@@ -22,7 +22,7 @@
 //+------------------------------------------------------------------+
 input group "=== LICENSE ==="
 input string   InpLicensePIN        = "";       // License PIN (required)
-input string   InpValidationURL     = "https://your-domain.com/api/pins/validate"; // Validation Server URL
+input string   InpValidationURL     = "";       // Online Validation URL (optional - leave empty for offline)
 
 //+------------------------------------------------------------------+
 //| INPUT PARAMETERS - User Configurable                             |
@@ -96,7 +96,7 @@ input int      InpPatternMemorySize  = 500;     // Max local patterns to remembe
 input double   InpLearningWeight     = 0.3;     // Learning influence on confidence (0-1)
 input int      InpMinPatternsForML   = 20;      // Min patterns before ML kicks in
 input bool     InpUseCloudML         = true;    // Use Cloud ML (learns from ALL users globally)
-input string   InpCloudMLURL         = "https://your-domain.com/api"; // Cloud Server URL
+input string   InpCloudMLURL         = "";       // Cloud Server URL (optional - leave empty to use local ML only)
 
 //--- Smart Features
 input group "=== SMART FEATURES ==="
@@ -207,21 +207,21 @@ bool           recoveryModeActive;
 int            smartCheckResult;
 
 //+------------------------------------------------------------------+
-//| PIN VALIDATION (OFFLINE HASH CHECK)                              |
-//| Online validation requires WebRequest - use ValidateOnline()     |
+//| PIN VALIDATION                                                   |
+//| Works offline by default. Online validation is optional.         |
 //+------------------------------------------------------------------+
 bool ValidatePINOffline(string pin)
 {
-   // Check format: ASE-XXXX-XXXX
+   // Check format: ASE-XXXX-XXXX (12 characters)
    if(StringLen(pin) != 12) return false;
    if(StringSubstr(pin, 0, 3) != "ASE") return false;
    if(StringGetCharacter(pin, 3) != '-') return false;
    if(StringGetCharacter(pin, 8) != '-') return false;
    
-   // Validate characters are alphanumeric
+   // Validate characters are alphanumeric (A-Z, 0-9)
    for(int i = 4; i < 12; i++)
    {
-      if(i == 8) continue; // Skip dash
+      if(i == 8) continue; // Skip dash position
       ushort ch = StringGetCharacter(pin, i);
       if(!((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z')))
          return false;
@@ -232,12 +232,14 @@ bool ValidatePINOffline(string pin)
 
 bool ValidatePINOnline(string pin)
 {
-   // Attempt online validation via WebRequest
-   // NOTE: User must add the validation URL to MT5 allowed URLs
-   // Tools > Options > Expert Advisors > Allow WebRequest for listed URLs
+   // If no validation URL set, use offline validation only
+   if(StringLen(InpValidationURL) < 10 || StringFind(InpValidationURL, "your-domain") >= 0)
+   {
+      Print("LICENSE: Using offline validation (no server URL configured).");
+      return ValidatePINOffline(pin);
+   }
    
-   if(StringLen(InpValidationURL) < 10) return ValidatePINOffline(pin);
-   
+   // Try online validation
    string headers = "Content-Type: application/json\r\n";
    string postData = "{\"pin\":\"" + pin + "\",\"mt5_account\":\"" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "\"}";
    
@@ -247,25 +249,22 @@ bool ValidatePINOnline(string pin)
    
    StringToCharArray(postData, post, 0, StringLen(postData));
    
-   int timeout = 5000; // 5 seconds
+   int timeout = 5000;
    int res = WebRequest("POST", InpValidationURL, headers, timeout, post, result, resultHeaders);
    
    if(res == 200)
    {
       string response = CharArrayToString(result);
-      // Check if response contains "valid": true
       if(StringFind(response, "\"valid\": true") >= 0 || StringFind(response, "\"valid\":true") >= 0)
          return true;
+      // Server returned 200 but said invalid
+      Print("LICENSE: Server rejected PIN.");
+      return false;
    }
    
-   // Fallback to offline validation if server unreachable
-   if(res == -1)
-   {
-      Print("WARNING: Could not reach license server. Using offline validation.");
-      return ValidatePINOffline(pin);
-   }
-   
-   return false;
+   // Server unreachable or error - ALWAYS fall back to offline
+   Print("WARNING: License server unreachable (code: ", res, "). Using offline validation.");
+   return ValidatePINOffline(pin);
 }
 
 //+------------------------------------------------------------------+
@@ -276,22 +275,23 @@ int OnInit()
    // === LICENSE VALIDATION ===
    if(StringLen(InpLicensePIN) == 0)
    {
-      Alert("LICENSE REQUIRED: Please enter your license PIN in the EA settings.");
+      Alert("LICENSE REQUIRED: Please enter your license PIN in the EA settings (Inputs tab > License PIN).");
       Print("ERROR: No license PIN provided. EA cannot start.");
       return(INIT_FAILED);
    }
    
-   // Try online first, fallback to offline
+   // Validate PIN: offline first (always works), online if URL configured
    licenseValid = ValidatePINOnline(InpLicensePIN);
    
    if(!licenseValid)
    {
-      Alert("INVALID LICENSE: The PIN you entered is not valid. Please check your PIN.");
+      Alert("INVALID LICENSE PIN: The PIN '" + InpLicensePIN + "' is not valid. Please check the format: ASE-XXXX-XXXX");
       Print("ERROR: License validation failed for PIN: ", InpLicensePIN);
+      Print("HINT: PIN must be format ASE-XXXX-XXXX where X is A-Z or 0-9");
       return(INIT_FAILED);
    }
    
-   Print("LICENSE VALIDATED: PIN accepted. EA authorized to trade.");
+   Print("LICENSE VALIDATED: PIN ", InpLicensePIN, " accepted. EA authorized to trade.");
    
    // Validate symbol
    if(StringFind(Symbol(), "XAU") < 0 && StringFind(Symbol(), "GOLD") < 0)
