@@ -1,0 +1,96 @@
+{
+  "theme": "LIGHT",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "design_philosophy": "Objective, rigid, and function-first. High contrast with dense, scanable 'Control Room' grids. Color is functional only, using gold accents strictly for XAUUSD branding and data highlights.",
+  "colors": {
+    "background": "0 0% 98%",
+    "foreground": "0 0% 4%",
+    "primary": "43 74% 49%", 
+    "primary_foreground": "0 0% 4%",
+    "secondary": "0 0% 90%",
+    "secondary_foreground": "0 0% 9%",
+    "accent": "43 74% 49%",
+    "accent_foreground": "0 0% 4%",
+    "muted": "0 0% 92%",
+    "muted_foreground": "0 0% 40%",
+    "border": "0 0% 85%",
+    "card": "0 0% 100%",
+    "card_foreground": "0 0% 4%",
+    "chart": {
+      "gold": "43 74% 49%",
+      "profit": "142 71% 45%",
+      "loss": "348 83% 47%",
+      "neutral": "0 0% 60%"
+    }
+  },
+  "typography": {
+    "font_family": {
+      "headings": "Cabinet Grotesk, sans-serif",
+      "body": "IBM Plex Sans, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl font-black tracking-tight leading-none",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h3": "text-xl sm:text-2xl font-semibold tracking-tight",
+      "h4": "text-lg font-medium tracking-tight",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm",
+      "overline": "text-xs font-bold uppercase tracking-[0.2em]"
+    }
+  },
+  "spacing_and_layout": {
+    "container_padding": "p-6 md:p-8 lg:p-12",
+    "grid_strategy": "MODE B: THE CONTROL ROOM GRID (Base grid-cols-1 md:grid-cols-3 lg:grid-cols-4, tight gap-4 or gap-6, every pixel utilized).",
+    "borders": "Exposed grid borders (border-collapse style) or 1px subtle borders (border-border) with flat backgrounds. No soft shadows.",
+    "border_radius": "rounded-none or max rounded-sm (2px) to maintain the Swiss Brutalist rigid feel."
+  },
+  "surfaces_and_components": {
+    "cards": "Flat solid background (bg-card), sharp 1px border (border-border), no rounded corners. On hover: border darkens, slight shadow-sm.",
+    "buttons": "Primary: Solid Gold (bg-primary) with black text. Secondary: Outline with sharp corners. Hover: -translate-y-[1px] with hard drop shadow.",
+    "inputs_and_forms": "Shadcn UI forms, heavily customized to have 0px border-radius, pure white background, 1px solid border. Use Shadcn Slider for risk % and Select for Strategy Mode.",
+    "header": "Solid Background (bg-background) with a hard 1px bottom border (border-border). No glassmorphism.",
+    "data_visualization": "Recharts for performance metrics. High contrast lines. Use JetBrains Mono for tick labels. Avoid using colors purely for decoration."
+  },
+  "animation_and_motion": {
+    "hover_states": "Crisp, instantaneous color swaps or slight rigid translations (-translate-y-1). No overly smooth/bouncy spring animations.",
+    "transitions": "transition-all duration-150 ease-out",
+    "loading": "Use mono-spaced ASCII art spinners or fast, precise linear progress bars."
+  },
+  "icons_and_assets": {
+    "icon_library": "@phosphor-icons/react (Duotone or Regular weight for a technical feel)",
+    "images": [
+      {
+        "category": "hero_background",
+        "url": "https://static.prod-images.emergentagent.com/jobs/a0d76eb0-1956-4da1-ad00-cd40d1b3f75f/images/3217ec4cb52b267ea0d9a14cebe330f75fc24b5035af66c21126a90c2724288d.png",
+        "description": "Minimalist 3D render of a golden sphere intersecting with data charts, used as the main hero visual for the EA Overview."
+      },
+      {
+        "category": "architecture_visual",
+        "url": "https://static.prod-images.emergentagent.com/jobs/a0d76eb0-1956-4da1-ad00-cd40d1b3f75f/images/808f94dadb0b008e2dd42ec3026977b7f488b77ccf61fd454e1eeb22466e72c0.png",
+        "description": "Macro photo of sleek computer chip with golden circuitry, to be used in the System Architecture Documentation section."
+      },
+      {
+        "category": "performance_background",
+        "url": "https://static.prod-images.emergentagent.com/jobs/a0d76eb0-1956-4da1-ad00-cd40d1b3f75f/images/f1232fd8bf6828ade6dadf165fd90c1105357be4deba17672ae11a5135a9f5b2.png",
+        "description": "Abstract 3D architectural landscape for the Risk Management Dashboard backdrop."
+      },
+      {
+        "category": "market_chart_placeholder",
+        "url": "https://images.unsplash.com/photo-1745509267945-b25cbb4d50ef?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODh8MHwxfHNlYXJjaHwxfHxjYW5kbGVzdGljayUyMGNoYXJ0JTIwdHJhZGluZ3xlbnwwfHx8fDE3NzYwNzU1NjR8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Candlestick chart image for market analysis visualization mockups."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Run `yarn add @phosphor-icons/react` before starting.",
+    "Update tailwind.config.js to use the HSL variables specified in colors section, and override border-radius to '0px' to ensure rigid Swiss style.",
+    "Use grid-cols-1 md:grid-cols-4 for the dashboard layout (sidebar + main content) or a dense bento grid for widgets.",
+    "Implement the Parameter Configurator Panel using Shadcn Forms/Sliders/Selects. Ensure inputs have sharp corners (rounded-none).",
+    "For the Performance Metrics Display, use Shadcn/Recharts to create high-contrast bar/line charts using the specified chart colors.",
+    "Ensure the EA Download Section is prominent with a high-contrast Gold (bg-primary) CTA button.",
+    "Add `data-testid` attributes to all interactive elements (e.g., data-testid='download-ea-button').",
+    "Use JetBrains Mono for all numeric financial data points (win rate, profit factor, prices).",
+    "Ensure high contrast check: text on background must have minimum 4.5:1 ratio."
+  ]
+}
