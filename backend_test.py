@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for AI XAUUSD Trading Bot - Iteration 5
-Tests new features: JWT admin authentication, admin portal, protected admin routes
+Backend API Testing for AI XAUUSD Trading Bot - Iteration 7
+Tests new features: Centralized ML endpoints, admin account management
 """
 
 import requests
@@ -538,20 +538,300 @@ class APITester:
             self.failed_tests.append(f"EA Download: Request failed - {str(e)}")
             return False, {}
 
+    def test_ml_submit_pattern_valid_pin(self):
+        """Test ML pattern submission with valid PIN - NEW FEATURE (Iteration 7)"""
+        test_data = {
+            "pin": "ASE-OPBT-VFWK",  # Known test PIN
+            "market_state": 0,  # trend_up
+            "strategy": 0,      # trend
+            "ema_diff": 15.5,
+            "rsi_value": 65.2,
+            "atr_value": 2.8,
+            "bb_width": 0.15,
+            "hour_of_day": 14,
+            "day_of_week": 2,
+            "candle_body_ratio": 0.75,
+            "was_winner": True,
+            "profit_pips": 12.5,
+            "confidence": 85
+        }
+        
+        def validate_ml_submit(data):
+            if not data.get('received'):
+                return f"Expected received=True, got {data.get('received')}"
+            
+            total_patterns = data.get('total_patterns', 0)
+            if not isinstance(total_patterns, int) or total_patterns < 0:
+                return f"Expected valid total_patterns count, got {total_patterns}"
+            
+            return True
+
+        return self.run_test("ML Submit Pattern (Valid PIN)", "POST", "/ml/submit-pattern", 
+                           data=test_data, validate_response=validate_ml_submit)
+
+    def test_ml_submit_pattern_invalid_pin(self):
+        """Test ML pattern submission with invalid PIN - NEW FEATURE (Iteration 7)"""
+        test_data = {
+            "pin": "ASE-INVALID-PIN",
+            "market_state": 0,
+            "strategy": 0,
+            "ema_diff": 15.5,
+            "rsi_value": 65.2,
+            "atr_value": 2.8,
+            "bb_width": 0.15,
+            "hour_of_day": 14,
+            "day_of_week": 2,
+            "candle_body_ratio": 0.75,
+            "was_winner": True,
+            "profit_pips": 12.5,
+            "confidence": 85
+        }
+        
+        def validate_403_error(data):
+            if 'detail' not in data:
+                return "Missing error detail field"
+            
+            detail = data.get('detail', '').lower()
+            if 'invalid pin' not in detail:
+                return f"Expected 'invalid pin' in error message, got: {data.get('detail')}"
+            
+            return True
+
+        return self.run_test("ML Submit Pattern (Invalid PIN)", "POST", "/ml/submit-pattern", 
+                           expected_status=403, data=test_data, validate_response=validate_403_error)
+
+    def test_ml_get_confidence_valid_pin(self):
+        """Test ML confidence request with valid PIN - NEW FEATURE (Iteration 7)"""
+        test_data = {
+            "pin": "ASE-OPBT-VFWK",  # Known test PIN
+            "market_state": 0,  # trend_up
+            "strategy": 0,      # trend
+            "ema_diff": 15.5,
+            "rsi_value": 65.2,
+            "atr_value": 2.8,
+            "bb_width": 0.15,
+            "hour_of_day": 14,
+            "day_of_week": 2
+        }
+        
+        def validate_ml_confidence(data):
+            required_fields = ['adjustment', 'total_patterns', 'similar_count', 'base_win_rate']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field: {field}"
+            
+            adjustment = data.get('adjustment')
+            if not isinstance(adjustment, int) or adjustment < -30 or adjustment > 30:
+                return f"Expected adjustment between -30 and 30, got {adjustment}"
+            
+            total_patterns = data.get('total_patterns', 0)
+            if not isinstance(total_patterns, int) or total_patterns < 0:
+                return f"Expected valid total_patterns count, got {total_patterns}"
+            
+            return True
+
+        return self.run_test("ML Get Confidence (Valid PIN)", "POST", "/ml/get-confidence", 
+                           data=test_data, validate_response=validate_ml_confidence)
+
+    def test_ml_global_stats(self):
+        """Test ML global statistics - NEW FEATURE (Iteration 7)"""
+        def validate_ml_stats(data):
+            required_fields = ['total_patterns', 'global_win_rate', 'contributors', 'strategies']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field: {field}"
+            
+            total_patterns = data.get('total_patterns', 0)
+            if not isinstance(total_patterns, int) or total_patterns < 0:
+                return f"Expected valid total_patterns count, got {total_patterns}"
+            
+            global_win_rate = data.get('global_win_rate', 0)
+            if not isinstance(global_win_rate, (int, float)) or global_win_rate < 0 or global_win_rate > 100:
+                return f"Expected win rate 0-100, got {global_win_rate}"
+            
+            contributors = data.get('contributors', 0)
+            if not isinstance(contributors, int) or contributors < 0:
+                return f"Expected valid contributors count, got {contributors}"
+            
+            strategies = data.get('strategies', {})
+            if not isinstance(strategies, dict):
+                return f"Expected strategies to be dict, got {type(strategies)}"
+            
+            return True
+
+        return self.run_test("ML Global Stats", "GET", "/ml/stats", 
+                           validate_response=validate_ml_stats)
+
+    def test_admin_ml_stats_requires_auth(self):
+        """Test admin ML stats requires authentication - NEW FEATURE (Iteration 7)"""
+        return self.run_test("Admin ML Stats (No Auth)", "GET", "/admin/ml/stats", 
+                           expected_status=401)
+
+    def test_admin_ml_stats_with_token(self):
+        """Test admin ML stats with valid token - NEW FEATURE (Iteration 7)"""
+        if not self.admin_token:
+            self.log("❌ Admin ML Stats - No admin token available", "ERROR")
+            self.failed_tests.append("Admin ML Stats: No admin token")
+            self.tests_run += 1
+            return False, {}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        def validate_admin_ml_stats(data):
+            # Should have all the fields from public stats plus recent_patterns
+            required_fields = ['total_patterns', 'global_win_rate', 'contributors', 'strategies', 'recent_patterns']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field: {field}"
+            
+            recent_patterns = data.get('recent_patterns', [])
+            if not isinstance(recent_patterns, list):
+                return f"Expected recent_patterns to be list, got {type(recent_patterns)}"
+            
+            # Check pattern structure if any exist
+            if recent_patterns:
+                pattern = recent_patterns[0]
+                pattern_fields = ['pin', 'market_state', 'strategy', 'was_winner', 'created_at']
+                for field in pattern_fields:
+                    if field not in pattern:
+                        return f"Missing pattern field: {field}"
+            
+            return True
+
+        return self.run_test("Admin ML Stats (With Token)", "GET", "/admin/ml/stats", 
+                           headers=headers, validate_response=validate_admin_ml_stats)
+
+    def test_admin_account_update_wrong_password(self):
+        """Test admin account update with wrong current password - NEW FEATURE (Iteration 7)"""
+        if not self.admin_token:
+            self.log("❌ Admin Account Update - No admin token available", "ERROR")
+            self.failed_tests.append("Admin Account Update: No admin token")
+            self.tests_run += 1
+            return False, {}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        test_data = {
+            "current_password": "WrongPassword123!",
+            "new_email": "newemail@aisniper.com"
+        }
+        
+        def validate_401_error(data):
+            if 'detail' not in data:
+                return "Missing error detail field"
+            
+            detail = data.get('detail', '').lower()
+            if 'current password' not in detail and 'incorrect' not in detail:
+                return f"Expected password error message, got: {data.get('detail')}"
+            
+            return True
+
+        return self.run_test("Admin Account Update (Wrong Password)", "PUT", "/admin/account", 
+                           expected_status=401, headers=headers, data=test_data, validate_response=validate_401_error)
+
+    def test_admin_account_update_no_changes(self):
+        """Test admin account update with correct password but no changes - NEW FEATURE (Iteration 7)"""
+        if not self.admin_token:
+            self.log("❌ Admin Account Update - No admin token available", "ERROR")
+            self.failed_tests.append("Admin Account Update: No admin token")
+            self.tests_run += 1
+            return False, {}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        test_data = {
+            "current_password": "Admin@2026!"
+            # No new_email or new_password provided
+        }
+        
+        def validate_no_changes(data):
+            if data.get('updated') != False:
+                return f"Expected updated=False for no changes, got {data.get('updated')}"
+            
+            if 'message' not in data:
+                return "Missing message field"
+            
+            return True
+
+        return self.run_test("Admin Account Update (No Changes)", "PUT", "/admin/account", 
+                           headers=headers, data=test_data, validate_response=validate_no_changes)
+
+    def test_admin_account_update_new_email(self):
+        """Test admin account update with new email - NEW FEATURE (Iteration 7)"""
+        if not self.admin_token:
+            self.log("❌ Admin Account Update - No admin token available", "ERROR")
+            self.failed_tests.append("Admin Account Update: No admin token")
+            self.tests_run += 1
+            return False, {}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        # Use a unique email to avoid conflicts
+        new_email = f"admin-test-{datetime.now().strftime('%H%M%S')}@aisniper.com"
+        test_data = {
+            "current_password": "Admin@2026!",
+            "new_email": new_email
+        }
+        
+        def validate_email_update(data):
+            if not data.get('updated'):
+                return f"Expected updated=True, got {data.get('updated')}"
+            
+            if data.get('email') != new_email:
+                return f"Expected email={new_email}, got {data.get('email')}"
+            
+            if 'token' not in data:
+                return "Missing new token field"
+            
+            # Update our token for subsequent tests
+            self.admin_token = data.get('token')
+            
+            return True
+
+        return self.run_test("Admin Account Update (New Email)", "PUT", "/admin/account", 
+                           headers=headers, data=test_data, validate_response=validate_email_update)
+
     def run_all_tests(self):
         """Run all backend tests"""
         self.log("=" * 60)
-        self.log("STARTING BACKEND API TESTS - ITERATION 5")
+        self.log("STARTING BACKEND API TESTS - ITERATION 7")
         self.log("=" * 60)
 
         # Test basic connectivity
         self.test_health_check()
 
         # Test NEW ADMIN AUTHENTICATION features (Iteration 5)
-        self.log("\n--- NEW ADMIN AUTHENTICATION (Iteration 5) ---")
+        self.log("\n--- ADMIN AUTHENTICATION (Iteration 5) ---")
         self.test_admin_login_success()
         self.test_admin_login_wrong_password()
         self.test_auth_me_with_token()
+
+        # Test NEW ML ENDPOINTS (Iteration 7)
+        self.log("\n--- NEW ML ENDPOINTS (Iteration 7) ---")
+        self.test_ml_submit_pattern_valid_pin()
+        self.test_ml_submit_pattern_invalid_pin()
+        self.test_ml_get_confidence_valid_pin()
+        self.test_ml_global_stats()
+        self.test_admin_ml_stats_requires_auth()
+        self.test_admin_ml_stats_with_token()
+
+        # Test NEW ADMIN ACCOUNT MANAGEMENT (Iteration 7)
+        self.log("\n--- ADMIN ACCOUNT MANAGEMENT (Iteration 7) ---")
+        self.test_admin_account_update_wrong_password()
+        self.test_admin_account_update_no_changes()
+        self.test_admin_account_update_new_email()
 
         # Test ADMIN PROTECTED ENDPOINTS (Iteration 5)
         self.log("\n--- ADMIN PROTECTED ENDPOINTS (Iteration 5) ---")

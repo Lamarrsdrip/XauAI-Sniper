@@ -92,9 +92,11 @@ input int      InpMagicNumber        = 20250101; // Magic Number
 //--- ML Learning
 input group "=== AI / MACHINE LEARNING ==="
 input bool     InpEnableLearning     = true;    // Enable Pattern Learning
-input int      InpPatternMemorySize  = 500;     // Max patterns to remember
+input int      InpPatternMemorySize  = 500;     // Max local patterns to remember
 input double   InpLearningWeight     = 0.3;     // Learning influence on confidence (0-1)
 input int      InpMinPatternsForML   = 20;      // Min patterns before ML kicks in
+input bool     InpUseCloudML         = true;    // Use Cloud ML (learns from ALL users globally)
+input string   InpCloudMLURL         = "https://your-domain.com/api/ml"; // Cloud ML Server URL
 
 //+------------------------------------------------------------------+
 //| ENUMERATIONS                                                     |
@@ -455,30 +457,56 @@ void OnTick()
       case STRATEGY_BREAKOUT: signal = BreakoutStrategy(); break;
    }
    
-   // Apply ML pattern boost/penalty
-   if(InpEnableLearning && patternCount >= InpMinPatternsForML && signal != 0)
+   // Apply ML: Cloud (global) FIRST, local as FALLBACK
+   if(InpEnableLearning && signal != 0)
    {
-      int mlAdjustment = GetMLConfidenceAdjustment();
-      tradeConfidence += mlAdjustment;
-      mlBoostApplied = mlAdjustment;
-      tradeConfidence = MathMax(0, MathMin(100, tradeConfidence));
+      int cloudAdj = 0;
+      bool useLocal = true;
       
-      // LOSS AVOIDANCE: Check if this hour/day historically loses
-      if(IsHighLossTimeSlot())
+      // TRY CLOUD ML FIRST (global intelligence from ALL users)
+      if(InpUseCloudML)
       {
-         tradeConfidence -= 20; // Heavy penalty for historically bad times
-         if(tradeConfidence < InpConfidenceThreshold)
+         cloudAdj = GetCloudMLConfidence();
+         if(cloudAdj == -100)
          {
-            signal = 0; // Skip trade entirely
-            Print("ML LOSS AVOIDANCE: Skipping trade - historically bad time slot");
+            signal = 0;
+            tradeConfidence = 0;
+            useLocal = false;
+            Print("CLOUD ML: Trade BLOCKED by global intelligence");
+         }
+         else if(cloudAdj != 0)
+         {
+            tradeConfidence += cloudAdj;
+            mlBoostApplied = cloudAdj;
+            useLocal = false;
          }
       }
       
-      // STREAK AWARENESS: If on a winning streak, slightly tighten entry
-      // If on a losing streak, require MUCH higher confidence
-      if(consecutiveLosses >= 2)
+      // FALLBACK TO LOCAL ML
+      if(useLocal && patternCount >= InpMinPatternsForML)
       {
-         tradeConfidence -= 10; // Require even higher confidence after losses
+         int localAdj = GetMLConfidenceAdjustment();
+         tradeConfidence += localAdj;
+         mlBoostApplied = localAdj;
+      }
+      
+      tradeConfidence = MathMax(0, MathMin(100, tradeConfidence));
+      
+      // LOSS AVOIDANCE
+      if(signal != 0 && IsHighLossTimeSlot())
+      {
+         tradeConfidence -= 20;
+         if(tradeConfidence < InpConfidenceThreshold)
+         {
+            signal = 0;
+            Print("ML: Skipping - historically bad time slot");
+         }
+      }
+      
+      // STREAK AWARENESS
+      if(signal != 0 && consecutiveLosses >= 2)
+      {
+         tradeConfidence -= 10;
       }
    }
    
@@ -650,6 +678,116 @@ void RecordTradePattern(bool wasWin, double profitPips)
    patternCount++;
    
    Print("ML: Pattern recorded (#", patternCount, ") | Win: ", wasWin, " | Pips: ", DoubleToString(profitPips, 1));
+   
+   // === CLOUD ML: Submit pattern to global server ===
+   if(InpUseCloudML && StringLen(InpCloudMLURL) > 10)
+   {
+      SubmitPatternToCloud(pattern);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| CLOUD ML: Submit pattern to global learning server               |
+//+------------------------------------------------------------------+
+void SubmitPatternToCloud(TradePattern &pat)
+{
+   string url = InpCloudMLURL + "/submit-pattern";
+   string headers = "Content-Type: application/json\r\n";
+   
+   string json = StringFormat(
+      "{\"pin\":\"%s\",\"market_state\":%d,\"strategy\":%d,\"ema_diff\":%.4f,"
+      "\"rsi_value\":%.2f,\"atr_value\":%.4f,\"bb_width\":%.6f,"
+      "\"hour_of_day\":%d,\"day_of_week\":%d,\"candle_body_ratio\":%.4f,"
+      "\"was_winner\":%s,\"profit_pips\":%.2f,\"confidence\":%d}",
+      InpLicensePIN, (int)pat.marketState, (int)pat.strategy, pat.emaDiff,
+      pat.rsiValue, pat.atrValue, pat.bbWidth,
+      pat.hourOfDay, pat.dayOfWeek, pat.candleBodyRatio,
+      pat.wasWinner ? "true" : "false", pat.profitPips, pat.confidence
+   );
+   
+   char post[], result[];
+   string resultHeaders;
+   StringToCharArray(json, post, 0, StringLen(json));
+   
+   int res = WebRequest("POST", url, headers, 5000, post, result, resultHeaders);
+   
+   if(res == 200)
+   {
+      Print("CLOUD ML: Pattern submitted to global server successfully");
+   }
+   else
+   {
+      Print("CLOUD ML: Submit failed (code: ", res, ") - using local ML only");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| CLOUD ML: Get confidence adjustment from global server           |
+//+------------------------------------------------------------------+
+int GetCloudMLConfidence()
+{
+   if(!InpUseCloudML || StringLen(InpCloudMLURL) < 10) return 0;
+   
+   string url = InpCloudMLURL + "/get-confidence";
+   string headers = "Content-Type: application/json\r\n";
+   
+   double emaDiff = (bufEMAFast[1] - bufEMASlow[1]) / bufEMASlow[1] * 10000;
+   double bbWidth = (bufBBUpper[1] - bufBBLower[1]) / iClose(Symbol(), PERIOD_M5, 1);
+   
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   
+   string json = StringFormat(
+      "{\"pin\":\"%s\",\"market_state\":%d,\"strategy\":%d,\"ema_diff\":%.4f,"
+      "\"rsi_value\":%.2f,\"atr_value\":%.4f,\"bb_width\":%.6f,"
+      "\"hour_of_day\":%d,\"day_of_week\":%d}",
+      InpLicensePIN, (int)currentMarketCondition, (int)activeStrategy,
+      emaDiff, bufRSI[1], bufATR[1], bbWidth, dt.hour, dt.day_of_week
+   );
+   
+   char post[], result[];
+   string resultHeaders;
+   StringToCharArray(json, post, 0, StringLen(json));
+   
+   int res = WebRequest("POST", url, headers, 5000, post, result, resultHeaders);
+   
+   if(res == 200)
+   {
+      string response = CharArrayToString(result);
+      
+      // Check for skip_trade flag
+      if(StringFind(response, "\"skip_trade\": true") >= 0 || StringFind(response, "\"skip_trade\":true") >= 0)
+      {
+         Print("CLOUD ML: Trade SKIPPED by global intelligence - historically bad setup");
+         return -100; // Signal to skip trade entirely
+      }
+      
+      // Parse adjustment value
+      int adjStart = StringFind(response, "\"adjustment\":");
+      if(adjStart >= 0)
+      {
+         adjStart += 14; // length of "\"adjustment\":"
+         string adjStr = "";
+         for(int i = adjStart; i < StringLen(response); i++)
+         {
+            ushort ch = StringGetCharacter(response, i);
+            if((ch >= '0' && ch <= '9') || ch == '-') adjStr += ShortToString(ch);
+            else if(StringLen(adjStr) > 0) break;
+         }
+         if(StringLen(adjStr) > 0)
+         {
+            int cloudAdj = (int)StringToInteger(adjStr);
+            Print("CLOUD ML: Global confidence adjustment: ", cloudAdj);
+            return cloudAdj;
+         }
+      }
+   }
+   else
+   {
+      Print("CLOUD ML: Server unreachable (code: ", res, ") - using local ML");
+   }
+   
+   return 0; // Fallback: no adjustment
 }
 
 //+------------------------------------------------------------------+

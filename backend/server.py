@@ -518,6 +518,191 @@ async def update_admin_account(req: AdminAccountUpdate, admin: dict = Depends(ge
     return {"updated": True, "email": new_email, "token": new_token, "message": "Account updated successfully"}
 
 # -------------------------------------------------------------------
+# CENTRALIZED ML ENGINE - Global Pattern Learning
+# -------------------------------------------------------------------
+
+class MLPatternSubmit(BaseModel):
+    pin: str
+    market_state: int  # 0=trend_up,1=trend_down,2=range,3=breakout_up,4=breakout_down
+    strategy: int      # 0=trend,1=range,2=breakout
+    ema_diff: float
+    rsi_value: float
+    atr_value: float
+    bb_width: float
+    hour_of_day: int
+    day_of_week: int
+    candle_body_ratio: float
+    was_winner: bool
+    profit_pips: float
+    confidence: int
+
+class MLConfidenceRequest(BaseModel):
+    pin: str
+    market_state: int
+    strategy: int
+    ema_diff: float
+    rsi_value: float
+    atr_value: float
+    bb_width: float
+    hour_of_day: int
+    day_of_week: int
+
+@api_router.post("/ml/submit-pattern")
+async def ml_submit_pattern(req: MLPatternSubmit):
+    """EA submits trade outcome for global learning"""
+    # Verify PIN is valid
+    pin_doc = await db.pin_licenses.find_one({"pin": req.pin, "is_active": True})
+    if not pin_doc:
+        raise HTTPException(status_code=403, detail="Invalid PIN")
+
+    pattern = {
+        "pin": req.pin,
+        "market_state": req.market_state,
+        "strategy": req.strategy,
+        "ema_diff": req.ema_diff,
+        "rsi_value": req.rsi_value,
+        "atr_value": req.atr_value,
+        "bb_width": req.bb_width,
+        "hour_of_day": req.hour_of_day,
+        "day_of_week": req.day_of_week,
+        "candle_body_ratio": req.candle_body_ratio,
+        "was_winner": req.was_winner,
+        "profit_pips": req.profit_pips,
+        "confidence": req.confidence,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.ml_patterns.insert_one(pattern)
+
+    # Update global stats cache
+    await _update_ml_stats()
+
+    return {"received": True, "total_patterns": await db.ml_patterns.count_documents({})}
+
+@api_router.post("/ml/get-confidence")
+async def ml_get_confidence(req: MLConfidenceRequest):
+    """EA asks for ML confidence adjustment before trading"""
+    # Verify PIN
+    pin_doc = await db.pin_licenses.find_one({"pin": req.pin, "is_active": True})
+    if not pin_doc:
+        raise HTTPException(status_code=403, detail="Invalid PIN")
+
+    total_patterns = await db.ml_patterns.count_documents({})
+    if total_patterns < 20:
+        return {"adjustment": 0, "total_patterns": total_patterns, "reason": "Not enough data yet"}
+
+    # 1. Find similar patterns globally (same market + strategy)
+    match_filter = {"market_state": req.market_state, "strategy": req.strategy}
+    similar = await db.ml_patterns.find(match_filter, {"_id": 0}).to_list(5000)
+
+    if len(similar) < 5:
+        return {"adjustment": 0, "total_patterns": total_patterns, "reason": "Few similar patterns"}
+
+    wins = sum(1 for p in similar if p["was_winner"])
+    base_win_rate = wins / len(similar)
+
+    # 2. Narrow down: same hour range (+/-1) and day of week
+    time_matches = [p for p in similar if abs(p["hour_of_day"] - req.hour_of_day) <= 1 and p["day_of_week"] == req.day_of_week]
+    time_win_rate = None
+    if len(time_matches) >= 5:
+        time_wins = sum(1 for p in time_matches if p["was_winner"])
+        time_win_rate = time_wins / len(time_matches)
+
+    # 3. RSI similarity check
+    rsi_matches = [p for p in similar if abs(p["rsi_value"] - req.rsi_value) < 10]
+    rsi_win_rate = None
+    if len(rsi_matches) >= 5:
+        rsi_wins = sum(1 for p in rsi_matches if p["was_winner"])
+        rsi_win_rate = rsi_wins / len(rsi_matches)
+
+    # 4. Calculate weighted confidence adjustment
+    # Base: strategy+market win rate (weight 40%)
+    # Time: hour+day win rate (weight 35%)
+    # RSI: indicator similarity (weight 25%)
+    weighted_wr = base_win_rate * 0.4
+    if time_win_rate is not None:
+        weighted_wr += time_win_rate * 0.35
+    else:
+        weighted_wr += base_win_rate * 0.35
+    if rsi_win_rate is not None:
+        weighted_wr += rsi_win_rate * 0.25
+    else:
+        weighted_wr += base_win_rate * 0.25
+
+    # Convert to adjustment: 50% WR = 0, 80% = +24, 30% = -16
+    adjustment = int((weighted_wr - 0.5) * 80)
+    adjustment = max(-25, min(25, adjustment))
+
+    # 5. Loss time slot check
+    skip_trade = False
+    if time_win_rate is not None and time_win_rate < 0.30 and len(time_matches) >= 8:
+        skip_trade = True
+        adjustment = -30  # Strong penalty
+
+    return {
+        "adjustment": adjustment,
+        "skip_trade": skip_trade,
+        "total_patterns": total_patterns,
+        "similar_count": len(similar),
+        "base_win_rate": round(base_win_rate * 100, 1),
+        "time_win_rate": round(time_win_rate * 100, 1) if time_win_rate else None,
+        "rsi_win_rate": round(rsi_win_rate * 100, 1) if rsi_win_rate else None,
+        "weighted_win_rate": round(weighted_wr * 100, 1),
+    }
+
+@api_router.get("/ml/stats")
+async def ml_global_stats():
+    """Global ML statistics (public)"""
+    total = await db.ml_patterns.count_documents({})
+    if total == 0:
+        return {"total_patterns": 0, "global_win_rate": 0, "contributors": 0, "strategies": {}, "hourly_performance": [], "message": "No patterns yet. As users trade, the AI gets smarter."}
+
+    wins = await db.ml_patterns.count_documents({"was_winner": True})
+    contributors = len(await db.ml_patterns.distinct("pin"))
+
+    # Strategy breakdown
+    strategies = {}
+    for sid, sname in [(0, "Trend"), (1, "Range"), (2, "Breakout")]:
+        st = await db.ml_patterns.count_documents({"strategy": sid})
+        sw = await db.ml_patterns.count_documents({"strategy": sid, "was_winner": True})
+        if st > 0:
+            strategies[sname] = {"trades": st, "win_rate": round(sw / st * 100, 1)}
+
+    # Hourly performance (which hours are best)
+    hourly = []
+    for h in range(24):
+        ht = await db.ml_patterns.count_documents({"hour_of_day": h})
+        if ht >= 3:
+            hw = await db.ml_patterns.count_documents({"hour_of_day": h, "was_winner": True})
+            hourly.append({"hour": h, "trades": ht, "win_rate": round(hw / ht * 100, 1)})
+
+    return {
+        "total_patterns": total,
+        "global_win_rate": round(wins / total * 100, 1) if total > 0 else 0,
+        "contributors": contributors,
+        "strategies": strategies,
+        "hourly_performance": hourly,
+    }
+
+@api_router.get("/admin/ml/stats", dependencies=[Depends(get_current_admin)])
+async def admin_ml_stats():
+    """Detailed ML stats for admin"""
+    stats = await ml_global_stats()
+    # Add recent patterns
+    recent = await db.ml_patterns.find({}, {"_id": 0}).sort("created_at", -1).to_list(20)
+    stats["recent_patterns"] = recent
+    return stats
+
+async def _update_ml_stats():
+    """Update cached ML stats periodically"""
+    total = await db.ml_patterns.count_documents({})
+    wins = await db.ml_patterns.count_documents({"was_winner": True})
+    await db.ml_cache.update_one(
+        {"key": "global_stats"},
+        {"$set": {"total": total, "wins": wins, "win_rate": round(wins/total*100, 1) if total > 0 else 0, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True
+    )
+
+# -------------------------------------------------------------------
 # STARTUP
 # -------------------------------------------------------------------
 
