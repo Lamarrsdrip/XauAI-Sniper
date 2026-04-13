@@ -444,15 +444,23 @@ async def admin_generate_pins(req: PinGenerateRequest):
 
 @api_router.get("/admin/pins", dependencies=[Depends(get_current_admin)])
 async def admin_list_pins():
-    pins = await db.pin_licenses.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    pins = await db.pin_licenses.find({}, {"_id": 0}).sort("created_at", -1).limit(100).to_list(100)
     return {"total": len(pins), "pins": pins}
 
 @api_router.get("/admin/pins/stats", dependencies=[Depends(get_current_admin)])
 async def admin_pin_stats():
-    total = await db.pin_licenses.count_documents({})
-    active = await db.pin_licenses.count_documents({"is_active": True})
-    used = await db.pin_licenses.count_documents({"is_used": True})
-    revoked = await db.pin_licenses.count_documents({"is_active": False})
+    pipeline = [{"$facet": {
+        "total": [{"$count": "c"}],
+        "active": [{"$match": {"is_active": True}}, {"$count": "c"}],
+        "used": [{"$match": {"is_used": True}}, {"$count": "c"}],
+        "revoked": [{"$match": {"is_active": False}}, {"$count": "c"}],
+    }}]
+    result = await db.pin_licenses.aggregate(pipeline).to_list(1)
+    r = result[0] if result else {}
+    total = r.get("total", [{}])[0].get("c", 0) if r.get("total") else 0
+    active = r.get("active", [{}])[0].get("c", 0) if r.get("active") else 0
+    used = r.get("used", [{}])[0].get("c", 0) if r.get("used") else 0
+    revoked = r.get("revoked", [{}])[0].get("c", 0) if r.get("revoked") else 0
     return {"total": total, "active": active, "used": used, "unused": active - used, "revoked": revoked}
 
 @api_router.put("/admin/pins/{pin}/revoke", dependencies=[Depends(get_current_admin)])
@@ -487,7 +495,7 @@ async def admin_list_configs():
 
 @api_router.get("/admin/transactions", dependencies=[Depends(get_current_admin)])
 async def admin_list_transactions():
-    txs = await db.payment_transactions.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    txs = await db.payment_transactions.find({}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
     return {"total": len(txs), "transactions": txs}
 
 @api_router.put("/admin/account")
@@ -592,7 +600,7 @@ async def ml_get_confidence(req: MLConfidenceRequest):
 
     # 1. Find similar patterns globally (same market + strategy)
     match_filter = {"market_state": req.market_state, "strategy": req.strategy}
-    similar = await db.ml_patterns.find(match_filter, {"_id": 0}).to_list(5000)
+    similar = await db.ml_patterns.find(match_filter, {"_id": 0, "was_winner": 1, "hour_of_day": 1, "day_of_week": 1, "rsi_value": 1, "profit_pips": 1}).limit(1000).to_list(1000)
 
     if len(similar) < 5:
         return {"adjustment": 0, "total_patterns": total_patterns, "reason": "Few similar patterns"}
@@ -659,21 +667,37 @@ async def ml_global_stats():
     wins = await db.ml_patterns.count_documents({"was_winner": True})
     contributors = len(await db.ml_patterns.distinct("pin"))
 
-    # Strategy breakdown
+    # Strategy breakdown via aggregation
     strategies = {}
+    strat_pipeline = [{"$group": {"_id": {"strategy": "$strategy", "was_winner": "$was_winner"}, "count": {"$sum": 1}}}]
+    strat_results = await db.ml_patterns.aggregate(strat_pipeline).to_list(20)
+    strat_data = {}
+    for r in strat_results:
+        sid = r["_id"]["strategy"]
+        if sid not in strat_data:
+            strat_data[sid] = {"total": 0, "wins": 0}
+        strat_data[sid]["total"] += r["count"]
+        if r["_id"]["was_winner"]:
+            strat_data[sid]["wins"] += r["count"]
     for sid, sname in [(0, "Trend"), (1, "Range"), (2, "Breakout")]:
-        st = await db.ml_patterns.count_documents({"strategy": sid})
-        sw = await db.ml_patterns.count_documents({"strategy": sid, "was_winner": True})
-        if st > 0:
-            strategies[sname] = {"trades": st, "win_rate": round(sw / st * 100, 1)}
+        if sid in strat_data and strat_data[sid]["total"] > 0:
+            strategies[sname] = {"trades": strat_data[sid]["total"], "win_rate": round(strat_data[sid]["wins"] / strat_data[sid]["total"] * 100, 1)}
 
-    # Hourly performance (which hours are best)
+    # Hourly performance via aggregation
     hourly = []
-    for h in range(24):
-        ht = await db.ml_patterns.count_documents({"hour_of_day": h})
-        if ht >= 3:
-            hw = await db.ml_patterns.count_documents({"hour_of_day": h, "was_winner": True})
-            hourly.append({"hour": h, "trades": ht, "win_rate": round(hw / ht * 100, 1)})
+    hour_pipeline = [{"$group": {"_id": {"hour": "$hour_of_day", "winner": "$was_winner"}, "count": {"$sum": 1}}}]
+    hour_results = await db.ml_patterns.aggregate(hour_pipeline).to_list(100)
+    hour_data = {}
+    for r in hour_results:
+        h = r["_id"]["hour"]
+        if h not in hour_data:
+            hour_data[h] = {"total": 0, "wins": 0}
+        hour_data[h]["total"] += r["count"]
+        if r["_id"]["winner"]:
+            hour_data[h]["wins"] += r["count"]
+    for h in sorted(hour_data.keys()):
+        if hour_data[h]["total"] >= 3:
+            hourly.append({"hour": h, "trades": hour_data[h]["total"], "win_rate": round(hour_data[h]["wins"] / hour_data[h]["total"] * 100, 1)})
 
     return {
         "total_patterns": total,
@@ -688,7 +712,7 @@ async def admin_ml_stats():
     """Detailed ML stats for admin"""
     stats = await ml_global_stats()
     # Add recent patterns
-    recent = await db.ml_patterns.find({}, {"_id": 0}).sort("created_at", -1).to_list(20)
+    recent = await db.ml_patterns.find({}, {"_id": 0, "market_state": 1, "strategy": 1, "was_winner": 1, "created_at": 1, "confidence": 1}).sort("created_at", -1).limit(20).to_list(20)
     stats["recent_patterns"] = recent
     return stats
 
