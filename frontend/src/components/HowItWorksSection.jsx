@@ -93,7 +93,16 @@ export default function HowItWorksSection({ data }) {
         </div>
 
         {/* Visual flow diagram */}
-        <div className="border border-border bg-card p-6 mb-10" data-testid="flow-diagram">
+        <div className="border border-border bg-card mb-10" data-testid="flow-diagram">
+          <div className="border-b border-border overflow-hidden">
+            <img
+              src="https://static.prod-images.emergentagent.com/jobs/a0d76eb0-1956-4da1-ad00-cd40d1b3f75f/images/73712160ad8cf86a17345fa0ce9460d2c140bc118fd596547ad81c65b671c5ce.png"
+              alt="AI Sniper Trading Flow"
+              className="w-full h-48 object-cover"
+              data-testid="flow-diagram-image"
+            />
+          </div>
+          <div className="p-6">
           <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground mb-4">
             TRADING FLOW
           </h4>
@@ -112,6 +121,7 @@ export default function HowItWorksSection({ data }) {
                 </React.Fragment>
               )
             )}
+          </div>
           </div>
         </div>
 
