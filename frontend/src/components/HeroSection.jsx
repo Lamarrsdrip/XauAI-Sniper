@@ -47,16 +47,15 @@ export default function HeroSection({ performance }) {
               className="font-heading text-4xl sm:text-5xl font-black tracking-tight leading-none mb-4 animate-fade-up delay-100"
               data-testid="hero-title"
             >
-              AI SNIPER
+              MrizAI SNIPER
               <br />
               <span className="text-[hsl(43,74%,49%)]">XAUUSD</span>
             </h1>
 
             <p className="text-base leading-relaxed text-muted-foreground max-w-lg mb-8 animate-fade-up delay-200">
-              Professional-grade adaptive trading system with machine learning
-              that gets smarter with every trade. Multi-strategy engine with AI
-              market classification, institutional risk management, and
-              sniper-precision execution for Gold markets.
+              AI-powered Gold trading bot that learns from every trade globally.
+              Multi-strategy engine with 90%+ confidence targeting and institutional
+              risk management. 20-50% weekly profit target.
             </p>
 
             <div className="flex items-center gap-3 animate-fade-up delay-300">

@@ -4,14 +4,12 @@ import axios from "axios";
 import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
 import HeroSection from "@/components/HeroSection";
-import ArchitectureSection from "@/components/ArchitectureSection";
-import PerformanceSection from "@/components/PerformanceSection";
-import DownloadSection from "@/components/DownloadSection";
-import InstallationSection from "@/components/InstallationSection";
+import BrokerSection from "@/components/BrokerSection";
 import HowItWorksSection from "@/components/HowItWorksSection";
+import PerformanceSection from "@/components/PerformanceSection";
 import PurchaseSection from "@/components/PurchaseSection";
 import SetupGuideSection from "@/components/SetupGuideSection";
-import VideoGuideSection from "@/components/VideoGuideSection";
+import DownloadSection from "@/components/DownloadSection";
 import PurchaseSuccessPage from "@/components/PurchaseSuccessPage";
 import AdminPortal from "@/components/AdminPortal";
 import Footer from "@/components/Footer";
@@ -22,8 +20,6 @@ const API = `${BACKEND_URL}/api`;
 function MainDashboard() {
   const [activeSection, setActiveSection] = useState("overview");
   const [performance, setPerformance] = useState(null);
-  const [architecture, setArchitecture] = useState(null);
-  const [installation, setInstallation] = useState(null);
   const [howItWorks, setHowItWorks] = useState(null);
   const [setupGuide, setSetupGuide] = useState(null);
   const [goldPrice, setGoldPrice] = useState(null);
@@ -31,13 +27,12 @@ function MainDashboard() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [p, a, i, h, s] = await Promise.all([
-        axios.get(`${API}/performance/summary`), axios.get(`${API}/architecture`),
-        axios.get(`${API}/docs/installation`), axios.get(`${API}/docs/how-it-works`),
+      const [p, h, s] = await Promise.all([
+        axios.get(`${API}/performance/summary`),
+        axios.get(`${API}/docs/how-it-works`),
         axios.get(`${API}/docs/setup-guide`),
       ]);
-      setPerformance(p.data); setArchitecture(a.data); setInstallation(i.data);
-      setHowItWorks(h.data); setSetupGuide(s.data);
+      setPerformance(p.data); setHowItWorks(h.data); setSetupGuide(s.data);
     } catch (e) { console.error(e); } finally { setLoading(false); }
   }, []);
 
@@ -70,14 +65,12 @@ function MainDashboard() {
       <Header activeSection={activeSection} onNavigate={scrollTo} goldPrice={goldPrice} />
       <main>
         <section id="overview"><HeroSection performance={performance} /></section>
+        <section id="broker"><BrokerSection /></section>
         <section id="purchase"><PurchaseSection api={API} /></section>
         <section id="how-it-works"><HowItWorksSection data={howItWorks} /></section>
-        <section id="setup-guide"><SetupGuideSection data={setupGuide} /></section>
-        <section id="video-guide"><VideoGuideSection /></section>
-        <section id="architecture"><ArchitectureSection data={architecture} /></section>
         <section id="performance"><PerformanceSection data={performance} /></section>
+        <section id="setup-guide"><SetupGuideSection data={setupGuide} /></section>
         <section id="download"><DownloadSection api={API} /></section>
-        <section id="installation"><InstallationSection data={installation} /></section>
       </main>
       <Footer />
     </div>

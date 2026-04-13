@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for AI XAUUSD Trading Bot - Iteration 7
-Tests new features: Centralized ML endpoints, admin account management
+Backend API Testing for MrizAI Sniper XAUUSD Trading Bot - Iteration 8
+Tests rebranding changes: MrizAI Sniper branding, Trade.com partnership
 """
 
 import requests
@@ -77,6 +77,22 @@ class APITester:
     def test_health_check(self):
         """Test basic health endpoint"""
         return self.run_test("Health Check", "GET", "/health")
+
+    def test_api_root_branding(self):
+        """Test API root endpoint returns MrizAI Sniper branding - NEW FOR ITERATION 8"""
+        def validate_api_branding(data):
+            # Should return MrizAI Sniper branding
+            if isinstance(data, dict):
+                message = data.get('message', '')
+            else:
+                message = str(data)
+            
+            if 'MrizAI Sniper EA API v2.0' not in message:
+                return f"Expected 'MrizAI Sniper EA API v2.0' in response, got: {message}"
+            
+            return True
+
+        return self.run_test("API Root Branding", "GET", "/", validate_response=validate_api_branding)
 
     def test_gold_price_api(self):
         """Test live gold price API - NEW FEATURE"""
@@ -806,11 +822,12 @@ class APITester:
     def run_all_tests(self):
         """Run all backend tests"""
         self.log("=" * 60)
-        self.log("STARTING BACKEND API TESTS - ITERATION 7")
+        self.log("STARTING BACKEND API TESTS - ITERATION 8 (MrizAI Sniper)")
         self.log("=" * 60)
 
-        # Test basic connectivity
+        # Test basic connectivity and NEW BRANDING
         self.test_health_check()
+        self.test_api_root_branding()
 
         # Test NEW ADMIN AUTHENTICATION features (Iteration 5)
         self.log("\n--- ADMIN AUTHENTICATION (Iteration 5) ---")
