@@ -10,17 +10,19 @@ import {
   Question,
   TrendUp,
   TrendDown,
+  ShoppingCart,
+  Wrench,
 } from "@phosphor-icons/react";
 
 const NAV_ITEMS = [
   { id: "overview", label: "OVERVIEW", icon: Crosshair },
+  { id: "purchase", label: "BUY", icon: ShoppingCart },
   { id: "how-it-works", label: "HOW IT WORKS", icon: Question },
-  { id: "architecture", label: "SYSTEM", icon: CpuIcon },
+  { id: "setup-guide", label: "SETUP", icon: Wrench },
   { id: "performance", label: "PERFORMANCE", icon: ChartLine },
   { id: "configurator", label: "CONFIGURE", icon: GearSix },
   { id: "pins", label: "LICENSES", icon: Key },
   { id: "download", label: "DOWNLOAD", icon: DownloadSimple },
-  { id: "installation", label: "INSTALL", icon: BookOpen },
 ];
 
 export default function Header({ activeSection, onNavigate, goldPrice }) {
@@ -46,25 +48,28 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const isActive = activeSection === item.id;
+              const isBuy = item.id === "purchase";
               return (
                 <button
                   key={item.id}
                   data-testid={`nav-${item.id}`}
                   onClick={() => onNavigate(item.id)}
                   className={`px-2.5 py-2 text-[10px] font-medium tracking-[0.08em] transition-colors duration-150 flex items-center gap-1 border-b-2 ${
-                    isActive
+                    isBuy
+                      ? "border-transparent text-primary font-bold hover:text-primary"
+                      : isActive
                       ? "border-primary text-foreground"
                       : "border-transparent text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  <Icon size={12} weight={isActive ? "fill" : "regular"} />
+                  <Icon size={12} weight={isActive || isBuy ? "fill" : "regular"} />
                   {item.label}
                 </button>
               );
             })}
           </nav>
 
-          {/* Gold Price Ticker + Status */}
+          {/* Gold Price Ticker */}
           <div className="flex items-center gap-4">
             {goldPrice && (
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 border border-border bg-card" data-testid="gold-ticker">
@@ -82,7 +87,9 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
             )}
             <div className="flex items-center gap-1.5">
               <div className="w-1.5 h-1.5 rounded-full bg-[hsl(142,71%,45%)] pulse-dot" />
-              <span className="text-xs font-mono text-muted-foreground">LIVE</span>
+              <span className="text-xs font-mono text-muted-foreground">
+                {goldPrice?.source === "live" ? "LIVE" : "CACHED"}
+              </span>
             </div>
           </div>
         </div>

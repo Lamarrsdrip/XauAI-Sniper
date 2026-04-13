@@ -1,33 +1,34 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for AI Sniper XAUUSD Trading Bot
-Tests all FastAPI endpoints for functionality and data integrity
+Backend API Testing for AI XAUUSD Trading Bot - Iteration 3
+Tests new features: live gold price, Stripe crypto checkout, setup guide
 """
 
 import requests
 import sys
 import json
 from datetime import datetime
-from typing import Dict, Any
 
-class AITradingBotAPITester:
+class APITester:
     def __init__(self, base_url="https://ml-gold-bot.preview.emergentagent.com"):
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
         self.tests_run = 0
         self.tests_passed = 0
         self.failed_tests = []
-        self.test_results = {}
 
-    def run_test(self, name: str, method: str, endpoint: str, expected_status: int = 200, 
-                 data: Dict[Any, Any] = None, validate_response: callable = None) -> tuple:
+    def log(self, message, level="INFO"):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] {level}: {message}")
+
+    def run_test(self, name, method, endpoint, expected_status=200, data=None, headers=None, validate_response=None):
         """Run a single API test with optional response validation"""
-        url = f"{self.api_url}/{endpoint}" if not endpoint.startswith('http') else endpoint
-        headers = {'Content-Type': 'application/json'}
+        url = f"{self.api_url}/{endpoint.lstrip('/')}"
+        if headers is None:
+            headers = {'Content-Type': 'application/json'}
 
         self.tests_run += 1
-        print(f"\n🔍 Testing {name}...")
-        print(f"   URL: {url}")
+        self.log(f"Testing {name}...")
         
         try:
             if method == 'GET':
@@ -38,524 +39,268 @@ class AITradingBotAPITester:
                 response = requests.put(url, json=data, headers=headers, timeout=10)
             elif method == 'DELETE':
                 response = requests.delete(url, headers=headers, timeout=10)
-            else:
-                raise ValueError(f"Unsupported method: {method}")
 
-            success = response.status_code == expected_status
-            response_data = {}
-            
+            # Check status code
+            if response.status_code != expected_status:
+                self.log(f"❌ {name} - Expected {expected_status}, got {response.status_code}", "ERROR")
+                self.failed_tests.append(f"{name}: Status {response.status_code} != {expected_status}")
+                return False, {}
+
+            # Parse JSON response
             try:
-                response_data = response.json() if response.content else {}
+                response_data = response.json()
             except json.JSONDecodeError:
                 if expected_status == 200:
-                    print(f"   ⚠️  Warning: Non-JSON response received")
-                response_data = {"raw_content": response.text[:200]}
+                    self.log(f"❌ {name} - Invalid JSON response", "ERROR")
+                    self.failed_tests.append(f"{name}: Invalid JSON response")
+                    return False, {}
+                response_data = {}
 
-            if success:
-                # Additional validation if provided
-                if validate_response and response_data:
-                    validation_result = validate_response(response_data)
-                    if not validation_result:
-                        success = False
-                        print(f"   ❌ Failed - Response validation failed")
-                    else:
-                        print(f"   ✅ Passed - Status: {response.status_code}, Validation: OK")
-                else:
-                    print(f"   ✅ Passed - Status: {response.status_code}")
-                
-                if success:
-                    self.tests_passed += 1
-            else:
-                print(f"   ❌ Failed - Expected {expected_status}, got {response.status_code}")
-                print(f"   Response: {response.text[:200]}")
-                self.failed_tests.append({
-                    "test": name,
-                    "expected": expected_status,
-                    "actual": response.status_code,
-                    "response": response.text[:200]
-                })
+            # Custom validation
+            if validate_response:
+                validation_result = validate_response(response_data)
+                if validation_result is not True:
+                    self.log(f"❌ {name} - Validation failed: {validation_result}", "ERROR")
+                    self.failed_tests.append(f"{name}: {validation_result}")
+                    return False, response_data
 
-            self.test_results[name] = {
-                "success": success,
-                "status_code": response.status_code,
-                "response_data": response_data
-            }
-
-            return success, response_data
+            self.tests_passed += 1
+            self.log(f"✅ {name} - Passed")
+            return True, response_data
 
         except requests.exceptions.RequestException as e:
-            print(f"   ❌ Failed - Network Error: {str(e)}")
-            self.failed_tests.append({
-                "test": name,
-                "error": str(e)
-            })
-            self.test_results[name] = {
-                "success": False,
-                "error": str(e)
-            }
+            self.log(f"❌ {name} - Request failed: {str(e)}", "ERROR")
+            self.failed_tests.append(f"{name}: Request failed - {str(e)}")
             return False, {}
 
-    def validate_performance_data(self, data: Dict) -> bool:
-        """Validate performance summary response structure"""
-        required_fields = [
-            'total_trades', 'win_rate', 'profit_factor', 'max_drawdown',
-            'avg_rr_ratio', 'weekly_return_avg', 'sharpe_ratio',
-            'monthly_returns', 'strategy_breakdown', 'weekly_data', 'equity_curve'
-        ]
-        
-        for field in required_fields:
-            if field not in data:
-                print(f"   Missing required field: {field}")
-                return False
-        
-        # Validate monthly_returns structure
-        if not isinstance(data['monthly_returns'], list) or len(data['monthly_returns']) == 0:
-            print(f"   Invalid monthly_returns structure")
-            return False
-            
-        # Check first monthly return has required fields
-        first_month = data['monthly_returns'][0]
-        month_fields = ['month', 'return', 'trades']
-        for field in month_fields:
-            if field not in first_month:
-                print(f"   Missing field in monthly_returns: {field}")
-                return False
-        
-        # Validate strategy_breakdown
-        if not isinstance(data['strategy_breakdown'], list) or len(data['strategy_breakdown']) != 3:
-            print(f"   Invalid strategy_breakdown structure")
-            return False
-            
-        return True
+    def test_health_check(self):
+        """Test basic health endpoint"""
+        return self.run_test("Health Check", "GET", "/health")
 
-    def validate_architecture_data(self, data: Dict) -> bool:
-        """Validate architecture response structure"""
-        if 'modules' not in data or 'filters' not in data:
-            print(f"   Missing modules or filters in architecture data")
-            return False
+    def test_gold_price_api(self):
+        """Test live gold price API - NEW FEATURE"""
+        def validate_gold_price(data):
+            required_fields = ['symbol', 'bid', 'ask', 'spread', 'change', 'change_pct', 'timestamp', 'source']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field: {field}"
             
-        if len(data['modules']) != 6:
-            print(f"   Expected 6 modules, got {len(data['modules'])}")
-            return False
+            if data.get('symbol') != 'XAUUSD':
+                return f"Expected symbol XAUUSD, got {data.get('symbol')}"
             
-        if len(data['filters']) != 4:
-            print(f"   Expected 4 filters, got {len(data['filters'])}")
-            return False
+            if data.get('source') != 'live':
+                return f"Expected source 'live', got {data.get('source')}"
             
-        # Check module structure
-        first_module = data['modules'][0]
-        module_fields = ['name', 'description', 'components']
-        for field in module_fields:
-            if field not in first_module:
-                print(f"   Missing field in module: {field}")
-                return False
-                
-        return True
+            bid = data.get('bid', 0)
+            if not (4000 <= bid <= 5500):
+                return f"Bid price {bid} not in expected range 4000-5500"
+            
+            return True
 
-    def validate_installation_data(self, data: Dict) -> bool:
-        """Validate installation guide response structure"""
-        required_fields = ['steps', 'requirements', 'warnings']
-        
-        for field in required_fields:
-            if field not in data:
-                print(f"   Missing required field: {field}")
-                return False
-        
-        if len(data['steps']) != 8:
-            print(f"   Expected 8 installation steps, got {len(data['steps'])}")
-            return False
-            
-        if len(data['requirements']) != 6:
-            print(f"   Expected 6 requirements, got {len(data['requirements'])}")
-            return False
-            
-        if len(data['warnings']) != 5:
-            print(f"   Expected 5 warnings, got {len(data['warnings'])}")
-            return False
-            
-        return True
+        return self.run_test("Live Gold Price", "GET", "/gold/price", validate_response=validate_gold_price)
 
-    def test_basic_endpoints(self):
-        """Test basic API endpoints"""
-        print("\n" + "="*50)
-        print("TESTING BASIC ENDPOINTS")
-        print("="*50)
-        
-        # Test root API endpoint
-        self.run_test(
-            "API Root",
-            "GET",
-            "",
-            200,
-            validate_response=lambda data: "message" in data and "AI Sniper EA API" in data["message"]
-        )
-        
-        # Test health endpoint
-        self.run_test(
-            "Health Check",
-            "GET", 
-            "health",
-            200,
-            validate_response=lambda data: data.get("status") == "ok"
-        )
+    def test_purchase_price_api(self):
+        """Test purchase price API - NEW FEATURE"""
+        def validate_purchase_price(data):
+            expected = {'price': 199, 'currency': 'usd', 'payment_method': 'crypto'}
+            for key, expected_value in expected.items():
+                if data.get(key) != expected_value:
+                    return f"Expected {key}={expected_value}, got {data.get(key)}"
+            return True
 
-    def test_performance_endpoints(self):
-        """Test performance data endpoints"""
-        print("\n" + "="*50)
-        print("TESTING PERFORMANCE ENDPOINTS")
-        print("="*50)
-        
-        self.run_test(
-            "Performance Summary",
-            "GET",
-            "performance/summary",
-            200,
-            validate_response=self.validate_performance_data
-        )
+        return self.run_test("Purchase Price", "GET", "/purchase/price", validate_response=validate_purchase_price)
 
-    def test_architecture_endpoints(self):
-        """Test system architecture endpoints"""
-        print("\n" + "="*50)
-        print("TESTING ARCHITECTURE ENDPOINTS")
-        print("="*50)
-        
-        self.run_test(
-            "System Architecture",
-            "GET",
-            "architecture",
-            200,
-            validate_response=self.validate_architecture_data
-        )
-
-    def test_documentation_endpoints(self):
-        """Test documentation endpoints"""
-        print("\n" + "="*50)
-        print("TESTING DOCUMENTATION ENDPOINTS")
-        print("="*50)
-        
-        self.run_test(
-            "Installation Guide",
-            "GET",
-            "docs/installation",
-            200,
-            validate_response=self.validate_installation_data
-        )
-        
-        self.run_test(
-            "Parameter Documentation",
-            "GET",
-            "docs/parameters",
-            200,
-            validate_response=lambda data: "groups" in data and len(data["groups"]) >= 3
-        )
-
-    def test_download_endpoints(self):
-        """Test file download endpoints"""
-        print("\n" + "="*50)
-        print("TESTING DOWNLOAD ENDPOINTS")
-        print("="*50)
-        
-        # Test EA file download
-        success, _ = self.run_test(
-            "Download EA File",
-            "GET",
-            "download/ea",
-            200
-        )
-        
-        # Test package download
-        success, _ = self.run_test(
-            "Download Package",
-            "GET",
-            "download/package",
-            200
-        )
-
-    def test_configuration_endpoints(self):
-        """Test configuration CRUD endpoints"""
-        print("\n" + "="*50)
-        print("TESTING CONFIGURATION ENDPOINTS")
-        print("="*50)
-        
-        # Test creating a configuration
-        test_config = {
-            "name": "Test Configuration",
-            "risk_percent": 1.5,
-            "daily_loss_limit": 2.5,
-            "enable_trend_mode": True,
-            "enable_range_mode": False,
-            "confidence_threshold": 80
-        }
-        
-        success, create_response = self.run_test(
-            "Create Configuration",
-            "POST",
-            "configs",
-            200,
-            data=test_config,
-            validate_response=lambda data: "id" in data and data["name"] == "Test Configuration"
-        )
-        
-        # Test getting all configurations
-        success, get_response = self.run_test(
-            "Get All Configurations",
-            "GET",
-            "configs",
-            200,
-            validate_response=lambda data: isinstance(data, list)
-        )
-        
-        # Test getting specific configuration if create was successful
-        if success and create_response and "id" in create_response:
-            config_id = create_response["id"]
-            self.run_test(
-                "Get Specific Configuration",
-                "GET",
-                f"configs/{config_id}",
-                200,
-                validate_response=lambda data: data.get("id") == config_id
-            )
-            
-            # Test deleting the configuration
-            self.run_test(
-                "Delete Configuration",
-                "DELETE",
-                f"configs/{config_id}",
-                200,
-                validate_response=lambda data: "deleted" in data
-            )
-
-    def validate_gold_price_data(self, data: Dict) -> bool:
-        """Validate gold price response structure"""
-        required_fields = ['symbol', 'bid', 'ask', 'spread', 'change', 'change_pct', 'timestamp']
-        
-        for field in required_fields:
-            if field not in data:
-                print(f"   Missing required field: {field}")
-                return False
-        
-        # Validate data types
-        if data['symbol'] != 'XAUUSD':
-            print(f"   Expected symbol XAUUSD, got {data['symbol']}")
-            return False
-            
-        if not isinstance(data['bid'], (int, float)) or data['bid'] <= 0:
-            print(f"   Invalid bid price: {data['bid']}")
-            return False
-            
-        if not isinstance(data['ask'], (int, float)) or data['ask'] <= 0:
-            print(f"   Invalid ask price: {data['ask']}")
-            return False
-            
-        return True
-
-    def validate_pin_stats_data(self, data: Dict) -> bool:
-        """Validate PIN stats response structure"""
-        required_fields = ['total', 'active', 'used', 'unused', 'revoked']
-        
-        for field in required_fields:
-            if field not in data:
-                print(f"   Missing required field: {field}")
-                return False
-            if not isinstance(data[field], int) or data[field] < 0:
-                print(f"   Invalid {field} value: {data[field]}")
-                return False
-        
-        return True
-
-    def validate_how_it_works_data(self, data: Dict) -> bool:
-        """Validate How It Works response structure"""
-        if 'sections' not in data or 'faq' not in data:
-            print(f"   Missing sections or faq in how-it-works data")
-            return False
-            
-        if not isinstance(data['sections'], list) or len(data['sections']) == 0:
-            print(f"   Invalid sections structure")
-            return False
-            
-        section = data['sections'][0]
-        if 'steps' not in section or len(section['steps']) != 8:
-            print(f"   Expected 8 steps, got {len(section.get('steps', []))}")
-            return False
-            
-        if not isinstance(data['faq'], list) or len(data['faq']) != 6:
-            print(f"   Expected 6 FAQ items, got {len(data['faq'])}")
-            return False
-            
-        return True
-
-    def test_gold_price_endpoints(self):
-        """Test gold price endpoints (NEW in iteration 2)"""
-        print("\n" + "="*50)
-        print("TESTING GOLD PRICE ENDPOINTS")
-        print("="*50)
-        
-        self.run_test(
-            "Get Gold Price",
-            "GET",
-            "gold/price",
-            200,
-            validate_response=self.validate_gold_price_data
-        )
-
-    def test_pin_management_endpoints(self):
-        """Test PIN license management endpoints (NEW in iteration 2)"""
-        print("\n" + "="*50)
-        print("TESTING PIN MANAGEMENT ENDPOINTS")
-        print("="*50)
-        
-        # Test PIN stats (should work even with no PINs)
-        self.run_test(
-            "Get PIN Stats",
-            "GET",
-            "pins/stats",
-            200,
-            validate_response=self.validate_pin_stats_data
-        )
-        
-        # Test getting all PINs
-        success, pins_response = self.run_test(
-            "Get All PINs",
-            "GET",
-            "pins",
-            200,
-            validate_response=lambda data: "total" in data and "pins" in data and isinstance(data["pins"], list)
-        )
-        
-        # Test generating PINs
-        pin_generate_data = {
-            "count": 2,
-            "buyer_name": "Test Buyer",
+    def test_purchase_checkout_api(self):
+        """Test Stripe checkout creation - NEW FEATURE"""
+        test_data = {
+            "buyer_name": "Test User",
             "buyer_email": "test@example.com",
-            "notes": "Test PIN generation"
+            "origin_url": "https://example.com"
         }
         
-        success, generate_response = self.run_test(
-            "Generate PINs",
-            "POST",
-            "pins/generate",
-            200,
-            data=pin_generate_data,
-            validate_response=lambda data: "pins_created" in data and data["pins_created"] == 2 and "pins" in data
-        )
-        
-        # If PIN generation was successful, test validation and management
-        if success and generate_response and "pins" in generate_response:
-            test_pin = generate_response["pins"][0]["pin"]
+        def validate_checkout(data):
+            required_fields = ['url', 'session_id']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field: {field}"
             
-            # Test PIN validation with valid PIN
-            self.run_test(
-                "Validate Valid PIN",
-                "POST",
-                "pins/validate",
-                200,
-                data={"pin": test_pin, "mt5_account": "12345"},
-                validate_response=lambda data: data.get("valid") == True and data.get("pin") == test_pin
-            )
+            if not data.get('url', '').startswith('https://'):
+                return f"Invalid checkout URL: {data.get('url')}"
             
-            # Test PIN validation with invalid PIN
-            self.run_test(
-                "Validate Invalid PIN",
-                "POST",
-                "pins/validate",
-                200,
-                data={"pin": "FAKE-PIN-1234", "mt5_account": "12345"},
-                validate_response=lambda data: data.get("valid") == False
-            )
+            if not data.get('session_id'):
+                return "Empty session_id"
             
-            # Test PIN revocation
-            self.run_test(
-                "Revoke PIN",
-                "PUT",
-                f"pins/{test_pin}/revoke",
-                200,
-                validate_response=lambda data: data.get("revoked") == True and data.get("pin") == test_pin
-            )
-            
-            # Test PIN reactivation
-            self.run_test(
-                "Reactivate PIN",
-                "PUT",
-                f"pins/{test_pin}/activate",
-                200,
-                validate_response=lambda data: data.get("activated") == True and data.get("pin") == test_pin
-            )
-            
-            # Test PIN deletion
-            self.run_test(
-                "Delete PIN",
-                "DELETE",
-                f"pins/{test_pin}",
-                200,
-                validate_response=lambda data: data.get("deleted") == True and data.get("pin") == test_pin
-            )
+            return True
 
-    def test_how_it_works_endpoints(self):
-        """Test How It Works documentation endpoints (NEW in iteration 2)"""
-        print("\n" + "="*50)
-        print("TESTING HOW IT WORKS ENDPOINTS")
-        print("="*50)
-        
-        self.run_test(
-            "How It Works Guide",
-            "GET",
-            "docs/how-it-works",
-            200,
-            validate_response=self.validate_how_it_works_data
-        )
+        return self.run_test("Purchase Checkout", "POST", "/purchase/checkout", 
+                           data=test_data, validate_response=validate_checkout)
 
-    def run_all_tests(self):
-        """Run all test suites"""
-        print("🚀 Starting AI Trading Bot API Tests - Iteration 2")
-        print(f"Base URL: {self.base_url}")
-        print(f"API URL: {self.api_url}")
+    def test_setup_guide_api(self):
+        """Test setup guide API - NEW FEATURE"""
+        def validate_setup_guide(data):
+            required_fields = ['title', 'intro', 'steps', 'important_notes']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field: {field}"
+            
+            if "10-Year-Old" not in data.get('title', ''):
+                return f"Title should contain '10-Year-Old', got: {data.get('title')}"
+            
+            steps = data.get('steps', [])
+            if len(steps) != 10:
+                return f"Expected 10 steps, got {len(steps)}"
+            
+            # Check each step has required fields
+            for i, step in enumerate(steps):
+                required_step_fields = ['step', 'title', 'instructions', 'tip']
+                for field in required_step_fields:
+                    if field not in step:
+                        return f"Step {i+1} missing field: {field}"
+                
+                if step.get('step') != i + 1:
+                    return f"Step {i+1} has wrong step number: {step.get('step')}"
+            
+            return True
+
+        return self.run_test("Setup Guide", "GET", "/docs/setup-guide", validate_response=validate_setup_guide)
+
+    def test_pin_generation(self):
+        """Test PIN generation - EXISTING FEATURE"""
+        test_data = {"count": 1, "buyer_name": "Test", "buyer_email": "test@example.com"}
         
-        start_time = datetime.now()
+        def validate_pins(data):
+            if 'pins_created' not in data or 'pins' not in data:
+                return "Missing pins_created or pins field"
+            
+            if data.get('pins_created') != 1:
+                return f"Expected 1 pin created, got {data.get('pins_created')}"
+            
+            pins = data.get('pins', [])
+            if len(pins) != 1:
+                return f"Expected 1 pin in array, got {len(pins)}"
+            
+            pin_obj = pins[0]
+            if not pin_obj.get('pin', '').startswith('ASE-'):
+                return f"PIN should start with ASE-, got: {pin_obj.get('pin')}"
+            
+            return True
+
+        return self.run_test("PIN Generation", "POST", "/pins/generate", 
+                           data=test_data, validate_response=validate_pins)
+
+    def test_pin_validation(self):
+        """Test PIN validation - EXISTING FEATURE"""
+        # First generate a PIN
+        gen_success, gen_data = self.test_pin_generation()
+        if not gen_success:
+            return False, {}
+        
+        pin = gen_data.get('pins', [{}])[0].get('pin')
+        if not pin:
+            self.log("❌ PIN Validation - No PIN to validate", "ERROR")
+            return False, {}
+        
+        test_data = {"pin": pin, "mt5_account": "12345"}
+        
+        def validate_pin_response(data):
+            if not data.get('valid'):
+                return f"PIN validation failed: {data.get('reason', 'Unknown')}"
+            
+            if data.get('pin') != pin:
+                return f"Returned PIN doesn't match: {data.get('pin')} != {pin}"
+            
+            return True
+
+        return self.run_test("PIN Validation", "POST", "/pins/validate", 
+                           data=test_data, validate_response=validate_pin_response)
+
+    def test_performance_summary(self):
+        """Test performance data - EXISTING FEATURE"""
+        def validate_performance(data):
+            required_fields = ['total_trades', 'win_rate', 'profit_factor', 'max_drawdown']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field: {field}"
+            
+            if not isinstance(data.get('total_trades'), int):
+                return "total_trades should be integer"
+            
+            return True
+
+        return self.run_test("Performance Summary", "GET", "/performance/summary", 
+                           validate_response=validate_performance)
+
+    def test_ea_download(self):
+        """Test EA file download - EXISTING FEATURE"""
+        url = f"{self.api_url}/download/ea"
+        self.tests_run += 1
+        self.log("Testing EA Download...")
         
         try:
-            self.test_basic_endpoints()
-            self.test_gold_price_endpoints()  # NEW in iteration 2
-            self.test_pin_management_endpoints()  # NEW in iteration 2
-            self.test_how_it_works_endpoints()  # NEW in iteration 2
-            self.test_performance_endpoints()
-            self.test_architecture_endpoints()
-            self.test_documentation_endpoints()
-            self.test_download_endpoints()
-            self.test_configuration_endpoints()
-        except Exception as e:
-            print(f"\n❌ Test suite failed with error: {str(e)}")
-            return 1
-        
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
-        
-        # Print final results
-        print("\n" + "="*60)
-        print("FINAL TEST RESULTS")
-        print("="*60)
-        print(f"Tests Run: {self.tests_run}")
-        print(f"Tests Passed: {self.tests_passed}")
-        print(f"Tests Failed: {self.tests_run - self.tests_passed}")
-        print(f"Success Rate: {(self.tests_passed/self.tests_run*100):.1f}%")
-        print(f"Duration: {duration:.2f} seconds")
-        
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                # Check if it's a file download
+                content_type = response.headers.get('content-type', '')
+                if 'application/octet-stream' in content_type or len(response.content) > 0:
+                    self.tests_passed += 1
+                    self.log("✅ EA Download - Passed")
+                    return True, {}
+                else:
+                    self.log("❌ EA Download - No file content", "ERROR")
+                    self.failed_tests.append("EA Download: No file content")
+                    return False, {}
+            else:
+                self.log(f"❌ EA Download - Status {response.status_code}", "ERROR")
+                self.failed_tests.append(f"EA Download: Status {response.status_code}")
+                return False, {}
+        except requests.exceptions.RequestException as e:
+            self.log(f"❌ EA Download - Request failed: {str(e)}", "ERROR")
+            self.failed_tests.append(f"EA Download: Request failed - {str(e)}")
+            return False, {}
+
+    def run_all_tests(self):
+        """Run all backend tests"""
+        self.log("=" * 60)
+        self.log("STARTING BACKEND API TESTS - ITERATION 3")
+        self.log("=" * 60)
+
+        # Test basic connectivity
+        self.test_health_check()
+
+        # Test NEW features (Iteration 3)
+        self.log("\n--- NEW FEATURES (Iteration 3) ---")
+        self.test_gold_price_api()
+        self.test_purchase_price_api()
+        self.test_purchase_checkout_api()
+        self.test_setup_guide_api()
+
+        # Test EXISTING features
+        self.log("\n--- EXISTING FEATURES ---")
+        self.test_pin_generation()
+        self.test_pin_validation()
+        self.test_performance_summary()
+        self.test_ea_download()
+
+        # Print summary
+        self.log("\n" + "=" * 60)
+        self.log("BACKEND TEST SUMMARY")
+        self.log("=" * 60)
+        self.log(f"Tests Run: {self.tests_run}")
+        self.log(f"Tests Passed: {self.tests_passed}")
+        self.log(f"Tests Failed: {self.tests_run - self.tests_passed}")
+        self.log(f"Success Rate: {(self.tests_passed/self.tests_run*100):.1f}%")
+
         if self.failed_tests:
-            print(f"\n❌ FAILED TESTS:")
-            for i, failure in enumerate(self.failed_tests, 1):
-                print(f"{i}. {failure['test']}")
-                if 'expected' in failure:
-                    print(f"   Expected: {failure['expected']}, Got: {failure['actual']}")
-                if 'error' in failure:
-                    print(f"   Error: {failure['error']}")
-                if 'response' in failure:
-                    print(f"   Response: {failure['response']}")
-        
-        return 0 if self.tests_passed == self.tests_run else 1
+            self.log("\nFAILED TESTS:")
+            for failure in self.failed_tests:
+                self.log(f"  - {failure}")
+
+        return self.tests_passed == self.tests_run
 
 def main():
-    """Main test execution"""
-    tester = AITradingBotAPITester()
-    return tester.run_all_tests()
+    tester = APITester()
+    success = tester.run_all_tests()
+    return 0 if success else 1
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import "@/App.css";
 import axios from "axios";
+import { BrowserRouter, Routes, Route, useSearchParams, useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
 import HeroSection from "@/components/HeroSection";
 import ArchitectureSection from "@/components/ArchitectureSection";
@@ -10,32 +11,38 @@ import DownloadSection from "@/components/DownloadSection";
 import InstallationSection from "@/components/InstallationSection";
 import HowItWorksSection from "@/components/HowItWorksSection";
 import PinManagerSection from "@/components/PinManagerSection";
+import PurchaseSection from "@/components/PurchaseSection";
+import SetupGuideSection from "@/components/SetupGuideSection";
+import PurchaseSuccessPage from "@/components/PurchaseSuccessPage";
 import Footer from "@/components/Footer";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-function App() {
+function MainDashboard() {
   const [activeSection, setActiveSection] = useState("overview");
   const [performance, setPerformance] = useState(null);
   const [architecture, setArchitecture] = useState(null);
   const [installation, setInstallation] = useState(null);
   const [howItWorks, setHowItWorks] = useState(null);
+  const [setupGuide, setSetupGuide] = useState(null);
   const [goldPrice, setGoldPrice] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
     try {
-      const [perfRes, archRes, installRes, hiwRes] = await Promise.all([
+      const [perfRes, archRes, installRes, hiwRes, sgRes] = await Promise.all([
         axios.get(`${API}/performance/summary`),
         axios.get(`${API}/architecture`),
         axios.get(`${API}/docs/installation`),
         axios.get(`${API}/docs/how-it-works`),
+        axios.get(`${API}/docs/setup-guide`),
       ]);
       setPerformance(perfRes.data);
       setArchitecture(archRes.data);
       setInstallation(installRes.data);
       setHowItWorks(hiwRes.data);
+      setSetupGuide(sgRes.data);
     } catch (e) {
       console.error("Failed to fetch data:", e);
     } finally {
@@ -43,20 +50,17 @@ function App() {
     }
   }, []);
 
-  // Fetch gold price every 5 seconds
   const fetchGoldPrice = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/gold/price`);
       setGoldPrice(res.data);
-    } catch (e) {
-      // Silently fail
-    }
+    } catch (e) { /* silent */ }
   }, []);
 
   useEffect(() => {
     fetchData();
     fetchGoldPrice();
-    const interval = setInterval(fetchGoldPrice, 5000);
+    const interval = setInterval(fetchGoldPrice, 10000);
     return () => clearInterval(interval);
   }, [fetchData, fetchGoldPrice]);
 
@@ -84,7 +88,9 @@ function App() {
       <Header activeSection={activeSection} onNavigate={scrollToSection} goldPrice={goldPrice} />
       <main>
         <section id="overview"><HeroSection performance={performance} /></section>
+        <section id="purchase"><PurchaseSection api={API} /></section>
         <section id="how-it-works"><HowItWorksSection data={howItWorks} /></section>
+        <section id="setup-guide"><SetupGuideSection data={setupGuide} /></section>
         <section id="architecture"><ArchitectureSection data={architecture} /></section>
         <section id="performance"><PerformanceSection data={performance} /></section>
         <section id="configurator"><ConfiguratorSection api={API} /></section>
@@ -94,6 +100,28 @@ function App() {
       </main>
       <Footer />
     </div>
+  );
+}
+
+function PurchaseSuccessWrapper() {
+  return <PurchaseSuccessPage api={API} />;
+}
+
+function PurchaseCancelWrapper() {
+  const navigate = useNavigate();
+  useEffect(() => { navigate("/"); }, [navigate]);
+  return null;
+}
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<MainDashboard />} />
+        <Route path="/purchase/success" element={<PurchaseSuccessWrapper />} />
+        <Route path="/purchase/cancel" element={<PurchaseCancelWrapper />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 
