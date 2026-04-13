@@ -462,9 +462,35 @@ void OnTick()
       tradeConfidence += mlAdjustment;
       mlBoostApplied = mlAdjustment;
       tradeConfidence = MathMax(0, MathMin(100, tradeConfidence));
+      
+      // LOSS AVOIDANCE: Check if this hour/day historically loses
+      if(IsHighLossTimeSlot())
+      {
+         tradeConfidence -= 20; // Heavy penalty for historically bad times
+         if(tradeConfidence < InpConfidenceThreshold)
+         {
+            signal = 0; // Skip trade entirely
+            Print("ML LOSS AVOIDANCE: Skipping trade - historically bad time slot");
+         }
+      }
+      
+      // STREAK AWARENESS: If on a winning streak, slightly tighten entry
+      // If on a losing streak, require MUCH higher confidence
+      if(consecutiveLosses >= 2)
+      {
+         tradeConfidence -= 10; // Require even higher confidence after losses
+      }
    }
    
-   if(signal != 0 && tradeConfidence >= InpConfidenceThreshold)
+   // Dynamic threshold: after enough learning, require higher confidence for better win rate
+   int effectiveThreshold = InpConfidenceThreshold;
+   if(patternCount >= 50)
+   {
+      double recentWinRate = GetRecentWinRate(20);
+      if(recentWinRate < 0.6) effectiveThreshold += 10; // Tighten if recent performance is poor
+   }
+   
+   if(signal != 0 && tradeConfidence >= effectiveThreshold)
    {
       ExecuteTrade(signal);
    }
@@ -525,9 +551,58 @@ int GetMLConfidenceAdjustment()
    
    double mlWinRate = (double)winCount / matchCount;
    
-   // Convert to confidence adjustment (-15 to +15)
-   int adjustment = (int)((mlWinRate - 0.5) * 30.0 * InpLearningWeight);
-   return MathMax(-15, MathMin(15, adjustment));
+   // Convert to confidence adjustment (-20 to +20) - wider range for more impact
+   int adjustment = (int)((mlWinRate - 0.5) * 40.0 * InpLearningWeight);
+   return MathMax(-20, MathMin(20, adjustment));
+}
+
+//+------------------------------------------------------------------+
+//| ML: CHECK IF CURRENT TIME IS HISTORICALLY A LOSING TIME          |
+//+------------------------------------------------------------------+
+bool IsHighLossTimeSlot()
+{
+   if(patternCount < 30) return false;
+   
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   int currentHour = dt.hour;
+   int currentDow = dt.day_of_week;
+   
+   int slotTotal = 0;
+   int slotLosses = 0;
+   
+   for(int i = 0; i < patternCount; i++)
+   {
+      // Match same hour range (+/- 1hr) and same day of week
+      if(MathAbs(patternMemory[i].hourOfDay - currentHour) <= 1 && patternMemory[i].dayOfWeek == currentDow)
+      {
+         slotTotal++;
+         if(!patternMemory[i].wasWinner) slotLosses++;
+      }
+   }
+   
+   if(slotTotal < 5) return false;
+   
+   double lossRate = (double)slotLosses / slotTotal;
+   return lossRate > 0.65; // If >65% of trades at this time lose, avoid it
+}
+
+//+------------------------------------------------------------------+
+//| ML: GET RECENT WIN RATE FROM LAST N PATTERNS                     |
+//+------------------------------------------------------------------+
+double GetRecentWinRate(int lookback)
+{
+   if(patternCount < lookback) return 0.5;
+   
+   int wins = 0;
+   int start = patternCount - lookback;
+   
+   for(int i = start; i < patternCount; i++)
+   {
+      if(patternMemory[i].wasWinner) wins++;
+   }
+   
+   return (double)wins / lookback;
 }
 
 //+------------------------------------------------------------------+

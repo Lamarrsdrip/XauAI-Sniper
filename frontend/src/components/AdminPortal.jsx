@@ -58,6 +58,7 @@ export default function AdminPortal({ api }) {
             { id: "settings", label: "SETTINGS", icon: GearSix },
             { id: "configurator", label: "EA CONFIG", icon: ChartBar },
             { id: "transactions", label: "PAYMENTS", icon: CurrencyNgn },
+            { id: "account", label: "ACCOUNT", icon: UserCircle },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} data-testid={`admin-tab-${t.id}`}
               className={`px-5 py-3 text-xs font-bold tracking-[0.1em] flex items-center gap-2 border-b-2 transition-colors ${tab === t.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
@@ -72,6 +73,7 @@ export default function AdminPortal({ api }) {
         {tab === "settings" && <SettingsTab api={api} token={token} />}
         {tab === "configurator" && <ConfigTab api={api} token={token} />}
         {tab === "transactions" && <TransactionsTab api={api} token={token} />}
+        {tab === "account" && <AccountTab api={api} token={token} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
       </div>
     </div>
   );
@@ -378,6 +380,124 @@ function TransactionsTab({ api, token }) {
             ))}</tbody>
           </table>
         </div>}
+      </div>
+    </div>
+  );
+}
+
+
+// --- ACCOUNT TAB ---
+function AccountTab({ api, token, admin, onLogin, onLogout }) {
+  const [newEmail, setNewEmail] = useState(admin?.email || "");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const h = { headers: { Authorization: `Bearer ${token}` } };
+
+  const handleSave = async () => {
+    setError(""); setMessage("");
+    if (!currentPassword) { setError("Enter your current password to make changes."); return; }
+    if (newPassword && newPassword !== confirmPassword) { setError("New passwords don't match."); return; }
+    if (newPassword && newPassword.length < 6) { setError("New password must be at least 6 characters."); return; }
+    if (!newEmail.includes("@")) { setError("Enter a valid email address."); return; }
+
+    setSaving(true);
+    try {
+      const body = { current_password: currentPassword };
+      if (newEmail !== admin?.email) body.new_email = newEmail;
+      if (newPassword) body.new_password = newPassword;
+
+      const res = await ax.put(`${api}/admin/account`, body, h);
+      if (res.data.updated) {
+        setMessage("Account updated successfully! " + (res.data.email !== admin?.email ? "You'll be logged in with the new email." : ""));
+        if (res.data.token) { onLogin(res.data.token); }
+        setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+      } else {
+        setMessage("No changes to save.");
+      }
+    } catch (err) {
+      const d = err.response?.data?.detail;
+      setError(typeof d === "string" ? d : "Update failed. Check your current password.");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="max-w-xl" data-testid="admin-account-tab">
+      <h3 className="font-heading text-xl font-bold mb-6">Admin Account</h3>
+
+      <div className="border border-border bg-card p-6 space-y-5">
+        {/* Current info */}
+        <div className="pb-4 border-b border-border">
+          <div className="flex items-center gap-3 mb-1">
+            <UserCircle size={32} weight="duotone" className="text-primary" />
+            <div>
+              <div className="font-bold text-sm">{admin?.name || "Admin"}</div>
+              <div className="text-xs text-muted-foreground">{admin?.email}</div>
+            </div>
+          </div>
+          <div className="mt-2 text-xs text-muted-foreground">Role: <span className="font-mono font-bold text-primary">ADMIN</span></div>
+        </div>
+
+        {/* Change Email */}
+        <div>
+          <label className="text-sm font-medium block mb-1.5">Email Address</label>
+          <div className="relative">
+            <Envelope size={16} className="absolute left-3 top-3 text-muted-foreground" />
+            <input data-testid="account-email" type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)}
+              className="w-full pl-10 pr-3 py-2.5 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+          </div>
+        </div>
+
+        {/* Change Password */}
+        <div>
+          <label className="text-sm font-medium block mb-1.5">New Password <span className="text-muted-foreground font-normal">(leave blank to keep current)</span></label>
+          <div className="relative">
+            <Lock size={16} className="absolute left-3 top-3 text-muted-foreground" />
+            <input data-testid="account-new-password" type={showNew ? "text" : "password"} value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="New password (optional)"
+              className="w-full pl-10 pr-10 py-2.5 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+            <button type="button" onClick={() => setShowNew(!showNew)} className="absolute right-3 top-3 text-muted-foreground">
+              {showNew ? <EyeSlash size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+        </div>
+
+        {newPassword && (
+          <div>
+            <label className="text-sm font-medium block mb-1.5">Confirm New Password</label>
+            <input data-testid="account-confirm-password" type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="Re-enter new password"
+              className="w-full px-3 py-2.5 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+            {newPassword && confirmPassword && newPassword !== confirmPassword && (
+              <p className="text-xs text-[hsl(348,83%,47%)] mt-1">Passwords don't match</p>
+            )}
+          </div>
+        )}
+
+        {/* Current Password (required) */}
+        <div className="pt-4 border-t border-border">
+          <label className="text-sm font-bold block mb-1.5 text-foreground">Current Password <span className="text-[hsl(348,83%,47%)]">*</span></label>
+          <p className="text-xs text-muted-foreground mb-2">Required to confirm any changes</p>
+          <div className="relative">
+            <Lock size={16} className="absolute left-3 top-3 text-muted-foreground" />
+            <input data-testid="account-current-password" type={showCurrent ? "text" : "password"} value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} placeholder="Enter current password"
+              className="w-full pl-10 pr-10 py-2.5 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+            <button type="button" onClick={() => setShowCurrent(!showCurrent)} className="absolute right-3 top-3 text-muted-foreground">
+              {showCurrent ? <EyeSlash size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+        </div>
+
+        {error && <div className="text-[hsl(348,83%,47%)] text-sm font-medium" data-testid="account-error">{error}</div>}
+        {message && <div className="text-[hsl(142,71%,45%)] text-sm font-medium" data-testid="account-success">{message}</div>}
+
+        <button onClick={handleSave} disabled={saving} data-testid="account-save-btn"
+          className="w-full py-3 bg-primary text-primary-foreground font-bold text-sm flex items-center justify-center gap-2 hover:-translate-y-[1px] transition-transform shadow-[2px_2px_0px_hsl(0,0%,4%)]">
+          <FloppyDisk size={16} weight="bold" /> {saving ? "UPDATING..." : "UPDATE ACCOUNT"}
+        </button>
       </div>
     </div>
   );

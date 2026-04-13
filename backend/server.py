@@ -152,6 +152,11 @@ class AdminSettingsUpdate(BaseModel):
     smtp_email: Optional[str] = None
     smtp_password: Optional[str] = None
 
+class AdminAccountUpdate(BaseModel):
+    new_email: Optional[str] = None
+    new_password: Optional[str] = None
+    current_password: str
+
 # -------------------------------------------------------------------
 # GOLD PRICE
 # -------------------------------------------------------------------
@@ -484,6 +489,33 @@ async def admin_list_configs():
 async def admin_list_transactions():
     txs = await db.payment_transactions.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return {"total": len(txs), "transactions": txs}
+
+@api_router.put("/admin/account")
+async def update_admin_account(req: AdminAccountUpdate, admin: dict = Depends(get_current_admin)):
+    """Change admin email and/or password"""
+    user = await db.users.find_one({"email": admin["email"]})
+    if not user:
+        raise HTTPException(status_code=404, detail="Admin user not found")
+    if not verify_password(req.current_password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    updates = {}
+    if req.new_email and req.new_email.strip():
+        new_email = req.new_email.strip().lower()
+        if new_email != admin["email"]:
+            existing = await db.users.find_one({"email": new_email})
+            if existing:
+                raise HTTPException(status_code=400, detail="Email already in use")
+            updates["email"] = new_email
+    if req.new_password and req.new_password.strip():
+        if len(req.new_password) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        updates["password_hash"] = hash_password(req.new_password)
+    if not updates:
+        return {"updated": False, "message": "No changes provided"}
+    await db.users.update_one({"email": admin["email"]}, {"$set": updates})
+    new_email = updates.get("email", admin["email"])
+    new_token = create_access_token(str(user["_id"]), new_email)
+    return {"updated": True, "email": new_email, "token": new_token, "message": "Account updated successfully"}
 
 # -------------------------------------------------------------------
 # STARTUP
