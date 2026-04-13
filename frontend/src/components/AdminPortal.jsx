@@ -39,7 +39,7 @@ export default function AdminPortal({ api }) {
             <div className="w-7 h-7 bg-[hsl(43,74%,49%)] flex items-center justify-center">
               <span className="font-mono text-xs font-bold text-black">AU</span>
             </div>
-            <span className="font-heading font-bold text-sm">MrizAI Sniper</span>
+            <span className="font-heading font-bold text-sm">XauAI Sniper</span>
             <span className="text-xs bg-white/10 px-2 py-0.5 font-mono">ADMIN</span>
           </div>
           <div className="flex items-center gap-4">
@@ -105,8 +105,8 @@ function LoginPage({ api, onLogin }) {
           <div className="w-12 h-12 bg-[hsl(43,74%,49%)] flex items-center justify-center mx-auto mb-4">
             <span className="font-mono text-lg font-bold text-black">AU</span>
           </div>
-          <h1 className="font-heading text-2xl font-bold text-white">MrizAI Admin</h1>
-          <p className="text-sm text-white/40 mt-1">MrizAI Sniper EA Management</p>
+          <h1 className="font-heading text-2xl font-bold text-white">XauAI Admin</h1>
+          <p className="text-sm text-white/40 mt-1">XauAI Sniper EA Management</p>
         </div>
         <form onSubmit={handleSubmit} className="bg-white/5 border border-white/10 p-6 space-y-4">
           <div>

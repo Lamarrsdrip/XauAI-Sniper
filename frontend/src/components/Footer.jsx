@@ -10,7 +10,7 @@ export default function Footer() {
               <span className="font-mono text-[9px] font-bold text-black">MZ</span>
             </div>
             <span className="text-sm font-medium text-white/60">
-              MrizAI Sniper v2.0 — XAUUSD Trading System
+              XauAI Sniper v2.0 — XAUUSD Trading System
             </span>
           </div>
           <div className="flex items-center gap-6">

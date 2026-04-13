@@ -221,11 +221,11 @@ async def send_pin_email(to_email: str, buyer_name: str, pin: str):
         return False
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "Your MrizAI Sniper EA License PIN"
+        msg["Subject"] = "Your XauAI Sniper EA License PIN"
         msg["From"] = smtp_email
         msg["To"] = to_email
         html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-<h2 style="color:#B8860B;">MrizAI Sniper EA - License PIN</h2>
+<h2 style="color:#B8860B;">XauAI Sniper EA - License PIN</h2>
 <p>Hello {buyer_name or 'Trader'},</p>
 <p>Thank you for your purchase! Here is your unique license PIN:</p>
 <div style="background:#f5f5f5;border:2px solid #B8860B;padding:20px;text-align:center;margin:20px 0;">
@@ -251,7 +251,7 @@ async def send_pin_email(to_email: str, buyer_name: str, pin: str):
 
 @api_router.get("/")
 async def root():
-    return {"message": "MrizAI Sniper EA API v2.0"}
+    return {"message": "XauAI Sniper EA API v2.0"}
 
 @api_router.get("/health")
 async def health():
@@ -389,7 +389,7 @@ async def get_installation_guide():
 
 @api_router.get("/docs/how-it-works")
 async def get_how_it_works():
-    return {"sections":[{"title":"How MrizAI Sniper Works","subtitle":"Your intelligent XAUUSD trading assistant","steps":[{"id":1,"title":"Market Scanning","description":"Scans XAUUSD across M5, H1, H4 every 5 minutes using EMA, RSI, ATR, Bollinger Bands.","detail":"Multi-timeframe filters false signals."},{"id":2,"title":"AI Classification","description":"Classifies market as TRENDING, RANGING, or BREAKOUT using weighted scoring.","detail":"Different strategy for each condition."},{"id":3,"title":"Confidence Scoring","description":"Scores 0-100 using global ML from all users. Only takes trades above 75+ confidence.","detail":"Sniper approach = fewer, higher-quality trades."},{"id":4,"title":"Smart Execution","description":"ATR-based stop loss, 1.5:1 R:R take profit, partial close at first target, trailing stop.","detail":"Locks profit early, lets winners run."},{"id":5,"title":"Risk Protection","description":"Per-trade risk limit, daily loss cap, weekly drawdown stop, cooldown after losses.","detail":"3 losses = pause. 3% daily = stops. Never blows account."},{"id":6,"title":"Global Learning","description":"Every trade from every user feeds the global AI brain. The more users trade, the smarter ALL bots get.","detail":"Cloud ML with 90%+ confidence target."}]}],"faq":[{"q":"Do I need to keep my computer on?","a":"Yes. Use a VPS ($5-10/mo) for 24/7 trading."},{"q":"What account size?","a":"Min $500, recommended $1,000+. Bot auto-calculates lot sizes."},{"q":"Which broker?","a":"We recommend Trade.com (75% deposit bonus). Any MT5 broker with XAUUSD works."},{"q":"Can I close trades manually?","a":"Yes, anytime. The bot won't interfere."},{"q":"What if I lose internet?","a":"Your SL/TP protect you. Bot resumes when reconnected."}]}
+    return {"sections":[{"title":"How XauAI Sniper Works","subtitle":"Your intelligent XAUUSD trading assistant","steps":[{"id":1,"title":"Market Scanning","description":"Scans XAUUSD across M5, H1, H4 every 5 minutes using EMA, RSI, ATR, Bollinger Bands.","detail":"Multi-timeframe filters false signals."},{"id":2,"title":"AI Classification","description":"Classifies market as TRENDING, RANGING, or BREAKOUT using weighted scoring.","detail":"Different strategy for each condition."},{"id":3,"title":"Confidence Scoring","description":"Scores 0-100 using global ML from all users. Only takes trades above 75+ confidence.","detail":"Sniper approach = fewer, higher-quality trades."},{"id":4,"title":"Smart Execution","description":"ATR-based stop loss, 1.5:1 R:R take profit, partial close at first target, trailing stop.","detail":"Locks profit early, lets winners run."},{"id":5,"title":"Risk Protection","description":"Per-trade risk limit, daily loss cap, weekly drawdown stop, cooldown after losses.","detail":"3 losses = pause. 3% daily = stops. Never blows account."},{"id":6,"title":"Global Learning","description":"Every trade from every user feeds the global AI brain. The more users trade, the smarter ALL bots get.","detail":"Cloud ML with 90%+ confidence target."}]}],"faq":[{"q":"Do I need to keep my computer on?","a":"Yes. Use a VPS ($5-10/mo) for 24/7 trading."},{"q":"What account size?","a":"Min $500, recommended $1,000+. Bot auto-calculates lot sizes."},{"q":"Which broker?","a":"We recommend Trade.com (75% deposit bonus). Any MT5 broker with XAUUSD works."},{"q":"Can I close trades manually?","a":"Yes, anytime. The bot won't interfere."},{"q":"What if I lose internet?","a":"Your SL/TP protect you. Bot resumes when reconnected."}]}
 
 @api_router.get("/docs/setup-guide")
 async def get_setup_guide():

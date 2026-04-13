@@ -26,7 +26,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
               <span className="font-mono text-xs font-bold text-primary-foreground">MZ</span>
             </div>
             <div>
-              <span className="font-heading font-bold text-sm tracking-tight text-foreground">MrizAI Sniper</span>
+              <span className="font-heading font-bold text-sm tracking-tight text-foreground">XauAI Sniper</span>
               <span className="text-xs text-muted-foreground ml-2 font-mono">v2.0</span>
             </div>
           </div>

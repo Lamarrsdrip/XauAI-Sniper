@@ -36,7 +36,7 @@ export default function BrokerSection() {
                 Trade with Trade.com — Get 75% Bonus
               </h3>
               <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
-                We highly recommend creating your MT5 account on <strong>Trade.com</strong> to use MrizAI Sniper.
+                We highly recommend creating your MT5 account on <strong>Trade.com</strong> to use XauAI Sniper.
                 Sign up through our partner link and get a <strong>75% bonus on every deposit</strong> you make.
                 More capital = more profit potential for the bot.
               </p>
@@ -66,7 +66,7 @@ export default function BrokerSection() {
                 <ArrowSquareOut size={16} weight="bold" />
               </a>
               <p className="text-xs text-muted-foreground mt-3">
-                Already have a Trade.com account? You can still use MrizAI Sniper with any MT5 broker.
+                Already have a Trade.com account? You can still use XauAI Sniper with any MT5 broker.
               </p>
             </div>
           </div>

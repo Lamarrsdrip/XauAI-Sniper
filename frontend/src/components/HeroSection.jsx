@@ -47,7 +47,7 @@ export default function HeroSection({ performance }) {
               className="font-heading text-4xl sm:text-5xl font-black tracking-tight leading-none mb-4 animate-fade-up delay-100"
               data-testid="hero-title"
             >
-              MrizAI SNIPER
+              XauAI SNIPER
               <br />
               <span className="text-[hsl(43,74%,49%)]">XAUUSD</span>
             </h1>
