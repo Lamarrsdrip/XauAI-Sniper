@@ -9,7 +9,7 @@ const API = `${BACKEND_URL}/api`;
 export default function PurchaseSuccessPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const sessionId = searchParams.get("session_id");
+  const reference = searchParams.get("reference") || searchParams.get("trxref");
 
   const [status, setStatus] = useState("checking");
   const [pin, setPin] = useState(null);
@@ -18,47 +18,30 @@ export default function PurchaseSuccessPage() {
   const [attempts, setAttempts] = useState(0);
 
   useEffect(() => {
-    if (!sessionId) {
-      setStatus("error");
-      return;
-    }
-
-    const pollStatus = async () => {
+    if (!reference) { setStatus("error"); return; }
+    const verify = async () => {
       try {
-        const res = await axios.get(`${API}/purchase/status/${sessionId}`);
-        const data = res.data;
-
-        if (data.payment_status === "paid" && data.pin) {
+        const res = await axios.get(`${API}/purchase/verify/${reference}`);
+        if (res.data.payment_status === "success" && res.data.pin) {
           setStatus("success");
-          setPin(data.pin);
-          setBuyerName(data.buyer_name || "");
-        } else if (data.status === "expired") {
-          setStatus("expired");
-        } else {
-          if (attempts < 10) {
-            setTimeout(() => setAttempts((a) => a + 1), 2000);
-          } else {
-            setStatus("timeout");
-          }
-        }
-      } catch (e) {
-        if (attempts < 10) {
-          setTimeout(() => setAttempts((a) => a + 1), 2000);
-        } else {
+          setPin(res.data.pin);
+          setBuyerName(res.data.buyer_name || "");
+        } else if (res.data.payment_status === "failed" || res.data.status === "failed") {
           setStatus("error");
+        } else {
+          if (attempts < 12) setTimeout(() => setAttempts(a => a + 1), 2500);
+          else setStatus("timeout");
         }
+      } catch {
+        if (attempts < 12) setTimeout(() => setAttempts(a => a + 1), 2500);
+        else setStatus("error");
       }
     };
-
-    pollStatus();
-  }, [sessionId, attempts]);
+    verify();
+  }, [reference, attempts]);
 
   const copyPin = () => {
-    if (pin) {
-      navigator.clipboard.writeText(pin);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    if (pin) { navigator.clipboard.writeText(pin); setCopied(true); setTimeout(() => setCopied(false), 2000); }
   };
 
   return (
@@ -70,12 +53,8 @@ export default function PurchaseSuccessPage() {
               <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
             </div>
             <h2 className="font-heading text-xl font-bold mb-2">Confirming Payment...</h2>
-            <p className="text-sm text-muted-foreground">
-              Please wait while we verify your crypto payment. This may take a moment.
-            </p>
-            <div className="mt-4 h-1 bg-muted overflow-hidden">
-              <div className="h-full bg-primary gold-shimmer w-full" />
-            </div>
+            <p className="text-sm text-muted-foreground">Verifying your Paystack payment. This may take a moment.</p>
+            <div className="mt-4 h-1 bg-muted overflow-hidden"><div className="h-full bg-primary gold-shimmer w-full" /></div>
           </div>
         )}
 
@@ -86,81 +65,51 @@ export default function PurchaseSuccessPage() {
                 <Check size={32} weight="bold" className="text-[hsl(142,71%,45%)]" />
               </div>
               <h2 className="font-heading text-2xl font-bold mb-1">Payment Successful!</h2>
-              <p className="text-sm text-muted-foreground">
-                Welcome{buyerName ? `, ${buyerName}` : ""}! Your license PIN has been generated.
-              </p>
+              <p className="text-sm text-muted-foreground">Welcome{buyerName ? `, ${buyerName}` : ""}! Your license PIN has been generated.</p>
             </div>
-
-            {/* PIN Display */}
             <div className="bg-muted/50 border border-border p-6 text-center mb-6" data-testid="pin-display">
-              <div className="text-xs font-bold tracking-[0.15em] text-muted-foreground mb-2">
-                YOUR LICENSE PIN
-              </div>
-              <div className="font-mono text-3xl font-black text-foreground tracking-wider mb-3" data-testid="generated-pin">
-                {pin}
-              </div>
-              <button
-                onClick={copyPin}
-                data-testid="copy-generated-pin"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground font-bold text-sm hover:-translate-y-[1px] transition-transform duration-150"
-              >
+              <div className="text-xs font-bold tracking-[0.15em] text-muted-foreground mb-2">YOUR LICENSE PIN</div>
+              <div className="font-mono text-3xl font-black text-foreground tracking-wider mb-3" data-testid="generated-pin">{pin}</div>
+              <button onClick={copyPin} data-testid="copy-generated-pin"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground font-bold text-sm hover:-translate-y-[1px] transition-transform duration-150">
                 {copied ? <Check size={14} /> : <Copy size={14} />}
                 {copied ? "COPIED!" : "COPY PIN"}
               </button>
             </div>
-
-            {/* Instructions */}
             <div className="space-y-3 mb-6">
               <h3 className="text-sm font-bold">What to do next:</h3>
               <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-                <li>Save your PIN somewhere safe (screenshot or write it down)</li>
+                <li>Save your PIN somewhere safe (screenshot it!)</li>
                 <li>Download the AI Sniper EA from our website</li>
-                <li>Install it on MetaTrader 5 (follow our Setup Guide)</li>
-                <li>Enter this PIN in the EA settings when prompted</li>
+                <li>Follow the Setup Guide to install on MetaTrader 5</li>
+                <li>Enter this PIN in the EA settings</li>
                 <li>Enable Auto Trading and start making money!</li>
               </ol>
             </div>
-
             <div className="border-t border-border pt-4 flex items-center justify-between">
-              <button
-                onClick={() => navigate("/")}
-                data-testid="back-to-home"
-                className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <ArrowLeft size={14} />
-                Back to Dashboard
+              <button onClick={() => navigate("/")} data-testid="back-to-home"
+                className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+                <ArrowLeft size={14} /> Back to Dashboard
               </button>
-              <a
-                href={`${API}/download/ea`}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground font-bold text-sm hover:-translate-y-[1px] transition-transform duration-150"
-              >
+              <a href={`${API}/download/ea`}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground font-bold text-sm hover:-translate-y-[1px] transition-transform duration-150">
                 DOWNLOAD EA
               </a>
             </div>
           </div>
         )}
 
-        {(status === "error" || status === "expired" || status === "timeout") && (
+        {(status === "error" || status === "timeout") && (
           <div className="border border-border bg-card p-8 text-center" data-testid="payment-error">
             <div className="w-16 h-16 bg-[hsl(348,83%,47%)]/10 flex items-center justify-center mx-auto mb-4">
               <Warning size={32} weight="bold" className="text-[hsl(348,83%,47%)]" />
             </div>
-            <h2 className="font-heading text-xl font-bold mb-2">
-              {status === "expired" ? "Payment Expired" : status === "timeout" ? "Verification Timed Out" : "Something Went Wrong"}
-            </h2>
+            <h2 className="font-heading text-xl font-bold mb-2">{status === "timeout" ? "Verification Timed Out" : "Something Went Wrong"}</h2>
             <p className="text-sm text-muted-foreground mb-6">
-              {status === "expired"
-                ? "Your payment session has expired. Please try again."
-                : status === "timeout"
-                ? "We couldn't verify your payment yet. If you completed the payment, please contact support."
-                : "There was an issue processing your payment. Please try again."}
+              {status === "timeout" ? "Couldn't verify your payment yet. If you completed payment, contact support with your reference." : "Issue processing payment. Please try again."}
             </p>
-            <button
-              onClick={() => navigate("/")}
-              className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground font-bold text-sm"
-            >
-              <ArrowLeft size={14} />
-              TRY AGAIN
+            <button onClick={() => navigate("/")} className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground font-bold text-sm">
+              <ArrowLeft size={14} /> TRY AGAIN
             </button>
           </div>
         )}

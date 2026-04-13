@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import "@/App.css";
 import axios from "axios";
-import { BrowserRouter, Routes, Route, useSearchParams, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
 import HeroSection from "@/components/HeroSection";
 import ArchitectureSection from "@/components/ArchitectureSection";
@@ -13,6 +13,7 @@ import HowItWorksSection from "@/components/HowItWorksSection";
 import PinManagerSection from "@/components/PinManagerSection";
 import PurchaseSection from "@/components/PurchaseSection";
 import SetupGuideSection from "@/components/SetupGuideSection";
+import VideoGuideSection from "@/components/VideoGuideSection";
 import PurchaseSuccessPage from "@/components/PurchaseSuccessPage";
 import Footer from "@/components/Footer";
 
@@ -75,9 +76,7 @@ function MainDashboard() {
       <div data-testid="loading-screen" className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
           <div className="font-mono text-sm text-muted-foreground mb-2">INITIALIZING</div>
-          <div className="w-48 h-[2px] bg-muted overflow-hidden">
-            <div className="h-full bg-primary gold-shimmer w-full" />
-          </div>
+          <div className="w-48 h-[2px] bg-muted overflow-hidden"><div className="h-full bg-primary gold-shimmer w-full" /></div>
         </div>
       </div>
     );
@@ -91,6 +90,7 @@ function MainDashboard() {
         <section id="purchase"><PurchaseSection api={API} /></section>
         <section id="how-it-works"><HowItWorksSection data={howItWorks} /></section>
         <section id="setup-guide"><SetupGuideSection data={setupGuide} /></section>
+        <section id="video-guide"><VideoGuideSection /></section>
         <section id="architecture"><ArchitectureSection data={architecture} /></section>
         <section id="performance"><PerformanceSection data={performance} /></section>
         <section id="configurator"><ConfiguratorSection api={API} /></section>
@@ -101,10 +101,6 @@ function MainDashboard() {
       <Footer />
     </div>
   );
-}
-
-function PurchaseSuccessWrapper() {
-  return <PurchaseSuccessPage api={API} />;
 }
 
 function PurchaseCancelWrapper() {
@@ -118,7 +114,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<MainDashboard />} />
-        <Route path="/purchase/success" element={<PurchaseSuccessWrapper />} />
+        <Route path="/purchase/success" element={<PurchaseSuccessPage />} />
         <Route path="/purchase/cancel" element={<PurchaseCancelWrapper />} />
       </Routes>
     </BrowserRouter>

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for AI XAUUSD Trading Bot - Iteration 3
-Tests new features: live gold price, Stripe crypto checkout, setup guide
+Backend API Testing for AI XAUUSD Trading Bot - Iteration 4
+Tests new features: Paystack Naira payment, video guide, enhanced AI metrics
 """
 
 import requests
@@ -100,40 +100,42 @@ class APITester:
         return self.run_test("Live Gold Price", "GET", "/gold/price", validate_response=validate_gold_price)
 
     def test_purchase_price_api(self):
-        """Test purchase price API - NEW FEATURE"""
+        """Test purchase price API - UPDATED FOR PAYSTACK NAIRA"""
         def validate_purchase_price(data):
-            expected = {'price': 199, 'currency': 'usd', 'payment_method': 'crypto'}
-            for key, expected_value in expected.items():
+            expected_fields = {
+                'price_naira': 300000,
+                'currency': 'NGN', 
+                'payment_method': 'paystack',
+                'formatted': '₦300,000'
+            }
+            for key, expected_value in expected_fields.items():
                 if data.get(key) != expected_value:
                     return f"Expected {key}={expected_value}, got {data.get(key)}"
             return True
 
-        return self.run_test("Purchase Price", "GET", "/purchase/price", validate_response=validate_purchase_price)
+        return self.run_test("Purchase Price (Paystack Naira)", "GET", "/purchase/price", validate_response=validate_purchase_price)
 
-    def test_purchase_checkout_api(self):
-        """Test Stripe checkout creation - NEW FEATURE"""
+    def test_purchase_initialize_api(self):
+        """Test Paystack purchase initialization - SHOULD RETURN 503 (NOT CONFIGURED)"""
         test_data = {
             "buyer_name": "Test User",
             "buyer_email": "test@example.com",
             "origin_url": "https://example.com"
         }
         
-        def validate_checkout(data):
-            required_fields = ['url', 'session_id']
-            for field in required_fields:
-                if field not in data:
-                    return f"Missing field: {field}"
+        def validate_503_error(data):
+            # For 503 status, we expect an error message about not being configured
+            if 'detail' not in data:
+                return "Missing error detail field"
             
-            if not data.get('url', '').startswith('https://'):
-                return f"Invalid checkout URL: {data.get('url')}"
-            
-            if not data.get('session_id'):
-                return "Empty session_id"
+            detail = data.get('detail', '').lower()
+            if 'not configured' not in detail or 'paystack' not in detail:
+                return f"Expected 'not configured' and 'paystack' in error message, got: {data.get('detail')}"
             
             return True
 
-        return self.run_test("Purchase Checkout", "POST", "/purchase/checkout", 
-                           data=test_data, validate_response=validate_checkout)
+        return self.run_test("Purchase Initialize (503 Expected)", "POST", "/purchase/initialize", 
+                           expected_status=503, data=test_data, validate_response=validate_503_error)
 
     def test_setup_guide_api(self):
         """Test setup guide API - NEW FEATURE"""
@@ -161,6 +163,45 @@ class APITester:
                     return f"Step {i+1} has wrong step number: {step.get('step')}"
             
             return True
+    def test_video_guide_api(self):
+        """Test video guide API - NEW FEATURE (Iteration 4)"""
+        def validate_video_guide(data):
+            required_fields = ['title', 'subtitle', 'scenes']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field: {field}"
+            
+            if "Visual Walkthrough" not in data.get('title', ''):
+                return f"Title should contain 'Visual Walkthrough', got: {data.get('title')}"
+            
+            scenes = data.get('scenes', [])
+            if len(scenes) != 6:
+                return f"Expected 6 scenes, got {len(scenes)}"
+            
+            # Check each scene has required fields
+            for i, scene in enumerate(scenes):
+                required_scene_fields = ['scene', 'title', 'duration', 'frames']
+                for field in required_scene_fields:
+                    if field not in scene:
+                        return f"Scene {i+1} missing field: {field}"
+                
+                if scene.get('scene') != i + 1:
+                    return f"Scene {i+1} has wrong scene number: {scene.get('scene')}"
+                
+                # Check frames
+                frames = scene.get('frames', [])
+                if len(frames) == 0:
+                    return f"Scene {i+1} has no frames"
+                
+                for j, frame in enumerate(frames):
+                    required_frame_fields = ['action', 'detail', 'visual']
+                    for field in required_frame_fields:
+                        if field not in frame:
+                            return f"Scene {i+1}, Frame {j+1} missing field: {field}"
+            
+            return True
+
+        return self.run_test("Video Guide (6 Scenes)", "GET", "/docs/video-guide", validate_response=validate_video_guide)
 
         return self.run_test("Setup Guide", "GET", "/docs/setup-guide", validate_response=validate_setup_guide)
 
@@ -215,9 +256,9 @@ class APITester:
                            data=test_data, validate_response=validate_pin_response)
 
     def test_performance_summary(self):
-        """Test performance data - EXISTING FEATURE"""
+        """Test performance data with enhanced AI metrics - UPDATED FOR ITERATION 4"""
         def validate_performance(data):
-            required_fields = ['total_trades', 'win_rate', 'profit_factor', 'max_drawdown']
+            required_fields = ['total_trades', 'win_rate', 'profit_factor', 'max_drawdown', 'ai_features']
             for field in required_fields:
                 if field not in data:
                     return f"Missing field: {field}"
@@ -225,9 +266,26 @@ class APITester:
             if not isinstance(data.get('total_trades'), int):
                 return "total_trades should be integer"
             
+            # Check enhanced AI features
+            ai_features = data.get('ai_features', {})
+            required_ai_fields = [
+                'market_classification_accuracy', 'avg_confidence_on_wins', 
+                'avg_confidence_on_losses', 'pattern_memory_size',
+                'adaptation_cycles', 'learning_rate_current',
+                'win_rate_after_learning', 'loss_avoidance_rate'
+            ]
+            for field in required_ai_fields:
+                if field not in ai_features:
+                    return f"Missing AI feature field: {field}"
+            
+            # Check for higher accuracy targets
+            accuracy = ai_features.get('market_classification_accuracy', 0)
+            if accuracy < 85:
+                return f"Expected market classification accuracy >= 85%, got {accuracy}%"
+            
             return True
 
-        return self.run_test("Performance Summary", "GET", "/performance/summary", 
+        return self.run_test("Performance Summary (Enhanced AI)", "GET", "/performance/summary", 
                            validate_response=validate_performance)
 
     def test_ea_download(self):
@@ -261,17 +319,18 @@ class APITester:
     def run_all_tests(self):
         """Run all backend tests"""
         self.log("=" * 60)
-        self.log("STARTING BACKEND API TESTS - ITERATION 3")
+        self.log("STARTING BACKEND API TESTS - ITERATION 4")
         self.log("=" * 60)
 
         # Test basic connectivity
         self.test_health_check()
 
-        # Test NEW features (Iteration 3)
-        self.log("\n--- NEW FEATURES (Iteration 3) ---")
+        # Test NEW features (Iteration 4)
+        self.log("\n--- NEW FEATURES (Iteration 4) ---")
         self.test_gold_price_api()
         self.test_purchase_price_api()
-        self.test_purchase_checkout_api()
+        self.test_purchase_initialize_api()
+        self.test_video_guide_api()
         self.test_setup_guide_api()
 
         # Test EXISTING features
