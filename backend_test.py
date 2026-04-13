@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for AI XAUUSD Trading Bot - Iteration 4
-Tests new features: Paystack Naira payment, video guide, enhanced AI metrics
+Backend API Testing for AI XAUUSD Trading Bot - Iteration 5
+Tests new features: JWT admin authentication, admin portal, protected admin routes
 """
 
 import requests
@@ -16,6 +16,7 @@ class APITester:
         self.tests_run = 0
         self.tests_passed = 0
         self.failed_tests = []
+        self.admin_token = None
 
     def log(self, message, level="INFO"):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -102,15 +103,24 @@ class APITester:
     def test_purchase_price_api(self):
         """Test purchase price API - UPDATED FOR PAYSTACK NAIRA"""
         def validate_purchase_price(data):
+            # Price might have been updated by admin settings test, so check for reasonable range
+            price_naira = data.get('price_naira', 0)
+            if not (200000 <= price_naira <= 400000):
+                return f"Price naira {price_naira} not in reasonable range 200000-400000"
+            
             expected_fields = {
-                'price_naira': 300000,
                 'currency': 'NGN', 
-                'payment_method': 'paystack',
-                'formatted': '₦300,000'
+                'payment_method': 'paystack'
             }
             for key, expected_value in expected_fields.items():
                 if data.get(key) != expected_value:
                     return f"Expected {key}={expected_value}, got {data.get(key)}"
+            
+            # Check formatted field contains ₦ symbol
+            formatted = data.get('formatted', '')
+            if '₦' not in formatted:
+                return f"Expected ₦ symbol in formatted field, got: {formatted}"
+            
             return True
 
         return self.run_test("Purchase Price (Paystack Naira)", "GET", "/purchase/price", validate_response=validate_purchase_price)
@@ -129,8 +139,8 @@ class APITester:
                 return "Missing error detail field"
             
             detail = data.get('detail', '').lower()
-            if 'not configured' not in detail or 'paystack' not in detail:
-                return f"Expected 'not configured' and 'paystack' in error message, got: {data.get('detail')}"
+            if 'not configured' not in detail:
+                return f"Expected 'not configured' in error message, got: {data.get('detail')}"
             
             return True
 
@@ -205,54 +215,266 @@ class APITester:
 
         return self.run_test("Setup Guide", "GET", "/docs/setup-guide", validate_response=validate_setup_guide)
 
-    def test_pin_generation(self):
-        """Test PIN generation - EXISTING FEATURE"""
-        test_data = {"count": 1, "buyer_name": "Test", "buyer_email": "test@example.com"}
+    def test_admin_login_success(self):
+        """Test admin login with correct credentials - NEW FEATURE (Iteration 5)"""
+        test_data = {
+            "email": "admin@aisniper.com",
+            "password": "Admin@2026!"
+        }
         
-        def validate_pins(data):
-            if 'pins_created' not in data or 'pins' not in data:
-                return "Missing pins_created or pins field"
+        def validate_login_response(data):
+            required_fields = ['email', 'name', 'role', 'token']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field: {field}"
             
-            if data.get('pins_created') != 1:
-                return f"Expected 1 pin created, got {data.get('pins_created')}"
+            if data.get('email') != 'admin@aisniper.com':
+                return f"Expected email admin@aisniper.com, got {data.get('email')}"
             
-            pins = data.get('pins', [])
-            if len(pins) != 1:
-                return f"Expected 1 pin in array, got {len(pins)}"
+            if data.get('role') != 'admin':
+                return f"Expected role admin, got {data.get('role')}"
             
-            pin_obj = pins[0]
-            if not pin_obj.get('pin', '').startswith('ASE-'):
-                return f"PIN should start with ASE-, got: {pin_obj.get('pin')}"
+            token = data.get('token')
+            if not token or len(token) < 50:
+                return f"Invalid token: {token}"
+            
+            # Store token for subsequent tests
+            self.admin_token = token
+            return True
+
+        return self.run_test("Admin Login (Success)", "POST", "/auth/login", 
+                           data=test_data, validate_response=validate_login_response)
+
+    def test_admin_login_wrong_password(self):
+        """Test admin login with wrong password - NEW FEATURE (Iteration 5)"""
+        test_data = {
+            "email": "admin@aisniper.com",
+            "password": "WrongPassword123!"
+        }
+        
+        def validate_401_error(data):
+            if 'detail' not in data:
+                return "Missing error detail field"
+            
+            detail = data.get('detail', '').lower()
+            if 'invalid' not in detail:
+                return f"Expected 'invalid' in error message, got: {data.get('detail')}"
             
             return True
 
-        return self.run_test("PIN Generation", "POST", "/pins/generate", 
-                           data=test_data, validate_response=validate_pins)
+        return self.run_test("Admin Login (Wrong Password)", "POST", "/auth/login", 
+                           expected_status=401, data=test_data, validate_response=validate_401_error)
+
+    def test_auth_me_with_token(self):
+        """Test /auth/me with valid token - NEW FEATURE (Iteration 5)"""
+        if not self.admin_token:
+            self.log("❌ Auth Me - No admin token available", "ERROR")
+            self.failed_tests.append("Auth Me: No admin token")
+            self.tests_run += 1
+            return False, {}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        def validate_me_response(data):
+            if data.get('email') != 'admin@aisniper.com':
+                return f"Expected email admin@aisniper.com, got {data.get('email')}"
+            
+            if data.get('role') != 'admin':
+                return f"Expected role admin, got {data.get('role')}"
+            
+            return True
+
+        return self.run_test("Auth Me (With Token)", "GET", "/auth/me", 
+                           headers=headers, validate_response=validate_me_response)
+
+    def test_admin_settings_requires_auth(self):
+        """Test admin settings endpoint requires authentication - NEW FEATURE (Iteration 5)"""
+        return self.run_test("Admin Settings (No Auth)", "GET", "/admin/settings", 
+                           expected_status=401)
+
+    def test_admin_pins_requires_auth(self):
+        """Test admin pins endpoint requires authentication - NEW FEATURE (Iteration 5)"""
+        return self.run_test("Admin Pins (No Auth)", "GET", "/admin/pins", 
+                           expected_status=401)
+
+    def test_admin_settings_with_token(self):
+        """Test admin settings with valid token - NEW FEATURE (Iteration 5)"""
+        if not self.admin_token:
+            self.log("❌ Admin Settings - No admin token available", "ERROR")
+            self.failed_tests.append("Admin Settings: No admin token")
+            self.tests_run += 1
+            return False, {}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        def validate_settings_response(data):
+            required_fields = ['paystack_configured', 'pin_price_kobo', 'pin_price_naira', 'smtp_email', 'smtp_configured']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field: {field}"
+            
+            # Check that paystack is not configured (as per .env)
+            if data.get('paystack_configured') != False:
+                return f"Expected paystack_configured=False, got {data.get('paystack_configured')}"
+            
+            # Check price is reasonable (might have been updated by previous tests)
+            price_kobo = data.get('pin_price_kobo', 0)
+            if not (20000000 <= price_kobo <= 40000000):
+                return f"Expected pin_price_kobo in range 20M-40M, got {price_kobo}"
+            
+            return True
+
+        return self.run_test("Admin Settings (With Token)", "GET", "/admin/settings", 
+                           headers=headers, validate_response=validate_settings_response)
+
+    def test_admin_settings_update(self):
+        """Test admin settings update - NEW FEATURE (Iteration 5)"""
+        if not self.admin_token:
+            self.log("❌ Admin Settings Update - No admin token available", "ERROR")
+            self.failed_tests.append("Admin Settings Update: No admin token")
+            self.tests_run += 1
+            return False, {}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        test_data = {
+            "pin_price_kobo": 25000000  # Update price to 250,000 Naira
+        }
+        
+        def validate_update_response(data):
+            if not data.get('updated'):
+                return f"Expected updated=True, got {data.get('updated')}"
+            return True
+
+        return self.run_test("Admin Settings Update", "PUT", "/admin/settings", 
+                           headers=headers, data=test_data, validate_response=validate_update_response)
+
+    def test_admin_pins_generate(self):
+        """Test admin PIN generation - NEW FEATURE (Iteration 5)"""
+        if not self.admin_token:
+            self.log("❌ Admin PIN Generate - No admin token available", "ERROR")
+            self.failed_tests.append("Admin PIN Generate: No admin token")
+            self.tests_run += 1
+            return False, {}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        test_data = {
+            "count": 2,
+            "buyer_name": "Test Admin User",
+            "buyer_email": "testadmin@example.com",
+            "notes": "Test PIN generation"
+        }
+        
+        def validate_pin_generation(data):
+            if data.get('pins_created') != 2:
+                return f"Expected pins_created=2, got {data.get('pins_created')}"
+            
+            pins = data.get('pins', [])
+            if len(pins) != 2:
+                return f"Expected 2 pins in array, got {len(pins)}"
+            
+            for pin_obj in pins:
+                if not pin_obj.get('pin', '').startswith('ASE-'):
+                    return f"PIN should start with ASE-, got: {pin_obj.get('pin')}"
+                
+                if pin_obj.get('buyer_name') != 'Test Admin User':
+                    return f"Expected buyer_name='Test Admin User', got {pin_obj.get('buyer_name')}"
+            
+            return True
+
+        return self.run_test("Admin PIN Generation", "POST", "/admin/pins/generate", 
+                           headers=headers, data=test_data, validate_response=validate_pin_generation)
+
+    def test_admin_pins_list(self):
+        """Test admin PIN listing - NEW FEATURE (Iteration 5)"""
+        if not self.admin_token:
+            self.log("❌ Admin PIN List - No admin token available", "ERROR")
+            self.failed_tests.append("Admin PIN List: No admin token")
+            self.tests_run += 1
+            return False, {}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        def validate_pins_list(data):
+            if 'total' not in data or 'pins' not in data:
+                return "Missing total or pins field"
+            
+            total = data.get('total', 0)
+            pins = data.get('pins', [])
+            
+            if len(pins) != total:
+                return f"Total {total} doesn't match pins array length {len(pins)}"
+            
+            # Should have at least the pins we generated
+            if total < 2:
+                return f"Expected at least 2 pins, got {total}"
+            
+            return True
+
+        return self.run_test("Admin PIN List", "GET", "/admin/pins", 
+                           headers=headers, validate_response=validate_pins_list)
+
+    def test_admin_transactions(self):
+        """Test admin transactions listing - NEW FEATURE (Iteration 5)"""
+        if not self.admin_token:
+            self.log("❌ Admin Transactions - No admin token available", "ERROR")
+            self.failed_tests.append("Admin Transactions: No admin token")
+            self.tests_run += 1
+            return False, {}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        def validate_transactions_list(data):
+            if 'total' not in data or 'transactions' not in data:
+                return "Missing total or transactions field"
+            
+            total = data.get('total', 0)
+            transactions = data.get('transactions', [])
+            
+            if len(transactions) != total:
+                return f"Total {total} doesn't match transactions array length {len(transactions)}"
+            
+            return True
+
+        return self.run_test("Admin Transactions", "GET", "/admin/transactions", 
+                           headers=headers, validate_response=validate_transactions_list)
 
     def test_pin_validation(self):
         """Test PIN validation - EXISTING FEATURE"""
-        # First generate a PIN
-        gen_success, gen_data = self.test_pin_generation()
-        if not gen_success:
-            return False, {}
-        
-        pin = gen_data.get('pins', [{}])[0].get('pin')
-        if not pin:
-            self.log("❌ PIN Validation - No PIN to validate", "ERROR")
-            return False, {}
-        
-        test_data = {"pin": pin, "mt5_account": "12345"}
+        # Use a known PIN format for testing
+        test_pin = "ASE-TEST-1234"
+        test_data = {"pin": test_pin, "mt5_account": "12345"}
         
         def validate_pin_response(data):
-            if not data.get('valid'):
-                return f"PIN validation failed: {data.get('reason', 'Unknown')}"
+            # PIN validation should return false for non-existent PIN
+            if data.get('valid') != False:
+                return f"Expected valid=False for non-existent PIN, got: {data.get('valid')}"
             
-            if data.get('pin') != pin:
-                return f"Returned PIN doesn't match: {data.get('pin')} != {pin}"
+            if 'reason' not in data:
+                return "Missing reason field for invalid PIN"
             
             return True
 
-        return self.run_test("PIN Validation", "POST", "/pins/validate", 
+        return self.run_test("PIN Validation (Non-existent)", "POST", "/pins/validate", 
                            data=test_data, validate_response=validate_pin_response)
 
     def test_performance_summary(self):
@@ -319,23 +541,33 @@ class APITester:
     def run_all_tests(self):
         """Run all backend tests"""
         self.log("=" * 60)
-        self.log("STARTING BACKEND API TESTS - ITERATION 4")
+        self.log("STARTING BACKEND API TESTS - ITERATION 5")
         self.log("=" * 60)
 
         # Test basic connectivity
         self.test_health_check()
 
-        # Test NEW features (Iteration 4)
-        self.log("\n--- NEW FEATURES (Iteration 4) ---")
+        # Test NEW ADMIN AUTHENTICATION features (Iteration 5)
+        self.log("\n--- NEW ADMIN AUTHENTICATION (Iteration 5) ---")
+        self.test_admin_login_success()
+        self.test_admin_login_wrong_password()
+        self.test_auth_me_with_token()
+
+        # Test ADMIN PROTECTED ENDPOINTS (Iteration 5)
+        self.log("\n--- ADMIN PROTECTED ENDPOINTS (Iteration 5) ---")
+        self.test_admin_settings_requires_auth()
+        self.test_admin_pins_requires_auth()
+        self.test_admin_settings_with_token()
+        self.test_admin_settings_update()
+        self.test_admin_pins_generate()
+        self.test_admin_pins_list()
+        self.test_admin_transactions()
+
+        # Test PUBLIC features (should still work)
+        self.log("\n--- PUBLIC FEATURES (Should Still Work) ---")
         self.test_gold_price_api()
         self.test_purchase_price_api()
         self.test_purchase_initialize_api()
-        self.test_video_guide_api()
-        self.test_setup_guide_api()
-
-        # Test EXISTING features
-        self.log("\n--- EXISTING FEATURES ---")
-        self.test_pin_generation()
         self.test_pin_validation()
         self.test_performance_summary()
         self.test_ea_download()

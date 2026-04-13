@@ -20,8 +20,6 @@ const NAV_ITEMS = [
   { id: "how-it-works", label: "HOW IT WORKS", icon: Question },
   { id: "setup-guide", label: "SETUP", icon: Wrench },
   { id: "performance", label: "PERFORMANCE", icon: ChartLine },
-  { id: "configurator", label: "CONFIGURE", icon: GearSix },
-  { id: "pins", label: "LICENSES", icon: Key },
   { id: "download", label: "DOWNLOAD", icon: DownloadSimple },
 ];
 

@@ -1,0 +1,384 @@
+import React, { useState, useEffect, useCallback } from "react";
+import axios from "axios";
+import {
+  Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
+  UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
+  FloppyDisk, ArrowCounterClockwise, ChartBar, Lightning, Flame,
+} from "@phosphor-icons/react";
+
+const ax = axios.create({ withCredentials: true });
+
+export default function AdminPortal({ api }) {
+  const [token, setToken] = useState(localStorage.getItem("admin_token") || "");
+  const [admin, setAdmin] = useState(null);
+  const [tab, setTab] = useState("pins");
+
+  const checkAuth = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await ax.get(`${api}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+      setAdmin(res.data);
+    } catch {
+      setToken(""); localStorage.removeItem("admin_token");
+    }
+  }, [api, token]);
+
+  useEffect(() => { checkAuth(); }, [checkAuth]);
+
+  const handleLogin = (t) => { setToken(t); localStorage.setItem("admin_token", t); };
+  const handleLogout = () => { setToken(""); setAdmin(null); localStorage.removeItem("admin_token"); ax.post(`${api}/auth/logout`).catch(() => {}); };
+
+  if (!admin) return <LoginPage api={api} onLogin={handleLogin} />;
+
+  return (
+    <div className="min-h-screen bg-background" data-testid="admin-portal">
+      {/* Admin Header */}
+      <header className="sticky top-0 z-50 bg-[hsl(0,0%,4%)] text-white border-b border-white/10">
+        <div className="max-w-7xl mx-auto px-6 md:px-8 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-7 h-7 bg-[hsl(43,74%,49%)] flex items-center justify-center">
+              <span className="font-mono text-xs font-bold text-black">AU</span>
+            </div>
+            <span className="font-heading font-bold text-sm">AI SNIPER</span>
+            <span className="text-xs bg-white/10 px-2 py-0.5 font-mono">ADMIN</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <span className="text-xs text-white/50">{admin.email}</span>
+            <a href="/" className="text-xs text-white/40 hover:text-white flex items-center gap-1"><ArrowLeft size={12} /> Public Site</a>
+            <button onClick={handleLogout} data-testid="logout-btn" className="text-xs text-white/40 hover:text-white flex items-center gap-1"><SignOut size={12} /> Logout</button>
+          </div>
+        </div>
+      </header>
+
+      {/* Tabs */}
+      <div className="border-b border-border bg-card">
+        <div className="max-w-7xl mx-auto px-6 md:px-8 flex gap-0">
+          {[
+            { id: "pins", label: "LICENSES", icon: Key },
+            { id: "settings", label: "SETTINGS", icon: GearSix },
+            { id: "configurator", label: "EA CONFIG", icon: ChartBar },
+            { id: "transactions", label: "PAYMENTS", icon: CurrencyNgn },
+          ].map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} data-testid={`admin-tab-${t.id}`}
+              className={`px-5 py-3 text-xs font-bold tracking-[0.1em] flex items-center gap-2 border-b-2 transition-colors ${tab === t.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+              <t.icon size={14} weight={tab === t.id ? "fill" : "regular"} /> {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-6 md:px-8 py-8">
+        {tab === "pins" && <PinsTab api={api} token={token} />}
+        {tab === "settings" && <SettingsTab api={api} token={token} />}
+        {tab === "configurator" && <ConfigTab api={api} token={token} />}
+        {tab === "transactions" && <TransactionsTab api={api} token={token} />}
+      </div>
+    </div>
+  );
+}
+
+// --- LOGIN PAGE ---
+function LoginPage({ api, onLogin }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault(); setError(""); setLoading(true);
+    try {
+      const res = await ax.post(`${api}/auth/login`, { email, password });
+      onLogin(res.data.token);
+    } catch (err) {
+      const d = err.response?.data?.detail;
+      setError(typeof d === "string" ? d : "Login failed");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="min-h-screen bg-[hsl(0,0%,4%)] flex items-center justify-center p-6" data-testid="admin-login-page">
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-8">
+          <div className="w-12 h-12 bg-[hsl(43,74%,49%)] flex items-center justify-center mx-auto mb-4">
+            <span className="font-mono text-lg font-bold text-black">AU</span>
+          </div>
+          <h1 className="font-heading text-2xl font-bold text-white">Admin Portal</h1>
+          <p className="text-sm text-white/40 mt-1">AI Sniper EA Management</p>
+        </div>
+        <form onSubmit={handleSubmit} className="bg-white/5 border border-white/10 p-6 space-y-4">
+          <div>
+            <label className="text-sm text-white/60 block mb-1">Email</label>
+            <div className="relative">
+              <Envelope size={16} className="absolute left-3 top-3 text-white/30" />
+              <input data-testid="admin-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@aisniper.com"
+                className="w-full pl-10 pr-3 py-2.5 bg-white/5 border border-white/20 text-white text-sm focus:outline-none focus:ring-1 focus:ring-[hsl(43,74%,49%)]" />
+            </div>
+          </div>
+          <div>
+            <label className="text-sm text-white/60 block mb-1">Password</label>
+            <div className="relative">
+              <Lock size={16} className="absolute left-3 top-3 text-white/30" />
+              <input data-testid="admin-password" type={showPw ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="Password"
+                className="w-full pl-10 pr-10 py-2.5 bg-white/5 border border-white/20 text-white text-sm focus:outline-none focus:ring-1 focus:ring-[hsl(43,74%,49%)]" />
+              <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-3 text-white/30 hover:text-white">
+                {showPw ? <EyeSlash size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+          {error && <div className="text-[hsl(348,83%,47%)] text-sm" data-testid="login-error">{error}</div>}
+          <button type="submit" disabled={loading} data-testid="admin-login-btn"
+            className="w-full py-3 bg-[hsl(43,74%,49%)] text-black font-bold text-sm disabled:opacity-50">
+            {loading ? "LOGGING IN..." : "LOGIN"}
+          </button>
+        </form>
+        <div className="text-center mt-4">
+          <a href="/" className="text-xs text-white/30 hover:text-white/60">Back to public site</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- PINS TAB ---
+function PinsTab({ api, token }) {
+  const [pins, setPins] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [genCount, setGenCount] = useState(1);
+  const [buyerName, setBuyerName] = useState("");
+  const [buyerEmail, setBuyerEmail] = useState("");
+  const [notes, setNotes] = useState("");
+  const [copiedPin, setCopiedPin] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const h = { headers: { Authorization: `Bearer ${token}` } };
+
+  const fetch = useCallback(async () => {
+    try {
+      const [p, s] = await Promise.all([ax.get(`${api}/admin/pins`, h), ax.get(`${api}/admin/pins/stats`, h)]);
+      setPins(p.data.pins || []); setStats(s.data);
+    } catch {}
+  }, [api, token]);
+
+  useEffect(() => { fetch(); }, [fetch]);
+
+  const generate = async () => {
+    setGenerating(true);
+    try { await ax.post(`${api}/admin/pins/generate`, { count: genCount, buyer_name: buyerName, buyer_email: buyerEmail, notes }, h); setBuyerName(""); setBuyerEmail(""); setNotes(""); await fetch(); } catch {} finally { setGenerating(false); }
+  };
+  const revoke = async (pin) => { await ax.put(`${api}/admin/pins/${pin}/revoke`, {}, h); fetch(); };
+  const activate = async (pin) => { await ax.put(`${api}/admin/pins/${pin}/activate`, {}, h); fetch(); };
+  const del = async (pin) => { await ax.delete(`${api}/admin/pins/${pin}`, h); fetch(); };
+  const copy = (pin) => { navigator.clipboard.writeText(pin); setCopiedPin(pin); setTimeout(() => setCopiedPin(null), 2000); };
+
+  return (
+    <div data-testid="admin-pins-tab">
+      {stats && (
+        <div className="grid grid-cols-5 gap-0 border border-border mb-6" data-testid="admin-pin-stats">
+          {[{l:"TOTAL",v:stats.total},{l:"ACTIVE",v:stats.active,c:"text-[hsl(142,71%,45%)]"},{l:"USED",v:stats.used,c:"text-primary"},{l:"UNUSED",v:stats.unused},{l:"REVOKED",v:stats.revoked,c:"text-[hsl(348,83%,47%)]"}].map((s,i) => (
+            <div key={s.l} className={`p-4 ${i<4?"border-r border-border":""}`}><div className="text-[10px] font-bold tracking-[0.15em] text-muted-foreground mb-1">{s.l}</div><div className={`font-mono text-2xl font-bold ${s.c||"text-foreground"}`}>{s.v}</div></div>
+          ))}
+        </div>
+      )}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="border border-border bg-card" data-testid="admin-gen-form">
+          <div className="px-5 py-3 border-b border-border bg-muted/30"><h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">GENERATE FREE PINS</h4></div>
+          <div className="p-5 space-y-3">
+            <input data-testid="admin-pin-name" type="text" value={buyerName} onChange={e=>setBuyerName(e.target.value)} placeholder="Buyer Name" className="w-full px-3 py-2 border border-border bg-background text-sm" />
+            <input data-testid="admin-pin-email" type="email" value={buyerEmail} onChange={e=>setBuyerEmail(e.target.value)} placeholder="Email" className="w-full px-3 py-2 border border-border bg-background text-sm" />
+            <input type="text" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Notes" className="w-full px-3 py-2 border border-border bg-background text-sm" />
+            <input type="number" min={1} max={50} value={genCount} onChange={e=>setGenCount(parseInt(e.target.value)||1)} className="w-full px-3 py-2 border border-border bg-background text-sm font-mono" />
+            <button onClick={generate} disabled={generating} data-testid="admin-gen-btn" className="w-full px-4 py-3 bg-primary text-primary-foreground font-bold text-sm flex items-center justify-center gap-2 hover:-translate-y-[1px] transition-transform shadow-[2px_2px_0px_hsl(0,0%,4%)]">
+              <Plus size={14} weight="bold" /> {generating ? "GENERATING..." : `GENERATE ${genCount} PIN${genCount>1?"S":""}`}
+            </button>
+          </div>
+        </div>
+        <div className="lg:col-span-2 border border-border bg-card" data-testid="admin-pin-list">
+          <div className="px-5 py-3 border-b border-border bg-muted/30 flex justify-between"><h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">ALL PINS</h4><span className="text-xs font-mono text-muted-foreground">{pins.length}</span></div>
+          <div className="max-h-[500px] overflow-y-auto divide-y divide-border">
+            {pins.length === 0 ? <div className="p-8 text-center text-sm text-muted-foreground">No PINs yet</div> :
+            pins.map(p => (
+              <div key={p.pin} className="px-5 py-3 flex items-center gap-3" data-testid={`admin-pin-${p.pin}`}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5"><span className="font-mono text-sm font-bold">{p.pin}</span>
+                    <button onClick={()=>copy(p.pin)} className="text-muted-foreground hover:text-foreground">{copiedPin===p.pin?<Check size={12} className="text-[hsl(142,71%,45%)]"/>:<Copy size={12}/>}</button></div>
+                  <div className="text-xs text-muted-foreground flex gap-2">{p.buyer_name&&<span>{p.buyer_name}</span>}{p.buyer_email&&<span>{p.buyer_email}</span>}{p.payment_ref&&<span className="text-primary">PAID</span>}</div>
+                </div>
+                <div className="flex gap-1.5 flex-shrink-0">
+                  {p.is_used&&<span className="px-1.5 py-0.5 bg-primary/10 text-primary text-[9px] font-bold">ACTIVATED</span>}
+                  <span className={`px-1.5 py-0.5 text-[9px] font-bold ${p.is_active?"bg-[hsl(142,71%,45%)]/10 text-[hsl(142,71%,45%)]":"bg-[hsl(348,83%,47%)]/10 text-[hsl(348,83%,47%)]"}`}>{p.is_active?"ACTIVE":"REVOKED"}</span>
+                </div>
+                <div className="flex gap-1 flex-shrink-0">
+                  {p.is_active?<button onClick={()=>revoke(p.pin)} className="p-1 text-muted-foreground hover:text-[hsl(348,83%,47%)]" title="Revoke"><ShieldCheck size={14}/></button>:<button onClick={()=>activate(p.pin)} className="p-1 text-muted-foreground hover:text-[hsl(142,71%,45%)]" title="Activate"><ShieldCheck size={14}/></button>}
+                  <button onClick={()=>del(p.pin)} className="p-1 text-muted-foreground hover:text-[hsl(348,83%,47%)]" title="Delete"><Trash size={14}/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- SETTINGS TAB ---
+function SettingsTab({ api, token }) {
+  const [settings, setSettings] = useState(null);
+  const [pk, setPk] = useState("");
+  const [priceNaira, setPriceNaira] = useState(300000);
+  const [smtpEmail, setSmtpEmail] = useState("");
+  const [smtpPw, setSmtpPw] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const h = { headers: { Authorization: `Bearer ${token}` } };
+
+  useEffect(() => {
+    ax.get(`${api}/admin/settings`, h).then(r => {
+      setSettings(r.data); setPriceNaira(r.data.pin_price_naira || 300000); setSmtpEmail(r.data.smtp_email || "");
+    }).catch(() => {});
+  }, [api, token]);
+
+  const save = async () => {
+    setSaving(true);
+    const updates = {};
+    if (pk) updates.paystack_secret_key = pk;
+    updates.pin_price_kobo = Math.round(priceNaira * 100);
+    if (smtpEmail) updates.smtp_email = smtpEmail;
+    if (smtpPw) updates.smtp_password = smtpPw;
+    try { await ax.put(`${api}/admin/settings`, updates, h); setSaved(true); setPk(""); setSmtpPw(""); setTimeout(() => setSaved(false), 3000);
+      const r = await ax.get(`${api}/admin/settings`, h); setSettings(r.data);
+    } catch {} finally { setSaving(false); }
+  };
+
+  return (
+    <div className="max-w-2xl" data-testid="admin-settings-tab">
+      <h3 className="font-heading text-xl font-bold mb-6">Admin Settings</h3>
+      <div className="space-y-6">
+        {/* Paystack */}
+        <div className="border border-border bg-card p-5">
+          <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground mb-4 flex items-center gap-2"><CurrencyNgn size={14} /> PAYSTACK CONFIGURATION</h4>
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm font-medium block mb-1">Paystack Secret Key</label>
+              <input data-testid="settings-paystack-key" type="password" value={pk} onChange={e=>setPk(e.target.value)} placeholder={settings?.paystack_configured ? "Key configured (enter new to change)" : "sk_live_xxxxx or sk_test_xxxxx"}
+                className="w-full px-3 py-2 border border-border bg-background font-mono text-sm" />
+              <p className="text-xs text-muted-foreground mt-1">Status: <span className={settings?.paystack_configured?"text-[hsl(142,71%,45%)]":"text-[hsl(348,83%,47%)]"}>{settings?.paystack_configured?"Configured":"Not set"}</span> {settings?.paystack_key_preview && settings.paystack_configured && <span className="font-mono">({settings.paystack_key_preview})</span>}</p>
+            </div>
+            <div>
+              <label className="text-sm font-medium block mb-1">PIN Price (Naira)</label>
+              <div className="flex items-center gap-2">
+                <span className="text-lg font-bold">₦</span>
+                <input data-testid="settings-price" type="number" value={priceNaira} onChange={e=>setPriceNaira(parseInt(e.target.value)||0)}
+                  className="w-full px-3 py-2 border border-border bg-background font-mono text-sm" />
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Current: ₦{priceNaira?.toLocaleString()}</p>
+            </div>
+          </div>
+        </div>
+        {/* Email */}
+        <div className="border border-border bg-card p-5">
+          <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground mb-4 flex items-center gap-2"><Envelope size={14} /> EMAIL CONFIGURATION (Gmail)</h4>
+          <p className="text-xs text-muted-foreground mb-3">Auto-send PINs to buyers after payment. Use a Gmail App Password (not your regular password). Go to myaccount.google.com &gt; Security &gt; App Passwords.</p>
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm font-medium block mb-1">Gmail Address</label>
+              <input data-testid="settings-smtp-email" type="email" value={smtpEmail} onChange={e=>setSmtpEmail(e.target.value)} placeholder="yourname@gmail.com"
+                className="w-full px-3 py-2 border border-border bg-background text-sm" />
+            </div>
+            <div>
+              <label className="text-sm font-medium block mb-1">App Password</label>
+              <input data-testid="settings-smtp-password" type="password" value={smtpPw} onChange={e=>setSmtpPw(e.target.value)} placeholder={settings?.smtp_configured ? "Password configured (enter new to change)" : "xxxx xxxx xxxx xxxx"}
+                className="w-full px-3 py-2 border border-border bg-background font-mono text-sm" />
+              <p className="text-xs text-muted-foreground mt-1">Status: <span className={settings?.smtp_configured?"text-[hsl(142,71%,45%)]":"text-[hsl(348,83%,47%)]"}>{settings?.smtp_configured?"Configured":"Not set"}</span></p>
+            </div>
+          </div>
+        </div>
+        <button onClick={save} disabled={saving} data-testid="settings-save-btn"
+          className="px-6 py-3 bg-primary text-primary-foreground font-bold text-sm flex items-center gap-2 hover:-translate-y-[1px] transition-transform shadow-[2px_2px_0px_hsl(0,0%,4%)]">
+          <FloppyDisk size={16} weight="bold" /> {saving?"SAVING...":saved?"SAVED!":"SAVE SETTINGS"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// --- CONFIGURATOR TAB ---
+function ConfigTab({ api, token }) {
+  const PRESETS = [
+    { id:"conservative", label:"CONSERVATIVE", icon:ShieldCheck, wt:20, risk:0.5, trades:2, conf:85, color:"text-[hsl(142,71%,45%)]", bg:"bg-[hsl(142,71%,45%)]/10" },
+    { id:"moderate", label:"MODERATE", icon:Lightning, wt:35, risk:1.0, trades:3, conf:75, color:"text-primary", bg:"bg-primary/10" },
+    { id:"aggressive", label:"AGGRESSIVE", icon:Flame, wt:50, risk:1.5, trades:5, conf:65, color:"text-[hsl(348,83%,47%)]", bg:"bg-[hsl(348,83%,47%)]/10" },
+  ];
+  const [config, setConfig] = useState({name:"Default",risk_percent:1,daily_loss_limit:3,weekly_drawdown_limit:10,weekly_profit_target:35,max_open_trades:2,max_trades_per_day:3,enable_trend_mode:true,enable_range_mode:true,enable_breakout_mode:true,confidence_threshold:75,ema_fast:50,ema_slow:200,min_rr_ratio:1.5,partial_close_percent:50,trailing_atr_multi:1.5,sl_atr_multiplier:2,trade_london:true,trade_new_york:true,equity_protection:70,profit_mode:"moderate"});
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const h = { headers: { Authorization: `Bearer ${token}` } };
+
+  const u = (k,v) => { setConfig(p=>({...p,[k]:v})); setSaved(false); };
+  const applyPreset = (p) => u("weekly_profit_target",p.wt) || u("risk_percent",p.risk) || u("max_trades_per_day",p.trades) || u("confidence_threshold",p.conf) || u("profit_mode",p.id) || setConfig(prev=>({...prev,weekly_profit_target:p.wt,risk_percent:p.risk,max_trades_per_day:p.trades,confidence_threshold:p.conf,profit_mode:p.id}));
+  const save = async () => { setSaving(true); try { await ax.post(`${api}/admin/configs`, config, h); setSaved(true); setTimeout(()=>setSaved(false),3000); } catch {} finally { setSaving(false); } };
+
+  return (
+    <div data-testid="admin-config-tab">
+      <h3 className="font-heading text-xl font-bold mb-4">EA Parameter Configuration</h3>
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        {PRESETS.map(p=>{const I=p.icon;const sel=config.profit_mode===p.id;return(
+          <button key={p.id} onClick={()=>applyPreset(p)} data-testid={`admin-preset-${p.id}`} className={`text-left p-4 border transition-all ${sel?`${p.bg} border-current`:""} ${!sel?"border-border hover:border-foreground/20":""}`}>
+            <div className="flex items-center gap-2 mb-1"><I size={16} weight={sel?"fill":"regular"} className={sel?p.color:"text-muted-foreground"}/><span className={`text-xs font-bold tracking-[0.1em] ${sel?p.color:"text-muted-foreground"}`}>{p.label}</span></div>
+            <div className="font-mono text-2xl font-black">{p.wt}%<span className="text-xs font-medium text-muted-foreground ml-1">/week</span></div>
+            <div className="text-xs text-muted-foreground mt-1">Risk: {p.risk}% | Trades: {p.trades}/day</div>
+          </button>
+        );})}
+      </div>
+      <div className="grid grid-cols-3 gap-4 mb-4">
+        {[["Risk %","risk_percent",0.1,3,0.1],["Daily Loss","daily_loss_limit",1,10,0.5],["Weekly DD","weekly_drawdown_limit",5,20,1],["Weekly Target","weekly_profit_target",10,100,5],["Confidence","confidence_threshold",50,95,5],["Min R:R","min_rr_ratio",1,5,0.1]].map(([l,k,mn,mx,st])=>{
+          const v=config[k];const pct=((v-mn)/(mx-mn))*100;return(
+          <div key={k}><div className="flex justify-between text-sm mb-1"><span>{l}</span><span className="font-mono font-bold">{Number.isInteger(v)?v:v.toFixed(1)}</span></div>
+          <input type="range" min={mn} max={mx} step={st} value={v} onChange={e=>u(k,parseFloat(e.target.value))} className="w-full h-1 appearance-none cursor-pointer accent-[hsl(43,74%,49%)]" style={{background:`linear-gradient(to right,hsl(43,74%,49%) ${pct}%,hsl(0,0%,90%) ${pct}%)`}} /></div>
+        );})}
+      </div>
+      <button onClick={save} disabled={saving} data-testid="admin-config-save"
+        className="px-6 py-3 bg-primary text-primary-foreground font-bold text-sm flex items-center gap-2 hover:-translate-y-[1px] transition-transform shadow-[2px_2px_0px_hsl(0,0%,4%)]">
+        <FloppyDisk size={16} weight="bold" /> {saving?"SAVING...":saved?"SAVED!":"SAVE CONFIG"}
+      </button>
+    </div>
+  );
+}
+
+// --- TRANSACTIONS TAB ---
+function TransactionsTab({ api, token }) {
+  const [txs, setTxs] = useState([]);
+  const h = { headers: { Authorization: `Bearer ${token}` } };
+  useEffect(() => { ax.get(`${api}/admin/transactions`, h).then(r=>setTxs(r.data.transactions||[])).catch(()=>{}); }, [api, token]);
+
+  return (
+    <div data-testid="admin-transactions-tab">
+      <h3 className="font-heading text-xl font-bold mb-4">Payment Transactions</h3>
+      <div className="border border-border bg-card">
+        <div className="px-5 py-3 border-b border-border bg-muted/30"><span className="text-xs font-bold tracking-[0.15em] text-muted-foreground">{txs.length} TRANSACTIONS</span></div>
+        {txs.length === 0 ? <div className="p-8 text-center text-sm text-muted-foreground">No transactions yet</div> :
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-border">
+              <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">REF</th>
+              <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">BUYER</th>
+              <th className="text-right px-4 py-2 text-xs font-bold text-muted-foreground">AMOUNT</th>
+              <th className="text-center px-4 py-2 text-xs font-bold text-muted-foreground">STATUS</th>
+              <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">PIN</th>
+              <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">DATE</th>
+            </tr></thead>
+            <tbody>{txs.map(t=>(
+              <tr key={t.reference} className="border-b border-border last:border-0">
+                <td className="px-4 py-2 font-mono text-xs">{t.reference}</td>
+                <td className="px-4 py-2"><div className="text-xs">{t.buyer_name}</div><div className="text-xs text-muted-foreground">{t.buyer_email}</div></td>
+                <td className="px-4 py-2 text-right font-mono">₦{(t.amount_kobo/100).toLocaleString()}</td>
+                <td className="px-4 py-2 text-center"><span className={`px-2 py-0.5 text-[10px] font-bold ${t.payment_status==="success"?"bg-[hsl(142,71%,45%)]/10 text-[hsl(142,71%,45%)]":"bg-primary/10 text-primary"}`}>{(t.payment_status||"pending").toUpperCase()}</span></td>
+                <td className="px-4 py-2 font-mono text-xs">{t.pin_generated||"-"}</td>
+                <td className="px-4 py-2 text-xs text-muted-foreground">{t.created_at?.split("T")[0]}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>}
+      </div>
+    </div>
+  );
+}
