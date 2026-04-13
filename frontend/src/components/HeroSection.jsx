@@ -77,17 +77,7 @@ export default function HeroSection({ performance }) {
             </div>
           </div>
 
-          {/* Right – Hero image */}
-          <div className="relative animate-fade-up delay-400">
-            <div className="border border-border overflow-hidden">
-              <img
-                src="https://static.prod-images.emergentagent.com/jobs/a0d76eb0-1956-4da1-ad00-cd40d1b3f75f/images/3217ec4cb52b267ea0d9a14cebe330f75fc24b5035af66c21126a90c2724288d.png"
-                alt="AI Sniper Trading System"
-                className="w-full h-auto object-cover"
-                data-testid="hero-image"
-              />
-            </div>
-          </div>
+          {/* Right – removed for space */}
         </div>
 
         {/* Stats bar */}

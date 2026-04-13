@@ -9,6 +9,7 @@ import HowItWorksSection from "@/components/HowItWorksSection";
 import PerformanceSection from "@/components/PerformanceSection";
 import PurchaseSection from "@/components/PurchaseSection";
 import SetupGuideSection from "@/components/SetupGuideSection";
+import VideoGuideSection from "@/components/VideoGuideSection";
 import DownloadSection from "@/components/DownloadSection";
 import PurchaseSuccessPage from "@/components/PurchaseSuccessPage";
 import AdminPortal from "@/components/AdminPortal";
@@ -70,6 +71,7 @@ function MainDashboard() {
         <section id="how-it-works"><HowItWorksSection data={howItWorks} /></section>
         <section id="performance"><PerformanceSection data={performance} /></section>
         <section id="setup-guide"><SetupGuideSection data={setupGuide} /></section>
+        <section id="video-guide"><VideoGuideSection /></section>
         <section id="download"><DownloadSection api={API} /></section>
       </main>
       <Footer />
