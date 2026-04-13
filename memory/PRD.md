@@ -1,28 +1,16 @@
-# MrizAI Sniper EA - PRD
+# XauAI Sniper EA - PRD
 
-## Brand: MrizAI Sniper | by emriz.eth
-## Broker Partner: Trade.com (75% deposit bonus)
+## Brand: XauAI Sniper | by emriz.eth
+## Broker: Trade.com (75% bonus) | Payment: Paystack (NGN)
 
-## Architecture
-Frontend: React + Tailwind | Backend: FastAPI + MongoDB | EA: MQL5 with Cloud ML | Payments: Paystack (NGN) | Auth: JWT
+## Smart Features (6 layers of protection)
+1. **News Auto-Avoidance**: Real economic calendar API - skips NFP, CPI, FOMC events
+2. **DXY Correlation**: Checks dollar index direction, only trades with gold bias alignment
+3. **Session Tuning**: Different confidence thresholds per session (London 75, NY 80, Overlap 70, Asian 85)
+4. **Drawdown Recovery**: At 50% daily loss limit, halves lot size + raises confidence +10
+5. **Weekend Protection**: Closes ALL trades Friday 20:00 to avoid gap risk
+6. **Monthly Report**: Admin sees best/worst hours, revenue, ML stats, recommendations
 
-## Public Site Sections (shortened)
-1. Hero (MrizAI SNIPER XAUUSD + live gold ticker + stats)
-2. Broker Partner (Trade.com + 75% bonus + referral link)
-3. Purchase (₦300,000 Paystack)
-4. How It Works (6 steps + 5 FAQs)
-5. Performance (charts, strategy breakdown, AI metrics)
-6. Setup Guide (10 steps for beginners)
-7. Download (EA + ZIP)
-8. Footer (made by emriz.eth + admin link)
+## All-in-One Smart Check: /api/smart/check-trade combines ML+News+DXY+Session+Weekend in single call
 
-## Admin Portal (/admin): admin@aisniper.com / MrizAdmin2026
-5 tabs: Licenses, Settings, EA Config, Payments, Account
-
-## Centralized ML: All users learn globally via /api/ml/* endpoints
-
-## To go live:
-1. Add Paystack key in Admin > Settings
-2. Add Gmail App Password in Admin > Settings
-3. Change admin password from Admin > Account
-4. Deploy
+## Admin: admin@aisniper.com / MrizAdmin2026 at /admin

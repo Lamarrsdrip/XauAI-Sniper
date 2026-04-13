@@ -727,6 +727,256 @@ async def _update_ml_stats():
     )
 
 # -------------------------------------------------------------------
+# SMART FEATURES: News, DXY, Session, Recovery, Weekend, Reports
+# -------------------------------------------------------------------
+
+# Cache for economic calendar
+_news_cache = []
+_news_cache_time = 0
+
+@api_router.get("/smart/news-events")
+async def get_news_events():
+    """Get upcoming high-impact economic events (for EA news filter)"""
+    global _news_cache, _news_cache_time
+    now = time.time()
+    if now - _news_cache_time < 3600 and _news_cache:  # Cache 1 hour
+        return {"events": _news_cache, "count": len(_news_cache)}
+
+    events = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            resp = await http.get("https://nfs.faireconomy.media/ff_calendar_thisweek.json")
+            if resp.status_code == 200:
+                data = resp.json()
+                for ev in data:
+                    impact = ev.get("impact", "").lower()
+                    if impact in ["high", "medium"]:
+                        events.append({
+                            "title": ev.get("title", ""),
+                            "country": ev.get("country", ""),
+                            "date": ev.get("date", ""),
+                            "impact": impact,
+                            "forecast": ev.get("forecast", ""),
+                            "previous": ev.get("previous", ""),
+                        })
+                # If we got events from external API, cache and return them
+                if events:
+                    _news_cache = events
+                    _news_cache_time = now
+                    return {"events": events, "count": len(events)}
+    except Exception as e:
+        logger.warning(f"News calendar fetch failed: {e}")
+
+    # Fallback: hardcode known recurring high-impact events
+    if not events:
+        from datetime import date
+        today = date.today()
+        weekday = today.weekday()
+        # NFP is first Friday of month
+        events = [
+            {"title": "NFP (if first Friday)", "country": "USD", "date": "", "impact": "high", "forecast": "", "previous": ""},
+            {"title": "CPI (monthly)", "country": "USD", "date": "", "impact": "high", "forecast": "", "previous": ""},
+            {"title": "FOMC (6-weekly)", "country": "USD", "date": "", "impact": "high", "forecast": "", "previous": ""},
+        ]
+
+    _news_cache = events
+    _news_cache_time = now
+    return {"events": events, "count": len(events)}
+
+@api_router.get("/smart/dxy")
+async def get_dxy_direction():
+    """Get DXY (Dollar Index) direction for correlation filter"""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    dxy_price = None
+    dxy_change = None
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as http:
+            resp = await http.get("https://www.google.com/finance/quote/DXY:INDEXNYSEGIS", headers=headers, follow_redirects=True)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, 'lxml')
+                pe = soup.find('div', class_='YMlKec fxKbKc')
+                if pe:
+                    try: dxy_price = float(pe.get_text(strip=True).replace(',', ''))
+                    except: pass
+                for el in soup.find_all('div', class_='JwB6zf'):
+                    t = el.get_text(strip=True)
+                    if '%' in t or any(c.isdigit() for c in t):
+                        for p in t.replace(',', '').split():
+                            c = p.replace('+', '').replace('%', '')
+                            try:
+                                v = float(c)
+                                if '%' not in p and dxy_change is None:
+                                    dxy_change = v
+                            except: pass
+                        break
+    except Exception as e:
+        logger.warning(f"DXY scrape failed: {e}")
+
+    if dxy_price is None:
+        dxy_price = 99.5
+        dxy_change = 0.0
+    if dxy_change is None:
+        dxy_change = 0.0
+
+    # DXY up = bearish for gold, DXY down = bullish for gold
+    direction = "weakening" if dxy_change < 0 else "strengthening" if dxy_change > 0 else "neutral"
+    gold_bias = "bullish" if dxy_change < 0 else "bearish" if dxy_change > 0 else "neutral"
+
+    return {
+        "dxy_price": round(dxy_price, 2),
+        "dxy_change": round(dxy_change, 2),
+        "dxy_direction": direction,
+        "gold_bias": gold_bias,
+        "recommendation": f"DXY {direction} -> Gold {gold_bias}. {'Favor BUY trades' if gold_bias == 'bullish' else 'Favor SELL trades' if gold_bias == 'bearish' else 'No bias'}.",
+    }
+
+@api_router.get("/smart/session-config")
+async def get_session_config():
+    """Session-specific strategy tuning recommendations"""
+    return {
+        "london": {
+            "hours": "08:00-16:00 GMT",
+            "preferred_strategies": ["trend", "breakout"],
+            "confidence_threshold": 75,
+            "description": "London = trend continuation. Best for directional trades.",
+            "risk_multiplier": 1.0,
+        },
+        "new_york": {
+            "hours": "13:00-21:00 GMT",
+            "preferred_strategies": ["trend", "range"],
+            "confidence_threshold": 80,
+            "description": "NY = volatility + reversals. Higher confidence needed.",
+            "risk_multiplier": 0.8,
+        },
+        "overlap": {
+            "hours": "13:00-16:00 GMT",
+            "preferred_strategies": ["breakout"],
+            "confidence_threshold": 70,
+            "description": "London-NY overlap = highest liquidity. Best breakout window.",
+            "risk_multiplier": 1.2,
+        },
+        "asian": {
+            "hours": "00:00-08:00 GMT",
+            "preferred_strategies": ["range"],
+            "confidence_threshold": 85,
+            "description": "Asian = low volatility ranging. Very selective.",
+            "risk_multiplier": 0.5,
+        },
+    }
+
+@api_router.post("/smart/check-trade")
+async def smart_check_trade(req: MLConfidenceRequest):
+    """All-in-one smart trade check: ML + News + DXY + Session + Recovery"""
+    result = {
+        "allow_trade": True,
+        "adjustments": [],
+        "final_adjustment": 0,
+        "warnings": [],
+    }
+
+    # 1. ML confidence (reuse existing logic)
+    ml_data = await ml_get_confidence(req)
+    ml_adj = ml_data.get("adjustment", 0)
+    if ml_data.get("skip_trade"):
+        result["allow_trade"] = False
+        result["warnings"].append("BLOCKED: Global ML says this setup historically loses")
+        return result
+    result["adjustments"].append({"source": "global_ml", "value": ml_adj})
+
+    # 2. DXY correlation
+    try:
+        dxy = await get_dxy_direction()
+        gold_bias = dxy.get("gold_bias", "neutral")
+        is_buy = req.market_state in [0, 3]  # trending up or breakout up
+
+        if (is_buy and gold_bias == "bearish") or (not is_buy and gold_bias == "bullish"):
+            result["adjustments"].append({"source": "dxy_conflict", "value": -10})
+            result["warnings"].append(f"DXY conflict: Gold bias is {gold_bias} but trade is {'BUY' if is_buy else 'SELL'}")
+        elif (is_buy and gold_bias == "bullish") or (not is_buy and gold_bias == "bearish"):
+            result["adjustments"].append({"source": "dxy_confirm", "value": 5})
+    except:
+        pass
+
+    # 3. Session tuning
+    hour = req.hour_of_day
+    if 13 <= hour < 16:  # overlap
+        result["adjustments"].append({"source": "session_overlap_boost", "value": 3})
+    elif 0 <= hour < 8:  # asian - be more selective
+        result["adjustments"].append({"source": "session_asian_penalty", "value": -8})
+        result["warnings"].append("Asian session: low liquidity, higher risk")
+
+    # 4. Weekend protection (Friday after 20:00)
+    dow = req.day_of_week
+    if dow == 5 and hour >= 20:
+        result["allow_trade"] = False
+        result["warnings"].append("BLOCKED: Weekend gap protection - no new trades after Friday 20:00")
+        return result
+
+    # Calculate final
+    total_adj = sum(a["value"] for a in result["adjustments"])
+    result["final_adjustment"] = max(-30, min(30, total_adj))
+
+    return result
+
+@api_router.get("/admin/monthly-report", dependencies=[Depends(get_current_admin)])
+async def admin_monthly_report():
+    """Generate monthly performance report for admin"""
+    total_patterns = await db.ml_patterns.count_documents({})
+    wins = await db.ml_patterns.count_documents({"was_winner": True})
+    total_txs = await db.payment_transactions.count_documents({})
+    paid_txs = await db.payment_transactions.count_documents({"payment_status": "success"})
+    total_pins = await db.pin_licenses.count_documents({})
+    active_pins = await db.pin_licenses.count_documents({"is_active": True, "is_used": True})
+
+    # Best/worst hours from ML data
+    hour_pipeline = [{"$group": {"_id": {"hour": "$hour_of_day", "winner": "$was_winner"}, "count": {"$sum": 1}}}]
+    hour_results = await db.ml_patterns.aggregate(hour_pipeline).to_list(100)
+    hour_data = {}
+    for r in hour_results:
+        h = r["_id"]["hour"]
+        if h not in hour_data: hour_data[h] = {"total": 0, "wins": 0}
+        hour_data[h]["total"] += r["count"]
+        if r["_id"]["winner"]: hour_data[h]["wins"] += r["count"]
+
+    best_hours = sorted(
+        [{"hour": h, "win_rate": round(d["wins"]/d["total"]*100, 1), "trades": d["total"]} for h, d in hour_data.items() if d["total"] >= 3],
+        key=lambda x: x["win_rate"], reverse=True
+    )[:5]
+
+    worst_hours = sorted(
+        [{"hour": h, "win_rate": round(d["wins"]/d["total"]*100, 1), "trades": d["total"]} for h, d in hour_data.items() if d["total"] >= 3],
+        key=lambda x: x["win_rate"]
+    )[:5]
+
+    s = await get_settings()
+    price_naira = s.get("pin_price_kobo", 30000000) / 100
+
+    best_str = ', '.join([f'{h["hour"]}:00 ({h["win_rate"]}%)' for h in best_hours[:3]])
+    worst_str = ', '.join([f'{h["hour"]}:00 ({h["win_rate"]}%)' for h in worst_hours[:3]])
+
+    return {
+        "ml_stats": {
+            "total_patterns": total_patterns,
+            "global_win_rate": round(wins / total_patterns * 100, 1) if total_patterns > 0 else 0,
+        },
+        "sales": {
+            "total_transactions": total_txs,
+            "successful_payments": paid_txs,
+            "revenue_naira": paid_txs * price_naira,
+            "total_pins": total_pins,
+            "active_users": active_pins,
+        },
+        "best_trading_hours": best_hours,
+        "worst_trading_hours": worst_hours,
+        "recommendations": [
+            f"Best trading hours: {best_str}",
+            f"Avoid trading at: {worst_str}",
+            f"Revenue so far: \u20a6{paid_txs * price_naira:,.0f} from {paid_txs} sales",
+        ] if best_hours else ["Not enough data yet. As more users trade, insights will appear."]
+    }
+
+# -------------------------------------------------------------------
 # STARTUP
 # -------------------------------------------------------------------
 

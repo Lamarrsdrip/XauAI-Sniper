@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for XauAI Sniper XAUUSD Trading Bot - Final Pre-deployment Test
-Tests rebranding changes: XauAI Sniper branding, Trade.com partnership
+Backend API Testing for XauAI Sniper XAUUSD Trading Bot - Iteration 9 Testing
+Tests new smart features: News events, DXY correlation, Session config, Smart trade check, Monthly reports
 """
 
 import requests
@@ -819,6 +819,175 @@ class APITester:
         return self.run_test("Admin Account Update (New Email)", "PUT", "/admin/account", 
                            headers=headers, data=test_data, validate_response=validate_email_update)
 
+    # NEW SMART FEATURES TESTS (Iteration 9)
+    def test_smart_news_events(self):
+        """Test GET /api/smart/news-events - Economic calendar events"""
+        def validate_news_events(data):
+            if 'events' not in data:
+                return "Missing 'events' field"
+            
+            if 'count' not in data:
+                return "Missing 'count' field"
+            
+            events = data.get('events', [])
+            if not isinstance(events, list):
+                return "Events should be a list"
+            
+            # Check structure of events if any exist
+            if events:
+                event = events[0]
+                required_fields = ['title', 'country', 'impact']
+                for field in required_fields:
+                    if field not in event:
+                        return f"Missing field '{field}' in event"
+            
+            return True
+
+        return self.run_test("Smart News Events API", "GET", "/smart/news-events", 
+                           validate_response=validate_news_events)
+
+    def test_smart_dxy_correlation(self):
+        """Test GET /api/smart/dxy - DXY dollar index correlation"""
+        def validate_dxy_data(data):
+            required_fields = ['dxy_price', 'dxy_change', 'dxy_direction', 'gold_bias', 'recommendation']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field '{field}'"
+            
+            # Validate data types and values
+            if not isinstance(data.get('dxy_price'), (int, float)):
+                return "dxy_price should be a number"
+            
+            valid_directions = ['strengthening', 'weakening', 'neutral']
+            if data.get('dxy_direction') not in valid_directions:
+                return f"dxy_direction should be one of {valid_directions}"
+            
+            valid_bias = ['bullish', 'bearish', 'neutral']
+            if data.get('gold_bias') not in valid_bias:
+                return f"gold_bias should be one of {valid_bias}"
+            
+            return True
+
+        return self.run_test("Smart DXY Correlation API", "GET", "/smart/dxy", 
+                           validate_response=validate_dxy_data)
+
+    def test_smart_session_config(self):
+        """Test GET /api/smart/session-config - Session-specific strategy tuning"""
+        def validate_session_config(data):
+            expected_sessions = ['london', 'new_york', 'overlap', 'asian']
+            for session in expected_sessions:
+                if session not in data:
+                    return f"Missing session '{session}'"
+                
+                session_data = data[session]
+                required_fields = ['hours', 'preferred_strategies', 'confidence_threshold', 'description', 'risk_multiplier']
+                for field in required_fields:
+                    if field not in session_data:
+                        return f"Missing field '{field}' in {session} session"
+                
+                # Validate data types
+                if not isinstance(session_data.get('confidence_threshold'), int):
+                    return f"confidence_threshold should be integer in {session}"
+                
+                if not isinstance(session_data.get('risk_multiplier'), (int, float)):
+                    return f"risk_multiplier should be number in {session}"
+            
+            return True
+
+        return self.run_test("Smart Session Config API", "GET", "/smart/session-config", 
+                           validate_response=validate_session_config)
+
+    def test_smart_check_trade(self):
+        """Test POST /api/smart/check-trade - All-in-one smart trade check"""
+        test_data = {
+            "pin": "ASE-OPBT-VFWK",
+            "market_state": 0,  # trending up
+            "strategy": 0,      # trend strategy
+            "ema_diff": 15.5,
+            "rsi_value": 55.0,
+            "atr_value": 0.0025,
+            "bb_width": 0.002,
+            "hour_of_day": 14,  # London-NY overlap
+            "day_of_week": 2    # Tuesday
+        }
+        
+        def validate_smart_check(data):
+            required_fields = ['allow_trade', 'adjustments', 'final_adjustment', 'warnings']
+            for field in required_fields:
+                if field not in data:
+                    return f"Missing field '{field}'"
+            
+            # Validate data types
+            if not isinstance(data.get('allow_trade'), bool):
+                return "allow_trade should be boolean"
+            
+            if not isinstance(data.get('adjustments'), list):
+                return "adjustments should be list"
+            
+            if not isinstance(data.get('final_adjustment'), (int, float)):
+                return "final_adjustment should be number"
+            
+            if not isinstance(data.get('warnings'), list):
+                return "warnings should be list"
+            
+            # Check adjustment structure if any exist
+            adjustments = data.get('adjustments', [])
+            if adjustments:
+                adj = adjustments[0]
+                if 'source' not in adj or 'value' not in adj:
+                    return "Adjustment should have 'source' and 'value' fields"
+            
+            return True
+
+        return self.run_test("Smart Check Trade API", "POST", "/smart/check-trade", 
+                           data=test_data, validate_response=validate_smart_check)
+
+    def test_admin_monthly_report(self):
+        """Test GET /api/admin/monthly-report - Monthly performance report (requires auth)"""
+        if not self.admin_token:
+            self.log("❌ Admin Monthly Report - No admin token available", "ERROR")
+            self.failed_tests.append("Admin Monthly Report: No admin token")
+            self.tests_run += 1
+            return False
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.admin_token}'
+        }
+        
+        def validate_monthly_report(data):
+            required_sections = ['ml_stats', 'sales', 'best_trading_hours', 'worst_trading_hours', 'recommendations']
+            for section in required_sections:
+                if section not in data:
+                    return f"Missing section '{section}'"
+            
+            # Validate ML stats structure
+            ml_stats = data.get('ml_stats', {})
+            if 'total_patterns' not in ml_stats or 'global_win_rate' not in ml_stats:
+                return "ML stats missing required fields"
+            
+            # Validate sales structure
+            sales = data.get('sales', {})
+            required_sales_fields = ['total_transactions', 'successful_payments', 'revenue_naira', 'total_pins', 'active_users']
+            for field in required_sales_fields:
+                if field not in sales:
+                    return f"Sales section missing '{field}'"
+            
+            # Validate trading hours are lists
+            if not isinstance(data.get('best_trading_hours'), list):
+                return "best_trading_hours should be list"
+            
+            if not isinstance(data.get('worst_trading_hours'), list):
+                return "worst_trading_hours should be list"
+            
+            if not isinstance(data.get('recommendations'), list):
+                return "recommendations should be list"
+            
+            return True
+
+        return self.run_test("Admin Monthly Report API", "GET", "/admin/monthly-report", 
+                           headers=headers, validate_response=validate_monthly_report)
+
     def run_all_tests(self):
         """Run all backend tests"""
         self.log("=" * 60)
@@ -859,6 +1028,14 @@ class APITester:
         self.test_admin_pins_generate()
         self.test_admin_pins_list()
         self.test_admin_transactions()
+
+        # Test NEW SMART FEATURES (Iteration 9)
+        self.log("\n--- NEW SMART FEATURES (Iteration 9) ---")
+        self.test_smart_news_events()
+        self.test_smart_dxy_correlation()
+        self.test_smart_session_config()
+        self.test_smart_check_trade()
+        self.test_admin_monthly_report()
 
         # Test PUBLIC features (should still work)
         self.log("\n--- PUBLIC FEATURES (Should Still Work) ---")

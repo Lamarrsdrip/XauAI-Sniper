@@ -96,7 +96,15 @@ input int      InpPatternMemorySize  = 500;     // Max local patterns to remembe
 input double   InpLearningWeight     = 0.3;     // Learning influence on confidence (0-1)
 input int      InpMinPatternsForML   = 20;      // Min patterns before ML kicks in
 input bool     InpUseCloudML         = true;    // Use Cloud ML (learns from ALL users globally)
-input string   InpCloudMLURL         = "https://your-domain.com/api/ml"; // Cloud ML Server URL
+input string   InpCloudMLURL         = "https://your-domain.com/api"; // Cloud Server URL
+
+//--- Smart Features
+input group "=== SMART FEATURES ==="
+input bool     InpSmartTradeCheck    = true;    // Use Smart Trade Check (News+DXY+Session combined)
+input bool     InpWeekendProtection  = true;    // Close trades before weekend (Friday 20:00)
+input int      InpFridayCloseHour    = 20;      // Hour to close all trades on Friday (server time)
+input bool     InpDrawdownRecovery   = true;    // Enable Drawdown Recovery Mode
+input double   InpRecoveryThreshold  = 50.0;    // Recovery triggers at X% of daily loss limit
 
 //+------------------------------------------------------------------+
 //| ENUMERATIONS                                                     |
@@ -193,6 +201,10 @@ int                   tradeConfidence;
 TradePattern   patternMemory[];
 int            patternCount;
 int            mlBoostApplied;
+
+// Smart Features
+bool           recoveryModeActive;
+int            smartCheckResult;
 
 //+------------------------------------------------------------------+
 //| PIN VALIDATION (OFFLINE HASH CHECK)                              |
@@ -430,6 +442,30 @@ void OnTick()
    CheckDailyReset();
    CheckWeeklyReset();
    
+   // === WEEKEND PROTECTION: Close all trades Friday before close ===
+   if(InpWeekendProtection)
+   {
+      MqlDateTime dtw;
+      TimeCurrent(dtw);
+      if(dtw.day_of_week == 5 && dtw.hour >= InpFridayCloseHour)
+      {
+         if(CountOpenPositions() > 0)
+         {
+            CloseAllPositions();
+            Print("WEEKEND PROTECTION: All trades closed before weekend gap risk");
+         }
+         return; // No new trades on Friday evening
+      }
+   }
+   
+   // === DRAWDOWN RECOVERY MODE ===
+   if(InpDrawdownRecovery)
+   {
+      double dailyPnL = accInfo.Equity() - dailyStartEquity;
+      double halfDailyLimit = dailyStartEquity * InpDailyLossLimit / 100.0 * (InpRecoveryThreshold / 100.0);
+      recoveryModeActive = (dailyPnL < -halfDailyLimit);
+   }
+   
    if(!PassSafetyChecks()) return;
    
    static datetime lastBarTime = 0;
@@ -457,14 +493,32 @@ void OnTick()
       case STRATEGY_BREAKOUT: signal = BreakoutStrategy(); break;
    }
    
-   // Apply ML: Cloud (global) FIRST, local as FALLBACK
+   // Apply ML: Smart Trade Check (all-in-one) or Cloud ML + Local fallback
    if(InpEnableLearning && signal != 0)
    {
       int cloudAdj = 0;
       bool useLocal = true;
       
-      // TRY CLOUD ML FIRST (global intelligence from ALL users)
-      if(InpUseCloudML)
+      // TRY SMART TRADE CHECK (News + DXY + Session + ML combined)
+      if(InpSmartTradeCheck && InpUseCloudML)
+      {
+         int smartAdj = GetSmartTradeCheck();
+         if(smartAdj == -100)
+         {
+            signal = 0;
+            tradeConfidence = 0;
+            useLocal = false;
+            Print("SMART CHECK: Trade BLOCKED (News/DXY/Weekend/ML)");
+         }
+         else
+         {
+            tradeConfidence += smartAdj;
+            mlBoostApplied = smartAdj;
+            useLocal = false;
+         }
+      }
+      // FALLBACK: Cloud ML only
+      else if(InpUseCloudML)
       {
          cloudAdj = GetCloudMLConfidence();
          if(cloudAdj == -100)
@@ -472,7 +526,6 @@ void OnTick()
             signal = 0;
             tradeConfidence = 0;
             useLocal = false;
-            Print("CLOUD ML: Trade BLOCKED by global intelligence");
          }
          else if(cloudAdj != 0)
          {
@@ -492,7 +545,7 @@ void OnTick()
       
       tradeConfidence = MathMax(0, MathMin(100, tradeConfidence));
       
-      // LOSS AVOIDANCE
+      // LOCAL LOSS AVOIDANCE
       if(signal != 0 && IsHighLossTimeSlot())
       {
          tradeConfidence -= 20;
@@ -508,15 +561,24 @@ void OnTick()
       {
          tradeConfidence -= 10;
       }
+      
+      // RECOVERY MODE: If active, require much higher confidence + reduce lot size
+      if(signal != 0 && recoveryModeActive)
+      {
+         tradeConfidence -= 15; // Require even higher confidence in recovery
+         Print("RECOVERY MODE: Active - tightened confidence by -15");
+      }
    }
    
-   // Dynamic threshold: after enough learning, require higher confidence for better win rate
+   // Dynamic threshold
    int effectiveThreshold = InpConfidenceThreshold;
    if(patternCount >= 50)
    {
       double recentWinRate = GetRecentWinRate(20);
-      if(recentWinRate < 0.6) effectiveThreshold += 10; // Tighten if recent performance is poor
+      if(recentWinRate < 0.6) effectiveThreshold += 10;
    }
+   // Recovery mode raises threshold further
+   if(recoveryModeActive) effectiveThreshold += 10;
    
    if(signal != 0 && tradeConfidence >= effectiveThreshold)
    {
@@ -789,6 +851,76 @@ int GetCloudMLConfidence()
    
    return 0; // Fallback: no adjustment
 }
+
+//+------------------------------------------------------------------+
+//| SMART TRADE CHECK: All-in-one (News+DXY+Session+ML combined)     |
+//+------------------------------------------------------------------+
+int GetSmartTradeCheck()
+{
+   if(StringLen(InpCloudMLURL) < 10) return 0;
+   
+   string url = InpCloudMLURL + "/smart/check-trade";
+   string headers = "Content-Type: application/json\r\n";
+   
+   double emaDiff = (bufEMAFast[1] - bufEMASlow[1]) / bufEMASlow[1] * 10000;
+   double bbWidth = (bufBBUpper[1] - bufBBLower[1]) / iClose(Symbol(), PERIOD_M5, 1);
+   
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   
+   string json = StringFormat(
+      "{\"pin\":\"%s\",\"market_state\":%d,\"strategy\":%d,\"ema_diff\":%.4f,"
+      "\"rsi_value\":%.2f,\"atr_value\":%.4f,\"bb_width\":%.6f,"
+      "\"hour_of_day\":%d,\"day_of_week\":%d}",
+      InpLicensePIN, (int)currentMarketCondition, (int)activeStrategy,
+      emaDiff, bufRSI[1], bufATR[1], bbWidth, dt.hour, dt.day_of_week
+   );
+   
+   char post[], result[];
+   string resultHeaders;
+   StringToCharArray(json, post, 0, StringLen(json));
+   
+   int res = WebRequest("POST", url, headers, 8000, post, result, resultHeaders);
+   
+   if(res == 200)
+   {
+      string response = CharArrayToString(result);
+      
+      // Check allow_trade flag
+      if(StringFind(response, "\"allow_trade\": false") >= 0 || StringFind(response, "\"allow_trade\":false") >= 0)
+      {
+         Print("SMART CHECK: Trade NOT ALLOWED by server");
+         return -100;
+      }
+      
+      // Parse final_adjustment
+      int adjStart = StringFind(response, "\"final_adjustment\":");
+      if(adjStart >= 0)
+      {
+         adjStart += 20;
+         string adjStr = "";
+         for(int i = adjStart; i < StringLen(response); i++)
+         {
+            ushort ch = StringGetCharacter(response, i);
+            if((ch >= '0' && ch <= '9') || ch == '-') adjStr += ShortToString(ch);
+            else if(StringLen(adjStr) > 0) break;
+         }
+         if(StringLen(adjStr) > 0)
+         {
+            int smartAdj = (int)StringToInteger(adjStr);
+            Print("SMART CHECK: Combined adjustment: ", smartAdj);
+            return smartAdj;
+         }
+      }
+   }
+   else
+   {
+      Print("SMART CHECK: Server unreachable (", res, ") - falling back to local");
+   }
+   
+   return 0;
+}
+
 
 //+------------------------------------------------------------------+
 //| ML: SAVE PATTERN MEMORY TO FILE                                  |
@@ -1217,6 +1349,14 @@ double CalculateLotSize(double slDistancePoints)
    if(tickValue == 0 || tickSize == 0 || slDistancePoints == 0) return 0;
    
    double lotSize = riskAmount / (slDistancePoints / tickSize * tickValue);
+   
+   // RECOVERY MODE: Cut lot size in half to protect remaining capital
+   if(recoveryModeActive)
+   {
+      lotSize *= 0.5;
+      Print("RECOVERY MODE: Lot size halved to ", DoubleToString(lotSize, 2));
+   }
+   
    lotSize = MathFloor(lotSize / lotStep) * lotStep;
    lotSize = MathMax(minLot, MathMin(maxLot, lotSize));
    
@@ -1480,7 +1620,7 @@ void UpdateDashboard()
    
    string dashboard = "\n";
    dashboard += "============================================\n";
-   dashboard += "     AI SNIPER EA v2.0 | XAUUSD | LICENSED\n";
+   dashboard += "   XauAI SNIPER v2.0 | XAUUSD | LICENSED\n";
    dashboard += "============================================\n";
    dashboard += StringFormat("Balance: $%.2f | Equity: $%.2f\n", balance, equity);
    dashboard += StringFormat("Daily P/L: $%.2f | Weekly: $%.2f\n", dailyPnL, weeklyPnL);
@@ -1493,6 +1633,11 @@ void UpdateDashboard()
    dashboard += StringFormat("Trades: %d | Win Rate: %.1f%%\n", totalTrades, winRate);
    dashboard += StringFormat("Max DD: %.2f%% | Target: %.0f%%\n", maxDrawdown, effectiveWeeklyTarget);
    dashboard += StringFormat("ML Patterns: %d | ML Win%%: %.1f%%\n", patternCount, mlWinRate);
+   dashboard += "--------------------------------------------\n";
+   dashboard += StringFormat("Smart Check: %s | Cloud ML: %s\n",
+                InpSmartTradeCheck ? "ON" : "OFF", InpUseCloudML ? "ON" : "OFF");
+   dashboard += StringFormat("Recovery: %s | Weekend Prot: %s\n",
+                recoveryModeActive ? "ACTIVE!" : "OFF", InpWeekendProtection ? "ON" : "OFF");
    dashboard += "============================================\n";
    
    if(dailyLimitReached) dashboard += "!! DAILY LOSS LIMIT REACHED !!\n";
