@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for MrizAI Sniper XAUUSD Trading Bot - Iteration 8
-Tests rebranding changes: MrizAI Sniper branding, Trade.com partnership
+Backend API Testing for XauAI Sniper XAUUSD Trading Bot - Final Pre-deployment Test
+Tests rebranding changes: XauAI Sniper branding, Trade.com partnership
 """
 
 import requests
@@ -79,16 +79,16 @@ class APITester:
         return self.run_test("Health Check", "GET", "/health")
 
     def test_api_root_branding(self):
-        """Test API root endpoint returns MrizAI Sniper branding - NEW FOR ITERATION 8"""
+        """Test API root endpoint returns XauAI Sniper branding - FINAL PRE-DEPLOYMENT TEST"""
         def validate_api_branding(data):
-            # Should return MrizAI Sniper branding
+            # Should return XauAI Sniper branding
             if isinstance(data, dict):
                 message = data.get('message', '')
             else:
                 message = str(data)
             
-            if 'MrizAI Sniper EA API v2.0' not in message:
-                return f"Expected 'MrizAI Sniper EA API v2.0' in response, got: {message}"
+            if 'XauAI Sniper EA API v2.0' not in message:
+                return f"Expected 'XauAI Sniper EA API v2.0' in response, got: {message}"
             
             return True
 
@@ -232,10 +232,10 @@ class APITester:
         return self.run_test("Setup Guide", "GET", "/docs/setup-guide", validate_response=validate_setup_guide)
 
     def test_admin_login_success(self):
-        """Test admin login with correct credentials - NEW FEATURE (Iteration 5)"""
+        """Test admin login with correct credentials - FINAL PRE-DEPLOYMENT TEST"""
         test_data = {
             "email": "admin@aisniper.com",
-            "password": "Admin@2026!"
+            "password": "MrizAdmin2026"
         }
         
         def validate_login_response(data):
@@ -262,7 +262,7 @@ class APITester:
                            data=test_data, validate_response=validate_login_response)
 
     def test_admin_login_wrong_password(self):
-        """Test admin login with wrong password - NEW FEATURE (Iteration 5)"""
+        """Test admin login with wrong password - FINAL PRE-DEPLOYMENT TEST"""
         test_data = {
             "email": "admin@aisniper.com",
             "password": "WrongPassword123!"
@@ -765,7 +765,7 @@ class APITester:
         }
         
         test_data = {
-            "current_password": "Admin@2026!"
+            "current_password": "MrizAdmin2026"
             # No new_email or new_password provided
         }
         
@@ -797,7 +797,7 @@ class APITester:
         # Use a unique email to avoid conflicts
         new_email = f"admin-test-{datetime.now().strftime('%H%M%S')}@aisniper.com"
         test_data = {
-            "current_password": "Admin@2026!",
+            "current_password": "MrizAdmin2026",
             "new_email": new_email
         }
         
@@ -822,7 +822,7 @@ class APITester:
     def run_all_tests(self):
         """Run all backend tests"""
         self.log("=" * 60)
-        self.log("STARTING BACKEND API TESTS - ITERATION 8 (MrizAI Sniper)")
+        self.log("STARTING BACKEND API TESTS - FINAL PRE-DEPLOYMENT (XauAI Sniper)")
         self.log("=" * 60)
 
         # Test basic connectivity and NEW BRANDING
