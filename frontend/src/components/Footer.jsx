@@ -22,8 +22,12 @@ export default function Footer() {
             </span>
           </div>
         </div>
-        <div className="mt-4 pt-4 border-t border-white/10 text-center">
-          <span className="text-xs text-white/30 font-mono">made by emriz.eth</span>
+        <div className="mt-6 pt-6 border-t border-white/10 flex items-center justify-center">
+          <div className="emriz-badge inline-flex items-center gap-2 px-5 py-2.5" data-testid="emriz-badge">
+            <span className="emriz-text font-heading text-sm font-bold tracking-[0.2em]">
+              made by emriz.eth
+            </span>
+          </div>
         </div>
       </div>
     </footer>
