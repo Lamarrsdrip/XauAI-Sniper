@@ -53,8 +53,9 @@ export default function HeroSection({ performance }) {
             </h1>
 
             <p className="text-base leading-relaxed text-muted-foreground max-w-lg mb-8 animate-fade-up delay-200">
-              Professional-grade adaptive trading system. Multi-strategy engine
-              with AI market classification, institutional risk management, and
+              Professional-grade adaptive trading system with machine learning
+              that gets smarter with every trade. Multi-strategy engine with AI
+              market classification, institutional risk management, and
               sniper-precision execution for Gold markets.
             </p>
 

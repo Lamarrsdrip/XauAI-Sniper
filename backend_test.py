@@ -34,6 +34,8 @@ class AITradingBotAPITester:
                 response = requests.get(url, headers=headers, timeout=10)
             elif method == 'POST':
                 response = requests.post(url, json=data, headers=headers, timeout=10)
+            elif method == 'PUT':
+                response = requests.put(url, json=data, headers=headers, timeout=10)
             elif method == 'DELETE':
                 response = requests.delete(url, headers=headers, timeout=10)
             else:
@@ -163,12 +165,12 @@ class AITradingBotAPITester:
             print(f"   Expected 8 installation steps, got {len(data['steps'])}")
             return False
             
-        if len(data['requirements']) != 5:
-            print(f"   Expected 5 requirements, got {len(data['requirements'])}")
+        if len(data['requirements']) != 6:
+            print(f"   Expected 6 requirements, got {len(data['requirements'])}")
             return False
             
-        if len(data['warnings']) != 4:
-            print(f"   Expected 4 warnings, got {len(data['warnings'])}")
+        if len(data['warnings']) != 5:
+            print(f"   Expected 5 warnings, got {len(data['warnings'])}")
             return False
             
         return True
@@ -323,9 +325,188 @@ class AITradingBotAPITester:
                 validate_response=lambda data: "deleted" in data
             )
 
+    def validate_gold_price_data(self, data: Dict) -> bool:
+        """Validate gold price response structure"""
+        required_fields = ['symbol', 'bid', 'ask', 'spread', 'change', 'change_pct', 'timestamp']
+        
+        for field in required_fields:
+            if field not in data:
+                print(f"   Missing required field: {field}")
+                return False
+        
+        # Validate data types
+        if data['symbol'] != 'XAUUSD':
+            print(f"   Expected symbol XAUUSD, got {data['symbol']}")
+            return False
+            
+        if not isinstance(data['bid'], (int, float)) or data['bid'] <= 0:
+            print(f"   Invalid bid price: {data['bid']}")
+            return False
+            
+        if not isinstance(data['ask'], (int, float)) or data['ask'] <= 0:
+            print(f"   Invalid ask price: {data['ask']}")
+            return False
+            
+        return True
+
+    def validate_pin_stats_data(self, data: Dict) -> bool:
+        """Validate PIN stats response structure"""
+        required_fields = ['total', 'active', 'used', 'unused', 'revoked']
+        
+        for field in required_fields:
+            if field not in data:
+                print(f"   Missing required field: {field}")
+                return False
+            if not isinstance(data[field], int) or data[field] < 0:
+                print(f"   Invalid {field} value: {data[field]}")
+                return False
+        
+        return True
+
+    def validate_how_it_works_data(self, data: Dict) -> bool:
+        """Validate How It Works response structure"""
+        if 'sections' not in data or 'faq' not in data:
+            print(f"   Missing sections or faq in how-it-works data")
+            return False
+            
+        if not isinstance(data['sections'], list) or len(data['sections']) == 0:
+            print(f"   Invalid sections structure")
+            return False
+            
+        section = data['sections'][0]
+        if 'steps' not in section or len(section['steps']) != 8:
+            print(f"   Expected 8 steps, got {len(section.get('steps', []))}")
+            return False
+            
+        if not isinstance(data['faq'], list) or len(data['faq']) != 6:
+            print(f"   Expected 6 FAQ items, got {len(data['faq'])}")
+            return False
+            
+        return True
+
+    def test_gold_price_endpoints(self):
+        """Test gold price endpoints (NEW in iteration 2)"""
+        print("\n" + "="*50)
+        print("TESTING GOLD PRICE ENDPOINTS")
+        print("="*50)
+        
+        self.run_test(
+            "Get Gold Price",
+            "GET",
+            "gold/price",
+            200,
+            validate_response=self.validate_gold_price_data
+        )
+
+    def test_pin_management_endpoints(self):
+        """Test PIN license management endpoints (NEW in iteration 2)"""
+        print("\n" + "="*50)
+        print("TESTING PIN MANAGEMENT ENDPOINTS")
+        print("="*50)
+        
+        # Test PIN stats (should work even with no PINs)
+        self.run_test(
+            "Get PIN Stats",
+            "GET",
+            "pins/stats",
+            200,
+            validate_response=self.validate_pin_stats_data
+        )
+        
+        # Test getting all PINs
+        success, pins_response = self.run_test(
+            "Get All PINs",
+            "GET",
+            "pins",
+            200,
+            validate_response=lambda data: "total" in data and "pins" in data and isinstance(data["pins"], list)
+        )
+        
+        # Test generating PINs
+        pin_generate_data = {
+            "count": 2,
+            "buyer_name": "Test Buyer",
+            "buyer_email": "test@example.com",
+            "notes": "Test PIN generation"
+        }
+        
+        success, generate_response = self.run_test(
+            "Generate PINs",
+            "POST",
+            "pins/generate",
+            200,
+            data=pin_generate_data,
+            validate_response=lambda data: "pins_created" in data and data["pins_created"] == 2 and "pins" in data
+        )
+        
+        # If PIN generation was successful, test validation and management
+        if success and generate_response and "pins" in generate_response:
+            test_pin = generate_response["pins"][0]["pin"]
+            
+            # Test PIN validation with valid PIN
+            self.run_test(
+                "Validate Valid PIN",
+                "POST",
+                "pins/validate",
+                200,
+                data={"pin": test_pin, "mt5_account": "12345"},
+                validate_response=lambda data: data.get("valid") == True and data.get("pin") == test_pin
+            )
+            
+            # Test PIN validation with invalid PIN
+            self.run_test(
+                "Validate Invalid PIN",
+                "POST",
+                "pins/validate",
+                200,
+                data={"pin": "FAKE-PIN-1234", "mt5_account": "12345"},
+                validate_response=lambda data: data.get("valid") == False
+            )
+            
+            # Test PIN revocation
+            self.run_test(
+                "Revoke PIN",
+                "PUT",
+                f"pins/{test_pin}/revoke",
+                200,
+                validate_response=lambda data: data.get("revoked") == True and data.get("pin") == test_pin
+            )
+            
+            # Test PIN reactivation
+            self.run_test(
+                "Reactivate PIN",
+                "PUT",
+                f"pins/{test_pin}/activate",
+                200,
+                validate_response=lambda data: data.get("activated") == True and data.get("pin") == test_pin
+            )
+            
+            # Test PIN deletion
+            self.run_test(
+                "Delete PIN",
+                "DELETE",
+                f"pins/{test_pin}",
+                200,
+                validate_response=lambda data: data.get("deleted") == True and data.get("pin") == test_pin
+            )
+
+    def test_how_it_works_endpoints(self):
+        """Test How It Works documentation endpoints (NEW in iteration 2)"""
+        print("\n" + "="*50)
+        print("TESTING HOW IT WORKS ENDPOINTS")
+        print("="*50)
+        
+        self.run_test(
+            "How It Works Guide",
+            "GET",
+            "docs/how-it-works",
+            200,
+            validate_response=self.validate_how_it_works_data
+        )
+
     def run_all_tests(self):
         """Run all test suites"""
-        print("🚀 Starting AI Trading Bot API Tests")
+        print("🚀 Starting AI Trading Bot API Tests - Iteration 2")
         print(f"Base URL: {self.base_url}")
         print(f"API URL: {self.api_url}")
         
@@ -333,6 +514,9 @@ class AITradingBotAPITester:
         
         try:
             self.test_basic_endpoints()
+            self.test_gold_price_endpoints()  # NEW in iteration 2
+            self.test_pin_management_endpoints()  # NEW in iteration 2
+            self.test_how_it_works_endpoints()  # NEW in iteration 2
             self.test_performance_endpoints()
             self.test_architecture_endpoints()
             self.test_documentation_endpoints()

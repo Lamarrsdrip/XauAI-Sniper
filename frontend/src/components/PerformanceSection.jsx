@@ -228,6 +228,32 @@ export default function PerformanceSection({ data }) {
           </div>
         </div>
 
+        {/* AI Intelligence Metrics */}
+        {data.ai_features && (
+          <div className="mt-6 border border-border bg-card" data-testid="ai-metrics">
+            <div className="px-5 py-4 border-b border-border">
+              <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">
+                AI / MACHINE LEARNING METRICS
+              </h4>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 divide-y md:divide-y-0 md:divide-x divide-border">
+              {[
+                { label: "CLASSIFICATION ACCURACY", value: `${data.ai_features.market_classification_accuracy}%` },
+                { label: "AVG CONFIDENCE (WINS)", value: data.ai_features.avg_confidence_on_wins },
+                { label: "AVG CONFIDENCE (LOSSES)", value: data.ai_features.avg_confidence_on_losses },
+                { label: "PATTERNS LEARNED", value: data.ai_features.pattern_memory_size?.toLocaleString() },
+                { label: "ADAPTATION CYCLES", value: data.ai_features.adaptation_cycles },
+                { label: "LEARNING RATE", value: data.ai_features.learning_rate_current },
+              ].map((m) => (
+                <div key={m.label} className="p-4">
+                  <div className="text-[10px] font-bold tracking-[0.1em] text-muted-foreground mb-1">{m.label}</div>
+                  <div className="font-mono text-lg font-bold text-foreground">{m.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Monthly Returns */}
         <div className="mt-6 border border-border bg-card" data-testid="monthly-returns">
           <div className="px-5 py-4 border-b border-border">

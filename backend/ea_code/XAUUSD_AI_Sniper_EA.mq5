@@ -7,7 +7,8 @@
 #property link      "https://ai-sniper-ea.com"
 #property version   "2.00"
 #property description "Advanced AI-Assisted XAUUSD Trading Expert Advisor"
-#property description "Multi-Strategy | Adaptive Intelligence | Strict Risk Management"
+#property description "Multi-Strategy | Adaptive ML | Strict Risk Management"
+#property description "LICENSE REQUIRED: Enter your unique PIN to activate"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -15,6 +16,13 @@
 #include <Trade\OrderInfo.mqh>
 #include <Trade\SymbolInfo.mqh>
 #include <Trade\AccountInfo.mqh>
+
+//+------------------------------------------------------------------+
+//| LICENSE ACTIVATION                                               |
+//+------------------------------------------------------------------+
+input group "=== LICENSE ==="
+input string   InpLicensePIN        = "";       // License PIN (required)
+input string   InpValidationURL     = "https://your-domain.com/api/pins/validate"; // Validation Server URL
 
 //+------------------------------------------------------------------+
 //| INPUT PARAMETERS - User Configurable                             |
@@ -29,6 +37,10 @@ input double   InpWeeklyProfitTarget = 35.0;    // Weekly profit target (%)
 input int      InpMaxOpenTrades      = 2;       // Max simultaneous open trades
 input int      InpMaxTradesPerDay    = 3;       // Max trades per day
 input double   InpMaxSpread          = 40.0;    // Max allowed spread (points)
+
+//--- Profit Mode Presets
+input group "=== PROFIT TARGET MODE ==="
+input int      InpProfitMode         = 2;       // Profit Mode: 1=Conservative(20%), 2=Moderate(35%), 3=Aggressive(50%)
 
 //--- Strategy Selection
 input group "=== STRATEGY MODES ==="
@@ -77,17 +89,24 @@ input int      InpConsecutiveLossMax = 3;        // Max consecutive losses befor
 input bool     InpEmergencyStop      = false;    // Emergency Stop (close all, stop)
 input int      InpMagicNumber        = 20250101; // Magic Number
 
+//--- ML Learning
+input group "=== AI / MACHINE LEARNING ==="
+input bool     InpEnableLearning     = true;    // Enable Pattern Learning
+input int      InpPatternMemorySize  = 500;     // Max patterns to remember
+input double   InpLearningWeight     = 0.3;     // Learning influence on confidence (0-1)
+input int      InpMinPatternsForML   = 20;      // Min patterns before ML kicks in
+
 //+------------------------------------------------------------------+
 //| ENUMERATIONS                                                     |
 //+------------------------------------------------------------------+
 enum ENUM_MARKET_CONDITION
 {
-   MARKET_TRENDING_UP    = 0,   // Strong Uptrend
-   MARKET_TRENDING_DOWN  = 1,   // Strong Downtrend
-   MARKET_RANGING        = 2,   // Range-bound
-   MARKET_BREAKOUT_UP    = 3,   // Bullish Breakout
-   MARKET_BREAKOUT_DOWN  = 4,   // Bearish Breakout
-   MARKET_UNDEFINED      = 5    // Undefined/Choppy
+   MARKET_TRENDING_UP    = 0,
+   MARKET_TRENDING_DOWN  = 1,
+   MARKET_RANGING        = 2,
+   MARKET_BREAKOUT_UP    = 3,
+   MARKET_BREAKOUT_DOWN  = 4,
+   MARKET_UNDEFINED      = 5
 };
 
 enum ENUM_STRATEGY_MODE
@@ -99,12 +118,34 @@ enum ENUM_STRATEGY_MODE
 };
 
 //+------------------------------------------------------------------+
+//| PATTERN MEMORY STRUCTURE (ML)                                    |
+//+------------------------------------------------------------------+
+struct TradePattern
+{
+   ENUM_MARKET_CONDITION  marketState;
+   ENUM_STRATEGY_MODE     strategy;
+   double  emaDiff;         // EMA fast-slow difference
+   double  rsiValue;        // RSI at entry
+   double  atrValue;        // ATR at entry
+   double  bbWidth;         // BB width at entry
+   int     hourOfDay;       // Hour of trade
+   int     dayOfWeek;       // Day of week
+   double  candleBodyRatio; // Body/range ratio of signal candle
+   bool    wasWinner;       // Outcome
+   double  profitPips;      // Profit in pips
+   int     confidence;      // Original confidence score
+};
+
+//+------------------------------------------------------------------+
 //| GLOBAL VARIABLES                                                 |
 //+------------------------------------------------------------------+
 CTrade         trade;
 CPositionInfo  posInfo;
 CSymbolInfo    symInfo;
 CAccountInfo   accInfo;
+
+// License
+bool licenseValid = false;
 
 // Indicator handles
 int handleEMAFast, handleEMASlow, handleRSI, handleATR, handleBB;
@@ -130,6 +171,7 @@ datetime       cooldownUntil;
 bool           dailyLimitReached;
 bool           weeklyLimitReached;
 bool           weeklyTargetReached;
+double         effectiveWeeklyTarget;
 
 // Performance tracking
 int            totalTrades;
@@ -145,11 +187,98 @@ ENUM_MARKET_CONDITION currentMarketCondition;
 ENUM_STRATEGY_MODE    activeStrategy;
 int                   tradeConfidence;
 
+// ML Pattern Memory
+TradePattern   patternMemory[];
+int            patternCount;
+int            mlBoostApplied;
+
+//+------------------------------------------------------------------+
+//| PIN VALIDATION (OFFLINE HASH CHECK)                              |
+//| Online validation requires WebRequest - use ValidateOnline()     |
+//+------------------------------------------------------------------+
+bool ValidatePINOffline(string pin)
+{
+   // Check format: ASE-XXXX-XXXX
+   if(StringLen(pin) != 12) return false;
+   if(StringSubstr(pin, 0, 3) != "ASE") return false;
+   if(StringGetCharacter(pin, 3) != '-') return false;
+   if(StringGetCharacter(pin, 8) != '-') return false;
+   
+   // Validate characters are alphanumeric
+   for(int i = 4; i < 12; i++)
+   {
+      if(i == 8) continue; // Skip dash
+      ushort ch = StringGetCharacter(pin, i);
+      if(!((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z')))
+         return false;
+   }
+   
+   return true;
+}
+
+bool ValidatePINOnline(string pin)
+{
+   // Attempt online validation via WebRequest
+   // NOTE: User must add the validation URL to MT5 allowed URLs
+   // Tools > Options > Expert Advisors > Allow WebRequest for listed URLs
+   
+   if(StringLen(InpValidationURL) < 10) return ValidatePINOffline(pin);
+   
+   string headers = "Content-Type: application/json\r\n";
+   string postData = "{\"pin\":\"" + pin + "\",\"mt5_account\":\"" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "\"}";
+   
+   char post[];
+   char result[];
+   string resultHeaders;
+   
+   StringToCharArray(postData, post, 0, StringLen(postData));
+   
+   int timeout = 5000; // 5 seconds
+   int res = WebRequest("POST", InpValidationURL, headers, timeout, post, result, resultHeaders);
+   
+   if(res == 200)
+   {
+      string response = CharArrayToString(result);
+      // Check if response contains "valid": true
+      if(StringFind(response, "\"valid\": true") >= 0 || StringFind(response, "\"valid\":true") >= 0)
+         return true;
+   }
+   
+   // Fallback to offline validation if server unreachable
+   if(res == -1)
+   {
+      Print("WARNING: Could not reach license server. Using offline validation.");
+      return ValidatePINOffline(pin);
+   }
+   
+   return false;
+}
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   // === LICENSE VALIDATION ===
+   if(StringLen(InpLicensePIN) == 0)
+   {
+      Alert("LICENSE REQUIRED: Please enter your license PIN in the EA settings.");
+      Print("ERROR: No license PIN provided. EA cannot start.");
+      return(INIT_FAILED);
+   }
+   
+   // Try online first, fallback to offline
+   licenseValid = ValidatePINOnline(InpLicensePIN);
+   
+   if(!licenseValid)
+   {
+      Alert("INVALID LICENSE: The PIN you entered is not valid. Please check your PIN.");
+      Print("ERROR: License validation failed for PIN: ", InpLicensePIN);
+      return(INIT_FAILED);
+   }
+   
+   Print("LICENSE VALIDATED: PIN accepted. EA authorized to trade.");
+   
    // Validate symbol
    if(StringFind(Symbol(), "XAU") < 0 && StringFind(Symbol(), "GOLD") < 0)
    {
@@ -162,6 +291,14 @@ int OnInit()
       CloseAllPositions();
       Print("EMERGENCY STOP ACTIVATED - All positions closed, EA stopped");
       return(INIT_FAILED);
+   }
+   
+   // Set effective weekly target based on profit mode
+   switch(InpProfitMode)
+   {
+      case 1: effectiveWeeklyTarget = 20.0; break;  // Conservative
+      case 3: effectiveWeeklyTarget = 50.0; break;  // Aggressive
+      default: effectiveWeeklyTarget = InpWeeklyProfitTarget; break; // Moderate or custom
    }
    
    // Initialize trade object
@@ -235,12 +372,22 @@ int OnInit()
    maxDrawdown    = 0;
    peakEquity     = accInfo.Equity();
    
+   // ML Pattern Memory
+   ArrayResize(patternMemory, 0);
+   patternCount = 0;
+   mlBoostApplied = 0;
+   
+   // Load saved patterns from file if exists
+   LoadPatternMemory();
+   
    Print("=== AI SNIPER EA v2.0 INITIALIZED ===");
-   Print("Symbol: ", Symbol(), " | Balance: ", DoubleToString(initialBalance, 2));
-   Print("Risk: ", InpRiskPercent, "% | Daily Limit: ", InpDailyLossLimit, "%");
-   Print("Trend Mode: ", InpEnableTrendMode ? "ON" : "OFF");
-   Print("Range Mode: ", InpEnableRangeMode ? "ON" : "OFF");
-   Print("Breakout Mode: ", InpEnableBreakoutMode ? "ON" : "OFF");
+   Print("License: VALID | Symbol: ", Symbol(), " | Balance: ", DoubleToString(initialBalance, 2));
+   Print("Risk: ", InpRiskPercent, "% | Weekly Target: ", effectiveWeeklyTarget, "%");
+   Print("Profit Mode: ", InpProfitMode == 1 ? "CONSERVATIVE" : InpProfitMode == 3 ? "AGGRESSIVE" : "MODERATE");
+   Print("ML Learning: ", InpEnableLearning ? "ON" : "OFF", " | Patterns loaded: ", patternCount);
+   Print("Trend: ", InpEnableTrendMode ? "ON" : "OFF",
+         " | Range: ", InpEnableRangeMode ? "ON" : "OFF",
+         " | Breakout: ", InpEnableBreakoutMode ? "ON" : "OFF");
    
    return(INIT_SUCCEEDED);
 }
@@ -250,6 +397,9 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // Save pattern memory
+   SavePatternMemory();
+   
    // Release indicator handles
    IndicatorRelease(handleEMAFast);
    IndicatorRelease(handleEMASlow);
@@ -262,10 +412,8 @@ void OnDeinit(const int reason)
    IndicatorRelease(handleEMAFast_H4);
    IndicatorRelease(handleEMASlow_H4);
    
-   // Print performance summary
    PrintPerformanceSummary();
-   
-   Print("=== AI SNIPER EA DEINITIALIZED ===");
+   Print("=== AI SNIPER EA DEINITIALIZED | Patterns saved: ", patternCount, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -273,63 +421,223 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Refresh symbol data
+   if(!licenseValid) return;
+   
    symInfo.Refresh();
    
-   // Daily/Weekly reset checks
    CheckDailyReset();
    CheckWeeklyReset();
    
-   // Safety checks
    if(!PassSafetyChecks()) return;
    
-   // Check for new bar (only process on new M5 bar)
    static datetime lastBarTime = 0;
    datetime currentBarTime = iTime(Symbol(), PERIOD_M5, 0);
    if(currentBarTime == lastBarTime) return;
    lastBarTime = currentBarTime;
    
-   // Update indicators
    if(!UpdateIndicators()) return;
    
-   // Manage existing positions (trailing stop, partial close)
    ManageOpenPositions();
    
-   // Check if we can open new trades
    if(!CanOpenNewTrade()) return;
    
-   // Classify market condition
    currentMarketCondition = ClassifyMarket();
-   
-   // Select appropriate strategy
    activeStrategy = SelectStrategy(currentMarketCondition);
    if(activeStrategy == STRATEGY_NONE) return;
    
-   // Generate trade signal with confidence
-   int signal = 0;      // 1 = buy, -1 = sell, 0 = no trade
+   int signal = 0;
    tradeConfidence = 0;
    
    switch(activeStrategy)
    {
-      case STRATEGY_TREND:
-         signal = TrendStrategy();
-         break;
-      case STRATEGY_RANGE:
-         signal = RangeStrategy();
-         break;
-      case STRATEGY_BREAKOUT:
-         signal = BreakoutStrategy();
-         break;
+      case STRATEGY_TREND:    signal = TrendStrategy();    break;
+      case STRATEGY_RANGE:    signal = RangeStrategy();    break;
+      case STRATEGY_BREAKOUT: signal = BreakoutStrategy(); break;
    }
    
-   // Execute if confidence is high enough
+   // Apply ML pattern boost/penalty
+   if(InpEnableLearning && patternCount >= InpMinPatternsForML && signal != 0)
+   {
+      int mlAdjustment = GetMLConfidenceAdjustment();
+      tradeConfidence += mlAdjustment;
+      mlBoostApplied = mlAdjustment;
+      tradeConfidence = MathMax(0, MathMin(100, tradeConfidence));
+   }
+   
    if(signal != 0 && tradeConfidence >= InpConfidenceThreshold)
    {
       ExecuteTrade(signal);
    }
    
-   // Update dashboard comment
    UpdateDashboard();
+}
+
+//+------------------------------------------------------------------+
+//| ML: GET CONFIDENCE ADJUSTMENT FROM PATTERN MEMORY                |
+//+------------------------------------------------------------------+
+int GetMLConfidenceAdjustment()
+{
+   if(patternCount < InpMinPatternsForML) return 0;
+   
+   // Find similar patterns in memory
+   double currentEMADiff = (bufEMAFast[1] - bufEMASlow[1]) / bufEMASlow[1] * 10000;
+   double currentRSI = bufRSI[1];
+   double currentATR = bufATR[1];
+   double currentBBWidth = (bufBBUpper[1] - bufBBLower[1]) / iClose(Symbol(), PERIOD_M5, 1);
+   
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   int currentHour = dt.hour;
+   int currentDow = dt.day_of_week;
+   
+   int matchCount = 0;
+   int winCount = 0;
+   double totalProfitPips = 0;
+   
+   for(int i = 0; i < patternCount; i++)
+   {
+      // Check similarity (weighted distance)
+      bool sameMarket = (patternMemory[i].marketState == currentMarketCondition);
+      bool sameStrategy = (patternMemory[i].strategy == activeStrategy);
+      bool similarRSI = MathAbs(patternMemory[i].rsiValue - currentRSI) < 15;
+      bool similarTime = (MathAbs(patternMemory[i].hourOfDay - currentHour) <= 2);
+      
+      // Need at least market + strategy match
+      if(sameMarket && sameStrategy)
+      {
+         matchCount++;
+         if(patternMemory[i].wasWinner)
+         {
+            winCount++;
+            totalProfitPips += patternMemory[i].profitPips;
+         }
+         
+         // Bonus for time similarity
+         if(similarRSI && similarTime)
+         {
+            matchCount++; // Double weight for close matches
+            if(patternMemory[i].wasWinner) winCount++;
+         }
+      }
+   }
+   
+   if(matchCount < 5) return 0;
+   
+   double mlWinRate = (double)winCount / matchCount;
+   
+   // Convert to confidence adjustment (-15 to +15)
+   int adjustment = (int)((mlWinRate - 0.5) * 30.0 * InpLearningWeight);
+   return MathMax(-15, MathMin(15, adjustment));
+}
+
+//+------------------------------------------------------------------+
+//| ML: RECORD TRADE PATTERN                                         |
+//+------------------------------------------------------------------+
+void RecordTradePattern(bool wasWin, double profitPips)
+{
+   if(!InpEnableLearning) return;
+   
+   TradePattern pattern;
+   pattern.marketState = currentMarketCondition;
+   pattern.strategy = activeStrategy;
+   pattern.emaDiff = (bufEMAFast[1] - bufEMASlow[1]) / bufEMASlow[1] * 10000;
+   pattern.rsiValue = bufRSI[1];
+   pattern.atrValue = bufATR[1];
+   pattern.bbWidth = (bufBBUpper[1] - bufBBLower[1]) / iClose(Symbol(), PERIOD_M5, 1);
+   
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   pattern.hourOfDay = dt.hour;
+   pattern.dayOfWeek = dt.day_of_week;
+   
+   double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double high1 = iHigh(Symbol(), PERIOD_M5, 1);
+   double low1 = iLow(Symbol(), PERIOD_M5, 1);
+   double range = high1 - low1;
+   pattern.candleBodyRatio = range > 0 ? MathAbs(close1 - open1) / range : 0;
+   
+   pattern.wasWinner = wasWin;
+   pattern.profitPips = profitPips;
+   pattern.confidence = tradeConfidence;
+   
+   // Add to memory (FIFO if full)
+   if(patternCount >= InpPatternMemorySize)
+   {
+      // Remove oldest
+      for(int i = 0; i < patternCount - 1; i++)
+         patternMemory[i] = patternMemory[i + 1];
+      patternCount--;
+   }
+   
+   ArrayResize(patternMemory, patternCount + 1);
+   patternMemory[patternCount] = pattern;
+   patternCount++;
+   
+   Print("ML: Pattern recorded (#", patternCount, ") | Win: ", wasWin, " | Pips: ", DoubleToString(profitPips, 1));
+}
+
+//+------------------------------------------------------------------+
+//| ML: SAVE PATTERN MEMORY TO FILE                                  |
+//+------------------------------------------------------------------+
+void SavePatternMemory()
+{
+   if(patternCount == 0) return;
+   
+   string filename = "AI_Sniper_Patterns_" + Symbol() + ".bin";
+   int handle = FileOpen(filename, FILE_WRITE | FILE_BIN);
+   if(handle == INVALID_HANDLE) return;
+   
+   FileWriteInteger(handle, patternCount);
+   for(int i = 0; i < patternCount; i++)
+   {
+      FileWriteInteger(handle, (int)patternMemory[i].marketState);
+      FileWriteInteger(handle, (int)patternMemory[i].strategy);
+      FileWriteDouble(handle, patternMemory[i].emaDiff);
+      FileWriteDouble(handle, patternMemory[i].rsiValue);
+      FileWriteDouble(handle, patternMemory[i].atrValue);
+      FileWriteDouble(handle, patternMemory[i].bbWidth);
+      FileWriteInteger(handle, patternMemory[i].hourOfDay);
+      FileWriteInteger(handle, patternMemory[i].dayOfWeek);
+      FileWriteDouble(handle, patternMemory[i].candleBodyRatio);
+      FileWriteInteger(handle, patternMemory[i].wasWinner ? 1 : 0);
+      FileWriteDouble(handle, patternMemory[i].profitPips);
+      FileWriteInteger(handle, patternMemory[i].confidence);
+   }
+   FileClose(handle);
+}
+
+//+------------------------------------------------------------------+
+//| ML: LOAD PATTERN MEMORY FROM FILE                                |
+//+------------------------------------------------------------------+
+void LoadPatternMemory()
+{
+   string filename = "AI_Sniper_Patterns_" + Symbol() + ".bin";
+   
+   if(!FileIsExist(filename)) return;
+   
+   int handle = FileOpen(filename, FILE_READ | FILE_BIN);
+   if(handle == INVALID_HANDLE) return;
+   
+   patternCount = FileReadInteger(handle);
+   ArrayResize(patternMemory, patternCount);
+   
+   for(int i = 0; i < patternCount; i++)
+   {
+      patternMemory[i].marketState = (ENUM_MARKET_CONDITION)FileReadInteger(handle);
+      patternMemory[i].strategy = (ENUM_STRATEGY_MODE)FileReadInteger(handle);
+      patternMemory[i].emaDiff = FileReadDouble(handle);
+      patternMemory[i].rsiValue = FileReadDouble(handle);
+      patternMemory[i].atrValue = FileReadDouble(handle);
+      patternMemory[i].bbWidth = FileReadDouble(handle);
+      patternMemory[i].hourOfDay = FileReadInteger(handle);
+      patternMemory[i].dayOfWeek = FileReadInteger(handle);
+      patternMemory[i].candleBodyRatio = FileReadDouble(handle);
+      patternMemory[i].wasWinner = FileReadInteger(handle) == 1;
+      patternMemory[i].profitPips = FileReadDouble(handle);
+      patternMemory[i].confidence = FileReadInteger(handle);
+   }
+   FileClose(handle);
 }
 
 //+------------------------------------------------------------------+
@@ -337,7 +645,6 @@ void OnTick()
 //+------------------------------------------------------------------+
 bool UpdateIndicators()
 {
-   // M5 indicators
    if(CopyBuffer(handleEMAFast, 0, 0, 10, bufEMAFast) < 10) return false;
    if(CopyBuffer(handleEMASlow, 0, 0, 10, bufEMASlow) < 10) return false;
    if(CopyBuffer(handleRSI, 0, 0, 10, bufRSI) < 10) return false;
@@ -345,16 +652,11 @@ bool UpdateIndicators()
    if(CopyBuffer(handleBB, 1, 0, 10, bufBBUpper) < 10) return false;
    if(CopyBuffer(handleBB, 0, 0, 10, bufBBMiddle) < 10) return false;
    if(CopyBuffer(handleBB, 2, 0, 10, bufBBLower) < 10) return false;
-   
-   // H1 indicators
    if(CopyBuffer(handleEMAFast_H1, 0, 0, 5, bufEMAFast_H1) < 5) return false;
    if(CopyBuffer(handleEMASlow_H1, 0, 0, 5, bufEMASlow_H1) < 5) return false;
    if(CopyBuffer(handleRSI_H1, 0, 0, 5, bufRSI_H1) < 5) return false;
-   
-   // H4 indicators
    if(CopyBuffer(handleEMAFast_H4, 0, 0, 5, bufEMAFast_H4) < 5) return false;
    if(CopyBuffer(handleEMASlow_H4, 0, 0, 5, bufEMASlow_H4) < 5) return false;
-   
    return true;
 }
 
@@ -365,41 +667,24 @@ ENUM_MARKET_CONDITION ClassifyMarket()
 {
    double emaFast = bufEMAFast[1];
    double emaSlow = bufEMASlow[1];
-   double atr     = bufATR[1];
    double bbUpper = bufBBUpper[1];
    double bbLower = bufBBLower[1];
    double close1  = iClose(Symbol(), PERIOD_M5, 1);
-   double close2  = iClose(Symbol(), PERIOD_M5, 2);
+   double h4Fast  = bufEMAFast_H4[1];
+   double h4Slow  = bufEMASlow_H4[1];
    
-   // H4 trend for higher timeframe confirmation
-   double h4Fast = bufEMAFast_H4[1];
-   double h4Slow = bufEMASlow_H4[1];
-   
-   // Calculate BB width relative to price
    double bbWidth = (bbUpper - bbLower) / close1;
-   
-   // Detect breakout - price breaking outside BB after squeeze
    double prevBBWidth = (bufBBUpper[3] - bufBBLower[3]) / iClose(Symbol(), PERIOD_M5, 3);
-   bool bbSqueeze = prevBBWidth < bbWidth * 0.7; // BB was tighter before
+   bool bbSqueeze = prevBBWidth < bbWidth * 0.7;
    
-   if(bbSqueeze && close1 > bbUpper)
-      return MARKET_BREAKOUT_UP;
-   if(bbSqueeze && close1 < bbLower)
-      return MARKET_BREAKOUT_DOWN;
+   if(bbSqueeze && close1 > bbUpper) return MARKET_BREAKOUT_UP;
+   if(bbSqueeze && close1 < bbLower) return MARKET_BREAKOUT_DOWN;
    
-   // Detect trend
    double emaDiff = MathAbs(emaFast - emaSlow) / close1 * 10000;
-   bool h4Bullish = h4Fast > h4Slow;
-   bool h4Bearish = h4Fast < h4Slow;
    
-   if(emaFast > emaSlow && emaDiff > 5 && h4Bullish)
-      return MARKET_TRENDING_UP;
-   if(emaFast < emaSlow && emaDiff > 5 && h4Bearish)
-      return MARKET_TRENDING_DOWN;
-   
-   // Otherwise ranging
-   if(emaDiff < 3)
-      return MARKET_RANGING;
+   if(emaFast > emaSlow && emaDiff > 5 && h4Fast > h4Slow) return MARKET_TRENDING_UP;
+   if(emaFast < emaSlow && emaDiff > 5 && h4Fast < h4Slow) return MARKET_TRENDING_DOWN;
+   if(emaDiff < 3) return MARKET_RANGING;
    
    return MARKET_UNDEFINED;
 }
@@ -427,8 +712,7 @@ ENUM_STRATEGY_MODE SelectStrategy(ENUM_MARKET_CONDITION condition)
 }
 
 //+------------------------------------------------------------------+
-//| TREND STRATEGY - Primary Profit Driver                           |
-//| Trade pullbacks in direction of EMA 200 trend                    |
+//| TREND STRATEGY                                                   |
 //+------------------------------------------------------------------+
 int TrendStrategy()
 {
@@ -445,34 +729,22 @@ int TrendStrategy()
    int confidence = 0;
    int signal = 0;
    
-   // BUY SETUP: Pullback in uptrend
    if(emaFast > emaSlow && h1Fast > h1Slow)
    {
-      // Price pulled back to EMA 50 zone
       bool nearEMA50 = close2 <= emaFast * 1.001 && close1 > emaFast;
-      
-      // RSI in bullish zone (not overbought)
       bool rsiBullish = rsi >= 45 && rsi <= 65;
-      
-      // Strong bullish candle confirmation
       bool bullishCandle = close1 > open1 && (close1 - open1) > (bufATR[1] * 0.3);
-      
-      // H1 RSI confirmation
       bool h1Confirm = h1RSI > 45 && h1RSI < 70;
       
       if(nearEMA50) confidence += 30;
       if(rsiBullish) confidence += 20;
       if(bullishCandle) confidence += 25;
       if(h1Confirm) confidence += 15;
-      if(close1 > emaSlow) confidence += 10; // Above EMA 200
+      if(close1 > emaSlow) confidence += 10;
       
-      if(nearEMA50 && rsiBullish && bullishCandle)
-      {
-         signal = 1;
-      }
+      if(nearEMA50 && rsiBullish && bullishCandle) signal = 1;
    }
    
-   // SELL SETUP: Pullback in downtrend
    if(emaFast < emaSlow && h1Fast < h1Slow)
    {
       bool nearEMA50 = close2 >= emaFast * 0.999 && close1 < emaFast;
@@ -487,10 +759,7 @@ int TrendStrategy()
       if(h1Confirm) confidence += 15;
       if(close1 < emaSlow) confidence += 10;
       
-      if(nearEMA50 && rsiBearish && bearishCandle)
-      {
-         signal = -1;
-      }
+      if(nearEMA50 && rsiBearish && bearishCandle) signal = -1;
    }
    
    tradeConfidence = confidence;
@@ -498,7 +767,7 @@ int TrendStrategy()
 }
 
 //+------------------------------------------------------------------+
-//| RANGE STRATEGY - Support/Resistance Trading                      |
+//| RANGE STRATEGY                                                   |
 //+------------------------------------------------------------------+
 int RangeStrategy()
 {
@@ -506,18 +775,15 @@ int RangeStrategy()
    double open1   = iOpen(Symbol(), PERIOD_M5, 1);
    double bbUpper = bufBBUpper[1];
    double bbLower = bufBBLower[1];
-   double bbMid   = bufBBMiddle[1];
    double rsi     = bufRSI[1];
    
    int confidence = 0;
    int signal = 0;
    
-   // Dynamic S/R using Bollinger Bands
    double bbRange = bbUpper - bbLower;
    double lowerZone = bbLower + bbRange * 0.15;
    double upperZone = bbUpper - bbRange * 0.15;
    
-   // BUY at support (lower BB zone)
    if(close1 <= lowerZone)
    {
       bool bullishRejection = close1 > open1;
@@ -525,16 +791,12 @@ int RangeStrategy()
       
       if(bullishRejection) confidence += 30;
       if(rsiOversold) confidence += 30;
-      if(close1 > bbLower) confidence += 20; // Not broken below
-      if(bufRSI[2] < bufRSI[1]) confidence += 20; // RSI turning up
+      if(close1 > bbLower) confidence += 20;
+      if(bufRSI[2] < bufRSI[1]) confidence += 20;
       
-      if(bullishRejection && rsiOversold)
-      {
-         signal = 1;
-      }
+      if(bullishRejection && rsiOversold) signal = 1;
    }
    
-   // SELL at resistance (upper BB zone)
    if(close1 >= upperZone)
    {
       bool bearishRejection = close1 < open1;
@@ -545,10 +807,7 @@ int RangeStrategy()
       if(close1 < bbUpper) confidence += 20;
       if(bufRSI[2] > bufRSI[1]) confidence += 20;
       
-      if(bearishRejection && rsiOverbought)
-      {
-         signal = -1;
-      }
+      if(bearishRejection && rsiOverbought) signal = -1;
    }
    
    tradeConfidence = confidence;
@@ -556,7 +815,7 @@ int RangeStrategy()
 }
 
 //+------------------------------------------------------------------+
-//| BREAKOUT STRATEGY - Volatility Breakout                          |
+//| BREAKOUT STRATEGY                                                |
 //+------------------------------------------------------------------+
 int BreakoutStrategy()
 {
@@ -571,16 +830,13 @@ int BreakoutStrategy()
    int confidence = 0;
    int signal = 0;
    
-   // Check for BB squeeze (consolidation)
    double bbWidth = bbUpper - bbLower;
    double prevBBWidth = bufBBUpper[5] - bufBBLower[5];
    bool wasSqueezing = bbWidth > prevBBWidth * 1.3;
    
-   // Volume-like confirmation via candle body size
    double bodySize = MathAbs(close1 - open1);
    bool strongBody = bodySize > atr * 0.5;
    
-   // Bullish breakout
    if(close1 > bbUpper && close2 <= bufBBUpper[2])
    {
       if(wasSqueezing) confidence += 25;
@@ -589,13 +845,9 @@ int BreakoutStrategy()
       if(close1 > open1) confidence += 15;
       if(bufEMAFast_H1[1] > bufEMASlow_H1[1]) confidence += 15;
       
-      if(strongBody && rsi > 55)
-      {
-         signal = 1;
-      }
+      if(strongBody && rsi > 55) signal = 1;
    }
    
-   // Bearish breakout
    if(close1 < bbLower && close2 >= bufBBLower[2])
    {
       if(wasSqueezing) confidence += 25;
@@ -604,10 +856,7 @@ int BreakoutStrategy()
       if(close1 < open1) confidence += 15;
       if(bufEMAFast_H1[1] < bufEMASlow_H1[1]) confidence += 15;
       
-      if(strongBody && rsi < 45)
-      {
-         signal = -1;
-      }
+      if(strongBody && rsi < 45) signal = -1;
    }
    
    tradeConfidence = confidence;
@@ -625,46 +874,37 @@ void ExecuteTrade(int signal)
    
    symInfo.Refresh();
    
-   if(signal == 1) // BUY
+   if(signal == 1)
    {
       price = symInfo.Ask();
-      
-      // ATR-based stop loss
       sl = price - atr * InpSLATRMultiplier;
       
-      // Structure-based SL check (use recent swing low)
       double swingLow = FindSwingLow(10);
       if(swingLow > 0 && swingLow < price)
       {
-         double structureSL = swingLow - atr * 0.2; // Small buffer
-         if(structureSL > sl) sl = structureSL; // Use tighter SL
+         double structureSL = swingLow - atr * 0.2;
+         if(structureSL > sl) sl = structureSL;
       }
       
-      // Calculate TP based on RR ratio
       double slDistance = price - sl;
       tp = price + slDistance * InpMinRRRatio;
-      
-      // Cap TP at max RR
       double maxTP = price + slDistance * InpMaxRRRatio;
       if(tp > maxTP) tp = maxTP;
       
-      // Calculate lot size
       lotSize = CalculateLotSize(slDistance);
       if(lotSize <= 0) return;
       
-      // Execute
-      if(trade.Buy(lotSize, Symbol(), price, sl, tp, 
-         StringFormat("AI_Sniper|%s|Conf:%d", StrategyName(activeStrategy), tradeConfidence)))
+      if(trade.Buy(lotSize, Symbol(), price, sl, tp,
+         StringFormat("AI_Sniper|%s|Conf:%d|ML:%d", StrategyName(activeStrategy), tradeConfidence, mlBoostApplied)))
       {
          LogTrade("BUY", price, sl, tp, lotSize, tradeConfidence);
          todayTradeCount++;
          lastTradeTime = TimeCurrent();
       }
    }
-   else if(signal == -1) // SELL
+   else if(signal == -1)
    {
       price = symInfo.Bid();
-      
       sl = price + atr * InpSLATRMultiplier;
       
       double swingHigh = FindSwingHigh(10);
@@ -676,7 +916,6 @@ void ExecuteTrade(int signal)
       
       double slDistance = sl - price;
       tp = price - slDistance * InpMinRRRatio;
-      
       double maxTP = price - slDistance * InpMaxRRRatio;
       if(tp < maxTP) tp = maxTP;
       
@@ -684,7 +923,7 @@ void ExecuteTrade(int signal)
       if(lotSize <= 0) return;
       
       if(trade.Sell(lotSize, Symbol(), price, sl, tp,
-         StringFormat("AI_Sniper|%s|Conf:%d", StrategyName(activeStrategy), tradeConfidence)))
+         StringFormat("AI_Sniper|%s|Conf:%d|ML:%d", StrategyName(activeStrategy), tradeConfidence, mlBoostApplied)))
       {
          LogTrade("SELL", price, sl, tp, lotSize, tradeConfidence);
          todayTradeCount++;
@@ -694,7 +933,7 @@ void ExecuteTrade(int signal)
 }
 
 //+------------------------------------------------------------------+
-//| POSITION MANAGEMENT - Trailing Stop & Partial Close              |
+//| POSITION MANAGEMENT                                              |
 //+------------------------------------------------------------------+
 void ManageOpenPositions()
 {
@@ -708,44 +947,31 @@ void ManageOpenPositions()
       double openPrice    = posInfo.PriceOpen();
       double currentSL    = posInfo.StopLoss();
       double currentTP    = posInfo.TakeProfit();
-      double posProfit    = posInfo.Profit();
       double atr          = bufATR[1];
       ulong  ticket       = posInfo.Ticket();
       
-      // Trailing Stop Logic
       if(posInfo.PositionType() == POSITION_TYPE_BUY)
       {
          double trailSL = currentPrice - atr * InpTrailingATRMulti;
-         
-         // Only trail if price moved in our favor
          if(currentPrice > openPrice + atr && trailSL > currentSL)
-         {
             trade.PositionModify(ticket, trailSL, currentTP);
-         }
          
-         // Partial close at first target
          double slDistance = openPrice - currentSL;
-         double firstTarget = openPrice + slDistance * 1.0; // 1:1 RR
+         double firstTarget = openPrice + slDistance * 1.0;
          
          if(currentPrice >= firstTarget && posInfo.Volume() > SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN))
          {
             double closeVolume = NormalizeDouble(posInfo.Volume() * InpPartialClosePercent / 100.0, 2);
             double minVol = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
             if(closeVolume >= minVol)
-            {
                trade.PositionClosePartial(ticket, closeVolume);
-               Print("Partial close executed: ", closeVolume, " lots at ", currentPrice);
-            }
          }
       }
       else if(posInfo.PositionType() == POSITION_TYPE_SELL)
       {
          double trailSL = currentPrice + atr * InpTrailingATRMulti;
-         
          if(currentPrice < openPrice - atr && trailSL < currentSL)
-         {
             trade.PositionModify(ticket, trailSL, currentTP);
-         }
          
          double slDistance = currentSL - openPrice;
          double firstTarget = openPrice - slDistance * 1.0;
@@ -755,17 +981,14 @@ void ManageOpenPositions()
             double closeVolume = NormalizeDouble(posInfo.Volume() * InpPartialClosePercent / 100.0, 2);
             double minVol = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
             if(closeVolume >= minVol)
-            {
                trade.PositionClosePartial(ticket, closeVolume);
-               Print("Partial close executed: ", closeVolume, " lots at ", currentPrice);
-            }
          }
       }
    }
 }
 
 //+------------------------------------------------------------------+
-//| POSITION SIZING - Dynamic Lot Calculation                        |
+//| POSITION SIZING                                                  |
 //+------------------------------------------------------------------+
 double CalculateLotSize(double slDistancePoints)
 {
@@ -778,18 +1001,10 @@ double CalculateLotSize(double slDistancePoints)
    double maxLot    = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
    double lotStep   = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
    
-   if(tickValue == 0 || tickSize == 0 || slDistancePoints == 0)
-   {
-      Print("ERROR: Invalid values for lot calculation");
-      return 0;
-   }
+   if(tickValue == 0 || tickSize == 0 || slDistancePoints == 0) return 0;
    
    double lotSize = riskAmount / (slDistancePoints / tickSize * tickValue);
-   
-   // Normalize to lot step
    lotSize = MathFloor(lotSize / lotStep) * lotStep;
-   
-   // Clamp to limits
    lotSize = MathMax(minLot, MathMin(maxLot, lotSize));
    
    return NormalizeDouble(lotSize, 2);
@@ -800,28 +1015,24 @@ double CalculateLotSize(double slDistancePoints)
 //+------------------------------------------------------------------+
 bool PassSafetyChecks()
 {
-   // Equity protection
    double currentEquity = accInfo.Equity();
    double protectionLevel = initialBalance * InpEquityProtection / 100.0;
    if(currentEquity < protectionLevel)
    {
       CloseAllPositions();
-      Print("EQUITY PROTECTION TRIGGERED: Equity dropped below ", InpEquityProtection, "% of initial balance");
+      Print("EQUITY PROTECTION TRIGGERED");
       return false;
    }
    
-   // Daily loss limit
    if(dailyLimitReached) return false;
    double dailyPnL = currentEquity - dailyStartEquity;
    double dailyLossMax = dailyStartEquity * InpDailyLossLimit / 100.0;
    if(dailyPnL < -dailyLossMax)
    {
       dailyLimitReached = true;
-      Print("DAILY LOSS LIMIT REACHED: ", DoubleToString(dailyPnL, 2));
       return false;
    }
    
-   // Weekly drawdown
    if(weeklyLimitReached) return false;
    double weeklyPnL = currentEquity - weeklyStartEquity;
    double weeklyLossMax = weeklyStartEquity * InpWeeklyDrawdownLimit / 100.0;
@@ -829,34 +1040,24 @@ bool PassSafetyChecks()
    {
       weeklyLimitReached = true;
       CloseAllPositions();
-      Print("WEEKLY DRAWDOWN LIMIT REACHED");
       return false;
    }
    
-   // Weekly profit target
    if(weeklyTargetReached) return false;
-   double weeklyTarget = weeklyStartEquity * InpWeeklyProfitTarget / 100.0;
+   double weeklyTarget = weeklyStartEquity * effectiveWeeklyTarget / 100.0;
    if(weeklyPnL >= weeklyTarget)
    {
       weeklyTargetReached = true;
-      Print("WEEKLY PROFIT TARGET REACHED: ", DoubleToString(weeklyPnL, 2));
       return false;
    }
    
-   // Cooldown check
    if(TimeCurrent() < cooldownUntil) return false;
    
-   // Spread filter
    double currentSpread = symInfo.Spread();
-   if(currentSpread > InpMaxSpread)
-   {
-      return false;
-   }
+   if(currentSpread > InpMaxSpread) return false;
    
-   // Session filter
    if(!IsWithinTradingSession()) return false;
    
-   // Update max drawdown tracking
    if(currentEquity > peakEquity) peakEquity = currentEquity;
    double currentDrawdown = (peakEquity - currentEquity) / peakEquity * 100;
    if(currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown;
@@ -864,24 +1065,14 @@ bool PassSafetyChecks()
    return true;
 }
 
-//+------------------------------------------------------------------+
-//| CHECK IF CAN OPEN NEW TRADE                                      |
-//+------------------------------------------------------------------+
 bool CanOpenNewTrade()
 {
-   // Max open trades
    int openCount = CountOpenPositions();
    if(openCount >= InpMaxOpenTrades) return false;
-   
-   // Max trades per day
    if(todayTradeCount >= InpMaxTradesPerDay) return false;
-   
    return true;
 }
 
-//+------------------------------------------------------------------+
-//| SESSION FILTER                                                   |
-//+------------------------------------------------------------------+
 bool IsWithinTradingSession()
 {
    MqlDateTime dt;
@@ -893,16 +1084,11 @@ bool IsWithinTradingSession()
    
    if(InpTradeOnlyLondon && inLondon) return true;
    if(InpTradeOnlyNewYork && inNY) return true;
-   
-   // If both sessions disabled, allow all hours
    if(!InpTradeOnlyLondon && !InpTradeOnlyNewYork) return true;
    
    return false;
 }
 
-//+------------------------------------------------------------------+
-//| SWING HIGH/LOW DETECTION                                         |
-//+------------------------------------------------------------------+
 double FindSwingLow(int lookback)
 {
    double lowest = DBL_MAX;
@@ -925,43 +1111,28 @@ double FindSwingHigh(int lookback)
    return highest;
 }
 
-//+------------------------------------------------------------------+
-//| COUNT OPEN POSITIONS                                             |
-//+------------------------------------------------------------------+
 int CountOpenPositions()
 {
    int count = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(posInfo.SelectByIndex(i))
-      {
          if(posInfo.Magic() == InpMagicNumber && posInfo.Symbol() == Symbol())
             count++;
-      }
    }
    return count;
 }
 
-//+------------------------------------------------------------------+
-//| CLOSE ALL POSITIONS                                              |
-//+------------------------------------------------------------------+
 void CloseAllPositions()
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(posInfo.SelectByIndex(i))
-      {
          if(posInfo.Magic() == InpMagicNumber && posInfo.Symbol() == Symbol())
-         {
             trade.PositionClose(posInfo.Ticket());
-         }
-      }
    }
 }
 
-//+------------------------------------------------------------------+
-//| DAILY RESET                                                      |
-//+------------------------------------------------------------------+
 void CheckDailyReset()
 {
    MqlDateTime dtNow, dtLast;
@@ -974,48 +1145,32 @@ void CheckDailyReset()
       todayTradeCount   = 0;
       dailyLimitReached = false;
       lastDayReset      = TimeCurrent();
-      Print("=== DAILY RESET === Equity: ", DoubleToString(dailyStartEquity, 2));
    }
 }
 
-//+------------------------------------------------------------------+
-//| WEEKLY RESET                                                     |
-//+------------------------------------------------------------------+
 void CheckWeeklyReset()
 {
    MqlDateTime dtNow, dtLast;
    TimeCurrent(dtNow);
    TimeToStruct(lastWeekReset, dtLast);
    
-   // Reset on Monday
    if(dtNow.day_of_week == 1 && dtLast.day_of_week != 1)
    {
       weeklyStartEquity  = accInfo.Equity();
       weeklyLimitReached = false;
       weeklyTargetReached= false;
       lastWeekReset      = TimeCurrent();
-      Print("=== WEEKLY RESET === Equity: ", DoubleToString(weeklyStartEquity, 2));
    }
 }
 
-//+------------------------------------------------------------------+
-//| TRADE LOGGING                                                    |
-//+------------------------------------------------------------------+
 void LogTrade(string type, double price, double sl, double tp, double lots, int confidence)
 {
-   string stratName = StrategyName(activeStrategy);
-   string marketName = MarketConditionName(currentMarketCondition);
-   
    Print("=== TRADE EXECUTED ===");
-   Print("Type: ", type, " | Strategy: ", stratName, " | Market: ", marketName);
+   Print("Type: ", type, " | Strategy: ", StrategyName(activeStrategy));
    Print("Price: ", DoubleToString(price, 2), " | SL: ", DoubleToString(sl, 2), " | TP: ", DoubleToString(tp, 2));
-   Print("Lots: ", DoubleToString(lots, 2), " | Confidence: ", confidence);
-   Print("Spread: ", symInfo.Spread(), " | ATR: ", DoubleToString(bufATR[1], 2));
+   Print("Lots: ", DoubleToString(lots, 2), " | Confidence: ", confidence, " | ML Boost: ", mlBoostApplied);
 }
 
-//+------------------------------------------------------------------+
-//| PERFORMANCE SUMMARY                                              |
-//+------------------------------------------------------------------+
 void PrintPerformanceSummary()
 {
    double equity = accInfo.Equity();
@@ -1024,17 +1179,11 @@ void PrintPerformanceSummary()
    double profitFactor = totalLoss != 0 ? MathAbs(totalProfit / totalLoss) : 0;
    
    Print("=== PERFORMANCE SUMMARY ===");
-   Print("Total Trades: ", totalTrades);
-   Print("Win Rate: ", DoubleToString(winRate, 1), "%");
-   Print("Profit Factor: ", DoubleToString(profitFactor, 2));
-   Print("Max Drawdown: ", DoubleToString(maxDrawdown, 2), "%");
-   Print("Total Return: ", DoubleToString(totalReturn, 2), "%");
-   Print("Final Equity: ", DoubleToString(equity, 2));
+   Print("Trades: ", totalTrades, " | Win Rate: ", DoubleToString(winRate, 1), "%");
+   Print("Profit Factor: ", DoubleToString(profitFactor, 2), " | Max DD: ", DoubleToString(maxDrawdown, 2), "%");
+   Print("Return: ", DoubleToString(totalReturn, 2), "% | ML Patterns: ", patternCount);
 }
 
-//+------------------------------------------------------------------+
-//| ON TRADE TRANSACTION - Track wins/losses                         |
-//+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction& trans,
                         const MqlTradeRequest& request,
                         const MqlTradeResult& result)
@@ -1049,7 +1198,9 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
             double profit = deal.Profit() + deal.Swap() + deal.Commission();
             totalTrades++;
             
-            if(profit > 0)
+            bool isWin = profit > 0;
+            
+            if(isWin)
             {
                winningTrades++;
                totalProfit += profit;
@@ -1064,19 +1215,17 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
                if(consecutiveLosses >= InpConsecutiveLossMax)
                {
                   cooldownUntil = TimeCurrent() + InpCooldownMinutes * 60;
-                  Print("COOLDOWN ACTIVATED: ", InpConsecutiveLossMax, " consecutive losses. Resume at: ", 
-                        TimeToString(cooldownUntil));
                   consecutiveLosses = 0;
                }
             }
+            
+            // ML: Record pattern
+            RecordTradePattern(isWin, profit);
          }
       }
    }
 }
 
-//+------------------------------------------------------------------+
-//| HELPER: Strategy Name                                            |
-//+------------------------------------------------------------------+
 string StrategyName(ENUM_STRATEGY_MODE mode)
 {
    switch(mode)
@@ -1088,25 +1237,19 @@ string StrategyName(ENUM_STRATEGY_MODE mode)
    }
 }
 
-//+------------------------------------------------------------------+
-//| HELPER: Market Condition Name                                    |
-//+------------------------------------------------------------------+
 string MarketConditionName(ENUM_MARKET_CONDITION condition)
 {
    switch(condition)
    {
-      case MARKET_TRENDING_UP:    return "TRENDING UP";
-      case MARKET_TRENDING_DOWN:  return "TRENDING DOWN";
+      case MARKET_TRENDING_UP:    return "TREND UP";
+      case MARKET_TRENDING_DOWN:  return "TREND DOWN";
       case MARKET_RANGING:        return "RANGING";
       case MARKET_BREAKOUT_UP:    return "BREAKOUT UP";
-      case MARKET_BREAKOUT_DOWN:  return "BREAKOUT DOWN";
+      case MARKET_BREAKOUT_DOWN:  return "BREAKOUT DN";
       default:                    return "UNDEFINED";
    }
 }
 
-//+------------------------------------------------------------------+
-//| DASHBOARD DISPLAY                                                |
-//+------------------------------------------------------------------+
 void UpdateDashboard()
 {
    double equity = accInfo.Equity();
@@ -1115,22 +1258,29 @@ void UpdateDashboard()
    double weeklyPnL = equity - weeklyStartEquity;
    double winRate = totalTrades > 0 ? (double)winningTrades / totalTrades * 100 : 0;
    
+   // ML stats
+   double mlWinRate = 0;
+   int mlWins = 0;
+   for(int i = 0; i < patternCount; i++)
+      if(patternMemory[i].wasWinner) mlWins++;
+   if(patternCount > 0) mlWinRate = (double)mlWins / patternCount * 100;
+   
    string dashboard = "\n";
-   dashboard += "========================================\n";
-   dashboard += "     AI SNIPER EA v2.0 | XAUUSD\n";
-   dashboard += "========================================\n";
+   dashboard += "============================================\n";
+   dashboard += "     AI SNIPER EA v2.0 | XAUUSD | LICENSED\n";
+   dashboard += "============================================\n";
    dashboard += StringFormat("Balance: $%.2f | Equity: $%.2f\n", balance, equity);
-   dashboard += StringFormat("Daily P/L: $%.2f | Weekly P/L: $%.2f\n", dailyPnL, weeklyPnL);
-   dashboard += "----------------------------------------\n";
-   dashboard += StringFormat("Market: %s\n", MarketConditionName(currentMarketCondition));
-   dashboard += StringFormat("Strategy: %s | Confidence: %d%%\n", StrategyName(activeStrategy), tradeConfidence);
-   dashboard += StringFormat("Open Trades: %d/%d | Today: %d/%d\n", 
+   dashboard += StringFormat("Daily P/L: $%.2f | Weekly: $%.2f\n", dailyPnL, weeklyPnL);
+   dashboard += "--------------------------------------------\n";
+   dashboard += StringFormat("Market: %s | Strategy: %s\n", MarketConditionName(currentMarketCondition), StrategyName(activeStrategy));
+   dashboard += StringFormat("Confidence: %d%% | ML Boost: %+d\n", tradeConfidence, mlBoostApplied);
+   dashboard += StringFormat("Open: %d/%d | Today: %d/%d\n",
                 CountOpenPositions(), InpMaxOpenTrades, todayTradeCount, InpMaxTradesPerDay);
-   dashboard += "----------------------------------------\n";
-   dashboard += StringFormat("Total Trades: %d | Win Rate: %.1f%%\n", totalTrades, winRate);
-   dashboard += StringFormat("Max Drawdown: %.2f%%\n", maxDrawdown);
-   dashboard += StringFormat("Spread: %d | ATR: %.2f\n", symInfo.Spread(), bufATR[1]);
-   dashboard += "========================================\n";
+   dashboard += "--------------------------------------------\n";
+   dashboard += StringFormat("Trades: %d | Win Rate: %.1f%%\n", totalTrades, winRate);
+   dashboard += StringFormat("Max DD: %.2f%% | Target: %.0f%%\n", maxDrawdown, effectiveWeeklyTarget);
+   dashboard += StringFormat("ML Patterns: %d | ML Win%%: %.1f%%\n", patternCount, mlWinRate);
+   dashboard += "============================================\n";
    
    if(dailyLimitReached) dashboard += "!! DAILY LOSS LIMIT REACHED !!\n";
    if(weeklyLimitReached) dashboard += "!! WEEKLY DRAWDOWN LIMIT !!\n";
