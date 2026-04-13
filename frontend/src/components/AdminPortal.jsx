@@ -4,6 +4,7 @@ import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
   UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
   FloppyDisk, ArrowCounterClockwise, ChartBar, Lightning, Flame,
+  House, TrendUp, TrendDown, Pulse,
 } from "@phosphor-icons/react";
 
 const ax = axios.create({ withCredentials: true });
@@ -11,7 +12,7 @@ const ax = axios.create({ withCredentials: true });
 export default function AdminPortal({ api }) {
   const [token, setToken] = useState(localStorage.getItem("admin_token") || "");
   const [admin, setAdmin] = useState(null);
-  const [tab, setTab] = useState("pins");
+  const [tab, setTab] = useState("dashboard");
 
   const checkAuth = useCallback(async () => {
     if (!token) return;
@@ -54,6 +55,7 @@ export default function AdminPortal({ api }) {
       <div className="border-b border-border bg-card">
         <div className="max-w-7xl mx-auto px-6 md:px-8 flex gap-0">
           {[
+            { id: "dashboard", label: "DASHBOARD", icon: House },
             { id: "pins", label: "LICENSES", icon: Key },
             { id: "settings", label: "SETTINGS", icon: GearSix },
             { id: "configurator", label: "EA CONFIG", icon: ChartBar },
@@ -69,6 +71,7 @@ export default function AdminPortal({ api }) {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 md:px-8 py-8">
+        {tab === "dashboard" && <DashboardTab api={api} token={token} />}
         {tab === "pins" && <PinsTab api={api} token={token} />}
         {tab === "settings" && <SettingsTab api={api} token={token} />}
         {tab === "configurator" && <ConfigTab api={api} token={token} />}
@@ -138,6 +141,179 @@ function LoginPage({ api, onLogin }) {
           <a href="/" className="text-xs text-white/30 hover:text-white/60">Back to public site</a>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+// --- DASHBOARD TAB ---
+function DashboardTab({ api, token }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const h = { headers: { Authorization: `Bearer ${token}` } };
+
+  useEffect(() => {
+    ax.get(`${api}/admin/dashboard`, h).then(r => setData(r.data)).catch(() => {}).finally(() => setLoading(false));
+  }, [api, token]);
+
+  if (loading) return <div className="text-center py-12 text-muted-foreground">Loading dashboard...</div>;
+  if (!data) return <div className="text-center py-12 text-muted-foreground">Failed to load dashboard</div>;
+
+  const b = data.bots;
+  const rev = data.revenue;
+  const perf = data.performance;
+
+  return (
+    <div data-testid="admin-dashboard-tab">
+      {/* Top Stats Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <StatCard label="BOTS SOLD" value={b.total_sold} sub={`${b.sold_via_payment} paid | ${b.free_generated} free`} color="text-foreground" testId="stat-total-sold" />
+        <StatCard label="ACTIVELY TRADING" value={b.actively_trading} sub={`${b.purchased_not_activated} not yet activated`} color="text-[hsl(142,71%,45%)]" testId="stat-active" />
+        <StatCard label="REVOKED" value={b.revoked} color="text-[hsl(348,83%,47%)]" testId="stat-revoked" />
+        <StatCard label="REVENUE" value={rev.formatted_revenue} sub={`${rev.successful_payments} payments`} color="text-primary" testId="stat-revenue" />
+      </div>
+
+      {/* Performance Overview */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Win/Loss */}
+        <div className="border border-border bg-card" data-testid="perf-overview">
+          <div className="px-5 py-3 border-b border-border bg-muted/30">
+            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground flex items-center gap-2"><Pulse size={14} /> GLOBAL PERFORMANCE (All Users)</h4>
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-3 gap-4 mb-4">
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">TOTAL TRADES</div>
+                <div className="font-mono text-2xl font-bold">{perf.total_trades}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">WIN RATE</div>
+                <div className={`font-mono text-2xl font-bold ${perf.win_rate >= 60 ? "text-[hsl(142,71%,45%)]" : perf.win_rate >= 45 ? "text-primary" : "text-[hsl(348,83%,47%)]"}`}>
+                  {perf.win_rate}%
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">ACTIVE TRADERS</div>
+                <div className="font-mono text-2xl font-bold text-primary">{perf.active_traders}</div>
+              </div>
+            </div>
+            {/* Win/Loss bar */}
+            <div className="mb-4">
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-[hsl(142,71%,45%)]">{perf.wins} wins</span>
+                <span className="text-[hsl(348,83%,47%)]">{perf.losses} losses</span>
+              </div>
+              <div className="h-3 bg-muted flex overflow-hidden">
+                <div className="bg-[hsl(142,71%,45%)] transition-all" style={{ width: `${perf.total_trades > 0 ? (perf.wins / perf.total_trades * 100) : 0}%` }} />
+                <div className="bg-[hsl(348,83%,47%)] transition-all" style={{ width: `${perf.total_trades > 0 ? (perf.losses / perf.total_trades * 100) : 0}%` }} />
+              </div>
+            </div>
+            {/* Pips */}
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">PROFIT PIPS</div>
+                <div className="font-mono text-lg font-bold text-[hsl(142,71%,45%)]">+{perf.total_profit_pips}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">LOSS PIPS</div>
+                <div className="font-mono text-lg font-bold text-[hsl(348,83%,47%)]">-{perf.total_loss_pips}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">NET PIPS</div>
+                <div className={`font-mono text-lg font-bold ${perf.net_pips >= 0 ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>
+                  {perf.net_pips >= 0 ? "+" : ""}{perf.net_pips}
+                </div>
+              </div>
+            </div>
+            {perf.profit_factor > 0 && (
+              <div className="mt-3 pt-3 border-t border-border text-xs text-muted-foreground">
+                Profit Factor: <span className="font-mono font-bold text-foreground">{perf.profit_factor}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Strategy Breakdown */}
+        <div className="border border-border bg-card" data-testid="strategy-performance">
+          <div className="px-5 py-3 border-b border-border bg-muted/30">
+            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">STRATEGY PERFORMANCE</h4>
+          </div>
+          <div className="divide-y divide-border">
+            {Object.entries(data.strategies || {}).map(([name, s]) => (
+              <div key={name} className="px-5 py-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-bold">{name}</span>
+                  <span className={`font-mono text-sm font-bold ${s.win_rate >= 60 ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>
+                    {s.win_rate}% WR
+                  </span>
+                </div>
+                <div className="flex items-center gap-4 text-xs">
+                  <span className="text-muted-foreground">{s.trades} trades</span>
+                  <span className="text-[hsl(142,71%,45%)]">+{s.profit_pips} pips</span>
+                  <span className="text-[hsl(348,83%,47%)]">-{s.loss_pips} pips</span>
+                  <span className={`font-bold ${s.net_pips >= 0 ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>
+                    Net: {s.net_pips >= 0 ? "+" : ""}{s.net_pips}
+                  </span>
+                </div>
+                <div className="mt-2 h-1.5 bg-muted">
+                  <div className="h-full bg-primary transition-all" style={{ width: `${s.win_rate}%` }} />
+                </div>
+              </div>
+            ))}
+            {Object.keys(data.strategies || {}).length === 0 && (
+              <div className="px-5 py-8 text-center text-sm text-muted-foreground">No strategy data yet. As users trade, data appears here.</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Recent Trades */}
+      <div className="border border-border bg-card" data-testid="recent-trades">
+        <div className="px-5 py-3 border-b border-border bg-muted/30">
+          <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">RECENT TRADES (Global)</h4>
+        </div>
+        {data.recent_trades?.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="border-b border-border">
+                <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">RESULT</th>
+                <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">STRATEGY</th>
+                <th className="text-right px-4 py-2 text-xs font-bold text-muted-foreground">PIPS</th>
+                <th className="text-right px-4 py-2 text-xs font-bold text-muted-foreground">CONFIDENCE</th>
+                <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">DATE</th>
+              </tr></thead>
+              <tbody>{data.recent_trades.map((t, i) => (
+                <tr key={i} className="border-b border-border last:border-0">
+                  <td className="px-4 py-2">
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold ${t.was_winner ? "bg-[hsl(142,71%,45%)]/10 text-[hsl(142,71%,45%)]" : "bg-[hsl(348,83%,47%)]/10 text-[hsl(348,83%,47%)]"}`}>
+                      {t.was_winner ? <TrendUp size={10} /> : <TrendDown size={10} />}
+                      {t.was_winner ? "WIN" : "LOSS"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-xs font-mono">{t.strategy_name}</td>
+                  <td className={`px-4 py-2 text-right font-mono font-bold ${t.profit_pips >= 0 ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>
+                    {t.profit_pips >= 0 ? "+" : ""}{t.profit_pips?.toFixed(1)}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono">{t.confidence}%</td>
+                  <td className="px-4 py-2 text-xs text-muted-foreground">{t.created_at?.split("T")[0]}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="px-5 py-8 text-center text-sm text-muted-foreground">No trades recorded yet. As users activate and trade, results will appear here.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, sub, color, testId }) {
+  return (
+    <div className="border border-border bg-card p-4" data-testid={testId}>
+      <div className="text-[10px] font-bold tracking-[0.15em] text-muted-foreground mb-1">{label}</div>
+      <div className={`font-mono text-2xl font-bold ${color || "text-foreground"}`}>{value}</div>
+      {sub && <div className="text-xs text-muted-foreground mt-1">{sub}</div>}
     </div>
   );
 }

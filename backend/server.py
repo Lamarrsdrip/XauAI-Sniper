@@ -498,6 +498,116 @@ async def admin_list_transactions():
     txs = await db.payment_transactions.find({}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
     return {"total": len(txs), "transactions": txs}
 
+@api_router.get("/admin/dashboard", dependencies=[Depends(get_current_admin)])
+async def admin_dashboard():
+    """Main admin dashboard: bots sold, active, performance, revenue"""
+    # PIN stats via aggregation
+    pin_pipeline = [{"$facet": {
+        "total": [{"$count": "c"}],
+        "active_used": [{"$match": {"is_active": True, "is_used": True}}, {"$count": "c"}],
+        "active_unused": [{"$match": {"is_active": True, "is_used": False}}, {"$count": "c"}],
+        "revoked": [{"$match": {"is_active": False}}, {"$count": "c"}],
+        "purchased": [{"$match": {"payment_ref": {"$ne": None}}}, {"$count": "c"}],
+        "free_generated": [{"$match": {"payment_ref": None}}, {"$count": "c"}],
+    }}]
+    pin_result = (await db.pin_licenses.aggregate(pin_pipeline).to_list(1))
+    pr = pin_result[0] if pin_result else {}
+    total_pins = pr.get("total", [{}])[0].get("c", 0) if pr.get("total") else 0
+    active_trading = pr.get("active_used", [{}])[0].get("c", 0) if pr.get("active_used") else 0
+    active_unused = pr.get("active_unused", [{}])[0].get("c", 0) if pr.get("active_unused") else 0
+    revoked = pr.get("revoked", [{}])[0].get("c", 0) if pr.get("revoked") else 0
+    purchased = pr.get("purchased", [{}])[0].get("c", 0) if pr.get("purchased") else 0
+    free_given = pr.get("free_generated", [{}])[0].get("c", 0) if pr.get("free_generated") else 0
+
+    # Payment stats
+    tx_pipeline = [{"$facet": {
+        "total": [{"$count": "c"}],
+        "paid": [{"$match": {"payment_status": "success"}}, {"$count": "c"}],
+        "pending": [{"$match": {"payment_status": "pending"}}, {"$count": "c"}],
+        "total_revenue": [{"$match": {"payment_status": "success"}}, {"$group": {"_id": None, "sum": {"$sum": "$amount_kobo"}}}],
+    }}]
+    tx_result = (await db.payment_transactions.aggregate(tx_pipeline).to_list(1))
+    tr = tx_result[0] if tx_result else {}
+    total_txs = tr.get("total", [{}])[0].get("c", 0) if tr.get("total") else 0
+    paid_txs = tr.get("paid", [{}])[0].get("c", 0) if tr.get("paid") else 0
+    pending_txs = tr.get("pending", [{}])[0].get("c", 0) if tr.get("pending") else 0
+    revenue_kobo = tr.get("total_revenue", [{}])[0].get("sum", 0) if tr.get("total_revenue") else 0
+    revenue_naira = revenue_kobo / 100
+
+    # ML performance
+    ml_total = await db.ml_patterns.count_documents({})
+    ml_wins = await db.ml_patterns.count_documents({"was_winner": True})
+    ml_losses = ml_total - ml_wins
+    ml_win_rate = round(ml_wins / ml_total * 100, 1) if ml_total > 0 else 0
+    contributors = len(await db.ml_patterns.distinct("pin")) if ml_total > 0 else 0
+
+    # Total profit/loss pips from ML patterns
+    pips_pipeline = [{"$group": {"_id": "$was_winner", "total_pips": {"$sum": "$profit_pips"}, "count": {"$sum": 1}}}]
+    pips_result = await db.ml_patterns.aggregate(pips_pipeline).to_list(10)
+    total_profit_pips = 0
+    total_loss_pips = 0
+    for p in pips_result:
+        if p["_id"] == True:
+            total_profit_pips = round(p["total_pips"], 1)
+        else:
+            total_loss_pips = round(abs(p["total_pips"]), 1)
+    net_pips = round(total_profit_pips - total_loss_pips, 1)
+
+    # Strategy performance
+    strat_pipeline = [{"$group": {"_id": {"strategy": "$strategy", "winner": "$was_winner"}, "count": {"$sum": 1}, "pips": {"$sum": "$profit_pips"}}}]
+    strat_results = await db.ml_patterns.aggregate(strat_pipeline).to_list(20)
+    strategies = {}
+    for r in strat_results:
+        sid = r["_id"]["strategy"]
+        sname = {0: "Trend", 1: "Range", 2: "Breakout"}.get(sid, f"S{sid}")
+        if sname not in strategies:
+            strategies[sname] = {"trades": 0, "wins": 0, "profit_pips": 0, "loss_pips": 0}
+        strategies[sname]["trades"] += r["count"]
+        if r["_id"]["winner"]:
+            strategies[sname]["wins"] += r["count"]
+            strategies[sname]["profit_pips"] += round(r["pips"], 1)
+        else:
+            strategies[sname]["loss_pips"] += round(abs(r["pips"]), 1)
+    for s in strategies.values():
+        s["win_rate"] = round(s["wins"] / s["trades"] * 100, 1) if s["trades"] > 0 else 0
+        s["net_pips"] = round(s["profit_pips"] - s["loss_pips"], 1)
+
+    # Recent activity (last 10 patterns)
+    recent = await db.ml_patterns.find({}, {"_id": 0, "was_winner": 1, "profit_pips": 1, "strategy": 1, "confidence": 1, "created_at": 1}).sort("created_at", -1).limit(10).to_list(10)
+    for r in recent:
+        r["strategy_name"] = {0: "Trend", 1: "Range", 2: "Breakout"}.get(r.get("strategy", -1), "Unknown")
+
+    return {
+        "bots": {
+            "total_sold": total_pins,
+            "actively_trading": active_trading,
+            "purchased_not_activated": active_unused,
+            "revoked": revoked,
+            "sold_via_payment": purchased,
+            "free_generated": free_given,
+        },
+        "revenue": {
+            "total_transactions": total_txs,
+            "successful_payments": paid_txs,
+            "pending_payments": pending_txs,
+            "total_revenue_naira": revenue_naira,
+            "formatted_revenue": f"\u20a6{revenue_naira:,.0f}",
+        },
+        "performance": {
+            "total_trades": ml_total,
+            "wins": ml_wins,
+            "losses": ml_losses,
+            "win_rate": ml_win_rate,
+            "total_profit_pips": total_profit_pips,
+            "total_loss_pips": total_loss_pips,
+            "net_pips": net_pips,
+            "active_traders": contributors,
+            "profit_factor": round(total_profit_pips / total_loss_pips, 2) if total_loss_pips > 0 else 0,
+        },
+        "strategies": strategies,
+        "recent_trades": recent,
+    }
+
 @api_router.put("/admin/account")
 async def update_admin_account(req: AdminAccountUpdate, admin: dict = Depends(get_current_admin)):
     """Change admin email and/or password"""
