@@ -212,16 +212,16 @@ int            smartCheckResult;
 //+------------------------------------------------------------------+
 bool ValidatePINOffline(string pin)
 {
-   // Check format: ASE-XXXX-XXXX (12 characters)
-   if(StringLen(pin) != 12) return false;
+   // Format: ASE-XXXX-XXXX = 13 characters
+   // A(0)S(1)E(2)-(3)X(4)X(5)X(6)X(7)-(8)X(9)X(10)X(11)X(12)
+   if(StringLen(pin) != 13) return false;
    if(StringSubstr(pin, 0, 3) != "ASE") return false;
    if(StringGetCharacter(pin, 3) != '-') return false;
    if(StringGetCharacter(pin, 8) != '-') return false;
    
-   // Validate characters are alphanumeric (A-Z, 0-9)
-   for(int i = 4; i < 12; i++)
+   for(int i = 4; i < 13; i++)
    {
-      if(i == 8) continue; // Skip dash position
+      if(i == 8) continue;
       ushort ch = StringGetCharacter(pin, i);
       if(!((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z')))
          return false;
