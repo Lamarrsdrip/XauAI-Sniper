@@ -69,8 +69,8 @@ input int      InpCooldownMinutes    = 30;      // Cooldown after consecutive lo
 
 //--- Session Filter
 input group "=== SESSION FILTER ==="
-input bool     InpTradeOnlyLondon    = true;    // Trade London Session
-input bool     InpTradeOnlyNewYork   = true;    // Trade New York Session
+input bool     InpTradeOnlyLondon    = false;   // Trade London Session
+input bool     InpTradeOnlyNewYork   = false;   // Trade New York Session
 input int      InpLondonStartHour    = 8;       // London Session Start (Server Time)
 input int      InpLondonEndHour      = 16;      // London Session End
 input int      InpNYStartHour        = 13;      // New York Session Start
