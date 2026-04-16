@@ -483,7 +483,11 @@ void OnTick()
    if(currentBarTime == lastBarTime) return;
    lastBarTime = currentBarTime;
    
-   if(!UpdateIndicators()) return;
+   if(!UpdateIndicators())
+   {
+      Print("BLOCKED: Indicator data not ready yet");
+      return;
+   }
    
    ManageOpenPositions();
    
@@ -1811,8 +1815,5 @@ void UpdateDashboard()
    if(TimeCurrent() < cooldownUntil) dashboard += "** COOLDOWN ACTIVE **\n";
    
    Comment(dashboard);
-}
-//+------------------------------------------------------------------+
-
 }
 //+------------------------------------------------------------------+
