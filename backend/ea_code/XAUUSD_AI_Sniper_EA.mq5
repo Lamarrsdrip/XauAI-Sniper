@@ -1142,8 +1142,8 @@ int TrendStrategy()
       if(h1Confirm) confidence += 10;
       if(h4Confirm) confidence += 10;
       
-      // Signal: bullish candle + RSI OK is minimum (very achievable)
-      if(bullishCandle && rsiBullish) signal = 1;
+      // Signal fires if confidence is strong enough (EMA direction = trade direction)
+      if(confidence >= 40) signal = 1;
    }
    
    // === BEARISH TREND ===
@@ -1168,7 +1168,8 @@ int TrendStrategy()
       if(h1Confirm) confidence += 10;
       if(h4Confirm) confidence += 10;
       
-      if(bearishCandle && rsiBearish) signal = -1;
+      // Signal fires if confidence is strong enough (EMA direction = trade direction)
+      if(confidence >= 40) signal = -1;
    }
    
    tradeConfidence = confidence;
@@ -1206,8 +1207,8 @@ int RangeStrategy()
       if(risingRSI) confidence += 20;
       if(rsi < 30) confidence += 15;  // Bonus for deeply oversold
       
-      // Signal if any ONE strong condition met (rejection or oversold RSI)
-      if(bullishRejection || rsiOversold) signal = 1;
+      // Signal if confidence is strong enough at lower BB
+      if(confidence >= 40) signal = 1;
    }
    
    // === SELL at upper BB zone ===
@@ -1223,7 +1224,8 @@ int RangeStrategy()
       if(fallingRSI) confidence += 20;
       if(rsi > 70) confidence += 15;  // Bonus for deeply overbought
       
-      if(bearishRejection || rsiOverbought) signal = -1;
+      // Signal if confidence is strong enough at upper BB
+      if(confidence >= 40) signal = -1;
    }
    
    tradeConfidence = confidence;
@@ -1263,8 +1265,8 @@ int BreakoutStrategy()
       if(bufEMAFast_H1[1] > bufEMASlow_H1[1]) confidence += 15;
       if(bodySize > atr * 0.5) confidence += 10;
       
-      // Signal on breakout candle closing above BB (the breakout itself is the signal)
-      if(close1 > open1) signal = 1;
+      // Signal on breakout up - confidence drives it
+      if(confidence >= 40) signal = 1;
    }
    
    // === BREAKOUT DOWN ===
@@ -1277,7 +1279,8 @@ int BreakoutStrategy()
       if(bufEMAFast_H1[1] < bufEMASlow_H1[1]) confidence += 15;
       if(bodySize > atr * 0.5) confidence += 10;
       
-      if(close1 < open1) signal = -1;
+      // Signal on breakout down - confidence drives it
+      if(confidence >= 40) signal = -1;
    }
    
    tradeConfidence = confidence;
@@ -1808,5 +1811,8 @@ void UpdateDashboard()
    if(TimeCurrent() < cooldownUntil) dashboard += "** COOLDOWN ACTIVE **\n";
    
    Comment(dashboard);
+}
+//+------------------------------------------------------------------+
+
 }
 //+------------------------------------------------------------------+
