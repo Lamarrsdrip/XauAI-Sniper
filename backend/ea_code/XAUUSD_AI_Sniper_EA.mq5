@@ -1282,12 +1282,16 @@ void ExecuteTrade(int signal)
    double atr = bufATR[1];
    double price, sl, tp;
    double lotSize;
-   
-   symInfo.Refresh();
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   long stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+   double minStopDist = stopLevel * point;
    
    if(signal == 1)
    {
-      price = symInfo.Ask();
+      price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+      if(price <= 0) { Print("ERROR: Ask price is 0 - cannot trade"); return; }
+      
       sl = price - atr * InpSLATRMultiplier;
       
       double swingLow = FindSwingLow(10);
@@ -1297,25 +1301,48 @@ void ExecuteTrade(int signal)
          if(structureSL > sl) sl = structureSL;
       }
       
+      // Ensure minimum stop distance from broker
+      if(price - sl < minStopDist) sl = price - minStopDist;
+      
       double slDistance = price - sl;
+      if(slDistance <= 0) { Print("ERROR: Invalid SL distance for BUY"); return; }
+      
       tp = price + slDistance * InpMinRRRatio;
       double maxTP = price + slDistance * InpMaxRRRatio;
       if(tp > maxTP) tp = maxTP;
       
-      lotSize = CalculateLotSize(slDistance);
-      if(lotSize <= 0) return;
+      // Ensure TP also meets minimum stop distance
+      if(tp - price < minStopDist) tp = price + minStopDist * InpMinRRRatio;
       
-      if(trade.Buy(lotSize, Symbol(), price, sl, tp,
+      // Normalize all prices
+      sl = NormalizeDouble(sl, digits);
+      tp = NormalizeDouble(tp, digits);
+      price = NormalizeDouble(price, digits);
+      
+      lotSize = CalculateLotSize(slDistance);
+      if(lotSize <= 0) { Print("ERROR: Lot size calculated as 0"); return; }
+      
+      Print("TRADE ATTEMPT BUY: Price=", DoubleToString(price, digits),
+            " SL=", DoubleToString(sl, digits), " TP=", DoubleToString(tp, digits),
+            " Lots=", DoubleToString(lotSize, 2));
+      
+      if(trade.Buy(lotSize, Symbol(), 0, sl, tp,
          StringFormat("AI_Sniper|%s|Conf:%d|ML:%d", StrategyName(activeStrategy), tradeConfidence, mlBoostApplied)))
       {
          LogTrade("BUY", price, sl, tp, lotSize, tradeConfidence);
          todayTradeCount++;
          lastTradeTime = TimeCurrent();
       }
+      else
+      {
+         Print("TRADE FAILED BUY: Error=", GetLastError(), " RetCode=", trade.ResultRetcode());
+      }
    }
    else if(signal == -1)
    {
-      price = symInfo.Bid();
+      price = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      if(price <= 0) { Print("ERROR: Bid price is 0 - cannot trade"); return; }
+      
       sl = price + atr * InpSLATRMultiplier;
       
       double swingHigh = FindSwingHigh(10);
@@ -1325,20 +1352,41 @@ void ExecuteTrade(int signal)
          if(structureSL < sl) sl = structureSL;
       }
       
+      // Ensure minimum stop distance from broker
+      if(sl - price < minStopDist) sl = price + minStopDist;
+      
       double slDistance = sl - price;
+      if(slDistance <= 0) { Print("ERROR: Invalid SL distance for SELL"); return; }
+      
       tp = price - slDistance * InpMinRRRatio;
       double maxTP = price - slDistance * InpMaxRRRatio;
       if(tp < maxTP) tp = maxTP;
       
-      lotSize = CalculateLotSize(slDistance);
-      if(lotSize <= 0) return;
+      // Ensure TP also meets minimum stop distance
+      if(price - tp < minStopDist) tp = price - minStopDist * InpMinRRRatio;
       
-      if(trade.Sell(lotSize, Symbol(), price, sl, tp,
+      // Normalize all prices
+      sl = NormalizeDouble(sl, digits);
+      tp = NormalizeDouble(tp, digits);
+      price = NormalizeDouble(price, digits);
+      
+      lotSize = CalculateLotSize(slDistance);
+      if(lotSize <= 0) { Print("ERROR: Lot size calculated as 0"); return; }
+      
+      Print("TRADE ATTEMPT SELL: Price=", DoubleToString(price, digits),
+            " SL=", DoubleToString(sl, digits), " TP=", DoubleToString(tp, digits),
+            " Lots=", DoubleToString(lotSize, 2));
+      
+      if(trade.Sell(lotSize, Symbol(), 0, sl, tp,
          StringFormat("AI_Sniper|%s|Conf:%d|ML:%d", StrategyName(activeStrategy), tradeConfidence, mlBoostApplied)))
       {
          LogTrade("SELL", price, sl, tp, lotSize, tradeConfidence);
          todayTradeCount++;
          lastTradeTime = TimeCurrent();
+      }
+      else
+      {
+         Print("TRADE FAILED SELL: Error=", GetLastError(), " RetCode=", trade.ResultRetcode());
       }
    }
 }
