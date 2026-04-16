@@ -47,7 +47,7 @@ input group "=== STRATEGY MODES ==="
 input bool     InpEnableTrendMode    = true;    // Enable Trend Following Mode
 input bool     InpEnableRangeMode    = true;    // Enable Range Trading Mode
 input bool     InpEnableBreakoutMode = true;    // Enable Breakout Mode
-input int      InpConfidenceThreshold= 75;      // Min confidence score (0-100)
+input int      InpConfidenceThreshold= 55;      // Min confidence score (0-100)
 
 //--- Indicator Parameters
 input group "=== INDICATORS ==="
@@ -548,7 +548,7 @@ void OnTick()
       // LOCAL LOSS AVOIDANCE
       if(signal != 0 && IsHighLossTimeSlot())
       {
-         tradeConfidence -= 20;
+         tradeConfidence -= 10;
          if(tradeConfidence < InpConfidenceThreshold)
          {
             signal = 0;
@@ -559,14 +559,14 @@ void OnTick()
       // STREAK AWARENESS
       if(signal != 0 && consecutiveLosses >= 2)
       {
-         tradeConfidence -= 10;
+         tradeConfidence -= 5;
       }
       
-      // RECOVERY MODE: If active, require much higher confidence + reduce lot size
+      // RECOVERY MODE: If active, slightly tighten confidence
       if(signal != 0 && recoveryModeActive)
       {
-         tradeConfidence -= 15; // Require even higher confidence in recovery
-         Print("RECOVERY MODE: Active - tightened confidence by -15");
+         tradeConfidence -= 5;
+         Print("RECOVERY MODE: Active - tightened confidence by -5");
       }
    }
    
@@ -575,10 +575,10 @@ void OnTick()
    if(patternCount >= 50)
    {
       double recentWinRate = GetRecentWinRate(20);
-      if(recentWinRate < 0.6) effectiveThreshold += 10;
+      if(recentWinRate < 0.4) effectiveThreshold += 5;  // Only raise if win rate is truly bad
    }
-   // Recovery mode raises threshold further
-   if(recoveryModeActive) effectiveThreshold += 10;
+   // Recovery mode raises threshold slightly
+   if(recoveryModeActive) effectiveThreshold += 5;
    
    if(signal != 0 && tradeConfidence >= effectiveThreshold)
    {
@@ -1027,11 +1027,12 @@ ENUM_MARKET_CONDITION ClassifyMarket()
    
    double emaDiff = MathAbs(emaFast - emaSlow) / close1 * 10000;
    
-   if(emaFast > emaSlow && emaDiff > 5 && h4Fast > h4Slow) return MARKET_TRENDING_UP;
-   if(emaFast < emaSlow && emaDiff > 5 && h4Fast < h4Slow) return MARKET_TRENDING_DOWN;
-   if(emaDiff < 3) return MARKET_RANGING;
+   // Relaxed: M5 EMA direction is primary, H4 is bonus (not required)
+   if(emaFast > emaSlow && emaDiff > 2) return MARKET_TRENDING_UP;
+   if(emaFast < emaSlow && emaDiff > 2) return MARKET_TRENDING_DOWN;
    
-   return MARKET_UNDEFINED;
+   // Anything not clearly trending is ranging (no more UNDEFINED dead zone)
+   return MARKET_RANGING;
 }
 
 //+------------------------------------------------------------------+
@@ -1070,41 +1071,62 @@ int TrendStrategy()
    double h1Fast  = bufEMAFast_H1[1];
    double h1Slow  = bufEMASlow_H1[1];
    double h1RSI   = bufRSI_H1[1];
+   double h4Fast  = bufEMAFast_H4[1];
+   double h4Slow  = bufEMASlow_H4[1];
    
    int confidence = 0;
    int signal = 0;
+   int conditionsMet = 0;
    
-   if(emaFast > emaSlow && h1Fast > h1Slow)
+   // === BULLISH TREND ===
+   if(emaFast > emaSlow)
    {
-      bool nearEMA50 = close2 <= emaFast * 1.001 && close1 > emaFast;
-      bool rsiBullish = rsi >= 45 && rsi <= 65;
-      bool bullishCandle = close1 > open1 && (close1 - open1) > (bufATR[1] * 0.3);
-      bool h1Confirm = h1RSI > 45 && h1RSI < 70;
+      // Condition 1: Price near EMA50 pullback zone (widened to 0.5%)
+      bool nearEMA50 = close2 <= emaFast * 1.005 && close1 > emaFast * 0.997;
+      // Condition 2: RSI in bullish zone (widened 35-72)
+      bool rsiBullish = rsi >= 35 && rsi <= 72;
+      // Condition 3: Bullish candle (relaxed body requirement)
+      bool bullishCandle = close1 > open1 && (close1 - open1) > (bufATR[1] * 0.15);
+      // Bonus: H1 confirmation
+      bool h1Confirm = h1Fast > h1Slow;
+      // Bonus: H4 confirmation
+      bool h4Confirm = h4Fast > h4Slow;
+      // Bonus: H1 RSI healthy
+      bool h1RSIOk = h1RSI > 40 && h1RSI < 75;
       
-      if(nearEMA50) confidence += 30;
-      if(rsiBullish) confidence += 20;
-      if(bullishCandle) confidence += 25;
-      if(h1Confirm) confidence += 15;
-      if(close1 > emaSlow) confidence += 10;
+      if(nearEMA50) { confidence += 25; conditionsMet++; }
+      if(rsiBullish) { confidence += 20; conditionsMet++; }
+      if(bullishCandle) { confidence += 20; conditionsMet++; }
+      if(h1Confirm) confidence += 10;
+      if(h4Confirm) confidence += 10;
+      if(h1RSIOk) confidence += 10;
+      if(close1 > emaSlow) confidence += 5;
       
-      if(nearEMA50 && rsiBullish && bullishCandle) signal = 1;
+      // Signal fires if ANY 2 of the 3 main conditions are met
+      if(conditionsMet >= 2) signal = 1;
    }
    
-   if(emaFast < emaSlow && h1Fast < h1Slow)
+   // === BEARISH TREND ===
+   if(signal == 0 && emaFast < emaSlow)
    {
-      bool nearEMA50 = close2 >= emaFast * 0.999 && close1 < emaFast;
-      bool rsiBearish = rsi >= 35 && rsi <= 55;
-      bool bearishCandle = close1 < open1 && (open1 - close1) > (bufATR[1] * 0.3);
-      bool h1Confirm = h1RSI < 55 && h1RSI > 30;
+      bool nearEMA50 = close2 >= emaFast * 0.995 && close1 < emaFast * 1.003;
+      bool rsiBearish = rsi >= 28 && rsi <= 65;
+      bool bearishCandle = close1 < open1 && (open1 - close1) > (bufATR[1] * 0.15);
+      bool h1Confirm = h1Fast < h1Slow;
+      bool h4Confirm = h4Fast < h4Slow;
+      bool h1RSIOk = h1RSI < 60 && h1RSI > 25;
       
+      conditionsMet = 0;
       confidence = 0;
-      if(nearEMA50) confidence += 30;
-      if(rsiBearish) confidence += 20;
-      if(bearishCandle) confidence += 25;
-      if(h1Confirm) confidence += 15;
-      if(close1 < emaSlow) confidence += 10;
+      if(nearEMA50) { confidence += 25; conditionsMet++; }
+      if(rsiBearish) { confidence += 20; conditionsMet++; }
+      if(bearishCandle) { confidence += 20; conditionsMet++; }
+      if(h1Confirm) confidence += 10;
+      if(h4Confirm) confidence += 10;
+      if(h1RSIOk) confidence += 10;
+      if(close1 < emaSlow) confidence += 5;
       
-      if(nearEMA50 && rsiBearish && bearishCandle) signal = -1;
+      if(conditionsMet >= 2) signal = -1;
    }
    
    tradeConfidence = confidence;
@@ -1126,33 +1148,40 @@ int RangeStrategy()
    int signal = 0;
    
    double bbRange = bbUpper - bbLower;
-   double lowerZone = bbLower + bbRange * 0.15;
-   double upperZone = bbUpper - bbRange * 0.15;
+   double lowerZone = bbLower + bbRange * 0.20;
+   double upperZone = bbUpper - bbRange * 0.20;
    
+   // === BUY at lower BB zone ===
    if(close1 <= lowerZone)
    {
       bool bullishRejection = close1 > open1;
-      bool rsiOversold = rsi < 35;
+      bool rsiOversold = rsi < 40;
+      bool risingRSI = bufRSI[2] < bufRSI[1];
       
-      if(bullishRejection) confidence += 30;
-      if(rsiOversold) confidence += 30;
-      if(close1 > bbLower) confidence += 20;
-      if(bufRSI[2] < bufRSI[1]) confidence += 20;
+      if(bullishRejection) confidence += 25;
+      if(rsiOversold) confidence += 25;
+      if(close1 > bbLower) confidence += 15;
+      if(risingRSI) confidence += 20;
+      if(rsi < 30) confidence += 15;  // Bonus for deeply oversold
       
-      if(bullishRejection && rsiOversold) signal = 1;
+      // Signal if any ONE strong condition met (rejection or oversold RSI)
+      if(bullishRejection || rsiOversold) signal = 1;
    }
    
-   if(close1 >= upperZone)
+   // === SELL at upper BB zone ===
+   if(signal == 0 && close1 >= upperZone)
    {
       bool bearishRejection = close1 < open1;
-      bool rsiOverbought = rsi > 65;
+      bool rsiOverbought = rsi > 60;
+      bool fallingRSI = bufRSI[2] > bufRSI[1];
       
-      if(bearishRejection) confidence += 30;
-      if(rsiOverbought) confidence += 30;
-      if(close1 < bbUpper) confidence += 20;
-      if(bufRSI[2] > bufRSI[1]) confidence += 20;
+      if(bearishRejection) confidence += 25;
+      if(rsiOverbought) confidence += 25;
+      if(close1 < bbUpper) confidence += 15;
+      if(fallingRSI) confidence += 20;
+      if(rsi > 70) confidence += 15;  // Bonus for deeply overbought
       
-      if(bearishRejection && rsiOverbought) signal = -1;
+      if(bearishRejection || rsiOverbought) signal = -1;
    }
    
    tradeConfidence = confidence;

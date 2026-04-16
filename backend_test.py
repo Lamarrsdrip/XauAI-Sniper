@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 
 class APITester:
-    def __init__(self, base_url="https://ml-gold-bot.preview.emergentagent.com"):
+    def __init__(self, base_url="https://xau-ea-trader.preview.emergentagent.com"):
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
         self.tests_run = 0
