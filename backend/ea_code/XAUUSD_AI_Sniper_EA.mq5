@@ -318,7 +318,17 @@ int OnInit()
    // Initialize trade object
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(30);
-   trade.SetTypeFilling(ORDER_FILLING_IOC);
+   
+   // Auto-detect broker's supported filling mode
+   long fillMode = SymbolInfoInteger(Symbol(), SYMBOL_FILLING_MODE);
+   if((fillMode & SYMBOL_FILLING_FOK) != 0)
+      trade.SetTypeFilling(ORDER_FILLING_FOK);
+   else if((fillMode & SYMBOL_FILLING_IOC) != 0)
+      trade.SetTypeFilling(ORDER_FILLING_IOC);
+   else
+      trade.SetTypeFilling(ORDER_FILLING_RETURN);
+   
+   Print("FILL MODE: ", (fillMode & SYMBOL_FILLING_FOK) != 0 ? "FOK" : (fillMode & SYMBOL_FILLING_IOC) != 0 ? "IOC" : "RETURN");
    
    // Initialize symbol info
    symInfo.Name(Symbol());
@@ -1396,6 +1406,8 @@ void ExecuteTrade(int signal)
 //+------------------------------------------------------------------+
 void ManageOpenPositions()
 {
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(!posInfo.SelectByIndex(i)) continue;
@@ -1411,11 +1423,12 @@ void ManageOpenPositions()
       
       if(posInfo.PositionType() == POSITION_TYPE_BUY)
       {
-         double trailSL = currentPrice - atr * InpTrailingATRMulti;
+         double trailSL = NormalizeDouble(currentPrice - atr * InpTrailingATRMulti, digits);
          if(currentPrice > openPrice + atr && trailSL > currentSL)
             trade.PositionModify(ticket, trailSL, currentTP);
          
          double slDistance = openPrice - currentSL;
+         if(slDistance <= 0) continue;
          double firstTarget = openPrice + slDistance * 1.0;
          
          if(currentPrice >= firstTarget && posInfo.Volume() > SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN))
@@ -1428,11 +1441,12 @@ void ManageOpenPositions()
       }
       else if(posInfo.PositionType() == POSITION_TYPE_SELL)
       {
-         double trailSL = currentPrice + atr * InpTrailingATRMulti;
+         double trailSL = NormalizeDouble(currentPrice + atr * InpTrailingATRMulti, digits);
          if(currentPrice < openPrice - atr && trailSL < currentSL)
             trade.PositionModify(ticket, trailSL, currentTP);
          
          double slDistance = currentSL - openPrice;
+         if(slDistance <= 0) continue;
          double firstTarget = openPrice - slDistance * 1.0;
          
          if(currentPrice <= firstTarget && posInfo.Volume() > SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN))
