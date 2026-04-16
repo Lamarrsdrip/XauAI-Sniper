@@ -35,8 +35,8 @@ input double   InpDailyLossLimit     = 3.0;     // Daily loss limit (%)
 input double   InpWeeklyDrawdownLimit= 10.0;    // Weekly drawdown limit (%)
 input double   InpWeeklyProfitTarget = 35.0;    // Weekly profit target (%)
 input int      InpMaxOpenTrades      = 2;       // Max simultaneous open trades
-input int      InpMaxTradesPerDay    = 3;       // Max trades per day
-input double   InpMaxSpread          = 40.0;    // Max allowed spread (points)
+input int      InpMaxTradesPerDay    = 6;       // Max trades per day
+input double   InpMaxSpread          = 100.0;   // Max allowed spread (points) - Gold needs wider
 
 //--- Profit Mode Presets
 input group "=== PROFIT TARGET MODE ==="
@@ -477,11 +477,19 @@ void OnTick()
    
    ManageOpenPositions();
    
-   if(!CanOpenNewTrade()) return;
+   if(!CanOpenNewTrade())
+   {
+      Print("SCAN: Skipped - max trades reached (open:", CountOpenPositions(), "/", InpMaxOpenTrades, " today:", todayTradeCount, "/", InpMaxTradesPerDay, ")");
+      return;
+   }
    
    currentMarketCondition = ClassifyMarket();
    activeStrategy = SelectStrategy(currentMarketCondition);
-   if(activeStrategy == STRATEGY_NONE) return;
+   if(activeStrategy == STRATEGY_NONE)
+   {
+      Print("SCAN: Market=", MarketConditionName(currentMarketCondition), " | No matching strategy enabled");
+      return;
+   }
    
    int signal = 0;
    tradeConfidence = 0;
@@ -582,7 +590,23 @@ void OnTick()
    
    if(signal != 0 && tradeConfidence >= effectiveThreshold)
    {
+      Print(">>> EXECUTING TRADE: Signal=", signal > 0 ? "BUY" : "SELL",
+            " | Confidence=", tradeConfidence, "/", effectiveThreshold,
+            " | Strategy=", StrategyName(activeStrategy));
       ExecuteTrade(signal);
+   }
+   else if(signal != 0)
+   {
+      Print("SCAN: Signal=", signal > 0 ? "BUY" : "SELL",
+            " but confidence too low (", tradeConfidence, " < ", effectiveThreshold,
+            ") | Strategy=", StrategyName(activeStrategy),
+            " | Market=", MarketConditionName(currentMarketCondition));
+   }
+   else
+   {
+      Print("SCAN: No signal | Market=", MarketConditionName(currentMarketCondition),
+            " | Strategy=", StrategyName(activeStrategy),
+            " | Spread=", DoubleToString(symInfo.Spread(), 0));
    }
    
    UpdateDashboard();
@@ -1064,6 +1088,7 @@ int TrendStrategy()
 {
    double close1  = iClose(Symbol(), PERIOD_M5, 1);
    double close2  = iClose(Symbol(), PERIOD_M5, 2);
+   double close3  = iClose(Symbol(), PERIOD_M5, 3);
    double open1   = iOpen(Symbol(), PERIOD_M5, 1);
    double emaFast = bufEMAFast[1];
    double emaSlow = bufEMASlow[1];
@@ -1076,57 +1101,64 @@ int TrendStrategy()
    
    int confidence = 0;
    int signal = 0;
-   int conditionsMet = 0;
    
    // === BULLISH TREND ===
    if(emaFast > emaSlow)
    {
-      // Condition 1: Price near EMA50 pullback zone (widened to 0.5%)
-      bool nearEMA50 = close2 <= emaFast * 1.005 && close1 > emaFast * 0.997;
-      // Condition 2: RSI in bullish zone (widened 35-72)
-      bool rsiBullish = rsi >= 35 && rsi <= 72;
-      // Condition 3: Bullish candle (relaxed body requirement)
-      bool bullishCandle = close1 > open1 && (close1 - open1) > (bufATR[1] * 0.15);
-      // Bonus: H1 confirmation
+      // Core: price is above fast EMA and moving up
+      bool priceAboveEMA = close1 > emaFast;
+      // Pullback: price was near or touched EMA and bounced
+      bool pullbackBounce = close2 <= emaFast * 1.005 && close1 > close2;
+      // Momentum: 2 consecutive higher closes
+      bool momentum = close1 > close2 && close2 > close3;
+      // RSI in bullish zone
+      bool rsiBullish = rsi >= 30 && rsi <= 75;
+      // Bullish candle
+      bool bullishCandle = close1 > open1;
+      // Strong candle (above average body)
+      bool strongCandle = bullishCandle && (close1 - open1) > (bufATR[1] * 0.1);
+      // H1 confirmation
       bool h1Confirm = h1Fast > h1Slow;
-      // Bonus: H4 confirmation
+      // H4 confirmation
       bool h4Confirm = h4Fast > h4Slow;
-      // Bonus: H1 RSI healthy
-      bool h1RSIOk = h1RSI > 40 && h1RSI < 75;
       
-      if(nearEMA50) { confidence += 25; conditionsMet++; }
-      if(rsiBullish) { confidence += 20; conditionsMet++; }
-      if(bullishCandle) { confidence += 20; conditionsMet++; }
+      // Build confidence score
+      if(priceAboveEMA) confidence += 15;
+      if(pullbackBounce) confidence += 20;
+      if(momentum) confidence += 15;
+      if(rsiBullish) confidence += 15;
+      if(strongCandle) confidence += 15;
+      else if(bullishCandle) confidence += 10;
       if(h1Confirm) confidence += 10;
       if(h4Confirm) confidence += 10;
-      if(h1RSIOk) confidence += 10;
-      if(close1 > emaSlow) confidence += 5;
       
-      // Signal fires if ANY 2 of the 3 main conditions are met
-      if(conditionsMet >= 2) signal = 1;
+      // Signal: bullish candle + RSI OK is minimum (very achievable)
+      if(bullishCandle && rsiBullish) signal = 1;
    }
    
    // === BEARISH TREND ===
    if(signal == 0 && emaFast < emaSlow)
    {
-      bool nearEMA50 = close2 >= emaFast * 0.995 && close1 < emaFast * 1.003;
-      bool rsiBearish = rsi >= 28 && rsi <= 65;
-      bool bearishCandle = close1 < open1 && (open1 - close1) > (bufATR[1] * 0.15);
+      bool priceBelowEMA = close1 < emaFast;
+      bool pullbackBounce = close2 >= emaFast * 0.995 && close1 < close2;
+      bool momentum = close1 < close2 && close2 < close3;
+      bool rsiBearish = rsi >= 25 && rsi <= 70;
+      bool bearishCandle = close1 < open1;
+      bool strongCandle = bearishCandle && (open1 - close1) > (bufATR[1] * 0.1);
       bool h1Confirm = h1Fast < h1Slow;
       bool h4Confirm = h4Fast < h4Slow;
-      bool h1RSIOk = h1RSI < 60 && h1RSI > 25;
       
-      conditionsMet = 0;
       confidence = 0;
-      if(nearEMA50) { confidence += 25; conditionsMet++; }
-      if(rsiBearish) { confidence += 20; conditionsMet++; }
-      if(bearishCandle) { confidence += 20; conditionsMet++; }
+      if(priceBelowEMA) confidence += 15;
+      if(pullbackBounce) confidence += 20;
+      if(momentum) confidence += 15;
+      if(rsiBearish) confidence += 15;
+      if(strongCandle) confidence += 15;
+      else if(bearishCandle) confidence += 10;
       if(h1Confirm) confidence += 10;
       if(h4Confirm) confidence += 10;
-      if(h1RSIOk) confidence += 10;
-      if(close1 < emaSlow) confidence += 5;
       
-      if(conditionsMet >= 2) signal = -1;
+      if(bearishCandle && rsiBearish) signal = -1;
    }
    
    tradeConfidence = confidence;
@@ -1206,31 +1238,36 @@ int BreakoutStrategy()
    
    double bbWidth = bbUpper - bbLower;
    double prevBBWidth = bufBBUpper[5] - bufBBLower[5];
-   bool wasSqueezing = bbWidth > prevBBWidth * 1.3;
+   bool wasSqueezing = bbWidth > prevBBWidth * 1.2;
    
    double bodySize = MathAbs(close1 - open1);
-   bool strongBody = bodySize > atr * 0.5;
+   bool strongBody = bodySize > atr * 0.3;
    
+   // === BREAKOUT UP ===
    if(close1 > bbUpper && close2 <= bufBBUpper[2])
    {
       if(wasSqueezing) confidence += 25;
-      if(strongBody) confidence += 25;
-      if(rsi > 55) confidence += 20;
+      if(strongBody) confidence += 20;
+      if(rsi > 50) confidence += 15;
       if(close1 > open1) confidence += 15;
       if(bufEMAFast_H1[1] > bufEMASlow_H1[1]) confidence += 15;
+      if(bodySize > atr * 0.5) confidence += 10;
       
-      if(strongBody && rsi > 55) signal = 1;
+      // Signal on breakout candle closing above BB (the breakout itself is the signal)
+      if(close1 > open1) signal = 1;
    }
    
-   if(close1 < bbLower && close2 >= bufBBLower[2])
+   // === BREAKOUT DOWN ===
+   if(signal == 0 && close1 < bbLower && close2 >= bufBBLower[2])
    {
       if(wasSqueezing) confidence += 25;
-      if(strongBody) confidence += 25;
-      if(rsi < 45) confidence += 20;
+      if(strongBody) confidence += 20;
+      if(rsi < 50) confidence += 15;
       if(close1 < open1) confidence += 15;
       if(bufEMAFast_H1[1] < bufEMASlow_H1[1]) confidence += 15;
+      if(bodySize > atr * 0.5) confidence += 10;
       
-      if(strongBody && rsi < 45) signal = -1;
+      if(close1 < open1) signal = -1;
    }
    
    tradeConfidence = confidence;
@@ -1402,43 +1439,77 @@ bool PassSafetyChecks()
    if(currentEquity < protectionLevel)
    {
       CloseAllPositions();
-      Print("EQUITY PROTECTION TRIGGERED");
+      Print("BLOCKED: EQUITY PROTECTION TRIGGERED - equity below ", DoubleToString(protectionLevel, 2));
       return false;
    }
    
-   if(dailyLimitReached) return false;
+   if(dailyLimitReached)
+   {
+      static datetime lastDailyMsg = 0;
+      if(TimeCurrent() - lastDailyMsg > 300) { Print("BLOCKED: Daily loss limit already reached"); lastDailyMsg = TimeCurrent(); }
+      return false;
+   }
    double dailyPnL = currentEquity - dailyStartEquity;
    double dailyLossMax = dailyStartEquity * InpDailyLossLimit / 100.0;
    if(dailyPnL < -dailyLossMax)
    {
       dailyLimitReached = true;
+      Print("BLOCKED: Daily loss limit hit (", DoubleToString(dailyPnL, 2), " < -", DoubleToString(dailyLossMax, 2), ")");
       return false;
    }
    
-   if(weeklyLimitReached) return false;
+   if(weeklyLimitReached)
+   {
+      static datetime lastWeekMsg = 0;
+      if(TimeCurrent() - lastWeekMsg > 300) { Print("BLOCKED: Weekly drawdown limit already reached"); lastWeekMsg = TimeCurrent(); }
+      return false;
+   }
    double weeklyPnL = currentEquity - weeklyStartEquity;
    double weeklyLossMax = weeklyStartEquity * InpWeeklyDrawdownLimit / 100.0;
    if(weeklyPnL < -weeklyLossMax)
    {
       weeklyLimitReached = true;
       CloseAllPositions();
+      Print("BLOCKED: Weekly drawdown limit hit");
       return false;
    }
    
-   if(weeklyTargetReached) return false;
+   if(weeklyTargetReached)
+   {
+      static datetime lastTargetMsg = 0;
+      if(TimeCurrent() - lastTargetMsg > 300) { Print("BLOCKED: Weekly target already reached - bot resting"); lastTargetMsg = TimeCurrent(); }
+      return false;
+   }
    double weeklyTarget = weeklyStartEquity * effectiveWeeklyTarget / 100.0;
    if(weeklyPnL >= weeklyTarget)
    {
       weeklyTargetReached = true;
+      Print("BLOCKED: Weekly profit target reached! Taking profit.");
       return false;
    }
    
-   if(TimeCurrent() < cooldownUntil) return false;
+   if(TimeCurrent() < cooldownUntil)
+   {
+      static datetime lastCoolMsg = 0;
+      if(TimeCurrent() - lastCoolMsg > 60) { Print("BLOCKED: Cooldown active until ", TimeToString(cooldownUntil)); lastCoolMsg = TimeCurrent(); }
+      return false;
+   }
    
+   symInfo.Refresh();
    double currentSpread = symInfo.Spread();
-   if(currentSpread > InpMaxSpread) return false;
+   if(currentSpread > InpMaxSpread)
+   {
+      static datetime lastSpreadMsg = 0;
+      if(TimeCurrent() - lastSpreadMsg > 300) { Print("BLOCKED: Spread too wide (", DoubleToString(currentSpread, 0), " > ", DoubleToString(InpMaxSpread, 0), ")"); lastSpreadMsg = TimeCurrent(); }
+      return false;
+   }
    
-   if(!IsWithinTradingSession()) return false;
+   if(!IsWithinTradingSession())
+   {
+      static datetime lastSessionMsg = 0;
+      if(TimeCurrent() - lastSessionMsg > 600) { Print("BLOCKED: Outside trading session hours"); lastSessionMsg = TimeCurrent(); }
+      return false;
+   }
    
    if(currentEquity > peakEquity) peakEquity = currentEquity;
    double currentDrawdown = (peakEquity - currentEquity) / peakEquity * 100;

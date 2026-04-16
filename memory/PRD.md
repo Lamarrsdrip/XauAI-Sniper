@@ -25,14 +25,17 @@
 - 6 Smart Features implemented
 - Rebranded to XauAI Sniper with Trade.com affiliate
 - Fixed PIN 13-character validation bug
-- **Fixed EA entry conditions (was not executing trades - too strict)**
-  - Lowered confidence threshold 75 -> 55
-  - Removed MARKET_UNDEFINED dead zone (now falls back to RANGING)
-  - ClassifyMarket: emaDiff 5 -> 2, removed H4 requirement
-  - TrendStrategy: ANY 2 of 3 conditions (was ALL 3), widened RSI/EMA zones
-  - RangeStrategy: single condition signal (was AND), widened RSI bands
-  - Reduced penalty stacking (loss slot -10, streak -5, recovery -5)
-  - Dynamic threshold only raises +5 at <40% win rate
+- **Fixed EA not trading — complete overhaul of entry logic (v3)**
+  - ROOT CAUSE: 3 silent blockers + overly strict strategy logic
+  - MaxSpread 40 → 100 (gold needs wider spread tolerance)
+  - MaxTradesPerDay 3 → 6 (more active trading)
+  - Confidence threshold 75 → 55
+  - ClassifyMarket: removed H4 requirement, lowered emaDiff 5→2, eliminated UNDEFINED dead zone
+  - TrendStrategy: simplified to bullishCandle+RSI (very achievable), EMA pullback is now bonus not requirement
+  - RangeStrategy: single condition signals (OR not AND), RSI oversold<40 overbought>60
+  - BreakoutStrategy: signal on candle direction (was strongBody+RSI)
+  - Added comprehensive diagnostic logging to EVERY gate (spread, session, limits, signals)
+  - Reduced penalty stacking: max -20 total (was -45)
 
 ## Upcoming Tasks
 - Add Live Paystack Secret Key & Gmail SMTP credentials (User action in Admin Settings) - P1
