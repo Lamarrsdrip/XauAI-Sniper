@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://api.fontshare.com/v2/css?f[]=clash-display@400,500,600,700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,35 +7,35 @@
 
 @layer base {
   :root {
-    --background: 0 0% 98%;
-    --foreground: 0 0% 4%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 4%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 4%;
-    --primary: 43 74% 49%;
-    --primary-foreground: 0 0% 4%;
-    --secondary: 0 0% 90%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 92%;
-    --muted-foreground: 0 0% 40%;
-    --accent: 43 74% 49%;
-    --accent-foreground: 0 0% 4%;
-    --destructive: 348 83% 47%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 85%;
-    --input: 0 0% 85%;
-    --ring: 43 74% 49%;
+    --background: 0 0% 2%;
+    --foreground: 0 0% 100%;
+    --card: 0 0% 5%;
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 5%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 43 74% 52%;
+    --primary-foreground: 0 0% 2%;
+    --secondary: 0 0% 8%;
+    --secondary-foreground: 0 0% 80%;
+    --muted: 0 0% 8%;
+    --muted-foreground: 240 4% 65%;
+    --accent: 43 74% 52%;
+    --accent-foreground: 0 0% 2%;
+    --destructive: 14 100% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 100% / 0.08;
+    --input: 0 0% 100% / 0.08;
+    --ring: 43 74% 52%;
     --radius: 0px;
-    --chart-gold: 43 74% 49%;
-    --chart-profit: 142 71% 45%;
-    --chart-loss: 348 83% 47%;
-    --chart-neutral: 0 0% 60%;
-    --chart-1: 43 74% 49%;
-    --chart-2: 142 71% 45%;
-    --chart-3: 348 83% 47%;
+    --chart-gold: 43 74% 52%;
+    --chart-profit: 145 100% 39%;
+    --chart-loss: 14 100% 50%;
+    --chart-neutral: 0 0% 40%;
+    --chart-1: 43 74% 52%;
+    --chart-2: 145 100% 39%;
+    --chart-3: 14 100% 50%;
     --chart-4: 200 70% 50%;
-    --chart-5: 0 0% 60%;
+    --chart-5: 0 0% 40%;
   }
 }
 
@@ -44,7 +45,9 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: 'IBM Plex Sans', sans-serif;
+    font-family: 'Manrope', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 
@@ -55,67 +58,44 @@
 }
 
 .font-heading {
-  font-family: 'Cabinet Grotesk', 'IBM Plex Sans', sans-serif;
+  font-family: 'Clash Display', 'Manrope', sans-serif;
 }
 
 .font-mono {
   font-family: 'JetBrains Mono', monospace;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: hsl(var(--muted));
-}
-::-webkit-scrollbar-thumb {
-  background: hsl(var(--border));
-}
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: #050505; }
+::-webkit-scrollbar-thumb { background: rgba(212,175,55,0.3); }
+::-webkit-scrollbar-thumb:hover { background: rgba(212,175,55,0.5); }
 
-/* Gold shimmer animation */
+/* Gold shimmer */
 @keyframes gold-shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
 
 .gold-shimmer {
-  background: linear-gradient(
-    90deg,
-    hsl(43, 74%, 49%) 0%,
-    hsl(43, 90%, 65%) 50%,
-    hsl(43, 74%, 49%) 100%
-  );
+  background: linear-gradient(90deg, #D4AF37 0%, #F5D76E 50%, #D4AF37 100%);
   background-size: 200% 100%;
   animation: gold-shimmer 3s ease-in-out infinite;
 }
 
 /* Metric card hover */
 .metric-card {
-  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+  transition: border-color 200ms ease, background-color 200ms ease;
 }
 .metric-card:hover {
-  border-color: hsl(0, 0%, 60%);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-}
-
-/* Nav link active */
-.nav-link-active {
-  border-bottom: 2px solid hsl(43, 74%, 49%);
-  color: hsl(0, 0%, 4%);
-}
-
-/* Code block */
-.code-block {
-  background: hsl(0, 0%, 6%);
-  color: hsl(43, 74%, 65%);
-  font-family: 'JetBrains Mono', monospace;
+  border-color: rgba(212,175,55,0.3);
+  background-color: rgba(212,175,55,0.03);
 }
 
 /* Pulse dot */
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  50% { opacity: 0.3; }
 }
 .pulse-dot {
   animation: pulse-dot 2s ease-in-out infinite;
@@ -123,57 +103,64 @@
 
 /* Staggered entrance */
 @keyframes fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-up {
+  animation: fade-up 0.5s ease-out forwards;
+  opacity: 0;
 }
 
-.animate-fade-up {
-  animation: fade-up 0.4s ease-out forwards;
-  opacity: 0;
+/* Glow border effect */
+@keyframes glow-border {
+  0%, 100% { border-color: rgba(212,175,55,0.2); box-shadow: 0 0 20px rgba(212,175,55,0.05); }
+  50% { border-color: rgba(212,175,55,0.5); box-shadow: 0 0 40px rgba(212,175,55,0.1); }
+}
+.glow-card {
+  animation: glow-border 3s ease-in-out infinite;
 }
 
 /* emriz.eth badge */
 @keyframes emriz-glow {
-  0%, 100% {
-    text-shadow:
-      0 0 4px hsl(43, 74%, 49%),
-      0 0 11px hsl(43, 74%, 49%),
-      0 0 22px hsl(43, 60%, 40%);
-  }
-  50% {
-    text-shadow:
-      0 0 6px hsl(43, 90%, 60%),
-      0 0 18px hsl(43, 90%, 55%),
-      0 0 36px hsl(43, 74%, 45%),
-      0 0 50px hsl(43, 60%, 35%);
-  }
+  0%, 100% { text-shadow: 0 0 4px #D4AF37, 0 0 11px #D4AF37, 0 0 22px rgba(212,175,55,0.5); }
+  50% { text-shadow: 0 0 6px #F5D76E, 0 0 18px #D4AF37, 0 0 36px rgba(212,175,55,0.4), 0 0 50px rgba(212,175,55,0.2); }
 }
-
 .emriz-badge {
   position: relative;
-  border: 1px solid hsl(43, 74%, 49%);
-  background: linear-gradient(135deg, hsl(43, 74%, 49%, 0.08) 0%, transparent 60%);
+  border: 1px solid rgba(212,175,55,0.4);
+  background: linear-gradient(135deg, rgba(212,175,55,0.06) 0%, transparent 60%);
+}
+.emriz-text {
+  color: #D4AF37;
+  animation: emriz-glow 3s ease-in-out infinite;
 }
 
-.emriz-badge::before {
+/* Gold text gradient */
+.gold-gradient-text {
+  background: linear-gradient(135deg, #D4AF37 0%, #F5D76E 50%, #D4AF37 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Section divider line */
+.section-line {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(212,175,55,0.3), transparent);
+}
+
+/* Noise texture overlay */
+.noise-overlay {
+  position: relative;
+}
+.noise-overlay::before {
   content: '';
   position: absolute;
-  inset: -1px;
-  background: linear-gradient(90deg, transparent, hsl(43, 74%, 49%, 0.3), transparent);
-  background-size: 200% 100%;
-  animation: gold-shimmer 3s ease-in-out infinite;
-  z-index: -1;
-}
-
-.emriz-text {
-  color: hsl(43, 90%, 60%);
-  animation: emriz-glow 3s ease-in-out infinite;
+  inset: 0;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 1;
 }
 
 .delay-100 { animation-delay: 100ms; }
@@ -181,3 +168,5 @@
 .delay-300 { animation-delay: 300ms; }
 .delay-400 { animation-delay: 400ms; }
 .delay-500 { animation-delay: 500ms; }
+.delay-600 { animation-delay: 600ms; }
+.delay-700 { animation-delay: 700ms; }

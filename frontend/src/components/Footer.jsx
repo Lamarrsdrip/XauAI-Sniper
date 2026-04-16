@@ -2,31 +2,24 @@ import React from "react";
 
 export default function Footer() {
   return (
-    <footer className="border-t border-border bg-[hsl(0,0%,4%)] text-white" data-testid="footer">
-      <div className="max-w-7xl mx-auto px-6 md:px-8 lg:px-12 py-8">
+    <footer className="border-t border-white/[0.06] bg-[#050505]" data-testid="footer">
+      <div className="max-w-7xl mx-auto px-6 md:px-8 lg:px-12 py-10">
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-6 h-6 bg-[hsl(43,74%,49%)] flex items-center justify-center">
-              <span className="font-mono text-[9px] font-bold text-black">MZ</span>
+            <div className="w-6 h-6 bg-[#D4AF37] flex items-center justify-center">
+              <span className="font-mono text-[8px] font-bold text-black tracking-wider">MZ</span>
             </div>
-            <span className="text-sm font-medium text-white/60">
-              XauAI Sniper v2.0 — XAUUSD Trading System
-            </span>
+            <span className="text-sm text-white/25">XauAI Sniper v2.0</span>
           </div>
           <div className="flex items-center gap-6">
-            <a href="/admin" className="text-xs text-white/20 hover:text-white/40 font-mono transition-colors" data-testid="admin-link">
-              Admin
-            </a>
-            <span className="text-xs text-white/30">
-              Risk Disclosure: Trading involves significant risk of loss.
-            </span>
+            <a href="/admin" className="text-[10px] text-white/10 hover:text-white/30 font-mono transition-colors tracking-wider" data-testid="admin-link">ADMIN</a>
+            <span className="text-[10px] text-white/15">Trading involves significant risk of loss.</span>
           </div>
         </div>
-        <div className="mt-6 pt-6 border-t border-white/10 flex items-center justify-center">
-          <div className="emriz-badge inline-flex items-center gap-2 px-5 py-2.5" data-testid="emriz-badge">
-            <span className="emriz-text font-heading text-sm font-bold tracking-[0.2em]">
-              made by emriz.eth
-            </span>
+        <div className="mt-8 pt-8 section-line" />
+        <div className="flex items-center justify-center mt-6">
+          <div className="emriz-badge inline-flex items-center gap-2 px-6 py-3" data-testid="emriz-badge">
+            <span className="emriz-text font-heading text-sm font-semibold tracking-[0.25em]">made by emriz.eth</span>
           </div>
         </div>
       </div>
