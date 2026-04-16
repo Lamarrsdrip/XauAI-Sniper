@@ -10,7 +10,7 @@ export default function VideoGuideSection() {
   const [activeScene, setActiveScene] = useState(0);
 
   useEffect(() => {
-    axios.get(`${API}/docs/video-guide`).then(r => setData(r.data)).catch(() => {});
+    axios.get(`${API}/docs/video-guide`).then(r => setData(r.data)).catch((err) => { console.error("Video guide load failed:", err); });
   }, []);
 
   if (!data) return null;
@@ -37,7 +37,7 @@ export default function VideoGuideSection() {
           <div className="lg:col-span-4">
             <div className="border border-white/10 divide-y divide-white/10">
               {data.scenes.map((s, i) => (
-                <button key={i} onClick={() => setActiveScene(i)} data-testid={`scene-btn-${i}`}
+                <button key={`scene-${s.title}`} onClick={() => setActiveScene(i)} data-testid={`scene-btn-${i}`}
                   className={`w-full text-left px-4 py-3 flex items-center gap-3 transition-colors duration-150 ${
                     i === activeScene ? "bg-white/10 border-l-2 border-l-[hsl(43,74%,49%)]" : "hover:bg-white/5 border-l-2 border-l-transparent"
                   }`}>
@@ -109,4 +109,6 @@ export default function VideoGuideSection() {
       </div>
     </div>
   );
+}
+;
 }

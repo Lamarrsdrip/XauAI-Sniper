@@ -195,14 +195,14 @@ async def fetch_live_gold_price() -> Dict:
         price, change, change_pct = 4957.0, 0.0, 0.0
     if change is None: change = 0.0
     if change_pct is None: change_pct = round(change/price*100, 3) if price else 0.0
-    sp = round(random.uniform(0.3, 0.8), 2)
+    sp = round(secrets.randbelow(500) / 1000 + 0.3, 2)
     result = {"symbol":"XAUUSD","bid":round(price,2),"ask":round(price+sp,2),"spread":sp,"change":round(change,2),"change_pct":round(change_pct,3),"timestamp":datetime.now(timezone.utc).isoformat(),"source":"live"}
     _gold_cache, _gold_cache_time = result, now
     return result
 
 def generate_unique_pin():
     chars = string.ascii_uppercase + string.digits
-    return f"ASE-{''.join(random.choices(chars,k=4))}-{''.join(random.choices(chars,k=4))}"
+    return f"ASE-{''.join(secrets.choice(chars) for _ in range(4))}-{''.join(secrets.choice(chars) for _ in range(4))}"
 
 async def get_settings():
     s = await db.admin_settings.find_one({"key": "main"}, {"_id": 0})

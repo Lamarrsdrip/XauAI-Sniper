@@ -50,8 +50,8 @@ export default function PurchaseSection({ api }) {
               {["Unique license PIN generated instantly", "Full AI Sniper EA v2.0 with ML learning",
                 "All strategies: Trend, Range, Breakout", "Lifetime license \u2014 no monthly fees",
                 "Free updates forever", "Global AI that improves with every trade"
-              ].map((f, i) => (
-                <div key={i} className="flex items-center gap-3">
+              ].map((f) => (
+                <div key={f} className="flex items-center gap-3">
                   <Check size={14} weight="bold" className="text-[#D4AF37] flex-shrink-0" />
                   <span className="text-sm text-white/60">{f}</span>
                 </div>

@@ -96,8 +96,8 @@ export default function SetupGuideSection({ data }) {
               <span className="text-sm font-bold text-[hsl(348,83%,47%)]">IMPORTANT - READ THIS!</span>
             </div>
             <ul className="space-y-2">
-              {data.important_notes.map((note, i) => (
-                <li key={i} className="text-sm text-foreground/80 flex items-start gap-2">
+              {data.important_notes.map((note) => (
+                <li key={note} className="text-sm text-foreground/80 flex items-start gap-2">
                   <span className="text-[hsl(348,83%,47%)] font-bold flex-shrink-0">!</span>
                   {note}
                 </li>

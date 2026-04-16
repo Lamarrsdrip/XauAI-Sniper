@@ -38,7 +38,7 @@ function MainDashboard() {
   }, []);
 
   const fetchGoldPrice = useCallback(async () => {
-    try { setGoldPrice((await axios.get(`${API}/gold/price`)).data); } catch {}
+    try { setGoldPrice((await axios.get(`${API}/gold/price`)).data); } catch (err) { console.error("Gold price fetch failed:", err); }
   }, []);
 
   useEffect(() => {

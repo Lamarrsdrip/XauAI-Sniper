@@ -35,8 +35,8 @@ export default function BrokerSection() {
                 Get a 75% bonus on every deposit. More capital = more profit potential.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-6">
-                {["75% bonus on all deposits", "MT5 platform supported", "Low spreads on XAUUSD", "Fast withdrawals", "Regulated broker", "24/7 support"].map((f, i) => (
-                  <div key={i} className="flex items-center gap-2">
+                {["75% bonus on all deposits", "MT5 platform supported", "Low spreads on XAUUSD", "Fast withdrawals", "Regulated broker", "24/7 support"].map((f) => (
+                  <div key={f} className="flex items-center gap-2">
                     <Check size={14} weight="bold" className="text-[#00C853] flex-shrink-0" />
                     <span className="text-sm text-white/60">{f}</span>
                   </div>

@@ -58,8 +58,7 @@ export default function HowItWorksSection({ data }) {
           <h4 className="text-[10px] font-mono font-bold tracking-[0.2em] text-white/30 mb-6">TRADING FLOW</h4>
           <div className="flex flex-wrap items-center justify-center gap-2">
             {["SCAN", "CLASSIFY", "STRATEGY", "CONFIDENCE", "EXECUTE", "MANAGE", "LEARN", "REPEAT"].map((step, i) => (
-              <React.Fragment key={step}>
-                <div className="px-4 py-2 border border-white/[0.08] bg-white/[0.02] text-[10px] font-mono font-bold tracking-[0.1em] text-white/60 text-center">
+              <React.Fragment key={step}>                <div className="px-4 py-2 border border-white/[0.08] bg-white/[0.02] text-[10px] font-mono font-bold tracking-[0.1em] text-white/60 text-center">
                   {step}
                 </div>
                 {i < 7 && <span className="text-[#D4AF37] font-mono text-sm hidden sm:block">&rarr;</span>}
@@ -74,7 +73,7 @@ export default function HowItWorksSection({ data }) {
             <h3 className="font-heading text-xl font-medium tracking-tight mb-6 text-white">FAQ</h3>
             <div className="space-y-1">
               {data.faq.map((item, i) => (
-                <div key={i} className="border border-white/[0.06] bg-[#0C0C0C]" data-testid={`faq-${i}`}>
+                <div key={`faq-${item.q}`} className="border border-white/[0.06] bg-[#0C0C0C]" data-testid={`faq-${i}`}>
                   <button className="w-full text-left px-5 py-4 flex items-center justify-between" onClick={() => setExpandedFaq(expandedFaq === i ? null : i)} data-testid={`faq-btn-${i}`}>
                     <span className="text-sm font-medium text-white/70">{item.q}</span>
                     {expandedFaq === i ? <CaretUp size={14} className="text-white/30" /> : <CaretDown size={14} className="text-white/30" />}
