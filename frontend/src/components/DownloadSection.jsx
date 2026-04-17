@@ -28,9 +28,9 @@ export default function DownloadSection({ api }) {
             <div className="flex items-center gap-3 mb-5 text-[10px] font-mono text-white/20 tracking-wide">
               <span>XAUUSD_AI_Sniper_EA.mq5</span>
               <span className="text-white/10">|</span>
-              <span>~65 KB</span>
+              <span>~19 KB</span>
               <span className="text-white/10">|</span>
-              <span>v2.0</span>
+              <span>v3.0</span>
             </div>
             <a href={`${api}/download/ea`} data-testid="download-ea-button"
               className="inline-flex items-center gap-2 px-6 py-3 bg-[#D4AF37] text-black font-semibold text-sm tracking-wide hover:bg-white transition-colors duration-200">
