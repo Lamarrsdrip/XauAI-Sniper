@@ -519,6 +519,8 @@ void ManagePositions()
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double atr = bufATR[1];
    if(atr <= 0) return;
+   double minVol = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -529,38 +531,81 @@ void ManagePositions()
       double curPrice = posInfo.PriceCurrent();
       double openPx   = posInfo.PriceOpen();
       double curSL    = posInfo.StopLoss();
+      double curTP    = posInfo.TakeProfit();
+      double volume   = posInfo.Volume();
       ulong  ticket   = posInfo.Ticket();
 
       if(posInfo.PositionType() == POSITION_TYPE_BUY)
       {
-         // Break-even: move SL to entry when profit > 1 ATR
-         if(InpBreakEven && curSL < openPx && curPrice > openPx + atr)
+         double slDist = openPx - curSL;
+         if(slDist <= 0) slDist = atr * InpSLMultiplier;
+         double tp1 = openPx + slDist * 1.0; // 1st target = 1:1 R:R
+
+         // PARTIAL CLOSE: at 1st target, close 50% and move SL to break-even
+         if(curPrice >= tp1 && volume > minVol)
+         {
+            double closeVol = MathFloor(volume * 0.5 / lotStep) * lotStep;
+            closeVol = NormalizeDouble(closeVol, 2);
+            if(closeVol >= minVol)
+            {
+               if(trade.PositionClosePartial(ticket, closeVol))
+               {
+                  Print("PARTIAL CLOSE: 50% of #", ticket, " at 1:1 target | Closed ", DoubleToString(closeVol, 2), " lots");
+                  // Move SL to break-even on remaining
+                  double beSL = NormalizeDouble(openPx + SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
+                  trade.PositionModify(ticket, beSL, curTP);
+               }
+            }
+         }
+         // Break-even (if partial close didn't trigger yet)
+         else if(InpBreakEven && curSL < openPx && curPrice > openPx + atr)
          {
             double beSL = NormalizeDouble(openPx + SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
-            trade.PositionModify(ticket, beSL, posInfo.TakeProfit());
-            Print("BREAK-EVEN: Ticket #", ticket, " SL moved to ", DoubleToString(beSL, digits));
+            trade.PositionModify(ticket, beSL, curTP);
+            Print("BREAK-EVEN: #", ticket, " SL moved to ", DoubleToString(beSL, digits));
          }
-         // Trailing: trail once in solid profit
-         if(InpTrailingStop && curPrice > openPx + atr * 1.5)
+
+         // Trailing: trail once past 1st target
+         if(InpTrailingStop && curPrice > tp1)
          {
             double newSL = NormalizeDouble(curPrice - atr * 1.0, digits);
             if(newSL > curSL && newSL > openPx)
-               trade.PositionModify(ticket, newSL, posInfo.TakeProfit());
+               trade.PositionModify(ticket, newSL, curTP);
          }
       }
       else // SELL
       {
-         if(InpBreakEven && curSL > openPx && curPrice < openPx - atr)
+         double slDist = curSL - openPx;
+         if(slDist <= 0) slDist = atr * InpSLMultiplier;
+         double tp1 = openPx - slDist * 1.0;
+
+         // PARTIAL CLOSE: at 1st target
+         if(curPrice <= tp1 && volume > minVol)
+         {
+            double closeVol = MathFloor(volume * 0.5 / lotStep) * lotStep;
+            closeVol = NormalizeDouble(closeVol, 2);
+            if(closeVol >= minVol)
+            {
+               if(trade.PositionClosePartial(ticket, closeVol))
+               {
+                  Print("PARTIAL CLOSE: 50% of #", ticket, " at 1:1 target | Closed ", DoubleToString(closeVol, 2), " lots");
+                  double beSL = NormalizeDouble(openPx - SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
+                  trade.PositionModify(ticket, beSL, curTP);
+               }
+            }
+         }
+         else if(InpBreakEven && curSL > openPx && curPrice < openPx - atr)
          {
             double beSL = NormalizeDouble(openPx - SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
-            trade.PositionModify(ticket, beSL, posInfo.TakeProfit());
-            Print("BREAK-EVEN: Ticket #", ticket, " SL moved to ", DoubleToString(beSL, digits));
+            trade.PositionModify(ticket, beSL, curTP);
+            Print("BREAK-EVEN: #", ticket, " SL moved to ", DoubleToString(beSL, digits));
          }
-         if(InpTrailingStop && curPrice < openPx - atr * 1.5)
+
+         if(InpTrailingStop && curPrice < tp1)
          {
             double newSL = NormalizeDouble(curPrice + atr * 1.0, digits);
             if(newSL < curSL && newSL < openPx)
-               trade.PositionModify(ticket, newSL, posInfo.TakeProfit());
+               trade.PositionModify(ticket, newSL, curTP);
          }
       }
    }
