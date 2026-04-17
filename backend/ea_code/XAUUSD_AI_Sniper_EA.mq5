@@ -41,8 +41,8 @@ input int    InpEMAFast        = 21;       // Fast EMA (M5)
 input int    InpEMASlow        = 50;       // Slow EMA (M5)
 input int    InpRSIPeriod      = 14;       // RSI Period
 input int    InpATRPeriod      = 14;       // ATR Period
-input double InpSLMultiplier   = 2.0;      // SL = ATR x this
-input double InpTPMultiplier   = 1.5;      // TP = SL x this (Risk:Reward)
+input double InpSLMultiplier   = 1.0;      // SL = ATR x this
+input double InpTPMultiplier   = 1.2;      // TP = SL x this (Risk:Reward)
 input bool   InpUseH1Filter    = true;     // Use H1 trend filter (smarter entries)
 
 //+------------------------------------------------------------------+
