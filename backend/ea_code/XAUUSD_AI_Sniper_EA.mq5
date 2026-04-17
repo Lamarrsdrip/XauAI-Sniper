@@ -309,15 +309,18 @@ void OnTick()
 
    int signal = 0;
    string reason = "";
+   double bodySize = MathAbs(close1 - open1);
+   double candleRange = iHigh(Symbol(), PERIOD_M5, 1) - iLow(Symbol(), PERIOD_M5, 1);
+   bool strongCandle = candleRange > 0 && (bodySize / candleRange) > 0.4; // body > 40% of range
 
    // --- TREND BUY ---
-   if(emaFast > emaSlow && close1 > emaFast && rsi > 40 && rsi < 75)
+   if(emaFast > emaSlow && close1 > emaFast && rsi > 40 && rsi < 75 && strongCandle)
    {
       signal = 1;
       reason = "TREND BUY: EMA21>50, RSI=" + DoubleToString(rsi, 1);
    }
    // --- TREND SELL ---
-   else if(emaFast < emaSlow && close1 < emaFast && rsi > 25 && rsi < 60)
+   else if(emaFast < emaSlow && close1 < emaFast && rsi > 25 && rsi < 60 && strongCandle)
    {
       signal = -1;
       reason = "TREND SELL: EMA21<50, RSI=" + DoubleToString(rsi, 1);
@@ -354,19 +357,43 @@ void OnTick()
       }
    }
 
-   // === ML PATTERN CHECK (adjusts, never blocks) ===
+   // === ML PATTERN CHECK (adjusts lot size based on history) ===
+   bool mlReduced = false;
    if(signal != 0 && InpLearnPatterns && patternCount >= 10)
    {
       double mlScore = GetMLScore(signal, rsi, (emaFast - emaSlow) / emaSlow * 10000, dtNow.hour, dtNow.day_of_week);
       if(mlScore < 0.3)
       {
-         Print("ML WARN: Low win rate (", DoubleToString(mlScore * 100, 0), "%) for this setup — taking with reduced size");
-         // Don't block — just log the warning. Lot size stays normal for now.
+         Print("ML: Low win rate (", DoubleToString(mlScore * 100, 0), "%) — HALF lot size");
+         mlReduced = true;
       }
       else if(mlScore > 0.65)
       {
-         Print("ML BOOST: High win rate (", DoubleToString(mlScore * 100, 0), "%) — confident setup");
+         Print("ML: High win rate (", DoubleToString(mlScore * 100, 0), "%) — confident setup");
       }
+   }
+
+   // === CONSECUTIVE LOSS GUARD: reduce size after 3 losses in a row ===
+   if(signal != 0 && losses >= 3 && (totalTrades - wins) >= 3)
+   {
+      // Check last 3 trades were all losses
+      int recentLosses = 0;
+      for(int p = patternCount - 1; p >= MathMax(0, patternCount - 3); p--)
+      {
+         if(!patterns[p].wasWinner) recentLosses++;
+      }
+      if(recentLosses >= 3)
+      {
+         Print("STREAK GUARD: 3+ consecutive losses — reducing lot size");
+         mlReduced = true;
+      }
+   }
+
+   // === VOLATILITY CHECK: skip during dead market (ATR too low) ===
+   if(signal != 0 && atr < SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 30)
+   {
+      Print("LOW VOLATILITY: ATR too low (", DoubleToString(atr, 2), ") — skipping");
+      signal = 0;
    }
 
    // === EXECUTE OR LOG ===
@@ -378,7 +405,7 @@ void OnTick()
       lastSignalRSI = rsi;
       lastSignalEMADiff = (emaFast - emaSlow) / emaSlow * 10000;
       lastSignalATR = atr;
-      OpenTrade(signal, atr, reason);
+      OpenTrade(signal, atr, reason, mlReduced);
    }
    else
    {
@@ -395,7 +422,7 @@ void OnTick()
 //+------------------------------------------------------------------+
 //| OPEN TRADE                                                       |
 //+------------------------------------------------------------------+
-void OpenTrade(int signal, double atr, string reason)
+void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
 {
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
@@ -440,6 +467,13 @@ void OpenTrade(int signal, double atr, string reason)
    lots = MathFloor(lots / lotStep) * lotStep;
    lots = MathMax(minLot, MathMin(maxLot, lots));
    lots = NormalizeDouble(lots, 2);
+
+   // ML/streak reduction: halve lot size on weak setups
+   if(reduceSize)
+   {
+      lots = MathMax(minLot, NormalizeDouble(lots * 0.5, 2));
+      Print("LOT REDUCED: ML/streak guard — using ", DoubleToString(lots, 2), " lots");
+   }
 
    // Safety cap: never risk more than 2% even if calculation is wrong
    double maxRiskLots = (balance * 0.02) / (slDist / tickSize * tickValue);
