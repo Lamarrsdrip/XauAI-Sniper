@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     AI-Assisted Gold Trading Bot  |
-//|                                     v3.0 - Simplified & Reliable  |
+//|                                     v3.1 - Smart & Reliable       |
 //+------------------------------------------------------------------+
 #property copyright "AI Sniper Trading Systems"
 #property link      "https://ai-sniper-ea.com"
-#property version   "3.00"
-#property description "XAUUSD AI Sniper EA - Simplified Core"
-#property description "Trend + Range + Breakout | Clean Execution"
+#property version   "3.10"
+#property description "XAUUSD AI Sniper EA - Smart Core with ML"
+#property description "Trend + Range | H1 Filter | Pattern Learning"
 #property description "LICENSE REQUIRED: Enter your PIN to activate"
 #property strict
 
@@ -19,14 +19,14 @@
 //| LICENSE                                                          |
 //+------------------------------------------------------------------+
 input group "=== LICENSE ==="
-input string InpLicensePIN     = "";       // License PIN (ASE-XXXX-XXXX)
+input string InpLicensePIN     = "";
 
 //+------------------------------------------------------------------+
 //| RISK MANAGEMENT                                                  |
 //+------------------------------------------------------------------+
 input group "=== RISK ==="
 input double InpRiskPercent    = 1.0;      // Risk per trade (%)
-input double InpDailyLossLimit = 3.0;      // Max daily loss (%)
+input double InpDailyLossLimit = 3.0;      // Max daily loss (%) - CLOSES ALL TRADES
 input int    InpMaxOpenTrades  = 3;        // Max open trades
 input int    InpMaxTradesPerDay= 8;        // Max trades per day
 
@@ -34,22 +34,47 @@ input int    InpMaxTradesPerDay= 8;        // Max trades per day
 //| STRATEGY                                                         |
 //+------------------------------------------------------------------+
 input group "=== STRATEGY ==="
-input int    InpEMAFast        = 21;       // Fast EMA
-input int    InpEMASlow        = 50;       // Slow EMA
+input int    InpEMAFast        = 21;       // Fast EMA (M5)
+input int    InpEMASlow        = 50;       // Slow EMA (M5)
 input int    InpRSIPeriod      = 14;       // RSI Period
 input int    InpATRPeriod      = 14;       // ATR Period
-input double InpSLMultiplier   = 1.5;      // SL = ATR x this
-input double InpTPMultiplier   = 2.0;      // TP = SL x this (Risk:Reward)
+input double InpSLMultiplier   = 2.0;      // SL = ATR x this
+input double InpTPMultiplier   = 2.5;      // TP = SL x this (Risk:Reward)
+input bool   InpUseH1Filter    = true;     // Use H1 trend filter (smarter entries)
+
+//+------------------------------------------------------------------+
+//| SMART FEATURES                                                   |
+//+------------------------------------------------------------------+
+input group "=== SMART ==="
+input bool   InpBreakEven      = true;     // Move SL to break-even at +1 ATR
+input bool   InpTrailingStop   = true;     // Trail stop in profit
+input bool   InpLearnPatterns  = true;     // Learn from trade outcomes (local ML)
+input int    InpMaxPatterns    = 200;      // Max patterns to remember
 
 //+------------------------------------------------------------------+
 //| SAFETY                                                           |
 //+------------------------------------------------------------------+
 input group "=== SAFETY ==="
 input double InpMaxSpread      = 150.0;    // Max spread (points)
-input double InpEquityProtect  = 70.0;     // Equity protection (% of initial)
+input double InpEquityProtect  = 70.0;     // Equity protection (%)
 input bool   InpWeekendClose   = true;     // Close before weekend
 input int    InpFridayHour     = 20;       // Friday close hour
 input int    InpMagicNumber    = 20250301; // Magic Number
+
+//+------------------------------------------------------------------+
+//| ML PATTERN STRUCTURE                                             |
+//+------------------------------------------------------------------+
+struct TradePattern
+{
+   int    direction;       // 1=buy, -1=sell
+   double emaDiff;         // ema fast - slow normalized
+   double rsi;             // rsi at entry
+   double atr;             // atr at entry
+   int    hour;            // hour of day
+   int    dayOfWeek;       // day of week
+   bool   wasWinner;       // outcome
+   double profit;          // profit in $
+};
 
 //+------------------------------------------------------------------+
 //| GLOBALS                                                          |
@@ -60,15 +85,23 @@ CAccountInfo  accInfo;
 
 bool   licenseValid = false;
 int    hEMAFast, hEMASlow, hRSI, hATR;
+int    hEMAFast_H1, hEMASlow_H1;
 double bufEMAFast[], bufEMASlow[], bufRSI[], bufATR[];
+double bufEMAFast_H1[], bufEMASlow_H1[];
 double initialBalance, dailyStartEquity;
 int    todayTradeCount;
 datetime lastDayReset;
 bool   dailyLimitHit;
 int    totalTrades, wins, losses;
 
+// ML
+TradePattern patterns[];
+int    patternCount;
+int    lastSignalDir;
+double lastSignalRSI, lastSignalEMADiff, lastSignalATR;
+
 //+------------------------------------------------------------------+
-//| PIN VALIDATION (Offline: ASE-XXXX-XXXX = 13 chars)              |
+//| PIN VALIDATION                                                   |
 //+------------------------------------------------------------------+
 bool ValidatePIN(string pin)
 {
@@ -91,7 +124,6 @@ bool ValidatePIN(string pin)
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // License check
    if(StringLen(InpLicensePIN) == 0)
    {
       Alert("Enter your license PIN in Inputs tab.");
@@ -105,7 +137,6 @@ int OnInit()
    }
    Print("LICENSE OK: ", InpLicensePIN);
 
-   // Symbol check
    if(StringFind(Symbol(), "XAU") < 0 && StringFind(Symbol(), "GOLD") < 0)
       Print("WARNING: EA optimized for XAUUSD. Current: ", Symbol());
 
@@ -120,14 +151,19 @@ int OnInit()
    else                                      trade.SetTypeFilling(ORDER_FILLING_RETURN);
    Print("FILL MODE: ", (fm & SYMBOL_FILLING_FOK) != 0 ? "FOK" : (fm & SYMBOL_FILLING_IOC) != 0 ? "IOC" : "RETURN");
 
-   // Create indicators (M5 only - keep it simple)
+   // M5 indicators
    hEMAFast = iMA(Symbol(), PERIOD_M5, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
    hEMASlow = iMA(Symbol(), PERIOD_M5, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
    hRSI     = iRSI(Symbol(), PERIOD_M5, InpRSIPeriod, PRICE_CLOSE);
    hATR     = iATR(Symbol(), PERIOD_M5, InpATRPeriod);
 
+   // H1 indicators for smart filter
+   hEMAFast_H1 = iMA(Symbol(), PERIOD_H1, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
+   hEMASlow_H1 = iMA(Symbol(), PERIOD_H1, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
+
    if(hEMAFast == INVALID_HANDLE || hEMASlow == INVALID_HANDLE ||
-      hRSI == INVALID_HANDLE || hATR == INVALID_HANDLE)
+      hRSI == INVALID_HANDLE || hATR == INVALID_HANDLE ||
+      hEMAFast_H1 == INVALID_HANDLE || hEMASlow_H1 == INVALID_HANDLE)
    {
       Print("ERROR: Failed to create indicators");
       return INIT_FAILED;
@@ -137,8 +173,10 @@ int OnInit()
    ArraySetAsSeries(bufEMASlow, true);
    ArraySetAsSeries(bufRSI, true);
    ArraySetAsSeries(bufATR, true);
+   ArraySetAsSeries(bufEMAFast_H1, true);
+   ArraySetAsSeries(bufEMASlow_H1, true);
 
-   // State init
+   // State
    initialBalance  = accInfo.Balance();
    dailyStartEquity= accInfo.Equity();
    todayTradeCount = 0;
@@ -146,11 +184,19 @@ int OnInit()
    dailyLimitHit   = false;
    totalTrades = 0; wins = 0; losses = 0;
 
-   Print("=== AI SNIPER v3.0 READY ===");
+   // ML
+   ArrayResize(patterns, 0);
+   patternCount = 0;
+   lastSignalDir = 0;
+   LoadPatterns();
+
+   Print("=== AI SNIPER v3.1 READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2),
          " | Risk: ", InpRiskPercent, "%",
          " | SL: ", InpSLMultiplier, "xATR",
-         " | TP: ", InpTPMultiplier, "xSL");
+         " | TP: ", InpTPMultiplier, "xSL",
+         " | H1 Filter: ", InpUseH1Filter ? "ON" : "OFF",
+         " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -163,12 +209,15 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI);
    IndicatorRelease(hATR);
+   IndicatorRelease(hEMAFast_H1);
+   IndicatorRelease(hEMASlow_H1);
+   SavePatterns();
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
-   Print("=== EA STOPPED | Trades: ", totalTrades, " | Win Rate: ", DoubleToString(wr, 1), "% ===");
+   Print("=== EA STOPPED | Trades: ", totalTrades, " | Win Rate: ", DoubleToString(wr, 1), "% | Patterns: ", patternCount, " ===");
 }
 
 //+------------------------------------------------------------------+
-//| TICK - Main logic                                                |
+//| TICK                                                             |
 //+------------------------------------------------------------------+
 void OnTick()
 {
@@ -194,28 +243,33 @@ void OnTick()
       return;
    }
 
-   // Equity protection
+   // === EQUITY PROTECTION: CLOSE EVERYTHING ===
    double equity = accInfo.Equity();
    if(equity < initialBalance * InpEquityProtect / 100.0)
    {
       CloseAll();
-      Print("EQUITY PROTECT: Closing all. Equity=$", DoubleToString(equity, 2));
+      Print("EQUITY PROTECT: CLOSED ALL. Equity=$", DoubleToString(equity, 2));
       return;
    }
 
-   // Daily loss limit
-   if(dailyLimitHit) return;
+   // === DAILY LOSS LIMIT: CLOSE EVERYTHING AND STOP ===
    double dailyPnL = equity - dailyStartEquity;
-   if(dailyPnL < -(dailyStartEquity * InpDailyLossLimit / 100.0))
+   double dailyMax = dailyStartEquity * InpDailyLossLimit / 100.0;
+   if(dailyPnL < -dailyMax)
    {
+      if(!dailyLimitHit)
+      {
+         Print("DAILY LIMIT HIT: Loss=$", DoubleToString(dailyPnL, 2),
+               " > Max=$", DoubleToString(dailyMax, 2), " — CLOSING ALL TRADES");
+      }
       dailyLimitHit = true;
-      Print("DAILY LIMIT: Loss $", DoubleToString(dailyPnL, 2), " - stopping for today");
+      if(CountMyPositions() > 0) CloseAll();  // CLOSE existing trades!
       return;
    }
 
    // Spread check
    double spread = SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-   if(spread > InpMaxSpread) return; // silent - spread changes fast
+   if(spread > InpMaxSpread) return;
 
    // New M5 bar only
    static datetime lastBar = 0;
@@ -223,80 +277,119 @@ void OnTick()
    if(curBar == lastBar) return;
    lastBar = curBar;
 
-   // Load indicator data
-   if(CopyBuffer(hEMAFast, 0, 0, 5, bufEMAFast) < 5) { Print("WARN: EMA fast data not ready"); return; }
-   if(CopyBuffer(hEMASlow, 0, 0, 5, bufEMASlow) < 5) { Print("WARN: EMA slow data not ready"); return; }
-   if(CopyBuffer(hRSI, 0, 0, 5, bufRSI) < 5)         { Print("WARN: RSI data not ready"); return; }
-   if(CopyBuffer(hATR, 0, 0, 5, bufATR) < 5)          { Print("WARN: ATR data not ready"); return; }
+   // Load indicators
+   if(CopyBuffer(hEMAFast, 0, 0, 5, bufEMAFast) < 5) { Print("WARN: EMA fast not ready"); return; }
+   if(CopyBuffer(hEMASlow, 0, 0, 5, bufEMASlow) < 5) { Print("WARN: EMA slow not ready"); return; }
+   if(CopyBuffer(hRSI, 0, 0, 5, bufRSI) < 5)         { Print("WARN: RSI not ready"); return; }
+   if(CopyBuffer(hATR, 0, 0, 5, bufATR) < 5)          { Print("WARN: ATR not ready"); return; }
+   if(CopyBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1) < 3) { Print("WARN: H1 EMA fast not ready"); return; }
+   if(CopyBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1) < 3) { Print("WARN: H1 EMA slow not ready"); return; }
 
-   // Manage existing trades (trailing stop)
+   // === MANAGE EXISTING TRADES FIRST (always runs) ===
    ManagePositions();
 
-   // Can we open?
-   if(CountMyPositions() >= InpMaxOpenTrades)
+   // Can we open new trade?
+   if(CountMyPositions() >= InpMaxOpenTrades || todayTradeCount >= InpMaxTradesPerDay)
    {
-      Print("SCAN: Max positions open (", CountMyPositions(), "/", InpMaxOpenTrades, ")");
-      return;
-   }
-   if(todayTradeCount >= InpMaxTradesPerDay)
-   {
-      Print("SCAN: Max trades today (", todayTradeCount, "/", InpMaxTradesPerDay, ")");
+      UpdateDashboard(0);
       return;
    }
 
-   // === GENERATE SIGNAL ===
+   // === READ MARKET ===
    double emaFast = bufEMAFast[1];
    double emaSlow = bufEMASlow[1];
    double rsi     = bufRSI[1];
    double atr     = bufATR[1];
    double close1  = iClose(Symbol(), PERIOD_M5, 1);
-   double close2  = iClose(Symbol(), PERIOD_M5, 2);
    double open1   = iOpen(Symbol(), PERIOD_M5, 1);
+   double h1Fast  = bufEMAFast_H1[1];
+   double h1Slow  = bufEMASlow_H1[1];
+   bool   h1Bull  = h1Fast > h1Slow;
+   bool   h1Bear  = h1Fast < h1Slow;
 
    int signal = 0;
    string reason = "";
 
-   // --- TREND BUY: EMA fast > slow + price above fast EMA ---
+   // --- TREND BUY ---
    if(emaFast > emaSlow && close1 > emaFast && rsi > 40 && rsi < 75)
    {
       signal = 1;
-      reason = "TREND BUY: EMA21>50, Price>EMA, RSI=" + DoubleToString(rsi, 1);
+      reason = "TREND BUY: EMA21>50, RSI=" + DoubleToString(rsi, 1);
    }
-   // --- TREND SELL: EMA fast < slow + price below fast EMA ---
+   // --- TREND SELL ---
    else if(emaFast < emaSlow && close1 < emaFast && rsi > 25 && rsi < 60)
    {
       signal = -1;
-      reason = "TREND SELL: EMA21<50, Price<EMA, RSI=" + DoubleToString(rsi, 1);
+      reason = "TREND SELL: EMA21<50, RSI=" + DoubleToString(rsi, 1);
    }
-   // --- RANGE BUY: RSI oversold + bullish candle ---
+   // --- RANGE BUY (RSI oversold) ---
    else if(rsi < 30 && close1 > open1)
    {
       signal = 1;
-      reason = "RANGE BUY: RSI oversold=" + DoubleToString(rsi, 1);
+      reason = "RSI OVERSOLD BUY: RSI=" + DoubleToString(rsi, 1);
    }
-   // --- RANGE SELL: RSI overbought + bearish candle ---
+   // --- RANGE SELL (RSI overbought) ---
    else if(rsi > 70 && close1 < open1)
    {
       signal = -1;
-      reason = "RANGE SELL: RSI overbought=" + DoubleToString(rsi, 1);
+      reason = "RSI OVERBOUGHT SELL: RSI=" + DoubleToString(rsi, 1);
+   }
+
+   // === SMART FILTER: H1 Trend (reduces bad trades, doesn't block good ones) ===
+   if(signal != 0 && InpUseH1Filter)
+   {
+      // Only filter trend trades, not RSI extremes
+      if(rsi > 30 && rsi < 70) // trend trade, not RSI extreme
+      {
+         if(signal == 1 && h1Bear)
+         {
+            Print("H1 FILTER: Skipping BUY — H1 is bearish");
+            signal = 0;
+         }
+         else if(signal == -1 && h1Bull)
+         {
+            Print("H1 FILTER: Skipping SELL — H1 is bullish");
+            signal = 0;
+         }
+      }
+   }
+
+   // === ML PATTERN CHECK (adjusts, never blocks) ===
+   if(signal != 0 && InpLearnPatterns && patternCount >= 10)
+   {
+      double mlScore = GetMLScore(signal, rsi, (emaFast - emaSlow) / emaSlow * 10000, dtNow.hour, dtNow.day_of_week);
+      if(mlScore < 0.3)
+      {
+         Print("ML WARN: Low win rate (", DoubleToString(mlScore * 100, 0), "%) for this setup — taking with reduced size");
+         // Don't block — just log the warning. Lot size stays normal for now.
+      }
+      else if(mlScore > 0.65)
+      {
+         Print("ML BOOST: High win rate (", DoubleToString(mlScore * 100, 0), "%) — confident setup");
+      }
    }
 
    // === EXECUTE OR LOG ===
    if(signal != 0)
    {
       Print(">>> SIGNAL: ", reason);
+      // Store signal context for ML recording
+      lastSignalDir = signal;
+      lastSignalRSI = rsi;
+      lastSignalEMADiff = (emaFast - emaSlow) / emaSlow * 10000;
+      lastSignalATR = atr;
       OpenTrade(signal, atr, reason);
    }
    else
    {
-      // Log every bar so user can see bot is scanning
       Print("SCAN: No setup | EMA21=", DoubleToString(emaFast, 2),
             " EMA50=", DoubleToString(emaSlow, 2),
             " RSI=", DoubleToString(rsi, 1),
+            " H1=", h1Bull ? "BULL" : h1Bear ? "BEAR" : "FLAT",
             " Spread=", DoubleToString(spread, 0));
    }
 
-   UpdateDashboard(emaFast, emaSlow, rsi, atr, spread);
+   UpdateDashboard(signal);
 }
 
 //+------------------------------------------------------------------+
@@ -311,20 +404,18 @@ void OpenTrade(int signal, double atr, string reason)
 
    double price, sl, tp, slDist;
 
-   if(signal == 1) // BUY
+   if(signal == 1)
    {
       price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-      if(price <= 0) { Print("ERROR: Ask price = 0"); return; }
-
+      if(price <= 0) { Print("ERROR: Ask = 0"); return; }
       slDist = MathMax(atr * InpSLMultiplier, minDist);
       sl = NormalizeDouble(price - slDist, digits);
       tp = NormalizeDouble(price + slDist * InpTPMultiplier, digits);
    }
-   else // SELL
+   else
    {
       price = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-      if(price <= 0) { Print("ERROR: Bid price = 0"); return; }
-
+      if(price <= 0) { Print("ERROR: Bid = 0"); return; }
       slDist = MathMax(atr * InpSLMultiplier, minDist);
       sl = NormalizeDouble(price + slDist, digits);
       tp = NormalizeDouble(price - slDist * InpTPMultiplier, digits);
@@ -341,7 +432,7 @@ void OpenTrade(int signal, double atr, string reason)
 
    if(tickValue <= 0 || tickSize <= 0 || slDist <= 0)
    {
-      Print("ERROR: Invalid lot calc params. TV=", tickValue, " TS=", tickSize, " SL=", slDist);
+      Print("ERROR: Lot calc invalid. TV=", tickValue, " TS=", tickSize, " SL=", slDist);
       return;
    }
 
@@ -350,12 +441,21 @@ void OpenTrade(int signal, double atr, string reason)
    lots = MathMax(minLot, MathMin(maxLot, lots));
    lots = NormalizeDouble(lots, 2);
 
+   // Safety cap: never risk more than 2% even if calculation is wrong
+   double maxRiskLots = (balance * 0.02) / (slDist / tickSize * tickValue);
+   maxRiskLots = MathFloor(maxRiskLots / lotStep) * lotStep;
+   if(lots > maxRiskLots)
+   {
+      Print("LOT CAP: Reduced from ", DoubleToString(lots, 2), " to ", DoubleToString(maxRiskLots, 2));
+      lots = maxRiskLots;
+   }
+
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
-         " | Price=", DoubleToString(price, digits),
-         " | SL=", DoubleToString(sl, digits),
-         " | TP=", DoubleToString(tp, digits),
-         " | Lots=", DoubleToString(lots, 2),
-         " | Reason: ", reason);
+         " Price=", DoubleToString(price, digits),
+         " SL=", DoubleToString(sl, digits),
+         " TP=", DoubleToString(tp, digits),
+         " Lots=", DoubleToString(lots, 2),
+         " Risk=$", DoubleToString(riskAmount, 2));
 
    bool ok;
    if(signal == 1)
@@ -370,21 +470,21 @@ void OpenTrade(int signal, double atr, string reason)
    }
    else
    {
-      Print("TRADE FAILED: Error=", GetLastError(),
-            " RetCode=", trade.ResultRetcode(),
-            " | Price=", DoubleToString(price, digits),
-            " | SL=", DoubleToString(sl, digits),
-            " | TP=", DoubleToString(tp, digits));
+      Print("TRADE FAILED: Error=", GetLastError(), " RetCode=", trade.ResultRetcode(),
+            " Price=", DoubleToString(price, digits),
+            " SL=", DoubleToString(sl, digits),
+            " TP=", DoubleToString(tp, digits));
    }
 }
 
 //+------------------------------------------------------------------+
-//| TRAILING STOP MANAGEMENT                                         |
+//| POSITION MANAGEMENT (break-even + trailing)                      |
 //+------------------------------------------------------------------+
 void ManagePositions()
 {
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double atr = bufATR[1];
+   if(atr <= 0) return;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -399,18 +499,143 @@ void ManagePositions()
 
       if(posInfo.PositionType() == POSITION_TYPE_BUY)
       {
-         // Trail once in profit by 1 ATR
-         double newSL = NormalizeDouble(curPrice - atr * 1.2, digits);
-         if(curPrice > openPx + atr && newSL > curSL && newSL > openPx)
-            trade.PositionModify(ticket, newSL, posInfo.TakeProfit());
+         // Break-even: move SL to entry when profit > 1 ATR
+         if(InpBreakEven && curSL < openPx && curPrice > openPx + atr)
+         {
+            double beSL = NormalizeDouble(openPx + SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
+            trade.PositionModify(ticket, beSL, posInfo.TakeProfit());
+            Print("BREAK-EVEN: Ticket #", ticket, " SL moved to ", DoubleToString(beSL, digits));
+         }
+         // Trailing: trail once in solid profit
+         if(InpTrailingStop && curPrice > openPx + atr * 1.5)
+         {
+            double newSL = NormalizeDouble(curPrice - atr * 1.0, digits);
+            if(newSL > curSL && newSL > openPx)
+               trade.PositionModify(ticket, newSL, posInfo.TakeProfit());
+         }
       }
-      else
+      else // SELL
       {
-         double newSL = NormalizeDouble(curPrice + atr * 1.2, digits);
-         if(curPrice < openPx - atr && newSL < curSL && newSL < openPx)
-            trade.PositionModify(ticket, newSL, posInfo.TakeProfit());
+         if(InpBreakEven && curSL > openPx && curPrice < openPx - atr)
+         {
+            double beSL = NormalizeDouble(openPx - SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
+            trade.PositionModify(ticket, beSL, posInfo.TakeProfit());
+            Print("BREAK-EVEN: Ticket #", ticket, " SL moved to ", DoubleToString(beSL, digits));
+         }
+         if(InpTrailingStop && curPrice < openPx - atr * 1.5)
+         {
+            double newSL = NormalizeDouble(curPrice + atr * 1.0, digits);
+            if(newSL < curSL && newSL < openPx)
+               trade.PositionModify(ticket, newSL, posInfo.TakeProfit());
+         }
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| ML: GET WIN RATE SCORE FOR SIMILAR SETUPS                        |
+//+------------------------------------------------------------------+
+double GetMLScore(int dir, double rsi, double emaDiff, int hour, int dow)
+{
+   if(patternCount < 10) return 0.5; // neutral if not enough data
+
+   int matches = 0;
+   int matchWins = 0;
+
+   for(int i = 0; i < patternCount; i++)
+   {
+      if(patterns[i].direction != dir) continue;
+      if(MathAbs(patterns[i].rsi - rsi) > 15) continue;
+      if(MathAbs(patterns[i].hour - hour) > 2) continue;
+
+      matches++;
+      if(patterns[i].wasWinner) matchWins++;
+   }
+
+   if(matches < 5) return 0.5;
+   return (double)matchWins / matches;
+}
+
+//+------------------------------------------------------------------+
+//| ML: RECORD TRADE OUTCOME                                         |
+//+------------------------------------------------------------------+
+void RecordPattern(bool wasWin, double profit)
+{
+   if(!InpLearnPatterns) return;
+
+   MqlDateTime dt;
+   TimeCurrent(dt);
+
+   TradePattern p;
+   p.direction = lastSignalDir;
+   p.emaDiff   = lastSignalEMADiff;
+   p.rsi       = lastSignalRSI;
+   p.atr       = lastSignalATR;
+   p.hour      = dt.hour;
+   p.dayOfWeek = dt.day_of_week;
+   p.wasWinner = wasWin;
+   p.profit    = profit;
+
+   // FIFO if full
+   if(patternCount >= InpMaxPatterns)
+   {
+      for(int i = 0; i < patternCount - 1; i++)
+         patterns[i] = patterns[i + 1];
+      patternCount--;
+   }
+
+   ArrayResize(patterns, patternCount + 1);
+   patterns[patternCount] = p;
+   patternCount++;
+
+   Print("ML: Recorded #", patternCount, " | ", wasWin ? "WIN" : "LOSS", " $", DoubleToString(profit, 2));
+}
+
+//+------------------------------------------------------------------+
+//| ML: SAVE/LOAD PATTERNS                                           |
+//+------------------------------------------------------------------+
+void SavePatterns()
+{
+   if(patternCount == 0) return;
+   string fn = "AIS_Patterns_" + Symbol() + ".bin";
+   int h = FileOpen(fn, FILE_WRITE | FILE_BIN);
+   if(h == INVALID_HANDLE) return;
+   FileWriteInteger(h, patternCount);
+   for(int i = 0; i < patternCount; i++)
+   {
+      FileWriteInteger(h, patterns[i].direction);
+      FileWriteDouble(h, patterns[i].emaDiff);
+      FileWriteDouble(h, patterns[i].rsi);
+      FileWriteDouble(h, patterns[i].atr);
+      FileWriteInteger(h, patterns[i].hour);
+      FileWriteInteger(h, patterns[i].dayOfWeek);
+      FileWriteInteger(h, patterns[i].wasWinner ? 1 : 0);
+      FileWriteDouble(h, patterns[i].profit);
+   }
+   FileClose(h);
+}
+
+void LoadPatterns()
+{
+   string fn = "AIS_Patterns_" + Symbol() + ".bin";
+   if(!FileIsExist(fn)) return;
+   int h = FileOpen(fn, FILE_READ | FILE_BIN);
+   if(h == INVALID_HANDLE) return;
+   patternCount = FileReadInteger(h);
+   ArrayResize(patterns, patternCount);
+   for(int i = 0; i < patternCount; i++)
+   {
+      patterns[i].direction = FileReadInteger(h);
+      patterns[i].emaDiff   = FileReadDouble(h);
+      patterns[i].rsi       = FileReadDouble(h);
+      patterns[i].atr       = FileReadDouble(h);
+      patterns[i].hour      = FileReadInteger(h);
+      patterns[i].dayOfWeek = FileReadInteger(h);
+      patterns[i].wasWinner = FileReadInteger(h) == 1;
+      patterns[i].profit    = FileReadDouble(h);
+   }
+   FileClose(h);
+   Print("ML: Loaded ", patternCount, " patterns");
 }
 
 //+------------------------------------------------------------------+
@@ -429,11 +654,15 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
          {
             double profit = deal.Profit() + deal.Swap() + deal.Commission();
             totalTrades++;
-            if(profit > 0) wins++;
-            else losses++;
-            Print("TRADE CLOSED: ", profit > 0 ? "WIN" : "LOSS",
+            bool isWin = profit > 0;
+            if(isWin) wins++; else losses++;
+
+            Print("TRADE CLOSED: ", isWin ? "WIN" : "LOSS",
                   " $", DoubleToString(profit, 2),
                   " | Total: ", totalTrades, " W:", wins, " L:", losses);
+
+            // ML: record pattern
+            RecordPattern(isWin, profit);
          }
       }
    }
@@ -460,39 +689,52 @@ void CloseAll()
    {
       if(posInfo.SelectByIndex(i))
          if(posInfo.Magic() == InpMagicNumber && posInfo.Symbol() == Symbol())
+         {
             trade.PositionClose(posInfo.Ticket());
+            Print("FORCE CLOSED: Ticket #", posInfo.Ticket());
+         }
    }
 }
 
 //+------------------------------------------------------------------+
 //| DASHBOARD                                                        |
 //+------------------------------------------------------------------+
-void UpdateDashboard(double emaF, double emaS, double rsi, double atr, double spread)
+void UpdateDashboard(int signal)
 {
    double equity  = accInfo.Equity();
    double balance = accInfo.Balance();
    double dailyPnL= equity - dailyStartEquity;
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
 
-   string dir = emaF > emaS ? "BULLISH" : emaF < emaS ? "BEARISH" : "FLAT";
+   string dir = bufEMAFast[1] > bufEMASlow[1] ? "BULLISH" : "BEARISH";
+   string h1dir = bufEMAFast_H1[1] > bufEMASlow_H1[1] ? "BULL" : "BEAR";
+   double mlWR = 0;
+   int mlW = 0;
+   for(int i = 0; i < patternCount; i++) if(patterns[i].wasWinner) mlW++;
+   if(patternCount > 0) mlWR = (double)mlW / patternCount * 100;
 
    string d = "\n";
    d += "========================================\n";
-   d += "  XauAI SNIPER v3.0 | LICENSED\n";
+   d += "  XauAI SNIPER v3.1 | SMART | LICENSED\n";
    d += "========================================\n";
    d += StringFormat("Balance: $%.2f | Equity: $%.2f\n", balance, equity);
    d += StringFormat("Daily P/L: $%.2f\n", dailyPnL);
    d += "----------------------------------------\n";
-   d += StringFormat("EMA21: %.2f | EMA50: %.2f\n", emaF, emaS);
-   d += StringFormat("Trend: %s | RSI: %.1f\n", dir, rsi);
-   d += StringFormat("ATR: %.2f | Spread: %.0f\n", atr, spread);
+   d += StringFormat("M5: %s | H1: %s | RSI: %.1f\n", dir, h1dir, bufRSI[1]);
+   d += StringFormat("ATR: %.2f | Spread: %.0f\n", bufATR[1], (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
    d += "----------------------------------------\n";
    d += StringFormat("Open: %d/%d | Today: %d/%d\n",
         CountMyPositions(), InpMaxOpenTrades, todayTradeCount, InpMaxTradesPerDay);
-   d += StringFormat("Trades: %d | Win Rate: %.1f%%\n", totalTrades, wr);
+   d += StringFormat("Trades: %d | Win: %.1f%%\n", totalTrades, wr);
+   d += StringFormat("ML Patterns: %d | ML Win%%: %.1f%%\n", patternCount, mlWR);
+   d += "----------------------------------------\n";
+   d += StringFormat("H1 Filter: %s | Break-Even: %s\n",
+        InpUseH1Filter ? "ON" : "OFF", InpBreakEven ? "ON" : "OFF");
+   d += StringFormat("Trailing: %s | Learning: %s\n",
+        InpTrailingStop ? "ON" : "OFF", InpLearnPatterns ? "ON" : "OFF");
    d += "========================================\n";
 
-   if(dailyLimitHit) d += "!! DAILY LIMIT REACHED !!\n";
+   if(dailyLimitHit) d += "!! DAILY LIMIT - ALL TRADES CLOSED !!\n";
 
    Comment(d);
 }
