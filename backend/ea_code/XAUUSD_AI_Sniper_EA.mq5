@@ -29,6 +29,9 @@ input double InpRiskPercent    = 1.0;      // Risk per trade (%)
 input double InpDailyLossLimit = 3.0;      // Max daily loss (%) - CLOSES ALL TRADES
 input int    InpMaxOpenTrades  = 3;        // Max open trades
 input int    InpMaxTradesPerDay= 8;        // Max trades per day
+input double InpWeeklyTarget   = 35.0;     // Weekly profit target (%) - stops when hit
+input double InpWeeklyMaxLoss  = 10.0;     // Weekly max loss (%) - stops when hit
+input bool   InpCarefulMode    = true;     // Careful mode: reduce risk as profit grows to protect gains
 
 //+------------------------------------------------------------------+
 //| STRATEGY                                                         |
@@ -88,10 +91,10 @@ int    hEMAFast, hEMASlow, hRSI, hATR;
 int    hEMAFast_H1, hEMASlow_H1;
 double bufEMAFast[], bufEMASlow[], bufRSI[], bufATR[];
 double bufEMAFast_H1[], bufEMASlow_H1[];
-double initialBalance, dailyStartEquity;
+double initialBalance, dailyStartEquity, weeklyStartEquity;
 int    todayTradeCount;
-datetime lastDayReset;
-bool   dailyLimitHit;
+datetime lastDayReset, lastWeekReset;
+bool   dailyLimitHit, weeklyTargetHit, weeklyLossHit;
 int    totalTrades, wins, losses;
 
 // ML
@@ -177,11 +180,15 @@ int OnInit()
    ArraySetAsSeries(bufEMASlow_H1, true);
 
    // State
-   initialBalance  = accInfo.Balance();
-   dailyStartEquity= accInfo.Equity();
-   todayTradeCount = 0;
-   lastDayReset    = TimeCurrent();
-   dailyLimitHit   = false;
+   initialBalance   = accInfo.Balance();
+   dailyStartEquity = accInfo.Equity();
+   weeklyStartEquity= accInfo.Equity();
+   todayTradeCount  = 0;
+   lastDayReset     = TimeCurrent();
+   lastWeekReset    = TimeCurrent();
+   dailyLimitHit    = false;
+   weeklyTargetHit  = false;
+   weeklyLossHit    = false;
    totalTrades = 0; wins = 0; losses = 0;
 
    // ML
@@ -194,7 +201,9 @@ int OnInit()
    Print("Balance: $", DoubleToString(initialBalance, 2),
          " | Risk: ", InpRiskPercent, "%",
          " | SL: ", InpSLMultiplier, "xATR",
-         " | TP: ", InpTPMultiplier, "xSL",
+         " | TP: ", InpTPMultiplier, "xSL");
+   Print("Weekly Target: +", InpWeeklyTarget, "% | Weekly Max Loss: -", InpWeeklyMaxLoss, "%",
+         " | Careful: ", InpCarefulMode ? "ON" : "OFF",
          " | H1 Filter: ", InpUseH1Filter ? "ON" : "OFF",
          " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    return INIT_SUCCEEDED;
@@ -224,7 +233,7 @@ void OnTick()
    if(!licenseValid) return;
 
    // Daily reset
-   MqlDateTime dtNow, dtLast;
+   MqlDateTime dtNow, dtLast, dtWeek;
    TimeCurrent(dtNow);
    TimeToStruct(lastDayReset, dtLast);
    if(dtNow.day != dtLast.day)
@@ -234,6 +243,17 @@ void OnTick()
       dailyLimitHit    = false;
       lastDayReset     = TimeCurrent();
       Print("NEW DAY: Equity reset to $", DoubleToString(dailyStartEquity, 2));
+   }
+
+   // Weekly reset (Monday)
+   TimeToStruct(lastWeekReset, dtWeek);
+   if(dtNow.day_of_week == 1 && dtWeek.day_of_week != 1)
+   {
+      weeklyStartEquity = accInfo.Equity();
+      weeklyTargetHit   = false;
+      weeklyLossHit     = false;
+      lastWeekReset     = TimeCurrent();
+      Print("NEW WEEK: Equity reset to $", DoubleToString(weeklyStartEquity, 2), " | Target: +", InpWeeklyTarget, "%");
    }
 
    // Weekend protection
@@ -249,6 +269,36 @@ void OnTick()
    {
       CloseAll();
       Print("EQUITY PROTECT: CLOSED ALL. Equity=$", DoubleToString(equity, 2));
+      return;
+   }
+
+   // === WEEKLY PROFIT TARGET: STOP TRADING FOR THE WEEK ===
+   double weeklyPnL = equity - weeklyStartEquity;
+   double weeklyTargetAmt = weeklyStartEquity * InpWeeklyTarget / 100.0;
+   if(weeklyPnL >= weeklyTargetAmt)
+   {
+      if(!weeklyTargetHit)
+      {
+         Print("WEEKLY TARGET HIT! Profit=$", DoubleToString(weeklyPnL, 2),
+               " (", DoubleToString(weeklyPnL / weeklyStartEquity * 100, 1), "%)",
+               " — DONE FOR THE WEEK. Closing all trades.");
+         if(CountMyPositions() > 0) CloseAll();
+      }
+      weeklyTargetHit = true;
+      return;
+   }
+
+   // === WEEKLY MAX LOSS: STOP TRADING FOR THE WEEK ===
+   double weeklyMaxLossAmt = weeklyStartEquity * InpWeeklyMaxLoss / 100.0;
+   if(weeklyPnL < -weeklyMaxLossAmt)
+   {
+      if(!weeklyLossHit)
+      {
+         Print("WEEKLY LOSS LIMIT! Loss=$", DoubleToString(weeklyPnL, 2),
+               " — STOPPING FOR THE WEEK. Closing all trades.");
+         if(CountMyPositions() > 0) CloseAll();
+      }
+      weeklyLossHit = true;
       return;
    }
 
@@ -450,7 +500,37 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
 
    // Lot sizing
    double balance    = accInfo.Balance();
-   double riskAmount = balance * InpRiskPercent / 100.0;
+   double riskPct    = InpRiskPercent;
+
+   // === CAREFUL MODE: Scale down risk as weekly profit grows ===
+   if(InpCarefulMode)
+   {
+      double weekPnL = accInfo.Equity() - weeklyStartEquity;
+      double weekPct = weekPnL / weeklyStartEquity * 100.0;
+
+      if(weekPct > InpWeeklyTarget * 0.75)
+      {
+         // Over 75% of target reached — trade at 25% size to protect gains
+         riskPct = InpRiskPercent * 0.25;
+         Print("CAREFUL: Near weekly target (", DoubleToString(weekPct, 1), "%) — risk reduced to ", DoubleToString(riskPct, 2), "%");
+      }
+      else if(weekPct > InpWeeklyTarget * 0.5)
+      {
+         // Over 50% of target — trade at 50% size
+         riskPct = InpRiskPercent * 0.5;
+         Print("CAREFUL: Good weekly progress (", DoubleToString(weekPct, 1), "%) — risk reduced to ", DoubleToString(riskPct, 2), "%");
+      }
+
+      // Also reduce after daily losses
+      double dayPnL = accInfo.Equity() - dailyStartEquity;
+      if(dayPnL < -(dailyStartEquity * InpDailyLossLimit / 100.0 * 0.5))
+      {
+         riskPct = riskPct * 0.5;
+         Print("CAREFUL: Daily drawdown — risk further reduced to ", DoubleToString(riskPct, 2), "%");
+      }
+   }
+
+   double riskAmount = balance * riskPct / 100.0;
    double tickValue  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
    double tickSize   = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
    double minLot     = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
@@ -783,6 +863,8 @@ void UpdateDashboard(int signal)
    double equity  = accInfo.Equity();
    double balance = accInfo.Balance();
    double dailyPnL= equity - dailyStartEquity;
+   double weeklyPnL = equity - weeklyStartEquity;
+   double weeklyPct = weeklyStartEquity > 0 ? weeklyPnL / weeklyStartEquity * 100.0 : 0;
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
 
    string dir = bufEMAFast[1] > bufEMASlow[1] ? "BULLISH" : "BEARISH";
@@ -798,6 +880,7 @@ void UpdateDashboard(int signal)
    d += "========================================\n";
    d += StringFormat("Balance: $%.2f | Equity: $%.2f\n", balance, equity);
    d += StringFormat("Daily P/L: $%.2f\n", dailyPnL);
+   d += StringFormat("Weekly P/L: $%.2f (%.1f%% / %.0f%%)\n", weeklyPnL, weeklyPct, InpWeeklyTarget);
    d += "----------------------------------------\n";
    d += StringFormat("M5: %s | H1: %s | RSI: %.1f\n", dir, h1dir, bufRSI[1]);
    d += StringFormat("ATR: %.2f | Spread: %.0f\n", bufATR[1], (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
@@ -807,13 +890,13 @@ void UpdateDashboard(int signal)
    d += StringFormat("Trades: %d | Win: %.1f%%\n", totalTrades, wr);
    d += StringFormat("ML Patterns: %d | ML Win%%: %.1f%%\n", patternCount, mlWR);
    d += "----------------------------------------\n";
-   d += StringFormat("H1 Filter: %s | Break-Even: %s\n",
-        InpUseH1Filter ? "ON" : "OFF", InpBreakEven ? "ON" : "OFF");
-   d += StringFormat("Trailing: %s | Learning: %s\n",
-        InpTrailingStop ? "ON" : "OFF", InpLearnPatterns ? "ON" : "OFF");
+   d += StringFormat("Careful: %s | H1: %s | ML: %s\n",
+        InpCarefulMode ? "ON" : "OFF", InpUseH1Filter ? "ON" : "OFF", InpLearnPatterns ? "ON" : "OFF");
    d += "========================================\n";
 
-   if(dailyLimitHit) d += "!! DAILY LIMIT - ALL TRADES CLOSED !!\n";
+   if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT - RESTING <<\n";
+   if(weeklyLossHit) d += "!! WEEKLY LOSS LIMIT - STOPPED !!\n";
+   if(dailyLimitHit) d += "!! DAILY LIMIT - TRADES CLOSED !!\n";
 
    Comment(d);
 }
