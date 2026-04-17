@@ -28,7 +28,7 @@ export default function DownloadSection({ api }) {
             <div className="flex items-center gap-3 mb-5 text-[10px] font-mono text-white/20 tracking-wide">
               <span>XAUUSD_AI_Sniper_EA.mq5</span>
               <span className="text-white/10">|</span>
-              <span>~19 KB</span>
+              <span>~35 KB</span>
               <span className="text-white/10">|</span>
               <span>v3.1</span>
             </div>
