@@ -27,7 +27,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
             </div>
             <div className="flex items-center gap-2">
               <span className="font-heading font-semibold text-sm tracking-tight text-white group-hover:text-[#D4AF37] transition-colors">XauAI Sniper</span>
-              <span className="text-[10px] text-white/30 font-mono border border-white/10 px-1.5 py-0.5">v2.0</span>
+              <span className="text-[10px] text-white/30 font-mono border border-white/10 px-1.5 py-0.5">v3.1</span>
             </div>
           </div>
 

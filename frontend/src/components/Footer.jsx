@@ -9,7 +9,7 @@ export default function Footer() {
             <div className="w-6 h-6 bg-[#D4AF37] flex items-center justify-center">
               <span className="font-mono text-[8px] font-bold text-black tracking-wider">MZ</span>
             </div>
-            <span className="text-sm text-white/25">XauAI Sniper v2.0</span>
+            <span className="text-sm text-white/25">XauAI Sniper v3.1</span>
           </div>
           <div className="flex items-center gap-6">
             <a href="/admin" className="text-[10px] text-white/10 hover:text-white/30 font-mono transition-colors tracking-wider" data-testid="admin-link">ADMIN</a>

@@ -30,7 +30,7 @@ export default function DownloadSection({ api }) {
               <span className="text-white/10">|</span>
               <span>~19 KB</span>
               <span className="text-white/10">|</span>
-              <span>v3.0</span>
+              <span>v3.1</span>
             </div>
             <a href={`${api}/download/ea`} data-testid="download-ea-button"
               className="inline-flex items-center gap-2 px-6 py-3 bg-[#D4AF37] text-black font-semibold text-sm tracking-wide hover:bg-white transition-colors duration-200">
