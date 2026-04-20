@@ -647,6 +647,26 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
       Print("RISK CAP: Adjusted to ", DoubleToString(lots, 2), " lots (3% max risk)");
    }
 
+   // === MARGIN CHECK: Reduce lot if not enough free margin ===
+   double freeMargin = accInfo.FreeMargin();
+   double marginNeeded = 0;
+   if(OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
+   {
+      while(lots > minLot && marginNeeded > freeMargin * 0.5)
+      {
+         lots -= lotStep;
+         lots = MathMax(minLot, lots);
+         OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded);
+      }
+      lots = NormalizeDouble(lots, 2);
+      if(marginNeeded > freeMargin * 0.8)
+      {
+         Print("NO MARGIN: Free=$", DoubleToString(freeMargin, 2),
+               " Need=$", DoubleToString(marginNeeded, 2), " — skipping trade");
+         return;
+      }
+   }
+
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
          " Price=", DoubleToString(price, digits),
          " SL=", DoubleToString(sl, digits),
