@@ -58,7 +58,7 @@ input bool   InpLearnPatterns  = true;     // Learn from trade outcomes (local M
 input int    InpMaxPatterns    = 500;      // Max patterns to remember
 input bool   InpUseAI          = true;     // Use GPT-5.2 AI analysis before trades
 input bool   InpUseNewsFilter  = true;     // Avoid trading during high-impact news
-input string InpServerURL      = "";       // Server URL (leave blank for offline mode)
+input string InpServerURL      = "https://xauaisniper.com";  // Server URL for AI & News
 
 //+------------------------------------------------------------------+
 //| SAFETY                                                           |
