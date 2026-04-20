@@ -42,8 +42,8 @@ input int    InpEMAFast        = 50;       // Fast EMA (M5) - was 21, less whips
 input int    InpEMASlow        = 200;      // Slow EMA (M5) - was 50, stronger trend
 input int    InpRSIPeriod      = 14;       // RSI Period
 input int    InpATRPeriod      = 14;       // ATR Period
-input double InpSLMultiplier   = 1.5;      // SL = ATR x this
-input double InpTPMultiplier   = 1.2;      // TP = SL x this (Risk:Reward)
+input double InpSLMultiplier   = 1.0;      // SL = ATR x this
+input double InpTPMultiplier   = 1.0;      // TP = SL x this (Risk:Reward)
 input bool   InpUseH1Filter    = true;     // Use H1 trend filter
 input int    InpCooldownMins   = 10;       // Minutes to wait after a loss before next trade
 input double InpMinEMASep      = 0.05;     // Min EMA separation (%) - avoids choppy zones
