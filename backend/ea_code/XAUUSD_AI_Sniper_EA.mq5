@@ -28,8 +28,8 @@ input group "=== RISK ==="
 input double InpRiskPercent    = 1.0;      // Risk per trade (%)
 input double InpMaxLots        = 2.0;      // HARD max lots per trade (safety cap)
 input double InpDailyLossLimit = 3.0;      // Max daily loss (%) - CLOSES ALL TRADES
-input int    InpMaxOpenTrades  = 2;        // Max open trades
-input int    InpMaxTradesPerDay= 6;        // Max trades per day
+input int    InpMaxOpenTrades  = 3;        // Max open trades
+input int    InpMaxTradesPerDay= 15;       // Max trades per day
 input double InpWeeklyTarget   = 35.0;     // Weekly profit target (%) - stops when hit
 input double InpWeeklyMaxLoss  = 10.0;     // Weekly max loss (%) - stops when hit
 input bool   InpCarefulMode    = true;     // Careful mode: reduce risk as profit grows
@@ -45,7 +45,7 @@ input int    InpATRPeriod      = 14;       // ATR Period
 input double InpSLMultiplier   = 1.5;      // SL = ATR x this
 input double InpTPMultiplier   = 1.2;      // TP = SL x this (Risk:Reward)
 input bool   InpUseH1Filter    = true;     // Use H1 trend filter
-input int    InpCooldownMins   = 30;       // Minutes to wait after a loss before next trade
+input int    InpCooldownMins   = 10;       // Minutes to wait after a loss before next trade
 input double InpMinEMASep      = 0.05;     // Min EMA separation (%) - avoids choppy zones
 
 //+------------------------------------------------------------------+
@@ -55,7 +55,7 @@ input group "=== SMART ==="
 input bool   InpBreakEven      = true;     // Move SL to break-even at +1 ATR
 input bool   InpTrailingStop   = true;     // Trail stop in profit
 input bool   InpLearnPatterns  = true;     // Learn from trade outcomes (local ML)
-input int    InpMaxPatterns    = 200;      // Max patterns to remember
+input int    InpMaxPatterns    = 500;      // Max patterns to remember
 
 //+------------------------------------------------------------------+
 //| SAFETY                                                           |
@@ -445,17 +445,19 @@ void OnTick()
 
    // === ML PATTERN CHECK (adjusts lot size based on history) ===
    bool mlReduced = false;
+   bool mlBoosted = false;
    if(signal != 0 && InpLearnPatterns && patternCount >= 10)
    {
       double mlScore = GetMLScore(signal, rsi, (emaFast - emaSlow) / emaSlow * 10000, dtNow.hour, dtNow.day_of_week);
       if(mlScore < 0.3)
       {
-         Print("ML: Low win rate (", DoubleToString(mlScore * 100, 0), "%) — HALF lot size");
+         Print("ML: Low win rate (", DoubleToString(mlScore * 100, 0), "%) — MIN lot to learn");
          mlReduced = true;
       }
-      else if(mlScore > 0.65)
+      else if(mlScore > 0.6)
       {
-         Print("ML: High win rate (", DoubleToString(mlScore * 100, 0), "%) — confident setup");
+         Print("ML: High win rate (", DoubleToString(mlScore * 100, 0), "%) — full confidence");
+         mlBoosted = true;
       }
    }
 
@@ -491,7 +493,7 @@ void OnTick()
       lastSignalRSI = rsi;
       lastSignalEMADiff = (emaFast - emaSlow) / emaSlow * 10000;
       lastSignalATR = atr;
-      OpenTrade(signal, atr, reason, mlReduced);
+      OpenTrade(signal, atr, reason, mlReduced || false);
    }
    else
    {
@@ -584,11 +586,11 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
    lots = MathMax(minLot, MathMin(maxLot, lots));
    lots = NormalizeDouble(lots, 2);
 
-   // ML/streak reduction: halve lot size on weak setups
-   if(reduceSize)
+   // ML/streak reduction or boost
+   if(reduceSize || mlReduced)
    {
-      lots = MathMax(minLot, NormalizeDouble(lots * 0.5, 2));
-      Print("LOT REDUCED: ML/streak guard — using ", DoubleToString(lots, 2), " lots");
+      lots = MathMax(minLot, NormalizeDouble(minLot, 2)); // minimum lot to learn
+      Print("LOT MIN: Learning trade — using ", DoubleToString(lots, 2), " lots");
    }
 
    // === HARD LOT CAP — ABSOLUTE MAXIMUM regardless of any calculation ===
