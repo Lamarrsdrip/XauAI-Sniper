@@ -18,7 +18,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
   const priceUp = goldPrice?.change >= 0;
 
   return (
-    <header data-testid="main-header" className="sticky top-0 z-50 bg-[#050505]/80 backdrop-blur-xl border-b border-white/[0.06]">
+    <header data-testid="main-header" className="sticky top-0 z-50 bg-[#080A0F]/85 backdrop-blur-xl border-b border-white/[0.06]">
       <div className="max-w-7xl mx-auto px-4 md:px-8 lg:px-12">
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center gap-3 flex-shrink-0 cursor-pointer group" onClick={() => onNavigate("overview")}>

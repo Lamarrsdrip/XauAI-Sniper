@@ -66,7 +66,7 @@ export default function PurchaseSection({ api }) {
             </div>
           </div>
 
-          <div className="border border-white/[0.08] bg-[#0C0C0C] p-8 glow-card" data-testid="purchase-form">
+          <div className="border border-white/[0.08] bg-[#0E1118] p-8 glow-card" data-testid="purchase-form">
             <h3 className="font-heading text-lg font-medium mb-6 text-white">Complete Your Purchase</h3>
             <div className="space-y-4">
               <div>
@@ -81,7 +81,7 @@ export default function PurchaseSection({ api }) {
               </div>
               {error && <div className="text-[#FF3D00] text-sm font-mono" data-testid="purchase-error">{error}</div>}
               <button data-testid="purchase-btn" onClick={handlePurchase} disabled={loading}
-                className="w-full inline-flex items-center justify-center gap-2 px-6 py-4 bg-[#D4AF37] text-black font-bold text-sm tracking-wide hover:bg-white transition-colors duration-200 disabled:opacity-50">
+                className="w-full inline-flex items-center justify-center gap-2 px-6 py-4 bg-[#D4AF37] text-black font-bold text-sm tracking-wide hover:bg-[#F5D76E] transition-colors duration-200 disabled:opacity-50 btn-gold">
                 <ShoppingCart size={18} weight="bold" />
                 {loading ? "REDIRECTING..." : `PAY ${displayPrice} NOW`}
               </button>

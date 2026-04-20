@@ -15,7 +15,7 @@ export default function DownloadSection({ api }) {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-[1px] bg-white/[0.06] mb-10">
-          <div className="bg-[#0C0C0C] p-8" data-testid="download-ea-card">
+          <div className="bg-[#0E1118] p-8" data-testid="download-ea-card">
             <div className="flex items-start gap-4 mb-6">
               <div className="w-12 h-12 border border-[#D4AF37]/20 bg-[#D4AF37]/5 flex items-center justify-center flex-shrink-0">
                 <FileCode size={22} weight="duotone" className="text-[#D4AF37]" />
@@ -37,7 +37,7 @@ export default function DownloadSection({ api }) {
               <DownloadSimple size={16} weight="bold" /> DOWNLOAD .MQ5
             </a>
           </div>
-          <div className="bg-[#0C0C0C] p-8" data-testid="download-package-card">
+          <div className="bg-[#0E1118] p-8" data-testid="download-package-card">
             <div className="flex items-start gap-4 mb-6">
               <div className="w-12 h-12 border border-white/[0.08] bg-white/[0.03] flex items-center justify-center flex-shrink-0">
                 <Package size={22} weight="duotone" className="text-white/40" />

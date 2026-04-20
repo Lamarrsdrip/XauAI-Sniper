@@ -12,7 +12,7 @@ export default function HeroSection({ performance }) {
   return (
     <div className="relative overflow-hidden noise-overlay" data-testid="hero-section">
       <div className="absolute inset-0 z-0">
-        <div className="absolute inset-0 bg-gradient-to-br from-[#0a0a00] via-[#050505] to-[#0a0500]" />
+        <div className="absolute inset-0 bg-gradient-to-br from-[#0a0a00] via-[#080A0F] to-[#0a0500]" />
         <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-[#D4AF37]/[0.03] rounded-full blur-[150px]" />
         <div className="absolute bottom-0 left-1/4 w-[400px] h-[400px] bg-[#D4AF37]/[0.02] rounded-full blur-[120px]" />
       </div>
@@ -68,7 +68,7 @@ export default function HeroSection({ performance }) {
 
           {/* Right side — AI preview card */}
           <div className="hidden lg:block animate-fade-up delay-500">
-            <div className="border border-white/[0.06] bg-[#0C0C0C] p-6 relative overflow-hidden">
+            <div className="border border-white/[0.06] bg-[#0E1118] p-6 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-[#D4AF37]/[0.03] rounded-full blur-[60px]" />
               <div className="flex items-center gap-2 mb-4">
                 <Brain size={16} weight="duotone" className="text-[#D4AF37]" />
@@ -111,7 +111,7 @@ export default function HeroSection({ performance }) {
           {stats.map((s) => {
             const Icon = s.icon;
             return (
-              <div key={s.label} className="bg-[#050505] p-6 metric-card" data-testid={`hero-stat-${s.label.toLowerCase().replace(/\s/g, "-")}`}>
+              <div key={s.label} className="bg-[#080A0F] p-6 metric-card" data-testid={`hero-stat-${s.label.toLowerCase().replace(/\s/g, "-")}`}>
                 <div className="flex items-center gap-2 mb-3">
                   <Icon size={14} weight="duotone" className="text-[#D4AF37]" />
                   <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-white/30">{s.label}</span>

@@ -53,7 +53,7 @@ function MainDashboard() {
   };
 
   if (loading) return (
-    <div data-testid="loading-screen" className="min-h-screen bg-[#050505] flex items-center justify-center">
+    <div data-testid="loading-screen" className="min-h-screen bg-[#080A0F] flex items-center justify-center">
       <div className="text-center">
         <div className="font-mono text-[10px] text-white/30 mb-3 tracking-[0.3em]">INITIALIZING</div>
         <div className="w-48 h-[1px] bg-white/[0.06] overflow-hidden"><div className="h-full gold-shimmer w-full" /></div>
@@ -62,7 +62,7 @@ function MainDashboard() {
   );
 
   return (
-    <div className="min-h-screen bg-[#050505]" data-testid="app-root">
+    <div className="min-h-screen bg-[#080A0F]" data-testid="app-root">
       <Header activeSection={activeSection} onNavigate={scrollTo} goldPrice={goldPrice} />
       <main>
         <section id="overview"><HeroSection performance={performance} /></section>

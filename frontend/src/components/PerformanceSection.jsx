@@ -26,13 +26,13 @@ export default function PerformanceSection({ data }) {
 
         {/* Charts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-[1px] bg-white/[0.06] mb-10">
-          <div className="bg-[#050505] p-6" data-testid="equity-chart">
+          <div className="bg-[#080A0F] p-6" data-testid="equity-chart">
             <h4 className="text-[10px] font-mono font-bold tracking-[0.2em] text-white/30 mb-6">EQUITY CURVE</h4>
             <ResponsiveContainer width="100%" height={220}>
               <AreaChart data={data.equity_curve}>
                 <XAxis dataKey="day" tick={{ fontSize: 10, fontFamily: "JetBrains Mono", fill: "rgba(255,255,255,0.2)" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 10, fontFamily: "JetBrains Mono", fill: "rgba(255,255,255,0.2)" }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-                <Tooltip contentStyle={{ background: "#0C0C0C", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 0, fontFamily: "JetBrains Mono", fontSize: 11, color: "#fff" }} formatter={(v) => [`$${v.toLocaleString()}`, "Equity"]} />
+                <Tooltip contentStyle={{ background: "#0E1118", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 0, fontFamily: "JetBrains Mono", fontSize: 11, color: "#fff" }} formatter={(v) => [`$${v.toLocaleString()}`, "Equity"]} />
                 <Area type="monotone" dataKey="equity" stroke="#D4AF37" fill="url(#goldGradient)" strokeWidth={1.5} />
                 <defs>
                   <linearGradient id="goldGradient" x1="0" y1="0" x2="0" y2="1">
@@ -43,13 +43,13 @@ export default function PerformanceSection({ data }) {
               </AreaChart>
             </ResponsiveContainer>
           </div>
-          <div className="bg-[#050505] p-6" data-testid="weekly-chart">
+          <div className="bg-[#080A0F] p-6" data-testid="weekly-chart">
             <h4 className="text-[10px] font-mono font-bold tracking-[0.2em] text-white/30 mb-6">WEEKLY RETURNS</h4>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={data.weekly_data}>
                 <XAxis dataKey="week" tick={{ fontSize: 10, fontFamily: "JetBrains Mono", fill: "rgba(255,255,255,0.2)" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 10, fontFamily: "JetBrains Mono", fill: "rgba(255,255,255,0.2)" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
-                <Tooltip contentStyle={{ background: "#0C0C0C", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 0, fontFamily: "JetBrains Mono", fontSize: 11, color: "#fff" }} formatter={(v) => [`${v}%`, "Return"]} />
+                <Tooltip contentStyle={{ background: "#0E1118", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 0, fontFamily: "JetBrains Mono", fontSize: 11, color: "#fff" }} formatter={(v) => [`${v}%`, "Return"]} />
                 <Bar dataKey="return" radius={0}>
                   {data.weekly_data?.map((entry, index) => (
                     <Cell key={index} fill={entry.return >= 0 ? "#00C853" : "#FF3D00"} fillOpacity={0.8} />
@@ -61,7 +61,7 @@ export default function PerformanceSection({ data }) {
         </div>
 
         {/* Strategy Breakdown */}
-        <div className="border border-white/[0.06] bg-[#0C0C0C]" data-testid="strategy-breakdown">
+        <div className="border border-white/[0.06] bg-[#0E1118]" data-testid="strategy-breakdown">
           <div className="px-6 py-4 border-b border-white/[0.06]">
             <h4 className="text-[10px] font-mono font-bold tracking-[0.2em] text-white/30">STRATEGY PERFORMANCE</h4>
           </div>
@@ -100,7 +100,7 @@ export default function PerformanceSection({ data }) {
               { label: "ADAPT CYCLES", value: data.ai_features.adaptation_cycles },
               { label: "LEARN RATE", value: data.ai_features.learning_rate_current },
             ].map((m) => (
-              <div key={m.label} className="bg-[#050505] p-5">
+              <div key={m.label} className="bg-[#080A0F] p-5">
                 <div className="text-[9px] font-mono font-bold tracking-[0.15em] text-white/25 mb-2">{m.label}</div>
                 <div className="font-mono text-lg font-bold text-white">{m.value}</div>
               </div>
@@ -109,7 +109,7 @@ export default function PerformanceSection({ data }) {
         )}
 
         {/* Monthly Returns */}
-        <div className="mt-6 border border-white/[0.06] bg-[#0C0C0C]" data-testid="monthly-returns">
+        <div className="mt-6 border border-white/[0.06] bg-[#0E1118]" data-testid="monthly-returns">
           <div className="px-6 py-4 border-b border-white/[0.06]">
             <h4 className="text-[10px] font-mono font-bold tracking-[0.2em] text-white/30">MONTHLY PERFORMANCE</h4>
           </div>
@@ -143,7 +143,7 @@ export default function PerformanceSection({ data }) {
 
 function MetricCard({ label, value, positive, negative, testId }) {
   return (
-    <div className="bg-[#050505] p-6 metric-card" data-testid={testId}>
+    <div className="bg-[#080A0F] p-6 metric-card" data-testid={testId}>
       <div className="text-[10px] font-mono font-bold tracking-[0.2em] text-white/25 mb-3">{label}</div>
       <div className={`font-mono text-2xl font-bold ${positive ? "text-[#00C853]" : negative ? "text-[#FF3D00]" : "text-white"}`}>{value}</div>
     </div>

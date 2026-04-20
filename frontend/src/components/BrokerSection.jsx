@@ -15,7 +15,7 @@ export default function BrokerSection() {
           </div>
         </div>
 
-        <div className="border border-white/[0.06] bg-[#0C0C0C] overflow-hidden">
+        <div className="border border-white/[0.06] bg-[#0E1118] overflow-hidden">
           <div className="grid grid-cols-1 lg:grid-cols-5 items-stretch">
             <div className="lg:col-span-2 p-10 flex flex-col items-center justify-center text-center border-b lg:border-b-0 lg:border-r border-white/[0.06]">
               <div className="font-heading text-2xl font-semibold tracking-tight text-white mb-4">Trade.com</div>

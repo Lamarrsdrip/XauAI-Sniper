@@ -27,7 +27,7 @@ export default function HowItWorksSection({ data }) {
             const Icon = STEP_ICONS[i] || Lightbulb;
             const isExpanded = expandedStep === i;
             return (
-              <div key={step.id} className="border border-white/[0.06] bg-[#0C0C0C] overflow-hidden metric-card" data-testid={`how-step-${step.id}`}>
+              <div key={step.id} className="border border-white/[0.06] bg-[#0E1118] overflow-hidden metric-card" data-testid={`how-step-${step.id}`}>
                 <button className="w-full text-left px-6 py-5 flex items-start gap-4" onClick={() => setExpandedStep(isExpanded ? null : i)} data-testid={`how-step-btn-${step.id}`}>
                   <div className="w-10 h-10 border border-[#D4AF37]/20 bg-[#D4AF37]/5 flex items-center justify-center flex-shrink-0">
                     <Icon size={18} weight="duotone" className="text-[#D4AF37]" />
@@ -54,7 +54,7 @@ export default function HowItWorksSection({ data }) {
         </div>
 
         {/* Trading flow */}
-        <div className="border border-white/[0.06] bg-[#0C0C0C] p-8 mb-12" data-testid="flow-diagram">
+        <div className="border border-white/[0.06] bg-[#0E1118] p-8 mb-12" data-testid="flow-diagram">
           <h4 className="text-[10px] font-mono font-bold tracking-[0.2em] text-white/30 mb-6">TRADING FLOW</h4>
           <div className="flex flex-wrap items-center justify-center gap-2">
             {["SCAN", "CLASSIFY", "STRATEGY", "CONFIDENCE", "EXECUTE", "MANAGE", "LEARN", "REPEAT"].map((step, i) => (
@@ -73,7 +73,7 @@ export default function HowItWorksSection({ data }) {
             <h3 className="font-heading text-xl font-medium tracking-tight mb-6 text-white">FAQ</h3>
             <div className="space-y-1">
               {data.faq.map((item, i) => (
-                <div key={`faq-${item.q}`} className="border border-white/[0.06] bg-[#0C0C0C]" data-testid={`faq-${i}`}>
+                <div key={`faq-${item.q}`} className="border border-white/[0.06] bg-[#0E1118]" data-testid={`faq-${i}`}>
                   <button className="w-full text-left px-5 py-4 flex items-center justify-between" onClick={() => setExpandedFaq(expandedFaq === i ? null : i)} data-testid={`faq-btn-${i}`}>
                     <span className="text-sm font-medium text-white/70">{item.q}</span>
                     {expandedFaq === i ? <CaretUp size={14} className="text-white/30" /> : <CaretDown size={14} className="text-white/30" />}
