@@ -26,24 +26,27 @@ input string InpLicensePIN     = "";
 //+------------------------------------------------------------------+
 input group "=== RISK ==="
 input double InpRiskPercent    = 1.0;      // Risk per trade (%)
+input double InpMaxLots        = 2.0;      // HARD max lots per trade (safety cap)
 input double InpDailyLossLimit = 3.0;      // Max daily loss (%) - CLOSES ALL TRADES
-input int    InpMaxOpenTrades  = 3;        // Max open trades
-input int    InpMaxTradesPerDay= 8;        // Max trades per day
+input int    InpMaxOpenTrades  = 2;        // Max open trades
+input int    InpMaxTradesPerDay= 6;        // Max trades per day
 input double InpWeeklyTarget   = 35.0;     // Weekly profit target (%) - stops when hit
 input double InpWeeklyMaxLoss  = 10.0;     // Weekly max loss (%) - stops when hit
-input bool   InpCarefulMode    = true;     // Careful mode: reduce risk as profit grows to protect gains
+input bool   InpCarefulMode    = true;     // Careful mode: reduce risk as profit grows
 
 //+------------------------------------------------------------------+
 //| STRATEGY                                                         |
 //+------------------------------------------------------------------+
 input group "=== STRATEGY ==="
-input int    InpEMAFast        = 21;       // Fast EMA (M5)
-input int    InpEMASlow        = 50;       // Slow EMA (M5)
+input int    InpEMAFast        = 50;       // Fast EMA (M5) - was 21, less whipsaw
+input int    InpEMASlow        = 200;      // Slow EMA (M5) - was 50, stronger trend
 input int    InpRSIPeriod      = 14;       // RSI Period
 input int    InpATRPeriod      = 14;       // ATR Period
-input double InpSLMultiplier   = 1.0;      // SL = ATR x this
+input double InpSLMultiplier   = 1.5;      // SL = ATR x this
 input double InpTPMultiplier   = 1.2;      // TP = SL x this (Risk:Reward)
-input bool   InpUseH1Filter    = true;     // Use H1 trend filter (smarter entries)
+input bool   InpUseH1Filter    = true;     // Use H1 trend filter
+input int    InpCooldownMins   = 30;       // Minutes to wait after a loss before next trade
+input double InpMinEMASep      = 0.05;     // Min EMA separation (%) - avoids choppy zones
 
 //+------------------------------------------------------------------+
 //| SMART FEATURES                                                   |
@@ -96,6 +99,8 @@ int    todayTradeCount;
 datetime lastDayReset, lastWeekReset;
 bool   dailyLimitHit, weeklyTargetHit, weeklyLossHit;
 int    totalTrades, wins, losses;
+datetime lastTradeClose;
+int    lastTradeDir;  // prevents immediate reversal
 
 // ML
 TradePattern patterns[];
@@ -190,6 +195,8 @@ int OnInit()
    weeklyTargetHit  = false;
    weeklyLossHit    = false;
    totalTrades = 0; wins = 0; losses = 0;
+   lastTradeClose = 0;
+   lastTradeDir = 0;
 
    // ML
    ArrayResize(patterns, 0);
@@ -345,6 +352,15 @@ void OnTick()
       return;
    }
 
+   // === COOLDOWN: Wait after last trade close ===
+   if(lastTradeClose > 0 && TimeCurrent() - lastTradeClose < InpCooldownMins * 60)
+   {
+      int remaining = (int)(InpCooldownMins * 60 - (TimeCurrent() - lastTradeClose)) / 60;
+      Print("COOLDOWN: Waiting ", remaining, " more minutes before next trade");
+      UpdateDashboard(0);
+      return;
+   }
+
    // === READ MARKET ===
    double emaFast = bufEMAFast[1];
    double emaSlow = bufEMASlow[1];
@@ -356,6 +372,15 @@ void OnTick()
    double h1Slow  = bufEMASlow_H1[1];
    bool   h1Bull  = h1Fast > h1Slow;
    bool   h1Bear  = h1Fast < h1Slow;
+
+   // === ANTI-WHIPSAW: Require minimum EMA separation ===
+   double emaSepPct = MathAbs(emaFast - emaSlow) / emaSlow * 100.0;
+   if(emaSepPct < InpMinEMASep)
+   {
+      Print("SCAN: EMAs too close (", DoubleToString(emaSepPct, 3), "%) — choppy zone, skipping");
+      UpdateDashboard(0);
+      return;
+   }
 
    int signal = 0;
    string reason = "";
@@ -391,8 +416,7 @@ void OnTick()
    // === SMART FILTER: H1 Trend (reduces bad trades, doesn't block good ones) ===
    if(signal != 0 && InpUseH1Filter)
    {
-      // Only filter trend trades, not RSI extremes
-      if(rsi > 30 && rsi < 70) // trend trade, not RSI extreme
+      if(rsi > 30 && rsi < 70)
       {
          if(signal == 1 && h1Bear)
          {
@@ -404,6 +428,18 @@ void OnTick()
             Print("H1 FILTER: Skipping SELL — H1 is bullish");
             signal = 0;
          }
+      }
+   }
+
+   // === ANTI-REVERSAL: Don't flip direction right after last trade ===
+   if(signal != 0 && lastTradeDir != 0 && signal != lastTradeDir)
+   {
+      if(lastTradeClose > 0 && TimeCurrent() - lastTradeClose < InpCooldownMins * 2 * 60)
+      {
+         Print("ANTI-REVERSAL: Blocked ", signal > 0 ? "BUY" : "SELL",
+               " — last trade was ", lastTradeDir > 0 ? "BUY" : "SELL",
+               ". Wait for confirmation.");
+         signal = 0;
       }
    }
 
@@ -555,13 +591,22 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
       Print("LOT REDUCED: ML/streak guard — using ", DoubleToString(lots, 2), " lots");
    }
 
-   // Safety cap: never risk more than 2% even if calculation is wrong
-   double maxRiskLots = (balance * 0.02) / (slDist / tickSize * tickValue);
-   maxRiskLots = MathFloor(maxRiskLots / lotStep) * lotStep;
-   if(lots > maxRiskLots)
+   // === HARD LOT CAP — ABSOLUTE MAXIMUM regardless of any calculation ===
+   if(lots > InpMaxLots)
    {
-      Print("LOT CAP: Reduced from ", DoubleToString(lots, 2), " to ", DoubleToString(maxRiskLots, 2));
-      lots = maxRiskLots;
+      Print("HARD CAP: ", DoubleToString(lots, 2), " -> ", DoubleToString(InpMaxLots, 2), " lots (max limit)");
+      lots = InpMaxLots;
+   }
+
+   // Safety: verify dollar risk makes sense
+   double estimatedRisk = lots * slDist / tickSize * tickValue;
+   if(estimatedRisk > balance * 0.03) // never risk more than 3% of balance
+   {
+      lots = (balance * 0.02) / (slDist / tickSize * tickValue);
+      lots = MathFloor(lots / lotStep) * lotStep;
+      lots = MathMax(minLot, lots);
+      lots = MathMin(lots, InpMaxLots);
+      Print("RISK CAP: Adjusted to ", DoubleToString(lots, 2), " lots (3% max risk)");
    }
 
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
@@ -581,6 +626,7 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
    {
       Print("TRADE OPENED: ", signal > 0 ? "BUY" : "SELL", " ", DoubleToString(lots, 2), " lots");
       todayTradeCount++;
+      lastTradeDir = signal;
    }
    else
    {
@@ -819,6 +865,9 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
             Print("TRADE CLOSED: ", isWin ? "WIN" : "LOSS",
                   " $", DoubleToString(profit, 2),
                   " | Total: ", totalTrades, " W:", wins, " L:", losses);
+
+            // Set cooldown timer (longer after a loss)
+            lastTradeClose = TimeCurrent();
 
             // ML: record pattern
             RecordPattern(isWin, profit);
