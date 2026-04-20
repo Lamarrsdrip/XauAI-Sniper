@@ -26,7 +26,7 @@ input string InpLicensePIN     = "";
 //+------------------------------------------------------------------+
 input group "=== RISK ==="
 input double InpRiskPercent    = 1.0;      // Risk per trade (%)
-input double InpMaxLots        = 2.0;      // HARD max lots per trade (safety cap)
+input double InpMaxLots        = 10.0;     // HARD max lots per trade (safety cap)
 input double InpDailyLossLimit = 3.0;      // Max daily loss (%) - CLOSES ALL TRADES
 input int    InpMaxOpenTrades  = 3;        // Max open trades
 input int    InpMaxTradesPerDay= 15;       // Max trades per day
