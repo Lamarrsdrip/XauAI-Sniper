@@ -387,6 +387,8 @@ void OnTick()
 
    int signal = 0;
    string reason = "";
+   bool mlReduced = false;
+   bool mlBoosted = false;
    double bodySize = MathAbs(close1 - open1);
    double candleRange = iHigh(Symbol(), PERIOD_M5, 1) - iLow(Symbol(), PERIOD_M5, 1);
    bool strongCandle = candleRange > 0 && (bodySize / candleRange) > 0.4; // body > 40% of range
@@ -447,8 +449,6 @@ void OnTick()
    }
 
    // === ML PATTERN CHECK (adjusts lot size based on history) ===
-   bool mlReduced = false;
-   bool mlBoosted = false;
    if(signal != 0 && InpLearnPatterns && patternCount >= 10)
    {
       double mlScore = GetMLScore(signal, rsi, (emaFast - emaSlow) / emaSlow * 10000, dtNow.hour, dtNow.day_of_week);
