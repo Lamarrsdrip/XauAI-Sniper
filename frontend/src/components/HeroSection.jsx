@@ -10,123 +10,86 @@ export default function HeroSection({ performance }) {
   ];
 
   return (
-    <div className="relative overflow-hidden noise-overlay" data-testid="hero-section">
-      <div className="absolute inset-0 z-0">
-        <div className="absolute inset-0 bg-gradient-to-br from-[#0a0a00] via-[#080A0F] to-[#0a0500]" />
-        <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-[#D4AF37]/[0.03] rounded-full blur-[150px]" />
-        <div className="absolute bottom-0 left-1/4 w-[400px] h-[400px] bg-[#D4AF37]/[0.02] rounded-full blur-[120px]" />
+    <div className="relative overflow-hidden bg-[#F8F9FA]" data-testid="hero-section">
+      <div className="absolute inset-0 opacity-[0.04]">
+        <img src="https://static.prod-images.emergentagent.com/jobs/d4562f89-eddf-4449-aed8-4236c30b6dde/images/9fc66b22efe10478c08b0f89c90815192ec833fb8b7bdcad47afaafe5168470a.png" alt="" className="w-full h-full object-cover" />
       </div>
 
-      <div className="relative z-10 max-w-7xl mx-auto px-6 md:px-8 lg:px-12 pt-24 pb-20">
+      <div className="relative z-10 max-w-7xl mx-auto px-6 md:px-12 pt-20 pb-24">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
           <div>
             <div className="flex items-center gap-3 mb-8 animate-fade-up">
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 border border-white/[0.08] bg-white/[0.03]">
-                <div className="w-1.5 h-1.5 bg-[#D4AF37]" />
-                <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-white/50">MT5 EXPERT ADVISOR</span>
-              </div>
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#D4AF37]/30 bg-[#D4AF37]/[0.08]">
-                <Brain size={12} weight="fill" className="text-[#D4AF37]" />
-                <span className="text-[10px] font-mono font-bold tracking-[0.15em] text-[#D4AF37]">POWERED BY GPT-5.2</span>
-              </div>
+              <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-gray-400 bg-white border border-gray-200 px-3 py-1.5 rounded-full">MT5 EXPERT ADVISOR</span>
+              <span className="text-[10px] font-mono font-bold tracking-[0.12em] text-[#C5A059] bg-[#C5A059]/10 border border-[#C5A059]/20 px-3 py-1.5 rounded-full flex items-center gap-1.5">
+                <Brain size={12} weight="fill" /> POWERED BY GPT-5.2
+              </span>
             </div>
 
-            <h1 className="font-heading text-5xl sm:text-6xl lg:text-7xl font-medium tracking-tighter leading-[0.95] mb-6 animate-fade-up delay-100" data-testid="hero-title">
-              XauAI
-              <br />
-              <span className="gold-gradient-text">Sniper</span>
-              <span className="text-white/15 text-2xl ml-3 font-mono">v3.1</span>
+            <h1 className="font-heading text-5xl sm:text-6xl lg:text-7xl font-semibold tracking-tight leading-[1] mb-6 text-[#111] animate-fade-up delay-100" data-testid="hero-title">
+              XauAI<br /><span className="gold-gradient-text">Sniper</span>
             </h1>
 
-            <p className="text-base lg:text-lg leading-relaxed text-white/50 max-w-xl mb-6 animate-fade-up delay-200">
-              The first Gold trading bot with <span className="text-white/80 font-medium">real AI analysis</span>.
-              GPT-5.2 evaluates every trade before execution. Machine learning
-              adapts to market patterns. News avoidance protects during volatility.
+            <p className="text-base lg:text-lg leading-relaxed text-gray-500 max-w-xl mb-8 animate-fade-up delay-200">
+              The first Gold trading bot with <span className="text-[#111] font-semibold">real AI analysis</span>.
+              GPT-5.2 evaluates every trade. Machine learning adapts. News filter protects.
             </p>
 
-            <div className="flex flex-wrap gap-x-6 gap-y-2 mb-10 animate-fade-up delay-300">
-              {["GPT-5.2 AI Brain", "Live News Filter", "ML Pattern Memory", "Auto Risk Control"].map((f) => (
-                <div key={f} className="flex items-center gap-1.5">
-                  <div className="w-1 h-1 bg-[#D4AF37]" />
-                  <span className="text-xs text-white/40 font-mono tracking-wide">{f}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-4 animate-fade-up delay-400">
+            <div className="flex items-center gap-4 animate-fade-up delay-300">
               <a href="#purchase" data-testid="hero-download-btn"
-                className="inline-flex items-center gap-2 px-7 py-3.5 bg-[#D4AF37] text-black font-semibold text-sm tracking-wide hover:bg-white transition-colors duration-200">
-                <ArrowDown size={16} weight="bold" />
-                GET STARTED
+                className="inline-flex items-center gap-2 bg-[#111] text-white rounded-full px-8 py-4 font-semibold text-sm tracking-wide hover:bg-gray-800 transition-colors">
+                <ArrowDown size={16} weight="bold" /> GET STARTED
               </a>
               <a href="#how-it-works" data-testid="hero-explore-btn"
-                className="inline-flex items-center gap-2 px-7 py-3.5 border border-white/20 text-white/80 font-medium text-sm tracking-wide hover:border-[#D4AF37] hover:text-[#D4AF37] transition-all duration-200">
+                className="inline-flex items-center gap-2 bg-white text-[#111] border border-gray-200 rounded-full px-8 py-4 font-medium text-sm tracking-wide hover:border-gray-400 hover:bg-gray-50 transition-all">
                 EXPLORE SYSTEM
               </a>
             </div>
           </div>
 
-          {/* Right side — AI preview card */}
-          <div className="hidden lg:block animate-fade-up delay-500">
-            <div className="border border-white/[0.06] bg-[#0E1118] p-6 relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-[#D4AF37]/[0.03] rounded-full blur-[60px]" />
-              <div className="flex items-center gap-2 mb-4">
-                <Brain size={16} weight="duotone" className="text-[#D4AF37]" />
-                <span className="text-[10px] font-mono font-bold tracking-[0.2em] text-[#D4AF37]">AI ANALYSIS PREVIEW</span>
+          <div className="hidden lg:block animate-fade-up delay-400">
+            <div className="bg-white border border-gray-200 rounded-3xl p-8 shadow-sm card-hover">
+              <div className="flex items-center gap-2 mb-6">
+                <Brain size={18} weight="duotone" className="text-[#C5A059]" />
+                <span className="text-[11px] font-mono font-bold tracking-[0.15em] text-gray-400">AI ANALYSIS PREVIEW</span>
               </div>
-              <div className="space-y-3 font-mono text-xs">
-                <div className="flex items-center justify-between py-2 border-b border-white/[0.04]">
-                  <span className="text-white/30">Market</span>
-                  <span className="text-white/70">XAUUSD — BULLISH</span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b border-white/[0.04]">
-                  <span className="text-white/30">EMA 50/200</span>
-                  <span className="text-[#00C853]">Aligned UP</span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b border-white/[0.04]">
-                  <span className="text-white/30">RSI(14)</span>
-                  <span className="text-white/70">54.2</span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b border-white/[0.04]">
-                  <span className="text-white/30">News Check</span>
-                  <span className="text-[#00C853]">Clear</span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b border-white/[0.04]">
-                  <span className="text-white/30">GPT-5.2</span>
-                  <span className="text-[#D4AF37] font-bold">BUY — 78% confidence</span>
-                </div>
-                <div className="mt-3 p-3 bg-[#D4AF37]/[0.05] border border-[#D4AF37]/20">
-                  <p className="text-[11px] text-white/50 italic leading-relaxed">
-                    "Strong bullish momentum with H1 trend confirmation. RSI healthy, no overbought risk. News calendar clear. Recommend BUY with default risk."
-                  </p>
-                  <p className="text-[10px] text-[#D4AF37] mt-2 font-bold">— GPT-5.2 AI Engine</p>
-                </div>
+              <div className="space-y-0 font-mono text-xs divide-y divide-gray-100">
+                {[["Market", "XAUUSD — BULLISH", "text-[#111]"],
+                  ["EMA 50/200", "Aligned UP", "text-emerald-600"],
+                  ["RSI(14)", "54.2", "text-[#111]"],
+                  ["News Check", "Clear", "text-emerald-600"],
+                  ["GPT-5.2", "BUY — 78% confidence", "text-[#C5A059] font-bold"],
+                ].map(([k, v, c]) => (
+                  <div key={k} className="flex items-center justify-between py-3">
+                    <span className="text-gray-400">{k}</span>
+                    <span className={c}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 p-4 bg-[#F8F9FA] rounded-2xl border border-gray-100">
+                <p className="text-[11px] text-gray-500 italic leading-relaxed">
+                  "Strong bullish momentum with H1 trend confirmation. RSI healthy, no overbought risk. Recommend BUY with default risk."
+                </p>
+                <p className="text-[10px] text-[#C5A059] mt-2 font-mono font-bold">— GPT-5.2 AI Engine</p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Stats bento */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-[1px] bg-white/[0.06] mt-20 animate-fade-up delay-600" data-testid="hero-stats">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-20 animate-fade-up delay-500" data-testid="hero-stats">
           {stats.map((s) => {
             const Icon = s.icon;
             return (
-              <div key={s.label} className="bg-[#080A0F] p-6 metric-card" data-testid={`hero-stat-${s.label.toLowerCase().replace(/\s/g, "-")}`}>
+              <div key={s.label} className="bg-white border border-gray-200 rounded-2xl p-6 card-hover" data-testid={`hero-stat-${s.label.toLowerCase().replace(/\s/g, "-")}`}>
                 <div className="flex items-center gap-2 mb-3">
-                  <Icon size={14} weight="duotone" className="text-[#D4AF37]" />
-                  <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-white/30">{s.label}</span>
+                  <Icon size={14} weight="duotone" className="text-[#C5A059]" />
+                  <span className="text-[10px] font-mono font-medium tracking-[0.15em] text-gray-400">{s.label}</span>
                 </div>
-                <div className="font-mono text-2xl font-bold text-white">{s.value}</div>
+                <div className="font-mono text-2xl font-bold text-[#111]">{s.value}</div>
               </div>
             );
           })}
         </div>
-
-        <div className="mt-4 px-1 animate-fade-up delay-700">
-          <p className="text-[10px] text-white/20 font-mono tracking-wide">
-            * Sample backtest metrics. Past performance does not guarantee future results.
-          </p>
-        </div>
+        <p className="text-[10px] text-gray-300 font-mono tracking-wide mt-4 px-1">* Sample backtest metrics. Past performance does not guarantee future results.</p>
       </div>
     </div>
   );

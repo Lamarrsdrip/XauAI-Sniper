@@ -53,16 +53,16 @@ function MainDashboard() {
   };
 
   if (loading) return (
-    <div data-testid="loading-screen" className="min-h-screen bg-[#080A0F] flex items-center justify-center">
+    <div data-testid="loading-screen" className="min-h-screen bg-white flex items-center justify-center">
       <div className="text-center">
-        <div className="font-mono text-[10px] text-white/30 mb-3 tracking-[0.3em]">INITIALIZING</div>
-        <div className="w-48 h-[1px] bg-white/[0.06] overflow-hidden"><div className="h-full gold-shimmer w-full" /></div>
+        <div className="font-mono text-[10px] text-gray-400 mb-3 tracking-[0.3em]">INITIALIZING</div>
+        <div className="w-48 h-[2px] bg-gray-100 overflow-hidden rounded-full"><div className="h-full bg-[#C5A059] w-full rounded-full" style={{animation:'pulse 1.5s infinite'}} /></div>
       </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-[#080A0F]" data-testid="app-root">
+    <div className="min-h-screen bg-white" data-testid="app-root">
       <Header activeSection={activeSection} onNavigate={scrollTo} goldPrice={goldPrice} />
       <main>
         <section id="overview"><HeroSection performance={performance} /></section>
