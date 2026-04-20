@@ -22,7 +22,7 @@ export default function DownloadSection({ api }) {
               </div>
               <div>
                 <h3 className="font-heading text-lg font-medium text-white">Expert Advisor (.mq5)</h3>
-                <p className="text-sm text-white/35 mt-1">Complete MQL5 source code. Ready to compile.</p>
+                <p className="text-sm text-white/35 mt-1">v3.1 Smart — GPT-5.2 AI + ML + News Filter. Ready to compile.</p>
               </div>
             </div>
             <div className="flex items-center gap-3 mb-5 text-[10px] font-mono text-white/20 tracking-wide">

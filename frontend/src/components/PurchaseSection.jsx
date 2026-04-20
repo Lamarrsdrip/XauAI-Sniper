@@ -47,9 +47,12 @@ export default function PurchaseSection({ api }) {
               Card, bank transfer, or USSD accepted.
             </p>
             <div className="space-y-3 mb-10">
-              {["Unique license PIN generated instantly", "Full AI Sniper EA v2.0 with ML learning",
-                "All strategies: Trend, Range, Breakout", "Lifetime license \u2014 no monthly fees",
-                "Free updates forever", "Global AI that improves with every trade"
+              {["GPT-5.2 AI analyzes every trade before execution",
+                "Live news avoidance — skips NFP, CPI, FOMC events",
+                "Machine learning improves with every trade",
+                "Auto break-even + trailing stop protection",
+                "Weekly profit target — rests when goal is hit",
+                "Lifetime license — free updates forever"
               ].map((f) => (
                 <div key={f} className="flex items-center gap-3">
                   <Check size={14} weight="bold" className="text-[#D4AF37] flex-shrink-0" />
