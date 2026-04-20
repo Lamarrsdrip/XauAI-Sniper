@@ -623,7 +623,7 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
    lots = NormalizeDouble(lots, 2);
 
    // ML/streak reduction or boost
-   if(reduceSize || mlReduced)
+   if(reduceSize)
    {
       lots = MathMax(minLot, NormalizeDouble(minLot, 2)); // minimum lot to learn
       Print("LOT MIN: Learning trade — using ", DoubleToString(lots, 2), " lots");
