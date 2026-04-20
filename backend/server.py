@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict
 from datetime import datetime, timezone, timedelta
+from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -25,6 +26,7 @@ api_router = APIRouter(prefix="/api")
 JWT_SECRET = os.environ.get('JWT_SECRET', secrets.token_hex(32))
 JWT_ALGORITHM = "HS256"
 PAYSTACK_BASE_URL = "https://api.paystack.co"
+LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -1106,6 +1108,102 @@ async def startup():
     creds_path = Path("/app/memory/test_credentials.md")
     creds_path.parent.mkdir(exist_ok=True)
     creds_path.write_text(f"# Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n## Endpoints\n- Login: POST /api/auth/login\n- Admin Portal: /admin\n")
+
+########################################
+# AI MARKET ANALYSIS (GPT-5.2)
+########################################
+class AIAnalysisRequest(BaseModel):
+    symbol: str = "XAUUSD"
+    ema_fast: float = 0
+    ema_slow: float = 0
+    rsi: float = 0
+    atr: float = 0
+    price: float = 0
+    h1_trend: str = "FLAT"
+    spread: float = 0
+    recent_candles: str = ""
+
+@api_router.post("/ai/analyze")
+async def ai_analyze_market(req: AIAnalysisRequest):
+    try:
+        if not LLM_KEY:
+            return {"action": "SKIP", "confidence": 50, "reason": "AI key not configured"}
+
+        chat = LlmChat(
+            api_key=LLM_KEY,
+            session_id=f"trade-{uuid.uuid4().hex[:8]}",
+            system_message="""You are an expert XAUUSD (Gold) trader AI. You analyze technical data and give ONE clear trading decision. You MUST respond in EXACTLY this JSON format, nothing else:
+{"action":"BUY","confidence":75,"reason":"short reason","sl_adjust":0,"tp_adjust":0}
+
+Rules:
+- action: BUY, SELL, or SKIP (only these 3)
+- confidence: 0-100 (how sure you are)
+- reason: max 50 words explaining why
+- sl_adjust: -1 to 1 (negative=tighter SL, positive=wider SL, 0=default)
+- tp_adjust: -1 to 1 (negative=tighter TP, positive=wider TP, 0=default)
+
+Be decisive. If unsure, SKIP. Consider trend, momentum, RSI extremes, and volatility."""
+        ).with_model("openai", "gpt-5.2")
+
+        prompt = f"""XAUUSD Market Data RIGHT NOW:
+- Price: {req.price}
+- EMA Fast(50): {req.ema_fast} | EMA Slow(200): {req.ema_slow}
+- Trend: {"BULLISH" if req.ema_fast > req.ema_slow else "BEARISH"} (separation: {abs(req.ema_fast - req.ema_slow):.2f})
+- RSI(14): {req.rsi}
+- ATR(14): {req.atr}
+- H1 Trend: {req.h1_trend}
+- Spread: {req.spread} points
+- Recent candles: {req.recent_candles}
+
+What is your trade decision? Respond ONLY with the JSON."""
+
+        msg = UserMessage(text=prompt)
+        response = await chat.send_message(msg)
+
+        import json
+        try:
+            result = json.loads(response.strip())
+            result["action"] = result.get("action", "SKIP").upper()
+            if result["action"] not in ["BUY", "SELL", "SKIP"]:
+                result["action"] = "SKIP"
+            result["confidence"] = max(0, min(100, int(result.get("confidence", 50))))
+            await db.ai_analyses.insert_one({"symbol": req.symbol, "request": req.dict(), "response": result, "created_at": datetime.now(timezone.utc).isoformat()})
+            return result
+        except json.JSONDecodeError:
+            if "BUY" in response.upper(): return {"action": "BUY", "confidence": 60, "reason": response[:100]}
+            elif "SELL" in response.upper(): return {"action": "SELL", "confidence": 60, "reason": response[:100]}
+            return {"action": "SKIP", "confidence": 50, "reason": "AI response unclear"}
+    except Exception as e:
+        logger.error(f"AI analysis error: {e}")
+        return {"action": "SKIP", "confidence": 50, "reason": f"AI error: {str(e)[:50]}"}
+
+########################################
+# NEWS AVOIDANCE
+########################################
+@api_router.get("/news/check")
+async def check_news_events():
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            r = await c.get("https://nfs.faireconomy.media/ff_calendar_thisweek.json")
+            if r.status_code != 200:
+                return {"safe_to_trade": True, "reason": "Calendar unavailable"}
+            events = r.json()
+            now = datetime.now(timezone.utc)
+            high_impact_soon = []
+            for ev in events:
+                if ev.get("impact", "").lower() not in ["high", "medium"]: continue
+                try:
+                    ev_time = datetime.fromisoformat(ev["date"].replace("Z", "+00:00"))
+                    diff_mins = (ev_time - now).total_seconds() / 60
+                    if -15 <= diff_mins <= 30:
+                        high_impact_soon.append({"title": ev.get("title", "Unknown"), "impact": ev.get("impact", ""), "currency": ev.get("country", ""), "minutes": int(diff_mins)})
+                except: continue
+            if high_impact_soon:
+                return {"safe_to_trade": False, "reason": f"High impact: {high_impact_soon[0]['title']} in {high_impact_soon[0]['minutes']}min", "events": high_impact_soon}
+            return {"safe_to_trade": True, "reason": "No high-impact events nearby"}
+    except Exception as e:
+        logger.error(f"News check error: {e}")
+        return {"safe_to_trade": True, "reason": "Calendar check failed"}
 
 app.include_router(api_router)
 

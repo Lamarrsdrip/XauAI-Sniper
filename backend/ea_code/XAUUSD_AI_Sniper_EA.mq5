@@ -56,6 +56,9 @@ input bool   InpBreakEven      = true;     // Move SL to break-even at +1 ATR
 input bool   InpTrailingStop   = true;     // Trail stop in profit
 input bool   InpLearnPatterns  = true;     // Learn from trade outcomes (local ML)
 input int    InpMaxPatterns    = 500;      // Max patterns to remember
+input bool   InpUseAI          = true;     // Use GPT-5.2 AI analysis before trades
+input bool   InpUseNewsFilter  = true;     // Avoid trading during high-impact news
+input string InpServerURL      = "";       // Server URL (leave blank for offline mode)
 
 //+------------------------------------------------------------------+
 //| SAFETY                                                           |
@@ -484,6 +487,39 @@ void OnTick()
       signal = 0;
    }
 
+   // === NEWS CHECK: Skip during high-impact events ===
+   if(signal != 0 && !IsNewsSafe())
+   {
+      signal = 0;
+   }
+
+   // === GPT-5.2 AI ANALYSIS: Get second opinion ===
+   if(signal != 0 && InpUseAI && StringLen(InpServerURL) >= 10)
+   {
+      string h1DirStr = h1Bull ? "BULL" : h1Bear ? "BEAR" : "FLAT";
+      int aiOpinion = GetAIAnalysis(emaFast, emaSlow, rsi, atr,
+                                      iClose(Symbol(), PERIOD_M5, 0), h1DirStr, spread);
+
+      if(aiOpinion == 0)
+      {
+         // AI says SKIP — still trade but at minimum lot (learning)
+         Print("AI: SKIP recommendation — trading at minimum lot to learn");
+         mlReduced = true;
+      }
+      else if(aiOpinion != signal)
+      {
+         // AI disagrees — trade at minimum lot
+         Print("AI: Disagrees (AI=", aiOpinion > 0 ? "BUY" : "SELL",
+               " vs Signal=", signal > 0 ? "BUY" : "SELL", ") — minimum lot");
+         mlReduced = true;
+      }
+      else
+      {
+         // AI agrees — full confidence
+         Print("AI: Confirms ", signal > 0 ? "BUY" : "SELL", " — full lot");
+      }
+   }
+
    // === EXECUTE OR LOG ===
    if(signal != 0)
    {
@@ -907,6 +943,94 @@ void CloseAll()
 }
 
 //+------------------------------------------------------------------+
+//| AI ANALYSIS: Call GPT-5.2 for trade decision                     |
+//+------------------------------------------------------------------+
+int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price, string h1Dir, double spread)
+{
+   if(!InpUseAI || StringLen(InpServerURL) < 10) return 0; // 0 = no opinion
+
+   string url = InpServerURL + "/api/ai/analyze";
+   string headers = "Content-Type: application/json\r\n";
+   string body = StringFormat(
+      "{\"price\":%.2f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"rsi\":%.1f,\"atr\":%.2f,\"h1_trend\":\"%s\",\"spread\":%.0f}",
+      price, emaF, emaS, rsi, atr, h1Dir, spread);
+
+   char postData[];
+   char result[];
+   string resultHeaders;
+   StringToCharArray(body, postData, 0, StringLen(body));
+
+   int timeout = 10000; // 10 seconds
+   int res = WebRequest("POST", url, headers, timeout, postData, result, resultHeaders);
+
+   if(res != 200)
+   {
+      Print("AI: Server returned ", res, " — proceeding without AI");
+      return 0;
+   }
+
+   string response = CharArrayToString(result);
+
+   // Parse action from JSON response
+   int actionIdx = StringFind(response, "\"action\"");
+   if(actionIdx < 0) return 0;
+
+   if(StringFind(response, "\"BUY\"", actionIdx) >= 0 || StringFind(response, "\"buy\"", actionIdx) >= 0)
+   {
+      Print("AI SAYS: BUY — ", response);
+      return 1;
+   }
+   else if(StringFind(response, "\"SELL\"", actionIdx) >= 0 || StringFind(response, "\"sell\"", actionIdx) >= 0)
+   {
+      Print("AI SAYS: SELL — ", response);
+      return -1;
+   }
+   else
+   {
+      Print("AI SAYS: SKIP — ", response);
+      return 0;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| NEWS CHECK: Avoid high-impact events                             |
+//+------------------------------------------------------------------+
+bool IsNewsSafe()
+{
+   if(!InpUseNewsFilter || StringLen(InpServerURL) < 10) return true;
+
+   string url = InpServerURL + "/api/news/check";
+   char postData[];
+   char result[];
+   string resultHeaders;
+
+   int res = WebRequest("GET", url, "", 5000, postData, result, resultHeaders);
+   if(res != 200)
+   {
+      Print("NEWS: Check failed (", res, ") — proceeding");
+      return true;
+   }
+
+   string response = CharArrayToString(result);
+
+   if(StringFind(response, "\"safe_to_trade\":false") >= 0 || StringFind(response, "\"safe_to_trade\": false") >= 0)
+   {
+      // Extract reason
+      int reasonIdx = StringFind(response, "\"reason\"");
+      if(reasonIdx >= 0)
+      {
+         string reasonPart = StringSubstr(response, reasonIdx, 200);
+         Print("NEWS ALERT: ", reasonPart, " — SKIPPING TRADE");
+      }
+      else
+         Print("NEWS ALERT: High-impact event nearby — SKIPPING TRADE");
+      return false;
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //| DASHBOARD                                                        |
 //+------------------------------------------------------------------+
 void UpdateDashboard(int signal)
@@ -943,6 +1067,8 @@ void UpdateDashboard(int signal)
    d += "----------------------------------------\n";
    d += StringFormat("Careful: %s | H1: %s | ML: %s\n",
         InpCarefulMode ? "ON" : "OFF", InpUseH1Filter ? "ON" : "OFF", InpLearnPatterns ? "ON" : "OFF");
+   d += StringFormat("AI(GPT5.2): %s | News Filter: %s\n",
+        InpUseAI ? "ON" : "OFF", InpUseNewsFilter ? "ON" : "OFF");
    d += "========================================\n";
 
    if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT - RESTING <<\n";
