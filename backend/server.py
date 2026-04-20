@@ -1205,6 +1205,40 @@ async def check_news_events():
         logger.error(f"News check error: {e}")
         return {"safe_to_trade": True, "reason": "Calendar check failed"}
 
+########################################
+# ML PATTERN CLOUD STORAGE
+########################################
+class PatternData(BaseModel):
+    pin: str = ""
+    symbol: str = "XAUUSD"
+    patterns: list = []
+
+@api_router.post("/ml/patterns/save")
+async def save_patterns_cloud(req: PatternData):
+    try:
+        key = f"{req.pin}_{req.symbol}" if req.pin else req.symbol
+        await db.ml_cloud_patterns.update_one(
+            {"key": key},
+            {"$set": {"key": key, "pin": req.pin, "symbol": req.symbol, "patterns": req.patterns, "count": len(req.patterns), "updated_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True
+        )
+        return {"status": "ok", "saved": len(req.patterns)}
+    except Exception as e:
+        logger.error(f"Pattern save error: {e}")
+        return {"status": "error", "saved": 0}
+
+@api_router.post("/ml/patterns/load")
+async def load_patterns_cloud(req: PatternData):
+    try:
+        key = f"{req.pin}_{req.symbol}" if req.pin else req.symbol
+        doc = await db.ml_cloud_patterns.find_one({"key": key}, {"_id": 0})
+        if doc and doc.get("patterns"):
+            return {"status": "ok", "patterns": doc["patterns"], "count": len(doc["patterns"])}
+        return {"status": "ok", "patterns": [], "count": 0}
+    except Exception as e:
+        logger.error(f"Pattern load error: {e}")
+        return {"status": "ok", "patterns": [], "count": 0}
+
 app.include_router(api_router)
 
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','), allow_methods=["*"], allow_headers=["*"])

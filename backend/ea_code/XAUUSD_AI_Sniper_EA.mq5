@@ -951,36 +951,125 @@ void RecordPattern(bool wasWin, double profit)
    patternCount++;
 
    Print("ML: Recorded #", patternCount, " | ", wasWin ? "WIN" : "LOSS", " $", DoubleToString(profit, 2));
+
+   // Auto-save to cloud every 5 trades
+   if(patternCount % 5 == 0) SavePatterns();
 }
 
 //+------------------------------------------------------------------+
-//| ML: SAVE/LOAD PATTERNS                                           |
+//| ML: SAVE PATTERNS (Cloud + Local backup)                         |
 //+------------------------------------------------------------------+
 void SavePatterns()
 {
    if(patternCount == 0) return;
+
+   // Save locally as backup
    string fn = "AIS_Patterns_" + Symbol() + ".bin";
    int h = FileOpen(fn, FILE_WRITE | FILE_BIN);
-   if(h == INVALID_HANDLE) return;
-   FileWriteInteger(h, patternCount);
-   for(int i = 0; i < patternCount; i++)
+   if(h != INVALID_HANDLE)
    {
-      FileWriteInteger(h, patterns[i].direction);
-      FileWriteDouble(h, patterns[i].emaDiff);
-      FileWriteDouble(h, patterns[i].rsi);
-      FileWriteDouble(h, patterns[i].atr);
-      FileWriteInteger(h, patterns[i].hour);
-      FileWriteInteger(h, patterns[i].dayOfWeek);
-      FileWriteInteger(h, patterns[i].wasWinner ? 1 : 0);
-      FileWriteDouble(h, patterns[i].profit);
+      FileWriteInteger(h, patternCount);
+      for(int i = 0; i < patternCount; i++)
+      {
+         FileWriteInteger(h, patterns[i].direction);
+         FileWriteDouble(h, patterns[i].emaDiff);
+         FileWriteDouble(h, patterns[i].rsi);
+         FileWriteDouble(h, patterns[i].atr);
+         FileWriteInteger(h, patterns[i].hour);
+         FileWriteInteger(h, patterns[i].dayOfWeek);
+         FileWriteInteger(h, patterns[i].wasWinner ? 1 : 0);
+         FileWriteDouble(h, patterns[i].profit);
+      }
+      FileClose(h);
    }
-   FileClose(h);
+
+   // Save to cloud server (survives account changes)
+   if(StringLen(InpServerURL) >= 10)
+   {
+      string url = InpServerURL + "/api/ml/patterns/save";
+      string headers = "Content-Type: application/json\r\n";
+
+      // Build JSON array of patterns
+      string jsonPatterns = "[";
+      for(int i = 0; i < patternCount; i++)
+      {
+         if(i > 0) jsonPatterns += ",";
+         jsonPatterns += StringFormat("{\"d\":%d,\"ed\":%.4f,\"r\":%.1f,\"a\":%.2f,\"h\":%d,\"dw\":%d,\"w\":%d,\"p\":%.2f}",
+            patterns[i].direction, patterns[i].emaDiff, patterns[i].rsi,
+            patterns[i].atr, patterns[i].hour, patterns[i].dayOfWeek,
+            patterns[i].wasWinner ? 1 : 0, patterns[i].profit);
+      }
+      jsonPatterns += "]";
+
+      string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"patterns\":%s}",
+         InpLicensePIN, Symbol(), jsonPatterns);
+
+      char postData[], result[];
+      string resultHeaders;
+      StringToCharArray(body, postData, 0, StringLen(body));
+      int res = WebRequest("POST", url, headers, 10000, postData, result, resultHeaders);
+      if(res == 200)
+         Print("ML CLOUD: Saved ", patternCount, " patterns to server");
+      else
+         Print("ML CLOUD: Save failed (", res, ") — local backup saved");
+   }
 }
 
+//+------------------------------------------------------------------+
+//| ML: LOAD PATTERNS (Cloud first, then local backup)               |
+//+------------------------------------------------------------------+
 void LoadPatterns()
 {
+   // Try cloud first (has patterns from all accounts)
+   if(StringLen(InpServerURL) >= 10)
+   {
+      string url = InpServerURL + "/api/ml/patterns/load";
+      string headers = "Content-Type: application/json\r\n";
+      string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\"}", InpLicensePIN, Symbol());
+
+      char postData[], result[];
+      string resultHeaders;
+      StringToCharArray(body, postData, 0, StringLen(body));
+      int res = WebRequest("POST", url, headers, 10000, postData, result, resultHeaders);
+
+      if(res == 200)
+      {
+         string response = CharArrayToString(result);
+
+         // Parse count
+         int countIdx = StringFind(response, "\"count\":");
+         if(countIdx >= 0)
+         {
+            string countStr = StringSubstr(response, countIdx + 8, 10);
+            int commaIdx = StringFind(countStr, ",");
+            if(commaIdx < 0) commaIdx = StringFind(countStr, "}");
+            if(commaIdx > 0) countStr = StringSubstr(countStr, 0, commaIdx);
+            int cloudCount = (int)StringToInteger(countStr);
+
+            if(cloudCount > 0)
+            {
+               // Parse patterns from JSON array
+               int arrStart = StringFind(response, "[");
+               int arrEnd = StringFind(response, "]");
+               if(arrStart >= 0 && arrEnd > arrStart)
+               {
+                  string arrStr = StringSubstr(response, arrStart, arrEnd - arrStart + 1);
+                  int parsed = ParseCloudPatterns(arrStr);
+                  if(parsed > 0)
+                  {
+                     Print("ML CLOUD: Loaded ", patternCount, " patterns from server");
+                     return;
+                  }
+               }
+            }
+         }
+      }
+      Print("ML CLOUD: No cloud patterns found, trying local...");
+   }
+
+   // Fallback to local file
    string fn = "AIS_Patterns_" + Symbol() + ".bin";
-   if(!FileIsExist(fn)) return;
+   if(!FileIsExist(fn)) { Print("ML: No patterns found (fresh start)"); return; }
    int h = FileOpen(fn, FILE_READ | FILE_BIN);
    if(h == INVALID_HANDLE) return;
    patternCount = FileReadInteger(h);
@@ -997,7 +1086,66 @@ void LoadPatterns()
       patterns[i].profit    = FileReadDouble(h);
    }
    FileClose(h);
-   Print("ML: Loaded ", patternCount, " patterns");
+   Print("ML LOCAL: Loaded ", patternCount, " patterns from file");
+}
+
+//+------------------------------------------------------------------+
+//| Parse cloud pattern JSON array                                    |
+//+------------------------------------------------------------------+
+int ParseCloudPatterns(string arrStr)
+{
+   patternCount = 0;
+   ArrayResize(patterns, 0);
+
+   int pos = 0;
+   while(pos < StringLen(arrStr))
+   {
+      int objStart = StringFind(arrStr, "{", pos);
+      if(objStart < 0) break;
+      int objEnd = StringFind(arrStr, "}", objStart);
+      if(objEnd < 0) break;
+
+      string obj = StringSubstr(arrStr, objStart, objEnd - objStart + 1);
+
+      TradePattern p;
+      p.direction = (int)GetJsonInt(obj, "\"d\":");
+      p.emaDiff   = GetJsonDouble(obj, "\"ed\":");
+      p.rsi       = GetJsonDouble(obj, "\"r\":");
+      p.atr       = GetJsonDouble(obj, "\"a\":");
+      p.hour      = (int)GetJsonInt(obj, "\"h\":");
+      p.dayOfWeek = (int)GetJsonInt(obj, "\"dw\":");
+      p.wasWinner = GetJsonInt(obj, "\"w\":") == 1;
+      p.profit    = GetJsonDouble(obj, "\"p\":");
+
+      ArrayResize(patterns, patternCount + 1);
+      patterns[patternCount] = p;
+      patternCount++;
+
+      pos = objEnd + 1;
+   }
+   return patternCount;
+}
+
+long GetJsonInt(string json, string key)
+{
+   int idx = StringFind(json, key);
+   if(idx < 0) return 0;
+   string val = StringSubstr(json, idx + StringLen(key), 20);
+   int end = StringFind(val, ",");
+   if(end < 0) end = StringFind(val, "}");
+   if(end > 0) val = StringSubstr(val, 0, end);
+   return StringToInteger(val);
+}
+
+double GetJsonDouble(string json, string key)
+{
+   int idx = StringFind(json, key);
+   if(idx < 0) return 0;
+   string val = StringSubstr(json, idx + StringLen(key), 20);
+   int end = StringFind(val, ",");
+   if(end < 0) end = StringFind(val, "}");
+   if(end > 0) val = StringSubstr(val, 0, end);
+   return StringToDouble(val);
 }
 
 //+------------------------------------------------------------------+
