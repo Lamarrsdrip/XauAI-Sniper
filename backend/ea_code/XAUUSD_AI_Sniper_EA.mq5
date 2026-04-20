@@ -696,7 +696,8 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
 }
 
 //+------------------------------------------------------------------+
-//| POSITION MANAGEMENT (break-even + trailing)                      |
+//| SMART POSITION MANAGEMENT — "Rethinking" active trades           |
+//| Watches RSI, EMA, candle patterns to adapt in real-time          |
 //+------------------------------------------------------------------+
 void ManagePositions()
 {
@@ -705,6 +706,12 @@ void ManagePositions()
    if(atr <= 0) return;
    double minVol = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
    double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+   double rsi = bufRSI[1];
+   double emaFast = bufEMAFast[1];
+   double emaSlow = bufEMASlow[1];
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double close2 = iClose(Symbol(), PERIOD_M5, 2);
+   double open1 = iOpen(Symbol(), PERIOD_M5, 1);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -718,14 +725,68 @@ void ManagePositions()
       double curTP    = posInfo.TakeProfit();
       double volume   = posInfo.Volume();
       ulong  ticket   = posInfo.Ticket();
+      double profit   = posInfo.Profit();
+      double slDist;
 
       if(posInfo.PositionType() == POSITION_TYPE_BUY)
       {
-         double slDist = openPx - curSL;
+         slDist = openPx - curSL;
          if(slDist <= 0) slDist = atr * InpSLMultiplier;
-         double tp1 = openPx + slDist * 1.0; // 1st target = 1:1 R:R
+         double tp1 = openPx + slDist * 1.0;
 
-         // PARTIAL CLOSE: at 1st target, close 50% and move SL to break-even
+         // ============================================
+         // SMART EXIT 1: In profit but market reversing
+         // If in profit AND (RSI overbought OR price crossed below fast EMA OR bearish reversal candle)
+         // → Take profit now, don't wait for TP
+         // ============================================
+         if(profit > 0 && curPrice > openPx + atr * 0.3)
+         {
+            bool rsiReversal = rsi > 72;                        // RSI getting overbought
+            bool emaCross = close1 < emaFast && close2 > emaFast; // price just crossed below EMA
+            bool bearishCandle = close1 < open1 && (open1 - close1) > atr * 0.4; // strong bearish candle
+
+            if(rsiReversal || emaCross || bearishCandle)
+            {
+               string exitReason = rsiReversal ? "RSI overbought" : emaCross ? "Price crossed below EMA" : "Strong bearish reversal candle";
+               Print("SMART EXIT: Closing BUY #", ticket, " in profit ($", DoubleToString(profit, 2),
+                     ") — Market reversing: ", exitReason);
+               trade.PositionClose(ticket);
+               continue;
+            }
+         }
+
+         // ============================================
+         // SMART EXIT 2: Heading to SL but showing recovery
+         // If losing AND price approaching SL AND (RSI oversold = bounce likely OR bullish reversal candle)
+         // → Widen SL slightly to give room, or do nothing (let it play out)
+         // If losing AND no recovery signs AND loss > 60% of SL distance
+         // → Cut loss early instead of waiting for full SL hit
+         // ============================================
+         if(profit < 0)
+         {
+            double lossPercent = MathAbs(curPrice - openPx) / slDist * 100;
+
+            // Loss > 60% of SL and market shows no recovery (bearish momentum)
+            if(lossPercent > 60 && rsi < 35 && close1 < close2)
+            {
+               Print("SMART CUT: Closing BUY #", ticket, " early — loss at ", DoubleToString(lossPercent, 0),
+                     "% of SL, no recovery signs (RSI=", DoubleToString(rsi, 1), ")");
+               trade.PositionClose(ticket);
+               continue;
+            }
+
+            // Near SL but RSI oversold = bounce likely → move SL a bit wider
+            if(lossPercent > 70 && rsi < 28)
+            {
+               double newSL = NormalizeDouble(curSL - atr * 0.3, digits);
+               Print("SMART ADJUST: BUY #", ticket, " — RSI oversold (", DoubleToString(rsi, 1),
+                     "), widening SL to give room for bounce");
+               trade.PositionModify(ticket, newSL, curTP);
+               continue;
+            }
+         }
+
+         // PARTIAL CLOSE at 1:1 target
          if(curPrice >= tp1 && volume > minVol)
          {
             double closeVol = MathFloor(volume * 0.5 / lotStep) * lotStep;
@@ -734,22 +795,20 @@ void ManagePositions()
             {
                if(trade.PositionClosePartial(ticket, closeVol))
                {
-                  Print("PARTIAL CLOSE: 50% of #", ticket, " at 1:1 target | Closed ", DoubleToString(closeVol, 2), " lots");
-                  // Move SL to break-even on remaining
+                  Print("PARTIAL CLOSE: 50% of #", ticket, " at 1:1 target");
                   double beSL = NormalizeDouble(openPx + SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
                   trade.PositionModify(ticket, beSL, curTP);
                }
             }
          }
-         // Break-even (if partial close didn't trigger yet)
          else if(InpBreakEven && curSL < openPx && curPrice > openPx + atr)
          {
             double beSL = NormalizeDouble(openPx + SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
             trade.PositionModify(ticket, beSL, curTP);
-            Print("BREAK-EVEN: #", ticket, " SL moved to ", DoubleToString(beSL, digits));
+            Print("BREAK-EVEN: #", ticket);
          }
 
-         // Trailing: trail once past 1st target
+         // Trailing
          if(InpTrailingStop && curPrice > tp1)
          {
             double newSL = NormalizeDouble(curPrice - atr * 1.0, digits);
@@ -757,13 +816,53 @@ void ManagePositions()
                trade.PositionModify(ticket, newSL, curTP);
          }
       }
-      else // SELL
+      else // === SELL POSITION ===
       {
-         double slDist = curSL - openPx;
+         slDist = curSL - openPx;
          if(slDist <= 0) slDist = atr * InpSLMultiplier;
          double tp1 = openPx - slDist * 1.0;
 
-         // PARTIAL CLOSE: at 1st target
+         // SMART EXIT: In profit but market reversing UP
+         if(profit > 0 && curPrice < openPx - atr * 0.3)
+         {
+            bool rsiReversal = rsi < 28;
+            bool emaCross = close1 > emaFast && close2 < emaFast;
+            bool bullishCandle = close1 > open1 && (close1 - open1) > atr * 0.4;
+
+            if(rsiReversal || emaCross || bullishCandle)
+            {
+               string exitReason = rsiReversal ? "RSI oversold" : emaCross ? "Price crossed above EMA" : "Strong bullish reversal candle";
+               Print("SMART EXIT: Closing SELL #", ticket, " in profit ($", DoubleToString(profit, 2),
+                     ") — Market reversing: ", exitReason);
+               trade.PositionClose(ticket);
+               continue;
+            }
+         }
+
+         // SMART CUT: Losing with no recovery
+         if(profit < 0)
+         {
+            double lossPercent = MathAbs(curPrice - openPx) / slDist * 100;
+
+            if(lossPercent > 60 && rsi > 65 && close1 > close2)
+            {
+               Print("SMART CUT: Closing SELL #", ticket, " early — loss at ", DoubleToString(lossPercent, 0),
+                     "% of SL, no recovery (RSI=", DoubleToString(rsi, 1), ")");
+               trade.PositionClose(ticket);
+               continue;
+            }
+
+            if(lossPercent > 70 && rsi > 72)
+            {
+               double newSL = NormalizeDouble(curSL + atr * 0.3, digits);
+               Print("SMART ADJUST: SELL #", ticket, " — RSI overbought (", DoubleToString(rsi, 1),
+                     "), widening SL for pullback");
+               trade.PositionModify(ticket, newSL, curTP);
+               continue;
+            }
+         }
+
+         // PARTIAL CLOSE
          if(curPrice <= tp1 && volume > minVol)
          {
             double closeVol = MathFloor(volume * 0.5 / lotStep) * lotStep;
@@ -772,7 +871,7 @@ void ManagePositions()
             {
                if(trade.PositionClosePartial(ticket, closeVol))
                {
-                  Print("PARTIAL CLOSE: 50% of #", ticket, " at 1:1 target | Closed ", DoubleToString(closeVol, 2), " lots");
+                  Print("PARTIAL CLOSE: 50% of #", ticket, " at 1:1 target");
                   double beSL = NormalizeDouble(openPx - SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
                   trade.PositionModify(ticket, beSL, curTP);
                }
@@ -782,7 +881,7 @@ void ManagePositions()
          {
             double beSL = NormalizeDouble(openPx - SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
             trade.PositionModify(ticket, beSL, curTP);
-            Print("BREAK-EVEN: #", ticket, " SL moved to ", DoubleToString(beSL, digits));
+            Print("BREAK-EVEN: #", ticket);
          }
 
          if(InpTrailingStop && curPrice < tp1)
