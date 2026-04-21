@@ -42,8 +42,8 @@ input int    InpEMAFast        = 50;       // Fast EMA (M5) - was 21, less whips
 input int    InpEMASlow        = 200;      // Slow EMA (M5) - was 50, stronger trend
 input int    InpRSIPeriod      = 14;       // RSI Period
 input int    InpATRPeriod      = 14;       // ATR Period
-input double InpSLMultiplier   = 0.8;      // SL = ATR x this (tight stop)
-input double InpTPMultiplier   = 1.3;      // TP = SL x this (TP bigger than SL)
+input double InpSLMultiplier   = 2.0;      // SL = ATR x this (wider = survive fakeouts)
+input double InpTPMultiplier   = 1.3;      // TP = SL x this (Risk:Reward)
 input bool   InpUseH1Filter    = true;     // Use H1 trend filter
 input int    InpCooldownMins   = 10;       // Minutes to wait after a loss before next trade
 input double InpMinEMASep      = 0.05;     // Min EMA separation (%) - avoids choppy zones
@@ -602,6 +602,16 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
          riskPct = riskPct * 0.5;
          Print("CAREFUL: Daily drawdown — risk further reduced to ", DoubleToString(riskPct, 2), "%");
       }
+   }
+
+   // === SESSION AWARENESS: Reduce lot during low-liquidity hours ===
+   MqlDateTime dtTrade;
+   TimeCurrent(dtTrade);
+   int hour = dtTrade.hour;
+   if(hour >= 0 && hour < 8) // Asian session (00:00-08:00 server time)
+   {
+      riskPct = riskPct * 0.3; // 30% of normal size during Asian
+      Print("ASIAN SESSION: Low liquidity — risk reduced to ", DoubleToString(riskPct, 2), "%");
    }
 
    double riskAmount = balance * riskPct / 100.0;
