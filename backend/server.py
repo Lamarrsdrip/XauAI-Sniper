@@ -1274,6 +1274,45 @@ async def get_trade_journal(pin: str = "", limit: int = 50):
         logger.error(f"Journal fetch error: {e}")
         return {"trades": [], "total": 0, "wins": 0, "losses": 0}
 
+class WeeklyReportEntry(BaseModel):
+    pin: str = ""
+    symbol: str = "XAUUSD"
+    trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float = 0
+    weekly_pnl: float = 0
+    weekly_pct: float = 0
+    balance: float = 0
+    patterns: int = 0
+    best_hour: int = -1
+    worst_hour: int = -1
+    best_hour_profit: float = 0
+    worst_hour_profit: float = 0
+
+@api_router.post("/journal/weekly-report")
+async def save_weekly_report(entry: WeeklyReportEntry):
+    try:
+        doc = entry.dict()
+        doc["created_at"] = datetime.now(timezone.utc).isoformat()
+        doc["week"] = datetime.now(timezone.utc).strftime("%Y-W%W")
+        await db.weekly_reports.insert_one(doc)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Weekly report error: {e}")
+        return {"status": "error"}
+
+@api_router.get("/journal/weekly-reports")
+async def get_weekly_reports(pin: str = "", limit: int = 12):
+    try:
+        query = {"pin": pin} if pin else {}
+        cursor = db.weekly_reports.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
+        reports = await cursor.to_list(length=limit)
+        return {"reports": reports}
+    except Exception as e:
+        logger.error(f"Weekly reports fetch error: {e}")
+        return {"reports": []}
+
 ########################################
 # ML PATTERN CLOUD STORAGE
 ########################################

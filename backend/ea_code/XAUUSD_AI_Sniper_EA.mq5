@@ -267,6 +267,9 @@ void OnTick()
    TimeToStruct(lastWeekReset, dtWeek);
    if(dtNow.day_of_week == 1 && dtWeek.day_of_week != 1)
    {
+      // Send weekly report before resetting
+      SendWeeklyReport();
+
       weeklyStartEquity = accInfo.Equity();
       weeklyTargetHit   = false;
       weeklyLossHit     = false;
@@ -508,6 +511,44 @@ void OnTick()
       }
    }
 
+   // === MOMENTUM EXHAUSTION: Don't chase extended moves ===
+   if(signal != 0)
+   {
+      double move3 = MathAbs(iClose(Symbol(), PERIOD_M5, 1) - iClose(Symbol(), PERIOD_M5, 4));
+      if(move3 > atr * 3.0) // 3 candles moved more than 3x ATR = exhausted
+      {
+         Print("EXHAUSTION: Move of ", DoubleToString(move3, 2), " in 3 bars (3xATR=",
+               DoubleToString(atr * 3, 2), ") — too extended, skipping");
+         signal = 0;
+      }
+   }
+
+   // === SPREAD SPIKE: Skip if spread suddenly widens ===
+   if(signal != 0)
+   {
+      double currentSpread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+      if(currentSpread > InpMaxSpread * 0.6) // spread above 60% of max = danger zone
+      {
+         Print("SPREAD SPIKE: Spread=", DoubleToString(currentSpread, 0),
+               " (", DoubleToString(currentSpread / InpMaxSpread * 100, 0), "% of max) — broker signaling risk");
+         signal = 0;
+      }
+   }
+
+   // === VOLUME CHECK: Low volume = fake moves ===
+   if(signal != 0)
+   {
+      long vol1 = iVolume(Symbol(), PERIOD_M5, 1);
+      long vol2 = iVolume(Symbol(), PERIOD_M5, 2);
+      long vol3 = iVolume(Symbol(), PERIOD_M5, 3);
+      long avgVol = (vol2 + vol3) / 2;
+      if(avgVol > 0 && vol1 < (long)(avgVol * 0.4)) // volume dropped below 40% of recent average
+      {
+         Print("LOW VOLUME: Tick vol=", vol1, " vs avg=", avgVol, " — weak move, skipping");
+         signal = 0;
+      }
+   }
+
    // === ANTI-REVERSAL: Don't flip direction right after last trade ===
    if(signal != 0 && lastTradeDir != 0 && signal != lastTradeDir)
    {
@@ -684,6 +725,27 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
    {
       riskPct = riskPct * 0.3; // 30% of normal size during Asian
       Print("ASIAN SESSION: Low liquidity — risk reduced to ", DoubleToString(riskPct, 2), "%");
+   }
+
+   // === AUTO RISK SCALING: Ride hot streaks, survive cold ones ===
+   if(patternCount >= 5)
+   {
+      int recentWins = 0, recentCount = 0;
+      for(int p = patternCount - 1; p >= MathMax(0, patternCount - 5); p--)
+      {
+         recentCount++;
+         if(patterns[p].wasWinner) recentWins++;
+      }
+      if(recentWins >= 4) // 4+ wins in last 5 = hot streak
+      {
+         riskPct = riskPct * 1.3; // 30% boost
+         Print("HOT STREAK: ", recentWins, "/", recentCount, " wins — risk boosted to ", DoubleToString(riskPct, 2), "%");
+      }
+      else if(recentWins <= 1) // 1 or 0 wins in last 5 = cold streak
+      {
+         riskPct = riskPct * 0.5; // halve
+         Print("COLD STREAK: ", recentWins, "/", recentCount, " wins — risk reduced to ", DoubleToString(riskPct, 2), "%");
+      }
    }
 
    double riskAmount = balance * riskPct / 100.0;
@@ -1381,6 +1443,60 @@ bool IsNewsSafe()
    }
 
    return true;
+}
+
+//+------------------------------------------------------------------+
+//| WEEKLY PERFORMANCE REPORT                                        |
+//+------------------------------------------------------------------+
+void SendWeeklyReport()
+{
+   if(StringLen(InpServerURL) < 10) return;
+   if(totalTrades == 0) return;
+
+   double equity = accInfo.Equity();
+   double weeklyPnL = equity - weeklyStartEquity;
+   double weeklyPct = weeklyStartEquity > 0 ? weeklyPnL / weeklyStartEquity * 100.0 : 0;
+   double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
+
+   // Find best and worst performing hours from patterns
+   int bestHour = -1, worstHour = -1;
+   double bestProfit = -99999, worstProfit = 99999;
+   for(int h = 0; h < 24; h++)
+   {
+      double hourProfit = 0;
+      int hourCount = 0;
+      for(int p = 0; p < patternCount; p++)
+      {
+         if(patterns[p].hour == h)
+         {
+            hourProfit += patterns[p].profit;
+            hourCount++;
+         }
+      }
+      if(hourCount >= 2)
+      {
+         if(hourProfit > bestProfit) { bestProfit = hourProfit; bestHour = h; }
+         if(hourProfit < worstProfit) { worstProfit = hourProfit; worstHour = h; }
+      }
+   }
+
+   string url = InpServerURL + "/api/journal/weekly-report";
+   string headers = "Content-Type: application/json\r\n";
+   string body = StringFormat(
+      "{\"pin\":\"%s\",\"symbol\":\"%s\",\"trades\":%d,\"wins\":%d,\"losses\":%d,\"win_rate\":%.1f,\"weekly_pnl\":%.2f,\"weekly_pct\":%.1f,\"balance\":%.2f,\"patterns\":%d,\"best_hour\":%d,\"worst_hour\":%d,\"best_hour_profit\":%.2f,\"worst_hour_profit\":%.2f}",
+      InpLicensePIN, Symbol(), totalTrades, wins, losses, wr,
+      weeklyPnL, weeklyPct, equity, patternCount,
+      bestHour, worstHour, bestProfit, worstProfit);
+
+   char postData[], resultArr[];
+   string resultHeaders;
+   StringToCharArray(body, postData, 0, StringLen(body));
+   int res = WebRequest("POST", url, headers, 10000, postData, resultArr, resultHeaders);
+   if(res == 200)
+      Print("WEEKLY REPORT: Sent to server — P/L: $", DoubleToString(weeklyPnL, 2),
+            " (", DoubleToString(weeklyPct, 1), "%) | WR: ", DoubleToString(wr, 1), "%");
+   else
+      Print("WEEKLY REPORT: Failed to send (", res, ")");
 }
 
 //+------------------------------------------------------------------+
