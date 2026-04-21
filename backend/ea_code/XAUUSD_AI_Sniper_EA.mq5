@@ -43,7 +43,7 @@ input int    InpEMASlow        = 200;      // Slow EMA (M5) - was 50, stronger t
 input int    InpRSIPeriod      = 14;       // RSI Period
 input int    InpATRPeriod      = 14;       // ATR Period
 input double InpSLMultiplier   = 2.0;      // SL = ATR x this (wider = survive fakeouts)
-input double InpTPMultiplier   = 1.3;      // TP = SL x this (Risk:Reward)
+input double InpTPMultiplier   = 2.0;      // TP = SL x this (let winners run, Smart Exit protects)
 input bool   InpUseH1Filter    = true;     // Use H1 trend filter
 input int    InpCooldownMins   = 10;       // Minutes to wait after a loss before next trade
 input double InpMinEMASep      = 0.05;     // Min EMA separation (%) - avoids choppy zones
