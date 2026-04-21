@@ -95,8 +95,10 @@ CAccountInfo  accInfo;
 bool   licenseValid = false;
 int    hEMAFast, hEMASlow, hRSI, hATR;
 int    hEMAFast_H1, hEMASlow_H1;
+int    hRSI_M15;
 double bufEMAFast[], bufEMASlow[], bufRSI[], bufATR[];
 double bufEMAFast_H1[], bufEMASlow_H1[];
+double bufRSI_M15[];
 double initialBalance, dailyStartEquity, weeklyStartEquity;
 int    todayTradeCount;
 datetime lastDayReset, lastWeekReset;
@@ -172,9 +174,13 @@ int OnInit()
    hEMAFast_H1 = iMA(Symbol(), PERIOD_H1, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
    hEMASlow_H1 = iMA(Symbol(), PERIOD_H1, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
 
+   // M15 for multi-timeframe confirmation
+   hRSI_M15 = iRSI(Symbol(), PERIOD_M15, InpRSIPeriod, PRICE_CLOSE);
+
    if(hEMAFast == INVALID_HANDLE || hEMASlow == INVALID_HANDLE ||
       hRSI == INVALID_HANDLE || hATR == INVALID_HANDLE ||
-      hEMAFast_H1 == INVALID_HANDLE || hEMASlow_H1 == INVALID_HANDLE)
+      hEMAFast_H1 == INVALID_HANDLE || hEMASlow_H1 == INVALID_HANDLE ||
+      hRSI_M15 == INVALID_HANDLE)
    {
       Print("ERROR: Failed to create indicators");
       return INIT_FAILED;
@@ -186,6 +192,7 @@ int OnInit()
    ArraySetAsSeries(bufATR, true);
    ArraySetAsSeries(bufEMAFast_H1, true);
    ArraySetAsSeries(bufEMASlow_H1, true);
+   ArraySetAsSeries(bufRSI_M15, true);
 
    // State
    initialBalance   = accInfo.Balance();
@@ -230,6 +237,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hATR);
    IndicatorRelease(hEMAFast_H1);
    IndicatorRelease(hEMASlow_H1);
+   IndicatorRelease(hRSI_M15);
    SavePatterns();
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    Print("=== EA STOPPED | Trades: ", totalTrades, " | Win Rate: ", DoubleToString(wr, 1), "% | Patterns: ", patternCount, " ===");
@@ -344,6 +352,7 @@ void OnTick()
    if(CopyBuffer(hATR, 0, 0, 5, bufATR) < 5)          { Print("WARN: ATR not ready"); return; }
    if(CopyBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1) < 3) { Print("WARN: H1 EMA fast not ready"); return; }
    if(CopyBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1) < 3) { Print("WARN: H1 EMA slow not ready"); return; }
+   if(CopyBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15) < 3) { Print("WARN: M15 RSI not ready"); return; }
 
    // === MANAGE EXISTING TRADES FIRST (always runs) ===
    ManagePositions();
@@ -418,7 +427,70 @@ void OnTick()
       reason = "RSI OVERBOUGHT SELL: RSI=" + DoubleToString(rsi, 1);
    }
 
-   // === SMART FILTER: H1 Trend (reduces bad trades, doesn't block good ones) ===
+   // === SUPPORT & RESISTANCE: Don't buy at resistance, don't sell at support ===
+   if(signal != 0)
+   {
+      double resistance = 0, support = 99999;
+      // Find recent swing high (resistance) and swing low (support) from last 30 M15 candles
+      for(int k = 1; k <= 30; k++)
+      {
+         double hi = iHigh(Symbol(), PERIOD_M15, k);
+         double lo = iLow(Symbol(), PERIOD_M15, k);
+         if(hi > resistance) resistance = hi;
+         if(lo < support) support = lo;
+      }
+
+      double price = iClose(Symbol(), PERIOD_M5, 0);
+      double buffer = atr * 0.5; // buffer zone around S/R
+
+      if(signal == 1 && price > resistance - buffer)
+      {
+         Print("S/R FILTER: Skipping BUY — too close to resistance (", DoubleToString(resistance, 2),
+               ") Price=", DoubleToString(price, 2));
+         signal = 0;
+      }
+      else if(signal == -1 && price < support + buffer)
+      {
+         Print("S/R FILTER: Skipping SELL — too close to support (", DoubleToString(support, 2),
+               ") Price=", DoubleToString(price, 2));
+         signal = 0;
+      }
+   }
+
+   // === M15 CONFIRMATION: Check M15 candle agrees with direction ===
+   if(signal != 0)
+   {
+      double m15Close1 = iClose(Symbol(), PERIOD_M15, 1);
+      double m15Open1  = iOpen(Symbol(), PERIOD_M15, 1);
+      double m15Close2 = iClose(Symbol(), PERIOD_M15, 2);
+      double m15RSI    = bufRSI_M15[1];
+
+      // BUY: M15 last candle should not be strongly bearish
+      if(signal == 1 && m15Close1 < m15Open1 && (m15Open1 - m15Close1) > atr * 0.6)
+      {
+         Print("M15 FILTER: Skipping BUY — M15 candle strongly bearish");
+         signal = 0;
+      }
+      // SELL: M15 last candle should not be strongly bullish
+      else if(signal == -1 && m15Close1 > m15Open1 && (m15Close1 - m15Open1) > atr * 0.6)
+      {
+         Print("M15 FILTER: Skipping SELL — M15 candle strongly bullish");
+         signal = 0;
+      }
+      // Also check M15 RSI divergence
+      else if(signal == 1 && m15RSI > 75)
+      {
+         Print("M15 FILTER: Skipping BUY — M15 RSI overbought (", DoubleToString(m15RSI, 1), ")");
+         signal = 0;
+      }
+      else if(signal == -1 && m15RSI < 25)
+      {
+         Print("M15 FILTER: Skipping SELL — M15 RSI oversold (", DoubleToString(m15RSI, 1), ")");
+         signal = 0;
+      }
+   }
+
+   // === SMART FILTER: H1 Trend ===
    if(signal != 0 && InpUseH1Filter)
    {
       if(rsi > 30 && rsi < 70)
@@ -1186,6 +1258,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
 
             // ML: record pattern
             RecordPattern(isWin, profit);
+
+            // TRADE JOURNAL: Save to server
+            LogTradeToServer(isWin ? "WIN" : "LOSS", deal.Price(), profit,
+                             deal.Volume(), deal.DealType() == DEAL_TYPE_BUY ? "BUY" : "SELL");
          }
       }
    }
@@ -1305,6 +1381,31 @@ bool IsNewsSafe()
    }
 
    return true;
+}
+
+//+------------------------------------------------------------------+
+//| TRADE JOURNAL: Log trade to server                               |
+//+------------------------------------------------------------------+
+void LogTradeToServer(string result, double price, double profit, double lots, string direction)
+{
+   if(StringLen(InpServerURL) < 10) return;
+
+   string url = InpServerURL + "/api/journal/log";
+   string headers = "Content-Type: application/json\r\n";
+
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   string body = StringFormat(
+      "{\"pin\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f}",
+      InpLicensePIN, Symbol(), direction, result, price, profit, lots,
+      dt.hour, dt.day_of_week, totalTrades, wins, losses, accInfo.Balance());
+
+   char postData[], resultArr[];
+   string resultHeaders;
+   StringToCharArray(body, postData, 0, StringLen(body));
+   int res = WebRequest("POST", url, headers, 5000, postData, resultArr, resultHeaders);
+   if(res == 200)
+      Print("JOURNAL: Trade logged to server");
 }
 
 //+------------------------------------------------------------------+

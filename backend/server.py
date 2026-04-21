@@ -1206,6 +1206,75 @@ async def check_news_events():
         return {"safe_to_trade": True, "reason": "Calendar check failed"}
 
 ########################################
+# TRADE JOURNAL
+########################################
+class TradeJournalEntry(BaseModel):
+    pin: str = ""
+    symbol: str = "XAUUSD"
+    direction: str = ""
+    result: str = ""
+    price: float = 0
+    profit: float = 0
+    lots: float = 0
+    hour: int = 0
+    day_of_week: int = 0
+    total_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    balance: float = 0
+
+@api_router.post("/journal/log")
+async def log_trade_journal(entry: TradeJournalEntry):
+    try:
+        doc = entry.dict()
+        doc["created_at"] = datetime.now(timezone.utc).isoformat()
+        doc["win_rate"] = round(entry.wins / entry.total_trades * 100, 1) if entry.total_trades > 0 else 0
+        await db.trade_journal.insert_one(doc)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Journal log error: {e}")
+        return {"status": "error"}
+
+@api_router.get("/journal/trades")
+async def get_trade_journal(pin: str = "", limit: int = 50):
+    try:
+        query = {"pin": pin} if pin else {}
+        cursor = db.trade_journal.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
+        trades = await cursor.to_list(length=limit)
+        total = await db.trade_journal.count_documents(query)
+        win_trades = await db.trade_journal.count_documents({**query, "result": "WIN"})
+        loss_trades = await db.trade_journal.count_documents({**query, "result": "LOSS"})
+        total_profit = sum(t.get("profit", 0) for t in trades)
+
+        # Best/worst hours
+        hour_stats = {}
+        all_trades = await db.trade_journal.find(query, {"_id": 0, "hour": 1, "profit": 1, "result": 1}).to_list(length=500)
+        for t in all_trades:
+            h = t.get("hour", 0)
+            if h not in hour_stats: hour_stats[h] = {"wins": 0, "losses": 0, "profit": 0}
+            hour_stats[h]["profit"] += t.get("profit", 0)
+            if t.get("result") == "WIN": hour_stats[h]["wins"] += 1
+            else: hour_stats[h]["losses"] += 1
+
+        best_hour = max(hour_stats, key=lambda h: hour_stats[h]["profit"]) if hour_stats else 0
+        worst_hour = min(hour_stats, key=lambda h: hour_stats[h]["profit"]) if hour_stats else 0
+
+        return {
+            "trades": trades,
+            "total": total,
+            "wins": win_trades,
+            "losses": loss_trades,
+            "win_rate": round(win_trades / total * 100, 1) if total > 0 else 0,
+            "total_profit": round(total_profit, 2),
+            "best_hour": best_hour,
+            "worst_hour": worst_hour,
+            "hour_stats": hour_stats,
+        }
+    except Exception as e:
+        logger.error(f"Journal fetch error: {e}")
+        return {"trades": [], "total": 0, "wins": 0, "losses": 0}
+
+########################################
 # ML PATTERN CLOUD STORAGE
 ########################################
 class PatternData(BaseModel):
