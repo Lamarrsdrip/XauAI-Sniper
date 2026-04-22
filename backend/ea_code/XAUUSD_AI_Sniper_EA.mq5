@@ -495,12 +495,14 @@ void OnTick()
    { if(!dailyLimitHit) Print("DAILY LIMIT: -$", DoubleToString(MathAbs(dailyPnL), 2));
      dailyLimitHit = true; if(CountMyPositions() > 0) CloseAll(); return; }
 
-   // Spread check (silent)
+   // === ALWAYS MANAGE OPEN POSITIONS (every tick, even on wide spread) ===
+   // We intentionally run this BEFORE the spread gate so that news-time
+   // spread spikes cannot prevent us from closing losing positions.
+   ManagePositions();
+
+   // Spread check — blocks NEW ENTRIES only (silent)
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
    if(spread > InpMaxSpread) return;
-
-   // === ALWAYS MANAGE OPEN POSITIONS (every tick) ===
-   ManagePositions();
 
    // New M5 bar only for entries
    static datetime lastBar = 0;
@@ -650,7 +652,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double riskPct = InpRiskPercent * sizeMulti;
 
    // Careful mode near weekly target
-   if(InpCarefulMode)
+   if(InpCarefulMode && weeklyStartEquity > 0)
    {
       double wPct = (accInfo.Equity() - weeklyStartEquity) / weeklyStartEquity * 100;
       if(wPct > InpWeeklyTarget * 0.75) riskPct *= 0.25;
@@ -707,8 +709,8 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
          " | ", reason);
 
    bool ok;
-   if(signal == 1) ok = trade.Buy(lots, Symbol(), 0, sl, tp, "QP4|" + reason);
-   else ok = trade.Sell(lots, Symbol(), 0, sl, tp, "QP4|" + reason);
+   if(signal == 1) ok = trade.Buy(lots, Symbol(), 0, sl, tp, "XAU-SNIPER|" + reason);
+   else ok = trade.Sell(lots, Symbol(), 0, sl, tp, "XAU-SNIPER|" + reason);
 
    if(ok) { todayTradeCount++; lastTradeDir = signal; }
    else Print("TRADE FAILED: Err=", GetLastError(), " Ret=", trade.ResultRetcode());
@@ -744,11 +746,19 @@ void ManagePositions()
       bool isBuy = posInfo.PositionType() == POSITION_TYPE_BUY;
       double slDist = isBuy ? (openPx - curSL) : (curSL - openPx);
       if(slDist <= 0) slDist = atr * InpSLMultiplier;
-      double rValue = slDist; // 1R = SL distance in price
+
+      // Convert 1R into ACCOUNT CURRENCY so we can compare against `profit` (USD).
+      // 1R$ = lots * (slDist / tickSize) * tickValue
+      double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+      double tickSize  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+      double lotsOpen  = posInfo.Volume();
+      double rDollars  = (tickSize > 0 && tickValue > 0)
+                         ? lotsOpen * (slDist / tickSize) * tickValue
+                         : MathMax(30.0, MathAbs(profit));
 
       // ===== PATH A: DETERMINISTIC (SL/TP/Trail) =====
-      // Trailing stop: 0.4% behind peak (QuantPerp style)
-      double trailDist = curPrice * 0.004; // 0.4%
+      // Trail at 1.2x ATR behind price (M5 gold — typical ATR $1-$3)
+      double trailDist = MathMax(atr * 1.2, SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 200);
       if(isBuy && profit > 0)
       {
          double newSL = NormalizeDouble(curPrice - trailDist, digits);
@@ -764,8 +774,8 @@ void ManagePositions()
 
       // ===== PATH B: SMART MANAGEMENT =====
 
-      // B1: Breakeven lock at +0.5R
-      double halfR = rValue * 0.5;
+      // B1: Breakeven lock at +0.5R (in PRICE)
+      double halfR = slDist * 0.5;
       if(isBuy && curPrice > openPx + halfR && curSL < openPx)
       {
          double beSL = NormalizeDouble(openPx + SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 20, digits);
@@ -779,14 +789,14 @@ void ManagePositions()
          Print("BE LOCK: #", ticket, " at +0.5R — risk free");
       }
 
-      // B2: Quick profit take ($200-500)
-      if(profit >= 200)
+      // B2: Quick profit take ($150-500, faster on M5 gold)
+      if(profit >= 150)
       {
          bool momentumFading = false;
          if(isBuy && (rsi > 70 || close1 < open1 || close1 < emaF)) momentumFading = true;
          if(!isBuy && (rsi < 30 || close1 > open1 || close1 > emaF)) momentumFading = true;
 
-         if(profit >= 500 || momentumFading || minsOpen > 25)
+         if(profit >= 500 || momentumFading || minsOpen > 18)
          {
             Print("QUICK PROFIT: #", ticket, " +$", DoubleToString(profit, 2), " (", minsOpen, "min)");
             trade.PositionClose(ticket); continue;
@@ -806,11 +816,11 @@ void ManagePositions()
          }
       }
 
-      // B4: Stale exit — QuantPerp caps
+      // B4: Stale exit — QuantPerp caps (compare DOLLARS to DOLLARS)
       int staleCap = (currentRegime == REGIME_LOW_VOL || currentRegime == REGIME_CHOPPY) ? 35 : 90;
-      if(minsOpen > staleCap && profit <= -(rValue * 0.6))
+      if(minsOpen > staleCap && profit <= -(rDollars * 0.6))
       {
-         Print("STALE EXIT: #", ticket, " open ", minsOpen, "min > cap ", staleCap, " with -$", DoubleToString(MathAbs(profit), 2));
+         Print("STALE EXIT: #", ticket, " open ", minsOpen, "min > cap ", staleCap, " with -$", DoubleToString(MathAbs(profit), 2), " (0.6R=$", DoubleToString(rDollars*0.6, 2), ")");
          trade.PositionClose(ticket); continue;
       }
       if(minsOpen > 30 && MathAbs(profit) < 30)
@@ -831,10 +841,10 @@ void ManagePositions()
 
          if(claudeResult == -1) // CLOSE
          {
-            // Safety net: if losing AND confidence unknown, let SL handle it
-            if(profit < 0 && profit > -(rValue * 0.3))
+            // Safety net: if losing AND small loss (<0.3R in dollars), let SL handle it
+            if(profit < 0 && profit > -(rDollars * 0.3))
             {
-               Print("CLAUDE EXIT BLOCKED: Losing -$", DoubleToString(MathAbs(profit), 2), " < 0.3R — letting SL handle");
+               Print("CLAUDE EXIT BLOCKED: Losing -$", DoubleToString(MathAbs(profit), 2), " < 0.3R=$", DoubleToString(rDollars*0.3, 2), " — letting SL handle");
             }
             else
             {
@@ -1088,8 +1098,9 @@ void SendWeeklyReport()
    if(StringLen(InpServerURL) < 10 || totalTrades == 0) return;
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    double wPnL = accInfo.Equity() - weeklyStartEquity;
+   double wPct = weeklyStartEquity > 0 ? wPnL / weeklyStartEquity * 100 : 0.0;
    string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"trades\":%d,\"wins\":%d,\"losses\":%d,\"win_rate\":%.1f,\"weekly_pnl\":%.2f,\"weekly_pct\":%.1f,\"balance\":%.2f,\"patterns\":%d,\"best_hour\":0,\"worst_hour\":0}",
-      InpLicensePIN, Symbol(), totalTrades, wins, losses, wr, wPnL, wPnL/weeklyStartEquity*100, accInfo.Equity(), patternCount);
+      InpLicensePIN, Symbol(), totalTrades, wins, losses, wr, wPnL, wPct, accInfo.Equity(), patternCount);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    WebRequest("POST", InpServerURL + "/api/journal/weekly-report", "Content-Type: application/json\r\n", 10000, pd, res, rh);
@@ -1108,7 +1119,7 @@ void UpdateDashboard(int signal, double score, string grade)
    d += " XAUAI SNIPER v4.0 | QUANTPERP | LICENSED\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
-   d += StringFormat("Daily: $%.0f | Weekly: $%.0f (%.1f%%/%.0f%%)\n", dPnL, wPnL, wPnL/weeklyStartEquity*100, InpWeeklyTarget);
+   d += StringFormat("Daily: $%.0f | Weekly: $%.0f (%.1f%%/%.0f%%)\n", dPnL, wPnL, weeklyStartEquity > 0 ? wPnL/weeklyStartEquity*100 : 0.0, InpWeeklyTarget);
    d += "------------------------------------------\n";
    d += StringFormat("Regime: %s | Session: %.2f\n", RegimeName(), GetSessionQuality());
    d += StringFormat("RSI: %.1f | ATR: %.2f | Spread: %.0f\n", bufRSI[1], bufATR[1], (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
