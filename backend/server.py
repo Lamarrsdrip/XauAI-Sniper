@@ -7,7 +7,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio
+import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio, re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
@@ -1281,20 +1281,30 @@ async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> di
             system_message=_ENTRY_SYSTEM_PROMPT,
         ).with_model(provider, model)
         msg = UserMessage(text=_build_entry_prompt(req))
-        response = await chat.send_message(msg)
-        return _parse_entry_json(response)
+        # 8s hard timeout — M5 signals are time-sensitive
+        response = await asyncio.wait_for(chat.send_message(msg), timeout=8.0)
+        result = _parse_entry_json(response)
+        result["available"] = True
+        return result
+    except asyncio.TimeoutError:
+        logger.warning(f"Entry AI {provider}/{model} timed out")
+        return {"action": "SKIP", "confidence": 0, "reason": f"{provider} timeout",
+                "sl_adjust": 0, "tp_adjust": 0, "available": False}
     except Exception as e:
         logger.error(f"Entry AI {provider}/{model} error: {e}")
-        return {"action": "SKIP", "confidence": 50, "reason": f"{provider} error", "sl_adjust": 0, "tp_adjust": 0}
+        return {"action": "SKIP", "confidence": 0, "reason": f"{provider} error",
+                "sl_adjust": 0, "tp_adjust": 0, "available": False}
 
 @api_router.post("/ai/analyze")
 async def ai_analyze_market(req: AIAnalysisRequest):
     """Dual-AI entry analysis: Claude 4.5 + GPT-5.2 vote in parallel.
-    Consensus rules:
-      - Both agree (BUY|BUY or SELL|SELL)     -> action = that side, confidence = avg (+5 bonus)
-      - One agrees, other SKIPs               -> action = the side, confidence = that AI's conf * 0.75
-      - Direct disagreement (BUY vs SELL)     -> action = SKIP (safety)
-      - Both SKIP                             -> action = SKIP
+
+    Consensus rules (revised to NOT punish availability):
+      - Both agree (BUY=BUY or SELL=SELL)        -> action, avg conf +5 (synergy bonus)
+      - Direct disagreement (BUY vs SELL)        -> SKIP (safety)
+      - One agrees, other SKIPs (both available) -> that side at 0.80x its confidence
+      - One agrees, other UNAVAILABLE (error)    -> that side at 1.00x (no penalty)
+      - Both SKIP or both unavailable            -> SKIP
     """
     try:
         if not LLM_KEY:
@@ -1307,28 +1317,38 @@ async def ai_analyze_market(req: AIAnalysisRequest):
 
         c_act, g_act = claude["action"], gpt["action"]
         c_conf, g_conf = claude["confidence"], gpt["confidence"]
+        c_ok, g_ok = claude.get("available", True), gpt.get("available", True)
 
-        if c_act == g_act and c_act in ("BUY", "SELL"):
+        if c_ok and g_ok and c_act == g_act and c_act in ("BUY", "SELL"):
             action = c_act
             confidence = min(100, int((c_conf + g_conf) / 2) + 5)
             reason = f"Both AIs agree: {claude['reason'][:60]} / {gpt['reason'][:60]}"
             sl_adj = (claude["sl_adjust"] + gpt["sl_adjust"]) / 2
             tp_adj = (claude["tp_adjust"] + gpt["tp_adjust"]) / 2
-        elif c_act in ("BUY", "SELL") and g_act == "SKIP":
-            action, confidence = c_act, int(c_conf * 0.75)
-            reason = f"Claude says {c_act} ({c_conf}%), GPT SKIP: {claude['reason'][:80]}"
-            sl_adj, tp_adj = claude["sl_adjust"], claude["tp_adjust"]
-        elif g_act in ("BUY", "SELL") and c_act == "SKIP":
-            action, confidence = g_act, int(g_conf * 0.75)
-            reason = f"GPT says {g_act} ({g_conf}%), Claude SKIP: {gpt['reason'][:80]}"
-            sl_adj, tp_adj = gpt["sl_adjust"], gpt["tp_adjust"]
-        elif c_act in ("BUY", "SELL") and g_act in ("BUY", "SELL") and c_act != g_act:
+        elif c_ok and g_ok and c_act in ("BUY","SELL") and g_act in ("BUY","SELL") and c_act != g_act:
+            # Both responded but disagreed — safety SKIP
             action, confidence = "SKIP", 50
-            reason = f"Disagreement: Claude={c_act} GPT={g_act} — safety SKIP"
+            reason = f"Disagreement: Claude={c_act}({c_conf}) GPT={g_act}({g_conf}) — safety SKIP"
             sl_adj, tp_adj = 0, 0
+        elif c_ok and c_act in ("BUY", "SELL") and (not g_ok or g_act == "SKIP"):
+            # Claude speaks; GPT either unavailable or SKIP
+            penalty = 1.00 if not g_ok else 0.80
+            action = c_act
+            confidence = max(0, min(100, int(c_conf * penalty)))
+            reason = (f"Claude says {c_act} ({c_conf}%), "
+                      f"{'GPT unavailable' if not g_ok else 'GPT SKIP'}: {claude['reason'][:80]}")
+            sl_adj, tp_adj = claude["sl_adjust"], claude["tp_adjust"]
+        elif g_ok and g_act in ("BUY", "SELL") and (not c_ok or c_act == "SKIP"):
+            # GPT speaks; Claude either unavailable or SKIP
+            penalty = 1.00 if not c_ok else 0.80
+            action = g_act
+            confidence = max(0, min(100, int(g_conf * penalty)))
+            reason = (f"GPT says {g_act} ({g_conf}%), "
+                      f"{'Claude unavailable' if not c_ok else 'Claude SKIP'}: {gpt['reason'][:80]}")
+            sl_adj, tp_adj = gpt["sl_adjust"], gpt["tp_adjust"]
         else:
             action, confidence = "SKIP", 50
-            reason = "Both AIs SKIP"
+            reason = f"Both SKIP/unavailable (claude_ok={c_ok}, gpt_ok={g_ok})"
             sl_adj, tp_adj = 0, 0
 
         result = {
@@ -1337,8 +1357,8 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             "reason": reason[:240],
             "sl_adjust": sl_adj,
             "tp_adjust": tp_adj,
-            "claude": {"action": c_act, "confidence": c_conf, "reason": claude["reason"]},
-            "gpt":    {"action": g_act, "confidence": g_conf, "reason": gpt["reason"]},
+            "claude": {"action": c_act, "confidence": c_conf, "reason": claude["reason"], "available": c_ok},
+            "gpt":    {"action": g_act, "confidence": g_conf, "reason": gpt["reason"],    "available": g_ok},
         }
         try:
             await db.ai_analyses.insert_one({
@@ -1438,32 +1458,77 @@ class HiveScoreRequest(BaseModel):
 
 @api_router.post("/ml/hive/score")
 async def ml_hive_score(req: HiveScoreRequest):
-    """Aggregate WR for an exact signature across ALL users in last N days.
-    Signature format: regime|setup|dir|session|rsi_bucket|stoch_bucket|mom_bucket"""
+    """Aggregate WR across ALL users in last N days, HIERARCHICAL rollup.
+
+    Signature format: regime|setup|dir|session|rsi_bucket|stoch_bucket|mom_bucket
+
+    Falls back in order when exact match has n<5:
+      level 0: exact (all 7 fields)                                  — most specific
+      level 1: drop mom_bucket      (regime|setup|dir|session|rsi|stoch)
+      level 2: drop stoch_bucket    (regime|setup|dir|session|rsi)
+      level 3: drop rsi_bucket      (regime|setup|dir|session)
+      level 4: drop session         (regime|setup|dir)               — broadest
+
+    Verdicts (asymmetric, stricter on the veto side to protect cold start):
+      BOOST:  n >= 5  AND wr >= 0.60
+      VETO:   n >= 10 AND wr <= 0.25
+      else NEUTRAL
+    """
     try:
         if not req.signature:
-            return {"wins": 0, "losses": 0, "total": 0, "wr": 0.5, "verdict": "NONE"}
+            return {"wins": 0, "losses": 0, "total": 0, "wr": 0.5,
+                    "verdict": "NONE", "level": -1, "matched_signature": ""}
         window = max(1, int(req.window_days))
         cutoff = time.time() - (window * 86400)
 
-        query = {"signature": req.signature, "created_ts": {"$gte": cutoff}}
-        wins = await db.hive_signatures.count_documents({**query, "result": "WIN"})
-        losses = await db.hive_signatures.count_documents({**query, "result": "LOSS"})
-        total = wins + losses
-        wr = (wins / total) if total > 0 else 0.5
+        parts = req.signature.split("|")
+        # Must have 7 fields to be valid
+        if len(parts) != 7:
+            return {"wins": 0, "losses": 0, "total": 0, "wr": 0.5,
+                    "verdict": "NONE", "level": -1, "matched_signature": req.signature}
 
-        if total >= 5 and wr >= 0.60:
-            verdict = "BOOST"
-        elif total >= 5 and wr <= 0.30:
-            verdict = "VETO"
-        else:
-            verdict = "NEUTRAL"
+        # Build hierarchy of signatures (exact + rollup prefixes)
+        rollups = [
+            (0, req.signature,                                         "exact"),
+            (1, "|".join(parts[:6]),                                   "drop_mom"),
+            (2, "|".join(parts[:5]),                                   "drop_stoch"),
+            (3, "|".join(parts[:4]),                                   "drop_rsi"),
+            (4, "|".join(parts[:3]),                                   "drop_session"),
+        ]
 
-        return {"wins": wins, "losses": losses, "total": total,
-                "wr": round(wr, 3), "verdict": verdict, "window_days": window}
+        for level, sig, label in rollups:
+            if level == 0:
+                filt = {"signature": sig, "created_ts": {"$gte": cutoff}}
+            else:
+                # Escape regex specials in the prefix (especially the "|" alternation operator!)
+                # then anchor with a trailing pipe so "RANGE" doesn't match "RANGE_REV"
+                escaped = re.escape(sig)
+                filt = {"signature": {"$regex": f"^{escaped}\\|"}, "created_ts": {"$gte": cutoff}}
+            wins = await db.hive_signatures.count_documents({**filt, "result": "WIN"})
+            losses = await db.hive_signatures.count_documents({**filt, "result": "LOSS"})
+            total = wins + losses
+            # Need at least 5 trades at this level to be informative
+            if total >= 5:
+                wr = wins / total
+                if wr >= 0.60:
+                    verdict = "BOOST"
+                elif total >= 10 and wr <= 0.25:
+                    verdict = "VETO"
+                else:
+                    verdict = "NEUTRAL"
+                return {"wins": wins, "losses": losses, "total": total,
+                        "wr": round(wr, 3), "verdict": verdict,
+                        "level": level, "label": label,
+                        "matched_signature": sig, "window_days": window}
+
+        # No level had >= 5 trades — true cold start
+        return {"wins": 0, "losses": 0, "total": 0, "wr": 0.5,
+                "verdict": "COLD_START", "level": -1,
+                "matched_signature": req.signature, "window_days": window}
     except Exception as e:
         logger.error(f"Hive score error: {e}")
-        return {"wins": 0, "losses": 0, "total": 0, "wr": 0.5, "verdict": "NONE"}
+        return {"wins": 0, "losses": 0, "total": 0, "wr": 0.5,
+                "verdict": "NONE", "level": -1, "matched_signature": ""}
 
 @api_router.get("/journal/trades")
 async def get_trade_journal(pin: str = "", limit: int = 50):

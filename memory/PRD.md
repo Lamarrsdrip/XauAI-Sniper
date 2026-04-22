@@ -43,12 +43,15 @@
   - Backend AI endpoints now strip markdown code fences before `json.loads` (Claude often wraps in ```json…```)
   - Verified `/api/download/ea` serves full 1126-line EA; all EA→backend endpoints (ai/analyze, ai/manage-position, news/check, ml/patterns/save, ml/patterns/load, journal/log, journal/weekly-report) respond correctly
 
-- **Feb 2026 - Dual-AI Entry + Signature Hive-Mind (v4.1)**
-  - `/api/ai/analyze` now runs Claude 4.5 AND GPT-5.2 in parallel. Consensus rules: both agree → avg+5 confidence; disagree → SKIP (safety); one agrees + one SKIPs → reduced confidence. Response includes per-AI breakdown.
-  - EA computes exact signature `regime|setup|dir|session|rsi_bucket|stoch_bucket|mom_bucket` (5×5×5 buckets) on every signal.
-  - Added M5 Stochastic (14,3,3) indicator and 5-bar momentum feed into signature.
-  - New `POST /api/ml/hive/score` aggregates WR across ALL users (7-day rolling) per signature. WR≥60% (n≥5) → BOOST (+15% size, +8pp conf); WR≤30% → HARD VETO.
-  - Trade journal now stores signature on every closed trade → feeds the hive automatically.
+- **Feb 2026 - v4.1 hardening pass (hierarchical hive + backtest mode)**
+  - `InpBacktestMode` input: disables ALL WebRequests (AI, news, hive, cloud ML save/load, journal) so EA runs 100% offline in MT5 Strategy Tester
+  - Hive now HIERARCHICAL: exact → drop_mom → drop_stoch → drop_rsi → drop_session. Kills cold-start problem — every signature finds a usable match fast.
+  - Fixed regex bug: `|` in MongoDB `$regex` was un-escaped → any prefix query matched ~everything. Now properly `re.escape`-d.
+  - Hive VETO now stricter (n≥10, WR≤25%) to protect against early noise; BOOST unchanged (n≥5, WR≥60%).
+  - Buckets collapsed 5→3 (OS/Neutral/OB for RSI+Stoch, DOWN/FLAT/UP for momentum). Keyspace: 8×7×2×5×3×3×3 ≈ 7,560 signatures (4× fewer).
+  - Dual-AI robustness: hard 8s timeout per AI, AIs return `available=false` on error, response logic no longer punishes availability (single AI at full weight if other is down).
+  - Exposed 8 tunable thresholds as MT5 inputs: GradeAPlus/A/B, TradeCooldown, ReversalCooldown, ProfitTakeMin/Max, QuickExitMin.
+  - Init banner now prints full mode + threshold summary.
 
 ## Upcoming Tasks
 - Add Live Paystack Secret Key & Gmail SMTP credentials (User action) - P1

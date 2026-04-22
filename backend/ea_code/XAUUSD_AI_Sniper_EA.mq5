@@ -45,6 +45,17 @@ input bool   InpUseNewsFilter  = true;     // Hard-block ±10min around news
 input bool   InpLearnPatterns  = true;     // ML learning loop
 input int    InpMaxPatterns    = 500;      // Pattern memory size
 input string InpServerURL      = "https://xauaisniper.com";
+input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
+
+input group "=== TUNABLE THRESHOLDS (walk-forward optimize these) ==="
+input double InpGradeAPlus     = 5.5;      // Combined score for A+ (default 5.5)
+input double InpGradeA         = 4.0;      // Combined score for A  (default 4.0)
+input double InpGradeB         = 2.5;      // Combined score for B / pass cutoff (default 2.5)
+input int    InpTradeCooldown  = 300;      // Seconds between trades after a close (default 300)
+input int    InpReversalCooldown = 600;    // Extra seconds required to flip direction (default 600)
+input int    InpProfitTakeMin  = 150;      // Start scanning for quick exit (USD, default 150)
+input int    InpProfitTakeMax  = 500;      // Auto-close at this profit (USD, default 500)
+input int    InpQuickExitMin   = 18;       // Auto-close minutes threshold (default 18)
 
 input group "=== SAFETY ==="
 input double InpMaxSpread      = 150.0;    // Max spread (points)
@@ -187,6 +198,12 @@ int OnInit()
    Print("=== XAUAI SNIPER v4.1 (DUAL-AI + HIVE) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
+   Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
+   Print("THRESHOLDS: Grade A+ >= ", DoubleToString(InpGradeAPlus, 1),
+         " | A >= ", DoubleToString(InpGradeA, 1),
+         " | B >= ", DoubleToString(InpGradeB, 1),
+         " | Cooldown=", InpTradeCooldown, "s | Reversal=", InpReversalCooldown, "s");
+   Print("EXITS: QuickTake $", InpProfitTakeMin, "-$", InpProfitTakeMax, " | QuickExitMin=", InpQuickExitMin, "min");
    return INIT_SUCCEEDED;
 }
 
@@ -274,18 +291,15 @@ string RegimeName()
 //| SIGNATURE BUCKETS & BUILDER                                      |
 //| sig = regime|setup|dir|session|rsi_bucket|stoch_bucket|mom_bucket|
 //+------------------------------------------------------------------+
-int RsiBucket(double r)   { if(r<20) return 0; if(r<40) return 1; if(r<60) return 2; if(r<80) return 3; return 4; }
-int StochBucket(double s) { if(s<20) return 0; if(s<40) return 1; if(s<60) return 2; if(s<80) return 3; return 4; }
-// Momentum bucket: price change over 5 bars, normalised by ATR
-int MomBucket(double mom, double atr)
+int RsiBucket(double r)   { if(r<35) return 0; if(r<65) return 1; return 2; }  // 3 buckets: OS / N / OB
+int StochBucket(double s) { if(s<25) return 0; if(s<75) return 1; return 2; }  // 3 buckets
+int MomBucket(double mom, double atr)                                          // 3 buckets
 {
-   if(atr <= 0) return 2;
+   if(atr <= 0) return 1;
    double m = mom / atr;
-   if(m < -0.8) return 0;
-   if(m < -0.2) return 1;
-   if(m <  0.2) return 2;
-   if(m <  0.8) return 3;
-   return 4;
+   if(m < -0.3) return 0;  // DOWN
+   if(m <  0.3) return 1;  // FLAT
+   return 2;                // UP
 }
 string SessionTag()
 {
@@ -316,6 +330,7 @@ string BuildSignature(int dir, string setupName)
 //+------------------------------------------------------------------+
 int GetHiveVerdict(string signature)
 {
+   if(InpBacktestMode) return 0;                       // Tester: no network
    if(StringLen(InpServerURL) < 10 || StringLen(signature) == 0) return 0;
    string url = InpServerURL + "/api/ml/hive/score";
    string headers = "Content-Type: application/json\r\n";
@@ -594,7 +609,7 @@ void OnTick()
    { UpdateDashboard(0, 0, ""); return; }
 
    // Cooldown
-   if(lastTradeClose > 0 && TimeCurrent() - lastTradeClose < 300) // 5min
+   if(lastTradeClose > 0 && TimeCurrent() - lastTradeClose < InpTradeCooldown)
    { UpdateDashboard(0, 0, ""); return; }
 
    // ============ GATE 1: REGIME ============
@@ -613,9 +628,9 @@ void OnTick()
 
    // Combined quality
    double combinedScore = setupScore * regimeQuality * sessionQuality;
-   string grade = combinedScore >= 5.5 ? "A+" : combinedScore >= 4.0 ? "A" : combinedScore >= 2.5 ? "B" : "PASS";
+   string grade = combinedScore >= InpGradeAPlus ? "A+" : combinedScore >= InpGradeA ? "A" : combinedScore >= InpGradeB ? "B" : "PASS";
 
-   if(signal == 0 || combinedScore < 2.5)
+   if(signal == 0 || combinedScore < InpGradeB)
    {
       Print("SCAN: ", RegimeName(), " | Session:", DoubleToString(sessionQuality, 2),
             " | Setup:", setupName, " Score:", DoubleToString(setupScore, 1),
@@ -635,7 +650,7 @@ void OnTick()
 
    // Anti-reversal (short cooldown for direction flip)
    if(lastTradeDir != 0 && signal != lastTradeDir && lastTradeClose > 0 &&
-      TimeCurrent() - lastTradeClose < 600)
+      TimeCurrent() - lastTradeClose < InpReversalCooldown)
    { Print("ANTI-REVERSAL: Wait before flipping direction"); return; }
 
    // Build exact signature for ML lookup + hive + journal
@@ -872,14 +887,14 @@ void ManagePositions()
          Print("BE LOCK: #", ticket, " at +0.5R — risk free");
       }
 
-      // B2: Quick profit take ($150-500, faster on M5 gold)
-      if(profit >= 150)
+      // B2: Quick profit take (tunable)
+      if(profit >= InpProfitTakeMin)
       {
          bool momentumFading = false;
          if(isBuy && (rsi > 70 || close1 < open1 || close1 < emaF)) momentumFading = true;
          if(!isBuy && (rsi < 30 || close1 > open1 || close1 > emaF)) momentumFading = true;
 
-         if(profit >= 500 || momentumFading || minsOpen > 18)
+         if(profit >= InpProfitTakeMax || momentumFading || minsOpen > InpQuickExitMin)
          {
             Print("QUICK PROFIT: #", ticket, " +$", DoubleToString(profit, 2), " (", minsOpen, "min)");
             trade.PositionClose(ticket); continue;
@@ -945,7 +960,7 @@ void ManagePositions()
 int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price, string h1Dir, double spread,
                   string setup, string regime, string signature, double stoch, double mom)
 {
-   if(!InpUseAI || StringLen(InpServerURL) < 10) return 0;
+   if(!InpUseAI || InpBacktestMode || StringLen(InpServerURL) < 10) return 0;
    string url = InpServerURL + "/api/ai/analyze";
    string headers = "Content-Type: application/json\r\n";
    string body = StringFormat(
@@ -969,6 +984,7 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
 int CheckPositionWithAI(string dir, double entry, double current, double profit, double lots,
                          double rsi, double emaF, double emaS, double atr, int minsOpen, double sl, double tp)
 {
+   if(InpBacktestMode) return 0;                   // Tester: no network
    if(StringLen(InpServerURL) < 10) return 0;
    string url = InpServerURL + "/api/ai/manage-position";
    string headers = "Content-Type: application/json\r\n";
@@ -985,6 +1001,7 @@ int CheckPositionWithAI(string dir, double entry, double current, double profit,
 
 bool IsNewsSafe()
 {
+   if(InpBacktestMode) return true;                  // Tester: assume safe
    if(!InpUseNewsFilter || StringLen(InpServerURL) < 10) return true;
    string url = InpServerURL + "/api/news/check";
    char pd[], result[]; string rh;
@@ -1055,8 +1072,8 @@ void SavePatterns()
       }
       FileClose(h);
    }
-   // Cloud save
-   if(StringLen(InpServerURL) >= 10)
+   // Cloud save (skip in backtest)
+   if(!InpBacktestMode && StringLen(InpServerURL) >= 10)
    {
       string url = InpServerURL + "/api/ml/patterns/save";
       string headers = "Content-Type: application/json\r\n";
@@ -1079,8 +1096,8 @@ void SavePatterns()
 
 void LoadPatterns()
 {
-   // Try cloud first
-   if(StringLen(InpServerURL) >= 10)
+   // Try cloud first (skip in backtest)
+   if(!InpBacktestMode && StringLen(InpServerURL) >= 10)
    {
       string url = InpServerURL + "/api/ml/patterns/load";
       string headers = "Content-Type: application/json\r\n";
@@ -1174,6 +1191,7 @@ void CloseAll()
 
 void LogTradeToServer(string result2, double price, double profit, double lots, string dir)
 {
+   if(InpBacktestMode) return;                    // Tester: no network
    if(StringLen(InpServerURL) < 10) return;
    MqlDateTime dt; TimeCurrent(dt);
    string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f,\"signature\":\"%s\",\"setup\":\"%s\",\"regime\":\"%s\"}",
@@ -1186,6 +1204,7 @@ void LogTradeToServer(string result2, double price, double profit, double lots, 
 
 void SendWeeklyReport()
 {
+   if(InpBacktestMode) return;                    // Tester: no network
    if(StringLen(InpServerURL) < 10 || totalTrades == 0) return;
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    double wPnL = accInfo.Equity() - weeklyStartEquity;
@@ -1207,7 +1226,8 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.1 | DUAL-AI + HIVE | LICENSED\n";
+   d += " XAUAI SNIPER v4.1 | DUAL-AI + HIVE | ";
+   d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
    d += StringFormat("Daily: $%.0f | Weekly: $%.0f (%.1f%%/%.0f%%)\n", dPnL, wPnL, weeklyStartEquity > 0 ? wPnL/weeklyStartEquity*100 : 0.0, InpWeeklyTarget);
