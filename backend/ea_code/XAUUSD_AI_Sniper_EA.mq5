@@ -28,8 +28,8 @@ input group "=== RISK ==="
 input double InpRiskPercent    = 1.0;      // Risk per trade (%)
 input double InpMaxLots        = 10.0;     // HARD max lots per trade (safety cap)
 input double InpDailyLossLimit = 3.0;      // Max daily loss (%) - CLOSES ALL TRADES
-input int    InpMaxOpenTrades  = 3;        // Max open trades
-input int    InpMaxTradesPerDay= 15;       // Max trades per day
+input int    InpMaxOpenTrades  = 5;        // Max open trades
+input int    InpMaxTradesPerDay= 30;       // Max trades per day (QuantPerp style: trade often)
 input double InpWeeklyTarget   = 35.0;     // Weekly profit target (%) - stops when hit
 input double InpWeeklyMaxLoss  = 10.0;     // Weekly max loss (%) - stops when hit
 input bool   InpCarefulMode    = true;     // Careful mode: reduce risk as profit grows
@@ -45,7 +45,7 @@ input int    InpATRPeriod      = 14;       // ATR Period
 input double InpSLMultiplier   = 2.0;      // SL = ATR x this (wider = survive fakeouts)
 input double InpTPMultiplier   = 2.0;      // TP = SL x this (let winners run, Smart Exit protects)
 input bool   InpUseH1Filter    = true;     // Use H1 trend filter
-input int    InpCooldownMins   = 10;       // Minutes to wait after a loss before next trade
+input int    InpCooldownMins   = 5;        // Minutes to wait after a loss (QuantPerp: quick recovery)
 input double InpMinEMASep      = 0.05;     // Min EMA separation (%) - avoids choppy zones
 
 //+------------------------------------------------------------------+
@@ -918,16 +918,14 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false, b
 }
 
 //+------------------------------------------------------------------+
-//| SMART POSITION MANAGEMENT — "Rethinking" active trades           |
-//| Watches RSI, EMA, candle patterns to adapt in real-time          |
+//| QUANTPERP-STYLE ACTIVE POSITION MANAGEMENT                      |
+//| Take profits fast. Cut losses quick. Let Claude decide.          |
 //+------------------------------------------------------------------+
 void ManagePositions()
 {
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double atr = bufATR[1];
    if(atr <= 0) return;
-   double minVol = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
-   double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
    double rsi = bufRSI[1];
    double emaFast = bufEMAFast[1];
    double emaSlow = bufEMASlow[1];
@@ -947,173 +945,151 @@ void ManagePositions()
       double curTP    = posInfo.TakeProfit();
       double volume   = posInfo.Volume();
       ulong  ticket   = posInfo.Ticket();
-      double profit   = posInfo.Profit();
-      double slDist;
+      double profit   = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+      int    minsOpen = (int)((TimeCurrent() - posInfo.Time()) / 60);
+      bool   isBuy    = posInfo.PositionType() == POSITION_TYPE_BUY;
 
-      if(posInfo.PositionType() == POSITION_TYPE_BUY)
+      // =============================================
+      // RULE 1: QUICK PROFIT — Take $200+ immediately
+      // Better 5x $200 than 1x $1000 that reverses
+      // =============================================
+      if(profit >= 200)
       {
-         slDist = openPx - curSL;
-         if(slDist <= 0) slDist = atr * InpSLMultiplier;
-         double tp1 = openPx + slDist * 1.0;
+         // Check if momentum still strong or weakening
+         bool momentumWeak = false;
+         if(isBuy && (rsi > 70 || close1 < open1 || close1 < emaFast)) momentumWeak = true;
+         if(!isBuy && (rsi < 30 || close1 > open1 || close1 > emaFast)) momentumWeak = true;
 
-         // ============================================
-         // SMART EXIT 1: In profit but market reversing
-         // If in profit AND (RSI overbought OR price crossed below fast EMA OR bearish reversal candle)
-         // → Take profit now, don't wait for TP
-         // ============================================
-         if(profit > 0 && curPrice > openPx + atr * 0.3)
+         if(profit >= 500 || momentumWeak || minsOpen > 20)
          {
-            bool rsiReversal = rsi > 72;                        // RSI getting overbought
-            bool emaCross = close1 < emaFast && close2 > emaFast; // price just crossed below EMA
-            bool bearishCandle = close1 < open1 && (open1 - close1) > atr * 0.4; // strong bearish candle
-
-            if(rsiReversal || emaCross || bearishCandle)
-            {
-               string exitReason = rsiReversal ? "RSI overbought" : emaCross ? "Price crossed below EMA" : "Strong bearish reversal candle";
-               Print("SMART EXIT: Closing BUY #", ticket, " in profit ($", DoubleToString(profit, 2),
-                     ") — Market reversing: ", exitReason);
-               trade.PositionClose(ticket);
-               continue;
-            }
+            Print("QUICK PROFIT: Closing #", ticket, " +$", DoubleToString(profit, 2),
+                  " (", minsOpen, "min) — ", profit >= 500 ? "Target hit" : momentumWeak ? "Momentum fading" : "Time limit");
+            trade.PositionClose(ticket);
+            continue;
          }
+      }
 
-         // ============================================
-         // SMART EXIT 2: Heading to SL but showing recovery
-         // If losing AND price approaching SL AND (RSI oversold = bounce likely OR bullish reversal candle)
-         // → Widen SL slightly to give room, or do nothing (let it play out)
-         // If losing AND no recovery signs AND loss > 60% of SL distance
-         // → Cut loss early instead of waiting for full SL hit
-         // ============================================
-         if(profit < 0)
+      // =============================================
+      // RULE 2: BREAK-EVEN FAST — Any profit > $50 after 5min
+      // =============================================
+      if(profit > 50 && minsOpen >= 5)
+      {
+         double beSL;
+         if(isBuy)
+            beSL = NormalizeDouble(openPx + SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 20, digits);
+         else
+            beSL = NormalizeDouble(openPx - SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 20, digits);
+
+         if((isBuy && curSL < openPx) || (!isBuy && curSL > openPx))
          {
-            double lossPercent = MathAbs(curPrice - openPx) / slDist * 100;
-
-            // Loss > 60% of SL and market shows no recovery (bearish momentum)
-            if(lossPercent > 60 && rsi < 35 && close1 < close2)
-            {
-               Print("SMART CUT: Closing BUY #", ticket, " early — loss at ", DoubleToString(lossPercent, 0),
-                     "% of SL, no recovery signs (RSI=", DoubleToString(rsi, 1), ")");
-               trade.PositionClose(ticket);
-               continue;
-            }
-
-            // Near SL but RSI oversold = bounce likely → move SL a bit wider
-            if(lossPercent > 70 && rsi < 28)
-            {
-               double newSL = NormalizeDouble(curSL - atr * 0.3, digits);
-               Print("SMART ADJUST: BUY #", ticket, " — RSI oversold (", DoubleToString(rsi, 1),
-                     "), widening SL to give room for bounce");
-               trade.PositionModify(ticket, newSL, curTP);
-               continue;
-            }
-         }
-
-         // PARTIAL CLOSE at 1:1 target
-         if(curPrice >= tp1 && volume > minVol)
-         {
-            double closeVol = MathFloor(volume * 0.5 / lotStep) * lotStep;
-            closeVol = NormalizeDouble(closeVol, 2);
-            if(closeVol >= minVol)
-            {
-               if(trade.PositionClosePartial(ticket, closeVol))
-               {
-                  Print("PARTIAL CLOSE: 50% of #", ticket, " at 1:1 target");
-                  double beSL = NormalizeDouble(openPx + SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
-                  trade.PositionModify(ticket, beSL, curTP);
-               }
-            }
-         }
-         else if(InpBreakEven && curSL < openPx && curPrice > openPx + atr)
-         {
-            double beSL = NormalizeDouble(openPx + SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
             trade.PositionModify(ticket, beSL, curTP);
-            Print("BREAK-EVEN: #", ticket);
+            Print("QUICK BE: #", ticket, " SL to break-even at +$", DoubleToString(profit, 2));
          }
+      }
 
-         // Trailing
-         if(InpTrailingStop && curPrice > tp1)
+      // =============================================
+      // RULE 3: SMART CUT — Don't wait for full SL
+      // If losing > $100 and no recovery signs, cut now
+      // =============================================
+      if(profit < -100)
+      {
+         bool noRecovery = false;
+         if(isBuy && rsi < 35 && close1 < close2 && close1 < emaFast) noRecovery = true;
+         if(!isBuy && rsi > 65 && close1 > close2 && close1 > emaFast) noRecovery = true;
+
+         if(noRecovery || (profit < -200 && minsOpen > 15))
          {
-            double newSL = NormalizeDouble(curPrice - atr * 1.0, digits);
+            Print("SMART CUT: Closing #", ticket, " at $", DoubleToString(profit, 2),
+                  " (", minsOpen, "min) — ", noRecovery ? "No recovery signs" : "Loss + time limit");
+            trade.PositionClose(ticket);
+            continue;
+         }
+      }
+
+      // =============================================
+      // RULE 4: STALE TRADE — Close if no movement
+      // Open > 30 min with < $50 profit = going nowhere
+      // =============================================
+      if(minsOpen > 30 && MathAbs(profit) < 50)
+      {
+         Print("STALE: Closing #", ticket, " — open ", minsOpen, "min with only $",
+               DoubleToString(profit, 2), " movement");
+         trade.PositionClose(ticket);
+         continue;
+      }
+
+      // =============================================
+      // RULE 5: CLAUDE AI POSITION CHECK (every 10 min)
+      // Send to Claude for deep reasoning
+      // =============================================
+      static datetime lastAICheck = 0;
+      if(StringLen(InpServerURL) >= 10 && InpUseAI && minsOpen >= 5 &&
+         TimeCurrent() - lastAICheck > 600) // every 10 min
+      {
+         int aiDecision = CheckPositionWithAI(
+            isBuy ? "BUY" : "SELL", openPx, curPrice, profit, volume,
+            rsi, emaFast, emaSlow, atr, minsOpen, curSL, curTP);
+         lastAICheck = TimeCurrent();
+
+         if(aiDecision == -1) // CLOSE
+         {
+            Print("CLAUDE AI: Recommends CLOSE #", ticket, " at $", DoubleToString(profit, 2));
+            trade.PositionClose(ticket);
+            continue;
+         }
+      }
+
+      // =============================================
+      // RULE 6: TRAILING STOP (tight, follows profit)
+      // =============================================
+      if(profit > 0)
+      {
+         if(isBuy)
+         {
+            double newSL = NormalizeDouble(curPrice - atr * 0.8, digits);
             if(newSL > curSL && newSL > openPx)
                trade.PositionModify(ticket, newSL, curTP);
          }
-      }
-      else // === SELL POSITION ===
-      {
-         slDist = curSL - openPx;
-         if(slDist <= 0) slDist = atr * InpSLMultiplier;
-         double tp1 = openPx - slDist * 1.0;
-
-         // SMART EXIT: In profit but market reversing UP
-         if(profit > 0 && curPrice < openPx - atr * 0.3)
+         else
          {
-            bool rsiReversal = rsi < 28;
-            bool emaCross = close1 > emaFast && close2 < emaFast;
-            bool bullishCandle = close1 > open1 && (close1 - open1) > atr * 0.4;
-
-            if(rsiReversal || emaCross || bullishCandle)
-            {
-               string exitReason = rsiReversal ? "RSI oversold" : emaCross ? "Price crossed above EMA" : "Strong bullish reversal candle";
-               Print("SMART EXIT: Closing SELL #", ticket, " in profit ($", DoubleToString(profit, 2),
-                     ") — Market reversing: ", exitReason);
-               trade.PositionClose(ticket);
-               continue;
-            }
-         }
-
-         // SMART CUT: Losing with no recovery
-         if(profit < 0)
-         {
-            double lossPercent = MathAbs(curPrice - openPx) / slDist * 100;
-
-            if(lossPercent > 60 && rsi > 65 && close1 > close2)
-            {
-               Print("SMART CUT: Closing SELL #", ticket, " early — loss at ", DoubleToString(lossPercent, 0),
-                     "% of SL, no recovery (RSI=", DoubleToString(rsi, 1), ")");
-               trade.PositionClose(ticket);
-               continue;
-            }
-
-            if(lossPercent > 70 && rsi > 72)
-            {
-               double newSL = NormalizeDouble(curSL + atr * 0.3, digits);
-               Print("SMART ADJUST: SELL #", ticket, " — RSI overbought (", DoubleToString(rsi, 1),
-                     "), widening SL for pullback");
-               trade.PositionModify(ticket, newSL, curTP);
-               continue;
-            }
-         }
-
-         // PARTIAL CLOSE
-         if(curPrice <= tp1 && volume > minVol)
-         {
-            double closeVol = MathFloor(volume * 0.5 / lotStep) * lotStep;
-            closeVol = NormalizeDouble(closeVol, 2);
-            if(closeVol >= minVol)
-            {
-               if(trade.PositionClosePartial(ticket, closeVol))
-               {
-                  Print("PARTIAL CLOSE: 50% of #", ticket, " at 1:1 target");
-                  double beSL = NormalizeDouble(openPx - SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
-                  trade.PositionModify(ticket, beSL, curTP);
-               }
-            }
-         }
-         else if(InpBreakEven && curSL > openPx && curPrice < openPx - atr)
-         {
-            double beSL = NormalizeDouble(openPx - SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10, digits);
-            trade.PositionModify(ticket, beSL, curTP);
-            Print("BREAK-EVEN: #", ticket);
-         }
-
-         if(InpTrailingStop && curPrice < tp1)
-         {
-            double newSL = NormalizeDouble(curPrice + atr * 1.0, digits);
+            double newSL = NormalizeDouble(curPrice + atr * 0.8, digits);
             if(newSL < curSL && newSL < openPx)
                trade.PositionModify(ticket, newSL, curTP);
          }
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| CLAUDE AI: Check if position should be held or closed            |
+//+------------------------------------------------------------------+
+int CheckPositionWithAI(string dir, double entry, double current, double profit,
+                         double lots, double rsi, double emaF, double emaS,
+                         double atr, int minsOpen, double sl, double tp)
+{
+   if(StringLen(InpServerURL) < 10) return 0;
+
+   string url = InpServerURL + "/api/ai/manage-position";
+   string headers = "Content-Type: application/json\r\n";
+   string body = StringFormat(
+      "{\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f}",
+      dir, entry, current, profit, lots, rsi, emaF, emaS, atr, minsOpen, sl, tp);
+
+   char postData[], result[];
+   string resultHeaders;
+   StringToCharArray(body, postData, 0, StringLen(body));
+   int res = WebRequest("POST", url, headers, 10000, postData, result, resultHeaders);
+
+   if(res != 200) return 0; // HOLD on error
+
+   string response = CharArrayToString(result);
+   if(StringFind(response, "CLOSE") >= 0 || StringFind(response, "\"CLOSE\"") >= 0)
+   {
+      Print("CLAUDE: CLOSE — ", response);
+      return -1;
+   }
+   Print("CLAUDE: HOLD — ", response);
+   return 0;
 }
 
 //+------------------------------------------------------------------+

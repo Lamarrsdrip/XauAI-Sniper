@@ -1110,6 +1110,83 @@ async def startup():
     creds_path.write_text(f"# Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n## Endpoints\n- Login: POST /api/auth/login\n- Admin Portal: /admin\n")
 
 ########################################
+# CLAUDE AI POSITION MANAGER (Active Trade Reasoning)
+########################################
+class PositionCheckRequest(BaseModel):
+    symbol: str = "XAUUSD"
+    direction: str = ""
+    entry_price: float = 0
+    current_price: float = 0
+    profit: float = 0
+    lots: float = 0
+    rsi: float = 0
+    ema_fast: float = 0
+    ema_slow: float = 0
+    atr: float = 0
+    minutes_open: int = 0
+    sl: float = 0
+    tp: float = 0
+
+@api_router.post("/ai/manage-position")
+async def ai_manage_position(req: PositionCheckRequest):
+    try:
+        if not LLM_KEY:
+            return {"action": "HOLD", "reason": "AI not configured"}
+
+        chat = LlmChat(
+            api_key=LLM_KEY,
+            session_id=f"manage-{uuid.uuid4().hex[:8]}",
+            system_message="""You are a XAUUSD position manager AI. You monitor OPEN trades and decide whether to HOLD or CLOSE them. You think like a professional scalper — take profits fast, cut losses quick.
+
+RESPOND IN EXACTLY THIS JSON FORMAT:
+{"action":"HOLD","reason":"short reason"}
+
+Rules:
+- action: HOLD or CLOSE (only these 2)
+- reason: max 30 words
+
+Your philosophy:
+- $200-500 profit is GOOD. Take it. Don't wait for more.
+- If profit > $150 and momentum is weakening, CLOSE.
+- If profit > $300, strongly consider CLOSE.
+- If losing and RSI shows no reversal signs, CLOSE early.
+- If trade has been open > 30 minutes with no progress, CLOSE.
+- Small consistent wins beat waiting for big wins.
+- Capital preservation is #1 priority."""
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+
+        pnl_str = f"+${req.profit:.2f}" if req.profit > 0 else f"-${abs(req.profit):.2f}"
+        prompt = f"""OPEN {req.direction} POSITION on XAUUSD:
+- Entry: {req.entry_price} | Current: {req.current_price}
+- P/L: {pnl_str} ({req.lots} lots)
+- Open for: {req.minutes_open} minutes
+- SL: {req.sl} | TP: {req.tp}
+- RSI: {req.rsi}
+- EMA50: {req.ema_fast} | EMA200: {req.ema_slow}
+- ATR: {req.atr}
+- Trend: {"BULLISH" if req.ema_fast > req.ema_slow else "BEARISH"}
+
+Should I HOLD or CLOSE this position? JSON only."""
+
+        msg = UserMessage(text=prompt)
+        response = await chat.send_message(msg)
+
+        import json
+        try:
+            result = json.loads(response.strip())
+            result["action"] = result.get("action", "HOLD").upper()
+            if result["action"] not in ["HOLD", "CLOSE"]:
+                result["action"] = "HOLD"
+            return result
+        except json.JSONDecodeError:
+            if "CLOSE" in response.upper():
+                return {"action": "CLOSE", "reason": response[:80]}
+            return {"action": "HOLD", "reason": "AI response unclear"}
+    except Exception as e:
+        logger.error(f"Position manager error: {e}")
+        return {"action": "HOLD", "reason": f"Error: {str(e)[:50]}"}
+
+########################################
 # AI MARKET ANALYSIS (GPT-5.2)
 ########################################
 class AIAnalysisRequest(BaseModel):
