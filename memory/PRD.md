@@ -30,6 +30,18 @@
   - Glassmorphic header with live ticker
   - Bento grid stats, premium charts, glowing purchase card
   - Noise textures, gold gradients, entrance animations
+- **Feb 2026 - QuantPerp-inspired M5 XAUUSD architecture (v4.0)**
+  - 5-Gate entry system: Regime → Session → Setup scoring → Risk → AI
+  - 7 setup types: Trend Pullback, Range Reversal, Breakout, Squeeze Release, RSI Extreme, London Fix Pin, Multi-Extreme
+  - 8 regime classifier: Trending Up/Dn, Ranging, Breakout Up/Dn, Low Vol, Choppy, Dead
+  - 3-Path Smart Exits: (A) Deterministic SL/TP/Trail, (B) Smart mgmt (BE lock, quick profit, loss cut, stale), (C) Claude semantic exit
+  - Cloud ML pattern store (save/load per PIN)
+  - GPT-5.2 entry analysis + Claude 4.5 Sonnet active position manager via Emergent Universal Key
+- **Feb 2026 - EA v4.0 compile fixes & backend parser hardening**
+  - Removed dependency on `CDealInfo` class; switched to native `HistoryDealSelect` + `HistoryDealGet*` API (was causing compile error + stale deal data)
+  - Tightened Claude close parser (requires `"CLOSE"` with quotes) to prevent false closes from reason text
+  - Backend AI endpoints now strip markdown code fences before `json.loads` (Claude often wraps in ```json…```)
+  - Verified `/api/download/ea` serves full 1126-line EA; all EA→backend endpoints (ai/analyze, ai/manage-position, news/check, ml/patterns/save, ml/patterns/load, journal/log, journal/weekly-report) respond correctly
 
 ## Upcoming Tasks
 - Add Live Paystack Secret Key & Gmail SMTP credentials (User action) - P1

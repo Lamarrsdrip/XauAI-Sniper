@@ -1171,16 +1171,28 @@ Should I HOLD or CLOSE this position? JSON only."""
         msg = UserMessage(text=prompt)
         response = await chat.send_message(msg)
 
-        import json
+        import json, re
+        cleaned = response.strip()
+        # Strip markdown code fences if present
+        fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", cleaned, re.DOTALL)
+        if fence:
+            cleaned = fence.group(1).strip()
+        # Extract first JSON object if still wrapped in prose
+        if not cleaned.startswith("{"):
+            m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if m:
+                cleaned = m.group(0)
         try:
-            result = json.loads(response.strip())
-            result["action"] = result.get("action", "HOLD").upper()
+            result = json.loads(cleaned)
+            result["action"] = str(result.get("action", "HOLD")).upper()
             if result["action"] not in ["HOLD", "CLOSE"]:
                 result["action"] = "HOLD"
+            result["reason"] = str(result.get("reason", ""))[:200]
             return result
         except json.JSONDecodeError:
-            if "CLOSE" in response.upper():
-                return {"action": "CLOSE", "reason": response[:80]}
+            up = response.upper()
+            if '"CLOSE"' in up or "ACTION:CLOSE" in up.replace(" ", ""):
+                return {"action": "CLOSE", "reason": "parser fallback"}
             return {"action": "HOLD", "reason": "AI response unclear"}
     except Exception as e:
         logger.error(f"Position manager error: {e}")
@@ -1237,18 +1249,28 @@ What is your trade decision? Respond ONLY with the JSON."""
         msg = UserMessage(text=prompt)
         response = await chat.send_message(msg)
 
-        import json
+        import json, re
+        cleaned = response.strip()
+        fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", cleaned, re.DOTALL)
+        if fence:
+            cleaned = fence.group(1).strip()
+        if not cleaned.startswith("{"):
+            m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if m:
+                cleaned = m.group(0)
         try:
-            result = json.loads(response.strip())
-            result["action"] = result.get("action", "SKIP").upper()
+            result = json.loads(cleaned)
+            result["action"] = str(result.get("action", "SKIP")).upper()
             if result["action"] not in ["BUY", "SELL", "SKIP"]:
                 result["action"] = "SKIP"
             result["confidence"] = max(0, min(100, int(result.get("confidence", 50))))
+            result["reason"] = str(result.get("reason", ""))[:200]
             await db.ai_analyses.insert_one({"symbol": req.symbol, "request": req.dict(), "response": result, "created_at": datetime.now(timezone.utc).isoformat()})
             return result
         except json.JSONDecodeError:
-            if "BUY" in response.upper(): return {"action": "BUY", "confidence": 60, "reason": response[:100]}
-            elif "SELL" in response.upper(): return {"action": "SELL", "confidence": 60, "reason": response[:100]}
+            up = response.upper()
+            if '"BUY"' in up: return {"action": "BUY", "confidence": 60, "reason": "parser fallback"}
+            if '"SELL"' in up: return {"action": "SELL", "confidence": 60, "reason": "parser fallback"}
             return {"action": "SKIP", "confidence": 50, "reason": "AI response unclear"}
     except Exception as e:
         logger.error(f"AI analysis error: {e}")

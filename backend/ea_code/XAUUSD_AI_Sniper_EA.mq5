@@ -879,7 +879,7 @@ int CheckPositionWithAI(string dir, double entry, double current, double profit,
    int res = WebRequest("POST", url, headers, 10000, postData, result, rh);
    if(res != 200) return 0;
    string response = CharArrayToString(result);
-   if(StringFind(response, "CLOSE") >= 0) { Print("CLAUDE: ", response); return -1; }
+   if(StringFind(response, "\"CLOSE\"") >= 0) { Print("CLAUDE: ", response); return -1; }
    return 0;
 }
 
@@ -1024,24 +1024,34 @@ void LoadPatterns()
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest& request, const MqlTradeResult& result)
 {
-   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
-   {
-      CDealInfo deal;
-      if(deal.SelectByIndex(HistoryDealsTotal() - 1))
-      {
-         if(deal.Magic() == InpMagicNumber && deal.Entry() == DEAL_ENTRY_OUT)
-         {
-            double profit = deal.Profit() + deal.Swap() + deal.Commission();
-            totalTrades++; if(profit > 0) wins++; else losses++;
-            lastTradeClose = TimeCurrent();
-            Print("CLOSED: ", profit > 0 ? "WIN" : "LOSS", " $", DoubleToString(profit, 2),
-                  " | T:", totalTrades, " W:", wins, " L:", losses);
-            RecordPattern(profit > 0, profit);
-            LogTradeToServer(profit > 0 ? "WIN" : "LOSS", deal.Price(), profit,
-                             deal.Volume(), deal.DealType() == DEAL_TYPE_BUY ? "BUY" : "SELL");
-         }
-      }
-   }
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+   ulong dealTicket = trans.deal;
+   if(dealTicket == 0) return;
+   if(!HistoryDealSelect(dealTicket)) return;
+
+   long magic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+   if(magic != InpMagicNumber) return;
+
+   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+   if(entry != DEAL_ENTRY_OUT) return;
+
+   double dProfit     = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+   double dSwap       = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+   double dCommission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+   double profit      = dProfit + dSwap + dCommission;
+   double dPrice      = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+   double dVolume     = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+   ENUM_DEAL_TYPE dType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+   // On exit, the closing deal is opposite side of the position
+   string dirStr = (dType == DEAL_TYPE_SELL) ? "BUY" : "SELL";
+
+   totalTrades++;
+   if(profit > 0) wins++; else losses++;
+   lastTradeClose = TimeCurrent();
+   Print("CLOSED: ", profit > 0 ? "WIN" : "LOSS", " $", DoubleToString(profit, 2),
+         " | T:", totalTrades, " W:", wins, " L:", losses);
+   RecordPattern(profit > 0, profit);
+   LogTradeToServer(profit > 0 ? "WIN" : "LOSS", dPrice, profit, dVolume, dirStr);
 }
 
 //+------------------------------------------------------------------+
