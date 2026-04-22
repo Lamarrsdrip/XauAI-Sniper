@@ -435,21 +435,21 @@ void OnTick()
       double lowerWick = MathMin(open1, close1) - iLow(Symbol(), PERIOD_M5, 1);
       double upperWick = iHigh(Symbol(), PERIOD_M5, 1) - MathMax(open1, close1);
 
-      if(close1 <= lowerZone && lowerWick > bodySize * 0.5 && rsi < 45)
+      if(close1 <= lowerZone && lowerWick > bodySize * 0.3 && rsi < 50)
       {
          signal = 1;
          reason = "SCALP BUY: Near support " + DoubleToString(intraLow, 2) + " | Wick rejection | RSI=" + DoubleToString(rsi, 1);
          isScalpTrade = true;
       }
       // SCALP SELL: Price near intraday resistance + rejection wick
-      else if(close1 >= upperZone && upperWick > bodySize * 0.5 && rsi > 55)
+      else if(close1 >= upperZone && upperWick > bodySize * 0.3 && rsi > 50)
       {
          signal = -1;
          reason = "SCALP SELL: Near resist " + DoubleToString(intraHigh, 2) + " | Wick rejection | RSI=" + DoubleToString(rsi, 1);
          isScalpTrade = true;
       }
       // MEAN REVERSION: Price far from midpoint + RSI extreme
-      else if(close1 < midPoint - intraRange * 0.3 && rsi < 35 && close1 > open1)
+      else if(close1 < midPoint - intraRange * 0.25 && rsi < 40 && close1 > open1)
       {
          signal = 1;
          reason = "REVERSION BUY: Below midpoint, RSI=" + DoubleToString(rsi, 1);
@@ -499,7 +499,8 @@ void OnTick()
    }
 
    // === SUPPORT & RESISTANCE: Don't buy at resistance, don't sell at support ===
-   if(signal != 0)
+   // (Skip for scalp trades — scalp already uses its own intraday S/R)
+   if(signal != 0 && !isScalpTrade)
    {
       double resistance = 0, support = 99999;
       // Find recent swing high (resistance) and swing low (support) from last 30 M15 candles
@@ -528,8 +529,8 @@ void OnTick()
       }
    }
 
-   // === M15 CONFIRMATION: Check M15 candle agrees with direction ===
-   if(signal != 0)
+   // === M15 CONFIRMATION: Only for trend trades, not scalps ===
+   if(signal != 0 && !isScalpTrade)
    {
       double m15Close1 = iClose(Symbol(), PERIOD_M15, 1);
       double m15Open1  = iOpen(Symbol(), PERIOD_M15, 1);
@@ -561,8 +562,8 @@ void OnTick()
       }
    }
 
-   // === SMART FILTER: H1 Trend ===
-   if(signal != 0 && InpUseH1Filter)
+   // === SMART FILTER: H1 Trend (only for trend trades) ===
+   if(signal != 0 && !isScalpTrade && InpUseH1Filter)
    {
       if(rsi > 30 && rsi < 70)
       {
@@ -579,8 +580,8 @@ void OnTick()
       }
    }
 
-   // === MOMENTUM EXHAUSTION: Don't chase extended moves ===
-   if(signal != 0)
+   // === MOMENTUM EXHAUSTION: Don't chase extended moves (trend only) ===
+   if(signal != 0 && !isScalpTrade)
    {
       double move3 = MathAbs(iClose(Symbol(), PERIOD_M5, 1) - iClose(Symbol(), PERIOD_M5, 4));
       if(move3 > atr * 3.0) // 3 candles moved more than 3x ATR = exhausted
@@ -603,8 +604,8 @@ void OnTick()
       }
    }
 
-   // === VOLUME CHECK: Low volume = fake moves ===
-   if(signal != 0)
+   // === VOLUME CHECK: Low volume = fake moves (trend only) ===
+   if(signal != 0 && !isScalpTrade)
    {
       long vol1 = iVolume(Symbol(), PERIOD_M5, 1);
       long vol2 = iVolume(Symbol(), PERIOD_M5, 2);
@@ -1649,3 +1650,4 @@ void UpdateDashboard(int signal)
    Comment(d);
 }
 //+------------------------------------------------------------------+
+
