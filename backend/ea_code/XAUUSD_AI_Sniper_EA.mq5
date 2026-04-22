@@ -109,6 +109,7 @@ struct TradePattern
    int    setupType;
    bool   wasWinner;
    double profit;
+   string signature;       // NEW: 7-field signature for exact + rollup matching
 };
 
 //+------------------------------------------------------------------+
@@ -870,15 +871,14 @@ void OnTick()
    double sizeMulti = grade == "A+" ? 1.0 : grade == "A" ? 0.85 : 0.55;
    int    confidenceBoostPP = 0;   // in percentage points, informational
 
-   // ----- LOCAL ML (exact-signature match) -----
+   // ----- LOCAL ML (hierarchical signature match, mirrors hive) -----
    if(InpLearnPatterns && patternCount >= 5)
    {
-      double mlScore = GetMLScore(signal, bufRSI[1],
-         (bufEMAFast[1] - bufEMASlow[1]) / bufEMASlow[1] * 10000,
-         dtNow.hour, dtNow.day_of_week);
-      if(mlScore <= 0.30 && patternCount >= 5)
-      { Print("LOCAL ML VETO: WR=", DoubleToString(mlScore * 100, 0), "% — HARD BLOCK"); return; }
-      if(mlScore >= 0.60) { sizeMulti += 0.15; confidenceBoostPP += 8; }
+      double mlScore = GetMLScore(signal, signature);
+      // Need at least 10 local samples before a veto is trusted
+      if(mlScore <= 0.30 && patternCount >= 10)
+      { Print("LOCAL ML VETO: WR=", DoubleToString(mlScore * 100, 0), "% (", patternCount, " patterns) — HARD BLOCK"); return; }
+      if(mlScore >= 0.60) { Print("LOCAL ML BOOST: WR=", DoubleToString(mlScore * 100, 0), "%"); sizeMulti += 0.15; confidenceBoostPP += 8; }
    }
 
    // ----- GLOBAL HIVE-MIND (7-day, all users, same signature) -----
@@ -1237,20 +1237,56 @@ bool IsNewsSafe()
 //+------------------------------------------------------------------+
 //| ML FUNCTIONS                                                     |
 //+------------------------------------------------------------------+
-double GetMLScore(int dir, double rsi, double emaDiff, int hour, int dow)
+//+------------------------------------------------------------------+
+//| LOCAL ML — hierarchical signature matching (mirrors hive logic)  |
+//| Input: current signature string + direction                      |
+//| Returns WR (0..1) at the MOST SPECIFIC level with >= 5 matches.  |
+//| Rollup levels: exact -> drop_mom -> drop_stoch -> drop_rsi ->    |
+//|                drop_session -> regime+setup+dir                  |
+//+------------------------------------------------------------------+
+double GetMLScore(int dir, string signature)
 {
-   if(patternCount < 10) return 0.5;
-   int matches = 0, matchWins = 0;
-   for(int i = 0; i < patternCount; i++)
+   if(patternCount < 5 || StringLen(signature) == 0) return 0.5;
+
+   // Build rollup prefixes (same hierarchy as backend hive)
+   string parts[];
+   int nParts = StringSplit(signature, '|', parts);
+   if(nParts != 7) return 0.5;
+
+   string rollups[5];
+   rollups[0] = signature;                                               // exact
+   rollups[1] = parts[0]+"|"+parts[1]+"|"+parts[2]+"|"+parts[3]+"|"+parts[4]+"|"+parts[5];  // drop_mom
+   rollups[2] = parts[0]+"|"+parts[1]+"|"+parts[2]+"|"+parts[3]+"|"+parts[4];               // drop_stoch
+   rollups[3] = parts[0]+"|"+parts[1]+"|"+parts[2]+"|"+parts[3];                             // drop_rsi
+   rollups[4] = parts[0]+"|"+parts[1]+"|"+parts[2];                                          // drop_session
+
+   for(int lvl = 0; lvl < 5; lvl++)
    {
-      if(patterns[i].direction != dir) continue;
-      if(MathAbs(patterns[i].rsi - rsi) > 15) continue;
-      if(MathAbs(patterns[i].hour - hour) > 2) continue;
-      matches++;
-      if(patterns[i].wasWinner) matchWins++;
+      string target = rollups[lvl];
+      int tLen = StringLen(target);
+      int matches = 0, wins = 0;
+      for(int i = 0; i < patternCount; i++)
+      {
+         if(patterns[i].direction != dir) continue;
+         string ps = patterns[i].signature;
+         if(StringLen(ps) == 0) continue;
+         bool match;
+         if(lvl == 0) match = (ps == target);
+         else
+         {
+            // Prefix match + pipe anchor
+            if(StringLen(ps) <= tLen) continue;
+            if(StringSubstr(ps, 0, tLen) != target) continue;
+            if(StringGetCharacter(ps, tLen) != '|') continue;
+            match = true;
+         }
+         if(!match) continue;
+         matches++;
+         if(patterns[i].wasWinner) wins++;
+      }
+      if(matches >= 5) return (double)wins / matches;
    }
-   if(matches < 5) return 0.5;
-   return (double)matchWins / matches;
+   return 0.5;
 }
 
 void RecordPattern(bool wasWin, double profit)
@@ -1263,11 +1299,12 @@ void RecordPattern(bool wasWin, double profit)
    p.hour = dt.hour; p.dayOfWeek = dt.day_of_week;
    p.regime = lastRegime; p.setupType = lastSetupType;
    p.wasWinner = wasWin; p.profit = profit;
+   p.signature = lastSignalSignature;      // 7-field signature for local ML matching
    if(patternCount >= InpMaxPatterns)
    { for(int i = 0; i < patternCount - 1; i++) patterns[i] = patterns[i+1]; patternCount--; }
    ArrayResize(patterns, patternCount + 1);
    patterns[patternCount] = p; patternCount++;
-   Print("ML: #", patternCount, " ", wasWin ? "WIN" : "LOSS", " $", DoubleToString(profit, 2));
+   Print("ML: #", patternCount, " ", wasWin ? "WIN" : "LOSS", " $", DoubleToString(profit, 2), " sig=", p.signature);
    if(patternCount % 5 == 0) SavePatterns();
 }
 
@@ -1277,11 +1314,12 @@ void RecordPattern(bool wasWin, double profit)
 void SavePatterns()
 {
    if(patternCount == 0) return;
-   // Local backup
+   // Local backup — v2 format adds signature string + magic header
    string fn = "AIS_Patterns_" + Symbol() + ".bin";
    int h = FileOpen(fn, FILE_WRITE | FILE_BIN);
    if(h != INVALID_HANDLE)
    {
+      FileWriteInteger(h, 0xA15E2);              // magic "AI SIG v2"
       FileWriteInteger(h, patternCount);
       for(int i = 0; i < patternCount; i++)
       {
@@ -1290,6 +1328,7 @@ void SavePatterns()
          FileWriteInteger(h, patterns[i].hour); FileWriteInteger(h, patterns[i].dayOfWeek);
          FileWriteInteger(h, patterns[i].regime); FileWriteInteger(h, patterns[i].setupType);
          FileWriteInteger(h, patterns[i].wasWinner ? 1 : 0); FileWriteDouble(h, patterns[i].profit);
+         FileWriteString(h, patterns[i].signature);
       }
       FileClose(h);
    }
@@ -1302,10 +1341,10 @@ void SavePatterns()
       for(int i = 0; i < patternCount; i++)
       {
          if(i > 0) jp += ",";
-         jp += StringFormat("{\"d\":%d,\"ed\":%.4f,\"r\":%.1f,\"a\":%.2f,\"h\":%d,\"dw\":%d,\"rg\":%d,\"st\":%d,\"w\":%d,\"p\":%.2f}",
+         jp += StringFormat("{\"d\":%d,\"ed\":%.4f,\"r\":%.1f,\"a\":%.2f,\"h\":%d,\"dw\":%d,\"rg\":%d,\"st\":%d,\"w\":%d,\"p\":%.2f,\"sig\":\"%s\"}",
             patterns[i].direction, patterns[i].emaDiff, patterns[i].rsi, patterns[i].atr,
             patterns[i].hour, patterns[i].dayOfWeek, patterns[i].regime, patterns[i].setupType,
-            patterns[i].wasWinner ? 1 : 0, patterns[i].profit);
+            patterns[i].wasWinner ? 1 : 0, patterns[i].profit, patterns[i].signature);
       }
       jp += "]";
       string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"patterns\":%s}", InpLicensePIN, Symbol(), jp);
@@ -1338,11 +1377,21 @@ void LoadPatterns()
          }
       }
    }
-   // Local fallback
+   // Local fallback (v2 format: magic + count + [...fields, signature])
    string fn = "AIS_Patterns_" + Symbol() + ".bin";
    if(!FileIsExist(fn)) { Print("ML: Fresh start"); return; }
    int h = FileOpen(fn, FILE_READ | FILE_BIN);
    if(h == INVALID_HANDLE) return;
+   int magic = FileReadInteger(h);
+   if(magic != 0xA15E2)
+   {
+      // Old format — discard and start fresh with signature-aware store
+      FileClose(h);
+      Print("ML LOCAL: old pattern file detected (no signatures) — starting fresh for v4.2");
+      patternCount = 0;
+      ArrayResize(patterns, 0);
+      return;
+   }
    patternCount = FileReadInteger(h);
    ArrayResize(patterns, patternCount);
    for(int i = 0; i < patternCount; i++)
@@ -1352,9 +1401,10 @@ void LoadPatterns()
       patterns[i].hour = FileReadInteger(h); patterns[i].dayOfWeek = FileReadInteger(h);
       patterns[i].regime = FileReadInteger(h); patterns[i].setupType = FileReadInteger(h);
       patterns[i].wasWinner = FileReadInteger(h) == 1; patterns[i].profit = FileReadDouble(h);
+      patterns[i].signature = FileReadString(h);
    }
    FileClose(h);
-   Print("ML LOCAL: Loaded ", patternCount, " patterns");
+   Print("ML LOCAL: Loaded ", patternCount, " patterns (v2 with signatures)");
 }
 
 //+------------------------------------------------------------------+

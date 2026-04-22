@@ -52,6 +52,13 @@
   - Dashboard shows DXY bias, drawdown state, streak pause timer, re-entry watcher status.
   - All 8 new features fully tunable via MT5 inputs, still respect `InpBacktestMode` (strategy-tester-safe).
 
+- **Feb 2026 - v4.2.1 Local ML reunified with signature system**
+  - `TradePattern` struct now stores the 7-field signature alongside fuzzy fields.
+  - `GetMLScore()` rewritten to use the SAME hierarchical rollup as the hive (exact → drop_mom → drop_stoch → drop_rsi → drop_session). Local ML no longer orphaned.
+  - Veto threshold raised to `n >= 10` for local stability.
+  - Pattern file format bumped to v2 with magic header `0xA15E2`. Old v1 files are detected and discarded cleanly (no crash).
+  - Cloud-save JSON now includes `sig` field so patterns round-trip correctly when loaded on another machine.
+
 ## Upcoming Tasks
 - Add Live Paystack Secret Key & Gmail SMTP credentials (User action) - P1
 - Create Customer Dashboard for buyers to manage PINs - P2
