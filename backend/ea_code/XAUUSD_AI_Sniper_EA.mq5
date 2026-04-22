@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
-//|                                     QuantPerp XAU Edition         |
-//|                                     v4.0 — 5-Gate + Smart Exits  |
+//|                                     XauAI Sniper — M5 Gold Edition|
+//|                                     v4.1 — Dual-AI + Hive-Mind   |
 //+------------------------------------------------------------------+
-#property copyright "AI Sniper × QuantPerp"
+#property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.00"
-#property description "XAUUSD AI Sniper v4.0 — QuantPerp Architecture"
-#property description "5-Gate Entry | 3-Path Exit | Claude + GPT-5.2"
-#property description "8 Market Regimes | 7 Setup Patterns | Learning Loop"
+#property version   "4.10"
+#property description "XAUUSD AI Sniper v4.1 — Dual-AI + Signature Hive-Mind"
+#property description "5-Gate Entry | 3-Path Smart Exit | Claude 4.5 + GPT-5.2"
+#property description "8 Regimes | 7 Setups | 7-day global signature learning"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -184,7 +184,7 @@ int OnInit()
    lastSignalDir = 0; lastRegime = 0; lastSetupType = 0;
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.0 (QUANTPERP) READY ===");
+   Print("=== XAUAI SNIPER v4.1 (DUAL-AI + HIVE) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    return INIT_SUCCEEDED;
@@ -197,7 +197,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1207,7 +1207,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.0 | QUANTPERP | LICENSED\n";
+   d += " XAUAI SNIPER v4.1 | DUAL-AI + HIVE | LICENSED\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
    d += StringFormat("Daily: $%.0f | Weekly: $%.0f (%.1f%%/%.0f%%)\n", dPnL, wPnL, weeklyStartEquity > 0 ? wPnL/weeklyStartEquity*100 : 0.0, InpWeeklyTarget);
