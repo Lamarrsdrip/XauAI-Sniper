@@ -390,7 +390,11 @@ void OnTick()
 
    // === ANTI-WHIPSAW: Require minimum EMA separation ===
    double emaSepPct = MathAbs(emaFast - emaSlow) / emaSlow * 100.0;
-   if(emaSepPct < InpMinEMASep)
+   bool isLowVolatility = atr < SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 50 || emaSepPct < InpMinEMASep;
+
+   // In LOW_VOLATILITY: Switch to scalp/mean-reversion mode
+   // In NORMAL: Use trend-following mode
+   if(!isLowVolatility && emaSepPct < InpMinEMASep)
    {
       Print("SCAN: EMAs too close (", DoubleToString(emaSepPct, 3), "%) — choppy zone, skipping");
       UpdateDashboard(0);
@@ -401,33 +405,97 @@ void OnTick()
    string reason = "";
    bool mlReduced = false;
    bool mlBoosted = false;
+   bool isScalpTrade = false; // flag for tight SL/TP
    double bodySize = MathAbs(close1 - open1);
    double candleRange = iHigh(Symbol(), PERIOD_M5, 1) - iLow(Symbol(), PERIOD_M5, 1);
-   bool strongCandle = candleRange > 0 && (bodySize / candleRange) > 0.4; // body > 40% of range
+   bool strongCandle = candleRange > 0 && (bodySize / candleRange) > 0.4;
 
-   // --- TREND BUY ---
-   if(emaFast > emaSlow && close1 > emaFast && rsi > 40 && rsi < 75 && strongCandle)
+   if(isLowVolatility)
    {
-      signal = 1;
-      reason = "TREND BUY: EMA21>50, RSI=" + DoubleToString(rsi, 1);
+      // ============================================
+      // LOW VOLATILITY REGIME: Scalp / Mean Reversion
+      // Trade within intraday S/R, tight SL/TP
+      // ============================================
+
+      // Find intraday S/R from last 20 M5 candles
+      double intraHigh = 0, intraLow = 99999;
+      for(int k = 1; k <= 20; k++)
+      {
+         double hi = iHigh(Symbol(), PERIOD_M5, k);
+         double lo = iLow(Symbol(), PERIOD_M5, k);
+         if(hi > intraHigh) intraHigh = hi;
+         if(lo < intraLow) intraLow = lo;
+      }
+      double intraRange = intraHigh - intraLow;
+      double midPoint = intraLow + intraRange * 0.5;
+      double lowerZone = intraLow + intraRange * 0.2;
+      double upperZone = intraHigh - intraRange * 0.2;
+
+      // SCALP BUY: Price near intraday support + rejection wick
+      double lowerWick = MathMin(open1, close1) - iLow(Symbol(), PERIOD_M5, 1);
+      double upperWick = iHigh(Symbol(), PERIOD_M5, 1) - MathMax(open1, close1);
+
+      if(close1 <= lowerZone && lowerWick > bodySize * 0.5 && rsi < 45)
+      {
+         signal = 1;
+         reason = "SCALP BUY: Near support " + DoubleToString(intraLow, 2) + " | Wick rejection | RSI=" + DoubleToString(rsi, 1);
+         isScalpTrade = true;
+      }
+      // SCALP SELL: Price near intraday resistance + rejection wick
+      else if(close1 >= upperZone && upperWick > bodySize * 0.5 && rsi > 55)
+      {
+         signal = -1;
+         reason = "SCALP SELL: Near resist " + DoubleToString(intraHigh, 2) + " | Wick rejection | RSI=" + DoubleToString(rsi, 1);
+         isScalpTrade = true;
+      }
+      // MEAN REVERSION: Price far from midpoint + RSI extreme
+      else if(close1 < midPoint - intraRange * 0.3 && rsi < 35 && close1 > open1)
+      {
+         signal = 1;
+         reason = "REVERSION BUY: Below midpoint, RSI=" + DoubleToString(rsi, 1);
+         isScalpTrade = true;
+      }
+      else if(close1 > midPoint + intraRange * 0.3 && rsi > 65 && close1 < open1)
+      {
+         signal = -1;
+         reason = "REVERSION SELL: Above midpoint, RSI=" + DoubleToString(rsi, 1);
+         isScalpTrade = true;
+      }
+
+      if(signal != 0)
+         Print("LOW VOL REGIME: ATR=", DoubleToString(atr, 2), " | Range=", DoubleToString(intraRange, 2),
+               " | Mode=SCALP");
    }
-   // --- TREND SELL ---
-   else if(emaFast < emaSlow && close1 < emaFast && rsi > 25 && rsi < 60 && strongCandle)
+   else
    {
-      signal = -1;
-      reason = "TREND SELL: EMA21<50, RSI=" + DoubleToString(rsi, 1);
-   }
-   // --- RANGE BUY (RSI oversold) ---
-   else if(rsi < 30 && close1 > open1)
-   {
-      signal = 1;
-      reason = "RSI OVERSOLD BUY: RSI=" + DoubleToString(rsi, 1);
-   }
-   // --- RANGE SELL (RSI overbought) ---
-   else if(rsi > 70 && close1 < open1)
-   {
-      signal = -1;
-      reason = "RSI OVERBOUGHT SELL: RSI=" + DoubleToString(rsi, 1);
+      // ============================================
+      // NORMAL VOLATILITY: Trend Following
+      // ============================================
+
+      // --- TREND BUY ---
+      if(emaFast > emaSlow && close1 > emaFast && rsi > 40 && rsi < 75 && strongCandle)
+      {
+         signal = 1;
+         reason = "TREND BUY: EMA50>200, RSI=" + DoubleToString(rsi, 1);
+      }
+      // --- TREND SELL ---
+      else if(emaFast < emaSlow && close1 < emaFast && rsi > 25 && rsi < 60 && strongCandle)
+      {
+         signal = -1;
+         reason = "TREND SELL: EMA50<200, RSI=" + DoubleToString(rsi, 1);
+      }
+      // --- RANGE BUY (RSI oversold) ---
+      else if(rsi < 30 && close1 > open1)
+      {
+         signal = 1;
+         reason = "RSI OVERSOLD BUY: RSI=" + DoubleToString(rsi, 1);
+      }
+      // --- RANGE SELL (RSI overbought) ---
+      else if(rsi > 70 && close1 < open1)
+      {
+         signal = -1;
+         reason = "RSI OVERBOUGHT SELL: RSI=" + DoubleToString(rsi, 1);
+      }
    }
 
    // === SUPPORT & RESISTANCE: Don't buy at resistance, don't sell at support ===
@@ -593,10 +661,10 @@ void OnTick()
       }
    }
 
-   // === VOLATILITY CHECK: skip during dead market (ATR too low) ===
-   if(signal != 0 && atr < SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 30)
+   // === VOLATILITY CHECK: Only skip if DEAD market AND not scalp mode ===
+   if(signal != 0 && !isScalpTrade && atr < SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 15)
    {
-      Print("LOW VOLATILITY: ATR too low (", DoubleToString(atr, 2), ") — skipping");
+      Print("DEAD MARKET: ATR extremely low (", DoubleToString(atr, 2), ") — skipping");
       signal = 0;
    }
 
@@ -642,13 +710,15 @@ void OnTick()
       lastSignalRSI = rsi;
       lastSignalEMADiff = (emaFast - emaSlow) / emaSlow * 10000;
       lastSignalATR = atr;
-      OpenTrade(signal, atr, reason, mlReduced || false);
+      OpenTrade(signal, atr, reason, mlReduced || false, isScalpTrade);
    }
    else
    {
-      Print("SCAN: No setup | EMA21=", DoubleToString(emaFast, 2),
-            " EMA50=", DoubleToString(emaSlow, 2),
+      string regime = isLowVolatility ? "LOW_VOL" : "NORMAL";
+      Print("SCAN: No setup | Regime=", regime, " | EMA50=", DoubleToString(emaFast, 2),
+            " EMA200=", DoubleToString(emaSlow, 2),
             " RSI=", DoubleToString(rsi, 1),
+            " ATR=", DoubleToString(atr, 2),
             " H1=", h1Bull ? "BULL" : h1Bear ? "BEAR" : "FLAT",
             " Spread=", DoubleToString(spread, 0));
    }
@@ -659,7 +729,7 @@ void OnTick()
 //+------------------------------------------------------------------+
 //| OPEN TRADE                                                       |
 //+------------------------------------------------------------------+
-void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
+void OpenTrade(int signal, double atr, string reason, bool reduceSize = false, bool scalp = false)
 {
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
@@ -668,21 +738,28 @@ void OpenTrade(int signal, double atr, string reason, bool reduceSize = false)
 
    double price, sl, tp, slDist;
 
+   // Dynamic SL/TP: Scalp uses tighter levels, Normal uses standard
+   double slMulti = scalp ? MathMax(0.5, InpSLMultiplier * 0.5) : InpSLMultiplier;
+   double tpMulti = scalp ? 1.5 : InpTPMultiplier; // Scalp: 1.5:1 R:R for quick exits
+
+   if(scalp)
+      Print("SCALP MODE: SL=", DoubleToString(slMulti, 2), "xATR | TP=", DoubleToString(tpMulti, 1), "xSL");
+
    if(signal == 1)
    {
       price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
       if(price <= 0) { Print("ERROR: Ask = 0"); return; }
-      slDist = MathMax(atr * InpSLMultiplier, minDist);
+      slDist = MathMax(atr * slMulti, minDist);
       sl = NormalizeDouble(price - slDist, digits);
-      tp = NormalizeDouble(price + slDist * InpTPMultiplier, digits);
+      tp = NormalizeDouble(price + slDist * tpMulti, digits);
    }
    else
    {
       price = SymbolInfoDouble(Symbol(), SYMBOL_BID);
       if(price <= 0) { Print("ERROR: Bid = 0"); return; }
-      slDist = MathMax(atr * InpSLMultiplier, minDist);
+      slDist = MathMax(atr * slMulti, minDist);
       sl = NormalizeDouble(price + slDist, digits);
-      tp = NormalizeDouble(price - slDist * InpTPMultiplier, digits);
+      tp = NormalizeDouble(price - slDist * tpMulti, digits);
    }
 
    // Lot sizing
