@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.1 — Dual-AI + Hive-Mind   |
+//|                                     v4.2.1 — Smart Features      |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.10"
-#property description "XAUUSD AI Sniper v4.1 — Dual-AI + Signature Hive-Mind"
-#property description "5-Gate Entry | 3-Path Smart Exit | Claude 4.5 + GPT-5.2"
-#property description "8 Regimes | 7 Setups | 7-day global signature learning"
+#property version   "4.21"
+#property description "XAUUSD AI Sniper v4.2.1 — Full Smart Stack"
+#property description "5-Gate Entry | 3-Path Exit | Dual-AI | Signature Hive"
+#property description "Re-Entry | DXY Gate | Drawdown Mode | Streak Cool-Down"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -249,7 +249,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.1 (DUAL-AI + HIVE) READY ===");
+   Print("=== XAUAI SNIPER v4.2.1 (FULL SMART STACK) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -272,7 +272,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.2.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1533,7 +1533,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.1 | DUAL-AI + HIVE | ";
+   d += " XAUAI SNIPER v4.2.1 | SMART STACK | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
