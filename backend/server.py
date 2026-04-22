@@ -7,7 +7,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx
+import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
@@ -1207,75 +1207,151 @@ class AIAnalysisRequest(BaseModel):
     ema_fast: float = 0
     ema_slow: float = 0
     rsi: float = 0
+    stoch: float = 50.0
+    mom: float = 0.0
     atr: float = 0
     price: float = 0
     h1_trend: str = "FLAT"
     spread: float = 0
     recent_candles: str = ""
+    setup: str = ""
+    regime: str = ""
+    signature: str = ""
 
-@api_router.post("/ai/analyze")
-async def ai_analyze_market(req: AIAnalysisRequest):
-    try:
-        if not LLM_KEY:
-            return {"action": "SKIP", "confidence": 50, "reason": "AI key not configured"}
-
-        chat = LlmChat(
-            api_key=LLM_KEY,
-            session_id=f"trade-{uuid.uuid4().hex[:8]}",
-            system_message="""You are an expert XAUUSD (Gold) trader AI. You analyze technical data and give ONE clear trading decision. You MUST respond in EXACTLY this JSON format, nothing else:
+# ------- shared helpers -------
+_ENTRY_SYSTEM_PROMPT = """You are an expert XAUUSD (Gold) M5 scalper. You analyze technical data and give ONE clear trading decision. You MUST respond in EXACTLY this JSON format, nothing else (NO markdown fences):
 {"action":"BUY","confidence":75,"reason":"short reason","sl_adjust":0,"tp_adjust":0}
 
 Rules:
 - action: BUY, SELL, or SKIP (only these 3)
 - confidence: 0-100 (how sure you are)
-- reason: max 50 words explaining why
+- reason: max 40 words explaining why
 - sl_adjust: -1 to 1 (negative=tighter SL, positive=wider SL, 0=default)
 - tp_adjust: -1 to 1 (negative=tighter TP, positive=wider TP, 0=default)
 
-Be decisive. If unsure, SKIP. Consider trend, momentum, RSI extremes, and volatility."""
-        ).with_model("openai", "gpt-5.2")
+Be decisive. If unsure, SKIP. Prefer fast M5 scalps. Consider trend alignment, RSI/Stoch extremes, momentum, regime and setup quality."""
 
-        prompt = f"""XAUUSD Market Data RIGHT NOW:
+def _build_entry_prompt(req: AIAnalysisRequest) -> str:
+    return f"""XAUUSD M5 Market Data RIGHT NOW:
 - Price: {req.price}
-- EMA Fast(50): {req.ema_fast} | EMA Slow(200): {req.ema_slow}
-- Trend: {"BULLISH" if req.ema_fast > req.ema_slow else "BEARISH"} (separation: {abs(req.ema_fast - req.ema_slow):.2f})
-- RSI(14): {req.rsi}
+- EMA50: {req.ema_fast} | EMA200: {req.ema_slow} (sep: {abs(req.ema_fast-req.ema_slow):.2f})
+- Trend: {"BULLISH" if req.ema_fast > req.ema_slow else "BEARISH"} | H1 Trend: {req.h1_trend}
+- RSI(14): {req.rsi} | Stoch: {req.stoch:.1f} | Momentum: {req.mom:+.2f}
 - ATR(14): {req.atr}
-- H1 Trend: {req.h1_trend}
 - Spread: {req.spread} points
+- Regime: {req.regime or "unknown"} | Setup: {req.setup or "unknown"}
 - Recent candles: {req.recent_candles}
 
-What is your trade decision? Respond ONLY with the JSON."""
+What is your trade decision? JSON only."""
 
-        msg = UserMessage(text=prompt)
+def _parse_entry_json(response: str) -> dict:
+    import json, re
+    cleaned = (response or "").strip()
+    fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", cleaned, re.DOTALL)
+    if fence:
+        cleaned = fence.group(1).strip()
+    if not cleaned.startswith("{"):
+        m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if m:
+            cleaned = m.group(0)
+    try:
+        r = json.loads(cleaned)
+        action = str(r.get("action", "SKIP")).upper()
+        if action not in ["BUY", "SELL", "SKIP"]:
+            action = "SKIP"
+        confidence = max(0, min(100, int(r.get("confidence", 50))))
+        return {
+            "action": action,
+            "confidence": confidence,
+            "reason": str(r.get("reason", ""))[:200],
+            "sl_adjust": float(r.get("sl_adjust", 0) or 0),
+            "tp_adjust": float(r.get("tp_adjust", 0) or 0),
+        }
+    except (json.JSONDecodeError, ValueError, TypeError):
+        up = (response or "").upper()
+        if '"BUY"' in up:  return {"action": "BUY",  "confidence": 55, "reason": "parser fallback", "sl_adjust": 0, "tp_adjust": 0}
+        if '"SELL"' in up: return {"action": "SELL", "confidence": 55, "reason": "parser fallback", "sl_adjust": 0, "tp_adjust": 0}
+        return {"action": "SKIP", "confidence": 50, "reason": "AI response unclear", "sl_adjust": 0, "tp_adjust": 0}
+
+async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> dict:
+    try:
+        chat = LlmChat(
+            api_key=LLM_KEY,
+            session_id=f"entry-{provider}-{uuid.uuid4().hex[:8]}",
+            system_message=_ENTRY_SYSTEM_PROMPT,
+        ).with_model(provider, model)
+        msg = UserMessage(text=_build_entry_prompt(req))
         response = await chat.send_message(msg)
-
-        import json, re
-        cleaned = response.strip()
-        fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", cleaned, re.DOTALL)
-        if fence:
-            cleaned = fence.group(1).strip()
-        if not cleaned.startswith("{"):
-            m = re.search(r"\{.*\}", cleaned, re.DOTALL)
-            if m:
-                cleaned = m.group(0)
-        try:
-            result = json.loads(cleaned)
-            result["action"] = str(result.get("action", "SKIP")).upper()
-            if result["action"] not in ["BUY", "SELL", "SKIP"]:
-                result["action"] = "SKIP"
-            result["confidence"] = max(0, min(100, int(result.get("confidence", 50))))
-            result["reason"] = str(result.get("reason", ""))[:200]
-            await db.ai_analyses.insert_one({"symbol": req.symbol, "request": req.dict(), "response": result, "created_at": datetime.now(timezone.utc).isoformat()})
-            return result
-        except json.JSONDecodeError:
-            up = response.upper()
-            if '"BUY"' in up: return {"action": "BUY", "confidence": 60, "reason": "parser fallback"}
-            if '"SELL"' in up: return {"action": "SELL", "confidence": 60, "reason": "parser fallback"}
-            return {"action": "SKIP", "confidence": 50, "reason": "AI response unclear"}
+        return _parse_entry_json(response)
     except Exception as e:
-        logger.error(f"AI analysis error: {e}")
-        return {"action": "SKIP", "confidence": 50, "reason": f"AI error: {str(e)[:50]}"}
+        logger.error(f"Entry AI {provider}/{model} error: {e}")
+        return {"action": "SKIP", "confidence": 50, "reason": f"{provider} error", "sl_adjust": 0, "tp_adjust": 0}
+
+@api_router.post("/ai/analyze")
+async def ai_analyze_market(req: AIAnalysisRequest):
+    """Dual-AI entry analysis: Claude 4.5 + GPT-5.2 vote in parallel.
+    Consensus rules:
+      - Both agree (BUY|BUY or SELL|SELL)     -> action = that side, confidence = avg (+5 bonus)
+      - One agrees, other SKIPs               -> action = the side, confidence = that AI's conf * 0.75
+      - Direct disagreement (BUY vs SELL)     -> action = SKIP (safety)
+      - Both SKIP                             -> action = SKIP
+    """
+    try:
+        if not LLM_KEY:
+            return {"action": "SKIP", "confidence": 50, "reason": "AI key not configured",
+                    "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0}
+
+        claude_task = _ask_entry_ai("anthropic", "claude-sonnet-4-5-20250929", req)
+        gpt_task    = _ask_entry_ai("openai",    "gpt-5.2",                    req)
+        claude, gpt = await asyncio.gather(claude_task, gpt_task)
+
+        c_act, g_act = claude["action"], gpt["action"]
+        c_conf, g_conf = claude["confidence"], gpt["confidence"]
+
+        if c_act == g_act and c_act in ("BUY", "SELL"):
+            action = c_act
+            confidence = min(100, int((c_conf + g_conf) / 2) + 5)
+            reason = f"Both AIs agree: {claude['reason'][:60]} / {gpt['reason'][:60]}"
+            sl_adj = (claude["sl_adjust"] + gpt["sl_adjust"]) / 2
+            tp_adj = (claude["tp_adjust"] + gpt["tp_adjust"]) / 2
+        elif c_act in ("BUY", "SELL") and g_act == "SKIP":
+            action, confidence = c_act, int(c_conf * 0.75)
+            reason = f"Claude says {c_act} ({c_conf}%), GPT SKIP: {claude['reason'][:80]}"
+            sl_adj, tp_adj = claude["sl_adjust"], claude["tp_adjust"]
+        elif g_act in ("BUY", "SELL") and c_act == "SKIP":
+            action, confidence = g_act, int(g_conf * 0.75)
+            reason = f"GPT says {g_act} ({g_conf}%), Claude SKIP: {gpt['reason'][:80]}"
+            sl_adj, tp_adj = gpt["sl_adjust"], gpt["tp_adjust"]
+        elif c_act in ("BUY", "SELL") and g_act in ("BUY", "SELL") and c_act != g_act:
+            action, confidence = "SKIP", 50
+            reason = f"Disagreement: Claude={c_act} GPT={g_act} — safety SKIP"
+            sl_adj, tp_adj = 0, 0
+        else:
+            action, confidence = "SKIP", 50
+            reason = "Both AIs SKIP"
+            sl_adj, tp_adj = 0, 0
+
+        result = {
+            "action": action,
+            "confidence": confidence,
+            "reason": reason[:240],
+            "sl_adjust": sl_adj,
+            "tp_adjust": tp_adj,
+            "claude": {"action": c_act, "confidence": c_conf, "reason": claude["reason"]},
+            "gpt":    {"action": g_act, "confidence": g_conf, "reason": gpt["reason"]},
+        }
+        try:
+            await db.ai_analyses.insert_one({
+                "symbol": req.symbol, "request": req.dict(), "response": result,
+                "signature": req.signature, "created_at": datetime.now(timezone.utc).isoformat()
+            })
+        except Exception:
+            pass
+        return result
+    except Exception as e:
+        logger.error(f"AI analyze dual error: {e}")
+        return {"action": "SKIP", "confidence": 50, "reason": f"AI error: {str(e)[:60]}",
+                "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0}
 
 ########################################
 # NEWS AVOIDANCE
@@ -1322,18 +1398,72 @@ class TradeJournalEntry(BaseModel):
     wins: int = 0
     losses: int = 0
     balance: float = 0
+    signature: str = ""
+    setup: str = ""
+    regime: str = ""
 
 @api_router.post("/journal/log")
 async def log_trade_journal(entry: TradeJournalEntry):
     try:
         doc = entry.dict()
         doc["created_at"] = datetime.now(timezone.utc).isoformat()
+        doc["created_ts"] = time.time()
         doc["win_rate"] = round(entry.wins / entry.total_trades * 100, 1) if entry.total_trades > 0 else 0
         await db.trade_journal.insert_one(doc)
+        # Also index into hive_signatures for fast aggregate lookup
+        if entry.signature:
+            try:
+                await db.hive_signatures.insert_one({
+                    "signature": entry.signature,
+                    "pin": entry.pin,
+                    "symbol": entry.symbol,
+                    "result": entry.result,   # WIN / LOSS
+                    "profit": entry.profit,
+                    "created_ts": time.time(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception as e:
+                logger.error(f"Hive index error: {e}")
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Journal log error: {e}")
         return {"status": "error"}
+
+########################################
+# HIVE-MIND — 7-day global signature stats
+########################################
+class HiveScoreRequest(BaseModel):
+    signature: str = ""
+    window_days: int = 7
+
+@api_router.post("/ml/hive/score")
+async def ml_hive_score(req: HiveScoreRequest):
+    """Aggregate WR for an exact signature across ALL users in last N days.
+    Signature format: regime|setup|dir|session|rsi_bucket|stoch_bucket|mom_bucket"""
+    try:
+        if not req.signature:
+            return {"wins": 0, "losses": 0, "total": 0, "wr": 0.5, "verdict": "NONE"}
+        window = max(1, int(req.window_days))
+        cutoff = time.time() - (window * 86400)
+
+        query = {"signature": req.signature, "created_ts": {"$gte": cutoff}}
+        wins = await db.hive_signatures.count_documents({**query, "result": "WIN"})
+        losses = await db.hive_signatures.count_documents({**query, "result": "LOSS"})
+        total = wins + losses
+        wr = (wins / total) if total > 0 else 0.5
+
+        if total >= 5 and wr >= 0.60:
+            verdict = "BOOST"
+        elif total >= 5 and wr <= 0.30:
+            verdict = "VETO"
+        else:
+            verdict = "NEUTRAL"
+
+        return {"wins": wins, "losses": losses, "total": total,
+                "wr": round(wr, 3), "verdict": verdict, "window_days": window}
+    except Exception as e:
+        logger.error(f"Hive score error: {e}")
+        return {"wins": 0, "losses": 0, "total": 0, "wr": 0.5, "verdict": "NONE"}
 
 @api_router.get("/journal/trades")
 async def get_trade_journal(pin: str = "", limit: int = 50):

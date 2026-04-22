@@ -93,10 +93,11 @@ CAccountInfo  accInfo;
 
 bool   licenseValid = false;
 int    hEMAFast, hEMASlow, hRSI, hATR, hBBUpper, hBBLower, hBBMid;
-int    hEMAFast_H1, hEMASlow_H1, hRSI_M15;
+int    hEMAFast_H1, hEMASlow_H1, hRSI_M15, hStoch;
 double bufEMAFast[], bufEMASlow[], bufRSI[], bufATR[];
 double bufBBUpper[], bufBBLower[], bufBBMid[];
 double bufEMAFast_H1[], bufEMASlow_H1[], bufRSI_M15[];
+double bufStochK[], bufStochD[];
 
 double initialBalance, dailyStartEquity, weeklyStartEquity;
 int    todayTradeCount;
@@ -110,6 +111,8 @@ int    lastSignalDir;
 double lastSignalRSI, lastSignalEMADiff, lastSignalATR;
 int    lastRegime, lastSetupType;
 ENUM_REGIME currentRegime;
+string lastSignalSetup = "";
+string lastSignalSignature = "";
 
 //+------------------------------------------------------------------+
 //| PIN VALIDATION                                                   |
@@ -156,10 +159,11 @@ int OnInit()
    hEMAFast_H1 = iMA(Symbol(), PERIOD_H1, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
    hEMASlow_H1 = iMA(Symbol(), PERIOD_H1, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
    hRSI_M15  = iRSI(Symbol(), PERIOD_M15, InpRSIPeriod, PRICE_CLOSE);
+   hStoch    = iStochastic(Symbol(), PERIOD_M5, 14, 3, 3, MODE_SMA, STO_LOWHIGH);
 
    if(hEMAFast==INVALID_HANDLE || hEMASlow==INVALID_HANDLE || hRSI==INVALID_HANDLE ||
       hATR==INVALID_HANDLE || hBBUpper==INVALID_HANDLE || hEMAFast_H1==INVALID_HANDLE ||
-      hEMASlow_H1==INVALID_HANDLE || hRSI_M15==INVALID_HANDLE)
+      hEMASlow_H1==INVALID_HANDLE || hRSI_M15==INVALID_HANDLE || hStoch==INVALID_HANDLE)
    { Print("ERROR: Indicators failed"); return INIT_FAILED; }
 
    ArraySetAsSeries(bufEMAFast, true); ArraySetAsSeries(bufEMASlow, true);
@@ -168,6 +172,7 @@ int OnInit()
    ArraySetAsSeries(bufBBMid, true);
    ArraySetAsSeries(bufEMAFast_H1, true); ArraySetAsSeries(bufEMASlow_H1, true);
    ArraySetAsSeries(bufRSI_M15, true);
+   ArraySetAsSeries(bufStochK, true); ArraySetAsSeries(bufStochD, true);
 
    initialBalance = accInfo.Balance();
    dailyStartEquity = weeklyStartEquity = accInfo.Equity();
@@ -190,6 +195,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast); IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI); IndicatorRelease(hATR); IndicatorRelease(hBBUpper);
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
+   IndicatorRelease(hStoch);
    SavePatterns();
    Print("=== v4.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
@@ -262,6 +268,66 @@ string RegimeName()
       case REGIME_DEAD: return "DEAD";
    }
    return "UNKNOWN";
+}
+
+//+------------------------------------------------------------------+
+//| SIGNATURE BUCKETS & BUILDER                                      |
+//| sig = regime|setup|dir|session|rsi_bucket|stoch_bucket|mom_bucket|
+//+------------------------------------------------------------------+
+int RsiBucket(double r)   { if(r<20) return 0; if(r<40) return 1; if(r<60) return 2; if(r<80) return 3; return 4; }
+int StochBucket(double s) { if(s<20) return 0; if(s<40) return 1; if(s<60) return 2; if(s<80) return 3; return 4; }
+// Momentum bucket: price change over 5 bars, normalised by ATR
+int MomBucket(double mom, double atr)
+{
+   if(atr <= 0) return 2;
+   double m = mom / atr;
+   if(m < -0.8) return 0;
+   if(m < -0.2) return 1;
+   if(m <  0.2) return 2;
+   if(m <  0.8) return 3;
+   return 4;
+}
+string SessionTag()
+{
+   MqlDateTime dt; TimeCurrent(dt);
+   int h = dt.hour;
+   if((h == 10 && dt.min >= 20) || (h == 15 && dt.min <= 10)) return "FIX";
+   if(h >= 13 && h < 17) return "NY";
+   if(h >= 7  && h < 13) return "LDN";
+   if(h >= 0  && h < 8)  return "ASIA";
+   return "LATE";
+}
+string BuildSignature(int dir, string setupName)
+{
+   if(ArraySize(bufRSI) < 2 || ArraySize(bufStochK) < 2 || ArraySize(bufATR) < 2)
+      return "";
+   double rsi = bufRSI[1];
+   double stk = bufStochK[1];
+   double atr = bufATR[1];
+   double mom = iClose(Symbol(), PERIOD_M5, 1) - iClose(Symbol(), PERIOD_M5, 5);
+   return StringFormat("%s|%s|%d|%s|%d|%d|%d",
+      RegimeName(), setupName, dir, SessionTag(),
+      RsiBucket(rsi), StochBucket(stk), MomBucket(mom, atr));
+}
+
+//+------------------------------------------------------------------+
+//| HIVE-MIND — 7-day global WR lookup                               |
+//| Returns: 1=BOOST (+8pp), 0=NEUTRAL, -1=VETO                      |
+//+------------------------------------------------------------------+
+int GetHiveVerdict(string signature)
+{
+   if(StringLen(InpServerURL) < 10 || StringLen(signature) == 0) return 0;
+   string url = InpServerURL + "/api/ml/hive/score";
+   string headers = "Content-Type: application/json\r\n";
+   string body = StringFormat("{\"signature\":\"%s\",\"window_days\":7}", signature);
+   char pd[], result[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   int res = WebRequest("POST", url, headers, 8000, pd, result, rh);
+   if(res != 200) return 0;
+   string response = CharArrayToString(result);
+   if(StringFind(response, "\"BOOST\"") >= 0) return 1;
+   if(StringFind(response, "\"VETO\"")  >= 0) return -1;
+   return 0;
 }
 
 //+------------------------------------------------------------------+
@@ -521,6 +587,8 @@ void OnTick()
    if(CopyBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1) < 3) return;
    if(CopyBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1) < 3) return;
    if(CopyBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15) < 3) return;
+   if(CopyBuffer(hStoch, 0, 0, 3, bufStochK) < 3) return;
+   if(CopyBuffer(hStoch, 1, 0, 3, bufStochD) < 3) return;
 
    if(CountMyPositions() >= InpMaxOpenTrades || todayTradeCount >= InpMaxTradesPerDay)
    { UpdateDashboard(0, 0, ""); return; }
@@ -570,41 +638,56 @@ void OnTick()
       TimeCurrent() - lastTradeClose < 600)
    { Print("ANTI-REVERSAL: Wait before flipping direction"); return; }
 
+   // Build exact signature for ML lookup + hive + journal
+   string signature = BuildSignature(signal, setupName);
+
    // ============ GATE 4: RISK SIZING ============
    double sizeMulti = grade == "A+" ? 1.0 : grade == "A" ? 0.85 : 0.55;
+   int    confidenceBoostPP = 0;   // in percentage points, informational
 
-   // ML check
-   bool mlReduced = false;
-   if(InpLearnPatterns && patternCount >= 10)
+   // ----- LOCAL ML (exact-signature match) -----
+   if(InpLearnPatterns && patternCount >= 5)
    {
       double mlScore = GetMLScore(signal, bufRSI[1],
          (bufEMAFast[1] - bufEMASlow[1]) / bufEMASlow[1] * 10000,
          dtNow.hour, dtNow.day_of_week);
       if(mlScore <= 0.30 && patternCount >= 5)
-      { Print("ML VETO: WR=", DoubleToString(mlScore * 100, 0), "% — HARD BLOCK");
-        return; } // QuantPerp: WR ≤ 30% = force veto
-      if(mlScore >= 0.60) sizeMulti += 0.15;
+      { Print("LOCAL ML VETO: WR=", DoubleToString(mlScore * 100, 0), "% — HARD BLOCK"); return; }
+      if(mlScore >= 0.60) { sizeMulti += 0.15; confidenceBoostPP += 8; }
    }
 
-   // ============ GATE 5: CLAUDE AI (A+ only) ============
+   // ----- GLOBAL HIVE-MIND (7-day, all users, same signature) -----
+   int hive = GetHiveVerdict(signature);
+   if(hive == -1)
+   { Print("HIVE VETO: signature ", signature, " has WR <= 30% globally — HARD BLOCK"); return; }
+   if(hive == 1)
+   { Print("HIVE BOOST: signature ", signature, " has WR >= 60% globally (+8pp)");
+     sizeMulti += 0.15; confidenceBoostPP += 8; }
+
+   // ============ GATE 5: DUAL-AI ENTRY (Claude 4.5 + GPT-5.2) ============
    if(grade == "A+" && InpUseAI && StringLen(InpServerURL) >= 10)
    {
       int aiResult = GetAIAnalysis(bufEMAFast[1], bufEMASlow[1], bufRSI[1], bufATR[1],
          iClose(Symbol(), PERIOD_M5, 0),
-         bufEMAFast_H1[1] > bufEMASlow_H1[1] ? "BULL" : "BEAR", spread);
+         bufEMAFast_H1[1] > bufEMASlow_H1[1] ? "BULL" : "BEAR", spread,
+         setupName, RegimeName(), signature,
+         ArraySize(bufStochK) >= 2 ? bufStochK[1] : 50.0,
+         iClose(Symbol(), PERIOD_M5, 1) - iClose(Symbol(), PERIOD_M5, 5));
       if(aiResult == 0)
-      { Print("CLAUDE: SKIP — reducing to B size"); sizeMulti = 0.55; }
+      { Print("DUAL-AI: SKIP — reducing to B size"); sizeMulti = MathMin(sizeMulti, 0.55); }
       else if(aiResult != signal)
-      { Print("CLAUDE: Disagrees — reducing to B size"); sizeMulti = 0.55; }
+      { Print("DUAL-AI: Disagrees — reducing to B size"); sizeMulti = MathMin(sizeMulti, 0.55); }
       else
-      { Print("CLAUDE: Confirms ", signal > 0 ? "BUY" : "SELL"); }
+      { Print("DUAL-AI: Confirms ", signal > 0 ? "BUY" : "SELL"); }
    }
 
-   // Store signal context for ML
+   // Store signal context for ML + journal logging
    lastSignalDir = signal;
    lastSignalRSI = bufRSI[1];
    lastSignalEMADiff = (bufEMAFast[1] - bufEMASlow[1]) / bufEMASlow[1] * 10000;
    lastSignalATR = bufATR[1];
+   lastSignalSetup = setupName;
+   lastSignalSignature = signature;
 
    // Open trade with grade-scaled sizing
    OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", sizeMulti);
@@ -859,20 +942,27 @@ void ManagePositions()
 //+------------------------------------------------------------------+
 //| AI FUNCTIONS                                                     |
 //+------------------------------------------------------------------+
-int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price, string h1Dir, double spread)
+int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price, string h1Dir, double spread,
+                  string setup, string regime, string signature, double stoch, double mom)
 {
    if(!InpUseAI || StringLen(InpServerURL) < 10) return 0;
    string url = InpServerURL + "/api/ai/analyze";
    string headers = "Content-Type: application/json\r\n";
-   string body = StringFormat("{\"price\":%.2f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"rsi\":%.1f,\"atr\":%.2f,\"h1_trend\":\"%s\",\"spread\":%.0f}",
-      price, emaF, emaS, rsi, atr, h1Dir, spread);
+   string body = StringFormat(
+      "{\"price\":%.2f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"rsi\":%.1f,\"stoch\":%.1f,\"mom\":%.2f,\"atr\":%.2f,\"h1_trend\":\"%s\",\"spread\":%.0f,\"setup\":\"%s\",\"regime\":\"%s\",\"signature\":\"%s\"}",
+      price, emaF, emaS, rsi, stoch, mom, atr, h1Dir, spread, setup, regime, signature);
    char postData[], result[]; string rh;
    StringToCharArray(body, postData, 0, StringLen(body));
-   int res = WebRequest("POST", url, headers, 10000, postData, result, rh);
+   int res = WebRequest("POST", url, headers, 15000, postData, result, rh);
    if(res != 200) return 0;
    string response = CharArrayToString(result);
-   if(StringFind(response, "\"BUY\"") >= 0) return 1;
-   if(StringFind(response, "\"SELL\"") >= 0) return -1;
+   // Response shape: {"action":"BUY|SELL|SKIP",...,"claude":{...},"gpt":{...}}
+   // Match only the top-level "action" field
+   int actIdx = StringFind(response, "\"action\":");
+   if(actIdx < 0) return 0;
+   string tail = StringSubstr(response, actIdx, 40);
+   if(StringFind(tail, "\"BUY\"")  >= 0) return 1;
+   if(StringFind(tail, "\"SELL\"") >= 0) return -1;
    return 0;
 }
 
@@ -1086,8 +1176,9 @@ void LogTradeToServer(string result2, double price, double profit, double lots, 
 {
    if(StringLen(InpServerURL) < 10) return;
    MqlDateTime dt; TimeCurrent(dt);
-   string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f}",
-      InpLicensePIN, Symbol(), dir, result2, price, profit, lots, dt.hour, dt.day_of_week, totalTrades, wins, losses, accInfo.Balance());
+   string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f,\"signature\":\"%s\",\"setup\":\"%s\",\"regime\":\"%s\"}",
+      InpLicensePIN, Symbol(), dir, result2, price, profit, lots, dt.hour, dt.day_of_week, totalTrades, wins, losses, accInfo.Balance(),
+      lastSignalSignature, lastSignalSetup, RegimeName());
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    WebRequest("POST", InpServerURL + "/api/journal/log", "Content-Type: application/json\r\n", 5000, pd, res, rh);

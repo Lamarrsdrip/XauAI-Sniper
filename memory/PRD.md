@@ -43,6 +43,13 @@
   - Backend AI endpoints now strip markdown code fences before `json.loads` (Claude often wraps in ```json…```)
   - Verified `/api/download/ea` serves full 1126-line EA; all EA→backend endpoints (ai/analyze, ai/manage-position, news/check, ml/patterns/save, ml/patterns/load, journal/log, journal/weekly-report) respond correctly
 
+- **Feb 2026 - Dual-AI Entry + Signature Hive-Mind (v4.1)**
+  - `/api/ai/analyze` now runs Claude 4.5 AND GPT-5.2 in parallel. Consensus rules: both agree → avg+5 confidence; disagree → SKIP (safety); one agrees + one SKIPs → reduced confidence. Response includes per-AI breakdown.
+  - EA computes exact signature `regime|setup|dir|session|rsi_bucket|stoch_bucket|mom_bucket` (5×5×5 buckets) on every signal.
+  - Added M5 Stochastic (14,3,3) indicator and 5-bar momentum feed into signature.
+  - New `POST /api/ml/hive/score` aggregates WR across ALL users (7-day rolling) per signature. WR≥60% (n≥5) → BOOST (+15% size, +8pp conf); WR≤30% → HARD VETO.
+  - Trade journal now stores signature on every closed trade → feeds the hive automatically.
+
 ## Upcoming Tasks
 - Add Live Paystack Secret Key & Gmail SMTP credentials (User action) - P1
 - Create Customer Dashboard for buyers to manage PINs - P2
