@@ -57,6 +57,22 @@ input int    InpProfitTakeMin  = 150;      // Start scanning for quick exit (USD
 input int    InpProfitTakeMax  = 500;      // Auto-close at this profit (USD, default 500)
 input int    InpQuickExitMin   = 18;       // Auto-close minutes threshold (default 18)
 
+input group "=== RE-ENTRY ENGINE (reverse-move recovery) ==="
+input bool   InpUseReEntry     = true;     // Auto re-enter if SL was noise
+input int    InpReEntryWindow  = 900;      // Seconds after close to watch for reversal (15min)
+input double InpReEntryFactor  = 1.2;      // Price must move this x SL past original entry
+input double InpReEntrySize    = 0.5;      // Re-entry size multiplier (0.5 = half original)
+
+input group "=== SMART FILTERS ==="
+input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
+input int    InpDXYRefreshSec  = 900;      // Refresh DXY every N seconds (15min)
+input bool   InpDrawdownMode   = true;     // Auto-reduce risk after losing streak
+input int    InpDrawdownLosses = 3;        // # losses in a day that trigger recovery
+input double InpDrawdownRisk   = 0.5;      // Risk % during recovery mode (default 0.5)
+input int    InpStreakCooldownLosses = 3;  // # losses in short window = pause
+input int    InpStreakWindowSec = 2700;    // Window for loss-streak detection (45min)
+input int    InpStreakPauseSec = 1200;     // Pause duration after streak (20min)
+
 input group "=== SAFETY ==="
 input double InpMaxSpread      = 150.0;    // Max spread (points)
 input double InpEquityProtect  = 70.0;     // Equity protection (%)
@@ -126,6 +142,36 @@ string lastSignalSetup = "";
 string lastSignalSignature = "";
 
 //+------------------------------------------------------------------+
+//| SMART STATE — re-entry, drawdown, streak cool-down, DXY cache    |
+//+------------------------------------------------------------------+
+struct LastClose
+{
+   bool   valid;
+   bool   wasLoss;
+   bool   reEntered;
+   int    dir;             // +1 BUY, -1 SELL
+   double entryPrice;
+   double slDist;          // price distance of SL at entry
+   double lots;
+   datetime closeTime;
+   string signature;
+   string setup;
+};
+LastClose  lastClose;
+
+datetime   closeTimes[];            // rolling list of close timestamps
+bool       closeResults[];          // matching win/loss flags (true = loss)
+datetime   streakPauseUntil = 0;    // paused until this time
+
+// DXY cache (avoid hammering the endpoint)
+datetime   dxyLastFetch = 0;
+string     dxyGoldBias = "neutral"; // "bullish" | "bearish" | "neutral"
+
+int        todayLossCount = 0;
+datetime   todayLossResetDay = 0;
+bool       drawdownActive = false;
+
+//+------------------------------------------------------------------+
 //| PIN VALIDATION                                                   |
 //+------------------------------------------------------------------+
 bool ValidatePIN(string pin)
@@ -193,6 +239,13 @@ int OnInit()
    totalTrades = wins = losses = lastTradeDir = 0;
    ArrayResize(patterns, 0); patternCount = 0;
    lastSignalDir = 0; lastRegime = 0; lastSetupType = 0;
+   ArrayResize(closeTimes, 0); ArrayResize(closeResults, 0);
+   streakPauseUntil = 0;
+   todayLossCount = 0; todayLossResetDay = TimeCurrent(); drawdownActive = false;
+   lastClose.valid = false; lastClose.reEntered = false; lastClose.wasLoss = false;
+   lastClose.dir = 0; lastClose.entryPrice = 0; lastClose.slDist = 0;
+   lastClose.lots = 0; lastClose.closeTime = 0; lastClose.signature = ""; lastClose.setup = "";
+   dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
    Print("=== XAUAI SNIPER v4.1 (DUAL-AI + HIVE) READY ===");
@@ -204,6 +257,10 @@ int OnInit()
          " | B >= ", DoubleToString(InpGradeB, 1),
          " | Cooldown=", InpTradeCooldown, "s | Reversal=", InpReversalCooldown, "s");
    Print("EXITS: QuickTake $", InpProfitTakeMin, "-$", InpProfitTakeMax, " | QuickExitMin=", InpQuickExitMin, "min");
+   Print("SMART: ReEntry=", InpUseReEntry?"ON":"OFF",
+         " (", InpReEntryWindow/60, "min win, ", DoubleToString(InpReEntrySize,2), "x) | DXY=", InpUseDXYFilter?"ON":"OFF",
+         " | Drawdown=", InpDrawdownMode?"ON":"OFF",
+         " (", InpDrawdownLosses, "losses->", DoubleToString(InpDrawdownRisk,2), "%) | Streak=", InpStreakCooldownLosses, " in ", InpStreakWindowSec/60, "min");
    return INIT_SUCCEEDED;
 }
 
@@ -343,6 +400,132 @@ int GetHiveVerdict(string signature)
    if(StringFind(response, "\"BOOST\"") >= 0) return 1;
    if(StringFind(response, "\"VETO\"")  >= 0) return -1;
    return 0;
+}
+
+//+------------------------------------------------------------------+
+//| DXY CORRELATION — cached so we don't hammer the endpoint         |
+//| Returns gold_bias: +1 bullish, -1 bearish, 0 neutral/unknown     |
+//+------------------------------------------------------------------+
+int GetDXYBias()
+{
+   if(InpBacktestMode || !InpUseDXYFilter) return 0;
+   if(StringLen(InpServerURL) < 10) return 0;
+   // Use cached value if fresh
+   if(dxyLastFetch > 0 && TimeCurrent() - dxyLastFetch < InpDXYRefreshSec)
+   {
+      if(dxyGoldBias == "bullish") return  1;
+      if(dxyGoldBias == "bearish") return -1;
+      return 0;
+   }
+   string url = InpServerURL + "/api/smart/dxy";
+   char pd[], result[]; string rh;
+   int res = WebRequest("GET", url, "", 6000, pd, result, rh);
+   if(res != 200) return 0;
+   string response = CharArrayToString(result);
+   dxyLastFetch = TimeCurrent();
+   if(StringFind(response, "\"gold_bias\":\"bullish\"") >= 0) { dxyGoldBias = "bullish"; return  1; }
+   if(StringFind(response, "\"gold_bias\":\"bearish\"") >= 0) { dxyGoldBias = "bearish"; return -1; }
+   dxyGoldBias = "neutral"; return 0;
+}
+
+//+------------------------------------------------------------------+
+//| STREAK TRACKER — count LOSSes in last InpStreakWindowSec         |
+//+------------------------------------------------------------------+
+void RecordCloseForStreak(bool wasLoss)
+{
+   int n = ArraySize(closeTimes);
+   ArrayResize(closeTimes, n+1);
+   ArrayResize(closeResults, n+1);
+   closeTimes[n] = TimeCurrent();
+   closeResults[n] = wasLoss;
+   PruneStreak();
+   int recentLosses = 0;
+   for(int i = 0; i < ArraySize(closeResults); i++)
+      if(closeResults[i]) recentLosses++;
+   if(recentLosses >= InpStreakCooldownLosses)
+   {
+      streakPauseUntil = TimeCurrent() + InpStreakPauseSec;
+      Print("STREAK COOLDOWN: ", recentLosses, " losses in window — pausing until ",
+            TimeToString(streakPauseUntil, TIME_SECONDS));
+   }
+}
+void PruneStreak()
+{
+   datetime cutoff = TimeCurrent() - InpStreakWindowSec;
+   while(ArraySize(closeTimes) > 0 && closeTimes[0] < cutoff)
+   {
+      int n = ArraySize(closeTimes) - 1;
+      for(int i = 0; i < n; i++)
+      {
+         closeTimes[i] = closeTimes[i+1];
+         closeResults[i] = closeResults[i+1];
+      }
+      ArrayResize(closeTimes, n);
+      ArrayResize(closeResults, n);
+   }
+}
+bool IsInStreakPause()
+{
+   return (streakPauseUntil > 0 && TimeCurrent() < streakPauseUntil);
+}
+
+//+------------------------------------------------------------------+
+//| DAILY LOSS COUNTER & DRAWDOWN RECOVERY MODE                      |
+//+------------------------------------------------------------------+
+void UpdateDrawdownState(bool wasLoss)
+{
+   MqlDateTime dtNow, dtLast; TimeCurrent(dtNow); TimeToStruct(todayLossResetDay, dtLast);
+   if(dtNow.day != dtLast.day) { todayLossCount = 0; todayLossResetDay = TimeCurrent(); drawdownActive = false; }
+   if(wasLoss) todayLossCount++;
+   else if(todayLossCount > 0) todayLossCount--;   // a win reduces recent-loss stress
+   if(InpDrawdownMode)
+   {
+      bool newState = (todayLossCount >= InpDrawdownLosses);
+      if(newState && !drawdownActive)
+         Print("DRAWDOWN RECOVERY ON: risk reduced to ", DoubleToString(InpDrawdownRisk, 2), "%");
+      if(!newState && drawdownActive)
+         Print("DRAWDOWN RECOVERY OFF: normal risk restored");
+      drawdownActive = newState;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| RE-ENTRY DETECTOR — called every tick (cheap)                    |
+//| Fires ONCE if lastClose was a LOSS and price has now reversed    |
+//| back past original entry in the original direction.              |
+//+------------------------------------------------------------------+
+void CheckReEntryOpportunity()
+{
+   if(!InpUseReEntry) return;
+   if(!lastClose.valid || !lastClose.wasLoss || lastClose.reEntered) return;
+   if(TimeCurrent() - lastClose.closeTime > InpReEntryWindow) return;
+   if(CountMyPositions() > 0) return;                  // Don't stack
+   if(IsInStreakPause()) return;
+   if(InpUseNewsFilter && !IsNewsSafe()) return;
+
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   if(bid <= 0 || ask <= 0) return;
+   double curPrice = (lastClose.dir == 1) ? ask : bid;
+   // Reversal threshold: price must travel >= factor * SL past original entry
+   double trigger = lastClose.slDist * InpReEntryFactor;
+   bool reversalBuy  = (lastClose.dir ==  1 && curPrice >= lastClose.entryPrice + trigger);
+   bool reversalSell = (lastClose.dir == -1 && curPrice <= lastClose.entryPrice - trigger);
+   if(!reversalBuy && !reversalSell) return;
+
+   // Use latest ATR for new SL sizing; bail if indicators not ready
+   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return;
+
+   Print("RE-ENTRY TRIGGER: last ", lastClose.dir==1?"BUY":"SELL",
+         " stopped at ", DoubleToString(lastClose.entryPrice, _Digits),
+         " | price now ", DoubleToString(curPrice, _Digits),
+         " (", DoubleToString((curPrice-lastClose.entryPrice)/lastClose.slDist, 2), "R past entry)");
+
+   lastClose.reEntered = true;  // one-shot
+   lastSignalDir = lastClose.dir;
+   lastSignalSignature = lastClose.signature;
+   lastSignalSetup = "RE_ENTRY";
+   OpenTrade(lastClose.dir, bufATR[1], "RE_ENTRY", InpReEntrySize);
 }
 
 //+------------------------------------------------------------------+
@@ -581,6 +764,11 @@ void OnTick()
    // spread spikes cannot prevent us from closing losing positions.
    ManagePositions();
 
+   // === RE-ENTRY WATCHER (every tick, cheap) ===
+   // If we just closed a loser and price has reversed back past our entry,
+   // re-enter at reduced size once. Pure MQL5 — no AI call needed.
+   CheckReEntryOpportunity();
+
    // Spread check — blocks NEW ENTRIES only (silent)
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
    if(spread > InpMaxSpread) return;
@@ -611,6 +799,15 @@ void OnTick()
    // Cooldown
    if(lastTradeClose > 0 && TimeCurrent() - lastTradeClose < InpTradeCooldown)
    { UpdateDashboard(0, 0, ""); return; }
+
+   // Streak pause (after multiple quick losses)
+   if(IsInStreakPause())
+   {
+      Print("STREAK PAUSE active — no new entries until ",
+            TimeToString(streakPauseUntil, TIME_SECONDS));
+      UpdateDashboard(0, 0, "PAUSED");
+      return;
+   }
 
    // ============ GATE 1: REGIME ============
    double regimeQuality = DetectRegime();
@@ -647,6 +844,19 @@ void OnTick()
 
    // News check
    if(InpUseNewsFilter && !IsNewsSafe()) { Print("NEWS BLOCK"); return; }
+
+   // DXY CORRELATION GATE (cached, ~every 15 min)
+   if(InpUseDXYFilter)
+   {
+      int dxyBias = GetDXYBias();
+      // DXY bias +1 = gold bullish, -1 = bearish. Signal +1 = BUY gold, -1 = SELL gold.
+      // If the dollar is clearly pushing gold the other way, veto.
+      if(dxyBias != 0 && dxyBias != signal)
+      {
+         Print("DXY VETO: gold_bias=", dxyGoldBias, " vs signal=", signal>0?"BUY":"SELL", " — skip");
+         return;
+      }
+   }
 
    // Anti-reversal (short cooldown for direction flip)
    if(lastTradeDir != 0 && signal != lastTradeDir && lastTradeClose > 0 &&
@@ -748,6 +958,17 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    // Lot sizing with grade multiplier
    double balance = accInfo.Balance();
    double riskPct = InpRiskPercent * sizeMulti;
+
+   // DRAWDOWN RECOVERY MODE: cap risk at InpDrawdownRisk% until we get a win
+   if(drawdownActive)
+   {
+      double cappedRisk = MathMin(riskPct, InpDrawdownRisk);
+      if(cappedRisk < riskPct)
+      {
+         Print("DRAWDOWN MODE: risk ", DoubleToString(riskPct,2), "% -> capped ", DoubleToString(cappedRisk,2), "%");
+         riskPct = cappedRisk;
+      }
+   }
 
    // Careful mode near weekly target
    if(InpCarefulMode && weeklyStartEquity > 0)
@@ -1163,12 +1384,48 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    string dirStr = (dType == DEAL_TYPE_SELL) ? "BUY" : "SELL";
 
    totalTrades++;
-   if(profit > 0) wins++; else losses++;
+   bool wasLoss = (profit <= 0);
+   if(!wasLoss) wins++; else losses++;
    lastTradeClose = TimeCurrent();
-   Print("CLOSED: ", profit > 0 ? "WIN" : "LOSS", " $", DoubleToString(profit, 2),
+   Print("CLOSED: ", !wasLoss ? "WIN" : "LOSS", " $", DoubleToString(profit, 2),
          " | T:", totalTrades, " W:", wins, " L:", losses);
-   RecordPattern(profit > 0, profit);
-   LogTradeToServer(profit > 0 ? "WIN" : "LOSS", dPrice, profit, dVolume, dirStr);
+
+   // Populate lastClose for RE-ENTRY detector
+   lastClose.valid      = true;
+   lastClose.wasLoss    = wasLoss;
+   lastClose.reEntered  = false;
+   lastClose.dir        = (dirStr == "BUY") ? 1 : -1;
+   lastClose.lots       = dVolume;
+   lastClose.closeTime  = TimeCurrent();
+   lastClose.signature  = lastSignalSignature;
+   lastClose.setup      = lastSignalSetup;
+   // Approximate original entry and SL distance from deal history.
+   // dPrice here is the CLOSE price; for re-entry we want the ORIGINAL entry.
+   // Fetch it by looking at the position's first deal (entry) with same position ID.
+   ulong posId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+   lastClose.entryPrice = dPrice;   // fallback
+   lastClose.slDist     = lastSignalATR > 0 ? lastSignalATR * InpSLMultiplier : 3.0;
+   if(posId > 0 && HistorySelectByPosition(posId))
+   {
+      int nDeals = HistoryDealsTotal();
+      for(int i = 0; i < nDeals; i++)
+      {
+         ulong t = HistoryDealGetTicket(i);
+         if(HistoryDealGetInteger(t, DEAL_POSITION_ID) != (long)posId) continue;
+         if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(t, DEAL_ENTRY) == DEAL_ENTRY_IN)
+         {
+            lastClose.entryPrice = HistoryDealGetDouble(t, DEAL_PRICE);
+            break;
+         }
+      }
+   }
+
+   // Streak + drawdown bookkeeping
+   RecordCloseForStreak(wasLoss);
+   UpdateDrawdownState(wasLoss);
+
+   RecordPattern(!wasLoss, profit);
+   LogTradeToServer(!wasLoss ? "WIN" : "LOSS", dPrice, profit, dVolume, dirStr);
 }
 
 //+------------------------------------------------------------------+
@@ -1239,6 +1496,11 @@ void UpdateDashboard(int signal, double score, string grade)
    d += StringFormat("Open: %d/%d | Today: %d/%d\n", CountMyPositions(), InpMaxOpenTrades, todayTradeCount, InpMaxTradesPerDay);
    d += StringFormat("Trades: %d | Win: %.0f%% | ML: %d\n", totalTrades, wr, patternCount);
    d += StringFormat("AI: %s | News: %s | Careful: %s\n", InpUseAI?"ON":"OFF", InpUseNewsFilter?"ON":"OFF", InpCarefulMode?"ON":"OFF");
+   d += StringFormat("DXY: %s (%s) | Drawdown: %s | Re-entry: %s\n",
+        dxyGoldBias, InpUseDXYFilter?"ON":"OFF",
+        drawdownActive?"ACTIVE":"off",
+        (lastClose.valid && lastClose.wasLoss && !lastClose.reEntered && TimeCurrent()-lastClose.closeTime < InpReEntryWindow) ? "WATCHING" : "idle");
+   if(IsInStreakPause()) d += StringFormat("STREAK PAUSE until %s\n", TimeToString(streakPauseUntil, TIME_SECONDS));
    d += "==========================================\n";
    if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT — RESTING <<\n";
    if(weeklyLossHit) d += "!! WEEKLY LOSS LIMIT — STOPPED !!\n";

@@ -43,15 +43,14 @@
   - Backend AI endpoints now strip markdown code fences before `json.loads` (Claude often wraps in ```json…```)
   - Verified `/api/download/ea` serves full 1126-line EA; all EA→backend endpoints (ai/analyze, ai/manage-position, news/check, ml/patterns/save, ml/patterns/load, journal/log, journal/weekly-report) respond correctly
 
-- **Feb 2026 - v4.1 hardening pass (hierarchical hive + backtest mode)**
-  - `InpBacktestMode` input: disables ALL WebRequests (AI, news, hive, cloud ML save/load, journal) so EA runs 100% offline in MT5 Strategy Tester
-  - Hive now HIERARCHICAL: exact → drop_mom → drop_stoch → drop_rsi → drop_session. Kills cold-start problem — every signature finds a usable match fast.
-  - Fixed regex bug: `|` in MongoDB `$regex` was un-escaped → any prefix query matched ~everything. Now properly `re.escape`-d.
-  - Hive VETO now stricter (n≥10, WR≤25%) to protect against early noise; BOOST unchanged (n≥5, WR≥60%).
-  - Buckets collapsed 5→3 (OS/Neutral/OB for RSI+Stoch, DOWN/FLAT/UP for momentum). Keyspace: 8×7×2×5×3×3×3 ≈ 7,560 signatures (4× fewer).
-  - Dual-AI robustness: hard 8s timeout per AI, AIs return `available=false` on error, response logic no longer punishes availability (single AI at full weight if other is down).
-  - Exposed 8 tunable thresholds as MT5 inputs: GradeAPlus/A/B, TradeCooldown, ReversalCooldown, ProfitTakeMin/Max, QuickExitMin.
-  - Init banner now prints full mode + threshold summary.
+- **Feb 2026 - v4.2 Smart Features (zero-cost intelligence layer)**
+  - **Re-entry engine** (pure MQL5, $0 AI cost): after a loser, watches for up to 15 min — if price reverses >=1.2× SL past original entry in the original direction → auto re-enter at 0.5× size. Solves the "stopped out then market reversed" pain point.
+  - **DXY correlation gate**: every 15 min the EA fetches `/api/smart/dxy`. If DXY says gold is bullish but we're trying to SELL, veto the trade. Huge on gold where ~75% of big moves follow inverse DXY.
+  - **Drawdown recovery mode**: 3+ losses in a day → risk auto-capped at 0.5% until balance recovers. Auto-disables after a win. Prevents revenge-blowup spiral.
+  - **Streak cool-down**: 3 losses in 45 min → pause trading entirely for 20 min. Breaks the tilt cycle.
+  - **Better close tracking**: now walks position history to recover the true entry price (not just the close price) for accurate re-entry threshold math.
+  - Dashboard shows DXY bias, drawdown state, streak pause timer, re-entry watcher status.
+  - All 8 new features fully tunable via MT5 inputs, still respect `InpBacktestMode` (strategy-tester-safe).
 
 ## Upcoming Tasks
 - Add Live Paystack Secret Key & Gmail SMTP credentials (User action) - P1
