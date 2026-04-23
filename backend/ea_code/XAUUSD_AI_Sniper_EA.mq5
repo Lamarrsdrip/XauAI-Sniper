@@ -1,15 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.2.5 — Quality-of-life fix |
+//|                                     v4.3.0 — Trader-Grade Exits  |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.25"
-#property description "XAUUSD AI Sniper v4.2.5 — Fixes: live dashboard, momentum, retrace"
-#property description "- PeakRetrace $100->$250 (no more tiny-profit exits)"
-#property description "- Momentum-fading needs 2+ confirmations (not 1 bounce candle)"
-#property description "- Dashboard now refreshes every 2s between bars"
+#property version   "4.30"
+#property description "XAUUSD AI Sniper v4.3.0 — Every exit has a reason"
+#property description "Full trader-grade exit cards logged to Experts + dashboard"
+#property description "Fixed: BE lock regression, EMA=0 false trigger, RSI extremes"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -315,7 +314,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.2.5 (QoL FIX) READY ===");
+   Print("=== XAUAI SNIPER v4.3.0 (TRADER-GRADE EXITS) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -344,7 +343,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.2.5 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.3.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1230,19 +1229,59 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
 }
 
 //+------------------------------------------------------------------+
+//| LogExit — structured trader-style exit card                      |
+//| Produces 3 lines per exit:                                       |
+//|   1. One-line summary (greppable)                                |
+//|   2. Full market context at close                                |
+//|   3. Plain-English reason                                        |
+//| Also saved to "lastExitReason" for dashboard + journal.          |
+//+------------------------------------------------------------------+
+string lastExitReason = "";    // visible on dashboard
+
+void LogExit(ulong ticket, string dir, double openPx, double closePx,
+             double profit, double peak, int minsOpen,
+             double rsi, double emaFast, double close1, double open1,
+             string path, string reason)
+{
+   double priceMove = (dir == "BUY") ? (closePx - openPx) : (openPx - closePx);
+   string barDir = (close1 > open1) ? "GREEN" : (close1 < open1) ? "RED" : "DOJI";
+   string emaRel = (close1 > emaFast) ? "above-EMA" : "below-EMA";
+   string rsiZone = rsi > 70 ? "OB" : rsi > 55 ? "bull" : rsi > 45 ? "neutral" : rsi > 30 ? "bear" : "OS";
+
+   // Line 1: summary
+   Print("┌─ EXIT #", ticket, " ", dir, " @ ", DoubleToString(closePx, _Digits),
+         "  P/L: $", DoubleToString(profit, 2), "  Peak: $", DoubleToString(peak, 2),
+         "  Move: ", DoubleToString(priceMove, _Digits), "  T+", minsOpen, "min");
+   // Line 2: context
+   Print("│  Path: ", path, "  |  Bar: ", barDir, "  EMA: ", emaRel,
+         "  RSI: ", DoubleToString(rsi, 1), " (", rsiZone, ")");
+   // Line 3: human explanation
+   Print("└─ Reason: ", reason);
+
+   lastExitReason = path + " | $" + DoubleToString(profit, 2) + " | " + reason;
+}
+//+------------------------------------------------------------------+
 //| 3-PATH SMART EXIT SYSTEM                                         |
-//| Path A: Deterministic | Path B: Smart | Path C: Claude           |
+//| Path 0: Hard Loss Armor (stop nukes, early adverse, peak retrace)|
+//| Path A: Deterministic Trailing                                   |
+//| Path B: Smart Momentum (BE lock, quick profit, smart cut, stale) |
+//| Path C: Claude AI Semantic Exit                                  |
 //+------------------------------------------------------------------+
 void ManagePositions()
 {
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return;
+   // GUARD: Do not attempt any momentum logic until ALL indicator buffers are ready.
+   // Previously emaF/emaS defaulted to 0 on stale buffers → `close1 > emaF` always true →
+   // SELL trades silently flagged "momentum fading" and closed for no real reason.
+   if(ArraySize(bufRSI) < 2 || ArraySize(bufEMAFast) < 2 || ArraySize(bufEMASlow) < 2) return;
    double atr = bufATR[1];
-   double rsi = ArraySize(bufRSI) >= 2 ? bufRSI[1] : 50;
-   double emaF = ArraySize(bufEMAFast) >= 2 ? bufEMAFast[1] : 0;
-   double emaS = ArraySize(bufEMASlow) >= 2 ? bufEMASlow[1] : 0;
+   double rsi = bufRSI[1];
+   double emaF = bufEMAFast[1];
+   double emaS = bufEMASlow[1];
    double close1 = iClose(Symbol(), PERIOD_M5, 1);
    double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+   double tickPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -1261,7 +1300,6 @@ void ManagePositions()
       if(slDist <= 0) slDist = atr * InpSLMultiplier;
 
       // Convert 1R into ACCOUNT CURRENCY so we can compare against `profit` (USD).
-      // 1R$ = lots * (slDist / tickSize) * tickValue
       double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
       double tickSize  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
       double lotsOpen  = posInfo.Volume();
@@ -1269,38 +1307,42 @@ void ManagePositions()
                          ? lotsOpen * (slDist / tickSize) * tickValue
                          : MathMax(30.0, MathAbs(profit));
 
-      // ===== PATH 0: HARD LOSS PROTECTION (fires before anything else) =====
-      // (a) Absolute dollar cap — stops $3000 nukes
+      // Track peak (for retrace exit + logging)
+      double peak = UpdatePeakProfit(ticket, profit);
+      double retracePct = (peak > 0 && profit < peak) ? ((peak - profit) / peak) * 100.0 : 0.0;
+
+      // Dir string for logging
+      string dirStr = isBuy ? "BUY" : "SELL";
+
+      // ===== PATH 0: HARD LOSS PROTECTION =====
       if(InpHardStopUSD > 0 && profit <= -InpHardStopUSD)
       {
-         Print("HARD STOP: #", ticket, " $", DoubleToString(profit, 2),
-               " breached -$", DoubleToString(InpHardStopUSD, 2));
+         LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                 "HARD_STOP",
+                 StringFormat("Loss $%.2f breached absolute cap $%.2f. Capital preservation override.",
+                              profit, InpHardStopUSD));
          trade.PositionClose(ticket); continue;
       }
-      // (b) Early adverse excursion — if first 5min and down > 0.7R, exit now
       if(InpEarlyAdverseCut && minsOpen <= InpEarlyAdverseMin &&
          profit <= -(rDollars * InpEarlyAdverseR))
       {
-         Print("EARLY ADVERSE: #", ticket, " ", minsOpen, "min down $", DoubleToString(profit, 2),
-               " >= ", DoubleToString(InpEarlyAdverseR, 1), "R ($", DoubleToString(rDollars*InpEarlyAdverseR, 2), ")");
+         LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                 "EARLY_ADVERSE",
+                 StringFormat("Down %.1fR ($%.2f of %.2f) within first %d min. Entry was wrong — cut fast.",
+                              MathAbs(profit)/rDollars, profit, rDollars, InpEarlyAdverseMin));
          trade.PositionClose(ticket); continue;
       }
-      // (c) Peak retrace — if trade WAS in profit and gave back >60%, close
-      double peak = UpdatePeakProfit(ticket, profit);
-      if(InpPeakRetraceExit && peak >= InpPeakMinUSD && profit < peak)
+      if(InpPeakRetraceExit && peak >= InpPeakMinUSD && retracePct >= InpPeakRetracePct)
       {
-         double retrace = peak - profit;
-         double retracePct = (retrace / peak) * 100.0;
-         if(retracePct >= InpPeakRetracePct)
-         {
-            Print("PEAK RETRACE: #", ticket, " peak $", DoubleToString(peak, 2),
-                  " now $", DoubleToString(profit, 2), " (", DoubleToString(retracePct, 0), "% gave back)");
-            trade.PositionClose(ticket); continue;
-         }
+         LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                 "PEAK_RETRACE",
+                 StringFormat("Peak was $%.2f, now $%.2f — gave back %.0f%% (threshold %.0f%%).",
+                              peak, profit, retracePct, InpPeakRetracePct));
+         trade.PositionClose(ticket); continue;
       }
 
-      // ===== PATH A: DETERMINISTIC (SL/TP/Trail) =====
-      // Trail at 1.2x ATR behind price (M5 gold — typical ATR $1-$3)
+      // ===== PATH A: DETERMINISTIC TRAILING =====
+      // Trail at 1.2x ATR behind price
       double trailDist = MathMax(atr * 1.2, SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 200);
       if(isBuy && profit > 0)
       {
@@ -1317,98 +1359,151 @@ void ManagePositions()
 
       // ===== PATH B: SMART MANAGEMENT =====
 
-      // B1: Breakeven lock at +0.5R (in PRICE)
+      // B1: Breakeven lock at +0.5R (ONLY if doesn't worsen current SL)
       double halfR = slDist * 0.5;
-      if(isBuy && curPrice > openPx + halfR && curSL < openPx)
+      double ptSafety = SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 20;
+      if(isBuy && curPrice > openPx + halfR)
       {
-         double beSL = NormalizeDouble(openPx + SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 20, digits);
-         trade.PositionModify(ticket, beSL, curTP);
-         Print("BE LOCK: #", ticket, " at +0.5R — risk free");
+         double beSL = NormalizeDouble(openPx + ptSafety, digits);
+         // Only raise SL — never lower it (this was a bug: trail could already be higher)
+         if(beSL > curSL)
+         {
+            trade.PositionModify(ticket, beSL, curTP);
+            Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits), " (+0.5R reached, risk free)");
+         }
       }
-      if(!isBuy && curPrice < openPx - halfR && curSL > openPx)
+      if(!isBuy && curPrice < openPx - halfR)
       {
-         double beSL = NormalizeDouble(openPx - SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 20, digits);
-         trade.PositionModify(ticket, beSL, curTP);
-         Print("BE LOCK: #", ticket, " at +0.5R — risk free");
+         double beSL = NormalizeDouble(openPx - ptSafety, digits);
+         if(beSL < curSL || curSL == 0)
+         {
+            trade.PositionModify(ticket, beSL, curTP);
+            Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits), " (+0.5R reached, risk free)");
+         }
       }
 
-      // B2: Quick profit take (tunable) — with momentum guard
-      // Safety: never close under InpProfitTakeMin/2 to prevent scratch exits
+      // B2: Quick profit take — FOUR-factor confirmation for fading
       if(profit >= InpProfitTakeMin && profit >= 75)
       {
-         // Momentum health check — need MULTIPLE confirmations (not just one bounce candle)
          double close2alt = iClose(Symbol(), PERIOD_M5, 2);
-         bool momentumFading = false;
-         bool momentumStrong = false;
+         bool barReverse = isBuy ? (close1 < open1) : (close1 > open1);
+         bool emaBroken  = isBuy ? (close1 < emaF)  : (close1 > emaF);
+         bool rsiTurning = false;
+         if(ArraySize(bufRSI) >= 3)
+         {
+            double rsiPrev = bufRSI[2];
+            // RSI must be extreme AND turning back (not just high — that's normal in trends)
+            if(isBuy)  rsiTurning = (rsi > 72 && rsi < rsiPrev);
+            else       rsiTurning = (rsi < 28 && rsi > rsiPrev);
+         }
+         bool streakBroken = isBuy ? (close1 < close2alt) : (close1 > close2alt);
+
+         // STRONG = 3 of 4 momentum-positive conditions hold
+         int strongScore = 0;
          if(isBuy)
          {
-            // Strong: consecutive greens above EMA fast, RSI < 75 (headroom)
-            momentumStrong = (close1 > open1 && close1 > emaF && close1 > close2alt && rsi < 75);
-            // Fading: extreme overbought OR (red bar AND broken EMA) — BOTH required
-            momentumFading = (rsi > 75) || (close1 < open1 && close1 < emaF);
+            if(close1 > open1) strongScore++;
+            if(close1 > emaF)  strongScore++;
+            if(close1 > close2alt) strongScore++;
+            if(rsi < 75 && rsi > 50) strongScore++;
          }
          else
          {
-            momentumStrong = (close1 < open1 && close1 < emaF && close1 < close2alt && rsi > 25);
-            momentumFading = (rsi < 25) || (close1 > open1 && close1 > emaF);
+            if(close1 < open1) strongScore++;
+            if(close1 < emaF)  strongScore++;
+            if(close1 < close2alt) strongScore++;
+            if(rsi > 25 && rsi < 50) strongScore++;
          }
+         bool momentumStrong = strongScore >= 3;
 
-         // Always close at max profit cap or if momentum clearly fading
+         // FADING = RSI actively turning from extreme AND bar reversed AND broke EMA (3 confirmations)
+         int fadeScore = 0;
+         if(rsiTurning)   fadeScore++;
+         if(barReverse)   fadeScore++;
+         if(emaBroken)    fadeScore++;
+         if(streakBroken) fadeScore++;
+         bool momentumFading = fadeScore >= 3;
+
          bool timeExpired = minsOpen > InpQuickExitMin;
-         bool closeNow = (profit >= InpProfitTakeMax) || momentumFading;
+         bool capReached  = profit >= InpProfitTakeMax;
 
-         // Honor time expiry UNLESS momentum is strong AND momentum guard is on
-         if(!closeNow && timeExpired)
-            closeNow = !(InpMomentumGuard && momentumStrong);
-
-         if(closeNow)
+         if(capReached)
          {
-            Print("QUICK PROFIT: #", ticket, " +$", DoubleToString(profit, 2), " (", minsOpen, "min)",
-                  momentumFading?" [fade]":"", momentumStrong?" [STRONG→held]":"");
+            LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                    "QUICK_PROFIT_CAP",
+                    StringFormat("Hit max profit target $%.2f (cap $%.2f). Taking the win.", profit, (double)InpProfitTakeMax));
             trade.PositionClose(ticket); continue;
          }
-         else if(timeExpired && InpMomentumGuard && momentumStrong)
+         if(momentumFading)
          {
-            // Let it run — but tighten SL to lock partial gains
+            LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                    "MOMENTUM_FADE",
+                    StringFormat("3+ fade signals: RSI-turn=%s bar-reverse=%s EMA-broken=%s streak-broken=%s.",
+                                 rsiTurning?"Y":"N", barReverse?"Y":"N", emaBroken?"Y":"N", streakBroken?"Y":"N"));
+            trade.PositionClose(ticket); continue;
+         }
+         if(timeExpired && !(InpMomentumGuard && momentumStrong))
+         {
+            LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                    "TIME_EXPIRED",
+                    StringFormat("Open %d min > cap %d min; momentum score only %d/4. Book what we have.",
+                                 minsOpen, InpQuickExitMin, strongScore));
+            trade.PositionClose(ticket); continue;
+         }
+         if(timeExpired && InpMomentumGuard && momentumStrong)
+         {
+            // Tighten SL to lock gains but let runner run
             double lockSL;
             if(isBuy)
             {
                lockSL = NormalizeDouble(curPrice - atr * 0.8, digits);
                if(lockSL > curSL && lockSL > openPx)
-               { trade.PositionModify(ticket, lockSL, curTP); Print("LETTING RUNNER: #", ticket, " SL tightened to ", DoubleToString(lockSL, digits)); }
+               { trade.PositionModify(ticket, lockSL, curTP);
+                 Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→", DoubleToString(lockSL, digits)); }
             }
             else
             {
                lockSL = NormalizeDouble(curPrice + atr * 0.8, digits);
                if(lockSL < curSL && lockSL < openPx)
-               { trade.PositionModify(ticket, lockSL, curTP); Print("LETTING RUNNER: #", ticket, " SL tightened to ", DoubleToString(lockSL, digits)); }
+               { trade.PositionModify(ticket, lockSL, curTP);
+                 Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→", DoubleToString(lockSL, digits)); }
             }
          }
       }
 
-      // B3: Smart loss cut
-      if(profit < -100)
+      // B3: Smart loss cut — R-multiple based (scales to any account size)
+      if(profit <= -(rDollars * 0.25) && minsOpen >= 3)
       {
-         bool noRecovery = false;
-         if(isBuy && rsi < 35 && close1 < emaF) noRecovery = true;
-         if(!isBuy && rsi > 65 && close1 > emaF) noRecovery = true;
-         if(noRecovery || (profit < -200 && minsOpen > 15))
+         bool emaAgainst = isBuy ? (close1 < emaF) : (close1 > emaF);
+         bool rsiFailing = isBuy ? (rsi < 40) : (rsi > 60);
+         bool deepLoss   = profit <= -(rDollars * 0.5) && minsOpen > 15;
+
+         if((emaAgainst && rsiFailing) || deepLoss)
          {
-            Print("SMART CUT: #", ticket, " $", DoubleToString(profit, 2), " — ", noRecovery ? "no recovery" : "time+loss");
+            LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                    "SMART_CUT",
+                    StringFormat("%.2fR loss + %s (EMA-against=%s RSI-failing=%s). Stop bleeding.",
+                                 MathAbs(profit)/rDollars, deepLoss?"deep+time":"no-recovery",
+                                 emaAgainst?"Y":"N", rsiFailing?"Y":"N"));
             trade.PositionClose(ticket); continue;
          }
       }
 
-      // B4: Stale exit — QuantPerp caps (compare DOLLARS to DOLLARS)
+      // B4: Stale exit — regime-aware
       int staleCap = (currentRegime == REGIME_LOW_VOL || currentRegime == REGIME_CHOPPY) ? 35 : 90;
       if(minsOpen > staleCap && profit <= -(rDollars * 0.6))
       {
-         Print("STALE EXIT: #", ticket, " open ", minsOpen, "min > cap ", staleCap, " with -$", DoubleToString(MathAbs(profit), 2), " (0.6R=$", DoubleToString(rDollars*0.6, 2), ")");
+         LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                 "STALE_LOSS",
+                 StringFormat("Open %d min > regime cap %d min at -%.2fR. Free the margin.",
+                              minsOpen, staleCap, MathAbs(profit)/rDollars));
          trade.PositionClose(ticket); continue;
       }
       if(minsOpen > 30 && profit > -30 && profit < 20)
       {
-         Print("STALE DRIFT: #", ticket, " — ", minsOpen, "min, $", DoubleToString(profit, 2), " — going nowhere");
+         LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                 "STALE_DRIFT",
+                 StringFormat("Open %d min with P/L $%.2f. Going nowhere — free margin.", minsOpen, profit));
          trade.PositionClose(ticket); continue;
       }
 
@@ -1427,11 +1522,15 @@ void ManagePositions()
             // Safety net: if losing AND small loss (<0.3R in dollars), let SL handle it
             if(profit < 0 && profit > -(rDollars * 0.3))
             {
-               Print("CLAUDE EXIT BLOCKED: Losing -$", DoubleToString(MathAbs(profit), 2), " < 0.3R=$", DoubleToString(rDollars*0.3, 2), " — letting SL handle");
+               Print("CLAUDE_EXIT_BLOCKED #", ticket, " losing -$", DoubleToString(MathAbs(profit), 2),
+                     " but < 0.3R ($", DoubleToString(rDollars*0.3, 2), ") — letting SL handle");
             }
             else
             {
-               Print("CLAUDE EXIT: #", ticket, " $", DoubleToString(profit, 2));
+               LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                       "CLAUDE_AI",
+                       StringFormat("Claude 4.5 said CLOSE. P/L $%.2f (%.2fR). AI analyzed context and decided exit.",
+                                    profit, profit/rDollars));
                trade.PositionClose(ticket); continue;
             }
          }
@@ -1799,7 +1898,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.2.5 | LOSS ARMOR | ";
+   d += " XAUAI SNIPER v4.3.0 | TRADER-GRADE | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
@@ -1817,6 +1916,7 @@ void UpdateDashboard(int signal, double score, string grade)
         drawdownActive?"ACTIVE":"off",
         (lastClose.valid && lastClose.wasLoss && !lastClose.reEntered && TimeCurrent()-lastClose.closeTime < InpReEntryWindow) ? "WATCHING" : "idle");
    if(IsInStreakPause()) d += StringFormat("STREAK PAUSE until %s\n", TimeToString(streakPauseUntil, TIME_SECONDS));
+   if(StringLen(lastExitReason) > 0) d += StringFormat("Last Exit: %s\n", lastExitReason);
    d += "==========================================\n";
    if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT — RESTING <<\n";
    if(weeklyLossHit) d += "!! WEEKLY LOSS LIMIT — STOPPED !!\n";
