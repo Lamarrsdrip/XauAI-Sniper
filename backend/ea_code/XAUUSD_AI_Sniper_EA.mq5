@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.4.3 — Bug Hunt Part 2     |
+//|                                     v4.4.4 — Let Runners Run     |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "4.43"
-#property description "XAUUSD AI Sniper v4.4.3 — Forensic bug hunt pass"
+#property description "XAUUSD AI Sniper v4.4.4 — Let runners run (smart profit cap)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -81,12 +81,16 @@ input int    InpDirLockoutLookback = 5;    // Check last N trades
 input int    InpDirLockoutLossesNeeded = 3;// If N of last M were losses in same direction
 input int    InpDirLockoutMinutes = 60;    // Lock that direction for X minutes
 
-input group "=== AUTO-SCALE (v4.3.1 — detect account size & adapt) ==="
+input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
 input double InpAutoRiskPct    = 0.8;      // Hard stop = this % of balance (e.g. 0.8% of $1000 = $8)
 input double InpAutoProfMinPct = 0.15;     // Profit floor scan start = this % of balance
-input double InpAutoProfMaxPct = 0.5;      // Profit auto-cap = this % of balance
+input double InpAutoProfMaxPct = 3.0;      // Profit soft-cap = this % of balance (was 0.5, let runners run)
 input double InpAutoPeakMinPct = 0.25;     // Peak-retrace arm threshold = this % of balance
+input double InpProfMinFloorUSD  = 25.0;   // ProfitMin NEVER below this $ (micro-account floor)
+input double InpProfMaxFloorUSD  = 50.0;   // ProfitMax NEVER below this $ (micro-account floor)
+input double InpProfMaxCeilUSD   = 5000.0; // ProfitMax NEVER above this $ (large-account ceiling)
+input bool   InpSmartCapExit     = true;   // TRUE = cap only exits on real reversal, else trail SL tightly
 
 input group "=== VOLATILITY-ADAPTIVE LOT SIZING ==="
 input bool   InpVolAdaptiveLots = true;    // Reduce lot size when ATR spikes above normal
@@ -292,11 +296,23 @@ void RecomputeAutoScale()
    if(bal <= 0) bal = 100;                  // fallback if account query fails
 
    // TRUE proportional scaling — works on $10 or $100k equally.
-   // No arbitrary dollar floors (they broke math on micro accounts).
+   // Then clamp with absolute floor/ceiling so micro accounts still get viable targets
+   // and mega-accounts don't chase unreachable daily jackpots.
    autoHardStopUSD   = NormalizeDouble(bal * (InpAutoRiskPct    / 100.0), 2);
    autoProfitTakeMin = NormalizeDouble(bal * (InpAutoProfMinPct / 100.0), 2);
    autoProfitTakeMax = NormalizeDouble(bal * (InpAutoProfMaxPct / 100.0), 2);
    autoPeakMinUSD    = NormalizeDouble(bal * (InpAutoPeakMinPct / 100.0), 2);
+
+   // Absolute bounds on profit targets (v4.4.4)
+   //   ProfitMin floor: $25  → micro accounts still have a scan trigger
+   //   ProfitMax floor: $50  → micro accounts still have a cap target
+   //   ProfitMax ceiling: $5000 → large accounts don't chase unreachable numbers
+   if(autoProfitTakeMin < InpProfMinFloorUSD) autoProfitTakeMin = InpProfMinFloorUSD;
+   if(autoProfitTakeMax < InpProfMaxFloorUSD) autoProfitTakeMax = InpProfMaxFloorUSD;
+   if(autoProfitTakeMax > InpProfMaxCeilUSD)  autoProfitTakeMax = InpProfMaxCeilUSD;
+   // Sanity: ProfitMax must always exceed ProfitMin
+   if(autoProfitTakeMax < autoProfitTakeMin * 1.5)
+      autoProfitTakeMax = autoProfitTakeMin * 1.5;
 
    // Viability warning for micro accounts — XAU M5 scalping has structural minimums
    // due to broker minimum lot size (0.01) and typical XAU tick values
@@ -434,7 +450,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.4.3 (DIRECTION LOCKOUT) READY ===");
+   Print("=== XAUAI SNIPER v4.4.4 (LET RUNNERS RUN) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -458,7 +474,9 @@ int OnInit()
             " -> HardStop:$", DoubleToString(autoHardStopUSD,2),
             " ProfitMin:$", DoubleToString(autoProfitTakeMin,2),
             " ProfitMax:$", DoubleToString(autoProfitTakeMax,2),
-            " PeakMin:$", DoubleToString(autoPeakMinUSD,2));
+            " PeakMin:$", DoubleToString(autoPeakMinUSD,2),
+            " | Bounds: $", DoubleToString(InpProfMaxFloorUSD,0), "-$", DoubleToString(InpProfMaxCeilUSD,0),
+            " | SmartCap=", InpSmartCapExit?"ON (trail, let run)":"OFF (force close)");
    Print("VOL-ADAPT: ", InpVolAdaptiveLots?"ON":"OFF",
          " (spike>", DoubleToString(InpVolSpikeMulti,2), "x ATR → size×",DoubleToString(InpVolSpikeReduce,2),
          ", calm<", DoubleToString(InpVolCalmMulti,2), "x → size×", DoubleToString(InpVolCalmBoost,2), ")");
@@ -472,7 +490,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.4.3 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.4.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1675,20 +1693,67 @@ void ManagePositions()
          bool timeExpired = minsOpen > InpQuickExitMin;
          bool capReached  = profit >= EffProfitTakeMax();
 
-         if(capReached)
+         // v4.4.4 — MOMENTUM-FADE check FIRST (always wins, at any profit level)
+         //           "Real reversal" = exit regardless of cap.
+         if(momentumFading)
+         {
+            LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                    "MOMENTUM_FADE",
+                    StringFormat("Real reversal: structure-broken=%s rsi-turn=%s bar-reverse=%s ema-broken=%s streak-broken=%s. Profit $%.2f peak $%.2f.",
+                                 structureBroken?"Y":"N", rsiTurning?"Y":"N", barReverse?"Y":"N", emaBroken?"Y":"N", streakBroken?"Y":"N",
+                                 profit, peak));
+            trade.PositionClose(ticket); continue;
+         }
+
+         // v4.4.4 — CAP REACHED: only force-close if smart cap disabled.
+         //           Otherwise, trail SL tight and LET THE RUNNER RUN up to ceiling.
+         if(capReached && !InpSmartCapExit)
          {
             LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                     "QUICK_PROFIT_CAP",
                     StringFormat("Hit max profit target $%.2f (cap $%.2f). Taking the win.", profit, EffProfitTakeMax()));
             trade.PositionClose(ticket); continue;
          }
-         if(momentumFading)
+         if(capReached && InpSmartCapExit)
          {
-            LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
-                    "MOMENTUM_FADE",
-                    StringFormat("Real reversal: structure-broken=%s rsi-turn=%s bar-reverse=%s ema-broken=%s streak-broken=%s.",
-                                 structureBroken?"Y":"N", rsiTurning?"Y":"N", barReverse?"Y":"N", emaBroken?"Y":"N", streakBroken?"Y":"N"));
-            trade.PositionClose(ticket); continue;
+            // Past the cap — trail SL at 0.8 ATR behind current price to lock in gains
+            // and let the runner breathe. We only exit if momentumFading fires (above)
+            // OR profit reaches the absolute ceiling (hard cap guard below).
+            double lockSL;
+            if(isBuy)
+            {
+               lockSL = NormalizeDouble(curPrice - atr * 0.8, digits);
+               if(lockSL > curSL && lockSL > openPx)
+               {
+                  trade.PositionModify(ticket, lockSL, curTP);
+                  Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
+                        " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
+                        " — SL trailed to ", DoubleToString(lockSL, digits), " (0.8 ATR). Letting it run.");
+               }
+            }
+            else
+            {
+               lockSL = NormalizeDouble(curPrice + atr * 0.8, digits);
+               if((lockSL < curSL || curSL == 0) && lockSL < openPx)
+               {
+                  trade.PositionModify(ticket, lockSL, curTP);
+                  Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
+                        " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
+                        " — SL trailed to ", DoubleToString(lockSL, digits), " (0.8 ATR). Letting it run.");
+               }
+            }
+
+            // Hard ceiling escape: absurdly large runner still gets banked
+            // (protects against unrealistic expectations on small accounts)
+            if(profit >= InpProfMaxCeilUSD)
+            {
+               LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                       "PROFIT_CEILING",
+                       StringFormat("Hit absolute ceiling $%.2f (max $%.2f). Banking the monster.",
+                                    profit, InpProfMaxCeilUSD));
+               trade.PositionClose(ticket); continue;
+            }
+            // else: let it run, next tick evaluates again
          }
          if(timeExpired && !(InpMomentumGuard && momentumStrong))
          {
@@ -2216,7 +2281,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.4.3 | SMART AUTO | ";
+   d += " XAUAI SNIPER v4.4.4 | SMART AUTO | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

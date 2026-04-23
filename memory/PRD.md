@@ -83,3 +83,15 @@
 ## Future/Backlog
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
+
+- **Feb 2026 - v4.4.4 — "Let Runners Run" (smart profit cap)**
+  - Root cause from user log: QUICK_PROFIT_CAP force-closed a $356 winner on a $57k account at fixed 0.5% cap ($285), then EA went idle. User complained: "only good high confidence reason should end it, cap should range $50-$5k."
+  - **Raised ProfitMax default** from 0.5% → 3.0% of balance (6× breathing room).
+  - **Added absolute bounds** `InpProfMaxFloorUSD=50` / `InpProfMaxCeilUSD=5000` — micro accounts get $50 floor, mega accounts capped at $5k.
+  - **Added ProfitMin floor** `InpProfMinFloorUSD=25` so scan still arms on micro balances.
+  - **Smart cap exit** (`InpSmartCapExit=true` default): hitting cap no longer force-closes. Instead:
+    - MOMENTUM_FADE check runs FIRST (structure break OR 3-of-4 reversal signals) → exits cleanly on real reversal.
+    - If cap hit with NO reversal, SL trails 0.8 ATR behind price (CAP_RUNNER log). Winner keeps running.
+    - Hard ceiling $5k triggers `PROFIT_CEILING` exit to bank monster trades sanely.
+  - Startup log now shows bounds + SmartCap status.
+  - Frontend badges bumped to v4.4.4.
