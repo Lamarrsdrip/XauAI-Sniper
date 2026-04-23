@@ -52,6 +52,14 @@
   - Dashboard shows DXY bias, drawdown state, streak pause timer, re-entry watcher status.
   - All 8 new features fully tunable via MT5 inputs, still respect `InpBacktestMode` (strategy-tester-safe).
 
+- **Feb 2026 - v4.2.4 — CRITICAL regime order bugfix**
+  - Root cause found from user log: `Regime: LOW_VOL | Session: 1.0 | Setup: SQUEEZE_RELEASE Score:4.0 Combined:2.1 [PASS]` — bot idle for 30+ minutes during NY peak overlap.
+  - Math: `atrPct = 4.55 / 4701 × 100 = 0.097%` → fell into `< 0.12%` LOW_VOL branch (quality 0.55) BEFORE the trending check ran. But chart showed a clear 55-point downtrend.
+  - **Order bug**: `if(atrPct < 0.12) return LOW_VOL` short-circuited before `if(emaF < emaS) return TRENDING_DOWN`. Slow-ATR trends were silenced.
+  - **Fix**: Reordered DetectRegime() to DEAD → BREAKOUT → TRENDING → LOW_VOL → CHOPPY → RANGING. Trending wins over low-vol when both conditions apply.
+  - Also tightened thresholds: DEAD 0.04%→0.03%, LOW_VOL 0.12%→0.08% (reflects higher-priced gold era where ATR% naturally compresses).
+  - LOW_VOL quality raised 0.55 → 0.65 (squeeze releases are MOST useful in low vol, shouldn't be penalized heavily).
+
 - **Feb 2026 - v4.2.3 — Loss Armor + Runner Protection (profit-factor surgery)**
   - **Root cause targeted**: user's trade history showed avg-$300 wins vs single -$3,096 nuke (1 bad trade eats 10 good trades). This is a profit-factor problem, not a WR problem.
   - **Hard dollar stop** (`InpHardStopUSD=800`): absolute cap per trade. A $3,000 drawdown on a single position now impossible.

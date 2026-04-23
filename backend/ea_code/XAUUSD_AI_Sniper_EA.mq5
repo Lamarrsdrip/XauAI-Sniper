@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.2.3 — Loss Armor + Runners|
+//|                                     v4.2.4 — Regime Order Fix    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.23"
-#property description "XAUUSD AI Sniper v4.2.3 — Loss Armor + Runner Protection"
-#property description "Hard stop | Early adverse cut | Peak retrace | Momentum guard"
-#property description "8 Setups | Dual-AI | Hive | Re-Entry | DXY | Adaptive Grades"
+#property version   "4.24"
+#property description "XAUUSD AI Sniper v4.2.4 — Regime priority fix"
+#property description "TRENDING check runs BEFORE low-vol (no more silenced trends)"
+#property description "Full Stack: 8 Setups | Dual-AI | Hive | Loss Armor"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -314,7 +314,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.2.3 (LOSS ARMOR + RUNNERS) READY ===");
+   Print("=== XAUAI SNIPER v4.2.4 (REGIME FIX) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -343,7 +343,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.2.3 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.2.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -369,20 +369,14 @@ double DetectRegime()
    double emaDiff = MathAbs(emaF - emaS) / emaS * 100;
    bool mtfAligned = (emaF > emaS && h1F > h1S) || (emaF < emaS && h1F < h1S);
 
-   // DEAD: ATR < 0.04%
-   if(atrPct < 0.04) { currentRegime = REGIME_DEAD; return 0.05; }
+   // --- TIER 1: DEAD (truly no movement — everything else is tradeable) ---
+   if(atrPct < 0.03) { currentRegime = REGIME_DEAD; return 0.05; }
 
-   // BREAKOUT: BB squeeze releasing + price outside bands
+   // --- TIER 2: BREAKOUT (explosive squeeze releases — highest priority) ---
    if(expanding && close1 > bbU) { currentRegime = REGIME_BREAKOUT_UP; return 0.75; }
    if(expanding && close1 < bbL) { currentRegime = REGIME_BREAKOUT_DOWN; return 0.75; }
 
-   // LOW VOL: ATR < 0.12%
-   if(atrPct < 0.12) { currentRegime = REGIME_LOW_VOL; return 0.55; }
-
-   // CHOPPY: EMAs close + no MTF alignment
-   if(emaDiff < 0.03 && !mtfAligned) { currentRegime = REGIME_CHOPPY; return 0.30; }
-
-   // TRENDING: Clear EMA separation + MTF aligned
+   // --- TIER 3: TRENDING (must check BEFORE low-vol so slow trends aren't misclassified) ---
    if(emaF > emaS && emaDiff > 0.03)
    {
       currentRegime = REGIME_TRENDING_UP;
@@ -394,7 +388,13 @@ double DetectRegime()
       return mtfAligned ? 0.85 : 0.65;
    }
 
-   // RANGING: Everything else
+   // --- TIER 4: LOW_VOL (quiet AND flat — only now that trend is ruled out) ---
+   if(atrPct < 0.08) { currentRegime = REGIME_LOW_VOL; return 0.65; }
+
+   // --- TIER 5: CHOPPY (EMAs tangled, no trend, no clear direction) ---
+   if(emaDiff < 0.03 && !mtfAligned) { currentRegime = REGIME_CHOPPY; return 0.30; }
+
+   // --- TIER 6: RANGING (everything else — moderate vol, no strong direction) ---
    currentRegime = REGIME_RANGING;
    return 0.60;
 }
@@ -1789,7 +1789,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.2.3 | LOSS ARMOR | ";
+   d += " XAUAI SNIPER v4.2.4 | LOSS ARMOR | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
