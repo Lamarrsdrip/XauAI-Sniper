@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.3.0 — Trader-Grade Exits  |
+//|                                     v4.4.0 — Smart Auto + Thesis |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.30"
-#property description "XAUUSD AI Sniper v4.3.0 — Every exit has a reason"
-#property description "Full trader-grade exit cards logged to Experts + dashboard"
-#property description "Fixed: BE lock regression, EMA=0 false trigger, RSI extremes"
+#property version   "4.40"
+#property description "XAUUSD AI Sniper v4.4.0 — True adaptive intelligence"
+#property description "Auto-scales to account size | Vol-adaptive lots | Trade thesis"
+#property description "Structure-break exits | Every decision reasoned"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -75,6 +75,20 @@ input int    InpStreakWindowSec = 2700;    // Window for loss-streak detection (
 input int    InpStreakPauseSec = 1200;     // Pause duration after streak (20min)
 input bool   InpAsiaRangeBreakout = true;  // Enable Asia-range breakout setup at London/NY open
 input bool   InpAdaptiveGrades = true;     // Auto-tune grade thresholds from recent win rate
+
+input group "=== AUTO-SCALE (v4.3.1 — detect account size & adapt) ==="
+input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
+input double InpAutoRiskPct    = 0.8;      // Hard stop = this % of balance (e.g. 0.8% of $1000 = $8)
+input double InpAutoProfMinPct = 0.15;     // Profit floor scan start = this % of balance
+input double InpAutoProfMaxPct = 0.5;      // Profit auto-cap = this % of balance
+input double InpAutoPeakMinPct = 0.25;     // Peak-retrace arm threshold = this % of balance
+
+input group "=== VOLATILITY-ADAPTIVE LOT SIZING ==="
+input bool   InpVolAdaptiveLots = true;    // Reduce lot size when ATR spikes above normal
+input double InpVolSpikeMulti  = 1.5;      // current ATR >= this × median ATR = "spike"
+input double InpVolSpikeReduce = 0.70;     // Multiply lots by this during vol spikes
+input double InpVolCalmMulti   = 0.7;      // current ATR <= this × median ATR = "calm"
+input double InpVolCalmBoost   = 1.10;     // Lot boost during calm stable markets
 
 input group "=== SAFETY ==="
 input double InpMaxSpread      = 150.0;    // Max spread (points)
@@ -198,6 +212,17 @@ datetime   asiaRangeDay = 0;
 ulong      peakTickets[];
 double     peakProfits[];
 
+// AUTO-SCALE derived values (computed in OnInit when InpAutoScale=true)
+double     autoHardStopUSD    = 0;
+double     autoProfitTakeMin  = 0;
+double     autoProfitTakeMax  = 0;
+double     autoPeakMinUSD     = 0;
+
+// TRADE THESIS (AI narrative per open position)
+string     currentTradeThesis = "";
+string     currentTradeInvalidation = "";
+string     currentTradeTarget = "";
+
 // Peak helpers
 int FindPeakIdx(ulong ticket)
 {
@@ -232,6 +257,71 @@ void ClearPeakProfit(ulong ticket)
    }
    ArrayResize(peakTickets, n);
    ArrayResize(peakProfits, n);
+}
+
+//+------------------------------------------------------------------+
+//| AUTO-SCALE: derive dollar thresholds from current account size   |
+//+------------------------------------------------------------------+
+void RecomputeAutoScale()
+{
+   if(!InpAutoScale)
+   {
+      autoHardStopUSD   = InpHardStopUSD;
+      autoProfitTakeMin = InpProfitTakeMin;
+      autoProfitTakeMax = InpProfitTakeMax;
+      autoPeakMinUSD    = InpPeakMinUSD;
+      return;
+   }
+   double bal = accInfo.Balance();
+   if(bal <= 0) bal = accInfo.Equity();
+   if(bal <= 0) bal = 1000;                 // fallback
+
+   autoHardStopUSD   = NormalizeDouble(bal * (InpAutoRiskPct    / 100.0), 2);
+   autoProfitTakeMin = NormalizeDouble(bal * (InpAutoProfMinPct / 100.0), 2);
+   autoProfitTakeMax = NormalizeDouble(bal * (InpAutoProfMaxPct / 100.0), 2);
+   autoPeakMinUSD    = NormalizeDouble(bal * (InpAutoPeakMinPct / 100.0), 2);
+
+   // Sensible minimums so we don't get absurdly tiny values on micro accounts
+   if(autoHardStopUSD   < 2)  autoHardStopUSD   = 2;
+   if(autoProfitTakeMin < 0.5) autoProfitTakeMin = 0.5;
+   if(autoProfitTakeMax < 2)   autoProfitTakeMax = 2;
+   if(autoPeakMinUSD    < 1)   autoPeakMinUSD    = 1;
+}
+
+// Getters that return either auto-scaled or user-input value
+double EffHardStopUSD()    { return InpAutoScale ? autoHardStopUSD   : InpHardStopUSD; }
+double EffProfitTakeMin()  { return InpAutoScale ? autoProfitTakeMin : InpProfitTakeMin; }
+double EffProfitTakeMax()  { return InpAutoScale ? autoProfitTakeMax : InpProfitTakeMax; }
+double EffPeakMinUSD()     { return InpAutoScale ? autoPeakMinUSD    : InpPeakMinUSD; }
+
+//+------------------------------------------------------------------+
+//| VOLATILITY-ADAPTIVE LOT MULTIPLIER                               |
+//| Compares current ATR vs rolling-median ATR (50 M5 bars).         |
+//| Returns multiplier: <1 in vol spikes, >1 in calm regimes.        |
+//+------------------------------------------------------------------+
+double GetVolAdaptiveMult()
+{
+   if(!InpVolAdaptiveLots) return 1.0;
+   if(ArraySize(bufATR) < 2) return 1.0;
+   double cur = bufATR[1];
+   if(cur <= 0) return 1.0;
+
+   // Pull last 50 ATR values, compute median
+   double samples[50];
+   int got = CopyBuffer(hATR, 0, 1, 50, samples);
+   if(got < 20) return 1.0;
+   // Simple selection sort top-50 — small enough to be cheap
+   for(int a = 0; a < got - 1; a++)
+      for(int b = a + 1; b < got; b++)
+         if(samples[b] < samples[a])
+         { double t = samples[a]; samples[a] = samples[b]; samples[b] = t; }
+   double median = samples[got / 2];
+   if(median <= 0) return 1.0;
+
+   double ratio = cur / median;
+   if(ratio >= InpVolSpikeMulti) return InpVolSpikeReduce;
+   if(ratio <= InpVolCalmMulti)  return InpVolCalmBoost;
+   return 1.0;
 }
 
 //+------------------------------------------------------------------+
@@ -308,13 +398,15 @@ int OnInit()
    todayReEntryCount = 0;
    asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false; asiaRangeDay = 0;
    ArrayResize(peakTickets, 0); ArrayResize(peakProfits, 0);
+   currentTradeThesis = ""; currentTradeInvalidation = ""; currentTradeTarget = "";
+   RecomputeAutoScale();
    lastClose.valid = false; lastClose.reEntered = false; lastClose.wasLoss = false;
    lastClose.dir = 0; lastClose.entryPrice = 0; lastClose.slDist = 0;
    lastClose.lots = 0; lastClose.closeTime = 0; lastClose.signature = ""; lastClose.setup = "";
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.3.0 (TRADER-GRADE EXITS) READY ===");
+   Print("=== XAUAI SNIPER v4.4.0 (SMART AUTO) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -329,10 +421,19 @@ int OnInit()
          " (", InpDrawdownLosses, "losses->", DoubleToString(InpDrawdownRisk,2), "%) | Streak=", InpStreakCooldownLosses, " in ", InpStreakWindowSec/60, "min");
    Print("ADAPTIVE: ", InpAdaptiveGrades?"ON":"OFF",
          " (auto-tunes GradeB on recent WR) | AsiaBreakout: ", InpAsiaRangeBreakout?"ON":"OFF");
-   Print("ARMOR: HardStop=$", DoubleToString(InpHardStopUSD,0),
+   Print("ARMOR: HardStop=$", DoubleToString(EffHardStopUSD(),2),
          " | EarlyAdverse=", InpEarlyAdverseCut?"ON":"OFF", " (", InpEarlyAdverseMin, "min,", DoubleToString(InpEarlyAdverseR,1), "R)",
-         " | PeakRetrace=", InpPeakRetraceExit?"ON":"OFF", " (", DoubleToString(InpPeakRetracePct,0), "%,min$", DoubleToString(InpPeakMinUSD,0), ")",
+         " | PeakRetrace=", InpPeakRetraceExit?"ON":"OFF", " (", DoubleToString(InpPeakRetracePct,0), "%,min$", DoubleToString(EffPeakMinUSD(),2), ")",
          " | MomentumGuard=", InpMomentumGuard?"ON":"OFF");
+   if(InpAutoScale)
+      Print("AUTO-SCALE ON | Balance: $", DoubleToString(accInfo.Balance(),2),
+            " -> HardStop:$", DoubleToString(autoHardStopUSD,2),
+            " ProfitMin:$", DoubleToString(autoProfitTakeMin,2),
+            " ProfitMax:$", DoubleToString(autoProfitTakeMax,2),
+            " PeakMin:$", DoubleToString(autoPeakMinUSD,2));
+   Print("VOL-ADAPT: ", InpVolAdaptiveLots?"ON":"OFF",
+         " (spike>", DoubleToString(InpVolSpikeMulti,2), "x ATR → size×",DoubleToString(InpVolSpikeReduce,2),
+         ", calm<", DoubleToString(InpVolCalmMulti,2), "x → size×", DoubleToString(InpVolCalmBoost,2), ")");
    return INIT_SUCCEEDED;
 }
 
@@ -343,7 +444,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.3.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.4.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -552,6 +653,7 @@ void UpdateDrawdownState(bool wasLoss)
       todayLossResetDay = TimeCurrent();
       drawdownActive = false;
       todayReEntryCount = 0;     // reset re-entry quota daily
+      RecomputeAutoScale();      // re-scale thresholds to current balance
    }
    if(wasLoss) todayLossCount++;
    else if(todayLossCount > 0) todayLossCount--;   // a win reduces recent-loss stress
@@ -1185,6 +1287,15 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       else if(rW <= 1) riskPct *= 0.5;
    }
 
+   // VOLATILITY-ADAPTIVE SIZING (reduce in vol spikes, boost in calm)
+   double volMult = GetVolAdaptiveMult();
+   if(volMult != 1.0)
+   {
+      Print("VOL-ADAPT: risk × ", DoubleToString(volMult, 2),
+            " (ATR vs median; ", volMult < 1.0 ? "high vol — shrinking" : "calm — slight boost", ")");
+      riskPct *= volMult;
+   }
+
    double riskAmount = balance * riskPct / 100.0;
    double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
    double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
@@ -1315,12 +1426,12 @@ void ManagePositions()
       string dirStr = isBuy ? "BUY" : "SELL";
 
       // ===== PATH 0: HARD LOSS PROTECTION =====
-      if(InpHardStopUSD > 0 && profit <= -InpHardStopUSD)
+      if(EffHardStopUSD() > 0 && profit <= -EffHardStopUSD())
       {
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "HARD_STOP",
                  StringFormat("Loss $%.2f breached absolute cap $%.2f. Capital preservation override.",
-                              profit, InpHardStopUSD));
+                              profit, EffHardStopUSD()));
          trade.PositionClose(ticket); continue;
       }
       if(InpEarlyAdverseCut && minsOpen <= InpEarlyAdverseMin &&
@@ -1332,7 +1443,7 @@ void ManagePositions()
                               MathAbs(profit)/rDollars, profit, rDollars, InpEarlyAdverseMin));
          trade.PositionClose(ticket); continue;
       }
-      if(InpPeakRetraceExit && peak >= InpPeakMinUSD && retracePct >= InpPeakRetracePct)
+      if(InpPeakRetraceExit && peak >= EffPeakMinUSD() && retracePct >= InpPeakRetracePct)
       {
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "PEAK_RETRACE",
@@ -1383,7 +1494,7 @@ void ManagePositions()
       }
 
       // B2: Quick profit take — FOUR-factor confirmation for fading
-      if(profit >= InpProfitTakeMin && profit >= 75)
+      if(profit >= EffProfitTakeMin() && profit >= MathMax(75, EffProfitTakeMin() * 0.5))
       {
          double close2alt = iClose(Symbol(), PERIOD_M5, 2);
          bool barReverse = isBuy ? (close1 < open1) : (close1 > open1);
@@ -1397,6 +1508,21 @@ void ManagePositions()
             else       rsiTurning = (rsi < 28 && rsi > rsiPrev);
          }
          bool streakBroken = isBuy ? (close1 < close2alt) : (close1 > close2alt);
+
+         // STRUCTURE BREAK: did price break a key swing level? (strong trader signal)
+         // For BUY: broke below the recent swing low (last 5 bars)
+         // For SELL: broke above the recent swing high
+         bool structureBroken = false;
+         double swingLow = close1, swingHigh = close1;
+         for(int k = 2; k <= 6; k++)
+         {
+            double hk = iHigh(Symbol(), PERIOD_M5, k);
+            double lk = iLow(Symbol(), PERIOD_M5, k);
+            if(lk < swingLow)  swingLow  = lk;
+            if(hk > swingHigh) swingHigh = hk;
+         }
+         if(isBuy  && close1 < swingLow)  structureBroken = true;
+         if(!isBuy && close1 > swingHigh) structureBroken = true;
 
          // STRONG = 3 of 4 momentum-positive conditions hold
          int strongScore = 0;
@@ -1416,30 +1542,32 @@ void ManagePositions()
          }
          bool momentumStrong = strongScore >= 3;
 
-         // FADING = RSI actively turning from extreme AND bar reversed AND broke EMA (3 confirmations)
+         // FADE TRIGGER (exit a winner):
+         //   Structure break alone = exit (price broke the swing, real reversal)
+         //   OR 3-of-4 momentum signals = exit (RSI-turn + bar-reverse + EMA + streak)
          int fadeScore = 0;
          if(rsiTurning)   fadeScore++;
          if(barReverse)   fadeScore++;
          if(emaBroken)    fadeScore++;
          if(streakBroken) fadeScore++;
-         bool momentumFading = fadeScore >= 3;
+         bool momentumFading = structureBroken || fadeScore >= 3;
 
          bool timeExpired = minsOpen > InpQuickExitMin;
-         bool capReached  = profit >= InpProfitTakeMax;
+         bool capReached  = profit >= EffProfitTakeMax();
 
          if(capReached)
          {
             LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                     "QUICK_PROFIT_CAP",
-                    StringFormat("Hit max profit target $%.2f (cap $%.2f). Taking the win.", profit, (double)InpProfitTakeMax));
+                    StringFormat("Hit max profit target $%.2f (cap $%.2f). Taking the win.", profit, EffProfitTakeMax()));
             trade.PositionClose(ticket); continue;
          }
          if(momentumFading)
          {
             LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                     "MOMENTUM_FADE",
-                    StringFormat("3+ fade signals: RSI-turn=%s bar-reverse=%s EMA-broken=%s streak-broken=%s.",
-                                 rsiTurning?"Y":"N", barReverse?"Y":"N", emaBroken?"Y":"N", streakBroken?"Y":"N"));
+                    StringFormat("Real reversal: structure-broken=%s rsi-turn=%s bar-reverse=%s ema-broken=%s streak-broken=%s.",
+                                 structureBroken?"Y":"N", rsiTurning?"Y":"N", barReverse?"Y":"N", emaBroken?"Y":"N", streakBroken?"Y":"N"));
             trade.PositionClose(ticket); continue;
          }
          if(timeExpired && !(InpMomentumGuard && momentumStrong))
@@ -1499,11 +1627,11 @@ void ManagePositions()
                               minsOpen, staleCap, MathAbs(profit)/rDollars));
          trade.PositionClose(ticket); continue;
       }
-      if(minsOpen > 30 && profit > -30 && profit < 20)
+      if(minsOpen > 60 && profit > -30 && profit < 30)
       {
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "STALE_DRIFT",
-                 StringFormat("Open %d min with P/L $%.2f. Going nowhere — free margin.", minsOpen, profit));
+                 StringFormat("Open %d min (>60min cap) with P/L $%.2f. No movement either way — free margin.", minsOpen, profit));
          trade.PositionClose(ticket); continue;
       }
 
@@ -1541,6 +1669,38 @@ void ManagePositions()
 //+------------------------------------------------------------------+
 //| AI FUNCTIONS                                                     |
 //+------------------------------------------------------------------+
+// Tiny JSON string extractor: pulls raw value of first occurrence of "key":"..."
+// Handles basic escaping (\" and \\). Returns empty string if not found.
+string ExtractJsonString(const string &json, const string key)
+{
+   string needle = "\"" + key + "\":";
+   int p = StringFind(json, needle);
+   if(p < 0) return "";
+   p += StringLen(needle);
+   // Skip whitespace
+   while(p < StringLen(json) && (StringGetCharacter(json, p) == ' ' || StringGetCharacter(json, p) == '\t')) p++;
+   if(p >= StringLen(json) || StringGetCharacter(json, p) != '"') return "";
+   p++; // past opening quote
+   string out = "";
+   while(p < StringLen(json))
+   {
+      ushort c = StringGetCharacter(json, p);
+      if(c == '\\' && p + 1 < StringLen(json))
+      {
+         ushort n = StringGetCharacter(json, p + 1);
+         if(n == '"')  { out += "\""; p += 2; continue; }
+         if(n == '\\') { out += "\\"; p += 2; continue; }
+         if(n == 'n')  { out += " ";  p += 2; continue; }  // collapse newlines to space for log
+         out += ShortToString((ushort)n);
+         p += 2; continue;
+      }
+      if(c == '"') break;   // closing quote
+      out += ShortToString(c);
+      p++;
+   }
+   return out;
+}
+
 int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price, string h1Dir, double spread,
                   string setup, string regime, string signature, double stoch, double mom)
 {
@@ -1555,14 +1715,25 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    int res = WebRequest("POST", url, headers, 15000, postData, result, rh);
    if(res != 200) return 0;
    string response = CharArrayToString(result);
-   // Response shape: {"action":"BUY|SELL|SKIP",...,"claude":{...},"gpt":{...}}
-   // Match only the top-level "action" field
    int actIdx = StringFind(response, "\"action\":");
    if(actIdx < 0) return 0;
    string tail = StringSubstr(response, actIdx, 40);
-   if(StringFind(tail, "\"BUY\"")  >= 0) return 1;
-   if(StringFind(tail, "\"SELL\"") >= 0) return -1;
-   return 0;
+   int dir = 0;
+   if(StringFind(tail, "\"BUY\"")  >= 0) dir = 1;
+   else if(StringFind(tail, "\"SELL\"") >= 0) dir = -1;
+   else return 0;
+
+   // Capture the full trader thesis for storage + display
+   currentTradeThesis       = ExtractJsonString(response, "thesis");
+   currentTradeInvalidation = ExtractJsonString(response, "invalidation");
+   currentTradeTarget       = ExtractJsonString(response, "target");
+   if(StringLen(currentTradeThesis) > 0)
+   {
+      Print("AI THESIS: ", currentTradeThesis);
+      if(StringLen(currentTradeInvalidation) > 0) Print("  Invalid if: ", currentTradeInvalidation);
+      if(StringLen(currentTradeTarget) > 0)       Print("  Target: ",     currentTradeTarget);
+   }
+   return dir;
 }
 
 int CheckPositionWithAI(string dir, double entry, double current, double profit, double lots,
@@ -1838,6 +2009,13 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    UpdateDrawdownState(wasLoss);
    // Drop peak tracker entry for this ticket (posId was computed above)
    if(posId > 0) ClearPeakProfit(posId);
+   // Clear active thesis (no open position now until next entry)
+   if(CountMyPositions() == 0)
+   {
+      currentTradeThesis = "";
+      currentTradeInvalidation = "";
+      currentTradeTarget = "";
+   }
 
    RecordPattern(!wasLoss, profit);
    LogTradeToServer(!wasLoss ? "WIN" : "LOSS", dPrice, profit, dVolume, dirStr);
@@ -1898,7 +2076,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.3.0 | TRADER-GRADE | ";
+   d += " XAUAI SNIPER v4.4.0 | SMART AUTO | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
@@ -1916,6 +2094,13 @@ void UpdateDashboard(int signal, double score, string grade)
         drawdownActive?"ACTIVE":"off",
         (lastClose.valid && lastClose.wasLoss && !lastClose.reEntered && TimeCurrent()-lastClose.closeTime < InpReEntryWindow) ? "WATCHING" : "idle");
    if(IsInStreakPause()) d += StringFormat("STREAK PAUSE until %s\n", TimeToString(streakPauseUntil, TIME_SECONDS));
+   if(StringLen(currentTradeThesis) > 0 && CountMyPositions() > 0)
+   {
+      d += "-- TRADE THESIS --\n";
+      d += currentTradeThesis + "\n";
+      if(StringLen(currentTradeInvalidation) > 0) d += "Invalidation: " + currentTradeInvalidation + "\n";
+      if(StringLen(currentTradeTarget) > 0)       d += "Target: " + currentTradeTarget + "\n";
+   }
    if(StringLen(lastExitReason) > 0) d += StringFormat("Last Exit: %s\n", lastExitReason);
    d += "==========================================\n";
    if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT — RESTING <<\n";

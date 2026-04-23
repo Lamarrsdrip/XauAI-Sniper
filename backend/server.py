@@ -1219,17 +1219,22 @@ class AIAnalysisRequest(BaseModel):
     signature: str = ""
 
 # ------- shared helpers -------
-_ENTRY_SYSTEM_PROMPT = """You are an expert XAUUSD (Gold) M5 scalper. You analyze technical data and give ONE clear trading decision. You MUST respond in EXACTLY this JSON format, nothing else (NO markdown fences):
-{"action":"BUY","confidence":75,"reason":"short reason","sl_adjust":0,"tp_adjust":0}
+_ENTRY_SYSTEM_PROMPT = """You are an expert XAUUSD (Gold) M5 scalper with 10+ years experience. You analyze technical data and give ONE clear trading decision WITH a full trader-style thesis. You MUST respond in EXACTLY this JSON format, nothing else (NO markdown fences):
+{"action":"BUY","confidence":75,"reason":"short reason","thesis":"detailed trader narrative","invalidation":"what proves you wrong","target":"where you expect price to reach","sl_adjust":0,"tp_adjust":0}
 
 Rules:
 - action: BUY, SELL, or SKIP (only these 3)
 - confidence: 0-100 (how sure you are)
-- reason: max 40 words explaining why
+- reason: max 30 words — one sentence summary
+- thesis: 40-80 words — explain the SETUP, CONTEXT, and WHY this edge exists. Write like a real trader: "Price broke above the Asia range high on strong NY volume. Bullish H1 trend intact, RSI has headroom at 58. Expecting continuation toward round $X level as algos chase the break."
+- invalidation: 15-25 words — the specific price/condition that PROVES this thesis wrong. Example: "If price closes back below 4692 with volume, thesis dead — cut immediately."
+- target: 10-20 words — realistic price target. Example: "First target: 4715 resistance. Stretch: 4728 prior swing high."
 - sl_adjust: -1 to 1 (negative=tighter SL, positive=wider SL, 0=default)
 - tp_adjust: -1 to 1 (negative=tighter TP, positive=wider TP, 0=default)
 
-Be decisive. If unsure, SKIP. Prefer fast M5 scalps. Consider trend alignment, RSI/Stoch extremes, momentum, regime and setup quality."""
+Be decisive. If unsure, SKIP. Prefer fast M5 scalps. Consider trend alignment, RSI/Stoch extremes, momentum, regime and setup quality.
+
+When action is SKIP, thesis/invalidation/target should still explain WHY you're skipping (e.g., "Mixed signals; RSI neutral and no clear setup. Waiting for cleaner break.")."""
 
 def _build_entry_prompt(req: AIAnalysisRequest) -> str:
     return f"""XAUUSD M5 Market Data RIGHT NOW:
@@ -1264,14 +1269,17 @@ def _parse_entry_json(response: str) -> dict:
             "action": action,
             "confidence": confidence,
             "reason": str(r.get("reason", ""))[:200],
+            "thesis": str(r.get("thesis", ""))[:500],
+            "invalidation": str(r.get("invalidation", ""))[:200],
+            "target": str(r.get("target", ""))[:200],
             "sl_adjust": float(r.get("sl_adjust", 0) or 0),
             "tp_adjust": float(r.get("tp_adjust", 0) or 0),
         }
     except (json.JSONDecodeError, ValueError, TypeError):
         up = (response or "").upper()
-        if '"BUY"' in up:  return {"action": "BUY",  "confidence": 55, "reason": "parser fallback", "sl_adjust": 0, "tp_adjust": 0}
-        if '"SELL"' in up: return {"action": "SELL", "confidence": 55, "reason": "parser fallback", "sl_adjust": 0, "tp_adjust": 0}
-        return {"action": "SKIP", "confidence": 50, "reason": "AI response unclear", "sl_adjust": 0, "tp_adjust": 0}
+        if '"BUY"' in up:  return {"action": "BUY",  "confidence": 55, "reason": "parser fallback", "thesis": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
+        if '"SELL"' in up: return {"action": "SELL", "confidence": 55, "reason": "parser fallback", "thesis": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
+        return {"action": "SKIP", "confidence": 50, "reason": "AI response unclear", "thesis": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
 
 async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> dict:
     try:
@@ -1289,10 +1297,12 @@ async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> di
     except asyncio.TimeoutError:
         logger.warning(f"Entry AI {provider}/{model} timed out")
         return {"action": "SKIP", "confidence": 0, "reason": f"{provider} timeout",
+                "thesis": "", "invalidation": "", "target": "",
                 "sl_adjust": 0, "tp_adjust": 0, "available": False}
     except Exception as e:
         logger.error(f"Entry AI {provider}/{model} error: {e}")
         return {"action": "SKIP", "confidence": 0, "reason": f"{provider} error",
+                "thesis": "", "invalidation": "", "target": "",
                 "sl_adjust": 0, "tp_adjust": 0, "available": False}
 
 @api_router.post("/ai/analyze")
@@ -1309,6 +1319,7 @@ async def ai_analyze_market(req: AIAnalysisRequest):
     try:
         if not LLM_KEY:
             return {"action": "SKIP", "confidence": 50, "reason": "AI key not configured",
+                    "thesis": "", "invalidation": "", "target": "",
                     "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0}
 
         claude_task = _ask_entry_ai("anthropic", "claude-sonnet-4-5-20250929", req)
@@ -1323,38 +1334,52 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             action = c_act
             confidence = min(100, int((c_conf + g_conf) / 2) + 5)
             reason = f"Both AIs agree: {claude['reason'][:60]} / {gpt['reason'][:60]}"
+            # Prefer the longer/fuller thesis
+            thesis = claude.get("thesis") if len(claude.get("thesis","")) >= len(gpt.get("thesis","")) else gpt.get("thesis")
+            invalidation = claude.get("invalidation") or gpt.get("invalidation")
+            target = claude.get("target") or gpt.get("target")
             sl_adj = (claude["sl_adjust"] + gpt["sl_adjust"]) / 2
             tp_adj = (claude["tp_adjust"] + gpt["tp_adjust"]) / 2
         elif c_ok and g_ok and c_act in ("BUY","SELL") and g_act in ("BUY","SELL") and c_act != g_act:
-            # Both responded but disagreed — safety SKIP
             action, confidence = "SKIP", 50
             reason = f"Disagreement: Claude={c_act}({c_conf}) GPT={g_act}({g_conf}) — safety SKIP"
+            thesis = f"Claude wanted {c_act}: {claude.get('thesis','')[:120]}. GPT wanted {g_act}: {gpt.get('thesis','')[:120]}. Conflicting reads — staying flat."
+            invalidation = ""; target = ""
             sl_adj, tp_adj = 0, 0
         elif c_ok and c_act in ("BUY", "SELL") and (not g_ok or g_act == "SKIP"):
-            # Claude speaks; GPT either unavailable or SKIP
             penalty = 1.00 if not g_ok else 0.80
             action = c_act
             confidence = max(0, min(100, int(c_conf * penalty)))
             reason = (f"Claude says {c_act} ({c_conf}%), "
                       f"{'GPT unavailable' if not g_ok else 'GPT SKIP'}: {claude['reason'][:80]}")
+            thesis = claude.get("thesis", "")
+            invalidation = claude.get("invalidation", "")
+            target = claude.get("target", "")
             sl_adj, tp_adj = claude["sl_adjust"], claude["tp_adjust"]
         elif g_ok and g_act in ("BUY", "SELL") and (not c_ok or c_act == "SKIP"):
-            # GPT speaks; Claude either unavailable or SKIP
             penalty = 1.00 if not c_ok else 0.80
             action = g_act
             confidence = max(0, min(100, int(g_conf * penalty)))
             reason = (f"GPT says {g_act} ({g_conf}%), "
                       f"{'Claude unavailable' if not c_ok else 'Claude SKIP'}: {gpt['reason'][:80]}")
+            thesis = gpt.get("thesis", "")
+            invalidation = gpt.get("invalidation", "")
+            target = gpt.get("target", "")
             sl_adj, tp_adj = gpt["sl_adjust"], gpt["tp_adjust"]
         else:
             action, confidence = "SKIP", 50
             reason = f"Both SKIP/unavailable (claude_ok={c_ok}, gpt_ok={g_ok})"
+            thesis = (claude.get("thesis","") or gpt.get("thesis","") or "")[:400]
+            invalidation = ""; target = ""
             sl_adj, tp_adj = 0, 0
 
         result = {
             "action": action,
             "confidence": confidence,
             "reason": reason[:240],
+            "thesis": (thesis or "")[:500],
+            "invalidation": (invalidation or "")[:200],
+            "target": (target or "")[:200],
             "sl_adjust": sl_adj,
             "tp_adjust": tp_adj,
             "claude": {"action": c_act, "confidence": c_conf, "reason": claude["reason"], "available": c_ok},
@@ -1371,6 +1396,7 @@ async def ai_analyze_market(req: AIAnalysisRequest):
     except Exception as e:
         logger.error(f"AI analyze dual error: {e}")
         return {"action": "SKIP", "confidence": 50, "reason": f"AI error: {str(e)[:60]}",
+                "thesis": "", "invalidation": "", "target": "",
                 "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0}
 
 ########################################
