@@ -1,14 +1,15 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.2.4 — Regime Order Fix    |
+//|                                     v4.2.5 — Quality-of-life fix |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.24"
-#property description "XAUUSD AI Sniper v4.2.4 — Regime priority fix"
-#property description "TRENDING check runs BEFORE low-vol (no more silenced trends)"
-#property description "Full Stack: 8 Setups | Dual-AI | Hive | Loss Armor"
+#property version   "4.25"
+#property description "XAUUSD AI Sniper v4.2.5 — Fixes: live dashboard, momentum, retrace"
+#property description "- PeakRetrace $100->$250 (no more tiny-profit exits)"
+#property description "- Momentum-fading needs 2+ confirmations (not 1 bounce candle)"
+#property description "- Dashboard now refreshes every 2s between bars"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -89,7 +90,7 @@ input int    InpEarlyAdverseMin = 5;       // Minutes window for early cut
 input double InpEarlyAdverseR  = 0.7;      // R-multiple loss that triggers early cut
 input bool   InpPeakRetraceExit = true;    // Exit winner if retraces from peak
 input double InpPeakRetracePct = 60.0;     // % retrace from peak to close
-input double InpPeakMinUSD     = 100.0;    // Peak must exceed this USD to arm retrace exit
+input double InpPeakMinUSD     = 250.0;    // Peak must exceed this USD to arm retrace exit
 input bool   InpMomentumGuard  = true;     // Don't cut winners if momentum is strong
 
 //+------------------------------------------------------------------+
@@ -314,7 +315,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.2.4 (REGIME FIX) READY ===");
+   Print("=== XAUAI SNIPER v4.2.5 (QoL FIX) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -343,7 +344,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.2.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.2.5 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -933,6 +934,14 @@ void OnTick()
    // re-enter at reduced size once. Pure MQL5 — no AI call needed.
    CheckReEntryOpportunity();
 
+   // === THROTTLED DASHBOARD REFRESH (every 2s, keeps UI live between bars) ===
+   static datetime lastDashTick = 0;
+   if(TimeCurrent() - lastDashTick >= 2)
+   {
+      UpdateDashboard(lastSignalDir, 0, "");
+      lastDashTick = TimeCurrent();
+   }
+
    // Spread check — blocks NEW ENTRIES only (silent)
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
    if(spread > InpMaxSpread) return;
@@ -1324,23 +1333,24 @@ void ManagePositions()
       }
 
       // B2: Quick profit take (tunable) — with momentum guard
-      if(profit >= InpProfitTakeMin)
+      // Safety: never close under InpProfitTakeMin/2 to prevent scratch exits
+      if(profit >= InpProfitTakeMin && profit >= 75)
       {
-         // Momentum health check: bar-body direction + RSI slope + EMA position
+         // Momentum health check — need MULTIPLE confirmations (not just one bounce candle)
          double close2alt = iClose(Symbol(), PERIOD_M5, 2);
          bool momentumFading = false;
          bool momentumStrong = false;
          if(isBuy)
          {
-            // Strong = consecutive green closes above EMA fast with RSI < 75 (headroom)
+            // Strong: consecutive greens above EMA fast, RSI < 75 (headroom)
             momentumStrong = (close1 > open1 && close1 > emaF && close1 > close2alt && rsi < 75);
-            // Fading = overbought RSI, red bar, or close dropped below EMA
-            momentumFading = (rsi > 70 || close1 < open1 || close1 < emaF);
+            // Fading: extreme overbought OR (red bar AND broken EMA) — BOTH required
+            momentumFading = (rsi > 75) || (close1 < open1 && close1 < emaF);
          }
          else
          {
             momentumStrong = (close1 < open1 && close1 < emaF && close1 < close2alt && rsi > 25);
-            momentumFading = (rsi < 30 || close1 > open1 || close1 > emaF);
+            momentumFading = (rsi < 25) || (close1 > open1 && close1 > emaF);
          }
 
          // Always close at max profit cap or if momentum clearly fading
@@ -1789,7 +1799,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.2.4 | LOSS ARMOR | ";
+   d += " XAUAI SNIPER v4.2.5 | LOSS ARMOR | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
