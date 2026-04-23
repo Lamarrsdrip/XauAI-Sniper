@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.2.2 — Bug Fixes + Asia BO |
+//|                                     v4.2.3 — Loss Armor + Runners|
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.22"
-#property description "XAUUSD AI Sniper v4.2.2 — Full Smart Stack"
-#property description "5-Gate + 8 Setups + 3-Path Exit | Dual-AI | Signature Hive"
-#property description "Re-Entry (capped) | DXY | Drawdown | Streak | Adaptive Grades"
+#property version   "4.23"
+#property description "XAUUSD AI Sniper v4.2.3 — Loss Armor + Runner Protection"
+#property description "Hard stop | Early adverse cut | Peak retrace | Momentum guard"
+#property description "8 Setups | Dual-AI | Hive | Re-Entry | DXY | Adaptive Grades"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -81,6 +81,16 @@ input double InpMaxSpread      = 150.0;    // Max spread (points)
 input double InpEquityProtect  = 70.0;     // Equity protection (%)
 input bool   InpWeekendClose   = true;     // Close Friday 20:00
 input int    InpMagicNumber    = 20250401;
+
+input group "=== LOSS PROTECTION (v4.2.3) ==="
+input double InpHardStopUSD    = 800.0;    // Hard $ loss cap per trade (0 = off)
+input bool   InpEarlyAdverseCut = true;    // Cut early if down > threshold in first minutes
+input int    InpEarlyAdverseMin = 5;       // Minutes window for early cut
+input double InpEarlyAdverseR  = 0.7;      // R-multiple loss that triggers early cut
+input bool   InpPeakRetraceExit = true;    // Exit winner if retraces from peak
+input double InpPeakRetracePct = 60.0;     // % retrace from peak to close
+input double InpPeakMinUSD     = 100.0;    // Peak must exceed this USD to arm retrace exit
+input bool   InpMomentumGuard  = true;     // Don't cut winners if momentum is strong
 
 //+------------------------------------------------------------------+
 //| ENUMS                                                            |
@@ -184,6 +194,46 @@ double     asiaRangeLow  = 0;
 bool       asiaRangeLocked = false;
 datetime   asiaRangeDay = 0;
 
+// Per-position peak-profit tracking (for retrace exit)
+ulong      peakTickets[];
+double     peakProfits[];
+
+// Peak helpers
+int FindPeakIdx(ulong ticket)
+{
+   for(int i = 0; i < ArraySize(peakTickets); i++)
+      if(peakTickets[i] == ticket) return i;
+   return -1;
+}
+double UpdatePeakProfit(ulong ticket, double profit)
+{
+   int idx = FindPeakIdx(ticket);
+   if(idx < 0)
+   {
+      int n = ArraySize(peakTickets);
+      ArrayResize(peakTickets, n+1);
+      ArrayResize(peakProfits, n+1);
+      peakTickets[n] = ticket;
+      peakProfits[n] = profit;
+      return profit;
+   }
+   if(profit > peakProfits[idx]) peakProfits[idx] = profit;
+   return peakProfits[idx];
+}
+void ClearPeakProfit(ulong ticket)
+{
+   int idx = FindPeakIdx(ticket);
+   if(idx < 0) return;
+   int n = ArraySize(peakTickets) - 1;
+   for(int i = idx; i < n; i++)
+   {
+      peakTickets[i] = peakTickets[i+1];
+      peakProfits[i] = peakProfits[i+1];
+   }
+   ArrayResize(peakTickets, n);
+   ArrayResize(peakProfits, n);
+}
+
 //+------------------------------------------------------------------+
 //| PIN VALIDATION                                                   |
 //+------------------------------------------------------------------+
@@ -257,13 +307,14 @@ int OnInit()
    todayLossCount = 0; todayLossResetDay = TimeCurrent(); drawdownActive = false;
    todayReEntryCount = 0;
    asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false; asiaRangeDay = 0;
+   ArrayResize(peakTickets, 0); ArrayResize(peakProfits, 0);
    lastClose.valid = false; lastClose.reEntered = false; lastClose.wasLoss = false;
    lastClose.dir = 0; lastClose.entryPrice = 0; lastClose.slDist = 0;
    lastClose.lots = 0; lastClose.closeTime = 0; lastClose.signature = ""; lastClose.setup = "";
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.2.2 (FULL SMART STACK) READY ===");
+   Print("=== XAUAI SNIPER v4.2.3 (LOSS ARMOR + RUNNERS) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -278,6 +329,10 @@ int OnInit()
          " (", InpDrawdownLosses, "losses->", DoubleToString(InpDrawdownRisk,2), "%) | Streak=", InpStreakCooldownLosses, " in ", InpStreakWindowSec/60, "min");
    Print("ADAPTIVE: ", InpAdaptiveGrades?"ON":"OFF",
          " (auto-tunes GradeB on recent WR) | AsiaBreakout: ", InpAsiaRangeBreakout?"ON":"OFF");
+   Print("ARMOR: HardStop=$", DoubleToString(InpHardStopUSD,0),
+         " | EarlyAdverse=", InpEarlyAdverseCut?"ON":"OFF", " (", InpEarlyAdverseMin, "min,", DoubleToString(InpEarlyAdverseR,1), "R)",
+         " | PeakRetrace=", InpPeakRetraceExit?"ON":"OFF", " (", DoubleToString(InpPeakRetracePct,0), "%,min$", DoubleToString(InpPeakMinUSD,0), ")",
+         " | MomentumGuard=", InpMomentumGuard?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -288,7 +343,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.2.2 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.2.3 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1205,6 +1260,36 @@ void ManagePositions()
                          ? lotsOpen * (slDist / tickSize) * tickValue
                          : MathMax(30.0, MathAbs(profit));
 
+      // ===== PATH 0: HARD LOSS PROTECTION (fires before anything else) =====
+      // (a) Absolute dollar cap — stops $3000 nukes
+      if(InpHardStopUSD > 0 && profit <= -InpHardStopUSD)
+      {
+         Print("HARD STOP: #", ticket, " $", DoubleToString(profit, 2),
+               " breached -$", DoubleToString(InpHardStopUSD, 2));
+         trade.PositionClose(ticket); continue;
+      }
+      // (b) Early adverse excursion — if first 5min and down > 0.7R, exit now
+      if(InpEarlyAdverseCut && minsOpen <= InpEarlyAdverseMin &&
+         profit <= -(rDollars * InpEarlyAdverseR))
+      {
+         Print("EARLY ADVERSE: #", ticket, " ", minsOpen, "min down $", DoubleToString(profit, 2),
+               " >= ", DoubleToString(InpEarlyAdverseR, 1), "R ($", DoubleToString(rDollars*InpEarlyAdverseR, 2), ")");
+         trade.PositionClose(ticket); continue;
+      }
+      // (c) Peak retrace — if trade WAS in profit and gave back >60%, close
+      double peak = UpdatePeakProfit(ticket, profit);
+      if(InpPeakRetraceExit && peak >= InpPeakMinUSD && profit < peak)
+      {
+         double retrace = peak - profit;
+         double retracePct = (retrace / peak) * 100.0;
+         if(retracePct >= InpPeakRetracePct)
+         {
+            Print("PEAK RETRACE: #", ticket, " peak $", DoubleToString(peak, 2),
+                  " now $", DoubleToString(profit, 2), " (", DoubleToString(retracePct, 0), "% gave back)");
+            trade.PositionClose(ticket); continue;
+         }
+      }
+
       // ===== PATH A: DETERMINISTIC (SL/TP/Trail) =====
       // Trail at 1.2x ATR behind price (M5 gold — typical ATR $1-$3)
       double trailDist = MathMax(atr * 1.2, SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 200);
@@ -1238,17 +1323,56 @@ void ManagePositions()
          Print("BE LOCK: #", ticket, " at +0.5R — risk free");
       }
 
-      // B2: Quick profit take (tunable)
+      // B2: Quick profit take (tunable) — with momentum guard
       if(profit >= InpProfitTakeMin)
       {
+         // Momentum health check: bar-body direction + RSI slope + EMA position
+         double close2alt = iClose(Symbol(), PERIOD_M5, 2);
          bool momentumFading = false;
-         if(isBuy && (rsi > 70 || close1 < open1 || close1 < emaF)) momentumFading = true;
-         if(!isBuy && (rsi < 30 || close1 > open1 || close1 > emaF)) momentumFading = true;
-
-         if(profit >= InpProfitTakeMax || momentumFading || minsOpen > InpQuickExitMin)
+         bool momentumStrong = false;
+         if(isBuy)
          {
-            Print("QUICK PROFIT: #", ticket, " +$", DoubleToString(profit, 2), " (", minsOpen, "min)");
+            // Strong = consecutive green closes above EMA fast with RSI < 75 (headroom)
+            momentumStrong = (close1 > open1 && close1 > emaF && close1 > close2alt && rsi < 75);
+            // Fading = overbought RSI, red bar, or close dropped below EMA
+            momentumFading = (rsi > 70 || close1 < open1 || close1 < emaF);
+         }
+         else
+         {
+            momentumStrong = (close1 < open1 && close1 < emaF && close1 < close2alt && rsi > 25);
+            momentumFading = (rsi < 30 || close1 > open1 || close1 > emaF);
+         }
+
+         // Always close at max profit cap or if momentum clearly fading
+         bool timeExpired = minsOpen > InpQuickExitMin;
+         bool closeNow = (profit >= InpProfitTakeMax) || momentumFading;
+
+         // Honor time expiry UNLESS momentum is strong AND momentum guard is on
+         if(!closeNow && timeExpired)
+            closeNow = !(InpMomentumGuard && momentumStrong);
+
+         if(closeNow)
+         {
+            Print("QUICK PROFIT: #", ticket, " +$", DoubleToString(profit, 2), " (", minsOpen, "min)",
+                  momentumFading?" [fade]":"", momentumStrong?" [STRONG→held]":"");
             trade.PositionClose(ticket); continue;
+         }
+         else if(timeExpired && InpMomentumGuard && momentumStrong)
+         {
+            // Let it run — but tighten SL to lock partial gains
+            double lockSL;
+            if(isBuy)
+            {
+               lockSL = NormalizeDouble(curPrice - atr * 0.8, digits);
+               if(lockSL > curSL && lockSL > openPx)
+               { trade.PositionModify(ticket, lockSL, curTP); Print("LETTING RUNNER: #", ticket, " SL tightened to ", DoubleToString(lockSL, digits)); }
+            }
+            else
+            {
+               lockSL = NormalizeDouble(curPrice + atr * 0.8, digits);
+               if(lockSL < curSL && lockSL < openPx)
+               { trade.PositionModify(ticket, lockSL, curTP); Print("LETTING RUNNER: #", ticket, " SL tightened to ", DoubleToString(lockSL, digits)); }
+            }
          }
       }
 
@@ -1603,6 +1727,8 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // Streak + drawdown bookkeeping
    RecordCloseForStreak(wasLoss);
    UpdateDrawdownState(wasLoss);
+   // Drop peak tracker entry for this ticket (posId was computed above)
+   if(posId > 0) ClearPeakProfit(posId);
 
    RecordPattern(!wasLoss, profit);
    LogTradeToServer(!wasLoss ? "WIN" : "LOSS", dPrice, profit, dVolume, dirStr);
@@ -1663,7 +1789,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.2.2 | SMART STACK | ";
+   d += " XAUAI SNIPER v4.2.3 | LOSS ARMOR | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

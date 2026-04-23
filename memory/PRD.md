@@ -52,6 +52,15 @@
   - Dashboard shows DXY bias, drawdown state, streak pause timer, re-entry watcher status.
   - All 8 new features fully tunable via MT5 inputs, still respect `InpBacktestMode` (strategy-tester-safe).
 
+- **Feb 2026 - v4.2.3 — Loss Armor + Runner Protection (profit-factor surgery)**
+  - **Root cause targeted**: user's trade history showed avg-$300 wins vs single -$3,096 nuke (1 bad trade eats 10 good trades). This is a profit-factor problem, not a WR problem.
+  - **Hard dollar stop** (`InpHardStopUSD=800`): absolute cap per trade. A $3,000 drawdown on a single position now impossible.
+  - **Early adverse cut** (`InpEarlyAdverseCut`): if in first 5 minutes the trade is down > 0.7R, exit immediately. Prevents small-losses-becoming-huge.
+  - **Peak retrace exit** (`InpPeakRetraceExit`): every position tracks its own peak profit. If retrace >= 60% AND peak was >= $100, close. Solves "was winning, gave it back" losers.
+  - **Momentum-aware quick exits** (`InpMomentumGuard=true`): B2 no longer force-closes winners at 18min if RSI/EMA/consecutive-green show real momentum. Instead, SL tightens by 0.8×ATR and lets the runner run. Directly fixes user complaint "trade closes then price keeps going in profit direction."
+  - Per-position peak tracking via parallel arrays `peakTickets[]/peakProfits[]`, cleared on close.
+  - All 4 new protections tunable via MT5 inputs + respect `InpBacktestMode`.
+
 - **Feb 2026 - v4.2.2 — Bugfix + Asia Breakout + Adaptive Grades**
   - **Bug #1 fixed (re-entry infinite loop)**: added `InpMaxReEntriesPerDay=3` cap + daily reset counter. Previously a new loss after a re-entry could spawn another re-entry indefinitely.
   - **Bug #2 fixed (stale drift closing winners)**: changed `|profit|<30` to `profit > -30 && profit < 20`. Winning trades with small profit no longer force-closed at 30min when momentum might take them higher.
