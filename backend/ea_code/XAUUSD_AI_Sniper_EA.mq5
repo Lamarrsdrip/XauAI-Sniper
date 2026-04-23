@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.4.2 — Reset ML + Live UI  |
+//|                                     v4.4.3 — Bug Hunt Part 2     |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.42"
-#property description "XAUUSD AI Sniper v4.4.2 — ML reset + dashboard cache fix"
-#property description "InpResetML clears legacy patterns for fresh version"
-#property description "Dashboard no longer flickers to zeros between scans"
+#property version   "4.43"
+#property description "XAUUSD AI Sniper v4.4.3 — Forensic bug hunt pass"
+#property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
+#property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -434,7 +434,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.4.2 (DIRECTION LOCKOUT) READY ===");
+   Print("=== XAUAI SNIPER v4.4.3 (DIRECTION LOCKOUT) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -472,7 +472,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.4.2 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.4.3 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -749,6 +749,14 @@ void CheckReEntryOpportunity()
    if(TimeCurrent() - lastClose.closeTime > InpReEntryWindow) return;
    if(CountMyPositions() > 0) return;                  // Don't stack
    if(IsInStreakPause()) return;
+   // Respect direction lockout — don't re-enter a side that's just been shown to fail
+   if(IsDirectionLocked(lastClose.dir))
+   {
+      lastClose.reEntered = true;   // mark done so we don't keep checking
+      Print("RE-ENTRY BLOCKED: side ", lastClose.dir==1?"BUY":"SELL",
+            " is locked — respecting direction lockout");
+      return;
+   }
    if(todayReEntryCount >= InpMaxReEntriesPerDay)
    {
       // One-shot log to avoid spam
@@ -897,7 +905,7 @@ int ScoreSetups(double &score, string &setupName)
       {
          dir = 1; s += 1.0;
          if(rsi < 35) s += 1.5;
-         if(lowerWick > body * 0.5) s += 1.5; // rejection wick
+         if(body > 0 && lowerWick > body * 0.5) s += 1.5; // rejection wick (guard against doji)
          if(close1 > open1) s += 1.0;
          if(m15RSI < 40) s += 0.5;
          if(close2 < close1) s += 0.5; // momentum turning
@@ -910,7 +918,7 @@ int ScoreSetups(double &score, string &setupName)
       {
          dir = -1; s += 1.0;
          if(rsi > 65) s += 1.5;
-         if(upperWick > body * 0.5) s += 1.5;
+         if(body > 0 && upperWick > body * 0.5) s += 1.5; // rejection wick (guard against doji)
          if(close1 < open1) s += 1.0;
          if(m15RSI > 60) s += 0.5;
          if(close2 > close1) s += 0.5;
@@ -958,8 +966,8 @@ int ScoreSetups(double &score, string &setupName)
    // === SETUP 5: RSI EXTREME (like VWAP reclaim) ===
    {
       double s = 0; int dir = 0;
-      if(rsi < 25 && close1 > open1) { dir = 1; s = 2.0 + (close1 > emaF ? 1.0 : 0) + (m15RSI < 30 ? 1.0 : 0) + (lowerWick > body ? 1.0 : 0); }
-      if(rsi > 75 && close1 < open1) { dir = -1; s = 2.0 + (close1 < emaF ? 1.0 : 0) + (m15RSI > 70 ? 1.0 : 0) + (upperWick > body ? 1.0 : 0); }
+      if(rsi < 25 && close1 > open1) { dir = 1; s = 2.0 + (close1 > emaF ? 1.0 : 0) + (m15RSI < 30 ? 1.0 : 0) + (body > 0 && lowerWick > body ? 1.0 : 0); }
+      if(rsi > 75 && close1 < open1) { dir = -1; s = 2.0 + (close1 < emaF ? 1.0 : 0) + (m15RSI > 70 ? 1.0 : 0) + (body > 0 && upperWick > body ? 1.0 : 0); }
       if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "RSI_EXTREME"; bestType = 5; }
    }
 
@@ -988,11 +996,11 @@ int ScoreSetups(double &score, string &setupName)
       double s = 0; int dir = 0;
       if(rsi < 28 && close1 < bbL + (bbU - bbL) * 0.15 && m15RSI < 35)
       {
-         dir = 1; s = 2.5 + (lowerWick > body * 0.5 ? 1.0 : 0) + (close1 > open1 ? 1.0 : 0);
+         dir = 1; s = 2.5 + (body > 0 && lowerWick > body * 0.5 ? 1.0 : 0) + (close1 > open1 ? 1.0 : 0);
       }
       if(rsi > 72 && close1 > bbU - (bbU - bbL) * 0.15 && m15RSI > 65)
       {
-         dir = -1; s = 2.5 + (upperWick > body * 0.5 ? 1.0 : 0) + (close1 < open1 ? 1.0 : 0);
+         dir = -1; s = 2.5 + (body > 0 && upperWick > body * 0.5 ? 1.0 : 0) + (close1 < open1 ? 1.0 : 0);
       }
       if(s > bestScore && dir != 0) { bestScore = s; bestDir = dir; bestName = "MULTI_EXTREME"; bestType = 7; }
    }
@@ -1199,6 +1207,7 @@ void OnTick()
             " | Setup:", setupName, " Score:", DoubleToString(setupScore, 1),
             " Combined:", DoubleToString(combinedScore, 1), " [", grade, "] — PASS");
       UpdateDashboard(0, combinedScore, grade);
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = grade;
       return;
    }
 
@@ -1209,17 +1218,23 @@ void OnTick()
          " | Combined:", DoubleToString(combinedScore, 1), " [", grade, "]");
 
    // News check
-   if(InpUseNewsFilter && !IsNewsSafe()) { Print("NEWS BLOCK"); return; }
+   if(InpUseNewsFilter && !IsNewsSafe())
+   {
+      Print("NEWS BLOCK");
+      UpdateDashboard(0, combinedScore, "NEWS");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "NEWS";
+      return;
+   }
 
    // DXY CORRELATION GATE (cached, ~every 15 min)
    if(InpUseDXYFilter)
    {
       int dxyBias = GetDXYBias();
-      // DXY bias +1 = gold bullish, -1 = bearish. Signal +1 = BUY gold, -1 = SELL gold.
-      // If the dollar is clearly pushing gold the other way, veto.
       if(dxyBias != 0 && dxyBias != signal)
       {
          Print("DXY VETO: gold_bias=", dxyGoldBias, " vs signal=", signal>0?"BUY":"SELL", " — skip");
+         UpdateDashboard(0, combinedScore, "DXY-VETO");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "DXY-VETO";
          return;
       }
    }
@@ -1227,7 +1242,12 @@ void OnTick()
    // Anti-reversal (short cooldown for direction flip)
    if(lastTradeDir != 0 && signal != lastTradeDir && lastTradeClose > 0 &&
       TimeCurrent() - lastTradeClose < InpReversalCooldown)
-   { Print("ANTI-REVERSAL: Wait before flipping direction"); return; }
+   {
+      Print("ANTI-REVERSAL: Wait before flipping direction");
+      UpdateDashboard(0, combinedScore, "REV-CD");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "REV-CD";
+      return;
+   }
 
    // DIRECTION LOCKOUT — if this side has been losing repeatedly, skip it
    if(IsDirectionLocked(signal))
@@ -1236,6 +1256,9 @@ void OnTick()
       Print("DIR-LOCK VETO: ", signal == 1 ? "BUY" : "SELL",
             " side locked until ", TimeToString(until, TIME_SECONDS),
             " due to recent losses on this side");
+      UpdateDashboard(0, combinedScore, signal == 1 ? "BUY-LOCKED" : "SELL-LOCKED");
+      lastDashSignal = 0; lastDashScore = combinedScore;
+      lastDashGrade = signal == 1 ? "BUY-LOCKED" : "SELL-LOCKED";
       return;
    }
 
@@ -1250,16 +1273,25 @@ void OnTick()
    if(InpLearnPatterns && patternCount >= 5)
    {
       double mlScore = GetMLScore(signal, signature);
-      // Need at least 10 local samples before a veto is trusted
       if(mlScore <= 0.30 && patternCount >= 10)
-      { Print("LOCAL ML VETO: WR=", DoubleToString(mlScore * 100, 0), "% (", patternCount, " patterns) — HARD BLOCK"); return; }
+      {
+         Print("LOCAL ML VETO: WR=", DoubleToString(mlScore * 100, 0), "% (", patternCount, " patterns) — HARD BLOCK");
+         UpdateDashboard(0, combinedScore, "ML-VETO");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "ML-VETO";
+         return;
+      }
       if(mlScore >= 0.60) { Print("LOCAL ML BOOST: WR=", DoubleToString(mlScore * 100, 0), "%"); sizeMulti += 0.15; confidenceBoostPP += 8; }
    }
 
    // ----- GLOBAL HIVE-MIND (7-day, all users, same signature) -----
    int hive = GetHiveVerdict(signature);
    if(hive == -1)
-   { Print("HIVE VETO: signature ", signature, " has WR <= 30% globally — HARD BLOCK"); return; }
+   {
+      Print("HIVE VETO: signature ", signature, " has WR <= 30% globally — HARD BLOCK");
+      UpdateDashboard(0, combinedScore, "HIVE-VETO");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "HIVE-VETO";
+      return;
+   }
    if(hive == 1)
    { Print("HIVE BOOST: signature ", signature, " has WR >= 60% globally (+8pp)");
      sizeMulti += 0.15; confidenceBoostPP += 8; }
@@ -1392,7 +1424,11 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    lots = MathFloor(lots / lotStep) * lotStep;
    lots = MathMax(minLot, MathMin(maxLot, lots));
    if(lots > InpMaxLots) lots = InpMaxLots;
-   lots = NormalizeDouble(lots, 2);
+   // Derive lot decimal precision from broker's lotStep (not a hardcoded 2)
+   int lotDigits = 2;
+   if(lotStep > 0 && lotStep < 0.01) lotDigits = 3;
+   if(lotStep > 0 && lotStep < 0.001) lotDigits = 4;
+   lots = NormalizeDouble(lots, lotDigits);
 
    // Margin check
    double freeMargin = accInfo.FreeMargin();
@@ -1406,13 +1442,13 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       }
       if(marginNeeded > freeMargin * 0.8) { Print("NO MARGIN"); return; }
    }
-   lots = NormalizeDouble(lots, 2);
+   lots = NormalizeDouble(lots, lotDigits);
 
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
          " Price=", DoubleToString(price, digits),
          " SL=", DoubleToString(sl, digits),
          " TP=", DoubleToString(tp, digits),
-         " Lots=", DoubleToString(lots, 2),
+         " Lots=", DoubleToString(lots, lotDigits),
          " | ", reason);
 
    bool ok;
@@ -2180,7 +2216,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.4.2 | SMART AUTO | ";
+   d += " XAUAI SNIPER v4.4.3 | SMART AUTO | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
