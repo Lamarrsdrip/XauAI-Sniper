@@ -274,18 +274,29 @@ void RecomputeAutoScale()
    }
    double bal = accInfo.Balance();
    if(bal <= 0) bal = accInfo.Equity();
-   if(bal <= 0) bal = 1000;                 // fallback
+   if(bal <= 0) bal = 100;                  // fallback if account query fails
 
+   // TRUE proportional scaling — works on $10 or $100k equally.
+   // No arbitrary dollar floors (they broke math on micro accounts).
    autoHardStopUSD   = NormalizeDouble(bal * (InpAutoRiskPct    / 100.0), 2);
    autoProfitTakeMin = NormalizeDouble(bal * (InpAutoProfMinPct / 100.0), 2);
    autoProfitTakeMax = NormalizeDouble(bal * (InpAutoProfMaxPct / 100.0), 2);
    autoPeakMinUSD    = NormalizeDouble(bal * (InpAutoPeakMinPct / 100.0), 2);
 
-   // Sensible minimums so we don't get absurdly tiny values on micro accounts
-   if(autoHardStopUSD   < 2)  autoHardStopUSD   = 2;
-   if(autoProfitTakeMin < 0.5) autoProfitTakeMin = 0.5;
-   if(autoProfitTakeMax < 2)   autoProfitTakeMax = 2;
-   if(autoPeakMinUSD    < 1)   autoPeakMinUSD    = 1;
+   // Viability warning for micro accounts — XAU M5 scalping has structural minimums
+   // due to broker minimum lot size (0.01) and typical XAU tick values
+   if(bal < 100.0)
+   {
+      Print("=========================================================");
+      Print("⚠ SMALL ACCOUNT WARNING: Balance $", DoubleToString(bal,2),
+            " is below $100 viability threshold for XAU M5 scalping.");
+      Print("  Broker minimum lot (0.01) on XAU = $1 per $1 price move.");
+      Print("  Typical SL distance ($5-8) can produce -$5 to -$8 losses per trade,");
+      Print("  which is ", DoubleToString(5.0/bal*100, 1), "-", DoubleToString(8.0/bal*100, 1),
+            "% of your balance — too high for sustainable compounding.");
+      Print("  Recommended minimum: $200-500 to survive normal drawdown swings.");
+      Print("=========================================================");
+   }
 }
 
 // Getters that return either auto-scaled or user-input value
