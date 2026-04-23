@@ -103,7 +103,7 @@ export default function ConfiguratorSection({ api }) {
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (e) {
-      console.error("Save failed:", e);
+      process.env.NODE_ENV === 'development' && console.error("Save failed:", e);
     } finally {
       setSaving(false);
     }

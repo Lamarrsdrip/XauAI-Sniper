@@ -34,11 +34,11 @@ function MainDashboard() {
         axios.get(`${API}/docs/setup-guide`),
       ]);
       setPerformance(p.data); setHowItWorks(h.data); setSetupGuide(s.data);
-    } catch (e) { console.error(e); } finally { setLoading(false); }
+    } catch (e) { process.env.NODE_ENV === 'development' && console.error(e); } finally { setLoading(false); }
   }, []);
 
   const fetchGoldPrice = useCallback(async () => {
-    try { setGoldPrice((await axios.get(`${API}/gold/price`)).data); } catch (err) { console.error("Gold price fetch failed:", err); }
+    try { setGoldPrice((await axios.get(`${API}/gold/price`)).data); } catch (err) { process.env.NODE_ENV === 'development' && console.error("Gold price fetch failed:", err); }
   }, []);
 
   useEffect(() => {

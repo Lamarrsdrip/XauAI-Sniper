@@ -10,7 +10,7 @@ export default function PurchaseSection({ api }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    axios.get(`${api}/purchase/price`).then(r => setPriceData(r.data)).catch((err) => { console.error("Price load failed:", err); });
+    axios.get(`${api}/purchase/price`).then(r => setPriceData(r.data)).catch((err) => { process.env.NODE_ENV === 'development' && console.error("Price load failed:", err); });
   }, [api]);
 
   const handlePurchase = async () => {

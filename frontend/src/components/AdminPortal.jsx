@@ -334,14 +334,14 @@ function PinsTab({ api, token }) {
     try {
       const [p, s] = await Promise.all([ax.get(`${api}/admin/pins`, h), ax.get(`${api}/admin/pins/stats`, h)]);
       setPins(p.data.pins || []); setStats(s.data);
-    } catch (err) { console.error("Failed to fetch pins:", err); }
+    } catch (err) { process.env.NODE_ENV === 'development' && console.error("Failed to fetch pins:", err); }
   }, [api, token]);
 
   useEffect(() => { fetch(); }, [fetch]);
 
   const generate = async () => {
     setGenerating(true);
-    try { await ax.post(`${api}/admin/pins/generate`, { count: genCount, buyer_name: buyerName, buyer_email: buyerEmail, notes }, h); setBuyerName(""); setBuyerEmail(""); setNotes(""); await fetch(); } catch (err) { console.error("Generate PIN failed:", err); } finally { setGenerating(false); }
+    try { await ax.post(`${api}/admin/pins/generate`, { count: genCount, buyer_name: buyerName, buyer_email: buyerEmail, notes }, h); setBuyerName(""); setBuyerEmail(""); setNotes(""); await fetch(); } catch (err) { process.env.NODE_ENV === 'development' && console.error("Generate PIN failed:", err); } finally { setGenerating(false); }
   };
   const revoke = async (pin) => { await ax.put(`${api}/admin/pins/${pin}/revoke`, {}, h); fetch(); };
   const activate = async (pin) => { await ax.put(`${api}/admin/pins/${pin}/activate`, {}, h); fetch(); };
@@ -412,7 +412,7 @@ function SettingsTab({ api, token }) {
   useEffect(() => {
     ax.get(`${api}/admin/settings`, h).then(r => {
       setSettings(r.data); setPriceNaira(r.data.pin_price_naira || 300000); setSmtpEmail(r.data.smtp_email || "");
-    }).catch((err) => { console.error("Failed to load settings:", err); });
+    }).catch((err) => { process.env.NODE_ENV === 'development' && console.error("Failed to load settings:", err); });
   }, [api, token]);
 
   const save = async () => {
@@ -424,7 +424,7 @@ function SettingsTab({ api, token }) {
     if (smtpPw) updates.smtp_password = smtpPw;
     try { await ax.put(`${api}/admin/settings`, updates, h); setSaved(true); setPk(""); setSmtpPw(""); setTimeout(() => setSaved(false), 3000);
       const r = await ax.get(`${api}/admin/settings`, h); setSettings(r.data);
-    } catch (err) { console.error("Save settings failed:", err); } finally { setSaving(false); }
+    } catch (err) { process.env.NODE_ENV === 'development' && console.error("Save settings failed:", err); } finally { setSaving(false); }
   };
 
   return (
@@ -493,7 +493,7 @@ function ConfigTab({ api, token }) {
 
   const u = (k,v) => { setConfig(p=>({...p,[k]:v})); setSaved(false); };
   const applyPreset = (p) => u("weekly_profit_target",p.wt) || u("risk_percent",p.risk) || u("max_trades_per_day",p.trades) || u("confidence_threshold",p.conf) || u("profit_mode",p.id) || setConfig(prev=>({...prev,weekly_profit_target:p.wt,risk_percent:p.risk,max_trades_per_day:p.trades,confidence_threshold:p.conf,profit_mode:p.id}));
-  const save = async () => { setSaving(true); try { await ax.post(`${api}/admin/configs`, config, h); setSaved(true); setTimeout(()=>setSaved(false),3000); } catch (err) { console.error("Save config failed:", err); } finally { setSaving(false); } };
+  const save = async () => { setSaving(true); try { await ax.post(`${api}/admin/configs`, config, h); setSaved(true); setTimeout(()=>setSaved(false),3000); } catch (err) { process.env.NODE_ENV === 'development' && console.error("Save config failed:", err); } finally { setSaving(false); } };
 
   return (
     <div data-testid="admin-config-tab">
@@ -526,7 +526,7 @@ function ConfigTab({ api, token }) {
 function TransactionsTab({ api, token }) {
   const [txs, setTxs] = useState([]);
   const h = { headers: { Authorization: `Bearer ${token}` } };
-  useEffect(() => { ax.get(`${api}/admin/transactions`, h).then(r=>setTxs(r.data.transactions||[])).catch((err) => { console.error("Failed to load transactions:", err); }); }, [api, token]);
+  useEffect(() => { ax.get(`${api}/admin/transactions`, h).then(r=>setTxs(r.data.transactions||[])).catch((err) => { process.env.NODE_ENV === 'development' && console.error("Failed to load transactions:", err); }); }, [api, token]);
 
   return (
     <div data-testid="admin-transactions-tab">

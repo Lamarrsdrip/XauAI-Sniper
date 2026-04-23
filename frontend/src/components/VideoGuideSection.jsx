@@ -10,7 +10,7 @@ export default function VideoGuideSection() {
   const [activeScene, setActiveScene] = useState(0);
 
   useEffect(() => {
-    axios.get(`${API}/docs/video-guide`).then(r => setData(r.data)).catch((err) => { console.error("Video guide load failed:", err); });
+    axios.get(`${API}/docs/video-guide`).then(r => setData(r.data)).catch((err) => { process.env.NODE_ENV === 'development' && console.error("Video guide load failed:", err); });
   }, []);
 
   if (!data) return null;
@@ -76,7 +76,7 @@ export default function VideoGuideSection() {
               {/* Frames */}
               <div className="divide-y divide-white/5">
                 {scene.frames.map((frame, i) => (
-                  <div key={i} className="px-6 py-4 flex items-start gap-4" data-testid={`frame-${activeScene}-${i}`}>
+                  <div key={`${activeScene}-${frame.action}-${i}`} className="px-6 py-4 flex items-start gap-4" data-testid={`frame-${activeScene}-${i}`}>
                     <div className="w-6 h-6 bg-[hsl(43,74%,49%)]/20 flex items-center justify-center flex-shrink-0 mt-0.5">
                       <CaretRight size={12} weight="bold" className="text-[hsl(43,74%,49%)]" />
                     </div>

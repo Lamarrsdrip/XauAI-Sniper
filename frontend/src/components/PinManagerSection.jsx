@@ -31,7 +31,7 @@ export default function PinManagerSection({ api }) {
       setPins(pinsRes.data.pins || []);
       setStats(statsRes.data);
     } catch (e) {
-      console.error("Failed to fetch pins:", e);
+      process.env.NODE_ENV === 'development' && console.error("Failed to fetch pins:", e);
     } finally {
       setLoading(false);
     }
@@ -55,7 +55,7 @@ export default function PinManagerSection({ api }) {
       setNotes("");
       await fetchPins();
     } catch (e) {
-      console.error("Generate failed:", e);
+      process.env.NODE_ENV === 'development' && console.error("Generate failed:", e);
     } finally {
       setGenerating(false);
     }
@@ -66,7 +66,7 @@ export default function PinManagerSection({ api }) {
       await axios.put(`${api}/pins/${pin}/revoke`);
       await fetchPins();
     } catch (e) {
-      console.error("Revoke failed:", e);
+      process.env.NODE_ENV === 'development' && console.error("Revoke failed:", e);
     }
   };
 
@@ -75,7 +75,7 @@ export default function PinManagerSection({ api }) {
       await axios.put(`${api}/pins/${pin}/activate`);
       await fetchPins();
     } catch (e) {
-      console.error("Activate failed:", e);
+      process.env.NODE_ENV === 'development' && console.error("Activate failed:", e);
     }
   };
 
@@ -84,7 +84,7 @@ export default function PinManagerSection({ api }) {
       await axios.delete(`${api}/pins/${pin}`);
       await fetchPins();
     } catch (e) {
-      console.error("Delete failed:", e);
+      process.env.NODE_ENV === 'development' && console.error("Delete failed:", e);
     }
   };
 
