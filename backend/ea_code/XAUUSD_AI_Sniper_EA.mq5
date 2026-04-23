@@ -476,7 +476,7 @@ double DetectRegime()
    double prevBBWidth = 0;
    if(bufBBUpper[5] > 0 && bufBBLower[5] > 0)
       prevBBWidth = (bufBBUpper[5] - bufBBLower[5]) / iClose(Symbol(), PERIOD_M5, 5) * 100;
-   bool expanding = bbWidth > prevBBWidth * 1.3;
+   bool expanding = (prevBBWidth > 0) && (bbWidth > prevBBWidth * 1.3);
 
    double emaDiff = MathAbs(emaF - emaS) / emaS * 100;
    bool mtfAligned = (emaF > emaS && h1F > h1S) || (emaF < emaS && h1F < h1S);
@@ -1199,7 +1199,7 @@ void OnTick()
    if(grade == "A+" && InpUseAI && StringLen(InpServerURL) >= 10)
    {
       int aiResult = GetAIAnalysis(bufEMAFast[1], bufEMASlow[1], bufRSI[1], bufATR[1],
-         iClose(Symbol(), PERIOD_M5, 0),
+         iClose(Symbol(), PERIOD_M5, 1),    // closed bar — consistent with setup scoring
          bufEMAFast_H1[1] > bufEMASlow_H1[1] ? "BULL" : "BEAR", spread,
          setupName, RegimeName(), signature,
          ArraySize(bufStochK) >= 2 ? bufStochK[1] : 50.0,
@@ -1979,10 +1979,15 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    string dirStr = (dType == DEAL_TYPE_SELL) ? "BUY" : "SELL";
 
    totalTrades++;
-   bool wasLoss = (profit <= 0);
-   if(!wasLoss) wins++; else losses++;
+   // Treat anything <= -$0.01 as real loss; anything >= $0.01 as win; else BE (no counter change)
+   bool wasLoss = (profit <= -0.01);
+   bool wasWin  = (profit >=  0.01);
+   if(wasWin) wins++;
+   else if(wasLoss) losses++;
+   // else: break-even — don't count either way
    lastTradeClose = TimeCurrent();
-   Print("CLOSED: ", !wasLoss ? "WIN" : "LOSS", " $", DoubleToString(profit, 2),
+   Print("CLOSED: ", wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK-EVEN",
+         " $", DoubleToString(profit, 2),
          " | T:", totalTrades, " W:", wins, " L:", losses);
 
    // Populate lastClose for RE-ENTRY detector
@@ -2028,8 +2033,8 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       currentTradeTarget = "";
    }
 
-   RecordPattern(!wasLoss, profit);
-   LogTradeToServer(!wasLoss ? "WIN" : "LOSS", dPrice, profit, dVolume, dirStr);
+   RecordPattern(wasWin, profit);
+   LogTradeToServer(wasWin ? "WIN" : wasLoss ? "LOSS" : "BE", dPrice, profit, dVolume, dirStr);
 }
 
 //+------------------------------------------------------------------+
@@ -2094,7 +2099,9 @@ void UpdateDashboard(int signal, double score, string grade)
    d += StringFormat("Daily: $%.0f | Weekly: $%.0f (%.1f%%/%.0f%%)\n", dPnL, wPnL, weeklyStartEquity > 0 ? wPnL/weeklyStartEquity*100 : 0.0, InpWeeklyTarget);
    d += "------------------------------------------\n";
    d += StringFormat("Regime: %s | Session: %.2f\n", RegimeName(), GetSessionQuality());
-   d += StringFormat("RSI: %.1f | ATR: %.2f | Spread: %.0f\n", bufRSI[1], bufATR[1], (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
+   double dRsi = ArraySize(bufRSI) >= 2 ? bufRSI[1] : 0;
+   double dAtr = ArraySize(bufATR) >= 2 ? bufATR[1] : 0;
+   d += StringFormat("RSI: %.1f | ATR: %.2f | Spread: %.0f\n", dRsi, dAtr, (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
    d += StringFormat("Last Score: %.1f [%s]\n", score, grade);
    d += "------------------------------------------\n";
    d += StringFormat("Open: %d/%d | Today: %d/%d\n", CountMyPositions(), InpMaxOpenTrades, todayTradeCount, InpMaxTradesPerDay);
