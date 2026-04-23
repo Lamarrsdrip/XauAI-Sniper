@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.4.0 — Smart Auto + Thesis |
+//|                                     v4.4.1 — Direction Lockout   |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.40"
-#property description "XAUUSD AI Sniper v4.4.0 — True adaptive intelligence"
-#property description "Auto-scales to account size | Vol-adaptive lots | Trade thesis"
-#property description "Structure-break exits | Every decision reasoned"
+#property version   "4.41"
+#property description "XAUUSD AI Sniper v4.4.1 — Direction Lockout + Full Smart Stack"
+#property description "Locks losing side (3 of 5 losses) for 60min — no more stuck trends"
+#property description "Auto-scales | Vol-adaptive | AI Thesis | Hive Learning"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -75,6 +75,10 @@ input int    InpStreakWindowSec = 2700;    // Window for loss-streak detection (
 input int    InpStreakPauseSec = 1200;     // Pause duration after streak (20min)
 input bool   InpAsiaRangeBreakout = true;  // Enable Asia-range breakout setup at London/NY open
 input bool   InpAdaptiveGrades = true;     // Auto-tune grade thresholds from recent win rate
+input bool   InpDirectionLockout = true;   // Lock a direction if too many same-direction losses
+input int    InpDirLockoutLookback = 5;    // Check last N trades
+input int    InpDirLockoutLossesNeeded = 3;// If N of last M were losses in same direction
+input int    InpDirLockoutMinutes = 60;    // Lock that direction for X minutes
 
 input group "=== AUTO-SCALE (v4.3.1 — detect account size & adapt) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -189,7 +193,12 @@ LastClose  lastClose;
 
 datetime   closeTimes[];            // rolling list of close timestamps
 bool       closeResults[];          // matching win/loss flags (true = loss)
+int        closeDirs[];             // direction of each close (+1 buy, -1 sell)
 datetime   streakPauseUntil = 0;    // paused until this time
+
+// Direction lockout (when a side is repeatedly losing)
+datetime   buyLockoutUntil  = 0;
+datetime   sellLockoutUntil = 0;
 
 // DXY cache (avoid hammering the endpoint)
 datetime   dxyLastFetch = 0;
@@ -403,8 +412,9 @@ int OnInit()
    totalTrades = wins = losses = lastTradeDir = 0;
    ArrayResize(patterns, 0); patternCount = 0;
    lastSignalDir = 0; lastRegime = 0; lastSetupType = 0;
-   ArrayResize(closeTimes, 0); ArrayResize(closeResults, 0);
+   ArrayResize(closeTimes, 0); ArrayResize(closeResults, 0); ArrayResize(closeDirs, 0);
    streakPauseUntil = 0;
+   buyLockoutUntil = 0; sellLockoutUntil = 0;
    todayLossCount = 0; todayLossResetDay = TimeCurrent(); drawdownActive = false;
    todayReEntryCount = 0;
    asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false; asiaRangeDay = 0;
@@ -417,7 +427,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.4.0 (SMART AUTO) READY ===");
+   Print("=== XAUAI SNIPER v4.4.1 (DIRECTION LOCKOUT) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -455,7 +465,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.4.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.4.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -619,8 +629,10 @@ void RecordCloseForStreak(bool wasLoss)
    int n = ArraySize(closeTimes);
    ArrayResize(closeTimes, n+1);
    ArrayResize(closeResults, n+1);
+   ArrayResize(closeDirs, n+1);
    closeTimes[n] = TimeCurrent();
    closeResults[n] = wasLoss;
+   closeDirs[n] = lastTradeDir;    // latest trade direction captured at exit
    PruneStreak();
    int recentLosses = 0;
    for(int i = 0; i < ArraySize(closeResults); i++)
@@ -631,6 +643,43 @@ void RecordCloseForStreak(bool wasLoss)
       Print("STREAK COOLDOWN: ", recentLosses, " losses in window — pausing until ",
             TimeToString(streakPauseUntil, TIME_SECONDS));
    }
+
+   // DIRECTION LOCKOUT: if last N closed trades show too many same-direction losses,
+   // lock that direction for X minutes. Solves "stuck selling into a dead trend".
+   if(InpDirectionLockout)
+   {
+      int total = ArraySize(closeDirs);
+      int check = MathMin(InpDirLockoutLookback, total);
+      if(check >= InpDirLockoutLossesNeeded)
+      {
+         int buyLosses = 0, sellLosses = 0, buyTotal = 0, sellTotal = 0;
+         for(int j = total - check; j < total; j++)
+         {
+            if(closeDirs[j] ==  1) { buyTotal++;  if(closeResults[j]) buyLosses++; }
+            if(closeDirs[j] == -1) { sellTotal++; if(closeResults[j]) sellLosses++; }
+         }
+         if(buyLosses >= InpDirLockoutLossesNeeded)
+         {
+            buyLockoutUntil = TimeCurrent() + InpDirLockoutMinutes * 60;
+            Print("DIR-LOCK: BUY locked for ", InpDirLockoutMinutes, " min — ",
+                  buyLosses, "/", buyTotal, " BUYs lost. Stop fighting this side.");
+         }
+         if(sellLosses >= InpDirLockoutLossesNeeded)
+         {
+            sellLockoutUntil = TimeCurrent() + InpDirLockoutMinutes * 60;
+            Print("DIR-LOCK: SELL locked for ", InpDirLockoutMinutes, " min — ",
+                  sellLosses, "/", sellTotal, " SELLs lost. Stop fighting this side.");
+         }
+      }
+   }
+}
+
+bool IsDirectionLocked(int dir)
+{
+   if(!InpDirectionLockout) return false;
+   if(dir ==  1 && buyLockoutUntil  > TimeCurrent()) return true;
+   if(dir == -1 && sellLockoutUntil > TimeCurrent()) return true;
+   return false;
 }
 void PruneStreak()
 {
@@ -642,9 +691,11 @@ void PruneStreak()
       {
          closeTimes[i] = closeTimes[i+1];
          closeResults[i] = closeResults[i+1];
+         closeDirs[i] = closeDirs[i+1];
       }
       ArrayResize(closeTimes, n);
       ArrayResize(closeResults, n);
+      ArrayResize(closeDirs, n);
    }
 }
 bool IsInStreakPause()
@@ -1169,6 +1220,16 @@ void OnTick()
    if(lastTradeDir != 0 && signal != lastTradeDir && lastTradeClose > 0 &&
       TimeCurrent() - lastTradeClose < InpReversalCooldown)
    { Print("ANTI-REVERSAL: Wait before flipping direction"); return; }
+
+   // DIRECTION LOCKOUT — if this side has been losing repeatedly, skip it
+   if(IsDirectionLocked(signal))
+   {
+      datetime until = (signal == 1) ? buyLockoutUntil : sellLockoutUntil;
+      Print("DIR-LOCK VETO: ", signal == 1 ? "BUY" : "SELL",
+            " side locked until ", TimeToString(until, TIME_SECONDS),
+            " due to recent losses on this side");
+      return;
+   }
 
    // Build exact signature for ML lookup + hive + journal
    string signature = BuildSignature(signal, setupName);
@@ -2092,7 +2153,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.4.0 | SMART AUTO | ";
+   d += " XAUAI SNIPER v4.4.1 | SMART AUTO | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
@@ -2112,6 +2173,8 @@ void UpdateDashboard(int signal, double score, string grade)
         drawdownActive?"ACTIVE":"off",
         (lastClose.valid && lastClose.wasLoss && !lastClose.reEntered && TimeCurrent()-lastClose.closeTime < InpReEntryWindow) ? "WATCHING" : "idle");
    if(IsInStreakPause()) d += StringFormat("STREAK PAUSE until %s\n", TimeToString(streakPauseUntil, TIME_SECONDS));
+   if(buyLockoutUntil  > TimeCurrent()) d += StringFormat("DIR-LOCK BUY until %s\n",  TimeToString(buyLockoutUntil,  TIME_SECONDS));
+   if(sellLockoutUntil > TimeCurrent()) d += StringFormat("DIR-LOCK SELL until %s\n", TimeToString(sellLockoutUntil, TIME_SECONDS));
    if(StringLen(currentTradeThesis) > 0 && CountMyPositions() > 0)
    {
       d += "-- TRADE THESIS --\n";
