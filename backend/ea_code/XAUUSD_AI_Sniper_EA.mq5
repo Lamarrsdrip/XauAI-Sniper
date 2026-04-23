@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.4.1 — Direction Lockout   |
+//|                                     v4.4.2 — Reset ML + Live UI  |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.41"
-#property description "XAUUSD AI Sniper v4.4.1 — Direction Lockout + Full Smart Stack"
-#property description "Locks losing side (3 of 5 losses) for 60min — no more stuck trends"
-#property description "Auto-scales | Vol-adaptive | AI Thesis | Hive Learning"
+#property version   "4.42"
+#property description "XAUUSD AI Sniper v4.4.2 — ML reset + dashboard cache fix"
+#property description "InpResetML clears legacy patterns for fresh version"
+#property description "Dashboard no longer flickers to zeros between scans"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -75,6 +75,7 @@ input int    InpStreakWindowSec = 2700;    // Window for loss-streak detection (
 input int    InpStreakPauseSec = 1200;     // Pause duration after streak (20min)
 input bool   InpAsiaRangeBreakout = true;  // Enable Asia-range breakout setup at London/NY open
 input bool   InpAdaptiveGrades = true;     // Auto-tune grade thresholds from recent win rate
+input bool   InpResetML        = false;    // TRUE = clear local ML on attach (fresh start for this version)
 input bool   InpDirectionLockout = true;   // Lock a direction if too many same-direction losses
 input int    InpDirLockoutLookback = 5;    // Check last N trades
 input int    InpDirLockoutLossesNeeded = 3;// If N of last M were losses in same direction
@@ -231,6 +232,11 @@ double     autoPeakMinUSD     = 0;
 string     currentTradeThesis = "";
 string     currentTradeInvalidation = "";
 string     currentTradeTarget = "";
+
+// Dashboard state cache — prevents throttled refresh from wiping scan data to zero
+int        lastDashSignal = 0;
+double     lastDashScore  = 0.0;
+string     lastDashGrade  = "";
 
 // Peak helpers
 int FindPeakIdx(ulong ticket)
@@ -420,6 +426,7 @@ int OnInit()
    asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false; asiaRangeDay = 0;
    ArrayResize(peakTickets, 0); ArrayResize(peakProfits, 0);
    currentTradeThesis = ""; currentTradeInvalidation = ""; currentTradeTarget = "";
+   lastDashSignal = 0; lastDashScore = 0.0; lastDashGrade = "";
    RecomputeAutoScale();
    lastClose.valid = false; lastClose.reEntered = false; lastClose.wasLoss = false;
    lastClose.dir = 0; lastClose.entryPrice = 0; lastClose.slDist = 0;
@@ -427,7 +434,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.4.1 (DIRECTION LOCKOUT) READY ===");
+   Print("=== XAUAI SNIPER v4.4.2 (DIRECTION LOCKOUT) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -465,7 +472,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.4.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.4.2 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1098,10 +1105,11 @@ void OnTick()
    CheckReEntryOpportunity();
 
    // === THROTTLED DASHBOARD REFRESH (every 2s, keeps UI live between bars) ===
+   // Uses cached scan state so the display doesn't flicker to zeros between scans.
    static datetime lastDashTick = 0;
    if(TimeCurrent() - lastDashTick >= 2)
    {
-      UpdateDashboard(lastSignalDir, 0, "");
+      UpdateDashboard(lastDashSignal, lastDashScore, lastDashGrade);
       lastDashTick = TimeCurrent();
    }
 
@@ -1133,18 +1141,18 @@ void OnTick()
    if(CopyBuffer(hStoch, 1, 0, 3, bufStochD) < 3) return;
 
    if(CountMyPositions() >= InpMaxOpenTrades || todayTradeCount >= InpMaxTradesPerDay)
-   { UpdateDashboard(0, 0, ""); return; }
+   { UpdateDashboard(0, 0, "MAX"); lastDashSignal=0; lastDashScore=0; lastDashGrade="MAX"; return; }
 
    // Cooldown
    if(lastTradeClose > 0 && TimeCurrent() - lastTradeClose < InpTradeCooldown)
-   { UpdateDashboard(0, 0, ""); return; }
+   { UpdateDashboard(0, 0, "CD"); lastDashSignal=0; lastDashScore=0; lastDashGrade="CD"; return; }
 
    // Streak pause (after multiple quick losses)
    if(IsInStreakPause())
    {
       Print("STREAK PAUSE active — no new entries until ",
             TimeToString(streakPauseUntil, TIME_SECONDS));
-      UpdateDashboard(0, 0, "PAUSED");
+      UpdateDashboard(0, 0, "PAUSED"); lastDashSignal=0; lastDashScore=0; lastDashGrade="PAUSED";
       return;
    }
 
@@ -1284,6 +1292,10 @@ void OnTick()
    // Open trade with grade-scaled sizing
    OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", sizeMulti);
    UpdateDashboard(signal, combinedScore, grade);
+   // Cache scan result so the 2-second throttled refresh doesn't overwrite it with zeros
+   lastDashSignal = signal;
+   lastDashScore  = combinedScore;
+   lastDashGrade  = grade;
 }
 
 //+------------------------------------------------------------------+
@@ -1962,6 +1974,21 @@ void SavePatterns()
 
 void LoadPatterns()
 {
+   // FRESH START option — skip loading legacy patterns from old EA versions
+   if(InpResetML)
+   {
+      string fn = "AIS_Patterns_" + Symbol() + ".bin";
+      if(FileIsExist(fn)) FileDelete(fn);
+      patternCount = 0;
+      ArrayResize(patterns, 0);
+      Print("═══════════════════════════════════════════════════════");
+      Print("ML RESET: Local patterns wiped per InpResetML=true.");
+      Print("  Fresh learning starts now. Cloud patterns untouched.");
+      Print("  Adaptive grade threshold resets to default.");
+      Print("═══════════════════════════════════════════════════════");
+      return;
+   }
+
    // Try cloud first (skip in backtest)
    if(!InpBacktestMode && StringLen(InpServerURL) >= 10)
    {
@@ -2153,7 +2180,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.4.1 | SMART AUTO | ";
+   d += " XAUAI SNIPER v4.4.2 | SMART AUTO | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
