@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.2.1 — Smart Features      |
+//|                                     v4.2.2 — Bug Fixes + Asia BO |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.21"
-#property description "XAUUSD AI Sniper v4.2.1 — Full Smart Stack"
-#property description "5-Gate Entry | 3-Path Exit | Dual-AI | Signature Hive"
-#property description "Re-Entry | DXY Gate | Drawdown Mode | Streak Cool-Down"
+#property version   "4.22"
+#property description "XAUUSD AI Sniper v4.2.2 — Full Smart Stack"
+#property description "5-Gate + 8 Setups + 3-Path Exit | Dual-AI | Signature Hive"
+#property description "Re-Entry (capped) | DXY | Drawdown | Streak | Adaptive Grades"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -62,6 +62,7 @@ input bool   InpUseReEntry     = true;     // Auto re-enter if SL was noise
 input int    InpReEntryWindow  = 900;      // Seconds after close to watch for reversal (15min)
 input double InpReEntryFactor  = 1.2;      // Price must move this x SL past original entry
 input double InpReEntrySize    = 0.5;      // Re-entry size multiplier (0.5 = half original)
+input int    InpMaxReEntriesPerDay = 3;    // Hard cap on re-entries per trading day
 
 input group "=== SMART FILTERS ==="
 input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
@@ -72,6 +73,8 @@ input double InpDrawdownRisk   = 0.5;      // Risk % during recovery mode (defau
 input int    InpStreakCooldownLosses = 3;  // # losses in short window = pause
 input int    InpStreakWindowSec = 2700;    // Window for loss-streak detection (45min)
 input int    InpStreakPauseSec = 1200;     // Pause duration after streak (20min)
+input bool   InpAsiaRangeBreakout = true;  // Enable Asia-range breakout setup at London/NY open
+input bool   InpAdaptiveGrades = true;     // Auto-tune grade thresholds from recent win rate
 
 input group "=== SAFETY ==="
 input double InpMaxSpread      = 150.0;    // Max spread (points)
@@ -172,6 +175,15 @@ int        todayLossCount = 0;
 datetime   todayLossResetDay = 0;
 bool       drawdownActive = false;
 
+// Re-entry safety counters
+int        todayReEntryCount = 0;
+
+// Asia range tracking (reset daily, tracked between 00:00-07:00 broker time)
+double     asiaRangeHigh = 0;
+double     asiaRangeLow  = 0;
+bool       asiaRangeLocked = false;
+datetime   asiaRangeDay = 0;
+
 //+------------------------------------------------------------------+
 //| PIN VALIDATION                                                   |
 //+------------------------------------------------------------------+
@@ -243,13 +255,15 @@ int OnInit()
    ArrayResize(closeTimes, 0); ArrayResize(closeResults, 0);
    streakPauseUntil = 0;
    todayLossCount = 0; todayLossResetDay = TimeCurrent(); drawdownActive = false;
+   todayReEntryCount = 0;
+   asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false; asiaRangeDay = 0;
    lastClose.valid = false; lastClose.reEntered = false; lastClose.wasLoss = false;
    lastClose.dir = 0; lastClose.entryPrice = 0; lastClose.slDist = 0;
    lastClose.lots = 0; lastClose.closeTime = 0; lastClose.signature = ""; lastClose.setup = "";
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.2.1 (FULL SMART STACK) READY ===");
+   Print("=== XAUAI SNIPER v4.2.2 (FULL SMART STACK) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -259,9 +273,11 @@ int OnInit()
          " | Cooldown=", InpTradeCooldown, "s | Reversal=", InpReversalCooldown, "s");
    Print("EXITS: QuickTake $", InpProfitTakeMin, "-$", InpProfitTakeMax, " | QuickExitMin=", InpQuickExitMin, "min");
    Print("SMART: ReEntry=", InpUseReEntry?"ON":"OFF",
-         " (", InpReEntryWindow/60, "min win, ", DoubleToString(InpReEntrySize,2), "x) | DXY=", InpUseDXYFilter?"ON":"OFF",
+         " (", InpReEntryWindow/60, "min win, ", DoubleToString(InpReEntrySize,2), "x, cap ", InpMaxReEntriesPerDay, "/day) | DXY=", InpUseDXYFilter?"ON":"OFF",
          " | Drawdown=", InpDrawdownMode?"ON":"OFF",
          " (", InpDrawdownLosses, "losses->", DoubleToString(InpDrawdownRisk,2), "%) | Streak=", InpStreakCooldownLosses, " in ", InpStreakWindowSec/60, "min");
+   Print("ADAPTIVE: ", InpAdaptiveGrades?"ON":"OFF",
+         " (auto-tunes GradeB on recent WR) | AsiaBreakout: ", InpAsiaRangeBreakout?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -272,7 +288,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.2.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.2.2 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -293,7 +309,6 @@ double DetectRegime()
    double prevBBWidth = 0;
    if(bufBBUpper[5] > 0 && bufBBLower[5] > 0)
       prevBBWidth = (bufBBUpper[5] - bufBBLower[5]) / iClose(Symbol(), PERIOD_M5, 5) * 100;
-   bool squeeze = bbWidth < prevBBWidth * 0.7;
    bool expanding = bbWidth > prevBBWidth * 1.3;
 
    double emaDiff = MathAbs(emaF - emaS) / emaS * 100;
@@ -476,7 +491,13 @@ bool IsInStreakPause()
 void UpdateDrawdownState(bool wasLoss)
 {
    MqlDateTime dtNow, dtLast; TimeCurrent(dtNow); TimeToStruct(todayLossResetDay, dtLast);
-   if(dtNow.day != dtLast.day) { todayLossCount = 0; todayLossResetDay = TimeCurrent(); drawdownActive = false; }
+   if(dtNow.day != dtLast.day)
+   {
+      todayLossCount = 0;
+      todayLossResetDay = TimeCurrent();
+      drawdownActive = false;
+      todayReEntryCount = 0;     // reset re-entry quota daily
+   }
    if(wasLoss) todayLossCount++;
    else if(todayLossCount > 0) todayLossCount--;   // a win reduces recent-loss stress
    if(InpDrawdownMode)
@@ -502,6 +523,14 @@ void CheckReEntryOpportunity()
    if(TimeCurrent() - lastClose.closeTime > InpReEntryWindow) return;
    if(CountMyPositions() > 0) return;                  // Don't stack
    if(IsInStreakPause()) return;
+   if(todayReEntryCount >= InpMaxReEntriesPerDay)
+   {
+      // One-shot log to avoid spam
+      static datetime lastCapLog = 0;
+      if(TimeCurrent() - lastCapLog > 3600)
+      { Print("RE-ENTRY CAP reached for today (", todayReEntryCount, "/", InpMaxReEntriesPerDay, ")"); lastCapLog = TimeCurrent(); }
+      return;
+   }
    if(InpUseNewsFilter && !IsNewsSafe()) return;
 
    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
@@ -517,12 +546,13 @@ void CheckReEntryOpportunity()
    // Use latest ATR for new SL sizing; bail if indicators not ready
    if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return;
 
-   Print("RE-ENTRY TRIGGER: last ", lastClose.dir==1?"BUY":"SELL",
+   Print("RE-ENTRY TRIGGER (", todayReEntryCount+1, "/", InpMaxReEntriesPerDay, "): last ", lastClose.dir==1?"BUY":"SELL",
          " stopped at ", DoubleToString(lastClose.entryPrice, _Digits),
          " | price now ", DoubleToString(curPrice, _Digits),
          " (", DoubleToString((curPrice-lastClose.entryPrice)/lastClose.slDist, 2), "R past entry)");
 
-   lastClose.reEntered = true;  // one-shot
+   lastClose.reEntered = true;  // one-shot per original close
+   todayReEntryCount++;
    lastSignalDir = lastClose.dir;
    lastSignalSignature = lastClose.signature;
    lastSignalSetup = "RE_ENTRY";
@@ -532,6 +562,40 @@ void CheckReEntryOpportunity()
 //+------------------------------------------------------------------+
 //| GATE 2: SESSION FILTER (UTC)                                     |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| ASIA RANGE TRACKER — builds high/low during Asia session (0-7h)  |
+//| Locks when Asia ends; used by breakout setup at London/NY open    |
+//+------------------------------------------------------------------+
+void UpdateAsiaRange()
+{
+   MqlDateTime dt; TimeCurrent(dt);
+   datetime today = TimeCurrent() - (TimeCurrent() % 86400);
+
+   // Start fresh at day rollover
+   if(today != asiaRangeDay)
+   {
+      asiaRangeDay = today;
+      asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false;
+   }
+
+   // Actively extend range during Asia hours (0-7 UTC-ish broker time)
+   if(dt.hour >= 0 && dt.hour < 7)
+   {
+      double h = iHigh(Symbol(), PERIOD_M5, 1);
+      double l = iLow(Symbol(),  PERIOD_M5, 1);
+      if(h > 0 && (asiaRangeHigh == 0 || h > asiaRangeHigh)) asiaRangeHigh = h;
+      if(l > 0 && (asiaRangeLow  == 0 || l < asiaRangeLow))  asiaRangeLow  = l;
+      asiaRangeLocked = false;
+   }
+   else if(dt.hour >= 7 && asiaRangeHigh > 0 && asiaRangeLow > 0 && !asiaRangeLocked)
+   {
+      asiaRangeLocked = true;
+      Print("ASIA RANGE LOCKED: High=", DoubleToString(asiaRangeHigh, _Digits),
+            " Low=", DoubleToString(asiaRangeLow, _Digits),
+            " (", DoubleToString(asiaRangeHigh - asiaRangeLow, _Digits), " pts)");
+   }
+}
+
 double GetSessionQuality()
 {
    MqlDateTime dt; TimeCurrent(dt);
@@ -707,6 +771,50 @@ int ScoreSetups(double &score, string &setupName)
       if(s > bestScore && dir != 0) { bestScore = s; bestDir = dir; bestName = "MULTI_EXTREME"; bestType = 7; }
    }
 
+   // === SETUP 8: ASIA RANGE BREAKOUT (gold-specific edge) ===
+   // Active only after Asia is locked (07:00+) and price has just broken out with volume
+   if(InpAsiaRangeBreakout && asiaRangeLocked && asiaRangeHigh > 0 && asiaRangeLow > 0)
+   {
+      MqlDateTime dt; TimeCurrent(dt);
+      // Valid breakout window: London + NY (07:00 - 17:00)
+      if(dt.hour >= 7 && dt.hour < 17)
+      {
+         double rangeSize = asiaRangeHigh - asiaRangeLow;
+         // Only trust the break if Asia range isn't microscopic (>= 0.3 * ATR*10 ≈ reasonable size)
+         if(rangeSize > atr * 1.5)
+         {
+            double s = 0; int dir = 0;
+            // Fresh breakout: previous bar inside range, current bar outside
+            bool freshBreakUp   = (close2 <= asiaRangeHigh && close1 > asiaRangeHigh);
+            bool freshBreakDown = (close2 >= asiaRangeLow  && close1 < asiaRangeLow);
+            // Or: continuation breakout within 3 bars of initial break
+            double hi3 = MathMax(iHigh(Symbol(), PERIOD_M5, 2), iHigh(Symbol(), PERIOD_M5, 3));
+            double lo3 = MathMin(iLow(Symbol(),  PERIOD_M5, 2), iLow(Symbol(),  PERIOD_M5, 3));
+            bool contBreakUp    = (close1 > asiaRangeHigh && hi3 > asiaRangeHigh && hi3 < close1);
+            bool contBreakDown  = (close1 < asiaRangeLow  && lo3 < asiaRangeLow  && lo3 > close1);
+
+            if(freshBreakUp || contBreakUp) { dir = 1; s = freshBreakUp ? 3.0 : 2.0; }
+            if(freshBreakDown || contBreakDown) { dir = -1; s = freshBreakDown ? 3.0 : 2.0; }
+
+            if(dir != 0)
+            {
+               // Volume confirmation
+               long v1 = iVolume(Symbol(), PERIOD_M5, 1);
+               long vAvg = (iVolume(Symbol(), PERIOD_M5, 2) + iVolume(Symbol(), PERIOD_M5, 3) + iVolume(Symbol(), PERIOD_M5, 4)) / 3;
+               if(vAvg > 0 && v1 > (long)(vAvg * 1.3)) s += 1.5;
+               // Strong candle body
+               if(body > atr * 0.5) s += 1.0;
+               // MTF agreement
+               if(dir == 1 && h1F > h1S) s += 1.0;
+               if(dir == -1 && h1F < h1S) s += 1.0;
+               // London/NY power hours
+               if(dt.hour >= 13 && dt.hour < 17) s += 0.5;
+               if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "ASIA_BREAKOUT"; bestType = 8; }
+            }
+         }
+      }
+   }
+
    score = bestScore;
    setupName = bestName;
    lastSetupType = bestType;
@@ -780,6 +888,9 @@ void OnTick()
    if(curBar == lastBar) return;
    lastBar = curBar;
 
+   // Update Asia-range tracker on every new M5 bar
+   if(InpAsiaRangeBreakout) UpdateAsiaRange();
+
    // Load indicators
    if(CopyBuffer(hEMAFast, 0, 0, 12, bufEMAFast) < 12) return;
    if(CopyBuffer(hEMASlow, 0, 0, 12, bufEMASlow) < 12) return;
@@ -826,9 +937,28 @@ void OnTick()
 
    // Combined quality
    double combinedScore = setupScore * regimeQuality * sessionQuality;
-   string grade = combinedScore >= InpGradeAPlus ? "A+" : combinedScore >= InpGradeA ? "A" : combinedScore >= InpGradeB ? "B" : "PASS";
 
-   if(signal == 0 || combinedScore < InpGradeB)
+   // Adaptive grade threshold: tighten when recent WR is poor, loosen when strong
+   double dynGradeB = InpGradeB;
+   if(InpAdaptiveGrades && patternCount >= 20)
+   {
+      int winN = 0, lossN = 0;
+      for(int i = patternCount - 1; i >= MathMax(0, patternCount - 20); i--)
+      {
+         if(patterns[i].wasWinner) winN++; else lossN++;
+      }
+      int totalN = winN + lossN;
+      if(totalN >= 10)
+      {
+         double recentWR = (double)winN / totalN;
+         if(recentWR < 0.40)      dynGradeB = MathMin(3.5, InpGradeB + 0.75);  // tighten
+         else if(recentWR > 0.60) dynGradeB = MathMax(1.8, InpGradeB - 0.50);  // loosen
+         // else keep default
+      }
+   }
+   string grade = combinedScore >= InpGradeAPlus ? "A+" : combinedScore >= InpGradeA ? "A" : combinedScore >= dynGradeB ? "B" : "PASS";
+
+   if(signal == 0 || combinedScore < dynGradeB)
    {
       Print("SCAN: ", RegimeName(), " | Session:", DoubleToString(sessionQuality, 2),
             " | Setup:", setupName, " Score:", DoubleToString(setupScore, 1),
@@ -1142,7 +1272,7 @@ void ManagePositions()
          Print("STALE EXIT: #", ticket, " open ", minsOpen, "min > cap ", staleCap, " with -$", DoubleToString(MathAbs(profit), 2), " (0.6R=$", DoubleToString(rDollars*0.6, 2), ")");
          trade.PositionClose(ticket); continue;
       }
-      if(minsOpen > 30 && MathAbs(profit) < 30)
+      if(minsOpen > 30 && profit > -30 && profit < 20)
       {
          Print("STALE DRIFT: #", ticket, " — ", minsOpen, "min, $", DoubleToString(profit, 2), " — going nowhere");
          trade.PositionClose(ticket); continue;
@@ -1533,7 +1663,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.2.1 | SMART STACK | ";
+   d += " XAUAI SNIPER v4.2.2 | SMART STACK | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

@@ -52,12 +52,12 @@
   - Dashboard shows DXY bias, drawdown state, streak pause timer, re-entry watcher status.
   - All 8 new features fully tunable via MT5 inputs, still respect `InpBacktestMode` (strategy-tester-safe).
 
-- **Feb 2026 - v4.2.1 Local ML reunified with signature system**
-  - `TradePattern` struct now stores the 7-field signature alongside fuzzy fields.
-  - `GetMLScore()` rewritten to use the SAME hierarchical rollup as the hive (exact → drop_mom → drop_stoch → drop_rsi → drop_session). Local ML no longer orphaned.
-  - Veto threshold raised to `n >= 10` for local stability.
-  - Pattern file format bumped to v2 with magic header `0xA15E2`. Old v1 files are detected and discarded cleanly (no crash).
-  - Cloud-save JSON now includes `sig` field so patterns round-trip correctly when loaded on another machine.
+- **Feb 2026 - v4.2.2 — Bugfix + Asia Breakout + Adaptive Grades**
+  - **Bug #1 fixed (re-entry infinite loop)**: added `InpMaxReEntriesPerDay=3` cap + daily reset counter. Previously a new loss after a re-entry could spawn another re-entry indefinitely.
+  - **Bug #2 fixed (stale drift closing winners)**: changed `|profit|<30` to `profit > -30 && profit < 20`. Winning trades with small profit no longer force-closed at 30min when momentum might take them higher.
+  - **Bug #3 cleaned**: removed dead `squeeze` variable in DetectRegime.
+  - **NEW setup #8 ASIA_BREAKOUT**: Tracks Asian session high/low during 00:00-07:00 broker time, locks at 07:00. During London/NY hours (07:00-17:00), if price breaks above/below the Asia range with volume confirmation + strong body + MTF alignment → A-grade signal. Historically strong edge on gold.
+  - **Adaptive grade threshold (`InpAdaptiveGrades`)**: Auto-tunes `InpGradeB` based on rolling WR of last 20 closed trades. WR<40% → tighten to 3.25 (fewer trades). WR>60% → loosen to 2.0 (more trades). Self-regulates to current market regime without manual input.
 
 ## Upcoming Tasks
 - Add Live Paystack Secret Key & Gmail SMTP credentials (User action) - P1
