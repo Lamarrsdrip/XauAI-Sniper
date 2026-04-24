@@ -1126,6 +1126,10 @@ class PositionCheckRequest(BaseModel):
     minutes_open: int = 0
     sl: float = 0
     tp: float = 0
+    # v4.5.0: mid-trade thesis audit fields
+    thesis: str = ""            # original entry thesis
+    invalidation: str = ""      # condition that invalidates the trade
+    confidence: int = 0         # original entry confidence (0-100)
 
 @api_router.post("/ai/manage-position")
 async def ai_manage_position(req: PositionCheckRequest):
@@ -1133,30 +1137,56 @@ async def ai_manage_position(req: PositionCheckRequest):
         if not LLM_KEY:
             return {"action": "HOLD", "reason": "AI not configured"}
 
-        chat = LlmChat(
-            api_key=LLM_KEY,
-            session_id=f"manage-{uuid.uuid4().hex[:8]}",
-            system_message="""You are a XAUUSD M5 scalping position manager AI. You monitor OPEN trades and decide whether to HOLD or CLOSE them. You think like a professional M5 gold scalper — take profits fast, cut losses quick, never hold more than 15-20 minutes.
+        # v4.5.0 — Thesis-aware manager.
+        # Instead of mechanical "take $150-500 profit" rules, Claude audits
+        # whether the ORIGINAL trade reason still holds given new market state.
+        has_thesis = bool(req.thesis and len(req.thesis) > 20)
+        if has_thesis:
+            system_msg = """You are a XAUUSD M5 position auditor. An open trade was taken for a specific REASON (the original thesis). Your job is to decide if that reason is STILL VALID given the new market data.
 
-RESPOND IN EXACTLY THIS JSON FORMAT (no markdown fences, no prose):
+RESPOND IN EXACTLY THIS JSON (no markdown fences):
 {"action":"HOLD","reason":"short reason"}
 
 Rules:
 - action: HOLD or CLOSE (only these 2)
-- reason: max 30 words
+- reason: max 30 words — reference whether the original thesis is still true
+- Do NOT close just because P/L is positive. Close ONLY if:
+    (a) the original thesis is INVALIDATED by new data (trend flip, structure break, etc.), or
+    (b) the invalidation condition has been met, or
+    (c) the trade has gone stale (minutes_open > 30) AND no follow-through
+- HOLD if the thesis is still intact, even if profit is modest — winners need time.
+- Trust the original reason; only override if there's clear evidence it's wrong now."""
+        else:
+            system_msg = """You are a XAUUSD M5 position auditor. Decide if an open trade should HOLD or CLOSE based on current market conditions.
 
-Your philosophy (M5 XAUUSD scalping):
-- $150-500 profit is GOOD. Take it. Don't wait for more.
-- If profit > $100 and momentum is weakening, CLOSE.
-- If profit > $250, strongly consider CLOSE.
-- If losing and RSI shows no reversal signs, CLOSE early.
-- If trade has been open > 15 minutes with small profit (<$80), CLOSE.
-- If trade has been open > 20 minutes regardless of P/L (and not deep in profit), CLOSE.
-- Small consistent wins beat waiting for big wins.
-- Capital preservation is #1 priority."""
+RESPOND IN EXACTLY THIS JSON (no markdown fences):
+{"action":"HOLD","reason":"short reason"}
+
+Rules:
+- action: HOLD or CLOSE
+- reason: max 30 words
+- CLOSE if trend has clearly flipped against position, RSI shows strong reversal, or trade has been open > 30 min with no progress.
+- HOLD if setup conditions still broadly support direction and price is actively moving.
+- Bias toward HOLD — give trades room to work. Only CLOSE with clear evidence."""
+
+        chat = LlmChat(
+            api_key=LLM_KEY,
+            session_id=f"manage-{uuid.uuid4().hex[:8]}",
+            system_message=system_msg
         ).with_model("anthropic", "claude-sonnet-4-5-20250929")
 
         pnl_str = f"+${req.profit:.2f}" if req.profit > 0 else f"-${abs(req.profit):.2f}"
+        thesis_block = ""
+        if has_thesis:
+            thesis_block = f"""
+ORIGINAL ENTRY THESIS (the reason we took this trade):
+"{req.thesis[:400]}"
+
+ORIGINAL INVALIDATION CONDITION:
+"{req.invalidation[:200] if req.invalidation else 'not specified'}"
+
+ORIGINAL CONFIDENCE: {req.confidence}/100
+"""
         prompt = f"""OPEN {req.direction} POSITION on XAUUSD:
 - Entry: {req.entry_price} | Current: {req.current_price}
 - P/L: {pnl_str} ({req.lots} lots)
@@ -1165,9 +1195,9 @@ Your philosophy (M5 XAUUSD scalping):
 - RSI: {req.rsi}
 - EMA50: {req.ema_fast} | EMA200: {req.ema_slow}
 - ATR: {req.atr}
-- Trend: {"BULLISH" if req.ema_fast > req.ema_slow else "BEARISH"}
-
-Should I HOLD or CLOSE this position? JSON only."""
+- Current Trend: {"BULLISH" if req.ema_fast > req.ema_slow else "BEARISH"}
+{thesis_block}
+Is the original thesis still valid? Should I HOLD or CLOSE? JSON only."""
 
         msg = UserMessage(text=prompt)
         response = await chat.send_message(msg)
@@ -1219,22 +1249,27 @@ class AIAnalysisRequest(BaseModel):
     signature: str = ""
 
 # ------- shared helpers -------
-_ENTRY_SYSTEM_PROMPT = """You are an expert XAUUSD (Gold) M5 scalper with 10+ years experience. You analyze technical data and give ONE clear trading decision WITH a full trader-style thesis. You MUST respond in EXACTLY this JSON format, nothing else (NO markdown fences):
-{"action":"BUY","confidence":75,"reason":"short reason","thesis":"detailed trader narrative","invalidation":"what proves you wrong","target":"where you expect price to reach","sl_adjust":0,"tp_adjust":0}
+_ENTRY_SYSTEM_PROMPT = """You are an expert XAUUSD (Gold) M5 scalper with 10+ years experience. You analyze technical data and give ONE clear trading decision WITH a full trader-style thesis AND a devil's-advocate counter-argument. You MUST respond in EXACTLY this JSON format, nothing else (NO markdown fences):
+{"action":"BUY","confidence":75,"reason":"short reason","thesis":"detailed trader narrative","bearish_case":"the counter-argument — why this trade could fail","skip_if":"specific price/condition that should cancel this trade BEFORE entry","invalidation":"what proves you wrong AFTER entry","target":"where you expect price to reach","sl_adjust":0,"tp_adjust":0}
 
 Rules:
 - action: BUY, SELL, or SKIP (only these 3)
-- confidence: 0-100 (how sure you are)
+- confidence: 0-100. USE THIS SCALE HONESTLY:
+    • 90-100: textbook setup, 5/5 confluence, would bet big
+    • 75-89: strong setup, 4/5 confluence, normal size
+    • 60-74: decent setup but something's off, smaller size
+    • <60: marginal, SKIP is better
+  Do NOT inflate confidence. A bot downstream will skip trades below 60 and size up above 90.
 - reason: max 30 words — one sentence summary
-- thesis: 40-80 words — explain the SETUP, CONTEXT, and WHY this edge exists. Write like a real trader: "Price broke above the Asia range high on strong NY volume. Bullish H1 trend intact, RSI has headroom at 58. Expecting continuation toward round $X level as algos chase the break."
-- invalidation: 15-25 words — the specific price/condition that PROVES this thesis wrong. Example: "If price closes back below 4692 with volume, thesis dead — cut immediately."
-- target: 10-20 words — realistic price target. Example: "First target: 4715 resistance. Stretch: 4728 prior swing high."
+- thesis: 40-80 words — explain the SETUP, CONTEXT, and WHY this edge exists. Write like a real trader.
+- bearish_case: 25-50 words — the honest counter-argument. What would make this trade fail? What are the RED FLAGS you're ignoring? If you can't think of one, confidence should drop.
+- skip_if: 15-25 words — specific pre-entry condition that should CANCEL this trade. Example: "Skip if spread > 30 points OR if H1 RSI crosses 70 before entry bar closes."
+- invalidation: 15-25 words — specific price/condition that PROVES thesis wrong AFTER entry. Example: "If price closes back below 4692 with volume, thesis dead — cut immediately."
+- target: 10-20 words — realistic price target.
 - sl_adjust: -1 to 1 (negative=tighter SL, positive=wider SL, 0=default)
 - tp_adjust: -1 to 1 (negative=tighter TP, positive=wider TP, 0=default)
 
-Be decisive. If unsure, SKIP. Prefer fast M5 scalps. Consider trend alignment, RSI/Stoch extremes, momentum, regime and setup quality.
-
-When action is SKIP, thesis/invalidation/target should still explain WHY you're skipping (e.g., "Mixed signals; RSI neutral and no clear setup. Waiting for cleaner break.")."""
+Be decisive. If unsure, SKIP. The bearish_case is MANDATORY — even for high-conviction trades, articulate the counter. A trader who can't see both sides is a gambler."""
 
 def _build_entry_prompt(req: AIAnalysisRequest) -> str:
     return f"""XAUUSD M5 Market Data RIGHT NOW:
@@ -1270,6 +1305,8 @@ def _parse_entry_json(response: str) -> dict:
             "confidence": confidence,
             "reason": str(r.get("reason", ""))[:200],
             "thesis": str(r.get("thesis", ""))[:500],
+            "bearish_case": str(r.get("bearish_case", ""))[:400],
+            "skip_if": str(r.get("skip_if", ""))[:200],
             "invalidation": str(r.get("invalidation", ""))[:200],
             "target": str(r.get("target", ""))[:200],
             "sl_adjust": float(r.get("sl_adjust", 0) or 0),
@@ -1277,9 +1314,9 @@ def _parse_entry_json(response: str) -> dict:
         }
     except (json.JSONDecodeError, ValueError, TypeError):
         up = (response or "").upper()
-        if '"BUY"' in up:  return {"action": "BUY",  "confidence": 55, "reason": "parser fallback", "thesis": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
-        if '"SELL"' in up: return {"action": "SELL", "confidence": 55, "reason": "parser fallback", "thesis": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
-        return {"action": "SKIP", "confidence": 50, "reason": "AI response unclear", "thesis": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
+        if '"BUY"' in up:  return {"action": "BUY",  "confidence": 55, "reason": "parser fallback", "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
+        if '"SELL"' in up: return {"action": "SELL", "confidence": 55, "reason": "parser fallback", "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
+        return {"action": "SKIP", "confidence": 50, "reason": "AI response unclear", "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
 
 async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> dict:
     try:
@@ -1297,12 +1334,12 @@ async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> di
     except asyncio.TimeoutError:
         logger.warning(f"Entry AI {provider}/{model} timed out")
         return {"action": "SKIP", "confidence": 0, "reason": f"{provider} timeout",
-                "thesis": "", "invalidation": "", "target": "",
+                "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
                 "sl_adjust": 0, "tp_adjust": 0, "available": False}
     except Exception as e:
         logger.error(f"Entry AI {provider}/{model} error: {e}")
         return {"action": "SKIP", "confidence": 0, "reason": f"{provider} error",
-                "thesis": "", "invalidation": "", "target": "",
+                "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
                 "sl_adjust": 0, "tp_adjust": 0, "available": False}
 
 @api_router.post("/ai/analyze")
@@ -1319,7 +1356,7 @@ async def ai_analyze_market(req: AIAnalysisRequest):
     try:
         if not LLM_KEY:
             return {"action": "SKIP", "confidence": 50, "reason": "AI key not configured",
-                    "thesis": "", "invalidation": "", "target": "",
+                    "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
                     "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0}
 
         claude_task = _ask_entry_ai("anthropic", "claude-sonnet-4-5-20250929", req)
@@ -1336,6 +1373,9 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             reason = f"Both AIs agree: {claude['reason'][:60]} / {gpt['reason'][:60]}"
             # Prefer the longer/fuller thesis
             thesis = claude.get("thesis") if len(claude.get("thesis","")) >= len(gpt.get("thesis","")) else gpt.get("thesis")
+            # Combine both bearish cases — we want ALL the red flags on the table
+            bearish_case = (claude.get("bearish_case","") + " | " + gpt.get("bearish_case","")).strip(" |")[:500]
+            skip_if = claude.get("skip_if") or gpt.get("skip_if")
             invalidation = claude.get("invalidation") or gpt.get("invalidation")
             target = claude.get("target") or gpt.get("target")
             sl_adj = (claude["sl_adjust"] + gpt["sl_adjust"]) / 2
@@ -1344,7 +1384,7 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             action, confidence = "SKIP", 50
             reason = f"Disagreement: Claude={c_act}({c_conf}) GPT={g_act}({g_conf}) — safety SKIP"
             thesis = f"Claude wanted {c_act}: {claude.get('thesis','')[:120]}. GPT wanted {g_act}: {gpt.get('thesis','')[:120]}. Conflicting reads — staying flat."
-            invalidation = ""; target = ""
+            bearish_case = ""; skip_if = ""; invalidation = ""; target = ""
             sl_adj, tp_adj = 0, 0
         elif c_ok and c_act in ("BUY", "SELL") and (not g_ok or g_act == "SKIP"):
             penalty = 1.00 if not g_ok else 0.80
@@ -1353,6 +1393,8 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             reason = (f"Claude says {c_act} ({c_conf}%), "
                       f"{'GPT unavailable' if not g_ok else 'GPT SKIP'}: {claude['reason'][:80]}")
             thesis = claude.get("thesis", "")
+            bearish_case = claude.get("bearish_case", "")
+            skip_if = claude.get("skip_if", "")
             invalidation = claude.get("invalidation", "")
             target = claude.get("target", "")
             sl_adj, tp_adj = claude["sl_adjust"], claude["tp_adjust"]
@@ -1363,6 +1405,8 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             reason = (f"GPT says {g_act} ({g_conf}%), "
                       f"{'Claude unavailable' if not c_ok else 'Claude SKIP'}: {gpt['reason'][:80]}")
             thesis = gpt.get("thesis", "")
+            bearish_case = gpt.get("bearish_case", "")
+            skip_if = gpt.get("skip_if", "")
             invalidation = gpt.get("invalidation", "")
             target = gpt.get("target", "")
             sl_adj, tp_adj = gpt["sl_adjust"], gpt["tp_adjust"]
@@ -1370,7 +1414,7 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             action, confidence = "SKIP", 50
             reason = f"Both SKIP/unavailable (claude_ok={c_ok}, gpt_ok={g_ok})"
             thesis = (claude.get("thesis","") or gpt.get("thesis","") or "")[:400]
-            invalidation = ""; target = ""
+            bearish_case = ""; skip_if = ""; invalidation = ""; target = ""
             sl_adj, tp_adj = 0, 0
 
         result = {
@@ -1378,6 +1422,8 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             "confidence": confidence,
             "reason": reason[:240],
             "thesis": (thesis or "")[:500],
+            "bearish_case": (bearish_case or "")[:500],
+            "skip_if": (skip_if or "")[:200],
             "invalidation": (invalidation or "")[:200],
             "target": (target or "")[:200],
             "sl_adjust": sl_adj,
@@ -1396,7 +1442,7 @@ async def ai_analyze_market(req: AIAnalysisRequest):
     except Exception as e:
         logger.error(f"AI analyze dual error: {e}")
         return {"action": "SKIP", "confidence": 50, "reason": f"AI error: {str(e)[:60]}",
-                "thesis": "", "invalidation": "", "target": "",
+                "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
                 "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0}
 
 ########################################

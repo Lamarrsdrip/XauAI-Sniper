@@ -84,6 +84,19 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.5.0 — "The Trader's Mind" (conviction + Devil's Advocate + thesis audits)**
+  - User feedback: "it just trade base on instruments like a robot as if it doesn't really reason before it take actions... it has Claude it should be better than this"
+  - **Devil's Advocate prompt**: entry system prompt now REQUIRES both Claude and GPT-5.2 to articulate a `bearish_case` (counter-argument) + `skip_if` (pre-entry veto condition) on every call. Prevents one-sided confirmation bias.
+  - **Conviction-Weighted Sizing** (`InpConvictionSizing=ON`, inputs `InpMinAIConfidence=60`, `InpNormalAIConfidence=75`, `InpHighAIConfidence=90`): EA now parses the combined AI confidence integer and scales lot size:
+    - <60%: SKIP entirely (prevents marginal trades that historically lose money)
+    - 60–74%: 0.5× size (small bet on uncertain setup)
+    - 75–89%: 1.0× size (normal)
+    - ≥90%: 1.3× size (high-conviction trades get meaningful skin in the game)
+  - **Thesis-Aware Mid-Trade Audits**: `/api/ai/manage-position` now accepts `thesis`, `invalidation`, and `confidence` from the EA. Claude's system prompt is rewritten to AUDIT whether the ORIGINAL reason still holds given new market data — HOLD if thesis intact, CLOSE only when invalidated. No more mechanical "take $150-500 profit" closes. Tested live: healthy trade with good thesis → Claude says HOLD; broken trend → Claude says CLOSE with specific reasoning.
+  - Dashboard now shows confidence %, the Devil's Advocate counter-argument, and thesis invalidation condition on the live chart.
+  - Entry log expanded to print thesis + Devil's Advocate + skip-if + invalidation + target for every decision.
+  - Frontend bumped to v4.5.0.
+
 - **Feb 2026 - v4.4.5 — "Hold & Stack" (R-based HardStop + Pyramid)**
   - **Critical root cause found from user logs**: `HardStopUSD` auto-scaled to 0.8% of balance. Lot size also auto-scaled with balance. Combined effect: 1-point adverse wiggle on a 5.95-lot position = -$481 = 0.8% of balance = HardStop fired in <1 minute. Reviewed user's last 12 losers — ALL followed this pattern (cut on tiny adverse wiggles, price then reversed into profit).
   - **R-BASED HardStop** (`InpHardStopRBased=true`, `InpHardStopRMulti=3.0`): HardStop now fires at 3× the trade's ORIGINAL risk (3R catastrophic cap) instead of a decoupled $ figure. Adaptive to lot size automatically. The absolute-$ path still available (`InpHardStopRBased=false` + `InpHardStopUSD>0`) for legacy users.

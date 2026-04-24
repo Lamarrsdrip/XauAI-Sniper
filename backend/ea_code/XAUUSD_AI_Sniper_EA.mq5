@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.4.5 — Hold & Stack        |
+//|                                     v4.5.0 — The Trader's Mind   |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.45"
-#property description "XAUUSD AI Sniper v4.4.5 — Hold trades, stack up to 5 (pyramid)"
+#property version   "4.50"
+#property description "XAUUSD AI Sniper v4.5.0 — The Trader's Mind (conviction sizing + devil's advocate + thesis audits)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -80,6 +80,15 @@ input bool   InpDirectionLockout = true;   // Lock a direction if too many same-
 input int    InpDirLockoutLookback = 5;    // Check last N trades
 input int    InpDirLockoutLossesNeeded = 3;// If N of last M were losses in same direction
 input int    InpDirLockoutMinutes = 60;    // Lock that direction for X minutes
+
+input group "=== CONVICTION-WEIGHTED SIZING (v4.5.0 — use Claude/GPT confidence) ==="
+input bool   InpConvictionSizing = true;   // Scale lot size by AI confidence
+input int    InpMinAIConfidence  = 60;     // Below this, SKIP entirely (AI is too uncertain)
+input int    InpNormalAIConfidence = 75;   // At/above this, use normal 1.0x size
+input int    InpHighAIConfidence   = 90;   // At/above this, use 1.3x boost size
+input double InpConvictionLowMulti  = 0.5; // 60-74% confidence -> 0.5x size
+input double InpConvictionHighMulti = 1.3; // >=90% confidence -> 1.3x size
+input bool   InpRespectSkipIf    = true;   // Honor the AI's skip_if veto condition
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -248,6 +257,13 @@ double     autoPeakMinUSD     = 0;
 string     currentTradeThesis = "";
 string     currentTradeInvalidation = "";
 string     currentTradeTarget = "";
+string     currentTradeBearishCase = "";   // v4.5.0 — Devil's Advocate counter-argument
+int        currentTradeConfidence = 0;     // v4.5.0 — Original AI confidence (0-100)
+
+// v4.5.0 — Last entry AI output cached after GetAIAnalysis()
+int        lastAIConfidence = 0;
+string     lastAIBearishCase = "";
+string     lastAISkipIf = "";
 
 // Dashboard state cache — prevents throttled refresh from wiping scan data to zero
 int        lastDashSignal = 0;
@@ -454,6 +470,7 @@ int OnInit()
    asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false; asiaRangeDay = 0;
    ArrayResize(peakTickets, 0); ArrayResize(peakProfits, 0);
    currentTradeThesis = ""; currentTradeInvalidation = ""; currentTradeTarget = "";
+   currentTradeBearishCase = ""; currentTradeConfidence = 0;
    lastDashSignal = 0; lastDashScore = 0.0; lastDashGrade = "";
    RecomputeAutoScale();
    lastClose.valid = false; lastClose.reEntered = false; lastClose.wasLoss = false;
@@ -462,7 +479,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.4.5 (HOLD & STACK) READY ===");
+   Print("=== XAUAI SNIPER v4.5.0 (THE TRADER'S MIND) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -501,6 +518,11 @@ int OnInit()
    Print("VOL-ADAPT: ", InpVolAdaptiveLots?"ON":"OFF",
          " (spike>", DoubleToString(InpVolSpikeMulti,2), "x ATR → size×",DoubleToString(InpVolSpikeReduce,2),
          ", calm<", DoubleToString(InpVolCalmMulti,2), "x → size×", DoubleToString(InpVolCalmBoost,2), ")");
+   Print("CONVICTION: ", InpConvictionSizing?"ON":"OFF",
+         " | MinConf=", InpMinAIConfidence, "% (below = SKIP)",
+         " | NormalConf=", InpNormalAIConfidence, "% (x1.0)",
+         " | HighConf=", InpHighAIConfidence, "% (x", DoubleToString(InpConvictionHighMulti, 2), ")",
+         " | LowMulti=x", DoubleToString(InpConvictionLowMulti, 2));
    return INIT_SUCCEEDED;
 }
 
@@ -511,7 +533,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.4.5 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.5.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1503,12 +1525,49 @@ void OnTick()
          setupName, RegimeName(), signature,
          ArraySize(bufStochK) >= 2 ? bufStochK[1] : 50.0,
          iClose(Symbol(), PERIOD_M5, 1) - iClose(Symbol(), PERIOD_M5, 5));
+
       if(aiResult == 0)
       { Print("DUAL-AI: SKIP — reducing to B size"); sizeMulti = MathMin(sizeMulti, 0.55); }
       else if(aiResult != signal)
       { Print("DUAL-AI: Disagrees — reducing to B size"); sizeMulti = MathMin(sizeMulti, 0.55); }
       else
-      { Print("DUAL-AI: Confirms ", signal > 0 ? "BUY" : "SELL"); }
+      {
+         Print("DUAL-AI: Confirms ", signal > 0 ? "BUY" : "SELL", " at ", lastAIConfidence, "% conf");
+
+         // v4.5.0 — CONVICTION GATE: skip the trade entirely if AI is too uncertain.
+         // Prevents marginal 50-60% confidence trades that historically lose money.
+         if(InpConvictionSizing && lastAIConfidence > 0 && lastAIConfidence < InpMinAIConfidence)
+         {
+            Print("CONVICTION-VETO: AI confidence ", lastAIConfidence, "% < min ", InpMinAIConfidence, "% — SKIP");
+            UpdateDashboard(0, combinedScore, "LOW-CONV");
+            lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "LOW-CONV";
+            return;
+         }
+
+         // v4.5.0 — CONVICTION-WEIGHTED SIZING:
+         //   < min        -> already skipped above
+         //   min .. normal -> 0.5x (low conviction = small size)
+         //   normal..high  -> 1.0x (standard size)
+         //   >= high       -> 1.3x (high conviction = bigger size)
+         if(InpConvictionSizing && lastAIConfidence > 0)
+         {
+            double convMult;
+            if(lastAIConfidence >= InpHighAIConfidence)
+               convMult = InpConvictionHighMulti;
+            else if(lastAIConfidence >= InpNormalAIConfidence)
+               convMult = 1.0;
+            else
+               convMult = InpConvictionLowMulti;
+            sizeMulti *= convMult;
+            Print("CONVICTION-SIZE: ", lastAIConfidence, "% -> size x",
+                  DoubleToString(convMult, 2), " (final sizeMulti=",
+                  DoubleToString(sizeMulti, 2), ")");
+         }
+
+         // v4.5.0 — Devil's Advocate log (for user visibility)
+         if(StringLen(lastAIBearishCase) > 0)
+            Print("DEVIL'S-ADVOCATE: ", lastAIBearishCase);
+      }
    }
 
    // Store signal context for ML + journal logging
@@ -1518,6 +1577,10 @@ void OnTick()
    lastSignalATR = bufATR[1];
    lastSignalSetup = setupName;
    lastSignalSignature = signature;
+
+   // v4.5.0 — Remember the AI's conviction on the trade we're about to open,
+   // so mid-trade audits can reference both the thesis AND the original confidence.
+   currentTradeConfidence = lastAIConfidence;
 
    // Open trade with grade-scaled sizing
    OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", sizeMulti);
@@ -2080,6 +2143,11 @@ string ExtractJsonString(const string &json, const string key)
 int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price, string h1Dir, double spread,
                   string setup, string regime, string signature, double stoch, double mom)
 {
+   // Reset cached outputs
+   lastAIConfidence = 0;
+   lastAIBearishCase = "";
+   lastAISkipIf = "";
+
    if(!InpUseAI || InpBacktestMode || StringLen(InpServerURL) < 10) return 0;
    string url = InpServerURL + "/api/ai/analyze";
    string headers = "Content-Type: application/json\r\n";
@@ -2103,11 +2171,35 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    currentTradeThesis       = ExtractJsonString(response, "thesis");
    currentTradeInvalidation = ExtractJsonString(response, "invalidation");
    currentTradeTarget       = ExtractJsonString(response, "target");
+   currentTradeBearishCase  = ExtractJsonString(response, "bearish_case");
+
+   // v4.5.0 — Parse confidence integer from "confidence":NN (not a string)
+   int confIdx = StringFind(response, "\"confidence\":");
+   if(confIdx >= 0)
+   {
+      int p = confIdx + StringLen("\"confidence\":");
+      // Skip whitespace
+      while(p < StringLen(response) && (StringGetCharacter(response, p) == ' ' ||
+            StringGetCharacter(response, p) == '\t')) p++;
+      string numStr = "";
+      while(p < StringLen(response))
+      {
+         ushort c = StringGetCharacter(response, p);
+         if(c >= '0' && c <= '9') { numStr += ShortToString(c); p++; }
+         else break;
+      }
+      if(StringLen(numStr) > 0) lastAIConfidence = (int)StringToInteger(numStr);
+   }
+   lastAIBearishCase = currentTradeBearishCase;
+   lastAISkipIf      = ExtractJsonString(response, "skip_if");
+
    if(StringLen(currentTradeThesis) > 0)
    {
-      Print("AI THESIS: ", currentTradeThesis);
-      if(StringLen(currentTradeInvalidation) > 0) Print("  Invalid if: ", currentTradeInvalidation);
-      if(StringLen(currentTradeTarget) > 0)       Print("  Target: ",     currentTradeTarget);
+      Print("AI THESIS (", lastAIConfidence, "% conf): ", currentTradeThesis);
+      if(StringLen(currentTradeBearishCase) > 0) Print("  Devil's Advocate: ", currentTradeBearishCase);
+      if(StringLen(lastAISkipIf) > 0)           Print("  Skip if: ",           lastAISkipIf);
+      if(StringLen(currentTradeInvalidation) > 0) Print("  Invalid if: ",      currentTradeInvalidation);
+      if(StringLen(currentTradeTarget) > 0)       Print("  Target: ",          currentTradeTarget);
    }
    return dir;
 }
@@ -2119,14 +2211,26 @@ int CheckPositionWithAI(string dir, double entry, double current, double profit,
    if(StringLen(InpServerURL) < 10) return 0;
    string url = InpServerURL + "/api/ai/manage-position";
    string headers = "Content-Type: application/json\r\n";
-   string body = StringFormat("{\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f}",
-      dir, entry, current, profit, lots, rsi, emaF, emaS, atr, minsOpen, sl, tp);
+
+   // v4.5.0 — Pass the ORIGINAL entry thesis + invalidation + confidence so Claude
+   // can audit whether the REASON we took this trade still holds, rather than using
+   // mechanical P/L rules. Escape quotes inside the thesis to keep JSON valid.
+   string thesisEsc = currentTradeThesis;
+   StringReplace(thesisEsc, "\"", "'");
+   StringReplace(thesisEsc, "\n", " ");
+   string invalEsc  = currentTradeInvalidation;
+   StringReplace(invalEsc,  "\"", "'");
+   StringReplace(invalEsc,  "\n", " ");
+
+   string body = StringFormat("{\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f,\"thesis\":\"%s\",\"invalidation\":\"%s\",\"confidence\":%d}",
+      dir, entry, current, profit, lots, rsi, emaF, emaS, atr, minsOpen, sl, tp,
+      thesisEsc, invalEsc, currentTradeConfidence);
    char postData[], result[]; string rh;
    StringToCharArray(body, postData, 0, StringLen(body));
    int res = WebRequest("POST", url, headers, 10000, postData, result, rh);
    if(res != 200) return 0;
    string response = CharArrayToString(result);
-   if(StringFind(response, "\"CLOSE\"") >= 0) { Print("CLAUDE: ", response); return -1; }
+   if(StringFind(response, "\"CLOSE\"") >= 0) { Print("CLAUDE_AUDIT: ", response); return -1; }
    return 0;
 }
 
@@ -2411,6 +2515,8 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       currentTradeThesis = "";
       currentTradeInvalidation = "";
       currentTradeTarget = "";
+      currentTradeBearishCase = "";
+      currentTradeConfidence = 0;
    }
 
    RecordPattern(wasWin, profit);
@@ -2472,7 +2578,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.4.5 | HOLD & STACK | ";
+   d += " XAUAI SNIPER v4.5.0 | TRADER'S MIND | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
@@ -2497,7 +2603,9 @@ void UpdateDashboard(int signal, double score, string grade)
    if(StringLen(currentTradeThesis) > 0 && CountMyPositions() > 0)
    {
       d += "-- TRADE THESIS --\n";
+      if(currentTradeConfidence > 0) d += StringFormat("Confidence: %d%%\n", currentTradeConfidence);
       d += currentTradeThesis + "\n";
+      if(StringLen(currentTradeBearishCase) > 0) d += "Counter: " + currentTradeBearishCase + "\n";
       if(StringLen(currentTradeInvalidation) > 0) d += "Invalidation: " + currentTradeInvalidation + "\n";
       if(StringLen(currentTradeTarget) > 0)       d += "Target: " + currentTradeTarget + "\n";
    }
