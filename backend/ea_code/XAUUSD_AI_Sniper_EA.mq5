@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.5.0 — The Trader's Mind   |
+//|                                     v4.5.1 — Loosen the Leash    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.50"
-#property description "XAUUSD AI Sniper v4.5.0 — The Trader's Mind (conviction sizing + devil's advocate + thesis audits)"
+#property version   "4.51"
+#property description "XAUUSD AI Sniper v4.5.1 — Loosen the Leash (wider BE + volatility-aware trail)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -89,6 +89,14 @@ input int    InpHighAIConfidence   = 90;   // At/above this, use 1.3x boost size
 input double InpConvictionLowMulti  = 0.5; // 60-74% confidence -> 0.5x size
 input double InpConvictionHighMulti = 1.3; // >=90% confidence -> 1.3x size
 input bool   InpRespectSkipIf    = true;   // Honor the AI's skip_if veto condition
+
+input group "=== TRAILING / BE LOCK (v4.5.1 — loosen the leash) ==="
+input double InpBELockActivateR   = 1.0;   // BE lock only fires at >= this R-multiple (was 0.5 = too tight)
+input double InpBELockProfitR     = 0.25;  // BE SL locks at openPx + this R (was +10pts = basically 0)
+input double InpCapTrailATRMulti  = 1.5;   // CAP_RUNNER trail distance = this × ATR (was 0.8 = clipped easily)
+input double InpCapTrailSpikeMulti= 1.8;   // On high-vol spike bars, widen trail to this × ATR
+input double InpCapTrailCalmMulti = 1.2;   // On calm bars, use this × ATR
+input int    InpClaudeAuditSec    = 900;   // Claude mid-trade audit frequency (was 600 = 10min, now 15min)
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -479,7 +487,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.5.0 (THE TRADER'S MIND) READY ===");
+   Print("=== XAUAI SNIPER v4.5.1 (LOOSEN THE LEASH) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -523,6 +531,12 @@ int OnInit()
          " | NormalConf=", InpNormalAIConfidence, "% (x1.0)",
          " | HighConf=", InpHighAIConfidence, "% (x", DoubleToString(InpConvictionHighMulti, 2), ")",
          " | LowMulti=x", DoubleToString(InpConvictionLowMulti, 2));
+   Print("TRAIL v4.5.1: BE activate=+", DoubleToString(InpBELockActivateR,2), "R  lock=+",
+         DoubleToString(InpBELockProfitR,2), "R",
+         " | CapTrail: normal=", DoubleToString(InpCapTrailATRMulti,2), "xATR",
+         " spike=", DoubleToString(InpCapTrailSpikeMulti,2), "xATR",
+         " calm=", DoubleToString(InpCapTrailCalmMulti,2), "xATR",
+         " | ClaudeAudit=", InpClaudeAuditSec, "s");
    return INIT_SUCCEEDED;
 }
 
@@ -533,7 +547,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.5.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.5.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1862,26 +1876,32 @@ void ManagePositions()
 
       // ===== PATH B: SMART MANAGEMENT =====
 
-      // B1: Breakeven lock at +0.5R (ONLY if doesn't worsen current SL)
-      double halfR = slDist * 0.5;
-      double ptSafety = SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 20;
-      if(isBuy && curPrice > openPx + halfR)
+      // B1: Breakeven lock (v4.5.1 — wait for +1R before locking, and lock at +0.25R of profit)
+      //  WAS: +0.5R activate, SL = openPx + 10 points (basically zero profit)
+      //  NOW: +1.0R activate, SL = openPx + 0.25R (locks real profit; survives normal noise)
+      double activateDist = slDist * InpBELockActivateR;
+      double lockProfitDist = slDist * InpBELockProfitR;
+      if(isBuy && curPrice > openPx + activateDist)
       {
-         double beSL = NormalizeDouble(openPx + ptSafety, digits);
+         double beSL = NormalizeDouble(openPx + lockProfitDist, digits);
          // Only raise SL — never lower it (this was a bug: trail could already be higher)
          if(beSL > curSL)
          {
             trade.PositionModify(ticket, beSL, curTP);
-            Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits), " (+0.5R reached, risk free)");
+            Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
+                  " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
+                  DoubleToString(InpBELockProfitR,2), "R profit)");
          }
       }
-      if(!isBuy && curPrice < openPx - halfR)
+      if(!isBuy && curPrice < openPx - activateDist)
       {
-         double beSL = NormalizeDouble(openPx - ptSafety, digits);
+         double beSL = NormalizeDouble(openPx - lockProfitDist, digits);
          if(beSL < curSL || curSL == 0)
          {
             trade.PositionModify(ticket, beSL, curTP);
-            Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits), " (+0.5R reached, risk free)");
+            Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
+                  " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
+                  DoubleToString(InpBELockProfitR,2), "R profit)");
          }
       }
 
@@ -1970,30 +1990,38 @@ void ManagePositions()
          }
          if(capReached && InpSmartCapExit)
          {
-            // Past the cap — trail SL at 0.8 ATR behind current price to lock in gains
-            // and let the runner breathe. We only exit if momentumFading fires (above)
-            // OR profit reaches the absolute ceiling (hard cap guard below).
+            // v4.5.1 — Past the cap, trail SL using a VOLATILITY-AWARE distance.
+            // On high-vol spike bars we widen to survive wicks. On calm bars we can
+            // tighten a bit. Default is now 1.5 × ATR (was 0.8 = clipped on normal noise).
+            double volMult = GetVolAdaptiveMult();  // <1 = spike, >1 = calm
+            double trailATR = InpCapTrailATRMulti;
+            if(volMult < 0.85)      trailATR = InpCapTrailSpikeMulti;   // spike bar → wider
+            else if(volMult > 1.05) trailATR = InpCapTrailCalmMulti;    // calm bar → slightly tighter
+            double trailDist = atr * trailATR;
+
             double lockSL;
             if(isBuy)
             {
-               lockSL = NormalizeDouble(curPrice - atr * 0.8, digits);
+               lockSL = NormalizeDouble(curPrice - trailDist, digits);
                if(lockSL > curSL && lockSL > openPx)
                {
                   trade.PositionModify(ticket, lockSL, curTP);
                   Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
                         " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
-                        " — SL trailed to ", DoubleToString(lockSL, digits), " (0.8 ATR). Letting it run.");
+                        " — SL trailed to ", DoubleToString(lockSL, digits),
+                        " (", DoubleToString(trailATR,2), " ATR). Letting it run.");
                }
             }
             else
             {
-               lockSL = NormalizeDouble(curPrice + atr * 0.8, digits);
+               lockSL = NormalizeDouble(curPrice + trailDist, digits);
                if((lockSL < curSL || curSL == 0) && lockSL < openPx)
                {
                   trade.PositionModify(ticket, lockSL, curTP);
                   Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
                         " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
-                        " — SL trailed to ", DoubleToString(lockSL, digits), " (0.8 ATR). Letting it run.");
+                        " — SL trailed to ", DoubleToString(lockSL, digits),
+                        " (", DoubleToString(trailATR,2), " ATR). Letting it run.");
                }
             }
 
@@ -2019,21 +2047,29 @@ void ManagePositions()
          }
          if(timeExpired && InpMomentumGuard && momentumStrong)
          {
-            // Tighten SL to lock gains but let runner run
+            // v4.5.1 — Tighten SL on time-expired runners using the same wider ATR trail
+            double volMult2 = GetVolAdaptiveMult();
+            double trailATR2 = InpCapTrailATRMulti;
+            if(volMult2 < 0.85)      trailATR2 = InpCapTrailSpikeMulti;
+            else if(volMult2 > 1.05) trailATR2 = InpCapTrailCalmMulti;
+            double trailDist2 = atr * trailATR2;
+
             double lockSL;
             if(isBuy)
             {
-               lockSL = NormalizeDouble(curPrice - atr * 0.8, digits);
+               lockSL = NormalizeDouble(curPrice - trailDist2, digits);
                if(lockSL > curSL && lockSL > openPx)
                { trade.PositionModify(ticket, lockSL, curTP);
-                 Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→", DoubleToString(lockSL, digits)); }
+                 Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→",
+                       DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), " ATR)"); }
             }
             else
             {
-               lockSL = NormalizeDouble(curPrice + atr * 0.8, digits);
+               lockSL = NormalizeDouble(curPrice + trailDist2, digits);
                if(lockSL < curSL && lockSL < openPx)
                { trade.PositionModify(ticket, lockSL, curTP);
-                 Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→", DoubleToString(lockSL, digits)); }
+                 Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→",
+                       DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), " ATR)"); }
             }
          }
       }
@@ -2074,10 +2110,10 @@ void ManagePositions()
          trade.PositionClose(ticket); continue;
       }
 
-      // ===== PATH C: CLAUDE SEMANTIC EXIT (A+ only, every 10 min) =====
+      // ===== PATH C: CLAUDE SEMANTIC EXIT (A+ only, every InpClaudeAuditSec) =====
       static datetime lastClaudeCheck = 0;
       if(InpUseAI && StringLen(InpServerURL) >= 10 && minsOpen >= 3 && // 3min grace period
-         TimeCurrent() - lastClaudeCheck > 600)
+         TimeCurrent() - lastClaudeCheck > InpClaudeAuditSec)
       {
          int claudeResult = CheckPositionWithAI(
             isBuy ? "BUY" : "SELL", openPx, curPrice, profit,
@@ -2578,7 +2614,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.5.0 | TRADER'S MIND | ";
+   d += " XAUAI SNIPER v4.5.1 | LOOSEN LEASH | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

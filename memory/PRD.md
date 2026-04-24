@@ -84,6 +84,18 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.5.1 — "Loosen the Leash" (wider BE + volatility-aware trailing)**
+  - User feedback from live trade log: "trailing is too tight the trailing don't reason well." Evidence: BUY 2.14 @ 4697 closed flat at +$45 (BE lock grabbed it on a 1-point wick) while gold ran to 4717 = missed $4,300 move. BUY 3.58 @ 4699 closed -$1,242 (trail clipped on pullback wick) while gold then ran to 4717.
+  - **BE lock raised from +0.5R → +1.0R** (`InpBELockActivateR=1.0`): wait for the trade to double the risk before locking. Prevents early BE exits on normal noise.
+  - **BE lock now locks PROFIT, not zero**: SL goes to `openPx + 0.25R` (was `+10 points = basically flat`). Even if hit, trade exits with real profit.
+  - **Volatility-aware CAP_RUNNER trail** (was flat 0.8 × ATR = clipped on normal wicks):
+    - Normal bars: 1.5 × ATR
+    - High-vol spike bars: 1.8 × ATR (widens for survival)
+    - Calm bars: 1.2 × ATR (tighter when safe)
+  - **Claude audit from 10 min → 15 min** (`InpClaudeAuditSec=900`) — less panic closes during normal consolidation.
+  - New TRAIL log line at startup shows all trailing parameters.
+  - Frontend bumped to v4.5.1.
+
 - **Feb 2026 - v4.5.0 — "The Trader's Mind" (conviction + Devil's Advocate + thesis audits)**
   - User feedback: "it just trade base on instruments like a robot as if it doesn't really reason before it take actions... it has Claude it should be better than this"
   - **Devil's Advocate prompt**: entry system prompt now REQUIRES both Claude and GPT-5.2 to articulate a `bearish_case` (counter-argument) + `skip_if` (pre-entry veto condition) on every call. Prevents one-sided confirmation bias.
