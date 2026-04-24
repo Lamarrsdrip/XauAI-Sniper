@@ -84,6 +84,16 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.4.5 — "Hold & Stack" (R-based HardStop + Pyramid)**
+  - **Critical root cause found from user logs**: `HardStopUSD` auto-scaled to 0.8% of balance. Lot size also auto-scaled with balance. Combined effect: 1-point adverse wiggle on a 5.95-lot position = -$481 = 0.8% of balance = HardStop fired in <1 minute. Reviewed user's last 12 losers — ALL followed this pattern (cut on tiny adverse wiggles, price then reversed into profit).
+  - **R-BASED HardStop** (`InpHardStopRBased=true`, `InpHardStopRMulti=3.0`): HardStop now fires at 3× the trade's ORIGINAL risk (3R catastrophic cap) instead of a decoupled $ figure. Adaptive to lot size automatically. The absolute-$ path still available (`InpHardStopRBased=false` + `InpHardStopUSD>0`) for legacy users.
+  - **EarlyAdverseCut OFF by default** (was ON at 0.7R/5min) — this was the other big scalper. Threshold raised to 1.5R when enabled.
+  - **PeakRetracePct 60% → 75%** — only deep give-backs trigger retrace exit.
+  - **Momentum-fade unanimous** (`InpMomentumFadeScore=4` from 3) — need all 4 reversal signals to fade a winner.
+  - **PYRAMID SCALE-IN** (`InpAllowPyramid=true`): when a position is open and (a) regime still supports direction, (b) not direction-locked, (c) price moved ≥0.3 ATR adverse OR ≥0.5 ATR with-trend, (d) 2+ min since last add, (e) no drawdown/streak/daily/news block — opens a new smaller same-direction position. Sizes DECREASE (0.6× multiplier) so 5 trades total have bounded risk, NOT a martingale. Max 5 concurrent (original + 4 adds).
+  - New dashboard line shows "Open: N/5 (pyr max 5)". ARMOR log now prints R-based + fade threshold.
+  - Frontend bumped to v4.4.5.
+
 - **Feb 2026 - v4.4.4 — "Let Runners Run" (smart profit cap)**
   - Root cause from user log: QUICK_PROFIT_CAP force-closed a $356 winner on a $57k account at fixed 0.5% cap ($285), then EA went idle. User complained: "only good high confidence reason should end it, cap should range $50-$5k."
   - **Raised ProfitMax default** from 0.5% → 3.0% of balance (6× breathing room).

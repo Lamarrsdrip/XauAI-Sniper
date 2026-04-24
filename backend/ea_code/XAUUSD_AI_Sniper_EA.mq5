@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.4.4 — Let Runners Run     |
+//|                                     v4.4.5 — Hold & Stack        |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.43"
-#property description "XAUUSD AI Sniper v4.4.4 — Let runners run (smart profit cap)"
+#property version   "4.45"
+#property description "XAUUSD AI Sniper v4.4.5 — Hold trades, stack up to 5 (pyramid)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -105,15 +105,27 @@ input double InpEquityProtect  = 70.0;     // Equity protection (%)
 input bool   InpWeekendClose   = true;     // Close Friday 20:00
 input int    InpMagicNumber    = 20250401;
 
-input group "=== LOSS PROTECTION (v4.2.3) ==="
-input double InpHardStopUSD    = 800.0;    // Hard $ loss cap per trade (0 = off)
-input bool   InpEarlyAdverseCut = true;    // Cut early if down > threshold in first minutes
+input group "=== LOSS PROTECTION (v4.4.5 — trust the SL, stop scalping out) ==="
+input double InpHardStopUSD    = 0;        // Hard $ loss cap per trade (0 = OFF, SL handles it)
+input bool   InpHardStopRBased = true;     // TRUE = HardStop = 3× original SL risk (adaptive, not $-absolute)
+input double InpHardStopRMulti = 3.0;      // HardStop fires at this × initial risk (3R = catastrophic only)
+input bool   InpEarlyAdverseCut = false;   // OFF by default — let SL do its job (was killing good trades)
 input int    InpEarlyAdverseMin = 5;       // Minutes window for early cut
-input double InpEarlyAdverseR  = 0.7;      // R-multiple loss that triggers early cut
+input double InpEarlyAdverseR  = 1.5;      // Only cut if down > 1.5R early (was 0.7 — too tight)
 input bool   InpPeakRetraceExit = true;    // Exit winner if retraces from peak
-input double InpPeakRetracePct = 60.0;     // % retrace from peak to close
+input double InpPeakRetracePct = 75.0;     // % retrace from peak to close (was 60, give room)
 input double InpPeakMinUSD     = 250.0;    // Peak must exceed this USD to arm retrace exit
 input bool   InpMomentumGuard  = true;     // Don't cut winners if momentum is strong
+input int    InpMomentumFadeScore = 4;     // Fade trigger needs ALL 4 signals (was 3 = premature)
+
+input group "=== PYRAMID / SCALE-IN (v4.4.5 — stack up to 5 in same direction) ==="
+input bool   InpAllowPyramid    = true;    // Stack multiple trades in same direction when signal holds
+input int    InpMaxPyramidAdds  = 4;       // Total concurrent = 1 original + this many adds (default 5 total)
+input double InpPyramidMinATR   = 0.3;     // Price must move at least this × ATR before adding
+input double InpPyramidSizeMulti= 0.6;     // Each add is this × previous size (prevents martingale blow-up)
+input int    InpPyramidMinGapSec= 120;     // Min seconds between pyramid adds
+input bool   InpPyramidOnAdverse= true;    // Add when price moves AGAINST us (better entry, averaging in)
+input bool   InpPyramidOnTrend  = true;    // Add when price moves WITH us (trend continuation)
 
 //+------------------------------------------------------------------+
 //| ENUMS                                                            |
@@ -450,7 +462,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.4.4 (LET RUNNERS RUN) READY ===");
+   Print("=== XAUAI SNIPER v4.4.5 (HOLD & STACK) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -465,10 +477,19 @@ int OnInit()
          " (", InpDrawdownLosses, "losses->", DoubleToString(InpDrawdownRisk,2), "%) | Streak=", InpStreakCooldownLosses, " in ", InpStreakWindowSec/60, "min");
    Print("ADAPTIVE: ", InpAdaptiveGrades?"ON":"OFF",
          " (auto-tunes GradeB on recent WR) | AsiaBreakout: ", InpAsiaRangeBreakout?"ON":"OFF");
-   Print("ARMOR: HardStop=$", DoubleToString(EffHardStopUSD(),2),
+   Print("ARMOR v4.4.5: HardStop=",
+         InpHardStopRBased ? StringFormat("R-BASED %.1fR (adaptive)", InpHardStopRMulti)
+                           : StringFormat("$-ABS $%.2f", EffHardStopUSD()),
          " | EarlyAdverse=", InpEarlyAdverseCut?"ON":"OFF", " (", InpEarlyAdverseMin, "min,", DoubleToString(InpEarlyAdverseR,1), "R)",
          " | PeakRetrace=", InpPeakRetraceExit?"ON":"OFF", " (", DoubleToString(InpPeakRetracePct,0), "%,min$", DoubleToString(EffPeakMinUSD(),2), ")",
-         " | MomentumGuard=", InpMomentumGuard?"ON":"OFF");
+         " | MomentumGuard=", InpMomentumGuard?"ON":"OFF", " (fade ≥", InpMomentumFadeScore, "/4)");
+   Print("PYRAMID: ", InpAllowPyramid?"ON":"OFF",
+         " | MaxAdds=", InpMaxPyramidAdds, " (total=", 1+InpMaxPyramidAdds, ")",
+         " | MinATR=", DoubleToString(InpPyramidMinATR,2),
+         " | SizeMulti=", DoubleToString(InpPyramidSizeMulti,2),
+         " | Gap=", InpPyramidMinGapSec, "s",
+         " | OnAdverse=", InpPyramidOnAdverse?"Y":"N",
+         " | OnTrend=", InpPyramidOnTrend?"Y":"N");
    if(InpAutoScale)
       Print("AUTO-SCALE ON | Balance: $", DoubleToString(accInfo.Balance(),2),
             " -> HardStop:$", DoubleToString(autoHardStopUSD,2),
@@ -490,7 +511,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.4.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.4.5 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1075,6 +1096,159 @@ int ScoreSetups(double &score, string &setupName)
 }
 
 //+------------------------------------------------------------------+
+//| PYRAMID / SCALE-IN (v4.4.5)                                      |
+//| Adds a smaller same-direction position when:                     |
+//|   • Price moved ≥ InpPyramidMinATR × ATR (adverse or with trend) |
+//|   • Regime still supports direction                              |
+//|   • Not direction-locked                                         |
+//|   • ≥ InpPyramidMinGapSec since last add                         |
+//|   • Not exceeding InpMaxPyramidAdds                              |
+//| Sizes DECREASE by InpPyramidSizeMulti each add (no martingale).  |
+//+------------------------------------------------------------------+
+datetime lastPyramidAddTime = 0;
+
+void CheckPyramidOpportunity()
+{
+   if(!InpAllowPyramid) return;
+   if(IsInStreakPause()) return;
+   if(drawdownActive) return;             // don't stack in drawdown recovery
+   if(dailyLimitHit || weeklyLossHit) return;
+
+   // Spread guard
+   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   if(spread > InpMaxSpread) return;
+
+   // Throttle: min gap between pyramid adds
+   if(TimeCurrent() - lastPyramidAddTime < InpPyramidMinGapSec) return;
+
+   int openCount = CountMyPositions();
+   if(openCount == 0) return;                               // no base trade to stack on
+   if(openCount >= 1 + InpMaxPyramidAdds) return;           // cap hit
+   if(openCount >= InpMaxOpenTrades) return;                // global cap
+
+   // Find the ORIGINAL (oldest) position in our magic + determine direction
+   ulong  origTicket = 0;
+   datetime origTime = 0;
+   long   origType   = -1;
+   double origPx     = 0, origSL = 0, smallestLot = 1e9;
+   int    totalBuys  = 0, totalSells = 0;
+   double totalLots  = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(!posInfo.SelectByTicket(tk)) continue;
+      if(posInfo.Magic() != InpMagicNumber) continue;
+      if(posInfo.Symbol() != Symbol()) continue;
+      datetime pt = (datetime)PositionGetInteger(POSITION_TIME);
+      if(origTime == 0 || pt < origTime)
+      { origTime = pt; origTicket = tk; origType = posInfo.PositionType();
+        origPx = posInfo.PriceOpen(); origSL = posInfo.StopLoss(); }
+      if(posInfo.PositionType() == POSITION_TYPE_BUY)  totalBuys++;
+      else                                              totalSells++;
+      double v = posInfo.Volume();
+      if(v < smallestLot) smallestLot = v;
+      totalLots += v;
+   }
+   if(origTicket == 0 || origType < 0) return;
+
+   bool isBuy = (origType == POSITION_TYPE_BUY);
+   int dir = isBuy ? 1 : -1;
+
+   // Must not have opposite positions hedging (skip — ambiguous)
+   if(totalBuys > 0 && totalSells > 0) return;
+
+   // Respect direction lockout (a lost side should not be re-pyramided)
+   if(IsDirectionLocked(dir)) return;
+
+   // Regime must still support the direction
+   ENUM_REGIME r = currentRegime;
+   bool regimeOk = false;
+   if(isBuy)
+      regimeOk = (r == REGIME_TRENDING_UP || r == REGIME_BREAKOUT_UP ||
+                  r == REGIME_RANGING || r == REGIME_LOW_VOL);
+   else
+      regimeOk = (r == REGIME_TRENDING_DOWN || r == REGIME_BREAKOUT_DOWN ||
+                  r == REGIME_RANGING || r == REGIME_LOW_VOL);
+   if(!regimeOk) return;
+
+   // Need ATR for distance gate
+   double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0;
+   if(atr <= 0) return;
+
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double curPx = isBuy ? bid : ask;
+   if(curPx <= 0) return;
+
+   // Distance from original entry
+   double moved = isBuy ? (curPx - origPx) : (origPx - curPx);   // +ve = with us, -ve = against
+   double minMove = atr * InpPyramidMinATR;
+
+   bool adverseTrigger = InpPyramidOnAdverse && moved <= -minMove;
+   bool trendTrigger   = InpPyramidOnTrend   && moved >=  (atr * 0.5);
+   if(!adverseTrigger && !trendTrigger) return;
+
+   // Margin & lot: next add = smallest existing lot × sizeMulti, but not below minLot
+   double minLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+   if(smallestLot >= 1e9) smallestLot = minLot;
+   double addLot = smallestLot * InpPyramidSizeMulti;
+   addLot = MathFloor(addLot / lotStep) * lotStep;
+   addLot = MathMax(minLot, MathMin(maxLot, addLot));
+   if(addLot > InpMaxLots) addLot = InpMaxLots;
+   int lotDigits = 2;
+   if(lotStep > 0 && lotStep < 0.01)  lotDigits = 3;
+   if(lotStep > 0 && lotStep < 0.001) lotDigits = 4;
+   addLot = NormalizeDouble(addLot, lotDigits);
+
+   // Margin check
+   double freeMargin = accInfo.FreeMargin();
+   double marginNeeded = 0;
+   ENUM_ORDER_TYPE ot = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(OrderCalcMargin(ot, Symbol(), addLot, isBuy ? ask : bid, marginNeeded))
+   {
+      if(marginNeeded > freeMargin * 0.5) return;  // don't over-commit
+   }
+
+   // SL same as original's SL (anchor risk).  TP = original's TP (shared).
+   double digits = (double)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   double entryPx = isBuy ? ask : bid;
+
+   // Compose reason label
+   string why = adverseTrigger
+      ? StringFormat("PYR+ADV (%.2f ATR adverse, avg-in)", MathAbs(moved)/atr)
+      : StringFormat("PYR+TRN (%.2f ATR with trend)", moved/atr);
+
+   Print("PYRAMID: adding #", openCount + 1, "/", (1 + InpMaxPyramidAdds),
+         " ", isBuy?"BUY":"SELL", " ", DoubleToString(addLot, lotDigits),
+         " lots @ ", DoubleToString(entryPx, (int)digits),
+         " | origPx=", DoubleToString(origPx, (int)digits),
+         " | moved=", DoubleToString(moved, 2),
+         " | totalLots=", DoubleToString(totalLots, lotDigits),
+         " | ", why);
+
+   // Get original TP too
+   posInfo.SelectByTicket(origTicket);
+   double origTP = posInfo.TakeProfit();
+
+   bool ok;
+   if(isBuy) ok = trade.Buy (addLot, Symbol(), 0, origSL, origTP, "XAU-SNIPER|" + why);
+   else      ok = trade.Sell(addLot, Symbol(), 0, origSL, origTP, "XAU-SNIPER|" + why);
+
+   if(ok)
+   {
+      lastPyramidAddTime = TimeCurrent();
+      todayTradeCount++;
+      Print("PYRAMID OK");
+   }
+   else
+   {
+      Print("PYRAMID FAILED: Err=", GetLastError(), " Ret=", trade.ResultRetcode());
+   }
+}
+
+//+------------------------------------------------------------------+
 //| TICK                                                             |
 //+------------------------------------------------------------------+
 void OnTick()
@@ -1129,6 +1303,12 @@ void OnTick()
    // If we just closed a loser and price has reversed back past our entry,
    // re-enter at reduced size once. Pure MQL5 — no AI call needed.
    CheckReEntryOpportunity();
+
+   // === PYRAMID WATCHER (every tick) ===
+   // If we have an open position and price has moved a meaningful distance
+   // (adverse = better entry; with-trend = continuation), stack another
+   // smaller position in the same direction while signal holds.
+   CheckPyramidOpportunity();
 
    // === THROTTLED DASHBOARD REFRESH (every 2s, keeps UI live between bars) ===
    // Uses cached scan state so the display doesn't flicker to zeros between scans.
@@ -1563,8 +1743,19 @@ void ManagePositions()
       // Dir string for logging
       string dirStr = isBuy ? "BUY" : "SELL";
 
-      // ===== PATH 0: HARD LOSS PROTECTION =====
-      if(EffHardStopUSD() > 0 && profit <= -EffHardStopUSD())
+      // ===== PATH 0: HARD LOSS PROTECTION (v4.4.5 — R-based, adaptive) =====
+      // R-BASED hard stop fires only at catastrophic loss (e.g. 3× original SL risk).
+      // This prevents the bug where a big lot + small $-cap = stopped out on 1-point noise.
+      if(InpHardStopRBased && profit <= -(rDollars * InpHardStopRMulti))
+      {
+         LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                 "HARD_STOP_R",
+                 StringFormat("Down %.1fR ($%.2f of %.2f) — %.1fR catastrophic cap hit. Capital preservation.",
+                              MathAbs(profit)/rDollars, profit, rDollars, InpHardStopRMulti));
+         trade.PositionClose(ticket); continue;
+      }
+      // Absolute $ cap ONLY fires if explicitly set and R-based disabled (legacy)
+      if(!InpHardStopRBased && EffHardStopUSD() > 0 && profit <= -EffHardStopUSD())
       {
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "HARD_STOP",
@@ -1688,7 +1879,7 @@ void ManagePositions()
          if(barReverse)   fadeScore++;
          if(emaBroken)    fadeScore++;
          if(streakBroken) fadeScore++;
-         bool momentumFading = structureBroken || fadeScore >= 3;
+         bool momentumFading = structureBroken || fadeScore >= InpMomentumFadeScore;
 
          bool timeExpired = minsOpen > InpQuickExitMin;
          bool capReached  = profit >= EffProfitTakeMax();
@@ -2281,7 +2472,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.4.4 | SMART AUTO | ";
+   d += " XAUAI SNIPER v4.4.5 | HOLD & STACK | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
@@ -2293,7 +2484,7 @@ void UpdateDashboard(int signal, double score, string grade)
    d += StringFormat("RSI: %.1f | ATR: %.2f | Spread: %.0f\n", dRsi, dAtr, (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
    d += StringFormat("Last Score: %.1f [%s]\n", score, grade);
    d += "------------------------------------------\n";
-   d += StringFormat("Open: %d/%d | Today: %d/%d\n", CountMyPositions(), InpMaxOpenTrades, todayTradeCount, InpMaxTradesPerDay);
+   d += StringFormat("Open: %d/%d (pyr max %d) | Today: %d/%d\n", CountMyPositions(), InpMaxOpenTrades, 1+InpMaxPyramidAdds, todayTradeCount, InpMaxTradesPerDay);
    d += StringFormat("Trades: %d | Win: %.0f%% | ML: %d\n", totalTrades, wr, patternCount);
    d += StringFormat("AI: %s | News: %s | Careful: %s\n", InpUseAI?"ON":"OFF", InpUseNewsFilter?"ON":"OFF", InpCarefulMode?"ON":"OFF");
    d += StringFormat("DXY: %s (%s) | Drawdown: %s | Re-entry: %s\n",
