@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.5.7 — Heartbeat           |
+//|                                     v4.5.8 — User Gates          |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.57"
-#property description "XAUUSD AI Sniper v4.5.7 — Heartbeat (never silently stop scanning)"
+#property version   "4.58"
+#property description "XAUUSD AI Sniper v4.5.8 — User-controlled risk gates (0 = disable)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -24,11 +24,11 @@ input string InpLicensePIN     = "";
 input group "=== RISK (Gate 4) ==="
 input double InpRiskPercent    = 1.0;      // Base risk per trade (%)
 input double InpMaxLots        = 10.0;     // Hard max lots
-input double InpDailyLossLimit = 6.0;      // Daily loss cap (%) — QuantPerp uses 6%
+input double InpDailyLossLimit = 6.0;      // Daily loss cap (%) — set 0 to disable
 input int    InpMaxOpenTrades  = 5;        // Max open positions
 input int    InpMaxTradesPerDay= 30;       // No artificial limit until target
-input double InpWeeklyTarget   = 50.0;     // Weekly profit target (%)
-input double InpWeeklyMaxLoss  = 15.0;     // Weekly max loss (%)
+input double InpWeeklyTarget   = 50.0;     // Weekly profit target (%) — set 0 to disable
+input double InpWeeklyMaxLoss  = 15.0;     // Weekly max loss (%) — set 0 to disable
 input bool   InpCarefulMode    = true;     // Scale down near target
 
 input group "=== STRATEGY ==="
@@ -137,7 +137,7 @@ input double InpVolCalmBoost   = 1.10;     // Lot boost during calm stable marke
 
 input group "=== SAFETY ==="
 input double InpMaxSpread      = 150.0;    // Max spread (points)
-input double InpEquityProtect  = 70.0;     // Equity protection (%)
+input double InpEquityProtect  = 70.0;     // Equity protection (%) — set 0 to disable
 input bool   InpWeekendClose   = true;     // Close Friday 20:00
 input int    InpMagicNumber    = 20250401;
 
@@ -687,7 +687,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.5.7 (HEARTBEAT) READY ===");
+   Print("=== XAUAI SNIPER v4.5.8 (USER GATES) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -758,7 +758,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.5.7 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.5.8 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1499,7 +1499,7 @@ void CheckPyramidOpportunity()
    }
 
    // SL same as original's SL (anchor risk).  TP = original's TP (shared).
-   double digits = (double)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   int    digits  = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double entryPx = isBuy ? ask : bid;
 
    // Compose reason label
@@ -1509,8 +1509,8 @@ void CheckPyramidOpportunity()
 
    Print("PYRAMID: adding #", openCount + 1, "/", (1 + InpMaxPyramidAdds),
          " ", isBuy?"BUY":"SELL", " ", DoubleToString(addLot, lotDigits),
-         " lots @ ", DoubleToString(entryPx, (int)digits),
-         " | origPx=", DoubleToString(origPx, (int)digits),
+         " lots @ ", DoubleToString(entryPx, digits),
+         " | origPx=", DoubleToString(origPx, digits),
          " | moved=", DoubleToString(moved, 2),
          " | totalLots=", DoubleToString(totalLots, lotDigits),
          " | ", why);
@@ -1525,8 +1525,7 @@ void CheckPyramidOpportunity()
    // price (adverse/trend continuation price). Instead, place a fresh ATR-based
    // SL for the pyramid add so it has normal breathing room.
    double pyramidSL = origSL;
-   double atrBufF = atr; // already computed earlier in function
-   double freshSlDist = atrBufF * InpSLMultiplier;
+   double freshSlDist = atr * InpSLMultiplier;
    if(isBuy && origSL > origPx)
    {
       pyramidSL = NormalizeDouble(entryPx - freshSlDist, digits);
@@ -1594,9 +1593,9 @@ void OnTick()
    static datetime lastGateHeartbeat = 0;
    bool heartbeatDue = (TimeCurrent() - lastGateHeartbeat >= 300);
 
-   // Equity/daily/weekly limits
+   // Equity/daily/weekly limits — a value of 0 fully disables the gate (user choice)
    double equity = accInfo.Equity();
-   if(equity < initialBalance * InpEquityProtect / 100.0)
+   if(InpEquityProtect > 0 && equity < initialBalance * InpEquityProtect / 100.0)
    {
       CloseAll();
       if(heartbeatDue) { Print("⏸  EQUITY PROTECT ACTIVE — equity $", DoubleToString(equity,2),
@@ -1607,34 +1606,35 @@ void OnTick()
    }
 
    double weeklyPnL = equity - weeklyStartEquity;
-   if(weeklyPnL >= weeklyStartEquity * InpWeeklyTarget / 100.0)
+   if(InpWeeklyTarget > 0 && weeklyPnL >= weeklyStartEquity * InpWeeklyTarget / 100.0)
    {
       if(!weeklyTargetHit) { CloseAll(); Print("WEEKLY TARGET HIT: +$", DoubleToString(weeklyPnL, 2)); }
       weeklyTargetHit = true;
       if(heartbeatDue) { Print("⏸  WEEKLY TARGET HIT — +$", DoubleToString(weeklyPnL, 2),
-         " reached. EA paused until Monday to protect gains.");
+         " reached (", DoubleToString(InpWeeklyTarget,1), "% of $", DoubleToString(weeklyStartEquity,2),
+         "). EA paused until Monday to protect gains.");
          lastGateHeartbeat = TimeCurrent(); }
       return;
    }
-   if(weeklyPnL < -(weeklyStartEquity * InpWeeklyMaxLoss / 100.0))
+   if(InpWeeklyMaxLoss > 0 && weeklyPnL < -(weeklyStartEquity * InpWeeklyMaxLoss / 100.0))
    {
       if(!weeklyLossHit) { CloseAll(); Print("WEEKLY LOSS LIMIT"); }
       weeklyLossHit = true;
       if(heartbeatDue) { Print("⏸  WEEKLY LOSS LIMIT — down $", DoubleToString(MathAbs(weeklyPnL),2),
          " (> ", DoubleToString(InpWeeklyMaxLoss,1), "% of weekly start $", DoubleToString(weeklyStartEquity,2),
-         "). EA paused until Monday.");
+         "). EA paused until Monday. Set InpWeeklyMaxLoss=0 to disable this gate.");
          lastGateHeartbeat = TimeCurrent(); }
       return;
    }
 
    double dailyPnL = equity - dailyStartEquity;
-   if(dailyPnL < -(dailyStartEquity * InpDailyLossLimit / 100.0))
+   if(InpDailyLossLimit > 0 && dailyPnL < -(dailyStartEquity * InpDailyLossLimit / 100.0))
    {
       if(!dailyLimitHit) Print("DAILY LIMIT: -$", DoubleToString(MathAbs(dailyPnL), 2));
       dailyLimitHit = true; if(CountMyPositions() > 0) CloseAll();
       if(heartbeatDue) { Print("⏸  DAILY LOSS LIMIT — down $", DoubleToString(MathAbs(dailyPnL),2),
          " (> ", DoubleToString(InpDailyLossLimit,1), "% of daily start $", DoubleToString(dailyStartEquity,2),
-         "). EA paused until next trading day (auto-resets at midnight broker time).");
+         "). EA paused until next trading day. Set InpDailyLossLimit=0 to disable this gate.");
          lastGateHeartbeat = TimeCurrent(); }
       return;
    }
@@ -2991,7 +2991,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.5.7 | HEARTBEAT | ";
+   d += " XAUAI SNIPER v4.5.8 | USER GATES | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

@@ -84,6 +84,20 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.5.8 — "User Gates" (full user control over risk limits)**
+  - User concern: the weekly/daily/equity limits that pause the EA should respect user configuration.
+  - **Truth**: the inputs `InpDailyLossLimit`, `InpWeeklyMaxLoss`, `InpWeeklyTarget`, `InpEquityProtect` were already user-configurable — but couldn't be fully disabled.
+  - **v4.5.8 adds `0 = disabled`**: set any gate to `0` in the input panel to completely bypass it.
+  - Input descriptions updated to say "set 0 to disable" so it's discoverable in MetaEditor's input panel.
+  - Heartbeat logs now hint at the disable option: `Set InpDailyLossLimit=0 to disable this gate`.
+  - Default values unchanged (6% daily, 15% weekly loss, 50% weekly target, 70% equity protect).
+
+- **Feb 2026 - v4.5.7 — "Heartbeat" (never silently stop scanning)**
+  - User reported: "Each 5M scanning update has stopped for 10 min".
+  - Root cause: user's account took a massive floating loss (-$44,944). When realized, it breached the weekly/daily loss limit. The EA correctly paused for capital preservation — but printed the pause reason only ONCE and then silently returned on every subsequent tick forever, making the EA look dead.
+  - Fix: 5-minute heartbeat log prints the active pause reason (EQUITY_PROTECT / WEEKLY_LOSS / WEEKLY_TARGET / DAILY_LOSS) with the specific $ amounts and thresholds, so the user always knows exactly why the bot is quiet.
+  - Frontend bumped to v4.5.7.
+
 - **Feb 2026 - v4.5.6 — "Live-Ready" (pre-live P0 bug sweep)**
   - Ran comprehensive pre-live-trading audit via troubleshoot_agent. Found and fixed 5 bugs that would cause real money losses on live broker:
   - **P0-1/2/3 — Silent PositionModify failures** (8 call sites): Added new `SafeModifySL()` helper that:
