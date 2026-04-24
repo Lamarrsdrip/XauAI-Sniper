@@ -84,6 +84,17 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.5.4 — "Partial TP" (lock half at +1R, ride the rest)**
+  - User-requested. ZERO LLM credit cost — pure MQL5 logic.
+  - When a trade reaches +1R in profit, bot auto-closes 50% of the position via `CTrade::PositionClosePartial()`.
+  - Remaining 50% stays alive and rides the trailing SL (or conviction runner if ≥90% conf).
+  - Skipped on ≥90% AI-confidence trades by default (`InpPartialSkipHighConf=true`) — those are meant to fully run via the 3×ATR conviction runner trail.
+  - Fires ONCE per ticket (guarded by `partialTakenTickets[]` array). Reset on position close.
+  - Lot math guards: partial AND remaining chunks must both be ≥ broker minimum, otherwise skipped cleanly.
+  - New inputs: `InpPartialTP=ON`, `InpPartialTPAtR=1.0`, `InpPartialPct=0.5`, `InpPartialSkipHighConf=true`.
+  - Log: `PARTIAL_TP #123 closed 1.00 of 2.00 lots at +1.02R ($185 locked). Remainder 1.00 rides the trail.`
+  - Frontend bumped to v4.5.4.
+
 - **Feb 2026 - v4.5.3 — "Conviction Runner" (let 90%+ trades RUN)**
   - New tier of trail protection for the bot's highest-quality setups.
   - Triggers when (a) original Dual-AI entry confidence was ≥90% AND (b) trade is already ≥+2R in profit.

@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.5.3 — Conviction Runner   |
+//|                                     v4.5.4 — Partial TP          |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.53"
-#property description "XAUUSD AI Sniper v4.5.3 — Conviction Runner (90%+ trades at +2R get 3x ATR trail)"
+#property version   "4.54"
+#property description "XAUUSD AI Sniper v4.5.4 — Partial TP (lock half at +1R, ride the rest)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -110,6 +110,12 @@ input bool   InpConvictionRunner  = true;  // TRUE = high-conf trades past +2R g
 input int    InpConvRunMinConf    = 90;    // Original AI confidence must have been >= this
 input double InpConvRunMinR       = 2.0;   // Trade must be at least this much in profit (R-multiples)
 input double InpConvRunnerMulti   = 3.0;   // Trail distance on these monsters = this × ATR
+
+input group "=== PARTIAL TAKE-PROFIT (v4.5.4 — lock half, ride the rest) ==="
+input bool   InpPartialTP         = true;  // Close part of the position at +1R, let rest run
+input double InpPartialTPAtR      = 1.0;   // Fire partial at this R-multiple of profit
+input double InpPartialPct        = 0.5;   // Fraction of position to close (0.5 = 50%)
+input bool   InpPartialSkipHighConf = true;// Skip partial on 90%+ trades (let them fully run)
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -268,6 +274,9 @@ datetime   asiaRangeDay = 0;
 ulong      peakTickets[];
 double     peakProfits[];
 
+// v4.5.4 — Per-position partial-TP tracker (prevents double-firing the partial)
+ulong      partialTakenTickets[];
+
 // AUTO-SCALE derived values (computed in OnInit when InpAutoScale=true)
 double     autoHardStopUSD    = 0;
 double     autoProfitTakeMin  = 0;
@@ -325,6 +334,32 @@ void ClearPeakProfit(ulong ticket)
    }
    ArrayResize(peakTickets, n);
    ArrayResize(peakProfits, n);
+}
+
+// v4.5.4 — Partial-TP tracker helpers
+bool PartialAlreadyTaken(ulong ticket)
+{
+   for(int i = 0; i < ArraySize(partialTakenTickets); i++)
+      if(partialTakenTickets[i] == ticket) return true;
+   return false;
+}
+void MarkPartialTaken(ulong ticket)
+{
+   if(PartialAlreadyTaken(ticket)) return;
+   int n = ArraySize(partialTakenTickets);
+   ArrayResize(partialTakenTickets, n+1);
+   partialTakenTickets[n] = ticket;
+}
+void ClearPartialTaken(ulong ticket)
+{
+   int idx = -1;
+   for(int i = 0; i < ArraySize(partialTakenTickets); i++)
+      if(partialTakenTickets[i] == ticket) { idx = i; break; }
+   if(idx < 0) return;
+   int n = ArraySize(partialTakenTickets) - 1;
+   for(int i = idx; i < n; i++)
+      partialTakenTickets[i] = partialTakenTickets[i+1];
+   ArrayResize(partialTakenTickets, n);
 }
 
 //+------------------------------------------------------------------+
@@ -578,7 +613,7 @@ int OnInit()
    todayLossCount = 0; todayLossResetDay = TimeCurrent(); drawdownActive = false;
    todayReEntryCount = 0;
    asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false; asiaRangeDay = 0;
-   ArrayResize(peakTickets, 0); ArrayResize(peakProfits, 0);
+   ArrayResize(peakTickets, 0); ArrayResize(peakProfits, 0); ArrayResize(partialTakenTickets, 0);
    currentTradeThesis = ""; currentTradeInvalidation = ""; currentTradeTarget = "";
    currentTradeBearishCase = ""; currentTradeConfidence = 0;
    lastDashSignal = 0; lastDashScore = 0.0; lastDashGrade = "";
@@ -589,7 +624,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.5.3 (CONVICTION RUNNER) READY ===");
+   Print("=== XAUAI SNIPER v4.5.4 (PARTIAL TP) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -646,6 +681,10 @@ int OnInit()
          " | Min conf=", InpConvRunMinConf, "%",
          " | Min profit=", DoubleToString(InpConvRunMinR,2), "R",
          " | Trail=", DoubleToString(InpConvRunnerMulti,2), "xATR (monster)");
+   Print("PARTIAL-TP v4.5.4: ", InpPartialTP?"ON":"OFF",
+         " | Fires at +", DoubleToString(InpPartialTPAtR,2), "R",
+         " | Close ", DoubleToString(InpPartialPct*100, 0), "% of position",
+         " | Skip on ≥", InpConvRunMinConf, "% conf=", InpPartialSkipHighConf?"Y":"N");
    return INIT_SUCCEEDED;
 }
 
@@ -656,7 +695,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.5.3 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.5.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -2014,6 +2053,53 @@ void ManagePositions()
          }
       }
 
+      // v4.5.4 — PARTIAL TAKE-PROFIT
+      // At +1R (default), close a fraction of the position to lock guaranteed profit,
+      // let the remainder ride the trailing SL. Fires ONCE per ticket.
+      // Skipped on high-conviction trades (>= InpConvRunMinConf) — those are meant
+      // to fully run via the conviction runner wide trail.
+      if(InpPartialTP && !PartialAlreadyTaken(ticket))
+      {
+         bool skipHighConf = InpPartialSkipHighConf &&
+                             currentTradeConfidence >= InpConvRunMinConf;
+         double profitR = (rDollars > 0) ? (profit / rDollars) : 0;
+         if(!skipHighConf && profitR >= InpPartialTPAtR)
+         {
+            double curLots = posInfo.Volume();
+            double minLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+            double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+            int    lotDig  = 2;
+            if(lotStep > 0 && lotStep < 0.01)  lotDig = 3;
+            if(lotStep > 0 && lotStep < 0.001) lotDig = 4;
+
+            double partialLots = curLots * InpPartialPct;
+            partialLots = MathFloor(partialLots / lotStep) * lotStep;
+            partialLots = NormalizeDouble(partialLots, lotDig);
+
+            // Only fire if both the partial AND the remaining chunk are >= broker minimum
+            double remaining = NormalizeDouble(curLots - partialLots, lotDig);
+            if(partialLots >= minLot && remaining >= minLot)
+            {
+               if(trade.PositionClosePartial(ticket, partialLots))
+               {
+                  MarkPartialTaken(ticket);
+                  Print("PARTIAL_TP #", ticket, " closed ", DoubleToString(partialLots, lotDig),
+                        " of ", DoubleToString(curLots, lotDig), " lots at +",
+                        DoubleToString(profitR, 2), "R ($", DoubleToString(profit * InpPartialPct, 2),
+                        " locked). Remainder ", DoubleToString(remaining, lotDig),
+                        " rides the trail.");
+               }
+               else
+               {
+                  Print("PARTIAL_TP FAIL #", ticket, " Err=", GetLastError(),
+                        " Ret=", trade.ResultRetcode());
+                  // Mark anyway to avoid retry-spam on persistent broker errors
+                  MarkPartialTaken(ticket);
+               }
+            }
+         }
+      }
+
       // B2: Quick profit take — FOUR-factor confirmation for fading
       if(profit >= EffProfitTakeMin() && profit >= MathMax(75, EffProfitTakeMin() * 0.5))
       {
@@ -2649,7 +2735,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    RecordCloseForStreak(wasLoss);
    UpdateDrawdownState(wasLoss);
    // Drop peak tracker entry for this ticket (posId was computed above)
-   if(posId > 0) ClearPeakProfit(posId);
+   if(posId > 0) { ClearPeakProfit(posId); ClearPartialTaken(posId); }
    // Clear active thesis (no open position now until next entry)
    if(CountMyPositions() == 0)
    {
@@ -2719,7 +2805,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.5.3 | CONVICTION | ";
+   d += " XAUAI SNIPER v4.5.4 | PARTIAL TP | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
