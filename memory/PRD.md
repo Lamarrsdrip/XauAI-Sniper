@@ -84,6 +84,15 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.5.3 — "Conviction Runner" (let 90%+ trades RUN)**
+  - New tier of trail protection for the bot's highest-quality setups.
+  - Triggers when (a) original Dual-AI entry confidence was ≥90% AND (b) trade is already ≥+2R in profit.
+  - Under these conditions, trail widens to 3.0 × ATR (largest in the system) — bigger than breakout trail (2.5×) and double the range trail (1.5×).
+  - Rationale: if both Claude + GPT-5.2 said "textbook, would bet big" at 90%+ AND the market has validated by giving us 2R, this is the trade of the day. Low residual risk (already +2R locked), maximum upside.
+  - New inputs: `InpConvictionRunner=ON`, `InpConvRunMinConf=90`, `InpConvRunMinR=2.0`, `InpConvRunnerMulti=3.0`.
+  - Logs once per minute when upgrade fires: `CONVICTION RUNNER: 91% conf + 2.15R profit → trail upgrade 2.20x → 3.00xATR`.
+  - Frontend bumped to v4.5.3.
+
 - **Feb 2026 - v4.5.2 — "Trend-Aware Trail" (market-mood adaptive trailing)**
   - Added `GetTrailATRMulti()` helper that picks the best trail distance based on current regime + EMA separation + volatility overlay.
   - Regime-based base trail:

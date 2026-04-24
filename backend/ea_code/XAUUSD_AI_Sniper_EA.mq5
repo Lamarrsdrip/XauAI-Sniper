@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.5.2 — Trend-Aware Trail   |
+//|                                     v4.5.3 — Conviction Runner   |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.52"
-#property description "XAUUSD AI Sniper v4.5.2 — Trend-Aware Trail (wide on trends, tight on ranges)"
+#property version   "4.53"
+#property description "XAUUSD AI Sniper v4.5.3 — Conviction Runner (90%+ trades at +2R get 3x ATR trail)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -104,6 +104,12 @@ input double InpTrendTrailMulti   = 2.2;   // Trending regime + strong EMA sep �
 input double InpStrongTrendTrail  = 2.5;   // Breakout / very strong trend → this × ATR
 input double InpLowVolTrailMulti  = 1.0;   // LOW_VOL regime → tighter (ranges are tight)
 input double InpChoppyTrailMulti  = 1.3;   // CHOPPY regime → moderate
+
+input group "=== CONVICTION RUNNER (v4.5.3 — let 90%+ winners RUN) ==="
+input bool   InpConvictionRunner  = true;  // TRUE = high-conf trades past +2R get max trail
+input int    InpConvRunMinConf    = 90;    // Original AI confidence must have been >= this
+input double InpConvRunMinR       = 2.0;   // Trade must be at least this much in profit (R-multiples)
+input double InpConvRunnerMulti   = 3.0;   // Trail distance on these monsters = this × ATR
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -415,18 +421,26 @@ double GetVolAdaptiveMult()
 //|   • Current regime (trending vs ranging vs breakout vs low-vol)  |
 //|   • EMA separation (strong trend = bigger stretch)               |
 //|   • Volatility spike/calm (existing v4.5.1 logic)                |
-//| Reasoning: trend days grind one direction with shallow pullbacks |
-//| (wider trail = ride the move); range days chop (tight trail).    |
+//| v4.5.3 CONVICTION RUNNER — if the trade was entered at           |
+//|   ≥ InpConvRunMinConf% AI confidence AND is already              |
+//|   ≥ InpConvRunMinR in profit, widen to InpConvRunnerMulti × ATR. |
+//|   These are the trades where both AIs said "textbook setup" AND  |
+//|   the market has already validated it — ride them for max gain.  |
 //+------------------------------------------------------------------+
-double GetTrailATRMulti()
+double GetTrailATRMulti(double profitRRatio = 0.0)
 {
    // Fallback: respect v4.5.1 defaults if trend-aware trail disabled
    if(!InpTrendAwareTrail)
    {
       double volMult = GetVolAdaptiveMult();
-      if(volMult < 0.85)      return InpCapTrailSpikeMulti;
-      else if(volMult > 1.05) return InpCapTrailCalmMulti;
-      return InpCapTrailATRMulti;
+      double baseF = InpCapTrailATRMulti;
+      if(volMult < 0.85)      baseF = InpCapTrailSpikeMulti;
+      else if(volMult > 1.05) baseF = InpCapTrailCalmMulti;
+      // Conviction runner overlay even when trend-aware is off
+      if(InpConvictionRunner && currentTradeConfidence >= InpConvRunMinConf &&
+         profitRRatio >= InpConvRunMinR)
+         return MathMax(baseF, InpConvRunnerMulti);
+      return baseF;
    }
 
    double base;
@@ -464,6 +478,28 @@ double GetTrailATRMulti()
    double volM = GetVolAdaptiveMult();
    if(volM < 0.85)  base = MathMax(base, InpCapTrailSpikeMulti);   // spike → widen if not already
    else if(volM > 1.05) base = MathMin(base, MathMax(InpCapTrailCalmMulti, 1.0));  // calm → tighten (but not absurdly)
+
+   // v4.5.3 — CONVICTION RUNNER OVERLAY: if the AI was ≥90% confident AND the trade
+   // is already ≥+2R in profit, upgrade to the monster-runner trail. This is the
+   // "textbook setup validated by market" case — let it run for max profit.
+   if(InpConvictionRunner && currentTradeConfidence >= InpConvRunMinConf &&
+      profitRRatio >= InpConvRunMinR)
+   {
+      double convTrail = InpConvRunnerMulti;
+      if(convTrail > base)
+      {
+         // Log the upgrade once per bar so we see it firing
+         static datetime lastConvLog = 0;
+         if(TimeCurrent() - lastConvLog > 60)
+         {
+            Print("CONVICTION RUNNER: ", currentTradeConfidence, "% conf + ",
+                  DoubleToString(profitRRatio,2), "R profit → trail upgrade ",
+                  DoubleToString(base,2), "x → ", DoubleToString(convTrail,2), "xATR");
+            lastConvLog = TimeCurrent();
+         }
+         base = convTrail;
+      }
+   }
 
    return base;
 }
@@ -553,7 +589,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.5.2 (TREND-AWARE TRAIL) READY ===");
+   Print("=== XAUAI SNIPER v4.5.3 (CONVICTION RUNNER) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -606,6 +642,10 @@ int OnInit()
          " Choppy=", DoubleToString(InpChoppyTrailMulti,2), "xATR",
          " LowVol=", DoubleToString(InpLowVolTrailMulti,2), "xATR",
          " | ClaudeAudit=", InpClaudeAuditSec, "s");
+   Print("CONVICTION-RUNNER v4.5.3: ", InpConvictionRunner?"ON":"OFF",
+         " | Min conf=", InpConvRunMinConf, "%",
+         " | Min profit=", DoubleToString(InpConvRunMinR,2), "R",
+         " | Trail=", DoubleToString(InpConvRunnerMulti,2), "xATR (monster)");
    return INIT_SUCCEEDED;
 }
 
@@ -616,7 +656,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.5.2 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.5.3 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -2060,7 +2100,9 @@ void ManagePositions()
          if(capReached && InpSmartCapExit)
          {
             // v4.5.2 — Trend-aware, volatility-aware trailing distance.
-            double trailATR = GetTrailATRMulti();
+            // v4.5.3 — Pass profit/R ratio so conviction-runner upgrade can fire.
+            double profitR = (rDollars > 0) ? (profit / rDollars) : 0;
+            double trailATR = GetTrailATRMulti(profitR);
             double trailDist = atr * trailATR;
 
             double lockSL;
@@ -2112,7 +2154,9 @@ void ManagePositions()
          if(timeExpired && InpMomentumGuard && momentumStrong)
          {
             // v4.5.2 — Same trend-aware trail on time-expired runners
-            double trailATR2 = GetTrailATRMulti();
+            // v4.5.3 — Pass profit/R ratio so conviction-runner upgrade can fire.
+            double profitR2 = (rDollars > 0) ? (profit / rDollars) : 0;
+            double trailATR2 = GetTrailATRMulti(profitR2);
             double trailDist2 = atr * trailATR2;
 
             double lockSL;
@@ -2675,7 +2719,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.5.2 | TREND-AWARE | ";
+   d += " XAUAI SNIPER v4.5.3 | CONVICTION | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
