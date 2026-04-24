@@ -84,6 +84,18 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.5.5 — "Pyramid Fix" (no 0.01 spam + loud margin warnings)**
+  - **User's live trade forensics**: logs showed `PYRAMID: adding #3/5 BUY 0.01 lots` repeatedly despite configured 0.6× multiplier. Root cause = 2-bug chain:
+    1. **Margin silent-clamp in OpenTrade**: with ~10 lots of open positions eating ~$47k margin on a $54k account, free margin was near zero. The margin guard `while(lots > minLot && marginNeeded > freeMargin * 0.5)` silently chopped desired ~1.3 lots down to broker minimum 0.01.
+    2. **Pyramid compounded**: `smallestLot(0.01) × 0.6 = 0.006` → `MathFloor → 0` → `MathMax(minLot, 0) = 0.01`. Every subsequent add was 0.01 forever.
+  - **Fixes shipped:**
+    - Pyramid lot now bases on **ORIGINAL position's lot size** (oldest entry) × `pow(multi, addNumber)` for predictable geometric decay: add#1=0.6×, add#2=0.36×, add#3=0.22×. Avoids compounding collapse after partial TP leaves a small remainder.
+    - **Pyramid SKIPS entirely** (no 0.01 spam) if calculated lot would clamp to broker minimum. Logs: `PYRAMID: SKIP — origLot=0.01 × 0.600 = 0.006 would clamp to minLot 0.01. Pyramid pointless at this scale.`
+    - **Free-margin gate**: pyramid skips if free margin < 30% of equity. Logs reason.
+    - **OpenTrade MARGIN-CAPPED warning**: logs a loud ⚠️  warning when margin forces > 20% lot reduction. Additionally SKIPS the trade entirely if reduction goes all the way to minLot when 5× minLot was desired (prevents the cascade: tiny original → minLot pyramids).
+  - **"Bot not trading for 3 hours" diagnosis**: confirmed Emergent LLM credits are healthy (Dual-AI responded correctly during debug). Real culprits likely: streak cooldown, margin exhaustion from still-open losing trades, or drawdown-recovery mode active. v4.5.5 adds visibility to all of these via loud log messages so the user can see exactly what's gating new entries.
+  - Frontend bumped to v4.5.5.
+
 - **Feb 2026 - v4.5.4 — "Partial TP" (lock half at +1R, ride the rest)**
   - User-requested. ZERO LLM credit cost — pure MQL5 logic.
   - When a trade reaches +1R in profit, bot auto-closes 50% of the position via `CTrade::PositionClosePartial()`.

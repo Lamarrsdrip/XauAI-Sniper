@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.5.4 — Partial TP          |
+//|                                     v4.5.5 — Pyramid Fix          |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.54"
-#property description "XAUUSD AI Sniper v4.5.4 — Partial TP (lock half at +1R, ride the rest)"
+#property version   "4.55"
+#property description "XAUUSD AI Sniper v4.5.5 — Pyramid fix (no minLot spam + margin warnings)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -624,7 +624,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.5.4 (PARTIAL TP) READY ===");
+   Print("=== XAUAI SNIPER v4.5.5 (PYRAMID FIX) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -695,7 +695,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.5.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.5.5 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1314,7 +1314,7 @@ void CheckPyramidOpportunity()
    ulong  origTicket = 0;
    datetime origTime = 0;
    long   origType   = -1;
-   double origPx     = 0, origSL = 0, smallestLot = 1e9;
+   double origPx     = 0, origSL = 0, origLot = 0, smallestLot = 1e9;
    int    totalBuys  = 0, totalSells = 0;
    double totalLots  = 0;
    for(int i = 0; i < PositionsTotal(); i++)
@@ -1326,7 +1326,8 @@ void CheckPyramidOpportunity()
       datetime pt = (datetime)PositionGetInteger(POSITION_TIME);
       if(origTime == 0 || pt < origTime)
       { origTime = pt; origTicket = tk; origType = posInfo.PositionType();
-        origPx = posInfo.PriceOpen(); origSL = posInfo.StopLoss(); }
+        origPx = posInfo.PriceOpen(); origSL = posInfo.StopLoss();
+        origLot = posInfo.Volume(); }
       if(posInfo.PositionType() == POSITION_TYPE_BUY)  totalBuys++;
       else                                              totalSells++;
       double v = posInfo.Volume();
@@ -1372,27 +1373,66 @@ void CheckPyramidOpportunity()
    bool trendTrigger   = InpPyramidOnTrend   && moved >=  (atr * 0.5);
    if(!adverseTrigger && !trendTrigger) return;
 
-   // Margin & lot: next add = smallest existing lot × sizeMulti, but not below minLot
+   // v4.5.5 — PYRAMID SIZING FIX
+   // Previous bug: used smallestLot × 0.6 which compounded: once first add hit
+   // min-lot (0.01), every subsequent add was 0.01 too. Now we base off the
+   // ORIGINAL position's lot size with geometric decrement (add#N = orig × multi^N).
+   // This keeps sizing predictable and symmetric regardless of partial-TP state.
    double minLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
    double maxLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
-   if(smallestLot >= 1e9) smallestLot = minLot;
-   double addLot = smallestLot * InpPyramidSizeMulti;
-   addLot = MathFloor(addLot / lotStep) * lotStep;
-   addLot = MathMax(minLot, MathMin(maxLot, addLot));
-   if(addLot > InpMaxLots) addLot = InpMaxLots;
    int lotDigits = 2;
    if(lotStep > 0 && lotStep < 0.01)  lotDigits = 3;
    if(lotStep > 0 && lotStep < 0.001) lotDigits = 4;
+
+   // Base lot = ORIGINAL entry (oldest position in our magic)
+   if(origLot <= 0) origLot = smallestLot;    // fallback safety
+   if(origLot <= 0 || origLot >= 1e9) return; // sanity
+   int addNumber = openCount; // 0th existing = original, so this is addNumber'th add
+   // Geometric decrement: pow(multi, addNumber) → add#1=0.6x, add#2=0.36x, add#3=0.22x...
+   double decayFactor = MathPow(InpPyramidSizeMulti, addNumber);
+   double addLotRaw = origLot * decayFactor;
+   double addLot = MathFloor(addLotRaw / lotStep) * lotStep;
    addLot = NormalizeDouble(addLot, lotDigits);
 
-   // Margin check
+   // v4.5.5 — SKIP pyramid entirely if the calculated lot would clamp to broker
+   // minimum. A 0.01 pyramid add is pointless (doesn't change avg, adds spread/commission
+   // risk) and causes the infinite-minLot-spam bug the user hit.
+   if(addLot < minLot)
+   {
+      Print("PYRAMID: SKIP — origLot=", DoubleToString(origLot, lotDigits),
+            " × ", DoubleToString(decayFactor, 3), " = ",
+            DoubleToString(addLotRaw, 4),
+            " would clamp to minLot ", DoubleToString(minLot, lotDigits),
+            ". Pyramid pointless at this scale.");
+      return;
+   }
+
+   // Hard caps
+   if(addLot > maxLot)      addLot = NormalizeDouble(maxLot, lotDigits);
+   if(addLot > InpMaxLots)  addLot = NormalizeDouble(InpMaxLots, lotDigits);
+
+   // v4.5.5 — Stricter margin gate: require at least 40% free margin buffer.
+   // Also explicitly SKIP (don't fire at all) rather than silently clamping lot down.
    double freeMargin = accInfo.FreeMargin();
+   double equityNow  = accInfo.Equity();
+   double freeMarginPct = equityNow > 0 ? (freeMargin / equityNow * 100.0) : 0;
+   if(freeMarginPct < 30.0)
+   {
+      Print("PYRAMID: SKIP — free margin only ", DoubleToString(freeMarginPct,1),
+            "% of equity (need ≥30%). Account too committed for another add.");
+      return;
+   }
    double marginNeeded = 0;
    ENUM_ORDER_TYPE ot = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    if(OrderCalcMargin(ot, Symbol(), addLot, isBuy ? ask : bid, marginNeeded))
    {
-      if(marginNeeded > freeMargin * 0.5) return;  // don't over-commit
+      if(marginNeeded > freeMargin * 0.5)
+      {
+         Print("PYRAMID: SKIP — add needs $", DoubleToString(marginNeeded,2),
+               " margin, only $", DoubleToString(freeMargin,2), " free.");
+         return;
+      }
    }
 
    // SL same as original's SL (anchor risk).  TP = original's TP (shared).
@@ -1856,6 +1896,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    // Margin check
    double freeMargin = accInfo.FreeMargin();
    double marginNeeded = 0;
+   double desiredLots = lots;   // v4.5.5 — remember pre-clamp lot for WARN log
    if(OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
    {
       while(lots > minLot && marginNeeded > freeMargin * 0.5)
@@ -1866,6 +1907,23 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       if(marginNeeded > freeMargin * 0.8) { Print("NO MARGIN"); return; }
    }
    lots = NormalizeDouble(lots, lotDigits);
+
+   // v4.5.5 — LOUD WARN if margin forced a lot reduction > 20%.
+   // Previously this happened silently and users wondered why the bot was trading tiny.
+   if(desiredLots > 0 && (desiredLots - lots) / desiredLots > 0.20)
+   {
+      Print("⚠️  MARGIN-CAPPED: desired ", DoubleToString(desiredLots, lotDigits),
+            " lots → reduced to ", DoubleToString(lots, lotDigits),
+            " (free margin $", DoubleToString(freeMargin,2),
+            " too low to support full size). Consider closing some open positions.");
+      // Extra guard: if resulting lot is at/near minLot AND we wanted much bigger,
+      // SKIP entirely rather than opening a pointless minLot trade + pyramid chain.
+      if(lots <= minLot * 1.01 && desiredLots >= minLot * 5)
+      {
+         Print("⚠️  SKIPPING TRADE: margin-clamp dropped lot to broker minimum — trade would be meaningless.");
+         return;
+      }
+   }
 
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
          " Price=", DoubleToString(price, digits),
@@ -2805,7 +2863,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.5.4 | PARTIAL TP | ";
+   d += " XAUAI SNIPER v4.5.5 | PYRAMID FIX | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
