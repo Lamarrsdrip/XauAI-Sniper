@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.5.6 — Live-Ready           |
+//|                                     v4.5.7 — Heartbeat           |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.56"
-#property description "XAUUSD AI Sniper v4.5.6 — Live-Ready (freeze/stops aware, no silent failures)"
+#property version   "4.57"
+#property description "XAUUSD AI Sniper v4.5.7 — Heartbeat (never silently stop scanning)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -687,7 +687,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.5.6 (LIVE-READY) READY ===");
+   Print("=== XAUAI SNIPER v4.5.7 (HEARTBEAT) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -758,7 +758,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.5.6 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.5.7 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1588,21 +1588,56 @@ void OnTick()
    if(InpWeekendClose && dtNow.day_of_week == 5 && dtNow.hour >= 20)
    { if(CountMyPositions() > 0) { CloseAll(); Print("WEEKEND CLOSE"); } return; }
 
+   // v4.5.7 — HEARTBEAT: if any risk gate is active, log ONCE per 5 min so
+   // user never has a silent EA again. Previously these only printed ONCE on
+   // threshold breach, then returned silently forever → looks like EA is dead.
+   static datetime lastGateHeartbeat = 0;
+   bool heartbeatDue = (TimeCurrent() - lastGateHeartbeat >= 300);
+
    // Equity/daily/weekly limits
    double equity = accInfo.Equity();
    if(equity < initialBalance * InpEquityProtect / 100.0)
-   { CloseAll(); Print("EQUITY PROTECT"); return; }
+   {
+      CloseAll();
+      if(heartbeatDue) { Print("⏸  EQUITY PROTECT ACTIVE — equity $", DoubleToString(equity,2),
+         " < ", DoubleToString(InpEquityProtect,1), "% of $", DoubleToString(initialBalance,2),
+         ". EA paused until equity recovers. Add funds or close losing trades.");
+         lastGateHeartbeat = TimeCurrent(); }
+      return;
+   }
 
    double weeklyPnL = equity - weeklyStartEquity;
    if(weeklyPnL >= weeklyStartEquity * InpWeeklyTarget / 100.0)
-   { if(!weeklyTargetHit) { CloseAll(); Print("WEEKLY TARGET HIT: +$", DoubleToString(weeklyPnL, 2)); } weeklyTargetHit = true; return; }
+   {
+      if(!weeklyTargetHit) { CloseAll(); Print("WEEKLY TARGET HIT: +$", DoubleToString(weeklyPnL, 2)); }
+      weeklyTargetHit = true;
+      if(heartbeatDue) { Print("⏸  WEEKLY TARGET HIT — +$", DoubleToString(weeklyPnL, 2),
+         " reached. EA paused until Monday to protect gains.");
+         lastGateHeartbeat = TimeCurrent(); }
+      return;
+   }
    if(weeklyPnL < -(weeklyStartEquity * InpWeeklyMaxLoss / 100.0))
-   { if(!weeklyLossHit) { CloseAll(); Print("WEEKLY LOSS LIMIT"); } weeklyLossHit = true; return; }
+   {
+      if(!weeklyLossHit) { CloseAll(); Print("WEEKLY LOSS LIMIT"); }
+      weeklyLossHit = true;
+      if(heartbeatDue) { Print("⏸  WEEKLY LOSS LIMIT — down $", DoubleToString(MathAbs(weeklyPnL),2),
+         " (> ", DoubleToString(InpWeeklyMaxLoss,1), "% of weekly start $", DoubleToString(weeklyStartEquity,2),
+         "). EA paused until Monday.");
+         lastGateHeartbeat = TimeCurrent(); }
+      return;
+   }
 
    double dailyPnL = equity - dailyStartEquity;
    if(dailyPnL < -(dailyStartEquity * InpDailyLossLimit / 100.0))
-   { if(!dailyLimitHit) Print("DAILY LIMIT: -$", DoubleToString(MathAbs(dailyPnL), 2));
-     dailyLimitHit = true; if(CountMyPositions() > 0) CloseAll(); return; }
+   {
+      if(!dailyLimitHit) Print("DAILY LIMIT: -$", DoubleToString(MathAbs(dailyPnL), 2));
+      dailyLimitHit = true; if(CountMyPositions() > 0) CloseAll();
+      if(heartbeatDue) { Print("⏸  DAILY LOSS LIMIT — down $", DoubleToString(MathAbs(dailyPnL),2),
+         " (> ", DoubleToString(InpDailyLossLimit,1), "% of daily start $", DoubleToString(dailyStartEquity,2),
+         "). EA paused until next trading day (auto-resets at midnight broker time).");
+         lastGateHeartbeat = TimeCurrent(); }
+      return;
+   }
 
    // === ALWAYS MANAGE OPEN POSITIONS (every tick, even on wide spread) ===
    // We intentionally run this BEFORE the spread gate so that news-time
@@ -2956,7 +2991,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.5.6 | LIVE-READY | ";
+   d += " XAUAI SNIPER v4.5.7 | HEARTBEAT | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
