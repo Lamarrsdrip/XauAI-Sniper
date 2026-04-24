@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.5.1 — Loosen the Leash    |
+//|                                     v4.5.2 — Trend-Aware Trail   |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.51"
-#property description "XAUUSD AI Sniper v4.5.1 — Loosen the Leash (wider BE + volatility-aware trail)"
+#property version   "4.52"
+#property description "XAUUSD AI Sniper v4.5.2 — Trend-Aware Trail (wide on trends, tight on ranges)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -97,6 +97,13 @@ input double InpCapTrailATRMulti  = 1.5;   // CAP_RUNNER trail distance = this �
 input double InpCapTrailSpikeMulti= 1.8;   // On high-vol spike bars, widen trail to this × ATR
 input double InpCapTrailCalmMulti = 1.2;   // On calm bars, use this × ATR
 input int    InpClaudeAuditSec    = 900;   // Claude mid-trade audit frequency (was 600 = 10min, now 15min)
+
+input group "=== TREND-AWARE TRAIL (v4.5.2 — read market mood) ==="
+input bool   InpTrendAwareTrail   = true;  // TRUE = widen trail on trend days, tighten on ranges
+input double InpTrendTrailMulti   = 2.2;   // Trending regime + strong EMA sep → this × ATR
+input double InpStrongTrendTrail  = 2.5;   // Breakout / very strong trend → this × ATR
+input double InpLowVolTrailMulti  = 1.0;   // LOW_VOL regime → tighter (ranges are tight)
+input double InpChoppyTrailMulti  = 1.3;   // CHOPPY regime → moderate
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -403,6 +410,65 @@ double GetVolAdaptiveMult()
 }
 
 //+------------------------------------------------------------------+
+//| v4.5.2 — TREND-AWARE TRAIL DISTANCE                              |
+//| Returns the ATR multiplier to use for trailing SL given:         |
+//|   • Current regime (trending vs ranging vs breakout vs low-vol)  |
+//|   • EMA separation (strong trend = bigger stretch)               |
+//|   • Volatility spike/calm (existing v4.5.1 logic)                |
+//| Reasoning: trend days grind one direction with shallow pullbacks |
+//| (wider trail = ride the move); range days chop (tight trail).    |
+//+------------------------------------------------------------------+
+double GetTrailATRMulti()
+{
+   // Fallback: respect v4.5.1 defaults if trend-aware trail disabled
+   if(!InpTrendAwareTrail)
+   {
+      double volMult = GetVolAdaptiveMult();
+      if(volMult < 0.85)      return InpCapTrailSpikeMulti;
+      else if(volMult > 1.05) return InpCapTrailCalmMulti;
+      return InpCapTrailATRMulti;
+   }
+
+   double base;
+   // Regime-based base trail
+   switch(currentRegime)
+   {
+      case REGIME_BREAKOUT_UP:
+      case REGIME_BREAKOUT_DOWN:
+         base = InpStrongTrendTrail;       // breakouts extend, need widest room
+         break;
+      case REGIME_TRENDING_UP:
+      case REGIME_TRENDING_DOWN:
+      {
+         // Strong EMA separation = strong trend = give more room
+         double emaSep = 0;
+         if(ArraySize(bufEMAFast) >= 2 && ArraySize(bufEMASlow) >= 2 && bufEMASlow[1] > 0)
+            emaSep = MathAbs(bufEMAFast[1] - bufEMASlow[1]) / bufEMASlow[1] * 10000; // basis points
+         base = (emaSep > 30) ? InpStrongTrendTrail : InpTrendTrailMulti;
+         break;
+      }
+      case REGIME_RANGING:
+         base = InpCapTrailATRMulti;       // normal ranges = default 1.5x
+         break;
+      case REGIME_CHOPPY:
+         base = InpChoppyTrailMulti;       // choppy = tighter (fewer real follow-throughs)
+         break;
+      case REGIME_LOW_VOL:
+         base = InpLowVolTrailMulti;       // low-vol ranges = tightest
+         break;
+      default:
+         base = InpCapTrailATRMulti;
+   }
+
+   // Volatility overlay — still respects spike/calm (survival over aesthetics)
+   double volM = GetVolAdaptiveMult();
+   if(volM < 0.85)  base = MathMax(base, InpCapTrailSpikeMulti);   // spike → widen if not already
+   else if(volM > 1.05) base = MathMin(base, MathMax(InpCapTrailCalmMulti, 1.0));  // calm → tighten (but not absurdly)
+
+   return base;
+}
+
+//+------------------------------------------------------------------+
 //| PIN VALIDATION                                                   |
 //+------------------------------------------------------------------+
 bool ValidatePIN(string pin)
@@ -487,7 +553,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.5.1 (LOOSEN THE LEASH) READY ===");
+   Print("=== XAUAI SNIPER v4.5.2 (TREND-AWARE TRAIL) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -531,11 +597,14 @@ int OnInit()
          " | NormalConf=", InpNormalAIConfidence, "% (x1.0)",
          " | HighConf=", InpHighAIConfidence, "% (x", DoubleToString(InpConvictionHighMulti, 2), ")",
          " | LowMulti=x", DoubleToString(InpConvictionLowMulti, 2));
-   Print("TRAIL v4.5.1: BE activate=+", DoubleToString(InpBELockActivateR,2), "R  lock=+",
+   Print("TRAIL v4.5.2: BE activate=+", DoubleToString(InpBELockActivateR,2), "R  lock=+",
          DoubleToString(InpBELockProfitR,2), "R",
-         " | CapTrail: normal=", DoubleToString(InpCapTrailATRMulti,2), "xATR",
-         " spike=", DoubleToString(InpCapTrailSpikeMulti,2), "xATR",
-         " calm=", DoubleToString(InpCapTrailCalmMulti,2), "xATR",
+         " | TrendAware=", InpTrendAwareTrail?"ON":"OFF",
+         " | Trend=", DoubleToString(InpTrendTrailMulti,2), "xATR",
+         " StrongTrend=", DoubleToString(InpStrongTrendTrail,2), "xATR",
+         " Range=", DoubleToString(InpCapTrailATRMulti,2), "xATR",
+         " Choppy=", DoubleToString(InpChoppyTrailMulti,2), "xATR",
+         " LowVol=", DoubleToString(InpLowVolTrailMulti,2), "xATR",
          " | ClaudeAudit=", InpClaudeAuditSec, "s");
    return INIT_SUCCEEDED;
 }
@@ -547,7 +616,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.5.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.5.2 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1990,13 +2059,8 @@ void ManagePositions()
          }
          if(capReached && InpSmartCapExit)
          {
-            // v4.5.1 — Past the cap, trail SL using a VOLATILITY-AWARE distance.
-            // On high-vol spike bars we widen to survive wicks. On calm bars we can
-            // tighten a bit. Default is now 1.5 × ATR (was 0.8 = clipped on normal noise).
-            double volMult = GetVolAdaptiveMult();  // <1 = spike, >1 = calm
-            double trailATR = InpCapTrailATRMulti;
-            if(volMult < 0.85)      trailATR = InpCapTrailSpikeMulti;   // spike bar → wider
-            else if(volMult > 1.05) trailATR = InpCapTrailCalmMulti;    // calm bar → slightly tighter
+            // v4.5.2 — Trend-aware, volatility-aware trailing distance.
+            double trailATR = GetTrailATRMulti();
             double trailDist = atr * trailATR;
 
             double lockSL;
@@ -2009,7 +2073,7 @@ void ManagePositions()
                   Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
                         " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
                         " — SL trailed to ", DoubleToString(lockSL, digits),
-                        " (", DoubleToString(trailATR,2), " ATR). Letting it run.");
+                        " (", DoubleToString(trailATR,2), "xATR, regime=", RegimeName(), "). Letting it run.");
                }
             }
             else
@@ -2021,7 +2085,7 @@ void ManagePositions()
                   Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
                         " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
                         " — SL trailed to ", DoubleToString(lockSL, digits),
-                        " (", DoubleToString(trailATR,2), " ATR). Letting it run.");
+                        " (", DoubleToString(trailATR,2), "xATR, regime=", RegimeName(), "). Letting it run.");
                }
             }
 
@@ -2047,11 +2111,8 @@ void ManagePositions()
          }
          if(timeExpired && InpMomentumGuard && momentumStrong)
          {
-            // v4.5.1 — Tighten SL on time-expired runners using the same wider ATR trail
-            double volMult2 = GetVolAdaptiveMult();
-            double trailATR2 = InpCapTrailATRMulti;
-            if(volMult2 < 0.85)      trailATR2 = InpCapTrailSpikeMulti;
-            else if(volMult2 > 1.05) trailATR2 = InpCapTrailCalmMulti;
+            // v4.5.2 — Same trend-aware trail on time-expired runners
+            double trailATR2 = GetTrailATRMulti();
             double trailDist2 = atr * trailATR2;
 
             double lockSL;
@@ -2061,7 +2122,7 @@ void ManagePositions()
                if(lockSL > curSL && lockSL > openPx)
                { trade.PositionModify(ticket, lockSL, curTP);
                  Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→",
-                       DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), " ATR)"); }
+                       DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), "xATR, ", RegimeName(), ")"); }
             }
             else
             {
@@ -2069,7 +2130,7 @@ void ManagePositions()
                if(lockSL < curSL && lockSL < openPx)
                { trade.PositionModify(ticket, lockSL, curTP);
                  Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→",
-                       DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), " ATR)"); }
+                       DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), "xATR, ", RegimeName(), ")"); }
             }
          }
       }
@@ -2614,7 +2675,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.5.1 | LOOSEN LEASH | ";
+   d += " XAUAI SNIPER v4.5.2 | TREND-AWARE | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

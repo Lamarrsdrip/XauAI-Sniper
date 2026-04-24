@@ -84,6 +84,20 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.5.2 — "Trend-Aware Trail" (market-mood adaptive trailing)**
+  - Added `GetTrailATRMulti()` helper that picks the best trail distance based on current regime + EMA separation + volatility overlay.
+  - Regime-based base trail:
+    - BREAKOUT (up/down): 2.5 × ATR (widest — breakouts extend)
+    - TRENDING + strong EMA separation (>30 bp): 2.5 × ATR
+    - TRENDING normal: 2.2 × ATR
+    - RANGING: 1.5 × ATR (v4.5.1 default)
+    - CHOPPY: 1.3 × ATR (fewer real follow-throughs)
+    - LOW_VOL: 1.0 × ATR (tight ranges = tight trail)
+  - Volatility overlay still respected: spike bars force widening, calm bars allow tightening.
+  - Both CAP_RUNNER trail and time-expired RUNNER trail now use the helper. Logs show `trailed to X (2.50xATR, TRENDING_UP)` for full visibility.
+  - New `InpTrendAwareTrail` toggle (ON by default). Tunable multipliers: `InpTrendTrailMulti=2.2`, `InpStrongTrendTrail=2.5`, `InpChoppyTrailMulti=1.3`, `InpLowVolTrailMulti=1.0`.
+  - Frontend bumped to v4.5.2.
+
 - **Feb 2026 - v4.5.1 — "Loosen the Leash" (wider BE + volatility-aware trailing)**
   - User feedback from live trade log: "trailing is too tight the trailing don't reason well." Evidence: BUY 2.14 @ 4697 closed flat at +$45 (BE lock grabbed it on a 1-point wick) while gold ran to 4717 = missed $4,300 move. BUY 3.58 @ 4699 closed -$1,242 (trail clipped on pullback wick) while gold then ran to 4717.
   - **BE lock raised from +0.5R → +1.0R** (`InpBELockActivateR=1.0`): wait for the trade to double the risk before locking. Prevents early BE exits on normal noise.
