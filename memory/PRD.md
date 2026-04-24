@@ -84,7 +84,19 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
-- **Feb 2026 - v4.5.5 — "Pyramid Fix" (no 0.01 spam + loud margin warnings)**
+- **Feb 2026 - v4.5.6 — "Live-Ready" (pre-live P0 bug sweep)**
+  - Ran comprehensive pre-live-trading audit via troubleshoot_agent. Found and fixed 5 bugs that would cause real money losses on live broker:
+  - **P0-1/2/3 — Silent PositionModify failures** (8 call sites): Added new `SafeModifySL()` helper that:
+    - Checks `SYMBOL_TRADE_STOPS_LEVEL` and clamps newSL to minimum allowed distance from current price (brokers reject SL too close → error 130).
+    - Checks `SYMBOL_TRADE_FREEZE_LEVEL` — skips modify with throttled warning if price is within freeze band (can't modify during freeze).
+    - **Logs any non-success retcode** so we see silent failures for the first time. Previously, failed SL updates (requote, off quotes, no connection) happened silently → position kept running with stale/entry SL → catastrophic loss on reversal.
+    - All 8 trade.PositionModify call sites (TRAIL-A x2, BE_LOCK x2, CAP_RUNNER x2, RUNNER x2) refactored to use SafeModifySL. Log messages only fire on successful modify.
+  - **P1-1 — Pyramid inheriting BE-locked SL**: When the original position had its SL BE-locked (moved past entry), pyramid adds inherited this dangerously tight SL → got stopped on normal noise → defeated pyramid purpose. Now pyramid detects BE-lock and places a FRESH ATR-based SL for the add, with logged rationale.
+  - **P1-3 — PARTIAL_TP log math**: Changed `profit * InpPartialPct` to `profit * (partialLots / curLots)` so "locked $X" is accurate when broker can't split exactly 50/50 on odd lot sizes.
+  - **P2-1 — Margin warning spam throttled**: The loud ⚠️ MARGIN-CAPPED warning now fires max once per 5 min (was every margin-capped trade).
+  - Audit found NO issues with: lot normalization (v4.5.5 clean), division-by-zero guards, BUY/SELL symmetry, state tracker cleanup (posId correctly equals position ticket on both hedge and netting), margin handling, no orphaned positions.
+  - Compile: 277/277 braces, 1737/1737 parens.
+  - Frontend bumped to v4.5.6.
   - **User's live trade forensics**: logs showed `PYRAMID: adding #3/5 BUY 0.01 lots` repeatedly despite configured 0.6× multiplier. Root cause = 2-bug chain:
     1. **Margin silent-clamp in OpenTrade**: with ~10 lots of open positions eating ~$47k margin on a $54k account, free margin was near zero. The margin guard `while(lots > minLot && marginNeeded > freeMargin * 0.5)` silently chopped desired ~1.3 lots down to broker minimum 0.01.
     2. **Pyramid compounded**: `smallestLot(0.01) × 0.6 = 0.006` → `MathFloor → 0` → `MathMax(minLot, 0) = 0.01`. Every subsequent add was 0.01 forever.

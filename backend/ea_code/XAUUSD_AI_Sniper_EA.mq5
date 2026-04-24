@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.5.5 — Pyramid Fix          |
+//|                                     v4.5.6 — Live-Ready           |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.55"
-#property description "XAUUSD AI Sniper v4.5.5 — Pyramid fix (no minLot spam + margin warnings)"
+#property version   "4.56"
+#property description "XAUUSD AI Sniper v4.5.6 — Live-Ready (freeze/stops aware, no silent failures)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -363,6 +363,69 @@ void ClearPartialTaken(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
+//| v4.5.6 — SAFE POSITION MODIFY (freeze/stops aware)               |
+//| Broker brokers reject PositionModify when:                       |
+//|   • Price within SYMBOL_TRADE_FREEZE_LEVEL of SL/TP               |
+//|   • SL/TP closer to price than SYMBOL_TRADE_STOPS_LEVEL           |
+//| This helper:                                                     |
+//|   1. Clamps the new SL to the minimum allowed distance            |
+//|   2. Skips the modify (and warns ONCE) if price is frozen          |
+//|   3. Logs any non-success retcode so we see silent failures        |
+//| Returns TRUE if broker accepted the modify.                      |
+//+------------------------------------------------------------------+
+bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curPrice, string logTag)
+{
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   int    digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   long   stopsLvl  = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+   long   freezeLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
+   double minStopsDist  = stopsLvl  * point;
+   double minFreezeDist = freezeLvl * point;
+
+   // Clamp SL to at least stops_level away from current price
+   if(isBuy)
+   {
+      // BUY: SL must be <= curPrice - minStopsDist
+      double maxAllowedSL = curPrice - minStopsDist;
+      if(minStopsDist > 0 && newSL > maxAllowedSL) newSL = NormalizeDouble(maxAllowedSL, digits);
+   }
+   else
+   {
+      // SELL: SL must be >= curPrice + minStopsDist
+      double minAllowedSL = curPrice + minStopsDist;
+      if(minStopsDist > 0 && newSL < minAllowedSL) newSL = NormalizeDouble(minAllowedSL, digits);
+   }
+
+   // Freeze level check — skip modify (but don't error) if price is within freeze band
+   if(minFreezeDist > 0)
+   {
+      double distToSL = isBuy ? MathAbs(curPrice - newSL) : MathAbs(newSL - curPrice);
+      if(distToSL < minFreezeDist)
+      {
+         static datetime lastFreezeWarn = 0;
+         if(TimeCurrent() - lastFreezeWarn > 60)
+         {
+            Print("SL-MOD SKIP #", ticket, " (", logTag, ") — price within freeze level (",
+                  DoubleToString(distToSL/point, 0), " pts < ", freezeLvl, " pts). Retry next tick.");
+            lastFreezeWarn = TimeCurrent();
+         }
+         return false;
+      }
+   }
+
+   // Execute modify — log any failure so they're no longer silent
+   if(!trade.PositionModify(ticket, newSL, tp))
+   {
+      uint ret = trade.ResultRetcode();
+      // 10025 DONE_PARTIAL is a warning not a failure; also tolerate REQUOTE etc
+      Print("SL-MOD FAIL #", ticket, " (", logTag, ") Ret=", ret,
+            " Err=", GetLastError(), " newSL=", DoubleToString(newSL, digits));
+      return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //| AUTO-SCALE: derive dollar thresholds from current account size   |
 //+------------------------------------------------------------------+
 void RecomputeAutoScale()
@@ -624,7 +687,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.5.5 (PYRAMID FIX) READY ===");
+   Print("=== XAUAI SNIPER v4.5.6 (LIVE-READY) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -695,7 +758,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.5.5 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.5.6 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1456,9 +1519,32 @@ void CheckPyramidOpportunity()
    posInfo.SelectByTicket(origTicket);
    double origTP = posInfo.TakeProfit();
 
+   // v4.5.6 — Don't inherit a BE-locked SL. If the original SL has been moved
+   // past breakeven (i.e., "above entry" for BUY, "below entry" for SELL), the
+   // pyramid add would inherit a dangerously tight SL relative to its own entry
+   // price (adverse/trend continuation price). Instead, place a fresh ATR-based
+   // SL for the pyramid add so it has normal breathing room.
+   double pyramidSL = origSL;
+   double atrBufF = atr; // already computed earlier in function
+   double freshSlDist = atrBufF * InpSLMultiplier;
+   if(isBuy && origSL > origPx)
+   {
+      pyramidSL = NormalizeDouble(entryPx - freshSlDist, digits);
+      Print("PYRAMID SL: origSL ", DoubleToString(origSL, digits),
+            " was BE-locked — using fresh SL ", DoubleToString(pyramidSL, digits),
+            " (", DoubleToString(freshSlDist, 2), " pts = ", DoubleToString(InpSLMultiplier, 2), "xATR)");
+   }
+   if(!isBuy && origSL > 0 && origSL < origPx)
+   {
+      pyramidSL = NormalizeDouble(entryPx + freshSlDist, digits);
+      Print("PYRAMID SL: origSL ", DoubleToString(origSL, digits),
+            " was BE-locked — using fresh SL ", DoubleToString(pyramidSL, digits),
+            " (", DoubleToString(freshSlDist, 2), " pts = ", DoubleToString(InpSLMultiplier, 2), "xATR)");
+   }
+
    bool ok;
-   if(isBuy) ok = trade.Buy (addLot, Symbol(), 0, origSL, origTP, "XAU-SNIPER|" + why);
-   else      ok = trade.Sell(addLot, Symbol(), 0, origSL, origTP, "XAU-SNIPER|" + why);
+   if(isBuy) ok = trade.Buy (addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
+   else      ok = trade.Sell(addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
 
    if(ok)
    {
@@ -1909,13 +1995,18 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    lots = NormalizeDouble(lots, lotDigits);
 
    // v4.5.5 — LOUD WARN if margin forced a lot reduction > 20%.
-   // Previously this happened silently and users wondered why the bot was trading tiny.
+   // v4.5.6 — Throttled to once per 5 min to avoid log spam.
    if(desiredLots > 0 && (desiredLots - lots) / desiredLots > 0.20)
    {
-      Print("⚠️  MARGIN-CAPPED: desired ", DoubleToString(desiredLots, lotDigits),
-            " lots → reduced to ", DoubleToString(lots, lotDigits),
-            " (free margin $", DoubleToString(freeMargin,2),
-            " too low to support full size). Consider closing some open positions.");
+      static datetime lastMarginWarnTime = 0;
+      if(TimeCurrent() - lastMarginWarnTime > 300)
+      {
+         Print("⚠️  MARGIN-CAPPED: desired ", DoubleToString(desiredLots, lotDigits),
+               " lots → reduced to ", DoubleToString(lots, lotDigits),
+               " (free margin $", DoubleToString(freeMargin,2),
+               " too low to support full size). Consider closing some open positions.");
+         lastMarginWarnTime = TimeCurrent();
+      }
       // Extra guard: if resulting lot is at/near minLot AND we wanted much bigger,
       // SKIP entirely rather than opening a pointless minLot trade + pyramid chain.
       if(lots <= minLot * 1.01 && desiredLots >= minLot * 5)
@@ -2071,13 +2162,13 @@ void ManagePositions()
       {
          double newSL = NormalizeDouble(curPrice - trailDist, digits);
          if(newSL > curSL && newSL > openPx)
-            trade.PositionModify(ticket, newSL, curTP);
+            SafeModifySL(ticket, newSL, curTP, true, curPrice, "TRAIL-A");
       }
       if(!isBuy && profit > 0)
       {
          double newSL = NormalizeDouble(curPrice + trailDist, digits);
          if(newSL < curSL && newSL < openPx)
-            trade.PositionModify(ticket, newSL, curTP);
+            SafeModifySL(ticket, newSL, curTP, false, curPrice, "TRAIL-A");
       }
 
       // ===== PATH B: SMART MANAGEMENT =====
@@ -2093,10 +2184,10 @@ void ManagePositions()
          // Only raise SL — never lower it (this was a bug: trail could already be higher)
          if(beSL > curSL)
          {
-            trade.PositionModify(ticket, beSL, curTP);
-            Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
-                  " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
-                  DoubleToString(InpBELockProfitR,2), "R profit)");
+            if(SafeModifySL(ticket, beSL, curTP, true, curPrice, "BE_LOCK"))
+               Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
+                     " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
+                     DoubleToString(InpBELockProfitR,2), "R profit)");
          }
       }
       if(!isBuy && curPrice < openPx - activateDist)
@@ -2104,10 +2195,10 @@ void ManagePositions()
          double beSL = NormalizeDouble(openPx - lockProfitDist, digits);
          if(beSL < curSL || curSL == 0)
          {
-            trade.PositionModify(ticket, beSL, curTP);
-            Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
-                  " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
-                  DoubleToString(InpBELockProfitR,2), "R profit)");
+            if(SafeModifySL(ticket, beSL, curTP, false, curPrice, "BE_LOCK"))
+               Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
+                     " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
+                     DoubleToString(InpBELockProfitR,2), "R profit)");
          }
       }
 
@@ -2141,9 +2232,11 @@ void ManagePositions()
                if(trade.PositionClosePartial(ticket, partialLots))
                {
                   MarkPartialTaken(ticket);
+                  // v4.5.6 — Use proportional profit math (closed_fraction × total P/L)
+                  double lockedProfit = profit * (partialLots / curLots);
                   Print("PARTIAL_TP #", ticket, " closed ", DoubleToString(partialLots, lotDig),
                         " of ", DoubleToString(curLots, lotDig), " lots at +",
-                        DoubleToString(profitR, 2), "R ($", DoubleToString(profit * InpPartialPct, 2),
+                        DoubleToString(profitR, 2), "R ($", DoubleToString(lockedProfit, 2),
                         " locked). Remainder ", DoubleToString(remaining, lotDig),
                         " rides the trail.");
                }
@@ -2255,11 +2348,11 @@ void ManagePositions()
                lockSL = NormalizeDouble(curPrice - trailDist, digits);
                if(lockSL > curSL && lockSL > openPx)
                {
-                  trade.PositionModify(ticket, lockSL, curTP);
-                  Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
-                        " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
-                        " — SL trailed to ", DoubleToString(lockSL, digits),
-                        " (", DoubleToString(trailATR,2), "xATR, regime=", RegimeName(), "). Letting it run.");
+                  if(SafeModifySL(ticket, lockSL, curTP, true, curPrice, "CAP_RUNNER"))
+                     Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
+                           " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
+                           " — SL trailed to ", DoubleToString(lockSL, digits),
+                           " (", DoubleToString(trailATR,2), "xATR, regime=", RegimeName(), "). Letting it run.");
                }
             }
             else
@@ -2267,11 +2360,11 @@ void ManagePositions()
                lockSL = NormalizeDouble(curPrice + trailDist, digits);
                if((lockSL < curSL || curSL == 0) && lockSL < openPx)
                {
-                  trade.PositionModify(ticket, lockSL, curTP);
-                  Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
-                        " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
-                        " — SL trailed to ", DoubleToString(lockSL, digits),
-                        " (", DoubleToString(trailATR,2), "xATR, regime=", RegimeName(), "). Letting it run.");
+                  if(SafeModifySL(ticket, lockSL, curTP, false, curPrice, "CAP_RUNNER"))
+                     Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
+                           " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
+                           " — SL trailed to ", DoubleToString(lockSL, digits),
+                           " (", DoubleToString(trailATR,2), "xATR, regime=", RegimeName(), "). Letting it run.");
                }
             }
 
@@ -2308,17 +2401,17 @@ void ManagePositions()
             {
                lockSL = NormalizeDouble(curPrice - trailDist2, digits);
                if(lockSL > curSL && lockSL > openPx)
-               { trade.PositionModify(ticket, lockSL, curTP);
-                 Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→",
-                       DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), "xATR, ", RegimeName(), ")"); }
+               { if(SafeModifySL(ticket, lockSL, curTP, true, curPrice, "RUNNER"))
+                   Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→",
+                         DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), "xATR, ", RegimeName(), ")"); }
             }
             else
             {
                lockSL = NormalizeDouble(curPrice + trailDist2, digits);
                if(lockSL < curSL && lockSL < openPx)
-               { trade.PositionModify(ticket, lockSL, curTP);
-                 Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→",
-                       DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), "xATR, ", RegimeName(), ")"); }
+               { if(SafeModifySL(ticket, lockSL, curTP, false, curPrice, "RUNNER"))
+                   Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→",
+                         DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), "xATR, ", RegimeName(), ")"); }
             }
          }
       }
@@ -2863,7 +2956,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.5.5 | PYRAMID FIX | ";
+   d += " XAUAI SNIPER v4.5.6 | LIVE-READY | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
