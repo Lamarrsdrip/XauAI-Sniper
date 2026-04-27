@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.7.3 — TP Auto-Extend        |
+//|                                     v4.7.4 — Smart TP Extend       |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.73"
-#property description "XAUUSD AI Sniper v4.7.3 — TP Auto-Extend (push TP forward as winner runs)"
+#property version   "4.74"
+#property description "XAUUSD AI Sniper v4.7.4 — Smart TP Extend (only chase TP when trend is real)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -2419,11 +2419,14 @@ void ManagePositions()
       // Dir string for logging
       string dirStr = isBuy ? "BUY" : "SELL";
 
-      // v4.7.3 — TP AUTO-EXTEND (push TP forward as winner runs)
+      // v4.7.3/v4.7.4 — TP AUTO-EXTEND (push TP forward as winner runs)
       //   When profit is ≥ InpTPExtendTriggerPct% of the way to current TP,
       //   add InpTPExtendATRMulti × ATR to TP so the runner doesn't get clipped
       //   on the original target. SL ratchets (Ladder/Peak/Moon) protect the
       //   gains; this just removes the artificial ceiling.
+      //   v4.7.4 — ONLY extend when market shows REAL continuation strength.
+      //   In ranging / choppy / low-vol markets we let the original TP hit
+      //   naturally because chasing TP in chop = trade gives back the win.
       if(InpTPAutoExtend && curTP > 0 && profit > 0 && atr > 0 &&
          GetTPExtendCount(ticket) < InpTPExtendMaxTimes)
       {
@@ -2431,22 +2434,54 @@ void ManagePositions()
          double profitDist = isBuy ? (curPrice - openPx) : (openPx - curPrice);
          if(tpDist > 0 && profitDist >= tpDist * (InpTPExtendTriggerPct / 100.0))
          {
-            double tpAdd = atr * InpTPExtendATRMulti;
-            double newTP = isBuy ? NormalizeDouble(curTP + tpAdd, digits)
-                                  : NormalizeDouble(curTP - tpAdd, digits);
-            // Sanity: must be on correct side of current price + respect stops level
-            double pp = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
-            long   slLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-            double bufPts = MathMax(slLvl * pp, pp * 30);
-            bool tpSane = isBuy ? (newTP > curPrice + bufPts) : (newTP < curPrice - bufPts);
-            if(tpSane && trade.PositionModify(ticket, curSL, newTP))
+            // Regime gate: only extend if trend or breakout regime
+            bool regimeStrong = (currentRegime == REGIME_TRENDING_UP ||
+                                 currentRegime == REGIME_TRENDING_DOWN ||
+                                 currentRegime == REGIME_BREAKOUT_UP ||
+                                 currentRegime == REGIME_BREAKOUT_DOWN);
+            // Direction gate: regime must align with our trade direction
+            bool regimeAligned = false;
+            if(isBuy)  regimeAligned = (currentRegime == REGIME_TRENDING_UP   ||
+                                        currentRegime == REGIME_BREAKOUT_UP);
+            if(!isBuy) regimeAligned = (currentRegime == REGIME_TRENDING_DOWN ||
+                                        currentRegime == REGIME_BREAKOUT_DOWN);
+            // EMA confirmation: price still on the right side of fast EMA
+            bool emaConfirm = isBuy ? (curPrice > emaF) : (curPrice < emaF);
+            // RSI not at exhaustion (don't chase TP into RSI overbought/oversold)
+            bool rsiHealthy = isBuy ? (rsi < 78) : (rsi > 22);
+
+            bool shouldExtend = regimeStrong && regimeAligned && emaConfirm && rsiHealthy;
+
+            if(!shouldExtend)
             {
-               IncTPExtendCount(ticket);
-               Print("TP_EXTEND #", ticket, " (", GetTPExtendCount(ticket), "/", InpTPExtendMaxTimes,
-                     ") profit $", DoubleToString(profit,2),
-                     " reached ", DoubleToString(InpTPExtendTriggerPct,0), "% of TP — TP pushed ",
-                     DoubleToString(tpAdd, digits), " further to ", DoubleToString(newTP, digits),
-                     ". Runner keeps running.");
+               static datetime lastTPSkip = 0;
+               if(TimeCurrent() - lastTPSkip > 60)
+               {
+                  Print("TP_EXTEND SKIP #", ticket, " — market not strong enough to chase TP. Regime=",
+                        RegimeName(), " emaConfirm=", emaConfirm?"Y":"N", " rsiHealthy=", rsiHealthy?"Y":"N",
+                        ". Letting original TP hit at ", DoubleToString(curTP, digits), ".");
+                  lastTPSkip = TimeCurrent();
+               }
+            }
+            else
+            {
+               double tpAdd = atr * InpTPExtendATRMulti;
+               double newTP = isBuy ? NormalizeDouble(curTP + tpAdd, digits)
+                                     : NormalizeDouble(curTP - tpAdd, digits);
+               // Sanity: must be on correct side of current price + respect stops level
+               double pp = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+               long   slLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+               double bufPts = MathMax(slLvl * pp, pp * 30);
+               bool tpSane = isBuy ? (newTP > curPrice + bufPts) : (newTP < curPrice - bufPts);
+               if(tpSane && trade.PositionModify(ticket, curSL, newTP))
+               {
+                  IncTPExtendCount(ticket);
+                  Print("TP_EXTEND #", ticket, " (", GetTPExtendCount(ticket), "/", InpTPExtendMaxTimes,
+                        ") profit $", DoubleToString(profit,2),
+                        " reached ", DoubleToString(InpTPExtendTriggerPct,0), "% of TP, regime=",
+                        RegimeName(), " — TP pushed ", DoubleToString(tpAdd, digits),
+                        " further to ", DoubleToString(newTP, digits), ". Runner keeps running.");
+               }
             }
          }
       }

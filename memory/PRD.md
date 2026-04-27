@@ -84,6 +84,19 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.7.4 — "Smart TP Extend" (only chase TP when trend is real)**
+  - User asked: "Hope the version will allow strong runner will hit the original TP if market look fine?"
+  - Honest finding: v4.7.3's TP_EXTEND fired on EVERY 80% threshold cross — meaning the original TP would basically never get hit, even on calm trades that should just bank the target.
+  - **Fix — TP extends only when 4 gates ALL pass**:
+    1. Regime is TRENDING_UP/DOWN or BREAKOUT_UP/DOWN (not RANGING/CHOPPY/LOW_VOL)
+    2. Regime direction aligns with our trade (BUY needs UP regime, SELL needs DOWN)
+    3. Price still on the right side of EMA fast (continuation confirmed)
+    4. RSI not at exhaustion (< 78 for BUY, > 22 for SELL)
+  - If any gate fails → log `TP_EXTEND SKIP — market not strong enough to chase TP. Letting original TP hit at price.` (throttled 1/min) → original TP banks the win as expected.
+  - If all gates pass → TP pushes forward + log shows regime context.
+  - Compile: braces 0/0, parens 0/0, 3654 lines.
+  - Frontend bumped to v4.7.4.
+
 - **Feb 2026 - v4.7.3 — "TP Auto-Extend" (push TP forward as winner runs)**
   - User pain: "Hope we still have the TP auto-readjustment to secure profit as market move in our favor like to bring TP front."
   - **Honest finding**: SL was being ratcheted forward (Profit Ladder, Peak Lock, Moon Trail) but TP was NEVER moved after entry. A strong runner would hit the original 2R TP and exit — no matter how good the trend was.
