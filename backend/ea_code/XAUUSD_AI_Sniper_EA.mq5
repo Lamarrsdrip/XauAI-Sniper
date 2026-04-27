@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.5.8 — User Gates          |
+//|                                     v4.5.9 — Partial Sanity      |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.58"
-#property description "XAUUSD AI Sniper v4.5.8 — User-controlled risk gates (0 = disable)"
+#property version   "4.59"
+#property description "XAUUSD AI Sniper v4.5.9 — Partial Sanity (no double-fire, no inflated stats)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -687,7 +687,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.5.8 (USER GATES) READY ===");
+   Print("=== XAUAI SNIPER v4.5.9 (PARTIAL SANITY) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -758,7 +758,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.5.8 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.5.9 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -2865,6 +2865,30 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
    if(entry != DEAL_ENTRY_OUT) return;
 
+   // v4.5.9 — Detect PARTIAL close vs FULL close.
+   // A partial close still leaves the position open with the same posId.
+   // If we treat partials as full closes, we double-count wins/losses, corrupt
+   // streak/drawdown tracking, and PartialAlreadyTaken gets cleared → repeat fires.
+   ulong posId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+   bool stillOpen = false;
+   if(posId > 0)
+   {
+      for(int i = 0; i < PositionsTotal(); i++)
+      {
+         if(PositionGetTicket(i) == posId) { stillOpen = true; break; }
+      }
+   }
+   if(stillOpen)
+   {
+      // Partial close — log and skip all counters/cleanup.
+      double partProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                        + HistoryDealGetDouble(dealTicket, DEAL_SWAP)
+                        + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+      Print("PARTIAL CLOSE event #", posId, " profit $", DoubleToString(partProfit, 2),
+            " — position still open, NOT counted as full trade.");
+      return;
+   }
+
    double dProfit     = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
    double dSwap       = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
    double dCommission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
@@ -2899,7 +2923,6 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // Approximate original entry and SL distance from deal history.
    // dPrice here is the CLOSE price; for re-entry we want the ORIGINAL entry.
    // Fetch it by looking at the position's first deal (entry) with same position ID.
-   ulong posId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
    lastClose.entryPrice = dPrice;   // fallback
    lastClose.slDist     = lastSignalATR > 0 ? lastSignalATR * InpSLMultiplier : 3.0;
    if(posId > 0 && HistorySelectByPosition(posId))
@@ -2920,7 +2943,8 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // Streak + drawdown bookkeeping
    RecordCloseForStreak(wasLoss);
    UpdateDrawdownState(wasLoss);
-   // Drop peak tracker entry for this ticket (posId was computed above)
+
+   // v4.5.9 — Position fully closed (verified above) — clear trackers.
    if(posId > 0) { ClearPeakProfit(posId); ClearPartialTaken(posId); }
    // Clear active thesis (no open position now until next entry)
    if(CountMyPositions() == 0)
@@ -2991,7 +3015,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.5.8 | USER GATES | ";
+   d += " XAUAI SNIPER v4.5.9 | PARTIAL SANITY | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

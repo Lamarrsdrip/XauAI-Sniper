@@ -84,6 +84,16 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.5.9 — "Partial Sanity" (fix double-firing partial TP)**
+  - User reported: "I don't think the pyramid is working well. It supposed to be 0.6× the original lots." Live log forensics revealed the SAME ticket (#151979111808) firing PARTIAL_TP twice within 0.5 seconds (closed 0.02 of 0.04, then closed 0.01 of 0.02), eventually leaving micro positions that pyramid couldn't scale meaningfully.
+  - **Root cause #1**: `OnTradeTransaction` treated the partial-close DEAL_ENTRY_OUT event as a full close. This called `ClearPartialTaken(posId)` removing the ticket from the tracker. Next tick: `PartialAlreadyTaken()` returned false → fired again → again → again. Each pass halved the lots until broker minimum.
+  - **Root cause #2**: Same handler ALSO ran `totalTrades++; wins++; RecordCloseForStreak; UpdateDrawdownState; LogTradeToServer; RecordPattern` for partial closes — inflating Win counts (user saw "Win 90%" which was largely partial-close artifacts), corrupting streak counters, polluting the journal, and skewing ML training data.
+  - **Fix**: At the top of OnTradeTransaction, check if `PositionGetTicket(i) == posId` exists in `PositionsTotal()`. If yes → it's a partial close → log "PARTIAL CLOSE event" and `return` immediately, bypassing all stats/cleanup code. If no → it's a real full close, proceed with all the existing logic.
+  - Side benefits: ML signatures, win rate, streak tracker, drawdown mode, and journal will all now reflect ONLY real complete trades. Win rate displayed on dashboard will drop (briefly) to honest values.
+  - Pyramid `origLot` will now stay accurate because partials no longer chain-shrink the same position.
+  - Compile: 285/285 braces, 1773/1773 parens.
+  - Frontend bumped to v4.5.9.
+
 - **Feb 2026 - v4.5.8 — "User Gates" (full user control over risk limits)**
   - User concern: the weekly/daily/equity limits that pause the EA should respect user configuration.
   - **Truth**: the inputs `InpDailyLossLimit`, `InpWeeklyMaxLoss`, `InpWeeklyTarget`, `InpEquityProtect` were already user-configurable — but couldn't be fully disabled.
