@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.6.7 — Peak-Lock Backstop    |
+//|                                     v4.7.0 — AI Exit Brain         |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.67"
-#property description "XAUUSD AI Sniper v4.6.7 — Peak-Lock Backstop (NEVER lose a $50+ winner)"
+#property version   "4.70"
+#property description "XAUUSD AI Sniper v4.7.0 — AI Exit Brain (Claude vetoes bad rule-based closes)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -159,6 +159,11 @@ input group "=== PEAK-LOCK BACKSTOP (v4.6.7 — bank a slice of EVERY good move)
 input bool   InpPeakLockBackstop = true;   // Universal: once peak profit ≥ arm, force-lock a slice
 input double InpPeakLockArmUSD   = 50.0;   // Peak must reach this $ before backstop arms
 input double InpPeakLockMinPct   = 25.0;   // Lock at least this % of PEAK profit (e.g. peak $700 → lock $175)
+
+input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
+input bool   InpAIExitOverride   = true;   // Ask Claude before any rule-based close (HOLD/CLOSE/LOCK $X)
+input int    InpAIExitMinSec     = 60;     // Min seconds between AI veto calls per position (cost control)
+input double InpAIExitMinProfit  = 30.0;   // Only call AI veto when profit/peak ≥ this $ (skip cheap closes)
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -325,6 +330,10 @@ double     peakProfits[];
 // v4.5.4 — Per-position partial-TP tracker (prevents double-firing the partial)
 ulong      partialTakenTickets[];
 
+// v4.7.0 — Per-position AI veto cooldown (last-call-time per ticket, cost control)
+ulong      aiVetoTickets[];
+datetime   aiVetoLastCall[];
+
 // AUTO-SCALE derived values (computed in OnInit when InpAutoScale=true)
 double     autoHardStopUSD    = 0;
 double     autoProfitTakeMin  = 0;
@@ -408,6 +417,104 @@ void ClearPartialTaken(ulong ticket)
    for(int i = idx; i < n; i++)
       partialTakenTickets[i] = partialTakenTickets[i+1];
    ArrayResize(partialTakenTickets, n);
+}
+
+// v4.7.0 — Per-ticket AI-veto cooldown helpers
+bool AIVetoCooldownOK(ulong ticket, int minSec)
+{
+   for(int i = 0; i < ArraySize(aiVetoTickets); i++)
+      if(aiVetoTickets[i] == ticket)
+         return (TimeCurrent() - aiVetoLastCall[i] >= minSec);
+   return true; // no record = OK
+}
+void RecordAIVetoCall(ulong ticket)
+{
+   for(int i = 0; i < ArraySize(aiVetoTickets); i++)
+      if(aiVetoTickets[i] == ticket)
+      {
+         aiVetoLastCall[i] = TimeCurrent();
+         return;
+      }
+   int n = ArraySize(aiVetoTickets);
+   ArrayResize(aiVetoTickets, n+1);
+   ArrayResize(aiVetoLastCall, n+1);
+   aiVetoTickets[n] = ticket;
+   aiVetoLastCall[n] = TimeCurrent();
+}
+void ClearAIVeto(ulong ticket)
+{
+   int idx = -1;
+   for(int i = 0; i < ArraySize(aiVetoTickets); i++)
+      if(aiVetoTickets[i] == ticket) { idx = i; break; }
+   if(idx < 0) return;
+   int n = ArraySize(aiVetoTickets) - 1;
+   for(int i = idx; i < n; i++)
+   {
+      aiVetoTickets[i]  = aiVetoTickets[i+1];
+      aiVetoLastCall[i] = aiVetoLastCall[i+1];
+   }
+   ArrayResize(aiVetoTickets, n);
+   ArrayResize(aiVetoLastCall, n);
+}
+
+// v4.7.0 — AI exit verdict struct (used by CheckPositionWithAI later in file)
+//   action: 0=HOLD, -1=CLOSE, 1=LOCK
+//   lockUSD: $ amount AI wants SL to bank (only if action=1)
+//   reason:  short text explanation (for log)
+struct AIExitVerdict
+{
+   int    action;
+   double lockUSD;
+   string reason;
+};
+
+// v4.7.0 — AI veto wrapper. Called BEFORE every rule-based close.
+// Returns TRUE if the close was blocked (AI said HOLD, or AI said LOCK $X and SL was banked).
+// Returns FALSE if AI confirmed CLOSE (or AI was not consulted) — caller proceeds with close.
+// Cost-aware: only calls AI if profit/peak >= InpAIExitMinProfit and cooldown is satisfied.
+bool AIBlocksClose(string ruleName, ulong ticket, bool isBuy, double openPx, double curPrice,
+                    double profit, double peak, double rDollars, double slDist, double curSL, double curTP,
+                    int digits, double rsi, double emaF, double emaS, double atr, int minsOpen, double lots)
+{
+   if(!InpAIExitOverride) return false;
+   if(InpBacktestMode)    return false;
+   if(StringLen(InpServerURL) < 10) return false;
+   // Cost gate: only spend an AI call if there's meaningful profit at stake
+   if(MathMax(profit, peak) < InpAIExitMinProfit) return false;
+   if(!AIVetoCooldownOK(ticket, InpAIExitMinSec)) return false;
+
+   AIExitVerdict v = CheckPositionWithAI(
+      isBuy ? "BUY" : "SELL", openPx, curPrice, profit, lots,
+      rsi, emaF, emaS, atr, minsOpen, curSL, curTP, peak, ruleName, RegimeName());
+   RecordAIVetoCall(ticket);
+
+   if(v.action == 0)
+   {
+      Print("AI VETO #", ticket, " (", ruleName, "): HOLD — ", v.reason);
+      return true;
+   }
+   if(v.action == 1 && v.lockUSD > 0 && rDollars > 0)
+   {
+      double lockDist = (v.lockUSD / rDollars) * slDist;
+      double newSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
+                            : NormalizeDouble(openPx - lockDist, digits);
+      double pp = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+      long   slLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+      double bufPts = MathMax(slLvl * pp, pp * 30);
+      bool sane    = isBuy ? (newSL > openPx && newSL < curPrice - bufPts)
+                           : (newSL < openPx && newSL > curPrice + bufPts);
+      bool ratchet = isBuy ? (newSL > curSL) : (newSL < curSL || curSL == 0);
+      if(sane && ratchet)
+      {
+         if(SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, "AI_LOCK"))
+            Print("AI LOCK #", ticket, " (", ruleName, ") — locked +$", DoubleToString(v.lockUSD,2),
+                  " at ", DoubleToString(newSL, digits), ". ", v.reason);
+      }
+      return true; // AI processed (either banked or sanity-rejected); skip the close
+   }
+   // v.action == -1 → AI confirmed CLOSE → caller proceeds
+   Print("AI CONFIRM #", ticket, " (", ruleName, "): CLOSE — ", v.reason);
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -754,6 +861,7 @@ int OnInit()
    todayReEntryCount = 0;
    asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false; asiaRangeDay = 0;
    ArrayResize(peakTickets, 0); ArrayResize(peakProfits, 0); ArrayResize(partialTakenTickets, 0);
+   ArrayResize(aiVetoTickets, 0); ArrayResize(aiVetoLastCall, 0);
    currentTradeThesis = ""; currentTradeInvalidation = ""; currentTradeTarget = "";
    currentTradeBearishCase = ""; currentTradeConfidence = 0;
    lastDashSignal = 0; lastDashScore = 0.0; lastDashGrade = "";
@@ -2770,6 +2878,10 @@ void ManagePositions()
       int staleCap = (currentRegime == REGIME_LOW_VOL || currentRegime == REGIME_CHOPPY) ? 35 : 90;
       if(minsOpen > staleCap && profit <= -(rDollars * 0.6))
       {
+         if(AIBlocksClose("STALE_LOSS", ticket, isBuy, openPx, curPrice,
+                          profit, peak, rDollars, slDist, curSL, curTP,
+                          digits, rsi, emaF, emaS, atr, minsOpen, posInfo.Volume()))
+            continue;
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "STALE_LOSS",
                  StringFormat("Open %d min > regime cap %d min at -%.2fR. Free the margin.",
@@ -2778,36 +2890,61 @@ void ManagePositions()
       }
       if(minsOpen > 60 && profit > -30 && profit < 30)
       {
+         if(AIBlocksClose("STALE_DRIFT", ticket, isBuy, openPx, curPrice,
+                          profit, peak, rDollars, slDist, curSL, curTP,
+                          digits, rsi, emaF, emaS, atr, minsOpen, posInfo.Volume()))
+            continue;
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "STALE_DRIFT",
                  StringFormat("Open %d min (>60min cap) with P/L $%.2f. No movement either way — free margin.", minsOpen, profit));
          trade.PositionClose(ticket); continue;
       }
 
-      // ===== PATH C: CLAUDE SEMANTIC EXIT (A+ only, every InpClaudeAuditSec) =====
+      // ===== PATH C: CLAUDE SEMANTIC EXIT (proactive audit, every InpClaudeAuditSec) =====
+      // v4.7.0 — uses AIExitVerdict (HOLD / CLOSE / LOCK $X). Cooldown is shared
+      //   with the AI veto so we don't double-spend on Claude calls.
       static datetime lastClaudeCheck = 0;
-      if(InpUseAI && StringLen(InpServerURL) >= 10 && minsOpen >= 3 && // 3min grace period
-         TimeCurrent() - lastClaudeCheck > InpClaudeAuditSec)
+      if(InpUseAI && StringLen(InpServerURL) >= 10 && minsOpen >= 3 &&
+         TimeCurrent() - lastClaudeCheck > InpClaudeAuditSec &&
+         AIVetoCooldownOK(ticket, InpAIExitMinSec))
       {
-         int claudeResult = CheckPositionWithAI(
+         AIExitVerdict v = CheckPositionWithAI(
             isBuy ? "BUY" : "SELL", openPx, curPrice, profit,
-            posInfo.Volume(), rsi, emaF, emaS, atr, minsOpen, curSL, curTP);
+            posInfo.Volume(), rsi, emaF, emaS, atr, minsOpen, curSL, curTP,
+            peak, "", RegimeName());
          lastClaudeCheck = TimeCurrent();
+         RecordAIVetoCall(ticket);
 
-         if(claudeResult == -1) // CLOSE
+         if(v.action == 1 && v.lockUSD > 0 && rDollars > 0)
          {
-            // Safety net: if losing AND small loss (<0.3R in dollars), let SL handle it
+            // Claude wants to LOCK $X — bank profit without exiting
+            double lockDist = (v.lockUSD / rDollars) * slDist;
+            double newSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
+                                 : NormalizeDouble(openPx - lockDist, digits);
+            double pp = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+            long   slLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+            double bufPts = MathMax(slLvl * pp, pp * 30);
+            bool sane    = isBuy ? (newSL > openPx && newSL < curPrice - bufPts)
+                                 : (newSL < openPx && newSL > curPrice + bufPts);
+            bool ratchet = isBuy ? (newSL > curSL) : (newSL < curSL || curSL == 0);
+            if(sane && ratchet && SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, "AI_LOCK"))
+               Print("AI LOCK (audit) #", ticket, " — locked +$", DoubleToString(v.lockUSD,2),
+                     " at ", DoubleToString(newSL, digits), ". ", v.reason);
+         }
+         else if(v.action == -1) // CLOSE
+         {
+            // Safety net: if losing AND small loss (<0.3R), let SL handle it
             if(profit < 0 && profit > -(rDollars * 0.3))
             {
                Print("CLAUDE_EXIT_BLOCKED #", ticket, " losing -$", DoubleToString(MathAbs(profit), 2),
-                     " but < 0.3R ($", DoubleToString(rDollars*0.3, 2), ") — letting SL handle");
+                     " but < 0.3R — letting SL handle");
             }
             else
             {
                LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                        "CLAUDE_AI",
-                       StringFormat("Claude 4.5 said CLOSE. P/L $%.2f (%.2fR). AI analyzed context and decided exit.",
-                                    profit, profit/rDollars));
+                       StringFormat("Claude 4.5 said CLOSE. P/L $%.2f (%.2fR). %s",
+                                    profit, profit/rDollars, v.reason));
                trade.PositionClose(ticket); continue;
             }
          }
@@ -2914,11 +3051,14 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    return dir;
 }
 
-int CheckPositionWithAI(string dir, double entry, double current, double profit, double lots,
-                         double rsi, double emaF, double emaS, double atr, int minsOpen, double sl, double tp)
+// v4.7.0 — AI position auditor: returns AIExitVerdict struct (defined near top of file)
+AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, double profit, double lots,
+                                   double rsi, double emaF, double emaS, double atr, int minsOpen, double sl, double tp,
+                                   double peakProfit, string pendingExitReason, string regime)
 {
-   if(InpBacktestMode) return 0;                   // Tester: no network
-   if(StringLen(InpServerURL) < 10) return 0;
+   AIExitVerdict v; v.action = 0; v.lockUSD = 0; v.reason = "";
+   if(InpBacktestMode) return v;                   // Tester: no network
+   if(StringLen(InpServerURL) < 10) return v;
    string url = InpServerURL + "/api/ai/manage-position";
    string headers = "Content-Type: application/json\r\n";
 
@@ -2932,16 +3072,38 @@ int CheckPositionWithAI(string dir, double entry, double current, double profit,
    StringReplace(invalEsc,  "\"", "'");
    StringReplace(invalEsc,  "\n", " ");
 
-   string body = StringFormat("{\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f,\"thesis\":\"%s\",\"invalidation\":\"%s\",\"confidence\":%d}",
+   string body = StringFormat("{\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f,\"thesis\":\"%s\",\"invalidation\":\"%s\",\"confidence\":%d,\"peak_profit\":%.2f,\"pending_exit_reason\":\"%s\",\"regime\":\"%s\"}",
       dir, entry, current, profit, lots, rsi, emaF, emaS, atr, minsOpen, sl, tp,
-      thesisEsc, invalEsc, currentTradeConfidence);
+      thesisEsc, invalEsc, currentTradeConfidence, peakProfit, pendingExitReason, regime);
    char postData[], result[]; string rh;
    StringToCharArray(body, postData, 0, StringLen(body));
    int res = WebRequest("POST", url, headers, 10000, postData, result, rh);
-   if(res != 200) return 0;
+   if(res != 200) return v;
    string response = CharArrayToString(result);
-   if(StringFind(response, "\"CLOSE\"") >= 0) { Print("CLAUDE_AUDIT: ", response); return -1; }
-   return 0;
+   v.reason = ExtractJsonString(response, "reason");
+   if(StringFind(response, "\"CLOSE\"") >= 0) { v.action = -1; return v; }
+   if(StringFind(response, "\"LOCK\"")  >= 0)
+   {
+      v.action = 1;
+      // Parse lock_usd value — it's a number, not a string
+      int lp = StringFind(response, "\"lock_usd\":");
+      if(lp >= 0)
+      {
+         lp += StringLen("\"lock_usd\":");
+         while(lp < StringLen(response) && (StringGetCharacter(response, lp) == ' ')) lp++;
+         string num = "";
+         while(lp < StringLen(response))
+         {
+            ushort c = StringGetCharacter(response, lp);
+            if((c >= '0' && c <= '9') || c == '.' || c == '-') { num += ShortToString(c); lp++; }
+            else break;
+         }
+         v.lockUSD = StringToDouble(num);
+      }
+      if(v.lockUSD <= 0) v.action = 0;  // degrade to HOLD if no valid lock
+      return v;
+   }
+   return v;
 }
 
 bool IsNewsSafe()
@@ -3242,7 +3404,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    UpdateDrawdownState(wasLoss);
 
    // v4.5.9 — Position fully closed (verified above) — clear trackers.
-   if(posId > 0) { ClearPeakProfit(posId); ClearPartialTaken(posId); }
+   if(posId > 0) { ClearPeakProfit(posId); ClearPartialTaken(posId); ClearAIVeto(posId); }
    // Clear active thesis (no open position now until next entry)
    if(CountMyPositions() == 0)
    {

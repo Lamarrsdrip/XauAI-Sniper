@@ -84,6 +84,23 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.7.0 — "AI Exit Brain" (Claude vetoes bad rule-based closes — finally smart exits)**
+  - User pain: "the only thing killing things is the exit logic… it doesn't reason before it takes actions". Bot was trading well on entries, but rule-based exits (MOMENTUM_FADE / STALE_DRIFT / STALE_LOSS) were closing winners right before continuation, OR letting profit retrace from huge to loss.
+  - **Solution — Claude veto override (cost-aware, ~$1-2/month extra)**:
+    - Backend `/api/ai/manage-position` upgraded to a 3-action vocabulary: **HOLD** / **CLOSE** / **LOCK ($X)**. New context fields: `peak_profit`, `pending_exit_reason`, `regime`.
+    - LOCK action: Claude can choose a $ amount to bank as SL floor instead of closing (e.g. peak $700 retracing → LOCK $400 floor, keep the runner). EA computes SL price from the $ amount, sanity-checks it, and ratchets only.
+    - System prompt: dedicated VETO mode when EA tells Claude "rule-based exit X wants to close — veto if thesis intact". Claude reasons against the original thesis + invalidation + current market state.
+  - **EA wiring**:
+    - New input group `=== AI EXIT BRAIN ===`: `InpAIExitOverride=true`, `InpAIExitMinSec=60` (cost cooldown), `InpAIExitMinProfit=30` (only call AI when there's meaningful profit at stake).
+    - New helper `AIBlocksClose()` called BEFORE every rule-based close. If AI says HOLD or LOCK → close is blocked. If AI says CLOSE → confirms with reasoning logged.
+    - Wired into 3 close paths: MOMENTUM_FADE, STALE_LOSS, STALE_DRIFT.
+    - PATH C (proactive Claude semantic exit) upgraded to use new struct, can now LOCK $X instead of just close.
+    - Per-position cooldown via `aiVetoTickets[]` arrays + cleanup in OnTradeTransaction.
+  - **Cost math**: Claude Sonnet 4.5 ≈ $0.0024 per call. Cooldown = 60s. Cost gate = profit/peak ≥ $30. Estimated 1-3 calls per trade × ~90 trades/month ≈ ~270 calls = **~$0.65/month** (well under $10 user budget).
+  - **Verified live**: test endpoint returns LOCK $400 with reasoning when MOMENTUM_FADE wants to close a healthy thesis-aligned position, and HOLD when a small drawdown trade is still in-thesis.
+  - Compile: braces 0/0, parens 0/0, 3515 lines, 167KB.
+  - Frontend bumped to v4.7.0.
+
 - **Feb 2026 - v4.6.7 — "Peak-Lock Backstop" (root cause: huge accounts skipped Tier 1)**
   - User report: live trade peaked at +$700, exited at **-$45**. SL never moved.
   - **Root cause**: the Profit Ladder tiers scale with balance. On a $50k+ account, Tier 1 trigger is $250+, so a $700 peak that retraced still never crossed any tier — SL stayed in original loss territory and got hit when price reversed.

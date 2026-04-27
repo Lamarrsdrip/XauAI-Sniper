@@ -1130,6 +1130,10 @@ class PositionCheckRequest(BaseModel):
     thesis: str = ""            # original entry thesis
     invalidation: str = ""      # condition that invalidates the trade
     confidence: int = 0         # original entry confidence (0-100)
+    # v4.7.0: richer context for AI veto on rule-based close attempts
+    peak_profit: float = 0      # highest profit reached on this trade
+    pending_exit_reason: str = "" # "MOMENTUM_FADE" / "TIME_EXPIRED" / "STALE_DRIFT" / "" (regular audit)
+    regime: str = ""            # current market regime (TRENDING_UP, RANGING, etc.)
 
 @api_router.post("/ai/manage-position")
 async def ai_manage_position(req: PositionCheckRequest):
@@ -1137,37 +1141,38 @@ async def ai_manage_position(req: PositionCheckRequest):
         if not LLM_KEY:
             return {"action": "HOLD", "reason": "AI not configured"}
 
-        # v4.5.0 — Thesis-aware manager.
-        # Instead of mechanical "take $150-500 profit" rules, Claude audits
-        # whether the ORIGINAL trade reason still holds given new market state.
+        # v4.7.0 — AI exit brain with action expansion.
+        # Returns one of: HOLD, CLOSE, LOCK (with lock_usd $ amount)
+        # When pending_exit_reason is set, the EA is asking AI to VETO a rule-based close.
+        is_veto = bool(req.pending_exit_reason)
         has_thesis = bool(req.thesis and len(req.thesis) > 20)
-        if has_thesis:
-            system_msg = """You are a XAUUSD M5 position auditor. An open trade was taken for a specific REASON (the original thesis). Your job is to decide if that reason is STILL VALID given the new market data.
+
+        if is_veto:
+            system_msg = f"""You are a XAUUSD M5 trade auditor. The bot's rule-based logic wants to CLOSE this position because of: {req.pending_exit_reason}.
+
+Your job: VETO the close if the original thesis is still intact, OR confirm if the rule is right.
 
 RESPOND IN EXACTLY THIS JSON (no markdown fences):
-{"action":"HOLD","reason":"short reason"}
+{{"action":"HOLD","reason":"short reason"}}
 
 Rules:
-- action: HOLD or CLOSE (only these 2)
-- reason: max 30 words — reference whether the original thesis is still true
-- Do NOT close just because P/L is positive. Close ONLY if:
-    (a) the original thesis is INVALIDATED by new data (trend flip, structure break, etc.), or
-    (b) the invalidation condition has been met, or
-    (c) the trade has gone stale (minutes_open > 30) AND no follow-through
-- HOLD if the thesis is still intact, even if profit is modest — winners need time.
-- Trust the original reason; only override if there's clear evidence it's wrong now."""
+- action: HOLD (veto the close — let trade run) or CLOSE (confirm rule was right) or LOCK (close half OR move SL into profit by lock_usd amount).
+- If action is LOCK include "lock_usd": <number> — the $ profit you want SL to bank as floor (the EA will move SL there).
+- reason: max 30 words — reference whether the original thesis is still true.
+- BIAS toward HOLD/LOCK over CLOSE — give winners room. Only CLOSE if the original thesis is invalidated or trend has clearly flipped against position.
+- LOCK is your friend: if the trade is up but momentum is uncertain, LOCK $X (a fraction of current profit) to bank the win without giving up the runner."""
         else:
-            system_msg = """You are a XAUUSD M5 position auditor. Decide if an open trade should HOLD or CLOSE based on current market conditions.
+            system_msg = """You are a XAUUSD M5 trade auditor for an open position. Decide HOLD, CLOSE, or LOCK.
 
 RESPOND IN EXACTLY THIS JSON (no markdown fences):
 {"action":"HOLD","reason":"short reason"}
 
 Rules:
-- action: HOLD or CLOSE
-- reason: max 30 words
-- CLOSE if trend has clearly flipped against position, RSI shows strong reversal, or trade has been open > 30 min with no progress.
-- HOLD if setup conditions still broadly support direction and price is actively moving.
-- Bias toward HOLD — give trades room to work. Only CLOSE with clear evidence."""
+- action: HOLD, CLOSE, or LOCK.
+- If action is LOCK include "lock_usd": <number> — the $ profit you want SL to bank.
+- reason: max 30 words.
+- HOLD is the default — give trades time to work. Only CLOSE if the original thesis is invalidated or trend has clearly flipped against position.
+- Use LOCK when profit is meaningful but you want to bank a floor without exiting. Example: profit $700 peak, now $600 with momentum slowing → LOCK $300."""
 
         chat = LlmChat(
             api_key=LLM_KEY,
@@ -1176,10 +1181,11 @@ Rules:
         ).with_model("anthropic", "claude-sonnet-4-5-20250929")
 
         pnl_str = f"+${req.profit:.2f}" if req.profit > 0 else f"-${abs(req.profit):.2f}"
+        peak_str = f"+${req.peak_profit:.2f}" if req.peak_profit > 0 else "n/a"
         thesis_block = ""
         if has_thesis:
             thesis_block = f"""
-ORIGINAL ENTRY THESIS (the reason we took this trade):
+ORIGINAL ENTRY THESIS:
 "{req.thesis[:400]}"
 
 ORIGINAL INVALIDATION CONDITION:
@@ -1187,28 +1193,26 @@ ORIGINAL INVALIDATION CONDITION:
 
 ORIGINAL CONFIDENCE: {req.confidence}/100
 """
+        veto_block = f"\n⚠️  RULE-BASED EXIT WANTS TO CLOSE: '{req.pending_exit_reason}'. Veto this if thesis is still intact." if is_veto else ""
         prompt = f"""OPEN {req.direction} POSITION on XAUUSD:
 - Entry: {req.entry_price} | Current: {req.current_price}
-- P/L: {pnl_str} ({req.lots} lots)
+- P/L: {pnl_str} | Peak: {peak_str} | ({req.lots} lots)
 - Open for: {req.minutes_open} minutes
 - SL: {req.sl} | TP: {req.tp}
-- RSI: {req.rsi}
+- RSI: {req.rsi} | ATR: {req.atr}
 - EMA50: {req.ema_fast} | EMA200: {req.ema_slow}
-- ATR: {req.atr}
-- Current Trend: {"BULLISH" if req.ema_fast > req.ema_slow else "BEARISH"}
+- Trend: {"BULLISH" if req.ema_fast > req.ema_slow else "BEARISH"} | Regime: {req.regime or 'unknown'}{veto_block}
 {thesis_block}
-Is the original thesis still valid? Should I HOLD or CLOSE? JSON only."""
+HOLD, CLOSE, or LOCK? JSON only."""
 
         msg = UserMessage(text=prompt)
         response = await chat.send_message(msg)
 
         import json, re
         cleaned = response.strip()
-        # Strip markdown code fences if present
         fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", cleaned, re.DOTALL)
         if fence:
             cleaned = fence.group(1).strip()
-        # Extract first JSON object if still wrapped in prose
         if not cleaned.startswith("{"):
             m = re.search(r"\{.*\}", cleaned, re.DOTALL)
             if m:
@@ -1216,9 +1220,19 @@ Is the original thesis still valid? Should I HOLD or CLOSE? JSON only."""
         try:
             result = json.loads(cleaned)
             result["action"] = str(result.get("action", "HOLD")).upper()
-            if result["action"] not in ["HOLD", "CLOSE"]:
+            if result["action"] not in ["HOLD", "CLOSE", "LOCK"]:
                 result["action"] = "HOLD"
             result["reason"] = str(result.get("reason", ""))[:200]
+            # Coerce lock_usd into float if present
+            if result["action"] == "LOCK":
+                try:
+                    result["lock_usd"] = float(result.get("lock_usd", 0) or 0)
+                except (TypeError, ValueError):
+                    result["lock_usd"] = 0.0
+                if result["lock_usd"] <= 0:
+                    # No valid lock amount → degrade to HOLD
+                    result["action"] = "HOLD"
+                    result["reason"] = "LOCK requested but no lock_usd → HOLD"
             return result
         except json.JSONDecodeError:
             up = response.upper()
