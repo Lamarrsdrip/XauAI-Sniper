@@ -84,6 +84,20 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.7.3 — "TP Auto-Extend" (push TP forward as winner runs)**
+  - User pain: "Hope we still have the TP auto-readjustment to secure profit as market move in our favor like to bring TP front."
+  - **Honest finding**: SL was being ratcheted forward (Profit Ladder, Peak Lock, Moon Trail) but TP was NEVER moved after entry. A strong runner would hit the original 2R TP and exit — no matter how good the trend was.
+  - **Fix — TP Auto-Extend (zero LLM cost, pure MQL5)**:
+    - `InpTPAutoExtend = true` (default ON)
+    - When profit reaches `InpTPExtendTriggerPct=80%` of TP-distance from entry, TP gets pushed forward by `InpTPExtendATRMulti=1.5×ATR`.
+    - Capped at `InpTPExtendMaxTimes=5` extensions per position (prevents infinite-loop edge cases).
+    - Sanity-check: new TP must sit on correct side of price + respect broker SYMBOL_TRADE_STOPS_LEVEL + 30pt buffer.
+    - Per-position counter via `tpExtendTickets[]` / `tpExtendCount[]` arrays. Cleaned up in OnTradeTransaction.
+    - New log: `TP_EXTEND #ticket (1/5) profit $X reached 80% of TP — TP pushed Y further to Z. Runner keeps running.`
+  - **Combined with v4.7.2 Preservation Mode**: SL ratchets UP (banks profit), TP ratchets FORWARD (removes ceiling), exits only on real reversal (AI veto + SL hit + Moon Trail). This is the full "let winners run" architecture.
+  - Compile: braces 0/0, parens 0/0, 3619 lines.
+  - Frontend bumped to v4.7.3.
+
 - **Feb 2026 - v4.7.2 — "Preservation Mode" (stop trading a $100k acc like a $100 acc)**
   - User pain: $100k account drawdown -45% → $54k. Bot called gold direction RIGHT (4710 → 4668), but every trade exited in -$58 to +$83 range. The bot was scalping out winners on micro-moves while the macro trend ran without it.
   - **Root cause**: rule-based exits (MOMENTUM_FADE, TIME_EXPIRED, SMART_CUT, STALE_DRIFT, PEAK_RETRACE) were tuned for a small $1k account where $30-50 profit-protection makes sense. On a $100k account those thresholds fire on completely normal noise wicks.

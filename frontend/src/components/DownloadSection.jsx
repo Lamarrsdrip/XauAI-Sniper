@@ -8,7 +8,7 @@ export default function DownloadSection({ api }) {
         <div className="mb-12">
           <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-gray-400 bg-white border border-gray-200 px-3 py-1.5 rounded-full"><DownloadSimple size={12} weight="bold" className="inline mr-1" />DOWNLOAD CENTER</span>
           <h2 className="font-heading text-3xl sm:text-4xl font-semibold tracking-tight mt-6 text-[#111]" data-testid="download-title">Get the Expert Advisor</h2>
-          <p className="text-gray-500 mt-2">Download v4.7.2 — Preservation Mode: stops scalper-style premature exits. Risk default 0.4%.</p>
+          <p className="text-gray-500 mt-2">Download v4.7.3 — TP Auto-Extend: TP pushes forward as winner runs. No more profit ceilings.</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
           <div className="bg-white border border-gray-200 rounded-3xl p-8 card-hover" data-testid="download-ea-card">
@@ -20,7 +20,7 @@ export default function DownloadSection({ api }) {
               </div>
             </div>
             <div className="flex items-center gap-3 mb-5 text-[10px] font-mono text-gray-300 tracking-wide">
-              <span>XAUUSD_AI_Sniper_EA.mq5</span><span>|</span><span>~155 KB</span><span>|</span><span>v4.7.2</span>
+              <span>XAUUSD_AI_Sniper_EA.mq5</span><span>|</span><span>~157 KB</span><span>|</span><span>v4.7.3</span>
             </div>
             <a href={`${api}/download/ea`} data-testid="download-ea-button"
               className="inline-flex items-center gap-2 bg-[#111] text-white rounded-full px-6 py-3 font-semibold text-sm hover:bg-gray-800 transition-colors">

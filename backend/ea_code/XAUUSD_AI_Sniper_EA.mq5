@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.7.2 — Preservation Mode     |
+//|                                     v4.7.3 — TP Auto-Extend        |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.72"
-#property description "XAUUSD AI Sniper v4.7.2 — Preservation Mode (let winners run, stop trading like a small acc)"
+#property version   "4.73"
+#property description "XAUUSD AI Sniper v4.7.3 — TP Auto-Extend (push TP forward as winner runs)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -25,6 +25,12 @@ input group "=== RISK (Gate 4) ==="
 input group "=== PRESERVATION MODE (v4.7.2 — let winners run, don't trade like scalper) ==="
 input bool   InpPreservationMode = true;  // Master toggle: disables premature profit-side exits
 input double InpRiskPercent    = 0.4;      // Base risk per trade (%) — was 1.0, lowered for survivability
+
+input group "=== TP AUTO-EXTEND (v4.7.3 — push TP forward as winner runs) ==="
+input bool   InpTPAutoExtend     = true;   // When profit nears TP, push TP further so the runner keeps running
+input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this % of TP-distance (e.g. 80%)
+input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
+input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 input double InpMaxLots        = 10.0;     // Hard max lots
 input double InpDailyLossLimit = 6.0;      // Daily loss cap (%) — set 0 to disable
 input int    InpMaxOpenTrades  = 5;        // Max open positions
@@ -336,6 +342,10 @@ ulong      partialTakenTickets[];
 ulong      aiVetoTickets[];
 datetime   aiVetoLastCall[];
 
+// v4.7.3 — Per-position TP-extension counter (caps how many times TP can be pushed forward)
+ulong      tpExtendTickets[];
+int        tpExtendCount[];
+
 // AUTO-SCALE derived values (computed in OnInit when InpAutoScale=true)
 double     autoHardStopUSD    = 0;
 double     autoProfitTakeMin  = 0;
@@ -457,6 +467,39 @@ void ClearAIVeto(ulong ticket)
    }
    ArrayResize(aiVetoTickets, n);
    ArrayResize(aiVetoLastCall, n);
+}
+
+// v4.7.3 — TP extension tracker helpers
+int GetTPExtendCount(ulong ticket)
+{
+   for(int i = 0; i < ArraySize(tpExtendTickets); i++)
+      if(tpExtendTickets[i] == ticket) return tpExtendCount[i];
+   return 0;
+}
+void IncTPExtendCount(ulong ticket)
+{
+   for(int i = 0; i < ArraySize(tpExtendTickets); i++)
+      if(tpExtendTickets[i] == ticket) { tpExtendCount[i]++; return; }
+   int n = ArraySize(tpExtendTickets);
+   ArrayResize(tpExtendTickets, n+1);
+   ArrayResize(tpExtendCount, n+1);
+   tpExtendTickets[n] = ticket;
+   tpExtendCount[n] = 1;
+}
+void ClearTPExtend(ulong ticket)
+{
+   int idx = -1;
+   for(int i = 0; i < ArraySize(tpExtendTickets); i++)
+      if(tpExtendTickets[i] == ticket) { idx = i; break; }
+   if(idx < 0) return;
+   int n = ArraySize(tpExtendTickets) - 1;
+   for(int i = idx; i < n; i++)
+   {
+      tpExtendTickets[i] = tpExtendTickets[i+1];
+      tpExtendCount[i]   = tpExtendCount[i+1];
+   }
+   ArrayResize(tpExtendTickets, n);
+   ArrayResize(tpExtendCount, n);
 }
 
 // v4.7.0 — AI exit verdict struct (used by CheckPositionWithAI later in file)
@@ -864,6 +907,7 @@ int OnInit()
    asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false; asiaRangeDay = 0;
    ArrayResize(peakTickets, 0); ArrayResize(peakProfits, 0); ArrayResize(partialTakenTickets, 0);
    ArrayResize(aiVetoTickets, 0); ArrayResize(aiVetoLastCall, 0);
+   ArrayResize(tpExtendTickets, 0); ArrayResize(tpExtendCount, 0);
    currentTradeThesis = ""; currentTradeInvalidation = ""; currentTradeTarget = "";
    currentTradeBearishCase = ""; currentTradeConfidence = 0;
    lastDashSignal = 0; lastDashScore = 0.0; lastDashGrade = "";
@@ -2375,6 +2419,38 @@ void ManagePositions()
       // Dir string for logging
       string dirStr = isBuy ? "BUY" : "SELL";
 
+      // v4.7.3 — TP AUTO-EXTEND (push TP forward as winner runs)
+      //   When profit is ≥ InpTPExtendTriggerPct% of the way to current TP,
+      //   add InpTPExtendATRMulti × ATR to TP so the runner doesn't get clipped
+      //   on the original target. SL ratchets (Ladder/Peak/Moon) protect the
+      //   gains; this just removes the artificial ceiling.
+      if(InpTPAutoExtend && curTP > 0 && profit > 0 && atr > 0 &&
+         GetTPExtendCount(ticket) < InpTPExtendMaxTimes)
+      {
+         double tpDist = isBuy ? (curTP - openPx) : (openPx - curTP);
+         double profitDist = isBuy ? (curPrice - openPx) : (openPx - curPrice);
+         if(tpDist > 0 && profitDist >= tpDist * (InpTPExtendTriggerPct / 100.0))
+         {
+            double tpAdd = atr * InpTPExtendATRMulti;
+            double newTP = isBuy ? NormalizeDouble(curTP + tpAdd, digits)
+                                  : NormalizeDouble(curTP - tpAdd, digits);
+            // Sanity: must be on correct side of current price + respect stops level
+            double pp = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+            long   slLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+            double bufPts = MathMax(slLvl * pp, pp * 30);
+            bool tpSane = isBuy ? (newTP > curPrice + bufPts) : (newTP < curPrice - bufPts);
+            if(tpSane && trade.PositionModify(ticket, curSL, newTP))
+            {
+               IncTPExtendCount(ticket);
+               Print("TP_EXTEND #", ticket, " (", GetTPExtendCount(ticket), "/", InpTPExtendMaxTimes,
+                     ") profit $", DoubleToString(profit,2),
+                     " reached ", DoubleToString(InpTPExtendTriggerPct,0), "% of TP — TP pushed ",
+                     DoubleToString(tpAdd, digits), " further to ", DoubleToString(newTP, digits),
+                     ". Runner keeps running.");
+            }
+         }
+      }
+
       // ===== PATH 0: HARD LOSS PROTECTION (v4.4.5 — R-based, adaptive) =====
       // R-BASED hard stop fires only at catastrophic loss (e.g. 3× original SL risk).
       // This prevents the bug where a big lot + small $-cap = stopped out on 1-point noise.
@@ -3432,7 +3508,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    UpdateDrawdownState(wasLoss);
 
    // v4.5.9 — Position fully closed (verified above) — clear trackers.
-   if(posId > 0) { ClearPeakProfit(posId); ClearPartialTaken(posId); ClearAIVeto(posId); }
+   if(posId > 0) { ClearPeakProfit(posId); ClearPartialTaken(posId); ClearAIVeto(posId); ClearTPExtend(posId); }
    // Clear active thesis (no open position now until next entry)
    if(CountMyPositions() == 0)
    {
