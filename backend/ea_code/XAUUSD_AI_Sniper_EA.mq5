@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.6.1 — Profit Ladder       |
+//|                                     v4.6.2 — Account-Scaled Ladder|
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.61"
-#property description "XAUUSD AI Sniper v4.6.1 — Profit Ladder (auto-locks SL into profit as $ grows)"
+#property version   "4.62"
+#property description "XAUUSD AI Sniper v4.6.2 — Account-Scaled Profit Ladder (works on $500 to $500k)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -118,18 +118,32 @@ input double InpPartialPct        = 0.4;   // Fraction of position to close (0.4
 input bool   InpPartialSkipHighConf = true;// Skip partial on 90%+ trades (let them fully run)
 input int    InpPartialMinMinutes  = 3;    // Don't fire partial within first N minutes (let trade develop)
 
-input group "=== PROFIT LADDER (v4.6.1 — auto-lock SL into profit as $ grows) ==="
+input group "=== PROFIT LADDER (v4.6.2 — auto-scales to YOUR account size) ==="
 input bool   InpProfitLadder       = true;  // Auto-push SL into profit as trade grows
-input double InpLadderTier1Profit  = 500;   // When profit ≥ $500
-input double InpLadderTier1Lock    = 200;   //   lock SL at +$200
-input double InpLadderTier2Profit  = 1000;  // When profit ≥ $1000
-input double InpLadderTier2Lock    = 500;   //   lock SL at +$500
-input double InpLadderTier3Profit  = 2000;  // When profit ≥ $2000
-input double InpLadderTier3Lock    = 1200;  //   lock SL at +$1200
-input double InpLadderTier4Profit  = 3500;  // When profit ≥ $3500
-input double InpLadderTier4Lock    = 2000;  //   lock SL at +$2000
-input double InpLadderTier5Profit  = 5000;  // When profit ≥ $5000
-input double InpLadderTier5Lock    = 3000;  //   lock SL at +$3000
+input bool   InpLadderUsePct       = true;  // TRUE = tiers are % of balance (recommended). FALSE = absolute $
+input double InpLadderTier1ProfPct = 0.5;   // Tier 1 trigger: profit ≥ this % of balance
+input double InpLadderTier1LockPct = 0.2;   //   lock SL at this % of balance
+input double InpLadderTier2ProfPct = 1.0;   // Tier 2 trigger: profit ≥ this % of balance
+input double InpLadderTier2LockPct = 0.5;   //   lock SL at this % of balance
+input double InpLadderTier3ProfPct = 2.0;   // Tier 3 trigger
+input double InpLadderTier3LockPct = 1.2;
+input double InpLadderTier4ProfPct = 3.5;   // Tier 4 trigger
+input double InpLadderTier4LockPct = 2.0;
+input double InpLadderTier5ProfPct = 5.0;   // Tier 5 trigger
+input double InpLadderTier5LockPct = 3.0;
+input double InpLadderMinProfFloor = 25.0;  // Minimum tier-1 trigger in $ (micro accounts)
+input double InpLadderMinLockFloor = 10.0;  // Minimum lock amount in $ (micro accounts)
+// Legacy absolute $ inputs (used only when InpLadderUsePct=false)
+input double InpLadderTier1Profit  = 500;   // Absolute $ tier 1 trigger
+input double InpLadderTier1Lock    = 200;   // Absolute $ tier 1 lock
+input double InpLadderTier2Profit  = 1000;
+input double InpLadderTier2Lock    = 500;
+input double InpLadderTier3Profit  = 2000;
+input double InpLadderTier3Lock    = 1200;
+input double InpLadderTier4Profit  = 3500;
+input double InpLadderTier4Lock    = 2000;
+input double InpLadderTier5Profit  = 5000;
+input double InpLadderTier5Lock    = 3000;
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -701,7 +715,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.6.1 (PROFIT LADDER) READY ===");
+   Print("=== XAUAI SNIPER v4.6.2 (ACCOUNT-SCALED LADDER) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -772,7 +786,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.6.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.6.2 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -2294,39 +2308,64 @@ void ManagePositions()
          }
       }
 
-      // v4.6.1 — PROFIT LADDER
+      // v4.6.2 — PROFIT LADDER (account-scaled)
       // Once trade reaches each profit tier, push SL to lock guaranteed dollar profit.
-      // Works for both BUY and SELL. Each tier is independent — picks the highest-tier
-      // lock currently met. Ladder math is in $ (not R) so big-lot trades benefit too.
+      // Tiers are % of CURRENT BALANCE so a $500 account uses $5/$2 tier-1, a $50k
+      // account uses $250/$100, etc. Absolute floors prevent micro accounts from
+      // having $0 lock amounts. Set InpLadderUsePct=false for fixed $ legacy mode.
       if(InpProfitLadder && profit > 0)
       {
+         double bal = accInfo.Balance();
+         if(bal <= 0) bal = accInfo.Equity();   // fallback
+         double t1p, t1l, t2p, t2l, t3p, t3l, t4p, t4l, t5p, t5l;
+         if(InpLadderUsePct)
+         {
+            t1p = bal * InpLadderTier1ProfPct / 100.0;
+            t1l = bal * InpLadderTier1LockPct / 100.0;
+            t2p = bal * InpLadderTier2ProfPct / 100.0;
+            t2l = bal * InpLadderTier2LockPct / 100.0;
+            t3p = bal * InpLadderTier3ProfPct / 100.0;
+            t3l = bal * InpLadderTier3LockPct / 100.0;
+            t4p = bal * InpLadderTier4ProfPct / 100.0;
+            t4l = bal * InpLadderTier4LockPct / 100.0;
+            t5p = bal * InpLadderTier5ProfPct / 100.0;
+            t5l = bal * InpLadderTier5LockPct / 100.0;
+            // Apply micro-account floors so tiers stay viable on tiny balances
+            if(t1p < InpLadderMinProfFloor) t1p = InpLadderMinProfFloor;
+            if(t1l < InpLadderMinLockFloor) t1l = InpLadderMinLockFloor;
+         }
+         else
+         {
+            t1p = InpLadderTier1Profit; t1l = InpLadderTier1Lock;
+            t2p = InpLadderTier2Profit; t2l = InpLadderTier2Lock;
+            t3p = InpLadderTier3Profit; t3l = InpLadderTier3Lock;
+            t4p = InpLadderTier4Profit; t4l = InpLadderTier4Lock;
+            t5p = InpLadderTier5Profit; t5l = InpLadderTier5Lock;
+         }
+
          double lockProfitUSD = 0;
-         if(profit >= InpLadderTier5Profit)      lockProfitUSD = InpLadderTier5Lock;
-         else if(profit >= InpLadderTier4Profit) lockProfitUSD = InpLadderTier4Lock;
-         else if(profit >= InpLadderTier3Profit) lockProfitUSD = InpLadderTier3Lock;
-         else if(profit >= InpLadderTier2Profit) lockProfitUSD = InpLadderTier2Lock;
-         else if(profit >= InpLadderTier1Profit) lockProfitUSD = InpLadderTier1Lock;
+         double tierTriggered = 0;
+         if(profit >= t5p)      { lockProfitUSD = t5l; tierTriggered = t5p; }
+         else if(profit >= t4p) { lockProfitUSD = t4l; tierTriggered = t4p; }
+         else if(profit >= t3p) { lockProfitUSD = t3l; tierTriggered = t3p; }
+         else if(profit >= t2p) { lockProfitUSD = t2l; tierTriggered = t2p; }
+         else if(profit >= t1p) { lockProfitUSD = t1l; tierTriggered = t1p; }
 
          if(lockProfitUSD > 0 && rDollars > 0)
          {
-            // Convert $-lock into a price level. lockDist (in price points) =
-            // (lockProfitUSD / rDollars) × slDist
+            // Convert $-lock into a price level
             double lockDist = (lockProfitUSD / rDollars) * slDist;
             double newLockSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
                                      : NormalizeDouble(openPx - lockDist, digits);
-            // Only ratchet UP for BUY (newSL > curSL) or DOWN for SELL (newSL < curSL or curSL==0)
+            // Only ratchet UP for BUY or DOWN for SELL
             bool shouldUpdate = isBuy ? (newLockSL > curSL)
                                       : (newLockSL < curSL || curSL == 0);
             if(shouldUpdate)
             {
                if(SafeModifySL(ticket, newLockSL, curTP, isBuy, curPrice, "LADDER"))
                   Print("PROFIT_LADDER #", ticket, " profit $", DoubleToString(profit,2),
-                        " ≥ tier $", DoubleToString(
-                           profit>=InpLadderTier5Profit?InpLadderTier5Profit:
-                           profit>=InpLadderTier4Profit?InpLadderTier4Profit:
-                           profit>=InpLadderTier3Profit?InpLadderTier3Profit:
-                           profit>=InpLadderTier2Profit?InpLadderTier2Profit:
-                           InpLadderTier1Profit, 0),
+                        " ≥ tier $", DoubleToString(tierTriggered, 0),
+                        " (bal $", DoubleToString(bal, 0), ")",
                         " — SL locked at +$", DoubleToString(lockProfitUSD, 0),
                         " (price ", DoubleToString(newLockSL, digits), "). Worst case = banked profit.");
             }
@@ -3114,7 +3153,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.6.1 | LADDER | ";
+   d += " XAUAI SNIPER v4.6.2 | LADDER% | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
