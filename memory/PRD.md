@@ -84,6 +84,19 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.6.3 — "Stop Killing Winners" (disable aggressive trails when Ladder ON)**
+  - User pain: gold went 4711 → 4693 (bot called direction RIGHT every time) but every SELL exited at +$11 / +$157 / +$317 — clipping at 0.02-0.9 points instead of riding for thousands.
+  - **Forensic root cause**: BE_LOCK was firing at +1R then placing SL at openPx + 0.25R = ~0.3 points above entry on these big-lot trades. Gold's normal noise wicks 0.3 points within seconds → SL hit → exit at near-zero profit. Same for PATH A 1.2×ATR trail kicking in at first profit point. Both were redundantly competing with the new Profit Ladder.
+  - **Fix**: when `InpProfitLadder = true` (default), the old BE_LOCK and PATH-A trail are SKIPPED entirely. Profit Ladder is the sole SL ratcheter — and it only moves SL when MEANINGFUL $ profit is reached (% of balance), not on a single 1R noise spike.
+  - Set `InpProfitLadder = false` to revert to legacy BE_LOCK + PATH-A trail behavior.
+  - Compile: 301/301 braces, 1826/1826 parens.
+  - Frontend bumped to v4.6.3.
+
+- **Feb 2026 - v4.6.2 — "Account-Scaled Profit Ladder"**
+  - User concern: ladder tiers shouldn't be fixed $ — must scale to account size.
+  - Made all 5 ladder tiers % of balance (default 0.5/1/2/3.5/5% trigger, 0.2/0.5/1.2/2/3% lock) with $25/$10 micro-account floors.
+  - Toggle via `InpLadderUsePct=true` (default). Set false for legacy fixed $ mode.
+
 - **Feb 2026 - v4.6.1 — "Profit Ladder" (auto-lock SL into profit as $ grows)**
   - User idea (perfect, zero credit cost): "once trade goes above $1k profit, push SL to lock guaranteed profit. Never lose a winner again."
   - **5-tier ladder** that automatically pushes SL into profit territory based on $ profit reached:

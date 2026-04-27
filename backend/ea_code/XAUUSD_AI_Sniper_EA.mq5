@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.6.2 — Account-Scaled Ladder|
+//|                                     v4.6.3 — Stop Killing Winners|
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.62"
-#property description "XAUUSD AI Sniper v4.6.2 — Account-Scaled Profit Ladder (works on $500 to $500k)"
+#property version   "4.63"
+#property description "XAUUSD AI Sniper v4.6.3 — Stop Killing Winners (BE_LOCK + tight trail disabled when Ladder ON)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -715,7 +715,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.6.2 (ACCOUNT-SCALED LADDER) READY ===");
+   Print("=== XAUAI SNIPER v4.6.3 (STOP KILLING WINNERS) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -786,7 +786,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.6.2 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.6.3 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -2262,49 +2262,58 @@ void ManagePositions()
       }
 
       // ===== PATH A: DETERMINISTIC TRAILING =====
-      // Trail at 1.2x ATR behind price
-      double trailDist = MathMax(atr * 1.2, SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 200);
-      if(isBuy && profit > 0)
+      // Trail at 1.2x ATR behind price.
+      // SKIPPED if Profit Ladder is active — Ladder handles SL ratcheting on
+      // real $ profit, which is smarter than a tick-by-tick ATR trail. (v4.6.3)
+      if(!InpProfitLadder)
       {
-         double newSL = NormalizeDouble(curPrice - trailDist, digits);
-         if(newSL > curSL && newSL > openPx)
-            SafeModifySL(ticket, newSL, curTP, true, curPrice, "TRAIL-A");
-      }
-      if(!isBuy && profit > 0)
-      {
-         double newSL = NormalizeDouble(curPrice + trailDist, digits);
-         if(newSL < curSL && newSL < openPx)
-            SafeModifySL(ticket, newSL, curTP, false, curPrice, "TRAIL-A");
+         double trailDist = MathMax(atr * 1.2, SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 200);
+         if(isBuy && profit > 0)
+         {
+            double newSL = NormalizeDouble(curPrice - trailDist, digits);
+            if(newSL > curSL && newSL > openPx)
+               SafeModifySL(ticket, newSL, curTP, true, curPrice, "TRAIL-A");
+         }
+         if(!isBuy && profit > 0)
+         {
+            double newSL = NormalizeDouble(curPrice + trailDist, digits);
+            if(newSL < curSL && newSL < openPx)
+               SafeModifySL(ticket, newSL, curTP, false, curPrice, "TRAIL-A");
+         }
       }
 
       // ===== PATH B: SMART MANAGEMENT =====
 
-      // B1: Breakeven lock (v4.5.1 — wait for +1R before locking, and lock at +0.25R of profit)
-      //  WAS: +0.5R activate, SL = openPx + 10 points (basically zero profit)
-      //  NOW: +1.0R activate, SL = openPx + 0.25R (locks real profit; survives normal noise)
-      double activateDist = slDist * InpBELockActivateR;
-      double lockProfitDist = slDist * InpBELockProfitR;
-      if(isBuy && curPrice > openPx + activateDist)
+      // B1: Breakeven lock — SKIPPED entirely if Profit Ladder is active.
+      // Reason: BE_LOCK at +1R / lock-at-+0.25R was getting wicked by normal noise,
+      //   killing every winner at near-zero profit. The Profit Ladder is a smarter
+      //   replacement: it only ratchets SL into profit when MEANINGFUL $ profit
+      //   (% of balance) is reached, not on a single 1R noise spike. (v4.6.3)
+      if(!InpProfitLadder)
       {
-         double beSL = NormalizeDouble(openPx + lockProfitDist, digits);
-         // Only raise SL — never lower it (this was a bug: trail could already be higher)
-         if(beSL > curSL)
+         double activateDist = slDist * InpBELockActivateR;
+         double lockProfitDist = slDist * InpBELockProfitR;
+         if(isBuy && curPrice > openPx + activateDist)
          {
-            if(SafeModifySL(ticket, beSL, curTP, true, curPrice, "BE_LOCK"))
-               Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
-                     " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
-                     DoubleToString(InpBELockProfitR,2), "R profit)");
+            double beSL = NormalizeDouble(openPx + lockProfitDist, digits);
+            if(beSL > curSL)
+            {
+               if(SafeModifySL(ticket, beSL, curTP, true, curPrice, "BE_LOCK"))
+                  Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
+                        " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
+                        DoubleToString(InpBELockProfitR,2), "R profit)");
+            }
          }
-      }
-      if(!isBuy && curPrice < openPx - activateDist)
-      {
-         double beSL = NormalizeDouble(openPx - lockProfitDist, digits);
-         if(beSL < curSL || curSL == 0)
+         if(!isBuy && curPrice < openPx - activateDist)
          {
-            if(SafeModifySL(ticket, beSL, curTP, false, curPrice, "BE_LOCK"))
-               Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
-                     " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
-                     DoubleToString(InpBELockProfitR,2), "R profit)");
+            double beSL = NormalizeDouble(openPx - lockProfitDist, digits);
+            if(beSL < curSL || curSL == 0)
+            {
+               if(SafeModifySL(ticket, beSL, curTP, false, curPrice, "BE_LOCK"))
+                  Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
+                        " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
+                        DoubleToString(InpBELockProfitR,2), "R profit)");
+            }
          }
       }
 
@@ -3153,7 +3162,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.6.2 | LADDER% | ";
+   d += " XAUAI SNIPER v4.6.3 | STOP CLIPPING | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
