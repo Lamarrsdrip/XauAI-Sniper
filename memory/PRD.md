@@ -84,6 +84,22 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.7.2 — "Preservation Mode" (stop trading a $100k acc like a $100 acc)**
+  - User pain: $100k account drawdown -45% → $54k. Bot called gold direction RIGHT (4710 → 4668), but every trade exited in -$58 to +$83 range. The bot was scalping out winners on micro-moves while the macro trend ran without it.
+  - **Root cause**: rule-based exits (MOMENTUM_FADE, TIME_EXPIRED, SMART_CUT, STALE_DRIFT, PEAK_RETRACE) were tuned for a small $1k account where $30-50 profit-protection makes sense. On a $100k account those thresholds fire on completely normal noise wicks.
+  - **Solution — `InpPreservationMode` master toggle (default ON)**:
+    - **MOMENTUM_FADE**: completely disabled (SL + AI veto + Profit Ladder are sufficient).
+    - **TIME_EXPIRED on winners**: skipped entirely. Never close a profitable trade because of the clock.
+    - **STALE_DRIFT**: completely disabled (drift trades are usually winners catching breath).
+    - **STALE_LOSS**: threshold raised from -0.6R → -2R (lets trade work much longer before time-cutting losers).
+    - **SMART_CUT**: threshold raised from -0.25R/3min → -1.5R/8min, deepLoss from -0.5R → -2R. Won't bail on a small adverse blip.
+    - **PEAK_RETRACE**: armed only at peak ≥ $200 + 90% retrace (vs $50/75% in legacy mode). Becomes a runner-saver, not a scalper.
+  - **`InpRiskPercent` default 1.0 → 0.4%** — was 1% per trade × 5+ legs/sequential trades = 5%+ exposure during streaks; new default keeps catastrophic drawdown bounded even on bad days.
+  - **Backwards toggle**: set `InpPreservationMode=false` to restore the v4.7.1 aggressive behavior.
+  - All AI veto wiring from v4.7.0/v4.7.1 still applies on top — Claude can still HOLD/CLOSE/LOCK as needed.
+  - Compile: braces 0/0, parens 0/0, 3543 lines, 10 Preservation Mode gates wired.
+  - Frontend bumped to v4.7.2.
+
 - **Feb 2026 - v4.7.1 — "AI Exit Brain — full coverage" (audit pass after user concern)**
   - User asked: "Hope no bugs… check everything so logic doesn't mix into each other."
   - **Audit performed**: cataloged all 13 unique close paths in ManagePositions and verified ordering + AI-veto coverage.

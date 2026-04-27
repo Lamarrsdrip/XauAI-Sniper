@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.7.0 — AI Exit Brain         |
+//|                                     v4.7.2 — Preservation Mode     |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.71"
-#property description "XAUUSD AI Sniper v4.7.1 — AI Exit Brain (full coverage: 5 close paths gated)"
+#property version   "4.72"
+#property description "XAUUSD AI Sniper v4.7.2 — Preservation Mode (let winners run, stop trading like a small acc)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -22,7 +22,9 @@ input group "=== LICENSE ==="
 input string InpLicensePIN     = "";
 
 input group "=== RISK (Gate 4) ==="
-input double InpRiskPercent    = 1.0;      // Base risk per trade (%)
+input group "=== PRESERVATION MODE (v4.7.2 — let winners run, don't trade like scalper) ==="
+input bool   InpPreservationMode = true;  // Master toggle: disables premature profit-side exits
+input double InpRiskPercent    = 0.4;      // Base risk per trade (%) — was 1.0, lowered for survivability
 input double InpMaxLots        = 10.0;     // Hard max lots
 input double InpDailyLossLimit = 6.0;      // Daily loss cap (%) — set 0 to disable
 input int    InpMaxOpenTrades  = 5;        // Max open positions
@@ -2402,7 +2404,11 @@ void ManagePositions()
                               MathAbs(profit)/rDollars, profit, rDollars, InpEarlyAdverseMin));
          trade.PositionClose(ticket); continue;
       }
-      if(InpPeakRetraceExit && peak >= EffPeakMinUSD() && retracePct >= InpPeakRetracePct)
+      // v4.7.2 — In Preservation Mode, PEAK_RETRACE only fires on DEEP retraces
+      //   from BIG peaks (90% retrace from $200+) — it's a runner-saver, not a scalper.
+      double effRetracePct = InpPreservationMode ? MathMax(InpPeakRetracePct, 90.0) : InpPeakRetracePct;
+      double effPeakMin    = InpPreservationMode ? MathMax(EffPeakMinUSD(), 200.0)  : EffPeakMinUSD();
+      if(InpPeakRetraceExit && peak >= effPeakMin && retracePct >= effRetracePct)
       {
          if(AIBlocksClose("PEAK_RETRACE", ticket, isBuy, openPx, curPrice,
                           profit, peak, rDollars, slDist, curSL, curTP,
@@ -2411,7 +2417,7 @@ void ManagePositions()
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "PEAK_RETRACE",
                  StringFormat("Peak was $%.2f, now $%.2f — gave back %.0f%% (threshold %.0f%%).",
-                              peak, profit, retracePct, InpPeakRetracePct));
+                              peak, profit, retracePct, effRetracePct));
          trade.PositionClose(ticket); continue;
       }
 
@@ -2824,7 +2830,13 @@ void ManagePositions()
             }
             // else: let it run, next tick evaluates again
          }
-         if(timeExpired && !(InpMomentumGuard && momentumStrong))
+         // v4.7.2 — When InpPreservationMode is ON, never close a profitable trade
+         //   on the clock alone. Time only matters when we're losing.
+         if(timeExpired && profit > 0 && InpPreservationMode)
+         {
+            // Skip — let the runner ride. Trail will catch the reversal.
+         }
+         else if(timeExpired && !(InpMomentumGuard && momentumStrong))
          {
             if(AIBlocksClose("TIME_EXPIRED", ticket, isBuy, openPx, curPrice,
                              profit, peak, rDollars, slDist, curSL, curTP,
@@ -2865,11 +2877,16 @@ void ManagePositions()
       }
 
       // B3: Smart loss cut — R-multiple based (scales to any account size)
-      if(profit <= -(rDollars * 0.25) && minsOpen >= 3)
+      // v4.7.2 — Preservation Mode raises threshold to -1.5R + needs MORE evidence
+      //   so we don't bail on a -0.5R noise blip when bot direction is right.
+      double scThresh = InpPreservationMode ? 1.5 : 0.25;
+      double scDeep   = InpPreservationMode ? 2.0 : 0.5;
+      int    scMinAge = InpPreservationMode ? 8   : 3;
+      if(profit <= -(rDollars * scThresh) && minsOpen >= scMinAge)
       {
          bool emaAgainst = isBuy ? (close1 < emaF) : (close1 > emaF);
          bool rsiFailing = isBuy ? (rsi < 40) : (rsi > 60);
-         bool deepLoss   = profit <= -(rDollars * 0.5) && minsOpen > 15;
+         bool deepLoss   = profit <= -(rDollars * scDeep) && minsOpen > 15;
 
          if((emaAgainst && rsiFailing) || deepLoss)
          {
@@ -2883,8 +2900,11 @@ void ManagePositions()
       }
 
       // B4: Stale exit — regime-aware
+      // v4.7.2 — Preservation Mode raises stale-loss bar (-2R from -0.6R) and
+      //   disables stale-DRIFT entirely (drift trades are usually winners catching breath).
       int staleCap = (currentRegime == REGIME_LOW_VOL || currentRegime == REGIME_CHOPPY) ? 35 : 90;
-      if(minsOpen > staleCap && profit <= -(rDollars * 0.6))
+      double staleR = InpPreservationMode ? 2.0 : 0.6;
+      if(minsOpen > staleCap && profit <= -(rDollars * staleR))
       {
          if(AIBlocksClose("STALE_LOSS", ticket, isBuy, openPx, curPrice,
                           profit, peak, rDollars, slDist, curSL, curTP,
@@ -2896,7 +2916,7 @@ void ManagePositions()
                               minsOpen, staleCap, MathAbs(profit)/rDollars));
          trade.PositionClose(ticket); continue;
       }
-      if(minsOpen > 60 && profit > -30 && profit < 30)
+      if(!InpPreservationMode && minsOpen > 60 && profit > -30 && profit < 30)
       {
          if(AIBlocksClose("STALE_DRIFT", ticket, isBuy, openPx, curPrice,
                           profit, peak, rDollars, slDist, curSL, curTP,
