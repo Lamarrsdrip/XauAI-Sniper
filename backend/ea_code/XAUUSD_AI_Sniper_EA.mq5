@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.6.0 — Trend Continuity    |
+//|                                     v4.6.1 — Profit Ladder       |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.60"
-#property description "XAUUSD AI Sniper v4.6.0 — Trend Continuity (no re-entry at worse price after winner)"
+#property version   "4.61"
+#property description "XAUUSD AI Sniper v4.6.1 — Profit Ladder (auto-locks SL into profit as $ grows)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -117,6 +117,19 @@ input double InpPartialTPAtR      = 1.5;   // Fire partial at this R-multiple of
 input double InpPartialPct        = 0.4;   // Fraction of position to close (0.4 = 40%, leaves 60% to ride)
 input bool   InpPartialSkipHighConf = true;// Skip partial on 90%+ trades (let them fully run)
 input int    InpPartialMinMinutes  = 3;    // Don't fire partial within first N minutes (let trade develop)
+
+input group "=== PROFIT LADDER (v4.6.1 — auto-lock SL into profit as $ grows) ==="
+input bool   InpProfitLadder       = true;  // Auto-push SL into profit as trade grows
+input double InpLadderTier1Profit  = 500;   // When profit ≥ $500
+input double InpLadderTier1Lock    = 200;   //   lock SL at +$200
+input double InpLadderTier2Profit  = 1000;  // When profit ≥ $1000
+input double InpLadderTier2Lock    = 500;   //   lock SL at +$500
+input double InpLadderTier3Profit  = 2000;  // When profit ≥ $2000
+input double InpLadderTier3Lock    = 1200;  //   lock SL at +$1200
+input double InpLadderTier4Profit  = 3500;  // When profit ≥ $3500
+input double InpLadderTier4Lock    = 2000;  //   lock SL at +$2000
+input double InpLadderTier5Profit  = 5000;  // When profit ≥ $5000
+input double InpLadderTier5Lock    = 3000;  //   lock SL at +$3000
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -688,7 +701,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.6.0 (TREND CONTINUITY) READY ===");
+   Print("=== XAUAI SNIPER v4.6.1 (PROFIT LADDER) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -759,7 +772,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.6.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.6.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -2281,6 +2294,45 @@ void ManagePositions()
          }
       }
 
+      // v4.6.1 — PROFIT LADDER
+      // Once trade reaches each profit tier, push SL to lock guaranteed dollar profit.
+      // Works for both BUY and SELL. Each tier is independent — picks the highest-tier
+      // lock currently met. Ladder math is in $ (not R) so big-lot trades benefit too.
+      if(InpProfitLadder && profit > 0)
+      {
+         double lockProfitUSD = 0;
+         if(profit >= InpLadderTier5Profit)      lockProfitUSD = InpLadderTier5Lock;
+         else if(profit >= InpLadderTier4Profit) lockProfitUSD = InpLadderTier4Lock;
+         else if(profit >= InpLadderTier3Profit) lockProfitUSD = InpLadderTier3Lock;
+         else if(profit >= InpLadderTier2Profit) lockProfitUSD = InpLadderTier2Lock;
+         else if(profit >= InpLadderTier1Profit) lockProfitUSD = InpLadderTier1Lock;
+
+         if(lockProfitUSD > 0 && rDollars > 0)
+         {
+            // Convert $-lock into a price level. lockDist (in price points) =
+            // (lockProfitUSD / rDollars) × slDist
+            double lockDist = (lockProfitUSD / rDollars) * slDist;
+            double newLockSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
+                                     : NormalizeDouble(openPx - lockDist, digits);
+            // Only ratchet UP for BUY (newSL > curSL) or DOWN for SELL (newSL < curSL or curSL==0)
+            bool shouldUpdate = isBuy ? (newLockSL > curSL)
+                                      : (newLockSL < curSL || curSL == 0);
+            if(shouldUpdate)
+            {
+               if(SafeModifySL(ticket, newLockSL, curTP, isBuy, curPrice, "LADDER"))
+                  Print("PROFIT_LADDER #", ticket, " profit $", DoubleToString(profit,2),
+                        " ≥ tier $", DoubleToString(
+                           profit>=InpLadderTier5Profit?InpLadderTier5Profit:
+                           profit>=InpLadderTier4Profit?InpLadderTier4Profit:
+                           profit>=InpLadderTier3Profit?InpLadderTier3Profit:
+                           profit>=InpLadderTier2Profit?InpLadderTier2Profit:
+                           InpLadderTier1Profit, 0),
+                        " — SL locked at +$", DoubleToString(lockProfitUSD, 0),
+                        " (price ", DoubleToString(newLockSL, digits), "). Worst case = banked profit.");
+            }
+         }
+      }
+
       // v4.5.4 — PARTIAL TAKE-PROFIT
       // At +1R (default), close a fraction of the position to lock guaranteed profit,
       // let the remainder ride the trailing SL. Fires ONCE per ticket.
@@ -3062,7 +3114,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.6.0 | TREND CONTINUITY | ";
+   d += " XAUAI SNIPER v4.6.1 | LADDER | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

@@ -84,6 +84,23 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.6.1 — "Profit Ladder" (auto-lock SL into profit as $ grows)**
+  - User idea (perfect, zero credit cost): "once trade goes above $1k profit, push SL to lock guaranteed profit. Never lose a winner again."
+  - **5-tier ladder** that automatically pushes SL into profit territory based on $ profit reached:
+    - $500 reached → SL locks at +$200
+    - $1,000 reached → SL locks at +$500
+    - $2,000 reached → SL locks at +$1,200
+    - $3,500 reached → SL locks at +$2,000
+    - $5,000 reached → SL locks at +$3,000
+  - **All tiers user-configurable** via inputs (`InpLadderTier1Profit`, `InpLadderTier1Lock`, etc.)
+  - Works for BOTH BUY and SELL symmetrically.
+  - Math: converts $-lock target into price-points using the trade's actual rDollars, so it works correctly regardless of lot size.
+  - Uses `SafeModifySL` (freeze/stops aware) so won't fail silently.
+  - Only ratchets in profit direction — never moves SL backwards.
+  - Logs: `PROFIT_LADDER #123 profit $1,250 ≥ tier $1000 — SL locked at +$500 (price 4695.50). Worst case = banked profit.`
+  - Compile: 292/292 braces, 1817/1817 parens.
+  - Frontend bumped to v4.6.1.
+
 - **Feb 2026 - v4.6.0 — "Trend Continuity" (smart exit + smart pyramid)**
   - User pain point: bot exited a winning SELL @ 4700 → 4699.67 for tiny +$317 (hit partial TP at 1R = 0.55 pts on big lots), then re-entered at 4696 (worse price), got stopped on bounce -$1,687, then market went down to 4695 vindicating the original prediction. Net: -$1,369 on what should have been +$2,800.
   - Also: "PYRAMID: SKIP — add needs $15,846 margin, only $25,590 free" spamming every tick.
