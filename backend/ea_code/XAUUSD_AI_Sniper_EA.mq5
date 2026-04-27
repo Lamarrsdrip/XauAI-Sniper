@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.70"
-#property description "XAUUSD AI Sniper v4.7.0 — AI Exit Brain (Claude vetoes bad rule-based closes)"
+#property version   "4.71"
+#property description "XAUUSD AI Sniper v4.7.1 — AI Exit Brain (full coverage: 5 close paths gated)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -2404,6 +2404,10 @@ void ManagePositions()
       }
       if(InpPeakRetraceExit && peak >= EffPeakMinUSD() && retracePct >= InpPeakRetracePct)
       {
+         if(AIBlocksClose("PEAK_RETRACE", ticket, isBuy, openPx, curPrice,
+                          profit, peak, rDollars, slDist, curSL, curTP,
+                          digits, rsi, emaF, emaS, atr, minsOpen, posInfo.Volume()))
+            continue;
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "PEAK_RETRACE",
                  StringFormat("Peak was $%.2f, now $%.2f — gave back %.0f%% (threshold %.0f%%).",
@@ -2822,6 +2826,10 @@ void ManagePositions()
          }
          if(timeExpired && !(InpMomentumGuard && momentumStrong))
          {
+            if(AIBlocksClose("TIME_EXPIRED", ticket, isBuy, openPx, curPrice,
+                             profit, peak, rDollars, slDist, curSL, curTP,
+                             digits, rsi, emaF, emaS, atr, minsOpen, posInfo.Volume()))
+               continue;
             LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                     "TIME_EXPIRED",
                     StringFormat("Open %d min > cap %d min; momentum score only %d/4. Book what we have.",

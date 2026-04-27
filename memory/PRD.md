@@ -84,6 +84,37 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.7.1 — "AI Exit Brain — full coverage" (audit pass after user concern)**
+  - User asked: "Hope no bugs… check everything so logic doesn't mix into each other."
+  - **Audit performed**: cataloged all 13 unique close paths in ManagePositions and verified ordering + AI-veto coverage.
+  - **Found 2 gaps from v4.7.0**: PEAK_RETRACE and TIME_EXPIRED were the very closes the user originally complained about ("ends trade and market moves on bot direction") and they had NO AI veto. Fixed.
+  - **Final exit-flow map** (top → bottom in code, all close attempts gated except catastrophic safety nets):
+    | # | Path | AI veto? | Why |
+    |---|---|---|---|
+    | 1 | HARD_STOP_R (3R catastrophic) | NO | safety net |
+    | 2 | HARD_STOP (legacy abs) | NO | safety net |
+    | 3 | EARLY_ADVERSE | NO | losing trade, AI can't help |
+    | 4 | **PEAK_RETRACE** | **YES** ✓ (NEW) | exactly the user's complaint |
+    | 5 | PEAK_LOCK_BACKSTOP | n/a (SL only) | universal SL ratchet |
+    | 6 | PROFIT_LADDER | n/a (SL only) | universal SL ratchet |
+    | 7 | MOON_TRAIL | n/a (SL only) | universal SL ratchet |
+    | 8 | MOMENTUM_FADE | YES ✓ | v4.7.0 |
+    | 9 | QUICK_PROFIT_CAP | NO | dormant (InpSmartCapExit=true default) |
+    | 10 | CAP_RUNNER | n/a (SL only) | dormant when Ladder ON |
+    | 11 | PROFIT_CEILING | NO | $25k absolute ceiling |
+    | 12 | **TIME_EXPIRED** | **YES** ✓ (NEW) | exactly the user's complaint |
+    | 13 | RUNNER (post-time) | n/a (SL only) | trail only |
+    | 14 | SMART_CUT | NO | losing trade, AI gate skips |
+    | 15 | STALE_LOSS | YES ✓ | v4.7.0 |
+    | 16 | STALE_DRIFT | YES ✓ | v4.7.0 |
+    | 17 | CLAUDE_AI proactive | uses verdict ✓ | v4.7.0 |
+  - **Conflict check**: SL ratchet paths (PEAK_LOCK, LADDER, MOON, BE_LOCK, TRAIL, CAP_RUNNER, RUNNER) all run BEFORE close attempts — they only modify SL, never call PositionClose. SafeModifySL returns silently when SL already at target (v4.6.5 no-op guard). No double-modify risk.
+  - **Cooldown sharing**: PATH C audit and AIBlocksClose share `aiVetoLastCall[]` cooldown (60s default) → if MOMENTUM_FADE consumed the cooldown, PATH C audit waits — intentional cost control, no race.
+  - **Backwards compat verified**: backend defaults peak_profit=0, pending_exit_reason="", regime="" → old EA versions (v4.7.0 and earlier) still get valid responses.
+  - **Live verification**: VETO request → LOCK $X with reasoning. Legacy request → HOLD with reasoning. Both routes work.
+  - Compile: braces 0/0, parens 0/0, 3523 lines, 5 AIBlocksClose call sites.
+  - Frontend bumped to v4.7.1.
+
 - **Feb 2026 - v4.7.0 — "AI Exit Brain" (Claude vetoes bad rule-based closes — finally smart exits)**
   - User pain: "the only thing killing things is the exit logic… it doesn't reason before it takes actions". Bot was trading well on entries, but rule-based exits (MOMENTUM_FADE / STALE_DRIFT / STALE_LOSS) were closing winners right before continuation, OR letting profit retrace from huge to loss.
   - **Solution — Claude veto override (cost-aware, ~$1-2/month extra)**:
