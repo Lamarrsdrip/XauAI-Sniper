@@ -84,6 +84,13 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.6.5 — "Quieter & Friendlier" (5-min cooldown + no SL-mod log spam)**
+  - User pain: "SL-MOD FAIL" still spamming the journal AND the post-winner entry block was killing nice trades by sitting on a 30-minute cooldown.
+  - **Fix #1 — SL-MOD silence**: `SafeModifySL` now has a no-op guard. Before calling `trade.PositionModify`, it reads `POSITION_SL`/`POSITION_TP` and returns silent success if they're already at the target (within 2-pt tolerance). This was the #1 cause of `Ret=10025 NO_CHANGES` spam. Also downgrades benign retcodes (10025 NO_CHANGES, 10004 REQUOTE, 10021 OFF_QUOTES, err=4756 invalid stops) to a 1-per-minute throttled `SL-MOD INFO` line. True failures (broker reject for non-trivial reasons) still log loudly.
+  - **Fix #2 — Post-winner cooldown 30→5 min + tunable**: new input group `=== POST-WINNER ENTRY GUARD ===` with `InpPostWinnerGuard` (toggle, default ON), `InpPostWinnerCoolMin` (default **5**, was hard-coded 30), and `InpPostWinnerATRBump` (default 0.5). Set `InpPostWinnerGuard=false` to disable entirely or `InpPostWinnerCoolMin=0` for the same effect.
+  - Compile: braces 0/0 balanced, parens 0/0 balanced, 3257 lines.
+  - Frontend bumped to v4.6.5.
+
 - **Feb 2026 - v4.6.4 — "Ladder Sanity" (kill the invalid-stops spam on profit retrace)**
   - User pain: live MT5 log showed `Ret=10016 Err=4756 [invalid stops]` looping during volatile retrace. Profit had spiked into Tier-3 ($1k+ lock), then price retraced back below the locked SL price → every Ladder pass tried to set SL on the WRONG side of current price → broker hard-rejected → infinite spam.
   - **Fix**: Profit Ladder now runs a sanity check before ratcheting. The lock SL must sit between the entry and current price (in the profit zone) AND respect the broker's `SYMBOL_TRADE_STOPS_LEVEL` + a 30-point breathing buffer. If the lock fails the check, the EA logs `LADDER SKIP: lock $X (price Y) doesn't fit in profit zone — waiting for it to rebuild` (throttled to once per minute) and waits for profit to rebuild.

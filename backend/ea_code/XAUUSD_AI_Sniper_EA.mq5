@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.6.4 — Ladder Sanity        |
+//|                                     v4.6.5 — Quieter & Friendlier |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.64"
-#property description "XAUUSD AI Sniper v4.6.4 — Ladder Sanity (no more invalid-stop spam)"
+#property version   "4.65"
+#property description "XAUUSD AI Sniper v4.6.5 — Quieter & Friendlier (5min cooldown + no SL-mod spam)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -190,6 +190,11 @@ input double InpPyramidSizeMulti= 0.6;     // Each add is this × previous size 
 input int    InpPyramidMinGapSec= 120;     // Min seconds between pyramid adds
 input bool   InpPyramidOnAdverse= true;    // Add when price moves AGAINST us (better entry, averaging in)
 input bool   InpPyramidOnTrend  = true;    // Add when price moves WITH us (trend continuation)
+
+input group "=== POST-WINNER ENTRY GUARD (v4.6.5 — user-tunable cooldown) ==="
+input bool   InpPostWinnerGuard    = true;   // Block re-entry in same direction after a winner (set false to disable)
+input int    InpPostWinnerCoolMin  = 5;      // Cooldown minutes after a winning close (was 30, now 5)
+input double InpPostWinnerATRBump  = 0.5;    // Need price ≥ this×ATR better to bypass cooldown
 
 //+------------------------------------------------------------------+
 //| ENUMS                                                            |
@@ -424,6 +429,18 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       if(minStopsDist > 0 && newSL < minAllowedSL) newSL = NormalizeDouble(minAllowedSL, digits);
    }
 
+   // v4.6.5 — NO-OP GUARD: don't modify if SL is already at/very near target.
+   //   Prevents "SL-MOD FAIL Ret=10025" (NO_CHANGES) spam when ladder/trail
+   //   recomputes the same level tick after tick.
+   if(PositionSelectByTicket(ticket))
+   {
+      double curSL = PositionGetDouble(POSITION_SL);
+      double curTP = PositionGetDouble(POSITION_TP);
+      double tol   = MathMax(point * 2, 0.00001);  // 2-pt tolerance
+      if(MathAbs(curSL - newSL) < tol && MathAbs(curTP - tp) < tol)
+         return true;  // already where we want it — silent success
+   }
+
    // Freeze level check — skip modify (but don't error) if price is within freeze band
    if(minFreezeDist > 0)
    {
@@ -445,9 +462,26 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
    if(!trade.PositionModify(ticket, newSL, tp))
    {
       uint ret = trade.ResultRetcode();
-      // 10025 DONE_PARTIAL is a warning not a failure; also tolerate REQUOTE etc
-      Print("SL-MOD FAIL #", ticket, " (", logTag, ") Ret=", ret,
-            " Err=", GetLastError(), " newSL=", DoubleToString(newSL, digits));
+      int  err = GetLastError();
+      // v4.6.5 — Downgrade common non-fatal retcodes to throttled INFO (1/min).
+      //   10025 NO_CHANGES, 10004 REQUOTE, 10021 OFF_QUOTES, 4756 invalid stops
+      //   are transient/benign — the next tick will retry. Don't spam the log.
+      bool benign = (ret == 10025 || ret == 10004 || ret == 10021 || err == 4756 || err == 10025);
+      if(benign)
+      {
+         static datetime lastBenignWarn = 0;
+         if(TimeCurrent() - lastBenignWarn > 60)
+         {
+            Print("SL-MOD INFO #", ticket, " (", logTag, ") transient ret=", ret,
+                  " err=", err, " — will retry next tick.");
+            lastBenignWarn = TimeCurrent();
+         }
+      }
+      else
+      {
+         Print("SL-MOD FAIL #", ticket, " (", logTag, ") Ret=", ret,
+               " Err=", err, " newSL=", DoubleToString(newSL, digits));
+      }
       return false;
    }
    return true;
@@ -1961,36 +1995,29 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    long stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
    double minDist = stopLevel * point;
 
-   // v4.6.0 — POST-WINNER ENTRY GUARD
-   // If we just closed a WIN in this direction, don't immediately open a NEW
-   // same-direction trade at a WORSE price than the prior winner. Prevents the
-   // classic "scalper got scalped" cascade: profit on first leg → re-enter at
-   // worse price → stopped on bounce → trend resumes → vindicated but losing.
-   //
-   // Allowed re-entries in same direction:
-   //   • Price has moved ≥ 0.5 × ATR FURTHER in our favor (better entry)
-   //   • OR > 30 minutes have passed since the winning close (new structure)
-   //   • RE_ENTRY tag (loss-reversal recovery) bypasses this guard
-   if(reason != "RE_ENTRY" && lastClose.valid && !lastClose.wasLoss &&
+   // v4.6.5 — POST-WINNER ENTRY GUARD (user-tunable, default cooldown 5 min)
+   // Toggle off via InpPostWinnerGuard=false. Cooldown via InpPostWinnerCoolMin.
+   if(InpPostWinnerGuard && InpPostWinnerCoolMin > 0 &&
+      reason != "RE_ENTRY" && lastClose.valid && !lastClose.wasLoss &&
       lastClose.dir == signal &&
-      TimeCurrent() - lastClose.closeTime < 30 * 60)
+      TimeCurrent() - lastClose.closeTime < InpPostWinnerCoolMin * 60)
    {
       double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
       double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
       double newEntry  = (signal == 1) ? ask : bid;
       double prevEntry = lastClose.entryPrice;
-      double minAdvanceATR = atr * 0.5;
+      double minAdvanceATR = atr * InpPostWinnerATRBump;
       bool betterPrice = false;
-      if(signal == 1)  betterPrice = (newEntry <= prevEntry - minAdvanceATR);  // BUY at lower price
-      if(signal == -1) betterPrice = (newEntry >= prevEntry + minAdvanceATR);  // SELL at higher price
+      if(signal == 1)  betterPrice = (newEntry <= prevEntry - minAdvanceATR);
+      if(signal == -1) betterPrice = (newEntry >= prevEntry + minAdvanceATR);
       if(!betterPrice)
       {
          Print("⏸  POST-WINNER ENTRY BLOCKED: Last ", signal==1?"BUY":"SELL",
-               " just closed at +profit @ ", DoubleToString(prevEntry, digits),
-               ". New entry @ ", DoubleToString(newEntry, digits),
-               " is not ≥0.5×ATR (", DoubleToString(minAdvanceATR, 2),
-               ") better. Waiting for either ", DoubleToString(minAdvanceATR, 2),
-               " ", signal==1?"lower":"higher", " price OR 30min cooldown.");
+               " closed +profit @ ", DoubleToString(prevEntry, digits),
+               ". New @ ", DoubleToString(newEntry, digits),
+               " not ≥", DoubleToString(InpPostWinnerATRBump,2), "×ATR (",
+               DoubleToString(minAdvanceATR, 2), ") better. Cooldown ",
+               InpPostWinnerCoolMin, "min.");
          return;
       }
    }
