@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.6.3 — Stop Killing Winners|
+//|                                     v4.6.4 — Ladder Sanity        |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.63"
-#property description "XAUUSD AI Sniper v4.6.3 — Stop Killing Winners (BE_LOCK + tight trail disabled when Ladder ON)"
+#property version   "4.64"
+#property description "XAUUSD AI Sniper v4.6.4 — Ladder Sanity (no more invalid-stop spam)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -715,7 +715,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.6.3 (STOP KILLING WINNERS) READY ===");
+   Print("=== XAUAI SNIPER v4.6.4 (LADDER SANITY) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -786,7 +786,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.6.3 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.6.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -2366,17 +2366,44 @@ void ManagePositions()
             double lockDist = (lockProfitUSD / rDollars) * slDist;
             double newLockSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
                                      : NormalizeDouble(openPx - lockDist, digits);
-            // Only ratchet UP for BUY or DOWN for SELL
-            bool shouldUpdate = isBuy ? (newLockSL > curSL)
-                                      : (newLockSL < curSL || curSL == 0);
-            if(shouldUpdate)
+
+            // v4.6.4 — SANITY CHECK: lock SL must be in the PROFIT ZONE
+            //   (between entry and current price, with broker stops-level buffer).
+            //   Without this, profit retracing below the high-tier lock would
+            //   place SL on wrong side → broker rejects with "invalid stops".
+            double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+            long stopsLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+            double minStopsDist = stopsLvl * point;
+            double bufferPts = MathMax(minStopsDist, point * 30); // +30 pts breathing room
+            bool sane = false;
+            if(isBuy)  sane = (newLockSL > openPx) && (newLockSL < curPrice - bufferPts);
+            else       sane = (newLockSL < openPx) && (newLockSL > curPrice + bufferPts);
+            if(!sane)
             {
-               if(SafeModifySL(ticket, newLockSL, curTP, isBuy, curPrice, "LADDER"))
-                  Print("PROFIT_LADDER #", ticket, " profit $", DoubleToString(profit,2),
-                        " ≥ tier $", DoubleToString(tierTriggered, 0),
-                        " (bal $", DoubleToString(bal, 0), ")",
-                        " — SL locked at +$", DoubleToString(lockProfitUSD, 0),
-                        " (price ", DoubleToString(newLockSL, digits), "). Worst case = banked profit.");
+               static datetime lastLadderSkip = 0;
+               if(TimeCurrent() - lastLadderSkip > 60)
+               {
+                  Print("LADDER SKIP: lock $", DoubleToString(lockProfitUSD,0),
+                        " (price ", DoubleToString(newLockSL,digits), ") doesn't fit in profit zone (entry ",
+                        DoubleToString(openPx,digits), ", price ", DoubleToString(curPrice,digits),
+                        "). Profit retraced below tier — waiting for it to rebuild.");
+                  lastLadderSkip = TimeCurrent();
+               }
+            }
+            else
+            {
+               // Only ratchet UP for BUY or DOWN for SELL
+               bool shouldUpdate = isBuy ? (newLockSL > curSL)
+                                         : (newLockSL < curSL || curSL == 0);
+               if(shouldUpdate)
+               {
+                  if(SafeModifySL(ticket, newLockSL, curTP, isBuy, curPrice, "LADDER"))
+                     Print("PROFIT_LADDER #", ticket, " profit $", DoubleToString(profit,2),
+                           " ≥ tier $", DoubleToString(tierTriggered, 0),
+                           " (bal $", DoubleToString(bal, 0), ")",
+                           " — SL locked at +$", DoubleToString(lockProfitUSD, 0),
+                           " (price ", DoubleToString(newLockSL, digits), "). Worst case = banked profit.");
+               }
             }
          }
       }
@@ -3162,7 +3189,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.6.3 | STOP CLIPPING | ";
+   d += " XAUAI SNIPER v4.6.4 | LADDER SANE | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
