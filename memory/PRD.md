@@ -84,6 +84,16 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.6.0 — "Trend Continuity" (smart exit + smart pyramid)**
+  - User pain point: bot exited a winning SELL @ 4700 → 4699.67 for tiny +$317 (hit partial TP at 1R = 0.55 pts on big lots), then re-entered at 4696 (worse price), got stopped on bounce -$1,687, then market went down to 4695 vindicating the original prediction. Net: -$1,369 on what should have been +$2,800.
+  - Also: "PYRAMID: SKIP — add needs $15,846 margin, only $25,590 free" spamming every tick.
+  - **3 surgical fixes:**
+  - **Post-winner entry block** — if last close was a WIN in the same direction within 30 min, NEW entries are blocked unless price is ≥0.5×ATR BETTER (lower for BUY, higher for SELL). Prevents the "scalper got scalped" cascade.
+  - **Partial TP delayed**: threshold raised from 1.0R → 1.5R + minimum 3-min hold time before partial can fire + fraction reduced from 50% → 40% (leaves 60% to ride). Net effect: winners get meaningfully more room before any partial.
+  - **Pyramid margin gate relaxed**: `marginNeeded > freeMargin × 0.5` → `× 0.7` (allows pyramid when 60% of margin used vs old 50%) + free-margin floor 30% → 25%. Skip log throttled to once per minute (was every tick).
+  - Compile: 289/289 braces, 1797/1797 parens.
+  - Frontend bumped to v4.6.0.
+
 - **Feb 2026 - v4.5.9 — "Partial Sanity" (fix double-firing partial TP)**
   - User reported: "I don't think the pyramid is working well. It supposed to be 0.6× the original lots." Live log forensics revealed the SAME ticket (#151979111808) firing PARTIAL_TP twice within 0.5 seconds (closed 0.02 of 0.04, then closed 0.01 of 0.02), eventually leaving micro positions that pyramid couldn't scale meaningfully.
   - **Root cause #1**: `OnTradeTransaction` treated the partial-close DEAL_ENTRY_OUT event as a full close. This called `ClearPartialTaken(posId)` removing the ticket from the tracker. Next tick: `PartialAlreadyTaken()` returned false → fired again → again → again. Each pass halved the lots until broker minimum.

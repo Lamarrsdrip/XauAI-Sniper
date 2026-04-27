@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.5.9 — Partial Sanity      |
+//|                                     v4.6.0 — Trend Continuity    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.59"
-#property description "XAUUSD AI Sniper v4.5.9 — Partial Sanity (no double-fire, no inflated stats)"
+#property version   "4.60"
+#property description "XAUUSD AI Sniper v4.6.0 — Trend Continuity (no re-entry at worse price after winner)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -112,10 +112,11 @@ input double InpConvRunMinR       = 2.0;   // Trade must be at least this much i
 input double InpConvRunnerMulti   = 3.0;   // Trail distance on these monsters = this × ATR
 
 input group "=== PARTIAL TAKE-PROFIT (v4.5.4 — lock half, ride the rest) ==="
-input bool   InpPartialTP         = true;  // Close part of the position at +1R, let rest run
-input double InpPartialTPAtR      = 1.0;   // Fire partial at this R-multiple of profit
-input double InpPartialPct        = 0.5;   // Fraction of position to close (0.5 = 50%)
+input bool   InpPartialTP         = true;  // Close part of the position at +X R, let rest run
+input double InpPartialTPAtR      = 1.5;   // Fire partial at this R-multiple of profit (1.5 = give winners more room)
+input double InpPartialPct        = 0.4;   // Fraction of position to close (0.4 = 40%, leaves 60% to ride)
 input bool   InpPartialSkipHighConf = true;// Skip partial on 90%+ trades (let them fully run)
+input int    InpPartialMinMinutes  = 3;    // Don't fire partial within first N minutes (let trade develop)
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -687,7 +688,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.5.9 (PARTIAL SANITY) READY ===");
+   Print("=== XAUAI SNIPER v4.6.0 (TREND CONTINUITY) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -758,7 +759,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.5.9 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.6.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1475,25 +1476,34 @@ void CheckPyramidOpportunity()
    if(addLot > maxLot)      addLot = NormalizeDouble(maxLot, lotDigits);
    if(addLot > InpMaxLots)  addLot = NormalizeDouble(InpMaxLots, lotDigits);
 
-   // v4.5.5 — Stricter margin gate: require at least 40% free margin buffer.
-   // Also explicitly SKIP (don't fire at all) rather than silently clamping lot down.
+   // v4.6.0 — Stricter margin gate: require at least 25% free margin buffer.
+   //          Throttled SKIP log so it doesn't spam every tick.
    double freeMargin = accInfo.FreeMargin();
    double equityNow  = accInfo.Equity();
    double freeMarginPct = equityNow > 0 ? (freeMargin / equityNow * 100.0) : 0;
-   if(freeMarginPct < 30.0)
+   static datetime lastPyramidSkipLog = 0;
+   bool pyrLogDue = (TimeCurrent() - lastPyramidSkipLog >= 60);
+   if(freeMarginPct < 25.0)
    {
-      Print("PYRAMID: SKIP — free margin only ", DoubleToString(freeMarginPct,1),
-            "% of equity (need ≥30%). Account too committed for another add.");
+      if(pyrLogDue) {
+         Print("PYRAMID: SKIP — free margin only ", DoubleToString(freeMarginPct,1),
+               "% of equity (need ≥25%). Account too committed for another add.");
+         lastPyramidSkipLog = TimeCurrent();
+      }
       return;
    }
    double marginNeeded = 0;
    ENUM_ORDER_TYPE ot = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    if(OrderCalcMargin(ot, Symbol(), addLot, isBuy ? ask : bid, marginNeeded))
    {
-      if(marginNeeded > freeMargin * 0.5)
+      // v4.6.0 — relaxed from 0.5 → 0.7 so pyramid can fire even when 60% of margin is in use
+      if(marginNeeded > freeMargin * 0.7)
       {
-         Print("PYRAMID: SKIP — add needs $", DoubleToString(marginNeeded,2),
-               " margin, only $", DoubleToString(freeMargin,2), " free.");
+         if(pyrLogDue) {
+            Print("PYRAMID: SKIP — add needs $", DoubleToString(marginNeeded,2),
+                  " margin, only $", DoubleToString(freeMargin,2), " free.");
+            lastPyramidSkipLog = TimeCurrent();
+         }
          return;
       }
    }
@@ -1923,6 +1933,40 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    long stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
    double minDist = stopLevel * point;
+
+   // v4.6.0 — POST-WINNER ENTRY GUARD
+   // If we just closed a WIN in this direction, don't immediately open a NEW
+   // same-direction trade at a WORSE price than the prior winner. Prevents the
+   // classic "scalper got scalped" cascade: profit on first leg → re-enter at
+   // worse price → stopped on bounce → trend resumes → vindicated but losing.
+   //
+   // Allowed re-entries in same direction:
+   //   • Price has moved ≥ 0.5 × ATR FURTHER in our favor (better entry)
+   //   • OR > 30 minutes have passed since the winning close (new structure)
+   //   • RE_ENTRY tag (loss-reversal recovery) bypasses this guard
+   if(reason != "RE_ENTRY" && lastClose.valid && !lastClose.wasLoss &&
+      lastClose.dir == signal &&
+      TimeCurrent() - lastClose.closeTime < 30 * 60)
+   {
+      double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+      double newEntry  = (signal == 1) ? ask : bid;
+      double prevEntry = lastClose.entryPrice;
+      double minAdvanceATR = atr * 0.5;
+      bool betterPrice = false;
+      if(signal == 1)  betterPrice = (newEntry <= prevEntry - minAdvanceATR);  // BUY at lower price
+      if(signal == -1) betterPrice = (newEntry >= prevEntry + minAdvanceATR);  // SELL at higher price
+      if(!betterPrice)
+      {
+         Print("⏸  POST-WINNER ENTRY BLOCKED: Last ", signal==1?"BUY":"SELL",
+               " just closed at +profit @ ", DoubleToString(prevEntry, digits),
+               ". New entry @ ", DoubleToString(newEntry, digits),
+               " is not ≥0.5×ATR (", DoubleToString(minAdvanceATR, 2),
+               ") better. Waiting for either ", DoubleToString(minAdvanceATR, 2),
+               " ", signal==1?"lower":"higher", " price OR 30min cooldown.");
+         return;
+      }
+   }
    double price, sl, tp, slDist;
 
    // Dynamic SL/TP: Low vol = tighter, trending = wider
@@ -2247,7 +2291,10 @@ void ManagePositions()
          bool skipHighConf = InpPartialSkipHighConf &&
                              currentTradeConfidence >= InpConvRunMinConf;
          double profitR = (rDollars > 0) ? (profit / rDollars) : 0;
-         if(!skipHighConf && profitR >= InpPartialTPAtR)
+         // v4.6.0 — Don't fire partial within first N minutes; give the trade
+         // time to develop. Premature partials cap winners on noise spikes.
+         bool tooEarly = (minsOpen < InpPartialMinMinutes);
+         if(!skipHighConf && !tooEarly && profitR >= InpPartialTPAtR)
          {
             double curLots = posInfo.Volume();
             double minLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
@@ -3015,7 +3062,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.5.9 | PARTIAL SANITY | ";
+   d += " XAUAI SNIPER v4.6.0 | TREND CONTINUITY | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
