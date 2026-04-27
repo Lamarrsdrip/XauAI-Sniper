@@ -84,6 +84,13 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.6.4 — "Ladder Sanity" (kill the invalid-stops spam on profit retrace)**
+  - User pain: live MT5 log showed `Ret=10016 Err=4756 [invalid stops]` looping during volatile retrace. Profit had spiked into Tier-3 ($1k+ lock), then price retraced back below the locked SL price → every Ladder pass tried to set SL on the WRONG side of current price → broker hard-rejected → infinite spam.
+  - **Fix**: Profit Ladder now runs a sanity check before ratcheting. The lock SL must sit between the entry and current price (in the profit zone) AND respect the broker's `SYMBOL_TRADE_STOPS_LEVEL` + a 30-point breathing buffer. If the lock fails the check, the EA logs `LADDER SKIP: lock $X (price Y) doesn't fit in profit zone — waiting for it to rebuild` (throttled to once per minute) and waits for profit to rebuild.
+  - This means: a high-tier lock that becomes physically impossible (because price retraced) is silently postponed instead of getting rejected by the broker. When profit recovers, the ladder ratchets normally.
+  - Compile: braces 0/0 balanced, parens 0/0 balanced, 3230 lines.
+  - Frontend bumped to v4.6.4.
+
 - **Feb 2026 - v4.6.3 — "Stop Killing Winners" (disable aggressive trails when Ladder ON)**
   - User pain: gold went 4711 → 4693 (bot called direction RIGHT every time) but every SELL exited at +$11 / +$157 / +$317 — clipping at 0.02-0.9 points instead of riding for thousands.
   - **Forensic root cause**: BE_LOCK was firing at +1R then placing SL at openPx + 0.25R = ~0.3 points above entry on these big-lot trades. Gold's normal noise wicks 0.3 points within seconds → SL hit → exit at near-zero profit. Same for PATH A 1.2×ATR trail kicking in at first profit point. Both were redundantly competing with the new Profit Ladder.
