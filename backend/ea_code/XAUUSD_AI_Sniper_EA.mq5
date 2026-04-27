@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.6.6 — Moon Trail            |
+//|                                     v4.6.7 — Peak-Lock Backstop    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.66"
-#property description "XAUUSD AI Sniper v4.6.6 — Moon Trail (target massive profit, smarter SL ratchet)"
+#property version   "4.67"
+#property description "XAUUSD AI Sniper v4.6.7 — Peak-Lock Backstop (NEVER lose a $50+ winner)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -154,6 +154,11 @@ input double InpLadderTier6Profit  = 8000;  // v4.6.6
 input double InpLadderTier6Lock    = 5000;
 input double InpLadderTier7Profit  = 12000; // v4.6.6
 input double InpLadderTier7Lock    = 8000;
+
+input group "=== PEAK-LOCK BACKSTOP (v4.6.7 — bank a slice of EVERY good move) ==="
+input bool   InpPeakLockBackstop = true;   // Universal: once peak profit ≥ arm, force-lock a slice
+input double InpPeakLockArmUSD   = 50.0;   // Peak must reach this $ before backstop arms
+input double InpPeakLockMinPct   = 25.0;   // Lock at least this % of PEAK profit (e.g. peak $700 → lock $175)
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -2350,6 +2355,42 @@ void ManagePositions()
                   Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
                         " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
                         DoubleToString(InpBELockProfitR,2), "R profit)");
+            }
+         }
+      }
+
+      // v4.6.7 — PEAK-LOCK BACKSTOP (universal, balance-independent)
+      // Problem this solves: on larger accounts (e.g. $50k+), Tier 1 of the
+      // Profit Ladder may sit at $250+, so a +$700 peak that retraced never
+      // crossed any tier and SL stayed in loss territory → exit at -$45.
+      // Fix: as soon as peak profit reaches `InpPeakLockArmUSD` (default $50),
+      // force-lock at LEAST `InpPeakLockMinPct` % of the peak ($700 peak → $175 lock).
+      // The Profit Ladder still ratchets HIGHER on top of this, so we never
+      // give back a winner that ran $50+ in profit.
+      if(InpPeakLockBackstop && peak >= InpPeakLockArmUSD && rDollars > 0)
+      {
+         double minLockUSD = peak * InpPeakLockMinPct / 100.0;
+         if(minLockUSD > 0)
+         {
+            double pBackDist = (minLockUSD / rDollars) * slDist;
+            double pBackSL   = isBuy ? NormalizeDouble(openPx + pBackDist, digits)
+                                     : NormalizeDouble(openPx - pBackDist, digits);
+            // Sanity: must sit in profit zone with broker stops-level buffer
+            double pPoint = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+            long   pStopsLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+            double pBufPts   = MathMax(pStopsLvl * pPoint, pPoint * 30);
+            bool pSane = isBuy ? (pBackSL > openPx && pBackSL < curPrice - pBufPts)
+                               : (pBackSL < openPx && pBackSL > curPrice + pBufPts);
+            // Ratchet only — never move SL backward
+            bool pShould = isBuy ? (pBackSL > curSL)
+                                 : (pBackSL < curSL || curSL == 0);
+            if(pSane && pShould)
+            {
+               if(SafeModifySL(ticket, pBackSL, curTP, isBuy, curPrice, "PEAK_LOCK"))
+                  Print("PEAK_LOCK #", ticket, " peak $", DoubleToString(peak,2),
+                        " — backstop locked ", DoubleToString(InpPeakLockMinPct,0),
+                        "% = +$", DoubleToString(minLockUSD,2),
+                        " (price ", DoubleToString(pBackSL, digits), "). Worst case = banked.");
             }
          }
       }

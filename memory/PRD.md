@@ -84,6 +84,15 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.6.7 — "Peak-Lock Backstop" (root cause: huge accounts skipped Tier 1)**
+  - User report: live trade peaked at +$700, exited at **-$45**. SL never moved.
+  - **Root cause**: the Profit Ladder tiers scale with balance. On a $50k+ account, Tier 1 trigger is $250+, so a $700 peak that retraced still never crossed any tier — SL stayed in original loss territory and got hit when price reversed.
+  - **Fix — universal Peak-Lock Backstop**: independent of balance, runs BEFORE the Ladder. Once peak profit reaches `InpPeakLockArmUSD` (default $50), forces SL to lock at least `InpPeakLockMinPct`% of peak (default 25%). Examples: peak $200 → lock $50, peak $700 → lock $175, peak $5000 → lock $1250. Sanity-checked (must sit in profit zone) and ratchet-only (never moves SL backward). Profit Ladder still ratchets HIGHER on top when its tiers fire.
+  - New inputs: `InpPeakLockBackstop=true`, `InpPeakLockArmUSD=50.0`, `InpPeakLockMinPct=25.0`.
+  - New log: `PEAK_LOCK #ticket peak $700 — backstop locked 25% = +$175 (price 4xxx). Worst case = banked.`
+  - Compile: braces 0/0, parens 0/0, 3353 lines.
+  - Frontend bumped to v4.6.7.
+
 - **Feb 2026 - v4.6.6 — "Moon Trail" (target massive profit + smarter SL ratchet)**
   - User: "PN EXIT STRATEGY TO TARGET TO CLOSE AT MASSIVE PROFIT… SHOULD ALLOW SL MOD DO BETTER WORKS"
   - **Profit Ladder extended from 5 → 7 tiers** for massive-profit lock-in:

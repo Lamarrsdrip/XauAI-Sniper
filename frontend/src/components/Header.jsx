@@ -22,7 +22,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
               <span className="font-mono text-[9px] font-bold text-white tracking-wider">MZ</span>
             </div>
             <span className="font-heading font-semibold text-sm tracking-tight text-[#111] group-hover:text-[#C5A059] transition-colors">XauAI Sniper</span>
-            <span className="text-[10px] text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded-full">v4.6.6</span>
+            <span className="text-[10px] text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded-full">v4.6.7</span>
           </div>
 
           <nav className="hidden lg:flex items-center gap-1">
