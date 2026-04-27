@@ -84,6 +84,17 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.6.6 — "Moon Trail" (target massive profit + smarter SL ratchet)**
+  - User: "PN EXIT STRATEGY TO TARGET TO CLOSE AT MASSIVE PROFIT… SHOULD ALLOW SL MOD DO BETTER WORKS"
+  - **Profit Ladder extended from 5 → 7 tiers** for massive-profit lock-in:
+    - Tier 6 (default 8% balance trigger / 5% lock)
+    - Tier 7 (12% / 8%) = MOON tier
+  - **Moon Trail (`InpLadderMoonTrail`, default ON, `InpLadderMoonTrailATR=3.5`)**: once tier 7 fires, SL switches to a wide 3.5×ATR trail behind price. Every new high ratchets SL up automatically — winner keeps running for as long as the move continues, but every new peak is banked. This is what turns "$3k locked" into "$8k, $12k, $20k locked" as the move extends.
+  - **CAP_RUNNER overlap killed**: when Profit Ladder is ON, the old CAP_RUNNER tightening (1.5–2.5×ATR) is skipped. Ladder/Moon are now the SOLE SL ratcheter for the smart-management path. No more competing trails clipping winners.
+  - **Profit ceiling raised $5k → $25k**: large accounts no longer get force-closed mid-monster. Still acts as a final safety brake.
+  - Compile: braces 0/0, parens 0/0, 3312 lines.
+  - Frontend bumped to v4.6.6.
+
 - **Feb 2026 - v4.6.5 — "Quieter & Friendlier" (5-min cooldown + no SL-mod log spam)**
   - User pain: "SL-MOD FAIL" still spamming the journal AND the post-winner entry block was killing nice trades by sitting on a 30-minute cooldown.
   - **Fix #1 — SL-MOD silence**: `SafeModifySL` now has a no-op guard. Before calling `trade.PositionModify`, it reads `POSITION_SL`/`POSITION_TP` and returns silent success if they're already at the target (within 2-pt tolerance). This was the #1 cause of `Ret=10025 NO_CHANGES` spam. Also downgrades benign retcodes (10025 NO_CHANGES, 10004 REQUOTE, 10021 OFF_QUOTES, err=4756 invalid stops) to a 1-per-minute throttled `SL-MOD INFO` line. True failures (broker reject for non-trivial reasons) still log loudly.

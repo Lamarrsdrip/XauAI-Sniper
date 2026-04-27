@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.6.5 — Quieter & Friendlier |
+//|                                     v4.6.6 — Moon Trail            |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.65"
-#property description "XAUUSD AI Sniper v4.6.5 — Quieter & Friendlier (5min cooldown + no SL-mod spam)"
+#property version   "4.66"
+#property description "XAUUSD AI Sniper v4.6.6 — Moon Trail (target massive profit, smarter SL ratchet)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -131,6 +131,12 @@ input double InpLadderTier4ProfPct = 3.5;   // Tier 4 trigger
 input double InpLadderTier4LockPct = 2.0;
 input double InpLadderTier5ProfPct = 5.0;   // Tier 5 trigger
 input double InpLadderTier5LockPct = 3.0;
+input double InpLadderTier6ProfPct = 8.0;   // Tier 6 trigger (v4.6.6 — massive profit)
+input double InpLadderTier6LockPct = 5.0;
+input double InpLadderTier7ProfPct = 12.0;  // Tier 7 trigger (v4.6.6 — moon mode)
+input double InpLadderTier7LockPct = 8.0;
+input bool   InpLadderMoonTrail    = true;  // After tier 7, switch SL to wide ATR trail (banks every new high)
+input double InpLadderMoonTrailATR = 3.5;   // ATR multiplier for moon trail (3.5 = generous, lets it run)
 input double InpLadderMinProfFloor = 25.0;  // Minimum tier-1 trigger in $ (micro accounts)
 input double InpLadderMinLockFloor = 10.0;  // Minimum lock amount in $ (micro accounts)
 // Legacy absolute $ inputs (used only when InpLadderUsePct=false)
@@ -144,6 +150,10 @@ input double InpLadderTier4Profit  = 3500;
 input double InpLadderTier4Lock    = 2000;
 input double InpLadderTier5Profit  = 5000;
 input double InpLadderTier5Lock    = 3000;
+input double InpLadderTier6Profit  = 8000;  // v4.6.6
+input double InpLadderTier6Lock    = 5000;
+input double InpLadderTier7Profit  = 12000; // v4.6.6
+input double InpLadderTier7Lock    = 8000;
 
 input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
@@ -153,7 +163,7 @@ input double InpAutoProfMaxPct = 3.0;      // Profit soft-cap = this % of balanc
 input double InpAutoPeakMinPct = 0.25;     // Peak-retrace arm threshold = this % of balance
 input double InpProfMinFloorUSD  = 25.0;   // ProfitMin NEVER below this $ (micro-account floor)
 input double InpProfMaxFloorUSD  = 50.0;   // ProfitMax NEVER below this $ (micro-account floor)
-input double InpProfMaxCeilUSD   = 5000.0; // ProfitMax NEVER above this $ (large-account ceiling)
+input double InpProfMaxCeilUSD   = 25000.0; // ProfitMax NEVER above this $ (raised v4.6.6 — let monsters run)
 input bool   InpSmartCapExit     = true;   // TRUE = cap only exits on real reversal, else trail SL tightly
 
 input group "=== VOLATILITY-ADAPTIVE LOT SIZING ==="
@@ -2353,7 +2363,7 @@ void ManagePositions()
       {
          double bal = accInfo.Balance();
          if(bal <= 0) bal = accInfo.Equity();   // fallback
-         double t1p, t1l, t2p, t2l, t3p, t3l, t4p, t4l, t5p, t5l;
+         double t1p, t1l, t2p, t2l, t3p, t3l, t4p, t4l, t5p, t5l, t6p, t6l, t7p, t7l;
          if(InpLadderUsePct)
          {
             t1p = bal * InpLadderTier1ProfPct / 100.0;
@@ -2366,6 +2376,10 @@ void ManagePositions()
             t4l = bal * InpLadderTier4LockPct / 100.0;
             t5p = bal * InpLadderTier5ProfPct / 100.0;
             t5l = bal * InpLadderTier5LockPct / 100.0;
+            t6p = bal * InpLadderTier6ProfPct / 100.0;
+            t6l = bal * InpLadderTier6LockPct / 100.0;
+            t7p = bal * InpLadderTier7ProfPct / 100.0;
+            t7l = bal * InpLadderTier7LockPct / 100.0;
             // Apply micro-account floors so tiers stay viable on tiny balances
             if(t1p < InpLadderMinProfFloor) t1p = InpLadderMinProfFloor;
             if(t1l < InpLadderMinLockFloor) t1l = InpLadderMinLockFloor;
@@ -2377,11 +2391,16 @@ void ManagePositions()
             t3p = InpLadderTier3Profit; t3l = InpLadderTier3Lock;
             t4p = InpLadderTier4Profit; t4l = InpLadderTier4Lock;
             t5p = InpLadderTier5Profit; t5l = InpLadderTier5Lock;
+            t6p = InpLadderTier6Profit; t6l = InpLadderTier6Lock;
+            t7p = InpLadderTier7Profit; t7l = InpLadderTier7Lock;
          }
 
          double lockProfitUSD = 0;
          double tierTriggered = 0;
-         if(profit >= t5p)      { lockProfitUSD = t5l; tierTriggered = t5p; }
+         bool   moonTier = false;
+         if(profit >= t7p)      { lockProfitUSD = t7l; tierTriggered = t7p; moonTier = true; }
+         else if(profit >= t6p) { lockProfitUSD = t6l; tierTriggered = t6p; }
+         else if(profit >= t5p) { lockProfitUSD = t5l; tierTriggered = t5p; }
          else if(profit >= t4p) { lockProfitUSD = t4l; tierTriggered = t4p; }
          else if(profit >= t3p) { lockProfitUSD = t3l; tierTriggered = t3p; }
          else if(profit >= t2p) { lockProfitUSD = t2l; tierTriggered = t2p; }
@@ -2430,6 +2449,30 @@ void ManagePositions()
                            " (bal $", DoubleToString(bal, 0), ")",
                            " — SL locked at +$", DoubleToString(lockProfitUSD, 0),
                            " (price ", DoubleToString(newLockSL, digits), "). Worst case = banked profit.");
+               }
+            }
+
+            // v4.6.6 — MOON TRAIL: once tier 7 is hit (massive profit), switch to a
+            //   wide ATR trail so any NEW HIGH automatically pushes SL up, banking
+            //   each fresh peak. This is what makes "let it run forever" actually
+            //   capture the gains instead of giving them all back.
+            if(moonTier && InpLadderMoonTrail && atr > 0)
+            {
+               double moonDist = atr * InpLadderMoonTrailATR;
+               double moonSL   = isBuy ? NormalizeDouble(curPrice - moonDist, digits)
+                                       : NormalizeDouble(curPrice + moonDist, digits);
+               // Only ratchet — never give back ground
+               bool moonShould = isBuy ? (moonSL > curSL && moonSL > newLockSL)
+                                       : ((moonSL < curSL || curSL == 0) && moonSL < newLockSL);
+               // Sanity: must still sit in profit zone vs current price
+               bool moonSane = isBuy ? (moonSL > openPx && moonSL < curPrice - bufferPts)
+                                     : (moonSL < openPx && moonSL > curPrice + bufferPts);
+               if(moonShould && moonSane)
+               {
+                  if(SafeModifySL(ticket, moonSL, curTP, isBuy, curPrice, "MOON"))
+                     Print("MOON_TRAIL #", ticket, " profit $", DoubleToString(profit,2),
+                           " — SL ratcheted to ", DoubleToString(moonSL, digits),
+                           " (", DoubleToString(InpLadderMoonTrailATR,2), "×ATR behind price). Riding the giant.");
                }
             }
          }
@@ -2572,6 +2615,17 @@ void ManagePositions()
          }
          if(capReached && InpSmartCapExit)
          {
+            // v4.6.6 — When Profit Ladder is ON, the Ladder/Moon trail is the SOLE
+            //   SL ratcheter. CAP_RUNNER's tighter trail (1.5–2.5×ATR) was clipping
+            //   massive winners that the Moon trail (3.5×ATR) was meant to ride.
+            //   Skip CAP_RUNNER's SL modify when Ladder is on; let Moon handle it.
+            if(InpProfitLadder)
+            {
+               // Still skip force-close (already letting it run) — just don't tighten SL.
+               // Moon trail above already moved SL if appropriate.
+            }
+            else
+            {
             // v4.5.2 — Trend-aware, volatility-aware trailing distance.
             // v4.5.3 — Pass profit/R ratio so conviction-runner upgrade can fire.
             double profitR = (rDollars > 0) ? (profit / rDollars) : 0;
@@ -2602,6 +2656,7 @@ void ManagePositions()
                            " — SL trailed to ", DoubleToString(lockSL, digits),
                            " (", DoubleToString(trailATR,2), "xATR, regime=", RegimeName(), "). Letting it run.");
                }
+            }
             }
 
             // Hard ceiling escape: absurdly large runner still gets banked
