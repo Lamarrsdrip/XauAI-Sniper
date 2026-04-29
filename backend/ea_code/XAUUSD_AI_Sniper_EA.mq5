@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.7.4 — Smart TP Extend       |
+//|                                     v4.7.5 — Equity Cap            |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.74"
-#property description "XAUUSD AI Sniper v4.7.4 — Smart TP Extend (only chase TP when trend is real)"
+#property version   "4.75"
+#property description "XAUUSD AI Sniper v4.7.5 — Equity Cap (no single trade risks > 1.5% of equity)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -32,6 +32,7 @@ input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this
 input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 input double InpMaxLots        = 10.0;     // Hard max lots
+input double InpMaxRiskPctEquity = 1.5;    // v4.7.5 — Hard cap: max % of EQUITY a single trade can lose if SL hits
 input double InpDailyLossLimit = 6.0;      // Daily loss cap (%) — set 0 to disable
 input int    InpMaxOpenTrades  = 5;        // Max open positions
 input int    InpMaxTradesPerDay= 30;       // No artificial limit until target
@@ -2275,6 +2276,31 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    lots = MathFloor(lots / lotStep) * lotStep;
    lots = MathMax(minLot, MathMin(maxLot, lots));
    if(lots > InpMaxLots) lots = InpMaxLots;
+
+   // v4.7.5 — HARD EQUITY-% CAP: regardless of risk math, no single trade can
+   //   risk more than InpMaxRiskPctEquity% of current equity if SL hits.
+   //   This is the absolute backstop that prevents the "5+ lot whacked for $4k"
+   //   scenario the user reported on a $100k account. SL distance × tick value
+   //   × lots = $-loss-if-SL-hit. Cap that at e.g. 1.5% of equity.
+   if(InpMaxRiskPctEquity > 0 && slDist > 0 && tickValue > 0 && tickSize > 0)
+   {
+      double equity = accInfo.Equity();
+      double maxDollarLoss = equity * InpMaxRiskPctEquity / 100.0;
+      double slDollarPerLot = (slDist / tickSize) * tickValue;
+      if(slDollarPerLot > 0)
+      {
+         double maxAllowedLots = maxDollarLoss / slDollarPerLot;
+         if(lots > maxAllowedLots)
+         {
+            Print("⚠️  EQUITY-CAP: lots ", DoubleToString(lots, 2), " → ",
+                  DoubleToString(maxAllowedLots, 2),
+                  " (would risk $", DoubleToString(lots * slDollarPerLot, 0),
+                  " > ", DoubleToString(InpMaxRiskPctEquity, 1), "% equity = $",
+                  DoubleToString(maxDollarLoss, 0), ")");
+            lots = maxAllowedLots;
+         }
+      }
+   }
    // Derive lot decimal precision from broker's lotStep (not a hardcoded 2)
    int lotDigits = 2;
    if(lotStep > 0 && lotStep < 0.01) lotDigits = 3;

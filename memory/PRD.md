@@ -84,6 +84,18 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.7.5 — "Equity Cap" (CRITICAL: caps single-trade $-loss as % of equity)**
+  - User shared screenshot showing $100k account → $50k. Single trade lost $4,259 (4.3% of equity in one move). Pattern: 5-6+ lot sells getting whacked on noise.
+  - **CRITICAL FINDING from screenshot**: user was running **v4.6.4** in MT5 — none of v4.7.0-v4.7.4 features (Preservation Mode, AI Exit Brain, TP Auto-Extend, Peak-Lock) were actually loaded. Sent install instructions.
+  - **Additional fix shipped — `InpMaxRiskPctEquity = 1.5` (default 1.5% of equity)**:
+    - After all existing risk math (riskPct, drawdown mode, vol-adapt, streak scaling), one final hard cap is applied.
+    - Computes `slDollarPerLot = (slDist / tickSize) × tickValue`. Caps lots so `lots × slDollarPerLot ≤ equity × 1.5%`.
+    - Logs: `⚠️ EQUITY-CAP: lots 5.68 → 1.20 (would risk $1860 > 1.5% equity = $750)`.
+    - Independent of `InpRiskPercent` — even if user keeps risk % low, this catches edge cases where ATR/SL widening causes oversized lots.
+  - On a $100k acc: 1 trade max -$1,500 (was -$4,259). Allows ~7 consecutive losses before -10% account.
+  - Compile: braces 0/0, parens 0/0, 3680 lines.
+  - Frontend bumped to v4.7.5.
+
 - **Feb 2026 - v4.7.4 — "Smart TP Extend" (only chase TP when trend is real)**
   - User asked: "Hope the version will allow strong runner will hit the original TP if market look fine?"
   - Honest finding: v4.7.3's TP_EXTEND fired on EVERY 80% threshold cross — meaning the original TP would basically never get hit, even on calm trades that should just bank the target.
