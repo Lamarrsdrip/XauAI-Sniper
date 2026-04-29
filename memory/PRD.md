@@ -84,6 +84,19 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.7.6 — "Aggregate Exposure" (analyzed user screenshot, fixed actual root cause)**
+  - User screenshot deep-dive ($100k → $50k drawdown):
+    - Big losses came from STACKING: sell 5.84 @ 4598 + sell 6.31 @ 4579 simultaneously open = ~12 lots short = $1,200/pt exposure → 5pt wick = -$6,000 combined.
+    - Single-trade EQUITY-CAP from v4.7.5 helps per-trade but doesn't stop multiple trades stacking. Aggregate cap was missing.
+    - Micro-profit exits (3.78 lots × 0.12pt = +$45) = MOMENTUM_FADE firing on noise. Already fixed in v4.7.2 Preservation Mode (user just needs to load it).
+  - **New gates**:
+    - `InpMaxAggregateRiskPct = 4.0` (default 4% equity): scans all open positions in our magic, sums their (open-SL)×ticksize×ticks×lots = total $-loss-if-everything-hits-SL. If > 4% equity, BLOCK new entries until exposure drops.
+    - `InpMaxTotalLots = 0` (auto = ~3% equity at typical SL distance): backstop hard cap on summed lot size across all positions.
+  - On user's $100k acc: max combined exposure $4k. Even if all positions hit SL together, max -4% account.
+  - Logs: `⛔ AGG-RISK BLOCK: open positions already risk $1860 (5.84 lots) > 4% equity (max $4000). New entries blocked until exposure drops.`
+  - Compile: braces 0/0, parens 0/0, 3742 lines.
+  - Frontend bumped to v4.7.6.
+
 - **Feb 2026 - v4.7.5 — "Equity Cap" (CRITICAL: caps single-trade $-loss as % of equity)**
   - User shared screenshot showing $100k account → $50k. Single trade lost $4,259 (4.3% of equity in one move). Pattern: 5-6+ lot sells getting whacked on noise.
   - **CRITICAL FINDING from screenshot**: user was running **v4.6.4** in MT5 — none of v4.7.0-v4.7.4 features (Preservation Mode, AI Exit Brain, TP Auto-Extend, Peak-Lock) were actually loaded. Sent install instructions.

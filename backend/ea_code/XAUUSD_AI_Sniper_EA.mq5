@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.7.5 — Equity Cap            |
+//|                                     v4.7.6 — Aggregate Exposure    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.75"
-#property description "XAUUSD AI Sniper v4.7.5 — Equity Cap (no single trade risks > 1.5% of equity)"
+#property version   "4.76"
+#property description "XAUUSD AI Sniper v4.7.6 — Aggregate Exposure (caps total open lots + combined risk)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -33,6 +33,8 @@ input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to cu
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 input double InpMaxLots        = 10.0;     // Hard max lots
 input double InpMaxRiskPctEquity = 1.5;    // v4.7.5 — Hard cap: max % of EQUITY a single trade can lose if SL hits
+input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
+input double InpMaxAggregateRiskPct = 4.0; // v4.7.6 — Block new entries if all open positions combined could lose > X% equity
 input double InpDailyLossLimit = 6.0;      // Daily loss cap (%) — set 0 to disable
 input int    InpMaxOpenTrades  = 5;        // Max open positions
 input int    InpMaxTradesPerDay= 30;       // No artificial limit until target
@@ -2164,6 +2166,66 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    long stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
    double minDist = stopLevel * point;
+
+   // v4.7.6 — AGGREGATE EXPOSURE GATE
+   //   Sum up the $-loss-if-SL-hit across ALL currently-open positions in our magic.
+   //   If it already exceeds InpMaxAggregateRiskPct% of equity, BLOCK new entries.
+   //   This stops the "sell 5.84 + open new sell 6.31 = $1200/pt = -$6k on next wick" scenario.
+   if(InpMaxAggregateRiskPct > 0)
+   {
+      double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+      double tickSize  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+      double aggDollar = 0;
+      double aggLots   = 0;
+      for(int i = 0; i < PositionsTotal(); i++)
+      {
+         ulong tk = PositionGetTicket(i);
+         if(!posInfo.SelectByTicket(tk)) continue;
+         if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+         double sl = posInfo.StopLoss();
+         double op = posInfo.PriceOpen();
+         double v  = posInfo.Volume();
+         aggLots += v;
+         if(sl > 0 && tickSize > 0 && tickValue > 0)
+         {
+            double dist = MathAbs(op - sl);
+            aggDollar += (dist / tickSize) * tickValue * v;
+         }
+      }
+      double equity = accInfo.Equity();
+      double maxAggDollar = equity * InpMaxAggregateRiskPct / 100.0;
+      if(aggDollar > maxAggDollar)
+      {
+         static datetime lastAggSkip = 0;
+         if(TimeCurrent() - lastAggSkip > 60)
+         {
+            Print("⛔ AGG-RISK BLOCK: open positions already risk $", DoubleToString(aggDollar, 0),
+                  " (", DoubleToString(aggLots, 2), " lots) > ", DoubleToString(InpMaxAggregateRiskPct, 1),
+                  "% equity (max $", DoubleToString(maxAggDollar, 0), "). New entries blocked until exposure drops.");
+            lastAggSkip = TimeCurrent();
+         }
+         return;
+      }
+      // Also enforce InpMaxTotalLots (auto = 3% of equity worst-case at typical SL)
+      double maxTotal = InpMaxTotalLots;
+      if(maxTotal <= 0)
+      {
+         // auto: roughly 3% of equity at average SL distance ($16 per lot at 16pt SL × $10)
+         maxTotal = (equity * 0.03) / 160.0;
+         maxTotal = MathMax(0.5, maxTotal); // never below 0.5
+      }
+      if(aggLots >= maxTotal)
+      {
+         static datetime lastLotSkip = 0;
+         if(TimeCurrent() - lastLotSkip > 60)
+         {
+            Print("⛔ TOTAL-LOTS BLOCK: open lots ", DoubleToString(aggLots, 2),
+                  " ≥ cap ", DoubleToString(maxTotal, 2), ". New entries blocked.");
+            lastLotSkip = TimeCurrent();
+         }
+         return;
+      }
+   }
 
    // v4.6.5 — POST-WINNER ENTRY GUARD (user-tunable, default cooldown 5 min)
    // Toggle off via InpPostWinnerGuard=false. Cooldown via InpPostWinnerCoolMin.
