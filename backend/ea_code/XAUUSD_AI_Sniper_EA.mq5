@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.7.7 — Adaptive Runner       |
+//|                                     v4.8.0 — Context Engine        |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.77"
-#property description "XAUUSD AI Sniper v4.7.7 — Adaptive Runner (2-stage trailing, activates tick 1)"
+#property version   "4.80"
+#property description "XAUUSD AI Sniper v4.8.0 — Context Engine (H4 HTF bias + Swing S/R proximity filter)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -45,6 +45,12 @@ input bool   InpCarefulMode    = true;     // Scale down near target
 input group "=== STRATEGY ==="
 input int    InpEMAFast        = 50;       // Fast EMA
 input int    InpEMASlow        = 200;      // Slow EMA
+
+input group "=== CONTEXT ENGINE (v4.8.0 — HTF + Swing-S/R, smarter entries) ==="
+input bool   InpUseH4Bias        = true;   // Require H4 EMA align with trade direction (strong bias filter)
+input bool   InpUseSRFilter      = true;   // Block entries too close to recent swing highs/lows
+input int    InpSRLookback       = 60;     // Bars back on M5 to scan for swing highs/lows (60 bars ≈ 5 hrs)
+input double InpSRProximityATR   = 0.4;    // Block if price within this × ATR of a swing level (without break-retest)
 input int    InpRSIPeriod      = 14;       // RSI Period
 input int    InpATRPeriod      = 14;       // ATR Period
 input double InpSLMultiplier   = 2.0;      // SL = ATR x this
@@ -281,9 +287,11 @@ CAccountInfo  accInfo;
 bool   licenseValid = false;
 int    hEMAFast, hEMASlow, hRSI, hATR, hBBUpper, hBBLower, hBBMid;
 int    hEMAFast_H1, hEMASlow_H1, hRSI_M15, hStoch;
+int    hEMAFast_H4, hEMASlow_H4;   // v4.8.0 — H4 HTF context
 double bufEMAFast[], bufEMASlow[], bufRSI[], bufATR[];
 double bufBBUpper[], bufBBLower[], bufBBMid[];
 double bufEMAFast_H1[], bufEMASlow_H1[], bufRSI_M15[];
+double bufEMAFast_H4[], bufEMASlow_H4[];  // v4.8.0
 double bufStochK[], bufStochD[];
 
 double initialBalance, dailyStartEquity, weeklyStartEquity;
@@ -863,6 +871,92 @@ bool ValidatePIN(string pin)
 }
 
 //+------------------------------------------------------------------+
+//| CONTEXT GATE (v4.8.0) — HTF bias + Swing S/R proximity filter    |
+//| Blocks entries that fight H4 trend OR sit near a recent swing    |
+//| level without a break+retest. Rule-based, zero LLM cost.         |
+//+------------------------------------------------------------------+
+bool ContextGateAllows(int signal, double atr)
+{
+   // === Gate 1: H4 HTF bias alignment ===
+   if(InpUseH4Bias)
+   {
+      double h4F = (ArraySize(bufEMAFast_H4) > 1) ? bufEMAFast_H4[1] : 0;
+      double h4S = (ArraySize(bufEMASlow_H4) > 1) ? bufEMASlow_H4[1] : 0;
+      if(h4F > 0 && h4S > 0)
+      {
+         bool h4Up   = (h4F > h4S);
+         bool h4Down = (h4F < h4S);
+         // Neutral zone: H4 EMAs too close (< 0.1% apart) = no strong HTF bias, allow trade
+         double spread = MathAbs(h4F - h4S) / h4S * 100;
+         if(spread >= 0.1)
+         {
+            if(signal == 1 && !h4Up)
+            {
+               Print("⛔ CONTEXT-GATE: BUY blocked — H4 EMA50 < EMA200 (bearish HTF bias). Don't fight the trend.");
+               return false;
+            }
+            if(signal == -1 && !h4Down)
+            {
+               Print("⛔ CONTEXT-GATE: SELL blocked — H4 EMA50 > EMA200 (bullish HTF bias). Don't fight the trend.");
+               return false;
+            }
+         }
+      }
+   }
+
+   // === Gate 2: Swing S/R proximity ===
+   if(InpUseSRFilter && InpSRLookback >= 20 && atr > 0)
+   {
+      double curPrice = (signal == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                                       : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      double proxDist = atr * InpSRProximityATR;
+
+      // Find recent swing high and swing low on M5 (last InpSRLookback bars)
+      // Swing = bar whose high/low is highest/lowest within ±3 bars window.
+      double swingHigh = 0;
+      double swingLow  = 999999;
+      for(int i = 3; i < InpSRLookback - 3; i++)
+      {
+         double h = iHigh(Symbol(), PERIOD_M5, i);
+         double l = iLow(Symbol(),  PERIOD_M5, i);
+         bool isSwingHigh = true;
+         bool isSwingLow  = true;
+         for(int j = 1; j <= 3; j++)
+         {
+            if(iHigh(Symbol(), PERIOD_M5, i-j) >= h || iHigh(Symbol(), PERIOD_M5, i+j) >= h) isSwingHigh = false;
+            if(iLow(Symbol(),  PERIOD_M5, i-j) <= l || iLow(Symbol(),  PERIOD_M5, i+j) <= l)  isSwingLow  = false;
+            if(!isSwingHigh && !isSwingLow) break;
+         }
+         if(isSwingHigh && h > swingHigh) swingHigh = h;
+         if(isSwingLow  && l < swingLow)  swingLow  = l;
+      }
+
+      // BUY trying to enter within proxDist BELOW a swing high = entering into resistance
+      if(signal == 1 && swingHigh > 0 && (swingHigh - curPrice) > 0 && (swingHigh - curPrice) < proxDist)
+      {
+         Print("⛔ CONTEXT-GATE: BUY blocked — price ", DoubleToString(curPrice, 2),
+               " is ", DoubleToString(swingHigh - curPrice, 2),
+               " below swing high ", DoubleToString(swingHigh, 2),
+               " (< ", DoubleToString(proxDist, 2), " = ", DoubleToString(InpSRProximityATR, 1),
+               "×ATR). Entering into resistance without break-retest.");
+         return false;
+      }
+      // SELL trying to enter within proxDist ABOVE a swing low = entering into support
+      if(signal == -1 && swingLow < 999999 && (curPrice - swingLow) > 0 && (curPrice - swingLow) < proxDist)
+      {
+         Print("⛔ CONTEXT-GATE: SELL blocked — price ", DoubleToString(curPrice, 2),
+               " is ", DoubleToString(curPrice - swingLow, 2),
+               " above swing low ", DoubleToString(swingLow, 2),
+               " (< ", DoubleToString(proxDist, 2), " = ", DoubleToString(InpSRProximityATR, 1),
+               "×ATR). Entering into support without break-retest.");
+         return false;
+      }
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //| INIT                                                             |
 //+------------------------------------------------------------------+
 int OnInit()
@@ -889,12 +983,15 @@ int OnInit()
    hBBMid    = hBBUpper;
    hEMAFast_H1 = iMA(Symbol(), PERIOD_H1, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
    hEMASlow_H1 = iMA(Symbol(), PERIOD_H1, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
+   hEMAFast_H4 = iMA(Symbol(), PERIOD_H4, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
+   hEMASlow_H4 = iMA(Symbol(), PERIOD_H4, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
    hRSI_M15  = iRSI(Symbol(), PERIOD_M15, InpRSIPeriod, PRICE_CLOSE);
    hStoch    = iStochastic(Symbol(), PERIOD_M5, 14, 3, 3, MODE_SMA, STO_LOWHIGH);
 
    if(hEMAFast==INVALID_HANDLE || hEMASlow==INVALID_HANDLE || hRSI==INVALID_HANDLE ||
       hATR==INVALID_HANDLE || hBBUpper==INVALID_HANDLE || hEMAFast_H1==INVALID_HANDLE ||
-      hEMASlow_H1==INVALID_HANDLE || hRSI_M15==INVALID_HANDLE || hStoch==INVALID_HANDLE)
+      hEMASlow_H1==INVALID_HANDLE || hRSI_M15==INVALID_HANDLE || hStoch==INVALID_HANDLE ||
+      hEMAFast_H4==INVALID_HANDLE || hEMASlow_H4==INVALID_HANDLE)
    { Print("ERROR: Indicators failed"); return INIT_FAILED; }
 
    ArraySetAsSeries(bufEMAFast, true); ArraySetAsSeries(bufEMASlow, true);
@@ -902,6 +999,7 @@ int OnInit()
    ArraySetAsSeries(bufBBUpper, true); ArraySetAsSeries(bufBBLower, true);
    ArraySetAsSeries(bufBBMid, true);
    ArraySetAsSeries(bufEMAFast_H1, true); ArraySetAsSeries(bufEMASlow_H1, true);
+   ArraySetAsSeries(bufEMAFast_H4, true); ArraySetAsSeries(bufEMASlow_H4, true);
    ArraySetAsSeries(bufRSI_M15, true);
    ArraySetAsSeries(bufStochK, true); ArraySetAsSeries(bufStochD, true);
 
@@ -1001,6 +1099,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast); IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI); IndicatorRelease(hATR); IndicatorRelease(hBBUpper);
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
+   IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
    Print("=== v4.6.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
@@ -1941,6 +2040,8 @@ void OnTick()
    if(CopyBuffer(hBBUpper, 0, 0, 12, bufBBMid) < 12) return;
    if(CopyBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1) < 3) return;
    if(CopyBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1) < 3) return;
+   if(CopyBuffer(hEMAFast_H4, 0, 0, 3, bufEMAFast_H4) < 3) return;
+   if(CopyBuffer(hEMASlow_H4, 0, 0, 3, bufEMASlow_H4) < 3) return;
    if(CopyBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15) < 3) return;
    if(CopyBuffer(hStoch, 0, 0, 3, bufStochK) < 3) return;
    if(CopyBuffer(hStoch, 1, 0, 3, bufStochD) < 3) return;
@@ -2158,6 +2259,14 @@ void OnTick()
    // v4.5.0 — Remember the AI's conviction on the trade we're about to open,
    // so mid-trade audits can reference both the thesis AND the original confidence.
    currentTradeConfidence = lastAIConfidence;
+
+   // v4.8.0 — CONTEXT GATE (HTF + Swing S/R)
+   //   Last defense before OpenTrade. Blocks entries that:
+   //     (a) fight H4 bias (e.g., BUY signal but H4 EMA50 < EMA200)
+   //     (b) sit within 0.4×ATR of a recent swing high/low without break-retest
+   //   Rule-based, zero LLM cost.
+   if(!ContextGateAllows(signal, bufATR[1]))
+      return;
 
    // Open trade with grade-scaled sizing
    OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", sizeMulti);
