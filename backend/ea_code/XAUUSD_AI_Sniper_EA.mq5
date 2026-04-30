@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.81"
-#property description "XAUUSD AI Sniper v4.8.1 — Context Gate loosened (0.4→0.2 ATR, 60→40 bars, 0.1→0.25% H4)"
+#property version   "4.82"
+#property description "XAUUSD AI Sniper v4.8.2 — Account Mode preset (Balanced 0.8% / Conservative 0.4% / Aggressive 1.2%)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -23,8 +23,12 @@ input string InpLicensePIN     = "";
 
 input group "=== RISK (Gate 4) ==="
 input group "=== PRESERVATION MODE (v4.7.2 — let winners run, don't trade like scalper) ==="
+input group "=== ACCOUNT MODE (v4.8.2 — one-input preset for risk profile) ==="
+enum ENUM_ACCT_MODE { ACCT_BALANCED, ACCT_CONSERVATIVE, ACCT_AGGRESSIVE };
+input ENUM_ACCT_MODE InpAccountMode = ACCT_BALANCED;  // BALANCED=0.8% | CONSERVATIVE=0.4% | AGGRESSIVE=1.2%
+
 input bool   InpPreservationMode = true;  // Master toggle: disables premature profit-side exits
-input double InpRiskPercent    = 0.4;      // Base risk per trade (%) — was 1.0, lowered for survivability
+input double InpRiskPercent    = 0.4;      // Base risk per trade (%) — IGNORED if InpAccountMode != BALANCED uses preset
 
 input group "=== TP AUTO-EXTEND (v4.7.3 — push TP forward as winner runs) ==="
 input bool   InpTPAutoExtend     = true;   // When profit nears TP, push TP further so the runner keeps running
@@ -2408,7 +2412,12 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
 
    // Lot sizing with grade multiplier
    double balance = accInfo.Balance();
-   double riskPct = InpRiskPercent * sizeMulti;
+   // v4.8.2 — Account Mode preset overrides InpRiskPercent
+   double baseRisk = InpRiskPercent;
+   if(InpAccountMode == ACCT_BALANCED)     baseRisk = 0.8;
+   if(InpAccountMode == ACCT_CONSERVATIVE) baseRisk = 0.4;
+   if(InpAccountMode == ACCT_AGGRESSIVE)   baseRisk = 1.2;
+   double riskPct = baseRisk * sizeMulti;
 
    // DRAWDOWN RECOVERY MODE: cap risk at InpDrawdownRisk% until we get a win
    if(drawdownActive)

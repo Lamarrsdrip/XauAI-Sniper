@@ -84,6 +84,19 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.8.2 — "Account Mode" (one-toggle risk preset)**
+  - User pain: $100k account trading like a $5k account (lots 0.05-0.5 because v4.7.2 set defensive 0.4% risk).
+  - **Fix**: new enum `InpAccountMode` with 3 presets that override `InpRiskPercent`:
+    - `ACCT_BALANCED` (default, 0.8%) — middle ground
+    - `ACCT_CONSERVATIVE` (0.4%) — defensive, for after losing streaks
+    - `ACCT_AGGRESSIVE` (1.2%) — max risk for confident periods
+  - Safety nets preserved: 1.5% per-trade and 4% aggregate equity caps still active.
+  - Now $100k accounts default to ~1 lot per trade. 2× larger profits vs v4.8.1.
+  - Compile: braces 0/0, parens 0/0, 3955 lines.
+  - Frontend bumped to v4.8.2.
+
+- **Feb 2026 - v4.8.1 — "Context Gate Loosened"**: relaxed S/R proximity 0.4→0.2×ATR, lookback 60→40, H4 neutral 0.1→0.25%. Added PASS log for visibility.
+
 - **Feb 2026 - v4.8.0 — "Context Engine" (HTF bias + Swing S/R proximity filter, pure rule-based)**
   - User shared 9-point "make it smarter" spec. Audit showed 6/9 already built (regime classification, quality scoring, memory, adaptive risk, smart exits, behavioral AI). Real gaps: HTF context + S/R zones.
   - **Gap filled (zero LLM cost, pure MQL5)**:
