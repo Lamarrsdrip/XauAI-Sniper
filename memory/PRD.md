@@ -84,6 +84,22 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.7.7 — "Adaptive Runner" (2-stage tick-1 trailing per user spec)**
+  - User shared the exact required spec after +$3,938 peak → big loss. Screenshot showed sell 3.27 @ 4571 sitting at +$3,397 profit, which later gave back everything and closed in red.
+  - **Implementation** matches user's 6-point spec exactly:
+    1. **Immediate activation** (tick 1): no time-in-trade gate, runs every ManagePositions tick.
+    2. **Two-stage trailing**:
+       - Stage 1 at `InpARStage1ActivateR = 0.3R` → `InpARStage1TrailATR = 1.0×ATR` (tight, early protection)
+       - Stage 2 at `InpARStage2ActivateR = 1.0R` → `InpARStage2TrailATR = 2.2×ATR` (wider, runner mode)
+    3. **Fast SL adjustment**: every tick, SafeModifySL no-op guard prevents spam.
+    4. **Adaptive speed**: `InpARMomentumBoostMulti = 0.7` — when bar range > 1.2×ATR in our direction, tighten trail by 30% for faster ratchet.
+    5. **Anti-noise**: `InpARMinTrailPoints = 80` (~$0.80 on XAU) hard floor on trail distance.
+    6. **Break-even at +0.5R**: `InpARBreakEvenR = 0.5` → moves SL to BE + `InpARBreakEvenProfitR = 0.1R` tiny cushion.
+  - **Conflict prevention**: old PATH A (1.2×ATR) and old BE_LOCK are DISABLED when `InpAdaptiveRunner=true` (default). Profit Ladder / Peak-Lock still run in parallel — they only ratchet FURTHER and SafeModifySL is ratchet-only so no conflicts.
+  - Logs: `AR_BE #ticket profitR=0.52 — locked BE+0.1R`, `AR_S1 #ticket profitR=0.45 [MOM+] — SL→X (0.70×ATR, min 80pts)`, `AR_S2 #ticket profitR=1.23 — SL→X (2.20×ATR, min 80pts)`. Throttled 30s.
+  - Compile: braces 0/0, parens 0/0, 3831 lines.
+  - Frontend bumped to v4.7.7.
+
 - **Feb 2026 - v4.7.6 — "Aggregate Exposure" (analyzed user screenshot, fixed actual root cause)**
   - User screenshot deep-dive ($100k → $50k drawdown):
     - Big losses came from STACKING: sell 5.84 @ 4598 + sell 6.31 @ 4579 simultaneously open = ~12 lots short = $1,200/pt exposure → 5pt wick = -$6,000 combined.

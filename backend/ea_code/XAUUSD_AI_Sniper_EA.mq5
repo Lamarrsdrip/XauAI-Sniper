@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.7.6 — Aggregate Exposure    |
+//|                                     v4.7.7 — Adaptive Runner       |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.76"
-#property description "XAUUSD AI Sniper v4.7.6 — Aggregate Exposure (caps total open lots + combined risk)"
+#property version   "4.77"
+#property description "XAUUSD AI Sniper v4.7.7 — Adaptive Runner (2-stage trailing, activates tick 1)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -170,6 +170,17 @@ input group "=== PEAK-LOCK BACKSTOP (v4.6.7 — bank a slice of EVERY good move)
 input bool   InpPeakLockBackstop = true;   // Universal: once peak profit ≥ arm, force-lock a slice
 input double InpPeakLockArmUSD   = 50.0;   // Peak must reach this $ before backstop arms
 input double InpPeakLockMinPct   = 25.0;   // Lock at least this % of PEAK profit (e.g. peak $700 → lock $175)
+
+input group "=== ADAPTIVE RUNNER (v4.7.7 — 2-stage SL trailing, activates tick 1) ==="
+input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
+input double InpARStage1ActivateR   = 0.3;    // Stage 1 activates at this profit in R (0.3R = early protection)
+input double InpARStage1TrailATR    = 1.0;    // Stage 1 trail distance = X × ATR (tighter = 0.8, looser = 1.2)
+input double InpARStage2ActivateR   = 1.0;    // Stage 2 activates at this profit in R (runner mode)
+input double InpARStage2TrailATR    = 2.2;    // Stage 2 trail distance = X × ATR (looser so trend can run)
+input double InpARBreakEvenR        = 0.5;    // Move to BE+small profit once this R is reached
+input double InpARBreakEvenProfitR  = 0.1;    // Lock this R of profit at BE (0.1R = tiny cushion past BE)
+input double InpARMinTrailPoints    = 80;     // Anti-noise: SL never closer than X points (chop filter, 80pt = ~$0.80 on XAU)
+input double InpARMomentumBoostMulti = 0.7;   // In strong momentum, tighten trail by this multi (0.7 = 30% tighter = faster ratchet)
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // Ask Claude before any rule-based close (HOLD/CLOSE/LOCK $X)
@@ -2620,11 +2631,92 @@ void ManagePositions()
          trade.PositionClose(ticket); continue;
       }
 
+      // ===== ADAPTIVE RUNNER (v4.7.7) — 2-stage tick-1 trailing =====
+      //   Fixes: slow SL activation, giveback from +$3,938 peak to loss.
+      //   Stage 0: Break-even at +0.5R (lock tiny profit cushion)
+      //   Stage 1: +0.3R → tight 1.0×ATR trail (protect early winners)
+      //   Stage 2: +1.0R → wider 2.2×ATR trail (let runner breathe)
+      //   Adaptive: tighter trail in strong momentum (faster ratchet).
+      //   Anti-noise: SL never closer than InpARMinTrailPoints (prevents chop stops).
+      //   Runs every tick — no time-in-trade gate.
+      //   Co-exists with Profit Ladder / Peak-Lock (those only move SL FURTHER,
+      //   and SafeModifySL ratchets only → no conflict).
+      if(InpAdaptiveRunner && profit > 0 && rDollars > 0 && atr > 0)
+      {
+         double profitR = profit / rDollars;
+         double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+         double minDist = InpARMinTrailPoints * point;
+
+         // Momentum detector: strong bar in our direction → tighten trail for faster lock
+         double barRange = MathAbs(close1 - open1);
+         bool strongMomentum = (barRange > atr * 1.2) &&
+                               ((isBuy && close1 > open1) || (!isBuy && close1 < open1));
+         double trailMulti = 0;
+
+         // Pick stage based on R profit
+         if(profitR >= InpARStage2ActivateR)
+         {
+            trailMulti = InpARStage2TrailATR;
+            if(strongMomentum) trailMulti *= InpARMomentumBoostMulti;
+         }
+         else if(profitR >= InpARStage1ActivateR)
+         {
+            trailMulti = InpARStage1TrailATR;
+            if(strongMomentum) trailMulti *= InpARMomentumBoostMulti;
+         }
+
+         // Stage 0: Break-even lock at +BreakEvenR (fires even before Stage 1 trail)
+         if(profitR >= InpARBreakEvenR)
+         {
+            double beProfitDist = slDist * InpARBreakEvenProfitR;
+            double beSL = isBuy ? NormalizeDouble(openPx + beProfitDist, digits)
+                                 : NormalizeDouble(openPx - beProfitDist, digits);
+            // Respect anti-noise: ensure BE SL is at least minDist from current price
+            bool beSane = isBuy ? (beSL < curPrice - minDist) : (beSL > curPrice + minDist);
+            bool beRatchet = isBuy ? (beSL > curSL) : (beSL < curSL || curSL == 0);
+            if(beSane && beRatchet)
+            {
+               if(SafeModifySL(ticket, beSL, curTP, isBuy, curPrice, "AR_BE"))
+                  Print("AR_BE #", ticket, " profitR=", DoubleToString(profitR,2),
+                        " — locked BE+", DoubleToString(InpARBreakEvenProfitR,2), "R at ",
+                        DoubleToString(beSL, digits));
+            }
+         }
+
+         // Stage 1/2: Adaptive ATR trail
+         if(trailMulti > 0)
+         {
+            double trailDist = MathMax(atr * trailMulti, minDist);
+            double newSL = isBuy ? NormalizeDouble(curPrice - trailDist, digits)
+                                  : NormalizeDouble(curPrice + trailDist, digits);
+            // Must be in profit zone AND ratchet only
+            bool sane = isBuy ? (newSL > openPx - (slDist * 0.3) && newSL < curPrice - minDist)
+                              : (newSL < openPx + (slDist * 0.3) && newSL > curPrice + minDist);
+            bool ratchet = isBuy ? (newSL > curSL) : (newSL < curSL || curSL == 0);
+            if(sane && ratchet)
+            {
+               string tag = (profitR >= InpARStage2ActivateR) ? "AR_S2" : "AR_S1";
+               if(SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, tag))
+               {
+                  static datetime lastARLog = 0;
+                  if(TimeCurrent() - lastARLog > 30)  // throttle 30s to keep journal clean
+                  {
+                     Print(tag, " #", ticket, " profitR=", DoubleToString(profitR,2),
+                           strongMomentum ? " [MOM+]" : "",
+                           " — SL→", DoubleToString(newSL, digits),
+                           " (", DoubleToString(trailMulti,2), "×ATR, min ",
+                           DoubleToString(InpARMinTrailPoints,0), "pts)");
+                     lastARLog = TimeCurrent();
+                  }
+               }
+            }
+         }
+      }
+
       // ===== PATH A: DETERMINISTIC TRAILING =====
       // Trail at 1.2x ATR behind price.
-      // SKIPPED if Profit Ladder is active — Ladder handles SL ratcheting on
-      // real $ profit, which is smarter than a tick-by-tick ATR trail. (v4.6.3)
-      if(!InpProfitLadder)
+      // SKIPPED if Profit Ladder OR Adaptive Runner is active (v4.7.7).
+      if(!InpProfitLadder && !InpAdaptiveRunner)
       {
          double trailDist = MathMax(atr * 1.2, SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 200);
          if(isBuy && profit > 0)
@@ -2643,12 +2735,9 @@ void ManagePositions()
 
       // ===== PATH B: SMART MANAGEMENT =====
 
-      // B1: Breakeven lock — SKIPPED entirely if Profit Ladder is active.
-      // Reason: BE_LOCK at +1R / lock-at-+0.25R was getting wicked by normal noise,
-      //   killing every winner at near-zero profit. The Profit Ladder is a smarter
-      //   replacement: it only ratchets SL into profit when MEANINGFUL $ profit
-      //   (% of balance) is reached, not on a single 1R noise spike. (v4.6.3)
-      if(!InpProfitLadder)
+      // B1: Breakeven lock — SKIPPED if Profit Ladder OR Adaptive Runner is active (v4.7.7).
+      //   Adaptive Runner has its own break-even at +0.5R (AR_BE) that supersedes this.
+      if(!InpProfitLadder && !InpAdaptiveRunner)
       {
          double activateDist = slDist * InpBELockActivateR;
          double lockProfitDist = slDist * InpBELockProfitR;
