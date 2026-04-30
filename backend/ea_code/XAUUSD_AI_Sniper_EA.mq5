@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.8.0 — Context Engine        |
+//|                                     v4.8.1 — Context Gate Loosened |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.80"
-#property description "XAUUSD AI Sniper v4.8.0 — Context Engine (H4 HTF bias + Swing S/R proximity filter)"
+#property version   "4.81"
+#property description "XAUUSD AI Sniper v4.8.1 — Context Gate loosened (0.4→0.2 ATR, 60→40 bars, 0.1→0.25% H4)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -46,11 +46,13 @@ input group "=== STRATEGY ==="
 input int    InpEMAFast        = 50;       // Fast EMA
 input int    InpEMASlow        = 200;      // Slow EMA
 
-input group "=== CONTEXT ENGINE (v4.8.0 — HTF + Swing-S/R, smarter entries) ==="
+input group "=== CONTEXT ENGINE (v4.8.0/v4.8.1 — HTF + Swing-S/R, smarter entries) ==="
 input bool   InpUseH4Bias        = true;   // Require H4 EMA align with trade direction (strong bias filter)
+input double InpH4NeutralPct     = 0.25;   // v4.8.1 — If H4 EMAs within this % apart → treat as neutral (allow trade)
 input bool   InpUseSRFilter      = true;   // Block entries too close to recent swing highs/lows
-input int    InpSRLookback       = 60;     // Bars back on M5 to scan for swing highs/lows (60 bars ≈ 5 hrs)
-input double InpSRProximityATR   = 0.4;    // Block if price within this × ATR of a swing level (without break-retest)
+input int    InpSRLookback       = 40;     // v4.8.1 — Bars back (was 60 = 5hr; now 40 = 3.3hr, less cluttered)
+input double InpSRProximityATR   = 0.2;    // v4.8.1 — Block if within X × ATR of swing (was 0.4 = way too strict)
+input bool   InpContextGateLog   = true;   // Print PASS lines too so you can see the gate is working
 input int    InpRSIPeriod      = 14;       // RSI Period
 input int    InpATRPeriod      = 14;       // ATR Period
 input double InpSLMultiplier   = 2.0;      // SL = ATR x this
@@ -886,9 +888,10 @@ bool ContextGateAllows(int signal, double atr)
       {
          bool h4Up   = (h4F > h4S);
          bool h4Down = (h4F < h4S);
-         // Neutral zone: H4 EMAs too close (< 0.1% apart) = no strong HTF bias, allow trade
+         // Neutral zone: H4 EMAs close together = no strong HTF bias, allow trade.
+         // Default 0.25% apart — wider than v4.8.0's 0.1% which was blocking too many valid entries.
          double spread = MathAbs(h4F - h4S) / h4S * 100;
-         if(spread >= 0.1)
+         if(spread >= InpH4NeutralPct)
          {
             if(signal == 1 && !h4Up)
             {
@@ -953,6 +956,9 @@ bool ContextGateAllows(int signal, double atr)
       }
    }
 
+   if(InpContextGateLog)
+      Print("✅ CONTEXT-GATE PASS: ", signal==1?"BUY":"SELL",
+            " cleared H4 bias + Swing-SR checks. Proceeding to OpenTrade.");
    return true;
 }
 
