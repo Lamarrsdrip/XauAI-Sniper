@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.9.3 — Bigger Lots           |
+//|                                     v4.9.4 — Basket Protect       |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
@@ -192,6 +192,17 @@ input bool   InpProfitRatchet       = true;   // Replaces AR_BE + AR Stage1/2 wi
 input double InpRatchetArmPct       = 5.0;    // v4.9.2 — $1k→$100, $10k→$500, $100k→$5000, $1M→$50k
 input double InpRatchetLockPct      = 50.0;   // Lock this % of current profit into SL (every tick, never pulls back)
 input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm amount ($100)
+
+input group "=== BASKET PROTECT (v4.9.4 — protect TOTAL floating profit across ALL open trades) ==="
+input bool   InpBasketMode          = true;   // Master toggle: SL logic works on AGGREGATE PnL, not per-trade
+input double InpBasketArmPct        = 1.0;    // Arm basket-lock when total floating ≥ X% of balance ($53k×1% = $530)
+input double InpBasketArmFloor      = 100.0;  // Absolute floor: don't arm before $100 floating (micro-accts)
+input double InpBasketLockMinPct    = 60.0;   // Once armed, lock AT LEAST this % of peak as floor (60% = 40% max giveback)
+input double InpBasketRatchetT1Pct  = 0.5;    // Tier 1 giveback floor: at peak≥0.5% bal, floor=50% of peak
+input double InpBasketRatchetT2Pct  = 2.5;    // Tier 2: at peak≥2.5% bal, floor=60% of peak (ratchets UP)
+input double InpBasketRatchetT3Pct  = 5.0;    // Tier 3: at peak≥5% bal,   floor=70% of peak (very protective)
+input double InpBasketBEPct         = 0.3;    // Once basket reached +0.3% balance, never let it go negative again
+input bool   InpBasketDisablePerTrade = true; // When basket active, disable per-trade peak-lock & ratchet (no conflict)
 
 input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
 input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
@@ -395,6 +406,13 @@ double     autoHardStopUSD    = 0;
 double     autoProfitTakeMin  = 0;
 double     autoProfitTakeMax  = 0;
 double     autoPeakMinUSD     = 0;
+
+// v4.9.4 — BASKET PROTECT state (aggregate across all open EA positions)
+double     g_basketPeakUSD   = 0;     // Max total floating $ reached since last flat state
+double     g_basketFloorUSD  = 0;     // Dynamic floor — if total falls below this, close ALL
+bool       g_basketArmed     = false; // True once peak has crossed arm threshold
+bool       g_basketBEHit     = false; // True once basket reached +BEPct% (then never let it go negative)
+datetime   g_basketLastLog   = 0;     // Throttle "basket state" prints
 
 // TRADE THESIS (AI narrative per open position)
 string     currentTradeThesis = "";
@@ -2018,6 +2036,17 @@ void OnTick()
       return;
    }
 
+   // === v4.9.4 BASKET PROTECT (runs BEFORE per-trade management) ===
+   // If total floating profit retraces past the dynamic basket floor,
+   // ManageBasket() closes ALL positions at once. When that fires we
+   // skip ManagePositions() entirely (the book is empty) and let the
+   // dashboard update once before the next tick.
+   if(ManageBasket())
+   {
+      UpdateDashboard(lastDashSignal, lastDashScore, lastDashGrade);
+      return;
+   }
+
    // === ALWAYS MANAGE OPEN POSITIONS (every tick, even on wide spread) ===
    // We intentionally run this BEFORE the spread gate so that news-time
    // spread spikes cannot prevent us from closing losing positions.
@@ -2609,6 +2638,108 @@ void LogExit(ulong ticket, string dir, double openPx, double closePx,
    lastExitReason = path + " | $" + DoubleToString(profit, 2) + " | " + reason;
 }
 //+------------------------------------------------------------------+
+//| v4.9.4 — BASKET PROTECT                                          |
+//|   Treat ALL open EA positions as a single basket. Protect the    |
+//|   AGGREGATE floating PnL (not per-trade). When the basket peak   |
+//|   retraces past a dynamic floor, CLOSE ALL at once — you bank    |
+//|   the move as a whole instead of each trade trailing separately  |
+//|   and getting shaken out on noise while others wait to arm.      |
+//|                                                                  |
+//|   Returns true if it closed all positions this tick — caller     |
+//|   should skip per-trade ManagePositions() to avoid redundant     |
+//|   work on an empty book.                                         |
+//+------------------------------------------------------------------+
+bool ManageBasket()
+{
+   if(!InpBasketMode) return false;
+
+   // Reset state when flat
+   if(CountMyPositions() == 0)
+   {
+      if(g_basketArmed || g_basketBEHit || g_basketPeakUSD != 0 || g_basketFloorUSD != 0)
+      {
+         g_basketPeakUSD  = 0;
+         g_basketFloorUSD = 0;
+         g_basketArmed    = false;
+         g_basketBEHit    = false;
+      }
+      return false;
+   }
+
+   // Aggregate floating PnL across all EA positions on this symbol
+   double totalPnL = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      totalPnL += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+   }
+
+   // Update peak
+   if(totalPnL > g_basketPeakUSD) g_basketPeakUSD = totalPnL;
+
+   double bal = accInfo.Balance();
+   if(bal <= 0) return false;
+
+   // Arm the basket-lock once peak crosses threshold
+   double armUSD = MathMax(InpBasketArmFloor, bal * InpBasketArmPct / 100.0);
+   if(!g_basketArmed && g_basketPeakUSD >= armUSD) g_basketArmed = true;
+
+   // BE flag: once basket reached BE threshold, never let it go negative
+   double beArmUSD = bal * InpBasketBEPct / 100.0;
+   if(!g_basketBEHit && g_basketPeakUSD >= beArmUSD) g_basketBEHit = true;
+
+   // Compute dynamic floor based on tiered peak thresholds
+   //   Base rule: floor = BasketLockMinPct% of peak (40% max giveback).
+   //   As peak grows past T1/T2/T3 tiers, lock tightens (50% / 60% / 70%).
+   double floorUSD = 0;
+   if(g_basketArmed)
+   {
+      double lockPct = InpBasketLockMinPct;
+      double t1USD = bal * InpBasketRatchetT1Pct / 100.0;
+      double t2USD = bal * InpBasketRatchetT2Pct / 100.0;
+      double t3USD = bal * InpBasketRatchetT3Pct / 100.0;
+      if(g_basketPeakUSD >= t1USD) lockPct = MathMax(lockPct, 50.0);
+      if(g_basketPeakUSD >= t2USD) lockPct = MathMax(lockPct, 60.0);
+      if(g_basketPeakUSD >= t3USD) lockPct = MathMax(lockPct, 70.0);
+      floorUSD = g_basketPeakUSD * lockPct / 100.0;
+   }
+
+   // BE safety: once BE armed, floor can never go below $1 (protect against full giveback)
+   if(g_basketBEHit) floorUSD = MathMax(floorUSD, 1.0);
+
+   // Floor can only ratchet UP, never down
+   if(floorUSD > g_basketFloorUSD) g_basketFloorUSD = floorUSD;
+
+   // Log state every 60s so user can watch live
+   if(TimeCurrent() - g_basketLastLog >= 60)
+   {
+      PrintFormat("BASKET │ PnL=$%.2f │ Peak=$%.2f │ Floor=$%.2f │ Armed=%s BE=%s",
+                  totalPnL, g_basketPeakUSD, g_basketFloorUSD,
+                  g_basketArmed ? "Y" : "N", g_basketBEHit ? "Y" : "N");
+      g_basketLastLog = TimeCurrent();
+   }
+
+   // TRIGGER: if armed and current falls below floor → close ALL
+   if(g_basketArmed && g_basketFloorUSD > 0 && totalPnL < g_basketFloorUSD)
+   {
+      PrintFormat(">>> BASKET CLOSE │ PnL=$%.2f < Floor=$%.2f │ Peak=$%.2f │ banking %.1f%% of peak",
+                  totalPnL, g_basketFloorUSD, g_basketPeakUSD,
+                  g_basketPeakUSD > 0 ? (totalPnL / g_basketPeakUSD) * 100.0 : 0.0);
+      lastExitReason = StringFormat("BASKET LOCK │ $%.2f peak → $%.2f banked", g_basketPeakUSD, totalPnL);
+      CloseAll();
+      // reset so the state doesn't instantly re-arm if a residual slippage trade lingers
+      g_basketPeakUSD  = 0;
+      g_basketFloorUSD = 0;
+      g_basketArmed    = false;
+      g_basketBEHit    = false;
+      return true;
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| 3-PATH SMART EXIT SYSTEM                                         |
 //| Path 0: Hard Loss Armor (stop nukes, early adverse, peak retrace)|
 //| Path A: Deterministic Trailing                                   |
@@ -2790,7 +2921,8 @@ void ManagePositions()
       //   Every tick while armed: compute new SL price that would bank 50% of CURRENT profit.
       //   Only ratchet forward (never pull back). Respects broker stops-level.
       //   This replaces the old AR_BE + AR_S1 + AR_S2 staging when enabled.
-      if(InpProfitRatchet && profit > 0 && rDollars > 0)
+      if(InpProfitRatchet && profit > 0 && rDollars > 0 &&
+         !(InpBasketMode && InpBasketDisablePerTrade))
       {
          double accBal = accInfo.Balance();
          if(accBal <= 0) accBal = accInfo.Equity();
@@ -2999,7 +3131,8 @@ void ManagePositions()
       double plBal = accInfo.Balance();
       if(plBal <= 0) plBal = accInfo.Equity();
       double peakArmUSD = MathMax(20.0, plBal * InpPeakLockArmPct / 100.0);
-      if(InpPeakLockBackstop && peak >= peakArmUSD && rDollars > 0)
+      if(InpPeakLockBackstop && peak >= peakArmUSD && rDollars > 0 &&
+         !(InpBasketMode && InpBasketDisablePerTrade))
       {
          double effPct = InpPeakLockMinPct;
          if(peak >= 300.0)  effPct = MathMax(effPct, 50.0);
@@ -4042,6 +4175,18 @@ void UpdateDashboard(int signal, double score, string grade)
    if(IsInStreakPause()) d += StringFormat("STREAK PAUSE until %s\n", TimeToString(streakPauseUntil, TIME_SECONDS));
    if(buyLockoutUntil  > TimeCurrent()) d += StringFormat("DIR-LOCK BUY until %s\n",  TimeToString(buyLockoutUntil,  TIME_SECONDS));
    if(sellLockoutUntil > TimeCurrent()) d += StringFormat("DIR-LOCK SELL until %s\n", TimeToString(sellLockoutUntil, TIME_SECONDS));
+   // v4.9.4 — Basket Protect live state
+   if(InpBasketMode && CountMyPositions() > 0)
+   {
+      double bskPnL = 0;
+      for(int bi = PositionsTotal() - 1; bi >= 0; bi--)
+         if(posInfo.SelectByIndex(bi) && posInfo.Magic() == InpMagicNumber && posInfo.Symbol() == Symbol())
+            bskPnL += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+      d += StringFormat("BASKET │ PnL $%.2f │ Peak $%.2f │ Floor $%.2f │ %s%s\n",
+           bskPnL, g_basketPeakUSD, g_basketFloorUSD,
+           g_basketArmed ? "ARMED" : "watching",
+           g_basketBEHit ? " +BE" : "");
+   }
    if(StringLen(currentTradeThesis) > 0 && CountMyPositions() > 0)
    {
       d += "-- TRADE THESIS --\n";
