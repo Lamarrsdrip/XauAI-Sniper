@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.9.1 — Profit Ratchet 50%    |
+//|                                     v4.9.2 — Ratchet Scaled Up     |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
@@ -189,9 +189,9 @@ input ENUM_MGMT_MODE InpMgmtMode = MGMT_BALANCED;  // BALANCED: trailing active 
 
 input group "=== PROFIT RATCHET (v4.9.1 — simple fast SL = 50% of current profit) ==="
 input bool   InpProfitRatchet       = true;   // Replaces AR_BE + AR Stage1/2 with simple "SL = 50% current profit"
-input double InpRatchetArmPct       = 0.5;    // Arm at this % of balance ($1k→$5, $10k→$50, $100k→$500, $1M→$5k)
+input double InpRatchetArmPct       = 5.0;    // v4.9.2 — $1k→$100, $10k→$500, $100k→$5000, $1M→$50k
 input double InpRatchetLockPct      = 50.0;   // Lock this % of current profit into SL (every tick, never pulls back)
-input double InpRatchetArmFloor     = 50.0;   // Absolute minimum arm amount in $ (floor)
+input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm amount ($100)
 
 input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
 input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
