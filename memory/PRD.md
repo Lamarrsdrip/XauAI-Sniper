@@ -84,6 +84,8 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.8.7 — "Proper Account Scale"** — User corrected v4.8.6 %s: "$1k should start from 50-200, 100k from 1k-5k". Bumped `InpARStage1MinPct` 0.5→5.0%, `InpARBreakEvenMinPct` 0.8→8.0%, `InpPeakLockArmPct` 0.3→3.0%. Floors raised to $50/$80/$30. Now: $100k → AR@$5k, BE@$8k, PeakLock@$3k.
+
 - **Feb 2026 - v4.8.6 — "Account-Aware Exits" (all $ thresholds scale with balance + wider trails)**
   - User feedback: "$50/$80 too small on big acc. Make everything base on account size."
   - **Converted fixed $ thresholds → % of balance:**

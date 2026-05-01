@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.8.6 — Account-Aware Exits  |
+//|                                     v4.8.7 — Proper Account Scale |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.86"
-#property description "XAUUSD AI Sniper v4.8.6 — Account-Aware Exits (all thresholds scale with balance, wider trails)"
+#property version   "4.87"
+#property description "XAUUSD AI Sniper v4.8.7 — Proper Account Scale ($1k→$50, $10k→$500, $100k→$5k triggers)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -180,18 +180,18 @@ input double InpLadderTier7Lock    = 8000;
 
 input group "=== PEAK-LOCK BACKSTOP (v4.6.7 — bank a slice of EVERY good move) ==="
 input bool   InpPeakLockBackstop = true;   // Universal: once peak profit ≥ arm, force-lock a slice
-input double InpPeakLockArmPct   = 0.3;    // v4.8.6 — % of balance ($1k→$3, $100k→$300). Min floor $8.
+input double InpPeakLockArmPct   = 3.0;    // v4.8.7 — $1k→$30, $10k→$300, $100k→$3000 (floor $30)
 input double InpPeakLockMinPct   = 40.0;   // v4.8.3 — Was 25%, now 40% base. Dynamic scaling adds more for bigger peaks.
 
 input group "=== ADAPTIVE RUNNER (v4.7.7 — 2-stage SL trailing, activates tick 1) ==="
 input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
 input double InpARStage1ActivateR   = 0.8;    // v4.8.4 — Was 0.3, now 0.8 (let winners develop before tight trail)
-input double InpARStage1MinPct      = 0.05;   // v4.8.6 — AND require profit ≥ this % of balance (scales with account: $1k→$0.50, $100k→$50)
+input double InpARStage1MinPct      = 5.0;    // v4.8.7 — $1k→$50, $10k→$500, $100k→$5000 (floor $50)
 input double InpARStage1TrailATR    = 1.5;    // v4.8.4 — Was 1.0, now 1.5 (more breathing room on noise wicks)
 input double InpARStage2ActivateR   = 1.0;    // Stage 2 activates at this profit in R (runner mode)
 input double InpARStage2TrailATR    = 3.0;    // v4.8.6 — Was 2.2, now 3.0 (runner breathes more)
 input double InpARBreakEvenR        = 1.2;    // v4.8.6 — Was 1.0, now 1.2 (more profit confirmed before BE lock)
-input double InpARBreakEvenMinPct   = 0.8;    // v4.8.6 — % of balance ($1k→$8, $100k→$800). Min floor $15.
+input double InpARBreakEvenMinPct   = 8.0;    // v4.8.7 — $1k→$80, $10k→$800, $100k→$8000 (floor $80)
 input double InpARBreakEvenProfitR  = 0.15;   // v4.8.4 — slightly more cushion past BE (was 0.1)
 input double InpARMinTrailPoints    = 80;     // Anti-noise: SL never closer than X points (chop filter, 80pt = ~$0.80 on XAU)
 input double InpARMomentumBoostMulti = 0.7;   // In strong momentum, tighten trail by this multi (0.7 = 30% tighter = faster ratchet)
@@ -2805,8 +2805,8 @@ void ManagePositions()
          // v4.8.6 — Compute dollar thresholds from account balance
          double accBal = accInfo.Balance();
          if(accBal <= 0) accBal = accInfo.Equity();
-         double arS1MinProfit = MathMax(10.0, accBal * InpARStage1MinPct / 100.0);
-         double arBEMinProfit = MathMax(15.0, accBal * InpARBreakEvenMinPct / 100.0);
+         double arS1MinProfit = MathMax(50.0, accBal * InpARStage1MinPct / 100.0);
+         double arBEMinProfit = MathMax(80.0, accBal * InpARBreakEvenMinPct / 100.0);
 
          // v4.8.6 — Trend Hold: force wide trail regardless of stage thresholds
          //   BUT still require profit ≥ arS1MinProfit so we don't micro-trail tiny wins
@@ -2936,7 +2936,7 @@ void ManagePositions()
       //   $1M acc → arm at peak $3,000
       double plBal = accInfo.Balance();
       if(plBal <= 0) plBal = accInfo.Equity();
-      double peakArmUSD = MathMax(8.0, plBal * InpPeakLockArmPct / 100.0);
+      double peakArmUSD = MathMax(30.0, plBal * InpPeakLockArmPct / 100.0);
       if(InpPeakLockBackstop && peak >= peakArmUSD && rDollars > 0)
       {
          double effPct = InpPeakLockMinPct;
