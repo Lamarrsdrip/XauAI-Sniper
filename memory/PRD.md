@@ -84,6 +84,14 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.8.4 — "Trend Hold Mode" (stop micro-exiting obvious 20-pt trends)**
+  - User pain: gold moved 4614 → 4594 (20pt = should have been $10k+). Bot opened ~15 sells, each held 0-1pt, netted only ~$500-800.
+  - **Root cause**: AR Stage 1 trail at 1.0×ATR (~4pt) clipping winners on noise. AR_BE at +0.5R locking too early.
+  - **Fix 1 — Loosen AR defaults**: AR_BE 0.5R→1.0R, AR_S1 activate 0.3R→0.8R, AR_S1 trail 1.0→1.5×ATR.
+  - **Fix 2 — Trend Hold Mode**: when H4+H1+M5 EMAs all align with trade direction → force wide 3.0×ATR trail. Log tag `AR_TH`.
+  - Expected: bot now holds single trades through 20pt moves instead of fighting itself with 15 micro-exits.
+  - Compile: braces 0/0, parens 0/0, 3989 lines. Frontend bumped to v4.8.4.
+
 - **Feb 2026 - v4.8.3 — "Dynamic Peak-Lock" (root cause of $1k+ peak giveback)**
   - User pain: sell 4.13 & 2.47 both hit +$1,000+ peak, closed at -$57 and +$212. Market then moved to their direction.
   - **Root cause**: Peak-Lock was hard-coded 25% of peak. On $1,000 peak → only $250 locked. Price retraced past $250 floor on a wick → SL hit.

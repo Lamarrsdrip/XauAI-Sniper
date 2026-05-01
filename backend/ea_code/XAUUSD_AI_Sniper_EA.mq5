@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.8.3 — Dynamic Peak-Lock    |
+//|                                     v4.8.4 — Trend Hold Mode      |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.83"
-#property description "XAUUSD AI Sniper v4.8.3 — Dynamic Peak-Lock (bigger peaks = tighter lock %, arm at $30)"
+#property version   "4.84"
+#property description "XAUUSD AI Sniper v4.8.4 — Trend Hold Mode (H4+H1+M5 align → let winners run, no micro-exits)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -185,14 +185,18 @@ input double InpPeakLockMinPct   = 40.0;   // v4.8.3 — Was 25%, now 40% base. 
 
 input group "=== ADAPTIVE RUNNER (v4.7.7 — 2-stage SL trailing, activates tick 1) ==="
 input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
-input double InpARStage1ActivateR   = 0.3;    // Stage 1 activates at this profit in R (0.3R = early protection)
-input double InpARStage1TrailATR    = 1.0;    // Stage 1 trail distance = X × ATR (tighter = 0.8, looser = 1.2)
+input double InpARStage1ActivateR   = 0.8;    // v4.8.4 — Was 0.3, now 0.8 (let winners develop before tight trail)
+input double InpARStage1TrailATR    = 1.5;    // v4.8.4 — Was 1.0, now 1.5 (more breathing room on noise wicks)
 input double InpARStage2ActivateR   = 1.0;    // Stage 2 activates at this profit in R (runner mode)
 input double InpARStage2TrailATR    = 2.2;    // Stage 2 trail distance = X × ATR (looser so trend can run)
-input double InpARBreakEvenR        = 0.5;    // Move to BE+small profit once this R is reached
-input double InpARBreakEvenProfitR  = 0.1;    // Lock this R of profit at BE (0.1R = tiny cushion past BE)
+input double InpARBreakEvenR        = 1.0;    // v4.8.4 — Was 0.5, now 1.0 (don't lock BE on 0.5R noise)
+input double InpARBreakEvenProfitR  = 0.15;   // v4.8.4 — slightly more cushion past BE (was 0.1)
 input double InpARMinTrailPoints    = 80;     // Anti-noise: SL never closer than X points (chop filter, 80pt = ~$0.80 on XAU)
 input double InpARMomentumBoostMulti = 0.7;   // In strong momentum, tighten trail by this multi (0.7 = 30% tighter = faster ratchet)
+
+input group "=== TREND HOLD MODE (v4.8.4 — don't micro-exit when trend is obvious) ==="
+input bool   InpTrendHoldMode    = true;   // When H4+H1+M5 all align with trade dir, force Stage 2 wide trail + disable micro-exits
+input double InpTrendHoldTrailATR = 3.0;   // Trail distance in trend-hold mode (wider than Stage 2)
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // Ask Claude before any rule-based close (HOLD/CLOSE/LOCK $X)
@@ -2771,6 +2775,24 @@ void ManagePositions()
          double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
          double minDist = InpARMinTrailPoints * point;
 
+         // v4.8.4 — TREND HOLD detection: H4+H1+M5 all aligned WITH trade direction
+         bool trendHold = false;
+         if(InpTrendHoldMode)
+         {
+            double h4F = (ArraySize(bufEMAFast_H4) > 1) ? bufEMAFast_H4[1] : 0;
+            double h4S = (ArraySize(bufEMASlow_H4) > 1) ? bufEMASlow_H4[1] : 0;
+            double h1F = (ArraySize(bufEMAFast_H1) > 1) ? bufEMAFast_H1[1] : 0;
+            double h1S = (ArraySize(bufEMASlow_H1) > 1) ? bufEMASlow_H1[1] : 0;
+            if(h4F > 0 && h1F > 0)
+            {
+               bool h4AlignUp   = (h4F > h4S);
+               bool h1AlignUp   = (h1F > h1S);
+               bool m5AlignUp   = (emaF > emaS);
+               if(isBuy  && h4AlignUp && h1AlignUp && m5AlignUp)  trendHold = true;
+               if(!isBuy && !h4AlignUp && !h1AlignUp && !m5AlignUp) trendHold = true;
+            }
+         }
+
          // Momentum detector: strong bar in our direction → tighten trail for faster lock
          double barRange = MathAbs(close1 - open1);
          bool strongMomentum = (barRange > atr * 1.2) &&
@@ -2778,7 +2800,13 @@ void ManagePositions()
          double trailMulti = 0;
 
          // Pick stage based on R profit
-         if(profitR >= InpARStage2ActivateR)
+         //   v4.8.4 — Trend Hold: force wide trail regardless of stage thresholds
+         if(trendHold && profitR >= InpARStage1ActivateR)
+         {
+            trailMulti = InpTrendHoldTrailATR;  // wide trail, let it RUN
+            // no momentum-tightening in trend-hold — we want breathing room
+         }
+         else if(profitR >= InpARStage2ActivateR)
          {
             trailMulti = InpARStage2TrailATR;
             if(strongMomentum) trailMulti *= InpARMomentumBoostMulti;
@@ -2819,7 +2847,8 @@ void ManagePositions()
             bool ratchet = isBuy ? (newSL > curSL) : (newSL < curSL || curSL == 0);
             if(sane && ratchet)
             {
-               string tag = (profitR >= InpARStage2ActivateR) ? "AR_S2" : "AR_S1";
+               string tag = trendHold ? "AR_TH" :
+                            (profitR >= InpARStage2ActivateR ? "AR_S2" : "AR_S1");
                if(SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, tag))
                {
                   static datetime lastARLog = 0;
