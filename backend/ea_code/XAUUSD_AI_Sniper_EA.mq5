@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.8.4 — Trend Hold Mode      |
+//|                                     v4.8.5 — Simple Trail          |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.84"
-#property description "XAUUSD AI Sniper v4.8.4 — Trend Hold Mode (H4+H1+M5 align → let winners run, no micro-exits)"
+#property version   "4.85"
+#property description "XAUUSD AI Sniper v4.8.5 — Simple Trail (no SL meddling below $50 profit — stops micro-exits)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -186,10 +186,12 @@ input double InpPeakLockMinPct   = 40.0;   // v4.8.3 — Was 25%, now 40% base. 
 input group "=== ADAPTIVE RUNNER (v4.7.7 — 2-stage SL trailing, activates tick 1) ==="
 input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
 input double InpARStage1ActivateR   = 0.8;    // v4.8.4 — Was 0.3, now 0.8 (let winners develop before tight trail)
+input double InpARStage1MinProfit   = 50.0;   // v4.8.5 — ALSO require profit ≥ $50 (no micro-trailing on $10 wins)
 input double InpARStage1TrailATR    = 1.5;    // v4.8.4 — Was 1.0, now 1.5 (more breathing room on noise wicks)
 input double InpARStage2ActivateR   = 1.0;    // Stage 2 activates at this profit in R (runner mode)
 input double InpARStage2TrailATR    = 2.2;    // Stage 2 trail distance = X × ATR (looser so trend can run)
 input double InpARBreakEvenR        = 1.0;    // v4.8.4 — Was 0.5, now 1.0 (don't lock BE on 0.5R noise)
+input double InpARBreakEvenMinProfit = 80.0;  // v4.8.5 — ALSO require profit ≥ $80 (no BE lock on tiny wins)
 input double InpARBreakEvenProfitR  = 0.15;   // v4.8.4 — slightly more cushion past BE (was 0.1)
 input double InpARMinTrailPoints    = 80;     // Anti-noise: SL never closer than X points (chop filter, 80pt = ~$0.80 on XAU)
 input double InpARMomentumBoostMulti = 0.7;   // In strong momentum, tighten trail by this multi (0.7 = 30% tighter = faster ratchet)
@@ -2800,8 +2802,9 @@ void ManagePositions()
          double trailMulti = 0;
 
          // Pick stage based on R profit
-         //   v4.8.4 — Trend Hold: force wide trail regardless of stage thresholds
-         if(trendHold && profitR >= InpARStage1ActivateR)
+         // v4.8.5 — Trend Hold: force wide trail regardless of stage thresholds
+         //   BUT still require profit ≥ $50 so we don't micro-trail tiny wins
+         if(trendHold && profitR >= InpARStage1ActivateR && profit >= InpARStage1MinProfit)
          {
             trailMulti = InpTrendHoldTrailATR;  // wide trail, let it RUN
             // no momentum-tightening in trend-hold — we want breathing room
@@ -2811,14 +2814,17 @@ void ManagePositions()
             trailMulti = InpARStage2TrailATR;
             if(strongMomentum) trailMulti *= InpARMomentumBoostMulti;
          }
-         else if(profitR >= InpARStage1ActivateR)
+         else if(profitR >= InpARStage1ActivateR && profit >= InpARStage1MinProfit)
          {
             trailMulti = InpARStage1TrailATR;
             if(strongMomentum) trailMulti *= InpARMomentumBoostMulti;
          }
 
          // Stage 0: Break-even lock at +BreakEvenR (fires even before Stage 1 trail)
-         if(profitR >= InpARBreakEvenR)
+         // v4.8.5 — ALSO require profit >= InpARBreakEvenMinProfit ($80 default).
+         //   Prevents BE lock on tiny 1R wins where R is small (e.g. $30) which
+         //   would clip on any 1pt wick.
+         if(profitR >= InpARBreakEvenR && profit >= InpARBreakEvenMinProfit)
          {
             double beProfitDist = slDist * InpARBreakEvenProfitR;
             double beSL = isBuy ? NormalizeDouble(openPx + beProfitDist, digits)
