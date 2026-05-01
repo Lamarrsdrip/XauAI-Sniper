@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.9.2 — Ratchet Scaled Up     |
+//|                                     v4.9.3 — Bigger Lots           |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
@@ -25,7 +25,7 @@ input group "=== RISK (Gate 4) ==="
 input group "=== PRESERVATION MODE (v4.7.2 — let winners run, don't trade like scalper) ==="
 input group "=== ACCOUNT MODE (v4.8.2 — one-input preset for risk profile) ==="
 enum ENUM_ACCT_MODE { ACCT_BALANCED, ACCT_CONSERVATIVE, ACCT_AGGRESSIVE };
-input ENUM_ACCT_MODE InpAccountMode = ACCT_BALANCED;  // BALANCED=0.8% | CONSERVATIVE=0.4% | AGGRESSIVE=1.2%
+input ENUM_ACCT_MODE InpAccountMode = ACCT_BALANCED;  // v4.9.3: BALANCED=1.2% | CONSERVATIVE=0.6% | AGGRESSIVE=2.0%
 
 input bool   InpPreservationMode = true;  // Master toggle: disables premature profit-side exits
 input double InpRiskPercent    = 0.4;      // Base risk per trade (%) — IGNORED if InpAccountMode != BALANCED uses preset
@@ -36,9 +36,9 @@ input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this
 input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 input double InpMaxLots        = 10.0;     // Hard max lots
-input double InpMaxRiskPctEquity = 1.5;    // v4.7.5 — Hard cap: max % of EQUITY a single trade can lose if SL hits
+input double InpMaxRiskPctEquity = 3.0;    // v4.9.3 — Was 1.5, now 3.0 (allow A+ big signals to pass)
 input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
-input double InpMaxAggregateRiskPct = 4.0; // v4.7.6 — Block new entries if all open positions combined could lose > X% equity
+input double InpMaxAggregateRiskPct = 8.0; // v4.9.3 — Was 4.0, now 8.0 (more room for layered trades)
 input double InpDailyLossLimit = 6.0;      // Daily loss cap (%) — set 0 to disable
 input int    InpMaxOpenTrades  = 5;        // Max open positions
 input int    InpMaxTradesPerDay= 30;       // No artificial limit until target
@@ -2190,7 +2190,8 @@ void OnTick()
    string signature = BuildSignature(signal, setupName);
 
    // ============ GATE 4: RISK SIZING ============
-   double sizeMulti = grade == "A+" ? 1.0 : grade == "A" ? 0.85 : 0.55;
+   // v4.9.3 — Bigger lots scale with signal strength
+   double sizeMulti = grade == "A+" ? 1.5 : grade == "A" ? 1.2 : 0.8;
    int    confidenceBoostPP = 0;   // in percentage points, informational
 
    // ----- LOCAL ML (hierarchical signature match, mirrors hive) -----
@@ -2429,10 +2430,13 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    // Lot sizing with grade multiplier
    double balance = accInfo.Balance();
    // v4.8.2 — Account Mode preset overrides InpRiskPercent
+   // v4.9.3 — Account mode risks bumped for bigger lots.
+   //   Old: BALANCED 0.8 / CONSERVATIVE 0.4 / AGGRESSIVE 1.2
+   //   New: BALANCED 1.2 / CONSERVATIVE 0.6 / AGGRESSIVE 2.0
    double baseRisk = InpRiskPercent;
-   if(InpAccountMode == ACCT_BALANCED)     baseRisk = 0.8;
-   if(InpAccountMode == ACCT_CONSERVATIVE) baseRisk = 0.4;
-   if(InpAccountMode == ACCT_AGGRESSIVE)   baseRisk = 1.2;
+   if(InpAccountMode == ACCT_BALANCED)     baseRisk = 1.2;
+   if(InpAccountMode == ACCT_CONSERVATIVE) baseRisk = 0.6;
+   if(InpAccountMode == ACCT_AGGRESSIVE)   baseRisk = 2.0;
    double riskPct = baseRisk * sizeMulti;
 
    // DRAWDOWN RECOVERY MODE: cap risk at InpDrawdownRisk% until we get a win
@@ -4055,4 +4059,3 @@ void UpdateDashboard(int signal, double score, string grade)
    Comment(d);
 }
 //+------------------------------------------------------------------+
--------------------+

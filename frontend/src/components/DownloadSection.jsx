@@ -8,7 +8,7 @@ export default function DownloadSection({ api }) {
         <div className="mb-12">
           <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-gray-400 bg-white border border-gray-200 px-3 py-1.5 rounded-full"><DownloadSimple size={12} weight="bold" className="inline mr-1" />DOWNLOAD CENTER</span>
           <h2 className="font-heading text-3xl sm:text-4xl font-semibold tracking-tight mt-6 text-[#111]" data-testid="download-title">Get the Expert Advisor</h2>
-          <p className="text-gray-500 mt-2">Download v4.9.2 — Ratchet arm scaled: $1k→$100, $10k→$500, $100k→$5k. Proper account sizing.</p>
+          <p className="text-gray-500 mt-2">Download v4.9.3 — Bigger Lots: A+ signals 1.5× base, BALANCED risk 1.2%, equity cap 3%. Matches account size.</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
           <div className="bg-white border border-gray-200 rounded-3xl p-8 card-hover" data-testid="download-ea-card">
@@ -16,7 +16,7 @@ export default function DownloadSection({ api }) {
               <div className="w-12 h-12 bg-[#C5A059]/10 border border-[#C5A059]/20 rounded-2xl flex items-center justify-center"><FileCode size={22} weight="duotone" className="text-[#C5A059]" /></div>
               <div>
                 <h3 className="font-heading text-lg font-medium text-[#111]">Expert Advisor (.mq5)</h3>
-                <p className="text-sm text-gray-400 mt-1">v4.9.2 — Ratchet arms at 5% balance. $100k acc arms at $5k profit, locks 50%.</p>
+                <p className="text-sm text-gray-400 mt-1">v4.9.3 — Grade A+=1.5, A=1.2, B=0.8 × acct risk. $50k A+ now ~4-5 lots. Signal strength matters.</p>
               </div>
             </div>
             <div className="flex items-center gap-3 mb-5 text-[10px] font-mono text-gray-300 tracking-wide">
