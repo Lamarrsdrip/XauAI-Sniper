@@ -84,6 +84,16 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.8.6 — "Account-Aware Exits" (all $ thresholds scale with balance + wider trails)**
+  - User feedback: "$50/$80 too small on big acc. Make everything base on account size."
+  - **Converted fixed $ thresholds → % of balance:**
+    - `InpARStage1MinPct = 0.5%` (floor $10): $1k→$5, $10k→$50, $100k→$500
+    - `InpARBreakEvenMinPct = 0.8%` (floor $15): $1k→$8, $100k→$800
+    - `InpPeakLockArmPct = 0.3%` (floor $8): $1k→$3, $100k→$300
+  - **Widened trails:** AR_S1 1.5→2.0×ATR, AR_S2 2.2→3.0×ATR, AR_BE +1.0R→+1.2R
+  - Also v4.8.5 `InpARStage1MinProfit`/`InpARBreakEvenMinProfit` fixed-$ inputs REMOVED (replaced by Pct versions).
+  - Compile: braces 0/0, parens 0/0, 3999 lines.
+
 - **Feb 2026 - v4.8.4 — "Trend Hold Mode" (stop micro-exiting obvious 20-pt trends)**
   - User pain: gold moved 4614 → 4594 (20pt = should have been $10k+). Bot opened ~15 sells, each held 0-1pt, netted only ~$500-800.
   - **Root cause**: AR Stage 1 trail at 1.0×ATR (~4pt) clipping winners on noise. AR_BE at +0.5R locking too early.

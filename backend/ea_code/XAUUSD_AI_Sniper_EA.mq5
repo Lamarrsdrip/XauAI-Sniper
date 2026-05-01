@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.8.5 — Simple Trail          |
+//|                                     v4.8.6 — Account-Aware Exits  |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.85"
-#property description "XAUUSD AI Sniper v4.8.5 — Simple Trail (no SL meddling below $50 profit — stops micro-exits)"
+#property version   "4.86"
+#property description "XAUUSD AI Sniper v4.8.6 — Account-Aware Exits (all thresholds scale with balance, wider trails)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -180,18 +180,18 @@ input double InpLadderTier7Lock    = 8000;
 
 input group "=== PEAK-LOCK BACKSTOP (v4.6.7 — bank a slice of EVERY good move) ==="
 input bool   InpPeakLockBackstop = true;   // Universal: once peak profit ≥ arm, force-lock a slice
-input double InpPeakLockArmUSD   = 30.0;   // v4.8.3 — Was 50, now 30 so smaller peaks get protected
+input double InpPeakLockArmPct   = 0.3;    // v4.8.6 — % of balance ($1k→$3, $100k→$300). Min floor $8.
 input double InpPeakLockMinPct   = 40.0;   // v4.8.3 — Was 25%, now 40% base. Dynamic scaling adds more for bigger peaks.
 
 input group "=== ADAPTIVE RUNNER (v4.7.7 — 2-stage SL trailing, activates tick 1) ==="
 input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
 input double InpARStage1ActivateR   = 0.8;    // v4.8.4 — Was 0.3, now 0.8 (let winners develop before tight trail)
-input double InpARStage1MinProfit   = 50.0;   // v4.8.5 — ALSO require profit ≥ $50 (no micro-trailing on $10 wins)
+input double InpARStage1MinPct      = 0.05;   // v4.8.6 — AND require profit ≥ this % of balance (scales with account: $1k→$0.50, $100k→$50)
 input double InpARStage1TrailATR    = 1.5;    // v4.8.4 — Was 1.0, now 1.5 (more breathing room on noise wicks)
 input double InpARStage2ActivateR   = 1.0;    // Stage 2 activates at this profit in R (runner mode)
-input double InpARStage2TrailATR    = 2.2;    // Stage 2 trail distance = X × ATR (looser so trend can run)
-input double InpARBreakEvenR        = 1.0;    // v4.8.4 — Was 0.5, now 1.0 (don't lock BE on 0.5R noise)
-input double InpARBreakEvenMinProfit = 80.0;  // v4.8.5 — ALSO require profit ≥ $80 (no BE lock on tiny wins)
+input double InpARStage2TrailATR    = 3.0;    // v4.8.6 — Was 2.2, now 3.0 (runner breathes more)
+input double InpARBreakEvenR        = 1.2;    // v4.8.6 — Was 1.0, now 1.2 (more profit confirmed before BE lock)
+input double InpARBreakEvenMinPct   = 0.8;    // v4.8.6 — % of balance ($1k→$8, $100k→$800). Min floor $15.
 input double InpARBreakEvenProfitR  = 0.15;   // v4.8.4 — slightly more cushion past BE (was 0.1)
 input double InpARMinTrailPoints    = 80;     // Anti-noise: SL never closer than X points (chop filter, 80pt = ~$0.80 on XAU)
 input double InpARMomentumBoostMulti = 0.7;   // In strong momentum, tighten trail by this multi (0.7 = 30% tighter = faster ratchet)
@@ -2802,9 +2802,15 @@ void ManagePositions()
          double trailMulti = 0;
 
          // Pick stage based on R profit
-         // v4.8.5 — Trend Hold: force wide trail regardless of stage thresholds
-         //   BUT still require profit ≥ $50 so we don't micro-trail tiny wins
-         if(trendHold && profitR >= InpARStage1ActivateR && profit >= InpARStage1MinProfit)
+         // v4.8.6 — Compute dollar thresholds from account balance
+         double accBal = accInfo.Balance();
+         if(accBal <= 0) accBal = accInfo.Equity();
+         double arS1MinProfit = MathMax(10.0, accBal * InpARStage1MinPct / 100.0);
+         double arBEMinProfit = MathMax(15.0, accBal * InpARBreakEvenMinPct / 100.0);
+
+         // v4.8.6 — Trend Hold: force wide trail regardless of stage thresholds
+         //   BUT still require profit ≥ arS1MinProfit so we don't micro-trail tiny wins
+         if(trendHold && profitR >= InpARStage1ActivateR && profit >= arS1MinProfit)
          {
             trailMulti = InpTrendHoldTrailATR;  // wide trail, let it RUN
             // no momentum-tightening in trend-hold — we want breathing room
@@ -2814,17 +2820,15 @@ void ManagePositions()
             trailMulti = InpARStage2TrailATR;
             if(strongMomentum) trailMulti *= InpARMomentumBoostMulti;
          }
-         else if(profitR >= InpARStage1ActivateR && profit >= InpARStage1MinProfit)
+         else if(profitR >= InpARStage1ActivateR && profit >= arS1MinProfit)
          {
             trailMulti = InpARStage1TrailATR;
             if(strongMomentum) trailMulti *= InpARMomentumBoostMulti;
          }
 
          // Stage 0: Break-even lock at +BreakEvenR (fires even before Stage 1 trail)
-         // v4.8.5 — ALSO require profit >= InpARBreakEvenMinProfit ($80 default).
-         //   Prevents BE lock on tiny 1R wins where R is small (e.g. $30) which
-         //   would clip on any 1pt wick.
-         if(profitR >= InpARBreakEvenR && profit >= InpARBreakEvenMinProfit)
+         // v4.8.6 — ALSO require profit >= arBEMinProfit (scales with balance).
+         if(profitR >= InpARBreakEvenR && profit >= arBEMinProfit)
          {
             double beProfitDist = slDist * InpARBreakEvenProfitR;
             double beSL = isBuy ? NormalizeDouble(openPx + beProfitDist, digits)
@@ -2924,16 +2928,16 @@ void ManagePositions()
          }
       }
 
-      // v4.6.7 / v4.8.3 — PEAK-LOCK BACKSTOP (dynamic scaling)
-      // Once peak profit reaches InpPeakLockArmUSD, FORCE-lock a % of the peak.
-      // v4.8.3: Lock % scales WITH peak size (bigger peaks = bigger lock):
-      //   peak $50-$300   → base 40%
-      //   peak $300-$1000 → 50%
-      //   peak $1000-$3000 → 60%
-      //   peak $3000+     → 70%
-      // This prevents the "+$1000 peak closes at +$212" scenario — a $1k peak
-      // now locks AT LEAST $600 minimum, so worst-case give-back is bounded.
-      if(InpPeakLockBackstop && peak >= InpPeakLockArmUSD && rDollars > 0)
+      // v4.6.7 / v4.8.3 / v4.8.6 — PEAK-LOCK BACKSTOP (dynamic scaling, account-size aware arm)
+      // Arm threshold now scales with balance: 0.3% of balance, min $8 floor.
+      //   $1k acc → arm at peak $8
+      //   $10k acc → arm at peak $30
+      //   $100k acc → arm at peak $300
+      //   $1M acc → arm at peak $3,000
+      double plBal = accInfo.Balance();
+      if(plBal <= 0) plBal = accInfo.Equity();
+      double peakArmUSD = MathMax(8.0, plBal * InpPeakLockArmPct / 100.0);
+      if(InpPeakLockBackstop && peak >= peakArmUSD && rDollars > 0)
       {
          double effPct = InpPeakLockMinPct;
          if(peak >= 300.0)  effPct = MathMax(effPct, 50.0);
