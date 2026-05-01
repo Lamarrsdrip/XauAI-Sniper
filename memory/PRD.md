@@ -100,6 +100,16 @@
   - Result: initial trades now ride with same simplicity as pyramid trades. Peak-Lock still catches big peaks (40-70% dynamic scaling from v4.8.3).
   - Compile: braces 0/0, parens 0/0, 4007 lines.
 
+- **Feb 2026 - v4.9.3 — "Bigger Lots" (scale size with signal strength)**
+  - User pain: $50k-$100k accounts were taking tiny 2-3 lot sizes on A+ signals that deserved more.
+  - **Grade multiplier bumped**: A+ 1.0→1.5, A 0.85→1.2, B 0.55→0.8 (line 2194).
+  - **Account Mode risk bumped**: BALANCED 0.8→1.2%, CONSERVATIVE 0.4→0.6%, AGGRESSIVE 1.2→2.0%.
+  - **Equity caps raised** so the new larger lots aren't throttled: `InpMaxRiskPctEquity` 1.5→3.0%, `InpMaxAggregateRiskPct` 4.0→8.0%.
+  - Fixed trailing-garbage syntax error that had been blocking compile (stray text at EOF after `Comment(d); }`).
+  - Compile: braces 0/0, parens 0/0, 4061 lines. Frontend download bumped to v4.9.3 and served via `/api/download/ea` (HTTP 200, 198 KB).
+
+- **Feb 2026 - v4.9.2 — "Profit Ratchet Scaled Up"** (locks 50% of profit at $500/$2.5k/$5k tiers keyed to account size).
+
 - **Feb 2026 - v4.8.7 — "Proper Account Scale"** — User corrected v4.8.6 %s: "$1k should start from 50-200, 100k from 1k-5k". Bumped `InpARStage1MinPct` 0.5→5.0%, `InpARBreakEvenMinPct` 0.8→8.0%, `InpPeakLockArmPct` 0.3→3.0%. Floors raised to $50/$80/$30. Now: $100k → AR@$5k, BE@$8k, PeakLock@$3k.
 
 - **Feb 2026 - v4.8.6 — "Account-Aware Exits" (all $ thresholds scale with balance + wider trails)**
