@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.8.7 — Proper Account Scale |
+//|                                     v4.8.8 — Simple Mode Default  |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.87"
-#property description "XAUUSD AI Sniper v4.8.7 — Proper Account Scale ($1k→$50, $10k→$500, $100k→$5k triggers)"
+#property version   "4.88"
+#property description "XAUUSD AI Sniper v4.8.8 — Simple Mode Default (initial trades ride like pyramids, Peak-Lock does the work)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -180,8 +180,12 @@ input double InpLadderTier7Lock    = 8000;
 
 input group "=== PEAK-LOCK BACKSTOP (v4.6.7 — bank a slice of EVERY good move) ==="
 input bool   InpPeakLockBackstop = true;   // Universal: once peak profit ≥ arm, force-lock a slice
-input double InpPeakLockArmPct   = 3.0;    // v4.8.7 — $1k→$30, $10k→$300, $100k→$3000 (floor $30)
+input double InpPeakLockArmPct   = 2.0;    // v4.8.8 — $1k→$20, $10k→$200, $100k→$2000 (earlier arm, primary protection in SIMPLE mode)
 input double InpPeakLockMinPct   = 40.0;   // v4.8.3 — Was 25%, now 40% base. Dynamic scaling adds more for bigger peaks.
+
+input group "=== MANAGEMENT MODE (v4.8.8 — pyramid-style simplicity) ==="
+enum ENUM_MGMT_MODE { MGMT_SIMPLE, MGMT_BALANCED, MGMT_AGGRESSIVE };
+input ENUM_MGMT_MODE InpMgmtMode = MGMT_SIMPLE;  // SIMPLE: only Peak-Lock + initial SL/TP (pyramid-like). BALANCED: +AR_BE+trail. AGGRESSIVE: earlier active.
 
 input group "=== ADAPTIVE RUNNER (v4.7.7 — 2-stage SL trailing, activates tick 1) ==="
 input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
@@ -2771,7 +2775,11 @@ void ManagePositions()
       //   Runs every tick — no time-in-trade gate.
       //   Co-exists with Profit Ladder / Peak-Lock (those only move SL FURTHER,
       //   and SafeModifySL ratchets only → no conflict).
-      if(InpAdaptiveRunner && profit > 0 && rDollars > 0 && atr > 0)
+      // v4.7.7 — ADAPTIVE RUNNER (2-stage tick-1 trailing)
+      //   v4.8.8 — SKIPPED in SIMPLE mode (pyramid-style: only Peak-Lock + initial SL/TP).
+      //   Pyramid trades work well because they don't get active management — let's
+      //   apply that same simplicity to initial trades by default.
+      if(InpMgmtMode != MGMT_SIMPLE && InpAdaptiveRunner && profit > 0 && rDollars > 0 && atr > 0)
       {
          double profitR = profit / rDollars;
          double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
@@ -2936,7 +2944,7 @@ void ManagePositions()
       //   $1M acc → arm at peak $3,000
       double plBal = accInfo.Balance();
       if(plBal <= 0) plBal = accInfo.Equity();
-      double peakArmUSD = MathMax(30.0, plBal * InpPeakLockArmPct / 100.0);
+      double peakArmUSD = MathMax(20.0, plBal * InpPeakLockArmPct / 100.0);
       if(InpPeakLockBackstop && peak >= peakArmUSD && rDollars > 0)
       {
          double effPct = InpPeakLockMinPct;

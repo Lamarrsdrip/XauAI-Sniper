@@ -84,6 +84,16 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.8.8 — "Simple Mode Default" (initial trades now ride like pyramids)**
+  - User insight: pyramid trades in screenshot (sell 0.37, 0.22, 0.08, 0.05, 0.03) all showing nice profits because they're small enough to never trigger AR_BE / AR_S1 / AR_S2 active management. Initial big trades (sell 2.47, 2.37, 1.42, 1.03) getting clipped by the active trail.
+  - **Fix**: new `InpMgmtMode` enum with 3 modes:
+    - **MGMT_SIMPLE** (default): no Adaptive Runner trailing. Just initial SL + TP + Peak-Lock. Trade either runs to TP or hits initial SL. Peak-Lock catches big retraces.
+    - **MGMT_BALANCED**: full Adaptive Runner active (v4.8.7 behavior)
+    - **MGMT_AGGRESSIVE**: Adaptive Runner with tighter trails (future)
+  - **Peak-Lock arm lowered**: 3% → **2%** of balance (floor $20). On $100k account: arms at $2k profit instead of $3k. Becomes primary protection in SIMPLE mode.
+  - Result: initial trades now ride with same simplicity as pyramid trades. Peak-Lock still catches big peaks (40-70% dynamic scaling from v4.8.3).
+  - Compile: braces 0/0, parens 0/0, 4007 lines.
+
 - **Feb 2026 - v4.8.7 — "Proper Account Scale"** — User corrected v4.8.6 %s: "$1k should start from 50-200, 100k from 1k-5k". Bumped `InpARStage1MinPct` 0.5→5.0%, `InpARBreakEvenMinPct` 0.8→8.0%, `InpPeakLockArmPct` 0.3→3.0%. Floors raised to $50/$80/$30. Now: $100k → AR@$5k, BE@$8k, PeakLock@$3k.
 
 - **Feb 2026 - v4.8.6 — "Account-Aware Exits" (all $ thresholds scale with balance + wider trails)**
