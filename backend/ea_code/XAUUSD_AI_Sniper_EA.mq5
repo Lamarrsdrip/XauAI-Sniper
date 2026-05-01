@@ -5,10 +5,10 @@
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.91"
-#property description "XAUUSD AI Sniper v4.9.1 — Profit Ratchet (SL locks 50% of current profit, fast, account-scaled)"
-#property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
-#property description "Re-entry respects direction lockout, status labels for all skip paths"
+#property version   "4.94"
+#property description "XAUUSD AI Sniper v4.9.4 — Basket Protect (aggregate floating-PnL lock across ALL open trades)"
+#property description "Adds basket peak/floor that closes ALL positions when total retraces past dynamic floor"
+#property description "Replaces per-trade peak-lock & ratchet (auto-disabled). Tier-up at 0.5%/2.5%/5% balance."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -1074,7 +1074,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.6.4 (LADDER SANITY) READY ===");
+   Print("=== XAUAI SNIPER v4.9.4 (BASKET PROTECT) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -1146,7 +1146,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.6.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.9.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -4153,7 +4153,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.6.4 | LADDER SANE | ";
+   d += " XAUAI SNIPER v4.9.4 | BASKET PROTECT | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
