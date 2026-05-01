@@ -84,6 +84,10 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.9.1 — "Profit Ratchet 50%"** — User spec: "$1k profit → SL $500, $2k → $1k, based on account size". Shipped exactly as requested. New input group, `InpProfitRatchet=true` default. Arms at 0.5% balance (floor $50), locks 50% of current profit every tick. Replaces AR_BE+AR_S1+AR_S2 staging (the thing that clipped sell 2.59 at -$2.59 on a BE wick). Account scaling: $1k→$5 arm, $10k→$50, $100k→$500, $1M→$5000.
+
+- **Feb 2026 - v4.9.0 — "Earlier Protection"** — User: "0-3k is too much, 1-2k atleast should have something active". Dropped Peak-Lock arm 3%→1.5% (floor $20), AR_S1 5%→2.5% (floor $30), AR_BE 8%→4% (floor $50). On $100k: Peak-Lock@$1.5k, trail@$2.5k, BE@$4k. Trails stay wide/patient from v4.8.9 (2.5×/4.0×ATR).
+
 - **Feb 2026 - v4.8.9 — "Patient Trailing"** — User correction to v4.8.8: "don't reduce %, don't remove trails — make better, allow profit grow, only trigger if very necessary". Reverted Peak-Lock 2%→3% (floor $30), default mode back to MGMT_BALANCED (trailing ACTIVE). Loosened trails for patience: AR_S1 2.0→2.5×ATR, AR_S2 activate 1R→2R + trail 3.0→4.0×ATR (~16pt). All layers stay active, just patient.
 
 - **Feb 2026 - v4.8.8 — "Simple Mode Default" (initial trades now ride like pyramids)**

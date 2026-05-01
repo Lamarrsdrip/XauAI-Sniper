@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.8.9 — Patient Trailing      |
+//|                                     v4.9.1 — Profit Ratchet 50%    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.89"
-#property description "XAUUSD AI Sniper v4.8.9 — Patient Trailing (keep trails active but WAY more patient, profit grows)"
+#property version   "4.91"
+#property description "XAUUSD AI Sniper v4.9.1 — Profit Ratchet (SL locks 50% of current profit, fast, account-scaled)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -180,22 +180,28 @@ input double InpLadderTier7Lock    = 8000;
 
 input group "=== PEAK-LOCK BACKSTOP (v4.6.7 — bank a slice of EVERY good move) ==="
 input bool   InpPeakLockBackstop = true;   // Universal: once peak profit ≥ arm, force-lock a slice
-input double InpPeakLockArmPct   = 3.0;    // v4.8.9 — $1k→$30, $10k→$300, $100k→$3000 (floor $30). Primary protection.
+input double InpPeakLockArmPct   = 1.5;    // v4.9.0 — $1k→$20, $10k→$150, $100k→$1500 (floor $20). Primary early protection.
 input double InpPeakLockMinPct   = 40.0;   // v4.8.3 — Was 25%, now 40% base. Dynamic scaling adds more for bigger peaks.
 
 input group "=== MANAGEMENT MODE (v4.8.8 — pyramid-style simplicity) ==="
 enum ENUM_MGMT_MODE { MGMT_SIMPLE, MGMT_BALANCED, MGMT_AGGRESSIVE };
 input ENUM_MGMT_MODE InpMgmtMode = MGMT_BALANCED;  // BALANCED: trailing active but patient. SIMPLE: only Peak-Lock. AGGRESSIVE: tighter.
 
-input group "=== ADAPTIVE RUNNER (v4.7.7 — 2-stage SL trailing, activates tick 1) ==="
+input group "=== PROFIT RATCHET (v4.9.1 — simple fast SL = 50% of current profit) ==="
+input bool   InpProfitRatchet       = true;   // Replaces AR_BE + AR Stage1/2 with simple "SL = 50% current profit"
+input double InpRatchetArmPct       = 0.5;    // Arm at this % of balance ($1k→$5, $10k→$50, $100k→$500, $1M→$5k)
+input double InpRatchetLockPct      = 50.0;   // Lock this % of current profit into SL (every tick, never pulls back)
+input double InpRatchetArmFloor     = 50.0;   // Absolute minimum arm amount in $ (floor)
+
+input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
 input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
 input double InpARStage1ActivateR   = 0.8;    // v4.8.4 — Was 0.3, now 0.8 (let winners develop before tight trail)
-input double InpARStage1MinPct      = 5.0;    // v4.8.7 — $1k→$50, $10k→$500, $100k→$5000 (floor $50)
+input double InpARStage1MinPct      = 2.5;    // v4.9.0 — $1k→$30, $10k→$250, $100k→$2500 (floor $30)
 input double InpARStage1TrailATR    = 2.5;    // v4.8.9 — Was 2.0, now 2.5 (more patient, ride profit growth)
 input double InpARStage2ActivateR   = 2.0;    // v4.8.9 — Was 1.0, now 2.0 (need strong profit before wide trail)
 input double InpARStage2TrailATR    = 4.0;    // v4.8.9 — Was 3.0, now 4.0 (trail FAR behind, let profit grow)
 input double InpARBreakEvenR        = 1.2;    // v4.8.6 — Was 1.0, now 1.2 (more profit confirmed before BE lock)
-input double InpARBreakEvenMinPct   = 8.0;    // v4.8.7 — $1k→$80, $10k→$800, $100k→$8000 (floor $80)
+input double InpARBreakEvenMinPct   = 4.0;    // v4.9.0 — $1k→$50, $10k→$400, $100k→$4000 (floor $50)
 input double InpARBreakEvenProfitR  = 0.15;   // v4.8.4 — slightly more cushion past BE (was 0.1)
 input double InpARMinTrailPoints    = 80;     // Anti-noise: SL never closer than X points (chop filter, 80pt = ~$0.80 on XAU)
 input double InpARMomentumBoostMulti = 0.7;   // In strong momentum, tighten trail by this multi (0.7 = 30% tighter = faster ratchet)
@@ -2775,7 +2781,51 @@ void ManagePositions()
       //   Runs every tick — no time-in-trade gate.
       //   Co-exists with Profit Ladder / Peak-Lock (those only move SL FURTHER,
       //   and SafeModifySL ratchets only → no conflict).
-      // v4.7.7 — ADAPTIVE RUNNER (2-stage tick-1 trailing)
+      // v4.9.1 — PROFIT RATCHET (user's spec: SL = 50% of current profit, fast, account-aware)
+      //   Arm at InpRatchetArmPct% of balance (floor $50). $100k → arms at $500.
+      //   Every tick while armed: compute new SL price that would bank 50% of CURRENT profit.
+      //   Only ratchet forward (never pull back). Respects broker stops-level.
+      //   This replaces the old AR_BE + AR_S1 + AR_S2 staging when enabled.
+      if(InpProfitRatchet && profit > 0 && rDollars > 0)
+      {
+         double accBal = accInfo.Balance();
+         if(accBal <= 0) accBal = accInfo.Equity();
+         double armUSD = MathMax(InpRatchetArmFloor, accBal * InpRatchetArmPct / 100.0);
+
+         if(profit >= armUSD)
+         {
+            double lockUSD = profit * InpRatchetLockPct / 100.0;
+            // Convert $ lock to price distance using R: (lockUSD / rDollars) × slDist
+            double lockDist = (lockUSD / rDollars) * slDist;
+            double newSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
+                                  : NormalizeDouble(openPx - lockDist, digits);
+            // Sanity: must sit in profit zone with broker stops-level buffer
+            double rPoint = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+            long   rSlLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+            double rBufPts = MathMax(rSlLvl * rPoint, rPoint * 30);
+            bool rSane = isBuy ? (newSL > openPx && newSL < curPrice - rBufPts)
+                               : (newSL < openPx && newSL > curPrice + rBufPts);
+            // Ratchet only — never move SL backward
+            bool rRatchet = isBuy ? (newSL > curSL) : (newSL < curSL || curSL == 0);
+            if(rSane && rRatchet)
+            {
+               if(SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, "P_RATCHET"))
+               {
+                  static datetime lastRatchetLog = 0;
+                  if(TimeCurrent() - lastRatchetLog > 30)
+                  {
+                     Print("P_RATCHET #", ticket, " profit $", DoubleToString(profit,0),
+                           " — SL locks $", DoubleToString(lockUSD,0),
+                           " (", DoubleToString(InpRatchetLockPct,0),
+                           "%) at ", DoubleToString(newSL, digits));
+                     lastRatchetLog = TimeCurrent();
+                  }
+               }
+            }
+         }
+      }
+
+      // v4.7.7 — ADAPTIVE RUNNER (legacy 2-stage — DISABLED when ProfitRatchet is on)
       //   v4.8.8 — SKIPPED in SIMPLE mode (pyramid-style: only Peak-Lock + initial SL/TP).
       //   Pyramid trades work well because they don't get active management — let's
       //   apply that same simplicity to initial trades by default.
@@ -2813,8 +2863,8 @@ void ManagePositions()
          // v4.8.6 — Compute dollar thresholds from account balance
          double accBal = accInfo.Balance();
          if(accBal <= 0) accBal = accInfo.Equity();
-         double arS1MinProfit = MathMax(50.0, accBal * InpARStage1MinPct / 100.0);
-         double arBEMinProfit = MathMax(80.0, accBal * InpARBreakEvenMinPct / 100.0);
+         double arS1MinProfit = MathMax(30.0, accBal * InpARStage1MinPct / 100.0);
+         double arBEMinProfit = MathMax(50.0, accBal * InpARBreakEvenMinPct / 100.0);
 
          // v4.8.6 — Trend Hold: force wide trail regardless of stage thresholds
          //   BUT still require profit ≥ arS1MinProfit so we don't micro-trail tiny wins
@@ -2944,7 +2994,7 @@ void ManagePositions()
       //   $1M acc → arm at peak $3,000
       double plBal = accInfo.Balance();
       if(plBal <= 0) plBal = accInfo.Equity();
-      double peakArmUSD = MathMax(30.0, plBal * InpPeakLockArmPct / 100.0);
+      double peakArmUSD = MathMax(20.0, plBal * InpPeakLockArmPct / 100.0);
       if(InpPeakLockBackstop && peak >= peakArmUSD && rDollars > 0)
       {
          double effPct = InpPeakLockMinPct;
@@ -4005,3 +4055,4 @@ void UpdateDashboard(int signal, double score, string grade)
    Comment(d);
 }
 //+------------------------------------------------------------------+
+-------------------+
