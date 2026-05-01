@@ -84,6 +84,18 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.8.3 — "Dynamic Peak-Lock" (root cause of $1k+ peak giveback)**
+  - User pain: sell 4.13 & 2.47 both hit +$1,000+ peak, closed at -$57 and +$212. Market then moved to their direction.
+  - **Root cause**: Peak-Lock was hard-coded 25% of peak. On $1,000 peak → only $250 locked. Price retraced past $250 floor on a wick → SL hit.
+  - **Fix**: dynamic scaling — bigger peaks get TIGHTER lock %:
+    - Peak $30-$300 → **40%** (was 25%)
+    - Peak $300-$1000 → **50%**
+    - Peak $1000-$3000 → **60%**
+    - Peak $3000+ → **70%**
+  - Armed at peak ≥ $30 (was $50) so small wins get protected too.
+  - Compile: braces 0/0, parens 0/0, 3960 lines.
+  - Frontend bumped to v4.8.3.
+
 - **Feb 2026 - v4.8.2 — "Account Mode" (one-toggle risk preset)**
   - User pain: $100k account trading like a $5k account (lots 0.05-0.5 because v4.7.2 set defensive 0.4% risk).
   - **Fix**: new enum `InpAccountMode` with 3 presets that override `InpRiskPercent`:
