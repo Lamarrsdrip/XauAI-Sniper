@@ -84,6 +84,8 @@
 - Telegram notification integration for trade alerts - P2
 - Referral/affiliate system - P2
 
+- **Feb 2026 - v4.8.9 — "Patient Trailing"** — User correction to v4.8.8: "don't reduce %, don't remove trails — make better, allow profit grow, only trigger if very necessary". Reverted Peak-Lock 2%→3% (floor $30), default mode back to MGMT_BALANCED (trailing ACTIVE). Loosened trails for patience: AR_S1 2.0→2.5×ATR, AR_S2 activate 1R→2R + trail 3.0→4.0×ATR (~16pt). All layers stay active, just patient.
+
 - **Feb 2026 - v4.8.8 — "Simple Mode Default" (initial trades now ride like pyramids)**
   - User insight: pyramid trades in screenshot (sell 0.37, 0.22, 0.08, 0.05, 0.03) all showing nice profits because they're small enough to never trigger AR_BE / AR_S1 / AR_S2 active management. Initial big trades (sell 2.47, 2.37, 1.42, 1.03) getting clipped by the active trail.
   - **Fix**: new `InpMgmtMode` enum with 3 modes:

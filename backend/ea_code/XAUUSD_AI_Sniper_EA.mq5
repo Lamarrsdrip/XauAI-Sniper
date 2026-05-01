@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.8.8 — Simple Mode Default  |
+//|                                     v4.8.9 — Patient Trailing      |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.88"
-#property description "XAUUSD AI Sniper v4.8.8 — Simple Mode Default (initial trades ride like pyramids, Peak-Lock does the work)"
+#property version   "4.89"
+#property description "XAUUSD AI Sniper v4.8.9 — Patient Trailing (keep trails active but WAY more patient, profit grows)"
 #property description "Fixed: 3-decimal lot brokers, doji false signals, dashboard cache leaks"
 #property description "Re-entry respects direction lockout, status labels for all skip paths"
 #property strict
@@ -180,20 +180,20 @@ input double InpLadderTier7Lock    = 8000;
 
 input group "=== PEAK-LOCK BACKSTOP (v4.6.7 — bank a slice of EVERY good move) ==="
 input bool   InpPeakLockBackstop = true;   // Universal: once peak profit ≥ arm, force-lock a slice
-input double InpPeakLockArmPct   = 2.0;    // v4.8.8 — $1k→$20, $10k→$200, $100k→$2000 (earlier arm, primary protection in SIMPLE mode)
+input double InpPeakLockArmPct   = 3.0;    // v4.8.9 — $1k→$30, $10k→$300, $100k→$3000 (floor $30). Primary protection.
 input double InpPeakLockMinPct   = 40.0;   // v4.8.3 — Was 25%, now 40% base. Dynamic scaling adds more for bigger peaks.
 
 input group "=== MANAGEMENT MODE (v4.8.8 — pyramid-style simplicity) ==="
 enum ENUM_MGMT_MODE { MGMT_SIMPLE, MGMT_BALANCED, MGMT_AGGRESSIVE };
-input ENUM_MGMT_MODE InpMgmtMode = MGMT_SIMPLE;  // SIMPLE: only Peak-Lock + initial SL/TP (pyramid-like). BALANCED: +AR_BE+trail. AGGRESSIVE: earlier active.
+input ENUM_MGMT_MODE InpMgmtMode = MGMT_BALANCED;  // BALANCED: trailing active but patient. SIMPLE: only Peak-Lock. AGGRESSIVE: tighter.
 
 input group "=== ADAPTIVE RUNNER (v4.7.7 — 2-stage SL trailing, activates tick 1) ==="
 input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
 input double InpARStage1ActivateR   = 0.8;    // v4.8.4 — Was 0.3, now 0.8 (let winners develop before tight trail)
 input double InpARStage1MinPct      = 5.0;    // v4.8.7 — $1k→$50, $10k→$500, $100k→$5000 (floor $50)
-input double InpARStage1TrailATR    = 1.5;    // v4.8.4 — Was 1.0, now 1.5 (more breathing room on noise wicks)
-input double InpARStage2ActivateR   = 1.0;    // Stage 2 activates at this profit in R (runner mode)
-input double InpARStage2TrailATR    = 3.0;    // v4.8.6 — Was 2.2, now 3.0 (runner breathes more)
+input double InpARStage1TrailATR    = 2.5;    // v4.8.9 — Was 2.0, now 2.5 (more patient, ride profit growth)
+input double InpARStage2ActivateR   = 2.0;    // v4.8.9 — Was 1.0, now 2.0 (need strong profit before wide trail)
+input double InpARStage2TrailATR    = 4.0;    // v4.8.9 — Was 3.0, now 4.0 (trail FAR behind, let profit grow)
 input double InpARBreakEvenR        = 1.2;    // v4.8.6 — Was 1.0, now 1.2 (more profit confirmed before BE lock)
 input double InpARBreakEvenMinPct   = 8.0;    // v4.8.7 — $1k→$80, $10k→$800, $100k→$8000 (floor $80)
 input double InpARBreakEvenProfitR  = 0.15;   // v4.8.4 — slightly more cushion past BE (was 0.1)
@@ -2944,7 +2944,7 @@ void ManagePositions()
       //   $1M acc → arm at peak $3,000
       double plBal = accInfo.Balance();
       if(plBal <= 0) plBal = accInfo.Equity();
-      double peakArmUSD = MathMax(20.0, plBal * InpPeakLockArmPct / 100.0);
+      double peakArmUSD = MathMax(30.0, plBal * InpPeakLockArmPct / 100.0);
       if(InpPeakLockBackstop && peak >= peakArmUSD && rDollars > 0)
       {
          double effPct = InpPeakLockMinPct;
