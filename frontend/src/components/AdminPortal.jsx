@@ -879,14 +879,33 @@ function CloudAdminTab({ api, token }) {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-bold tracking-widest">VPS WORKERS</h3>
-              <button onClick={()=>{
-                const name = prompt("Worker name (e.g. Contabo-NYC-1):"); if (!name) return;
-                const max = parseInt(prompt("Max MT5 instances this worker can host:", "30")) || 30;
-                const endpoint = prompt("Optional endpoint URL (leave blank for pull-mode):", "") || "";
-                const notes = prompt("Notes (optional):", "") || "";
-                ax.post(`${api}/admin/cloud/infrastructure/workers`, {name, max_users: max, endpoint, notes}, { headers })
-                  .then(()=>refresh()).catch(e=>setMsg(e.response?.data?.detail || "Failed"));
-              }} data-testid="add-worker-btn" className="px-3 py-2 bg-primary text-primary-foreground text-xs font-bold">+ ADD WORKER</button>
+              <div className="flex gap-2">
+                <button onClick={async()=>{
+                  setBusy(true); setMsg("");
+                  try {
+                    const r = await ax.post(`${api}/admin/cloud/infrastructure/test-signal`,
+                      { side: "BUY", slDistDollars: 4.0, tpMultR: 4.0, auto_close_seconds: 5, exit_rMult: 3.0 },
+                      { headers });
+                    const fo = r.data.fanout || [];
+                    const detail = fo.length ?
+                      `Fanned to ${fo.length} user(s):\n` +
+                      fo.map(f=>`  • ${f.email} ($${f.balance.toFixed(0)} ${f.tier}) → ${f.lots} lots ($${f.risk_usd} risk)`).join("\n") +
+                      "\n\nAll sized from each user's OWN balance (master balance irrelevant).\nAuto-closes at +3R in 5s — check user dashboards." :
+                      "No users with MT5 connected yet — create a test user first.";
+                    alert(r.data.message + "\n\n" + detail);
+                    setMsg(`Fired test signal → ${fo.length} users, ${fo.reduce((s,f)=>s+f.lots,0).toFixed(2)} total lots`);
+                  } catch(e){ setMsg(e.response?.data?.detail || "Failed"); }
+                  finally { setBusy(false); }
+                }} disabled={busy} data-testid="fire-test-signal-btn" className="px-3 py-2 bg-[hsl(142,71%,45%)] text-black text-xs font-bold">⚡ FIRE TEST SIGNAL</button>
+                <button onClick={()=>{
+                  const name = prompt("Worker name (e.g. Contabo-NYC-1):"); if (!name) return;
+                  const max = parseInt(prompt("Max MT5 instances this worker can host:", "30")) || 30;
+                  const endpoint = prompt("Optional endpoint URL (leave blank for pull-mode):", "") || "";
+                  const notes = prompt("Notes (optional):", "") || "";
+                  ax.post(`${api}/admin/cloud/infrastructure/workers`, {name, max_users: max, endpoint, notes}, { headers })
+                    .then(()=>refresh()).catch(e=>setMsg(e.response?.data?.detail || "Failed"));
+                }} data-testid="add-worker-btn" className="px-3 py-2 bg-primary text-primary-foreground text-xs font-bold">+ ADD WORKER</button>
+              </div>
             </div>
             {infra.workers.length === 0 ? (
               <div className="border-2 border-dashed border-border p-8 text-center" data-testid="no-workers">
@@ -921,13 +940,21 @@ function CloudAdminTab({ api, token }) {
 
           {/* Quick-start guide */}
           <div className="border border-primary/30 bg-primary/5 p-4 text-sm" data-testid="infra-guide">
+            <div className="font-bold mb-2">⚖️ How sizing works (important):</div>
+            <div className="text-muted-foreground mb-3 leading-relaxed">
+              Your master EA (on your laptop / VPS) only emits <span className="font-bold text-foreground">price signals</span>:
+              entry, stop-loss, take-profit. <span className="font-bold text-foreground">Master lot size is completely ignored.</span>
+              Each user's trade is sized from <span className="font-bold text-foreground">THEIR balance × THEIR risk tier</span>.
+              Master $1k → user $100k = user still takes 5 lots on their own account.
+              Click <span className="font-mono">FIRE TEST SIGNAL</span> above to see this happen live.
+            </div>
             <div className="font-bold mb-2">🚀 Going live (when you're ready):</div>
             <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-              <li>Rent a Windows VPS (Contabo CX11 = $6/mo, holds ~15 MT5 instances)</li>
+              <li>Run master MT5 on any always-on machine (your laptop works — VPS $5/mo if you want zero downtime)</li>
               <li>Click "Generate/Rotate" above and copy the agent token</li>
-              <li>Click "+ ADD WORKER" and register the VPS</li>
-              <li>Install the XauAi worker script on the VPS (contact developer for the script)</li>
-              <li>Once the worker is online, flip "GO LIVE" — all connected users switch from shadow → real trading</li>
+              <li>Paste token into master EA inputs — master will POST signals here automatically</li>
+              <li>For real execution on user accounts: rent a Windows VPS, click "+ ADD WORKER" and register it</li>
+              <li>Flip "GO LIVE" — all connected users switch from shadow → real trading</li>
             </ol>
           </div>
         </div>

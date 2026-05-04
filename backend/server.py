@@ -2143,6 +2143,79 @@ async def admin_toggle_shadow(body: dict):
             "message": ("SHADOW MODE ON — signals are simulated in dashboards, no real trades placed."
                         if enabled else "LIVE MODE — workers will execute real trades on connected accounts.")}
 
+# --- Admin test: fire a synthetic signal and watch it fan out ---
+class TestSignalReq(BaseModel):
+    side: str = "BUY"
+    slDistDollars: float = 4.0
+    tpMultR: float = 4.0
+    auto_close_seconds: int = 5
+    exit_rMult: float = 3.0
+
+@api_router.post("/admin/cloud/infrastructure/test-signal", dependencies=[Depends(get_current_admin)])
+async def admin_test_signal(req: TestSignalReq):
+    """Manually fire a signal as if master EA had fired it. Fans out per-user
+       sized to THEIR balance + tier. Auto-closes after N seconds so admin can
+       see the full lifecycle end-to-end in the user dashboard."""
+    entry = 4567.50
+    side = req.side.upper()
+    if side not in ("BUY","SELL"):
+        raise HTTPException(status_code=400, detail="side must be BUY or SELL")
+    if req.slDistDollars <= 0:
+        raise HTTPException(status_code=400, detail="slDistDollars must be > 0")
+    sl = (entry - req.slDistDollars) if side == "BUY" else (entry + req.slDistDollars)
+    tp = (entry + req.slDistDollars * req.tpMultR) if side == "BUY" else (entry - req.slDistDollars * req.tpMultR)
+    now = datetime.now(timezone.utc)
+    await db.cloud_settings.update_one({"key":"main"},
+        {"$set":{"master_last_heartbeat": now.isoformat(), "master_ea_status": "online"}}, upsert=True)
+    sig_id = str(uuid.uuid4())
+    await db.cloud_signals.insert_one({"id": sig_id, "symbol":"XAUUSD","side":side,
+        "entry":entry,"sl":sl,"tp":tp,"grade":"A+","ts": now.isoformat(), "test": True})
+    users = await db.cloud_users.find(
+        {"mt5_connected": True, "paused": False, "status": {"$in": ["trial","active"]}},
+        {"_id": 0, "id": 1, "email": 1, "last_balance": 1, "risk_tier": 1}
+    ).to_list(2000)
+    risk_map = {"conservative": 0.6, "balanced": 1.2, "aggressive": 2.0}
+    fanout = []
+    for u in users:
+        bal = float(u.get("last_balance") or 1000)
+        rpct = risk_map.get(u.get("risk_tier","balanced"), 1.2)
+        riskUSD = bal * rpct / 100
+        lots = max(0.01, round(riskUSD / (req.slDistDollars * 100), 2))
+        trade = {"id": str(uuid.uuid4()), "user_id": u["id"], "signal_id": sig_id,
+                 "symbol":"XAUUSD","side":side,"lots":lots,"entry":entry,
+                 "exit_price":0,"profit":0,"status":"shadow_open",
+                 "opened_at":now.isoformat(),"closed_at":None,
+                 "shadow":True,"grade":"A+","test":True}
+        await db.cloud_shadow_trades.insert_one(trade.copy())
+        fanout.append({"email": u["email"], "balance": bal,
+                       "tier": u.get("risk_tier","balanced"),
+                       "risk_usd": round(riskUSD, 2), "lots": lots})
+    if req.auto_close_seconds > 0:
+        import asyncio
+        async def _auto_close():
+            await asyncio.sleep(req.auto_close_seconds)
+            move = req.slDistDollars * req.exit_rMult
+            exit_price = (entry + move) if side == "BUY" else (entry - move)
+            trades = await db.cloud_shadow_trades.find({"signal_id": sig_id, "status":"shadow_open"},
+                                                       {"_id":0}).to_list(5000)
+            t_now = datetime.now(timezone.utc)
+            for t in trades:
+                diff = (exit_price - t["entry"]) if side == "BUY" else (t["entry"] - exit_price)
+                profit = round(diff * t["lots"] * 100, 2)
+                await db.cloud_shadow_trades.update_one({"id": t["id"]},
+                    {"$set":{"status":"shadow_closed","exit_price":exit_price,
+                             "profit":profit,"closed_at":t_now.isoformat(),
+                             "reason":f"TEST @{req.exit_rMult}R"}})
+                doc = dict(t); doc["id"] = str(uuid.uuid4()); doc["exit_price"] = exit_price
+                doc["profit"] = profit; doc["closed_at"] = t_now.isoformat()
+                doc["reason"] = f"TEST @{req.exit_rMult}R"
+                await db.cloud_trades.insert_one(doc)
+        asyncio.create_task(_auto_close())
+    return {"ok": True, "signal_id": sig_id, "fanout": fanout,
+            "entry": entry, "sl": sl, "tp": tp,
+            "message": f"Test signal fired — {len(fanout)} users received it, each sized to THEIR OWN balance + tier. Auto-close in {req.auto_close_seconds}s at +{req.exit_rMult}R."}
+
+
 # Auto-assign a user to the first worker with free capacity
 async def _auto_assign_worker(user_id: str):
     workers = await db.cloud_workers.find({}, {"_id": 0}).sort("created_at", 1).to_list(200)
