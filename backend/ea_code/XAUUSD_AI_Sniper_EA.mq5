@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.9.5 — Clean Exits           |
+//|                                     v4.9.6 — Self-Diagnostic       |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.95"
-#property description "XAUUSD AI Sniper v4.9.5 — Clean Exits (ONE exit authority per phase)"
-#property description "Tiered lifecycle: BE@+1R → Chandelier@+2R → Partial@+3R → Tight@+4R"
-#property description "Disabled 6 competing legacy systems. Wider SL (2.5xATR) + TP (4R). Momentum-flip cut."
+#property version   "4.96"
+#property description "XAUUSD AI Sniper v4.9.6 — Self-Diagnostic (startup banner + live heartbeat)"
+#property description "Prints exactly why bot is idle every 60s. Plus all v4.9.5 Clean Exits logic."
+#property description "Catches: symbol mismatch, WebRequest not whitelisted, Algo Trading off, spread too wide, buffers not ready"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -427,6 +427,11 @@ double     g_basketFloorUSD  = 0;     // Dynamic floor — if total falls below 
 bool       g_basketArmed     = false; // True once peak has crossed arm threshold
 bool       g_basketBEHit     = false; // True once basket reached +BEPct% (then never let it go negative)
 datetime   g_basketLastLog   = 0;     // Throttle "basket state" prints
+
+// v4.9.6 — DIAGNOSTIC HEARTBEAT state
+string     g_lastSkipReason  = "";    // Updated every time OnTick returns silently
+datetime   g_lastHeartbeat   = 0;     // Throttle heartbeat to 1/minute
+int        g_ticksSinceEntry = 0;     // How many ticks since last position opened
 
 // TRADE THESIS (AI narrative per open position)
 string     currentTradeThesis = "";
@@ -1088,7 +1093,52 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.9.5 (CLEAN EXITS) READY ===");
+   Print("=== XAUAI SNIPER v4.9.6 (SELF-DIAGNOSTIC) READY ===");
+
+   // ============================================================
+   // v4.9.6 — STARTUP DIAGNOSTIC BANNER
+   //   Tells the user IMMEDIATELY if their setup is wrong.
+   //   Catches the top 5 "bot active but idle" causes at attach time.
+   // ============================================================
+   Print("─────────────── STARTUP DIAGNOSTICS ───────────────");
+   string sym = Symbol();
+   bool  symOK = (StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0 || StringFind(sym, "Gold") >= 0);
+   PrintFormat("▸ Symbol detected: %s %s", sym, symOK ? "✓ OK (gold instrument)" : "⚠ NOT A GOLD SYMBOL — attach EA to XAUUSD chart!");
+   long  acctNum  = AccountInfoInteger(ACCOUNT_LOGIN);
+   string acctSrv = AccountInfoString(ACCOUNT_SERVER);
+   string acctTyp = AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_DEMO ? "DEMO" :
+                    AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_CONTEST ? "CONTEST" : "LIVE";
+   string acctCur = AccountInfoString(ACCOUNT_CURRENCY);
+   PrintFormat("▸ Account: #%I64d on %s (%s, %s)", acctNum, acctSrv, acctTyp, acctCur);
+   bool termConn = (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
+   bool termAlgo = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
+   bool mqlAlgo  = (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
+   PrintFormat("▸ Broker connection: %s", termConn ? "✓ connected" : "✗ NOT CONNECTED — check internet");
+   PrintFormat("▸ Algo Trading toolbar button: %s", termAlgo ? "✓ ENABLED (green)" : "✗ DISABLED — click toolbar button until GREEN");
+   PrintFormat("▸ EA-level Algo Trading: %s", mqlAlgo ? "✓ allowed (Common tab checked)" : "✗ NOT allowed — re-attach EA, tick 'Allow Algo Trading' in Common tab");
+   double curSpread = (double)SymbolInfoInteger(sym, SYMBOL_SPREAD);
+   PrintFormat("▸ Current spread: %.0f points (max allowed: %d) %s",
+               curSpread, InpMaxSpread,
+               curSpread <= InpMaxSpread ? "✓ OK" : "⚠ TOO WIDE — entries will be blocked until spread narrows");
+   // WebRequest live connectivity test (cheap GET, 3s timeout)
+   if(!InpBacktestMode && StringLen(InpServerURL) >= 10)
+   {
+      char _pd[], _res[]; string _rh;
+      ResetLastError();
+      int wrTest = WebRequest("GET", InpServerURL + "/api/health", "", 3000, _pd, _res, _rh);
+      if(wrTest == 200)
+         PrintFormat("▸ WebRequest to %s: ✓ OK (HTTP 200)", InpServerURL);
+      else if(wrTest == -1 && GetLastError() == 4060)
+         PrintFormat("▸ WebRequest: ✗ URL NOT WHITELISTED! Go to Tools→Options→Expert Advisors, tick 'Allow WebRequest for listed URL', add: %s", InpServerURL);
+      else
+         PrintFormat("▸ WebRequest to %s: ⚠ HTTP %d (err %d) — server unreachable, AI/ML/license features disabled", InpServerURL, wrTest, GetLastError());
+   }
+   // Indicator buffer check
+   int barsAvail = Bars(sym, PERIOD_M5);
+   PrintFormat("▸ M5 bars loaded: %d %s", barsAvail, barsAvail >= 100 ? "✓ OK" : "⚠ need 100+ bars — wait or scroll chart back");
+   Print("─────────────── END DIAGNOSTICS ───────────────");
+   if(!symOK || !termConn || !termAlgo || !mqlAlgo)
+      Print("⚠⚠⚠  ONE OR MORE CRITICAL CHECKS FAILED — THE BOT WILL NOT TRADE UNTIL FIXED  ⚠⚠⚠");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -1160,7 +1210,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.9.5 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.9.6 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1973,7 +2023,34 @@ void CheckPyramidOpportunity()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   if(!licenseValid) return;
+   if(!licenseValid) { g_lastSkipReason = "LICENSE_INVALID (enter correct PIN in inputs)"; return; }
+
+   // v4.9.6 — DIAGNOSTIC HEARTBEAT (prints every 60s telling user WHY bot is idle)
+   if(TimeCurrent() - g_lastHeartbeat >= 60)
+   {
+      // Collect live state
+      string sym = Symbol();
+      bool symOK = (StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0 || StringFind(sym, "Gold") >= 0);
+      bool termConn = (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
+      bool termAlgo = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
+      bool mqlAlgo  = (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
+      double curSpr = (double)SymbolInfoInteger(sym, SYMBOL_SPREAD);
+      int    openPs = CountMyPositions();
+
+      string status;
+      if(!termConn)        status = "BROKER DISCONNECTED — check internet/VPS connection";
+      else if(!symOK)      status = StringFormat("WRONG SYMBOL '%s' — attach EA to XAUUSD chart (your broker may call it XAUUSDm / XAUUSD.r / GOLD)", sym);
+      else if(!termAlgo)   status = "ALGO TRADING OFF — click the 'Algo Trading' toolbar button until it turns GREEN";
+      else if(!mqlAlgo)    status = "EA-LEVEL ALGO NOT ALLOWED — re-attach EA and tick 'Allow Algo Trading' in the Common tab";
+      else if(openPs > 0)  status = StringFormat("MANAGING %d OPEN POSITION(S) — entries paused while positions active", openPs);
+      else if(StringLen(g_lastSkipReason) > 0) status = "IDLE — " + g_lastSkipReason;
+      else                 status = StringFormat("SCANNING — spread=%.0fpts, all systems OK, waiting for A/A+ setup", curSpr);
+
+      PrintFormat("♥ HEARTBEAT │ %s", status);
+      g_lastHeartbeat = TimeCurrent();
+      // Reset the reason flag so stale entries don't mislead next cycle
+      g_lastSkipReason = "";
+   }
 
    // Daily/weekly resets
    MqlDateTime dtNow, dtLast, dtWeek;
@@ -2086,34 +2163,38 @@ void OnTick()
       lastDashTick = TimeCurrent();
    }
 
-   // Spread check — blocks NEW ENTRIES only (silent)
+   // Spread check — blocks NEW ENTRIES only
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-   if(spread > InpMaxSpread) return;
+   if(spread > InpMaxSpread)
+   {
+      g_lastSkipReason = StringFormat("SPREAD_TOO_WIDE: %.0f > %d pts (wait for spread to narrow, or raise InpMaxSpread)", spread, InpMaxSpread);
+      return;
+   }
 
    // New M5 bar only for entries
    static datetime lastBar = 0;
    datetime curBar = iTime(Symbol(), PERIOD_M5, 0);
-   if(curBar == lastBar) return;
+   if(curBar == lastBar) { g_lastSkipReason = "WAITING_FOR_NEW_M5_BAR"; return; }
    lastBar = curBar;
 
    // Update Asia-range tracker on every new M5 bar
    if(InpAsiaRangeBreakout) UpdateAsiaRange();
 
    // Load indicators
-   if(CopyBuffer(hEMAFast, 0, 0, 12, bufEMAFast) < 12) return;
-   if(CopyBuffer(hEMASlow, 0, 0, 12, bufEMASlow) < 12) return;
-   if(CopyBuffer(hRSI, 0, 0, 5, bufRSI) < 5) return;
-   if(CopyBuffer(hATR, 0, 0, 5, bufATR) < 5) return;
-   if(CopyBuffer(hBBUpper, 1, 0, 12, bufBBUpper) < 12) return;
-   if(CopyBuffer(hBBUpper, 2, 0, 12, bufBBLower) < 12) return;
-   if(CopyBuffer(hBBUpper, 0, 0, 12, bufBBMid) < 12) return;
-   if(CopyBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1) < 3) return;
-   if(CopyBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1) < 3) return;
-   if(CopyBuffer(hEMAFast_H4, 0, 0, 3, bufEMAFast_H4) < 3) return;
-   if(CopyBuffer(hEMASlow_H4, 0, 0, 3, bufEMASlow_H4) < 3) return;
-   if(CopyBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15) < 3) return;
-   if(CopyBuffer(hStoch, 0, 0, 3, bufStochK) < 3) return;
-   if(CopyBuffer(hStoch, 1, 0, 3, bufStochD) < 3) return;
+   if(CopyBuffer(hEMAFast, 0, 0, 12, bufEMAFast) < 12)      { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_FAST_M5"; return; }
+   if(CopyBuffer(hEMASlow, 0, 0, 12, bufEMASlow) < 12)      { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_SLOW_M5"; return; }
+   if(CopyBuffer(hRSI, 0, 0, 5, bufRSI) < 5)                 { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: RSI_M5"; return; }
+   if(CopyBuffer(hATR, 0, 0, 5, bufATR) < 5)                 { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: ATR_M5"; return; }
+   if(CopyBuffer(hBBUpper, 1, 0, 12, bufBBUpper) < 12)       { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: BB_UPPER"; return; }
+   if(CopyBuffer(hBBUpper, 2, 0, 12, bufBBLower) < 12)       { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: BB_LOWER"; return; }
+   if(CopyBuffer(hBBUpper, 0, 0, 12, bufBBMid) < 12)         { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: BB_MID"; return; }
+   if(CopyBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1) < 3)   { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_FAST_H1 (broker may need time to load H1 history)"; return; }
+   if(CopyBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1) < 3)   { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_SLOW_H1"; return; }
+   if(CopyBuffer(hEMAFast_H4, 0, 0, 3, bufEMAFast_H4) < 3)   { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_FAST_H4 (load H4 chart once to prime buffer)"; return; }
+   if(CopyBuffer(hEMASlow_H4, 0, 0, 3, bufEMASlow_H4) < 3)   { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_SLOW_H4"; return; }
+   if(CopyBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15) < 3)          { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: RSI_M15"; return; }
+   if(CopyBuffer(hStoch, 0, 0, 3, bufStochK) < 3)             { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: STOCH_K"; return; }
+   if(CopyBuffer(hStoch, 1, 0, 3, bufStochD) < 3)             { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: STOCH_D"; return; }
 
    if(CountMyPositions() >= InpMaxOpenTrades || todayTradeCount >= InpMaxTradesPerDay)
    { UpdateDashboard(0, 0, "MAX"); lastDashSignal=0; lastDashScore=0; lastDashGrade="MAX"; return; }
@@ -4350,7 +4431,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.9.5 | CLEAN EXITS | ";
+   d += " XAUAI SNIPER v4.9.6 | SELF-DIAGNOSTIC | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
