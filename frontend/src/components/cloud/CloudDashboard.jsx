@@ -65,38 +65,38 @@ export default function CloudDashboard() {
   const needsPayment = !isActive && isTrial && daysLeft <= 0;
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white">
+    <div className="min-h-screen bg-[#050505] text-white pb-20 sm:pb-0">
       {/* Top bar */}
       <nav className="sticky top-0 z-40 backdrop-blur-xl bg-[#050505]/80 border-b border-white/5">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link to="/cloud" className="flex items-center gap-2"><Cloud className="w-6 h-6 text-[#D4AF37]" /><span className="font-bold tracking-tight">XauAi Cloud</span></Link>
-          <div className="flex items-center gap-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
+          <Link to="/cloud" className="flex items-center gap-2 min-w-0"><Cloud className="w-5 h-5 sm:w-6 sm:h-6 text-[#D4AF37] flex-none" /><span className="font-bold tracking-tight text-sm sm:text-base truncate">XauAi Cloud</span></Link>
+          <div className="flex items-center gap-3 flex-none">
             <div className="hidden md:block text-xs text-white/50"><span data-testid="user-email">{me.email}</span></div>
-            <button onClick={logout} className="text-white/50 hover:text-white transition-colors" data-testid="logout-button"><LogOut className="w-5 h-5" /></button>
+            <button onClick={logout} className="text-white/50 hover:text-white transition-colors p-1.5" data-testid="logout-button" aria-label="Log out"><LogOut className="w-5 h-5" /></button>
           </div>
         </div>
       </nav>
 
       {/* Trial / subscription banner */}
       {isTrial && daysLeft > 0 && (
-        <div className="bg-[#D4AF37]/10 border-b border-[#D4AF37]/20 py-3" data-testid="trial-banner">
-          <div className="max-w-7xl mx-auto px-6 flex items-center justify-between text-sm">
-            <div><span className="text-[#D4AF37] font-semibold">Free trial active</span><span className="text-white/60 ml-2">— {daysLeft} day{daysLeft===1?"":"s"} remaining</span></div>
-            <button onClick={()=>setTab("billing")} className="text-[#D4AF37] hover:underline font-semibold" data-testid="trial-upgrade-link">Upgrade now →</button>
+        <div className="bg-[#D4AF37]/10 border-b border-[#D4AF37]/20 py-2.5 sm:py-3" data-testid="trial-banner">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between text-xs sm:text-sm gap-2">
+            <div className="min-w-0"><span className="text-[#D4AF37] font-semibold">Free trial</span><span className="text-white/60 ml-1 sm:ml-2">— {daysLeft}d left</span></div>
+            <button onClick={()=>setTab("billing")} className="text-[#D4AF37] hover:underline font-semibold whitespace-nowrap" data-testid="trial-upgrade-link">Upgrade →</button>
           </div>
         </div>
       )}
       {needsPayment && (
-        <div className="bg-red-500/10 border-b border-red-500/20 py-3" data-testid="expired-banner">
-          <div className="max-w-7xl mx-auto px-6 flex items-center justify-between text-sm">
-            <div><span className="text-red-400 font-semibold">Trial expired</span><span className="text-white/60 ml-2">— subscribe to continue trading</span></div>
-            <button onClick={()=>setTab("billing")} className="text-red-400 hover:underline font-semibold" data-testid="expired-subscribe-link">Subscribe →</button>
+        <div className="bg-red-500/10 border-b border-red-500/20 py-2.5 sm:py-3" data-testid="expired-banner">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between text-xs sm:text-sm gap-2">
+            <div className="min-w-0"><span className="text-red-400 font-semibold">Trial expired</span><span className="text-white/60 ml-1 sm:ml-2 hidden sm:inline">— subscribe to continue</span></div>
+            <button onClick={()=>setTab("billing")} className="text-red-400 hover:underline font-semibold whitespace-nowrap" data-testid="expired-subscribe-link">Subscribe →</button>
           </div>
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="max-w-7xl mx-auto px-6 pt-6">
+      {/* Desktop tabs (hidden on mobile; mobile uses bottom nav) */}
+      <div className="hidden sm:block max-w-7xl mx-auto px-6 pt-6">
         <div className="flex gap-2 border-b border-white/5">
           {[
             {id:"overview",label:"Overview"},
@@ -112,11 +112,28 @@ export default function CloudDashboard() {
       </div>
 
       {/* Content */}
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 sm:py-8">
         {tab === "overview" && <OverviewTab me={me} data={data} onTogglePause={togglePause} />}
         {tab === "connect" && <ConnectTab me={me} onRefresh={fetchAll} />}
         {tab === "billing" && <BillingTab me={me} onRefresh={fetchAll} />}
       </div>
+
+      {/* Mobile bottom tab bar — native-app feel */}
+      <nav className="sm:hidden fixed bottom-0 inset-x-0 z-40 bg-[#050505]/95 backdrop-blur-xl border-t border-white/10 pb-[env(safe-area-inset-bottom)]">
+        <div className="grid grid-cols-3">
+          {[
+            {id:"overview",label:"Overview",Icon:TrendingUp},
+            {id:"connect",label:"Connect",Icon:Shield},
+            {id:"billing",label:"Billing",Icon:CreditCard},
+          ].map(({id,label,Icon})=>(
+            <button key={id} onClick={()=>setTab(id)} data-testid={`mtab-${id}`}
+                    className={`flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition-colors ${tab===id?"text-[#D4AF37]":"text-white/50"}`}>
+              <Icon className="w-5 h-5" />
+              {label}
+            </button>
+          ))}
+        </div>
+      </nav>
     </div>
   );
 }
@@ -124,9 +141,9 @@ export default function CloudDashboard() {
 function OverviewTab({ me, data, onTogglePause }) {
   const wr = data.totals.total_trades > 0 ? Math.round((data.totals.wins / data.totals.total_trades) * 100) : 0;
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
         <KPI label="Net P&L (30d)" value={formatUSD(data.totals.net_pnl)} accent={data.totals.net_pnl >= 0 ? "green" : "red"} testid="kpi-pnl" />
         <KPI label="Trades" value={data.totals.total_trades} testid="kpi-trades" />
         <KPI label="Win Rate" value={`${wr}%`} testid="kpi-winrate" />
@@ -134,58 +151,77 @@ function OverviewTab({ me, data, onTogglePause }) {
       </div>
 
       {/* Execution status */}
-      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-6" data-testid="execution-status-card">
-        <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
+      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="execution-status-card">
+        <div className="flex items-center justify-between mb-4 sm:mb-6 flex-wrap gap-3">
           <div>
-            <div className="text-xs font-mono tracking-widest text-white/40 mb-2">EXECUTION STATUS</div>
+            <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40 mb-1.5 sm:mb-2">EXECUTION STATUS</div>
             <div className="flex items-center gap-3">
-              {data.mt5_connected ? <CheckCircle2 className="w-6 h-6 text-green-400" /> : <XCircle className="w-6 h-6 text-red-400" />}
+              {data.mt5_connected ? <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6 text-green-400" /> : <XCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-400" />}
               <div>
-                <div className="font-bold text-lg">{data.mt5_connected ? "MT5 Linked" : "MT5 Not Connected"}</div>
-                <div className="text-sm text-white/60">
-                  {data.paused ? "⏸ Trading paused by you" : data.mt5_connected ? "Active — executing trades 24/7" : "Connect your MT5 account to start"}
+                <div className="font-bold text-base sm:text-lg">{data.mt5_connected ? "MT5 Linked" : "MT5 Not Connected"}</div>
+                <div className="text-xs sm:text-sm text-white/60">
+                  {data.paused ? "⏸ Trading paused by you" : data.mt5_connected ? "Active — executing 24/7" : "Connect to start"}
                 </div>
               </div>
             </div>
           </div>
           {data.mt5_connected && (
             <button onClick={onTogglePause} data-testid="pause-toggle"
-                    className={`px-5 py-2.5 rounded-xl font-semibold flex items-center gap-2 transition-colors ${data.paused ? "bg-green-500/20 text-green-400 hover:bg-green-500/30" : "bg-red-500/20 text-red-400 hover:bg-red-500/30"}`}>
-              {data.paused ? <><Play className="w-4 h-4" /> Resume trading</> : <><Pause className="w-4 h-4" /> Pause trading</>}
+                    className={`w-full sm:w-auto px-5 py-2.5 rounded-xl font-semibold flex items-center justify-center gap-2 transition-colors ${data.paused ? "bg-green-500/20 text-green-400 hover:bg-green-500/30" : "bg-red-500/20 text-red-400 hover:bg-red-500/30"}`}>
+              {data.paused ? <><Play className="w-4 h-4" /> Resume</> : <><Pause className="w-4 h-4" /> Pause</>}
             </button>
           )}
         </div>
       </div>
 
       {/* Recent trades */}
-      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-6" data-testid="trades-card">
-        <div className="text-xs font-mono tracking-widest text-white/40 mb-4">RECENT TRADES</div>
+      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="trades-card">
+        <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40 mb-3 sm:mb-4">RECENT TRADES</div>
         {data.trades.length === 0 ? (
-          <div className="text-center py-12 text-white/40">
-            <TrendingUp className="w-12 h-12 mx-auto mb-3 text-white/20" />
-            <div>No trades yet. {data.mt5_connected ? "Signals arrive during market hours." : "Connect your MT5 to get started."}</div>
+          <div className="text-center py-10 sm:py-12 text-white/40">
+            <TrendingUp className="w-10 h-10 sm:w-12 sm:h-12 mx-auto mb-3 text-white/20" />
+            <div className="text-sm sm:text-base">No trades yet. {data.mt5_connected ? "Signals arrive during market hours." : "Connect your MT5 to get started."}</div>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead><tr className="text-xs font-mono tracking-widest text-white/40 border-b border-white/5">
-                <th className="py-2 text-left">SYMBOL</th><th className="py-2 text-left">SIDE</th>
-                <th className="py-2 text-right">LOTS</th><th className="py-2 text-right">P&L</th>
-                <th className="py-2 text-right">CLOSED</th>
-              </tr></thead>
-              <tbody>
-                {data.trades.map((t,i)=>(
-                  <tr key={t.id || i} className="border-b border-white/5" data-testid={`trade-row-${i}`}>
-                    <td className="py-3 font-mono">{t.symbol}</td>
-                    <td className={`py-3 font-semibold ${t.side==="BUY"?"text-green-400":"text-red-400"}`}>{t.side}</td>
-                    <td className="py-3 font-mono text-right">{t.lots?.toFixed(2)}</td>
-                    <td className={`py-3 font-mono text-right font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{formatUSD(t.profit)}</td>
-                    <td className="py-3 text-right text-white/50 text-xs">{t.closed_at?.slice(0,16).replace("T"," ")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            {/* Mobile card list */}
+            <div className="sm:hidden space-y-2">
+              {data.trades.map((t,i)=>(
+                <div key={t.id||i} className="bg-black/30 rounded-xl p-3 flex items-center justify-between" data-testid={`trade-card-${i}`}>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="font-mono text-sm">{t.symbol}</span>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${t.side==="BUY"?"bg-green-500/20 text-green-400":"bg-red-500/20 text-red-400"}`}>{t.side}</span>
+                      <span className="font-mono text-xs text-white/50">{t.lots?.toFixed(2)}</span>
+                    </div>
+                    <div className="text-[10px] text-white/40">{t.closed_at?.slice(0,16).replace("T"," ")}</div>
+                  </div>
+                  <div className={`font-mono text-sm font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{formatUSD(t.profit)}</div>
+                </div>
+              ))}
+            </div>
+            {/* Desktop table */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="text-xs font-mono tracking-widest text-white/40 border-b border-white/5">
+                  <th className="py-2 text-left">SYMBOL</th><th className="py-2 text-left">SIDE</th>
+                  <th className="py-2 text-right">LOTS</th><th className="py-2 text-right">P&L</th>
+                  <th className="py-2 text-right">CLOSED</th>
+                </tr></thead>
+                <tbody>
+                  {data.trades.map((t,i)=>(
+                    <tr key={t.id || i} className="border-b border-white/5" data-testid={`trade-row-${i}`}>
+                      <td className="py-3 font-mono">{t.symbol}</td>
+                      <td className={`py-3 font-semibold ${t.side==="BUY"?"text-green-400":"text-red-400"}`}>{t.side}</td>
+                      <td className="py-3 font-mono text-right">{t.lots?.toFixed(2)}</td>
+                      <td className={`py-3 font-mono text-right font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{formatUSD(t.profit)}</td>
+                      <td className="py-3 text-right text-white/50 text-xs">{t.closed_at?.slice(0,16).replace("T"," ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -195,9 +231,9 @@ function OverviewTab({ me, data, onTogglePause }) {
 function KPI({ label, value, accent, testid }) {
   const color = accent === "green" ? "text-green-400" : accent === "red" ? "text-red-400" : "text-white";
   return (
-    <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-5" data-testid={testid}>
-      <div className="text-[10px] font-mono tracking-widest text-white/40 mb-2">{label}</div>
-      <div className={`text-2xl font-bold font-mono ${color}`}>{value}</div>
+    <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-xl sm:rounded-2xl p-3 sm:p-5" data-testid={testid}>
+      <div className="text-[9px] sm:text-[10px] font-mono tracking-widest text-white/40 mb-1 sm:mb-2">{label}</div>
+      <div className={`text-lg sm:text-2xl font-bold font-mono ${color}`}>{value}</div>
     </div>
   );
 }
@@ -242,7 +278,7 @@ function ConnectTab({ me, onRefresh }) {
 
   return (
     <div className="max-w-2xl">
-      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-6 mb-6" data-testid="connect-card">
+      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6 mb-5 sm:mb-6" data-testid="connect-card">
         <div className="flex items-start gap-4 mb-6">
           <div className="w-10 h-10 rounded-full bg-[#D4AF37]/10 border border-[#D4AF37]/20 flex items-center justify-center flex-none">
             <Shield className="w-5 h-5 text-[#D4AF37]" />
@@ -415,7 +451,7 @@ function BillingTab({ me, onRefresh }) {
   return (
     <div className="space-y-6">
       {/* Current subscription status */}
-      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-6" data-testid="subscription-status">
+      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="subscription-status">
         <div className="text-xs font-mono tracking-widest text-white/40 mb-2">CURRENT PLAN</div>
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
@@ -441,7 +477,7 @@ function BillingTab({ me, onRefresh }) {
       </div>
 
       {/* Payment method + instructions */}
-      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-6" data-testid="payment-instructions">
+      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="payment-instructions">
         <div className="text-xs font-mono tracking-widest text-white/40 mb-3">PAYMENT METHOD</div>
         <div className="grid grid-cols-3 gap-2 mb-5">
           {[{id:"crypto",label:"Crypto"},{id:"bank",label:"Bank transfer"},{id:"fiat",label:"Card / Paystack"}].map(m => (
@@ -492,7 +528,7 @@ function BillingTab({ me, onRefresh }) {
       </div>
 
       {/* Submit payment proof */}
-      <form onSubmit={submit} className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-6" data-testid="payment-submit-form">
+      <form onSubmit={submit} className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="payment-submit-form">
         <div className="text-xs font-mono tracking-widest text-white/40 mb-4">SUBMIT PAYMENT CONFIRMATION</div>
         <div className="text-sm text-white/60 mb-4">After you've sent payment, submit the transaction reference below. Admin verifies within 24 hours and activates your subscription.</div>
         <div className="space-y-3">
@@ -516,7 +552,7 @@ function BillingTab({ me, onRefresh }) {
 
       {/* Payment history */}
       {payments.length > 0 && (
-        <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-6" data-testid="payment-history">
+        <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="payment-history">
           <div className="text-xs font-mono tracking-widest text-white/40 mb-4">PAYMENT HISTORY</div>
           <div className="space-y-2">
             {payments.map((p,i)=>(
