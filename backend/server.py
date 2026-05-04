@@ -1832,10 +1832,18 @@ async def _get_cloud_settings():
 @api_router.get("/cloud/config")
 async def cloud_public_config():
     s = await _get_cloud_settings()
+    # Worker (executor) status — how many VPS workers have heartbeat in last 3 min
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+    workers_online = await db.cloud_workers.count_documents(
+        {"status": "online", "last_heartbeat": {"$gt": cutoff}})
+    workers_total = await db.cloud_workers.count_documents({})
     return {"plans": CLOUD_PLANS, "trial_days": CLOUD_TRIAL_DAYS,
             "crypto_wallets": s.get("crypto_wallets", []),
             "bank_accounts":  s.get("bank_accounts", []),
-            "master_status":  s.get("master_ea_status", "online")}
+            "master_status":  s.get("master_ea_status", "online"),
+            "executor_workers_online": workers_online,
+            "executor_workers_total":  workers_total,
+            "shadow_mode":    s.get("shadow_mode", True)}
 
 # -------- Signup / Login / Me --------
 @api_router.post("/cloud/auth/signup")

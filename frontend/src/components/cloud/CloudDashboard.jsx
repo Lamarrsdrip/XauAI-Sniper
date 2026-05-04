@@ -310,6 +310,25 @@ function ConnectTab({ me, onRefresh }) {
   };
 
   const [refreshing, setRefreshing] = useState(false);
+  const [executorStatus, setExecutorStatus] = useState({ online: null, total: null });
+
+  // Poll public config every 30s to know if any worker is online
+  useEffect(() => {
+    let alive = true;
+    const tick = () => {
+      cloudAxios.get(`/cloud/config`).then(r => {
+        if (!alive) return;
+        setExecutorStatus({
+          online: r.data?.executor_workers_online ?? 0,
+          total:  r.data?.executor_workers_total  ?? 0,
+        });
+      }).catch(()=>{});
+    };
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
   const refreshBalance = async () => {
     if (refreshing) return;
     setRefreshing(true); setErr(""); setMsg("");
@@ -351,9 +370,23 @@ function ConnectTab({ me, onRefresh }) {
                 {verifyStatus === "rejected" ? "Broker login failed" : "Verifying broker login…"}
               </div>
               <div className="text-xs text-white/60 mt-1 leading-relaxed">
-                {verifyStatus === "rejected"
-                  ? <>Our executor agent could not log in: <span className="font-mono text-red-300">{verifyError || "Invalid credentials"}</span>. Re-enter your details below.</>
-                  : <>Credentials saved &amp; encrypted. We&apos;ll attempt a real broker login the moment our executor agent comes online (usually within 60s of going live). Until then, simulated trades will appear in your Overview tab.</>}
+                {verifyStatus === "rejected" ? (
+                  <>Our executor agent could not log in: <span className="font-mono text-red-300">{verifyError || "Invalid credentials"}</span>. Re-enter your details below.</>
+                ) : executorStatus.online === 0 ? (
+                  <>
+                    <span className="text-yellow-300 font-semibold">Waiting for an executor agent to come online.</span> Your credentials are saved &amp; encrypted. The XauAi platform team is bringing the broker-execution VPS online — verification will run automatically the moment it connects (no action needed from you). Until then you'll see <b>simulated trades</b> in your Overview tab to show how the system would have traded your account.
+                    <div className="mt-2 inline-flex items-center gap-2 px-2 py-1 rounded-md bg-black/40 border border-white/10 font-mono text-[10px]">
+                      <span className="w-2 h-2 rounded-full bg-red-400" /> Executor offline ({executorStatus.total ?? 0} workers registered)
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    Executor agent is online — verification should complete in a few seconds. Refresh to update.
+                    <div className="mt-2 inline-flex items-center gap-2 px-2 py-1 rounded-md bg-black/40 border border-white/10 font-mono text-[10px]">
+                      <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" /> Executor online · {executorStatus.online} worker{executorStatus.online === 1 ? "" : "s"}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
