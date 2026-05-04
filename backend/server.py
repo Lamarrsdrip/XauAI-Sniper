@@ -2332,6 +2332,33 @@ async def cloud_agent_users(request: Request):
         r["mt5_password"] = _cloud_decrypt(enc) if enc else ""
     return {"users": rows, "total": len(rows)}
 
+# --- Worker feed: recent open + close events since a given ISO timestamp ---
+# Used by the Python VPS worker agent to mirror master signals into each
+# subscriber's MT5 terminal. Returns at most `limit` of each kind, newest first.
+@api_router.get("/cloud/agent/pending-signals")
+async def cloud_agent_pending_signals(request: Request, since: str = "", limit: int = 100):
+    await _require_agent_async(request)
+    q_open: dict = {}
+    q_close: dict = {}
+    if since:
+        q_open["ts"] = {"$gt": since}
+        q_close["closed_at"] = {"$gt": since}
+    opens = await db.cloud_signals.find(q_open, {"_id": 0}).sort("ts", -1).to_list(limit)
+    # closes: pull distinct closed shadow trades (they carry exit_price + reason + signal_id)
+    closes_raw = await db.cloud_shadow_trades.find(
+        {"status": "shadow_closed", **({"closed_at": {"$gt": since}} if since else {})},
+        {"_id": 0, "signal_id": 1, "exit_price": 1, "closed_at": 1, "reason": 1}
+    ).sort("closed_at", -1).to_list(limit * 5)
+    # dedupe by signal_id, keep first (newest) occurrence
+    seen = set(); closes = []
+    for c in closes_raw:
+        sid = c.get("signal_id")
+        if not sid or sid in seen: continue
+        seen.add(sid); closes.append(c)
+        if len(closes) >= limit: break
+    return {"opens": opens, "closes": closes,
+            "server_time": datetime.now(timezone.utc).isoformat()}
+
 class AgentTradeLog(BaseModel):
     user_id: str; ticket: int; symbol: str; side: str
     lots: float; entry: float; exit_price: float; profit: float
@@ -2358,6 +2385,27 @@ async def cloud_agent_equity(req: AgentEquitySnapshot, request: Request):
         {"$set": {"last_equity": req.equity, "last_balance": req.balance,
                   "last_equity_ts": doc["ts"]}})
     return {"ok": True}
+
+# --- Worker heartbeat: VPS agent pings every N seconds so admin sees it online ---
+class WorkerHeartbeatReq(BaseModel):
+    worker_id: str
+    active_users: int = 0
+    version: Optional[str] = ""
+    hostname: Optional[str] = ""
+
+@api_router.post("/cloud/agent/heartbeat")
+async def cloud_agent_heartbeat(req: WorkerHeartbeatReq, request: Request):
+    await _require_agent_async(request)
+    now = datetime.now(timezone.utc).isoformat()
+    r = await db.cloud_workers.update_one(
+        {"id": req.worker_id},
+        {"$set": {"last_heartbeat": now, "status": "online",
+                  "active_users": req.active_users,
+                  "version": req.version or "",
+                  "hostname": req.hostname or ""}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Unknown worker_id — register via /admin → Cloud → Infrastructure first.")
+    return {"ok": True, "server_time": now}
 
 # ===================================================================
 # END XauAi CLOUD
