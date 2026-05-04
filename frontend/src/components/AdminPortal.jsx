@@ -897,6 +897,31 @@ function CloudAdminTab({ api, token }) {
                   } catch(e){ setMsg(e.response?.data?.detail || "Failed"); }
                   finally { setBusy(false); }
                 }} disabled={busy} data-testid="fire-test-signal-btn" className="px-3 py-2 bg-[hsl(142,71%,45%)] text-black text-xs font-bold">⚡ FIRE TEST SIGNAL</button>
+                <button onClick={async()=>{
+                  const name = prompt("Give this worker a name (e.g. 'My-Laptop' or 'Contabo-VPS'):", "My-Laptop"); if (!name) return;
+                  try {
+                    const r = await ax.post(`${api}/admin/cloud/infrastructure/pair-code`, {name, max_users: 30}, { headers });
+                    const code = r.data.code;
+                    const isMac = /Mac/i.test(navigator.platform);
+                    const cmd = isMac
+                      ? `curl -fsSL https://xauaisniper.com/install-worker.sh | bash`
+                      : `iwr -useb https://xauaisniper.com/install-worker.ps1 | iex`;
+                    const msg = [
+                      `✅ PAIRING CODE: ${code}`,
+                      `(valid 10 minutes — copy it)`,
+                      ``,
+                      `Now on YOUR laptop / VPS, open a terminal and paste:`,
+                      ``,
+                      cmd,
+                      ``,
+                      `When it asks, paste the 6-digit code above.`,
+                      `That's it — no other copy/paste needed.`
+                    ].join("\n");
+                    alert(msg);
+                    try { await navigator.clipboard.writeText(code); } catch {}
+                    refresh();
+                  } catch(e) { alert(e.response?.data?.detail || "Failed"); }
+                }} data-testid="generate-pair-code-btn" className="px-3 py-2 bg-primary text-primary-foreground text-xs font-bold">🪄 GENERATE PAIR CODE</button>
                 <button onClick={()=>{
                   const name = prompt("Worker name (e.g. Contabo-NYC-1):"); if (!name) return;
                   const max = parseInt(prompt("Max MT5 instances this worker can host:", "30")) || 30;
@@ -904,7 +929,7 @@ function CloudAdminTab({ api, token }) {
                   const notes = prompt("Notes (optional):", "") || "";
                   ax.post(`${api}/admin/cloud/infrastructure/workers`, {name, max_users: max, endpoint, notes}, { headers })
                     .then(()=>refresh()).catch(e=>setMsg(e.response?.data?.detail || "Failed"));
-                }} data-testid="add-worker-btn" className="px-3 py-2 bg-primary text-primary-foreground text-xs font-bold">+ ADD WORKER</button>
+                }} data-testid="add-worker-btn" className="px-3 py-2 bg-muted text-foreground text-xs font-bold">+ MANUAL ADD</button>
               </div>
             </div>
             {infra.workers.length === 0 ? (

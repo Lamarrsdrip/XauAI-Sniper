@@ -53,6 +53,50 @@ if not MOCK_MT5:
 # ---------- Config ----------
 load_dotenv()
 
+def _interactive_pair():
+    """First-run pairing — prompts for cloud URL + 6-digit code, writes .env."""
+    print("=" * 60)
+    print(" XauAi Cloud Worker — first-run pairing")
+    print("=" * 60)
+    print(" 1. Open your admin panel → Cloud → Infrastructure")
+    print(" 2. Click 'Generate Pairing Code'")
+    print(" 3. Paste the 6-digit code below.\n")
+    cloud_url = input("Cloud URL [https://xauaisniper.com]: ").strip() or "https://xauaisniper.com"
+    code = input("6-digit pairing code: ").strip()
+    if not code.isdigit() or len(code) != 6:
+        print("[FAIL] Code must be 6 digits."); sys.exit(1)
+    try:
+        r = requests.post(f"{cloud_url.rstrip('/')}/api/cloud/agent/pair",
+                          json={"code": code, "hostname": socket.gethostname()},
+                          timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        print(f"[FAIL] Pair failed: {e}"); sys.exit(1)
+    cfg = (
+        f"CLOUD_URL={cloud_url}\n"
+        f"CLOUD_AGENT_TOKEN={data['agent_token']}\n"
+        f"WORKER_ID={data['worker_id']}\n"
+        f"POLL_SEC=10\n"
+        f"HEARTBEAT_SEC=60\n"
+        f"EQUITY_SEC=120\n"
+        f"HTTP_TIMEOUT=15\n"
+        f"MOCK_MT5={os.environ.get('MOCK_MT5','0')}\n"
+    )
+    here = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(here, ".env")
+    with open(env_path, "w") as f: f.write(cfg)
+    print(f"\n[OK] Paired as worker '{data.get('worker_name')}'.")
+    print(f"[OK] Config saved to {env_path}\n")
+    load_dotenv(env_path, override=True)
+
+# If .env config is missing critical fields, drop into pairing wizard
+if not (os.environ.get("CLOUD_URL") and os.environ.get("CLOUD_AGENT_TOKEN") and os.environ.get("WORKER_ID")):
+    if os.environ.get("XAUAI_NO_PAIR") == "1":
+        print("[FAIL] Missing CLOUD_URL/CLOUD_AGENT_TOKEN/WORKER_ID and XAUAI_NO_PAIR=1 set.")
+        sys.exit(1)
+    _interactive_pair()
+
 CLOUD_URL = os.environ["CLOUD_URL"].rstrip("/")
 AGENT_TOKEN = os.environ["CLOUD_AGENT_TOKEN"]
 WORKER_ID = os.environ["WORKER_ID"]

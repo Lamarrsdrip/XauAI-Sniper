@@ -2375,6 +2375,79 @@ async def admin_rotate_agent_token():
     await db.cloud_settings.update_one({"key": "main"}, {"$set": {"agent_token": new_tok}}, upsert=True)
     return {"ok": True, "token": new_tok, "message": "New agent token generated. Paste into each VPS worker config."}
 
+# --- One-shot pairing code: admin generates code → worker exchanges for full config ---
+@api_router.post("/admin/cloud/infrastructure/pair-code", dependencies=[Depends(get_current_admin)])
+async def admin_generate_pair_code(body: dict = None):
+    """Generate a 6-digit pairing code (TTL 10 min). The worker enters this code
+       on first run and auto-receives agent_token + a fresh worker_id."""
+    body = body or {}
+    name = (body.get("name") or "Auto-paired worker").strip()[:60]
+    max_users = max(1, min(500, int(body.get("max_users") or 30)))
+    code = "".join([str(secrets.randbelow(10)) for _ in range(6)])
+    expires = datetime.now(timezone.utc) + timedelta(minutes=10)
+    await db.cloud_pair_codes.insert_one({
+        "code": code,
+        "expires_at": expires.isoformat(),
+        "consumed": False,
+        "worker_name": name,
+        "max_users": max_users,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"code": code, "expires_at": expires.isoformat(),
+            "ttl_minutes": 10,
+            "message": f"Code: {code} (valid for 10 min). Run the installer and paste this code."}
+
+class PairExchangeReq(BaseModel):
+    code: str
+    hostname: Optional[str] = ""
+
+@api_router.post("/cloud/agent/pair")
+async def cloud_agent_pair(req: PairExchangeReq):
+    """Public — exchange a 6-digit pair code for full worker config.
+       This is the ONLY agent endpoint that doesn't require X-Agent-Token."""
+    code = (req.code or "").strip()
+    if not code or not code.isdigit() or len(code) != 6:
+        raise HTTPException(status_code=400, detail="Code must be 6 digits.")
+    rec = await db.cloud_pair_codes.find_one({"code": code, "consumed": False}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Invalid or already-used code.")
+    try:
+        exp = datetime.fromisoformat(rec["expires_at"])
+        if datetime.now(timezone.utc) > exp:
+            raise HTTPException(status_code=410, detail="Code expired. Ask admin for a new one.")
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=500, detail="Code metadata corrupt")
+    # Make sure an agent_token exists (auto-rotate if missing)
+    s = await _get_cloud_settings()
+    agent_token = s.get("agent_token") or ""
+    if not agent_token:
+        agent_token = secrets.token_hex(32)
+        await db.cloud_settings.update_one({"key": "main"},
+            {"$set": {"agent_token": agent_token}}, upsert=True)
+    # Auto-create a worker
+    wid = str(uuid.uuid4())
+    name = rec.get("worker_name") or "Auto-paired worker"
+    if req.hostname:
+        name = f"{name} ({req.hostname[:30]})"
+    await db.cloud_workers.insert_one({
+        "id": wid, "name": name[:80], "endpoint": "",
+        "max_users": rec.get("max_users", 30), "notes": "Created via pair code",
+        "status": "offline", "last_heartbeat": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    # Mark the code consumed
+    await db.cloud_pair_codes.update_one({"code": code},
+        {"$set": {"consumed": True, "consumed_at": datetime.now(timezone.utc).isoformat(),
+                  "consumed_worker_id": wid}})
+    # Determine the canonical cloud URL — must be the actual public URL clients hit
+    cloud_url = os.environ.get("CLOUD_PUBLIC_URL") or os.environ.get("REACT_APP_BACKEND_URL") or ""
+    return {"ok": True,
+            "cloud_url": cloud_url,
+            "agent_token": agent_token,
+            "worker_id": wid,
+            "worker_name": name,
+            "message": "Paired. Save the .env and start the worker."}
+
 @api_router.post("/admin/cloud/infrastructure/shadow-mode", dependencies=[Depends(get_current_admin)])
 async def admin_toggle_shadow(body: dict):
     enabled = bool(body.get("enabled", True))
