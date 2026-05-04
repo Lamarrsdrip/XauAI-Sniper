@@ -192,6 +192,48 @@ class WorkerAgent:
                 "margin": float(acct.margin), "free_margin": float(acct.margin_free)}
 
     # ---------- Core loops ----------
+    def verify_queue(self) -> None:
+        """Try logging into pending users' MT5 accounts and report verified/rejected."""
+        try:
+            data = self._get("/api/cloud/agent/verify-queue")
+        except Exception as e:
+            log.error("verify_queue fetch failed: %s", e); return
+        for row in data.get("users", []):
+            uid = row.get("id")
+            email = row.get("email", "")
+            login = int(row.get("mt5_login") or 0)
+            server = row.get("mt5_server") or row.get("broker_server") or ""
+            pwd = row.get("mt5_password") or ""
+            if not uid or login <= 0 or not server or not pwd: continue
+            log.info("verify attempt user=%s login=%s server=%s", email, login, server)
+            ok, err, bal, eq, ccy = self._mt5_try_login(login, server, pwd)
+            try:
+                self._post("/api/cloud/agent/verify-credentials", {
+                    "user_id": uid, "ok": ok, "error": err,
+                    "balance": bal, "equity": eq, "currency": ccy})
+                log.info("verify result user=%s ok=%s err=%s", email, ok, err)
+            except Exception as e:
+                log.error("verify-credentials POST failed user=%s: %s", email, e)
+
+    def _mt5_try_login(self, login: int, server: str, password: str):
+        """Returns (ok, error, balance, equity, currency)."""
+        if MOCK_MT5:
+            # Mock: anything with password "wrong" → reject. Otherwise pretend ok.
+            if password.lower() == "wrong":
+                return False, "Invalid credentials (mock)", None, None, ""
+            return True, "", 1000.0, 1000.0, "USD"
+        ok = mt5.initialize(login=int(login), server=server, password=password)
+        if not ok:
+            err = mt5.last_error()
+            return False, f"{err}", None, None, ""
+        acct = mt5.account_info()
+        if not acct:
+            mt5.shutdown()
+            return False, "account_info() returned None", None, None, ""
+        bal, eq, ccy = float(acct.balance), float(acct.equity), str(acct.currency or "")
+        # leave terminal connected for trading; don't shut down
+        return True, "", bal, eq, ccy
+
     def sync_users(self) -> None:
         try:
             data = self._get("/api/cloud/agent/pending-users")
@@ -306,12 +348,14 @@ class WorkerAgent:
     def run(self) -> None:
         log.info("XauAi Worker Agent %s starting — worker_id=%s mock=%s host=%s os=%s",
                  VERSION, WORKER_ID, MOCK_MT5, socket.gethostname(), platform.system())
+        self.verify_queue()
         self.sync_users()
         last_user_sync = time.time()
         while self.running:
             now = time.time()
             try:
                 if now - last_user_sync >= 30:
+                    self.verify_queue()
                     self.sync_users(); last_user_sync = now
                 self.poll_signals()
                 if now - self.last_hb >= HEARTBEAT_SEC:

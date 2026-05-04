@@ -247,8 +247,31 @@ function ConnectTab({ me, onRefresh }) {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [simBalance, setSimBalance] = useState(me.last_balance || 1000);
+  const [brokerList, setBrokerList] = useState([]);
+  const [serverQuery, setServerQuery] = useState("");
+  const [serverDropOpen, setServerDropOpen] = useState(false);
+  const [customServer, setCustomServer] = useState(false);
 
   const connected = me.mt5_connected;
+  const verifyStatus = me.mt5_verification_status || "none";
+  const verifyError = me.mt5_verification_error || "";
+
+  // Fetch curated broker→servers list once
+  useEffect(() => {
+    let alive = true;
+    cloudAxios.get(`/cloud/mt5/brokers`).then(r => { if (alive) setBrokerList(r.data?.servers || []); }).catch(()=>{});
+    return () => { alive = false; };
+  }, []);
+
+  // Filter dropdown list by query (broker name OR server name)
+  const filteredServers = (() => {
+    const q = serverQuery.trim().toLowerCase();
+    if (!q) return brokerList.slice(0, 50);
+    return brokerList.filter(b =>
+      b.broker.toLowerCase().includes(q) ||
+      b.server.toLowerCase().includes(q)
+    ).slice(0, 50);
+  })();
 
   // v1.1 — Account-size scaling preview
   // Exactly mirrors what the bot will do live:
@@ -294,12 +317,31 @@ function ConnectTab({ me, onRefresh }) {
           </div>
         </div>
 
+        {/* Verification banner — shown for pending/rejected creds (above connected/form) */}
+        {(verifyStatus === "pending" || verifyStatus === "rejected") && (
+          <div className={`mb-4 p-4 rounded-xl border flex items-start gap-3 ${verifyStatus === "rejected" ? "bg-red-500/10 border-red-500/30" : "bg-yellow-500/10 border-yellow-500/30"}`} data-testid="verify-banner">
+            {verifyStatus === "rejected"
+              ? <XCircle className="w-5 h-5 text-red-400 flex-none mt-0.5" />
+              : <Clock  className="w-5 h-5 text-yellow-400 flex-none mt-0.5" />}
+            <div className="flex-1 min-w-0">
+              <div className={`font-semibold ${verifyStatus === "rejected" ? "text-red-400" : "text-yellow-400"}`}>
+                {verifyStatus === "rejected" ? "Broker login failed" : "Verifying broker login…"}
+              </div>
+              <div className="text-xs text-white/60 mt-1 leading-relaxed">
+                {verifyStatus === "rejected"
+                  ? <>Our executor agent could not log in: <span className="font-mono text-red-300">{verifyError || "Invalid credentials"}</span>. Re-enter your details below.</>
+                  : <>Credentials saved &amp; encrypted. We&apos;ll attempt a real broker login the moment our executor agent comes online (usually within 60s of going live). Until then, simulated trades will appear in your Overview tab.</>}
+              </div>
+            </div>
+          </div>
+        )}
+
         {connected ? (
           <div data-testid="mt5-connected-view">
             <div className="flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-xl mb-4">
               <CheckCircle2 className="w-5 h-5 text-green-400" />
               <div>
-                <div className="font-semibold text-green-400">MT5 Account Connected</div>
+                <div className="font-semibold text-green-400">MT5 Account Connected &amp; Verified</div>
                 <div className="text-xs text-white/50">Broker: {me.broker_server || "—"} · Login: {me.mt5_login || "—"} · Risk: {me.risk_tier || "balanced"}</div>
               </div>
             </div>
@@ -335,13 +377,84 @@ function ConnectTab({ me, onRefresh }) {
               Disconnect MT5 account
             </button>
           </div>
+        ) : verifyStatus === "pending" && me.broker_server ? (
+          <div data-testid="mt5-pending-view">
+            <div className="bg-black/40 border border-yellow-500/20 rounded-xl p-4 mb-4">
+              <div className="text-xs font-mono tracking-widest text-white/40 mb-2">CREDENTIALS ON FILE (encrypted)</div>
+              <div className="text-sm text-white/80">
+                <span className="text-white/40">Broker:</span> <span className="font-mono">{me.broker_server}</span><br/>
+                <span className="text-white/40">Login:</span> <span className="font-mono">{me.mt5_login || "—"}</span><br/>
+                <span className="text-white/40">Risk tier:</span> <span className="font-mono capitalize">{me.risk_tier || "balanced"}</span>
+              </div>
+            </div>
+            <button onClick={disconnect} disabled={loading} className="w-full py-3 border border-red-500/30 text-red-400 rounded-xl hover:bg-red-500/10 transition-colors disabled:opacity-50" data-testid="cancel-pending-button">
+              Cancel &amp; remove credentials
+            </button>
+          </div>
         ) : (
           <form onSubmit={submit} className="space-y-4" data-testid="mt5-connect-form">
-            <div>
+            {/* BROKER SERVER — searchable like MT5's broker picker */}
+            <div className="relative">
               <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">BROKER SERVER</label>
-              <input required value={form.broker_server} onChange={e=>setForm({...form, broker_server: e.target.value})} placeholder="e.g. TradeCom-Live"
-                     className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" data-testid="mt5-server" />
-              <div className="text-xs text-white/30 mt-1">Find this in MT5 → Tools → Options → Server</div>
+              {!customServer ? (
+                <>
+                  <input
+                    type="text"
+                    value={form.broker_server || serverQuery}
+                    onChange={e => { setServerQuery(e.target.value); setForm({ ...form, broker_server: "" }); setServerDropOpen(true); }}
+                    onFocus={() => setServerDropOpen(true)}
+                    onBlur={() => setTimeout(() => setServerDropOpen(false), 150)}
+                    placeholder="Search broker (e.g. Exness, IC Markets, FBS...)"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none"
+                    data-testid="mt5-server-search"
+                    autoComplete="off"
+                  />
+                  {serverDropOpen && filteredServers.length > 0 && (
+                    <div className="absolute z-30 left-0 right-0 mt-1 max-h-72 overflow-auto bg-[#111] border border-[#D4AF37]/30 rounded-xl shadow-2xl" data-testid="server-dropdown">
+                      {filteredServers.map(b => (
+                        <button
+                          key={b.server}
+                          type="button"
+                          onMouseDown={() => { setForm({ ...form, broker_server: b.server }); setServerQuery(b.server); setServerDropOpen(false); }}
+                          data-testid={`server-option-${b.server}`}
+                          className="w-full text-left px-4 py-2.5 hover:bg-[#D4AF37]/10 border-b border-white/5 flex items-center justify-between gap-3"
+                        >
+                          <span className="font-mono text-sm">{b.server}</span>
+                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${b.type === "live" ? "bg-green-500/15 text-green-400 border border-green-500/30" : "bg-blue-500/15 text-blue-400 border border-blue-500/30"}`}>
+                            {b.type === "live" ? "LIVE" : "DEMO"}
+                          </span>
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onMouseDown={() => { setCustomServer(true); setServerDropOpen(false); setServerQuery(""); setForm({ ...form, broker_server: "" }); }}
+                        className="w-full text-left px-4 py-2.5 hover:bg-[#D4AF37]/10 text-[#D4AF37] text-sm border-t border-[#D4AF37]/20"
+                        data-testid="server-option-custom"
+                      >
+                        + My broker isn't listed (type custom)
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    required
+                    value={form.broker_server}
+                    onChange={e => setForm({ ...form, broker_server: e.target.value })}
+                    placeholder="Type exact server name (e.g. YourBroker-Live)"
+                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none"
+                    data-testid="mt5-server-custom"
+                    autoComplete="off"
+                  />
+                  <button type="button" onClick={() => { setCustomServer(false); setForm({ ...form, broker_server: "" }); }}
+                          className="px-3 text-xs text-white/50 hover:text-white border border-white/10 rounded-xl"
+                          data-testid="server-back-search">Back</button>
+                </div>
+              )}
+              <div className="text-xs text-white/30 mt-1">
+                Find this in MT5 → Tools → Options → Server. Format must be <span className="font-mono text-white/50">Broker-Live</span> or <span className="font-mono text-white/50">Broker-Demo</span>.
+              </div>
             </div>
             <div>
               <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">MT5 LOGIN (ACCOUNT NUMBER)</label>

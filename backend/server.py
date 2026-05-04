@@ -1900,23 +1900,96 @@ async def cloud_me(user: dict = Depends(get_cloud_user)):
 async def cloud_connect_mt5(req: MT5ConnectReq, user: dict = Depends(get_cloud_user)):
     if req.risk_tier not in ("conservative", "balanced", "aggressive"):
         raise HTTPException(status_code=400, detail="Invalid risk tier")
+    # ---- Shape validation (we cannot truly verify until a VPS executor is online) ----
+    server = req.broker_server.strip()
+    login_raw = req.mt5_login.strip()
+    pwd = req.mt5_password
+    # Server: "Broker-Live", "Broker-Demo", "Broker-Real", "Broker-Trial..." etc.
+    # Allow alnum + dot/hyphen, must contain a hyphen.
+    import re
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{2,40}-[A-Za-z0-9]{2,30}$", server):
+        raise HTTPException(status_code=400,
+            detail="Broker server must look like 'Broker-Live' or 'Broker-Demo' (e.g. Exness-MT5Real16).")
+    if not login_raw.isdigit() or not (4 <= len(login_raw) <= 12):
+        raise HTTPException(status_code=400,
+            detail="MT5 login must be a 4–12 digit account number (no letters/spaces).")
+    if len(pwd) < 4:
+        raise HTTPException(status_code=400,
+            detail="MT5 password must be at least 4 characters.")
     update = {
-        "broker_server":     req.broker_server.strip(),
-        "mt5_login":         req.mt5_login.strip(),  # plain login is fine (not secret)
-        "mt5_password_enc":  _cloud_encrypt(req.mt5_password),
+        "broker_server":     server,
+        "mt5_login":         login_raw,
+        "mt5_password_enc":  _cloud_encrypt(pwd),
         "risk_tier":         req.risk_tier,
-        "mt5_connected":     True,
-        "mt5_connected_at":  datetime.now(timezone.utc).isoformat(),
+        # NEW: never claim "connected" without a real broker login. Shape-valid creds
+        # land in pending_verification until the VPS worker successfully logs in.
+        "mt5_connected":          False,
+        "mt5_verification_status":"pending",     # pending | verified | rejected
+        "mt5_verification_error": "",
+        "mt5_credentials_at":     datetime.now(timezone.utc).isoformat(),
     }
     await db.cloud_users.update_one({"id": user["id"]}, {"$set": update})
     # Auto-assign to a worker with capacity (silently no-ops if no workers yet → shadow mode picks up)
     wid = await _auto_assign_worker(user["id"])
     s = await _get_cloud_settings()
-    mode = "shadow" if s.get("shadow_mode", True) or not wid else "live"
-    msg = ("MT5 account linked. SHADOW MODE — you'll see simulated trades in your dashboard as signals fire."
-           if mode == "shadow"
-           else "MT5 account linked. Worker agent will pick it up within 60 seconds.")
-    return {"ok": True, "message": msg, "mode": mode, "assigned_worker": wid}
+    workers_online = await db.cloud_workers.count_documents({"status": "online"})
+    if workers_online == 0:
+        msg = ("Credentials saved & encrypted. Verification will complete the moment our executor "
+               "agent logs in to your broker — usually within 60 seconds of going live.")
+        mode = "pending_executor"
+    elif s.get("shadow_mode", True):
+        msg = ("Credentials saved. SHADOW MODE is on — simulated trades will appear in your dashboard. "
+               "Real-broker login verification will run when admin flips Shadow OFF.")
+        mode = "shadow"
+    else:
+        msg = "Credentials saved. Worker agent will verify the broker login within 60 seconds."
+        mode = "live_pending_verify"
+    return {"ok": True, "message": msg, "mode": mode, "assigned_worker": wid,
+            "verification_status": "pending"}
+
+# -------- Curated broker server list (searchable on UI like MT5's broker picker) --------
+# Sourced from each broker's published MT5 server list. "Custom..." path on the UI
+# allows free-typed servers for unlisted brokers. Update this list as needed.
+CLOUD_BROKER_SERVERS = [
+    {"broker": "MetaQuotes",   "server": "MetaQuotes-Demo",      "type": "demo"},
+    {"broker": "Exness",       "server": "Exness-MT5Real",       "type": "live"},
+    {"broker": "Exness",       "server": "Exness-MT5Real2",      "type": "live"},
+    {"broker": "Exness",       "server": "Exness-MT5Real8",      "type": "live"},
+    {"broker": "Exness",       "server": "Exness-MT5Real16",     "type": "live"},
+    {"broker": "Exness",       "server": "Exness-MT5Trial",      "type": "demo"},
+    {"broker": "Exness",       "server": "Exness-MT5Trial4",     "type": "demo"},
+    {"broker": "IC Markets",   "server": "ICMarketsSC-MT5",      "type": "live"},
+    {"broker": "IC Markets",   "server": "ICMarketsSC-Demo",     "type": "demo"},
+    {"broker": "IC Markets",   "server": "ICMarketsSC-MT5-02",   "type": "live"},
+    {"broker": "Pepperstone",  "server": "Pepperstone-MT5-Live", "type": "live"},
+    {"broker": "Pepperstone",  "server": "Pepperstone-Demo",     "type": "demo"},
+    {"broker": "FBS",          "server": "FBS-Real",             "type": "live"},
+    {"broker": "FBS",          "server": "FBS-Demo",             "type": "demo"},
+    {"broker": "XM",           "server": "XMGlobal-MT5",         "type": "live"},
+    {"broker": "XM",           "server": "XMGlobal-MT5 2",       "type": "live"},
+    {"broker": "XM",           "server": "XMGlobal-Demo",        "type": "demo"},
+    {"broker": "OctaFX",       "server": "OctaFX-Real",          "type": "live"},
+    {"broker": "OctaFX",       "server": "OctaFX-Demo",          "type": "demo"},
+    {"broker": "FxPro",        "server": "FxPro-MT5",            "type": "live"},
+    {"broker": "FxPro",        "server": "FxPro-MT5-Demo",       "type": "demo"},
+    {"broker": "FTMO",         "server": "FTMO-Server",          "type": "live"},
+    {"broker": "FTMO",         "server": "FTMO-Demo",            "type": "demo"},
+    {"broker": "RoboForex",    "server": "RoboForex-Pro",        "type": "live"},
+    {"broker": "RoboForex",    "server": "RoboForex-Demo",       "type": "demo"},
+    {"broker": "Tickmill",     "server": "TickmillUK-Live",      "type": "live"},
+    {"broker": "Tickmill",     "server": "TickmillUK-Demo",      "type": "demo"},
+    {"broker": "Admirals",     "server": "AdmiralsGroup-Live",   "type": "live"},
+    {"broker": "Admirals",     "server": "AdmiralsGroup-Demo",   "type": "demo"},
+    {"broker": "HFM",          "server": "HFMarketsGlobal-Live", "type": "live"},
+    {"broker": "HFM",          "server": "HFMarketsGlobal-Demo", "type": "demo"},
+    {"broker": "ThinkMarkets", "server": "ThinkMarkets-Live",    "type": "live"},
+    {"broker": "ThinkMarkets", "server": "ThinkMarkets-Demo",    "type": "demo"},
+]
+
+@api_router.get("/cloud/mt5/brokers")
+async def cloud_list_brokers():
+    """Public: returns curated broker→servers list for the UI search dropdown."""
+    return {"servers": CLOUD_BROKER_SERVERS}
 
 @api_router.post("/cloud/mt5/disconnect")
 async def cloud_disconnect_mt5(user: dict = Depends(get_cloud_user)):
@@ -1948,6 +2021,10 @@ async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
     except Exception: pass
     return {"trades": trades, "totals": totals, "equity": equity,
             "mt5_connected": user.get("mt5_connected", False),
+            "mt5_verification_status": user.get("mt5_verification_status", "none"),
+            "mt5_verification_error":  user.get("mt5_verification_error", ""),
+            "broker_server": user.get("broker_server", ""),
+            "mt5_login": user.get("mt5_login", ""),
             "paused": user.get("paused", False),
             "plan": user.get("plan", "starter"),
             "status": user.get("status", "trial")}
@@ -2323,7 +2400,10 @@ AGENT_TOKEN = os.environ.get("CLOUD_AGENT_TOKEN", "")  # kept for backward compa
 async def cloud_agent_users(request: Request):
     await _require_agent_async(request)
     rows = await db.cloud_users.find(
-        {"mt5_connected": True, "paused": False, "status": {"$in": ["trial", "active"]}},
+        {"mt5_connected": True,
+         "mt5_verification_status": "verified",
+         "paused": False,
+         "status": {"$in": ["trial", "active"]}},
         {"_id": 0, "password_hash": 0}
     ).to_list(2000)
     # decrypt passwords in-memory ONLY for the worker response (TLS-only transport)
@@ -2358,6 +2438,50 @@ async def cloud_agent_pending_signals(request: Request, since: str = "", limit: 
         if len(closes) >= limit: break
     return {"opens": opens, "closes": closes,
             "server_time": datetime.now(timezone.utc).isoformat()}
+
+# --- Worker feed: users awaiting credential verification ---
+# Returns shape-valid creds that haven't been login-tested yet. The worker
+# attempts mt5.login() and POSTs the result to /cloud/agent/verify-credentials.
+@api_router.get("/cloud/agent/verify-queue")
+async def cloud_agent_verify_queue(request: Request):
+    await _require_agent_async(request)
+    rows = await db.cloud_users.find(
+        {"mt5_verification_status": "pending",
+         "status": {"$in": ["trial", "active"]},
+         "mt5_password_enc": {"$exists": True, "$ne": None}},
+        {"_id": 0, "password_hash": 0}
+    ).to_list(500)
+    for r in rows:
+        enc = r.pop("mt5_password_enc", None)
+        r["mt5_password"] = _cloud_decrypt(enc) if enc else ""
+    return {"users": rows, "total": len(rows)}
+
+class VerifyCredentialsReq(BaseModel):
+    user_id: str
+    ok: bool
+    error: Optional[str] = ""        # broker error message if ok=False
+    balance: Optional[float] = None
+    equity: Optional[float] = None
+    currency: Optional[str] = ""
+
+@api_router.post("/cloud/agent/verify-credentials")
+async def cloud_agent_verify_credentials(req: VerifyCredentialsReq, request: Request):
+    await _require_agent_async(request)
+    now = datetime.now(timezone.utc).isoformat()
+    set_doc = {
+        "mt5_verification_status": "verified" if req.ok else "rejected",
+        "mt5_verification_error":  "" if req.ok else (req.error or "Login failed"),
+        "mt5_verified_at":         now,
+        "mt5_connected":           bool(req.ok),
+    }
+    if req.ok:
+        if req.balance is not None: set_doc["last_balance"] = float(req.balance)
+        if req.equity  is not None: set_doc["last_equity"]  = float(req.equity)
+        if req.currency:            set_doc["account_currency"] = req.currency
+    r = await db.cloud_users.update_one({"id": req.user_id}, {"$set": set_doc})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Unknown user_id")
+    return {"ok": True, "verification_status": set_doc["mt5_verification_status"]}
 
 class AgentTradeLog(BaseModel):
     user_id: str; ticket: int; symbol: str; side: str
