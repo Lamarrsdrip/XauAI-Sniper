@@ -7,6 +7,16 @@
 
 ## Completed (Feb 2026)
 - Base FastAPI + React + MongoDB setup
+- **XauAi Cloud MVP (May 2026)** — centralized trade-execution platform
+  - Public landing (/cloud) selling managed-trading subscription
+  - User signup/login with JWT + 7-day free trial auto-start
+  - "Connect MT5" wizard with Fernet-AES encrypted credential storage
+  - User dashboard: KPIs, recent trades, equity curve, pause/resume toggle
+  - Billing tab: $50 Starter / $100 Pro plans, payment instruction display, proof submission
+  - Admin Cloud tab: stats (MRR, users, pending), user list, payment approval queue, crypto wallet + bank account config
+  - Worker agent endpoints (token-protected) for future VPS executor integration: /cloud/agent/pending-users, /trade-close, /equity-snapshot
+  - CORS + cookie auth for both admin and cloud user namespaces
+  - Admin settings include crypto wallets array + bank accounts array (admin can add/remove)
 - MQL5 EA core architecture with multi-mode strategies
 - PIN License generation and validation (Offline ASE-XXXX-XXXX + Online)
 - Paystack NGN payment flow

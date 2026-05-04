@@ -14,6 +14,9 @@ import DownloadSection from "@/components/DownloadSection";
 import PurchaseSuccessPage from "@/components/PurchaseSuccessPage";
 import AdminPortal from "@/components/AdminPortal";
 import Footer from "@/components/Footer";
+import CloudLanding from "@/components/cloud/CloudLanding";
+import { CloudSignup, CloudLogin } from "@/components/cloud/CloudAuth";
+import CloudDashboard from "@/components/cloud/CloudDashboard";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -90,6 +93,10 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<MainDashboard />} />
+        <Route path="/cloud" element={<CloudLanding />} />
+        <Route path="/cloud/signup" element={<CloudSignup />} />
+        <Route path="/cloud/login" element={<CloudLogin />} />
+        <Route path="/cloud/dashboard" element={<CloudDashboard />} />
         <Route path="/purchase/success" element={<PurchaseSuccessPage />} />
         <Route path="/purchase/cancel" element={<PurchaseCancelWrap />} />
         <Route path="/admin" element={<AdminPortal api={API} />} />

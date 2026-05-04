@@ -52,6 +52,9 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
                 </div>
               </div>
             )}
+            <a href="/cloud" data-testid="nav-cloud-link" className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#C5A059] text-black text-[11px] font-semibold rounded-full tracking-wider hover:bg-[#D4AF37] transition-colors">
+              XAUAI CLOUD
+            </a>
             <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 rounded-full bg-emerald-500 pulse-dot" />
               <span className="text-[10px] font-mono text-gray-400 tracking-wider">LIVE</span>

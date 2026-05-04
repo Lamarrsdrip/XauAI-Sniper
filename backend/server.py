@@ -3,7 +3,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1728,7 +1728,375 @@ async def load_patterns_cloud(req: PatternData):
         logger.error(f"Pattern load error: {e}")
         return {"status": "ok", "patterns": [], "count": 0}
 
+# ===================================================================
+# XauAi CLOUD — Centralized trade-execution service (v1.0)
+# ===================================================================
+#  Users sign up, subscribe, connect their MT5 account. Bot signals
+#  generated on our master run through per-user executors that place
+#  proportionally-sized trades on each user's broker account.
+#
+#  This module adds:
+#   - Cloud user auth (separate namespace from admin)
+#   - MT5 credential storage (Fernet-encrypted at rest)
+#   - Subscription model + 7-day free trial
+#   - Payment requests (crypto / fiat / bank — admin approves)
+#   - User dashboard APIs
+#   - Admin cloud-management APIs
+# ===================================================================
+from cryptography.fernet import Fernet
+import base64 as _b64, hashlib as _hashlib
+
+# Derive a stable Fernet key from JWT_SECRET (reuses existing secret infra).
+# Each install gets a unique key because JWT_SECRET is unique per install.
+_FERNET_KEY = _b64.urlsafe_b64encode(_hashlib.sha256(JWT_SECRET.encode()).digest())
+_fernet = Fernet(_FERNET_KEY)
+
+def _cloud_encrypt(plaintext: str) -> str:
+    return _fernet.encrypt(plaintext.encode("utf-8")).decode("utf-8")
+
+def _cloud_decrypt(ciphertext: str) -> str:
+    try: return _fernet.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+    except Exception: return ""
+
+def _cloud_token(user_id: str, email: str) -> str:
+    return jwt.encode(
+        {"sub": user_id, "email": email, "type": "cloud",
+         "exp": datetime.now(timezone.utc) + timedelta(days=30)},
+        JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+async def get_cloud_user(request: Request) -> dict:
+    token = request.cookies.get("cloud_token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "): token = auth[7:]
+    if not token: raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "cloud": raise HTTPException(status_code=401, detail="Wrong token type")
+        u = await db.cloud_users.find_one({"id": payload.get("sub")}, {"_id": 0, "password_hash": 0})
+        if not u: raise HTTPException(status_code=401, detail="User not found")
+        return u
+    except jwt.ExpiredSignatureError: raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:     raise HTTPException(status_code=401, detail="Invalid token")
+
+# -------- Models --------
+class CloudSignupReq(BaseModel):
+    email: str; password: str; full_name: Optional[str] = ""; country: Optional[str] = ""
+
+class CloudLoginReq(BaseModel):
+    email: str; password: str
+
+class MT5ConnectReq(BaseModel):
+    broker_server: str
+    mt5_login: str
+    mt5_password: str
+    risk_tier: Optional[str] = "balanced"   # conservative | balanced | aggressive
+
+class PaymentSubmitReq(BaseModel):
+    plan: str                   # "starter" ($50) or "pro" ($100)
+    method: str                 # "crypto" | "bank" | "fiat"
+    amount_usd: float
+    reference: Optional[str] = ""   # tx hash / bank ref / paystack ref
+    notes: Optional[str] = ""
+
+class CloudPauseReq(BaseModel):
+    paused: bool
+
+# -------- Plans (admin-configurable later; hard-coded defaults for MVP) --------
+CLOUD_PLANS = {
+    "starter": {"name": "Starter", "price_usd": 50.0, "max_balance_usd": 5000,
+                "description": "For accounts up to $5,000. All features. Email support."},
+    "pro":     {"name": "Pro",     "price_usd": 100.0, "max_balance_usd": 999999,
+                "description": "For accounts $5,000+. Priority execution. Telegram alerts. Priority support."},
+}
+CLOUD_TRIAL_DAYS = 7
+
+# -------- Admin-configured Cloud settings (payment methods, etc.) --------
+async def _get_cloud_settings():
+    s = await db.cloud_settings.find_one({"key": "main"}, {"_id": 0})
+    if not s:
+        s = {"key": "main",
+             "crypto_wallets": [],       # [{network,address,asset}]
+             "bank_accounts": [],        # [{bank_name,account_name,account_number,swift,country}]
+             "fiat_paystack_enabled": False,
+             "telegram_alerts_enabled": False,
+             "master_ea_status": "online"}
+        await db.cloud_settings.insert_one(s)
+        s.pop("_id", None)
+    return s
+
+# -------- Public config endpoint (users need payment instructions) --------
+@api_router.get("/cloud/config")
+async def cloud_public_config():
+    s = await _get_cloud_settings()
+    return {"plans": CLOUD_PLANS, "trial_days": CLOUD_TRIAL_DAYS,
+            "crypto_wallets": s.get("crypto_wallets", []),
+            "bank_accounts":  s.get("bank_accounts", []),
+            "master_status":  s.get("master_ea_status", "online")}
+
+# -------- Signup / Login / Me --------
+@api_router.post("/cloud/auth/signup")
+async def cloud_signup(req: CloudSignupReq, response: Response):
+    req.email = req.email.lower().strip()
+    if await db.cloud_users.find_one({"email": req.email}):
+        raise HTTPException(status_code=400, detail="Email already registered")
+    if len(req.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be 8+ characters")
+    uid = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    trial_ends = now + timedelta(days=CLOUD_TRIAL_DAYS)
+    doc = {"id": uid, "email": req.email, "password_hash": hash_password(req.password),
+           "full_name": req.full_name or "", "country": req.country or "",
+           "created_at": now.isoformat(), "status": "trial",
+           "plan": "starter", "subscription_ends_at": trial_ends.isoformat(),
+           "trial_used": True, "paused": False,
+           "mt5_connected": False, "last_login_at": now.isoformat()}
+    await db.cloud_users.insert_one(doc.copy())
+    token = _cloud_token(uid, req.email)
+    response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="lax", max_age=60*60*24*30)
+    return {"ok": True, "token": token, "user": {k: v for k, v in doc.items() if k != "password_hash"}}
+
+@api_router.post("/cloud/auth/login")
+async def cloud_login(req: CloudLoginReq, response: Response):
+    req.email = req.email.lower().strip()
+    u = await db.cloud_users.find_one({"email": req.email})
+    if not u or not verify_password(req.password, u.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    await db.cloud_users.update_one({"id": u["id"]}, {"$set": {"last_login_at": datetime.now(timezone.utc).isoformat()}})
+    token = _cloud_token(u["id"], u["email"])
+    response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="lax", max_age=60*60*24*30)
+    u.pop("_id", None); u.pop("password_hash", None)
+    return {"ok": True, "token": token, "user": u}
+
+@api_router.post("/cloud/auth/logout")
+async def cloud_logout(response: Response):
+    response.delete_cookie("cloud_token")
+    return {"ok": True}
+
+@api_router.get("/cloud/auth/me")
+async def cloud_me(user: dict = Depends(get_cloud_user)):
+    # hide mt5 creds from self lookup too
+    u = dict(user)
+    u.pop("mt5_login_enc", None); u.pop("mt5_password_enc", None); u.pop("_id", None)
+    # compute subscription status live
+    ends = u.get("subscription_ends_at")
+    if ends:
+        try:
+            end_dt = datetime.fromisoformat(ends.replace("Z", "+00:00"))
+            u["days_remaining"] = max(0, (end_dt - datetime.now(timezone.utc)).days)
+            u["subscription_active"] = datetime.now(timezone.utc) < end_dt
+        except Exception:
+            u["days_remaining"] = 0; u["subscription_active"] = False
+    return u
+
+# -------- MT5 Connection --------
+@api_router.post("/cloud/mt5/connect")
+async def cloud_connect_mt5(req: MT5ConnectReq, user: dict = Depends(get_cloud_user)):
+    if req.risk_tier not in ("conservative", "balanced", "aggressive"):
+        raise HTTPException(status_code=400, detail="Invalid risk tier")
+    update = {
+        "broker_server":     req.broker_server.strip(),
+        "mt5_login":         req.mt5_login.strip(),  # plain login is fine (not secret)
+        "mt5_password_enc":  _cloud_encrypt(req.mt5_password),
+        "risk_tier":         req.risk_tier,
+        "mt5_connected":     True,
+        "mt5_connected_at":  datetime.now(timezone.utc).isoformat(),
+    }
+    await db.cloud_users.update_one({"id": user["id"]}, {"$set": update})
+    return {"ok": True, "message": "MT5 account linked. Worker agent will pick it up within 60 seconds."}
+
+@api_router.post("/cloud/mt5/disconnect")
+async def cloud_disconnect_mt5(user: dict = Depends(get_cloud_user)):
+    await db.cloud_users.update_one({"id": user["id"]},
+        {"$set": {"mt5_connected": False},
+         "$unset": {"mt5_password_enc": "", "mt5_login": "", "broker_server": ""}})
+    return {"ok": True, "message": "MT5 credentials removed. Trade execution paused."}
+
+@api_router.post("/cloud/pause")
+async def cloud_pause(req: CloudPauseReq, user: dict = Depends(get_cloud_user)):
+    await db.cloud_users.update_one({"id": user["id"]}, {"$set": {"paused": bool(req.paused)}})
+    return {"ok": True, "paused": bool(req.paused)}
+
+# -------- Dashboard Data --------
+@api_router.get("/cloud/dashboard")
+async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
+    # placeholder: real trade data comes from worker agents pushing to /cloud/trades/log
+    trades = await db.cloud_trades.find({"user_id": user["id"]}, {"_id": 0}).sort("closed_at", -1).limit(50).to_list(50)
+    totals = {"total_trades": len(trades),
+              "wins": sum(1 for t in trades if t.get("profit", 0) > 0),
+              "losses": sum(1 for t in trades if t.get("profit", 0) < 0),
+              "net_pnl": sum(t.get("profit", 0) for t in trades)}
+    # equity curve data (last 30 days aggregated daily)
+    equity = []
+    try:
+        since = datetime.now(timezone.utc) - timedelta(days=30)
+        cursor = db.cloud_equity_snapshots.find({"user_id": user["id"], "ts": {"$gte": since.isoformat()}}, {"_id": 0}).sort("ts", 1)
+        equity = await cursor.to_list(2000)
+    except Exception: pass
+    return {"trades": trades, "totals": totals, "equity": equity,
+            "mt5_connected": user.get("mt5_connected", False),
+            "paused": user.get("paused", False),
+            "plan": user.get("plan", "starter"),
+            "status": user.get("status", "trial")}
+
+# -------- Payments (user submits proof; admin approves) --------
+@api_router.post("/cloud/payments/submit")
+async def cloud_submit_payment(req: PaymentSubmitReq, user: dict = Depends(get_cloud_user)):
+    if req.plan not in CLOUD_PLANS:
+        raise HTTPException(status_code=400, detail="Unknown plan")
+    if req.method not in ("crypto", "bank", "fiat"):
+        raise HTTPException(status_code=400, detail="Invalid method")
+    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "email": user["email"],
+           "plan": req.plan, "method": req.method, "amount_usd": float(req.amount_usd),
+           "reference": req.reference or "", "notes": req.notes or "",
+           "status": "pending", "submitted_at": datetime.now(timezone.utc).isoformat(),
+           "approved_at": None, "approved_by": None}
+    await db.cloud_payments.insert_one(doc.copy())
+    doc.pop("_id", None)
+    return {"ok": True, "payment_id": doc["id"], "message": "Payment submitted. Admin will verify and activate your subscription within 24 hours."}
+
+@api_router.get("/cloud/payments/my")
+async def cloud_my_payments(user: dict = Depends(get_cloud_user)):
+    rows = await db.cloud_payments.find({"user_id": user["id"]}, {"_id": 0}).sort("submitted_at", -1).to_list(50)
+    return {"payments": rows}
+
+# -------- Admin endpoints --------
+@api_router.get("/admin/cloud/users", dependencies=[Depends(get_current_admin)])
+async def admin_cloud_users():
+    rows = await db.cloud_users.find(
+        {}, {"_id": 0, "password_hash": 0, "mt5_password_enc": 0}
+    ).sort("created_at", -1).limit(500).to_list(500)
+    return {"users": rows, "total": len(rows)}
+
+@api_router.get("/admin/cloud/stats", dependencies=[Depends(get_current_admin)])
+async def admin_cloud_stats():
+    total = await db.cloud_users.count_documents({})
+    trial = await db.cloud_users.count_documents({"status": "trial"})
+    active = await db.cloud_users.count_documents({"status": "active"})
+    connected = await db.cloud_users.count_documents({"mt5_connected": True})
+    pending_pays = await db.cloud_payments.count_documents({"status": "pending"})
+    # simple MRR estimate
+    active_users = await db.cloud_users.find({"status": "active"}, {"_id": 0, "plan": 1}).to_list(10000)
+    mrr = sum(CLOUD_PLANS.get(u.get("plan", "starter"), {}).get("price_usd", 0) for u in active_users)
+    return {"total_users": total, "trial_users": trial, "active_users": active,
+            "mt5_connected": connected, "pending_payments": pending_pays, "mrr_usd": mrr}
+
+@api_router.get("/admin/cloud/payments", dependencies=[Depends(get_current_admin)])
+async def admin_cloud_payments(status: Optional[str] = None):
+    q = {} if not status else {"status": status}
+    rows = await db.cloud_payments.find(q, {"_id": 0}).sort("submitted_at", -1).limit(500).to_list(500)
+    return {"payments": rows}
+
+@api_router.post("/admin/cloud/payments/{payment_id}/approve")
+async def admin_approve_payment(payment_id: str, admin: dict = Depends(get_current_admin)):
+    pay = await db.cloud_payments.find_one({"id": payment_id}, {"_id": 0})
+    if not pay: raise HTTPException(status_code=404, detail="Payment not found")
+    if pay["status"] != "pending": raise HTTPException(status_code=400, detail=f"Already {pay['status']}")
+    plan = pay["plan"]
+    # extend subscription 30 days from NOW (or from current end if still active)
+    user = await db.cloud_users.find_one({"id": pay["user_id"]}, {"_id": 0})
+    if not user: raise HTTPException(status_code=404, detail="User not found")
+    now = datetime.now(timezone.utc)
+    curr_end = now
+    try:
+        ends = user.get("subscription_ends_at")
+        if ends:
+            ce = datetime.fromisoformat(ends.replace("Z", "+00:00"))
+            if ce > now: curr_end = ce
+    except Exception: pass
+    new_end = curr_end + timedelta(days=30)
+    await db.cloud_users.update_one({"id": pay["user_id"]},
+        {"$set": {"status": "active", "plan": plan,
+                  "subscription_ends_at": new_end.isoformat()}})
+    await db.cloud_payments.update_one({"id": payment_id},
+        {"$set": {"status": "approved", "approved_at": now.isoformat(), "approved_by": admin.get("email", "admin")}})
+    return {"ok": True, "new_subscription_ends_at": new_end.isoformat()}
+
+@api_router.post("/admin/cloud/payments/{payment_id}/reject")
+async def admin_reject_payment(payment_id: str, admin: dict = Depends(get_current_admin)):
+    r = await db.cloud_payments.update_one({"id": payment_id, "status": "pending"},
+        {"$set": {"status": "rejected", "approved_at": datetime.now(timezone.utc).isoformat(),
+                  "approved_by": admin.get("email", "admin")}})
+    if not r.matched_count: raise HTTPException(status_code=404, detail="Not found or already processed")
+    return {"ok": True}
+
+@api_router.get("/admin/cloud/settings", dependencies=[Depends(get_current_admin)])
+async def admin_cloud_get_settings():
+    return await _get_cloud_settings()
+
+class CloudSettingsUpdate(BaseModel):
+    crypto_wallets: Optional[list] = None
+    bank_accounts: Optional[list] = None
+    fiat_paystack_enabled: Optional[bool] = None
+    telegram_alerts_enabled: Optional[bool] = None
+    master_ea_status: Optional[str] = None
+
+@api_router.put("/admin/cloud/settings", dependencies=[Depends(get_current_admin)])
+async def admin_cloud_update_settings(req: CloudSettingsUpdate):
+    upd = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not upd: return {"ok": True, "unchanged": True}
+    await db.cloud_settings.update_one({"key": "main"}, {"$set": upd}, upsert=True)
+    return {"ok": True}
+
+# -------- Worker Agent Endpoints (used by VPS workers, protected by secret) --------
+#  Workers poll /cloud/agent/pending-users to get credentials for users they should
+#  manage, and push trade results to /cloud/agent/trade-close. Authenticated with
+#  a shared secret (AGENT_TOKEN env var) — ops-only, never exposed to UI.
+AGENT_TOKEN = os.environ.get("CLOUD_AGENT_TOKEN", "")
+
+def _require_agent(request: Request):
+    if not AGENT_TOKEN:
+        raise HTTPException(status_code=503, detail="Agent endpoint not configured yet")
+    hdr = request.headers.get("X-Agent-Token", "")
+    if hdr != AGENT_TOKEN:
+        raise HTTPException(status_code=403, detail="Bad agent token")
+
+@api_router.get("/cloud/agent/pending-users")
+async def cloud_agent_users(request: Request):
+    _require_agent(request)
+    rows = await db.cloud_users.find(
+        {"mt5_connected": True, "paused": False, "status": {"$in": ["trial", "active"]}},
+        {"_id": 0, "password_hash": 0}
+    ).to_list(2000)
+    # decrypt passwords in-memory ONLY for the worker response (TLS-only transport)
+    for r in rows:
+        enc = r.pop("mt5_password_enc", None)
+        r["mt5_password"] = _cloud_decrypt(enc) if enc else ""
+    return {"users": rows, "total": len(rows)}
+
+class AgentTradeLog(BaseModel):
+    user_id: str; ticket: int; symbol: str; side: str
+    lots: float; entry: float; exit_price: float; profit: float
+    opened_at: str; closed_at: str; reason: Optional[str] = ""
+
+@api_router.post("/cloud/agent/trade-close")
+async def cloud_agent_trade_close(req: AgentTradeLog, request: Request):
+    _require_agent(request)
+    doc = req.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    await db.cloud_trades.insert_one(doc.copy())
+    return {"ok": True}
+
+class AgentEquitySnapshot(BaseModel):
+    user_id: str; balance: float; equity: float; margin: float; free_margin: float
+
+@api_router.post("/cloud/agent/equity-snapshot")
+async def cloud_agent_equity(req: AgentEquitySnapshot, request: Request):
+    _require_agent(request)
+    doc = req.model_dump()
+    doc["ts"] = datetime.now(timezone.utc).isoformat()
+    await db.cloud_equity_snapshots.insert_one(doc.copy())
+    await db.cloud_users.update_one({"id": req.user_id},
+        {"$set": {"last_equity": req.equity, "last_balance": req.balance,
+                  "last_equity_ts": doc["ts"]}})
+    return {"ok": True}
+
+# ===================================================================
+# END XauAi CLOUD
+# ===================================================================
+
 app.include_router(api_router)
+
 
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','), allow_methods=["*"], allow_headers=["*"])
 

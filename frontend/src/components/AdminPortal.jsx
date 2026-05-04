@@ -57,6 +57,7 @@ export default function AdminPortal({ api }) {
           {[
             { id: "dashboard", label: "DASHBOARD", icon: House },
             { id: "pins", label: "LICENSES", icon: Key },
+            { id: "cloud", label: "XAUAI CLOUD", icon: ChartBar },
             { id: "settings", label: "SETTINGS", icon: GearSix },
             { id: "configurator", label: "EA CONFIG", icon: ChartBar },
             { id: "transactions", label: "PAYMENTS", icon: CurrencyNgn },
@@ -73,6 +74,7 @@ export default function AdminPortal({ api }) {
       <div className="max-w-7xl mx-auto px-6 md:px-8 py-8">
         {tab === "dashboard" && <DashboardTab api={api} token={token} />}
         {tab === "pins" && <PinsTab api={api} token={token} />}
+        {tab === "cloud" && <CloudAdminTab api={api} token={token} />}
         {tab === "settings" && <SettingsTab api={api} token={token} />}
         {tab === "configurator" && <ConfigTab api={api} token={token} />}
         {tab === "transactions" && <TransactionsTab api={api} token={token} />}
@@ -675,6 +677,178 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
           <FloppyDisk size={16} weight="bold" /> {saving ? "UPDATING..." : "UPDATE ACCOUNT"}
         </button>
       </div>
+    </div>
+  );
+}
+
+
+// --- CLOUD ADMIN TAB ---
+function CloudAdminTab({ api, token }) {
+  const [stats, setStats] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [settings, setSettings] = useState(null);
+  const [sub, setSub] = useState("stats"); // stats | users | payments | settings
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const headers = { Authorization: `Bearer ${token}` };
+
+  const refresh = useCallback(async () => {
+    try {
+      const [s, u, p, cfg] = await Promise.all([
+        ax.get(`${api}/admin/cloud/stats`, { headers }),
+        ax.get(`${api}/admin/cloud/users`, { headers }),
+        ax.get(`${api}/admin/cloud/payments`, { headers }),
+        ax.get(`${api}/admin/cloud/settings`, { headers }),
+      ]);
+      setStats(s.data); setUsers(u.data.users || []); setPayments(p.data.payments || []); setSettings(cfg.data);
+    } catch (e) { setMsg(e.response?.data?.detail || "Failed to load"); }
+  }, [api, token]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const approve = async (id) => {
+    setBusy(true); setMsg("");
+    try { await ax.post(`${api}/admin/cloud/payments/${id}/approve`, {}, { headers }); setMsg("Approved."); refresh(); }
+    catch (e) { setMsg(e.response?.data?.detail || "Approve failed"); }
+    finally { setBusy(false); }
+  };
+  const reject = async (id) => {
+    if (!window.confirm("Reject this payment?")) return;
+    setBusy(true);
+    try { await ax.post(`${api}/admin/cloud/payments/${id}/reject`, {}, { headers }); refresh(); }
+    catch (e) { setMsg(e.response?.data?.detail || "Reject failed"); }
+    finally { setBusy(false); }
+  };
+
+  const saveSettings = async () => {
+    setBusy(true); setMsg("");
+    try { await ax.put(`${api}/admin/cloud/settings`, settings, { headers }); setMsg("Saved."); }
+    catch (e) { setMsg(e.response?.data?.detail || "Save failed"); }
+    finally { setBusy(false); }
+  };
+
+  const addWallet = () => setSettings({...settings, crypto_wallets: [...(settings.crypto_wallets||[]), {asset:"",network:"",address:""}]});
+  const updWallet = (i,k,v) => { const a = [...settings.crypto_wallets]; a[i] = {...a[i], [k]:v}; setSettings({...settings, crypto_wallets: a}); };
+  const delWallet = (i) => { const a = [...settings.crypto_wallets]; a.splice(i,1); setSettings({...settings, crypto_wallets: a}); };
+  const addBank = () => setSettings({...settings, bank_accounts: [...(settings.bank_accounts||[]), {bank_name:"",account_name:"",account_number:"",swift:"",country:""}]});
+  const updBank = (i,k,v) => { const a = [...settings.bank_accounts]; a[i] = {...a[i], [k]:v}; setSettings({...settings, bank_accounts: a}); };
+  const delBank = (i) => { const a = [...settings.bank_accounts]; a.splice(i,1); setSettings({...settings, bank_accounts: a}); };
+
+  return (
+    <div className="space-y-6" data-testid="cloud-admin-tab">
+      <div className="flex gap-0 border-b border-border">
+        {[{id:"stats",label:"OVERVIEW"},{id:"users",label:"USERS"},{id:"payments",label:"PAYMENTS"},{id:"settings",label:"SETTINGS"}].map(t=>(
+          <button key={t.id} onClick={()=>setSub(t.id)} data-testid={`cloud-sub-${t.id}`}
+                  className={`px-5 py-3 text-xs font-bold tracking-[0.1em] border-b-2 transition-colors ${sub===t.id?"border-primary text-foreground":"border-transparent text-muted-foreground hover:text-foreground"}`}>
+            {t.label} {t.id==="payments" && stats?.pending_payments>0 ? <span className="ml-1 px-1.5 py-0.5 bg-primary text-primary-foreground rounded-full text-[10px]">{stats.pending_payments}</span> : null}
+          </button>
+        ))}
+      </div>
+
+      {msg && <div className="px-4 py-2 bg-primary/10 border border-primary/30 text-primary text-sm rounded">{msg}</div>}
+
+      {sub === "stats" && stats && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4" data-testid="cloud-stats-grid">
+          <StatCard label="TOTAL USERS" value={stats.total_users} testId="cloud-stat-total" />
+          <StatCard label="TRIAL" value={stats.trial_users} color="primary" testId="cloud-stat-trial" />
+          <StatCard label="ACTIVE (PAID)" value={stats.active_users} color="green" testId="cloud-stat-active" />
+          <StatCard label="MT5 CONNECTED" value={stats.mt5_connected} testId="cloud-stat-connected" />
+          <StatCard label="MRR" value={`$${stats.mrr_usd.toLocaleString()}`} color="green" testId="cloud-stat-mrr" />
+          <StatCard label="PENDING PAYMENTS" value={stats.pending_payments} color={stats.pending_payments>0?"primary":undefined} testId="cloud-stat-pending" />
+        </div>
+      )}
+
+      {sub === "users" && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm" data-testid="cloud-users-table">
+            <thead><tr className="text-[10px] font-bold tracking-widest text-muted-foreground border-b border-border">
+              <th className="text-left py-2">EMAIL</th><th className="text-left py-2">STATUS</th>
+              <th className="text-left py-2">PLAN</th><th className="text-right py-2">MT5</th>
+              <th className="text-right py-2">BALANCE</th><th className="text-right py-2">ENDS</th>
+            </tr></thead>
+            <tbody>
+              {users.map((u,i)=>(
+                <tr key={u.id} className="border-b border-border/50" data-testid={`cloud-user-${i}`}>
+                  <td className="py-2"><div className="font-semibold">{u.email}</div><div className="text-[10px] text-muted-foreground">{u.full_name}</div></td>
+                  <td className={`py-2 font-mono text-xs ${u.status==="active"?"text-[hsl(142,71%,45%)]":"text-primary"}`}>{u.status?.toUpperCase()}</td>
+                  <td className="py-2 capitalize">{u.plan}</td>
+                  <td className="py-2 text-right">{u.mt5_connected ? <Check size={14} className="inline text-[hsl(142,71%,45%)]" /> : "—"}</td>
+                  <td className="py-2 text-right font-mono">{u.last_balance ? `$${u.last_balance.toFixed(0)}` : "—"}</td>
+                  <td className="py-2 text-right text-xs">{u.subscription_ends_at?.slice(0,10) || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {users.length === 0 && <div className="text-center text-muted-foreground py-8">No cloud users yet.</div>}
+        </div>
+      )}
+
+      {sub === "payments" && (
+        <div className="space-y-2" data-testid="cloud-payments-list">
+          {payments.length === 0 ? <div className="text-center text-muted-foreground py-8">No payments submitted.</div> :
+            payments.map((p,i)=>(
+              <div key={p.id} className="border border-border p-4 flex items-center justify-between gap-4 flex-wrap" data-testid={`cloud-payment-${i}`}>
+                <div>
+                  <div className="font-bold">{p.email}</div>
+                  <div className="text-xs text-muted-foreground mt-1">Plan: <span className="capitalize">{p.plan}</span> · ${p.amount_usd} · {p.method}</div>
+                  <div className="text-[11px] text-muted-foreground font-mono mt-1">Ref: {p.reference || "—"}</div>
+                  {p.notes && <div className="text-[11px] text-muted-foreground mt-1">Notes: {p.notes}</div>}
+                  <div className="text-[10px] text-muted-foreground mt-1">Submitted: {p.submitted_at?.slice(0,16).replace("T"," ")}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-1 text-[10px] font-bold rounded ${p.status==="approved"?"bg-[hsl(142,71%,45%)]/20 text-[hsl(142,71%,45%)]":p.status==="rejected"?"bg-[hsl(348,83%,47%)]/20 text-[hsl(348,83%,47%)]":"bg-primary/20 text-primary"}`}>{p.status?.toUpperCase()}</span>
+                  {p.status === "pending" && <>
+                    <button onClick={()=>approve(p.id)} disabled={busy} data-testid={`approve-${p.id}`} className="px-3 py-1.5 bg-[hsl(142,71%,45%)] text-black text-xs font-bold">APPROVE</button>
+                    <button onClick={()=>reject(p.id)} disabled={busy} data-testid={`reject-${p.id}`} className="px-3 py-1.5 bg-[hsl(348,83%,47%)] text-white text-xs font-bold">REJECT</button>
+                  </>}
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+
+      {sub === "settings" && settings && (
+        <div className="space-y-6" data-testid="cloud-settings-form">
+          <div>
+            <h3 className="text-sm font-bold tracking-widest mb-3">CRYPTO WALLETS</h3>
+            <div className="space-y-2">
+              {(settings.crypto_wallets || []).map((w,i)=>(
+                <div key={i} className="grid grid-cols-1 md:grid-cols-4 gap-2 items-center" data-testid={`crypto-wallet-${i}`}>
+                  <input placeholder="Asset (USDT)" value={w.asset} onChange={e=>updWallet(i,"asset",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
+                  <input placeholder="Network (TRC20)" value={w.network} onChange={e=>updWallet(i,"network",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
+                  <input placeholder="Address" value={w.address} onChange={e=>updWallet(i,"address",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm font-mono col-span-1 md:col-span-2" />
+                  <button onClick={()=>delWallet(i)} className="text-[hsl(348,83%,47%)] text-xs md:col-start-4">Remove</button>
+                </div>
+              ))}
+              <button onClick={addWallet} data-testid="add-wallet-btn" className="text-xs text-primary">+ Add crypto wallet</button>
+            </div>
+          </div>
+          <div>
+            <h3 className="text-sm font-bold tracking-widest mb-3">BANK ACCOUNTS</h3>
+            <div className="space-y-2">
+              {(settings.bank_accounts || []).map((b,i)=>(
+                <div key={i} className="grid grid-cols-1 md:grid-cols-5 gap-2 items-center" data-testid={`bank-acc-${i}`}>
+                  <input placeholder="Bank name" value={b.bank_name} onChange={e=>updBank(i,"bank_name",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
+                  <input placeholder="Account name" value={b.account_name} onChange={e=>updBank(i,"account_name",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
+                  <input placeholder="Account number" value={b.account_number} onChange={e=>updBank(i,"account_number",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
+                  <input placeholder="SWIFT (optional)" value={b.swift} onChange={e=>updBank(i,"swift",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
+                  <div className="flex gap-2">
+                    <input placeholder="Country" value={b.country} onChange={e=>updBank(i,"country",e.target.value)} className="flex-1 bg-background border border-border px-3 py-2 text-sm" />
+                    <button onClick={()=>delBank(i)} className="text-[hsl(348,83%,47%)] text-xs">X</button>
+                  </div>
+                </div>
+              ))}
+              <button onClick={addBank} data-testid="add-bank-btn" className="text-xs text-primary">+ Add bank account</button>
+            </div>
+          </div>
+          <button onClick={saveSettings} disabled={busy} data-testid="save-cloud-settings"
+                  className="px-6 py-3 bg-primary text-primary-foreground font-bold text-sm flex items-center gap-2 hover:-translate-y-[1px] transition-transform shadow-[2px_2px_0px_hsl(0,0%,4%)]">
+            <FloppyDisk size={16} weight="bold" /> {busy ? "SAVING..." : "SAVE CLOUD SETTINGS"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
