@@ -1,14 +1,15 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.9.6 — Self-Diagnostic       |
+//|                                     v4.9.7 — Smart Guards          |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.96"
-#property description "XAUUSD AI Sniper v4.9.6 — Self-Diagnostic (startup banner + live heartbeat)"
-#property description "Prints exactly why bot is idle every 60s. Plus all v4.9.5 Clean Exits logic."
-#property description "Catches: symbol mismatch, WebRequest not whitelisted, Algo Trading off, spread too wide, buffers not ready"
+#property version   "4.97"
+#property description "XAUUSD AI Sniper v4.9.7 — Smart Guards (loose thresholds + fast-reversal circuit breakers)"
+#property description "Basket arms at 2% bal (was 1%). Allows 50% giveback (was 40%). Tier1@1.5%, T2@3.5%, T3@6%."
+#property description "NEW: Fast-reversal guard closes ALL on >35% drop in 45s. Hard cap: never give back >1.5% of bal."
+#property description "NEW: Pyramid blocked while basket armed (no fresh stacks before flush)."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -193,16 +194,22 @@ input double InpRatchetArmPct       = 5.0;    // v4.9.2 — $1k→$100, $10k→$
 input double InpRatchetLockPct      = 50.0;   // Lock this % of current profit into SL (every tick, never pulls back)
 input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm amount ($100)
 
-input group "=== BASKET PROTECT (v4.9.4 — protect TOTAL floating profit across ALL open trades) ==="
+input group "=== BASKET PROTECT (v4.9.7 — smarter thresholds + fast-reversal circuit breakers) ==="
 input bool   InpBasketMode          = true;   // Master toggle: SL logic works on AGGREGATE PnL, not per-trade
-input double InpBasketArmPct        = 1.0;    // Arm basket-lock when total floating ≥ X% of balance ($53k×1% = $530)
-input double InpBasketArmFloor      = 100.0;  // Absolute floor: don't arm before $100 floating (micro-accts)
-input double InpBasketLockMinPct    = 60.0;   // Once armed, lock AT LEAST this % of peak as floor (60% = 40% max giveback)
-input double InpBasketRatchetT1Pct  = 0.5;    // Tier 1 giveback floor: at peak≥0.5% bal, floor=50% of peak
-input double InpBasketRatchetT2Pct  = 2.5;    // Tier 2: at peak≥2.5% bal, floor=60% of peak (ratchets UP)
-input double InpBasketRatchetT3Pct  = 5.0;    // Tier 3: at peak≥5% bal,   floor=70% of peak (very protective)
-input double InpBasketBEPct         = 0.3;    // Once basket reached +0.3% balance, never let it go negative again
+input double InpBasketArmPct        = 2.0;    // v4.9.7 — was 1.0, now 2.0 ($53k×2% = $1,060) so trends have room to develop
+input double InpBasketArmFloor      = 200.0;  // v4.9.7 — was 100, now 200 (don't arm too early on tiny floats)
+input double InpBasketLockMinPct    = 50.0;   // v4.9.7 — was 60, now 50 (allow 50% giveback before close = more breathing room)
+input double InpBasketRatchetT1Pct  = 1.5;    // v4.9.7 — was 0.5, now 1.5 (tier-1 fires later, let winners run)
+input double InpBasketRatchetT2Pct  = 3.5;    // v4.9.7 — was 2.5, now 3.5 (tier-2 fires later)
+input double InpBasketRatchetT3Pct  = 6.0;    // v4.9.7 — was 5.0, now 6.0 (tier-3 fires on REAL big peaks)
+input double InpBasketBEPct         = 0.5;    // v4.9.7 — was 0.3, now 0.5 (BE lock at +0.5% bal — slightly later)
 input bool   InpBasketDisablePerTrade = true; // When basket active, disable per-trade peak-lock & ratchet (no conflict)
+// === v4.9.7 Smart Guards ===
+input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on sudden reversal even if floor not breached
+input double InpBasketFastDropPct       = 35.0; // If basket gives back ≥X% of peak within FastWindowSec → close immediately
+input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
+input double InpBasketHardGivebackPct   = 1.5;  // HARD CAP: never give back more than X% of balance from peak ($53k×1.5%=$795)
+input bool   InpBasketBlockPyramidWhenArmed = true; // Block NEW pyramid entries while basket is armed (don't stack into a flush)
 
 input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
 input bool   InpAdaptiveRunner      = false;  // v4.9.5 — DISABLED (clean exits use tiered model)
@@ -427,6 +434,12 @@ double     g_basketFloorUSD  = 0;     // Dynamic floor — if total falls below 
 bool       g_basketArmed     = false; // True once peak has crossed arm threshold
 bool       g_basketBEHit     = false; // True once basket reached +BEPct% (then never let it go negative)
 datetime   g_basketLastLog   = 0;     // Throttle "basket state" prints
+// v4.9.7 — Fast-reversal circuit breaker rolling buffer
+//   Stores the last N (timestamp, basketPnL) pairs so we can detect a sudden drop
+//   even if the floor hasn't been formally breached yet.
+double     g_basketSnapPnL[];         // rolling buffer of basket PnL samples
+datetime   g_basketSnapTime[];        // matching timestamps
+int        g_basketSnapMax = 60;      // store up to 60 samples (~1 sample / sec when ticks come fast)
 
 // v4.9.6 — DIAGNOSTIC HEARTBEAT state
 string     g_lastSkipReason  = "";    // Updated every time OnTick returns silently
@@ -1093,7 +1106,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.9.6 (SELF-DIAGNOSTIC) READY ===");
+   Print("=== XAUAI SNIPER v4.9.7 (SMART GUARDS) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1210,7 +1223,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.9.6 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.9.7 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -1812,6 +1825,20 @@ void CheckPyramidOpportunity()
    if(IsInStreakPause()) return;
    if(drawdownActive) return;             // don't stack in drawdown recovery
    if(dailyLimitHit || weeklyLossHit) return;
+
+   // v4.9.7 — Don't stack new risk into a basket that's already armed and protecting profit.
+   // Adding fresh trades right before a basket-flush just creates micro-loss tickets
+   // (e.g. fresh trade closes at -0.25 pips when basket triggers).
+   if(InpBasketMode && InpBasketBlockPyramidWhenArmed && g_basketArmed)
+   {
+      static datetime lastBlockLog = 0;
+      if(TimeCurrent() - lastBlockLog > 120)
+      {
+         Print("PYRAMID BLOCKED: basket is ARMED — no new stacks until current cycle resolves.");
+         lastBlockLog = TimeCurrent();
+      }
+      return;
+   }
 
    // Spread guard
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
@@ -2757,6 +2784,7 @@ bool ManageBasket()
          g_basketFloorUSD = 0;
          g_basketArmed    = false;
          g_basketBEHit    = false;
+         ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
       }
       return false;
    }
@@ -2815,6 +2843,91 @@ bool ManageBasket()
       g_basketLastLog = TimeCurrent();
    }
 
+   // ============ v4.9.7 SMART GUARDS (run BEFORE floor trigger) ============
+   //
+   //   Guard 1 — FAST REVERSAL CIRCUIT BREAKER
+   //   Push current PnL into rolling buffer. If basket gives back ≥ FastDropPct%
+   //   of peak within FastWindowSec → close immediately. This catches news spikes
+   //   and 1-minute reversals where price collapses faster than the floor logic
+   //   can react. Without this, a longer arm threshold means more exposure.
+   //
+   //   Guard 2 — HARD $ GIVEBACK CAP
+   //   Regardless of percentage rules, never give back more than HardGivebackPct%
+   //   of balance from peak. This is the absolute backstop for tail-risk events.
+   //
+   if(g_basketArmed)
+   {
+      // append snapshot
+      int sz = ArraySize(g_basketSnapPnL);
+      ArrayResize(g_basketSnapPnL, sz + 1);
+      ArrayResize(g_basketSnapTime, sz + 1);
+      g_basketSnapPnL[sz]  = totalPnL;
+      g_basketSnapTime[sz] = TimeCurrent();
+      // trim any samples older than the window (and cap the array)
+      datetime cutoff = TimeCurrent() - InpBasketFastWindowSec;
+      int firstKeep = 0;
+      while(firstKeep < ArraySize(g_basketSnapTime) && g_basketSnapTime[firstKeep] < cutoff) firstKeep++;
+      if(firstKeep > 0)
+      {
+         int newN = ArraySize(g_basketSnapTime) - firstKeep;
+         double tmpP[]; datetime tmpT[];
+         ArrayResize(tmpP, newN); ArrayResize(tmpT, newN);
+         for(int k = 0; k < newN; k++) { tmpP[k] = g_basketSnapPnL[firstKeep + k]; tmpT[k] = g_basketSnapTime[firstKeep + k]; }
+         ArrayResize(g_basketSnapPnL, newN); ArrayResize(g_basketSnapTime, newN);
+         for(int k = 0; k < newN; k++) { g_basketSnapPnL[k] = tmpP[k]; g_basketSnapTime[k] = tmpT[k]; }
+      }
+      // also cap absolute size
+      if(ArraySize(g_basketSnapPnL) > g_basketSnapMax)
+      {
+         int dropN = ArraySize(g_basketSnapPnL) - g_basketSnapMax;
+         double tmpP[]; datetime tmpT[];
+         ArrayResize(tmpP, g_basketSnapMax); ArrayResize(tmpT, g_basketSnapMax);
+         for(int k = 0; k < g_basketSnapMax; k++) { tmpP[k] = g_basketSnapPnL[dropN + k]; tmpT[k] = g_basketSnapTime[dropN + k]; }
+         ArrayResize(g_basketSnapPnL, g_basketSnapMax); ArrayResize(g_basketSnapTime, g_basketSnapMax);
+         for(int k = 0; k < g_basketSnapMax; k++) { g_basketSnapPnL[k] = tmpP[k]; g_basketSnapTime[k] = tmpT[k]; }
+      }
+
+      // GUARD 1: fast reversal — find max PnL in window, see how far we've fallen
+      if(InpBasketFastReversalGuard && ArraySize(g_basketSnapPnL) >= 2 && g_basketPeakUSD > 0)
+      {
+         double winMax = totalPnL;
+         for(int k = 0; k < ArraySize(g_basketSnapPnL); k++)
+            if(g_basketSnapPnL[k] > winMax) winMax = g_basketSnapPnL[k];
+         double dropFromWinMax = winMax - totalPnL;
+         double dropPctOfPeak  = (g_basketPeakUSD > 0) ? (dropFromWinMax / g_basketPeakUSD) * 100.0 : 0.0;
+         // Only fire if we've actually given back meaningful $ AND % of peak
+         if(dropFromWinMax > MathMax(50.0, bal * 0.001) && dropPctOfPeak >= InpBasketFastDropPct)
+         {
+            PrintFormat(">>> BASKET FAST-REVERSAL │ dropped $%.2f (%.1f%% of peak $%.2f) in %ds → CLOSE ALL",
+                        dropFromWinMax, dropPctOfPeak, g_basketPeakUSD, InpBasketFastWindowSec);
+            lastExitReason = StringFormat("BASKET FAST-REV │ peak $%.2f → $%.2f in %ds", g_basketPeakUSD, totalPnL, InpBasketFastWindowSec);
+            CloseAll();
+            g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
+            g_basketArmed    = false; g_basketBEHit = false;
+            ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+            return true;
+         }
+      }
+
+      // GUARD 2: hard $ giveback cap (never give back > X% of balance from peak)
+      if(InpBasketHardGivebackPct > 0)
+      {
+         double maxGivebackUSD = bal * InpBasketHardGivebackPct / 100.0;
+         double currGivebackUSD = g_basketPeakUSD - totalPnL;
+         if(currGivebackUSD >= maxGivebackUSD)
+         {
+            PrintFormat(">>> BASKET HARD-CAP │ giveback $%.2f ≥ cap $%.2f (%.1f%% of bal) → CLOSE ALL",
+                        currGivebackUSD, maxGivebackUSD, InpBasketHardGivebackPct);
+            lastExitReason = StringFormat("BASKET HARD-CAP │ peak $%.2f → $%.2f (giveback $%.2f)", g_basketPeakUSD, totalPnL, currGivebackUSD);
+            CloseAll();
+            g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
+            g_basketArmed    = false; g_basketBEHit = false;
+            ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+            return true;
+         }
+      }
+   }
+
    // TRIGGER: if armed and current falls below floor → close ALL
    if(g_basketArmed && g_basketFloorUSD > 0 && totalPnL < g_basketFloorUSD)
    {
@@ -2828,6 +2941,7 @@ bool ManageBasket()
       g_basketFloorUSD = 0;
       g_basketArmed    = false;
       g_basketBEHit    = false;
+      ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
       return true;
    }
 
@@ -4431,7 +4545,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.9.6 | SELF-DIAGNOSTIC | ";
+   d += " XAUAI SNIPER v4.9.7 | SMART GUARDS | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
