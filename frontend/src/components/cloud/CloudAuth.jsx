@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Cloud, Loader2 } from "lucide-react";
+import InstallAppPrompt from "./InstallAppPrompt";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -17,6 +18,7 @@ cloudAxios.interceptors.request.use((cfg) => {
 function AuthShell({ title, subtitle, children }) {
   return (
     <div className="min-h-screen bg-[#050505] text-white flex flex-col">
+      <InstallAppPrompt />
       <nav className="border-b border-white/5 backdrop-blur-xl bg-[#050505]/80">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link to="/cloud" className="flex items-center gap-2" data-testid="auth-logo-link">

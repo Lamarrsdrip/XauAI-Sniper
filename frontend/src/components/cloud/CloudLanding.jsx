@@ -1,10 +1,12 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { Cloud, Zap, Shield, Smartphone, TrendingUp, Check, ArrowRight } from "lucide-react";
+import InstallAppPrompt from "./InstallAppPrompt";
 
 export default function CloudLanding() {
   return (
     <div className="min-h-screen bg-[#050505] text-white">
+      <InstallAppPrompt />
       {/* Nav */}
       <nav className="sticky top-0 z-40 backdrop-blur-xl bg-[#050505]/80 border-b border-white/5">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-3">
