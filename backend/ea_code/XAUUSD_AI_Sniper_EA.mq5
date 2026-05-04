@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v4.9.4 — Basket Protect       |
+//|                                     v4.9.5 — Clean Exits           |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "4.94"
-#property description "XAUUSD AI Sniper v4.9.4 — Basket Protect (aggregate floating-PnL lock across ALL open trades)"
-#property description "Adds basket peak/floor that closes ALL positions when total retraces past dynamic floor"
-#property description "Replaces per-trade peak-lock & ratchet (auto-disabled). Tier-up at 0.5%/2.5%/5% balance."
+#property version   "4.95"
+#property description "XAUUSD AI Sniper v4.9.5 — Clean Exits (ONE exit authority per phase)"
+#property description "Tiered lifecycle: BE@+1R → Chandelier@+2R → Partial@+3R → Tight@+4R"
+#property description "Disabled 6 competing legacy systems. Wider SL (2.5xATR) + TP (4R). Momentum-flip cut."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -59,8 +59,8 @@ input double InpSRProximityATR   = 0.2;    // v4.8.1 — Block if within X × AT
 input bool   InpContextGateLog   = true;   // Print PASS lines too so you can see the gate is working
 input int    InpRSIPeriod      = 14;       // RSI Period
 input int    InpATRPeriod      = 14;       // ATR Period
-input double InpSLMultiplier   = 2.0;      // SL = ATR x this
-input double InpTPMultiplier   = 2.0;      // TP = SL x this
+input double InpSLMultiplier   = 2.5;      // v4.9.5 — wider SL (was 2.0) to survive M5 noise
+input double InpTPMultiplier   = 4.0;      // v4.9.5 — wider TP (was 2.0) so runners can reach +4R
 
 input group "=== SMART FEATURES ==="
 input bool   InpUseAI          = true;     // Use Claude + GPT-5.2
@@ -142,7 +142,7 @@ input bool   InpPartialSkipHighConf = true;// Skip partial on 90%+ trades (let t
 input int    InpPartialMinMinutes  = 3;    // Don't fire partial within first N minutes (let trade develop)
 
 input group "=== PROFIT LADDER (v4.6.2 — auto-scales to YOUR account size) ==="
-input bool   InpProfitLadder       = true;  // Auto-push SL into profit as trade grows
+input bool   InpProfitLadder       = false; // v4.9.5 — DISABLED (clean exits use tiered model)
 input bool   InpLadderUsePct       = true;  // TRUE = tiers are % of balance (recommended). FALSE = absolute $
 input double InpLadderTier1ProfPct = 0.5;   // Tier 1 trigger: profit ≥ this % of balance
 input double InpLadderTier1LockPct = 0.2;   //   lock SL at this % of balance
@@ -179,7 +179,7 @@ input double InpLadderTier7Profit  = 12000; // v4.6.6
 input double InpLadderTier7Lock    = 8000;
 
 input group "=== PEAK-LOCK BACKSTOP (v4.6.7 — bank a slice of EVERY good move) ==="
-input bool   InpPeakLockBackstop = true;   // Universal: once peak profit ≥ arm, force-lock a slice
+input bool   InpPeakLockBackstop = false;  // v4.9.5 — DISABLED (clean exits use tiered model)
 input double InpPeakLockArmPct   = 1.5;    // v4.9.0 — $1k→$20, $10k→$150, $100k→$1500 (floor $20). Primary early protection.
 input double InpPeakLockMinPct   = 40.0;   // v4.8.3 — Was 25%, now 40% base. Dynamic scaling adds more for bigger peaks.
 
@@ -188,7 +188,7 @@ enum ENUM_MGMT_MODE { MGMT_SIMPLE, MGMT_BALANCED, MGMT_AGGRESSIVE };
 input ENUM_MGMT_MODE InpMgmtMode = MGMT_BALANCED;  // BALANCED: trailing active but patient. SIMPLE: only Peak-Lock. AGGRESSIVE: tighter.
 
 input group "=== PROFIT RATCHET (v4.9.1 — simple fast SL = 50% of current profit) ==="
-input bool   InpProfitRatchet       = true;   // Replaces AR_BE + AR Stage1/2 with simple "SL = 50% current profit"
+input bool   InpProfitRatchet       = false;  // v4.9.5 — DISABLED (clean exits use tiered model)
 input double InpRatchetArmPct       = 5.0;    // v4.9.2 — $1k→$100, $10k→$500, $100k→$5000, $1M→$50k
 input double InpRatchetLockPct      = 50.0;   // Lock this % of current profit into SL (every tick, never pulls back)
 input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm amount ($100)
@@ -205,7 +205,7 @@ input double InpBasketBEPct         = 0.3;    // Once basket reached +0.3% balan
 input bool   InpBasketDisablePerTrade = true; // When basket active, disable per-trade peak-lock & ratchet (no conflict)
 
 input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
-input bool   InpAdaptiveRunner      = true;   // Master toggle: replaces old time-delayed trailing
+input bool   InpAdaptiveRunner      = false;  // v4.9.5 — DISABLED (clean exits use tiered model)
 input double InpARStage1ActivateR   = 0.8;    // v4.8.4 — Was 0.3, now 0.8 (let winners develop before tight trail)
 input double InpARStage1MinPct      = 2.5;    // v4.9.0 — $1k→$30, $10k→$250, $100k→$2500 (floor $30)
 input double InpARStage1TrailATR    = 2.5;    // v4.8.9 — Was 2.0, now 2.5 (more patient, ride profit growth)
@@ -218,8 +218,22 @@ input double InpARMinTrailPoints    = 80;     // Anti-noise: SL never closer tha
 input double InpARMomentumBoostMulti = 0.7;   // In strong momentum, tighten trail by this multi (0.7 = 30% tighter = faster ratchet)
 
 input group "=== TREND HOLD MODE (v4.8.4 — don't micro-exit when trend is obvious) ==="
-input bool   InpTrendHoldMode    = true;   // When H4+H1+M5 all align with trade dir, force Stage 2 wide trail + disable micro-exits
+input bool   InpTrendHoldMode    = false;  // v4.9.5 — DISABLED (clean exits handle trends via chandelier)
 input double InpTrendHoldTrailATR = 3.0;   // Trail distance in trend-hold mode (wider than Stage 2)
+
+input group "=== CLEAN EXITS (v4.9.5 — ONE exit authority per phase, simple & effective) ==="
+input bool   InpCleanExits          = true;   // MASTER toggle — disables all other per-trade trails
+input double InpCleanBEActivateR    = 1.0;    // At +1R, move SL to entry + small cushion
+input double InpCleanBECushionR     = 0.2;    // Cushion locked at BE trigger (+0.2R profit)
+input double InpCleanChandelierStartR = 2.0;  // At +2R, chandelier trail kicks in
+input double InpCleanChandelierATR1 = 3.0;    // Chandelier distance +2R→+4R (wide, let runner breathe)
+input double InpCleanChandelierATR2 = 2.0;    // Chandelier distance +4R+ (tighter, bank more)
+input double InpCleanPartialR       = 3.0;    // At +3R, close partial
+input double InpCleanPartialPct     = 30.0;   // % of position to close at +3R
+input int    InpCleanChandelierLookback = 20; // Bars to scan for highest high / lowest low
+input bool   InpCleanMomentumInvalidation = true; // Cut trade if momentum flips hard against us
+input int    InpCleanStaleHours     = 4;      // Close if > X hours in AND profit < StaleMinR
+input double InpCleanStaleMinR      = 0.5;    // Threshold below which we consider trade stale
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // Ask Claude before any rule-based close (HOLD/CLOSE/LOCK $X)
@@ -1074,7 +1088,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v4.9.4 (BASKET PROTECT) READY ===");
+   Print("=== XAUAI SNIPER v4.9.5 (CLEAN EXITS) READY ===");
    Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
          "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
@@ -1146,7 +1160,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.9.4 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v4.9.5 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 //+------------------------------------------------------------------+
@@ -2740,6 +2754,172 @@ bool ManageBasket()
 }
 
 //+------------------------------------------------------------------+
+//| v4.9.5 — CLEAN EXITS                                             |
+//|   ONE exit authority per phase. No competing systems.            |
+//|                                                                  |
+//|   Phase 0 (0 to +1R):   initial SL only, zero trailing           |
+//|   Phase 1 (+1R to +2R): SL → entry + 0.2R cushion (lock tiny win)|
+//|   Phase 2 (+2R to +4R): Chandelier 3×ATR trail behind swing      |
+//|   Phase 3 (+3R):        close 30% partial (runner continues)     |
+//|   Phase 4 (+4R+):       Chandelier 2×ATR (tighter, bank more)    |
+//|   Invalidation:         M5 close strongly against + EMA flip     |
+//|   Stale:                > 4h AND profit < 0.5R → close           |
+//+------------------------------------------------------------------+
+// Per-ticket state: was partial taken already?
+ulong g_cePartialTickets[];   // tickets that have had their 30% partial close
+
+bool CleanPartialAlreadyTaken(ulong ticket)
+{
+   for(int i = ArraySize(g_cePartialTickets) - 1; i >= 0; i--)
+      if(g_cePartialTickets[i] == ticket) return true;
+   return false;
+}
+
+void CleanMarkPartialTaken(ulong ticket)
+{
+   int n = ArraySize(g_cePartialTickets);
+   ArrayResize(g_cePartialTickets, n + 1);
+   g_cePartialTickets[n] = ticket;
+   // GC: if array grows too large, trim oldest
+   if(ArraySize(g_cePartialTickets) > 200)
+   {
+      ulong tmp[];
+      ArrayResize(tmp, 100);
+      for(int j = 0; j < 100; j++) tmp[j] = g_cePartialTickets[ArraySize(g_cePartialTickets) - 100 + j];
+      ArrayResize(g_cePartialTickets, 100);
+      for(int j = 0; j < 100; j++) g_cePartialTickets[j] = tmp[j];
+   }
+}
+
+// Returns true if position was closed this tick (caller should skip further logic)
+bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double curPrice,
+                                 double curSL, double curTP, double slDist, double atr,
+                                 double emaF, double close1, int digits, double rsi,
+                                 int minsOpen, double lotsOpen)
+{
+   if(!InpCleanExits) return false;
+   if(slDist <= 0 || atr <= 0) return false;
+
+   // Compute current R-multiple of profit in price terms
+   double priceProfit = isBuy ? (curPrice - openPx) : (openPx - curPrice);
+   double rMult = priceProfit / slDist;   // negative if underwater
+
+   // ============ STALE CUT ============
+   if(InpCleanStaleHours > 0 && minsOpen >= InpCleanStaleHours * 60 && rMult < InpCleanStaleMinR)
+   {
+      PrintFormat("CLEAN_STALE #%I64u %s | %dm open, only %.2fR → CLOSE",
+                  ticket, isBuy?"BUY":"SELL", minsOpen, rMult);
+      lastExitReason = StringFormat("STALE │ %.2fR after %dm", rMult, minsOpen);
+      trade.PositionClose(ticket);
+      return true;
+   }
+
+   // ============ MOMENTUM-FLIP INVALIDATION ============
+   // Only after a decent window (>10 bars = 50min) so we don't cut to fakeouts
+   if(InpCleanMomentumInvalidation && minsOpen >= 50)
+   {
+      // Strong close against direction (> 1× ATR body) + EMA flipped against us
+      double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+      double bodySize = MathAbs(close1 - open1);
+      bool strongReversalBar = bodySize > atr * 0.8;
+      bool closeAgainst = isBuy ? (close1 < open1) : (close1 > open1);
+      bool emaAgainst = isBuy ? (close1 < emaF) : (close1 > emaF);
+      // Extra filter: RSI crossed mid (50) against us — confirms real momentum shift
+      bool rsiAgainst = isBuy ? (rsi < 45) : (rsi > 55);
+
+      if(strongReversalBar && closeAgainst && emaAgainst && rsiAgainst && rMult < 1.0)
+      {
+         PrintFormat("CLEAN_FLIP #%I64u %s | body=%.2f atr=%.2f emaFlip=Y rsi=%.1f → CLOSE",
+                     ticket, isBuy?"BUY":"SELL", bodySize, atr, rsi);
+         lastExitReason = StringFormat("MOMENTUM FLIP │ %.2fR cut early", rMult);
+         trade.PositionClose(ticket);
+         return true;
+      }
+   }
+
+   // ============ PHASE 1: BREAKEVEN LOCK @ +1R ============
+   if(rMult >= InpCleanBEActivateR)
+   {
+      double cushionDist = slDist * InpCleanBECushionR;
+      double beSL = isBuy ? NormalizeDouble(openPx + cushionDist, digits)
+                          : NormalizeDouble(openPx - cushionDist, digits);
+      // Only move SL forward, never back
+      bool shouldMove = isBuy ? (beSL > curSL) : (beSL < curSL || curSL == 0);
+      if(shouldMove && rMult < InpCleanChandelierStartR)
+      {
+         // Broker stops-level buffer
+         double pt = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+         long   lvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+         double buf = MathMax(lvl * pt, pt * 30);
+         bool sane = isBuy ? (beSL < curPrice - buf) : (beSL > curPrice + buf);
+         if(sane)
+         {
+            if(SafeModifySL(ticket, beSL, curTP, isBuy, curPrice, "CLEAN_BE"))
+               PrintFormat("CLEAN_BE #%I64u %s | %.2fR → SL=%s (lock +%.2fR)",
+                           ticket, isBuy?"BUY":"SELL", rMult,
+                           DoubleToString(beSL, digits), InpCleanBECushionR);
+         }
+      }
+   }
+
+   // ============ PHASE 3: PARTIAL @ +3R (close 30% once) ============
+   if(rMult >= InpCleanPartialR && !CleanPartialAlreadyTaken(ticket) &&
+      InpCleanPartialPct > 0 && lotsOpen > 0)
+   {
+      double step = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+      double minL = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+      double partialLots = lotsOpen * InpCleanPartialPct / 100.0;
+      if(step > 0) partialLots = MathFloor(partialLots / step) * step;
+      // Must leave at least minL behind for the runner
+      if(partialLots >= minL && (lotsOpen - partialLots) >= minL)
+      {
+         if(trade.PositionClosePartial(ticket, partialLots))
+         {
+            CleanMarkPartialTaken(ticket);
+            PrintFormat("CLEAN_PARTIAL #%I64u %s | %.2fR → closed %.2f lots (%.0f%%), runner=%.2f",
+                        ticket, isBuy?"BUY":"SELL", rMult, partialLots,
+                        InpCleanPartialPct, lotsOpen - partialLots);
+         }
+      }
+   }
+
+   // ============ PHASE 2 & 4: CHANDELIER TRAIL ============
+   if(rMult >= InpCleanChandelierStartR)
+   {
+      // Tighter trail once we're past +4R (bank more of the move)
+      double chanATR = (rMult >= 4.0) ? InpCleanChandelierATR2 : InpCleanChandelierATR1;
+      double chanDist = atr * chanATR;
+      // Find highest high / lowest low over lookback bars (Chandelier Exit classic)
+      int lb = InpCleanChandelierLookback;
+      if(lb < 3) lb = 3;
+      double anchor = isBuy ? iHigh(Symbol(), PERIOD_M5, iHighest(Symbol(), PERIOD_M5, MODE_HIGH, lb, 0))
+                            : iLow(Symbol(),  PERIOD_M5, iLowest(Symbol(),  PERIOD_M5, MODE_LOW,  lb, 0));
+      double chanSL = isBuy ? NormalizeDouble(anchor - chanDist, digits)
+                            : NormalizeDouble(anchor + chanDist, digits);
+
+      // Ratchet only
+      bool advance = isBuy ? (chanSL > curSL) : (chanSL < curSL || curSL == 0);
+      // Sanity — must stay on correct side of entry (never below BE once armed)
+      bool profitZone = isBuy ? (chanSL >= openPx) : (chanSL <= openPx);
+      // Broker stops-level buffer
+      double pt = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+      long   lvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+      double buf = MathMax(lvl * pt, pt * 30);
+      bool sane = isBuy ? (chanSL < curPrice - buf) : (chanSL > curPrice + buf);
+
+      if(advance && profitZone && sane)
+      {
+         if(SafeModifySL(ticket, chanSL, curTP, isBuy, curPrice, "CLEAN_CHAN"))
+            PrintFormat("CLEAN_CHAN #%I64u %s | %.2fR | chan=%.1fxATR | SL=%s",
+                        ticket, isBuy?"BUY":"SELL", rMult, chanATR,
+                        DoubleToString(chanSL, digits));
+      }
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| 3-PATH SMART EXIT SYSTEM                                         |
 //| Path 0: Hard Loss Armor (stop nukes, early adverse, peak retrace)|
 //| Path A: Deterministic Trailing                                   |
@@ -2792,6 +2972,23 @@ void ManagePositions()
 
       // Dir string for logging
       string dirStr = isBuy ? "BUY" : "SELL";
+
+      // ============ v4.9.5 CLEAN EXITS (single exit authority) ============
+      // When enabled, this handles: BE lock, chandelier trail, partial TP,
+      // momentum-flip cut, stale cut. All legacy systems (Peak-Lock, Profit
+      // Ratchet, Adaptive Runner, Trend-Hold, Profit Ladder) are disabled.
+      // If Clean Exits closes the position, skip further logic for this ticket.
+      if(InpCleanExits)
+      {
+         if(ManageCleanExitsForPosition(ticket, isBuy, openPx, curPrice, curSL, curTP,
+                                        slDist, atr, emaF, close1, digits, rsi,
+                                        minsOpen, lotsOpen))
+            continue;
+         // Skip ALL legacy trailing systems below — Clean Exits owns this ticket.
+         // The original SL set at order-open time remains as the hard downside
+         // cap. Clean Exits ratchets it forward through BE → Chandelier phases.
+         continue;
+      }
 
       // v4.7.3/v4.7.4 — TP AUTO-EXTEND (push TP forward as winner runs)
       //   When profit is ≥ InpTPExtendTriggerPct% of the way to current TP,
@@ -3072,8 +3269,8 @@ void ManagePositions()
 
       // ===== PATH A: DETERMINISTIC TRAILING =====
       // Trail at 1.2x ATR behind price.
-      // SKIPPED if Profit Ladder OR Adaptive Runner is active (v4.7.7).
-      if(!InpProfitLadder && !InpAdaptiveRunner)
+      // SKIPPED if Profit Ladder OR Adaptive Runner OR Clean Exits is active.
+      if(!InpProfitLadder && !InpAdaptiveRunner && !InpCleanExits)
       {
          double trailDist = MathMax(atr * 1.2, SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 200);
          if(isBuy && profit > 0)
@@ -3092,9 +3289,9 @@ void ManagePositions()
 
       // ===== PATH B: SMART MANAGEMENT =====
 
-      // B1: Breakeven lock — SKIPPED if Profit Ladder OR Adaptive Runner is active (v4.7.7).
-      //   Adaptive Runner has its own break-even at +0.5R (AR_BE) that supersedes this.
-      if(!InpProfitLadder && !InpAdaptiveRunner)
+      // B1: Breakeven lock — SKIPPED if Profit Ladder OR Adaptive Runner OR Clean Exits is active.
+      //   Clean Exits has its own BE logic at +1R (ManageCleanExits) that supersedes this.
+      if(!InpProfitLadder && !InpAdaptiveRunner && !InpCleanExits)
       {
          double activateDist = slDist * InpBELockActivateR;
          double lockProfitDist = slDist * InpBELockProfitR;
@@ -4153,7 +4350,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v4.9.4 | BASKET PROTECT | ";
+   d += " XAUAI SNIPER v4.9.5 | CLEAN EXITS | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
