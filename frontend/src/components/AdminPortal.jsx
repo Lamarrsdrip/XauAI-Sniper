@@ -916,11 +916,17 @@ function CloudAdminTab({ api, token }) {
               <div className="space-y-2">
                 {infra.workers.map((w,i)=>(
                   <div key={w.id} className="border border-border p-4 flex items-center justify-between gap-4 flex-wrap" data-testid={`worker-${i}`}>
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <div className="font-bold">{w.name}</div>
                       <div className="text-[11px] text-muted-foreground mt-1">
                         {w.endpoint || "pull-mode"} · cap {w.current_users || 0}/{w.max_users}
                         {w.last_heartbeat ? ` · last seen ${w.last_heartbeat.slice(11,16)}` : ""}
+                      </div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <code className="text-[10px] font-mono px-2 py-1 bg-black/30 border border-border rounded select-all break-all">{w.id}</code>
+                        <button onClick={()=>{ navigator.clipboard.writeText(w.id); alert("Worker ID copied"); }}
+                                data-testid={`copy-worker-id-${i}`}
+                                className="px-2 py-1 text-[10px] font-bold bg-muted hover:bg-primary/20">📋 COPY ID</button>
                       </div>
                       {w.notes && <div className="text-[11px] text-muted-foreground mt-1">{w.notes}</div>}
                     </div>
