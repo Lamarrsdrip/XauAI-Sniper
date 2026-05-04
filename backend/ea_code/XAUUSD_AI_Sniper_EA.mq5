@@ -86,7 +86,7 @@ input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables A
 input group "=== XAUAI CLOUD (fanout master signals to subscribers) ==="
 input bool   InpCloudFanout       = true;    // TRUE = POST every open/close to the XauAi Cloud backend
 input string InpCloudURL          = "https://xauaisniper.com";  // Cloud API base URL — ALREADY SET. Add this to MT5 WebRequest whitelist!
-input string InpCloudAgentToken   = "";      // X-Agent-Token — PASTE from /admin → Cloud → Infrastructure → Rotate Token
+input string InpCloudAgentToken   = "c2eb530ea11d7dd8308f9f7be1fb7c2657f4cdbdfb3b0d63d88ad4ee433e2289";      // X-Agent-Token — PRE-FILLED for emriz. Keep PRIVATE — never share this file publicly.
 input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms)
 
 input group "=== TUNABLE THRESHOLDS (walk-forward optimize these) ==="
