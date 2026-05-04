@@ -73,7 +73,7 @@ input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables A
 
 input group "=== XAUAI CLOUD (fanout master signals to subscribers) ==="
 input bool   InpCloudFanout       = true;    // TRUE = POST every open/close to the XauAi Cloud backend
-input string InpCloudURL          = "https://xau-ea-trader.preview.emergentagent.com";  // Cloud API base URL — ALREADY SET. Add this to MT5 WebRequest whitelist!
+input string InpCloudURL          = "https://xauaisniper.com";  // Cloud API base URL — ALREADY SET. Add this to MT5 WebRequest whitelist!
 input string InpCloudAgentToken   = "";      // X-Agent-Token — PASTE from /admin → Cloud → Infrastructure → Rotate Token
 input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms)
 
