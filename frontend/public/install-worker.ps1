@@ -14,12 +14,50 @@ function Die($msg) { Write-Host "[fail]  $msg" -ForegroundColor Red; exit 1 }
 
 Say "Installing XauAi Cloud Worker -> $InstallDir"
 
-# 1. Python check (auto-install via winget if missing)
+# 1. Python check (auto-install via winget on desktop, or python.org direct download on Server)
 $py = Get-Command python -ErrorAction SilentlyContinue
 if (-not $py) {
-    Say "Python not found. Installing via winget..."
-    try { winget install --id Python.Python.3.11 -e --silent --accept-source-agreements --accept-package-agreements } catch { Die "winget Python install failed. Install Python 3.11+ from python.org and re-run." }
+    Say "Python not found. Attempting auto-install..."
+    $installed = $false
+    # Try winget (Windows 10/11 desktop)
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        try {
+            winget install --id Python.Python.3.11 -e --silent --accept-source-agreements --accept-package-agreements
+            $installed = $true
+        } catch { Say "winget install failed, falling back to python.org direct download." }
+    } else {
+        Say "winget not available (likely Windows Server). Downloading Python 3.11 directly..."
+    }
+    if (-not $installed) {
+        # Direct download from python.org — works on every Windows version
+        $pyUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
+        $pyInstaller = "$env:TEMP\python-3.11.9-installer.exe"
+        try {
+            Invoke-WebRequest -Uri $pyUrl -OutFile $pyInstaller -UseBasicParsing
+            Say "Running silent Python installer (PrependPath=1, InstallAllUsers=1)..."
+            $proc = Start-Process -FilePath $pyInstaller -ArgumentList "/quiet","InstallAllUsers=1","PrependPath=1","Include_launcher=1","Include_test=0" -Wait -PassThru
+            if ($proc.ExitCode -ne 0) { Die "Python installer exited with code $($proc.ExitCode)." }
+            Remove-Item $pyInstaller -Force -ErrorAction SilentlyContinue
+            $installed = $true
+        } catch { Die "Direct Python install failed: $_" }
+    }
+    # Refresh PATH so we can find python.exe in this same session
     $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        # Try common install paths
+        $candidates = @(
+            "C:\Program Files\Python311\python.exe",
+            "C:\Program Files\Python312\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+        )
+        foreach ($c in $candidates) {
+            if (Test-Path $c) { $env:Path = (Split-Path $c) + ";" + $env:Path; break }
+        }
+    }
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        Die "Python installed but not found on PATH. Close + re-open PowerShell as Administrator, then re-run the installer."
+    }
 }
 $pyv = & python --version 2>&1
 Ok "Python: $pyv"
