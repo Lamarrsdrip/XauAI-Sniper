@@ -2023,8 +2023,13 @@ async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
             "mt5_connected": user.get("mt5_connected", False),
             "mt5_verification_status": user.get("mt5_verification_status", "none"),
             "mt5_verification_error":  user.get("mt5_verification_error", ""),
+            "mt5_verified_at":         user.get("mt5_verified_at", ""),
             "broker_server": user.get("broker_server", ""),
             "mt5_login": user.get("mt5_login", ""),
+            "risk_tier": user.get("risk_tier", "balanced"),
+            "last_balance": user.get("last_balance", 0),
+            "last_equity":  user.get("last_equity", 0),
+            "account_currency": user.get("account_currency", ""),
             "paused": user.get("paused", False),
             "plan": user.get("plan", "starter"),
             "status": user.get("status", "trial")}

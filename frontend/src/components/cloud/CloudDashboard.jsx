@@ -338,11 +338,34 @@ function ConnectTab({ me, onRefresh }) {
 
         {connected ? (
           <div data-testid="mt5-connected-view">
-            <div className="flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-xl mb-4">
-              <CheckCircle2 className="w-5 h-5 text-green-400" />
-              <div>
-                <div className="font-semibold text-green-400">MT5 Account Connected &amp; Verified</div>
-                <div className="text-xs text-white/50">Broker: {me.broker_server || "—"} · Login: {me.mt5_login || "—"} · Risk: {me.risk_tier || "balanced"}</div>
+            <div className="flex items-start gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-xl mb-4" data-testid="verified-banner">
+              <CheckCircle2 className="w-5 h-5 text-green-400 flex-none mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-green-400 flex items-center gap-2 flex-wrap">
+                  MT5 Account Connected &amp; Verified
+                  {me.last_balance > 0 && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-green-500/20 border border-green-500/30 text-green-300" data-testid="verified-balance-pill">
+                      {(me.account_currency || "USD") + " "}
+                      {Number(me.last_balance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs text-white/60 mt-1 leading-relaxed">
+                  <span className="font-mono text-white/80">{me.broker_server || "—"}</span>
+                  {" · "}Login <span className="font-mono text-white/80">{me.mt5_login || "—"}</span>
+                  {" · "}Risk <span className="capitalize text-white/80">{me.risk_tier || "balanced"}</span>
+                </div>
+                {me.last_balance > 0 && (
+                  <div className="text-[11px] text-white/50 mt-1.5 flex items-center gap-3 flex-wrap">
+                    <span>Balance: <span className="font-mono text-white/80">{(me.account_currency || "$")} {Number(me.last_balance).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></span>
+                    {me.last_equity > 0 && me.last_equity !== me.last_balance && (
+                      <span>Equity: <span className="font-mono text-white/80">{(me.account_currency || "$")} {Number(me.last_equity).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></span>
+                    )}
+                    {me.mt5_verified_at && (
+                      <span className="text-white/30">verified {new Date(me.mt5_verified_at).toLocaleString()}</span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
