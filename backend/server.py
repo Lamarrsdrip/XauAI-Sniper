@@ -1820,7 +1820,10 @@ async def _get_cloud_settings():
              "bank_accounts": [],        # [{bank_name,account_name,account_number,swift,country}]
              "fiat_paystack_enabled": False,
              "telegram_alerts_enabled": False,
-             "master_ea_status": "online"}
+             "master_ea_status": "unknown",
+             "master_last_heartbeat": None,
+             "shadow_mode": True,        # v1.2 — default ON so admin can sell before VPS
+             "agent_token": ""}
         await db.cloud_settings.insert_one(s)
         s.pop("_id", None)
     return s
@@ -1906,7 +1909,14 @@ async def cloud_connect_mt5(req: MT5ConnectReq, user: dict = Depends(get_cloud_u
         "mt5_connected_at":  datetime.now(timezone.utc).isoformat(),
     }
     await db.cloud_users.update_one({"id": user["id"]}, {"$set": update})
-    return {"ok": True, "message": "MT5 account linked. Worker agent will pick it up within 60 seconds."}
+    # Auto-assign to a worker with capacity (silently no-ops if no workers yet → shadow mode picks up)
+    wid = await _auto_assign_worker(user["id"])
+    s = await _get_cloud_settings()
+    mode = "shadow" if s.get("shadow_mode", True) or not wid else "live"
+    msg = ("MT5 account linked. SHADOW MODE — you'll see simulated trades in your dashboard as signals fire."
+           if mode == "shadow"
+           else "MT5 account linked. Worker agent will pick it up within 60 seconds.")
+    return {"ok": True, "message": msg, "mode": mode, "assigned_worker": wid}
 
 @api_router.post("/cloud/mt5/disconnect")
 async def cloud_disconnect_mt5(user: dict = Depends(get_cloud_user)):
@@ -2055,19 +2065,190 @@ async def admin_cloud_update_settings(req: CloudSettingsUpdate):
 # -------- Worker Agent Endpoints (used by VPS workers, protected by secret) --------
 #  Workers poll /cloud/agent/pending-users to get credentials for users they should
 #  manage, and push trade results to /cloud/agent/trade-close. Authenticated with
-#  a shared secret (AGENT_TOKEN env var) — ops-only, never exposed to UI.
-AGENT_TOKEN = os.environ.get("CLOUD_AGENT_TOKEN", "")
+#  a shared secret stored in cloud_settings (admin can rotate via UI).
+async def _get_agent_token():
+    s = await _get_cloud_settings()
+    # Fall back to env var for backwards compat
+    return s.get("agent_token") or os.environ.get("CLOUD_AGENT_TOKEN", "")
 
-def _require_agent(request: Request):
-    if not AGENT_TOKEN:
-        raise HTTPException(status_code=503, detail="Agent endpoint not configured yet")
+async def _require_agent_async(request: Request):
+    tok = await _get_agent_token()
+    if not tok:
+        raise HTTPException(status_code=503, detail="Agent token not configured. Admin must generate one in /admin → Cloud → Infrastructure.")
     hdr = request.headers.get("X-Agent-Token", "")
-    if hdr != AGENT_TOKEN:
+    if hdr != tok:
         raise HTTPException(status_code=403, detail="Bad agent token")
+
+# Legacy sync wrapper (deprecated, kept for internal callers)
+def _require_agent(request: Request):
+    hdr = request.headers.get("X-Agent-Token", "")
+    # This sync path only accepts env-configured token — async path is preferred
+    env_tok = os.environ.get("CLOUD_AGENT_TOKEN", "")
+    if env_tok and hdr == env_tok: return
+    raise HTTPException(status_code=403, detail="Use async agent path")
+
+# -------- Admin: Infrastructure (VPS workers) --------
+class WorkerRegisterReq(BaseModel):
+    name: str
+    endpoint: Optional[str] = ""      # optional URL if worker runs a reachable HTTP server
+    max_users: int = 30
+    notes: Optional[str] = ""
+
+@api_router.get("/admin/cloud/infrastructure", dependencies=[Depends(get_current_admin)])
+async def admin_infra_list():
+    workers = await db.cloud_workers.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    s = await _get_cloud_settings()
+    # compute per-worker usage
+    for w in workers:
+        w["current_users"] = await db.cloud_users.count_documents({"assigned_worker_id": w["id"], "mt5_connected": True})
+    total_capacity = sum(w.get("max_users", 30) for w in workers)
+    assigned = await db.cloud_users.count_documents({"assigned_worker_id": {"$exists": True, "$ne": None}, "mt5_connected": True})
+    unassigned = await db.cloud_users.count_documents({"mt5_connected": True, "assigned_worker_id": {"$in": [None, ""]}})
+    return {"workers": workers, "total_capacity": total_capacity, "assigned_users": assigned,
+            "unassigned_users": unassigned,
+            "shadow_mode": s.get("shadow_mode", True),
+            "agent_token_preview": (s.get("agent_token", "") or "")[:8] + "…" if s.get("agent_token") else "",
+            "master_ea_status": s.get("master_ea_status", "unknown"),
+            "master_last_heartbeat": s.get("master_last_heartbeat")}
+
+@api_router.post("/admin/cloud/infrastructure/workers", dependencies=[Depends(get_current_admin)])
+async def admin_infra_add_worker(req: WorkerRegisterReq):
+    wid = str(uuid.uuid4())
+    doc = {"id": wid, "name": req.name.strip(), "endpoint": (req.endpoint or "").strip(),
+           "max_users": max(1, int(req.max_users)), "notes": req.notes or "",
+           "status": "offline", "last_heartbeat": None,
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.cloud_workers.insert_one(doc.copy())
+    return {"ok": True, "worker_id": wid}
+
+@api_router.delete("/admin/cloud/infrastructure/workers/{worker_id}", dependencies=[Depends(get_current_admin)])
+async def admin_infra_remove_worker(worker_id: str):
+    # Unassign any users on this worker
+    await db.cloud_users.update_many({"assigned_worker_id": worker_id}, {"$unset": {"assigned_worker_id": ""}})
+    r = await db.cloud_workers.delete_one({"id": worker_id})
+    if not r.deleted_count: raise HTTPException(status_code=404, detail="Worker not found")
+    return {"ok": True}
+
+@api_router.post("/admin/cloud/infrastructure/rotate-token", dependencies=[Depends(get_current_admin)])
+async def admin_rotate_agent_token():
+    new_tok = secrets.token_hex(32)
+    await db.cloud_settings.update_one({"key": "main"}, {"$set": {"agent_token": new_tok}}, upsert=True)
+    return {"ok": True, "token": new_tok, "message": "New agent token generated. Paste into each VPS worker config."}
+
+@api_router.post("/admin/cloud/infrastructure/shadow-mode", dependencies=[Depends(get_current_admin)])
+async def admin_toggle_shadow(body: dict):
+    enabled = bool(body.get("enabled", True))
+    await db.cloud_settings.update_one({"key": "main"}, {"$set": {"shadow_mode": enabled}}, upsert=True)
+    return {"ok": True, "shadow_mode": enabled,
+            "message": ("SHADOW MODE ON — signals are simulated in dashboards, no real trades placed."
+                        if enabled else "LIVE MODE — workers will execute real trades on connected accounts.")}
+
+# Auto-assign a user to the first worker with free capacity
+async def _auto_assign_worker(user_id: str):
+    workers = await db.cloud_workers.find({}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    for w in workers:
+        count = await db.cloud_users.count_documents({"assigned_worker_id": w["id"], "mt5_connected": True})
+        if count < w.get("max_users", 30):
+            await db.cloud_users.update_one({"id": user_id}, {"$set": {"assigned_worker_id": w["id"]}})
+            return w["id"]
+    return None
+
+# -------- SHADOW MODE: master signals fan out to all subscribers as simulated trades --------
+class MasterSignalReq(BaseModel):
+    symbol: str
+    side: str                    # BUY | SELL
+    entry: float
+    sl: float
+    tp: float
+    grade: Optional[str] = ""    # A+ / A / B
+    risk_hint_pct: Optional[float] = 1.2   # master-side risk %, bot-provided
+
+@api_router.post("/cloud/master/signal")
+async def cloud_master_signal(req: MasterSignalReq, request: Request):
+    """Called by the master EA (or bot) whenever a new signal fires.
+       If shadow_mode is ON → create simulated trade rows for every active user.
+       If OFF → also broadcast to workers for real execution (workers poll)."""
+    await _require_agent_async(request)
+    s = await _get_cloud_settings()
+    shadow = s.get("shadow_mode", True)
+    now = datetime.now(timezone.utc)
+    # Heartbeat update
+    await db.cloud_settings.update_one({"key": "main"},
+        {"$set": {"master_last_heartbeat": now.isoformat(), "master_ea_status": "online"}}, upsert=True)
+    # Store the signal
+    sig_id = str(uuid.uuid4())
+    signal_doc = {"id": sig_id, "symbol": req.symbol, "side": req.side, "entry": req.entry,
+                  "sl": req.sl, "tp": req.tp, "grade": req.grade, "ts": now.isoformat()}
+    await db.cloud_signals.insert_one(signal_doc.copy())
+    fanout = 0
+    if shadow:
+        # For every active, non-paused, connected user: create a simulated trade
+        users = await db.cloud_users.find(
+            {"mt5_connected": True, "paused": False, "status": {"$in": ["trial","active"]}},
+            {"_id": 0, "id": 1, "last_balance": 1, "risk_tier": 1}
+        ).to_list(2000)
+        risk_map = {"conservative": 0.6, "balanced": 1.2, "aggressive": 2.0}
+        for u in users:
+            bal = float(u.get("last_balance") or 1000)
+            rpct = risk_map.get(u.get("risk_tier","balanced"), 1.2)
+            slDist = abs(req.entry - req.sl)
+            if slDist <= 0: continue
+            riskUSD = bal * rpct / 100
+            # XAUUSD: 1 lot ≈ $100/pip; pip ≈ $0.01 price; use $1 price move per lot as unit
+            lots = max(0.01, round(riskUSD / (slDist * 100), 2))
+            trade = {"id": str(uuid.uuid4()), "user_id": u["id"], "signal_id": sig_id,
+                     "symbol": req.symbol, "side": req.side, "lots": lots,
+                     "entry": req.entry, "exit_price": 0, "profit": 0,
+                     "status": "shadow_open",
+                     "opened_at": now.isoformat(), "closed_at": None,
+                     "shadow": True, "grade": req.grade}
+            await db.cloud_shadow_trades.insert_one(trade.copy())
+            fanout += 1
+    return {"ok": True, "signal_id": sig_id, "shadow": shadow, "fanout_users": fanout}
+
+class MasterSignalCloseReq(BaseModel):
+    signal_id: str
+    exit_price: float
+    reason: Optional[str] = ""
+
+@api_router.post("/cloud/master/signal-close")
+async def cloud_master_close(req: MasterSignalCloseReq, request: Request):
+    await _require_agent_async(request)
+    sig = await db.cloud_signals.find_one({"id": req.signal_id}, {"_id": 0})
+    if not sig: raise HTTPException(status_code=404, detail="Signal not found")
+    now = datetime.now(timezone.utc)
+    # Close all shadow trades attached to this signal
+    trades = await db.cloud_shadow_trades.find({"signal_id": req.signal_id, "status": "shadow_open"},
+                                               {"_id": 0}).to_list(5000)
+    closed = 0
+    for t in trades:
+        # P&L math: (exit - entry) for buy, (entry - exit) for sell; $100/lot/pt (XAUUSD)
+        diff = (req.exit_price - t["entry"]) if t["side"].upper() == "BUY" else (t["entry"] - req.exit_price)
+        profit = round(diff * t["lots"] * 100, 2)
+        await db.cloud_shadow_trades.update_one({"id": t["id"]},
+            {"$set": {"status": "shadow_closed", "exit_price": req.exit_price,
+                      "profit": profit, "closed_at": now.isoformat(), "reason": req.reason}})
+        # ALSO write into cloud_trades so the user dashboard shows it
+        doc = dict(t); doc["id"] = str(uuid.uuid4()); doc["exit_price"] = req.exit_price
+        doc["profit"] = profit; doc["closed_at"] = now.isoformat(); doc["reason"] = req.reason or "Shadow close"
+        await db.cloud_trades.insert_one(doc)
+        closed += 1
+    return {"ok": True, "closed": closed}
+
+# Master heartbeat (so admin can see if the master EA is alive even without signals)
+@api_router.post("/cloud/master/heartbeat")
+async def cloud_master_heartbeat(request: Request):
+    await _require_agent_async(request)
+    await db.cloud_settings.update_one({"key": "main"},
+        {"$set": {"master_last_heartbeat": datetime.now(timezone.utc).isoformat(),
+                  "master_ea_status": "online"}}, upsert=True)
+    return {"ok": True}
+
+AGENT_TOKEN = os.environ.get("CLOUD_AGENT_TOKEN", "")  # kept for backward compat
 
 @api_router.get("/cloud/agent/pending-users")
 async def cloud_agent_users(request: Request):
-    _require_agent(request)
+    await _require_agent_async(request)
     rows = await db.cloud_users.find(
         {"mt5_connected": True, "paused": False, "status": {"$in": ["trial", "active"]}},
         {"_id": 0, "password_hash": 0}
@@ -2085,7 +2266,7 @@ class AgentTradeLog(BaseModel):
 
 @api_router.post("/cloud/agent/trade-close")
 async def cloud_agent_trade_close(req: AgentTradeLog, request: Request):
-    _require_agent(request)
+    await _require_agent_async(request)
     doc = req.model_dump()
     doc["id"] = str(uuid.uuid4())
     await db.cloud_trades.insert_one(doc.copy())
@@ -2096,7 +2277,7 @@ class AgentEquitySnapshot(BaseModel):
 
 @api_router.post("/cloud/agent/equity-snapshot")
 async def cloud_agent_equity(req: AgentEquitySnapshot, request: Request):
-    _require_agent(request)
+    await _require_agent_async(request)
     doc = req.model_dump()
     doc["ts"] = datetime.now(timezone.utc).isoformat()
     await db.cloud_equity_snapshots.insert_one(doc.copy())

@@ -688,21 +688,25 @@ function CloudAdminTab({ api, token }) {
   const [users, setUsers] = useState([]);
   const [payments, setPayments] = useState([]);
   const [settings, setSettings] = useState(null);
-  const [sub, setSub] = useState("stats"); // stats | users | payments | settings
+  const [infra, setInfra] = useState(null);
+  const [sub, setSub] = useState("stats"); // stats | users | payments | infra | settings
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [newToken, setNewToken] = useState("");
 
   const headers = { Authorization: `Bearer ${token}` };
 
   const refresh = useCallback(async () => {
     try {
-      const [s, u, p, cfg] = await Promise.all([
+      const [s, u, p, cfg, inf] = await Promise.all([
         ax.get(`${api}/admin/cloud/stats`, { headers }),
         ax.get(`${api}/admin/cloud/users`, { headers }),
         ax.get(`${api}/admin/cloud/payments`, { headers }),
         ax.get(`${api}/admin/cloud/settings`, { headers }),
+        ax.get(`${api}/admin/cloud/infrastructure`, { headers }),
       ]);
-      setStats(s.data); setUsers(u.data.users || []); setPayments(p.data.payments || []); setSettings(cfg.data);
+      setStats(s.data); setUsers(u.data.users || []); setPayments(p.data.payments || []);
+      setSettings(cfg.data); setInfra(inf.data);
     } catch (e) { setMsg(e.response?.data?.detail || "Failed to load"); }
   }, [api, token]);
 
@@ -738,10 +742,10 @@ function CloudAdminTab({ api, token }) {
 
   return (
     <div className="space-y-6" data-testid="cloud-admin-tab">
-      <div className="flex gap-0 border-b border-border">
-        {[{id:"stats",label:"OVERVIEW"},{id:"users",label:"USERS"},{id:"payments",label:"PAYMENTS"},{id:"settings",label:"SETTINGS"}].map(t=>(
+      <div className="flex gap-0 border-b border-border overflow-x-auto">
+        {[{id:"stats",label:"OVERVIEW"},{id:"users",label:"USERS"},{id:"payments",label:"PAYMENTS"},{id:"infra",label:"INFRASTRUCTURE"},{id:"settings",label:"SETTINGS"}].map(t=>(
           <button key={t.id} onClick={()=>setSub(t.id)} data-testid={`cloud-sub-${t.id}`}
-                  className={`px-5 py-3 text-xs font-bold tracking-[0.1em] border-b-2 transition-colors ${sub===t.id?"border-primary text-foreground":"border-transparent text-muted-foreground hover:text-foreground"}`}>
+                  className={`px-5 py-3 text-xs font-bold tracking-[0.1em] border-b-2 transition-colors whitespace-nowrap ${sub===t.id?"border-primary text-foreground":"border-transparent text-muted-foreground hover:text-foreground"}`}>
             {t.label} {t.id==="payments" && stats?.pending_payments>0 ? <span className="ml-1 px-1.5 py-0.5 bg-primary text-primary-foreground rounded-full text-[10px]">{stats.pending_payments}</span> : null}
           </button>
         ))}
@@ -806,6 +810,126 @@ function CloudAdminTab({ api, token }) {
                 </div>
               </div>
             ))}
+        </div>
+      )}
+
+      {sub === "infra" && infra && (
+        <div className="space-y-6" data-testid="cloud-infra-panel">
+
+          {/* Mode toggle + master heartbeat */}
+          <div className="grid md:grid-cols-3 gap-4">
+            <div className={`border-2 p-4 ${infra.shadow_mode ? "border-primary bg-primary/5" : "border-border"}`} data-testid="infra-mode-card">
+              <div className="text-[10px] font-bold tracking-widest text-muted-foreground mb-1">EXECUTION MODE</div>
+              <div className="text-xl font-bold">{infra.shadow_mode ? "SHADOW" : "LIVE"}</div>
+              <div className="text-xs text-muted-foreground mt-1 mb-3">
+                {infra.shadow_mode ? "Simulated trades only. No real orders placed. Safe to test." : "Real trades hitting connected accounts."}
+              </div>
+              <button onClick={async()=>{
+                setBusy(true); setMsg("");
+                try {
+                  const r = await ax.post(`${api}/admin/cloud/infrastructure/shadow-mode`, {enabled: !infra.shadow_mode}, { headers });
+                  setMsg(r.data.message); refresh();
+                } catch(e){ setMsg(e.response?.data?.detail || "Failed"); }
+                finally { setBusy(false); }
+              }} disabled={busy} data-testid="toggle-shadow-btn"
+                 className={`w-full py-2 text-xs font-bold ${infra.shadow_mode ? "bg-primary text-primary-foreground" : "bg-[hsl(142,71%,45%)] text-black"}`}>
+                {infra.shadow_mode ? "GO LIVE →" : "← BACK TO SHADOW"}
+              </button>
+            </div>
+            <div className="border-2 border-border p-4" data-testid="infra-master-card">
+              <div className="text-[10px] font-bold tracking-widest text-muted-foreground mb-1">MASTER EA</div>
+              <div className="text-xl font-bold capitalize">{infra.master_ea_status}</div>
+              <div className="text-xs text-muted-foreground mt-1">
+                Last heartbeat: {infra.master_last_heartbeat?.slice(0,16).replace("T"," ") || "never"}
+              </div>
+            </div>
+            <div className="border-2 border-border p-4" data-testid="infra-capacity-card">
+              <div className="text-[10px] font-bold tracking-widest text-muted-foreground mb-1">CAPACITY</div>
+              <div className="text-xl font-bold">{infra.assigned_users} / {infra.total_capacity}</div>
+              <div className="text-xs text-muted-foreground mt-1">
+                Users assigned vs max capacity ({infra.unassigned_users} unassigned)
+              </div>
+            </div>
+          </div>
+
+          {/* Agent token */}
+          <div className="border border-border p-4" data-testid="infra-token-card">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <div className="text-[10px] font-bold tracking-widest text-muted-foreground mb-1">AGENT TOKEN</div>
+                <div className="font-mono text-sm">{newToken || infra.agent_token_preview || "not generated yet"}</div>
+              </div>
+              <button onClick={async()=>{
+                if (!window.confirm("Rotate agent token? All workers will lose access until you paste the new token into their config.")) return;
+                setBusy(true); setMsg("");
+                try {
+                  const r = await ax.post(`${api}/admin/cloud/infrastructure/rotate-token`, {}, { headers });
+                  setNewToken(r.data.token); setMsg("New token — save it now; it won't show fully again!");
+                  refresh();
+                } catch(e){ setMsg(e.response?.data?.detail || "Failed"); }
+                finally { setBusy(false); }
+              }} disabled={busy} data-testid="rotate-token-btn" className="px-3 py-2 bg-primary text-primary-foreground text-xs font-bold">
+                {infra.agent_token_preview ? "ROTATE" : "GENERATE"}
+              </button>
+            </div>
+            <div className="text-xs text-muted-foreground">Workers authenticate with this token. Paste it into each VPS worker's config file.</div>
+          </div>
+
+          {/* Workers list */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold tracking-widest">VPS WORKERS</h3>
+              <button onClick={()=>{
+                const name = prompt("Worker name (e.g. Contabo-NYC-1):"); if (!name) return;
+                const max = parseInt(prompt("Max MT5 instances this worker can host:", "30")) || 30;
+                const endpoint = prompt("Optional endpoint URL (leave blank for pull-mode):", "") || "";
+                const notes = prompt("Notes (optional):", "") || "";
+                ax.post(`${api}/admin/cloud/infrastructure/workers`, {name, max_users: max, endpoint, notes}, { headers })
+                  .then(()=>refresh()).catch(e=>setMsg(e.response?.data?.detail || "Failed"));
+              }} data-testid="add-worker-btn" className="px-3 py-2 bg-primary text-primary-foreground text-xs font-bold">+ ADD WORKER</button>
+            </div>
+            {infra.workers.length === 0 ? (
+              <div className="border-2 border-dashed border-border p-8 text-center" data-testid="no-workers">
+                <div className="text-muted-foreground mb-2">No VPS workers registered yet.</div>
+                <div className="text-xs text-muted-foreground max-w-md mx-auto">You can still sell subscriptions today — Shadow Mode shows simulated trades in every user's dashboard. When you rent your first VPS, add it here and flip mode to LIVE.</div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {infra.workers.map((w,i)=>(
+                  <div key={w.id} className="border border-border p-4 flex items-center justify-between gap-4 flex-wrap" data-testid={`worker-${i}`}>
+                    <div>
+                      <div className="font-bold">{w.name}</div>
+                      <div className="text-[11px] text-muted-foreground mt-1">
+                        {w.endpoint || "pull-mode"} · cap {w.current_users || 0}/{w.max_users}
+                        {w.last_heartbeat ? ` · last seen ${w.last_heartbeat.slice(11,16)}` : ""}
+                      </div>
+                      {w.notes && <div className="text-[11px] text-muted-foreground mt-1">{w.notes}</div>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-1 text-[10px] font-bold rounded ${w.status==="online"?"bg-[hsl(142,71%,45%)]/20 text-[hsl(142,71%,45%)]":"bg-muted text-muted-foreground"}`}>{w.status?.toUpperCase()}</span>
+                      <button onClick={async()=>{
+                        if (!window.confirm(`Remove ${w.name}? Users assigned to it will be unassigned.`)) return;
+                        await ax.delete(`${api}/admin/cloud/infrastructure/workers/${w.id}`, { headers });
+                        refresh();
+                      }} data-testid={`remove-worker-${i}`} className="px-3 py-1.5 bg-[hsl(348,83%,47%)] text-white text-xs font-bold">REMOVE</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Quick-start guide */}
+          <div className="border border-primary/30 bg-primary/5 p-4 text-sm" data-testid="infra-guide">
+            <div className="font-bold mb-2">🚀 Going live (when you're ready):</div>
+            <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
+              <li>Rent a Windows VPS (Contabo CX11 = $6/mo, holds ~15 MT5 instances)</li>
+              <li>Click "Generate/Rotate" above and copy the agent token</li>
+              <li>Click "+ ADD WORKER" and register the VPS</li>
+              <li>Install the XauAi worker script on the VPS (contact developer for the script)</li>
+              <li>Once the worker is online, flip "GO LIVE" — all connected users switch from shadow → real trading</li>
+            </ol>
+          </div>
         </div>
       )}
 
