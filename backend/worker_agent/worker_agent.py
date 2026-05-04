@@ -344,6 +344,30 @@ class WorkerAgent:
             except Exception as e:
                 log.warning("equity push failed user=%s: %s", u.email, e)
 
+    def push_equity_for(self, user_ids: list) -> None:
+        """Targeted equity push — used for user-initiated 'Refresh balance' clicks."""
+        if not user_ids: return
+        for uid in user_ids:
+            u = self.users.get(uid)
+            if not u:
+                log.info("refresh requested but user not in active set: %s", uid); continue
+            eq = self.mt5_equity(u)
+            if not eq: continue
+            u.last_balance = eq["balance"]
+            try:
+                self._post("/api/cloud/agent/equity-snapshot", {"user_id": u.user_id, **eq})
+                log.info("REFRESH pushed for user=%s balance=%.2f", u.email, eq["balance"])
+            except Exception as e:
+                log.warning("refresh push failed user=%s: %s", u.email, e)
+
+    def poll_refresh_queue(self) -> None:
+        try:
+            data = self._get("/api/cloud/agent/refresh-queue")
+        except Exception as e:
+            log.warning("refresh-queue fetch failed: %s", e); return
+        ids = data.get("user_ids", [])
+        if ids: self.push_equity_for(ids)
+
     # ---------- Entrypoint ----------
     def run(self) -> None:
         log.info("XauAi Worker Agent %s starting — worker_id=%s mock=%s host=%s os=%s",
@@ -358,6 +382,7 @@ class WorkerAgent:
                     self.verify_queue()
                     self.sync_users(); last_user_sync = now
                 self.poll_signals()
+                self.poll_refresh_queue()
                 if now - self.last_hb >= HEARTBEAT_SEC:
                     self.heartbeat(); self.last_hb = now
                 if now - self.last_eq >= EQUITY_SEC:

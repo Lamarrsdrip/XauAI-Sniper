@@ -302,6 +302,22 @@ function ConnectTab({ me, onRefresh }) {
     finally { setLoading(false); }
   };
 
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshBalance = async () => {
+    if (refreshing) return;
+    setRefreshing(true); setErr(""); setMsg("");
+    try {
+      const res = await cloudAxios.post(`/cloud/mt5/refresh-balance`);
+      setMsg(res.data?.message || "Refresh requested.");
+      // Poll the dashboard a few times so the user sees the new balance pop in
+      for (let i = 0; i < 6; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        await onRefresh();
+      }
+    } catch (e) { setErr(e.response?.data?.detail || "Refresh failed"); }
+    finally { setRefreshing(false); }
+  };
+
   return (
     <div className="max-w-2xl">
       <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6 mb-5 sm:mb-6" data-testid="connect-card">
@@ -349,6 +365,18 @@ function ConnectTab({ me, onRefresh }) {
                       {Number(me.last_balance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
                   )}
+                  <button
+                    type="button"
+                    onClick={refreshBalance}
+                    disabled={refreshing}
+                    title="Force the worker to push a fresh balance/equity snapshot from your broker"
+                    className="ml-auto inline-flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-full bg-white/5 border border-white/15 text-white/70 hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/40 hover:text-[#D4AF37] disabled:opacity-50 transition-colors"
+                    data-testid="refresh-balance-btn"
+                  >
+                    {refreshing
+                      ? <><Loader2 className="w-3 h-3 animate-spin" /> SYNCING…</>
+                      : <><RefreshCw className="w-3 h-3" /> REFRESH</>}
+                  </button>
                 </div>
                 <div className="text-xs text-white/60 mt-1 leading-relaxed">
                   <span className="font-mono text-white/80">{me.broker_server || "—"}</span>

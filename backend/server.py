@@ -1991,11 +1991,35 @@ async def cloud_list_brokers():
     """Public: returns curated broker→servers list for the UI search dropdown."""
     return {"servers": CLOUD_BROKER_SERVERS}
 
+@api_router.post("/cloud/mt5/refresh-balance")
+async def cloud_refresh_balance(user: dict = Depends(get_cloud_user)):
+    """User-initiated immediate balance refresh. Sets a flag the worker
+       picks up on its next poll (≤10s) and pushes a fresh equity-snapshot."""
+    if not user.get("mt5_connected") or user.get("mt5_verification_status") != "verified":
+        raise HTTPException(status_code=400, detail="Connect & verify your MT5 account first.")
+    # Light cooldown — prevent spam-clicking from hammering the broker
+    last = user.get("last_refresh_request_at")
+    now = datetime.now(timezone.utc)
+    if last:
+        try:
+            since = (now - datetime.fromisoformat(last)).total_seconds()
+            if since < 10:
+                raise HTTPException(status_code=429,
+                    detail=f"Please wait {int(10 - since)}s before another refresh.")
+        except (ValueError, TypeError): pass
+    await db.cloud_users.update_one({"id": user["id"]},
+        {"$set": {"force_equity_refresh": True,
+                  "last_refresh_request_at": now.isoformat()}})
+    return {"ok": True, "message": "Refresh requested. Your balance will update within 10 seconds."}
+
 @api_router.post("/cloud/mt5/disconnect")
 async def cloud_disconnect_mt5(user: dict = Depends(get_cloud_user)):
     await db.cloud_users.update_one({"id": user["id"]},
-        {"$set": {"mt5_connected": False},
-         "$unset": {"mt5_password_enc": "", "mt5_login": "", "broker_server": ""}})
+        {"$set": {"mt5_connected": False, "mt5_verification_status": "none"},
+         "$unset": {"mt5_password_enc": "", "mt5_login": "", "broker_server": "",
+                    "mt5_verification_error": "", "mt5_verified_at": "",
+                    "force_equity_refresh": "", "last_refresh_request_at": "",
+                    "last_balance": "", "last_equity": "", "account_currency": ""}})
     return {"ok": True, "message": "MT5 credentials removed. Trade execution paused."}
 
 @api_router.post("/cloud/pause")
@@ -2487,6 +2511,23 @@ async def cloud_agent_verify_credentials(req: VerifyCredentialsReq, request: Req
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Unknown user_id")
     return {"ok": True, "verification_status": set_doc["mt5_verification_status"]}
+
+# --- Worker feed: users that hit "Refresh balance" — return + clear in one shot ---
+@api_router.get("/cloud/agent/refresh-queue")
+async def cloud_agent_refresh_queue(request: Request):
+    await _require_agent_async(request)
+    rows = await db.cloud_users.find(
+        {"force_equity_refresh": True,
+         "mt5_connected": True,
+         "mt5_verification_status": "verified"},
+        {"_id": 0, "id": 1, "email": 1}
+    ).to_list(500)
+    user_ids = [r["id"] for r in rows]
+    if user_ids:
+        await db.cloud_users.update_many(
+            {"id": {"$in": user_ids}},
+            {"$unset": {"force_equity_refresh": ""}})
+    return {"user_ids": user_ids, "total": len(user_ids)}
 
 class AgentTradeLog(BaseModel):
     user_id: str; ticket: int; symbol: str; side: str
