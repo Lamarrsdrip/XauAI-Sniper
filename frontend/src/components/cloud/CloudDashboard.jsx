@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { Cloud, Pause, Play, Shield, LogOut, TrendingUp, TrendingDown, Loader2, Copy, CheckCircle2, XCircle, Clock, CreditCard, Calculator } from "lucide-react";
+import { Cloud, Pause, Play, Shield, LogOut, TrendingUp, TrendingDown, Loader2, Copy, CheckCircle2, XCircle, Clock, CreditCard, Calculator, RefreshCw } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
+import { forceRefreshApp } from "@/registerSW";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
