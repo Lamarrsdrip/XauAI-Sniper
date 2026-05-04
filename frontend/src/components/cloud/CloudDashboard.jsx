@@ -4,6 +4,7 @@ import axios from "axios";
 import { Cloud, Pause, Play, Shield, LogOut, TrendingUp, TrendingDown, Loader2, Copy, CheckCircle2, XCircle, Clock, CreditCard, Calculator, RefreshCw } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import { forceRefreshApp } from "@/registerSW";
+import { FALLBACK_BROKER_SERVERS } from "./brokerServers";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -247,7 +248,7 @@ function ConnectTab({ me, onRefresh }) {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [simBalance, setSimBalance] = useState(me.last_balance || 1000);
-  const [brokerList, setBrokerList] = useState([]);
+  const [brokerList, setBrokerList] = useState(FALLBACK_BROKER_SERVERS);
   const [serverQuery, setServerQuery] = useState("");
   const [serverDropOpen, setServerDropOpen] = useState(false);
   const [customServer, setCustomServer] = useState(false);
@@ -256,21 +257,27 @@ function ConnectTab({ me, onRefresh }) {
   const verifyStatus = me.mt5_verification_status || "none";
   const verifyError = me.mt5_verification_error || "";
 
-  // Fetch curated broker→servers list once
+  // Try the API first; if it returns a non-empty list, use it. Otherwise keep
+  // the baked-in fallback so the dropdown ALWAYS works (even if backend is older).
   useEffect(() => {
     let alive = true;
-    cloudAxios.get(`/cloud/mt5/brokers`).then(r => { if (alive) setBrokerList(r.data?.servers || []); }).catch(()=>{});
+    cloudAxios.get(`/cloud/mt5/brokers`)
+      .then(r => {
+        const list = r.data?.servers || [];
+        if (alive && Array.isArray(list) && list.length > 0) setBrokerList(list);
+      })
+      .catch(() => { /* silently keep fallback */ });
     return () => { alive = false; };
   }, []);
 
-  // Filter dropdown list by query (broker name OR server name)
+  // Filter dropdown list by query (broker name OR server name). Empty query → first 60 items.
   const filteredServers = (() => {
     const q = serverQuery.trim().toLowerCase();
-    if (!q) return brokerList.slice(0, 50);
+    if (!q) return brokerList.slice(0, 60);
     return brokerList.filter(b =>
       b.broker.toLowerCase().includes(q) ||
       b.server.toLowerCase().includes(q)
-    ).slice(0, 50);
+    ).slice(0, 60);
   })();
 
   // v1.1 — Account-size scaling preview
@@ -460,8 +467,19 @@ function ConnectTab({ me, onRefresh }) {
                     data-testid="mt5-server-search"
                     autoComplete="off"
                   />
-                  {serverDropOpen && filteredServers.length > 0 && (
+                  {serverDropOpen && (
                     <div className="absolute z-30 left-0 right-0 mt-1 max-h-72 overflow-auto bg-[#111] border border-[#D4AF37]/30 rounded-xl shadow-2xl" data-testid="server-dropdown">
+                      <div className="px-4 py-2 text-[10px] font-mono tracking-widest text-white/40 border-b border-white/5 sticky top-0 bg-[#111]">
+                        {filteredServers.length} {filteredServers.length === 1 ? "MATCH" : "MATCHES"} · {brokerList.length} BROKERS
+                      </div>
+                      {filteredServers.length === 0 && (
+                        <div className="px-4 py-3 text-sm text-white/50">
+                          No match for "<span className="font-mono text-white/70">{serverQuery}</span>". Try fewer letters or
+                          <button type="button"
+                                  onMouseDown={() => { setCustomServer(true); setServerDropOpen(false); setServerQuery(""); setForm({ ...form, broker_server: "" }); }}
+                                  className="ml-1 text-[#D4AF37] hover:underline" data-testid="server-empty-custom">type custom →</button>
+                        </div>
+                      )}
                       {filteredServers.map(b => (
                         <button
                           key={b.server}
@@ -470,16 +488,19 @@ function ConnectTab({ me, onRefresh }) {
                           data-testid={`server-option-${b.server}`}
                           className="w-full text-left px-4 py-2.5 hover:bg-[#D4AF37]/10 border-b border-white/5 flex items-center justify-between gap-3"
                         >
-                          <span className="font-mono text-sm">{b.server}</span>
-                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${b.type === "live" ? "bg-green-500/15 text-green-400 border border-green-500/30" : "bg-blue-500/15 text-blue-400 border border-blue-500/30"}`}>
-                            {b.type === "live" ? "LIVE" : "DEMO"}
+                          <div className="flex flex-col min-w-0">
+                            <span className="font-mono text-sm truncate">{b.server}</span>
+                            <span className="text-[10px] text-white/40">{b.broker}</span>
+                          </div>
+                          <span className={`flex-none text-[10px] font-mono px-2 py-0.5 rounded-full ${b.type === "live" || b.type === "real" ? "bg-green-500/15 text-green-400 border border-green-500/30" : "bg-blue-500/15 text-blue-400 border border-blue-500/30"}`}>
+                            {b.type === "live" || b.type === "real" ? "LIVE" : "DEMO"}
                           </span>
                         </button>
                       ))}
                       <button
                         type="button"
                         onMouseDown={() => { setCustomServer(true); setServerDropOpen(false); setServerQuery(""); setForm({ ...form, broker_server: "" }); }}
-                        className="w-full text-left px-4 py-2.5 hover:bg-[#D4AF37]/10 text-[#D4AF37] text-sm border-t border-[#D4AF37]/20"
+                        className="w-full text-left px-4 py-2.5 hover:bg-[#D4AF37]/10 text-[#D4AF37] text-sm border-t border-[#D4AF37]/20 sticky bottom-0 bg-[#111]"
                         data-testid="server-option-custom"
                       >
                         + My broker isn't listed (type custom)
