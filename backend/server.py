@@ -1838,6 +1838,9 @@ async def cloud_public_config():
 @api_router.post("/cloud/auth/signup")
 async def cloud_signup(req: CloudSignupReq, response: Response):
     req.email = req.email.lower().strip()
+    # basic email format check (no regex lib dependency — simple sanity)
+    if "@" not in req.email or "." not in req.email.split("@")[-1] or len(req.email) < 5:
+        raise HTTPException(status_code=400, detail="Invalid email format")
     if await db.cloud_users.find_one({"email": req.email}):
         raise HTTPException(status_code=400, detail="Email already registered")
     if len(req.password) < 8:
@@ -1846,7 +1849,7 @@ async def cloud_signup(req: CloudSignupReq, response: Response):
     now = datetime.now(timezone.utc)
     trial_ends = now + timedelta(days=CLOUD_TRIAL_DAYS)
     doc = {"id": uid, "email": req.email, "password_hash": hash_password(req.password),
-           "full_name": req.full_name or "", "country": req.country or "",
+           "full_name": (req.full_name or "").strip(), "country": (req.country or "").strip(),
            "created_at": now.isoformat(), "status": "trial",
            "plan": "starter", "subscription_ends_at": trial_ends.isoformat(),
            "trial_used": True, "paused": False,
@@ -1946,9 +1949,20 @@ async def cloud_submit_payment(req: PaymentSubmitReq, user: dict = Depends(get_c
         raise HTTPException(status_code=400, detail="Unknown plan")
     if req.method not in ("crypto", "bank", "fiat"):
         raise HTTPException(status_code=400, detail="Invalid method")
+    ref = (req.reference or "").strip()
+    if len(ref) < 4:
+        raise HTTPException(status_code=400, detail="Transaction reference is required (min 4 chars)")
+    # Expected price validation — prevent tampered low amounts
+    expected_price = CLOUD_PLANS[req.plan]["price_usd"]
+    if abs(float(req.amount_usd) - expected_price) > 0.01:
+        raise HTTPException(status_code=400, detail=f"Amount must be ${expected_price} for {req.plan} plan")
+    # Block a second pending payment from the same user (prevent spam)
+    existing_pending = await db.cloud_payments.find_one({"user_id": user["id"], "status": "pending"})
+    if existing_pending:
+        raise HTTPException(status_code=400, detail="You already have a payment pending review. Please wait or contact support.")
     doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "email": user["email"],
            "plan": req.plan, "method": req.method, "amount_usd": float(req.amount_usd),
-           "reference": req.reference or "", "notes": req.notes or "",
+           "reference": ref, "notes": (req.notes or "").strip(),
            "status": "pending", "submitted_at": datetime.now(timezone.utc).isoformat(),
            "approved_at": None, "approved_by": None}
     await db.cloud_payments.insert_one(doc.copy())

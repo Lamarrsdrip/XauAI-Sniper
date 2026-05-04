@@ -5,6 +5,15 @@ import { Cloud, Loader2 } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
+// Scoped axios instance for cloud auth — avoids polluting global axios defaults
+// that could leak into the admin portal if the same browser session uses both.
+const cloudAxios = axios.create({ baseURL: API, withCredentials: true });
+cloudAxios.interceptors.request.use((cfg) => {
+  const t = localStorage.getItem("cloud_token");
+  if (t) cfg.headers.Authorization = `Bearer ${t}`;
+  return cfg;
+});
+
 function AuthShell({ title, subtitle, children }) {
   return (
     <div className="min-h-screen bg-[#050505] text-white flex flex-col">
@@ -36,9 +45,8 @@ export function CloudSignup() {
   const submit = async (e) => {
     e.preventDefault(); setErr(""); setLoading(true);
     try {
-      const res = await axios.post(`${API}/cloud/auth/signup`, form, { withCredentials: true });
+      const res = await cloudAxios.post(`/cloud/auth/signup`, form);
       localStorage.setItem("cloud_token", res.data.token);
-      axios.defaults.headers.common["Authorization"] = `Bearer ${res.data.token}`;
       nav("/cloud/dashboard");
     } catch (e) { setErr(e.response?.data?.detail || "Signup failed"); }
     finally { setLoading(false); }
@@ -90,9 +98,8 @@ export function CloudLogin() {
   const submit = async (e) => {
     e.preventDefault(); setErr(""); setLoading(true);
     try {
-      const res = await axios.post(`${API}/cloud/auth/login`, form, { withCredentials: true });
+      const res = await cloudAxios.post(`/cloud/auth/login`, form);
       localStorage.setItem("cloud_token", res.data.token);
-      axios.defaults.headers.common["Authorization"] = `Bearer ${res.data.token}`;
       nav("/cloud/dashboard");
     } catch (e) { setErr(e.response?.data?.detail || "Login failed"); }
     finally { setLoading(false); }

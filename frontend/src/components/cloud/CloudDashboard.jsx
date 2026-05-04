@@ -1,16 +1,24 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { Cloud, Pause, Play, Shield, LogOut, TrendingUp, TrendingDown, Loader2, Copy, CheckCircle2, XCircle, Clock, CreditCard } from "lucide-react";
+import { Cloud, Pause, Play, Shield, LogOut, TrendingUp, TrendingDown, Loader2, Copy, CheckCircle2, XCircle, Clock, CreditCard, Calculator } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+
+// Scoped axios instance — never touches global defaults (avoids leaking Bearer
+// token into admin portal or other axios calls that run in the same session)
+const cloudAxios = axios.create({ baseURL: API });
+cloudAxios.interceptors.request.use((cfg) => {
+  const t = localStorage.getItem("cloud_token");
+  if (t) cfg.headers.Authorization = `Bearer ${t}`;
+  return cfg;
+});
 
 function useAuth() {
   const nav = useNavigate();
   useEffect(() => {
     const token = localStorage.getItem("cloud_token");
-    if (!token) { nav("/cloud/login"); return; }
-    axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+    if (!token) nav("/cloud/login");
   }, [nav]);
 }
 
@@ -26,7 +34,7 @@ export default function CloudDashboard() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [m, d] = await Promise.all([axios.get(`${API}/cloud/auth/me`), axios.get(`${API}/cloud/dashboard`)]);
+      const [m, d] = await Promise.all([cloudAxios.get(`/cloud/auth/me`), cloudAxios.get(`/cloud/dashboard`)]);
       setMe(m.data); setData(d.data);
     } catch (e) {
       if (e.response?.status === 401) { localStorage.removeItem("cloud_token"); nav("/cloud/login"); }
@@ -36,13 +44,13 @@ export default function CloudDashboard() {
   useEffect(() => { fetchAll(); const iv = setInterval(fetchAll, 15000); return () => clearInterval(iv); }, [fetchAll]);
 
   const logout = async () => {
-    try { await axios.post(`${API}/cloud/auth/logout`); } catch {}
+    try { await cloudAxios.post(`/cloud/auth/logout`); } catch {}
     localStorage.removeItem("cloud_token");
     nav("/cloud");
   };
 
   const togglePause = async () => {
-    try { await axios.post(`${API}/cloud/pause`, { paused: !data.paused }); fetchAll(); } catch {}
+    try { await cloudAxios.post(`/cloud/pause`, { paused: !data.paused }); fetchAll(); } catch {}
   };
 
   if (loading || !me) return (
@@ -199,13 +207,26 @@ function ConnectTab({ me, onRefresh }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  const [simBalance, setSimBalance] = useState(me.last_balance || 1000);
 
   const connected = me.mt5_connected;
+
+  // v1.1 — Account-size scaling preview
+  // Exactly mirrors what the bot will do live:
+  //   risk_tier → risk % of balance → $ risked per trade → approx lot size
+  //   (XAUUSD 1 lot ≈ $100/pip; SL is ~3-6 pips ATR-based on M5)
+  const riskPctMap = { conservative: 0.6, balanced: 1.2, aggressive: 2.0 };
+  const tier = form.risk_tier || "balanced";
+  const riskPct = riskPctMap[tier];
+  const riskUSD = (simBalance * riskPct) / 100;
+  const assumedSLpips = 4.0; // typical M5 2.5× ATR SL in pips on XAUUSD
+  const pipValuePerLot = 100; // XAUUSD standard contract = $100 per 1-pip on 1.0 lot
+  const lotSize = riskUSD / (assumedSLpips * pipValuePerLot);
 
   const submit = async (e) => {
     e.preventDefault(); setErr(""); setMsg(""); setLoading(true);
     try {
-      const res = await axios.post(`${API}/cloud/mt5/connect`, form);
+      const res = await cloudAxios.post(`/cloud/mt5/connect`, form);
       setMsg(res.data.message); onRefresh();
     } catch (e) { setErr(e.response?.data?.detail || "Connect failed"); }
     finally { setLoading(false); }
@@ -214,7 +235,7 @@ function ConnectTab({ me, onRefresh }) {
   const disconnect = async () => {
     if (!window.confirm("Remove MT5 credentials from XauAi Cloud? Open trades will not be affected.")) return;
     setLoading(true);
-    try { await axios.post(`${API}/cloud/mt5/disconnect`); onRefresh(); setMsg("Credentials removed."); }
+    try { await cloudAxios.post(`/cloud/mt5/disconnect`); onRefresh(); setMsg("Credentials removed."); }
     catch (e) { setErr(e.response?.data?.detail || "Failed"); }
     finally { setLoading(false); }
   };
@@ -243,6 +264,34 @@ function ConnectTab({ me, onRefresh }) {
                 <div className="text-xs text-white/50">Broker: {me.broker_server || "—"} · Login: {me.mt5_login || "—"} · Risk: {me.risk_tier || "balanced"}</div>
               </div>
             </div>
+
+            {/* Live scaling on their current balance + current tier */}
+            <div className="bg-black/40 border border-[#D4AF37]/20 rounded-xl p-4 mb-4" data-testid="live-scaling">
+              <div className="flex items-center gap-2 mb-3">
+                <Calculator className="w-4 h-4 text-[#D4AF37]" />
+                <div className="text-xs font-mono tracking-widest text-[#D4AF37]">LIVE SCALING ON YOUR ACCOUNT</div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                <div className="bg-white/5 rounded-lg p-3">
+                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">BALANCE</div>
+                  <div className="text-base font-bold font-mono text-white">${(me.last_balance || 0).toFixed(0)}</div>
+                </div>
+                <div className="bg-white/5 rounded-lg p-3">
+                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">RISK/TRADE</div>
+                  <div className="text-base font-bold font-mono text-[#D4AF37]">{riskPctMap[me.risk_tier || "balanced"]}%</div>
+                </div>
+                <div className="bg-white/5 rounded-lg p-3">
+                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">$ RISKED</div>
+                  <div className="text-base font-bold font-mono">${(((me.last_balance||0)*riskPctMap[me.risk_tier||"balanced"])/100).toFixed(0)}</div>
+                </div>
+                <div className="bg-white/5 rounded-lg p-3">
+                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">BASKET ARMS AT</div>
+                  <div className="text-base font-bold font-mono text-green-400">${((me.last_balance||0)*0.02).toFixed(0)}</div>
+                </div>
+              </div>
+              {!me.last_balance && <div className="text-[11px] text-white/40 mt-2">Worker agent will sync your balance within 60s after first connection.</div>}
+            </div>
+
             <button onClick={disconnect} disabled={loading} className="w-full py-3 border border-red-500/30 text-red-400 rounded-xl hover:bg-red-500/10 transition-colors disabled:opacity-50" data-testid="disconnect-button">
               Disconnect MT5 account
             </button>
@@ -278,6 +327,42 @@ function ConnectTab({ me, onRefresh }) {
               </div>
               <div className="text-xs text-white/30 mt-1">Conservative: 0.6% / Balanced: 1.2% / Aggressive: 2% risk per trade</div>
             </div>
+
+            {/* v1.1 — Live account-size scaling preview */}
+            <div className="bg-black/40 border border-[#D4AF37]/20 rounded-xl p-4" data-testid="scaling-preview">
+              <div className="flex items-center gap-2 mb-3">
+                <Calculator className="w-4 h-4 text-[#D4AF37]" />
+                <div className="text-xs font-mono tracking-widest text-[#D4AF37]">ACCOUNT-SIZE SCALING PREVIEW</div>
+              </div>
+              <div className="mb-3">
+                <label className="block text-[10px] font-mono tracking-widest text-white/50 mb-1">SIMULATED BALANCE (USD)</label>
+                <input type="number" value={simBalance} min={100} step={100}
+                       onChange={e=>setSimBalance(Math.max(100, Number(e.target.value)||0))}
+                       className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 font-mono text-sm focus:border-[#D4AF37] outline-none"
+                       data-testid="sim-balance-input" />
+                <div className="text-[10px] text-white/30 mt-1">Plug in your real balance to see how trades will size on YOUR account</div>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="bg-white/5 rounded-lg p-3" data-testid="preview-risk-pct">
+                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">RISK PER TRADE</div>
+                  <div className="text-lg font-bold font-mono text-[#D4AF37]">{riskPct}%</div>
+                </div>
+                <div className="bg-white/5 rounded-lg p-3" data-testid="preview-risk-usd">
+                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">$ RISKED</div>
+                  <div className="text-lg font-bold font-mono text-white">${riskUSD.toFixed(0)}</div>
+                </div>
+                <div className="bg-white/5 rounded-lg p-3" data-testid="preview-lot-size">
+                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">LOT SIZE (APPROX)</div>
+                  <div className="text-lg font-bold font-mono text-green-400">{lotSize.toFixed(2)}</div>
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t border-white/5 space-y-1 text-[11px] text-white/50">
+                <div>• At <span className="font-mono text-[#D4AF37]">+1R</span> profit: SL locks at <span className="font-mono">+${(riskUSD*0.2).toFixed(0)}</span> (breakeven protection)</div>
+                <div>• At <span className="font-mono text-[#D4AF37]">+3R</span> profit: 30% closes automatically (<span className="font-mono">+${(riskUSD*3*0.3).toFixed(0)}</span> banked)</div>
+                <div>• Basket lock arms at <span className="font-mono">${(simBalance*0.02).toFixed(0)}</span> floating (2% of balance)</div>
+                <div>• Hard cap: max loss per single trade = <span className="font-mono">${(simBalance*0.03).toFixed(0)}</span> (3% of balance)</div>
+              </div>
+            </div>
             {msg && <div className="text-green-400 text-sm" data-testid="connect-msg">{msg}</div>}
             {err && <div className="text-red-400 text-sm" data-testid="connect-err">{err}</div>}
             <button type="submit" disabled={loading} className="w-full py-3 bg-[#D4AF37] text-black font-semibold rounded-xl hover:bg-[#E5C558] transition-colors disabled:opacity-50 flex items-center justify-center gap-2" data-testid="connect-submit">
@@ -304,8 +389,8 @@ function BillingTab({ me, onRefresh }) {
   const [payments, setPayments] = useState([]);
 
   useEffect(() => {
-    axios.get(`${API}/cloud/config`).then(r => setCfg(r.data));
-    axios.get(`${API}/cloud/payments/my`).then(r => setPayments(r.data.payments || []));
+    cloudAxios.get(`/cloud/config`).then(r => setCfg(r.data)).catch(() => {});
+    cloudAxios.get(`/cloud/payments/my`).then(r => setPayments(r.data.payments || [])).catch(() => {});
   }, []);
 
   const copy = (txt, key) => { navigator.clipboard.writeText(txt); setCopied(key); setTimeout(()=>setCopied(""),2000); };
@@ -314,12 +399,12 @@ function BillingTab({ me, onRefresh }) {
     e.preventDefault(); setErr(""); setMsg(""); setLoading(true);
     try {
       const plan = cfg.plans[selectedPlan];
-      const res = await axios.post(`${API}/cloud/payments/submit`, {
+      const res = await cloudAxios.post(`/cloud/payments/submit`, {
         plan: selectedPlan, method, amount_usd: plan.price_usd, reference, notes
       });
       setMsg(res.data.message);
       setReference(""); setNotes("");
-      const p = await axios.get(`${API}/cloud/payments/my`); setPayments(p.data.payments || []);
+      const p = await cloudAxios.get(`/cloud/payments/my`); setPayments(p.data.payments || []);
       onRefresh();
     } catch (e) { setErr(e.response?.data?.detail || "Submit failed"); }
     finally { setLoading(false); }
