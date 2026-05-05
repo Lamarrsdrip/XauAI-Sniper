@@ -7,7 +7,25 @@
 
 ## Completed (Feb 2026)
 
-- **Feb 2026 — Brand refresh + high-conversion copy + DIY→Cloud funnel**
+- **Feb 2026 — v5.1.2 Smart Profit Lock + cloud copy simplification**
+  - **EA v5.1.2** (`/app/backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`) addresses two real-account complaints:
+    1. *"7+ hours no trades while gold moved"* — fixed by:
+       - Trend gate ATR multiplier `2.0 → 1.0` (default `InpPG_HTFTrendATR`). Only EXTREME counter-trend blocks now.
+       - **NEW**: ranging-market carve-out (`PG_HTFTrend()` → consolidation check). When the last 10 M30 bars' total range / ATR < 0.8, the trend lock is bypassed entirely so the bot scalps chop instead of waiting forever for a strong trend.
+    2. *"Monday +70% gains roundtripped to zero"* — fixed by:
+       - **Escalating HWM giveback** (`PG_HWMGivebackPctEffective()`): allowed giveback% tightens automatically as the day's gain grows. <30% → 25%, 30%+ → 20%, 50%+ → 15%, 75%+ → 10%. So a +70% day can only give back ~10.5% before halt — preserves the run instead of letting it roundtrip.
+       - **NEW**: per-position ratchet (`PG_PerPositionRatchet()`, called every tick). At +1×ATR profit moves SL → BE; at +2×ATR profit, trails SL at 1×ATR behind price. Each winner self-protects, doesn't depend on account-level brake.
+    3. *"Single losses paralyze the bot"* — fixed by:
+       - **NEW**: adaptive cooldown (`PG_AdaptiveCooldownMin()`): 1 loss = 30 min (base), 2 consecutive = 90 min (3×), 3+ consecutive = 240 min (8×). Streak resets on any winner via `PG_OnBasketWin()` (called from basket-flush profit branch + per-deal TP closes in `OnTradeTransaction`).
+    All changes additive and gated behind input booleans (`InpPG_EscalatingGiveback`, `InpPG_ConsolidationCarveout`, `InpPG_AdaptiveCooldown`, `InpPG_PerPositionRatchet`) so each can be disabled without recompile if needed. New version published to `/app/frontend/public/XAUUSD_AI_Sniper_EA_v5.1.2.mq5`. `/api/download/ea` serves it. Header version badge updated v5.1.1 → v5.1.2.
+  - **Cloud landing copy simplified to app-interface tone**:
+    - Hero: "Trade gold. Hands-free." + "Connect once. We trade. You watch." + 1-line subtitle
+    - How it works: "Three steps." → Connect / Activate / Trade 24/7 (one-line bodies)
+    - Benefits: 6 short cards (No VPS · No MT5 install · Real-time execution · Fully automated · Pause anytime · Funds stay with broker)
+    - Trust: "Funds stay with your broker." + 1-line bodies
+    - Closing CTA: "Put gold trading on autopilot. Start free trial →"
+
+- **Feb 2026 — Brand refresh + DIY→Cloud funnel**
   - **New logo** (`XauAiLogo.jsx`): minimalist gold cloud silhouette with bold upward arrow inside. Renders cleanly from 16px favicon → 1024px app-icon. Two render modes: outlined (transparent fill, gold stroke) for nav/header, and `solid` (gold gradient fill, dark arrow) for app icons / hero badges. Replaces the generic lucide-react `<Cloud />` icon in the cloud nav + footer.
   - **`favicon.svg` + regenerated `icon-192.png` / `icon-512.png`** (PWA manifest icons) using the new logo + dark `#0A0A0A` rounded-square background. Added `<link rel="icon" type="image/svg+xml">` to `index.html` so browsers + iOS install both pick it up.
   - **Cloud landing copy revamp** (`/cloud`):
