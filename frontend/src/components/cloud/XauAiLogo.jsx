@@ -1,63 +1,97 @@
 import React from "react";
 
 /**
- * XauAi Cloud minimal logo — fintech style.
- * - Gold cloud outline with subtle inner gradient
- * - Upward arrow inside (signals "trades up", "rising")
- * - Designed to read at 16px favicon → 1024px app-icon
+ * XauAi Cloud — XAU Cloud branded logo.
+ * Gold cloud silhouette with a stylized "X" inside; one arm of the X extends
+ * upward and to the right as an arrow that pierces through the top-right of
+ * the cloud — signaling "trades go up, executed in the cloud".
+ *
+ * Designed to read at every size: 16px favicon → 1024px app-icon.
  *
  * Props:
  *   size  → pixel size (default 32)
- *   solid → set true to render filled cloud (good for app icons on dark BG)
+ *   solid → true for filled app-icon style (dark rounded-square + filled glyphs)
+ *           false for outlined nav/inline use (transparent, gold strokes only)
  *   className
  */
 export default function XauAiLogo({ size = 32, solid = false, className = "" }) {
   const id = React.useId();
+  const stroke = `url(#${id}-grad)`;
+
   return (
     <svg
       width={size}
       height={size}
-      viewBox="0 0 64 64"
+      viewBox="0 0 200 200"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-label="XauAi Cloud"
     >
       <defs>
-        <linearGradient id={`${id}-grad`} x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
-          <stop offset="0%"   stopColor="#F5D061" />
-          <stop offset="55%"  stopColor="#D4AF37" />
-          <stop offset="100%" stopColor="#9C7A1F" />
+        {/* Gold gradient — matches the brand: warm highlight → core gold → deep antique */}
+        <linearGradient id={`${id}-grad`} x1="20" y1="20" x2="180" y2="190" gradientUnits="userSpaceOnUse">
+          <stop offset="0%"   stopColor="#FBE08A" />
+          <stop offset="35%"  stopColor="#E5C158" />
+          <stop offset="65%"  stopColor="#D4AF37" />
+          <stop offset="100%" stopColor="#8C6A1A" />
         </linearGradient>
-        <linearGradient id={`${id}-arrow`} x1="32" y1="14" x2="32" y2="46" gradientUnits="userSpaceOnUse">
-          <stop offset="0%"   stopColor="#FFEAA0" />
-          <stop offset="100%" stopColor="#D4AF37" />
+        {/* Subtle inner highlight on solid X for premium metallic feel */}
+        <linearGradient id={`${id}-x`} x1="50" y1="50" x2="160" y2="160" gradientUnits="userSpaceOnUse">
+          <stop offset="0%"   stopColor="#FFE8A0" />
+          <stop offset="55%"  stopColor="#D4AF37" />
+          <stop offset="100%" stopColor="#A0791F" />
         </linearGradient>
       </defs>
 
-      {/* Cloud silhouette — single closed path, left-rounded, peaks on right */}
+      {/* App-icon background */}
+      {solid && <rect x="0" y="0" width="200" height="200" rx="44" fill="#0A0A0A" />}
+
+      {/* Cloud — two-lobed silhouette, generous proportions */}
       <path
-        d="M20 46
-           C12 46 6 40 6 33
-           C6 27 10 22 16 21
-           C18 14 25 9 33 9
-           C42 9 49 15 50 24
-           C56 24 60 28 60 33
-           C60 40 54 46 47 46
-           Z"
-        fill={solid ? `url(#${id}-grad)` : "transparent"}
-        stroke={`url(#${id}-grad)`}
-        strokeWidth={solid ? 0 : 3}
+        d="
+          M 58 148
+          C 36 148, 20 132, 22 110
+          C 24 92, 38 80, 56 80
+          C 60 58, 82 46, 104 50
+          C 122 36, 152 44, 160 70
+          C 182 72, 196 92, 188 112
+          C 196 132, 178 150, 156 146
+          C 140 154, 76 154, 58 148
+          Z
+        "
+        fill={solid ? "transparent" : "transparent"}
+        stroke={stroke}
+        strokeWidth={solid ? 9 : 10}
         strokeLinejoin="round"
+        strokeLinecap="round"
       />
 
-      {/* Up arrow — bold, centered, gold gradient stem + chevron head */}
+      {/* X — left arm (back-slash). Tapered ends for a sharper, premium feel. */}
       <path
-        d="M32 44 L32 22 M32 22 L24 30 M32 22 L40 30"
-        stroke={solid ? "#0A0A0A" : `url(#${id}-arrow)`}
-        strokeWidth="4.5"
+        d="M 78 70 L 132 138"
+        stroke={solid ? `url(#${id}-x)` : stroke}
+        strokeWidth="13"
+        strokeLinecap="round"
+      />
+
+      {/* X — right arm + arrow shaft. Starts at lower-left of the X, pierces
+          through the cloud's top-right and exits as an arrow. */}
+      <path
+        d="M 70 138 L 162 54"
+        stroke={solid ? `url(#${id}-x)` : stroke}
+        strokeWidth="13"
+        strokeLinecap="round"
+      />
+
+      {/* Arrowhead — clean V-chevron at the arrow tip */}
+      <path
+        d="M 142 50 L 162 54 L 158 74"
+        stroke={solid ? `url(#${id}-x)` : stroke}
+        strokeWidth="13"
         strokeLinecap="round"
         strokeLinejoin="round"
+        fill="none"
       />
     </svg>
   );
