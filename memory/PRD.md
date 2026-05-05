@@ -1,11 +1,42 @@
 # XauAI Sniper EA - PRD
 
 ## Brand: XauAI Sniper | by emriz.eth
-## Broker: Trade.com (75% bonus) | Payment: Paystack (NGN)
+## Broker: Trade.com (75% bonus) | Payment: Bank Transfer + Crypto (admin-configurable pricing & FX)
 
 ## Admin: admin@aisniper.com / MrizAdmin2026 at /admin
 
 ## Completed (Feb 2026)
+
+- **Feb 2026 — XauAi Cloud Copy-Trading P0 fix + Billing System Overhaul**
+  - **Worker Agent v1.1.0** (`/app/backend/worker_agent/worker_agent.py`) — full rewrite addressing the "trades not mirroring" bug:
+    1. **Per-user MT5 session swap** (`_ensure_active`): the MetaTrader5 Python SDK keeps only ONE active terminal connection. Pre v1.1.0 the worker initialized once per user but every subsequent `mt5.initialize()` REPLACED the previous session — so order_send always fired against the LAST-initialized user. Now every operation (login, order_send, order_close, equity) re-authenticates as the intended user; cached active-user id avoids redundant swaps.
+    2. **Symbol auto-resolution** (`_resolve_symbol`): master EA sends `XAUUSD` but client brokers may use `XAUUSDm`, `XAUUSD.r`, `XAUUSD.s`, `GOLD`, etc. Worker now probes 16 known variants then falls back to scanning all broker symbols for any `XAU*USD*` instrument. Cached per-user.
+    3. **Filling-mode + lot-step auto-detection** per broker symbol (FOK/IOC/RETURN, volume_step rounding) — fixes silent retcode=10030 "unsupported filling mode" rejections.
+    4. **Cold-start checkpoint**: `last_signal_poll` now initializes to `now() - SIGNAL_CATCHUP_MIN(5min)` so worker restarts don't replay the entire signal history.
+    5. **Per-fanout reporting**: every trade-open attempt (success OR failure) is POSTed to `/api/cloud/agent/trade-open` with broker error string — admin sees fills + diagnoses errors without SSH-into-VPS.
+  - **Backend (server.py)** new/updated endpoints:
+    - `POST /api/cloud/agent/trade-open` — worker reports each fanout outcome; on success a real (shadow:false) row lands in `cloud_trades`; always logs to new `cloud_fanout_logs` collection with `ok`, `error`, `signal_id`, `ticket`, etc.
+    - `GET /api/admin/cloud/fanout-logs` — admin diagnostic view of recent fanout outcomes.
+  - **Billing System Overhaul**:
+    - **Dynamic admin pricing**: plans moved from hardcoded dict into `cloud_settings.plans` (admin-editable). `_get_effective_plans()` merges with defaults so missing keys still resolve. Admin can change starter/pro prices live via Pricing & FX tab.
+    - **FX currency conversion**: `cloud_settings.fx_rates` (admin-editable). Defaults: NGN=1650, KES=130, ZAR=18.5, GHS=15, EUR=0.92, GBP=0.79, INR=84, CAD=1.40, AUD=1.55. `/cloud/config` now returns `user_country` (best-effort from CF-IPCountry / X-Vercel-IP-Country / Accept-Language) + `user_currency` + `fx_rates`. Bank-transfer payment page shows the exact local-currency amount with conversion rate.
+    - **Per-user override** `POST /api/admin/cloud/users/override`: admin can set `custom_price_usd` (overrides plan default), change `plan`, or `extend_days` from the Users tab (+30d / $ override / plan-swap buttons added).
+    - **Payment proof upload**: bank-transfer payments now REQUIRE a base64 image of the transfer receipt; submit endpoint rejects bank-method submissions without `proof_image` (must be `data:image/...`, max 5 MB). Admin Payments queue renders a clickable thumbnail.
+    - **Removed Paystack/card option**: frontend `Card / Paystack` tab gone; backend rejects `method: "fiat"`.
+    - **MRR calculation** now honors per-user `custom_price_usd` (falls back to plan price).
+  - **Frontend**:
+    - `CloudDashboard.jsx` BillingTab — 2-column method picker (crypto + bank), conditional FX banner showing `NGN 82,500 ≈ $50 USD · rate 1 USD = 1650 NGN` when the user's detected country uses a non-USD currency, file picker for proof image with thumbnail preview.
+    - `AdminPortal.jsx` — new "Pricing & FX" sub-tab with editable plan name/price/max-balance/description and FX rate inputs. Users tab gains 3 inline action buttons per user: `+30d` (extend), `$` (custom price prompt), `⇄` (swap plan). Payments queue shows proof thumbnails.
+  - **EA v5.1.1** (already in tree): Profit Guardian HTF trend lock now defaults to `PERIOD_M30` with `2.0×ATR` looser threshold (was H4 / 1.5×ATR — too slow for gold).
+  - **Testing**: 21/21 backend regression tests passed (testing_agent_v3_fork iteration 9): trade-open success+failure, fanout logs, dynamic plans, FX rates, settings update, per-user override, payment-submit guards (fiat rejected, bank requires proof, admin-overridden price honored), MRR with custom price, master signal flow, auth guards on admin/agent/cloud endpoints.
+
+## Upcoming Tasks
+- Telegram alerts for cloud users (trade open/close) — P1
+- server.py refactor (2900+ lines → modular routers under /app/backend/routes) — P1
+- Worker: portable MT5 instances for true parallel multi-user execution — P2
+- End-of-day Telegram report, referral/affiliate, public AUM counter — P2
+
+## Future/Backlog
 - Base FastAPI + React + MongoDB setup
 - **XauAi Cloud MVP (May 2026)** — centralized trade-execution platform
   - Public landing (/cloud) selling managed-trading subscription
