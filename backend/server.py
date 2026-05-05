@@ -1794,15 +1794,18 @@ class MT5ConnectReq(BaseModel):
 
 class PaymentSubmitReq(BaseModel):
     plan: str                   # "starter" ($50) or "pro" ($100)
-    method: str                 # "crypto" | "bank" | "fiat"
+    method: str                 # "crypto" | "bank"
     amount_usd: float
-    reference: Optional[str] = ""   # tx hash / bank ref / paystack ref
+    reference: Optional[str] = ""   # tx hash / bank ref
     notes: Optional[str] = ""
+    proof_image: Optional[str] = ""  # base64 data URL of bank-transfer screenshot
+    paid_currency: Optional[str] = "USD"      # currency user actually paid in (NGN, USD, etc.)
+    paid_amount_local: Optional[float] = 0.0  # amount in that currency
 
 class CloudPauseReq(BaseModel):
     paused: bool
 
-# -------- Plans (admin-configurable later; hard-coded defaults for MVP) --------
+# -------- Plans (admin-configurable via cloud_settings.plans; defaults below) --------
 CLOUD_PLANS = {
     "starter": {"name": "Starter", "price_usd": 50.0, "max_balance_usd": 5000,
                 "description": "For accounts up to $5,000. All features. Email support."},
@@ -1810,6 +1813,61 @@ CLOUD_PLANS = {
                 "description": "For accounts $5,000+. Priority execution. Telegram alerts. Priority support."},
 }
 CLOUD_TRIAL_DAYS = 7
+
+# Default FX rates (USD = 1.0). Admin can override via /admin/cloud/settings.
+# Used for showing bank-transfer amounts in local currency on the billing page.
+DEFAULT_FX_RATES = {
+    "USD": 1.0,
+    "NGN": 1650.0,    # Nigeria
+    "KES": 130.0,     # Kenya
+    "ZAR": 18.5,      # South Africa
+    "GHS": 15.0,      # Ghana
+    "EUR": 0.92,      # Europe
+    "GBP": 0.79,      # UK
+    "INR": 84.0,      # India
+    "CAD": 1.40,      # Canada
+    "AUD": 1.55,      # Australia
+}
+
+# Country → preferred currency mapping for IP-based detection.
+COUNTRY_TO_CURRENCY = {
+    "NG": "NGN", "KE": "KES", "ZA": "ZAR", "GH": "GHS",
+    "GB": "GBP", "UK": "GBP", "IN": "INR", "CA": "CAD", "AU": "AUD",
+    # default everything else to USD
+}
+
+async def _get_effective_plans():
+    """Returns admin-overridden plans if set in cloud_settings.plans, else defaults."""
+    s = await _get_cloud_settings()
+    plans = s.get("plans") or {}
+    if not plans:
+        return CLOUD_PLANS
+    # merge with defaults so missing keys still resolve
+    merged = {k: dict(v) for k, v in CLOUD_PLANS.items()}
+    for pid, override in plans.items():
+        if pid not in merged: merged[pid] = {}
+        merged[pid].update(override)
+    return merged
+
+async def _get_fx_rates():
+    s = await _get_cloud_settings()
+    rates = s.get("fx_rates") or {}
+    out = dict(DEFAULT_FX_RATES); out.update({k: float(v) for k, v in rates.items() if isinstance(v, (int, float))})
+    return out
+
+def _detect_country_from_request(request: Request) -> str:
+    """Best-effort country detection from common CDN headers."""
+    for h in ("CF-IPCountry", "X-Vercel-IP-Country", "X-Country-Code"):
+        v = request.headers.get(h, "").upper().strip()
+        if v and len(v) == 2: return v
+    al = request.headers.get("Accept-Language", "")
+    if al:
+        # 'en-NG,en;q=0.9' → 'NG'
+        for piece in al.split(","):
+            if "-" in piece:
+                cc = piece.split("-")[1].split(";")[0].strip().upper()
+                if len(cc) == 2: return cc
+    return ""
 
 # -------- Admin-configured Cloud settings (payment methods, etc.) --------
 async def _get_cloud_settings():
@@ -1830,16 +1888,23 @@ async def _get_cloud_settings():
 
 # -------- Public config endpoint (users need payment instructions) --------
 @api_router.get("/cloud/config")
-async def cloud_public_config():
+async def cloud_public_config(request: Request):
     s = await _get_cloud_settings()
+    plans = await _get_effective_plans()
+    rates = await _get_fx_rates()
+    country = _detect_country_from_request(request)
+    user_currency = COUNTRY_TO_CURRENCY.get(country, "USD")
     # Worker (executor) status — how many VPS workers have heartbeat in last 3 min
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
     workers_online = await db.cloud_workers.count_documents(
         {"status": "online", "last_heartbeat": {"$gt": cutoff}})
     workers_total = await db.cloud_workers.count_documents({})
-    return {"plans": CLOUD_PLANS, "trial_days": CLOUD_TRIAL_DAYS,
+    return {"plans": plans, "trial_days": CLOUD_TRIAL_DAYS,
             "crypto_wallets": s.get("crypto_wallets", []),
             "bank_accounts":  s.get("bank_accounts", []),
+            "fx_rates":       rates,
+            "user_country":   country,
+            "user_currency":  user_currency,
             "master_status":  s.get("master_ea_status", "online"),
             "executor_workers_online": workers_online,
             "executor_workers_total":  workers_total,
@@ -2195,15 +2260,24 @@ async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
 # -------- Payments (user submits proof; admin approves) --------
 @api_router.post("/cloud/payments/submit")
 async def cloud_submit_payment(req: PaymentSubmitReq, user: dict = Depends(get_cloud_user)):
-    if req.plan not in CLOUD_PLANS:
+    plans = await _get_effective_plans()
+    if req.plan not in plans:
         raise HTTPException(status_code=400, detail="Unknown plan")
-    if req.method not in ("crypto", "bank", "fiat"):
-        raise HTTPException(status_code=400, detail="Invalid method")
+    if req.method not in ("crypto", "bank"):
+        raise HTTPException(status_code=400, detail="Invalid method (use crypto or bank)")
     ref = (req.reference or "").strip()
     if len(ref) < 4:
         raise HTTPException(status_code=400, detail="Transaction reference is required (min 4 chars)")
-    # Expected price validation — prevent tampered low amounts
-    expected_price = CLOUD_PLANS[req.plan]["price_usd"]
+    # Bank-transfer payments must include an image proof
+    if req.method == "bank":
+        proof = (req.proof_image or "").strip()
+        if not proof.startswith("data:image/"):
+            raise HTTPException(status_code=400, detail="Bank transfer requires a screenshot of your transfer (image upload).")
+        # rough size limit ~5 MB after base64 (~6.7 MB string)
+        if len(proof) > 7_000_000:
+            raise HTTPException(status_code=400, detail="Proof image too large (max 5 MB).")
+    # Expected price validation — prevent tampered low amounts (admin-overridable plans)
+    expected_price = float(plans[req.plan].get("price_usd", 0))
     if abs(float(req.amount_usd) - expected_price) > 0.01:
         raise HTTPException(status_code=400, detail=f"Amount must be ${expected_price} for {req.plan} plan")
     # Block a second pending payment from the same user (prevent spam)
@@ -2212,7 +2286,10 @@ async def cloud_submit_payment(req: PaymentSubmitReq, user: dict = Depends(get_c
         raise HTTPException(status_code=400, detail="You already have a payment pending review. Please wait or contact support.")
     doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "email": user["email"],
            "plan": req.plan, "method": req.method, "amount_usd": float(req.amount_usd),
+           "paid_currency": (req.paid_currency or "USD").upper(),
+           "paid_amount_local": float(req.paid_amount_local or 0.0),
            "reference": ref, "notes": (req.notes or "").strip(),
+           "proof_image": req.proof_image or "",
            "status": "pending", "submitted_at": datetime.now(timezone.utc).isoformat(),
            "approved_at": None, "approved_by": None}
     await db.cloud_payments.insert_one(doc.copy())
@@ -2234,14 +2311,19 @@ async def admin_cloud_users():
 
 @api_router.get("/admin/cloud/stats", dependencies=[Depends(get_current_admin)])
 async def admin_cloud_stats():
+    plans = await _get_effective_plans()
     total = await db.cloud_users.count_documents({})
     trial = await db.cloud_users.count_documents({"status": "trial"})
     active = await db.cloud_users.count_documents({"status": "active"})
     connected = await db.cloud_users.count_documents({"mt5_connected": True})
     pending_pays = await db.cloud_payments.count_documents({"status": "pending"})
-    # simple MRR estimate
-    active_users = await db.cloud_users.find({"status": "active"}, {"_id": 0, "plan": 1}).to_list(10000)
-    mrr = sum(CLOUD_PLANS.get(u.get("plan", "starter"), {}).get("price_usd", 0) for u in active_users)
+    # MRR estimate, honoring per-user custom_price_usd overrides
+    active_users = await db.cloud_users.find({"status": "active"},
+        {"_id": 0, "plan": 1, "custom_price_usd": 1}).to_list(10000)
+    mrr = 0.0
+    for u in active_users:
+        cp = u.get("custom_price_usd")
+        mrr += float(cp) if cp else float(plans.get(u.get("plan", "starter"), {}).get("price_usd", 0))
     return {"total_users": total, "trial_users": trial, "active_users": active,
             "mt5_connected": connected, "pending_payments": pending_pays, "mrr_usd": mrr}
 
@@ -2294,6 +2376,8 @@ class CloudSettingsUpdate(BaseModel):
     fiat_paystack_enabled: Optional[bool] = None
     telegram_alerts_enabled: Optional[bool] = None
     master_ea_status: Optional[str] = None
+    plans: Optional[dict] = None        # {"starter":{"price_usd":50,...}, ...}
+    fx_rates: Optional[dict] = None     # {"NGN":1650, "KES":130, ...}
 
 @api_router.put("/admin/cloud/settings", dependencies=[Depends(get_current_admin)])
 async def admin_cloud_update_settings(req: CloudSettingsUpdate):
@@ -2301,6 +2385,41 @@ async def admin_cloud_update_settings(req: CloudSettingsUpdate):
     if not upd: return {"ok": True, "unchanged": True}
     await db.cloud_settings.update_one({"key": "main"}, {"$set": upd}, upsert=True)
     return {"ok": True}
+
+# -------- Admin: per-user pricing override --------
+class UserPlanOverrideReq(BaseModel):
+    user_id: str
+    plan: Optional[str] = None          # change plan for this user
+    custom_price_usd: Optional[float] = None  # 0 or null = use plan default
+    extend_days: Optional[int] = None   # +N days onto subscription_ends_at
+
+@api_router.post("/admin/cloud/users/override", dependencies=[Depends(get_current_admin)])
+async def admin_user_override(req: UserPlanOverrideReq):
+    user = await db.cloud_users.find_one({"id": req.user_id}, {"_id": 0})
+    if not user: raise HTTPException(status_code=404, detail="User not found")
+    set_doc: dict = {}
+    if req.plan:
+        plans = await _get_effective_plans()
+        if req.plan not in plans:
+            raise HTTPException(status_code=400, detail=f"Unknown plan '{req.plan}'")
+        set_doc["plan"] = req.plan
+    if req.custom_price_usd is not None:
+        set_doc["custom_price_usd"] = float(req.custom_price_usd) if req.custom_price_usd > 0 else None
+    if req.extend_days and req.extend_days > 0:
+        now = datetime.now(timezone.utc)
+        curr = now
+        try:
+            ends = user.get("subscription_ends_at")
+            if ends:
+                ce = datetime.fromisoformat(ends.replace("Z", "+00:00"))
+                if ce > now: curr = ce
+        except Exception: pass
+        set_doc["subscription_ends_at"] = (curr + timedelta(days=int(req.extend_days))).isoformat()
+        set_doc["status"] = "active"
+    if not set_doc:
+        return {"ok": True, "unchanged": True}
+    await db.cloud_users.update_one({"id": req.user_id}, {"$set": set_doc})
+    return {"ok": True, "set": set_doc}
 
 # -------- Worker Agent Endpoints (used by VPS workers, protected by secret) --------
 #  Workers poll /cloud/agent/pending-users to get credentials for users they should
@@ -2748,6 +2867,51 @@ async def cloud_agent_trade_close(req: AgentTradeLog, request: Request):
     doc["id"] = str(uuid.uuid4())
     await db.cloud_trades.insert_one(doc.copy())
     return {"ok": True}
+
+# Worker reports each trade-open attempt (success OR failure) so the admin
+# panel + user dashboard can see exactly what the VPS executor did per signal.
+class AgentTradeOpenReq(BaseModel):
+    user_id: str
+    signal_id: str
+    ticket: int = 0
+    symbol: str = "XAUUSD"
+    side: str = ""
+    lots: float = 0.0
+    entry: float = 0.0
+    sl: float = 0.0
+    tp: float = 0.0
+    ok: bool = False
+    error: Optional[str] = ""
+    opened_at: str = ""
+
+@api_router.post("/cloud/agent/trade-open")
+async def cloud_agent_trade_open(req: AgentTradeOpenReq, request: Request):
+    await _require_agent_async(request)
+    doc = req.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["status"] = "open" if req.ok else "failed"
+    await db.cloud_fanout_logs.insert_one(doc.copy())
+    if req.ok:
+        # Insert a real (non-shadow) trade row so the user dashboard sees it.
+        trade = {
+            "id": str(uuid.uuid4()), "user_id": req.user_id,
+            "signal_id": req.signal_id, "ticket": req.ticket,
+            "symbol": req.symbol, "side": req.side, "lots": req.lots,
+            "entry": req.entry, "sl": req.sl, "tp": req.tp,
+            "exit_price": 0, "profit": 0,
+            "status": "open", "shadow": False,
+            "opened_at": req.opened_at or datetime.now(timezone.utc).isoformat(),
+            "closed_at": None,
+        }
+        await db.cloud_trades.insert_one(trade.copy())
+    return {"ok": True}
+
+# Admin diagnostic: recent fanout outcomes (last 100) so debugging copy-trading
+# is one click away instead of SSH-into-VPS-to-tail-logs.
+@api_router.get("/admin/cloud/fanout-logs", dependencies=[Depends(get_current_admin)])
+async def cloud_admin_fanout_logs(limit: int = 100):
+    rows = await db.cloud_fanout_logs.find({}, {"_id": 0}).sort("opened_at", -1).to_list(min(int(limit), 500))
+    return {"logs": rows, "total": len(rows)}
 
 class AgentEquitySnapshot(BaseModel):
     user_id: str; balance: float; equity: float; margin: float; free_margin: float

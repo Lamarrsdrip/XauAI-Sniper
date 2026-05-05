@@ -639,6 +639,8 @@ function BillingTab({ me, onRefresh }) {
   const [method, setMethod] = useState("crypto");
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
+  const [proofImage, setProofImage] = useState("");   // base64 data URL
+  const [proofName, setProofName] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -652,15 +654,33 @@ function BillingTab({ me, onRefresh }) {
 
   const copy = (txt, key) => { navigator.clipboard.writeText(txt); setCopied(key); setTimeout(()=>setCopied(""),2000); };
 
+  const onProofPick = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > 5 * 1024 * 1024) { setErr("Proof image must be under 5 MB"); return; }
+    const r = new FileReader();
+    r.onload = () => { setProofImage(r.result); setProofName(f.name); setErr(""); };
+    r.readAsDataURL(f);
+  };
+
   const submit = async (e) => {
     e.preventDefault(); setErr(""); setMsg(""); setLoading(true);
     try {
       const plan = cfg.plans[selectedPlan];
+      const rate = (cfg.fx_rates && cfg.fx_rates[cfg.user_currency]) || 1;
+      const localAmount = +(plan.price_usd * rate).toFixed(2);
       const res = await cloudAxios.post(`/cloud/payments/submit`, {
-        plan: selectedPlan, method, amount_usd: plan.price_usd, reference, notes
+        plan: selectedPlan,
+        method,
+        amount_usd: plan.price_usd,
+        reference,
+        notes,
+        proof_image: method === "bank" ? proofImage : "",
+        paid_currency: method === "bank" ? cfg.user_currency : "USD",
+        paid_amount_local: method === "bank" ? localAmount : plan.price_usd,
       });
       setMsg(res.data.message);
-      setReference(""); setNotes("");
+      setReference(""); setNotes(""); setProofImage(""); setProofName("");
       const p = await cloudAxios.get(`/cloud/payments/my`); setPayments(p.data.payments || []);
       onRefresh();
     } catch (e) { setErr(e.response?.data?.detail || "Submit failed"); }
@@ -668,6 +688,12 @@ function BillingTab({ me, onRefresh }) {
   };
 
   if (!cfg) return <Loader2 className="w-6 h-6 animate-spin text-[#D4AF37]" />;
+
+  const userCcy = cfg.user_currency || "USD";
+  const fxRate = (cfg.fx_rates && cfg.fx_rates[userCcy]) || 1;
+  const planPrice = cfg.plans[selectedPlan]?.price_usd || 0;
+  const localPrice = (planPrice * fxRate).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const showLocal = method === "bank" && userCcy !== "USD";
 
   return (
     <div className="space-y-6">
@@ -700,9 +726,9 @@ function BillingTab({ me, onRefresh }) {
       {/* Payment method + instructions */}
       <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="payment-instructions">
         <div className="text-xs font-mono tracking-widest text-white/40 mb-3">PAYMENT METHOD</div>
-        <div className="grid grid-cols-3 gap-2 mb-5">
-          {[{id:"crypto",label:"Crypto"},{id:"bank",label:"Bank transfer"},{id:"fiat",label:"Card / Paystack"}].map(m => (
-            <button key={m.id} onClick={()=>setMethod(m.id)} data-testid={`method-${m.id}`}
+        <div className="grid grid-cols-2 gap-2 mb-5">
+          {[{id:"crypto",label:"Crypto"},{id:"bank",label:"Bank transfer"}].map(m => (
+            <button key={m.id} type="button" onClick={()=>setMethod(m.id)} data-testid={`method-${m.id}`}
                     className={`py-2.5 rounded-xl border transition-colors text-sm ${method===m.id?"bg-[#D4AF37]/10 border-[#D4AF37]/40 text-[#D4AF37]":"bg-white/5 border-white/10 text-white/70 hover:bg-white/10"}`}>
               {m.label}
             </button>
@@ -717,17 +743,27 @@ function BillingTab({ me, onRefresh }) {
               <div key={i} className="p-4 bg-black/40 border border-white/5 rounded-xl">
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs font-mono tracking-widest text-white/50">{w.asset} · {w.network}</div>
-                  <button onClick={()=>copy(w.address, `w${i}`)} className="text-xs text-[#D4AF37] flex items-center gap-1" data-testid={`copy-wallet-${i}`}>
+                  <button type="button" onClick={()=>copy(w.address, `w${i}`)} className="text-xs text-[#D4AF37] flex items-center gap-1" data-testid={`copy-wallet-${i}`}>
                     {copied===`w${i}` ? "Copied!" : <>Copy <Copy className="w-3 h-3" /></>}
                   </button>
                 </div>
                 <div className="font-mono text-sm break-all">{w.address}</div>
               </div>
             ))}
+            <div className="text-sm text-white/60 p-3 bg-[#D4AF37]/5 border border-[#D4AF37]/20 rounded-xl">
+              Send exactly <span className="font-mono text-[#D4AF37]">${planPrice}</span> worth of crypto to the address above, then submit the transaction hash below.
+            </div>
           </div>
         )}
         {method === "bank" && (
           <div className="space-y-3" data-testid="bank-details">
+            {showLocal && (
+              <div className="p-4 bg-[#D4AF37]/5 border border-[#D4AF37]/30 rounded-xl text-sm" data-testid="fx-conversion">
+                <div className="text-xs font-mono tracking-widest text-[#D4AF37] mb-1">PAY THIS AMOUNT</div>
+                <div className="text-2xl font-bold">{userCcy} {localPrice}</div>
+                <div className="text-xs text-white/50 mt-1">≈ ${planPrice} USD · rate 1 USD = {fxRate} {userCcy}</div>
+              </div>
+            )}
             {cfg.bank_accounts.length === 0 ? (
               <div className="text-sm text-white/50 p-4 bg-white/5 rounded-xl">Bank accounts are being configured. Please try crypto or contact support.</div>
             ) : cfg.bank_accounts.map((b,i)=>(
@@ -741,23 +777,32 @@ function BillingTab({ me, onRefresh }) {
             ))}
           </div>
         )}
-        {method === "fiat" && (
-          <div className="text-sm text-white/60 p-4 bg-white/5 rounded-xl" data-testid="fiat-details">
-            Paystack checkout integration is coming soon. For now, please use bank transfer or crypto, or contact support for card payments.
-          </div>
-        )}
       </div>
 
       {/* Submit payment proof */}
       <form onSubmit={submit} className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="payment-submit-form">
         <div className="text-xs font-mono tracking-widest text-white/40 mb-4">SUBMIT PAYMENT CONFIRMATION</div>
-        <div className="text-sm text-white/60 mb-4">After you've sent payment, submit the transaction reference below. Admin verifies within 24 hours and activates your subscription.</div>
+        <div className="text-sm text-white/60 mb-4">After you've sent payment, submit the transaction reference{method==="bank"?" plus a screenshot of the transfer":""} below. Admin verifies within 24 hours and activates your subscription.</div>
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">TRANSACTION REFERENCE</label>
-            <input value={reference} onChange={e=>setReference(e.target.value)} required placeholder="tx hash, bank ref, or confirmation number"
+            <input value={reference} onChange={e=>setReference(e.target.value)} required placeholder={method==="crypto"?"transaction hash":"bank reference / receipt #"}
                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none font-mono text-sm" data-testid="payment-reference" />
           </div>
+          {method === "bank" && (
+            <div>
+              <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">PROOF OF PAYMENT (SCREENSHOT) *</label>
+              <input type="file" accept="image/*" onChange={onProofPick} required
+                     className="w-full text-sm text-white/70 file:bg-[#D4AF37]/10 file:text-[#D4AF37] file:border-0 file:rounded-lg file:px-4 file:py-2 file:mr-3 file:font-semibold file:cursor-pointer"
+                     data-testid="payment-proof-upload" />
+              {proofImage && (
+                <div className="mt-2 flex items-center gap-3" data-testid="proof-preview">
+                  <img src={proofImage} alt="proof" className="h-20 w-20 object-cover rounded-lg border border-white/10" />
+                  <div className="text-xs text-white/60 font-mono">{proofName}</div>
+                </div>
+              )}
+            </div>
+          )}
           <div>
             <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">NOTES (OPTIONAL)</label>
             <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} placeholder="Anything we should know"
@@ -765,8 +810,8 @@ function BillingTab({ me, onRefresh }) {
           </div>
           {msg && <div className="text-green-400 text-sm" data-testid="pay-msg">{msg}</div>}
           {err && <div className="text-red-400 text-sm" data-testid="pay-err">{err}</div>}
-          <button type="submit" disabled={loading} className="w-full py-3 bg-[#D4AF37] text-black font-semibold rounded-xl hover:bg-[#E5C558] transition-colors disabled:opacity-50 flex items-center justify-center gap-2" data-testid="payment-submit">
-            <CreditCard className="w-4 h-4" /> {loading ? "Submitting…" : `Submit ${cfg.plans[selectedPlan].name} payment ($${cfg.plans[selectedPlan].price_usd})`}
+          <button type="submit" disabled={loading || (method==="bank" && !proofImage)} className="w-full py-3 bg-[#D4AF37] text-black font-semibold rounded-xl hover:bg-[#E5C558] transition-colors disabled:opacity-50 flex items-center justify-center gap-2" data-testid="payment-submit">
+            <CreditCard className="w-4 h-4" /> {loading ? "Submitting…" : `Submit ${cfg.plans[selectedPlan].name} payment ($${cfg.plans[selectedPlan].price_usd}${showLocal?` ≈ ${userCcy} ${localPrice}`:""})`}
           </button>
         </div>
       </form>

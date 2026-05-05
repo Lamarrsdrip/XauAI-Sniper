@@ -1,0 +1,48 @@
+{
+  "summary": "Backend regression tests for XauAi Cloud billing overhaul + copy-trading fanout. 21/21 tests passed (100%). Verified: trade-open success/failure flow, admin fanout-logs, dynamic plans+fx_rates in /cloud/config, admin settings updates, per-user pricing override, payment submit (fiat rejected, bank requires proof, admin-overridden price honored), MRR with custom_price_usd, master signal flow, and auth guards on admin/agent/cloud-user endpoints.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "TestAuthGuards (4/4): admin endpoints reject missing/bad Bearer (401/403); cloud-user endpoint rejects no cookie; agent endpoint rejects bad X-Agent-Token (403)",
+    "TestCloudConfig (2/2): /api/cloud/config returns plans, fx_rates with all 10 currencies (USD/NGN/KES/ZAR/GHS/EUR/GBP/INR/CAD/AUD), user_country (NG via Accept-Language), user_currency (NGN)",
+    "TestAdminSettingsUpdate (1/1): PUT /admin/cloud/settings persists plans and fx_rates; immediately reflected in /cloud/config (starter $55, pro $110, NGN 1700)",
+    "TestPaymentsSubmit (4/4): rejects method='fiat'; bank requires proof_image data-url; amount validated against admin-overridden plan price; successful bank payment with proof+paid_currency=NGN+paid_amount_local persists correctly",
+    "TestUserOverride (4/4): rejects unknown plan (400); plan+custom_price_usd+extend_days sets all fields and status=active; custom_price_usd=0 clears to None; rejects without admin token",
+    "TestAdminStats (1/1): MRR includes per-user custom_price_usd override ($75)",
+    "TestMasterSignalAndFanout (5/5): POST /cloud/master/signal creates signal; GET /cloud/agent/pending-signals returns it; trade-open ok=true inserts shadow:false row in cloud_trades AND fanout_logs; trade-open ok=false inserts ONLY into cloud_fanout_logs; GET /admin/cloud/fanout-logs returns recent logs sorted by opened_at desc"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_cloud_billing_and_copy_trading.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 2963 lines — exceeds the 700-line guideline. Should be split into modules (e.g., cloud_routes.py, admin_routes.py, agent_routes.py, models.py, billing.py).",
+    "Two agent token resolvers exist (_require_agent + _require_agent_async). The legacy sync wrapper is dead code in current routes; consider removing.",
+    "_detect_country_from_request relies on CF-IPCountry / X-Vercel-IP-Country / X-Country-Code headers — none of these reach the backend through the current Emergent ingress (verified: only Accept-Language passes through). Country detection works only when browsers send a regional Accept-Language. Consider integrating an IP-geo lookup or document the limitation.",
+    "POST /cloud/payments/submit: the proof_image is stored as a base64 data URL inside Mongo (up to ~7MB). For >100 payments this will bloat the DB. Move uploaded proofs to object storage (S3-style) and store only the URL.",
+    "POST /admin/cloud/users/override: extend_days only works with positive int; negative or null leaves status unchanged. Consider adding ability to revoke (status=expired) for completeness.",
+    "POST /cloud/agent/trade-open: when ok=true, the inserted cloud_trades row has profit=0 and exit_price=0 with status='open' — that's correct, but trade-close updates require a separate insert via /cloud/agent/trade-close. The dashboard query sorts by closed_at which means open trades will always be at the end. Verify dashboard handles status='open' visually.",
+    "The signal_id column in cloud_fanout_logs is not indexed. With 1000s of trades/day this query (sort by opened_at desc) will get slow — add an index on opened_at."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_cloud_billing_and_copy_trading.py"
+  ],
+  "success_rate": {
+    "backend": "100% (21/21)",
+    "frontend": "skipped per request"
+  },
+  "test_credentials": "Admin: admin@aisniper.com / MrizAdmin2026 ; Cloud user: testuser@xauai.com / TestUser2026",
+  "seed_data_creation": "Test user testuser@xauai.com was already seeded (created in prior iterations). Tests submit one bank-transfer payment then delete it. TEST_ prefixed signals and their fanout_logs are deleted in teardown. Plans are restored to defaults (starter $50, pro $100). custom_price_usd is cleared on test user. NOTE: test user's plan is now 'pro' and status='active' as a side-effect of the override tests (subscription extended ~30 days). This is intentional per test flow and matches expected behavior.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All 9 review-request items pass. Test file at /app/backend/tests/test_cloud_billing_and_copy_trading.py is fully self-contained (creates user if missing, restores defaults in teardown). Agent token is resolved at runtime from db.cloud_settings.main.agent_token. CF-IPCountry header is stripped by the Emergent edge — country detection in tests uses Accept-Language. The single-pass regression run takes ~5s.",
+  "rca_of_the_issue": "N/A — all features verified working. The fix-set for the original copy-trade-not-mirroring bug (new /cloud/agent/trade-open endpoint that workers POST after each MT5 OrderSend, plus the /admin/cloud/fanout-logs diagnostic endpoint) is correctly wired: success reports insert into cloud_trades (shadow:false) for the user dashboard, failure reports go only to cloud_fanout_logs for admin debugging."
+}

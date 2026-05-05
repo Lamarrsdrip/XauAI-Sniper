@@ -733,6 +733,27 @@ function CloudAdminTab({ api, token }) {
     finally { setBusy(false); }
   };
 
+  // Per-user pricing override
+  const overrideUser = async (uid, body) => {
+    try {
+      await ax.post(`${api}/admin/cloud/users/override`, { user_id: uid, ...body }, { headers });
+      setMsg("User updated."); refresh();
+    } catch (e) { setMsg(e.response?.data?.detail || "Update failed"); }
+  };
+
+  // Pricing edits (in-memory until "Save settings")
+  const updPlan = (id, k, v) => {
+    const plans = { ...(settings?.plans || {}) };
+    const base = plans[id] || {};
+    plans[id] = { ...base, [k]: k === "price_usd" || k === "max_balance_usd" ? Number(v) : v };
+    setSettings({ ...settings, plans });
+  };
+  const updFx = (ccy, v) => {
+    const r = { ...(settings?.fx_rates || {}) };
+    r[ccy] = Number(v);
+    setSettings({ ...settings, fx_rates: r });
+  };
+
   const addWallet = () => setSettings({...settings, crypto_wallets: [...(settings.crypto_wallets||[]), {asset:"",network:"",address:""}]});
   const updWallet = (i,k,v) => { const a = [...settings.crypto_wallets]; a[i] = {...a[i], [k]:v}; setSettings({...settings, crypto_wallets: a}); };
   const delWallet = (i) => { const a = [...settings.crypto_wallets]; a.splice(i,1); setSettings({...settings, crypto_wallets: a}); };
@@ -743,7 +764,7 @@ function CloudAdminTab({ api, token }) {
   return (
     <div className="space-y-6" data-testid="cloud-admin-tab">
       <div className="flex gap-0 border-b border-border overflow-x-auto">
-        {[{id:"stats",label:"OVERVIEW"},{id:"users",label:"USERS"},{id:"payments",label:"PAYMENTS"},{id:"infra",label:"INFRASTRUCTURE"},{id:"settings",label:"SETTINGS"}].map(t=>(
+        {[{id:"stats",label:"OVERVIEW"},{id:"users",label:"USERS"},{id:"payments",label:"PAYMENTS"},{id:"pricing",label:"PRICING & FX"},{id:"infra",label:"INFRASTRUCTURE"},{id:"settings",label:"SETTINGS"}].map(t=>(
           <button key={t.id} onClick={()=>setSub(t.id)} data-testid={`cloud-sub-${t.id}`}
                   className={`px-5 py-3 text-xs font-bold tracking-[0.1em] border-b-2 transition-colors whitespace-nowrap ${sub===t.id?"border-primary text-foreground":"border-transparent text-muted-foreground hover:text-foreground"}`}>
             {t.label} {t.id==="payments" && stats?.pending_payments>0 ? <span className="ml-1 px-1.5 py-0.5 bg-primary text-primary-foreground rounded-full text-[10px]">{stats.pending_payments}</span> : null}
@@ -771,16 +792,39 @@ function CloudAdminTab({ api, token }) {
               <th className="text-left py-2">EMAIL</th><th className="text-left py-2">STATUS</th>
               <th className="text-left py-2">PLAN</th><th className="text-right py-2">MT5</th>
               <th className="text-right py-2">BALANCE</th><th className="text-right py-2">ENDS</th>
+              <th className="text-right py-2">OVERRIDE</th>
             </tr></thead>
             <tbody>
               {users.map((u,i)=>(
                 <tr key={u.id} className="border-b border-border/50" data-testid={`cloud-user-${i}`}>
                   <td className="py-2"><div className="font-semibold">{u.email}</div><div className="text-[10px] text-muted-foreground">{u.full_name}</div></td>
                   <td className={`py-2 font-mono text-xs ${u.status==="active"?"text-[hsl(142,71%,45%)]":"text-primary"}`}>{u.status?.toUpperCase()}</td>
-                  <td className="py-2 capitalize">{u.plan}</td>
+                  <td className="py-2 capitalize">
+                    {u.plan}
+                    {u.custom_price_usd ? <span className="ml-1 text-[10px] text-primary font-mono">(${u.custom_price_usd})</span> : null}
+                  </td>
                   <td className="py-2 text-right">{u.mt5_connected ? <Check size={14} className="inline text-[hsl(142,71%,45%)]" /> : "—"}</td>
                   <td className="py-2 text-right font-mono">{u.last_balance ? `$${u.last_balance.toFixed(0)}` : "—"}</td>
                   <td className="py-2 text-right text-xs">{u.subscription_ends_at?.slice(0,10) || "—"}</td>
+                  <td className="py-2 text-right space-x-1">
+                    <button data-testid={`extend-30-${u.id}`}
+                            onClick={()=>overrideUser(u.id, { extend_days: 30 })}
+                            className="px-2 py-1 bg-[hsl(142,71%,45%)]/20 text-[hsl(142,71%,45%)] text-[10px] font-bold rounded hover:bg-[hsl(142,71%,45%)]/30">+30d</button>
+                    <button data-testid={`override-price-${u.id}`}
+                            onClick={()=>{
+                              const v = window.prompt(`Set custom monthly price (USD) for ${u.email}.\nLeave blank to clear (use plan default).`, u.custom_price_usd || "");
+                              if (v === null) return;
+                              overrideUser(u.id, { custom_price_usd: v.trim() === "" ? 0 : Number(v) });
+                            }}
+                            className="px-2 py-1 bg-primary/20 text-primary text-[10px] font-bold rounded hover:bg-primary/30">$</button>
+                    <button data-testid={`change-plan-${u.id}`}
+                            onClick={()=>{
+                              const next = u.plan === "starter" ? "pro" : "starter";
+                              if (!window.confirm(`Switch ${u.email} to ${next}?`)) return;
+                              overrideUser(u.id, { plan: next });
+                            }}
+                            className="px-2 py-1 bg-foreground/10 text-foreground text-[10px] font-bold rounded hover:bg-foreground/20">⇄</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -789,17 +833,87 @@ function CloudAdminTab({ api, token }) {
         </div>
       )}
 
+      {sub === "pricing" && settings && (
+        <div className="space-y-6" data-testid="cloud-pricing-tab">
+          <div className="border border-border p-4">
+            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-3">SUBSCRIPTION PLANS</div>
+            <div className="grid md:grid-cols-2 gap-4">
+              {["starter", "pro"].map(pid => {
+                const defaults = { starter: { name: "Starter", price_usd: 50, max_balance_usd: 5000, description: "" }, pro: { name: "Pro", price_usd: 100, max_balance_usd: 999999, description: "" } };
+                const cur = (settings.plans && settings.plans[pid]) || defaults[pid];
+                return (
+                  <div key={pid} className="border border-border p-3 space-y-2" data-testid={`plan-edit-${pid}`}>
+                    <div className="text-[10px] font-bold tracking-widest text-primary">{pid.toUpperCase()}</div>
+                    <input data-testid={`plan-${pid}-name`} value={cur.name||""} onChange={e=>updPlan(pid,"name",e.target.value)}
+                           placeholder="Plan name" className="w-full bg-muted/30 border border-border px-3 py-2 text-sm" />
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <div className="text-[10px] text-muted-foreground mb-1">PRICE USD/MO</div>
+                        <input data-testid={`plan-${pid}-price`} type="number" step="0.01" value={cur.price_usd||0} onChange={e=>updPlan(pid,"price_usd",e.target.value)}
+                               className="w-full bg-muted/30 border border-border px-3 py-2 text-sm font-mono" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-[10px] text-muted-foreground mb-1">MAX BALANCE</div>
+                        <input data-testid={`plan-${pid}-max`} type="number" value={cur.max_balance_usd||0} onChange={e=>updPlan(pid,"max_balance_usd",e.target.value)}
+                               className="w-full bg-muted/30 border border-border px-3 py-2 text-sm font-mono" />
+                      </div>
+                    </div>
+                    <textarea data-testid={`plan-${pid}-desc`} value={cur.description||""} onChange={e=>updPlan(pid,"description",e.target.value)} rows={2}
+                              placeholder="Description" className="w-full bg-muted/30 border border-border px-3 py-2 text-sm" />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="border border-border p-4">
+            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-1">FX RATES (1 USD = X)</div>
+            <div className="text-[11px] text-muted-foreground mb-3">Used to show local-currency amount on the bank-transfer payment page.</div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              {["NGN","KES","ZAR","GHS","EUR","GBP","INR","CAD","AUD"].map(ccy=>{
+                const v = (settings.fx_rates && settings.fx_rates[ccy]) ?? "";
+                return (
+                  <div key={ccy}>
+                    <div className="text-[10px] font-mono text-muted-foreground mb-1">{ccy}</div>
+                    <input data-testid={`fx-${ccy}`} type="number" step="0.01" value={v} onChange={e=>updFx(ccy,e.target.value)}
+                           className="w-full bg-muted/30 border border-border px-3 py-2 text-sm font-mono" placeholder="rate" />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <button onClick={saveSettings} disabled={busy} data-testid="save-pricing"
+                  className="px-5 py-2 bg-primary text-primary-foreground font-bold tracking-widest text-xs">
+            {busy ? "SAVING..." : "SAVE PRICING & FX"}
+          </button>
+        </div>
+      )}
+
       {sub === "payments" && (
         <div className="space-y-2" data-testid="cloud-payments-list">
           {payments.length === 0 ? <div className="text-center text-muted-foreground py-8">No payments submitted.</div> :
             payments.map((p,i)=>(
-              <div key={p.id} className="border border-border p-4 flex items-center justify-between gap-4 flex-wrap" data-testid={`cloud-payment-${i}`}>
-                <div>
-                  <div className="font-bold">{p.email}</div>
-                  <div className="text-xs text-muted-foreground mt-1">Plan: <span className="capitalize">{p.plan}</span> · ${p.amount_usd} · {p.method}</div>
-                  <div className="text-[11px] text-muted-foreground font-mono mt-1">Ref: {p.reference || "—"}</div>
-                  {p.notes && <div className="text-[11px] text-muted-foreground mt-1">Notes: {p.notes}</div>}
-                  <div className="text-[10px] text-muted-foreground mt-1">Submitted: {p.submitted_at?.slice(0,16).replace("T"," ")}</div>
+              <div key={p.id} className="border border-border p-4 flex items-start justify-between gap-4 flex-wrap" data-testid={`cloud-payment-${i}`}>
+                <div className="flex gap-4 items-start flex-1 min-w-0">
+                  {p.proof_image && (
+                    <a href={p.proof_image} target="_blank" rel="noreferrer" data-testid={`proof-${i}`}
+                       className="shrink-0 block">
+                      <img src={p.proof_image} alt="proof" className="w-24 h-24 object-cover rounded-lg border border-border hover:opacity-80 transition-opacity" />
+                      <div className="text-[10px] text-center text-muted-foreground mt-1">click to enlarge</div>
+                    </a>
+                  )}
+                  <div className="min-w-0">
+                    <div className="font-bold">{p.email}</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Plan: <span className="capitalize">{p.plan}</span> · ${p.amount_usd} · {p.method}
+                      {p.paid_currency && p.paid_currency !== "USD" && p.paid_amount_local > 0 &&
+                        <span className="ml-1">(paid {p.paid_currency} {p.paid_amount_local.toLocaleString()})</span>}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground font-mono mt-1 break-all">Ref: {p.reference || "—"}</div>
+                    {p.notes && <div className="text-[11px] text-muted-foreground mt-1">Notes: {p.notes}</div>}
+                    <div className="text-[10px] text-muted-foreground mt-1">Submitted: {p.submitted_at?.slice(0,16).replace("T"," ")}</div>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`px-2 py-1 text-[10px] font-bold rounded ${p.status==="approved"?"bg-[hsl(142,71%,45%)]/20 text-[hsl(142,71%,45%)]":p.status==="rejected"?"bg-[hsl(348,83%,47%)]/20 text-[hsl(348,83%,47%)]":"bg-primary/20 text-primary"}`}>{p.status?.toUpperCase()}</span>

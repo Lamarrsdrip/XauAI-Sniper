@@ -21,7 +21,7 @@ Mock mode (any OS, for dry-run testing):
   → logs every action but never actually calls MT5. Perfect for sanity-checking
     the backend round-trip before you rent the VPS.
 
-Author: XauAi Sniper   |   Version: 1.0.0
+Author: XauAi Sniper   |   Version: 1.1.0  (multi-user session swap + symbol resolver)
 """
 from __future__ import annotations
 
@@ -34,8 +34,8 @@ import socket
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Dict, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
@@ -104,7 +104,11 @@ POLL_SEC = int(os.environ.get("POLL_SEC", "10"))
 HEARTBEAT_SEC = int(os.environ.get("HEARTBEAT_SEC", "60"))
 EQUITY_SEC = int(os.environ.get("EQUITY_SEC", "120"))
 HTTP_TIMEOUT = int(os.environ.get("HTTP_TIMEOUT", "15"))
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+
+# Catch-up window: on cold start we only execute signals from the last N minutes
+# to avoid replaying historic trades. 0 = only signals fired AFTER worker start.
+SIGNAL_CATCHUP_MIN = int(os.environ.get("SIGNAL_CATCHUP_MIN", "5"))
 
 HEADERS = {"X-Agent-Token": AGENT_TOKEN, "Content-Type": "application/json"}
 
@@ -114,6 +118,13 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("xauai-worker")
+
+# Common XAUUSD symbol variants to probe when broker uses a non-standard name.
+SYMBOL_VARIANTS = [
+    "XAUUSD", "XAUUSDm", "XAUUSD.r", "XAUUSD.s", "XAUUSD.c", "XAUUSDc",
+    "XAUUSD-Z", "XAUUSDpro", "XAUUSD#", "XAUUSD.", "GOLD", "GOLDm",
+    "GOLD.s", "XAU/USD", "XAUUSDX", "XAUUSD_i",
+]
 
 
 # ---------- State ----------
@@ -127,8 +138,13 @@ class UserSession:
     risk_tier: str = "balanced"        # conservative | balanced | aggressive
     last_balance: float = 1000.0
     logged_in: bool = False
+    resolved_symbol: str = ""          # cached XAUUSD-equivalent for THIS broker
     # signal_id -> MT5 ticket, so we can close precisely when master closes
     open_tickets: Dict[str, int] = field(default_factory=dict)
+    # diagnostic counters
+    fanout_attempts: int = 0
+    fanout_successes: int = 0
+    last_fanout_error: str = ""
 
 
 RISK_PCT = {"conservative": 0.6, "balanced": 1.2, "aggressive": 2.0}
@@ -137,10 +153,15 @@ RISK_PCT = {"conservative": 0.6, "balanced": 1.2, "aggressive": 2.0}
 class WorkerAgent:
     def __init__(self) -> None:
         self.users: Dict[str, UserSession] = {}
-        self.last_signal_poll: str = ""   # ISO timestamp of last /pending-signals poll
+        # cold-start cursor: only pick up signals fired after worker boot
+        # (minus a small catch-up window for very recent ones)
+        boot = datetime.now(timezone.utc) - timedelta(minutes=SIGNAL_CATCHUP_MIN)
+        self.last_signal_poll: str = boot.isoformat()
         self.last_hb: float = 0.0
         self.last_eq: float = 0.0
         self.running = True
+        # which user currently owns the active MT5 terminal connection
+        self._active_user_id: str = ""
 
     # ---------- HTTP helpers ----------
     def _get(self, path: str, params: Optional[dict] = None) -> dict:
@@ -153,65 +174,174 @@ class WorkerAgent:
         r.raise_for_status()
         return r.json()
 
-    # ---------- MT5 helpers (mockable) ----------
-    def mt5_login(self, u: UserSession) -> bool:
+    def _post_safe(self, path: str, body: dict) -> None:
+        """Best-effort POST that logs but never raises."""
+        try:
+            self._post(path, body)
+        except Exception as e:
+            log.warning("POST %s failed: %s", path, e)
+
+    # ---------- MT5 session swap ----------
+    def _ensure_active(self, u: UserSession) -> bool:
+        """CRITICAL: the MetaTrader5 Python SDK has a SINGLE global terminal
+        connection. To operate on a specific user's account we must re-login
+        before every operation. This is cheap (~50ms) when already logged in
+        as the same user, expensive only on swap."""
         if MOCK_MT5:
             u.logged_in = True
-            log.info("[MOCK] login ok user=%s login=%s server=%s", u.email, u.mt5_login, u.mt5_server)
+            self._active_user_id = u.user_id
             return True
+        if self._active_user_id == u.user_id and u.logged_in:
+            # Already active for this user — nothing to do.
+            return True
+        # Swap: re-initialize for THIS user.
         ok = mt5.initialize(login=int(u.mt5_login), server=u.mt5_server, password=u.mt5_password)
         if not ok:
-            log.error("MT5 login FAIL user=%s err=%s", u.email, mt5.last_error())
+            err = mt5.last_error()
+            u.logged_in = False
+            u.last_fanout_error = f"login swap failed: {err}"
+            log.error("MT5 login swap FAIL user=%s server=%s err=%s", u.email, u.mt5_server, err)
             return False
+        u.logged_in = True
+        self._active_user_id = u.user_id
         acct = mt5.account_info()
         if acct:
             u.last_balance = float(acct.balance)
-        u.logged_in = True
-        log.info("MT5 login OK user=%s balance=%.2f", u.email, u.last_balance)
         return True
 
-    def mt5_order_open(self, u: UserSession, sig: dict, lots: float) -> Optional[int]:
-        """Returns MT5 ticket on success, else None."""
+    def mt5_login(self, u: UserSession) -> bool:
+        if MOCK_MT5:
+            u.logged_in = True
+            self._active_user_id = u.user_id
+            log.info("[MOCK] login ok user=%s login=%s server=%s", u.email, u.mt5_login, u.mt5_server)
+            return True
+        return self._ensure_active(u)
+
+    # ---------- Symbol auto-resolution ----------
+    def _resolve_symbol(self, u: UserSession, requested: str) -> Optional[str]:
+        """Find the broker-specific XAUUSD symbol for THIS user's terminal.
+        Caches per-user. Tries the master-EA's name first, then known variants."""
+        if u.resolved_symbol:
+            return u.resolved_symbol
+        if MOCK_MT5:
+            u.resolved_symbol = requested or "XAUUSD"
+            return u.resolved_symbol
+        # 1. Try the requested name exactly.
+        candidates: List[str] = []
+        if requested:
+            candidates.append(requested)
+        candidates.extend([s for s in SYMBOL_VARIANTS if s != requested])
+        for sym in candidates:
+            info = mt5.symbol_info(sym)
+            if info is None:
+                continue
+            # Symbol exists in the broker's universe. Activate it.
+            if not info.visible:
+                if not mt5.symbol_select(sym, True):
+                    continue
+            u.resolved_symbol = sym
+            log.info("symbol resolved user=%s requested=%s → broker=%s",
+                     u.email, requested, sym)
+            return sym
+        # 2. Fallback: scan all symbols for one that begins with XAU.
+        all_syms = mt5.symbols_get() or []
+        for s in all_syms:
+            name = getattr(s, "name", "")
+            if name.upper().startswith("XAU") and "USD" in name.upper():
+                if mt5.symbol_select(name, True):
+                    u.resolved_symbol = name
+                    log.info("symbol resolved (scan) user=%s → %s", u.email, name)
+                    return name
+        log.error("symbol_resolve FAIL user=%s — no XAUUSD-equivalent on this broker. "
+                  "Asked for '%s'. Add a gold instrument to MT5 → Market Watch.",
+                  u.email, requested)
+        u.last_fanout_error = f"no XAUUSD-equivalent symbol on broker"
+        return None
+
+    # ---------- Trade ops ----------
+    def mt5_order_open(self, u: UserSession, sig: dict, lots: float) -> Tuple[Optional[int], str]:
+        """Returns (ticket, error_msg)."""
         side = sig["side"].upper()
-        symbol = sig.get("symbol", "XAUUSD")
         sl, tp = float(sig["sl"]), float(sig["tp"])
         comment = f"XAUAI|{sig['id'][:8]}"
+        if not self._ensure_active(u):
+            return None, u.last_fanout_error or "mt5 login failed"
+        symbol = self._resolve_symbol(u, sig.get("symbol", "XAUUSD"))
+        if not symbol:
+            return None, "symbol not found"
         if MOCK_MT5:
             fake_ticket = int(time.time() * 1000) % 2_000_000_000
             log.info("[MOCK] order_send user=%s %s %s lots=%.2f sl=%.2f tp=%.2f ticket=%d",
                      u.email, side, symbol, lots, sl, tp, fake_ticket)
-            return fake_ticket
-        if not mt5.symbol_select(symbol, True):
-            log.error("symbol_select failed for %s", symbol); return None
+            return fake_ticket, ""
         tick = mt5.symbol_info_tick(symbol)
+        if not tick:
+            return None, f"no tick for {symbol}"
         price = tick.ask if side == "BUY" else tick.bid
+        info = mt5.symbol_info(symbol)
+        # Pick a filling mode that the symbol supports.
+        filling = mt5.ORDER_FILLING_IOC
+        if info is not None:
+            modes = info.filling_mode
+            if modes & 1:
+                filling = mt5.ORDER_FILLING_FOK
+            elif modes & 2:
+                filling = mt5.ORDER_FILLING_IOC
+            else:
+                filling = mt5.ORDER_FILLING_RETURN
+        # Normalize lot size to the broker's allowed step.
+        if info is not None:
+            step = info.volume_step or 0.01
+            min_lot = info.volume_min or 0.01
+            max_lot = info.volume_max or 100.0
+            lots = max(min_lot, min(max_lot, round(round(lots / step) * step, 2)))
         req = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": symbol,
             "volume": float(lots),
             "type": mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL,
             "price": price, "sl": sl, "tp": tp,
-            "deviation": 20, "magic": 77007007,
+            "deviation": 50, "magic": 77007007,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": filling,
         }
+        log.info("order_send user=%s %s %s lots=%.2f price=%.2f sl=%.2f tp=%.2f",
+                 u.email, side, symbol, lots, price, sl, tp)
         res = mt5.order_send(req)
-        if res is None or res.retcode != mt5.TRADE_RETCODE_DONE:
-            log.error("order_send FAIL user=%s ret=%s", u.email, res)
-            return None
-        return int(res.order)
+        if res is None:
+            err = mt5.last_error()
+            log.error("order_send returned None user=%s err=%s", u.email, err)
+            return None, f"order_send None: {err}"
+        if res.retcode != mt5.TRADE_RETCODE_DONE:
+            log.error("order_send FAIL user=%s ret=%s comment=%s",
+                      u.email, res.retcode, res.comment)
+            return None, f"retcode={res.retcode} {res.comment}"
+        log.info("order FILLED user=%s ticket=%d", u.email, int(res.order))
+        return int(res.order), ""
 
-    def mt5_order_close(self, u: UserSession, ticket: int) -> Tuple[float, float]:
-        """Closes position by ticket. Returns (exit_price, profit)."""
+    def mt5_order_close(self, u: UserSession, ticket: int) -> Tuple[float, float, str]:
+        """Closes position by ticket. Returns (exit_price, profit, error)."""
+        if not self._ensure_active(u):
+            return 0.0, 0.0, u.last_fanout_error or "login fail"
         if MOCK_MT5:
             log.info("[MOCK] close_position user=%s ticket=%d", u.email, ticket)
-            return 0.0, 0.0
+            return 0.0, 0.0, ""
         positions = mt5.positions_get(ticket=ticket)
-        if not positions: return 0.0, 0.0
+        if not positions:
+            return 0.0, 0.0, "position not found"
         p = positions[0]
         tick = mt5.symbol_info_tick(p.symbol)
+        if not tick:
+            return 0.0, 0.0, "no tick"
         close_price = tick.bid if p.type == mt5.ORDER_TYPE_BUY else tick.ask
+        info = mt5.symbol_info(p.symbol)
+        filling = mt5.ORDER_FILLING_IOC
+        if info is not None:
+            modes = info.filling_mode
+            if modes & 1: filling = mt5.ORDER_FILLING_FOK
+            elif modes & 2: filling = mt5.ORDER_FILLING_IOC
+            else: filling = mt5.ORDER_FILLING_RETURN
         req = {
             "action": mt5.TRADE_ACTION_DEAL,
             "position": ticket,
@@ -219,14 +349,20 @@ class WorkerAgent:
             "volume": p.volume,
             "type": mt5.ORDER_TYPE_SELL if p.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY,
             "price": close_price,
-            "deviation": 20, "magic": 77007007,
+            "deviation": 50, "magic": 77007007,
             "comment": "XAUAI|close",
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": filling,
         }
         res = mt5.order_send(req)
-        return float(close_price), float(p.profit)
+        if res is None or res.retcode != mt5.TRADE_RETCODE_DONE:
+            err = f"close ret={getattr(res,'retcode','?')} {getattr(res,'comment','')}"
+            log.error("close FAIL user=%s ticket=%d %s", u.email, ticket, err)
+            return float(close_price), float(p.profit), err
+        return float(close_price), float(p.profit), ""
 
     def mt5_equity(self, u: UserSession) -> Optional[dict]:
+        if not self._ensure_active(u):
+            return None
         if MOCK_MT5:
             return {"balance": u.last_balance, "equity": u.last_balance,
                     "margin": 0.0, "free_margin": u.last_balance}
@@ -262,7 +398,6 @@ class WorkerAgent:
     def _mt5_try_login(self, login: int, server: str, password: str):
         """Returns (ok, error, balance, equity, currency)."""
         if MOCK_MT5:
-            # Mock: anything with password "wrong" → reject. Otherwise pretend ok.
             if password.lower() == "wrong":
                 return False, "Invalid credentials (mock)", None, None, ""
             return True, "", 1000.0, 1000.0, "USD"
@@ -270,12 +405,13 @@ class WorkerAgent:
         if not ok:
             err = mt5.last_error()
             return False, f"{err}", None, None, ""
+        # Verification swap invalidates the active session — clear cache so the
+        # next operation re-authenticates as the intended user.
+        self._active_user_id = ""
         acct = mt5.account_info()
         if not acct:
-            mt5.shutdown()
             return False, "account_info() returned None", None, None, ""
         bal, eq, ccy = float(acct.balance), float(acct.equity), str(acct.currency or "")
-        # leave terminal connected for trading; don't shut down
         return True, "", bal, eq, ccy
 
     def sync_users(self) -> None:
@@ -297,18 +433,30 @@ class WorkerAgent:
             )
             s.risk_tier = row.get("risk_tier") or "balanced"
             s.last_balance = float(row.get("last_balance") or s.last_balance)
-            s.mt5_login = int(row.get("mt5_login") or s.mt5_login)
-            s.mt5_server = row.get("mt5_server") or s.mt5_server
-            s.mt5_password = row.get("mt5_password") or s.mt5_password
+            new_login = int(row.get("mt5_login") or s.mt5_login)
+            new_server = row.get("mt5_server") or s.mt5_server
+            new_pwd = row.get("mt5_password") or s.mt5_password
+            # If creds changed, force re-login + re-resolve symbol.
+            if (new_login != s.mt5_login or new_server != s.mt5_server
+                or new_pwd != s.mt5_password):
+                s.logged_in = False
+                s.resolved_symbol = ""
+            s.mt5_login = new_login
+            s.mt5_server = new_server
+            s.mt5_password = new_pwd
             if not s.logged_in:
                 self.mt5_login(s)
             wanted[uid] = s
-        # drop users no longer active
         for gone in set(self.users) - set(wanted):
             log.info("dropping user %s (no longer active)", self.users[gone].email)
             self.users.pop(gone, None)
         self.users = wanted
-        log.info("users synced: %d active", len(self.users))
+        if self.users:
+            log.info("users synced: %d active [%s]",
+                     len(self.users),
+                     ", ".join(f"{u.email}({u.mt5_login})" for u in self.users.values()))
+        else:
+            log.info("users synced: 0 active")
 
     def compute_lots(self, u: UserSession, sig: dict) -> float:
         """Risk-scaled lot size. XAUUSD: ~$100 per lot per $1 move."""
@@ -326,25 +474,59 @@ class WorkerAgent:
                              params={"since": self.last_signal_poll, "limit": 50})
         except Exception as e:
             log.error("poll_signals failed: %s", e); return
+        opens = data.get("opens", [])
+        closes = data.get("closes", [])
+        if opens or closes:
+            log.info("polled signals: opens=%d closes=%d users=%d",
+                     len(opens), len(closes), len(self.users))
         # Process opens (oldest first so chronological)
-        for sig in reversed(data.get("opens", [])):
+        for sig in reversed(opens):
             self._handle_open(sig)
-        for c in reversed(data.get("closes", [])):
+        for c in reversed(closes):
             self._handle_close(c)
-        # advance cursor
-        self.last_signal_poll = data.get("server_time") or self.last_signal_poll
+        # advance cursor — only if we got server_time back
+        st = data.get("server_time")
+        if st:
+            self.last_signal_poll = st
 
     def _handle_open(self, sig: dict) -> None:
         sig_id = sig.get("id")
         if not sig_id: return
-        log.info("OPEN signal %s %s @%.2f sl=%.2f tp=%.2f", sig_id[:8],
+        log.info("OPEN signal %s %s @%.2f sl=%.2f tp=%.2f users=%d", sig_id[:8],
                  sig.get("side"), float(sig.get("entry", 0)),
-                 float(sig.get("sl", 0)), float(sig.get("tp", 0)))
+                 float(sig.get("sl", 0)), float(sig.get("tp", 0)),
+                 len(self.users))
+        if not self.users:
+            log.warning("OPEN signal %s arrived but worker has 0 active users — "
+                        "verify users have mt5_connected=True + verification_status=verified.",
+                        sig_id[:8])
+            return
         for u in self.users.values():
             if sig_id in u.open_tickets: continue  # already executed for this user
+            u.fanout_attempts += 1
             lots = self.compute_lots(u, sig)
-            tkt = self.mt5_order_open(u, sig, lots)
-            if tkt: u.open_tickets[sig_id] = tkt
+            tkt, err = self.mt5_order_open(u, sig, lots)
+            # Always report attempt to backend so admin/user can see fills + errors
+            self._post_safe("/api/cloud/agent/trade-open", {
+                "user_id": u.user_id,
+                "signal_id": sig_id,
+                "ticket": int(tkt or 0),
+                "symbol": u.resolved_symbol or sig.get("symbol", "XAUUSD"),
+                "side": sig.get("side", ""),
+                "lots": float(lots),
+                "entry": float(sig.get("entry", 0)),
+                "sl": float(sig.get("sl", 0)),
+                "tp": float(sig.get("tp", 0)),
+                "ok": bool(tkt),
+                "error": err,
+                "opened_at": datetime.now(timezone.utc).isoformat(),
+            })
+            if tkt:
+                u.open_tickets[sig_id] = tkt
+                u.fanout_successes += 1
+                u.last_fanout_error = ""
+            else:
+                u.last_fanout_error = err
 
     def _handle_close(self, c: dict) -> None:
         sig_id = c.get("signal_id")
@@ -353,18 +535,15 @@ class WorkerAgent:
         for u in self.users.values():
             tkt = u.open_tickets.pop(sig_id, None)
             if not tkt: continue
-            exit_px, profit = self.mt5_order_close(u, tkt)
-            try:
-                self._post("/api/cloud/agent/trade-close", {
-                    "user_id": u.user_id, "ticket": int(tkt),
-                    "symbol": "XAUUSD", "side": "",
-                    "lots": 0.0, "entry": 0.0,
-                    "exit_price": float(exit_px or c.get("exit_price", 0)),
-                    "profit": float(profit),
-                    "opened_at": "", "closed_at": datetime.now(timezone.utc).isoformat(),
-                    "reason": c.get("reason") or "master close"})
-            except Exception as e:
-                log.error("trade-close POST failed user=%s: %s", u.email, e)
+            exit_px, profit, err = self.mt5_order_close(u, tkt)
+            self._post_safe("/api/cloud/agent/trade-close", {
+                "user_id": u.user_id, "ticket": int(tkt),
+                "symbol": u.resolved_symbol or "XAUUSD", "side": "",
+                "lots": 0.0, "entry": 0.0,
+                "exit_price": float(exit_px or c.get("exit_price", 0)),
+                "profit": float(profit),
+                "opened_at": "", "closed_at": datetime.now(timezone.utc).isoformat(),
+                "reason": (c.get("reason") or "master close") + (f" | err={err}" if err else "")})
 
     def heartbeat(self) -> None:
         try:
@@ -382,14 +561,10 @@ class WorkerAgent:
             eq = self.mt5_equity(u)
             if not eq: continue
             u.last_balance = eq["balance"]
-            try:
-                self._post("/api/cloud/agent/equity-snapshot", {
-                    "user_id": u.user_id, **eq})
-            except Exception as e:
-                log.warning("equity push failed user=%s: %s", u.email, e)
+            self._post_safe("/api/cloud/agent/equity-snapshot",
+                            {"user_id": u.user_id, **eq})
 
     def push_equity_for(self, user_ids: list) -> None:
-        """Targeted equity push — used for user-initiated 'Refresh balance' clicks."""
         if not user_ids: return
         for uid in user_ids:
             u = self.users.get(uid)
@@ -398,11 +573,9 @@ class WorkerAgent:
             eq = self.mt5_equity(u)
             if not eq: continue
             u.last_balance = eq["balance"]
-            try:
-                self._post("/api/cloud/agent/equity-snapshot", {"user_id": u.user_id, **eq})
-                log.info("REFRESH pushed for user=%s balance=%.2f", u.email, eq["balance"])
-            except Exception as e:
-                log.warning("refresh push failed user=%s: %s", u.email, e)
+            self._post_safe("/api/cloud/agent/equity-snapshot",
+                            {"user_id": u.user_id, **eq})
+            log.info("REFRESH pushed for user=%s balance=%.2f", u.email, eq["balance"])
 
     def poll_refresh_queue(self) -> None:
         try:
@@ -416,6 +589,8 @@ class WorkerAgent:
     def run(self) -> None:
         log.info("XauAi Worker Agent %s starting — worker_id=%s mock=%s host=%s os=%s",
                  VERSION, WORKER_ID, MOCK_MT5, socket.gethostname(), platform.system())
+        log.info("Signal cursor cold-start: %s (catchup=%dmin)",
+                 self.last_signal_poll, SIGNAL_CATCHUP_MIN)
         self.verify_queue()
         self.sync_users()
         last_user_sync = time.time()
