@@ -33,29 +33,27 @@ export default function CloudLanding() {
             </div>
 
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.05] mb-4 sm:mb-6" data-testid="hero-title">
-              Stop babysitting MT5. <br className="hidden sm:block" />
-              <span className="text-[#D4AF37]">Let your trades run themselves.</span>
+              Trade gold. <br className="hidden sm:block" />
+              <span className="text-[#D4AF37]">Hands-free.</span>
             </h1>
 
-            <p className="text-base sm:text-lg text-white/70 mb-3 leading-relaxed max-w-xl" data-testid="hero-subtitle">
-              XauAi Cloud connects your trading account once — and handles the rest.
-              <span className="block text-white/50 mt-1">No VPS. No laptop. No stress.</span>
+            <p className="text-base sm:text-lg text-white/70 mb-2 leading-snug max-w-md" data-testid="hero-subtitle">
+              Connect once. We trade. You watch.
             </p>
-            <p className="text-sm sm:text-base text-white/60 mb-6 sm:mb-8 max-w-xl leading-relaxed" data-testid="hero-subtitle-2">
-              Our system runs your gold (XAUUSD) strategy <span className="text-white">24/7 from secure servers</span>,
-              copying trades directly to your account in real time — while your funds remain safely with your broker.
+            <p className="text-sm text-white/50 mb-6 sm:mb-8 max-w-md" data-testid="hero-subtitle-2">
+              Your funds stay with your broker. 24/7 from secure servers.
             </p>
 
             <div className="flex flex-col sm:flex-row flex-wrap gap-3 mb-6 sm:mb-8">
               <Link to="/cloud/signup" className="px-6 py-3 bg-[#D4AF37] text-black font-semibold rounded-full hover:bg-[#E5C558] transition-colors inline-flex items-center justify-center gap-2 group" data-testid="hero-cta-signup">
-                Start 7-day free trial
+                Start free trial
                 <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
               </Link>
               <a href="#how-it-works" className="px-6 py-3 border border-white/10 rounded-full hover:bg-white/5 transition-colors text-center" data-testid="hero-cta-learn">How it works</a>
             </div>
 
             <div className="flex flex-wrap gap-4 sm:gap-6 text-xs sm:text-sm text-white/50">
-              <div className="flex items-center gap-2"><Check className="w-4 h-4 text-[#D4AF37]" /> No VPS needed</div>
+              <div className="flex items-center gap-2"><Check className="w-4 h-4 text-[#D4AF37]" /> No VPS</div>
               <div className="flex items-center gap-2"><Check className="w-4 h-4 text-[#D4AF37]" /> No MT5 install</div>
               <div className="flex items-center gap-2"><Check className="w-4 h-4 text-[#D4AF37]" /> Pause anytime</div>
             </div>
@@ -105,10 +103,7 @@ export default function CloudLanding() {
           <div className="text-2xl sm:text-3xl font-bold tracking-tight" data-testid="trader-headline">
             Trade smarter, <span className="text-[#D4AF37]">not harder.</span>
           </div>
-          <p className="text-white/60 text-sm sm:text-base mt-2 max-w-2xl mx-auto">
-            You don't need to stay online, monitor charts, or worry about missing moves.
-            <span className="block text-white/80 mt-1 font-medium">We execute. You monitor results.</span>
-          </p>
+          <p className="text-white/60 text-sm sm:text-base mt-2">We execute. You monitor results.</p>
         </div>
       </section>
 
@@ -116,14 +111,14 @@ export default function CloudLanding() {
       <section id="how-it-works" className="max-w-7xl mx-auto px-4 sm:px-6 py-12 sm:py-20 border-t border-white/5">
         <div className="text-center mb-10 sm:mb-16">
           <div className="text-[10px] sm:text-xs font-mono tracking-[0.3em] text-[#D4AF37] mb-3">HOW IT WORKS</div>
-          <h2 className="text-3xl sm:text-4xl font-bold mb-3" data-testid="howworks-title">Three steps. That's it.</h2>
-          <p className="text-white/60 text-sm sm:text-base max-w-xl mx-auto">No downloads. No configuration. No technical skills required.</p>
+          <h2 className="text-3xl sm:text-4xl font-bold mb-3" data-testid="howworks-title">Three steps.</h2>
+          <p className="text-white/60 text-sm sm:text-base">No setup. No skills required.</p>
         </div>
         <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6">
           {[
-            {n:"01", icon:<Lock className="w-6 h-6" />,     title:"Connect your trading account", body:"Enter your MT5 login once. Encrypted at rest — only your executor can read it."},
-            {n:"02", icon:<Sparkles className="w-6 h-6" />, title:"Activate XauAi Cloud",          body:"Pick a plan, start your 7-day free trial. We auto-assign you to a cloud executor."},
-            {n:"03", icon:<Zap className="w-6 h-6" />,      title:"Trades execute automatically — 24/7", body:"Our XauAi engine fires gold signals, mirrors them to your account in real time, sized to your balance."},
+            {n:"01", icon:<Lock className="w-6 h-6" />,     title:"Connect", body:"Enter your MT5 login. Encrypted at rest."},
+            {n:"02", icon:<Sparkles className="w-6 h-6" />, title:"Activate", body:"Pick a plan. 7-day free trial."},
+            {n:"03", icon:<Zap className="w-6 h-6" />,      title:"Trade 24/7", body:"We mirror trades to your account in real time."},
           ].map((f,i)=>(
             <div key={i} className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-5 sm:p-6" data-testid={`feature-${i}`}>
               <div className="flex items-center justify-between mb-4">
@@ -141,16 +136,16 @@ export default function CloudLanding() {
       <section className="max-w-5xl mx-auto px-4 sm:px-6 pb-12 sm:pb-20">
         <div className="text-center mb-8 sm:mb-10">
           <div className="text-[10px] sm:text-xs font-mono tracking-[0.3em] text-[#D4AF37] mb-3">WHY XAUAI CLOUD</div>
-          <h2 className="text-3xl sm:text-4xl font-bold" data-testid="benefits-title">Built for traders who want results, not screen time.</h2>
+          <h2 className="text-3xl sm:text-4xl font-bold" data-testid="benefits-title">Built for results, not screen time.</h2>
         </div>
         <div className="grid sm:grid-cols-2 gap-3 sm:gap-4 max-w-2xl mx-auto" data-testid="benefits-grid">
           {[
-            "No VPS or setup needed",
-            "No MT5 running on your phone",
-            "Real-time trade execution",
-            "Fully automated gold trading",
-            "Pause anytime, full control",
-            "Funds stay with your broker",
+            "No VPS",
+            "No MT5 install",
+            "Real-time execution",
+            "Fully automated",
+            "Pause anytime",
+            "Funds stay with broker",
           ].map((b,i)=>(
             <div key={i} className="flex items-center gap-3 p-3 sm:p-4 bg-white/[0.03] border border-white/10 rounded-xl" data-testid={`benefit-${i}`}>
               <div className="w-8 h-8 rounded-full bg-[#D4AF37]/15 border border-[#D4AF37]/30 flex items-center justify-center flex-none">
@@ -166,7 +161,7 @@ export default function CloudLanding() {
       <section id="pricing" className="max-w-5xl mx-auto px-4 sm:px-6 py-12 sm:py-20 border-t border-white/5">
         <div className="text-center mb-10 sm:mb-12">
           <div className="text-[10px] sm:text-xs font-mono tracking-[0.3em] text-[#D4AF37] mb-3">PRICING</div>
-          <h2 className="text-3xl sm:text-4xl font-bold mb-3">Simple. Honest. No lock-in.</h2>
+          <h2 className="text-3xl sm:text-4xl font-bold mb-3">Simple. No lock-in.</h2>
           <p className="text-white/60 text-sm sm:text-base">7 days free. Cancel anytime.</p>
         </div>
         <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
@@ -195,33 +190,33 @@ export default function CloudLanding() {
       {/* Trust */}
       <section className="max-w-5xl mx-auto px-4 sm:px-6 py-12 sm:py-20 border-t border-white/5">
         <div className="text-center mb-8 sm:mb-10">
-          <h2 className="text-2xl sm:text-3xl font-bold mb-2" data-testid="trust-title">Your funds stay in your broker.</h2>
-          <p className="text-white/60 text-sm sm:text-base">We don't hold your money — we only execute trades.</p>
+          <h2 className="text-2xl sm:text-3xl font-bold mb-2" data-testid="trust-title">Funds stay with your broker.</h2>
+          <p className="text-white/60 text-sm sm:text-base">We don't hold money. We only execute.</p>
         </div>
         <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-8 sm:gap-10 text-center">
           <div data-testid="trust-1">
             <Shield className="w-8 h-8 text-[#D4AF37] mx-auto mb-3" />
             <div className="font-bold mb-2">Funds never leave your broker</div>
-            <div className="text-sm text-white/60">We only place trades on your behalf. Deposits & withdrawals stay between you and your broker.</div>
+            <div className="text-sm text-white/60">Deposits & withdrawals stay between you and your broker.</div>
           </div>
           <div data-testid="trust-2">
             <Lock className="w-8 h-8 text-[#D4AF37] mx-auto mb-3" />
-            <div className="font-bold mb-2">Credentials encrypted at rest</div>
-            <div className="text-sm text-white/60">Fernet-AES with per-install keys. Even our database dumps can't reveal your password.</div>
+            <div className="font-bold mb-2">Encrypted credentials</div>
+            <div className="text-sm text-white/60">Fernet-AES with per-install keys.</div>
           </div>
           <div data-testid="trust-3">
             <Pause className="w-8 h-8 text-[#D4AF37] mx-auto mb-3" />
             <div className="font-bold mb-2">One-click pause</div>
-            <div className="text-sm text-white/60">Stop new trades instantly. Open positions stay untouched and close normally.</div>
+            <div className="text-sm text-white/60">Stop new trades instantly.</div>
           </div>
         </div>
       </section>
 
       {/* Closing CTA */}
       <section className="max-w-3xl mx-auto px-4 sm:px-6 py-12 sm:py-16 text-center">
-        <div className="text-2xl sm:text-3xl font-bold mb-4">Ready to put gold trading on autopilot?</div>
+        <div className="text-2xl sm:text-3xl font-bold mb-4">Put gold trading on autopilot.</div>
         <Link to="/cloud/signup" className="inline-flex items-center gap-2 px-7 py-3.5 bg-[#D4AF37] text-black font-semibold rounded-full hover:bg-[#E5C558] transition-colors" data-testid="closing-cta">
-          Start 7-day free trial <ArrowRight className="w-4 h-4" />
+          Start free trial <ArrowRight className="w-4 h-4" />
         </Link>
         <div className="text-xs text-white/40 mt-3">No payment. Cancel anytime.</div>
       </section>

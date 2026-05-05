@@ -1,5 +1,6 @@
 import React from "react";
 import { Crosshair, ChartLine, DownloadSimple, Question, TrendUp, TrendDown, ShoppingCart, Wrench, Handshake } from "@phosphor-icons/react";
+import XauAiLogo from "./cloud/XauAiLogo";
 
 const NAV = [
   { id: "overview", label: "HOME", icon: Crosshair },
@@ -17,12 +18,10 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
     <header data-testid="main-header" className="sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-200">
       <div className="max-w-7xl mx-auto px-4 md:px-12">
         <div className="flex items-center justify-between h-14 md:h-16 gap-2">
-          <div className="flex items-center gap-2 md:gap-3 cursor-pointer group min-w-0" onClick={() => onNavigate("overview")}>
-            <div className="w-7 h-7 md:w-8 md:h-8 bg-[#111] rounded-full flex items-center justify-center flex-none">
-              <span className="font-mono text-[9px] font-bold text-white tracking-wider">MZ</span>
-            </div>
-            <span className="font-heading font-semibold text-sm tracking-tight text-[#111] group-hover:text-[#C5A059] transition-colors truncate">XauAI Sniper</span>
-            <span className="hidden sm:inline text-[10px] text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded-full flex-none">v4.9.3</span>
+          <div className="flex items-center gap-2 md:gap-3 cursor-pointer group min-w-0" onClick={() => onNavigate("overview")} data-testid="header-brand">
+            <XauAiLogo size={32} className="flex-none ring-1 ring-black/5 shadow-sm" />
+            <span className="font-heading font-semibold text-sm md:text-base tracking-tight text-[#111] group-hover:text-[#C5A059] transition-colors truncate">XauAi Cloud</span>
+            <span className="hidden sm:inline text-[10px] text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded-full flex-none">v5.1.1</span>
           </div>
 
           <nav className="hidden lg:flex items-center gap-1">
@@ -53,7 +52,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
               </div>
             )}
             <a href="/cloud" data-testid="nav-cloud-link" className="inline-flex items-center gap-1.5 px-2.5 py-1.5 md:px-3 bg-[#C5A059] text-black text-[10px] md:text-[11px] font-semibold rounded-full tracking-wider hover:bg-[#D4AF37] transition-colors whitespace-nowrap">
-              ☁ CLOUD
+              <XauAiLogo size={14} rounded="full" className="flex-none" /> CLOUD
             </a>
             <div className="hidden sm:flex items-center gap-1.5">
               <div className="w-2 h-2 rounded-full bg-emerald-500 pulse-dot" />
