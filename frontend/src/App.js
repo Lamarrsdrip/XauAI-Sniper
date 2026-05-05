@@ -17,6 +17,7 @@ import Footer from "@/components/Footer";
 import CloudLanding from "@/components/cloud/CloudLanding";
 import { CloudSignup, CloudLogin } from "@/components/cloud/CloudAuth";
 import CloudDashboard from "@/components/cloud/CloudDashboard";
+import CloudPromoSection from "@/components/CloudPromoSection";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -70,6 +71,7 @@ function MainDashboard() {
       <main>
         <section id="overview"><HeroSection performance={performance} /></section>
         <section id="broker"><BrokerSection /></section>
+        <section id="cloud-promo"><CloudPromoSection /></section>
         <section id="purchase"><PurchaseSection api={API} /></section>
         <section id="how-it-works"><HowItWorksSection data={howItWorks} /></section>
         <section id="performance"><PerformanceSection data={performance} /></section>

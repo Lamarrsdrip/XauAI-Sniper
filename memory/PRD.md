@@ -7,6 +7,18 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — Brand refresh + high-conversion copy + DIY→Cloud funnel**
+  - **New logo** (`XauAiLogo.jsx`): minimalist gold cloud silhouette with bold upward arrow inside. Renders cleanly from 16px favicon → 1024px app-icon. Two render modes: outlined (transparent fill, gold stroke) for nav/header, and `solid` (gold gradient fill, dark arrow) for app icons / hero badges. Replaces the generic lucide-react `<Cloud />` icon in the cloud nav + footer.
+  - **`favicon.svg` + regenerated `icon-192.png` / `icon-512.png`** (PWA manifest icons) using the new logo + dark `#0A0A0A` rounded-square background. Added `<link rel="icon" type="image/svg+xml">` to `index.html` so browsers + iOS install both pick it up.
+  - **Cloud landing copy revamp** (`/cloud`):
+    - Hero: "Stop babysitting MT5. Let your trades run themselves." + dual subtitle ("No VPS. No laptop. No stress." then the 24/7 explainer).
+    - New "Trade smarter, not harder" headline strip between hero and how-it-works.
+    - "How it works" rewritten with the 3-step language the user provided (Connect → Activate → Execute).
+    - New "Built for traders who want results, not screen time." benefits grid (6 checkmark cards).
+    - Trust section retitled "Your funds stay in your broker. We don't hold your money — we only execute trades."
+    - Final closing CTA ("Ready to put gold trading on autopilot?") above the footer.
+  - **Homepage promo funnel** (`CloudPromoSection.jsx`): new dark section injected between `#broker` and `#purchase` on the main DIY landing page. Side-by-side comparison card (DIY vs XauAi Cloud, Cloud marked "EASIEST"), live executor mockup (broker, executor, open positions, next execution, today's P&L, uptime), with primary "Try XauAi Cloud free" CTA → `/cloud` and secondary "See pricing" → `/cloud#pricing`. Catches visitors who don't want to install MT5 or rent a VPS and routes them to the managed offering.
+
 - **Feb 2026 — XauAi Cloud Copy-Trading P0 fix + Billing System Overhaul**
   - **Worker Agent v1.1.0** (`/app/backend/worker_agent/worker_agent.py`) — full rewrite addressing the "trades not mirroring" bug:
     1. **Per-user MT5 session swap** (`_ensure_active`): the MetaTrader5 Python SDK keeps only ONE active terminal connection. Pre v1.1.0 the worker initialized once per user but every subsequent `mt5.initialize()` REPLACED the previous session — so order_send always fired against the LAST-initialized user. Now every operation (login, order_send, order_close, equity) re-authenticates as the intended user; cached active-user id avoids redundant swaps.
