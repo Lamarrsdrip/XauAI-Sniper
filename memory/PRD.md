@@ -7,7 +7,19 @@
 
 ## Completed (Feb 2026)
 
-- **Feb 2026 — v5.1.2 Smart Profit Lock + cloud copy simplification**
+- **Feb 2026 — Cloud realtime visibility fix (worker decay + UX feedback)**
+  - **Root cause** of "balance not updating, cloud feels not realtime":
+    1. Backend never auto-flipped workers from `status=online` → `offline` when their heartbeat went stale. Found a worker that died 8+ hours ago but was still showing `online` in DB → cloud config endpoint reported `executor_workers_online > 0` lying to the dashboard.
+    2. `/cloud/mt5/refresh-balance` only set a `force_equity_refresh=True` flag and returned 200 OK — even when zero workers were alive to read it. Click "Refresh" → no error → no update. Looked broken.
+    3. Dashboard had no surface for "when was my balance last actually updated by the worker?" — user couldn't tell stale data from fresh.
+  - **Fixes**:
+    - `server.py` startup: new background task `_decay_stale_workers()` runs every 60s, flips any worker with `last_heartbeat < now - 3min` to `status=offline`. `cloud_workers.status` field now matches reality.
+    - `POST /api/cloud/mt5/refresh-balance` now pre-checks live worker count — returns **503 with explicit message** "No cloud worker is currently online" instead of silently queuing.
+    - `GET /api/cloud/dashboard` returns 3 new fields: `executor_online` (bool), `executor_count` (int), `last_balance_updated_at` (ISO from latest `cloud_equity_snapshots` for THIS user).
+    - `CloudDashboard.jsx` MT5 tab: new amber "No cloud worker is currently online" banner shown above the verified card when `executor_online === false`. Refresh button disabled in that state with tooltip. Verified card now shows `updated 12s ago / 3m ago` next to the balance.
+  - **Verified end-to-end**: backend log shows `[worker-decay] flipped 1 stale worker(s) offline` after restart; cloud config now reports `online=0 total=2` (was lying with `online=1` before).
+
+- **Feb 2026 — v5.1.3 Smart Profit Lock + cloud copy simplification**
   - **EA v5.1.2** (`/app/backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`) addresses two real-account complaints:
     1. *"7+ hours no trades while gold moved"* — fixed by:
        - Trend gate ATR multiplier `2.0 → 1.0` (default `InpPG_HTFTrendATR`). Only EXTREME counter-trend blocks now.

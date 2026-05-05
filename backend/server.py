@@ -1109,6 +1109,22 @@ async def startup():
     creds_path.parent.mkdir(exist_ok=True)
     creds_path.write_text(f"# Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n## Endpoints\n- Login: POST /api/auth/login\n- Admin Portal: /admin\n")
 
+    # Background: auto-mark workers offline if heartbeat goes stale.
+    # Without this the dashboard lies that cloud is "online" when the VPS process died.
+    async def _decay_stale_workers():
+        while True:
+            try:
+                cutoff = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+                res = await db.cloud_workers.update_many(
+                    {"status": "online", "last_heartbeat": {"$lt": cutoff}},
+                    {"$set": {"status": "offline"}})
+                if res.modified_count:
+                    logger.info(f"[worker-decay] flipped {res.modified_count} stale worker(s) offline")
+            except Exception as e:
+                logger.warning(f"[worker-decay] {e}")
+            await asyncio.sleep(60)
+    asyncio.create_task(_decay_stale_workers())
+
 ########################################
 # CLAUDE AI POSITION MANAGER (Active Trade Reasoning)
 ########################################
@@ -2195,7 +2211,17 @@ async def cloud_refresh_balance(user: dict = Depends(get_cloud_user)):
     """User-initiated immediate balance refresh. Sets a flag the worker
        picks up on its next poll (≤10s) and pushes a fresh equity-snapshot."""
     if not user.get("mt5_connected") or user.get("mt5_verification_status") != "verified":
-        raise HTTPException(status_code=400, detail="Connect & verify your MT5 account first.")
+        raise HTTPException(status_code=400,
+            detail="Connect & verify your MT5 account first — go to the MT5 tab and link your broker login.")
+
+    # Verify a worker is actually alive — otherwise refresh request will sit forever.
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+    online_workers = await db.cloud_workers.count_documents(
+        {"status": "online", "last_heartbeat": {"$gt": cutoff}})
+    if online_workers == 0:
+        raise HTTPException(status_code=503,
+            detail="No cloud worker is currently online — your trades + balance updates will resume the moment a worker reconnects. We've been notified.")
+
     # Light cooldown — prevent spam-clicking from hammering the broker
     last = user.get("last_refresh_request_at")
     now = datetime.now(timezone.utc)
@@ -2242,6 +2268,18 @@ async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
         cursor = db.cloud_equity_snapshots.find({"user_id": user["id"], "ts": {"$gte": since.isoformat()}}, {"_id": 0}).sort("ts", 1)
         equity = await cursor.to_list(2000)
     except Exception: pass
+    # Live executor status — surface to user so they can SEE if cloud is reachable
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+    workers_online = await db.cloud_workers.count_documents(
+        {"status": "online", "last_heartbeat": {"$gt": cutoff}})
+    # When was this user's balance last actually pushed by a worker?
+    last_eq_at = ""
+    try:
+        latest = await db.cloud_equity_snapshots.find_one(
+            {"user_id": user["id"]}, {"_id": 0, "ts": 1}, sort=[("ts", -1)])
+        if latest: last_eq_at = latest.get("ts", "")
+    except Exception: pass
+
     return {"trades": trades, "totals": totals, "equity": equity,
             "mt5_connected": user.get("mt5_connected", False),
             "mt5_verification_status": user.get("mt5_verification_status", "none"),
@@ -2252,6 +2290,9 @@ async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
             "risk_tier": user.get("risk_tier", "balanced"),
             "last_balance": user.get("last_balance", 0),
             "last_equity":  user.get("last_equity", 0),
+            "last_balance_updated_at": last_eq_at,   # NEW
+            "executor_online": workers_online > 0,    # NEW
+            "executor_count":  workers_online,        # NEW
             "account_currency": user.get("account_currency", ""),
             "paused": user.get("paused", False),
             "plan": user.get("plan", "starter"),

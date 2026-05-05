@@ -1,10 +1,22 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { Cloud, Pause, Play, Shield, LogOut, TrendingUp, TrendingDown, Loader2, Copy, CheckCircle2, XCircle, Clock, CreditCard, Calculator, RefreshCw } from "lucide-react";
+import { Cloud, Pause, Play, Shield, LogOut, TrendingUp, TrendingDown, Loader2, Copy, CheckCircle2, XCircle, Clock, CreditCard, Calculator, RefreshCw, AlertTriangle } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import { forceRefreshApp } from "@/registerSW";
 import { FALLBACK_BROKER_SERVERS } from "./brokerServers";
+
+// Compact relative-time formatter ("12s ago", "3m ago", "2h ago")
+const relativeTime = (iso) => {
+  if (!iso) return "never";
+  try {
+    const d = new Date(iso); const s = (Date.now() - d.getTime()) / 1000;
+    if (s < 60)    return `${Math.floor(s)}s ago`;
+    if (s < 3600)  return `${Math.floor(s/60)}m ago`;
+    if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+    return `${Math.floor(s/86400)}d ago`;
+  } catch { return "—"; }
+};
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -394,6 +406,19 @@ function ConnectTab({ me, onRefresh }) {
 
         {connected ? (
           <div data-testid="mt5-connected-view">
+            {/* v5.1.3: live executor status — without this user can't tell if cloud is actually connected to a worker */}
+            {me.executor_online === false && (
+              <div className="flex items-start gap-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl mb-3" data-testid="executor-offline-banner">
+                <AlertTriangle className="w-5 h-5 text-amber-400 flex-none mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-amber-300">No cloud worker is currently online</div>
+                  <div className="text-xs text-amber-200/80 mt-1 leading-relaxed">
+                    Your trades + balance updates are paused until a worker reconnects. The "Refresh" button won't fetch a new balance until then. We're notified — you don't need to do anything.
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-start gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-xl mb-4" data-testid="verified-banner">
               <CheckCircle2 className="w-5 h-5 text-green-400 flex-none mt-0.5" />
               <div className="flex-1 min-w-0">
@@ -408,9 +433,9 @@ function ConnectTab({ me, onRefresh }) {
                   <button
                     type="button"
                     onClick={refreshBalance}
-                    disabled={refreshing}
-                    title="Force the worker to push a fresh balance/equity snapshot from your broker"
-                    className="ml-auto inline-flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-full bg-white/5 border border-white/15 text-white/70 hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/40 hover:text-[#D4AF37] disabled:opacity-50 transition-colors"
+                    disabled={refreshing || me.executor_online === false}
+                    title={me.executor_online === false ? "No worker online — refresh disabled" : "Force the worker to push a fresh balance/equity snapshot from your broker"}
+                    className="ml-auto inline-flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-full bg-white/5 border border-white/15 text-white/70 hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/40 hover:text-[#D4AF37] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     data-testid="refresh-balance-btn"
                   >
                     {refreshing
@@ -429,8 +454,10 @@ function ConnectTab({ me, onRefresh }) {
                     {me.last_equity > 0 && me.last_equity !== me.last_balance && (
                       <span>Equity: <span className="font-mono text-white/80">{(me.account_currency || "$")} {Number(me.last_equity).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></span>
                     )}
-                    {me.mt5_verified_at && (
-                      <span className="text-white/30">verified {new Date(me.mt5_verified_at).toLocaleString()}</span>
+                    {me.last_balance_updated_at && (
+                      <span className="text-white/40" data-testid="last-balance-update">
+                        updated {relativeTime(me.last_balance_updated_at)}
+                      </span>
                     )}
                   </div>
                 )}
