@@ -7,6 +7,23 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — v1.2.0 worker — root-cause fix for "trades not copying" P0**
+  - **Smoking gun (from user's diagnostics screenshot)**: every fan-out attempt was returning `login swap failed: (-2, 'Terminal: Invalid params')`. Trades were never even being SENT — the MT5 SDK was rejecting the per-user account-swap before reaching `order_send`.
+  - **Root cause**: `_ensure_active()` was calling `mt5.initialize(login=, server=, password=)` repeatedly to swap users. The MetaTrader5 Python SDK does NOT support that pattern — after the first init, subsequent initialize() calls with login args fail with `(-2, 'Invalid params')`. Correct pattern: `mt5.initialize()` ONCE (no args), then `mt5.login(login, password, server)` for each account swap. Same bug existed in `_mt5_try_login()`.
+  - **Fix in `_ensure_active` + `_mt5_try_login`**: terminal init happens exactly once via `_mt5_inited` flag; account swaps go through `mt5.login()`; if that path fails (older SDK versions) we fall back to `mt5.initialize(login=…)` once. Login error messages now include the broker server name + login id + a checklist of common causes.
+  - **`mt5_order_open` hardened to v1.2.0 spec** (covers every common rejection cause):
+    1. **Pre-flight account checks**: `account_info().trade_allowed` (catches investor/read-only password) and `account_info().trade_expert` (catches "Allow algorithmic trading" disabled at account level), plus `terminal_info().trade_allowed` (catches AutoTrading toolbar button OFF).
+    2. **Symbol auto-select** + tick freshness check.
+    3. **Lot normalization**: rounds DOWN to broker's `volume_step`, clamps to `[volume_min, volume_max]`.
+    4. **Margin pre-check** via `mt5.order_calc_margin()`: if needed > 95% of free margin, AUTO-SHRINKS the lot to fit ~90% of free margin instead of failing with retcode 10019.
+    5. **SL/TP auto-clamp** to `trade_stops_level + 20% buffer` — covers the broker-rejects-stops-too-close case.
+    6. **`mt5.order_check()` pre-validation** before every `order_send` — cycles filling modes / fixes lots / widens stops / refreshes price WITHOUT spamming the broker.
+    7. **Filling-mode retry across IOC, FOK, RETURN** even when broker's bitmask says only one is supported (MetaQuotes-Demo bitmask is wrong for many symbols).
+    8. **Requote/price-off auto-retry** with fresh tick + 2× deviation up to deviation=500.
+    9. **Terminal/account hard errors** (10017/10018/10019/10027) short-circuit the retry loop with a specific actionable error.
+    10. **Per-error human-readable hints** map (`_RETCODE_HINTS`).
+  - Published as `/app/frontend/public/worker_agent_v1.2.0.py` (HTTP 200, VERSION=1.2.0).
+
 - **Feb 2026 — v1.1.1 worker + Admin Cloud Diagnostics tab (P0 copy-trade visibility fix)**
   - **Root cause of "trades not copying" being invisible**: when the master EA fired a signal and zero subscribers were fan-out-eligible, the worker's `_handle_open` early-returned WITHOUT logging anything to backend. From the admin's POV the platform looked silently broken — signal hit `cloud_signals`, but no `cloud_fanout_logs` row appeared, no error surfaced anywhere. Same gap when the worker process was offline: no fanout row, no signal echo back.
   - **Worker v1.1.0 → v1.1.1** (`/app/backend/worker_agent/worker_agent.py`):
