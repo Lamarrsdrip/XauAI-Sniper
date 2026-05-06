@@ -2785,6 +2785,11 @@ class MasterSignalReq(BaseModel):
     tp: float
     grade: Optional[str] = ""    # A+ / A / B
     risk_hint_pct: Optional[float] = 1.2   # master-side risk %, bot-provided
+    # v1.3 — STRICT MIRROR fields. The master EA now ships its own actual lots
+    # + account balance so cloud users mirror the master 1:1, scaled only by
+    # balance ratio. No independent risk math on the cloud side anymore.
+    master_lots: Optional[float] = 0.0
+    master_balance: Optional[float] = 0.0
 
 @api_router.post("/cloud/master/signal")
 async def cloud_master_signal(req: MasterSignalReq, request: Request):
@@ -2801,7 +2806,11 @@ async def cloud_master_signal(req: MasterSignalReq, request: Request):
     # Store the signal
     sig_id = str(uuid.uuid4())
     signal_doc = {"id": sig_id, "symbol": req.symbol, "side": req.side, "entry": req.entry,
-                  "sl": req.sl, "tp": req.tp, "grade": req.grade, "ts": now.isoformat()}
+                  "sl": req.sl, "tp": req.tp, "grade": req.grade, "ts": now.isoformat(),
+                  # v1.3 STRICT MIRROR — propagate master lots + balance so workers
+                  # compute linkedLot = (userBalance / masterBalance) × masterLot.
+                  "master_lots": float(req.master_lots or 0.0),
+                  "master_balance": float(req.master_balance or 0.0)}
     await db.cloud_signals.insert_one(signal_doc.copy())
     fanout = 0
     if shadow:
@@ -2810,15 +2819,22 @@ async def cloud_master_signal(req: MasterSignalReq, request: Request):
             {"mt5_connected": True, "paused": False, "status": {"$in": ["trial","active"]}},
             {"_id": 0, "id": 1, "last_balance": 1, "risk_tier": 1}
         ).to_list(2000)
+        master_lots = float(req.master_lots or 0.0)
+        master_bal  = float(req.master_balance or 0.0)
         risk_map = {"conservative": 0.6, "balanced": 1.2, "aggressive": 2.0}
         for u in users:
             bal = float(u.get("last_balance") or 1000)
-            rpct = risk_map.get(u.get("risk_tier","balanced"), 1.2)
-            slDist = abs(req.entry - req.sl)
-            if slDist <= 0: continue
-            riskUSD = bal * rpct / 100
-            # XAUUSD: 1 lot ≈ $100/pip; pip ≈ $0.01 price; use $1 price move per lot as unit
-            lots = max(0.01, round(riskUSD / (slDist * 100), 2))
+            if master_lots > 0 and master_bal > 0:
+                # STRICT MIRROR — exact copy when balances match, scaled when they differ.
+                lots = max(0.01, round((bal / master_bal) * master_lots, 2))
+            else:
+                # Legacy fallback for old EAs that don't ship master_lots.
+                rpct = risk_map.get(u.get("risk_tier","balanced"), 1.2)
+                slDist = abs(req.entry - req.sl)
+                if slDist <= 0: continue
+                riskUSD = bal * rpct / 100
+                # XAUUSD: 1 lot ≈ $100/pip; pip ≈ $0.01 price; use $1 price move per lot as unit
+                lots = max(0.01, round(riskUSD / (slDist * 100), 2))
             trade = {"id": str(uuid.uuid4()), "user_id": u["id"], "signal_id": sig_id,
                      "symbol": req.symbol, "side": req.side, "lots": lots,
                      "entry": req.entry, "exit_price": 0, "profit": 0,

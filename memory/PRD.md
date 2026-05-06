@@ -7,6 +7,20 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — v1.3 / EA v5.2.0 — STRICT 1:1 MIRROR (master-driven lot sizing)**
+  - **User pain**: with 100k master + 100k cloud user, master fired 6.63/6.71/2.38 lots while cloud user took 2.67/2.70 (different lots, fewer trades). Plus master closed but cloud stayed open.
+  - **Root cause #1 — divergent lot math**: master used `InpRiskPercent × grade multiplier × pyramid stack`, cloud worker used `risk_tier % × SL distance` (totally different formula). Same balance ≠ same lots.
+  - **Root cause #2 — close-mirror loss on EA restart**: `g_cloudPosIds[]` was in-memory only. EA recompile/restart wiped the position→signal map; subsequent close → `CloudMapPop` returned "" → no `signal-close` POST → cloud trades stayed open forever.
+  - **Backend (`MasterSignalReq` + `cloud_master_signal`)**: signal payload now carries `master_lots` + `master_balance`; persisted into `cloud_signals` doc; shadow-mode trades use `lots = (userBalance / masterBalance) × masterLots` (legacy fallback retained for outdated EAs).
+  - **Worker v1.3.0 (`compute_lots`)**: rewritten — strict mirror first, returns `(lots, source_label)` for diagnostic logging. Logs `LOT CALC user=X → 6.63 (strict_mirror master=6.63@$94875 user=$100828 ratio=1.063)`. Risk-tier fallback ONLY runs if master_lots/balance are zero.
+  - **EA v5.2.0**:
+    - `CloudPostSignal()` now ships `master_lots` + `master_balance` in the JSON body; call site passes `lots` (the lots actually opened) and `accInfo.Balance()`.
+    - `CloudMapAdd/Pop` now persist to `MQL5/Files/Common/xauai_cloud_map.csv` after every change.
+    - `OnInit()` calls new `CloudMapLoad()` to restore the map → close mirroring survives EA recompile/restart.
+    - `#property version "5.20"`, customer-edition sanitizer in backend strips `InpCloudFanout` + token automatically.
+  - **Frontend Cloud Dashboard**: removed "LIVE SCALING ON YOUR ACCOUNT" widget (it implied independent risk math that no longer exists). Replaced with concise "STRICT 1:1 COPY MODE" explainer card (`data-testid="strict-mirror-info"`).
+  - Published `/app/frontend/public/worker_agent_v1.3.0.py` and `/app/frontend/public/XAUUSD_AI_Sniper_EA_v5.2.0.mq5`. Public download endpoint (`/api/download/ea`) auto-sanitizes for customers.
+
 - **Feb 2026 — EA v5.1.9 — Profit Guardian "Selective Mode" (replace day-halt)**
   - **User pain**: PG day-halt was killing the rest of the day after a single giveback. User wanted "keep trading the BEST setups instead of going dark".
   - **Replaced full day-halt with Selective Mode** (`InpPG_SelectiveMode=true` default). When the giveback brake fires:

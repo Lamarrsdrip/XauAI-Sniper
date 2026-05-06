@@ -582,29 +582,18 @@ function ConnectTab({ me, onRefresh }) {
               </div>
             </div>
 
-            {/* Live scaling on their current balance + current tier */}
-            <div className="bg-black/40 border border-[#D4AF37]/20 rounded-xl p-4 mb-4" data-testid="live-scaling">
-              <div className="flex items-center gap-2 mb-3">
+            {/* v1.3 — STRICT MIRROR: lot sizes are now master-driven (master_lots × balance ratio).
+                The "Live scaling on your account" risk-tier widget was removed because it implied
+                independent risk math that no longer exists. Keep this anchor for layout. */}
+            <div className="bg-black/40 border border-[#D4AF37]/20 rounded-xl p-4 mb-4" data-testid="strict-mirror-info">
+              <div className="flex items-center gap-2 mb-2">
                 <Calculator className="w-4 h-4 text-[#D4AF37]" />
-                <div className="text-xs font-mono tracking-widest text-[#D4AF37]">LIVE SCALING ON YOUR ACCOUNT</div>
+                <div className="text-xs font-mono tracking-widest text-[#D4AF37]">STRICT 1:1 COPY MODE</div>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                <div className="bg-white/5 rounded-lg p-3">
-                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">BALANCE</div>
-                  <div className="text-base font-bold font-mono text-white">${(me.last_balance || 0).toFixed(0)}</div>
-                </div>
-                <div className="bg-white/5 rounded-lg p-3">
-                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">RISK/TRADE</div>
-                  <div className="text-base font-bold font-mono text-[#D4AF37]">{riskPctMap[me.risk_tier || "balanced"]}%</div>
-                </div>
-                <div className="bg-white/5 rounded-lg p-3">
-                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">$ RISKED</div>
-                  <div className="text-base font-bold font-mono">${(((me.last_balance||0)*riskPctMap[me.risk_tier||"balanced"])/100).toFixed(0)}</div>
-                </div>
-                <div className="bg-white/5 rounded-lg p-3">
-                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">BASKET ARMS AT</div>
-                  <div className="text-base font-bold font-mono text-green-400">${((me.last_balance||0)*0.02).toFixed(0)}</div>
-                </div>
+              <div className="text-[12px] text-white/70 leading-relaxed">
+                Your account mirrors the master 1:1. Lot size scales only by balance ratio.
+                If your balance equals the master's, you take the same lot. Smaller account → proportionally smaller lots.
+                SL, TP and entry are copied exactly.
               </div>
               {!me.last_balance && <div className="text-[11px] text-white/40 mt-2">Worker agent will sync your balance within 60s after first connection.</div>}
             </div>
