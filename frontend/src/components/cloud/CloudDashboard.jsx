@@ -673,11 +673,25 @@ function BillingTab({ me, onRefresh }) {
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState("");
   const [payments, setPayments] = useState([]);
+  // v5.1.4: manual currency picker — production CDN may not expose CF-IPCountry,
+  // so we let the user pick. Persists in localStorage so they only set it once.
+  const [chosenCurrency, setChosenCurrency] = useState(
+    () => localStorage.getItem("xauai_pref_currency") || "");
 
   useEffect(() => {
-    cloudAxios.get(`/cloud/config`).then(r => setCfg(r.data)).catch(() => {});
+    cloudAxios.get(`/cloud/config`).then(r => {
+      setCfg(r.data);
+      if (!chosenCurrency && r.data?.user_currency) setChosenCurrency(r.data.user_currency);
+    }).catch(() => {});
     cloudAxios.get(`/cloud/payments/my`).then(r => setPayments(r.data.payments || [])).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const setCurrency = (ccy) => {
+    setChosenCurrency(ccy);
+    if (ccy) localStorage.setItem("xauai_pref_currency", ccy);
+    else     localStorage.removeItem("xauai_pref_currency");
+  };
 
   const copy = (txt, key) => { navigator.clipboard.writeText(txt); setCopied(key); setTimeout(()=>setCopied(""),2000); };
 
@@ -694,7 +708,8 @@ function BillingTab({ me, onRefresh }) {
     e.preventDefault(); setErr(""); setMsg(""); setLoading(true);
     try {
       const plan = cfg.plans[selectedPlan];
-      const rate = (cfg.fx_rates && cfg.fx_rates[cfg.user_currency]) || 1;
+      const ccy = chosenCurrency || cfg.user_currency || "USD";
+      const rate = (cfg.fx_rates && cfg.fx_rates[ccy]) || 1;
       const localAmount = +(plan.price_usd * rate).toFixed(2);
       const res = await cloudAxios.post(`/cloud/payments/submit`, {
         plan: selectedPlan,
@@ -703,7 +718,7 @@ function BillingTab({ me, onRefresh }) {
         reference,
         notes,
         proof_image: method === "bank" ? proofImage : "",
-        paid_currency: method === "bank" ? cfg.user_currency : "USD",
+        paid_currency: method === "bank" ? ccy : "USD",
         paid_amount_local: method === "bank" ? localAmount : plan.price_usd,
       });
       setMsg(res.data.message);
@@ -716,11 +731,12 @@ function BillingTab({ me, onRefresh }) {
 
   if (!cfg) return <Loader2 className="w-6 h-6 animate-spin text-[#D4AF37]" />;
 
-  const userCcy = cfg.user_currency || "USD";
+  const userCcy = chosenCurrency || cfg.user_currency || "USD";
   const fxRate = (cfg.fx_rates && cfg.fx_rates[userCcy]) || 1;
   const planPrice = cfg.plans[selectedPlan]?.price_usd || 0;
   const localPrice = (planPrice * fxRate).toLocaleString(undefined, { maximumFractionDigits: 2 });
   const showLocal = method === "bank" && userCcy !== "USD";
+  const fxOptions = Object.keys(cfg.fx_rates || { USD: 1 });
 
   return (
     <div className="space-y-6">
@@ -784,6 +800,26 @@ function BillingTab({ me, onRefresh }) {
         )}
         {method === "bank" && (
           <div className="space-y-3" data-testid="bank-details">
+            {/* v5.1.4: manual currency picker — guarantees FX conversion works even when CDN headers don't expose country */}
+            <div className="p-3 bg-white/[0.03] border border-white/10 rounded-xl" data-testid="currency-picker-row">
+              <label className="text-[10px] font-mono tracking-widest text-white/50 mb-1.5 flex items-center gap-2">
+                YOUR CURRENCY
+                {chosenCurrency && chosenCurrency !== (cfg.user_currency || "USD") && (
+                  <span className="text-[9px] font-normal text-[#D4AF37] normal-case tracking-normal">(manually selected)</span>
+                )}
+              </label>
+              <select
+                value={userCcy}
+                onChange={(e) => setCurrency(e.target.value)}
+                data-testid="currency-picker"
+                className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm font-mono focus:border-[#D4AF37] outline-none"
+              >
+                {fxOptions.map((c) => (
+                  <option key={c} value={c}>{c}{c === "USD" ? "" : ` — pay ${c} ${(planPrice * (cfg.fx_rates[c] || 1)).toLocaleString(undefined,{maximumFractionDigits:2})}`}</option>
+                ))}
+              </select>
+              <div className="text-[10px] text-white/40 mt-1.5">Pick your bank's currency to see the exact local-currency amount to transfer.</div>
+            </div>
             {showLocal && (
               <div className="p-4 bg-[#D4AF37]/5 border border-[#D4AF37]/30 rounded-xl text-sm" data-testid="fx-conversion">
                 <div className="text-xs font-mono tracking-widest text-[#D4AF37] mb-1">PAY THIS AMOUNT</div>

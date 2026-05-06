@@ -728,7 +728,25 @@ function CloudAdminTab({ api, token }) {
 
   const saveSettings = async () => {
     setBusy(true); setMsg("");
-    try { await ax.put(`${api}/admin/cloud/settings`, settings, { headers }); setMsg("Saved."); }
+    try {
+      // Pre-flight validation: don't let admin accidentally save $0 plan prices
+      // (form blanks would clobber prices to 0 and break the public site).
+      const plans = settings?.plans || {};
+      for (const [pid, p] of Object.entries(plans)) {
+        const price = Number(p.price_usd);
+        if (!Number.isFinite(price) || price <= 0) {
+          setMsg(`${pid.toUpperCase()} plan price must be > $0 (got ${p.price_usd}). Fix and re-save.`);
+          setBusy(false); return;
+        }
+        if (!p.name || !p.name.trim()) {
+          setMsg(`${pid.toUpperCase()} plan needs a name.`);
+          setBusy(false); return;
+        }
+      }
+      await ax.put(`${api}/admin/cloud/settings`, settings, { headers });
+      setMsg("Saved.");
+      refresh();
+    }
     catch (e) { setMsg(e.response?.data?.detail || "Save failed"); }
     finally { setBusy(false); }
   };

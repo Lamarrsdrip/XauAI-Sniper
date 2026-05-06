@@ -7,6 +7,22 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — v5.1.4 EA + admin pricing/FX hardening**
+  - **EA v5.1.4 — giveback brake noise filter** (`/app/backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`)
+    - **Root cause** of "bot hasn't traded since 2pm yesterday despite v5.1.3 + Profit Guardian off":
+      - v5.1.3's always-on `InpProfitLock=true` runs `PG_UpdateHWM()` → on a +0.6% day ($340 gain) the dayHWM crept up by maybe $500 then natural noise put a $300 dent in equity → 25% giveback baseline = $125 allowed → noise > allowed → `pg_dayHaltActive=true` silently, no new entries until midnight reset.
+    - **Fix**: new input `InpPG_GivebackMinGainPct` (default `5.0`). Brake doesn't arm until day-HWM gain ≥ 5% of starting equity. Below that, normal market wiggle is bigger than the gain — brake stays disarmed. With v5.1.4 a +0.6% day will trade normally; only days with real >5% runs get the giveback protection.
+    - Published to `/app/frontend/public/XAUUSD_AI_Sniper_EA_v5.1.4.mq5`. `/api/download/ea` serves it.
+  - **Admin pricing form hardening** (server.py + AdminPortal.jsx)
+    - **Root cause** of "I updated pricing but cloud site still shows defaults / Starter is $0":
+      - `GET /admin/cloud/settings` returned RAW saved overrides → form rendered empty fields for keys not yet saved → admin clicked Save → blanks/0s clobbered the saved plan → Starter price became $0 in DB.
+    - **Fix**: `GET /admin/cloud/settings` now returns MERGED effective plans + fx_rates (defaults + admin overrides) so the form always shows real values. `PUT /admin/cloud/settings` rejects `price_usd <= 0` and empty plan names with HTTP 400 (`_validate_plans_payload`). Admin frontend adds a pre-flight check + calls `refresh()` after save so the UI immediately reflects what's stored.
+  - **Manual currency picker on bank-transfer payment page** (CloudDashboard.jsx BillingTab)
+    - **Root cause** of "bank transfer still showing USD instead of NGN":
+      - Production CDN doesn't expose CF-IPCountry/X-Vercel-IP-Country headers → `_detect_country_from_request` returns "" → `user_currency` defaults to "USD" → no FX conversion shown.
+    - **Fix**: new currency dropdown above bank-account list. Pre-fills with detected currency if available, persists user pick in `localStorage` (`xauai_pref_currency`), shows live preview of every supported currency in the option labels (e.g., "NGN — pay NGN 82,500"). Changes immediately reflect in the gold "PAY THIS AMOUNT" banner. `paid_currency` + `paid_amount_local` fields on the submit-payment payload now use the chosen currency.
+    - Verified: backend admin endpoints — merged plans returned ✓, $0 price rejected with explicit error ✓, valid save works ✓.
+
 - **Feb 2026 — Cloud realtime visibility fix (worker decay + UX feedback)**
   - **Root cause** of "balance not updating, cloud feels not realtime":
     1. Backend never auto-flipped workers from `status=online` → `offline` when their heartbeat went stale. Found a worker that died 8+ hours ago but was still showing `online` in DB → cloud config endpoint reported `executor_workers_online > 0` lying to the dashboard.

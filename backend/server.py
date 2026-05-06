@@ -2409,7 +2409,30 @@ async def admin_reject_payment(payment_id: str, admin: dict = Depends(get_curren
 
 @api_router.get("/admin/cloud/settings", dependencies=[Depends(get_current_admin)])
 async def admin_cloud_get_settings():
-    return await _get_cloud_settings()
+    s = await _get_cloud_settings()
+    # v5.1.4: always return MERGED effective plans + fx_rates so the admin form
+    # auto-populates with real defaults instead of empty fields. Without this,
+    # if a previous save partially overrode plans, the form shows blanks for
+    # the un-saved keys and the admin accidentally clobbers them to $0 on next save.
+    s["plans"] = await _get_effective_plans()
+    s["fx_rates"] = await _get_fx_rates()
+    return s
+
+# v5.1.4: validate plan saves so admin can't accidentally write a $0 price.
+def _validate_plans_payload(plans: dict):
+    if not isinstance(plans, dict): return
+    for pid, p in plans.items():
+        if not isinstance(p, dict): continue
+        price = p.get("price_usd")
+        if price is None: continue  # admin partial-update is OK
+        try: pf = float(price)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"{pid}: price_usd must be a number")
+        if pf <= 0:
+            raise HTTPException(status_code=400, detail=f"{pid} plan price must be > $0 (got ${pf}). Refusing to save.")
+        name = p.get("name")
+        if name is not None and not str(name).strip():
+            raise HTTPException(status_code=400, detail=f"{pid} plan name cannot be empty.")
 
 class CloudSettingsUpdate(BaseModel):
     crypto_wallets: Optional[list] = None
@@ -2424,6 +2447,8 @@ class CloudSettingsUpdate(BaseModel):
 async def admin_cloud_update_settings(req: CloudSettingsUpdate):
     upd = {k: v for k, v in req.model_dump().items() if v is not None}
     if not upd: return {"ok": True, "unchanged": True}
+    if "plans" in upd:
+        _validate_plans_payload(upd["plans"])
     await db.cloud_settings.update_one({"key": "main"}, {"$set": upd}, upsert=True)
     return {"ok": True}
 
