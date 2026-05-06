@@ -7,6 +7,22 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — v1.1.1 worker + Admin Cloud Diagnostics tab (P0 copy-trade visibility fix)**
+  - **Root cause of "trades not copying" being invisible**: when the master EA fired a signal and zero subscribers were fan-out-eligible, the worker's `_handle_open` early-returned WITHOUT logging anything to backend. From the admin's POV the platform looked silently broken — signal hit `cloud_signals`, but no `cloud_fanout_logs` row appeared, no error surfaced anywhere. Same gap when the worker process was offline: no fanout row, no signal echo back.
+  - **Worker v1.1.0 → v1.1.1** (`/app/backend/worker_agent/worker_agent.py`):
+    - When a signal arrives and `len(self.users) == 0`, worker now POSTs a sentinel fanout-log row (`user_id="(no-active-users)"`, `ok=False`, `error="Worker has 0 active users at signal time. Subscribers must have mt5_connected=True AND mt5_verification_status=verified AND paused=False AND status in [trial,active]."`). Admin sees the silent fail in the dashboard, no SSH needed.
+    - Re-published to `/app/frontend/public/worker_agent_v1.1.1.py` (HTTP 200 verified).
+  - **Backend `GET /api/admin/cloud/diagnostics`** (`server.py`): single endpoint that consolidates everything an operator needs to debug copy-trading: workers (with `active_users`/`version`/`hostname`/`last_heartbeat` + auto online-vs-offline based on 3-min heartbeat cutoff), recent fanout logs (last 50), recent master signals (last 10), per-user fan-out readiness checklist (mt5_connected + verification_status + paused + status → `fanout_ready: bool` + `blocked_reason: str`).
+  - **Frontend AdminPortal — new "DIAGNOSTICS" sub-tab** under Cloud:
+    - 4-card health row: workers online, fan-out-ready users, recent events, recent signals.
+    - Smart hint banner that auto-classifies the failure mode: NO WORKERS ONLINE / NO USERS FAN-OUT READY / FAN-OUT FAILURES DETECTED / HEALTHY.
+    - Per-user readiness table with ✓/✗ for each gate + blocked_reason column → instantly tells admin which subscriber is missing what flag.
+    - Fan-out events table with timestamp, user_id (or sentinel), signal_id, side, lots, ticket, ok flag, error string. The smoking gun for any worker-side failure.
+    - Recent master signals table so admin can confirm whether master EA is firing at all.
+    - Worker rows (Infrastructure tab) now also show `active_users` count + worker `version`.
+  - **Verified**: `GET /api/admin/cloud/diagnostics` (admin token) returns the expected JSON shape on the preview env. Live data already revealed: 0 workers online, 1 of 4 users fan-out-ready, testuser blocked by `mt5 not connected`.
+  - **Why this matters**: P0 ticket "trade fired on master but didn't copy to client" — admin can now answer that question in one click instead of SSH'ing the Windows VPS to grep `worker_agent.log`.
+
 - **Feb 2026 — v5.1.4 EA + admin pricing/FX hardening**
   - **EA v5.1.4 — giveback brake noise filter** (`/app/backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`)
     - **Root cause** of "bot hasn't traded since 2pm yesterday despite v5.1.3 + Profit Guardian off":

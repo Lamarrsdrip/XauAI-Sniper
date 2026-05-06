@@ -690,7 +690,8 @@ function CloudAdminTab({ api, token }) {
   const [settings, setSettings] = useState(null);
   const [infra, setInfra] = useState(null);
   const [botMode, setBotMode] = useState(null);    // {current, presets, set_at}
-  const [sub, setSub] = useState("stats"); // stats | users | payments | botmode | infra | settings
+  const [diag, setDiag] = useState(null);          // diagnostics: workers + fanout logs + per-user readiness
+  const [sub, setSub] = useState("stats"); // stats | users | payments | botmode | infra | diagnostics | settings
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [newToken, setNewToken] = useState("");
@@ -699,16 +700,17 @@ function CloudAdminTab({ api, token }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, u, p, cfg, inf, bm] = await Promise.all([
+      const [s, u, p, cfg, inf, bm, dg] = await Promise.all([
         ax.get(`${api}/admin/cloud/stats`, { headers }),
         ax.get(`${api}/admin/cloud/users`, { headers }),
         ax.get(`${api}/admin/cloud/payments`, { headers }),
         ax.get(`${api}/admin/cloud/settings`, { headers }),
         ax.get(`${api}/admin/cloud/infrastructure`, { headers }),
         ax.get(`${api}/admin/cloud/bot-mode`, { headers }),
+        ax.get(`${api}/admin/cloud/diagnostics`, { headers }),
       ]);
       setStats(s.data); setUsers(u.data.users || []); setPayments(p.data.payments || []);
-      setSettings(cfg.data); setInfra(inf.data); setBotMode(bm.data);
+      setSettings(cfg.data); setInfra(inf.data); setBotMode(bm.data); setDiag(dg.data);
     } catch (e) { setMsg(e.response?.data?.detail || "Failed to load"); }
   }, [api, token]);
 
@@ -794,7 +796,7 @@ function CloudAdminTab({ api, token }) {
   return (
     <div className="space-y-6" data-testid="cloud-admin-tab">
       <div className="flex gap-0 border-b border-border overflow-x-auto">
-        {[{id:"stats",label:"OVERVIEW"},{id:"users",label:"USERS"},{id:"payments",label:"PAYMENTS"},{id:"pricing",label:"PRICING & FX"},{id:"botmode",label:"BOT MODE"},{id:"infra",label:"INFRASTRUCTURE"},{id:"settings",label:"SETTINGS"}].map(t=>(
+        {[{id:"stats",label:"OVERVIEW"},{id:"users",label:"USERS"},{id:"payments",label:"PAYMENTS"},{id:"pricing",label:"PRICING & FX"},{id:"botmode",label:"BOT MODE"},{id:"infra",label:"INFRASTRUCTURE"},{id:"diagnostics",label:"DIAGNOSTICS"},{id:"settings",label:"SETTINGS"}].map(t=>(
           <button key={t.id} onClick={()=>setSub(t.id)} data-testid={`cloud-sub-${t.id}`}
                   className={`px-5 py-3 text-xs font-bold tracking-[0.1em] border-b-2 transition-colors whitespace-nowrap ${sub===t.id?"border-primary text-foreground":"border-transparent text-muted-foreground hover:text-foreground"}`}>
             {t.label} {t.id==="payments" && stats?.pending_payments>0 ? <span className="ml-1 px-1.5 py-0.5 bg-primary text-primary-foreground rounded-full text-[10px]">{stats.pending_payments}</span> : null}
@@ -1146,6 +1148,8 @@ function CloudAdminTab({ api, token }) {
                       <div className="font-bold">{w.name}</div>
                       <div className="text-[11px] text-muted-foreground mt-1">
                         {w.endpoint || "pull-mode"} · cap {w.current_users || 0}/{w.max_users}
+                        {typeof w.active_users === "number" ? ` · ${w.active_users} active mt5` : ""}
+                        {w.version ? ` · v${w.version}` : ""}
                         {w.last_heartbeat ? ` · last seen ${w.last_heartbeat.slice(11,16)}` : ""}
                       </div>
                       <div className="mt-2 flex items-center gap-2">
@@ -1188,6 +1192,172 @@ function CloudAdminTab({ api, token }) {
               <li>For real execution on user accounts: rent a Windows VPS, click "+ ADD WORKER" and register it</li>
               <li>Flip "GO LIVE" — all connected users switch from shadow → real trading</li>
             </ol>
+          </div>
+        </div>
+      )}
+
+      {sub === "diagnostics" && diag && (
+        <div className="space-y-6" data-testid="cloud-diagnostics-panel">
+          {/* At-a-glance health row */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard label="WORKERS ONLINE" value={`${diag.online_workers} / ${diag.workers.length}`} color={diag.online_workers > 0 ? "green" : "primary"} testId="diag-workers-online" />
+            <StatCard label="FAN-OUT READY USERS" value={`${diag.fanout_ready_users} / ${diag.total_users}`} color={diag.fanout_ready_users > 0 ? "green" : "primary"} testId="diag-ready-users" />
+            <StatCard label="RECENT FAN-OUT EVENTS" value={diag.fanout_logs.length} testId="diag-fanout-count" />
+            <StatCard label="RECENT MASTER SIGNALS" value={diag.signals.length} testId="diag-signal-count" />
+          </div>
+
+          {/* Diagnosis hint banner */}
+          {(() => {
+            if (diag.online_workers === 0) {
+              return <div className="border-2 border-[hsl(348,83%,47%)]/40 bg-[hsl(348,83%,47%)]/5 p-4 text-sm" data-testid="diag-hint">
+                <div className="font-bold text-[hsl(348,83%,47%)] mb-1">⛔ NO WORKERS ONLINE</div>
+                The VPS worker is not heart-beating. Trades cannot copy. SSH the VPS and run <code className="font-mono bg-black/30 px-1">python worker_agent.py</code> — or check Windows Task Scheduler if you set it as a startup task. If the worker WAS running, look for a crash trace in <code className="font-mono bg-black/30 px-1">worker_agent.log</code>.
+              </div>;
+            }
+            if (diag.fanout_ready_users === 0) {
+              return <div className="border-2 border-primary/40 bg-primary/5 p-4 text-sm" data-testid="diag-hint">
+                <div className="font-bold text-primary mb-1">⚠ NO USERS ARE FAN-OUT READY</div>
+                Worker is online but no subscriber meets ALL of: status ∈ [trial,active], <code className="font-mono">mt5_connected</code>=true, <code className="font-mono">mt5_verification_status</code>=verified, <code className="font-mono">paused</code>=false. See per-user readiness table below.
+              </div>;
+            }
+            const hasFails = diag.fanout_logs.some(f => !f.ok);
+            if (hasFails) {
+              return <div className="border-2 border-primary/40 bg-primary/5 p-4 text-sm" data-testid="diag-hint">
+                <div className="font-bold text-primary mb-1">⚠ FAN-OUT FAILURES DETECTED</div>
+                Worker is online and at least 1 user is ready, but some fan-out attempts are failing. Inspect the error column in the table below — common causes: invalid filling mode, lot-step mismatch, broker rejecting price/SL/TP, or the user's MT5 password no longer working.
+              </div>;
+            }
+            return <div className="border-2 border-[hsl(142,71%,45%)]/40 bg-[hsl(142,71%,45%)]/5 p-4 text-sm" data-testid="diag-hint">
+              <div className="font-bold text-[hsl(142,71%,45%)] mb-1">✅ COPY-TRADING IS HEALTHY</div>
+              Workers online, users fan-out-ready, no recent failures. Master EA signals will mirror to subscriber accounts.
+            </div>;
+          })()}
+
+          <button onClick={refresh} disabled={busy} data-testid="diag-refresh"
+                  className="px-4 py-2 bg-muted text-foreground text-xs font-bold tracking-widest">
+            {busy ? "REFRESHING..." : "↻ REFRESH"}
+          </button>
+
+          {/* Workers detail */}
+          <div className="border border-border p-4">
+            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-3">VPS WORKERS</div>
+            {diag.workers.length === 0 ? <div className="text-sm text-muted-foreground">No workers registered.</div> :
+              <div className="space-y-2">
+                {diag.workers.map((w,i)=>(
+                  <div key={w.id} className="text-sm flex flex-wrap items-center gap-3 border-b border-border/50 pb-2" data-testid={`diag-worker-${i}`}>
+                    <span className={`px-2 py-0.5 text-[10px] font-bold rounded ${w.status==="online"?"bg-[hsl(142,71%,45%)]/20 text-[hsl(142,71%,45%)]":"bg-[hsl(348,83%,47%)]/20 text-[hsl(348,83%,47%)]"}`}>{w.status?.toUpperCase()}</span>
+                    <span className="font-bold">{w.name}</span>
+                    <span className="text-muted-foreground text-xs">v{w.version || "?"}</span>
+                    <span className="text-muted-foreground text-xs">{w.hostname || "unknown host"}</span>
+                    <span className="text-muted-foreground text-xs">{w.active_users} mt5 sessions</span>
+                    <span className="text-muted-foreground text-xs">last hb: {w.last_heartbeat?.slice(11,19) || "never"}</span>
+                  </div>
+                ))}
+              </div>
+            }
+          </div>
+
+          {/* Per-user fan-out readiness */}
+          <div className="border border-border p-4">
+            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-3">PER-USER FAN-OUT READINESS</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs" data-testid="diag-users-table">
+                <thead><tr className="text-[10px] font-bold tracking-widest text-muted-foreground border-b border-border">
+                  <th className="text-left py-2">EMAIL</th>
+                  <th className="text-left py-2">STATUS</th>
+                  <th className="text-center py-2">MT5</th>
+                  <th className="text-center py-2">VERIFIED</th>
+                  <th className="text-center py-2">PAUSED</th>
+                  <th className="text-center py-2">READY</th>
+                  <th className="text-left py-2">BLOCKED REASON</th>
+                </tr></thead>
+                <tbody>
+                  {diag.users.map((u,i)=>(
+                    <tr key={u.id} className="border-b border-border/30" data-testid={`diag-user-${i}`}>
+                      <td className="py-1.5 font-semibold">{u.email}</td>
+                      <td className="py-1.5 capitalize">{u.status}</td>
+                      <td className="py-1.5 text-center">{u.mt5_connected ? "✓" : "—"}</td>
+                      <td className="py-1.5 text-center">
+                        {u.mt5_verification_status === "verified" ? "✓"
+                          : u.mt5_verification_status === "rejected"
+                            ? <span className="text-[hsl(348,83%,47%)]" title={u.mt5_verification_error}>✗</span>
+                            : <span className="text-primary">{u.mt5_verification_status || "—"}</span>}
+                      </td>
+                      <td className="py-1.5 text-center">{u.paused ? "✓" : "—"}</td>
+                      <td className={`py-1.5 text-center font-bold ${u.fanout_ready ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>{u.fanout_ready ? "YES" : "NO"}</td>
+                      <td className="py-1.5 text-muted-foreground text-[11px]">{u.blocked_reason || (u.mt5_verification_error || "")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {diag.users.length === 0 && <div className="text-center text-muted-foreground py-8">No trial/active subscribers yet.</div>}
+            </div>
+          </div>
+
+          {/* Recent fan-out events (the actual smoking gun for "trades not copying") */}
+          <div className="border border-border p-4">
+            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-3">RECENT FAN-OUT EVENTS (NEWEST FIRST)</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs" data-testid="diag-fanout-table">
+                <thead><tr className="text-[10px] font-bold tracking-widest text-muted-foreground border-b border-border">
+                  <th className="text-left py-2">TIME</th>
+                  <th className="text-left py-2">USER</th>
+                  <th className="text-left py-2">SIGNAL</th>
+                  <th className="text-left py-2">SIDE</th>
+                  <th className="text-right py-2">LOTS</th>
+                  <th className="text-right py-2">TICKET</th>
+                  <th className="text-center py-2">OK</th>
+                  <th className="text-left py-2">ERROR</th>
+                </tr></thead>
+                <tbody>
+                  {diag.fanout_logs.map((f,i)=>(
+                    <tr key={i} className="border-b border-border/30 align-top" data-testid={`diag-fanout-${i}`}>
+                      <td className="py-1.5 font-mono text-[10px] whitespace-nowrap">{f.opened_at?.slice(11,19) || "—"}</td>
+                      <td className="py-1.5 break-all max-w-[180px]">{f.user_id?.startsWith("(") ? <span className="text-primary">{f.user_id}</span> : (f.user_id || "—").slice(0,8)}</td>
+                      <td className="py-1.5 font-mono text-[10px]">{(f.signal_id || "—").slice(0,8)}</td>
+                      <td className="py-1.5 font-bold">{f.side}</td>
+                      <td className="py-1.5 text-right font-mono">{Number(f.lots || 0).toFixed(2)}</td>
+                      <td className="py-1.5 text-right font-mono">{f.ticket || "—"}</td>
+                      <td className={`py-1.5 text-center font-bold ${f.ok ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>{f.ok ? "✓" : "✗"}</td>
+                      <td className="py-1.5 text-[11px] text-muted-foreground max-w-md break-words">{f.error || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {diag.fanout_logs.length === 0 && <div className="text-center text-muted-foreground py-8">No fan-out events yet. Fire a master signal — every attempt (success or failure) will appear here.</div>}
+            </div>
+          </div>
+
+          {/* Recent master signals (so you can see if the master EA is actually firing) */}
+          <div className="border border-border p-4">
+            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-3">RECENT MASTER SIGNALS (NEWEST FIRST)</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs" data-testid="diag-signals-table">
+                <thead><tr className="text-[10px] font-bold tracking-widest text-muted-foreground border-b border-border">
+                  <th className="text-left py-2">TIME</th>
+                  <th className="text-left py-2">SIGNAL ID</th>
+                  <th className="text-left py-2">SIDE</th>
+                  <th className="text-right py-2">ENTRY</th>
+                  <th className="text-right py-2">SL</th>
+                  <th className="text-right py-2">TP</th>
+                  <th className="text-left py-2">SOURCE</th>
+                </tr></thead>
+                <tbody>
+                  {diag.signals.map((s,i)=>(
+                    <tr key={i} className="border-b border-border/30" data-testid={`diag-signal-${i}`}>
+                      <td className="py-1.5 font-mono text-[10px]">{s.ts?.slice(11,19) || "—"}</td>
+                      <td className="py-1.5 font-mono text-[10px]">{(s.id || "—").slice(0,8)}</td>
+                      <td className="py-1.5 font-bold">{s.side}</td>
+                      <td className="py-1.5 text-right font-mono">{s.entry?.toFixed?.(2) || s.entry}</td>
+                      <td className="py-1.5 text-right font-mono">{s.sl?.toFixed?.(2) || s.sl}</td>
+                      <td className="py-1.5 text-right font-mono">{s.tp?.toFixed?.(2) || s.tp}</td>
+                      <td className="py-1.5 text-muted-foreground">{s.source || "master"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {diag.signals.length === 0 && <div className="text-center text-muted-foreground py-8">No master signals received yet.</div>}
+            </div>
           </div>
         </div>
       )}

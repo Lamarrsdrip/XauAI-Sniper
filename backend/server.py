@@ -3076,6 +3076,74 @@ async def cloud_admin_fanout_logs(limit: int = 100):
     rows = await db.cloud_fanout_logs.find({}, {"_id": 0}).sort("opened_at", -1).to_list(min(int(limit), 500))
     return {"logs": rows, "total": len(rows)}
 
+# Admin one-shot diagnostics: everything an operator needs to debug "trades not
+# copying" without SSH-ing the VPS. Combines workers (with active_users + version),
+# recent fanout log rows, recent master signals, and a per-user "ready to fan-out?"
+# checklist (mt5_connected + verification_status + paused + status). 99% of bugs
+# show up here as a single missing checkmark.
+@api_router.get("/admin/cloud/diagnostics", dependencies=[Depends(get_current_admin)])
+async def cloud_admin_diagnostics(fanout_limit: int = 50, signal_limit: int = 10):
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(minutes=3)).isoformat()
+    workers_raw = await db.cloud_workers.find({}, {"_id": 0}).sort("last_heartbeat", -1).to_list(100)
+    workers = []
+    for w in workers_raw:
+        hb = w.get("last_heartbeat")
+        is_online = bool(hb and hb > cutoff)
+        workers.append({
+            "id": w.get("id"),
+            "name": w.get("name"),
+            "status": "online" if is_online else "offline",
+            "last_heartbeat": hb,
+            "active_users": int(w.get("active_users") or 0),
+            "version": w.get("version") or "",
+            "hostname": w.get("hostname") or "",
+        })
+    fanout = await db.cloud_fanout_logs.find({}, {"_id": 0}).sort("opened_at", -1).to_list(min(int(fanout_limit), 200))
+    signals = await db.cloud_signals.find({}, {"_id": 0}).sort("ts", -1).to_list(min(int(signal_limit), 50))
+    # Per-user fan-out readiness: surface anyone who looks like they should be
+    # mirroring trades but won't because of a missing flag.
+    users_raw = await db.cloud_users.find(
+        {"status": {"$in": ["trial", "active"]}},
+        {"_id": 0, "id": 1, "email": 1, "status": 1, "mt5_connected": 1,
+         "mt5_verification_status": 1, "mt5_verification_error": 1,
+         "paused": 1, "assigned_worker_id": 1, "last_balance": 1}
+    ).to_list(500)
+    users = []
+    for u in users_raw:
+        connected = bool(u.get("mt5_connected"))
+        verified = u.get("mt5_verification_status") == "verified"
+        paused = bool(u.get("paused"))
+        ready = connected and verified and not paused
+        reason = ""
+        if not connected: reason = "mt5 not connected"
+        elif not verified: reason = f"mt5 not verified ({u.get('mt5_verification_status') or 'none'})"
+        elif paused: reason = "user paused"
+        users.append({
+            "id": u.get("id"),
+            "email": u.get("email"),
+            "status": u.get("status"),
+            "mt5_connected": connected,
+            "mt5_verification_status": u.get("mt5_verification_status") or "",
+            "mt5_verification_error": u.get("mt5_verification_error") or "",
+            "paused": paused,
+            "assigned_worker_id": u.get("assigned_worker_id") or "",
+            "last_balance": float(u.get("last_balance") or 0),
+            "fanout_ready": ready,
+            "blocked_reason": reason,
+        })
+    ready_count = sum(1 for u in users if u["fanout_ready"])
+    return {
+        "now": now.isoformat(),
+        "workers": workers,
+        "online_workers": sum(1 for w in workers if w["status"] == "online"),
+        "fanout_logs": fanout,
+        "signals": signals,
+        "users": users,
+        "fanout_ready_users": ready_count,
+        "total_users": len(users),
+    }
+
 class AgentEquitySnapshot(BaseModel):
     user_id: str; balance: float; equity: float; margin: float; free_margin: float
 
