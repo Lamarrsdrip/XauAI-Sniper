@@ -2815,6 +2815,68 @@ async def cloud_master_heartbeat(request: Request):
                   "master_ea_status": "online"}}, upsert=True)
     return {"ok": True}
 
+# v5.1.8 — Bot trading-mode preset (admin switcher).
+# Master EA polls /cloud/master/config every minute; admin can change which mode
+# is active from the admin panel without touching MT5 inputs.
+BOT_MODE_PRESETS = {
+    "conservative": {
+        "label": "Conservative",
+        "description": "Fewer but cleaner trades. Higher win-rate, smaller drawdowns. Best for quiet markets or after losses.",
+        "gradeB": 3.0,
+        "scoreFloor": 0.55,
+        "contextTF": 16388,      # PERIOD_H4 (MQL5 enum value)
+        "useHTFBias": True,
+        "adaptiveTighten": True,
+    },
+    "balanced": {
+        "label": "Balanced",
+        "description": "Default mode. M30 trend alignment, mid-range score threshold. Today's v5.1.7 baseline.",
+        "gradeB": 2.5,
+        "scoreFloor": 0.65,
+        "contextTF": 30,         # PERIOD_M30
+        "useHTFBias": True,
+        "adaptiveTighten": False,
+    },
+    "aggressive": {
+        "label": "Aggressive",
+        "description": "Trade more often. Lower threshold, no HTF alignment required. Best for trending sessions.",
+        "gradeB": 2.0,
+        "scoreFloor": 0.75,
+        "contextTF": 30,
+        "useHTFBias": False,
+        "adaptiveTighten": False,
+    },
+}
+
+class BotModeReq(BaseModel):
+    mode: str  # conservative | balanced | aggressive
+
+@api_router.get("/admin/cloud/bot-mode", dependencies=[Depends(get_current_admin)])
+async def admin_get_bot_mode():
+    s = await _get_cloud_settings()
+    current = s.get("bot_mode", "balanced")
+    return {"current": current, "presets": BOT_MODE_PRESETS,
+            "set_at": s.get("bot_mode_set_at", "")}
+
+@api_router.post("/admin/cloud/bot-mode", dependencies=[Depends(get_current_admin)])
+async def admin_set_bot_mode(req: BotModeReq):
+    if req.mode not in BOT_MODE_PRESETS:
+        raise HTTPException(status_code=400, detail=f"Unknown mode '{req.mode}'. Valid: {list(BOT_MODE_PRESETS)}")
+    await db.cloud_settings.update_one({"key": "main"},
+        {"$set": {"bot_mode": req.mode,
+                  "bot_mode_set_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    return {"ok": True, "mode": req.mode, "preset": BOT_MODE_PRESETS[req.mode]}
+
+# Master EA polls this every ~60s to pick up admin-changed mode without restart.
+@api_router.get("/cloud/master/config")
+async def cloud_master_config(request: Request):
+    await _require_agent_async(request)
+    s = await _get_cloud_settings()
+    mode = s.get("bot_mode", "balanced")
+    preset = BOT_MODE_PRESETS.get(mode, BOT_MODE_PRESETS["balanced"])
+    return {"mode": mode, "preset": preset,
+            "set_at": s.get("bot_mode_set_at", "")}
+
 # v5.1.5 — Bot Reasoning feed: master EA pushes "TRADE BLOCKED BECAUSE …" /
 # "FIRED BUY/SELL …" events here so cloud subscribers can see live why their
 # copy account is or isn't trading. Capped at 500 rows (TTL-style trim on insert).

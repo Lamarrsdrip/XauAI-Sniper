@@ -689,7 +689,8 @@ function CloudAdminTab({ api, token }) {
   const [payments, setPayments] = useState([]);
   const [settings, setSettings] = useState(null);
   const [infra, setInfra] = useState(null);
-  const [sub, setSub] = useState("stats"); // stats | users | payments | infra | settings
+  const [botMode, setBotMode] = useState(null);    // {current, presets, set_at}
+  const [sub, setSub] = useState("stats"); // stats | users | payments | botmode | infra | settings
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [newToken, setNewToken] = useState("");
@@ -698,19 +699,30 @@ function CloudAdminTab({ api, token }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, u, p, cfg, inf] = await Promise.all([
+      const [s, u, p, cfg, inf, bm] = await Promise.all([
         ax.get(`${api}/admin/cloud/stats`, { headers }),
         ax.get(`${api}/admin/cloud/users`, { headers }),
         ax.get(`${api}/admin/cloud/payments`, { headers }),
         ax.get(`${api}/admin/cloud/settings`, { headers }),
         ax.get(`${api}/admin/cloud/infrastructure`, { headers }),
+        ax.get(`${api}/admin/cloud/bot-mode`, { headers }),
       ]);
       setStats(s.data); setUsers(u.data.users || []); setPayments(p.data.payments || []);
-      setSettings(cfg.data); setInfra(inf.data);
+      setSettings(cfg.data); setInfra(inf.data); setBotMode(bm.data);
     } catch (e) { setMsg(e.response?.data?.detail || "Failed to load"); }
   }, [api, token]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  const setBotModePreset = async (mode) => {
+    setBusy(true); setMsg("");
+    try {
+      await ax.post(`${api}/admin/cloud/bot-mode`, { mode }, { headers });
+      setMsg(`Bot mode → ${mode}. Master EA will pick it up within 60 seconds.`);
+      refresh();
+    } catch (e) { setMsg(e.response?.data?.detail || "Mode change failed"); }
+    finally { setBusy(false); }
+  };
 
   const approve = async (id) => {
     setBusy(true); setMsg("");
@@ -782,7 +794,7 @@ function CloudAdminTab({ api, token }) {
   return (
     <div className="space-y-6" data-testid="cloud-admin-tab">
       <div className="flex gap-0 border-b border-border overflow-x-auto">
-        {[{id:"stats",label:"OVERVIEW"},{id:"users",label:"USERS"},{id:"payments",label:"PAYMENTS"},{id:"pricing",label:"PRICING & FX"},{id:"infra",label:"INFRASTRUCTURE"},{id:"settings",label:"SETTINGS"}].map(t=>(
+        {[{id:"stats",label:"OVERVIEW"},{id:"users",label:"USERS"},{id:"payments",label:"PAYMENTS"},{id:"pricing",label:"PRICING & FX"},{id:"botmode",label:"BOT MODE"},{id:"infra",label:"INFRASTRUCTURE"},{id:"settings",label:"SETTINGS"}].map(t=>(
           <button key={t.id} onClick={()=>setSub(t.id)} data-testid={`cloud-sub-${t.id}`}
                   className={`px-5 py-3 text-xs font-bold tracking-[0.1em] border-b-2 transition-colors whitespace-nowrap ${sub===t.id?"border-primary text-foreground":"border-transparent text-muted-foreground hover:text-foreground"}`}>
             {t.label} {t.id==="payments" && stats?.pending_payments>0 ? <span className="ml-1 px-1.5 py-0.5 bg-primary text-primary-foreground rounded-full text-[10px]">{stats.pending_payments}</span> : null}
@@ -942,6 +954,63 @@ function CloudAdminTab({ api, token }) {
                 </div>
               </div>
             ))}
+        </div>
+      )}
+
+      {sub === "botmode" && botMode && (
+        <div className="space-y-5" data-testid="botmode-panel">
+          <div className="border border-border p-4 sm:p-5">
+            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-1">CURRENT BOT MODE</div>
+            <div className="flex items-baseline gap-3 flex-wrap">
+              <div className="text-3xl sm:text-4xl font-bold capitalize text-primary" data-testid="botmode-current">{botMode.current}</div>
+              {botMode.set_at && <div className="text-[11px] text-muted-foreground font-mono">since {new Date(botMode.set_at).toLocaleString()}</div>}
+            </div>
+            <div className="text-[12px] text-muted-foreground mt-2 leading-relaxed">
+              The master EA polls this every ~60s. Switching modes changes the score threshold,
+              floor, HTF context-gate, and post-loss tightening for ALL trades — without restarting MT5.
+              Cloud subscribers all execute against the same mode.
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-3 sm:gap-4">
+            {Object.entries(botMode.presets || {}).map(([id, p]) => {
+              const isCurrent = id === botMode.current;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setBotModePreset(id)}
+                  disabled={busy || isCurrent}
+                  data-testid={`botmode-${id}`}
+                  className={`text-left border-2 p-4 sm:p-5 transition-colors ${isCurrent ? "border-primary bg-primary/10" : "border-border bg-muted/10 hover:border-primary/50 hover:bg-primary/5"} ${busy ? "opacity-50 cursor-wait" : "cursor-pointer"}`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className={`text-[10px] font-bold tracking-widest ${isCurrent ? "text-primary" : "text-muted-foreground"}`}>{id.toUpperCase()}</div>
+                    {isCurrent && <div className="text-[9px] font-mono px-1.5 py-0.5 bg-primary text-primary-foreground rounded">ACTIVE</div>}
+                  </div>
+                  <div className="font-bold text-base sm:text-lg mb-2">{p.label}</div>
+                  <div className="text-[11px] text-muted-foreground leading-relaxed mb-3">{p.description}</div>
+                  <div className="text-[10px] font-mono text-muted-foreground/80 space-y-0.5 border-t border-border pt-2">
+                    <div>gradeB: <span className="text-foreground">{p.gradeB}</span></div>
+                    <div>scoreFloor: <span className="text-foreground">{p.scoreFloor}</span></div>
+                    <div>HTF align: <span className="text-foreground">{p.useHTFBias ? `yes · TF=${p.contextTF}` : "off"}</span></div>
+                    <div>post-loss tighten: <span className="text-foreground">{p.adaptiveTighten ? "on" : "off"}</span></div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="border border-border p-3 sm:p-4 text-[12px] text-muted-foreground">
+            <div className="font-bold text-foreground mb-1">⚠ A note on win-rate</div>
+            <div className="leading-relaxed">
+              No mode guarantees "always profit" — markets are stochastic. These presets bias the bot
+              toward different risk/frequency tradeoffs. <span className="text-foreground">Conservative</span> trades less
+              but with higher win-rate per trade. <span className="text-foreground">Aggressive</span> trades more but accepts
+              more whipsaw. Win-rate × avg-win-size × frequency = expectancy. The bot is engineered for
+              positive expectancy across all three modes — but only over a meaningful sample (50+ trades).
+            </div>
+          </div>
         </div>
       )}
 
