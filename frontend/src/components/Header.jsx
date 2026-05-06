@@ -21,7 +21,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
           <div className="flex items-center gap-2 md:gap-3 cursor-pointer group min-w-0" onClick={() => onNavigate("overview")} data-testid="header-brand">
             <XauAiLogo size={32} className="flex-none ring-1 ring-black/5 shadow-sm" />
             <span className="font-heading font-semibold text-sm md:text-base tracking-tight text-[#111] group-hover:text-[#C5A059] transition-colors truncate">XauAi Cloud</span>
-            <span className="hidden sm:inline text-[10px] text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded-full flex-none">v5.1.5</span>
+            <span className="hidden sm:inline text-[10px] text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded-full flex-none">v5.1.6</span>
           </div>
 
           <nav className="hidden lg:flex items-center gap-1">
