@@ -263,6 +263,9 @@ function BotReasoningFeed() {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  // v5.1.7: collapsed by default on mobile, persisted user preference
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem("xauai_bot_feed_collapsed") === "1");
 
   useEffect(() => {
     let alive = true;
@@ -279,57 +282,92 @@ function BotReasoningFeed() {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
+  const toggle = () => {
+    setCollapsed((c) => {
+      const next = !c;
+      localStorage.setItem("xauai_bot_feed_collapsed", next ? "1" : "0");
+      return next;
+    });
+  };
+
+  // Latest event preview shown when collapsed (so user still sees activity)
+  const latest = events[0];
+  const latestIsFire = latest?.event_type === "FIRE";
+
   return (
     <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="bot-reasoning-feed">
-      <div className="flex items-center justify-between mb-3 sm:mb-4 flex-wrap gap-2">
-        <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40">BOT ACTIVITY · LIVE</div>
-        <div className="flex items-center gap-1.5 text-[10px] font-mono">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-          <span className="text-white/40">refreshing every 6s</span>
+      <button
+        type="button"
+        onClick={toggle}
+        className="w-full flex items-center justify-between mb-3 sm:mb-4 gap-2 hover:opacity-80 transition-opacity text-left"
+        data-testid="bot-feed-toggle"
+        aria-expanded={!collapsed}
+      >
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40 flex-none">BOT ACTIVITY · LIVE</div>
+          <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-none" />
+          {collapsed && latest && (
+            <div className={`text-[10px] sm:text-[11px] font-mono truncate min-w-0 ${latestIsFire ? "text-green-400" : "text-amber-300"}`} data-testid="bot-feed-latest-preview">
+              · {latestIsFire ? "FIRE" : "BLOCK"} · {relativeTime(latest.ts)} · {latest.reason}
+            </div>
+          )}
+          {!collapsed && (
+            <div className="text-[10px] font-mono text-white/40 hidden sm:inline">refreshing every 6s</div>
+          )}
         </div>
-      </div>
-      {loading && events.length === 0 ? (
-        <div className="flex items-center gap-2 text-white/40 text-sm py-6 justify-center">
-          <Loader2 className="w-4 h-4 animate-spin" /> Connecting to master EA…
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-white/40 flex-none">
+          {events.length > 0 && (
+            <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10">{events.length}</span>
+          )}
+          <span className={`transition-transform ${collapsed ? "" : "rotate-180"}`}>▾</span>
         </div>
-      ) : events.length === 0 ? (
-        <div className="text-center py-8 text-white/40 text-sm">
-          <Cloud className="w-8 h-8 mx-auto mb-2 text-white/20" />
-          No activity yet. The bot will start logging once the master EA is online.
-        </div>
-      ) : (
-        <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
-          {events.map((e, i) => {
-            const isFire = e.event_type === "FIRE";
-            const grade = (e.grade || "").toUpperCase();
-            const dirArrow = e.signal_dir > 0 ? "↑" : e.signal_dir < 0 ? "↓" : "·";
-            const accent = isFire
-              ? "border-green-500/40 bg-green-500/5"
-              : grade.includes("VETO") || grade.includes("LOCK") || grade === "NEWS"
-              ? "border-red-500/30 bg-red-500/5"
-              : "border-white/10 bg-white/[0.02]";
-            const labelColor = isFire ? "text-green-400" : "text-amber-400";
-            return (
-              <div key={e.id || i} className={`flex items-start gap-3 p-3 border rounded-xl ${accent}`} data-testid={`reasoning-row-${i}`}>
-                <div className={`flex-none text-[10px] font-mono font-bold tracking-widest ${labelColor} pt-0.5`}>
-                  {isFire ? "FIRE" : "BLOCK"}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-white/90 leading-snug break-words">{e.reason}</div>
-                  <div className="flex items-center gap-2 text-[10px] font-mono text-white/40 mt-1 flex-wrap">
-                    <span>{relativeTime(e.ts)}</span>
-                    {e.regime && <span>· {e.regime}</span>}
-                    {e.setup && <span>· {e.setup}</span>}
-                    {grade && grade !== e.event_type && <span>· {grade}</span>}
-                    {e.signal_dir !== 0 && <span className={e.signal_dir > 0 ? "text-green-400" : "text-red-400"}>{dirArrow} {e.signal_dir > 0 ? "BUY" : "SELL"}</span>}
+      </button>
+      {!collapsed && (
+        <>
+          {loading && events.length === 0 ? (
+            <div className="flex items-center gap-2 text-white/40 text-sm py-6 justify-center">
+              <Loader2 className="w-4 h-4 animate-spin" /> Connecting to master EA…
+            </div>
+          ) : events.length === 0 ? (
+            <div className="text-center py-8 text-white/40 text-sm">
+              <Cloud className="w-8 h-8 mx-auto mb-2 text-white/20" />
+              No activity yet. The bot will start logging once the master EA is online.
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[280px] sm:max-h-[420px] overflow-y-auto pr-1">
+              {events.map((e, i) => {
+                const isFire = e.event_type === "FIRE";
+                const grade = (e.grade || "").toUpperCase();
+                const dirArrow = e.signal_dir > 0 ? "↑" : e.signal_dir < 0 ? "↓" : "·";
+                const accent = isFire
+                  ? "border-green-500/40 bg-green-500/5"
+                  : grade.includes("VETO") || grade.includes("LOCK") || grade === "NEWS"
+                  ? "border-red-500/30 bg-red-500/5"
+                  : "border-white/10 bg-white/[0.02]";
+                const labelColor = isFire ? "text-green-400" : "text-amber-400";
+                return (
+                  <div key={e.id || i} className={`flex items-start gap-3 p-3 border rounded-xl ${accent}`} data-testid={`reasoning-row-${i}`}>
+                    <div className={`flex-none text-[10px] font-mono font-bold tracking-widest ${labelColor} pt-0.5`}>
+                      {isFire ? "FIRE" : "BLOCK"}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white/90 leading-snug break-words">{e.reason}</div>
+                      <div className="flex items-center gap-2 text-[10px] font-mono text-white/40 mt-1 flex-wrap">
+                        <span>{relativeTime(e.ts)}</span>
+                        {e.regime && <span>· {e.regime}</span>}
+                        {e.setup && <span>· {e.setup}</span>}
+                        {grade && grade !== e.event_type && <span>· {grade}</span>}
+                        {e.signal_dir !== 0 && <span className={e.signal_dir > 0 ? "text-green-400" : "text-red-400"}>{dirArrow} {e.signal_dir > 0 ? "BUY" : "SELL"}</span>}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
+          )}
+          {err && <div className="text-xs text-red-400 mt-2" data-testid="reasoning-err">{err}</div>}
+        </>
       )}
-      {err && <div className="text-xs text-red-400 mt-2" data-testid="reasoning-err">{err}</div>}
     </div>
   );
 }
