@@ -7,6 +7,19 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — EA v5.2.1 — Startup cooldown (no blind trades after EA reload)**
+  - **User pain**: every MT5/EA restart sometimes immediately fired a trade on stale buffers / mid-bar context — blind shots.
+  - **Two-layer gate inserted at the very top of `PG_BlockReason()`** (runs before all other PG checks; fires even if PG is disabled):
+    1. **Time gate**: `InpStartupCooldownMin` (default 5 min) must elapse since `OnInit`.
+    2. **Bar gate**: `InpStartupRequireNewBar` (default true) — current M5 bar open-time must differ from the bar that was open at boot. Forces at least one fresh M5 close.
+  - **State**: `g_startupAt`, `g_startupBarTime`, `g_startupCooldownDone` (sticky to suppress repeat logs).
+  - **Logs**:
+    - On boot: `🟡 Startup detected — entering 5-minute cooldown + 1 fresh M5 bar before any trade is allowed.`
+    - On veto: `🛡 PROFIT GUARDIAN VETO: Trade blocked due to startup cooldown — startup cooldown (2/5 min elapsed) (signal=BUY grade=A)`
+    - On clear: `🟢 Startup cooldown complete — trading enabled.` (logged once)
+  - Both inputs adjustable per chart. Set `InpStartupCooldownMin=0` AND `InpStartupRequireNewBar=false` to disable entirely.
+  - Published `/app/frontend/public/XAUUSD_AI_Sniper_EA_v5.2.1.mq5` and serving via `/api/download/ea` (HTTP verified, version=5.21).
+
 - **Feb 2026 — v1.3 / EA v5.2.0 — STRICT 1:1 MIRROR (master-driven lot sizing)**
   - **User pain**: with 100k master + 100k cloud user, master fired 6.63/6.71/2.38 lots while cloud user took 2.67/2.70 (different lots, fewer trades). Plus master closed but cloud stayed open.
   - **Root cause #1 — divergent lot math**: master used `InpRiskPercent × grade multiplier × pyramid stack`, cloud worker used `risk_tier % × SL distance` (totally different formula). Same balance ≠ same lots.
