@@ -1220,16 +1220,33 @@ function CloudAdminTab({ api, token }) {
                 Worker is online but no subscriber meets ALL of: status ∈ [trial,active], <code className="font-mono">mt5_connected</code>=true, <code className="font-mono">mt5_verification_status</code>=verified, <code className="font-mono">paused</code>=false. See per-user readiness table below.
               </div>;
             }
-            const hasFails = diag.fanout_logs.some(f => !f.ok);
-            if (hasFails) {
+            // Only judge based on the LAST 5 fan-out events. Older failures
+            // (e.g. from a pre-fix worker version) shouldn't keep the banner
+            // red forever once the issue is resolved.
+            const recent = (diag.fanout_logs || []).slice(0, 5);
+            const recentFails = recent.filter(f => !f.ok).length;
+            const recentOks = recent.filter(f => f.ok).length;
+            if (recent.length === 0) {
               return <div className="border-2 border-primary/40 bg-primary/5 p-4 text-sm" data-testid="diag-hint">
-                <div className="font-bold text-primary mb-1">⚠ FAN-OUT FAILURES DETECTED</div>
-                Worker is online and at least 1 user is ready, but some fan-out attempts are failing. Inspect the error column in the table below — common causes: invalid filling mode, lot-step mismatch, broker rejecting price/SL/TP, or the user's MT5 password no longer working.
+                <div className="font-bold text-primary mb-1">ℹ NO FAN-OUT EVENTS YET</div>
+                Workers online and users ready — fire a master signal to test the pipeline. Every fan-out attempt (success OR failure) will show below.
+              </div>;
+            }
+            if (recentFails > 0 && recentOks === 0) {
+              return <div className="border-2 border-[hsl(348,83%,47%)]/40 bg-[hsl(348,83%,47%)]/5 p-4 text-sm" data-testid="diag-hint">
+                <div className="font-bold text-[hsl(348,83%,47%)] mb-1">⛔ RECENT FAN-OUT FAILURES</div>
+                Last {recent.length} fan-out attempt(s) all failed. Inspect the error column below — common causes: invalid filling mode, lot-step mismatch, broker rejecting price/SL/TP, AutoTrading disabled in user's MT5, or the user's MT5 password no longer working.
+              </div>;
+            }
+            if (recentFails > 0 && recentOks > 0) {
+              return <div className="border-2 border-primary/40 bg-primary/5 p-4 text-sm" data-testid="diag-hint">
+                <div className="font-bold text-primary mb-1">⚠ MIXED RESULTS</div>
+                {recentOks} of last {recent.length} succeeded. Some users' brokers may be rejecting trades — check the error column for the failing ones.
               </div>;
             }
             return <div className="border-2 border-[hsl(142,71%,45%)]/40 bg-[hsl(142,71%,45%)]/5 p-4 text-sm" data-testid="diag-hint">
               <div className="font-bold text-[hsl(142,71%,45%)] mb-1">✅ COPY-TRADING IS HEALTHY</div>
-              Workers online, users fan-out-ready, no recent failures. Master EA signals will mirror to subscriber accounts.
+              Workers online, users fan-out-ready, last {recent.length} fan-out events all succeeded. Master EA signals will mirror to subscriber accounts.
             </div>;
           })()}
 
