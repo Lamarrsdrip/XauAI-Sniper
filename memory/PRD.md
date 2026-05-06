@@ -7,6 +7,25 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — EA v5.1.9 — Profit Guardian "Selective Mode" (replace day-halt)**
+  - **User pain**: PG day-halt was killing the rest of the day after a single giveback. User wanted "keep trading the BEST setups instead of going dark".
+  - **Replaced full day-halt with Selective Mode** (`InpPG_SelectiveMode=true` default). When the giveback brake fires:
+    - Bot does NOT stop trading.
+    - Bot only takes **Grade A or A+** setups with **combined score ≥ `InpPG_SelectiveMinScore` (default 4.0)**.
+    - **Strict M15 + H1 trend alignment** required (`InpPG_SelectiveRequireHTF=true` default — both M15 and H1 EMA50 must point ≥ 0.3×ATR away from price in trade direction).
+    - **Lot size reduced** by `InpPG_SelectiveLotMulti` (default 0.6 = 40% reduction).
+  - **PG activation gated by ≥25% day gain** (`InpPG_SelectiveMinDayGain=25.0`). Below that, PG does not interfere with normal trading at all — fixes the "PG nuked my $0.5% day" bug class.
+  - **Optional auto-recovery**: `InpPG_SelectiveRecoverMin` (default 0 = stay restricted until next-day reset). Set to e.g. 120 → if equity is stable for 2 hours and back above the activation level, bot returns to normal mode.
+  - **Logging**:
+    - Activation: `🛡 PG SELECTIVE MODE ACTIVATED — high-confidence trades only. HWM gain $X | giveback $Y (≥Z% of gain @ dayGain=W%). Min combined score=4.0 | lot×=0.60 | HTF require=M15+H1`
+    - Sub-A trades skipped: `🛡 PROFIT GUARDIAN VETO: PG selective: only A/A+ allowed, this trade is grade B (skipped 3 sub-A so far)` — counter increments so user can see what's being filtered.
+    - Score gate: `PG selective: combined score 3.4 < min 4.0 required while restricted`
+    - HTF gate: `PG selective: M15+H1 trend not aligned with trade direction (strict HTF gate)`
+    - Recovery: `🛡 PG SELECTIVE MODE → NORMAL — equity stabilized for Xmin, no further drawdown. Skipped N sub-A trades while restricted.`
+  - **Backwards compat**: set `InpPG_SelectiveMode=false` to restore the legacy v5.1.8 day-halt behavior.
+  - Code locations: new inputs after `InpPG_RatchetTrailDist`; new state vars after `pg_consecutiveLosses`; daily reset block extended; `PG_UpdateHWM()` rewritten with selective branch + recovery tracker; new `PG_HTFAlignedM15H1()` helper; `PG_BlockReason()` signature now takes `combinedScore`; call site multiplies `sizeMulti × pgLotMult`.
+  - Published as `/app/frontend/public/XAUUSD_AI_Sniper_EA_v5.1.9.mq5` and served by `/api/download/ea` (HTTP verified — `version="5.19"`).
+
 - **Feb 2026 — v1.2.0 worker — root-cause fix for "trades not copying" P0**
   - **Smoking gun (from user's diagnostics screenshot)**: every fan-out attempt was returning `login swap failed: (-2, 'Terminal: Invalid params')`. Trades were never even being SENT — the MT5 SDK was rejecting the per-user account-swap before reaching `order_send`.
   - **Root cause**: `_ensure_active()` was calling `mt5.initialize(login=, server=, password=)` repeatedly to swap users. The MetaTrader5 Python SDK does NOT support that pattern — after the first init, subsequent initialize() calls with login args fail with `(-2, 'Invalid params')`. Correct pattern: `mt5.initialize()` ONCE (no args), then `mt5.login(login, password, server)` for each account swap. Same bug existed in `_mt5_try_login()`.
