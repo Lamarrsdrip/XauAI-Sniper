@@ -397,6 +397,11 @@ bool     pg_dayHaltActive     = false; // HWM-giveback hit → no new entries to
 datetime pg_dayHaltDay        = 0;     // day this halt was triggered
 int      pg_lastReportedTier  = -1;    // throttle tier transition logs
 int      pg_consecutiveLosses = 0;     // v5.1.2: resets on any winner; drives adaptive cooldown
+
+// v5.1.5 — Bot reasoning push throttle (avoid spamming cloud on every M5 bar)
+string   br_lastReason         = "";    // last reason string pushed
+datetime br_lastReasonAt       = 0;     // when last pushed
+int      br_minIntervalSec     = 30;    // min seconds between identical-reason pushes
 //---------------------------------------------------------------------------
 int    todayTradeCount;
 datetime lastDayReset, lastWeekReset, lastTradeClose;
@@ -2377,6 +2382,14 @@ void OnTick()
       Print("TRADE BLOCKED BECAUSE: ", blockReason,
             " | Regime:", RegimeName(), " | Setup:", setupName,
             " | Score:", DoubleToString(setupScore, 1));
+      // v5.1.5: push to cloud reasoning feed (throttled — only if reason changed
+      // OR enough time elapsed) so subscribers see why their copy account is idle.
+      if(blockReason != br_lastReason || (TimeCurrent() - br_lastReasonAt) >= br_minIntervalSec)
+      {
+         CloudPostReasoning("BLOCK", blockReason, RegimeName(), setupName,
+                            setupScore, combinedScore, grade, signal);
+         br_lastReason = blockReason; br_lastReasonAt = TimeCurrent();
+      }
       UpdateDashboard(0, combinedScore, grade);
       lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = grade;
       return;
@@ -2392,6 +2405,8 @@ void OnTick()
    if(InpUseNewsFilter && !IsNewsSafe())
    {
       Print("TRADE BLOCKED BECAUSE: NEWS FILTER (high-impact event nearby)");
+      CloudPostReasoning("BLOCK", "NEWS FILTER (high-impact event nearby)",
+                         RegimeName(), setupName, setupScore, combinedScore, "NEWS", signal);
       UpdateDashboard(0, combinedScore, "NEWS");
       lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "NEWS";
       return;
@@ -2403,8 +2418,12 @@ void OnTick()
       int dxyBias = GetDXYBias();
       if(dxyBias != 0 && dxyBias != signal)
       {
-         Print("TRADE BLOCKED BECAUSE: DXY VETO — gold_bias=", dxyGoldBias,
-               " vs signal=", signal>0?"BUY":"SELL", " (set InpUseDXYFilter=false to disable)");
+         string dxyMsg = StringFormat("DXY VETO — gold_bias=%d vs signal=%s",
+                                       dxyGoldBias, signal>0?"BUY":"SELL");
+         Print("TRADE BLOCKED BECAUSE: ", dxyMsg,
+               " (set InpUseDXYFilter=false to disable)");
+         CloudPostReasoning("BLOCK", dxyMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "DXY-VETO", signal);
          UpdateDashboard(0, combinedScore, "DXY-VETO");
          lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "DXY-VETO";
          return;
@@ -2416,10 +2435,11 @@ void OnTick()
       TimeCurrent() - lastTradeClose < InpReversalCooldown)
    {
       int rem = (int)(InpReversalCooldown - (TimeCurrent() - lastTradeClose));
-      Print("TRADE BLOCKED BECAUSE: ANTI-REVERSAL cooldown (",
-            rem, "s left before flipping ",
-            lastTradeDir>0?"BUY":"SELL", " → ",
-            signal>0?"BUY":"SELL", ")");
+      string revMsg = StringFormat("ANTI-REVERSAL cooldown (%ds left, flipping %s→%s)",
+                                    rem, lastTradeDir>0?"BUY":"SELL", signal>0?"BUY":"SELL");
+      Print("TRADE BLOCKED BECAUSE: ", revMsg);
+      CloudPostReasoning("BLOCK", revMsg, RegimeName(), setupName,
+                         setupScore, combinedScore, "REV-CD", signal);
       UpdateDashboard(0, combinedScore, "REV-CD");
       lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "REV-CD";
       return;
@@ -2429,10 +2449,13 @@ void OnTick()
    if(IsDirectionLocked(signal))
    {
       datetime until = (signal == 1) ? buyLockoutUntil : sellLockoutUntil;
-      Print("TRADE BLOCKED BECAUSE: DIR-LOCK — ",
-            signal == 1 ? "BUY" : "SELL", " side locked until ",
-            TimeToString(until, TIME_SECONDS),
-            " due to recent losses on this side");
+      string locMsg = StringFormat("DIR-LOCK — %s side locked until %s due to recent losses",
+                                    signal == 1 ? "BUY" : "SELL",
+                                    TimeToString(until, TIME_SECONDS));
+      Print("TRADE BLOCKED BECAUSE: ", locMsg);
+      CloudPostReasoning("BLOCK", locMsg, RegimeName(), setupName,
+                         setupScore, combinedScore,
+                         signal == 1 ? "BUY-LOCKED" : "SELL-LOCKED", signal);
       UpdateDashboard(0, combinedScore, signal == 1 ? "BUY-LOCKED" : "SELL-LOCKED");
       lastDashSignal = 0; lastDashScore = combinedScore;
       lastDashGrade = signal == 1 ? "BUY-LOCKED" : "SELL-LOCKED";
@@ -2866,6 +2889,11 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       string sigId = CloudPostSignal(Symbol(), signal == 1 ? "BUY" : "SELL",
                                      price, sl, tp, grade, riskHintPct);
       if(StringLen(sigId) > 0 && posId > 0) CloudMapAdd(posId, sigId);
+      // v5.1.5 — push to bot-reasoning feed so subscribers see EVERY trade fire
+      string fireMsg = StringFormat("FIRED %s @%.2f SL:%.2f TP:%.2f grade=%s",
+                                     signal == 1 ? "BUY" : "SELL", price, sl, tp, grade);
+      CloudPostReasoning("FIRE", fireMsg, RegimeName(), "", 0.0, 0.0, grade, signal);
+      br_lastReason = ""; br_lastReasonAt = 0; // reset block-throttle
    }
 }
 
@@ -5073,6 +5101,27 @@ void CloudHeartbeat()
    char pd[], res[]; string rh;
    StringToCharArray("{}", pd, 0, 2);
    string url = InpCloudURL + "/api/cloud/master/heartbeat";
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   WebRequest("POST", url, hdr, InpCloudTimeoutMs, pd, res, rh);
+}
+
+// v5.1.5 — push every "TRADE BLOCKED BECAUSE: <reason>" + "TRADE FIRED" event
+// to the cloud so subscribers see WHY their copy account isn't trading. Throttled
+// in caller so we don't spam (only on state change or signal).
+void CloudPostReasoning(string event_type, string reason, string regime, string setup,
+                        double setup_score, double combined_score, string grade, int signal_dir)
+{
+   if(!CloudEnabled()) return;
+   string r = reason;
+   StringReplace(r, "\"", "'"); StringReplace(r, "\n", " ");
+   if(StringLen(r) > 240) r = StringSubstr(r, 0, 240);
+   string body = StringFormat(
+      "{\"event_type\":\"%s\",\"reason\":\"%s\",\"regime\":\"%s\",\"setup\":\"%s\","
+      "\"setup_score\":%.2f,\"combined_score\":%.2f,\"grade\":\"%s\",\"signal_dir\":%d}",
+      event_type, r, regime, setup, setup_score, combined_score, grade, signal_dir);
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string url = InpCloudURL + "/api/cloud/master/reasoning";
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
    WebRequest("POST", url, hdr, InpCloudTimeoutMs, pd, res, rh);
 }

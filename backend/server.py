@@ -2815,6 +2815,41 @@ async def cloud_master_heartbeat(request: Request):
                   "master_ea_status": "online"}}, upsert=True)
     return {"ok": True}
 
+# v5.1.5 — Bot Reasoning feed: master EA pushes "TRADE BLOCKED BECAUSE …" /
+# "FIRED BUY/SELL …" events here so cloud subscribers can see live why their
+# copy account is or isn't trading. Capped at 500 rows (TTL-style trim on insert).
+class MasterReasoningReq(BaseModel):
+    event_type: str             # "BLOCK" | "FIRE"
+    reason: str
+    regime: Optional[str] = ""
+    setup: Optional[str] = ""
+    setup_score: Optional[float] = 0.0
+    combined_score: Optional[float] = 0.0
+    grade: Optional[str] = ""
+    signal_dir: Optional[int] = 0
+
+@api_router.post("/cloud/master/reasoning")
+async def cloud_master_reasoning(req: MasterReasoningReq, request: Request):
+    await _require_agent_async(request)
+    doc = req.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["ts"] = datetime.now(timezone.utc).isoformat()
+    await db.cloud_reasoning.insert_one(doc.copy())
+    # keep only the most recent 500 events to bound storage
+    total = await db.cloud_reasoning.estimated_document_count()
+    if total > 600:
+        oldest = await db.cloud_reasoning.find({}, {"_id": 1, "ts": 1}).sort("ts", 1).to_list(total - 500)
+        if oldest:
+            await db.cloud_reasoning.delete_many({"_id": {"$in": [o["_id"] for o in oldest]}})
+    return {"ok": True}
+
+@api_router.get("/cloud/me/reasoning")
+async def cloud_me_reasoning(limit: int = 30, _user: dict = Depends(get_cloud_user)):
+    """Public to ANY logged-in cloud user — they see the same master EA feed."""
+    n = max(1, min(int(limit), 100))
+    rows = await db.cloud_reasoning.find({}, {"_id": 0}).sort("ts", -1).to_list(n)
+    return {"events": rows, "count": len(rows)}
+
 AGENT_TOKEN = os.environ.get("CLOUD_AGENT_TOKEN", "")  # kept for backward compat
 
 @api_router.get("/cloud/agent/pending-users")
