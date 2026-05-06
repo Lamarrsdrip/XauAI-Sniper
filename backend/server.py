@@ -361,19 +361,71 @@ async def paystack_webhook(request: Request):
     return {"status": "ok"}
 
 # --- Public Docs ---
+def _sanitize_ea_for_customer(src: str) -> str:
+    """Strip master-only secrets from the EA source so a customer can use it
+    on their own MT5 WITHOUT accidentally posting their trades into our cloud.
+    Disables CloudFanout by default and clears the agent token. Customers can
+    still re-enable everything if they have their own cloud setup."""
+    import re
+    out = src
+    # Flip cloud fanout default OFF
+    out = re.sub(
+        r'(input\s+bool\s+InpCloudFanout\s*=\s*)true(\s*;)',
+        r'\1false\2',
+        out, count=1)
+    # Clear the agent token default (don't ship our secret)
+    out = re.sub(
+        r'(input\s+string\s+InpCloudAgentToken\s*=\s*)"[^"]*"(\s*;)',
+        r'\1""\2',
+        out, count=1)
+    # Add a clear customer banner at the top so it's obvious what version they have
+    banner = ("// =====================================================================\n"
+              "// CUSTOMER EDITION — cloud master uplink DISABLED.\n"
+              "// This EA runs standalone on your MT5 and trades on YOUR account only.\n"
+              "// It does NOT mirror trades to or from the XauAi Cloud master.\n"
+              "// =====================================================================\n")
+    return banner + out
+
 @api_router.get("/download/ea")
 async def download_ea():
+    """PUBLIC customer download — sanitized (no master token, fanout OFF)."""
     p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
     if not p.exists(): raise HTTPException(status_code=404)
-    return FileResponse(path=str(p), filename="XAUUSD_AI_Sniper_EA.mq5", media_type="application/octet-stream")
+    src = p.read_text(encoding="utf-8", errors="ignore")
+    sanitized = _sanitize_ea_for_customer(src)
+    return Response(
+        content=sanitized,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA.mq5"'},
+    )
+
+# Admin-only: serves the FULL master EA with your agent token + cloud fanout
+# baked in. NEVER expose this URL publicly.
+@api_router.get("/admin/download/ea-master", dependencies=[Depends(get_current_admin)])
+async def admin_download_ea_master():
+    p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
+    if not p.exists(): raise HTTPException(status_code=404)
+    return FileResponse(
+        path=str(p),
+        filename="XAUUSD_AI_Sniper_EA_MASTER.mq5",
+        media_type="application/octet-stream",
+    )
 
 @api_router.get("/download/package")
 async def download_package():
+    """PUBLIC customer package — uses sanitized EA."""
     d = ROOT_DIR / "ea_code"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
         for f in d.rglob("*"):
-            if f.is_file(): z.write(f, f.relative_to(d))
+            if not f.is_file(): continue
+            rel = f.relative_to(d)
+            # Sanitize the EA inside the zip too.
+            if f.name == "XAUUSD_AI_Sniper_EA.mq5":
+                z.writestr(str(rel), _sanitize_ea_for_customer(
+                    f.read_text(encoding="utf-8", errors="ignore")))
+            else:
+                z.write(f, rel)
     buf.seek(0)
     return StreamingResponse(buf, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=AI_Sniper_EA_Package.zip"})
 

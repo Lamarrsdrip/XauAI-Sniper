@@ -1084,6 +1084,20 @@ function CloudAdminTab({ api, token }) {
               <h3 className="text-sm font-bold tracking-widest">VPS WORKERS</h3>
               <div className="flex gap-2">
                 <button onClick={async()=>{
+                  // Fetch master EA with admin auth and trigger browser download.
+                  try {
+                    const r = await ax.get(`${api}/admin/download/ea-master`, {
+                      headers, responseType: "blob"
+                    });
+                    const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/octet-stream" }));
+                    const a = document.createElement("a");
+                    a.href = url; a.download = "XAUUSD_AI_Sniper_EA_MASTER.mq5";
+                    document.body.appendChild(a); a.click(); a.remove();
+                    window.URL.revokeObjectURL(url);
+                  } catch(e){ alert(e.response?.data?.detail || "Master EA download failed"); }
+                }} data-testid="download-master-ea-btn"
+                className="px-3 py-2 bg-[hsl(43,74%,49%)] text-black text-xs font-bold">⬇ MASTER EA</button>
+                <button onClick={async()=>{
                   setBusy(true); setMsg("");
                   try {
                     const r = await ax.post(`${api}/admin/cloud/infrastructure/test-signal`,
