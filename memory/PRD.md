@@ -7,6 +7,19 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — Worker v1.4.2 — Tiny-account safety (P0 protect $10/$50/$100 users)**
+  - **User pain**: bot's user base includes $10-$100 accounts. Old `compute_lots` did `max(0.01, ratio × master_lots)` — silently rounded UP to broker minimum 0.01 lots, which meant a $10 account taking ~20× its fair share of a master trade. A single 1500-pip SL hit = $150 loss = account blown 15× over.
+  - **Fix in `compute_lots()`**: now returns `(lots, reason)` where `lots == 0.0` means SKIP. Three new gates:
+    1. **MIN_BALANCE_USD floor** (`$10` default, env override `WORKER_MIN_BALANCE_USD`): accounts below this aren't even considered for cloud copy.
+    2. **Under-min check**: if `ideal_lot < 0.01` (broker minimum) the account literally cannot proportionally mirror this signal — skip with clear log `SKIP under-min: ideal 0.0005 lots < 0.01 broker min`.
+    3. **Risk-cap**: estimated max loss = `lot × sl_distance × $100/lot`. If > `MAX_RISK_PCT_PER_TRADE` (5% default, env override `WORKER_MAX_RISK_PCT`) of equity, skip with clear log `SKIP risk-cap: trade would risk $5.00 = 50.0% of $10 (cap 5.0%)`.
+  - **`_handle_open` honors lot==0**: posts a clear `ok=false, error=<reason>` row to backend so admin diagnostics + cloud user dashboard show WHY the trade was skipped. No order_send fires.
+  - **Practical effect**:
+    - $10 account: most signals skipped (5% of $10 = $0.50 — tighter than typical SL distance). Only very-tight scalp signals execute. Account is safe.
+    - $100 account: signals with SL ≤ ~50 pips execute; wider SL skipped.
+    - $1000+ account: virtually all signals execute as before.
+  - Published `/app/frontend/public/worker_agent_v1.4.2.py`. Verified `VERSION = "1.4.2"` + all 3 gates live in served file.
+
 - **Feb 2026 — EA v5.3.1 — Adaptive guards (replace rigid rules with confidence-aware logic)**
   - **User pain**: v5.3.0 was too restrictive — hard 3% DD stop killed recovery cycles, adverse-pyramid disabled completely lost averaging-in opportunities, trailing stops cut high-grade winners short.
   - **Change 1 — Soft DD mode (replaces hard halt)**:
