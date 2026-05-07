@@ -7,6 +7,14 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — Worker v1.4.1 — Duplicate-guard (P0 cloud trade duplication)**
+  - **User pain**: cloud user account showed PAIRS of trades (`buy 2.88 × 2 @ 12:01:27`, `buy 3.08 × 2 @ 13:04:56`, etc.) while master had single positions. Caused by two worker processes running concurrently (the 1.2.1 ↔ 1.3.0 version-flip we caught earlier) — both fetched the same signal and both fired `order_send`.
+  - **Two layers of defense added** (so even if user accidentally launches two workers again, no duplicates):
+    1. **Worker-side MT5 scan before order_send** (`_handle_open`): worker activates the user's MT5 session, calls `_scan_positions_by_sig(sig_id)`, and if ANY existing position with `magic=77007007 + comment startswith "XAUAI|<sigid[:8]>"` is found, it **skips order_send entirely** and logs `DUP-GUARD user=X sig=Y — already have position(s) [tkt] on MT5; skipping order_send`. Also records the existing ticket into the persistent state file so close-mirror still works.
+    2. **Backend dedup at `/api/cloud/agent/trade-open`**: if a successful row with the same `(user_id, signal_id)` is already in `cloud_trades` (status=open), the second worker's POST returns `{"ok": True, "deduped": True, "existing_ticket": ...}` without inserting a duplicate.
+  - Sentinel rows (`user_id="(no-active-users)"`) and failed rows are exempt from dedup so admin diagnostics still show all attempts.
+  - Verified `/worker_agent_v1.4.1.py` serves `VERSION = "1.4.1"` with both guards present.
+
 - **Feb 2026 — Worker v1.4.0 — Close-sync hardened (P0 orphan trades fix)**
   - **User pain**: master EA closes positions but cloud users keep them open indefinitely. Manual close required.
   - **Three stacked bugs identified and fixed:**

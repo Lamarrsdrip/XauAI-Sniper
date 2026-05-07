@@ -3139,6 +3139,19 @@ class AgentTradeOpenReq(BaseModel):
 @api_router.post("/cloud/agent/trade-open")
 async def cloud_agent_trade_open(req: AgentTradeOpenReq, request: Request):
     await _require_agent_async(request)
+    # v1.4.1 — DUPLICATE GUARD #2 (server-side). If a successful trade-open
+    # for this exact (user_id, signal_id) is ALREADY in the DB, reject the
+    # second worker's POST. Prevents two-worker races from creating duplicate
+    # cloud_trades rows. Sentinel rows ("(no-active-users)") and failed rows
+    # are exempt.
+    if req.ok and req.user_id and not req.user_id.startswith("("):
+        dup = await db.cloud_trades.find_one(
+            {"user_id": req.user_id, "signal_id": req.signal_id, "status": "open"},
+            {"_id": 0, "id": 1, "ticket": 1})
+        if dup:
+            return {"ok": True, "deduped": True,
+                    "existing_ticket": dup.get("ticket"),
+                    "message": "duplicate suppressed"}
     doc = req.model_dump()
     doc["id"] = str(uuid.uuid4())
     doc["status"] = "open" if req.ok else "failed"
