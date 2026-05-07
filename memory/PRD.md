@@ -7,6 +7,25 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — EA v5.3.0 — Smart-edge bundle (3-phase quality upgrade)**
+  - **User pain**: log analysis revealed two -$6k disasters (09:15 & 13:45) caused by adverse-pyramid stacks on local tops. User asked for: spacing logic, exhaustion detection, ML smoothing, volatility/spread/DD guards, news filter, regime polish.
+  - **Phase 1 — Emergency brakes (account-aware)**:
+    - `InpPyramidOnAdverse` default flipped to **false** (root-cause of disasters).
+    - `InpPyramidMinSpaceATR=0.7` — pyramid adds must be ≥ 0.7×ATR away from previous add price (`lastPyramidPx`). Logs "PYRAMID SKIPPED: spacing X < min Y".
+    - `VolatilityKillReason()` — blocks entries when M5 ATR > 2× 50-bar median ATR.
+    - `SpreadKillReason()` — rolling 60-tick median spread; blocks if current > 2× median.
+    - `HardDailyDDReason()` — hard-halt entries when daily PnL ≤ -3% of `dailyStartEquity` (account-size auto-scales).
+  - **Phase 2 — Exhaustion + ML smoothing**:
+    - `HasExhaustionDivergence()` — pivot-based RSI divergence detector (price HH + RSI lower-HH for buys, mirror for sells).
+    - `IsMomentumWeak()` — blocks entry if last close in lower 30% of last 3-bar range (buys) or upper 30% (sells).
+    - `SmoothedMLScore()` — recency-weighted moving average over last 5 ML scores (`InpMLSmoothingBars`); kills 0%↔100% flip.
+  - **Phase 3 — Regime / basket polish**:
+    - `IsFakeBreakout()` — Donchian-20 break must be confirmed by next-bar CLOSE beyond level (rejects wick-throughs).
+    - `InpDynamicBasketTP=true` — when momentum is accelerating (3 consecutive higher-highs/lower-lows + rising ATR), pushes basket arm threshold +25% so we don't flush a strong trend prematurely.
+  - **Master gate aggregator `PreTradeBlockReason(signal)`** — wired into BOTH `PG_BlockReason()` (entry path) AND `CheckPyramidOpportunity()` (pyramid path). Single point of truth.
+  - **Cloud auto-mirrors all 11 new filters**: every gate runs on the master EA's decision path BEFORE `CloudPostSignal` fires. Cloud users only receive signals the master actually executes. No cloud-side code change required.
+  - Brace/paren delta vs v5.2.2: +25/+25 (matches 25 new gate blocks). Published `/app/frontend/public/XAUUSD_AI_Sniper_EA_v5.3.0.mq5`. `/api/download/ea` serves `version 5.30`.
+
 - **Feb 2026 — Worker v1.4.1 — Duplicate-guard (P0 cloud trade duplication)**
   - **User pain**: cloud user account showed PAIRS of trades (`buy 2.88 × 2 @ 12:01:27`, `buy 3.08 × 2 @ 13:04:56`, etc.) while master had single positions. Caused by two worker processes running concurrently (the 1.2.1 ↔ 1.3.0 version-flip we caught earlier) — both fetched the same signal and both fired `order_send`.
   - **Two layers of defense added** (so even if user accidentally launches two workers again, no duplicates):
