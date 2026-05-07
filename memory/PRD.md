@@ -7,6 +7,17 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — Worker v1.4.0 — Close-sync hardened (P0 orphan trades fix)**
+  - **User pain**: master EA closes positions but cloud users keep them open indefinitely. Manual close required.
+  - **Three stacked bugs identified and fixed:**
+    1. **In-memory only mapping** — `u.open_tickets` was a Python dict on the worker process. Any worker restart wiped it. Master close arrives → no record → cloud orphaned. **Fix:** persist to `worker_agent/worker_state.json` after every change. On boot, restore via `_load_state` and re-attach in `sync_users()`.
+    2. **Pop-before-close race** — old code called `u.open_tickets.pop()` BEFORE attempting `mt5_order_close`. Transient broker error → mapping lost forever, no retry possible. **Fix:** only pop AFTER successful close. Failed closes leave the mapping armed for next poll.
+    3. **No MT5-side reconciliation** — even when in-memory state was wrong, worker never queried MT5 itself. **Fix:** new `_scan_positions_by_sig(sig_id)` finds all positions where `magic == 77007007 AND comment.startswith("XAUAI|<sigid_prefix>")`. Called from `_handle_close()` so it works even when memory is empty (post-restart, pyramid extras, manual interventions).
+  - **New `reconcile_orphans()` periodic safety net** — every 90s, fetches the last 6 hours of closed signals from new endpoint `GET /api/cloud/agent/closed-signals` and force-closes any matching open MT5 positions on each user's account. Catches whatever slips through the live polling cycle (HTTP failures, worker dead at the moment, etc).
+  - **Backend new endpoint `/api/cloud/agent/closed-signals?hours=6&limit=200`** — agent-authed feed of recently-closed signal IDs for the reconciler. Returns deduped list `[{id, exit_price, closed_at, reason}, …]`.
+  - **Logs**: every close action now prints `CLOSE user=X sig=abc12345 — closing 2 ticket(s) (mem+scan)`. Failed memory closes log `CLOSE retry-armed user=X sig=… — keeping mapping for next poll`. Reconciler logs `RECONCILE user=X sig=… — found N orphan position(s) for an already-closed signal. Force-closing.`
+  - Published `/app/frontend/public/worker_agent_v1.4.0.py`. Verified `python3 -c ast.parse` clean + endpoint returns 200 with correct token.
+
 - **Feb 2026 — EA v5.2.2 — Pyramid adds now mirror to cloud (P0)**
   - **User pain**: master EA pyramided into a setup (4.79 + 2.87 + 1.72 lots) but cloud user only saw the FIRST entry — pyramid stacks were master-only.
   - **Root cause**: `CheckPyramidOpportunity()` calls `trade.Buy()/trade.Sell()` directly (not via `OpenTrade()`), so it bypassed the `CloudPostSignal` call that lives at the bottom of `OpenTrade`. Pyramids never reached the cloud.

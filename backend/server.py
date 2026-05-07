@@ -3042,6 +3042,27 @@ async def cloud_agent_verify_queue(request: Request):
         r["mt5_password"] = _cloud_decrypt(enc) if enc else ""
     return {"users": rows, "total": len(rows)}
 
+# v1.4 — reconciliation feed: signals that have been CLOSED in the last
+# `hours` window. Workers use this to scan their MT5 terminal for orphan
+# positions whose master signal already closed (e.g. due to a transient
+# HTTP failure during the live close fan-out) and force-close them.
+@api_router.get("/cloud/agent/closed-signals")
+async def cloud_agent_closed_signals(request: Request, hours: int = 6, limit: int = 200):
+    await _require_agent_async(request)
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, min(24, int(hours))))).isoformat()
+    closed_raw = await db.cloud_shadow_trades.find(
+        {"status": "shadow_closed", "closed_at": {"$gt": cutoff}},
+        {"_id": 0, "signal_id": 1, "exit_price": 1, "closed_at": 1, "reason": 1}
+    ).sort("closed_at", -1).to_list(min(int(limit), 500))
+    seen = set(); rows_out = []
+    for c in closed_raw:
+        sid = c.get("signal_id")
+        if not sid or sid in seen: continue
+        seen.add(sid)
+        rows_out.append({"id": sid, "exit_price": c.get("exit_price", 0),
+                         "closed_at": c.get("closed_at"), "reason": c.get("reason", "")})
+    return {"signals": rows_out, "total": len(rows_out)}
+
 class VerifyCredentialsReq(BaseModel):
     user_id: str
     ok: bool
