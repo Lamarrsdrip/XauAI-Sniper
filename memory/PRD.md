@@ -7,6 +7,27 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — EA v5.3.1 — Adaptive guards (replace rigid rules with confidence-aware logic)**
+  - **User pain**: v5.3.0 was too restrictive — hard 3% DD stop killed recovery cycles, adverse-pyramid disabled completely lost averaging-in opportunities, trailing stops cut high-grade winners short.
+  - **Change 1 — Soft DD mode (replaces hard halt)**:
+    - `InpHardDailyDDPct` raised from 3% → **6%** (true emergency only)
+    - New `InpSoftDDPct=2.5%` triggers `IsSoftDDMode()` — bot KEEPS trading but: A/A+ only + combined score ≥ 4.0 + lot × `InpSoftDDLotMulti=0.7`. Multiplier stacks with PG selective mode.
+    - Logic in `PG_BlockReason()` routes through soft-DD before the hard floor.
+  - **Change 2 — Adverse-pyramid signal-strength gate**:
+    - `InpPyramidOnAdverse` default flipped back to **true**
+    - But adverse-only adds (no trend confirmation) now require: `g_lastEntryGrade ∈ {A, A+}` AND `g_lastEntryScore ≥ InpAdvPyrMinScore=4.0` AND `!HasExhaustionDivergence()`.
+    - `g_lastEntryGrade` + `g_lastEntryScore` recorded after each successful `OpenTrade` call.
+    - Trend-side adds (price moving WITH us) skip this gate — they've already proved themselves.
+    - Logs `PYRAMID-ADVERSE SKIPPED: original entry grade B is not A/A+ (signal too weak to add into drawdown)` etc.
+  - **Change 3 — High-grade breathing room (per-position ratchet)**:
+    - Position comment is parsed (`[A]` / `[A+]`) inside the per-position ratchet loop. A/A+ trades use:
+      - BE move trigger: `InpHighGradeBETriggerATR=1.5` (vs B's 1.0×ATR)
+      - Trail start: `InpHighGradeTrailStartATR=3.0` (vs B's 2.0×ATR)
+      - Trail distance: `InpHighGradeTrailDistATR=1.5` (vs B's 1.0×ATR — looser leash)
+    - Lets winning A/A+ trades capture continuation moves instead of trailing them out on minor pullbacks.
+  - **Cloud auto-mirrors**: same architecture as v5.3.0 — gates run on master decision path before `CloudPostSignal`. No worker change needed.
+  - Brace/paren delta vs v5.3.0: +6/+6 (clean). Published `/app/frontend/public/XAUUSD_AI_Sniper_EA_v5.3.1.mq5`. `/api/download/ea` serves `version "5.31"` with all new inputs.
+
 - **Feb 2026 — EA v5.3.0 — Smart-edge bundle (3-phase quality upgrade)**
   - **User pain**: log analysis revealed two -$6k disasters (09:15 & 13:45) caused by adverse-pyramid stacks on local tops. User asked for: spacing logic, exhaustion detection, ML smoothing, volatility/spread/DD guards, news filter, regime polish.
   - **Phase 1 — Emergency brakes (account-aware)**:
