@@ -7,6 +7,12 @@
 
 ## Completed (Feb 2026)
 
+- **Feb 2026 — EA v5.2.2 — Pyramid adds now mirror to cloud (P0)**
+  - **User pain**: master EA pyramided into a setup (4.79 + 2.87 + 1.72 lots) but cloud user only saw the FIRST entry — pyramid stacks were master-only.
+  - **Root cause**: `CheckPyramidOpportunity()` calls `trade.Buy()/trade.Sell()` directly (not via `OpenTrade()`), so it bypassed the `CloudPostSignal` call that lives at the bottom of `OpenTrade`. Pyramids never reached the cloud.
+  - **Fix**: after a successful `trade.Buy/Sell` inside `CheckPyramidOpportunity()`, call `CloudPostSignal()` with the pyramid's actual `addLot` + master's current balance + grade `"PYR"`, and `CloudMapAdd(posId, sigId)` so close-mirroring works for the pyramid too. Also fires `CloudPostReasoning("PYR", ...)` so the cloud reasoning feed shows pyramid additions.
+  - Brace/paren delta vs v5.2.1: +1/+1 (single new block). Published `/app/frontend/public/XAUUSD_AI_Sniper_EA_v5.2.2.mq5`. `/api/download/ea` serves `#property version "5.22"`.
+
 - **Feb 2026 — EA v5.2.1 — Startup cooldown (no blind trades after EA reload)**
   - **User pain**: every MT5/EA restart sometimes immediately fired a trade on stale buffers / mid-bar context — blind shots.
   - **Two-layer gate inserted at the very top of `PG_BlockReason()`** (runs before all other PG checks; fires even if PG is disabled):
