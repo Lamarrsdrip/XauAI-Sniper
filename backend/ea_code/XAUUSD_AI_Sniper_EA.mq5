@@ -1,19 +1,17 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.1.9 — Selective Mode      |
+//|                                     v5.3.6 — Compile-fix Build   |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.34"
-#property description "XAUUSD AI Sniper v5.3.4 — Compile fix: removed duplicate lastPyramidPx declaration"
-#property description "  • PG no longer day-halts. After giveback brake fires, restricts to A/A+ + score≥4.0 + M15+H1 align + 0.6× lots."
-#property description "  • Activates only after ≥25% day gain. Auto-recovers if equity stable for InpPG_SelectiveRecoverMin minutes."
-#property description "  • Polls /api/cloud/master/config every 60s for admin-selected mode."
-#property description "  • Conservative: gradeB=3.0, scoreFloor=0.55, H4 align, post-loss tighten ON"
-#property description "  • Balanced:     gradeB=2.5, scoreFloor=0.65, M30 align, no tighten (DEFAULT)"
-#property description "  • Aggressive:   gradeB=2.0, scoreFloor=0.75, no HTF align, no tighten"
-#property description "  • Inherits v5.1.7 M30 context gate, v5.1.6 aggressive defaults, v5.1.5 score floor."
+#property version   "5.36"
+#property description "XAUUSD AI Sniper v5.3.6"
+#property description "Compile fix: removed stray '-----------+' at EOF that broke build."
+#property description "Dashboard banner now correctly reports v5.3.6 (was stuck at v5.1.8)."
+#property description "PG selective: A/A+ only + score>=4.0 + M15+H1 align + 0.6x lots."
+#property description "Polls /api/cloud/master/config every 60s for admin Bot Mode preset."
+#property description "Modes: Conservative / Balanced (default) / Aggressive."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -1255,7 +1253,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v5.3.5 (BOT MODE PRESETS) READY ===");
+   Print("=== XAUAI SNIPER v5.3.6 (BOT MODE PRESETS) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -5912,7 +5910,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.3.5 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.3.6 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
@@ -5963,4 +5961,4 @@ void UpdateDashboard(int signal, double score, string grade)
    Comment(d);
 }
 //+------------------------------------------------------------------+
------------+
+//+------------------------------------------------------------------+
