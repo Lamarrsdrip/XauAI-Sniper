@@ -691,6 +691,7 @@ function CloudAdminTab({ api, token }) {
   const [infra, setInfra] = useState(null);
   const [botMode, setBotMode] = useState(null);    // {current, presets, set_at}
   const [diag, setDiag] = useState(null);          // diagnostics: workers + fanout logs + per-user readiness
+  const [orphans, setOrphans] = useState(null);    // v1.4.3: orphan-trade detector
   const [sub, setSub] = useState("stats"); // stats | users | payments | botmode | infra | diagnostics | settings
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -700,7 +701,7 @@ function CloudAdminTab({ api, token }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, u, p, cfg, inf, bm, dg] = await Promise.all([
+      const [s, u, p, cfg, inf, bm, dg, orp] = await Promise.all([
         ax.get(`${api}/admin/cloud/stats`, { headers }),
         ax.get(`${api}/admin/cloud/users`, { headers }),
         ax.get(`${api}/admin/cloud/payments`, { headers }),
@@ -708,9 +709,11 @@ function CloudAdminTab({ api, token }) {
         ax.get(`${api}/admin/cloud/infrastructure`, { headers }),
         ax.get(`${api}/admin/cloud/bot-mode`, { headers }),
         ax.get(`${api}/admin/cloud/diagnostics`, { headers }),
+        ax.get(`${api}/admin/cloud/orphans`, { headers }),
       ]);
       setStats(s.data); setUsers(u.data.users || []); setPayments(p.data.payments || []);
       setSettings(cfg.data); setInfra(inf.data); setBotMode(bm.data); setDiag(dg.data);
+      setOrphans(orp.data);
     } catch (e) { setMsg(e.response?.data?.detail || "Failed to load"); }
   }, [api, token]);
 
@@ -820,6 +823,38 @@ function CloudAdminTab({ api, token }) {
       </div>
 
       {msg && <div className="px-4 py-2 bg-primary/10 border border-primary/30 text-primary text-sm rounded">{msg}</div>}
+
+      {/* v1.4.3 — Orphan-trade alert. Surfaces anytime a user's worker
+          reports MORE open positions (magic 77007007) than the master EA
+          currently has open — those extras are legacy orphans. One-click NUKE
+          per user clears them via the force-close-queue. */}
+      {orphans && orphans.flagged_users && orphans.flagged_users.length > 0 && (
+        <div className="border-2 border-[hsl(0,84%,60%)]/50 bg-[hsl(0,84%,60%)]/10 p-4 rounded space-y-3" data-testid="orphan-alert-banner">
+          <div className="flex items-center gap-2">
+            <span className="text-[hsl(0,84%,60%)] font-bold tracking-wider text-sm">⚠ ORPHAN POSITIONS DETECTED</span>
+            <span className="text-xs text-muted-foreground">Master has {orphans.master_open_count} open · {orphans.flagged_users.length} user(s) flagged</span>
+          </div>
+          <div className="text-[11px] text-muted-foreground">
+            These users' MT5 accounts have more open positions (magic 77007007) than the master EA. The extras are likely legacy
+            trades from a pre-v1.4 worker that lacked the <code className="font-mono bg-black/30 px-1">XAUAI|sigid</code> comment, so
+            auto close-sync can't see them. Click NUKE to force-close every magic-77007007 position on that user's terminal.
+          </div>
+          <div className="space-y-1">
+            {orphans.flagged_users.map((o, i) => (
+              <div key={o.user_id} className="flex items-center justify-between gap-3 bg-black/20 px-3 py-2 rounded text-sm" data-testid={`orphan-row-${i}`}>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="font-semibold">{o.email}</span>
+                  <span className="text-[10px] font-mono text-[hsl(0,84%,60%)]">{o.cloud_positions} cloud / {o.master_open} master = ~{o.orphan_estimate} orphan(s)</span>
+                  <span className="text-[10px] text-muted-foreground">last reported {o.last_reported_at?.slice(11,19) || "?"}</span>
+                </div>
+                <button data-testid={`orphan-nuke-${i}`}
+                        onClick={()=>forceCloseUser(o.user_id, o.email)}
+                        className="px-3 py-1 bg-[hsl(0,84%,60%)] text-white text-[10px] font-bold tracking-widest rounded hover:bg-[hsl(0,84%,55%)]">NUKE</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {sub === "stats" && stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4" data-testid="cloud-stats-grid">

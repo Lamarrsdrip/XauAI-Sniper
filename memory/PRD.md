@@ -6,6 +6,37 @@
 ## Admin: admin@aisniper.com / MrizAdmin2026 at /admin
 
 ## Completed (Feb 2026)
+- **Feb 2026 — EA v5.3.5 + Worker v1.4.3 + Auto-detect orphans alert**
+  - **EA fix**: chart dashboard banner was hardcoded `"v5.1.8"` even though `#property version` was `5.34`. Fixed all three stale strings (line 5915 dashboard, line 1258 boot Print, header). EA now reports `XAUAI SNIPER v5.3.5`. **`#property version` bumped to `5.35`** so MT5 marketplace/recompile picks up the change.
+  - **Worker v1.4.3 (`/app/frontend/public/worker_agent_v1.4.3.py`)**:
+    - Adds `cloud_positions_count` (count of magic=77007007 positions on the user's terminal) to every `equity-snapshot` POST.
+    - Already includes the `force-close-queue` poller wired in this fork. Picks up admin NUKE markers on its next ~30s loop and closes EVERY magic-77007007 position regardless of in-memory mapping.
+  - **Backend** (`server.py`):
+    - `equity-snapshot` model accepts optional `cloud_positions_count` and persists `last_equity_ts` + `cloud_positions_ts` per user.
+    - New endpoint `GET /api/admin/cloud/orphans` — compares each user's last reported `cloud_positions_count` vs `count(cloud_signals where closed_at is null)`. Any user with `cloud > master` is flagged.
+  - **Frontend** (`AdminPortal.jsx`):
+    - Loads orphan report on every Cloud-tab refresh. If any user is flagged, a red `ORPHAN POSITIONS DETECTED` banner appears at the TOP of every Cloud sub-tab (Overview/Users/Diagnostics/etc).
+    - Each flagged row shows `email · 7 cloud / 3 master = ~4 orphan(s) · last reported HH:MM:SS` + one-click NUKE button.
+  - **Verified**: faked an equity-snapshot with `cloud_positions_count=7`, banner appeared with NUKE; clicking NUKE successfully queued the force-close marker (already curl-tested). Worker v1.4.3 will execute it on next poll.
+
+  ### Why orphans were happening (root cause confirmed)
+  The auto close-sync uses `mt5.positions_get()` and looks for `magic == 77007007 AND comment.startswith("XAUAI|<sigid>")`. Pre-v1.4 workers opened positions WITHOUT that comment prefix, so when the master closed the signal the matching scan returned empty and the position lived forever. Reconcile (every 90s) had the same blind spot. The new orphan-banner + NUKE bypasses comment matching entirely (`mt5.positions_get(magic=77007007)` and closes ALL).
+
+  ### Action for the user (CRITICAL)
+  1. **Click Deploy** in Emergent to push backend+frontend changes to `xauaisniper.com`.
+  2. **Update worker on VPS to v1.4.3** — orphan detection AND the NUKE button BOTH require it. PowerShell:
+     ```powershell
+     # stop current worker
+     taskkill /F /IM python.exe
+     # download v1.4.3
+     iwr https://xauaisniper.com/worker_agent_v1.4.3.py -OutFile worker_agent.py
+     # restart
+     python worker_agent.py
+     ```
+  3. **Recompile the EA**: open `XAUUSD_AI_Sniper_EA_MASTER.mq5` in MetaEditor and press F7. The chart banner should now read `XAUAI SNIPER v5.3.5`.
+  4. After ~2 minutes, the admin Cloud Overview will show the orphan banner if any user has stale legacy positions. Click NUKE on each row.
+
+
 - **Feb 2026 — Admin "NUKE" button — manual force-close legacy orphan trades (P0)**
   - **User pain**: orphan trades from a pre-v1.4 worker remained open on cloud accounts because they have no DB ticket mapping; auto close-sync can't see them.
   - **Backend**: `POST /api/admin/cloud/force-close-user {user_id}` inserts a `force_close_all` marker into `cloud_force_close_queue`. Worker polls `GET /api/cloud/agent/force-close-queue` every cycle, closes EVERY position with magic 77007007 on its MT5 terminal, then ACKs via `POST /api/cloud/agent/force-close-ack`. (Already wired in worker v1.4.3.)

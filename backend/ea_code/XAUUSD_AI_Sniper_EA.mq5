@@ -1255,7 +1255,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v5.1.8 (BOT MODE PRESETS) READY ===");
+   Print("=== XAUAI SNIPER v5.3.5 (BOT MODE PRESETS) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -5912,7 +5912,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.1.8 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.3.5 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
@@ -5963,3 +5963,4 @@ void UpdateDashboard(int signal, double score, string grade)
    Comment(d);
 }
 //+------------------------------------------------------------------+
+-----------+

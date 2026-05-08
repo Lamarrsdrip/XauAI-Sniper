@@ -3289,6 +3289,7 @@ async def cloud_admin_diagnostics(fanout_limit: int = 50, signal_limit: int = 10
 
 class AgentEquitySnapshot(BaseModel):
     user_id: str; balance: float; equity: float; margin: float; free_margin: float
+    cloud_positions_count: Optional[int] = None  # v1.4.3 — orphan detection
 
 @api_router.post("/cloud/agent/equity-snapshot")
 async def cloud_agent_equity(req: AgentEquitySnapshot, request: Request):
@@ -3296,10 +3297,49 @@ async def cloud_agent_equity(req: AgentEquitySnapshot, request: Request):
     doc = req.model_dump()
     doc["ts"] = datetime.now(timezone.utc).isoformat()
     await db.cloud_equity_snapshots.insert_one(doc.copy())
-    await db.cloud_users.update_one({"id": req.user_id},
-        {"$set": {"last_equity": req.equity, "last_balance": req.balance,
-                  "last_equity_ts": doc["ts"]}})
+    set_doc = {"last_equity": req.equity, "last_balance": req.balance,
+               "last_equity_ts": doc["ts"]}
+    if req.cloud_positions_count is not None:
+        set_doc["cloud_positions_count"] = int(req.cloud_positions_count)
+        set_doc["cloud_positions_ts"] = doc["ts"]
+    await db.cloud_users.update_one({"id": req.user_id}, {"$set": set_doc})
     return {"ok": True}
+
+# v1.4.3 — Orphan detector. Compares each cloud user's `cloud_positions_count`
+# (last reported by the worker) against the count of currently-open master
+# signals. Any user whose worker reports MORE open positions than the master has
+# is flagged — those extras are "orphans" (legacy trades from a pre-v1.4 worker
+# that never got an XAUAI|<sigid> comment, so reconcile can't see them).
+@api_router.get("/admin/cloud/orphans", dependencies=[Depends(get_current_admin)])
+async def admin_cloud_orphans():
+    # Master open count = signals with no closed_at (the master EA is still in)
+    master_open = await db.cloud_signals.count_documents({
+        "$or": [{"closed_at": None}, {"closed_at": {"$exists": False}}]
+    })
+    users = await db.cloud_users.find(
+        {"mt5_connected": True},
+        {"_id": 0, "id": 1, "email": 1, "cloud_positions_count": 1,
+         "cloud_positions_ts": 1, "last_equity_ts": 1}
+    ).to_list(2000)
+    flagged = []
+    for u in users:
+        pos = int(u.get("cloud_positions_count") or 0)
+        if pos <= master_open:
+            continue
+        flagged.append({
+            "user_id": u.get("id"),
+            "email": u.get("email"),
+            "cloud_positions": pos,
+            "master_open": master_open,
+            "orphan_estimate": pos - master_open,
+            "last_reported_at": u.get("cloud_positions_ts") or u.get("last_equity_ts"),
+        })
+    return {
+        "master_open_count": master_open,
+        "checked_users": len(users),
+        "flagged_users": flagged,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
 
 # --- Worker heartbeat: VPS agent pings every N seconds so admin sees it online ---
 class WorkerHeartbeatReq(BaseModel):
