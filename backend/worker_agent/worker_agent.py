@@ -1007,6 +1007,55 @@ class WorkerAgent:
         whose signals are already CLOSED on the backend but the position is
         still open locally. Force-close them. Catches any close that slipped
         through the polling cycle (HTTP failure, worker dead at the moment, etc)."""
+        # v1.4.3 — also process admin "force-close-all" markers BEFORE the
+        # closed-signal sweep. Admins push markers via /admin/cloud/force-close-user
+        # to nuke orphan positions left over from pre-v1.4 worker versions.
+        try:
+            qd = self._get("/api/cloud/agent/force-close-queue")
+            for item in (qd or {}).get("items", []) if isinstance(qd, dict) else []:
+                tgt_uid = item.get("user_id", "")
+                marker_id = item.get("id", "")
+                if item.get("kind") != "force_close_all": continue
+                if tgt_uid not in self.users:
+                    self._post_safe("/api/cloud/agent/force-close-ack",
+                                    {"marker_id": marker_id, "result": "user_not_on_this_worker"})
+                    continue
+                u = self.users[tgt_uid]
+                if not self._ensure_active(u):
+                    continue  # try again next cycle
+                if MOCK_MT5:
+                    self._post_safe("/api/cloud/agent/force-close-ack",
+                                    {"marker_id": marker_id, "result": "mock"})
+                    continue
+                try:
+                    positions = mt5.positions_get()
+                except Exception:
+                    positions = None
+                closed = 0
+                if positions:
+                    for p in positions:
+                        if int(getattr(p, "magic", 0) or 0) != 77007007: continue
+                        exit_px, profit, err = self.mt5_order_close(u, int(p.ticket))
+                        if not err: closed += 1
+                        self._post_safe("/api/cloud/agent/trade-close", {
+                            "user_id": u.user_id, "ticket": int(p.ticket),
+                            "symbol": str(p.symbol or ""), "side": "",
+                            "lots": float(p.volume or 0), "entry": float(p.price_open or 0),
+                            "exit_price": float(exit_px or 0),
+                            "profit": float(profit),
+                            "opened_at": "", "closed_at": datetime.now(timezone.utc).isoformat(),
+                            "reason": "admin force-close-all" + (f" | err={err}" if err else "")})
+                # Clear ALL local mappings for this user (everything just got closed)
+                u.open_tickets.clear()
+                self._save_state()
+                log.warning("FORCE-CLOSE user=%s marker=%s — closed %d positions",
+                            u.email, marker_id[:8], closed)
+                self._post_safe("/api/cloud/agent/force-close-ack",
+                                {"marker_id": marker_id,
+                                 "result": f"closed_{closed}_positions"})
+        except Exception as e:
+            log.debug("force-close queue poll failed: %s", e)
+
         try:
             data = self._get("/api/cloud/agent/closed-signals", params={"hours": 6, "limit": 200})
         except Exception as e:

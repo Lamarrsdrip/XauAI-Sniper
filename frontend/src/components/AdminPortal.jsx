@@ -773,6 +773,21 @@ function CloudAdminTab({ api, token }) {
     } catch (e) { setMsg(e.response?.data?.detail || "Update failed"); }
   };
 
+  // v1.4.3 — Admin nuclear option: queues a "force-close-all" marker so the
+  // worker closes EVERY open position (incl. legacy orphans without DB mapping)
+  // on this user's MT5 account on the next poll cycle.
+  const forceCloseUser = async (uid, email) => {
+    if (!window.confirm(
+      `NUKE: Force-close ALL open positions on ${email}'s cloud MT5 account?\n\n` +
+      `This is used to clear legacy orphan trades from a pre-v1.4 worker.\n` +
+      `The worker will close every position (magic 77007007 only) on its next poll (~30s).`
+    )) return;
+    try {
+      const r = await ax.post(`${api}/admin/cloud/force-close-user`, { user_id: uid }, { headers });
+      setMsg(`Force-close queued for ${email} (marker ${r.data?.marker_id?.slice(0,8) || "?"}). Worker will execute within ~30s.`);
+    } catch (e) { setMsg(e.response?.data?.detail || "Force-close failed"); }
+  };
+
   // Pricing edits (in-memory until "Save settings")
   const updPlan = (id, k, v) => {
     const plans = { ...(settings?.plans || {}) };
@@ -856,6 +871,10 @@ function CloudAdminTab({ api, token }) {
                               overrideUser(u.id, { plan: next });
                             }}
                             className="px-2 py-1 bg-foreground/10 text-foreground text-[10px] font-bold rounded hover:bg-foreground/20">⇄</button>
+                    <button data-testid={`force-close-${u.id}`}
+                            onClick={()=>forceCloseUser(u.id, u.email)}
+                            title="NUKE: Force-close ALL open positions on this user's MT5 (clears legacy orphan trades)"
+                            className="px-2 py-1 bg-[hsl(0,84%,60%)]/20 text-[hsl(0,84%,60%)] text-[10px] font-bold rounded hover:bg-[hsl(0,84%,60%)]/30">NUKE</button>
                   </td>
                 </tr>
               ))}

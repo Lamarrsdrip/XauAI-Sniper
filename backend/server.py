@@ -3063,6 +3063,47 @@ async def cloud_agent_closed_signals(request: Request, hours: int = 6, limit: in
                          "closed_at": c.get("closed_at"), "reason": c.get("reason", "")})
     return {"signals": rows_out, "total": len(rows_out)}
 
+# v1.4.3 — Admin nuclear option: force-close ALL open positions for a specific
+# user (or all users). Used when orphan trades from a pre-v1.4 worker need to
+# be cleared without RDP'ing the user's MT5. The worker will receive this via
+# the existing close-signal poll mechanism using a sentinel signal_id.
+@api_router.post("/admin/cloud/force-close-user", dependencies=[Depends(get_current_admin)])
+async def admin_force_close_user(payload: dict):
+    user_id = (payload or {}).get("user_id", "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+    # Insert a special "force-close-all" marker that the worker picks up on
+    # its next poll. Workers see this and call mt5.positions_get() filtered by
+    # magic=77007007 and close everything — regardless of signal_id mapping.
+    marker = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "kind": "force_close_all",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "consumed": False,
+    }
+    await db.cloud_force_close_queue.insert_one(marker.copy())
+    return {"queued": True, "user_id": user_id, "marker_id": marker["id"]}
+
+@api_router.get("/cloud/agent/force-close-queue")
+async def cloud_agent_force_close_queue(request: Request):
+    await _require_agent_async(request)
+    items = await db.cloud_force_close_queue.find(
+        {"consumed": False}, {"_id": 0}
+    ).sort("created_at", 1).to_list(50)
+    return {"items": items}
+
+@api_router.post("/cloud/agent/force-close-ack")
+async def cloud_agent_force_close_ack(payload: dict, request: Request):
+    await _require_agent_async(request)
+    mid = (payload or {}).get("marker_id")
+    if not mid: raise HTTPException(status_code=400, detail="marker_id required")
+    await db.cloud_force_close_queue.update_one(
+        {"id": mid}, {"$set": {"consumed": True,
+                                "consumed_at": datetime.now(timezone.utc).isoformat(),
+                                "result": (payload or {}).get("result", "")}})
+    return {"ok": True}
+
 class VerifyCredentialsReq(BaseModel):
     user_id: str
     ok: bool

@@ -6,6 +6,14 @@
 ## Admin: admin@aisniper.com / MrizAdmin2026 at /admin
 
 ## Completed (Feb 2026)
+- **Feb 2026 — Admin "NUKE" button — manual force-close legacy orphan trades (P0)**
+  - **User pain**: orphan trades from a pre-v1.4 worker remained open on cloud accounts because they have no DB ticket mapping; auto close-sync can't see them.
+  - **Backend**: `POST /api/admin/cloud/force-close-user {user_id}` inserts a `force_close_all` marker into `cloud_force_close_queue`. Worker polls `GET /api/cloud/agent/force-close-queue` every cycle, closes EVERY position with magic 77007007 on its MT5 terminal, then ACKs via `POST /api/cloud/agent/force-close-ack`. (Already wired in worker v1.4.3.)
+  - **Frontend**: red `NUKE` button on every row in `Admin → XauAI Cloud → Users` (`AdminPortal.jsx` `forceCloseUser()`). Confirms before queueing; toast shows the marker id + ETA.
+  - **Verified**: queue/ack endpoints return correctly via curl; UI renders 4 NUKE buttons (one per cloud user) in preview.
+  - **Action for the user**: log into the Admin portal → Cloud → Users tab → click NUKE next to your cloud account. Worker will clear all open positions on its next ~30s poll. Ensure your worker is running v1.4.3+ on the VPS.
+
+
 
 - **Feb 2026 — Worker v1.4.2 — Tiny-account safety (P0 protect $10/$50/$100 users)**
   - **User pain**: bot's user base includes $10-$100 accounts. Old `compute_lots` did `max(0.01, ratio × master_lots)` — silently rounded UP to broker minimum 0.01 lots, which meant a $10 account taking ~20× its fair share of a master trade. A single 1500-pip SL hit = $150 loss = account blown 15× over.
