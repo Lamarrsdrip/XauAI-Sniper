@@ -1,15 +1,15 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.3.6 — Compile-fix Build   |
+//|                                     v5.4.0 — Signal Quality Overhaul|
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.36"
-#property description "XAUUSD AI Sniper v5.3.6"
-#property description "Compile fix: removed stray '-----------+' at EOF that broke build."
-#property description "Dashboard banner now correctly reports v5.3.6 (was stuck at v5.1.8)."
-#property description "PG selective: A/A+ only + score>=4.0 + M15+H1 align + 0.6x lots."
+#property version   "5.40"
+#property description "XAUUSD AI Sniper v5.4.0 — SIGNAL QUALITY OVERHAUL"
+#property description "Counter-trend setups now require H1 trend alignment to fire."
+#property description "A+ grade requires H1 alignment OR trend-following setup type."
+#property description "Fixes losing high-grade trades that fired against H1 trend."
 #property description "Polls /api/cloud/master/config every 60s for admin Bot Mode preset."
 #property description "Modes: Conservative / Balanced (default) / Aggressive."
 #property strict
@@ -6009,13 +6009,6 @@ void UpdateDashboard(int signal, double score, string grade)
    if(StringLen(lastExitReason) > 0) d += StringFormat("Last Exit: %s\n", lastExitReason);
    d += "==========================================\n";
    if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT — RESTING <<\n";
-   if(weeklyLossHit) d += "!! WEEKLY LOSS LIMIT — STOPPED !!\n";
-   if(dailyLimitHit) d += "!! DAILY LIMIT — CLOSED ALL !!\n";
-   Comment(d);
-}
-//+------------------------------------------------------------------+
-//+------------------------------------------------------------------+
-  if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT — RESTING <<\n";
    if(weeklyLossHit) d += "!! WEEKLY LOSS LIMIT — STOPPED !!\n";
    if(dailyLimitHit) d += "!! DAILY LIMIT — CLOSED ALL !!\n";
    Comment(d);
