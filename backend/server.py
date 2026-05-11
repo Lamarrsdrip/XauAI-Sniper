@@ -1156,6 +1156,31 @@ async def startup():
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
         logger.info("Admin password updated")
     await db.users.create_index("email", unique=True)
+    # v1.4.7 — one-time backfill: copy closed_at from cloud_shadow_trades back
+    # into cloud_signals. Fixes legacy signals where master_close updated
+    # shadow trades but not the parent signal record. Idempotent.
+    try:
+        legacy = await db.cloud_shadow_trades.aggregate([
+            {"$match": {"status": "shadow_closed", "closed_at": {"$ne": None}}},
+            {"$group": {"_id": "$signal_id", "closed_at": {"$min": "$closed_at"},
+                        "exit_price": {"$first": "$exit_price"},
+                        "reason": {"$first": "$reason"}}}
+        ]).to_list(50000)
+        bf = 0
+        for r in legacy:
+            sid = r.get("_id");
+            if not sid: continue
+            res = await db.cloud_signals.update_one(
+                {"id": sid, "$or": [{"closed_at": None}, {"closed_at": {"$exists": False}}]},
+                {"$set": {"closed_at": r.get("closed_at"),
+                          "exit_price": float(r.get("exit_price") or 0),
+                          "close_reason": r.get("reason", "")}}
+            )
+            if res.modified_count: bf += 1
+        if bf:
+            logger.info(f"[backfill] marked {bf} legacy cloud_signals as closed from shadow trades")
+    except Exception as e:
+        logger.warning(f"[backfill] cloud_signals.closed_at backfill failed: {e}")
     # Write test credentials
     creds_path = Path("/app/memory/test_credentials.md")
     creds_path.parent.mkdir(exist_ok=True)
@@ -2856,6 +2881,17 @@ async def cloud_master_close(req: MasterSignalCloseReq, request: Request):
     sig = await db.cloud_signals.find_one({"id": req.signal_id}, {"_id": 0})
     if not sig: raise HTTPException(status_code=404, detail="Signal not found")
     now = datetime.now(timezone.utc)
+    # v1.4.7 — UPDATE cloud_signals FIRST. This is the single source of truth
+    # for "is the master signal closed?". The worker's reconciler reads this,
+    # the orphan-detector reads this, the closed-signals feed reads this.
+    # Previously we only touched shadow_trades, which led to disappearing
+    # closes if no shadow row existed (race A: close before fan-out).
+    await db.cloud_signals.update_one(
+        {"id": req.signal_id},
+        {"$set": {"closed_at": now.isoformat(),
+                  "exit_price": req.exit_price,
+                  "close_reason": req.reason or ""}}
+    )
     # Close all shadow trades attached to this signal
     trades = await db.cloud_shadow_trades.find({"signal_id": req.signal_id, "status": "shadow_open"},
                                                {"_id": 0}).to_list(5000)
@@ -2872,7 +2908,7 @@ async def cloud_master_close(req: MasterSignalCloseReq, request: Request):
         doc["profit"] = profit; doc["closed_at"] = now.isoformat(); doc["reason"] = req.reason or "Shadow close"
         await db.cloud_trades.insert_one(doc)
         closed += 1
-    return {"ok": True, "closed": closed}
+    return {"ok": True, "closed": closed, "signal_marked_closed": True}
 
 # Master heartbeat (so admin can see if the master EA is alive even without signals)
 @api_router.post("/cloud/master/heartbeat")
@@ -3005,23 +3041,22 @@ async def cloud_agent_users(request: Request):
 async def cloud_agent_pending_signals(request: Request, since: str = "", limit: int = 100):
     await _require_agent_async(request)
     q_open: dict = {}
-    q_close: dict = {}
     if since:
         q_open["ts"] = {"$gt": since}
-        q_close["closed_at"] = {"$gt": since}
     opens = await db.cloud_signals.find(q_open, {"_id": 0}).sort("ts", -1).to_list(limit)
-    # closes: pull distinct closed shadow trades (they carry exit_price + reason + signal_id)
-    closes_raw = await db.cloud_shadow_trades.find(
-        {"status": "shadow_closed", **({"closed_at": {"$gt": since}} if since else {})},
-        {"_id": 0, "signal_id": 1, "exit_price": 1, "closed_at": 1, "reason": 1}
-    ).sort("closed_at", -1).to_list(limit * 5)
-    # dedupe by signal_id, keep first (newest) occurrence
-    seen = set(); closes = []
-    for c in closes_raw:
-        sid = c.get("signal_id")
-        if not sid or sid in seen: continue
-        seen.add(sid); closes.append(c)
-        if len(closes) >= limit: break
+    # v1.4.7 — closes come from cloud_signals.closed_at (TRUTH SOURCE).
+    # Previously read from cloud_shadow_trades, which produced disappearing
+    # closes when no shadow row existed (close-before-fanout race).
+    q_close: dict = {"closed_at": {"$ne": None}}
+    if since:
+        q_close["closed_at"] = {"$gt": since, "$ne": None}
+    closes_raw = await db.cloud_signals.find(
+        q_close,
+        {"_id": 0, "id": 1, "exit_price": 1, "closed_at": 1, "close_reason": 1}
+    ).sort("closed_at", -1).to_list(limit)
+    closes = [{"signal_id": c.get("id"), "exit_price": c.get("exit_price", 0),
+               "closed_at": c.get("closed_at"), "reason": c.get("close_reason", "")}
+              for c in closes_raw]
     return {"opens": opens, "closes": closes,
             "server_time": datetime.now(timezone.utc).isoformat()}
 
@@ -3042,26 +3077,66 @@ async def cloud_agent_verify_queue(request: Request):
         r["mt5_password"] = _cloud_decrypt(enc) if enc else ""
     return {"users": rows, "total": len(rows)}
 
-# v1.4 — reconciliation feed: signals that have been CLOSED in the last
+# v1.4.7 — reconciliation feed: signals that have been CLOSED in the last
 # `hours` window. Workers use this to scan their MT5 terminal for orphan
 # positions whose master signal already closed (e.g. due to a transient
 # HTTP failure during the live close fan-out) and force-close them.
+# Source of truth: cloud_signals.closed_at (NOT cloud_shadow_trades — that
+# table is downstream and can race against close events).
 @api_router.get("/cloud/agent/closed-signals")
 async def cloud_agent_closed_signals(request: Request, hours: int = 6, limit: int = 200):
     await _require_agent_async(request)
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, min(24, int(hours))))).isoformat()
-    closed_raw = await db.cloud_shadow_trades.find(
-        {"status": "shadow_closed", "closed_at": {"$gt": cutoff}},
-        {"_id": 0, "signal_id": 1, "exit_price": 1, "closed_at": 1, "reason": 1}
+    rows = await db.cloud_signals.find(
+        {"closed_at": {"$gt": cutoff, "$ne": None}},
+        {"_id": 0, "id": 1, "exit_price": 1, "closed_at": 1, "close_reason": 1}
     ).sort("closed_at", -1).to_list(min(int(limit), 500))
-    seen = set(); rows_out = []
-    for c in closed_raw:
-        sid = c.get("signal_id")
-        if not sid or sid in seen: continue
-        seen.add(sid)
-        rows_out.append({"id": sid, "exit_price": c.get("exit_price", 0),
-                         "closed_at": c.get("closed_at"), "reason": c.get("reason", "")})
+    rows_out = [{"id": r.get("id"), "exit_price": r.get("exit_price", 0),
+                 "closed_at": r.get("closed_at"),
+                 "reason": r.get("close_reason", "")} for r in rows]
     return {"signals": rows_out, "total": len(rows_out)}
+
+# v1.4.7 — Worker bullet-proof reconciler endpoint. The worker POSTs a list
+# of signal_ids it currently has open positions for. Backend returns, for
+# each ID: closed (true/false), exit_price, closed_at. The worker closes any
+# position whose signal is reported closed. This catches EVERY race:
+#  - close-before-fanout (no shadow row ever existed)
+#  - fanout-after-close (worker opened a trade for a signal that closed seconds earlier)
+#  - missed-close-event (worker was offline when the closed-signals feed served it)
+class SignalStatusReq(BaseModel):
+    signal_ids: List[str]
+
+@api_router.post("/cloud/agent/signal-status")
+async def cloud_agent_signal_status(req: SignalStatusReq, request: Request):
+    await _require_agent_async(request)
+    ids = [s for s in (req.signal_ids or []) if isinstance(s, str)][:2000]
+    if not ids:
+        return {"signals": {}}
+    rows = await db.cloud_signals.find(
+        {"id": {"$in": ids}},
+        {"_id": 0, "id": 1, "closed_at": 1, "exit_price": 1, "close_reason": 1}
+    ).to_list(len(ids))
+    out = {}
+    seen = set()
+    for r in rows:
+        sid = r.get("id")
+        if not sid: continue
+        seen.add(sid)
+        is_closed = bool(r.get("closed_at"))
+        out[sid] = {
+            "closed": is_closed,
+            "exit_price": float(r.get("exit_price") or 0),
+            "closed_at": r.get("closed_at") or "",
+            "reason": r.get("close_reason", ""),
+        }
+    # Any IDs the worker asked about that don't exist in cloud_signals at all
+    # — treat as "unknown signal, close it" (safety: better to close than leave
+    # an orphan worker-side trade with no master record).
+    for sid in ids:
+        if sid not in seen:
+            out[sid] = {"closed": True, "exit_price": 0.0, "closed_at": "",
+                        "reason": "signal not found in cloud_signals (orphan)"}
+    return {"signals": out}
 
 # v1.4.3 — Admin nuclear option: force-close ALL open positions for a specific
 # user (or all users). Used when orphan trades from a pre-v1.4 worker need to
