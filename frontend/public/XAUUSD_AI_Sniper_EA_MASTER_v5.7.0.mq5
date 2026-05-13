@@ -2430,7 +2430,7 @@ string EPF_BlockReason(string grade, double setupScore, int signal)
 {
    if(!InpEPF_Enable || epf_tier == 0) return "";
    if(epf_tier >= 4)
-      return StringFormat("EPF-T4 LOCKDOWN (daily DD limit reached or equity tier 4)");
+      return "EPF-T4 LOCKDOWN (daily DD limit reached or equity tier 4)";
    // T1/T2/T3 do NOT block — they only reduce lot size via EPF_LotMultiplier().
    return "";
 }
