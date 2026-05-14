@@ -1,64 +1,74 @@
 import React from "react";
-import { Crosshair, ChartLine, DownloadSimple, Question, TrendUp, TrendDown, ShoppingCart, Wrench, Handshake } from "@phosphor-icons/react";
+import { Crosshair, DownloadSimple, TrendUp, TrendDown, Cloud, Menu } from "@phosphor-icons/react";
 import XauAiLogo from "./cloud/XauAiLogo";
 
 const NAV = [
-  { id: "overview", label: "HOME", icon: Crosshair },
-  { id: "broker", label: "BROKER", icon: Handshake },
-  { id: "purchase", label: "BUY", icon: ShoppingCart },
-  { id: "how-it-works", label: "SYSTEM", icon: Question },
-  { id: "performance", label: "RESULTS", icon: ChartLine },
-  { id: "setup-guide", label: "SETUP", icon: Wrench },
-  { id: "download", label: "DOWNLOAD", icon: DownloadSimple },
+  { id: "overview", label: "Home" },
+  { id: "broker", label: "Broker" },
+  { id: "purchase", label: "Buy" },
+  { id: "how-it-works", label: "System" },
+  { id: "performance", label: "Results" },
+  { id: "download", label: "Download" },
 ];
 
 export default function Header({ activeSection, onNavigate, goldPrice }) {
   const up = goldPrice?.change >= 0;
+
   return (
-    <header data-testid="main-header" className="sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-200">
-      <div className="max-w-7xl mx-auto px-4 md:px-12">
-        <div className="flex items-center justify-between h-14 md:h-16 gap-2">
-          <div className="flex items-center gap-2 md:gap-3 cursor-pointer group min-w-0" onClick={() => onNavigate("overview")} data-testid="header-brand">
-            <XauAiLogo size={32} className="flex-none ring-1 ring-black/5 shadow-sm" />
-            <span className="font-heading font-semibold text-sm md:text-base tracking-tight text-[#111] group-hover:text-[#C5A059] transition-colors truncate">XauAi Cloud</span>
-            <span className="hidden sm:inline text-[10px] text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded-full flex-none">v5.1.8</span>
-          </div>
+    <header data-testid="main-header" className="sticky top-0 z-50 border-b border-white/10 bg-[#07090d]/[0.88] text-white backdrop-blur-2xl">
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 md:px-8">
+        <button
+          type="button"
+          onClick={() => onNavigate("overview")}
+          className="flex min-w-0 items-center gap-3"
+          data-testid="header-brand"
+        >
+          <XauAiLogo size={34} className="flex-none shadow-lg shadow-amber-500/10" />
+          <span className="min-w-0">
+            <span className="block truncate font-heading text-base font-semibold tracking-tight">XauAI Sniper</span>
+            <span className="block truncate font-mono text-[9px] uppercase tracking-[0.24em] text-amber-200/55">Master v5.8.7</span>
+          </span>
+        </button>
 
-          <nav className="hidden lg:flex items-center gap-1">
-            {NAV.map((item) => {
-              const Icon = item.icon;
-              const active = activeSection === item.id;
-              return (
-                <button key={item.id} data-testid={`nav-${item.id}`} onClick={() => onNavigate(item.id)}
-                  className={`px-3 py-1.5 text-[11px] font-medium tracking-[0.08em] rounded-full transition-all flex items-center gap-1.5 ${
-                    active ? "bg-[#111] text-white" : "text-gray-500 hover:text-[#111] hover:bg-gray-100"
-                  }`}>
-                  <Icon size={13} weight={active ? "fill" : "regular"} />
-                  {item.label}
-                </button>
-              );
-            })}
-          </nav>
+        <nav className="hidden items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] p-1 lg:flex">
+          {NAV.map((item) => {
+            const active = activeSection === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                data-testid={`nav-${item.id}`}
+                onClick={() => onNavigate(item.id)}
+                className={`rounded-full px-3.5 py-2 text-xs font-semibold transition ${
+                  active ? "bg-white text-[#090b10]" : "text-white/60 hover:bg-white/[0.08] hover:text-white"
+                }`}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
 
-          <div className="flex items-center gap-2 md:gap-4 flex-none">
-            {goldPrice && (
-              <div className="hidden md:flex items-center gap-3 bg-[#111] text-white px-4 py-2 rounded-full" data-testid="gold-ticker">
-                <span className="text-[10px] font-bold tracking-[0.12em] text-gray-400">XAUUSD</span>
-                <span className="font-mono text-sm font-bold" data-testid="gold-bid-price">{goldPrice.bid?.toFixed(2)}</span>
-                <div className={`flex items-center gap-0.5 ${up ? "text-emerald-400" : "text-red-400"}`}>
-                  {up ? <TrendUp size={12} weight="bold" /> : <TrendDown size={12} weight="bold" />}
-                  <span className="font-mono text-[11px] font-bold" data-testid="gold-change">{up ? "+" : ""}{goldPrice.change?.toFixed(2)}</span>
-                </div>
-              </div>
-            )}
-            <a href="/cloud" data-testid="nav-cloud-link" className="inline-flex items-center gap-1.5 px-2.5 py-1.5 md:px-3 bg-[#C5A059] text-black text-[10px] md:text-[11px] font-semibold rounded-full tracking-wider hover:bg-[#D4AF37] transition-colors whitespace-nowrap">
-              <XauAiLogo size={14} rounded="full" className="flex-none" /> CLOUD
-            </a>
-            <div className="hidden sm:flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 pulse-dot" />
-              <span className="text-[10px] font-mono text-gray-400 tracking-wider">LIVE</span>
+        <div className="flex items-center gap-2">
+          {goldPrice && (
+            <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-black/35 px-3 py-2 md:flex" data-testid="gold-ticker">
+              <Crosshair size={14} className="text-amber-300" weight="bold" />
+              <span className="font-mono text-xs font-bold" data-testid="gold-bid-price">{goldPrice.bid?.toFixed(2)}</span>
+              <span className={`flex items-center gap-1 font-mono text-[11px] font-bold ${up ? "text-emerald-300" : "text-red-300"}`} data-testid="gold-change">
+                {up ? <TrendUp size={12} weight="bold" /> : <TrendDown size={12} weight="bold" />}
+                {up ? "+" : ""}{goldPrice.change?.toFixed(2)}
+              </span>
             </div>
-          </div>
+          )}
+          <a href="/cloud" data-testid="nav-cloud-link" className="inline-flex items-center gap-1.5 rounded-full bg-emerald-300 px-3 py-2 text-[11px] font-extrabold uppercase tracking-wider text-[#06110c] transition hover:bg-emerald-200">
+            <Cloud size={14} weight="fill" /> Cloud
+          </a>
+          <button onClick={() => onNavigate("download")} className="hidden rounded-full bg-amber-300 px-3 py-2 text-[11px] font-extrabold uppercase tracking-wider text-black transition hover:bg-amber-200 sm:inline-flex">
+            <DownloadSimple size={14} weight="bold" /> EA
+          </button>
+          <button aria-label="Open menu" className="rounded-full border border-white/10 p-2 text-white/70 lg:hidden">
+            <Menu size={18} weight="bold" />
+          </button>
         </div>
       </div>
     </header>

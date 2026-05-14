@@ -1,237 +1,200 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { Zap, Shield, Lock, Pause, Activity, Check, ArrowRight, Sparkles } from "lucide-react";
+import { Activity, ArrowRight, Check, Cloud, Lock, Pause, Shield, Smartphone, Zap } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 
+const benefits = [
+  "No VPS setup",
+  "No MT5 left running at home",
+  "Pause anytime",
+  "Trade alerts",
+  "Broker funds stay with you",
+  "Mobile-first dashboard",
+];
+
 export default function CloudLanding() {
   return (
-    <div className="min-h-screen bg-[#050505] text-white">
+    <div className="min-h-screen bg-[#07090d] text-white">
       <InstallAppPrompt />
 
-      {/* Nav */}
-      <nav className="sticky top-0 z-40 backdrop-blur-xl bg-[#050505]/80 border-b border-white/5">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-3">
-          <Link to="/" className="flex items-center gap-2 min-w-0" data-testid="cloud-logo-link">
-            <XauAiLogo size={28} className="flex-none" />
-            <span className="font-bold tracking-tight text-sm sm:text-lg truncate">XauAi Cloud</span>
+      <nav className="sticky top-0 z-40 border-b border-white/10 bg-[#07090d]/[0.88] backdrop-blur-2xl">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 md:px-8">
+          <Link to="/" className="flex min-w-0 items-center gap-3" data-testid="cloud-logo-link">
+            <XauAiLogo size={34} className="flex-none" />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-bold sm:text-base">XauAI Cloud</span>
+              <span className="block truncate font-mono text-[9px] uppercase tracking-[0.22em] text-white/38">copy trading hub</span>
+            </span>
           </Link>
-          <div className="flex items-center gap-2 sm:gap-3 flex-none">
-            <Link to="/cloud/login" className="text-xs sm:text-sm text-white/70 hover:text-white transition-colors" data-testid="nav-login">Log in</Link>
-            <Link to="/cloud/signup" className="px-3 py-1.5 sm:px-4 sm:py-2 bg-[#D4AF37] text-black font-semibold rounded-full text-[11px] sm:text-sm hover:bg-[#E5C558] transition-colors whitespace-nowrap" data-testid="nav-signup">Start trial</Link>
+          <div className="flex items-center gap-2">
+            <Link to="/cloud/login" className="rounded-full px-3 py-2 text-xs font-semibold text-white/62 transition hover:text-white" data-testid="nav-login">Log in</Link>
+            <Link to="/cloud/signup" className="rounded-full bg-emerald-300 px-4 py-2 text-xs font-extrabold uppercase tracking-wider text-[#06110c] transition hover:bg-emerald-200" data-testid="nav-signup">Start</Link>
           </div>
         </div>
       </nav>
 
-      {/* Hero */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 pt-10 sm:pt-20 pb-10 sm:pb-16">
-        <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 items-center">
+      <main>
+        <section className="mx-auto grid max-w-7xl gap-8 px-4 py-10 md:px-8 md:py-16 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#D4AF37]/10 border border-[#D4AF37]/20 text-[#D4AF37] text-[10px] sm:text-xs font-mono tracking-wider mb-4 sm:mb-6" data-testid="hero-badge">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#D4AF37] animate-pulse" />
-              LIVE · FULLY AUTOMATED
+            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-200" data-testid="hero-badge">
+              <Cloud className="h-3.5 w-3.5" /> Cloud execution
             </div>
-
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.05] mb-4 sm:mb-6" data-testid="hero-title">
-              Trade gold. <br className="hidden sm:block" />
-              <span className="text-[#D4AF37]">Hands-free.</span>
+            <h1 className="max-w-3xl text-5xl font-black leading-[0.95] tracking-tight sm:text-6xl lg:text-7xl" data-testid="hero-title">
+              Your gold bot, running from the cloud.
             </h1>
-
-            <p className="text-base sm:text-lg text-white/70 mb-2 leading-snug max-w-md" data-testid="hero-subtitle">
-              Connect once. We trade. You watch.
+            <p className="mt-6 max-w-xl text-base leading-7 text-white/62" data-testid="hero-subtitle">
+              Connect your MT5 account once. XauAI Cloud mirrors the master signals, shows live reasoning, and gives you a simple mobile control center.
             </p>
-            <p className="text-sm text-white/50 mb-6 sm:mb-8 max-w-md" data-testid="hero-subtitle-2">
-              Your funds stay with your broker. 24/7 from secure servers.
-            </p>
-
-            <div className="flex flex-col sm:flex-row flex-wrap gap-3 mb-6 sm:mb-8">
-              <Link to="/cloud/signup" className="px-6 py-3 bg-[#D4AF37] text-black font-semibold rounded-full hover:bg-[#E5C558] transition-colors inline-flex items-center justify-center gap-2 group" data-testid="hero-cta-signup">
-                Start free trial
-                <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <Link to="/cloud/signup" className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-300 px-6 py-3.5 text-sm font-extrabold text-[#06110c] transition hover:bg-emerald-200" data-testid="hero-cta-signup">
+                Start free trial <ArrowRight className="h-4 w-4" />
               </Link>
-              <a href="#how-it-works" className="px-6 py-3 border border-white/10 rounded-full hover:bg-white/5 transition-colors text-center" data-testid="hero-cta-learn">How it works</a>
+              <Link to="/cloud/login" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]" data-testid="hero-cta-login">
+                Open dashboard
+              </Link>
             </div>
-
-            <div className="flex flex-wrap gap-4 sm:gap-6 text-xs sm:text-sm text-white/50">
-              <div className="flex items-center gap-2"><Check className="w-4 h-4 text-[#D4AF37]" /> No VPS</div>
-              <div className="flex items-center gap-2"><Check className="w-4 h-4 text-[#D4AF37]" /> No MT5 install</div>
-              <div className="flex items-center gap-2"><Check className="w-4 h-4 text-[#D4AF37]" /> Pause anytime</div>
-            </div>
+            <p className="mt-4 text-xs leading-5 text-white/38">No trading result is guaranteed. Use demo first and keep risk sized to your account.</p>
           </div>
 
-          {/* Dashboard mockup (preserved) */}
-          <div className="relative mt-6 lg:mt-0">
-            <div className="absolute inset-0 bg-gradient-to-br from-[#D4AF37]/10 via-transparent to-transparent blur-3xl" />
-            <div className="relative bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl sm:rounded-3xl p-5 sm:p-8 backdrop-blur-sm" data-testid="hero-mockup">
-              <div className="flex items-center justify-between mb-4 sm:mb-6">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500/60" />
-                  <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500/60" />
-                  <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500/60" />
+          <div className="relative">
+            <div className="rounded-[32px] border border-white/10 bg-white/[0.055] p-3 shadow-2xl shadow-black/40">
+              <div className="rounded-[24px] border border-white/10 bg-[#0b1118] p-4">
+                <div className="mb-5 flex items-center justify-between">
+                  <div>
+                    <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-white/35">Today</div>
+                    <div className="mt-1 font-mono text-3xl font-black text-emerald-300">+$847.32</div>
+                  </div>
+                  <button className="rounded-full bg-red-400/12 px-3 py-2 text-xs font-bold text-red-200">
+                    <Pause className="mr-1 inline h-3.5 w-3.5" /> Pause
+                  </button>
                 </div>
-                <div className="font-mono text-[9px] sm:text-xs text-white/40">XAUAI CLOUD · DASHBOARD</div>
-              </div>
-              <div className="mb-4">
-                <div className="text-[10px] sm:text-xs text-white/40 uppercase tracking-widest mb-1">Today's P&L</div>
-                <div className="text-3xl sm:text-4xl font-bold text-green-400 font-mono">+$847.32</div>
-              </div>
-              <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-4">
-                <div className="bg-white/5 rounded-lg sm:rounded-xl p-2.5 sm:p-3">
-                  <div className="text-[9px] sm:text-[10px] text-white/40 uppercase mb-1">Balance</div>
-                  <div className="font-mono font-semibold text-sm sm:text-base">$10,247</div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    ["Balance", "$10,247"],
+                    ["Trades", "15"],
+                    ["Win rate", "80%"],
+                  ].map(([k, v]) => (
+                    <div key={k} className="rounded-2xl border border-white/10 bg-white/[0.045] p-3">
+                      <div className="font-mono text-[9px] uppercase tracking-widest text-white/35">{k}</div>
+                      <div className="mt-1 font-mono text-sm font-bold">{v}</div>
+                    </div>
+                  ))}
                 </div>
-                <div className="bg-white/5 rounded-lg sm:rounded-xl p-2.5 sm:p-3">
-                  <div className="text-[9px] sm:text-[10px] text-white/40 uppercase mb-1">Wins</div>
-                  <div className="font-mono font-semibold text-sm sm:text-base text-green-400">12</div>
+
+                <div className="mt-4 rounded-2xl border border-white/10 bg-black/[0.24] p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <span className="font-mono text-[10px] uppercase tracking-widest text-white/35">Bot activity</span>
+                    <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                  </div>
+                  <div className="space-y-3 text-xs leading-5 text-white/58">
+                    <p><span className="font-mono text-emerald-300">FIRE</span> · XAUUSD BUY copied to account</p>
+                    <p><span className="font-mono text-amber-200">SOFT</span> · SMART-GUARD reduced risk on B setup</p>
+                    <p><span className="font-mono text-sky-200">SYNC</span> · Worker heartbeat received</p>
+                  </div>
                 </div>
-                <div className="bg-white/5 rounded-lg sm:rounded-xl p-2.5 sm:p-3">
-                  <div className="text-[9px] sm:text-[10px] text-white/40 uppercase mb-1">Losses</div>
-                  <div className="font-mono font-semibold text-sm sm:text-base text-red-400">3</div>
+
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <button className="rounded-2xl bg-emerald-300 px-4 py-3 text-sm font-extrabold text-[#06110c]">Resume</button>
+                  <button className="rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-bold">Risk</button>
                 </div>
-              </div>
-              <div className="h-20 sm:h-24 bg-gradient-to-t from-[#D4AF37]/5 to-transparent rounded-xl flex items-end justify-between px-3 py-2">
-                {[40,50,45,60,55,70,75,68,85,92,88,100].map((h,i)=>(<div key={i} className="w-1 sm:w-1.5 bg-gradient-to-t from-[#D4AF37]/60 to-[#D4AF37] rounded-t" style={{height:`${h}%`}} />))}
               </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Trader headline strip */}
-      <section className="max-w-5xl mx-auto px-4 sm:px-6 pb-6 sm:pb-12">
-        <div className="border-y border-white/5 py-6 sm:py-8 text-center">
-          <div className="text-2xl sm:text-3xl font-bold tracking-tight" data-testid="trader-headline">
-            Trade smarter, <span className="text-[#D4AF37]">not harder.</span>
-          </div>
-          <p className="text-white/60 text-sm sm:text-base mt-2">We execute. You monitor results.</p>
-        </div>
-      </section>
-
-      {/* How It Works */}
-      <section id="how-it-works" className="max-w-7xl mx-auto px-4 sm:px-6 py-12 sm:py-20 border-t border-white/5">
-        <div className="text-center mb-10 sm:mb-16">
-          <div className="text-[10px] sm:text-xs font-mono tracking-[0.3em] text-[#D4AF37] mb-3">HOW IT WORKS</div>
-          <h2 className="text-3xl sm:text-4xl font-bold mb-3" data-testid="howworks-title">Three steps.</h2>
-          <p className="text-white/60 text-sm sm:text-base">No setup. No skills required.</p>
-        </div>
-        <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6">
-          {[
-            {n:"01", icon:<Lock className="w-6 h-6" />,     title:"Connect", body:"Enter your MT5 login. Encrypted at rest."},
-            {n:"02", icon:<Sparkles className="w-6 h-6" />, title:"Activate", body:"Pick a plan. 7-day free trial."},
-            {n:"03", icon:<Zap className="w-6 h-6" />,      title:"Trade 24/7", body:"We mirror trades to your account in real time."},
-          ].map((f,i)=>(
-            <div key={i} className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-5 sm:p-6" data-testid={`feature-${i}`}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-[#D4AF37]/10 border border-[#D4AF37]/20 flex items-center justify-center text-[#D4AF37]">{f.icon}</div>
-                <div className="font-mono text-2xl sm:text-3xl text-white/10 font-bold">{f.n}</div>
+        <section className="mx-auto max-w-7xl px-4 pb-12 md:px-8">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { icon: Smartphone, title: "Phone-first", body: "Dashboard, pause, billing, and status are clean on mobile." },
+              { icon: Shield, title: "Broker-safe", body: "Your deposits and withdrawals stay with your broker." },
+              { icon: Activity, title: "Live reasoning", body: "See why the master bot fired, paused, or skipped a trade." },
+              { icon: Lock, title: "Encrypted", body: "Credentials are stored securely and can be removed anytime." },
+            ].map(({ icon: Icon, title, body }) => (
+              <div key={title} className="rounded-3xl border border-white/10 bg-white/[0.045] p-5">
+                <Icon className="mb-4 h-6 w-6 text-amber-200" />
+                <h3 className="font-bold">{title}</h3>
+                <p className="mt-2 text-sm leading-6 text-white/52">{body}</p>
               </div>
-              <h3 className="text-lg sm:text-xl font-bold mb-2">{f.title}</h3>
-              <p className="text-white/60 text-sm leading-relaxed">{f.body}</p>
-            </div>
-          ))}
-        </div>
-      </section>
+            ))}
+          </div>
+        </section>
 
-      {/* Key Benefits */}
-      <section className="max-w-5xl mx-auto px-4 sm:px-6 pb-12 sm:pb-20">
-        <div className="text-center mb-8 sm:mb-10">
-          <div className="text-[10px] sm:text-xs font-mono tracking-[0.3em] text-[#D4AF37] mb-3">WHY XAUAI CLOUD</div>
-          <h2 className="text-3xl sm:text-4xl font-bold" data-testid="benefits-title">Built for results, not screen time.</h2>
-        </div>
-        <div className="grid sm:grid-cols-2 gap-3 sm:gap-4 max-w-2xl mx-auto" data-testid="benefits-grid">
-          {[
-            "No VPS",
-            "No MT5 install",
-            "Real-time execution",
-            "Fully automated",
-            "Pause anytime",
-            "Funds stay with broker",
-          ].map((b,i)=>(
-            <div key={i} className="flex items-center gap-3 p-3 sm:p-4 bg-white/[0.03] border border-white/10 rounded-xl" data-testid={`benefit-${i}`}>
-              <div className="w-8 h-8 rounded-full bg-[#D4AF37]/15 border border-[#D4AF37]/30 flex items-center justify-center flex-none">
-                <Check className="w-4 h-4 text-[#D4AF37]" />
+        <section className="mx-auto max-w-7xl px-4 pb-16 md:px-8">
+          <div className="grid gap-4 lg:grid-cols-[0.92fr_1.08fr]">
+            <div className="rounded-[28px] border border-white/10 bg-white/[0.045] p-6">
+              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-200">Simple setup</div>
+              <h2 className="mt-3 text-3xl font-black tracking-tight">Three steps. Then monitor.</h2>
+              <div className="mt-6 space-y-3">
+                {["Create cloud account", "Connect your MT5 login", "Choose plan and let the worker run"].map((step, i) => (
+                  <div key={step} className="flex items-center gap-3 rounded-2xl bg-black/[0.22] p-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-300 font-mono text-xs font-black text-[#06110c]">{i + 1}</span>
+                    <span className="text-sm font-semibold text-white/80">{step}</span>
+                  </div>
+                ))}
               </div>
-              <span className="text-white/85 text-sm sm:text-base">{b}</span>
             </div>
-          ))}
-        </div>
-      </section>
 
-      {/* Pricing */}
-      <section id="pricing" className="max-w-5xl mx-auto px-4 sm:px-6 py-12 sm:py-20 border-t border-white/5">
-        <div className="text-center mb-10 sm:mb-12">
-          <div className="text-[10px] sm:text-xs font-mono tracking-[0.3em] text-[#D4AF37] mb-3">PRICING</div>
-          <h2 className="text-3xl sm:text-4xl font-bold mb-3">Simple. No lock-in.</h2>
-          <p className="text-white/60 text-sm sm:text-base">7 days free. Cancel anytime.</p>
-        </div>
-        <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
-          <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl sm:rounded-3xl p-6 sm:p-8" data-testid="plan-starter">
-            <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40 mb-2">STARTER</div>
-            <div className="flex items-baseline gap-1 mb-1"><span className="text-4xl sm:text-5xl font-bold">$50</span><span className="text-white/50">/month</span></div>
-            <div className="text-sm text-white/50 mb-5 sm:mb-6">For accounts up to $5,000</div>
-            <ul className="space-y-3 mb-6 sm:mb-8 text-sm">
-              {["Full XauAi bot execution","Trade mirroring to your account","Email trade alerts","Pause/resume anytime","30-day trade history"].map((f,i)=>(<li key={i} className="flex gap-2"><Check className="w-4 h-4 text-[#D4AF37] mt-0.5 flex-none" /><span className="text-white/80">{f}</span></li>))}
-            </ul>
-            <Link to="/cloud/signup" className="block text-center py-3 border border-white/20 rounded-full hover:bg-white/5 transition-colors" data-testid="plan-starter-cta">Start trial</Link>
+            <div className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/[0.08] p-6">
+              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-emerald-200">What you get</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                {benefits.map((benefit) => (
+                  <div key={benefit} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/[0.18] p-3">
+                    <Check className="h-4 w-4 flex-none text-emerald-300" />
+                    <span className="text-sm text-white/76">{benefit}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-          <div className="bg-gradient-to-br from-[#D4AF37]/15 to-[#D4AF37]/5 border border-[#D4AF37]/40 rounded-2xl sm:rounded-3xl p-6 sm:p-8 relative" data-testid="plan-pro">
-            <div className="absolute -top-3 right-4 sm:right-6 px-3 py-1 bg-[#D4AF37] text-black text-[10px] font-mono font-bold rounded-full">RECOMMENDED</div>
-            <div className="text-[10px] sm:text-xs font-mono tracking-widest text-[#D4AF37] mb-2">PRO</div>
-            <div className="flex items-baseline gap-1 mb-1"><span className="text-4xl sm:text-5xl font-bold">$100</span><span className="text-white/50">/month</span></div>
-            <div className="text-sm text-white/50 mb-5 sm:mb-6">For accounts $5,000+</div>
-            <ul className="space-y-3 mb-6 sm:mb-8 text-sm">
-              {["Everything in Starter","Priority execution queue","Telegram + Email alerts","Full trade history & analytics","Priority support","Advanced risk controls"].map((f,i)=>(<li key={i} className="flex gap-2"><Check className="w-4 h-4 text-[#D4AF37] mt-0.5 flex-none" /><span className="text-white/80">{f}</span></li>))}
-            </ul>
-            <Link to="/cloud/signup" className="block text-center py-3 bg-[#D4AF37] text-black font-semibold rounded-full hover:bg-[#E5C558] transition-colors" data-testid="plan-pro-cta">Start trial</Link>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Trust */}
-      <section className="max-w-5xl mx-auto px-4 sm:px-6 py-12 sm:py-20 border-t border-white/5">
-        <div className="text-center mb-8 sm:mb-10">
-          <h2 className="text-2xl sm:text-3xl font-bold mb-2" data-testid="trust-title">Funds stay with your broker.</h2>
-          <p className="text-white/60 text-sm sm:text-base">We don't hold money. We only execute.</p>
-        </div>
-        <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-8 sm:gap-10 text-center">
-          <div data-testid="trust-1">
-            <Shield className="w-8 h-8 text-[#D4AF37] mx-auto mb-3" />
-            <div className="font-bold mb-2">Funds never leave your broker</div>
-            <div className="text-sm text-white/60">Deposits & withdrawals stay between you and your broker.</div>
+        <section id="pricing" className="mx-auto max-w-7xl px-4 pb-16 md:px-8">
+          <div className="rounded-[30px] border border-white/10 bg-white/[0.045] p-6 sm:p-8">
+            <div className="mb-6">
+              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-200">Pricing</div>
+              <h2 className="mt-3 text-3xl font-black tracking-tight">Simple plans, no lock-in.</h2>
+              <p className="mt-2 text-sm leading-6 text-white/52">Start on trial, connect demo first, then choose the cloud level that fits your account size.</p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {[
+                ["Starter", "$50", "For smaller accounts testing cloud execution", ["Master signal copy", "Email alerts", "Pause/resume", "30-day history"]],
+                ["Pro", "$100", "For active accounts that need priority monitoring", ["Everything in Starter", "Priority queue", "Telegram + email", "Advanced controls"]],
+              ].map(([name, price, body, items]) => (
+                <div key={name} className="rounded-3xl border border-white/10 bg-black/[0.2] p-5">
+                  <div className="font-mono text-[10px] uppercase tracking-widest text-white/35">{name}</div>
+                  <div className="mt-2 flex items-end gap-1">
+                    <span className="text-4xl font-black">{price}</span>
+                    <span className="pb-1 text-sm text-white/45">/mo</span>
+                  </div>
+                  <p className="mt-2 text-sm text-white/52">{body}</p>
+                  <div className="mt-5 space-y-2">
+                    {items.map((item) => (
+                      <div key={item} className="flex items-center gap-2 text-sm text-white/70">
+                        <Check className="h-4 w-4 text-emerald-300" /> {item}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div data-testid="trust-2">
-            <Lock className="w-8 h-8 text-[#D4AF37] mx-auto mb-3" />
-            <div className="font-bold mb-2">Encrypted credentials</div>
-            <div className="text-sm text-white/60">Fernet-AES with per-install keys.</div>
-          </div>
-          <div data-testid="trust-3">
-            <Pause className="w-8 h-8 text-[#D4AF37] mx-auto mb-3" />
-            <div className="font-bold mb-2">One-click pause</div>
-            <div className="text-sm text-white/60">Stop new trades instantly.</div>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Closing CTA */}
-      <section className="max-w-3xl mx-auto px-4 sm:px-6 py-12 sm:py-16 text-center">
-        <div className="text-2xl sm:text-3xl font-bold mb-4">Put gold trading on autopilot.</div>
-        <Link to="/cloud/signup" className="inline-flex items-center gap-2 px-7 py-3.5 bg-[#D4AF37] text-black font-semibold rounded-full hover:bg-[#E5C558] transition-colors" data-testid="closing-cta">
-          Start free trial <ArrowRight className="w-4 h-4" />
-        </Link>
-        <div className="text-xs text-white/40 mt-3">No payment. Cancel anytime.</div>
-      </section>
-
-      <footer className="border-t border-white/5 py-6 sm:py-8 text-center text-xs sm:text-sm text-white/40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <XauAiLogo size={16} />
-            <span>© 2026 XauAi — by emriz.eth</span>
+        <section className="mx-auto max-w-4xl px-4 pb-16 text-center md:px-8">
+          <div className="rounded-[30px] border border-white/10 bg-white/[0.055] p-6 sm:p-10">
+            <Zap className="mx-auto mb-4 h-8 w-8 text-amber-200" />
+            <h2 className="text-3xl font-black tracking-tight">Put the master EA on autopilot.</h2>
+            <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-white/55">
+              Start with demo, verify execution, then scale only when the results match your risk plan.
+            </p>
+            <Link to="/cloud/signup" className="mt-6 inline-flex items-center gap-2 rounded-full bg-emerald-300 px-7 py-3.5 text-sm font-extrabold text-[#06110c]">
+              Start free trial <ArrowRight className="h-4 w-4" />
+            </Link>
           </div>
-          <Link to="/" className="hover:text-white/70 inline-flex items-center gap-1" data-testid="footer-diy-link">
-            <Activity className="w-3.5 h-3.5" /> Prefer DIY? Buy a PIN →
-          </Link>
-        </div>
-      </footer>
+        </section>
+      </main>
     </div>
   );
 }

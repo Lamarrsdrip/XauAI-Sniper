@@ -1,17 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.1 — Exit-Fix Trust Build|
+//|                                     v5.8.7 — Adaptive Guard Build|
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.81"
-#property description "XAUUSD AI Sniper v5.8.1 — EXIT-FIX TRUST BUILD"
-#property description "v5.8.0 killed too many setups — bot sat idle in trending regimes."
-#property description "v5.8.1 re-enables TREND_PULLBACK + BREAKOUT — trusts the +1R exit guard"
-#property description "to fix the asymmetric R:R that caused historical losses."
-#property description "Adverse pyramiding stays OFF (-$21k leak, no exit fix could save it)."
-#property description "All other v5.8.0 logic preserved."
+#property version   "5.87"
+#property description "XAUUSD AI Sniper v5.8.7 — ADAPTIVE SMART GUARD"
+#property description "Keeps hedge guard/demo risk; replaces hard B-grade poison"
+#property description "with sample-aware soft veto, decay, and inactivity relief."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -28,7 +25,7 @@ input group "=== RISK (Gate 4) ==="
 input group "=== PRESERVATION MODE (v4.7.2 — let winners run, don't trade like scalper) ==="
 input group "=== ACCOUNT MODE (v4.8.2 — one-input preset for risk profile) ==="
 enum ENUM_ACCT_MODE { ACCT_BALANCED, ACCT_CONSERVATIVE, ACCT_AGGRESSIVE };
-input ENUM_ACCT_MODE InpAccountMode = ACCT_BALANCED;  // v4.9.3: BALANCED=1.2% | CONSERVATIVE=0.6% | AGGRESSIVE=2.0%
+input ENUM_ACCT_MODE InpAccountMode = ACCT_BALANCED;  // v5.8.4: original default risk preset for demo/cloud testing
 
 input group "=== PROFIT GUARDIAN (v5.1.3 — OFF by default; v4.9.7-style aggressive trading) ==="
 input bool   InpProfitGuardian      = false; // v5.1.3: DEFAULT OFF — tier risk-cuts + HTF trend lock + cooldown OFF (restores v4.9.7 aggression)
@@ -102,10 +99,10 @@ input bool   InpVolKillEnabled    = true;   // Block entries when M5 ATR > 2× 5
 input double InpVolKillMultiplier = 2.0;    // Multiplier vs 50-bar median ATR to trigger the kill switch
 input bool   InpSpreadKillEnabled = true;   // Block entries when current spread > 2× 60-bar median (broker freakout)
 input double InpSpreadKillMultiplier = 2.0; // Multiplier vs median spread to trigger kill switch
-input double InpHardDailyDDPct    = 15.0;   // v5.3.2: HARD halt only at extreme DD (was 6%). Soft-mode now starts at -10% per user feedback.
-input double InpSoftDDPct         = 10.0;   // v5.3.2: SOFT mode trigger raised 2.5%→10%. At -10% day PnL: A/A+ only + 0.7× lots. Still trades.
-input double InpSoftDDLotMulti    = 0.7;    // lot multiplier while in soft DD mode (0.7 = 30% reduction)
-input double InpPyramidMinSpaceATR = 0.7;   // Pyramid adds must be ≥ this × ATR away from PREVIOUS add (anti-clustering)
+input double InpHardDailyDDPct    = 0.0;    // v5.8.4 demo: disabled
+input double InpSoftDDPct         = 0.0;    // v5.8.4 demo: disabled
+input double InpSoftDDLotMulti    = 0.7;    // lot multiplier while in soft DD mode (unused while soft DD disabled)
+input double InpPyramidMinSpaceATR = 1.0;   // Pyramid adds must be ≥ this × ATR away from PREVIOUS add (anti-clustering)
 input double InpAdvPyrMinScore    = 4.0;    // v5.3.1: combined score required for ADVERSE pyramids (≥ here OR no add). Trend-side adds skip this gate.
 
 // v5.3.1 — HIGH-GRADE BREATHING ROOM (let A/A+ winners run instead of trailing them out)
@@ -117,6 +114,7 @@ input double InpHighGradeTrailDistATR  = 1.5; // A/A+ trail distance (vs 1× ATR
 input bool   InpRSIDivergenceFilter = true; // Block buy if RSI_HH < prev RSI_HH while price made new HH (and mirror for sells)
 input bool   InpMomentumSlowdown    = true; // Block entry if last close is in lower 30% of last 3 candles' ranges
 input int    InpMLSmoothingBars     = 5;    // WMA smoothing on ML score over last N decisions (0 = disabled)
+input bool   InpResetMLSmoothingBySignature = true; // v5.8.6: keep smoothing inside same setup/direction signature
 
 // v5.3.0 — PHASE 3: REGIME / BASKET POLISH
 input bool   InpFakeBreakoutGuard   = true; // Require 2-bar confirmation past Donchian-N break before entering breakouts
@@ -139,14 +137,14 @@ input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this
 input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 input double InpMaxLots        = 10.0;     // Hard max lots
-input double InpMaxRiskPctEquity = 3.0;    // v4.9.3 — Was 1.5, now 3.0 (allow A+ big signals to pass)
+input double InpMaxRiskPctEquity = 3.0;    // v5.8.4: restored original account-based max risk cap
 input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
-input double InpMaxAggregateRiskPct = 8.0; // v4.9.3 — Was 4.0, now 8.0 (more room for layered trades)
-input double InpDailyLossLimit = 6.0;      // Daily loss cap (%) — set 0 to disable
-input int    InpMaxOpenTrades  = 5;        // Max open positions
-input int    InpMaxTradesPerDay= 30;       // No artificial limit until target
-input double InpWeeklyTarget   = 50.0;     // Weekly profit target (%) — set 0 to disable
-input double InpWeeklyMaxLoss  = 15.0;     // Weekly max loss (%) — set 0 to disable
+input double InpMaxAggregateRiskPct = 8.0; // v5.8.4: restored original aggregate risk room for demo/cloud testing
+input double InpDailyLossLimit = 0.0;      // v5.8.4 demo: disabled
+input int    InpMaxOpenTrades  = 3;        // Max open positions
+input int    InpMaxTradesPerDay= 15;       // v5.8.2 — reduce overtrading after choppy loss windows
+input double InpWeeklyTarget   = 100.0;    // v5.8.4 demo: weekly ROI target 100%
+input double InpWeeklyMaxLoss  = 0.0;      // v5.8.4 demo: disabled
 input bool   InpCarefulMode    = true;     // Scale down near target
 
 input group "=== STRATEGY ==="
@@ -175,15 +173,15 @@ input string InpServerURL      = "https://xauaisniper.com";
 input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
 
 input group "=== XAUAI CLOUD (fanout master signals to subscribers) ==="
-input bool   InpCloudFanout       = true;    // TRUE = POST every open/close to the XauAi Cloud backend
+input bool   InpCloudFanout       = false;   // TRUE = POST every open/close to the XauAi Cloud backend
 input string InpCloudURL          = "https://xauaisniper.com";  // Cloud API base URL — ALREADY SET. Add this to MT5 WebRequest whitelist!
-input string InpCloudAgentToken   = "c2eb530ea11d7dd8308f9f7be1fb7c2657f4cdbdfb3b0d63d88ad4ee433e2289";      // X-Agent-Token — PRE-FILLED for emriz. Keep PRIVATE — never share this file publicly.
+input string InpCloudAgentToken   = "";       // X-Agent-Token — keep PRIVATE. Do not commit live master tokens to GitHub.
 input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms)
 
 input group "=== TUNABLE THRESHOLDS (walk-forward optimize these) ==="
 input double InpGradeAPlus     = 5.5;      // Combined score for A+ (default 5.5)
 input double InpGradeA         = 4.0;      // Combined score for A  (default 4.0)
-input double InpGradeB         = 2.5;      // Combined score for B / pass cutoff (default 2.5)
+input double InpGradeB         = 3.0;      // v5.8.2: B floor raised; weak B trades caused most oversized loss clusters
 input double InpScoreFloor     = 0.65;     // v5.1.5: floor for quality-drag — combined score never drops below setupScore × this. Was effectively 0 → killed the bot in fair-quality regimes.
 input bool   InpAdaptiveGradeB = false;    // v5.1.6: DEFAULT OFF — was permanently tightening threshold after losses, killing the bot. Set true to re-enable.
 input double InpAdaptiveGradeBMax = 3.0;   // when adaptive on: max tightening cap
@@ -195,11 +193,11 @@ input int    InpProfitTakeMax  = 500;      // Auto-close at this profit (USD, de
 input int    InpQuickExitMin   = 18;       // Auto-close minutes threshold (default 18)
 
 input group "=== RE-ENTRY ENGINE (reverse-move recovery) ==="
-input bool   InpUseReEntry     = true;     // Auto re-enter if SL was noise
+input bool   InpUseReEntry     = false;    // v5.8.2: OFF by default; live report favors fewer revenge/recovery attempts
 input int    InpReEntryWindow  = 900;      // Seconds after close to watch for reversal (15min)
 input double InpReEntryFactor  = 1.2;      // Price must move this x SL past original entry
 input double InpReEntrySize    = 0.5;      // Re-entry size multiplier (0.5 = half original)
-input int    InpMaxReEntriesPerDay = 3;    // Hard cap on re-entries per trading day
+input int    InpMaxReEntriesPerDay = 1;    // Hard cap on re-entries per trading day
 
 input group "=== SMART FILTERS ==="
 input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
@@ -207,16 +205,16 @@ input int    InpDXYRefreshSec  = 900;      // Refresh DXY every N seconds (15min
 input bool   InpDrawdownMode   = true;     // Auto-reduce risk after losing streak
 input int    InpDrawdownLosses = 3;        // # losses in a day that trigger recovery
 input double InpDrawdownRisk   = 0.5;      // Risk % during recovery mode (default 0.5)
-input int    InpStreakCooldownLosses = 3;  // # losses in short window = pause
+input int    InpStreakCooldownLosses = 2;  // # losses in short window = pause
 input int    InpStreakWindowSec = 2700;    // Window for loss-streak detection (45min)
-input int    InpStreakPauseSec = 1200;     // Pause duration after streak (20min)
+input int    InpStreakPauseSec = 3600;     // Pause duration after streak (60min)
 input bool   InpAsiaRangeBreakout = true;  // Enable Asia-range breakout setup at London/NY open
 input bool   InpAdaptiveGrades = true;     // Auto-tune grade thresholds from recent win rate
 input bool   InpResetML        = false;    // TRUE = clear local ML on attach (fresh start for this version)
 input bool   InpDirectionLockout = true;   // Lock a direction if too many same-direction losses
 input int    InpDirLockoutLookback = 5;    // Check last N trades
-input int    InpDirLockoutLossesNeeded = 3;// If N of last M were losses in same direction
-input int    InpDirLockoutMinutes = 60;    // Lock that direction for X minutes
+input int    InpDirLockoutLossesNeeded = 2;// If N of last M were losses in same direction
+input int    InpDirLockoutMinutes = 120;   // Lock that direction for X minutes
 
 input group "=== CONVICTION-WEIGHTED SIZING (v4.5.0 — use Claude/GPT confidence) ==="
 input bool   InpConvictionSizing = true;   // Scale lot size by AI confidence
@@ -309,9 +307,9 @@ input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm
 
 input group "=== BASKET PROTECT (v4.9.7 — smarter thresholds + fast-reversal circuit breakers) ==="
 input bool   InpBasketMode          = true;   // Master toggle: SL logic works on AGGREGATE PnL, not per-trade
-input double InpBasketArmPct        = 2.0;    // v4.9.7 — was 1.0, now 2.0 ($53k×2% = $1,060) so trends have room to develop
-input double InpBasketArmFloor      = 200.0;  // v4.9.7 — was 100, now 200 (don't arm too early on tiny floats)
-input double InpBasketLockMinPct    = 50.0;   // v4.9.7 — was 60, now 50 (allow 50% giveback before close = more breathing room)
+input double InpBasketArmPct        = 2.5;    // v5.8.3 — arm later so valid gold runners are not basket-closed too early
+input double InpBasketArmFloor      = 300.0;  // v5.8.3 — don't arm on small noise profits
+input double InpBasketLockMinPct    = 45.0;   // v5.8.3 — lock profit but allow trend breathing room
 input double InpBasketRatchetT1Pct  = 1.5;    // v4.9.7 — was 0.5, now 1.5 (tier-1 fires later, let winners run)
 input double InpBasketRatchetT2Pct  = 3.5;    // v4.9.7 — was 2.5, now 3.5 (tier-2 fires later)
 input double InpBasketRatchetT3Pct  = 6.0;    // v4.9.7 — was 5.0, now 6.0 (tier-3 fires on REAL big peaks)
@@ -319,9 +317,9 @@ input double InpBasketBEPct         = 0.5;    // v4.9.7 — was 0.3, now 0.5 (BE
 input bool   InpBasketDisablePerTrade = true; // When basket active, disable per-trade peak-lock & ratchet (no conflict)
 // === v4.9.7 Smart Guards ===
 input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on sudden reversal even if floor not breached
-input double InpBasketFastDropPct       = 35.0; // If basket gives back ≥X% of peak within FastWindowSec → close immediately
+input double InpBasketFastDropPct       = 50.0; // If basket gives back ≥X% of peak within FastWindowSec → close immediately
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
-input double InpBasketHardGivebackPct   = 1.5;  // HARD CAP: never give back more than X% of balance from peak ($53k×1.5%=$795)
+input double InpBasketHardGivebackPct   = 2.0;  // HARD CAP: never give back more than X% of balance from peak
 input bool   InpBasketBlockPyramidWhenArmed = true; // Block NEW pyramid entries while basket is armed (don't stack into a flush)
 
 input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
@@ -341,19 +339,26 @@ input group "=== TREND HOLD MODE (v4.8.4 — don't micro-exit when trend is obvi
 input bool   InpTrendHoldMode    = false;  // v4.9.5 — DISABLED (clean exits handle trends via chandelier)
 input double InpTrendHoldTrailATR = 3.0;   // Trail distance in trend-hold mode (wider than Stage 2)
 
-input group "=== CLEAN EXITS (v4.9.5 — ONE exit authority per phase, simple & effective) ==="
+input group "=== CLEAN EXITS (v5.8.3 — balanced statistical trade management) ==="
 input bool   InpCleanExits          = true;   // MASTER toggle — disables all other per-trade trails
-input double InpCleanBEActivateR    = 1.0;    // At +1R, move SL to entry + small cushion
-input double InpCleanBECushionR     = 0.2;    // Cushion locked at BE trigger (+0.2R profit)
-input double InpCleanChandelierStartR = 2.0;  // At +2R, chandelier trail kicks in
-input double InpCleanChandelierATR1 = 3.0;    // Chandelier distance +2R→+4R (wide, let runner breathe)
-input double InpCleanChandelierATR2 = 2.0;    // Chandelier distance +4R+ (tighter, bank more)
-input double InpCleanPartialR       = 3.0;    // At +3R, close partial
-input double InpCleanPartialPct     = 30.0;   // % of position to close at +3R
+input double InpCleanBEActivateR    = 1.25;   // At +1.25R, move SL to entry + small cushion; avoids clipping pre-move winners
+input double InpCleanBECushionR     = 0.10;   // Cushion locked at BE trigger (+0.10R profit)
+input double InpCleanChandelierStartR = 2.25; // Base chandelier start; actual value adapts by regime + momentum
+input double InpCleanChandelierATR1 = 3.5;    // Chandelier distance +2R→+4R (wide, let runner breathe)
+input double InpCleanChandelierATR2 = 2.6;    // Chandelier distance +4R+ (still wide enough for XAU)
+input double InpCleanPartialR       = 2.0;    // At +2R, close partial
+input double InpCleanPartialPct     = 25.0;   // % of position to close at +2R; leaves 75% runner
 input int    InpCleanChandelierLookback = 20; // Bars to scan for highest high / lowest low
 input bool   InpCleanMomentumInvalidation = true; // Cut trade if momentum flips hard against us
-input int    InpCleanStaleHours     = 4;      // Close if > X hours in AND profit < StaleMinR
-input double InpCleanStaleMinR      = 0.5;    // Threshold below which we consider trade stale
+input int    InpCleanStaleHours     = 3;      // Close if > X hours in AND profit < StaleMinR, unless trend still validates
+input double InpCleanStaleMinR      = 0.35;   // Threshold below which we consider trade stale
+input double InpCleanMaxLossR       = 1.25;   // Max tolerated loss before confirmed invalidation can close early
+input double InpCleanEmergencyLossR = 1.80;   // Emergency close even without full confirmation
+input int    InpCleanStructureLookback = 12;  // Bars for swing structure invalidation
+input double InpCleanStructureATRBuffer = 0.20; // Close must break swing by this ATR fraction
+input int    InpCleanMinInvalidationMin = 20; // Don't judge invalidation too early unless emergency loss
+input int    InpCleanStagnantMinutes = 75;    // Time-based exit for flat/choppy trades with no progress
+input double InpCleanStagnantMaxR = 0.20;     // Stagnant if abs(R) remains below this after StagnantMinutes
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // Ask Claude before any rule-based close (HOLD/CLOSE/LOCK $X)
@@ -410,8 +415,8 @@ input bool   InpAllowPyramid    = true;    // Stack multiple trades in same dire
 //   ASIA_BREAKOUT:   1 trade,  +$1,004 — KEPT
 // User can re-enable any setup via these toggles if they redesign the entries.
 // ====================================================================
-input bool   InpAllowTrendPullback = true;  // v5.8.1: RE-ENABLED (was idle in trending regimes). Trust the +1R exit guard from v5.8.0 to fix asymmetric R:R.
-input bool   InpAllowBreakout       = true;  // v5.8.1: RE-ENABLED — same reasoning.
+input bool   InpAllowTrendPullback = true;  // v5.8.2: allowed only when Smart Guard quality gates pass
+input bool   InpAllowBreakout       = true;  // v5.8.2: allowed only when Smart Guard quality gates pass
 input bool   InpAllowSqueezeRelease = true;  // v5.8.0: KEEP — $13k profit, PF 4.36
 input bool   InpAllowRangeReversal  = true;  // small +EV
 input bool   InpAllowAsiaBreakout   = true;  // small +EV
@@ -419,10 +424,27 @@ input bool   InpAllowRSIExtreme     = true;
 input bool   InpAllowLondonFixPin   = true;
 input bool   InpAllowDXYReversal    = true;
 input bool   InpAllowMultiExtreme   = true;
-input int    InpMaxPyramidAdds  = 4;       // Total concurrent = 1 original + this many adds (default 5 total)
-input double InpPyramidMinATR   = 0.3;     // Price must move at least this × ATR before adding
-input double InpPyramidSizeMulti= 0.6;     // Each add is this × previous size (prevents martingale blow-up)
-input int    InpPyramidMinGapSec= 120;     // Min seconds between pyramid adds
+input group "=== SMART GUARD (v5.8.2 — data-driven loss reduction) ==="
+input bool   InpSmartGuardEnable          = true;  // Master switch for v5.8.2 live-history protections
+input bool   InpOneDirectionOnly          = true;  // v5.8.5: block opposite-direction entries while a position is open
+input bool   InpBlockNewEntriesIfHedged   = true;  // v5.8.5: if account is already mixed BUY+SELL, pause fresh entries
+input bool   InpSmartGuardSkipBTrendBreak = true;  // v5.8.7: adaptive B-grade guard for TREND_PULLBACK/BREAKOUT
+input bool   InpSmartGuardRequireHTF      = true;  // Require M15+H1 alignment for TREND_PULLBACK/BREAKOUT
+input bool   InpSmartGuardNoDamageStack   = true;  // Do not open fresh damage-prone setup while another position is open
+input double InpSmartGuardDamageLotMulti  = 0.55;  // Extra risk cut for allowed TREND_PULLBACK/BREAKOUT entries
+input int    InpSmartGuardMinHardSamples  = 30;    // Need this many same-setup live patterns before hard expectancy veto
+input double InpSmartGuardHardExpectancy  = -150.0;// Hard-veto only when decayed avg P/L/trade is worse than this
+input double InpSmartGuardHardWinRate     = 35.0;  // Hard-veto only when decayed WR is also below this %
+input double InpSmartGuardSoftLotMulti    = 0.70;  // Soft-veto risk multiplier; trade still allowed if other gates pass
+input int    InpSmartGuardRelaxAfterMin   = 180;   // If no trades for this long, relax hard veto to soft retest
+input double InpSmartGuardOverrideScore   = 3.8;   // Strong trend pullbacks at/above this can override soft negative stats
+input bool   InpPyramidRequireGradeA      = true;  // Only pyramid if original entry was A/A+
+input bool   InpPyramidRequireHTF         = true;  // Only pyramid when M15+H1 still align with direction
+
+input int    InpMaxPyramidAdds  = 1;       // v5.8.2: allow at most one add; live clusters got dangerous at 3-5 tickets
+input double InpPyramidMinATR   = 0.9;     // Price must move at least this × ATR before adding
+input double InpPyramidSizeMulti= 0.35;    // Each add is this × previous size (prevents stack blow-up)
+input int    InpPyramidMinGapSec= 600;     // Min seconds between pyramid adds
 input bool   InpPyramidOnAdverse= false;   // v5.8.0: DISABLED by default — live data showed -$21k from 37 adverse-pyramid trades (PF 0.28). Adds risk to losing positions.
 input bool   InpPyramidOnTrend  = true;    // Add when price moves WITH us (trend continuation)
 
@@ -1321,7 +1343,7 @@ int OnInit()
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
 
-   Print("=== XAUAI SNIPER v5.8.1 (EXIT-FIX TRUST BUILD) READY ===");
+   Print("=== XAUAI SNIPER v5.8.7 (ADAPTIVE SMART-GUARD BUILD) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1960,8 +1982,8 @@ int ScoreSetups(double &score, string &setupName)
    // === SETUP 5: RSI EXTREME (like VWAP reclaim) ===
    {
       double s = 0; int dir = 0;
-      if(rsi < 25 && close1 > open1) { dir = 1; s = 2.0 + (close1 > emaF ? 1.0 : 0) + (m15RSI < 30 ? 1.0 : 0) + (body > 0 && lowerWick > body ? 1.0 : 0); }
-      if(rsi > 75 && close1 < open1) { dir = -1; s = 2.0 + (close1 < emaF ? 1.0 : 0) + (m15RSI > 70 ? 1.0 : 0) + (body > 0 && upperWick > body ? 1.0 : 0); }
+      if(rsi < 25 && close1 > open1 && h1TrendDir >= 0 && !h1Stretched) { dir = 1; s = 2.0 + (close1 > emaF ? 1.0 : 0) + (m15RSI < 30 ? 1.0 : 0) + (body > 0 && lowerWick > body ? 1.0 : 0); }
+      if(rsi > 75 && close1 < open1 && h1TrendDir <= 0 && !h1Stretched) { dir = -1; s = 2.0 + (close1 < emaF ? 1.0 : 0) + (m15RSI > 70 ? 1.0 : 0) + (body > 0 && upperWick > body ? 1.0 : 0); }
       if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "RSI_EXTREME"; bestType = 5; }
    }
 
@@ -1988,11 +2010,11 @@ int ScoreSetups(double &score, string &setupName)
       // When gold RSI is oversold AND price at BB lower = likely bounce
       // When gold RSI is overbought AND price at BB upper = likely drop
       double s = 0; int dir = 0;
-      if(rsi < 28 && close1 < bbL + (bbU - bbL) * 0.15 && m15RSI < 35)
+      if(rsi < 28 && close1 < bbL + (bbU - bbL) * 0.15 && m15RSI < 35 && h1TrendDir >= 0 && !h1Stretched)
       {
          dir = 1; s = 2.5 + (body > 0 && lowerWick > body * 0.5 ? 1.0 : 0) + (close1 > open1 ? 1.0 : 0);
       }
-      if(rsi > 72 && close1 > bbU - (bbU - bbL) * 0.15 && m15RSI > 65)
+      if(rsi > 72 && close1 > bbU - (bbU - bbL) * 0.15 && m15RSI > 65 && h1TrendDir <= 0 && !h1Stretched)
       {
          dir = -1; s = 2.5 + (body > 0 && upperWick > body * 0.5 ? 1.0 : 0) + (close1 < open1 ? 1.0 : 0);
       }
@@ -2066,6 +2088,87 @@ double   lastPyramidPx     = 0.0;        // v5.3.0 — tracks last add price for
 // and by per-position high-grade ratchet looseness).
 string   g_lastEntryGrade  = "B";
 double   g_lastEntryScore  = 0.0;
+
+bool IsSmartGuardDamageSetup(string setupName)
+{
+   return (StringFind(setupName, "TREND_PULLBACK") >= 0 ||
+           StringFind(setupName, "BREAKOUT") >= 0);
+}
+
+bool IsGradeAtLeastA(string grade)
+{
+   return (StringCompare(grade, "A") == 0 || StringFind(grade, "A+") >= 0);
+}
+
+struct SmartGuardStats
+{
+   int    samples;
+   int    wins;
+   int    losses;
+   double weight;
+   double winRate;
+   double expectancy;
+};
+
+void GetSmartGuardSetupStats(int setupType, SmartGuardStats &st)
+{
+   st.samples = 0; st.wins = 0; st.losses = 0;
+   st.weight = 0.0; st.winRate = 50.0; st.expectancy = 0.0;
+   if(setupType <= 0 || patternCount <= 0) return;
+
+   double w = 1.0;
+   double weightedWins = 0.0;
+   double weightedPnl = 0.0;
+
+   // Recency decay by pattern index: newest trade gets full weight, older
+   // trades fade. This prevents one bad historical cluster from poisoning a
+   // setup class forever and lets recent recovery rehabilitate it.
+   for(int i = patternCount - 1; i >= 0 && st.samples < 100; i--)
+   {
+      if(patterns[i].setupType != setupType) continue;
+      st.samples++;
+      if(patterns[i].wasWinner) { st.wins++; weightedWins += w; }
+      else st.losses++;
+      weightedPnl += patterns[i].profit * w;
+      st.weight += w;
+      w *= 0.92;
+   }
+
+   if(st.weight > 0.0)
+   {
+      st.winRate = (weightedWins / st.weight) * 100.0;
+      st.expectancy = weightedPnl / st.weight;
+   }
+}
+
+bool SmartGuardStrongTrendRetest(int signal, double setupScore, double combinedScore)
+{
+   if(signal == 0 || combinedScore < InpSmartGuardOverrideScore) return false;
+   if(!PG_HTFAlignedM15H1(signal)) return false;
+
+   bool regimeAligned =
+      (signal == 1 && (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP)) ||
+      (signal == -1 && (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN));
+   if(!regimeAligned) return false;
+
+   double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   if(atr <= 0.0) return false;
+   double mom = (iClose(Symbol(), PERIOD_M5, 1) - iClose(Symbol(), PERIOD_M5, 5)) / atr;
+   bool momentumAligned = (signal == 1 && mom >= 0.25) || (signal == -1 && mom <= -0.25);
+   if(!momentumAligned) return false;
+
+   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   bool cleanSpread = (InpMaxSpread <= 0 || spread <= InpMaxSpread * 0.85);
+   return (cleanSpread && setupScore >= 3.0);
+}
+
+bool SmartGuardInactivityRelaxed()
+{
+   if(InpSmartGuardRelaxAfterMin <= 0 || CountMyPositions() > 0) return false;
+   datetime anchor = lastTradeClose > 0 ? lastTradeClose : lastDayReset;
+   if(anchor <= 0) return false;
+   return (TimeCurrent() - anchor >= InpSmartGuardRelaxAfterMin * 60);
+}
 
 void CheckPyramidOpportunity()
 {
@@ -2146,6 +2249,30 @@ void CheckPyramidOpportunity()
    // Respect direction lockout (a lost side should not be re-pyramided)
    if(IsDirectionLocked(dir)) return;
 
+   if(InpPyramidRequireGradeA && !IsGradeAtLeastA(g_lastEntryGrade))
+   {
+      static datetime lastPyrGradeLog = 0;
+      if(TimeCurrent() - lastPyrGradeLog > 120)
+      {
+         Print("PYRAMID SKIPPED: original entry grade ", g_lastEntryGrade,
+               " is below A. Smart Guard requires A/A+ before stacking.");
+         lastPyrGradeLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(InpPyramidRequireHTF && !PG_HTFAlignedM15H1(dir))
+   {
+      static datetime lastPyrHtfLog = 0;
+      if(TimeCurrent() - lastPyrHtfLog > 120)
+      {
+         Print("PYRAMID SKIPPED: M15+H1 no longer align with ",
+               dir == 1 ? "BUY" : "SELL", " direction.");
+         lastPyrHtfLog = TimeCurrent();
+      }
+      return;
+   }
+
    // Regime must still support the direction
    ENUM_REGIME r = currentRegime;
    bool regimeOk = false;
@@ -2171,7 +2298,7 @@ void CheckPyramidOpportunity()
    double minMove = atr * InpPyramidMinATR;
 
    bool adverseTrigger = InpPyramidOnAdverse && moved <= -minMove;
-   bool trendTrigger   = InpPyramidOnTrend   && moved >=  (atr * 0.5);
+   bool trendTrigger   = InpPyramidOnTrend   && moved >= minMove;
    if(!adverseTrigger && !trendTrigger) return;
 
    // v5.3.1 — ADVERSE-PYRAMID SIGNAL-STRENGTH GATE.
@@ -2895,6 +3022,77 @@ void OnTick()
       }
    }
 
+   bool smartDamageSetup = InpSmartGuardEnable && IsSmartGuardDamageSetup(setupName);
+   double smartGuardExtraLotMulti = 1.0;
+   if(smartDamageSetup)
+   {
+      if(InpSmartGuardSkipBTrendBreak && grade == "B")
+      {
+         SmartGuardStats sgStats;
+         GetSmartGuardSetupStats(lastSetupType, sgStats);
+
+         bool enoughSamples = (sgStats.samples >= InpSmartGuardMinHardSamples);
+         bool hardBad = enoughSamples &&
+                        sgStats.expectancy <= InpSmartGuardHardExpectancy &&
+                        sgStats.winRate <= InpSmartGuardHardWinRate;
+         bool catastrophic = enoughSamples &&
+                             sgStats.expectancy <= (InpSmartGuardHardExpectancy * 2.0) &&
+                             sgStats.winRate <= MathMax(20.0, InpSmartGuardHardWinRate - 10.0);
+         bool strongRetest = SmartGuardStrongTrendRetest(signal, setupScore, combinedScore);
+         bool inactivityRelaxed = SmartGuardInactivityRelaxed();
+
+         if(catastrophic && !strongRetest && !inactivityRelaxed)
+         {
+            string sgMsg = StringFormat("SMART-GUARD HARD: %s B-grade blocked | combined %.1f | samples=%d W/L=%d/%d | decayed WR=%.0f%% exp=$%.0f | reason=statistically catastrophic. Re-enable: A-grade, HTF+momentum override >= %.1f, or inactivity relax after %d min.",
+                                        setupName, combinedScore, sgStats.samples, sgStats.wins, sgStats.losses,
+                                        sgStats.winRate, sgStats.expectancy, InpSmartGuardOverrideScore,
+                                        InpSmartGuardRelaxAfterMin);
+            Print("TRADE BLOCKED BECAUSE: ", sgMsg);
+            CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
+                               setupScore, combinedScore, "SG-HARD", signal);
+            UpdateDashboard(0, combinedScore, "SG-HARD");
+            lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "SG-HARD";
+            return;
+         }
+
+         if(!enoughSamples || hardBad || !strongRetest)
+         {
+            smartGuardExtraLotMulti = InpSmartGuardSoftLotMulti;
+            string mode = !enoughSamples ? "small-sample" : hardBad ? "negative-expectancy" : "B-grade-damage-class";
+            string relax = inactivityRelaxed ? " | inactivity relax active: hard veto downgraded to soft retest" : "";
+            string overrideTxt = strongRetest ? " | strong trend retest: HTF+momentum aligned" : "";
+            Print(StringFormat("SMART-GUARD SOFT: %s allowed with reduced risk x%.2f | mode=%s | combined %.1f | samples=%d W/L=%d/%d | decayed WR=%.0f%% exp=$%.0f%s%s",
+                               setupName, smartGuardExtraLotMulti, mode, combinedScore,
+                               sgStats.samples, sgStats.wins, sgStats.losses,
+                               sgStats.winRate, sgStats.expectancy, relax, overrideTxt));
+         }
+      }
+
+      if(InpSmartGuardRequireHTF && signal != 0 && !PG_HTFAlignedM15H1(signal))
+      {
+         string sgMsg = StringFormat("SMART-GUARD: %s blocked because M15+H1 do not align with %s.",
+                                     setupName, signal == 1 ? "BUY" : "SELL");
+         Print("TRADE BLOCKED BECAUSE: ", sgMsg);
+         CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "SG-HTF", signal);
+         UpdateDashboard(0, combinedScore, "SG-HTF");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "SG-HTF";
+         return;
+      }
+
+      if(InpSmartGuardNoDamageStack && CountMyPositions() > 0)
+      {
+         string sgMsg = StringFormat("SMART-GUARD: %s blocked while another position is open. No fresh stacking on damage-prone setup.",
+                                     setupName);
+         Print("TRADE BLOCKED BECAUSE: ", sgMsg);
+         CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "SG-STACK", signal);
+         UpdateDashboard(0, combinedScore, "SG-STACK");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "SG-STACK";
+         return;
+      }
+   }
+
    // v5.4.0 — A+ NOW REQUIRES H1 TREND ALIGNMENT.
    // Previously A+ was just "combinedScore >= 5.5" — which counter-trend
    // mean-reversion setups can easily hit, leading to over-confident bets
@@ -2947,6 +3145,34 @@ void OnTick()
       }
       UpdateDashboard(0, combinedScore, grade);
       lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = grade;
+      return;
+   }
+
+   // v5.8.5 — Global hedge guard.
+   // The old code allowed a fresh SELL while a BUY was still open (and vice versa)
+   // because it only checked total position count. That creates confused master
+   // exposure and can fan out mixed signals to cloud-linked accounts.
+   int openDir = GetOpenExposureDirection();
+   if(InpBlockNewEntriesIfHedged && openDir == 2)
+   {
+      string hedgeMsg = "HEDGE-GUARD: account already has BUY+SELL exposure. Managing existing trades only; no fresh entries.";
+      Print("TRADE BLOCKED BECAUSE: ", hedgeMsg);
+      CloudPostReasoning("BLOCK", hedgeMsg, RegimeName(), setupName,
+                         setupScore, combinedScore, "HEDGE-MIXED", signal);
+      UpdateDashboard(0, combinedScore, "HEDGE");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "HEDGE";
+      return;
+   }
+   if(InpOneDirectionOnly && openDir != 0 && openDir != signal)
+   {
+      string hedgeMsg = StringFormat("HEDGE-GUARD: open %s exists; blocking new %s until current exposure closes.",
+                                     openDir == 1 ? "BUY" : "SELL",
+                                     signal == 1 ? "BUY" : "SELL");
+      Print("TRADE BLOCKED BECAUSE: ", hedgeMsg);
+      CloudPostReasoning("BLOCK", hedgeMsg, RegimeName(), setupName,
+                         setupScore, combinedScore, "NO-HEDGE", signal);
+      UpdateDashboard(0, combinedScore, "NO-HEDGE");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "NO-HEDGE";
       return;
    }
 
@@ -3022,14 +3248,22 @@ void OnTick()
 
    // ============ GATE 4: RISK SIZING ============
    // v4.9.3 — Bigger lots scale with signal strength
-   double sizeMulti = grade == "A+" ? 1.5 : grade == "A" ? 1.2 : 0.8;
+   double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;
    int    confidenceBoostPP = 0;   // in percentage points, informational
+
+   if(smartDamageSetup && InpSmartGuardDamageLotMulti > 0)
+   {
+      sizeMulti *= InpSmartGuardDamageLotMulti * smartGuardExtraLotMulti;
+      Print("SMART-GUARD SIZE: ", setupName, " risk x",
+            DoubleToString(InpSmartGuardDamageLotMulti * smartGuardExtraLotMulti, 2),
+            " (live-history defensive sizing)");
+   }
 
    // ----- LOCAL ML (hierarchical signature match, mirrors hive) -----
    if(InpLearnPatterns && patternCount >= 5)
    {
       double mlRaw = GetMLScore(signal, signature);
-      double mlScore = SmoothedMLScore(mlRaw);   // v5.3.0 — WMA smoothing kills 0%↔100% flips
+      double mlScore = SmoothedMLScore(mlRaw, signature);   // v5.8.6 — smooth only inside the same setup/direction signature
       if(mlScore <= 0.30 && patternCount >= 10)
       {
          Print("TRADE BLOCKED BECAUSE: LOCAL ML VETO — WR=", DoubleToString(mlScore * 100, 0),
@@ -3201,6 +3435,21 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    long stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
    double minDist = stopLevel * point;
 
+   // v5.8.6 — Execution-layer hedge backstop. The main signal path already
+   // blocks this, but OpenTrade can also be reached by recovery/re-entry paths.
+   int openDir = GetOpenExposureDirection();
+   if(InpBlockNewEntriesIfHedged && openDir == 2)
+   {
+      Print("OPEN TRADE BLOCKED: existing mixed BUY+SELL exposure detected. Manage or close the hedge before adding risk.");
+      return;
+   }
+   if(InpOneDirectionOnly && openDir != 0 && openDir != signal)
+   {
+      Print("OPEN TRADE BLOCKED: one-direction mode active. Existing exposure dir=", openDir,
+            " new signal=", signal);
+      return;
+   }
+
    // v4.7.6 — AGGREGATE EXPOSURE GATE
    //   Sum up the $-loss-if-SL-hit across ALL currently-open positions in our magic.
    //   If it already exceeds InpMaxAggregateRiskPct% of equity, BLOCK new entries.
@@ -3317,9 +3566,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    // Lot sizing with grade multiplier
    double balance = accInfo.Balance();
    // v4.8.2 — Account Mode preset overrides InpRiskPercent
-   // v4.9.3 — Account mode risks bumped for bigger lots.
-   //   Old: BALANCED 0.8 / CONSERVATIVE 0.4 / AGGRESSIVE 1.2
-   //   New: BALANCED 1.2 / CONSERVATIVE 0.6 / AGGRESSIVE 2.0
+   // v5.8.4 — Restore original account-based risk presets for demo/cloud testing.
    double baseRisk = InpRiskPercent;
    if(InpAccountMode == ACCT_BALANCED)     baseRisk = 1.2;
    if(InpAccountMode == ACCT_CONSERVATIVE) baseRisk = 0.6;
@@ -3748,16 +3995,14 @@ bool ManageBasket()
 }
 
 //+------------------------------------------------------------------+
-//| v4.9.5 — CLEAN EXITS                                             |
+//| v5.8.3 — CLEAN EXITS                                             |
 //|   ONE exit authority per phase. No competing systems.            |
 //|                                                                  |
-//|   Phase 0 (0 to +1R):   initial SL only, zero trailing           |
-//|   Phase 1 (+1R to +2R): SL → entry + 0.2R cushion (lock tiny win)|
-//|   Phase 2 (+2R to +4R): Chandelier 3×ATR trail behind swing      |
-//|   Phase 3 (+3R):        close 30% partial (runner continues)     |
-//|   Phase 4 (+4R+):       Chandelier 2×ATR (tighter, bank more)    |
-//|   Invalidation:         M5 close strongly against + EMA flip     |
-//|   Stale:                > 4h AND profit < 0.5R → close           |
+//|   Losses: close only after structure + EMA/RSI/momentum          |
+//|           confirm that drawdown is invalidation, not noise.      |
+//|   Winners: partial at +2R, delayed BE in strong trends,          |
+//|            adaptive Chandelier trail after momentum confirms.    |
+//|   Stale: close only flat/choppy trades that fail to progress.    |
 //+------------------------------------------------------------------+
 // Per-ticket state: was partial taken already?
 ulong g_cePartialTickets[];   // tickets that have had their 30% partial close
@@ -3785,10 +4030,60 @@ void CleanMarkPartialTaken(ulong ticket)
    }
 }
 
+int CleanMomentumScore(bool isBuy, double close1, double open1, double close2, double emaF, double emaS, double rsi)
+{
+   int score = 0;
+   if(isBuy)
+   {
+      if(close1 > open1)  score++;
+      if(close1 > close2) score++;
+      if(close1 > emaF)   score++;
+      if(emaF > emaS)     score++;
+      if(rsi > 50 && rsi < 78) score++;
+   }
+   else
+   {
+      if(close1 < open1)  score++;
+      if(close1 < close2) score++;
+      if(close1 < emaF)   score++;
+      if(emaF < emaS)     score++;
+      if(rsi < 50 && rsi > 22) score++;
+   }
+   return score;
+}
+
+bool CleanRegimeAligned(bool isBuy)
+{
+   if(isBuy)
+      return (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP);
+   return (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN);
+}
+
+bool CleanChoppyRegime()
+{
+   return (currentRegime == REGIME_CHOPPY ||
+           currentRegime == REGIME_LOW_VOL ||
+           currentRegime == REGIME_RANGING);
+}
+
+void CleanStructureLevels(int lookback, double &swingLow, double &swingHigh)
+{
+   swingLow = DBL_MAX;
+   swingHigh = -DBL_MAX;
+   int lb = MathMax(lookback, 4);
+   for(int k = 2; k <= lb + 1; k++)
+   {
+      double hk = iHigh(Symbol(), PERIOD_M5, k);
+      double lk = iLow(Symbol(), PERIOD_M5, k);
+      if(hk > 0 && hk > swingHigh) swingHigh = hk;
+      if(lk > 0 && lk < swingLow)  swingLow = lk;
+   }
+}
+
 // Returns true if position was closed this tick (caller should skip further logic)
 bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double curPrice,
                                  double curSL, double curTP, double slDist, double atr,
-                                 double emaF, double close1, int digits, double rsi,
+                                 double emaF, double emaS, double close1, double open1, int digits, double rsi,
                                  int minsOpen, double lotsOpen)
 {
    if(!InpCleanExits) return false;
@@ -3797,42 +4092,72 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    // Compute current R-multiple of profit in price terms
    double priceProfit = isBuy ? (curPrice - openPx) : (openPx - curPrice);
    double rMult = priceProfit / slDist;   // negative if underwater
+   double close2 = iClose(Symbol(), PERIOD_M5, 2);
+   int momentumScore = CleanMomentumScore(isBuy, close1, open1, close2, emaF, emaS, rsi);
+   bool trendAligned = CleanRegimeAligned(isBuy);
+   bool choppyRegime = CleanChoppyRegime();
+   double swingLow, swingHigh;
+   CleanStructureLevels(InpCleanStructureLookback, swingLow, swingHigh);
+   double structBuf = atr * InpCleanStructureATRBuffer;
+   bool structureBroken = false;
+   if(isBuy && swingLow < DBL_MAX)
+      structureBroken = (close1 < swingLow - structBuf);
+   if(!isBuy && swingHigh > -DBL_MAX)
+      structureBroken = (close1 > swingHigh + structBuf);
+   bool emaAgainst = isBuy ? (close1 < emaF && emaF < emaS) : (close1 > emaF && emaF > emaS);
+   bool rsiAgainst = isBuy ? (rsi < 42) : (rsi > 58);
+   bool reversalCandle = isBuy ? (close1 < open1 && MathAbs(close1 - open1) >= atr * 0.45)
+                               : (close1 > open1 && MathAbs(close1 - open1) >= atr * 0.45);
+   int invalidScore = 0;
+   if(structureBroken) invalidScore += 2;
+   if(emaAgainst)      invalidScore++;
+   if(rsiAgainst)      invalidScore++;
+   if(reversalCandle)  invalidScore++;
 
    // ============ STALE CUT ============
-   if(InpCleanStaleHours > 0 && minsOpen >= InpCleanStaleHours * 60 && rMult < InpCleanStaleMinR)
+   if(InpCleanStagnantMinutes > 0 && minsOpen >= InpCleanStagnantMinutes &&
+      MathAbs(rMult) <= InpCleanStagnantMaxR && choppyRegime && !trendAligned)
    {
-      PrintFormat("CLEAN_STALE #%I64u %s | %dm open, only %.2fR → CLOSE",
-                  ticket, isBuy?"BUY":"SELL", minsOpen, rMult);
-      lastExitReason = StringFormat("STALE │ %.2fR after %dm", rMult, minsOpen);
+      PrintFormat("CLEAN_STAGNANT #%I64u %s | %dm open, %.2fR in %s → CLOSE",
+                  ticket, isBuy?"BUY":"SELL", minsOpen, rMult, RegimeName());
+      lastExitReason = StringFormat("STAGNANT │ %.2fR after %dm in %s", rMult, minsOpen, RegimeName());
+      trade.PositionClose(ticket);
+      return true;
+   }
+
+   if(InpCleanStaleHours > 0 && minsOpen >= InpCleanStaleHours * 60 &&
+      rMult < InpCleanStaleMinR && (!trendAligned || momentumScore <= 2))
+   {
+      PrintFormat("CLEAN_STALE #%I64u %s | %dm open, %.2fR, trendAligned=%s momentum=%d/5 → CLOSE",
+                  ticket, isBuy?"BUY":"SELL", minsOpen, rMult, trendAligned?"Y":"N", momentumScore);
+      lastExitReason = StringFormat("STALE │ %.2fR after %dm momentum %d/5", rMult, minsOpen, momentumScore);
       trade.PositionClose(ticket);
       return true;
    }
 
    // ============ MOMENTUM-FLIP INVALIDATION ============
-   // Only after a decent window (>10 bars = 50min) so we don't cut to fakeouts
-   if(InpCleanMomentumInvalidation && minsOpen >= 50)
+   // Requires structure + volatility/momentum evidence, so normal gold pullbacks survive.
+   if(InpCleanMomentumInvalidation && minsOpen >= InpCleanMinInvalidationMin)
    {
-      // Strong close against direction (> 1× ATR body) + EMA flipped against us
-      double open1 = iOpen(Symbol(), PERIOD_M5, 1);
-      double bodySize = MathAbs(close1 - open1);
-      bool strongReversalBar = bodySize > atr * 0.8;
-      bool closeAgainst = isBuy ? (close1 < open1) : (close1 > open1);
-      bool emaAgainst = isBuy ? (close1 < emaF) : (close1 > emaF);
-      // Extra filter: RSI crossed mid (50) against us — confirms real momentum shift
-      bool rsiAgainst = isBuy ? (rsi < 45) : (rsi > 55);
-
-      if(strongReversalBar && closeAgainst && emaAgainst && rsiAgainst && rMult < 1.0)
+      bool confirmedInvalid = (rMult <= -InpCleanMaxLossR && invalidScore >= 3) ||
+                              (structureBroken && emaAgainst && rsiAgainst && rMult < 0.35);
+      bool emergencyInvalid = (rMult <= -InpCleanEmergencyLossR && invalidScore >= 2);
+      if(confirmedInvalid || emergencyInvalid)
       {
-         PrintFormat("CLEAN_FLIP #%I64u %s | body=%.2f atr=%.2f emaFlip=Y rsi=%.1f → CLOSE",
-                     ticket, isBuy?"BUY":"SELL", bodySize, atr, rsi);
-         lastExitReason = StringFormat("MOMENTUM FLIP │ %.2fR cut early", rMult);
+         PrintFormat("CLEAN_INVALID #%I64u %s | %.2fR invalidScore=%d struct=%s ema=%s rsi=%s rev=%s → CLOSE",
+                     ticket, isBuy?"BUY":"SELL", rMult, invalidScore,
+                     structureBroken?"Y":"N", emaAgainst?"Y":"N", rsiAgainst?"Y":"N", reversalCandle?"Y":"N");
+         lastExitReason = StringFormat("INVALIDATION │ %.2fR score %d", rMult, invalidScore);
          trade.PositionClose(ticket);
          return true;
       }
    }
 
    // ============ PHASE 1: BREAKEVEN LOCK @ +1R ============
-   if(rMult >= InpCleanBEActivateR)
+   double beActivateR = InpCleanBEActivateR;
+   if(trendAligned && momentumScore >= 4) beActivateR += 0.35;
+   if(choppyRegime) beActivateR = MathMax(1.0, beActivateR - 0.25);
+   if(rMult >= beActivateR)
    {
       double cushionDist = slDist * InpCleanBECushionR;
       double beSL = isBuy ? NormalizeDouble(openPx + cushionDist, digits)
@@ -3849,9 +4174,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          if(sane)
          {
             if(SafeModifySL(ticket, beSL, curTP, isBuy, curPrice, "CLEAN_BE"))
-               PrintFormat("CLEAN_BE #%I64u %s | %.2fR → SL=%s (lock +%.2fR)",
+               PrintFormat("CLEAN_BE #%I64u %s | %.2fR → SL=%s (lock +%.2fR, trigger %.2fR)",
                            ticket, isBuy?"BUY":"SELL", rMult,
-                           DoubleToString(beSL, digits), InpCleanBECushionR);
+                           DoubleToString(beSL, digits), InpCleanBECushionR, beActivateR);
          }
       }
    }
@@ -3878,10 +4203,16 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    }
 
    // ============ PHASE 2 & 4: CHANDELIER TRAIL ============
-   if(rMult >= InpCleanChandelierStartR)
+   double trailStartR = InpCleanChandelierStartR;
+   if(trendAligned && momentumScore >= 4) trailStartR += 0.50;
+   if(choppyRegime) trailStartR = MathMax(1.50, trailStartR - 0.50);
+   bool momentumConfirmed = (momentumScore >= (trendAligned ? 3 : 2)) || rMult >= 4.0;
+   if(rMult >= trailStartR && momentumConfirmed)
    {
       // Tighter trail once we're past +4R (bank more of the move)
       double chanATR = (rMult >= 4.0) ? InpCleanChandelierATR2 : InpCleanChandelierATR1;
+      if(trendAligned && momentumScore >= 4) chanATR += 0.60;
+      if(choppyRegime && momentumScore <= 2) chanATR = MathMax(1.80, chanATR - 0.70);
       double chanDist = atr * chanATR;
       // Find highest high / lowest low over lookback bars (Chandelier Exit classic)
       int lb = InpCleanChandelierLookback;
@@ -3904,8 +4235,8 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       if(advance && profitZone && sane)
       {
          if(SafeModifySL(ticket, chanSL, curTP, isBuy, curPrice, "CLEAN_CHAN"))
-            PrintFormat("CLEAN_CHAN #%I64u %s | %.2fR | chan=%.1fxATR | SL=%s",
-                        ticket, isBuy?"BUY":"SELL", rMult, chanATR,
+            PrintFormat("CLEAN_CHAN #%I64u %s | %.2fR | chan=%.1fxATR | momentum=%d/5 | SL=%s",
+                        ticket, isBuy?"BUY":"SELL", rMult, chanATR, momentumScore,
                         DoubleToString(chanSL, digits));
       }
    }
@@ -3975,7 +4306,7 @@ void ManagePositions()
       if(InpCleanExits)
       {
          if(ManageCleanExitsForPosition(ticket, isBuy, openPx, curPrice, curSL, curTP,
-                                        slDist, atr, emaF, close1, digits, rsi,
+                                        slDist, atr, emaF, emaS, close1, open1, digits, rsi,
                                         minsOpen, lotsOpen))
             continue;
          // Skip ALL legacy trailing systems below — Clean Exits owns this ticket.
@@ -5324,6 +5655,22 @@ int CountMyPositions()
    return c;
 }
 
+int GetOpenExposureDirection()
+{
+   int buys = 0, sells = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      if(posInfo.PositionType() == POSITION_TYPE_BUY) buys++;
+      else sells++;
+   }
+   if(buys > 0 && sells > 0) return 2;   // mixed hedge already exists
+   if(buys > 0) return 1;
+   if(sells > 0) return -1;
+   return 0;
+}
+
 void CloseAll()
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -5622,9 +5969,9 @@ bool HasExhaustionDivergence(int signal)
    int hRSI_div = iRSI(Symbol(), PERIOD_M5, 14, PRICE_CLOSE);
    if(hRSI_div == INVALID_HANDLE) return false;
    double rsi[20], hi[20], lo[20];
-   if(CopyBuffer(hRSI_div, 0, 0, 20, rsi) < 20) return false;
-   if(CopyHigh(Symbol(), PERIOD_M5, 0, 20, hi) < 20) return false;
-   if(CopyLow (Symbol(), PERIOD_M5, 0, 20, lo) < 20) return false;
+   if(CopyBuffer(hRSI_div, 0, 1, 20, rsi) < 20) { IndicatorRelease(hRSI_div); return false; }
+   if(CopyHigh(Symbol(), PERIOD_M5, 1, 20, hi) < 20) { IndicatorRelease(hRSI_div); return false; }
+   if(CopyLow (Symbol(), PERIOD_M5, 1, 20, lo) < 20) { IndicatorRelease(hRSI_div); return false; }
    // Find two most recent local maxima/minima (simple 3-bar pivots).
    int p1 = -1, p2 = -1;
    for(int i = 2; i < 17; i++)
@@ -5639,14 +5986,16 @@ bool HasExhaustionDivergence(int signal)
          }
       }
    }
-   if(p1 < 0 || p2 < 0) return false;
+   if(p1 < 0 || p2 < 0) { IndicatorRelease(hRSI_div); return false; }
+   bool diverged = false;
    if(signal == +1) {
       // p1 is the more recent high (smaller index)
-      if(hi[p1] > hi[p2] && rsi[p1] < rsi[p2] && rsi[p2] >= 60.0) return true;
+      if(hi[p1] > hi[p2] && rsi[p1] < rsi[p2] && rsi[p2] >= 60.0) diverged = true;
    } else {
-      if(lo[p1] < lo[p2] && rsi[p1] > rsi[p2] && rsi[p2] <= 40.0) return true;
+      if(lo[p1] < lo[p2] && rsi[p1] > rsi[p2] && rsi[p2] <= 40.0) diverged = true;
    }
-   return false;
+   IndicatorRelease(hRSI_div);
+   return diverged;
 }
 
 // v5.3.0 — Phase 2: Momentum slowdown (entry-bar weakness check).
@@ -5656,9 +6005,9 @@ bool IsMomentumWeak(int signal)
 {
    if(!InpMomentumSlowdown) return false;
    double hi[3], lo[3], cl[3];
-   if(CopyHigh(Symbol(), PERIOD_M5, 0, 3, hi) < 3) return false;
-   if(CopyLow (Symbol(), PERIOD_M5, 0, 3, lo) < 3) return false;
-   if(CopyClose(Symbol(), PERIOD_M5, 0, 3, cl) < 3) return false;
+   if(CopyHigh(Symbol(), PERIOD_M5, 1, 3, hi) < 3) return false;
+   if(CopyLow (Symbol(), PERIOD_M5, 1, 3, lo) < 3) return false;
+   if(CopyClose(Symbol(), PERIOD_M5, 1, 3, cl) < 3) return false;
    double maxH = MathMax(hi[0], MathMax(hi[1], hi[2]));
    double minL = MathMin(lo[0], MathMin(lo[1], lo[2]));
    double range = maxH - minL;
@@ -5674,10 +6023,18 @@ bool IsMomentumWeak(int signal)
 double  g_mlHistory[10];
 int     g_mlHistIdx = 0;
 int     g_mlHistCount = 0;
-double SmoothedMLScore(double rawScore)
+string  g_mlLastSignature = "";
+double SmoothedMLScore(double rawScore, string signature)
 {
    if(InpMLSmoothingBars <= 1) return rawScore;
    int n = MathMin(InpMLSmoothingBars, 10);
+   if(InpResetMLSmoothingBySignature && signature != g_mlLastSignature)
+   {
+      ArrayInitialize(g_mlHistory, 0.0);
+      g_mlHistIdx = 0;
+      g_mlHistCount = 0;
+      g_mlLastSignature = signature;
+   }
    g_mlHistory[g_mlHistIdx] = rawScore;
    g_mlHistIdx = (g_mlHistIdx + 1) % n;
    if(g_mlHistCount < n) g_mlHistCount++;
@@ -5701,9 +6058,9 @@ bool IsFakeBreakout(int signal)
    if(!InpFakeBreakoutGuard) return false;
    int N = 20;
    double hi[20], lo[20], cl[2];
-   if(CopyHigh(Symbol(), PERIOD_M5, 1, N, hi) < N) return false;
-   if(CopyLow (Symbol(), PERIOD_M5, 1, N, lo) < N) return false;
-   if(CopyClose(Symbol(), PERIOD_M5, 0, 2, cl) < 2) return false;
+   if(CopyHigh(Symbol(), PERIOD_M5, 2, N, hi) < N) return false;
+   if(CopyLow (Symbol(), PERIOD_M5, 2, N, lo) < N) return false;
+   if(CopyClose(Symbol(), PERIOD_M5, 1, 2, cl) < 2) return false;
    double maxH = hi[ArrayMaximum(hi)];
    double minL = lo[ArrayMinimum(lo)];
    if(signal == +1) {
@@ -6324,7 +6681,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.1 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.7 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

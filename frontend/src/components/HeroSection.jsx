@@ -1,95 +1,123 @@
 import React from "react";
-import { ArrowDown, ChartLineUp, Lightning, ShieldCheck, Brain } from "@phosphor-icons/react";
+import { ArrowDown, Brain, ChartLineUp, ShieldCheck, Lightning, Pulse, CloudArrowUp } from "@phosphor-icons/react";
 
 export default function HeroSection({ performance }) {
   const stats = [
-    { label: "WIN RATE", value: performance?.win_rate ? `${performance.win_rate}%` : "--", icon: ChartLineUp },
-    { label: "PROFIT FACTOR", value: performance?.profit_factor ? `${performance.profit_factor}` : "--", icon: Lightning },
-    { label: "MAX DRAWDOWN", value: performance?.max_drawdown ? `${performance.max_drawdown}%` : "--", icon: ShieldCheck },
-    { label: "AVG WEEKLY", value: performance?.weekly_return_avg ? `+${performance.weekly_return_avg}%` : "--", icon: ChartLineUp },
+    { label: "Backtest WR", value: performance?.win_rate ? `${performance.win_rate}%` : "--", icon: ChartLineUp, tone: "text-emerald-300" },
+    { label: "Profit factor", value: performance?.profit_factor ? `${performance.profit_factor}` : "--", icon: Lightning, tone: "text-amber-200" },
+    { label: "Max DD", value: performance?.max_drawdown ? `${performance.max_drawdown}%` : "--", icon: ShieldCheck, tone: "text-sky-300" },
+    { label: "Master EA", value: "v5.8.7", icon: Brain, tone: "text-violet-300" },
   ];
 
   return (
-    <div className="relative overflow-hidden bg-[#F8F9FA]" data-testid="hero-section">
-      <div className="absolute inset-0 opacity-[0.04]">
-        <img src="https://static.prod-images.emergentagent.com/jobs/d4562f89-eddf-4449-aed8-4236c30b6dde/images/9fc66b22efe10478c08b0f89c90815192ec833fb8b7bdcad47afaafe5168470a.png" alt="" className="w-full h-full object-cover" />
+    <div className="relative overflow-hidden bg-[#07090d] text-white" data-testid="hero-section">
+      <div className="absolute inset-0">
+        <img
+          src="https://static.prod-images.emergentagent.com/jobs/d4562f89-eddf-4449-aed8-4236c30b6dde/images/9fc66b22efe10478c08b0f89c90815192ec833fb8b7bdcad47afaafe5168470a.png"
+          alt=""
+          className="h-full w-full object-cover opacity-[0.18] mix-blend-screen"
+        />
+        <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(7,9,13,0.74),#07090d_78%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_20%,rgba(52,211,153,0.18),transparent_30%),radial-gradient(circle_at_82%_18%,rgba(245,158,11,0.16),transparent_28%)]" />
       </div>
 
-      <div className="relative z-10 max-w-7xl mx-auto px-6 md:px-12 pt-20 pb-24">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+      <div className="relative z-10 mx-auto max-w-7xl px-4 pb-16 pt-12 md:px-8 md:pb-24 md:pt-20">
+        <div className="grid gap-8 lg:grid-cols-[1.02fr_0.98fr] lg:items-center">
           <div>
-            <div className="flex items-center gap-3 mb-8 animate-fade-up">
-              <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-gray-400 bg-white border border-gray-200 px-3 py-1.5 rounded-full">MT5 EXPERT ADVISOR</span>
-              <span className="text-[10px] font-mono font-bold tracking-[0.12em] text-[#C5A059] bg-[#C5A059]/10 border border-[#C5A059]/20 px-3 py-1.5 rounded-full flex items-center gap-1.5">
-                <Brain size={12} weight="fill" /> POWERED BY GPT-5.2
+            <div className="mb-5 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-200">
+                <Pulse size={12} weight="fill" /> Adaptive Smart-Guard
+              </span>
+              <span className="rounded-full border border-white/10 bg-white/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-white/60">
+                XAUUSD · M5 · MT5
               </span>
             </div>
 
-            <h1 className="font-heading text-5xl sm:text-6xl lg:text-7xl font-semibold tracking-tight leading-[1] mb-6 text-[#111] animate-fade-up delay-100" data-testid="hero-title">
-              XauAI<br /><span className="gold-gradient-text">Sniper</span>
+            <h1 className="max-w-4xl font-heading text-5xl font-semibold leading-[0.94] tracking-tight sm:text-6xl lg:text-7xl" data-testid="hero-title">
+              Gold trading control, built like a modern risk desk.
             </h1>
 
-            <p className="text-base lg:text-lg leading-relaxed text-gray-500 max-w-xl mb-8 animate-fade-up delay-200">
-              The first Gold trading bot with <span className="text-[#111] font-semibold">real AI analysis</span>.
-              GPT-5.2 evaluates every trade. Machine learning adapts. News filter protects.
+            <p className="mt-6 max-w-2xl text-base leading-7 text-white/68 md:text-lg">
+              XauAI Sniper combines trend logic, volatility-aware exits, cloud copy flow, and the latest v5.8.7 adaptive guard so the bot can protect capital without freezing all day.
             </p>
 
-            <div className="flex items-center gap-4 animate-fade-up delay-300">
-              <a href="#purchase" data-testid="hero-download-btn"
-                className="inline-flex items-center gap-2 bg-[#111] text-white rounded-full px-8 py-4 font-semibold text-sm tracking-wide hover:bg-gray-800 transition-colors">
-                <ArrowDown size={16} weight="bold" /> GET STARTED
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <a href="#download" data-testid="hero-download-btn" className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
+                <ArrowDown size={17} weight="bold" /> Download v5.8.7
               </a>
-              <a href="#how-it-works" data-testid="hero-explore-btn"
-                className="inline-flex items-center gap-2 bg-white text-[#111] border border-gray-200 rounded-full px-8 py-4 font-medium text-sm tracking-wide hover:border-gray-400 hover:bg-gray-50 transition-all">
-                EXPLORE SYSTEM
+              <a href="/cloud" data-testid="hero-cloud-btn" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.08] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.12]">
+                <CloudArrowUp size={17} weight="bold" /> Open Cloud
               </a>
             </div>
+
+            <p className="mt-4 max-w-xl text-xs leading-5 text-white/42">
+              Trading is risky. Start on demo, backtest your broker data, and use account-sized risk.
+            </p>
           </div>
 
-          <div className="hidden lg:block animate-fade-up delay-400">
-            <div className="bg-white border border-gray-200 rounded-3xl p-8 shadow-sm card-hover">
-              <div className="flex items-center gap-2 mb-6">
-                <Brain size={18} weight="duotone" className="text-[#C5A059]" />
-                <span className="text-[11px] font-mono font-bold tracking-[0.15em] text-gray-400">AI ANALYSIS PREVIEW</span>
+          <div className="relative">
+            <div className="overflow-hidden rounded-[28px] border border-white/[0.12] bg-[#0c1118]/[0.88] shadow-2xl shadow-black/[0.45] backdrop-blur">
+              <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-white/40">Master terminal</div>
+                  <div className="mt-1 font-semibold">XAUUSD AI Sniper v5.8.7</div>
+                </div>
+                <div className="rounded-full bg-emerald-300 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#06110c]">Live</div>
               </div>
-              <div className="space-y-0 font-mono text-xs divide-y divide-gray-100">
-                {[["Market", "XAUUSD — BULLISH", "text-[#111]"],
-                  ["EMA 50/200", "Aligned UP", "text-emerald-600"],
-                  ["RSI(14)", "54.2", "text-[#111]"],
-                  ["News Check", "Clear", "text-emerald-600"],
-                  ["GPT-5.2", "BUY — 78% confidence", "text-[#C5A059] font-bold"],
-                ].map(([k, v, c]) => (
-                  <div key={k} className="flex items-center justify-between py-3">
-                    <span className="text-gray-400">{k}</span>
-                    <span className={c}>{v}</span>
+
+              <div className="p-5">
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    ["Regime", "Trend down", "text-sky-200"],
+                    ["Guard", "Soft retest", "text-emerald-300"],
+                    ["Risk", "Account-sized", "text-amber-200"],
+                    ["Cloud", "Fanout ready", "text-violet-200"],
+                  ].map(([label, value, tone]) => (
+                    <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                      <div className="font-mono text-[10px] uppercase tracking-widest text-white/35">{label}</div>
+                      <div className={`mt-2 font-mono text-sm font-bold ${tone}`}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <span className="font-mono text-[10px] uppercase tracking-widest text-white/35">Smart-Guard reasoning</span>
+                    <span className="rounded-full bg-emerald-300/10 px-2 py-1 font-mono text-[9px] font-bold text-emerald-200">transparent logs</span>
                   </div>
-                ))}
-              </div>
-              <div className="mt-4 p-4 bg-[#F8F9FA] rounded-2xl border border-gray-100">
-                <p className="text-[11px] text-gray-500 italic leading-relaxed">
-                  "Strong bullish momentum with H1 trend confirmation. RSI healthy, no overbought risk. Recommend BUY with default risk."
-                </p>
-                <p className="text-[10px] text-[#C5A059] mt-2 font-mono font-bold">— GPT-5.2 AI Engine</p>
+                  <div className="space-y-2 font-mono text-[11px] leading-5 text-white/58">
+                    <p><span className="text-emerald-300">SOFT</span> · B-grade pullback allowed with reduced risk</p>
+                    <p><span className="text-sky-300">CHECK</span> · samples, decayed expectancy, HTF alignment</p>
+                    <p><span className="text-amber-200">RETEST</span> · inactivity relaxation prevents all-day paralysis</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 h-24 rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(16,185,129,0.12),rgba(245,158,11,0.04))] px-4 py-3">
+                  <div className="flex h-full items-end justify-between gap-1">
+                    {[36, 42, 38, 54, 49, 67, 72, 62, 76, 88, 81, 94, 89, 100].map((h, i) => (
+                      <span key={i} className="w-full rounded-t bg-gradient-to-t from-emerald-400/55 to-amber-200" style={{ height: `${h}%` }} />
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-20 animate-fade-up delay-500" data-testid="hero-stats">
+        <div className="mt-10 grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="hero-stats">
           {stats.map((s) => {
             const Icon = s.icon;
             return (
-              <div key={s.label} className="bg-white border border-gray-200 rounded-2xl p-6 card-hover" data-testid={`hero-stat-${s.label.toLowerCase().replace(/\s/g, "-")}`}>
-                <div className="flex items-center gap-2 mb-3">
-                  <Icon size={14} weight="duotone" className="text-[#C5A059]" />
-                  <span className="text-[10px] font-mono font-medium tracking-[0.15em] text-gray-400">{s.label}</span>
+              <div key={s.label} className="rounded-2xl border border-white/10 bg-white/[0.055] p-4 backdrop-blur" data-testid={`hero-stat-${s.label.toLowerCase().replace(/\s/g, "-")}`}>
+                <div className="mb-3 flex items-center gap-2">
+                  <Icon size={15} weight="duotone" className={s.tone} />
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">{s.label}</span>
                 </div>
-                <div className="font-mono text-2xl font-bold text-[#111]">{s.value}</div>
+                <div className="font-mono text-xl font-black">{s.value}</div>
               </div>
             );
           })}
         </div>
-        <p className="text-[10px] text-gray-300 font-mono tracking-wide mt-4 px-1">* Sample backtest metrics. Past performance does not guarantee future results.</p>
       </div>
     </div>
   );

@@ -3,8 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Cloud, Loader2 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "@/lib/api";
 
 // Scoped axios instance for cloud auth — avoids polluting global axios defaults
 // that could leak into the admin portal if the same browser session uses both.

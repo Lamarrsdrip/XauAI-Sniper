@@ -5,6 +5,7 @@ import { Cloud, Pause, Play, Shield, LogOut, TrendingUp, TrendingDown, Loader2, 
 import InstallAppPrompt from "./InstallAppPrompt";
 import { forceRefreshApp } from "@/registerSW";
 import { FALLBACK_BROKER_SERVERS } from "./brokerServers";
+import { API } from "@/lib/api";
 
 // Compact relative-time formatter ("12s ago", "3m ago", "2h ago")
 const relativeTime = (iso) => {
@@ -17,8 +18,6 @@ const relativeTime = (iso) => {
     return `${Math.floor(s/86400)}d ago`;
   } catch { return "—"; }
 };
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 // Scoped axios instance — never touches global defaults (avoids leaking Bearer
 // token into admin portal or other axios calls that run in the same session)

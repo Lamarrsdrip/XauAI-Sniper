@@ -1,54 +1,98 @@
 import React from "react";
-import { DownloadSimple, FileCode, Package, Warning } from "@phosphor-icons/react";
+import { DownloadSimple, FileCode, Package, Warning, ShieldCheck, CloudArrowUp } from "@phosphor-icons/react";
 
 export default function DownloadSection({ api }) {
   return (
-    <div className="bg-[#F8F9FA] border-t border-gray-100" data-testid="download-section">
-      <div className="max-w-7xl mx-auto px-6 md:px-12 py-24">
-        <div className="mb-12">
-          <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-gray-400 bg-white border border-gray-200 px-3 py-1.5 rounded-full"><DownloadSimple size={12} weight="bold" className="inline mr-1" />DOWNLOAD CENTER</span>
-          <h2 className="font-heading text-3xl sm:text-4xl font-semibold tracking-tight mt-6 text-[#111]" data-testid="download-title">Get the Expert Advisor</h2>
-          <p className="text-gray-500 mt-2">Download v4.9.3 — Bigger Lots: A+ signals 1.5× base, BALANCED risk 1.2%, equity cap 3%. Matches account size.</p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
-          <div className="bg-white border border-gray-200 rounded-3xl p-8 card-hover" data-testid="download-ea-card">
-            <div className="flex items-start gap-4 mb-6">
-              <div className="w-12 h-12 bg-[#C5A059]/10 border border-[#C5A059]/20 rounded-2xl flex items-center justify-center"><FileCode size={22} weight="duotone" className="text-[#C5A059]" /></div>
-              <div>
-                <h3 className="font-heading text-lg font-medium text-[#111]">Expert Advisor (.mq5)</h3>
-                <p className="text-sm text-gray-400 mt-1">v4.9.3 — Grade A+=1.5, A=1.2, B=0.8 × acct risk. $50k A+ now ~4-5 lots. Signal strength matters.</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 mb-5 text-[10px] font-mono text-gray-300 tracking-wide">
-              <span>XAUUSD_AI_Sniper_EA.mq5</span><span>|</span><span>~185 KB</span><span>|</span><span>v4.9.7</span>
-            </div>
-            <a href={`${api}/download/ea`} data-testid="download-ea-button"
-              className="inline-flex items-center gap-2 bg-[#111] text-white rounded-full px-6 py-3 font-semibold text-sm hover:bg-gray-800 transition-colors">
-              <DownloadSimple size={16} weight="bold" /> DOWNLOAD .MQ5
-            </a>
-          </div>
-          <div className="bg-white border border-gray-200 rounded-3xl p-8 card-hover" data-testid="download-package-card">
-            <div className="flex items-start gap-4 mb-6">
-              <div className="w-12 h-12 bg-gray-100 border border-gray-200 rounded-2xl flex items-center justify-center"><Package size={22} weight="duotone" className="text-gray-400" /></div>
-              <div>
-                <h3 className="font-heading text-lg font-medium text-[#111]">Complete Package (.zip)</h3>
-                <p className="text-sm text-gray-400 mt-1">Full bundle with docs and config templates</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 mb-5 text-[10px] font-mono text-gray-300 tracking-wide">
-              <span>AI_Sniper_EA_Package.zip</span><span>|</span><span>Complete Bundle</span>
-            </div>
-            <a href={`${api}/download/package`} data-testid="download-package-button"
-              className="inline-flex items-center gap-2 bg-white text-[#111] border border-gray-200 rounded-full px-6 py-3 font-medium text-sm hover:border-gray-400 transition-colors">
-              <DownloadSimple size={16} weight="bold" /> DOWNLOAD ZIP
-            </a>
-          </div>
-        </div>
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 flex items-start gap-3" data-testid="download-warning">
-          <Warning size={18} weight="fill" className="text-amber-500 flex-shrink-0 mt-0.5" />
+    <div className="bg-[#07090d] text-white" data-testid="download-section">
+      <div className="mx-auto max-w-7xl px-4 py-16 md:px-8 md:py-24">
+        <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
           <div>
-            <p className="text-sm font-medium text-[#111] mb-1">Important Notice</p>
-            <p className="text-sm text-gray-500 leading-relaxed">This EA is for educational and research purposes. Backtest thoroughly and start with a demo account. Trading involves significant risk.</p>
+            <span className="inline-flex items-center gap-2 rounded-full border border-amber-300/25 bg-amber-300/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
+              <DownloadSimple size={12} weight="bold" /> Download center
+            </span>
+            <h2 className="mt-5 max-w-3xl font-heading text-3xl font-semibold tracking-tight sm:text-5xl" data-testid="download-title">
+              Latest master build: v5.8.7 Adaptive Guard.
+            </h2>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
+              This is the current build from this workspace. Public downloads are sanitized by the backend for customer safety; admin master download remains protected.
+            </p>
+          </div>
+          <a href="/cloud" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
+            <CloudArrowUp size={16} weight="bold" /> Use cloud copy
+          </a>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.08fr_0.92fr]">
+          <div className="rounded-[28px] border border-white/10 bg-white/[0.055] p-5 shadow-2xl shadow-black/20 md:p-7" data-testid="download-ea-card">
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex gap-4">
+                <div className="flex h-14 w-14 flex-none items-center justify-center rounded-2xl border border-amber-300/25 bg-amber-300/10">
+                  <FileCode size={25} weight="duotone" className="text-amber-200" />
+                </div>
+                <div>
+                  <h3 className="font-heading text-2xl font-semibold">Expert Advisor (.mq5)</h3>
+                  <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
+                    Includes v5.8.7 SMART-GUARD: sample-aware expectancy, soft-veto sizing, inactivity relaxation, hedge guard, and balanced trade management.
+                  </p>
+                </div>
+              </div>
+              <span className="inline-flex w-fit rounded-full bg-emerald-300 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#06110c]">Current</span>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              {[
+                ["Version", "5.8.7"],
+                ["File", "MQ5 source"],
+                ["Risk", "Account-sized"],
+              ].map(([k, v]) => (
+                <div key={k} className="rounded-2xl border border-white/10 bg-black/[0.24] p-4">
+                  <div className="font-mono text-[10px] uppercase tracking-widest text-white/35">{k}</div>
+                  <div className="mt-1 font-mono text-sm font-bold">{v}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+              <a href={`${api}/download/ea`} data-testid="download-ea-button" className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
+                <DownloadSimple size={17} weight="bold" /> Download v5.8.7 .MQ5
+              </a>
+              <a href="/cloud" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
+                Cloud setup
+              </a>
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-white/10 bg-white/[0.035] p-5 md:p-7" data-testid="download-package-card">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 flex-none items-center justify-center rounded-2xl border border-sky-300/20 bg-sky-300/10">
+                <Package size={24} weight="duotone" className="text-sky-200" />
+              </div>
+              <div>
+                <h3 className="font-heading text-xl font-semibold">Complete package</h3>
+                <p className="mt-2 text-sm leading-6 text-white/55">EA bundle with the code package used by the backend download center.</p>
+              </div>
+            </div>
+            <a href={`${api}/download/package`} data-testid="download-package-button" className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
+              <DownloadSimple size={17} weight="bold" /> Download ZIP
+            </a>
+
+            <div className="mt-6 rounded-2xl border border-emerald-300/20 bg-emerald-300/[0.08] p-4">
+              <div className="mb-2 flex items-center gap-2 font-semibold text-emerald-200">
+                <ShieldCheck size={18} weight="fill" /> Safer by design
+              </div>
+              <p className="text-sm leading-6 text-white/56">
+                The customer endpoint strips cloud-master fanout settings before download. Use the admin portal only for protected master files.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4" data-testid="download-warning">
+          <div className="flex items-start gap-3">
+            <Warning size={19} weight="fill" className="mt-0.5 flex-none text-amber-200" />
+            <p className="text-sm leading-6 text-white/62">
+              Backtest before live use. This tool can improve discipline and risk control, but no trading system can guarantee profit.
+            </p>
           </div>
         </div>
       </div>

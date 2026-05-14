@@ -19,9 +19,7 @@ import { CloudSignup, CloudLogin } from "@/components/cloud/CloudAuth";
 import CloudDashboard from "@/components/cloud/CloudDashboard";
 import CloudPromoSection from "@/components/CloudPromoSection";
 import CloudFunnelBanner from "@/components/CloudFunnelBanner";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import { API } from "@/lib/api";
 
 function MainDashboard() {
   const [activeSection, setActiveSection] = useState("overview");
