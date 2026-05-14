@@ -1,5 +1,5 @@
 import React from "react";
-import { Crosshair, DownloadSimple, TrendUp, TrendDown, Cloud, Menu } from "@phosphor-icons/react";
+import { Crosshair, DownloadSimple, TrendUp, TrendDown, Cloud, List } from "@phosphor-icons/react";
 import XauAiLogo from "./cloud/XauAiLogo";
 
 const NAV = [
@@ -67,7 +67,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
             <DownloadSimple size={14} weight="bold" /> EA
           </button>
           <button aria-label="Open menu" className="rounded-full border border-white/10 p-2 text-white/70 lg:hidden">
-            <Menu size={18} weight="bold" />
+            <List size={18} weight="bold" />
           </button>
         </div>
       </div>
