@@ -2055,8 +2055,9 @@ async def cloud_me(user: dict = Depends(get_cloud_user)):
     if ends:
         try:
             end_dt = datetime.fromisoformat(ends.replace("Z", "+00:00"))
-            u["days_remaining"] = max(0, (end_dt - datetime.now(timezone.utc)).days)
-            u["subscription_active"] = datetime.now(timezone.utc) < end_dt
+            remaining = end_dt - datetime.now(timezone.utc)
+            u["subscription_active"] = remaining.total_seconds() > 0
+            u["days_remaining"] = max(0, int((remaining.total_seconds() + 86399) // 86400))
         except Exception:
             u["days_remaining"] = 0; u["subscription_active"] = False
     return u
@@ -2321,7 +2322,8 @@ async def cloud_disconnect_mt5(user: dict = Depends(get_cloud_user)):
          "$unset": {"mt5_password_enc": "", "mt5_login": "", "broker_server": "",
                     "mt5_verification_error": "", "mt5_verified_at": "",
                     "force_equity_refresh": "", "last_refresh_request_at": "",
-                    "last_balance": "", "last_equity": "", "account_currency": ""}})
+                    "last_balance": "", "last_equity": "", "last_balance_updated_at": "",
+                    "last_equity_ts": "", "account_currency": ""}})
     return {"ok": True, "message": "MT5 credentials removed. Trade execution paused."}
 
 @api_router.post("/cloud/pause")
@@ -3373,7 +3375,7 @@ async def cloud_agent_equity(req: AgentEquitySnapshot, request: Request):
     doc["ts"] = datetime.now(timezone.utc).isoformat()
     await db.cloud_equity_snapshots.insert_one(doc.copy())
     set_doc = {"last_equity": req.equity, "last_balance": req.balance,
-               "last_equity_ts": doc["ts"]}
+               "last_equity_ts": doc["ts"], "last_balance_updated_at": doc["ts"]}
     if req.cloud_positions_count is not None:
         set_doc["cloud_positions_count"] = int(req.cloud_positions_count)
         set_doc["cloud_positions_ts"] = doc["ts"]

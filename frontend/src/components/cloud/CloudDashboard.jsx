@@ -36,7 +36,7 @@ function useAuth() {
   }, [nav]);
 }
 
-function formatUSD(n) { return "$" + (n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function formatUSD(n) { return "$" + Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 export default function CloudDashboard() {
   useAuth();
@@ -155,8 +155,46 @@ export default function CloudDashboard() {
 
 function OverviewTab({ me, data, onTogglePause }) {
   const wr = data.totals.total_trades > 0 ? Math.round((data.totals.wins / data.totals.total_trades) * 100) : 0;
+  const executorOnline = Boolean(data.executor_online);
+  const verified = data.mt5_verification_status === "verified";
+  const activeSub = Boolean(me.subscription_active || me.status === "active");
   return (
     <div className="space-y-4 sm:space-y-6">
+      <div className="grid gap-3 lg:grid-cols-[1.15fr_0.85fr]" data-testid="cloud-command-center">
+        <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.07] to-white/[0.025] p-4 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40 mb-2">CLOUD COMMAND CENTER</div>
+              <div className="text-2xl sm:text-3xl font-bold tracking-tight">
+                {verified ? "Execution ready" : data.mt5_verification_status === "pending" ? "Broker verification pending" : "Connect MT5 to activate"}
+              </div>
+              <div className="text-sm text-white/55 mt-2 max-w-2xl">
+                Master signals, worker execution, subscription, and broker connection are checked together so you can see why the cloud is active or paused.
+              </div>
+            </div>
+            <button
+              onClick={onTogglePause}
+              disabled={!data.mt5_connected}
+              data-testid="command-pause-toggle"
+              className={`rounded-2xl px-5 py-3 text-sm font-bold transition disabled:opacity-40 ${
+                data.paused
+                  ? "bg-green-400/15 text-green-300 border border-green-400/25"
+                  : "bg-red-400/15 text-red-300 border border-red-400/25"
+              }`}
+            >
+              {data.paused ? "Resume Copying" : "Pause Copying"}
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <HealthPill label="Subscription" ok={activeSub} value={activeSub ? `${me.days_remaining ?? 0}d left` : "Expired"} />
+          <HealthPill label="MT5" ok={verified} value={verified ? "Verified" : data.mt5_verification_status || "Not linked"} />
+          <HealthPill label="Worker" ok={executorOnline} value={executorOnline ? `${data.executor_count || 1} online` : "Offline"} />
+          <HealthPill label="Copying" ok={!data.paused && verified && executorOnline} value={data.paused ? "Paused" : "Armed"} />
+        </div>
+      </div>
+
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
         <KPI label="Net P&L (30d)" value={formatUSD(data.totals.net_pnl)} accent={data.totals.net_pnl >= 0 ? "green" : "red"} testid="kpi-pnl" />
@@ -251,6 +289,18 @@ function KPI({ label, value, accent, testid }) {
     <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-xl sm:rounded-2xl p-3 sm:p-5" data-testid={testid}>
       <div className="text-[9px] sm:text-[10px] font-mono tracking-widest text-white/40 mb-1 sm:mb-2">{label}</div>
       <div className={`text-lg sm:text-2xl font-bold font-mono ${color}`}>{value}</div>
+    </div>
+  );
+}
+
+function HealthPill({ label, value, ok }) {
+  return (
+    <div className={`rounded-2xl border p-4 ${ok ? "border-green-400/20 bg-green-400/[0.08]" : "border-amber-400/20 bg-amber-400/[0.08]"}`}>
+      <div className="flex items-center gap-2">
+        <span className={`h-2 w-2 rounded-full ${ok ? "bg-green-400" : "bg-amber-300"}`} />
+        <span className="font-mono text-[9px] uppercase tracking-widest text-white/40">{label}</span>
+      </div>
+      <div className={`mt-2 text-sm font-bold ${ok ? "text-green-300" : "text-amber-200"}`}>{value}</div>
     </div>
   );
 }
@@ -409,10 +459,9 @@ function ConnectTab({ me, onRefresh }) {
     ).slice(0, 60);
   })();
 
-  // v1.1 — Account-size scaling preview
-  // Exactly mirrors what the bot will do live:
-  //   risk_tier → risk % of balance → $ risked per trade → approx lot size
-  //   (XAUUSD 1 lot ≈ $100/pip; SL is ~3-6 pips ATR-based on M5)
+  // Connection preview. Live workers primarily use strict mirror sizing from
+  // the master signal, then cap risk if a user's balance cannot safely support
+  // the mirrored lot. This preview is only a conservative planning guide.
   const riskPctMap = { conservative: 0.6, balanced: 1.2, aggressive: 2.0 };
   const tier = form.risk_tier || "balanced";
   const riskPct = riskPctMap[tier];
@@ -440,6 +489,7 @@ function ConnectTab({ me, onRefresh }) {
 
   const [refreshing, setRefreshing] = useState(false);
   const [executorStatus, setExecutorStatus] = useState({ online: null, total: null });
+  const executorOnline = (executorStatus.online || 0) > 0;
 
   // Poll public config every 30s to know if any worker is online
   useEffect(() => {
@@ -474,7 +524,13 @@ function ConnectTab({ me, onRefresh }) {
   };
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-5xl">
+      <div className="grid gap-3 sm:grid-cols-3 mb-5" data-testid="connect-readiness">
+        <HealthPill label="Credential vault" ok={Boolean(me.broker_server || connected)} value={me.broker_server ? "Saved" : "Empty"} />
+        <HealthPill label="Verification" ok={verifyStatus === "verified"} value={verifyStatus === "verified" ? "Passed" : verifyStatus === "pending" ? "Pending" : "Needed"} />
+        <HealthPill label="Executor VPS" ok={executorOnline} value={executorOnline ? `${executorStatus.online} online` : "Offline"} />
+      </div>
+
       <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6 mb-5 sm:mb-6" data-testid="connect-card">
         <div className="flex items-start gap-4 mb-6">
           <div className="w-10 h-10 rounded-full bg-[#D4AF37]/10 border border-[#D4AF37]/20 flex items-center justify-center flex-none">
@@ -483,7 +539,7 @@ function ConnectTab({ me, onRefresh }) {
           <div>
             <div className="font-bold mb-1">Secure credential handling</div>
             <div className="text-sm text-white/60 leading-relaxed">
-              Your MT5 password is encrypted with Fernet-AES before it ever touches our database. Only our isolated executor agent can decrypt it to place trades. You can revoke anytime by clicking "Disconnect".
+              Your MT5 password is encrypted before storage and only the isolated execution worker can decrypt it for broker login. You can disconnect at any time, which removes the saved broker password and pauses future copying.
             </div>
           </div>
         </div>
@@ -524,7 +580,7 @@ function ConnectTab({ me, onRefresh }) {
         {connected ? (
           <div data-testid="mt5-connected-view">
             {/* v5.1.3: live executor status — without this user can't tell if cloud is actually connected to a worker */}
-            {me.executor_online === false && (
+            {!executorOnline && (
               <div className="flex items-start gap-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl mb-3" data-testid="executor-offline-banner">
                 <AlertTriangle className="w-5 h-5 text-amber-400 flex-none mt-0.5" />
                 <div className="flex-1 min-w-0">
@@ -550,8 +606,8 @@ function ConnectTab({ me, onRefresh }) {
                   <button
                     type="button"
                     onClick={refreshBalance}
-                    disabled={refreshing || me.executor_online === false}
-                    title={me.executor_online === false ? "No worker online — refresh disabled" : "Force the worker to push a fresh balance/equity snapshot from your broker"}
+                    disabled={refreshing || !executorOnline}
+                    title={!executorOnline ? "No worker online - refresh disabled" : "Force the worker to push a fresh balance/equity snapshot from your broker"}
                     className="ml-auto inline-flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-full bg-white/5 border border-white/15 text-white/70 hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/40 hover:text-[#D4AF37] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     data-testid="refresh-balance-btn"
                   >
@@ -590,9 +646,8 @@ function ConnectTab({ me, onRefresh }) {
                 <div className="text-xs font-mono tracking-widest text-[#D4AF37]">STRICT 1:1 COPY MODE</div>
               </div>
               <div className="text-[12px] text-white/70 leading-relaxed">
-                Your account mirrors the master 1:1. Lot size scales only by balance ratio.
-                If your balance equals the master's, you take the same lot. Smaller account → proportionally smaller lots.
-                SL, TP and entry are copied exactly.
+                Your account follows the master signal, then the worker adjusts lot size by balance ratio and applies a hard risk cap when needed.
+                Entry, SL, TP, and close events stay tied to the master signal so the copy account does not drift into orphan positions.
               </div>
               {!me.last_balance && <div className="text-[11px] text-white/40 mt-2">Worker agent will sync your balance within 60s after first connection.</div>}
             </div>
@@ -715,14 +770,14 @@ function ConnectTab({ me, onRefresh }) {
                   </button>
                 ))}
               </div>
-              <div className="text-xs text-white/30 mt-1">Conservative: 0.6% / Balanced: 1.2% / Aggressive: 2% risk per trade</div>
+              <div className="text-xs text-white/30 mt-1">Used as a fallback and safety cap. Normal live copying mirrors master lots by balance ratio.</div>
             </div>
 
-            {/* v1.1 — Live account-size scaling preview */}
+            {/* Copy safety preview */}
             <div className="bg-black/40 border border-[#D4AF37]/20 rounded-xl p-4" data-testid="scaling-preview">
               <div className="flex items-center gap-2 mb-3">
                 <Calculator className="w-4 h-4 text-[#D4AF37]" />
-                <div className="text-xs font-mono tracking-widest text-[#D4AF37]">ACCOUNT-SIZE SCALING PREVIEW</div>
+                <div className="text-xs font-mono tracking-widest text-[#D4AF37]">COPY SAFETY PREVIEW</div>
               </div>
               <div className="mb-3">
                 <label className="block text-[10px] font-mono tracking-widest text-white/50 mb-1">SIMULATED BALANCE (USD)</label>
@@ -730,7 +785,7 @@ function ConnectTab({ me, onRefresh }) {
                        onChange={e=>setSimBalance(Math.max(100, Number(e.target.value)||0))}
                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 font-mono text-sm focus:border-[#D4AF37] outline-none"
                        data-testid="sim-balance-input" />
-                <div className="text-[10px] text-white/30 mt-1">Plug in your real balance to see how trades will size on YOUR account</div>
+                <div className="text-[10px] text-white/30 mt-1">Planning guide only. Live lots come from the master signal and your balance ratio.</div>
               </div>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div className="bg-white/5 rounded-lg p-3" data-testid="preview-risk-pct">
@@ -742,15 +797,15 @@ function ConnectTab({ me, onRefresh }) {
                   <div className="text-lg font-bold font-mono text-white">${riskUSD.toFixed(0)}</div>
                 </div>
                 <div className="bg-white/5 rounded-lg p-3" data-testid="preview-lot-size">
-                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">LOT SIZE (APPROX)</div>
+                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">FALLBACK LOT</div>
                   <div className="text-lg font-bold font-mono text-green-400">{lotSize.toFixed(2)}</div>
                 </div>
               </div>
               <div className="mt-3 pt-3 border-t border-white/5 space-y-1 text-[11px] text-white/50">
-                <div>• At <span className="font-mono text-[#D4AF37]">+1R</span> profit: SL locks at <span className="font-mono">+${(riskUSD*0.2).toFixed(0)}</span> (breakeven protection)</div>
-                <div>• At <span className="font-mono text-[#D4AF37]">+3R</span> profit: 30% closes automatically (<span className="font-mono">+${(riskUSD*3*0.3).toFixed(0)}</span> banked)</div>
-                <div>• Basket lock arms at <span className="font-mono">${(simBalance*0.02).toFixed(0)}</span> floating (2% of balance)</div>
-                <div>• Hard cap: max loss per single trade = <span className="font-mono">${(simBalance*0.03).toFixed(0)}</span> (3% of balance)</div>
+                <div>- Worker auto-fits oversize master lots to the configured cap instead of blindly copying dangerous exposure.</div>
+                <div>- If the fitted lot falls below broker minimum, the worker skips and reports the reason in activity logs.</div>
+                <div>- Balance refresh and verification require at least one online executor VPS.</div>
+                <div>- Suggested max planning risk: <span className="font-mono">${riskUSD.toFixed(0)}</span> at the selected tier.</div>
               </div>
             </div>
             {msg && <div className="text-green-400 text-sm" data-testid="connect-msg">{msg}</div>}

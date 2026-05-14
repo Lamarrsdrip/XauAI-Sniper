@@ -21,7 +21,7 @@ Mock mode (any OS, for dry-run testing):
   → logs every action but never actually calls MT5. Perfect for sanity-checking
     the backend round-trip before you rent the VPS.
 
-Author: XauAi Sniper   |   Version: 1.4.2  (tiny-account safety: skip if would blow user)
+Author: XauAi Sniper   |   Version: 1.4.7  (strict mirror with account-fit risk cap)
 """
 from __future__ import annotations
 
@@ -787,13 +787,22 @@ class WorkerAgent:
             return 0.0, (f"SKIP tiny-account: balance ${u.last_balance:.2f} < "
                          f"min ${MIN_BALANCE_USD:.2f} (cloud copying not safe)")
 
+        try:
+            entry = float(sig.get("entry") or 0.0)
+            sl = float(sig.get("sl") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0, "SKIP malformed-signal: entry/sl not numeric"
+
+        sl_dist = abs(entry - sl)
+        if sl_dist <= 0:
+            return 0.0, "SKIP malformed-signal: missing or zero SL distance"
+
         master_lots = float(sig.get("master_lots") or 0.0)
         master_bal  = float(sig.get("master_balance") or 0.0)
         if master_lots > 0 and master_bal > 0:
             ratio = u.last_balance / master_bal
             ideal_lot = master_lots * ratio
             lots = round(ideal_lot, 2)
-            sl_dist = abs(float(sig["entry"]) - float(sig["sl"]))
             est_loss_usd = lots * sl_dist * XAU_USD_PER_LOT_PER_PRICE
             risk_pct = (est_loss_usd / u.last_balance * 100.0) if u.last_balance > 0 else 999
             scaled_note = ""
@@ -819,8 +828,6 @@ class WorkerAgent:
                                        f"risk=${est_loss_usd:.2f} ({risk_pct:.1f}% of eq){scaled_note}")
 
         # Legacy fallback (ONLY runs if master EA hasn't been upgraded yet).
-        sl_dist = abs(float(sig["entry"]) - float(sig["sl"]))
-        if sl_dist <= 0: return 0.01, "legacy_fallback (sl_dist=0)"
         risk_pct_cfg = RISK_PCT.get(u.risk_tier, 1.2)
         risk_usd = u.last_balance * risk_pct_cfg / 100.0
         lots = max(0.01, round(risk_usd / (sl_dist * XAU_USD_PER_LOT_PER_PRICE), 2))
