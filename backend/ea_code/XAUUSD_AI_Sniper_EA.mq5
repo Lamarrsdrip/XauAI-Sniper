@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.7 — Adaptive Guard Build|
+//|                                     v5.8.8 — Watchdog Scale Build|
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.87"
-#property description "XAUUSD AI Sniper v5.8.7 — ADAPTIVE SMART GUARD"
-#property description "Keeps hedge guard/demo risk; replaces hard B-grade poison"
-#property description "with sample-aware soft veto, decay, and inactivity relief."
+#property version   "5.88"
+#property description "XAUUSD AI Sniper v5.8.8 — WATCHDOG SCALE BUILD"
+#property description "Adds scan watchdog recovery, adaptive daily cap, smarter pyramids"
+#property description "and account-size lot scaling while preserving risk caps."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -143,9 +143,13 @@ input double InpMaxAggregateRiskPct = 8.0; // v5.8.4: restored original aggregat
 input double InpDailyLossLimit = 0.0;      // v5.8.4 demo: disabled
 input int    InpMaxOpenTrades  = 3;        // Max open positions
 input int    InpMaxTradesPerDay= 15;       // v5.8.2 — reduce overtrading after choppy loss windows
+input bool   InpAdaptiveDailyCap = true;   // v5.8.8: strong trend days can trade more; weak days trade less
+input int    InpMaxTradesStrongDay = 24;   // v5.8.8: adaptive cap ceiling during clean trend/breakout sessions
 input double InpWeeklyTarget   = 100.0;    // v5.8.4 demo: weekly ROI target 100%
 input double InpWeeklyMaxLoss  = 0.0;      // v5.8.4 demo: disabled
 input bool   InpCarefulMode    = true;     // Scale down near target
+input bool   InpAccountSizeBoost = true;   // v5.8.8: lets larger accounts use slightly stronger risk, still capped
+input double InpLargeAccountBoostMax = 1.35;// v5.8.8: maximum lot-risk multiplier from account-size scaling
 
 input group "=== STRATEGY ==="
 input int    InpEMAFast        = 50;       // Fast EMA
@@ -173,9 +177,9 @@ input string InpServerURL      = "https://xauaisniper.com";
 input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
 
 input group "=== XAUAI CLOUD (fanout master signals to subscribers) ==="
-input bool   InpCloudFanout       = false;   // TRUE = POST every open/close to the XauAi Cloud backend
+input bool   InpCloudFanout       = true;    // TRUE = POST every open/close to the XauAi Cloud backend
 input string InpCloudURL          = "https://xauaisniper.com";  // Cloud API base URL — ALREADY SET. Add this to MT5 WebRequest whitelist!
-input string InpCloudAgentToken   = "";       // X-Agent-Token — keep PRIVATE. Do not commit live master tokens to GitHub.
+input string InpCloudAgentToken   = "c2eb530ea11d7dd8308f9f7be1fb7c2657f4cdbdfb3b0d63d88ad4ee433e2289";      // X-Agent-Token — PRE-FILLED for emriz. Keep PRIVATE — never share this file publicly.
 input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms)
 
 input group "=== TUNABLE THRESHOLDS (walk-forward optimize these) ==="
@@ -441,12 +445,17 @@ input double InpSmartGuardOverrideScore   = 3.8;   // Strong trend pullbacks at/
 input bool   InpPyramidRequireGradeA      = true;  // Only pyramid if original entry was A/A+
 input bool   InpPyramidRequireHTF         = true;  // Only pyramid when M15+H1 still align with direction
 
-input int    InpMaxPyramidAdds  = 1;       // v5.8.2: allow at most one add; live clusters got dangerous at 3-5 tickets
+input int    InpMaxPyramidAdds  = 2;       // v5.8.8: adaptive; clean trends can add, chop still blocks
 input double InpPyramidMinATR   = 0.9;     // Price must move at least this × ATR before adding
-input double InpPyramidSizeMulti= 0.35;    // Each add is this × previous size (prevents stack blow-up)
-input int    InpPyramidMinGapSec= 600;     // Min seconds between pyramid adds
+input double InpPyramidSizeMulti= 0.50;    // Each add is this × previous size (prevents stack blow-up)
+input int    InpPyramidMinGapSec= 360;     // Min seconds between pyramid adds
 input bool   InpPyramidOnAdverse= false;   // v5.8.0: DISABLED by default — live data showed -$21k from 37 adverse-pyramid trades (PF 0.28). Adds risk to losing positions.
 input bool   InpPyramidOnTrend  = true;    // Add when price moves WITH us (trend continuation)
+
+input group "=== SCAN WATCHDOG (v5.8.8 — no restart needed) ==="
+input int    InpTimerScanSec     = 15;      // Timer wake-up so slow ticks/VPS lag cannot freeze scan loop
+input int    InpScanWatchdogMin  = 7;       // Force a scan if no successful entry scan for this many minutes
+input int    InpScanSkipLogSec   = 120;     // Log repeated idle-skip detail at most every N seconds
 
 input group "=== POST-WINNER ENTRY GUARD (v4.6.5 — user-tunable cooldown) ==="
 input bool   InpPostWinnerGuard    = true;   // Block re-entry in same direction after a winner (set false to disable)
@@ -651,6 +660,11 @@ int        g_basketSnapMax = 60;      // store up to 60 samples (~1 sample / sec
 string     g_lastSkipReason  = "";    // Updated every time OnTick returns silently
 datetime   g_lastHeartbeat   = 0;     // Throttle heartbeat to 1/minute
 int        g_ticksSinceEntry = 0;     // How many ticks since last position opened
+datetime   g_lastEntryScanAt = 0;     // v5.8.8: last time indicator buffers loaded and entry scan ran
+datetime   g_lastEntryBarSeen = 0;    // v5.8.8: robust M5 bar marker, not trapped in local static state
+datetime   g_lastScanSkipLog = 0;     // v5.8.8: throttled reason logs for idle/watchdog decisions
+bool       g_timerForceScan = false;  // v5.8.8: timer asks OnTick to run a recovery scan
+datetime   g_lastPyramidFailTime = 0; // v5.8.8: failed pyramid add cooldown
 
 // TRADE THESIS (AI narrative per open position)
 string     currentTradeThesis = "";
@@ -1342,8 +1356,14 @@ int OnInit()
    lastClose.lots = 0; lastClose.closeTime = 0; lastClose.signature = ""; lastClose.setup = "";
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
+   if(InpTimerScanSec > 0)
+   {
+      EventSetTimer(InpTimerScanSec);
+      Print("SCAN WATCHDOG: timer armed every ", InpTimerScanSec,
+            "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
+   }
 
-   Print("=== XAUAI SNIPER v5.8.7 (ADAPTIVE SMART-GUARD BUILD) READY ===");
+   Print("=== XAUAI SNIPER v5.8.8 (WATCHDOG + SCALE BUILD) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1454,6 +1474,7 @@ int OnInit()
 
 void OnDeinit(const int reason)
 {
+   EventKillTimer();
    IndicatorRelease(hEMAFast); IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI); IndicatorRelease(hATR); IndicatorRelease(hBBUpper);
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
@@ -1461,6 +1482,13 @@ void OnDeinit(const int reason)
    IndicatorRelease(hStoch);
    SavePatterns();
    Print("=== v4.9.7 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+}
+
+void OnTimer()
+{
+   int secondsSinceScan = (g_lastEntryScanAt > 0) ? (int)(TimeCurrent() - g_lastEntryScanAt) : 999999;
+   g_timerForceScan = (InpScanWatchdogMin > 0 && secondsSinceScan >= InpScanWatchdogMin * 60);
+   OnTick();
 }
 
 //+------------------------------------------------------------------+
@@ -2170,6 +2198,63 @@ bool SmartGuardInactivityRelaxed()
    return (TimeCurrent() - anchor >= InpSmartGuardRelaxAfterMin * 60);
 }
 
+bool IsTrendContinuationRegime(int dir)
+{
+   if(dir > 0)
+      return (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP);
+   return (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN);
+}
+
+int EffectiveMaxTradesPerDay()
+{
+   int cap = InpMaxTradesPerDay;
+   if(!InpAdaptiveDailyCap || cap <= 0) return cap;
+
+   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   bool cleanTrend = (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_TRENDING_DOWN ||
+                      currentRegime == REGIME_BREAKOUT_UP || currentRegime == REGIME_BREAKOUT_DOWN);
+   bool weakDay = (currentRegime == REGIME_CHOPPY || currentRegime == REGIME_DEAD || drawdownActive);
+   double dPnL = accInfo.Equity() - dailyStartEquity;
+
+   if(weakDay || dPnL < -MathMax(50.0, accInfo.Balance() * 0.004))
+      return MathMax(5, (int)MathFloor(cap * 0.65));
+
+   if(cleanTrend && spread <= InpMaxSpread * 0.65 && dPnL >= 0)
+      return MathMax(cap, InpMaxTradesStrongDay);
+
+   return cap;
+}
+
+double AccountSizeRiskMultiplier()
+{
+   if(!InpAccountSizeBoost) return 1.0;
+   double equity = MathMax(accInfo.Equity(), accInfo.Balance());
+   if(equity < 1000.0)   return 0.75;
+   if(equity < 10000.0)  return 1.00;
+   if(equity < 25000.0)  return 1.08;
+   if(equity < 75000.0)  return MathMin(1.22, InpLargeAccountBoostMax);
+   return MathMin(1.35, InpLargeAccountBoostMax);
+}
+
+int EffectiveMaxPyramidAdds(int dir, double moved, double atr)
+{
+   int maxAdds = InpMaxPyramidAdds;
+   if(maxAdds <= 0) return 0;
+
+   bool trendOk = IsTrendContinuationRegime(dir);
+   bool highQuality = IsGradeAtLeastA(g_lastEntryGrade) && g_lastEntryScore >= 4.0;
+   double equity = MathMax(accInfo.Equity(), accInfo.Balance());
+
+   if(currentRegime == REGIME_CHOPPY || currentRegime == REGIME_DEAD || currentRegime == REGIME_LOW_VOL)
+      maxAdds = MathMin(maxAdds, 1);
+   if(!trendOk || !highQuality || drawdownActive)
+      maxAdds = MathMin(maxAdds, 1);
+   if(trendOk && highQuality && equity >= 50000.0 && moved >= atr * 1.8 && !drawdownActive)
+      maxAdds = MathMin(MathMax(maxAdds, 3), MathMax(1, InpMaxOpenTrades - 1));
+
+   return MathMin(maxAdds, MathMax(0, InpMaxOpenTrades - 1));
+}
+
 void CheckPyramidOpportunity()
 {
    if(!InpAllowPyramid) return;
@@ -2206,12 +2291,14 @@ void CheckPyramidOpportunity()
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
    if(spread > InpMaxSpread) return;
 
+   if(g_lastPyramidFailTime > 0 && TimeCurrent() - g_lastPyramidFailTime < 900)
+      return;
+
    // Throttle: min gap between pyramid adds
    if(TimeCurrent() - lastPyramidAddTime < InpPyramidMinGapSec) return;
 
    int openCount = CountMyPositions();
    if(openCount == 0) return;                               // no base trade to stack on
-   if(openCount >= 1 + InpMaxPyramidAdds) return;           // cap hit
    if(openCount >= InpMaxOpenTrades) return;                // global cap
 
    // Find the ORIGINAL (oldest) position in our magic + determine direction
@@ -2300,6 +2387,35 @@ void CheckPyramidOpportunity()
    bool adverseTrigger = InpPyramidOnAdverse && moved <= -minMove;
    bool trendTrigger   = InpPyramidOnTrend   && moved >= minMove;
    if(!adverseTrigger && !trendTrigger) return;
+
+   int maxAddsAllowed = EffectiveMaxPyramidAdds(dir, moved, atr);
+   if(openCount >= 1 + maxAddsAllowed)
+   {
+      static datetime lastPyrCapLog = 0;
+      if(TimeCurrent() - lastPyrCapLog > 180)
+      {
+         Print("PYRAMID SKIPPED: adaptive cap hit. Open=", openCount,
+               " allowed total=", 1 + maxAddsAllowed,
+               " | regime=", RegimeName(),
+               " | grade=", g_lastEntryGrade,
+               " | score=", DoubleToString(g_lastEntryScore, 2));
+         lastPyrCapLog = TimeCurrent();
+      }
+      return;
+   }
+
+   bool baseProtected = (origSL > 0 && ((isBuy && origSL >= origPx) || (!isBuy && origSL <= origPx)));
+   if(trendTrigger && !baseProtected && moved < atr * 1.5)
+   {
+      static datetime lastPyrProtectLog = 0;
+      if(TimeCurrent() - lastPyrProtectLog > 180)
+      {
+         Print("PYRAMID SKIPPED: base trade not protected yet and trend move only ",
+               DoubleToString(moved / atr, 2), " ATR. Waiting for SL lock or stronger continuation.");
+         lastPyrProtectLog = TimeCurrent();
+      }
+      return;
+   }
 
    // v5.3.1 — ADVERSE-PYRAMID SIGNAL-STRENGTH GATE.
    // Adverse adds (averaging-in against the move) are only allowed when the
@@ -2436,7 +2552,7 @@ void CheckPyramidOpportunity()
       ? StringFormat("PYR+ADV (%.2f ATR adverse, avg-in)", MathAbs(moved)/atr)
       : StringFormat("PYR+TRN (%.2f ATR with trend)", moved/atr);
 
-   Print("PYRAMID: adding #", openCount + 1, "/", (1 + InpMaxPyramidAdds),
+   Print("PYRAMID: adding #", openCount + 1, "/", (1 + maxAddsAllowed),
          " ", isBuy?"BUY":"SELL", " ", DoubleToString(addLot, lotDigits),
          " lots @ ", DoubleToString(entryPx, digits),
          " | origPx=", DoubleToString(origPx, digits),
@@ -2507,6 +2623,7 @@ void CheckPyramidOpportunity()
    else
    {
       Print("PYRAMID FAILED: Err=", GetLastError(), " Ret=", trade.ResultRetcode());
+      g_lastPyramidFailTime = TimeCurrent();
    }
 }
 
@@ -2888,11 +3005,38 @@ void OnTick()
       return;
    }
 
-   // New M5 bar only for entries
-   static datetime lastBar = 0;
-   datetime curBar = iTime(Symbol(), PERIOD_M5, 0);
-   if(curBar == lastBar) { g_lastSkipReason = "WAITING_FOR_NEW_M5_BAR"; return; }
-   lastBar = curBar;
+   // New M5 bar only for entries, with watchdog recovery.
+   datetime barOpens[1];
+   datetime curBar = 0;
+   int barCopied = CopyTime(Symbol(), PERIOD_M5, 0, 1, barOpens);
+   if(barCopied > 0) curBar = barOpens[0];
+   if(curBar <= 0)  curBar = iTime(Symbol(), PERIOD_M5, 0);
+
+   bool newM5Bar = (curBar > 0 && curBar != g_lastEntryBarSeen);
+   int secondsSinceScan = (g_lastEntryScanAt > 0) ? (int)(TimeCurrent() - g_lastEntryScanAt) : 999999;
+   bool watchdogDue = (InpScanWatchdogMin > 0 && secondsSinceScan >= InpScanWatchdogMin * 60);
+   bool timerForced = g_timerForceScan;
+   g_timerForceScan = false;
+
+   if(!newM5Bar && !watchdogDue && !timerForced)
+   {
+      g_lastSkipReason = StringFormat("WAITING_FOR_NEW_M5_BAR: cur=%s last=%s sinceScan=%ds",
+                                      TimeToString(curBar, TIME_MINUTES),
+                                      TimeToString(g_lastEntryBarSeen, TIME_MINUTES),
+                                      secondsSinceScan);
+      if(TimeCurrent() - g_lastScanSkipLog >= InpScanSkipLogSec)
+      {
+         Print("SCAN IDLE: ", g_lastSkipReason,
+               " | tick OK; management loop still active.");
+         g_lastScanSkipLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(watchdogDue && !newM5Bar)
+      Print("⚠ SCAN WATCHDOG: forcing entry scan after ", secondsSinceScan,
+            "s without a completed scan. curBar=", TimeToString(curBar, TIME_MINUTES),
+            " lastBar=", TimeToString(g_lastEntryBarSeen, TIME_MINUTES));
 
    // Update Asia-range tracker on every new M5 bar
    if(InpAsiaRangeBreakout) UpdateAsiaRange();
@@ -2912,8 +3056,11 @@ void OnTick()
    if(CopyBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15) < 3)          { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: RSI_M15"; return; }
    if(CopyBuffer(hStoch, 0, 0, 3, bufStochK) < 3)             { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: STOCH_K"; return; }
    if(CopyBuffer(hStoch, 1, 0, 3, bufStochD) < 3)             { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: STOCH_D"; return; }
+   if(curBar > 0) g_lastEntryBarSeen = curBar;
+   g_lastEntryScanAt = TimeCurrent();
 
-   if(CountMyPositions() >= InpMaxOpenTrades || todayTradeCount >= InpMaxTradesPerDay)
+   int maxTradesToday = EffectiveMaxTradesPerDay();
+   if(CountMyPositions() >= InpMaxOpenTrades || todayTradeCount >= maxTradesToday)
    { UpdateDashboard(0, 0, "MAX"); lastDashSignal=0; lastDashScore=0; lastDashGrade="MAX"; return; }
 
    // Cooldown
@@ -3573,6 +3720,15 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    if(InpAccountMode == ACCT_AGGRESSIVE)   baseRisk = 2.0;
    double riskPct = baseRisk * sizeMulti;
 
+   double acctSizeMult = AccountSizeRiskMultiplier();
+   if(acctSizeMult != 1.0)
+   {
+      Print("ACCOUNT-SCALE: equity/balance $", DoubleToString(MathMax(accInfo.Equity(), accInfo.Balance()), 2),
+            " risk×", DoubleToString(acctSizeMult, 2),
+            " (large accounts scale stronger; small accounts protected)");
+      riskPct *= acctSizeMult;
+   }
+
    // v5.1.0 — PROFIT GUARDIAN: tier-based risk scaling on top of everything else
    double pgMult = PG_RiskMultiplier();
    if(pgMult < 1.0)
@@ -3604,7 +3760,11 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
 
    // Session scaling
    MqlDateTime dt; TimeCurrent(dt);
-   if(dt.hour >= 0 && dt.hour < 8) riskPct *= 0.3; // Asian
+   if(dt.hour >= 0 && dt.hour < 8)
+   {
+      double asianMult = (IsTrendContinuationRegime(signal) && accInfo.Equity() >= 25000.0) ? 0.55 : 0.40;
+      riskPct *= asianMult; // Asian session is still quieter, but no longer crushes large clean-trend lots to dust.
+   }
 
    // Auto risk scaling from streaks
    if(patternCount >= 5)
@@ -6681,7 +6841,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.7 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.8 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
@@ -6693,7 +6853,7 @@ void UpdateDashboard(int signal, double score, string grade)
    d += StringFormat("RSI: %.1f | ATR: %.2f | Spread: %.0f\n", dRsi, dAtr, (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
    d += StringFormat("Last Score: %.1f [%s]\n", score, grade);
    d += "------------------------------------------\n";
-   d += StringFormat("Open: %d/%d (pyr max %d) | Today: %d/%d\n", CountMyPositions(), InpMaxOpenTrades, 1+InpMaxPyramidAdds, todayTradeCount, InpMaxTradesPerDay);
+   d += StringFormat("Open: %d/%d (pyr max %d) | Today: %d/%d\n", CountMyPositions(), InpMaxOpenTrades, 1+InpMaxPyramidAdds, todayTradeCount, EffectiveMaxTradesPerDay());
    d += StringFormat("Trades: %d | Win: %.0f%% | ML: %d\n", totalTrades, wr, patternCount);
    d += StringFormat("AI: %s | News: %s | Careful: %s\n", InpUseAI?"ON":"OFF", InpUseNewsFilter?"ON":"OFF", InpCarefulMode?"ON":"OFF");
    d += StringFormat("DXY: %s (%s) | Drawdown: %s | Re-entry: %s\n",

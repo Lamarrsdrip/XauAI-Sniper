@@ -154,10 +154,12 @@ export default function CloudDashboard() {
 }
 
 function OverviewTab({ me, data, onTogglePause }) {
-  const wr = data.totals.total_trades > 0 ? Math.round((data.totals.wins / data.totals.total_trades) * 100) : 0;
+  const completedTrades = data.totals.completed_trades || 0;
+  const wr = completedTrades > 0 ? Math.round((data.totals.wins / completedTrades) * 100) : 0;
   const executorOnline = Boolean(data.executor_online);
   const verified = data.mt5_verification_status === "verified";
   const activeSub = Boolean(me.subscription_active || me.status === "active");
+  const recentTrades = (data.trades || []).slice(0, 5);
   return (
     <div className="space-y-4 sm:space-y-6">
       <div className="grid gap-3 lg:grid-cols-[1.15fr_0.85fr]" data-testid="cloud-command-center">
@@ -203,53 +205,30 @@ function OverviewTab({ me, data, onTogglePause }) {
         <KPI label="Last Balance" value={me.last_balance ? formatUSD(me.last_balance) : "—"} testid="kpi-balance" />
       </div>
 
-      {/* Execution status */}
-      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="execution-status-card">
-        <div className="flex items-center justify-between mb-4 sm:mb-6 flex-wrap gap-3">
-          <div>
-            <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40 mb-1.5 sm:mb-2">EXECUTION STATUS</div>
-            <div className="flex items-center gap-3">
-              {data.mt5_connected ? <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6 text-green-400" /> : <XCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-400" />}
-              <div>
-                <div className="font-bold text-base sm:text-lg">{data.mt5_connected ? "MT5 Linked" : "MT5 Not Connected"}</div>
-                <div className="text-xs sm:text-sm text-white/60">
-                  {data.paused ? "⏸ Trading paused by you" : data.mt5_connected ? "Active — executing 24/7" : "Connect to start"}
-                </div>
-              </div>
-            </div>
-          </div>
-          {data.mt5_connected && (
-            <button onClick={onTogglePause} data-testid="pause-toggle"
-                    className={`w-full sm:w-auto px-5 py-2.5 rounded-xl font-semibold flex items-center justify-center gap-2 transition-colors ${data.paused ? "bg-green-500/20 text-green-400 hover:bg-green-500/30" : "bg-red-500/20 text-red-400 hover:bg-red-500/30"}`}>
-              {data.paused ? <><Play className="w-4 h-4" /> Resume</> : <><Pause className="w-4 h-4" /> Pause</>}
-            </button>
-          )}
-        </div>
-      </div>
-
       <BotReasoningFeed />
 
       {/* Recent trades */}
       <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="trades-card">
         <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40 mb-3 sm:mb-4">RECENT TRADES</div>
-        {data.trades.length === 0 ? (
+        {recentTrades.length === 0 ? (
           <div className="text-center py-10 sm:py-12 text-white/40">
             <TrendingUp className="w-10 h-10 sm:w-12 sm:h-12 mx-auto mb-3 text-white/20" />
-            <div className="text-sm sm:text-base">No trades yet. {data.mt5_connected ? "Signals arrive during market hours." : "Connect your MT5 to get started."}</div>
+            <div className="text-sm sm:text-base">No trade data yet. {data.mt5_connected ? "Signals arrive during market hours." : "Connect your MT5 to get started."}</div>
           </div>
         ) : (
           <>
             {/* Mobile card list */}
             <div className="sm:hidden space-y-2">
-              {data.trades.map((t,i)=>(
+              {recentTrades.map((t,i)=>(
                 <div key={t.id||i} className="bg-black/30 rounded-xl p-3 flex items-center justify-between" data-testid={`trade-card-${i}`}>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <span className="font-mono text-sm">{t.symbol}</span>
                       <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${t.side==="BUY"?"bg-green-500/20 text-green-400":"bg-red-500/20 text-red-400"}`}>{t.side}</span>
-                      <span className="font-mono text-xs text-white/50">{t.lots?.toFixed(2)}</span>
+                      <span className="font-mono text-xs text-white/50">{Number(t.lots || 0).toFixed(2)}</span>
+                      <span className="font-mono text-[10px] text-white/35">{t.status || "open"}</span>
                     </div>
-                    <div className="text-[10px] text-white/40">{t.closed_at?.slice(0,16).replace("T"," ")}</div>
+                    <div className="text-[10px] text-white/40">{(t.closed_at || t.opened_at || "").slice(0,16).replace("T"," ") || "live"}</div>
                   </div>
                   <div className={`font-mono text-sm font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{formatUSD(t.profit)}</div>
                 </div>
@@ -264,18 +243,23 @@ function OverviewTab({ me, data, onTogglePause }) {
                   <th className="py-2 text-right">CLOSED</th>
                 </tr></thead>
                 <tbody>
-                  {data.trades.map((t,i)=>(
+                  {recentTrades.map((t,i)=>(
                     <tr key={t.id || i} className="border-b border-white/5" data-testid={`trade-row-${i}`}>
                       <td className="py-3 font-mono">{t.symbol}</td>
                       <td className={`py-3 font-semibold ${t.side==="BUY"?"text-green-400":"text-red-400"}`}>{t.side}</td>
-                      <td className="py-3 font-mono text-right">{t.lots?.toFixed(2)}</td>
+                      <td className="py-3 font-mono text-right">{Number(t.lots || 0).toFixed(2)}</td>
                       <td className={`py-3 font-mono text-right font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{formatUSD(t.profit)}</td>
-                      <td className="py-3 text-right text-white/50 text-xs">{t.closed_at?.slice(0,16).replace("T"," ")}</td>
+                      <td className="py-3 text-right text-white/50 text-xs">{(t.closed_at || t.opened_at || "").slice(0,16).replace("T"," ") || "live"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            {data.trades.length > recentTrades.length && (
+              <div className="mt-3 text-right text-xs font-mono text-[#D4AF37]">
+                Showing latest {recentTrades.length} of {data.trades.length} copied trades
+              </div>
+            )}
           </>
         )}
       </div>

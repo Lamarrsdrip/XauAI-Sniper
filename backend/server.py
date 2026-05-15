@@ -396,7 +396,7 @@ async def download_ea():
     return Response(
         content=sanitized,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.7_ADAPTIVE_GUARD.mq5"'},
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.8_WATCHDOG_SCALE.mq5"'},
     )
 
 # Admin-only: serves the FULL master EA with your agent token + cloud fanout
@@ -407,7 +407,7 @@ async def admin_download_ea_master():
     if not p.exists(): raise HTTPException(status_code=404)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.7_ADAPTIVE_GUARD.mq5",
+        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.8_WATCHDOG_SCALE.mq5",
         media_type="application/octet-stream",
     )
 
@@ -2334,12 +2334,13 @@ async def cloud_pause(req: CloudPauseReq, user: dict = Depends(get_cloud_user)):
 # -------- Dashboard Data --------
 @api_router.get("/cloud/dashboard")
 async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
-    # placeholder: real trade data comes from worker agents pushing to /cloud/trades/log
-    trades = await db.cloud_trades.find({"user_id": user["id"]}, {"_id": 0}).sort("closed_at", -1).limit(50).to_list(50)
+    trades = await db.cloud_trades.find({"user_id": user["id"]}, {"_id": 0}).sort("opened_at", -1).limit(50).to_list(50)
+    completed = [t for t in trades if t.get("status") == "closed" or t.get("closed_at")]
     totals = {"total_trades": len(trades),
-              "wins": sum(1 for t in trades if t.get("profit", 0) > 0),
-              "losses": sum(1 for t in trades if t.get("profit", 0) < 0),
-              "net_pnl": sum(t.get("profit", 0) for t in trades)}
+              "completed_trades": len(completed),
+              "wins": sum(1 for t in completed if float(t.get("profit") or 0) > 0),
+              "losses": sum(1 for t in completed if float(t.get("profit") or 0) < 0),
+              "net_pnl": sum(float(t.get("profit") or 0) for t in trades)}
     # equity curve data (last 30 days aggregated daily)
     equity = []
     try:
@@ -3234,8 +3235,14 @@ class AgentTradeLog(BaseModel):
 async def cloud_agent_trade_close(req: AgentTradeLog, request: Request):
     await _require_agent_async(request)
     doc = req.model_dump()
-    doc["id"] = str(uuid.uuid4())
-    await db.cloud_trades.insert_one(doc.copy())
+    doc["status"] = "closed"
+    existing = await db.cloud_trades.find_one({"user_id": req.user_id, "ticket": req.ticket}, {"_id": 0, "id": 1})
+    if existing:
+        set_doc = {k: v for k, v in doc.items() if v not in ("", None)}
+        await db.cloud_trades.update_one({"id": existing["id"]}, {"$set": set_doc})
+    else:
+        doc["id"] = str(uuid.uuid4())
+        await db.cloud_trades.insert_one(doc.copy())
     return {"ok": True}
 
 # Worker reports each trade-open attempt (success OR failure) so the admin
