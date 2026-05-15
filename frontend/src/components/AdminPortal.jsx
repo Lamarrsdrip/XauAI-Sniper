@@ -1246,10 +1246,10 @@ function CloudAdminTab({ api, token }) {
           <div className="border border-primary/30 bg-primary/5 p-4 text-sm" data-testid="infra-guide">
             <div className="font-bold mb-2">⚖️ How sizing works (important):</div>
             <div className="text-muted-foreground mb-3 leading-relaxed">
-              Your master EA (on your laptop / VPS) only emits <span className="font-bold text-foreground">price signals</span>:
-              entry, stop-loss, take-profit. <span className="font-bold text-foreground">Master lot size is completely ignored.</span>
-              Each user's trade is sized from <span className="font-bold text-foreground">THEIR balance × THEIR risk tier</span>.
-              Master $1k → user $100k = user still takes 5 lots on their own account.
+              Your master EA emits price, SL/TP, and master lot data. The worker mirrors lot size
+              proportionally: <span className="font-bold text-foreground">cloud lot = master lot × cloud equity / master balance</span>,
+              then applies broker lot-step, max-lot, and free-margin checks.
+              Same-size accounts should now take almost the same lots.
               Click <span className="font-mono">FIRE TEST SIGNAL</span> above to see this happen live.
             </div>
             <div className="font-bold mb-2">🚀 Going live (when you're ready):</div>

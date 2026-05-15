@@ -6,7 +6,7 @@
 # ============================================================================
 $ErrorActionPreference = "Stop"
 $InstallDir = "$env:USERPROFILE\xauai-worker"
-$ZipUrl     = "https://xauaisniper.com/xauai_worker_agent_v1.5.1.zip"
+$ZipUrl     = "https://xauaisniper.com/xauai_worker_agent_v1.5.2.zip"
 
 function Say($msg) { Write-Host "[xauai] $msg" -ForegroundColor Cyan }
 function Ok($msg)  { Write-Host "[ok]    $msg" -ForegroundColor Green }
@@ -101,10 +101,10 @@ $mock = if ($env:MOCK_MT5) { $env:MOCK_MT5 } else { "0" }   # Windows -> real MT
 CLOUD_URL=$cloud
 CLOUD_AGENT_TOKEN=$($resp.agent_token)
 WORKER_ID=$($resp.worker_id)
-POLL_SEC=10
-HEARTBEAT_SEC=60
-EQUITY_SEC=120
-HTTP_TIMEOUT=15
+POLL_SEC=1
+HEARTBEAT_SEC=30
+EQUITY_SEC=30
+HTTP_TIMEOUT=8
 MOCK_MT5=$mock
 "@ | Set-Content -Path ".env" -Encoding ASCII
 Ok "Paired as worker: $($resp.worker_name)"

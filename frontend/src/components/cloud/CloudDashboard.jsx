@@ -160,6 +160,8 @@ function OverviewTab({ me, data, onTogglePause }) {
   const verified = data.mt5_verification_status === "verified";
   const activeSub = Boolean(me.subscription_active || me.status === "active");
   const recentTrades = (data.trades || []).slice(0, 5);
+  const fmtLots = (v) => Number(v || 0) > 0 ? Number(v).toFixed(2) : "—";
+  const fmtPnl = (v) => (v === null || v === undefined) ? "—" : formatUSD(v);
   return (
     <div className="space-y-4 sm:space-y-6">
       <div className="grid gap-3 lg:grid-cols-[1.15fr_0.85fr]" data-testid="cloud-command-center">
@@ -225,12 +227,12 @@ function OverviewTab({ me, data, onTogglePause }) {
                     <div className="flex items-center gap-2 mb-0.5">
                       <span className="font-mono text-sm">{t.symbol}</span>
                       <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${t.side==="BUY"?"bg-green-500/20 text-green-400":"bg-red-500/20 text-red-400"}`}>{t.side}</span>
-                      <span className="font-mono text-xs text-white/50">{Number(t.lots || 0).toFixed(2)}</span>
+                      <span className="font-mono text-xs text-white/50">{fmtLots(t.lots)}</span>
                       <span className="font-mono text-[10px] text-white/35">{t.status || "open"}</span>
                     </div>
                     <div className="text-[10px] text-white/40">{(t.closed_at || t.opened_at || "").slice(0,16).replace("T"," ") || "live"}</div>
                   </div>
-                  <div className={`font-mono text-sm font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{formatUSD(t.profit)}</div>
+                  <div className={`font-mono text-sm font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{fmtPnl(t.profit)}</div>
                 </div>
               ))}
             </div>
@@ -247,8 +249,8 @@ function OverviewTab({ me, data, onTogglePause }) {
                     <tr key={t.id || i} className="border-b border-white/5" data-testid={`trade-row-${i}`}>
                       <td className="py-3 font-mono">{t.symbol}</td>
                       <td className={`py-3 font-semibold ${t.side==="BUY"?"text-green-400":"text-red-400"}`}>{t.side}</td>
-                      <td className="py-3 font-mono text-right">{Number(t.lots || 0).toFixed(2)}</td>
-                      <td className={`py-3 font-mono text-right font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{formatUSD(t.profit)}</td>
+                      <td className="py-3 font-mono text-right">{fmtLots(t.lots)}</td>
+                      <td className={`py-3 font-mono text-right font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{fmtPnl(t.profit)}</td>
                       <td className="py-3 text-right text-white/50 text-xs">{(t.closed_at || t.opened_at || "").slice(0,16).replace("T"," ") || "live"}</td>
                     </tr>
                   ))}

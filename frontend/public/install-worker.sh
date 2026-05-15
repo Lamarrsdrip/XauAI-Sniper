@@ -10,7 +10,7 @@ err() { echo -e "${RED}[fail]${NC}  $*"; exit 1; }
 ok()  { echo -e "${GREEN}[ok]${NC}    $*"; }
 
 INSTALL_DIR="$HOME/xauai-worker"
-ZIP_URL="https://xauaisniper.com/xauai_worker_agent_v1.5.1.zip"
+ZIP_URL="https://xauaisniper.com/xauai_worker_agent_v1.5.2.zip"
 
 say "Installing XauAi Cloud Worker → $INSTALL_DIR"
 
@@ -76,7 +76,7 @@ with open(".env","w") as f:
     f.write(f"CLOUD_URL={cloud}\n")
     f.write(f"CLOUD_AGENT_TOKEN={data['agent_token']}\n")
     f.write(f"WORKER_ID={data['worker_id']}\n")
-    f.write("POLL_SEC=10\nHEARTBEAT_SEC=60\nEQUITY_SEC=120\nHTTP_TIMEOUT=15\n")
+    f.write("POLL_SEC=1\nHEARTBEAT_SEC=30\nEQUITY_SEC=30\nHTTP_TIMEOUT=8\n")
     f.write(f"MOCK_MT5={mock}\n")
 print(f"\n[ok] Paired as worker: {data.get('worker_name')}")
 PYEOF

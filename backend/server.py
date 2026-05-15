@@ -2334,13 +2334,48 @@ async def cloud_pause(req: CloudPauseReq, user: dict = Depends(get_cloud_user)):
 # -------- Dashboard Data --------
 @api_router.get("/cloud/dashboard")
 async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
-    trades = await db.cloud_trades.find({"user_id": user["id"]}, {"_id": 0}).sort("opened_at", -1).limit(50).to_list(50)
+    trades_raw = await db.cloud_trades.find({"user_id": user["id"]}, {"_id": 0}).sort("opened_at", -1).limit(500).to_list(500)
+
+    def _num(v, default=0.0):
+        try:
+            return float(v if v is not None else default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _trade_ts(t):
+        return t.get("closed_at") or t.get("opened_at") or ""
+
+    def _calc_profit(t):
+        profit = _num(t.get("profit"), 0.0)
+        if abs(profit) > 1e-9:
+            return profit
+        if not (t.get("status") == "closed" or t.get("closed_at")):
+            return profit
+        lots = _num(t.get("lots"), 0.0)
+        entry = _num(t.get("entry"), 0.0)
+        exit_px = _num(t.get("exit_price"), 0.0)
+        side = str(t.get("side") or "").upper()
+        if lots > 0 and entry > 0 and exit_px > 0 and side in ("BUY", "SELL"):
+            direction = 1 if side == "BUY" else -1
+            return (exit_px - entry) * lots * 100.0 * direction
+        return profit
+
+    trades = []
+    for t in trades_raw:
+        row = dict(t)
+        row["lots"] = _num(row.get("lots"), 0.0)
+        row["entry"] = _num(row.get("entry"), 0.0)
+        row["exit_price"] = _num(row.get("exit_price"), 0.0)
+        row["profit"] = _calc_profit(row)
+        trades.append(row)
+    trades.sort(key=_trade_ts, reverse=True)
     completed = [t for t in trades if t.get("status") == "closed" or t.get("closed_at")]
     totals = {"total_trades": len(trades),
               "completed_trades": len(completed),
               "wins": sum(1 for t in completed if float(t.get("profit") or 0) > 0),
               "losses": sum(1 for t in completed if float(t.get("profit") or 0) < 0),
-              "net_pnl": sum(float(t.get("profit") or 0) for t in trades)}
+              "net_pnl": sum(float(t.get("profit") or 0) for t in completed)}
+    trades = trades[:50]
     # equity curve data (last 30 days aggregated daily)
     equity = []
     try:
@@ -3302,6 +3337,7 @@ class AgentTradeLog(BaseModel):
     user_id: str; ticket: int; symbol: str; side: str
     lots: float; entry: float; exit_price: float; profit: float
     opened_at: str; closed_at: str; reason: Optional[str] = ""
+    signal_id: Optional[str] = ""
 
 class AgentTradePartialLog(BaseModel):
     user_id: str
@@ -3325,11 +3361,60 @@ async def cloud_agent_trade_close(req: AgentTradeLog, request: Request):
     await _require_agent_async(request)
     doc = req.model_dump()
     doc["status"] = "closed"
-    existing = await db.cloud_trades.find_one({"user_id": req.user_id, "ticket": req.ticket}, {"_id": 0, "id": 1})
+    existing = await db.cloud_trades.find_one(
+        {"user_id": req.user_id, "ticket": req.ticket},
+        {"_id": 0}
+    )
+    if not existing and req.signal_id:
+        existing = await db.cloud_trades.find_one(
+            {"user_id": req.user_id, "signal_id": req.signal_id, "status": "open"},
+            {"_id": 0}
+        )
+    if not existing and req.signal_id:
+        existing = await db.cloud_trades.find_one(
+            {"user_id": req.user_id, "signal_id": req.signal_id},
+            {"_id": 0},
+            sort=[("opened_at", -1)]
+        )
+
+    def _num(v, default=0.0):
+        try:
+            return float(v if v is not None else default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _keep(existing_value, incoming_value):
+        if incoming_value in ("", None):
+            return existing_value
+        if isinstance(incoming_value, (int, float)) and abs(float(incoming_value)) < 1e-12:
+            return existing_value if existing_value not in ("", None, 0, 0.0) else incoming_value
+        return incoming_value
+
+    def _fallback_profit(row):
+        profit = _num(row.get("profit"), 0.0)
+        if abs(profit) > 1e-9:
+            return profit
+        lots = _num(row.get("lots"), 0.0)
+        entry = _num(row.get("entry"), 0.0)
+        exit_px = _num(row.get("exit_price"), 0.0)
+        side = str(row.get("side") or "").upper()
+        if lots > 0 and entry > 0 and exit_px > 0 and side in ("BUY", "SELL"):
+            direction = 1 if side == "BUY" else -1
+            return (exit_px - entry) * lots * 100.0 * direction
+        return profit
+
     if existing:
-        set_doc = {k: v for k, v in doc.items() if v not in ("", None)}
+        merged = dict(existing)
+        for k, v in doc.items():
+            merged[k] = _keep(existing.get(k), v)
+        merged["status"] = "closed"
+        merged["ticket"] = int(req.ticket or existing.get("ticket") or 0)
+        merged["closed_at"] = req.closed_at or existing.get("closed_at") or datetime.now(timezone.utc).isoformat()
+        merged["profit"] = _fallback_profit(merged)
+        set_doc = {k: v for k, v in merged.items() if k != "_id"}
         await db.cloud_trades.update_one({"id": existing["id"]}, {"$set": set_doc})
     else:
+        doc["profit"] = _fallback_profit(doc)
         doc["id"] = str(uuid.uuid4())
         await db.cloud_trades.insert_one(doc.copy())
     return {"ok": True}
