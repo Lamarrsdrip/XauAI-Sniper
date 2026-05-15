@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.10 — Scan + Sync Fix    |
+//|                                     v5.8.11 — Expectancy Fix     |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.90"
-#property description "XAUUSD AI Sniper v5.8.10 — SCAN + SYNC FIX"
-#property description "Adds indicator-buffer self-healing and stronger large-account sizing"
-#property description "while preserving equity, margin, aggregate-risk, and broker caps."
+#property description "XAUUSD AI Sniper v5.8.11 — EXPECTANCY FIX"
+#property description "Keeps scan-sync + lot scaling, then prevents one loss wiping many wins."
+#property description "Adds Clean-Exit hard loss armor and daily peak giveback control."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -312,9 +312,9 @@ input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm
 
 input group "=== BASKET PROTECT (v4.9.7 — smarter thresholds + fast-reversal circuit breakers) ==="
 input bool   InpBasketMode          = true;   // Master toggle: SL logic works on AGGREGATE PnL, not per-trade
-input double InpBasketArmPct        = 2.5;    // v5.8.3 — arm later so valid gold runners are not basket-closed too early
-input double InpBasketArmFloor      = 300.0;  // v5.8.3 — don't arm on small noise profits
-input double InpBasketLockMinPct    = 45.0;   // v5.8.3 — lock profit but allow trend breathing room
+input double InpBasketArmPct        = 1.6;    // v5.8.11: arm earlier so a winning day cannot fully round-trip
+input double InpBasketArmFloor      = 250.0;  // v5.8.11: still ignores tiny noise, but protects real bankable moves
+input double InpBasketLockMinPct    = 55.0;   // v5.8.11: lock more of the open basket once armed
 input double InpBasketRatchetT1Pct  = 1.5;    // v4.9.7 — was 0.5, now 1.5 (tier-1 fires later, let winners run)
 input double InpBasketRatchetT2Pct  = 3.5;    // v4.9.7 — was 2.5, now 3.5 (tier-2 fires later)
 input double InpBasketRatchetT3Pct  = 6.0;    // v4.9.7 — was 5.0, now 6.0 (tier-3 fires on REAL big peaks)
@@ -322,9 +322,9 @@ input double InpBasketBEPct         = 0.5;    // v4.9.7 — was 0.3, now 0.5 (BE
 input bool   InpBasketDisablePerTrade = true; // When basket active, disable per-trade peak-lock & ratchet (no conflict)
 // === v4.9.7 Smart Guards ===
 input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on sudden reversal even if floor not breached
-input double InpBasketFastDropPct       = 50.0; // If basket gives back ≥X% of peak within FastWindowSec → close immediately
+input double InpBasketFastDropPct       = 38.0; // If basket gives back >= X% of peak within FastWindowSec, close immediately
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
-input double InpBasketHardGivebackPct   = 2.0;  // HARD CAP: never give back more than X% of balance from peak
+input double InpBasketHardGivebackPct   = 0.9;  // HARD CAP: never give back more than X% of balance from peak
 input bool   InpBasketBlockPyramidWhenArmed = true; // Block NEW pyramid entries while basket is armed (don't stack into a flush)
 
 input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
@@ -357,13 +357,22 @@ input int    InpCleanChandelierLookback = 20; // Bars to scan for highest high /
 input bool   InpCleanMomentumInvalidation = true; // Cut trade if momentum flips hard against us
 input int    InpCleanStaleHours     = 3;      // Close if > X hours in AND profit < StaleMinR, unless trend still validates
 input double InpCleanStaleMinR      = 0.35;   // Threshold below which we consider trade stale
-input double InpCleanMaxLossR       = 1.25;   // Max tolerated loss before confirmed invalidation can close early
-input double InpCleanEmergencyLossR = 1.80;   // Emergency close even without full confirmation
+input double InpCleanMaxLossR       = 0.95;   // v5.8.11: confirmed invalidation cannot wait for a full oversized SL
+input double InpCleanEmergencyLossR = 1.25;   // v5.8.11: emergency cap for failed setups even if signals lag
 input int    InpCleanStructureLookback = 12;  // Bars for swing structure invalidation
 input double InpCleanStructureATRBuffer = 0.20; // Close must break swing by this ATR fraction
-input int    InpCleanMinInvalidationMin = 20; // Don't judge invalidation too early unless emergency loss
-input int    InpCleanStagnantMinutes = 75;    // Time-based exit for flat/choppy trades with no progress
+input int    InpCleanMinInvalidationMin = 8;  // v5.8.11: judge failed setups sooner, not after damage is already large
+input int    InpCleanStagnantMinutes = 55;    // Time-based exit for flat/choppy trades with no progress
 input double InpCleanStagnantMaxR = 0.20;     // Stagnant if abs(R) remains below this after StagnantMinutes
+
+input group "=== EXPECTANCY LOSS ARMOR (v5.8.11 — stop one loss wiping many wins) ==="
+input bool   InpExpectancyLossArmor       = true;  // Runs even when Clean Exits owns trade management
+input double InpExpectancyMaxLossR        = 1.20;  // Per-position hard close at this R loss
+input int    InpExpectancyMinAgeSec       = 90;    // Avoid closing inside first few ticks/spread noise
+input bool   InpExpectancyUseDayGiveback  = true;  // Protect daily HWM after a profitable run
+input double InpExpectancyDayArmPct       = 1.0;   // Arm daily giveback after day HWM is up this % of start equity
+input double InpExpectancyDayMaxGivePct   = 35.0;  // Max allowed giveback of today's HWM profit
+input double InpExpectancyDayGiveFloorUSD = 600.0; // Floor so small normal fluctuation does not close a basket
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // Ask Claude before any rule-based close (HOLD/CLOSE/LOCK $X)
@@ -396,8 +405,8 @@ input int    InpMagicNumber    = 20250401;
 
 input group "=== LOSS PROTECTION (v4.4.5 — trust the SL, stop scalping out) ==="
 input double InpHardStopUSD    = 0;        // Hard $ loss cap per trade (0 = OFF, SL handles it)
-input bool   InpHardStopRBased = true;     // TRUE = HardStop = 3× original SL risk (adaptive, not $-absolute)
-input double InpHardStopRMulti = 3.0;      // HardStop fires at this × initial risk (3R = catastrophic only)
+input bool   InpHardStopRBased = true;     // TRUE = HardStop = adaptive R-based risk, not fixed dollars
+input double InpHardStopRMulti = 1.6;      // v5.8.11: true catastrophic cap; Clean Exits now respects it too
 input bool   InpEarlyAdverseCut = false;   // OFF by default — let SL do its job (was killing good trades)
 input int    InpEarlyAdverseMin = 5;       // Minutes window for early cut
 input double InpEarlyAdverseR  = 1.5;      // Only cut if down > 1.5R early (was 0.7 — too tight)
@@ -1367,7 +1376,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.10 (SCAN + SYNC FIX) READY ===");
+   Print("=== XAUAI SNIPER v5.8.11 (EXPECTANCY FIX) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -3017,6 +3026,15 @@ void OnTick()
          " (> ", DoubleToString(InpDailyLossLimit,1), "% of daily start $", DoubleToString(dailyStartEquity,2),
          "). EA paused until next trading day. Set InpDailyLossLimit=0 to disable this gate.");
          lastGateHeartbeat = TimeCurrent(); }
+      return;
+   }
+
+   // v5.8.11: protect the equity curve after a profitable run. This closes open
+   // positions when today's equity HWM gives back too much, even if daily loss
+   // limits are disabled for demo testing.
+   if(ExpectancyDayGivebackGuard())
+   {
+      UpdateDashboard(lastDashSignal, lastDashScore, lastDashGrade);
       return;
    }
 
@@ -4678,6 +4696,29 @@ void ManagePositions()
       // Dir string for logging
       string dirStr = isBuy ? "BUY" : "SELL";
 
+      // v5.8.11 EXPECTANCY LOSS ARMOR
+      // This must run BEFORE Clean Exits. Earlier builds let Clean Exits return
+      // before the hard-stop layer, so one failed trade could still reach a full
+      // oversized SL after many smaller winners.
+      int ageSec = (int)(TimeCurrent() - posInfo.Time());
+      if(InpExpectancyLossArmor && rDollars > 0 && ageSec >= InpExpectancyMinAgeSec)
+      {
+         double maxLossR = InpExpectancyMaxLossR;
+         if(InpHardStopRBased && InpHardStopRMulti > 0)
+            maxLossR = MathMin(maxLossR, InpHardStopRMulti);
+
+         if(profit <= -(rDollars * maxLossR))
+         {
+            LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
+                    "EXPECTANCY_MAX_LOSS",
+                    StringFormat("Down %.2fR ($%.2f / 1R=$%.2f) >= cap %.2fR after %ds. Preventing one loss from wiping multiple wins.",
+                                 MathAbs(profit) / rDollars, profit, rDollars, maxLossR, ageSec));
+            trade.PositionClose(ticket);
+            lastTradeTime = TimeCurrent();
+            continue;
+         }
+      }
+
       // ============ v4.9.5 CLEAN EXITS (single exit authority) ============
       // When enabled, this handles: BE lock, chandelier trail, partial TP,
       // momentum-flip cut, stale cut. All legacy systems (Peak-Lock, Profit
@@ -6088,6 +6129,39 @@ void CloseAll()
       { trade.PositionClose(posInfo.Ticket()); Print("FORCE CLOSE: #", posInfo.Ticket()); }
 }
 
+bool ExpectancyDayGivebackGuard()
+{
+   if(!InpExpectancyLossArmor || !InpExpectancyUseDayGiveback || dailyStartEquity <= 0)
+      return false;
+
+   double equity = accInfo.Equity();
+   if(equity > pg_dayHWM) pg_dayHWM = equity;
+
+   double dayPeakGain = pg_dayHWM - dailyStartEquity;
+   double armGainUSD  = MathMax(InpExpectancyDayGiveFloorUSD,
+                                dailyStartEquity * InpExpectancyDayArmPct / 100.0);
+   if(dayPeakGain < armGainUSD)
+      return false;
+
+   double givebackUSD = pg_dayHWM - equity;
+   double maxGiveback = MathMax(InpExpectancyDayGiveFloorUSD,
+                                dayPeakGain * InpExpectancyDayMaxGivePct / 100.0);
+   if(givebackUSD < maxGiveback)
+      return false;
+
+   if(CountMyPositions() <= 0)
+      return false;
+
+   PrintFormat("EXPECTANCY_DAY_GUARD: equity HWM $%.2f start $%.2f current $%.2f | peakGain $%.2f giveback $%.2f >= cap $%.2f (%.1f%%) -> CLOSE ALL",
+               pg_dayHWM, dailyStartEquity, equity, dayPeakGain, givebackUSD,
+               maxGiveback, InpExpectancyDayMaxGivePct);
+   lastExitReason = StringFormat("EXPECTANCY DAY GUARD | gave back $%.2f of $%.2f peak gain",
+                                 givebackUSD, dayPeakGain);
+   CloseAll();
+   lastTradeTime = TimeCurrent();
+   return true;
+}
+
 //+------------------------------------------------------------------+
 //| v5.1.0 — PROFIT GUARDIAN                                          |
 //| 1. Tracks daily HWM and tightens risk in 3 tiers as gain grows.   |
@@ -7120,7 +7194,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.10 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.11 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
