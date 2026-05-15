@@ -396,7 +396,7 @@ async def download_ea():
     return Response(
         content=sanitized,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.9_LOT_BUFFER_FIX.mq5"'},
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.10_SCAN_SYNC_FIX.mq5"'},
     )
 
 # Admin-only: serves the FULL master EA with your agent token + cloud fanout
@@ -407,7 +407,7 @@ async def admin_download_ea_master():
     if not p.exists(): raise HTTPException(status_code=404)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.9_LOT_BUFFER_FIX.mq5",
+        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.10_SCAN_SYNC_FIX.mq5",
         media_type="application/octet-stream",
     )
 
@@ -2819,63 +2819,101 @@ class MasterSignalReq(BaseModel):
     master_lots: Optional[float] = 0.0
     master_balance: Optional[float] = 0.0
 
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            value = value.replace(",", "").replace(" ", "").strip()
+            if not value:
+                return default
+        return float(value)
+    except Exception:
+        return default
+
 @api_router.post("/cloud/master/signal")
 async def cloud_master_signal(req: MasterSignalReq, request: Request):
     """Called by the master EA (or bot) whenever a new signal fires.
        If shadow_mode is ON → create simulated trade rows for every active user.
        If OFF → also broadcast to workers for real execution (workers poll)."""
     await _require_agent_async(request)
-    s = await _get_cloud_settings()
-    shadow = s.get("shadow_mode", True)
     now = datetime.now(timezone.utc)
-    # Heartbeat update
-    await db.cloud_settings.update_one({"key": "main"},
-        {"$set": {"master_last_heartbeat": now.isoformat(), "master_ea_status": "online"}}, upsert=True)
-    # Store the signal
-    sig_id = str(uuid.uuid4())
-    signal_doc = {"id": sig_id, "symbol": req.symbol, "side": req.side, "entry": req.entry,
-                  "sl": req.sl, "tp": req.tp, "grade": req.grade, "ts": now.isoformat(),
-                  # v1.3 STRICT MIRROR — propagate master lots + balance so workers
-                  # compute linkedLot = (userBalance / masterBalance) × masterLot.
-                  "master_lots": float(req.master_lots or 0.0),
-                  "master_balance": float(req.master_balance or 0.0)}
-    await db.cloud_signals.insert_one(signal_doc.copy())
+    try:
+        s = await _get_cloud_settings()
+        raw_shadow = s.get("shadow_mode", True)
+        shadow = raw_shadow if isinstance(raw_shadow, bool) else str(raw_shadow).lower() not in ("0", "false", "off", "no")
+        await db.cloud_settings.update_one({"key": "main"},
+            {"$set": {"master_last_heartbeat": now.isoformat(), "master_ea_status": "online"}}, upsert=True)
+        sig_id = str(uuid.uuid4())
+        signal_doc = {"id": sig_id, "symbol": req.symbol, "side": req.side, "entry": _safe_float(req.entry),
+                      "sl": _safe_float(req.sl), "tp": _safe_float(req.tp), "grade": req.grade, "ts": now.isoformat(),
+                      # v1.3 STRICT MIRROR — propagate master lots + balance so workers
+                      # compute linkedLot = (userBalance / masterBalance) × masterLot.
+                      "master_lots": _safe_float(req.master_lots),
+                      "master_balance": _safe_float(req.master_balance)}
+        await db.cloud_signals.insert_one(signal_doc.copy())
+    except Exception as e:
+        logger.exception("[cloud-master-signal] CRITICAL: failed before signal could be stored")
+        raise HTTPException(status_code=500, detail=f"master signal store failed: {type(e).__name__}: {e}")
+
     fanout = 0
+    fanout_errors = []
     if shadow:
         # For every active, non-paused, connected user: create a simulated trade
-        users = await db.cloud_users.find(
-            {"mt5_connected": True, "paused": False, "status": {"$in": ["trial","active"]}},
-            {"_id": 0, "id": 1, "last_balance": 1, "risk_tier": 1}
-        ).to_list(2000)
-        master_lots = float(req.master_lots or 0.0)
-        master_bal  = float(req.master_balance or 0.0)
+        try:
+            users = await db.cloud_users.find(
+                {"mt5_connected": True, "paused": False, "status": {"$in": ["trial","active"]}},
+                {"_id": 0, "id": 1, "last_balance": 1, "risk_tier": 1}
+            ).to_list(2000)
+        except Exception as e:
+            users = []
+            fanout_errors.append(f"user query failed: {type(e).__name__}: {e}")
+            logger.exception("[cloud-master-signal] shadow user query failed for signal %s", sig_id)
+        master_lots = _safe_float(req.master_lots)
+        master_bal  = _safe_float(req.master_balance)
         risk_map = {"conservative": 0.6, "balanced": 1.2, "aggressive": 2.0}
         for u in users:
-            bal = float(u.get("last_balance") or 1000)
-            if master_lots > 0 and master_bal > 0:
-                # STRICT MIRROR — exact copy when balances match, scaled when they differ.
-                lots = max(0.01, round((bal / master_bal) * master_lots, 2))
-            else:
-                # Legacy fallback for old EAs that don't ship master_lots.
-                rpct = risk_map.get(u.get("risk_tier","balanced"), 1.2)
-                slDist = abs(req.entry - req.sl)
-                if slDist <= 0: continue
-                riskUSD = bal * rpct / 100
-                # XAUUSD: 1 lot ≈ $100/pip; pip ≈ $0.01 price; use $1 price move per lot as unit
-                lots = max(0.01, round(riskUSD / (slDist * 100), 2))
-            trade = {"id": str(uuid.uuid4()), "user_id": u["id"], "signal_id": sig_id,
-                     "symbol": req.symbol, "side": req.side, "lots": lots,
-                     "entry": req.entry, "exit_price": 0, "profit": 0,
-                     "status": "shadow_open",
-                     "opened_at": now.isoformat(), "closed_at": None,
-                     "shadow": True, "grade": req.grade}
-            await db.cloud_shadow_trades.insert_one(trade.copy())
-            fanout += 1
-    return {"ok": True, "signal_id": sig_id, "shadow": shadow, "fanout_users": fanout}
+            try:
+                user_id = u.get("id")
+                if not user_id:
+                    fanout_errors.append("user row missing id")
+                    continue
+                bal = _safe_float(u.get("last_balance"), 1000.0)
+                if master_lots > 0 and master_bal > 0:
+                    # STRICT MIRROR — exact copy when balances match, scaled when they differ.
+                    lots = max(0.01, round((bal / master_bal) * master_lots, 2))
+                else:
+                    # Legacy fallback for old EAs that don't ship master_lots.
+                    rpct = risk_map.get(u.get("risk_tier","balanced"), 1.2)
+                    slDist = abs(_safe_float(req.entry) - _safe_float(req.sl))
+                    if slDist <= 0:
+                        fanout_errors.append(f"{user_id}: zero SL distance")
+                        continue
+                    riskUSD = bal * rpct / 100
+                    lots = max(0.01, round(riskUSD / (slDist * 100), 2))
+                trade = {"id": str(uuid.uuid4()), "user_id": user_id, "signal_id": sig_id,
+                         "symbol": req.symbol, "side": req.side, "lots": lots,
+                         "entry": _safe_float(req.entry), "exit_price": 0, "profit": 0,
+                         "status": "shadow_open",
+                         "opened_at": now.isoformat(), "closed_at": None,
+                         "shadow": True, "grade": req.grade}
+                await db.cloud_shadow_trades.insert_one(trade.copy())
+                fanout += 1
+            except Exception as e:
+                fanout_errors.append(f"{u.get('id','unknown')}: {type(e).__name__}: {e}")
+                logger.exception("[cloud-master-signal] shadow fanout failed for signal %s user=%s", sig_id, u.get("id"))
+    return {"ok": True, "signal_id": sig_id, "shadow": shadow, "fanout_users": fanout,
+            "fanout_errors": fanout_errors[:10]}
 
 class MasterSignalCloseReq(BaseModel):
     signal_id: str
     exit_price: float
+    reason: Optional[str] = ""
+
+class MasterSignalPartialReq(BaseModel):
+    signal_id: str
+    exit_price: float
+    close_percent: float = 50.0
     reason: Optional[str] = ""
 
 @api_router.post("/cloud/master/signal-close")
@@ -2912,6 +2950,30 @@ async def cloud_master_close(req: MasterSignalCloseReq, request: Request):
         await db.cloud_trades.insert_one(doc)
         closed += 1
     return {"ok": True, "closed": closed, "signal_marked_closed": True}
+
+@api_router.post("/cloud/master/signal-partial")
+async def cloud_master_partial(req: MasterSignalPartialReq, request: Request):
+    await _require_agent_async(request)
+    sig = await db.cloud_signals.find_one({"id": req.signal_id}, {"_id": 0})
+    if not sig:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    pct = max(1.0, min(float(req.close_percent or 0.0), 99.0))
+    now = datetime.now(timezone.utc)
+    event = {
+        "id": str(uuid.uuid4()),
+        "signal_id": req.signal_id,
+        "exit_price": float(req.exit_price or 0.0),
+        "close_percent": pct,
+        "reason": req.reason or "master partial close",
+        "ts": now.isoformat(),
+    }
+    await db.cloud_signal_partials.insert_one(event.copy())
+    await db.cloud_signals.update_one(
+        {"id": req.signal_id},
+        {"$set": {"last_partial_at": now.isoformat(), "last_partial_percent": pct,
+                  "last_partial_exit_price": float(req.exit_price or 0.0)}}
+    )
+    return {"ok": True, "partial_id": event["id"], "signal_id": req.signal_id, "close_percent": pct}
 
 # Master heartbeat (so admin can see if the master EA is alive even without signals)
 @api_router.post("/cloud/master/heartbeat")
@@ -3000,17 +3062,21 @@ class MasterReasoningReq(BaseModel):
 @api_router.post("/cloud/master/reasoning")
 async def cloud_master_reasoning(req: MasterReasoningReq, request: Request):
     await _require_agent_async(request)
-    doc = req.model_dump()
-    doc["id"] = str(uuid.uuid4())
-    doc["ts"] = datetime.now(timezone.utc).isoformat()
-    await db.cloud_reasoning.insert_one(doc.copy())
-    # keep only the most recent 500 events to bound storage
-    total = await db.cloud_reasoning.estimated_document_count()
-    if total > 600:
-        oldest = await db.cloud_reasoning.find({}, {"_id": 1, "ts": 1}).sort("ts", 1).to_list(total - 500)
-        if oldest:
-            await db.cloud_reasoning.delete_many({"_id": {"$in": [o["_id"] for o in oldest]}})
-    return {"ok": True}
+    try:
+        doc = req.model_dump()
+        doc["id"] = str(uuid.uuid4())
+        doc["ts"] = datetime.now(timezone.utc).isoformat()
+        await db.cloud_reasoning.insert_one(doc.copy())
+        # keep only the most recent 500 events to bound storage
+        total = await db.cloud_reasoning.estimated_document_count()
+        if total > 600:
+            oldest = await db.cloud_reasoning.find({}, {"_id": 1, "ts": 1}).sort("ts", 1).to_list(total - 500)
+            if oldest:
+                await db.cloud_reasoning.delete_many({"_id": {"$in": [o["_id"] for o in oldest]}})
+        return {"ok": True}
+    except Exception as e:
+        logger.exception("[cloud-master-reasoning] failed")
+        raise HTTPException(status_code=500, detail=f"reasoning store failed: {type(e).__name__}: {e}")
 
 @api_router.get("/cloud/me/reasoning")
 async def cloud_me_reasoning(limit: int = 30, _user: dict = Depends(get_cloud_user)):
@@ -3060,7 +3126,13 @@ async def cloud_agent_pending_signals(request: Request, since: str = "", limit: 
     closes = [{"signal_id": c.get("id"), "exit_price": c.get("exit_price", 0),
                "closed_at": c.get("closed_at"), "reason": c.get("close_reason", "")}
               for c in closes_raw]
-    return {"opens": opens, "closes": closes,
+    q_partial: dict = {}
+    if since:
+        q_partial["ts"] = {"$gt": since}
+    partials = await db.cloud_signal_partials.find(
+        q_partial, {"_id": 0}
+    ).sort("ts", -1).to_list(limit)
+    return {"opens": opens, "partials": partials, "closes": closes,
             "server_time": datetime.now(timezone.utc).isoformat()}
 
 # --- Worker feed: users awaiting credential verification ---
@@ -3231,6 +3303,23 @@ class AgentTradeLog(BaseModel):
     lots: float; entry: float; exit_price: float; profit: float
     opened_at: str; closed_at: str; reason: Optional[str] = ""
 
+class AgentTradePartialLog(BaseModel):
+    user_id: str
+    signal_id: str
+    ticket: int
+    symbol: str = "XAUUSD"
+    side: str = ""
+    closed_lots: float = 0.0
+    remaining_lots: float = 0.0
+    close_percent: float = 0.0
+    entry: float = 0.0
+    exit_price: float = 0.0
+    profit: float = 0.0
+    ok: bool = False
+    error: Optional[str] = ""
+    closed_at: str = ""
+    reason: Optional[str] = ""
+
 @api_router.post("/cloud/agent/trade-close")
 async def cloud_agent_trade_close(req: AgentTradeLog, request: Request):
     await _require_agent_async(request)
@@ -3243,6 +3332,25 @@ async def cloud_agent_trade_close(req: AgentTradeLog, request: Request):
     else:
         doc["id"] = str(uuid.uuid4())
         await db.cloud_trades.insert_one(doc.copy())
+    return {"ok": True}
+
+@api_router.post("/cloud/agent/trade-partial")
+async def cloud_agent_trade_partial(req: AgentTradePartialLog, request: Request):
+    await _require_agent_async(request)
+    doc = req.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["status"] = "partial" if req.ok else "partial_failed"
+    doc["closed_at"] = req.closed_at or datetime.now(timezone.utc).isoformat()
+    await db.cloud_trade_partials.insert_one(doc.copy())
+    await db.cloud_fanout_logs.insert_one(doc.copy())
+    if req.ok and req.ticket:
+        await db.cloud_trades.update_one(
+            {"user_id": req.user_id, "signal_id": req.signal_id, "ticket": req.ticket, "status": "open"},
+            {"$set": {"last_partial_at": doc["closed_at"],
+                      "last_partial_lots": float(req.closed_lots or 0.0),
+                      "last_partial_profit": float(req.profit or 0.0),
+                      "lots": float(req.remaining_lots or 0.0)}}
+        )
     return {"ok": True}
 
 # Worker reports each trade-open attempt (success OR failure) so the admin

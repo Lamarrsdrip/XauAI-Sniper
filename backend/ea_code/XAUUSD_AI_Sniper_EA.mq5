@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.9 — Lot + Buffer Fix    |
+//|                                     v5.8.10 — Scan + Sync Fix    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.89"
-#property description "XAUUSD AI Sniper v5.8.9 — LOT + BUFFER FIX"
+#property version   "5.90"
+#property description "XAUUSD AI Sniper v5.8.10 — SCAN + SYNC FIX"
 #property description "Adds indicator-buffer self-healing and stronger large-account sizing"
 #property description "while preserving equity, margin, aggregate-risk, and broker caps."
 #property strict
@@ -1367,7 +1367,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.9 (LOT + BUFFER FIX) READY ===");
+   Print("=== XAUAI SNIPER v5.8.10 (SCAN + SYNC FIX) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1547,13 +1547,11 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
    ResetLastError();
    int got = CopyBuffer(handle, buffer, start, count, target);
    if(got >= count)
-   {
-      g_indicatorBufferFailCount = 0;
       return true;
-   }
 
    int err = GetLastError();
    int calculated = (handle != INVALID_HANDLE) ? BarsCalculated(handle) : -1;
+   bool staleHandle = (handle == INVALID_HANDLE || calculated < 0 || got < 0);
    g_indicatorBufferFailCount++;
    g_lastSkipReason = StringFormat("INDICATOR_BUFFER_NOT_READY: %s got %d/%d barsCalc=%d err=%d fail=%d/%d",
                                    label, got, count, calculated, err,
@@ -1568,8 +1566,17 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
       g_lastIndicatorFailLog = TimeCurrent();
    }
 
-   if(InpIndicatorReloadFails > 0 && g_indicatorBufferFailCount >= InpIndicatorReloadFails)
-      RebuildEntryIndicatorHandles(label);
+   if(staleHandle || (InpIndicatorReloadFails > 0 && g_indicatorBufferFailCount >= InpIndicatorReloadFails))
+   {
+      string why = staleHandle
+                   ? StringFormat("%s stale handle/copy failure (got=%d barsCalc=%d err=%d)", label, got, calculated, err)
+                   : label;
+      if(RebuildEntryIndicatorHandles(why))
+      {
+         g_timerForceScan = true;
+         g_lastSkipReason = "INDICATOR_RECOVERED: handles rebuilt; retrying scan on next tick/timer";
+      }
+   }
 
    return false;
 }
@@ -2908,7 +2915,7 @@ void OnTick()
       else if(!symOK)      status = StringFormat("WRONG SYMBOL '%s' — attach EA to XAUUSD chart (your broker may call it XAUUSDm / XAUUSD.r / GOLD)", sym);
       else if(!termAlgo)   status = "ALGO TRADING OFF — click the 'Algo Trading' toolbar button until it turns GREEN";
       else if(!mqlAlgo)    status = "EA-LEVEL ALGO NOT ALLOWED — re-attach EA and tick 'Allow Algo Trading' in the Common tab";
-      else if(openPs > 0)  status = StringFormat("MANAGING %d OPEN POSITION(S) — entries paused while positions active", openPs);
+      else if(openPs > 0)  status = StringFormat("MANAGING %d OPEN POSITION(S) + SCANNING — analysis remains active while trades run", openPs);
       else if(StringLen(g_lastSkipReason) > 0) status = "IDLE — " + g_lastSkipReason;
       else                 status = StringFormat("SCANNING — spread=%.0fpts, all systems OK, waiting for A/A+ setup", curSpr);
 
@@ -3082,10 +3089,13 @@ void OnTick()
 
    // Spread check — blocks NEW ENTRIES only
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   bool spreadBlocksEntry = false;
+   string spreadBlockReason = "";
    if(spread > InpMaxSpread)
    {
-      g_lastSkipReason = StringFormat("SPREAD_TOO_WIDE: %.0f > %d pts (wait for spread to narrow, or raise InpMaxSpread)", spread, InpMaxSpread);
-      return;
+      spreadBlocksEntry = true;
+      spreadBlockReason = StringFormat("SPREAD_TOO_WIDE: %.0f > %d pts (analysis continues; entries wait for spread to narrow)", spread, InpMaxSpread);
+      g_lastSkipReason = spreadBlockReason;
    }
 
    // New M5 bar only for entries, with watchdog recovery.
@@ -3139,24 +3149,46 @@ void OnTick()
    if(!CopyEntryBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15, "RSI_M15")) return;
    if(!CopyEntryBuffer(hStoch, 0, 0, 3, bufStochK, "STOCH_K")) return;
    if(!CopyEntryBuffer(hStoch, 1, 0, 3, bufStochD, "STOCH_D")) return;
+   g_indicatorBufferFailCount = 0;
    if(curBar > 0) g_lastEntryBarSeen = curBar;
    g_lastEntryScanAt = TimeCurrent();
 
    int maxTradesToday = EffectiveMaxTradesPerDay();
-   if(CountMyPositions() >= InpMaxOpenTrades || todayTradeCount >= maxTradesToday)
-   { UpdateDashboard(0, 0, "MAX"); lastDashSignal=0; lastDashScore=0; lastDashGrade="MAX"; return; }
+   bool entryExecutionBlocked = false;
+   string entryExecutionBlockReason = "";
+   string entryExecutionBlockGrade = "";
+   int openNowForScan = CountMyPositions();
+   if(openNowForScan >= InpMaxOpenTrades)
+   {
+      entryExecutionBlocked = true;
+      entryExecutionBlockGrade = "MAX-OPEN";
+      entryExecutionBlockReason = StringFormat("max open trades reached (%d/%d); market analysis continues but fresh entries are blocked",
+                                               openNowForScan, InpMaxOpenTrades);
+   }
+   else if(todayTradeCount >= maxTradesToday)
+   {
+      entryExecutionBlocked = true;
+      entryExecutionBlockGrade = "MAX-DAY";
+      entryExecutionBlockReason = StringFormat("adaptive daily trade cap reached (%d/%d); market analysis continues but fresh entries are blocked",
+                                               todayTradeCount, maxTradesToday);
+   }
 
    // Cooldown
-   if(lastTradeClose > 0 && TimeCurrent() - lastTradeClose < InpTradeCooldown)
-   { UpdateDashboard(0, 0, "CD"); lastDashSignal=0; lastDashScore=0; lastDashGrade="CD"; return; }
+   if(!entryExecutionBlocked && lastTradeClose > 0 && TimeCurrent() - lastTradeClose < InpTradeCooldown)
+   {
+      entryExecutionBlocked = true;
+      entryExecutionBlockGrade = "CD";
+      entryExecutionBlockReason = StringFormat("post-close cooldown active (%ds left); market analysis continues",
+                                               (int)(InpTradeCooldown - (TimeCurrent() - lastTradeClose)));
+   }
 
    // Streak pause (after multiple quick losses)
-   if(IsInStreakPause())
+   if(!entryExecutionBlocked && IsInStreakPause())
    {
-      Print("STREAK PAUSE active — no new entries until ",
-            TimeToString(streakPauseUntil, TIME_SECONDS));
-      UpdateDashboard(0, 0, "PAUSED"); lastDashSignal=0; lastDashScore=0; lastDashGrade="PAUSED";
-      return;
+      entryExecutionBlocked = true;
+      entryExecutionBlockGrade = "PAUSED";
+      entryExecutionBlockReason = "streak pause active until " + TimeToString(streakPauseUntil, TIME_SECONDS) +
+                                  "; market analysis continues but fresh entries are blocked";
    }
 
    // ============ GATE 1: REGIME ============
@@ -3411,6 +3443,35 @@ void OnTick()
          " | Session:", DoubleToString(sessionQuality, 2),
          " | Score:", DoubleToString(setupScore, 1),
          " | Combined:", DoubleToString(combinedScore, 1), " [", grade, "]");
+
+   if(entryExecutionBlocked)
+   {
+      string msg = "ANALYSIS-ONLY: " + entryExecutionBlockReason;
+      Print("TRADE BLOCKED BECAUSE: ", msg,
+            " | live signal still evaluated: ", setupName, " ",
+            signal > 0 ? "BUY" : "SELL",
+            " combined=", DoubleToString(combinedScore, 1),
+            " grade=", grade);
+      CloudPostReasoning("BLOCK", msg, RegimeName(), setupName,
+                         setupScore, combinedScore, entryExecutionBlockGrade, signal);
+      UpdateDashboard(signal, combinedScore, entryExecutionBlockGrade);
+      lastDashSignal = signal; lastDashScore = combinedScore; lastDashGrade = entryExecutionBlockGrade;
+      return;
+   }
+
+   if(spreadBlocksEntry)
+   {
+      Print("TRADE BLOCKED BECAUSE: ", spreadBlockReason,
+            " | live signal still evaluated: ", setupName, " ",
+            signal > 0 ? "BUY" : "SELL",
+            " combined=", DoubleToString(combinedScore, 1),
+            " grade=", grade);
+      CloudPostReasoning("BLOCK", spreadBlockReason, RegimeName(), setupName,
+                         setupScore, combinedScore, "SPREAD", signal);
+      UpdateDashboard(signal, combinedScore, "SPREAD");
+      lastDashSignal = signal; lastDashScore = combinedScore; lastDashGrade = "SPREAD";
+      return;
+   }
 
    // News check
    if(InpUseNewsFilter && !IsNewsSafe())
@@ -5867,7 +5928,13 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    {
       for(int i = 0; i < PositionsTotal(); i++)
       {
-         if(PositionGetTicket(i) == posId) { stillOpen = true; break; }
+         ulong tk = PositionGetTicket(i);
+         if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+         if((ulong)PositionGetInteger(POSITION_IDENTIFIER) == posId)
+         {
+            stillOpen = true;
+            break;
+         }
       }
    }
    if(stillOpen)
@@ -5878,6 +5945,30 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                         + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
       Print("PARTIAL CLOSE event #", posId, " profit $", DoubleToString(partProfit, 2),
             " — position still open, NOT counted as full trade.");
+      if(CloudEnabled())
+      {
+         double closeVol = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+         double remainVol = 0.0;
+         for(int i = 0; i < PositionsTotal(); i++)
+         {
+            ulong tk = PositionGetTicket(i);
+            if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+            if((ulong)PositionGetInteger(POSITION_IDENTIFIER) == posId)
+            {
+               remainVol = PositionGetDouble(POSITION_VOLUME);
+               break;
+            }
+         }
+         double pct = (closeVol > 0 && (closeVol + remainVol) > 0)
+                      ? (100.0 * closeVol / (closeVol + remainVol))
+                      : 0.0;
+         string sigId = CloudMapGet(posId);
+         if(StringLen(sigId) > 0 && pct > 0)
+            CloudPostSignalPartial(sigId, HistoryDealGetDouble(dealTicket, DEAL_PRICE),
+                                   pct, "master partial close");
+         else
+            Print("☁  CLOUD partial skipped: no signal map or invalid percent for posId=", posId);
+      }
       return;
    }
 
@@ -6743,6 +6834,15 @@ string CloudMapPop(ulong posId)
    return "";
 }
 
+string CloudMapGet(ulong posId)
+{
+   int n = ArraySize(g_cloudPosIds);
+   for(int i = 0; i < n; i++)
+      if(g_cloudPosIds[i] == posId)
+         return g_cloudSigIds[i];
+   return "";
+}
+
 // Extract a substring between the first occurrence of `needle` followed by
 // `"` and the next `"`. Tiny JSON-value extractor — we only need `signal_id`.
 string JsonStr(string src, string key)
@@ -6802,6 +6902,26 @@ void CloudPostSignalClose(string sigId, double exitPrice, string reason)
       Print("☁  CLOUD close POST failed: http=", code, " err=", GetLastError());
    else
       Print("☁  CLOUD close fanout OK — signal_id=", sigId, " exit=", exitPrice);
+}
+
+void CloudPostSignalPartial(string sigId, double exitPrice, double closePct, string reason)
+{
+   if(!CloudEnabled() || StringLen(sigId) < 4 || closePct <= 0) return;
+   string r = reason;
+   StringReplace(r, "\"", "'");
+   if(StringLen(r) > 120) r = StringSubstr(r, 0, 120);
+   string body = StringFormat("{\"signal_id\":\"%s\",\"exit_price\":%.5f,\"close_percent\":%.2f,\"reason\":\"%s\"}",
+                              sigId, exitPrice, closePct, r);
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string url = InpCloudURL + "/api/cloud/master/signal-partial";
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   int code = WebRequest("POST", url, hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200)
+      Print("☁  CLOUD partial POST failed: http=", code, " err=", GetLastError());
+   else
+      Print("☁  CLOUD partial fanout OK — signal_id=", sigId,
+            " closePct=", DoubleToString(closePct, 1), "% exit=", exitPrice);
 }
 
 void CloudHeartbeat()
@@ -7000,7 +7120,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.9 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.10 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

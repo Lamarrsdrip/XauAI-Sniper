@@ -1145,7 +1145,7 @@ function CloudAdminTab({ api, token }) {
                     });
                     const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/octet-stream" }));
                     const a = document.createElement("a");
-                    a.href = url; a.download = "XAUUSD_AI_Sniper_EA_MASTER_v5.8.9_LOT_BUFFER_FIX.mq5";
+                    a.href = url; a.download = "XAUUSD_AI_Sniper_EA_MASTER_v5.8.10_SCAN_SYNC_FIX.mq5";
                     document.body.appendChild(a); a.click(); a.remove();
                     window.URL.revokeObjectURL(url);
                   } catch(e){ alert(e.response?.data?.detail || "Master EA download failed"); }
