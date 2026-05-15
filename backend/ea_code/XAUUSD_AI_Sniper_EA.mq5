@@ -4714,7 +4714,7 @@ void ManagePositions()
                     StringFormat("Down %.2fR ($%.2f / 1R=$%.2f) >= cap %.2fR after %ds. Preventing one loss from wiping multiple wins.",
                                  MathAbs(profit) / rDollars, profit, rDollars, maxLossR, ageSec));
             trade.PositionClose(ticket);
-            lastTradeTime = TimeCurrent();
+            lastTradeClose = TimeCurrent();
             continue;
          }
       }
@@ -6158,7 +6158,7 @@ bool ExpectancyDayGivebackGuard()
    lastExitReason = StringFormat("EXPECTANCY DAY GUARD | gave back $%.2f of $%.2f peak gain",
                                  givebackUSD, dayPeakGain);
    CloseAll();
-   lastTradeTime = TimeCurrent();
+   lastTradeClose = TimeCurrent();
    return true;
 }
 
