@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.8 — Watchdog Scale Build|
+//|                                     v5.8.9 — Lot + Buffer Fix    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.88"
-#property description "XAUUSD AI Sniper v5.8.8 — WATCHDOG SCALE BUILD"
-#property description "Adds scan watchdog recovery, adaptive daily cap, smarter pyramids"
-#property description "and account-size lot scaling while preserving risk caps."
+#property version   "5.89"
+#property description "XAUUSD AI Sniper v5.8.9 — LOT + BUFFER FIX"
+#property description "Adds indicator-buffer self-healing and stronger large-account sizing"
+#property description "while preserving equity, margin, aggregate-risk, and broker caps."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -136,7 +136,7 @@ input bool   InpTPAutoExtend     = true;   // When profit nears TP, push TP furt
 input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this % of TP-distance (e.g. 80%)
 input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
-input double InpMaxLots        = 10.0;     // Hard max lots
+input double InpMaxLots        = 50.0;     // Hard max lots; final equity/margin caps still protect risk
 input double InpMaxRiskPctEquity = 3.0;    // v5.8.4: restored original account-based max risk cap
 input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
 input double InpMaxAggregateRiskPct = 8.0; // v5.8.4: restored original aggregate risk room for demo/cloud testing
@@ -150,6 +150,7 @@ input double InpWeeklyMaxLoss  = 0.0;      // v5.8.4 demo: disabled
 input bool   InpCarefulMode    = true;     // Scale down near target
 input bool   InpAccountSizeBoost = true;   // v5.8.8: lets larger accounts use slightly stronger risk, still capped
 input double InpLargeAccountBoostMax = 1.35;// v5.8.8: maximum lot-risk multiplier from account-size scaling
+input double InpLargeAccountMinRiskPct = 2.00; // v5.9.0: floor for 50k+ accounts unless in drawdown/lockdown
 
 input group "=== STRATEGY ==="
 input int    InpEMAFast        = 50;       // Fast EMA
@@ -456,6 +457,7 @@ input group "=== SCAN WATCHDOG (v5.8.8 — no restart needed) ==="
 input int    InpTimerScanSec     = 15;      // Timer wake-up so slow ticks/VPS lag cannot freeze scan loop
 input int    InpScanWatchdogMin  = 7;       // Force a scan if no successful entry scan for this many minutes
 input int    InpScanSkipLogSec   = 120;     // Log repeated idle-skip detail at most every N seconds
+input int    InpIndicatorReloadFails = 3;   // Rebuild indicator handles after this many buffer failures
 
 input group "=== POST-WINNER ENTRY GUARD (v4.6.5 — user-tunable cooldown) ==="
 input bool   InpPostWinnerGuard    = true;   // Block re-entry in same direction after a winner (set false to disable)
@@ -665,6 +667,8 @@ datetime   g_lastEntryBarSeen = 0;    // v5.8.8: robust M5 bar marker, not trapp
 datetime   g_lastScanSkipLog = 0;     // v5.8.8: throttled reason logs for idle/watchdog decisions
 bool       g_timerForceScan = false;  // v5.8.8: timer asks OnTick to run a recovery scan
 datetime   g_lastPyramidFailTime = 0; // v5.8.8: failed pyramid add cooldown
+int        g_indicatorBufferFailCount = 0; // v5.9.0: rebuild stale indicator handles instead of requiring MT5 restart
+datetime   g_lastIndicatorFailLog = 0;
 
 // TRADE THESIS (AI narrative per open position)
 string     currentTradeThesis = "";
@@ -1363,7 +1367,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.8 (WATCHDOG + SCALE BUILD) READY ===");
+   Print("=== XAUAI SNIPER v5.8.9 (LOT + BUFFER FIX) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1489,6 +1493,85 @@ void OnTimer()
    int secondsSinceScan = (g_lastEntryScanAt > 0) ? (int)(TimeCurrent() - g_lastEntryScanAt) : 999999;
    g_timerForceScan = (InpScanWatchdogMin > 0 && secondsSinceScan >= InpScanWatchdogMin * 60);
    OnTick();
+}
+
+bool RebuildEntryIndicatorHandles(string why)
+{
+   Print("INDICATOR RECOVERY: rebuilding entry indicator handles because ", why);
+
+   if(hEMAFast     != INVALID_HANDLE) IndicatorRelease(hEMAFast);
+   if(hEMASlow     != INVALID_HANDLE) IndicatorRelease(hEMASlow);
+   if(hRSI         != INVALID_HANDLE) IndicatorRelease(hRSI);
+   if(hATR         != INVALID_HANDLE) IndicatorRelease(hATR);
+   if(hBBUpper     != INVALID_HANDLE) IndicatorRelease(hBBUpper);
+   if(hEMAFast_H1  != INVALID_HANDLE) IndicatorRelease(hEMAFast_H1);
+   if(hEMASlow_H1  != INVALID_HANDLE) IndicatorRelease(hEMASlow_H1);
+   if(hEMAFast_H4  != INVALID_HANDLE) IndicatorRelease(hEMAFast_H4);
+   if(hEMASlow_H4  != INVALID_HANDLE) IndicatorRelease(hEMASlow_H4);
+   if(hRSI_M15     != INVALID_HANDLE) IndicatorRelease(hRSI_M15);
+   if(hStoch       != INVALID_HANDLE) IndicatorRelease(hStoch);
+
+   hEMAFast  = iMA(Symbol(), PERIOD_M5, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
+   hEMASlow  = iMA(Symbol(), PERIOD_M5, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
+   hRSI      = iRSI(Symbol(), PERIOD_M5, InpRSIPeriod, PRICE_CLOSE);
+   hATR      = iATR(Symbol(), PERIOD_M5, InpATRPeriod);
+   hBBUpper  = iBands(Symbol(), PERIOD_M5, 20, 0, 2.0, PRICE_CLOSE);
+   hBBLower  = hBBUpper;
+   hBBMid    = hBBUpper;
+   hEMAFast_H1 = iMA(Symbol(), PERIOD_H1, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
+   hEMASlow_H1 = iMA(Symbol(), PERIOD_H1, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
+   hEMAFast_H4 = iMA(Symbol(), InpContextTF, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
+   hEMASlow_H4 = iMA(Symbol(), InpContextTF, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
+   hRSI_M15  = iRSI(Symbol(), PERIOD_M15, InpRSIPeriod, PRICE_CLOSE);
+   hStoch    = iStochastic(Symbol(), PERIOD_M5, 14, 3, 3, MODE_SMA, STO_LOWHIGH);
+
+   bool ok = (hEMAFast     != INVALID_HANDLE && hEMASlow    != INVALID_HANDLE &&
+              hRSI         != INVALID_HANDLE && hATR        != INVALID_HANDLE &&
+              hBBUpper     != INVALID_HANDLE && hEMAFast_H1 != INVALID_HANDLE &&
+              hEMASlow_H1  != INVALID_HANDLE && hEMAFast_H4 != INVALID_HANDLE &&
+              hEMASlow_H4  != INVALID_HANDLE && hRSI_M15    != INVALID_HANDLE &&
+              hStoch       != INVALID_HANDLE);
+   if(ok)
+   {
+      g_indicatorBufferFailCount = 0;
+      Print("INDICATOR RECOVERY: handles rebuilt OK; next tick/timer will retry scan.");
+   }
+   else
+      Print("INDICATOR RECOVERY FAILED: one or more indicator handles are still invalid. Check chart symbol/history.");
+
+   return ok;
+}
+
+bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &target[], string label)
+{
+   ResetLastError();
+   int got = CopyBuffer(handle, buffer, start, count, target);
+   if(got >= count)
+   {
+      g_indicatorBufferFailCount = 0;
+      return true;
+   }
+
+   int err = GetLastError();
+   int calculated = (handle != INVALID_HANDLE) ? BarsCalculated(handle) : -1;
+   g_indicatorBufferFailCount++;
+   g_lastSkipReason = StringFormat("INDICATOR_BUFFER_NOT_READY: %s got %d/%d barsCalc=%d err=%d fail=%d/%d",
+                                   label, got, count, calculated, err,
+                                   g_indicatorBufferFailCount, InpIndicatorReloadFails);
+   if(TimeCurrent() - g_lastIndicatorFailLog >= 60)
+   {
+      Print("SCAN BUFFER WAIT: ", g_lastSkipReason,
+            " | bars M5=", Bars(Symbol(), PERIOD_M5),
+            " M15=", Bars(Symbol(), PERIOD_M15),
+            " H1=", Bars(Symbol(), PERIOD_H1),
+            " HTF=", Bars(Symbol(), InpContextTF));
+      g_lastIndicatorFailLog = TimeCurrent();
+   }
+
+   if(InpIndicatorReloadFails > 0 && g_indicatorBufferFailCount >= InpIndicatorReloadFails)
+      RebuildEntryIndicatorHandles(label);
+
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -3042,20 +3125,20 @@ void OnTick()
    if(InpAsiaRangeBreakout) UpdateAsiaRange();
 
    // Load indicators
-   if(CopyBuffer(hEMAFast, 0, 0, 12, bufEMAFast) < 12)      { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_FAST_M5"; return; }
-   if(CopyBuffer(hEMASlow, 0, 0, 12, bufEMASlow) < 12)      { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_SLOW_M5"; return; }
-   if(CopyBuffer(hRSI, 0, 0, 5, bufRSI) < 5)                 { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: RSI_M5"; return; }
-   if(CopyBuffer(hATR, 0, 0, 5, bufATR) < 5)                 { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: ATR_M5"; return; }
-   if(CopyBuffer(hBBUpper, 1, 0, 12, bufBBUpper) < 12)       { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: BB_UPPER"; return; }
-   if(CopyBuffer(hBBUpper, 2, 0, 12, bufBBLower) < 12)       { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: BB_LOWER"; return; }
-   if(CopyBuffer(hBBUpper, 0, 0, 12, bufBBMid) < 12)         { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: BB_MID"; return; }
-   if(CopyBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1) < 3)   { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_FAST_H1 (broker may need time to load H1 history)"; return; }
-   if(CopyBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1) < 3)   { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_SLOW_H1"; return; }
-   if(CopyBuffer(hEMAFast_H4, 0, 0, 3, bufEMAFast_H4) < 3)   { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_FAST_HTF (load HTF chart once to prime buffer)"; return; }
-   if(CopyBuffer(hEMASlow_H4, 0, 0, 3, bufEMASlow_H4) < 3)   { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: EMA_SLOW_HTF"; return; }
-   if(CopyBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15) < 3)          { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: RSI_M15"; return; }
-   if(CopyBuffer(hStoch, 0, 0, 3, bufStochK) < 3)             { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: STOCH_K"; return; }
-   if(CopyBuffer(hStoch, 1, 0, 3, bufStochD) < 3)             { g_lastSkipReason="INDICATOR_BUFFER_NOT_READY: STOCH_D"; return; }
+   if(!CopyEntryBuffer(hEMAFast, 0, 0, 12, bufEMAFast, "EMA_FAST_M5")) return;
+   if(!CopyEntryBuffer(hEMASlow, 0, 0, 12, bufEMASlow, "EMA_SLOW_M5")) return;
+   if(!CopyEntryBuffer(hRSI, 0, 0, 5, bufRSI, "RSI_M5")) return;
+   if(!CopyEntryBuffer(hATR, 0, 0, 5, bufATR, "ATR_M5")) return;
+   if(!CopyEntryBuffer(hBBUpper, 1, 0, 12, bufBBUpper, "BB_UPPER")) return;
+   if(!CopyEntryBuffer(hBBUpper, 2, 0, 12, bufBBLower, "BB_LOWER")) return;
+   if(!CopyEntryBuffer(hBBUpper, 0, 0, 12, bufBBMid, "BB_MID")) return;
+   if(!CopyEntryBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1, "EMA_FAST_H1")) return;
+   if(!CopyEntryBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1, "EMA_SLOW_H1")) return;
+   if(!CopyEntryBuffer(hEMAFast_H4, 0, 0, 3, bufEMAFast_H4, "EMA_FAST_HTF")) return;
+   if(!CopyEntryBuffer(hEMASlow_H4, 0, 0, 3, bufEMASlow_H4, "EMA_SLOW_HTF")) return;
+   if(!CopyEntryBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15, "RSI_M15")) return;
+   if(!CopyEntryBuffer(hStoch, 0, 0, 3, bufStochK, "STOCH_K")) return;
+   if(!CopyEntryBuffer(hStoch, 1, 0, 3, bufStochD, "STOCH_D")) return;
    if(curBar > 0) g_lastEntryBarSeen = curBar;
    g_lastEntryScanAt = TimeCurrent();
 
@@ -3719,6 +3802,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    if(InpAccountMode == ACCT_CONSERVATIVE) baseRisk = 0.6;
    if(InpAccountMode == ACCT_AGGRESSIVE)   baseRisk = 2.0;
    double riskPct = baseRisk * sizeMulti;
+   double riskAfterSignal = riskPct;
 
    double acctSizeMult = AccountSizeRiskMultiplier();
    if(acctSizeMult != 1.0)
@@ -3728,6 +3812,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
             " (large accounts scale stronger; small accounts protected)");
       riskPct *= acctSizeMult;
    }
+   double riskAfterAccount = riskPct;
 
    // v5.1.0 — PROFIT GUARDIAN: tier-based risk scaling on top of everything else
    double pgMult = PG_RiskMultiplier();
@@ -3738,6 +3823,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       riskPct *= pgMult;
       if(pgMult <= 0.001) return;   // tier 3: no new lots
    }
+   double riskAfterPG = riskPct;
 
    // DRAWDOWN RECOVERY MODE: cap risk at InpDrawdownRisk% until we get a win
    if(drawdownActive)
@@ -3757,24 +3843,30 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       if(wPct > InpWeeklyTarget * 0.75) riskPct *= 0.25;
       else if(wPct > InpWeeklyTarget * 0.5) riskPct *= 0.5;
    }
+   double riskAfterCareful = riskPct;
 
    // Session scaling
    MqlDateTime dt; TimeCurrent(dt);
+   double sessionMult = 1.0;
    if(dt.hour >= 0 && dt.hour < 8)
    {
       double asianMult = (IsTrendContinuationRegime(signal) && accInfo.Equity() >= 25000.0) ? 0.55 : 0.40;
+      sessionMult = asianMult;
       riskPct *= asianMult; // Asian session is still quieter, but no longer crushes large clean-trend lots to dust.
    }
+   double riskAfterSession = riskPct;
 
    // Auto risk scaling from streaks
+   double patternMult = 1.0;
    if(patternCount >= 5)
    {
       int rW = 0;
       for(int p = patternCount - 1; p >= MathMax(0, patternCount - 5); p--)
          if(patterns[p].wasWinner) rW++;
-      if(rW >= 4) riskPct *= 1.3;
-      else if(rW <= 1) riskPct *= 0.5;
+      if(rW >= 4) { patternMult = 1.3; riskPct *= patternMult; }
+      else if(rW <= 1) { patternMult = 0.5; riskPct *= patternMult; }
    }
+   double riskAfterPattern = riskPct;
 
    // VOLATILITY-ADAPTIVE SIZING (reduce in vol spikes, boost in calm)
    double volMult = GetVolAdaptiveMult();
@@ -3785,6 +3877,22 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       riskPct *= volMult;
    }
 
+   double equityForSizing = accInfo.Equity();
+   double largeFloor = 0.0;
+   if(InpLargeAccountMinRiskPct > 0 && equityForSizing >= 50000.0 && !drawdownActive && pgMult > 0.40)
+      largeFloor = InpLargeAccountMinRiskPct;
+   else if(InpLargeAccountMinRiskPct > 0 && equityForSizing >= 25000.0 && !drawdownActive && pgMult > 0.40)
+      largeFloor = MathMin(1.25, InpLargeAccountMinRiskPct);
+
+   if(largeFloor > 0 && riskPct < largeFloor)
+   {
+      Print("LOT-FLOOR: large account equity $", DoubleToString(equityForSizing, 2),
+            " raised effective risk ", DoubleToString(riskPct, 2), "% -> ",
+            DoubleToString(largeFloor, 2),
+            "% after small multipliers. Equity cap still limits final lots.");
+      riskPct = largeFloor;
+   }
+
    double riskAmount = balance * riskPct / 100.0;
    double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
    double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
@@ -3793,10 +3901,28 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
    if(tickValue <= 0 || tickSize <= 0 || slDist <= 0) return;
 
-   double lots = riskAmount / (slDist / tickSize * tickValue);
-   lots = MathFloor(lots / lotStep) * lotStep;
-   lots = MathMax(minLot, MathMin(maxLot, lots));
+   double slDollarPerLotRaw = (slDist / tickSize) * tickValue;
+   double rawLots = riskAmount / slDollarPerLotRaw;
+   double lots = MathFloor(rawLots / lotStep) * lotStep;
+   double brokerLimitedLots = MathMin(maxLot, lots);
+   if(brokerLimitedLots < minLot)
+   {
+      Print("LOT-CALC SKIP: balance=$", DoubleToString(balance,2),
+            " equity=$", DoubleToString(equityForSizing,2),
+            " finalRisk=", DoubleToString(riskPct,2), "%",
+            " riskUSD=$", DoubleToString(riskAmount,2),
+            " slDist=", DoubleToString(slDist,2),
+            " sl$/lot=$", DoubleToString(slDollarPerLotRaw,2),
+            " rawLots=", DoubleToString(rawLots,4),
+            " roundedLots=", DoubleToString(lots,4),
+            " brokerMin=", DoubleToString(minLot,4),
+            " reason=calculated size below broker minimum; skipped instead of over-risking.");
+      return;
+   }
+   lots = brokerLimitedLots;
+   double beforeInpMaxLots = lots;
    if(lots > InpMaxLots) lots = InpMaxLots;
+   double afterInpMaxLots = lots;
 
    // v4.7.5 — HARD EQUITY-% CAP: regardless of risk math, no single trade can
    //   risk more than InpMaxRiskPctEquity% of current equity if SL hits.
@@ -3807,7 +3933,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    {
       double equity = accInfo.Equity();
       double maxDollarLoss = equity * InpMaxRiskPctEquity / 100.0;
-      double slDollarPerLot = (slDist / tickSize) * tickValue;
+      double slDollarPerLot = slDollarPerLotRaw;
       if(slDollarPerLot > 0)
       {
          double maxAllowedLots = maxDollarLoss / slDollarPerLot;
@@ -3827,6 +3953,13 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    if(lotStep > 0 && lotStep < 0.01) lotDigits = 3;
    if(lotStep > 0 && lotStep < 0.001) lotDigits = 4;
    lots = NormalizeDouble(lots, lotDigits);
+   if(lots < minLot)
+   {
+      Print("LOT-CALC SKIP: final lot ", DoubleToString(lots, lotDigits),
+            " below broker minimum ", DoubleToString(minLot, lotDigits),
+            " after risk/equity caps. Trade skipped safely.");
+      return;
+   }
 
    // Margin check
    double freeMargin = accInfo.FreeMargin();
@@ -3842,6 +3975,32 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       if(marginNeeded > freeMargin * 0.8) { Print("NO MARGIN"); return; }
    }
    lots = NormalizeDouble(lots, lotDigits);
+
+   Print("LOT-CALC: balance=$", DoubleToString(balance,2),
+         " equity=$", DoubleToString(equityForSizing,2),
+         " modeRisk=", DoubleToString(baseRisk,2), "%",
+         " signalMult=", DoubleToString(sizeMulti,2),
+         " riskSignal=", DoubleToString(riskAfterSignal,2), "%",
+         " acctMult=", DoubleToString(acctSizeMult,2),
+         " riskAcct=", DoubleToString(riskAfterAccount,2), "%",
+         " pgMult=", DoubleToString(pgMult,2),
+         " riskPG=", DoubleToString(riskAfterPG,2), "%",
+         " riskCareful=", DoubleToString(riskAfterCareful,2), "%",
+         " sessionMult=", DoubleToString(sessionMult,2),
+         " riskSession=", DoubleToString(riskAfterSession,2), "%",
+         " patternMult=", DoubleToString(patternMult,2),
+         " riskPattern=", DoubleToString(riskAfterPattern,2), "%",
+         " volMult=", DoubleToString(volMult,2),
+         " finalRisk=", DoubleToString(riskPct,2), "%",
+         " riskUSD=$", DoubleToString(riskAmount,2),
+         " slDist=", DoubleToString(slDist,2),
+         " sl$/lot=$", DoubleToString(slDollarPerLotRaw,2),
+         " rawLots=", DoubleToString(rawLots,3),
+         " brokerLots=", DoubleToString(brokerLimitedLots,lotDigits),
+         " beforeMax=", DoubleToString(beforeInpMaxLots,lotDigits),
+         " maxInputLots=", DoubleToString(InpMaxLots,2),
+         " afterMax=", DoubleToString(afterInpMaxLots,lotDigits),
+         " finalLots=", DoubleToString(lots,lotDigits));
 
    // v4.5.5 — LOUD WARN if margin forced a lot reduction > 20%.
    // v4.5.6 — Throttled to once per 5 min to avoid log spam.
@@ -6841,7 +7000,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.8 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.9 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
