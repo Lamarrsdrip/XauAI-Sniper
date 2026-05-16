@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.13 — Basket Runner Fix  |
+//|                                     v5.8.14 — Risk Sync Audit  |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.90"
-#property description "XAUUSD AI Sniper v5.8.13 — BASKET RUNNER FIX"
+#property version   "5.91"
+#property description "XAUUSD AI Sniper v5.8.14 — RISK SYNC AUDIT"
 #property description "Lets gold trades breathe while banking basket profit in stages."
 #property description "Adds soft basket lock, soft loss de-risk, and equity-based loss backstops."
 #property strict
@@ -312,7 +312,7 @@ input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm
 
 input group "=== BASKET PROTECT (v4.9.7 — smarter thresholds + fast-reversal circuit breakers) ==="
 input bool   InpBasketMode          = true;   // Master toggle: SL logic works on AGGREGATE PnL, not per-trade
-input double InpBasketArmPct        = 2.2;    // v5.8.13: let winners breathe more, but still protect real basket profit
+input double InpBasketArmPct        = 2.2;    // v5.8.14: let winners breathe more, but still protect real basket profit
 input double InpBasketArmFloor      = 300.0;  // don't arm on small noise profits
 input double InpBasketLockMinPct    = 45.0;   // lock profit but allow trend breathing room
 input double InpBasketRatchetT1Pct  = 1.5;    // v4.9.7 — was 0.5, now 1.5 (tier-1 fires later, let winners run)
@@ -326,7 +326,7 @@ input double InpBasketFastDropPct       = 50.0; // If basket gives back >= X% of
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
 input double InpBasketHardGivebackPct   = 1.5;  // HARD CAP: never give back more than X% of balance from peak
 input bool   InpBasketBlockPyramidWhenArmed = true; // Block NEW pyramid entries while basket is armed (don't stack into a flush)
-input bool   InpBasketSoftLockFirst     = true; // v5.8.13: first basket-floor hit banks partial only; runner stays alive
+input bool   InpBasketSoftLockFirst     = true; // v5.8.14: first basket-floor hit banks partial only; runner stays alive
 input double InpBasketSoftLockPct       = 35.0; // % of each open layer to bank on first basket lock
 input double InpBasketRunnerFloorPct    = 20.0; // After soft lock, keep only a small positive floor for the runner
 
@@ -349,18 +349,18 @@ input double InpTrendHoldTrailATR = 3.0;   // Trail distance in trend-hold mode 
 
 input group "=== CLEAN EXITS (v5.8.3 — balanced statistical trade management) ==="
 input bool   InpCleanExits          = true;   // MASTER toggle — disables all other per-trade trails
-input double InpCleanBEActivateR    = 1.60;   // v5.8.13: wait for stronger confirmation before BE
+input double InpCleanBEActivateR    = 1.60;   // v5.8.14: wait for stronger confirmation before BE
 input double InpCleanBECushionR     = 0.05;   // Small cushion; do not choke valid pullbacks
-input double InpCleanChandelierStartR = 3.00; // v5.8.13: runner trail starts later so wins can grow
+input double InpCleanChandelierStartR = 3.00; // v5.8.14: runner trail starts later so wins can grow
 input double InpCleanChandelierATR1 = 4.2;    // Wider +3R to +4R trail for gold continuation
 input double InpCleanChandelierATR2 = 3.2;    // Wider +4R+ trail; protects without clipping every pullback
-input double InpCleanPartialR       = 2.80;   // v5.8.13: take partial later, after real move
+input double InpCleanPartialR       = 2.80;   // v5.8.14: take partial later, after real move
 input double InpCleanPartialPct     = 15.0;   // Smaller partial; leaves 85% runner
 input int    InpCleanChandelierLookback = 20; // Bars to scan for highest high / lowest low
 input bool   InpCleanMomentumInvalidation = true; // Cut trade if momentum flips hard against us
 input int    InpCleanStaleHours     = 3;      // Close if > X hours in AND profit < StaleMinR, unless trend still validates
 input double InpCleanStaleMinR      = 0.35;   // Threshold below which we consider trade stale
-input double InpCleanMaxLossR       = 1.35;   // v5.8.13: confirmed invalidation closes, but normal XAU pullbacks breathe
+input double InpCleanMaxLossR       = 1.35;   // v5.8.14: confirmed invalidation closes, but normal XAU pullbacks breathe
 input double InpCleanEmergencyLossR = 2.20;   // Emergency close only after a real failed setup
 input int    InpCleanStructureLookback = 12;  // Bars for swing structure invalidation
 input double InpCleanStructureATRBuffer = 0.20; // Close must break swing by this ATR fraction
@@ -368,7 +368,7 @@ input int    InpCleanMinInvalidationMin = 15; // Do not judge normal early XAU p
 input int    InpCleanStagnantMinutes = 75;    // Time-based exit for flat/choppy trades with no progress
 input double InpCleanStagnantMaxR = 0.20;     // Stagnant if abs(R) remains below this after StagnantMinutes
 
-input group "=== EXPECTANCY LOSS ARMOR (v5.8.13 — breathe first, de-risk before disaster) ==="
+input group "=== EXPECTANCY LOSS ARMOR (v5.8.14 — breathe first, de-risk before disaster) ==="
 input bool   InpExpectancyLossArmor       = true;  // Runs even when Clean Exits owns trade management
 input bool   InpExpectancySoftDeRisk      = true;  // First response is partial size reduction, not full kill
 input double InpExpectancySoftLossR       = 1.25;  // Soft de-risk trigger by R
@@ -415,7 +415,7 @@ input int    InpMagicNumber    = 20250401;
 input group "=== LOSS PROTECTION (v4.4.5 — trust the SL, stop scalping out) ==="
 input double InpHardStopUSD    = 0;        // Hard $ loss cap per trade (0 = OFF, SL handles it)
 input bool   InpHardStopRBased = true;     // TRUE = HardStop = adaptive R-based risk, not fixed dollars
-input double InpHardStopRMulti = 2.8;      // v5.8.13: catastrophic only; soft de-risk handles earlier damage
+input double InpHardStopRMulti = 2.8;      // v5.8.14: catastrophic only; soft de-risk handles earlier damage
 input bool   InpEarlyAdverseCut = false;   // OFF by default — let SL do its job (was killing good trades)
 input int    InpEarlyAdverseMin = 5;       // Minutes window for early cut
 input double InpEarlyAdverseR  = 1.5;      // Only cut if down > 1.5R early (was 0.7 — too tight)
@@ -668,7 +668,7 @@ double     g_basketPeakUSD   = 0;     // Max total floating $ reached since last
 double     g_basketFloorUSD  = 0;     // Dynamic floor — if total falls below this, close ALL
 bool       g_basketArmed     = false; // True once peak has crossed arm threshold
 bool       g_basketBEHit     = false; // True once basket reached +BEPct% (then never let it go negative)
-bool       g_basketSoftLockTaken = false; // v5.8.13: partial basket bank already used for this basket
+bool       g_basketSoftLockTaken = false; // v5.8.14: partial basket bank already used for this basket
 datetime   g_basketLastLog   = 0;     // Throttle "basket state" prints
 // v4.9.7 — Fast-reversal circuit breaker rolling buffer
 //   Stores the last N (timestamp, basketPnL) pairs so we can detect a sudden drop
@@ -1386,7 +1386,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.13 (BREATHING EXPECTANCY FIX) READY ===");
+   Print("=== XAUAI SNIPER v5.8.14 (BASKET RUNNER + AGG-RISK FIX) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -2661,14 +2661,6 @@ void CheckPyramidOpportunity()
       ? StringFormat("PYR+ADV (%.2f ATR adverse, avg-in)", MathAbs(moved)/atr)
       : StringFormat("PYR+TRN (%.2f ATR with trend)", moved/atr);
 
-   Print("PYRAMID: adding #", openCount + 1, "/", (1 + maxAddsAllowed),
-         " ", isBuy?"BUY":"SELL", " ", DoubleToString(addLot, lotDigits),
-         " lots @ ", DoubleToString(entryPx, digits),
-         " | origPx=", DoubleToString(origPx, digits),
-         " | moved=", DoubleToString(moved, 2),
-         " | totalLots=", DoubleToString(totalLots, lotDigits),
-         " | ", why);
-
    // Get original TP too
    posInfo.SelectByTicket(origTicket);
    double origTP = posInfo.TakeProfit();
@@ -2694,6 +2686,70 @@ void CheckPyramidOpportunity()
             " was BE-locked — using fresh SL ", DoubleToString(pyramidSL, digits),
             " (", DoubleToString(freshSlDist, 2), " pts = ", DoubleToString(InpSLMultiplier, 2), "xATR)");
    }
+
+   double pyramidRiskPerLot = RiskPerLotForDistance(MathAbs(entryPx - pyramidSL));
+   double beforeRiskCapLot = addLot;
+   if(pyramidRiskPerLot > 0)
+   {
+      double equity = accInfo.Equity();
+      if(InpMaxRiskPctEquity > 0)
+      {
+         double maxSingleLoss = equity * InpMaxRiskPctEquity / 100.0;
+         double maxSingleLots = maxSingleLoss / pyramidRiskPerLot;
+         if(addLot > maxSingleLots)
+         {
+            addLot = NormalizeVolumeDown(maxSingleLots);
+            Print("PYRAMID SINGLE-RISK CAP: ", DoubleToString(beforeRiskCapLot, lotDigits),
+                  " -> ", DoubleToString(addLot, lotDigits),
+                  " | candidate risk $", DoubleToString(beforeRiskCapLot * pyramidRiskPerLot, 0),
+                  " > ", DoubleToString(InpMaxRiskPctEquity, 1), "% equity ($",
+                  DoubleToString(maxSingleLoss, 0), ")");
+         }
+      }
+
+      if(InpMaxAggregateRiskPct > 0)
+      {
+         double openRiskLots = 0.0;
+         double openRisk = CurrentAggregateRiskToSL(openRiskLots);
+         double maxAggRisk = equity * InpMaxAggregateRiskPct / 100.0;
+         double remainingRisk = maxAggRisk - openRisk;
+         if(remainingRisk <= 0)
+         {
+            Print("PYRAMID BLOCKED: aggregate risk already $", DoubleToString(openRisk, 0),
+                  " (", DoubleToString(openRiskLots, 2), " lots) >= max $",
+                  DoubleToString(maxAggRisk, 0), ". No room for add.");
+            return;
+         }
+         double maxAggLots = remainingRisk / pyramidRiskPerLot;
+         if(addLot > maxAggLots)
+         {
+            double beforeAggCapLot = addLot;
+            addLot = NormalizeVolumeDown(maxAggLots);
+            Print("PYRAMID AGG-RISK CAP: ", DoubleToString(beforeAggCapLot, lotDigits),
+                  " -> ", DoubleToString(addLot, lotDigits),
+                  " | openRisk=$", DoubleToString(openRisk, 0),
+                  " candidate=$", DoubleToString(beforeAggCapLot * pyramidRiskPerLot, 0),
+                  " maxAgg=$", DoubleToString(maxAggRisk, 0));
+         }
+      }
+
+      if(addLot < minLot)
+      {
+         Print("PYRAMID SKIPPED: risk caps reduced add below broker min. minLot=",
+               DoubleToString(minLot, lotDigits),
+               " riskPerLot=$", DoubleToString(pyramidRiskPerLot, 2));
+         return;
+      }
+   }
+
+   Print("PYRAMID: adding #", openCount + 1, "/", (1 + maxAddsAllowed),
+         " ", isBuy?"BUY":"SELL", " ", DoubleToString(addLot, lotDigits),
+         " lots @ ", DoubleToString(entryPx, digits),
+         " | origPx=", DoubleToString(origPx, digits),
+         " | moved=", DoubleToString(moved, 2),
+         " | totalLots=", DoubleToString(totalLots, lotDigits),
+         " | riskPerLot=$", DoubleToString(pyramidRiskPerLot, 0),
+         " | ", why);
 
    bool ok;
    if(isBuy) ok = trade.Buy (addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
@@ -3039,7 +3095,7 @@ void OnTick()
       return;
    }
 
-   // v5.8.13: protect the equity curve after a profitable run. This closes open
+   // v5.8.14: protect the equity curve after a profitable run. This closes open
    // positions when today's equity HWM gives back too much, even if daily loss
    // limits are disabled for demo testing.
    if(ExpectancyDayGivebackGuard())
@@ -3049,10 +3105,10 @@ void OnTick()
    }
 
    // === v4.9.4 BASKET PROTECT (runs BEFORE per-trade management) ===
-   // If total floating profit retraces past the dynamic basket floor,
-   // ManageBasket() closes ALL positions at once. When that fires we
-   // skip ManagePositions() entirely (the book is empty) and let the
-   // dashboard update once before the next tick.
+   // v5.8.14 changed the first floor touch from "close all immediately" to a
+   // partial soft-lock when possible, so runners can survive healthy gold noise.
+   // True close-all still happens on fast reversal, hard giveback, or a second
+   // floor failure after the soft-lock has already banked profit.
    if(ManageBasket())
    {
       UpdateDashboard(lastDashSignal, lastDashScore, lastDashGrade);
@@ -3744,6 +3800,56 @@ void OnTick()
    lastDashGrade  = grade;
 }
 
+int VolumeDigitsForSymbol()
+{
+   double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+   int lotDigits = 2;
+   if(lotStep > 0 && lotStep < 0.01)  lotDigits = 3;
+   if(lotStep > 0 && lotStep < 0.001) lotDigits = 4;
+   return lotDigits;
+}
+
+double NormalizeVolumeDown(double lots)
+{
+   double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) return NormalizeDouble(lots, VolumeDigitsForSymbol());
+   double minLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
+   lots = MathFloor(lots / lotStep) * lotStep;
+   lots = MathMax(0.0, MathMin(maxLot, lots));
+   if(lots > 0 && lots < minLot) lots = 0.0;
+   return NormalizeDouble(lots, VolumeDigitsForSymbol());
+}
+
+double RiskPerLotForDistance(double dist)
+{
+   double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+   if(dist <= 0 || tickSize <= 0 || tickValue <= 0) return 0.0;
+   return (dist / tickSize) * tickValue;
+}
+
+double CurrentAggregateRiskToSL(double &openLots)
+{
+   openLots = 0.0;
+   double risk = 0.0;
+   double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(!posInfo.SelectByTicket(tk)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      double v = posInfo.Volume();
+      openLots += v;
+      double sl = posInfo.StopLoss();
+      if(sl <= 0 || tickSize <= 0 || tickValue <= 0) continue;
+      double dist = MathAbs(posInfo.PriceOpen() - sl);
+      risk += (dist / tickSize) * tickValue * v;
+   }
+   return risk;
+}
+
 //+------------------------------------------------------------------+
 //| OPEN TRADE (Gate 4 sizing)                                       |
 //+------------------------------------------------------------------+
@@ -3771,29 +3877,12 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
 
    // v4.7.6 — AGGREGATE EXPOSURE GATE
    //   Sum up the $-loss-if-SL-hit across ALL currently-open positions in our magic.
-   //   If it already exceeds InpMaxAggregateRiskPct% of equity, BLOCK new entries.
-   //   This stops the "sell 5.84 + open new sell 6.31 = $1200/pt = -$6k on next wick" scenario.
+   //   This early gate blocks entries when current exposure is already too high.
+   //   A second final gate below includes the candidate trade after lot sizing.
    if(InpMaxAggregateRiskPct > 0)
    {
-      double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-      double tickSize  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
-      double aggDollar = 0;
-      double aggLots   = 0;
-      for(int i = 0; i < PositionsTotal(); i++)
-      {
-         ulong tk = PositionGetTicket(i);
-         if(!posInfo.SelectByTicket(tk)) continue;
-         if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
-         double sl = posInfo.StopLoss();
-         double op = posInfo.PriceOpen();
-         double v  = posInfo.Volume();
-         aggLots += v;
-         if(sl > 0 && tickSize > 0 && tickValue > 0)
-         {
-            double dist = MathAbs(op - sl);
-            aggDollar += (dist / tickSize) * tickValue * v;
-         }
-      }
+      double aggLots = 0.0;
+      double aggDollar = CurrentAggregateRiskToSL(aggLots);
       double equity = accInfo.Equity();
       double maxAggDollar = equity * InpMaxAggregateRiskPct / 100.0;
       if(aggDollar > maxAggDollar)
@@ -4050,6 +4139,39 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       return;
    }
 
+   if(InpMaxAggregateRiskPct > 0 && slDollarPerLotRaw > 0)
+   {
+      double openLots = 0.0;
+      double openRisk = CurrentAggregateRiskToSL(openLots);
+      double maxAggDollar = accInfo.Equity() * InpMaxAggregateRiskPct / 100.0;
+      double candidateRisk = lots * slDollarPerLotRaw;
+      double remainingRisk = maxAggDollar - openRisk;
+      if(remainingRisk <= 0)
+      {
+         Print("AGG-RISK FINAL BLOCK: openRisk=$", DoubleToString(openRisk, 0),
+               " (", DoubleToString(openLots, 2), " lots) >= maxAgg=$",
+               DoubleToString(maxAggDollar, 0), ". Candidate skipped.");
+         return;
+      }
+      if(candidateRisk > remainingRisk)
+      {
+         double beforeAggLots = lots;
+         lots = NormalizeVolumeDown(remainingRisk / slDollarPerLotRaw);
+         Print("AGG-RISK FINAL CAP: lots ", DoubleToString(beforeAggLots, lotDigits),
+               " -> ", DoubleToString(lots, lotDigits),
+               " | openRisk=$", DoubleToString(openRisk, 0),
+               " candidate=$", DoubleToString(candidateRisk, 0),
+               " remaining=$", DoubleToString(remainingRisk, 0),
+               " maxAgg=$", DoubleToString(maxAggDollar, 0));
+         if(lots < minLot)
+         {
+            Print("AGG-RISK FINAL SKIP: remaining risk room cannot support broker min lot ",
+                  DoubleToString(minLot, lotDigits), ".");
+            return;
+         }
+      }
+   }
+
    // Margin check
    double freeMargin = accInfo.FreeMargin();
    double marginNeeded = 0;
@@ -4234,7 +4356,7 @@ bool CloseBasketPartial(double closePct, string reason)
 //+------------------------------------------------------------------+
 //| v4.9.4 — BASKET PROTECT                                          |
 //|   Treat ALL open EA positions as a single basket. Protect the    |
-//|   AGGREGATE floating PnL (not per-trade). v5.8.13 banks partial  |
+//|   AGGREGATE floating PnL (not per-trade). v5.8.14 banks partial  |
 //|   basket profit first and keeps a runner alive. Close-all is     |
 //|   reserved for fast reversal, hard giveback, or second failure.  |
 //|                                                                  |
@@ -4429,7 +4551,7 @@ bool ManageBasket()
    }
 
    // TRIGGER: if armed and current falls below floor.
-   // v5.8.13: first hit banks partial profit and keeps a runner alive. A later
+   // v5.8.14: first hit banks partial profit and keeps a runner alive. A later
    // floor hit can still close all if the remaining runner truly fails.
    if(g_basketArmed && g_basketFloorUSD > 0 && totalPnL < g_basketFloorUSD)
    {
@@ -4797,7 +4919,7 @@ void ManagePositions()
       // Dir string for logging
       string dirStr = isBuy ? "BUY" : "SELL";
 
-      // v5.8.13 EXPECTANCY LOSS ARMOR
+      // v5.8.14 EXPECTANCY LOSS ARMOR
       // Breathe first: if drawdown becomes unhealthy, reduce part of the size
       // once and keep a runner alive. Full close is reserved for dangerous
       // equity damage or deep R loss.
@@ -7336,7 +7458,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.13 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.14 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

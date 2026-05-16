@@ -11,7 +11,7 @@ export default function DownloadSection({ api }) {
               <DownloadSimple size={12} weight="bold" /> Download center
             </span>
             <h2 className="mt-5 max-w-3xl font-heading text-3xl font-semibold tracking-tight sm:text-5xl" data-testid="download-title">
-              Latest master build: v5.8.13 Basket Runner Fix.
+              Latest master build: v5.8.14 Risk Sync Audit.
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
               This is the current build from this workspace. Public downloads are sanitized by the backend for customer safety; admin master download remains protected.
@@ -32,7 +32,7 @@ export default function DownloadSection({ api }) {
                 <div>
                   <h3 className="font-heading text-2xl font-semibold">Expert Advisor (.mq5)</h3>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                    Includes v5.8.13 stale-indicator recovery, live scan watchdogs, partial-close sync, adaptive daily caps, smarter pyramids, account-size scaling, and soft basket lock, staged de-risk, and wider runner management.
+                    Includes v5.8.14 stale-indicator recovery, live scan watchdogs, partial-close sync, adaptive daily caps, smarter pyramids, account-size scaling, and soft basket lock, staged de-risk, and wider runner management.
                   </p>
                 </div>
               </div>
@@ -41,7 +41,7 @@ export default function DownloadSection({ api }) {
 
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               {[
-                ["Version", "5.8.12"],
+                ["Version", "5.8.14"],
                 ["File", "MQ5 source"],
                 ["Risk", "Account-sized"],
               ].map(([k, v]) => (
@@ -54,7 +54,7 @@ export default function DownloadSection({ api }) {
 
             <div className="mt-6 flex flex-col gap-3 sm:flex-row">
               <a href={`${api}/download/ea`} data-testid="download-ea-button" className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
-                <DownloadSimple size={17} weight="bold" /> Download v5.8.13 .MQ5
+                <DownloadSimple size={17} weight="bold" /> Download v5.8.14 .MQ5
               </a>
               <a href="/cloud" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
                 Cloud setup

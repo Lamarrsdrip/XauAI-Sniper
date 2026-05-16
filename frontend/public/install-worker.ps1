@@ -6,7 +6,7 @@
 # ============================================================================
 $ErrorActionPreference = "Stop"
 $InstallDir = "$env:USERPROFILE\xauai-worker"
-$ZipUrl     = "https://xauaisniper.com/xauai_worker_agent_v1.5.2.zip"
+$ZipUrl     = "https://xauaisniper.com/xauai_worker_agent_v1.5.3.zip"
 
 function Say($msg) { Write-Host "[xauai] $msg" -ForegroundColor Cyan }
 function Ok($msg)  { Write-Host "[ok]    $msg" -ForegroundColor Green }
