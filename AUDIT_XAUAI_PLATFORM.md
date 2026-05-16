@@ -10,10 +10,10 @@ Current default protection is layered:
 
 - Planned single-trade SL risk cap: `InpMaxRiskPctEquity = 3.0`
 - Planned aggregate open-risk cap: `InpMaxAggregateRiskPct = 8.0`
-- Expectancy hard-loss armor cap: `InpExpectancyMaxLossPctEq = 5.0`
+- Expectancy hard-loss armor cap: `InpExpectancyMaxLossPctEq = 7.0`
 - Daily loss limit and weekly loss limit are disabled by default for demo testing.
 
-That means the bot can cut a trade before -10% if the trade is structurally invalidated or if the equity/risk cap is reached. That is intentional account protection. The important fix is that it should not panic-close normal XAUUSD pullbacks. In v5.8.14, the basket floor first takes a partial soft lock and keeps a runner alive where possible instead of closing the entire basket immediately.
+That means the bot can cut a trade before -10% if the trade is structurally invalidated or if the equity/risk cap is reached. That is intentional account protection. The important fix is that it should not panic-close normal XAUUSD pullbacks. In v5.8.15, the loss exits are structure-aware: the EA needs stronger evidence that gold has truly reversed before closing, and it gives more room when trend alignment and momentum still support recovery.
 
 ## Critical Hidden Interaction Found
 
@@ -32,6 +32,8 @@ The basket manager runs before per-ticket trade management:
 This means basket peak/floor protection can override breakeven, trailing, and partial TP before those per-trade systems get a chance to act. That was a real weakness.
 
 Fix applied: first basket floor hit now uses a soft-lock partial close when possible. Full close is reserved for fast reversal, hard giveback, or a second basket floor failure after partial profit has already been banked.
+
+Additional v5.8.15 fix: loss exits now require stronger structure confirmation. A single XAUUSD liquidity sweep should not be treated as failure. The EA now requires multiple closed candles beyond structure before calling it a confirmed break, and recovery-likely trades receive wider loss/soft-de-risk caps.
 
 ## EA Execution Loop
 
@@ -94,7 +96,7 @@ Master EA:
 - Applies mode risk, signal confidence, account-size multiplier, drawdown guard, margin cap, broker min/max/step, single-trade cap, and aggregate cap.
 - Logs balance/equity, risk %, calculated lot, final lot, and reduction reason.
 
-Important v5.8.14 fix:
+Important v5.8.15 fix:
 
 - Normal entries and pyramids now both respect single-trade risk and aggregate open-risk caps.
 - Pyramids can no longer bypass the global risk room.
@@ -116,8 +118,10 @@ Clean exits are the main per-ticket exit authority when enabled.
 Loss side:
 
 - Normal drawdown is allowed.
-- Soft de-risk can close part of a losing position once, then keep a runner.
+- Soft de-risk happens later and closes less size once, then keeps a runner.
 - Full close requires deeper R loss, equity cap, or confirmed invalidation.
+- If trend, momentum, and structure still support the trade, loss caps are boosted so XAUUSD pullbacks can breathe.
+- Structure invalidation now requires confirmed bars beyond the swing level, not just one sweep candle.
 
 Win side:
 
@@ -174,7 +178,7 @@ Verified locally:
 - Python backend and worker compile with `py_compile`.
 - Worker package `xauai_worker_agent_v1.5.3.zip` contains the new v1.5.3 worker and requirements.
 - EA source has risk caps wired into normal entries and pyramid entries.
-- Download endpoint now names the EA package as v5.8.14.
+- Download endpoint now names the EA package as v5.8.15.
 
 Could not verify locally:
 
@@ -186,7 +190,7 @@ Could not verify locally:
 Before judging live results, make sure these are true:
 
 - MT5 has WebRequest enabled for `https://xauaisniper.com`.
-- The chart is running the latest EA file: `XAUUSD_AI_Sniper_EA_MASTER_v5.8.14_RISK_SYNC_AUDIT.mq5`.
+- The chart is running the latest EA file: `XAUUSD_AI_Sniper_EA_MASTER_v5.8.15_GOLD_BREATHING_AUDIT.mq5`.
 - VPS worker starts as `XauAi Worker Agent 1.5.3`.
 - VPS worker log says `riskCap=disabled`.
 - The cloud dashboard shows recent balance/equity updates.
