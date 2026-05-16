@@ -6,7 +6,7 @@ export default function HeroSection({ performance }) {
     { label: "Backtest WR", value: performance?.win_rate ? `${performance.win_rate}%` : "--", icon: ChartLineUp, tone: "text-emerald-300" },
     { label: "Profit factor", value: performance?.profit_factor ? `${performance.profit_factor}` : "--", icon: Lightning, tone: "text-amber-200" },
     { label: "Max DD", value: performance?.max_drawdown ? `${performance.max_drawdown}%` : "--", icon: ShieldCheck, tone: "text-sky-300" },
-    { label: "Master EA", value: "v5.8.11", icon: Brain, tone: "text-violet-300" },
+    { label: "Master EA", value: "v5.8.12", icon: Brain, tone: "text-violet-300" },
   ];
 
   return (
@@ -38,12 +38,12 @@ export default function HeroSection({ performance }) {
             </h1>
 
             <p className="mt-6 max-w-2xl text-base leading-7 text-white/68 md:text-lg">
-              XauAI Sniper combines trend logic, volatility-aware exits, cloud copy flow, and the latest v5.8.11 expectancy build so the bot can keep analyzing live markets without letting one failed trade wipe many wins.
+              XauAI Sniper combines trend logic, volatility-aware exits, cloud copy flow, and the latest v5.8.12 breathing expectancy build so the bot can keep analyzing live markets without letting one failed trade wipe many wins.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <a href="#download" data-testid="hero-download-btn" className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
-                <ArrowDown size={17} weight="bold" /> Download v5.8.11
+                <ArrowDown size={17} weight="bold" /> Download v5.8.12
               </a>
               <a href="/cloud" data-testid="hero-cloud-btn" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.08] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.12]">
                 <CloudArrowUp size={17} weight="bold" /> Open Cloud
@@ -60,7 +60,7 @@ export default function HeroSection({ performance }) {
               <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
                 <div>
                   <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-white/40">Master terminal</div>
-                  <div className="mt-1 font-semibold">XAUUSD AI Sniper v5.8.11</div>
+                  <div className="mt-1 font-semibold">XAUUSD AI Sniper v5.8.12</div>
                 </div>
                 <div className="rounded-full bg-emerald-300 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#06110c]">Live</div>
               </div>

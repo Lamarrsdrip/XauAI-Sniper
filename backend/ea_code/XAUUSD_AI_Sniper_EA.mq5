@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.11 — Expectancy Fix     |
+//|                                     v5.8.12 — Breathing Fix      |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.90"
-#property description "XAUUSD AI Sniper v5.8.11 — EXPECTANCY FIX"
-#property description "Keeps scan-sync + lot scaling, then prevents one loss wiping many wins."
-#property description "Adds Clean-Exit hard loss armor and daily peak giveback control."
+#property description "XAUUSD AI Sniper v5.8.12 — BREATHING EXPECTANCY FIX"
+#property description "Lets gold trades breathe while reducing oversized losers in stages."
+#property description "Adds soft de-risk, wider runners, and equity-based loss backstops."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -312,9 +312,9 @@ input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm
 
 input group "=== BASKET PROTECT (v4.9.7 — smarter thresholds + fast-reversal circuit breakers) ==="
 input bool   InpBasketMode          = true;   // Master toggle: SL logic works on AGGREGATE PnL, not per-trade
-input double InpBasketArmPct        = 1.6;    // v5.8.11: arm earlier so a winning day cannot fully round-trip
-input double InpBasketArmFloor      = 250.0;  // v5.8.11: still ignores tiny noise, but protects real bankable moves
-input double InpBasketLockMinPct    = 55.0;   // v5.8.11: lock more of the open basket once armed
+input double InpBasketArmPct        = 2.2;    // v5.8.12: let winners breathe more, but still protect real basket profit
+input double InpBasketArmFloor      = 300.0;  // don't arm on small noise profits
+input double InpBasketLockMinPct    = 45.0;   // lock profit but allow trend breathing room
 input double InpBasketRatchetT1Pct  = 1.5;    // v4.9.7 — was 0.5, now 1.5 (tier-1 fires later, let winners run)
 input double InpBasketRatchetT2Pct  = 3.5;    // v4.9.7 — was 2.5, now 3.5 (tier-2 fires later)
 input double InpBasketRatchetT3Pct  = 6.0;    // v4.9.7 — was 5.0, now 6.0 (tier-3 fires on REAL big peaks)
@@ -322,9 +322,9 @@ input double InpBasketBEPct         = 0.5;    // v4.9.7 — was 0.3, now 0.5 (BE
 input bool   InpBasketDisablePerTrade = true; // When basket active, disable per-trade peak-lock & ratchet (no conflict)
 // === v4.9.7 Smart Guards ===
 input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on sudden reversal even if floor not breached
-input double InpBasketFastDropPct       = 38.0; // If basket gives back >= X% of peak within FastWindowSec, close immediately
+input double InpBasketFastDropPct       = 50.0; // If basket gives back >= X% of peak within FastWindowSec, close immediately
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
-input double InpBasketHardGivebackPct   = 0.9;  // HARD CAP: never give back more than X% of balance from peak
+input double InpBasketHardGivebackPct   = 1.5;  // HARD CAP: never give back more than X% of balance from peak
 input bool   InpBasketBlockPyramidWhenArmed = true; // Block NEW pyramid entries while basket is armed (don't stack into a flush)
 
 input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
@@ -346,29 +346,35 @@ input double InpTrendHoldTrailATR = 3.0;   // Trail distance in trend-hold mode 
 
 input group "=== CLEAN EXITS (v5.8.3 — balanced statistical trade management) ==="
 input bool   InpCleanExits          = true;   // MASTER toggle — disables all other per-trade trails
-input double InpCleanBEActivateR    = 1.25;   // At +1.25R, move SL to entry + small cushion; avoids clipping pre-move winners
-input double InpCleanBECushionR     = 0.10;   // Cushion locked at BE trigger (+0.10R profit)
-input double InpCleanChandelierStartR = 2.25; // Base chandelier start; actual value adapts by regime + momentum
-input double InpCleanChandelierATR1 = 3.5;    // Chandelier distance +2R→+4R (wide, let runner breathe)
-input double InpCleanChandelierATR2 = 2.6;    // Chandelier distance +4R+ (still wide enough for XAU)
-input double InpCleanPartialR       = 2.0;    // At +2R, close partial
-input double InpCleanPartialPct     = 25.0;   // % of position to close at +2R; leaves 75% runner
+input double InpCleanBEActivateR    = 1.60;   // v5.8.12: wait for stronger confirmation before BE
+input double InpCleanBECushionR     = 0.05;   // Small cushion; do not choke valid pullbacks
+input double InpCleanChandelierStartR = 3.00; // v5.8.12: runner trail starts later so wins can grow
+input double InpCleanChandelierATR1 = 4.2;    // Wider +3R to +4R trail for gold continuation
+input double InpCleanChandelierATR2 = 3.2;    // Wider +4R+ trail; protects without clipping every pullback
+input double InpCleanPartialR       = 2.80;   // v5.8.12: take partial later, after real move
+input double InpCleanPartialPct     = 15.0;   // Smaller partial; leaves 85% runner
 input int    InpCleanChandelierLookback = 20; // Bars to scan for highest high / lowest low
 input bool   InpCleanMomentumInvalidation = true; // Cut trade if momentum flips hard against us
 input int    InpCleanStaleHours     = 3;      // Close if > X hours in AND profit < StaleMinR, unless trend still validates
 input double InpCleanStaleMinR      = 0.35;   // Threshold below which we consider trade stale
-input double InpCleanMaxLossR       = 0.95;   // v5.8.11: confirmed invalidation cannot wait for a full oversized SL
-input double InpCleanEmergencyLossR = 1.25;   // v5.8.11: emergency cap for failed setups even if signals lag
+input double InpCleanMaxLossR       = 1.35;   // v5.8.12: confirmed invalidation closes, but normal XAU pullbacks breathe
+input double InpCleanEmergencyLossR = 2.20;   // Emergency close only after a real failed setup
 input int    InpCleanStructureLookback = 12;  // Bars for swing structure invalidation
 input double InpCleanStructureATRBuffer = 0.20; // Close must break swing by this ATR fraction
-input int    InpCleanMinInvalidationMin = 8;  // v5.8.11: judge failed setups sooner, not after damage is already large
-input int    InpCleanStagnantMinutes = 55;    // Time-based exit for flat/choppy trades with no progress
+input int    InpCleanMinInvalidationMin = 15; // Do not judge normal early XAU pullback too fast
+input int    InpCleanStagnantMinutes = 75;    // Time-based exit for flat/choppy trades with no progress
 input double InpCleanStagnantMaxR = 0.20;     // Stagnant if abs(R) remains below this after StagnantMinutes
 
-input group "=== EXPECTANCY LOSS ARMOR (v5.8.11 — stop one loss wiping many wins) ==="
+input group "=== EXPECTANCY LOSS ARMOR (v5.8.12 — breathe first, de-risk before disaster) ==="
 input bool   InpExpectancyLossArmor       = true;  // Runs even when Clean Exits owns trade management
-input double InpExpectancyMaxLossR        = 1.20;  // Per-position hard close at this R loss
-input int    InpExpectancyMinAgeSec       = 90;    // Avoid closing inside first few ticks/spread noise
+input bool   InpExpectancySoftDeRisk      = true;  // First response is partial size reduction, not full kill
+input double InpExpectancySoftLossR       = 1.25;  // Soft de-risk trigger by R
+input double InpExpectancySoftLossPctEq   = 2.0;   // Soft de-risk trigger by equity %
+input double InpExpectancySoftClosePct    = 35.0;  // Close this % once; keep runner alive for recovery
+input int    InpExpectancySoftMinAgeSec   = 360;   // Let fresh XAU pullbacks breathe before de-risk
+input double InpExpectancyMaxLossR        = 2.80;  // Full close only at deep R loss
+input double InpExpectancyMaxLossPctEq    = 5.0;   // Or at dangerous equity loss, whichever comes first
+input int    InpExpectancyMinAgeSec       = 600;   // Avoid full close before the setup has had time to prove itself
 input bool   InpExpectancyUseDayGiveback  = true;  // Protect daily HWM after a profitable run
 input double InpExpectancyDayArmPct       = 1.0;   // Arm daily giveback after day HWM is up this % of start equity
 input double InpExpectancyDayMaxGivePct   = 35.0;  // Max allowed giveback of today's HWM profit
@@ -406,7 +412,7 @@ input int    InpMagicNumber    = 20250401;
 input group "=== LOSS PROTECTION (v4.4.5 — trust the SL, stop scalping out) ==="
 input double InpHardStopUSD    = 0;        // Hard $ loss cap per trade (0 = OFF, SL handles it)
 input bool   InpHardStopRBased = true;     // TRUE = HardStop = adaptive R-based risk, not fixed dollars
-input double InpHardStopRMulti = 1.6;      // v5.8.11: true catastrophic cap; Clean Exits now respects it too
+input double InpHardStopRMulti = 2.8;      // v5.8.12: catastrophic only; soft de-risk handles earlier damage
 input bool   InpEarlyAdverseCut = false;   // OFF by default — let SL do its job (was killing good trades)
 input int    InpEarlyAdverseMin = 5;       // Minutes window for early cut
 input double InpEarlyAdverseR  = 1.5;      // Only cut if down > 1.5R early (was 0.7 — too tight)
@@ -1376,7 +1382,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.11 (EXPECTANCY FIX) READY ===");
+   Print("=== XAUAI SNIPER v5.8.12 (BREATHING EXPECTANCY FIX) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -3029,7 +3035,7 @@ void OnTick()
       return;
    }
 
-   // v5.8.11: protect the equity curve after a profitable run. This closes open
+   // v5.8.12: protect the equity curve after a profitable run. This closes open
    // positions when today's equity HWM gives back too much, even if daily loss
    // limits are disabled for demo testing.
    if(ExpectancyDayGivebackGuard())
@@ -4402,8 +4408,9 @@ bool ManageBasket()
 //|            adaptive Chandelier trail after momentum confirms.    |
 //|   Stale: close only flat/choppy trades that fail to progress.    |
 //+------------------------------------------------------------------+
-// Per-ticket state: was partial taken already?
-ulong g_cePartialTickets[];   // tickets that have had their 30% partial close
+// Per-ticket state: was partial/de-risk taken already?
+ulong g_cePartialTickets[];       // tickets that have had their profit partial close
+ulong g_ceLossReduceTickets[];    // tickets that have had their loss-side soft de-risk
 
 bool CleanPartialAlreadyTaken(ulong ticket)
 {
@@ -4425,6 +4432,28 @@ void CleanMarkPartialTaken(ulong ticket)
       for(int j = 0; j < 100; j++) tmp[j] = g_cePartialTickets[ArraySize(g_cePartialTickets) - 100 + j];
       ArrayResize(g_cePartialTickets, 100);
       for(int j = 0; j < 100; j++) g_cePartialTickets[j] = tmp[j];
+   }
+}
+
+bool CleanLossReduceAlreadyTaken(ulong ticket)
+{
+   for(int i = ArraySize(g_ceLossReduceTickets) - 1; i >= 0; i--)
+      if(g_ceLossReduceTickets[i] == ticket) return true;
+   return false;
+}
+
+void CleanMarkLossReduceTaken(ulong ticket)
+{
+   int n = ArraySize(g_ceLossReduceTickets);
+   ArrayResize(g_ceLossReduceTickets, n + 1);
+   g_ceLossReduceTickets[n] = ticket;
+   if(ArraySize(g_ceLossReduceTickets) > 200)
+   {
+      ulong tmp[];
+      ArrayResize(tmp, 100);
+      for(int j = 0; j < 100; j++) tmp[j] = g_ceLossReduceTickets[ArraySize(g_ceLossReduceTickets) - 100 + j];
+      ArrayResize(g_ceLossReduceTickets, 100);
+      for(int j = 0; j < 100; j++) g_ceLossReduceTickets[j] = tmp[j];
    }
 }
 
@@ -4696,26 +4725,67 @@ void ManagePositions()
       // Dir string for logging
       string dirStr = isBuy ? "BUY" : "SELL";
 
-      // v5.8.11 EXPECTANCY LOSS ARMOR
-      // This must run BEFORE Clean Exits. Earlier builds let Clean Exits return
-      // before the hard-stop layer, so one failed trade could still reach a full
-      // oversized SL after many smaller winners.
+      // v5.8.12 EXPECTANCY LOSS ARMOR
+      // Breathe first: if drawdown becomes unhealthy, reduce part of the size
+      // once and keep a runner alive. Full close is reserved for dangerous
+      // equity damage or deep R loss.
       int ageSec = (int)(TimeCurrent() - posInfo.Time());
       if(InpExpectancyLossArmor && rDollars > 0 && ageSec >= InpExpectancyMinAgeSec)
       {
          double maxLossR = InpExpectancyMaxLossR;
          if(InpHardStopRBased && InpHardStopRMulti > 0)
             maxLossR = MathMin(maxLossR, InpHardStopRMulti);
+         double equityLossCap = accInfo.Equity() * InpExpectancyMaxLossPctEq / 100.0;
+         double hardLossUSD = rDollars * maxLossR;
+         if(equityLossCap > 0) hardLossUSD = MathMin(hardLossUSD, equityLossCap);
 
-         if(profit <= -(rDollars * maxLossR))
+         if(profit <= -hardLossUSD)
          {
             LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                     "EXPECTANCY_MAX_LOSS",
-                    StringFormat("Down %.2fR ($%.2f / 1R=$%.2f) >= cap %.2fR after %ds. Preventing one loss from wiping multiple wins.",
-                                 MathAbs(profit) / rDollars, profit, rDollars, maxLossR, ageSec));
+                    StringFormat("Down %.2fR ($%.2f / 1R=$%.2f) >= hard cap $%.2f after %ds. Breathing failed; preventing account damage.",
+                                 MathAbs(profit) / rDollars, profit, rDollars, hardLossUSD, ageSec));
             trade.PositionClose(ticket);
             lastTradeClose = TimeCurrent();
             continue;
+         }
+      }
+
+      if(InpExpectancyLossArmor && InpExpectancySoftDeRisk && rDollars > 0 &&
+         ageSec >= InpExpectancySoftMinAgeSec && !CleanLossReduceAlreadyTaken(ticket) &&
+         profit < 0)
+      {
+         double softLossUSD = rDollars * InpExpectancySoftLossR;
+         double softEqCap = accInfo.Equity() * InpExpectancySoftLossPctEq / 100.0;
+         if(softEqCap > 0) softLossUSD = MathMin(softLossUSD, softEqCap);
+
+         if(profit <= -softLossUSD)
+         {
+            double step = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+            double minL = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+            int lotDig = 2;
+            if(step > 0 && step < 0.01)  lotDig = 3;
+            if(step > 0 && step < 0.001) lotDig = 4;
+
+            double reduceLots = lotsOpen * InpExpectancySoftClosePct / 100.0;
+            if(step > 0) reduceLots = MathFloor(reduceLots / step) * step;
+            reduceLots = NormalizeDouble(reduceLots, lotDig);
+            double remaining = NormalizeDouble(lotsOpen - reduceLots, lotDig);
+
+            if(reduceLots >= minL && remaining >= minL && trade.PositionClosePartial(ticket, reduceLots))
+            {
+               CleanMarkLossReduceTaken(ticket);
+               PrintFormat("EXPECTANCY_SOFT_DERISK #%I64u %s | loss $%.2f (%.2fR) >= soft cap $%.2f | closed %.2f lots (%.0f%%), runner %.2f stays alive",
+                           ticket, dirStr, profit, MathAbs(profit) / rDollars, softLossUSD,
+                           reduceLots, InpExpectancySoftClosePct, remaining);
+            }
+            else
+            {
+               CleanMarkLossReduceTaken(ticket);
+               PrintFormat("EXPECTANCY_SOFT_DERISK_SKIP #%I64u %s | wanted %.2f lots from %.2f, min %.2f, step %.4f, ret=%d err=%d",
+                           ticket, dirStr, reduceLots, lotsOpen, minL, step,
+                           trade.ResultRetcode(), GetLastError());
+            }
          }
       }
 
@@ -7194,7 +7264,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.11 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.12 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
