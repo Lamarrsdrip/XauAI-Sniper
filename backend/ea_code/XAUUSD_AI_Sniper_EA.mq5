@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.15 — Gold Breathing Audit|
+//|                                     v5.8.16 — Adaptive XAU Confirm|
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.92"
-#property description "XAUUSD AI Sniper v5.8.15 — GOLD BREATHING AUDIT"
+#property version   "5.93"
+#property description "XAUUSD AI Sniper v5.8.16 — ADAPTIVE XAU CONFIRM"
 #property description "Keeps risk caps but distinguishes XAU pullback noise from true failure."
-#property description "Adds recovery-probability checks before loss exits and wider structure confirmation."
+#property description "Replaces slow H1 hard vetoes with fast gold scoring and H1 soft context."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -124,9 +124,17 @@ input bool   InpDynamicBasketTP     = true; // Push basket arm by +0.5×ATR if m
 input bool   InpPG_SelectiveMode        = true;  // v5.1.9: when giveback brake fires, switch to A/A+ only instead of full halt
 input double InpPG_SelectiveMinDayGain  = 25.0; // PG only activates after day gain ≥ this % (avoid noise lockouts)
 input double InpPG_SelectiveMinScore    = 4.0;  // In selective mode, combined score must be ≥ this (Grade A floor)
-input bool   InpPG_SelectiveRequireHTF  = true; // Require M15 + H1 trend alignment with trade direction
+input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation instead of slow H1 hard veto
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
+
+input group "=== XAU FAST CONFIRMATION (v5.8.16 — H1 soft context, not hard veto) ==="
+input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
+input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
+input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
+input double InpXAU_H1PenaltyLotMulti     = 0.75;  // If H1 disagrees but fast TFs pass, reduce lot instead of veto
+input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence penalty shown in logs
+input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 
 input bool   InpPreservationMode = true;  // Master toggle: disables premature profit-side exits
 input double InpRiskPercent    = 0.4;      // Base risk per trade (%) — IGNORED if InpAccountMode != BALANCED uses preset
@@ -458,7 +466,7 @@ input bool   InpSmartGuardEnable          = true;  // Master switch for v5.8.2 l
 input bool   InpOneDirectionOnly          = true;  // v5.8.5: block opposite-direction entries while a position is open
 input bool   InpBlockNewEntriesIfHedged   = true;  // v5.8.5: if account is already mixed BUY+SELL, pause fresh entries
 input bool   InpSmartGuardSkipBTrendBreak = true;  // v5.8.7: adaptive B-grade guard for TREND_PULLBACK/BREAKOUT
-input bool   InpSmartGuardRequireHTF      = true;  // Require M15+H1 alignment for TREND_PULLBACK/BREAKOUT
+input bool   InpSmartGuardRequireHTF      = true;  // Use adaptive XAU confirmation for TREND_PULLBACK/BREAKOUT
 input bool   InpSmartGuardNoDamageStack   = true;  // Do not open fresh damage-prone setup while another position is open
 input double InpSmartGuardDamageLotMulti  = 0.55;  // Extra risk cut for allowed TREND_PULLBACK/BREAKOUT entries
 input int    InpSmartGuardMinHardSamples  = 30;    // Need this many same-setup live patterns before hard expectancy veto
@@ -468,7 +476,7 @@ input double InpSmartGuardSoftLotMulti    = 0.70;  // Soft-veto risk multiplier;
 input int    InpSmartGuardRelaxAfterMin   = 180;   // If no trades for this long, relax hard veto to soft retest
 input double InpSmartGuardOverrideScore   = 3.8;   // Strong trend pullbacks at/above this can override soft negative stats
 input bool   InpPyramidRequireGradeA      = true;  // Only pyramid if original entry was A/A+
-input bool   InpPyramidRequireHTF         = true;  // Only pyramid when M15+H1 still align with direction
+input bool   InpPyramidRequireHTF         = true;  // Only pyramid when adaptive fast confirmation still supports direction
 
 input int    InpMaxPyramidAdds  = 2;       // v5.8.8: adaptive; clean trends can add, chop still blocks
 input double InpPyramidMinATR   = 0.9;     // Price must move at least this × ATR before adding
@@ -539,6 +547,12 @@ double bufEMAFast_H4[], bufEMASlow_H4[];  // v4.8.0
 double bufStochK[], bufStochD[];
 
 double initialBalance, dailyStartEquity, weeklyStartEquity;
+
+// v5.8.16 — adaptive XAU confirmation state. Callers use this to turn
+// H1 disagreement into reduced size instead of a hard gold veto.
+double   g_adaptiveConfirmLotMulti = 1.0;
+string   g_adaptiveConfirmReason   = "";
+datetime g_lastAdaptiveConfirmLog  = 0;
 
 // v5.1.2 Profit Guardian state ---------------------------------------------
 double   pg_dayHWM            = 0.0;   // highest equity reached today
@@ -1392,7 +1406,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.15 (BASKET RUNNER + AGG-RISK FIX) READY ===");
+   Print("=== XAUAI SNIPER v5.8.16 (ADAPTIVE XAU CONFIRM) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -2287,7 +2301,11 @@ void GetSmartGuardSetupStats(int setupType, SmartGuardStats &st)
 bool SmartGuardStrongTrendRetest(int signal, double setupScore, double combinedScore)
 {
    if(signal == 0 || combinedScore < InpSmartGuardOverrideScore) return false;
-   if(!PG_HTFAlignedM15H1(signal)) return false;
+   double confirmLot = 1.0;
+   string confirmWhy = "";
+   if(!AdaptiveXAUConfirm(signal, "SMART-GUARD-RETEST", combinedScore, "B",
+                          confirmLot, confirmWhy, false))
+      return false;
 
    bool regimeAligned =
       (signal == 1 && (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP)) ||
@@ -2463,13 +2481,16 @@ void CheckPyramidOpportunity()
       return;
    }
 
-   if(InpPyramidRequireHTF && !PG_HTFAlignedM15H1(dir))
+   double pyrConfirmLot = 1.0;
+   string pyrConfirmWhy = "";
+   if(InpPyramidRequireHTF && !AdaptiveXAUConfirm(dir, "PYRAMID", g_lastEntryScore, g_lastEntryGrade,
+                                                  pyrConfirmLot, pyrConfirmWhy, true))
    {
       static datetime lastPyrHtfLog = 0;
       if(TimeCurrent() - lastPyrHtfLog > 120)
       {
-         Print("PYRAMID SKIPPED: M15+H1 no longer align with ",
-               dir == 1 ? "BUY" : "SELL", " direction.");
+         Print("PYRAMID SKIPPED: adaptive fast confirmation failed for ",
+               dir == 1 ? "BUY" : "SELL", " direction. ", pyrConfirmWhy);
          lastPyrHtfLog = TimeCurrent();
       }
       return;
@@ -3420,16 +3441,28 @@ void OnTick()
          }
       }
 
-      if(InpSmartGuardRequireHTF && signal != 0 && !PG_HTFAlignedM15H1(signal))
+      if(InpSmartGuardRequireHTF && signal != 0)
       {
-         string sgMsg = StringFormat("SMART-GUARD: %s blocked because M15+H1 do not align with %s.",
-                                     setupName, signal == 1 ? "BUY" : "SELL");
-         Print("TRADE BLOCKED BECAUSE: ", sgMsg);
-         CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
-                            setupScore, combinedScore, "SG-HTF", signal);
-         UpdateDashboard(0, combinedScore, "SG-HTF");
-         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "SG-HTF";
-         return;
+         double confirmLot = 1.0;
+         string confirmWhy = "";
+         if(!AdaptiveXAUConfirm(signal, "SMART-GUARD", combinedScore, grade,
+                                confirmLot, confirmWhy, true))
+         {
+            string sgMsg = StringFormat("SMART-GUARD: %s blocked by adaptive fast confirmation for %s. %s",
+                                        setupName, signal == 1 ? "BUY" : "SELL", confirmWhy);
+            Print("TRADE BLOCKED BECAUSE: ", sgMsg);
+            CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
+                               setupScore, combinedScore, "SG-FAST", signal);
+            UpdateDashboard(0, combinedScore, "SG-FAST");
+            lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "SG-FAST";
+            return;
+         }
+         if(confirmLot < 0.999)
+         {
+            smartGuardExtraLotMulti *= confirmLot;
+            Print("SMART-GUARD FAST CONFIRM: allowed with H1 soft-context lot penalty x",
+                  DoubleToString(confirmLot, 2), " | ", confirmWhy);
+         }
       }
 
       if(InpSmartGuardNoDamageStack && CountMyPositions() > 0)
@@ -3444,6 +3477,9 @@ void OnTick()
          return;
       }
    }
+
+   g_adaptiveConfirmLotMulti = 1.0;
+   g_adaptiveConfirmReason = "";
 
    // v5.4.0 — A+ NOW REQUIRES H1 TREND ALIGNMENT.
    // Previously A+ was just "combinedScore >= 5.5" — which counter-trend
@@ -3631,6 +3667,15 @@ void OnTick()
    // v4.9.3 — Bigger lots scale with signal strength
    double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;
    int    confidenceBoostPP = 0;   // in percentage points, informational
+
+   if(g_adaptiveConfirmLotMulti < 0.999)
+   {
+      sizeMulti *= g_adaptiveConfirmLotMulti;
+      Print("ADAPTIVE-CONFIRM SIZE: lot x",
+            DoubleToString(g_adaptiveConfirmLotMulti, 2), " | ",
+            g_adaptiveConfirmReason);
+      g_adaptiveConfirmLotMulti = 1.0;
+   }
 
    if(smartDamageSetup && InpSmartGuardDamageLotMulti > 0)
    {
@@ -6599,7 +6644,7 @@ void PG_UpdateHWM()
                      DoubleToString(dayGainPct,1), "%). ",
                      "Min combined score=", DoubleToString(InpPG_SelectiveMinScore,1),
                      " | lot×=", DoubleToString(InpPG_SelectiveLotMulti,2),
-                     " | HTF require=", InpPG_SelectiveRequireHTF ? "M15+H1" : "off");
+                     " | confirm=", InpPG_SelectiveRequireHTF ? "adaptive XAU fast" : "off");
             }
          }
          else if(!pg_dayHaltActive)
@@ -6916,27 +6961,157 @@ string PreTradeBlockReason(int signal)
    return "";
 }
 
-// v5.1.9 — M15 + H1 trend alignment helper for Selective Mode.
-// Returns true if BOTH M15 and H1 EMA50 trends point the SAME direction as `signal`.
+bool IsXAUFastSymbol()
+{
+   string s = Symbol();
+   StringToUpper(s);
+   return (StringFind(s, "XAU") >= 0 || StringFind(s, "GOLD") >= 0);
+}
+
+string TFShortName(ENUM_TIMEFRAMES tf)
+{
+   if(tf == PERIOD_M5)  return "M5";
+   if(tf == PERIOD_M15) return "M15";
+   if(tf == PERIOD_M30) return "M30";
+   if(tf == PERIOD_H1)  return "H1";
+   return EnumToString(tf);
+}
+
+int TFDirectionByEMA(int signal, ENUM_TIMEFRAMES tf, double atrThreshold, string &why)
+{
+   int hEMA = iMA(Symbol(), tf, 50, 0, MODE_EMA, PRICE_CLOSE);
+   int hATR = iATR(Symbol(), tf, 14);
+   if(hEMA == INVALID_HANDLE || hATR == INVALID_HANDLE)
+   {
+      why = TFShortName(tf) + ":DATA";
+      return 0;
+   }
+
+   double ema[2], atr[2], close[2];
+   bool ok = (CopyBuffer(hEMA, 0, 0, 2, ema) > 0 &&
+              CopyBuffer(hATR, 0, 0, 2, atr) > 0 &&
+              CopyClose(Symbol(), tf, 0, 2, close) > 0);
+   IndicatorRelease(hEMA);
+   IndicatorRelease(hATR);
+   if(!ok || atr[0] <= 0.0)
+   {
+      why = TFShortName(tf) + ":WAIT";
+      return 0;
+   }
+
+   double diff = close[0] - ema[0];
+   double thr = atr[0] * atrThreshold;
+   int dir = 0;
+   if(diff > thr) dir = 1;
+   else if(diff < -thr) dir = -1;
+
+   string state = (dir == signal) ? "OK" : (dir == -signal ? "AGAINST" : "NEUTRAL");
+   why = StringFormat("%s:%s diff=%.2f thr=%.2f", TFShortName(tf), state, diff, thr);
+   return dir;
+}
+
+// v5.8.16 — shared adaptive confirmation engine.
+// On XAU/GOLD, M5/M15/M30 carry the hard decision; H1 is soft context.
+// Non-gold symbols retain the older strict M15+H1 behavior.
+bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, string grade,
+                        double &lotMulti, string &reason, bool logDecision)
+{
+   lotMulti = 1.0;
+   reason = "";
+   if(signal == 0) { reason = "no direction"; return false; }
+
+   bool xauFast = (InpXAU_AdaptiveConfirm && IsXAUFastSymbol());
+   double tfThreshold = 0.30;
+   bool fastRegime =
+      (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_TRENDING_DOWN ||
+       currentRegime == REGIME_BREAKOUT_UP || currentRegime == REGIME_BREAKOUT_DOWN);
+   bool choppyRegime =
+      (currentRegime == REGIME_RANGING || currentRegime == REGIME_CHOPPY ||
+       currentRegime == REGIME_LOW_VOL || currentRegime == REGIME_DEAD);
+
+   if(fastRegime) tfThreshold = 0.20;
+   if(choppyRegime) tfThreshold = 0.40;
+
+   string m5Why, m15Why, m30Why, h1Why;
+   int m5  = TFDirectionByEMA(signal, PERIOD_M5,  tfThreshold, m5Why);
+   int m15 = TFDirectionByEMA(signal, PERIOD_M15, tfThreshold, m15Why);
+   int m30 = TFDirectionByEMA(signal, PERIOD_M30, tfThreshold, m30Why);
+   int h1  = TFDirectionByEMA(signal, PERIOD_H1,  tfThreshold, h1Why);
+
+   if(!xauFast)
+   {
+      bool okLegacy = (m15 == signal && h1 == signal);
+      reason = okLegacy
+               ? "legacy strict M15+H1 aligned"
+               : "legacy strict M15+H1 not aligned | " + m15Why + " | " + h1Why;
+      return okLegacy;
+   }
+
+   double fastScore = 0.0;
+   int fastAgainst = 0;
+   if(m5 == signal) fastScore += 20.0; else if(m5 == -signal) fastAgainst++;
+   if(m15 == signal) fastScore += 35.0; else if(m15 == -signal) fastAgainst++;
+   if(m30 == signal) fastScore += 30.0; else if(m30 == -signal) fastAgainst++;
+
+   double h1Soft = 0.0;
+   bool h1Against = (h1 == -signal);
+   bool h1Aligned = (h1 == signal);
+   if(h1Aligned) h1Soft = 15.0;
+   if(h1Against)
+   {
+      lotMulti *= InpXAU_H1PenaltyLotMulti;
+      h1Soft = -InpXAU_H1PenaltyScore;
+   }
+
+   double totalScore = fastScore + h1Soft;
+   double requiredFast = choppyRegime ? InpXAU_ChopMinScore : InpXAU_FastTrendMinScore;
+   if(StringFind(gateName, "PYRAMID") >= 0)
+      requiredFast = MathMax(requiredFast, 65.0);
+   if(StringFind(grade, "A+") >= 0)
+      requiredFast = MathMax(InpXAU_FastTrendMinScore, requiredFast - 5.0);
+
+   bool momentumBad = IsMomentumWeak(signal);
+   bool allow = (fastScore >= requiredFast && fastAgainst < 2 && !momentumBad);
+
+   string h1Text = h1Against
+                   ? "H1 disagreement treated as soft penalty"
+                   : (h1Aligned ? "H1 aligned bonus" : "H1 neutral soft context");
+   reason = StringFormat("Fast gold mode enabled | gate=%s | fastScore=%.0f/85 required=%.0f total=%.0f | %s | lotPenalty=%.2f | %s | %s | %s | %s",
+                         gateName, fastScore, requiredFast, totalScore, h1Text, lotMulti,
+                         m5Why, m15Why, m30Why, h1Why);
+
+   if(!allow)
+   {
+      if(fastAgainst >= 2)
+         reason = "Trade blocked due to weak fast-timeframe confirmation: multiple fast TFs against | " + reason;
+      else if(momentumBad)
+         reason = "Trade blocked due to weak fast-timeframe confirmation: momentum slowdown | " + reason;
+      else
+         reason = "Trade blocked due to weak fast-timeframe confirmation: score below adaptive floor | " + reason;
+   }
+   else if(h1Against)
+      reason = "Trade allowed due to strong M5/M15/M30 momentum; H1 not aligned but ignored as soft context for XAU fast mode | " + reason;
+   else
+      reason = "Trade allowed because M5/M15/M30 momentum align | " + reason;
+
+   if(logDecision && InpXAU_LogAdaptiveConfirm && TimeCurrent() - g_lastAdaptiveConfirmLog >= 45)
+   {
+      Print("ADAPTIVE-CONFIRM: ", allow ? "ALLOW — " : "BLOCK — ", reason);
+      g_lastAdaptiveConfirmLog = TimeCurrent();
+   }
+   return allow;
+}
+
+// Backwards-compatible name used by older gates. On XAU it now calls the
+// adaptive fast-gold engine; H1 is no longer a hard blocker.
 bool PG_HTFAlignedM15H1(int signal)
 {
-   if(signal == 0) return false;
-   ENUM_TIMEFRAMES tfs[2] = { PERIOD_M15, PERIOD_H1 };
-   for(int i = 0; i < 2; i++)
-   {
-      int hEMA_HTF = iMA(Symbol(), tfs[i], 50, 0, MODE_EMA, PRICE_CLOSE);
-      int hATR_HTF = iATR(Symbol(), tfs[i], 14);
-      if(hEMA_HTF == INVALID_HANDLE || hATR_HTF == INVALID_HANDLE) return false;
-      double ema[2], atr[2], close[2];
-      if(CopyBuffer(hEMA_HTF, 0, 0, 2, ema) <= 0) return false;
-      if(CopyBuffer(hATR_HTF, 0, 0, 2, atr) <= 0) return false;
-      if(CopyClose(Symbol(), tfs[i], 0, 2, close) <= 0) return false;
-      double diff = close[0] - ema[0];
-      double thr  = atr[0] * 0.3;        // ~0.3×ATR away from EMA = real trend
-      if(signal == +1 && diff <  thr) return false;   // not bullish enough
-      if(signal == -1 && diff > -thr) return false;   // not bearish enough
-   }
-   return true;
+   double lm;
+   string why;
+   bool ok = AdaptiveXAUConfirm(signal, "SHARED", 0.0, "", lm, why, true);
+   g_adaptiveConfirmLotMulti = lm;
+   g_adaptiveConfirmReason = why;
+   return ok;
 }
 
 // Returns "" if OK to open, otherwise the reason to block.
@@ -6985,10 +7160,14 @@ string PG_BlockReason(int signal, string grade, double combinedScore)
          return StringFormat("PG selective: combined score %.1f < min %.1f required while restricted",
                              combinedScore, InpPG_SelectiveMinScore);
       }
-      if(InpPG_SelectiveRequireHTF && !PG_HTFAlignedM15H1(signal))
+      double pgConfirmLot = 1.0;
+      string pgConfirmWhy = "";
+      if(InpPG_SelectiveRequireHTF &&
+         !AdaptiveXAUConfirm(signal, "PG-SELECTIVE", combinedScore, grade,
+                             pgConfirmLot, pgConfirmWhy, true))
       {
          pg_selectiveSkippedCnt++;
-         return "PG selective: M15+H1 trend not aligned with trade direction (strict HTF gate)";
+         return "PG selective: adaptive fast confirmation failed — " + pgConfirmWhy;
       }
       // Passed all selective gates → trade may proceed (lot reduction applied at OpenTrade)
    }
@@ -7539,7 +7718,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.15 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.16 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
