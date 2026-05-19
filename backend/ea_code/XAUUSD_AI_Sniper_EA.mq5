@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.24 — Trade Cycle Guard |
+//|                                     v5.8.25 — Fast Volkill Fix  |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.24 — TRADE CYCLE GUARD"
-#property description "Prevents bank-profit then same-direction bottom/top chase re-entries."
+#property description "XAUUSD AI Sniper v5.8.25 — FAST VOLKILL FIX"
+#property description "Makes XAU volatility guard adaptive so early fast moves are not missed, while extreme chaos still blocks."
 #property description "Keeps indicator backoff and smarter pyramid-rescue logging."
 #property strict
 
@@ -97,6 +97,8 @@ input bool   InpStartupRequireNewBar = true; // Also require at least one fresh 
 // v5.3.0 — PHASE 1: VOLATILITY / SPREAD / DAILY-DD GUARDS (account-aware)
 input bool   InpVolKillEnabled    = true;   // Block entries when M5 ATR > 2× 50-bar median (turbulent market)
 input double InpVolKillMultiplier = 2.0;    // Multiplier vs 50-bar median ATR to trigger the kill switch
+input double InpVolKillHardMultiplier = 2.80; // v5.8.25: only this level is a hard chaos block for XAU fast mode
+input bool   InpVolKillXAUAdaptiveBypass = true; // v5.8.25: strong XAU fast confirmations soft-pass moderate ATR expansion
 input bool   InpSpreadKillEnabled = true;   // Block entries when current spread > 2× 60-bar median (broker freakout)
 input double InpSpreadKillMultiplier = 2.0; // Multiplier vs median spread to trigger kill switch
 input double InpHardDailyDDPct    = 0.0;    // v5.8.4 demo: disabled
@@ -128,7 +130,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.24 — breakout + pyramid adaptive confirmation) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.25 — breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -137,7 +139,7 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.24 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.25 — stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
@@ -505,13 +507,13 @@ input double InpPyramidSizeMulti= 0.50;    // Each add is this × previous size 
 input int    InpPyramidMinGapSec= 360;     // Min seconds between pyramid adds
 input bool   InpPyramidOnAdverse= false;   // v5.8.0: DISABLED by default — live data showed -$21k from 37 adverse-pyramid trades (PF 0.28). Adds risk to losing positions.
 input bool   InpPyramidOnTrend  = true;    // Add when price moves WITH us (trend continuation)
-input bool   InpPyramidAdaptiveEngine = true; // v5.8.24: score-based institutional pyramid engine
+input bool   InpPyramidAdaptiveEngine = true; // v5.8.25: score-based institutional pyramid engine
 input bool   InpPyramidAllowProtectedB = true; // Allow B-grade adds only when base trade is healthy and trend evidence is strong
 input bool   InpPyramidRescueMode = true;      // Allow ONE small pullback/retest add against entry if original direction still confirms
 input double InpPyramidRescueMaxATR = 1.80;    // Do not rescue-add after drawdown is already too deep
 input double InpPyramidRescueSizeMulti = 0.35; // Rescue add size vs original lot before risk caps
 input double InpPyramidRescueMinScore = 4.00;  // Rescue add needs strong original signal score
-input double InpPyramidRescueEliteScore = 4.70;// v5.8.24: elite score can allow one controlled rescue without wick-turn
+input double InpPyramidRescueEliteScore = 4.70;// v5.8.25: elite score can allow one controlled rescue without wick-turn
 input double InpPyramidMinHealthATR = 0.75;    // Base trade should be this ATR in profit before first add
 input double InpPyramidModerateScore = 3.60;   // Minimum score for protected B-grade continuation add
 input double InpPyramidEliteScore = 4.20;      // Elite score allows stronger/faster adds
@@ -526,14 +528,14 @@ input int    InpTimerScanSec     = 15;      // Timer wake-up so slow ticks/VPS l
 input int    InpScanWatchdogMin  = 7;       // Force a scan if no successful entry scan for this many minutes
 input int    InpScanSkipLogSec   = 120;     // Log repeated idle-skip detail at most every N seconds
 input int    InpIndicatorReloadFails = 3;   // Rebuild indicator handles after this many buffer failures
-input int    InpIndicatorWarmupSec = 12;    // v5.8.24: wait after rebuilding handles before copying buffers again
-input int    InpIndicatorRecoveryBackoffSec = 90; // v5.8.24: minimum seconds between handle rebuild attempts
+input int    InpIndicatorWarmupSec = 12;    // v5.8.25: wait after rebuilding handles before copying buffers again
+input int    InpIndicatorRecoveryBackoffSec = 90; // v5.8.25: minimum seconds between handle rebuild attempts
 
 input group "=== POST-WINNER ENTRY GUARD (v4.6.5 — user-tunable cooldown) ==="
 input bool   InpPostWinnerGuard    = true;   // Block re-entry in same direction after a winner (set false to disable)
 input int    InpPostWinnerCoolMin  = 5;      // Cooldown minutes after a winning close (was 30, now 5)
 input double InpPostWinnerATRBump  = 0.5;    // Need price ≥ this×ATR better to bypass cooldown
-input bool   InpPostWinnerCycleGuard = true; // v5.8.24: after banking, don't chase same direction at worse exhaustion price
+input bool   InpPostWinnerCycleGuard = true; // v5.8.25: after banking, don't chase same direction at worse exhaustion price
 input int    InpPostWinnerCycleMin   = 45;   // Minutes to require a pullback/reset after profitable same-direction exit
 input double InpPostWinnerResetATR   = 0.60; // Required reset from close price before same-direction re-entry
 input double InpPostWinnerChaseATR   = 0.20; // Worse than close by this ATR = bottom/top chase risk
@@ -595,6 +597,7 @@ double initialBalance, dailyStartEquity, weeklyStartEquity;
 double   g_adaptiveConfirmLotMulti = 1.0;
 string   g_adaptiveConfirmReason   = "";
 datetime g_lastAdaptiveConfirmLog  = 0;
+datetime g_lastVolKillSoftPassLog  = 0; // v5.8.25: throttle adaptive volkill pass logs
 
 // v5.1.2 Profit Guardian state ---------------------------------------------
 double   pg_dayHWM            = 0.0;   // highest equity reached today
@@ -753,8 +756,8 @@ bool       g_timerForceScan = false;  // v5.8.8: timer asks OnTick to run a reco
 datetime   g_lastPyramidFailTime = 0; // v5.8.8: failed pyramid add cooldown
 int        g_indicatorBufferFailCount = 0; // v5.9.0: rebuild stale indicator handles instead of requiring MT5 restart
 datetime   g_lastIndicatorFailLog = 0;
-datetime   g_lastIndicatorRebuildAt = 0; // v5.8.24: throttle recovery loops
-datetime   g_indicatorWarmupUntil = 0;   // v5.8.24: let MT5 calculate new indicator buffers before retrying
+datetime   g_lastIndicatorRebuildAt = 0; // v5.8.25: throttle recovery loops
+datetime   g_indicatorWarmupUntil = 0;   // v5.8.25: let MT5 calculate new indicator buffers before retrying
 
 // TRADE THESIS (AI narrative per open position)
 string     currentTradeThesis = "";
@@ -1453,7 +1456,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.24 (TRADE CYCLE GUARD) READY ===");
+   Print("=== XAUAI SNIPER v5.8.25 (FAST VOLKILL FIX) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -4512,7 +4515,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       }
    }
 
-   // v5.8.24 — Trade-cycle guard. The bad pattern in live screenshots was:
+   // v5.8.25 — Trade-cycle guard. The bad pattern in live screenshots was:
    // bank a profitable SELL, then re-sell lower into exhaustion/bottom because
    // the direction still looked correct. For XAU, same-direction re-entry after
    // a winner must wait for a real reset/pullback, not just another signal.
@@ -7356,17 +7359,30 @@ string StartupCooldownReason()
    return "";
 }
 
-// v5.3.0 — Phase 1: Volatility kill switch.
-// Returns "" if OK, else reason. ATR over current candle is compared to the
-// 50-bar median ATR; when it spikes >= multiplier we treat the market as
-// turbulent / spread-prone / news-induced and stand aside.
-string VolatilityKillReason()
+bool IsXAUFastSymbol();
+bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, string grade,
+                        double &lotMulti, string &reason, bool logDecision);
+bool IsXAUConfirmedBreakoutContinuation(int signal, string setupName);
+
+// v5.8.25 — Adaptive XAU volatility gate.
+// Old behavior hard-blocked at 2x ATR. On gold that often blocked the first
+// clean flush/pump, then allowed a late bottom/top entry after ATR cooled.
+// New behavior:
+//   • normal symbols keep the old hard 2x gate
+//   • XAU/GOLD hard-blocks only extreme chaos
+//   • moderate ATR expansion soft-passes if fast confirmation/breakout agrees
+string VolatilityKillReason(int signal, string setupName)
 {
    if(!InpVolKillEnabled) return "";
    int hVK = iATR(Symbol(), PERIOD_M5, 14);
    if(hVK == INVALID_HANDLE) return "";
    double atrBuf[51];
-   if(CopyBuffer(hVK, 0, 0, 51, atrBuf) < 51) return "";
+   if(CopyBuffer(hVK, 0, 0, 51, atrBuf) < 51)
+   {
+      IndicatorRelease(hVK);
+      return "";
+   }
+   IndicatorRelease(hVK);
    // Median over the last 50 closed bars (skip current forming bar at index 0).
    double sample[50];
    for(int i = 0; i < 50; i++) sample[i] = atrBuf[i + 1];
@@ -7375,10 +7391,39 @@ string VolatilityKillReason()
    double cur = atrBuf[1];                  // last fully-closed bar
    if(median <= 0 || cur <= 0) return "";
    double ratio = cur / median;
-   if(ratio >= InpVolKillMultiplier)
+   if(ratio < InpVolKillMultiplier) return "";
+
+   bool xauFast = (InpVolKillXAUAdaptiveBypass && IsXAUFastSymbol() && signal != 0);
+   double hardMult = MathMax(InpVolKillHardMultiplier, InpVolKillMultiplier);
+   if(!xauFast)
       return StringFormat("ATR turbulent (%.2f / median %.2f = %.2fx ≥ %.2fx)",
                           cur, median, ratio, InpVolKillMultiplier);
-   return "";
+
+   if(ratio >= hardMult)
+      return StringFormat("ATR extreme chaos (%.2f / median %.2f = %.2fx ≥ hard %.2fx)",
+                          cur, median, ratio, hardMult);
+
+   double lm = 1.0;
+   string why = "";
+   bool fastConfirm = AdaptiveXAUConfirm(signal, "VOLKILL", 0.0, "", lm, why, false);
+   bool breakoutOK = IsXAUConfirmedBreakoutContinuation(signal, setupName);
+   if(fastConfirm || breakoutOK)
+   {
+      if(TimeCurrent() - g_lastVolKillSoftPassLog >= 45)
+      {
+         Print("VOLKILL SOFT-PASS: moderate XAU ATR expansion ",
+               DoubleToString(cur, 2), " / median ", DoubleToString(median, 2),
+               " = ", DoubleToString(ratio, 2), "x. Allowed because fastConfirm=",
+               fastConfirm ? "Y" : "N", " breakout=", breakoutOK ? "Y" : "N",
+               ". Entry timing guard still protects against selling bottoms/buying tops. ",
+               why);
+         g_lastVolKillSoftPassLog = TimeCurrent();
+      }
+      return "";
+   }
+
+   return StringFormat("ATR turbulent without fast XAU confirmation (%.2f / median %.2f = %.2fx ≥ %.2fx; hard %.2fx)",
+                       cur, median, ratio, InpVolKillMultiplier, hardMult);
 }
 
 // v5.3.0 — Phase 1: Spread spike protection.
@@ -7530,7 +7575,7 @@ bool IsXAUExtensionResetMissing(int signal, double atr, double &extensionATR, do
            resetATR < InpXAU_MinExtensionResetATR);
 }
 
-// v5.8.24 - Gold breakout exception for the generic momentum-slowdown guard.
+// v5.8.25 - Gold breakout exception for the generic momentum-slowdown guard.
 // The old check treated any SELL close in the upper part of a 3-bar range as
 // weak momentum, even when the broader regime had already flipped into a fast
 // breakout. That blocked real XAU flushes before they moved. This helper keeps
@@ -7820,7 +7865,7 @@ string PreTradeBlockReason(int signal, string setupName = "")
    string r;
    r = StartupCooldownReason();   if(StringLen(r) > 0) return "startup: "  + r;
    r = HardDailyDDReason();       if(StringLen(r) > 0) return "ddfloor: "  + r;
-   r = VolatilityKillReason();    if(StringLen(r) > 0) return "volkill: "  + r;
+   r = VolatilityKillReason(signal, setupName); if(StringLen(r) > 0) return "volkill: "  + r;
    r = SpreadKillReason();        if(StringLen(r) > 0) return "spread: "   + r;
    if(IsMomentumWeak(signal) && !IsXAUConfirmedBreakoutContinuation(signal, setupName))
       return "momentum slowdown (close in opposite 30% of last 3-bar range)";
@@ -8618,7 +8663,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.24 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.25 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
