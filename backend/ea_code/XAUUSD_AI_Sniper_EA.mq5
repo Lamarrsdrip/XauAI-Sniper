@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.16 — Adaptive XAU Confirm|
+//|                                     v5.8.18 — Anti-Bias Strategy Fix|
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.93"
-#property description "XAUUSD AI Sniper v5.8.16 — ADAPTIVE XAU CONFIRM"
-#property description "Keeps risk caps but distinguishes XAU pullback noise from true failure."
-#property description "Replaces slow H1 hard vetoes with fast gold scoring and H1 soft context."
+#property version   "5.95"
+#property description "XAUUSD AI Sniper v5.8.18 — ANTI-BIAS STRATEGY FIX"
+#property description "Keeps gold breathing exits, but stops repeating the same losing side."
+#property description "Adds fast-TF anti-bias correction and stricter B-grade damage setup control."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -128,13 +128,14 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.16 — H1 soft context, not hard veto) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.18 — H1 soft context, not hard veto) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
 input double InpXAU_H1PenaltyLotMulti     = 0.75;  // If H1 disagrees but fast TFs pass, reduce lot instead of veto
 input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence penalty shown in logs
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
+input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
 input bool   InpPreservationMode = true;  // Master toggle: disables premature profit-side exits
 input double InpRiskPercent    = 0.4;      // Base risk per trade (%) — IGNORED if InpAccountMode != BALANCED uses preset
@@ -228,6 +229,11 @@ input bool   InpDirectionLockout = true;   // Lock a direction if too many same-
 input int    InpDirLockoutLookback = 5;    // Check last N trades
 input int    InpDirLockoutLossesNeeded = 2;// If N of last M were losses in same direction
 input int    InpDirLockoutMinutes = 120;   // Lock that direction for X minutes
+input bool   InpAntiBiasCorrection = true; // After repeated wrong-side losses, block or flip only if fast TFs prove opposite
+input int    InpAntiBiasLookback = 5;      // Recent closed trades checked for same-side losses
+input int    InpAntiBiasLossesNeeded = 2;  // Losses needed before correction activates
+input int    InpAntiBiasWindowMin = 180;   // Only use losses inside this many minutes
+input double InpAntiBiasMinScore = 3.6;    // Minimum combined score before considering correction
 
 input group "=== CONVICTION-WEIGHTED SIZING (v4.5.0 — use Claude/GPT confidence) ==="
 input bool   InpConvictionSizing = true;   // Scale lot size by AI confidence
@@ -368,31 +374,31 @@ input int    InpCleanChandelierLookback = 24; // Bars to scan for highest high /
 input bool   InpCleanMomentumInvalidation = true; // Cut trade if momentum flips hard against us
 input int    InpCleanStaleHours     = 3;      // Close if > X hours in AND profit < StaleMinR, unless trend still validates
 input double InpCleanStaleMinR      = 0.10;   // Threshold below which we consider trade stale
-input double InpCleanMaxLossR       = 1.80;   // v5.8.15: confirmed invalidation only; normal XAU pullbacks breathe
-input double InpCleanEmergencyLossR = 2.80;   // Emergency close only after a real failed setup
+input double InpCleanMaxLossR       = 2.60;   // v5.8.17: give XAU pullbacks room before invalidation close
+input double InpCleanEmergencyLossR = 4.20;   // Emergency close only after a true failed setup/disaster move
 input int    InpCleanStructureLookback = 18;  // Wider swing window for gold structure invalidation
 input double InpCleanStructureATRBuffer = 0.35; // Close must break swing by this ATR fraction
-input int    InpCleanMinInvalidationMin = 25; // Do not judge normal early XAU pullback too fast
+input int    InpCleanMinInvalidationMin = 40; // Do not judge normal early XAU pullback too fast
 input int    InpCleanStagnantMinutes = 120;   // Time-based exit for flat/choppy trades with no progress
 input double InpCleanStagnantMaxR = 0.20;     // Stagnant if abs(R) remains below this after StagnantMinutes
 
 input group "=== GOLD PULLBACK SURVIVAL (v5.8.15 — structure before panic) ==="
 input bool   InpGoldPullbackSurvivalMode = true;  // If trend/structure still supports trade, give loss exits more room
-input int    InpGoldPullbackConfirmBars  = 2;     // Need this many closed bars beyond structure before true failure
-input double InpGoldPullbackCapBoost     = 1.45;  // Boost loss caps while recovery probability remains valid
+input int    InpGoldPullbackConfirmBars  = 3;     // Need this many closed bars beyond structure before true failure
+input double InpGoldPullbackCapBoost     = 1.80;  // Boost loss caps while recovery probability remains valid
 input int    InpGoldPullbackMinMomentum  = 3;     // Momentum score needed to classify drawdown as recoverable
 
 input group "=== EXPECTANCY LOSS ARMOR (v5.8.15 — breathe first, de-risk before disaster) ==="
 input bool   InpExpectancyLossArmor       = true;  // Runs even when Clean Exits owns trade management
 input bool   InpExpectancySoftDeRisk      = true;  // First response is partial size reduction, not full kill
-input double InpExpectancySoftLossR       = 1.80;  // Soft de-risk trigger by R
-input double InpExpectancySoftLossPctEq   = 3.0;   // Soft de-risk trigger by equity %
-input double InpExpectancySoftClosePct    = 25.0;  // Close this % once; keep runner alive for recovery
-input int    InpExpectancySoftMinAgeSec   = 900;   // Let fresh XAU pullbacks breathe before de-risk
-input double InpExpectancyMaxLossR        = 3.50;  // Full close only at deep R loss
-input double InpExpectancyMaxLossPctEq    = 7.0;   // Or at dangerous equity loss, whichever comes first
-input int    InpExpectancyMinAgeSec       = 1200;  // Avoid full close before the setup has had time to prove itself
-input bool   InpExpectancyUseDayGiveback  = true;  // Protect daily HWM after a profitable run
+input double InpExpectancySoftLossR       = 2.70;  // Soft de-risk trigger by R
+input double InpExpectancySoftLossPctEq   = 4.5;   // Soft de-risk trigger by equity %
+input double InpExpectancySoftClosePct    = 15.0;  // Close this % once; keep runner alive for recovery
+input int    InpExpectancySoftMinAgeSec   = 1800;  // Let fresh XAU pullbacks breathe before de-risk
+input double InpExpectancyMaxLossR        = 4.20;  // Full close only at deep R loss
+input double InpExpectancyMaxLossPctEq    = 8.5;   // Or at dangerous equity loss, whichever comes first
+input int    InpExpectancyMinAgeSec       = 2400;  // Avoid full close before the setup has had time to prove itself
+input bool   InpExpectancyUseDayGiveback  = false; // v5.8.17: disabled by default; basket/SL manage live pullbacks
 input double InpExpectancyDayArmPct       = 1.0;   // Arm daily giveback after day HWM is up this % of start equity
 input double InpExpectancyDayMaxGivePct   = 35.0;  // Max allowed giveback of today's HWM profit
 input double InpExpectancyDayGiveFloorUSD = 600.0; // Floor so small normal fluctuation does not close a basket
@@ -1406,7 +1412,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.16 (ADAPTIVE XAU CONFIRM) READY ===");
+   Print("=== XAUAI SNIPER v5.8.18 (ANTI-BIAS STRATEGY FIX) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1832,6 +1838,101 @@ bool IsDirectionLocked(int dir)
    if(dir ==  1 && buyLockoutUntil  > TimeCurrent()) return true;
    if(dir == -1 && sellLockoutUntil > TimeCurrent()) return true;
    return false;
+}
+
+bool IsDamageProneSetupName(string setupName)
+{
+   return (StringFind(setupName, "TREND_PULLBACK") >= 0 ||
+           StringFind(setupName, "BREAKOUT") >= 0);
+}
+
+int RecentDirectionalLosses(int dir, int lookback, int windowMin)
+{
+   if(dir == 0) return 0;
+   int total = ArraySize(closeDirs);
+   int checked = 0;
+   int dirLosses = 0;
+   datetime cutoff = TimeCurrent() - windowMin * 60;
+   for(int i = total - 1; i >= 0 && checked < lookback; i--)
+   {
+      if(closeTimes[i] < cutoff) break;
+      if(closeDirs[i] != dir) continue;
+      checked++;
+      if(closeResults[i]) dirLosses++;
+   }
+   return dirLosses;
+}
+
+bool IsFastTrendRegimeForDirection(int dir)
+{
+   if(dir == 1)
+      return (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP);
+   if(dir == -1)
+      return (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN);
+   return false;
+}
+
+bool ApplyAntiBiasCorrection(int &signal, string &setupName, double setupScore,
+                             double combinedScore, string grade, string &reason)
+{
+   reason = "";
+   if(!InpAntiBiasCorrection || signal == 0) return true;
+   if(!IsDamageProneSetupName(setupName)) return true;
+   if(combinedScore < InpAntiBiasMinScore) return true;
+
+   int sameSideLosses = RecentDirectionalLosses(signal, InpAntiBiasLookback, InpAntiBiasWindowMin);
+   if(sameSideLosses < InpAntiBiasLossesNeeded) return true;
+
+   double oppositeLotPenalty = 1.0;
+   string oppositeWhy = "";
+   bool oppositeConfirmed = AdaptiveXAUConfirm(-signal, "ANTI-BIAS-OPPOSITE",
+                                               combinedScore, grade,
+                                               oppositeLotPenalty, oppositeWhy, true);
+   bool oppositeTrendOk = IsFastTrendRegimeForDirection(-signal);
+
+   if(oppositeConfirmed && oppositeTrendOk)
+   {
+      int oldSignal = signal;
+      signal = -signal;
+      setupName = setupName + "_ANTI_BIAS";
+      g_adaptiveConfirmLotMulti *= MathMin(1.0, oppositeLotPenalty);
+      g_adaptiveConfirmReason = "ANTI-BIAS flip: " + oppositeWhy;
+      reason = StringFormat("ANTI-BIAS FLIP: recent %s losses=%d/%d inside %dmin; switched to %s because fast XAU confirmation supports opposite. %s",
+                            oldSignal == 1 ? "BUY" : "SELL",
+                            sameSideLosses, InpAntiBiasLookback, InpAntiBiasWindowMin,
+                            signal == 1 ? "BUY" : "SELL", oppositeWhy);
+      Print(reason);
+      CloudPostReasoning("ANTI-BIAS", reason, RegimeName(), setupName,
+                         setupScore, combinedScore, grade, signal);
+      return true;
+   }
+
+   if(InpTrendPullbackBRequireAntiBias && grade == "B")
+   {
+      reason = StringFormat("ANTI-BIAS BLOCK: %s %s has recent same-side losses=%d/%d inside %dmin and opposite confirmation is not clean. B-grade damage setups are paused instead of repeating losses. Opposite check: %s",
+                            setupName, signal == 1 ? "BUY" : "SELL",
+                            sameSideLosses, InpAntiBiasLookback, InpAntiBiasWindowMin,
+                            oppositeWhy);
+      return false;
+   }
+
+   double sameLotPenalty = 1.0;
+   string sameWhy = "";
+   if(!AdaptiveXAUConfirm(signal, "ANTI-BIAS-SAME", combinedScore, grade,
+                          sameLotPenalty, sameWhy, true))
+   {
+      reason = StringFormat("ANTI-BIAS BLOCK: recent %s losses=%d/%d and same-side fast confirmation failed. %s",
+                            signal == 1 ? "BUY" : "SELL",
+                            sameSideLosses, InpAntiBiasLookback, sameWhy);
+      return false;
+   }
+
+   g_adaptiveConfirmLotMulti *= MathMin(1.0, sameLotPenalty * 0.70);
+   g_adaptiveConfirmReason = "ANTI-BIAS defensive same-side retry: " + sameWhy;
+   PrintFormat("ANTI-BIAS DEFENSIVE RETRY: %s losses=%d/%d; same side allowed only with reduced lot x%.2f. %s",
+               signal == 1 ? "BUY" : "SELL", sameSideLosses, InpAntiBiasLookback,
+               MathMin(1.0, sameLotPenalty * 0.70), sameWhy);
+   return true;
 }
 void PruneStreak()
 {
@@ -3395,6 +3496,43 @@ void OnTick()
       }
    }
 
+   g_adaptiveConfirmLotMulti = 1.0;
+   g_adaptiveConfirmReason = "";
+
+   string antiBiasReason = "";
+   if(!ApplyAntiBiasCorrection(signal, setupName, setupScore, combinedScore, grade, antiBiasReason))
+   {
+      Print("TRADE BLOCKED BECAUSE: ", antiBiasReason);
+      CloudPostReasoning("BLOCK", antiBiasReason, RegimeName(), setupName,
+                         setupScore, combinedScore, "ANTI-BIAS", signal);
+      UpdateDashboard(0, combinedScore, "ANTI-BIAS");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "ANTI-BIAS";
+      return;
+   }
+
+   if(InpTrendPullbackBRequireAntiBias && grade == "B" && IsDamageProneSetupName(setupName))
+   {
+      double bQualityLot = 1.0;
+      string bQualityWhy = "";
+      if(!AdaptiveXAUConfirm(signal, "DAMAGE-B-QUALITY", combinedScore, grade,
+                             bQualityLot, bQualityWhy, true))
+      {
+         string bMsg = StringFormat("B-GRADE QUALITY BLOCK: %s %s failed stricter fast XAU confirmation. %s",
+                                    setupName, signal == 1 ? "BUY" : "SELL", bQualityWhy);
+         Print("TRADE BLOCKED BECAUSE: ", bMsg);
+         CloudPostReasoning("BLOCK", bMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "B-QUALITY", signal);
+         UpdateDashboard(0, combinedScore, "B-QUALITY");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "B-QUALITY";
+         return;
+      }
+      if(bQualityLot < 0.999)
+      {
+         g_adaptiveConfirmLotMulti *= bQualityLot;
+         g_adaptiveConfirmReason = "B-grade damage setup fast-confirm penalty: " + bQualityWhy;
+      }
+   }
+
    bool smartDamageSetup = InpSmartGuardEnable && IsSmartGuardDamageSetup(setupName);
    double smartGuardExtraLotMulti = 1.0;
    if(smartDamageSetup)
@@ -3477,9 +3615,6 @@ void OnTick()
          return;
       }
    }
-
-   g_adaptiveConfirmLotMulti = 1.0;
-   g_adaptiveConfirmReason = "";
 
    // v5.4.0 — A+ NOW REQUIRES H1 TREND ALIGNMENT.
    // Previously A+ was just "combinedScore >= 5.5" — which counter-trend
@@ -4550,7 +4685,11 @@ bool ManageBasket()
          for(int k = 0; k < g_basketSnapMax; k++) { g_basketSnapPnL[k] = tmpP[k]; g_basketSnapTime[k] = tmpT[k]; }
       }
 
-      // GUARD 1: fast reversal — find max PnL in window, see how far we've fallen
+      // GUARD 1: fast reversal — find max PnL in window, see how far we've fallen.
+      // v5.8.17: this may bank a still-profitable basket, but it must not
+      // panic-close a losing/pullback basket. Gold often sweeps hard before
+      // continuing; once the basket is negative, the structure SL/clean-exit
+      // engine owns the decision.
       if(InpBasketFastReversalGuard && ArraySize(g_basketSnapPnL) >= 2 && g_basketPeakUSD > 0)
       {
          double winMax = totalPnL;
@@ -4561,42 +4700,46 @@ bool ManageBasket()
          // Only fire if we've actually given back meaningful $ AND % of peak
          if(dropFromWinMax > MathMax(50.0, bal * 0.001) && dropPctOfPeak >= InpBasketFastDropPct)
          {
-            PrintFormat(">>> BASKET FAST-REVERSAL │ dropped $%.2f (%.1f%% of peak $%.2f) in %ds → CLOSE ALL",
-                        dropFromWinMax, dropPctOfPeak, g_basketPeakUSD, InpBasketFastWindowSec);
-            lastExitReason = StringFormat("BASKET FAST-REV │ peak $%.2f → $%.2f in %ds", g_basketPeakUSD, totalPnL, InpBasketFastWindowSec);
-            CloseAll();
-            // v5.1.0 — trigger Profit Guardian post-loss cooldown if this flush was a real loss
-            if(totalPnL < 0 && bal > 0)
-               PG_OnBasketLoss((-totalPnL) / bal * 100.0);
-            else if(totalPnL > 0)
+            if(totalPnL > 0)
+            {
+               PrintFormat(">>> BASKET FAST-REVERSAL │ dropped $%.2f (%.1f%% of peak $%.2f) in %ds → BANK PROFIT",
+                           dropFromWinMax, dropPctOfPeak, g_basketPeakUSD, InpBasketFastWindowSec);
+               lastExitReason = StringFormat("BASKET FAST-REV │ peak $%.2f → $%.2f in %ds", g_basketPeakUSD, totalPnL, InpBasketFastWindowSec);
+               CloseAll();
                PG_OnBasketWin();  // v5.1.2 — winner resets consecutive-loss streak
-            g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
-            g_basketArmed    = false; g_basketBEHit = false;
-            ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
-            return true;
+               g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
+               g_basketArmed    = false; g_basketBEHit = false;
+               ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+               return true;
+            }
+            PrintFormat("BASKET_FAST_REV_BREATHE │ peak $%.2f -> pnl $%.2f, drop %.1f%% in %ds, but basket is not profitable; SL/structure manages recovery",
+                        g_basketPeakUSD, totalPnL, dropPctOfPeak, InpBasketFastWindowSec);
          }
       }
 
-      // GUARD 2: hard $ giveback cap (never give back > X% of balance from peak)
+      // GUARD 2: hard $ giveback cap. v5.8.17: same principle as above;
+      // bank remaining profit, but don't convert normal XAU pullback into
+      // a forced red close unless the real SL/clean-exit engine confirms failure.
       if(InpBasketHardGivebackPct > 0)
       {
          double maxGivebackUSD = bal * InpBasketHardGivebackPct / 100.0;
          double currGivebackUSD = g_basketPeakUSD - totalPnL;
          if(currGivebackUSD >= maxGivebackUSD)
          {
-            PrintFormat(">>> BASKET HARD-CAP │ giveback $%.2f ≥ cap $%.2f (%.1f%% of bal) → CLOSE ALL",
-                        currGivebackUSD, maxGivebackUSD, InpBasketHardGivebackPct);
-            lastExitReason = StringFormat("BASKET HARD-CAP │ peak $%.2f → $%.2f (giveback $%.2f)", g_basketPeakUSD, totalPnL, currGivebackUSD);
-            CloseAll();
-            // v5.1.0 — Profit Guardian cooldown if loss
-            if(totalPnL < 0 && bal > 0)
-               PG_OnBasketLoss((-totalPnL) / bal * 100.0);
-            else if(totalPnL > 0)
+            if(totalPnL > 0)
+            {
+               PrintFormat(">>> BASKET HARD-CAP │ giveback $%.2f ≥ cap $%.2f (%.1f%% of bal) → BANK PROFIT",
+                           currGivebackUSD, maxGivebackUSD, InpBasketHardGivebackPct);
+               lastExitReason = StringFormat("BASKET HARD-CAP │ peak $%.2f → $%.2f (giveback $%.2f)", g_basketPeakUSD, totalPnL, currGivebackUSD);
+               CloseAll();
                PG_OnBasketWin();  // v5.1.2
-            g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
-            g_basketArmed    = false; g_basketBEHit = false;
-            ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
-            return true;
+               g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
+               g_basketArmed    = false; g_basketBEHit = false;
+               ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+               return true;
+            }
+            PrintFormat("BASKET_HARD_CAP_BREATHE │ peak $%.2f -> pnl $%.2f, giveback $%.2f >= cap $%.2f, but basket is not profitable; holding for SL/structure",
+                        g_basketPeakUSD, totalPnL, currGivebackUSD, maxGivebackUSD);
          }
       }
    }
@@ -4625,19 +4768,24 @@ bool ManageBasket()
          }
       }
 
-      PrintFormat(">>> BASKET CLOSE │ PnL=$%.2f < Floor=$%.2f │ Peak=$%.2f │ banking %.1f%% of peak",
-                  totalPnL, g_basketFloorUSD, g_basketPeakUSD,
-                  g_basketPeakUSD > 0 ? (totalPnL / g_basketPeakUSD) * 100.0 : 0.0);
-      lastExitReason = StringFormat("BASKET LOCK │ $%.2f peak → $%.2f banked", g_basketPeakUSD, totalPnL);
-      CloseAll();
-      // reset so the state doesn't instantly re-arm if a residual slippage trade lingers
-      g_basketPeakUSD  = 0;
-      g_basketFloorUSD = 0;
-      g_basketArmed    = false;
-      g_basketBEHit    = false;
-      g_basketSoftLockTaken = false;
-      ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
-      return true;
+      if(totalPnL > 0)
+      {
+         PrintFormat(">>> BASKET CLOSE │ PnL=$%.2f < Floor=$%.2f │ Peak=$%.2f │ banking %.1f%% of peak",
+                     totalPnL, g_basketFloorUSD, g_basketPeakUSD,
+                     g_basketPeakUSD > 0 ? (totalPnL / g_basketPeakUSD) * 100.0 : 0.0);
+         lastExitReason = StringFormat("BASKET LOCK │ $%.2f peak → $%.2f banked", g_basketPeakUSD, totalPnL);
+         CloseAll();
+         // reset so the state doesn't instantly re-arm if a residual slippage trade lingers
+         g_basketPeakUSD  = 0;
+         g_basketFloorUSD = 0;
+         g_basketArmed    = false;
+         g_basketBEHit    = false;
+         g_basketSoftLockTaken = false;
+         ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+         return true;
+      }
+      PrintFormat("BASKET_LOCK_BREATHE │ PnL=$%.2f < Floor=$%.2f after peak $%.2f, but basket is red; no panic close, SL/structure owns exit",
+                  totalPnL, g_basketFloorUSD, g_basketPeakUSD);
    }
 
    return false;
@@ -4851,7 +4999,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    {
       bool confirmedInvalid = !recoveryLikely &&
                               ((rMult <= -InpCleanMaxLossR && invalidScore >= 3) ||
-                               (structureConfirmedBroken && emaAgainst && rsiAgainst && rMult < 0.10));
+                               (rMult <= -0.80 && structureConfirmedBroken && emaAgainst && rsiAgainst && invalidScore >= 4));
       bool emergencyInvalid = (rMult <= -InpCleanEmergencyLossR && invalidScore >= 3);
       if(confirmedInvalid || emergencyInvalid)
       {
@@ -6519,6 +6667,18 @@ void CloseAll()
       { trade.PositionClose(posInfo.Ticket()); Print("FORCE CLOSE: #", posInfo.Ticket()); }
 }
 
+double BasketFloatingPnL()
+{
+   double total = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      total += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+   }
+   return total;
+}
+
 bool ExpectancyDayGivebackGuard()
 {
    if(!InpExpectancyLossArmor || !InpExpectancyUseDayGiveback || dailyStartEquity <= 0)
@@ -6542,7 +6702,15 @@ bool ExpectancyDayGivebackGuard()
    if(CountMyPositions() <= 0)
       return false;
 
-   PrintFormat("EXPECTANCY_DAY_GUARD: equity HWM $%.2f start $%.2f current $%.2f | peakGain $%.2f giveback $%.2f >= cap $%.2f (%.1f%%) -> CLOSE ALL",
+   double openPnL = BasketFloatingPnL();
+   if(openPnL <= 0)
+   {
+      PrintFormat("EXPECTANCY_DAY_GUARD_BREATHE: HWM giveback hit ($%.2f of $%.2f), but open basket is $%.2f. No forced red close; SL/structure manages XAU pullback.",
+                  givebackUSD, dayPeakGain, openPnL);
+      return false;
+   }
+
+   PrintFormat("EXPECTANCY_DAY_GUARD: equity HWM $%.2f start $%.2f current $%.2f | peakGain $%.2f giveback $%.2f >= cap $%.2f (%.1f%%) -> BANK PROFIT ONLY",
                pg_dayHWM, dailyStartEquity, equity, dayPeakGain, givebackUSD,
                maxGiveback, InpExpectancyDayMaxGivePct);
    lastExitReason = StringFormat("EXPECTANCY DAY GUARD | gave back $%.2f of $%.2f peak gain",
@@ -7066,6 +7234,10 @@ bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, strin
    double totalScore = fastScore + h1Soft;
    double requiredFast = choppyRegime ? InpXAU_ChopMinScore : InpXAU_FastTrendMinScore;
    if(StringFind(gateName, "PYRAMID") >= 0)
+      requiredFast = MathMax(requiredFast, 65.0);
+   if(StringFind(gateName, "DAMAGE-B") >= 0)
+      requiredFast = MathMax(requiredFast, 70.0);
+   if(StringFind(gateName, "ANTI-BIAS") >= 0)
       requiredFast = MathMax(requiredFast, 65.0);
    if(StringFind(grade, "A+") >= 0)
       requiredFast = MathMax(InpXAU_FastTrendMinScore, requiredFast - 5.0);
@@ -7718,7 +7890,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.16 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.18 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

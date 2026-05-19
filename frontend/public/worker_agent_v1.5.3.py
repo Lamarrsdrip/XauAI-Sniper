@@ -21,7 +21,7 @@ Mock mode (any OS, for dry-run testing):
   → logs every action but never actually calls MT5. Perfect for sanity-checking
     the backend round-trip before you rent the VPS.
 
-Author: XauAi Sniper   |   Version: 1.5.2  (fast sync + strict proportional mirror)
+Author: XauAi Sniper   |   Version: 1.5.4  (broker health + compatibility checks)
 """
 from __future__ import annotations
 
@@ -104,7 +104,7 @@ POLL_SEC = int(os.environ.get("POLL_SEC", "1"))
 HEARTBEAT_SEC = int(os.environ.get("HEARTBEAT_SEC", "30"))
 EQUITY_SEC = int(os.environ.get("EQUITY_SEC", "30"))
 HTTP_TIMEOUT = int(os.environ.get("HTTP_TIMEOUT", "8"))
-VERSION = "1.5.3"
+VERSION = "1.5.4"
 
 # Catch-up window: on cold start we only execute signals from the last N minutes
 # to avoid replaying historic trades. 0 = only signals fired AFTER worker start.
@@ -123,7 +123,8 @@ log = logging.getLogger("xauai-worker")
 SYMBOL_VARIANTS = [
     "XAUUSD", "XAUUSDm", "XAUUSD.r", "XAUUSD.s", "XAUUSD.c", "XAUUSDc",
     "XAUUSD-Z", "XAUUSDpro", "XAUUSD#", "XAUUSD.", "GOLD", "GOLDm",
-    "GOLD.s", "XAU/USD", "XAUUSDX", "XAUUSD_i",
+    "GOLD.s", "GOLD.", "GOLDmicro", "GOLDpro", "XAU/USD", "XAUUSDX",
+    "XAUUSD_i", "XAUUSD.raw", "XAUUSD-RAW", "XAUUSDecn", "XAUUSD_ECN",
 ]
 
 
@@ -388,6 +389,30 @@ class WorkerAgent:
         10030: "Filling mode rejected by broker — auto-retried IOC/FOK/RETURN",
         10031: "Connection lost to trade server",
     }
+
+    def _human_mt5_error(self, err) -> str:
+        raw = str(err or "")
+        text = raw.lower()
+        if not raw or raw == "None":
+            return "Unknown MT5 connection error"
+        if "authorization" in text or "invalid account" in text:
+            return f"Invalid MT5 login/password or wrong broker server: {raw}"
+        if "invalid params" in text:
+            return f"MT5 rejected login parameters. This is usually an MT4/MT5 mismatch or exact server-name problem: {raw}"
+        if "timeout" in text or "timed out" in text:
+            return f"MT5 broker server timeout. Check server name, broker region, and VPS network latency: {raw}"
+        if "terminal" in text or "initialize" in text:
+            return f"MT5 terminal not reachable on this VPS. Start MT5 and confirm it can log in manually: {raw}"
+        return raw
+
+    def _account_mode_name(self, acct) -> str:
+        mode = getattr(acct, "trade_mode", None)
+        mapping = {
+            0: "demo",
+            1: "contest",
+            2: "real",
+        }
+        return mapping.get(int(mode), str(mode)) if mode is not None else ""
 
     @staticmethod
     def _retcode_msg(retcode: int, comment: str) -> str:
@@ -808,26 +833,63 @@ class WorkerAgent:
             pwd = row.get("mt5_password") or ""
             if not uid or login <= 0 or not server or not pwd: continue
             log.info("verify attempt user=%s login=%s server=%s", email, login, server)
-            ok, err, bal, eq, ccy = self._mt5_try_login(login, server, pwd)
+            ok, err, bal, eq, ccy, health = self._mt5_try_login(login, server, pwd)
             try:
-                self._post("/api/cloud/agent/verify-credentials", {
+                payload = {
                     "user_id": uid, "ok": ok, "error": err,
-                    "balance": bal, "equity": eq, "currency": ccy})
-                log.info("verify result user=%s ok=%s err=%s", email, ok, err)
+                    "balance": bal, "equity": eq, "currency": ccy,
+                    "health": health,
+                    "broker_name": health.get("broker_name", ""),
+                    "server": health.get("server", server),
+                    "account_type": health.get("account_type", ""),
+                    "trade_allowed": health.get("trade_allowed"),
+                    "terminal_trade_allowed": health.get("terminal_trade_allowed"),
+                    "symbol": health.get("resolved_symbol", ""),
+                    "symbol_mapping": health.get("symbol_mapping", ""),
+                    "latency_ms": health.get("latency_ms", 0),
+                }
+                self._post("/api/cloud/agent/verify-credentials", payload)
+                log.info("verify result user=%s ok=%s latency=%sms symbol=%s err=%s",
+                         email, ok, health.get("latency_ms", 0),
+                         health.get("resolved_symbol", ""), err)
             except Exception as e:
                 log.error("verify-credentials POST failed user=%s: %s", email, e)
 
     def _mt5_try_login(self, login: int, server: str, password: str):
-        """Returns (ok, error, balance, equity, currency)."""
+        """Returns (ok, error, balance, equity, currency, health)."""
+        started = time.time()
+        health = {
+            "server": server,
+            "platform": "MT5",
+            "login": int(login),
+            "latency_ms": 0,
+            "resolved_symbol": "",
+            "symbol_mapping": "",
+            "trade_allowed": False,
+            "terminal_trade_allowed": False,
+            "checks": [],
+        }
         if MOCK_MT5:
+            health.update({
+                "broker_name": "MOCK",
+                "account_type": "demo",
+                "trade_allowed": True,
+                "terminal_trade_allowed": True,
+                "resolved_symbol": "XAUUSD",
+                "symbol_mapping": "XAUUSD→XAUUSD",
+                "latency_ms": int((time.time() - started) * 1000),
+                "checks": ["mock login", "mock symbol", "mock trading permission"],
+            })
             if password.lower() == "wrong":
-                return False, "Invalid credentials (mock)", None, None, ""
-            return True, "", 1000.0, 1000.0, "USD"
+                return False, "Invalid credentials (mock)", None, None, "", health
+            return True, "", 1000.0, 1000.0, "USD", health
         # Ensure terminal up exactly once (same pattern as _ensure_active).
         if not getattr(self, "_mt5_inited", False):
             if not mt5.initialize():
-                return False, f"mt5.initialize: {mt5.last_error()}", None, None, ""
+                health["latency_ms"] = int((time.time() - started) * 1000)
+                return False, self._human_mt5_error(f"mt5.initialize: {mt5.last_error()}"), None, None, "", health
             self._mt5_inited = True
+        health["checks"].append("terminal initialized")
         # Use mt5.login() for swaps (avoids -2 'Invalid params' on re-init).
         ok = False
         try:
@@ -843,15 +905,60 @@ class WorkerAgent:
             except Exception as e:
                 err = (-2, f"initialize-fallback raised: {e}")
             if not ok2:
-                return False, f"{err}", None, None, ""
+                health["latency_ms"] = int((time.time() - started) * 1000)
+                return False, self._human_mt5_error(err), None, None, "", health
+        health["checks"].append("login accepted")
         # Verification swap invalidates the active session — clear cache so the
         # next operation re-authenticates as the intended user.
         self._active_user_id = ""
         acct = mt5.account_info()
         if not acct:
-            return False, "account_info() returned None", None, None, ""
+            health["latency_ms"] = int((time.time() - started) * 1000)
+            return False, "account_info() returned None after login", None, None, "", health
         bal, eq, ccy = float(acct.balance), float(acct.equity), str(acct.currency or "")
-        return True, "", bal, eq, ccy
+        health.update({
+            "broker_name": str(getattr(acct, "company", "") or ""),
+            "account_type": self._account_mode_name(acct),
+            "trade_allowed": bool(getattr(acct, "trade_allowed", True)),
+            "balance": bal,
+            "equity": eq,
+            "currency": ccy,
+        })
+        term = mt5.terminal_info()
+        if term:
+            health["terminal_trade_allowed"] = bool(getattr(term, "trade_allowed", True))
+        if not health["trade_allowed"]:
+            health["latency_ms"] = int((time.time() - started) * 1000)
+            return False, "Account connected but trading permission is disabled. Use the trading password, not investor password.", bal, eq, ccy, health
+        if term and not health["terminal_trade_allowed"]:
+            health["latency_ms"] = int((time.time() - started) * 1000)
+            return False, "Terminal AutoTrading is disabled on the worker MT5.", bal, eq, ccy, health
+        health["checks"].append("trading permission ok")
+        tmp = UserSession(user_id="verify", email="verify", mt5_login=login,
+                          mt5_server=server, mt5_password=password)
+        sym = self._resolve_symbol(tmp, "XAUUSD")
+        if not sym:
+            health["latency_ms"] = int((time.time() - started) * 1000)
+            return False, tmp.last_fanout_error or "No XAUUSD-equivalent symbol on broker", bal, eq, ccy, health
+        health["resolved_symbol"] = sym
+        health["symbol_mapping"] = f"XAUUSD→{sym}"
+        info = mt5.symbol_info(sym)
+        tick = mt5.symbol_info_tick(sym)
+        if info:
+            health.update({
+                "lot_min": float(getattr(info, "volume_min", 0.0) or 0.0),
+                "lot_max": float(getattr(info, "volume_max", 0.0) or 0.0),
+                "lot_step": float(getattr(info, "volume_step", 0.0) or 0.0),
+                "stops_level": int(getattr(info, "trade_stops_level", 0) or 0),
+                "filling_mode": int(getattr(info, "filling_mode", 0) or 0),
+                "contract_size": float(getattr(info, "trade_contract_size", 0.0) or 0.0),
+            })
+        if not tick:
+            health["latency_ms"] = int((time.time() - started) * 1000)
+            return False, f"{sym} exists but broker is not streaming live ticks. Market may be closed or symbol hidden.", bal, eq, ccy, health
+        health["checks"].append("gold symbol selected")
+        health["latency_ms"] = int((time.time() - started) * 1000)
+        return True, "", bal, eq, ccy, health
 
     def sync_users(self) -> None:
         try:
@@ -1038,10 +1145,10 @@ class WorkerAgent:
             return
         for u in self.users.values():
             if sig_id in u.open_tickets: continue  # already executed for this user
-            # v1.4.1 — DUPLICATE GUARD #1: ask MT5 itself.
-            # Even if two workers race the same signal, the second one will
-            # see the position from the first one and skip. Magic+comment
-            # prefix is unique to (us, this signal).
+            # DUPLICATE GUARD #1: ask MT5 itself. First check the exact signal
+            # comment, then check for a near-identical recent XAUAI position.
+            # The second guard catches master/backend retry cases where the
+            # repeated open received a new UUID but is clearly the same trade.
             if not MOCK_MT5:
                 if not self._ensure_active(u):
                     log.warning("OPEN: skipping user=%s — login swap failed", u.email)
@@ -1054,6 +1161,11 @@ class WorkerAgent:
                     # close-mirror works for it.
                     u.open_tickets[sig_id] = int(existing[0])
                     self._save_state()
+                    continue
+                similar = self._scan_recent_similar_open(sig)
+                if similar:
+                    log.warning("DUP-GUARD user=%s sig=%s — similar recent cloud position ticket=%s; skipping duplicate order_send",
+                                u.email, sig_id[:8], similar)
                     continue
             u.fanout_attempts += 1
             lots, lot_src = self.compute_lots(u, sig)
@@ -1167,6 +1279,43 @@ class WorkerAgent:
             if cmt.startswith(prefix):
                 tickets.append(int(p.ticket))
         return tickets
+
+    def _scan_recent_similar_open(self, sig: dict) -> Optional[int]:
+        """Suppress same-trade duplicate opens even when backend retry made a
+        new signal id. Allows real pyramids because price/time must be close."""
+        if MOCK_MT5:
+            return None
+        try:
+            side = str(sig.get("side") or "").upper()
+            entry = float(sig.get("entry") or 0.0)
+            sl = float(sig.get("sl") or 0.0)
+            sl_dist = abs(entry - sl)
+            max_gap = min(max(sl_dist * 0.15, 2.0), 6.0)
+            sig_ts_raw = str(sig.get("ts") or "")
+            sig_ts = datetime.fromisoformat(sig_ts_raw.replace("Z", "+00:00")) if sig_ts_raw else datetime.now(timezone.utc)
+            positions = mt5.positions_get() or ()
+        except Exception:
+            return None
+        want_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+        for p in positions:
+            try:
+                if int(getattr(p, "magic", 0) or 0) != 77007007:
+                    continue
+                if int(getattr(p, "type", -1)) != want_type:
+                    continue
+                cmt = str(getattr(p, "comment", "") or "")
+                if not cmt.startswith("XAUAI|"):
+                    continue
+                opened_ts = int(getattr(p, "time", 0) or 0)
+                opened = datetime.fromtimestamp(opened_ts, timezone.utc) if opened_ts > 0 else sig_ts
+                if abs((sig_ts - opened).total_seconds()) > 180:
+                    continue
+                opened_price = float(getattr(p, "price_open", 0.0) or 0.0)
+                if entry > 0 and opened_price > 0 and abs(opened_price - entry) <= max_gap:
+                    return int(getattr(p, "ticket", 0) or 0)
+            except Exception:
+                continue
+        return None
 
     def _handle_close(self, c: dict) -> None:
         sig_id = c.get("signal_id")

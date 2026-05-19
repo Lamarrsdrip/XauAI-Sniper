@@ -396,7 +396,7 @@ async def download_ea():
     return Response(
         content=sanitized,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.16_ADAPTIVE_XAU_CONFIRM.mq5"'},
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.18_ANTI_BIAS_STRATEGY_FIX.mq5"'},
     )
 
 # Admin-only: serves the FULL master EA with your agent token + cloud fanout
@@ -407,7 +407,7 @@ async def admin_download_ea_master():
     if not p.exists(): raise HTTPException(status_code=404)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.16_ADAPTIVE_XAU_CONFIRM.mq5",
+        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.18_ANTI_BIAS_STRATEGY_FIX.mq5",
         media_type="application/octet-stream",
     )
 
@@ -1885,6 +1885,9 @@ class MT5ConnectReq(BaseModel):
     mt5_password: str
     risk_tier: Optional[str] = "balanced"   # conservative | balanced | aggressive
 
+class MT5BrokerCheckReq(BaseModel):
+    broker_server: Optional[str] = ""
+
 class PaymentSubmitReq(BaseModel):
     plan: str                   # "starter" ($50) or "pro" ($100)
     method: str                 # "crypto" | "bank"
@@ -1928,6 +1931,9 @@ COUNTRY_TO_CURRENCY = {
     "GB": "GBP", "UK": "GBP", "IN": "INR", "CA": "CAD", "AU": "AUD",
     # default everything else to USD
 }
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 async def _get_effective_plans():
     """Returns admin-overridden plans if set in cloud_settings.plans, else defaults."""
@@ -2083,8 +2089,12 @@ async def cloud_connect_mt5(req: MT5ConnectReq, user: dict = Depends(get_cloud_u
     if len(pwd) < 4:
         raise HTTPException(status_code=400,
             detail="MT5 password must be at least 4 characters.")
+    profile = _broker_profile_for_server(server)
     update = {
         "broker_server":     server,
+        "broker_name":       profile.get("broker", ""),
+        "broker_platform":   profile.get("platform", "MT5"),
+        "broker_support_status": profile.get("support_status", "custom_review"),
         "mt5_login":         login_raw,
         "mt5_password_enc":  _cloud_encrypt(pwd),
         "risk_tier":         req.risk_tier,
@@ -2094,8 +2104,15 @@ async def cloud_connect_mt5(req: MT5ConnectReq, user: dict = Depends(get_cloud_u
         "mt5_verification_status":"pending",     # pending | verified | rejected
         "mt5_verification_error": "",
         "mt5_credentials_at":     datetime.now(timezone.utc).isoformat(),
+        "broker_last_health":     {},
     }
     await db.cloud_users.update_one({"id": user["id"]}, {"$set": update})
+    await _log_broker_event(user["id"], user.get("email", ""), "credentials_saved", True, server, {
+        "broker": profile.get("broker"),
+        "platform": profile.get("platform"),
+        "support_status": profile.get("support_status"),
+        "risk_tier": req.risk_tier,
+    })
     # Auto-assign to a worker with capacity (silently no-ops if no workers yet → shadow mode picks up)
     wid = await _auto_assign_worker(user["id"])
     s = await _get_cloud_settings()
@@ -2279,10 +2296,129 @@ CLOUD_BROKER_SERVERS = [
     {"broker": "ZoraCapital",      "server": "ZoraCapital-Server",         "type": "live"},
 ]
 
+def _broker_server_index() -> Dict[str, dict]:
+    return {str(b.get("server", "")).lower(): b for b in CLOUD_BROKER_SERVERS}
+
+def _broker_profile_for_server(server: str) -> dict:
+    server = (server or "").strip()
+    row = _broker_server_index().get(server.lower())
+    if row:
+        out = dict(row)
+        out.update({
+            "platform": "MT5",
+            "support_status": "curated",
+            "compatibility": "full_pending_login",
+            "requires_exact_server": True,
+            "notes": "Listed server. Final compatibility is confirmed by worker login, symbol, and trading-permission checks.",
+        })
+        return out
+    return {
+        "broker": "Custom / unlisted broker",
+        "server": server,
+        "type": "custom",
+        "platform": "MT5",
+        "support_status": "custom_review",
+        "compatibility": "partial_until_verified",
+        "requires_exact_server": True,
+        "notes": "Custom MT5 server. It can still work, but the worker must verify login, symbol mapping, and trading permissions before copying.",
+    }
+
+def _broker_error_hint(raw_error: str) -> str:
+    text = str(raw_error or "").lower()
+    if not text:
+        return ""
+    if "initialize" in text or "terminal" in text:
+        return "MT5 terminal is not reachable on the executor VPS. Start MT5, install MetaTrader5 Python package, and confirm the terminal can log in."
+    if "authorization" in text or "invalid account" in text or "invalid credentials" in text or "authentication" in text:
+        return "Invalid MT5 login/password or broker server mismatch. Use the trading password, not investor/read-only password."
+    if "server" in text and ("timeout" in text or "not found" in text or "unreachable" in text):
+        return "MT5 server not reachable. Check exact live/demo server name and region restrictions."
+    if "investor" in text or "read-only" in text or "trade disabled" in text or "trading disabled" in text:
+        return "Account connected but trading permission is disabled. Use the master/trading password and enable Algo Trading in MT5."
+    if "symbol" in text or "xau" in text or "gold" in text:
+        return "Broker uses a different gold symbol or does not stream XAUUSD. Add/select the correct gold symbol in Market Watch."
+    if "margin" in text or "money" in text:
+        return "Broker/account rejected execution because margin or leverage is insufficient for the requested lot."
+    return "Broker rejected the connection or execution. Check exact server, MT5/MT4 mismatch, password type, and account trading permission."
+
+async def _log_broker_event(user_id: str, email: str, event: str, ok: bool,
+                            server: str = "", details: Optional[dict] = None):
+    try:
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "email": email,
+            "event": event,
+            "ok": bool(ok),
+            "broker_server": server,
+            "details": details or {},
+            "ts": _utc_now_iso(),
+        }
+        await db.cloud_broker_logs.insert_one(doc.copy())
+        await db.cloud_broker_logs.delete_many({
+            "ts": {"$lt": (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()}
+        })
+    except Exception:
+        logger.exception("[cloud-broker-log] failed")
+
 @api_router.get("/cloud/mt5/brokers")
 async def cloud_list_brokers():
     """Public: returns curated broker→servers list for the UI search dropdown."""
-    return {"servers": CLOUD_BROKER_SERVERS}
+    servers = []
+    seen = set()
+    for b in CLOUD_BROKER_SERVERS:
+        key = str(b.get("server", "")).lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        row = dict(b)
+        row.setdefault("platform", "MT5")
+        row.setdefault("support_status", "curated")
+        row.setdefault("compatibility", "full_pending_login")
+        servers.append(row)
+    brokers = sorted({b["broker"] for b in servers if b.get("broker")})
+    return {"servers": servers, "brokers": brokers, "total": len(servers),
+            "notes": "Only MT5-compatible servers are executable today. MT4/cTrader/API brokers must use an MT5 account/server or are unsupported for cloud copy."}
+
+@api_router.get("/cloud/mt5/compatibility")
+async def cloud_mt5_compatibility(server: str = ""):
+    profile = _broker_profile_for_server(server)
+    return {"ok": True, "profile": profile,
+            "checks": [
+                "MT5 terminal reachable on executor VPS",
+                "Exact server name accepted by mt5.login",
+                "Trading password is valid, not investor/read-only password",
+                "Account trade_allowed and terminal trade_allowed are true",
+                "XAUUSD/gold symbol can be resolved and selected",
+                "Broker reports lot step/min/max, filling mode, stop level, and live tick",
+            ]}
+
+@api_router.post("/cloud/mt5/test-connection")
+async def cloud_mt5_test_connection(req: MT5BrokerCheckReq, user: dict = Depends(get_cloud_user)):
+    server = (req.broker_server or user.get("broker_server") or "").strip()
+    if not user.get("mt5_password_enc") or not user.get("mt5_login") or not server:
+        raise HTTPException(status_code=400, detail="Save MT5 credentials before running a broker test.")
+    now = _utc_now_iso()
+    profile = _broker_profile_for_server(server)
+    await db.cloud_users.update_one({"id": user["id"]}, {"$set": {
+        "broker_server": server,
+        "mt5_verification_status": "pending",
+        "mt5_verification_error": "",
+        "mt5_connected": False,
+        "broker_support_status": profile.get("support_status"),
+        "broker_platform": profile.get("platform"),
+        "broker_last_check_requested_at": now,
+    }})
+    await _log_broker_event(user["id"], user.get("email", ""), "manual_test_requested", True, server, profile)
+    return {"ok": True, "message": "Broker test queued. The worker will verify login, trading permission, symbol mapping, and latency.", "profile": profile}
+
+@api_router.get("/cloud/mt5/logs")
+async def cloud_mt5_logs(limit: int = 30, user: dict = Depends(get_cloud_user)):
+    n = max(1, min(int(limit), 100))
+    rows = await db.cloud_broker_logs.find(
+        {"user_id": user["id"]}, {"_id": 0}
+    ).sort("ts", -1).to_list(n)
+    return {"logs": rows, "total": len(rows)}
 
 @api_router.post("/cloud/mt5/refresh-balance")
 async def cloud_refresh_balance(user: dict = Depends(get_cloud_user)):
@@ -2853,6 +2989,7 @@ class MasterSignalReq(BaseModel):
     # balance ratio. No independent risk math on the cloud side anymore.
     master_lots: Optional[float] = 0.0
     master_balance: Optional[float] = 0.0
+    master_ticket: Optional[str] = ""   # optional future EA idempotency anchor
 
 def _safe_float(value, default: float = 0.0) -> float:
     try:
@@ -2865,6 +3002,19 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+def _cloud_signal_dedupe_key(req: MasterSignalReq) -> str:
+    symbol = (req.symbol or "XAUUSD").upper().strip()
+    side = (req.side or "").upper().strip()
+    ticket = str(req.master_ticket or "").strip()
+    if ticket:
+        return f"ticket:{symbol}:{ticket}"
+    entry = round(_safe_float(req.entry), 1)
+    sl = round(_safe_float(req.sl), 1)
+    tp = round(_safe_float(req.tp), 1)
+    lots = round(_safe_float(req.master_lots), 2)
+    grade = (req.grade or "").upper().strip()
+    return f"sig:{symbol}:{side}:e{entry}:sl{sl}:tp{tp}:l{lots}:g{grade}"
 
 @api_router.post("/cloud/master/signal")
 async def cloud_master_signal(req: MasterSignalReq, request: Request):
@@ -2879,9 +3029,22 @@ async def cloud_master_signal(req: MasterSignalReq, request: Request):
         shadow = raw_shadow if isinstance(raw_shadow, bool) else str(raw_shadow).lower() not in ("0", "false", "off", "no")
         await db.cloud_settings.update_one({"key": "main"},
             {"$set": {"master_last_heartbeat": now.isoformat(), "master_ea_status": "online"}}, upsert=True)
+        dedupe_key = _cloud_signal_dedupe_key(req)
+        retry_cutoff = (now - timedelta(seconds=90)).isoformat()
+        existing_signal = await db.cloud_signals.find_one(
+            {"dedupe_key": dedupe_key, "ts": {"$gt": retry_cutoff}, "closed_at": {"$in": [None, ""]}},
+            {"_id": 0}
+        )
+        if existing_signal:
+            logger.warning("[cloud-master-signal] duplicate retry suppressed key=%s existing=%s",
+                           dedupe_key, existing_signal.get("id"))
+            return {"ok": True, "signal_id": existing_signal.get("id"), "shadow": shadow,
+                    "fanout_users": 0, "deduped": True,
+                    "message": "duplicate master signal suppressed"}
         sig_id = str(uuid.uuid4())
         signal_doc = {"id": sig_id, "symbol": req.symbol, "side": req.side, "entry": _safe_float(req.entry),
                       "sl": _safe_float(req.sl), "tp": _safe_float(req.tp), "grade": req.grade, "ts": now.isoformat(),
+                      "dedupe_key": dedupe_key, "master_ticket": str(req.master_ticket or ""),
                       # v1.3 STRICT MIRROR — propagate master lots + balance so workers
                       # compute linkedLot = (userBalance / masterBalance) × masterLot.
                       "master_lots": _safe_float(req.master_lots),
@@ -3296,16 +3459,49 @@ class VerifyCredentialsReq(BaseModel):
     balance: Optional[float] = None
     equity: Optional[float] = None
     currency: Optional[str] = ""
+    broker_name: Optional[str] = ""
+    server: Optional[str] = ""
+    account_type: Optional[str] = ""
+    trade_allowed: Optional[bool] = None
+    terminal_trade_allowed: Optional[bool] = None
+    symbol: Optional[str] = ""
+    symbol_mapping: Optional[str] = ""
+    latency_ms: Optional[int] = None
+    health: Optional[dict] = None
 
 @api_router.post("/cloud/agent/verify-credentials")
 async def cloud_agent_verify_credentials(req: VerifyCredentialsReq, request: Request):
     await _require_agent_async(request)
     now = datetime.now(timezone.utc).isoformat()
+    hint = _broker_error_hint(req.error or "")
+    health = req.health or {}
+    if req.symbol:
+        health.setdefault("resolved_symbol", req.symbol)
+    if req.symbol_mapping:
+        health.setdefault("symbol_mapping", req.symbol_mapping)
+    if req.latency_ms is not None:
+        health.setdefault("latency_ms", int(req.latency_ms))
+    if req.trade_allowed is not None:
+        health.setdefault("trade_allowed", bool(req.trade_allowed))
+    if req.terminal_trade_allowed is not None:
+        health.setdefault("terminal_trade_allowed", bool(req.terminal_trade_allowed))
+    if req.broker_name:
+        health.setdefault("broker_name", req.broker_name)
+    if req.server:
+        health.setdefault("server", req.server)
     set_doc = {
         "mt5_verification_status": "verified" if req.ok else "rejected",
-        "mt5_verification_error":  "" if req.ok else (req.error or "Login failed"),
+        "mt5_verification_error":  "" if req.ok else (hint or req.error or "Login failed"),
+        "mt5_raw_verification_error": "" if req.ok else (req.error or ""),
         "mt5_verified_at":         now,
         "mt5_connected":           bool(req.ok),
+        "broker_last_health":      health,
+        "broker_last_latency_ms":   int(req.latency_ms or 0),
+        "broker_last_check_at":     now,
+        "broker_detected_name":     req.broker_name or "",
+        "broker_detected_server":   req.server or "",
+        "broker_symbol":           req.symbol or "",
+        "broker_symbol_mapping":   req.symbol_mapping or "",
     }
     if req.ok:
         if req.balance is not None: set_doc["last_balance"] = float(req.balance)
@@ -3314,6 +3510,13 @@ async def cloud_agent_verify_credentials(req: VerifyCredentialsReq, request: Req
     r = await db.cloud_users.update_one({"id": req.user_id}, {"$set": set_doc})
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Unknown user_id")
+    user = await db.cloud_users.find_one({"id": req.user_id}, {"_id": 0, "email": 1, "broker_server": 1})
+    await _log_broker_event(req.user_id, (user or {}).get("email", ""), "verification_result", bool(req.ok),
+                            req.server or (user or {}).get("broker_server", ""), {
+                                "error": req.error or "",
+                                "hint": hint,
+                                "health": health,
+                            })
     return {"ok": True, "verification_status": set_doc["mt5_verification_status"]}
 
 # --- Worker feed: users that hit "Refresh balance" — return + clear in one shot ---

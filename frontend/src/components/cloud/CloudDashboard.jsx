@@ -414,6 +414,9 @@ function ConnectTab({ me, onRefresh }) {
   const [err, setErr] = useState("");
   const [simBalance, setSimBalance] = useState(me.last_balance || 1000);
   const [brokerList, setBrokerList] = useState(FALLBACK_BROKER_SERVERS);
+  const [brokerLogs, setBrokerLogs] = useState([]);
+  const [compat, setCompat] = useState(null);
+  const [testingBroker, setTestingBroker] = useState(false);
   const [serverQuery, setServerQuery] = useState("");
   const [serverDropOpen, setServerDropOpen] = useState(false);
   const [customServer, setCustomServer] = useState(false);
@@ -434,6 +437,25 @@ function ConnectTab({ me, onRefresh }) {
       .catch(() => { /* silently keep fallback */ });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    cloudAxios.get(`/cloud/mt5/logs?limit=8`)
+      .then(r => { if (alive) setBrokerLogs(r.data?.logs || []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [me.mt5_verification_status, me.broker_last_check_at]);
+
+  useEffect(() => {
+    const server = (form.broker_server || serverQuery || me.broker_server || "").trim();
+    if (!server) { setCompat(null); return; }
+    const id = setTimeout(() => {
+      cloudAxios.get(`/cloud/mt5/compatibility`, { params: { server } })
+        .then(r => setCompat(r.data?.profile || null))
+        .catch(() => setCompat(null));
+    }, 250);
+    return () => clearTimeout(id);
+  }, [form.broker_server, serverQuery, me.broker_server]);
 
   // Filter dropdown list by query (broker name OR server name). Empty query → first 60 items.
   const filteredServers = (() => {
@@ -509,6 +531,22 @@ function ConnectTab({ me, onRefresh }) {
     finally { setRefreshing(false); }
   };
 
+  const testBroker = async () => {
+    if (testingBroker) return;
+    setTestingBroker(true); setErr(""); setMsg("");
+    try {
+      const res = await cloudAxios.post(`/cloud/mt5/test-connection`, { broker_server: form.broker_server || me.broker_server || serverQuery });
+      setMsg(res.data?.message || "Broker test queued.");
+      await onRefresh();
+      const logs = await cloudAxios.get(`/cloud/mt5/logs?limit=8`).catch(() => null);
+      setBrokerLogs(logs?.data?.logs || brokerLogs);
+    } catch (e) { setErr(e.response?.data?.detail || "Broker test failed"); }
+    finally { setTestingBroker(false); }
+  };
+
+  const health = me.broker_last_health || {};
+  const hasBrokerHealth = Object.keys(health).length > 0;
+
   return (
     <div className="max-w-5xl">
       <div className="grid gap-3 sm:grid-cols-3 mb-5" data-testid="connect-readiness">
@@ -516,6 +554,42 @@ function ConnectTab({ me, onRefresh }) {
         <HealthPill label="Verification" ok={verifyStatus === "verified"} value={verifyStatus === "verified" ? "Passed" : verifyStatus === "pending" ? "Pending" : "Needed"} />
         <HealthPill label="Executor VPS" ok={executorOnline} value={executorOnline ? `${executorStatus.online} online` : "Offline"} />
       </div>
+
+      {(compat || hasBrokerHealth || brokerLogs.length > 0) && (
+        <div className="bg-black/35 border border-white/10 rounded-2xl p-4 mb-5" data-testid="broker-compatibility-panel">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div>
+              <div className="text-xs font-mono tracking-widest text-[#D4AF37]">BROKER COMPATIBILITY</div>
+              <div className="text-sm text-white/60 mt-1">
+                {compat?.server || me.broker_server || "Select a server"} · {compat?.platform || me.broker_platform || "MT5"} · {compat?.support_status || me.broker_support_status || "pending"}
+              </div>
+            </div>
+            <button type="button" onClick={testBroker} disabled={testingBroker || !me.broker_server}
+                    className="px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-xs font-mono text-white/70 hover:border-[#D4AF37]/40 hover:text-[#D4AF37] disabled:opacity-40"
+                    data-testid="broker-test-button">
+              {testingBroker ? "TESTING..." : "TEST"}
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/35 font-mono">SYMBOL</div><div className="font-mono text-white">{health.resolved_symbol || me.broker_symbol || "pending"}</div></div>
+            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/35 font-mono">LATENCY</div><div className="font-mono text-white">{me.broker_last_latency_ms ? `${me.broker_last_latency_ms}ms` : health.latency_ms ? `${health.latency_ms}ms` : "pending"}</div></div>
+            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/35 font-mono">TRADING</div><div className={health.trade_allowed ? "font-mono text-green-400" : "font-mono text-yellow-300"}>{health.trade_allowed ? "allowed" : "pending"}</div></div>
+            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/35 font-mono">ACCOUNT</div><div className="font-mono text-white">{health.account_type || "pending"}</div></div>
+          </div>
+          {verifyError && <div className="mt-3 text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl p-3">{verifyError}</div>}
+          {brokerLogs.length > 0 && (
+            <div className="mt-3 space-y-1" data-testid="broker-log-list">
+              {brokerLogs.slice(0, 3).map(l => (
+                <div key={l.id} className="text-[11px] text-white/50 flex items-center justify-between gap-3">
+                  <span className={l.ok ? "text-green-400" : "text-red-400"}>{l.ok ? "OK" : "FAIL"}</span>
+                  <span className="flex-1 truncate">{l.event} · {l.broker_server || "server pending"}</span>
+                  <span>{relativeTime(l.ts)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6 mb-5 sm:mb-6" data-testid="connect-card">
         <div className="flex items-start gap-4 mb-6">
@@ -734,6 +808,11 @@ function ConnectTab({ me, onRefresh }) {
               <div className="text-xs text-white/30 mt-1">
                 Find this in MT5 → Tools → Options → Server. Format must be <span className="font-mono text-white/50">Broker-Live</span> or <span className="font-mono text-white/50">Broker-Demo</span>.
               </div>
+              {compat && (
+                <div className={`mt-2 text-[11px] rounded-xl px-3 py-2 border ${compat.support_status === "curated" ? "bg-green-500/10 border-green-500/20 text-green-300" : "bg-yellow-500/10 border-yellow-500/20 text-yellow-200"}`} data-testid="server-compatibility-hint">
+                  {compat.support_status === "curated" ? "Curated MT5 server" : "Custom MT5 server"} · {compat.notes}
+                </div>
+              )}
             </div>
             <div>
               <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">MT5 LOGIN (ACCOUNT NUMBER)</label>
