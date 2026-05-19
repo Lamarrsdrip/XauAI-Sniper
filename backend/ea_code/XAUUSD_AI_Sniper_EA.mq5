@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.19 — Entry Timing Guard    |
+//|                                     v5.8.23 — Indicator Backoff Fix |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.96"
-#property description "XAUUSD AI Sniper v5.8.19 — ENTRY TIMING GUARD"
-#property description "A/A+/B grades must also prove pullback timing, not just confirmation strength."
-#property description "Blocks late gold chase entries and reduces size when timing is only fair."
+#property version   "5.99"
+#property description "XAUUSD AI Sniper v5.8.23 — INDICATOR BACKOFF FIX"
+#property description "Keeps smart pyramid/rescue logic and stops indicator recovery spam."
+#property description "Adds warmup/backoff so MT5 buffers can recover without handle rebuild loops."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -128,7 +128,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.19 — H1 soft context, timing guard active) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.23 — breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -137,7 +137,7 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.19 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.23 — stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
@@ -145,6 +145,9 @@ input double InpXAU_ImpulseATRBlock        = 1.65;  // Last closed M5 candle ran
 input double InpXAU_ImpulseATRDowngrade    = 1.20;  // Moderate impulse stretches reduce grade/lot
 input double InpXAU_MinPullbackATR         = 0.25;  // Valid continuation should show at least this pullback/retest
 input double InpXAU_MaxThreeBarDriveATR    = 2.30;  // 3-bar one-way drive above this means wait for retrace
+input int    InpXAU_ExtensionLookbackBars  = 9;     // Larger one-way drive window used to block late breakout re-entry
+input double InpXAU_MaxExtensionDriveATR   = 3.40;  // If price already moved this far, require a reset/pullback first
+input double InpXAU_MinExtensionResetATR   = 0.75;  // Minimum pullback from fresh high/low before another same-direction entry
 input double InpXAU_FairTimingLotMulti     = 0.65;  // If timing is fair but not clean, reduce risk
 input bool   InpXAU_BlockLateA             = true;  // A/A+ late chase becomes BLOCK, not just smaller
 input bool   InpXAU_LogTimingGuard         = true;  // Print timing audit: grade, EMA/VWAP distance, impulse, pullback quality
@@ -502,12 +505,28 @@ input double InpPyramidSizeMulti= 0.50;    // Each add is this × previous size 
 input int    InpPyramidMinGapSec= 360;     // Min seconds between pyramid adds
 input bool   InpPyramidOnAdverse= false;   // v5.8.0: DISABLED by default — live data showed -$21k from 37 adverse-pyramid trades (PF 0.28). Adds risk to losing positions.
 input bool   InpPyramidOnTrend  = true;    // Add when price moves WITH us (trend continuation)
+input bool   InpPyramidAdaptiveEngine = true; // v5.8.23: score-based institutional pyramid engine
+input bool   InpPyramidAllowProtectedB = true; // Allow B-grade adds only when base trade is healthy and trend evidence is strong
+input bool   InpPyramidRescueMode = true;      // Allow ONE small pullback/retest add against entry if original direction still confirms
+input double InpPyramidRescueMaxATR = 1.80;    // Do not rescue-add after drawdown is already too deep
+input double InpPyramidRescueSizeMulti = 0.35; // Rescue add size vs original lot before risk caps
+input double InpPyramidRescueMinScore = 4.00;  // Rescue add needs strong original signal score
+input double InpPyramidMinHealthATR = 0.75;    // Base trade should be this ATR in profit before first add
+input double InpPyramidModerateScore = 3.60;   // Minimum score for protected B-grade continuation add
+input double InpPyramidEliteScore = 4.20;      // Elite score allows stronger/faster adds
+input double InpPyramidMaxSpreadFrac = 0.75;   // Pyramid spread must be <= this fraction of max spread
+input double InpPyramidSessionMin = 0.65;      // Minimum session quality for pyramid adds
+input double InpPyramidVolMinExpansion = 0.70; // Avoid pyramids when ATR is too dead
+input double InpPyramidVolMaxExpansion = 1.80; // Avoid pyramids during unstable volatility spikes
+input int    InpPyramidAllowEPFUpToTier = 2;   // EPF T1/T2 may allow protected elite adds; T3+ blocks
 
 input group "=== SCAN WATCHDOG (v5.8.8 — no restart needed) ==="
 input int    InpTimerScanSec     = 15;      // Timer wake-up so slow ticks/VPS lag cannot freeze scan loop
 input int    InpScanWatchdogMin  = 7;       // Force a scan if no successful entry scan for this many minutes
 input int    InpScanSkipLogSec   = 120;     // Log repeated idle-skip detail at most every N seconds
 input int    InpIndicatorReloadFails = 3;   // Rebuild indicator handles after this many buffer failures
+input int    InpIndicatorWarmupSec = 12;    // v5.8.23: wait after rebuilding handles before copying buffers again
+input int    InpIndicatorRecoveryBackoffSec = 90; // v5.8.23: minimum seconds between handle rebuild attempts
 
 input group "=== POST-WINNER ENTRY GUARD (v4.6.5 — user-tunable cooldown) ==="
 input bool   InpPostWinnerGuard    = true;   // Block re-entry in same direction after a winner (set false to disable)
@@ -726,6 +745,8 @@ bool       g_timerForceScan = false;  // v5.8.8: timer asks OnTick to run a reco
 datetime   g_lastPyramidFailTime = 0; // v5.8.8: failed pyramid add cooldown
 int        g_indicatorBufferFailCount = 0; // v5.9.0: rebuild stale indicator handles instead of requiring MT5 restart
 datetime   g_lastIndicatorFailLog = 0;
+datetime   g_lastIndicatorRebuildAt = 0; // v5.8.23: throttle recovery loops
+datetime   g_indicatorWarmupUntil = 0;   // v5.8.23: let MT5 calculate new indicator buffers before retrying
 
 // TRADE THESIS (AI narrative per open position)
 string     currentTradeThesis = "";
@@ -1424,7 +1445,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.19 (ENTRY TIMING GUARD) READY ===");
+   Print("=== XAUAI SNIPER v5.8.23 (INDICATOR BACKOFF FIX) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1496,7 +1517,11 @@ int OnInit()
          " | SizeMulti=", DoubleToString(InpPyramidSizeMulti,2),
          " | Gap=", InpPyramidMinGapSec, "s",
          " | OnAdverse=", InpPyramidOnAdverse?"Y":"N",
-         " | OnTrend=", InpPyramidOnTrend?"Y":"N");
+         " | OnTrend=", InpPyramidOnTrend?"Y":"N",
+         " | Adaptive=", InpPyramidAdaptiveEngine?"Y":"N",
+         " | Rescue=", InpPyramidRescueMode?"Y":"N",
+         " (max ", DoubleToString(InpPyramidRescueMaxATR,2), "ATR, size×",
+         DoubleToString(InpPyramidRescueSizeMulti,2), ")");
    if(InpAutoScale)
       Print("AUTO-SCALE ON | Balance: $", DoubleToString(accInfo.Balance(),2),
             " -> HardStop:$", DoubleToString(autoHardStopUSD,2),
@@ -1554,6 +1579,7 @@ void OnTimer()
 
 bool RebuildEntryIndicatorHandles(string why)
 {
+   g_lastIndicatorRebuildAt = TimeCurrent();
    Print("INDICATOR RECOVERY: rebuilding entry indicator handles because ", why);
 
    if(hEMAFast     != INVALID_HANDLE) IndicatorRelease(hEMAFast);
@@ -1591,7 +1617,11 @@ bool RebuildEntryIndicatorHandles(string why)
    if(ok)
    {
       g_indicatorBufferFailCount = 0;
-      Print("INDICATOR RECOVERY: handles rebuilt OK; next tick/timer will retry scan.");
+      int warmupSec = InpIndicatorWarmupSec;
+      if(warmupSec < 3) warmupSec = 3;
+      g_indicatorWarmupUntil = TimeCurrent() + warmupSec;
+      Print("INDICATOR RECOVERY: handles rebuilt OK; warming buffers for ",
+            warmupSec, "s before retrying scan.");
    }
    else
       Print("INDICATOR RECOVERY FAILED: one or more indicator handles are still invalid. Check chart symbol/history.");
@@ -1601,6 +1631,20 @@ bool RebuildEntryIndicatorHandles(string why)
 
 bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &target[], string label)
 {
+   if(g_indicatorWarmupUntil > 0 && TimeCurrent() < g_indicatorWarmupUntil)
+   {
+      g_lastSkipReason = StringFormat("INDICATOR_WARMUP: waiting %ds after handle rebuild before copying %s",
+                                      (int)(g_indicatorWarmupUntil - TimeCurrent()), label);
+      if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
+      {
+         Print("SCAN BUFFER WARMUP: ", g_lastSkipReason);
+         g_lastIndicatorFailLog = TimeCurrent();
+      }
+      return false;
+   }
+   if(g_indicatorWarmupUntil > 0 && TimeCurrent() >= g_indicatorWarmupUntil)
+      g_indicatorWarmupUntil = 0;
+
    ResetLastError();
    int got = CopyBuffer(handle, buffer, start, count, target);
    if(got >= count)
@@ -1628,10 +1672,27 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
       string why = staleHandle
                    ? StringFormat("%s stale handle/copy failure (got=%d barsCalc=%d err=%d)", label, got, calculated, err)
                    : label;
+      int backoffSec = InpIndicatorRecoveryBackoffSec;
+      if(backoffSec < 15) backoffSec = 15;
+      bool rebuildAllowed = (g_lastIndicatorRebuildAt <= 0 ||
+                             TimeCurrent() - g_lastIndicatorRebuildAt >= backoffSec);
+      if(!rebuildAllowed)
+      {
+         g_lastSkipReason = StringFormat("INDICATOR_RECOVERY_BACKOFF: %s; retry rebuild in %ds",
+                                         label, backoffSec - (int)(TimeCurrent() - g_lastIndicatorRebuildAt));
+         if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
+         {
+            Print("INDICATOR RECOVERY BACKOFF: ", why,
+                  " | next rebuild in ",
+                  backoffSec - (int)(TimeCurrent() - g_lastIndicatorRebuildAt), "s");
+            g_lastIndicatorFailLog = TimeCurrent();
+         }
+         return false;
+      }
       if(RebuildEntryIndicatorHandles(why))
       {
          g_timerForceScan = true;
-         g_lastSkipReason = "INDICATOR_RECOVERED: handles rebuilt; retrying scan on next tick/timer";
+         g_lastSkipReason = "INDICATOR_RECOVERED: handles rebuilt; warming buffers before retrying scan";
       }
    }
 
@@ -2501,23 +2562,47 @@ int EffectiveMaxPyramidAdds(int dir, double moved, double atr)
    return MathMin(maxAdds, MathMax(0, InpMaxOpenTrades - 1));
 }
 
+double PyramidMomentumATR(int dir, double atr)
+{
+   if(dir == 0 || atr <= 0.0) return 0.0;
+   double c1 = iClose(Symbol(), PERIOD_M5, 1);
+   double c4 = iClose(Symbol(), PERIOD_M5, 4);
+   if(c1 <= 0.0 || c4 <= 0.0) return 0.0;
+   return (dir * (c1 - c4)) / atr;
+}
+
+int AdaptivePyramidMaxAdds(int dir, double moved, double atr, double quality,
+                           bool baseProtected, double atrExpansion, double sessionQuality)
+{
+   int maxAdds = EffectiveMaxPyramidAdds(dir, moved, atr);
+   if(!InpPyramidAdaptiveEngine) return maxAdds;
+
+   bool trendOk = IsTrendContinuationRegime(dir);
+   bool weakRegime = (currentRegime == REGIME_CHOPPY ||
+                      currentRegime == REGIME_DEAD ||
+                      currentRegime == REGIME_LOW_VOL ||
+                      currentRegime == REGIME_RANGING);
+   double movedATR = (atr > 0.0) ? moved / atr : 0.0;
+   double equity = MathMax(accInfo.Equity(), accInfo.Balance());
+
+   if(weakRegime || !trendOk || atrExpansion > InpPyramidVolMaxExpansion || sessionQuality < InpPyramidSessionMin)
+      return MathMin(maxAdds, 1);
+
+   if(quality >= 82.0 && baseProtected && movedATR >= 1.45 && equity >= 25000.0 && !drawdownActive)
+      maxAdds = MathMax(maxAdds, MathMin(3, MathMax(1, InpMaxOpenTrades - 1)));
+
+   if(quality >= 90.0 && movedATR >= 2.00 && equity >= 50000.0 && atrExpansion <= 1.35)
+      maxAdds = MathMax(maxAdds, MathMin(4, MathMax(1, InpMaxOpenTrades - 1)));
+
+   return MathMin(maxAdds, MathMax(0, InpMaxOpenTrades - 1));
+}
+
 void CheckPyramidOpportunity()
 {
    if(!InpAllowPyramid) return;
    if(IsInStreakPause()) return;
    if(drawdownActive) return;             // don't stack in drawdown recovery
    if(dailyLimitHit || weeklyLossHit) return;
-   // v5.5.0 — EPF T2+ blocks NEW pyramid adds (existing pyramids managed normally)
-   if(EPF_BlockPyramidAdd())
-   {
-      static datetime lastEPFPyrLog = 0;
-      if(TimeCurrent() - lastEPFPyrLog > 300)  // throttle to once per 5 min
-      {
-         Print("🛑 EPF-T", epf_tier, " PYRAMID-ADDS DISABLED (preservation mode)");
-         lastEPFPyrLog = TimeCurrent();
-      }
-      return;
-   }
 
    // v4.9.7 — Don't stack new risk into a basket that's already armed and protecting profit.
    // Adding fresh trades right before a basket-flush just creates micro-loss tickets
@@ -2539,9 +2624,6 @@ void CheckPyramidOpportunity()
 
    if(g_lastPyramidFailTime > 0 && TimeCurrent() - g_lastPyramidFailTime < 900)
       return;
-
-   // Throttle: min gap between pyramid adds
-   if(TimeCurrent() - lastPyramidAddTime < InpPyramidMinGapSec) return;
 
    int openCount = CountMyPositions();
    if(openCount == 0) return;                               // no base trade to stack on
@@ -2582,7 +2664,8 @@ void CheckPyramidOpportunity()
    // Respect direction lockout (a lost side should not be re-pyramided)
    if(IsDirectionLocked(dir)) return;
 
-   if(InpPyramidRequireGradeA && !IsGradeAtLeastA(g_lastEntryGrade))
+   bool pyramidGradeA = IsGradeAtLeastA(g_lastEntryGrade);
+   if(InpPyramidRequireGradeA && !pyramidGradeA && !InpPyramidAllowProtectedB)
    {
       static datetime lastPyrGradeLog = 0;
       if(TimeCurrent() - lastPyrGradeLog > 120)
@@ -2613,11 +2696,9 @@ void CheckPyramidOpportunity()
    ENUM_REGIME r = currentRegime;
    bool regimeOk = false;
    if(isBuy)
-      regimeOk = (r == REGIME_TRENDING_UP || r == REGIME_BREAKOUT_UP ||
-                  r == REGIME_RANGING || r == REGIME_LOW_VOL);
+      regimeOk = (r == REGIME_TRENDING_UP || r == REGIME_BREAKOUT_UP);
    else
-      regimeOk = (r == REGIME_TRENDING_DOWN || r == REGIME_BREAKOUT_DOWN ||
-                  r == REGIME_RANGING || r == REGIME_LOW_VOL);
+      regimeOk = (r == REGIME_TRENDING_DOWN || r == REGIME_BREAKOUT_DOWN);
    if(!regimeOk) return;
 
    // Need ATR for distance gate
@@ -2633,11 +2714,219 @@ void CheckPyramidOpportunity()
    double moved = isBuy ? (curPx - origPx) : (origPx - curPx);   // +ve = with us, -ve = against
    double minMove = atr * InpPyramidMinATR;
 
-   bool adverseTrigger = InpPyramidOnAdverse && moved <= -minMove;
+   bool adverseTrigger = (InpPyramidOnAdverse || InpPyramidRescueMode) && moved <= -minMove;
    bool trendTrigger   = InpPyramidOnTrend   && moved >= minMove;
    if(!adverseTrigger && !trendTrigger) return;
 
-   int maxAddsAllowed = EffectiveMaxPyramidAdds(dir, moved, atr);
+   double movedATR = moved / atr;
+   double avgAtr = XAU_AvgATR(40);
+   double atrExpansion = (avgAtr > 0.0) ? atr / avgAtr : 1.0;
+   double sessionQuality = GetSessionQuality();
+   double momentumATR = PyramidMomentumATR(dir, atr);
+   double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double high1 = iHigh(Symbol(), PERIOD_M5, 1);
+   double low1 = iLow(Symbol(), PERIOD_M5, 1);
+   double barRange = MathMax(high1 - low1, 0.0);
+   double upperWick = high1 - MathMax(open1, close1);
+   double lowerWick = MathMin(open1, close1) - low1;
+   bool rescueRejection = (barRange > 0.0 &&
+                           ((dir < 0 && upperWick >= barRange * 0.28) ||
+                            (dir > 0 && lowerWick >= barRange * 0.28)));
+   bool baseProtected = (origSL > 0 && ((isBuy && origSL >= origPx) || (!isBuy && origSL <= origPx)));
+   bool baseHealthy = (movedATR >= InpPyramidMinHealthATR || baseProtected);
+   double adverseATR = MathMax(-movedATR, 0.0);
+   bool cleanSpread = (InpMaxSpread <= 0 || spread <= InpMaxSpread * InpPyramidMaxSpreadFrac);
+   double extensionATR = 0.0;
+   double resetATR = 0.0;
+   bool extensionNoReset = IsXAUExtensionResetMissing(dir, atr, extensionATR, resetATR);
+   bool eliteTrend = (g_lastEntryScore >= InpPyramidEliteScore && pyramidGradeA && momentumATR >= 0.55);
+   bool moderateTrend = (g_lastEntryScore >= InpPyramidModerateScore && momentumATR >= 0.35);
+   bool rescueMode = (adverseTrigger && !trendTrigger && InpPyramidRescueMode);
+   bool rescueTurn = (momentumATR >= 0.10 || rescueRejection);
+   bool rescueCandidate = (rescueMode &&
+                           openCount == 1 &&
+                           adverseATR <= InpPyramidRescueMaxATR &&
+                           g_lastEntryScore >= InpPyramidRescueMinScore &&
+                           regimeOk && cleanSpread && rescueTurn &&
+                           !HasExhaustionDivergence(dir));
+
+   double pyramidQuality = 0.0;
+   if(regimeOk) pyramidQuality += 22.0;
+   if(baseHealthy || rescueCandidate) pyramidQuality += 20.0;
+   if(baseProtected) pyramidQuality += 10.0;
+   if(cleanSpread) pyramidQuality += 12.0;
+   if(sessionQuality >= 0.95) pyramidQuality += 10.0;
+   else if(sessionQuality >= InpPyramidSessionMin) pyramidQuality += 6.0;
+   if(atrExpansion >= InpPyramidVolMinExpansion && atrExpansion <= 1.30) pyramidQuality += 12.0;
+   else if(atrExpansion <= InpPyramidVolMaxExpansion) pyramidQuality += 6.0;
+   if(momentumATR >= 0.55) pyramidQuality += 14.0;
+   else if(momentumATR >= 0.35) pyramidQuality += 8.0;
+   else if(rescueCandidate && momentumATR >= 0.10) pyramidQuality += 5.0;
+   if(pyramidGradeA) pyramidQuality += 8.0;
+   else if(g_lastEntryScore >= InpPyramidModerateScore) pyramidQuality += 3.0;
+   if(rescueCandidate) pyramidQuality += 8.0;
+   if(extensionNoReset) pyramidQuality -= 35.0;
+
+   static datetime lastPyramidAuditLog = 0;
+   bool pyrAuditDue = (TimeCurrent() - lastPyramidAuditLog >= 60);
+
+   if(!cleanSpread)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID BLOCKED: spread not clean for add. spread=", DoubleToString(spread, 1),
+               " maxAdd=", DoubleToString(InpMaxSpread * InpPyramidMaxSpreadFrac, 1),
+               " | quality=", DoubleToString(pyramidQuality, 1));
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(atrExpansion < InpPyramidVolMinExpansion || atrExpansion > InpPyramidVolMaxExpansion)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID BLOCKED: volatility not suitable. atrExp=", DoubleToString(atrExpansion, 2),
+               " allowed=", DoubleToString(InpPyramidVolMinExpansion, 2), "-",
+               DoubleToString(InpPyramidVolMaxExpansion, 2),
+               " | quality=", DoubleToString(pyramidQuality, 1));
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(extensionNoReset && trendTrigger)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID BLOCKED: move already extended without reset. drive=",
+               DoubleToString(extensionATR, 2), "ATR reset=", DoubleToString(resetATR, 2),
+               "ATR | prevents late add near exhaustion.");
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(sessionQuality < InpPyramidSessionMin)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID BLOCKED: weak session quality ", DoubleToString(sessionQuality, 2),
+               " < ", DoubleToString(InpPyramidSessionMin, 2));
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(rescueMode && !rescueCandidate)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID-RESCUE BLOCKED: adverse add failed safety test. adverse=",
+               DoubleToString(adverseATR, 2), "ATR max=", DoubleToString(InpPyramidRescueMaxATR, 2),
+               " score=", DoubleToString(g_lastEntryScore, 2),
+               " turn=", rescueTurn ? "Y" : "N",
+               " reject=", rescueRejection ? "Y" : "N",
+               " open=", openCount,
+               " divergence=", HasExhaustionDivergence(dir) ? "Y" : "N");
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(trendTrigger && !baseHealthy)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID WAIT: base trade not healthy enough. moved=",
+               DoubleToString(movedATR, 2), "ATR protected=", baseProtected ? "Y" : "N",
+               " need=", DoubleToString(InpPyramidMinHealthATR, 2), "ATR/protected.");
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(!pyramidGradeA)
+   {
+      if(!(rescueCandidate || (InpPyramidAllowProtectedB && baseHealthy && regimeOk && moderateTrend && pyramidQuality >= 70.0)))
+      {
+         if(pyrAuditDue)
+         {
+            Print("PYRAMID BLOCKED: B-grade add did not pass protected-continuation test. grade=",
+                  g_lastEntryGrade, " score=", DoubleToString(g_lastEntryScore, 2),
+                  " momentum=", DoubleToString(momentumATR, 2),
+                  " quality=", DoubleToString(pyramidQuality, 1));
+            lastPyramidAuditLog = TimeCurrent();
+         }
+         return;
+      }
+   }
+
+   int adaptiveGapSec = InpPyramidMinGapSec;
+   if(InpPyramidAdaptiveEngine && eliteTrend && sessionQuality >= 0.95 && atrExpansion <= 1.25)
+   {
+      adaptiveGapSec = InpPyramidMinGapSec / 2;
+      if(adaptiveGapSec < 150) adaptiveGapSec = 150;
+   }
+   if(InpPyramidAdaptiveEngine && (atrExpansion > 1.35 || (!pyramidGradeA && !rescueCandidate)))
+   {
+      if(adaptiveGapSec < InpPyramidMinGapSec) adaptiveGapSec = InpPyramidMinGapSec;
+      if(adaptiveGapSec < 600) adaptiveGapSec = 600;
+   }
+
+   if(TimeCurrent() - lastPyramidAddTime < adaptiveGapSec)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID WAIT: adaptive gap active. elapsed=", TimeCurrent() - lastPyramidAddTime,
+               "s need=", adaptiveGapSec,
+               "s | quality=", DoubleToString(pyramidQuality, 1),
+               " elite=", eliteTrend ? "Y" : "N");
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(EPF_BlockPyramidAdd())
+   {
+      bool epfOverride = (InpPyramidAdaptiveEngine &&
+                          epf_tier <= InpPyramidAllowEPFUpToTier &&
+                          trendTrigger && baseProtected && eliteTrend &&
+                          pyramidQuality >= 82.0);
+      if(!epfOverride)
+      {
+         if(pyrAuditDue)
+         {
+            Print("EPF-T", epf_tier, " PYRAMID BLOCKED: preservation mode. quality=",
+                  DoubleToString(pyramidQuality, 1),
+                  " protected=", baseProtected ? "Y" : "N",
+                  " elite=", eliteTrend ? "Y" : "N");
+            lastPyramidAuditLog = TimeCurrent();
+         }
+         return;
+      }
+      if(pyrAuditDue)
+      {
+         Print("EPF-T", epf_tier, " PYRAMID SOFT-ALLOW: protected elite continuation; size will be reduced.");
+         lastPyramidAuditLog = TimeCurrent();
+      }
+   }
+
+   if(!rescueCandidate && momentumATR < 0.25)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID BLOCKED: momentum not accelerating with trade. mom=",
+               DoubleToString(momentumATR, 2), "ATR quality=", DoubleToString(pyramidQuality, 1));
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   int maxAddsAllowed = AdaptivePyramidMaxAdds(dir, moved, atr, pyramidQuality,
+                                               baseProtected, atrExpansion, sessionQuality);
+   if(rescueCandidate) maxAddsAllowed = MathMin(maxAddsAllowed, 1);
    if(openCount >= 1 + maxAddsAllowed)
    {
       static datetime lastPyrCapLog = 0;
@@ -2653,7 +2942,6 @@ void CheckPyramidOpportunity()
       return;
    }
 
-   bool baseProtected = (origSL > 0 && ((isBuy && origSL >= origPx) || (!isBuy && origSL <= origPx)));
    if(trendTrigger && !baseProtected && moved < atr * 1.5)
    {
       static datetime lastPyrProtectLog = 0;
@@ -2671,7 +2959,7 @@ void CheckPyramidOpportunity()
    // ORIGINAL entry was a high-confidence A/A+ setup AND combined score still
    // ≥ InpAdvPyrMinScore. Trend-side adds (price moving with us) skip this
    // gate — those already proved themselves.
-   if(adverseTrigger && !trendTrigger)
+   if(adverseTrigger && !trendTrigger && !rescueCandidate)
    {
       bool isHighGrade = (StringCompare(g_lastEntryGrade, "A") == 0 || StringFind(g_lastEntryGrade, "A+") >= 0);
       if(!isHighGrade)
@@ -2702,11 +2990,16 @@ void CheckPyramidOpportunity()
    // pyramid add.
    if(InpPyramidMinSpaceATR > 0 && lastPyramidPx > 0)
    {
-      double minSpace = atr * InpPyramidMinSpaceATR;
+      double adaptiveSpaceATR = InpPyramidMinSpaceATR;
+      if(InpPyramidAdaptiveEngine && eliteTrend && sessionQuality >= 0.95 && atrExpansion <= 1.20)
+         adaptiveSpaceATR = MathMax(0.65, InpPyramidMinSpaceATR * 0.80);
+      if(InpPyramidAdaptiveEngine && (atrExpansion > 1.35 || !pyramidGradeA))
+         adaptiveSpaceATR = InpPyramidMinSpaceATR * 1.25;
+      double minSpace = atr * adaptiveSpaceATR;
       if(MathAbs(curPx - lastPyramidPx) < minSpace)
       {
          Print("PYRAMID SKIPPED: spacing ", DoubleToString(MathAbs(curPx - lastPyramidPx), 2),
-               " < min ", DoubleToString(minSpace, 2), " (", DoubleToString(InpPyramidMinSpaceATR, 2),
+               " < min ", DoubleToString(minSpace, 2), " (", DoubleToString(adaptiveSpaceATR, 2),
                "× ATR ", DoubleToString(atr, 2), ")");
          return;
       }
@@ -2714,7 +3007,7 @@ void CheckPyramidOpportunity()
 
    // v5.3.0 — share the master pre-trade gate with pyramid adds too. If
    // volatility/spread/exhaustion/news says don't trade, don't pyramid either.
-   string preBlock = PreTradeBlockReason(isBuy ? +1 : -1);
+   string preBlock = PreTradeBlockReason(isBuy ? +1 : -1, "PYRAMID");
    if(StringLen(preBlock) > 0)
    {
       Print("PYRAMID SKIPPED: ", preBlock);
@@ -2739,7 +3032,22 @@ void CheckPyramidOpportunity()
    int addNumber = openCount; // 0th existing = original, so this is addNumber'th add
    // Geometric decrement: pow(multi, addNumber) → add#1=0.6x, add#2=0.36x, add#3=0.22x...
    double decayFactor = MathPow(InpPyramidSizeMulti, addNumber);
-   double addLotRaw = origLot * decayFactor;
+   double pyramidSizeMulti = 1.0;
+   if(InpPyramidAdaptiveEngine)
+   {
+      if(rescueCandidate) pyramidSizeMulti = InpPyramidRescueSizeMulti;
+      else if(eliteTrend && pyramidQuality >= 88.0) pyramidSizeMulti = 1.15;
+      else if(pyramidQuality >= 78.0) pyramidSizeMulti = 0.90;
+      else pyramidSizeMulti = 0.65;
+      if(!rescueCandidate)
+      {
+         if(!pyramidGradeA) pyramidSizeMulti *= 0.72;
+         if(atrExpansion > 1.35) pyramidSizeMulti *= 0.75;
+         if(sessionQuality < 0.95) pyramidSizeMulti *= 0.85;
+         if(EPF_BlockPyramidAdd()) pyramidSizeMulti *= 0.55;
+      }
+   }
+   double addLotRaw = origLot * decayFactor * pyrConfirmLot * pyramidSizeMulti;
    double addLot = MathFloor(addLotRaw / lotStep) * lotStep;
    addLot = NormalizeDouble(addLot, lotDigits);
 
@@ -2797,9 +3105,20 @@ void CheckPyramidOpportunity()
    double entryPx = isBuy ? ask : bid;
 
    // Compose reason label
-   string why = adverseTrigger
-      ? StringFormat("PYR+ADV (%.2f ATR adverse, avg-in)", MathAbs(moved)/atr)
-      : StringFormat("PYR+TRN (%.2f ATR with trend)", moved/atr);
+   string why = "";
+   if(adverseTrigger)
+   {
+      if(rescueCandidate)
+         why = StringFormat("PYR+RESCUE (%.2f ATR pullback, turn=%s, q=%.0f)",
+                            MathAbs(moved)/atr, rescueTurn ? "Y" : "N", pyramidQuality);
+      else
+         why = StringFormat("PYR+ADV (%.2f ATR adverse, avg-in)", MathAbs(moved)/atr);
+   }
+   else
+   {
+      why = StringFormat("PYR+TRN (%.2f ATR with trend, q=%.0f, mom=%.2f, atrExp=%.2f)",
+                         moved/atr, pyramidQuality, momentumATR, atrExpansion);
+   }
 
    // Get original TP too
    posInfo.SelectByTicket(origTicket);
@@ -2887,7 +3206,16 @@ void CheckPyramidOpportunity()
          " lots @ ", DoubleToString(entryPx, digits),
          " | origPx=", DoubleToString(origPx, digits),
          " | moved=", DoubleToString(moved, 2),
+         " (", DoubleToString(movedATR, 2), "ATR)",
          " | totalLots=", DoubleToString(totalLots, lotDigits),
+         " | quality=", DoubleToString(pyramidQuality, 1),
+         " | sizeMulti=", DoubleToString(pyramidSizeMulti, 2),
+         " | confirmMulti=", DoubleToString(pyrConfirmLot, 2),
+         " | session=", DoubleToString(sessionQuality, 2),
+         " | atrExp=", DoubleToString(atrExpansion, 2),
+         " | baseProtected=", baseProtected ? "Y" : "N",
+         " | rescue=", rescueCandidate ? "Y" : "N",
+         " | rejection=", rescueRejection ? "Y" : "N",
          " | riskPerLot=$", DoubleToString(pyramidRiskPerLot, 0),
          " | ", why);
 
@@ -2920,8 +3248,9 @@ void CheckPyramidOpportunity()
                                         "PYR", riskHintPct,
                                         addLot, accInfo.Balance());
          if(StringLen(sigId) > 0 && posId > 0) CloudMapAdd(posId, sigId);
-         CloudPostReasoning("PYR", StringFormat("PYRAMID #%d %.2f lot @%.2f — %s",
-                                                openCount + 1, addLot, entryPx, why),
+         CloudPostReasoning("PYR", StringFormat("PYRAMID #%d %.2f lot @%.2f — %s | q=%.0f sizeMulti=%.2f",
+                                                openCount + 1, addLot, entryPx, why,
+                                                pyramidQuality, pyramidSizeMulti),
                             RegimeName(), "", 0.0, 0.0, "PYR", isBuy ? +1 : -1);
       }
    }
@@ -3526,7 +3855,7 @@ void OnTick()
    {
       double bQualityLot = 1.0;
       string bQualityWhy = "";
-      if(!AdaptiveXAUConfirm(signal, "DAMAGE-B-QUALITY", combinedScore, grade,
+      if(!AdaptiveXAUConfirm(signal, "DAMAGE-B-QUALITY-" + setupName, combinedScore, grade,
                              bQualityLot, bQualityWhy, true))
       {
          string bMsg = StringFormat("B-GRADE QUALITY BLOCK: %s %s failed stricter fast XAU confirmation. %s",
@@ -3960,7 +4289,7 @@ void OnTick()
 
    // v5.1.0 — PROFIT GUARDIAN gate: blocks counter-trend stacks, tier-3 halt, post-loss cooldown
    // v5.1.9 — now also enforces Selective Mode (A/A+ only after giveback brake)
-   string pgBlock = PG_BlockReason(signal, grade, combinedScore);
+   string pgBlock = PG_BlockReason(signal, grade, combinedScore, setupName);
    if(StringLen(pgBlock) > 0)
    {
       Print("🛡 PROFIT GUARDIAN VETO: ", pgBlock, " (signal=", signal == 1 ? "BUY" : "SELL", " grade=", grade, ")");
@@ -7095,6 +7424,88 @@ bool IsMomentumWeak(int signal)
    return false;
 }
 
+double XAU_DirectionalExtensionATR(int signal, int bars, double atr, double &resetATR)
+{
+   resetATR = 999.0;
+   if(signal == 0 || atr <= 0.0) return 0.0;
+   int lookback = bars;
+   if(lookback < 4) lookback = 4;
+   if(lookback > 30) lookback = 30;
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   if(close1 <= 0.0) return 0.0;
+
+   double hi = iHigh(Symbol(), PERIOD_M5, 1);
+   double lo = iLow(Symbol(), PERIOD_M5, 1);
+   if(hi <= 0.0 || lo <= 0.0) return 0.0;
+
+   for(int i = 2; i <= lookback; i++)
+   {
+      double h = iHigh(Symbol(), PERIOD_M5, i);
+      double l = iLow(Symbol(), PERIOD_M5, i);
+      if(h > 0.0) hi = MathMax(hi, h);
+      if(l > 0.0) lo = MathMin(lo, l);
+   }
+
+   if(signal == -1)
+   {
+      resetATR = MathMax((close1 - lo) / atr, 0.0);
+      return MathMax((hi - close1) / atr, 0.0);
+   }
+
+   resetATR = MathMax((hi - close1) / atr, 0.0);
+   return MathMax((close1 - lo) / atr, 0.0);
+}
+
+bool IsXAUExtensionResetMissing(int signal, double atr, double &extensionATR, double &resetATR)
+{
+   extensionATR = XAU_DirectionalExtensionATR(signal, InpXAU_ExtensionLookbackBars, atr, resetATR);
+   return (extensionATR >= InpXAU_MaxExtensionDriveATR &&
+           resetATR < InpXAU_MinExtensionResetATR);
+}
+
+// v5.8.23 - Gold breakout exception for the generic momentum-slowdown guard.
+// The old check treated any SELL close in the upper part of a 3-bar range as
+// weak momentum, even when the broader regime had already flipped into a fast
+// breakout. That blocked real XAU flushes before they moved. This helper keeps
+// the slowdown guard for normal pullbacks, but lets confirmed breakout
+// continuation pass with reduced false vetoes.
+bool IsXAUConfirmedBreakoutContinuation(int signal, string setupName)
+{
+   if(signal == 0 || !IsXAUFastSymbol()) return false;
+
+   bool setupBreakout = (StringFind(setupName, "BREAKOUT") >= 0 ||
+                         StringFind(setupName, "BRKT") >= 0);
+   bool regimeBreakout =
+      (signal ==  1 && currentRegime == REGIME_BREAKOUT_UP) ||
+      (signal == -1 && currentRegime == REGIME_BREAKOUT_DOWN);
+   if(!setupBreakout && !regimeBreakout) return false;
+
+   double o[3], h[3], l[3], c[3];
+   if(CopyOpen (Symbol(), PERIOD_M5, 1, 3, o) < 3) return false;
+   if(CopyHigh (Symbol(), PERIOD_M5, 1, 3, h) < 3) return false;
+   if(CopyLow  (Symbol(), PERIOD_M5, 1, 3, l) < 3) return false;
+   if(CopyClose(Symbol(), PERIOD_M5, 1, 3, c) < 3) return false;
+
+   double atr = 0.0;
+   if(ArraySize(bufATR) > 1) atr = bufATR[1];
+   if(atr <= 0.0) return false;
+
+   double extensionATR = 0.0, resetATR = 0.0;
+   if(IsXAUExtensionResetMissing(signal, atr, extensionATR, resetATR))
+      return false; // Do not let the breakout exception sell bottoms / buy tops after the flush is already stretched.
+
+   double bodyATR = MathAbs(c[0] - o[0]) / atr;
+   double rangeATR = (h[0] - l[0]) / atr;
+   bool directionalBody = (signal == 1 ? c[0] > o[0] : c[0] < o[0]);
+   bool brokePriorSwing = (signal == 1 ? c[0] > MathMax(h[1], h[2])
+                                      : c[0] < MathMin(l[1], l[2]));
+   bool continuationClose = (signal == 1 ? c[0] > c[1] : c[0] < c[1]);
+
+   return directionalBody &&
+          continuationClose &&
+          (brokePriorSwing || bodyATR >= 0.35 || rangeATR >= 0.80);
+}
+
 // v5.3.0 — Phase 2: ML score smoothing (WMA over last N).
 double  g_mlHistory[10];
 int     g_mlHistIdx = 0;
@@ -7233,6 +7644,8 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    double emaDistATR = MathAbs(close1 - ema50) / atr;
    double vwapDistATR = (vwap > 0.0) ? MathAbs(close1 - vwap) / atr : 0.0;
    double threeBarDriveATR = (close4 > 0.0) ? MathAbs(close1 - close4) / atr : 0.0;
+   double extensionResetATR = 0.0;
+   double extensionDriveATR = XAU_DirectionalExtensionATR(signal, InpXAU_ExtensionLookbackBars, atr, extensionResetATR);
 
    double hi6 = high1, lo6 = low1;
    for(int i = 1; i <= 6; i++)
@@ -7281,17 +7694,28 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    bool vwapFar = (vwap > 0.0 && vwapDistATR > InpXAU_MaxVWAPDistanceATR);
    bool driveFar = (threeBarDriveATR > InpXAU_MaxThreeBarDriveATR);
    bool cleanContinuation = (hasPullback && hasRejection && !wrongCandle);
+   bool extensionNoReset = (trendSetup &&
+                            extensionDriveATR >= InpXAU_MaxExtensionDriveATR &&
+                            extensionResetATR < InpXAU_MinExtensionResetATR);
 
    string timingState = cleanContinuation ? "clean-pullback" : "weak-timing";
+   if(extensionNoReset) timingState = "extended-no-reset";
    bool severeLate = trendSetup && chasingAway && (impulseBlock || driveFar || vwapFar) && !cleanContinuation;
    bool moderateLate = trendSetup && (chasingAway || impulseWarn || driveFar || vwapFar || !hasPullback || wrongCandle) && !cleanContinuation;
 
-   reason = StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR pullback=%.2fATR rejection=%s wrongCandle=%s",
+   reason = StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullback=%.2fATR rejection=%s wrongCandle=%s",
                          setupName, grade, setupScore, combinedScore, timingState,
                          emaDistATR, vwapDistATR, impulseATR, bodyATR, atrExpansion,
-                         threeBarDriveATR, pullbackATR,
+                         threeBarDriveATR, InpXAU_ExtensionLookbackBars, extensionDriveATR, extensionResetATR,
+                         pullbackATR,
                          hasRejection ? "yes" : "no",
                          wrongCandle ? "yes" : "no");
+
+   if(extensionNoReset)
+   {
+      reason = "BAD-TIMING BLOCK: extended XAU move has not reset yet; waiting for pullback before another same-direction entry. " + reason;
+      return false;
+   }
 
    if(severeLate && (InpXAU_BlockLateA || !cleanContinuation))
    {
@@ -7324,14 +7748,15 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
 
 // v5.3.0 — master pre-trade gate aggregator. Anything returned non-empty
 // blocks new entries (but lets EXISTING positions trail/manage).
-string PreTradeBlockReason(int signal)
+string PreTradeBlockReason(int signal, string setupName = "")
 {
    string r;
    r = StartupCooldownReason();   if(StringLen(r) > 0) return "startup: "  + r;
    r = HardDailyDDReason();       if(StringLen(r) > 0) return "ddfloor: "  + r;
    r = VolatilityKillReason();    if(StringLen(r) > 0) return "volkill: "  + r;
    r = SpreadKillReason();        if(StringLen(r) > 0) return "spread: "   + r;
-   if(IsMomentumWeak(signal))     return "momentum slowdown (close in opposite 30% of last 3-bar range)";
+   if(IsMomentumWeak(signal) && !IsXAUConfirmedBreakoutContinuation(signal, setupName))
+      return "momentum slowdown (close in opposite 30% of last 3-bar range)";
    if(HasExhaustionDivergence(signal)) return "RSI divergence (exhaustion vs price extreme)";
    if(IsFakeBreakout(signal))     return "fake breakout (last close back inside Donchian-20)";
    return "";
@@ -7450,8 +7875,13 @@ bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, strin
    if(StringFind(grade, "A+") >= 0)
       requiredFast = MathMax(InpXAU_FastTrendMinScore, requiredFast - 5.0);
 
+   bool breakoutContinuation = IsXAUConfirmedBreakoutContinuation(signal, gateName);
    bool momentumBad = IsMomentumWeak(signal);
-   bool allow = (fastScore >= requiredFast && fastAgainst < 2 && !momentumBad);
+   bool momentumHardBlock = (momentumBad && !breakoutContinuation);
+   if(momentumBad && breakoutContinuation)
+      lotMulti *= 0.85; // still respect the warning, but do not kill a real gold flush.
+
+   bool allow = (fastScore >= requiredFast && fastAgainst < 2 && !momentumHardBlock);
 
    string h1Text = h1Against
                    ? "H1 disagreement treated as soft penalty"
@@ -7464,11 +7894,13 @@ bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, strin
    {
       if(fastAgainst >= 2)
          reason = "Trade blocked due to weak fast-timeframe confirmation: multiple fast TFs against | " + reason;
-      else if(momentumBad)
+      else if(momentumHardBlock)
          reason = "Trade blocked due to weak fast-timeframe confirmation: momentum slowdown | " + reason;
       else
          reason = "Trade blocked due to weak fast-timeframe confirmation: score below adaptive floor | " + reason;
    }
+   else if(momentumBad && breakoutContinuation)
+      reason = "Trade allowed because confirmed XAU breakout continuation overrides momentum-slowdown hard veto; lot reduced x0.85 | " + reason;
    else if(h1Against)
       reason = "Trade allowed due to strong M5/M15/M30 momentum; H1 not aligned but ignored as soft context for XAU fast mode | " + reason;
    else
@@ -7499,11 +7931,11 @@ bool PG_HTFAlignedM15H1(int signal)
 // v5.1.3: when InpProfitGuardian=false but InpProfitLock=true, ONLY the day-halt
 // (escalating giveback brake) blocks new entries — restores v4.9.7 trading aggression.
 // v5.1.9: replaces day-halt with Selective Mode (A/A+ only, lot reduction).
-string PG_BlockReason(int signal, string grade, double combinedScore)
+string PG_BlockReason(int signal, string grade, double combinedScore, string setupName = "")
 {
    // v5.3.0 — Phase 1-3 master gate. Aggregates startup cooldown + DD floor +
    // volatility/spread kill + RSI divergence + momentum slowdown + fake breakout.
-   string preBlock = PreTradeBlockReason(signal);
+   string preBlock = PreTradeBlockReason(signal, setupName);
    if(StringLen(preBlock) > 0)
       return "Trade blocked — " + preBlock;
 
@@ -8012,6 +8444,25 @@ bool GetEffectiveAdaptiveGrade()
    return InpAdaptiveGradeB;
 }
 
+string CloudJsonSafe(string s, int maxLen)
+{
+   StringReplace(s, "\\", "/");
+   StringReplace(s, "\"", "'");
+   StringReplace(s, "\r", " ");
+   StringReplace(s, "\n", " ");
+   StringReplace(s, "\t", " ");
+   StringReplace(s, "—", "-");
+   StringReplace(s, "–", "-");
+   StringReplace(s, "→", "->");
+   StringReplace(s, "≤", "<=");
+   StringReplace(s, "≥", ">=");
+   StringReplace(s, "☁", "cloud");
+   StringReplace(s, "🛡", "guard");
+   StringReplace(s, "⚙", "fix");
+   if(StringLen(s) > maxLen) s = StringSubstr(s, 0, maxLen);
+   return s;
+}
+
 // v5.1.5 — push every "TRADE BLOCKED BECAUSE: <reason>" + "TRADE FIRED" event
 // to the cloud so subscribers see WHY their copy account isn't trading. Throttled
 // in caller so we don't spam (only on state change or signal).
@@ -8019,13 +8470,15 @@ void CloudPostReasoning(string event_type, string reason, string regime, string 
                         double setup_score, double combined_score, string grade, int signal_dir)
 {
    if(!CloudEnabled()) return;
-   string r = reason;
-   StringReplace(r, "\"", "'"); StringReplace(r, "\n", " ");
-   if(StringLen(r) > 240) r = StringSubstr(r, 0, 240);
+   string r = CloudJsonSafe(reason, 240);
+   string ev = CloudJsonSafe(event_type, 32);
+   string rg = CloudJsonSafe(regime, 32);
+   string st = CloudJsonSafe(setup, 48);
+   string gr = CloudJsonSafe(grade, 24);
    string body = StringFormat(
       "{\"event_type\":\"%s\",\"reason\":\"%s\",\"regime\":\"%s\",\"setup\":\"%s\","
       "\"setup_score\":%.2f,\"combined_score\":%.2f,\"grade\":\"%s\",\"signal_dir\":%d}",
-      event_type, r, regime, setup, setup_score, combined_score, grade, signal_dir);
+      ev, r, rg, st, setup_score, combined_score, gr, signal_dir);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    string url = InpCloudURL + "/api/cloud/master/reasoning";
@@ -8098,7 +8551,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.19 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.23 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
