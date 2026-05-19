@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.18 — Anti-Bias Strategy Fix|
+//|                                     v5.8.19 — Entry Timing Guard    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.95"
-#property description "XAUUSD AI Sniper v5.8.18 — ANTI-BIAS STRATEGY FIX"
-#property description "Keeps gold breathing exits, but stops repeating the same losing side."
-#property description "Adds fast-TF anti-bias correction and stricter B-grade damage setup control."
+#property version   "5.96"
+#property description "XAUUSD AI Sniper v5.8.19 — ENTRY TIMING GUARD"
+#property description "A/A+/B grades must also prove pullback timing, not just confirmation strength."
+#property description "Blocks late gold chase entries and reduces size when timing is only fair."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -128,7 +128,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.18 — H1 soft context, not hard veto) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.19 — H1 soft context, timing guard active) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -136,6 +136,18 @@ input double InpXAU_H1PenaltyLotMulti     = 0.75;  // If H1 disagrees but fast T
 input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence penalty shown in logs
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
+
+input group "=== XAU ENTRY TIMING GUARD (v5.8.19 — stop selling bottoms / buying tops) ==="
+input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
+input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
+input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
+input double InpXAU_ImpulseATRBlock        = 1.65;  // Last closed M5 candle range above this ATR can block chase entries
+input double InpXAU_ImpulseATRDowngrade    = 1.20;  // Moderate impulse stretches reduce grade/lot
+input double InpXAU_MinPullbackATR         = 0.25;  // Valid continuation should show at least this pullback/retest
+input double InpXAU_MaxThreeBarDriveATR    = 2.30;  // 3-bar one-way drive above this means wait for retrace
+input double InpXAU_FairTimingLotMulti     = 0.65;  // If timing is fair but not clean, reduce risk
+input bool   InpXAU_BlockLateA             = true;  // A/A+ late chase becomes BLOCK, not just smaller
+input bool   InpXAU_LogTimingGuard         = true;  // Print timing audit: grade, EMA/VWAP distance, impulse, pullback quality
 
 input bool   InpPreservationMode = true;  // Master toggle: disables premature profit-side exits
 input double InpRiskPercent    = 0.4;      // Base risk per trade (%) — IGNORED if InpAccountMode != BALANCED uses preset
@@ -1412,7 +1424,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.18 (ANTI-BIAS STRATEGY FIX) READY ===");
+   Print("=== XAUAI SNIPER v5.8.19 (ENTRY TIMING GUARD) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -3671,6 +3683,21 @@ void OnTick()
       return;
    }
 
+   double timingLotMult = 1.0;
+   string timingReason = "";
+   if(!XAUEntryTimingGuard(signal, setupName, setupScore, combinedScore,
+                           grade, timingLotMult, timingReason))
+   {
+      Print("TRADE BLOCKED BECAUSE: ", timingReason);
+      CloudPostReasoning("BLOCK", timingReason, RegimeName(), setupName,
+                         setupScore, combinedScore, "BAD-TIMING", signal);
+      UpdateDashboard(0, combinedScore, "BAD-TIMING");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "BAD-TIMING";
+      return;
+   }
+   if(InpXAU_LogTimingGuard && StringLen(timingReason) > 0)
+      Print(timingReason);
+
    // v5.8.5 — Global hedge guard.
    // The old code allowed a fresh SELL while a BUY was still open (and vice versa)
    // because it only checked total position count. That creates confused master
@@ -3802,6 +3829,13 @@ void OnTick()
    // v4.9.3 — Bigger lots scale with signal strength
    double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;
    int    confidenceBoostPP = 0;   // in percentage points, informational
+
+   if(timingLotMult < 0.999)
+   {
+      sizeMulti *= timingLotMult;
+      Print("ENTRY-TIMING SIZE: lot x", DoubleToString(timingLotMult, 2),
+            " | finalGrade=", grade, " | ", timingReason);
+   }
 
    if(g_adaptiveConfirmLotMulti < 0.999)
    {
@@ -7114,6 +7148,180 @@ bool IsFakeBreakout(int signal)
    return false;
 }
 
+double XAU_SessionVWAP(int lookbackBars)
+{
+   if(lookbackBars < 8) lookbackBars = 8;
+   double sumPV = 0.0, sumV = 0.0;
+   MqlDateTime nowDt, barDt;
+   TimeCurrent(nowDt);
+   for(int i = 1; i <= lookbackBars; i++)
+   {
+      datetime bt = iTime(Symbol(), PERIOD_M5, i);
+      if(bt <= 0) break;
+      TimeToStruct(bt, barDt);
+      if(barDt.year != nowDt.year || barDt.mon != nowDt.mon || barDt.day != nowDt.day)
+         break;
+
+      double h = iHigh(Symbol(), PERIOD_M5, i);
+      double l = iLow(Symbol(), PERIOD_M5, i);
+      double c = iClose(Symbol(), PERIOD_M5, i);
+      long   v = iVolume(Symbol(), PERIOD_M5, i);
+      if(h <= 0 || l <= 0 || c <= 0 || v <= 0) continue;
+      double typical = (h + l + c) / 3.0;
+      sumPV += typical * (double)v;
+      sumV  += (double)v;
+   }
+   return (sumV > 0.0) ? (sumPV / sumV) : 0.0;
+}
+
+double XAU_AvgATR(int bars)
+{
+   if(bars < 10) bars = 10;
+   double arr[];
+   ArraySetAsSeries(arr, true);
+   int got = CopyBuffer(hATR, 0, 1, bars, arr);
+   if(got <= 5) return (ArraySize(bufATR) > 1 ? bufATR[1] : 0.0);
+   double sum = 0.0;
+   int n = 0;
+   for(int i = 0; i < got; i++)
+   {
+      if(arr[i] > 0.0) { sum += arr[i]; n++; }
+   }
+   return n > 0 ? sum / n : (ArraySize(bufATR) > 1 ? bufATR[1] : 0.0);
+}
+
+string DowngradeGradeOneStep(string grade)
+{
+   if(StringFind(grade, "A+") >= 0) return "A";
+   if(grade == "A") return "B";
+   if(grade == "B") return "SKIP";
+   return grade;
+}
+
+bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double combinedScore,
+                         string &grade, double &lotMulti, string &reason)
+{
+   lotMulti = 1.0;
+   reason = "";
+   if(!InpXAU_TimingGuard || signal == 0) return true;
+   if(!IsXAUFastSymbol()) return true;
+   if(ArraySize(bufATR) < 2 || ArraySize(bufEMAFast) < 2 || bufATR[1] <= 0.0 || bufEMAFast[1] <= 0.0)
+   {
+      reason = "timing data not ready";
+      return true;
+   }
+
+   double atr = bufATR[1];
+   double avgAtr = XAU_AvgATR(40);
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double close2 = iClose(Symbol(), PERIOD_M5, 2);
+   double close4 = iClose(Symbol(), PERIOD_M5, 4);
+   double open1  = iOpen(Symbol(), PERIOD_M5, 1);
+   double high1  = iHigh(Symbol(), PERIOD_M5, 1);
+   double low1   = iLow(Symbol(), PERIOD_M5, 1);
+   double ema50  = bufEMAFast[1];
+   double vwap   = XAU_SessionVWAP(96);
+   if(close1 <= 0 || open1 <= 0 || high1 <= 0 || low1 <= 0 || ema50 <= 0) return true;
+
+   double body = MathAbs(close1 - open1);
+   double range = MathMax(high1 - low1, 0.0);
+   double upperWick = high1 - MathMax(open1, close1);
+   double lowerWick = MathMin(open1, close1) - low1;
+   double impulseATR = range / atr;
+   double bodyATR = body / atr;
+   double atrExpansion = (avgAtr > 0.0) ? atr / avgAtr : 1.0;
+   double emaDistATR = MathAbs(close1 - ema50) / atr;
+   double vwapDistATR = (vwap > 0.0) ? MathAbs(close1 - vwap) / atr : 0.0;
+   double threeBarDriveATR = (close4 > 0.0) ? MathAbs(close1 - close4) / atr : 0.0;
+
+   double hi6 = high1, lo6 = low1;
+   for(int i = 1; i <= 6; i++)
+   {
+      hi6 = MathMax(hi6, iHigh(Symbol(), PERIOD_M5, i));
+      lo6 = MathMin(lo6, iLow(Symbol(), PERIOD_M5, i));
+   }
+
+   bool trendSetup = (StringFind(setupName, "TREND_PULLBACK") >= 0 ||
+                      StringFind(setupName, "BREAKOUT") >= 0 ||
+                      StringFind(setupName, "SQUEEZE") >= 0 ||
+                      StringFind(setupName, "ASIA_BREAKOUT") >= 0);
+   bool isA = (grade == "A" || StringFind(grade, "A+") >= 0);
+
+   bool hasPullback = false;
+   bool hasRejection = false;
+   bool chasingAway = false;
+   bool wrongCandle = false;
+   double pullbackATR = 0.0;
+
+   if(signal == -1)
+   {
+      pullbackATR = MathMax((hi6 - close1) / atr, 0.0);
+      hasPullback = (pullbackATR >= InpXAU_MinPullbackATR ||
+                     high1 >= ema50 - atr * 0.25 ||
+                     close2 >= ema50 - atr * 0.35);
+      hasRejection = ((upperWick >= MathMax(body * 0.45, atr * 0.08) && close1 <= open1) ||
+                      (close1 < open1 && close1 < close2));
+      chasingAway = (close1 < ema50 - atr * InpXAU_MaxEMADistanceATR);
+      wrongCandle = (close1 > open1 && lowerWick < body * 0.35);
+   }
+   else
+   {
+      pullbackATR = MathMax((close1 - lo6) / atr, 0.0);
+      hasPullback = (pullbackATR >= InpXAU_MinPullbackATR ||
+                     low1 <= ema50 + atr * 0.25 ||
+                     close2 <= ema50 + atr * 0.35);
+      hasRejection = ((lowerWick >= MathMax(body * 0.45, atr * 0.08) && close1 >= open1) ||
+                      (close1 > open1 && close1 > close2));
+      chasingAway = (close1 > ema50 + atr * InpXAU_MaxEMADistanceATR);
+      wrongCandle = (close1 < open1 && upperWick < body * 0.35);
+   }
+
+   bool impulseBlock = (impulseATR >= InpXAU_ImpulseATRBlock && bodyATR >= 0.65);
+   bool impulseWarn  = (impulseATR >= InpXAU_ImpulseATRDowngrade || atrExpansion >= 1.45);
+   bool vwapFar = (vwap > 0.0 && vwapDistATR > InpXAU_MaxVWAPDistanceATR);
+   bool driveFar = (threeBarDriveATR > InpXAU_MaxThreeBarDriveATR);
+   bool cleanContinuation = (hasPullback && hasRejection && !wrongCandle);
+
+   string timingState = cleanContinuation ? "clean-pullback" : "weak-timing";
+   bool severeLate = trendSetup && chasingAway && (impulseBlock || driveFar || vwapFar) && !cleanContinuation;
+   bool moderateLate = trendSetup && (chasingAway || impulseWarn || driveFar || vwapFar || !hasPullback || wrongCandle) && !cleanContinuation;
+
+   reason = StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR pullback=%.2fATR rejection=%s wrongCandle=%s",
+                         setupName, grade, setupScore, combinedScore, timingState,
+                         emaDistATR, vwapDistATR, impulseATR, bodyATR, atrExpansion,
+                         threeBarDriveATR, pullbackATR,
+                         hasRejection ? "yes" : "no",
+                         wrongCandle ? "yes" : "no");
+
+   if(severeLate && (InpXAU_BlockLateA || !cleanContinuation))
+   {
+      reason = "BAD-TIMING BLOCK: late gold chase / overextended entry. " + reason +
+               " | wait for retracement + rejection before entering.";
+      return false;
+   }
+
+   if(moderateLate)
+   {
+      string oldGrade = grade;
+      lotMulti *= InpXAU_FairTimingLotMulti;
+      grade = DowngradeGradeOneStep(grade);
+      reason = StringFormat("BAD-TIMING SOFT: %s downgraded %s→%s, lot x%.2f. ",
+                            signal == 1 ? "BUY" : "SELL", oldGrade, grade, lotMulti) + reason;
+      if(grade == "SKIP")
+      {
+         reason = "BAD-TIMING BLOCK: B-grade timing was only fair/late, skipped instead of forcing entry. " + reason;
+         return false;
+      }
+      return true;
+   }
+
+   if(isA && cleanContinuation)
+      reason = "A-grade timing confirmed: pullback continuation entry, not late confirmation chase. " + reason;
+   else
+      reason = "ENTRY TIMING PASS: " + reason;
+   return true;
+}
+
 // v5.3.0 — master pre-trade gate aggregator. Anything returned non-empty
 // blocks new entries (but lets EXISTING positions trail/manage).
 string PreTradeBlockReason(int signal)
@@ -7890,7 +8098,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.18 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.19 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
