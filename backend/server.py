@@ -396,7 +396,7 @@ async def download_ea():
     return Response(
         content=sanitized,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.23_INDICATOR_BACKOFF.mq5"'},
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.24_TRADE_CYCLE_GUARD.mq5"'},
     )
 
 # Admin-only: serves the FULL master EA with your agent token + cloud fanout
@@ -407,7 +407,7 @@ async def admin_download_ea_master():
     if not p.exists(): raise HTTPException(status_code=404)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.23_INDICATOR_BACKOFF.mq5",
+        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.24_TRADE_CYCLE_GUARD.mq5",
         media_type="application/octet-stream",
     )
 
@@ -2232,12 +2232,20 @@ CLOUD_BROKER_SERVERS = [
     {"broker": "Trade.com",        "server": "LeadCapitalMarkets-Live",    "type": "live"},
     {"broker": "Trade.com",        "server": "LeadCapitalMarkets-Demo",    "type": "demo"},
     {"broker": "Trade.com",        "server": "TradeCapitalMarkets-Live",   "type": "live"},
+    {"broker": "Trade.com",        "server": "TradeCapitalMarkets-Demo",   "type": "demo"},
+    {"broker": "Trade.com / TCH",   "server": "TradeCapitalHolding-Live",  "type": "live"},
+    {"broker": "Trade.com / TCH",   "server": "TradeCapitalHolding-Demo",  "type": "demo"},
     # OneRoyal
     {"broker": "OneRoyal",         "server": "OneRoyal-Live",              "type": "live"},
     {"broker": "OneRoyal",         "server": "OneRoyal-Demo",              "type": "demo"},
     {"broker": "OneRoyal",         "server": "RoyalMtPro-Live",            "type": "live"},
     {"broker": "OneRoyal",         "server": "RoyalMtPro-Live01",          "type": "live"},
     {"broker": "OneRoyal",         "server": "RoyalMtPro-Demo",            "type": "demo"},
+    # 4XC / 4xCube
+    {"broker": "4XC",              "server": "4XC-Live",                   "type": "live"},
+    {"broker": "4XC",              "server": "4XC-Demo",                   "type": "demo"},
+    {"broker": "4XC",              "server": "4xCube-Live",                "type": "live"},
+    {"broker": "4XC",              "server": "4xCube-Demo",                "type": "demo"},
     # AvaTrade / ActivTrades
     {"broker": "AvaTrade",         "server": "AvaTrade-Real",              "type": "live"},
     {"broker": "AvaTrade",         "server": "AvaTrade-Demo",              "type": "demo"},
@@ -2309,7 +2317,7 @@ def _broker_profile_for_server(server: str) -> dict:
             "support_status": "curated",
             "compatibility": "full_pending_login",
             "requires_exact_server": True,
-            "notes": "Listed server. Final compatibility is confirmed by worker login, symbol, and trading-permission checks.",
+            "notes": "Listed server. Final compatibility is confirmed by worker login, symbol, and trading-permission checks. If login fails, copy the exact server string from MT5/account email and use Custom server.",
         })
         return out
     return {
@@ -2320,7 +2328,7 @@ def _broker_profile_for_server(server: str) -> dict:
         "support_status": "custom_review",
         "compatibility": "partial_until_verified",
         "requires_exact_server": True,
-        "notes": "Custom MT5 server. It can still work, but the worker must verify login, symbol mapping, and trading permissions before copying.",
+        "notes": "Custom MT5 server. This is often required for brokers like Trade.com/TCH where the live server shown in MT5 can differ by account. The worker must verify login, symbol mapping, and trading permissions before copying.",
     }
 
 def _broker_error_hint(raw_error: str) -> str:
@@ -2378,7 +2386,7 @@ async def cloud_list_brokers():
         servers.append(row)
     brokers = sorted({b["broker"] for b in servers if b.get("broker")})
     return {"servers": servers, "brokers": brokers, "total": len(servers),
-            "notes": "Only MT5-compatible servers are executable today. MT4/cTrader/API brokers must use an MT5 account/server or are unsupported for cloud copy."}
+            "notes": "Only MT5-compatible servers are executable today. Broker server names change by account and region; if a listed server fails, use the exact server string from the user's MT5 login screen/account email via Custom server. MT4/cTrader/API brokers must use an MT5 account/server or are unsupported for cloud copy."}
 
 @api_router.get("/cloud/mt5/compatibility")
 async def cloud_mt5_compatibility(server: str = ""):

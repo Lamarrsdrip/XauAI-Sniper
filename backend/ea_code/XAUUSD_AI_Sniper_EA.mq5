@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.23 — Indicator Backoff Fix |
+//|                                     v5.8.24 — Trade Cycle Guard |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.23 — INDICATOR BACKOFF FIX"
-#property description "Keeps smart pyramid/rescue logic and stops indicator recovery spam."
-#property description "Adds warmup/backoff so MT5 buffers can recover without handle rebuild loops."
+#property description "XAUUSD AI Sniper v5.8.24 — TRADE CYCLE GUARD"
+#property description "Prevents bank-profit then same-direction bottom/top chase re-entries."
+#property description "Keeps indicator backoff and smarter pyramid-rescue logging."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -128,7 +128,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.23 — breakout + pyramid adaptive confirmation) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.24 — breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -137,7 +137,7 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.23 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.24 — stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
@@ -505,12 +505,13 @@ input double InpPyramidSizeMulti= 0.50;    // Each add is this × previous size 
 input int    InpPyramidMinGapSec= 360;     // Min seconds between pyramid adds
 input bool   InpPyramidOnAdverse= false;   // v5.8.0: DISABLED by default — live data showed -$21k from 37 adverse-pyramid trades (PF 0.28). Adds risk to losing positions.
 input bool   InpPyramidOnTrend  = true;    // Add when price moves WITH us (trend continuation)
-input bool   InpPyramidAdaptiveEngine = true; // v5.8.23: score-based institutional pyramid engine
+input bool   InpPyramidAdaptiveEngine = true; // v5.8.24: score-based institutional pyramid engine
 input bool   InpPyramidAllowProtectedB = true; // Allow B-grade adds only when base trade is healthy and trend evidence is strong
 input bool   InpPyramidRescueMode = true;      // Allow ONE small pullback/retest add against entry if original direction still confirms
 input double InpPyramidRescueMaxATR = 1.80;    // Do not rescue-add after drawdown is already too deep
 input double InpPyramidRescueSizeMulti = 0.35; // Rescue add size vs original lot before risk caps
 input double InpPyramidRescueMinScore = 4.00;  // Rescue add needs strong original signal score
+input double InpPyramidRescueEliteScore = 4.70;// v5.8.24: elite score can allow one controlled rescue without wick-turn
 input double InpPyramidMinHealthATR = 0.75;    // Base trade should be this ATR in profit before first add
 input double InpPyramidModerateScore = 3.60;   // Minimum score for protected B-grade continuation add
 input double InpPyramidEliteScore = 4.20;      // Elite score allows stronger/faster adds
@@ -525,13 +526,17 @@ input int    InpTimerScanSec     = 15;      // Timer wake-up so slow ticks/VPS l
 input int    InpScanWatchdogMin  = 7;       // Force a scan if no successful entry scan for this many minutes
 input int    InpScanSkipLogSec   = 120;     // Log repeated idle-skip detail at most every N seconds
 input int    InpIndicatorReloadFails = 3;   // Rebuild indicator handles after this many buffer failures
-input int    InpIndicatorWarmupSec = 12;    // v5.8.23: wait after rebuilding handles before copying buffers again
-input int    InpIndicatorRecoveryBackoffSec = 90; // v5.8.23: minimum seconds between handle rebuild attempts
+input int    InpIndicatorWarmupSec = 12;    // v5.8.24: wait after rebuilding handles before copying buffers again
+input int    InpIndicatorRecoveryBackoffSec = 90; // v5.8.24: minimum seconds between handle rebuild attempts
 
 input group "=== POST-WINNER ENTRY GUARD (v4.6.5 — user-tunable cooldown) ==="
 input bool   InpPostWinnerGuard    = true;   // Block re-entry in same direction after a winner (set false to disable)
 input int    InpPostWinnerCoolMin  = 5;      // Cooldown minutes after a winning close (was 30, now 5)
 input double InpPostWinnerATRBump  = 0.5;    // Need price ≥ this×ATR better to bypass cooldown
+input bool   InpPostWinnerCycleGuard = true; // v5.8.24: after banking, don't chase same direction at worse exhaustion price
+input int    InpPostWinnerCycleMin   = 45;   // Minutes to require a pullback/reset after profitable same-direction exit
+input double InpPostWinnerResetATR   = 0.60; // Required reset from close price before same-direction re-entry
+input double InpPostWinnerChaseATR   = 0.20; // Worse than close by this ATR = bottom/top chase risk
 
 //+------------------------------------------------------------------+
 //| ENUMS                                                            |
@@ -665,11 +670,14 @@ struct LastClose
    bool   reEntered;
    int    dir;             // +1 BUY, -1 SELL
    double entryPrice;
+   double closePrice;
    double slDist;          // price distance of SL at entry
    double lots;
+   double profit;
    datetime closeTime;
    string signature;
    string setup;
+   string exitReason;
 };
 LastClose  lastClose;
 
@@ -745,8 +753,8 @@ bool       g_timerForceScan = false;  // v5.8.8: timer asks OnTick to run a reco
 datetime   g_lastPyramidFailTime = 0; // v5.8.8: failed pyramid add cooldown
 int        g_indicatorBufferFailCount = 0; // v5.9.0: rebuild stale indicator handles instead of requiring MT5 restart
 datetime   g_lastIndicatorFailLog = 0;
-datetime   g_lastIndicatorRebuildAt = 0; // v5.8.23: throttle recovery loops
-datetime   g_indicatorWarmupUntil = 0;   // v5.8.23: let MT5 calculate new indicator buffers before retrying
+datetime   g_lastIndicatorRebuildAt = 0; // v5.8.24: throttle recovery loops
+datetime   g_indicatorWarmupUntil = 0;   // v5.8.24: let MT5 calculate new indicator buffers before retrying
 
 // TRADE THESIS (AI narrative per open position)
 string     currentTradeThesis = "";
@@ -1445,7 +1453,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.23 (INDICATOR BACKOFF FIX) READY ===");
+   Print("=== XAUAI SNIPER v5.8.24 (TRADE CYCLE GUARD) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -2743,7 +2751,11 @@ void CheckPyramidOpportunity()
    bool eliteTrend = (g_lastEntryScore >= InpPyramidEliteScore && pyramidGradeA && momentumATR >= 0.55);
    bool moderateTrend = (g_lastEntryScore >= InpPyramidModerateScore && momentumATR >= 0.35);
    bool rescueMode = (adverseTrigger && !trendTrigger && InpPyramidRescueMode);
-   bool rescueTurn = (momentumATR >= 0.10 || rescueRejection);
+   bool rescueElite = (g_lastEntryScore >= InpPyramidRescueEliteScore &&
+                       adverseATR <= MathMin(InpPyramidRescueMaxATR, 1.25) &&
+                       openCount == 1 && regimeOk && cleanSpread &&
+                       !HasExhaustionDivergence(dir));
+   bool rescueTurn = (momentumATR >= 0.10 || rescueRejection || rescueElite);
    bool rescueCandidate = (rescueMode &&
                            openCount == 1 &&
                            adverseATR <= InpPyramidRescueMaxATR &&
@@ -2828,6 +2840,7 @@ void CheckPyramidOpportunity()
                " score=", DoubleToString(g_lastEntryScore, 2),
                " turn=", rescueTurn ? "Y" : "N",
                " reject=", rescueRejection ? "Y" : "N",
+               " elite=", rescueElite ? "Y" : "N",
                " open=", openCount,
                " divergence=", HasExhaustionDivergence(dir) ? "Y" : "N");
          lastPyramidAuditLog = TimeCurrent();
@@ -3010,7 +3023,11 @@ void CheckPyramidOpportunity()
    string preBlock = PreTradeBlockReason(isBuy ? +1 : -1, "PYRAMID");
    if(StringLen(preBlock) > 0)
    {
-      Print("PYRAMID SKIPPED: ", preBlock);
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID SKIPPED: ", preBlock);
+         lastPyramidAuditLog = TimeCurrent();
+      }
       return;
    }
 
@@ -4469,14 +4486,15 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
 
    // v4.6.5 — POST-WINNER ENTRY GUARD (user-tunable, default cooldown 5 min)
    // Toggle off via InpPostWinnerGuard=false. Cooldown via InpPostWinnerCoolMin.
+   double bidNow = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double askNow = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double newEntryNow = (signal == 1) ? askNow : bidNow;
    if(InpPostWinnerGuard && InpPostWinnerCoolMin > 0 &&
       reason != "RE_ENTRY" && lastClose.valid && !lastClose.wasLoss &&
       lastClose.dir == signal &&
       TimeCurrent() - lastClose.closeTime < InpPostWinnerCoolMin * 60)
    {
-      double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-      double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-      double newEntry  = (signal == 1) ? ask : bid;
+      double newEntry  = newEntryNow;
       double prevEntry = lastClose.entryPrice;
       double minAdvanceATR = atr * InpPostWinnerATRBump;
       bool betterPrice = false;
@@ -4490,6 +4508,52 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                " not ≥", DoubleToString(InpPostWinnerATRBump,2), "×ATR (",
                DoubleToString(minAdvanceATR, 2), ") better. Cooldown ",
                InpPostWinnerCoolMin, "min.");
+         return;
+      }
+   }
+
+   // v5.8.24 — Trade-cycle guard. The bad pattern in live screenshots was:
+   // bank a profitable SELL, then re-sell lower into exhaustion/bottom because
+   // the direction still looked correct. For XAU, same-direction re-entry after
+   // a winner must wait for a real reset/pullback, not just another signal.
+   if(InpPostWinnerCycleGuard && InpPostWinnerCycleMin > 0 && atr > 0 &&
+      reason != "RE_ENTRY" && lastClose.valid && !lastClose.wasLoss &&
+      lastClose.dir == signal && lastClose.closePrice > 0 &&
+      TimeCurrent() - lastClose.closeTime < InpPostWinnerCycleMin * 60)
+   {
+      double resetDist = atr * InpPostWinnerResetATR;
+      double chaseDist = atr * InpPostWinnerChaseATR;
+      bool resetSeen = false;
+      bool chaseRisk = false;
+
+      if(signal == -1)
+      {
+         // After a profitable SELL close, require price to pull back UP before
+         // another SELL. Selling below the last close is usually late-bottom risk.
+         resetSeen = (newEntryNow >= lastClose.closePrice + resetDist);
+         chaseRisk = (newEntryNow <= lastClose.closePrice - chaseDist);
+      }
+      else
+      {
+         // After a profitable BUY close, require price to pull back DOWN before
+         // another BUY. Buying above the last close is usually late-top risk.
+         resetSeen = (newEntryNow <= lastClose.closePrice - resetDist);
+         chaseRisk = (newEntryNow >= lastClose.closePrice + chaseDist);
+      }
+
+      bool basketBank = (StringFind(lastClose.exitReason, "BASKET") >= 0 ||
+                         StringFind(lastClose.exitReason, "LOCK") >= 0 ||
+                         StringFind(lastClose.exitReason, "peak") >= 0);
+      if(!resetSeen && (chaseRisk || basketBank))
+      {
+         Print("⏸  POST-WINNER CYCLE BLOCK: ", signal == 1 ? "BUY" : "SELL",
+               " winner closed @", DoubleToString(lastClose.closePrice, digits),
+               " profit $", DoubleToString(lastClose.profit, 2),
+               ". New @", DoubleToString(newEntryNow, digits),
+               " before reset ", DoubleToString(resetDist, 2),
+               " (", DoubleToString(InpPostWinnerResetATR, 2), "×ATR). Avoiding ",
+               signal == 1 ? "buying top after bank" : "selling bottom after bank",
+               ". Last exit=", lastClose.exitReason);
          return;
       }
    }
@@ -6942,9 +7006,12 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    lastClose.reEntered  = false;
    lastClose.dir        = (dirStr == "BUY") ? 1 : -1;
    lastClose.lots       = dVolume;
+   lastClose.profit     = profit;
    lastClose.closeTime  = TimeCurrent();
    lastClose.signature  = lastSignalSignature;
    lastClose.setup      = lastSignalSetup;
+   lastClose.closePrice = dPrice;
+   lastClose.exitReason = lastExitReason;
    // Approximate original entry and SL distance from deal history.
    // dPrice here is the CLOSE price; for re-entry we want the ORIGINAL entry.
    // Fetch it by looking at the position's first deal (entry) with same position ID.
@@ -7463,7 +7530,7 @@ bool IsXAUExtensionResetMissing(int signal, double atr, double &extensionATR, do
            resetATR < InpXAU_MinExtensionResetATR);
 }
 
-// v5.8.23 - Gold breakout exception for the generic momentum-slowdown guard.
+// v5.8.24 - Gold breakout exception for the generic momentum-slowdown guard.
 // The old check treated any SELL close in the upper part of a 3-bar range as
 // weak momentum, even when the broader regime had already flipped into a fast
 // breakout. That blocked real XAU flushes before they moved. This helper keeps
@@ -8551,7 +8618,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.23 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.24 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

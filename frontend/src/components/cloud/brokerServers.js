@@ -99,12 +99,20 @@ export const FALLBACK_BROKER_SERVERS = [
   { broker: "Trade.com",         server: "LeadCapitalMarkets-Live",        type: "live" },
   { broker: "Trade.com",         server: "LeadCapitalMarkets-Demo",        type: "demo" },
   { broker: "Trade.com",         server: "TradeCapitalMarkets-Live",       type: "live" },
+  { broker: "Trade.com",         server: "TradeCapitalMarkets-Demo",       type: "demo" },
+  { broker: "Trade.com / TCH",   server: "TradeCapitalHolding-Live",       type: "live" },
+  { broker: "Trade.com / TCH",   server: "TradeCapitalHolding-Demo",       type: "demo" },
   // OneRoyal
   { broker: "OneRoyal",          server: "OneRoyal-Live",                  type: "live" },
   { broker: "OneRoyal",          server: "OneRoyal-Demo",                  type: "demo" },
   { broker: "OneRoyal",          server: "RoyalMtPro-Live",                type: "live" },
   { broker: "OneRoyal",          server: "RoyalMtPro-Live01",              type: "live" },
   { broker: "OneRoyal",          server: "RoyalMtPro-Demo",                type: "demo" },
+  // 4XC / 4xCube
+  { broker: "4XC",               server: "4XC-Live",                       type: "live" },
+  { broker: "4XC",               server: "4XC-Demo",                       type: "demo" },
+  { broker: "4XC",               server: "4xCube-Live",                    type: "live" },
+  { broker: "4XC",               server: "4xCube-Demo",                    type: "demo" },
   // AvaTrade / ActivTrades
   { broker: "AvaTrade",          server: "AvaTrade-Real",                  type: "live" },
   { broker: "AvaTrade",          server: "AvaTrade-Demo",                  type: "demo" },
