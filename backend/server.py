@@ -3477,6 +3477,66 @@ class VerifyCredentialsReq(BaseModel):
     latency_ms: Optional[int] = None
     health: Optional[dict] = None
 
+class AgentAccountStatusReq(BaseModel):
+    user_id: str
+    worker_id: Optional[str] = ""
+    status: str = "CONNECTING"
+    logged_in: bool = False
+    algo_ok: bool = True
+    retry_count: int = 0
+    next_retry_at: Optional[str] = ""
+    last_success_at: Optional[str] = ""
+    last_error: Optional[str] = ""
+    server: Optional[str] = ""
+    login: Optional[int] = 0
+    resolved_symbol: Optional[str] = ""
+
+@api_router.post("/cloud/agent/account-status")
+async def cloud_agent_account_status(req: AgentAccountStatusReq, request: Request):
+    await _require_agent_async(request)
+    now = datetime.now(timezone.utc).isoformat()
+    status = (req.status or "CONNECTING").upper()
+    error = req.last_error or ""
+    set_doc = {
+        "copy_status": status,
+        "copy_logged_in": bool(req.logged_in),
+        "copy_algo_ok": bool(req.algo_ok),
+        "copy_retry_count": int(req.retry_count or 0),
+        "copy_next_retry_at": req.next_retry_at or "",
+        "copy_last_success_at": req.last_success_at or "",
+        "copy_last_error": error,
+        "copy_last_status_at": now,
+        "copy_worker_id": req.worker_id or "",
+        "broker_detected_server": req.server or "",
+        "broker_symbol": req.resolved_symbol or "",
+    }
+    # Do not flip mt5_connected / mt5_verification_status here. Those fields
+    # decide whether the worker keeps receiving this account from pending-users.
+    # Runtime copy health belongs in copy_status so a bad login can cool down,
+    # retry later, and remain visible without removing itself from the worker
+    # feed or affecting other healthy accounts.
+    r = await db.cloud_users.update_one({"id": req.user_id}, {"$set": set_doc})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Unknown user_id")
+    await db.cloud_account_status_logs.insert_one({
+        "id": str(uuid.uuid4()),
+        "ts": now,
+        **req.model_dump(),
+        "status": status,
+    })
+    user = await db.cloud_users.find_one({"id": req.user_id}, {"_id": 0, "email": 1})
+    await _log_broker_event(req.user_id, (user or {}).get("email", ""), "account_status",
+                            status in {"ACTIVE", "COPYING"}, req.server or "", {
+                                "status": status,
+                                "logged_in": bool(req.logged_in),
+                                "algo_ok": bool(req.algo_ok),
+                                "retry_count": int(req.retry_count or 0),
+                                "next_retry_at": req.next_retry_at or "",
+                                "last_error": error,
+                                "worker_id": req.worker_id or "",
+                            })
+    return {"ok": True, "status": status}
+
 @api_router.post("/cloud/agent/verify-credentials")
 async def cloud_agent_verify_credentials(req: VerifyCredentialsReq, request: Request):
     await _require_agent_async(request)
@@ -3738,7 +3798,11 @@ async def cloud_admin_diagnostics(fanout_limit: int = 50, signal_limit: int = 10
         {"status": {"$in": ["trial", "active"]}},
         {"_id": 0, "id": 1, "email": 1, "status": 1, "mt5_connected": 1,
          "mt5_verification_status": 1, "mt5_verification_error": 1,
-         "paused": 1, "assigned_worker_id": 1, "last_balance": 1}
+         "paused": 1, "assigned_worker_id": 1, "last_balance": 1,
+         "copy_status": 1, "copy_logged_in": 1, "copy_algo_ok": 1,
+         "copy_retry_count": 1, "copy_next_retry_at": 1,
+         "copy_last_success_at": 1, "copy_last_error": 1,
+         "copy_last_status_at": 1, "copy_worker_id": 1}
     ).to_list(500)
     users = []
     for u in users_raw:
@@ -3750,6 +3814,10 @@ async def cloud_admin_diagnostics(fanout_limit: int = 50, signal_limit: int = 10
         if not connected: reason = "mt5 not connected"
         elif not verified: reason = f"mt5 not verified ({u.get('mt5_verification_status') or 'none'})"
         elif paused: reason = "user paused"
+        copy_status = u.get("copy_status") or ("COPYING" if ready else "CONNECTING")
+        if copy_status in {"LOGIN_FAILED", "EA_DISABLED", "NEEDS_ATTENTION", "DISABLED"}:
+            ready = False
+            reason = u.get("copy_last_error") or copy_status
         users.append({
             "id": u.get("id"),
             "email": u.get("email"),
@@ -3760,6 +3828,15 @@ async def cloud_admin_diagnostics(fanout_limit: int = 50, signal_limit: int = 10
             "paused": paused,
             "assigned_worker_id": u.get("assigned_worker_id") or "",
             "last_balance": float(u.get("last_balance") or 0),
+            "copy_status": copy_status,
+            "copy_logged_in": bool(u.get("copy_logged_in")),
+            "copy_algo_ok": bool(u.get("copy_algo_ok", True)),
+            "copy_retry_count": int(u.get("copy_retry_count") or 0),
+            "copy_next_retry_at": u.get("copy_next_retry_at") or "",
+            "copy_last_success_at": u.get("copy_last_success_at") or "",
+            "copy_last_error": u.get("copy_last_error") or "",
+            "copy_last_status_at": u.get("copy_last_status_at") or "",
+            "copy_worker_id": u.get("copy_worker_id") or "",
             "fanout_ready": ready,
             "blocked_reason": reason,
         })

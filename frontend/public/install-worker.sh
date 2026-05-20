@@ -10,7 +10,7 @@ err() { echo -e "${RED}[fail]${NC}  $*"; exit 1; }
 ok()  { echo -e "${GREEN}[ok]${NC}    $*"; }
 
 INSTALL_DIR="$HOME/xauai-worker"
-ZIP_URL="https://xauaisniper.com/xauai_worker_agent_v1.5.4.zip"
+ZIP_URL="https://xauaisniper.com/xauai_worker_agent_v1.5.5.zip"
 
 say "Installing XauAi Cloud Worker → $INSTALL_DIR"
 

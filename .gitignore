@@ -67,6 +67,7 @@ agenthub/agents/youtube/db
 # Archive files and large assets
 **/*.zip
 !frontend/public/xauai_worker_agent_v1.5.4.zip
+!frontend/public/xauai_worker_agent_v1.5.5.zip
 **/*.tar.gz
 **/*.tar
 **/*.tgz

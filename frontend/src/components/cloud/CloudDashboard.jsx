@@ -38,6 +38,18 @@ function useAuth() {
 
 function formatUSD(n) { return "$" + Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
+function copyStatusMeta(status) {
+  const s = String(status || "CONNECTING").toUpperCase();
+  if (s === "COPYING" || s === "ACTIVE") return { ok: true, label: "Copying", color: "green" };
+  if (s === "CONNECTING") return { ok: false, label: "Connecting", color: "amber" };
+  if (s === "PAUSED") return { ok: false, label: "Paused", color: "amber" };
+  if (s === "EA_DISABLED") return { ok: false, label: "EA disabled", color: "red" };
+  if (s === "LOGIN_FAILED") return { ok: false, label: "Login failed", color: "red" };
+  if (s === "NEEDS_ATTENTION") return { ok: false, label: "Needs attention", color: "red" };
+  if (s === "DISABLED") return { ok: false, label: "Disabled", color: "red" };
+  return { ok: false, label: s.replaceAll("_", " ").toLowerCase(), color: "amber" };
+}
+
 export default function CloudDashboard() {
   useAuth();
   const nav = useNavigate();
@@ -159,6 +171,8 @@ function OverviewTab({ me, data, onTogglePause }) {
   const executorOnline = Boolean(data.executor_online);
   const verified = data.mt5_verification_status === "verified";
   const activeSub = Boolean(me.subscription_active || me.status === "active");
+  const copyMeta = copyStatusMeta(me.copy_status || data.copy_status);
+  const copyHealthy = copyMeta.ok && verified && executorOnline && !data.paused;
   const recentTrades = (data.trades || []).slice(0, 5);
   const fmtLots = (v) => Number(v || 0) > 0 ? Number(v).toFixed(2) : "—";
   const fmtPnl = (v) => (v === null || v === undefined) ? "—" : formatUSD(v);
@@ -195,9 +209,41 @@ function OverviewTab({ me, data, onTogglePause }) {
           <HealthPill label="Subscription" ok={activeSub} value={activeSub ? `${me.days_remaining ?? 0}d left` : "Expired"} />
           <HealthPill label="MT5" ok={verified} value={verified ? "Verified" : data.mt5_verification_status || "Not linked"} />
           <HealthPill label="Worker" ok={executorOnline} value={executorOnline ? `${data.executor_count || 1} online` : "Offline"} />
-          <HealthPill label="Copying" ok={!data.paused && verified && executorOnline} value={data.paused ? "Paused" : "Armed"} />
+          <HealthPill label="Copying" ok={copyHealthy} value={data.paused ? "Paused" : copyMeta.label} />
         </div>
       </div>
+
+      {(me.copy_status || me.copy_last_error || me.copy_retry_count > 0) && (
+        <div className={`rounded-2xl border p-4 ${
+          copyMeta.color === "green"
+            ? "border-green-400/20 bg-green-400/[0.07]"
+            : copyMeta.color === "red"
+            ? "border-red-400/25 bg-red-500/[0.08]"
+            : "border-amber-400/25 bg-amber-400/[0.08]"
+        }`} data-testid="copy-runtime-status">
+          <div className="flex items-start gap-3">
+            {copyMeta.color === "green" ? <CheckCircle2 className="w-5 h-5 text-green-400 flex-none mt-0.5" /> : <AlertTriangle className={`w-5 h-5 flex-none mt-0.5 ${copyMeta.color === "red" ? "text-red-400" : "text-amber-300"}`} />}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="font-semibold">{copyMeta.label}</div>
+                <div className="text-[10px] font-mono text-white/45">last status {relativeTime(me.copy_last_status_at)}</div>
+              </div>
+              <div className="mt-1 text-xs text-white/60 leading-relaxed">
+                {copyMeta.ok
+                  ? <>Worker is logged in and copying this account. Last healthy sync: <span className="font-mono text-white/75">{relativeTime(me.copy_last_success_at)}</span>.</>
+                  : <>This account is isolated from healthy users. Other accounts continue copying while this one waits for retry or action.</>}
+              </div>
+              {(me.copy_last_error || me.copy_retry_count > 0 || me.copy_next_retry_at) && (
+                <div className="mt-2 grid gap-2 sm:grid-cols-3 text-[11px]">
+                  <div className="rounded-lg bg-black/25 border border-white/10 p-2"><span className="text-white/35 font-mono">RETRY</span><br/><span className="font-mono">{me.copy_retry_count || 0}</span></div>
+                  <div className="rounded-lg bg-black/25 border border-white/10 p-2"><span className="text-white/35 font-mono">NEXT</span><br/><span className="font-mono">{relativeTime(me.copy_next_retry_at)}</span></div>
+                  <div className="rounded-lg bg-black/25 border border-white/10 p-2 min-w-0"><span className="text-white/35 font-mono">ERROR</span><br/><span className="font-mono truncate block">{me.copy_last_error || "—"}</span></div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
@@ -424,6 +470,8 @@ function ConnectTab({ me, onRefresh }) {
   const connected = me.mt5_connected;
   const verifyStatus = me.mt5_verification_status || "none";
   const verifyError = me.mt5_verification_error || "";
+  const copyMeta = copyStatusMeta(me.copy_status);
+  const copyRuntimeOk = copyMeta.ok && Boolean(me.copy_logged_in) && me.copy_algo_ok !== false;
 
   // Try the API first; if it returns a non-empty list, use it. Otherwise keep
   // the baked-in fallback so the dropdown ALWAYS works (even if backend is older).
@@ -552,8 +600,45 @@ function ConnectTab({ me, onRefresh }) {
       <div className="grid gap-3 sm:grid-cols-3 mb-5" data-testid="connect-readiness">
         <HealthPill label="Credential vault" ok={Boolean(me.broker_server || connected)} value={me.broker_server ? "Saved" : "Empty"} />
         <HealthPill label="Verification" ok={verifyStatus === "verified"} value={verifyStatus === "verified" ? "Passed" : verifyStatus === "pending" ? "Pending" : "Needed"} />
-        <HealthPill label="Executor VPS" ok={executorOnline} value={executorOnline ? `${executorStatus.online} online` : "Offline"} />
+        <HealthPill label="Copy runtime" ok={copyRuntimeOk} value={copyMeta.label} />
       </div>
+
+      {(me.copy_status || me.copy_last_error || me.copy_retry_count > 0 || me.copy_algo_ok === false) && (
+        <div className={`border rounded-2xl p-4 mb-5 ${
+          copyMeta.color === "green"
+            ? "bg-green-500/10 border-green-500/20"
+            : copyMeta.color === "red"
+            ? "bg-red-500/10 border-red-500/25"
+            : "bg-amber-500/10 border-amber-500/25"
+        }`} data-testid="copy-health-panel">
+          <div className="flex items-start gap-3">
+            {copyMeta.color === "green" ? <CheckCircle2 className="w-5 h-5 text-green-400 mt-0.5 flex-none" /> : <AlertTriangle className={`w-5 h-5 mt-0.5 flex-none ${copyMeta.color === "red" ? "text-red-400" : "text-amber-300"}`} />}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="font-semibold">Account copy status: {copyMeta.label}</div>
+                <div className="text-[10px] font-mono text-white/45">worker {me.copy_worker_id || "pending"}</div>
+              </div>
+              <div className="text-xs text-white/60 mt-1 leading-relaxed">
+                {copyMeta.ok
+                  ? <>Healthy account. Copying stays active while bad accounts are skipped independently.</>
+                  : <>This account is isolated. Failed login or EA permission problems do not block other linked accounts.</>}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-[11px]">
+                <div className="bg-black/30 rounded-xl p-3"><div className="text-white/35 font-mono">LOGIN</div><div className={me.copy_logged_in ? "font-mono text-green-400" : "font-mono text-amber-300"}>{me.copy_logged_in ? "ok" : "not active"}</div></div>
+                <div className="bg-black/30 rounded-xl p-3"><div className="text-white/35 font-mono">EA/ALGO</div><div className={me.copy_algo_ok === false ? "font-mono text-red-400" : "font-mono text-green-400"}>{me.copy_algo_ok === false ? "disabled" : "ok"}</div></div>
+                <div className="bg-black/30 rounded-xl p-3"><div className="text-white/35 font-mono">RETRY</div><div className="font-mono text-white">{me.copy_retry_count || 0}</div></div>
+                <div className="bg-black/30 rounded-xl p-3"><div className="text-white/35 font-mono">LAST OK</div><div className="font-mono text-white">{relativeTime(me.copy_last_success_at)}</div></div>
+              </div>
+              {me.copy_last_error && (
+                <div className="mt-3 text-xs text-red-200/90 bg-black/25 border border-red-400/20 rounded-xl p-3 break-words">
+                  {me.copy_last_error}
+                  {me.copy_next_retry_at && <span className="block text-white/45 mt-1">Next retry: {relativeTime(me.copy_next_retry_at)}</span>}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {(compat || hasBrokerHealth || brokerLogs.length > 0) && (
         <div className="bg-black/35 border border-white/10 rounded-2xl p-4 mb-5" data-testid="broker-compatibility-panel">
