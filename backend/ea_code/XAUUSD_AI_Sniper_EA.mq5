@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.25 — Fast Volkill Fix  |
+//|                                     v5.8.26 — Pullback Location Fix |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.25 — FAST VOLKILL FIX"
-#property description "Makes XAU volatility guard adaptive so early fast moves are not missed, while extreme chaos still blocks."
-#property description "Keeps indicator backoff and smarter pyramid-rescue logging."
+#property description "XAUUSD AI Sniper v5.8.26 — PULLBACK LOCATION FIX"
+#property description "Stops selling bottoms / buying tops by requiring value pullbacks before continuation entries."
+#property description "Cloud-safe lifecycle disables partial loss/profit reductions that desync master and followers."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -130,7 +130,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.25 — breakout + pyramid adaptive confirmation) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.26 — breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -139,13 +139,20 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.25 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.26 — stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
 input double InpXAU_ImpulseATRBlock        = 1.65;  // Last closed M5 candle range above this ATR can block chase entries
 input double InpXAU_ImpulseATRDowngrade    = 1.20;  // Moderate impulse stretches reduce grade/lot
 input double InpXAU_MinPullbackATR         = 0.25;  // Valid continuation should show at least this pullback/retest
+input int    InpXAU_BadLocationLookbackBars = 14;   // Recent structure window used to detect selling bottoms / buying tops
+input double InpXAU_ExtremeLocationPct      = 24.0; // SELL blocked in bottom X%; BUY blocked in top X% unless pullback rejection is clean
+input double InpXAU_MinLowHighClearanceATR  = 0.45; // Minimum distance away from recent low/high before continuation entry
+input double InpXAU_MinPullbackValueATR     = 0.65; // Trend continuation needs this much pullback away from the extreme
+input double InpXAU_ValueAreaEMABufferATR   = 0.85; // Pullback is higher quality if back near EMA50 value area
+input double InpXAU_ValueAreaVWAPBufferATR  = 1.15; // Pullback is higher quality if back near session VWAP value area
+input bool   InpXAU_RequirePullbackValueForTrend = true; // Trend entries should wait for value, not chase lows/highs
 input double InpXAU_MaxThreeBarDriveATR    = 2.30;  // 3-bar one-way drive above this means wait for retrace
 input int    InpXAU_ExtensionLookbackBars  = 9;     // Larger one-way drive window used to block late breakout re-entry
 input double InpXAU_MaxExtensionDriveATR   = 3.40;  // If price already moved this far, require a reset/pullback first
@@ -153,6 +160,7 @@ input double InpXAU_MinExtensionResetATR   = 0.75;  // Minimum pullback from fre
 input double InpXAU_FairTimingLotMulti     = 0.65;  // If timing is fair but not clean, reduce risk
 input bool   InpXAU_BlockLateA             = true;  // A/A+ late chase becomes BLOCK, not just smaller
 input bool   InpXAU_LogTimingGuard         = true;  // Print timing audit: grade, EMA/VWAP distance, impulse, pullback quality
+input bool   InpCloudSafeDisablePartials   = true;  // Disable partial-loss/profit reductions so master/cloud lifecycle stays synchronized
 
 input bool   InpPreservationMode = true;  // Master toggle: disables premature profit-side exits
 input double InpRiskPercent    = 0.4;      // Base risk per trade (%) — IGNORED if InpAccountMode != BALANCED uses preset
@@ -1456,7 +1464,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.25 (FAST VOLKILL FIX) READY ===");
+   Print("=== XAUAI SNIPER v5.8.26 (PULLBACK LOCATION FIX) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1562,10 +1570,11 @@ int OnInit()
          " | Min conf=", InpConvRunMinConf, "%",
          " | Min profit=", DoubleToString(InpConvRunMinR,2), "R",
          " | Trail=", DoubleToString(InpConvRunnerMulti,2), "xATR (monster)");
-   Print("PARTIAL-TP v4.5.4: ", InpPartialTP?"ON":"OFF",
+   Print("PARTIAL-TP v4.5.4: ", (InpPartialTP && !InpCloudSafeDisablePartials)?"ON":"OFF",
          " | Fires at +", DoubleToString(InpPartialTPAtR,2), "R",
          " | Close ", DoubleToString(InpPartialPct*100, 0), "% of position",
-         " | Skip on ≥", InpConvRunMinConf, "% conf=", InpPartialSkipHighConf?"Y":"N");
+         " | Skip on ≥", InpConvRunMinConf, "% conf=", InpPartialSkipHighConf?"Y":"N",
+         " | CloudSafeNoPartials=", InpCloudSafeDisablePartials?"Y":"N");
    return INIT_SUCCEEDED;
 }
 
@@ -3417,7 +3426,7 @@ void EPF_MarkPartialClosed(ulong ticket)
 // phases.
 void EPF_ManagePartials()
 {
-   if(!InpEPF_Enable || !InpEPF_PartialClose) return;
+   if(!InpEPF_Enable || !InpEPF_PartialClose || InpCloudSafeDisablePartials) return;
    if(epf_tier < 1) return;
    double atr = ArraySize(bufATR) > 1 ? bufATR[1] : 0;
    if(atr <= 0) return;
@@ -4926,6 +4935,12 @@ void LogExit(ulong ticket, string dir, double openPx, double closePx,
 
 bool CloseBasketPartial(double closePct, string reason)
 {
+   if(InpCloudSafeDisablePartials)
+   {
+      PrintFormat("BASKET PARTIAL SKIPPED: cloud-safe lifecycle enabled; no partial basket close (%s)", reason);
+      return false;
+   }
+
    bool anyClosed = false;
    double pct = MathMax(1.0, MathMin(closePct, 90.0));
 
@@ -5179,7 +5194,7 @@ bool ManageBasket()
    // floor hit can still close all if the remaining runner truly fails.
    if(g_basketArmed && g_basketFloorUSD > 0 && totalPnL < g_basketFloorUSD)
    {
-      if(InpBasketSoftLockFirst && !g_basketSoftLockTaken && totalPnL > 0)
+      if(InpBasketSoftLockFirst && !InpCloudSafeDisablePartials && !g_basketSoftLockTaken && totalPnL > 0)
       {
          PrintFormat(">>> BASKET SOFT-LOCK │ PnL=$%.2f < Floor=$%.2f │ Peak=$%.2f │ banking %.0f%%, runner stays alive",
                      totalPnL, g_basketFloorUSD, g_basketPeakUSD, InpBasketSoftLockPct);
@@ -5485,7 +5500,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    }
 
    // ============ PHASE 3: PARTIAL @ +3R (close 30% once) ============
-   if(rMult >= InpCleanPartialR && !CleanPartialAlreadyTaken(ticket) &&
+   if(rMult >= InpCleanPartialR && !InpCloudSafeDisablePartials && !CleanPartialAlreadyTaken(ticket) &&
       InpCleanPartialPct > 0 && lotsOpen > 0)
    {
       double step = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
@@ -5645,7 +5660,7 @@ void ManagePositions()
          }
       }
 
-      if(InpExpectancyLossArmor && InpExpectancySoftDeRisk && rDollars > 0 &&
+      if(InpExpectancyLossArmor && InpExpectancySoftDeRisk && !InpCloudSafeDisablePartials && rDollars > 0 &&
          ageSec >= InpExpectancySoftMinAgeSec && !CleanLossReduceAlreadyTaken(ticket) &&
          profit < 0)
       {
@@ -6204,7 +6219,7 @@ void ManagePositions()
       // let the remainder ride the trailing SL. Fires ONCE per ticket.
       // Skipped on high-conviction trades (>= InpConvRunMinConf) — those are meant
       // to fully run via the conviction runner wide trail.
-      if(InpPartialTP && !PartialAlreadyTaken(ticket))
+      if(InpPartialTP && !InpCloudSafeDisablePartials && !PartialAlreadyTaken(ticket))
       {
          bool skipHighConf = InpPartialSkipHighConf &&
                              currentTradeConfidence >= InpConvRunMinConf;
@@ -7766,6 +7781,22 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       lo6 = MathMin(lo6, iLow(Symbol(), PERIOD_M5, i));
    }
 
+   int locLookback = (int)MathMax(6.0, MathMin((double)InpXAU_BadLocationLookbackBars, 30.0));
+   double locHigh = high1, locLow = low1;
+   for(int i = 1; i <= locLookback; i++)
+   {
+      double h = iHigh(Symbol(), PERIOD_M5, i);
+      double l = iLow(Symbol(), PERIOD_M5, i);
+      if(h > 0.0) locHigh = MathMax(locHigh, h);
+      if(l > 0.0) locLow = MathMin(locLow, l);
+   }
+   double locRange = MathMax(locHigh - locLow, atr * 0.10);
+   double locPct = (locRange > 0.0) ? (close1 - locLow) / locRange : 0.50;
+   locPct = MathMax(0.0, MathMin(1.0, locPct));
+   double lowClearanceATR = MathMax((close1 - locLow) / atr, 0.0);
+   double highClearanceATR = MathMax((locHigh - close1) / atr, 0.0);
+   double extremePct = MathMax(5.0, MathMin(InpXAU_ExtremeLocationPct, 45.0)) / 100.0;
+
    bool trendSetup = (StringFind(setupName, "TREND_PULLBACK") >= 0 ||
                       StringFind(setupName, "BREAKOUT") >= 0 ||
                       StringFind(setupName, "SQUEEZE") >= 0 ||
@@ -7776,52 +7807,85 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    bool hasRejection = false;
    bool chasingAway = false;
    bool wrongCandle = false;
+   bool betterValue = false;
+   bool badLocation = false;
    double pullbackATR = 0.0;
 
    if(signal == -1)
    {
-      pullbackATR = MathMax((hi6 - close1) / atr, 0.0);
+      // SELL continuation needs price to have pulled up away from recent lows.
+      // The old logic used distance down from highs, which rewarded selling after
+      // the dump. This uses low clearance/value instead.
+      pullbackATR = lowClearanceATR;
+      bool nearRecentLow = (locPct <= extremePct || lowClearanceATR < InpXAU_MinLowHighClearanceATR);
+      betterValue = (pullbackATR >= InpXAU_MinPullbackValueATR &&
+                     (close1 >= ema50 - atr * InpXAU_ValueAreaEMABufferATR ||
+                      (vwap > 0.0 && close1 >= vwap - atr * InpXAU_ValueAreaVWAPBufferATR) ||
+                      locPct >= 0.35));
       hasPullback = (pullbackATR >= InpXAU_MinPullbackATR ||
                      high1 >= ema50 - atr * 0.25 ||
                      close2 >= ema50 - atr * 0.35);
+      if(trendSetup && InpXAU_RequirePullbackValueForTrend)
+         hasPullback = (hasPullback && betterValue);
       hasRejection = ((upperWick >= MathMax(body * 0.45, atr * 0.08) && close1 <= open1) ||
                       (close1 < open1 && close1 < close2));
       chasingAway = (close1 < ema50 - atr * InpXAU_MaxEMADistanceATR);
       wrongCandle = (close1 > open1 && lowerWick < body * 0.35);
+      badLocation = (nearRecentLow || (chasingAway && !betterValue));
    }
    else
    {
-      pullbackATR = MathMax((close1 - lo6) / atr, 0.0);
+      // BUY continuation needs price to have pulled down away from recent highs.
+      pullbackATR = highClearanceATR;
+      bool nearRecentHigh = (locPct >= (1.0 - extremePct) || highClearanceATR < InpXAU_MinLowHighClearanceATR);
+      betterValue = (pullbackATR >= InpXAU_MinPullbackValueATR &&
+                     (close1 <= ema50 + atr * InpXAU_ValueAreaEMABufferATR ||
+                      (vwap > 0.0 && close1 <= vwap + atr * InpXAU_ValueAreaVWAPBufferATR) ||
+                      locPct <= 0.65));
       hasPullback = (pullbackATR >= InpXAU_MinPullbackATR ||
                      low1 <= ema50 + atr * 0.25 ||
                      close2 <= ema50 + atr * 0.35);
+      if(trendSetup && InpXAU_RequirePullbackValueForTrend)
+         hasPullback = (hasPullback && betterValue);
       hasRejection = ((lowerWick >= MathMax(body * 0.45, atr * 0.08) && close1 >= open1) ||
                       (close1 > open1 && close1 > close2));
       chasingAway = (close1 > ema50 + atr * InpXAU_MaxEMADistanceATR);
       wrongCandle = (close1 < open1 && upperWick < body * 0.35);
+      badLocation = (nearRecentHigh || (chasingAway && !betterValue));
    }
 
    bool impulseBlock = (impulseATR >= InpXAU_ImpulseATRBlock && bodyATR >= 0.65);
    bool impulseWarn  = (impulseATR >= InpXAU_ImpulseATRDowngrade || atrExpansion >= 1.45);
    bool vwapFar = (vwap > 0.0 && vwapDistATR > InpXAU_MaxVWAPDistanceATR);
    bool driveFar = (threeBarDriveATR > InpXAU_MaxThreeBarDriveATR);
-   bool cleanContinuation = (hasPullback && hasRejection && !wrongCandle);
+   bool cleanContinuation = (hasPullback && hasRejection && !wrongCandle && !badLocation);
+   bool locationBlock = (trendSetup && badLocation && !cleanContinuation);
    bool extensionNoReset = (trendSetup &&
                             extensionDriveATR >= InpXAU_MaxExtensionDriveATR &&
                             extensionResetATR < InpXAU_MinExtensionResetATR);
 
-   string timingState = cleanContinuation ? "clean-pullback" : "weak-timing";
+   string timingState = locationBlock ? "bad-location" : (cleanContinuation ? "clean-pullback" : "weak-timing");
    if(extensionNoReset) timingState = "extended-no-reset";
    bool severeLate = trendSetup && chasingAway && (impulseBlock || driveFar || vwapFar) && !cleanContinuation;
    bool moderateLate = trendSetup && (chasingAway || impulseWarn || driveFar || vwapFar || !hasPullback || wrongCandle) && !cleanContinuation;
 
-   reason = StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullback=%.2fATR rejection=%s wrongCandle=%s",
+   reason = StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullbackFromExtreme=%.2fATR loc=%.0f%% lowClr=%.2fATR highClr=%.2fATR value=%s badLoc=%s rejection=%s wrongCandle=%s",
                          setupName, grade, setupScore, combinedScore, timingState,
                          emaDistATR, vwapDistATR, impulseATR, bodyATR, atrExpansion,
                          threeBarDriveATR, InpXAU_ExtensionLookbackBars, extensionDriveATR, extensionResetATR,
-                         pullbackATR,
+                         pullbackATR, locPct * 100.0, lowClearanceATR, highClearanceATR,
+                         betterValue ? "yes" : "no",
+                         badLocation ? "yes" : "no",
                          hasRejection ? "yes" : "no",
                          wrongCandle ? "yes" : "no");
+
+   if(locationBlock)
+   {
+      reason = StringFormat("BAD-LOCATION BLOCK: %s is too close to the recent %s after movement; waiting for pullback into value area + rejection. ",
+                            signal == -1 ? "SELL" : "BUY",
+                            signal == -1 ? "low" : "high") + reason;
+      return false;
+   }
 
    if(extensionNoReset)
    {
@@ -8663,7 +8727,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.25 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.26 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
