@@ -4,20 +4,22 @@ import { TrendUp, TrendDown, Crosshair, Lightning } from "@phosphor-icons/react"
 
 export default function PerformanceSection({ data }) {
   if (!data) return null;
+  const hasTrades = (data.total_trades || 0) > 0;
+  const money = (value = 0) => `${value >= 0 ? "+" : "-"}$${Math.abs(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
   return (
     <div className="border-t border-gray-100" data-testid="performance-section">
       <div className="max-w-7xl mx-auto px-6 md:px-12 py-24">
         <div className="mb-12">
-          <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-gray-400 bg-gray-100 border border-gray-200 px-3 py-1.5 rounded-full">BACKTEST RESULTS</span>
+          <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-gray-400 bg-gray-100 border border-gray-200 px-3 py-1.5 rounded-full">LIVE JOURNAL</span>
           <h2 className="font-heading text-3xl sm:text-4xl font-semibold tracking-tight mt-6 text-[#111]" data-testid="performance-title">Performance Analytics</h2>
-          <p className="text-gray-500 mt-2">Sample backtest metrics from historical XAUUSD data.</p>
+          <p className="text-gray-500 mt-2">{hasTrades ? "Verified metrics from connected bot trade logs." : "No verified bot journal trades logged yet."}</p>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10" data-testid="performance-metrics">
           <MetricCard label="TOTAL TRADES" value={data.total_trades} testId="metric-total-trades" />
-          <MetricCard label="SHARPE RATIO" value={data.sharpe_ratio?.toFixed(2)} testId="metric-sharpe" />
-          <MetricCard label="BEST WEEK" value={`+${data.best_week}%`} positive testId="metric-best-week" />
-          <MetricCard label="WORST WEEK" value={`${data.worst_week}%`} negative testId="metric-worst-week" />
+          <MetricCard label="PROFIT FACTOR" value={data.profit_factor?.toFixed?.(2) ?? data.profit_factor} testId="metric-sharpe" />
+          <MetricCard label="AVG WIN" value={money(data.avg_win)} positive={data.avg_win > 0} testId="metric-best-week" />
+          <MetricCard label="AVG LOSS" value={money(data.avg_loss)} negative={data.avg_loss < 0} testId="metric-worst-week" />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-10">
@@ -38,8 +40,8 @@ export default function PerformanceSection({ data }) {
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={data.weekly_data}>
                 <XAxis dataKey="week" tick={{ fontSize: 10, fontFamily: "JetBrains Mono", fill: "#9CA3AF" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fontFamily: "JetBrains Mono", fill: "#9CA3AF" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
-                <Tooltip contentStyle={{ background: "#fff", border: "1px solid #E5E7EB", borderRadius: 12, fontFamily: "JetBrains Mono", fontSize: 11 }} formatter={(v) => [`${v}%`, "Return"]} />
+                <YAxis tick={{ fontSize: 10, fontFamily: "JetBrains Mono", fill: "#9CA3AF" }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v}`} />
+                <Tooltip contentStyle={{ background: "#fff", border: "1px solid #E5E7EB", borderRadius: 12, fontFamily: "JetBrains Mono", fontSize: 11 }} formatter={(v) => [money(v), "P/L"]} />
                 <Bar dataKey="return" radius={[6,6,0,0]}>
                   {data.weekly_data?.map((e, i) => <Cell key={i} fill={e.return >= 0 ? "#10B981" : "#EF4444"} fillOpacity={0.85} />)}
                 </Bar>
@@ -63,7 +65,7 @@ export default function PerformanceSection({ data }) {
                   <div className="grid grid-cols-3 gap-4">
                     <div><div className="text-[10px] text-gray-400 mb-1 font-mono">Trades</div><div className="font-mono text-lg font-bold text-[#111]">{s.trades}</div></div>
                     <div><div className="text-[10px] text-gray-400 mb-1 font-mono">Win Rate</div><div className="font-mono text-lg font-bold text-[#111]">{s.win_rate}%</div></div>
-                    <div><div className="text-[10px] text-gray-400 mb-1 font-mono">Profit</div><div className="font-mono text-lg font-bold text-[#111]">{s.profit_share}%</div></div>
+                    <div><div className="text-[10px] text-gray-400 mb-1 font-mono">Profit</div><div className="font-mono text-lg font-bold text-[#111]">{money(s.profit_share)}</div></div>
                   </div>
                   <div className="mt-4 h-1 bg-gray-100 rounded-full w-full"><div className="h-full bg-[#C5A059] rounded-full" style={{ width: `${s.win_rate}%` }} /></div>
                 </div>
@@ -78,13 +80,13 @@ export default function PerformanceSection({ data }) {
             <table className="w-full text-sm">
               <thead><tr className="border-b border-gray-100">
                 <th className="text-left px-6 py-3 text-[10px] font-mono font-bold tracking-[0.12em] text-gray-400">MONTH</th>
-                <th className="text-right px-6 py-3 text-[10px] font-mono font-bold tracking-[0.12em] text-gray-400">RETURN</th>
+                <th className="text-right px-6 py-3 text-[10px] font-mono font-bold tracking-[0.12em] text-gray-400">P/L</th>
                 <th className="text-right px-6 py-3 text-[10px] font-mono font-bold tracking-[0.12em] text-gray-400">TRADES</th>
               </tr></thead>
               <tbody>{data.monthly_returns?.map((m) => (
                 <tr key={m.month} className="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
                   <td className="px-6 py-3 font-medium text-[#111]">{m.month}</td>
-                  <td className={`px-6 py-3 text-right font-mono font-bold ${m.return >= 0 ? "text-emerald-600" : "text-red-500"}`}>{m.return >= 0 ? "+" : ""}{m.return}%</td>
+                  <td className={`px-6 py-3 text-right font-mono font-bold ${m.return >= 0 ? "text-emerald-600" : "text-red-500"}`}>{money(m.return)}</td>
                   <td className="px-6 py-3 text-right font-mono text-gray-400">{m.trades}</td>
                 </tr>
               ))}</tbody>

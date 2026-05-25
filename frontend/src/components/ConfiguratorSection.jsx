@@ -225,9 +225,8 @@ export default function ConfiguratorSection({ api }) {
               </h4>
             </div>
             <div className="p-5 space-y-5">
-              <SliderField label="Min R:R Ratio" value={config.min_rr_ratio} min={1} max={5} step={0.1} suffix=":1" onChange={(v) => updateField("min_rr_ratio", v)} testId="slider-min-rr" />
-              <SliderField label="Partial Close" value={config.partial_close_percent} min={30} max={80} step={5} suffix="%" onChange={(v) => updateField("partial_close_percent", v)} testId="slider-partial-close" />
-              <SliderField label="Trailing ATR Multi" value={config.trailing_atr_multi} min={0.5} max={3} step={0.1} suffix="x" onChange={(v) => updateField("trailing_atr_multi", v)} testId="slider-trailing" />
+	              <SliderField label="Min R:R Ratio" value={config.min_rr_ratio} min={1} max={5} step={0.1} suffix=":1" onChange={(v) => updateField("min_rr_ratio", v)} testId="slider-min-rr" />
+	              <SliderField label="Trailing ATR Multi" value={config.trailing_atr_multi} min={0.5} max={3} step={0.1} suffix="x" onChange={(v) => updateField("trailing_atr_multi", v)} testId="slider-trailing" />
               <SliderField label="SL ATR Multiplier" value={config.sl_atr_multiplier} min={1} max={4} step={0.1} suffix="x" onChange={(v) => updateField("sl_atr_multiplier", v)} testId="slider-sl-atr" />
               <ToggleField label="London Session" value={config.trade_london} onChange={(v) => updateField("trade_london", v)} testId="toggle-london" />
               <ToggleField label="New York Session" value={config.trade_new_york} onChange={(v) => updateField("trade_new_york", v)} testId="toggle-newyork" />

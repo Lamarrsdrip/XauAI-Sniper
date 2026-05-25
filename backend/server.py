@@ -396,7 +396,7 @@ async def download_ea():
     return Response(
         content=sanitized,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.26_PULLBACK_LOCATION_FIX.mq5"'},
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.31_ENTRY_QUALITY_GUARD.mq5"'},
     )
 
 # Admin-only: serves the FULL master EA with your agent token + cloud fanout
@@ -407,7 +407,7 @@ async def admin_download_ea_master():
     if not p.exists(): raise HTTPException(status_code=404)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.26_PULLBACK_LOCATION_FIX.mq5",
+        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.31_ENTRY_QUALITY_GUARD.mq5",
         media_type="application/octet-stream",
     )
 
@@ -431,11 +431,149 @@ async def download_package():
 
 @api_router.get("/performance/summary")
 async def get_performance_summary():
-    return {"total_trades":247,"win_rate":68.4,"profit_factor":2.31,"max_drawdown":8.7,"avg_rr_ratio":1.82,"weekly_return_avg":12.6,"sharpe_ratio":1.94,"best_week":34.2,"worst_week":-6.8,"avg_trade_duration":"2h 15m","longest_winning_streak":9,"longest_losing_streak":3,"monthly_returns":[{"month":"Jul 2025","return":42.1,"trades":38},{"month":"Aug 2025","return":28.7,"trades":31},{"month":"Sep 2025","return":-4.2,"trades":22},{"month":"Oct 2025","return":51.3,"trades":41},{"month":"Nov 2025","return":35.8,"trades":36},{"month":"Dec 2025","return":19.4,"trades":29}],"strategy_breakdown":[{"strategy":"Trend","trades":142,"win_rate":72.5,"profit_share":61.3},{"strategy":"Range","trades":58,"win_rate":62.1,"profit_share":18.7},{"strategy":"Breakout","trades":47,"win_rate":66.0,"profit_share":20.0}],"weekly_data":[{"week":"W1","return":8.2,"drawdown":2.1,"trades":7},{"week":"W2","return":15.4,"drawdown":3.5,"trades":9},{"week":"W3","return":-2.1,"drawdown":5.8,"trades":5},{"week":"W4","return":22.7,"drawdown":1.9,"trades":11},{"week":"W5","return":11.3,"drawdown":4.2,"trades":8},{"week":"W6","return":18.9,"drawdown":2.7,"trades":10},{"week":"W7","return":-6.8,"drawdown":8.7,"trades":4},{"week":"W8","return":34.2,"drawdown":1.4,"trades":12}],"equity_curve":[{"day":1,"equity":10000},{"day":5,"equity":10820},{"day":10,"equity":12480},{"day":15,"equity":12160},{"day":20,"equity":14890},{"day":25,"equity":16200},{"day":30,"equity":18930},{"day":35,"equity":17640},{"day":40,"equity":21580},{"day":45,"equity":24100},{"day":50,"equity":26730},{"day":55,"equity":28410},{"day":60,"equity":31200}],"ai_features":{"market_classification_accuracy":91.4,"avg_confidence_on_wins":88,"avg_confidence_on_losses":54,"pattern_memory_size":3247,"adaptation_cycles":812,"learning_rate_current":0.89,"win_rate_after_learning":84.7,"loss_avoidance_rate":78.3}}
+    try:
+        trades = await db.trade_journal.find({}, {"_id": 0}).sort("created_ts", 1).to_list(length=5000)
+    except Exception as e:
+        logger.error(f"Performance summary error: {e}")
+        trades = []
+
+    closed = [t for t in trades if str(t.get("result", "")).upper() in {"WIN", "LOSS", "BE"}]
+    total = len(closed)
+    wins = sum(1 for t in closed if str(t.get("result", "")).upper() == "WIN")
+    losses = sum(1 for t in closed if str(t.get("result", "")).upper() == "LOSS")
+    profits = [float(t.get("profit") or 0) for t in closed]
+    gross_profit = sum(p for p in profits if p > 0)
+    gross_loss = abs(sum(p for p in profits if p < 0))
+    net_profit = sum(profits)
+    winning_profits = [p for p in profits if p > 0]
+    losing_profits = [p for p in profits if p < 0]
+    avg_win = sum(winning_profits) / len(winning_profits) if winning_profits else 0
+    avg_loss = sum(losing_profits) / len(losing_profits) if losing_profits else 0
+    largest_win = max(winning_profits) if winning_profits else 0
+    largest_loss = min(losing_profits) if losing_profits else 0
+
+    summary = {
+        "source": "live_journal",
+        "sample": False,
+        "total_trades": total,
+        "win_rate": round(wins / total * 100, 1) if total else 0,
+        "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else (round(gross_profit, 2) if gross_profit > 0 else 0),
+        "net_profit": round(net_profit, 2),
+        "gross_profit": round(gross_profit, 2),
+        "gross_loss": round(gross_loss, 2),
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "largest_win": round(largest_win, 2),
+        "largest_loss": round(largest_loss, 2),
+        "loss_to_avg_win": round(abs(avg_loss) / avg_win, 2) if avg_win > 0 and avg_loss < 0 else 0,
+        "max_drawdown": 0,
+        "avg_rr_ratio": 0,
+        "weekly_return_avg": 0,
+        "sharpe_ratio": 0,
+        "best_week": 0,
+        "worst_week": 0,
+        "avg_trade_duration": "n/a",
+        "longest_winning_streak": 0,
+        "longest_losing_streak": 0,
+        "monthly_returns": [],
+        "strategy_breakdown": [],
+        "weekly_data": [],
+        "equity_curve": [],
+        "ai_features": {
+            "market_classification_accuracy": 0,
+            "avg_confidence_on_wins": 0,
+            "avg_confidence_on_losses": 0,
+            "pattern_memory_size": total,
+            "adaptation_cycles": total,
+            "learning_rate_current": 0,
+            "win_rate_after_learning": round(wins / total * 100, 1) if total else 0,
+            "loss_avoidance_rate": round((total - losses) / total * 100, 1) if total else 0,
+        },
+    }
+    if not total:
+        return summary
+
+    running_equity = 0.0
+    peak_equity = 0.0
+    max_dd = 0.0
+    week_stats = {}
+    month_stats = {}
+    setup_stats = {}
+    current_win_streak = current_loss_streak = 0
+
+    for idx, trade in enumerate(closed, start=1):
+        profit = float(trade.get("profit") or 0)
+        running_equity += profit
+        peak_equity = max(peak_equity, running_equity)
+        max_dd = max(max_dd, peak_equity - running_equity)
+        balance = float(trade.get("balance") or 0)
+        summary["equity_curve"].append({"day": idx, "equity": round(balance if balance > 0 else running_equity, 2)})
+
+        raw_dt = trade.get("created_at")
+        try:
+            dt = datetime.fromisoformat(str(raw_dt).replace("Z", "+00:00")) if raw_dt else datetime.fromtimestamp(float(trade.get("created_ts") or 0), timezone.utc)
+        except Exception:
+            dt = datetime.now(timezone.utc)
+        week_key = f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
+        month_key = dt.strftime("%b %Y")
+
+        if week_key not in week_stats:
+            week_stats[week_key] = {"profit": 0.0, "trades": 0, "peak": 0.0, "equity": 0.0, "drawdown": 0.0}
+        week_stats[week_key]["profit"] += profit
+        week_stats[week_key]["trades"] += 1
+        week_stats[week_key]["equity"] += profit
+        week_stats[week_key]["peak"] = max(week_stats[week_key]["peak"], week_stats[week_key]["equity"])
+        week_stats[week_key]["drawdown"] = max(week_stats[week_key]["drawdown"], week_stats[week_key]["peak"] - week_stats[week_key]["equity"])
+
+        if month_key not in month_stats:
+            month_stats[month_key] = {"profit": 0.0, "trades": 0}
+        month_stats[month_key]["profit"] += profit
+        month_stats[month_key]["trades"] += 1
+
+        setup = str(trade.get("setup") or trade.get("signature") or "Unknown").split("|")[0] or "Unknown"
+        if setup not in setup_stats:
+            setup_stats[setup] = {"trades": 0, "wins": 0, "profit": 0.0}
+        setup_stats[setup]["trades"] += 1
+        setup_stats[setup]["profit"] += profit
+
+        result = str(trade.get("result", "")).upper()
+        if result == "WIN":
+            setup_stats[setup]["wins"] += 1
+            current_win_streak += 1
+            current_loss_streak = 0
+        elif result == "LOSS":
+            current_loss_streak += 1
+            current_win_streak = 0
+        summary["longest_winning_streak"] = max(summary["longest_winning_streak"], current_win_streak)
+        summary["longest_losing_streak"] = max(summary["longest_losing_streak"], current_loss_streak)
+
+    summary["max_drawdown"] = round(max_dd, 2)
+    weekly_profits = [v["profit"] for v in week_stats.values()]
+    summary["best_week"] = round(max(weekly_profits), 2) if weekly_profits else 0
+    summary["worst_week"] = round(min(weekly_profits), 2) if weekly_profits else 0
+    summary["weekly_return_avg"] = round(sum(weekly_profits) / len(weekly_profits), 2) if weekly_profits else 0
+    summary["weekly_data"] = [
+        {"week": k, "return": round(v["profit"], 2), "drawdown": round(v["drawdown"], 2), "trades": v["trades"]}
+        for k, v in sorted(week_stats.items())[-12:]
+    ]
+    summary["monthly_returns"] = [
+        {"month": k, "return": round(v["profit"], 2), "trades": v["trades"]}
+        for k, v in month_stats.items()
+    ][-12:]
+    summary["strategy_breakdown"] = [
+        {
+            "strategy": k[:24],
+            "trades": v["trades"],
+            "win_rate": round(v["wins"] / v["trades"] * 100, 1) if v["trades"] else 0,
+            "profit_share": round(v["profit"], 2),
+        }
+        for k, v in sorted(setup_stats.items(), key=lambda item: item[1]["profit"], reverse=True)[:3]
+    ]
+    return summary
 
 @api_router.get("/architecture")
 async def get_architecture():
-    return {"modules":[{"name":"Market Analysis Engine","description":"Multi-layered analysis using EMA, RSI, ATR, BB across M5, H1, H4","components":["Trend Detection (EMA 50/200)","Market Structure (HH/LL)","Volatility Analysis (ATR)","Multi-Timeframe Confirmation"]},{"name":"AI Adaptive Decision Engine","description":"ML classifier targeting 80-90% win rate with self-improving confidence","components":["Market Classifier","Confidence Scoring (0-100)","Deep Pattern Memory (3000+)","Self-Improving Engine"]},{"name":"Strategy Engine","description":"Three strategies with dynamic switching","components":["Trend Mode","Range Mode","Breakout Mode","Pattern Recognition"]},{"name":"Risk Management","description":"Institutional controls with 20-50% weekly targets","components":["Dynamic Position Sizing","ATR-based SL/TP","Daily/Weekly Limits","Equity Protection"]},{"name":"Execution Engine","description":"Precision execution with PIN validation","components":["Market/Limit Orders","Spread Filter","Partial Close","Trailing Stop"]},{"name":"Performance Tracking","description":"Logging + ML feedback loop","components":["Trade Journal","Win Rate Tracking","Drawdown Monitor","Pattern Learning"]}],"filters":[{"name":"Session Filter","description":"London & NY only"},{"name":"Spread Filter","description":"Avoids high spread"},{"name":"News Filter","description":"Avoids events"},{"name":"Volatility Filter","description":"Adapts to volatility"}]}
+    return {"modules":[{"name":"Market Analysis Engine","description":"Multi-layered analysis using EMA, RSI, ATR, BB across M5, H1, H4","components":["Trend Detection (EMA 50/200)","Market Structure (HH/LL)","Volatility Analysis (ATR)","Multi-Timeframe Confirmation"]},{"name":"AI Adaptive Decision Engine","description":"ML classifier targeting high-probability setups with self-improving confidence","components":["Market Classifier","Confidence Scoring (0-100)","Deep Pattern Memory","Self-Improving Engine"]},{"name":"Strategy Engine","description":"Three strategies with dynamic switching","components":["Trend Mode","Range Mode","Breakout Mode","Pattern Recognition"]},{"name":"Risk Management","description":"Institutional controls with account-aware exposure limits","components":["Dynamic Position Sizing","ATR-based SL/TP","Daily/Weekly Limits","Equity Protection"]},{"name":"Execution Engine","description":"Precision execution with PIN validation and cloud-safe synchronized exits","components":["Market/Limit Orders","Spread Filter","Structure Exit Logic","Trailing Stop"]},{"name":"Performance Tracking","description":"Logging + ML feedback loop","components":["Trade Journal","Win Rate Tracking","Drawdown Monitor","Pattern Learning"]}],"filters":[{"name":"Session Filter","description":"London & NY only"},{"name":"Spread Filter","description":"Avoids high spread"},{"name":"News Filter","description":"Avoids events"},{"name":"Volatility Filter","description":"Adapts to volatility"}]}
 
 @api_router.get("/docs/installation")
 async def get_installation_guide():
@@ -443,7 +581,7 @@ async def get_installation_guide():
 
 @api_router.get("/docs/how-it-works")
 async def get_how_it_works():
-    return {"sections":[{"title":"How XauAI Sniper Works","subtitle":"Your intelligent XAUUSD trading assistant","steps":[{"id":1,"title":"Market Scanning","description":"Scans XAUUSD across M5, H1, H4 every 5 minutes using EMA, RSI, ATR, Bollinger Bands.","detail":"Multi-timeframe filters false signals."},{"id":2,"title":"AI Classification","description":"Classifies market as TRENDING, RANGING, or BREAKOUT using weighted scoring.","detail":"Different strategy for each condition."},{"id":3,"title":"Confidence Scoring","description":"Scores 0-100 using global ML from all users. Only takes trades above 75+ confidence.","detail":"Sniper approach = fewer, higher-quality trades."},{"id":4,"title":"Smart Execution","description":"ATR-based stop loss, 1.5:1 R:R take profit, partial close at first target, trailing stop.","detail":"Locks profit early, lets winners run."},{"id":5,"title":"Risk Protection","description":"Per-trade risk limit, daily loss cap, weekly drawdown stop, cooldown after losses.","detail":"3 losses = pause. 3% daily = stops. Never blows account."},{"id":6,"title":"Global Learning","description":"Every trade from every user feeds the global AI brain. The more users trade, the smarter ALL bots get.","detail":"Cloud ML with 90%+ confidence target."}]}],"faq":[{"q":"Do I need to keep my computer on?","a":"Yes. Use a VPS ($5-10/mo) for 24/7 trading."},{"q":"What account size?","a":"Min $500, recommended $1,000+. Bot auto-calculates lot sizes."},{"q":"Which broker?","a":"We recommend Trade.com (75% deposit bonus). Any MT5 broker with XAUUSD works."},{"q":"Can I close trades manually?","a":"Yes, anytime. The bot won't interfere."},{"q":"What if I lose internet?","a":"Your SL/TP protect you. Bot resumes when reconnected."}]}
+    return {"sections":[{"title":"How XauAI Sniper Works","subtitle":"Your intelligent XAUUSD trading assistant","steps":[{"id":1,"title":"Market Scanning","description":"Scans XAUUSD across M5, H1, H4 every 5 minutes using EMA, RSI, ATR, Bollinger Bands.","detail":"Multi-timeframe filters false signals."},{"id":2,"title":"AI Classification","description":"Classifies market as TRENDING, RANGING, or BREAKOUT using weighted scoring.","detail":"Different strategy for each condition."},{"id":3,"title":"Confidence Scoring","description":"Scores each setup using market structure, momentum, volatility, session quality, and live journal memory.","detail":"Sniper approach = fewer, higher-quality trades."},{"id":4,"title":"Smart Execution","description":"ATR-based stop loss, wider structure-runner targets, synchronized SL/TP, and trailing logic.","detail":"Protects the account while giving valid gold moves room to breathe."},{"id":5,"title":"Risk Protection","description":"Per-trade risk limits, account exposure caps, drawdown checks, and cooldown after weak conditions.","detail":"Controls damage without blocking every pullback."},{"id":6,"title":"Global Learning","description":"Verified trade logs feed the global AI memory so repeated weak patterns can be avoided over time.","detail":"Cloud ML improves only from real outcomes, not fake sample stats."}]}],"faq":[{"q":"Do I need to keep my computer on?","a":"Yes. Use a VPS ($5-10/mo) for 24/7 trading."},{"q":"What account size?","a":"Min $500, recommended $1,000+. Bot auto-calculates lot sizes."},{"q":"Which broker?","a":"Any reliable MT5 broker with a low-spread XAUUSD symbol can work."},{"q":"Can I close trades manually?","a":"Yes, anytime. The bot won't interfere."},{"q":"What if I lose internet?","a":"Your SL/TP protect you. Bot resumes when reconnected."}]}
 
 @api_router.get("/docs/setup-guide")
 async def get_setup_guide():
@@ -1147,12 +1285,13 @@ async def admin_monthly_report():
 @app.on_event("startup")
 async def startup():
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@aisniper.com").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@2026!")
+    admin_password_env = os.environ.get("ADMIN_PASSWORD")
+    admin_password = admin_password_env or "Admin@2026!"
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({"email": admin_email, "password_hash": hash_password(admin_password), "name": "Admin", "role": "admin", "created_at": datetime.now(timezone.utc).isoformat()})
         logger.info(f"Admin seeded: {admin_email}")
-    elif not verify_password(admin_password, existing["password_hash"]):
+    elif admin_password_env and not verify_password(admin_password, existing["password_hash"]):
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
         logger.info("Admin password updated")
     await db.users.create_index("email", unique=True)
@@ -1181,10 +1320,10 @@ async def startup():
             logger.info(f"[backfill] marked {bf} legacy cloud_signals as closed from shadow trades")
     except Exception as e:
         logger.warning(f"[backfill] cloud_signals.closed_at backfill failed: {e}")
-    # Write test credentials
-    creds_path = Path("/app/memory/test_credentials.md")
-    creds_path.parent.mkdir(exist_ok=True)
-    creds_path.write_text(f"# Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n## Endpoints\n- Login: POST /api/auth/login\n- Admin Portal: /admin\n")
+    if os.environ.get("WRITE_TEST_CREDENTIALS") == "1":
+        creds_path = Path("/app/memory/test_credentials.md")
+        creds_path.parent.mkdir(exist_ok=True)
+        creds_path.write_text(f"# Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n## Endpoints\n- Login: POST /api/auth/login\n- Admin Portal: /admin\n")
 
     # Background: auto-mark workers offline if heartbeat goes stale.
     # Without this the dashboard lies that cloud is "online" when the VPS process died.
