@@ -22,6 +22,13 @@ input group "=== LICENSE ==="
 input string InpLicensePIN     = "";
 
 input group "=== RISK (Gate 4) ==="
+// Decision ownership map:
+// ENTRY: setup scorer + XAU timing guard + context gate.
+// RISK: OpenTrade lot sizing + existing aggregate exposure cap.
+// PYRAMID: trend-continuation scale-in only by default; no rescue averaging.
+// EXIT: Clean Exits owns per-trade management when enabled; Basket Protect owns aggregate profitable baskets.
+// AI: advisory by default; logs opinions but does not override deterministic trade/risk authority.
+// CLOUD: mirrors accepted master actions; cloud failures must not change local trade decisions.
 input group "=== PRESERVATION MODE (v4.7.2 — let winners run, don't trade like scalper) ==="
 input group "=== ACCOUNT MODE (v4.8.2 — one-input preset for risk profile) ==="
 enum ENUM_ACCT_MODE { ACCT_BALANCED, ACCT_CONSERVATIVE, ACCT_AGGRESSIVE };
@@ -247,9 +254,12 @@ input double InpTPMultiplier   = 4.0;      // v4.9.5 — wider TP (was 2.0) so r
 
 input group "=== SMART FEATURES ==="
 input bool   InpUseAI          = true;     // Use Claude + GPT-5.2
+input bool   InpAIAdvisoryOnly = true;     // AI logs context only; deterministic rules own entry/exit/risk decisions
 input bool   InpUseNewsFilter  = true;     // Hard-block ±10min around news
 input bool   InpLearnPatterns  = true;     // ML learning loop
 input int    InpMaxPatterns    = 500;      // Pattern memory size
+input int    InpMLMinTrustedSamples = 20;  // Local ML cannot veto/boost until this many matching samples exist
+input int    InpHiveMinTrustedSamples = 30;// Hive cannot veto/boost until backend reports this many matching samples
 input string InpServerURL      = "https://xauaisniper.com";
 input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
 
@@ -303,7 +313,7 @@ input int    InpAntiBiasWindowMin = 180;   // Only use losses inside this many m
 input double InpAntiBiasMinScore = 3.6;    // Minimum combined score before considering correction
 
 input group "=== CONVICTION-WEIGHTED SIZING (v4.5.0 — use Claude/GPT confidence) ==="
-input bool   InpConvictionSizing = true;   // Scale lot size by AI confidence
+input bool   InpConvictionSizing = false;  // Advisory default: do not scale/veto lots from AI confidence alone
 input int    InpMinAIConfidence  = 60;     // Below this, SKIP entirely (AI is too uncertain)
 input int    InpNormalAIConfidence = 75;   // At/above this, use normal 1.0x size
 input int    InpHighAIConfidence   = 90;   // At/above this, use 1.3x boost size
@@ -477,7 +487,7 @@ input int    InpNoPartialSmartLossMinSec  = 1500;  // Let normal XAU pullbacks b
 input int    InpNoPartialSmartMaxMomentum = 1;     // Momentum must be this weak or worse for early no-partial close
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
-input bool   InpAIExitOverride   = true;   // Ask Claude before any rule-based close (HOLD/CLOSE/LOCK $X)
+input bool   InpAIExitOverride   = false;  // Advisory default: AI cannot veto/force deterministic rule-based closes
 input int    InpAIExitMinSec     = 60;     // Min seconds between AI veto calls per position (cost control)
 input double InpAIExitMinProfit  = 30.0;   // Only call AI veto when profit/peak ≥ this $ (skip cheap closes)
 
@@ -578,9 +588,9 @@ input double InpPyramidSessionMin = 0.65;      // Minimum session quality for py
 input double InpPyramidVolMinExpansion = 0.70; // Avoid pyramids when ATR is too dead
 input double InpPyramidVolMaxExpansion = 2.20; // Avoid pyramids during unstable volatility spikes
 input int    InpPyramidAllowEPFUpToTier = 2;   // EPF T1/T2 may allow protected elite adds; T3+ blocks
-input bool   InpPyramidEliteRescueNoTurn = true; // Elite rescue can add before a turn candle if fast confirmation is strong
+input bool   InpPyramidEliteRescueNoTurn = false; // No pre-turn rescue by default; avoid adding before price proves the turn
 input double InpPyramidRescueConfirmMultiMin = 0.70; // Min adaptive confirm multiplier for rescue adds
-input bool   InpPyramidSoftNeutralConfirm = true;    // Allow reduced rescue adds when fast TFs are neutral, not opposite
+input bool   InpPyramidSoftNeutralConfirm = false;   // Neutral fast TFs are not enough reason to rescue a losing add
 input double InpPyramidSoftConfirmMinScore = 3.60;   // B-quality rescue can retest when fast TFs are neutral
 input double InpPyramidSoftConfirmLotMulti = 0.70;   // H1 supports but fast TFs neutral: reduced add size
 input double InpPyramidNeutralConfirmLotMulti = 0.55;// Neutral-only rescue add size when no fast TF opposes
@@ -815,6 +825,23 @@ int    lastRegime, lastSetupType;
 ENUM_REGIME currentRegime;
 string lastSignalSetup = "";
 string lastSignalSignature = "";
+
+// Tester/audit proof counters. These are intentionally small and local so
+// the EA can prove which setup/exit families helped or hurt without adding
+// another trading authority.
+string g_exitReasonKeys[];
+int    g_exitReasonTrades[];
+int    g_exitReasonWins[];
+double g_exitReasonGrossWin[];
+double g_exitReasonGrossLoss[];
+int    g_aiInfluencedTrades = 0;
+int    g_aiInfluencedWins   = 0;
+double g_aiInfluencedPnl    = 0.0;
+int    g_nonAiTrades        = 0;
+int    g_nonAiWins          = 0;
+double g_nonAiPnl           = 0.0;
+double g_peakEquityAudit    = 0.0;
+double g_maxDrawdownAudit   = 0.0;
 
 //+------------------------------------------------------------------+
 //| SMART STATE — re-entry, drawdown, streak cool-down, DXY cache    |
@@ -1082,6 +1109,7 @@ bool AIBlocksClose(string ruleName, ulong ticket, bool isBuy, double openPx, dou
                     int digits, double rsi, double emaF, double emaS, double atr, int minsOpen, double lots)
 {
    if(!InpAIExitOverride) return false;
+   if(InpAIAdvisoryOnly)  return false;
    if(InpBacktestMode)    return false;
    if(StringLen(InpServerURL) < 10) return false;
    // Cost gate: only spend an AI call if there's meaningful profit at stake
@@ -1593,6 +1621,12 @@ int OnInit()
    ArrayResize(peakTickets, 0); ArrayResize(peakProfits, 0); ArrayResize(partialTakenTickets, 0);
    ArrayResize(aiVetoTickets, 0); ArrayResize(aiVetoLastCall, 0);
    ArrayResize(tpExtendTickets, 0); ArrayResize(tpExtendCount, 0);
+   ArrayResize(g_exitReasonKeys, 0); ArrayResize(g_exitReasonTrades, 0);
+   ArrayResize(g_exitReasonWins, 0); ArrayResize(g_exitReasonGrossWin, 0);
+   ArrayResize(g_exitReasonGrossLoss, 0);
+   g_aiInfluencedTrades = 0; g_aiInfluencedWins = 0; g_aiInfluencedPnl = 0.0;
+   g_nonAiTrades = 0; g_nonAiWins = 0; g_nonAiPnl = 0.0;
+   g_peakEquityAudit = accInfo.Equity(); g_maxDrawdownAudit = 0.0;
    currentTradeThesis = ""; currentTradeInvalidation = ""; currentTradeTarget = "";
    currentTradeBearishCase = ""; currentTradeConfidence = 0;
    lastDashSignal = 0; lastDashScore = 0.0; lastDashGrade = "";
@@ -1726,13 +1760,14 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   PrintBacktestAuditReport();
    IndicatorRelease(hEMAFast); IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI); IndicatorRelease(hATR); IndicatorRelease(hBBUpper);
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v4.9.7 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.31 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -1986,6 +2021,20 @@ int GetHiveVerdict(string signature)
    int res = WebRequest("POST", url, headers, 8000, pd, result, rh);
    if(res != 200) return 0;
    string response = CharArrayToString(result);
+   int total = ExtractJsonInt(response, "total", 0);
+   double wr = ExtractJsonDouble(response, "wr", 0.5);
+   string verdict = ExtractJsonString(response, "verdict");
+
+   if(total < InpHiveMinTrustedSamples)
+   {
+      Print("HIVE IGNORED: sample=", total, " < trusted minimum ",
+            InpHiveMinTrustedSamples, " | wr=", DoubleToString(wr * 100.0, 1),
+            "% | verdict=", verdict);
+      return 0;
+   }
+
+   Print("HIVE TRUSTED: sample=", total, " | wr=", DoubleToString(wr * 100.0, 1),
+         "% | verdict=", verdict);
    if(StringFind(response, "\"BOOST\"") >= 0) return 1;
    if(StringFind(response, "\"VETO\"")  >= 0) return -1;
    return 0;
@@ -3731,6 +3780,7 @@ void EPF_ManagePartials()
 void OnTick()
 {
    if(!licenseValid) { g_lastSkipReason = "LICENSE_INVALID (enter correct PIN in inputs)"; return; }
+   UpdateAuditDrawdown();
 
    // v4.9.6 — DIAGNOSTIC HEARTBEAT (prints every 60s telling user WHY bot is idle)
    if(TimeCurrent() - g_lastHeartbeat >= 60)
@@ -4478,17 +4528,28 @@ void OnTick()
    // ----- LOCAL ML (hierarchical signature match, mirrors hive) -----
    if(InpLearnPatterns && patternCount >= 5)
    {
-      double mlRaw = GetMLScore(signal, signature);
+      int mlSamples = 0;
+      double mlRaw = GetMLScoreWithSamples(signal, signature, mlSamples);
       double mlScore = SmoothedMLScore(mlRaw, signature);   // v5.8.6 — smooth only inside the same setup/direction signature
-      if(mlScore <= 0.30 && patternCount >= 10)
+      bool mlTrusted = (mlSamples >= InpMLMinTrustedSamples);
+      Print("LOCAL ML AUDIT: signature samples=", mlSamples,
+            " trusted=", mlTrusted ? "Y" : "N",
+            " wr=", DoubleToString(mlRaw * 100.0, 0),
+            "% smoothed=", DoubleToString(mlScore * 100.0, 0),
+            "% min=", InpMLMinTrustedSamples);
+      if(mlTrusted && mlScore <= 0.30)
       {
          Print("TRADE BLOCKED BECAUSE: LOCAL ML VETO — WR=", DoubleToString(mlScore * 100, 0),
-               "% (", patternCount, " patterns)");
+               "% (", mlSamples, " matching samples)");
          UpdateDashboard(0, combinedScore, "ML-VETO");
          lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "ML-VETO";
          return;
       }
-      if(mlScore >= 0.60) { Print("LOCAL ML BOOST: WR=", DoubleToString(mlScore * 100, 0), "%"); sizeMulti += 0.15; confidenceBoostPP += 8; }
+      if(mlTrusted && mlScore >= 0.60)
+      {
+         Print("LOCAL ML BOOST: WR=", DoubleToString(mlScore * 100, 0), "% samples=", mlSamples);
+         sizeMulti += 0.15; confidenceBoostPP += 8;
+      }
    }
 
    // ----- GLOBAL HIVE-MIND (7-day, all users, same signature) -----
@@ -4515,7 +4576,14 @@ void OnTick()
          ArraySize(bufStochK) >= 2 ? bufStochK[1] : 50.0,
          iClose(Symbol(), PERIOD_M5, 1) - iClose(Symbol(), PERIOD_M5, 5));
 
-      if(aiResult == 0)
+      if(InpAIAdvisoryOnly)
+      {
+         Print("AI ADVISORY ONLY: result=",
+               aiResult == signal ? "CONFIRM" : aiResult == 0 ? "UNAVAILABLE/NEUTRAL" : "DISAGREE",
+               " confidence=", lastAIConfidence,
+               "%. No entry veto, lot boost, or lot cut applied.");
+      }
+      else if(aiResult == 0)
       { Print("DUAL-AI: SKIP — reducing to B size"); sizeMulti = MathMin(sizeMulti, 0.55); }
       else if(aiResult != signal)
       { Print("DUAL-AI: Disagrees — reducing to B size"); sizeMulti = MathMin(sizeMulti, 0.55); }
@@ -4708,6 +4776,127 @@ double CurrentAggregateRiskToSL(double &openLots)
       risk += (dist / tickSize) * tickValue * v;
    }
    return risk;
+}
+
+string SetupNameFromType(int setupType)
+{
+   if(setupType == 1) return "TREND_PULLBACK";
+   if(setupType == 2) return "BREAKOUT";
+   if(setupType == 3) return "SQUEEZE_RELEASE";
+   if(setupType == 4) return "RANGE_REVERSAL";
+   if(setupType == 5) return "RSI_EXTREME";
+   if(setupType == 6) return "LONDON_FIX_PIN";
+   if(setupType == 7) return "MULTI_EXTREME";
+   if(setupType == 8) return "ASIA_BREAKOUT";
+   return "UNKNOWN";
+}
+
+string ExitOwnerFromReason(string reason)
+{
+   if(StringLen(reason) == 0) return "BROKER/UNKNOWN";
+   int p = StringFind(reason, " | ");
+   string key = (p > 0) ? StringSubstr(reason, 0, p) : reason;
+   if(StringFind(key, "CLEAN") >= 0) return "CLEAN_EXITS";
+   if(StringFind(key, "BASKET") >= 0) return "BASKET_PROTECT";
+   if(StringFind(key, "PYRAMID") >= 0 || StringFind(key, "PYR") >= 0) return "PYRAMID";
+   if(StringFind(key, "AI") >= 0 || StringFind(key, "CLAUDE") >= 0) return "AI";
+   if(StringFind(key, "SL") >= 0) return "BROKER_SL";
+   if(StringFind(key, "TP") >= 0) return "BROKER_TP";
+   return key;
+}
+
+void RecordExitAudit(string reason, bool wasWin, double profit)
+{
+   string key = ExitOwnerFromReason(reason);
+   int idx = -1;
+   for(int i = 0; i < ArraySize(g_exitReasonKeys); i++)
+      if(g_exitReasonKeys[i] == key) { idx = i; break; }
+   if(idx < 0)
+   {
+      idx = ArraySize(g_exitReasonKeys);
+      ArrayResize(g_exitReasonKeys, idx + 1);
+      ArrayResize(g_exitReasonTrades, idx + 1);
+      ArrayResize(g_exitReasonWins, idx + 1);
+      ArrayResize(g_exitReasonGrossWin, idx + 1);
+      ArrayResize(g_exitReasonGrossLoss, idx + 1);
+      g_exitReasonKeys[idx] = key;
+      g_exitReasonTrades[idx] = 0;
+      g_exitReasonWins[idx] = 0;
+      g_exitReasonGrossWin[idx] = 0.0;
+      g_exitReasonGrossLoss[idx] = 0.0;
+   }
+   g_exitReasonTrades[idx]++;
+   if(wasWin) g_exitReasonWins[idx]++;
+   if(profit >= 0) g_exitReasonGrossWin[idx] += profit;
+   else g_exitReasonGrossLoss[idx] += MathAbs(profit);
+}
+
+void UpdateAuditDrawdown()
+{
+   double eq = accInfo.Equity();
+   if(g_peakEquityAudit <= 0.0 || eq > g_peakEquityAudit) g_peakEquityAudit = eq;
+   if(g_peakEquityAudit > 0.0)
+   {
+      double dd = g_peakEquityAudit - eq;
+      if(dd > g_maxDrawdownAudit) g_maxDrawdownAudit = dd;
+   }
+}
+
+void PrintBacktestAuditReport()
+{
+   Print("========== XAUAI TEST MODE REPORT ==========");
+   Print("Trades=", totalTrades, " Wins=", wins, " Losses=", losses,
+         " MaxDD=$", DoubleToString(g_maxDrawdownAudit, 2));
+
+   for(int st = 1; st <= 8; st++)
+   {
+      int trades = 0, swins = 0;
+      double gw = 0.0, gl = 0.0, net = 0.0;
+      for(int i = 0; i < patternCount; i++)
+      {
+         if(patterns[i].setupType != st) continue;
+         trades++;
+         if(patterns[i].wasWinner) swins++;
+         net += patterns[i].profit;
+         if(patterns[i].profit >= 0) gw += patterns[i].profit;
+         else gl += MathAbs(patterns[i].profit);
+      }
+      if(trades <= 0) continue;
+      double wr = (double)swins / trades * 100.0;
+      double pf = (gl > 0.0) ? gw / gl : (gw > 0.0 ? 999.0 : 0.0);
+      Print("SETUP REPORT | ", SetupNameFromType(st),
+            " trades=", trades,
+            " wr=", DoubleToString(wr, 1), "%",
+            " pf=", DoubleToString(pf, 2),
+            " avgWin=$", DoubleToString(swins > 0 ? gw / swins : 0.0, 2),
+            " avgLoss=$", DoubleToString((trades - swins) > 0 ? gl / (trades - swins) : 0.0, 2),
+            " net=$", DoubleToString(net, 2));
+   }
+
+   for(int j = 0; j < ArraySize(g_exitReasonKeys); j++)
+   {
+      int t = g_exitReasonTrades[j];
+      if(t <= 0) continue;
+      double wr2 = (double)g_exitReasonWins[j] / t * 100.0;
+      double pf2 = (g_exitReasonGrossLoss[j] > 0.0) ? g_exitReasonGrossWin[j] / g_exitReasonGrossLoss[j] :
+                   (g_exitReasonGrossWin[j] > 0.0 ? 999.0 : 0.0);
+      Print("EXIT REPORT | ", g_exitReasonKeys[j],
+            " trades=", t,
+            " wr=", DoubleToString(wr2, 1), "%",
+            " pf=", DoubleToString(pf2, 2),
+            " grossWin=$", DoubleToString(g_exitReasonGrossWin[j], 2),
+            " grossLoss=$", DoubleToString(g_exitReasonGrossLoss[j], 2));
+   }
+
+   Print("AI REPORT | influenced trades=", g_aiInfluencedTrades,
+         " wins=", g_aiInfluencedWins,
+         " pnl=$", DoubleToString(g_aiInfluencedPnl, 2),
+         " | nonAI trades=", g_nonAiTrades,
+         " wins=", g_nonAiWins,
+         " pnl=$", DoubleToString(g_nonAiPnl, 2));
+   Print("PYRAMID REPORT | see journal tags PYR+TRN / PYR+RESCUE and setup report; no separate position-link stats in this build.");
+   Print("CLOUD REPORT | heartbeat/post failures are logged live by CLOUD POST/CloudReasoning lines; tester mode disables WebRequest.");
+   Print("========== END XAUAI TEST MODE REPORT ==========");
 }
 
 //+------------------------------------------------------------------+
@@ -5939,7 +6128,7 @@ void ManagePositions()
       // once and keep a runner alive. Full close is reserved for dangerous
 	      // equity damage or deep R loss.
 	      int ageSec = (int)(TimeCurrent() - posInfo.Time());
-	      if(InpExpectancyLossArmor && InpNoPartialSmartLossArmor && InpCloudSafeDisablePartials &&
+	      if(!InpCleanExits && InpExpectancyLossArmor && InpNoPartialSmartLossArmor && InpCloudSafeDisablePartials &&
 	         rDollars > 0 && ageSec >= InpNoPartialSmartLossMinSec && profit < 0)
 	      {
 	         double smartLossUSD = rDollars * InpNoPartialSmartLossR;
@@ -5963,7 +6152,7 @@ void ManagePositions()
 	         }
 	      }
 
-	      if(InpExpectancyLossArmor && rDollars > 0 && ageSec >= InpExpectancyMinAgeSec)
+	      if(!InpCleanExits && InpExpectancyLossArmor && rDollars > 0 && ageSec >= InpExpectancyMinAgeSec)
 	      {
 	         double maxLossR = InpExpectancyMaxLossR;
          if(InpHardStopRBased && InpHardStopRMulti > 0)
@@ -6006,7 +6195,7 @@ void ManagePositions()
 	         }
 	      }
 
-      if(InpExpectancyLossArmor && InpExpectancySoftDeRisk && !InpCloudSafeDisablePartials && rDollars > 0 &&
+      if(!InpCleanExits && InpExpectancyLossArmor && InpExpectancySoftDeRisk && !InpCloudSafeDisablePartials && rDollars > 0 &&
          ageSec >= InpExpectancySoftMinAgeSec && !CleanLossReduceAlreadyTaken(ticket) &&
          profit < 0)
       {
@@ -6868,7 +7057,7 @@ void ManagePositions()
       // v4.7.0 — uses AIExitVerdict (HOLD / CLOSE / LOCK $X). Cooldown is shared
       //   with the AI veto so we don't double-spend on Claude calls.
       static datetime lastClaudeCheck = 0;
-      if(InpUseAI && StringLen(InpServerURL) >= 10 && minsOpen >= 3 &&
+      if(InpUseAI && !InpAIAdvisoryOnly && StringLen(InpServerURL) >= 10 && minsOpen >= 3 &&
          TimeCurrent() - lastClaudeCheck > InpClaudeAuditSec &&
          AIVetoCooldownOK(ticket, InpAIExitMinSec))
       {
@@ -6949,6 +7138,29 @@ string ExtractJsonString(const string &json, const string key)
       p++;
    }
    return out;
+}
+
+double ExtractJsonDouble(const string &json, const string key, double fallback)
+{
+   string needle = "\"" + key + "\":";
+   int p = StringFind(json, needle);
+   if(p < 0) return fallback;
+   p += StringLen(needle);
+   while(p < StringLen(json) && (StringGetCharacter(json, p) == ' ' || StringGetCharacter(json, p) == '\t')) p++;
+   string num = "";
+   while(p < StringLen(json))
+   {
+      ushort c = StringGetCharacter(json, p);
+      if((c >= '0' && c <= '9') || c == '.' || c == '-') { num += ShortToString(c); p++; }
+      else break;
+   }
+   if(StringLen(num) == 0) return fallback;
+   return StringToDouble(num);
+}
+
+int ExtractJsonInt(const string &json, const string key, int fallback)
+{
+   return (int)ExtractJsonDouble(json, key, (double)fallback);
 }
 
 int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price, string h1Dir, double spread,
@@ -7094,8 +7306,9 @@ bool IsNewsSafe()
 //| Rollup levels: exact -> drop_mom -> drop_stoch -> drop_rsi ->    |
 //|                drop_session -> regime+setup+dir                  |
 //+------------------------------------------------------------------+
-double GetMLScore(int dir, string signature)
+double GetMLScoreWithSamples(int dir, string signature, int &matchedSamples)
 {
+   matchedSamples = 0;
    if(patternCount < 5 || StringLen(signature) == 0) return 0.5;
 
    // Build rollup prefixes (same hierarchy as backend hive)
@@ -7134,9 +7347,19 @@ double GetMLScore(int dir, string signature)
          matches++;
          if(patterns[i].wasWinner) wins++;
       }
-      if(matches >= 5) return (double)wins / matches;
+      if(matches >= 5)
+      {
+         matchedSamples = matches;
+         return (double)wins / matches;
+      }
    }
    return 0.5;
+}
+
+double GetMLScore(int dir, string signature)
+{
+   int matchedSamples = 0;
+   return GetMLScoreWithSamples(dir, signature, matchedSamples);
 }
 
 void RecordPattern(bool wasWin, double profit)
@@ -7363,6 +7586,20 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    Print("CLOSED: ", wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK-EVEN",
          " $", DoubleToString(profit, 2),
          " | T:", totalTrades, " W:", wins, " L:", losses);
+   bool aiInfluenced = (currentTradeConfidence > 0 || StringFind(lastExitReason, "AI") >= 0 || StringFind(lastExitReason, "CLAUDE") >= 0);
+   if(aiInfluenced)
+   {
+      g_aiInfluencedTrades++;
+      if(wasWin) g_aiInfluencedWins++;
+      g_aiInfluencedPnl += profit;
+   }
+   else
+   {
+      g_nonAiTrades++;
+      if(wasWin) g_nonAiWins++;
+      g_nonAiPnl += profit;
+   }
+   RecordExitAudit(lastExitReason, wasWin, profit);
 
    // Populate lastClose for RE-ENTRY detector
    lastClose.valid      = true;
