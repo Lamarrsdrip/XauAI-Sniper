@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.31 — Entry Quality Guard Mode   |
+//|                                     v5.8.32 — Architecture Audit Mode   |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.31 — ENTRY QUALITY GUARD"
+#property description "XAUUSD AI Sniper v5.8.32 — ARCHITECTURE AUDIT"
 #property description "Main build: 10-30 min entry quality guards with wider profit room."
 #property description "Keeps pullback timing, cycle armor, smart pyramid guard, and cloud-safe no-partial lifecycle."
 #property strict
@@ -145,7 +145,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.31 — breakout + pyramid adaptive confirmation) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.32 — breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -154,7 +154,7 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.31 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.32 — stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
@@ -178,7 +178,7 @@ input bool   InpXAU_BlockLateA             = true;  // A/A+ late chase becomes B
 input bool   InpXAU_LogTimingGuard         = true;  // Print timing audit: grade, EMA/VWAP distance, impulse, pullback quality
 input bool   InpCloudSafeDisablePartials   = true;  // Disable partial-loss/profit reductions so master/cloud lifecycle stays synchronized
 
-input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.31 — protect big winning cycles) ==="
+input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.32 — protect big winning cycles) ==="
 input bool   InpXAU_CycleGivebackArmor        = true; // After a strong winning day, reduce late-cycle risk instead of giving back many wins
 input double InpXAU_CycleArmGainPct           = 8.0;  // Daily gain % where cycle armor starts protecting session equity
 input double InpXAU_CycleLotMulti             = 0.55; // Lot multiplier while cycle armor is armed
@@ -196,7 +196,7 @@ input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this
 input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 
-input group "=== ENTRY QUALITY GUARD (v5.8.31 — 10-30 min entry quality guard) ==="
+input group "=== ENTRY QUALITY GUARD (v5.8.32 — 10-30 min entry quality guard) ==="
 input bool   InpStructureRunnerMode           = true;  // Main runner: let correct XAU direction breathe into larger account-sized wins
 input double InpStructureTPMultiplier         = 6.5;   // Wider initial TP target; still based on SL/ATR, never fixed dollars
 input double InpStructureTPExtendTriggerPct   = 68.0;  // Extend earlier so strong trends do not hit a small TP and stop
@@ -416,7 +416,7 @@ input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on
 input double InpBasketFastDropPct       = 50.0; // If basket gives back >= X% of peak within FastWindowSec, close immediately
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
 input double InpBasketHardGivebackPct   = 1.5;  // HARD CAP: never give back more than X% of balance from peak
-input bool   InpBasketBlockPyramidWhenArmed = false; // v5.8.31: allow elite pyramid/rescue adds while basket watches; other gates still protect
+input bool   InpBasketBlockPyramidWhenArmed = false; // v5.8.32: allow elite pyramid/rescue adds while basket watches; other gates still protect
 input bool   InpBasketSoftLockFirst     = true; // v5.8.15: first basket-floor hit banks partial only; runner stays alive
 input double InpBasketSoftLockPct       = 35.0; // % of each open layer to bank on first basket lock
 input double InpBasketRunnerFloorPct    = 20.0; // After soft lock, keep only a small positive floor for the runner
@@ -564,10 +564,10 @@ input double InpSmartGuardHardWinRate     = 35.0;  // Hard-veto only when decaye
 input double InpSmartGuardSoftLotMulti    = 0.70;  // Soft-veto risk multiplier; trade still allowed if other gates pass
 input int    InpSmartGuardRelaxAfterMin   = 180;   // If no trades for this long, relax hard veto to soft retest
 input double InpSmartGuardOverrideScore   = 3.8;   // Strong trend pullbacks at/above this can override soft negative stats
-input bool   InpPyramidRequireGradeA      = false; // v5.8.31: B can pyramid only when protected-quality gates pass
+input bool   InpPyramidRequireGradeA      = false; // v5.8.32: B can pyramid only when protected-quality gates pass
 input bool   InpPyramidRequireHTF         = true;  // Only pyramid when adaptive fast confirmation still supports direction
 
-input int    InpMaxPyramidAdds  = 3;       // v5.8.31: controlled compounding in clean trends/rescue cycles
+input int    InpMaxPyramidAdds  = 3;       // v5.8.32: controlled compounding in clean trends/rescue cycles
 input double InpPyramidMinATR   = 0.65;    // Price must move at least this × ATR before adding
 input double InpPyramidSizeMulti= 0.58;    // Each add is this × previous size (prevents stack blow-up)
 input int    InpPyramidMinGapSec= 180;     // Min seconds between pyramid adds
@@ -1643,7 +1643,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.31 (ENTRY QUALITY GUARD) READY ===");
+   Print("=== XAUAI SNIPER v5.8.32 (ARCHITECTURE AUDIT) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1767,7 +1767,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.31 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.32 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -3633,7 +3633,7 @@ bool EPF_IsEliteGrade(string grade)
 }
 
 // Returns empty string if entry is allowed, or a reason string for block.
-// v5.8.31 — T4 is no longer a blind robot lock. Hard daily drawdown still
+// v5.8.32 — T4 is no longer a blind robot lock. Hard daily drawdown still
 // blocks, but elite signals can pass in guarded mode with tiny reduced size.
 string EPF_EntryBlockReason(string grade, double setupScore, double combinedScore, int signal,
                             double &adaptiveLotMult, bool &adaptivePass)
@@ -4658,7 +4658,7 @@ void OnTick()
       return;
    }
 
-   // v5.8.31 — adaptive EPF-T4: elite signals may pass at reduced size unless hard DD is hit.
+   // v5.8.32 — adaptive EPF-T4: elite signals may pass at reduced size unless hard DD is hit.
    double epfAdaptiveLotMult = 1.0;
    bool epfT4AdaptivePass = false;
    string epfBlock = EPF_EntryBlockReason(grade, setupScore, combinedScore, signal,
@@ -9380,7 +9380,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.31 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.32 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
