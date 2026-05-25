@@ -9395,6 +9395,8 @@ void UpdateDashboard(int signal, double score, string grade)
    d += StringFormat("Open: %d/%d (pyr max %d) | Today: %d/%d\n", CountMyPositions(), InpMaxOpenTrades, 1+InpMaxPyramidAdds, todayTradeCount, EffectiveMaxTradesPerDay());
    d += StringFormat("Trades: %d | Win: %.0f%% | ML: %d\n", totalTrades, wr, patternCount);
    d += StringFormat("AI: %s | News: %s | Careful: %s\n", InpUseAI?"ON":"OFF", InpUseNewsFilter?"ON":"OFF", InpCarefulMode?"ON":"OFF");
+   if(StringLen(g_lastSkipReason) > 0)
+      d += "Idle reason: " + StringSubstr(g_lastSkipReason, 0, 120) + "\n";
    d += StringFormat("DXY: %s (%s) | Drawdown: %s | Re-entry: %s\n",
         dxyGoldBias, InpUseDXYFilter?"ON":"OFF",
         drawdownActive?"ACTIVE":"off",
