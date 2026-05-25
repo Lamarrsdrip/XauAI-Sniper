@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.32 — Architecture Audit Mode   |
+//|                                     v5.8.34 — Pyramid Retest Fix Mode   |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.32 — ARCHITECTURE AUDIT"
+#property description "XAUUSD AI Sniper v5.8.34 — PYRAMID RETEST FIX"
 #property description "Main build: 10-30 min entry quality guards with wider profit room."
 #property description "Keeps pullback timing, cycle armor, smart pyramid guard, and cloud-safe no-partial lifecycle."
 #property strict
@@ -145,7 +145,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.32 — breakout + pyramid adaptive confirmation) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.34 — breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -154,7 +154,7 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.32 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.34 — stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
@@ -178,7 +178,7 @@ input bool   InpXAU_BlockLateA             = true;  // A/A+ late chase becomes B
 input bool   InpXAU_LogTimingGuard         = true;  // Print timing audit: grade, EMA/VWAP distance, impulse, pullback quality
 input bool   InpCloudSafeDisablePartials   = true;  // Disable partial-loss/profit reductions so master/cloud lifecycle stays synchronized
 
-input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.32 — protect big winning cycles) ==="
+input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.34 — protect big winning cycles) ==="
 input bool   InpXAU_CycleGivebackArmor        = true; // After a strong winning day, reduce late-cycle risk instead of giving back many wins
 input double InpXAU_CycleArmGainPct           = 8.0;  // Daily gain % where cycle armor starts protecting session equity
 input double InpXAU_CycleLotMulti             = 0.55; // Lot multiplier while cycle armor is armed
@@ -196,7 +196,7 @@ input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this
 input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 
-input group "=== ENTRY QUALITY GUARD (v5.8.32 — 10-30 min entry quality guard) ==="
+input group "=== ENTRY QUALITY GUARD (v5.8.34 — 10-30 min entry quality guard) ==="
 input bool   InpStructureRunnerMode           = true;  // Main runner: let correct XAU direction breathe into larger account-sized wins
 input double InpStructureTPMultiplier         = 6.5;   // Wider initial TP target; still based on SL/ATR, never fixed dollars
 input double InpStructureTPExtendTriggerPct   = 68.0;  // Extend earlier so strong trends do not hit a small TP and stop
@@ -289,6 +289,7 @@ input int    InpReEntryWindow  = 900;      // Seconds after close to watch for r
 input double InpReEntryFactor  = 1.2;      // Price must move this x SL past original entry
 input double InpReEntrySize    = 0.5;      // Re-entry size multiplier (0.5 = half original)
 input int    InpMaxReEntriesPerDay = 1;    // Hard cap on re-entries per trading day
+input bool   InpReEntryBetterPriceOnly = true; // After a loss, do not auto re-enter at a worse price than the failed entry
 
 input group "=== SMART FILTERS ==="
 input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
@@ -416,7 +417,7 @@ input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on
 input double InpBasketFastDropPct       = 50.0; // If basket gives back >= X% of peak within FastWindowSec, close immediately
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
 input double InpBasketHardGivebackPct   = 1.5;  // HARD CAP: never give back more than X% of balance from peak
-input bool   InpBasketBlockPyramidWhenArmed = false; // v5.8.32: allow elite pyramid/rescue adds while basket watches; other gates still protect
+input bool   InpBasketBlockPyramidWhenArmed = true;  // v5.8.34: no fresh adds after basket protect is armed; let the current cycle resolve
 input bool   InpBasketSoftLockFirst     = true; // v5.8.15: first basket-floor hit banks partial only; runner stays alive
 input double InpBasketSoftLockPct       = 35.0; // % of each open layer to bank on first basket lock
 input double InpBasketRunnerFloorPct    = 20.0; // After soft lock, keep only a small positive floor for the runner
@@ -564,10 +565,10 @@ input double InpSmartGuardHardWinRate     = 35.0;  // Hard-veto only when decaye
 input double InpSmartGuardSoftLotMulti    = 0.70;  // Soft-veto risk multiplier; trade still allowed if other gates pass
 input int    InpSmartGuardRelaxAfterMin   = 180;   // If no trades for this long, relax hard veto to soft retest
 input double InpSmartGuardOverrideScore   = 3.8;   // Strong trend pullbacks at/above this can override soft negative stats
-input bool   InpPyramidRequireGradeA      = false; // v5.8.32: B can pyramid only when protected-quality gates pass
+input bool   InpPyramidRequireGradeA      = false; // v5.8.34: B can pyramid only when protected-quality gates pass
 input bool   InpPyramidRequireHTF         = true;  // Only pyramid when adaptive fast confirmation still supports direction
 
-input int    InpMaxPyramidAdds  = 3;       // v5.8.32: controlled compounding in clean trends/rescue cycles
+input int    InpMaxPyramidAdds  = 3;       // v5.8.34: controlled compounding in clean trends/rescue cycles
 input double InpPyramidMinATR   = 0.65;    // Price must move at least this × ATR before adding
 input double InpPyramidSizeMulti= 0.58;    // Each add is this × previous size (prevents stack blow-up)
 input int    InpPyramidMinGapSec= 180;     // Min seconds between pyramid adds
@@ -598,6 +599,7 @@ input int    InpPyramidFailCooldownSec = 120;  // Cooldown after failed pyramid 
 input double InpPyramidProtectedBQuality = 58.0; // Quality needed for protected B pyramid continuation
 input double InpPyramidEPFOverrideQuality = 72.0; // Quality needed to override EPF soft pause
 input bool   InpPyramidRequireTurnForRescue = true; // Rescue adds must wait for turn/rejection, not just elite original score
+input bool   InpPyramidNoAddIntoArmedBasket = true; // Prevent high-price add immediately before basket/runner protection closes
 
 input group "=== SCAN WATCHDOG (v5.8.8 — no restart needed) ==="
 input int    InpTimerScanSec     = 15;      // Timer wake-up so slow ticks/VPS lag cannot freeze scan loop
@@ -615,6 +617,9 @@ input bool   InpPostWinnerCycleGuard = true; // v5.8.25: after banking, don't ch
 input int    InpPostWinnerCycleMin   = 45;   // Minutes to require a pullback/reset after profitable same-direction exit
 input double InpPostWinnerResetATR   = 0.60; // Required reset from close price before same-direction re-entry
 input double InpPostWinnerChaseATR   = 0.20; // Worse than close by this ATR = bottom/top chase risk
+input bool   InpPostLossSameSideGuard = true; // After a same-side loss, wait for a better retest instead of chasing higher/lower
+input int    InpPostLossGuardMin      = 90;   // Minutes after a loss to require better same-side price
+input double InpPostLossBetterATR     = 0.25; // BUY must be this ATR cheaper; SELL must be this ATR higher than failed entry
 
 //+------------------------------------------------------------------+
 //| ENUMS                                                            |
@@ -1643,7 +1648,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.32 (ARCHITECTURE AUDIT) READY ===");
+   Print("=== XAUAI SNIPER v5.8.34 (PYRAMID RETEST FIX) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1767,7 +1772,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.32 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.34 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -2272,8 +2277,9 @@ void UpdateDrawdownState(bool wasLoss)
 
 //+------------------------------------------------------------------+
 //| RE-ENTRY DETECTOR — called every tick (cheap)                    |
-//| Fires ONCE if lastClose was a LOSS and price has now reversed    |
-//| back past original entry in the original direction.              |
+//| Fires ONCE after a loss only if price has reset to a better       |
+//| same-side level. This avoids buying higher/selling lower after    |
+//| a failed trade just because price reclaimed the old entry.        |
 //+------------------------------------------------------------------+
 void CheckReEntryOpportunity()
 {
@@ -2304,10 +2310,38 @@ void CheckReEntryOpportunity()
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    if(bid <= 0 || ask <= 0) return;
    double curPrice = (lastClose.dir == 1) ? ask : bid;
-   // Reversal threshold: price must travel >= factor * SL past original entry
+   if(InpReEntryBetterPriceOnly && lastClose.entryPrice > 0)
+   {
+      double betterBuffer = 0.0;
+      if(ArraySize(bufATR) >= 2 && bufATR[1] > 0)
+         betterBuffer = bufATR[1] * InpPostLossBetterATR;
+      bool betterPrice = (lastClose.dir == 1)
+                         ? (curPrice <= lastClose.entryPrice - betterBuffer)
+                         : (curPrice >= lastClose.entryPrice + betterBuffer);
+      if(!betterPrice)
+      {
+         static datetime lastBetterPriceLog = 0;
+         if(TimeCurrent() - lastBetterPriceLog > 60)
+         {
+            Print("RE-ENTRY BLOCKED: last ", lastClose.dir==1?"BUY":"SELL",
+                  " lost from entry ", DoubleToString(lastClose.entryPrice, _Digits),
+                  ". Current ", DoubleToString(curPrice, _Digits),
+                  " is not a better retest by ", DoubleToString(InpPostLossBetterATR, 2),
+                  "x ATR; avoiding worse-price chase after loss.");
+            lastBetterPriceLog = TimeCurrent();
+         }
+         return;
+      }
+   }
+   // Legacy mode chased price past the failed entry. Better-price mode turns
+   // re-entry into a retest-only recovery path.
    double trigger = lastClose.slDist * InpReEntryFactor;
-   bool reversalBuy  = (lastClose.dir ==  1 && curPrice >= lastClose.entryPrice + trigger);
-   bool reversalSell = (lastClose.dir == -1 && curPrice <= lastClose.entryPrice - trigger);
+   bool reversalBuy  = InpReEntryBetterPriceOnly
+                       ? (lastClose.dir ==  1)
+                       : (lastClose.dir ==  1 && curPrice >= lastClose.entryPrice + trigger);
+   bool reversalSell = InpReEntryBetterPriceOnly
+                       ? (lastClose.dir == -1)
+                       : (lastClose.dir == -1 && curPrice <= lastClose.entryPrice - trigger);
    if(!reversalBuy && !reversalSell) return;
 
    // Use latest ATR for new SL sizing; bail if indicators not ready
@@ -2316,7 +2350,7 @@ void CheckReEntryOpportunity()
    Print("RE-ENTRY TRIGGER (", todayReEntryCount+1, "/", InpMaxReEntriesPerDay, "): last ", lastClose.dir==1?"BUY":"SELL",
          " stopped at ", DoubleToString(lastClose.entryPrice, _Digits),
          " | price now ", DoubleToString(curPrice, _Digits),
-         " (", DoubleToString((curPrice-lastClose.entryPrice)/lastClose.slDist, 2), "R past entry)");
+         " | retest distance ", DoubleToString(MathAbs(curPrice-lastClose.entryPrice)/lastClose.slDist, 2), "R");
 
    lastClose.reEntered = true;  // one-shot per original close
    todayReEntryCount++;
@@ -2867,12 +2901,12 @@ void CheckPyramidOpportunity()
    // v4.9.7 — Don't stack new risk into a basket that's already armed and protecting profit.
    // Adding fresh trades right before a basket-flush just creates micro-loss tickets
    // (e.g. fresh trade closes at -0.25 pips when basket triggers).
-   if(InpBasketMode && InpBasketBlockPyramidWhenArmed && g_basketArmed)
+   if(InpBasketMode && g_basketArmed && (InpBasketBlockPyramidWhenArmed || InpPyramidNoAddIntoArmedBasket))
    {
       static datetime lastBlockLog = 0;
       if(TimeCurrent() - lastBlockLog > 120)
       {
-         Print("PYRAMID BLOCKED: basket is ARMED — no new stacks until current cycle resolves.");
+         Print("PYRAMID BLOCKED: basket is ARMED — no new stacks until current cycle resolves. This prevents late add tickets from closing red during basket protection.");
          lastBlockLog = TimeCurrent();
       }
       return;
@@ -3633,7 +3667,7 @@ bool EPF_IsEliteGrade(string grade)
 }
 
 // Returns empty string if entry is allowed, or a reason string for block.
-// v5.8.32 — T4 is no longer a blind robot lock. Hard daily drawdown still
+// v5.8.34 — T4 is no longer a blind robot lock. Hard daily drawdown still
 // blocks, but elite signals can pass in guarded mode with tiny reduced size.
 string EPF_EntryBlockReason(string grade, double setupScore, double combinedScore, int signal,
                             double &adaptiveLotMult, bool &adaptivePass)
@@ -4658,7 +4692,7 @@ void OnTick()
       return;
    }
 
-   // v5.8.32 — adaptive EPF-T4: elite signals may pass at reduced size unless hard DD is hit.
+   // v5.8.34 — adaptive EPF-T4: elite signals may pass at reduced size unless hard DD is hit.
    double epfAdaptiveLotMult = 1.0;
    bool epfT4AdaptivePass = false;
    string epfBlock = EPF_EntryBlockReason(grade, setupScore, combinedScore, signal,
@@ -5037,6 +5071,35 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                " (", DoubleToString(InpPostWinnerResetATR, 2), "×ATR). Avoiding ",
                signal == 1 ? "buying top after bank" : "selling bottom after bank",
                ". Last exit=", lastClose.exitReason);
+         return;
+      }
+   }
+
+   // v5.8.34 — Post-loss same-side retest guard. This is not a drawdown cap:
+   // it only blocks the specific bad pattern where a BUY loses, then the EA
+   // buys again at a worse/higher price before a real retest; inverse for SELL.
+   if(InpPostLossSameSideGuard && InpPostLossGuardMin > 0 && atr > 0 &&
+      reason != "RE_ENTRY" && lastClose.valid && lastClose.wasLoss &&
+      lastClose.dir == signal && lastClose.entryPrice > 0 &&
+      TimeCurrent() - lastClose.closeTime < InpPostLossGuardMin * 60)
+   {
+      double betterDist = atr * InpPostLossBetterATR;
+      bool betterRetest = false;
+      if(signal == 1)
+         betterRetest = (newEntryNow <= lastClose.entryPrice - betterDist);
+      else
+         betterRetest = (newEntryNow >= lastClose.entryPrice + betterDist);
+
+      if(!betterRetest)
+      {
+         Print("POST-LOSS SAME-SIDE BLOCK: last ", signal == 1 ? "BUY" : "SELL",
+               " lost from entry ", DoubleToString(lastClose.entryPrice, digits),
+               " close ", DoubleToString(lastClose.closePrice, digits),
+               ". New entry ", DoubleToString(newEntryNow, digits),
+               " is not a better retest by ", DoubleToString(InpPostLossBetterATR, 2),
+               "x ATR (", DoubleToString(betterDist, 2),
+               "). Waiting instead of chasing after loss. Last exit=", lastClose.exitReason);
+         g_lastSkipReason = "POST-LOSS SAME-SIDE BLOCK: waiting for better retest after loss";
          return;
       }
    }
@@ -9380,7 +9443,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.32 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.34 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
