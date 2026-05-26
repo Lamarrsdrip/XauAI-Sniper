@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.35 — Retest Rescue Sniper Mode   |
+//|                                     v5.8.36 — Timing Quality Grade Mode   |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.35 — RETEST RESCUE SNIPER"
+#property description "XAUUSD AI Sniper v5.8.36 — TIMING QUALITY GRADE"
 #property description "Main build: 10-30 min entry quality guards with wider profit room."
 #property description "Keeps pullback timing, cycle armor, smart pyramid guard, and cloud-safe no-partial lifecycle."
 #property strict
@@ -145,7 +145,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.35 — breakout + pyramid adaptive confirmation) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.36 — breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -154,7 +154,7 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.35 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.36 — stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
@@ -176,9 +176,15 @@ input double InpXAU_MinExtensionResetATR   = 0.75;  // Minimum pullback from fre
 input double InpXAU_FairTimingLotMulti     = 0.65;  // If timing is fair but not clean, reduce risk
 input bool   InpXAU_BlockLateA             = true;  // A/A+ late chase becomes BLOCK, not just smaller
 input bool   InpXAU_LogTimingGuard         = true;  // Print timing audit: grade, EMA/VWAP distance, impulse, pullback quality
+input bool   InpXAU_TimingQualityGrades    = true;  // A/A+ needs timing quality, not just late confirmation strength
+input double InpXAU_APlusMinTimingQuality  = 70.0;  // A+ minimum timing score after late/exhaustion penalties
+input double InpXAU_APlusMaxLateProb       = 45.0;  // A+ cannot be mostly a late-entry confirmation
+input double InpXAU_APlusMaxExhaustionProb = 45.0;  // A+ cannot be near likely liquidity exhaustion
+input double InpXAU_MinDirectionalRoomATR  = 0.60;  // Minimum room from local liquidity before A/A+ continuation
+input double InpXAU_MissedMoveDriveATR     = 2.60;  // If move already travelled this far without reset, demote/block
 input bool   InpCloudSafeDisablePartials   = true;  // Disable partial-loss/profit reductions so master/cloud lifecycle stays synchronized
 
-input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.35 — protect big winning cycles) ==="
+input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.36 — protect big winning cycles) ==="
 input bool   InpXAU_CycleGivebackArmor        = true; // After a strong winning day, reduce late-cycle risk instead of giving back many wins
 input double InpXAU_CycleArmGainPct           = 8.0;  // Daily gain % where cycle armor starts protecting session equity
 input double InpXAU_CycleLotMulti             = 0.55; // Lot multiplier while cycle armor is armed
@@ -196,7 +202,7 @@ input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this
 input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 
-input group "=== ENTRY QUALITY GUARD (v5.8.35 — 10-30 min entry quality guard) ==="
+input group "=== ENTRY QUALITY GUARD (v5.8.36 — 10-30 min entry quality guard) ==="
 input bool   InpStructureRunnerMode           = true;  // Main runner: let correct XAU direction breathe into larger account-sized wins
 input double InpStructureTPMultiplier         = 6.5;   // Wider initial TP target; still based on SL/ATR, never fixed dollars
 input double InpStructureTPExtendTriggerPct   = 68.0;  // Extend earlier so strong trends do not hit a small TP and stop
@@ -417,7 +423,7 @@ input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on
 input double InpBasketFastDropPct       = 50.0; // If basket gives back >= X% of peak within FastWindowSec, close immediately
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
 input double InpBasketHardGivebackPct   = 1.5;  // HARD CAP: never give back more than X% of balance from peak
-input bool   InpBasketBlockPyramidWhenArmed = true;  // v5.8.35: no fresh adds after basket protect is armed; let the current cycle resolve
+input bool   InpBasketBlockPyramidWhenArmed = true;  // v5.8.36: no fresh adds after basket protect is armed; let the current cycle resolve
 input bool   InpBasketSoftLockFirst     = true; // v5.8.15: first basket-floor hit banks partial only; runner stays alive
 input double InpBasketSoftLockPct       = 35.0; // % of each open layer to bank on first basket lock
 input double InpBasketRunnerFloorPct    = 20.0; // After soft lock, keep only a small positive floor for the runner
@@ -565,10 +571,10 @@ input double InpSmartGuardHardWinRate     = 35.0;  // Hard-veto only when decaye
 input double InpSmartGuardSoftLotMulti    = 0.70;  // Soft-veto risk multiplier; trade still allowed if other gates pass
 input int    InpSmartGuardRelaxAfterMin   = 180;   // If no trades for this long, relax hard veto to soft retest
 input double InpSmartGuardOverrideScore   = 3.8;   // Strong trend pullbacks at/above this can override soft negative stats
-input bool   InpPyramidRequireGradeA      = false; // v5.8.35: B can pyramid only when protected-quality gates pass
+input bool   InpPyramidRequireGradeA      = false; // v5.8.36: B can pyramid only when protected-quality gates pass
 input bool   InpPyramidRequireHTF         = true;  // Only pyramid when adaptive fast confirmation still supports direction
 
-input int    InpMaxPyramidAdds  = 3;       // v5.8.35: controlled compounding in clean trends/rescue cycles
+input int    InpMaxPyramidAdds  = 3;       // v5.8.36: controlled compounding in clean trends/rescue cycles
 input double InpPyramidMinATR   = 0.65;    // Price must move at least this × ATR before adding
 input double InpPyramidSizeMulti= 0.58;    // Each add is this × previous size (prevents stack blow-up)
 input int    InpPyramidMinGapSec= 180;     // Min seconds between pyramid adds
@@ -1653,7 +1659,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.35 (RETEST RESCUE SNIPER) READY ===");
+   Print("=== XAUAI SNIPER v5.8.36 (TIMING QUALITY GRADE) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1777,7 +1783,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.35 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.36 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -3743,7 +3749,7 @@ bool EPF_IsEliteGrade(string grade)
 }
 
 // Returns empty string if entry is allowed, or a reason string for block.
-// v5.8.35 — T4 is no longer a blind robot lock. Hard daily drawdown still
+// v5.8.36 — T4 is no longer a blind robot lock. Hard daily drawdown still
 // blocks, but elite signals can pass in guarded mode with tiny reduced size.
 string EPF_EntryBlockReason(string grade, double setupScore, double combinedScore, int signal,
                             double &adaptiveLotMult, bool &adaptivePass)
@@ -4768,7 +4774,7 @@ void OnTick()
       return;
    }
 
-   // v5.8.35 — adaptive EPF-T4: elite signals may pass at reduced size unless hard DD is hit.
+   // v5.8.36 — adaptive EPF-T4: elite signals may pass at reduced size unless hard DD is hit.
    double epfAdaptiveLotMult = 1.0;
    bool epfT4AdaptivePass = false;
    string epfBlock = EPF_EntryBlockReason(grade, setupScore, combinedScore, signal,
@@ -5151,7 +5157,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       }
    }
 
-   // v5.8.35 — Post-loss same-side retest guard. This is not a drawdown cap:
+   // v5.8.36 — Post-loss same-side retest guard. This is not a drawdown cap:
    // it only blocks the specific bad pattern where a BUY loses, then the EA
    // buys again at a worse/higher price before a real retest; inverse for SELL.
    if(InpPostLossSameSideGuard && InpPostLossGuardMin > 0 && atr > 0 &&
@@ -5503,9 +5509,12 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                                      accInfo.Balance());                  // v1.3: master balance ($)
       if(StringLen(sigId) > 0 && posId > 0) CloudMapAdd(posId, sigId);
       // v5.1.5 — push to bot-reasoning feed so subscribers see EVERY trade fire
-      string fireMsg = StringFormat("FIRED %s @%.2f SL:%.2f TP:%.2f grade=%s",
-                                     signal == 1 ? "BUY" : "SELL", price, sl, tp, grade);
-      CloudPostReasoning("FIRE", fireMsg, RegimeName(), "", 0.0, 0.0, grade, signal);
+      string setupForCloud = reason;
+      int setupBracket = StringFind(setupForCloud, " [");
+      if(setupBracket >= 0) setupForCloud = StringSubstr(setupForCloud, 0, setupBracket);
+      string fireMsg = StringFormat("FIRED %s @%.2f SL:%.2f TP:%.2f grade=%s setup=%s",
+                                     signal == 1 ? "BUY" : "SELL", price, sl, tp, grade, setupForCloud);
+      CloudPostReasoning("FIRE", fireMsg, RegimeName(), setupForCloud, 0.0, 0.0, grade, signal);
       br_lastReason = ""; br_lastReasonAt = 0; // reset block-throttle
    }
 }
@@ -8617,16 +8626,85 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
 	   bool cycleGivebackBlock = (trendSetup && cycleHot && cycleExtremeLocation && !cleanContinuation);
 	   bool cycleLotReduce = (trendSetup && cycleHot);
 	   bool trueBreakoutContinuation = IsXAUConfirmedBreakoutContinuation(signal, setupName);
+   double directionalRoomATR = (signal == -1) ? lowClearanceATR : highClearanceATR;
+   bool nearLiquiditySweep = (directionalRoomATR < InpXAU_MinDirectionalRoomATR);
+   bool missedMove = (trendSetup &&
+                      extensionDriveATR >= InpXAU_MissedMoveDriveATR &&
+                      extensionResetATR < InpXAU_MinExtensionResetATR &&
+                      !cleanContinuation);
+   double exhaustionProb = 0.0;
+   if(badLocation) exhaustionProb += 28.0;
+   if(failedImpulse) exhaustionProb += 24.0;
+   if(extensionNoReset || missedMove) exhaustionProb += 18.0;
+   if(impulseWarn) exhaustionProb += 10.0;
+   if(vwapFar) exhaustionProb += 8.0;
+   if(wrongCandle) exhaustionProb += 12.0;
+   if(nearLiquiditySweep) exhaustionProb += 16.0;
+   if(!hasPullback) exhaustionProb += 10.0;
+   if(cleanContinuation) exhaustionProb -= 25.0;
+   exhaustionProb = MathMax(0.0, MathMin(100.0, exhaustionProb));
+
+   double lateEntryProb = 0.0;
+   if(chasingAway) lateEntryProb += 25.0;
+   if(driveFar) lateEntryProb += 20.0;
+   if(impulseWarn) lateEntryProb += 15.0;
+   if(extensionDriveATR >= InpXAU_MissedMoveDriveATR) lateEntryProb += 18.0;
+   if(!betterValue) lateEntryProb += 12.0;
+   if(nearLiquiditySweep) lateEntryProb += 15.0;
+   if(cleanContinuation) lateEntryProb -= 30.0;
+   lateEntryProb = MathMax(0.0, MathMin(100.0, lateEntryProb));
+
+   double entryEfficiency = 100.0;
+   entryEfficiency -= lateEntryProb * 0.45;
+   entryEfficiency -= exhaustionProb * 0.35;
+   if(!hasPullback) entryEfficiency -= 10.0;
+   if(!hasRejection) entryEfficiency -= 8.0;
+   if(betterValue) entryEfficiency += 8.0;
+   if(cleanContinuation) entryEfficiency += 12.0;
+   entryEfficiency = MathMax(0.0, MathMin(100.0, entryEfficiency));
+
+   double rrQuality = MathMin(100.0, (directionalRoomATR / MathMax(0.10, InpXAU_MinDirectionalRoomATR)) * 45.0);
+   if(cleanContinuation) rrQuality = MathMin(100.0, rrQuality + 20.0);
+   if(missedMove || failedImpulse) rrQuality = MathMax(0.0, rrQuality - 25.0);
 
    string timingState = locationBlock ? "bad-location" : (cleanContinuation ? "clean-pullback" : "weak-timing");
    if(extensionNoReset) timingState = "extended-no-reset";
    if(failedImpulseBlock) timingState = "failed-impulse";
    if(cycleGivebackBlock) timingState = "cycle-giveback";
+   if(missedMove && timingState == "weak-timing") timingState = "missed-move";
    bool severeLate = trendSetup && chasingAway && (impulseBlock || driveFar || vwapFar) && !cleanContinuation;
    bool moderateLate = trendSetup && (chasingAway || impulseWarn || driveFar || vwapFar || !hasPullback || wrongCandle) && !cleanContinuation;
 
-   reason = StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullbackFromExtreme=%.2fATR loc=%.0f%% lowClr=%.2fATR highClr=%.2fATR value=%s badLoc=%s rejection=%s wrongCandle=%s dayGain=%.1f%% cycle=%s failedImpulse=%s dropHigh=%.2fATR(%d) bounceLow=%.2fATR(%d)",
+   if(InpXAU_TimingQualityGrades && trendSetup && (grade == "A" || StringFind(grade, "A+") >= 0) && !cleanContinuation)
+   {
+      bool aPlusBadTiming = (StringFind(grade, "A+") >= 0 &&
+                             (entryEfficiency < InpXAU_APlusMinTimingQuality ||
+                              lateEntryProb > InpXAU_APlusMaxLateProb ||
+                              exhaustionProb > InpXAU_APlusMaxExhaustionProb ||
+                              missedMove || failedImpulse || nearLiquiditySweep));
+      bool aBadRR = (rrQuality < 35.0 && (missedMove || nearLiquiditySweep || failedImpulse));
+      if(aPlusBadTiming)
+      {
+         string oldGrade = grade;
+         grade = "A";
+         lotMulti *= MathMin(0.80, InpXAU_FairTimingLotMulti);
+         reason = StringFormat("A+ TIMING DEMOTION: %s→A because confirmation arrived after positioning quality weakened. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f missedMove=%s failedImpulse=%s liquidityDist=%.2fATR. ",
+                               oldGrade, entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
+                               missedMove ? "Y" : "N", failedImpulse ? "Y" : "N", directionalRoomATR);
+      }
+      if(aBadRR && InpXAU_BlockLateA)
+      {
+         reason += StringFormat("BAD-RR TIMING BLOCK: A/A+ continuation has poor directional room after the move already travelled; waiting for fresh pullback/retest. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f liquidityDist=%.2fATR missedMove=%s failedImpulse=%s. ",
+                                entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
+                                directionalRoomATR, missedMove ? "Y" : "N", failedImpulse ? "Y" : "N");
+         return false;
+      }
+   }
+
+   reason += StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s timingQ=%.0f lateProb=%.0f%% exhaustion=%.0f%% rrQ=%.0f liquidityDist=%.2fATR expansionOrigin=%.2fATR expectedPullback=%.2fATR emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullbackFromExtreme=%.2fATR loc=%.0f%% lowClr=%.2fATR highClr=%.2fATR value=%s badLoc=%s rejection=%s wrongCandle=%s dayGain=%.1f%% cycle=%s failedImpulse=%s missedMove=%s dropHigh=%.2fATR(%d) bounceLow=%.2fATR(%d)",
                          setupName, grade, setupScore, combinedScore, timingState,
+                         entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
+                         directionalRoomATR, extensionDriveATR, InpXAU_MinExtensionResetATR,
                          emaDistATR, vwapDistATR, impulseATR, bodyATR, atrExpansion,
                          threeBarDriveATR, InpXAU_ExtensionLookbackBars, extensionDriveATR, extensionResetATR,
                          pullbackATR, locPct * 100.0, lowClearanceATR, highClearanceATR,
@@ -8637,6 +8715,7 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
                          dayGainPct,
                          cycleHot ? "armed" : "off",
                          failedImpulse ? "yes" : "no",
+                         missedMove ? "yes" : "no",
                          dropFromFailHighATR, failHighShift,
                          bounceFromFailLowATR, failLowShift);
 
@@ -9519,7 +9598,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.35 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.36 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
