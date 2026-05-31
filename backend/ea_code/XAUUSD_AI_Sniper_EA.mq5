@@ -8622,13 +8622,15 @@ void XAU_AppendBlockedMemory(string eventName, BlockedIdea &idea, int checkpoint
    if(!InpBlockedTradeMemoryReport || !IsXAUFastSymbol()) return;
    string fn = XAU_BlockedMemoryFile();
    bool exists = FileIsExist(fn, FILE_COMMON);
-   int h = FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   int h = exists
+           ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',')
+           : FileOpen(fn, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE)
    {
       Print("BLOCKED-MEMORY: FileOpen failed err=", GetLastError());
       return;
    }
-   FileSeek(h, 0, SEEK_END);
+   if(exists) FileSeek(h, 0, SEEK_END);
    if(!exists || FileTell(h) == 0)
    {
       FileWrite(h, "event", "time", "symbol", "dir", "setup", "grade", "reasonKey",
