@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.37 — Post-Sweep A Plus Guard Mode   |
+//|                                     v5.8.38 — Entry Timing Memory Mode   |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.37 — POST-SWEEP A PLUS GUARD"
+#property description "XAUUSD AI Sniper v5.8.38 — ENTRY TIMING MEMORY"
 #property description "Main build: 10-30 min entry quality guards with wider profit room."
 #property description "Keeps pullback timing, cycle armor, smart pyramid guard, and cloud-safe no-partial lifecycle."
 #property strict
@@ -145,7 +145,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.37 — breakout + pyramid adaptive confirmation) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.38 — breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -154,7 +154,7 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.37 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.38 — stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
@@ -185,9 +185,18 @@ input double InpXAU_MissedMoveDriveATR     = 2.60;  // If move already travelled
 input bool   InpXAU_BlockPostSweepAPlus    = true;  // Block A+ continuation after gold sweeps liquidity then snaps back
 input int    InpXAU_PostSweepLookbackBars  = 7;     // Sweep must be recent to count as trap risk
 input double InpXAU_PostSweepRetraceATR    = 1.10;  // Bounce/drop from swept low/high that signals trap risk
+input bool   InpXAU_FirstSignalMemory      = true;  // Track first blocked/seen signal so late A/A+ cannot chase after move already happened
+input double InpXAU_MaxMissedMoveATR       = 3.20;  // Same signal idea is late if price travelled this far from first-seen zone
+input double InpXAU_MaxMissedMoveUSD       = 30.0;  // Dollar-distance fallback for vertical XAU moves (e.g. 4380 -> 4500)
+input int    InpXAU_MaxSignalAgeBars       = 6;     // After this many M5 bars, same idea must retest/pull back before entry
+input double InpXAU_MinLateRetestATR       = 0.90;  // Late continuation needs at least this pullback/retest from the new extreme
+input double InpXAU_ExtremeLateLotMulti    = 0.35;  // If late but still allowed after retest, force small lot
+input bool   InpXAU_BlockLateChasePyramids = true;  // Pyramid adds must not cluster near the exhausted end of a missed move
+input bool   InpBlockedTradeMemoryReport   = true;  // Persist blocked-signal outcome learning to CSV for audits
+input int    InpBlockedMemoryMinSamples    = 8;     // Samples required before blocked-pattern stats can influence logs/size
 input bool   InpCloudSafeDisablePartials   = true;  // Disable partial-loss/profit reductions so master/cloud lifecycle stays synchronized
 
-input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.37 — protect big winning cycles) ==="
+input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.38 — protect big winning cycles) ==="
 input bool   InpXAU_CycleGivebackArmor        = true; // After a strong winning day, reduce late-cycle risk instead of giving back many wins
 input double InpXAU_CycleArmGainPct           = 8.0;  // Daily gain % where cycle armor starts protecting session equity
 input double InpXAU_CycleLotMulti             = 0.55; // Lot multiplier while cycle armor is armed
@@ -205,7 +214,7 @@ input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this
 input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 
-input group "=== ENTRY QUALITY GUARD (v5.8.37 — 10-30 min entry quality guard) ==="
+input group "=== ENTRY QUALITY GUARD (v5.8.38 — 10-30 min entry quality guard) ==="
 input bool   InpStructureRunnerMode           = true;  // Main runner: let correct XAU direction breathe into larger account-sized wins
 input double InpStructureTPMultiplier         = 6.5;   // Wider initial TP target; still based on SL/ATR, never fixed dollars
 input double InpStructureTPExtendTriggerPct   = 68.0;  // Extend earlier so strong trends do not hit a small TP and stop
@@ -426,7 +435,7 @@ input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on
 input double InpBasketFastDropPct       = 50.0; // If basket gives back >= X% of peak within FastWindowSec, close immediately
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
 input double InpBasketHardGivebackPct   = 1.5;  // HARD CAP: never give back more than X% of balance from peak
-input bool   InpBasketBlockPyramidWhenArmed = true;  // v5.8.37: no fresh adds after basket protect is armed; let the current cycle resolve
+input bool   InpBasketBlockPyramidWhenArmed = true;  // v5.8.38: no fresh adds after basket protect is armed; let the current cycle resolve
 input bool   InpBasketSoftLockFirst     = true; // v5.8.15: first basket-floor hit banks partial only; runner stays alive
 input double InpBasketSoftLockPct       = 35.0; // % of each open layer to bank on first basket lock
 input double InpBasketRunnerFloorPct    = 20.0; // After soft lock, keep only a small positive floor for the runner
@@ -574,10 +583,10 @@ input double InpSmartGuardHardWinRate     = 35.0;  // Hard-veto only when decaye
 input double InpSmartGuardSoftLotMulti    = 0.70;  // Soft-veto risk multiplier; trade still allowed if other gates pass
 input int    InpSmartGuardRelaxAfterMin   = 180;   // If no trades for this long, relax hard veto to soft retest
 input double InpSmartGuardOverrideScore   = 3.8;   // Strong trend pullbacks at/above this can override soft negative stats
-input bool   InpPyramidRequireGradeA      = false; // v5.8.37: B can pyramid only when protected-quality gates pass
+input bool   InpPyramidRequireGradeA      = false; // v5.8.38: B can pyramid only when protected-quality gates pass
 input bool   InpPyramidRequireHTF         = true;  // Only pyramid when adaptive fast confirmation still supports direction
 
-input int    InpMaxPyramidAdds  = 3;       // v5.8.37: controlled compounding in clean trends/rescue cycles
+input int    InpMaxPyramidAdds  = 3;       // v5.8.38: controlled compounding in clean trends/rescue cycles
 input double InpPyramidMinATR   = 0.65;    // Price must move at least this × ATR before adding
 input double InpPyramidSizeMulti= 0.58;    // Each add is this × previous size (prevents stack blow-up)
 input int    InpPyramidMinGapSec= 180;     // Min seconds between pyramid adds
@@ -844,6 +853,46 @@ int    lastRegime, lastSetupType;
 ENUM_REGIME currentRegime;
 string lastSignalSetup = "";
 string lastSignalSignature = "";
+
+// v5.8.38 — Entry Timing Intelligence.
+// This tracks where an idea first appeared, what blocked it, and whether a later
+// A/A+ entry is now chasing the already-played move.
+datetime g_signalFirstSeenTime = 0;
+double   g_signalFirstSeenPrice = 0.0;
+int      g_signalFirstSeenDir = 0;
+string   g_signalFirstSeenSetup = "";
+string   g_signalFirstSeenGrade = "";
+string   g_signalFirstBlockReason = "";
+double   g_signalFirstSetupScore = 0.0;
+double   g_signalFirstCombined = 0.0;
+double   g_signalFirstATR = 0.0;
+
+struct BlockedIdea
+{
+   bool     active;
+   datetime firstTime;
+   datetime lastCheck;
+   int      nextCheckpointMin;
+   int      dir;
+   double   signalPrice;
+   double   atr;
+   double   maxFav;
+   double   maxAdv;
+   double   setupScore;
+   double   combinedScore;
+   int      regime;
+   string   setup;
+   string   grade;
+   string   reason;
+};
+BlockedIdea g_blockedIdeas[];
+int         g_blockedIdeaCount = 0;
+datetime    g_lastBlockedMemorySummary = 0;
+
+ulong       g_qualityPosIds[];
+double      g_qualityWorstPnl[];
+datetime    g_qualityNegativeSince[];
+int         g_qualityNegativeSec[];
 
 // Tester/audit proof counters. These are intentionally small and local so
 // the EA can prove which setup/exit families helped or hurt without adding
@@ -1662,7 +1711,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.37 (POST-SWEEP A PLUS GUARD) READY ===");
+   Print("=== XAUAI SNIPER v5.8.38 (ENTRY TIMING MEMORY) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1786,7 +1835,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.37 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.38 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -3062,6 +3111,37 @@ void CheckPyramidOpportunity()
    double resetATR = 0.0;
    bool extensionNoReset = IsXAUExtensionResetMissing(dir, atr, extensionATR, resetATR);
    bool noDivergence = !HasExhaustionDivergence(dir);
+   bool pyramidBaseWasLateChase = false;
+   double pyramidBaseMissedMove = 0.0;
+   double pyramidBaseMissedATR = 0.0;
+   if(InpXAU_BlockLateChasePyramids &&
+      g_signalFirstSeenTime > 0 &&
+      g_signalFirstSeenDir == dir &&
+      g_signalFirstSeenPrice > 0.0)
+   {
+      pyramidBaseMissedMove = dir > 0 ? (origPx - g_signalFirstSeenPrice)
+                                      : (g_signalFirstSeenPrice - origPx);
+      double anchorAtr = MathMax(atr, g_signalFirstATR);
+      pyramidBaseMissedATR = anchorAtr > 0.0 ? pyramidBaseMissedMove / anchorAtr : 0.0;
+      pyramidBaseWasLateChase = (pyramidBaseMissedMove > 0.0 &&
+                                 (pyramidBaseMissedATR >= InpXAU_MaxMissedMoveATR ||
+                                  pyramidBaseMissedMove >= InpXAU_MaxMissedMoveUSD));
+   }
+   if(pyramidBaseWasLateChase && !baseProtected)
+   {
+      static datetime lastLatePyrBlockLog = 0;
+      if(TimeCurrent() - lastLatePyrBlockLog >= 60)
+      {
+         Print("PYRAMID BLOCKED: base trade was a late chase from first signal zone. firstPrice=",
+               DoubleToString(g_signalFirstSeenPrice, 2),
+               " baseEntry=", DoubleToString(origPx, 2),
+               " missedMove=", DoubleToString(pyramidBaseMissedMove, 2),
+               " (", DoubleToString(pyramidBaseMissedATR, 2),
+               "ATR). No clustered add until base is protected or a fresh setup resets.");
+         lastLatePyrBlockLog = TimeCurrent();
+      }
+      return;
+   }
    bool eliteTrend = (g_lastEntryScore >= InpPyramidEliteScore && (pyramidGradeA || InpPyramidAllowProtectedB) && momentumATR >= 0.50);
    bool moderateTrend = (g_lastEntryScore >= InpPyramidModerateScore && momentumATR >= 0.25);
    bool rescueMode = (adverseTrigger && !trendTrigger && InpPyramidRescueMode);
@@ -3752,7 +3832,7 @@ bool EPF_IsEliteGrade(string grade)
 }
 
 // Returns empty string if entry is allowed, or a reason string for block.
-// v5.8.37 — T4 is no longer a blind robot lock. Hard daily drawdown still
+// v5.8.38 — T4 is no longer a blind robot lock. Hard daily drawdown still
 // blocks, but elite signals can pass in guarded mode with tiny reduced size.
 string EPF_EntryBlockReason(string grade, double setupScore, double combinedScore, int signal,
                             double &adaptiveLotMult, bool &adaptivePass)
@@ -4077,6 +4157,7 @@ void OnTick()
    // If we have an open position and price has moved a meaningful distance
    // (adverse = better entry; with-trend = continuation), stack another
    // smaller position in the same direction while signal holds.
+   XAU_UpdateOpenTradeQuality();
    CheckPyramidOpportunity();
 
    // === THROTTLED DASHBOARD REFRESH (every 2s, keeps UI live between bars) ===
@@ -4166,6 +4247,7 @@ void OnTick()
    g_indicatorBufferFailCount = 0;
    if(curBar > 0) g_lastEntryBarSeen = curBar;
    g_lastEntryScanAt = TimeCurrent();
+   XAU_UpdateBlockedSignalOutcomes();
 
    int maxTradesToday = EffectiveMaxTradesPerDay();
    bool entryExecutionBlocked = false;
@@ -4281,6 +4363,12 @@ void OnTick()
                 : combinedScore >= dynGradeB    ? "B"
                 : "SKIP";
 
+   double firstSeenPx = signal > 0 ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                                   : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   if(firstSeenPx <= 0.0) firstSeenPx = iClose(Symbol(), PERIOD_M5, 1);
+   if(signal != 0 && grade != "SKIP")
+      XAU_TrackSignalFirstSeen(signal, setupName, grade, setupScore, combinedScore, firstSeenPx, bufATR[1]);
+
    // v5.6.0 FIX C — In unstable regimes (CHOPPY/LOW_VOL/DEAD), B-grade is too
    // permissive. Live data showed B-grade trades fired in CHOPPY regime then
    // got crushed when regime transitioned back to TREND_DN. Now B-grade is
@@ -4305,6 +4393,7 @@ void OnTick()
    if(!ApplyAntiBiasCorrection(signal, setupName, setupScore, combinedScore, grade, antiBiasReason))
    {
       Print("TRADE BLOCKED BECAUSE: ", antiBiasReason);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, antiBiasReason);
       CloudPostReasoning("BLOCK", antiBiasReason, RegimeName(), setupName,
                          setupScore, combinedScore, "ANTI-BIAS", signal);
       UpdateDashboard(0, combinedScore, "ANTI-BIAS");
@@ -4322,6 +4411,7 @@ void OnTick()
          string bMsg = StringFormat("B-GRADE QUALITY BLOCK: %s %s failed stricter fast XAU confirmation. %s",
                                     setupName, signal == 1 ? "BUY" : "SELL", bQualityWhy);
          Print("TRADE BLOCKED BECAUSE: ", bMsg);
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, bMsg);
          CloudPostReasoning("BLOCK", bMsg, RegimeName(), setupName,
                             setupScore, combinedScore, "B-QUALITY", signal);
          UpdateDashboard(0, combinedScore, "B-QUALITY");
@@ -4361,6 +4451,7 @@ void OnTick()
                                         sgStats.winRate, sgStats.expectancy, InpSmartGuardOverrideScore,
                                         InpSmartGuardRelaxAfterMin);
             Print("TRADE BLOCKED BECAUSE: ", sgMsg);
+            XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, sgMsg);
             CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
                                setupScore, combinedScore, "SG-HARD", signal);
             UpdateDashboard(0, combinedScore, "SG-HARD");
@@ -4391,6 +4482,7 @@ void OnTick()
             string sgMsg = StringFormat("SMART-GUARD: %s blocked by adaptive fast confirmation for %s. %s",
                                         setupName, signal == 1 ? "BUY" : "SELL", confirmWhy);
             Print("TRADE BLOCKED BECAUSE: ", sgMsg);
+            XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, sgMsg);
             CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
                                setupScore, combinedScore, "SG-FAST", signal);
             UpdateDashboard(0, combinedScore, "SG-FAST");
@@ -4410,6 +4502,7 @@ void OnTick()
          string sgMsg = StringFormat("SMART-GUARD: %s blocked while another position is open. No fresh stacking on damage-prone setup.",
                                      setupName);
          Print("TRADE BLOCKED BECAUSE: ", sgMsg);
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, sgMsg);
          CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
                             setupScore, combinedScore, "SG-STACK", signal);
          UpdateDashboard(0, combinedScore, "SG-STACK");
@@ -4479,6 +4572,7 @@ void OnTick()
                            grade, timingLotMult, timingReason))
    {
       Print("TRADE BLOCKED BECAUSE: ", timingReason);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, timingReason);
       CloudPostReasoning("BLOCK", timingReason, RegimeName(), setupName,
                          setupScore, combinedScore, "BAD-TIMING", signal);
       UpdateDashboard(0, combinedScore, "BAD-TIMING");
@@ -4530,6 +4624,7 @@ void OnTick()
             signal > 0 ? "BUY" : "SELL",
             " combined=", DoubleToString(combinedScore, 1),
             " grade=", grade);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, msg);
       CloudPostReasoning("BLOCK", msg, RegimeName(), setupName,
                          setupScore, combinedScore, entryExecutionBlockGrade, signal);
       UpdateDashboard(signal, combinedScore, entryExecutionBlockGrade);
@@ -4544,6 +4639,7 @@ void OnTick()
             signal > 0 ? "BUY" : "SELL",
             " combined=", DoubleToString(combinedScore, 1),
             " grade=", grade);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, spreadBlockReason);
       CloudPostReasoning("BLOCK", spreadBlockReason, RegimeName(), setupName,
                          setupScore, combinedScore, "SPREAD", signal);
       UpdateDashboard(signal, combinedScore, "SPREAD");
@@ -4555,6 +4651,7 @@ void OnTick()
    if(InpUseNewsFilter && !IsNewsSafe())
    {
       Print("TRADE BLOCKED BECAUSE: NEWS FILTER (high-impact event nearby)");
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "NEWS FILTER (high-impact event nearby)");
       CloudPostReasoning("BLOCK", "NEWS FILTER (high-impact event nearby)",
                          RegimeName(), setupName, setupScore, combinedScore, "NEWS", signal);
       UpdateDashboard(0, combinedScore, "NEWS");
@@ -4572,6 +4669,7 @@ void OnTick()
                                        dxyGoldBias, signal>0?"BUY":"SELL");
          Print("TRADE BLOCKED BECAUSE: ", dxyMsg,
                " (set InpUseDXYFilter=false to disable)");
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, dxyMsg);
          CloudPostReasoning("BLOCK", dxyMsg, RegimeName(), setupName,
                             setupScore, combinedScore, "DXY-VETO", signal);
          UpdateDashboard(0, combinedScore, "DXY-VETO");
@@ -4588,6 +4686,7 @@ void OnTick()
       string revMsg = StringFormat("ANTI-REVERSAL cooldown (%ds left, flipping %s→%s)",
                                     rem, lastTradeDir>0?"BUY":"SELL", signal>0?"BUY":"SELL");
       Print("TRADE BLOCKED BECAUSE: ", revMsg);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, revMsg);
       CloudPostReasoning("BLOCK", revMsg, RegimeName(), setupName,
                          setupScore, combinedScore, "REV-CD", signal);
       UpdateDashboard(0, combinedScore, "REV-CD");
@@ -4603,6 +4702,7 @@ void OnTick()
                                     signal == 1 ? "BUY" : "SELL",
                                     TimeToString(until, TIME_SECONDS));
       Print("TRADE BLOCKED BECAUSE: ", locMsg);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, locMsg);
       CloudPostReasoning("BLOCK", locMsg, RegimeName(), setupName,
                          setupScore, combinedScore,
                          signal == 1 ? "BUY-LOCKED" : "SELL-LOCKED", signal);
@@ -4660,6 +4760,7 @@ void OnTick()
       {
          Print("TRADE BLOCKED BECAUSE: LOCAL ML VETO — WR=", DoubleToString(mlScore * 100, 0),
                "% (", mlSamples, " matching samples)");
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "LOCAL ML VETO");
          UpdateDashboard(0, combinedScore, "ML-VETO");
          lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "ML-VETO";
          return;
@@ -4677,6 +4778,7 @@ void OnTick()
    {
       Print("TRADE BLOCKED BECAUSE: HIVE VETO — signature ", signature,
             " has WR ≤ 30% globally over last 7 days");
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "HIVE VETO");
       UpdateDashboard(0, combinedScore, "HIVE-VETO");
       lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "HIVE-VETO";
       return;
@@ -4772,12 +4874,13 @@ void OnTick()
    if(StringLen(pgBlock) > 0)
    {
       Print("🛡 PROFIT GUARDIAN VETO: ", pgBlock, " (signal=", signal == 1 ? "BUY" : "SELL", " grade=", grade, ")");
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, pgBlock);
       UpdateDashboard(0, combinedScore, "PG-VETO");
       lastDashGrade = "PG-VETO";
       return;
    }
 
-   // v5.8.37 — adaptive EPF-T4: elite signals may pass at reduced size unless hard DD is hit.
+   // v5.8.38 — adaptive EPF-T4: elite signals may pass at reduced size unless hard DD is hit.
    double epfAdaptiveLotMult = 1.0;
    bool epfT4AdaptivePass = false;
    string epfBlock = EPF_EntryBlockReason(grade, setupScore, combinedScore, signal,
@@ -4788,6 +4891,7 @@ void OnTick()
             " setupScore=", DoubleToString(setupScore, 1),
             " combined=", DoubleToString(combinedScore, 1),
             " grade=", grade, ")");
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, epfBlock);
       CloudPostReasoning("EPF", epfBlock, RegimeName(), setupName,
                          setupScore, combinedScore, "EPF-VETO", signal);
       UpdateDashboard(0, combinedScore, StringFormat("EPF-T%d", epf_tier));
@@ -4803,6 +4907,7 @@ void OnTick()
       if(EPF_IsClusteredEntry(signal, curPx, bufATR[1]))
       {
          Print("🛑 EPF CLUSTER VETO: entry too close to existing same-direction position");
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "EPF CLUSTER VETO");
          UpdateDashboard(0, combinedScore, "EPF-CLUSTER");
          lastDashGrade = "EPF-CLUSTER";
          return;
@@ -5160,7 +5265,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       }
    }
 
-   // v5.8.37 — Post-loss same-side retest guard. This is not a drawdown cap:
+   // v5.8.38 — Post-loss same-side retest guard. This is not a drawdown cap:
    // it only blocks the specific bad pattern where a BUY loses, then the EA
    // buys again at a worse/higher price before a real retest; inverse for SELL.
    if(InpPostLossSameSideGuard && InpPostLossGuardMin > 0 && atr > 0 &&
@@ -7751,6 +7856,21 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       g_nonAiPnl += profit;
    }
    RecordExitAudit(lastExitReason, wasWin, profit);
+   double worstFloatingPnl = 0.0;
+   int secondsNegative = 0;
+   XAU_PopTradeQuality(posId, worstFloatingPnl, secondsNegative);
+   if(worstFloatingPnl < -1.0 || secondsNegative > 0)
+   {
+      double recoveryQuality = profit > 0.0 && worstFloatingPnl < 0.0 ? profit / MathAbs(worstFloatingPnl) : 0.0;
+      string q = (profit > 0.0 && worstFloatingPnl <= -10000.0 && recoveryQuality < 0.60) ? "BAD-ENTRY-RECOVERY" :
+                 (worstFloatingPnl <= -5000.0 ? "DEEP-DRAWDOWN" : "OK");
+      Print("TRADE-QUALITY: ", q,
+            " worstFloating=$", DoubleToString(worstFloatingPnl, 2),
+            " secondsNegative=", secondsNegative,
+            " closeProfit=$", DoubleToString(profit, 2),
+            " recoveryQuality=", DoubleToString(recoveryQuality, 2),
+            " note=green close after deep drawdown is still poor entry timing.");
+   }
 
    // Populate lastClose for RE-ENTRY detector
    lastClose.valid      = true;
@@ -8470,6 +8590,339 @@ string DowngradeGradeOneStep(string grade)
    return grade;
 }
 
+string XAU_CsvSafe(string s)
+{
+   StringReplace(s, ",", ";");
+   StringReplace(s, "\r", " ");
+   StringReplace(s, "\n", " ");
+   StringReplace(s, "\"", "'");
+   if(StringLen(s) > 180) s = StringSubstr(s, 0, 180);
+   return s;
+}
+
+string XAU_BlockReasonKey(string reason)
+{
+   string r = reason;
+   int cut = StringFind(r, ":");
+   if(cut > 0) r = StringSubstr(r, 0, cut);
+   cut = StringFind(r, "|");
+   if(cut > 0) r = StringSubstr(r, 0, cut);
+   if(StringLen(r) > 64) r = StringSubstr(r, 0, 64);
+   return XAU_CsvSafe(r);
+}
+
+string XAU_BlockedMemoryFile()
+{
+   return "XAUAI_BlockedTradeMemory_" + Symbol() + ".csv";
+}
+
+void XAU_AppendBlockedMemory(string eventName, BlockedIdea &idea, int checkpointMin,
+                             double curPrice, string extra)
+{
+   if(!InpBlockedTradeMemoryReport || !IsXAUFastSymbol()) return;
+   string fn = XAU_BlockedMemoryFile();
+   bool exists = FileIsExist(fn, FILE_COMMON);
+   int h = FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE)
+   {
+      Print("BLOCKED-MEMORY: FileOpen failed err=", GetLastError());
+      return;
+   }
+   FileSeek(h, 0, SEEK_END);
+   if(!exists || FileTell(h) == 0)
+   {
+      FileWrite(h, "event", "time", "symbol", "dir", "setup", "grade", "reasonKey",
+                "signalPrice", "currentPrice", "atr", "checkpointMin",
+                "favATR", "advATR", "regime", "setupScore", "combined", "extra");
+   }
+   double favATR = idea.atr > 0.0 ? idea.maxFav / idea.atr : 0.0;
+   double advATR = idea.atr > 0.0 ? idea.maxAdv / idea.atr : 0.0;
+   FileWrite(h, eventName,
+             TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+             Symbol(),
+             idea.dir > 0 ? "BUY" : "SELL",
+             XAU_CsvSafe(idea.setup),
+             XAU_CsvSafe(idea.grade),
+             XAU_BlockReasonKey(idea.reason),
+             DoubleToString(idea.signalPrice, 2),
+             DoubleToString(curPrice, 2),
+             DoubleToString(idea.atr, 2),
+             checkpointMin,
+             DoubleToString(favATR, 2),
+             DoubleToString(advATR, 2),
+             idea.regime,
+             DoubleToString(idea.setupScore, 2),
+             DoubleToString(idea.combinedScore, 2),
+             XAU_CsvSafe(extra));
+   FileClose(h);
+}
+
+void XAU_TrackSignalFirstSeen(int signal, string setupName, string grade,
+                              double setupScore, double combinedScore,
+                              double price, double atr)
+{
+   if(!InpXAU_FirstSignalMemory || signal == 0 || price <= 0.0 || atr <= 0.0)
+      return;
+
+   bool reset = (g_signalFirstSeenTime == 0 ||
+                 g_signalFirstSeenDir != signal ||
+                 g_signalFirstSeenSetup != setupName ||
+                 TimeCurrent() - g_signalFirstSeenTime > 90 * 60);
+
+   if(reset)
+   {
+      g_signalFirstSeenTime = TimeCurrent();
+      g_signalFirstSeenPrice = price;
+      g_signalFirstSeenDir = signal;
+      g_signalFirstSeenSetup = setupName;
+      g_signalFirstSeenGrade = grade;
+      g_signalFirstBlockReason = "";
+      g_signalFirstSetupScore = setupScore;
+      g_signalFirstCombined = combinedScore;
+      g_signalFirstATR = atr;
+      Print("FIRST-SIGNAL: ", signal > 0 ? "BUY" : "SELL",
+            " setup=", setupName,
+            " grade=", grade,
+            " signalFirstSeenPrice=", DoubleToString(price, 2),
+            " score=", DoubleToString(setupScore, 1),
+            " combined=", DoubleToString(combinedScore, 1));
+   }
+}
+
+void XAU_RememberBlockedSignal(int signal, string setupName, string grade,
+                               double setupScore, double combinedScore,
+                               string reason)
+{
+   if(!InpBlockedTradeMemoryReport || signal == 0 || !IsXAUFastSymbol()) return;
+   double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   if(atr <= 0.0) return;
+   double px = (signal > 0) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                            : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   if(px <= 0.0) px = iClose(Symbol(), PERIOD_M5, 1);
+   if(px <= 0.0) return;
+
+   if(g_signalFirstSeenDir == signal && g_signalFirstSeenSetup == setupName && g_signalFirstSeenTime > 0)
+      g_signalFirstBlockReason = reason;
+
+   int idx = -1;
+   for(int i = 0; i < g_blockedIdeaCount; i++)
+   {
+      if(g_blockedIdeas[i].active &&
+         g_blockedIdeas[i].dir == signal &&
+         g_blockedIdeas[i].setup == setupName &&
+         XAU_BlockReasonKey(g_blockedIdeas[i].reason) == XAU_BlockReasonKey(reason))
+      {
+         idx = i;
+         break;
+      }
+   }
+   if(idx < 0)
+   {
+      if(g_blockedIdeaCount >= 40)
+      {
+         for(int j = 0; j < g_blockedIdeaCount - 1; j++) g_blockedIdeas[j] = g_blockedIdeas[j + 1];
+         g_blockedIdeaCount--;
+      }
+      ArrayResize(g_blockedIdeas, g_blockedIdeaCount + 1);
+      idx = g_blockedIdeaCount++;
+      g_blockedIdeas[idx].active = true;
+      g_blockedIdeas[idx].firstTime = TimeCurrent();
+      g_blockedIdeas[idx].lastCheck = TimeCurrent();
+      g_blockedIdeas[idx].nextCheckpointMin = 5;
+      g_blockedIdeas[idx].dir = signal;
+      g_blockedIdeas[idx].signalPrice = px;
+      g_blockedIdeas[idx].atr = atr;
+      g_blockedIdeas[idx].maxFav = 0.0;
+      g_blockedIdeas[idx].maxAdv = 0.0;
+      g_blockedIdeas[idx].setupScore = setupScore;
+      g_blockedIdeas[idx].combinedScore = combinedScore;
+      g_blockedIdeas[idx].regime = (int)currentRegime;
+      g_blockedIdeas[idx].setup = setupName;
+      g_blockedIdeas[idx].grade = grade;
+      g_blockedIdeas[idx].reason = reason;
+      XAU_AppendBlockedMemory("BLOCKED", g_blockedIdeas[idx], 0, px, reason);
+      Print("BLOCKED-MEMORY: saved virtual ", signal > 0 ? "BUY" : "SELL",
+            " setup=", setupName,
+            " grade=", grade,
+            " signalPrice=", DoubleToString(px, 2),
+            " reason=", XAU_BlockReasonKey(reason));
+   }
+}
+
+void XAU_UpdateBlockedSignalOutcomes()
+{
+   if(!InpBlockedTradeMemoryReport || g_blockedIdeaCount <= 0 || !IsXAUFastSymbol()) return;
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double mid = (bid > 0.0 && ask > 0.0) ? (bid + ask) * 0.5 : iClose(Symbol(), PERIOD_M5, 0);
+   if(mid <= 0.0) return;
+
+   int active = 0;
+   double totalFavATR = 0.0;
+   for(int i = 0; i < g_blockedIdeaCount; i++)
+   {
+      if(!g_blockedIdeas[i].active) continue;
+      double move = g_blockedIdeas[i].dir > 0 ? (mid - g_blockedIdeas[i].signalPrice)
+                                              : (g_blockedIdeas[i].signalPrice - mid);
+      g_blockedIdeas[i].maxFav = MathMax(g_blockedIdeas[i].maxFav, move);
+      g_blockedIdeas[i].maxAdv = MathMax(g_blockedIdeas[i].maxAdv, -move);
+
+      int ageMin = (int)((TimeCurrent() - g_blockedIdeas[i].firstTime) / 60);
+      if(ageMin >= g_blockedIdeas[i].nextCheckpointMin)
+      {
+         string extra = StringFormat("wouldTP2R=%s wouldSL1R=%s",
+                                     g_blockedIdeas[i].maxFav >= g_blockedIdeas[i].atr * 2.0 ? "Y" : "N",
+                                     g_blockedIdeas[i].maxAdv >= g_blockedIdeas[i].atr * 1.0 ? "Y" : "N");
+         XAU_AppendBlockedMemory("CHECK", g_blockedIdeas[i], g_blockedIdeas[i].nextCheckpointMin, mid, extra);
+         if(g_blockedIdeas[i].nextCheckpointMin < 10) g_blockedIdeas[i].nextCheckpointMin = 10;
+         else if(g_blockedIdeas[i].nextCheckpointMin < 15) g_blockedIdeas[i].nextCheckpointMin = 15;
+         else if(g_blockedIdeas[i].nextCheckpointMin < 30) g_blockedIdeas[i].nextCheckpointMin = 30;
+         else if(g_blockedIdeas[i].nextCheckpointMin < 60) g_blockedIdeas[i].nextCheckpointMin = 60;
+         else g_blockedIdeas[i].active = false;
+      }
+
+      if(g_blockedIdeas[i].active)
+      {
+         active++;
+         if(g_blockedIdeas[i].atr > 0.0) totalFavATR += g_blockedIdeas[i].maxFav / g_blockedIdeas[i].atr;
+      }
+   }
+
+   if(active > 0 && TimeCurrent() - g_lastBlockedMemorySummary >= 300)
+   {
+      Print("BLOCKED-MEMORY SUMMARY: active=", active,
+            " avgMaxFavorable=", DoubleToString(totalFavATR / active, 2),
+            "ATR minSamplesBeforeInfluence=", InpBlockedMemoryMinSamples,
+            ". CSV=", XAU_BlockedMemoryFile());
+      g_lastBlockedMemorySummary = TimeCurrent();
+   }
+}
+
+bool XAU_BlockedMemoryStats(string setupName, int signal, string reason,
+                            int &samples, double &winRate, double &avgFavATR, double &avgAdvATR)
+{
+   samples = 0;
+   winRate = 0.0;
+   avgFavATR = 0.0;
+   avgAdvATR = 0.0;
+   if(!InpBlockedTradeMemoryReport || !IsXAUFastSymbol()) return false;
+   string fn = XAU_BlockedMemoryFile();
+   if(!FileIsExist(fn, FILE_COMMON)) return false;
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return false;
+
+   string wantDir = signal > 0 ? "BUY" : "SELL";
+   string wantReason = XAU_BlockReasonKey(reason);
+   int winsMem = 0;
+   int lossesMem = 0;
+   while(!FileIsEnding(h))
+   {
+      string ev = FileReadString(h);
+      string tm = FileReadString(h);
+      string sym = FileReadString(h);
+      string dir = FileReadString(h);
+      string setup = FileReadString(h);
+      string grade = FileReadString(h);
+      string reasonKey = FileReadString(h);
+      string sigPx = FileReadString(h);
+      string curPx = FileReadString(h);
+      string atrTxt = FileReadString(h);
+      string cpTxt = FileReadString(h);
+      string favTxt = FileReadString(h);
+      string advTxt = FileReadString(h);
+      string regimeTxt = FileReadString(h);
+      string setupScoreTxt = FileReadString(h);
+      string combinedTxt = FileReadString(h);
+      string extra = FileReadString(h);
+      if(ev != "CHECK" || sym != Symbol() || dir != wantDir || setup != setupName || reasonKey != wantReason)
+         continue;
+      int checkpoint = (int)StringToInteger(cpTxt);
+      if(checkpoint < 30) continue;
+      double fav = StringToDouble(favTxt);
+      double adv = StringToDouble(advTxt);
+      samples++;
+      avgFavATR += fav;
+      avgAdvATR += adv;
+      if(fav >= 2.0 && adv < 1.20) winsMem++;
+      else if(adv >= 1.0 && fav < 1.50) lossesMem++;
+   }
+   FileClose(h);
+   if(samples <= 0) return false;
+   avgFavATR /= samples;
+   avgAdvATR /= samples;
+   int decided = winsMem + lossesMem;
+   winRate = decided > 0 ? (double)winsMem / decided * 100.0 : 50.0;
+   return (samples >= InpBlockedMemoryMinSamples);
+}
+
+int XAU_FindQualityIdx(ulong posId)
+{
+   for(int i = 0; i < ArraySize(g_qualityPosIds); i++)
+      if(g_qualityPosIds[i] == posId) return i;
+   return -1;
+}
+
+void XAU_UpdateOpenTradeQuality()
+{
+   if(!IsXAUFastSymbol()) return;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      ulong posId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      if(posId == 0) continue;
+      int idx = XAU_FindQualityIdx(posId);
+      if(idx < 0)
+      {
+         int n = ArraySize(g_qualityPosIds);
+         ArrayResize(g_qualityPosIds, n + 1);
+         ArrayResize(g_qualityWorstPnl, n + 1);
+         ArrayResize(g_qualityNegativeSince, n + 1);
+         ArrayResize(g_qualityNegativeSec, n + 1);
+         idx = n;
+         g_qualityPosIds[idx] = posId;
+         g_qualityWorstPnl[idx] = 0.0;
+         g_qualityNegativeSince[idx] = 0;
+         g_qualityNegativeSec[idx] = 0;
+      }
+      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(pnl < g_qualityWorstPnl[idx]) g_qualityWorstPnl[idx] = pnl;
+      if(pnl < 0.0)
+      {
+         if(g_qualityNegativeSince[idx] == 0) g_qualityNegativeSince[idx] = TimeCurrent();
+         g_qualityNegativeSec[idx] = (int)(TimeCurrent() - g_qualityNegativeSince[idx]);
+      }
+      else
+      {
+         g_qualityNegativeSince[idx] = 0;
+      }
+   }
+}
+
+void XAU_PopTradeQuality(ulong posId, double &worstPnl, int &negativeSec)
+{
+   worstPnl = 0.0;
+   negativeSec = 0;
+   int idx = XAU_FindQualityIdx(posId);
+   if(idx < 0) return;
+   worstPnl = g_qualityWorstPnl[idx];
+   negativeSec = g_qualityNegativeSec[idx];
+   int n = ArraySize(g_qualityPosIds);
+   for(int i = idx; i < n - 1; i++)
+   {
+      g_qualityPosIds[i] = g_qualityPosIds[i + 1];
+      g_qualityWorstPnl[i] = g_qualityWorstPnl[i + 1];
+      g_qualityNegativeSince[i] = g_qualityNegativeSince[i + 1];
+      g_qualityNegativeSec[i] = g_qualityNegativeSec[i + 1];
+   }
+   ArrayResize(g_qualityPosIds, n - 1);
+   ArrayResize(g_qualityWorstPnl, n - 1);
+   ArrayResize(g_qualityNegativeSince, n - 1);
+   ArrayResize(g_qualityNegativeSec, n - 1);
+}
+
 bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double combinedScore,
                          string &grade, double &lotMulti, string &reason)
 {
@@ -8634,12 +9087,42 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    bool extensionNoReset = (trendSetup &&
                             extensionDriveATR >= InpXAU_MaxExtensionDriveATR &&
                             extensionResetATR < InpXAU_MinExtensionResetATR);
-	   bool failedImpulseBlock = (trendSetup && InpXAU_BlockFailedImpulse && failedImpulse && !cleanContinuation);
-	   bool cycleGivebackBlock = (trendSetup && cycleHot && cycleExtremeLocation && !cleanContinuation);
-	   bool cycleLotReduce = (trendSetup && cycleHot);
-	   bool trueBreakoutContinuation = IsXAUConfirmedBreakoutContinuation(signal, setupName);
+   bool failedImpulseBlock = (trendSetup && InpXAU_BlockFailedImpulse && failedImpulse && !cleanContinuation);
+   bool cycleGivebackBlock = (trendSetup && cycleHot && cycleExtremeLocation && !cleanContinuation);
+   bool cycleLotReduce = (trendSetup && cycleHot);
+   bool trueBreakoutContinuation = IsXAUConfirmedBreakoutContinuation(signal, setupName);
    double directionalRoomATR = (signal == -1) ? lowClearanceATR : highClearanceATR;
    bool nearLiquiditySweep = (directionalRoomATR < InpXAU_MinDirectionalRoomATR);
+   bool sameFirstSignal = (InpXAU_FirstSignalMemory &&
+                           g_signalFirstSeenTime > 0 &&
+                           g_signalFirstSeenDir == signal &&
+                           g_signalFirstSeenSetup == setupName);
+   double missedMoveDistance = 0.0;
+   double missedMoveATRFromFirst = 0.0;
+   int candlesSinceSignal = 0;
+   if(sameFirstSignal)
+   {
+      missedMoveDistance = signal > 0 ? (close1 - g_signalFirstSeenPrice)
+                                      : (g_signalFirstSeenPrice - close1);
+      double anchorAtr = MathMax(atr, g_signalFirstATR);
+      missedMoveATRFromFirst = anchorAtr > 0.0 ? missedMoveDistance / anchorAtr : 0.0;
+      candlesSinceSignal = (int)((TimeCurrent() - g_signalFirstSeenTime) / 300);
+   }
+   bool signalPlayedOut = (trendSetup && sameFirstSignal &&
+                           missedMoveDistance > 0.0 &&
+                           (missedMoveATRFromFirst >= InpXAU_MaxMissedMoveATR ||
+                            missedMoveDistance >= InpXAU_MaxMissedMoveUSD ||
+                            candlesSinceSignal > InpXAU_MaxSignalAgeBars));
+   bool realLateRetest = (cleanContinuation &&
+                          pullbackATR >= InpXAU_MinLateRetestATR &&
+                          !chasingAway &&
+                          emaDistATR <= InpXAU_MaxEMADistanceATR * 1.15 &&
+                          (vwap <= 0.0 || vwapDistATR <= InpXAU_MaxVWAPDistanceATR * 1.10));
+   bool lateChaseEntry = (signalPlayedOut && !realLateRetest);
+   bool spikeCooldown = (trendSetup &&
+                         extensionDriveATR >= MathMax(InpXAU_MaxExtensionDriveATR, InpXAU_MaxMissedMoveATR) &&
+                         extensionResetATR < InpXAU_MinLateRetestATR &&
+                         candlesSinceSignal <= MathMax(2, InpXAU_MaxSignalAgeBars));
    bool missedMove = (trendSetup &&
                       extensionDriveATR >= InpXAU_MissedMoveDriveATR &&
                       extensionResetATR < InpXAU_MinExtensionResetATR &&
@@ -8653,6 +9136,8 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    if(vwapFar) exhaustionProb += 8.0;
    if(wrongCandle) exhaustionProb += 12.0;
    if(nearLiquiditySweep) exhaustionProb += 16.0;
+   if(lateChaseEntry) exhaustionProb += 32.0;
+   if(spikeCooldown) exhaustionProb += 22.0;
    if(!hasPullback) exhaustionProb += 10.0;
    if(cleanContinuation) exhaustionProb -= 25.0;
    exhaustionProb = MathMax(0.0, MathMin(100.0, exhaustionProb));
@@ -8665,6 +9150,8 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    if(!betterValue) lateEntryProb += 12.0;
    if(nearLiquiditySweep) lateEntryProb += 15.0;
    if(postSweepTrap) lateEntryProb += 20.0;
+   if(signalPlayedOut) lateEntryProb += 30.0;
+   if(spikeCooldown) lateEntryProb += 20.0;
    if(cleanContinuation) lateEntryProb -= 30.0;
    lateEntryProb = MathMax(0.0, MathMin(100.0, lateEntryProb));
 
@@ -8679,12 +9166,13 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
 
    double rrQuality = MathMin(100.0, (directionalRoomATR / MathMax(0.10, InpXAU_MinDirectionalRoomATR)) * 45.0);
    if(cleanContinuation) rrQuality = MathMin(100.0, rrQuality + 20.0);
-   if(missedMove || failedImpulse) rrQuality = MathMax(0.0, rrQuality - 25.0);
+   if(missedMove || failedImpulse || lateChaseEntry) rrQuality = MathMax(0.0, rrQuality - 25.0);
 
    string timingState = locationBlock ? "bad-location" : (cleanContinuation ? "clean-pullback" : "weak-timing");
    if(extensionNoReset) timingState = "extended-no-reset";
    if(failedImpulseBlock) timingState = "failed-impulse";
    if(cycleGivebackBlock) timingState = "cycle-giveback";
+   if(signalPlayedOut) timingState = realLateRetest ? "missed-move-retest" : "late-chase-entry";
    if(missedMove && timingState == "weak-timing") timingState = "missed-move";
    bool severeLate = trendSetup && chasingAway && (impulseBlock || driveFar || vwapFar) && !cleanContinuation;
    bool moderateLate = trendSetup && (chasingAway || impulseWarn || driveFar || vwapFar || !hasPullback || wrongCandle) && !cleanContinuation;
@@ -8693,19 +9181,19 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    {
       bool wasAPlus = (StringFind(grade, "A+") >= 0);
       bool aPlusBadTiming = (wasAPlus &&
-                             (entryEfficiency < InpXAU_APlusMinTimingQuality ||
-                              lateEntryProb > InpXAU_APlusMaxLateProb ||
-                              exhaustionProb > InpXAU_APlusMaxExhaustionProb ||
-                              missedMove || failedImpulse || postSweepTrap || nearLiquiditySweep));
-      bool aBadRR = (rrQuality < 35.0 && (missedMove || nearLiquiditySweep || failedImpulse || postSweepTrap));
+	                             (entryEfficiency < InpXAU_APlusMinTimingQuality ||
+	                              lateEntryProb > InpXAU_APlusMaxLateProb ||
+	                              exhaustionProb > InpXAU_APlusMaxExhaustionProb ||
+	                              missedMove || failedImpulse || postSweepTrap || nearLiquiditySweep || lateChaseEntry));
+      bool aBadRR = (rrQuality < 35.0 && (missedMove || nearLiquiditySweep || failedImpulse || postSweepTrap || lateChaseEntry));
       if(aPlusBadTiming)
       {
          string oldGrade = grade;
          grade = "A";
          lotMulti *= MathMin(0.80, InpXAU_FairTimingLotMulti);
-         reason = StringFormat("A+ TIMING DEMOTION: %s→A because confirmation arrived after positioning quality weakened. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f missedMove=%s failedImpulse=%s postSweep=%s liquidityDist=%.2fATR. ",
+         reason = StringFormat("A+ TIMING DEMOTION: %s→A because confirmation arrived after positioning quality weakened. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f missedMove=%s lateChase=%s failedImpulse=%s postSweep=%s liquidityDist=%.2fATR. ",
                                oldGrade, entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
-                               missedMove ? "Y" : "N", failedImpulse ? "Y" : "N",
+                               missedMove ? "Y" : "N", lateChaseEntry ? "Y" : "N", failedImpulse ? "Y" : "N",
                                postSweepTrap ? "Y" : "N", directionalRoomATR);
       }
       if(wasAPlus && postSweepTrap && InpXAU_BlockLateA)
@@ -8716,17 +9204,24 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       }
       if(aBadRR && InpXAU_BlockLateA)
       {
-         reason += StringFormat("BAD-RR TIMING BLOCK: A/A+ continuation has poor directional room after the move already travelled; waiting for fresh pullback/retest. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f liquidityDist=%.2fATR missedMove=%s failedImpulse=%s postSweep=%s. ",
+         reason += StringFormat("BAD-RR TIMING BLOCK: A/A+ continuation has poor directional room after the move already travelled; waiting for fresh pullback/retest. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f liquidityDist=%.2fATR missedMove=%s lateChase=%s failedImpulse=%s postSweep=%s. ",
                                 entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
-                                directionalRoomATR, missedMove ? "Y" : "N", failedImpulse ? "Y" : "N",
+                                directionalRoomATR, missedMove ? "Y" : "N", lateChaseEntry ? "Y" : "N", failedImpulse ? "Y" : "N",
                                 postSweepTrap ? "Y" : "N");
          return false;
       }
    }
 
-   reason += StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s timingQ=%.0f lateProb=%.0f%% exhaustion=%.0f%% rrQ=%.0f liquidityDist=%.2fATR expansionOrigin=%.2fATR expectedPullback=%.2fATR emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullbackFromExtreme=%.2fATR loc=%.0f%% lowClr=%.2fATR highClr=%.2fATR value=%s badLoc=%s rejection=%s wrongCandle=%s dayGain=%.1f%% cycle=%s failedImpulse=%s postSweep=%s missedMove=%s dropHigh=%.2fATR(%d) bounceLow=%.2fATR(%d)",
+   reason += StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s timingQ=%.0f lateProb=%.0f%% exhaustion=%.0f%% rrQ=%.0f signalFirstSeenPrice=%.2f entryPrice=%.2f missedMoveDistance=%.2f missedMoveATR=%.2f candlesSinceSignal=%d reasonBlockedAtFirstSignal=%s lateEntryVeto=%s spikeDetected=%s lotReductionReason=%s whyTradeAllowedAfterDelay=%s liquidityDist=%.2fATR expansionOrigin=%.2fATR expectedPullback=%.2fATR emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullbackFromExtreme=%.2fATR loc=%.0f%% lowClr=%.2fATR highClr=%.2fATR value=%s badLoc=%s rejection=%s wrongCandle=%s dayGain=%.1f%% cycle=%s failedImpulse=%s postSweep=%s missedMove=%s dropHigh=%.2fATR(%d) bounceLow=%.2fATR(%d)",
                          setupName, grade, setupScore, combinedScore, timingState,
                          entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
+                         sameFirstSignal ? g_signalFirstSeenPrice : 0.0, close1,
+                         missedMoveDistance, missedMoveATRFromFirst, candlesSinceSignal,
+                         StringLen(g_signalFirstBlockReason) > 0 ? XAU_BlockReasonKey(g_signalFirstBlockReason) : "none",
+                         lateChaseEntry ? "Y" : "N",
+                         (spikeCooldown || impulseBlock) ? "Y" : "N",
+                         signalPlayedOut ? (realLateRetest ? "late-retest-small-lot" : "missed-move-block") : "none",
+                         signalPlayedOut ? (realLateRetest ? "real-retest-structure-confirmed" : "not-allowed-move-played-out") : "fresh-signal",
                          directionalRoomATR, extensionDriveATR, InpXAU_MinExtensionResetATR,
                          emaDistATR, vwapDistATR, impulseATR, bodyATR, atrExpansion,
                          threeBarDriveATR, InpXAU_ExtensionLookbackBars, extensionDriveATR, extensionResetATR,
@@ -8743,11 +9238,46 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
                          dropFromFailHighATR, failHighShift,
                          bounceFromFailLowATR, failLowShift);
 
+   if(lateChaseEntry && InpXAU_BlockLateA)
+   {
+      reason = StringFormat("LATE-CHASE ENTRY BLOCK: first %s %s was seen at %.2f, current entry %.2f after %.2f (%.2fATR) and %d M5 candles; the move already played out, so no full-size A/A+ chase without real pullback/retest/structure. ",
+                            signal == 1 ? "BUY" : "SELL", setupName,
+                            g_signalFirstSeenPrice, close1, missedMoveDistance,
+                            missedMoveATRFromFirst, candlesSinceSignal) + reason;
+      return false;
+   }
+
+   if(signalPlayedOut && realLateRetest)
+   {
+      string oldGrade = grade;
+      lotMulti *= InpXAU_ExtremeLateLotMulti;
+      grade = DowngradeGradeOneStep(grade);
+      reason = StringFormat("MISSED-MOVE RETEST: same idea already travelled %.2f (%.2fATR) from first signal; retest is valid but size forced x%.2f and %s→%s. ",
+                            missedMoveDistance, missedMoveATRFromFirst,
+                            InpXAU_ExtremeLateLotMulti, oldGrade, grade) + reason;
+   }
+
    if(locationBlock)
    {
       reason = StringFormat("BAD-LOCATION BLOCK: %s is too close to the recent %s after movement; waiting for pullback into value area + rejection. ",
                             signal == -1 ? "SELL" : "BUY",
                             signal == -1 ? "low" : "high") + reason;
+      int memSamples = 0;
+      double memWR = 0.0, memFav = 0.0, memAdv = 0.0;
+      bool memorySupportsScout = XAU_BlockedMemoryStats(setupName, signal, reason,
+                                                        memSamples, memWR, memFav, memAdv) &&
+                                 memWR >= 65.0 && memFav >= 1.60 && memAdv <= 1.10 &&
+                                 !lateChaseEntry && !spikeCooldown;
+      if(memorySupportsScout)
+      {
+         string oldGrade = grade;
+         lotMulti *= InpXAU_ExtremeLateLotMulti;
+         grade = DowngradeGradeOneStep(grade);
+         reason = StringFormat("BLOCKED-MEMORY SCOUT: similar blocked %s signals worked before (samples=%d WR=%.0f%% avgFav=%.2fATR avgAdv=%.2fATR), so allowing controlled small scout %s→%s lot x%.2f instead of blind hard block. ",
+                               setupName, memSamples, memWR, memFav, memAdv,
+                               oldGrade, grade, lotMulti) + reason;
+         return true;
+      }
       return false;
    }
 
@@ -8762,6 +9292,22 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       reason = StringFormat("FAILED-IMPULSE BLOCK: %s is trying to join after gold already rejected the latest %s; waiting for fresh pullback continuation instead. ",
                             signal == 1 ? "BUY" : "SELL",
                             signal == 1 ? "spike high" : "flush low") + reason;
+      int memSamples = 0;
+      double memWR = 0.0, memFav = 0.0, memAdv = 0.0;
+      bool memorySupportsScout = XAU_BlockedMemoryStats(setupName, signal, reason,
+                                                        memSamples, memWR, memFav, memAdv) &&
+                                 memWR >= 70.0 && memFav >= 1.80 && memAdv <= 1.00 &&
+                                 !lateChaseEntry && !spikeCooldown;
+      if(memorySupportsScout)
+      {
+         string oldGrade = grade;
+         lotMulti *= InpXAU_ExtremeLateLotMulti;
+         grade = DowngradeGradeOneStep(grade);
+         reason = StringFormat("BLOCKED-MEMORY SCOUT: failed-impulse blocks for this pattern have worked after block (samples=%d WR=%.0f%% avgFav=%.2fATR avgAdv=%.2fATR), so allowing controlled scout %s→%s lot x%.2f. ",
+                               memSamples, memWR, memFav, memAdv,
+                               oldGrade, grade, lotMulti) + reason;
+         return true;
+      }
       return false;
    }
 
@@ -9622,7 +10168,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.37 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.38 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
