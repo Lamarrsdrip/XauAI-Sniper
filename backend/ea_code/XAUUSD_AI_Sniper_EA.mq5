@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.38 — Entry Timing Memory Mode   |
+//|                                     v5.8.39 — Trade Brain Memory Mode    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.38 — ENTRY TIMING MEMORY"
+#property description "XAUUSD AI Sniper v5.8.39 — TRADE BRAIN MEMORY"
 #property description "Main build: 10-30 min entry quality guards with wider profit room."
 #property description "Keeps pullback timing, cycle armor, smart pyramid guard, and cloud-safe no-partial lifecycle."
 #property strict
@@ -145,7 +145,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.38 — breakout + pyramid adaptive confirmation) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.39 — breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -154,7 +154,7 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.38 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.39 — stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
@@ -194,9 +194,16 @@ input double InpXAU_ExtremeLateLotMulti    = 0.35;  // If late but still allowed
 input bool   InpXAU_BlockLateChasePyramids = true;  // Pyramid adds must not cluster near the exhausted end of a missed move
 input bool   InpBlockedTradeMemoryReport   = true;  // Persist blocked-signal outcome learning to CSV for audits
 input int    InpBlockedMemoryMinSamples    = 8;     // Samples required before blocked-pattern stats can influence logs/size
+input bool   InpTradeBrainMemory           = true;  // Persist EVERY executed trade with entry reason, exit reason, drawdown, and outcome
+input int    InpTradeBrainMinSamples       = 12;    // Minimum matching closed trades before brain can affect new entries
+input double InpTradeBrainReduceWR         = 42.0;  // If similar pattern WR is below this, reduce lot instead of repeating full risk
+input double InpTradeBrainBlockWR          = 28.0;  // If similar pattern WR is below this with poor PF, block until pattern improves
+input double InpTradeBrainMinPF            = 0.75;  // Below this profit factor, similar pattern is treated as weak
+input double InpTradeBrainBadDDProfitRatio = 2.50;  // Avg worst DD worse than this × avg profit = poor entry quality
+input double InpTradeBrainWeakLotMulti     = 0.45;  // Lot multiplier for weak-but-not-blocked repeated patterns
 input bool   InpCloudSafeDisablePartials   = true;  // Disable partial-loss/profit reductions so master/cloud lifecycle stays synchronized
 
-input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.38 — protect big winning cycles) ==="
+input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.39 — protect big winning cycles) ==="
 input bool   InpXAU_CycleGivebackArmor        = true; // After a strong winning day, reduce late-cycle risk instead of giving back many wins
 input double InpXAU_CycleArmGainPct           = 8.0;  // Daily gain % where cycle armor starts protecting session equity
 input double InpXAU_CycleLotMulti             = 0.55; // Lot multiplier while cycle armor is armed
@@ -214,7 +221,7 @@ input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this
 input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 
-input group "=== ENTRY QUALITY GUARD (v5.8.38 — 10-30 min entry quality guard) ==="
+input group "=== ENTRY QUALITY GUARD (v5.8.39 — 10-30 min entry quality guard) ==="
 input bool   InpStructureRunnerMode           = true;  // Main runner: let correct XAU direction breathe into larger account-sized wins
 input double InpStructureTPMultiplier         = 6.5;   // Wider initial TP target; still based on SL/ATR, never fixed dollars
 input double InpStructureTPExtendTriggerPct   = 68.0;  // Extend earlier so strong trends do not hit a small TP and stop
@@ -853,8 +860,12 @@ int    lastRegime, lastSetupType;
 ENUM_REGIME currentRegime;
 string lastSignalSetup = "";
 string lastSignalSignature = "";
+string g_pendingBrainGrade = "";
+double g_pendingBrainSetupScore = 0.0;
+double g_pendingBrainCombinedScore = 0.0;
+string g_pendingBrainEntryAudit = "";
 
-// v5.8.38 — Entry Timing Intelligence.
+// v5.8.39 — Entry Timing + Trade Brain Intelligence.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -893,6 +904,28 @@ ulong       g_qualityPosIds[];
 double      g_qualityWorstPnl[];
 datetime    g_qualityNegativeSince[];
 int         g_qualityNegativeSec[];
+
+struct TradeBrainOpen
+{
+   ulong    posId;
+   datetime entryTime;
+   int      dir;
+   double   entryPrice;
+   double   sl;
+   double   tp;
+   double   lots;
+   double   atr;
+   double   setupScore;
+   double   combinedScore;
+   int      regime;
+   int      aiConfidence;
+   string   setup;
+   string   grade;
+   string   signature;
+   string   session;
+   string   entryReason;
+};
+TradeBrainOpen g_brainOpenTrades[];
 
 // Tester/audit proof counters. These are intentionally small and local so
 // the EA can prove which setup/exit families helped or hurt without adding
@@ -1711,7 +1744,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.38 (ENTRY TIMING MEMORY) READY ===");
+   Print("=== XAUAI SNIPER v5.8.39 (TRADE BRAIN MEMORY) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1835,7 +1868,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.38 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.39 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -4855,6 +4888,10 @@ void OnTick()
    lastSignalATR = bufATR[1];
    lastSignalSetup = setupName;
    lastSignalSignature = signature;
+   g_pendingBrainGrade = grade;
+   g_pendingBrainSetupScore = setupScore;
+   g_pendingBrainCombinedScore = combinedScore;
+   g_pendingBrainEntryAudit = timingReason;
 
    // v4.5.0 — Remember the AI's conviction on the trade we're about to open,
    // so mid-trade audits can reference both the thesis AND the original confidence.
@@ -4938,6 +4975,26 @@ void OnTick()
       CloudPostReasoning("EPF-T4", "Adaptive guarded pass: elite signal allowed with reduced lot",
                          RegimeName(), setupName, setupScore, combinedScore, "EPF-T4-SOFT", signal);
    }
+
+   double brainLotMult = 1.0;
+   string brainReason = "";
+   if(!XAU_TradeBrainPreEntry(signal, setupName, grade, signature, brainLotMult, brainReason))
+   {
+      Print(brainReason);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, brainReason);
+      CloudPostReasoning("BLOCK", brainReason, RegimeName(), setupName,
+                         setupScore, combinedScore, "TRADE-BRAIN", signal);
+      UpdateDashboard(0, combinedScore, "BRAIN-BLOCK");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "BRAIN-BLOCK";
+      return;
+   }
+   if(brainLotMult < 0.999)
+   {
+      sizeMulti *= brainLotMult;
+      Print(brainReason);
+   }
+   else if(StringLen(brainReason) > 0)
+      Print(brainReason);
 
    // Open trade with grade-scaled sizing
    OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", sizeMulti * pgLotMult);
@@ -5595,17 +5652,26 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    if(signal == 1) ok = trade.Buy(lots, Symbol(), 0, sl, tp, "XAU-SNIPER|" + reason);
    else ok = trade.Sell(lots, Symbol(), 0, sl, tp, "XAU-SNIPER|" + reason);
 
-   if(ok) { todayTradeCount++; lastTradeDir = signal; }
+   ulong openedDealTicket = ok ? trade.ResultDeal() : 0;
+   ulong openedPosId = 0;
+   if(ok && openedDealTicket > 0 && HistoryDealSelect(openedDealTicket))
+      openedPosId = (ulong)HistoryDealGetInteger(openedDealTicket, DEAL_POSITION_ID);
+   if(ok && openedPosId == 0) openedPosId = trade.ResultOrder(); // fallback (broker-dependent)
+
+   if(ok)
+   {
+      todayTradeCount++;
+      lastTradeDir = signal;
+      XAU_BrainRecordOpen(openedPosId, signal, price, sl, tp, lots, atr,
+                          lastSignalSetup, g_pendingBrainGrade, lastSignalSignature,
+                          g_pendingBrainSetupScore, g_pendingBrainCombinedScore,
+                          reason + " | " + g_pendingBrainEntryAudit);
+   }
    else Print("TRADE FAILED: Err=", GetLastError(), " Ret=", trade.ResultRetcode());
 
    // v5.0.0 — XAUAI CLOUD fanout: mirror this open to subscribers
    if(ok && CloudEnabled())
    {
-      ulong dealTicket = trade.ResultDeal();
-      ulong posId = 0;
-      if(dealTicket > 0 && HistoryDealSelect(dealTicket))
-         posId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
-      if(posId == 0) posId = trade.ResultOrder(); // fallback (broker-dependent)
       string grade = CloudExtractGrade(reason);
       double riskHintPct = InpRiskPercent;
       if(InpAccountMode == ACCT_BALANCED)     riskHintPct = 1.2;
@@ -5615,7 +5681,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                                      price, sl, tp, grade, riskHintPct,
                                      lots,                                // v1.3: master lot size
                                      accInfo.Balance());                  // v1.3: master balance ($)
-      if(StringLen(sigId) > 0 && posId > 0) CloudMapAdd(posId, sigId);
+      if(StringLen(sigId) > 0 && openedPosId > 0) CloudMapAdd(openedPosId, sigId);
       // v5.1.5 — push to bot-reasoning feed so subscribers see EVERY trade fire
       string setupForCloud = reason;
       int setupBracket = StringFind(setupForCloud, " [");
@@ -7871,6 +7937,48 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
             " recoveryQuality=", DoubleToString(recoveryQuality, 2),
             " note=green close after deep drawdown is still poor entry timing.");
    }
+   if(InpTradeBrainMemory && IsXAUFastSymbol())
+   {
+      int brainIdx = XAU_FindBrainOpen(posId);
+      TradeBrainOpen brainRec;
+      if(brainIdx >= 0)
+         brainRec = g_brainOpenTrades[brainIdx];
+      else
+      {
+         brainRec.posId = posId;
+         brainRec.entryTime = TimeCurrent();
+         brainRec.dir = (dirStr == "BUY") ? 1 : -1;
+         brainRec.entryPrice = dPrice;
+         brainRec.sl = 0.0;
+         brainRec.tp = 0.0;
+         brainRec.lots = dVolume;
+         brainRec.atr = lastSignalATR;
+         brainRec.setupScore = 0.0;
+         brainRec.combinedScore = g_lastEntryScore;
+         brainRec.regime = (int)currentRegime;
+         brainRec.aiConfidence = currentTradeConfidence;
+         brainRec.setup = StringLen(lastSignalSetup) > 0 ? lastSignalSetup : "UNKNOWN";
+         brainRec.grade = StringLen(g_lastEntryGrade) > 0 ? g_lastEntryGrade : "UNKNOWN";
+         brainRec.signature = lastSignalSignature;
+         brainRec.session = SessionTag();
+         brainRec.entryReason = "fallback: open record not found";
+      }
+      string outcome = wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK_EVEN";
+      if(wasWin && worstFloatingPnl <= -10000.0)
+         outcome = "WIN_AFTER_DEEP_DD";
+      else if(wasWin && worstFloatingPnl < 0.0 && profit > 0.0 && profit / MathAbs(worstFloatingPnl) < 0.60)
+         outcome = "WEAK_RECOVERY_WIN";
+      XAU_AppendTradeBrain("CLOSE", brainRec, dPrice, profit, worstFloatingPnl,
+                           secondsNegative, outcome, lastExitReason);
+      Print("TRADE-BRAIN CLOSE: ", outcome,
+            " posId=", posId,
+            " setup=", brainRec.setup,
+            " grade=", XAU_GradeBucket(brainRec.grade),
+            " profit=$", DoubleToString(profit, 2),
+            " worstFloating=$", DoubleToString(worstFloatingPnl, 2),
+            " exitReason=", XAU_BlockReasonKey(lastExitReason));
+      if(brainIdx >= 0) XAU_RemoveBrainOpen(brainIdx);
+   }
 
    // Populate lastClose for RE-ENTRY detector
    lastClose.valid      = true;
@@ -8614,6 +8722,255 @@ string XAU_BlockReasonKey(string reason)
 string XAU_BlockedMemoryFile()
 {
    return "XAUAI_BlockedTradeMemory_" + Symbol() + ".csv";
+}
+
+string XAU_TradeBrainFile()
+{
+   return "XAUAI_ExecutedTradeBrain_" + Symbol() + ".csv";
+}
+
+string XAU_GradeBucket(string grade)
+{
+   if(StringFind(grade, "A+") >= 0) return "A+";
+   if(grade == "A") return "A";
+   if(grade == "B" || StringFind(grade, "B+") >= 0) return "B";
+   return grade;
+}
+
+int XAU_FindBrainOpen(ulong posId)
+{
+   for(int i = 0; i < ArraySize(g_brainOpenTrades); i++)
+      if(g_brainOpenTrades[i].posId == posId) return i;
+   return -1;
+}
+
+void XAU_RemoveBrainOpen(int idx)
+{
+   int n = ArraySize(g_brainOpenTrades);
+   if(idx < 0 || idx >= n) return;
+   for(int i = idx; i < n - 1; i++)
+      g_brainOpenTrades[i] = g_brainOpenTrades[i + 1];
+   ArrayResize(g_brainOpenTrades, n - 1);
+}
+
+void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
+                          double exitPrice, double profit,
+                          double worstFloatingPnl, int secondsNegative,
+                          string outcome, string exitReason)
+{
+   if(!InpTradeBrainMemory || !IsXAUFastSymbol()) return;
+   string fn = XAU_TradeBrainFile();
+   bool exists = FileIsExist(fn, FILE_COMMON);
+   int h = exists
+           ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',')
+           : FileOpen(fn, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE)
+   {
+      Print("TRADE-BRAIN: FileOpen failed err=", GetLastError());
+      return;
+   }
+   if(exists) FileSeek(h, 0, SEEK_END);
+   if(!exists || FileTell(h) == 0)
+   {
+      FileWrite(h, "event", "time", "posId", "symbol", "dir", "setup", "grade", "signature",
+                "regime", "session", "hour", "entryPrice", "exitPrice", "lots", "sl", "tp",
+                "profit", "worstFloating", "secondsNegative", "outcome", "exitReason",
+                "entryReason", "setupScore", "combined", "atr", "aiConfidence");
+   }
+   MqlDateTime dt; TimeCurrent(dt);
+   FileWrite(h, eventName,
+             TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+             (string)r.posId,
+             Symbol(),
+             r.dir > 0 ? "BUY" : "SELL",
+             XAU_CsvSafe(r.setup),
+             XAU_CsvSafe(XAU_GradeBucket(r.grade)),
+             XAU_CsvSafe(r.signature),
+             r.regime,
+             XAU_CsvSafe(r.session),
+             dt.hour,
+             DoubleToString(r.entryPrice, 2),
+             DoubleToString(exitPrice, 2),
+             DoubleToString(r.lots, VolumeDigitsForSymbol()),
+             DoubleToString(r.sl, 2),
+             DoubleToString(r.tp, 2),
+             DoubleToString(profit, 2),
+             DoubleToString(worstFloatingPnl, 2),
+             secondsNegative,
+             XAU_CsvSafe(outcome),
+             XAU_CsvSafe(exitReason),
+             XAU_CsvSafe(r.entryReason),
+             DoubleToString(r.setupScore, 2),
+             DoubleToString(r.combinedScore, 2),
+             DoubleToString(r.atr, 2),
+             r.aiConfidence);
+   FileClose(h);
+}
+
+void XAU_BrainRecordOpen(ulong posId, int signal, double entryPrice, double sl, double tp,
+                         double lots, double atr, string setupName, string grade,
+                         string signature, double setupScore, double combinedScore,
+                         string entryReason)
+{
+   if(!InpTradeBrainMemory || posId == 0 || signal == 0 || !IsXAUFastSymbol()) return;
+   int idx = XAU_FindBrainOpen(posId);
+   if(idx < 0)
+   {
+      int n = ArraySize(g_brainOpenTrades);
+      ArrayResize(g_brainOpenTrades, n + 1);
+      idx = n;
+   }
+   g_brainOpenTrades[idx].posId = posId;
+   g_brainOpenTrades[idx].entryTime = TimeCurrent();
+   g_brainOpenTrades[idx].dir = signal;
+   g_brainOpenTrades[idx].entryPrice = entryPrice;
+   g_brainOpenTrades[idx].sl = sl;
+   g_brainOpenTrades[idx].tp = tp;
+   g_brainOpenTrades[idx].lots = lots;
+   g_brainOpenTrades[idx].atr = atr;
+   g_brainOpenTrades[idx].setupScore = setupScore;
+   g_brainOpenTrades[idx].combinedScore = combinedScore;
+   g_brainOpenTrades[idx].regime = (int)currentRegime;
+   g_brainOpenTrades[idx].aiConfidence = currentTradeConfidence;
+   g_brainOpenTrades[idx].setup = setupName;
+   g_brainOpenTrades[idx].grade = grade;
+   g_brainOpenTrades[idx].signature = signature;
+   g_brainOpenTrades[idx].session = SessionTag();
+   g_brainOpenTrades[idx].entryReason = entryReason;
+   XAU_AppendTradeBrain("OPEN", g_brainOpenTrades[idx], 0.0, 0.0, 0.0, 0, "OPEN", "");
+   Print("TRADE-BRAIN OPEN: posId=", posId,
+         " ", signal > 0 ? "BUY" : "SELL",
+         " setup=", setupName,
+         " grade=", XAU_GradeBucket(grade),
+         " signature=", signature,
+         " file=", XAU_TradeBrainFile());
+}
+
+bool XAU_TradeBrainStats(string setupName, int signal, string grade, string signature,
+                         int &samples, double &winRate, double &profitFactor,
+                         double &avgProfit, double &avgWorstDD, double &badRecoveryRate)
+{
+   samples = 0;
+   winRate = 0.0;
+   profitFactor = 0.0;
+   avgProfit = 0.0;
+   avgWorstDD = 0.0;
+   badRecoveryRate = 0.0;
+   if(!InpTradeBrainMemory || !IsXAUFastSymbol()) return false;
+   string fn = XAU_TradeBrainFile();
+   if(!FileIsExist(fn, FILE_COMMON)) return false;
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return false;
+
+   string wantDir = signal > 0 ? "BUY" : "SELL";
+   string wantGrade = XAU_GradeBucket(grade);
+   int winsMem = 0;
+   int badRecovery = 0;
+   double grossWin = 0.0;
+   double grossLoss = 0.0;
+   double totalWorst = 0.0;
+   double totalProfit = 0.0;
+   int exactSigSamples = 0;
+   int exactSigWins = 0;
+
+   while(!FileIsEnding(h))
+   {
+      string ev = FileReadString(h);
+      string tm = FileReadString(h);
+      string posIdTxt = FileReadString(h);
+      string sym = FileReadString(h);
+      string dir = FileReadString(h);
+      string setup = FileReadString(h);
+      string gr = FileReadString(h);
+      string sig = FileReadString(h);
+      string regimeTxt = FileReadString(h);
+      string sess = FileReadString(h);
+      string hourTxt = FileReadString(h);
+      string entryTxt = FileReadString(h);
+      string exitTxt = FileReadString(h);
+      string lotsTxt = FileReadString(h);
+      string slTxt = FileReadString(h);
+      string tpTxt = FileReadString(h);
+      string profitTxt = FileReadString(h);
+      string worstTxt = FileReadString(h);
+      string negTxt = FileReadString(h);
+      string outcome = FileReadString(h);
+      string exitR = FileReadString(h);
+      string entryR = FileReadString(h);
+      string setupScoreTxt = FileReadString(h);
+      string combinedTxt = FileReadString(h);
+      string atrTxt = FileReadString(h);
+      string aiTxt = FileReadString(h);
+
+      if(ev != "CLOSE" || sym != Symbol() || dir != wantDir || setup != setupName)
+         continue;
+      bool gradeCompatible = (gr == wantGrade || sig == signature);
+      if(!gradeCompatible) continue;
+
+      double p = StringToDouble(profitTxt);
+      double worst = StringToDouble(worstTxt);
+      samples++;
+      totalProfit += p;
+      totalWorst += worst;
+      if(p >= 0.01) { winsMem++; grossWin += p; }
+      else if(p <= -0.01) grossLoss += MathAbs(p);
+      if(sig == signature)
+      {
+         exactSigSamples++;
+         if(p >= 0.01) exactSigWins++;
+      }
+      if(p > 0.0 && worst < -1.0 && p / MathAbs(worst) < 0.60)
+         badRecovery++;
+   }
+   FileClose(h);
+   if(samples <= 0) return false;
+   winRate = (double)winsMem / samples * 100.0;
+   profitFactor = grossLoss > 0.0 ? grossWin / grossLoss : (grossWin > 0.0 ? 999.0 : 0.0);
+   avgProfit = totalProfit / samples;
+   avgWorstDD = totalWorst / samples;
+   badRecoveryRate = (double)badRecovery / samples * 100.0;
+   if(exactSigSamples >= InpTradeBrainMinSamples)
+      Print("TRADE-BRAIN EXACT-SIGNATURE: ", signature,
+            " samples=", exactSigSamples,
+            " WR=", DoubleToString((double)exactSigWins / exactSigSamples * 100.0, 0), "%");
+   return (samples >= InpTradeBrainMinSamples);
+}
+
+bool XAU_TradeBrainPreEntry(int signal, string setupName, string grade, string signature,
+                            double &lotMulti, string &brainReason)
+{
+   lotMulti = 1.0;
+   brainReason = "";
+   if(!InpTradeBrainMemory || signal == 0 || !IsXAUFastSymbol()) return true;
+   int samples = 0;
+   double wr = 0.0, pf = 0.0, avgP = 0.0, avgDD = 0.0, badRec = 0.0;
+   bool trusted = XAU_TradeBrainStats(setupName, signal, grade, signature,
+                                      samples, wr, pf, avgP, avgDD, badRec);
+   if(!trusted)
+   {
+      brainReason = StringFormat("TRADE-BRAIN AUDIT: pattern has %d/%d samples; recording only, no behavior change.",
+                                 samples, InpTradeBrainMinSamples);
+      return true;
+   }
+
+   bool poorEntryQuality = (avgP > 0.0 && avgDD < 0.0 &&
+                            MathAbs(avgDD) > avgP * InpTradeBrainBadDDProfitRatio);
+   brainReason = StringFormat("TRADE-BRAIN AUDIT: samples=%d WR=%.0f%% PF=%.2f avgP=$%.0f avgWorstDD=$%.0f badRecovery=%.0f%% poorEntry=%s",
+                              samples, wr, pf, avgP, avgDD, badRec,
+                              poorEntryQuality ? "Y" : "N");
+
+   if(wr <= InpTradeBrainBlockWR && pf < InpTradeBrainMinPF)
+   {
+      brainReason = "TRADE-BRAIN BLOCK: similar executed trades have poor proven expectancy. " + brainReason;
+      return false;
+   }
+   if(wr <= InpTradeBrainReduceWR || pf < InpTradeBrainMinPF || poorEntryQuality || badRec >= 45.0)
+   {
+      lotMulti = InpTradeBrainWeakLotMulti;
+      brainReason = StringFormat("TRADE-BRAIN REDUCE: similar pattern is weak, lot x%.2f. ",
+                                 lotMulti) + brainReason;
+   }
+   return true;
 }
 
 void XAU_AppendBlockedMemory(string eventName, BlockedIdea &idea, int checkpointMin,
@@ -10170,7 +10527,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.38 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.39 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
