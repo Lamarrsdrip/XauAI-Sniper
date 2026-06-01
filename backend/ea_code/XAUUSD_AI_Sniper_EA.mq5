@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.39 — Trade Brain Memory Mode    |
+//|                                     v5.8.40 — Exit Learning Brain Mode   |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.39 — TRADE BRAIN MEMORY"
+#property description "XAUUSD AI Sniper v5.8.40 — EXIT LEARNING BRAIN"
 #property description "Main build: 10-30 min entry quality guards with wider profit room."
 #property description "Keeps pullback timing, cycle armor, smart pyramid guard, and cloud-safe no-partial lifecycle."
 #property strict
@@ -145,7 +145,7 @@ input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.39 — breakout + pyramid adaptive confirmation) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.40 — breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -154,7 +154,7 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.39 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.40 — stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
@@ -201,9 +201,12 @@ input double InpTradeBrainBlockWR          = 28.0;  // If similar pattern WR is 
 input double InpTradeBrainMinPF            = 0.75;  // Below this profit factor, similar pattern is treated as weak
 input double InpTradeBrainBadDDProfitRatio = 2.50;  // Avg worst DD worse than this × avg profit = poor entry quality
 input double InpTradeBrainWeakLotMulti     = 0.45;  // Lot multiplier for weak-but-not-blocked repeated patterns
+input bool   InpTradeBrainMonitorAfterExit = true;  // After close, keep watching to learn whether exit was early, late, or correct
+input double InpExitBrainEarlyProfitATR    = 1.20;  // If price moves this much further after close, mark exit as early
+input double InpExitBrainGoodAvoidATR      = 0.90;  // If price reverses this much after close, mark exit as good protection
 input bool   InpCloudSafeDisablePartials   = true;  // Disable partial-loss/profit reductions so master/cloud lifecycle stays synchronized
 
-input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.39 — protect big winning cycles) ==="
+input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.40 — protect big winning cycles) ==="
 input bool   InpXAU_CycleGivebackArmor        = true; // After a strong winning day, reduce late-cycle risk instead of giving back many wins
 input double InpXAU_CycleArmGainPct           = 8.0;  // Daily gain % where cycle armor starts protecting session equity
 input double InpXAU_CycleLotMulti             = 0.55; // Lot multiplier while cycle armor is armed
@@ -221,7 +224,7 @@ input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this
 input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
 input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
 
-input group "=== ENTRY QUALITY GUARD (v5.8.39 — 10-30 min entry quality guard) ==="
+input group "=== ENTRY QUALITY GUARD (v5.8.40 — 10-30 min entry quality guard) ==="
 input bool   InpStructureRunnerMode           = true;  // Main runner: let correct XAU direction breathe into larger account-sized wins
 input double InpStructureTPMultiplier         = 6.5;   // Wider initial TP target; still based on SL/ATR, never fixed dollars
 input double InpStructureTPExtendTriggerPct   = 68.0;  // Extend earlier so strong trends do not hit a small TP and stop
@@ -865,7 +868,7 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
-// v5.8.39 — Entry Timing + Trade Brain Intelligence.
+// v5.8.40 — Entry Timing + Trade Brain + Exit Learning Intelligence.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -926,6 +929,19 @@ struct TradeBrainOpen
    string   entryReason;
 };
 TradeBrainOpen g_brainOpenTrades[];
+
+struct TradeBrainClosedWatch
+{
+   bool     active;
+   datetime closeTime;
+   int      nextCheckpointMin;
+   double   closePrice;
+   double   closeProfit;
+   double   maxMoreMove;
+   double   maxReverseMove;
+   TradeBrainOpen rec;
+};
+TradeBrainClosedWatch g_brainClosedWatch[];
 
 // Tester/audit proof counters. These are intentionally small and local so
 // the EA can prove which setup/exit families helped or hurt without adding
@@ -1744,7 +1760,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.39 (TRADE BRAIN MEMORY) READY ===");
+   Print("=== XAUAI SNIPER v5.8.40 (EXIT LEARNING BRAIN) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1868,7 +1884,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.39 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.40 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -4191,6 +4207,7 @@ void OnTick()
    // (adverse = better entry; with-trend = continuation), stack another
    // smaller position in the same direction while signal holds.
    XAU_UpdateOpenTradeQuality();
+   XAU_UpdateClosedTradeOutcomes();
    CheckPyramidOpportunity();
 
    // === THROTTLED DASHBOARD REFRESH (every 2s, keeps UI live between bars) ===
@@ -7970,6 +7987,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          outcome = "WEAK_RECOVERY_WIN";
       XAU_AppendTradeBrain("CLOSE", brainRec, dPrice, profit, worstFloatingPnl,
                            secondsNegative, outcome, lastExitReason);
+      XAU_BrainWatchClosedTrade(brainRec, dPrice, profit);
       Print("TRADE-BRAIN CLOSE: ", outcome,
             " posId=", posId,
             " setup=", brainRec.setup,
@@ -8753,6 +8771,14 @@ void XAU_RemoveBrainOpen(int idx)
    ArrayResize(g_brainOpenTrades, n - 1);
 }
 
+double XAU_MoveToMoney(double move, double lots)
+{
+   double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue <= 0.0 || tickSize <= 0.0 || lots <= 0.0) return 0.0;
+   return (move / tickSize) * tickValue * lots;
+}
+
 void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
                           double exitPrice, double profit,
                           double worstFloatingPnl, int secondsNegative,
@@ -8805,6 +8831,86 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
              DoubleToString(r.atr, 2),
              r.aiConfidence);
    FileClose(h);
+}
+
+void XAU_BrainWatchClosedTrade(TradeBrainOpen &r, double closePrice, double closeProfit)
+{
+   if(!InpTradeBrainMemory || !InpTradeBrainMonitorAfterExit || !IsXAUFastSymbol()) return;
+   if(r.posId == 0 || r.dir == 0 || closePrice <= 0.0) return;
+   int n = ArraySize(g_brainClosedWatch);
+   if(n >= 60)
+   {
+      for(int i = 0; i < n - 1; i++) g_brainClosedWatch[i] = g_brainClosedWatch[i + 1];
+      ArrayResize(g_brainClosedWatch, n - 1);
+      n--;
+   }
+   ArrayResize(g_brainClosedWatch, n + 1);
+   g_brainClosedWatch[n].active = true;
+   g_brainClosedWatch[n].closeTime = TimeCurrent();
+   g_brainClosedWatch[n].nextCheckpointMin = 5;
+   g_brainClosedWatch[n].closePrice = closePrice;
+   g_brainClosedWatch[n].closeProfit = closeProfit;
+   g_brainClosedWatch[n].maxMoreMove = 0.0;
+   g_brainClosedWatch[n].maxReverseMove = 0.0;
+   g_brainClosedWatch[n].rec = r;
+   Print("EXIT-BRAIN WATCH: posId=", r.posId,
+         " closePrice=", DoubleToString(closePrice, 2),
+         " closeProfit=$", DoubleToString(closeProfit, 2),
+         " will monitor 5/10/15/30/60m to judge early-vs-good exit.");
+}
+
+void XAU_UpdateClosedTradeOutcomes()
+{
+   if(!InpTradeBrainMemory || !InpTradeBrainMonitorAfterExit || !IsXAUFastSymbol()) return;
+   int n = ArraySize(g_brainClosedWatch);
+   if(n <= 0) return;
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double mid = (bid > 0.0 && ask > 0.0) ? (bid + ask) * 0.5 : iClose(Symbol(), PERIOD_M5, 0);
+   if(mid <= 0.0) return;
+
+   for(int i = 0; i < n; i++)
+   {
+      if(!g_brainClosedWatch[i].active) continue;
+      TradeBrainOpen r = g_brainClosedWatch[i].rec;
+      double moveAfterClose = r.dir > 0 ? (mid - g_brainClosedWatch[i].closePrice)
+                                        : (g_brainClosedWatch[i].closePrice - mid);
+      g_brainClosedWatch[i].maxMoreMove = MathMax(g_brainClosedWatch[i].maxMoreMove, moveAfterClose);
+      g_brainClosedWatch[i].maxReverseMove = MathMax(g_brainClosedWatch[i].maxReverseMove, -moveAfterClose);
+
+      int ageMin = (int)((TimeCurrent() - g_brainClosedWatch[i].closeTime) / 60);
+      if(ageMin < g_brainClosedWatch[i].nextCheckpointMin) continue;
+
+      double atr = MathMax(r.atr, 0.01);
+      double moreATR = g_brainClosedWatch[i].maxMoreMove / atr;
+      double reverseATR = g_brainClosedWatch[i].maxReverseMove / atr;
+      double missedMoney = XAU_MoveToMoney(g_brainClosedWatch[i].maxMoreMove, r.lots);
+      double avoidedMoney = XAU_MoveToMoney(g_brainClosedWatch[i].maxReverseMove, r.lots);
+      string verdict = "EXIT_OK";
+      if(moreATR >= InpExitBrainEarlyProfitATR && moreATR > reverseATR * 1.15)
+         verdict = "EXIT_EARLY_LEFT_PROFIT";
+      else if(reverseATR >= InpExitBrainGoodAvoidATR && reverseATR > moreATR * 1.10)
+         verdict = "EXIT_GOOD_AVOIDED_REVERSAL";
+      else if(moreATR >= InpExitBrainEarlyProfitATR && reverseATR >= InpExitBrainGoodAvoidATR)
+         verdict = "EXIT_MIXED_VOLATILE_AFTER_CLOSE";
+
+      string extra = StringFormat("%s checkpoint=%dm closeProfit=$%.2f maxMore=%.2fATR($%.0f) maxReverse=%.2fATR($%.0f) closePrice=%.2f current=%.2f",
+                                  verdict, g_brainClosedWatch[i].nextCheckpointMin,
+                                  g_brainClosedWatch[i].closeProfit,
+                                  moreATR, missedMoney, reverseATR, avoidedMoney,
+                                  g_brainClosedWatch[i].closePrice, mid);
+      XAU_AppendTradeBrain("POST_CLOSE", r, mid, g_brainClosedWatch[i].closeProfit,
+                           missedMoney, g_brainClosedWatch[i].nextCheckpointMin,
+                           verdict, extra);
+      Print("EXIT-BRAIN CHECK: posId=", r.posId,
+            " ", extra);
+
+      if(g_brainClosedWatch[i].nextCheckpointMin < 10) g_brainClosedWatch[i].nextCheckpointMin = 10;
+      else if(g_brainClosedWatch[i].nextCheckpointMin < 15) g_brainClosedWatch[i].nextCheckpointMin = 15;
+      else if(g_brainClosedWatch[i].nextCheckpointMin < 30) g_brainClosedWatch[i].nextCheckpointMin = 30;
+      else if(g_brainClosedWatch[i].nextCheckpointMin < 60) g_brainClosedWatch[i].nextCheckpointMin = 60;
+      else g_brainClosedWatch[i].active = false;
+   }
 }
 
 void XAU_BrainRecordOpen(ulong posId, int signal, double entryPrice, double sl, double tp,
@@ -10527,7 +10633,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.39 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.40 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
