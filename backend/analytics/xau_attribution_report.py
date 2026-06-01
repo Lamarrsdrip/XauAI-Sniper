@@ -196,8 +196,12 @@ class BlockBucket:
 def read_csv(path: Path) -> list[dict[str, str]]:
     if not path or not path.exists():
         return []
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
+    raw = path.read_bytes()
+    if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+        text = raw.decode("utf-16")
+    else:
+        text = raw.decode("utf-8-sig", errors="replace")
+    return list(csv.DictReader(text.splitlines()))
 
 
 def filter_rows(rows: Iterable[dict[str, str]], days: int) -> list[dict[str, str]]:
