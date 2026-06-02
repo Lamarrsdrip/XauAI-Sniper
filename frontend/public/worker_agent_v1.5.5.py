@@ -106,6 +106,13 @@ EQUITY_SEC = int(os.environ.get("EQUITY_SEC", "30"))
 HTTP_TIMEOUT = int(os.environ.get("HTTP_TIMEOUT", "8"))
 VERSION = "1.5.5"
 
+# The MetaTrader5 Python package exposes one global terminal session per worker
+# process. One worker must therefore manage one live MT5 account by default;
+# otherwise account A and account B keep replacing each other's terminal login.
+WORKER_MAX_USERS = max(1, int(os.environ.get("WORKER_MAX_USERS", "1")))
+WORKER_USER_ID = os.environ.get("WORKER_USER_ID", "").strip()
+WORKER_MT5_LOGIN = os.environ.get("WORKER_MT5_LOGIN", "").strip()
+
 # Per-account fault isolation. The MT5 Python bridge is global, so a bad login
 # must be quarantined quickly instead of being retried on every loop and
 # poisoning execution for healthy accounts.
@@ -117,7 +124,7 @@ LOGIN_NEEDS_ATTENTION_AFTER = int(os.environ.get("WORKER_LOGIN_NEEDS_ATTENTION_A
 # to avoid replaying historic trades. 0 = only signals fired AFTER worker start.
 SIGNAL_CATCHUP_MIN = int(os.environ.get("SIGNAL_CATCHUP_MIN", "5"))
 
-HEADERS = {"X-Agent-Token": AGENT_TOKEN, "Content-Type": "application/json"}
+HEADERS = {"X-Agent-Token": AGENT_TOKEN, "X-Worker-Id": WORKER_ID, "Content-Type": "application/json"}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -154,7 +161,7 @@ class UserSession:
     fanout_attempts: int = 0
     fanout_successes: int = 0
     last_fanout_error: str = ""
-    status: str = "CONNECTING"       # CONNECTING | ACTIVE | COPYING | LOGIN_FAILED | EA_DISABLED | PAUSED | DISABLED | NEEDS_ATTENTION
+    status: str = "CONNECTING"       # CONNECTING | ACTIVE | COPYING | LOGIN_FAILED | EA_DISABLED | PAUSED | DISABLED | NEEDS_ATTENTION | NEEDS_DEDICATED_WORKER
     retry_count: int = 0
     next_retry_at: float = 0.0
     last_login_attempt_at: float = 0.0
@@ -190,6 +197,7 @@ class WorkerAgent:
         self._last_bulletproof_notice: Dict[str, float] = {}
         # which user currently owns the active MT5 terminal connection
         self._active_user_id: str = ""
+        self._capacity_reported: Dict[str, float] = {}
         # v1.4 — persist open_tickets across worker restarts. Without this,
         # any restart between OPEN and CLOSE orphans cloud trades because
         # the in-memory sig_id → ticket map is lost.
@@ -234,6 +242,29 @@ class WorkerAgent:
             self._post(path, body)
         except Exception as e:
             log.warning("POST %s failed: %s", path, e)
+
+    def _report_capacity_skip(self, row: dict, reason: str) -> None:
+        uid = row.get("id")
+        if not uid:
+            return
+        now = time.time()
+        if now - float(self._capacity_reported.get(uid, 0.0)) < 60:
+            return
+        self._capacity_reported[uid] = now
+        self._post_safe("/api/cloud/agent/account-status", {
+            "user_id": uid,
+            "worker_id": WORKER_ID,
+            "status": "NEEDS_DEDICATED_WORKER",
+            "logged_in": False,
+            "algo_ok": True,
+            "retry_count": 0,
+            "next_retry_at": "",
+            "last_success_at": "",
+            "last_error": reason,
+            "server": row.get("mt5_server") or row.get("broker_server") or "",
+            "login": int(row.get("mt5_login") or 0),
+            "resolved_symbol": "",
+        })
 
     def _retry_delay(self, u: UserSession) -> int:
         exp = min(max(int(u.retry_count) - 1, 0), 6)
@@ -1084,10 +1115,23 @@ class WorkerAgent:
             data = self._get("/api/cloud/agent/pending-users")
         except Exception as e:
             log.error("sync_users failed: %s", e); return
+        rows = [r for r in data.get("users", []) if r.get("id") and r.get("mt5_password")]
+        selected_rows = self._select_worker_rows(rows)
+        selected_ids = {r.get("id") for r in selected_rows}
+        skipped = [r for r in rows if r.get("id") not in selected_ids]
+        if skipped:
+            reason = (
+                f"Worker {WORKER_ID} is dedicated to {WORKER_MAX_USERS} MT5 account(s). "
+                "Start a separate worker/MT5 terminal for this linked account; no login swap was attempted."
+            )
+            log.warning("DEDICATED WORKER GUARD: loaded=%d skipped=%d max=%d selected=%s",
+                        len(selected_rows), len(skipped), WORKER_MAX_USERS,
+                        ",".join(str(r.get("mt5_login") or "") for r in selected_rows))
+            for row in skipped:
+                self._report_capacity_skip(row, reason)
         wanted: Dict[str, UserSession] = {}
-        for row in data.get("users", []):
+        for row in selected_rows:
             uid = row.get("id")
-            if not uid or not row.get("mt5_password"): continue
             existing = self.users.get(uid)
             s = existing or UserSession(
                 user_id=uid,
@@ -1140,6 +1184,44 @@ class WorkerAgent:
                      ", ".join(f"{u.email}({u.mt5_login})" for u in self.users.values()))
         else:
             log.info("users synced: 0 active")
+
+    def _select_worker_rows(self, rows: List[dict]) -> List[dict]:
+        if not rows:
+            return []
+        if WORKER_USER_ID:
+            picked = [r for r in rows if str(r.get("id") or "") == WORKER_USER_ID]
+            if not picked:
+                log.warning("WORKER_USER_ID=%s is set but no pending user matched it.", WORKER_USER_ID)
+            return picked[:WORKER_MAX_USERS]
+        if WORKER_MT5_LOGIN:
+            picked = [r for r in rows if str(r.get("mt5_login") or "") == WORKER_MT5_LOGIN]
+            if not picked:
+                log.warning("WORKER_MT5_LOGIN=%s is set but no pending user matched it.", WORKER_MT5_LOGIN)
+            return picked[:WORKER_MAX_USERS]
+
+        selected: List[dict] = []
+        seen: Set[str] = set()
+
+        # Keep the account this worker already owns before considering new rows.
+        for uid in list(self.users.keys()):
+            for row in rows:
+                rid = str(row.get("id") or "")
+                if rid == uid and rid not in seen:
+                    selected.append(row)
+                    seen.add(rid)
+                    break
+            if len(selected) >= WORKER_MAX_USERS:
+                return selected
+
+        for row in rows:
+            rid = str(row.get("id") or "")
+            if rid in seen:
+                continue
+            selected.append(row)
+            seen.add(rid)
+            if len(selected) >= WORKER_MAX_USERS:
+                break
+        return selected
 
     def compute_lots(self, u: UserSession, sig: dict) -> Tuple[float, str]:
         """v1.5.3 STRICT MIRROR + BROKER/MARGIN SAFETY:
@@ -1765,6 +1847,8 @@ class WorkerAgent:
     def run(self) -> None:
         log.info("XauAi Worker Agent %s starting — worker_id=%s mock=%s host=%s os=%s",
                  VERSION, WORKER_ID, MOCK_MT5, socket.gethostname(), platform.system())
+        log.warning("DEDICATED WORKER MODE: WORKER_MAX_USERS=%d. The MT5 Python bridge has one global terminal session; run one worker/terminal per live account.",
+                    WORKER_MAX_USERS)
         log.info("Signal cursor cold-start: %s (catchup=%dmin)",
                  self.last_signal_poll, SIGNAL_CATCHUP_MIN)
         if MAX_RISK_PCT_PER_TRADE > 0:

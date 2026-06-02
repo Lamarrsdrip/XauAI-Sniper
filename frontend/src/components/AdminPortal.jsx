@@ -1171,7 +1171,7 @@ function CloudAdminTab({ api, token }) {
                 <button onClick={async()=>{
                   const name = prompt("Give this worker a name (e.g. 'My-Laptop' or 'Contabo-VPS'):", "My-Laptop"); if (!name) return;
                   try {
-                    const r = await ax.post(`${api}/admin/cloud/infrastructure/pair-code`, {name, max_users: 30}, { headers });
+                    const r = await ax.post(`${api}/admin/cloud/infrastructure/pair-code`, {name, max_users: 1}, { headers });
                     const code = r.data.code;
                     const isMac = /Mac/i.test(navigator.platform);
                     const cmd = isMac
@@ -1195,7 +1195,7 @@ function CloudAdminTab({ api, token }) {
                 }} data-testid="generate-pair-code-btn" className="px-3 py-2 bg-primary text-primary-foreground text-xs font-bold">🪄 GENERATE PAIR CODE</button>
                 <button onClick={()=>{
                   const name = prompt("Worker name (e.g. Contabo-NYC-1):"); if (!name) return;
-                  const max = parseInt(prompt("Max MT5 instances this worker can host:", "30")) || 30;
+                  const max = parseInt(prompt("Max MT5 accounts this worker can host. Use 1 unless this worker runs isolated MT5 terminals/processes:", "1")) || 1;
                   const endpoint = prompt("Optional endpoint URL (leave blank for pull-mode):", "") || "";
                   const notes = prompt("Notes (optional):", "") || "";
                   ax.post(`${api}/admin/cloud/infrastructure/workers`, {name, max_users: max, endpoint, notes}, { headers })
@@ -1215,8 +1215,8 @@ function CloudAdminTab({ api, token }) {
                     <div className="min-w-0 flex-1">
                       <div className="font-bold">{w.name}</div>
                       <div className="text-[11px] text-muted-foreground mt-1">
-                        {w.endpoint || "pull-mode"} · cap {w.current_users || 0}/{w.max_users}
-                        {typeof w.active_users === "number" ? ` · ${w.active_users} active mt5` : ""}
+                        {w.endpoint || "pull-mode"} · account cap {w.current_users || 0}/{w.max_users}
+                        {typeof w.active_users === "number" ? ` · ${w.active_users} active account${w.active_users === 1 ? "" : "s"}` : ""}
                         {w.version ? ` · v${w.version}` : ""}
                         {w.last_heartbeat ? ` · last seen ${w.last_heartbeat.slice(11,16)}` : ""}
                       </div>
@@ -1249,7 +1249,7 @@ function CloudAdminTab({ api, token }) {
               Your master EA emits price, SL/TP, and master lot data. The worker mirrors lot size
               proportionally: <span className="font-bold text-foreground">cloud lot = master lot × cloud equity / master balance</span>,
               then applies broker lot-step, max-lot, and free-margin checks.
-              Same-size accounts should now take almost the same lots.
+              Same-size accounts should now take almost the same lots. For live copying, use one worker/MT5 terminal per linked account unless you have true isolated MT5 terminal processes.
               Click <span className="font-mono">FIRE TEST SIGNAL</span> above to see this happen live.
             </div>
             <div className="font-bold mb-2">🚀 Going live (when you're ready):</div>
@@ -1257,7 +1257,7 @@ function CloudAdminTab({ api, token }) {
               <li>Run master MT5 on any always-on machine (your laptop works — VPS $5/mo if you want zero downtime)</li>
               <li>Click "Generate/Rotate" above and copy the agent token</li>
               <li>Paste token into master EA inputs — master will POST signals here automatically</li>
-              <li>For real execution on user accounts: rent a Windows VPS, click "+ ADD WORKER" and register it</li>
+              <li>For real execution on user accounts: run one Windows MT5 terminal + worker per linked account, then register each worker here</li>
               <li>Flip "GO LIVE" — all connected users switch from shadow → real trading</li>
             </ol>
           </div>
@@ -1334,7 +1334,7 @@ function CloudAdminTab({ api, token }) {
                     <span className="font-bold">{w.name}</span>
                     <span className="text-muted-foreground text-xs">v{w.version || "?"}</span>
                     <span className="text-muted-foreground text-xs">{w.hostname || "unknown host"}</span>
-                    <span className="text-muted-foreground text-xs">{w.active_users} mt5 sessions</span>
+                    <span className="text-muted-foreground text-xs">{w.active_users} active account{w.active_users === 1 ? "" : "s"}</span>
                     <span className="text-muted-foreground text-xs">last hb: {w.last_heartbeat?.slice(11,19) || "never"}</span>
                   </div>
                 ))}

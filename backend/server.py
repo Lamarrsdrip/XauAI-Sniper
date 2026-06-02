@@ -2914,7 +2914,7 @@ def _require_agent(request: Request):
 class WorkerRegisterReq(BaseModel):
     name: str
     endpoint: Optional[str] = ""      # optional URL if worker runs a reachable HTTP server
-    max_users: int = 30
+    max_users: int = 1
     notes: Optional[str] = ""
 
 @api_router.get("/admin/cloud/infrastructure", dependencies=[Depends(get_current_admin)])
@@ -2965,7 +2965,7 @@ async def admin_generate_pair_code(body: dict = None):
        on first run and auto-receives agent_token + a fresh worker_id."""
     body = body or {}
     name = (body.get("name") or "Auto-paired worker").strip()[:60]
-    max_users = max(1, min(500, int(body.get("max_users") or 30)))
+    max_users = max(1, min(500, int(body.get("max_users") or 1)))
     code = "".join([str(secrets.randbelow(10)) for _ in range(6)])
     expires = datetime.now(timezone.utc) + timedelta(minutes=10)
     await db.cloud_pair_codes.insert_one({
@@ -3014,7 +3014,7 @@ async def cloud_agent_pair(req: PairExchangeReq):
         name = f"{name} ({req.hostname[:30]})"
     await db.cloud_workers.insert_one({
         "id": wid, "name": name[:80], "endpoint": "",
-        "max_users": rec.get("max_users", 30), "notes": "Created via pair code",
+        "max_users": rec.get("max_users", 1), "notes": "Created via pair code",
         "status": "offline", "last_heartbeat": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
@@ -3435,11 +3435,15 @@ AGENT_TOKEN = os.environ.get("CLOUD_AGENT_TOKEN", "")  # kept for backward compa
 @api_router.get("/cloud/agent/pending-users")
 async def cloud_agent_users(request: Request):
     await _require_agent_async(request)
+    worker_id = (request.headers.get("X-Worker-Id") or "").strip()
+    query = {"mt5_connected": True,
+             "mt5_verification_status": "verified",
+             "paused": False,
+             "status": {"$in": ["trial", "active"]}}
+    if worker_id:
+        query["assigned_worker_id"] = worker_id
     rows = await db.cloud_users.find(
-        {"mt5_connected": True,
-         "mt5_verification_status": "verified",
-         "paused": False,
-         "status": {"$in": ["trial", "active"]}},
+        query,
         {"_id": 0, "password_hash": 0}
     ).to_list(2000)
     # decrypt passwords in-memory ONLY for the worker response (TLS-only transport)

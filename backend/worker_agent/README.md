@@ -1,19 +1,22 @@
 # XauAi Cloud — Worker Agent
 
 A headless Python agent that runs on a Windows VPS and mirrors **master EA
-signals** into every subscriber's MetaTrader 5 terminal, lot-sized to their
+signals** into one subscriber's MetaTrader 5 terminal, lot-sized to their
 individual balance + risk tier.
+
+Important: the MetaTrader5 Python package has one global terminal connection
+per worker process. The safe production layout is **one worker + one MT5
+terminal per live linked account**. Do not run multiple cloud accounts through
+one worker unless you have built true isolated MT5 terminal processes.
 
 ```
   Master EA (your PC / master VPS)
         │   POST /cloud/master/signal   on every open
         │   POST /cloud/master/signal-close on every close
         ▼
-  XauAi Cloud Backend  ───── fanout ─────►  Worker Agent (this script)
-                                                 │
-                                                 ├── subscriber A → mt5.order_send(...)
-                                                 ├── subscriber B → mt5.order_send(...)
-                                                 └── subscriber N → mt5.order_send(...)
+  XauAi Cloud Backend  ───── fanout ─────►  Worker Agent A → subscriber A MT5
+                                      └──►  Worker Agent B → subscriber B MT5
+                                      └──►  Worker Agent N → subscriber N MT5
 ```
 
 ---
@@ -26,6 +29,12 @@ individual balance + risk tier.
 - Outbound HTTPS to your backend (port 443)
 - The **agent token** from `/admin → Cloud → Infrastructure → Rotate Token`
 - A registered **worker_id** (add this VPS under `/admin → Cloud → Infrastructure → Add Worker`)
+
+Optional isolation settings:
+
+- `WORKER_MAX_USERS=1` is the default and should stay that way for normal live copying.
+- `WORKER_USER_ID=<cloud-user-id>` pins a worker to a specific cloud user.
+- `WORKER_MT5_LOGIN=<login>` pins a worker to a specific MT5 login.
 
 ## Install
 
@@ -80,6 +89,9 @@ The service will auto-restart if the agent crashes and survives reboots.
 | 60 s  | `POST /api/cloud/agent/heartbeat` → admin panel shows this worker online |
 | 120 s | `POST /api/cloud/agent/equity-snapshot` per user → live balance/equity shown on user dashboards |
 | on close | `POST /api/cloud/agent/trade-close` → trade appears in user's history with P/L |
+
+With the default dedicated mode, "per user" means the one account assigned to
+this worker. Extra linked accounts must run on their own worker/terminal.
 
 ## Troubleshooting
 

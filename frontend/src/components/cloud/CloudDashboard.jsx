@@ -46,6 +46,7 @@ function copyStatusMeta(status) {
   if (s === "EA_DISABLED") return { ok: false, label: "EA disabled", color: "red" };
   if (s === "LOGIN_FAILED") return { ok: false, label: "Login failed", color: "red" };
   if (s === "NEEDS_ATTENTION") return { ok: false, label: "Needs attention", color: "red" };
+  if (s === "NEEDS_DEDICATED_WORKER") return { ok: false, label: "Needs worker", color: "amber" };
   if (s === "DISABLED") return { ok: false, label: "Disabled", color: "red" };
   return { ok: false, label: s.replaceAll("_", " ").toLowerCase(), color: "amber" };
 }
@@ -621,6 +622,8 @@ function ConnectTab({ me, onRefresh }) {
               <div className="text-xs text-white/60 mt-1 leading-relaxed">
                 {copyMeta.ok
                   ? <>Healthy account. Copying stays active while bad accounts are skipped independently.</>
+                  : me.copy_status === "NEEDS_DEDICATED_WORKER"
+                  ? <>This account needs its own worker/MT5 terminal before live copying can run safely.</>
                   : <>This account is isolated. Failed login or EA permission problems do not block other linked accounts.</>}
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-[11px]">
