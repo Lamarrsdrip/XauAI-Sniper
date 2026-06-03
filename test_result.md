@@ -101,3 +101,43 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+## user_problem_statement: Implement Accelerated Learning Mode plus bounded Startup Intelligence Sync for XAUUSD AI Sniper without adding reckless risk changes or long startup delays.
+## backend:
+##   - task: "v5.8.44 Startup Sync + Accelerated Learning"
+##     implemented: true
+##     working: true
+##     file: "backend/ea_code/XAUUSD_AI_Sniper_EA.mq5"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Added STARTUP_SYNC and MARKET_SNAPSHOT intelligence rows, soft 200-candle startup target with 100-candle critical unlock, and score-only Accelerated Learning after 24h/50 qualified observations. MetaEditor/Wine compile passed with 0 errors and 7 warnings. /Applications keeps only MQ5; compiled EX5 was removed per owner preference."
+## frontend:
+##   - task: "v5.8.44 download/version labels"
+##     implemented: true
+##     working: true
+##     file: "frontend/src/components/DownloadSection.jsx"
+##     stuck_count: 0
+##     priority: "medium"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Updated public/admin download filenames and visible site labels to v5.8.44 Startup Sync Intelligence. Frontend production build passed with pre-existing AdminPortal hook warnings."
+## metadata:
+##   created_by: "main_agent"
+##   version: "1.0"
+##   test_sequence: 1
+##   run_ui: false
+## test_plan:
+##   current_focus:
+##     - "v5.8.44 Startup Sync + Accelerated Learning"
+##   stuck_tasks: []
+##   test_all: true
+##   test_priority: "high_first"
+## agent_communication:
+##   - agent: "main"
+##     message: "Validated with pytest, py_compile, git diff --check, npm build, and MetaEditor/Wine compile. Compiled EX5 was deleted from /Applications after verification."

@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.43 — Local Intelligence Ready     |
+//|                                     v5.8.44 — Startup Sync Intelligence    |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.43 — LOCAL INTELLIGENCE READY"
+#property description "XAUUSD AI Sniper v5.8.44 — STARTUP SYNC INTELLIGENCE"
 #property description "Uses attribution memory to soften expensive blocks with tiny scouts, not blind looseness."
 #property description "Cuts B-grade hot-cycle risk after large winning runs so one late B cannot erase the day."
 #property strict
@@ -201,6 +201,15 @@ input double InpBlockedMemoryScoutMaxAdvATR= 1.55;  // Do not scout if similar b
 input double InpBlockedMemoryScoutLotMulti = 0.22;  // Tiny risk only; this is learning scout, not full-size looseness
 input bool   InpTradingIntelDataset        = true;  // Unified CSV/JSONL black-box recorder for trades, blocks, vetoes, exits, cloud
 input bool   InpTradingIntelJson           = true;  // Also write JSONL rows for external analysis tools
+input bool   InpMarketIntelSnapshots       = true;  // Record one market-state row per M5 scan for Codex analysis
+input bool   InpStartupIntelSync           = true;  // Recover local memory + open positions + chart context before fresh entries
+input int    InpStartupIntelMinCandles     = 200;   // Startup context target; does not wait for 4h shadow outcomes
+input bool   InpAcceleratedLearningMode    = true;  // After evidence builds, adapt ranking/confidence only; never risk controls
+input int    InpAccelLearningMinHours       = 24;    // Earliest low-risk adaptive scoring window
+input int    InpAccelLearningMinObs         = 50;    // Minimum qualified observations before any adaptive score nudge
+input double InpAccelLearningMinWR          = 55.0;  // Positive pattern floor before boosting score
+input double InpAccelLearningMinPF          = 1.10;  // Profit factor floor before boosting score
+input double InpAccelLearningMaxScoreAdj    = 0.25;  // Score-only cap; does not change lot, SL, TP, max risk, drawdown, or emergency locks
 input bool   InpTradeBrainMemory           = true;  // Persist EVERY executed trade with entry reason, exit reason, drawdown, and outcome
 input int    InpTradeBrainMinSamples       = 12;    // Minimum matching closed trades before brain can affect new entries
 input double InpTradeBrainReduceWR         = 42.0;  // If similar pattern WR is below this, reduce lot instead of repeating full risk
@@ -832,6 +841,9 @@ datetime epf_t4LastAdaptiveTrade   = 0; // last guarded T4 entry time
 datetime g_startupAt          = 0;     // when EA first booted this session
 datetime g_startupBarTime     = 0;     // open-time of the M5 bar at startup
 bool     g_startupCooldownDone = false; // sticky flag once gate cleared (avoid re-logging every tick)
+bool     g_startupIntelSyncDone = false;
+bool     g_startupIntelSyncOk   = false;
+string   g_startupIntelSyncReason = "not started";
 
 // v5.1.9 — Selective Mode state (replaces day-halt full lockout)
 bool     pg_selectiveActive      = false;  // PG fired → A/A+ only
@@ -877,7 +889,7 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
-// v5.8.43 — Local Trading Intelligence + Trade Brain + Exit Learning Intelligence.
+// v5.8.44 — Startup Sync Intelligence + Trade Brain + Exit Learning Intelligence.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -1769,8 +1781,9 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.43 (LOCAL INTELLIGENCE READY) READY ===");
+   Print("=== XAUAI SNIPER v5.8.44 (STARTUP SYNC INTELLIGENCE) READY ===");
    XAU_LogTradingIntelStartupHealth();
+   XAU_RunStartupIntelligenceSync();
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1894,7 +1907,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.43 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.44 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -4406,6 +4419,14 @@ void OnTick()
       else if(signal == -1 && isTrendingUp) combinedScore = MathMax(0.0, combinedScore - 0.5);
    }
 
+   string accelReason = "";
+   double accelAdj = XAU_AcceleratedLearningAdjust(signal, setupName, combinedScore, accelReason);
+   if(MathAbs(accelAdj) >= 0.01)
+   {
+      combinedScore = MathMax(0.0, combinedScore + accelAdj);
+      Print(accelReason);
+   }
+
    // v5.7.0 — ADAPTIVE GRADE TIGHTENING IS PERMANENTLY DISABLED.
    // User analysis of live trades concluded that the adaptive system was
    // creating a death spiral: lose → raise threshold → fewer trades, only
@@ -4422,6 +4443,7 @@ void OnTick()
                 : combinedScore >= InpGradeA    ? "A"
                 : combinedScore >= dynGradeB    ? "B"
                 : "SKIP";
+   XAU_RecordMarketSnapshot("SCAN_EVALUATED", signal, setupName, grade, setupScore, combinedScore);
 
    double firstSeenPx = signal > 0 ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
                                    : SymbolInfoDouble(Symbol(), SYMBOL_BID);
@@ -8344,6 +8366,13 @@ int PG_HTFTrend()
 string StartupCooldownReason()
 {
    if(g_startupCooldownDone) return "";
+   if(InpStartupIntelSync)
+   {
+      if(!g_startupIntelSyncDone)
+         return "startup intelligence sync (recovering memory/context)";
+      if(!g_startupIntelSyncOk)
+         return "startup intelligence sync failed: " + g_startupIntelSyncReason;
+   }
    datetime now = TimeCurrent();
    int waitedMin = (int)((now - g_startupAt) / 60);
    if(InpStartupCooldownMin > 0 && waitedMin < InpStartupCooldownMin)
@@ -8767,6 +8796,73 @@ string XAU_TradingIntelJsonFile()
    return "XAUAI_TradingIntelligence_" + Symbol() + ".jsonl";
 }
 
+int XAU_CountCsvDataRows(string fn)
+{
+   if(!FileIsExist(fn, FILE_COMMON)) return 0;
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return 0;
+   int rows = 0;
+   bool header = true;
+   while(!FileIsEnding(h))
+   {
+      string first = FileReadString(h);
+      if(StringLen(first) == 0 && FileIsEnding(h)) break;
+      for(int guard = 0; guard < 80 && !FileIsLineEnding(h) && !FileIsEnding(h); guard++)
+         FileReadString(h);
+      if(header) header = false;
+      else rows++;
+   }
+   FileClose(h);
+   return rows;
+}
+
+int XAU_RecoverOpenPositionQuality()
+{
+   int recovered = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      ulong posId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      if(posId == 0) continue;
+      if(XAU_FindQualityIdx(posId) < 0)
+      {
+         int n = ArraySize(g_qualityPosIds);
+         ArrayResize(g_qualityPosIds, n + 1);
+         ArrayResize(g_qualityWorstPnl, n + 1);
+         ArrayResize(g_qualityNegativeSince, n + 1);
+         ArrayResize(g_qualityNegativeSec, n + 1);
+         double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         g_qualityPosIds[n] = posId;
+         g_qualityWorstPnl[n] = MathMin(0.0, pnl);
+         g_qualityNegativeSince[n] = pnl < 0.0 ? TimeCurrent() : 0;
+         g_qualityNegativeSec[n] = 0;
+      }
+      recovered++;
+   }
+   return recovered;
+}
+
+int XAU_CountMyHistoryDeals(int daysBack)
+{
+   datetime to = TimeCurrent();
+   datetime from = to - MathMax(daysBack, 1) * 86400;
+   if(!HistorySelect(from, to)) return 0;
+   int count = 0;
+   int deals = HistoryDealsTotal();
+   for(int i = 0; i < deals; i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal == 0) continue;
+      if(HistoryDealGetInteger(deal, DEAL_MAGIC) != InpMagicNumber) continue;
+      if(HistoryDealGetString(deal, DEAL_SYMBOL) != Symbol()) continue;
+      count++;
+   }
+   return count;
+}
+
 void XAU_LogTradingIntelStartupHealth()
 {
    if(!InpTradingIntelDataset || !IsXAUFastSymbol()) return;
@@ -8786,6 +8882,88 @@ void XAU_LogTradingIntelStartupHealth()
          " JSON=", InpTradingIntelJson ? jsonFile : "OFF",
          " | CloudFanout=", InpCloudFanout ? "ON" : "OFF",
          " | local source of truth enabled.");
+}
+
+void XAU_RunStartupIntelligenceSync()
+{
+   if(!InpStartupIntelSync || !IsXAUFastSymbol())
+   {
+      g_startupIntelSyncDone = true;
+      g_startupIntelSyncOk = true;
+      g_startupIntelSyncReason = "disabled_or_not_xau";
+      return;
+   }
+
+   datetime started = TimeCurrent();
+   int barsM5 = Bars(Symbol(), PERIOD_M5);
+   int openRecovered = XAU_RecoverOpenPositionQuality();
+   int tradeBrainRows = XAU_CountCsvDataRows(XAU_TradeBrainFile());
+   int blockedRows = XAU_CountCsvDataRows(XAU_BlockedMemoryFile());
+   int intelRows = XAU_CountCsvDataRows(XAU_TradingIntelCsvFile());
+   int historyDeals = XAU_CountMyHistoryDeals(14);
+   bool memoryOk = (InpTradeBrainMemory ? (FileIsExist(XAU_TradeBrainFile(), FILE_COMMON) || tradeBrainRows >= 0) : true);
+   bool contextCriticalOk = (barsM5 >= 100);
+   bool contextTargetMet = (barsM5 >= InpStartupIntelMinCandles);
+   bool positionsOk = true;
+   g_startupIntelSyncOk = (memoryOk && contextCriticalOk && positionsOk);
+   g_startupIntelSyncDone = true;
+   g_startupIntelSyncReason = g_startupIntelSyncOk ? (contextTargetMet ? "OK" : "OK_WARN_CONTEXT_TARGET_NOT_MET") : "FAILED";
+   if(!contextCriticalOk)
+      g_startupIntelSyncReason = StringFormat("FAILED: only %d M5 bars loaded; critical minimum 100, target %d",
+                                              barsM5, InpStartupIntelMinCandles);
+
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double mid = (bid > 0.0 && ask > 0.0) ? (bid + ask) * 0.5 : iClose(Symbol(), PERIOD_M5, 0);
+   double atr = (ArraySize(bufATR) > 1 ? bufATR[1] : 0.0);
+   string extra = StringFormat("version=5.8.44 syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
+                               (int)(TimeCurrent() - started), historyDeals, openRecovered,
+                               tradeBrainRows, blockedRows, intelRows, barsM5,
+                               InpStartupIntelMinCandles, contextTargetMet ? "Y" : "N",
+                               g_startupIntelSyncOk ? "Y" : "N",
+                               g_startupIntelSyncReason);
+   XAU_IntelAppend("STARTUP_SYNC", "startup_sync_" + (string)((long)started), 0, 0,
+                   "SYSTEM", "", "", (int)currentRegime, SessionTag(),
+                   "STARTUP_SYNC", "RECOVER", g_startupIntelSyncReason,
+                   0.0, 0.0, atr, mid, 0.0, 0.0, 0.0, 0.0, 0.0,
+                   0.0, 0.0, 0, 0, 0.0, 0.0,
+                   "startup intelligence sync", "", "", 0, g_startupIntelSyncOk, extra);
+   Print("STARTUP-INTEL SYNC: ", extra);
+}
+
+void XAU_RecordMarketSnapshot(string phase, int signal, string setupName, string grade,
+                              double setupScore, double combinedScore)
+{
+   if(!InpMarketIntelSnapshots || !InpTradingIntelDataset || !IsXAUFastSymbol()) return;
+   if(ArraySize(bufATR) < 2 || ArraySize(bufRSI) < 2 ||
+      ArraySize(bufEMAFast) < 2 || ArraySize(bufEMASlow) < 2) return;
+
+   double o[2], h[2], l[2], c[2];
+   if(CopyOpen(Symbol(), PERIOD_M5, 1, 1, o) < 1) return;
+   if(CopyHigh(Symbol(), PERIOD_M5, 1, 1, h) < 1) return;
+   if(CopyLow(Symbol(), PERIOD_M5, 1, 1, l) < 1) return;
+   if(CopyClose(Symbol(), PERIOD_M5, 1, 1, c) < 1) return;
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double mid = (bid > 0.0 && ask > 0.0) ? (bid + ask) * 0.5 : c[0];
+   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   double atr = bufATR[1];
+   double emaFast = bufEMAFast[1];
+   double emaSlow = bufEMASlow[1];
+   double rsi = bufRSI[1];
+   double stoch = ArraySize(bufStochK) > 1 ? bufStochK[1] : 0.0;
+   long vol = iVolume(Symbol(), PERIOD_M5, 1);
+   string structure = emaFast > emaSlow ? "EMA_BULL" : (emaFast < emaSlow ? "EMA_BEAR" : "EMA_FLAT");
+   string extra = StringFormat("phase=%s tf=M5 o=%.2f h=%.2f l=%.2f c=%.2f spread=%.0f atr=%.2f rsi=%.1f stoch=%.1f emaFast=%.2f emaSlow=%.2f volume=%d regime=%s session=%s structure=%s dxy=%s openPositions=%d lastSkip=%s",
+                               phase, o[0], h[0], l[0], c[0], spread, atr, rsi, stoch,
+                               emaFast, emaSlow, (int)vol, RegimeName(), SessionTag(),
+                               structure, dxyGoldBias, CountMyPositions(), g_lastSkipReason);
+   XAU_IntelAppend("MARKET_SNAPSHOT", "snap_" + (string)((long)TimeCurrent()), 0, signal,
+                   setupName, grade, lastSignalSignature, (int)currentRegime, SessionTag(),
+                   "MARKET", phase, "M5_CONTEXT",
+                   setupScore, combinedScore, atr, mid, 0.0, 0.0, 0.0, 0.0, 0.0,
+                   0.0, 0.0, 0, 0, 0.0, 0.0,
+                   "market snapshot", "", "", 0, true, extra);
 }
 
 string XAU_IntelJsonSafe(string s, int maxLen)
@@ -8951,6 +9129,112 @@ string XAU_GradeBucket(string grade)
    if(grade == "A") return "A";
    if(grade == "B" || StringFind(grade, "B+") >= 0) return "B";
    return grade;
+}
+
+double XAU_AcceleratedLearningAdjust(int signal, string setupName,
+                                     double combinedScore, string &reason)
+{
+   reason = "";
+   if(!InpAcceleratedLearningMode || !InpTradeBrainMemory || !IsXAUFastSymbol()) return 0.0;
+   if(signal == 0 || StringLen(setupName) == 0) return 0.0;
+   string fn = XAU_TradeBrainFile();
+   if(!FileIsExist(fn, FILE_COMMON)) return 0.0;
+
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return 0.0;
+
+   int samples = 0, wins = 0;
+   int asia = 0, london = 0, ny = 0;
+   bool has24h = false;
+   double grossWin = 0.0, grossLoss = 0.0, worstSum = 0.0, profitSum = 0.0;
+   bool header = true;
+   while(!FileIsEnding(h))
+   {
+      string eventName = FileReadString(h);
+      if(StringLen(eventName) == 0 && FileIsEnding(h)) break;
+      string tm = FileReadString(h);
+      FileReadString(h); // posId
+      string sym = FileReadString(h);
+      string dirTxt = FileReadString(h);
+      string setup = FileReadString(h);
+      FileReadString(h); // grade
+      FileReadString(h); // signature
+      FileReadString(h); // regime
+      string session = FileReadString(h);
+      FileReadString(h); // hour
+      FileReadString(h); // entryPrice
+      FileReadString(h); // exitPrice
+      FileReadString(h); // lots
+      FileReadString(h); // sl
+      FileReadString(h); // tp
+      string profitTxt = FileReadString(h);
+      string worstTxt = FileReadString(h);
+      FileReadString(h); // secondsNegative
+      FileReadString(h); // outcome
+      FileReadString(h); // exitReason
+      FileReadString(h); // entryReason
+      FileReadString(h); // setupScore
+      FileReadString(h); // combined
+      FileReadString(h); // atr
+      FileReadString(h); // aiConfidence
+
+      if(header) { header = false; continue; }
+      if(eventName != "CLOSE") continue;
+      if(sym != Symbol()) continue;
+      if((signal > 0 && dirTxt != "BUY") || (signal < 0 && dirTxt != "SELL")) continue;
+      if(setup != setupName) continue;
+
+      double profit = StringToDouble(profitTxt);
+      double worst = StringToDouble(worstTxt);
+      samples++;
+      profitSum += profit;
+      worstSum += worst;
+      if(profit > 0.0) { wins++; grossWin += profit; }
+      else grossLoss += MathAbs(profit);
+      if(session == "ASIA") asia++;
+      else if(session == "LONDON") london++;
+      else if(session == "NY") ny++;
+      datetime rowTime = StringToTime(tm);
+      if(rowTime > 0 && (TimeCurrent() - rowTime) >= InpAccelLearningMinHours * 3600)
+         has24h = true;
+   }
+   FileClose(h);
+
+   if(samples < InpAccelLearningMinObs || !has24h) return 0.0;
+   int activeSessions = (asia > 0 ? 1 : 0) + (london > 0 ? 1 : 0) + (ny > 0 ? 1 : 0);
+   if(activeSessions < 2) return 0.0;
+
+   double wr = samples > 0 ? (100.0 * wins / samples) : 0.0;
+   double pf = grossLoss > 0.0 ? grossWin / grossLoss : (grossWin > 0.0 ? 99.0 : 0.0);
+   double avg = samples > 0 ? profitSum / samples : 0.0;
+   double avgWorst = samples > 0 ? worstSum / samples : 0.0;
+   double adj = 0.0;
+   string verdict = "NO_CHANGE";
+
+   if(wr >= InpAccelLearningMinWR && pf >= InpAccelLearningMinPF && avg > 0.0)
+   {
+      adj = MathMin(InpAccelLearningMaxScoreAdj, 0.10 + MathMin(0.15, (pf - InpAccelLearningMinPF) * 0.08));
+      verdict = "PATTERN_STRENGTHENED";
+   }
+   else if(wr <= 42.0 || pf < 0.85 || avg < 0.0)
+   {
+      adj = -MathMin(InpAccelLearningMaxScoreAdj, 0.10 + MathMin(0.15, (0.85 - MathMin(pf, 0.85)) * 0.10));
+      verdict = "PATTERN_WEAKENED";
+   }
+   if(MathAbs(adj) < 0.01) return 0.0;
+
+   double afterScore = MathMax(0.0, combinedScore + adj);
+   reason = StringFormat("ACCEL-LEARNING %s LOW_RISK_SCORE_ONLY setup=%s dir=%s samples=%d wr=%.1f pf=%.2f avg=$%.0f avgWorst=$%.0f scoreAdj=%.2f before=%.2f after=%.2f; does not change lot, SL, TP, max risk, drawdown, or emergency locks",
+                         verdict, setupName, signal > 0 ? "BUY" : "SELL", samples,
+                         wr, pf, avg, avgWorst, adj, combinedScore, afterScore);
+   XAU_IntelAppend("ACCEL_LEARNING", "accel_" + setupName + "_" + (signal > 0 ? "BUY" : "SELL"),
+                   0, signal, setupName, "", lastSignalSignature, (int)currentRegime, SessionTag(),
+                   "LEARNING", "SCORE_ADJUST", verdict,
+                   0.0, afterScore, 0.0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
+                   0.0, 0.0, 0.0, 0.0, 0.0, avg,
+                   avgWorst, 0, 0, 0.0, 0.0,
+                   "accelerated learning evidence", "", "", 0, true, reason);
+   return adj;
 }
 
 int XAU_FindBrainOpen(ulong posId)
@@ -10956,7 +11240,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.43 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.44 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
