@@ -396,7 +396,7 @@ async def download_ea():
     return Response(
         content=sanitized,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.40_EXIT_LEARNING_BRAIN.mq5"'},
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.41_REPORT_FIT_RECOVERY_SCOUT.mq5"'},
     )
 
 # Admin-only: serves the FULL master EA with your agent token + cloud fanout
@@ -407,7 +407,7 @@ async def admin_download_ea_master():
     if not p.exists(): raise HTTPException(status_code=404)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.40_EXIT_LEARNING_BRAIN.mq5",
+        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.41_REPORT_FIT_RECOVERY_SCOUT.mq5",
         media_type="application/octet-stream",
     )
 

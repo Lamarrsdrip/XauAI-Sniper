@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.40 — Exit Learning Brain Mode   |
+//|                                     v5.8.41 — Report-Fit Recovery Scout  |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.40 — EXIT LEARNING BRAIN"
-#property description "Main build: 10-30 min entry quality guards with wider profit room."
-#property description "Keeps pullback timing, cycle armor, smart pyramid guard, and cloud-safe no-partial lifecycle."
+#property description "XAUUSD AI Sniper v5.8.41 — REPORT-FIT RECOVERY SCOUT"
+#property description "Uses attribution memory to soften expensive blocks with tiny scouts, not blind looseness."
+#property description "Cuts B-grade hot-cycle risk after large winning runs so one late B cannot erase the day."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -194,6 +194,11 @@ input double InpXAU_ExtremeLateLotMulti    = 0.35;  // If late but still allowed
 input bool   InpXAU_BlockLateChasePyramids = true;  // Pyramid adds must not cluster near the exhausted end of a missed move
 input bool   InpBlockedTradeMemoryReport   = true;  // Persist blocked-signal outcome learning to CSV for audits
 input int    InpBlockedMemoryMinSamples    = 8;     // Samples required before blocked-pattern stats can influence logs/size
+input bool   InpBlockedMemoryScoutEnable   = true;  // If a block reason repeatedly misses more than it saves, allow tiny controlled scout
+input double InpBlockedMemoryScoutEdgeATR  = 0.50;  // Avg favorable ATR must exceed avg adverse ATR by this much
+input double InpBlockedMemoryScoutMinFavATR= 1.45;  // Minimum average favorable move after similar blocks
+input double InpBlockedMemoryScoutMaxAdvATR= 1.55;  // Do not scout if similar blocks usually draw down worse than this
+input double InpBlockedMemoryScoutLotMulti = 0.22;  // Tiny risk only; this is learning scout, not full-size looseness
 input bool   InpTradeBrainMemory           = true;  // Persist EVERY executed trade with entry reason, exit reason, drawdown, and outcome
 input int    InpTradeBrainMinSamples       = 12;    // Minimum matching closed trades before brain can affect new entries
 input double InpTradeBrainReduceWR         = 42.0;  // If similar pattern WR is below this, reduce lot instead of repeating full risk
@@ -210,6 +215,8 @@ input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.40 — protect big winning cycle
 input bool   InpXAU_CycleGivebackArmor        = true; // After a strong winning day, reduce late-cycle risk instead of giving back many wins
 input double InpXAU_CycleArmGainPct           = 8.0;  // Daily gain % where cycle armor starts protecting session equity
 input double InpXAU_CycleLotMulti             = 0.55; // Lot multiplier while cycle armor is armed
+input double InpXAU_CycleBGradeDeepGainPct    = 18.0; // After a very strong day, B-grade entries become small only
+input double InpXAU_CycleBGradeLotMulti       = 0.20; // Extra B-grade multiplier after deep daily gain
 input int    InpXAU_FailedImpulseLookbackBars = 10;   // Lookback for failed spike/flush detection
 input double InpXAU_FailedImpulseRetraceATR   = 0.85; // Reversal away from fresh high/low that warns move may be exhausted
 input double InpXAU_CycleExtremePct           = 30.0; // Hot-day entries near extremes need clean continuation or they are blocked
@@ -868,7 +875,7 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
-// v5.8.40 — Entry Timing + Trade Brain + Exit Learning Intelligence.
+// v5.8.41 — Report-Fit Scout + Trade Brain + Exit Learning Intelligence.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -1760,7 +1767,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.40 (EXIT LEARNING BRAIN) READY ===");
+   Print("=== XAUAI SNIPER v5.8.41 (REPORT-FIT RECOVERY SCOUT) READY ===");
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1884,7 +1891,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.40 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.41 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -9320,6 +9327,31 @@ bool XAU_BlockedMemoryStats(string setupName, int signal, string reason,
    return (samples >= InpBlockedMemoryMinSamples);
 }
 
+bool XAU_BlockedMemoryEdgeSupportsScout(string setupName, int signal, string reason,
+                                        int &samples, double &winRate,
+                                        double &avgFavATR, double &avgAdvATR,
+                                        string &why)
+{
+   why = "";
+   if(!InpBlockedMemoryScoutEnable)
+      return false;
+
+   if(!XAU_BlockedMemoryStats(setupName, signal, reason,
+                              samples, winRate, avgFavATR, avgAdvATR))
+      return false;
+
+   double edgeATR = avgFavATR - avgAdvATR;
+   bool enoughEdge = (edgeATR >= InpBlockedMemoryScoutEdgeATR &&
+                      avgFavATR >= InpBlockedMemoryScoutMinFavATR &&
+                      avgAdvATR <= InpBlockedMemoryScoutMaxAdvATR);
+   if(!enoughEdge)
+      return false;
+
+   why = StringFormat("blocked-memory edge samples=%d WR=%.0f%% avgFav=%.2fATR avgAdv=%.2fATR edge=%.2fATR",
+                      samples, winRate, avgFavATR, avgAdvATR, edgeATR);
+   return true;
+}
+
 int XAU_FindQualityIdx(ulong posId)
 {
    for(int i = 0; i < ArraySize(g_qualityPosIds); i++)
@@ -9709,6 +9741,24 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
                             signal == 1 ? "BUY" : "SELL", setupName,
                             g_signalFirstSeenPrice, close1, missedMoveDistance,
                             missedMoveATRFromFirst, candlesSinceSignal) + reason;
+      int memSamples = 0;
+      double memWR = 0.0, memFav = 0.0, memAdv = 0.0;
+      string memWhy = "";
+      bool memorySupportsScout = XAU_BlockedMemoryEdgeSupportsScout(setupName, signal, reason,
+                                                                    memSamples, memWR, memFav, memAdv, memWhy) &&
+                                 !spikeCooldown &&
+                                 entryEfficiency >= 35.0 &&
+                                 exhaustionProb <= 78.0 &&
+                                 directionalRoomATR >= 0.35;
+      if(memorySupportsScout)
+      {
+         string oldGrade = grade;
+         lotMulti *= InpBlockedMemoryScoutLotMulti;
+         grade = DowngradeGradeOneStep(grade);
+         reason = StringFormat("REPORT-FIT SCOUT: LATE-CHASE hard block is expensive in memory (%s); allowing tiny scout only %s→%s lot x%.2f, not full-size chase. ",
+                               memWhy, oldGrade, grade, lotMulti) + reason;
+         return true;
+      }
       return false;
    }
 
@@ -9729,18 +9779,19 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
                             signal == -1 ? "low" : "high") + reason;
       int memSamples = 0;
       double memWR = 0.0, memFav = 0.0, memAdv = 0.0;
-      bool memorySupportsScout = XAU_BlockedMemoryStats(setupName, signal, reason,
-                                                        memSamples, memWR, memFav, memAdv) &&
-                                 memWR >= 65.0 && memFav >= 1.60 && memAdv <= 1.10 &&
-                                 !lateChaseEntry && !spikeCooldown;
+      string memWhy = "";
+      bool memorySupportsScout = XAU_BlockedMemoryEdgeSupportsScout(setupName, signal, reason,
+                                                                    memSamples, memWR, memFav, memAdv, memWhy) &&
+                                 entryEfficiency >= 38.0 &&
+                                 exhaustionProb <= 82.0 &&
+                                 !spikeCooldown;
       if(memorySupportsScout)
       {
          string oldGrade = grade;
-         lotMulti *= InpXAU_ExtremeLateLotMulti;
+         lotMulti *= InpBlockedMemoryScoutLotMulti;
          grade = DowngradeGradeOneStep(grade);
-         reason = StringFormat("BLOCKED-MEMORY SCOUT: similar blocked %s signals worked before (samples=%d WR=%.0f%% avgFav=%.2fATR avgAdv=%.2fATR), so allowing controlled small scout %s→%s lot x%.2f instead of blind hard block. ",
-                               setupName, memSamples, memWR, memFav, memAdv,
-                               oldGrade, grade, lotMulti) + reason;
+         reason = StringFormat("REPORT-FIT SCOUT: BAD-LOCATION block has been too expensive in memory (%s); allowing controlled tiny scout %s→%s lot x%.2f instead of blind hard block. ",
+                               memWhy, oldGrade, grade, lotMulti) + reason;
          return true;
       }
       return false;
@@ -9819,6 +9870,13 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       lotMulti *= InpXAU_CycleLotMulti;
       reason = StringFormat("CYCLE ARMOR SOFT: dayGain %.1f%%, lot x%.2f so one late trade cannot wipe many wins. ",
                             dayGainPct, InpXAU_CycleLotMulti) + reason;
+      if(grade == "B" && dayGainPct >= InpXAU_CycleBGradeDeepGainPct)
+      {
+         lotMulti *= InpXAU_CycleBGradeLotMulti;
+         reason = StringFormat("REPORT-FIT B-CYCLE CUT: prior report loss was B-grade after a hot winning cycle; dayGain %.1f%% >= %.1f%% so B risk x%.2f extra. ",
+                               dayGainPct, InpXAU_CycleBGradeDeepGainPct,
+                               InpXAU_CycleBGradeLotMulti) + reason;
+      }
    }
 
    if(isA && cleanContinuation)
@@ -10633,7 +10691,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.40 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.41 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
