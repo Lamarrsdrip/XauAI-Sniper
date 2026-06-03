@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import axios from "axios";
 import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
@@ -57,7 +57,7 @@ export default function AdminPortal({ api }) {
           {[
             { id: "dashboard", label: "DASHBOARD", icon: House },
             { id: "pins", label: "LICENSES", icon: Key },
-            { id: "cloud", label: "COMMAND CENTER", icon: ChartBar },
+            { id: "command", label: "BOT OPS", icon: Pulse },
             { id: "settings", label: "SETTINGS", icon: GearSix },
             { id: "configurator", label: "EA CONFIG", icon: ChartBar },
             { id: "transactions", label: "PAYMENTS", icon: CurrencyNgn },
@@ -74,7 +74,7 @@ export default function AdminPortal({ api }) {
       <div className="max-w-7xl mx-auto px-6 md:px-8 py-8">
         {tab === "dashboard" && <DashboardTab api={api} token={token} />}
         {tab === "pins" && <PinsTab api={api} token={token} />}
-        {tab === "cloud" && <CloudAdminTab api={api} token={token} />}
+        {tab === "command" && <CommandOpsTab api={api} token={token} />}
         {tab === "settings" && <SettingsTab api={api} token={token} />}
         {tab === "configurator" && <ConfigTab api={api} token={token} />}
         {tab === "transactions" && <TransactionsTab api={api} token={token} />}
@@ -152,159 +152,67 @@ function LoginPage({ api, onLogin }) {
 function DashboardTab({ api, token }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const h = { headers: { Authorization: `Bearer ${token}` } };
+  const h = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
 
   useEffect(() => {
     ax.get(`${api}/admin/dashboard`, h).then(r => setData(r.data)).catch(() => {}).finally(() => setLoading(false));
-  }, [api, token]);
+  }, [api, h]);
 
   if (loading) return <div className="text-center py-12 text-muted-foreground">Loading dashboard...</div>;
   if (!data) return <div className="text-center py-12 text-muted-foreground">Failed to load dashboard</div>;
 
   const b = data.bots;
   const rev = data.revenue;
-  const perf = data.performance;
-
   return (
-    <div data-testid="admin-dashboard-tab">
-      {/* Top Stats Cards */}
+    <div className="space-y-6" data-testid="admin-dashboard-tab">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <StatCard label="BOTS SOLD" value={b.total_sold} sub={`${b.sold_via_payment} paid | ${b.free_generated} free`} color="text-foreground" testId="stat-total-sold" />
-        <StatCard label="ACTIVELY TRADING" value={b.actively_trading} sub={`${b.purchased_not_activated} not yet activated`} color="text-[hsl(142,71%,45%)]" testId="stat-active" />
+        <StatCard label="LICENSES ISSUED" value={b.total_sold} sub={`${b.sold_via_payment} paid | ${b.free_generated} manual`} color="text-foreground" testId="stat-total-sold" />
+        <StatCard label="ACTIVATED LICENSES" value={b.actively_trading} sub={`${b.purchased_not_activated} waiting for MT5 activation`} color="text-[hsl(142,71%,45%)]" testId="stat-active" />
         <StatCard label="REVOKED" value={b.revoked} color="text-[hsl(348,83%,47%)]" testId="stat-revoked" />
         <StatCard label="REVENUE" value={rev.formatted_revenue} sub={`${rev.successful_payments} payments`} color="text-primary" testId="stat-revenue" />
       </div>
 
-      {/* Performance Overview */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {/* Win/Loss */}
-        <div className="border border-border bg-card" data-testid="perf-overview">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="border border-border bg-card" data-testid="license-business-overview">
           <div className="px-5 py-3 border-b border-border bg-muted/30">
-            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground flex items-center gap-2"><Pulse size={14} /> GLOBAL PERFORMANCE (All Users)</h4>
+            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground flex items-center gap-2"><Pulse size={14} /> LICENSE BUSINESS OVERVIEW</h4>
           </div>
-          <div className="p-5">
-            <div className="grid grid-cols-3 gap-4 mb-4">
-              <div>
-                <div className="text-xs text-muted-foreground mb-1">TOTAL TRADES</div>
-                <div className="font-mono text-2xl font-bold">{perf.total_trades}</div>
+          <div className="p-5 space-y-4">
+            <div className="text-sm leading-6 text-muted-foreground">
+              Admin now tracks the commercial product: licenses sold, activation status, payments, and live bot operations.
+              Trading performance belongs in structured EA reports and the user Command Center, not old cloud-copy dashboards.
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="border border-border p-4">
+                <div className="text-[10px] font-bold tracking-[0.15em] text-muted-foreground">PAID LICENSES</div>
+                <div className="font-mono text-2xl font-bold text-primary mt-1">{b.sold_via_payment}</div>
               </div>
-              <div>
-                <div className="text-xs text-muted-foreground mb-1">WIN RATE</div>
-                <div className={`font-mono text-2xl font-bold ${perf.win_rate >= 60 ? "text-[hsl(142,71%,45%)]" : perf.win_rate >= 45 ? "text-primary" : "text-[hsl(348,83%,47%)]"}`}>
-                  {perf.win_rate}%
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground mb-1">ACTIVE TRADERS</div>
-                <div className="font-mono text-2xl font-bold text-primary">{perf.active_traders}</div>
+              <div className="border border-border p-4">
+                <div className="text-[10px] font-bold tracking-[0.15em] text-muted-foreground">MANUAL LICENSES</div>
+                <div className="font-mono text-2xl font-bold mt-1">{b.free_generated}</div>
               </div>
             </div>
-            {/* Win/Loss bar */}
-            <div className="mb-4">
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-[hsl(142,71%,45%)]">{perf.wins} wins</span>
-                <span className="text-[hsl(348,83%,47%)]">{perf.losses} losses</span>
-              </div>
-              <div className="h-3 bg-muted flex overflow-hidden">
-                <div className="bg-[hsl(142,71%,45%)] transition-all" style={{ width: `${perf.total_trades > 0 ? (perf.wins / perf.total_trades * 100) : 0}%` }} />
-                <div className="bg-[hsl(348,83%,47%)] transition-all" style={{ width: `${perf.total_trades > 0 ? (perf.losses / perf.total_trades * 100) : 0}%` }} />
-              </div>
-            </div>
-            {/* Pips */}
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <div className="text-xs text-muted-foreground mb-1">PROFIT PIPS</div>
-                <div className="font-mono text-lg font-bold text-[hsl(142,71%,45%)]">+{perf.total_profit_pips}</div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground mb-1">LOSS PIPS</div>
-                <div className="font-mono text-lg font-bold text-[hsl(348,83%,47%)]">-{perf.total_loss_pips}</div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground mb-1">NET PIPS</div>
-                <div className={`font-mono text-lg font-bold ${perf.net_pips >= 0 ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>
-                  {perf.net_pips >= 0 ? "+" : ""}{perf.net_pips}
-                </div>
-              </div>
-            </div>
-            {perf.profit_factor > 0 && (
-              <div className="mt-3 pt-3 border-t border-border text-xs text-muted-foreground">
-                Profit Factor: <span className="font-mono font-bold text-foreground">{perf.profit_factor}</span>
-              </div>
-            )}
           </div>
         </div>
 
-        {/* Strategy Breakdown */}
-        <div className="border border-border bg-card" data-testid="strategy-performance">
+        <div className="border border-border bg-card" data-testid="admin-next-actions">
           <div className="px-5 py-3 border-b border-border bg-muted/30">
-            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">STRATEGY PERFORMANCE</h4>
+            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">ADMIN WORKFLOW</h4>
           </div>
-          <div className="divide-y divide-border">
-            {Object.entries(data.strategies || {}).map(([name, s]) => (
-              <div key={name} className="px-5 py-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-bold">{name}</span>
-                  <span className={`font-mono text-sm font-bold ${s.win_rate >= 60 ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>
-                    {s.win_rate}% WR
-                  </span>
-                </div>
-                <div className="flex items-center gap-4 text-xs">
-                  <span className="text-muted-foreground">{s.trades} trades</span>
-                  <span className="text-[hsl(142,71%,45%)]">+{s.profit_pips} pips</span>
-                  <span className="text-[hsl(348,83%,47%)]">-{s.loss_pips} pips</span>
-                  <span className={`font-bold ${s.net_pips >= 0 ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>
-                    Net: {s.net_pips >= 0 ? "+" : ""}{s.net_pips}
-                  </span>
-                </div>
-                <div className="mt-2 h-1.5 bg-muted">
-                  <div className="h-full bg-primary transition-all" style={{ width: `${s.win_rate}%` }} />
-                </div>
+          <div className="p-5 space-y-3">
+            {[
+              ["Licenses", "Create, revoke, activate, and copy ASE license keys."],
+              ["Bot Ops", "Watch live heartbeat, command queue, and EA activity."],
+              ["Payments", "Review Paystack transactions and generated license keys."],
+              ["Settings", "Set license price, payment keys, and email delivery."],
+            ].map(([title, body]) => (
+              <div key={title} className="border border-border p-3">
+                <div className="font-bold text-sm">{title}</div>
+                <div className="text-xs text-muted-foreground mt-1">{body}</div>
               </div>
             ))}
-            {Object.keys(data.strategies || {}).length === 0 && (
-              <div className="px-5 py-8 text-center text-sm text-muted-foreground">No strategy data yet. As users trade, data appears here.</div>
-            )}
           </div>
         </div>
-      </div>
-
-      {/* Recent Trades */}
-      <div className="border border-border bg-card" data-testid="recent-trades">
-        <div className="px-5 py-3 border-b border-border bg-muted/30">
-          <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">RECENT TRADES (Global)</h4>
-        </div>
-        {data.recent_trades?.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead><tr className="border-b border-border">
-                <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">RESULT</th>
-                <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">STRATEGY</th>
-                <th className="text-right px-4 py-2 text-xs font-bold text-muted-foreground">PIPS</th>
-                <th className="text-right px-4 py-2 text-xs font-bold text-muted-foreground">CONFIDENCE</th>
-                <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">DATE</th>
-              </tr></thead>
-              <tbody>{data.recent_trades.map((t, i) => (
-                <tr key={`trade-${t.strategy_name}-${i}`} className="border-b border-border last:border-0">
-                  <td className="px-4 py-2">
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold ${t.was_winner ? "bg-[hsl(142,71%,45%)]/10 text-[hsl(142,71%,45%)]" : "bg-[hsl(348,83%,47%)]/10 text-[hsl(348,83%,47%)]"}`}>
-                      {t.was_winner ? <TrendUp size={10} /> : <TrendDown size={10} />}
-                      {t.was_winner ? "WIN" : "LOSS"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2 text-xs font-mono">{t.strategy_name}</td>
-                  <td className={`px-4 py-2 text-right font-mono font-bold ${t.profit_pips >= 0 ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>
-                    {t.profit_pips >= 0 ? "+" : ""}{t.profit_pips?.toFixed(1)}
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono">{t.confidence}%</td>
-                  <td className="px-4 py-2 text-xs text-muted-foreground">{t.created_at?.split("T")[0]}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="px-5 py-8 text-center text-sm text-muted-foreground">No trades recorded yet. As users activate and trade, results will appear here.</div>
-        )}
       </div>
     </div>
   );
@@ -330,14 +238,14 @@ function PinsTab({ api, token }) {
   const [notes, setNotes] = useState("");
   const [copiedPin, setCopiedPin] = useState(null);
   const [generating, setGenerating] = useState(false);
-  const h = { headers: { Authorization: `Bearer ${token}` } };
+  const h = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
 
   const fetch = useCallback(async () => {
     try {
       const [p, s] = await Promise.all([ax.get(`${api}/admin/pins`, h), ax.get(`${api}/admin/pins/stats`, h)]);
       setPins(p.data.pins || []); setStats(s.data);
     } catch (err) { process.env.NODE_ENV === 'development' && console.error("Failed to fetch pins:", err); }
-  }, [api, token]);
+  }, [api, h]);
 
   useEffect(() => { fetch(); }, [fetch]);
 
@@ -409,13 +317,13 @@ function SettingsTab({ api, token }) {
   const [smtpPw, setSmtpPw] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const h = { headers: { Authorization: `Bearer ${token}` } };
+  const h = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
 
   useEffect(() => {
     ax.get(`${api}/admin/settings`, h).then(r => {
       setSettings(r.data); setPriceNaira(r.data.pin_price_naira || 300000); setSmtpEmail(r.data.smtp_email || "");
     }).catch((err) => { process.env.NODE_ENV === 'development' && console.error("Failed to load settings:", err); });
-  }, [api, token]);
+  }, [api, h]);
 
   const save = async () => {
     setSaving(true);
@@ -527,8 +435,8 @@ function ConfigTab({ api, token }) {
 // --- TRANSACTIONS TAB ---
 function TransactionsTab({ api, token }) {
   const [txs, setTxs] = useState([]);
-  const h = { headers: { Authorization: `Bearer ${token}` } };
-  useEffect(() => { ax.get(`${api}/admin/transactions`, h).then(r=>setTxs(r.data.transactions||[])).catch((err) => { process.env.NODE_ENV === 'development' && console.error("Failed to load transactions:", err); }); }, [api, token]);
+  const h = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
+  useEffect(() => { ax.get(`${api}/admin/transactions`, h).then(r=>setTxs(r.data.transactions||[])).catch((err) => { process.env.NODE_ENV === 'development' && console.error("Failed to load transactions:", err); }); }, [api, h]);
 
   return (
     <div data-testid="admin-transactions-tab">
@@ -558,6 +466,118 @@ function TransactionsTab({ api, token }) {
             ))}</tbody>
           </table>
         </div>}
+      </div>
+    </div>
+  );
+}
+
+function CommandOpsTab({ api, token }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const h = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
+
+  const fetch = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await ax.get(`${api}/admin/command-center/overview`, h);
+      setData(res.data);
+    } catch (err) {
+      process.env.NODE_ENV === "development" && console.error("Command Center overview failed:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, h]);
+
+  useEffect(() => { fetch(); }, [fetch]);
+
+  if (loading) return <div className="text-center py-12 text-muted-foreground">Loading bot operations...</div>;
+  if (!data) return <div className="text-center py-12 text-muted-foreground">Failed to load bot operations</div>;
+
+  const bot = data.bot || {};
+  const licenses = data.licenses || {};
+  const commands = data.commands || {};
+  const activity = data.activity || [];
+  const statusClass = bot.online ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]";
+
+  return (
+    <div className="space-y-6" data-testid="admin-command-ops-tab">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="font-heading text-xl font-bold">Bot Operations</h3>
+          <p className="text-sm text-muted-foreground mt-1">Licensed bot fleet, heartbeat, command queue, and recent EA activity.</p>
+        </div>
+        <button onClick={fetch} className="px-4 py-2 border border-border bg-card text-xs font-bold">REFRESH</button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard label="ACTIVE LICENSES" value={licenses.active || 0} sub={`${licenses.activated || 0} activated`} color="text-primary" />
+        <StatCard label="LINKED MT5 ACCOUNTS" value={licenses.linked_accounts || 0} sub={`${licenses.total || 0} total licenses`} color="text-[hsl(142,71%,45%)]" />
+        <StatCard label="BOT HEARTBEAT" value={bot.online ? "ONLINE" : "OFFLINE"} sub={bot.last_heartbeat ? bot.last_heartbeat.slice(0, 16).replace("T", " ") : "never"} color={statusClass} />
+        <StatCard label="PENDING COMMANDS" value={commands.pending || 0} sub={`${commands.executed || 0} executed | ${commands.failed || 0} failed`} color={commands.failed ? "text-[hsl(348,83%,47%)]" : "text-foreground"} />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="border border-border bg-card">
+          <div className="px-5 py-3 border-b border-border bg-muted/30">
+            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">LATEST BOT HEARTBEAT</h4>
+          </div>
+          <div className="p-5 grid grid-cols-2 gap-4 text-sm">
+            {[
+              ["Status", bot.status || (bot.online ? "ONLINE" : "OFFLINE")],
+              ["EA version", bot.ea_version || "-"],
+              ["Account", bot.account_number || "-"],
+              ["Broker", bot.broker_server || "-"],
+              ["Symbol", `${bot.symbol || "-"} ${bot.timeframe || ""}`.trim()],
+              ["Open positions", bot.open_positions || 0],
+              ["Algo trading", bot.algo_trading ? "Enabled" : "Disabled"],
+              ["Trading allowed", bot.trading_allowed ? "Yes" : "No"],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <div className="text-[10px] font-bold tracking-[0.15em] text-muted-foreground mb-1">{label.toUpperCase()}</div>
+                <div className="font-mono font-bold break-words">{value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="border border-border bg-card">
+          <div className="px-5 py-3 border-b border-border bg-muted/30">
+            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">RECENT COMMANDS</h4>
+          </div>
+          <div className="divide-y divide-border max-h-[340px] overflow-y-auto">
+            {(commands.recent || []).length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">No remote commands yet.</div>
+            ) : commands.recent.map((cmd) => (
+              <div key={cmd.id} className="px-5 py-3 text-sm">
+                <div className="flex justify-between gap-3">
+                  <div className="font-bold">{cmd.label || cmd.action}</div>
+                  <span className={`font-mono text-xs font-bold ${cmd.status === "FAILED" ? "text-[hsl(348,83%,47%)]" : cmd.status === "EXECUTED" ? "text-[hsl(142,71%,45%)]" : "text-primary"}`}>{cmd.status}</span>
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">{cmd.user_email || "user"} · {cmd.requested_at?.slice(0, 16).replace("T", " ")}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="border border-border bg-card">
+        <div className="px-5 py-3 border-b border-border bg-muted/30">
+          <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">RECENT BOT ACTIVITY</h4>
+        </div>
+        <div className="divide-y divide-border max-h-[420px] overflow-y-auto">
+          {activity.length === 0 ? (
+            <div className="p-8 text-center text-sm text-muted-foreground">No EA activity events yet.</div>
+          ) : activity.map((event) => (
+            <div key={event.id} className="px-5 py-3 text-sm">
+              <div className="flex justify-between gap-3">
+                <div className="font-bold">{event.event_type}</div>
+                <span className="font-mono text-xs text-muted-foreground">{event.severity}</span>
+              </div>
+              <div className="mt-1 text-muted-foreground">{event.message}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{event.account || "account"} · {event.ts?.slice(0, 16).replace("T", " ")}</div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -677,816 +697,6 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
           <FloppyDisk size={16} weight="bold" /> {saving ? "UPDATING..." : "UPDATE ACCOUNT"}
         </button>
       </div>
-    </div>
-  );
-}
-
-
-// --- CLOUD ADMIN TAB ---
-function CloudAdminTab({ api, token }) {
-  const [stats, setStats] = useState(null);
-  const [users, setUsers] = useState([]);
-  const [payments, setPayments] = useState([]);
-  const [settings, setSettings] = useState(null);
-  const [infra, setInfra] = useState(null);
-  const [botMode, setBotMode] = useState(null);    // {current, presets, set_at}
-  const [diag, setDiag] = useState(null);          // diagnostics: workers + fanout logs + per-user readiness
-  const [orphans, setOrphans] = useState(null);    // v1.4.3: orphan-trade detector
-  const [sub, setSub] = useState("stats"); // stats | users | payments | botmode | infra | diagnostics | settings
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-  const [newToken, setNewToken] = useState("");
-
-  const headers = { Authorization: `Bearer ${token}` };
-
-  const refresh = useCallback(async () => {
-    try {
-      const [s, u, p, cfg, inf, bm, dg, orp] = await Promise.all([
-        ax.get(`${api}/admin/cloud/stats`, { headers }),
-        ax.get(`${api}/admin/cloud/users`, { headers }),
-        ax.get(`${api}/admin/cloud/payments`, { headers }),
-        ax.get(`${api}/admin/cloud/settings`, { headers }),
-        ax.get(`${api}/admin/cloud/infrastructure`, { headers }),
-        ax.get(`${api}/admin/cloud/bot-mode`, { headers }),
-        ax.get(`${api}/admin/cloud/diagnostics`, { headers }),
-        ax.get(`${api}/admin/cloud/orphans`, { headers }),
-      ]);
-      setStats(s.data); setUsers(u.data.users || []); setPayments(p.data.payments || []);
-      setSettings(cfg.data); setInfra(inf.data); setBotMode(bm.data); setDiag(dg.data);
-      setOrphans(orp.data);
-    } catch (e) { setMsg(e.response?.data?.detail || "Failed to load"); }
-  }, [api, token]);
-
-  useEffect(() => { refresh(); }, [refresh]);
-
-  const setBotModePreset = async (mode) => {
-    setBusy(true); setMsg("");
-    try {
-      await ax.post(`${api}/admin/cloud/bot-mode`, { mode }, { headers });
-      setMsg(`Bot mode → ${mode}. Master EA will pick it up within 60 seconds.`);
-      refresh();
-    } catch (e) { setMsg(e.response?.data?.detail || "Mode change failed"); }
-    finally { setBusy(false); }
-  };
-
-  const approve = async (id) => {
-    setBusy(true); setMsg("");
-    try { await ax.post(`${api}/admin/cloud/payments/${id}/approve`, {}, { headers }); setMsg("Approved."); refresh(); }
-    catch (e) { setMsg(e.response?.data?.detail || "Approve failed"); }
-    finally { setBusy(false); }
-  };
-  const reject = async (id) => {
-    if (!window.confirm("Reject this payment?")) return;
-    setBusy(true);
-    try { await ax.post(`${api}/admin/cloud/payments/${id}/reject`, {}, { headers }); refresh(); }
-    catch (e) { setMsg(e.response?.data?.detail || "Reject failed"); }
-    finally { setBusy(false); }
-  };
-
-  const saveSettings = async () => {
-    setBusy(true); setMsg("");
-    try {
-      // Pre-flight validation: don't let admin accidentally save $0 plan prices
-      // (form blanks would clobber prices to 0 and break the public site).
-      const plans = settings?.plans || {};
-      for (const [pid, p] of Object.entries(plans)) {
-        const price = Number(p.price_usd);
-        if (!Number.isFinite(price) || price <= 0) {
-          setMsg(`${pid.toUpperCase()} plan price must be > $0 (got ${p.price_usd}). Fix and re-save.`);
-          setBusy(false); return;
-        }
-        if (!p.name || !p.name.trim()) {
-          setMsg(`${pid.toUpperCase()} plan needs a name.`);
-          setBusy(false); return;
-        }
-      }
-      await ax.put(`${api}/admin/cloud/settings`, settings, { headers });
-      setMsg("Saved.");
-      refresh();
-    }
-    catch (e) { setMsg(e.response?.data?.detail || "Save failed"); }
-    finally { setBusy(false); }
-  };
-
-  // Per-user pricing override
-  const overrideUser = async (uid, body) => {
-    try {
-      await ax.post(`${api}/admin/cloud/users/override`, { user_id: uid, ...body }, { headers });
-      setMsg("User updated."); refresh();
-    } catch (e) { setMsg(e.response?.data?.detail || "Update failed"); }
-  };
-
-  // v1.4.3 — Admin nuclear option: queues a "force-close-all" marker so the
-  // worker closes EVERY open position (incl. legacy orphans without DB mapping)
-  // on this user's MT5 account on the next poll cycle.
-  const forceCloseUser = async (uid, email) => {
-    if (!window.confirm(
-      `NUKE: Force-close ALL open positions on ${email}'s cloud MT5 account?\n\n` +
-      `This is used to clear legacy orphan trades from a pre-v1.4 worker.\n` +
-      `The worker will close every position (magic 77007007 only) on its next poll (~30s).`
-    )) return;
-    try {
-      const r = await ax.post(`${api}/admin/cloud/force-close-user`, { user_id: uid }, { headers });
-      setMsg(`Force-close queued for ${email} (marker ${r.data?.marker_id?.slice(0,8) || "?"}). Worker will execute within ~30s.`);
-    } catch (e) { setMsg(e.response?.data?.detail || "Force-close failed"); }
-  };
-
-  // Pricing edits (in-memory until "Save settings")
-  const updPlan = (id, k, v) => {
-    const plans = { ...(settings?.plans || {}) };
-    const base = plans[id] || {};
-    plans[id] = { ...base, [k]: k === "price_usd" || k === "max_balance_usd" ? Number(v) : v };
-    setSettings({ ...settings, plans });
-  };
-  const updFx = (ccy, v) => {
-    const r = { ...(settings?.fx_rates || {}) };
-    r[ccy] = Number(v);
-    setSettings({ ...settings, fx_rates: r });
-  };
-
-  const addWallet = () => setSettings({...settings, crypto_wallets: [...(settings.crypto_wallets||[]), {asset:"",network:"",address:""}]});
-  const updWallet = (i,k,v) => { const a = [...settings.crypto_wallets]; a[i] = {...a[i], [k]:v}; setSettings({...settings, crypto_wallets: a}); };
-  const delWallet = (i) => { const a = [...settings.crypto_wallets]; a.splice(i,1); setSettings({...settings, crypto_wallets: a}); };
-  const addBank = () => setSettings({...settings, bank_accounts: [...(settings.bank_accounts||[]), {bank_name:"",account_name:"",account_number:"",swift:"",country:""}]});
-  const updBank = (i,k,v) => { const a = [...settings.bank_accounts]; a[i] = {...a[i], [k]:v}; setSettings({...settings, bank_accounts: a}); };
-  const delBank = (i) => { const a = [...settings.bank_accounts]; a.splice(i,1); setSettings({...settings, bank_accounts: a}); };
-
-  return (
-    <div className="space-y-6" data-testid="cloud-admin-tab">
-      <div className="flex gap-0 border-b border-border overflow-x-auto">
-        {[{id:"stats",label:"OVERVIEW"},{id:"users",label:"USERS"},{id:"payments",label:"PAYMENTS"},{id:"pricing",label:"PRICING & FX"},{id:"botmode",label:"BOT MODE"},{id:"infra",label:"INFRASTRUCTURE"},{id:"diagnostics",label:"DIAGNOSTICS"},{id:"settings",label:"SETTINGS"}].map(t=>(
-          <button key={t.id} onClick={()=>setSub(t.id)} data-testid={`cloud-sub-${t.id}`}
-                  className={`px-5 py-3 text-xs font-bold tracking-[0.1em] border-b-2 transition-colors whitespace-nowrap ${sub===t.id?"border-primary text-foreground":"border-transparent text-muted-foreground hover:text-foreground"}`}>
-            {t.label} {t.id==="payments" && stats?.pending_payments>0 ? <span className="ml-1 px-1.5 py-0.5 bg-primary text-primary-foreground rounded-full text-[10px]">{stats.pending_payments}</span> : null}
-          </button>
-        ))}
-      </div>
-
-      {msg && <div className="px-4 py-2 bg-primary/10 border border-primary/30 text-primary text-sm rounded">{msg}</div>}
-
-      {/* v1.4.3 — Orphan-trade alert. Surfaces anytime a user's worker
-          reports MORE open positions (magic 77007007) than the master EA
-          currently has open — those extras are legacy orphans. One-click NUKE
-          per user clears them via the force-close-queue. */}
-      {orphans && orphans.flagged_users && orphans.flagged_users.length > 0 && (
-        <div className="border-2 border-[hsl(0,84%,60%)]/50 bg-[hsl(0,84%,60%)]/10 p-4 rounded space-y-3" data-testid="orphan-alert-banner">
-          <div className="flex items-center gap-2">
-            <span className="text-[hsl(0,84%,60%)] font-bold tracking-wider text-sm">⚠ ORPHAN POSITIONS DETECTED</span>
-            <span className="text-xs text-muted-foreground">Master has {orphans.master_open_count} open · {orphans.flagged_users.length} user(s) flagged</span>
-          </div>
-          <div className="text-[11px] text-muted-foreground">
-            These users' MT5 accounts have more open positions (magic 77007007) than the master EA. The extras are likely legacy
-            trades from a pre-v1.4 worker that lacked the <code className="font-mono bg-black/30 px-1">XAUAI|sigid</code> comment, so
-            auto close-sync can't see them. Click NUKE to force-close every magic-77007007 position on that user's terminal.
-          </div>
-          <div className="space-y-1">
-            {orphans.flagged_users.map((o, i) => (
-              <div key={o.user_id} className="flex items-center justify-between gap-3 bg-black/20 px-3 py-2 rounded text-sm" data-testid={`orphan-row-${i}`}>
-                <div className="flex items-center gap-3 flex-wrap">
-                  <span className="font-semibold">{o.email}</span>
-                  <span className="text-[10px] font-mono text-[hsl(0,84%,60%)]">{o.cloud_positions} cloud / {o.master_open} master = ~{o.orphan_estimate} orphan(s)</span>
-                  <span className="text-[10px] text-muted-foreground">last reported {o.last_reported_at?.slice(11,19) || "?"}</span>
-                </div>
-                <button data-testid={`orphan-nuke-${i}`}
-                        onClick={()=>forceCloseUser(o.user_id, o.email)}
-                        className="px-3 py-1 bg-[hsl(0,84%,60%)] text-white text-[10px] font-bold tracking-widest rounded hover:bg-[hsl(0,84%,55%)]">NUKE</button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {sub === "stats" && stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4" data-testid="cloud-stats-grid">
-          <StatCard label="TOTAL USERS" value={stats.total_users} testId="cloud-stat-total" />
-          <StatCard label="TRIAL" value={stats.trial_users} color="primary" testId="cloud-stat-trial" />
-          <StatCard label="ACTIVE (PAID)" value={stats.active_users} color="green" testId="cloud-stat-active" />
-          <StatCard label="MT5 CONNECTED" value={stats.mt5_connected} testId="cloud-stat-connected" />
-          <StatCard label="MRR" value={`$${stats.mrr_usd.toLocaleString()}`} color="green" testId="cloud-stat-mrr" />
-          <StatCard label="PENDING PAYMENTS" value={stats.pending_payments} color={stats.pending_payments>0?"primary":undefined} testId="cloud-stat-pending" />
-        </div>
-      )}
-
-      {sub === "users" && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm" data-testid="cloud-users-table">
-            <thead><tr className="text-[10px] font-bold tracking-widest text-muted-foreground border-b border-border">
-              <th className="text-left py-2">EMAIL</th><th className="text-left py-2">STATUS</th>
-              <th className="text-left py-2">PLAN</th><th className="text-right py-2">MT5</th>
-              <th className="text-right py-2">BALANCE</th><th className="text-right py-2">ENDS</th>
-              <th className="text-right py-2">OVERRIDE</th>
-            </tr></thead>
-            <tbody>
-              {users.map((u,i)=>(
-                <tr key={u.id} className="border-b border-border/50" data-testid={`cloud-user-${i}`}>
-                  <td className="py-2"><div className="font-semibold">{u.email}</div><div className="text-[10px] text-muted-foreground">{u.full_name}</div></td>
-                  <td className={`py-2 font-mono text-xs ${u.status==="active"?"text-[hsl(142,71%,45%)]":"text-primary"}`}>{u.status?.toUpperCase()}</td>
-                  <td className="py-2 capitalize">
-                    {u.plan}
-                    {u.custom_price_usd ? <span className="ml-1 text-[10px] text-primary font-mono">(${u.custom_price_usd})</span> : null}
-                  </td>
-                  <td className="py-2 text-right">{u.mt5_connected ? <Check size={14} className="inline text-[hsl(142,71%,45%)]" /> : "—"}</td>
-                  <td className="py-2 text-right font-mono">{u.last_balance ? `$${u.last_balance.toFixed(0)}` : "—"}</td>
-                  <td className="py-2 text-right text-xs">{u.subscription_ends_at?.slice(0,10) || "—"}</td>
-                  <td className="py-2 text-right space-x-1">
-                    <button data-testid={`extend-30-${u.id}`}
-                            onClick={()=>overrideUser(u.id, { extend_days: 30 })}
-                            className="px-2 py-1 bg-[hsl(142,71%,45%)]/20 text-[hsl(142,71%,45%)] text-[10px] font-bold rounded hover:bg-[hsl(142,71%,45%)]/30">+30d</button>
-                    <button data-testid={`override-price-${u.id}`}
-                            onClick={()=>{
-                              const v = window.prompt(`Set custom monthly price (USD) for ${u.email}.\nLeave blank to clear (use plan default).`, u.custom_price_usd || "");
-                              if (v === null) return;
-                              overrideUser(u.id, { custom_price_usd: v.trim() === "" ? 0 : Number(v) });
-                            }}
-                            className="px-2 py-1 bg-primary/20 text-primary text-[10px] font-bold rounded hover:bg-primary/30">$</button>
-                    <button data-testid={`change-plan-${u.id}`}
-                            onClick={()=>{
-                              const next = u.plan === "starter" ? "pro" : "starter";
-                              if (!window.confirm(`Switch ${u.email} to ${next}?`)) return;
-                              overrideUser(u.id, { plan: next });
-                            }}
-                            className="px-2 py-1 bg-foreground/10 text-foreground text-[10px] font-bold rounded hover:bg-foreground/20">⇄</button>
-                    <button data-testid={`force-close-${u.id}`}
-                            onClick={()=>forceCloseUser(u.id, u.email)}
-                            title="NUKE: Force-close ALL open positions on this user's MT5 (clears legacy orphan trades)"
-                            className="px-2 py-1 bg-[hsl(0,84%,60%)]/20 text-[hsl(0,84%,60%)] text-[10px] font-bold rounded hover:bg-[hsl(0,84%,60%)]/30">NUKE</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {users.length === 0 && <div className="text-center text-muted-foreground py-8">No cloud users yet.</div>}
-        </div>
-      )}
-
-      {sub === "pricing" && settings && (
-        <div className="space-y-6" data-testid="cloud-pricing-tab">
-          <div className="border border-border p-4">
-            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-3">SUBSCRIPTION PLANS</div>
-            <div className="grid md:grid-cols-2 gap-4">
-              {["starter", "pro"].map(pid => {
-                const defaults = { starter: { name: "Starter", price_usd: 50, max_balance_usd: 5000, description: "" }, pro: { name: "Pro", price_usd: 100, max_balance_usd: 999999, description: "" } };
-                const cur = (settings.plans && settings.plans[pid]) || defaults[pid];
-                return (
-                  <div key={pid} className="border border-border p-3 space-y-2" data-testid={`plan-edit-${pid}`}>
-                    <div className="text-[10px] font-bold tracking-widest text-primary">{pid.toUpperCase()}</div>
-                    <input data-testid={`plan-${pid}-name`} value={cur.name||""} onChange={e=>updPlan(pid,"name",e.target.value)}
-                           placeholder="Plan name" className="w-full bg-muted/30 border border-border px-3 py-2 text-sm" />
-                    <div className="flex gap-2">
-                      <div className="flex-1">
-                        <div className="text-[10px] text-muted-foreground mb-1">PRICE USD/MO</div>
-                        <input data-testid={`plan-${pid}-price`} type="number" step="0.01" value={cur.price_usd||0} onChange={e=>updPlan(pid,"price_usd",e.target.value)}
-                               className="w-full bg-muted/30 border border-border px-3 py-2 text-sm font-mono" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-[10px] text-muted-foreground mb-1">MAX BALANCE</div>
-                        <input data-testid={`plan-${pid}-max`} type="number" value={cur.max_balance_usd||0} onChange={e=>updPlan(pid,"max_balance_usd",e.target.value)}
-                               className="w-full bg-muted/30 border border-border px-3 py-2 text-sm font-mono" />
-                      </div>
-                    </div>
-                    <textarea data-testid={`plan-${pid}-desc`} value={cur.description||""} onChange={e=>updPlan(pid,"description",e.target.value)} rows={2}
-                              placeholder="Description" className="w-full bg-muted/30 border border-border px-3 py-2 text-sm" />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="border border-border p-4">
-            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-1">FX RATES (1 USD = X)</div>
-            <div className="text-[11px] text-muted-foreground mb-3">Used to show local-currency amount on the bank-transfer payment page.</div>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              {["NGN","KES","ZAR","GHS","EUR","GBP","INR","CAD","AUD"].map(ccy=>{
-                const v = (settings.fx_rates && settings.fx_rates[ccy]) ?? "";
-                return (
-                  <div key={ccy}>
-                    <div className="text-[10px] font-mono text-muted-foreground mb-1">{ccy}</div>
-                    <input data-testid={`fx-${ccy}`} type="number" step="0.01" value={v} onChange={e=>updFx(ccy,e.target.value)}
-                           className="w-full bg-muted/30 border border-border px-3 py-2 text-sm font-mono" placeholder="rate" />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <button onClick={saveSettings} disabled={busy} data-testid="save-pricing"
-                  className="px-5 py-2 bg-primary text-primary-foreground font-bold tracking-widest text-xs">
-            {busy ? "SAVING..." : "SAVE PRICING & FX"}
-          </button>
-        </div>
-      )}
-
-      {sub === "payments" && (
-        <div className="space-y-2" data-testid="cloud-payments-list">
-          {payments.length === 0 ? <div className="text-center text-muted-foreground py-8">No payments submitted.</div> :
-            payments.map((p,i)=>(
-              <div key={p.id} className="border border-border p-4 flex items-start justify-between gap-4 flex-wrap" data-testid={`cloud-payment-${i}`}>
-                <div className="flex gap-4 items-start flex-1 min-w-0">
-                  {p.proof_image && (
-                    <a href={p.proof_image} target="_blank" rel="noreferrer" data-testid={`proof-${i}`}
-                       className="shrink-0 block">
-                      <img src={p.proof_image} alt="proof" className="w-24 h-24 object-cover rounded-lg border border-border hover:opacity-80 transition-opacity" />
-                      <div className="text-[10px] text-center text-muted-foreground mt-1">click to enlarge</div>
-                    </a>
-                  )}
-                  <div className="min-w-0">
-                    <div className="font-bold">{p.email}</div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      Plan: <span className="capitalize">{p.plan}</span> · ${p.amount_usd} · {p.method}
-                      {p.paid_currency && p.paid_currency !== "USD" && p.paid_amount_local > 0 &&
-                        <span className="ml-1">(paid {p.paid_currency} {p.paid_amount_local.toLocaleString()})</span>}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground font-mono mt-1 break-all">Ref: {p.reference || "—"}</div>
-                    {p.notes && <div className="text-[11px] text-muted-foreground mt-1">Notes: {p.notes}</div>}
-                    <div className="text-[10px] text-muted-foreground mt-1">Submitted: {p.submitted_at?.slice(0,16).replace("T"," ")}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`px-2 py-1 text-[10px] font-bold rounded ${p.status==="approved"?"bg-[hsl(142,71%,45%)]/20 text-[hsl(142,71%,45%)]":p.status==="rejected"?"bg-[hsl(348,83%,47%)]/20 text-[hsl(348,83%,47%)]":"bg-primary/20 text-primary"}`}>{p.status?.toUpperCase()}</span>
-                  {p.status === "pending" && <>
-                    <button onClick={()=>approve(p.id)} disabled={busy} data-testid={`approve-${p.id}`} className="px-3 py-1.5 bg-[hsl(142,71%,45%)] text-black text-xs font-bold">APPROVE</button>
-                    <button onClick={()=>reject(p.id)} disabled={busy} data-testid={`reject-${p.id}`} className="px-3 py-1.5 bg-[hsl(348,83%,47%)] text-white text-xs font-bold">REJECT</button>
-                  </>}
-                </div>
-              </div>
-            ))}
-        </div>
-      )}
-
-      {sub === "botmode" && botMode && (
-        <div className="space-y-5" data-testid="botmode-panel">
-          <div className="border border-border p-4 sm:p-5">
-            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-1">CURRENT BOT MODE</div>
-            <div className="flex items-baseline gap-3 flex-wrap">
-              <div className="text-3xl sm:text-4xl font-bold capitalize text-primary" data-testid="botmode-current">{botMode.current}</div>
-              {botMode.set_at && <div className="text-[11px] text-muted-foreground font-mono">since {new Date(botMode.set_at).toLocaleString()}</div>}
-            </div>
-            <div className="text-[12px] text-muted-foreground mt-2 leading-relaxed">
-              The master EA polls this every ~60s. Switching modes changes the score threshold,
-              floor, HTF context-gate, and post-loss tightening for ALL trades — without restarting MT5.
-              Cloud subscribers all execute against the same mode.
-            </div>
-          </div>
-
-          <div className="grid md:grid-cols-3 gap-3 sm:gap-4">
-            {Object.entries(botMode.presets || {}).map(([id, p]) => {
-              const isCurrent = id === botMode.current;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setBotModePreset(id)}
-                  disabled={busy || isCurrent}
-                  data-testid={`botmode-${id}`}
-                  className={`text-left border-2 p-4 sm:p-5 transition-colors ${isCurrent ? "border-primary bg-primary/10" : "border-border bg-muted/10 hover:border-primary/50 hover:bg-primary/5"} ${busy ? "opacity-50 cursor-wait" : "cursor-pointer"}`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className={`text-[10px] font-bold tracking-widest ${isCurrent ? "text-primary" : "text-muted-foreground"}`}>{id.toUpperCase()}</div>
-                    {isCurrent && <div className="text-[9px] font-mono px-1.5 py-0.5 bg-primary text-primary-foreground rounded">ACTIVE</div>}
-                  </div>
-                  <div className="font-bold text-base sm:text-lg mb-2">{p.label}</div>
-                  <div className="text-[11px] text-muted-foreground leading-relaxed mb-3">{p.description}</div>
-                  <div className="text-[10px] font-mono text-muted-foreground/80 space-y-0.5 border-t border-border pt-2">
-                    <div>gradeB: <span className="text-foreground">{p.gradeB}</span></div>
-                    <div>scoreFloor: <span className="text-foreground">{p.scoreFloor}</span></div>
-                    <div>HTF align: <span className="text-foreground">{p.useHTFBias ? `yes · TF=${p.contextTF}` : "off"}</span></div>
-                    <div>post-loss tighten: <span className="text-foreground">{p.adaptiveTighten ? "on" : "off"}</span></div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="border border-border p-3 sm:p-4 text-[12px] text-muted-foreground">
-            <div className="font-bold text-foreground mb-1">⚠ A note on win-rate</div>
-            <div className="leading-relaxed">
-              No mode guarantees "always profit" — markets are stochastic. These presets bias the bot
-              toward different risk/frequency tradeoffs. <span className="text-foreground">Conservative</span> trades less
-              but with higher win-rate per trade. <span className="text-foreground">Aggressive</span> trades more but accepts
-              more whipsaw. Win-rate × avg-win-size × frequency = expectancy. The bot is engineered for
-              positive expectancy across all three modes — but only over a meaningful sample (50+ trades).
-            </div>
-          </div>
-        </div>
-      )}
-
-      {sub === "infra" && infra && (
-        <div className="space-y-6" data-testid="cloud-infra-panel">
-
-          {/* Mode toggle + master heartbeat */}
-          <div className="grid md:grid-cols-3 gap-4">
-            <div className={`border-2 p-4 ${infra.shadow_mode ? "border-primary bg-primary/5" : "border-border"}`} data-testid="infra-mode-card">
-              <div className="text-[10px] font-bold tracking-widest text-muted-foreground mb-1">EXECUTION MODE</div>
-              <div className="text-xl font-bold">{infra.shadow_mode ? "SHADOW" : "LIVE"}</div>
-              <div className="text-xs text-muted-foreground mt-1 mb-3">
-                {infra.shadow_mode ? "Simulated trades only. No real orders placed. Safe to test." : "Real trades hitting connected accounts."}
-              </div>
-              <button onClick={async()=>{
-                setBusy(true); setMsg("");
-                try {
-                  const r = await ax.post(`${api}/admin/cloud/infrastructure/shadow-mode`, {enabled: !infra.shadow_mode}, { headers });
-                  setMsg(r.data.message); refresh();
-                } catch(e){ setMsg(e.response?.data?.detail || "Failed"); }
-                finally { setBusy(false); }
-              }} disabled={busy} data-testid="toggle-shadow-btn"
-                 className={`w-full py-2 text-xs font-bold ${infra.shadow_mode ? "bg-primary text-primary-foreground" : "bg-[hsl(142,71%,45%)] text-black"}`}>
-                {infra.shadow_mode ? "GO LIVE →" : "← BACK TO SHADOW"}
-              </button>
-            </div>
-            <div className="border-2 border-border p-4" data-testid="infra-master-card">
-              <div className="text-[10px] font-bold tracking-widest text-muted-foreground mb-1">MASTER EA</div>
-              <div className="text-xl font-bold capitalize">{infra.master_ea_status}</div>
-              <div className="text-xs text-muted-foreground mt-1">
-                Last heartbeat: {infra.master_last_heartbeat?.slice(0,16).replace("T"," ") || "never"}
-              </div>
-            </div>
-            <div className="border-2 border-border p-4" data-testid="infra-capacity-card">
-              <div className="text-[10px] font-bold tracking-widest text-muted-foreground mb-1">CAPACITY</div>
-              <div className="text-xl font-bold">{infra.assigned_users} / {infra.total_capacity}</div>
-              <div className="text-xs text-muted-foreground mt-1">
-                Users assigned vs max capacity ({infra.unassigned_users} unassigned)
-              </div>
-            </div>
-          </div>
-
-          {/* Agent token */}
-          <div className="border border-border p-4" data-testid="infra-token-card">
-            <div className="flex items-center justify-between mb-2">
-              <div>
-                <div className="text-[10px] font-bold tracking-widest text-muted-foreground mb-1">AGENT TOKEN</div>
-                <div className="font-mono text-sm">{newToken || infra.agent_token_preview || "not generated yet"}</div>
-              </div>
-              <button onClick={async()=>{
-                if (!window.confirm("Rotate agent token? All workers will lose access until you paste the new token into their config.")) return;
-                setBusy(true); setMsg("");
-                try {
-                  const r = await ax.post(`${api}/admin/cloud/infrastructure/rotate-token`, {}, { headers });
-                  setNewToken(r.data.token); setMsg("New token — save it now; it won't show fully again!");
-                  refresh();
-                } catch(e){ setMsg(e.response?.data?.detail || "Failed"); }
-                finally { setBusy(false); }
-              }} disabled={busy} data-testid="rotate-token-btn" className="px-3 py-2 bg-primary text-primary-foreground text-xs font-bold">
-                {infra.agent_token_preview ? "ROTATE" : "GENERATE"}
-              </button>
-            </div>
-            <div className="text-xs text-muted-foreground">Workers authenticate with this token. Paste it into each VPS worker's config file.</div>
-          </div>
-
-          {/* Workers list */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-bold tracking-widest">VPS WORKERS</h3>
-              <div className="flex gap-2">
-                <button onClick={async()=>{
-                  // Fetch master EA with admin auth and trigger browser download.
-                  try {
-                    const r = await ax.get(`${api}/admin/download/ea-master`, {
-                      headers, responseType: "blob"
-                    });
-                    const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/octet-stream" }));
-                    const a = document.createElement("a");
-                    a.href = url; a.download = "XAUUSD_AI_Sniper_EA_MASTER_v5.8.45_BOT_ACTIVITY_MONITOR.mq5";
-                    document.body.appendChild(a); a.click(); a.remove();
-                    window.URL.revokeObjectURL(url);
-                  } catch(e){ alert(e.response?.data?.detail || "Master EA download failed"); }
-                }} data-testid="download-master-ea-btn"
-                className="px-3 py-2 bg-[hsl(43,74%,49%)] text-black text-xs font-bold">⬇ MASTER EA</button>
-                <button onClick={async()=>{
-                  setBusy(true); setMsg("");
-                  try {
-                    const r = await ax.post(`${api}/admin/cloud/infrastructure/test-signal`,
-                      { side: "BUY", slDistDollars: 4.0, tpMultR: 4.0, auto_close_seconds: 5, exit_rMult: 3.0 },
-                      { headers });
-                    const fo = r.data.fanout || [];
-                    const detail = fo.length ?
-                      `Fanned to ${fo.length} user(s):\n` +
-                      fo.map(f=>`  • ${f.email} ($${f.balance.toFixed(0)} ${f.tier}) → ${f.lots} lots ($${f.risk_usd} risk)`).join("\n") +
-                      "\n\nAll sized from each user's OWN balance (master balance irrelevant).\nAuto-closes at +3R in 5s — check user dashboards." :
-                      "No users with MT5 connected yet — create a test user first.";
-                    alert(r.data.message + "\n\n" + detail);
-                    setMsg(`Fired test signal → ${fo.length} users, ${fo.reduce((s,f)=>s+f.lots,0).toFixed(2)} total lots`);
-                  } catch(e){ setMsg(e.response?.data?.detail || "Failed"); }
-                  finally { setBusy(false); }
-                }} disabled={busy} data-testid="fire-test-signal-btn" className="px-3 py-2 bg-[hsl(142,71%,45%)] text-black text-xs font-bold">⚡ FIRE TEST SIGNAL</button>
-                <button onClick={async()=>{
-                  const name = prompt("Give this worker a name (e.g. 'My-Laptop' or 'Contabo-VPS'):", "My-Laptop"); if (!name) return;
-                  try {
-                    const r = await ax.post(`${api}/admin/cloud/infrastructure/pair-code`, {name, max_users: 1}, { headers });
-                    const code = r.data.code;
-                    const isMac = /Mac/i.test(navigator.platform);
-                    const cmd = isMac
-                      ? `curl -fsSL https://xauaisniper.com/install-worker.sh | bash`
-                      : `iwr -useb https://xauaisniper.com/install-worker.ps1 | iex`;
-                    const msg = [
-                      `✅ PAIRING CODE: ${code}`,
-                      `(valid 10 minutes — copy it)`,
-                      ``,
-                      `Now on YOUR laptop / VPS, open a terminal and paste:`,
-                      ``,
-                      cmd,
-                      ``,
-                      `When it asks, paste the 6-digit code above.`,
-                      `That's it — no other copy/paste needed.`
-                    ].join("\n");
-                    alert(msg);
-                    try { await navigator.clipboard.writeText(code); } catch {}
-                    refresh();
-                  } catch(e) { alert(e.response?.data?.detail || "Failed"); }
-                }} data-testid="generate-pair-code-btn" className="px-3 py-2 bg-primary text-primary-foreground text-xs font-bold">🪄 GENERATE PAIR CODE</button>
-                <button onClick={()=>{
-                  const name = prompt("Worker name (e.g. Contabo-NYC-1):"); if (!name) return;
-                  const max = parseInt(prompt("Max MT5 accounts this worker can host. Use 1 unless this worker runs isolated MT5 terminals/processes:", "1")) || 1;
-                  const endpoint = prompt("Optional endpoint URL (leave blank for pull-mode):", "") || "";
-                  const notes = prompt("Notes (optional):", "") || "";
-                  ax.post(`${api}/admin/cloud/infrastructure/workers`, {name, max_users: max, endpoint, notes}, { headers })
-                    .then(()=>refresh()).catch(e=>setMsg(e.response?.data?.detail || "Failed"));
-                }} data-testid="add-worker-btn" className="px-3 py-2 bg-muted text-foreground text-xs font-bold">+ MANUAL ADD</button>
-              </div>
-            </div>
-            {infra.workers.length === 0 ? (
-              <div className="border-2 border-dashed border-border p-8 text-center" data-testid="no-workers">
-                <div className="text-muted-foreground mb-2">No VPS workers registered yet.</div>
-                <div className="text-xs text-muted-foreground max-w-md mx-auto">You can still sell subscriptions today — Shadow Mode shows simulated trades in every user's dashboard. When you rent your first VPS, add it here and flip mode to LIVE.</div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {infra.workers.map((w,i)=>(
-                  <div key={w.id} className="border border-border p-4 flex items-center justify-between gap-4 flex-wrap" data-testid={`worker-${i}`}>
-                    <div className="min-w-0 flex-1">
-                      <div className="font-bold">{w.name}</div>
-                      <div className="text-[11px] text-muted-foreground mt-1">
-                        {w.endpoint || "pull-mode"} · account cap {w.current_users || 0}/{w.max_users}
-                        {typeof w.active_users === "number" ? ` · ${w.active_users} active account${w.active_users === 1 ? "" : "s"}` : ""}
-                        {w.version ? ` · v${w.version}` : ""}
-                        {w.last_heartbeat ? ` · last seen ${w.last_heartbeat.slice(11,16)}` : ""}
-                      </div>
-                      <div className="mt-2 flex items-center gap-2">
-                        <code className="text-[10px] font-mono px-2 py-1 bg-black/30 border border-border rounded select-all break-all">{w.id}</code>
-                        <button onClick={()=>{ navigator.clipboard.writeText(w.id); alert("Worker ID copied"); }}
-                                data-testid={`copy-worker-id-${i}`}
-                                className="px-2 py-1 text-[10px] font-bold bg-muted hover:bg-primary/20">📋 COPY ID</button>
-                      </div>
-                      {w.notes && <div className="text-[11px] text-muted-foreground mt-1">{w.notes}</div>}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`px-2 py-1 text-[10px] font-bold rounded ${w.status==="online"?"bg-[hsl(142,71%,45%)]/20 text-[hsl(142,71%,45%)]":"bg-muted text-muted-foreground"}`}>{w.status?.toUpperCase()}</span>
-                      <button onClick={async()=>{
-                        if (!window.confirm(`Remove ${w.name}? Users assigned to it will be unassigned.`)) return;
-                        await ax.delete(`${api}/admin/cloud/infrastructure/workers/${w.id}`, { headers });
-                        refresh();
-                      }} data-testid={`remove-worker-${i}`} className="px-3 py-1.5 bg-[hsl(348,83%,47%)] text-white text-xs font-bold">REMOVE</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Quick-start guide */}
-          <div className="border border-primary/30 bg-primary/5 p-4 text-sm" data-testid="infra-guide">
-            <div className="font-bold mb-2">⚖️ How sizing works (important):</div>
-            <div className="text-muted-foreground mb-3 leading-relaxed">
-              Your master EA emits price, SL/TP, and master lot data. The worker mirrors lot size
-              proportionally: <span className="font-bold text-foreground">cloud lot = master lot × cloud equity / master balance</span>,
-              then applies broker lot-step, max-lot, and free-margin checks.
-              Same-size accounts should now take almost the same lots. For live copying, use one worker/MT5 terminal per linked account unless you have true isolated MT5 terminal processes.
-              Click <span className="font-mono">FIRE TEST SIGNAL</span> above to see this happen live.
-            </div>
-            <div className="font-bold mb-2">🚀 Going live (when you're ready):</div>
-            <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-              <li>Run master MT5 on any always-on machine (your laptop works — VPS $5/mo if you want zero downtime)</li>
-              <li>Click "Generate/Rotate" above and copy the agent token</li>
-              <li>Paste token into master EA inputs — master will POST signals here automatically</li>
-              <li>For real execution on user accounts: run one Windows MT5 terminal + worker per linked account, then register each worker here</li>
-              <li>Flip "GO LIVE" — all connected users switch from shadow → real trading</li>
-            </ol>
-          </div>
-        </div>
-      )}
-
-      {sub === "diagnostics" && diag && (
-        <div className="space-y-6" data-testid="cloud-diagnostics-panel">
-          {/* At-a-glance health row */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard label="WORKERS ONLINE" value={`${diag.online_workers} / ${diag.workers.length}`} color={diag.online_workers > 0 ? "green" : "primary"} testId="diag-workers-online" />
-            <StatCard label="FAN-OUT READY USERS" value={`${diag.fanout_ready_users} / ${diag.total_users}`} color={diag.fanout_ready_users > 0 ? "green" : "primary"} testId="diag-ready-users" />
-            <StatCard label="RECENT FAN-OUT EVENTS" value={diag.fanout_logs.length} testId="diag-fanout-count" />
-            <StatCard label="RECENT MASTER SIGNALS" value={diag.signals.length} testId="diag-signal-count" />
-          </div>
-
-          {/* Diagnosis hint banner */}
-          {(() => {
-            if (diag.online_workers === 0) {
-              return <div className="border-2 border-[hsl(348,83%,47%)]/40 bg-[hsl(348,83%,47%)]/5 p-4 text-sm" data-testid="diag-hint">
-                <div className="font-bold text-[hsl(348,83%,47%)] mb-1">⛔ NO WORKERS ONLINE</div>
-                The VPS worker is not heart-beating. Trades cannot copy. SSH the VPS and run <code className="font-mono bg-black/30 px-1">python worker_agent.py</code> — or check Windows Task Scheduler if you set it as a startup task. If the worker WAS running, look for a crash trace in <code className="font-mono bg-black/30 px-1">worker_agent.log</code>.
-              </div>;
-            }
-            if (diag.fanout_ready_users === 0) {
-              return <div className="border-2 border-primary/40 bg-primary/5 p-4 text-sm" data-testid="diag-hint">
-                <div className="font-bold text-primary mb-1">⚠ NO USERS ARE FAN-OUT READY</div>
-                Worker is online but no subscriber meets ALL of: status ∈ [trial,active], <code className="font-mono">mt5_connected</code>=true, <code className="font-mono">mt5_verification_status</code>=verified, <code className="font-mono">paused</code>=false. See per-user readiness table below.
-              </div>;
-            }
-            // Only judge based on the LAST 5 fan-out events. Older failures
-            // (e.g. from a pre-fix worker version) shouldn't keep the banner
-            // red forever once the issue is resolved.
-            const recent = (diag.fanout_logs || []).slice(0, 5);
-            const recentFails = recent.filter(f => !f.ok).length;
-            const recentOks = recent.filter(f => f.ok).length;
-            if (recent.length === 0) {
-              return <div className="border-2 border-primary/40 bg-primary/5 p-4 text-sm" data-testid="diag-hint">
-                <div className="font-bold text-primary mb-1">ℹ NO FAN-OUT EVENTS YET</div>
-                Workers online and users ready — fire a master signal to test the pipeline. Every fan-out attempt (success OR failure) will show below.
-              </div>;
-            }
-            if (recentFails > 0 && recentOks === 0) {
-              return <div className="border-2 border-[hsl(348,83%,47%)]/40 bg-[hsl(348,83%,47%)]/5 p-4 text-sm" data-testid="diag-hint">
-                <div className="font-bold text-[hsl(348,83%,47%)] mb-1">⛔ RECENT FAN-OUT FAILURES</div>
-                Last {recent.length} fan-out attempt(s) all failed. Inspect the error column below — common causes: invalid filling mode, lot-step mismatch, broker rejecting price/SL/TP, AutoTrading disabled in user's MT5, or the user's MT5 password no longer working.
-              </div>;
-            }
-            if (recentFails > 0 && recentOks > 0) {
-              return <div className="border-2 border-primary/40 bg-primary/5 p-4 text-sm" data-testid="diag-hint">
-                <div className="font-bold text-primary mb-1">⚠ MIXED RESULTS</div>
-                {recentOks} of last {recent.length} succeeded. Some users' brokers may be rejecting trades — check the error column for the failing ones.
-              </div>;
-            }
-            return <div className="border-2 border-[hsl(142,71%,45%)]/40 bg-[hsl(142,71%,45%)]/5 p-4 text-sm" data-testid="diag-hint">
-              <div className="font-bold text-[hsl(142,71%,45%)] mb-1">✅ COPY-TRADING IS HEALTHY</div>
-              Workers online, users fan-out-ready, last {recent.length} fan-out events all succeeded. Master EA signals will mirror to subscriber accounts.
-            </div>;
-          })()}
-
-          <button onClick={refresh} disabled={busy} data-testid="diag-refresh"
-                  className="px-4 py-2 bg-muted text-foreground text-xs font-bold tracking-widest">
-            {busy ? "REFRESHING..." : "↻ REFRESH"}
-          </button>
-
-          {/* Workers detail */}
-          <div className="border border-border p-4">
-            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-3">VPS WORKERS</div>
-            {diag.workers.length === 0 ? <div className="text-sm text-muted-foreground">No workers registered.</div> :
-              <div className="space-y-2">
-                {diag.workers.map((w,i)=>(
-                  <div key={w.id} className="text-sm flex flex-wrap items-center gap-3 border-b border-border/50 pb-2" data-testid={`diag-worker-${i}`}>
-                    <span className={`px-2 py-0.5 text-[10px] font-bold rounded ${w.status==="online"?"bg-[hsl(142,71%,45%)]/20 text-[hsl(142,71%,45%)]":"bg-[hsl(348,83%,47%)]/20 text-[hsl(348,83%,47%)]"}`}>{w.status?.toUpperCase()}</span>
-                    <span className="font-bold">{w.name}</span>
-                    <span className="text-muted-foreground text-xs">v{w.version || "?"}</span>
-                    <span className="text-muted-foreground text-xs">{w.hostname || "unknown host"}</span>
-                    <span className="text-muted-foreground text-xs">{w.active_users} active account{w.active_users === 1 ? "" : "s"}</span>
-                    <span className="text-muted-foreground text-xs">last hb: {w.last_heartbeat?.slice(11,19) || "never"}</span>
-                  </div>
-                ))}
-              </div>
-            }
-          </div>
-
-          {/* Per-user fan-out readiness */}
-          <div className="border border-border p-4">
-            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-3">PER-USER FAN-OUT READINESS</div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs" data-testid="diag-users-table">
-                <thead><tr className="text-[10px] font-bold tracking-widest text-muted-foreground border-b border-border">
-                  <th className="text-left py-2">EMAIL</th>
-                  <th className="text-left py-2">STATUS</th>
-                  <th className="text-center py-2">MT5</th>
-                  <th className="text-center py-2">VERIFIED</th>
-                  <th className="text-center py-2">PAUSED</th>
-                  <th className="text-center py-2">READY</th>
-                  <th className="text-left py-2">BLOCKED REASON</th>
-                </tr></thead>
-                <tbody>
-                  {diag.users.map((u,i)=>(
-                    <tr key={u.id} className="border-b border-border/30" data-testid={`diag-user-${i}`}>
-                      <td className="py-1.5 font-semibold">{u.email}</td>
-                      <td className="py-1.5 capitalize">{u.status}</td>
-                      <td className="py-1.5 text-center">{u.mt5_connected ? "✓" : "—"}</td>
-                      <td className="py-1.5 text-center">
-                        {u.mt5_verification_status === "verified" ? "✓"
-                          : u.mt5_verification_status === "rejected"
-                            ? <span className="text-[hsl(348,83%,47%)]" title={u.mt5_verification_error}>✗</span>
-                            : <span className="text-primary">{u.mt5_verification_status || "—"}</span>}
-                      </td>
-                      <td className="py-1.5 text-center">{u.paused ? "✓" : "—"}</td>
-                      <td className={`py-1.5 text-center font-bold ${u.fanout_ready ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>{u.fanout_ready ? "YES" : "NO"}</td>
-                      <td className="py-1.5 text-muted-foreground text-[11px]">{u.blocked_reason || (u.mt5_verification_error || "")}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {diag.users.length === 0 && <div className="text-center text-muted-foreground py-8">No trial/active subscribers yet.</div>}
-            </div>
-          </div>
-
-          {/* Recent fan-out events (the actual smoking gun for "trades not copying") */}
-          <div className="border border-border p-4">
-            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-3">RECENT FAN-OUT EVENTS (NEWEST FIRST)</div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs" data-testid="diag-fanout-table">
-                <thead><tr className="text-[10px] font-bold tracking-widest text-muted-foreground border-b border-border">
-                  <th className="text-left py-2">TIME</th>
-                  <th className="text-left py-2">USER</th>
-                  <th className="text-left py-2">SIGNAL</th>
-                  <th className="text-left py-2">SIDE</th>
-                  <th className="text-right py-2">LOTS</th>
-                  <th className="text-right py-2">TICKET</th>
-                  <th className="text-center py-2">OK</th>
-                  <th className="text-left py-2">ERROR</th>
-                </tr></thead>
-                <tbody>
-                  {diag.fanout_logs.map((f,i)=>(
-                    <tr key={i} className="border-b border-border/30 align-top" data-testid={`diag-fanout-${i}`}>
-                      <td className="py-1.5 font-mono text-[10px] whitespace-nowrap">{f.opened_at?.slice(11,19) || "—"}</td>
-                      <td className="py-1.5 break-all max-w-[180px]">{f.user_id?.startsWith("(") ? <span className="text-primary">{f.user_id}</span> : (f.user_id || "—").slice(0,8)}</td>
-                      <td className="py-1.5 font-mono text-[10px]">{(f.signal_id || "—").slice(0,8)}</td>
-                      <td className="py-1.5 font-bold">{f.side}</td>
-                      <td className="py-1.5 text-right font-mono">{Number(f.lots || 0).toFixed(2)}</td>
-                      <td className="py-1.5 text-right font-mono">{f.ticket || "—"}</td>
-                      <td className={`py-1.5 text-center font-bold ${f.ok ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]"}`}>{f.ok ? "✓" : "✗"}</td>
-                      <td className="py-1.5 text-[11px] text-muted-foreground max-w-md break-words">{f.error || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {diag.fanout_logs.length === 0 && <div className="text-center text-muted-foreground py-8">No fan-out events yet. Fire a master signal — every attempt (success or failure) will appear here.</div>}
-            </div>
-          </div>
-
-          {/* Recent master signals (so you can see if the master EA is actually firing) */}
-          <div className="border border-border p-4">
-            <div className="text-xs font-bold tracking-widest text-muted-foreground mb-3">RECENT MASTER SIGNALS (NEWEST FIRST)</div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs" data-testid="diag-signals-table">
-                <thead><tr className="text-[10px] font-bold tracking-widest text-muted-foreground border-b border-border">
-                  <th className="text-left py-2">TIME</th>
-                  <th className="text-left py-2">SIGNAL ID</th>
-                  <th className="text-left py-2">SIDE</th>
-                  <th className="text-right py-2">ENTRY</th>
-                  <th className="text-right py-2">SL</th>
-                  <th className="text-right py-2">TP</th>
-                  <th className="text-left py-2">SOURCE</th>
-                </tr></thead>
-                <tbody>
-                  {diag.signals.map((s,i)=>(
-                    <tr key={i} className="border-b border-border/30" data-testid={`diag-signal-${i}`}>
-                      <td className="py-1.5 font-mono text-[10px]">{s.ts?.slice(11,19) || "—"}</td>
-                      <td className="py-1.5 font-mono text-[10px]">{(s.id || "—").slice(0,8)}</td>
-                      <td className="py-1.5 font-bold">{s.side}</td>
-                      <td className="py-1.5 text-right font-mono">{s.entry?.toFixed?.(2) || s.entry}</td>
-                      <td className="py-1.5 text-right font-mono">{s.sl?.toFixed?.(2) || s.sl}</td>
-                      <td className="py-1.5 text-right font-mono">{s.tp?.toFixed?.(2) || s.tp}</td>
-                      <td className="py-1.5 text-muted-foreground">{s.source || "master"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {diag.signals.length === 0 && <div className="text-center text-muted-foreground py-8">No master signals received yet.</div>}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {sub === "settings" && settings && (
-        <div className="space-y-6" data-testid="cloud-settings-form">
-          <div>
-            <h3 className="text-sm font-bold tracking-widest mb-3">CRYPTO WALLETS</h3>
-            <div className="space-y-2">
-              {(settings.crypto_wallets || []).map((w,i)=>(
-                <div key={i} className="grid grid-cols-1 md:grid-cols-4 gap-2 items-center" data-testid={`crypto-wallet-${i}`}>
-                  <input placeholder="Asset (USDT)" value={w.asset} onChange={e=>updWallet(i,"asset",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
-                  <input placeholder="Network (TRC20)" value={w.network} onChange={e=>updWallet(i,"network",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
-                  <input placeholder="Address" value={w.address} onChange={e=>updWallet(i,"address",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm font-mono col-span-1 md:col-span-2" />
-                  <button onClick={()=>delWallet(i)} className="text-[hsl(348,83%,47%)] text-xs md:col-start-4">Remove</button>
-                </div>
-              ))}
-              <button onClick={addWallet} data-testid="add-wallet-btn" className="text-xs text-primary">+ Add crypto wallet</button>
-            </div>
-          </div>
-          <div>
-            <h3 className="text-sm font-bold tracking-widest mb-3">BANK ACCOUNTS</h3>
-            <div className="space-y-2">
-              {(settings.bank_accounts || []).map((b,i)=>(
-                <div key={i} className="grid grid-cols-1 md:grid-cols-5 gap-2 items-center" data-testid={`bank-acc-${i}`}>
-                  <input placeholder="Bank name" value={b.bank_name} onChange={e=>updBank(i,"bank_name",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
-                  <input placeholder="Account name" value={b.account_name} onChange={e=>updBank(i,"account_name",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
-                  <input placeholder="Account number" value={b.account_number} onChange={e=>updBank(i,"account_number",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
-                  <input placeholder="SWIFT (optional)" value={b.swift} onChange={e=>updBank(i,"swift",e.target.value)} className="bg-background border border-border px-3 py-2 text-sm" />
-                  <div className="flex gap-2">
-                    <input placeholder="Country" value={b.country} onChange={e=>updBank(i,"country",e.target.value)} className="flex-1 bg-background border border-border px-3 py-2 text-sm" />
-                    <button onClick={()=>delBank(i)} className="text-[hsl(348,83%,47%)] text-xs">X</button>
-                  </div>
-                </div>
-              ))}
-              <button onClick={addBank} data-testid="add-bank-btn" className="text-xs text-primary">+ Add bank account</button>
-            </div>
-          </div>
-          <button onClick={saveSettings} disabled={busy} data-testid="save-cloud-settings"
-                  className="px-6 py-3 bg-primary text-primary-foreground font-bold text-sm flex items-center gap-2 hover:-translate-y-[1px] transition-transform shadow-[2px_2px_0px_hsl(0,0%,4%)]">
-            <FloppyDisk size={16} weight="bold" /> {busy ? "SAVING..." : "SAVE CLOUD SETTINGS"}
-          </button>
-        </div>
-      )}
     </div>
   );
 }

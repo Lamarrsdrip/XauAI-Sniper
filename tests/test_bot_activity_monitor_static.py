@@ -12,6 +12,10 @@ def test_backend_exposes_bot_monitor_and_command_center_endpoints():
     server = read("backend/server.py")
 
     assert "BotHeartbeatReq" in server
+    assert "CloudLicenseLinkReq" in server
+    assert "_verify_command_license" in server
+    assert "@api_router.post(\"/cloud/license/link\")" in server
+    assert "@api_router.get(\"/cloud/license/status\")" in server
     assert "@api_router.post(\"/cloud/monitor/heartbeat\")" in server
     assert "@api_router.post(\"/cloud/monitor/activity\")" in server
     assert "@api_router.get(\"/cloud/monitor/status\")" in server
@@ -26,6 +30,7 @@ def test_backend_exposes_bot_monitor_and_command_center_endpoints():
     assert "@api_router.get(\"/cloud/command/pending\")" in server
     assert "@api_router.post(\"/cloud/command/ack\")" in server
     assert "cloud_bot_commands" in server
+    assert "\"/admin/command-center/overview\"" in server
 
 
 def test_ea_sends_live_monitor_heartbeat_and_activity_events():
@@ -53,18 +58,34 @@ def test_ea_sends_live_monitor_heartbeat_and_activity_events():
 def test_cloud_dashboard_is_repurposed_as_mobile_monitor():
     dashboard = read("frontend/src/components/cloud/CloudDashboard.jsx")
 
-    assert "Bot Activity Monitor" in dashboard
+    assert "Command Center" in dashboard
     assert "/cloud/monitor/status" in dashboard
     assert "/cloud/monitor/activity" in dashboard
+    assert "/cloud/license/status" in dashboard
+    assert "/cloud/license/link" in dashboard
     assert "data-testid=\"bot-monitor-dashboard\"" in dashboard
     assert "data-testid=\"bot-status-card\"" in dashboard
     assert "activity-filter-trade" in dashboard
-    assert "BOT OFFLINE / NO HEARTBEAT" in dashboard
-    assert "XAU AI Sniper Command Center" in dashboard
-    assert "Monitor + PIN-safe control" in dashboard
+    assert "No live bot connected" in dashboard
+    assert "Link your license" in dashboard
+    assert "Old cloud records are intentionally hidden" in dashboard
     assert "/cloud/command/request" in dashboard
-    assert "Pause new trades" in dashboard
-    assert "Close all trades" in dashboard
+    assert "Pause" in dashboard
+    assert "Close all" in dashboard
+    assert "window.prompt" not in dashboard
+    assert "4-6 digit" not in dashboard
+
+
+def test_admin_dashboard_uses_license_and_bot_ops_not_old_cloud_panel():
+    admin = read("frontend/src/components/AdminPortal.jsx")
+
+    assert "admin-command-ops-tab" in admin
+    assert "/admin/command-center/overview" in admin
+    assert "LICENSE BUSINESS OVERVIEW" in admin
+    assert "BOT OPS" in admin
+    assert "tab === \"cloud\"" not in admin
+    assert "CloudAdminTab" not in admin
+    assert "cloud-admin-tab" not in admin
 
 
 def test_command_center_routing_replaces_cloud_public_route():

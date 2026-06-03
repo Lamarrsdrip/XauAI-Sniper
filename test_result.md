@@ -142,6 +142,53 @@
 ##   - agent: "main"
 ##     message: "Validated with pytest, py_compile, git diff --check, npm build, and MetaEditor/Wine compile. Compiled EX5 was deleted from /Applications after verification."
 
+## user_problem_statement: Rebuild XAU AI Sniper Command Center into a premium license-first mobile app and remove old cloud/copy-trading data from the visible platform and admin dashboard.
+## backend:
+##   - task: "License-first Command Center identity and scoped monitor data"
+##     implemented: true
+##     working: true
+##     file: "backend/server.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Added license link/status endpoints, changed remote commands to verify the ASE license key instead of a disconnected 4-6 digit PIN, scoped monitor status/activity to the linked license MT5 account, and added an admin Bot Ops overview endpoint. This hides stale legacy cloud data from users who have not linked a license/account."
+## frontend:
+##   - task: "Premium multi-page Command Center rebuild"
+##     implemented: true
+##     working: true
+##     file: "frontend/src/components/cloud/CloudDashboard.jsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Rebuilt the Command Center as a mobile-first app shell with Home, Trading, Analytics, Intelligence, Activity, Control, License, and Settings. Controls are isolated to Control, require license verification, and use modal confirmation instead of browser prompts. Dashboard no longer shows stale old cloud records."
+##   - task: "Admin dashboard cloud-copy cleanup"
+##     implemented: true
+##     working: true
+##     file: "frontend/src/components/AdminPortal.jsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Removed the legacy CloudAdminTab from the compiled admin portal, replaced COMMAND CENTER admin tab with BOT OPS, and changed the admin dashboard to license business overview instead of global cloud-copy trade data."
+## test_plan:
+##   current_focus:
+##     - "License-first Command Center identity and scoped monitor data"
+##     - "Premium multi-page Command Center rebuild"
+##     - "Admin dashboard cloud-copy cleanup"
+##   test_all: true
+##   test_priority: "high_first"
+## agent_communication:
+##   - agent: "main"
+##     message: "Validated with backend py_compile, full pytest suite, frontend production build, and static checks for the new license-first Command Center/admin Bot Ops behavior. EA source was not changed in this pass, so no EX5 was created."
+
 ## user_problem_statement: Repurpose the old cloud/copy-trading side into XAU AI Sniper Command Center with live monitoring and PIN-safe remote commands.
 ## backend:
 ##   - task: "v5.8.45 Command Center monitor and command endpoints"

@@ -655,6 +655,56 @@ async def admin_pin_stats():
     revoked = r.get("revoked", [{}])[0].get("c", 0) if r.get("revoked") else 0
     return {"total": total, "active": active, "used": used, "unused": active - used, "revoked": revoked}
 
+@api_router.get("/admin/command-center/overview", dependencies=[Depends(get_current_admin)])
+async def admin_command_center_overview():
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=90)
+    latest_hb = await db.cloud_bot_heartbeats.find_one({}, {"_id": 0}, sort=[("ts", -1)])
+    hb_time = _dt_or_none((latest_hb or {}).get("ts"))
+    online = bool(hb_time and hb_time > cutoff)
+    total_licenses = await db.pin_licenses.count_documents({})
+    active_licenses = await db.pin_licenses.count_documents({"is_active": True})
+    activated_licenses = await db.pin_licenses.count_documents({"is_active": True, "is_used": True})
+    revoked_licenses = await db.pin_licenses.count_documents({"is_active": False})
+    linked_accounts = await db.pin_licenses.count_documents({"mt5_account": {"$nin": [None, ""]}})
+    pending_commands = await db.cloud_bot_commands.count_documents({"status": "PENDING"})
+    executed_commands = await db.cloud_bot_commands.count_documents({"status": "EXECUTED"})
+    failed_commands = await db.cloud_bot_commands.count_documents({"status": "FAILED"})
+    recent_events = await db.cloud_bot_activity.find({}, {"_id": 0}).sort("ts", -1).limit(30).to_list(30)
+    recent_commands = await db.cloud_bot_commands.find({}, {"_id": 0}).sort("requested_at", -1).limit(20).to_list(20)
+    return {
+        "licenses": {
+            "total": total_licenses,
+            "active": active_licenses,
+            "activated": activated_licenses,
+            "revoked": revoked_licenses,
+            "linked_accounts": linked_accounts,
+        },
+        "bot": {
+            "online": online,
+            "status": (latest_hb or {}).get("bot_state") or ("ONLINE" if online else "OFFLINE"),
+            "last_heartbeat": (latest_hb or {}).get("ts") or "",
+            "ea_version": (latest_hb or {}).get("ea_version") or "",
+            "account_number": (latest_hb or {}).get("account_number") or "",
+            "broker_server": (latest_hb or {}).get("broker_server") or "",
+            "symbol": (latest_hb or {}).get("symbol") or "",
+            "timeframe": (latest_hb or {}).get("timeframe") or "",
+            "equity": (latest_hb or {}).get("equity") or 0,
+            "balance": (latest_hb or {}).get("balance") or 0,
+            "open_positions": (latest_hb or {}).get("open_positions") or 0,
+            "algo_trading": bool((latest_hb or {}).get("algo_trading")),
+            "trading_allowed": bool((latest_hb or {}).get("trading_allowed")),
+            "mt5_connected": bool((latest_hb or {}).get("mt5_connected")),
+        },
+        "commands": {
+            "pending": pending_commands,
+            "executed": executed_commands,
+            "failed": failed_commands,
+            "recent": recent_commands,
+        },
+        "activity": recent_events,
+    }
+
 @api_router.put("/admin/pins/{pin}/revoke", dependencies=[Depends(get_current_admin)])
 async def admin_revoke(pin: str):
     r = await db.pin_licenses.update_one({"pin": pin}, {"$set": {"is_active": False}})
@@ -2046,6 +2096,9 @@ class CloudCommandReq(BaseModel):
     confirm: bool = False
     payload: Optional[Dict] = None
 
+class CloudLicenseLinkReq(BaseModel):
+    license_key: str
+
 class CloudCommandAckReq(BaseModel):
     command_id: str
     status: str
@@ -2061,20 +2114,40 @@ SAFE_REMOTE_COMMANDS = {
     "FORCE_REPORT_UPLOAD": "Force report upload marker",
 }
 
-async def _verify_or_create_command_pin(user: dict, pin: str) -> bool:
-    raw = str(pin or "").strip()
-    if not raw.isdigit() or not (4 <= len(raw) <= 6):
-        raise HTTPException(status_code=400, detail="PIN must be 4-6 digits.")
-    stored = user.get("command_pin_hash") or ""
-    if stored:
-        if not verify_password(raw, stored):
-            raise HTTPException(status_code=403, detail="Wrong Command Center PIN.")
-        return True
+def _normalize_license_key(value: str) -> str:
+    return str(value or "").strip().upper().replace(" ", "")
+
+async def _get_user_license(user: dict) -> Optional[dict]:
+    linked = _normalize_license_key(user.get("license_key") or user.get("command_license_key") or "")
+    query = None
+    if linked:
+        query = {"pin": linked, "is_active": True}
+    elif user.get("email"):
+        query = {"buyer_email": user["email"], "is_active": True}
+    if not query:
+        return None
+    return await db.pin_licenses.find_one(query, {"_id": 0})
+
+async def _verify_command_license(user: dict, key: str) -> dict:
+    raw = _normalize_license_key(key)
+    if not raw.startswith("ASE-") or len(raw) < 10:
+        raise HTTPException(status_code=400, detail="Enter your XAU AI Sniper license key, for example ASE-D4Q9-SUFW.")
+    lic = await db.pin_licenses.find_one({"pin": raw, "is_active": True}, {"_id": 0})
+    if not lic:
+        raise HTTPException(status_code=403, detail="License key not found or inactive.")
+    owner = str(lic.get("buyer_email") or "").lower().strip()
+    user_email = str(user.get("email") or "").lower().strip()
+    linked = _normalize_license_key(user.get("license_key") or user.get("command_license_key") or "")
+    if owner and owner != user_email and linked != raw:
+        raise HTTPException(status_code=403, detail="This license is linked to another Command Center account.")
     await db.cloud_users.update_one({"id": user["id"]}, {"$set": {
-        "command_pin_hash": hash_password(raw),
-        "command_pin_set_at": datetime.now(timezone.utc).isoformat(),
+        "license_key": raw,
+        "command_license_key": raw,
+        "license_linked_at": datetime.now(timezone.utc).isoformat(),
     }})
-    return True
+    if not owner and user_email:
+        await db.pin_licenses.update_one({"pin": raw}, {"$set": {"buyer_email": user_email}})
+    return lic
 
 # -------- Plans (admin-configurable via cloud_settings.plans; defaults below) --------
 CLOUD_PLANS = {
@@ -2242,6 +2315,45 @@ async def cloud_me(user: dict = Depends(get_cloud_user)):
         except Exception:
             u["days_remaining"] = 0; u["subscription_active"] = False
     return u
+
+@api_router.post("/cloud/license/link")
+async def cloud_license_link(req: CloudLicenseLinkReq, user: dict = Depends(get_cloud_user)):
+    lic = await _verify_command_license(user, req.license_key)
+    return {"ok": True, "license": {
+        "license_id": lic.get("id", ""),
+        "activation_key": lic.get("pin", ""),
+        "status": "active" if lic.get("is_active") else "inactive",
+        "is_used": bool(lic.get("is_used")),
+        "activated_at": lic.get("activated_at") or "",
+        "mt5_account": lic.get("mt5_account") or "",
+        "buyer_email": lic.get("buyer_email") or user.get("email", ""),
+        "created_at": lic.get("created_at") or "",
+        "expiry": lic.get("expires_at") or lic.get("subscription_ends_at") or "",
+    }}
+
+@api_router.get("/cloud/license/status")
+async def cloud_license_status(user: dict = Depends(get_cloud_user)):
+    lic = await _get_user_license(user)
+    if not lic:
+        return {
+            "linked": False,
+            "license": None,
+            "message": "No license linked. Add your ASE activation key to connect this Command Center to your EA.",
+        }
+    return {"linked": True, "license": {
+        "license_id": lic.get("id", ""),
+        "activation_key": lic.get("pin", ""),
+        "status": "active" if lic.get("is_active") else "inactive",
+        "is_used": bool(lic.get("is_used")),
+        "activated_at": lic.get("activated_at") or "",
+        "mt5_account": lic.get("mt5_account") or "",
+        "account_binding": lic.get("mt5_account") or "Not bound yet",
+        "vps_binding": lic.get("vps_binding") or "Not bound yet",
+        "ea_version": lic.get("ea_version") or "",
+        "buyer_email": lic.get("buyer_email") or user.get("email", ""),
+        "created_at": lic.get("created_at") or "",
+        "expiry": lic.get("expires_at") or lic.get("subscription_ends_at") or "Lifetime / manual",
+    }}
 
 # -------- MT5 Connection --------
 @api_router.post("/cloud/mt5/connect")
@@ -3588,13 +3700,15 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
         raise HTTPException(status_code=400, detail="Unsupported Command Center action.")
     if not req.confirm:
         raise HTTPException(status_code=400, detail="Confirmation is required before queueing a remote command.")
-    await _verify_or_create_command_pin(user, req.pin)
+    lic = await _verify_command_license(user, req.pin)
     now = datetime.now(timezone.utc)
     command_id = str(uuid.uuid4())
     doc = {
         "id": command_id,
         "user_id": user["id"],
         "user_email": user.get("email", ""),
+        "license_key": lic.get("pin", ""),
+        "mt5_account": lic.get("mt5_account", ""),
         "action": action,
         "label": SAFE_REMOTE_COMMANDS[action],
         "status": "PENDING",
@@ -3608,7 +3722,8 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
     await db.cloud_bot_commands.insert_one(doc.copy())
     await _store_bot_activity("REMOTE_COMMAND_QUEUED", "COMMAND",
                               f"{SAFE_REMOTE_COMMANDS[action]} queued for EA acknowledgement",
-                              details={"command_id": command_id, "action": action, "user": user.get("email", "")})
+                              account=lic.get("mt5_account", ""),
+                              details={"command_id": command_id, "action": action, "user": user.get("email", ""), "license_key": lic.get("pin", "")})
     return {"ok": True, "command_id": command_id, "status": "PENDING", "action": action}
 
 @api_router.get("/cloud/command/pending")
@@ -3649,9 +3764,11 @@ async def cloud_command_recent(limit: int = 20, user: dict = Depends(get_cloud_u
     return {"commands": rows, "count": len(rows)}
 
 @api_router.get("/cloud/monitor/status")
-async def cloud_monitor_status(_user: dict = Depends(get_cloud_user)):
-    s = await _get_cloud_settings()
-    hb = await db.cloud_bot_heartbeats.find_one({}, {"_id": 0}, sort=[("ts", -1)])
+async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
+    lic = await _get_user_license(user)
+    account_filter = str((lic or {}).get("mt5_account") or "").strip()
+    hb_query = {"account_number": account_filter} if account_filter else {}
+    hb = await db.cloud_bot_heartbeats.find_one(hb_query, {"_id": 0}, sort=[("ts", -1)])
     now = datetime.now(timezone.utc)
     hb_time = _dt_or_none((hb or {}).get("ts"))
     age_sec = int((now - hb_time).total_seconds()) if hb_time else None
@@ -3669,21 +3786,36 @@ async def cloud_monitor_status(_user: dict = Depends(get_cloud_user)):
             alerts.append({"severity": "ERROR", "type": "TRADING_DISABLED", "message": "Trading not allowed"})
         if hb.get("last_error"):
             alerts.append({"severity": "ERROR", "type": "LAST_ERROR", "message": hb.get("last_error")})
-    open_signals = await db.cloud_signals.count_documents({"closed_at": {"$in": [None, ""]}})
-    last_signal = await db.cloud_signals.find_one({}, {"_id": 0}, sort=[("ts", -1)])
-    last_trade = await db.cloud_trades.find_one({}, {"_id": 0}, sort=[("closed_at", -1), ("opened_at", -1)])
+    activity_scope = {}
+    if account_filter:
+        activity_scope = {"account": account_filter}
+    elif hb and hb.get("account_number"):
+        activity_scope = {"account": str(hb.get("account_number"))}
+    last_signal = await db.cloud_bot_activity.find_one(
+        {**activity_scope, "event_type": {"$regex": "SIGNAL|FIRE|SETUP|FIRST_SIGNAL"}},
+        {"_id": 0}, sort=[("ts", -1)]) if activity_scope else None
+    last_trade = await db.cloud_bot_activity.find_one(
+        {**activity_scope, "severity": {"$in": ["TRADE", "EXIT"]}},
+        {"_id": 0}, sort=[("ts", -1)]) if activity_scope else None
     last_block = await db.cloud_bot_activity.find_one(
-        {"$or": [{"severity": "BLOCK"}, {"event_type": {"$regex": "BLOCK|VETO"}}]},
-        {"_id": 0}, sort=[("ts", -1)])
+        {**activity_scope, "$or": [{"severity": "BLOCK"}, {"event_type": {"$regex": "BLOCK|VETO"}}]},
+        {"_id": 0}, sort=[("ts", -1)]) if activity_scope else None
     last_error = await db.cloud_bot_activity.find_one(
-        {"severity": {"$in": ["ERROR", "CRITICAL"]}}, {"_id": 0}, sort=[("ts", -1)])
+        {**activity_scope, "severity": {"$in": ["ERROR", "CRITICAL"]}}, {"_id": 0}, sort=[("ts", -1)]) if activity_scope else None
     return {
         "status": status_label,
         "offline": offline,
         "heartbeat_age_sec": age_sec,
-        "heartbeat": hb or s.get("monitor_last_status") or {},
+        "heartbeat": hb or {},
+        "license": {
+            "linked": bool(lic),
+            "activation_key": (lic or {}).get("pin", ""),
+            "status": "active" if (lic or {}).get("is_active") else ("not_linked" if not lic else "inactive"),
+            "mt5_account": (lic or {}).get("mt5_account", ""),
+            "expiry": (lic or {}).get("expires_at") or (lic or {}).get("subscription_ends_at") or "",
+        },
         "alerts": alerts,
-        "open_trades": (hb or {}).get("open_positions", open_signals),
+        "open_trades": (hb or {}).get("open_positions", 0) if not offline else 0,
         "last_trade": last_trade,
         "last_blocked_trade": last_block,
         "last_signal": last_signal,
@@ -3694,9 +3826,13 @@ async def cloud_monitor_status(_user: dict = Depends(get_cloud_user)):
 
 @api_router.get("/cloud/monitor/activity")
 async def cloud_monitor_activity_feed(kind: str = "all", limit: int = 80,
-                                      _user: dict = Depends(get_cloud_user)):
+                                      user: dict = Depends(get_cloud_user)):
     n = max(1, min(int(limit), 200))
     k = (kind or "all").lower()
+    lic = await _get_user_license(user)
+    account_filter = str((lic or {}).get("mt5_account") or "").strip()
+    if not account_filter:
+        return {"events": [], "count": 0, "kind": k, "reason": "license_not_linked"}
     query = {}
     if k == "trades":
         query = {"severity": "TRADE"}
@@ -3712,6 +3848,7 @@ async def cloud_monitor_activity_feed(kind: str = "all", limit: int = 80,
         query = {"event_type": {"$regex": "SHADOW|BLOCK_CHECK"}}
     elif k == "risk":
         query = {"event_type": {"$regex": "EPF|DRAWDOWN|RISK|LOCK"}}
+    query = {"$and": [{"account": account_filter}, query]} if query else {"account": account_filter}
     rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", -1).to_list(n)
     return {"events": rows, "count": len(rows), "kind": k}
 

@@ -40,13 +40,15 @@ def test_worker_reports_broker_health_and_gold_symbol_mapping():
 
 def test_command_center_dashboard_has_user_visible_runtime_checks():
     dashboard = read("frontend/src/components/cloud/CloudDashboard.jsx")
-    assert "XAU AI Sniper Command Center" in dashboard
-    assert "MT5 connection" in dashboard
-    assert "Algo trading" in dashboard
-    assert "Account" in dashboard
-    assert "Safe remote commands" in dashboard
+    assert "Command Center" in dashboard
+    assert "MT5 binding" in dashboard
+    assert "Connected bot" in dashboard
+    assert "No account" in dashboard
+    assert "Control" in dashboard
+    assert "License key" in dashboard
+    assert "/cloud/license/status" in dashboard
     assert "/cloud/command/request" in dashboard
-    assert "Close all trades" in dashboard
+    assert "Close all" in dashboard
 
 
 if __name__ == "__main__":

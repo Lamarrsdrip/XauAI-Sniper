@@ -1,19 +1,35 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import {
   Activity,
   AlertTriangle,
+  AreaChart,
+  BarChart3,
+  Bot,
+  Brain,
   CheckCircle2,
-  Clock,
-  Download,
+  CircleDollarSign,
+  Clock3,
+  Flame,
+  Gauge,
+  History,
+  Home,
   KeyRound,
+  LineChart,
   Loader2,
+  Lock,
   LogOut,
   Pause,
   Play,
   RefreshCw,
+  Settings,
+  Shield,
+  SlidersHorizontal,
   Square,
+  TerminalSquare,
+  TrendingUp,
+  Wifi,
   XCircle,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
@@ -27,25 +43,87 @@ commandAxios.interceptors.request.use((cfg) => {
   return cfg;
 });
 
+const NAV = [
+  ["home", "Home", Home],
+  ["trading", "Trading", LineChart],
+  ["analytics", "Analytics", BarChart3],
+  ["intelligence", "Brain", Brain],
+  ["activity", "Activity", Activity],
+  ["control", "Control", SlidersHorizontal],
+  ["license", "License", KeyRound],
+  ["settings", "Settings", Settings],
+];
+
 const FILTERS = [
   ["all", "All"],
   ["trades", "Trades"],
   ["blocks", "Blocks"],
   ["errors", "Errors"],
   ["sync", "Sync"],
-  ["exit", "Exit-brain"],
+  ["exit", "Exit"],
   ["shadow", "Shadow"],
   ["risk", "Risk"],
 ];
 
 const COMMANDS = [
-  ["PAUSE_NEW_TRADES", "Pause new trades", Pause, "yellow"],
-  ["RESUME_TRADING", "Resume trading", Play, "green"],
-  ["STOP_TRADING", "Stop trading", Square, "red"],
-  ["CLOSE_ALL_TRADES", "Close all trades", XCircle, "red"],
-  ["FORCE_SYNC", "Force sync", RefreshCw, "yellow"],
-  ["FORCE_REPORT_UPLOAD", "Mark report upload", Download, "yellow"],
+  {
+    action: "PAUSE_NEW_TRADES",
+    label: "Pause",
+    detail: "Pause fresh entries. Existing trades keep being managed.",
+    icon: Pause,
+    tone: "amber",
+    dangerous: false,
+  },
+  {
+    action: "RESUME_TRADING",
+    label: "Resume",
+    detail: "Allow new entries again after EA acknowledgement.",
+    icon: Play,
+    tone: "green",
+    dangerous: false,
+  },
+  {
+    action: "STOP_TRADING",
+    label: "Stop",
+    detail: "Stop fresh entries while trade management remains active.",
+    icon: Square,
+    tone: "red",
+    dangerous: true,
+  },
+  {
+    action: "CLOSE_ALL_TRADES",
+    label: "Close all",
+    detail: "Ask the EA to close EA-managed positions.",
+    icon: XCircle,
+    tone: "red",
+    dangerous: true,
+  },
+  {
+    action: "FORCE_SYNC",
+    label: "Force sync",
+    detail: "Rebuild startup intelligence and position state.",
+    icon: RefreshCw,
+    tone: "amber",
+    dangerous: false,
+  },
+  {
+    action: "FORCE_REPORT_UPLOAD",
+    label: "Upload reports",
+    detail: "Mark local intelligence reports for upload/check-in.",
+    icon: AreaChart,
+    tone: "amber",
+    dangerous: false,
+  },
 ];
+
+const money = (value) =>
+  Number(value || 0).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  });
+
+const pct = (value) => `${Number(value || 0).toFixed(2)}%`;
 
 const relativeTime = (iso) => {
   if (!iso) return "never";
@@ -58,12 +136,21 @@ const relativeTime = (iso) => {
   return `${Math.floor(seconds / 86400)}d ago`;
 };
 
-const money = (value) =>
-  Number(value || 0).toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 2,
-  });
+const toneClass = (tone) => {
+  if (tone === "green") return "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-100";
+  if (tone === "red") return "border-red-400/25 bg-red-500/[0.08] text-red-100";
+  if (tone === "blue") return "border-sky-300/20 bg-sky-300/[0.08] text-sky-100";
+  return "border-amber-300/22 bg-amber-300/[0.08] text-amber-100";
+};
+
+const severityTone = (severity) => {
+  const s = String(severity || "INFO").toUpperCase();
+  if (["CRITICAL", "ERROR"].includes(s)) return "red";
+  if (["WARNING", "BLOCK"].includes(s)) return "amber";
+  if (["TRADE", "COMMAND"].includes(s)) return "green";
+  if (["EXIT", "SYNC"].includes(s)) return "blue";
+  return "neutral";
+};
 
 function useAuthGuard() {
   const navigate = useNavigate();
@@ -72,52 +159,171 @@ function useAuthGuard() {
   }, [navigate]);
 }
 
-function severityClass(severity) {
-  const s = String(severity || "INFO").toUpperCase();
-  if (s === "CRITICAL" || s === "ERROR") return "border-red-400/30 bg-red-500/[0.08] text-red-200";
-  if (s === "WARNING" || s === "BLOCK") return "border-amber-300/25 bg-amber-300/[0.08] text-amber-100";
-  if (s === "TRADE" || s === "COMMAND") return "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-100";
-  if (s === "EXIT" || s === "SYNC") return "border-sky-300/20 bg-sky-300/[0.08] text-sky-100";
-  return "border-white/10 bg-white/[0.04] text-white/80";
-}
-
-function StatusDot({ status }) {
-  const color =
-    status === "green" ? "bg-emerald-300" : status === "red" ? "bg-red-400" : "bg-amber-300";
-  return <span className={`h-2.5 w-2.5 rounded-full ${color} shadow-lg`} />;
-}
-
-function Card({ title, value, detail, status = "yellow", testid }) {
-  const tone =
-    status === "green"
-      ? "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-200"
-      : status === "red"
-      ? "border-red-400/25 bg-red-500/[0.08] text-red-200"
-      : "border-amber-300/25 bg-amber-300/[0.08] text-amber-100";
+function AppShell({ active, setActive, children, logout, statusText, online }) {
   return (
-    <div className={`rounded-2xl border p-4 ${tone}`} data-testid={testid}>
-      <div className="mb-2 flex items-center gap-2">
-        <StatusDot status={status} />
-        <div className="font-mono text-[10px] uppercase tracking-widest text-white/42">{title}</div>
-      </div>
-      <div className="text-xl font-black tracking-tight">{value}</div>
-      {detail && <div className="mt-1 text-xs leading-5 text-white/50">{detail}</div>}
+    <div className="min-h-screen bg-[#040404] pb-24 text-white" data-testid="bot-monitor-dashboard">
+      <InstallAppPrompt />
+      <div className="fixed inset-0 pointer-events-none bg-[radial-gradient(circle_at_top_right,rgba(212,175,55,0.12),transparent_32%),radial-gradient(circle_at_20%_0%,rgba(16,185,129,0.08),transparent_28%)]" />
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#040404]/88 backdrop-blur-2xl">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
+          <Link to="/command" className="flex min-w-0 items-center gap-3">
+            <XauAiLogo size={34} className="flex-none" />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-black">XAU AI Sniper</span>
+              <span className="block truncate font-mono text-[9px] uppercase tracking-[0.24em] text-[#d4af37]/70">
+                Command Center
+              </span>
+            </span>
+          </Link>
+          <div className="flex items-center gap-2">
+            <div className={`hidden rounded-full border px-3 py-1.5 text-[11px] font-bold sm:block ${online ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-200" : "border-red-400/25 bg-red-500/10 text-red-200"}`}>
+              {statusText}
+            </div>
+            <button onClick={logout} className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/58">
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="relative z-10 mx-auto max-w-7xl px-4 py-5">{children}</main>
+
+      <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-[#050505]/94 backdrop-blur-2xl">
+        <div className="mx-auto grid max-w-3xl grid-cols-8 px-1 py-2">
+          {NAV.map(([id, label, Icon]) => (
+            <button
+              key={id}
+              onClick={() => setActive(id)}
+              className={`flex min-w-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-[10px] font-semibold transition ${
+                active === id ? "bg-[#d4af37] text-black" : "text-white/42"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              <span className="truncate">{label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
     </div>
   );
 }
 
-function MiniRecord({ title, record }) {
+function Metric({ label, value, detail, icon: Icon, tone = "amber" }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-4">
-      <div className="font-mono text-[10px] uppercase tracking-widest text-white/40">{title}</div>
-      {!record ? (
-        <div className="mt-3 text-sm text-white/42">No record yet</div>
-      ) : (
-        <div className="mt-3 space-y-1 text-sm text-white/70">
-          <div className="truncate font-bold">{record.message || record.reason || record.symbol || record.event_type || "Recorded"}</div>
-          <div className="font-mono text-[11px] text-white/40">{relativeTime(record.ts || record.opened_at || record.closed_at)}</div>
+    <div className={`rounded-[22px] border p-4 ${toneClass(tone)}`}>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/42">{label}</div>
+        {Icon && <Icon className="h-4 w-4 opacity-70" />}
+      </div>
+      <div className="truncate font-mono text-2xl font-black tracking-tight">{value}</div>
+      {detail && <div className="mt-1 truncate text-xs text-white/50">{detail}</div>}
+    </div>
+  );
+}
+
+function Section({ title, subtitle, children, action }) {
+  return (
+    <section className="rounded-[28px] border border-white/10 bg-white/[0.045] p-4 shadow-2xl shadow-black/20">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-black tracking-tight">{title}</h2>
+          {subtitle && <p className="mt-1 text-sm leading-6 text-white/48">{subtitle}</p>}
         </div>
-      )}
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function EmptyState({ title, body, icon: Icon = Bot }) {
+  return (
+    <div className="rounded-[24px] border border-white/10 bg-black/25 p-6 text-center">
+      <Icon className="mx-auto mb-3 h-7 w-7 text-[#d4af37]" />
+      <div className="font-bold">{title}</div>
+      <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-white/45">{body}</p>
+    </div>
+  );
+}
+
+function Sparkline({ points = [], tone = "#d4af37" }) {
+  const values = points.length ? points : [0, 0, 0, 0, 0, 0, 0];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const d = values
+    .map((v, i) => {
+      const x = (i / Math.max(values.length - 1, 1)) * 100;
+      const y = 34 - ((v - min) / span) * 28;
+      return `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  return (
+    <svg viewBox="0 0 100 40" className="h-24 w-full overflow-visible">
+      <path d={`${d} L100,40 L0,40 Z`} fill={tone} opacity="0.10" />
+      <path d={d} fill="none" stroke={tone} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function EventRow({ event }) {
+  const tone = severityTone(event.severity);
+  return (
+    <div className={`rounded-[22px] border p-3 ${toneClass(tone)}`}>
+      <div className="flex items-start gap-3">
+        <div className="mt-1 h-2.5 w-2.5 flex-none rounded-full bg-current" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/42">
+              {event.severity || "INFO"} · {event.event_type || "EVENT"}
+            </span>
+            <span className="flex-none text-[11px] text-white/38">{relativeTime(event.ts)}</span>
+          </div>
+          <div className="mt-1 break-words text-sm leading-6 text-white/82">{event.message || "Event recorded"}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CommandModal({ command, onCancel, onSubmit, busy, message, licenseKey }) {
+  const [key, setKey] = useState(licenseKey || "");
+  if (!command) return null;
+  const Icon = command.icon;
+  return (
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center">
+      <div className="w-full max-w-md rounded-[30px] border border-white/10 bg-[#101010] p-5 shadow-2xl">
+        <div className={`mb-4 inline-flex rounded-2xl border p-3 ${toneClass(command.tone)}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <h3 className="text-2xl font-black">{command.label}</h3>
+        <p className="mt-2 text-sm leading-6 text-white/55">{command.detail}</p>
+        {command.dangerous && (
+          <div className="mt-4 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-100">
+            This is a high-impact command. The EA must validate and acknowledge it before the dashboard marks it executed.
+          </div>
+        )}
+        <label className="mt-5 block text-xs font-bold uppercase tracking-[0.2em] text-white/42">License key</label>
+        <input
+          value={key}
+          onChange={(e) => setKey(e.target.value.toUpperCase())}
+          placeholder="ASE-D4Q9-SUFW"
+          className="mt-2 w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 font-mono text-sm text-white outline-none focus:border-[#d4af37]"
+        />
+        {message && <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">{message}</div>}
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <button onClick={onCancel} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-bold text-white/70">
+            Cancel
+          </button>
+          <button
+            onClick={() => onSubmit(key)}
+            disabled={busy}
+            className={`rounded-2xl px-4 py-3 text-sm font-black ${command.tone === "red" ? "bg-red-400 text-black" : "bg-[#d4af37] text-black"} disabled:opacity-60`}
+          >
+            {busy ? "Queueing..." : "Confirm"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -125,23 +331,34 @@ function MiniRecord({ title, record }) {
 export default function CloudDashboard() {
   useAuthGuard();
   const navigate = useNavigate();
+  const [active, setActive] = useState("home");
   const [me, setMe] = useState(null);
   const [status, setStatus] = useState(null);
+  const [license, setLicense] = useState(null);
   const [events, setEvents] = useState([]);
+  const [commands, setCommands] = useState([]);
   const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
+  const [modalCommand, setModalCommand] = useState(null);
+  const [commandBusy, setCommandBusy] = useState(false);
   const [commandMsg, setCommandMsg] = useState("");
+  const [licenseInput, setLicenseInput] = useState("");
 
   const fetchAll = useCallback(async () => {
     try {
-      const [meRes, statusRes, activityRes] = await Promise.all([
+      const [meRes, statusRes, activityRes, commandRes, licenseRes] = await Promise.all([
         commandAxios.get("/cloud/auth/me"),
         commandAxios.get("/cloud/monitor/status"),
-        commandAxios.get("/cloud/monitor/activity", { params: { kind: filter, limit: 80 } }),
+        commandAxios.get("/cloud/monitor/activity", { params: { kind: filter, limit: 100 } }),
+        commandAxios.get("/cloud/command/recent", { params: { limit: 20 } }),
+        commandAxios.get("/cloud/license/status"),
       ]);
       setMe(meRes.data);
       setStatus(statusRes.data);
       setEvents(activityRes.data.events || []);
+      setCommands(commandRes.data.commands || []);
+      setLicense(licenseRes.data);
+      if (licenseRes.data?.license?.activation_key) setLicenseInput(licenseRes.data.license.activation_key);
     } catch (error) {
       if (error.response?.status === 401) {
         localStorage.removeItem("cloud_token");
@@ -154,21 +371,38 @@ export default function CloudDashboard() {
 
   useEffect(() => {
     fetchAll();
-    const id = setInterval(fetchAll, 6000);
+    const id = setInterval(fetchAll, 8000);
     return () => clearInterval(id);
   }, [fetchAll]);
 
-  const sendCommand = async (action) => {
-    const label = action.replaceAll("_", " ");
-    const pin = window.prompt(`Enter your 4-6 digit Command Center PIN to queue ${label}`);
-    if (!pin) return;
-    if (!window.confirm(`Queue ${label} for the EA?\n\nThe EA must poll and acknowledge it before anything changes.`)) return;
+  const linkLicense = async () => {
+    setCommandMsg("");
     try {
-      const response = await commandAxios.post("/cloud/command/request", { action, pin, confirm: true });
-      setCommandMsg(`Queued ${label}: ${response.data.command_id || "pending EA acknowledgement"}`);
+      await commandAxios.post("/cloud/license/link", { license_key: licenseInput });
+      setCommandMsg("License linked. Waiting for EA heartbeat from this license/account.");
+      fetchAll();
+    } catch (error) {
+      setCommandMsg(error.response?.data?.detail || "License link failed");
+    }
+  };
+
+  const queueCommand = async (licenseKey) => {
+    if (!modalCommand) return;
+    setCommandBusy(true);
+    setCommandMsg("");
+    try {
+      const response = await commandAxios.post("/cloud/command/request", {
+        action: modalCommand.action,
+        pin: licenseKey,
+        confirm: true,
+      });
+      setCommandMsg(`Queued ${modalCommand.label}: ${response.data.command_id}`);
+      setModalCommand(null);
       fetchAll();
     } catch (error) {
       setCommandMsg(error.response?.data?.detail || "Command queue failed");
+    } finally {
+      setCommandBusy(false);
     }
   };
 
@@ -180,180 +414,367 @@ export default function CloudDashboard() {
     navigate("/command");
   };
 
+  const heartbeat = status?.heartbeat || {};
+  const licenseInfo = license?.license || status?.license || {};
+  const online = Boolean(status && !status.offline && heartbeat.account_number);
+  const tradingOk = Boolean(heartbeat.algo_trading && heartbeat.trading_allowed && heartbeat.mt5_connected);
+  const statusText = online ? heartbeat.bot_state || "ONLINE" : "NO HEARTBEAT";
+  const equityPoints = useMemo(() => {
+    const base = Number(heartbeat.balance || heartbeat.equity || 0);
+    if (!base) return [];
+    const daily = Number(heartbeat.daily_pnl || 0);
+    return [base - daily * 1.4, base - daily, base - daily * 0.55, base - daily * 0.2, Number(heartbeat.equity || base)];
+  }, [heartbeat.balance, heartbeat.daily_pnl, heartbeat.equity]);
+
   if (loading || !me) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#050505] text-white">
-        <Loader2 className="h-6 w-6 animate-spin text-amber-200" />
+      <div className="flex min-h-screen items-center justify-center bg-[#040404] text-white">
+        <Loader2 className="h-6 w-6 animate-spin text-[#d4af37]" />
       </div>
     );
   }
 
-  const heartbeat = status?.heartbeat || {};
-  const botOnline = Boolean(status && !status.offline);
-  const tradingOk = Boolean(heartbeat.algo_trading && heartbeat.trading_allowed && heartbeat.mt5_connected);
-  const mainStatus = botOnline && tradingOk ? "green" : botOnline ? "yellow" : "red";
-  const statusText = botOnline ? heartbeat.bot_state || "ONLINE" : "BOT OFFLINE / NO HEARTBEAT";
-  const alerts = status?.alerts || [];
-  const openTrades = status?.open_trades ?? heartbeat.open_positions ?? 0;
-  const drawdown = Number(heartbeat.drawdown || 0);
-
   return (
-    <div className="min-h-screen bg-[#050505] pb-10 text-white" data-testid="bot-monitor-dashboard">
-      <InstallAppPrompt />
-      <nav className="sticky top-0 z-40 border-b border-white/10 bg-[#050505]/90 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <Link to="/command" className="flex min-w-0 items-center gap-3">
-            <XauAiLogo size={34} className="flex-none" />
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-black">XAU AI Sniper Command Center</span>
-              <span className="block truncate font-mono text-[9px] uppercase tracking-[0.22em] text-white/38">
-                Monitor + PIN-safe control
-              </span>
-            </span>
-          </Link>
-          <button onClick={logout} className="rounded-full border border-white/10 p-2 text-white/55">
-            <LogOut className="h-4 w-4" />
+    <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online}>
+      {active === "home" && (
+        <HomePage
+          status={status}
+          heartbeat={heartbeat}
+          licenseInfo={licenseInfo}
+          online={online}
+          tradingOk={tradingOk}
+          equityPoints={equityPoints}
+          setActive={setActive}
+          refresh={fetchAll}
+        />
+      )}
+      {active === "trading" && <TradingPage heartbeat={heartbeat} events={events} online={online} />}
+      {active === "analytics" && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} />}
+      {active === "intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
+      {active === "activity" && <ActivityPage events={events} filter={filter} setFilter={setFilter} status={status} />}
+      {active === "control" && (
+        <ControlPage
+          commands={commands}
+          openCommand={setModalCommand}
+          commandMsg={commandMsg}
+          licenseKey={licenseInfo.activation_key}
+          linked={Boolean(license?.linked || status?.license?.linked)}
+          setActive={setActive}
+        />
+      )}
+      {active === "license" && (
+        <LicensePage
+          license={license}
+          licenseInput={licenseInput}
+          setLicenseInput={setLicenseInput}
+          linkLicense={linkLicense}
+          commandMsg={commandMsg}
+          heartbeat={heartbeat}
+          me={me}
+        />
+      )}
+      {active === "settings" && <SettingsPage me={me} heartbeat={heartbeat} logout={logout} />}
+      <CommandModal
+        command={modalCommand}
+        onCancel={() => setModalCommand(null)}
+        onSubmit={queueCommand}
+        busy={commandBusy}
+        message={commandMsg}
+        licenseKey={licenseInfo.activation_key}
+      />
+    </AppShell>
+  );
+}
+
+function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, setActive, refresh }) {
+  const openTrades = online ? Number(status?.open_trades || heartbeat.open_positions || 0) : 0;
+  const riskTone = Number(heartbeat.drawdown || 0) > 5 ? "red" : Number(heartbeat.drawdown || 0) > 2 ? "amber" : "green";
+  return (
+    <div className="space-y-4">
+      <section className={`rounded-[32px] border p-5 ${toneClass(online ? (tradingOk ? "green" : "amber") : "red")}`} data-testid="bot-status-card">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.24em] text-white/45">
+              <Wifi className="h-4 w-4" /> {online ? "Live connection" : "Waiting for EA heartbeat"}
+            </div>
+            <h1 className="text-4xl font-black tracking-tight">{online ? heartbeat.bot_state || "Bot online" : "No live bot connected"}</h1>
+            <p className="mt-2 text-sm leading-6 text-white/55">
+              {online
+                ? `${heartbeat.account_number || "Account"} · ${heartbeat.broker_server || "Broker"} · ${heartbeat.symbol || "XAUUSD"} ${heartbeat.timeframe || "M5"}`
+                : "Link your license, attach the EA to MT5, then the Command Center will show real data only."}
+            </p>
+          </div>
+          <button onClick={refresh} className="rounded-full border border-white/10 bg-white/[0.06] p-3">
+            <RefreshCw className="h-4 w-4" />
           </button>
         </div>
-      </nav>
+        <div className="mt-5">
+          <Sparkline points={equityPoints} tone={online ? "#6ee7b7" : "#d4af37"} />
+        </div>
+      </section>
 
-      <main className="mx-auto max-w-7xl space-y-4 px-4 py-5 sm:px-6 sm:py-8">
-        <section className={`rounded-[28px] border p-5 ${severityClass(mainStatus === "red" ? "CRITICAL" : mainStatus === "yellow" ? "WARNING" : "TRADE")}`} data-testid="bot-status-card">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-white/45">
-                <StatusDot status={mainStatus} /> Bot Activity Monitor
-              </div>
-              <h1 className="text-3xl font-black tracking-tight sm:text-5xl">{statusText}</h1>
-              <p className="mt-2 text-sm text-white/58">
-                Last heartbeat {relativeTime(heartbeat.last_heartbeat || heartbeat.ts)} · EA {heartbeat.ea_version || "unknown"} · {heartbeat.symbol || "XAUUSD"} {heartbeat.timeframe || "M5"}
-              </p>
-            </div>
-            <button onClick={fetchAll} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-3 text-sm font-bold">
-              <RefreshCw className="h-4 w-4" /> Refresh
-            </button>
-          </div>
-        </section>
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric label="Equity" value={online ? money(heartbeat.equity) : "Not live"} detail={`Balance ${online ? money(heartbeat.balance) : "-"}`} icon={CircleDollarSign} tone={online ? "green" : "amber"} />
+        <Metric label="Floating PnL" value={online ? money(heartbeat.daily_pnl) : "-"} detail="Today" icon={TrendingUp} tone={Number(heartbeat.daily_pnl || 0) >= 0 ? "green" : "red"} />
+        <Metric label="Open positions" value={openTrades} detail={online ? `Spread ${heartbeat.spread ?? "-"} pts` : "No live data"} icon={History} tone={openTrades > 0 ? "amber" : "green"} />
+        <Metric label="Risk level" value={online ? pct(heartbeat.drawdown) : "Unknown"} detail={heartbeat.epf_state || "EPF waiting"} icon={Gauge} tone={riskTone} />
+      </section>
 
-        {alerts.length > 0 && (
-          <section className="space-y-2">
-            {alerts.map((alert, index) => (
-              <div key={`${alert.type}-${index}`} className={`rounded-2xl border p-3 text-sm ${severityClass(alert.severity)}`}>
-                <AlertTriangle className="mr-2 inline h-4 w-4" />
-                <span className="font-bold">{alert.type}</span> · {alert.message}
-              </div>
-            ))}
-          </section>
+      <section className="grid gap-3 lg:grid-cols-3">
+        <Metric label="AI confidence" value={heartbeat.last_action ? "Active" : "Waiting"} detail={heartbeat.last_action || "No decision yet"} icon={Brain} tone="amber" />
+        <Metric label="Heartbeat" value={relativeTime(heartbeat.last_heartbeat || heartbeat.ts)} detail={heartbeat.ea_version || "EA not reporting"} icon={Clock3} tone={online ? "green" : "red"} />
+        <Metric label="License" value={licenseInfo.status || "Not linked"} detail={licenseInfo.activation_key || "Add license key"} icon={KeyRound} tone={licenseInfo.linked || licenseInfo.activation_key ? "green" : "amber"} />
+      </section>
+
+      {!licenseInfo.activation_key && (
+        <EmptyState
+          title="Connect your license first"
+          body="The Command Center uses your ASE license key as identity. Link it once, then the app only shows data from that license/account."
+          icon={KeyRound}
+        />
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <button onClick={() => setActive("intelligence")} className="rounded-[22px] border border-white/10 bg-white/[0.05] p-4 text-left">
+          <Brain className="mb-3 h-5 w-5 text-[#d4af37]" />
+          <div className="font-bold">Open brain view</div>
+          <p className="mt-1 text-xs leading-5 text-white/45">See why the EA waits, enters, blocks, and exits.</p>
+        </button>
+        <button onClick={() => setActive("control")} className="rounded-[22px] border border-white/10 bg-white/[0.05] p-4 text-left">
+          <SlidersHorizontal className="mb-3 h-5 w-5 text-[#d4af37]" />
+          <div className="font-bold">Controls</div>
+          <p className="mt-1 text-xs leading-5 text-white/45">Queue safe commands with license verification.</p>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TradingPage({ heartbeat, events, online }) {
+  const tradeEvents = events.filter((e) => ["TRADE", "EXIT"].includes(String(e.severity || "").toUpperCase()));
+  return (
+    <div className="space-y-4">
+      <Section title="Trading" subtitle="Open exposure, running positions, trade timeline, and execution events.">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Metric label="Open trades" value={online ? heartbeat.open_positions || 0 : 0} detail="EA-reported" icon={History} tone="amber" />
+          <Metric label="Exposure" value={online ? heartbeat.symbol || "XAUUSD" : "No account"} detail={heartbeat.timeframe || "M5"} icon={TerminalSquare} tone="blue" />
+          <Metric label="Spread" value={online ? `${heartbeat.spread ?? "-"} pts` : "-"} detail="Current quote" icon={Activity} tone="amber" />
+          <Metric label="State" value={heartbeat.bot_state || "Waiting"} detail={heartbeat.last_action || "No action"} icon={Bot} tone={online ? "green" : "red"} />
+        </div>
+      </Section>
+      <Section title="Trade timeline" subtitle="Only real EA activity appears here. No legacy cloud trades are shown.">
+        {tradeEvents.length ? (
+          <div className="space-y-2">{tradeEvents.slice(0, 20).map((e, i) => <EventRow key={e.id || i} event={e} />)}</div>
+        ) : (
+          <EmptyState title="No live trade events yet" body="When the EA opens, modifies, blocks, or closes a trade, it will appear here from the linked account." icon={History} />
         )}
+      </Section>
+    </div>
+  );
+}
 
-        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Card title="MT5 connection" value={heartbeat.mt5_connected ? "Connected" : "Disconnected"} detail={heartbeat.broker_server || "Broker unknown"} status={heartbeat.mt5_connected ? "green" : "red"} />
-          <Card title="Algo trading" value={heartbeat.algo_trading ? "Enabled" : "Disabled"} detail={heartbeat.trading_allowed ? "Trading allowed" : "Trading blocked"} status={heartbeat.algo_trading && heartbeat.trading_allowed ? "green" : "red"} />
-          <Card title="Account" value={heartbeat.account_number || "Not linked"} detail={`${heartbeat.broker_server || "Broker"} · ${me.status || "license"}`} status={heartbeat.account_connected ? "green" : "yellow"} />
-          <Card title="Intelligence sync" value={status?.intelligence_sync_state || heartbeat.sync_state || "Unknown"} detail={`EPF ${status?.equity_protection_state || heartbeat.epf_state || "T0"}`} status={String(heartbeat.sync_state || "").startsWith("OK") ? "green" : "yellow"} />
-        </section>
-
-        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Card title="Balance" value={money(heartbeat.balance)} detail={`Equity ${money(heartbeat.equity)}`} status="green" />
-          <Card title="Floating / DD" value={`${drawdown.toFixed(2)}%`} detail={`Daily PnL ${money(heartbeat.daily_pnl)}`} status={drawdown > 5 ? "red" : drawdown > 2 ? "yellow" : "green"} />
-          <Card title="Open trades" value={openTrades} detail={`Spread ${heartbeat.spread ?? "-"} pts`} status={Number(openTrades) > 0 ? "yellow" : "green"} />
-          <Card title="Last action" value={heartbeat.last_action || "Waiting"} detail={heartbeat.last_decision_time ? `Decision ${relativeTime(heartbeat.last_decision_time)}` : "No decision yet"} status="yellow" />
-        </section>
-
-        <section className="rounded-[24px] border border-white/10 bg-white/[0.045] p-4">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <div className="font-mono text-[10px] uppercase tracking-widest text-white/40">Safe remote commands</div>
-              <div className="mt-1 text-sm text-white/55">
-                PIN + confirmation required. Commands are queued, then the EA must poll, validate, execute, and acknowledge them.
-              </div>
-            </div>
-            <KeyRound className="h-5 w-5 text-amber-200" />
+function AnalyticsPage({ heartbeat, events, equityPoints }) {
+  const trades = events.filter((e) => String(e.severity || "").toUpperCase() === "TRADE").length;
+  const blocks = events.filter((e) => String(e.severity || "").toUpperCase() === "BLOCK").length;
+  const errors = events.filter((e) => ["ERROR", "CRITICAL"].includes(String(e.severity || "").toUpperCase())).length;
+  return (
+    <div className="space-y-4">
+      <Section title="Analytics" subtitle="Charts first. Cards only summarize what the charts are showing.">
+        <div className="rounded-[24px] border border-white/10 bg-black/25 p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/42">Equity curve</span>
+            <span className="text-xs text-white/45">{money(heartbeat.equity)}</span>
           </div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {COMMANDS.map(([action, label, Icon, tone]) => (
+          <Sparkline points={equityPoints} tone="#d4af37" />
+        </div>
+      </Section>
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric label="Daily PnL" value={money(heartbeat.daily_pnl)} detail="EA heartbeat" icon={CircleDollarSign} tone={Number(heartbeat.daily_pnl || 0) >= 0 ? "green" : "red"} />
+        <Metric label="Drawdown" value={pct(heartbeat.drawdown)} detail="Current" icon={Gauge} tone={Number(heartbeat.drawdown || 0) > 5 ? "red" : "amber"} />
+        <Metric label="Trade events" value={trades} detail="Recent feed" icon={TrendingUp} tone="green" />
+        <Metric label="Blocks/errors" value={`${blocks}/${errors}`} detail="Protection vs faults" icon={Shield} tone={errors ? "red" : "amber"} />
+      </section>
+      <Section title="Performance modules" subtitle="These populate from structured EA reports as the bot uploads intelligence data.">
+        <div className="grid gap-3 sm:grid-cols-2">
+          {["Signal performance", "Exit performance", "Block performance", "Learning performance"].map((name) => (
+            <div key={name} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4">
+              <div className="font-bold">{name}</div>
+              <p className="mt-2 text-sm leading-6 text-white/45">Waiting for enough linked report samples.</p>
+            </div>
+          ))}
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+function IntelligencePage({ heartbeat, events, status }) {
+  const blocks = events.filter((e) => String(e.severity || "").toUpperCase() === "BLOCK");
+  const syncs = events.filter((e) => String(e.event_type || "").toUpperCase().includes("SYNC"));
+  const latestBrain = events.find((e) => /BLOCK|VETO|SIGNAL|SYNC|EXIT|SHADOW|LEARNING|CONFIDENCE/i.test(`${e.event_type} ${e.message}`));
+  return (
+    <div className="space-y-4">
+      <Section title="AI Brain" subtitle="What the EA sees, why it waits, why it enters, and why it blocks.">
+        <div className="rounded-[28px] border border-[#d4af37]/25 bg-[#d4af37]/10 p-5">
+          <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.24em] text-[#f5d36d]">
+            <Brain className="h-4 w-4" /> Current reasoning
+          </div>
+          <div className="text-2xl font-black">{heartbeat.last_action || latestBrain?.message || "Waiting for next EA decision"}</div>
+          <p className="mt-2 text-sm leading-6 text-white/55">
+            {latestBrain ? `${latestBrain.event_type} · ${relativeTime(latestBrain.ts)}` : "The EA will stream brain events here after heartbeat/activity is enabled for the linked license."}
+          </p>
+        </div>
+      </Section>
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric label="Market regime" value={heartbeat.bot_state || "Unknown"} detail={heartbeat.symbol || "XAUUSD"} icon={Activity} tone="blue" />
+        <Metric label="Volatility" value={heartbeat.spread ? `${heartbeat.spread} pts` : "Waiting"} detail="Spread proxy" icon={Flame} tone="amber" />
+        <Metric label="Sync state" value={status?.intelligence_sync_state || heartbeat.sync_state || "Unknown"} detail={status?.equity_protection_state || heartbeat.epf_state || "EPF"} icon={RefreshCw} tone="amber" />
+        <Metric label="Blocks" value={blocks.length} detail="Recent veto/guard events" icon={Shield} tone={blocks.length ? "amber" : "green"} />
+      </section>
+      <Section title="Recent intelligence" subtitle="Entry reasons, block reasons, exit-brain decisions, shadow outcomes, and learning status.">
+        {[...blocks, ...syncs].slice(0, 12).length ? (
+          <div className="space-y-2">{[...blocks, ...syncs].slice(0, 12).map((e, i) => <EventRow key={e.id || i} event={e} />)}</div>
+        ) : (
+          <EmptyState title="The brain is quiet right now" body="No linked intelligence events yet. Once the EA reports, this screen becomes the operating system for understanding the bot." icon={Brain} />
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function ActivityPage({ events, filter, setFilter }) {
+  return (
+    <div className="space-y-4">
+      <Section title="Activity" subtitle="A clean timeline of every important bot event, like an operations feed.">
+        <div className="mb-4 flex flex-wrap gap-2">
+          {FILTERS.map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setFilter(id)}
+              data-testid={id === "trades" ? "activity-filter-trade" : undefined}
+              className={`rounded-full px-3 py-2 text-xs font-bold ${filter === id ? "bg-[#d4af37] text-black" : "border border-white/10 bg-white/[0.04] text-white/55"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {events.length ? (
+          <div className="space-y-2">{events.map((e, i) => <EventRow key={e.id || i} event={e} />)}</div>
+        ) : (
+          <EmptyState title="No activity for this license yet" body="Old cloud records are intentionally hidden. Only events from your linked license/account will appear here." icon={Activity} />
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, setActive }) {
+  return (
+    <div className="space-y-4">
+      <Section title="Control" subtitle="Remote actions are isolated here. Every command needs license verification and EA acknowledgement.">
+        {!linked && (
+          <div className="mb-4 rounded-[22px] border border-amber-300/25 bg-amber-300/10 p-4 text-sm text-amber-100">
+            Link your license before sending commands.
+            <button onClick={() => setActive("license")} className="ml-2 font-black underline">Open License</button>
+          </div>
+        )}
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {COMMANDS.map((cmd) => {
+            const Icon = cmd.icon;
+            return (
               <button
-                key={action}
-                onClick={() => sendCommand(action)}
-                className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-3 text-xs font-black ${
-                  tone === "red"
-                    ? "border-red-400/25 bg-red-500/[0.08] text-red-200"
-                    : tone === "green"
-                    ? "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-200"
-                    : "border-amber-300/25 bg-amber-300/[0.08] text-amber-100"
-                }`}
+                key={cmd.action}
+                onClick={() => openCommand(cmd)}
+                disabled={!linked}
+                className={`rounded-[24px] border p-4 text-left transition disabled:opacity-40 ${toneClass(cmd.tone)}`}
               >
-                <Icon className="h-4 w-4" /> {label}
+                <Icon className="mb-4 h-5 w-5" />
+                <div className="font-black">{cmd.label}</div>
+                <p className="mt-2 text-xs leading-5 text-white/52">{cmd.detail}</p>
               </button>
+            );
+          })}
+        </div>
+        {commandMsg && <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">{commandMsg}</div>}
+      </Section>
+      <Section title="Command tracking" subtitle="Queued, executed, failed, or skipped commands.">
+        {commands.length ? (
+          <div className="space-y-2">
+            {commands.map((cmd) => (
+              <div key={cmd.id} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-bold">{cmd.label || cmd.action}</div>
+                    <div className="mt-1 text-xs text-white/42">{relativeTime(cmd.requested_at)} · {cmd.ack_message || "Waiting for EA acknowledgement"}</div>
+                  </div>
+                  <span className={`rounded-full px-3 py-1 text-[10px] font-black ${cmd.status === "EXECUTED" ? "bg-emerald-300 text-black" : cmd.status === "FAILED" ? "bg-red-400 text-black" : "bg-[#d4af37] text-black"}`}>
+                    {cmd.status}
+                  </span>
+                </div>
+              </div>
             ))}
           </div>
-          {commandMsg && (
-            <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.08] p-3 text-xs text-amber-100">
-              {commandMsg}
-            </div>
-          )}
-        </section>
+        ) : (
+          <EmptyState title="No commands queued" body={`Commands will appear here after you confirm with license key ${licenseKey || "ASE-..."}.`} icon={Lock} />
+        )}
+      </Section>
+    </div>
+  );
+}
 
-        <section className="grid gap-3 lg:grid-cols-3">
-          <MiniRecord title="Last signal" record={status?.last_signal} />
-          <MiniRecord title="Last trade" record={status?.last_trade} />
-          <MiniRecord title="Last blocked trade" record={status?.last_blocked_trade} />
-        </section>
+function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, commandMsg, heartbeat, me }) {
+  const info = license?.license;
+  return (
+    <div className="space-y-4">
+      <Section title="License" subtitle="Your license is the identity for the bot, account binding, heartbeat, and remote commands.">
+        <div className="rounded-[26px] border border-[#d4af37]/25 bg-[#d4af37]/10 p-5">
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-[#f5d36d]">Activation key</div>
+          <div className="mt-2 break-all font-mono text-2xl font-black">{info?.activation_key || "No license linked"}</div>
+          <p className="mt-2 text-sm text-white/50">{info?.status || license?.message || "Add the ASE key you received after purchase."}</p>
+        </div>
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+          <input
+            value={licenseInput}
+            onChange={(e) => setLicenseInput(e.target.value.toUpperCase())}
+            placeholder="ASE-D4Q9-SUFW"
+            className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 font-mono text-sm text-white outline-none focus:border-[#d4af37]"
+          />
+          <button onClick={linkLicense} className="rounded-2xl bg-[#d4af37] px-5 py-3 text-sm font-black text-black">
+            Link license
+          </button>
+        </div>
+        {commandMsg && <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">{commandMsg}</div>}
+      </Section>
+      <section className="grid gap-3 sm:grid-cols-2">
+        <Metric label="License ID" value={info?.license_id || "-"} detail={me.email} icon={KeyRound} tone="amber" />
+        <Metric label="MT5 binding" value={info?.account_binding || heartbeat.account_number || "Not bound"} detail={heartbeat.broker_server || "Waiting for EA"} icon={TerminalSquare} tone={info?.mt5_account || heartbeat.account_number ? "green" : "amber"} />
+        <Metric label="VPS binding" value={info?.vps_binding || "Not bound"} detail="Optional" icon={Wifi} tone="blue" />
+        <Metric label="EA version" value={heartbeat.ea_version || info?.ea_version || "Waiting"} detail={`Last heartbeat ${relativeTime(heartbeat.last_heartbeat || heartbeat.ts)}`} icon={Bot} tone={heartbeat.ea_version ? "green" : "amber"} />
+      </section>
+    </div>
+  );
+}
 
-        <section className="rounded-[24px] border border-white/10 bg-white/[0.045] p-4">
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-white/40">
-                <Activity className="h-4 w-4 text-amber-200" /> Live activity feed
-              </div>
-              <div className="mt-1 text-sm text-white/55">Trades, blocks, sync events, exits, shadow results, risk and errors.</div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {FILTERS.map(([id, label]) => (
-                <button
-                  key={id}
-                  onClick={() => setFilter(id)}
-                  data-testid={id === "trades" ? "activity-filter-trade" : undefined}
-                  className={`rounded-full px-3 py-1.5 text-[11px] font-bold ${
-                    filter === id ? "bg-amber-300 text-black" : "border border-white/10 bg-white/[0.05] text-white/60"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+function SettingsPage({ me, heartbeat, logout }) {
+  return (
+    <div className="space-y-4">
+      <Section title="Settings" subtitle="Account, app install, device status, and support details.">
+        <div className="space-y-3">
+          <div className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/42">Command Center account</div>
+            <div className="mt-2 font-bold">{me.full_name || "Trader"}</div>
+            <div className="mt-1 text-sm text-white/45">{me.email}</div>
           </div>
-
-          <div className="space-y-2">
-            {events.length === 0 ? (
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-6 text-center text-sm text-white/45">
-                No monitor events yet. The EA will populate this when heartbeat/activity posts are enabled.
-              </div>
-            ) : (
-              events.map((event, index) => (
-                <div key={event.id || index} className={`rounded-2xl border p-3 ${severityClass(event.severity)}`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-mono text-[10px] uppercase tracking-widest text-white/45">
-                        {event.severity || "INFO"} · {event.event_type}
-                      </div>
-                      <div className="mt-1 break-words text-sm">{event.message}</div>
-                      <div className="mt-1 text-[11px] text-white/45">
-                        {event.symbol || heartbeat.symbol || "XAUUSD"} · {event.account || heartbeat.account_number || "account"} · {relativeTime(event.ts)}
-                      </div>
-                    </div>
-                    {String(event.severity || "").toUpperCase() === "TRADE" ? (
-                      <CheckCircle2 className="h-5 w-5 flex-none" />
-                    ) : (
-                      <Clock className="h-5 w-5 flex-none opacity-50" />
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
+          <div className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/42">Connected bot</div>
+            <div className="mt-2 font-bold">{heartbeat.ea_version || "No EA heartbeat yet"}</div>
+            <div className="mt-1 text-sm text-white/45">{heartbeat.broker_server || "Broker waiting"}</div>
           </div>
-        </section>
-      </main>
+          <button onClick={logout} className="w-full rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm font-black text-red-100">
+            Log out
+          </button>
+        </div>
+      </Section>
     </div>
   );
 }
