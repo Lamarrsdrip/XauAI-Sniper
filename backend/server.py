@@ -14,7 +14,11 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict
 from datetime import datetime, timezone, timedelta
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+try:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+except ImportError:
+    LlmChat = None
+    UserMessage = None
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -396,7 +400,7 @@ async def download_ea():
     return Response(
         content=sanitized,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.45_BOT_ACTIVITY_MONITOR.mq5"'},
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.46_COMMAND_CENTER_HEARTBEAT.mq5"'},
     )
 
 # Admin-only: serves the FULL master EA with your agent token + cloud fanout
@@ -407,7 +411,7 @@ async def admin_download_ea_master():
     if not p.exists(): raise HTTPException(status_code=404)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.45_BOT_ACTIVITY_MONITOR.mq5",
+        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.46_COMMAND_CENTER_HEARTBEAT.mq5",
         media_type="application/octet-stream",
     )
 
@@ -3554,6 +3558,8 @@ class MasterReasoningReq(BaseModel):
     severity: Optional[str] = ""
 
 class BotHeartbeatReq(BaseModel):
+    pin: Optional[str] = ""
+    license_key: Optional[str] = ""
     bot_online: Optional[bool] = True
     ea_version: Optional[str] = ""
     account_number: Optional[str] = ""
@@ -3580,6 +3586,8 @@ class BotHeartbeatReq(BaseModel):
     sync_state: Optional[str] = ""
 
 class BotActivityReq(BaseModel):
+    pin: Optional[str] = ""
+    license_key: Optional[str] = ""
     event_type: str = "INFO"
     severity: str = "INFO"
     account: Optional[str] = ""
@@ -3599,15 +3607,18 @@ async def _store_bot_activity(event_type: str, severity: str, message: str,
                               account: str = "", symbol: str = "", details: dict = None):
     now = datetime.now(timezone.utc)
     sev = (severity or "INFO").upper()
+    details = details or {}
+    license_key = _normalize_license_key(details.get("license_key", ""))
     doc = {
         "id": str(uuid.uuid4()),
         "ts": now.isoformat(),
         "event_type": (event_type or "INFO").upper(),
         "severity": sev,
+        "license_key": license_key,
         "account": str(account or ""),
         "symbol": str(symbol or ""),
         "message": str(message or "")[:600],
-        "details": details or {},
+        "details": details,
     }
     await db.cloud_bot_activity.insert_one(doc.copy())
     total = await db.cloud_bot_activity.estimated_document_count()
@@ -3657,10 +3668,29 @@ async def cloud_monitor_heartbeat(req: BotHeartbeatReq, request: Request):
     await _require_agent_async(request)
     now = datetime.now(timezone.utc)
     doc = req.model_dump()
+    license_key = _normalize_license_key(req.license_key or req.pin or "")
+    if license_key:
+        doc["license_key"] = license_key
+        doc["pin"] = license_key
     doc["id"] = str(uuid.uuid4())
     doc["ts"] = now.isoformat()
     doc["last_heartbeat"] = now.isoformat()
     account = str(req.account_number or "")
+    if license_key:
+        await db.pin_licenses.update_one(
+            {"pin": license_key, "is_active": True},
+            {"$set": {
+                "is_used": True,
+                "activated_at": now.isoformat(),
+                "mt5_account": account,
+                "ea_version": req.ea_version or "",
+                "broker_server": req.broker_server or "",
+                "last_heartbeat": now.isoformat(),
+                "last_symbol": req.symbol or "",
+                "last_timeframe": req.timeframe or "",
+            }},
+            upsert=False,
+        )
     await db.cloud_bot_heartbeats.insert_one(doc.copy())
     await db.cloud_settings.update_one({"key": "main"}, {"$set": {
         "master_last_heartbeat": now.isoformat(),
@@ -3685,8 +3715,13 @@ async def cloud_monitor_heartbeat(req: BotHeartbeatReq, request: Request):
 async def cloud_monitor_activity(req: BotActivityReq, request: Request):
     """Remote monitoring only; this endpoint never executes trades."""
     await _require_agent_async(request)
+    license_key = _normalize_license_key(req.license_key or req.pin or "")
+    details = req.details or {}
+    if license_key:
+        details = dict(details)
+        details["license_key"] = license_key
     doc = await _store_bot_activity(req.event_type, req.severity, req.message,
-                                    req.account or "", req.symbol or "", req.details or {})
+                                    req.account or "", req.symbol or "", details)
     await db.cloud_settings.update_one({"key": "main"}, {"$set": {
         "monitor_last_activity_at": doc["ts"],
         "monitor_last_activity": doc,
@@ -3766,9 +3801,27 @@ async def cloud_command_recent(limit: int = 20, user: dict = Depends(get_cloud_u
 @api_router.get("/cloud/monitor/status")
 async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
     lic = await _get_user_license(user)
+    license_key = _normalize_license_key((lic or {}).get("pin", ""))
     account_filter = str((lic or {}).get("mt5_account") or "").strip()
-    hb_query = {"account_number": account_filter} if account_filter else {}
-    hb = await db.cloud_bot_heartbeats.find_one(hb_query, {"_id": 0}, sort=[("ts", -1)])
+    hb_filters = []
+    if license_key:
+        hb_filters.append({"license_key": license_key})
+        hb_filters.append({"pin": license_key})
+    if account_filter:
+        hb_filters.append({"account_number": account_filter})
+    hb_query = {"$or": hb_filters} if hb_filters else None
+    hb = await db.cloud_bot_heartbeats.find_one(hb_query, {"_id": 0}, sort=[("ts", -1)]) if hb_query else None
+    if hb and not account_filter and hb.get("account_number") and license_key:
+        account_filter = str(hb.get("account_number") or "")
+        await db.pin_licenses.update_one(
+            {"pin": license_key, "is_active": True},
+            {"$set": {
+                "mt5_account": account_filter,
+                "ea_version": hb.get("ea_version", ""),
+                "broker_server": hb.get("broker_server", ""),
+                "last_heartbeat": hb.get("ts", ""),
+            }},
+        )
     now = datetime.now(timezone.utc)
     hb_time = _dt_or_none((hb or {}).get("ts"))
     age_sec = int((now - hb_time).total_seconds()) if hb_time else None
@@ -3776,7 +3829,10 @@ async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
     status_label = "BOT OFFLINE / NO HEARTBEAT" if offline else (hb or {}).get("bot_state", "ONLINE")
     alerts = []
     if offline:
-        alerts.append({"severity": "CRITICAL", "type": "BOT_OFFLINE_NO_HEARTBEAT", "message": "BOT OFFLINE / NO HEARTBEAT"})
+        msg = "BOT OFFLINE / NO HEARTBEAT"
+        if lic and not hb:
+            msg = "License linked, but no EA heartbeat has reached this server yet. Check InpCloudURL, InpCloudAgentToken, WebRequest URL allow-list, and that the new EA version is attached."
+        alerts.append({"severity": "CRITICAL", "type": "BOT_OFFLINE_NO_HEARTBEAT", "message": msg})
     if hb:
         if hb.get("algo_trading") is False:
             alerts.append({"severity": "CRITICAL", "type": "ALGO_DISABLED", "message": "Algo Trading disabled"})
@@ -3789,6 +3845,8 @@ async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
     activity_scope = {}
     if account_filter:
         activity_scope = {"account": account_filter}
+    elif license_key:
+        activity_scope = {"license_key": license_key}
     elif hb and hb.get("account_number"):
         activity_scope = {"account": str(hb.get("account_number"))}
     last_signal = await db.cloud_bot_activity.find_one(
@@ -3830,8 +3888,9 @@ async def cloud_monitor_activity_feed(kind: str = "all", limit: int = 80,
     n = max(1, min(int(limit), 200))
     k = (kind or "all").lower()
     lic = await _get_user_license(user)
+    license_key = _normalize_license_key((lic or {}).get("pin", ""))
     account_filter = str((lic or {}).get("mt5_account") or "").strip()
-    if not account_filter:
+    if not account_filter and not license_key:
         return {"events": [], "count": 0, "kind": k, "reason": "license_not_linked"}
     query = {}
     if k == "trades":
@@ -3848,7 +3907,8 @@ async def cloud_monitor_activity_feed(kind: str = "all", limit: int = 80,
         query = {"event_type": {"$regex": "SHADOW|BLOCK_CHECK"}}
     elif k == "risk":
         query = {"event_type": {"$regex": "EPF|DRAWDOWN|RISK|LOCK"}}
-    query = {"$and": [{"account": account_filter}, query]} if query else {"account": account_filter}
+    scope = {"$or": [{"account": account_filter}, {"license_key": license_key}]} if account_filter and license_key else ({"account": account_filter} if account_filter else {"license_key": license_key})
+    query = {"$and": [scope, query]} if query else scope
     rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", -1).to_list(n)
     return {"events": rows, "count": len(rows), "kind": k}
 

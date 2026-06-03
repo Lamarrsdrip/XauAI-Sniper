@@ -1,5 +1,5 @@
 /**
- * XauAi Cloud — Service Worker
+ * XAU AI Sniper Command Center — Service Worker
  * ------------------------------------------------------------
  * Goal: installed PWA must auto-update the moment new code ships.
  *

@@ -489,6 +489,10 @@ export default function CloudDashboard() {
 function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, setActive, refresh }) {
   const openTrades = online ? Number(status?.open_trades || heartbeat.open_positions || 0) : 0;
   const riskTone = Number(heartbeat.drawdown || 0) > 5 ? "red" : Number(heartbeat.drawdown || 0) > 2 ? "amber" : "green";
+  const primaryAlert = status?.alerts?.[0]?.message || "";
+  const offlineCopy = licenseInfo?.activation_key
+    ? primaryAlert || "License linked. Waiting for the EA heartbeat from MT5."
+    : "Link your license, attach the EA to MT5, then the Command Center will show real data only.";
   return (
     <div className="space-y-4">
       <section className={`rounded-[32px] border p-5 ${toneClass(online ? (tradingOk ? "green" : "amber") : "red")}`} data-testid="bot-status-card">
@@ -501,7 +505,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
             <p className="mt-2 text-sm leading-6 text-white/55">
               {online
                 ? `${heartbeat.account_number || "Account"} · ${heartbeat.broker_server || "Broker"} · ${heartbeat.symbol || "XAUUSD"} ${heartbeat.timeframe || "M5"}`
-                : "Link your license, attach the EA to MT5, then the Command Center will show real data only."}
+                : offlineCopy}
             </p>
           </div>
           <button onClick={refresh} className="rounded-full border border-white/10 bg-white/[0.06] p-3">

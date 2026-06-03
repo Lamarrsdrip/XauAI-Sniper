@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.45 — Bot Activity Monitor         |
+//|                                     v5.8.46 — Entry Quality Brain          |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.45 — BOT ACTIVITY MONITOR"
+#property description "XAUUSD AI Sniper v5.8.46 — ENTRY QUALITY BRAIN"
 #property description "Uses attribution memory to soften expensive blocks with tiny scouts, not blind looseness."
 #property description "Cuts B-grade hot-cycle risk after large winning runs so one late B cannot erase the day."
 #property strict
@@ -195,10 +195,12 @@ input bool   InpXAU_BlockLateChasePyramids = true;  // Pyramid adds must not clu
 input bool   InpBlockedTradeMemoryReport   = true;  // Persist blocked-signal outcome learning to CSV for audits
 input int    InpBlockedMemoryMinSamples    = 8;     // Samples required before blocked-pattern stats can influence logs/size
 input bool   InpBlockedMemoryScoutEnable   = true;  // If a block reason repeatedly misses more than it saves, allow tiny controlled scout
+input double InpBlockedMemoryScoutMinWR     = 55.0;  // Scout only if similar blocked ideas show real win-rate proof, not just movement edge
 input double InpBlockedMemoryScoutEdgeATR  = 0.50;  // Avg favorable ATR must exceed avg adverse ATR by this much
 input double InpBlockedMemoryScoutMinFavATR= 1.45;  // Minimum average favorable move after similar blocks
 input double InpBlockedMemoryScoutMaxAdvATR= 1.55;  // Do not scout if similar blocks usually draw down worse than this
 input double InpBlockedMemoryScoutLotMulti = 0.22;  // Tiny risk only; this is learning scout, not full-size looseness
+input double InpEntryQualityScoutRiskCap    = 0.25;  // Tiny scouts cannot be raised by large-account lot floors above this risk %
 input bool   InpTradingIntelDataset        = true;  // Unified CSV/JSONL black-box recorder for trades, blocks, vetoes, exits, cloud
 input bool   InpTradingIntelJson           = true;  // Also write JSONL rows for external analysis tools
 input bool   InpMarketIntelSnapshots       = true;  // Record one market-state row per M5 scan for Codex analysis
@@ -218,6 +220,13 @@ input double InpTradeBrainMinPF            = 0.75;  // Below this profit factor,
 input double InpTradeBrainBadDDProfitRatio = 2.50;  // Avg worst DD worse than this × avg profit = poor entry quality
 input double InpTradeBrainWeakLotMulti     = 0.45;  // Lot multiplier for weak-but-not-blocked repeated patterns
 input bool   InpTradeBrainMonitorAfterExit = true;  // After close, keep watching to learn whether exit was early, late, or correct
+input bool   InpEntryQualityReview          = true;  // Write Entry Quality Review CSV for every closed trade
+input int    InpEntryQualityFastMinSamples  = 6;     // Faster warning window for repeated deep-drawdown patterns
+input double InpEntryQualityPoorMAEATR      = 0.80;  // More than this adverse ATR = poor entry timing
+input double InpEntryQualityDangerMAEATR    = 1.20;  // More than this adverse ATR = dangerous entry timing
+input double InpEntryQualityBadDDPct        = 3.0;   // Floating loss above this equity % marks poor entry quality
+input double InpEntryQualityDangerDDPct     = 5.0;   // Floating loss above this equity % marks dangerous survival-by-balance
+input int    InpEntryQualityLongUnderwaterMin = 30;  // Time negative before a green close becomes recovery-dependent
 input double InpExitBrainEarlyProfitATR    = 1.20;  // If price moves this much further after close, mark exit as early
 input double InpExitBrainGoodAvoidATR      = 0.90;  // If price reverses this much after close, mark exit as good protection
 input bool   InpCloudSafeDisablePartials   = true;  // Disable partial-loss/profit reductions so master/cloud lifecycle stays synchronized
@@ -891,7 +900,7 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
-// v5.8.45 — Bot Activity Monitor + Startup Sync + Trade Brain + Exit Learning Intelligence.
+// v5.8.46 — Bot Activity Monitor + Startup Sync + Trade Brain + Entry Quality Intelligence.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -930,6 +939,8 @@ ulong       g_qualityPosIds[];
 double      g_qualityWorstPnl[];
 datetime    g_qualityNegativeSince[];
 int         g_qualityNegativeSec[];
+double      g_qualityMaxFavMove[];
+double      g_qualityMaxAdvMove[];
 
 struct TradeBrainOpen
 {
@@ -1788,7 +1799,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.45 (BOT ACTIVITY MONITOR) READY ===");
+   Print("=== XAUAI SNIPER v5.8.46 (COMMAND CENTER HEARTBEAT) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -1915,7 +1926,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.45 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.46 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -5455,6 +5466,9 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    if(InpAccountMode == ACCT_CONSERVATIVE) baseRisk = 0.6;
    if(InpAccountMode == ACCT_AGGRESSIVE)   baseRisk = 2.0;
    double riskPct = baseRisk * sizeMulti;
+   bool entryQualityScout = (sizeMulti <= InpBlockedMemoryScoutLotMulti * 0.75 ||
+                             StringFind(g_pendingBrainEntryAudit, "REPORT-FIT SCOUT") >= 0 ||
+                             StringFind(g_pendingBrainEntryAudit, "BLOCKED-MEMORY SCOUT") >= 0);
    double riskAfterSignal = riskPct;
 
    double acctSizeMult = AccountSizeRiskMultiplier();
@@ -5464,6 +5478,14 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
             " risk×", DoubleToString(acctSizeMult, 2),
             " (large accounts scale stronger; small accounts protected)");
       riskPct *= acctSizeMult;
+   }
+   if(entryQualityScout && InpEntryQualityScoutRiskCap > 0.0 && riskPct > InpEntryQualityScoutRiskCap)
+   {
+      Print("SCOUT-RISK CAP: memory/scout entry risk ",
+            DoubleToString(riskPct, 2), "% -> ",
+            DoubleToString(InpEntryQualityScoutRiskCap, 2),
+            "% so blocked-memory recovery cannot become a full-size trade.");
+      riskPct = InpEntryQualityScoutRiskCap;
    }
    double riskAfterAccount = riskPct;
 
@@ -5475,6 +5497,13 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
             " (HWM=$", DoubleToString(pg_dayHWM,2), ")");
       riskPct *= pgMult;
       if(pgMult <= 0.001) return;   // tier 3: no new lots
+   }
+   if(entryQualityScout && InpEntryQualityScoutRiskCap > 0.0 && riskPct > InpEntryQualityScoutRiskCap)
+   {
+      Print("SCOUT-RISK CAP: post-PG memory/scout risk ",
+            DoubleToString(riskPct, 2), "% -> ",
+            DoubleToString(InpEntryQualityScoutRiskCap, 2), "%");
+      riskPct = InpEntryQualityScoutRiskCap;
    }
    double riskAfterPG = riskPct;
 
@@ -5537,7 +5566,13 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    else if(InpLargeAccountMinRiskPct > 0 && equityForSizing >= 25000.0 && !drawdownActive && pgMult > 0.40)
       largeFloor = MathMin(1.25, InpLargeAccountMinRiskPct);
 
-   if(largeFloor > 0 && riskPct < largeFloor)
+   if(entryQualityScout && largeFloor > 0)
+   {
+      Print("SCOUT-RISK: large-account lot floor bypassed for memory/scout entry. risk=",
+            DoubleToString(riskPct, 2), "% floor=", DoubleToString(largeFloor, 2),
+            "% reason=", reason);
+   }
+   else if(largeFloor > 0 && riskPct < largeFloor)
    {
       Print("LOT-FLOOR: large account equity $", DoubleToString(equityForSizing, 2),
             " raised effective risk ", DoubleToString(riskPct, 2), "% -> ",
@@ -8817,6 +8852,11 @@ string XAU_TradeBrainFile()
    return "XAUAI_ExecutedTradeBrain_" + Symbol() + ".csv";
 }
 
+string XAU_EntryQualityFile()
+{
+   return "XAUAI_EntryQualityReview_" + Symbol() + ".csv";
+}
+
 string XAU_TradingIntelCsvFile()
 {
    return "XAUAI_TradingIntelligence_" + Symbol() + ".csv";
@@ -8865,11 +8905,15 @@ int XAU_RecoverOpenPositionQuality()
          ArrayResize(g_qualityWorstPnl, n + 1);
          ArrayResize(g_qualityNegativeSince, n + 1);
          ArrayResize(g_qualityNegativeSec, n + 1);
+         ArrayResize(g_qualityMaxFavMove, n + 1);
+         ArrayResize(g_qualityMaxAdvMove, n + 1);
          double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
          g_qualityPosIds[n] = posId;
          g_qualityWorstPnl[n] = MathMin(0.0, pnl);
          g_qualityNegativeSince[n] = pnl < 0.0 ? TimeCurrent() : 0;
          g_qualityNegativeSec[n] = 0;
+         g_qualityMaxFavMove[n] = 0.0;
+         g_qualityMaxAdvMove[n] = 0.0;
       }
       recovered++;
    }
@@ -9881,9 +9925,17 @@ bool XAU_BlockedMemoryEdgeSupportsScout(string setupName, int signal, string rea
    double edgeATR = avgFavATR - avgAdvATR;
    bool enoughEdge = (edgeATR >= InpBlockedMemoryScoutEdgeATR &&
                       avgFavATR >= InpBlockedMemoryScoutMinFavATR &&
-                      avgAdvATR <= InpBlockedMemoryScoutMaxAdvATR);
+                      avgAdvATR <= InpBlockedMemoryScoutMaxAdvATR &&
+                      winRate >= InpBlockedMemoryScoutMinWR);
    if(!enoughEdge)
+   {
+      Print("BLOCKED-MEMORY SCOUT DENIED: samples=", samples,
+            " WR=", DoubleToString(winRate, 0), "% < min ",
+            DoubleToString(InpBlockedMemoryScoutMinWR, 0), "% or edge not strong enough. avgFav=",
+            DoubleToString(avgFavATR, 2), "ATR avgAdv=", DoubleToString(avgAdvATR, 2),
+            "ATR. No scout; wait for better entry.");
       return false;
+   }
 
    why = StringFormat("blocked-memory edge samples=%d WR=%.0f%% avgFav=%.2fATR avgAdv=%.2fATR edge=%.2fATR",
                       samples, winRate, avgFavATR, avgAdvATR, edgeATR);
@@ -10925,8 +10977,9 @@ void BotMonitorActivity(string eventType, string severity, string message)
    string msg = BotMonitorJsonSafe(message, 420);
    string account = (string)AccountInfoInteger(ACCOUNT_LOGIN);
    string body = StringFormat(
-      "{\"event_type\":\"%s\",\"severity\":\"%s\",\"account\":\"%s\",\"symbol\":\"%s\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"event_type\":\"%s\",\"severity\":\"%s\",\"account\":\"%s\",\"symbol\":\"%s\","
       "\"message\":\"%s\",\"details\":{\"regime\":\"%s\",\"session\":\"%s\",\"last_skip\":\"%s\"}}",
+      BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
       ev, sev, account, Symbol(), msg, BotMonitorJsonSafe(RegimeName(), 32),
       BotMonitorJsonSafe(SessionTag(), 16), BotMonitorJsonSafe(g_lastSkipReason, 180));
    char pd[], res[]; string rh;
@@ -10964,7 +11017,7 @@ void BotMonitorHeartbeat()
    int err = GetLastError();
    if(err != 0) lastErr = "MQL error " + (string)err;
    string body = StringFormat(
-      "{\"bot_online\":true,\"ea_version\":\"v5.8.45\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.46\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -10972,6 +11025,8 @@ void BotMonitorHeartbeat()
       "\"bot_state\":\"%s\",\"last_action\":\"%s\",\"last_tick_time\":\"%s\","
       "\"last_decision_time\":\"%s\",\"last_error\":\"%s\",\"epf_state\":\"T%d\","
       "\"sync_state\":\"%s\"}",
+      BotMonitorJsonSafe(InpLicensePIN, 32),
+      BotMonitorJsonSafe(InpLicensePIN, 32),
       AccountInfoInteger(ACCOUNT_LOGIN),
       BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER), 80),
       Symbol(), spread, equity, balance, (equity - dailyStartEquity), dd, openPs,
@@ -11467,7 +11522,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.45 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.46 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
