@@ -38,19 +38,19 @@ def test_worker_reports_broker_health_and_gold_symbol_mapping():
     assert "EA_DISABLED" in worker
 
 
-def test_cloud_dashboard_has_user_visible_broker_checks():
+def test_command_center_dashboard_has_user_visible_runtime_checks():
     dashboard = read("frontend/src/components/cloud/CloudDashboard.jsx")
-    assert "/cloud/mt5/compatibility" in dashboard
-    assert "/cloud/mt5/test-connection" in dashboard
-    assert "/cloud/mt5/logs" in dashboard
-    assert "BROKER COMPATIBILITY" in dashboard
-    assert "broker-test-button" in dashboard
-    assert "copy-runtime-status" in dashboard
-    assert "copy-health-panel" in dashboard
+    assert "XAU AI Sniper Command Center" in dashboard
+    assert "MT5 connection" in dashboard
+    assert "Algo trading" in dashboard
+    assert "Account" in dashboard
+    assert "Safe remote commands" in dashboard
+    assert "/cloud/command/request" in dashboard
+    assert "Close all trades" in dashboard
 
 
 if __name__ == "__main__":
     test_backend_exposes_broker_compatibility_flow()
     test_worker_reports_broker_health_and_gold_symbol_mapping()
-    test_cloud_dashboard_has_user_visible_broker_checks()
+    test_command_center_dashboard_has_user_visible_runtime_checks()
     print("broker linking static checks passed")

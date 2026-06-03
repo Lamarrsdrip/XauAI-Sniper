@@ -1,1220 +1,359 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { Cloud, Pause, Play, Shield, LogOut, TrendingUp, TrendingDown, Loader2, Copy, CheckCircle2, XCircle, Clock, CreditCard, Calculator, RefreshCw, AlertTriangle } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Download,
+  KeyRound,
+  Loader2,
+  LogOut,
+  Pause,
+  Play,
+  RefreshCw,
+  Square,
+  XCircle,
+} from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
-import { forceRefreshApp } from "@/registerSW";
-import { FALLBACK_BROKER_SERVERS } from "./brokerServers";
+import XauAiLogo from "./XauAiLogo";
 import { API } from "@/lib/api";
 
-// Compact relative-time formatter ("12s ago", "3m ago", "2h ago")
-const relativeTime = (iso) => {
-  if (!iso) return "never";
-  try {
-    const d = new Date(iso); const s = (Date.now() - d.getTime()) / 1000;
-    if (s < 60)    return `${Math.floor(s)}s ago`;
-    if (s < 3600)  return `${Math.floor(s/60)}m ago`;
-    if (s < 86400) return `${Math.floor(s/3600)}h ago`;
-    return `${Math.floor(s/86400)}d ago`;
-  } catch { return "—"; }
-};
-
-// Scoped axios instance — never touches global defaults (avoids leaking Bearer
-// token into admin portal or other axios calls that run in the same session)
-const cloudAxios = axios.create({ baseURL: API });
-cloudAxios.interceptors.request.use((cfg) => {
-  const t = localStorage.getItem("cloud_token");
-  if (t) cfg.headers.Authorization = `Bearer ${t}`;
+const commandAxios = axios.create({ baseURL: API, withCredentials: true });
+commandAxios.interceptors.request.use((cfg) => {
+  const token = localStorage.getItem("cloud_token");
+  if (token) cfg.headers.Authorization = `Bearer ${token}`;
   return cfg;
 });
 
-function useAuth() {
-  const nav = useNavigate();
+const FILTERS = [
+  ["all", "All"],
+  ["trades", "Trades"],
+  ["blocks", "Blocks"],
+  ["errors", "Errors"],
+  ["sync", "Sync"],
+  ["exit", "Exit-brain"],
+  ["shadow", "Shadow"],
+  ["risk", "Risk"],
+];
+
+const COMMANDS = [
+  ["PAUSE_NEW_TRADES", "Pause new trades", Pause, "yellow"],
+  ["RESUME_TRADING", "Resume trading", Play, "green"],
+  ["STOP_TRADING", "Stop trading", Square, "red"],
+  ["CLOSE_ALL_TRADES", "Close all trades", XCircle, "red"],
+  ["FORCE_SYNC", "Force sync", RefreshCw, "yellow"],
+  ["FORCE_REPORT_UPLOAD", "Mark report upload", Download, "yellow"],
+];
+
+const relativeTime = (iso) => {
+  if (!iso) return "never";
+  const date = new Date(iso);
+  const seconds = (Date.now() - date.getTime()) / 1000;
+  if (!Number.isFinite(seconds)) return "never";
+  if (seconds < 60) return `${Math.max(0, Math.floor(seconds))}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+};
+
+const money = (value) =>
+  Number(value || 0).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  });
+
+function useAuthGuard() {
+  const navigate = useNavigate();
   useEffect(() => {
-    const token = localStorage.getItem("cloud_token");
-    if (!token) nav("/cloud/login");
-  }, [nav]);
+    if (!localStorage.getItem("cloud_token")) navigate("/command/login");
+  }, [navigate]);
 }
 
-function formatUSD(n) { return "$" + Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function severityClass(severity) {
+  const s = String(severity || "INFO").toUpperCase();
+  if (s === "CRITICAL" || s === "ERROR") return "border-red-400/30 bg-red-500/[0.08] text-red-200";
+  if (s === "WARNING" || s === "BLOCK") return "border-amber-300/25 bg-amber-300/[0.08] text-amber-100";
+  if (s === "TRADE" || s === "COMMAND") return "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-100";
+  if (s === "EXIT" || s === "SYNC") return "border-sky-300/20 bg-sky-300/[0.08] text-sky-100";
+  return "border-white/10 bg-white/[0.04] text-white/80";
+}
 
-function copyStatusMeta(status) {
-  const s = String(status || "CONNECTING").toUpperCase();
-  if (s === "COPYING" || s === "ACTIVE") return { ok: true, label: "Copying", color: "green" };
-  if (s === "CONNECTING") return { ok: false, label: "Connecting", color: "amber" };
-  if (s === "PAUSED") return { ok: false, label: "Paused", color: "amber" };
-  if (s === "EA_DISABLED") return { ok: false, label: "EA disabled", color: "red" };
-  if (s === "LOGIN_FAILED") return { ok: false, label: "Login failed", color: "red" };
-  if (s === "NEEDS_ATTENTION") return { ok: false, label: "Needs attention", color: "red" };
-  if (s === "NEEDS_DEDICATED_WORKER") return { ok: false, label: "Needs worker", color: "amber" };
-  if (s === "DISABLED") return { ok: false, label: "Disabled", color: "red" };
-  return { ok: false, label: s.replaceAll("_", " ").toLowerCase(), color: "amber" };
+function StatusDot({ status }) {
+  const color =
+    status === "green" ? "bg-emerald-300" : status === "red" ? "bg-red-400" : "bg-amber-300";
+  return <span className={`h-2.5 w-2.5 rounded-full ${color} shadow-lg`} />;
+}
+
+function Card({ title, value, detail, status = "yellow", testid }) {
+  const tone =
+    status === "green"
+      ? "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-200"
+      : status === "red"
+      ? "border-red-400/25 bg-red-500/[0.08] text-red-200"
+      : "border-amber-300/25 bg-amber-300/[0.08] text-amber-100";
+  return (
+    <div className={`rounded-2xl border p-4 ${tone}`} data-testid={testid}>
+      <div className="mb-2 flex items-center gap-2">
+        <StatusDot status={status} />
+        <div className="font-mono text-[10px] uppercase tracking-widest text-white/42">{title}</div>
+      </div>
+      <div className="text-xl font-black tracking-tight">{value}</div>
+      {detail && <div className="mt-1 text-xs leading-5 text-white/50">{detail}</div>}
+    </div>
+  );
+}
+
+function MiniRecord({ title, record }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-4">
+      <div className="font-mono text-[10px] uppercase tracking-widest text-white/40">{title}</div>
+      {!record ? (
+        <div className="mt-3 text-sm text-white/42">No record yet</div>
+      ) : (
+        <div className="mt-3 space-y-1 text-sm text-white/70">
+          <div className="truncate font-bold">{record.message || record.reason || record.symbol || record.event_type || "Recorded"}</div>
+          <div className="font-mono text-[11px] text-white/40">{relativeTime(record.ts || record.opened_at || record.closed_at)}</div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function CloudDashboard() {
-  useAuth();
-  const nav = useNavigate();
+  useAuthGuard();
+  const navigate = useNavigate();
   const [me, setMe] = useState(null);
-  const [data, setData] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState("overview"); // overview | connect | billing
+  const [commandMsg, setCommandMsg] = useState("");
 
   const fetchAll = useCallback(async () => {
     try {
-      const [m, d] = await Promise.all([cloudAxios.get(`/cloud/auth/me`), cloudAxios.get(`/cloud/dashboard`)]);
-      setMe(m.data); setData(d.data);
-    } catch (e) {
-      if (e.response?.status === 401) { localStorage.removeItem("cloud_token"); nav("/cloud/login"); }
-    } finally { setLoading(false); }
-  }, [nav]);
+      const [meRes, statusRes, activityRes] = await Promise.all([
+        commandAxios.get("/cloud/auth/me"),
+        commandAxios.get("/cloud/monitor/status"),
+        commandAxios.get("/cloud/monitor/activity", { params: { kind: filter, limit: 80 } }),
+      ]);
+      setMe(meRes.data);
+      setStatus(statusRes.data);
+      setEvents(activityRes.data.events || []);
+    } catch (error) {
+      if (error.response?.status === 401) {
+        localStorage.removeItem("cloud_token");
+        navigate("/command/login");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [filter, navigate]);
 
-  useEffect(() => { fetchAll(); const iv = setInterval(fetchAll, 15000); return () => clearInterval(iv); }, [fetchAll]);
+  useEffect(() => {
+    fetchAll();
+    const id = setInterval(fetchAll, 6000);
+    return () => clearInterval(id);
+  }, [fetchAll]);
+
+  const sendCommand = async (action) => {
+    const label = action.replaceAll("_", " ");
+    const pin = window.prompt(`Enter your 4-6 digit Command Center PIN to queue ${label}`);
+    if (!pin) return;
+    if (!window.confirm(`Queue ${label} for the EA?\n\nThe EA must poll and acknowledge it before anything changes.`)) return;
+    try {
+      const response = await commandAxios.post("/cloud/command/request", { action, pin, confirm: true });
+      setCommandMsg(`Queued ${label}: ${response.data.command_id || "pending EA acknowledgement"}`);
+      fetchAll();
+    } catch (error) {
+      setCommandMsg(error.response?.data?.detail || "Command queue failed");
+    }
+  };
 
   const logout = async () => {
-    try { await cloudAxios.post(`/cloud/auth/logout`); } catch {}
+    try {
+      await commandAxios.post("/cloud/auth/logout");
+    } catch {}
     localStorage.removeItem("cloud_token");
-    nav("/cloud");
+    navigate("/command");
   };
 
-  const togglePause = async () => {
-    try { await cloudAxios.post(`/cloud/pause`, { paused: !data.paused }); fetchAll(); } catch {}
-  };
+  if (loading || !me) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#050505] text-white">
+        <Loader2 className="h-6 w-6 animate-spin text-amber-200" />
+      </div>
+    );
+  }
 
-  if (loading || !me) return (
-    <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">
-      <Loader2 className="w-6 h-6 animate-spin text-[#D4AF37]" />
-    </div>
-  );
-
-  const daysLeft = me.days_remaining ?? 0;
-  const isTrial = me.status === "trial";
-  const isActive = me.subscription_active;
-  const needsPayment = !isActive && isTrial && daysLeft <= 0;
+  const heartbeat = status?.heartbeat || {};
+  const botOnline = Boolean(status && !status.offline);
+  const tradingOk = Boolean(heartbeat.algo_trading && heartbeat.trading_allowed && heartbeat.mt5_connected);
+  const mainStatus = botOnline && tradingOk ? "green" : botOnline ? "yellow" : "red";
+  const statusText = botOnline ? heartbeat.bot_state || "ONLINE" : "BOT OFFLINE / NO HEARTBEAT";
+  const alerts = status?.alerts || [];
+  const openTrades = status?.open_trades ?? heartbeat.open_positions ?? 0;
+  const drawdown = Number(heartbeat.drawdown || 0);
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white pb-20 sm:pb-0">
+    <div className="min-h-screen bg-[#050505] pb-10 text-white" data-testid="bot-monitor-dashboard">
       <InstallAppPrompt />
-      {/* Top bar */}
-      <nav className="sticky top-0 z-40 backdrop-blur-xl bg-[#050505]/80 border-b border-white/5">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
-          <Link to="/cloud" className="flex items-center gap-2 min-w-0"><Cloud className="w-5 h-5 sm:w-6 sm:h-6 text-[#D4AF37] flex-none" /><span className="font-bold tracking-tight text-sm sm:text-base truncate">XauAi Cloud</span></Link>
-          <div className="flex items-center gap-3 flex-none">
-            <div className="hidden md:block text-xs text-white/50"><span data-testid="user-email">{me.email}</span></div>
-            <button onClick={logout} className="text-white/50 hover:text-white transition-colors p-1.5" data-testid="logout-button" aria-label="Log out"><LogOut className="w-5 h-5" /></button>
-          </div>
-        </div>
-      </nav>
-
-      {/* Trial / subscription banner */}
-      {isTrial && daysLeft > 0 && (
-        <div className="bg-[#D4AF37]/10 border-b border-[#D4AF37]/20 py-2.5 sm:py-3" data-testid="trial-banner">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between text-xs sm:text-sm gap-2">
-            <div className="min-w-0"><span className="text-[#D4AF37] font-semibold">Free trial</span><span className="text-white/60 ml-1 sm:ml-2">— {daysLeft}d left</span></div>
-            <button onClick={()=>setTab("billing")} className="text-[#D4AF37] hover:underline font-semibold whitespace-nowrap" data-testid="trial-upgrade-link">Upgrade →</button>
-          </div>
-        </div>
-      )}
-      {needsPayment && (
-        <div className="bg-red-500/10 border-b border-red-500/20 py-2.5 sm:py-3" data-testid="expired-banner">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between text-xs sm:text-sm gap-2">
-            <div className="min-w-0"><span className="text-red-400 font-semibold">Trial expired</span><span className="text-white/60 ml-1 sm:ml-2 hidden sm:inline">— subscribe to continue</span></div>
-            <button onClick={()=>setTab("billing")} className="text-red-400 hover:underline font-semibold whitespace-nowrap" data-testid="expired-subscribe-link">Subscribe →</button>
-          </div>
-        </div>
-      )}
-
-      {/* Desktop tabs (hidden on mobile; mobile uses bottom nav) */}
-      <div className="hidden sm:block max-w-7xl mx-auto px-6 pt-6">
-        <div className="flex gap-2 border-b border-white/5">
-          {[
-            {id:"overview",label:"Overview"},
-            {id:"connect",label:"MT5 Connection"},
-            {id:"billing",label:"Subscription"},
-          ].map(t=>(
-            <button key={t.id} onClick={()=>setTab(t.id)} data-testid={`tab-${t.id}`}
-                    className={`px-4 py-3 text-sm transition-colors ${tab===t.id?"text-[#D4AF37] border-b-2 border-[#D4AF37]":"text-white/50 hover:text-white"}`}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 sm:py-8">
-        {tab === "overview" && <OverviewTab me={me} data={data} onTogglePause={togglePause} />}
-        {tab === "connect" && <ConnectTab me={me} onRefresh={fetchAll} />}
-        {tab === "billing" && <BillingTab me={me} onRefresh={fetchAll} />}
-      </div>
-
-      {/* Mobile bottom tab bar — native-app feel */}
-      <nav className="sm:hidden fixed bottom-0 inset-x-0 z-40 bg-[#050505]/95 backdrop-blur-xl border-t border-white/10 pb-[env(safe-area-inset-bottom)]">
-        <div className="grid grid-cols-3">
-          {[
-            {id:"overview",label:"Overview",Icon:TrendingUp},
-            {id:"connect",label:"Connect",Icon:Shield},
-            {id:"billing",label:"Billing",Icon:CreditCard},
-          ].map(({id,label,Icon})=>(
-            <button key={id} onClick={()=>setTab(id)} data-testid={`mtab-${id}`}
-                    className={`flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition-colors ${tab===id?"text-[#D4AF37]":"text-white/50"}`}>
-              <Icon className="w-5 h-5" />
-              {label}
-            </button>
-          ))}
-        </div>
-      </nav>
-    </div>
-  );
-}
-
-function OverviewTab({ me, data, onTogglePause }) {
-  const completedTrades = data.totals.completed_trades || 0;
-  const wr = completedTrades > 0 ? Math.round((data.totals.wins / completedTrades) * 100) : 0;
-  const executorOnline = Boolean(data.executor_online);
-  const verified = data.mt5_verification_status === "verified";
-  const activeSub = Boolean(me.subscription_active || me.status === "active");
-  const copyMeta = copyStatusMeta(me.copy_status || data.copy_status);
-  const copyHealthy = copyMeta.ok && verified && executorOnline && !data.paused;
-  const recentTrades = (data.trades || []).slice(0, 5);
-  const fmtLots = (v) => Number(v || 0) > 0 ? Number(v).toFixed(2) : "—";
-  const fmtPnl = (v) => (v === null || v === undefined) ? "—" : formatUSD(v);
-  return (
-    <div className="space-y-4 sm:space-y-6">
-      <div className="grid gap-3 lg:grid-cols-[1.15fr_0.85fr]" data-testid="cloud-command-center">
-        <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.07] to-white/[0.025] p-4 sm:p-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40 mb-2">CLOUD COMMAND CENTER</div>
-              <div className="text-2xl sm:text-3xl font-bold tracking-tight">
-                {verified ? "Execution ready" : data.mt5_verification_status === "pending" ? "Broker verification pending" : "Connect MT5 to activate"}
-              </div>
-              <div className="text-sm text-white/55 mt-2 max-w-2xl">
-                Master signals, worker execution, subscription, and broker connection are checked together so you can see why the cloud is active or paused.
-              </div>
-            </div>
-            <button
-              onClick={onTogglePause}
-              disabled={!data.mt5_connected}
-              data-testid="command-pause-toggle"
-              className={`rounded-2xl px-5 py-3 text-sm font-bold transition disabled:opacity-40 ${
-                data.paused
-                  ? "bg-green-400/15 text-green-300 border border-green-400/25"
-                  : "bg-red-400/15 text-red-300 border border-red-400/25"
-              }`}
-            >
-              {data.paused ? "Resume Copying" : "Pause Copying"}
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <HealthPill label="Subscription" ok={activeSub} value={activeSub ? `${me.days_remaining ?? 0}d left` : "Expired"} />
-          <HealthPill label="MT5" ok={verified} value={verified ? "Verified" : data.mt5_verification_status || "Not linked"} />
-          <HealthPill label="Worker" ok={executorOnline} value={executorOnline ? `${data.executor_count || 1} online` : "Offline"} />
-          <HealthPill label="Copying" ok={copyHealthy} value={data.paused ? "Paused" : copyMeta.label} />
-        </div>
-      </div>
-
-      {(me.copy_status || me.copy_last_error || me.copy_retry_count > 0) && (
-        <div className={`rounded-2xl border p-4 ${
-          copyMeta.color === "green"
-            ? "border-green-400/20 bg-green-400/[0.07]"
-            : copyMeta.color === "red"
-            ? "border-red-400/25 bg-red-500/[0.08]"
-            : "border-amber-400/25 bg-amber-400/[0.08]"
-        }`} data-testid="copy-runtime-status">
-          <div className="flex items-start gap-3">
-            {copyMeta.color === "green" ? <CheckCircle2 className="w-5 h-5 text-green-400 flex-none mt-0.5" /> : <AlertTriangle className={`w-5 h-5 flex-none mt-0.5 ${copyMeta.color === "red" ? "text-red-400" : "text-amber-300"}`} />}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="font-semibold">{copyMeta.label}</div>
-                <div className="text-[10px] font-mono text-white/45">last status {relativeTime(me.copy_last_status_at)}</div>
-              </div>
-              <div className="mt-1 text-xs text-white/60 leading-relaxed">
-                {copyMeta.ok
-                  ? <>Worker is logged in and copying this account. Last healthy sync: <span className="font-mono text-white/75">{relativeTime(me.copy_last_success_at)}</span>.</>
-                  : <>This account is isolated from healthy users. Other accounts continue copying while this one waits for retry or action.</>}
-              </div>
-              {(me.copy_last_error || me.copy_retry_count > 0 || me.copy_next_retry_at) && (
-                <div className="mt-2 grid gap-2 sm:grid-cols-3 text-[11px]">
-                  <div className="rounded-lg bg-black/25 border border-white/10 p-2"><span className="text-white/35 font-mono">RETRY</span><br/><span className="font-mono">{me.copy_retry_count || 0}</span></div>
-                  <div className="rounded-lg bg-black/25 border border-white/10 p-2"><span className="text-white/35 font-mono">NEXT</span><br/><span className="font-mono">{relativeTime(me.copy_next_retry_at)}</span></div>
-                  <div className="rounded-lg bg-black/25 border border-white/10 p-2 min-w-0"><span className="text-white/35 font-mono">ERROR</span><br/><span className="font-mono truncate block">{me.copy_last_error || "—"}</span></div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-        <KPI label="Net P&L (30d)" value={formatUSD(data.totals.net_pnl)} accent={data.totals.net_pnl >= 0 ? "green" : "red"} testid="kpi-pnl" />
-        <KPI label="Trades" value={data.totals.total_trades} testid="kpi-trades" />
-        <KPI label="Win Rate" value={`${wr}%`} testid="kpi-winrate" />
-        <KPI label="Last Balance" value={me.last_balance ? formatUSD(me.last_balance) : "—"} testid="kpi-balance" />
-      </div>
-
-      <BotReasoningFeed />
-
-      {/* Recent trades */}
-      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="trades-card">
-        <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40 mb-3 sm:mb-4">RECENT TRADES</div>
-        {recentTrades.length === 0 ? (
-          <div className="text-center py-10 sm:py-12 text-white/40">
-            <TrendingUp className="w-10 h-10 sm:w-12 sm:h-12 mx-auto mb-3 text-white/20" />
-            <div className="text-sm sm:text-base">No trade data yet. {data.mt5_connected ? "Signals arrive during market hours." : "Connect your MT5 to get started."}</div>
-          </div>
-        ) : (
-          <>
-            {/* Mobile card list */}
-            <div className="sm:hidden space-y-2">
-              {recentTrades.map((t,i)=>(
-                <div key={t.id||i} className="bg-black/30 rounded-xl p-3 flex items-center justify-between" data-testid={`trade-card-${i}`}>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="font-mono text-sm">{t.symbol}</span>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${t.side==="BUY"?"bg-green-500/20 text-green-400":"bg-red-500/20 text-red-400"}`}>{t.side}</span>
-                      <span className="font-mono text-xs text-white/50">{fmtLots(t.lots)}</span>
-                      <span className="font-mono text-[10px] text-white/35">{t.status || "open"}</span>
-                    </div>
-                    <div className="text-[10px] text-white/40">{(t.closed_at || t.opened_at || "").slice(0,16).replace("T"," ") || "live"}</div>
-                  </div>
-                  <div className={`font-mono text-sm font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{fmtPnl(t.profit)}</div>
-                </div>
-              ))}
-            </div>
-            {/* Desktop table */}
-            <div className="hidden sm:block overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead><tr className="text-xs font-mono tracking-widest text-white/40 border-b border-white/5">
-                  <th className="py-2 text-left">SYMBOL</th><th className="py-2 text-left">SIDE</th>
-                  <th className="py-2 text-right">LOTS</th><th className="py-2 text-right">P&L</th>
-                  <th className="py-2 text-right">CLOSED</th>
-                </tr></thead>
-                <tbody>
-                  {recentTrades.map((t,i)=>(
-                    <tr key={t.id || i} className="border-b border-white/5" data-testid={`trade-row-${i}`}>
-                      <td className="py-3 font-mono">{t.symbol}</td>
-                      <td className={`py-3 font-semibold ${t.side==="BUY"?"text-green-400":"text-red-400"}`}>{t.side}</td>
-                      <td className="py-3 font-mono text-right">{fmtLots(t.lots)}</td>
-                      <td className={`py-3 font-mono text-right font-semibold ${t.profit>=0?"text-green-400":"text-red-400"}`}>{fmtPnl(t.profit)}</td>
-                      <td className="py-3 text-right text-white/50 text-xs">{(t.closed_at || t.opened_at || "").slice(0,16).replace("T"," ") || "live"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {data.trades.length > recentTrades.length && (
-              <div className="mt-3 text-right text-xs font-mono text-[#D4AF37]">
-                Showing latest {recentTrades.length} of {data.trades.length} copied trades
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function KPI({ label, value, accent, testid }) {
-  const color = accent === "green" ? "text-green-400" : accent === "red" ? "text-red-400" : "text-white";
-  return (
-    <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-xl sm:rounded-2xl p-3 sm:p-5" data-testid={testid}>
-      <div className="text-[9px] sm:text-[10px] font-mono tracking-widest text-white/40 mb-1 sm:mb-2">{label}</div>
-      <div className={`text-lg sm:text-2xl font-bold font-mono ${color}`}>{value}</div>
-    </div>
-  );
-}
-
-function HealthPill({ label, value, ok }) {
-  return (
-    <div className={`rounded-2xl border p-4 ${ok ? "border-green-400/20 bg-green-400/[0.08]" : "border-amber-400/20 bg-amber-400/[0.08]"}`}>
-      <div className="flex items-center gap-2">
-        <span className={`h-2 w-2 rounded-full ${ok ? "bg-green-400" : "bg-amber-300"}`} />
-        <span className="font-mono text-[9px] uppercase tracking-widest text-white/40">{label}</span>
-      </div>
-      <div className={`mt-2 text-sm font-bold ${ok ? "text-green-300" : "text-amber-200"}`}>{value}</div>
-    </div>
-  );
-}
-
-// Live "Bot Reasoning" feed — polls the master EA's TRADE BLOCKED BECAUSE / FIRED
-// events every 6s so subscribers see exactly why their copy account is or isn't
-// trading right now. Removes the "is this thing broken?" mystery.
-function BotReasoningFeed() {
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-  // v5.1.7: collapsed by default on mobile, persisted user preference
-  const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem("xauai_bot_feed_collapsed") === "1");
-
-  useEffect(() => {
-    let alive = true;
-    const fetchOnce = async () => {
-      try {
-        const r = await cloudAxios.get(`/cloud/me/reasoning?limit=20`);
-        if (alive) { setEvents(r.data.events || []); setErr(""); }
-      } catch (e) {
-        if (alive) setErr(e.response?.data?.detail || "Could not load activity feed");
-      } finally { if (alive) setLoading(false); }
-    };
-    fetchOnce();
-    const id = setInterval(fetchOnce, 6000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
-
-  const toggle = () => {
-    setCollapsed((c) => {
-      const next = !c;
-      localStorage.setItem("xauai_bot_feed_collapsed", next ? "1" : "0");
-      return next;
-    });
-  };
-
-  // Latest event preview shown when collapsed (so user still sees activity)
-  const latest = events[0];
-  const latestIsFire = latest?.event_type === "FIRE";
-
-  return (
-    <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="bot-reasoning-feed">
-      <button
-        type="button"
-        onClick={toggle}
-        className="w-full flex items-center justify-between mb-3 sm:mb-4 gap-2 hover:opacity-80 transition-opacity text-left"
-        data-testid="bot-feed-toggle"
-        aria-expanded={!collapsed}
-      >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <div className="text-[10px] sm:text-xs font-mono tracking-widest text-white/40 flex-none">BOT ACTIVITY · LIVE</div>
-          <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-none" />
-          {collapsed && latest && (
-            <div className={`text-[10px] sm:text-[11px] font-mono truncate min-w-0 ${latestIsFire ? "text-green-400" : "text-amber-300"}`} data-testid="bot-feed-latest-preview">
-              · {latestIsFire ? "FIRE" : "BLOCK"} · {relativeTime(latest.ts)} · {latest.reason}
-            </div>
-          )}
-          {!collapsed && (
-            <div className="text-[10px] font-mono text-white/40 hidden sm:inline">refreshing every 6s</div>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-white/40 flex-none">
-          {events.length > 0 && (
-            <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10">{events.length}</span>
-          )}
-          <span className={`transition-transform ${collapsed ? "" : "rotate-180"}`}>▾</span>
-        </div>
-      </button>
-      {!collapsed && (
-        <>
-          {loading && events.length === 0 ? (
-            <div className="flex items-center gap-2 text-white/40 text-sm py-6 justify-center">
-              <Loader2 className="w-4 h-4 animate-spin" /> Connecting to master EA…
-            </div>
-          ) : events.length === 0 ? (
-            <div className="text-center py-8 text-white/40 text-sm">
-              <Cloud className="w-8 h-8 mx-auto mb-2 text-white/20" />
-              No activity yet. The bot will start logging once the master EA is online.
-            </div>
-          ) : (
-            <div className="space-y-2 max-h-[280px] sm:max-h-[420px] overflow-y-auto pr-1">
-              {events.map((e, i) => {
-                const isFire = e.event_type === "FIRE";
-                const grade = (e.grade || "").toUpperCase();
-                const dirArrow = e.signal_dir > 0 ? "↑" : e.signal_dir < 0 ? "↓" : "·";
-                const accent = isFire
-                  ? "border-green-500/40 bg-green-500/5"
-                  : grade.includes("VETO") || grade.includes("LOCK") || grade === "NEWS"
-                  ? "border-red-500/30 bg-red-500/5"
-                  : "border-white/10 bg-white/[0.02]";
-                const labelColor = isFire ? "text-green-400" : "text-amber-400";
-                return (
-                  <div key={e.id || i} className={`flex items-start gap-3 p-3 border rounded-xl ${accent}`} data-testid={`reasoning-row-${i}`}>
-                    <div className={`flex-none text-[10px] font-mono font-bold tracking-widest ${labelColor} pt-0.5`}>
-                      {isFire ? "FIRE" : "BLOCK"}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm text-white/90 leading-snug break-words">{e.reason}</div>
-                      <div className="flex items-center gap-2 text-[10px] font-mono text-white/40 mt-1 flex-wrap">
-                        <span>{relativeTime(e.ts)}</span>
-                        {e.regime && <span>· {e.regime}</span>}
-                        {e.setup && <span>· {e.setup}</span>}
-                        {grade && grade !== e.event_type && <span>· {grade}</span>}
-                        {e.signal_dir !== 0 && <span className={e.signal_dir > 0 ? "text-green-400" : "text-red-400"}>{dirArrow} {e.signal_dir > 0 ? "BUY" : "SELL"}</span>}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {err && <div className="text-xs text-red-400 mt-2" data-testid="reasoning-err">{err}</div>}
-        </>
-      )}
-    </div>
-  );
-}
-
-function ConnectTab({ me, onRefresh }) {
-  const [form, setForm] = useState({ broker_server: "", mt5_login: "", mt5_password: "", risk_tier: "balanced" });
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
-  const [simBalance, setSimBalance] = useState(me.last_balance || 1000);
-  const [brokerList, setBrokerList] = useState(FALLBACK_BROKER_SERVERS);
-  const [brokerLogs, setBrokerLogs] = useState([]);
-  const [compat, setCompat] = useState(null);
-  const [testingBroker, setTestingBroker] = useState(false);
-  const [serverQuery, setServerQuery] = useState("");
-  const [serverDropOpen, setServerDropOpen] = useState(false);
-  const [customServer, setCustomServer] = useState(false);
-
-  const connected = me.mt5_connected;
-  const verifyStatus = me.mt5_verification_status || "none";
-  const verifyError = me.mt5_verification_error || "";
-  const copyMeta = copyStatusMeta(me.copy_status);
-  const copyRuntimeOk = copyMeta.ok && Boolean(me.copy_logged_in) && me.copy_algo_ok !== false;
-
-  // Try the API first; if it returns a non-empty list, use it. Otherwise keep
-  // the baked-in fallback so the dropdown ALWAYS works (even if backend is older).
-  useEffect(() => {
-    let alive = true;
-    cloudAxios.get(`/cloud/mt5/brokers`)
-      .then(r => {
-        const list = r.data?.servers || [];
-        if (alive && Array.isArray(list) && list.length > 0) setBrokerList(list);
-      })
-      .catch(() => { /* silently keep fallback */ });
-    return () => { alive = false; };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    cloudAxios.get(`/cloud/mt5/logs?limit=8`)
-      .then(r => { if (alive) setBrokerLogs(r.data?.logs || []); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [me.mt5_verification_status, me.broker_last_check_at]);
-
-  useEffect(() => {
-    const server = (form.broker_server || serverQuery || me.broker_server || "").trim();
-    if (!server) { setCompat(null); return; }
-    const id = setTimeout(() => {
-      cloudAxios.get(`/cloud/mt5/compatibility`, { params: { server } })
-        .then(r => setCompat(r.data?.profile || null))
-        .catch(() => setCompat(null));
-    }, 250);
-    return () => clearTimeout(id);
-  }, [form.broker_server, serverQuery, me.broker_server]);
-
-  // Filter dropdown list by query (broker name OR server name). Empty query → first 60 items.
-  const filteredServers = (() => {
-    const q = serverQuery.trim().toLowerCase();
-    if (!q) return brokerList.slice(0, 60);
-    return brokerList.filter(b =>
-      b.broker.toLowerCase().includes(q) ||
-      b.server.toLowerCase().includes(q)
-    ).slice(0, 60);
-  })();
-
-  // Connection preview. Live workers primarily use strict mirror sizing from
-  // the master signal, then cap risk if a user's balance cannot safely support
-  // the mirrored lot. This preview is only a conservative planning guide.
-  const riskPctMap = { conservative: 0.6, balanced: 1.2, aggressive: 2.0 };
-  const tier = form.risk_tier || "balanced";
-  const riskPct = riskPctMap[tier];
-  const riskUSD = (simBalance * riskPct) / 100;
-  const assumedSLpips = 4.0; // typical M5 2.5× ATR SL in pips on XAUUSD
-  const pipValuePerLot = 100; // XAUUSD standard contract = $100 per 1-pip on 1.0 lot
-  const lotSize = riskUSD / (assumedSLpips * pipValuePerLot);
-
-  const submit = async (e) => {
-    e.preventDefault(); setErr(""); setMsg(""); setLoading(true);
-    try {
-      const res = await cloudAxios.post(`/cloud/mt5/connect`, form);
-      setMsg(res.data.message); onRefresh();
-    } catch (e) { setErr(e.response?.data?.detail || "Connect failed"); }
-    finally { setLoading(false); }
-  };
-
-  const disconnect = async () => {
-    if (!window.confirm("Remove MT5 credentials from XauAi Cloud? Open trades will not be affected.")) return;
-    setLoading(true);
-    try { await cloudAxios.post(`/cloud/mt5/disconnect`); onRefresh(); setMsg("Credentials removed."); }
-    catch (e) { setErr(e.response?.data?.detail || "Failed"); }
-    finally { setLoading(false); }
-  };
-
-  const [refreshing, setRefreshing] = useState(false);
-  const [executorStatus, setExecutorStatus] = useState({ online: null, total: null });
-  const executorOnline = (executorStatus.online || 0) > 0;
-
-  // Poll public config every 30s to know if any worker is online
-  useEffect(() => {
-    let alive = true;
-    const tick = () => {
-      cloudAxios.get(`/cloud/config`).then(r => {
-        if (!alive) return;
-        setExecutorStatus({
-          online: r.data?.executor_workers_online ?? 0,
-          total:  r.data?.executor_workers_total  ?? 0,
-        });
-      }).catch(()=>{});
-    };
-    tick();
-    const id = setInterval(tick, 30000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
-
-  const refreshBalance = async () => {
-    if (refreshing) return;
-    setRefreshing(true); setErr(""); setMsg("");
-    try {
-      const res = await cloudAxios.post(`/cloud/mt5/refresh-balance`);
-      setMsg(res.data?.message || "Refresh requested.");
-      // Poll the dashboard a few times so the user sees the new balance pop in
-      for (let i = 0; i < 6; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        await onRefresh();
-      }
-    } catch (e) { setErr(e.response?.data?.detail || "Refresh failed"); }
-    finally { setRefreshing(false); }
-  };
-
-  const testBroker = async () => {
-    if (testingBroker) return;
-    setTestingBroker(true); setErr(""); setMsg("");
-    try {
-      const res = await cloudAxios.post(`/cloud/mt5/test-connection`, { broker_server: form.broker_server || me.broker_server || serverQuery });
-      setMsg(res.data?.message || "Broker test queued.");
-      await onRefresh();
-      const logs = await cloudAxios.get(`/cloud/mt5/logs?limit=8`).catch(() => null);
-      setBrokerLogs(logs?.data?.logs || brokerLogs);
-    } catch (e) { setErr(e.response?.data?.detail || "Broker test failed"); }
-    finally { setTestingBroker(false); }
-  };
-
-  const health = me.broker_last_health || {};
-  const hasBrokerHealth = Object.keys(health).length > 0;
-
-  return (
-    <div className="max-w-5xl">
-      <div className="grid gap-3 sm:grid-cols-3 mb-5" data-testid="connect-readiness">
-        <HealthPill label="Credential vault" ok={Boolean(me.broker_server || connected)} value={me.broker_server ? "Saved" : "Empty"} />
-        <HealthPill label="Verification" ok={verifyStatus === "verified"} value={verifyStatus === "verified" ? "Passed" : verifyStatus === "pending" ? "Pending" : "Needed"} />
-        <HealthPill label="Copy runtime" ok={copyRuntimeOk} value={copyMeta.label} />
-      </div>
-
-      {(me.copy_status || me.copy_last_error || me.copy_retry_count > 0 || me.copy_algo_ok === false) && (
-        <div className={`border rounded-2xl p-4 mb-5 ${
-          copyMeta.color === "green"
-            ? "bg-green-500/10 border-green-500/20"
-            : copyMeta.color === "red"
-            ? "bg-red-500/10 border-red-500/25"
-            : "bg-amber-500/10 border-amber-500/25"
-        }`} data-testid="copy-health-panel">
-          <div className="flex items-start gap-3">
-            {copyMeta.color === "green" ? <CheckCircle2 className="w-5 h-5 text-green-400 mt-0.5 flex-none" /> : <AlertTriangle className={`w-5 h-5 mt-0.5 flex-none ${copyMeta.color === "red" ? "text-red-400" : "text-amber-300"}`} />}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="font-semibold">Account copy status: {copyMeta.label}</div>
-                <div className="text-[10px] font-mono text-white/45">worker {me.copy_worker_id || "pending"}</div>
-              </div>
-              <div className="text-xs text-white/60 mt-1 leading-relaxed">
-                {copyMeta.ok
-                  ? <>Healthy account. Copying stays active while bad accounts are skipped independently.</>
-                  : me.copy_status === "NEEDS_DEDICATED_WORKER"
-                  ? <>This account needs its own worker/MT5 terminal before live copying can run safely.</>
-                  : <>This account is isolated. Failed login or EA permission problems do not block other linked accounts.</>}
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-[11px]">
-                <div className="bg-black/30 rounded-xl p-3"><div className="text-white/35 font-mono">LOGIN</div><div className={me.copy_logged_in ? "font-mono text-green-400" : "font-mono text-amber-300"}>{me.copy_logged_in ? "ok" : "not active"}</div></div>
-                <div className="bg-black/30 rounded-xl p-3"><div className="text-white/35 font-mono">EA/ALGO</div><div className={me.copy_algo_ok === false ? "font-mono text-red-400" : "font-mono text-green-400"}>{me.copy_algo_ok === false ? "disabled" : "ok"}</div></div>
-                <div className="bg-black/30 rounded-xl p-3"><div className="text-white/35 font-mono">RETRY</div><div className="font-mono text-white">{me.copy_retry_count || 0}</div></div>
-                <div className="bg-black/30 rounded-xl p-3"><div className="text-white/35 font-mono">LAST OK</div><div className="font-mono text-white">{relativeTime(me.copy_last_success_at)}</div></div>
-              </div>
-              {me.copy_last_error && (
-                <div className="mt-3 text-xs text-red-200/90 bg-black/25 border border-red-400/20 rounded-xl p-3 break-words">
-                  {me.copy_last_error}
-                  {me.copy_next_retry_at && <span className="block text-white/45 mt-1">Next retry: {relativeTime(me.copy_next_retry_at)}</span>}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {(compat || hasBrokerHealth || brokerLogs.length > 0) && (
-        <div className="bg-black/35 border border-white/10 rounded-2xl p-4 mb-5" data-testid="broker-compatibility-panel">
-          <div className="flex items-start justify-between gap-3 mb-3">
-            <div>
-              <div className="text-xs font-mono tracking-widest text-[#D4AF37]">BROKER COMPATIBILITY</div>
-              <div className="text-sm text-white/60 mt-1">
-                {compat?.server || me.broker_server || "Select a server"} · {compat?.platform || me.broker_platform || "MT5"} · {compat?.support_status || me.broker_support_status || "pending"}
-              </div>
-            </div>
-            <button type="button" onClick={testBroker} disabled={testingBroker || !me.broker_server}
-                    className="px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-xs font-mono text-white/70 hover:border-[#D4AF37]/40 hover:text-[#D4AF37] disabled:opacity-40"
-                    data-testid="broker-test-button">
-              {testingBroker ? "TESTING..." : "TEST"}
-            </button>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/35 font-mono">SYMBOL</div><div className="font-mono text-white">{health.resolved_symbol || me.broker_symbol || "pending"}</div></div>
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/35 font-mono">LATENCY</div><div className="font-mono text-white">{me.broker_last_latency_ms ? `${me.broker_last_latency_ms}ms` : health.latency_ms ? `${health.latency_ms}ms` : "pending"}</div></div>
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/35 font-mono">TRADING</div><div className={health.trade_allowed ? "font-mono text-green-400" : "font-mono text-yellow-300"}>{health.trade_allowed ? "allowed" : "pending"}</div></div>
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/35 font-mono">ACCOUNT</div><div className="font-mono text-white">{health.account_type || "pending"}</div></div>
-          </div>
-          {verifyError && <div className="mt-3 text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl p-3">{verifyError}</div>}
-          {brokerLogs.length > 0 && (
-            <div className="mt-3 space-y-1" data-testid="broker-log-list">
-              {brokerLogs.slice(0, 3).map(l => (
-                <div key={l.id} className="text-[11px] text-white/50 flex items-center justify-between gap-3">
-                  <span className={l.ok ? "text-green-400" : "text-red-400"}>{l.ok ? "OK" : "FAIL"}</span>
-                  <span className="flex-1 truncate">{l.event} · {l.broker_server || "server pending"}</span>
-                  <span>{relativeTime(l.ts)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6 mb-5 sm:mb-6" data-testid="connect-card">
-        <div className="flex items-start gap-4 mb-6">
-          <div className="w-10 h-10 rounded-full bg-[#D4AF37]/10 border border-[#D4AF37]/20 flex items-center justify-center flex-none">
-            <Shield className="w-5 h-5 text-[#D4AF37]" />
-          </div>
-          <div>
-            <div className="font-bold mb-1">Secure credential handling</div>
-            <div className="text-sm text-white/60 leading-relaxed">
-              Your MT5 password is encrypted before storage and only the isolated execution worker can decrypt it for broker login. You can disconnect at any time, which removes the saved broker password and pauses future copying.
-            </div>
-          </div>
-        </div>
-
-        {/* Verification banner — shown for pending/rejected creds (above connected/form) */}
-        {(verifyStatus === "pending" || verifyStatus === "rejected") && (
-          <div className={`mb-4 p-4 rounded-xl border flex items-start gap-3 ${verifyStatus === "rejected" ? "bg-red-500/10 border-red-500/30" : "bg-yellow-500/10 border-yellow-500/30"}`} data-testid="verify-banner">
-            {verifyStatus === "rejected"
-              ? <XCircle className="w-5 h-5 text-red-400 flex-none mt-0.5" />
-              : <Clock  className="w-5 h-5 text-yellow-400 flex-none mt-0.5" />}
-            <div className="flex-1 min-w-0">
-              <div className={`font-semibold ${verifyStatus === "rejected" ? "text-red-400" : "text-yellow-400"}`}>
-                {verifyStatus === "rejected" ? "Broker login failed" : "Verifying broker login…"}
-              </div>
-              <div className="text-xs text-white/60 mt-1 leading-relaxed">
-                {verifyStatus === "rejected" ? (
-                  <>Our executor agent could not log in: <span className="font-mono text-red-300">{verifyError || "Invalid credentials"}</span>. Re-enter your details below.</>
-                ) : executorStatus.online === 0 ? (
-                  <>
-                    <span className="text-yellow-300 font-semibold">Waiting for an executor agent to come online.</span> Your credentials are saved &amp; encrypted. The XauAi platform team is bringing the broker-execution VPS online — verification will run automatically the moment it connects (no action needed from you). Until then you'll see <b>simulated trades</b> in your Overview tab to show how the system would have traded your account.
-                    <div className="mt-2 inline-flex items-center gap-2 px-2 py-1 rounded-md bg-black/40 border border-white/10 font-mono text-[10px]">
-                      <span className="w-2 h-2 rounded-full bg-red-400" /> Executor offline ({executorStatus.total ?? 0} workers registered)
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    Executor agent is online — verification should complete in a few seconds. Refresh to update.
-                    <div className="mt-2 inline-flex items-center gap-2 px-2 py-1 rounded-md bg-black/40 border border-white/10 font-mono text-[10px]">
-                      <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" /> Executor online · {executorStatus.online} worker{executorStatus.online === 1 ? "" : "s"}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {connected ? (
-          <div data-testid="mt5-connected-view">
-            {/* v5.1.3: live executor status — without this user can't tell if cloud is actually connected to a worker */}
-            {!executorOnline && (
-              <div className="flex items-start gap-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl mb-3" data-testid="executor-offline-banner">
-                <AlertTriangle className="w-5 h-5 text-amber-400 flex-none mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-amber-300">No cloud worker is currently online</div>
-                  <div className="text-xs text-amber-200/80 mt-1 leading-relaxed">
-                    Your trades + balance updates are paused until a worker reconnects. The "Refresh" button won't fetch a new balance until then. We're notified — you don't need to do anything.
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="flex items-start gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-xl mb-4" data-testid="verified-banner">
-              <CheckCircle2 className="w-5 h-5 text-green-400 flex-none mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <div className="font-semibold text-green-400 flex items-center gap-2 flex-wrap">
-                  MT5 Account Connected &amp; Verified
-                  {me.last_balance > 0 && (
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-green-500/20 border border-green-500/30 text-green-300" data-testid="verified-balance-pill">
-                      {(me.account_currency || "USD") + " "}
-                      {Number(me.last_balance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={refreshBalance}
-                    disabled={refreshing || !executorOnline}
-                    title={!executorOnline ? "No worker online - refresh disabled" : "Force the worker to push a fresh balance/equity snapshot from your broker"}
-                    className="ml-auto inline-flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-full bg-white/5 border border-white/15 text-white/70 hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/40 hover:text-[#D4AF37] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    data-testid="refresh-balance-btn"
-                  >
-                    {refreshing
-                      ? <><Loader2 className="w-3 h-3 animate-spin" /> SYNCING…</>
-                      : <><RefreshCw className="w-3 h-3" /> REFRESH</>}
-                  </button>
-                </div>
-                <div className="text-xs text-white/60 mt-1 leading-relaxed">
-                  <span className="font-mono text-white/80">{me.broker_server || "—"}</span>
-                  {" · "}Login <span className="font-mono text-white/80">{me.mt5_login || "—"}</span>
-                  {" · "}Risk <span className="capitalize text-white/80">{me.risk_tier || "balanced"}</span>
-                </div>
-                {me.last_balance > 0 && (
-                  <div className="text-[11px] text-white/50 mt-1.5 flex items-center gap-3 flex-wrap">
-                    <span>Balance: <span className="font-mono text-white/80">{(me.account_currency || "$")} {Number(me.last_balance).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></span>
-                    {me.last_equity > 0 && me.last_equity !== me.last_balance && (
-                      <span>Equity: <span className="font-mono text-white/80">{(me.account_currency || "$")} {Number(me.last_equity).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></span>
-                    )}
-                    {me.last_balance_updated_at && (
-                      <span className="text-white/40" data-testid="last-balance-update">
-                        updated {relativeTime(me.last_balance_updated_at)}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* v1.3 — STRICT MIRROR: lot sizes are now master-driven (master_lots × balance ratio).
-                The "Live scaling on your account" risk-tier widget was removed because it implied
-                independent risk math that no longer exists. Keep this anchor for layout. */}
-            <div className="bg-black/40 border border-[#D4AF37]/20 rounded-xl p-4 mb-4" data-testid="strict-mirror-info">
-              <div className="flex items-center gap-2 mb-2">
-                <Calculator className="w-4 h-4 text-[#D4AF37]" />
-                <div className="text-xs font-mono tracking-widest text-[#D4AF37]">STRICT 1:1 COPY MODE</div>
-              </div>
-              <div className="text-[12px] text-white/70 leading-relaxed">
-                Your account follows the master signal, then the worker adjusts lot size by balance ratio and applies a hard risk cap when needed.
-                Entry, SL, TP, and close events stay tied to the master signal so the copy account does not drift into orphan positions.
-              </div>
-              {!me.last_balance && <div className="text-[11px] text-white/40 mt-2">Worker agent will sync your balance within 60s after first connection.</div>}
-            </div>
-
-            <button onClick={disconnect} disabled={loading} className="w-full py-3 border border-red-500/30 text-red-400 rounded-xl hover:bg-red-500/10 transition-colors disabled:opacity-50" data-testid="disconnect-button">
-              Disconnect MT5 account
-            </button>
-          </div>
-        ) : verifyStatus === "pending" && me.broker_server ? (
-          <div data-testid="mt5-pending-view">
-            <div className="bg-black/40 border border-yellow-500/20 rounded-xl p-4 mb-4">
-              <div className="text-xs font-mono tracking-widest text-white/40 mb-2">CREDENTIALS ON FILE (encrypted)</div>
-              <div className="text-sm text-white/80">
-                <span className="text-white/40">Broker:</span> <span className="font-mono">{me.broker_server}</span><br/>
-                <span className="text-white/40">Login:</span> <span className="font-mono">{me.mt5_login || "—"}</span><br/>
-                <span className="text-white/40">Risk tier:</span> <span className="font-mono capitalize">{me.risk_tier || "balanced"}</span>
-              </div>
-            </div>
-            <button onClick={disconnect} disabled={loading} className="w-full py-3 border border-red-500/30 text-red-400 rounded-xl hover:bg-red-500/10 transition-colors disabled:opacity-50" data-testid="cancel-pending-button">
-              Cancel &amp; remove credentials
-            </button>
-          </div>
-        ) : (
-          <form onSubmit={submit} className="space-y-4" data-testid="mt5-connect-form">
-            {/* BROKER SERVER — searchable like MT5's broker picker */}
-            <div className="relative">
-              <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">BROKER SERVER</label>
-              {!customServer ? (
-                <>
-                  <input
-                    type="text"
-                    value={form.broker_server || serverQuery}
-                    onChange={e => { setServerQuery(e.target.value); setForm({ ...form, broker_server: "" }); setServerDropOpen(true); }}
-                    onFocus={() => setServerDropOpen(true)}
-                    onBlur={() => setTimeout(() => setServerDropOpen(false), 150)}
-                    placeholder="Search broker (e.g. Exness, IC Markets, FBS...)"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none"
-                    data-testid="mt5-server-search"
-                    autoComplete="off"
-                  />
-                  {serverDropOpen && (
-                    <div className="absolute z-30 left-0 right-0 mt-1 max-h-72 overflow-auto bg-[#111] border border-[#D4AF37]/30 rounded-xl shadow-2xl" data-testid="server-dropdown">
-                      <div className="px-4 py-2 text-[10px] font-mono tracking-widest text-white/40 border-b border-white/5 sticky top-0 bg-[#111]">
-                        {filteredServers.length} {filteredServers.length === 1 ? "MATCH" : "MATCHES"} · {brokerList.length} BROKERS
-                      </div>
-                      {filteredServers.length === 0 && (
-                        <div className="px-4 py-3 text-sm text-white/50">
-                          No match for "<span className="font-mono text-white/70">{serverQuery}</span>". Try fewer letters or
-                          <button type="button"
-                                  onMouseDown={() => { setCustomServer(true); setServerDropOpen(false); setServerQuery(""); setForm({ ...form, broker_server: "" }); }}
-                                  className="ml-1 text-[#D4AF37] hover:underline" data-testid="server-empty-custom">type custom →</button>
-                        </div>
-                      )}
-                      {filteredServers.map(b => (
-                        <button
-                          key={b.server}
-                          type="button"
-                          onMouseDown={() => { setForm({ ...form, broker_server: b.server }); setServerQuery(b.server); setServerDropOpen(false); }}
-                          data-testid={`server-option-${b.server}`}
-                          className="w-full text-left px-4 py-2.5 hover:bg-[#D4AF37]/10 border-b border-white/5 flex items-center justify-between gap-3"
-                        >
-                          <div className="flex flex-col min-w-0">
-                            <span className="font-mono text-sm truncate">{b.server}</span>
-                            <span className="text-[10px] text-white/40">{b.broker}</span>
-                          </div>
-                          <span className={`flex-none text-[10px] font-mono px-2 py-0.5 rounded-full ${b.type === "live" || b.type === "real" ? "bg-green-500/15 text-green-400 border border-green-500/30" : "bg-blue-500/15 text-blue-400 border border-blue-500/30"}`}>
-                            {b.type === "live" || b.type === "real" ? "LIVE" : "DEMO"}
-                          </span>
-                        </button>
-                      ))}
-                      <button
-                        type="button"
-                        onMouseDown={() => { setCustomServer(true); setServerDropOpen(false); setServerQuery(""); setForm({ ...form, broker_server: "" }); }}
-                        className="w-full text-left px-4 py-2.5 hover:bg-[#D4AF37]/10 text-[#D4AF37] text-sm border-t border-[#D4AF37]/20 sticky bottom-0 bg-[#111]"
-                        data-testid="server-option-custom"
-                      >
-                        + My broker isn't listed (type custom)
-                      </button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="flex gap-2">
-                  <input
-                    required
-                    value={form.broker_server}
-                    onChange={e => setForm({ ...form, broker_server: e.target.value })}
-                    placeholder="Type exact server name (e.g. YourBroker-Live)"
-                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none"
-                    data-testid="mt5-server-custom"
-                    autoComplete="off"
-                  />
-                  <button type="button" onClick={() => { setCustomServer(false); setForm({ ...form, broker_server: "" }); }}
-                          className="px-3 text-xs text-white/50 hover:text-white border border-white/10 rounded-xl"
-                          data-testid="server-back-search">Back</button>
-                </div>
-              )}
-              <div className="text-xs text-white/30 mt-1">
-                Find this in MT5 → Tools → Options → Server. Format must be <span className="font-mono text-white/50">Broker-Live</span> or <span className="font-mono text-white/50">Broker-Demo</span>.
-              </div>
-              {compat && (
-                <div className={`mt-2 text-[11px] rounded-xl px-3 py-2 border ${compat.support_status === "curated" ? "bg-green-500/10 border-green-500/20 text-green-300" : "bg-yellow-500/10 border-yellow-500/20 text-yellow-200"}`} data-testid="server-compatibility-hint">
-                  {compat.support_status === "curated" ? "Curated MT5 server" : "Custom MT5 server"} · {compat.notes}
-                </div>
-              )}
-            </div>
-            <div>
-              <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">MT5 LOGIN (ACCOUNT NUMBER)</label>
-              <input required value={form.mt5_login} onChange={e=>setForm({...form, mt5_login: e.target.value})} placeholder="e.g. 10023456"
-                     className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" data-testid="mt5-login" />
-            </div>
-            <div>
-              <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">MT5 PASSWORD</label>
-              <input type="password" required value={form.mt5_password} onChange={e=>setForm({...form, mt5_password: e.target.value})}
-                     className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" data-testid="mt5-password" />
-              <div className="text-xs text-white/30 mt-1">Encrypted with Fernet-AES before storage. Never logged.</div>
-            </div>
-            <div>
-              <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">RISK TIER</label>
-              <div className="grid grid-cols-3 gap-2">
-                {["conservative","balanced","aggressive"].map(t=>(
-                  <button key={t} type="button" onClick={()=>setForm({...form, risk_tier: t})} data-testid={`risk-${t}`}
-                          className={`py-2.5 rounded-xl border transition-colors capitalize text-sm ${form.risk_tier===t?"bg-[#D4AF37]/10 border-[#D4AF37]/40 text-[#D4AF37]":"bg-white/5 border-white/10 text-white/70 hover:bg-white/10"}`}>
-                    {t}
-                  </button>
-                ))}
-              </div>
-              <div className="text-xs text-white/30 mt-1">Used as a fallback and safety cap. Normal live copying mirrors master lots by balance ratio.</div>
-            </div>
-
-            {/* Copy safety preview */}
-            <div className="bg-black/40 border border-[#D4AF37]/20 rounded-xl p-4" data-testid="scaling-preview">
-              <div className="flex items-center gap-2 mb-3">
-                <Calculator className="w-4 h-4 text-[#D4AF37]" />
-                <div className="text-xs font-mono tracking-widest text-[#D4AF37]">COPY SAFETY PREVIEW</div>
-              </div>
-              <div className="mb-3">
-                <label className="block text-[10px] font-mono tracking-widest text-white/50 mb-1">SIMULATED BALANCE (USD)</label>
-                <input type="number" value={simBalance} min={100} step={100}
-                       onChange={e=>setSimBalance(Math.max(100, Number(e.target.value)||0))}
-                       className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 font-mono text-sm focus:border-[#D4AF37] outline-none"
-                       data-testid="sim-balance-input" />
-                <div className="text-[10px] text-white/30 mt-1">Planning guide only. Live lots come from the master signal and your balance ratio.</div>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="bg-white/5 rounded-lg p-3" data-testid="preview-risk-pct">
-                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">RISK PER TRADE</div>
-                  <div className="text-lg font-bold font-mono text-[#D4AF37]">{riskPct}%</div>
-                </div>
-                <div className="bg-white/5 rounded-lg p-3" data-testid="preview-risk-usd">
-                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">$ RISKED</div>
-                  <div className="text-lg font-bold font-mono text-white">${riskUSD.toFixed(0)}</div>
-                </div>
-                <div className="bg-white/5 rounded-lg p-3" data-testid="preview-lot-size">
-                  <div className="text-[9px] font-mono tracking-widest text-white/40 mb-1">FALLBACK LOT</div>
-                  <div className="text-lg font-bold font-mono text-green-400">{lotSize.toFixed(2)}</div>
-                </div>
-              </div>
-              <div className="mt-3 pt-3 border-t border-white/5 space-y-1 text-[11px] text-white/50">
-                <div>- Worker auto-fits oversize master lots to the configured cap instead of blindly copying dangerous exposure.</div>
-                <div>- If the fitted lot falls below broker minimum, the worker skips and reports the reason in activity logs.</div>
-                <div>- Balance refresh and verification require at least one online executor VPS.</div>
-                <div>- Suggested max planning risk: <span className="font-mono">${riskUSD.toFixed(0)}</span> at the selected tier.</div>
-              </div>
-            </div>
-            {msg && <div className="text-green-400 text-sm" data-testid="connect-msg">{msg}</div>}
-            {err && <div className="text-red-400 text-sm" data-testid="connect-err">{err}</div>}
-            <button type="submit" disabled={loading} className="w-full py-3 bg-[#D4AF37] text-black font-semibold rounded-xl hover:bg-[#E5C558] transition-colors disabled:opacity-50 flex items-center justify-center gap-2" data-testid="connect-submit">
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-              {loading ? "Connecting…" : "Connect MT5 account →"}
-            </button>
-          </form>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function BillingTab({ me, onRefresh }) {
-  const [cfg, setCfg] = useState(null);
-  const [selectedPlan, setSelectedPlan] = useState("pro");
-  const [method, setMethod] = useState("crypto");
-  const [reference, setReference] = useState("");
-  const [notes, setNotes] = useState("");
-  const [proofImage, setProofImage] = useState("");   // base64 data URL
-  const [proofName, setProofName] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
-  const [copied, setCopied] = useState("");
-  const [payments, setPayments] = useState([]);
-  // v5.1.4: manual currency picker — production CDN may not expose CF-IPCountry,
-  // so we let the user pick. Persists in localStorage so they only set it once.
-  const [chosenCurrency, setChosenCurrency] = useState(
-    () => localStorage.getItem("xauai_pref_currency") || "");
-
-  useEffect(() => {
-    cloudAxios.get(`/cloud/config`).then(r => {
-      setCfg(r.data);
-      if (!chosenCurrency && r.data?.user_currency) setChosenCurrency(r.data.user_currency);
-    }).catch(() => {});
-    cloudAxios.get(`/cloud/payments/my`).then(r => setPayments(r.data.payments || [])).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const setCurrency = (ccy) => {
-    setChosenCurrency(ccy);
-    if (ccy) localStorage.setItem("xauai_pref_currency", ccy);
-    else     localStorage.removeItem("xauai_pref_currency");
-  };
-
-  const copy = (txt, key) => { navigator.clipboard.writeText(txt); setCopied(key); setTimeout(()=>setCopied(""),2000); };
-
-  const onProofPick = (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    if (f.size > 5 * 1024 * 1024) { setErr("Proof image must be under 5 MB"); return; }
-    const r = new FileReader();
-    r.onload = () => { setProofImage(r.result); setProofName(f.name); setErr(""); };
-    r.readAsDataURL(f);
-  };
-
-  const submit = async (e) => {
-    e.preventDefault(); setErr(""); setMsg(""); setLoading(true);
-    try {
-      const plan = cfg.plans[selectedPlan];
-      const ccy = chosenCurrency || cfg.user_currency || "USD";
-      const rate = (cfg.fx_rates && cfg.fx_rates[ccy]) || 1;
-      const localAmount = +(plan.price_usd * rate).toFixed(2);
-      const res = await cloudAxios.post(`/cloud/payments/submit`, {
-        plan: selectedPlan,
-        method,
-        amount_usd: plan.price_usd,
-        reference,
-        notes,
-        proof_image: method === "bank" ? proofImage : "",
-        paid_currency: method === "bank" ? ccy : "USD",
-        paid_amount_local: method === "bank" ? localAmount : plan.price_usd,
-      });
-      setMsg(res.data.message);
-      setReference(""); setNotes(""); setProofImage(""); setProofName("");
-      const p = await cloudAxios.get(`/cloud/payments/my`); setPayments(p.data.payments || []);
-      onRefresh();
-    } catch (e) { setErr(e.response?.data?.detail || "Submit failed"); }
-    finally { setLoading(false); }
-  };
-
-  if (!cfg) return <Loader2 className="w-6 h-6 animate-spin text-[#D4AF37]" />;
-
-  const userCcy = chosenCurrency || cfg.user_currency || "USD";
-  const fxRate = (cfg.fx_rates && cfg.fx_rates[userCcy]) || 1;
-  const planPrice = cfg.plans[selectedPlan]?.price_usd || 0;
-  const localPrice = (planPrice * fxRate).toLocaleString(undefined, { maximumFractionDigits: 2 });
-  const showLocal = method === "bank" && userCcy !== "USD";
-  const fxOptions = Object.keys(cfg.fx_rates || { USD: 1 });
-
-  return (
-    <div className="space-y-6">
-      {/* Current subscription status */}
-      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="subscription-status">
-        <div className="text-xs font-mono tracking-widest text-white/40 mb-2">CURRENT PLAN</div>
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <div className="text-2xl font-bold capitalize">{me.plan || "—"} · <span className={`text-sm font-mono ${me.status==="active"?"text-green-400":"text-[#D4AF37]"}`}>{me.status?.toUpperCase()}</span></div>
-            <div className="text-sm text-white/60 mt-1">{me.days_remaining != null ? `${me.days_remaining} day(s) remaining` : "—"}</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Plan selection */}
-      <div>
-        <div className="text-xs font-mono tracking-widest text-white/40 mb-3">SELECT PLAN</div>
-        <div className="grid md:grid-cols-2 gap-4">
-          {Object.entries(cfg.plans).map(([id, p]) => (
-            <button key={id} onClick={()=>setSelectedPlan(id)} data-testid={`select-plan-${id}`}
-                    className={`text-left p-6 rounded-2xl border transition-all ${selectedPlan===id ? "bg-[#D4AF37]/10 border-[#D4AF37]/40" : "bg-white/5 border-white/10 hover:bg-white/10"}`}>
-              <div className="text-xs font-mono tracking-widest text-white/50 mb-1">{p.name.toUpperCase()}</div>
-              <div className="flex items-baseline gap-1 mb-2"><span className="text-3xl font-bold">${p.price_usd}</span><span className="text-white/50 text-sm">/mo</span></div>
-              <div className="text-sm text-white/60">{p.description}</div>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Payment method + instructions */}
-      <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="payment-instructions">
-        <div className="text-xs font-mono tracking-widest text-white/40 mb-3">PAYMENT METHOD</div>
-        <div className="grid grid-cols-2 gap-2 mb-5">
-          {[{id:"crypto",label:"Crypto"},{id:"bank",label:"Bank transfer"}].map(m => (
-            <button key={m.id} type="button" onClick={()=>setMethod(m.id)} data-testid={`method-${m.id}`}
-                    className={`py-2.5 rounded-xl border transition-colors text-sm ${method===m.id?"bg-[#D4AF37]/10 border-[#D4AF37]/40 text-[#D4AF37]":"bg-white/5 border-white/10 text-white/70 hover:bg-white/10"}`}>
-              {m.label}
-            </button>
-          ))}
-        </div>
-
-        {method === "crypto" && (
-          <div className="space-y-3" data-testid="crypto-details">
-            {cfg.crypto_wallets.length === 0 ? (
-              <div className="text-sm text-white/50 p-4 bg-white/5 rounded-xl">Crypto payment addresses are being configured. Please try bank transfer or contact support.</div>
-            ) : cfg.crypto_wallets.map((w,i)=>(
-              <div key={i} className="p-4 bg-black/40 border border-white/5 rounded-xl">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="text-xs font-mono tracking-widest text-white/50">{w.asset} · {w.network}</div>
-                  <button type="button" onClick={()=>copy(w.address, `w${i}`)} className="text-xs text-[#D4AF37] flex items-center gap-1" data-testid={`copy-wallet-${i}`}>
-                    {copied===`w${i}` ? "Copied!" : <>Copy <Copy className="w-3 h-3" /></>}
-                  </button>
-                </div>
-                <div className="font-mono text-sm break-all">{w.address}</div>
-              </div>
-            ))}
-            <div className="text-sm text-white/60 p-3 bg-[#D4AF37]/5 border border-[#D4AF37]/20 rounded-xl">
-              Send exactly <span className="font-mono text-[#D4AF37]">${planPrice}</span> worth of crypto to the address above, then submit the transaction hash below.
-            </div>
-          </div>
-        )}
-        {method === "bank" && (
-          <div className="space-y-3" data-testid="bank-details">
-            {/* v5.1.4: manual currency picker — guarantees FX conversion works even when CDN headers don't expose country */}
-            <div className="p-3 bg-white/[0.03] border border-white/10 rounded-xl" data-testid="currency-picker-row">
-              <label className="text-[10px] font-mono tracking-widest text-white/50 mb-1.5 flex items-center gap-2">
-                YOUR CURRENCY
-                {chosenCurrency && chosenCurrency !== (cfg.user_currency || "USD") && (
-                  <span className="text-[9px] font-normal text-[#D4AF37] normal-case tracking-normal">(manually selected)</span>
-                )}
-              </label>
-              <select
-                value={userCcy}
-                onChange={(e) => setCurrency(e.target.value)}
-                data-testid="currency-picker"
-                className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm font-mono focus:border-[#D4AF37] outline-none"
-              >
-                {fxOptions.map((c) => (
-                  <option key={c} value={c}>{c}{c === "USD" ? "" : ` — pay ${c} ${(planPrice * (cfg.fx_rates[c] || 1)).toLocaleString(undefined,{maximumFractionDigits:2})}`}</option>
-                ))}
-              </select>
-              <div className="text-[10px] text-white/40 mt-1.5">Pick your bank's currency to see the exact local-currency amount to transfer.</div>
-            </div>
-            {showLocal && (
-              <div className="p-4 bg-[#D4AF37]/5 border border-[#D4AF37]/30 rounded-xl text-sm" data-testid="fx-conversion">
-                <div className="text-xs font-mono tracking-widest text-[#D4AF37] mb-1">PAY THIS AMOUNT</div>
-                <div className="text-2xl font-bold">{userCcy} {localPrice}</div>
-                <div className="text-xs text-white/50 mt-1">≈ ${planPrice} USD · rate 1 USD = {fxRate} {userCcy}</div>
-              </div>
-            )}
-            {cfg.bank_accounts.length === 0 ? (
-              <div className="text-sm text-white/50 p-4 bg-white/5 rounded-xl">Bank accounts are being configured. Please try crypto or contact support.</div>
-            ) : cfg.bank_accounts.map((b,i)=>(
-              <div key={i} className="p-4 bg-black/40 border border-white/5 rounded-xl text-sm space-y-1" data-testid={`bank-row-${i}`}>
-                <div><span className="text-white/40">Bank:</span> <span className="font-semibold">{b.bank_name}</span></div>
-                <div><span className="text-white/40">Account name:</span> <span className="font-mono">{b.account_name}</span></div>
-                <div><span className="text-white/40">Account #:</span> <span className="font-mono">{b.account_number}</span></div>
-                {b.swift && <div><span className="text-white/40">SWIFT:</span> <span className="font-mono">{b.swift}</span></div>}
-                {b.country && <div><span className="text-white/40">Country:</span> {b.country}</div>}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Submit payment proof */}
-      <form onSubmit={submit} className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="payment-submit-form">
-        <div className="text-xs font-mono tracking-widest text-white/40 mb-4">SUBMIT PAYMENT CONFIRMATION</div>
-        <div className="text-sm text-white/60 mb-4">After you've sent payment, submit the transaction reference{method==="bank"?" plus a screenshot of the transfer":""} below. Admin verifies within 24 hours and activates your subscription.</div>
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">TRANSACTION REFERENCE</label>
-            <input value={reference} onChange={e=>setReference(e.target.value)} required placeholder={method==="crypto"?"transaction hash":"bank reference / receipt #"}
-                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none font-mono text-sm" data-testid="payment-reference" />
-          </div>
-          {method === "bank" && (
-            <div>
-              <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">PROOF OF PAYMENT (SCREENSHOT) *</label>
-              <input type="file" accept="image/*" onChange={onProofPick} required
-                     className="w-full text-sm text-white/70 file:bg-[#D4AF37]/10 file:text-[#D4AF37] file:border-0 file:rounded-lg file:px-4 file:py-2 file:mr-3 file:font-semibold file:cursor-pointer"
-                     data-testid="payment-proof-upload" />
-              {proofImage && (
-                <div className="mt-2 flex items-center gap-3" data-testid="proof-preview">
-                  <img src={proofImage} alt="proof" className="h-20 w-20 object-cover rounded-lg border border-white/10" />
-                  <div className="text-xs text-white/60 font-mono">{proofName}</div>
-                </div>
-              )}
-            </div>
-          )}
-          <div>
-            <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">NOTES (OPTIONAL)</label>
-            <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} placeholder="Anything we should know"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none text-sm" data-testid="payment-notes" />
-          </div>
-          {msg && <div className="text-green-400 text-sm" data-testid="pay-msg">{msg}</div>}
-          {err && <div className="text-red-400 text-sm" data-testid="pay-err">{err}</div>}
-          <button type="submit" disabled={loading || (method==="bank" && !proofImage)} className="w-full py-3 bg-[#D4AF37] text-black font-semibold rounded-xl hover:bg-[#E5C558] transition-colors disabled:opacity-50 flex items-center justify-center gap-2" data-testid="payment-submit">
-            <CreditCard className="w-4 h-4" /> {loading ? "Submitting…" : `Submit ${cfg.plans[selectedPlan].name} payment ($${cfg.plans[selectedPlan].price_usd}${showLocal?` ≈ ${userCcy} ${localPrice}`:""})`}
+      <nav className="sticky top-0 z-40 border-b border-white/10 bg-[#050505]/90 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          <Link to="/command" className="flex min-w-0 items-center gap-3">
+            <XauAiLogo size={34} className="flex-none" />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-black">XAU AI Sniper Command Center</span>
+              <span className="block truncate font-mono text-[9px] uppercase tracking-[0.22em] text-white/38">
+                Monitor + PIN-safe control
+              </span>
+            </span>
+          </Link>
+          <button onClick={logout} className="rounded-full border border-white/10 p-2 text-white/55">
+            <LogOut className="h-4 w-4" />
           </button>
         </div>
-      </form>
+      </nav>
 
-      {/* Payment history */}
-      {payments.length > 0 && (
-        <div className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-2xl p-4 sm:p-6" data-testid="payment-history">
-          <div className="text-xs font-mono tracking-widest text-white/40 mb-4">PAYMENT HISTORY</div>
-          <div className="space-y-2">
-            {payments.map((p,i)=>(
-              <div key={p.id} className="flex items-center justify-between p-3 bg-black/30 rounded-xl text-sm" data-testid={`history-row-${i}`}>
-                <div>
-                  <div className="font-semibold capitalize">{p.plan} · {p.method}</div>
-                  <div className="text-xs text-white/40 font-mono">{p.reference}</div>
-                </div>
-                <div className="text-right">
-                  <div className="font-mono font-semibold">${p.amount_usd}</div>
-                  <div className={`text-xs font-mono mt-0.5 ${p.status==="approved"?"text-green-400":p.status==="rejected"?"text-red-400":"text-[#D4AF37]"}`}>
-                    {p.status==="pending"?<><Clock className="w-3 h-3 inline mr-1" />PENDING</>:p.status.toUpperCase()}
-                  </div>
-                </div>
+      <main className="mx-auto max-w-7xl space-y-4 px-4 py-5 sm:px-6 sm:py-8">
+        <section className={`rounded-[28px] border p-5 ${severityClass(mainStatus === "red" ? "CRITICAL" : mainStatus === "yellow" ? "WARNING" : "TRADE")}`} data-testid="bot-status-card">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-white/45">
+                <StatusDot status={mainStatus} /> Bot Activity Monitor
+              </div>
+              <h1 className="text-3xl font-black tracking-tight sm:text-5xl">{statusText}</h1>
+              <p className="mt-2 text-sm text-white/58">
+                Last heartbeat {relativeTime(heartbeat.last_heartbeat || heartbeat.ts)} · EA {heartbeat.ea_version || "unknown"} · {heartbeat.symbol || "XAUUSD"} {heartbeat.timeframe || "M5"}
+              </p>
+            </div>
+            <button onClick={fetchAll} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-3 text-sm font-bold">
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </button>
+          </div>
+        </section>
+
+        {alerts.length > 0 && (
+          <section className="space-y-2">
+            {alerts.map((alert, index) => (
+              <div key={`${alert.type}-${index}`} className={`rounded-2xl border p-3 text-sm ${severityClass(alert.severity)}`}>
+                <AlertTriangle className="mr-2 inline h-4 w-4" />
+                <span className="font-bold">{alert.type}</span> · {alert.message}
               </div>
             ))}
+          </section>
+        )}
+
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Card title="MT5 connection" value={heartbeat.mt5_connected ? "Connected" : "Disconnected"} detail={heartbeat.broker_server || "Broker unknown"} status={heartbeat.mt5_connected ? "green" : "red"} />
+          <Card title="Algo trading" value={heartbeat.algo_trading ? "Enabled" : "Disabled"} detail={heartbeat.trading_allowed ? "Trading allowed" : "Trading blocked"} status={heartbeat.algo_trading && heartbeat.trading_allowed ? "green" : "red"} />
+          <Card title="Account" value={heartbeat.account_number || "Not linked"} detail={`${heartbeat.broker_server || "Broker"} · ${me.status || "license"}`} status={heartbeat.account_connected ? "green" : "yellow"} />
+          <Card title="Intelligence sync" value={status?.intelligence_sync_state || heartbeat.sync_state || "Unknown"} detail={`EPF ${status?.equity_protection_state || heartbeat.epf_state || "T0"}`} status={String(heartbeat.sync_state || "").startsWith("OK") ? "green" : "yellow"} />
+        </section>
+
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Card title="Balance" value={money(heartbeat.balance)} detail={`Equity ${money(heartbeat.equity)}`} status="green" />
+          <Card title="Floating / DD" value={`${drawdown.toFixed(2)}%`} detail={`Daily PnL ${money(heartbeat.daily_pnl)}`} status={drawdown > 5 ? "red" : drawdown > 2 ? "yellow" : "green"} />
+          <Card title="Open trades" value={openTrades} detail={`Spread ${heartbeat.spread ?? "-"} pts`} status={Number(openTrades) > 0 ? "yellow" : "green"} />
+          <Card title="Last action" value={heartbeat.last_action || "Waiting"} detail={heartbeat.last_decision_time ? `Decision ${relativeTime(heartbeat.last_decision_time)}` : "No decision yet"} status="yellow" />
+        </section>
+
+        <section className="rounded-[24px] border border-white/10 bg-white/[0.045] p-4">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-widest text-white/40">Safe remote commands</div>
+              <div className="mt-1 text-sm text-white/55">
+                PIN + confirmation required. Commands are queued, then the EA must poll, validate, execute, and acknowledge them.
+              </div>
+            </div>
+            <KeyRound className="h-5 w-5 text-amber-200" />
           </div>
-        </div>
-      )}
+          <div className="grid gap-2 sm:grid-cols-3">
+            {COMMANDS.map(([action, label, Icon, tone]) => (
+              <button
+                key={action}
+                onClick={() => sendCommand(action)}
+                className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-3 text-xs font-black ${
+                  tone === "red"
+                    ? "border-red-400/25 bg-red-500/[0.08] text-red-200"
+                    : tone === "green"
+                    ? "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-200"
+                    : "border-amber-300/25 bg-amber-300/[0.08] text-amber-100"
+                }`}
+              >
+                <Icon className="h-4 w-4" /> {label}
+              </button>
+            ))}
+          </div>
+          {commandMsg && (
+            <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.08] p-3 text-xs text-amber-100">
+              {commandMsg}
+            </div>
+          )}
+        </section>
+
+        <section className="grid gap-3 lg:grid-cols-3">
+          <MiniRecord title="Last signal" record={status?.last_signal} />
+          <MiniRecord title="Last trade" record={status?.last_trade} />
+          <MiniRecord title="Last blocked trade" record={status?.last_blocked_trade} />
+        </section>
+
+        <section className="rounded-[24px] border border-white/10 bg-white/[0.045] p-4">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-white/40">
+                <Activity className="h-4 w-4 text-amber-200" /> Live activity feed
+              </div>
+              <div className="mt-1 text-sm text-white/55">Trades, blocks, sync events, exits, shadow results, risk and errors.</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {FILTERS.map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => setFilter(id)}
+                  data-testid={id === "trades" ? "activity-filter-trade" : undefined}
+                  className={`rounded-full px-3 py-1.5 text-[11px] font-bold ${
+                    filter === id ? "bg-amber-300 text-black" : "border border-white/10 bg-white/[0.05] text-white/60"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {events.length === 0 ? (
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-6 text-center text-sm text-white/45">
+                No monitor events yet. The EA will populate this when heartbeat/activity posts are enabled.
+              </div>
+            ) : (
+              events.map((event, index) => (
+                <div key={event.id || index} className={`rounded-2xl border p-3 ${severityClass(event.severity)}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-mono text-[10px] uppercase tracking-widest text-white/45">
+                        {event.severity || "INFO"} · {event.event_type}
+                      </div>
+                      <div className="mt-1 break-words text-sm">{event.message}</div>
+                      <div className="mt-1 text-[11px] text-white/45">
+                        {event.symbol || heartbeat.symbol || "XAUUSD"} · {event.account || heartbeat.account_number || "account"} · {relativeTime(event.ts)}
+                      </div>
+                    </div>
+                    {String(event.severity || "").toUpperCase() === "TRADE" ? (
+                      <CheckCircle2 className="h-5 w-5 flex-none" />
+                    ) : (
+                      <Clock className="h-5 w-5 flex-none opacity-50" />
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      </main>
     </div>
   );
 }

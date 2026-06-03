@@ -18,7 +18,7 @@ function detectPlatform() {
 /**
  * InstallAppPrompt
  * Shows a native-like "Install as app" banner on mobile the first time
- * a user visits /cloud. iOS → instruction card (Safari can't do programmatic
+ * a user visits /command. iOS → instruction card (Safari can't do programmatic
  * install). Android/Chrome → uses beforeinstallprompt and one-tap install.
  */
 export default function InstallAppPrompt() {
@@ -74,8 +74,9 @@ export default function InstallAppPrompt() {
 
   if (!show || platform.isStandalone) return null;
 
-  // Detect if there's a bottom nav on this page (/cloud/dashboard has one on mobile)
-  const hasBottomNav = typeof window !== "undefined" && window.location.pathname.startsWith("/cloud/dashboard");
+  // Detect if there's a bottom nav on this page (/command/dashboard has one on mobile)
+  const hasBottomNav = typeof window !== "undefined" &&
+    (window.location.pathname.startsWith("/command/dashboard") || window.location.pathname.startsWith("/cloud/dashboard"));
   const bottomOffset = hasBottomNav ? 76 : 12;
 
   return (
@@ -92,7 +93,7 @@ export default function InstallAppPrompt() {
               <Smartphone className="w-5 h-5" />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="font-bold text-white text-sm">Install XauAi Cloud app</div>
+              <div className="font-bold text-white text-sm">Install Command Center app</div>
               <div className="text-[11px] text-white/60">
                 {platform.isIOS ? "Tap Share → Add to Home Screen" : "One-tap install — opens like a native app"}
               </div>
@@ -149,7 +150,7 @@ export default function InstallAppPrompt() {
                 <span className="w-6 h-6 rounded-full bg-[#D4AF37] text-black text-xs font-bold flex items-center justify-center flex-none">3</span>
                 <div className="flex-1">
                   <div className="text-white font-medium">Tap "Add"</div>
-                  <div className="text-[11px] text-white/50">XauAi Cloud icon will appear on your home screen — opens full-screen like a real app</div>
+                  <div className="text-[11px] text-white/50">XAU AI Sniper Command Center will appear on your home screen and open full-screen like a real app</div>
                 </div>
               </li>
             </ol>

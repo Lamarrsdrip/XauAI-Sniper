@@ -1,11 +1,11 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { Cloud, Loader2 } from "lucide-react";
+import { RadioTower, Loader2 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import { API } from "@/lib/api";
 
-// Scoped axios instance for cloud auth — avoids polluting global axios defaults
+// Scoped axios instance for Command Center auth — avoids polluting global axios defaults
 // that could leak into the admin portal if the same browser session uses both.
 const cloudAxios = axios.create({ baseURL: API, withCredentials: true });
 cloudAxios.interceptors.request.use((cfg) => {
@@ -20,9 +20,9 @@ function AuthShell({ title, subtitle, children }) {
       <InstallAppPrompt />
       <nav className="border-b border-white/5 backdrop-blur-xl bg-[#050505]/80">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link to="/cloud" className="flex items-center gap-2" data-testid="auth-logo-link">
-            <Cloud className="w-6 h-6 text-[#D4AF37]" />
-            <span className="font-bold tracking-tight text-lg">XauAi Cloud</span>
+          <Link to="/command" className="flex items-center gap-2" data-testid="auth-logo-link">
+            <RadioTower className="w-6 h-6 text-[#D4AF37]" />
+            <span className="font-bold tracking-tight text-lg">XAU AI Sniper Command Center</span>
           </Link>
         </div>
       </nav>
@@ -48,13 +48,13 @@ export function CloudSignup() {
     try {
       const res = await cloudAxios.post(`/cloud/auth/signup`, form);
       localStorage.setItem("cloud_token", res.data.token);
-      nav("/cloud/dashboard");
+      nav("/command/dashboard");
     } catch (e) { setErr(e.response?.data?.detail || "Signup failed"); }
     finally { setLoading(false); }
   };
 
   return (
-    <AuthShell title="Start your 7-day trial" subtitle="No credit card required. Cancel anytime.">
+    <AuthShell title="Create Command Center account" subtitle="Access your license, setup flow, heartbeat monitor, and PIN-safe controls.">
       <form onSubmit={submit} className="space-y-4" data-testid="signup-form">
         <div>
           <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">FULL NAME</label>
@@ -80,10 +80,10 @@ export function CloudSignup() {
         {err && <div className="text-red-400 text-sm" data-testid="signup-error">{err}</div>}
         <button type="submit" disabled={loading} className="w-full py-3 bg-[#D4AF37] text-black font-semibold rounded-xl hover:bg-[#E5C558] transition-colors disabled:opacity-50 flex items-center justify-center gap-2" data-testid="signup-submit">
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-          {loading ? "Creating account…" : "Start free trial →"}
+          {loading ? "Creating account…" : "Create account →"}
         </button>
         <div className="text-sm text-center text-white/50">
-          Already have an account? <Link to="/cloud/login" className="text-[#D4AF37] hover:underline" data-testid="signup-go-login">Log in</Link>
+          Already have an account? <Link to="/command/login" className="text-[#D4AF37] hover:underline" data-testid="signup-go-login">Log in</Link>
         </div>
       </form>
     </AuthShell>
@@ -101,13 +101,13 @@ export function CloudLogin() {
     try {
       const res = await cloudAxios.post(`/cloud/auth/login`, form);
       localStorage.setItem("cloud_token", res.data.token);
-      nav("/cloud/dashboard");
+      nav("/command/dashboard");
     } catch (e) { setErr(e.response?.data?.detail || "Login failed"); }
     finally { setLoading(false); }
   };
 
   return (
-    <AuthShell title="Welcome back" subtitle="Log in to your XauAi Cloud dashboard">
+    <AuthShell title="Welcome back" subtitle="Log in to your XAU AI Sniper Command Center">
       <form onSubmit={submit} className="space-y-4" data-testid="login-form">
         <div>
           <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">EMAIL</label>
@@ -125,7 +125,7 @@ export function CloudLogin() {
           {loading ? "Logging in…" : "Log in →"}
         </button>
         <div className="text-sm text-center text-white/50">
-          Don't have an account? <Link to="/cloud/signup" className="text-[#D4AF37] hover:underline" data-testid="login-go-signup">Start free trial</Link>
+          Don't have an account? <Link to="/command/signup" className="text-[#D4AF37] hover:underline" data-testid="login-go-signup">Create account</Link>
         </div>
       </form>
     </AuthShell>

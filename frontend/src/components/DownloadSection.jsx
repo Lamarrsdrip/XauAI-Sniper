@@ -11,14 +11,14 @@ export default function DownloadSection({ api }) {
               <DownloadSimple size={12} weight="bold" /> Download center
             </span>
             <h2 className="mt-5 max-w-3xl font-heading text-3xl font-semibold tracking-tight sm:text-5xl" data-testid="download-title">
-              Latest master build: v5.8.44 Startup Sync Intelligence.
+              Latest master build: v5.8.45 Bot Activity Monitor.
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
               This is the current build from this workspace. Public downloads are sanitized by the backend for customer safety; admin master download remains protected.
             </p>
           </div>
-          <a href="/cloud" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
-            <CloudArrowUp size={16} weight="bold" /> Use cloud copy
+          <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
+            <CloudArrowUp size={16} weight="bold" /> Open Command Center
           </a>
         </div>
 
@@ -32,7 +32,7 @@ export default function DownloadSection({ api }) {
                 <div>
                   <h3 className="font-heading text-2xl font-semibold">Expert Advisor (.mq5)</h3>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                    Includes v5.8.44 startup intelligence sync, accelerated score-only learning, market snapshot reports, local-first trading intelligence CSV/JSONL reports, executed-trade outcome learning, blocked-trade outcome monitoring, entry timing memory management, smart pyramid guard, pullback-location timing guard, fast-volatility handling, adaptive rescue adds, stale-indicator recovery, live scan watchdogs, adaptive daily caps, and account-size scaling.
+                    Includes v5.8.45 Command Center heartbeat, offline alerts, PIN-safe command queue, startup intelligence sync, accelerated score-only learning, market snapshot reports, local-first trading intelligence CSV/JSONL reports, executed-trade outcome learning, blocked-trade outcome monitoring, entry timing memory management, smart pyramid guard, pullback-location timing guard, fast-volatility handling, adaptive rescue adds, stale-indicator recovery, live scan watchdogs, adaptive daily caps, and account-size scaling.
                   </p>
                 </div>
               </div>
@@ -41,7 +41,7 @@ export default function DownloadSection({ api }) {
 
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               {[
-                ["Version", "5.8.44"],
+                ["Version", "5.8.45"],
                 ["File", "MQ5 source"],
                 ["Risk", "Account-sized"],
               ].map(([k, v]) => (
@@ -54,10 +54,10 @@ export default function DownloadSection({ api }) {
 
             <div className="mt-6 flex flex-col gap-3 sm:flex-row">
               <a href={`${api}/download/ea`} data-testid="download-ea-button" className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
-                <DownloadSimple size={17} weight="bold" /> Download v5.8.44 .MQ5
+                <DownloadSimple size={17} weight="bold" /> Download v5.8.45 .MQ5
               </a>
-              <a href="/cloud" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
-                Cloud setup
+              <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
+                Command setup
               </a>
             </div>
           </div>
@@ -81,7 +81,7 @@ export default function DownloadSection({ api }) {
                 <ShieldCheck size={18} weight="fill" /> Safer by design
               </div>
               <p className="text-sm leading-6 text-white/56">
-                The customer endpoint strips cloud-master fanout settings before download. Use the admin portal only for protected master files.
+                The customer endpoint strips protected operator settings before download. Use the admin portal only for protected master files.
               </p>
             </div>
           </div>

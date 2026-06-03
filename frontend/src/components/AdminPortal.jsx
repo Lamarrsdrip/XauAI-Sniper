@@ -57,7 +57,7 @@ export default function AdminPortal({ api }) {
           {[
             { id: "dashboard", label: "DASHBOARD", icon: House },
             { id: "pins", label: "LICENSES", icon: Key },
-            { id: "cloud", label: "XAUAI CLOUD", icon: ChartBar },
+            { id: "cloud", label: "COMMAND CENTER", icon: ChartBar },
             { id: "settings", label: "SETTINGS", icon: GearSix },
             { id: "configurator", label: "EA CONFIG", icon: ChartBar },
             { id: "transactions", label: "PAYMENTS", icon: CurrencyNgn },
@@ -1145,7 +1145,7 @@ function CloudAdminTab({ api, token }) {
                     });
                     const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/octet-stream" }));
                     const a = document.createElement("a");
-                    a.href = url; a.download = "XAUUSD_AI_Sniper_EA_MASTER_v5.8.44_STARTUP_SYNC_INTELLIGENCE.mq5";
+                    a.href = url; a.download = "XAUUSD_AI_Sniper_EA_MASTER_v5.8.45_BOT_ACTIVITY_MONITOR.mq5";
                     document.body.appendChild(a); a.click(); a.remove();
                     window.URL.revokeObjectURL(url);
                   } catch(e){ alert(e.response?.data?.detail || "Master EA download failed"); }

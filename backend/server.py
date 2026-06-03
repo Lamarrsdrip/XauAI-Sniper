@@ -396,7 +396,7 @@ async def download_ea():
     return Response(
         content=sanitized,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.44_STARTUP_SYNC_INTELLIGENCE.mq5"'},
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.45_BOT_ACTIVITY_MONITOR.mq5"'},
     )
 
 # Admin-only: serves the FULL master EA with your agent token + cloud fanout
@@ -407,7 +407,7 @@ async def admin_download_ea_master():
     if not p.exists(): raise HTTPException(status_code=404)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.44_STARTUP_SYNC_INTELLIGENCE.mq5",
+        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.45_BOT_ACTIVITY_MONITOR.mq5",
         media_type="application/octet-stream",
     )
 
@@ -2040,6 +2040,42 @@ class PaymentSubmitReq(BaseModel):
 class CloudPauseReq(BaseModel):
     paused: bool
 
+class CloudCommandReq(BaseModel):
+    action: str
+    pin: str
+    confirm: bool = False
+    payload: Optional[Dict] = None
+
+class CloudCommandAckReq(BaseModel):
+    command_id: str
+    status: str
+    message: Optional[str] = ""
+    details: Optional[Dict] = None
+
+SAFE_REMOTE_COMMANDS = {
+    "PAUSE_NEW_TRADES": "Pause new trades",
+    "RESUME_TRADING": "Resume trading",
+    "STOP_TRADING": "Stop trading",
+    "CLOSE_ALL_TRADES": "Close all trades",
+    "FORCE_SYNC": "Force startup intelligence sync",
+    "FORCE_REPORT_UPLOAD": "Force report upload marker",
+}
+
+async def _verify_or_create_command_pin(user: dict, pin: str) -> bool:
+    raw = str(pin or "").strip()
+    if not raw.isdigit() or not (4 <= len(raw) <= 6):
+        raise HTTPException(status_code=400, detail="PIN must be 4-6 digits.")
+    stored = user.get("command_pin_hash") or ""
+    if stored:
+        if not verify_password(raw, stored):
+            raise HTTPException(status_code=403, detail="Wrong Command Center PIN.")
+        return True
+    await db.cloud_users.update_one({"id": user["id"]}, {"$set": {
+        "command_pin_hash": hash_password(raw),
+        "command_pin_set_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    return True
+
 # -------- Plans (admin-configurable via cloud_settings.plans; defaults below) --------
 CLOUD_PLANS = {
     "starter": {"name": "Starter", "price_usd": 50.0, "max_balance_usd": 5000,
@@ -3403,6 +3439,83 @@ class MasterReasoningReq(BaseModel):
     combined_score: Optional[float] = 0.0
     grade: Optional[str] = ""
     signal_dir: Optional[int] = 0
+    severity: Optional[str] = ""
+
+class BotHeartbeatReq(BaseModel):
+    bot_online: Optional[bool] = True
+    ea_version: Optional[str] = ""
+    account_number: Optional[str] = ""
+    broker_server: Optional[str] = ""
+    symbol: Optional[str] = ""
+    timeframe: Optional[str] = ""
+    spread: Optional[float] = 0.0
+    equity: Optional[float] = 0.0
+    balance: Optional[float] = 0.0
+    daily_pnl: Optional[float] = 0.0
+    drawdown: Optional[float] = 0.0
+    open_positions: Optional[int] = 0
+    algo_trading: Optional[bool] = False
+    trading_allowed: Optional[bool] = False
+    mt5_connected: Optional[bool] = False
+    account_connected: Optional[bool] = False
+    ea_active: Optional[bool] = True
+    bot_state: Optional[str] = "UNKNOWN"
+    last_action: Optional[str] = ""
+    last_tick_time: Optional[str] = ""
+    last_decision_time: Optional[str] = ""
+    last_error: Optional[str] = ""
+    epf_state: Optional[str] = ""
+    sync_state: Optional[str] = ""
+
+class BotActivityReq(BaseModel):
+    event_type: str = "INFO"
+    severity: str = "INFO"
+    account: Optional[str] = ""
+    symbol: Optional[str] = ""
+    message: str = ""
+    details: Optional[Dict] = None
+
+def _dt_or_none(iso: str):
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+async def _store_bot_activity(event_type: str, severity: str, message: str,
+                              account: str = "", symbol: str = "", details: dict = None):
+    now = datetime.now(timezone.utc)
+    sev = (severity or "INFO").upper()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "ts": now.isoformat(),
+        "event_type": (event_type or "INFO").upper(),
+        "severity": sev,
+        "account": str(account or ""),
+        "symbol": str(symbol or ""),
+        "message": str(message or "")[:600],
+        "details": details or {},
+    }
+    await db.cloud_bot_activity.insert_one(doc.copy())
+    total = await db.cloud_bot_activity.estimated_document_count()
+    if total > 2500:
+        oldest = await db.cloud_bot_activity.find({}, {"_id": 1, "ts": 1}).sort("ts", 1).to_list(total - 2000)
+        if oldest:
+            await db.cloud_bot_activity.delete_many({"_id": {"$in": [o["_id"] for o in oldest]}})
+    return doc
+
+def _monitor_severity(event_type: str, reason: str = "") -> str:
+    text = f"{event_type} {reason}".upper()
+    if any(k in text for k in ("ERROR", "FAILED", "DISABLED", "DISCONNECTED", "LOCK", "OFFLINE")):
+        return "ERROR"
+    if any(k in text for k in ("BLOCK", "VETO", "SPREAD", "NEWS", "SYNC")):
+        return "BLOCK" if "BLOCK" in text or "VETO" in text else "WARNING"
+    if any(k in text for k in ("FIRE", "TRADE", "PYR")):
+        return "TRADE"
+    if "EXIT" in text or "CLOSE" in text:
+        return "EXIT"
+    return "INFO"
 
 @api_router.post("/cloud/master/reasoning")
 async def cloud_master_reasoning(req: MasterReasoningReq, request: Request):
@@ -3412,6 +3525,9 @@ async def cloud_master_reasoning(req: MasterReasoningReq, request: Request):
         doc["id"] = str(uuid.uuid4())
         doc["ts"] = datetime.now(timezone.utc).isoformat()
         await db.cloud_reasoning.insert_one(doc.copy())
+        sev = (req.severity or _monitor_severity(req.event_type, req.reason)).upper()
+        await _store_bot_activity(req.event_type, sev, req.reason,
+                                  symbol="", details=doc)
         # keep only the most recent 500 events to bound storage
         total = await db.cloud_reasoning.estimated_document_count()
         if total > 600:
@@ -3422,6 +3538,182 @@ async def cloud_master_reasoning(req: MasterReasoningReq, request: Request):
     except Exception as e:
         logger.exception("[cloud-master-reasoning] failed")
         raise HTTPException(status_code=500, detail=f"reasoning store failed: {type(e).__name__}: {e}")
+
+@api_router.post("/cloud/monitor/heartbeat")
+async def cloud_monitor_heartbeat(req: BotHeartbeatReq, request: Request):
+    """Remote monitoring only; this endpoint never executes trades or changes strategy."""
+    await _require_agent_async(request)
+    now = datetime.now(timezone.utc)
+    doc = req.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["ts"] = now.isoformat()
+    doc["last_heartbeat"] = now.isoformat()
+    account = str(req.account_number or "")
+    await db.cloud_bot_heartbeats.insert_one(doc.copy())
+    await db.cloud_settings.update_one({"key": "main"}, {"$set": {
+        "master_last_heartbeat": now.isoformat(),
+        "master_ea_status": "online",
+        "monitor_last_heartbeat": now.isoformat(),
+        "monitor_last_status": doc,
+    }}, upsert=True)
+    if req.last_error:
+        await _store_bot_activity("ERROR", "ERROR", req.last_error, account, req.symbol or "", doc)
+    if req.algo_trading is False:
+        await _store_bot_activity("ALGO_DISABLED", "CRITICAL", "Algo Trading disabled", account, req.symbol or "", doc)
+    if req.mt5_connected is False:
+        await _store_bot_activity("MT5_DISCONNECTED", "CRITICAL", "MT5 disconnected", account, req.symbol or "", doc)
+    total = await db.cloud_bot_heartbeats.estimated_document_count()
+    if total > 1500:
+        oldest = await db.cloud_bot_heartbeats.find({}, {"_id": 1, "ts": 1}).sort("ts", 1).to_list(total - 1000)
+        if oldest:
+            await db.cloud_bot_heartbeats.delete_many({"_id": {"$in": [o["_id"] for o in oldest]}})
+    return {"ok": True, "status": "received"}
+
+@api_router.post("/cloud/monitor/activity")
+async def cloud_monitor_activity(req: BotActivityReq, request: Request):
+    """Remote monitoring only; this endpoint never executes trades."""
+    await _require_agent_async(request)
+    doc = await _store_bot_activity(req.event_type, req.severity, req.message,
+                                    req.account or "", req.symbol or "", req.details or {})
+    await db.cloud_settings.update_one({"key": "main"}, {"$set": {
+        "monitor_last_activity_at": doc["ts"],
+        "monitor_last_activity": doc,
+    }}, upsert=True)
+    return {"ok": True, "event_id": doc["id"]}
+
+@api_router.post("/cloud/command/request")
+async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_cloud_user)):
+    action = str(req.action or "").upper().strip()
+    if action not in SAFE_REMOTE_COMMANDS:
+        raise HTTPException(status_code=400, detail="Unsupported Command Center action.")
+    if not req.confirm:
+        raise HTTPException(status_code=400, detail="Confirmation is required before queueing a remote command.")
+    await _verify_or_create_command_pin(user, req.pin)
+    now = datetime.now(timezone.utc)
+    command_id = str(uuid.uuid4())
+    doc = {
+        "id": command_id,
+        "user_id": user["id"],
+        "user_email": user.get("email", ""),
+        "action": action,
+        "label": SAFE_REMOTE_COMMANDS[action],
+        "status": "PENDING",
+        "requested_at": now.isoformat(),
+        "payload": req.payload or {},
+        "ack_at": "",
+        "ack_status": "",
+        "ack_message": "",
+        "ack_details": {},
+    }
+    await db.cloud_bot_commands.insert_one(doc.copy())
+    await _store_bot_activity("REMOTE_COMMAND_QUEUED", "COMMAND",
+                              f"{SAFE_REMOTE_COMMANDS[action]} queued for EA acknowledgement",
+                              details={"command_id": command_id, "action": action, "user": user.get("email", "")})
+    return {"ok": True, "command_id": command_id, "status": "PENDING", "action": action}
+
+@api_router.get("/cloud/command/pending")
+async def cloud_command_pending(request: Request, limit: int = 5):
+    await _require_agent_async(request)
+    n = max(1, min(int(limit), 10))
+    rows = await db.cloud_bot_commands.find({"status": "PENDING"}, {"_id": 0}).sort("requested_at", 1).to_list(n)
+    return {"ok": True, "commands": rows, "next": rows[0] if rows else None, "count": len(rows)}
+
+@api_router.post("/cloud/command/ack")
+async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
+    await _require_agent_async(request)
+    status = str(req.status or "").upper().strip()
+    if status not in {"ACKED", "EXECUTED", "FAILED", "SKIPPED"}:
+        raise HTTPException(status_code=400, detail="Invalid command acknowledgement status.")
+    now = datetime.now(timezone.utc)
+    command = await db.cloud_bot_commands.find_one({"id": req.command_id}, {"_id": 0})
+    if not command:
+        raise HTTPException(status_code=404, detail="Command not found.")
+    await db.cloud_bot_commands.update_one({"id": req.command_id}, {"$set": {
+        "status": status,
+        "ack_at": now.isoformat(),
+        "ack_status": status,
+        "ack_message": str(req.message or "")[:400],
+        "ack_details": req.details or {},
+    }})
+    severity = "COMMAND" if status in {"ACKED", "EXECUTED"} else "ERROR"
+    label = command.get("label") or command.get("action") or "Remote command"
+    await _store_bot_activity("REMOTE_COMMAND_" + status, severity,
+                              f"{label}: {req.message or status}",
+                              details={"command_id": req.command_id, "action": command.get("action"), "status": status})
+    return {"ok": True, "command_id": req.command_id, "status": status}
+
+@api_router.get("/cloud/command/recent")
+async def cloud_command_recent(limit: int = 20, user: dict = Depends(get_cloud_user)):
+    n = max(1, min(int(limit), 50))
+    rows = await db.cloud_bot_commands.find({"user_id": user["id"]}, {"_id": 0}).sort("requested_at", -1).to_list(n)
+    return {"commands": rows, "count": len(rows)}
+
+@api_router.get("/cloud/monitor/status")
+async def cloud_monitor_status(_user: dict = Depends(get_cloud_user)):
+    s = await _get_cloud_settings()
+    hb = await db.cloud_bot_heartbeats.find_one({}, {"_id": 0}, sort=[("ts", -1)])
+    now = datetime.now(timezone.utc)
+    hb_time = _dt_or_none((hb or {}).get("ts"))
+    age_sec = int((now - hb_time).total_seconds()) if hb_time else None
+    offline = age_sec is None or age_sec > 90
+    status_label = "BOT OFFLINE / NO HEARTBEAT" if offline else (hb or {}).get("bot_state", "ONLINE")
+    alerts = []
+    if offline:
+        alerts.append({"severity": "CRITICAL", "type": "BOT_OFFLINE_NO_HEARTBEAT", "message": "BOT OFFLINE / NO HEARTBEAT"})
+    if hb:
+        if hb.get("algo_trading") is False:
+            alerts.append({"severity": "CRITICAL", "type": "ALGO_DISABLED", "message": "Algo Trading disabled"})
+        if hb.get("mt5_connected") is False:
+            alerts.append({"severity": "CRITICAL", "type": "MT5_DISCONNECTED", "message": "MT5 disconnected"})
+        if hb.get("trading_allowed") is False:
+            alerts.append({"severity": "ERROR", "type": "TRADING_DISABLED", "message": "Trading not allowed"})
+        if hb.get("last_error"):
+            alerts.append({"severity": "ERROR", "type": "LAST_ERROR", "message": hb.get("last_error")})
+    open_signals = await db.cloud_signals.count_documents({"closed_at": {"$in": [None, ""]}})
+    last_signal = await db.cloud_signals.find_one({}, {"_id": 0}, sort=[("ts", -1)])
+    last_trade = await db.cloud_trades.find_one({}, {"_id": 0}, sort=[("closed_at", -1), ("opened_at", -1)])
+    last_block = await db.cloud_bot_activity.find_one(
+        {"$or": [{"severity": "BLOCK"}, {"event_type": {"$regex": "BLOCK|VETO"}}]},
+        {"_id": 0}, sort=[("ts", -1)])
+    last_error = await db.cloud_bot_activity.find_one(
+        {"severity": {"$in": ["ERROR", "CRITICAL"]}}, {"_id": 0}, sort=[("ts", -1)])
+    return {
+        "status": status_label,
+        "offline": offline,
+        "heartbeat_age_sec": age_sec,
+        "heartbeat": hb or s.get("monitor_last_status") or {},
+        "alerts": alerts,
+        "open_trades": (hb or {}).get("open_positions", open_signals),
+        "last_trade": last_trade,
+        "last_blocked_trade": last_block,
+        "last_signal": last_signal,
+        "last_error": last_error,
+        "intelligence_sync_state": (hb or {}).get("sync_state") or "",
+        "equity_protection_state": (hb or {}).get("epf_state") or "",
+    }
+
+@api_router.get("/cloud/monitor/activity")
+async def cloud_monitor_activity_feed(kind: str = "all", limit: int = 80,
+                                      _user: dict = Depends(get_cloud_user)):
+    n = max(1, min(int(limit), 200))
+    k = (kind or "all").lower()
+    query = {}
+    if k == "trades":
+        query = {"severity": "TRADE"}
+    elif k == "blocks":
+        query = {"$or": [{"severity": "BLOCK"}, {"event_type": {"$regex": "BLOCK|VETO"}}]}
+    elif k == "errors":
+        query = {"severity": {"$in": ["ERROR", "CRITICAL"]}}
+    elif k == "sync":
+        query = {"$or": [{"severity": "SYNC"}, {"event_type": {"$regex": "SYNC"}}]}
+    elif k == "exit":
+        query = {"$or": [{"severity": "EXIT"}, {"event_type": {"$regex": "EXIT|CLOSE"}}]}
+    elif k == "shadow":
+        query = {"event_type": {"$regex": "SHADOW|BLOCK_CHECK"}}
+    elif k == "risk":
+        query = {"event_type": {"$regex": "EPF|DRAWDOWN|RISK|LOCK"}}
+    rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", -1).to_list(n)
+    return {"events": rows, "count": len(rows), "kind": k}
 
 @api_router.get("/cloud/me/reasoning")
 async def cloud_me_reasoning(limit: int = 30, _user: dict = Depends(get_cloud_user)):

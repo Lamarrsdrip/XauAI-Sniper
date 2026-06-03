@@ -26,7 +26,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
           <XauAiLogo size={34} className="flex-none shadow-lg shadow-amber-500/10" />
           <span className="min-w-0">
             <span className="block truncate font-heading text-base font-semibold tracking-tight">XauAI Sniper</span>
-            <span className="block truncate font-mono text-[9px] uppercase tracking-[0.24em] text-amber-200/55">Master v5.8.44</span>
+            <span className="block truncate font-mono text-[9px] uppercase tracking-[0.24em] text-amber-200/55">Master v5.8.45</span>
           </span>
         </button>
 
@@ -60,8 +60,8 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
               </span>
             </div>
           )}
-          <a href="/cloud" data-testid="nav-cloud-link" className="inline-flex items-center gap-1.5 rounded-full bg-emerald-300 px-3 py-2 text-[11px] font-extrabold uppercase tracking-wider text-[#06110c] transition hover:bg-emerald-200">
-            <Cloud size={14} weight="fill" /> Cloud
+          <a href="/command" data-testid="nav-cloud-link" className="inline-flex items-center gap-1.5 rounded-full bg-emerald-300 px-3 py-2 text-[11px] font-extrabold uppercase tracking-wider text-[#06110c] transition hover:bg-emerald-200">
+            <Cloud size={14} weight="fill" /> Command
           </a>
           <button onClick={() => onNavigate("download")} className="hidden rounded-full bg-amber-300 px-3 py-2 text-[11px] font-extrabold uppercase tracking-wider text-black transition hover:bg-amber-200 sm:inline-flex">
             <DownloadSimple size={14} weight="bold" /> EA

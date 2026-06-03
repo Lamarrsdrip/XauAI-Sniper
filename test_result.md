@@ -141,3 +141,47 @@
 ## agent_communication:
 ##   - agent: "main"
 ##     message: "Validated with pytest, py_compile, git diff --check, npm build, and MetaEditor/Wine compile. Compiled EX5 was deleted from /Applications after verification."
+
+## user_problem_statement: Repurpose the old cloud/copy-trading side into XAU AI Sniper Command Center with live monitoring and PIN-safe remote commands.
+## backend:
+##   - task: "v5.8.45 Command Center monitor and command endpoints"
+##     implemented: true
+##     working: true
+##     file: "backend/server.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Added monitor heartbeat/activity endpoints, status/feed endpoints, and a PIN-protected command queue with pending/recent/ack endpoints. Visible controls are backed by persisted commands and activity audit logs."
+##   - task: "v5.8.45 EA heartbeat/activity publisher and command poller"
+##     implemented: true
+##     working: true
+##     file: "backend/ea_code/XAUUSD_AI_Sniper_EA.mq5"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Added monitor heartbeat every 20 seconds by default, activity events for major bot actions, and EA command polling/acknowledgement for pause, resume, stop, close all, force sync, and report upload markers."
+## frontend:
+##   - task: "v5.8.45 mobile Command Center dashboard"
+##     implemented: true
+##     working: true
+##     file: "frontend/src/components/cloud/CloudDashboard.jsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Replaced old cloud/copy UI with a mobile-friendly Command Center: live status cards, offline/no-heartbeat alert, recent signal/trade/block records, filtered activity feed, and real PIN-confirmed remote control actions."
+## test_plan:
+##   current_focus:
+##     - "v5.8.45 Command Center monitor and command endpoints"
+##     - "v5.8.45 EA heartbeat/activity publisher and command poller"
+##     - "v5.8.45 mobile Command Center dashboard"
+##   test_all: true
+##   test_priority: "high_first"

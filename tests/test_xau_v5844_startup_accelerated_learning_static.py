@@ -8,8 +8,8 @@ EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 def test_trading_intelligence_dataset_build_controls_exist():
     text = EA.read_text()
 
-    assert "v5.8.44" in text
-    assert "STARTUP SYNC INTELLIGENCE" in text
+    assert "v5.8.45" in text
+    assert "BOT ACTIVITY MONITOR" in text
     assert "InpTradingIntelDataset" in text
     assert "InpTradingIntelJson" in text
     assert "InpMarketIntelSnapshots" in text

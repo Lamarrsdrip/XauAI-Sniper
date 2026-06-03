@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.44 — Startup Sync Intelligence    |
+//|                                     v5.8.45 — Bot Activity Monitor         |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.44 — STARTUP SYNC INTELLIGENCE"
+#property description "XAUUSD AI Sniper v5.8.45 — BOT ACTIVITY MONITOR"
 #property description "Uses attribution memory to soften expensive blocks with tiny scouts, not blind looseness."
 #property description "Cuts B-grade hot-cycle risk after large winning runs so one late B cannot erase the day."
 #property strict
@@ -309,11 +309,13 @@ input int    InpHiveMinTrustedSamples = 30;// Hive cannot veto/boost until backe
 input string InpServerURL      = "https://xauaisniper.com";
 input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
 
-input group "=== XAUAI CLOUD (fanout master signals to subscribers) ==="
+input group "=== XAU COMMAND CENTER (heartbeat, activity, safe remote commands) ==="
 input bool   InpCloudFanout       = false;   // Local-first default: reports/brain work without VPS/cloud. Turn ON only if using copy cloud.
 input string InpCloudURL          = "https://xauaisniper.com";  // Cloud API base URL — ALREADY SET. Add this to MT5 WebRequest whitelist!
 input string InpCloudAgentToken   = "";      // Optional cloud token. Keep empty for local-only trading intelligence.
 input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms)
+input bool   InpBotMonitorEnable  = true;    // Command Center heartbeat/activity/command acknowledgements
+input int    InpBotMonitorHeartbeatSec = 20; // Send remote heartbeat every 10-30 seconds recommended
 
 input group "=== TUNABLE THRESHOLDS (walk-forward optimize these) ==="
 input double InpGradeAPlus     = 5.5;      // Combined score for A+ (default 5.5)
@@ -889,7 +891,7 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
-// v5.8.44 — Startup Sync Intelligence + Trade Brain + Exit Learning Intelligence.
+// v5.8.45 — Bot Activity Monitor + Startup Sync + Trade Brain + Exit Learning Intelligence.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -1066,6 +1068,11 @@ int        g_basketSnapMax = 60;      // store up to 60 samples (~1 sample / sec
 // v4.9.6 — DIAGNOSTIC HEARTBEAT state
 string     g_lastSkipReason  = "";    // Updated every time OnTick returns silently
 datetime   g_lastHeartbeat   = 0;     // Throttle heartbeat to 1/minute
+datetime   g_lastBotMonitorHeartbeat = 0; // Remote dashboard heartbeat
+datetime   g_lastBotCommandPoll = 0;      // PIN-safe command queue poll cadence
+bool       g_remotePauseNewTrades = false;
+bool       g_remoteStopTrading = false;
+string     g_lastRemoteCommandState = "";
 int        g_ticksSinceEntry = 0;     // How many ticks since last position opened
 datetime   g_lastEntryScanAt = 0;     // v5.8.8: last time indicator buffers loaded and entry scan ran
 datetime   g_lastEntryBarSeen = 0;    // v5.8.8: robust M5 bar marker, not trapped in local static state
@@ -1781,9 +1788,10 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.44 (STARTUP SYNC INTELLIGENCE) READY ===");
+   Print("=== XAUAI SNIPER v5.8.45 (BOT ACTIVITY MONITOR) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
+   BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1907,7 +1915,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.44 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.45 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -3801,6 +3809,9 @@ void CheckPyramidOpportunity()
       lastPyramidPx      = entryPx;       // v5.3.0 — for ATR spacing gate
       todayTradeCount++;
       Print("PYRAMID OK");
+      BotMonitorActivity("PYRAMID_ADD", "TRADE",
+                         StringFormat("PYRAMID #%d %.2f lot @%.2f - %s",
+                                      openCount + 1, addLot, entryPx, why));
 
       // v5.2.2 — fan pyramid add to XauAi Cloud subscribers (was previously
       // missing; pyramid adds went master-only, breaking 1:1 mirror).
@@ -4250,7 +4261,16 @@ void OnTick()
       FetchBotMode();   // v5.1.8 — same cadence: pull admin-set mode preset
       lastCloudHB = TimeCurrent();
    }
-
+   if(TimeCurrent() - g_lastBotMonitorHeartbeat >= MathMax(10, InpBotMonitorHeartbeatSec))
+   {
+      BotMonitorHeartbeat();
+      g_lastBotMonitorHeartbeat = TimeCurrent();
+   }
+   if(TimeCurrent() - g_lastBotCommandPoll >= 10)
+   {
+      BotMonitorPollCommands();
+      g_lastBotCommandPoll = TimeCurrent();
+   }
    // v5.1.2 — Profit Guardian: HWM tracking + per-position ratchet every tick
    PG_UpdateHWM();
    PG_PerPositionRatchet();
@@ -5715,8 +5735,17 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                           lastSignalSetup, g_pendingBrainGrade, lastSignalSignature,
                           g_pendingBrainSetupScore, g_pendingBrainCombinedScore,
                           reason + " | " + g_pendingBrainEntryAudit);
+      BotMonitorActivity("TRADE_EXECUTED", "TRADE",
+                         StringFormat("FIRED %s %.2f lot @%.2f SL:%.2f TP:%.2f grade=%s",
+                                      signal == 1 ? "BUY" : "SELL", lots, price, sl, tp,
+                                      g_pendingBrainGrade));
    }
-   else Print("TRADE FAILED: Err=", GetLastError(), " Ret=", trade.ResultRetcode());
+   else
+   {
+      Print("TRADE FAILED: Err=", GetLastError(), " Ret=", trade.ResultRetcode());
+      BotMonitorActivity("TRADE_FAILED", "ERROR",
+                         StringFormat("Trade failed err=%d ret=%d", GetLastError(), trade.ResultRetcode()));
+   }
 
    // v5.0.0 — XAUAI CLOUD fanout: mirror this open to subscribers
    if(ok && CloudEnabled())
@@ -8365,6 +8394,8 @@ int PG_HTFTrend()
 // Once both pass, sets a sticky flag so we don't re-log every tick.
 string StartupCooldownReason()
 {
+   if(g_remoteStopTrading) return "remote command stop trading active";
+   if(g_remotePauseNewTrades) return "remote command pause new trades active";
    if(g_startupCooldownDone) return "";
    if(InpStartupIntelSync)
    {
@@ -8916,7 +8947,7 @@ void XAU_RunStartupIntelligenceSync()
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double mid = (bid > 0.0 && ask > 0.0) ? (bid + ask) * 0.5 : iClose(Symbol(), PERIOD_M5, 0);
    double atr = (ArraySize(bufATR) > 1 ? bufATR[1] : 0.0);
-   string extra = StringFormat("version=5.8.44 syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
+   string extra = StringFormat("version=5.8.45 syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
                                (int)(TimeCurrent() - started), historyDeals, openRecovered,
                                tradeBrainRows, blockedRows, intelRows, barsM5,
                                InpStartupIntelMinCandles, contextTargetMet ? "Y" : "N",
@@ -10858,6 +10889,196 @@ bool CloudEnabled()
            && StringLen(InpCloudAgentToken) >= 8);
 }
 
+bool BotMonitorEnabled()
+{
+   return (InpBotMonitorEnable && !InpBacktestMode
+           && StringLen(InpCloudURL) >= 10
+           && StringLen(InpCloudAgentToken) >= 8);
+}
+
+string BotMonitorJsonSafe(string s, int maxLen)
+{
+   StringReplace(s, "\\", "/");
+   StringReplace(s, "\"", "'");
+   StringReplace(s, "\r", " ");
+   StringReplace(s, "\n", " ");
+   StringReplace(s, "\t", " ");
+   StringReplace(s, "—", "-");
+   StringReplace(s, "–", "-");
+   StringReplace(s, "→", "->");
+   StringReplace(s, "≤", "<=");
+   StringReplace(s, "≥", ">=");
+   if(StringLen(s) > maxLen) s = StringSubstr(s, 0, maxLen);
+   return s;
+}
+
+string BotMonitorBool(bool v)
+{
+   return v ? "true" : "false";
+}
+
+void BotMonitorActivity(string eventType, string severity, string message)
+{
+   if(!BotMonitorEnabled()) return;
+   string ev = BotMonitorJsonSafe(eventType, 40);
+   string sev = BotMonitorJsonSafe(severity, 16);
+   string msg = BotMonitorJsonSafe(message, 420);
+   string account = (string)AccountInfoInteger(ACCOUNT_LOGIN);
+   string body = StringFormat(
+      "{\"event_type\":\"%s\",\"severity\":\"%s\",\"account\":\"%s\",\"symbol\":\"%s\","
+      "\"message\":\"%s\",\"details\":{\"regime\":\"%s\",\"session\":\"%s\",\"last_skip\":\"%s\"}}",
+      ev, sev, account, Symbol(), msg, BotMonitorJsonSafe(RegimeName(), 32),
+      BotMonitorJsonSafe(SessionTag(), 16), BotMonitorJsonSafe(g_lastSkipReason, 180));
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   ResetLastError();
+   int code = WebRequest("POST", InpCloudURL + "/api/cloud/monitor/activity",
+                         hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200)
+      Print("BOT-MONITOR activity POST failed http=", code, " err=", GetLastError());
+}
+
+void BotMonitorHeartbeat()
+{
+   if(!BotMonitorEnabled()) return;
+   bool termConn = (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
+   bool termAlgo = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
+   bool mqlAlgo  = (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
+   bool tradeAllowed = termConn && termAlgo && mqlAlgo && AccountInfoInteger(ACCOUNT_TRADE_ALLOWED);
+   int openPs = CountMyPositions();
+   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   double equity = accInfo.Equity();
+   double balance = accInfo.Balance();
+   double dd = balance > 0.0 ? MathMax(0.0, (balance - equity) / balance * 100.0) : 0.0;
+   string state = "SCANNING";
+   if(!termConn) state = "MT5_DISCONNECTED";
+   else if(!termAlgo) state = "ALGO_DISABLED";
+   else if(!mqlAlgo) state = "EA_TRADING_DISABLED";
+   else if(!g_startupIntelSyncDone) state = "STARTUP_SYNCING";
+   else if(g_remoteStopTrading) state = "REMOTE_STOPPED";
+   else if(g_remotePauseNewTrades) state = "REMOTE_PAUSED";
+   else if(openPs > 0) state = "MANAGING_TRADES";
+   else if(StringLen(g_lastSkipReason) > 0) state = "WAITING";
+   string lastErr = "";
+   int err = GetLastError();
+   if(err != 0) lastErr = "MQL error " + (string)err;
+   string body = StringFormat(
+      "{\"bot_online\":true,\"ea_version\":\"v5.8.45\",\"account_number\":\"%I64d\","
+      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
+      "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
+      "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
+      "\"mt5_connected\":%s,\"account_connected\":%s,\"ea_active\":true,"
+      "\"bot_state\":\"%s\",\"last_action\":\"%s\",\"last_tick_time\":\"%s\","
+      "\"last_decision_time\":\"%s\",\"last_error\":\"%s\",\"epf_state\":\"T%d\","
+      "\"sync_state\":\"%s\"}",
+      AccountInfoInteger(ACCOUNT_LOGIN),
+      BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER), 80),
+      Symbol(), spread, equity, balance, (equity - dailyStartEquity), dd, openPs,
+      BotMonitorBool(termAlgo), BotMonitorBool(tradeAllowed),
+      BotMonitorBool(termConn), BotMonitorBool(AccountInfoInteger(ACCOUNT_LOGIN) > 0),
+      BotMonitorJsonSafe(state, 48), BotMonitorJsonSafe(StringLen(g_lastRemoteCommandState) > 0 ? g_lastRemoteCommandState : g_lastSkipReason, 180),
+      TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+      TimeToString(g_lastEntryScanAt > 0 ? g_lastEntryScanAt : TimeCurrent(), TIME_DATE | TIME_SECONDS),
+      BotMonitorJsonSafe(lastErr, 120), epf_tier,
+      BotMonitorJsonSafe(g_startupIntelSyncReason, 120));
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   ResetLastError();
+   int code = WebRequest("POST", InpCloudURL + "/api/cloud/monitor/heartbeat",
+                         hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200)
+      Print("BOT-MONITOR heartbeat POST failed http=", code, " err=", GetLastError(),
+            " (monitor is read-only; trading continues locally)");
+}
+
+void BotMonitorAckCommand(string commandId, string status, string message)
+{
+   if(!BotMonitorEnabled() || StringLen(commandId) < 8) return;
+   string body = StringFormat(
+      "{\"command_id\":\"%s\",\"status\":\"%s\",\"message\":\"%s\","
+      "\"details\":{\"remote_pause\":%s,\"remote_stop\":%s,\"open_positions\":%d}}",
+      BotMonitorJsonSafe(commandId, 80), BotMonitorJsonSafe(status, 16),
+      BotMonitorJsonSafe(message, 260), BotMonitorBool(g_remotePauseNewTrades),
+      BotMonitorBool(g_remoteStopTrading), CountMyPositions());
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   ResetLastError();
+   int code = WebRequest("POST", InpCloudURL + "/api/cloud/command/ack",
+                         hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200)
+      Print("BOT-COMMAND ack failed http=", code, " err=", GetLastError());
+}
+
+void BotMonitorPollCommands()
+{
+   if(!BotMonitorEnabled()) return;
+   char pd[], res[]; string rh;
+   StringToCharArray("", pd, 0, 0);
+   string hdr = "X-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   ResetLastError();
+   int code = WebRequest("GET", InpCloudURL + "/api/cloud/command/pending?limit=1",
+                         hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200 || ArraySize(res) == 0) return;
+
+   string body = CharArrayToString(res);
+   string commandId = JsonStringField(body, "id");
+   string action = JsonStringField(body, "action");
+   if(StringLen(commandId) < 8 || StringLen(action) < 3) return;
+   StringToUpper(action);
+
+   string result = "Command ignored";
+   string status = "SKIPPED";
+   if(action == "PAUSE_NEW_TRADES")
+   {
+      g_remotePauseNewTrades = true;
+      g_remoteStopTrading = false;
+      status = "EXECUTED";
+      result = "New entries paused; existing positions still managed.";
+   }
+   else if(action == "RESUME_TRADING")
+   {
+      g_remotePauseNewTrades = false;
+      g_remoteStopTrading = false;
+      status = "EXECUTED";
+      result = "Remote pause/stop cleared; normal entry scanning resumed.";
+   }
+   else if(action == "STOP_TRADING")
+   {
+      g_remoteStopTrading = true;
+      g_remotePauseNewTrades = false;
+      status = "EXECUTED";
+      result = "Fresh entries stopped; management of open positions continues.";
+   }
+   else if(action == "CLOSE_ALL_TRADES")
+   {
+      int before = CountMyPositions();
+      CloseAll();
+      status = "EXECUTED";
+      result = StringFormat("Close-all requested; positions before command=%d.", before);
+   }
+   else if(action == "FORCE_SYNC")
+   {
+      g_startupIntelSyncDone = false;
+      g_startupIntelSyncOk = false;
+      XAU_RunStartupIntelligenceSync();
+      status = g_startupIntelSyncOk ? "EXECUTED" : "FAILED";
+      result = "Startup intelligence sync forced: " + g_startupIntelSyncReason;
+   }
+   else if(action == "FORCE_REPORT_UPLOAD")
+   {
+      status = "EXECUTED";
+      result = "Report upload marker recorded; local CSV/JSONL remains the source of truth.";
+   }
+
+   g_lastRemoteCommandState = action + ": " + result;
+   Print("BOT-COMMAND ", status, " ", action, " - ", result);
+   BotMonitorActivity("REMOTE_COMMAND_" + status, status == "FAILED" ? "ERROR" : "COMMAND", g_lastRemoteCommandState);
+   BotMonitorAckCommand(commandId, status, result);
+}
+
 void CloudMapAdd(ulong posId, string sigId)
 {
    int n = ArraySize(g_cloudPosIds);
@@ -11158,6 +11379,12 @@ string CloudJsonSafe(string s, int maxLen)
 void CloudPostReasoning(string event_type, string reason, string regime, string setup,
                         double setup_score, double combined_score, string grade, int signal_dir)
 {
+   string monitorSeverity = "INFO";
+   if(event_type == "FIRE" || event_type == "PYR") monitorSeverity = "TRADE";
+   else if(event_type == "BLOCK" || StringFind(reason, "VETO") >= 0) monitorSeverity = "BLOCK";
+   else if(StringFind(reason, "ERROR") >= 0 || StringFind(reason, "FAILED") >= 0) monitorSeverity = "ERROR";
+   else if(StringFind(reason, "SYNC") >= 0) monitorSeverity = "SYNC";
+   BotMonitorActivity(event_type, monitorSeverity, reason);
    if(!CloudEnabled()) return;
    string r = CloudJsonSafe(reason, 240);
    string ev = CloudJsonSafe(event_type, 32);
@@ -11240,7 +11467,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.44 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.45 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

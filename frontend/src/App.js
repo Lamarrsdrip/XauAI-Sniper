@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import "@/App.css";
 import axios from "axios";
-import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
 import HeroSection from "@/components/HeroSection";
 import BrokerSection from "@/components/BrokerSection";
@@ -95,10 +95,14 @@ function App() {
       <CloudFunnelBanner />
       <Routes>
         <Route path="/" element={<MainDashboard />} />
-        <Route path="/cloud" element={<CloudLanding />} />
-        <Route path="/cloud/signup" element={<CloudSignup />} />
-        <Route path="/cloud/login" element={<CloudLogin />} />
-        <Route path="/cloud/dashboard" element={<CloudDashboard />} />
+        <Route path="/command" element={<CloudLanding />} />
+        <Route path="/command/signup" element={<CloudSignup />} />
+        <Route path="/command/login" element={<CloudLogin />} />
+        <Route path="/command/dashboard" element={<CloudDashboard />} />
+        <Route path="/cloud" element={<Navigate to="/command" replace />} />
+        <Route path="/cloud/signup" element={<Navigate to="/command/signup" replace />} />
+        <Route path="/cloud/login" element={<Navigate to="/command/login" replace />} />
+        <Route path="/cloud/dashboard" element={<Navigate to="/command/dashboard" replace />} />
         <Route path="/purchase/success" element={<PurchaseSuccessPage />} />
         <Route path="/purchase/cancel" element={<PurchaseCancelWrap />} />
         <Route path="/admin" element={<AdminPortal api={API} />} />
