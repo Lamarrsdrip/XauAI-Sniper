@@ -291,6 +291,92 @@ def redundancy_report(block_rows: list[dict[str, str]]) -> list[str]:
     return lines
 
 
+def intel_summary(intel_rows: list[dict[str, str]]) -> list[str]:
+    lines = ["## Trading Intelligence Dataset QA", ""]
+    if not intel_rows:
+        lines += [
+            "No unified Trading Intelligence dataset was provided. Use `--intel XAUAI_TradingIntelligence_XAUUSD.csv` once v5.8.42+ has been running.",
+            "",
+        ]
+        return lines
+
+    event_counts: dict[str, int] = defaultdict(int)
+    for row in intel_rows:
+        event_counts[row.get("event") or "UNKNOWN"] += 1
+
+    close_rows = [r for r in intel_rows if r.get("event") == "CLOSE"]
+    block_checks = [r for r in intel_rows if r.get("event") == "BLOCK_CHECK"]
+    post_close = [r for r in intel_rows if r.get("event") == "POST_CLOSE"]
+    cloud_rows = [r for r in intel_rows if (r.get("owner") == "CLOUD" or r.get("event", "").startswith("CLOUD_"))]
+
+    wins = sum(1 for r in close_rows if fnum(r.get("profit")) >= 0.01)
+    losses = sum(1 for r in close_rows if fnum(r.get("profit")) <= -0.01)
+    a_losses = [
+        r for r in close_rows
+        if (r.get("grade") in {"A+", "A"} and fnum(r.get("profit")) < -0.01)
+    ]
+    profitable_blocks = [
+        r for r in block_checks
+        if fnum(r.get("favATR")) >= 2.0 and fnum(r.get("advATR")) < 1.2 and inum(r.get("checkpointMin")) >= 30
+    ]
+    late_entries = [
+        r for r in close_rows
+        if "late" in (r.get("entryReason", "") + " " + r.get("extra", "")).lower()
+        or "missed" in (r.get("entryReason", "") + " " + r.get("extra", "")).lower()
+    ]
+    bad_recovery = [
+        r for r in close_rows
+        if fnum(r.get("profit")) > 0 and fnum(r.get("worstFloating")) < 0
+        and abs(fnum(r.get("worstFloating"))) > max(fnum(r.get("profit")), 1.0) * 2.5
+    ]
+    bad_exits = [r for r in post_close if r.get("outcome") == "EXIT_EARLY_LEFT_PROFIT" or "EXIT_EARLY_LEFT_PROFIT" in r.get("exitReason", "")]
+    cloud_failures = [
+        r for r in cloud_rows
+        if (r.get("cloudOk") in {"N", "false", "False"} or (inum(r.get("cloudCode")) not in {0, 200}))
+    ]
+
+    lines += ["| Event | Rows |", "|---|---:|"]
+    for event, count in sorted(event_counts.items(), key=lambda kv: kv[1], reverse=True):
+        lines.append(f"| {event} | {count} |")
+    lines += [
+        "",
+        "### Diagnostics",
+        "",
+        f"- Dataset closed trades: {len(close_rows)}",
+        f"- Dataset win rate sanity: {pct(wins, wins + losses):.1f}% from {wins} wins / {losses} losses",
+        f"- A/A+ losing trades: {len(a_losses)}",
+        f"- Profitable blocked trades: {len(profitable_blocks)}",
+        f"- Late/missed-move executed trades: {len(late_entries)}",
+        f"- Green trades with bad drawdown-before-recovery: {len(bad_recovery)}",
+        f"- Post-close reports saying exit left profit: {len(bad_exits)}",
+        f"- Cloud copy/fanout failures: {len(cloud_failures)}",
+        "",
+    ]
+
+    reason_cost: dict[str, BlockBucket] = defaultdict(BlockBucket)
+    for row in block_checks:
+        reason_cost[row.get("reasonKey") or "UNKNOWN"].add({
+            "event": "CHECK",
+            "checkpointMin": row.get("checkpointMin", ""),
+            "favATR": row.get("favATR", ""),
+            "advATR": row.get("advATR", ""),
+        })
+    if reason_cost:
+        lines += block_table(dict(reason_cost), "Trading Intelligence Block Cost Ranking", limit=10)
+
+    if a_losses:
+        lines += ["### A/A+ Losing Trade Samples", "", "| Time | Dir | Setup | Grade | Profit | Worst floating | Entry reason | Exit reason |", "|---|---|---|---|---:|---:|---|---|"]
+        for row in sorted(a_losses, key=lambda r: fnum(r.get("profit")))[:10]:
+            lines.append(
+                f"| {row.get('time','')} | {row.get('dir','')} | {row.get('setup','')} | {row.get('grade','')} | "
+                f"{money(fnum(row.get('profit')))} | {money(fnum(row.get('worstFloating')))} | "
+                f"{row.get('entryReason','')[:80]} | {row.get('exitReason','')[:80]} |"
+            )
+        lines.append("")
+
+    return lines
+
+
 def recommendations(
     grade_buckets: dict[str, MetricBucket],
     setup_buckets: dict[str, MetricBucket],
@@ -327,9 +413,10 @@ def recommendations(
     return lines
 
 
-def build_report(executed_path: Path, blocked_path: Path, days: int) -> str:
+def build_report(executed_path: Path, blocked_path: Path, days: int, intel_path: Path | None = None) -> str:
     executed_all = filter_rows(read_csv(executed_path), days)
     blocked_all = filter_rows(read_csv(blocked_path), days)
+    intel_all = filter_rows(read_csv(intel_path), days) if intel_path else []
 
     close_rows = [r for r in executed_all if r.get("event") == "CLOSE"]
     post_rows = [r for r in executed_all if r.get("event") == "POST_CLOSE"]
@@ -368,6 +455,7 @@ def build_report(executed_path: Path, blocked_path: Path, days: int) -> str:
         f"Window: last {days} days",
         f"Executed memory: `{executed_path}`",
         f"Blocked memory: `{blocked_path}`",
+        f"Trading Intelligence dataset: `{intel_path}`" if intel_path else "Trading Intelligence dataset: not provided",
         "",
         "## Executive Summary",
         "",
@@ -395,6 +483,7 @@ def build_report(executed_path: Path, blocked_path: Path, days: int) -> str:
     lines += metric_table("Setup Performance", setup_buckets)
     lines += metric_table("Exit Reason Performance", exit_buckets)
     lines += metric_table("Signature Performance", signature_buckets, limit=10)
+    lines += intel_summary(intel_all)
     lines += block_table(dict(block_buckets), "Blocked Trade Intelligence")
     lines += redundancy_report(blocked_all)
     lines += recommendations(grade_buckets, setup_buckets, dict(block_buckets), exit_buckets)
@@ -416,11 +505,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Generate XAUAI attribution report from EA memory CSV files.")
     parser.add_argument("--executed", required=True, type=Path, help="Path to XAUAI_ExecutedTradeBrain_<symbol>.csv")
     parser.add_argument("--blocked", required=True, type=Path, help="Path to XAUAI_BlockedTradeMemory_<symbol>.csv")
+    parser.add_argument("--intel", type=Path, help="Optional path to XAUAI_TradingIntelligence_<symbol>.csv")
     parser.add_argument("--days", default=7, type=int, help="Lookback window in days")
     parser.add_argument("--out", type=Path, help="Optional markdown output path")
     args = parser.parse_args()
 
-    report = build_report(args.executed, args.blocked, args.days)
+    report = build_report(args.executed, args.blocked, args.days, args.intel)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(report, encoding="utf-8")

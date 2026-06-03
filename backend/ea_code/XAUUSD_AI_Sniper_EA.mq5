@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.41 — Report-Fit Recovery Scout  |
+//|                                     v5.8.43 — Local Intelligence Ready     |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.41 — REPORT-FIT RECOVERY SCOUT"
+#property description "XAUUSD AI Sniper v5.8.43 — LOCAL INTELLIGENCE READY"
 #property description "Uses attribution memory to soften expensive blocks with tiny scouts, not blind looseness."
 #property description "Cuts B-grade hot-cycle risk after large winning runs so one late B cannot erase the day."
 #property strict
@@ -199,6 +199,8 @@ input double InpBlockedMemoryScoutEdgeATR  = 0.50;  // Avg favorable ATR must ex
 input double InpBlockedMemoryScoutMinFavATR= 1.45;  // Minimum average favorable move after similar blocks
 input double InpBlockedMemoryScoutMaxAdvATR= 1.55;  // Do not scout if similar blocks usually draw down worse than this
 input double InpBlockedMemoryScoutLotMulti = 0.22;  // Tiny risk only; this is learning scout, not full-size looseness
+input bool   InpTradingIntelDataset        = true;  // Unified CSV/JSONL black-box recorder for trades, blocks, vetoes, exits, cloud
+input bool   InpTradingIntelJson           = true;  // Also write JSONL rows for external analysis tools
 input bool   InpTradeBrainMemory           = true;  // Persist EVERY executed trade with entry reason, exit reason, drawdown, and outcome
 input int    InpTradeBrainMinSamples       = 12;    // Minimum matching closed trades before brain can affect new entries
 input double InpTradeBrainReduceWR         = 42.0;  // If similar pattern WR is below this, reduce lot instead of repeating full risk
@@ -299,9 +301,9 @@ input string InpServerURL      = "https://xauaisniper.com";
 input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
 
 input group "=== XAUAI CLOUD (fanout master signals to subscribers) ==="
-input bool   InpCloudFanout       = true;    // TRUE = POST every open/close to the XauAi Cloud backend
+input bool   InpCloudFanout       = false;   // Local-first default: reports/brain work without VPS/cloud. Turn ON only if using copy cloud.
 input string InpCloudURL          = "https://xauaisniper.com";  // Cloud API base URL — ALREADY SET. Add this to MT5 WebRequest whitelist!
-input string InpCloudAgentToken   = "c2eb530ea11d7dd8308f9f7be1fb7c2657f4cdbdfb3b0d63d88ad4ee433e2289";      // X-Agent-Token — PRE-FILLED for emriz. Keep PRIVATE — never share this file publicly.
+input string InpCloudAgentToken   = "";      // Optional cloud token. Keep empty for local-only trading intelligence.
 input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms)
 
 input group "=== TUNABLE THRESHOLDS (walk-forward optimize these) ==="
@@ -875,7 +877,7 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
-// v5.8.41 — Report-Fit Scout + Trade Brain + Exit Learning Intelligence.
+// v5.8.43 — Local Trading Intelligence + Trade Brain + Exit Learning Intelligence.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -1767,7 +1769,8 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.41 (REPORT-FIT RECOVERY SCOUT) READY ===");
+   Print("=== XAUAI SNIPER v5.8.43 (LOCAL INTELLIGENCE READY) READY ===");
+   XAU_LogTradingIntelStartupHealth();
 
    // ============================================================
    // v4.9.6 — STARTUP DIAGNOSTIC BANNER
@@ -1891,7 +1894,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.41 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.43 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -8754,6 +8757,194 @@ string XAU_TradeBrainFile()
    return "XAUAI_ExecutedTradeBrain_" + Symbol() + ".csv";
 }
 
+string XAU_TradingIntelCsvFile()
+{
+   return "XAUAI_TradingIntelligence_" + Symbol() + ".csv";
+}
+
+string XAU_TradingIntelJsonFile()
+{
+   return "XAUAI_TradingIntelligence_" + Symbol() + ".jsonl";
+}
+
+void XAU_LogTradingIntelStartupHealth()
+{
+   if(!InpTradingIntelDataset || !IsXAUFastSymbol()) return;
+   string csvFile = XAU_TradingIntelCsvFile();
+   string jsonFile = XAU_TradingIntelJsonFile();
+   string extra = "csv=" + csvFile +
+                  " json=" + jsonFile +
+                  " cloudFanout=" + (InpCloudFanout ? "ON" : "OFF") +
+                  " localSourceOfTruth=Y";
+   XAU_IntelAppend("DATASET_READY", "startup_" + (string)((long)TimeCurrent()), 0, 0,
+                   "SYSTEM", "", "", (int)currentRegime, SessionTag(),
+                   "DATASET", "READY", "LOCAL_REPORTS_READY",
+                   0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                   0.0, 0.0, 0, 0, 0.0, 0.0,
+                   "startup health check", "", "", 0, true, extra);
+   Print("TRADING-INTEL READY: CSV=", csvFile,
+         " JSON=", InpTradingIntelJson ? jsonFile : "OFF",
+         " | CloudFanout=", InpCloudFanout ? "ON" : "OFF",
+         " | local source of truth enabled.");
+}
+
+string XAU_IntelJsonSafe(string s, int maxLen)
+{
+   StringReplace(s, "\\", "\\\\");
+   StringReplace(s, "\"", "\\\"");
+   StringReplace(s, "\r", " ");
+   StringReplace(s, "\n", " ");
+   if(maxLen > 0 && StringLen(s) > maxLen) s = StringSubstr(s, 0, maxLen);
+   return s;
+}
+
+void XAU_IntelAppendJson(string eventName, string decisionId, ulong posId, int dir,
+                         string setupName, string grade, string signature, int regime,
+                         string session, string owner, string action, string reasonKey,
+                         double setupScore, double combinedScore, double atr,
+                         double price, double entryPrice, double exitPrice,
+                         double lots, double sl, double tp, double profit,
+                         double worstFloating, int secondsNegative, int checkpointMin,
+                         double favATR, double advATR, string entryReason,
+                         string exitReason, string cloudSignalId, int cloudCode,
+                         bool cloudOk, string extra)
+{
+   if(!InpTradingIntelJson) return;
+   string fn = XAU_TradingIntelJsonFile();
+   bool exists = FileIsExist(fn, FILE_COMMON);
+   int h = exists
+           ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_TXT | FILE_COMMON)
+           : FileOpen(fn, FILE_WRITE | FILE_TXT | FILE_COMMON);
+   if(h == INVALID_HANDLE)
+   {
+      Print("TRADING-INTEL JSON: FileOpen failed err=", GetLastError());
+      return;
+   }
+   if(exists) FileSeek(h, 0, SEEK_END);
+   MqlDateTime dt; TimeCurrent(dt);
+   string line = "{";
+   line += "\"schema\":\"xauai_trading_intelligence_v1\"";
+   line += ",\"event\":\"" + XAU_IntelJsonSafe(eventName, 64) + "\"";
+   line += ",\"time\":\"" + TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS) + "\"";
+   line += ",\"symbol\":\"" + XAU_IntelJsonSafe(Symbol(), 24) + "\"";
+   line += ",\"decisionId\":\"" + XAU_IntelJsonSafe(decisionId, 80) + "\"";
+   line += ",\"posId\":\"" + (string)posId + "\"";
+   line += ",\"dir\":\"" + (dir > 0 ? "BUY" : (dir < 0 ? "SELL" : "NA")) + "\"";
+   line += ",\"setup\":\"" + XAU_IntelJsonSafe(setupName, 80) + "\"";
+   line += ",\"grade\":\"" + XAU_IntelJsonSafe(XAU_GradeBucket(grade), 24) + "\"";
+   line += ",\"signature\":\"" + XAU_IntelJsonSafe(signature, 120) + "\"";
+   line += ",\"regime\":" + (string)regime;
+   line += ",\"session\":\"" + XAU_IntelJsonSafe(session, 32) + "\"";
+   line += ",\"hour\":" + (string)dt.hour;
+   line += ",\"owner\":\"" + XAU_IntelJsonSafe(owner, 40) + "\"";
+   line += ",\"action\":\"" + XAU_IntelJsonSafe(action, 40) + "\"";
+   line += ",\"reasonKey\":\"" + XAU_IntelJsonSafe(reasonKey, 90) + "\"";
+   line += ",\"setupScore\":" + DoubleToString(setupScore, 2);
+   line += ",\"combined\":" + DoubleToString(combinedScore, 2);
+   line += ",\"atr\":" + DoubleToString(atr, 4);
+   line += ",\"price\":" + DoubleToString(price, 5);
+   line += ",\"entryPrice\":" + DoubleToString(entryPrice, 5);
+   line += ",\"exitPrice\":" + DoubleToString(exitPrice, 5);
+   line += ",\"lots\":" + DoubleToString(lots, 2);
+   line += ",\"sl\":" + DoubleToString(sl, 5);
+   line += ",\"tp\":" + DoubleToString(tp, 5);
+   line += ",\"profit\":" + DoubleToString(profit, 2);
+   line += ",\"worstFloating\":" + DoubleToString(worstFloating, 2);
+   line += ",\"secondsNegative\":" + (string)secondsNegative;
+   line += ",\"checkpointMin\":" + (string)checkpointMin;
+   line += ",\"favATR\":" + DoubleToString(favATR, 2);
+   line += ",\"advATR\":" + DoubleToString(advATR, 2);
+   line += ",\"entryReason\":\"" + XAU_IntelJsonSafe(entryReason, 240) + "\"";
+   line += ",\"exitReason\":\"" + XAU_IntelJsonSafe(exitReason, 240) + "\"";
+   line += ",\"cloudSignalId\":\"" + XAU_IntelJsonSafe(cloudSignalId, 80) + "\"";
+   line += ",\"cloudCode\":" + (string)cloudCode;
+   line += ",\"cloudOk\":" + (cloudOk ? "true" : "false");
+   line += ",\"extra\":\"" + XAU_IntelJsonSafe(extra, 500) + "\"";
+   line += "}";
+   FileWriteString(h, line + "\n");
+   FileClose(h);
+}
+
+void XAU_IntelAppend(string eventName, string decisionId, ulong posId, int dir,
+                     string setupName, string grade, string signature, int regime,
+                     string session, string owner, string action, string reasonKey,
+                     double setupScore, double combinedScore, double atr,
+                     double price, double entryPrice, double exitPrice,
+                     double lots, double sl, double tp, double profit,
+                     double worstFloating, int secondsNegative, int checkpointMin,
+                     double favATR, double advATR, string entryReason,
+                     string exitReason, string cloudSignalId, int cloudCode,
+                     bool cloudOk, string extra)
+{
+   if(!InpTradingIntelDataset || !IsXAUFastSymbol()) return;
+   string fn = XAU_TradingIntelCsvFile();
+   bool exists = FileIsExist(fn, FILE_COMMON);
+   int h = exists
+           ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',')
+           : FileOpen(fn, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE)
+   {
+      Print("TRADING-INTEL CSV: FileOpen failed err=", GetLastError());
+      return;
+   }
+   if(exists) FileSeek(h, 0, SEEK_END);
+   if(!exists || FileTell(h) == 0)
+   {
+      FileWrite(h, "schema", "event", "time", "symbol", "decisionId", "posId",
+                "dir", "setup", "grade", "signature", "regime", "session", "hour",
+                "owner", "action", "reasonKey", "setupScore", "combined", "atr",
+                "price", "entryPrice", "exitPrice", "lots", "sl", "tp", "profit",
+                "worstFloating", "secondsNegative", "checkpointMin", "favATR", "advATR",
+                "entryReason", "exitReason", "cloudSignalId", "cloudCode", "cloudOk", "extra");
+   }
+   MqlDateTime dt; TimeCurrent(dt);
+   FileWrite(h,
+             "xauai_trading_intelligence_v1",
+             XAU_CsvSafe(eventName),
+             TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+             Symbol(),
+             XAU_CsvSafe(decisionId),
+             (string)posId,
+             dir > 0 ? "BUY" : (dir < 0 ? "SELL" : "NA"),
+             XAU_CsvSafe(setupName),
+             XAU_CsvSafe(XAU_GradeBucket(grade)),
+             XAU_CsvSafe(signature),
+             regime,
+             XAU_CsvSafe(session),
+             dt.hour,
+             XAU_CsvSafe(owner),
+             XAU_CsvSafe(action),
+             XAU_CsvSafe(reasonKey),
+             DoubleToString(setupScore, 2),
+             DoubleToString(combinedScore, 2),
+             DoubleToString(atr, 4),
+             DoubleToString(price, 5),
+             DoubleToString(entryPrice, 5),
+             DoubleToString(exitPrice, 5),
+             DoubleToString(lots, 2),
+             DoubleToString(sl, 5),
+             DoubleToString(tp, 5),
+             DoubleToString(profit, 2),
+             DoubleToString(worstFloating, 2),
+             secondsNegative,
+             checkpointMin,
+             DoubleToString(favATR, 2),
+             DoubleToString(advATR, 2),
+             XAU_CsvSafe(entryReason),
+             XAU_CsvSafe(exitReason),
+             XAU_CsvSafe(cloudSignalId),
+             cloudCode,
+             cloudOk ? "Y" : "N",
+             XAU_CsvSafe(extra));
+   FileClose(h);
+
+   XAU_IntelAppendJson(eventName, decisionId, posId, dir, setupName, grade, signature,
+                       regime, session, owner, action, reasonKey, setupScore, combinedScore,
+                       atr, price, entryPrice, exitPrice, lots, sl, tp, profit,
+                       worstFloating, secondsNegative, checkpointMin, favATR, advATR,
+                       entryReason, exitReason, cloudSignalId, cloudCode, cloudOk, extra);
+}
+
 string XAU_GradeBucket(string grade)
 {
    if(StringFind(grade, "A+") >= 0) return "A+";
@@ -8838,6 +9029,23 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
              DoubleToString(r.atr, 2),
              r.aiConfidence);
    FileClose(h);
+
+   string owner = "TRADE";
+   string action = eventName;
+   string reasonKey = eventName == "OPEN" ? "TRADE_OPEN" : XAU_BlockReasonKey(exitReason);
+   if(eventName == "OPEN") owner = "ENTRY";
+   else if(eventName == "CLOSE") owner = "EXIT";
+   else if(eventName == "POST_CLOSE") owner = "EXIT_BRAIN";
+   XAU_IntelAppend(eventName, (string)r.posId, r.posId, r.dir,
+                   r.setup, r.grade, r.signature, r.regime, r.session,
+                   owner, action, reasonKey,
+                   r.setupScore, r.combinedScore, r.atr,
+                   eventName == "OPEN" ? r.entryPrice : exitPrice,
+                   r.entryPrice, exitPrice, r.lots, r.sl, r.tp, profit,
+                   worstFloatingPnl, secondsNegative,
+                   eventName == "POST_CLOSE" ? secondsNegative : 0,
+                   0.0, 0.0, r.entryReason, exitReason,
+                   CloudMapGet(r.posId), 0, true, outcome);
 }
 
 void XAU_BrainWatchClosedTrade(TradeBrainOpen &r, double closePrice, double closeProfit)
@@ -9127,6 +9335,21 @@ void XAU_AppendBlockedMemory(string eventName, BlockedIdea &idea, int checkpoint
              DoubleToString(idea.combinedScore, 2),
              XAU_CsvSafe(extra));
    FileClose(h);
+
+   string intelEvent = (eventName == "CHECK") ? "BLOCK_CHECK" : eventName;
+   string decisionId = (string)((long)idea.firstTime) + "_" +
+                       (idea.dir > 0 ? "BUY" : "SELL") + "_" +
+                       XAU_CsvSafe(idea.setup) + "_" +
+                       XAU_BlockReasonKey(idea.reason);
+   XAU_IntelAppend(intelEvent, decisionId, 0, idea.dir,
+                   idea.setup, idea.grade, "", idea.regime, SessionTag(),
+                   eventName == "CHECK" ? "BLOCKED_OUTCOME" : "VETO",
+                   eventName == "CHECK" ? "CHECK" : "BLOCK",
+                   XAU_BlockReasonKey(idea.reason),
+                   idea.setupScore, idea.combinedScore, idea.atr,
+                   curPrice, idea.signalPrice, 0.0, 0.0, 0.0, 0.0, 0.0,
+                   0.0, 0, checkpointMin, favATR, advATR,
+                   "blockedSignal", "", "", 0, true, extra);
 }
 
 void XAU_TrackSignalFirstSeen(int signal, string setupName, string grade,
@@ -10425,12 +10648,26 @@ string CloudPostSignal(string symbol, string side, double entry, double sl, doub
    {
       Print("☁  CLOUD signal POST failed: http=", code, " err=", GetLastError(),
             " (check WebRequest whitelist for ", InpCloudURL, ")");
+      XAU_IntelAppend("CLOUD_SIGNAL", "", 0, side == "BUY" ? 1 : (side == "SELL" ? -1 : 0),
+                      "", grade, "", (int)currentRegime, SessionTag(), "CLOUD",
+                      "SIGNAL_POST", "CLOUD_SIGNAL_POST_FAILED",
+                      0.0, 0.0, 0.0, entry, entry, 0.0, masterLots, sl, tp,
+                      0.0, 0.0, 0, 0, 0.0, 0.0, "",
+                      "cloud signal POST failed", "", code, false,
+                      "url=" + InpCloudURL + " err=" + (string)GetLastError());
       return "";
    }
    string resp = CharArrayToString(res);
    string sigId = JsonStr(resp, "signal_id");
    Print("☁  CLOUD signal fanout OK — signal_id=", sigId, " ", side, " @", entry,
          " masterLots=", DoubleToString(masterLots,2), " masterBal=$", DoubleToString(masterBalance,0));
+   XAU_IntelAppend("CLOUD_SIGNAL", sigId, 0, side == "BUY" ? 1 : (side == "SELL" ? -1 : 0),
+                   "", grade, "", (int)currentRegime, SessionTag(), "CLOUD",
+                   "SIGNAL_POST", "CLOUD_SIGNAL_POST_OK",
+                   0.0, 0.0, 0.0, entry, entry, 0.0, masterLots, sl, tp,
+                   0.0, 0.0, 0, 0, 0.0, 0.0, "",
+                   "cloud signal accepted", sigId, code, true,
+                   "masterBalance=" + DoubleToString(masterBalance, 2));
    return sigId;
 }
 
@@ -10449,9 +10686,23 @@ void CloudPostSignalClose(string sigId, double exitPrice, string reason)
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
    int code = WebRequest("POST", url, hdr, InpCloudTimeoutMs, pd, res, rh);
    if(code != 200)
+   {
       Print("☁  CLOUD close POST failed: http=", code, " err=", GetLastError());
+      XAU_IntelAppend("CLOUD_CLOSE", sigId, 0, 0, "", "", "", (int)currentRegime,
+                      SessionTag(), "CLOUD", "CLOSE_POST", "CLOUD_CLOSE_POST_FAILED",
+                      0.0, 0.0, 0.0, exitPrice, 0.0, exitPrice, 0.0, 0.0, 0.0,
+                      0.0, 0.0, 0, 0, 0.0, 0.0, "", reason, sigId, code, false,
+                      "err=" + (string)GetLastError());
+   }
    else
+   {
       Print("☁  CLOUD close fanout OK — signal_id=", sigId, " exit=", exitPrice);
+      XAU_IntelAppend("CLOUD_CLOSE", sigId, 0, 0, "", "", "", (int)currentRegime,
+                      SessionTag(), "CLOUD", "CLOSE_POST", "CLOUD_CLOSE_POST_OK",
+                      0.0, 0.0, 0.0, exitPrice, 0.0, exitPrice, 0.0, 0.0, 0.0,
+                      0.0, 0.0, 0, 0, 0.0, 0.0, "", reason, sigId, code, true,
+                      "");
+   }
 }
 
 void CloudPostSignalPartial(string sigId, double exitPrice, double closePct, string reason)
@@ -10468,10 +10719,24 @@ void CloudPostSignalPartial(string sigId, double exitPrice, double closePct, str
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
    int code = WebRequest("POST", url, hdr, InpCloudTimeoutMs, pd, res, rh);
    if(code != 200)
+   {
       Print("☁  CLOUD partial POST failed: http=", code, " err=", GetLastError());
+      XAU_IntelAppend("CLOUD_PARTIAL", sigId, 0, 0, "", "", "", (int)currentRegime,
+                      SessionTag(), "CLOUD", "PARTIAL_POST", "CLOUD_PARTIAL_POST_FAILED",
+                      0.0, 0.0, 0.0, exitPrice, 0.0, exitPrice, closePct, 0.0, 0.0,
+                      0.0, 0.0, 0, 0, 0.0, 0.0, "", reason, sigId, code, false,
+                      "closePct=" + DoubleToString(closePct, 2) + " err=" + (string)GetLastError());
+   }
    else
+   {
       Print("☁  CLOUD partial fanout OK — signal_id=", sigId,
             " closePct=", DoubleToString(closePct, 1), "% exit=", exitPrice);
+      XAU_IntelAppend("CLOUD_PARTIAL", sigId, 0, 0, "", "", "", (int)currentRegime,
+                      SessionTag(), "CLOUD", "PARTIAL_POST", "CLOUD_PARTIAL_POST_OK",
+                      0.0, 0.0, 0.0, exitPrice, 0.0, exitPrice, closePct, 0.0, 0.0,
+                      0.0, 0.0, 0, 0, 0.0, 0.0, "", reason, sigId, code, true,
+                      "closePct=" + DoubleToString(closePct, 2));
+   }
 }
 
 void CloudHeartbeat()
@@ -10691,7 +10956,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.41 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.43 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

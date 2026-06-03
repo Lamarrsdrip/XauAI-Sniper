@@ -26,7 +26,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
           <XauAiLogo size={34} className="flex-none shadow-lg shadow-amber-500/10" />
           <span className="min-w-0">
             <span className="block truncate font-heading text-base font-semibold tracking-tight">XauAI Sniper</span>
-            <span className="block truncate font-mono text-[9px] uppercase tracking-[0.24em] text-amber-200/55">Master v5.8.41</span>
+            <span className="block truncate font-mono text-[9px] uppercase tracking-[0.24em] text-amber-200/55">Master v5.8.43</span>
           </span>
         </button>
 
