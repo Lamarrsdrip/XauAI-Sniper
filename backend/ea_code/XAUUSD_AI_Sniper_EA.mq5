@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.47 — Entry Quality Brain          |
+//|                                     v5.8.48 — Rapid Memory Scout           |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.47 — ENTRY QUALITY BRAIN"
+#property description "XAUUSD AI Sniper v5.8.48 — RAPID MEMORY SCOUT"
 #property description "Uses attribution memory to soften expensive blocks with tiny scouts, not blind looseness."
 #property description "Cuts B-grade hot-cycle risk after large winning runs so one late B cannot erase the day."
 #property strict
@@ -900,7 +900,7 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
-// v5.8.47 — Bot Activity Monitor + Startup Sync + Trade Brain + Entry Quality Intelligence.
+// v5.8.48 — Bot Activity Monitor + Startup Sync + Trade Brain + Rapid Memory Scout.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -1799,7 +1799,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.47 (COMMAND CENTER HEARTBEAT) READY ===");
+   Print("=== XAUAI SNIPER v5.8.48 (RAPID MEMORY SCOUT) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -1926,7 +1926,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.47 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.48 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -4501,6 +4501,7 @@ void OnTick()
 
    g_adaptiveConfirmLotMulti = 1.0;
    g_adaptiveConfirmReason = "";
+   bool bQualityReportScout = false;
 
    string antiBiasReason = "";
    if(!ApplyAntiBiasCorrection(signal, setupName, setupScore, combinedScore, grade, antiBiasReason))
@@ -4523,6 +4524,20 @@ void OnTick()
       {
          string bMsg = StringFormat("B-GRADE QUALITY BLOCK: %s %s failed stricter fast XAU confirmation. %s",
                                     setupName, signal == 1 ? "BUY" : "SELL", bQualityWhy);
+         string scoutWhy = "";
+         if(XAU_BlockedMemoryRapidScout(setupName, signal, bMsg, scoutWhy))
+         {
+            bQualityReportScout = true;
+            g_adaptiveConfirmLotMulti *= InpBlockedMemoryScoutLotMulti;
+            g_adaptiveConfirmReason = "B-grade report-fit scout: " + scoutWhy + " | original fast-confirm: " + bQualityWhy;
+            Print("REPORT-FIT B-SCOUT: ", setupName, " ", signal == 1 ? "BUY" : "SELL",
+                  " allowed at tiny risk x", DoubleToString(InpBlockedMemoryScoutLotMulti, 2),
+                  " because blocked-memory says this exact pattern is expensive to miss. ", scoutWhy);
+            CloudPostReasoning("ALLOW", "REPORT-FIT B-SCOUT: " + scoutWhy, RegimeName(), setupName,
+                               setupScore, combinedScore, "B-SCOUT", signal);
+         }
+         else
+         {
          Print("TRADE BLOCKED BECAUSE: ", bMsg);
          XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, bMsg);
          CloudPostReasoning("BLOCK", bMsg, RegimeName(), setupName,
@@ -4530,6 +4545,7 @@ void OnTick()
          UpdateDashboard(0, combinedScore, "B-QUALITY");
          lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "B-QUALITY";
          return;
+         }
       }
       if(bQualityLot < 0.999)
       {
@@ -4585,7 +4601,7 @@ void OnTick()
          }
       }
 
-      if(InpSmartGuardRequireHTF && signal != 0)
+      if(InpSmartGuardRequireHTF && signal != 0 && !bQualityReportScout)
       {
          double confirmLot = 1.0;
          string confirmWhy = "";
@@ -4608,6 +4624,11 @@ void OnTick()
             Print("SMART-GUARD FAST CONFIRM: allowed with H1 soft-context lot penalty x",
                   DoubleToString(confirmLot, 2), " | ", confirmWhy);
          }
+      }
+      else if(bQualityReportScout)
+      {
+         Print("SMART-GUARD FAST CONFIRM: bypassed only for REPORT-FIT B-SCOUT; risk remains capped by scout sizing. ",
+               g_adaptiveConfirmReason);
       }
 
       if(InpSmartGuardNoDamageStack && CountMyPositions() > 0)
@@ -9942,6 +9963,85 @@ bool XAU_BlockedMemoryEdgeSupportsScout(string setupName, int signal, string rea
    return true;
 }
 
+bool XAU_BlockedMemoryRapidScout(string setupName, int signal, string reason, string &why)
+{
+   why = "";
+   if(!InpBlockedMemoryScoutEnable || !InpBlockedTradeMemoryReport || !IsXAUFastSymbol())
+      return false;
+
+   string fn = XAU_BlockedMemoryFile();
+   if(!FileIsExist(fn, FILE_COMMON))
+      return false;
+
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE)
+      return false;
+
+   string wantDir = signal > 0 ? "BUY" : "SELL";
+   string wantReason = XAU_BlockReasonKey(reason);
+   int samples = 0;
+   int tp2r = 0;
+   int sl1r = 0;
+   double avgFavATR = 0.0;
+   double avgAdvATR = 0.0;
+
+   while(!FileIsEnding(h))
+   {
+      string ev = FileReadString(h);
+      string tm = FileReadString(h);
+      string sym = FileReadString(h);
+      string dir = FileReadString(h);
+      string setup = FileReadString(h);
+      string grade = FileReadString(h);
+      string reasonKey = FileReadString(h);
+      string sigPx = FileReadString(h);
+      string curPx = FileReadString(h);
+      string atrTxt = FileReadString(h);
+      string cpTxt = FileReadString(h);
+      string favTxt = FileReadString(h);
+      string advTxt = FileReadString(h);
+      string regimeTxt = FileReadString(h);
+      string setupScoreTxt = FileReadString(h);
+      string combinedTxt = FileReadString(h);
+      string extra = FileReadString(h);
+
+      if(ev != "CHECK" || sym != Symbol() || dir != wantDir || setup != setupName || reasonKey != wantReason)
+         continue;
+
+      int checkpoint = (int)StringToInteger(cpTxt);
+      if(checkpoint < 30)
+         continue;
+
+      double fav = StringToDouble(favTxt);
+      double adv = StringToDouble(advTxt);
+      samples++;
+      avgFavATR += fav;
+      avgAdvATR += adv;
+      if(StringFind(extra, "wouldTP2R=Y") >= 0) tp2r++;
+      if(StringFind(extra, "wouldSL1R=Y") >= 0) sl1r++;
+   }
+   FileClose(h);
+
+   if(samples <= 0)
+      return false;
+
+   avgFavATR /= samples;
+   avgAdvATR /= samples;
+
+   bool cleanRapidEdge = (samples >= 5 &&
+                          tp2r >= 3 &&
+                          sl1r == 0 &&
+                          avgFavATR >= 2.00 &&
+                          avgAdvATR <= 0.45);
+
+   if(!cleanRapidEdge)
+      return false;
+
+   why = StringFormat("rapid blocked-memory edge samples=%d TP2R=%d SL1R=%d avgFav=%.2fATR avgAdv=%.2fATR",
+                      samples, tp2r, sl1r, avgFavATR, avgAdvATR);
+   return true;
+}
+
 int XAU_FindQualityIdx(ulong posId)
 {
    for(int i = 0; i < ArraySize(g_qualityPosIds); i++)
@@ -11024,7 +11124,7 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.47\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.48\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -11564,7 +11664,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.47 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.48 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
