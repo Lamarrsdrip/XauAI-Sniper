@@ -11019,9 +11019,10 @@ void BotMonitorHeartbeat()
    else if(g_remotePauseNewTrades) state = "REMOTE_PAUSED";
    else if(openPs > 0) state = "MANAGING_TRADES";
    else if(StringLen(g_lastSkipReason) > 0) state = "WAITING";
+   // Do not publish stale MQL runtime codes as live bot errors. Trade/order
+   // failures are logged explicitly where they happen; heartbeat is state only.
    string lastErr = "";
-   int err = GetLastError();
-   if(err != 0) lastErr = "MQL error " + (string)err;
+   ResetLastError();
    string body = StringFormat(
       "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.47\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"

@@ -3751,7 +3751,8 @@ async def cloud_monitor_heartbeat(req: BotHeartbeatReq, request: Request):
         "monitor_last_heartbeat": now.isoformat(),
         "monitor_last_status": doc,
     }}, upsert=True)
-    if req.last_error:
+    noisy_stale_error = str(req.last_error or "").strip().upper() in {"MQL ERROR 5035"}
+    if req.last_error and not noisy_stale_error:
         await _store_bot_activity("ERROR", "ERROR", req.last_error, account, req.symbol or "", doc)
     if req.algo_trading is False:
         await _store_bot_activity("ALGO_DISABLED", "CRITICAL", "Algo Trading disabled", account, req.symbol or "", doc)
