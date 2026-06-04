@@ -21,6 +21,7 @@ import {
   Loader2,
   Lock,
   LogOut,
+  Menu,
   Pause,
   Play,
   RefreshCw,
@@ -48,8 +49,11 @@ const NAV = [
   ["home", "Home", Home],
   ["trading", "Trading", LineChart],
   ["analytics", "Analytics", BarChart3],
-  ["intelligence", "Brain", Brain],
   ["activity", "Activity", Activity],
+];
+
+const MORE_NAV = [
+  ["intelligence", "Brain", Brain, "EA decisions, waits, blocks, and learning"],
   ["control", "Control", SlidersHorizontal],
   ["license", "License", KeyRound],
   ["settings", "Settings", Settings],
@@ -161,6 +165,13 @@ function useAuthGuard() {
 }
 
 function AppShell({ active, setActive, children, logout, statusText, online }) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreActive = MORE_NAV.some(([id]) => id === active);
+  const openPage = (id) => {
+    setActive(id);
+    setMoreOpen(false);
+  };
+
   return (
     <div className="min-h-screen bg-[#040404] pb-[calc(6.5rem+env(safe-area-inset-bottom))] text-white" data-testid="bot-monitor-dashboard">
       <InstallAppPrompt />
@@ -189,8 +200,47 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
 
       <main className="relative z-10 mx-auto max-w-7xl overflow-x-hidden px-4 py-5 pb-[calc(8rem+env(safe-area-inset-bottom))]">{children}</main>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-[#050505]/94 pb-[env(safe-area-inset-bottom)] backdrop-blur-2xl">
-        <div className="mx-auto grid max-w-3xl grid-cols-8 px-1 py-2">
+      {moreOpen && (
+        <div className="fixed inset-0 z-[70] flex items-end bg-black/55 backdrop-blur-sm" onClick={() => setMoreOpen(false)}>
+          <div
+            className="w-full rounded-t-[34px] border border-white/10 bg-[#0b0b0b] p-4 pb-[calc(6.25rem+env(safe-area-inset-bottom))] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-white/18" />
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-[#d4af37]/70">Command Center</div>
+                <div className="text-xl font-black">More tools</div>
+              </div>
+              <button onClick={() => setMoreOpen(false)} className="rounded-full border border-white/10 bg-white/[0.06] p-2 text-white/65">
+                <XCircle className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {MORE_NAV.map(([id, label, Icon, detail]) => (
+                <button
+                  key={id}
+                  onClick={() => openPage(id)}
+                  className={`flex items-center gap-3 rounded-[22px] border p-4 text-left transition ${
+                    active === id ? "border-[#d4af37]/45 bg-[#d4af37]/15 text-[#f5d36d]" : "border-white/10 bg-white/[0.045] text-white/80"
+                  }`}
+                >
+                  <span className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <Icon className="h-5 w-5" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block font-black">{label}</span>
+                    <span className="mt-1 block truncate text-xs text-white/42">{detail || "Open page"}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <nav className="fixed bottom-0 left-0 right-0 z-[60] border-t border-white/10 bg-[#050505]/94 pb-[env(safe-area-inset-bottom)] backdrop-blur-2xl">
+        <div className="mx-auto grid max-w-md grid-cols-5 gap-1 px-2 py-2">
           {NAV.map(([id, label, Icon]) => (
             <button
               key={id}
@@ -203,6 +253,15 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
               <span className="truncate">{label}</span>
             </button>
           ))}
+          <button
+            onClick={() => setMoreOpen(true)}
+            className={`flex min-w-0 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-[10px] font-semibold transition ${
+              moreActive ? "bg-[#d4af37] text-black" : "text-white/42"
+            }`}
+          >
+            <Menu className="h-4 w-4" />
+            <span className="truncate">More</span>
+          </button>
         </div>
       </nav>
     </div>
