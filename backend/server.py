@@ -400,7 +400,7 @@ async def download_ea():
     return Response(
         content=sanitized,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.46_COMMAND_CENTER_HEARTBEAT.mq5"'},
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.47_COMMAND_CENTER_PIN_AUTH.mq5"'},
     )
 
 # Admin-only: serves the FULL master EA with your agent token + cloud fanout
@@ -411,7 +411,7 @@ async def admin_download_ea_master():
     if not p.exists(): raise HTTPException(status_code=404)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.46_COMMAND_CENTER_HEARTBEAT.mq5",
+        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.47_COMMAND_CENTER_PIN_AUTH.mq5",
         media_type="application/octet-stream",
     )
 
@@ -2107,6 +2107,9 @@ class CloudCommandAckReq(BaseModel):
     command_id: str
     status: str
     message: Optional[str] = ""
+    pin: Optional[str] = ""
+    license_key: Optional[str] = ""
+    account: Optional[str] = ""
     details: Optional[Dict] = None
 
 SAFE_REMOTE_COMMANDS = {
@@ -2152,6 +2155,51 @@ async def _verify_command_license(user: dict, key: str) -> dict:
     if not owner and user_email:
         await db.pin_licenses.update_one({"pin": raw}, {"$set": {"buyer_email": user_email}})
     return lic
+
+async def _resolve_monitor_license(pin: str = "", account: str = "", request: Optional[Request] = None) -> dict:
+    """Authenticate EA monitor traffic by license PIN first; agent token remains only a fallback."""
+    raw = _normalize_license_key(pin)
+    account = str(account or "").strip()
+    if raw:
+        lic = await db.pin_licenses.find_one({"pin": raw, "is_active": True}, {"_id": 0})
+        if not lic:
+            logger.warning("[monitor-auth] reject invalid/inactive pin=%s account=%s", raw, account)
+            raise HTTPException(status_code=403, detail={
+                "ok": False,
+                "reason": "INVALID_OR_INACTIVE_LICENSE_PIN",
+                "message": "License PIN was not found or is inactive.",
+                "license_pin": raw,
+                "account": account,
+            })
+        bound = str(lic.get("mt5_account") or "").strip()
+        if bound and account and bound != account:
+            logger.warning("[monitor-auth] reject account mismatch pin=%s bound=%s account=%s", raw, bound, account)
+            raise HTTPException(status_code=403, detail={
+                "ok": False,
+                "reason": "LICENSE_BOUND_TO_DIFFERENT_MT5_ACCOUNT",
+                "message": f"License is already bound to MT5 account {bound}.",
+                "license_pin": raw,
+                "bound_account": bound,
+                "account": account,
+            })
+        logger.info("[monitor-auth] accepted pin=%s license_id=%s account=%s user=%s",
+                    raw, lic.get("id", ""), account, lic.get("buyer_email", ""))
+        return lic
+
+    if request is not None:
+        try:
+            await _require_agent_async(request)
+            logger.info("[monitor-auth] accepted fallback agent token account=%s", account)
+            return {}
+        except HTTPException as exc:
+            logger.warning("[monitor-auth] reject missing pin/token account=%s detail=%s", account, exc.detail)
+
+    raise HTTPException(status_code=403, detail={
+        "ok": False,
+        "reason": "MISSING_LICENSE_PIN",
+        "message": "EA monitor requests must include license_pin/pin. Put your ASE license key in InpLicensePIN.",
+        "account": account,
+    })
 
 # -------- Plans (admin-configurable via cloud_settings.plans; defaults below) --------
 CLOUD_PLANS = {
@@ -3665,19 +3713,22 @@ async def cloud_master_reasoning(req: MasterReasoningReq, request: Request):
 @api_router.post("/cloud/monitor/heartbeat")
 async def cloud_monitor_heartbeat(req: BotHeartbeatReq, request: Request):
     """Remote monitoring only; this endpoint never executes trades or changes strategy."""
-    await _require_agent_async(request)
     now = datetime.now(timezone.utc)
     doc = req.model_dump()
     license_key = _normalize_license_key(req.license_key or req.pin or "")
+    account = str(req.account_number or "")
+    lic = await _resolve_monitor_license(license_key, account, request)
+    license_id = lic.get("id", "") if lic else ""
     if license_key:
         doc["license_key"] = license_key
         doc["pin"] = license_key
+    if license_id:
+        doc["license_id"] = license_id
     doc["id"] = str(uuid.uuid4())
     doc["ts"] = now.isoformat()
     doc["last_heartbeat"] = now.isoformat()
-    account = str(req.account_number or "")
     if license_key:
-        await db.pin_licenses.update_one(
+        update_result = await db.pin_licenses.update_one(
             {"pin": license_key, "is_active": True},
             {"$set": {
                 "is_used": True,
@@ -3691,6 +3742,8 @@ async def cloud_monitor_heartbeat(req: BotHeartbeatReq, request: Request):
             }},
             upsert=False,
         )
+        doc["license_update_matched"] = update_result.matched_count
+        doc["license_update_modified"] = update_result.modified_count
     await db.cloud_bot_heartbeats.insert_one(doc.copy())
     await db.cloud_settings.update_one({"key": "main"}, {"$set": {
         "master_last_heartbeat": now.isoformat(),
@@ -3709,17 +3762,29 @@ async def cloud_monitor_heartbeat(req: BotHeartbeatReq, request: Request):
         oldest = await db.cloud_bot_heartbeats.find({}, {"_id": 1, "ts": 1}).sort("ts", 1).to_list(total - 1000)
         if oldest:
             await db.cloud_bot_heartbeats.delete_many({"_id": {"$in": [o["_id"] for o in oldest]}})
-    return {"ok": True, "status": "received"}
+    response = {
+        "ok": True,
+        "status": "received",
+        "auth": "license_pin" if license_key else "agent_token",
+        "license_pin": license_key,
+        "license_id": license_id,
+        "account": account,
+        "heartbeat_id": doc["id"],
+        "bound": bool(account),
+    }
+    logger.info("[monitor-heartbeat] response=%s", response)
+    return response
 
 @api_router.post("/cloud/monitor/activity")
 async def cloud_monitor_activity(req: BotActivityReq, request: Request):
     """Remote monitoring only; this endpoint never executes trades."""
-    await _require_agent_async(request)
     license_key = _normalize_license_key(req.license_key or req.pin or "")
+    lic = await _resolve_monitor_license(license_key, req.account or "", request)
     details = req.details or {}
     if license_key:
         details = dict(details)
         details["license_key"] = license_key
+        details["license_id"] = lic.get("id", "") if lic else ""
     doc = await _store_bot_activity(req.event_type, req.severity, req.message,
                                     req.account or "", req.symbol or "", details)
     await db.cloud_settings.update_one({"key": "main"}, {"$set": {
@@ -3762,15 +3827,23 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
     return {"ok": True, "command_id": command_id, "status": "PENDING", "action": action}
 
 @api_router.get("/cloud/command/pending")
-async def cloud_command_pending(request: Request, limit: int = 5):
-    await _require_agent_async(request)
+async def cloud_command_pending(request: Request, limit: int = 5,
+                                pin: str = "", license_key: str = "", account: str = ""):
+    raw = _normalize_license_key(license_key or pin or "")
+    lic = await _resolve_monitor_license(raw, account, request)
     n = max(1, min(int(limit), 10))
-    rows = await db.cloud_bot_commands.find({"status": "PENDING"}, {"_id": 0}).sort("requested_at", 1).to_list(n)
+    query = {"status": "PENDING"}
+    if lic and lic.get("pin"):
+        query["license_key"] = lic["pin"]
+    if account:
+        query["$or"] = [{"mt5_account": str(account)}, {"account": str(account)}, {"mt5_account": ""}, {"mt5_account": {"$exists": False}}]
+    rows = await db.cloud_bot_commands.find(query, {"_id": 0}).sort("requested_at", 1).to_list(n)
     return {"ok": True, "commands": rows, "next": rows[0] if rows else None, "count": len(rows)}
 
 @api_router.post("/cloud/command/ack")
 async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
-    await _require_agent_async(request)
+    raw = _normalize_license_key(req.license_key or req.pin or "")
+    lic = await _resolve_monitor_license(raw, req.account or "", request)
     status = str(req.status or "").upper().strip()
     if status not in {"ACKED", "EXECUTED", "FAILED", "SKIPPED"}:
         raise HTTPException(status_code=400, detail="Invalid command acknowledgement status.")
@@ -3778,6 +3851,13 @@ async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
     command = await db.cloud_bot_commands.find_one({"id": req.command_id}, {"_id": 0})
     if not command:
         raise HTTPException(status_code=404, detail="Command not found.")
+    if lic and command.get("license_key") and command.get("license_key") != lic.get("pin"):
+        raise HTTPException(status_code=403, detail={
+            "ok": False,
+            "reason": "COMMAND_LICENSE_MISMATCH",
+            "message": "This command belongs to a different license.",
+            "command_id": req.command_id,
+        })
     await db.cloud_bot_commands.update_one({"id": req.command_id}, {"$set": {
         "status": status,
         "ack_at": now.isoformat(),
@@ -3789,7 +3869,8 @@ async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
     label = command.get("label") or command.get("action") or "Remote command"
     await _store_bot_activity("REMOTE_COMMAND_" + status, severity,
                               f"{label}: {req.message or status}",
-                              details={"command_id": req.command_id, "action": command.get("action"), "status": status})
+                              account=command.get("mt5_account", "") or req.account or "",
+                              details={"command_id": req.command_id, "action": command.get("action"), "status": status, "license_key": command.get("license_key", "")})
     return {"ok": True, "command_id": req.command_id, "status": status}
 
 @api_router.get("/cloud/command/recent")
@@ -4392,8 +4473,8 @@ async def cloud_agent_trade_open(req: AgentTradeOpenReq, request: Request):
         await db.cloud_trades.insert_one(trade.copy())
     return {"ok": True}
 
-# Admin diagnostic: recent fanout outcomes (last 100) so debugging copy-trading
-# is one click away instead of SSH-into-VPS-to-tail-logs.
+# Admin diagnostic: recent command/monitor fanout outcomes (last 100) so
+# operators can debug delivery without SSH-into-VPS-to-tail-logs.
 @api_router.get("/admin/cloud/fanout-logs", dependencies=[Depends(get_current_admin)])
 async def cloud_admin_fanout_logs(limit: int = 100):
     rows = await db.cloud_fanout_logs.find({}, {"_id": 0}).sort("opened_at", -1).to_list(min(int(limit), 500))

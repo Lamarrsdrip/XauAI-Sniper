@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.46 — Entry Quality Brain          |
+//|                                     v5.8.47 — Entry Quality Brain          |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.46 — ENTRY QUALITY BRAIN"
+#property description "XAUUSD AI Sniper v5.8.47 — ENTRY QUALITY BRAIN"
 #property description "Uses attribution memory to soften expensive blocks with tiny scouts, not blind looseness."
 #property description "Cuts B-grade hot-cycle risk after large winning runs so one late B cannot erase the day."
 #property strict
@@ -900,7 +900,7 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
-// v5.8.46 — Bot Activity Monitor + Startup Sync + Trade Brain + Entry Quality Intelligence.
+// v5.8.47 — Bot Activity Monitor + Startup Sync + Trade Brain + Entry Quality Intelligence.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -1799,7 +1799,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.46 (COMMAND CENTER HEARTBEAT) READY ===");
+   Print("=== XAUAI SNIPER v5.8.47 (COMMAND CENTER HEARTBEAT) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -1926,7 +1926,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.46 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.47 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -10945,7 +10945,7 @@ bool BotMonitorEnabled()
 {
    return (InpBotMonitorEnable && !InpBacktestMode
            && StringLen(InpCloudURL) >= 10
-           && StringLen(InpCloudAgentToken) >= 8);
+           && StringLen(InpLicensePIN) >= 10);
 }
 
 string BotMonitorJsonSafe(string s, int maxLen)
@@ -10989,7 +10989,13 @@ void BotMonitorActivity(string eventType, string severity, string message)
    int code = WebRequest("POST", InpCloudURL + "/api/cloud/monitor/activity",
                          hdr, InpCloudTimeoutMs, pd, res, rh);
    if(code != 200)
-      Print("BOT-MONITOR activity POST failed http=", code, " err=", GetLastError());
+   {
+      string responseBody = CharArrayToString(res);
+      Print("BOT-MONITOR activity POST failed url=", InpCloudURL, "/api/cloud/monitor/activity",
+            " http=", code, " err=", GetLastError(),
+            " pin=", BotMonitorJsonSafe(InpLicensePIN, 32),
+            " response=", BotMonitorJsonSafe(responseBody, 360));
+   }
 }
 
 void BotMonitorHeartbeat()
@@ -11017,7 +11023,7 @@ void BotMonitorHeartbeat()
    int err = GetLastError();
    if(err != 0) lastErr = "MQL error " + (string)err;
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.46\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.47\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -11044,16 +11050,33 @@ void BotMonitorHeartbeat()
    int code = WebRequest("POST", InpCloudURL + "/api/cloud/monitor/heartbeat",
                          hdr, InpCloudTimeoutMs, pd, res, rh);
    if(code != 200)
-      Print("BOT-MONITOR heartbeat POST failed http=", code, " err=", GetLastError(),
-            " (monitor is read-only; trading continues locally)");
+   {
+      string responseBody = CharArrayToString(res);
+      Print("BOT-MONITOR heartbeat POST failed url=", InpCloudURL, "/api/cloud/monitor/heartbeat",
+            " http=", code, " err=", GetLastError(),
+            " pin=", BotMonitorJsonSafe(InpLicensePIN, 32),
+            " account=", (string)AccountInfoInteger(ACCOUNT_LOGIN),
+            " payloadFields=pin,license_key,account_number,ea_version,symbol,timeframe,equity,balance",
+            " response=", BotMonitorJsonSafe(responseBody, 520),
+            " (monitor only; trading continues locally)");
+   }
+   else
+   {
+      string responseBody = CharArrayToString(res);
+      Print("BOT-MONITOR heartbeat OK account=", (string)AccountInfoInteger(ACCOUNT_LOGIN),
+            " pin=", BotMonitorJsonSafe(InpLicensePIN, 32),
+            " response=", BotMonitorJsonSafe(responseBody, 220));
+   }
 }
 
 void BotMonitorAckCommand(string commandId, string status, string message)
 {
    if(!BotMonitorEnabled() || StringLen(commandId) < 8) return;
    string body = StringFormat(
-      "{\"command_id\":\"%s\",\"status\":\"%s\",\"message\":\"%s\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"account\":\"%I64d\",\"command_id\":\"%s\",\"status\":\"%s\",\"message\":\"%s\","
       "\"details\":{\"remote_pause\":%s,\"remote_stop\":%s,\"open_positions\":%d}}",
+      BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
+      AccountInfoInteger(ACCOUNT_LOGIN),
       BotMonitorJsonSafe(commandId, 80), BotMonitorJsonSafe(status, 16),
       BotMonitorJsonSafe(message, 260), BotMonitorBool(g_remotePauseNewTrades),
       BotMonitorBool(g_remoteStopTrading), CountMyPositions());
@@ -11064,7 +11087,12 @@ void BotMonitorAckCommand(string commandId, string status, string message)
    int code = WebRequest("POST", InpCloudURL + "/api/cloud/command/ack",
                          hdr, InpCloudTimeoutMs, pd, res, rh);
    if(code != 200)
-      Print("BOT-COMMAND ack failed http=", code, " err=", GetLastError());
+   {
+      string responseBody = CharArrayToString(res);
+      Print("BOT-COMMAND ack failed http=", code, " err=", GetLastError(),
+            " pin=", BotMonitorJsonSafe(InpLicensePIN, 32),
+            " response=", BotMonitorJsonSafe(responseBody, 360));
+   }
 }
 
 void BotMonitorPollCommands()
@@ -11074,9 +11102,22 @@ void BotMonitorPollCommands()
    StringToCharArray("", pd, 0, 0);
    string hdr = "X-Agent-Token: " + InpCloudAgentToken + "\r\n";
    ResetLastError();
-   int code = WebRequest("GET", InpCloudURL + "/api/cloud/command/pending?limit=1",
+   string pendingUrl = InpCloudURL + "/api/cloud/command/pending?limit=1&pin=" +
+                       BotMonitorJsonSafe(InpLicensePIN, 32) +
+                       "&account=" + (string)AccountInfoInteger(ACCOUNT_LOGIN);
+   int code = WebRequest("GET", pendingUrl,
                          hdr, InpCloudTimeoutMs, pd, res, rh);
-   if(code != 200 || ArraySize(res) == 0) return;
+   if(code != 200 || ArraySize(res) == 0)
+   {
+      if(code != 200)
+      {
+         string responseBody = CharArrayToString(res);
+         Print("BOT-COMMAND pending GET failed url=", pendingUrl,
+               " http=", code, " err=", GetLastError(),
+               " response=", BotMonitorJsonSafe(responseBody, 360));
+      }
+      return;
+   }
 
    string body = CharArrayToString(res);
    string commandId = JsonStringField(body, "id");
@@ -11522,7 +11563,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.46 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.47 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

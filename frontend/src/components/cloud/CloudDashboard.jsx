@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   CircleDollarSign,
   Clock3,
+  Copy,
   Flame,
   Gauge,
   History,
@@ -161,7 +162,7 @@ function useAuthGuard() {
 
 function AppShell({ active, setActive, children, logout, statusText, online }) {
   return (
-    <div className="min-h-screen bg-[#040404] pb-24 text-white" data-testid="bot-monitor-dashboard">
+    <div className="min-h-screen bg-[#040404] pb-[calc(6.5rem+env(safe-area-inset-bottom))] text-white" data-testid="bot-monitor-dashboard">
       <InstallAppPrompt />
       <div className="fixed inset-0 pointer-events-none bg-[radial-gradient(circle_at_top_right,rgba(212,175,55,0.12),transparent_32%),radial-gradient(circle_at_20%_0%,rgba(16,185,129,0.08),transparent_28%)]" />
       <header className="sticky top-0 z-40 border-b border-white/10 bg-[#040404]/88 backdrop-blur-2xl">
@@ -186,9 +187,9 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
         </div>
       </header>
 
-      <main className="relative z-10 mx-auto max-w-7xl px-4 py-5">{children}</main>
+      <main className="relative z-10 mx-auto max-w-7xl overflow-x-hidden px-4 py-5 pb-[calc(8rem+env(safe-area-inset-bottom))]">{children}</main>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-[#050505]/94 backdrop-blur-2xl">
+      <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-[#050505]/94 pb-[env(safe-area-inset-bottom)] backdrop-blur-2xl">
         <div className="mx-auto grid max-w-3xl grid-cols-8 px-1 py-2">
           {NAV.map(([id, label, Icon]) => (
             <button
@@ -210,14 +211,37 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
 
 function Metric({ label, value, detail, icon: Icon, tone = "amber" }) {
   return (
-    <div className={`rounded-[22px] border p-4 ${toneClass(tone)}`}>
+    <div className={`min-w-0 overflow-hidden rounded-[22px] border p-4 ${toneClass(tone)}`}>
       <div className="mb-3 flex items-center justify-between">
         <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/42">{label}</div>
         {Icon && <Icon className="h-4 w-4 opacity-70" />}
       </div>
-      <div className="truncate font-mono text-2xl font-black tracking-tight">{value}</div>
-      {detail && <div className="mt-1 truncate text-xs text-white/50">{detail}</div>}
+      <div className="break-words font-mono text-xl font-black tracking-tight sm:text-2xl">{value}</div>
+      {detail && <div className="mt-1 break-words text-xs text-white/50">{detail}</div>}
     </div>
+  );
+}
+
+function CopyButton({ value, label = "Copy" }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="inline-flex items-center justify-center gap-1 rounded-full border border-white/10 bg-white/[0.06] px-3 py-2 text-[11px] font-black text-white/70"
+    >
+      <Copy className="h-3.5 w-3.5" /> {copied ? "Copied" : label}
+    </button>
   );
 }
 
@@ -291,8 +315,8 @@ function CommandModal({ command, onCancel, onSubmit, busy, message, licenseKey }
   if (!command) return null;
   const Icon = command.icon;
   return (
-    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center">
-      <div className="w-full max-w-md rounded-[30px] border border-white/10 bg-[#101010] p-5 shadow-2xl">
+    <div className="fixed inset-0 z-[120] flex items-end justify-center overflow-y-auto bg-black/70 p-3 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-8 backdrop-blur-sm sm:items-center sm:pb-3">
+      <div className="max-h-[calc(100vh-8.5rem)] w-full max-w-md overflow-y-auto rounded-[30px] border border-white/10 bg-[#101010] p-5 shadow-2xl sm:max-h-[90vh]">
         <div className={`mb-4 inline-flex rounded-2xl border p-3 ${toneClass(command.tone)}`}>
           <Icon className="h-5 w-5" />
         </div>
@@ -311,7 +335,7 @@ function CommandModal({ command, onCancel, onSubmit, busy, message, licenseKey }
           className="mt-2 w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 font-mono text-sm text-white outline-none focus:border-[#d4af37]"
         />
         {message && <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">{message}</div>}
-        <div className="mt-5 grid grid-cols-2 gap-3">
+        <div className="sticky bottom-0 mt-5 grid grid-cols-2 gap-3 bg-[#101010] pt-3">
           <button onClick={onCancel} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-bold text-white/70">
             Cancel
           </button>
@@ -733,8 +757,14 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
       <Section title="License" subtitle="Your license is the identity for the bot, account binding, heartbeat, and remote commands.">
         <div className="rounded-[26px] border border-[#d4af37]/25 bg-[#d4af37]/10 p-5">
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-[#f5d36d]">Activation key</div>
-          <div className="mt-2 break-all font-mono text-2xl font-black">{info?.activation_key || "No license linked"}</div>
-          <p className="mt-2 text-sm text-white/50">{info?.status || license?.message || "Add the ASE key you received after purchase."}</p>
+          <div className="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 break-words font-mono text-2xl font-black">{info?.activation_key || "No license linked"}</div>
+            {info?.activation_key && <CopyButton value={info.activation_key} label="Copy key" />}
+          </div>
+          <p className="mt-2 text-sm leading-6 text-white/50">
+            License PIN / Activation Key is what you normally put into MT5 as <span className="font-mono text-white/70">InpLicensePIN</span>.
+          </p>
+          <p className="mt-1 text-xs text-white/42">{info?.status || license?.message || "Add the ASE key you received after purchase."}</p>
         </div>
         <div className="mt-4 flex flex-col gap-3 sm:flex-row">
           <input
@@ -750,7 +780,20 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
         {commandMsg && <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">{commandMsg}</div>}
       </Section>
       <section className="grid gap-3 sm:grid-cols-2">
-        <Metric label="License ID" value={info?.license_id || "-"} detail={me.email} icon={KeyRound} tone="amber" />
+        <div className={`min-w-0 overflow-hidden rounded-[22px] border p-4 ${toneClass("amber")}`}>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/42">License ID</div>
+            <KeyRound className="h-4 w-4 flex-none opacity-70" />
+          </div>
+          <div className="break-all font-mono text-sm font-black leading-6 text-amber-50">{info?.license_id || "-"}</div>
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <div className="min-w-0 break-words text-xs leading-5 text-white/50">
+              Internal support ID only. You should not need this in MT5.
+              <br />{me.email}
+            </div>
+            {info?.license_id && <CopyButton value={info.license_id} label="Copy ID" />}
+          </div>
+        </div>
         <Metric label="MT5 binding" value={info?.account_binding || heartbeat.account_number || "Not bound"} detail={heartbeat.broker_server || "Waiting for EA"} icon={TerminalSquare} tone={info?.mt5_account || heartbeat.account_number ? "green" : "amber"} />
         <Metric label="VPS binding" value={info?.vps_binding || "Not bound"} detail="Optional" icon={Wifi} tone="blue" />
         <Metric label="EA version" value={heartbeat.ea_version || info?.ea_version || "Waiting"} detail={`Last heartbeat ${relativeTime(heartbeat.last_heartbeat || heartbeat.ts)}`} icon={Bot} tone={heartbeat.ea_version ? "green" : "amber"} />
