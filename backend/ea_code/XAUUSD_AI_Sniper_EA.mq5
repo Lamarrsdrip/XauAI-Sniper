@@ -321,7 +321,7 @@ input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables A
 input group "=== XAU COMMAND CENTER (heartbeat, activity, safe remote commands) ==="
 input bool   InpCloudFanout       = false;   // Local-first default: reports/brain work without VPS/cloud. Turn ON only if using copy cloud.
 input string InpCloudURL          = "https://xauaisniper.com";  // Cloud API base URL — ALREADY SET. Add this to MT5 WebRequest whitelist!
-input string InpCloudAgentToken   = "";      // Optional cloud token. Keep empty for local-only trading intelligence.
+input string InpCloudAgentToken   = "";      // Optional legacy worker token. Command Center heartbeat uses InpLicensePIN.
 input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms)
 input bool   InpBotMonitorEnable  = true;    // Command Center heartbeat/activity/command acknowledgements
 input int    InpBotMonitorHeartbeatSec = 20; // Send remote heartbeat every 10-30 seconds recommended

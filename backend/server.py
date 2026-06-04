@@ -3909,11 +3909,13 @@ async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
     age_sec = int((now - hb_time).total_seconds()) if hb_time else None
     offline = age_sec is None or age_sec > 90
     status_label = "BOT OFFLINE / NO HEARTBEAT" if offline else (hb or {}).get("bot_state", "ONLINE")
+    hb_last_error = str((hb or {}).get("last_error") or "").strip()
+    noisy_stale_error = hb_last_error.upper() in {"MQL ERROR 5035"}
     alerts = []
     if offline:
         msg = "BOT OFFLINE / NO HEARTBEAT"
         if lic and not hb:
-            msg = "License linked, but no EA heartbeat has reached this server yet. Check InpCloudURL, InpCloudAgentToken, WebRequest URL allow-list, and that the new EA version is attached."
+            msg = "License linked, but no EA heartbeat has reached this server yet. Check InpLicensePIN, InpCloudURL, MT5 WebRequest allowed URL, and that the new EA version is attached."
         alerts.append({"severity": "CRITICAL", "type": "BOT_OFFLINE_NO_HEARTBEAT", "message": msg})
     if hb:
         if hb.get("algo_trading") is False:
@@ -3922,8 +3924,40 @@ async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
             alerts.append({"severity": "CRITICAL", "type": "MT5_DISCONNECTED", "message": "MT5 disconnected"})
         if hb.get("trading_allowed") is False:
             alerts.append({"severity": "ERROR", "type": "TRADING_DISABLED", "message": "Trading not allowed"})
-        if hb.get("last_error"):
-            alerts.append({"severity": "ERROR", "type": "LAST_ERROR", "message": hb.get("last_error")})
+        if hb_last_error and not noisy_stale_error:
+            alerts.append({"severity": "ERROR", "type": "LAST_ERROR", "message": hb_last_error})
+    setup_checks = [
+        {
+            "key": "license",
+            "label": "License linked",
+            "ok": bool(lic and (lic or {}).get("is_active")),
+            "detail": (lic or {}).get("pin", "") if lic else "Add your ASE activation key.",
+        },
+        {
+            "key": "heartbeat",
+            "label": "EA heartbeat",
+            "ok": bool(hb and not offline),
+            "detail": f"{age_sec}s ago" if age_sec is not None else "No heartbeat received yet.",
+        },
+        {
+            "key": "mt5_account",
+            "label": "MT5 account bound",
+            "ok": bool((lic or {}).get("mt5_account") or (hb or {}).get("account_number")),
+            "detail": str((lic or {}).get("mt5_account") or (hb or {}).get("account_number") or "Waiting for EA."),
+        },
+        {
+            "key": "ea_version",
+            "label": "EA version reporting",
+            "ok": bool((hb or {}).get("ea_version") or (lic or {}).get("ea_version")),
+            "detail": (hb or {}).get("ea_version") or (lic or {}).get("ea_version") or "Attach latest EA.",
+        },
+        {
+            "key": "algo",
+            "label": "Algo trading allowed",
+            "ok": bool(hb and hb.get("algo_trading") is not False and hb.get("trading_allowed") is not False),
+            "detail": "Allowed" if hb and hb.get("algo_trading") is not False and hb.get("trading_allowed") is not False else "Enable Algo Trading and allow live trading.",
+        },
+    ]
     activity_scope = {}
     if account_filter:
         activity_scope = {"account": account_filter}
@@ -3955,6 +3989,7 @@ async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
             "expiry": (lic or {}).get("expires_at") or (lic or {}).get("subscription_ends_at") or "",
         },
         "alerts": alerts,
+        "setup_checks": setup_checks,
         "open_trades": (hb or {}).get("open_positions", 0) if not offline else 0,
         "last_trade": last_trade,
         "last_blocked_trade": last_block,

@@ -554,6 +554,8 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         <Metric label="License" value={licenseInfo.status || "Not linked"} detail={licenseInfo.activation_key || "Add license key"} icon={KeyRound} tone={licenseInfo.linked || licenseInfo.activation_key ? "green" : "amber"} />
       </section>
 
+      <SetupChecklist checks={status?.setup_checks || []} />
+
       {!licenseInfo.activation_key && (
         <EmptyState
           title="Connect your license first"
@@ -575,6 +577,35 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         </button>
       </div>
     </div>
+  );
+}
+
+function SetupChecklist({ checks = [] }) {
+  if (!checks.length) return null;
+  const healthy = checks.filter((check) => check.ok).length;
+  return (
+    <Section
+      title="Setup Health"
+      subtitle={`${healthy}/${checks.length} checks passing. This is the source of truth for why the Command Center is live or waiting.`}
+    >
+      <div className="grid gap-2 sm:grid-cols-2">
+        {checks.map((check) => {
+          const Icon = check.ok ? CheckCircle2 : XCircle;
+          return (
+            <div
+              key={check.key || check.label}
+              className={`flex min-w-0 items-start gap-3 rounded-2xl border p-3 ${toneClass(check.ok ? "green" : "amber")}`}
+            >
+              <Icon className="mt-0.5 h-4 w-4 flex-none" />
+              <div className="min-w-0">
+                <div className="text-sm font-black">{check.label}</div>
+                <div className="mt-1 break-words text-xs leading-5 text-white/48">{check.detail}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Section>
   );
 }
 
