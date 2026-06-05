@@ -400,7 +400,7 @@ async def download_ea():
     return Response(
         content=sanitized,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.48_RAPID_MEMORY_SCOUT.mq5"'},
+        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_v5.8.49_PROP_FIRM_COMMAND_CENTER.mq5"'},
     )
 
 # Admin-only: serves the FULL master EA with your agent token + cloud fanout
@@ -411,7 +411,7 @@ async def admin_download_ea_master():
     if not p.exists(): raise HTTPException(status_code=404)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.48_RAPID_MEMORY_SCOUT.mq5",
+        filename="XAUUSD_AI_Sniper_EA_MASTER_v5.8.49_PROP_FIRM_COMMAND_CENTER.mq5",
         media_type="application/octet-stream",
     )
 
@@ -2119,7 +2119,46 @@ SAFE_REMOTE_COMMANDS = {
     "CLOSE_ALL_TRADES": "Close all trades",
     "FORCE_SYNC": "Force startup intelligence sync",
     "FORCE_REPORT_UPLOAD": "Force report upload marker",
+    "UPDATE_PROP_FIRM_CONFIG": "Update prop firm protection",
 }
+
+def _normalize_prop_firm_config(payload: Optional[Dict]) -> dict:
+    raw = payload or {}
+    def as_bool(value, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return value != 0
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def number(name: str, default: float) -> float:
+        try:
+            return float(raw.get(name, default) if raw.get(name) is not None else default)
+        except (TypeError, ValueError):
+            return default
+
+    enabled = as_bool(raw.get("enabled"), False)
+    starting_balance = max(0.0, number("starting_balance", 0.0))
+    daily_loss = min(20.0, max(0.5, number("daily_loss_pct", 4.0)))
+    max_loss = min(30.0, max(daily_loss, number("max_loss_pct", 8.0)))
+    buffer_pct = min(max(0.0, daily_loss - 0.10),
+                     max(0.0, number("safety_buffer_pct", 0.50)))
+    risk_trade = min(2.0, max(0.01, number("risk_per_trade_pct", 0.15)))
+    basket_risk = min(4.0, max(risk_trade, number("max_basket_risk_pct", 0.75)))
+    retest_multi = min(0.50, max(0.05, number("retest_add_lot_multi", 0.25)))
+    return {
+        "enabled": enabled,
+        "starting_balance": round(starting_balance, 2),
+        "daily_loss_pct": round(daily_loss, 2),
+        "max_loss_pct": round(max_loss, 2),
+        "safety_buffer_pct": round(buffer_pct, 2),
+        "risk_per_trade_pct": round(risk_trade, 2),
+        "max_basket_risk_pct": round(basket_risk, 2),
+        "allow_retest_add": as_bool(raw.get("allow_retest_add"), True),
+        "retest_add_lot_multi": round(retest_multi, 2),
+    }
 
 def _normalize_license_key(value: str) -> str:
     return str(value or "").strip().upper().replace(" ", "")
@@ -3632,6 +3671,12 @@ class BotHeartbeatReq(BaseModel):
     last_error: Optional[str] = ""
     epf_state: Optional[str] = ""
     sync_state: Optional[str] = ""
+    prop_firm_mode: Optional[bool] = False
+    prop_daily_loss_pct: Optional[float] = 0.0
+    prop_max_loss_pct: Optional[float] = 0.0
+    prop_safety_buffer_pct: Optional[float] = 0.0
+    prop_risk_per_trade_pct: Optional[float] = 0.0
+    prop_max_basket_risk_pct: Optional[float] = 0.0
 
 class BotActivityReq(BaseModel):
     pin: Optional[str] = ""
@@ -3804,6 +3849,9 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
     lic = await _verify_command_license(user, req.pin)
     now = datetime.now(timezone.utc)
     command_id = str(uuid.uuid4())
+    payload = req.payload or {}
+    if action == "UPDATE_PROP_FIRM_CONFIG":
+        payload = _normalize_prop_firm_config(payload)
     doc = {
         "id": command_id,
         "user_id": user["id"],
@@ -3814,13 +3862,24 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
         "label": SAFE_REMOTE_COMMANDS[action],
         "status": "PENDING",
         "requested_at": now.isoformat(),
-        "payload": req.payload or {},
+        "payload": payload,
         "ack_at": "",
         "ack_status": "",
         "ack_message": "",
         "ack_details": {},
     }
     await db.cloud_bot_commands.insert_one(doc.copy())
+    if action == "UPDATE_PROP_FIRM_CONFIG":
+        await db.pin_licenses.update_one(
+            {"pin": lic.get("pin", ""), "is_active": True},
+            {"$set": {
+                "prop_firm_requested": payload,
+                "prop_firm_requested_at": now.isoformat(),
+                "prop_firm_command_id": command_id,
+                "prop_firm_apply_status": "PENDING",
+                "prop_firm_apply_message": "Waiting for EA acknowledgement.",
+            }},
+        )
     await _store_bot_activity("REMOTE_COMMAND_QUEUED", "COMMAND",
                               f"{SAFE_REMOTE_COMMANDS[action]} queued for EA acknowledgement",
                               account=lic.get("mt5_account", ""),
@@ -3866,6 +3925,19 @@ async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
         "ack_message": str(req.message or "")[:400],
         "ack_details": req.details or {},
     }})
+    if command.get("action") == "UPDATE_PROP_FIRM_CONFIG":
+        prop_update = {
+            "prop_firm_apply_status": status,
+            "prop_firm_apply_message": str(req.message or "")[:400],
+            "prop_firm_apply_at": now.isoformat(),
+        }
+        if status == "EXECUTED":
+            prop_update["prop_firm_applied"] = _normalize_prop_firm_config(command.get("payload") or {})
+            prop_update["prop_firm_applied_at"] = now.isoformat()
+        await db.pin_licenses.update_one(
+            {"pin": command.get("license_key", ""), "is_active": True},
+            {"$set": prop_update},
+        )
     severity = "COMMAND" if status in {"ACKED", "EXECUTED"} else "ERROR"
     label = command.get("label") or command.get("action") or "Remote command"
     await _store_bot_activity("REMOTE_COMMAND_" + status, severity,
@@ -3879,6 +3951,57 @@ async def cloud_command_recent(limit: int = 20, user: dict = Depends(get_cloud_u
     n = max(1, min(int(limit), 50))
     rows = await db.cloud_bot_commands.find({"user_id": user["id"]}, {"_id": 0}).sort("requested_at", -1).to_list(n)
     return {"commands": rows, "count": len(rows)}
+
+@api_router.get("/cloud/prop-firm/config")
+async def cloud_prop_firm_config(user: dict = Depends(get_cloud_user)):
+    lic = await _get_user_license(user)
+    defaults = _normalize_prop_firm_config({})
+    if not lic:
+        return {
+            "linked": False,
+            "defaults": defaults,
+            "requested": defaults,
+            "applied": defaults,
+            "apply_status": "NOT_LINKED",
+            "apply_message": "Link an active license before configuring Prop Firm Mode.",
+        }
+
+    license_key = _normalize_license_key(lic.get("pin", ""))
+    account = str(lic.get("mt5_account") or "")
+    hb_filters = [{"license_key": license_key}, {"pin": license_key}]
+    if account:
+        hb_filters.append({"account_number": account})
+    hb = await db.cloud_bot_heartbeats.find_one(
+        {"$or": hb_filters}, {"_id": 0}, sort=[("ts", -1)]
+    )
+    heartbeat_applied = {}
+    heartbeat_fields = {
+        "enabled": "prop_firm_mode",
+        "daily_loss_pct": "prop_daily_loss_pct",
+        "max_loss_pct": "prop_max_loss_pct",
+        "safety_buffer_pct": "prop_safety_buffer_pct",
+        "risk_per_trade_pct": "prop_risk_per_trade_pct",
+        "max_basket_risk_pct": "prop_max_basket_risk_pct",
+    }
+    for config_key, heartbeat_key in heartbeat_fields.items():
+        if hb and heartbeat_key in hb:
+            heartbeat_applied[config_key] = hb[heartbeat_key]
+    requested = _normalize_prop_firm_config(lic.get("prop_firm_requested") or defaults)
+    stored_applied = lic.get("prop_firm_applied") or {}
+    applied = _normalize_prop_firm_config({**requested, **stored_applied, **heartbeat_applied})
+    return {
+        "linked": True,
+        "license_key": license_key,
+        "defaults": defaults,
+        "requested": requested,
+        "requested_at": lic.get("prop_firm_requested_at", ""),
+        "applied": applied,
+        "applied_at": lic.get("prop_firm_applied_at", ""),
+        "apply_status": lic.get("prop_firm_apply_status", "NOT_CONFIGURED"),
+        "apply_message": lic.get("prop_firm_apply_message", ""),
+        "heartbeat_at": (hb or {}).get("ts", ""),
+        "ea_version": (hb or {}).get("ea_version", ""),
+    }
 
 @api_router.get("/cloud/monitor/status")
 async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):

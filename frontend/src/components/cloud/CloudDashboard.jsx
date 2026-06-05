@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import {
@@ -120,6 +120,18 @@ const COMMANDS = [
     dangerous: false,
   },
 ];
+
+const DEFAULT_PROP_FIRM_CONFIG = {
+  enabled: false,
+  starting_balance: 0,
+  daily_loss_pct: 4,
+  max_loss_pct: 8,
+  safety_buffer_pct: 0.5,
+  risk_per_trade_pct: 0.15,
+  max_basket_risk_pct: 0.75,
+  allow_retest_add: true,
+  retest_add_lot_multi: 0.25,
+};
 
 const money = (value) =>
   Number(value || 0).toLocaleString("en-US", {
@@ -426,21 +438,31 @@ export default function CloudDashboard() {
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandMsg, setCommandMsg] = useState("");
   const [licenseInput, setLicenseInput] = useState("");
+  const [propFirm, setPropFirm] = useState(null);
+  const [propFirmForm, setPropFirmForm] = useState(DEFAULT_PROP_FIRM_CONFIG);
+  const [propFirmConfirmed, setPropFirmConfirmed] = useState(false);
+  const [propFirmBusy, setPropFirmBusy] = useState(false);
+  const propFirmDirty = useRef(false);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [meRes, statusRes, activityRes, commandRes, licenseRes] = await Promise.all([
+      const [meRes, statusRes, activityRes, commandRes, licenseRes, propFirmRes] = await Promise.all([
         commandAxios.get("/cloud/auth/me"),
         commandAxios.get("/cloud/monitor/status"),
         commandAxios.get("/cloud/monitor/activity", { params: { kind: filter, limit: 100 } }),
         commandAxios.get("/cloud/command/recent", { params: { limit: 20 } }),
         commandAxios.get("/cloud/license/status"),
+        commandAxios.get("/cloud/prop-firm/config"),
       ]);
       setMe(meRes.data);
       setStatus(statusRes.data);
       setEvents(activityRes.data.events || []);
       setCommands(commandRes.data.commands || []);
       setLicense(licenseRes.data);
+      setPropFirm(propFirmRes.data);
+      if (!propFirmDirty.current && propFirmRes.data?.requested) {
+        setPropFirmForm({ ...DEFAULT_PROP_FIRM_CONFIG, ...propFirmRes.data.requested });
+      }
       if (licenseRes.data?.license?.activation_key) setLicenseInput(licenseRes.data.license.activation_key);
     } catch (error) {
       if (error.response?.status === 401) {
@@ -486,6 +508,31 @@ export default function CloudDashboard() {
       setCommandMsg(error.response?.data?.detail || "Command queue failed");
     } finally {
       setCommandBusy(false);
+    }
+  };
+
+  const applyPropFirmConfig = async () => {
+    if (!propFirmConfirmed) {
+      setCommandMsg("Confirm that these are the exact limits from your prop firm before applying.");
+      return;
+    }
+    setPropFirmBusy(true);
+    setCommandMsg("");
+    try {
+      const response = await commandAxios.post("/cloud/command/request", {
+        action: "UPDATE_PROP_FIRM_CONFIG",
+        pin: licenseInfo.activation_key,
+        confirm: true,
+        payload: propFirmForm,
+      });
+      setCommandMsg(`Prop Firm Mode queued for the EA: ${response.data.command_id}`);
+      setPropFirmConfirmed(false);
+      propFirmDirty.current = false;
+      fetchAll();
+    } catch (error) {
+      setCommandMsg(error.response?.data?.detail || "Prop Firm Mode update failed");
+    } finally {
+      setPropFirmBusy(false);
     }
   };
 
@@ -543,6 +590,14 @@ export default function CloudDashboard() {
           licenseKey={licenseInfo.activation_key}
           linked={Boolean(license?.linked || status?.license?.linked)}
           setActive={setActive}
+          propFirm={propFirm}
+          propFirmForm={propFirmForm}
+          setPropFirmForm={setPropFirmForm}
+          markPropFirmDirty={() => { propFirmDirty.current = true; }}
+          propFirmConfirmed={propFirmConfirmed}
+          setPropFirmConfirmed={setPropFirmConfirmed}
+          propFirmBusy={propFirmBusy}
+          applyPropFirmConfig={applyPropFirmConfig}
         />
       )}
       {active === "license" && (
@@ -786,9 +841,149 @@ function ActivityPage({ events, filter, setFilter }) {
   );
 }
 
-function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, setActive }) {
+function PropFirmNumberField({ label, value, onChange, suffix = "%", min = 0, max, step = "0.01", detail }) {
+  return (
+    <label className="block">
+      <span className="text-xs font-bold text-white/70">{label}</span>
+      <div className="mt-2 flex items-center rounded-2xl border border-white/10 bg-white/[0.05] px-3 focus-within:border-[#d4af37]/70">
+        <input
+          type="number"
+          inputMode="decimal"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(event) => onChange(Number(event.target.value))}
+          className="min-w-0 flex-1 bg-transparent py-3 text-sm font-bold text-white outline-none"
+        />
+        <span className="ml-2 text-xs font-bold text-white/35">{suffix}</span>
+      </div>
+      {detail && <span className="mt-1 block text-[11px] leading-4 text-white/38">{detail}</span>}
+    </label>
+  );
+}
+
+function ControlPage({
+  commands,
+  openCommand,
+  commandMsg,
+  licenseKey,
+  linked,
+  setActive,
+  propFirm,
+  propFirmForm,
+  setPropFirmForm,
+  markPropFirmDirty,
+  propFirmConfirmed,
+  setPropFirmConfirmed,
+  propFirmBusy,
+  applyPropFirmConfig,
+}) {
+  const applied = propFirm?.applied || {};
+  const updateProp = (field, value) => {
+    markPropFirmDirty();
+    setPropFirmForm((current) => ({ ...current, [field]: value }));
+  };
   return (
     <div className="space-y-4">
+      <Section title="PROP FIRM MODE" subtitle="Set the firm's exact limits here. The EA stays unchanged until it receives and acknowledges this command.">
+        <div className="flex items-center justify-between gap-4 rounded-[22px] border border-white/10 bg-white/[0.04] p-4">
+          <div>
+            <div className="font-black">{propFirmForm.enabled ? "Protection enabled" : "Protection off"}</div>
+            <div className="mt-1 text-xs leading-5 text-white/45">
+              Off by default. Turning it on caps exposure and locks before the configured firm limits.
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={propFirmForm.enabled}
+            onClick={() => updateProp("enabled", !propFirmForm.enabled)}
+            className={`relative h-8 w-14 flex-none rounded-full transition ${propFirmForm.enabled ? "bg-emerald-400" : "bg-white/15"}`}
+          >
+            <span className={`absolute top-1 h-6 w-6 rounded-full bg-black transition ${propFirmForm.enabled ? "left-7" : "left-1"}`} />
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <PropFirmNumberField
+            label="Starting account balance"
+            value={propFirmForm.starting_balance}
+            onChange={(value) => updateProp("starting_balance", value)}
+            suffix="$"
+            step="1"
+            detail="Use the prop account's original balance for total drawdown tracking."
+          />
+          <PropFirmNumberField label="Daily loss limit" value={propFirmForm.daily_loss_pct} onChange={(value) => updateProp("daily_loss_pct", value)} min={0.5} max={20} />
+          <PropFirmNumberField label="Maximum total loss" value={propFirmForm.max_loss_pct} onChange={(value) => updateProp("max_loss_pct", value)} min={0.5} max={30} />
+          <PropFirmNumberField label="Safety buffer" value={propFirmForm.safety_buffer_pct} onChange={(value) => updateProp("safety_buffer_pct", value)} min={0} max={10} detail="The EA locks this far before the firm's stated limit." />
+          <PropFirmNumberField label="Risk per trade" value={propFirmForm.risk_per_trade_pct} onChange={(value) => updateProp("risk_per_trade_pct", value)} min={0.01} max={2} />
+          <PropFirmNumberField label="Maximum basket risk" value={propFirmForm.max_basket_risk_pct} onChange={(value) => updateProp("max_basket_risk_pct", value)} min={0.01} max={4} />
+        </div>
+
+        <label className="mt-4 flex items-start gap-3 rounded-[22px] border border-white/10 bg-white/[0.04] p-4">
+          <input
+            type="checkbox"
+            checked={propFirmForm.allow_retest_add}
+            onChange={(event) => updateProp("allow_retest_add", event.target.checked)}
+            className="mt-1 h-4 w-4 accent-[#d4af37]"
+          />
+          <span>
+            <span className="block text-sm font-black">Allow one confirmed retest add</span>
+            <span className="mt-1 block text-xs leading-5 text-white/45">
+              Keeps the existing one-small-retest behavior, but only inside the configured basket risk.
+            </span>
+          </span>
+        </label>
+
+        {propFirmForm.allow_retest_add && (
+          <div className="mt-4 max-w-sm">
+            <PropFirmNumberField
+              label="Retest add size"
+              value={Number(propFirmForm.retest_add_lot_multi || 0) * 100}
+              onChange={(value) => updateProp("retest_add_lot_multi", value / 100)}
+              min={5}
+              max={50}
+              suffix="% of normal add"
+              step="1"
+            />
+          </div>
+        )}
+
+        <label className="mt-5 flex items-start gap-3 text-xs leading-5 text-white/55">
+          <input
+            type="checkbox"
+            checked={propFirmConfirmed}
+            onChange={(event) => setPropFirmConfirmed(event.target.checked)}
+            className="mt-1 h-4 w-4 accent-[#d4af37]"
+          />
+          I checked these values against my prop firm's rules. Firm calculations can differ, so the safety buffer should remain above zero.
+        </label>
+        <button
+          onClick={applyPropFirmConfig}
+          disabled={!linked || !propFirmConfirmed || propFirmBusy}
+          className="mt-4 w-full rounded-2xl bg-[#d4af37] px-5 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {propFirmBusy ? "Sending to EA..." : "Apply to EA"}
+        </button>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-[20px] border border-white/10 bg-black/25 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/35">Command status</div>
+            <div className="mt-2 text-sm font-black">{propFirm?.apply_status || "NOT CONFIGURED"}</div>
+            <div className="mt-1 text-xs leading-5 text-white/42">{propFirm?.apply_message || "No Prop Firm Mode command sent yet."}</div>
+          </div>
+          <div className="rounded-[20px] border border-white/10 bg-black/25 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/35">Applied by EA</div>
+            <div className={`mt-2 text-sm font-black ${applied.enabled ? "text-emerald-300" : "text-white/70"}`}>
+              {applied.enabled ? "ON" : "OFF"}
+            </div>
+            <div className="mt-1 text-xs leading-5 text-white/42">
+              Risk {Number(applied.risk_per_trade_pct || 0).toFixed(2)}% · Basket {Number(applied.max_basket_risk_pct || 0).toFixed(2)}%
+            </div>
+          </div>
+        </div>
+      </Section>
       <Section title="Control" subtitle="Remote actions are isolated here. Every command needs license verification and EA acknowledgement.">
         {!linked && (
           <div className="mb-4 rounded-[22px] border border-amber-300/25 bg-amber-300/10 p-4 text-sm text-amber-100">

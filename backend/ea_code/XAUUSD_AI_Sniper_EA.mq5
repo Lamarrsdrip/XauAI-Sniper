@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.48 — Rapid Memory Scout           |
+//|                                     v5.8.49 — Prop Firm Mode               |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.48 — RAPID MEMORY SCOUT"
-#property description "Uses attribution memory to soften expensive blocks with tiny scouts, not blind looseness."
+#property description "XAUUSD AI Sniper v5.8.49 — PROP FIRM MODE"
+#property description "Adds an opt-in prop risk envelope without changing normal entry intelligence."
 #property description "Cuts B-grade hot-cycle risk after large winning runs so one late B cannot erase the day."
 #property strict
 
@@ -819,6 +819,18 @@ double bufEMAFast_H4[], bufEMASlow_H4[];  // v4.8.0
 double bufStochK[], bufStochD[];
 
 double initialBalance, dailyStartEquity, weeklyStartEquity;
+bool   g_propFirmMode = false;
+double g_propFirmConfiguredBalance = 0.0;
+double g_propFirmDailyLossPct = 4.0;
+double g_propFirmMaxLossPct = 8.0;
+double g_propFirmSafetyBufferPct = 0.50;
+double g_propFirmRiskPerTradePct = 0.15;
+double g_propFirmMaxBasketRiskPct = 0.75;
+bool   g_propFirmAllowOneRetestAdd = true;
+double g_propFirmRetestAddLotMulti = 0.25;
+double g_propFirmStartingBalance = 0.0;
+double g_propFirmDailyStartEquity = 0.0;
+bool   g_propFirmLockActive = false;
 
 // v5.8.16 — adaptive XAU confirmation state. Callers use this to turn
 // H1 disagreement into reduced size instead of a hard gold veto.
@@ -900,7 +912,7 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
-// v5.8.48 — Bot Activity Monitor + Startup Sync + Trade Brain + Rapid Memory Scout.
+// v5.8.49 — Command Center-owned Prop Firm Mode with persistent EA enforcement.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -1694,6 +1706,165 @@ bool ContextGateAllows(int signal, double atr)
    return true;
 }
 
+string PropFirmBaselineKey()
+{
+   return StringFormat("XAUAI_PROP_BASE_%I64d_%d",
+                       AccountInfoInteger(ACCOUNT_LOGIN), InpMagicNumber);
+}
+
+string PropFirmConfigKey(string field)
+{
+   return StringFormat("XAUAI_PROP_CFG_%I64d_%s",
+                       AccountInfoInteger(ACCOUNT_LOGIN), field);
+}
+
+void SavePropFirmConfig()
+{
+   GlobalVariableSet(PropFirmConfigKey("ON"), g_propFirmMode ? 1.0 : 0.0);
+   GlobalVariableSet(PropFirmConfigKey("BAL"), g_propFirmConfiguredBalance);
+   GlobalVariableSet(PropFirmConfigKey("DAY"), g_propFirmDailyLossPct);
+   GlobalVariableSet(PropFirmConfigKey("MAX"), g_propFirmMaxLossPct);
+   GlobalVariableSet(PropFirmConfigKey("BUF"), g_propFirmSafetyBufferPct);
+   GlobalVariableSet(PropFirmConfigKey("RISK"), g_propFirmRiskPerTradePct);
+   GlobalVariableSet(PropFirmConfigKey("BASK"), g_propFirmMaxBasketRiskPct);
+   GlobalVariableSet(PropFirmConfigKey("ADD"), g_propFirmAllowOneRetestAdd ? 1.0 : 0.0);
+   GlobalVariableSet(PropFirmConfigKey("ADDM"), g_propFirmRetestAddLotMulti);
+}
+
+void LoadPropFirmConfig()
+{
+   if(!GlobalVariableCheck(PropFirmConfigKey("ON")))
+   {
+      SavePropFirmConfig();
+      return;
+   }
+   g_propFirmMode = GlobalVariableGet(PropFirmConfigKey("ON")) > 0.5;
+   if(GlobalVariableCheck(PropFirmConfigKey("BAL")))
+      g_propFirmConfiguredBalance = GlobalVariableGet(PropFirmConfigKey("BAL"));
+   if(GlobalVariableCheck(PropFirmConfigKey("DAY")))
+      g_propFirmDailyLossPct = GlobalVariableGet(PropFirmConfigKey("DAY"));
+   if(GlobalVariableCheck(PropFirmConfigKey("MAX")))
+      g_propFirmMaxLossPct = GlobalVariableGet(PropFirmConfigKey("MAX"));
+   if(GlobalVariableCheck(PropFirmConfigKey("BUF")))
+      g_propFirmSafetyBufferPct = GlobalVariableGet(PropFirmConfigKey("BUF"));
+   if(GlobalVariableCheck(PropFirmConfigKey("RISK")))
+      g_propFirmRiskPerTradePct = GlobalVariableGet(PropFirmConfigKey("RISK"));
+   if(GlobalVariableCheck(PropFirmConfigKey("BASK")))
+      g_propFirmMaxBasketRiskPct = GlobalVariableGet(PropFirmConfigKey("BASK"));
+   if(GlobalVariableCheck(PropFirmConfigKey("ADD")))
+      g_propFirmAllowOneRetestAdd = GlobalVariableGet(PropFirmConfigKey("ADD")) > 0.5;
+   if(GlobalVariableCheck(PropFirmConfigKey("ADDM")))
+      g_propFirmRetestAddLotMulti = GlobalVariableGet(PropFirmConfigKey("ADDM"));
+}
+
+string PropFirmDailyKey()
+{
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   return StringFormat("XAUAI_PROP_DAY_%I64d_%04d%02d%02d",
+                       AccountInfoInteger(ACCOUNT_LOGIN), dt.year, dt.mon, dt.day);
+}
+
+void ResetPropFirmDailyBaseline()
+{
+   if(!g_propFirmMode) return;
+   g_propFirmDailyStartEquity = accInfo.Equity();
+   GlobalVariableSet(PropFirmDailyKey(), g_propFirmDailyStartEquity);
+   g_propFirmLockActive = false;
+   Print("PROP FIRM MODE: new daily equity baseline $",
+         DoubleToString(g_propFirmDailyStartEquity, 2));
+}
+
+void LoadPropFirmBaseline()
+{
+   if(!g_propFirmMode)
+   {
+      g_propFirmStartingBalance = 0.0;
+      g_propFirmDailyStartEquity = 0.0;
+      return;
+   }
+
+   string totalKey = PropFirmBaselineKey();
+   if(g_propFirmConfiguredBalance > 0.0)
+   {
+      g_propFirmStartingBalance = g_propFirmConfiguredBalance;
+      GlobalVariableSet(totalKey, g_propFirmStartingBalance);
+   }
+   else if(GlobalVariableCheck(totalKey))
+      g_propFirmStartingBalance = GlobalVariableGet(totalKey);
+   else
+   {
+      g_propFirmStartingBalance = accInfo.Balance();
+      GlobalVariableSet(totalKey, g_propFirmStartingBalance);
+   }
+
+   string dayKey = PropFirmDailyKey();
+   if(GlobalVariableCheck(dayKey))
+      g_propFirmDailyStartEquity = GlobalVariableGet(dayKey);
+   else
+   {
+      g_propFirmDailyStartEquity = accInfo.Equity();
+      GlobalVariableSet(dayKey, g_propFirmDailyStartEquity);
+   }
+
+   Print("=== PROP FIRM MODE ON === start=$",
+         DoubleToString(g_propFirmStartingBalance, 2),
+         " dailyStart=$", DoubleToString(g_propFirmDailyStartEquity, 2),
+         " risk/trade=", DoubleToString(g_propFirmRiskPerTradePct, 2),
+         "% basket=", DoubleToString(g_propFirmMaxBasketRiskPct, 2),
+         "% daily=", DoubleToString(g_propFirmDailyLossPct, 2),
+         "% total=", DoubleToString(g_propFirmMaxLossPct, 2),
+         "% buffer=", DoubleToString(g_propFirmSafetyBufferPct, 2), "%");
+}
+
+double EffectiveSingleRiskCapPct()
+{
+   double cap = InpMaxRiskPctEquity;
+   if(g_propFirmMode && g_propFirmRiskPerTradePct > 0.0)
+      cap = (cap > 0.0) ? MathMin(cap, g_propFirmRiskPerTradePct)
+                        : g_propFirmRiskPerTradePct;
+   return cap;
+}
+
+double EffectiveAggregateRiskCapPct()
+{
+   double cap = InpMaxAggregateRiskPct;
+   if(g_propFirmMode && g_propFirmMaxBasketRiskPct > 0.0)
+      cap = (cap > 0.0) ? MathMin(cap, g_propFirmMaxBasketRiskPct)
+                        : g_propFirmMaxBasketRiskPct;
+   return cap;
+}
+
+string PropFirmLossLockReason()
+{
+   if(!g_propFirmMode) return "";
+   double equity = accInfo.Equity();
+   double buffer = MathMax(0.0, g_propFirmSafetyBufferPct);
+   double dailyLimit = MathMax(0.0, g_propFirmDailyLossPct);
+   double totalLimit = MathMax(0.0, g_propFirmMaxLossPct);
+   double dailyTrigger = MathMax(0.0, dailyLimit - buffer);
+   double totalTrigger = MathMax(0.0, totalLimit - buffer);
+
+   if(g_propFirmDailyStartEquity > 0.0 && dailyTrigger > 0.0)
+   {
+      double dailyLossPct = (g_propFirmDailyStartEquity - equity) /
+                            g_propFirmDailyStartEquity * 100.0;
+      if(dailyLossPct >= dailyTrigger)
+         return StringFormat("daily equity loss %.2f%% reached %.2f%% safety trigger (firm %.2f%%)",
+                             dailyLossPct, dailyTrigger, dailyLimit);
+   }
+
+   if(g_propFirmStartingBalance > 0.0 && totalTrigger > 0.0)
+   {
+      double totalLossPct = (g_propFirmStartingBalance - equity) /
+                            g_propFirmStartingBalance * 100.0;
+      if(totalLossPct >= totalTrigger)
+         return StringFormat("total equity loss %.2f%% reached %.2f%% safety trigger (firm %.2f%%)",
+                             totalLossPct, totalTrigger, totalLimit);
+   }
+   return "";
+}
+
 //+------------------------------------------------------------------+
 //| INIT                                                             |
 //+------------------------------------------------------------------+
@@ -1761,6 +1932,8 @@ int OnInit()
 
    initialBalance = accInfo.Balance();
    dailyStartEquity = weeklyStartEquity = accInfo.Equity();
+   LoadPropFirmConfig();
+   LoadPropFirmBaseline();
    pg_dayHWM = accInfo.Equity();        // v5.1.0 — initialize Profit Guardian HWM
    todayTradeCount = 0;
    lastDayReset = lastWeekReset = lastTradeClose = 0;
@@ -1799,7 +1972,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.48 (RAPID MEMORY SCOUT) READY ===");
+   Print("=== XAUAI SNIPER v5.8.49 (PROP FIRM COMMAND CENTER) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -1926,7 +2099,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.48 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.49 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -3300,6 +3473,20 @@ void CheckPyramidOpportunity()
                            regimeOk && cleanSpread && rescueTurn &&
                            noDivergence);
 
+   if(g_propFirmMode && adverseTrigger)
+   {
+      if(!g_propFirmAllowOneRetestAdd || !retestRescue)
+      {
+         Print("PROP-FIRM PYRAMID BLOCK: adverse averaging is disabled; only one confirmed retest add may pass.");
+         return;
+      }
+      if(openCount > 1)
+      {
+         Print("PROP-FIRM PYRAMID BLOCK: one confirmed retest add already used.");
+         return;
+      }
+   }
+
    double pyramidQuality = 0.0;
    if(regimeOk) pyramidQuality += 22.0;
    if(baseHealthy || rescueCandidate) pyramidQuality += 20.0;
@@ -3632,6 +3819,8 @@ void CheckPyramidOpportunity()
          if(EPF_BlockPyramidAdd()) pyramidSizeMulti *= 0.70;
       }
    }
+   if(g_propFirmMode && retestRescue)
+      pyramidSizeMulti *= g_propFirmRetestAddLotMulti;
    double addLotRaw = origLot * decayFactor * pyrConfirmLot * pyramidSizeMulti;
    double addLot = MathFloor(addLotRaw / lotStep) * lotStep;
    addLot = NormalizeDouble(addLot, lotDigits);
@@ -3739,9 +3928,10 @@ void CheckPyramidOpportunity()
    if(pyramidRiskPerLot > 0)
    {
       double equity = accInfo.Equity();
-      if(InpMaxRiskPctEquity > 0)
+      double effectiveSingleCap = EffectiveSingleRiskCapPct();
+      if(effectiveSingleCap > 0)
       {
-         double maxSingleLoss = equity * InpMaxRiskPctEquity / 100.0;
+         double maxSingleLoss = equity * effectiveSingleCap / 100.0;
          double maxSingleLots = maxSingleLoss / pyramidRiskPerLot;
          if(addLot > maxSingleLots)
          {
@@ -3749,16 +3939,17 @@ void CheckPyramidOpportunity()
             Print("PYRAMID SINGLE-RISK CAP: ", DoubleToString(beforeRiskCapLot, lotDigits),
                   " -> ", DoubleToString(addLot, lotDigits),
                   " | candidate risk $", DoubleToString(beforeRiskCapLot * pyramidRiskPerLot, 0),
-                  " > ", DoubleToString(InpMaxRiskPctEquity, 1), "% equity ($",
+                  " > ", DoubleToString(effectiveSingleCap, 2), "% equity ($",
                   DoubleToString(maxSingleLoss, 0), ")");
          }
       }
 
-      if(InpMaxAggregateRiskPct > 0)
+      double effectiveAggregateCap = EffectiveAggregateRiskCapPct();
+      if(effectiveAggregateCap > 0)
       {
          double openRiskLots = 0.0;
          double openRisk = CurrentAggregateRiskToSL(openRiskLots);
-         double maxAggRisk = equity * InpMaxAggregateRiskPct / 100.0;
+         double maxAggRisk = equity * effectiveAggregateCap / 100.0;
          double remainingRisk = maxAggRisk - openRisk;
          if(remainingRisk <= 0)
          {
@@ -4109,6 +4300,7 @@ void OnTick()
    if(dtNow.day != dtLast.day)
    {
       dailyStartEquity = accInfo.Equity();
+      ResetPropFirmDailyBaseline();
       todayTradeCount = 0; dailyLimitHit = false;
       lastDayReset = TimeCurrent();
       // v5.1.0 — reset Profit Guardian state at day boundary
@@ -4155,6 +4347,19 @@ void OnTick()
 
    // Equity/daily/weekly limits — a value of 0 fully disables the gate (user choice)
    double equity = accInfo.Equity();
+   string propFirmLock = PropFirmLossLockReason();
+   if(StringLen(propFirmLock) > 0)
+   {
+      if(!g_propFirmLockActive)
+      {
+         Print("PROP-FIRM LOSS LOCK: ", propFirmLock,
+               ". Closing exposure and pausing new trades before the firm's hard limit.");
+         g_propFirmLockActive = true;
+      }
+      if(CountMyPositions() > 0) CloseAll();
+      g_lastSkipReason = "PROP-FIRM LOSS LOCK: " + propFirmLock;
+      return;
+   }
    if(InpEquityProtect > 0 && equity < initialBalance * InpEquityProtect / 100.0)
    {
       CloseAll();
@@ -5290,6 +5495,8 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    long stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
    double minDist = stopLevel * point;
+   double effectiveSingleCap = EffectiveSingleRiskCapPct();
+   double effectiveAggregateCap = EffectiveAggregateRiskCapPct();
 
    // v5.8.6 — Execution-layer hedge backstop. The main signal path already
    // blocks this, but OpenTrade can also be reached by recovery/re-entry paths.
@@ -5310,19 +5517,19 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    //   Sum up the $-loss-if-SL-hit across ALL currently-open positions in our magic.
    //   This early gate blocks entries when current exposure is already too high.
    //   A second final gate below includes the candidate trade after lot sizing.
-   if(InpMaxAggregateRiskPct > 0)
+   if(effectiveAggregateCap > 0)
    {
       double aggLots = 0.0;
       double aggDollar = CurrentAggregateRiskToSL(aggLots);
       double equity = accInfo.Equity();
-      double maxAggDollar = equity * InpMaxAggregateRiskPct / 100.0;
+      double maxAggDollar = equity * effectiveAggregateCap / 100.0;
       if(aggDollar > maxAggDollar)
       {
          static datetime lastAggSkip = 0;
          if(TimeCurrent() - lastAggSkip > 60)
          {
             Print("⛔ AGG-RISK BLOCK: open positions already risk $", DoubleToString(aggDollar, 0),
-                  " (", DoubleToString(aggLots, 2), " lots) > ", DoubleToString(InpMaxAggregateRiskPct, 1),
+                  " (", DoubleToString(aggLots, 2), " lots) > ", DoubleToString(effectiveAggregateCap, 2),
                   "% equity (max $", DoubleToString(maxAggDollar, 0), "). New entries blocked until exposure drops.");
             lastAggSkip = TimeCurrent();
          }
@@ -5580,9 +5787,21 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       riskPct *= volMult;
    }
 
+   if(g_propFirmMode && g_propFirmRiskPerTradePct > 0.0 &&
+      riskPct > g_propFirmRiskPerTradePct)
+   {
+      Print("PROP-FIRM RISK CAP: calculated entry risk ",
+            DoubleToString(riskPct, 2), "% -> ",
+            DoubleToString(g_propFirmRiskPerTradePct, 2),
+            "%. Signal remains allowed; only position size is reduced.");
+      riskPct = g_propFirmRiskPerTradePct;
+   }
+
    double equityForSizing = accInfo.Equity();
    double largeFloor = 0.0;
-   if(InpLargeAccountMinRiskPct > 0 && equityForSizing >= 50000.0 && !drawdownActive && pgMult > 0.40)
+   if(g_propFirmMode)
+      Print("PROP-FIRM MODE: large-account risk floor disabled.");
+   else if(InpLargeAccountMinRiskPct > 0 && equityForSizing >= 50000.0 && !drawdownActive && pgMult > 0.40)
       largeFloor = InpLargeAccountMinRiskPct;
    else if(InpLargeAccountMinRiskPct > 0 && equityForSizing >= 25000.0 && !drawdownActive && pgMult > 0.40)
       largeFloor = MathMin(1.25, InpLargeAccountMinRiskPct);
@@ -5638,10 +5857,10 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    //   This is the absolute backstop that prevents the "5+ lot whacked for $4k"
    //   scenario the user reported on a $100k account. SL distance × tick value
    //   × lots = $-loss-if-SL-hit. Cap that at e.g. 1.5% of equity.
-   if(InpMaxRiskPctEquity > 0 && slDist > 0 && tickValue > 0 && tickSize > 0)
+   if(effectiveSingleCap > 0 && slDist > 0 && tickValue > 0 && tickSize > 0)
    {
       double equity = accInfo.Equity();
-      double maxDollarLoss = equity * InpMaxRiskPctEquity / 100.0;
+      double maxDollarLoss = equity * effectiveSingleCap / 100.0;
       double slDollarPerLot = slDollarPerLotRaw;
       if(slDollarPerLot > 0)
       {
@@ -5651,7 +5870,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
             Print("⚠️  EQUITY-CAP: lots ", DoubleToString(lots, 2), " → ",
                   DoubleToString(maxAllowedLots, 2),
                   " (would risk $", DoubleToString(lots * slDollarPerLot, 0),
-                  " > ", DoubleToString(InpMaxRiskPctEquity, 1), "% equity = $",
+                  " > ", DoubleToString(effectiveSingleCap, 2), "% equity = $",
                   DoubleToString(maxDollarLoss, 0), ")");
             lots = maxAllowedLots;
          }
@@ -5670,11 +5889,11 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       return;
    }
 
-   if(InpMaxAggregateRiskPct > 0 && slDollarPerLotRaw > 0)
+   if(effectiveAggregateCap > 0 && slDollarPerLotRaw > 0)
    {
       double openLots = 0.0;
       double openRisk = CurrentAggregateRiskToSL(openLots);
-      double maxAggDollar = accInfo.Equity() * InpMaxAggregateRiskPct / 100.0;
+      double maxAggDollar = accInfo.Equity() * effectiveAggregateCap / 100.0;
       double candidateRisk = lots * slDollarPerLotRaw;
       double remainingRisk = maxAggDollar - openRisk;
       if(remainingRisk <= 0)
@@ -11124,14 +11343,16 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.48\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.49\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
       "\"mt5_connected\":%s,\"account_connected\":%s,\"ea_active\":true,"
       "\"bot_state\":\"%s\",\"last_action\":\"%s\",\"last_tick_time\":\"%s\","
       "\"last_decision_time\":\"%s\",\"last_error\":\"%s\",\"epf_state\":\"T%d\","
-      "\"sync_state\":\"%s\"}",
+      "\"sync_state\":\"%s\",\"prop_firm_mode\":%s,\"prop_daily_loss_pct\":%.2f,"
+      "\"prop_max_loss_pct\":%.2f,\"prop_safety_buffer_pct\":%.2f,"
+      "\"prop_risk_per_trade_pct\":%.2f,\"prop_max_basket_risk_pct\":%.2f}",
       BotMonitorJsonSafe(InpLicensePIN, 32),
       BotMonitorJsonSafe(InpLicensePIN, 32),
       AccountInfoInteger(ACCOUNT_LOGIN),
@@ -11143,7 +11364,10 @@ void BotMonitorHeartbeat()
       TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
       TimeToString(g_lastEntryScanAt > 0 ? g_lastEntryScanAt : TimeCurrent(), TIME_DATE | TIME_SECONDS),
       BotMonitorJsonSafe(lastErr, 120), epf_tier,
-      BotMonitorJsonSafe(g_startupIntelSyncReason, 120));
+      BotMonitorJsonSafe(g_startupIntelSyncReason, 120),
+      BotMonitorBool(g_propFirmMode), g_propFirmDailyLossPct,
+      g_propFirmMaxLossPct, g_propFirmSafetyBufferPct,
+      g_propFirmRiskPerTradePct, g_propFirmMaxBasketRiskPct);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
@@ -11268,6 +11492,33 @@ void BotMonitorPollCommands()
    {
       status = "EXECUTED";
       result = "Report upload marker recorded; local CSV/JSONL remains the source of truth.";
+   }
+   else if(action == "UPDATE_PROP_FIRM_CONFIG")
+   {
+      string enabledRaw = JsonStringField(body, "enabled");
+      string retestRaw = JsonStringField(body, "allow_retest_add");
+      g_propFirmMode = (StringFind(enabledRaw, "true") >= 0 || enabledRaw == "1");
+      g_propFirmConfiguredBalance = MathMax(0.0, JsonNumberField(body, "starting_balance"));
+      g_propFirmDailyLossPct = MathMax(0.5, MathMin(20.0, JsonNumberField(body, "daily_loss_pct")));
+      g_propFirmMaxLossPct = MathMax(g_propFirmDailyLossPct, MathMin(30.0, JsonNumberField(body, "max_loss_pct")));
+      g_propFirmSafetyBufferPct = MathMax(0.0, MathMin(g_propFirmDailyLossPct - 0.10,
+                                                       JsonNumberField(body, "safety_buffer_pct")));
+      g_propFirmRiskPerTradePct = MathMax(0.01, MathMin(2.0, JsonNumberField(body, "risk_per_trade_pct")));
+      g_propFirmMaxBasketRiskPct = MathMax(g_propFirmRiskPerTradePct,
+                                           MathMin(4.0, JsonNumberField(body, "max_basket_risk_pct")));
+      g_propFirmAllowOneRetestAdd = (StringFind(retestRaw, "true") >= 0 || retestRaw == "1");
+      g_propFirmRetestAddLotMulti = MathMax(0.05, MathMin(0.50,
+                                             JsonNumberField(body, "retest_add_lot_multi")));
+      SavePropFirmConfig();
+      LoadPropFirmBaseline();
+      g_propFirmLockActive = false;
+      status = "EXECUTED";
+      result = StringFormat("PropFirm=%s daily=%.2f%% total=%.2f%% risk=%.2f%% basket=%.2f%% buffer=%.2f%% retest=%s.",
+                            g_propFirmMode ? "ON" : "OFF",
+                            g_propFirmDailyLossPct, g_propFirmMaxLossPct,
+                            g_propFirmRiskPerTradePct, g_propFirmMaxBasketRiskPct,
+                            g_propFirmSafetyBufferPct,
+                            g_propFirmAllowOneRetestAdd ? "ONE" : "OFF");
    }
 
    g_lastRemoteCommandState = action + ": " + result;
@@ -11664,7 +11915,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.48 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.49 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

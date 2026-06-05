@@ -11,7 +11,7 @@ export default function DownloadSection({ api }) {
               <DownloadSimple size={12} weight="bold" /> Download center
             </span>
             <h2 className="mt-5 max-w-3xl font-heading text-3xl font-semibold tracking-tight sm:text-5xl" data-testid="download-title">
-              Latest master build: v5.8.48 Rapid Memory Scout.
+              Latest master build: v5.8.49 Prop Firm Command Center.
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
               This is the current build from this workspace. Public downloads are sanitized by the backend for customer safety; admin master download remains protected.
@@ -32,7 +32,7 @@ export default function DownloadSection({ api }) {
                 <div>
                   <h3 className="font-heading text-2xl font-semibold">Expert Advisor (.mq5)</h3>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                    Includes v5.8.48 rapid blocked-memory scout, Command Center PIN-auth heartbeat, offline alerts, PIN-safe command queue, startup intelligence sync, accelerated score-only learning, market snapshot reports, local-first trading intelligence CSV/JSONL reports, executed-trade outcome learning, blocked-trade outcome monitoring, entry timing memory management, smart pyramid guard, pullback-location timing guard, fast-volatility handling, adaptive rescue adds, stale-indicator recovery, live scan watchdogs, adaptive daily caps, and account-size scaling.
+                    Includes v5.8.49 Command Center-owned Prop Firm Mode, persistent restart-safe limits, EA acknowledgement, risk and basket caps, one controlled retest add, rapid blocked-memory scout, PIN-auth heartbeat, startup intelligence sync, and local-first trading intelligence reports.
                   </p>
                 </div>
               </div>
@@ -41,7 +41,7 @@ export default function DownloadSection({ api }) {
 
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               {[
-                ["Version", "5.8.45"],
+                ["Version", "5.8.49"],
                 ["File", "MQ5 source"],
                 ["Risk", "Account-sized"],
               ].map(([k, v]) => (
@@ -54,7 +54,7 @@ export default function DownloadSection({ api }) {
 
             <div className="mt-6 flex flex-col gap-3 sm:flex-row">
               <a href={`${api}/download/ea`} data-testid="download-ea-button" className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
-                <DownloadSimple size={17} weight="bold" /> Download v5.8.48 .MQ5
+                <DownloadSimple size={17} weight="bold" /> Download v5.8.49 .MQ5
               </a>
               <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
                 Command setup
