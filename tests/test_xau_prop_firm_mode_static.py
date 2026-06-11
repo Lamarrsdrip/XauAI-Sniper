@@ -67,5 +67,5 @@ def test_command_center_has_editable_limits_and_applied_status():
 
 
 def test_version_is_updated():
-    assert "v5.8.49" in EA
-    assert '\\"ea_version\\":\\"v5.8.49\\"' in EA
+    assert "v5.8.50" in EA
+    assert '\\"ea_version\\":\\"v5.8.50\\"' in EA

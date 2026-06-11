@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.49 — Prop Firm Mode               |
+//|                                     v5.8.50 — Evidence Refactor            |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
 #property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.49 — PROP FIRM MODE"
-#property description "Adds an opt-in prop risk envelope without changing normal entry intelligence."
-#property description "Cuts B-grade hot-cycle risk after large winning runs so one late B cannot erase the day."
+#property description "XAUUSD AI Sniper v5.8.50 — EVIDENCE REFACTOR"
+#property description "Uses prop reference balance consistently, repairs cooldowns, and makes A+ timing honest."
+#property description "Preserves profitable entry/exit logic and proven blocked-trade protections."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -100,6 +100,9 @@ input bool   InpPG_ConsolidationCarveout = true;
 input double InpPG_ConsolidationATR = 0.8;
 input int    InpPG_PostLossCooldown = 30;    // BASE cooldown minutes (only used when InpProfitGuardian=true)
 input bool   InpPG_AdaptiveCooldown = true;
+input int    InpTwoLossCooldownMin  = 300;   // Two distinct losing trade cycles pause fresh entries for 5h
+input int    InpLossCycleDedupSec    = 30;    // Layered basket closes inside this window count as one loss cycle
+input int    InpProfitLockCooldownMin = 300;  // Legacy HWM full-day halt becomes a 5h monitoring cooldown
 input bool   InpPG_PerPositionRatchet = true; // v5.1.3: KEY profit-protection — works INDEPENDENTLY of InpProfitGuardian
 input double InpPG_RatchetBETrigger  = 1.0;  // ATR multiples in profit before BE move
 input double InpPG_RatchetTrailStart = 2.0;  // ATR multiples in profit before trail kicks in
@@ -177,9 +180,10 @@ input double InpXAU_FairTimingLotMulti     = 0.65;  // If timing is fair but not
 input bool   InpXAU_BlockLateA             = true;  // A/A+ late chase becomes BLOCK, not just smaller
 input bool   InpXAU_LogTimingGuard         = true;  // Print timing audit: grade, EMA/VWAP distance, impulse, pullback quality
 input bool   InpXAU_TimingQualityGrades    = true;  // A/A+ needs timing quality, not just late confirmation strength
-input double InpXAU_APlusMinTimingQuality  = 70.0;  // A+ minimum timing score after late/exhaustion penalties
-input double InpXAU_APlusMaxLateProb       = 45.0;  // A+ cannot be mostly a late-entry confirmation
-input double InpXAU_APlusMaxExhaustionProb = 45.0;  // A+ cannot be near likely liquidity exhaustion
+input double InpXAU_APlusMinTimingQuality  = 78.0;  // A+ requires strong positioning; weak timing is demoted to A, not blocked
+input double InpXAU_APlusMaxLateProb       = 35.0;  // A+ cannot be a late confirmation/chase
+input double InpXAU_APlusMaxExhaustionProb = 35.0;  // A+ cannot sit near likely liquidity exhaustion
+input double InpXAU_APlusMinRRQuality      = 55.0;  // A+ also needs usable directional room, not confidence alone
 input double InpXAU_MinDirectionalRoomATR  = 0.60;  // Minimum room from local liquidity before A/A+ continuation
 input double InpXAU_MissedMoveDriveATR     = 2.60;  // If move already travelled this far without reset, demote/block
 input bool   InpXAU_BlockPostSweepAPlus    = true;  // Block A+ continuation after gold sweeps liquidity then snaps back
@@ -829,6 +833,7 @@ double g_propFirmMaxBasketRiskPct = 0.75;
 bool   g_propFirmAllowOneRetestAdd = true;
 double g_propFirmRetestAddLotMulti = 0.25;
 double g_propFirmStartingBalance = 0.0;
+double g_propFirmAccountStartEquity = 0.0;
 double g_propFirmDailyStartEquity = 0.0;
 bool   g_propFirmLockActive = false;
 
@@ -846,6 +851,7 @@ bool     pg_dayHaltActive     = false; // HWM-giveback hit → no new entries to
 datetime pg_dayHaltDay        = 0;     // day this halt was triggered
 int      pg_lastReportedTier  = -1;    // throttle tier transition logs
 int      pg_consecutiveLosses = 0;     // v5.1.2: resets on any winner; drives adaptive cooldown
+datetime pg_lastLossCycleAt   = 0;     // layered closes from one basket count as one losing cycle
 
 // ====================================================================
 // v5.5.0 — Equity Preservation Framework state
@@ -1413,6 +1419,18 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
 //+------------------------------------------------------------------+
 //| AUTO-SCALE: derive dollar thresholds from current account size   |
 //+------------------------------------------------------------------+
+double StrategyReferenceBalance()
+{
+   if(g_propFirmMode)
+   {
+      if(g_propFirmConfiguredBalance > 0.0) return g_propFirmConfiguredBalance;
+      if(g_propFirmStartingBalance > 0.0) return g_propFirmStartingBalance;
+   }
+   double bal = accInfo.Balance();
+   if(bal <= 0.0) bal = accInfo.Equity();
+   return bal;
+}
+
 void RecomputeAutoScale()
 {
    if(!InpAutoScale)
@@ -1423,8 +1441,7 @@ void RecomputeAutoScale()
       autoPeakMinUSD    = InpPeakMinUSD;
       return;
    }
-   double bal = accInfo.Balance();
-   if(bal <= 0) bal = accInfo.Equity();
+   double bal = StrategyReferenceBalance();
    if(bal <= 0) bal = 100;                  // fallback if account query fails
 
    // TRUE proportional scaling — works on $10 or $100k equally.
@@ -1629,6 +1646,8 @@ bool ContextGateAllows(int signal, double atr)
             h4F = bufF[1]; h4S = bufS[1];
          }
       }
+      if(hF != INVALID_HANDLE) IndicatorRelease(hF);
+      if(hS != INVALID_HANDLE) IndicatorRelease(hS);
       if(h4F > 0 && h4S > 0)
       {
          bool h4Up   = (h4F > h4S);
@@ -1712,6 +1731,12 @@ string PropFirmBaselineKey()
                        AccountInfoInteger(ACCOUNT_LOGIN), InpMagicNumber);
 }
 
+string PropFirmAccountEquityKey()
+{
+   return StringFormat("XAUAI_PROP_REAL_EQ_START_%I64d_%d",
+                       AccountInfoInteger(ACCOUNT_LOGIN), InpMagicNumber);
+}
+
 string PropFirmConfigKey(string field)
 {
    return StringFormat("XAUAI_PROP_CFG_%I64d_%s",
@@ -1780,6 +1805,7 @@ void LoadPropFirmBaseline()
    if(!g_propFirmMode)
    {
       g_propFirmStartingBalance = 0.0;
+      g_propFirmAccountStartEquity = 0.0;
       g_propFirmDailyStartEquity = 0.0;
       return;
    }
@@ -1796,6 +1822,15 @@ void LoadPropFirmBaseline()
    {
       g_propFirmStartingBalance = accInfo.Balance();
       GlobalVariableSet(totalKey, g_propFirmStartingBalance);
+   }
+
+   string accountEquityKey = PropFirmAccountEquityKey();
+   if(GlobalVariableCheck(accountEquityKey))
+      g_propFirmAccountStartEquity = GlobalVariableGet(accountEquityKey);
+   else
+   {
+      g_propFirmAccountStartEquity = accInfo.Equity();
+      GlobalVariableSet(accountEquityKey, g_propFirmAccountStartEquity);
    }
 
    string dayKey = PropFirmDailyKey();
@@ -1815,6 +1850,15 @@ void LoadPropFirmBaseline()
          "% daily=", DoubleToString(g_propFirmDailyLossPct, 2),
          "% total=", DoubleToString(g_propFirmMaxLossPct, 2),
          "% buffer=", DoubleToString(g_propFirmSafetyBufferPct, 2), "%");
+   Print("PROP_MODE_ON",
+         " | RealAccountBalance=", DoubleToString(accInfo.Balance(), 2),
+         " | RealAccountStartEquity=", DoubleToString(g_propFirmAccountStartEquity, 2),
+         " | PropReferenceBalance=", DoubleToString(StrategyReferenceBalance(), 2),
+         " | LotCalculatedFrom=PROP_REFERENCE_BALANCE",
+         " | ProfitTargetCalculatedFrom=PROP_REFERENCE_BALANCE",
+         " | DrawdownLimitCalculatedFrom=PROP_REFERENCE_BALANCE",
+         " | ExitTargetCalculatedFrom=PROP_REFERENCE_BALANCE",
+         " | EmergencyBrokerProtection=REAL_EQUITY");
 }
 
 double EffectiveSingleRiskCapPct()
@@ -1844,23 +1888,24 @@ string PropFirmLossLockReason()
    double totalLimit = MathMax(0.0, g_propFirmMaxLossPct);
    double dailyTrigger = MathMax(0.0, dailyLimit - buffer);
    double totalTrigger = MathMax(0.0, totalLimit - buffer);
+   double propReference = StrategyReferenceBalance();
 
-   if(g_propFirmDailyStartEquity > 0.0 && dailyTrigger > 0.0)
+   if(g_propFirmDailyStartEquity > 0.0 && propReference > 0.0 && dailyTrigger > 0.0)
    {
-      double dailyLossPct = (g_propFirmDailyStartEquity - equity) /
-                            g_propFirmDailyStartEquity * 100.0;
+      double dailyLossUSD = MathMax(0.0, g_propFirmDailyStartEquity - equity);
+      double dailyLossPct = dailyLossUSD / propReference * 100.0;
       if(dailyLossPct >= dailyTrigger)
-         return StringFormat("daily equity loss %.2f%% reached %.2f%% safety trigger (firm %.2f%%)",
-                             dailyLossPct, dailyTrigger, dailyLimit);
+         return StringFormat("daily equity loss $%.2f = %.2f%% of prop reference reached %.2f%% safety trigger (firm %.2f%%)",
+                             dailyLossUSD, dailyLossPct, dailyTrigger, dailyLimit);
    }
 
-   if(g_propFirmStartingBalance > 0.0 && totalTrigger > 0.0)
+   if(g_propFirmAccountStartEquity > 0.0 && propReference > 0.0 && totalTrigger > 0.0)
    {
-      double totalLossPct = (g_propFirmStartingBalance - equity) /
-                            g_propFirmStartingBalance * 100.0;
+      double totalLossUSD = MathMax(0.0, g_propFirmAccountStartEquity - equity);
+      double totalLossPct = totalLossUSD / propReference * 100.0;
       if(totalLossPct >= totalTrigger)
-         return StringFormat("total equity loss %.2f%% reached %.2f%% safety trigger (firm %.2f%%)",
-                             totalLossPct, totalTrigger, totalLimit);
+         return StringFormat("total equity loss $%.2f = %.2f%% of prop reference reached %.2f%% safety trigger (firm %.2f%%)",
+                             totalLossUSD, totalLossPct, totalTrigger, totalLimit);
    }
    return "";
 }
@@ -1972,7 +2017,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.49 (PROP FIRM COMMAND CENTER) READY ===");
+   Print("=== XAUAI SNIPER v5.8.50 (EVIDENCE REFACTOR) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -2099,7 +2144,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.49 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.50 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -3098,7 +3143,7 @@ int EffectiveMaxTradesPerDay()
    bool weakDay = (currentRegime == REGIME_CHOPPY || currentRegime == REGIME_DEAD || drawdownActive);
    double dPnL = accInfo.Equity() - dailyStartEquity;
 
-   if(weakDay || dPnL < -MathMax(50.0, accInfo.Balance() * 0.004))
+   if(weakDay || dPnL < -MathMax(50.0, StrategyReferenceBalance() * 0.004))
       return MathMax(5, (int)MathFloor(cap * 0.65));
 
    if(cleanTrend && spread <= InpMaxSpread * 0.65 && dPnL >= 0)
@@ -3110,7 +3155,7 @@ int EffectiveMaxTradesPerDay()
 double AccountSizeRiskMultiplier()
 {
    if(!InpAccountSizeBoost) return 1.0;
-   double equity = MathMax(accInfo.Equity(), accInfo.Balance());
+   double equity = StrategyReferenceBalance();
    if(equity < 1000.0)   return 0.75;
    if(equity < 10000.0)  return 1.00;
    if(equity < 25000.0)  return 1.08;
@@ -3126,7 +3171,7 @@ int EffectiveMaxPyramidAdds(int dir, double moved, double atr)
    bool trendOk = IsTrendContinuationRegime(dir);
    bool highQuality = (IsGradeAtLeastA(g_lastEntryGrade) && g_lastEntryScore >= 4.0) ||
                       (InpPyramidAllowProtectedB && g_lastEntryScore >= InpPyramidModerateScore);
-   double equity = MathMax(accInfo.Equity(), accInfo.Balance());
+   double equity = StrategyReferenceBalance();
 
    if(currentRegime == REGIME_CHOPPY || currentRegime == REGIME_DEAD || currentRegime == REGIME_LOW_VOL)
       maxAdds = MathMin(maxAdds, 1);
@@ -4309,6 +4354,7 @@ void OnTick()
       pg_pauseUntil = 0;
       pg_lastReportedTier = -1;
       pg_consecutiveLosses = 0;  // v5.1.2: fresh streak each day
+      pg_lastLossCycleAt = 0;
       // v5.1.9 — selective mode resets at day boundary too
       pg_selectiveActive = false;
       pg_selectiveActivatedAt = 0;
@@ -5686,7 +5732,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    }
 
    // Lot sizing with grade multiplier
-   double balance = accInfo.Balance();
+   double balance = StrategyReferenceBalance();
    // v4.8.2 — Account Mode preset overrides InpRiskPercent
    // v5.8.4 — Restore original account-based risk presets for demo/cloud testing.
    double baseRisk = InpRiskPercent;
@@ -5702,7 +5748,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double acctSizeMult = AccountSizeRiskMultiplier();
    if(acctSizeMult != 1.0)
    {
-      Print("ACCOUNT-SCALE: equity/balance $", DoubleToString(MathMax(accInfo.Equity(), accInfo.Balance()), 2),
+      Print("ACCOUNT-SCALE: strategy reference $", DoubleToString(StrategyReferenceBalance(), 2),
             " risk×", DoubleToString(acctSizeMult, 2),
             " (large accounts scale stronger; small accounts protected)");
       riskPct *= acctSizeMult;
@@ -5760,7 +5806,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double sessionMult = 1.0;
    if(dt.hour >= 0 && dt.hour < 8)
    {
-      double asianMult = (IsTrendContinuationRegime(signal) && accInfo.Equity() >= 25000.0) ? 0.55 : 0.40;
+      double asianMult = (IsTrendContinuationRegime(signal) && StrategyReferenceBalance() >= 25000.0) ? 0.55 : 0.40;
       sessionMult = asianMult;
       riskPct *= asianMult; // Asian session is still quieter, but no longer crushes large clean-trend lots to dust.
    }
@@ -5797,7 +5843,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       riskPct = g_propFirmRiskPerTradePct;
    }
 
-   double equityForSizing = accInfo.Equity();
+   double equityForSizing = StrategyReferenceBalance();
    double largeFloor = 0.0;
    if(g_propFirmMode)
       Print("PROP-FIRM MODE: large-account risk floor disabled.");
@@ -5859,7 +5905,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    //   × lots = $-loss-if-SL-hit. Cap that at e.g. 1.5% of equity.
    if(effectiveSingleCap > 0 && slDist > 0 && tickValue > 0 && tickSize > 0)
    {
-      double equity = accInfo.Equity();
+      double equity = StrategyReferenceBalance();
       double maxDollarLoss = equity * effectiveSingleCap / 100.0;
       double slDollarPerLot = slDollarPerLotRaw;
       if(slDollarPerLot > 0)
@@ -5893,7 +5939,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    {
       double openLots = 0.0;
       double openRisk = CurrentAggregateRiskToSL(openLots);
-      double maxAggDollar = accInfo.Equity() * effectiveAggregateCap / 100.0;
+      double maxAggDollar = StrategyReferenceBalance() * effectiveAggregateCap / 100.0;
       double candidateRisk = lots * slDollarPerLotRaw;
       double remainingRisk = maxAggDollar - openRisk;
       if(remainingRisk <= 0)
@@ -6172,7 +6218,7 @@ bool ManageBasket()
    // Update peak
    if(totalPnL > g_basketPeakUSD) g_basketPeakUSD = totalPnL;
 
-   double bal = accInfo.Balance();
+   double bal = StrategyReferenceBalance();
    if(bal <= 0) return false;
 
    // Arm the basket-lock once peak crosses threshold
@@ -6807,7 +6853,7 @@ void ManagePositions()
 	         rDollars > 0 && ageSec >= InpNoPartialSmartLossMinSec && profit < 0)
 	      {
 	         double smartLossUSD = rDollars * InpNoPartialSmartLossR;
-	         double smartEqCap = accInfo.Equity() * InpNoPartialSmartLossPctEq / 100.0;
+	         double smartEqCap = StrategyReferenceBalance() * InpNoPartialSmartLossPctEq / 100.0;
 	         if(smartEqCap > 0) smartLossUSD = MathMin(smartLossUSD, smartEqCap);
 	         bool confirmedFailed = (!recoveryLikelyEA &&
 	                                 structureConfirmedEA &&
@@ -6832,7 +6878,7 @@ void ManagePositions()
 	         double maxLossR = InpExpectancyMaxLossR;
          if(InpHardStopRBased && InpHardStopRMulti > 0)
             maxLossR = MathMin(maxLossR, InpHardStopRMulti);
-         double equityLossCap = accInfo.Equity() * InpExpectancyMaxLossPctEq / 100.0;
+         double equityLossCap = StrategyReferenceBalance() * InpExpectancyMaxLossPctEq / 100.0;
          double hardLossUSD = rDollars * maxLossR;
          if(equityLossCap > 0) hardLossUSD = MathMin(hardLossUSD, equityLossCap);
          if(recoveryLikelyEA && InpGoldPullbackCapBoost > 1.0)
@@ -6875,7 +6921,7 @@ void ManagePositions()
          profit < 0)
       {
          double softLossUSD = rDollars * InpExpectancySoftLossR;
-         double softEqCap = accInfo.Equity() * InpExpectancySoftLossPctEq / 100.0;
+         double softEqCap = StrategyReferenceBalance() * InpExpectancySoftLossPctEq / 100.0;
          if(softEqCap > 0) softLossUSD = MathMin(softLossUSD, softEqCap);
          if(recoveryLikelyEA && InpGoldPullbackCapBoost > 1.0)
             softLossUSD *= InpGoldPullbackCapBoost;
@@ -7060,8 +7106,7 @@ void ManagePositions()
       if(InpProfitRatchet && profit > 0 && rDollars > 0 &&
          !(InpBasketMode && InpBasketDisablePerTrade))
       {
-         double accBal = accInfo.Balance();
-         if(accBal <= 0) accBal = accInfo.Equity();
+         double accBal = StrategyReferenceBalance();
          double armUSD = MathMax(InpRatchetArmFloor, accBal * InpRatchetArmPct / 100.0);
 
          if(profit >= armUSD)
@@ -7133,8 +7178,7 @@ void ManagePositions()
 
          // Pick stage based on R profit
          // v4.8.6 — Compute dollar thresholds from account balance
-         double accBal = accInfo.Balance();
-         if(accBal <= 0) accBal = accInfo.Equity();
+         double accBal = StrategyReferenceBalance();
          double arS1MinProfit = MathMax(30.0, accBal * InpARStage1MinPct / 100.0);
          double arBEMinProfit = MathMax(50.0, accBal * InpARBreakEvenMinPct / 100.0);
 
@@ -7264,8 +7308,7 @@ void ManagePositions()
       //   $10k acc → arm at peak $30
       //   $100k acc → arm at peak $300
       //   $1M acc → arm at peak $3,000
-      double plBal = accInfo.Balance();
-      if(plBal <= 0) plBal = accInfo.Equity();
+      double plBal = StrategyReferenceBalance();
       double peakArmUSD = MathMax(20.0, plBal * InpPeakLockArmPct / 100.0);
       if(InpPeakLockBackstop && peak >= peakArmUSD && rDollars > 0 &&
          !(InpBasketMode && InpBasketDisablePerTrade))
@@ -7307,8 +7350,7 @@ void ManagePositions()
       // having $0 lock amounts. Set InpLadderUsePct=false for fixed $ legacy mode.
       if(InpProfitLadder && profit > 0)
       {
-         double bal = accInfo.Balance();
-         if(bal <= 0) bal = accInfo.Equity();   // fallback
+         double bal = StrategyReferenceBalance();
          double t1p, t1l, t2p, t2l, t3p, t3l, t4p, t4l, t5p, t5l, t6p, t6l, t7p, t7l;
          if(InpLadderUsePct)
          {
@@ -8254,8 +8296,9 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // Treat anything <= -$0.01 as real loss; anything >= $0.01 as win; else BE (no counter change)
    bool wasLoss = (profit <= -0.01);
    bool wasWin  = (profit >=  0.01);
-   if(wasWin) { wins++; PG_OnBasketWin(); }   // v5.1.2: each winner resets PG cooldown streak
+   if(wasWin) wins++;
    else if(wasLoss) losses++;
+   RegisterClosedTradeCooldown(wasWin, wasLoss, profit);
    // else: break-even — don't count either way
    lastTradeClose = TimeCurrent();
    Print("CLOSED: ", wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK-EVEN",
@@ -8579,16 +8622,18 @@ void PG_UpdateHWM()
                      " | confirm=", InpPG_SelectiveRequireHTF ? "adaptive XAU fast" : "off");
             }
          }
-         else if(!pg_dayHaltActive)
+         else if(pg_pauseUntil <= TimeCurrent())
          {
-            // Legacy behavior: full day-halt.
-            pg_dayHaltActive = true;
-            pg_dayHaltDay    = today;
-            Print("🛡 PROFIT GUARDIAN: Day-halt triggered. HWM gain $",
+            // v5.8.50: the old full-day halt missed later high-quality sessions.
+            // Keep monitoring and managing positions, then resume fresh entries.
+            pg_dayHaltActive = false;
+            pg_pauseUntil = TimeCurrent() + MathMax(1, InpProfitLockCooldownMin) * 60;
+            Print("🛡 PROFIT-LOCK COOLDOWN: HWM gain $",
                   DoubleToString(hwmGain,2), " | giveback $",
                   DoubleToString(currentDrawback,2), " (>=",
                   DoubleToString(effectiveGivebackPct,1), "% of gain @ dayGain=",
-                  DoubleToString(dayGainPct,1), "%). NO NEW ENTRIES until tomorrow.");
+                  DoubleToString(dayGainPct,1), "%). Fresh entries paused for ",
+                  InpProfitLockCooldownMin, " minutes; market monitoring and open-trade management continue.");
          }
       }
    }
@@ -10329,6 +10374,20 @@ void XAU_PopTradeQuality(ulong posId, double &worstPnl, int &negativeSec)
    ArrayResize(g_qualityNegativeSec, n - 1);
 }
 
+bool XAU_APlusPositioningQualified(double timingQuality, double lateProbability,
+                                   double exhaustionProbability, double rrQuality,
+                                   double directionalRoomATR, bool cleanContinuation,
+                                   bool trueBreakoutContinuation)
+{
+   bool structureConfirmed = (cleanContinuation || trueBreakoutContinuation);
+   return (timingQuality >= InpXAU_APlusMinTimingQuality &&
+           lateProbability <= InpXAU_APlusMaxLateProb &&
+           exhaustionProbability <= InpXAU_APlusMaxExhaustionProb &&
+           rrQuality >= InpXAU_APlusMinRRQuality &&
+           directionalRoomATR >= InpXAU_MinDirectionalRoomATR &&
+           structureConfirmed);
+}
+
 bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double combinedScore,
                          string &grade, double &lotMulti, string &reason)
 {
@@ -10586,19 +10645,23 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    if(InpXAU_TimingQualityGrades && trendSetup && (grade == "A" || StringFind(grade, "A+") >= 0))
    {
       bool wasAPlus = (StringFind(grade, "A+") >= 0);
-      bool aPlusBadTiming = (wasAPlus &&
-	                             (entryEfficiency < InpXAU_APlusMinTimingQuality ||
-	                              lateEntryProb > InpXAU_APlusMaxLateProb ||
-	                              exhaustionProb > InpXAU_APlusMaxExhaustionProb ||
-	                              missedMove || failedImpulse || postSweepTrap || nearLiquiditySweep || lateChaseEntry));
+      bool aPlusQualified = XAU_APlusPositioningQualified(entryEfficiency, lateEntryProb,
+                                                          exhaustionProb, rrQuality,
+                                                          directionalRoomATR,
+                                                          cleanContinuation,
+                                                          trueBreakoutContinuation);
+      bool aPlusBadTiming = (wasAPlus && (!aPlusQualified ||
+	                                      missedMove || failedImpulse || postSweepTrap ||
+	                                      nearLiquiditySweep || lateChaseEntry));
       bool aBadRR = (rrQuality < 35.0 && (missedMove || nearLiquiditySweep || failedImpulse || postSweepTrap || lateChaseEntry));
       if(aPlusBadTiming)
       {
          string oldGrade = grade;
          grade = "A";
          lotMulti *= MathMin(0.80, InpXAU_FairTimingLotMulti);
-         reason = StringFormat("A+ TIMING DEMOTION: %s→A because confirmation arrived after positioning quality weakened. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f missedMove=%s lateChase=%s failedImpulse=%s postSweep=%s liquidityDist=%.2fATR. ",
+         reason = StringFormat("A+ EVIDENCE DEMOTION: %s→A because score strength was not matched by clean positioning. Trade remains eligible at A-size; this is an honest grade correction, not another veto. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f cleanContinuation=%s breakoutContinuation=%s missedMove=%s lateChase=%s failedImpulse=%s postSweep=%s liquidityDist=%.2fATR. ",
                                oldGrade, entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
+                               cleanContinuation ? "Y" : "N", trueBreakoutContinuation ? "Y" : "N",
                                missedMove ? "Y" : "N", lateChaseEntry ? "Y" : "N", failedImpulse ? "Y" : "N",
                                postSweepTrap ? "Y" : "N", directionalRoomATR);
       }
@@ -10988,6 +11051,17 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
    if(StringLen(preBlock) > 0)
       return "Trade blocked — " + preBlock;
 
+   // v5.8.50: cooldown is independent of Profit Guardian. It pauses only fresh
+   // entries; OnTick continues market monitoring and open-position management.
+   if(pg_pauseUntil > 0 && TimeCurrent() < pg_pauseUntil)
+   {
+      int secs = (int)(pg_pauseUntil - TimeCurrent());
+      return StringFormat("COOLDOWN_ACTIVE | Reason=consecutive-loss/profit-lock pause | LossCount=%d | PauseUntil=%s | Remaining=%d:%02d | ResumeCondition=time elapsed",
+                          pg_consecutiveLosses,
+                          TimeToString(pg_pauseUntil, TIME_DATE|TIME_MINUTES),
+                          secs/60, secs%60);
+   }
+
    // v5.3.1 — Soft DD mode: keep trading but A/A+ only with high score.
    //   This REPLACES the old -3% hard halt that was killing recovery cycles.
    if(IsSoftDDMode())
@@ -11033,9 +11107,6 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
       // Passed all selective gates → trade may proceed (lot reduction applied at OpenTrade)
    }
 
-   // 1b. Legacy day-halt (only if Selective Mode is OFF) — v5.1.3 path
-   if(pg_dayHaltActive) return "PG day-halt (escalating giveback brake fired)";
-
    // When Profit Guardian master is OFF, skip everything below — v4.9.7 trading style.
    if(!InpProfitGuardian) return "";
 
@@ -11043,15 +11114,7 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
    int tier = PG_Tier();
    if(tier >= 3) return "PG tier3 (>=75% daily gain — preservation mode, no new entries)";
 
-   // 3. Post-loss cooldown active
-   if(pg_pauseUntil > 0 && TimeCurrent() < pg_pauseUntil)
-   {
-      int secs = (int)(pg_pauseUntil - TimeCurrent());
-      return StringFormat("PG cooldown (post-loss x%d, %d:%02d remaining)",
-                          pg_consecutiveLosses, secs/60, secs%60);
-   }
-
-   // 4. HTF trend lock — block counter-trend unless A+ grade
+   // 3. HTF trend lock — block counter-trend unless A+ grade
    int htf = PG_HTFTrend();
    bool isAPlusOuter = (StringFind(grade, "A+") >= 0);
    if(htf == +1 && signal == -1 && !isAPlusOuter)
@@ -11108,6 +11171,38 @@ void PG_OnBasketWin()
       Print("🛡 PROFIT GUARDIAN: winner reset cooldown streak (was ",
             pg_consecutiveLosses, ").");
       pg_consecutiveLosses = 0;
+   }
+}
+
+void RegisterClosedTradeCooldown(bool wasWin, bool wasLoss, double profit)
+{
+   if(wasWin)
+   {
+      PG_OnBasketWin();
+      return;
+   }
+   if(!wasLoss) return;
+
+   datetime now = TimeCurrent();
+   if(pg_lastLossCycleAt > 0 && now - pg_lastLossCycleAt <= MathMax(1, InpLossCycleDedupSec))
+   {
+      Print("COOLDOWN LOSS DEDUP: layered close $", DoubleToString(profit, 2),
+            " belongs to the same basket cycle; consecutive count remains ",
+            pg_consecutiveLosses, ".");
+      return;
+   }
+
+   pg_lastLossCycleAt = now;
+   pg_consecutiveLosses++;
+   if(pg_consecutiveLosses >= 2 && InpTwoLossCooldownMin > 0)
+   {
+      pg_pauseUntil = now + InpTwoLossCooldownMin * 60;
+      Print("COOLDOWN_ACTIVE",
+            " | Reason=two consecutive losing trade cycles",
+            " | LossCount=", pg_consecutiveLosses,
+            " | LastLoss=$", DoubleToString(profit, 2),
+            " | PauseUntil=", TimeToString(pg_pauseUntil, TIME_DATE|TIME_MINUTES),
+            " | ResumeCondition=5h elapsed; hard drawdown protections remain active");
    }
 }
 
@@ -11343,7 +11438,7 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.49\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.50\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -11915,7 +12010,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.49 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.50 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
