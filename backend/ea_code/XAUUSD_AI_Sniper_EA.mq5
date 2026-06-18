@@ -1,13 +1,15 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.50 — Evidence Refactor            |
+//|                                     v5.8.51 — A+ Profit Shield            |
 //+------------------------------------------------------------------+
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.99"
-#property description "XAUUSD AI Sniper v5.8.50 — EVIDENCE REFACTOR"
-#property description "Uses prop reference balance consistently, repairs cooldowns, and makes A+ timing honest."
+#property version   "5.8.51"
+#property description "XAUUSD AI Sniper v5.8.51 — A+ PROFIT SHIELD"
+#property description "Adds equity-based profit shield for A/A+ trades: arms at meaningful float, moves BE,"
+#property description "hard-trails on giveback, force-closes on catastrophic peak retrace."
+#property description "Adds bestFloating/peakR to reports. Lot-calc detail in intelligence CSV."
 #property description "Preserves profitable entry/exit logic and proven blocked-trade protections."
 #property strict
 
@@ -526,6 +528,34 @@ input bool   InpGoldPullbackSurvivalMode = true;  // If trend/structure still su
 input int    InpGoldPullbackConfirmBars  = 3;     // Need this many closed bars beyond structure before true failure
 input double InpGoldPullbackCapBoost     = 1.80;  // Boost loss caps while recovery probability remains valid
 input int    InpGoldPullbackMinMomentum  = 3;     // Momentum score needed to classify drawdown as recoverable
+
+// ====================================================================
+// v5.8.51 — A+ PROFIT SHIELD
+// Dedicated layer that protects large floating profit on A/A+ trades
+// before the standard Clean-Exits thresholds (1.85R BE, 3.5R trail)
+// would normally activate.
+//
+// Problem solved: A+ trade reached meaningful equity profit (~5% acct)
+// but rMult was still below InpCleanBEActivateR because the original
+// SL was wide.  The trade reverted to BE with no protection triggered.
+//
+// Solution: arm the shield from an EQUITY % or an R threshold,
+// whichever comes first.  Once armed:
+//   1. Move SL to entry + small cushion (APLUS_BE_MOVED)
+//   2. On partial giveback from peak → hard ATR trail (APLUS_TRAIL_LOCKED)
+//   3. On near-total giveback → force-close (APLUS_GIVEBACK_EXIT)
+//
+// Does not interfere with strong runners — only ratchets the stop
+// after the trade has already proven significant value.
+// ====================================================================
+input group "=== A+ PROFIT SHIELD (v5.8.51 — protect large floating profit on A/A+ trades) ==="
+input bool   InpAPlusShield             = true;   // Master toggle — arm equity/R-based protection for A/A+ trades
+input double InpAPlusShieldEquityPct    = 1.5;    // ARM: floating profit >= X% of reference balance (0=off)
+input double InpAPlusShieldArmR         = 0.90;   // ARM: rMult >= this for A/A+ grade trades (0=off)
+input double InpAPlusShieldBECushR      = 0.04;   // SL placed at entry + (slDist × this); small cushion past BE
+input double InpAPlusGivebackPct        = 50.0;   // TRAIL: hard-trail when profit gives back >= X% from peak
+input double InpAPlusGivebackTrailATR   = 1.20;   // ATR multiplier for the hard trail after giveback
+input double InpAPlusForceExitGivePct   = 85.0;   // EXIT: force-close when giveback >= X% of shield peak (0=off)
 
 input group "=== EXPECTANCY LOSS ARMOR (v5.8.15 — breathe first, de-risk before disaster) ==="
 input bool   InpExpectancyLossArmor       = true;  // Runs even when Clean Exits owns trade management
@@ -1190,6 +1220,34 @@ void ClearPartialTaken(ulong ticket)
    for(int i = idx; i < n; i++)
       partialTakenTickets[i] = partialTakenTickets[i+1];
    ArrayResize(partialTakenTickets, n);
+}
+
+// v5.8.51 — A+ Profit Shield per-ticket tracker
+ulong g_aplusShieldArmedTickets[];
+
+bool APlusShieldArmed(ulong ticket)
+{
+   for(int i = 0; i < ArraySize(g_aplusShieldArmedTickets); i++)
+      if(g_aplusShieldArmedTickets[i] == ticket) return true;
+   return false;
+}
+void APlusMarkShieldArmed(ulong ticket)
+{
+   if(APlusShieldArmed(ticket)) return;
+   int n = ArraySize(g_aplusShieldArmedTickets);
+   ArrayResize(g_aplusShieldArmedTickets, n + 1);
+   g_aplusShieldArmedTickets[n] = ticket;
+}
+void APlusClearShield(ulong ticket)
+{
+   for(int i = 0; i < ArraySize(g_aplusShieldArmedTickets); i++)
+   {
+      if(g_aplusShieldArmedTickets[i] != ticket) continue;
+      int n = ArraySize(g_aplusShieldArmedTickets) - 1;
+      for(int j = i; j < n; j++) g_aplusShieldArmedTickets[j] = g_aplusShieldArmedTickets[j+1];
+      ArrayResize(g_aplusShieldArmedTickets, n);
+      return;
+   }
 }
 
 // v4.7.0 — Per-ticket AI-veto cooldown helpers
@@ -6009,6 +6067,31 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
          " afterMax=", DoubleToString(afterInpMaxLots,lotDigits),
          " finalLots=", DoubleToString(lots,lotDigits));
 
+   // v5.8.51: append structured lot-sizing detail to the audit string so
+   //          the Intelligence CSV / Command Center shows exactly why the
+   //          lot size ended up at its final value (APLUS_LOT_REDUCED_REASON).
+   {
+      string lotDetail = StringFormat(
+         " | APLUS_LOT_REDUCED_REASON: gradeLotMultiplier=%.2f baseRisk=%.2f%% "
+         "acctMult=%.2f pgMult=%.2f sessionMult=%.2f patternMult=%.2f "
+         "volMult=%.2f finalRisk=%.2f%% riskCap=%.2f%% equityRisk=$%.2f "
+         "slDist=%.2f rawLot=%.3f finalLot=%.2f",
+         sizeMulti,
+         baseRisk,
+         acctSizeMult,
+         pgMult,
+         sessionMult,
+         patternMult,
+         volMult,
+         riskPct,
+         effectiveSingleCap,
+         riskAmount,
+         slDist,
+         rawLots,
+         lots);
+      g_pendingBrainEntryAudit += lotDetail;
+   }
+
    // v4.5.5 — LOUD WARN if margin forced a lot reduction > 20%.
    // v4.5.6 — Throttled to once per 5 min to avoid log spam.
    if(desiredLots > 0 && (desiredLots - lots) / desiredLots > 0.20)
@@ -6572,10 +6655,15 @@ bool CleanRecoveryLikely(bool isBuy, bool trendAligned, int momentumScore,
 }
 
 // Returns true if position was closed this tick (caller should skip further logic)
+// v5.8.51: added peak (best floating USD profit) and rDollars (USD value of 1R)
+//          for the A+ Profit Shield layer.
 bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double curPrice,
                                  double curSL, double curTP, double slDist, double atr,
                                  double emaF, double emaS, double close1, double open1, int digits, double rsi,
-                                 int minsOpen, double lotsOpen)
+                                 int minsOpen, double lotsOpen,
+                                 double peak,     // v5.8.51: best floating profit seen (USD)
+                                 double rDollars  // v5.8.51: USD value of 1R for this position
+                                 )
 {
    if(!InpCleanExits) return false;
    if(slDist <= 0 || atr <= 0) return false;
@@ -6682,6 +6770,100 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          lastExitReason = StringFormat("STRUCTURE_FAILFAST │ %.2fR confirmed failed structure", rMult);
          trade.PositionClose(ticket);
          return true;
+      }
+   }
+
+   // ============ v5.8.51: A+ PROFIT SHIELD ============
+   // Runs BEFORE Phase-1 BE so A/A+ trades get earlier SL protection
+   // when meaningful equity profit has accumulated even below 1.85R.
+   // Uses the peak floating profit passed in from the outer loop.
+   double curProfit = isBuy ? (curPrice - openPx) : (openPx - curPrice);  // price-based (positive = profit)
+   double curProfitUSD = (rDollars > 0 && slDist > 0) ? (curProfit / slDist) * rDollars : 0.0;
+   if(InpAPlusShield && peak > 0 && rDollars > 0)
+   {
+      double balance     = StrategyReferenceBalance();
+      double shieldArmUSD = (InpAPlusShieldEquityPct > 0) ? balance * InpAPlusShieldEquityPct / 100.0 : 1e9;
+      bool   isHighGrade  = (StringCompare(g_lastEntryGrade, "A") == 0 ||
+                              StringFind(g_lastEntryGrade, "A+") >= 0);
+      double peakR        = peak / rDollars;
+
+      // Arm conditions: equity % OR R threshold (grade-gated for R arm)
+      bool equityArm = (InpAPlusShieldEquityPct > 0 && peak >= shieldArmUSD);
+      bool rArm      = (isHighGrade && InpAPlusShieldArmR > 0 && peakR >= InpAPlusShieldArmR);
+
+      if((equityArm || rArm) && !APlusShieldArmed(ticket))
+      {
+         APlusMarkShieldArmed(ticket);
+         PrintFormat("APLUS_PROFIT_SHIELD_ARMED #%I64u %s | grade=%s peakUSD=$%.2f peakR=%.2fR | "
+                     "shieldArm=$%.2f(%.1f%%bal) equityArm=%s rArm=%s | "
+                     "gradeLotMultiplier=%.2f baseRisk=%.2f%%",
+                     ticket, isBuy?"BUY":"SELL", g_lastEntryGrade,
+                     peak, peakR, shieldArmUSD, InpAPlusShieldEquityPct,
+                     equityArm?"Y":"N", rArm?"Y":"N",
+                     (StringFind(g_lastEntryGrade,"A+")>=0)?1.10:(StringCompare(g_lastEntryGrade,"A")==0)?0.85:0.45,
+                     (InpAccountMode==ACCT_BALANCED)?1.2:(InpAccountMode==ACCT_CONSERVATIVE)?0.6:2.0);
+      }
+
+      if(APlusShieldArmed(ticket))
+      {
+         double givebackPct = (peak > 0 && curProfitUSD < peak)
+                              ? ((peak - curProfitUSD) / peak) * 100.0 : 0.0;
+
+         // ── 1. Move SL to breakeven + cushion ───────────────────────────
+         double beCushionDist = slDist * InpAPlusShieldBECushR;
+         double shieldBESL    = isBuy ? NormalizeDouble(openPx + beCushionDist, digits)
+                                      : NormalizeDouble(openPx - beCushionDist, digits);
+         bool beNeeded = isBuy ? (shieldBESL > curSL) : (shieldBESL < curSL || curSL == 0);
+         if(beNeeded && curProfitUSD > 0)
+         {
+            double pt  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+            long   lvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+            double buf = MathMax(lvl * pt, pt * 30);
+            bool   sane = isBuy ? (shieldBESL < curPrice - buf) : (shieldBESL > curPrice + buf);
+            if(sane && SafeModifySL(ticket, shieldBESL, curTP, isBuy, curPrice, "APLUS_BE"))
+               PrintFormat("APLUS_BE_MOVED #%I64u %s | peakUSD=$%.2f peakR=%.2fR | "
+                           "SL→%s (entry=%s cushion=%.3fR) | curProfit=$%.2f",
+                           ticket, isBuy?"BUY":"SELL", peak, peakR,
+                           DoubleToString(shieldBESL, digits),
+                           DoubleToString(openPx, digits),
+                           InpAPlusShieldBECushR, curProfitUSD);
+         }
+
+         // ── 2. Hard ATR trail on significant giveback ────────────────────
+         if(InpAPlusGivebackPct > 0 && givebackPct >= InpAPlusGivebackPct && curProfitUSD >= 0)
+         {
+            double trailDist = atr * InpAPlusGivebackTrailATR;
+            double trailSL   = isBuy ? NormalizeDouble(curPrice - trailDist, digits)
+                                     : NormalizeDouble(curPrice + trailDist, digits);
+            bool advance    = isBuy ? (trailSL > curSL) : (trailSL < curSL || curSL == 0);
+            bool profitZone = isBuy ? (trailSL >= openPx) : (trailSL <= openPx);
+            double pt  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+            long   lvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+            double buf = MathMax(lvl * pt, pt * 30);
+            bool   sane = isBuy ? (trailSL < curPrice - buf) : (trailSL > curPrice + buf);
+            if(advance && profitZone && sane)
+            {
+               if(SafeModifySL(ticket, trailSL, curTP, isBuy, curPrice, "APLUS_TRAIL"))
+                  PrintFormat("APLUS_TRAIL_LOCKED #%I64u %s | peakUSD=$%.2f givebackPct=%.0f%% "
+                              "SL→%s (%.1fxATR trail) | curProfit=$%.2f",
+                              ticket, isBuy?"BUY":"SELL", peak, givebackPct,
+                              DoubleToString(trailSL, digits),
+                              InpAPlusGivebackTrailATR, curProfitUSD);
+            }
+         }
+
+         // ── 3. Force-close on catastrophic giveback from peak ────────────
+         if(InpAPlusForceExitGivePct > 0 && givebackPct >= InpAPlusForceExitGivePct && curProfitUSD >= 0)
+         {
+            PrintFormat("APLUS_GIVEBACK_EXIT #%I64u %s | peakUSD=$%.2f peakR=%.2fR | "
+                        "curProfit=$%.2f givebackPct=%.0f%% (threshold=%.0f%%) → CLOSE to protect remaining profit",
+                        ticket, isBuy?"BUY":"SELL", peak, peakR,
+                        curProfitUSD, givebackPct, InpAPlusForceExitGivePct);
+            lastExitReason = StringFormat("APLUS_GIVEBACK_EXIT │ gave back %.0f%% from $%.2f peak → protected close",
+                                          givebackPct, peak);
+            trade.PositionClose(ticket);
+            return true;
+         }
       }
    }
 
@@ -6965,9 +7147,12 @@ void ManagePositions()
       // If Clean Exits closes the position, skip further logic for this ticket.
       if(InpCleanExits)
       {
+         // v5.8.51: pass peak and rDollars so the A+ Profit Shield inside
+         //          ManageCleanExitsForPosition can use equity-based thresholds.
          if(ManageCleanExitsForPosition(ticket, isBuy, openPx, curPrice, curSL, curTP,
                                         slDist, atr, emaF, emaS, close1, open1, digits, rsi,
-                                        minsOpen, lotsOpen))
+                                        minsOpen, lotsOpen,
+                                        peak, rDollars))
             continue;
          // Skip ALL legacy trailing systems below — Clean Exits owns this ticket.
          // The original SL set at order-open time remains as the hard downside
@@ -8364,15 +8549,42 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          outcome = "WIN_AFTER_DEEP_DD";
       else if(wasWin && worstFloatingPnl < 0.0 && profit > 0.0 && profit / MathAbs(worstFloatingPnl) < 0.60)
          outcome = "WEAK_RECOVERY_WIN";
+
+      // v5.8.51: Retrieve peak floating profit and enhance outcome classification.
+      // Distinguishes true BE/loss from protected BE / giveback loss (had good profit, let it slip).
+      double bestFloatingPnl = 0.0;
+      {
+         int bfIdx = FindPeakIdx(posId);
+         if(bfIdx >= 0) bestFloatingPnl = peakProfits[bfIdx];
+      }
+      double shieldMeaningfulUSD = StrategyReferenceBalance() * 0.015; // 1.5% balance = "meaningful profit"
+      if(outcome == "BREAK_EVEN" && bestFloatingPnl >= shieldMeaningfulUSD)
+         outcome = "APLUS_PROTECTED_BE";   // had real profit, SL moved to entry, closed at cost — this is GOOD
+      else if(outcome == "LOSS" && bestFloatingPnl >= shieldMeaningfulUSD)
+         outcome = "APLUS_GIVEBACK_LOSS";  // had real profit, gave it all back — system should have acted sooner
+      // Note: APLUS_GIVEBACK_EXIT will have lastExitReason starting with "APLUS_GIVEBACK" so ML can
+      // distinguish a deliberate protected close from a passive SL hit.
+
+      // Build bestFloating extra note for ML dataset
+      string shieldExtra = StringFormat("bestFloating=%.2f peakR=%.3f shieldArmed=%s",
+                                        bestFloatingPnl,
+                                        (lastSignalATR > 0 && InpSLMultiplier > 0)
+                                           ? bestFloatingPnl / MathMax(1.0, StrategyReferenceBalance() * 0.01)
+                                           : 0.0,
+                                        APlusShieldArmed(posId) ? "Y" : "N");
+
       XAU_AppendTradeBrain("CLOSE", brainRec, dPrice, profit, worstFloatingPnl,
-                           secondsNegative, outcome, lastExitReason);
+                           secondsNegative, outcome,
+                           lastExitReason + " | " + shieldExtra);
       XAU_BrainWatchClosedTrade(brainRec, dPrice, profit);
       Print("TRADE-BRAIN CLOSE: ", outcome,
             " posId=", posId,
             " setup=", brainRec.setup,
             " grade=", XAU_GradeBucket(brainRec.grade),
             " profit=$", DoubleToString(profit, 2),
+            " bestFloating=$", DoubleToString(bestFloatingPnl, 2),
             " worstFloating=$", DoubleToString(worstFloatingPnl, 2),
+            " shieldArmed=", APlusShieldArmed(posId)?"Y":"N",
             " exitReason=", XAU_BlockReasonKey(lastExitReason));
       if(brainIdx >= 0) XAU_RemoveBrainOpen(brainIdx);
    }
@@ -8414,7 +8626,8 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    UpdateDrawdownState(wasLoss);
 
    // v4.5.9 — Position fully closed (verified above) — clear trackers.
-   if(posId > 0) { ClearPeakProfit(posId); ClearPartialTaken(posId); ClearAIVeto(posId); ClearTPExtend(posId); }
+   // v5.8.51: also clear A+ shield armed state.
+   if(posId > 0) { ClearPeakProfit(posId); ClearPartialTaken(posId); ClearAIVeto(posId); ClearTPExtend(posId); APlusClearShield(posId); }
    // Clear active thesis (no open position now until next entry)
    if(CountMyPositions() == 0)
    {
