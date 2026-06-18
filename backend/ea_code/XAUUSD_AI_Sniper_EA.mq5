@@ -1,31 +1,29 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.52 — A+ Profit Shield    |
+//|                                     v5.8.53 — Smart Profit Shield |
 //+------------------------------------------------------------------+
 // v5.8.51 CHANGES (Live Account Readiness Audit 2026-06-18):
 //   1. SL THROTTLE: trailing mods capped at 1/sec (prevents 15-30s cascade on 3-pos baskets)
 //   2. CONTEXT-BUSY RETRY: 150ms yield + retry on ERR_TRADE_CONTEXT_BUSY before giving up
 //   3. INDICATOR REBUILD FIX: err=4807 transient no longer forces immediate rebuild/warmup
-//      (was causing 58+ unnecessary 12s warmup windows per day on June 17 log evidence)
 //   4. SPREAD RECOVERY: 90s cooldown after a spread spike before entries re-open
 //   5. MOMENTUM SOFT MODE: fastScore>=80 + no opposing TF → x0.80 lot instead of hard block
-//      (evidence: 85/85-score SELL blocked despite all 4 TFs aligned — June 18 00:45 log)
 //   6. SLIPPAGE MONITOR: logs fills with >0.20 ATR slippage + daily slippage statistics
-// v5.8.52 CHANGES (A+ Profit Shield 2026-06-18):
-//   1. Arms on equity-% OR R-multiple floating profit (whichever fires first)
-//   2. Moves SL to breakeven + cushion once armed (APLUS_BE_MOVED)
-//   3. Hard ATR trail when giveback >= 50% of peak (APLUS_TRAIL_LOCKED)
-//   4. Force-close when giveback >= 85% of peak (APLUS_GIVEBACK_EXIT)
-//   5. New close outcomes: APLUS_PROTECTED_BE / APLUS_GIVEBACK_LOSS
-//   6. bestFloating + shieldArmed in every TRADE-BRAIN CLOSE log + CSV
-//   7. Lot-calc detail appended to intelligence entry audit (APLUS_LOT_REDUCED_REASON)
+// v5.8.52 CHANGES (A+ Profit Shield — initial, too aggressive):
+//   Shield armed at 0.9R, causing force-closes on normal pullbacks (e.g. SELL 4229→4228 $10,
+//   then market ran to 4221). Fixed in v5.8.53.
+// v5.8.53 CHANGES (Smart Two-Tier Shield 2026-06-18):
+//   TIER 1 (low threshold): Arms at 1.5R / 2% equity → moves SL to entry ONLY. Trade runs free.
+//   TIER 2 (high threshold): Only fires when peak >= 3R OR 3% equity AND momentum CONFIRMS
+//   reversal (score <= 2, trend broken, RSI against). If it's a pullback → APLUS_PULLBACK_DETECTED,
+//   trade holds. If genuine reversal → trail tightens or force-closes. Prevents missing good runs.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.8.52"
-#property description "XAUUSD AI Sniper v5.8.52 — A+ PROFIT SHIELD + LIVE READINESS"
-#property description "Live execution quality: SL throttle, spread recovery, slippage monitoring."
-#property description "A+ Profit Shield: equity-based BE lock, hard ATR trail, force-close on giveback."
+#property version   "5.8.53"
+#property description "XAUUSD AI Sniper v5.8.53 — SMART PROFIT SHIELD + LIVE READINESS"
+#property description "Two-tier shield: BE lock early (no trail), active protection only on confirmed reversal."
+#property description "Pullbacks detected and held — trade runs freely. Only closes on genuine reversals."
 #property description "Preserves profitable entry/exit logic and proven blocked-trade protections."
 #property strict
 
@@ -566,14 +564,19 @@ input double InpNoPartialSmartLossPctEq   = 4.0;   // Or by account equity %, wh
 input int    InpNoPartialSmartLossMinSec  = 1500;  // Let normal XAU pullbacks breathe first
 input int    InpNoPartialSmartMaxMomentum = 1;     // Momentum must be this weak or worse for early no-partial close
 
-input group "=== A+ PROFIT SHIELD (v5.8.52 — protect large floating profit on A/A+ trades) ==="
-input bool   InpAPlusShield             = true;   // Master toggle — arm equity/R-based protection for A/A+ trades
-input double InpAPlusShieldEquityPct    = 1.5;    // Arm at X% of reference balance floating profit
-input double InpAPlusShieldArmR         = 0.90;   // Also arm at rMult >= this (A/A+ only)
-input double InpAPlusShieldBECushR      = 0.04;   // SL = entry + slDist * this (small cushion above BE)
-input double InpAPlusGivebackPct        = 50.0;   // Hard trail when giveback >= X% of peak floating profit
-input double InpAPlusGivebackTrailATR   = 1.20;   // ATR multiplier for the hard trail distance
-input double InpAPlusForceExitGivePct   = 85.0;   // Force-close when giveback >= X% of peak floating profit
+input group "=== A+ PROFIT SHIELD (v5.8.53 — two-tier: BE lock early, protect only on confirmed reversal) ==="
+input bool   InpAPlusShield             = true;   // Master toggle
+// --- TIER 1: BE lock (arms early, moves SL to entry only — does NOT trail or close) ---
+input double InpAPlusShieldEquityPct    = 2.0;    // Arm BE lock when peak >= X% of reference balance
+input double InpAPlusShieldArmR         = 1.50;   // Also arm BE lock when peakR >= this (raised from 0.90)
+input double InpAPlusShieldBECushR      = 0.04;   // SL = entry + slDist * this cushion
+// --- TIER 2: Active protection (only fires when peak was MEANINGFUL + momentum confirms reversal) ---
+input double InpAPlusShieldProtectEquityPct = 3.0;  // Tier 2 requires peak >= X% of balance (e.g. $300 on $10k)
+input double InpAPlusShieldProtectR         = 3.0;  // OR peakR >= this (significant runner)
+input double InpAPlusGivebackPct            = 60.0; // Trail only after X% giveback from peak (was 50%)
+input double InpAPlusGivebackTrailATR       = 1.50; // Wider ATR trail — gives pullbacks room (was 1.20)
+input double InpAPlusForceExitGivePct       = 88.0; // Force-close after X% giveback (was 85%)
+input int    InpAPlusReversalMomentum       = 2;    // Trail/close only if momentum score <= this (confirms reversal, not pullback)
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = false;  // Advisory default: AI cannot veto/force deterministic rule-based closes
@@ -6804,42 +6807,53 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       }
    }
 
-   // ============ v5.8.52: A+ PROFIT SHIELD ============
-   // Arms before Phase 1 BE so wide-SL A+ trades are protected even if they
-   // never reach 1.85R.  Three escalating layers:
-   //   1. Arm  → move SL to entry + cushion  (APLUS_BE_MOVED)
-   //   2. 50%+ giveback from peak → hard ATR trail  (APLUS_TRAIL_LOCKED)
-   //   3. 85%+ giveback from peak → force-close  (APLUS_GIVEBACK_EXIT)
+   // ============ v5.8.53: A+ PROFIT SHIELD (two-tier, momentum-aware) ============
+   //
+   // TIER 1 — BE lock (arms at low threshold, moves SL to entry ONLY, then steps back).
+   //   The trade is now risk-free. CleanExits runs the rest normally.
+   //   Does NOT trail or close on small pullbacks.
+   //
+   // TIER 2 — Active protection (only fires when BOTH conditions are true):
+   //   a) Peak was MEANINGFUL (>= 3% balance OR >= 3R) — not a tiny early move
+   //   b) Momentum CONFIRMS reversal (score <= InpAPlusReversalMomentum) — not a pullback
+   //   If momentum says continuation → log APLUS_PULLBACK_DETECTED and leave trade alone.
+   //
    if(InpAPlusShield && peak > 0 && rDollars > 0)
    {
-      string grade = g_lastEntryGrade;
-      bool isAPlus = (grade == "A+" || grade == "A");
+      string grade   = g_lastEntryGrade;
+      bool   isAPlus = (grade == "A+" || grade == "A");
       if(isAPlus)
       {
-         double refBal       = StrategyReferenceBalance();
-         double curProfitUSD = isBuy ? (curPrice - openPx) : (openPx - curPrice);
-         curProfitUSD       *= lotsOpen * SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE)
-                               / MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
-         double shieldArmUSD = refBal * InpAPlusShieldEquityPct / 100.0;
-         double peakR        = (rDollars > 0) ? peak / rDollars : 0.0;
-         bool   equityArm    = (peak >= shieldArmUSD);
-         bool   rArm         = (peakR >= InpAPlusShieldArmR);
+         double refBal        = StrategyReferenceBalance();
+         double tickVal       = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+         double tickSz        = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
+         double curProfitUSD  = isBuy ? (curPrice - openPx) : (openPx - curPrice);
+         curProfitUSD        *= lotsOpen * tickVal / tickSz;
+         double peakR         = (rDollars > 0) ? peak / rDollars : 0.0;
 
-         if((equityArm || rArm) && !APlusShieldArmed(ticket))
+         // ---- TIER 1: arm condition (BE lock only) ----
+         double tier1ArmUSD  = refBal * InpAPlusShieldEquityPct / 100.0;
+         bool   tier1Equity  = (peak >= tier1ArmUSD);
+         bool   tier1R       = (peakR >= InpAPlusShieldArmR);
+
+         if((tier1Equity || tier1R) && !APlusShieldArmed(ticket))
          {
             APlusMarkShieldArmed(ticket);
             PrintFormat("APLUS_PROFIT_SHIELD_ARMED #%I64u %s | grade=%s peakUSD=$%.2f peakR=%.2fR | "
-                        "armTrigger=%s refBal=$%.2f armAt=%.2f%%=$%.2f or %.2fR",
+                        "trigger=%s | tier2needs>=%.2f%%($%.2f) or %.2fR",
                         ticket, isBuy?"BUY":"SELL", grade, peak, peakR,
-                        equityArm?"EQUITY_PCT":"R_MULT",
-                        refBal, InpAPlusShieldEquityPct, shieldArmUSD, InpAPlusShieldArmR);
+                        tier1Equity?"EQUITY_PCT":"R_MULT",
+                        InpAPlusShieldProtectEquityPct,
+                        refBal * InpAPlusShieldProtectEquityPct / 100.0,
+                        InpAPlusShieldProtectR);
          }
 
          if(APlusShieldArmed(ticket))
          {
-            double cushionDist = slDist * InpAPlusShieldBECushR;
-            double shieldBESL  = isBuy ? NormalizeDouble(openPx + cushionDist, digits)
-                                       : NormalizeDouble(openPx - cushionDist, digits);
+            // TIER 1 action: move SL to entry + tiny cushion. Safe always.
+            double cushionDist  = slDist * InpAPlusShieldBECushR;
+            double shieldBESL   = isBuy ? NormalizeDouble(openPx + cushionDist, digits)
+                                        : NormalizeDouble(openPx - cushionDist, digits);
             bool   beShouldMove = isBuy ? (shieldBESL > curSL) : (shieldBESL < curSL || curSL == 0);
             if(beShouldMove)
             {
@@ -6848,45 +6862,85 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                double buf = MathMax(lvl * pt, pt * 30);
                bool   sane = isBuy ? (shieldBESL < curPrice - buf) : (shieldBESL > curPrice + buf);
                if(sane && SafeModifySL(ticket, shieldBESL, curTP, isBuy, curPrice, "APLUS_BE"))
-                  PrintFormat("APLUS_BE_MOVED #%I64u %s | peakUSD=$%.2f peakR=%.2fR | newSL=%s",
+                  PrintFormat("APLUS_BE_MOVED #%I64u %s | peakUSD=$%.2f peakR=%.2fR | "
+                              "newSL=%s | trade is now risk-free, running freely",
                               ticket, isBuy?"BUY":"SELL", peak, peakR,
                               DoubleToString(shieldBESL, digits));
             }
 
-            double givebackPct = (peak > 0 && curProfitUSD < peak)
-                                 ? ((peak - curProfitUSD) / peak) * 100.0
-                                 : 0.0;
+            // ---- TIER 2: trail + force-close — only on significant peaks + confirmed reversal ----
+            double tier2ArmUSD  = refBal * InpAPlusShieldProtectEquityPct / 100.0;
+            bool   tier2Ready   = (peak >= tier2ArmUSD || peakR >= InpAPlusShieldProtectR);
 
-            if(givebackPct >= InpAPlusForceExitGivePct)
+            if(tier2Ready)
             {
-               PrintFormat("APLUS_GIVEBACK_EXIT #%I64u %s | peakUSD=$%.2f peakR=%.2fR | "
-                           "curProfit=$%.2f givebackPct=%.0f%% >= forceExit=%.0f%%",
-                           ticket, isBuy?"BUY":"SELL", peak, peakR,
-                           curProfitUSD, givebackPct, InpAPlusForceExitGivePct);
-               lastExitReason = StringFormat("APLUS_GIVEBACK_EXIT | gave back %.0f%% from $%.2f peak → protected close",
-                                             givebackPct, peak);
-               trade.PositionClose(ticket);
-               return true;
-            }
-            else if(givebackPct >= InpAPlusGivebackPct)
-            {
-               double trailDist = atr * InpAPlusGivebackTrailATR;
-               double trailSL   = isBuy ? NormalizeDouble(curPrice - trailDist, digits)
-                                        : NormalizeDouble(curPrice + trailDist, digits);
-               bool   trailAdv  = isBuy ? (trailSL > curSL) : (trailSL < curSL || curSL == 0);
-               if(trailAdv)
+               double givebackPct = (peak > 0 && curProfitUSD < peak)
+                                    ? ((peak - curProfitUSD) / peak) * 100.0 : 0.0;
+
+               // Momentum check: is this a pullback or a reversal?
+               // CleanMomentumScore already computed in the outer scope — but we need it fresh here.
+               // score >= 3 + trend aligned = still running. score <= InpAPlusReversalMomentum = reversing.
+               bool trendStillWith  = CleanRegimeAligned(isBuy);
+               bool momentumAgainst = (momentumScore <= InpAPlusReversalMomentum);
+               bool confirmReversal = momentumAgainst && !trendStillWith;
+               // Also confirm if RSI is crossing against (overbought on sell, oversold on buy)
+               bool rsiAgainst      = isBuy ? (rsi < 40) : (rsi > 60);
+               bool strongReversal  = confirmReversal || (momentumAgainst && rsiAgainst);
+
+               if(givebackPct >= InpAPlusForceExitGivePct)
                {
-                  double pt2  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
-                  long   lvl2 = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-                  double buf2 = MathMax(lvl2 * pt2, pt2 * 30);
-                  bool   sane2 = isBuy ? (trailSL < curPrice - buf2) : (trailSL > curPrice + buf2);
-                  if(sane2 && SafeModifySL(ticket, trailSL, curTP, isBuy, curPrice, "APLUS_TRAIL"))
-                     PrintFormat("APLUS_TRAIL_LOCKED #%I64u %s | peakUSD=$%.2f givebackPct=%.0f%% | "
-                                 "trailSL=%s ATR=%.2f x%.2f",
-                                 ticket, isBuy?"BUY":"SELL", peak, givebackPct,
-                                 DoubleToString(trailSL, digits), atr, InpAPlusGivebackTrailATR);
+                  if(strongReversal)
+                  {
+                     PrintFormat("APLUS_GIVEBACK_EXIT #%I64u %s | peakUSD=$%.2f peakR=%.2fR | "
+                                 "curProfit=$%.2f givebackPct=%.0f%% | momentum=%d trendWith=%s rsi=%.1f",
+                                 ticket, isBuy?"BUY":"SELL", peak, peakR,
+                                 curProfitUSD, givebackPct, momentumScore,
+                                 trendStillWith?"Y":"N", rsi);
+                     lastExitReason = StringFormat("APLUS_GIVEBACK_EXIT | %.0f%% giveback from $%.2f peak, reversal confirmed",
+                                                   givebackPct, peak);
+                     trade.PositionClose(ticket);
+                     return true;
+                  }
+                  else
+                  {
+                     // Big giveback but momentum/trend still with us — this is a pullback, hold.
+                     PrintFormat("APLUS_PULLBACK_DETECTED #%I64u %s | givebackPct=%.0f%% BUT momentum=%d trendWith=%s rsi=%.1f — holding, not closing",
+                                 ticket, isBuy?"BUY":"SELL", givebackPct,
+                                 momentumScore, trendStillWith?"Y":"N", rsi);
+                  }
+               }
+               else if(givebackPct >= InpAPlusGivebackPct)
+               {
+                  if(strongReversal)
+                  {
+                     // Reversal confirmed — trail tightly to lock in remaining profit
+                     double trailDist = atr * InpAPlusGivebackTrailATR;
+                     double trailSL   = isBuy ? NormalizeDouble(curPrice - trailDist, digits)
+                                              : NormalizeDouble(curPrice + trailDist, digits);
+                     bool   trailAdv  = isBuy ? (trailSL > curSL) : (trailSL < curSL || curSL == 0);
+                     if(trailAdv)
+                     {
+                        double pt2  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+                        long   lvl2 = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+                        double buf2 = MathMax(lvl2 * pt2, pt2 * 30);
+                        bool   sane2 = isBuy ? (trailSL < curPrice - buf2) : (trailSL > curPrice + buf2);
+                        if(sane2 && SafeModifySL(ticket, trailSL, curTP, isBuy, curPrice, "APLUS_TRAIL"))
+                           PrintFormat("APLUS_TRAIL_LOCKED #%I64u %s | peakUSD=$%.2f givebackPct=%.0f%% | "
+                                       "trailSL=%s momentum=%d trendWith=%s",
+                                       ticket, isBuy?"BUY":"SELL", peak, givebackPct,
+                                       DoubleToString(trailSL, digits), momentumScore, trendStillWith?"Y":"N");
+                     }
+                  }
+                  else
+                  {
+                     // Giveback but still looks like a pullback — give it room, do not trail yet
+                     PrintFormat("APLUS_PULLBACK_DETECTED #%I64u %s | givebackPct=%.0f%% | momentum=%d trendWith=%s — giving room",
+                                 ticket, isBuy?"BUY":"SELL", givebackPct,
+                                 momentumScore, trendStillWith?"Y":"N");
+                  }
                }
             }
+            // If tier2 not ready: BE is set, CleanExits manages the rest. No aggressive action.
          }
       }
    }
