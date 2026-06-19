@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.53 — Smart Profit Shield |
+//|                                     v5.8.54 — Patient Profit Shield |
 //+------------------------------------------------------------------+
 // v5.8.51 CHANGES (Live Account Readiness Audit 2026-06-18):
 //   1. SL THROTTLE: trailing mods capped at 1/sec (prevents 15-30s cascade on 3-pos baskets)
@@ -18,12 +18,18 @@
 //   TIER 2 (high threshold): Only fires when peak >= 3R OR 3% equity AND momentum CONFIRMS
 //   reversal (score <= 2, trend broken, RSI against). If it's a pullback → APLUS_PULLBACK_DETECTED,
 //   trade holds. If genuine reversal → trail tightens or force-closes. Prevents missing good runs.
+// v5.8.54 CHANGES (Patient Profit Shield 2026-06-19):
+//   Reports showed v5.8.53 still closed several A/A+ positions too early ($0.49/$1.50/$4.27)
+//   after arming on noise-level floating profit. The shield is now protective, not
+//   profit-cutting: tier 1 ignores tiny peaks, tier 2 can lock account-meaningful profit,
+//   market-close is OFF by default, and confirmed reversals tighten SL instead of dumping
+//   good trades at tiny profit.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.8.53"
-#property description "XAUUSD AI Sniper v5.8.53 — SMART PROFIT SHIELD + LIVE READINESS"
-#property description "Two-tier shield: BE lock early (no trail), active protection only on confirmed reversal."
-#property description "Pullbacks detected and held — trade runs freely. Only closes on genuine reversals."
+#property version   "5.8.54"
+#property description "XAUUSD AI Sniper v5.8.54 — PATIENT PROFIT SHIELD + LIVE READINESS"
+#property description "Two-tier shield: BE lock early, meaningful-profit trail later, no tiny-profit force close."
+#property description "Pullbacks are held. Confirmed reversals tighten SL unless market-close is explicitly enabled."
 #property description "Preserves profitable entry/exit logic and proven blocked-trade protections."
 #property strict
 
@@ -564,18 +570,23 @@ input double InpNoPartialSmartLossPctEq   = 4.0;   // Or by account equity %, wh
 input int    InpNoPartialSmartLossMinSec  = 1500;  // Let normal XAU pullbacks breathe first
 input int    InpNoPartialSmartMaxMomentum = 1;     // Momentum must be this weak or worse for early no-partial close
 
-input group "=== A+ PROFIT SHIELD (v5.8.53 — two-tier: BE lock early, protect only on confirmed reversal) ==="
+input group "=== A+ PROFIT SHIELD (v5.8.54 — patient: protect profit without tiny early closes) ==="
 input bool   InpAPlusShield             = true;   // Master toggle
 // --- TIER 1: BE lock (arms early, moves SL to entry only — does NOT trail or close) ---
-input double InpAPlusShieldEquityPct    = 2.0;    // Arm BE lock when peak >= X% of reference balance
+input double InpAPlusShieldEquityPct    = 1.5;    // Arm BE lock when peak >= X% of reference balance
 input double InpAPlusShieldArmR         = 1.50;   // Also arm BE lock when peakR >= this (raised from 0.90)
 input double InpAPlusShieldBECushR      = 0.04;   // SL = entry + slDist * this cushion
+input double InpAPlusShieldMinArmUSD    = 30.0;   // Ignore noise-level peaks; $7-$20 should not move SL on a $3k account
 // --- TIER 2: Active protection (only fires when peak was MEANINGFUL + momentum confirms reversal) ---
-input double InpAPlusShieldProtectEquityPct = 3.0;  // Tier 2 requires peak >= X% of balance (e.g. $300 on $10k)
-input double InpAPlusShieldProtectR         = 3.0;  // OR peakR >= this (significant runner)
+input double InpAPlusShieldProtectEquityPct = 2.0;  // Tier 2 can lock after account-meaningful profit, without waiting too long
+input double InpAPlusShieldProtectR         = 3.0;  // And peakR >= this when RequireUSDAndR is true
+input double InpAPlusShieldMinProtectUSD    = 50.0; // Never treat sub-$50 moves as meaningful protection events
+input bool   InpAPlusShieldRequireUSDAndR   = false;// False = 3% account profit can lock even if SL was wide
 input double InpAPlusGivebackPct            = 60.0; // Trail only after X% giveback from peak (was 50%)
 input double InpAPlusGivebackTrailATR       = 1.50; // Wider ATR trail — gives pullbacks room (was 1.20)
-input double InpAPlusForceExitGivePct       = 88.0; // Force-close after X% giveback (was 85%)
+input double InpAPlusForceExitGivePct       = 88.0; // If market-close enabled, force-close after X% giveback
+input bool   InpAPlusShieldAllowMarketClose = false;// Default OFF: tighten SL, do not close runners at tiny profit
+input double InpAPlusShieldPeakLockPct      = 35.0; // On confirmed reversal, try to lock this % of best floating profit
 input int    InpAPlusReversalMomentum       = 2;    // Trail/close only if momentum score <= this (confirms reversal, not pullback)
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
@@ -2099,7 +2110,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.50 (EVIDENCE REFACTOR) READY ===");
+   Print("=== XAUAI SNIPER v5.8.54 (PATIENT PROFIT SHIELD) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -2226,7 +2237,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.50 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.8.54 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -5892,9 +5903,15 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double sessionMult = 1.0;
    if(dt.hour >= 0 && dt.hour < 8)
    {
-      double asianMult = (IsTrendContinuationRegime(signal) && StrategyReferenceBalance() >= 25000.0) ? 0.55 : 0.40;
+      bool cleanHighGrade = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
+      bool trendContinuation = IsTrendContinuationRegime(signal);
+      double asianMult = 0.40;
+      if(trendContinuation && cleanHighGrade && !entryQualityScout)
+         asianMult = g_propFirmMode ? 0.55 : 0.68;
+      else if(trendContinuation && !entryQualityScout)
+         asianMult = g_propFirmMode ? 0.45 : 0.55;
       sessionMult = asianMult;
-      riskPct *= asianMult; // Asian session is still quieter, but no longer crushes large clean-trend lots to dust.
+      riskPct *= asianMult; // v5.8.54: do not crush clean A/A+ continuation trades on small non-prop accounts.
    }
    double riskAfterSession = riskPct;
 
@@ -6807,14 +6824,14 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       }
    }
 
-   // ============ v5.8.53: A+ PROFIT SHIELD (two-tier, momentum-aware) ============
+   // ============ v5.8.54: A+ PROFIT SHIELD (patient, report-backed) ============
    //
-   // TIER 1 — BE lock (arms at low threshold, moves SL to entry ONLY, then steps back).
+   // TIER 1 — BE lock (arms only after meaningful floating profit, then steps back).
    //   The trade is now risk-free. CleanExits runs the rest normally.
    //   Does NOT trail or close on small pullbacks.
    //
-   // TIER 2 — Active protection (only fires when BOTH conditions are true):
-   //   a) Peak was MEANINGFUL (>= 3% balance OR >= 3R) — not a tiny early move
+   // TIER 2 — Active protection (fires only after account-meaningful profit or large R):
+   //   a) Peak was MEANINGFUL (>= 2% balance, or >= min USD + configured R) — not a tiny early move
    //   b) Momentum CONFIRMS reversal (score <= InpAPlusReversalMomentum) — not a pullback
    //   If momentum says continuation → log APLUS_PULLBACK_DETECTED and leave trade alone.
    //
@@ -6832,19 +6849,20 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          double peakR         = (rDollars > 0) ? peak / rDollars : 0.0;
 
          // ---- TIER 1: arm condition (BE lock only) ----
-         double tier1ArmUSD  = refBal * InpAPlusShieldEquityPct / 100.0;
+         double tier1ArmUSD  = MathMax(InpAPlusShieldMinArmUSD, refBal * InpAPlusShieldEquityPct / 100.0);
          bool   tier1Equity  = (peak >= tier1ArmUSD);
-         bool   tier1R       = (peakR >= InpAPlusShieldArmR);
+         bool   tier1R       = (peak >= InpAPlusShieldMinArmUSD && peakR >= InpAPlusShieldArmR);
 
          if((tier1Equity || tier1R) && !APlusShieldArmed(ticket))
          {
             APlusMarkShieldArmed(ticket);
             PrintFormat("APLUS_PROFIT_SHIELD_ARMED #%I64u %s | grade=%s peakUSD=$%.2f peakR=%.2fR | "
-                        "trigger=%s | tier2needs>=%.2f%%($%.2f) or %.2fR",
+                        "trigger=%s | tier2needs>=%.2f%%($%.2f) %s %.2fR",
                         ticket, isBuy?"BUY":"SELL", grade, peak, peakR,
                         tier1Equity?"EQUITY_PCT":"R_MULT",
                         InpAPlusShieldProtectEquityPct,
-                        refBal * InpAPlusShieldProtectEquityPct / 100.0,
+                        MathMax(InpAPlusShieldMinProtectUSD, refBal * InpAPlusShieldProtectEquityPct / 100.0),
+                        InpAPlusShieldRequireUSDAndR ? "and" : "or",
                         InpAPlusShieldProtectR);
          }
 
@@ -6869,8 +6887,10 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
             }
 
             // ---- TIER 2: trail + force-close — only on significant peaks + confirmed reversal ----
-            double tier2ArmUSD  = refBal * InpAPlusShieldProtectEquityPct / 100.0;
-            bool   tier2Ready   = (peak >= tier2ArmUSD || peakR >= InpAPlusShieldProtectR);
+            double tier2ArmUSD  = MathMax(InpAPlusShieldMinProtectUSD, refBal * InpAPlusShieldProtectEquityPct / 100.0);
+            bool   tier2Equity  = (peak >= tier2ArmUSD);
+            bool   tier2R       = (peak >= InpAPlusShieldMinProtectUSD && peakR >= InpAPlusShieldProtectR);
+            bool   tier2Ready   = InpAPlusShieldRequireUSDAndR ? (tier2Equity && tier2R) : (tier2Equity || tier2R);
 
             if(tier2Ready)
             {
@@ -6891,15 +6911,48 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                {
                   if(strongReversal)
                   {
-                     PrintFormat("APLUS_GIVEBACK_EXIT #%I64u %s | peakUSD=$%.2f peakR=%.2fR | "
-                                 "curProfit=$%.2f givebackPct=%.0f%% | momentum=%d trendWith=%s rsi=%.1f",
-                                 ticket, isBuy?"BUY":"SELL", peak, peakR,
-                                 curProfitUSD, givebackPct, momentumScore,
-                                 trendStillWith?"Y":"N", rsi);
-                     lastExitReason = StringFormat("APLUS_GIVEBACK_EXIT | %.0f%% giveback from $%.2f peak, reversal confirmed",
-                                                   givebackPct, peak);
-                     trade.PositionClose(ticket);
-                     return true;
+                     if(InpAPlusShieldAllowMarketClose)
+                     {
+                        PrintFormat("APLUS_GIVEBACK_EXIT #%I64u %s | peakUSD=$%.2f peakR=%.2fR | "
+                                    "curProfit=$%.2f givebackPct=%.0f%% | momentum=%d trendWith=%s rsi=%.1f",
+                                    ticket, isBuy?"BUY":"SELL", peak, peakR,
+                                    curProfitUSD, givebackPct, momentumScore,
+                                    trendStillWith?"Y":"N", rsi);
+                        lastExitReason = StringFormat("APLUS_GIVEBACK_EXIT | %.0f%% giveback from $%.2f peak, reversal confirmed",
+                                                      givebackPct, peak);
+                        trade.PositionClose(ticket);
+                        return true;
+                     }
+
+                     double lockUSD  = MathMax(rDollars * 0.25, peak * InpAPlusShieldPeakLockPct / 100.0);
+                     double lockDist = (tickVal > 0 && lotsOpen > 0)
+                                       ? (lockUSD * tickSz / (lotsOpen * tickVal))
+                                       : (slDist * 0.25);
+                     double pt3  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+                     long   lvl3 = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+                     double buf3 = MathMax(lvl3 * pt3, pt3 * 30);
+                     double peakLockSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
+                                               : NormalizeDouble(openPx - lockDist, digits);
+                     double validSideSL = isBuy ? NormalizeDouble(curPrice - buf3, digits)
+                                                : NormalizeDouble(curPrice + buf3, digits);
+                     double patientSL = isBuy ? MathMin(MathMax(shieldBESL, peakLockSL), validSideSL)
+                                               : MathMax(MathMin(shieldBESL, peakLockSL), validSideSL);
+                     patientSL = NormalizeDouble(patientSL, digits);
+                     bool patientAdv = isBuy ? (patientSL > curSL) : (patientSL < curSL || curSL == 0);
+                     bool patientSane = isBuy ? (patientSL < curPrice - buf3) : (patientSL > curPrice + buf3);
+                     if(patientAdv && patientSane && SafeModifySL(ticket, patientSL, curTP, isBuy, curPrice, "APLUS_PATIENT_LOCK"))
+                     {
+                        PrintFormat("APLUS_PATIENT_LOCK #%I64u %s | market-close OFF | peakUSD=$%.2f peakR=%.2fR "
+                                    "givebackPct=%.0f%% lockUSD=$%.2f newSL=%s | trade still allowed to run",
+                                    ticket, isBuy?"BUY":"SELL", peak, peakR, givebackPct,
+                                    lockUSD, DoubleToString(patientSL, digits));
+                     }
+                     else
+                     {
+                        PrintFormat("APLUS_PATIENT_HOLD #%I64u %s | market-close OFF | peakUSD=$%.2f peakR=%.2fR "
+                                    "givebackPct=%.0f%% | no valid tighter SL yet",
+                                    ticket, isBuy?"BUY":"SELL", peak, peakR, givebackPct);
+                     }
                   }
                   else
                   {
@@ -9400,7 +9453,7 @@ string XAU_CsvSafe(string s)
    StringReplace(s, "\r", " ");
    StringReplace(s, "\n", " ");
    StringReplace(s, "\"", "'");
-   if(StringLen(s) > 180) s = StringSubstr(s, 0, 180);
+   if(StringLen(s) > 700) s = StringSubstr(s, 0, 700);
    return s;
 }
 
@@ -9680,8 +9733,8 @@ void XAU_IntelAppendJson(string eventName, string decisionId, ulong posId, int d
    line += ",\"checkpointMin\":" + (string)checkpointMin;
    line += ",\"favATR\":" + DoubleToString(favATR, 2);
    line += ",\"advATR\":" + DoubleToString(advATR, 2);
-   line += ",\"entryReason\":\"" + XAU_IntelJsonSafe(entryReason, 240) + "\"";
-   line += ",\"exitReason\":\"" + XAU_IntelJsonSafe(exitReason, 240) + "\"";
+   line += ",\"entryReason\":\"" + XAU_IntelJsonSafe(entryReason, 700) + "\"";
+   line += ",\"exitReason\":\"" + XAU_IntelJsonSafe(exitReason, 700) + "\"";
    line += ",\"cloudSignalId\":\"" + XAU_IntelJsonSafe(cloudSignalId, 80) + "\"";
    line += ",\"cloudCode\":" + (string)cloudCode;
    line += ",\"cloudOk\":" + (cloudOk ? "true" : "false");
@@ -11738,7 +11791,7 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.50\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.54\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -12310,7 +12363,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.50 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.8.54 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
