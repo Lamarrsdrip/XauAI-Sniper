@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.8.55 — Runner Restore Shield |
+//|                                     v5.9.0 — Precision Refinement |
 //+------------------------------------------------------------------+
 // v5.8.51 CHANGES (Live Account Readiness Audit 2026-06-18):
 //   1. SL THROTTLE: trailing mods capped at 1/sec (prevents 15-30s cascade on 3-pos baskets)
@@ -30,10 +30,14 @@
 //   SL to BE unless explicitly enabled. Tier 2 owns meaningful-profit protection.
 //   Blocked-trade memory remains a reporting/learning system by default, not a tiny
 //   live-scout engine.
+// v5.9.0 CHANGES (Precision Refinement 2026-06-21):
+//   No new strategy/features. This pass tightens existing systems only:
+//   closed-bar volatility cache for faster lot/trail decisions, safer Profit Guardian
+//   HTF handle cleanup, and clearer build identity across MT5/Command Center/site.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.8.55"
-#property description "XAUUSD AI Sniper v5.8.55 — RUNNER RESTORE SHIELD + LIVE READINESS"
+#property version   "5.9.0"
+#property description "XAUUSD AI Sniper v5.9.0 — PRECISION REFINEMENT + LIVE READINESS"
 #property description "Two-tier shield: tier-1 observes, tier-2 protects meaningful profit; no tiny BE choke."
 #property description "Blocked-trade memory is report-first by default. Pullbacks are held unless reversal is proven."
 #property description "Preserves profitable entry/exit logic and proven blocked-trade protections."
@@ -1594,6 +1598,15 @@ double GetVolAdaptiveMult()
 {
    if(!InpVolAdaptiveLots) return 1.0;
    if(ArraySize(bufATR) < 2) return 1.0;
+
+   // v5.9.0: all consumers use the last CLOSED M5 ATR, so recomputing the
+   // 50-bar median on every tick only adds latency/noise. Cache by closed bar.
+   static datetime cachedClosedBar = 0;
+   static double   cachedMult      = 1.0;
+   datetime closedBar = iTime(Symbol(), PERIOD_M5, 1);
+   if(closedBar > 0 && cachedClosedBar == closedBar)
+      return cachedMult;
+
    double cur = bufATR[1];
    if(cur <= 0) return 1.0;
 
@@ -1610,9 +1623,15 @@ double GetVolAdaptiveMult()
    if(median <= 0) return 1.0;
 
    double ratio = cur / median;
-   if(ratio >= InpVolSpikeMulti) return InpVolSpikeReduce;
-   if(ratio <= InpVolCalmMulti)  return InpVolCalmBoost;
-   return 1.0;
+   double mult = 1.0;
+   if(ratio >= InpVolSpikeMulti) mult = InpVolSpikeReduce;
+   else if(ratio <= InpVolCalmMulti) mult = InpVolCalmBoost;
+   if(closedBar > 0)
+   {
+      cachedClosedBar = closedBar;
+      cachedMult = mult;
+   }
+   return mult;
 }
 
 //+------------------------------------------------------------------+
@@ -2117,7 +2136,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.8.55 (RUNNER RESTORE SHIELD) READY ===");
+   Print("=== XAUAI SNIPER v5.9.0 (PRECISION REFINEMENT) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -2244,7 +2263,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.8.55 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v5.9.0 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -9017,10 +9036,18 @@ int PG_HTFTrend()
    double ema[3], close[3], atr[3];
    int hEMA = iMA(Symbol(), InpPG_HTFTrendTF, 50, 0, MODE_EMA, PRICE_CLOSE);
    int hATR = iATR(Symbol(), InpPG_HTFTrendTF, 14);
-   if(hEMA == INVALID_HANDLE || hATR == INVALID_HANDLE) return lastTrend;
-   if(CopyBuffer(hEMA, 0, 0, 3, ema) <= 0) return lastTrend;
-   if(CopyBuffer(hATR, 0, 0, 3, atr) <= 0) return lastTrend;
-   if(CopyClose(Symbol(), InpPG_HTFTrendTF, 0, 3, close) <= 0) return lastTrend;
+   if(hEMA == INVALID_HANDLE || hATR == INVALID_HANDLE)
+   {
+      if(hEMA != INVALID_HANDLE) IndicatorRelease(hEMA);
+      if(hATR != INVALID_HANDLE) IndicatorRelease(hATR);
+      return lastTrend;
+   }
+   bool dataOk = (CopyBuffer(hEMA, 0, 0, 3, ema) > 0 &&
+                  CopyBuffer(hATR, 0, 0, 3, atr) > 0 &&
+                  CopyClose(Symbol(), InpPG_HTFTrendTF, 0, 3, close) > 0);
+   IndicatorRelease(hEMA);
+   IndicatorRelease(hATR);
+   if(!dataOk) return lastTrend;
    double price = close[0];
    double diff  = price - ema[0];
    double thr   = atr[0] * InpPG_HTFTrendATR;
@@ -11802,7 +11829,7 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.8.55\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.9.0\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -12374,7 +12401,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.8.55 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.9.0 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

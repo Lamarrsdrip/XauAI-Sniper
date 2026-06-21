@@ -74,6 +74,6 @@ def test_context_gate_releases_dynamic_indicator_handles():
     assert "IndicatorRelease(hS)" in body
 
 
-def test_version_is_5850():
-    assert "v5.8.50" in EA
-    assert '\\"ea_version\\":\\"v5.8.50\\"' in EA
+def test_version_is_590():
+    assert "v5.9.0" in EA
+    assert '\\"ea_version\\":\\"v5.9.0\\"' in EA
