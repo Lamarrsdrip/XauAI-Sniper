@@ -67,13 +67,17 @@ def test_legacy_profit_halt_is_time_limited_not_until_tomorrow():
     assert "InpProfitLockCooldownMin = 300" in EA
 
 
-def test_context_gate_releases_dynamic_indicator_handles():
+def test_context_gate_uses_cached_indicator_handles():
+    # v5.9.0+ caches HTF EMA handles via static locals (hF_ctx/hS_ctx).
+    # Handles are released only when the context TF changes, not on every tick.
     start = EA.index("bool ContextGateAllows")
     body = EA[start : EA.index("string PropFirmBaselineKey", start)]
-    assert "IndicatorRelease(hF)" in body
-    assert "IndicatorRelease(hS)" in body
+    assert "hF_ctx" in body
+    assert "hS_ctx" in body
+    assert "IndicatorRelease(hF_ctx)" in body
+    assert "IndicatorRelease(hS_ctx)" in body
 
 
-def test_version_is_590():
-    assert "v5.9.0" in EA
-    assert '\\"ea_version\\":\\"v5.9.0\\"' in EA
+def test_version_is_591():
+    assert "v5.9.1" in EA
+    assert '\\"ea_version\\":\\"v5.9.1\\"' in EA
