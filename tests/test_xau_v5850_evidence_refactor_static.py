@@ -78,6 +78,6 @@ def test_context_gate_uses_cached_indicator_handles():
     assert "IndicatorRelease(hS_ctx)" in body
 
 
-def test_version_is_591():
-    assert "v5.9.1" in EA
-    assert '\\"ea_version\\":\\"v5.9.1\\"' in EA
+def test_version_is_602():
+    assert "v6.0.2" in EA
+    assert '\\"ea_version\\":\\"v6.0.2\\"' in EA

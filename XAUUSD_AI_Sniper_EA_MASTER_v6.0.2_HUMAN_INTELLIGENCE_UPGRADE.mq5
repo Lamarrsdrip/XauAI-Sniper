@@ -2696,7 +2696,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.9.1 (BALANCED PRECISION) READY ===");
+   Print("=== XAUAI SNIPER v6.0.2 (HUMAN INTELLIGENCE UPGRADE) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -10440,7 +10440,7 @@ void XAU_RunStartupIntelligenceSync()
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double mid = (bid > 0.0 && ask > 0.0) ? (bid + ask) * 0.5 : iClose(Symbol(), PERIOD_M5, 0);
    double atr = (ArraySize(bufATR) > 1 ? bufATR[1] : 0.0);
-   string extra = StringFormat("version=5.9.1 syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
+   string extra = StringFormat("version=6.0.2 syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
                                (int)(TimeCurrent() - started), historyDeals, openRecovered,
                                tradeBrainRows, blockedRows, intelRows, barsM5,
                                InpStartupIntelMinCandles, contextTargetMet ? "Y" : "N",
@@ -13105,7 +13105,7 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.9.1\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v6.0.2\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -13677,7 +13677,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.9.1 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v6.0.2 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

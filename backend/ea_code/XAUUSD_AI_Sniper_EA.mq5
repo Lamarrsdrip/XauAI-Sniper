@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                                     v5.9.1 — Balanced Precision   |
+//|                              v6.0.2 — Human Intelligence Upgrade  |
 //+------------------------------------------------------------------+
 // v5.8.51 CHANGES (Live Account Readiness Audit 2026-06-18):
 //   1. SL THROTTLE: trailing mods capped at 1/sec (prevents 15-30s cascade on 3-pos baskets)
@@ -38,6 +38,24 @@
 //   5. INTELLIGENCE: GetTrailATRMulti() widens trail 15% during strong directional RSI to reduce premature stop-outs
 //   6. INTELLIGENCE: Stale drift exit now requires EMA to oppose trade direction — flat but aligned trades are held
 //   7. VERSION: Startup sync and bot heartbeat version strings updated to v5.9.0
+// v6.0.0 CHANGES (Strategic Trend Intelligence 2026-06-23):
+//   STRATEGIC TREND INTELLIGENCE (STI) — the biggest intelligence upgrade yet.
+//   The EA now understands complete market structure instead of isolated candles.
+//   1. STI_ComputeTCP(): Multi-TF Trend Continuation Probability (D1+H4+H1+M30+M15+M5 = 100pts)
+//      — every entry sees a 0-100 probability score of the trend continuing.
+//   2. STI_ComputeExhaustion(): Exhaustion detection (H4/H1 ATR contraction + RSI divergence)
+//      — multiple signals must agree before marking a trend as exhausted.
+//   3. STI_ComputeLateEntryRisk(): Late Entry Filter (H4 EMA dist + run bars + H1 RSI)
+//      — blocks/reduces entries after the trend has already moved significantly without reset.
+//   4. Trend Memory: g_sti struct survives trade closes — macro direction never resets to zero.
+//   5. Re-entry Intelligence: after a profitable TP, STI watches for a clean pullback before
+//      allowing same-direction re-entry (STI_AfterProfitableClose + STI_BlockLateReentry).
+//   6. TCP-based exit guidance: stagnant/stale cuts suppressed when TCP >= TCPContinueMinimum
+//      and trade is profitable — lets high-probability runners continue riding the trend.
+//   7. All existing modules (Profit Guardian, Smart Guard, EPF, Clean Exits, Basket Protect)
+//      unchanged. STI is an additive intelligence layer, not a replacement.
+//   PHILOSOPHY: strict != smart. STI only hard-blocks extreme late entries / exhausted trends.
+//   Borderline cases get lot reduction. The bot stays aggressive on high-quality setups.
 // v5.9.1 CHANGES (Balanced Precision 2026-06-22):
 //   Merges Claude's Precision Audit with Codex's Precision Refinement engineering improvements.
 //   No new strategy or features — pure polish.
@@ -54,13 +72,55 @@
 //     PG_HTFTrendGet() releases hEMA and hATR handles on ALL failure paths, not just success.
 //       Eliminates handle leaks when the indicator read fails mid-function.
 //   NET RESULT: lowest per-tick overhead yet, no handle leaks, no trading logic changed.
+// v6.0.2 CHANGES (Human Intelligence Upgrade 2026-06-23):
+//   1. HUMAN REASONING ENGINE: expanded from 5 rules to 12 rules.
+//      New rules (fire after primary 5; ordered risk-before-opportunity):
+//      Rule 6  AGAINST_H4_TREND:      H4+H1 both oppose direction → reduce size
+//      Rule 7  LOSS_STREAK_CAUTION:   2+ consecutive losses + B-grade → reduce size
+//      Rule 8  ASIAN_RANGING:         02:00-06:00 GMT + B-grade → reduce size (low-liquidity)
+//      Rule 9  SPREAD_ELEVATED:       live spread > 1.8× EMA baseline → reduce size
+//      Rule 10 TRIPLE_TF_ALIGNED:     H4+H1+M5 all aligned → boost (highest conviction)
+//      Rule 11 LN_NY_OVERLAP:         13:00-17:00 GMT + H1+M5 aligned → boost (peak liquidity)
+//      Rule 12 CLEAN_ENTRY_CONDITIONS: H1 aligned + RSI 40-65 + normal spread → slight boost
+//   2. PER-POSITION COMMITTEE MEMORY: fixes basket race condition.
+//      Previously g_lastTradePattern was a global string overwritten by every new trade open.
+//      In a 3-position basket, a pyramid add would corrupt the original entry's pattern before
+//      the original closed and recorded. Fix: DEAL_ENTRY_IN handler now captures committee data
+//      (pattern+dirLabel+conf) into g_posCommData[] keyed by posId. At close, DEAL_ENTRY_OUT
+//      looks up posId → retrieves the correct data for that specific position → records memory.
+//   3. NEWS AFTERMATH FILTER: pauses new entries after spread spikes (news events).
+//      Spread EMA (α=0.02, ~50-tick baseline) tracks normal spread. If live spread exceeds
+//      InpNewsSpreadMulti (default 2.5×) of that baseline, entries are paused for
+//      InpNewsAftermathMins (default 10 min) even after spread normalizes.
+//      Also exposed as HumanReasoning Rule 9 (reduces size when spread is 1.8× elevated).
+// v6.0.1 CHANGES (Exit Intelligence Upgrade 2026-06-23):
+//   FORENSIC AUDIT FINDING: PG_PerPositionRatchet() moved SL to EXACT ENTRY with zero cushion
+//   and zero trend context. Live evidence: 4 A-grade SELL positions (4119.20/4121.64/4117.55/4112.85)
+//   closed at $0.00 profit (bestFloating: $17.60/$25.89/$19.52/$16.77) during normal M5 pullbacks
+//   while the H1 bearish trend remained fully intact. Root causes:
+//     1. Hard BE at exactly entry price — normal M5 noise (0.3-0.5×ATR) closed winning trades
+//     2. No trend context in ratchet — BE fired even when M5+H1 EMA both aligned bearish
+//     3. APLUS Shield grade race condition — g_lastEntryGrade read by wrong pyramid ticket
+//   REDESIGN — PG_PerPositionRatchet() now:
+//     a) DEFERRED:  trend confirmed (M5+H1 aligned, momentum>=3, regime OK) → don't move SL at all
+//        The original protective SL remains. No unnecessary BE move during strong trends.
+//     b) CUSHIONED: trend weakening (M5 against or H1 mixed) → SL = entry ± InpRatchetBECushionATR×ATR
+//        Locks a small amount of proven profit instead of clamping to zero.
+//     c) HARD BE:   reversal confirmed (EMAs crossed against, RSI extreme, momentum<=1) → old behavior
+//        Only clamps to zero when the market has actually reversed.
+//     d) ADAPTIVE TRAIL: when momentum >= 4, trail is InpRatchetStrongMomMulti wider (default 1.5×)
+//        giving pullbacks room to recover without stopping out a still-running trend.
+//   APLUS SHIELD FIX: reads grade from POSITION_COMMENT (contains "[A]"/"[A+]") instead of
+//     g_lastEntryGrade, which is a global that changes on every new trade open (race condition).
+//   IMPACT: A/A+ trades with proven profit and confirmed trend continuation now hold through normal
+//   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "5.9.1"
-#property description "XAUUSD AI Sniper v5.9.1 — BALANCED PRECISION"
-#property description "Claude: ArraySort median, cached HTF handles, shared ATR, 3-mod/s BE, RSI trail, EMA drift gate."
-#property description "Codex: closed-bar vol cache, Profit Guardian HTF handle leak fix."
-#property description "All existing exit modules, risk rules, and trading logic preserved exactly."
+#property version   "6.0.2"
+#property description "XAUUSD AI Sniper v6.0.2 — HUMAN INTELLIGENCE UPGRADE"
+#property description "12-rule Human Reasoning Engine. Per-position committee memory. News aftermath filter."
+#property description "Triple-TF alignment, loss-streak caution, Asian-session gate, London-NY overlap boost."
+#property description "Spread-spike detection with 10-min entry pause. Basket race condition fixed."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -181,6 +241,33 @@ input double InpAdvPyrMinScore    = 4.0;    // v5.3.1: combined score required f
 input double InpHighGradeBETriggerATR  = 1.5; // A/A+ trades only move to BE after this much profit (vs InpPG_RatchetBETrigger for B)
 input double InpHighGradeTrailStartATR = 3.0; // A/A+ trail kicks in only after 3× ATR profit (vs 2× for B)
 input double InpHighGradeTrailDistATR  = 1.5; // A/A+ trail distance (vs 1× ATR for B) — looser leash to capture continuation
+
+// v6.0.1 — EXIT INTELLIGENCE GATE (context-aware ratchet — eliminates unnecessary BE exits)
+// Forensic finding: ratchet fired hard BE (SL = exact entry) during strong trends, closing
+// A-grade trades at $0.00 while bestFloating was $17-$25. Three-tier context now governs all ratchet decisions.
+input group "=== EXIT INTELLIGENCE GATE (v6.0.1 — context-aware ratchet) ==="
+input bool   InpRatchetTrendGate      = true;   // Gate BE ratchet behind trend context — DEFERRED/CUSHIONED/HARD per market
+input int    InpRatchetTrendMinMoment = 3;       // Momentum score (1-5) needed to defer BE ratchet (trend still running)
+input double InpRatchetBECushionATR   = 0.35;   // Weakening trend: lock entry + N×ATR instead of clamping to zero
+input bool   InpRatchetAdaptiveTrail  = true;    // Widen trail in strong momentum, tighten on reversals
+input double InpRatchetStrongMomMulti = 1.5;    // Trail width multiplier when momentum >= 4 (1.5 = 50% wider leash)
+input double InpRatchetWeakMomMulti   = 1.0;    // Trail width multiplier when momentum <= 2 (1.0 = normal, locks profit)
+
+input group "=== AI TRADING COMMITTEE (v6.0.1 — committee of reasoning modules) ==="
+// Every trade now goes through a 3-module committee before sizing.
+// Each module votes (-2 to +2). Votes aggregate into a lot multiplier and an entry thesis.
+// No additional blocking gates — "strict != smart". The committee adjusts SIZE, not access.
+input bool   InpCommitteeEnable  = true;    // Master switch: enable the trading committee
+input bool   InpCommitteeLog     = true;    // Print committee thesis to terminal before every trade
+input bool   InpCommitteeLotAdj  = true;    // Let committee adjust lot size (range 0.50-1.25×)
+input bool   InpInTradeClassify  = true;    // Classify open positions every bar (HEALTHY/PULLBACK/REVERSING/etc.)
+
+input group "=== NEWS AFTERMATH FILTER (v6.0.2) ==="
+// Detects sudden spread spikes (news events) and pauses new entries for a safety window.
+// Spread EMA tracks normal baseline; if live spread exceeds N× that baseline, entries pause.
+input bool   InpNewsAftermathEnable  = true;  // Pause new entries after detected spread spike
+input double InpNewsSpreadMulti      = 2.5;   // Spread must exceed N× EMA baseline to trigger
+input int    InpNewsAftermathMins    = 10;    // Minutes to block new entries after spike
 
 // v5.3.0 — PHASE 2: EXHAUSTION + ML SMOOTHING
 input bool   InpRSIDivergenceFilter = true; // Block buy if RSI_HH < prev RSI_HH while price made new HH (and mirror for sells)
@@ -759,6 +846,28 @@ input bool   InpPostLossSameSideGuard = true; // After a same-side loss, wait fo
 input int    InpPostLossGuardMin      = 90;   // Minutes after a loss to require better same-side price
 input double InpPostLossBetterATR     = 0.25; // BUY must be this ATR cheaper; SELL must be this ATR higher than failed entry
 
+input group "=== STRATEGIC TREND INTELLIGENCE (v6.0 STI — market narrative awareness) ==="
+// STI makes the EA understand COMPLETE market structure rather than isolated candles.
+// It does NOT replace existing guards — it is a mandatory additive intelligence layer.
+// PHILOSOPHY: strict does NOT equal smart. STI is measured. Hard blocks = extreme cases only.
+input bool   InpSTI_Enable              = true;   // Master on/off for all STI logic
+input bool   InpSTI_Log                 = true;   // Print STI decisions and scores to terminal
+// Late Entry Filter — prevents entering after most of the trend move is already done
+input double InpSTI_LateEntryMaxEMADist = 3.0;    // H4 EMA50 distance (in H4 ATR) = late territory
+input double InpSTI_LateEntryMaxMoveATR = 9.0;    // Consecutive M5 run in ATR multiples = late
+input double InpSTI_LateEntryBlockScore = 82.0;   // Late risk >= this = hard block (extreme only)
+input double InpSTI_LateEntryReduceScore= 58.0;   // Late risk >= this = lot reduction (x0.65)
+// Exhaustion Detection — RSI divergence + ATR contraction must agree
+input double InpSTI_ExhaustionBlock     = 80.0;   // Exhaustion >= this AND tcp < 60 = hard block
+input double InpSTI_ExhaustionReduce    = 62.0;   // Exhaustion >= this = lot reduction (x0.75)
+// TCP-based exit guidance — high continuation probability = hold the runner
+input double InpSTI_TCPContinueMinimum  = 62.0;   // TCP >= this: skip stagnant/stale close on profitable trade
+// Re-entry intelligence — after TP, wait for clean pullback before same-direction re-entry
+input bool   InpSTI_BlockLateReentry    = true;   // After TP, require pullback before same-dir re-entry
+input double InpSTI_ReentryPullbackATR  = 1.20;   // Pullback size (M5 ATR) required to unlock re-entry
+input int    InpSTI_ReentryMinWaitMin   = 20;     // Minutes to wait after TP before watching for pullback
+input int    InpSTI_ReentryMaxWindowMin = 90;     // After this many minutes post-TP the re-entry gate expires
+
 //+------------------------------------------------------------------+
 //| ENUMS                                                            |
 //+------------------------------------------------------------------+
@@ -1105,6 +1214,79 @@ struct LastClose
 };
 LastClose  lastClose;
 
+// ====================================================================
+// v6.0 — STRATEGIC TREND INTELLIGENCE (STI) persistent state.
+// This struct survives trade closes — unlike everything else in the EA,
+// macro trend context is NEVER reset after a TP or SL.
+// The EA thinks in terms of market narrative, not isolated candles.
+// ====================================================================
+struct STI_StateStruct
+{
+   int      macroDir;        // +1 bull, -1 bear, 0 neutral (D1×3 + H4×2 + H1×1 vote)
+   double   macroStrength;   // 0.0-1.0 how many HTF agree with macro direction
+   // After-TP re-entry memory
+   datetime lastProfitClose; // timestamp of last profitable close
+   int      lastProfitDir;   // direction of that trade (+1 or -1)
+   double   lastProfitPrice; // close price at profitable exit
+   bool     pullbackReady;   // true = clean pullback occurred after last TP
+   // Internal caching
+   int      lastCalcBar;     // M5 bar number (barOpen/300) at last macro update
+};
+STI_StateStruct g_sti;
+double g_stiLotMulti = 1.0;  // lot multiplier set by STI gate; applied to sizeMulti at entry
+
+// ====================================================================
+// v6.0.1 — AI TRADING COMMITTEE structs + global state
+// ====================================================================
+struct CommitteeVote
+{
+   string module;
+   int    score;      // -2 = strong against, -1 = mild against, 0 = neutral, +1 mild for, +2 strong for
+   string label;
+   string reasoning;
+};
+
+struct CommitteeDecision
+{
+   double lotMultiplier; // final lot adjustment applied to sizeMulti before OpenTrade
+   int    totalScore;    // sum of all vote scores
+   string directorLabel; // Market Director narrative label
+   string thesis;        // full one-line committee log
+   int    confidence;    // 0-100
+};
+
+struct TradeMemRecord
+{
+   string   pattern;       // setupName + "_" + grade (e.g. "TREND_PULLBACK_A+")
+   string   directorLabel; // Market Director label at entry
+   int      committeeConf; // committee confidence at entry (0-100)
+   double   rMultiple;     // trade outcome in R units (positive = profit)
+   datetime closedAt;
+   bool     valid;
+};
+
+CommitteeDecision g_committee;           // last assembled committee decision
+TradeMemRecord    g_tradeMemory[100];    // circular buffer of last 100 closed trades
+int               g_tradeMemHead = 0;   // next write index in the circular buffer
+
+// Stored at entry, retrieved at close to record outcome in trade memory
+string g_lastTradePattern  = "";
+string g_lastTradeDirLabel = "";
+int    g_lastTradeCommConf = 0;
+
+// In-trade position classifier (max 10 simultaneous positions — parallel arrays)
+ulong  g_posClassTicket[10];   // auto-init to 0
+int    g_posClassState[10];    // auto-init to 0 (= PSTATE_UNKNOWN)
+
+// v6.0.2: per-position committee data — fixes basket race condition where g_lastTradePattern
+// would be overwritten by a pyramid add before the original position closed and recorded.
+struct PosCommitteeRec { ulong posId; string pattern; string dirLabel; int conf; bool valid; };
+PosCommitteeRec g_posCommData[10];
+
+// v6.0.2: news aftermath filter globals
+double   g_spreadEMA         = 0.0;  // exponential moving average of spread (α=0.02, ~50-tick baseline)
+datetime g_newsAftermathUntil = 0;   // new entries blocked until this time after spread spike
+
 datetime   closeTimes[];            // rolling list of close timestamps
 bool       closeResults[];          // matching win/loss flags (true = loss)
 int        closeDirs[];             // direction of each close (+1 buy, -1 sell)
@@ -1209,6 +1391,348 @@ double     lastDashScore  = 0.0;
 string     lastDashGrade  = "";
 
 // Peak helpers
+// ====================================================================
+// v6.0 STRATEGIC TREND INTELLIGENCE — Core Functions
+// ====================================================================
+
+void STI_Init()
+{
+   g_sti.macroDir        = 0;
+   g_sti.macroStrength   = 0.0;
+   g_sti.lastProfitClose = 0;
+   g_sti.lastProfitDir   = 0;
+   g_sti.lastProfitPrice = 0.0;
+   g_sti.pullbackReady   = false;
+   g_sti.lastCalcBar     = 0;
+   g_stiLotMulti         = 1.0;
+}
+
+// Returns 0-100: how strongly the multi-TF stack supports the given direction.
+// Weights: D1=22, H4=22, H1=18, M30=15, M15=13, M5=10 → 100 total.
+// Cached per signal (buy/sell) per 30 s to avoid redundant handle creation.
+double STI_ComputeTCP(int signal)
+{
+   if(!InpSTI_Enable || signal == 0) return 50.0;
+   static datetime cacheTime[2]; static double cacheVal[2];
+   int idx = (signal == 1) ? 0 : 1;
+   if(TimeCurrent() - cacheTime[idx] < 30) return cacheVal[idx];
+   cacheTime[idx] = TimeCurrent();
+
+   string w;
+   int d1  = TFDirectionByEMA(signal, PERIOD_D1,  0.18, w);
+   int h4  = TFDirectionByEMA(signal, PERIOD_H4,  0.20, w);
+   int h1  = TFDirectionByEMA(signal, PERIOD_H1,  0.22, w);
+   int m30 = TFDirectionByEMA(signal, PERIOD_M30, 0.25, w);
+   int m15 = TFDirectionByEMA(signal, PERIOD_M15, 0.25, w);
+   int m5  = TFDirectionByEMA(signal, PERIOD_M5,  0.25, w);
+
+   double tcp = 0.0;
+   if(d1  == signal) tcp += 22.0;
+   if(h4  == signal) tcp += 22.0;
+   if(h1  == signal) tcp += 18.0;
+   if(m30 == signal) tcp += 15.0;
+   if(m15 == signal) tcp += 13.0;
+   if(m5  == signal) tcp += 10.0;
+   cacheVal[idx] = tcp;
+   return tcp;
+}
+
+// Returns 0-100: how exhausted the current trend is.
+// Looks for ATR contraction + RSI divergence on H4 and H1.
+// Multiple signals must agree — a single signal is NOT enough for a block.
+double STI_ComputeExhaustion(int signal)
+{
+   if(!InpSTI_Enable || signal == 0) return 0.0;
+   static datetime cacheTime[2]; static double cacheVal[2];
+   int idx = (signal == 1) ? 0 : 1;
+   if(TimeCurrent() - cacheTime[idx] < 45) return cacheVal[idx];
+   cacheTime[idx] = TimeCurrent();
+
+   double score = 0.0;
+
+   // --- H4 ATR contraction ---
+   {
+      int h = iATR(_Symbol, PERIOD_H4, 14);
+      if(h != INVALID_HANDLE)
+      {
+         double buf[21];
+         if(CopyBuffer(h, 0, 0, 21, buf) == 21)
+         {
+            double s[20]; for(int i=0;i<20;i++) s[i]=buf[i+1];
+            ArraySort(s);
+            double med = s[10];
+            if(med > 0)
+            {
+               double r = buf[1] / med;
+               if(r < 0.70) score += 25.0;
+               else if(r < 0.82) score += 12.0;
+            }
+         }
+         IndicatorRelease(h);
+      }
+   }
+
+   // --- H1 ATR contraction ---
+   {
+      int h = iATR(_Symbol, PERIOD_H1, 14);
+      if(h != INVALID_HANDLE)
+      {
+         double buf[21];
+         if(CopyBuffer(h, 0, 0, 21, buf) == 21)
+         {
+            double s[20]; for(int i=0;i<20;i++) s[i]=buf[i+1];
+            ArraySort(s);
+            double med = s[10];
+            if(med > 0)
+            {
+               double r = buf[1] / med;
+               if(r < 0.70) score += 15.0;
+               else if(r < 0.82) score += 7.0;
+            }
+         }
+         IndicatorRelease(h);
+      }
+   }
+
+   // --- H4 RSI divergence (price at new extreme but RSI diverges) ---
+   {
+      int hR = iRSI(_Symbol, PERIOD_H4, 14, PRICE_CLOSE);
+      int hA = iATR(_Symbol, PERIOD_H4, 14);
+      if(hR != INVALID_HANDLE && hA != INVALID_HANDLE)
+      {
+         double rsi[4], cls[4], atr[2];
+         bool ok = (CopyBuffer(hR,0,0,4,rsi)==4 &&
+                    CopyClose(_Symbol,PERIOD_H4,0,4,cls)==4 &&
+                    CopyBuffer(hA,0,0,2,atr)>0);
+         if(ok && atr[1] > 0)
+         {
+            if(signal == 1) // bull trend: check bearish (price new high, RSI lower)
+            {
+               bool priceHigher = cls[1] > cls[3] + atr[1] * 0.30;
+               bool rsiLower    = rsi[1] < rsi[3] - 2.5;
+               if(priceHigher && rsiLower && rsi[1] > 58.0) score += 28.0;
+            }
+            else // bear trend: check bullish (price new low, RSI higher)
+            {
+               bool priceLower  = cls[1] < cls[3] - atr[1] * 0.30;
+               bool rsiHigher   = rsi[1] > rsi[3] + 2.5;
+               if(priceLower && rsiHigher && rsi[1] < 42.0) score += 28.0;
+            }
+         }
+      }
+      if(hR != INVALID_HANDLE) IndicatorRelease(hR);
+      if(hA != INVALID_HANDLE) IndicatorRelease(hA);
+   }
+
+   // --- H1 RSI divergence (lighter weight) ---
+   {
+      int hR = iRSI(_Symbol, PERIOD_H1, 14, PRICE_CLOSE);
+      int hA = iATR(_Symbol, PERIOD_H1, 14);
+      if(hR != INVALID_HANDLE && hA != INVALID_HANDLE)
+      {
+         double rsi[4], cls[4], atr[2];
+         bool ok = (CopyBuffer(hR,0,0,4,rsi)==4 &&
+                    CopyClose(_Symbol,PERIOD_H1,0,4,cls)==4 &&
+                    CopyBuffer(hA,0,0,2,atr)>0);
+         if(ok && atr[1] > 0)
+         {
+            if(signal == 1)
+            {
+               bool priceHigher = cls[1] > cls[3] + atr[1] * 0.25;
+               bool rsiLower    = rsi[1] < rsi[3] - 3.0;
+               if(priceHigher && rsiLower && rsi[1] > 55.0) score += 17.0;
+            }
+            else
+            {
+               bool priceLower  = cls[1] < cls[3] - atr[1] * 0.25;
+               bool rsiHigher   = rsi[1] > rsi[3] + 3.0;
+               if(priceLower && rsiHigher && rsi[1] < 45.0) score += 17.0;
+            }
+         }
+      }
+      if(hR != INVALID_HANDLE) IndicatorRelease(hR);
+      if(hA != INVALID_HANDLE) IndicatorRelease(hA);
+   }
+
+   cacheVal[idx] = MathMin(score, 100.0);
+   return cacheVal[idx];
+}
+
+// Returns 0-100: how late/extended is this entry?
+// Higher = most of the move already happened without a reset.
+// Hard block only at extreme levels (> InpSTI_LateEntryBlockScore).
+double STI_ComputeLateEntryRisk(int signal, double m5atr)
+{
+   if(!InpSTI_Enable || signal == 0 || m5atr <= 0) return 0.0;
+   static datetime cacheTime[2]; static double cacheVal[2];
+   int idx = (signal == 1) ? 0 : 1;
+   if(TimeCurrent() - cacheTime[idx] < 30) return cacheVal[idx];
+   cacheTime[idx] = TimeCurrent();
+
+   double risk = 0.0;
+
+   // --- Distance from H4 EMA50 in H4 ATR units ---
+   {
+      int hE = iMA(_Symbol, PERIOD_H4, 50, 0, MODE_EMA, PRICE_CLOSE);
+      int hA = iATR(_Symbol, PERIOD_H4, 14);
+      if(hE != INVALID_HANDLE && hA != INVALID_HANDLE)
+      {
+         double ema[2], atr[2], cls[2];
+         bool ok = (CopyBuffer(hE,0,0,2,ema)>0 &&
+                    CopyBuffer(hA,0,0,2,atr)>0 &&
+                    CopyClose(_Symbol,PERIOD_H4,0,2,cls)>0);
+         if(ok && atr[1] > 0)
+         {
+            // relevantDist > 0 means price extended IN the trade direction
+            double relDist = (signal == 1)
+                              ? (cls[1] - ema[1]) / atr[1]
+                              : (ema[1] - cls[1]) / atr[1];
+            if(relDist >= InpSTI_LateEntryMaxEMADist)
+               risk += 35.0;
+            else if(relDist >= InpSTI_LateEntryMaxEMADist * 0.65)
+               risk += 16.0;
+         }
+      }
+      if(hE != INVALID_HANDLE) IndicatorRelease(hE);
+      if(hA != INVALID_HANDLE) IndicatorRelease(hA);
+   }
+
+   // --- Recent M5 consecutive bars without a counter-bar (no pullback seen) ---
+   {
+      int runBars = 0;
+      for(int i = 1; i <= 16; i++)
+      {
+         double c = iClose(_Symbol, PERIOD_M5, i);
+         double o = iOpen(_Symbol,  PERIOD_M5, i);
+         bool withTrend = (signal == 1) ? (c > o) : (c < o);
+         if(withTrend) runBars++;
+         else break;
+      }
+      // Each bar ≈ 0.65 ATR on average; flag if run > threshold
+      double runEstATR = (double)runBars * 0.65;
+      if(runEstATR >= InpSTI_LateEntryMaxMoveATR)
+         risk += 30.0;
+      else if(runEstATR >= InpSTI_LateEntryMaxMoveATR * 0.60)
+         risk += 14.0;
+   }
+
+   // --- H1 RSI overbought / oversold (mean-reversion risk) ---
+   {
+      int hR = iRSI(_Symbol, PERIOD_H1, 14, PRICE_CLOSE);
+      if(hR != INVALID_HANDLE)
+      {
+         double rsi[2];
+         if(CopyBuffer(hR, 0, 0, 2, rsi) > 0)
+         {
+            if(signal == 1)
+            {
+               if(rsi[1] > 74.0) risk += 22.0;
+               else if(rsi[1] > 65.0) risk += 10.0;
+            }
+            else
+            {
+               if(rsi[1] < 26.0) risk += 22.0;
+               else if(rsi[1] < 35.0) risk += 10.0;
+            }
+         }
+         IndicatorRelease(hR);
+      }
+   }
+
+   // --- Recent price run over 12 M5 bars ---
+   if(m5atr > 0)
+   {
+      double oldC = iClose(_Symbol, PERIOD_M5, 13);
+      double newC = iClose(_Symbol, PERIOD_M5, 1);
+      if(oldC > 0)
+      {
+         double moveATR = MathAbs(newC - oldC) / m5atr;
+         bool inDir = (signal == 1) ? (newC > oldC) : (newC < oldC);
+         if(inDir && moveATR > InpSTI_LateEntryMaxMoveATR * 0.70)
+            risk += 13.0;
+      }
+   }
+
+   cacheVal[idx] = MathMin(risk, 100.0);
+   return cacheVal[idx];
+}
+
+// Called every new M5 bar to refresh macro direction + pullback tracking.
+// Cheap: macro direction is the only state requiring recalculation every bar.
+void STI_Update()
+{
+   if(!InpSTI_Enable) return;
+   datetime barOpens[1];
+   if(CopyTime(_Symbol, PERIOD_M5, 0, 1, barOpens) <= 0) return;
+   int curBarInt = (int)((long)barOpens[0] / 300);
+   if(curBarInt == g_sti.lastCalcBar) return;
+   g_sti.lastCalcBar = curBarInt;
+
+   // D1×3 + H4×2 + H1×1 weighted vote for macro direction
+   string w;
+   int d1 = TFDirectionByEMA(1, PERIOD_D1, 0.18, w);
+   int h4 = TFDirectionByEMA(1, PERIOD_H4, 0.20, w);
+   int h1 = TFDirectionByEMA(1, PERIOD_H1, 0.22, w);
+   int vote = d1*3 + h4*2 + h1*1;
+   if(vote >= 3)
+      { g_sti.macroDir = 1;  g_sti.macroStrength = MathMin(1.0, vote/6.0); }
+   else if(vote <= -3)
+      { g_sti.macroDir = -1; g_sti.macroStrength = MathMin(1.0,-vote/6.0); }
+   else
+      { g_sti.macroDir = 0;  g_sti.macroStrength = 0.0; }
+
+   // Pullback-after-TP: once wait time passed, check if price pulled back enough
+   if(InpSTI_BlockLateReentry && g_sti.lastProfitDir != 0 && !g_sti.pullbackReady)
+   {
+      int elapsed = (int)(TimeCurrent() - g_sti.lastProfitClose);
+      bool windowExpired = (elapsed > InpSTI_ReentryMaxWindowMin * 60);
+      if(windowExpired)
+      {
+         // Window expired — clear memory so the gate does not block indefinitely
+         g_sti.lastProfitDir = 0;
+         g_sti.pullbackReady = false;
+      }
+      else if(elapsed >= InpSTI_ReentryMinWaitMin * 60)
+      {
+         double m5atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+         if(m5atr > 0)
+         {
+            double curPx = (g_sti.lastProfitDir == 1)
+                           ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                           : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            double thr = InpSTI_ReentryPullbackATR * m5atr;
+            bool pulled = (g_sti.lastProfitDir == 1)
+                          ? (curPx <= g_sti.lastProfitPrice - thr)
+                          : (curPx >= g_sti.lastProfitPrice + thr);
+            if(pulled)
+            {
+               g_sti.pullbackReady = true;
+               if(InpSTI_Log)
+                  PrintFormat("STI_PULLBACK_READY | dir=%s lastTP=%.2f cur=%.2f pull=%.2f ATR waited=%dmin | re-entry window unlocked",
+                              g_sti.lastProfitDir==1?"BUY":"SELL",
+                              g_sti.lastProfitPrice, curPx,
+                              MathAbs(curPx-g_sti.lastProfitPrice)/m5atr,
+                              elapsed/60);
+            }
+         }
+      }
+   }
+}
+
+// Called after every profitable full close to arm the re-entry intelligence.
+void STI_AfterProfitableClose(int dir, double closePrice)
+{
+   if(!InpSTI_Enable || !InpSTI_BlockLateReentry) return;
+   g_sti.lastProfitClose = TimeCurrent();
+   g_sti.lastProfitDir   = dir;
+   g_sti.lastProfitPrice = closePrice;
+   g_sti.pullbackReady   = false;
+   if(InpSTI_Log)
+      PrintFormat("STI_TP_MEMORY | dir=%s closePrice=%.2f | armed: waiting %d min then %.2f ATR pullback required before same-dir re-entry",
+                  dir==1?"BUY":"SELL", closePrice,
+                  InpSTI_ReentryMinWaitMin, InpSTI_ReentryPullbackATR);
+}
+
 int FindPeakIdx(ulong ticket)
 {
    for(int i = 0; i < ArraySize(peakTickets); i++)
@@ -2172,7 +2696,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.9.1 (BALANCED PRECISION) READY ===");
+   Print("=== XAUAI SNIPER v6.0.2 (HUMAN INTELLIGENCE UPGRADE) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -2286,6 +2810,13 @@ int OnInit()
          " | Close ", DoubleToString(InpPartialPct*100, 0), "% of position",
          " | Skip on ≥", InpConvRunMinConf, "% conf=", InpPartialSkipHighConf?"Y":"N",
          " | CloudSafeNoPartials=", InpCloudSafeDisablePartials?"Y":"N");
+   STI_Init();
+   Print(StringFormat("STI v6.0: %s | LateBlock=%.0f LateReduce=%.0f ExhaustBlock=%.0f ExhaustReduce=%.0f | TCP_min=%.0f | ReentryPullback=%.2fATR wait=%dmin",
+         InpSTI_Enable ? "ENABLED" : "DISABLED",
+         InpSTI_LateEntryBlockScore, InpSTI_LateEntryReduceScore,
+         InpSTI_ExhaustionBlock, InpSTI_ExhaustionReduce,
+         InpSTI_TCPContinueMinimum,
+         InpSTI_ReentryPullbackATR, InpSTI_ReentryMinWaitMin));
    return INIT_SUCCEEDED;
 }
 
@@ -2299,7 +2830,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v5.9.1 STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   Print("=== v6.0.0 STI STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -4698,12 +5229,33 @@ void OnTick()
 
    // Spread check — blocks NEW ENTRIES only
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+
+   // v6.0.2: track spread EMA for news spike detection (runs every tick, negligible cost)
+   if(g_spreadEMA <= 0.0) g_spreadEMA = spread;
+   else g_spreadEMA = g_spreadEMA * 0.98 + spread * 0.02;
+   if(InpNewsAftermathEnable && g_spreadEMA > 5.0 && spread > g_spreadEMA * InpNewsSpreadMulti)
+   {
+      if(TimeCurrent() > g_newsAftermathUntil) // only log at the START of each new spike window
+         Print(StringFormat("NEWS-SPIKE: spread %.0f pts (%.1f× baseline %.0f) — new entries paused for %d min",
+                            spread, spread / g_spreadEMA, g_spreadEMA, InpNewsAftermathMins));
+      g_newsAftermathUntil = TimeCurrent() + InpNewsAftermathMins * 60;
+   }
+
    bool spreadBlocksEntry = false;
    string spreadBlockReason = "";
    if(spread > InpMaxSpread)
    {
       spreadBlocksEntry = true;
       spreadBlockReason = StringFormat("SPREAD_TOO_WIDE: %.0f > %d pts (analysis continues; entries wait for spread to narrow)", spread, InpMaxSpread);
+      g_lastSkipReason = spreadBlockReason;
+   }
+   // v6.0.2: news aftermath block — entries paused after detected spread spike
+   if(InpNewsAftermathEnable && TimeCurrent() < g_newsAftermathUntil && !spreadBlocksEntry)
+   {
+      int secsLeft = (int)(g_newsAftermathUntil - TimeCurrent());
+      spreadBlocksEntry = true;
+      spreadBlockReason = StringFormat("NEWS_AFTERMATH: entries paused %ds after spread spike (resumes %s)",
+                                       secsLeft, TimeToString(g_newsAftermathUntil, TIME_MINUTES));
       g_lastSkipReason = spreadBlockReason;
    }
 
@@ -4715,6 +5267,8 @@ void OnTick()
    if(curBar <= 0)  curBar = iTime(Symbol(), PERIOD_M5, 0);
 
    bool newM5Bar = (curBar > 0 && curBar != g_lastEntryBarSeen);
+   // v6.0 STI: refresh macro trend state on every new M5 bar (cheap, bar-cached)
+   if(newM5Bar) STI_Update();
    int secondsSinceScan = (g_lastEntryScanAt > 0) ? (int)(TimeCurrent() - g_lastEntryScanAt) : 999999;
    bool watchdogDue = (InpScanWatchdogMin > 0 && secondsSinceScan >= InpScanWatchdogMin * 60);
    bool timerForced = g_timerForceScan;
@@ -4762,6 +5316,7 @@ void OnTick()
    if(curBar > 0) g_lastEntryBarSeen = curBar;
    g_lastEntryScanAt = TimeCurrent();
    XAU_UpdateBlockedSignalOutcomes();
+   InTradeClassifier_Update(); // v6.0.1: classify open positions every bar (feeds ratchet + exit logic)
 
    int maxTradesToday = EffectiveMaxTradesPerDay();
    bool entryExecutionBlocked = false;
@@ -5222,6 +5777,95 @@ void OnTick()
       }
    }
 
+   // ============ STI GATE (v6.0 — Strategic Trend Intelligence) ============
+   // Runs AFTER all existing quality gates, BEFORE the reversal cooldown.
+   // STI is an additive intelligence layer: hard blocks only extreme cases,
+   // borderline risk = lot reduction. The bot stays aggressive on quality setups.
+   g_stiLotMulti = 1.0;  // reset each scan
+   if(InpSTI_Enable && signal != 0 && grade != "SKIP")
+   {
+      double stiM5ATR = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+      double stiTCP     = STI_ComputeTCP(signal);
+      double stiExhaust = STI_ComputeExhaustion(signal);
+      double stiLate    = STI_ComputeLateEntryRisk(signal, stiM5ATR);
+
+      if(InpSTI_Log)
+         PrintFormat("STI SCAN | %s %s | TCP=%.0f Exhaust=%.0f LateRisk=%.0f | macroDir=%s macro%.0f%%",
+                     signal==1?"BUY":"SELL", setupName,
+                     stiTCP, stiExhaust, stiLate,
+                     g_sti.macroDir==1?"BULL":g_sti.macroDir==-1?"BEAR":"NEUTRAL",
+                     g_sti.macroStrength*100.0);
+
+      // --- 1. LATE ENTRY HARD BLOCK (extreme: move has run without reset) ---
+      if(stiLate >= InpSTI_LateEntryBlockScore)
+      {
+         string stiMsg = StringFormat("STI_LATE_BLOCK | %s %s | lateRisk=%.0f >= %.0f (tcp=%.0f exhaust=%.0f) | trend moved too far without reset — wait for pullback",
+                                      signal==1?"BUY":"SELL", setupName,
+                                      stiLate, InpSTI_LateEntryBlockScore, stiTCP, stiExhaust);
+         Print("TRADE BLOCKED BECAUSE: ", stiMsg);
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, stiMsg);
+         CloudPostReasoning("BLOCK", stiMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "STI-LATE", signal);
+         UpdateDashboard(0, combinedScore, "STI-LATE");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "STI-LATE";
+         return;
+      }
+
+      // --- 2. EXHAUSTION HARD BLOCK (multiple signals confirm trend nearing end) ---
+      if(stiExhaust >= InpSTI_ExhaustionBlock && stiTCP < 60.0)
+      {
+         string stiMsg = StringFormat("STI_EXHAUST_BLOCK | %s %s | exhaust=%.0f >= %.0f AND tcp=%.0f < 60 | RSI divergence + ATR contraction confirm trend fatigue",
+                                      signal==1?"BUY":"SELL", setupName,
+                                      stiExhaust, InpSTI_ExhaustionBlock, stiTCP);
+         Print("TRADE BLOCKED BECAUSE: ", stiMsg);
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, stiMsg);
+         CloudPostReasoning("BLOCK", stiMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "STI-EXHAUST", signal);
+         UpdateDashboard(0, combinedScore, "STI-EXHAUST");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "STI-EXHAUST";
+         return;
+      }
+
+      // --- 3. RE-ENTRY GATE (after TP, require clean pullback before same-dir re-entry) ---
+      if(InpSTI_BlockLateReentry &&
+         g_sti.lastProfitDir == signal && g_sti.lastProfitClose > 0 && !g_sti.pullbackReady)
+      {
+         int waitedMin = (int)((TimeCurrent() - g_sti.lastProfitClose) / 60);
+         bool inWindow = (waitedMin < InpSTI_ReentryMaxWindowMin);
+         if(inWindow && waitedMin >= 0)
+         {
+            string stiMsg = StringFormat("STI_REENTRY_WAIT | %s %s | last TP at %.2f (%d min ago) | no %.2f ATR pullback yet | chasing same dir before reset is the pattern that lost money",
+                                         signal==1?"BUY":"SELL", setupName,
+                                         g_sti.lastProfitPrice, waitedMin,
+                                         InpSTI_ReentryPullbackATR);
+            Print("TRADE BLOCKED BECAUSE: ", stiMsg);
+            XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, stiMsg);
+            CloudPostReasoning("BLOCK", stiMsg, RegimeName(), setupName,
+                               setupScore, combinedScore, "STI-WAIT", signal);
+            UpdateDashboard(0, combinedScore, "STI-WAIT");
+            lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "STI-WAIT";
+            return;
+         }
+      }
+
+      // --- 4. SOFT REDUCTIONS (borderline: reduce lot instead of blocking) ---
+      if(stiLate >= InpSTI_LateEntryReduceScore)
+      {
+         g_stiLotMulti = 0.65;
+         if(InpSTI_Log)
+            PrintFormat("STI_LATE_REDUCE | %s lateRisk=%.0f → lot x%.2f | still tradeable but reduced risk",
+                        setupName, stiLate, g_stiLotMulti);
+      }
+      else if(stiExhaust >= InpSTI_ExhaustionReduce && stiTCP < 75.0)
+      {
+         g_stiLotMulti = 0.75;
+         if(InpSTI_Log)
+            PrintFormat("STI_EXHAUST_REDUCE | %s exhaust=%.0f tcp=%.0f → lot x%.2f",
+                        setupName, stiExhaust, stiTCP, g_stiLotMulti);
+      }
+   }
+   // ============ END STI GATE ============
+
    // Anti-reversal (short cooldown for direction flip)
    if(lastTradeDir != 0 && signal != lastTradeDir && lastTradeClose > 0 &&
       TimeCurrent() - lastTradeClose < InpReversalCooldown)
@@ -5507,8 +6151,20 @@ void OnTick()
    else if(StringLen(brainReason) > 0)
       Print(brainReason);
 
-   // Open trade with grade-scaled sizing
-   OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", sizeMulti * pgLotMult);
+   // v6.0.1 — AI Trading Committee: synthesise market narrative + human rules + pattern memory
+   g_committee = Committee_Assemble(signal, setupName, grade, combinedScore);
+   g_lastTradePattern  = setupName + "_" + grade;
+   g_lastTradeDirLabel = g_committee.directorLabel;
+   g_lastTradeCommConf = g_committee.confidence;
+   if(InpCommitteeLog)
+      Print(g_committee.thesis);
+   double committeeSzMult = InpCommitteeLotAdj ? g_committee.lotMultiplier : 1.0;
+
+   // Open trade with grade-scaled sizing (g_stiLotMulti = 1.0 unless STI reduced it)
+   if(InpSTI_Enable && g_stiLotMulti < 0.999)
+      Print(StringFormat("STI SIZE APPLIED | lot x%.2f | committee x%.2f | final sizeMulti=%.3f",
+                         g_stiLotMulti, committeeSzMult, sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult));
+   OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult);
    // v5.3.1 — remember this entry's grade + score so adverse-pyramid logic and
    // high-grade ratchet looseness can reference them.
    g_lastEntryGrade = grade;
@@ -6812,7 +7468,29 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                                              rsiAgainst, rMult);
 
    // ============ STALE CUT ============
-   if(InpCleanStagnantMinutes > 0 && minsOpen >= InpCleanStagnantMinutes &&
+   // v6.0 STI: if the macro trend TCP is still strongly aligned AND the trade is
+   // meaningfully profitable, suppress stagnant/stale exits. The EA was exiting
+   // profitable runners purely because short-term momentum paused — this is wrong
+   // when the higher-timeframe trend is still fully intact.
+   // Only active on profitable trades (rMult >= 0.25) with TCP >= configured minimum.
+   bool stiHighTCP = false;
+   if(InpSTI_Enable && rMult >= 0.25)
+   {
+      double tcpNow = STI_ComputeTCP(isBuy ? 1 : -1);
+      stiHighTCP = (tcpNow >= InpSTI_TCPContinueMinimum);
+      if(stiHighTCP)
+      {
+         static datetime lastTCPHoldLog = 0;
+         if(TimeCurrent() - lastTCPHoldLog >= 120)
+         {
+            PrintFormat("STI_TCP_HOLD #%I64u %s | rMult=%.2fR tcp=%.0f >= %.0f | macro trend valid — suppressing premature stagnant/stale exit, runner continues",
+                        ticket, isBuy?"BUY":"SELL", rMult, tcpNow, InpSTI_TCPContinueMinimum);
+            lastTCPHoldLog = TimeCurrent();
+         }
+      }
+   }
+
+   if(!stiHighTCP && InpCleanStagnantMinutes > 0 && minsOpen >= InpCleanStagnantMinutes &&
       MathAbs(rMult) <= InpCleanStagnantMaxR && choppyRegime && !trendAligned)
    {
       PrintFormat("CLEAN_STAGNANT #%I64u %s | %dm open, %.2fR in %s → CLOSE",
@@ -6822,7 +7500,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       return true;
    }
 
-   if(InpCleanStaleHours > 0 && minsOpen >= InpCleanStaleHours * 60 &&
+   if(!stiHighTCP && InpCleanStaleHours > 0 && minsOpen >= InpCleanStaleHours * 60 &&
       rMult < InpCleanStaleMinR && (!trendAligned || momentumScore <= 2))
    {
       PrintFormat("CLEAN_STALE #%I64u %s | %dm open, %.2fR, trendAligned=%s momentum=%d/5 → CLOSE",
@@ -6900,8 +7578,15 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    //
    if(InpAPlusShield && peak > 0 && rDollars > 0)
    {
-      string grade   = g_lastEntryGrade;
-      bool   isAPlus = (grade == "A+" || grade == "A");
+      // v6.0.1 FIX: g_lastEntryGrade is a global that changes every time any trade opens,
+      // so pyramid tickets read the wrong grade. Read from POSITION_COMMENT instead —
+      // it was stamped with "[A]" or "[A+]" at entry and is per-position authoritative.
+      string posCmtShield = "";
+      if(PositionSelectByTicket(ticket))
+         posCmtShield = PositionGetString(POSITION_COMMENT);
+      bool   isAPlus = (StringFind(posCmtShield, "[A+]") >= 0 || StringFind(posCmtShield, "[A]") >= 0);
+      string grade   = StringFind(posCmtShield, "[A+]") >= 0 ? "A+" :
+                       isAPlus ? "A" : g_lastEntryGrade;
       if(isAPlus)
       {
          double refBal        = StrategyReferenceBalance();
@@ -8611,6 +9296,30 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    if(magic != InpMagicNumber) return;
 
    ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+
+   // v6.0.2: capture committee data per-position at the moment a trade opens.
+   // Fixes basket race condition: g_lastTradePattern was shared across all positions,
+   // so a pyramid add would overwrite it before the original position closed and recorded.
+   if(entry == DEAL_ENTRY_IN)
+   {
+      ulong openPosId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      if(openPosId > 0 && StringLen(g_lastTradePattern) > 0)
+      {
+         for(int s = 0; s < 10; s++)
+         {
+            if(!g_posCommData[s].valid || g_posCommData[s].posId == openPosId)
+            {
+               g_posCommData[s].posId    = openPosId;
+               g_posCommData[s].pattern  = g_lastTradePattern;
+               g_posCommData[s].dirLabel = g_lastTradeDirLabel;
+               g_posCommData[s].conf     = g_lastTradeCommConf;
+               g_posCommData[s].valid    = true;
+               break;
+            }
+         }
+      }
+      return;
+   }
    if(entry != DEAL_ENTRY_OUT) return;
 
    // v4.5.9 — Detect PARTIAL close vs FULL close.
@@ -8684,6 +9393,14 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    if(wasWin) wins++;
    else if(wasLoss) losses++;
    RegisterClosedTradeCooldown(wasWin, wasLoss, profit);
+   // v6.0 STI: record profitable closes so re-entry intelligence can watch
+   // for a clean pullback before allowing the same-direction trade again.
+   // dType is the CLOSING deal type; the original position is the opposite side.
+   if(wasWin)
+   {
+      int origDir = (dType == DEAL_TYPE_SELL) ? 1 : -1; // closing SELL = was a BUY
+      STI_AfterProfitableClose(origDir, dPrice);
+   }
    // else: break-even — don't count either way
    lastTradeClose = TimeCurrent();
    Print("CLOSED: ", wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK-EVEN",
@@ -8703,6 +9420,34 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       g_nonAiPnl += profit;
    }
    RecordExitAudit(lastExitReason, wasWin, profit);
+   // v6.0.2: record this closed trade into the committee's pattern memory.
+   // Uses per-position data (captured at open via DEAL_ENTRY_IN) instead of the global,
+   // so baskets record the correct pattern for each individual position.
+   {
+      string memPattern  = g_lastTradePattern;   // fallback to global if no per-pos record found
+      string memDirLabel = g_lastTradeDirLabel;
+      int    memConf     = g_lastTradeCommConf;
+      for(int s = 0; s < 10; s++)
+      {
+         if(g_posCommData[s].valid && g_posCommData[s].posId == posId)
+         {
+            memPattern  = g_posCommData[s].pattern;
+            memDirLabel = g_posCommData[s].dirLabel;
+            memConf     = g_posCommData[s].conf;
+            g_posCommData[s].valid = false; // free the slot
+            break;
+         }
+      }
+      if(StringLen(memPattern) > 0)
+      {
+         double rMult = (autoHardStopUSD > 0.01) ? profit / autoHardStopUSD
+                       : (profit > 0 ? 1.0 : profit < 0 ? -1.0 : 0.0);
+         TradeMemory_Record(memPattern, memDirLabel, memConf, rMult);
+         if(InpCommitteeLog)
+            Print(StringFormat("COMMITTEE-MEMORY: stored pattern=%s dir=%s conf=%d%% rMult=%.2f P/L=$%.2f",
+                               memPattern, memDirLabel, memConf, rMult, profit));
+      }
+   }
    double worstFloatingPnl = 0.0;
    int secondsNegative = 0;
    XAU_PopTradeQuality(posId, worstFloatingPnl, secondsNegative);
@@ -9695,7 +10440,7 @@ void XAU_RunStartupIntelligenceSync()
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double mid = (bid > 0.0 && ask > 0.0) ? (bid + ask) * 0.5 : iClose(Symbol(), PERIOD_M5, 0);
    double atr = (ArraySize(bufATR) > 1 ? bufATR[1] : 0.0);
-   string extra = StringFormat("version=5.9.1 syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
+   string extra = StringFormat("version=6.0.2 syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
                                (int)(TimeCurrent() - started), historyDeals, openRecovered,
                                tradeBrainRows, blockedRows, intelRows, barsM5,
                                InpStartupIntelMinCandles, contextTargetMet ? "Y" : "N",
@@ -11637,9 +12382,465 @@ void RegisterClosedTradeCooldown(bool wasWin, bool wasLoss, double profit)
    }
 }
 
-// v5.1.2 — per-position ratchet: lock individual winners.
-//   • profit ≥ +InpPG_RatchetBETrigger × ATR  → move SL to entry
-//   • profit ≥ +InpPG_RatchetTrailStart × ATR → trail SL at InpPG_RatchetTrailDist × ATR behind
+// +------------------------------------------------------------------+
+// | v6.0.1 — AI TRADING COMMITTEE                                   |
+// | Three reasoning modules vote before every entry.                |
+// |   1. Market Director  — what is the market doing and why?       |
+// |   2. Human Reasoning  — would a professional actually enter?    |
+// |   3. Trade Memory     — how has this pattern performed lately?  |
+// | Votes aggregate into a lot multiplier (0.50–1.25×) and a       |
+// | one-line thesis printed before every trade. No extra blocking.  |
+// +------------------------------------------------------------------+
+
+// ---- Market Director narrative labels ----
+#define MD_FRESH_IMPULSE   "FRESH_IMPULSE"
+#define MD_TREND_RUNNING   "TREND_RUNNING"
+#define MD_PULLBACK_ENTRY  "PULLBACK_ENTRY"
+#define MD_LATE_EXTENDED   "LATE_EXTENDED"
+#define MD_NEAR_EXHAUSTION "NEAR_EXHAUSTION"
+#define MD_COUNTER_TREND   "COUNTER_TREND"
+#define MD_NEUTRAL_CTX     "NEUTRAL_CTX"
+
+// ---- In-trade position state codes ----
+#define PSTATE_UNKNOWN       0
+#define PSTATE_HEALTHY       1
+#define PSTATE_PULLBACK      2
+#define PSTATE_CONSOLIDATING 3
+#define PSTATE_WEAKENING     4
+#define PSTATE_EXHAUSTING    5
+#define PSTATE_REVERSING     6
+
+// Position-class lookup (used by RatchetExitContext to avoid re-reading indicators every tick)
+int GetPositionClassState(ulong ticket)
+{
+   for(int s = 0; s < 10; s++)
+      if(g_posClassTicket[s] == ticket) return g_posClassState[s];
+   return PSTATE_UNKNOWN;
+}
+
+// ---------- MODULE 1: Market Director ----------
+// Synthesises multi-TF trend context into a single narrative label and score.
+// Reads: STI TCP/exhaustion/late-risk, EMA alignment, ATR extension.
+CommitteeVote MarketDirector_Assess(int signal)
+{
+   CommitteeVote v;
+   v.module = "DIR"; v.score = 0; v.label = MD_NEUTRAL_CTX; v.reasoning = "";
+   if(signal == 0 || ArraySize(bufATR) < 2 || bufATR[1] <= 0) return v;
+
+   bool   isBuy    = (signal == 1);
+   double atr      = bufATR[1];
+   double tcpScore = STI_ComputeTCP(signal);
+   double exhaust  = STI_ComputeExhaustion(signal);
+   double lateRisk = STI_ComputeLateEntryRisk(signal, atr);
+   bool   regOK    = CleanRegimeAligned(isBuy);
+
+   double c1 = iClose(Symbol(), PERIOD_M5, 1);
+   double c6 = iClose(Symbol(), PERIOD_M5, 6);
+   double emaDist   = (ArraySize(bufEMASlow) >= 2 && bufEMASlow[1] > 0)
+                      ? MathAbs(c1 - bufEMASlow[1]) / atr : 0.0;
+   double runLast6  = MathAbs(c1 - c6) / atr;
+   bool m5Aligned   = isBuy ? (bufEMAFast[1] > bufEMASlow[1]) : (bufEMAFast[1] < bufEMASlow[1]);
+   bool h1Aligned   = false;
+   bool h4Aligned   = false;
+   if(ArraySize(bufEMAFast_H1) >= 2 && bufEMAFast_H1[1] > 0)
+      h1Aligned = isBuy ? (bufEMAFast_H1[1] > bufEMASlow_H1[1])
+                        : (bufEMAFast_H1[1] < bufEMASlow_H1[1]);
+   if(ArraySize(bufEMAFast_H4) >= 2 && bufEMAFast_H4[1] > 0)
+      h4Aligned = isBuy ? (bufEMAFast_H4[1] > bufEMASlow_H4[1])
+                        : (bufEMAFast_H4[1] < bufEMASlow_H4[1]);
+
+   // Late / Extended — highest priority (price already ran far from value)
+   if(lateRisk >= 65 || (runLast6 >= 2.8 && emaDist >= 3.0))
+   {
+      v.label = MD_LATE_EXTENDED; v.score = -2;
+      v.reasoning = StringFormat("%.1f×ATR from EMA, %.1f×ATR run in 6 bars, late risk %.0f — chasing a mature move", emaDist, runLast6, lateRisk);
+      return v;
+   }
+   // Exhaustion — trend momentum genuinely fading
+   if(exhaust >= 62 && tcpScore < 55)
+   {
+      v.label = MD_NEAR_EXHAUSTION; v.score = -1;
+      v.reasoning = StringFormat("Exhaustion %.0f, TCP %.0f — momentum fading, reversal risk elevated", exhaust, tcpScore);
+      return v;
+   }
+   // Counter-trend — both M5 and H1 oppose the signal
+   if(!m5Aligned && !h1Aligned)
+   {
+      v.label = MD_COUNTER_TREND; v.score = -2;
+      v.reasoning = "M5 and H1 EMAs both oppose this direction — genuine counter-trend entry";
+      return v;
+   }
+   // Fresh impulse — all TFs aligned near EMA, TCP high (best setups)
+   if(m5Aligned && h1Aligned && h4Aligned && tcpScore >= 70 && regOK && emaDist <= 2.0)
+   {
+      v.label = MD_FRESH_IMPULSE; v.score = +2;
+      v.reasoning = StringFormat("M5+H1+H4 aligned, TCP %.0f, price near EMA — early trend entry with full multi-TF backing", tcpScore);
+      return v;
+   }
+   // Trend running — established trend, clean continuation
+   if(m5Aligned && h1Aligned && tcpScore >= 57 && regOK)
+   {
+      v.label = MD_TREND_RUNNING; v.score = +1;
+      v.reasoning = StringFormat("H1+M5 aligned, TCP %.0f, regime confirms — established trend, continuation is valid", tcpScore);
+      return v;
+   }
+   // Pullback entry — temporarily against M5 but H1 trend intact
+   if(!m5Aligned && h1Aligned && emaDist <= 1.8)
+   {
+      v.label = MD_PULLBACK_ENTRY; v.score = +1;
+      v.reasoning = "M5 temporarily against H1 trend — price pulling back to EMA in a valid trend (not reversing)";
+      return v;
+   }
+   // Default neutral
+   v.reasoning = StringFormat("TCP %.0f, H1 %s, H4 %s, regime %s — no strong directional conviction",
+                               tcpScore, h1Aligned?"aligned":"mixed", h4Aligned?"aligned":"mixed", regOK?"OK":"mixed");
+   return v;
+}
+
+// ---------- MODULE 2: Human Reasoning Engine ----------
+// Deterministic discretionary rules: would an experienced XAUUSD trader take this trade?
+// Each rule returns immediately so at most one rule fires per scan.
+CommitteeVote HumanReasoning_Assess(int signal, string setupName, string grade)
+{
+   CommitteeVote v;
+   v.module = "HUMAN"; v.score = 0; v.label = "VALID_STANDARD";
+   v.reasoning = "No special discretionary enhancement or concern";
+   if(signal == 0) return v;
+
+   bool   isBuy = (signal == 1);
+   double atr   = (ArraySize(bufATR) >= 2 && bufATR[1] > 0) ? bufATR[1] : 0;
+   double rsi   = (ArraySize(bufRSI) >= 2) ? bufRSI[1] : 50;
+   double c1    = iClose(Symbol(), PERIOD_M5, 1);
+   double c6    = iClose(Symbol(), PERIOD_M5, 6);
+   double run6  = (atr > 0) ? MathAbs(c1 - c6) / atr : 0;
+   double emaDist = (atr > 0 && ArraySize(bufEMASlow) >= 2 && bufEMASlow[1] > 0)
+                    ? MathAbs(c1 - bufEMASlow[1]) / atr : 0;
+   bool m5OK = (ArraySize(bufEMAFast) >= 2 && ArraySize(bufEMASlow) >= 2)
+               ? (isBuy ? (bufEMAFast[1] > bufEMASlow[1]) : (bufEMAFast[1] < bufEMASlow[1])) : false;
+   bool h1OK = false;
+   if(ArraySize(bufEMAFast_H1) >= 2 && bufEMAFast_H1[1] > 0)
+      h1OK = isBuy ? (bufEMAFast_H1[1] > bufEMASlow_H1[1]) : (bufEMAFast_H1[1] < bufEMASlow_H1[1]);
+   bool h4OK = false;
+   if(ArraySize(bufEMAFast_H4) >= 2 && bufEMAFast_H4[1] > 0)
+      h4OK = isBuy ? (bufEMAFast_H4[1] > bufEMASlow_H4[1]) : (bufEMAFast_H4[1] < bufEMASlow_H4[1]);
+
+   MqlDateTime dt; TimeGMT(dt);
+   bool londonOpen  = (dt.hour == 7  && dt.min < 45);
+   bool nyOpen      = (dt.hour == 13 && dt.min < 45);
+   bool asianMid    = (dt.hour >= 2  && dt.hour < 6);
+   bool lnNyOverlap = (dt.hour >= 13 && dt.hour < 17);
+
+   // ---- PRIMARY RULES (early return — highest priority) ----
+
+   // Rule 1: Chasing — price ran hard without pause (non-A+ only)
+   if(run6 >= 3.0 && grade != "A+")
+   {
+      v.label = "WAIT_FOR_PULLBACK"; v.score = -1;
+      v.reasoning = StringFormat("%.1f×ATR move in 6 bars without pause — professional waits for retrace, not chasing now", run6);
+      return v;
+   }
+   // Rule 2: RSI extreme — momentum over-extended
+   if((isBuy && rsi > 74) || (!isBuy && rsi < 26))
+   {
+      v.label = "RSI_OVEREXTENDED"; v.score = -1;
+      v.reasoning = StringFormat("RSI %.0f is extreme — sharp counter-reversal risk; A+ only here", rsi);
+      return v;
+   }
+   // Rule 3: Clean EMA retest in intact trend — professional entry zone
+   if(h1OK && emaDist <= 1.0 && rsi > 42 && rsi < 60)
+   {
+      v.label = "EMA_RETEST_VALID"; v.score = +2;
+      v.reasoning = StringFormat("Price %.1f×ATR from EMA, RSI %.0f neutral, H1 aligned — textbook institutional entry zone", emaDist, rsi);
+      return v;
+   }
+   // Rule 4: Session open caution (London 07:00-07:45 GMT / NY 13:00-13:45 GMT)
+   if(londonOpen || nyOpen)
+   {
+      v.label = "SESSION_OPEN_CAUTION"; v.score = -1;
+      v.reasoning = StringFormat("%s first 45 min — direction frequently false-breaks before true move begins",
+                                  londonOpen ? "London open" : "New York open");
+      return v;
+   }
+   // Rule 5: A+ with full alignment — pro takes full size without hesitation
+   if(grade == "A+" && m5OK && h1OK && rsi > 44 && rsi < 72)
+   {
+      v.label = "HIGH_QUALITY_ENTRY"; v.score = +1;
+      v.reasoning = "A+ grade, M5+H1 aligned, RSI healthy — professional takes full size, no hesitation";
+      return v;
+   }
+
+   // ---- SECONDARY RULES (first match wins; ordered risk-before-opportunity) ----
+
+   // Rule 6: Against both H4 AND H1 trend — fighting the full daily flow
+   if(!h4OK && !h1OK)
+   {
+      v.label = "AGAINST_H4_TREND"; v.score = -1;
+      v.reasoning = "H4 and H1 EMAs both oppose this direction — counter-trend vs daily flow, professional reduces size";
+      return v;
+   }
+   // Rule 7: Consecutive losses today on B-grade — emotional discipline
+   if(pg_consecutiveLosses >= 2 && grade == "B")
+   {
+      v.label = "LOSS_STREAK_CAUTION"; v.score = -1;
+      v.reasoning = StringFormat("%d consecutive losses — professional tightens criteria after a losing streak; B-grade reduced", pg_consecutiveLosses);
+      return v;
+   }
+   // Rule 8: Asian mid-session, B-grade — low liquidity, false breakouts common
+   if(asianMid && grade == "B")
+   {
+      v.label = "ASIAN_RANGING"; v.score = -1;
+      v.reasoning = "Asian mid-session (02:00-06:00 GMT) — low-liquidity, choppy range-bound; B-grade entries often reverse";
+      return v;
+   }
+   // Rule 9: Spread elevated vs recent baseline — microstructure risk
+   if(g_spreadEMA > 5.0)
+   {
+      double curSpreadPts = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+      if(curSpreadPts > g_spreadEMA * 1.8)
+      {
+         v.label = "SPREAD_ELEVATED"; v.score = -1;
+         v.reasoning = StringFormat("Spread %.0f pts (%.1f× baseline %.0f) — elevated microstructure risk, likely news or low liquidity", curSpreadPts, curSpreadPts / g_spreadEMA, g_spreadEMA);
+         return v;
+      }
+   }
+   // Rule 10: Triple TF alignment — highest conviction setup, daily flow trade
+   if(h4OK && h1OK && m5OK)
+   {
+      v.label = "TRIPLE_TF_ALIGNED"; v.score = +1;
+      v.reasoning = "H4+H1+M5 all aligned in same direction — trading with full daily flow, highest timeframe conviction";
+      return v;
+   }
+   // Rule 11: London-NY overlap with aligned H1 — highest liquidity window
+   if(lnNyOverlap && h1OK && m5OK)
+   {
+      v.label = "LN_NY_OVERLAP"; v.score = +1;
+      v.reasoning = "London-NY overlap (13:00-17:00 GMT), H1+M5 aligned — peak liquidity, institutional flows dominate, trend continuation most reliable";
+      return v;
+   }
+   // Rule 12: H1 aligned, RSI healthy, spread normal — clean entry environment
+   double liveSpread12 = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   bool spreadOK12 = (g_spreadEMA <= 5.0 || liveSpread12 < g_spreadEMA * 1.3);
+   if(h1OK && rsi > 40 && rsi < 65 && spreadOK12)
+   {
+      v.label = "CLEAN_ENTRY_CONDITIONS"; v.score = +1;
+      v.reasoning = StringFormat("H1 aligned, RSI %.0f in healthy range, spread normal — clean conditions for entry", rsi);
+      return v;
+   }
+   return v;
+}
+
+// ---------- MODULE 3: Trade Memory ----------
+// Circular buffer of last 100 closed trades. Adjusts lot size per pattern
+// based on recent 30-day performance. Minimum 8 samples before adjusting.
+double TradeMemory_LotAdjust(string pattern)
+{
+   int    samples = 0, wins = 0;
+   double totalR  = 0.0;
+   datetime cutoff = TimeCurrent() - 30 * 24 * 3600;
+   for(int i = 0; i < 100; i++)
+   {
+      if(!g_tradeMemory[i].valid || g_tradeMemory[i].pattern != pattern) continue;
+      if(g_tradeMemory[i].closedAt < cutoff) continue;
+      samples++;
+      if(g_tradeMemory[i].rMultiple > 0.0) wins++;
+      totalR += g_tradeMemory[i].rMultiple;
+   }
+   if(samples < 8) return 1.0;
+   double wr   = (double)wins / samples;
+   double avgR = totalR / samples;
+   if(wr >= 0.65 && avgR >= 0.5)  return MathMin(1.20, 1.0 + (wr - 0.60) * 0.80);
+   if(wr <  0.38 || avgR < -0.30) return MathMax(0.65, 1.0 - (0.45 - wr) * 0.80);
+   return 1.0;
+}
+
+void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult)
+{
+   g_tradeMemory[g_tradeMemHead].pattern       = pattern;
+   g_tradeMemory[g_tradeMemHead].directorLabel = dirLabel;
+   g_tradeMemory[g_tradeMemHead].committeeConf = conf;
+   g_tradeMemory[g_tradeMemHead].rMultiple     = rMult;
+   g_tradeMemory[g_tradeMemHead].closedAt      = TimeCurrent();
+   g_tradeMemory[g_tradeMemHead].valid         = true;
+   g_tradeMemHead = (g_tradeMemHead + 1) % 100;
+}
+
+// ---------- COMMITTEE ASSEMBLER ----------
+// Combines all three module votes into one CommitteeDecision.
+CommitteeDecision Committee_Assemble(int signal, string setupName, string grade, double combinedScore)
+{
+   CommitteeDecision dec;
+   dec.lotMultiplier = 1.0;
+   dec.totalScore    = 0;
+   dec.directorLabel = MD_NEUTRAL_CTX;
+   dec.thesis        = "";
+   dec.confidence    = 50;
+   if(!InpCommitteeEnable || signal == 0) return dec;
+
+   CommitteeVote dirVote = MarketDirector_Assess(signal);
+   CommitteeVote humVote = HumanReasoning_Assess(signal, setupName, grade);
+
+   CommitteeVote memVote;
+   memVote.module = "MEM";
+   double memAdj  = InpCommitteeLotAdj ? TradeMemory_LotAdjust(setupName + "_" + grade) : 1.0;
+   memVote.score  = (memAdj >= 1.12) ? +1 : (memAdj <= 0.78) ? -1 : 0;
+   memVote.label  = (memAdj >= 1.12) ? "PROVEN" : (memAdj <= 0.78) ? "WEAK" : "NEUTRAL";
+   memVote.reasoning = StringFormat("30d '%s_%s' → lot×%.2f", setupName, grade, memAdj);
+
+   int total = dirVote.score + humVote.score + memVote.score;
+
+   double lotMult = 1.0;
+   if(InpCommitteeLotAdj)
+   {
+      if(total >=  4)      lotMult = 1.15;
+      else if(total >= 2)  lotMult = 1.08;
+      else if(total == 1)  lotMult = 1.03;
+      else if(total == 0)  lotMult = 1.00;
+      else if(total == -1) lotMult = 0.92;
+      else if(total == -2) lotMult = 0.82;
+      else                 lotMult = 0.70;
+      lotMult = MathMax(0.50, MathMin(1.25, lotMult * memAdj));
+   }
+
+   int baseConf = (grade == "A+") ? 82 : (grade == "A") ? 68 : 50;
+   int conf     = (int)MathMax(20, MathMin(97, baseConf + total * 4));
+
+   dec.lotMultiplier = lotMult;
+   dec.totalScore    = total;
+   dec.directorLabel = dirVote.label;
+   dec.confidence    = conf;
+   dec.thesis = StringFormat(
+      "COMMITTEE | DIR:%s(%+d) %s | HUMAN:%s(%+d) | MEM:%s(%+d) → lot×%.2f conf:%d%%",
+      dirVote.label, dirVote.score, dirVote.reasoning,
+      humVote.label, humVote.score,
+      memVote.label, memVote.score,
+      lotMult, conf);
+   return dec;
+}
+
+// ---------- IN-TRADE CLASSIFIER ----------
+// Called every new M5 bar. Tracks position state so exit modules can act
+// intelligently without re-reading every indicator on every tick.
+void InTradeClassifier_Update()
+{
+   if(!InpInTradeClassify) return;
+   if(ArraySize(bufEMAFast) < 3 || ArraySize(bufRSI) < 2 || bufATR[1] <= 0) return;
+   double atr = bufATR[1];
+   string snames[] = {"UNKNOWN","HEALTHY","PULLBACK","CONSOLIDATING","WEAKENING","EXHAUSTING","REVERSING"};
+
+   // Expire slots for positions that are no longer open
+   for(int s = 0; s < 10; s++)
+   {
+      if(g_posClassTicket[s] == 0) continue;
+      if(!PositionSelectByTicket(g_posClassTicket[s]))
+      { g_posClassTicket[s] = 0; g_posClassState[s] = PSTATE_UNKNOWN; }
+   }
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(!PositionSelectByTicket(tk)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+
+      bool   isBuy     = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+      double entry     = PositionGetDouble(POSITION_PRICE_OPEN);
+      double price     = isBuy ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
+                               : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+      double profitATR = isBuy ? (price - entry) / atr : (entry - price) / atr;
+      double emaF = bufEMAFast[1], emaS = bufEMASlow[1], rsi = bufRSI[1];
+      double c1 = iClose(Symbol(), PERIOD_M5, 1);
+      double o1 = iOpen(Symbol(), PERIOD_M5, 1);
+      double c2 = iClose(Symbol(), PERIOD_M5, 2);
+      int    mom = CleanMomentumScore(isBuy, c1, o1, c2, emaF, emaS, rsi);
+      bool   m5OK = isBuy ? (emaF > emaS) : (emaF < emaS);
+      bool   h1OK = false;
+      if(ArraySize(bufEMAFast_H1) >= 2 && bufEMAFast_H1[1] > 0)
+         h1OK = isBuy ? (bufEMAFast_H1[1] > bufEMASlow_H1[1])
+                      : (bufEMAFast_H1[1] < bufEMASlow_H1[1]);
+
+      int ns;
+      if(!m5OK && !h1OK && mom <= 1)         ns = PSTATE_REVERSING;
+      else if(!m5OK && !h1OK)                ns = PSTATE_WEAKENING;
+      else if(!m5OK && profitATR >= 0.5)     ns = PSTATE_PULLBACK;
+      else if(mom <= 1 && profitATR >= 2.0)  ns = PSTATE_EXHAUSTING;
+      else if(m5OK && mom >= 3)              ns = PSTATE_HEALTHY;
+      else                                   ns = PSTATE_CONSOLIDATING;
+
+      int slot = -1;
+      for(int s = 0; s < 10; s++) if(g_posClassTicket[s] == tk) { slot = s; break; }
+      if(slot < 0) for(int s = 0; s < 10; s++) if(g_posClassTicket[s] == 0) { slot = s; break; }
+      if(slot < 0) continue;
+
+      if(g_posClassState[slot] != ns)
+         Print("TRADE-CLASS #", tk, " ", isBuy?"BUY":"SELL",
+               " ", snames[g_posClassState[slot]], " → ", snames[ns],
+               " | profitATR=", DoubleToString(profitATR,2), " mom=", mom,
+               " m5=", m5OK?"OK":"x", " h1=", h1OK?"OK":"x");
+      g_posClassTicket[slot] = tk;
+      g_posClassState[slot]  = ns;
+   }
+}
+
+// v6.0.1 — RatchetExitContext: determines how aggressively to tighten SL based on real trend state.
+// Returns: 2=trend confirmed (DEFER — don't move SL at all, original SL protects against catastrophe)
+//          1=trend weakening  (CUSHION — move SL to entry + InpRatchetBECushionATR×ATR, lock small profit)
+//          0=reversal confirmed (HARD — move SL to exact entry, old behaviour, protect capital)
+// posTicket: if provided and InTradeClassifier has classified this position, uses that state first.
+// Called once per position per tick inside PG_PerPositionRatchet.
+int RatchetExitContext(bool isBuy, ulong posTicket = 0)
+{
+   // Fast path: use InTradeClassifier state if available (avoids re-reading indicators every tick)
+   if(posTicket > 0 && InpInTradeClassify)
+   {
+      int cls = GetPositionClassState(posTicket);
+      if(cls == PSTATE_REVERSING)                    return 0; // confirmed reversal → fire hard
+      if(cls == PSTATE_WEAKENING)                    return 1; // trend losing power → cushion
+      if(cls == PSTATE_EXHAUSTING)                   return 1; // near top/bottom → cushion
+      if(cls == PSTATE_CONSOLIDATING)                return 1; // unclear → cushion
+      if(cls == PSTATE_PULLBACK || cls == PSTATE_HEALTHY) return 2; // intact → defer
+      // PSTATE_UNKNOWN falls through to indicator-based logic below
+   }
+
+   bool hasM5  = (ArraySize(bufEMAFast) >= 3 && ArraySize(bufEMASlow) >= 3 && ArraySize(bufRSI) >= 2);
+   bool hasH1  = (ArraySize(bufEMAFast_H1) >= 2 && ArraySize(bufEMASlow_H1) >= 2 &&
+                  bufEMAFast_H1[1] > 0 && bufEMASlow_H1[1] > 0);
+   if(!hasM5) return 1; // insufficient data — default to cushioned BE
+
+   double emaF   = bufEMAFast[1];
+   double emaS   = bufEMASlow[1];
+   double rsi    = bufRSI[1];
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double open1  = iOpen(Symbol(), PERIOD_M5, 1);
+   double close2 = iClose(Symbol(), PERIOD_M5, 2);
+
+   bool m5Aligned  = isBuy ? (emaF > emaS)  : (emaF < emaS);
+   bool rsiOK      = isBuy ? (rsi > 45.0)   : (rsi < 55.0);
+   bool rsiExtreme = isBuy ? (rsi < 38.0)   : (rsi > 62.0); // RSI strongly against = reversal signal
+   bool regimeOK   = CleanRegimeAligned(isBuy);
+   int  mom        = CleanMomentumScore(isBuy, close1, open1, close2, emaF, emaS, rsi);
+
+   bool h1Aligned = true; // assume aligned when H1 data unavailable (conservative)
+   if(hasH1)
+      h1Aligned = isBuy ? (bufEMAFast_H1[1] > bufEMASlow_H1[1])
+                        : (bufEMAFast_H1[1] < bufEMASlow_H1[1]);
+
+   // ---- REVERSAL CONFIRMED: 0 — fire hard BE ----
+   if(!m5Aligned && rsiExtreme && mom <= 1) return 0;  // M5 crossed + RSI extreme + flat momentum
+   if(!m5Aligned && !h1Aligned && mom <= 2) return 0;  // both M5 and H1 EMAs against the trade
+
+   // ---- TREND CONFIRMED: 2 — defer BE, original SL holds ----
+   if(m5Aligned && h1Aligned && rsiOK && mom >= InpRatchetTrendMinMoment && regimeOK) return 2;
+   if(m5Aligned && h1Aligned && mom >= (InpRatchetTrendMinMoment + 1)) return 2; // very strong momentum
+
+   // ---- WEAKENING: 1 — cushioned BE (default) ----
+   return 1;
+}
+
+// v5.1.2 — per-position ratchet: lock individual winners (v6.0.1: context-aware).
+//   Context 2 (trend confirmed)  → DEFERRED: don't move SL; original SL protects; avoid unnecessary BE exit
+//   Context 1 (trend weakening)  → CUSHION:  SL = entry ± InpRatchetBECushionATR×ATR (lock small profit)
+//   Context 0 (reversal)         → HARD BE:  SL = exact entry (original behaviour, protect capital)
+//   Trail phase (profitInAtr >= trailStartATR) → adaptive width based on momentum score
 // Called every tick (cheap — O(positions)).
 void PG_PerPositionRatchet()
 {
@@ -11649,8 +12850,12 @@ void PG_PerPositionRatchet()
    if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return;
    double atr = bufATR[1];
    if(atr <= 0) return;
-   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   double point  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    int    digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+
+   // v6.0.1: pre-check if context buffers are populated (same for every position this tick)
+   bool hasGoodBuffers = (ArraySize(bufEMAFast) >= 3 && ArraySize(bufEMASlow) >= 3 &&
+                          ArraySize(bufRSI) >= 2);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -11662,53 +12867,82 @@ void PG_PerPositionRatchet()
       if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
 
       ENUM_POSITION_TYPE ptype = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      double entry = PositionGetDouble(POSITION_PRICE_OPEN);
-      double curSL = PositionGetDouble(POSITION_SL);
-      double curTP = PositionGetDouble(POSITION_TP);
-      double price = (ptype == POSITION_TYPE_BUY)
-                     ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
-                     : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-      double profitDist = (ptype == POSITION_TYPE_BUY) ? (price - entry) : (entry - price);
+      bool   isBuy  = (ptype == POSITION_TYPE_BUY);
+      double entry  = PositionGetDouble(POSITION_PRICE_OPEN);
+      double curSL  = PositionGetDouble(POSITION_SL);
+      double curTP  = PositionGetDouble(POSITION_TP);
+      double price  = isBuy ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
+                            : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+      double profitDist = isBuy ? (price - entry) : (entry - price);
       if(profitDist <= 0) continue;
       double profitInAtr = profitDist / atr;
 
       // v5.3.1 — HIGH-GRADE BREATHING ROOM. A/A+ trades use looser thresholds
-      // so winners run further. We detect grade from the position comment
-      // (set in OpenTrade as "setupName [A+]" or similar). Falls back to B
-      // settings if comment can't be parsed.
-      string posCmt = PositionGetString(POSITION_COMMENT);
+      // so winners run further. Grade is read from position comment (set at entry).
+      string posCmt    = PositionGetString(POSITION_COMMENT);
       bool isHighGrade = (StringFind(posCmt, "[A]") >= 0 || StringFind(posCmt, "[A+]") >= 0);
       double beTriggerATR  = isHighGrade ? InpHighGradeBETriggerATR  : InpPG_RatchetBETrigger;
       double trailStartATR = isHighGrade ? InpHighGradeTrailStartATR : InpPG_RatchetTrailStart;
       double trailDistATR  = isHighGrade ? InpHighGradeTrailDistATR  : InpPG_RatchetTrailDist;
 
+      // v6.0.1: trend context decides how aggressively to ratchet.
+      // Pass ticket so classifier state is used first (cheap); falls back to indicator logic.
+      int trendCtx = 1; // default: cushioned BE when buffers not available
+      if(InpRatchetTrendGate && hasGoodBuffers)
+         trendCtx = RatchetExitContext(isBuy, tk);
+
       double newSL = curSL;
-      // Stage 1: BE move
-      if(profitInAtr >= beTriggerATR)
+
+      // Stage 1: BE move (context-aware, only in the window below trail start)
+      if(profitInAtr >= beTriggerATR && profitInAtr < trailStartATR)
       {
-         double beSL = entry;
-         if(ptype == POSITION_TYPE_BUY  && (curSL == 0 || curSL < beSL)) newSL = beSL;
-         if(ptype == POSITION_TYPE_SELL && (curSL == 0 || curSL > beSL)) newSL = beSL;
+         if(trendCtx == 2)
+         {
+            // Trend confirmed → defer BE entirely; original SL is the backstop.
+            // newSL stays == curSL; position loops continues to stage 2 (won't fire yet).
+         }
+         else
+         {
+            // trendCtx 1=cushion (small locked profit), 0=hard (zero profit = old behaviour)
+            double cushion = (trendCtx == 1) ? (atr * InpRatchetBECushionATR) : 0.0;
+            double beSL    = isBuy ? (entry + cushion) : (entry - cushion);
+            if(isBuy  && (curSL == 0 || curSL < beSL))  newSL = beSL;
+            if(!isBuy && (curSL == 0 || curSL > beSL))  newSL = beSL;
+         }
       }
-      // Stage 2: trail at trailDistATR × ATR behind price (only tightens, never loosens)
+
+      // Stage 2: trail (fires at trailStartATR regardless of context; width adapts to momentum)
       if(profitInAtr >= trailStartATR)
       {
-         double trail = atr * trailDistATR;
-         double trailSL = (ptype == POSITION_TYPE_BUY) ? (price - trail) : (price + trail);
-         if(ptype == POSITION_TYPE_BUY  && trailSL > newSL) newSL = trailSL;
-         if(ptype == POSITION_TYPE_SELL && (newSL == 0 || trailSL < newSL)) newSL = trailSL;
+         double adaptiveMult = 1.0;
+         if(InpRatchetAdaptiveTrail && hasGoodBuffers)
+         {
+            double emaF2 = bufEMAFast[1], emaS2 = bufEMASlow[1], rsi2 = bufRSI[1];
+            double c1 = iClose(Symbol(), PERIOD_M5, 1);
+            double o1 = iOpen(Symbol(), PERIOD_M5, 1);
+            double c2 = iClose(Symbol(), PERIOD_M5, 2);
+            int mom = CleanMomentumScore(isBuy, c1, o1, c2, emaF2, emaS2, rsi2);
+            // Strong momentum → wider trail (survive pullbacks in running trends)
+            // Weak momentum   → normal trail (protect locked profit on reversals)
+            adaptiveMult = (mom >= 4) ? InpRatchetStrongMomMulti
+                         : (mom <= 2) ? InpRatchetWeakMomMulti
+                         : 1.0;
+         }
+         double trail   = atr * trailDistATR * adaptiveMult;
+         double trailSL = isBuy ? (price - trail) : (price + trail);
+         if(isBuy  && trailSL > newSL) newSL = trailSL;
+         if(!isBuy && (newSL == 0 || trailSL < newSL)) newSL = trailSL;
       }
 
       // Round + apply only if we actually tightened
       newSL = NormalizeDouble(newSL, digits);
       if(newSL == curSL) continue;
-      // Sanity: reject if SL is on the wrong side of price
-      if(ptype == POSITION_TYPE_BUY  && newSL >= price) continue;
-      if(ptype == POSITION_TYPE_SELL && newSL <= price) continue;
+      // Sanity: reject if SL is on wrong side of price
+      if(isBuy  && newSL >= price) continue;
+      if(!isBuy && newSL <= price) continue;
       // Respect broker stops level
       long stopsLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-      double minDist = stopsLevel * point;
-      if(MathAbs(price - newSL) < minDist) continue;
+      if(MathAbs(price - newSL) < stopsLevel * point) continue;
 
       MqlTradeRequest req; ZeroMemory(req);
       MqlTradeResult  res; ZeroMemory(res);
@@ -11719,9 +12953,12 @@ void PG_PerPositionRatchet()
       req.tp       = curTP;
       if(OrderSend(req, res) && res.retcode == TRADE_RETCODE_DONE)
       {
-         Print("🛡 PG ratchet: ticket=", tk, " ", EnumToString(ptype),
-               " profit=", DoubleToString(profitInAtr,2), "×ATR  SL: ",
-               DoubleToString(curSL, digits), " → ", DoubleToString(newSL, digits));
+         string ctxTag = (trendCtx == 2) ? "TRAIL_OVR"   // trail fired despite DEFERRED BE
+                       : (trendCtx == 1) ? "CUSHION_BE"
+                       :                   "HARD_BE";
+         Print("PG ratchet: ticket=", tk, " ", isBuy ? "BUY" : "SELL",
+               " profit=", DoubleToString(profitInAtr, 2), "xATR [", ctxTag, "]",
+               "  SL: ", DoubleToString(curSL, digits), " -> ", DoubleToString(newSL, digits));
       }
    }
 }
@@ -11868,7 +13105,7 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.9.1\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v6.0.2\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -12440,7 +13677,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.9.1 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v6.0.2 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
