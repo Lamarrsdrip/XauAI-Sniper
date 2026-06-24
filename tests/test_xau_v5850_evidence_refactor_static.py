@@ -78,6 +78,22 @@ def test_context_gate_uses_cached_indicator_handles():
     assert "IndicatorRelease(hS_ctx)" in body
 
 
-def test_version_is_602():
-    assert "v6.0.2" in EA
-    assert '\\"ea_version\\":\\"v6.0.2\\"' in EA
+def test_version_is_603():
+    assert "v6.0.3" in EA
+    assert '\\"ea_version\\":\\"v6.0.3\\"' in EA
+
+
+def test_forensic_growth_audit_logs_entry_size_and_close_diagnosis():
+    assert "FORENSIC_GROWTH_AUDIT" in EA
+    assert "FORENSIC_ENTRY_SNAPSHOT" in EA
+    assert "FORENSIC_SIZE_STACK" in EA
+    assert "FORENSIC_CLOSE_DIAGNOSIS" in EA
+    assert "protectionShouldHaveTriggered=" in EA
+    assert "profitGiveback=" in EA
+
+
+def test_trade_brain_blocks_negative_expectancy_even_when_win_rate_is_not_extreme():
+    body = EA[EA.index("bool XAU_TradeBrainPreEntry"):EA.index("void XAU_AppendBlockedMemory")]
+    assert "negativeExpectancyPattern" in body
+    assert "avgP < 0.0 && pf < InpTradeBrainMinPF" in body
+    assert "TRADE-BRAIN BLOCK: similar executed trades have negative expectancy" in body
