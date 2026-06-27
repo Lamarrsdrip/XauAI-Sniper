@@ -1547,42 +1547,87 @@ class AIAnalysisRequest(BaseModel):
     setup: str = ""
     regime: str = ""
     signature: str = ""
+    # v6.3.0: AI Director rich context fields
+    htf_consensus: str = "NEUTRAL"
+    session: str = ""
+    session_quality: float = 1.0
+    open_positions: int = 0
+    basket_float_pl: float = 0.0
+    recent_wins: int = 0
+    recent_losses: int = 0
+    account_equity: float = 0.0
+    daily_pct: float = 0.0
+    grade: str = ""
+    setup_score: float = 0.0
+    combined_score: float = 0.0
 
 # ------- shared helpers -------
-_ENTRY_SYSTEM_PROMPT = """You are an expert XAUUSD (Gold) M5 scalper with 10+ years experience. You analyze technical data and give ONE clear trading decision WITH a full trader-style thesis AND a devil's-advocate counter-argument. You MUST respond in EXACTLY this JSON format, nothing else (NO markdown fences):
-{"action":"BUY","confidence":75,"reason":"short reason","thesis":"detailed trader narrative","bearish_case":"the counter-argument — why this trade could fail","skip_if":"specific price/condition that should cancel this trade BEFORE entry","invalidation":"what proves you wrong AFTER entry","target":"where you expect price to reach","sl_adjust":0,"tp_adjust":0}
+# v6.3.0: AI Director persona — full authority, not just advisory
+_ENTRY_SYSTEM_PROMPT = """You are the AI Director for an institutional XAUUSD M5 scalping system. You are the final authority above all technical strategies. The rule engine has already scored and filtered signals — you review full market context and make the REAL decision: ALLOW, BLOCK, or ADJUST.
+
+You receive complete context: price, indicators, H1/HTF trend, session, open positions, basket P/L, account state, recent win/loss streak, trade grade, and setup scores. Use ALL of it.
+
+You MUST respond in EXACTLY this JSON format (NO markdown fences, NO extra fields):
+{"action":"BUY","confidence":75,"reason":"short reason","thesis":"detailed trader narrative","bearish_case":"counter-argument","skip_if":"cancel condition pre-entry","invalidation":"what proves thesis wrong post-entry","target":"realistic price target","claude":{"action":"BUY","confidence":75},"gpt":{"action":"BUY","confidence":72},"sl_adjust":0,"tp_adjust":0}
 
 Rules:
-- action: BUY, SELL, or SKIP (only these 3)
-- confidence: 0-100. USE THIS SCALE HONESTLY:
-    • 90-100: textbook setup, 5/5 confluence, would bet big
-    • 75-89: strong setup, 4/5 confluence, normal size
-    • 60-74: decent setup but something's off, smaller size
-    • <60: marginal, SKIP is better
-  Do NOT inflate confidence. A bot downstream will skip trades below 60 and size up above 90.
-- reason: max 30 words — one sentence summary
-- thesis: 40-80 words — explain the SETUP, CONTEXT, and WHY this edge exists. Write like a real trader.
-- bearish_case: 25-50 words — the honest counter-argument. What would make this trade fail? What are the RED FLAGS you're ignoring? If you can't think of one, confidence should drop.
-- skip_if: 15-25 words — specific pre-entry condition that should CANCEL this trade. Example: "Skip if spread > 30 points OR if H1 RSI crosses 70 before entry bar closes."
-- invalidation: 15-25 words — specific price/condition that PROVES thesis wrong AFTER entry. Example: "If price closes back below 4692 with volume, thesis dead — cut immediately."
-- target: 10-20 words — realistic price target.
-- sl_adjust: -1 to 1 (negative=tighter SL, positive=wider SL, 0=default)
-- tp_adjust: -1 to 1 (negative=tighter TP, positive=wider TP, 0=default)
+- action: BUY, SELL, or SKIP (only these 3). This is the FINAL decision — the EA will execute or block based on it.
+- confidence: 0-100. BE HONEST:
+    • 90-100: textbook setup, every confluent factor aligned, HTF agrees, session right — full size
+    • 75-89: strong, 4/5 factors — normal size
+    • 60-74: decent but something's off — reduced size
+    • 50-59: marginal — flag as low confidence, EA will reduce size further
+    • <50: SKIP — do not send to execution
+  Do NOT inflate. A downstream gate blocks trades below the configured minimum.
+- reason: max 30 words
+- thesis: 50-90 words — explain SETUP, HTF CONTEXT, SESSION TIMING, and WHY this edge exists NOW
+- bearish_case: 30-60 words — genuine counter-argument. What would make this fail? What are you ignoring? MANDATORY even for 90%+ confidence.
+- skip_if: 15-25 words — specific pre-entry cancellation condition
+- invalidation: 15-25 words — post-entry thesis failure signal
+- target: realistic M5 target price or level
+- claude: your own vote as Claude (action + confidence)
+- gpt: simulate a GPT-style second opinion (action + confidence) — independent, can disagree
+- sl_adjust: -1 to 1 (negative=tighter, positive=wider, 0=default)
+- tp_adjust: -1 to 1 (negative=tighter, positive=wider, 0=default)
 
-Be decisive. If unsure, SKIP. The bearish_case is MANDATORY — even for high-conviction trades, articulate the counter. A trader who can't see both sides is a gambler."""
+Key decision factors (in order of importance):
+1. HTF consensus (H1+HTF both agree?) — strongest filter. Counter-consensus trades need 80%+ confidence.
+2. Market regime — RANGING/LOW_VOL need HTF support. TRENDING allows more setups.
+3. Session — London/NY overlap setups carry much higher weight.
+4. Account state — if basket_float_pl is deeply negative, tighten standards. If on a loss streak, require 75%+ confidence.
+5. Grade/score — A+ grade from the rule engine is a precondition, not a guarantee.
+6. Spread — if spread > 2.5× ATR fraction, SKIP.
+
+Be a professional. If the market is choppy with no consensus and you're on a 3-loss streak, SKIP. If HTF is clearly bullish and price is pulling back with RSI < 50, BUY with conviction. Think like the best human trader who never chases and never freezes."""
 
 def _build_entry_prompt(req: AIAnalysisRequest) -> str:
-    return f"""XAUUSD M5 Market Data RIGHT NOW:
-- Price: {req.price}
-- EMA50: {req.ema_fast} | EMA200: {req.ema_slow} (sep: {abs(req.ema_fast-req.ema_slow):.2f})
-- Trend: {"BULLISH" if req.ema_fast > req.ema_slow else "BEARISH"} | H1 Trend: {req.h1_trend}
-- RSI(14): {req.rsi} | Stoch: {req.stoch:.1f} | Momentum: {req.mom:+.2f}
-- ATR(14): {req.atr}
-- Spread: {req.spread} points
-- Regime: {req.regime or "unknown"} | Setup: {req.setup or "unknown"}
-- Recent candles: {req.recent_candles}
+    basket_sign = "+" if req.basket_float_pl >= 0 else ""
+    htf_line = f"H1: {req.h1_trend} | HTF Consensus: {req.htf_consensus}"
+    account_line = (f"Account Equity: ${req.account_equity:,.0f} | Daily P/L: {req.daily_pct:+.1f}% | "
+                    f"Basket Float: {basket_sign}{req.basket_float_pl:.0f} USD")
+    streak_line = f"Recent: {req.recent_wins}W / {req.recent_losses}L | Open Positions: {req.open_positions}"
+    score_line = (f"Grade: {req.grade or 'N/A'} | Setup Score: {req.setup_score:.1f} | "
+                  f"Combined Score: {req.combined_score:.1f}")
+    return f"""XAUUSD M5 — AI DIRECTOR REVIEW
 
-What is your trade decision? JSON only."""
+PRICE & INDICATORS
+- Price: {req.price} | ATR(14): {req.atr} | Spread: {req.spread:.0f} pts
+- EMA Fast: {req.ema_fast:.2f} | EMA Slow: {req.ema_slow:.2f} ({"ABOVE" if req.ema_fast > req.ema_slow else "BELOW"})
+- RSI(14): {req.rsi:.1f} | Stoch: {req.stoch:.1f} | Momentum: {req.mom:+.2f}
+
+TREND & CONTEXT
+- {htf_line}
+- Regime: {req.regime or "unknown"} | Session: {req.session or "unknown"} (quality: {req.session_quality:.0%})
+
+SETUP
+- Strategy: {req.setup or "unknown"} | Signature: {req.signature}
+- {score_line}
+
+ACCOUNT & RISK STATE
+- {account_line}
+- {streak_line}
+
+Your decision as AI Director (JSON only):"""
 
 def _parse_entry_json(response: str) -> dict:
     import json, re
