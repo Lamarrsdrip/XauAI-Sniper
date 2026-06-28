@@ -1664,16 +1664,35 @@ def _build_entry_prompt(req: AIAnalysisRequest) -> str:
     htf_line = f"H1: {req.h1_trend} | HTF Consensus: {req.htf_consensus}"
     account_line = (f"Account Equity: ${req.account_equity:,.0f} | Daily P/L: {req.daily_pct:+.1f}% | "
                     f"Basket Float: {basket_sign}{req.basket_float_pl:.0f} USD")
-    streak_line = f"Recent: {req.recent_wins}W / {req.recent_losses}L | Open Positions: {req.open_positions}"
+    # v6.3.7: recent_wins/recent_losses are now last-10-trade sliding window (fixed from all-time totals)
+    streak_line = f"Last 10 trades: {req.recent_wins}W / {req.recent_losses}L | Open Positions: {req.open_positions}"
     score_line = (f"Grade: {req.grade or 'N/A'} | Setup Score: {req.setup_score:.1f} | "
                   f"Combined Score: {req.combined_score:.1f}")
+    # v6.3.7: render recent_candles when populated (format: "O/H/L/C O/H/L/C ..." oldest-first, 5 bars)
+    # EA sends bars oldest-first: index 0 = bar[5], index 4 = bar[1] (most recent closed)
+    candles_section = ""
+    if req.recent_candles and req.recent_candles.strip():
+        candle_entries = req.recent_candles.strip().split()
+        labeled = []
+        total = min(len(candle_entries), 5)
+        for idx, c in enumerate(candle_entries[-total:]):
+            bar_offset = total - idx  # bar[5]=5, bar[4]=4, ... bar[1]=1
+            parts = c.split("/")
+            if len(parts) == 4:
+                o, h, l, cl = parts
+                body = float(cl) - float(o)
+                direction = "bull" if body >= 0 else "bear"
+                label = "most recent closed" if bar_offset == 1 else f"{bar_offset} bars ago"
+                labeled.append(f"  [{label}]: O={o} H={h} L={l} C={cl} ({direction})")
+        if labeled:
+            candles_section = "\nRECENT PRICE ACTION (M5, oldest→newest)\n" + "\n".join(labeled)
     return f"""XAUUSD M5 — AI DIRECTOR REVIEW
 
 PRICE & INDICATORS
 - Price: {req.price} | ATR(14): {req.atr} | Spread: {req.spread:.0f} pts
 - EMA Fast: {req.ema_fast:.2f} | EMA Slow: {req.ema_slow:.2f} ({"ABOVE" if req.ema_fast > req.ema_slow else "BELOW"})
 - RSI(14): {req.rsi:.1f} | Stoch: {req.stoch:.1f} | Momentum: {req.mom:+.2f}
-
+{candles_section}
 TREND & CONTEXT
 - {htf_line}
 - Regime: {req.regime or "unknown"} | Session: {req.session or "unknown"} (quality: {req.session_quality:.0%})

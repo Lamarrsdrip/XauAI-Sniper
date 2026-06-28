@@ -10019,6 +10019,13 @@ int ExtractJsonInt(const string &json, const string key, int fallback)
 // v6.3.0: enriched GetAIAnalysis — sends full market context to AI Director
 // Added: htf_consensus, session, open_positions, basket_float_pl, recent_wins,
 //        recent_losses, account_equity, daily_pct, grade, setup_score, combined_score
+// v6.3.7: FIX — recent_wins/recent_losses now use last-10-trade sliding window from
+//         patterns[] instead of all-time cumulative wins/losses counters.
+// v6.3.7: PERF — per-bar AI cache keyed on (signature + bar open time) to prevent
+//         duplicate LLM calls when the same signal fires on multiple ticks within
+//         one M5 bar. Cache evicted automatically when the bar changes.
+// v6.3.7: CONTEXT — recent_candles field now populated with last 5 closed M5 OHLC
+//         candles so the AI can reason about price action, not just indicator values.
 int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price, string h1Dir, double spread,
                   string setup, string regime, string signature, double stoch, double mom,
                   string grade = "", double setupScore = 0, double combinedScore = 0)
@@ -10031,6 +10038,44 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    g_aiGPTVote    = "unknown";
 
    if(!InpUseAI || InpBacktestMode || StringLen(InpServerURL) < 10) return 0;
+
+   // -----------------------------------------------------------------------
+   // v6.3.7 IMPROVEMENT 2: Per-bar AI response cache.
+   // Within a single M5 bar, calling GetAIAnalysis multiple times for the
+   // same signature produces identical results (same price context, same
+   // indicators). Each call blocks tick processing for up to 16 s (2 × 8 s
+   // AI timeout). Cache the result and replay it instantly for duplicate
+   // calls on the same bar+signature pair.
+   // -----------------------------------------------------------------------
+   static string g_aiCacheSig     = "";
+   static datetime g_aiCacheBar   = 0;
+   static int      g_aiCacheDir   = 0;
+   static int      g_aiCacheConf  = 0;
+   static string   g_aiCacheThesis = "";
+   static string   g_aiCacheInval  = "";
+   static string   g_aiCacheTarget = "";
+   static string   g_aiCacheBearish = "";
+   static string   g_aiCacheSkipIf  = "";
+   static string   g_aiCacheClaudeV = "";
+   static string   g_aiCacheGPTV    = "";
+
+   datetime currentBarOpen = iTime(Symbol(), PERIOD_M5, 0);
+   if(g_aiCacheBar == currentBarOpen && g_aiCacheSig == signature && g_aiCacheDir != -999)
+   {
+      // Replay cached response — no network call
+      lastAIConfidence    = g_aiCacheConf;
+      currentTradeThesis       = g_aiCacheThesis;
+      currentTradeInvalidation = g_aiCacheInval;
+      currentTradeTarget       = g_aiCacheTarget;
+      currentTradeBearishCase  = g_aiCacheBearish;
+      lastAIBearishCase        = g_aiCacheBearish;
+      lastAISkipIf             = g_aiCacheSkipIf;
+      g_aiClaudeVote           = g_aiCacheClaudeV;
+      g_aiGPTVote              = g_aiCacheGPTV;
+      Print("AI DIRECTOR CACHE HIT: reusing ", signature, " result from this bar (dir=",
+            g_aiCacheDir, " conf=", g_aiCacheConf, "%) — no LLM call needed");
+      return g_aiCacheDir;
+   }
 
    // Gather rich context
    string htfConsensusStr = (g_htfConsensusDir == 1) ? "BULL" : (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL";
@@ -10056,6 +10101,47 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
    double dailyPct = (dailyStartEquity > 0) ? ((equity - dailyStartEquity) / dailyStartEquity * 100.0) : 0.0;
 
+   // -----------------------------------------------------------------------
+   // v6.3.7 IMPROVEMENT 1: Fix recent_wins / recent_losses context bug.
+   // The previous code passed the all-time career totals `wins` and `losses`
+   // as "Recent" performance to the AI — e.g. "Recent: 310W / 190L" after
+   // hundreds of trades, which is meaningless for assessing current conditions.
+   // Now we compute a true last-10-trade sliding window from patterns[].
+   // patterns[] is a FIFO array of closed-trade structs; the last N entries
+   // are the most recently closed trades.
+   // -----------------------------------------------------------------------
+   int recentWins10 = 0, recentLosses10 = 0;
+   {
+      int windowSize = 10;
+      int startIdx = MathMax(0, patternCount - windowSize);
+      for(int pw = startIdx; pw < patternCount; pw++)
+      {
+         if(patterns[pw].wasWinner) recentWins10++;
+         else                        recentLosses10++;
+      }
+   }
+
+   // -----------------------------------------------------------------------
+   // v6.3.7 IMPROVEMENT 3: Populate recent_candles with last 5 closed M5
+   // OHLC candles. The AI receives indicator values but zero price action.
+   // Five candles of OHLC context (in compact CSV format O/H/L/C) let the
+   // AI assess momentum, inside bars, pin bars and engulfing patterns that
+   // pure RSI/EMA cannot express. Format: "O/H/L/C O/H/L/C ..." oldest-first.
+   // -----------------------------------------------------------------------
+   string recentCandlesStr = "";
+   {
+      for(int ci = 5; ci >= 1; ci--)
+      {
+         double cO = iOpen(Symbol(),  PERIOD_M5, ci);
+         double cH = iHigh(Symbol(),  PERIOD_M5, ci);
+         double cL = iLow(Symbol(),   PERIOD_M5, ci);
+         double cC = iClose(Symbol(), PERIOD_M5, ci);
+         string cEntry = StringFormat("%.2f/%.2f/%.2f/%.2f", cO, cH, cL, cC);
+         if(StringLen(recentCandlesStr) > 0) recentCandlesStr += " ";
+         recentCandlesStr += cEntry;
+      }
+   }
+
    string url = InpServerURL + "/api/ai/analyze";
    string headers = "Content-Type: application/json\r\n";
    string body = StringFormat(
@@ -10063,12 +10149,14 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
       "\"h1_trend\":\"%s\",\"htf_consensus\":\"%s\",\"spread\":%.0f,\"setup\":\"%s\",\"regime\":\"%s\","
       "\"session\":\"%s\",\"session_quality\":%.2f,\"open_positions\":%d,\"basket_float_pl\":%.2f,"
       "\"recent_wins\":%d,\"recent_losses\":%d,\"account_equity\":%.2f,\"daily_pct\":%.2f,"
-      "\"grade\":\"%s\",\"setup_score\":%.2f,\"combined_score\":%.2f,\"signature\":\"%s\"}",
+      "\"grade\":\"%s\",\"setup_score\":%.2f,\"combined_score\":%.2f,\"signature\":\"%s\","
+      "\"recent_candles\":\"%s\"}",
       price, emaF, emaS, rsi, stoch, mom, atr,
       h1Dir, htfConsensusStr, spread, setup, regime,
       sessionName, sessQ, openPositions, basketFloat,
-      wins, losses, equity, dailyPct,
-      grade, setupScore, combinedScore, signature);
+      recentWins10, recentLosses10, equity, dailyPct,
+      grade, setupScore, combinedScore, signature,
+      recentCandlesStr);
    char postData[], result[]; string rh;
    StringToCharArray(body, postData, 0, StringLen(body));
    int res = WebRequest("POST", url, headers, 15000, postData, result, rh);
@@ -10177,6 +10265,24 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
       if(StringLen(currentTradeInvalidation) > 0) Print("  Invalid if: ",      currentTradeInvalidation);
       if(StringLen(currentTradeTarget) > 0)       Print("  Target: ",          currentTradeTarget);
    }
+
+   // -----------------------------------------------------------------------
+   // v6.3.7 IMPROVEMENT 2: Store result in per-bar cache for this signature.
+   // On the next tick (still same bar, same signal), GetAIAnalysis returns
+   // immediately from cache above without any network call.
+   // -----------------------------------------------------------------------
+   g_aiCacheSig      = signature;
+   g_aiCacheBar      = currentBarOpen;
+   g_aiCacheDir      = dir;
+   g_aiCacheConf     = lastAIConfidence;
+   g_aiCacheThesis   = currentTradeThesis;
+   g_aiCacheInval    = currentTradeInvalidation;
+   g_aiCacheTarget   = currentTradeTarget;
+   g_aiCacheBearish  = currentTradeBearishCase;
+   g_aiCacheSkipIf   = lastAISkipIf;
+   g_aiCacheClaudeV  = g_aiClaudeVote;
+   g_aiCacheGPTV     = g_aiGPTVote;
+
    return dir;
 }
 
