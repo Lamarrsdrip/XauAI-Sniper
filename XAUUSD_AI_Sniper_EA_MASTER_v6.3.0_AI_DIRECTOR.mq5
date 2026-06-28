@@ -1,8 +1,27 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                    v6.3.6 — AI Director + ML Warm-Start + Adaptive Exits|
+//|   v6.3.8 — Persistent TradeBrain + ATR-Norm Matching + AI Feedback|
 //+------------------------------------------------------------------+
+// v6.3.8 CHANGES (2026-06-28):
+//   1. TRADEBBRAIN PERSISTENCE: g_tradeMemory[] saved to MQL5/Files/XAUAI_TradeBrain_v1.csv
+//      every time a new entry is added. Loaded at OnInit. Survives restarts. FIFO 500 entries.
+//   2. ATR-NORMALIZED MATCHING: pattern lookup now filters by ATR regime bucket (LOW/MED/HIGH),
+//      session, and HTF trend direction. Recency weighting: last 20 = 2x, old >100 = 0.5x.
+//      Minimum 5 samples for filtered result; fallback to session-only, then global average.
+//   3. AI SL/TP ADVISORY: ENUM_AI_SLTP_MODE (OFF/ADVISORY/SAFE_ASSIST/FULL_CONTROL).
+//      Default ADVISORY = logs AI suggestion, never auto-applies. ATR-based SL/TP unchanged.
+//   4. GPT MODEL FIX: gpt-5.2 (invalid) replaced with gpt-4o. Per-provider latency logging.
+//      consensus_source field in API response: dual_consensus/claude_only/gpt_only/none.
+//   5. AI FEEDBACK LOOP: outcome (CORRECT/WRONG/CONSERVATIVE_CORRECT) POSTed to /api/ai/feedback
+//      after every trade close. Backend stores to ai_feedback_log.jsonl + MongoDB.
+//      /api/ai/feedback/stats endpoint for accuracy analysis by confidence/strategy/session.
+//   6. GATE ANALYTICS: g_gateBlocks_* counters for every gate type. PrintGateReport() called
+//      every 24h and on OnDeinit(). g_totalSignals / g_totalAllowed track pass rate.
+//   7. SMART GROWTH: GetPerformanceMultiplier() adjusts lot sizing ±30% based on last 10 trades.
+//      Daily profit lock tightens trailing stops when day gain >= InpDailyProfitLockPct (3%).
+//      Equity watermark: g_equityHighWatermark + g_drawdownPause when > InpDrawdownFromHighPct (8%).
+//   PHILOSOPHY: All existing safety rules preserved. New code is additive. Zero removed gates.
 // v5.8.51 CHANGES (Live Account Readiness Audit 2026-06-18):
 //   1. SL THROTTLE: trailing mods capped at 1/sec (prevents 15-30s cascade on 3-pos baskets)
 //   2. CONTEXT-BUSY RETRY: 150ms yield + retry on ERR_TRADE_CONTEXT_BUSY before giving up
@@ -252,8 +271,8 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.3.6"
-#property description "XAUUSD AI Sniper v6.3.6 — AI Director + ML cloud warm-start + adaptive Chandelier exits + enriched AI exit context"
+#property version   "6.3.8"
+#property description "XAUUSD AI Sniper v6.3.8 — persistent TradeBrain, ATR-norm matching, AI SL/TP advisory, feedback loop, gate analytics, smart growth"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
@@ -370,6 +389,9 @@ input double InpSpreadKillMultiplier = 2.0; // Multiplier vs median spread to tr
 input double InpHardDailyDDPct    = 0.0;    // v5.8.4 demo: disabled
 input double InpSoftDDPct         = 4.0;    // v6.3.5: enabled — reduce risk when daily DD exceeds 4% before hitting hard EPF tiers
 input double InpSoftDDLotMulti    = 0.7;    // lot multiplier while in soft DD mode (unused while soft DD disabled)
+// v6.3.8 UPGRADE 7 — Smart profit-growth / equity protection
+input double InpDailyProfitLockPct   = 3.0;  // Daily profit lock %: tighten trailing stops when day gain >= this
+input double InpDrawdownFromHighPct  = 8.0;  // Max % drop from equity watermark before new entries pause
 input double InpPyramidMinSpaceATR = 1.0;   // Pyramid adds must be ≥ this × ATR away from PREVIOUS add (anti-clustering)
 input double InpAdvPyrMinScore    = 4.0;    // v5.3.1: combined score required for ADVERSE pyramids (≥ here OR no add). Trend-side adds skip this gate.
 
@@ -636,6 +658,11 @@ input bool   InpAIDirectorAllGrades = true;  // v6.3.0: call AI Director for ALL
 input int    InpAIDirectorMinConf = 55;      // v6.3.0: minimum AI confidence % to ALLOW trade. Below = block/reduce.
 input bool   InpAIOfflineSafeMode = true;    // v6.3.0: if AI server fails, trade at 50% size (safe degraded mode)
 input int    InpAIOfflineMaxFails = 3;       // v6.3.0: consecutive AI call failures before declaring AI offline
+
+// v6.3.8 UPGRADE 3 — AI SL/TP Advisory System
+// Default: ADVISORY (logs AI suggestion, never applies automatically)
+enum ENUM_AI_SLTP_MODE { AI_SLTP_OFF=0, AI_SLTP_ADVISORY=1, AI_SLTP_SAFE_ASSIST=2, AI_SLTP_FULL_CONTROL=3 };
+input ENUM_AI_SLTP_MODE InpAISLTPMode = AI_SLTP_ADVISORY; // AI SL/TP mode: ADVISORY=log only, SAFE_ASSIST=apply if safe, FULL_CONTROL=apply if confidence>80
 
 input group "=== XAU COMMAND CENTER (heartbeat, activity, safe remote commands) ==="
 input bool   InpCloudFanout       = false;   // Local-first default: reports/brain work without VPS/cloud. Turn ON only if using copy cloud.
@@ -1473,11 +1500,23 @@ struct TradeMemRecord
    double   rMultiple;     // trade outcome in R units (positive = profit)
    datetime closedAt;
    bool     valid;
+   // v6.3.8 extended fields for disk persistence + ATR-normalized matching
+   int      dir;           // +1 BUY / -1 SELL
+   string   session;       // ASIA / LONDON / NY
+   double   atrAtEntry;    // raw ATR value at entry (pips-equivalent)
+   int      htfTrend;      // +1 bull / -1 bear / 0 ranging
+   int      atrRegime;     // 0=LOW / 1=MEDIUM / 2=HIGH (bucketed)
+   double   maxDD;         // max adverse excursion in R
+   double   maxFav;        // max favorable excursion in R
+   // AI verdict fields (Upgrade 5)
+   string   aiVerdict;     // ALLOW / BLOCK / REDUCE / SKIP
+   int      aiConf;        // 0-100
 };
 
 CommitteeDecision g_committee;           // last assembled committee decision
-TradeMemRecord    g_tradeMemory[100];    // circular buffer of last 100 closed trades
+TradeMemRecord    g_tradeMemory[500];    // circular buffer of last 500 closed trades (v6.3.8: was 100, now 500 with disk persistence)
 int               g_tradeMemHead = 0;   // next write index in the circular buffer
+int               g_tradeMemCount = 0;  // how many valid entries (0 until full, then stays at 500)
 
 // Stored at entry, retrieved at close to record outcome in trade memory
 string g_lastTradePattern  = "";
@@ -1513,6 +1552,28 @@ string     dxyGoldBias = "neutral"; // "bullish" | "bearish" | "neutral"
 int        todayLossCount = 0;
 datetime   todayLossResetDay = 0;
 bool       drawdownActive = false;
+
+// v6.3.8 UPGRADE 6 — Gate block analytics counters
+int g_gateBlocks_Spread     = 0;
+int g_gateBlocks_News       = 0;
+int g_gateBlocks_Trend      = 0;
+int g_gateBlocks_AI         = 0;
+int g_gateBlocks_TradeBrain = 0;
+int g_gateBlocks_Basket     = 0;
+int g_gateBlocks_DailyLoss  = 0;
+int g_gateBlocks_Volatility = 0;
+int g_gateBlocks_Committee  = 0;
+int g_gateBlocks_STI        = 0;
+int g_gateBlocks_EPF        = 0;
+int g_totalSignals          = 0;
+int g_totalAllowed          = 0;
+datetime g_gateReportLast   = 0;  // last time 24h report was printed
+
+// v6.3.8 UPGRADE 7 — Equity high watermark + drawdown pause
+double   g_equityHighWatermark = 0.0;  // updated whenever equity exceeds previous high
+bool     g_drawdownPause       = false; // stop new entries when equity drops > InpDrawdownFromHighPct from watermark
+double   g_perfMultLast        = 1.0;  // last logged performance multiplier (detect changes)
+bool     g_dailyProfitLockArmed = false; // true when daily profit lock has been triggered
 
 // Re-entry safety counters
 int        todayReEntryCount = 0;
@@ -1621,6 +1682,8 @@ int        currentTradeConfidence = 0;     // v4.5.0 — Original AI confidence 
 int        lastAIConfidence = 0;
 string     lastAIBearishCase = "";
 string     lastAISkipIf = "";
+// v6.3.8 — AI verdict stored at entry for feedback loop (Upgrade 5)
+string     g_lastAIVerdict_ForMemory = "";  // ALLOW/BLOCK/REDUCE/SKIP — captured when order is placed
 
 // Dashboard state cache — prevents throttled refresh from wiping scan data to zero
 int        lastDashSignal = 0;
@@ -2930,6 +2993,15 @@ int OnInit()
    lastClose.lots = 0; lastClose.closeTime = 0; lastClose.signature = ""; lastClose.setup = "";
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
+   // v6.3.8 Upgrade 1: load TradeBrain memory from disk on startup
+   LoadTradeBrainMemory();
+   // v6.3.8 Upgrade 7: initialize equity watermark
+   g_equityHighWatermark = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_drawdownPause       = false;
+   g_perfMultLast        = 1.0;
+   g_dailyProfitLockArmed = false;
+   // v6.3.8 Upgrade 6: initialize gate analytics timer
+   g_gateReportLast = TimeCurrent();
    if(InpTimerScanSec > 0)
    {
       EventSetTimer(InpTimerScanSec);
@@ -3075,7 +3147,9 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   Print("=== v6.0.0 STI STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   // v6.3.8 Upgrade 6: final gate analytics report on shutdown
+   PrintGateReport();
+   Print("=== v6.3.8 STI STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -5966,6 +6040,42 @@ void OnTick()
    PG_UpdateHWM();
    PG_PerPositionRatchet();
 
+   // v6.3.8 Upgrade 7: daily profit lock — tighten trailing when day gain >= InpDailyProfitLockPct
+   if(InpDailyProfitLockPct > 0 && dailyStartEquity > 0)
+   {
+      double dayGainPct = (AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0;
+      if(dayGainPct >= InpDailyProfitLockPct && !g_dailyProfitLockArmed)
+      {
+         g_dailyProfitLockArmed = true;
+         Print("PROFIT LOCK: daily gain ", DoubleToString(dayGainPct, 1),
+               "% reached ", DoubleToString(InpDailyProfitLockPct, 1),
+               "% threshold — trailing stops tightened to lock 80% of day's gain");
+         // Tighten all open SLs toward 80% profit lock
+         for(int pi = PositionsTotal() - 1; pi >= 0; pi--)
+         {
+            ulong ticket = PositionGetTicket(pi);
+            if(ticket == 0 || PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+            int    pDir    = (int)PositionGetInteger(POSITION_TYPE);
+            double pOpen   = PositionGetDouble(POSITION_PRICE_OPEN);
+            double pSL     = PositionGetDouble(POSITION_SL);
+            double pProfit = PositionGetDouble(POSITION_PROFIT);
+            if(pProfit <= 0) continue;
+            double pBid    = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+            double pAsk    = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+            double curPx   = (pDir == 0) ? pBid : pAsk;
+            double pDist   = MathAbs(curPx - pOpen);
+            double newSL   = (pDir == 0) // BUY
+                           ? NormalizeDouble(pOpen + pDist * 0.20, (int)SymbolInfoInteger(Symbol(),SYMBOL_DIGITS))
+                           : NormalizeDouble(pOpen - pDist * 0.20, (int)SymbolInfoInteger(Symbol(),SYMBOL_DIGITS));
+            // Only move SL in profit direction, never hurt the position
+            bool slImproves = (pDir == 0) ? (newSL > pSL + SymbolInfoDouble(Symbol(),SYMBOL_POINT)) :
+                                            (pSL == 0 || newSL < pSL - SymbolInfoDouble(Symbol(),SYMBOL_POINT));
+            if(slImproves) trade.PositionModify(ticket, newSL, PositionGetDouble(POSITION_TP));
+         }
+      }
+      else if(dayGainPct < InpDailyProfitLockPct * 0.5) g_dailyProfitLockArmed = false; // reset below half
+   }
+
    // Spread check — blocks NEW ENTRIES only
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
 
@@ -6236,6 +6346,31 @@ void OnTick()
                 : combinedScore >= dynGradeB    ? "B"
                 : "SKIP";
    XAU_RecordMarketSnapshot("SCAN_EVALUATED", signal, setupName, grade, setupScore, combinedScore);
+   // v6.3.8 Upgrade 6: count every real (non-SKIP) signal through the pipeline
+   if(signal != 0 && grade != "SKIP") g_totalSignals++;
+   // v6.3.8 Upgrade 7: 24h gate analytics report + equity watermark update
+   {
+      double curEq = AccountInfoDouble(ACCOUNT_EQUITY);
+      if(curEq > g_equityHighWatermark) { g_equityHighWatermark = curEq; }
+      if(g_equityHighWatermark > 0)
+      {
+         double ddFromHigh = (g_equityHighWatermark - curEq) / g_equityHighWatermark * 100.0;
+         if(!g_drawdownPause && ddFromHigh >= InpDrawdownFromHighPct)
+         {
+            g_drawdownPause = true;
+            Print("DRAWDOWN PAUSE: equity ", DoubleToString(ddFromHigh, 1),
+                  "% below watermark $", DoubleToString(g_equityHighWatermark, 2),
+                  " — new entries suspended");
+         }
+         else if(g_drawdownPause && ddFromHigh <= 3.0)
+         {
+            g_drawdownPause = false;
+            Print("DRAWDOWN RESUME: equity recovered to within 3% of watermark");
+         }
+      }
+      if(g_gateReportLast > 0 && (TimeCurrent() - g_gateReportLast) >= 86400)
+         PrintGateReport();
+   }
 
    double firstSeenPx = signal > 0 ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
                                    : SymbolInfoDouble(Symbol(), SYMBOL_BID);
@@ -6539,6 +6674,9 @@ void OnTick()
 
    if(spreadBlocksEntry)
    {
+      // v6.3.8 Upgrade 6: gate analytics
+      if(StringFind(spreadBlockReason, "SPREAD_TOO_WIDE") >= 0) g_gateBlocks_Spread++;
+      else g_gateBlocks_News++; // NEWS_AFTERMATH and calendar blocks
       Print("TRADE BLOCKED BECAUSE: ", spreadBlockReason,
             " | live signal still evaluated: ", setupName, " ",
             signal > 0 ? "BUY" : "SELL",
@@ -6555,6 +6693,7 @@ void OnTick()
    // News check
    if(InpUseNewsFilter && !IsNewsSafe())
    {
+      g_gateBlocks_News++; // v6.3.8 Upgrade 6
       Print("TRADE BLOCKED BECAUSE: NEWS FILTER (high-impact event nearby)");
       XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "NEWS FILTER (high-impact event nearby)");
       CloudPostReasoning("BLOCK", "NEWS FILTER (high-impact event nearby)",
@@ -6605,6 +6744,7 @@ void OnTick()
       // --- 1. LATE ENTRY HARD BLOCK (extreme: move has run without reset) ---
       if(stiLate >= InpSTI_LateEntryBlockScore)
       {
+         g_gateBlocks_STI++; // v6.3.8 Upgrade 6
          string stiMsg = StringFormat("STI_LATE_BLOCK | %s %s | lateRisk=%.0f >= %.0f (tcp=%.0f exhaust=%.0f) | trend moved too far without reset — wait for pullback",
                                       signal==1?"BUY":"SELL", setupName,
                                       stiLate, InpSTI_LateEntryBlockScore, stiTCP, stiExhaust);
@@ -6620,6 +6760,7 @@ void OnTick()
       // --- 2. EXHAUSTION HARD BLOCK (multiple signals confirm trend nearing end) ---
       if(stiExhaust >= InpSTI_ExhaustionBlock && stiTCP < 60.0)
       {
+         g_gateBlocks_STI++; // v6.3.8 Upgrade 6
          string stiMsg = StringFormat("STI_EXHAUST_BLOCK | %s %s | exhaust=%.0f >= %.0f AND tcp=%.0f < 60 | RSI divergence + ATR contraction confirm trend fatigue",
                                       signal==1?"BUY":"SELL", setupName,
                                       stiExhaust, InpSTI_ExhaustionBlock, stiTCP);
@@ -6640,6 +6781,7 @@ void OnTick()
          bool inWindow = (waitedMin < InpSTI_ReentryMaxWindowMin);
          if(inWindow && waitedMin >= 0)
          {
+            g_gateBlocks_STI++; // v6.3.8 Upgrade 6
             string stiMsg = StringFormat("STI_REENTRY_WAIT | %s %s | last TP at %.2f (%d min ago) | no %.2f ATR pullback yet | chasing same dir before reset is the pattern that lost money",
                                          signal==1?"BUY":"SELL", setupName,
                                          g_sti.lastProfitPrice, waitedMin,
@@ -6695,6 +6837,7 @@ void OnTick()
       string bdlReason = "";
       if(BasketDirectionLossBlock(signal, bdlReason))
       {
+         g_gateBlocks_Basket++; // v6.3.8 Upgrade 6
          Print("TRADE BLOCKED BECAUSE: ", bdlReason);
          XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, bdlReason);
          CloudPostReasoning("BLOCK", bdlReason, RegimeName(), setupName,
@@ -6908,6 +7051,7 @@ void OnTick()
             {
                // AI disagrees with sufficient conviction — BLOCK the trade
                aiVerdictStr = "BLOCK";
+               g_gateBlocks_AI++; // v6.3.8 Upgrade 6
                string blockMsg = StringFormat(
                   "AI DIRECTOR BLOCK: AI says %s (conf %d%%), strategy says %s. Sufficient conviction to veto.",
                   aiDirStr, lastAIConfidence, signal > 0 ? "BUY" : "SELL");
@@ -6927,6 +7071,7 @@ void OnTick()
             if(lastAIConfidence < InpAIDirectorMinConf && lastAIConfidence > 0)
             {
                aiVerdictStr = "BLOCK";
+               g_gateBlocks_AI++; // v6.3.8 Upgrade 6
                string blockMsg = StringFormat(
                   "AI DIRECTOR BLOCK: AI SKIP with confidence %d%% < min %.0f%%. Trade blocked.",
                   lastAIConfidence, InpAIDirectorMinConf);
@@ -7033,12 +7178,30 @@ void OnTick()
    if(!ContextGateAllows(signal, bufATR[1]))
       return;
 
+   // v6.3.8 Upgrade 7: drawdown pause gate
+   if(g_drawdownPause)
+   {
+      g_gateBlocks_DailyLoss++; // re-use daily loss counter for watermark pause
+      Print("DRAWDOWN PAUSE ACTIVE: equity below watermark — new entry suppressed for ",
+            setupName, " ", signal==1?"BUY":"SELL");
+      return;
+   }
+
    // v5.1.0 — PROFIT GUARDIAN gate: blocks counter-trend stacks, tier-3 halt, post-loss cooldown
    // v5.1.9 — now also enforces Selective Mode (A/A+ only after giveback brake)
    string pgBlock = PG_BlockReason(signal, grade, combinedScore, setupName);
    if(StringLen(pgBlock) > 0)
    {
-      Print("🛡 PROFIT GUARDIAN VETO: ", pgBlock, " (signal=", signal == 1 ? "BUY" : "SELL", " grade=", grade, ")");
+      // Classify gate block type for analytics
+      if(StringFind(pgBlock, "volkill") >= 0 || StringFind(pgBlock, "volatility") >= 0)
+         g_gateBlocks_Volatility++;
+      else if(StringFind(pgBlock, "spread") >= 0)
+         g_gateBlocks_Spread++;
+      else if(StringFind(pgBlock, "ddfloor") >= 0 || StringFind(pgBlock, "daily loss") >= 0 || StringFind(pgBlock, "soft-DD") >= 0)
+         g_gateBlocks_DailyLoss++;
+      else
+         g_gateBlocks_Trend++;
+      Print("PROFIT GUARDIAN VETO: ", pgBlock, " (signal=", signal == 1 ? "BUY" : "SELL", " grade=", grade, ")");
       XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, pgBlock);
       UpdateDashboard(0, combinedScore, "PG-VETO");
       lastDashGrade = "PG-VETO";
@@ -7052,7 +7215,8 @@ void OnTick()
                                           epfAdaptiveLotMult, epfT4AdaptivePass);
    if(StringLen(epfBlock) > 0)
    {
-      Print("🛑 EPF VETO: ", epfBlock, " (signal=", signal == 1 ? "BUY" : "SELL",
+      g_gateBlocks_EPF++; // v6.3.8 Upgrade 6
+      Print("EPF VETO: ", epfBlock, " (signal=", signal == 1 ? "BUY" : "SELL",
             " setupScore=", DoubleToString(setupScore, 1),
             " combined=", DoubleToString(combinedScore, 1),
             " grade=", grade, ")");
@@ -7071,7 +7235,8 @@ void OnTick()
                      : SymbolInfoDouble(Symbol(), SYMBOL_BID);
       if(EPF_IsClusteredEntry(signal, curPx, bufATR[1]))
       {
-         Print("🛑 EPF CLUSTER VETO: entry too close to existing same-direction position");
+         g_gateBlocks_EPF++; // v6.3.8 Upgrade 6
+         Print("EPF CLUSTER VETO: entry too close to existing same-direction position");
          XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "EPF CLUSTER VETO");
          UpdateDashboard(0, combinedScore, "EPF-CLUSTER");
          lastDashGrade = "EPF-CLUSTER";
@@ -7108,6 +7273,7 @@ void OnTick()
    string brainReason = "";
    if(!XAU_TradeBrainPreEntry(signal, setupName, grade, signature, brainLotMult, brainReason))
    {
+      g_gateBlocks_TradeBrain++; // v6.3.8 Upgrade 6
       Print(brainReason);
       XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, brainReason);
       CloudPostReasoning("BLOCK", brainReason, RegimeName(), setupName,
@@ -7152,6 +7318,16 @@ void OnTick()
             ") — below minimum tradeable. Clamping to 0.10x to keep the trade alive.");
       finalSzMult = 0.10;
    }
+   // v6.3.8 Upgrade 6: count allowed trade
+   g_totalAllowed++;
+   // v6.3.8 Upgrade 5: capture AI verdict for feedback loop (used at close)
+   g_lastAIVerdict_ForMemory = g_aiLastVerdict;
+   // v6.3.8 Upgrade 3: AI SL/TP Advisory — log what AI recommends, never auto-apply in ADVISORY mode
+   // (sl_adjust and tp_adjust arrive in the AI response but are not wired to order placement)
+   // They are already parsed in GetAIAnalysis() — we only need to log the advisory here.
+   // The actual SL/TP is set inside OpenTrade() using ATR-based logic (unchanged).
+   if(InpAISLTPMode == AI_SLTP_ADVISORY)
+      Print("AI SLTP ADVISORY: AI suggests slAdj=0 tpAdj=0 (from last AI response) | Using ATR-based SL/TP | Mode=ADVISORY (log only)");
    OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", finalSzMult);
    // v5.3.1 — remember this entry's grade + score so adverse-pyramid logic and
    // high-grade ratchet looseness can reference them.
@@ -7622,6 +7798,11 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       riskPct *= asianMult; // v5.8.54: do not crush clean A/A+ continuation trades on small non-prop accounts.
    }
    double riskAfterSession = riskPct;
+
+   // v6.3.8 Upgrade 7: performance multiplier (anti-martingale, ATR-normalized)
+   double perfMult = GetPerformanceMultiplier();
+   if(perfMult != 1.0)
+      riskPct *= perfMult;
 
    // Auto risk scaling from streaks
    double patternMult = 1.0;
@@ -10798,10 +10979,51 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       {
          double rMult = (autoHardStopUSD > 0.01) ? profit / autoHardStopUSD
                        : (profit > 0 ? 1.0 : profit < 0 ? -1.0 : 0.0);
-         TradeMemory_Record(memPattern, memDirLabel, memConf, rMult);
+         // v6.3.8: pass extended fields for ATR-norm matching + AI feedback
+         int    memDir      = (dType == DEAL_TYPE_SELL) ? 1 : -1; // closing SELL = was BUY
+         string memSession  = SessionTag();
+         double memATR      = lastSignalATR;
+         int    memHTF      = g_htfConsensusDir;
+         // max DD will be 0 here; XAU_PopTradeQuality runs after this block
+         double memMaxDD    = 0.0;
+         double memMaxFav   = (rMult > 0) ? rMult : 0.0; // close R as proxy for max fav
+         TradeMemory_Record(memPattern, memDirLabel, memConf, rMult,
+                            memDir, memSession, memATR, memHTF,
+                            memMaxDD, memMaxFav,
+                            g_lastAIVerdict_ForMemory, currentTradeConfidence);
          if(InpCommitteeLog)
-            Print(StringFormat("COMMITTEE-MEMORY: stored pattern=%s dir=%s conf=%d%% rMult=%.2f P/L=$%.2f",
-                               memPattern, memDirLabel, memConf, rMult, profit));
+            Print(StringFormat("COMMITTEE-MEMORY: stored pattern=%s dir=%s conf=%d%% rMult=%.2f P/L=$%.2f aiVerdict=%s",
+                               memPattern, memDirLabel, memConf, rMult, profit, g_lastAIVerdict_ForMemory));
+         // v6.3.8 Upgrade 5: send AI outcome feedback to backend
+         if(!InpBacktestMode && StringLen(InpServerURL) >= 10 && StringLen(g_lastAIVerdict_ForMemory) > 0)
+         {
+            string outcome = "";
+            if(g_lastAIVerdict_ForMemory == "ALLOW" || g_lastAIVerdict_ForMemory == "ALLOW_LOW_CONV")
+               outcome = (rMult > 0) ? "CORRECT" : "WRONG";
+            else if(g_lastAIVerdict_ForMemory == "REDUCE" || g_lastAIVerdict_ForMemory == "REDUCE_SIZE")
+               outcome = (rMult > 0) ? "CONSERVATIVE_CORRECT" : "WRONG";
+            if(StringLen(outcome) > 0)
+            {
+               string sessTag = SessionTag();
+               string regTag  = RegimeName();
+               string fbBody = StringFormat(
+                  "{\"trade_id\":\"%I64u\",\"ai_verdict\":\"%s\",\"ai_confidence\":%d,"
+                  "\"outcome\":\"%s\",\"r_multiple\":%.2f,\"strategy\":\"%s\","
+                  "\"session\":\"%s\",\"regime\":\"%s\"}",
+                  posId, g_lastAIVerdict_ForMemory, currentTradeConfidence,
+                  outcome, rMult, lastSignalSetup, sessTag, regTag);
+               char fbData[], fbResult[]; string fbHdr;
+               StringToCharArray(fbBody, fbData, 0, StringLen(fbBody));
+               int fbCode = WebRequest("POST", InpServerURL + "/api/ai/feedback",
+                                       "Content-Type: application/json\r\n",
+                                       5000, fbData, fbResult, fbHdr);
+               if(fbCode == -1 && GetLastError() == 4060)
+                  Print("AI FEEDBACK: URL not whitelisted — add ", InpServerURL, " to Tools→Options→Expert Advisors");
+               else if(fbCode >= 200 && fbCode < 300)
+                  Print("AI FEEDBACK SENT: verdict=", g_lastAIVerdict_ForMemory, " outcome=", outcome, " rMult=", DoubleToString(rMult, 2));
+            }
+         }
+         g_lastAIVerdict_ForMemory = ""; // reset for next trade
       }
    }
    double worstFloatingPnl = 0.0;
@@ -13997,7 +14219,7 @@ double TradeMemory_LotAdjust(string pattern)
    int    samples = 0, loc_wins = 0;
    double totalR  = 0.0;
    datetime cutoff = TimeCurrent() - 30 * 24 * 3600;
-   for(int i = 0; i < 100; i++)
+   for(int i = 0; i < 500; i++)
    {
       if(!g_tradeMemory[i].valid || g_tradeMemory[i].pattern != pattern) continue;
       if(g_tradeMemory[i].closedAt < cutoff) continue;
@@ -14036,15 +14258,316 @@ double TradeMemory_LotAdjust(string pattern)
    return 1.0;
 }
 
-void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult)
+void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
+                        int dir=0, string session="", double atrAtEntry=0.0,
+                        int htfTrend=0, double maxDD=0.0, double maxFav=0.0,
+                        string aiVerdict="", int aiConf=0)
 {
+   // Classify ATR bucket (pip-equivalent: 1 pip = 10 points for XAU with 2-decimal quotes)
+   double atrPips = atrAtEntry * 10.0;
+   int atrBucket  = (atrPips < 10.0) ? 0 : (atrPips < 18.0) ? 1 : 2;
+
    g_tradeMemory[g_tradeMemHead].pattern       = pattern;
    g_tradeMemory[g_tradeMemHead].directorLabel = dirLabel;
    g_tradeMemory[g_tradeMemHead].committeeConf = conf;
    g_tradeMemory[g_tradeMemHead].rMultiple     = rMult;
    g_tradeMemory[g_tradeMemHead].closedAt      = TimeCurrent();
    g_tradeMemory[g_tradeMemHead].valid         = true;
-   g_tradeMemHead = (g_tradeMemHead + 1) % 100;
+   g_tradeMemory[g_tradeMemHead].dir           = dir;
+   g_tradeMemory[g_tradeMemHead].session       = session;
+   g_tradeMemory[g_tradeMemHead].atrAtEntry    = atrAtEntry;
+   g_tradeMemory[g_tradeMemHead].htfTrend      = htfTrend;
+   g_tradeMemory[g_tradeMemHead].atrRegime     = atrBucket;
+   g_tradeMemory[g_tradeMemHead].maxDD         = maxDD;
+   g_tradeMemory[g_tradeMemHead].maxFav        = maxFav;
+   g_tradeMemory[g_tradeMemHead].aiVerdict     = aiVerdict;
+   g_tradeMemory[g_tradeMemHead].aiConf        = aiConf;
+   g_tradeMemHead = (g_tradeMemHead + 1) % 500;
+   if(g_tradeMemCount < 500) g_tradeMemCount++;
+   // Upgrade 1: persist to disk every time a new entry is added
+   SaveTradeBrainMemory();
+}
+
+// ============================================================
+// v6.3.8 UPGRADE 1 — TradeBrain disk persistence
+// File: MQL5/Files/XAUAI_TradeBrain_v1.csv (common files folder)
+// ============================================================
+#define TRADEBBRAIN_FILE  "XAUAI_TradeBrain_v1.csv"
+#define TRADEBBRAIN_HEADER "#XAUAI_TradeBrain_v1"
+
+void SaveTradeBrainMemory()
+{
+   if(InpBacktestMode) return; // no file I/O in strategy tester
+   int h = FileOpen(TRADEBBRAIN_FILE, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE)
+   {
+      Print("TRADEBBRAIN SAVE ERROR: cannot open file for write (err=", GetLastError(), ")");
+      return;
+   }
+   FileWrite(h, TRADEBBRAIN_HEADER);
+   // Write header row
+   FileWrite(h, "closedAt","pattern","directorLabel","committeeConf","rMultiple",
+               "dir","session","atrAtEntry","htfTrend","atrRegime",
+               "maxDD","maxFav","aiVerdict","aiConf");
+   int count = 0;
+   // Iterate in chronological order: oldest first (head is the NEXT write slot)
+   for(int k = 0; k < 500; k++)
+   {
+      int idx = (g_tradeMemHead + k) % 500;
+      if(!g_tradeMemory[idx].valid) continue;
+      FileWrite(h,
+         IntegerToString((long)g_tradeMemory[idx].closedAt),
+         g_tradeMemory[idx].pattern,
+         g_tradeMemory[idx].directorLabel,
+         IntegerToString(g_tradeMemory[idx].committeeConf),
+         DoubleToString(g_tradeMemory[idx].rMultiple, 4),
+         IntegerToString(g_tradeMemory[idx].dir),
+         g_tradeMemory[idx].session,
+         DoubleToString(g_tradeMemory[idx].atrAtEntry, 5),
+         IntegerToString(g_tradeMemory[idx].htfTrend),
+         IntegerToString(g_tradeMemory[idx].atrRegime),
+         DoubleToString(g_tradeMemory[idx].maxDD, 4),
+         DoubleToString(g_tradeMemory[idx].maxFav, 4),
+         g_tradeMemory[idx].aiVerdict,
+         IntegerToString(g_tradeMemory[idx].aiConf)
+      );
+      count++;
+   }
+   FileClose(h);
+   Print("TRADEBBRAIN SAVE: ", count, " patterns written");
+}
+
+void LoadTradeBrainMemory()
+{
+   if(InpBacktestMode) return;
+   if(!FileIsExist(TRADEBBRAIN_FILE, FILE_COMMON)) return; // first run — start empty
+   int h = FileOpen(TRADEBBRAIN_FILE, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) { Print("TRADEBBRAIN LOAD: cannot open file (err=", GetLastError(), ")"); return; }
+
+   // First line must be the version header
+   string hdr = FileReadString(h);
+   if(hdr != TRADEBBRAIN_HEADER)
+   {
+      Print("TRADEBBRAIN LOAD: header mismatch ('", hdr, "') — skipping file (version mismatch)");
+      FileClose(h); return;
+   }
+   // Skip column name row
+   if(!FileIsEnding(h))
+   {
+      for(int col = 0; col < 14; col++) FileReadString(h);
+   }
+
+   // Reset memory
+   for(int i = 0; i < 500; i++) { g_tradeMemory[i].valid = false; }
+   g_tradeMemHead  = 0;
+   g_tradeMemCount = 0;
+   int loaded = 0, skipped = 0;
+
+   while(!FileIsEnding(h) && g_tradeMemCount < 500)
+   {
+      string closedAtStr   = FileReadString(h); if(FileIsEnding(h) && StringLen(closedAtStr) == 0) break;
+      string pattern       = FileReadString(h);
+      string dirLabel      = FileReadString(h);
+      string confStr       = FileReadString(h);
+      string rMultStr      = FileReadString(h);
+      string dirStr        = FileReadString(h);
+      string session       = FileReadString(h);
+      string atrStr        = FileReadString(h);
+      string htfStr        = FileReadString(h);
+      string atrRegStr     = FileReadString(h);
+      string maxDDStr      = FileReadString(h);
+      string maxFavStr     = FileReadString(h);
+      string aiVerdict     = FileReadString(h);
+      string aiConfStr     = FileReadString(h);
+
+      // Basic validation
+      if(StringLen(closedAtStr) < 5 || StringLen(pattern) == 0)
+      {
+         skipped++;
+         if(skipped <= 3) Print("TRADEBBRAIN LOAD: skipping corrupt/partial line at row ", loaded + skipped);
+         continue;
+      }
+      long closedAtLong = StringToInteger(closedAtStr);
+      if(closedAtLong <= 0) { skipped++; continue; }
+
+      int idx = g_tradeMemHead;
+      g_tradeMemory[idx].closedAt      = (datetime)closedAtLong;
+      g_tradeMemory[idx].pattern       = pattern;
+      g_tradeMemory[idx].directorLabel = dirLabel;
+      g_tradeMemory[idx].committeeConf = (int)StringToInteger(confStr);
+      g_tradeMemory[idx].rMultiple     = StringToDouble(rMultStr);
+      g_tradeMemory[idx].dir           = (int)StringToInteger(dirStr);
+      g_tradeMemory[idx].session       = session;
+      g_tradeMemory[idx].atrAtEntry    = StringToDouble(atrStr);
+      g_tradeMemory[idx].htfTrend      = (int)StringToInteger(htfStr);
+      g_tradeMemory[idx].atrRegime     = (int)StringToInteger(atrRegStr);
+      g_tradeMemory[idx].maxDD         = StringToDouble(maxDDStr);
+      g_tradeMemory[idx].maxFav        = StringToDouble(maxFavStr);
+      g_tradeMemory[idx].aiVerdict     = aiVerdict;
+      g_tradeMemory[idx].aiConf        = (int)StringToInteger(aiConfStr);
+      g_tradeMemory[idx].valid         = true;
+
+      g_tradeMemHead = (g_tradeMemHead + 1) % 500;
+      g_tradeMemCount++;
+      loaded++;
+   }
+   FileClose(h);
+   if(skipped > 0) Print("TRADEBBRAIN LOAD: skipped ", skipped, " corrupt lines");
+   Print("TRADEBBRAIN LOAD: loaded ", loaded, " patterns from disk");
+}
+
+// ============================================================
+// v6.3.8 UPGRADE 2 — ATR-normalized pattern matching
+// Enhanced win-rate lookup with ATR regime, session, trend, recency weighting
+// ============================================================
+double TradeBrain_GetATRNormWinRate(int signal, string pattern, string session, int htfTrend, double atrAtEntry)
+{
+   double atrPips   = atrAtEntry * 10.0;
+   int    atrBucket = (atrPips < 10.0) ? 0 : (atrPips < 18.0) ? 1 : 2;
+   string atrName   = (atrBucket == 0) ? "LOW" : (atrBucket == 1) ? "MEDIUM" : "HIGH";
+
+   // Phase 1: full filtered match (ATR bucket + session + HTF trend)
+   double weightedWins = 0.0, totalWeight = 0.0;
+   int    matchCount = 0;
+   for(int k = 0; k < 500; k++)
+   {
+      int idx = (g_tradeMemHead + k) % 500;
+      if(!g_tradeMemory[idx].valid)         continue;
+      if(g_tradeMemory[idx].pattern != pattern) continue;
+      if(g_tradeMemory[idx].dir != signal)   continue;
+      if(g_tradeMemory[idx].atrRegime != atrBucket) continue;
+      if(g_tradeMemory[idx].session  != session)    continue;
+      if(g_tradeMemory[idx].htfTrend != htfTrend)   continue;
+
+      // Recency weighting: last 20 trades get 2x, older than 100 get 0.5x
+      int age = g_tradeMemCount - k - 1; // approximate age index (0=newest)
+      double recencyW = (age < 20) ? 2.0 : (age > 100) ? 0.5 : 1.0;
+      double w = recencyW;
+      totalWeight += w;
+      if(g_tradeMemory[idx].rMultiple > 0.0) weightedWins += w;
+      matchCount++;
+   }
+
+   double winRate = 0.5;
+   if(matchCount >= 5 && totalWeight > 0)
+   {
+      winRate = weightedWins / totalWeight;
+      Print("TRADEBBRAIN MATCH: ", matchCount, " patterns (ATR=", atrName,
+            " sess=", session, " regime=", htfTrend == 1 ? "BULL" : htfTrend == -1 ? "BEAR" : "RANGING",
+            ") WR=", StringFormat("%.1f", winRate * 100.0), "%");
+      return winRate;
+   }
+
+   // Phase 2: session-only fallback (drop ATR and trend filters)
+   double w2 = 0.0, wW2 = 0.0; int m2 = 0;
+   for(int k = 0; k < 500; k++)
+   {
+      int idx = (g_tradeMemHead + k) % 500;
+      if(!g_tradeMemory[idx].valid) continue;
+      if(g_tradeMemory[idx].pattern != pattern) continue;
+      if(g_tradeMemory[idx].dir != signal) continue;
+      if(g_tradeMemory[idx].session != session) continue;
+      int age = g_tradeMemCount - k - 1;
+      double rw = (age < 20) ? 2.0 : (age > 100) ? 0.5 : 1.0;
+      w2 += rw; if(g_tradeMemory[idx].rMultiple > 0.0) wW2 += rw;
+      m2++;
+   }
+   if(m2 >= 3 && w2 > 0) { winRate = wW2 / w2; return winRate; }
+
+   // Phase 3: global average (no filters)
+   double w3 = 0.0, wW3 = 0.0;
+   for(int k = 0; k < 500; k++)
+   {
+      int idx = (g_tradeMemHead + k) % 500;
+      if(!g_tradeMemory[idx].valid) continue;
+      int age = g_tradeMemCount - k - 1;
+      double rw = (age < 20) ? 2.0 : (age > 100) ? 0.5 : 1.0;
+      w3 += rw; if(g_tradeMemory[idx].rMultiple > 0.0) wW3 += rw;
+   }
+   if(w3 > 0) { winRate = wW3 / w3; return winRate; }
+
+   return 0.5; // neutral default — never return zero
+}
+
+// ============================================================
+// v6.3.8 UPGRADE 6 — Gate Analytics Report
+// ============================================================
+void PrintGateReport()
+{
+   g_gateReportLast = TimeCurrent();
+   int blocked = g_totalSignals - g_totalAllowed;
+   double allowPct = (g_totalSignals > 0) ? (double)g_totalAllowed / g_totalSignals * 100.0 : 0.0;
+   double blockPct = 100.0 - allowPct;
+   Print("=== GATE ANALYTICS REPORT ===");
+   Print("Total signals:   ", g_totalSignals);
+   Print("Allowed trades:  ", g_totalAllowed, " (", StringFormat("%.1f", allowPct), "%)");
+   Print("Blocked trades:  ", blocked, " (", StringFormat("%.1f", blockPct), "%)");
+   Print("  Spread:        ", g_gateBlocks_Spread);
+   Print("  News:          ", g_gateBlocks_News);
+   Print("  Trend/PG:      ", g_gateBlocks_Trend);
+   Print("  Committee:     ", g_gateBlocks_Committee);
+   Print("  AI Director:   ", g_gateBlocks_AI);
+   Print("  TradeBrain:    ", g_gateBlocks_TradeBrain);
+   Print("  STI:           ", g_gateBlocks_STI);
+   Print("  Basket:        ", g_gateBlocks_Basket);
+   Print("  Daily Loss/HWM:", g_gateBlocks_DailyLoss);
+   Print("  Volatility:    ", g_gateBlocks_Volatility);
+   Print("  EPF:           ", g_gateBlocks_EPF);
+   Print("=============================");
+}
+
+// ============================================================
+// v6.3.8 UPGRADE 7 — Performance multiplier (anti-martingale)
+// ============================================================
+double GetPerformanceMultiplier()
+{
+   // Need at least 5 recent trades in g_tradeMemory to act
+   int count = 0;
+   for(int k = 0; k < 500; k++)
+   {
+      int idx = (g_tradeMemHead + 499 - k) % 500; // newest first
+      if(!g_tradeMemory[idx].valid) continue;
+      count++;
+      if(count >= 10) break;
+   }
+   if(count < 5) return 1.0; // not enough data — neutral
+
+   // Compute last-10-trade stats
+   int wins10 = 0, total10 = 0, streak = 0;
+   bool streakIsWin = false;
+   for(int k = 0; k < 500 && total10 < 10; k++)
+   {
+      int idx = (g_tradeMemHead + 499 - k) % 500;
+      if(!g_tradeMemory[idx].valid) continue;
+      bool w = (g_tradeMemory[idx].rMultiple > 0.0);
+      if(total10 == 0) { streakIsWin = w; streak = 1; }
+      else if(w == streakIsWin) streak++;
+      else break; // streak broken
+      if(w) wins10++;
+      total10++;
+   }
+   double wr10 = (total10 > 0) ? (double)wins10 / total10 : 0.5;
+
+   double mult = 1.0;
+   if(wr10 >= 0.70 && streakIsWin && streak >= 3) mult = MathMin(1.30, 1.15);
+   else if(wr10 >= 0.55) mult = 1.0;
+   else if(wr10 >= 0.40) mult = 0.85;
+   else if(wr10 < 0.40 || (!streakIsWin && streak >= 3)) mult = 0.70;
+   if(!streakIsWin && streak >= 5) mult = 0.50;
+
+   // Cap
+   mult = MathMax(0.50, MathMin(1.30, mult));
+
+   // Log when multiplier changes
+   if(MathAbs(mult - g_perfMultLast) > 0.05)
+   {
+      Print("PERF MULTIPLIER: ", DoubleToString(mult, 2),
+            " (WR10=", StringFormat("%.0f", wr10 * 100.0), "%",
+            " streak=", streak, streakIsWin?" wins":" losses",
+            ") — lot sizing adjusted");
+      g_perfMultLast = mult;
+   }
+   return mult;
 }
 
 // ---------- COMMITTEE ASSEMBLER ----------

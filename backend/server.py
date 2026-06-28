@@ -1742,6 +1742,7 @@ def _parse_entry_json(response: str) -> dict:
         return {"action": "SKIP", "confidence": 50, "reason": "AI response unclear", "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
 
 async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> dict:
+    t0 = time.time()
     try:
         chat = LlmChat(
             api_key=LLM_KEY,
@@ -1751,23 +1752,32 @@ async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> di
         msg = UserMessage(text=_build_entry_prompt(req))
         # 8s hard timeout — M5 signals are time-sensitive
         response = await asyncio.wait_for(chat.send_message(msg), timeout=8.0)
+        latency = time.time() - t0
         result = _parse_entry_json(response)
         result["available"] = True
+        # v6.3.8 Upgrade 4: per-provider logging with latency
+        if provider == "anthropic":
+            logger.info(f"AI_CALL provider=claude model={model} status=ok latency={latency:.2f}s action={result.get('action','?')} conf={result.get('confidence',0)}")
+        else:
+            logger.info(f"AI_CALL provider=openai model={model} status=ok latency={latency:.2f}s action={result.get('action','?')} conf={result.get('confidence',0)}")
         return result
     except asyncio.TimeoutError:
-        logger.warning(f"Entry AI {provider}/{model} timed out")
+        latency = time.time() - t0
+        logger.warning(f"AI_CALL provider={provider} model={model} status=TIMEOUT latency={latency:.2f}s fallback=skip")
         return {"action": "SKIP", "confidence": 0, "reason": f"{provider} timeout",
                 "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
                 "sl_adjust": 0, "tp_adjust": 0, "available": False}
     except Exception as e:
-        logger.error(f"Entry AI {provider}/{model} error: {e}")
+        latency = time.time() - t0
+        fallback = "claude_only" if provider == "openai" else "gpt_only"
+        logger.warning(f"AI_CALL provider={provider} model={model} status=FAILED error={str(e)[:120]} latency={latency:.2f}s fallback={fallback}")
         return {"action": "SKIP", "confidence": 0, "reason": f"{provider} error",
                 "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
                 "sl_adjust": 0, "tp_adjust": 0, "available": False}
 
 @api_router.post("/ai/analyze")
 async def ai_analyze_market(req: AIAnalysisRequest):
-    """Dual-AI entry analysis: Claude 4.5 + GPT-5.2 vote in parallel.
+    """Dual-AI entry analysis: Claude 4.5 + GPT-4o vote in parallel.
 
     Consensus rules (revised to NOT punish availability):
       - Both agree (BUY=BUY or SELL=SELL)        -> action, avg conf +5 (synergy bonus)
@@ -1780,10 +1790,10 @@ async def ai_analyze_market(req: AIAnalysisRequest):
         if not LLM_KEY:
             return {"action": "SKIP", "confidence": 50, "reason": "AI key not configured",
                     "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
-                    "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0}
+                    "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0, "consensus_source": "none"}
 
         claude_task = _ask_entry_ai("anthropic", "claude-sonnet-4-5-20250929", req)
-        gpt_task    = _ask_entry_ai("openai",    "gpt-5.2",                    req)
+        gpt_task    = _ask_entry_ai("openai",    "gpt-4o",                     req)
         claude, gpt = await asyncio.gather(claude_task, gpt_task)
 
         c_act, g_act = claude["action"], gpt["action"]
@@ -1840,6 +1850,16 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             bearish_case = ""; skip_if = ""; invalidation = ""; target = ""
             sl_adj, tp_adj = 0, 0
 
+        # v6.3.8 Upgrade 4: consensus_source field — EA must know which providers answered
+        if c_ok and g_ok and c_act == g_act and c_act in ("BUY", "SELL"):
+            consensus_source = "dual_consensus"
+        elif c_ok and c_act in ("BUY", "SELL") and (not g_ok or g_act == "SKIP"):
+            consensus_source = "claude_only"
+        elif g_ok and g_act in ("BUY", "SELL") and (not c_ok or c_act == "SKIP"):
+            consensus_source = "gpt_only"
+        else:
+            consensus_source = "none"
+
         result = {
             "action": action,
             "confidence": confidence,
@@ -1851,6 +1871,7 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             "target": (target or "")[:200],
             "sl_adjust": sl_adj,
             "tp_adjust": tp_adj,
+            "consensus_source": consensus_source,
             "claude": {"action": c_act, "confidence": c_conf, "reason": claude["reason"], "available": c_ok},
             "gpt":    {"action": g_act, "confidence": g_conf, "reason": gpt["reason"],    "available": g_ok},
         }
@@ -1866,7 +1887,94 @@ async def ai_analyze_market(req: AIAnalysisRequest):
         logger.error(f"AI analyze dual error: {e}")
         return {"action": "SKIP", "confidence": 50, "reason": f"AI error: {str(e)[:60]}",
                 "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
-                "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0}
+                "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0, "consensus_source": "none"}
+
+########################################
+# v6.3.8 UPGRADE 5 — AI Outcome Feedback Loop
+########################################
+import json as _json
+
+@api_router.post("/ai/feedback")
+async def ai_feedback(data: dict):
+    """Record AI verdict outcome after every trade closes."""
+    try:
+        feedback_path = ROOT_DIR / "ai_feedback_log.jsonl"
+        record = {**data, "recorded_at": datetime.now(timezone.utc).isoformat()}
+        with open(feedback_path, "a") as f:
+            f.write(_json.dumps(record) + "\n")
+        # Also persist to MongoDB for dashboard queries
+        try:
+            await db.ai_feedback.insert_one(record)
+        except Exception:
+            pass
+        logger.info(f"AI_FEEDBACK recorded: verdict={data.get('ai_verdict','?')} outcome={data.get('outcome','?')} rMult={data.get('r_multiple','?')}")
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"AI feedback error: {e}")
+        return {"status": "error", "detail": str(e)}
+
+@api_router.get("/ai/feedback/stats")
+async def ai_feedback_stats():
+    """Compute accuracy by confidence band, strategy, session from feedback log."""
+    try:
+        feedback_path = ROOT_DIR / "ai_feedback_log.jsonl"
+        if not feedback_path.exists():
+            return {"total": 0, "correct": 0, "accuracy": 0.0, "by_confidence": {}, "by_strategy": {}, "by_session": {}}
+
+        records = []
+        with open(feedback_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try: records.append(_json.loads(line))
+                    except Exception: pass
+
+        total = len(records)
+        correct = sum(1 for r in records if r.get("outcome") in ("CORRECT", "CONSERVATIVE_CORRECT"))
+        accuracy = correct / total if total > 0 else 0.0
+
+        # By confidence band (0-49, 50-64, 65-79, 80+)
+        bands = {"0-49": {"total":0,"correct":0}, "50-64": {"total":0,"correct":0},
+                 "65-79": {"total":0,"correct":0}, "80+": {"total":0,"correct":0}}
+        by_strategy = {}
+        by_session   = {}
+        for r in records:
+            c = int(r.get("ai_confidence", 0))
+            band = "0-49" if c < 50 else "50-64" if c < 65 else "65-79" if c < 80 else "80+"
+            bands[band]["total"] += 1
+            if r.get("outcome") in ("CORRECT", "CONSERVATIVE_CORRECT"):
+                bands[band]["correct"] += 1
+            strat = r.get("strategy", "UNKNOWN")
+            sess  = r.get("session",  "UNKNOWN")
+            by_strategy.setdefault(strat, {"total":0,"correct":0})
+            by_session.setdefault(sess,   {"total":0,"correct":0})
+            by_strategy[strat]["total"] += 1
+            by_session[sess]["total"]   += 1
+            if r.get("outcome") in ("CORRECT", "CONSERVATIVE_CORRECT"):
+                by_strategy[strat]["correct"] += 1
+                by_session[sess]["correct"]   += 1
+
+        for k in bands:
+            n = bands[k]["total"]
+            bands[k]["accuracy"] = bands[k]["correct"] / n if n > 0 else 0.0
+        for k in by_strategy:
+            n = by_strategy[k]["total"]
+            by_strategy[k]["accuracy"] = by_strategy[k]["correct"] / n if n > 0 else 0.0
+        for k in by_session:
+            n = by_session[k]["total"]
+            by_session[k]["accuracy"] = by_session[k]["correct"] / n if n > 0 else 0.0
+
+        return {
+            "total": total,
+            "correct": correct,
+            "accuracy": round(accuracy, 4),
+            "by_confidence": bands,
+            "by_strategy": by_strategy,
+            "by_session": by_session
+        }
+    except Exception as e:
+        logger.error(f"AI feedback stats error: {e}")
+        return {"error": str(e)}
 
 ########################################
 # NEWS AVOIDANCE
