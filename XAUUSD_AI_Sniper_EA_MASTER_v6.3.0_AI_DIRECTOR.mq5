@@ -633,7 +633,7 @@ input group "=== AI DIRECTOR (v6.3.0 — real authority, not just advisory) ==="
 input bool   InpUseAI          = true;     // Enable AI Director (Claude + GPT dual vote)
 input bool   InpAIAdvisoryOnly = false;    // v6.3.0: FALSE = AI has real authority. TRUE = log-only (advisory). Default: AUTHORITY MODE.
 input bool   InpAIDirectorAllGrades = true;  // v6.3.0: call AI Director for ALL grades (A,A+,B), not just A+
-input double InpAIDirectorMinConf = 55.0;    // v6.3.0: minimum AI confidence % to ALLOW trade. Below = block.
+input int    InpAIDirectorMinConf = 55;      // v6.3.0: minimum AI confidence % to ALLOW trade. Below = block/reduce.
 input bool   InpAIOfflineSafeMode = true;    // v6.3.0: if AI server fails, trade at 50% size (safe degraded mode)
 input int    InpAIOfflineMaxFails = 3;       // v6.3.0: consecutive AI call failures before declaring AI offline
 
@@ -700,11 +700,12 @@ input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables A
 
 input group "=== CONVICTION-WEIGHTED SIZING (v4.5.0 — use Claude/GPT confidence) ==="
 input bool   InpConvictionSizing = true;   // v6.3.0: TRUE — AI confidence now drives lot sizing by default
-input int    InpMinAIConfidence  = 60;     // Below this, SKIP entirely (AI is too uncertain)
+// v6.3.1: InpMinAIConfidence removed — threshold is now InpAIDirectorMinConf (55%) for all paths
+// (was 60%, causing blocks when AI agreed at 56-59% on valid setups)
 input int    InpNormalAIConfidence = 75;   // At/above this, use normal 1.0x size
 input int    InpHighAIConfidence   = 90;   // At/above this, use 1.3x boost size
-input double InpConvictionLowMulti  = 0.5; // 60-74% confidence -> 0.5x size
-input double InpConvictionHighMulti = 1.3; // >=90% confidence -> 1.3x size
+input double InpConvictionLowMulti  = 0.70; // v6.3.1: raised from 0.5 → 0.70 (AI at 55-74% = mild reduce, not halve)
+input double InpConvictionHighMulti = 1.3;  // >=90% confidence -> 1.3x boost size
 input bool   InpRespectSkipIf    = true;   // Honor the AI's skip_if veto condition
 
 input group "=== TRAILING / BE LOCK (v4.5.1 — loosen the leash) ==="
@@ -3013,11 +3014,15 @@ int OnInit()
    Print("VOL-ADAPT: ", InpVolAdaptiveLots?"ON":"OFF",
          " (spike>", DoubleToString(InpVolSpikeMulti,2), "x ATR → size×",DoubleToString(InpVolSpikeReduce,2),
          ", calm<", DoubleToString(InpVolCalmMulti,2), "x → size×", DoubleToString(InpVolCalmBoost,2), ")");
+   Print("AI DIRECTOR: ", InpUseAI?"ON":"OFF",
+         " | Auth=", InpAIAdvisoryOnly?"ADVISORY":"REAL-AUTHORITY",
+         " | AllGrades=", InpAIDirectorAllGrades?"YES":"A+-only",
+         " | MinConf=", InpAIDirectorMinConf, "% (block below this)",
+         " | OfflineSafe=", InpAIOfflineSafeMode?"50%-lot":"disabled");
    Print("CONVICTION: ", InpConvictionSizing?"ON":"OFF",
-         " | MinConf=", InpMinAIConfidence, "% (below = SKIP)",
          " | NormalConf=", InpNormalAIConfidence, "% (x1.0)",
          " | HighConf=", InpHighAIConfidence, "% (x", DoubleToString(InpConvictionHighMulti, 2), ")",
-         " | LowMulti=x", DoubleToString(InpConvictionLowMulti, 2));
+         " | LowMulti=x", DoubleToString(InpConvictionLowMulti, 2), " (55-74% = mild reduce)");
    Print("TRAIL v4.5.2: BE activate=+", DoubleToString(InpBELockActivateR,2), "R  lock=+",
          DoubleToString(InpBELockProfitR,2), "R",
          " | TrendAware=", InpTrendAwareTrail?"ON":"OFF",
@@ -6813,7 +6818,9 @@ void OnTick()
          string aiDirStr = (aiResult == 1) ? "BUY" : (aiResult == -1) ? "SELL" : "SKIP";
          bool aiConfirms    = (aiResult == signal);
          bool aiDisagrees   = (aiResult != 0 && aiResult != signal);
-         bool aiUnavailable = (aiResult == 0 && lastAIConfidence == 0);
+         // aiUnavailable: server returned 200 but no parseable action AND no skip_if/confidence
+         // (true no-response). If AI said SKIP with confidence or skip_if text, it's a real SKIP.
+         bool aiUnavailable = (aiResult == 0 && lastAIConfidence == 0 && StringLen(lastAISkipIf) == 0);
 
          Print("══════════════════ AI DIRECTOR ══════════════════");
          Print("Signal: ", setupName, " ", signal > 0 ? "BUY" : "SELL",
@@ -6848,24 +6855,51 @@ void OnTick()
          }
          else if(aiDisagrees)
          {
-            // AI says the opposite direction — BLOCK the trade entirely
-            aiVerdictStr = "BLOCK";
-            string blockMsg = StringFormat(
-               "AI DIRECTOR BLOCK: AI says %s, strategy says %s. AI confidence %d%%. Trade blocked.",
-               aiDirStr, signal > 0 ? "BUY" : "SELL", lastAIConfidence);
-            Print("AI DIRECTOR: BLOCK — ", blockMsg);
-            XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
-            CloudPostReasoning("BLOCK", blockMsg, RegimeName(), setupName, setupScore, combinedScore, grade, signal);
-            UpdateDashboard(0, combinedScore, "AI-BLOCK");
-            lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "AI-BLOCK";
-            g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
-            Print("══════════════════════════════════════════════════");
-            return;
+            // v6.3.1 FIX: AI disagreement only BLOCKS when it has enough conviction.
+            // A 51% AI should not kill a setup that passed every structural gate.
+            // HTF consensus is a hard rule-based structural signal — weak AI never overrides it.
+            bool htfConsensusTrade = (g_htfConsensusDir == 1 && signal == 1) ||
+                                     (g_htfConsensusDir == -1 && signal == -1);
+            if(htfConsensusTrade)
+            {
+               // HTF consensus overrides weak AI disagreement — reduce lot, never block
+               aiVerdictStr = "HTF-OVERRIDE";
+               sizeMulti = MathMin(sizeMulti, 0.70);
+               Print("AI DIRECTOR: HTF-CONSENSUS OVERRIDE — AI disagrees (", lastAIConfidence,
+                     "%) but HTF structure confirmed ", signal > 0 ? "BUY" : "SELL",
+                     " | reducing lot x0.70, not blocking");
+               g_aiLastVerdict = "HTF-OVERRIDE"; g_aiLastConfidence = lastAIConfidence;
+            }
+            else if(lastAIConfidence < InpAIDirectorMinConf)
+            {
+               // AI disagrees but with weak conviction — reduce lot, don't block
+               aiVerdictStr = "WEAK-DISAGREE";
+               sizeMulti = MathMin(sizeMulti, 0.65);
+               Print("AI DIRECTOR: WEAK-DISAGREE (conf=", lastAIConfidence, "% < min ",
+                     InpAIDirectorMinConf, "%) — reducing lot x0.65, not blocking");
+               g_aiLastVerdict = "WEAK-DISAGREE"; g_aiLastConfidence = lastAIConfidence;
+            }
+            else
+            {
+               // AI disagrees with sufficient conviction — BLOCK the trade
+               aiVerdictStr = "BLOCK";
+               string blockMsg = StringFormat(
+                  "AI DIRECTOR BLOCK: AI says %s (conf %d%%), strategy says %s. Sufficient conviction to veto.",
+                  aiDirStr, lastAIConfidence, signal > 0 ? "BUY" : "SELL");
+               Print("AI DIRECTOR: BLOCK — ", blockMsg);
+               XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
+               CloudPostReasoning("BLOCK", blockMsg, RegimeName(), setupName, setupScore, combinedScore, grade, signal);
+               UpdateDashboard(0, combinedScore, "AI-BLOCK");
+               lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "AI-BLOCK";
+               g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
+               Print("══════════════════════════════════════════════════");
+               return;
+            }
          }
          else if(aiResult == 0)
          {
             // AI says SKIP — block if confidence below minimum, else reduce size
-            if(lastAIConfidence < (int)InpAIDirectorMinConf && lastAIConfidence > 0)
+            if(lastAIConfidence < InpAIDirectorMinConf && lastAIConfidence > 0)
             {
                aiVerdictStr = "BLOCK";
                string blockMsg = StringFormat(
@@ -6891,12 +6925,15 @@ void OnTick()
             // AI confirms same direction — apply conviction sizing
             if(InpConvictionSizing && lastAIConfidence > 0)
             {
-               if(lastAIConfidence < InpMinAIConfidence)
+               // v6.3.1 FIX: unified threshold — use InpAIDirectorMinConf (55%) for both
+               // confirms and disagrees paths. InpMinAIConfidence (60%) was a hidden second
+               // threshold that blocked valid setups where AI agreed at 56-59%.
+               if(lastAIConfidence < InpAIDirectorMinConf)
                {
                   aiVerdictStr = "BLOCK";
                   string blockMsg = StringFormat(
-                     "AI DIRECTOR BLOCK: confirms direction but confidence %d%% < min %d%%.",
-                     lastAIConfidence, InpMinAIConfidence);
+                     "AI DIRECTOR BLOCK: confirms direction but confidence %d%% < min %.0f%%.",
+                     lastAIConfidence, InpAIDirectorMinConf);
                   Print("AI DIRECTOR: BLOCK LOW-CONV — ", blockMsg);
                   XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
                   UpdateDashboard(0, combinedScore, "LOW-CONV");
@@ -7076,7 +7113,22 @@ void OnTick()
    if(InpSTI_Enable && g_stiLotMulti < 0.999)
       Print(StringFormat("STI SIZE APPLIED | lot x%.2f | committee x%.2f | final sizeMulti=%.3f",
                          g_stiLotMulti, committeeSzMult, sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult));
-   OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult);
+
+   // v6.3.1 SIZE GUARD: prevent silent 0-lot order when multiple reduction layers stack.
+   // Multiplier stacking (grade B 0.45 × AI 0.5 × pgLot × STI × committee) can compound
+   // to near-zero; OpenTrade would try to submit a lot below broker minimum and fail silently.
+   double finalSzMult = sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult;
+   if(finalSzMult < 0.04)
+   {
+      Print("SIZE GUARD: finalSzMult=", DoubleToString(finalSzMult, 4),
+            " (sizeMulti=", DoubleToString(sizeMulti, 3),
+            " × pg=", DoubleToString(pgLotMult, 3),
+            " × sti=", DoubleToString(g_stiLotMulti, 2),
+            " × comm=", DoubleToString(committeeSzMult, 2),
+            ") — below minimum tradeable. Clamping to 0.10x to keep the trade alive.");
+      finalSzMult = 0.10;
+   }
+   OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", finalSzMult);
    // v5.3.1 — remember this entry's grade + score so adverse-pyramid logic and
    // high-grade ratchet looseness can reference them.
    g_lastEntryGrade = grade;
@@ -9935,12 +9987,35 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
       if(g_aiOffline) { g_aiOffline = false; Print("AI DIRECTOR BACK ONLINE — resuming full authority"); }
    }
    string response = CharArrayToString(result);
+
+   // v6.3.1 FIX: parse confidence FIRST (before action check) so that when AI
+   // returns SKIP, lastAIConfidence is populated and CheckForEntry can correctly
+   // distinguish a genuine SKIP (confidence known) from a no-response (confidence==0).
+   int confIdx0 = StringFind(response, "\"confidence\":");
+   if(confIdx0 >= 0)
+   {
+      int p0 = confIdx0 + StringLen("\"confidence\":");
+      while(p0 < StringLen(response) && (StringGetCharacter(response, p0) == ' ' ||
+            StringGetCharacter(response, p0) == '\t')) p0++;
+      string numStr0 = "";
+      while(p0 < StringLen(response)) {
+         ushort c0 = StringGetCharacter(response, p0);
+         if(c0 >= '0' && c0 <= '9') { numStr0 += ShortToString(c0); p0++; }
+         else break;
+      }
+      if(StringLen(numStr0) > 0) lastAIConfidence = (int)StringToInteger(numStr0);
+   }
+   // Also pre-parse skip_if so SKIP vs no-response is distinguishable downstream
+   lastAISkipIf = ExtractJsonString(response, "skip_if");
+
    int actIdx = StringFind(response, "\"action\":");
    if(actIdx < 0) return 0;
    string tail = StringSubstr(response, actIdx, 40);
    int dir = 0;
    if(StringFind(tail, "\"BUY\"")  >= 0) dir = 1;
    else if(StringFind(tail, "\"SELL\"") >= 0) dir = -1;
+   // AI returned SKIP — confidence and skip_if are already parsed above; return 0 so
+   // CheckForEntry falls into the aiResult==0 branch (not aiUnavailable).
    else return 0;
 
    // Capture the full trader thesis for storage + display
@@ -9949,25 +10024,8 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    currentTradeTarget       = ExtractJsonString(response, "target");
    currentTradeBearishCase  = ExtractJsonString(response, "bearish_case");
 
-   // v4.5.0 — Parse confidence integer from "confidence":NN (not a string)
-   int confIdx = StringFind(response, "\"confidence\":");
-   if(confIdx >= 0)
-   {
-      int p = confIdx + StringLen("\"confidence\":");
-      // Skip whitespace
-      while(p < StringLen(response) && (StringGetCharacter(response, p) == ' ' ||
-            StringGetCharacter(response, p) == '\t')) p++;
-      string numStr = "";
-      while(p < StringLen(response))
-      {
-         ushort c = StringGetCharacter(response, p);
-         if(c >= '0' && c <= '9') { numStr += ShortToString(c); p++; }
-         else break;
-      }
-      if(StringLen(numStr) > 0) lastAIConfidence = (int)StringToInteger(numStr);
-   }
+   // Confidence and skip_if already parsed above (before action check — v6.3.1 fix)
    lastAIBearishCase = currentTradeBearishCase;
-   lastAISkipIf      = ExtractJsonString(response, "skip_if");
 
    // v6.3.0: extract individual Claude + GPT votes from backend dual-vote response
    // Backend returns: "claude":{"action":"BUY","confidence":78}, "gpt":{"action":"BUY","confidence":72}
