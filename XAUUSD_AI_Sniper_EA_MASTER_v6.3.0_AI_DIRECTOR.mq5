@@ -790,9 +790,9 @@ input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm
 
 input group "=== BASKET PROTECT (v4.9.7 — smarter thresholds + fast-reversal circuit breakers) ==="
 input bool   InpBasketMode          = true;   // Master toggle: SL logic works on AGGREGATE PnL, not per-trade
-input double InpBasketArmPct        = 2.2;    // v5.8.15: let winners breathe more, but still protect real basket profit
-input double InpBasketArmFloor      = 300.0;  // don't arm on small noise profits
-input double InpBasketLockMinPct    = 45.0;   // lock profit but allow trend breathing room
+input double InpBasketArmPct        = 3.0;    // v6.3.4: raised 2.2→3.0 — arm later, let winners breathe longer before locking
+input double InpBasketArmFloor      = 200.0;  // v6.3.4: lowered 300→200 — catch mid-sized wins on small accounts
+input double InpBasketLockMinPct    = 52.0;   // v6.3.4: raised 45→52 — never give back >48% of basket peak once armed
 input double InpBasketRatchetT1Pct  = 1.5;    // v4.9.7 — was 0.5, now 1.5 (tier-1 fires later, let winners run)
 input double InpBasketRatchetT2Pct  = 3.5;    // v4.9.7 — was 2.5, now 3.5 (tier-2 fires later)
 input double InpBasketRatchetT3Pct  = 6.0;    // v4.9.7 — was 5.0, now 6.0 (tier-3 fires on REAL big peaks)
@@ -802,7 +802,7 @@ input bool   InpBasketDisablePerTrade = true; // When basket active, disable per
 input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on sudden reversal even if floor not breached
 input double InpBasketFastDropPct       = 50.0; // If basket gives back >= X% of peak within FastWindowSec, close immediately
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
-input double InpBasketHardGivebackPct   = 1.5;  // HARD CAP: never give back more than X% of balance from peak
+input double InpBasketHardGivebackPct   = 2.5;  // v6.3.4: raised 1.5→2.5 — $45 on $3k was closing basket too early; now $75
 input bool   InpBasketBlockPyramidWhenArmed = true;  // v5.8.38: no fresh adds after basket protect is armed; let the current cycle resolve
 input bool   InpBasketSoftLockFirst     = true; // v5.8.15: first basket-floor hit banks partial only; runner stays alive
 input double InpBasketSoftLockPct       = 35.0; // % of each open layer to bank on first basket lock
@@ -828,13 +828,17 @@ input group "=== TREND HOLD MODE (v4.8.4 — don't micro-exit when trend is obvi
 input bool   InpTrendHoldMode    = false;  // v4.9.5 — DISABLED (clean exits handle trends via chandelier)
 input double InpTrendHoldTrailATR = 3.0;   // Trail distance in trend-hold mode (wider than Stage 2)
 
-input group "=== CLEAN EXITS (v5.8.3 — balanced statistical trade management) ==="
+input group "=== CLEAN EXITS (v6.3.4 — adaptive exits, close dead zone, tighter Chandelier) ==="
 input bool   InpCleanExits          = true;   // MASTER toggle — disables all other per-trade trails
-input double InpCleanBEActivateR    = 1.85;   // v5.8.15: later BE; avoid choking gold before continuation
-input double InpCleanBECushionR     = 0.05;   // Small cushion; do not choke valid pullbacks
-input double InpCleanChandelierStartR = 3.50; // v5.8.15: trail only after clear runner move
-input double InpCleanChandelierATR1 = 4.8;    // Wider trail for gold continuation
-input double InpCleanChandelierATR2 = 3.8;    // Wider +4R+ trail; protects without clipping pullbacks
+// v6.3.4 EXIT FIXES (audit-confirmed profit giveback sources):
+// Old: BE at 1.85R with 0.05R cushion → trade could give back 95% between 1.85R and Chandelier start
+// Old: Chandelier starts at 3.5R with 4.8× ATR → 0.1 lot trade could give $190-380 from peak
+// New: BE at 1.50R with 0.30R cushion → meaningful floor earlier. Chandelier starts at 2.0R, tighter ATR.
+input double InpCleanBEActivateR    = 1.50;   // v6.3.4: earlier BE (was 1.85) — protect sooner without choking
+input double InpCleanBECushionR     = 0.30;   // v6.3.4: lock 30% of risk at BE (was 0.05 = $3 floor = worthless)
+input double InpCleanChandelierStartR = 2.00; // v6.3.4: trail from +2R not +3.5R — closes dead zone
+input double InpCleanChandelierATR1 = 3.2;    // v6.3.4: tightened 4.8→3.2 — still breathes but banks more profit
+input double InpCleanChandelierATR2 = 2.5;    // v6.3.4: tightened 3.8→2.5 — after +4R lock in the bulk
 input double InpCleanPartialR       = 3.20;   // v5.8.15: take partial later, after real move
 input double InpCleanPartialPct     = 12.0;   // Smaller partial; leaves 88% runner
 input int    InpCleanChandelierLookback = 24; // Bars to scan for highest high / lowest low
@@ -8786,10 +8790,26 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    bool momentumConfirmed = (momentumScore >= (trendAligned ? 3 : 2)) || rMult >= 4.0;
    if(rMult >= trailStartR && momentumConfirmed)
    {
-      // Tighter trail once we're past +4R (bank more of the move)
+      // v6.3.4 ADAPTIVE CHANDELIER: ATR multiplier adapts to market state in real time.
+      // Base: 3.2× (start) or 2.5× (after +4R). Adjusts up or down based on:
+      //   + HTF consensus still matches position dir  → widen (+0.5) — let runner run
+      //   + Momentum score 4-5/5                      → widen (+0.4) — trend accelerating
+      //   - Regime choppy/ranging                     → tighten (-0.7) — protect gains
+      //   - Momentum score ≤ 2                         → tighten (-0.5) — momentum fading
+      //   - RSI extreme against position               → tighten (-0.3) — overextended
+      // Floor: 1.8× (always gives price 1-2 ATR breathing room to avoid normal pullback exit)
       double chanATR = (rMult >= 4.0) ? EffCleanChandelierATR2() : EffCleanChandelierATR1();
-      if(trendAligned && momentumScore >= 4) chanATR += 0.60;
-      if(choppyRegime && momentumScore <= 2) chanATR = MathMax(1.80, chanATR - 0.70);
+      // Widen: HTF consensus still confirms our direction → trend is structurally sound → hold
+      bool htfStillWithUs = (isBuy && g_htfConsensusDir == 1) || (!isBuy && g_htfConsensusDir == -1);
+      if(htfStillWithUs) chanATR += 0.50;
+      if(trendAligned && momentumScore >= 4) chanATR += 0.40;
+      // Tighten: trend structure failing or momentum exhausting → protect what we have
+      if(choppyRegime) chanATR -= 0.70;
+      if(momentumScore <= 2) chanATR -= 0.50;
+      double rsiVal = bufRSI[0]; // current RSI
+      bool rsiExtreme = (isBuy && rsiVal > 75) || (!isBuy && rsiVal < 25);
+      if(rsiExtreme) chanATR -= 0.30; // overextended — tighten before reversal
+      chanATR = MathMax(1.80, chanATR); // never less than 1.8× — respect normal M5 pullbacks
       double chanDist = atr * chanATR;
       // Find highest high / lowest low over lookback bars (Chandelier Exit classic)
       int lb = InpCleanChandelierLookback;
@@ -8999,6 +9019,58 @@ void ManagePositions()
                PrintFormat("EXPECTANCY_SOFT_DERISK_SKIP #%I64u %s | wanted %.2f lots from %.2f, min %.2f, step %.4f, ret=%d err=%d",
                            ticket, dirStr, reduceLots, lotsOpen, minL, step,
                            trade.ResultRetcode(), GetLastError());
+            }
+         }
+      }
+
+      // ============ v6.3.4 AI PROACTIVE EXIT AUDIT (runs before CleanExits) ============
+      // Moved here from Path C so AI can HOLD/CLOSE/LOCK positions even when CleanExits=true.
+      // Previously, the `continue` at line 9021 meant AI exit override had ZERO effect.
+      // Now AI runs first, can: LOCK the SL to bank profit, or CLOSE early if thesis is dead.
+      // Cooldown: InpClaudeAuditSec (default 900s = 15min) — doesn't spam the API.
+      {
+         static datetime lastClaudeCheckCE = 0;
+         if(InpUseAI && InpAIExitOverride && !InpAIAdvisoryOnly &&
+            StringLen(InpServerURL) >= 10 && minsOpen >= 3 &&
+            TimeCurrent() - lastClaudeCheckCE > InpClaudeAuditSec &&
+            AIVetoCooldownOK(ticket, InpAIExitMinSec))
+         {
+            AIExitVerdict v = CheckPositionWithAI(
+               isBuy ? "BUY" : "SELL", openPx, curPrice, profit,
+               lotsOpen, rsi, emaF, emaS, atr, minsOpen, curSL, curTP,
+               peak, "", RegimeName());
+            lastClaudeCheckCE = TimeCurrent();
+            RecordAIVetoCall(ticket);
+
+            if(v.action == 1 && v.lockUSD > 0 && rDollars > 0)
+            {
+               // AI wants to LOCK profit — move SL to bank the specified USD amount
+               double lockDist = (v.lockUSD / rDollars) * slDist;
+               double newSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
+                                    : NormalizeDouble(openPx - lockDist, digits);
+               double pp2 = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+               long   slLvl2 = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+               double bufPts2 = MathMax(slLvl2 * pp2, pp2 * 30);
+               bool sane2   = isBuy ? (newSL > openPx && newSL < curPrice - bufPts2)
+                                    : (newSL < openPx && newSL > curPrice + bufPts2);
+               bool ratchet2 = isBuy ? (newSL > curSL) : (newSL < curSL || curSL == 0);
+               if(sane2 && ratchet2 && SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, "AI_LOCK_CE"))
+                  Print("AI DIRECTOR EXIT LOCK #", ticket, " — locked +$", DoubleToString(v.lockUSD,2),
+                        " | SL=", DoubleToString(newSL, digits), " | reason: ", v.reason);
+            }
+            else if(v.action == -1 && profit > rDollars * 0.3)
+            {
+               // AI wants to CLOSE — only execute if we're in meaningful profit (>0.3R).
+               // Never let AI close a losing trade early (let SL handle that).
+               Print("AI DIRECTOR EXIT CLOSE #", ticket, " | profit=$", DoubleToString(profit,2),
+                     " | reason: ", v.reason);
+               trade.PositionClose(ticket);
+               continue;
+            }
+            else if(v.action == 0)
+            {
+               // AI says HOLD — log it, do nothing (CleanExits still manages normally)
+               Print("AI DIRECTOR EXIT HOLD #", ticket, " | conf=", v.confidence, "% | ", v.reason);
             }
          }
       }
