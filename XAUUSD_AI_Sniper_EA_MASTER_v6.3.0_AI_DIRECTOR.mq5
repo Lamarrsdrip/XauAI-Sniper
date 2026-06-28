@@ -2117,6 +2117,7 @@ struct AIExitVerdict
    int    action;
    double lockUSD;
    string reason;
+   int    confidence;
 };
 
 // v4.7.0 — AI veto wrapper. Called BEFORE every rule-based close.
@@ -6983,14 +6984,14 @@ void OnTick()
                sizeMulti *= convMult;
                Print("AI DIRECTOR: ", aiVerdictStr, " — conf=", lastAIConfidence, "% → lot x",
                      DoubleToString(convMult, 2), " (sizeMulti=", DoubleToString(sizeMulti, 2), ")");
-            }
+               }  // close else block (high/normal/low conviction branch)
+            }  // close if(InpConvictionSizing && lastAIConfidence > 0)
             else
             {
                aiVerdictStr = "ALLOW";
                Print("AI DIRECTOR: ALLOW — AI confirms ", signal > 0 ? "BUY" : "SELL",
                      " at ", lastAIConfidence, "% confidence");
             }
-            } // close else (conviction sizing block, opened in LOW-CONV fix above)
             g_aiLastVerdict = aiVerdictStr; g_aiLastConfidence = lastAIConfidence;
             if(StringLen(lastAIBearishCase) > 0)
                Print("Devil's Advocate: ", lastAIBearishCase);
@@ -7791,7 +7792,11 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       while(lots > minLot && marginNeeded > freeMargin * 0.5)
       {
          lots -= lotStep; lots = MathMax(minLot, lots);
-         OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded);
+         if(!OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
+         {
+            Print("OrderCalcMargin failed — skip trade");
+            return;
+         }
       }
       if(marginNeeded > freeMargin * 0.8) { Print("NO MARGIN"); return; }
    }
@@ -10180,7 +10185,7 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
                                    double rsi, double emaF, double emaS, double atr, int minsOpen, double sl, double tp,
                                    double peakProfit, string pendingExitReason, string regime)
 {
-   AIExitVerdict v; v.action = 0; v.lockUSD = 0; v.reason = "";
+   AIExitVerdict v; v.action = 0; v.lockUSD = 0; v.reason = ""; v.confidence = 0;
    if(InpBacktestMode) return v;                   // Tester: no network
    if(StringLen(InpServerURL) < 10) return v;
    string url = InpServerURL + "/api/ai/manage-position";
@@ -10229,6 +10234,23 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
    if(res != 200) return v;
    string response = CharArrayToString(result);
    v.reason = ExtractJsonString(response, "reason");
+   // Parse confidence from exit verdict response and store on struct
+   {
+      int confIdx = StringFind(response, "\"confidence\":");
+      if(confIdx >= 0)
+      {
+         int cp = confIdx + StringLen("\"confidence\":");
+         while(cp < StringLen(response) && (StringGetCharacter(response, cp) == ' ' ||
+               StringGetCharacter(response, cp) == '\t')) cp++;
+         string cnum = "";
+         while(cp < StringLen(response)) {
+            ushort cc = StringGetCharacter(response, cp);
+            if(cc >= '0' && cc <= '9') { cnum += ShortToString(cc); cp++; }
+            else break;
+         }
+         if(StringLen(cnum) > 0) { lastAIConfidence = (int)StringToInteger(cnum); v.confidence = lastAIConfidence; }
+      }
+   }
    if(StringFind(response, "\"CLOSE\"") >= 0) { v.action = -1; return v; }
    if(StringFind(response, "\"LOCK\"")  >= 0)
    {
@@ -10299,7 +10321,7 @@ double GetMLScoreWithSamples(int dir, string signature, int &matchedSamples)
    {
       string target = rollups[lvl];
       int tLen = StringLen(target);
-      int matches = 0, wins = 0;
+      int matches = 0, loc_wins = 0;
       for(int i = 0; i < patternCount; i++)
       {
          if(patterns[i].direction != dir) continue;
@@ -10317,12 +10339,12 @@ double GetMLScoreWithSamples(int dir, string signature, int &matchedSamples)
          }
          if(!match) continue;
          matches++;
-         if(patterns[i].wasWinner) wins++;
+         if(patterns[i].wasWinner) loc_wins++;
       }
       if(matches >= 5)
       {
          matchedSamples = matches;
-         return (double)wins / matches;
+         return (double)loc_wins / matches;
       }
    }
    return 0.5;
@@ -11048,18 +11070,18 @@ int PG_HTFTrend()
    lastCheck = TimeCurrent();
    double ema[3], close[3], atr[3];
    int hEMA = iMA(Symbol(), InpPG_HTFTrendTF, 50, 0, MODE_EMA, PRICE_CLOSE);
-   int hATR = iATR(Symbol(), InpPG_HTFTrendTF, 14);
-   if(hEMA == INVALID_HANDLE || hATR == INVALID_HANDLE)
+   int loc_hATR = iATR(Symbol(), InpPG_HTFTrendTF, 14);
+   if(hEMA == INVALID_HANDLE || loc_hATR == INVALID_HANDLE)
    {
       if(hEMA != INVALID_HANDLE) IndicatorRelease(hEMA);
-      if(hATR != INVALID_HANDLE) IndicatorRelease(hATR);
+      if(loc_hATR != INVALID_HANDLE) IndicatorRelease(loc_hATR);
       return lastTrend;
    }
    bool dataOk = (CopyBuffer(hEMA, 0, 0, 3, ema)           > 0 &&
-                  CopyBuffer(hATR, 0, 0, 3, atr)           > 0 &&
+                  CopyBuffer(loc_hATR, 0, 0, 3, atr)       > 0 &&
                   CopyClose(Symbol(), InpPG_HTFTrendTF, 0, 3, close) > 0);
    IndicatorRelease(hEMA);
-   IndicatorRelease(hATR);
+   IndicatorRelease(loc_hATR);
    if(!dataOk) return lastTrend;
    double price = close[0];
    double diff  = price - ema[0];
@@ -11306,8 +11328,8 @@ bool IsMomentumWeak(int signal)
    double minL = MathMin(lo[0], MathMin(lo[1], lo[2]));
    double range = maxH - minL;
    if(range <= 0) return false;
-   double lastClose = cl[0];
-   double posPct = (lastClose - minL) / range;
+   double loc_lastClose = cl[0];
+   double posPct = (loc_lastClose - minL) / range;
    if(signal == +1 && posPct < 0.30) return true;       // close in lower 30% — buyers exhausted
    if(signal == -1 && posPct > 0.70) return true;       // close in upper 30% — sellers exhausted
    return false;
@@ -11895,7 +11917,7 @@ double XAU_AcceleratedLearningAdjust(int signal, string setupName,
    int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE) return 0.0;
 
-   int samples = 0, wins = 0;
+   int samples = 0, loc_wins = 0;
    int asia = 0, london = 0, ny = 0;
    bool has24h = false;
    double grossWin = 0.0, grossLoss = 0.0, worstSum = 0.0, profitSum = 0.0;
@@ -11941,7 +11963,7 @@ double XAU_AcceleratedLearningAdjust(int signal, string setupName,
       samples++;
       profitSum += profit;
       worstSum += worst;
-      if(profit > 0.0) { wins++; grossWin += profit; }
+      if(profit > 0.0) { loc_wins++; grossWin += profit; }
       else grossLoss += MathAbs(profit);
       if(session == "ASIA") asia++;
       else if(session == "LONDON") london++;
@@ -11956,7 +11978,7 @@ double XAU_AcceleratedLearningAdjust(int signal, string setupName,
    int activeSessions = (asia > 0 ? 1 : 0) + (london > 0 ? 1 : 0) + (ny > 0 ? 1 : 0);
    if(activeSessions < 2) return 0.0;
 
-   double wr = samples > 0 ? (100.0 * wins / samples) : 0.0;
+   double wr = samples > 0 ? (100.0 * loc_wins / samples) : 0.0;
    double pf = grossLoss > 0.0 ? grossWin / grossLoss : (grossWin > 0.0 ? 99.0 : 0.0);
    double avg = samples > 0 ? profitSum / samples : 0.0;
    double avgWorst = samples > 0 ? worstSum / samples : 0.0;
@@ -13285,8 +13307,8 @@ string TFShortName(ENUM_TIMEFRAMES tf)
 int TFDirectionByEMA(int signal, ENUM_TIMEFRAMES tf, double atrThreshold, string &why)
 {
    int hEMA = iMA(Symbol(), tf, 50, 0, MODE_EMA, PRICE_CLOSE);
-   int hATR = iATR(Symbol(), tf, 14);
-   if(hEMA == INVALID_HANDLE || hATR == INVALID_HANDLE)
+   int loc_hATR = iATR(Symbol(), tf, 14);
+   if(hEMA == INVALID_HANDLE || loc_hATR == INVALID_HANDLE)
    {
       why = TFShortName(tf) + ":DATA";
       return 0;
@@ -13294,10 +13316,10 @@ int TFDirectionByEMA(int signal, ENUM_TIMEFRAMES tf, double atrThreshold, string
 
    double ema[2], atr[2], close[2];
    bool ok = (CopyBuffer(hEMA, 0, 0, 2, ema) > 0 &&
-              CopyBuffer(hATR, 0, 0, 2, atr) > 0 &&
+              CopyBuffer(loc_hATR, 0, 0, 2, atr) > 0 &&
               CopyClose(Symbol(), tf, 0, 2, close) > 0);
    IndicatorRelease(hEMA);
-   IndicatorRelease(hATR);
+   IndicatorRelease(loc_hATR);
    if(!ok || atr[0] <= 0.0)
    {
       why = TFShortName(tf) + ":WAIT";
@@ -13866,7 +13888,7 @@ CommitteeVote HumanReasoning_Assess(int signal, string setupName, string grade)
 // based on recent 30-day performance. Minimum 8 samples before adjusting.
 double TradeMemory_LotAdjust(string pattern)
 {
-   int    samples = 0, wins = 0;
+   int    samples = 0, loc_wins = 0;
    double totalR  = 0.0;
    datetime cutoff = TimeCurrent() - 30 * 24 * 3600;
    for(int i = 0; i < 100; i++)
@@ -13874,7 +13896,7 @@ double TradeMemory_LotAdjust(string pattern)
       if(!g_tradeMemory[i].valid || g_tradeMemory[i].pattern != pattern) continue;
       if(g_tradeMemory[i].closedAt < cutoff) continue;
       samples++;
-      if(g_tradeMemory[i].rMultiple > 0.0) wins++;
+      if(g_tradeMemory[i].rMultiple > 0.0) loc_wins++;
       totalR += g_tradeMemory[i].rMultiple;
    }
 
@@ -13893,7 +13915,7 @@ double TradeMemory_LotAdjust(string pattern)
       double dataWeight  = 1.0 - priorWeight;
       if(samples == 0) return priorAdj;
       // Blend: prior × priorWeight + real_data_adj × dataWeight
-      double realWR  = (double)wins / samples;
+      double realWR  = (double)loc_wins / samples;
       double realAvgR = totalR / samples;
       double realAdj = (realWR >= 0.65 && realAvgR >= 0.5) ? MathMin(1.20, 1.0 + (realWR - 0.60) * 0.80)
                      : (realWR <  0.38 || realAvgR < -0.30) ? MathMax(0.65, 1.0 - (0.45 - realWR) * 0.80)
@@ -13901,7 +13923,7 @@ double TradeMemory_LotAdjust(string pattern)
       return priorAdj * priorWeight + realAdj * dataWeight;
    }
 
-   double wr   = (double)wins / samples;
+   double wr   = (double)loc_wins / samples;
    double avgR = totalR / samples;
    if(wr >= 0.65 && avgR >= 0.5)  return MathMin(1.20, 1.0 + (wr - 0.60) * 0.80);
    if(wr <  0.38 || avgR < -0.30) return MathMax(0.65, 1.0 - (0.45 - wr) * 0.80);
