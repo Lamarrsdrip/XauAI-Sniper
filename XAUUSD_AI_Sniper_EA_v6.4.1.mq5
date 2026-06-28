@@ -3193,39 +3193,24 @@ int OnInit()
          if(calCode == 200 && ArraySize(calResult) > 10)
          {
             string calJson = CharArrayToString(calResult, 0, ArraySize(calResult));
-            // Parse multipliers using inline string scanning (MQL5 has no JSON parser)
-            // Expected keys in "multipliers" JSON object: "0-49", "50-64", "65-79", "80-100"
-            double m0  = 1.0, m50 = 1.0, m65 = 1.0, m80 = 1.0;
-            int n0 = 0, n50 = 0, n65 = 0, n80 = 0;
-            // Parse "0-49" multiplier
+            // Parse multipliers using ExtractJsonDouble (already defined later in file — MQL5 resolves all file-scope functions)
+            double m0  = ExtractJsonDouble(calJson, "\"0-49\"",   1.0);
+            double m50 = ExtractJsonDouble(calJson, "\"50-64\"",  1.0);
+            double m65 = ExtractJsonDouble(calJson, "\"65-79\"",  1.0);
+            double m80 = ExtractJsonDouble(calJson, "\"80-100\"", 1.0);
+            // Clamp each multiplier to safe range
+            m0  = MathMax(0.70, MathMin(1.30, m0  > 0 ? m0  : 1.0));
+            m50 = MathMax(0.70, MathMin(1.30, m50 > 0 ? m50 : 1.0));
+            m65 = MathMax(0.70, MathMin(1.30, m65 > 0 ? m65 : 1.0));
+            m80 = MathMax(0.70, MathMin(1.30, m80 > 0 ? m80 : 1.0));
+            // Parse sample counts for logging (find inside "sample_counts" sub-object)
+            int    n0  = 0, n80 = 0;
+            int    scPos = StringFind(calJson, "sample_counts");
+            if(scPos >= 0)
             {
-               string key = "\"0-49\":";
-               int pos = StringFind(calJson, key);
-               if(pos >= 0) { pos += StringLen(key); string num=""; while(pos<StringLen(calJson)){ushort ch=StringGetCharacter(calJson,pos); if((ch>='0'&&ch<='9')||ch=='.'||ch=='-'){num+=ShortToString(ch);pos++;}else break;} if(StringLen(num)>0){double v=StringToDouble(num);if(v>0)m0=MathMax(0.70,MathMin(1.30,v));} }
-            }
-            {
-               string key = "\"50-64\":";
-               int pos = StringFind(calJson, key);
-               if(pos >= 0) { pos += StringLen(key); string num=""; while(pos<StringLen(calJson)){ushort ch=StringGetCharacter(calJson,pos); if((ch>='0'&&ch<='9')||ch=='.'||ch=='-'){num+=ShortToString(ch);pos++;}else break;} if(StringLen(num)>0){double v=StringToDouble(num);if(v>0)m50=MathMax(0.70,MathMin(1.30,v));} }
-            }
-            {
-               string key = "\"65-79\":";
-               int pos = StringFind(calJson, key);
-               if(pos >= 0) { pos += StringLen(key); string num=""; while(pos<StringLen(calJson)){ushort ch=StringGetCharacter(calJson,pos); if((ch>='0'&&ch<='9')||ch=='.'||ch=='-'){num+=ShortToString(ch);pos++;}else break;} if(StringLen(num)>0){double v=StringToDouble(num);if(v>0)m65=MathMax(0.70,MathMin(1.30,v));} }
-            }
-            {
-               string key = "\"80-100\":";
-               int pos = StringFind(calJson, key);
-               if(pos >= 0) { pos += StringLen(key); string num=""; while(pos<StringLen(calJson)){ushort ch=StringGetCharacter(calJson,pos); if((ch>='0'&&ch<='9')||ch=='.'||ch=='-'){num+=ShortToString(ch);pos++;}else break;} if(StringLen(num)>0){double v=StringToDouble(num);if(v>0)m80=MathMax(0.70,MathMin(1.30,v));} }
-            }
-            // Parse sample_counts for the key bands (for logging)
-            {
-               string key = "\"0-49\":"; int spos = StringFind(calJson, "sample_counts");
-               if(spos >= 0) { string sub = StringSubstr(calJson, spos); int p2 = StringFind(sub, key); if(p2>=0){p2+=StringLen(key); string num=""; while(p2<StringLen(sub)){ushort ch=StringGetCharacter(sub,p2); if(ch>='0'&&ch<='9'){num+=ShortToString(ch);p2++;}else break;} if(StringLen(num)>0)n0=(int)StringToInteger(num);} }
-            }
-            {
-               string key = "\"80-100\":"; int spos = StringFind(calJson, "sample_counts");
-               if(spos >= 0) { string sub = StringSubstr(calJson, spos); int p2 = StringFind(sub, key); if(p2>=0){p2+=StringLen(key); string num=""; while(p2<StringLen(sub)){ushort ch=StringGetCharacter(sub,p2); if(ch>='0'&&ch<='9'){num+=ShortToString(ch);p2++;}else break;} if(StringLen(num)>0)n80=(int)StringToInteger(num);} }
+               string scSub = StringSubstr(calJson, scPos);
+               n0  = (int)ExtractJsonDouble(scSub, "\"0-49\"",   0.0);
+               n80 = (int)ExtractJsonDouble(scSub, "\"80-100\"", 0.0);
             }
             g_calibration_0_49   = m0;
             g_calibration_50_64  = m50;
