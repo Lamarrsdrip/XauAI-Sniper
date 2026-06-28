@@ -1,8 +1,32 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.3.8 — Persistent TradeBrain + ATR-Norm Matching + AI Feedback|
+//|   v6.3.9 — Verification & Hardening: TradeBrain audit, ATR-adaptive|
+//|            profit lock, smart growth safety overrides, gate file   |
+//|            reports, forward-test report mode                       |
 //+------------------------------------------------------------------+
+// v6.3.9 CHANGES (2026-06-28):
+//   1. TRADEBRAIN TYPO FIX: all Print() log strings corrected TRADEBBRAIN→TRADEBRAIN.
+//   2. GetPerformanceMultiplier() SAFETY OVERRIDES (5 new guards):
+//      Override 1: cap at 1.0 when floating drawdown > 0.5% of balance.
+//      Override 2: cap at 1.0 when currentATR > 1.5× 50-bar median ATR (high vol).
+//      Override 3: cap at 1.0 when daily P&L is negative.
+//      Override 4: cap at 1.0 when TradeBrain has < 10 samples.
+//      Override 5: hard cap 1.15× (was 1.30×).
+//      Consecutive loss thresholds: ≥3 → 0.70 immediately; ≥5 → 0.50 immediately.
+//   3. ATR-ADAPTIVE PROFIT LOCK: SL tightening now uses MathMax(1.5×ATR, minStopDist)
+//      instead of a fixed 20% of open distance. g_dailyProfitLockArmed prevents
+//      re-trigger on every tick; partial resets below 50% threshold.
+//   4. AI FEEDBACK LOOP: added missing `ai_reason` and `direction` fields to WebRequest body.
+//      Added explicit error log for non-200 responses (not just -1/4060).
+//   5. AI CONSENSUS LOGGING: Print("AI DIRECTOR: Claude=..., GPT=..., consensus=..., final=...")
+//      added at the point where AI JSON response is parsed (after Claude/GPT votes extracted).
+//   6. GATE FILE REPORT: WriteGateReportToFile() writes daily .txt file in common folder.
+//      Called alongside PrintGateReport() every 24h and on OnDeinit().
+//   7. FORWARD TEST REPORT: WriteForwardTestReport() generates XAUAI_ForwardTest_YYYY.MM.DD.txt.
+//      Globals track signals, trades, P&L, DD, AI stats, strategy breakdown.
+//      Written at 23:59 server time and on OnDeinit(). g_ftReport_* globals initialized in OnInit().
+//   8. VERSION: #property version updated to 6.3.9; header comment updated.
 // v6.3.8 CHANGES (2026-06-28):
 //   1. TRADEBBRAIN PERSISTENCE: g_tradeMemory[] saved to MQL5/Files/XAUAI_TradeBrain_v1.csv
 //      every time a new entry is added. Loaded at OnInit. Survives restarts. FIFO 500 entries.
@@ -271,8 +295,8 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.3.8"
-#property description "XAUUSD AI Sniper v6.3.8 — persistent TradeBrain, ATR-norm matching, AI SL/TP advisory, feedback loop, gate analytics, smart growth"
+#property version   "6.3.9"
+#property description "XAUUSD AI Sniper v6.3.9 — TradeBrain audit, ATR-adaptive profit lock, smart growth safety overrides, gate file reports, forward-test report mode"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
@@ -1574,6 +1598,29 @@ double   g_equityHighWatermark = 0.0;  // updated whenever equity exceeds previo
 bool     g_drawdownPause       = false; // stop new entries when equity drops > InpDrawdownFromHighPct from watermark
 double   g_perfMultLast        = 1.0;  // last logged performance multiplier (detect changes)
 bool     g_dailyProfitLockArmed = false; // true when daily profit lock has been triggered
+
+// v6.3.9 UPGRADE — 24h Forward-Test Report globals
+int    g_ftReport_Signals     = 0;
+int    g_ftReport_Trades      = 0;
+int    g_ftReport_Wins        = 0;
+int    g_ftReport_Losses      = 0;
+double g_ftReport_TotalPnL    = 0.0;
+double g_ftReport_MaxDD       = 0.0;
+double g_ftReport_MaxFloat    = 0.0;
+double g_ftReport_MaxFav      = 0.0;
+int    g_ftReport_AIAllowed   = 0;
+int    g_ftReport_AIBlocked   = 0;
+int    g_ftReport_TBAllowed   = 0;
+int    g_ftReport_TBBlocked   = 0;
+double g_ftReport_StartEquity = 0.0;
+datetime g_ftReport_StartTime = 0;
+// Strategy breakdown parallel arrays (up to 20 strategies)
+string g_ftReport_StratNames[20];
+int    g_ftReport_StratWins[20];
+int    g_ftReport_StratLosses[20];
+int    g_ftReport_StratCount  = 0;
+// 23:59 daily write guard
+int    g_ftReport_LastWriteDay = -1;
 
 // Re-entry safety counters
 int        todayReEntryCount = 0;
@@ -3002,6 +3049,25 @@ int OnInit()
    g_dailyProfitLockArmed = false;
    // v6.3.8 Upgrade 6: initialize gate analytics timer
    g_gateReportLast = TimeCurrent();
+   // v6.3.9: initialize forward-test report globals
+   g_ftReport_Signals     = 0;
+   g_ftReport_Trades      = 0;
+   g_ftReport_Wins        = 0;
+   g_ftReport_Losses      = 0;
+   g_ftReport_TotalPnL    = 0.0;
+   g_ftReport_MaxDD       = 0.0;
+   g_ftReport_MaxFloat    = 0.0;
+   g_ftReport_MaxFav      = 0.0;
+   g_ftReport_AIAllowed   = 0;
+   g_ftReport_AIBlocked   = 0;
+   g_ftReport_TBAllowed   = 0;
+   g_ftReport_TBBlocked   = 0;
+   g_ftReport_StartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_ftReport_StartTime   = TimeCurrent();
+   g_ftReport_StratCount  = 0;
+   g_ftReport_LastWriteDay = -1;
+   for(int fsi = 0; fsi < 20; fsi++)
+   { g_ftReport_StratNames[fsi] = ""; g_ftReport_StratWins[fsi] = 0; g_ftReport_StratLosses[fsi] = 0; }
    if(InpTimerScanSec > 0)
    {
       EventSetTimer(InpTimerScanSec);
@@ -3147,9 +3213,12 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
    SavePatterns();
-   // v6.3.8 Upgrade 6: final gate analytics report on shutdown
+   // v6.3.8 Upgrade 6 / v6.3.9: final gate analytics report on shutdown
    PrintGateReport();
-   Print("=== v6.3.8 STI STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   WriteGateReportToFile();
+   // v6.3.9: final forward-test report on shutdown
+   WriteForwardTestReport();
+   Print("=== v6.3.9 STI STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -6040,17 +6109,23 @@ void OnTick()
    PG_UpdateHWM();
    PG_PerPositionRatchet();
 
-   // v6.3.8 Upgrade 7: daily profit lock — tighten trailing when day gain >= InpDailyProfitLockPct
+   // v6.3.9 UPGRADE — ATR-adaptive daily profit lock
+   // Tightens all open SLs once per trigger (not on every tick). ATR-based distance
+   // prevents over-tightening on high-volatility gold days with 40+ pip swings.
    if(InpDailyProfitLockPct > 0 && dailyStartEquity > 0)
    {
       double dayGainPct = (AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0;
       if(dayGainPct >= InpDailyProfitLockPct && !g_dailyProfitLockArmed)
       {
          g_dailyProfitLockArmed = true;
+         double lockATR = (ArraySize(bufATR) >= 2 && bufATR[1] > 0) ? bufATR[1] : 0.0;
          Print("PROFIT LOCK: daily gain ", DoubleToString(dayGainPct, 1),
                "% reached ", DoubleToString(InpDailyProfitLockPct, 1),
-               "% threshold — trailing stops tightened to lock 80% of day's gain");
-         // Tighten all open SLs toward 80% profit lock
+               "% threshold — tightening SLs with ATR-adaptive distance (ATR=",
+               DoubleToString(lockATR, 2), ")");
+         int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+         double minStop = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+         // Loop over ALL open positions (basket-safe)
          for(int pi = PositionsTotal() - 1; pi >= 0; pi--)
          {
             ulong ticket = PositionGetTicket(pi);
@@ -6059,21 +6134,35 @@ void OnTick()
             double pOpen   = PositionGetDouble(POSITION_PRICE_OPEN);
             double pSL     = PositionGetDouble(POSITION_SL);
             double pProfit = PositionGetDouble(POSITION_PROFIT);
-            if(pProfit <= 0) continue;
+            if(pProfit <= 0) continue; // only tighten profitable positions
             double pBid    = SymbolInfoDouble(Symbol(), SYMBOL_BID);
             double pAsk    = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
             double curPx   = (pDir == 0) ? pBid : pAsk;
-            double pDist   = MathAbs(curPx - pOpen);
-            double newSL   = (pDir == 0) // BUY
-                           ? NormalizeDouble(pOpen + pDist * 0.20, (int)SymbolInfoInteger(Symbol(),SYMBOL_DIGITS))
-                           : NormalizeDouble(pOpen - pDist * 0.20, (int)SymbolInfoInteger(Symbol(),SYMBOL_DIGITS));
-            // Only move SL in profit direction, never hurt the position
-            bool slImproves = (pDir == 0) ? (newSL > pSL + SymbolInfoDouble(Symbol(),SYMBOL_POINT)) :
-                                            (pSL == 0 || newSL < pSL - SymbolInfoDouble(Symbol(),SYMBOL_POINT));
-            if(slImproves) trade.PositionModify(ticket, newSL, PositionGetDouble(POSITION_TP));
+            // ATR-adaptive lock distance: at least 1.5×ATR behind price
+            double lockDist = (lockATR > 0) ? MathMax(1.5 * lockATR, minStop) : MathMax(0.0010, minStop);
+            double newSL = (pDir == 0) // BUY: SL below current price
+                         ? NormalizeDouble(curPx - lockDist, digits)
+                         : NormalizeDouble(curPx + lockDist, digits); // SELL: SL above current price
+            // Validate: new SL must be in profit direction, must not cross min stop level
+            bool slImproves = (pDir == 0)
+                            ? (newSL > pSL + SymbolInfoDouble(Symbol(), SYMBOL_POINT) && newSL < curPx - minStop)
+                            : (pSL == 0 || (newSL < pSL - SymbolInfoDouble(Symbol(), SYMBOL_POINT) && newSL > curPx + minStop));
+            if(slImproves)
+            {
+               bool ok = trade.PositionModify(ticket, newSL, PositionGetDouble(POSITION_TP));
+               if(ok) Print("PROFIT LOCK: ticket=", ticket,
+                            " SL moved to ", DoubleToString(newSL, digits),
+                            " (lockDist=", DoubleToString(lockDist, 2), " ATR-adaptive)");
+            }
          }
       }
-      else if(dayGainPct < InpDailyProfitLockPct * 0.5) g_dailyProfitLockArmed = false; // reset below half
+      // Partial reset: re-arm below 50% of lock threshold so it can fire again if
+      // profits recover and the day gain climbs back above the threshold
+      else if(g_dailyProfitLockArmed && dayGainPct < InpDailyProfitLockPct * 0.5)
+      {
+         g_dailyProfitLockArmed = false;
+         Print("PROFIT LOCK: reset — day gain dropped below 50% of threshold");
+      }
    }
 
    // Spread check — blocks NEW ENTRIES only
@@ -6347,8 +6436,8 @@ void OnTick()
                 : "SKIP";
    XAU_RecordMarketSnapshot("SCAN_EVALUATED", signal, setupName, grade, setupScore, combinedScore);
    // v6.3.8 Upgrade 6: count every real (non-SKIP) signal through the pipeline
-   if(signal != 0 && grade != "SKIP") g_totalSignals++;
-   // v6.3.8 Upgrade 7: 24h gate analytics report + equity watermark update
+   if(signal != 0 && grade != "SKIP") { g_totalSignals++; g_ftReport_Signals++; }
+   // v6.3.8 Upgrade 7 / v6.3.9: 24h gate analytics report + equity watermark update + FT report tracking
    {
       double curEq = AccountInfoDouble(ACCOUNT_EQUITY);
       if(curEq > g_equityHighWatermark) { g_equityHighWatermark = curEq; }
@@ -6369,7 +6458,28 @@ void OnTick()
          }
       }
       if(g_gateReportLast > 0 && (TimeCurrent() - g_gateReportLast) >= 86400)
+      {
          PrintGateReport();
+         WriteGateReportToFile();
+      }
+      // v6.3.9: track max floating P&L and session drawdown for forward-test report
+      double floatNow = AccountInfoDouble(ACCOUNT_PROFIT);
+      if(floatNow < 0 && MathAbs(floatNow) > g_ftReport_MaxFloat)
+         g_ftReport_MaxFloat = MathAbs(floatNow);
+      if(floatNow > 0 && floatNow > g_ftReport_MaxFav)
+         g_ftReport_MaxFav = floatNow;
+      if(g_ftReport_StartEquity > 0)
+      {
+         double sessionDD = g_ftReport_StartEquity - curEq;
+         if(sessionDD > g_ftReport_MaxDD) g_ftReport_MaxDD = sessionDD;
+      }
+      // v6.3.9: write forward-test report at 23:59 server time (once per day)
+      MqlDateTime dtNow; TimeCurrent(dtNow);
+      if(dtNow.hour == 23 && dtNow.min == 59 && dtNow.day != g_ftReport_LastWriteDay)
+      {
+         g_ftReport_LastWriteDay = dtNow.day;
+         WriteForwardTestReport();
+      }
    }
 
    double firstSeenPx = signal > 0 ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
@@ -7052,6 +7162,7 @@ void OnTick()
                // AI disagrees with sufficient conviction — BLOCK the trade
                aiVerdictStr = "BLOCK";
                g_gateBlocks_AI++; // v6.3.8 Upgrade 6
+               g_ftReport_AIBlocked++; // v6.3.9: forward-test tracking
                string blockMsg = StringFormat(
                   "AI DIRECTOR BLOCK: AI says %s (conf %d%%), strategy says %s. Sufficient conviction to veto.",
                   aiDirStr, lastAIConfidence, signal > 0 ? "BUY" : "SELL");
@@ -7072,6 +7183,7 @@ void OnTick()
             {
                aiVerdictStr = "BLOCK";
                g_gateBlocks_AI++; // v6.3.8 Upgrade 6
+               g_ftReport_AIBlocked++; // v6.3.9: forward-test tracking
                string blockMsg = StringFormat(
                   "AI DIRECTOR BLOCK: AI SKIP with confidence %d%% < min %.0f%%. Trade blocked.",
                   lastAIConfidence, InpAIDirectorMinConf);
@@ -7274,6 +7386,7 @@ void OnTick()
    if(!XAU_TradeBrainPreEntry(signal, setupName, grade, signature, brainLotMult, brainReason))
    {
       g_gateBlocks_TradeBrain++; // v6.3.8 Upgrade 6
+      g_ftReport_TBBlocked++;   // v6.3.9: forward-test tracking
       Print(brainReason);
       XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, brainReason);
       CloudPostReasoning("BLOCK", brainReason, RegimeName(), setupName,
@@ -7282,6 +7395,7 @@ void OnTick()
       lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "BRAIN-BLOCK";
       return;
    }
+   g_ftReport_TBAllowed++; // v6.3.9: TradeBrain allowed this trade through
    if(brainLotMult < 0.999)
    {
       sizeMulti *= brainLotMult;
@@ -7320,6 +7434,9 @@ void OnTick()
    }
    // v6.3.8 Upgrade 6: count allowed trade
    g_totalAllowed++;
+   // v6.3.9: track AI allow for forward-test report
+   if(StringLen(g_aiLastVerdict) > 0 && g_aiLastVerdict != "NEUTRAL" && g_aiLastVerdict != "ADVISORY")
+      g_ftReport_AIAllowed++;
    // v6.3.8 Upgrade 5: capture AI verdict for feedback loop (used at close)
    g_lastAIVerdict_ForMemory = g_aiLastVerdict;
    // v6.3.8 Upgrade 3: AI SL/TP Advisory — log what AI recommends, never auto-apply in ADVISORY mode
@@ -10464,6 +10581,21 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    g_aiCacheClaudeV  = g_aiClaudeVote;
    g_aiCacheGPTV     = g_aiGPTVote;
 
+   // v6.3.9: AI CONSENSUS logging — determine and log consensus_source
+   {
+      string csSource = "none";
+      bool cOk = (g_aiClaudeVote == "BUY" || g_aiClaudeVote == "SELL");
+      bool gOk = (g_aiGPTVote   == "BUY" || g_aiGPTVote   == "SELL");
+      if(cOk && gOk && g_aiClaudeVote == g_aiGPTVote) csSource = "dual_consensus";
+      else if(cOk && !gOk)  csSource = "claude_only";
+      else if(!cOk && gOk)  csSource = "gpt_only";
+      string finalStr = (dir == 1) ? "BUY" : (dir == -1) ? "SELL" : "NONE";
+      Print("AI DIRECTOR: Claude=", g_aiClaudeVote,
+            " GPT=", g_aiGPTVote,
+            " consensus=", csSource,
+            " final=", finalStr);
+   }
+
    return dir;
 }
 
@@ -10929,6 +11061,8 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    bool wasWin  = (profit >=  0.01);
    if(wasWin) wins++;
    else if(wasLoss) losses++;
+   // v6.3.9: forward-test report tracking — record this trade close
+   FTReport_RecordTrade(lastSignalSetup, wasWin, profit);
    RegisterClosedTradeCooldown(wasWin, wasLoss, profit);
    // v6.0 STI: record profitable closes so re-entry intelligence can watch
    // for a clean pullback before allowing the same-direction trade again.
@@ -11006,20 +11140,32 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
             {
                string sessTag = SessionTag();
                string regTag  = RegimeName();
+               // v6.3.9: build feedback body with all required fields
+               string fbDirStr = (lastTradeDir > 0) ? "BUY" : (lastTradeDir < 0) ? "SELL" : "UNKNOWN";
+               string fbReasonEsc = currentTradeThesis;
+               StringReplace(fbReasonEsc, "\"", "'");
+               StringReplace(fbReasonEsc, "\n", " ");
                string fbBody = StringFormat(
                   "{\"trade_id\":\"%I64u\",\"ai_verdict\":\"%s\",\"ai_confidence\":%d,"
-                  "\"outcome\":\"%s\",\"r_multiple\":%.2f,\"strategy\":\"%s\","
-                  "\"session\":\"%s\",\"regime\":\"%s\"}",
+                  "\"ai_reason\":\"%s\",\"outcome\":\"%s\",\"r_multiple\":%.2f,"
+                  "\"strategy\":\"%s\",\"session\":\"%s\",\"regime\":\"%s\","
+                  "\"direction\":\"%s\"}",
                   posId, g_lastAIVerdict_ForMemory, currentTradeConfidence,
-                  outcome, rMult, lastSignalSetup, sessTag, regTag);
+                  fbReasonEsc, outcome, rMult, lastSignalSetup, sessTag, regTag,
+                  fbDirStr);
                char fbData[], fbResult[]; string fbHdr;
                StringToCharArray(fbBody, fbData, 0, StringLen(fbBody));
                int fbCode = WebRequest("POST", InpServerURL + "/api/ai/feedback",
                                        "Content-Type: application/json\r\n",
                                        5000, fbData, fbResult, fbHdr);
-               if(fbCode == -1 && GetLastError() == 4060)
-                  Print("AI FEEDBACK: URL not whitelisted — add ", InpServerURL, " to Tools→Options→Expert Advisors");
-               else if(fbCode >= 200 && fbCode < 300)
+               int fbErr = GetLastError();
+               if(fbCode == -1 && fbErr == 4060)
+                  Print("AI FEEDBACK ERROR: WebRequest failed code=", fbErr, " — add URL to Tools→Options→Expert Advisors");
+               else if(fbCode == -1)
+                  Print("AI FEEDBACK ERROR: WebRequest failed code=", fbErr, " (network error or timeout)");
+               else if(fbCode < 200 || fbCode >= 300)
+                  Print("AI FEEDBACK ERROR: server returned HTTP ", fbCode);
+               else
                   Print("AI FEEDBACK SENT: verdict=", g_lastAIVerdict_ForMemory, " outcome=", outcome, " rMult=", DoubleToString(rMult, 2));
             }
          }
@@ -14301,7 +14447,7 @@ void SaveTradeBrainMemory()
    int h = FileOpen(TRADEBBRAIN_FILE, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE)
    {
-      Print("TRADEBBRAIN SAVE ERROR: cannot open file for write (err=", GetLastError(), ")");
+      Print("TRADEBRAIN SAVE ERROR: cannot open file for write (err=", GetLastError(), ")");
       return;
    }
    FileWrite(h, TRADEBBRAIN_HEADER);
@@ -14334,7 +14480,7 @@ void SaveTradeBrainMemory()
       count++;
    }
    FileClose(h);
-   Print("TRADEBBRAIN SAVE: ", count, " patterns written");
+   Print("TRADEBRAIN SAVE: ", count, " patterns written");
 }
 
 void LoadTradeBrainMemory()
@@ -14342,13 +14488,13 @@ void LoadTradeBrainMemory()
    if(InpBacktestMode) return;
    if(!FileIsExist(TRADEBBRAIN_FILE, FILE_COMMON)) return; // first run — start empty
    int h = FileOpen(TRADEBBRAIN_FILE, FILE_READ | FILE_CSV | FILE_COMMON, ',');
-   if(h == INVALID_HANDLE) { Print("TRADEBBRAIN LOAD: cannot open file (err=", GetLastError(), ")"); return; }
+   if(h == INVALID_HANDLE) { Print("TRADEBRAIN LOAD: cannot open file (err=", GetLastError(), ")"); return; }
 
    // First line must be the version header
    string hdr = FileReadString(h);
    if(hdr != TRADEBBRAIN_HEADER)
    {
-      Print("TRADEBBRAIN LOAD: header mismatch ('", hdr, "') — skipping file (version mismatch)");
+      Print("TRADEBRAIN LOAD: header mismatch ('", hdr, "') — skipping file (version mismatch)");
       FileClose(h); return;
    }
    // Skip column name row
@@ -14384,7 +14530,7 @@ void LoadTradeBrainMemory()
       if(StringLen(closedAtStr) < 5 || StringLen(pattern) == 0)
       {
          skipped++;
-         if(skipped <= 3) Print("TRADEBBRAIN LOAD: skipping corrupt/partial line at row ", loaded + skipped);
+         if(skipped <= 3) Print("TRADEBRAIN LOAD: skipping corrupt/partial line at row ", loaded + skipped);
          continue;
       }
       long closedAtLong = StringToInteger(closedAtStr);
@@ -14412,8 +14558,8 @@ void LoadTradeBrainMemory()
       loaded++;
    }
    FileClose(h);
-   if(skipped > 0) Print("TRADEBBRAIN LOAD: skipped ", skipped, " corrupt lines");
-   Print("TRADEBBRAIN LOAD: loaded ", loaded, " patterns from disk");
+   if(skipped > 0) Print("TRADEBRAIN LOAD: skipped ", skipped, " corrupt lines");
+   Print("TRADEBRAIN LOAD: loaded ", loaded, " patterns from disk");
 }
 
 // ============================================================
@@ -14452,7 +14598,7 @@ double TradeBrain_GetATRNormWinRate(int signal, string pattern, string session, 
    if(matchCount >= 5 && totalWeight > 0)
    {
       winRate = weightedWins / totalWeight;
-      Print("TRADEBBRAIN MATCH: ", matchCount, " patterns (ATR=", atrName,
+      Print("TRADEBRAIN MATCH: ", matchCount, " patterns (ATR=", atrName,
             " sess=", session, " regime=", htfTrend == 1 ? "BULL" : htfTrend == -1 ? "BEAR" : "RANGING",
             ") WR=", StringFormat("%.1f", winRate * 100.0), "%");
       return winRate;
@@ -14517,10 +14663,181 @@ void PrintGateReport()
 }
 
 // ============================================================
+// v6.3.9 UPGRADE — Gate Analytics File Report
+// ============================================================
+void WriteGateReportToFile()
+{
+   string fname = "XAUAI_GateReport_" + TimeToString(TimeCurrent(), TIME_DATE) + ".txt";
+   int fh = FileOpen(fname, FILE_WRITE | FILE_TXT | FILE_COMMON);
+   if(fh == INVALID_HANDLE) { Print("GATE REPORT: failed to open file (err=", GetLastError(), ")"); return; }
+   int blocked = g_totalSignals - g_totalAllowed;
+   double allowPct = (g_totalSignals > 0) ? (100.0 * g_totalAllowed / g_totalSignals) : 0.0;
+   FileWrite(fh, "=== XAUAI GATE ANALYTICS REPORT ===");
+   FileWrite(fh, "Date: " + TimeToString(TimeCurrent()));
+   FileWrite(fh, "Total signals:   " + IntegerToString(g_totalSignals));
+   FileWrite(fh, "Allowed trades:  " + IntegerToString(g_totalAllowed) + " (" +
+             DoubleToString(allowPct, 1) + "%)");
+   FileWrite(fh, "Blocked trades:  " + IntegerToString(blocked));
+   FileWrite(fh, "  Spread:        " + IntegerToString(g_gateBlocks_Spread));
+   FileWrite(fh, "  News:          " + IntegerToString(g_gateBlocks_News));
+   FileWrite(fh, "  Trend/PG:      " + IntegerToString(g_gateBlocks_Trend));
+   FileWrite(fh, "  Committee:     " + IntegerToString(g_gateBlocks_Committee));
+   FileWrite(fh, "  AI Director:   " + IntegerToString(g_gateBlocks_AI));
+   FileWrite(fh, "  TradeBrain:    " + IntegerToString(g_gateBlocks_TradeBrain));
+   FileWrite(fh, "  STI:           " + IntegerToString(g_gateBlocks_STI));
+   FileWrite(fh, "  Basket:        " + IntegerToString(g_gateBlocks_Basket));
+   FileWrite(fh, "  Daily Loss:    " + IntegerToString(g_gateBlocks_DailyLoss));
+   FileWrite(fh, "  Volatility:    " + IntegerToString(g_gateBlocks_Volatility));
+   FileWrite(fh, "  EPF:           " + IntegerToString(g_gateBlocks_EPF));
+   if(g_totalSignals > 20)
+   {
+      double passRate = allowPct;
+      if(passRate < 10.0)       FileWrite(fh, "DIAGNOSIS: SEVERE over-filtering — fewer than 10% of signals pass");
+      else if(passRate < 20.0)  FileWrite(fh, "DIAGNOSIS: Moderate over-filtering — fewer than 20% pass");
+      else if(passRate > 60.0)  FileWrite(fh, "DIAGNOSIS: Possible under-filtering — over 60% of signals pass");
+      else                      FileWrite(fh, "DIAGNOSIS: Pass rate is in normal range (20-60%)");
+   }
+   FileClose(fh);
+   Print("GATE REPORT: written to ", fname);
+}
+
+// ============================================================
+// v6.3.9 UPGRADE — 24h Forward-Test Report
+// ============================================================
+void FTReport_RecordTrade(string stratName, bool wasWin, double pnl)
+{
+   g_ftReport_Trades++;
+   if(wasWin) g_ftReport_Wins++; else g_ftReport_Losses++;
+   g_ftReport_TotalPnL += pnl;
+   // Update strategy breakdown
+   for(int si = 0; si < g_ftReport_StratCount; si++)
+   {
+      if(g_ftReport_StratNames[si] == stratName)
+      {
+         if(wasWin) g_ftReport_StratWins[si]++; else g_ftReport_StratLosses[si]++;
+         return;
+      }
+   }
+   if(g_ftReport_StratCount < 20)
+   {
+      g_ftReport_StratNames[g_ftReport_StratCount]  = stratName;
+      g_ftReport_StratWins[g_ftReport_StratCount]   = wasWin ? 1 : 0;
+      g_ftReport_StratLosses[g_ftReport_StratCount] = wasWin ? 0 : 1;
+      g_ftReport_StratCount++;
+   }
+}
+
+void WriteForwardTestReport()
+{
+   MqlDateTime dt; TimeCurrent(dt);
+   string dateStr = StringFormat("%04d.%02d.%02d", dt.year, dt.mon, dt.day);
+   string fname = "XAUAI_ForwardTest_" + dateStr + ".txt";
+   int fh = FileOpen(fname, FILE_WRITE | FILE_TXT | FILE_COMMON);
+   if(fh == INVALID_HANDLE) { Print("FT REPORT: failed to open file (err=", GetLastError(), ")"); return; }
+
+   double curEq = AccountInfoDouble(ACCOUNT_EQUITY);
+   double netPnL = curEq - g_ftReport_StartEquity;
+   double netPct = (g_ftReport_StartEquity > 0) ? (netPnL / g_ftReport_StartEquity * 100.0) : 0.0;
+   double ddPct  = (g_ftReport_StartEquity > 0) ? (g_ftReport_MaxDD / g_ftReport_StartEquity * 100.0) : 0.0;
+   double mfPct  = (g_ftReport_StartEquity > 0) ? (g_ftReport_MaxFloat / g_ftReport_StartEquity * 100.0) : 0.0;
+   double favPct = (g_ftReport_StartEquity > 0) ? (g_ftReport_MaxFav / g_ftReport_StartEquity * 100.0) : 0.0;
+   int    tWins  = g_ftReport_Wins;
+   int    tLoss  = g_ftReport_Losses;
+   int    tTotal = g_ftReport_Trades;
+   double wr     = (tTotal > 0) ? (100.0 * tWins / tTotal) : 0.0;
+   double lossR  = (tTotal > 0) ? (100.0 * tLoss / tTotal) : 0.0;
+   double aiPassR = (g_ftReport_AIAllowed + g_ftReport_AIBlocked > 0)
+                  ? (100.0 * g_ftReport_AIAllowed / (g_ftReport_AIAllowed + g_ftReport_AIBlocked)) : 0.0;
+
+   FileWrite(fh, "=== XAUAI SNIPER v6.3.9 — 24H FORWARD TEST REPORT ===");
+   FileWrite(fh, "Date:              " + dateStr);
+   FileWrite(fh, "Start equity:      $" + DoubleToString(g_ftReport_StartEquity, 2));
+   FileWrite(fh, "End equity:        $" + DoubleToString(curEq, 2));
+   FileWrite(fh, "Net P&L:           " + (netPnL >= 0 ? "+" : "") + "$" +
+             DoubleToString(netPnL, 2) + " (" + (netPct >= 0 ? "+" : "") +
+             DoubleToString(netPct, 2) + "%)");
+   FileWrite(fh, "---");
+   FileWrite(fh, "Signals generated: " + IntegerToString(g_ftReport_Signals));
+   FileWrite(fh, "Trades opened:     " + IntegerToString(tTotal));
+   FileWrite(fh, "  Wins:            " + IntegerToString(tWins) + " (" + DoubleToString(wr, 1) + "%)");
+   FileWrite(fh, "  Losses:          " + IntegerToString(tLoss) + " (" + DoubleToString(lossR, 1) + "%)");
+   FileWrite(fh, "Max drawdown:      -$" + DoubleToString(g_ftReport_MaxDD, 2) +
+             " (-" + DoubleToString(ddPct, 2) + "%)");
+   FileWrite(fh, "Max floating loss: -$" + DoubleToString(g_ftReport_MaxFloat, 2) +
+             " (-" + DoubleToString(mfPct, 2) + "%)");
+   FileWrite(fh, "Max floating gain: +$" + DoubleToString(g_ftReport_MaxFav, 2) +
+             " (+" + DoubleToString(favPct, 2) + "%)");
+   FileWrite(fh, "---");
+   FileWrite(fh, "AI Director");
+   FileWrite(fh, "  Allowed:         " + IntegerToString(g_ftReport_AIAllowed));
+   FileWrite(fh, "  Blocked:         " + IntegerToString(g_ftReport_AIBlocked));
+   FileWrite(fh, "  Pass rate:       " + DoubleToString(aiPassR, 1) + "%");
+   FileWrite(fh, "TradeBrain");
+   FileWrite(fh, "  Allowed:         " + IntegerToString(g_ftReport_TBAllowed));
+   FileWrite(fh, "  Blocked:         " + IntegerToString(g_ftReport_TBBlocked));
+   FileWrite(fh, "---");
+   FileWrite(fh, "Strategy performance:");
+   for(int si = 0; si < g_ftReport_StratCount; si++)
+   {
+      int sw = g_ftReport_StratWins[si], sl = g_ftReport_StratLosses[si];
+      int st = sw + sl;
+      double swr = (st > 0) ? (100.0 * sw / st) : 0.0;
+      FileWrite(fh, "  " + g_ftReport_StratNames[si] + ":  " + IntegerToString(st) +
+                " trades  " + IntegerToString(sw) + "W/" + IntegerToString(sl) + "L" +
+                "  WR=" + DoubleToString(swr, 1) + "%");
+   }
+   FileWrite(fh, "---");
+   // Biggest gate block
+   int maxBlockVal = 0; string maxBlockName = "None";
+   int blockVals[11];
+   string blockNames[11];
+   blockVals[0]=g_gateBlocks_Spread;    blockNames[0]="Spread";
+   blockVals[1]=g_gateBlocks_News;      blockNames[1]="News";
+   blockVals[2]=g_gateBlocks_Trend;     blockNames[2]="Trend/PG";
+   blockVals[3]=g_gateBlocks_Committee; blockNames[3]="Committee";
+   blockVals[4]=g_gateBlocks_AI;        blockNames[4]="AI Director";
+   blockVals[5]=g_gateBlocks_TradeBrain;blockNames[5]="TradeBrain";
+   blockVals[6]=g_gateBlocks_STI;       blockNames[6]="STI";
+   blockVals[7]=g_gateBlocks_Basket;    blockNames[7]="Basket";
+   blockVals[8]=g_gateBlocks_DailyLoss; blockNames[8]="Daily Loss";
+   blockVals[9]=g_gateBlocks_Volatility;blockNames[9]="Volatility";
+   blockVals[10]=g_gateBlocks_EPF;      blockNames[10]="EPF";
+   for(int bi = 0; bi < 11; bi++)
+      if(blockVals[bi] > maxBlockVal) { maxBlockVal = blockVals[bi]; maxBlockName = blockNames[bi]; }
+   FileWrite(fh, "Biggest gate block: " + maxBlockName + " (" + IntegerToString(maxBlockVal) + " blocks)");
+   FileWrite(fh, "---");
+   int totalSig = g_ftReport_Signals;
+   double passRate2 = (totalSig > 0) ? (100.0 * g_ftReport_Trades / totalSig) : 0.0;
+   if(totalSig > 20)
+   {
+      if(passRate2 < 10.0)
+         FileWrite(fh, "DIAGNOSIS: SEVERE over-filtering — fewer than 10% of signals passed.");
+      else if(passRate2 < 20.0)
+         FileWrite(fh, "DIAGNOSIS: Pass rate " + DoubleToString(passRate2, 1) + "% — moderate, check gate counters above.");
+      else if(passRate2 > 60.0)
+         FileWrite(fh, "DIAGNOSIS: Pass rate " + DoubleToString(passRate2, 1) + "% — high, possible under-filtering.");
+      else
+         FileWrite(fh, "DIAGNOSIS: Pass rate " + DoubleToString(passRate2, 1) + "% — normal range.");
+   }
+   if(g_ftReport_AIBlocked > 0 && g_ftReport_AIAllowed > 0)
+   {
+      double aiBlkPct = 100.0 * g_ftReport_AIBlocked / (g_ftReport_AIAllowed + g_ftReport_AIBlocked);
+      if(aiBlkPct > 50.0)
+         FileWrite(fh, "RECOMMENDATION: Monitor AI block rate. If AI blocks >50% of setups, review AI confidence threshold.");
+   }
+   FileClose(fh);
+   Print("FT REPORT: written to ", fname);
+}
+
+// ============================================================
 // v6.3.8 UPGRADE 7 — Performance multiplier (anti-martingale)
 // ============================================================
 double GetPerformanceMultiplier()
 {
+   // v6.3.9: SAFETY OVERRIDE 4 — TradeBrain sample size guard
+   // If fewer than 10 historical patterns in memory, don't boost
+   if(g_tradeMemCount < 10) return 1.0;
+
    // Need at least 5 recent trades in g_tradeMemory to act
    int count = 0;
    for(int k = 0; k < 500; k++)
@@ -14549,14 +14866,53 @@ double GetPerformanceMultiplier()
    double wr10 = (total10 > 0) ? (double)wins10 / total10 : 0.5;
 
    double mult = 1.0;
-   if(wr10 >= 0.70 && streakIsWin && streak >= 3) mult = MathMin(1.30, 1.15);
+   if(wr10 >= 0.70 && streakIsWin && streak >= 3) mult = 1.15;
    else if(wr10 >= 0.55) mult = 1.0;
    else if(wr10 >= 0.40) mult = 0.85;
-   else if(wr10 < 0.40 || (!streakIsWin && streak >= 3)) mult = 0.70;
-   if(!streakIsWin && streak >= 5) mult = 0.50;
+   // v6.3.9: consecutive loss thresholds fire immediately
+   if(!streakIsWin && streak >= 5) { mult = 0.50; }       // 5+ losses → 0.50 immediately
+   else if(!streakIsWin && streak >= 3) { mult = 0.70; }  // 3+ losses → 0.70 immediately
+   else if(wr10 < 0.40) mult = MathMin(mult, 0.70);
+   // Also respect pg_consecutiveLosses counter (aligned with EPF loss-streak tracking)
+   if(pg_consecutiveLosses >= 5) mult = MathMin(mult, 0.50);
+   else if(pg_consecutiveLosses >= 3) mult = MathMin(mult, 0.70);
 
-   // Cap
-   mult = MathMax(0.50, MathMin(1.30, mult));
+   // v6.3.9: SAFETY OVERRIDE 1 — Never increase lots during floating drawdown > 0.5% balance
+   double floatingPL = AccountInfoDouble(ACCOUNT_PROFIT);
+   if(floatingPL < 0 && MathAbs(floatingPL) > AccountInfoDouble(ACCOUNT_BALANCE) * 0.005)
+      mult = MathMin(mult, 1.0);
+
+   // v6.3.9: SAFETY OVERRIDE 2 — Never increase during high volatility (ATR > 1.5× 50-bar median)
+   if(ArraySize(bufATR) >= 2 && bufATR[1] > 0)
+   {
+      double curATR = bufATR[1];
+      // Compute 50-bar ATR median (same method as VolatilityKillReason — no extra handle)
+      int hVolATR = iATR(Symbol(), PERIOD_M5, 14);
+      if(hVolATR != INVALID_HANDLE)
+      {
+         double atrSamples[51];
+         if(CopyBuffer(hVolATR, 0, 0, 51, atrSamples) == 51)
+         {
+            double sample50[50];
+            for(int si = 0; si < 50; si++) sample50[si] = atrSamples[si + 1];
+            ArraySort(sample50);
+            double atrMedian = sample50[25];
+            if(atrMedian > 0 && curATR > atrMedian * 1.5)
+               mult = MathMin(mult, 1.0);
+         }
+         IndicatorRelease(hVolATR);
+      }
+   }
+
+   // v6.3.9: SAFETY OVERRIDE 3 — Never increase after daily loss
+   if(dailyStartEquity > 0)
+   {
+      double dailyResult = AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity;
+      if(dailyResult < 0) mult = MathMin(mult, 1.0);
+   }
+
+   // v6.3.9: SAFETY OVERRIDE 5 — Hard cap at 1.15× (was 1.30×)
+   mult = MathMax(0.50, MathMin(1.15, mult));
 
    // Log when multiplier changes
    if(MathAbs(mult - g_perfMultLast) > 0.05)
@@ -14564,6 +14920,8 @@ double GetPerformanceMultiplier()
       Print("PERF MULTIPLIER: ", DoubleToString(mult, 2),
             " (WR10=", StringFormat("%.0f", wr10 * 100.0), "%",
             " streak=", streak, streakIsWin?" wins":" losses",
+            " pg_consec=", pg_consecutiveLosses,
+            " floatPL=", DoubleToString(AccountInfoDouble(ACCOUNT_PROFIT), 2),
             ") — lot sizing adjusted");
       g_perfMultLast = mult;
    }

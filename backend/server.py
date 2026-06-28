@@ -1915,11 +1915,11 @@ async def ai_feedback(data: dict):
 
 @api_router.get("/ai/feedback/stats")
 async def ai_feedback_stats():
-    """Compute accuracy by confidence band, strategy, session from feedback log."""
+    """Compute accuracy by confidence band, strategy, session, direction from feedback log."""
     try:
         feedback_path = ROOT_DIR / "ai_feedback_log.jsonl"
         if not feedback_path.exists():
-            return {"total": 0, "correct": 0, "accuracy": 0.0, "by_confidence": {}, "by_strategy": {}, "by_session": {}}
+            return {"total": 0, "message": "no feedback recorded yet"}
 
         records = []
         with open(feedback_path) as f:
@@ -1930,39 +1930,47 @@ async def ai_feedback_stats():
                     except Exception: pass
 
         total = len(records)
+        if total == 0:
+            return {"total": 0, "message": "no feedback recorded yet"}
+
         correct = sum(1 for r in records if r.get("outcome") in ("CORRECT", "CONSERVATIVE_CORRECT"))
         accuracy = correct / total if total > 0 else 0.0
 
-        # By confidence band (0-49, 50-64, 65-79, 80+)
+        # By confidence band (0-49, 50-64, 65-79, 80-100)
         bands = {"0-49": {"total":0,"correct":0}, "50-64": {"total":0,"correct":0},
-                 "65-79": {"total":0,"correct":0}, "80+": {"total":0,"correct":0}}
+                 "65-79": {"total":0,"correct":0}, "80-100": {"total":0,"correct":0}}
         by_strategy = {}
         by_session   = {}
+        by_direction = {}
         for r in records:
             c = int(r.get("ai_confidence", 0))
-            band = "0-49" if c < 50 else "50-64" if c < 65 else "65-79" if c < 80 else "80+"
+            band = "0-49" if c < 50 else "50-64" if c < 65 else "65-79" if c < 80 else "80-100"
             bands[band]["total"] += 1
-            if r.get("outcome") in ("CORRECT", "CONSERVATIVE_CORRECT"):
+            is_correct = r.get("outcome") in ("CORRECT", "CONSERVATIVE_CORRECT")
+            if is_correct:
                 bands[band]["correct"] += 1
             strat = r.get("strategy", "UNKNOWN")
             sess  = r.get("session",  "UNKNOWN")
+            dirn  = r.get("direction","UNKNOWN")
             by_strategy.setdefault(strat, {"total":0,"correct":0})
             by_session.setdefault(sess,   {"total":0,"correct":0})
+            by_direction.setdefault(dirn, {"total":0,"correct":0})
             by_strategy[strat]["total"] += 1
             by_session[sess]["total"]   += 1
-            if r.get("outcome") in ("CORRECT", "CONSERVATIVE_CORRECT"):
+            by_direction[dirn]["total"] += 1
+            if is_correct:
                 by_strategy[strat]["correct"] += 1
                 by_session[sess]["correct"]   += 1
+                by_direction[dirn]["correct"] += 1
 
-        for k in bands:
-            n = bands[k]["total"]
-            bands[k]["accuracy"] = bands[k]["correct"] / n if n > 0 else 0.0
-        for k in by_strategy:
-            n = by_strategy[k]["total"]
-            by_strategy[k]["accuracy"] = by_strategy[k]["correct"] / n if n > 0 else 0.0
-        for k in by_session:
-            n = by_session[k]["total"]
-            by_session[k]["accuracy"] = by_session[k]["correct"] / n if n > 0 else 0.0
+        def add_accuracy(d):
+            for k in d:
+                n = d[k]["total"]
+                d[k]["accuracy"] = round(d[k]["correct"] / n, 4) if n > 0 else 0.0
+        add_accuracy(bands)
+        add_accuracy(by_strategy)
+        add_accuracy(by_session)
+        add_accuracy(by_direction)
 
         return {
             "total": total,
@@ -1970,7 +1978,8 @@ async def ai_feedback_stats():
             "accuracy": round(accuracy, 4),
             "by_confidence": bands,
             "by_strategy": by_strategy,
-            "by_session": by_session
+            "by_session": by_session,
+            "by_direction": by_direction
         }
     except Exception as e:
         logger.error(f"AI feedback stats error: {e}")

@@ -28,7 +28,7 @@ export default function HeroSection({ performance }) {
         {/* Top badge row */}
         <div className="mb-6 flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-300/25 bg-violet-300/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-violet-200">
-            <Sparkle size={11} weight="fill" /> AI Director — v6.3.6
+            <Sparkle size={11} weight="fill" /> AI Director — v6.3.9
           </span>
           <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-white/45">
             XAUUSD · M5 · MT5
@@ -46,7 +46,7 @@ export default function HeroSection({ performance }) {
             </h1>
 
             <p className="mt-5 max-w-xl text-[15px] leading-7 text-white/60">
-              XauAI Sniper v6.3.6 runs on your MT5 with a full AI Director — Claude Sonnet and GPT jointly decide every entry, position size, and exit. ML cloud warm-start loads pattern history on the first tick. Adaptive Chandelier exits trail winners without giving back gains.
+              XauAI Sniper v6.3.9 runs on your MT5 with a full AI Director — Claude Sonnet and GPT jointly decide every entry, position size, and exit. ML cloud warm-start loads pattern history on the first tick. Adaptive Chandelier exits trail winners without giving back gains.
             </p>
 
             <div className="mt-7 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -61,7 +61,7 @@ export default function HeroSection({ performance }) {
             <div className="mt-7 flex flex-col gap-3 sm:flex-row">
               <a href="#download" data-testid="hero-download-btn"
                 className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-[13px] font-extrabold text-black transition hover:bg-amber-200">
-                <ArrowDown size={15} weight="bold" /> Download v6.3.6
+                <ArrowDown size={15} weight="bold" /> Download v6.3.9
               </a>
               <a href="/command" data-testid="hero-cloud-btn"
                 className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.1] bg-white/[0.05] px-6 py-3.5 text-[13px] font-semibold text-white transition hover:bg-white/[0.09]">
@@ -80,7 +80,7 @@ export default function HeroSection({ performance }) {
               <div className="flex items-center justify-between border-b border-white/[0.07] px-5 py-3.5">
                 <div>
                   <div className="font-mono text-[9px] uppercase tracking-[0.24em] text-white/30">Master terminal</div>
-                  <div className="mt-0.5 text-[14px] font-semibold">XAUUSD AI Sniper v6.3.6</div>
+                  <div className="mt-0.5 text-[14px] font-semibold">XAUUSD AI Sniper v6.3.9</div>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="h-2 w-2 rounded-full bg-emerald-400" />
