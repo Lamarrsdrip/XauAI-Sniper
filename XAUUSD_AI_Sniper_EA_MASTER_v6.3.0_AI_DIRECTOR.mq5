@@ -1289,6 +1289,11 @@ ENUM_REGIME currentRegime;
 // +1 = H1+HTF both bullish, -1 = H1+HTF both bearish, 0 = no consensus.
 int    g_htfConsensusDir = 0;
 
+// v6.3.5: Hive verdict cache — one WebRequest per bar per signature
+string   g_hiveLastSig     = "";
+int      g_hiveLastVerdict  = 0;
+int      g_hiveLastBar      = -1;
+
 // v6.3.0: AI Director state
 int    g_aiConsecutiveFails = 0;   // count of back-to-back AI server failures
 bool   g_aiOffline = false;        // true when AI fails InpAIOfflineMaxFails times in a row
@@ -3317,33 +3322,35 @@ string BuildSignature(int dir, string setupName)
 //+------------------------------------------------------------------+
 int GetHiveVerdict(string signature)
 {
-   if(InpBacktestMode) return 0;                       // Tester: no network
+   if(InpBacktestMode) return 0;
    if(StringLen(InpServerURL) < 10 || StringLen(signature) == 0) return 0;
+   // Cache: one WebRequest per bar per signature — prevents hammering on every tick
+   int curBar = iBars(Symbol(), PERIOD_M5);
+   if(signature == g_hiveLastSig && curBar == g_hiveLastBar) return g_hiveLastVerdict;
+
    string url = InpServerURL + "/api/ml/hive/score";
    string headers = "Content-Type: application/json\r\n";
    string body = StringFormat("{\"signature\":\"%s\",\"window_days\":7}", signature);
    char pd[], result[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    int res = WebRequest("POST", url, headers, 8000, pd, result, rh);
-   if(res != 200) return 0;
+   if(res != 200) { g_hiveLastSig = signature; g_hiveLastBar = curBar; g_hiveLastVerdict = 0; return 0; }
    string response = CharArrayToString(result);
    int total = ExtractJsonInt(response, "total", 0);
    double wr = ExtractJsonDouble(response, "wr", 0.5);
    string verdict = ExtractJsonString(response, "verdict");
 
+   int hv = 0;
    if(total < InpHiveMinTrustedSamples)
+   { Print("HIVE IGNORED: sample=", total, "/", InpHiveMinTrustedSamples, " | wr=", DoubleToString(wr*100,1), "% | verdict=", verdict); }
+   else
    {
-      Print("HIVE IGNORED: sample=", total, " < trusted minimum ",
-            InpHiveMinTrustedSamples, " | wr=", DoubleToString(wr * 100.0, 1),
-            "% | verdict=", verdict);
-      return 0;
+      Print("HIVE TRUSTED: sample=", total, " | wr=", DoubleToString(wr*100,1), "% | verdict=", verdict);
+      if(StringFind(response, "\"BOOST\"") >= 0) hv =  1;
+      if(StringFind(response, "\"VETO\"")  >= 0) hv = -1;
    }
-
-   Print("HIVE TRUSTED: sample=", total, " | wr=", DoubleToString(wr * 100.0, 1),
-         "% | verdict=", verdict);
-   if(StringFind(response, "\"BOOST\"") >= 0) return 1;
-   if(StringFind(response, "\"VETO\"")  >= 0) return -1;
-   return 0;
+   g_hiveLastSig = signature; g_hiveLastBar = curBar; g_hiveLastVerdict = hv;
+   return hv;
 }
 
 //+------------------------------------------------------------------+
@@ -6754,11 +6761,13 @@ void OnTick()
       double mlRaw = GetMLScoreWithSamples(signal, signature, mlSamples);
       double mlScore = SmoothedMLScore(mlRaw, signature);   // v5.8.6 — smooth only inside the same setup/direction signature
       bool mlTrusted = (mlSamples >= InpMLMinTrustedSamples);
-      Print("LOCAL ML AUDIT: signature samples=", mlSamples,
-            " trusted=", mlTrusted ? "Y" : "N",
-            " wr=", DoubleToString(mlRaw * 100.0, 0),
-            "% smoothed=", DoubleToString(mlScore * 100.0, 0),
-            "% min=", InpMLMinTrustedSamples);
+      if(!mlTrusted)
+         Print("LOCAL ML: learning mode — ", mlSamples, "/", InpMLMinTrustedSamples,
+               " matching samples, no authority yet");
+      else
+         Print("LOCAL ML AUDIT: samples=", mlSamples,
+               " wr=", DoubleToString(mlRaw * 100.0, 0),
+               "% smoothed=", DoubleToString(mlScore * 100.0, 0), "%");
       if(mlTrusted && mlScore <= 0.30)
       {
          Print("TRADE BLOCKED BECAUSE: LOCAL ML VETO — WR=", DoubleToString(mlScore * 100, 0),
@@ -10415,16 +10424,59 @@ void LoadPatterns()
       string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\"}", InpLicensePIN, Symbol());
       char pd[], result[]; string rh;
       StringToCharArray(body, pd, 0, StringLen(body));
-      int res = WebRequest("POST", url, headers, 10000, pd, result, rh);
+      int res = WebRequest("POST", url, headers, 15000, pd, result, rh);
       if(res == 200)
       {
          string response = CharArrayToString(result);
+         // v6.3.5 FIX: actually parse patterns[] from cloud JSON, not just log count
+         int arrStart = StringFind(response, "\"patterns\":[");
+         if(arrStart >= 0)
+         {
+            arrStart += 12; // skip past "patterns":[
+            int cloudCount = 0;
+            int pos = arrStart;
+            while(pos < StringLen(response) && cloudCount < InpMaxPatterns)
+            {
+               int objStart = StringFind(response, "{", pos);
+               if(objStart < 0) break;
+               int objEnd = StringFind(response, "}", objStart);
+               if(objEnd < 0) break;
+               string obj = StringSubstr(response, objStart, objEnd - objStart + 1);
+               TradePattern p;
+               p.direction  = ExtractJsonInt(obj, "d", 0);
+               p.emaDiff    = ExtractJsonDouble(obj, "ed", 0);
+               p.rsi        = ExtractJsonDouble(obj, "r", 50);
+               p.atr        = ExtractJsonDouble(obj, "a", 0);
+               p.hour       = ExtractJsonInt(obj, "h", 0);
+               p.dayOfWeek  = ExtractJsonInt(obj, "dw", 0);
+               p.regime     = ExtractJsonInt(obj, "rg", 0);
+               p.setupType  = ExtractJsonInt(obj, "st", 0);
+               p.wasWinner  = ExtractJsonInt(obj, "w", 0) == 1;
+               p.profit     = ExtractJsonDouble(obj, "p", 0);
+               p.signature  = ExtractJsonString(obj, "sig");
+               if(p.direction != 0 && StringLen(p.signature) > 0)
+               {
+                  ArrayResize(patterns, cloudCount + 1);
+                  patterns[cloudCount] = p;
+                  cloudCount++;
+               }
+               pos = objEnd + 1;
+            }
+            if(cloudCount > 0)
+            {
+               patternCount = cloudCount;
+               Print("ML CLOUD: Warm-start — loaded ", patternCount, " patterns, ML authority immediate");
+               SavePatterns(); // write local .bin so future restarts use fast local path
+               return;        // skip local file read — cloud data is authoritative
+            }
+         }
+         // No patterns array or empty — just log the server count
          int countIdx = StringFind(response, "\"count\":");
          if(countIdx >= 0)
          {
             string cs = StringSubstr(response, countIdx + 8, 10);
             int ci = StringFind(cs, ","); if(ci < 0) ci = StringFind(cs, "}");
-            if(ci > 0) { cs = StringSubstr(cs, 0, ci); if(StringToInteger(cs) > 0) { Print("ML CLOUD: ", cs, " patterns"); } }
+            if(ci > 0) { cs = StringSubstr(cs, 0, ci); Print("ML CLOUD: server reports ", cs, " patterns (none parsed — fresh start)"); }
          }
       }
    }
