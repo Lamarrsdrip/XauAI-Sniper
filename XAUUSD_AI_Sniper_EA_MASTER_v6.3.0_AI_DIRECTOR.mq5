@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                              v6.0.4 — Calendar + Memory + MidLock   |
+//|                    v6.3.6 — AI Director + ML Warm-Start + Adaptive Exits|
 //+------------------------------------------------------------------+
 // v5.8.51 CHANGES (Live Account Readiness Audit 2026-06-18):
 //   1. SL THROTTLE: trailing mods capped at 1/sec (prevents 15-30s cascade on 3-pos baskets)
@@ -252,8 +252,8 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.3.0"
-#property description "XAUUSD AI Sniper v6.3.0 — AI DIRECTOR: real LLM authority over entries, sizing, and exit management"
+#property version   "6.3.6"
+#property description "XAUUSD AI Sniper v6.3.6 — AI Director + ML cloud warm-start + adaptive Chandelier exits + enriched AI exit context"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
