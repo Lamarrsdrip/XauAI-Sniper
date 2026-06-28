@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|                              v6.0.3 — Forensic Growth Audit       |
+//|                    v6.3.6 — AI Director + ML Warm-Start + Adaptive Exits|
 //+------------------------------------------------------------------+
 // v5.8.51 CHANGES (Live Account Readiness Audit 2026-06-18):
 //   1. SL THROTTLE: trailing mods capped at 1/sec (prevents 15-30s cascade on 3-pos baskets)
@@ -72,6 +72,142 @@
 //     PG_HTFTrendGet() releases hEMA and hATR handles on ALL failure paths, not just success.
 //       Eliminates handle leaks when the indicator read fails mid-function.
 //   NET RESULT: lowest per-tick overhead yet, no handle leaks, no trading logic changed.
+// v6.1.3 CHANGES (Anti-Trend Protection + Basket Loss Block 2026-06-26):
+//   ROOT CAUSE AUDIT: Bot was opening SELL trades during a clear XAUUSD bull move
+//   (3991→4022→4036+), losing -$260 per trade on 0.18 lots ($3k account).
+//   Five specific bugs identified and fixed:
+//
+//   1. SQUEEZE_RELEASE had NO H1 trend check — fired sell when BB expanded down
+//      even during H1 uptrend. Fixed: block sell if h1TrendDir==1 or htfBullConsensus.
+//
+//   2. LONDON_FIX_PIN had NO trend check — faded EVERY London spike regardless of
+//      direction. In a gold bull run, every spike is a valid buy continuation.
+//      Fixed: only fade spike if H1 is NOT trending in spike direction.
+//
+//   3. RANGE_REVERSAL sell required h1TrendDir <= 0 (neutral OR bearish) — neutral
+//      H1 (spread < 0.0015) let sells fire in a clearly bullish market.
+//      Fixed: now requires h1TrendDir == -1 AND !htfBullConsensus.
+//
+//   4. MULTI_EXTREME sell same bug — h1TrendDir <= 0 allowed neutral-H1 sells.
+//      Fixed: requires h1TrendDir == -1 AND !htfBullConsensus.
+//
+//   5. No protection against adding sells into a losing sell basket.
+//      Fixed: BasketDirectionLossBlock() — if same-direction floating loss exceeds
+//      InpBasketDirLossBlockPct (default 2%) of balance, no new same-dir entries.
+//
+//   6. GLOBAL ANTI-TREND VETO added at end of ScoreSetups():
+//      When H1 + context-TF both agree on a direction, all counter-trend mean-
+//      reversion setups are blocked. Even TREND_PULLBACK sells are blocked if
+//      H1+HTF are both bullish (M5 pullback in bull trend = don't sell gold).
+//
+//   New inputs:
+//      InpBasketDirLossBlock    = true   (master switch)
+//      InpBasketDirLossBlockPct = 2.0    (% of balance trigger)
+//
+// v6.1.2 CHANGES (No DD Blocking 2026-06-25):
+//   Removed all drawdown-based entry blocks. Bot now trades regardless of daily loss.
+//   1. InpEPF_HardDailyDDPct = 0  → hard daily loss lockdown disabled
+//   2. InpEPF_T4BlockHardDD  = false → T4 hard DD block disabled
+//   3. InpEPF_CooldownMin    = 0  → no cooldown pause after consecutive losses
+//   4. InpStreakPauseSec      = 0  → no streak pause
+//   EPF lot-reduction tiers (T1-T4 on profit milestones) are kept — they only
+//   adjust size, they do not block. Goal: bot always fires when setup qualifies.
+//
+// v6.1.1 CHANGES (Data-Backed Block Removal 2026-06-25):
+//   30-day forensic attribution (133 trades, WR 63.2%, PF 1.78, net +$228,874) proved:
+//   1. DIR-LOCK DEFAULT → false: 30-day data: 1 blocked trade, 2 would-win, 0 would-loss, -5.27 ATR
+//      net cost. Zero protection benefit. Costs more in suppressed growth than it ever saves.
+//   2. ANTI-BIAS DEFAULT → false: 30-day data: 15 blocked, 7 would-win, 7 would-loss (50/50).
+//      Net cost -1.56 ATR. A 50/50 filter is indistinguishable from random — not worth running.
+//   3. EPF T4 EliteLotMult 0.12 → 0.20: The lot collapse from avg 21.40 to 0.05 is the primary
+//      growth blocker in the current phase. T4 guarded mode at 0.12× makes recovery impossible.
+//      0.20× is still strongly defensive while allowing the account to compound back.
+//   Rule: being strict does not mean being smart. These three blocks cost more than they save.
+//   All other logic unchanged. InpDirectionLockout and InpAntiBiasCorrection remain as inputs —
+//   power users can still enable them; default is now data-proven off.
+//
+// v6.1.0 CHANGES (SMC Entry Layer 2026-06-24):
+//   SMC (SMART MONEY CONCEPTS) ADDITIVE CONFIRMATION — the xaubot's entry eye on your brain.
+//   PHILOSOPHY: Nothing removed. Nothing gated. SMC bonus lifts quality entries to A/A+
+//   and exposes SMC-opposed setups as lower-grade B trades, letting the committee/EPF
+//   handle sizing naturally. The aggressive growth personality is fully preserved.
+//
+//   1. SMC_DetectBOS(): Break of Structure on H1.
+//      Tracks highest high and lowest low in InpSMC_BOS_Lookback bars.
+//      Bullish BOS: H1 close breaks above recent swing high → g_smc_bos_dir = +1.
+//      Bearish BOS: H1 close breaks below recent swing low → g_smc_bos_dir = -1.
+//      BOS direction aligned with trade: +InpSMC_BOS_BonusScore to setup score.
+//      BOS opposing: logged as BOS_OPP (awareness only, no penalty — growth personality preserved).
+//
+//   2. SMC_DetectOrderBlocks(): Order Block zones on H1.
+//      Bullish OB: last bearish H1 candle before a confirmed bullish impulse (>5×ATR move up).
+//      Bearish OB: last bullish H1 candle before a confirmed bearish impulse (>5×ATR move down).
+//      When price RETURNS to the OB zone: +InpSMC_OB_BonusScore (default +2.0).
+//      This is the xaubot's core entry concept — buying into demand, selling into supply.
+//
+//   3. SMC_DetectFVGs(): Fair Value Gaps on M15.
+//      3-bar imbalance: candle[i+1].high < candle[i-1].low (bullish FVG, price must fill it).
+//      When current price is inside unfilled FVG in trade direction: +InpSMC_FVG_BonusScore (default +1.5).
+//
+//   4. ICT Kill Zone timing bonus: London open (07-10 GMT), NY open (12-15 GMT), London close (15-16 GMT).
+//      +InpSMC_KZ_BonusScore (default +0.5) during these windows.
+//
+//   NET EFFECT: A clean TREND_PULLBACK + BOS + OB + kill zone = +4.0 score bonus.
+//   A score of 3.5 (B-grade) becomes 7.5 → A+ in one confluence stack.
+//   A trade that fights BOS is logged as BOS_OPP (awareness only); no penalty applied.
+//   Zero new blocking logic. Zero risk engine changes. Zero exit logic changes.
+//
+// v6.0.4 CHANGES (Calendar + Memory + MidLock 2026-06-24):
+//   1. SCHEDULED NEWS CALENDAR (IsScheduledNewsWindow, new inputs group):
+//      Pure GMT time-math, no external API. Pre-defined recurring high-impact windows:
+//        - Sunday 00:00-00:45 GMT — weekly market open gap risk
+//        - Monday 00:00-00:30 GMT — Asian open liquidity spike
+//        - Thursday 12:15-13:30 GMT — US Jobless Claims
+//        - Friday 12:15-14:00 GMT — NFP / US data window (covers all Fridays)
+//      Plus 3 user-configurable custom windows (InpCalCustomDay1-3 etc.)
+//      Default custom 1: Wednesday 18:00 GMT +90min (FOMC — disable when not FOMC week)
+//      Entries blocked silently; logged once per minute to terminal.
+//   2. TRADE MEMORY GRADE PRIORS (warm start):
+//      Previously: returned neutral 1.0 until 8+ real samples accumulated (took weeks).
+//      Now: uses grade-based priors from day 1 and blends them out as real data arrives:
+//        A+ pattern → 1.06× prior (historically proven, ~70%+ WR baseline)
+//        A  pattern → 1.01× prior (slight positive)
+//        B  pattern → 0.91× prior (lower expectancy, slight caution)
+//      Linear blend: at 0 samples = 100% prior, at 4 samples = 50/50, at 8+ = 100% real data.
+//      This makes the committee useful on the very first trade, not just after weeks of data.
+//   3. CUSHIONED MID-ZONE PROFIT LOCK (ratchet Stage 1 upgrade):
+//      Between BE trigger (1.5×ATR) and trail start (3.0×ATR), there was a "dead zone"
+//      where SL was locked at entry+0.35×ATR even if profit grew to 2.9×ATR.
+//      Fix: in CUSHIONED mode, at profit >= 2.0×ATR, SL steps up to entry+0.75×ATR.
+//      This provides a progressive staircase: 0.35×ATR lock at 1.5×ATR profit →
+//      0.75×ATR lock at 2.0×ATR profit → full trail at 3.0×ATR profit.
+//      In DEFERRED mode (strong trend): unchanged — original SL still provides backstop.
+// v6.0.3 CHANGES (Forensic Recovery Patch 2026-06-24):
+//   FORENSIC INVESTIGATION FINDING (full audit of all 75 EA versions, git history, MT5 logs):
+//   1. LOT COLLAPSE ROOT CAUSE CONFIRMED: Manual switch from account #5050699209 ($419K-$483K)
+//      to account #108492408 ($3,000) on June 17 at 17:11:43. EA works correctly on both —
+//      lots are proportional to balance. 161x balance reduction = 161x smaller lots. No bug.
+//   2. CODEX MADE ZERO CHANGES: All 75 /Applications .mq5 files MD5-verified. Codex artifacts
+//      are only internal SQLite session databases. Every EA commit in git was from Claude Code.
+//   3. GRADE SCORING UNCHANGED: A+=5.5, A=4.0, B=3.0 thresholds identical across v5.8.50→v6.0.2.
+//      Entry logic has not degraded. The EA did not drift from its profitable personality.
+//   4. EXIT LOGIC IMPROVED: v6.0.1 context-aware ratchet fixed the 4 BE-at-zero trades.
+//      shieldArmed=Y confirmed working in recent logs. Profit giveback is within normal parameters.
+//
+//   TWO TARGETED FIXES (evidence-backed):
+//   A. patternMult floor: 0.50 → 0.70 (line ~6644)
+//      After ≤1 win in last 5 trades, lot size was halved. This prevented recovery on small
+//      accounts — each recovery trade was too small to offset the prior loss, producing the
+//      observed win/lose alternation. Reduced to 70% (still disciplined, allows recovery).
+//   B. Committee lot floor: 0.50 → 0.70 (line ~12701)
+//      In worst-case negative committee sentiment, the floor was 0.50× of base lot.
+//      Combined with STI late-entry reduction (0.65×), this stacked to 0.325× of base risk —
+//      producing $6.95 risk on a $3K account (0.03 lots). Raised floor to 0.70× so
+//      STI+committee worst case = 0.65×0.70 = 0.455× of base. Typical recovery scenario
+//      (A-grade, normal session, loss streak) improves from 0.193× to 0.399× of base risk.
+//
+//   IMPACT: Growth potential preserved. Worst-case position roughly doubles in size.
+//   Protective personality intact — no entry gates removed, no exit gates relaxed.
 // v6.0.2 CHANGES (Human Intelligence Upgrade 2026-06-23):
 //   1. HUMAN REASONING ENGINE: expanded from 5 rules to 12 rules.
 //      New rules (fire after primary 5; ordered risk-before-opportunity):
@@ -93,19 +229,6 @@
 //      InpNewsSpreadMulti (default 2.5×) of that baseline, entries are paused for
 //      InpNewsAftermathMins (default 10 min) even after spread normalizes.
 //      Also exposed as HumanReasoning Rule 9 (reduces size when spread is 1.8× elevated).
-// v6.0.3 CHANGES (Forensic Growth Audit 2026-06-24):
-//   FORENSIC_GROWTH_AUDIT build. No random strategy rewrites. This version adds the
-//   evidence layer needed to explain old aggressive compounding vs current win/loss churn:
-//   1. FORENSIC_ENTRY_SNAPSHOT: every open records setup, grade, regime, session,
-//      M5/M15/H1/H4 context, spread ratio, STI TCP/exhaustion/late-risk, and committee state.
-//   2. FORENSIC_SIZE_STACK: every open records the exact sizing chain that turned a signal
-//      into final lots, so tiny-lot behavior can be traced to timing, brain, PG/EPF,
-//      STI, committee, session, volatility, account scale, or broker caps.
-//   3. FORENSIC_CLOSE_DIAGNOSIS: every close records peak floating profit, profit giveback,
-//      whether protection should have triggered, and final diagnosis:
-//      good trade / bad entry / bad exit giveback / bad recovery / scratch.
-//   PURPOSE: prove what broke before tuning. Keep the profitable personality intact while
-//   making winner giveback and reduced-size stagnation visible in CSV/JSON/journal evidence.
 // v6.0.1 CHANGES (Exit Intelligence Upgrade 2026-06-23):
 //   FORENSIC AUDIT FINDING: PG_PerPositionRatchet() moved SL to EXACT ENTRY with zero cushion
 //   and zero trend context. Live evidence: 4 A-grade SELL positions (4119.20/4121.64/4117.55/4112.85)
@@ -129,11 +252,11 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.0.3"
-#property description "XAUUSD AI Sniper v6.0.3 — FORENSIC GROWTH AUDIT"
-#property description "Forensic entry snapshots, exact lot-size stack, and close giveback diagnosis."
-#property description "Proves late-entry, tiny sizing, regime, spread, committee, and exit-protection causes."
-#property description "No random strategy rewrite: original aggressive growth behavior preserved while evidence improves."
+#property version   "6.3.6"
+#property description "XAUUSD AI Sniper v6.3.6 — AI Director + ML cloud warm-start + adaptive Chandelier exits + enriched AI exit context"
+#property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
+#property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
+#property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -193,21 +316,21 @@ input double InpEPF_PeakRetracePct  = 6.0;    // % retrace from intraday peak (a
 input double InpEPF_PeakMinPct      = 5.0;    // ignore retrace gate until daily peak >= this %
 input int    InpEPF_ConsecLossWarn  = 3;      // after N consecutive losses → bump 1 tier
 input int    InpEPF_ConsecLossCool  = 5;      // after N consecutive losses → full cooldown
-input int    InpEPF_CooldownMin     = 90;     // minutes to pause after consecutive-loss cooldown
+input int    InpEPF_CooldownMin     = 0;      // minutes to pause after consecutive-loss cooldown (v6.1.2: no DD blocking)
 input bool   InpEPF_BlockClusters   = true;   // block fresh entries within InpEPF_ClusterATR of an existing same-direction position
 input double InpEPF_ClusterATR      = 0.6;    // ATR distance under which entries are considered "clustered"
 input int    InpEPF_ClusterMaxSec   = 600;    // clustering protection window (seconds since last entry)
 input double InpEPF_TrailTightT3    = 0.6;    // T3+ tightens trailing stop to N×ATR (vs default ~1.5)
 input bool   InpEPF_PartialClose    = true;   // T1+ enables 50% partial close at +1.5R on trend-aligned trades
-input double InpEPF_HardDailyDDPct  = 8.0;    // v5.7.0: HARD lockdown if daily loss exceeds this %. Set 0 to disable.
+input double InpEPF_HardDailyDDPct  = 0;      // v5.7.0: HARD lockdown if daily loss exceeds this %. Set 0 to disable. (v6.1.2: disabled — no DD blocking)
 input bool   InpEPF_T4AdaptiveAllowElite = true;  // T4 allows elite A/B signals at reduced size unless hard DD is hit
 input double InpEPF_T4EliteSetupScore    = 4.70;  // minimum raw setup score for guarded T4 pass
 input double InpEPF_T4EliteCombinedScore = 3.70;  // minimum combined score for guarded T4 pass
-input double InpEPF_T4EliteLotMult       = 0.12;  // reduced lot multiplier for guarded T4 pass
+input double InpEPF_T4EliteLotMult       = 0.20;  // reduced lot multiplier for guarded T4 pass (v6.1.1: was 0.12 — too small to recover)
 input bool   InpEPF_T4RequireAorB        = true;  // only A/B grade may pass guarded T4 mode
 input int    InpEPF_T4MaxTradesPerDay    = 3;     // max guarded T4 trades per day
 input int    InpEPF_T4MinMinutesBetween  = 45;    // spacing between guarded T4 trades
-input bool   InpEPF_T4BlockHardDD        = true;  // hard daily loss limit still blocks completely
+input bool   InpEPF_T4BlockHardDD        = false; // hard daily loss limit still blocks completely (v6.1.2: disabled — no DD blocking)
                                               //         enables: (1) escalating HWM giveback day-halt, (2) per-position BE/trail ratchet
 input double InpPG_Tier1Pct         = 30.0;  // ignored when InpProfitGuardian=false
 input double InpPG_Tier2Pct         = 50.0;  // ignored when InpProfitGuardian=false
@@ -245,7 +368,7 @@ input bool   InpVolKillXAUAdaptiveBypass = true; // v5.8.25: strong XAU fast con
 input bool   InpSpreadKillEnabled = true;   // Block entries when current spread > 2× 60-bar median (broker freakout)
 input double InpSpreadKillMultiplier = 2.0; // Multiplier vs median spread to trigger kill switch
 input double InpHardDailyDDPct    = 0.0;    // v5.8.4 demo: disabled
-input double InpSoftDDPct         = 0.0;    // v5.8.4 demo: disabled
+input double InpSoftDDPct         = 4.0;    // v6.3.5: enabled — reduce risk when daily DD exceeds 4% before hitting hard EPF tiers
 input double InpSoftDDLotMulti    = 0.7;    // lot multiplier while in soft DD mode (unused while soft DD disabled)
 input double InpPyramidMinSpaceATR = 1.0;   // Pyramid adds must be ≥ this × ATR away from PREVIOUS add (anti-clustering)
 input double InpAdvPyrMinScore    = 4.0;    // v5.3.1: combined score required for ADVERSE pyramids (≥ here OR no add). Trend-side adds skip this gate.
@@ -275,18 +398,52 @@ input bool   InpCommitteeLog     = true;    // Print committee thesis to termina
 input bool   InpCommitteeLotAdj  = true;    // Let committee adjust lot size (range 0.50-1.25×)
 input bool   InpInTradeClassify  = true;    // Classify open positions every bar (HEALTHY/PULLBACK/REVERSING/etc.)
 
-input group "=== FORENSIC GROWTH AUDIT (v6.0.3) ==="
-input bool   InpForensicGrowthAudit         = true;  // Log why each trade opened, sized, held, and closed
-input double InpForensicGivebackWatchPct    = 0.25;  // Meaningful peak = max(this % of reference balance, min USD)
-input double InpForensicGivebackWatchMinUSD = 20.0;  // Minimum meaningful peak for giveback diagnosis
-input double InpForensicGivebackAlertPct    = 60.0;  // Flag when a winner gives back this % of peak floating profit
-
 input group "=== NEWS AFTERMATH FILTER (v6.0.2) ==="
 // Detects sudden spread spikes (news events) and pauses new entries for a safety window.
 // Spread EMA tracks normal baseline; if live spread exceeds N× that baseline, entries pause.
 input bool   InpNewsAftermathEnable  = true;  // Pause new entries after detected spread spike
 input double InpNewsSpreadMulti      = 2.5;   // Spread must exceed N× EMA baseline to trigger
 input int    InpNewsAftermathMins    = 10;    // Minutes to block new entries after spike
+
+input group "=== SCHEDULED NEWS CALENDAR (v6.0.4) ==="
+// Pre-defined high-impact windows (GMT). Entries blocked for duration. No external API needed.
+// Covers the recurring economic releases that most affect XAUUSD.
+input bool   InpCalendarEnable       = true;  // Enable scheduled news calendar blackout
+input bool   InpCalThursJobless      = true;  // Thursday 12:15-13:30 GMT — US Jobless Claims
+input bool   InpCalFridayData        = true;  // Friday 12:15-14:00 GMT — NFP / US data window
+input bool   InpCalSundayOpen        = true;  // Sunday 00:00-00:45 GMT — weekly market open gap risk
+input bool   InpCalMondayOpen        = true;  // Monday 00:00-00:30 GMT — Asian liquidity open spike
+// User-configurable custom blackout windows (set Day=-1 to disable; Day 0=Sun...6=Sat, time in GMT)
+input int    InpCalCustomDay1        = 3;     // Custom 1: day (0=Sun, 3=Wed for FOMC, -1=off)
+input int    InpCalCustomHour1       = 18;    // Custom 1: start hour GMT (18 = 18:00)
+input int    InpCalCustomMin1        = 0;     // Custom 1: start minute GMT
+input int    InpCalCustomDurMin1     = 90;    // Custom 1: duration in minutes
+input int    InpCalCustomDay2        = -1;    // Custom 2: day (-1 = disabled)
+input int    InpCalCustomHour2       = 12;    // Custom 2: start hour GMT
+input int    InpCalCustomMin2        = 30;    // Custom 2: start minute GMT
+input int    InpCalCustomDurMin2     = 60;    // Custom 2: duration in minutes
+input int    InpCalCustomDay3        = -1;    // Custom 3: day (-1 = disabled)
+input int    InpCalCustomHour3       = 0;     // Custom 3: start hour GMT
+input int    InpCalCustomMin3        = 0;     // Custom 3: start minute GMT
+input int    InpCalCustomDurMin3     = 60;    // Custom 3: duration in minutes
+
+input group "=== SMC ENTRY LAYER (v6.1.0 — Smart Money Concepts additive confirmation) ==="
+// Additive only. Nothing blocked, nothing removed. SMC confluence lifts score → better grade → bigger lot.
+// Turn InpSMC_Enable=false to run exactly as v6.0.4 for A/B comparison.
+input bool   InpSMC_Enable          = true;  // Master switch: SMC layer ON (false = pure v6.0.4 behaviour)
+input bool   InpSMC_Log             = true;  // Print SMC context line before every scored setup
+input int    InpSMC_BOS_Lookback    = 20;    // H1 bars to track for swing high/low (Break of Structure)
+input int    InpSMC_OB_Lookback     = 10;    // H1 bars to search backward for Order Block candles
+input int    InpSMC_FVG_Lookback    = 15;    // M15 bars to search backward for Fair Value Gaps
+input double InpSMC_BOS_BonusScore  = 1.0;  // Score bonus when H1 BOS direction matches trade
+input double InpSMC_OB_BonusScore   = 2.0;  // Score bonus when price is returning to a valid OB zone
+input double InpSMC_FVG_BonusScore  = 1.5;  // Score bonus when price is inside an unfilled FVG zone
+input double InpSMC_KZ_BonusScore   = 0.5;  // Score bonus during ICT kill zones (LN open, NY open, LN close)
+input double InpSMC_OppPenalty      = 0.5;  // Reserved (not applied) — BOS opposition is log-only; existing Smart Guard handles counter-trend
+input double InpSMC_OB_ToleranceATR = 0.5;  // OB zone tolerance in ATR multiples (price proximity)
+input double InpSMC_FVG_ToleranceATR= 0.3;  // FVG zone tolerance in ATR multiples
+input double InpSMC_ImpulseATR      = 5.0;  // Min M5-ATR multiples for impulse move to confirm OB validity
+input bool   InpSMC_KillZones       = true; // Enable ICT kill zone timing bonus
 
 // v5.3.0 — PHASE 2: EXHAUSTION + ML SMOOTHING
 input bool   InpRSIDivergenceFilter = true; // Block buy if RSI_HH < prev RSI_HH while price made new HH (and mirror for sells)
@@ -440,12 +597,12 @@ input double InpMaxLots        = 50.0;     // Hard max lots; final equity/margin
 input double InpMaxRiskPctEquity = 3.0;    // v5.8.4: restored original account-based max risk cap
 input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
 input double InpMaxAggregateRiskPct = 8.0; // v5.8.4: restored original aggregate risk room for demo/cloud testing
-input double InpDailyLossLimit = 0.0;      // v5.8.4 demo: disabled
+input double InpDailyLossLimit = 3.0;      // v6.3.5: enabled 3% daily loss limit — hard stop for catastrophic days, doesn't interfere with normal trading
 input int    InpMaxOpenTrades  = 3;        // Max open positions
 input int    InpMaxTradesPerDay= 15;       // v5.8.2 — reduce overtrading after choppy loss windows
 input bool   InpAdaptiveDailyCap = true;   // v5.8.8: strong trend days can trade more; weak days trade less
 input int    InpMaxTradesStrongDay = 24;   // v5.8.8: adaptive cap ceiling during clean trend/breakout sessions
-input double InpWeeklyTarget   = 100.0;    // v5.8.4 demo: weekly ROI target 100%
+input double InpWeeklyTarget   = 500.0;    // v6.3.2: raised 100→500 — CarefulMode lot-halving was crushing lots on any good week, preventing compounding
 input double InpWeeklyMaxLoss  = 0.0;      // v5.8.4 demo: disabled
 input bool   InpCarefulMode    = true;     // Scale down near target
 input bool   InpAccountSizeBoost = true;   // v5.8.8: lets larger accounts use slightly stronger risk, still capped
@@ -469,16 +626,16 @@ input int    InpATRPeriod      = 14;       // ATR Period
 input double InpSLMultiplier   = 2.5;      // v4.9.5 — wider SL (was 2.0) to survive M5 noise
 input double InpTPMultiplier   = 4.0;      // v4.9.5 — wider TP (was 2.0) so runners can reach +4R
 
-input group "=== SMART FEATURES ==="
-input bool   InpUseAI          = true;     // Use Claude + GPT-5.2
-input bool   InpAIAdvisoryOnly = true;     // AI logs context only; deterministic rules own entry/exit/risk decisions
-input bool   InpUseNewsFilter  = true;     // Hard-block ±10min around news
-input bool   InpLearnPatterns  = true;     // ML learning loop
-input int    InpMaxPatterns    = 500;      // Pattern memory size
-input int    InpMLMinTrustedSamples = 20;  // Local ML cannot veto/boost until this many matching samples exist
-input int    InpHiveMinTrustedSamples = 30;// Hive cannot veto/boost until backend reports this many matching samples
-input string InpServerURL      = "https://xauaisniper.com";
-input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
+input group "=== AI DIRECTOR (v6.3.0 — real authority, not just advisory) ==="
+// v6.3.0: The AI Director is the final authority above all strategies.
+// Strategies submit votes/signals. AI Director reviews ALL context and decides:
+// ALLOW | BLOCK | REDUCE_LOT | INCREASE_LOT. Hard safety rules sit above AI.
+input bool   InpUseAI          = true;     // Enable AI Director (Claude + GPT dual vote)
+input bool   InpAIAdvisoryOnly = false;    // v6.3.0: FALSE = AI has real authority. TRUE = log-only (advisory). Default: AUTHORITY MODE.
+input bool   InpAIDirectorAllGrades = true;  // v6.3.0: call AI Director for ALL grades (A,A+,B), not just A+
+input int    InpAIDirectorMinConf = 55;      // v6.3.0: minimum AI confidence % to ALLOW trade. Below = block/reduce.
+input bool   InpAIOfflineSafeMode = true;    // v6.3.0: if AI server fails, trade at 50% size (safe degraded mode)
+input int    InpAIOfflineMaxFails = 3;       // v6.3.0: consecutive AI call failures before declaring AI offline
 
 input group "=== XAU COMMAND CENTER (heartbeat, activity, safe remote commands) ==="
 input bool   InpCloudFanout       = false;   // Local-first default: reports/brain work without VPS/cloud. Turn ON only if using copy cloud.
@@ -497,13 +654,13 @@ input bool   InpAdaptiveGradeB = false;    // v5.1.6: DEFAULT OFF — was perman
 input double InpAdaptiveGradeBMax = 3.0;   // when adaptive on: max tightening cap
 input int    InpStaleStreakHours = 6;      // when adaptive on: forget tightening after N hours of no trades
 input int    InpTradeCooldown  = 300;      // Seconds between trades after a close (default 300)
-input int    InpReversalCooldown = 600;    // Extra seconds required to flip direction (default 600)
+input int    InpReversalCooldown = 300;    // v6.3.2: reduced 600→300 — 10min blocked V-reversals on M5 gold (2 full bars); 5min is enough
 input int    InpProfitTakeMin  = 150;      // Start scanning for quick exit (USD, default 150)
 input int    InpProfitTakeMax  = 500;      // Auto-close at this profit (USD, default 500)
 input int    InpQuickExitMin   = 18;       // Auto-close minutes threshold (default 18)
 
 input group "=== RE-ENTRY ENGINE (reverse-move recovery) ==="
-input bool   InpUseReEntry     = false;    // v5.8.2: OFF by default; live report favors fewer revenge/recovery attempts
+input bool   InpUseReEntry     = true;     // v6.3.2: ON — re-entry on bounced stops during trends recovers free missed moves
 input int    InpReEntryWindow  = 900;      // Seconds after close to watch for reversal (15min)
 input double InpReEntryFactor  = 1.2;      // Price must move this x SL past original entry
 input double InpReEntrySize    = 0.5;      // Re-entry size multiplier (0.5 = half original)
@@ -514,31 +671,41 @@ input group "=== SMART FILTERS ==="
 input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
 input int    InpDXYRefreshSec  = 900;      // Refresh DXY every N seconds (15min)
 input bool   InpDrawdownMode   = true;     // Auto-reduce risk after losing streak
-input int    InpDrawdownLosses = 3;        // # losses in a day that trigger recovery
+input int    InpDrawdownLosses = 5;        // v6.3.2: raised 3→5 — 3 micro-losses were triggering half-risk mode all day
 input double InpDrawdownRisk   = 0.5;      // Risk % during recovery mode (default 0.5)
 input int    InpStreakCooldownLosses = 2;  // # losses in short window = pause
 input int    InpStreakWindowSec = 2700;    // Window for loss-streak detection (45min)
-input int    InpStreakPauseSec = 3600;     // Pause duration after streak (60min)
+input int    InpStreakPauseSec = 0;        // Pause duration after streak (v6.1.2: disabled — no DD blocking)
 input bool   InpAsiaRangeBreakout = true;  // Enable Asia-range breakout setup at London/NY open
 input bool   InpAdaptiveGrades = true;     // Auto-tune grade thresholds from recent win rate
 input bool   InpResetML        = false;    // TRUE = clear local ML on attach (fresh start for this version)
-input bool   InpDirectionLockout = true;   // Lock a direction if too many same-direction losses
+input bool   InpDirectionLockout = false;  // Lock a direction if too many same-direction losses (v6.1.1: data shows -5.27 ATR net cost, 0 protection benefit — default off)
 input int    InpDirLockoutLookback = 5;    // Check last N trades
 input int    InpDirLockoutLossesNeeded = 2;// If N of last M were losses in same direction
 input int    InpDirLockoutMinutes = 120;   // Lock that direction for X minutes
-input bool   InpAntiBiasCorrection = true; // After repeated wrong-side losses, block or flip only if fast TFs prove opposite
+input bool   InpAntiBiasCorrection = false; // After repeated wrong-side losses, block or flip only if fast TFs prove opposite (v6.1.1: data shows 50/50 outcome at -1.56 ATR net cost — default off)
 input int    InpAntiBiasLookback = 5;      // Recent closed trades checked for same-side losses
 input int    InpAntiBiasLossesNeeded = 2;  // Losses needed before correction activates
 input int    InpAntiBiasWindowMin = 180;   // Only use losses inside this many minutes
 input double InpAntiBiasMinScore = 3.6;    // Minimum combined score before considering correction
 
+input group "=== SMART FEATURES (secondary) ==="
+input bool   InpUseNewsFilter  = true;     // Hard-block ±10min around news
+input bool   InpLearnPatterns  = true;     // ML learning loop
+input int    InpMaxPatterns    = 500;      // Pattern memory size
+input int    InpMLMinTrustedSamples = 10;  // v6.3.5: lowered 20→10 — 10 samples gives reliable directional signal, less cold-start blind period
+input int    InpHiveMinTrustedSamples = 15;// v6.3.5: lowered 30→15 — hive authority from fewer global samples
+input string InpServerURL      = "https://xauaisniper.com";
+input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
+
 input group "=== CONVICTION-WEIGHTED SIZING (v4.5.0 — use Claude/GPT confidence) ==="
-input bool   InpConvictionSizing = false;  // Advisory default: do not scale/veto lots from AI confidence alone
-input int    InpMinAIConfidence  = 60;     // Below this, SKIP entirely (AI is too uncertain)
+input bool   InpConvictionSizing = true;   // v6.3.0: TRUE — AI confidence now drives lot sizing by default
+// v6.3.1: InpMinAIConfidence removed — threshold is now InpAIDirectorMinConf (55%) for all paths
+// (was 60%, causing blocks when AI agreed at 56-59% on valid setups)
 input int    InpNormalAIConfidence = 75;   // At/above this, use normal 1.0x size
 input int    InpHighAIConfidence   = 90;   // At/above this, use 1.3x boost size
-input double InpConvictionLowMulti  = 0.5; // 60-74% confidence -> 0.5x size
-input double InpConvictionHighMulti = 1.3; // >=90% confidence -> 1.3x size
+input double InpConvictionLowMulti  = 0.70; // v6.3.1: raised from 0.5 → 0.70 (AI at 55-74% = mild reduce, not halve)
+input double InpConvictionHighMulti = 1.3;  // >=90% confidence -> 1.3x boost size
 input bool   InpRespectSkipIf    = true;   // Honor the AI's skip_if veto condition
 
 input group "=== TRAILING / BE LOCK (v4.5.1 — loosen the leash) ==="
@@ -623,9 +790,9 @@ input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm
 
 input group "=== BASKET PROTECT (v4.9.7 — smarter thresholds + fast-reversal circuit breakers) ==="
 input bool   InpBasketMode          = true;   // Master toggle: SL logic works on AGGREGATE PnL, not per-trade
-input double InpBasketArmPct        = 2.2;    // v5.8.15: let winners breathe more, but still protect real basket profit
-input double InpBasketArmFloor      = 300.0;  // don't arm on small noise profits
-input double InpBasketLockMinPct    = 45.0;   // lock profit but allow trend breathing room
+input double InpBasketArmPct        = 3.0;    // v6.3.4: raised 2.2→3.0 — arm later, let winners breathe longer before locking
+input double InpBasketArmFloor      = 200.0;  // v6.3.4: lowered 300→200 — catch mid-sized wins on small accounts
+input double InpBasketLockMinPct    = 52.0;   // v6.3.4: raised 45→52 — never give back >48% of basket peak once armed
 input double InpBasketRatchetT1Pct  = 1.5;    // v4.9.7 — was 0.5, now 1.5 (tier-1 fires later, let winners run)
 input double InpBasketRatchetT2Pct  = 3.5;    // v4.9.7 — was 2.5, now 3.5 (tier-2 fires later)
 input double InpBasketRatchetT3Pct  = 6.0;    // v4.9.7 — was 5.0, now 6.0 (tier-3 fires on REAL big peaks)
@@ -635,11 +802,14 @@ input bool   InpBasketDisablePerTrade = true; // When basket active, disable per
 input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on sudden reversal even if floor not breached
 input double InpBasketFastDropPct       = 50.0; // If basket gives back >= X% of peak within FastWindowSec, close immediately
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
-input double InpBasketHardGivebackPct   = 1.5;  // HARD CAP: never give back more than X% of balance from peak
+input double InpBasketHardGivebackPct   = 2.5;  // v6.3.4: raised 1.5→2.5 — $45 on $3k was closing basket too early; now $75
 input bool   InpBasketBlockPyramidWhenArmed = true;  // v5.8.38: no fresh adds after basket protect is armed; let the current cycle resolve
 input bool   InpBasketSoftLockFirst     = true; // v5.8.15: first basket-floor hit banks partial only; runner stays alive
 input double InpBasketSoftLockPct       = 35.0; // % of each open layer to bank on first basket lock
 input double InpBasketRunnerFloorPct    = 20.0; // After soft lock, keep only a small positive floor for the runner
+// v6.1.3 — Basket direction-loss block: stop adding same-direction trades into a losing basket
+input bool   InpBasketDirLossBlock      = true;  // Block new entries if same-direction trades are in net loss
+input double InpBasketDirLossBlockPct   = 2.0;   // Block new same-dir entries if floating loss exceeds X% of balance
 
 input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
 input bool   InpAdaptiveRunner      = false;  // v4.9.5 — DISABLED (clean exits use tiered model)
@@ -658,15 +828,19 @@ input group "=== TREND HOLD MODE (v4.8.4 — don't micro-exit when trend is obvi
 input bool   InpTrendHoldMode    = false;  // v4.9.5 — DISABLED (clean exits handle trends via chandelier)
 input double InpTrendHoldTrailATR = 3.0;   // Trail distance in trend-hold mode (wider than Stage 2)
 
-input group "=== CLEAN EXITS (v5.8.3 — balanced statistical trade management) ==="
+input group "=== CLEAN EXITS (v6.3.4 — adaptive exits, close dead zone, tighter Chandelier) ==="
 input bool   InpCleanExits          = true;   // MASTER toggle — disables all other per-trade trails
-input double InpCleanBEActivateR    = 1.85;   // v5.8.15: later BE; avoid choking gold before continuation
-input double InpCleanBECushionR     = 0.05;   // Small cushion; do not choke valid pullbacks
-input double InpCleanChandelierStartR = 3.50; // v5.8.15: trail only after clear runner move
-input double InpCleanChandelierATR1 = 4.8;    // Wider trail for gold continuation
-input double InpCleanChandelierATR2 = 3.8;    // Wider +4R+ trail; protects without clipping pullbacks
-input double InpCleanPartialR       = 3.20;   // v5.8.15: take partial later, after real move
-input double InpCleanPartialPct     = 12.0;   // Smaller partial; leaves 88% runner
+// v6.3.4 EXIT FIXES (audit-confirmed profit giveback sources):
+// Old: BE at 1.85R with 0.05R cushion → trade could give back 95% between 1.85R and Chandelier start
+// Old: Chandelier starts at 3.5R with 4.8× ATR → 0.1 lot trade could give $190-380 from peak
+// New: BE at 1.50R with 0.30R cushion → meaningful floor earlier. Chandelier starts at 2.0R, tighter ATR.
+input double InpCleanBEActivateR    = 1.50;   // v6.3.4: earlier BE (was 1.85) — protect sooner without choking
+input double InpCleanBECushionR     = 0.30;   // v6.3.4: lock 30% of risk at BE (was 0.05 = $3 floor = worthless)
+input double InpCleanChandelierStartR = 2.00; // v6.3.4: trail from +2R not +3.5R — closes dead zone
+input double InpCleanChandelierATR1 = 3.2;    // v6.3.4: tightened 4.8→3.2 — still breathes but banks more profit
+input double InpCleanChandelierATR2 = 2.5;    // v6.3.4: tightened 3.8→2.5 — after +4R lock in the bulk
+input double InpCleanPartialR       = 2.20;   // v6.3.5: take partial at 2.2R (was 3.2R) — bank profit as Chandelier starts, runner continues
+input double InpCleanPartialPct     = 22.0;   // v6.3.5: raised 12→22% partial — meaningful cash in pocket, 78% runner still runs
 input int    InpCleanChandelierLookback = 24; // Bars to scan for highest high / lowest low
 input bool   InpCleanMomentumInvalidation = true; // Cut trade if momentum flips hard against us
 input int    InpCleanStaleHours     = 3;      // Close if > X hours in AND profit < StaleMinR, unless trend still validates
@@ -727,7 +901,7 @@ input double InpAPlusShieldPeakLockPct      = 45.0; // On confirmed reversal, tr
 input int    InpAPlusReversalMomentum       = 2;    // Trail/close only if momentum score <= this (confirms reversal, not pullback)
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
-input bool   InpAIExitOverride   = false;  // Advisory default: AI cannot veto/force deterministic rule-based closes
+input bool   InpAIExitOverride   = true;   // v6.3.0: TRUE — AI Director can HOLD, CLOSE, or LOCK positions
 input int    InpAIExitMinSec     = 60;     // Min seconds between AI veto calls per position (cost control)
 input double InpAIExitMinProfit  = 30.0;   // Only call AI veto when profit/peak ≥ this $ (skip cheap closes)
 
@@ -796,7 +970,7 @@ input bool   InpOneDirectionOnly          = true;  // v5.8.5: block opposite-dir
 input bool   InpBlockNewEntriesIfHedged   = true;  // v5.8.5: if account is already mixed BUY+SELL, pause fresh entries
 input bool   InpSmartGuardSkipBTrendBreak = true;  // v5.8.7: adaptive B-grade guard for TREND_PULLBACK/BREAKOUT
 input bool   InpSmartGuardRequireHTF      = true;  // Use adaptive XAU confirmation for TREND_PULLBACK/BREAKOUT
-input bool   InpSmartGuardNoDamageStack   = true;  // Do not open fresh damage-prone setup while another position is open
+input bool   InpSmartGuardNoDamageStack   = false; // v6.3.2: OFF — was killing all re-entries during active positions; SmartGuard lot reduction already handles damage-setup risk
 input double InpSmartGuardDamageLotMulti  = 0.75;  // v5.8.55 softer cut; protects damage setups without making A/A+ too timid
 input int    InpSmartGuardMinHardSamples  = 30;    // Need this many same-setup live patterns before hard expectancy veto
 input double InpSmartGuardHardExpectancy  = -150.0;// Hard-veto only when decayed avg P/L/trade is worse than this
@@ -875,7 +1049,7 @@ input bool   InpSTI_Log                 = true;   // Print STI decisions and sco
 input double InpSTI_LateEntryMaxEMADist = 3.0;    // H4 EMA50 distance (in H4 ATR) = late territory
 input double InpSTI_LateEntryMaxMoveATR = 9.0;    // Consecutive M5 run in ATR multiples = late
 input double InpSTI_LateEntryBlockScore = 82.0;   // Late risk >= this = hard block (extreme only)
-input double InpSTI_LateEntryReduceScore= 58.0;   // Late risk >= this = lot reduction (x0.65)
+input double InpSTI_LateEntryReduceScore= 68.0;   // v6.3.2: raised 58→68 — at 58 two mild signals triggered 0.65x reduce, stacking to sub-minLot on Asia B-grade
 // Exhaustion Detection — RSI divergence + ATR contraction must agree
 input double InpSTI_ExhaustionBlock     = 80.0;   // Exhaustion >= this AND tcp < 60 = hard block
 input double InpSTI_ExhaustionReduce    = 62.0;   // Exhaustion >= this = lot reduction (x0.75)
@@ -883,9 +1057,9 @@ input double InpSTI_ExhaustionReduce    = 62.0;   // Exhaustion >= this = lot re
 input double InpSTI_TCPContinueMinimum  = 62.0;   // TCP >= this: skip stagnant/stale close on profitable trade
 // Re-entry intelligence — after TP, wait for clean pullback before same-direction re-entry
 input bool   InpSTI_BlockLateReentry    = true;   // After TP, require pullback before same-dir re-entry
-input double InpSTI_ReentryPullbackATR  = 1.20;   // Pullback size (M5 ATR) required to unlock re-entry
+input double InpSTI_ReentryPullbackATR  = 0.60;   // v6.3.2: reduced 1.20→0.60 — 1.2 ATR was too deep, missed most real trend re-entries
 input int    InpSTI_ReentryMinWaitMin   = 20;     // Minutes to wait after TP before watching for pullback
-input int    InpSTI_ReentryMaxWindowMin = 90;     // After this many minutes post-TP the re-entry gate expires
+input int    InpSTI_ReentryMaxWindowMin = 30;     // v6.3.2: reduced 90→30 min — 90 min was blocking 5+ re-entries per trend day
 
 //+------------------------------------------------------------------+
 //| ENUMS                                                            |
@@ -1111,15 +1285,29 @@ int    lastSignalDir;
 double lastSignalRSI, lastSignalEMADiff, lastSignalATR;
 int    lastRegime, lastSetupType;
 ENUM_REGIME currentRegime;
+// v6.2.0: HTF consensus direction exposed globally so CheckForEntry can use it.
+// +1 = H1+HTF both bullish, -1 = H1+HTF both bearish, 0 = no consensus.
+int    g_htfConsensusDir = 0;
+
+// v6.3.5: Hive verdict cache — one WebRequest per bar per signature
+string   g_hiveLastSig     = "";
+int      g_hiveLastVerdict  = 0;
+int      g_hiveLastBar      = -1;
+
+// v6.3.0: AI Director state
+int    g_aiConsecutiveFails = 0;   // count of back-to-back AI server failures
+bool   g_aiOffline = false;        // true when AI fails InpAIOfflineMaxFails times in a row
+datetime g_aiOfflineSince = 0;     // v6.3.2: timestamp when AI went offline (for auto-recovery)
+string g_aiLastVerdict = "NONE";   // last AI Director verdict for dashboard
+int    g_aiLastConfidence = 0;     // last AI confidence % for dashboard
+string g_aiClaudeVote = "";        // Claude's vote this bar
+string g_aiGPTVote = "";           // GPT's vote this bar
 string lastSignalSetup = "";
 string lastSignalSignature = "";
 string g_pendingBrainGrade = "";
 double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
-double g_pendingForensicStiTCP = 0.0;
-double g_pendingForensicStiExhaust = 0.0;
-double g_pendingForensicStiLate = 0.0;
 
 // v5.8.49 — Command Center-owned Prop Firm Mode with persistent EA enforcement.
 // This tracks where an idea first appeared, what blocked it, and whether a later
@@ -1334,6 +1522,33 @@ double     asiaRangeHigh = 0;
 double     asiaRangeLow  = 0;
 bool       asiaRangeLocked = false;
 datetime   asiaRangeDay = 0;
+
+// v6.1.0 — SMC (Smart Money Concepts) state — updated once per M5 bar
+struct SMC_OBZone
+{
+   bool     valid;
+   int      dir;       // +1 = bullish OB (buy demand zone), -1 = bearish OB (sell supply zone)
+   double   high;
+   double   low;
+   double   mid;
+   datetime barTime;
+};
+struct SMC_FVGZone
+{
+   bool     valid;
+   int      dir;       // +1 = bullish gap (price below, wants to fill up), -1 = bearish gap
+   double   high;      // top of the gap
+   double   low;       // bottom of the gap
+   double   mid;
+   datetime barTime;
+};
+
+SMC_OBZone  g_smc_ob_bull;     // most recent bullish order block (H1)
+SMC_OBZone  g_smc_ob_bear;     // most recent bearish order block (H1)
+SMC_FVGZone g_smc_fvg_bull;    // most recent unfilled bullish FVG (M15)
+SMC_FVGZone g_smc_fvg_bear;    // most recent unfilled bearish FVG (M15)
+int         g_smc_bos_dir   = 0;  // last H1 BOS direction: +1 bullish, -1 bearish, 0 = unknown
+datetime    g_smc_last_bar  = 0;  // gate: only run SMC_Update() once per M5 bar
 
 // Per-position peak-profit tracking (for retrace exit)
 ulong      peakTickets[];
@@ -1902,6 +2117,7 @@ struct AIExitVerdict
    int    action;
    double lockUSD;
    string reason;
+   int    confidence;
 };
 
 // v4.7.0 — AI veto wrapper. Called BEFORE every rule-based close.
@@ -2398,7 +2614,7 @@ bool ContextGateAllows(int signal, double atr)
          if(isSwingLow  && l < swingLow)  swingLow  = l;
       }
 
-      // BUY trying to enter within proxDist BELOW a swing high = entering into resistance
+      // BUY trying to enter within proxDist BELOW a swing high = entering into resistance — block
       if(signal == 1 && swingHigh > 0 && (swingHigh - curPrice) > 0 && (swingHigh - curPrice) < proxDist)
       {
          Print("⛔ CONTEXT-GATE: BUY blocked — price ", DoubleToString(curPrice, 2),
@@ -2408,14 +2624,17 @@ bool ContextGateAllows(int signal, double atr)
                "×ATR). Entering into resistance without break-retest.");
          return false;
       }
-      // SELL trying to enter within proxDist ABOVE a swing low = entering into support
-      if(signal == -1 && swingLow < 999999 && (curPrice - swingLow) > 0 && (curPrice - swingLow) < proxDist)
+      // v6.3.2 FIX: SELL near swing LOW is VALID for range-reversal/mean-reversion entries.
+      // Old logic blocked SELL within proxDist ABOVE support — but that's exactly where a
+      // RANGE_REVERSAL SELL triggers (fade the bounce from support back down).
+      // Corrected: only block SELL if price is far BELOW a swing low (over-extended downside).
+      // Block SELL if price is more than 2× ATR BELOW nearest swing low (over-extended, not near).
+      if(signal == -1 && swingLow < 999999 && curPrice < swingLow && (swingLow - curPrice) > proxDist * 2.0)
       {
          Print("⛔ CONTEXT-GATE: SELL blocked — price ", DoubleToString(curPrice, 2),
-               " is ", DoubleToString(curPrice - swingLow, 2),
-               " above swing low ", DoubleToString(swingLow, 2),
-               " (< ", DoubleToString(proxDist, 2), " = ", DoubleToString(InpSRProximityATR, 1),
-               "×ATR). Entering into support without break-retest.");
+               " is ", DoubleToString(swingLow - curPrice, 2),
+               " below swing low ", DoubleToString(swingLow, 2),
+               " — over-extended downside, not a good short entry.");
          return false;
       }
    }
@@ -2424,49 +2643,6 @@ bool ContextGateAllows(int signal, double atr)
       Print("✅ CONTEXT-GATE PASS: ", signal==1?"BUY":"SELL",
             " cleared H4 bias + Swing-SR checks. Proceeding to OpenTrade.");
    return true;
-}
-
-string XAU_ForensicTFTrend(double fast, double slow)
-{
-   if(fast <= 0.0 || slow <= 0.0) return "NA";
-   double spreadPct = MathAbs(fast - slow) / MathMax(MathAbs(slow), 0.01) * 100.0;
-   if(spreadPct < 0.03) return "FLAT";
-   return fast > slow ? "BULL" : "BEAR";
-}
-
-string XAU_ForensicEntrySnapshot(int signal, string setupName, string grade,
-                                 double setupScore, double combinedScore,
-                                 double stiTCP, double stiExhaust, double stiLate)
-{
-   if(!InpForensicGrowthAudit || !IsXAUFastSymbol()) return "";
-   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-   double price = signal > 0 ? ask : bid;
-   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-   double spreadRatio = (g_spreadEMA > 0.0) ? spread / g_spreadEMA : 0.0;
-   double atr = (ArraySize(bufATR) > 1) ? bufATR[1] : 0.0;
-   double close1 = iClose(Symbol(), PERIOD_M5, 1);
-   double emaDistATR = (atr > 0.0 && ArraySize(bufEMAFast) > 1 && close1 > 0.0)
-                       ? MathAbs(close1 - bufEMAFast[1]) / atr : 0.0;
-   string m5Trend = (ArraySize(bufEMAFast) > 1 && ArraySize(bufEMASlow) > 1)
-                    ? XAU_ForensicTFTrend(bufEMAFast[1], bufEMASlow[1]) : "NA";
-   string h1Trend = (ArraySize(bufEMAFast_H1) > 1 && ArraySize(bufEMASlow_H1) > 1)
-                    ? XAU_ForensicTFTrend(bufEMAFast_H1[1], bufEMASlow_H1[1]) : "NA";
-   string contextTrend = (ArraySize(bufEMAFast_H4) > 1 && ArraySize(bufEMASlow_H4) > 1)
-                         ? XAU_ForensicTFTrend(bufEMAFast_H4[1], bufEMASlow_H4[1]) : "NA";
-   double m15Rsi = (ArraySize(bufRSI_M15) > 1) ? bufRSI_M15[1] : 0.0;
-   string aligned = "MIXED";
-   if(signal > 0 && m5Trend == "BULL" && h1Trend == "BULL") aligned = "FAST_ALIGNED_BUY";
-   if(signal < 0 && m5Trend == "BEAR" && h1Trend == "BEAR") aligned = "FAST_ALIGNED_SELL";
-   if(signal > 0 && (m5Trend == "BEAR" || h1Trend == "BEAR")) aligned = "COUNTER_OR_MIXED_BUY";
-   if(signal < 0 && (m5Trend == "BULL" || h1Trend == "BULL")) aligned = "COUNTER_OR_MIXED_SELL";
-
-   return StringFormat(
-      "FORENSIC_ENTRY_SNAPSHOT version=6.0.3 dir=%s setup=%s grade=%s setupScore=%.1f combined=%.1f regime=%s session=%s M5=%s M15_RSI=%.1f H1=%s contextTF=%s alignment=%s price=%.2f atr=%.2f emaDist=%.2fATR spread=%.0f spreadEMA=%.1f spreadRatio=%.2f STI_TCP=%.0f STI_exhaust=%.0f STI_late=%.0f committeeLabel=%s committeeConf=%d",
-      signal > 0 ? "BUY" : "SELL", setupName, grade, setupScore, combinedScore,
-      RegimeName(), SessionTag(), m5Trend, m15Rsi, h1Trend, contextTrend, aligned,
-      price, atr, emaDistATR, spread, g_spreadEMA, spreadRatio,
-      stiTCP, stiExhaust, stiLate, g_committee.directorLabel, g_committee.confidence);
 }
 
 string PropFirmBaselineKey()
@@ -2761,7 +2937,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v6.0.3 (FORENSIC GROWTH AUDIT) READY ===");
+   Print("=== XAUAI SNIPER v5.9.1 (BALANCED PRECISION) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -2852,11 +3028,15 @@ int OnInit()
    Print("VOL-ADAPT: ", InpVolAdaptiveLots?"ON":"OFF",
          " (spike>", DoubleToString(InpVolSpikeMulti,2), "x ATR → size×",DoubleToString(InpVolSpikeReduce,2),
          ", calm<", DoubleToString(InpVolCalmMulti,2), "x → size×", DoubleToString(InpVolCalmBoost,2), ")");
+   Print("AI DIRECTOR: ", InpUseAI?"ON":"OFF",
+         " | Auth=", InpAIAdvisoryOnly?"ADVISORY":"REAL-AUTHORITY",
+         " | AllGrades=", InpAIDirectorAllGrades?"YES":"A+-only",
+         " | MinConf=", InpAIDirectorMinConf, "% (block below this)",
+         " | OfflineSafe=", InpAIOfflineSafeMode?"50%-lot":"disabled");
    Print("CONVICTION: ", InpConvictionSizing?"ON":"OFF",
-         " | MinConf=", InpMinAIConfidence, "% (below = SKIP)",
          " | NormalConf=", InpNormalAIConfidence, "% (x1.0)",
          " | HighConf=", InpHighAIConfidence, "% (x", DoubleToString(InpConvictionHighMulti, 2), ")",
-         " | LowMulti=x", DoubleToString(InpConvictionLowMulti, 2));
+         " | LowMulti=x", DoubleToString(InpConvictionLowMulti, 2), " (55-74% = mild reduce)");
    Print("TRAIL v4.5.2: BE activate=+", DoubleToString(InpBELockActivateR,2), "R  lock=+",
          DoubleToString(InpBELockProfitR,2), "R",
          " | TrendAware=", InpTrendAwareTrail?"ON":"OFF",
@@ -3143,33 +3323,35 @@ string BuildSignature(int dir, string setupName)
 //+------------------------------------------------------------------+
 int GetHiveVerdict(string signature)
 {
-   if(InpBacktestMode) return 0;                       // Tester: no network
+   if(InpBacktestMode) return 0;
    if(StringLen(InpServerURL) < 10 || StringLen(signature) == 0) return 0;
+   // Cache: one WebRequest per bar per signature — prevents hammering on every tick
+   int curBar = iBars(Symbol(), PERIOD_M5);
+   if(signature == g_hiveLastSig && curBar == g_hiveLastBar) return g_hiveLastVerdict;
+
    string url = InpServerURL + "/api/ml/hive/score";
    string headers = "Content-Type: application/json\r\n";
    string body = StringFormat("{\"signature\":\"%s\",\"window_days\":7}", signature);
    char pd[], result[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    int res = WebRequest("POST", url, headers, 8000, pd, result, rh);
-   if(res != 200) return 0;
+   if(res != 200) { g_hiveLastSig = signature; g_hiveLastBar = curBar; g_hiveLastVerdict = 0; return 0; }
    string response = CharArrayToString(result);
    int total = ExtractJsonInt(response, "total", 0);
    double wr = ExtractJsonDouble(response, "wr", 0.5);
    string verdict = ExtractJsonString(response, "verdict");
 
+   int hv = 0;
    if(total < InpHiveMinTrustedSamples)
+   { Print("HIVE IGNORED: sample=", total, "/", InpHiveMinTrustedSamples, " | wr=", DoubleToString(wr*100,1), "% | verdict=", verdict); }
+   else
    {
-      Print("HIVE IGNORED: sample=", total, " < trusted minimum ",
-            InpHiveMinTrustedSamples, " | wr=", DoubleToString(wr * 100.0, 1),
-            "% | verdict=", verdict);
-      return 0;
+      Print("HIVE TRUSTED: sample=", total, " | wr=", DoubleToString(wr*100,1), "% | verdict=", verdict);
+      if(StringFind(response, "\"BOOST\"") >= 0) hv =  1;
+      if(StringFind(response, "\"VETO\"")  >= 0) hv = -1;
    }
-
-   Print("HIVE TRUSTED: sample=", total, " | wr=", DoubleToString(wr * 100.0, 1),
-         "% | verdict=", verdict);
-   if(StringFind(response, "\"BOOST\"") >= 0) return 1;
-   if(StringFind(response, "\"VETO\"")  >= 0) return -1;
-   return 0;
+   g_hiveLastSig = signature; g_hiveLastBar = curBar; g_hiveLastVerdict = hv;
+   return hv;
 }
 
 //+------------------------------------------------------------------+
@@ -3249,6 +3431,42 @@ void RecordCloseForStreak(bool wasLoss)
          }
       }
    }
+}
+
+// v6.1.3 — Basket direction-loss block.
+// Returns true (= block entry) if existing same-direction open trades are in a net
+// floating loss exceeding InpBasketDirLossBlockPct % of current balance.
+// Prevents the bot adding more sells into a rising gold market that is already
+// burning through the existing sell basket.
+bool BasketDirectionLossBlock(int dir, string &reason)
+{
+   reason = "";
+   if(!InpBasketDirLossBlock || dir == 0) return false;
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(balance <= 0) return false;
+   // v6.3.2 FIX: enforce $200 minimum so the block never fires from normal spread+noise
+   // float on small accounts (e.g. 2% of $3k = $60 — one open position in mild drawdown).
+   double threshold = -MathMax(balance * InpBasketDirLossBlockPct / 100.0, 200.0);
+   double dirFloat  = 0.0;
+   int    dirCount  = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      int posDir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+      if(posDir != dir) continue;
+      dirFloat += PositionGetDouble(POSITION_PROFIT);
+      dirCount++;
+   }
+   if(dirCount > 0 && dirFloat < threshold)
+   {
+      reason = StringFormat("BASKET-DIR-LOSS: %d open %s trades floating $%.2f (threshold $%.2f = %.1f%% of $%.0f balance) — no new %s entries until basket recovers",
+                            dirCount, dir == 1 ? "BUY" : "SELL", dirFloat, threshold,
+                            InpBasketDirLossBlockPct, balance, dir == 1 ? "BUY" : "SELL");
+      return true;
+   }
+   return false;
 }
 
 bool IsDirectionLocked(int dir)
@@ -3390,7 +3608,7 @@ void UpdateDrawdownState(bool wasLoss)
       RecomputeAutoScale();      // re-scale thresholds to current balance
    }
    if(wasLoss) todayLossCount++;
-   else if(todayLossCount > 0) todayLossCount--;   // a win reduces recent-loss stress
+   else todayLossCount = 0;   // v6.3.2: single win fully resets loss counter (was -1 per win, stuck bot in recovery mode after 3L+1W)
    if(InpDrawdownMode)
    {
       bool newState = (todayLossCount >= InpDrawdownLosses);
@@ -3488,6 +3706,284 @@ void CheckReEntryOpportunity()
 }
 
 //+------------------------------------------------------------------+
+//| SMC ENTRY LAYER (v6.1.0)                                         |
+//| Additive confirmation: BOS + Order Block + FVG + Kill Zone       |
+//| Raises score on confluent trades. BOS opposition = log only.     |
+//| All existing gates, risk engine, and exits are UNTOUCHED.        |
+//+------------------------------------------------------------------+
+
+void SMC_DetectBOS(double atr)
+{
+   int lookback = InpSMC_BOS_Lookback;
+   double swingHigh = 0.0;
+   double swingLow  = DBL_MAX;
+
+   for(int i = 2; i < lookback + 2; i++)
+   {
+      double h = iHigh(Symbol(), PERIOD_H1, i);
+      double l = iLow(Symbol(),  PERIOD_H1, i);
+      if(h <= 0 || l <= 0) break;
+      // Simple pivot: bar i is swing high if higher than both neighbours
+      double hPrev = iHigh(Symbol(), PERIOD_H1, i - 1);
+      double hNext = iHigh(Symbol(), PERIOD_H1, i + 1);
+      double lPrev = iLow(Symbol(),  PERIOD_H1, i - 1);
+      double lNext = iLow(Symbol(),  PERIOD_H1, i + 1);
+      if(hPrev > 0 && hNext > 0 && h > hPrev && h > hNext)
+         if(h > swingHigh) swingHigh = h;
+      if(lPrev > 0 && lNext > 0 && l < lPrev && l < lNext)
+         if(l < swingLow)  swingLow  = l;
+   }
+   if(swingHigh <= 0 || swingLow >= DBL_MAX) return;
+
+   double h1Close = iClose(Symbol(), PERIOD_H1, 1);
+   if(h1Close <= 0) return;
+
+   if(h1Close > swingHigh)      g_smc_bos_dir =  1;   // bullish BOS
+   else if(h1Close < swingLow)  g_smc_bos_dir = -1;   // bearish BOS
+   // If inside range, keep previous g_smc_bos_dir (BOS persists until next structural break)
+}
+
+void SMC_DetectOrderBlocks(double atr)
+{
+   g_smc_ob_bull.valid = false;
+   g_smc_ob_bear.valid = false;
+   if(atr <= 0) return;
+
+   double currentPrice = iClose(Symbol(), PERIOD_M5, 1);
+   if(currentPrice <= 0) return;
+
+   double impulseMin = atr * InpSMC_ImpulseATR;    // min move away from OB to confirm impulse
+   double obTol      = atr * InpSMC_OB_ToleranceATR;
+   int    lookback   = InpSMC_OB_Lookback;
+
+   for(int i = 2; i <= lookback + 2; i++)
+   {
+      double openH  = iOpen(Symbol(),  PERIOD_H1, i);
+      double closeH = iClose(Symbol(), PERIOD_H1, i);
+      double highH  = iHigh(Symbol(),  PERIOD_H1, i);
+      double lowH   = iLow(Symbol(),   PERIOD_H1, i);
+      if(openH <= 0 || closeH <= 0) break;
+
+      // === BULLISH ORDER BLOCK ===
+      // A bearish (down) H1 candle before a bullish impulse — becomes demand zone
+      if(!g_smc_ob_bull.valid && closeH < openH)
+      {
+         // Find highest price reached since this candle (bars i-1 down to bar 1)
+         double highestSince = 0.0;
+         for(int j = i - 1; j >= 1; j--)
+         {
+            double hj = iHigh(Symbol(), PERIOD_H1, j);
+            if(hj > highestSince) highestSince = hj;
+         }
+         bool impulseConfirmed = (highestSince - highH) >= impulseMin;
+         // Price returning INTO the OB zone from above (demand test)
+         bool inZone = (currentPrice >= lowH - obTol) && (currentPrice <= highH + obTol);
+
+         if(impulseConfirmed && inZone)
+         {
+            g_smc_ob_bull.valid   = true;
+            g_smc_ob_bull.dir     = 1;
+            g_smc_ob_bull.high    = highH;
+            g_smc_ob_bull.low     = lowH;
+            g_smc_ob_bull.mid     = (highH + lowH) * 0.5;
+            g_smc_ob_bull.barTime = iTime(Symbol(), PERIOD_H1, i);
+         }
+      }
+
+      // === BEARISH ORDER BLOCK ===
+      // A bullish (up) H1 candle before a bearish impulse — becomes supply zone
+      if(!g_smc_ob_bear.valid && closeH > openH)
+      {
+         double lowestSince = DBL_MAX;
+         for(int j = i - 1; j >= 1; j--)
+         {
+            double lj = iLow(Symbol(), PERIOD_H1, j);
+            if(lj < lowestSince) lowestSince = lj;
+         }
+         bool impulseConfirmed = (lowH - lowestSince) >= impulseMin;
+         bool inZone = (currentPrice >= lowH - obTol) && (currentPrice <= highH + obTol);
+
+         if(impulseConfirmed && inZone)
+         {
+            g_smc_ob_bear.valid   = true;
+            g_smc_ob_bear.dir     = -1;
+            g_smc_ob_bear.high    = highH;
+            g_smc_ob_bear.low     = lowH;
+            g_smc_ob_bear.mid     = (highH + lowH) * 0.5;
+            g_smc_ob_bear.barTime = iTime(Symbol(), PERIOD_H1, i);
+         }
+      }
+
+      if(g_smc_ob_bull.valid && g_smc_ob_bear.valid) break;
+   }
+}
+
+void SMC_DetectFVGs(double atr)
+{
+   g_smc_fvg_bull.valid = false;
+   g_smc_fvg_bear.valid = false;
+   if(atr <= 0) return;
+
+   double currentPrice = iClose(Symbol(), PERIOD_M5, 1);
+   if(currentPrice <= 0) return;
+
+   double fvgTol  = atr * InpSMC_FVG_ToleranceATR;
+   int    lookback = InpSMC_FVG_Lookback;
+   double minGap   = atr * 0.2;   // FVG must be at least 0.2 ATR wide to matter
+
+   for(int i = 2; i <= lookback; i++)
+   {
+      // Three-candle pattern: bars [i+1], [i], [i-1] on M15
+      double highPrev = iHigh(Symbol(), PERIOD_M15, i + 1);
+      double lowPrev  = iLow(Symbol(),  PERIOD_M15, i + 1);
+      double highNext = iHigh(Symbol(), PERIOD_M15, i - 1);
+      double lowNext  = iLow(Symbol(),  PERIOD_M15, i - 1);
+      if(highPrev <= 0 || lowNext <= 0) break;
+
+      // BULLISH FVG: gap between prev candle high and next candle low (unfilled space above)
+      if(!g_smc_fvg_bull.valid && highPrev < lowNext)
+      {
+         double gapLow  = highPrev;
+         double gapHigh = lowNext;
+         if(gapHigh - gapLow >= minGap)
+         {
+            bool inZone = (currentPrice >= gapLow - fvgTol) && (currentPrice <= gapHigh + fvgTol);
+            if(inZone)
+            {
+               g_smc_fvg_bull.valid   = true;
+               g_smc_fvg_bull.dir     = 1;
+               g_smc_fvg_bull.high    = gapHigh;
+               g_smc_fvg_bull.low     = gapLow;
+               g_smc_fvg_bull.mid     = (gapHigh + gapLow) * 0.5;
+               g_smc_fvg_bull.barTime = iTime(Symbol(), PERIOD_M15, i);
+            }
+         }
+      }
+
+      // BEARISH FVG: gap between next candle high and prev candle low
+      if(!g_smc_fvg_bear.valid && lowPrev > highNext)
+      {
+         double gapHigh = lowPrev;
+         double gapLow  = highNext;
+         if(gapHigh - gapLow >= minGap)
+         {
+            bool inZone = (currentPrice >= gapLow - fvgTol) && (currentPrice <= gapHigh + fvgTol);
+            if(inZone)
+            {
+               g_smc_fvg_bear.valid   = true;
+               g_smc_fvg_bear.dir     = -1;
+               g_smc_fvg_bear.high    = gapHigh;
+               g_smc_fvg_bear.low     = gapLow;
+               g_smc_fvg_bear.mid     = (gapHigh + gapLow) * 0.5;
+               g_smc_fvg_bear.barTime = iTime(Symbol(), PERIOD_M15, i);
+            }
+         }
+      }
+
+      if(g_smc_fvg_bull.valid && g_smc_fvg_bear.valid) break;
+   }
+}
+
+bool SMC_InKillZone()
+{
+   if(!InpSMC_KillZones) return false;
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   int h = dt.hour;
+   return ((h >= 7 && h < 10) ||    // London open
+           (h >= 12 && h < 15) ||   // NY open
+           (h == 15));               // London close
+}
+
+void SMC_Update()
+{
+   // Run once per closed M5 bar — no extra overhead on every tick
+   datetime curBar = iTime(Symbol(), PERIOD_M5, 1);
+   if(curBar <= 0 || curBar == g_smc_last_bar) return;
+
+   double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   if(atr <= 0) return;   // bufATR not yet loaded — do not stamp bar, retry next tick
+
+   g_smc_last_bar = curBar;   // stamp only after confirmed good ATR
+   SMC_DetectBOS(atr);
+   SMC_DetectOrderBlocks(atr);
+   SMC_DetectFVGs(atr);
+}
+
+// Returns the total SMC score bonus (positive = confluent, negative = opposed).
+// Populates smcReason string for logging. Never blocks — only adjusts score.
+double SMC_GetScoreBonus(int dir, string &smcReason)
+{
+   smcReason = "";
+   if(!InpSMC_Enable || dir == 0) return 0.0;
+
+   double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   if(atr <= 0) return 0.0;
+
+   double bonus = 0.0;
+   double currentPrice = iClose(Symbol(), PERIOD_M5, 1);
+   double obTol  = atr * InpSMC_OB_ToleranceATR;
+   double fvgTol = atr * InpSMC_FVG_ToleranceATR;
+
+   // --- BOS alignment (bonus only — no penalty; existing Smart Guard / EPF handle bad-direction trades) ---
+   if(g_smc_bos_dir != 0 && g_smc_bos_dir == dir)
+   {
+      bonus += InpSMC_BOS_BonusScore;
+      smcReason += StringFormat("BOS%+d(+%.1f) ", g_smc_bos_dir, InpSMC_BOS_BonusScore);
+   }
+   else if(g_smc_bos_dir != 0 && g_smc_bos_dir != dir)
+   {
+      // BOS opposes — log it for awareness but do NOT reduce score (keeps aggressive growth personality)
+      smcReason += "BOS_OPP(log_only) ";
+   }
+
+   // --- Order Block zone ---
+   if(dir == 1 && g_smc_ob_bull.valid &&
+      currentPrice >= g_smc_ob_bull.low - obTol &&
+      currentPrice <= g_smc_ob_bull.high + obTol)
+   {
+      bonus += InpSMC_OB_BonusScore;
+      smcReason += StringFormat("BULL_OB[%.2f-%.2f](+%.1f) ",
+                                g_smc_ob_bull.low, g_smc_ob_bull.high, InpSMC_OB_BonusScore);
+   }
+   if(dir == -1 && g_smc_ob_bear.valid &&
+      currentPrice >= g_smc_ob_bear.low - obTol &&
+      currentPrice <= g_smc_ob_bear.high + obTol)
+   {
+      bonus += InpSMC_OB_BonusScore;
+      smcReason += StringFormat("BEAR_OB[%.2f-%.2f](+%.1f) ",
+                                g_smc_ob_bear.low, g_smc_ob_bear.high, InpSMC_OB_BonusScore);
+   }
+
+   // --- FVG zone ---
+   if(dir == 1 && g_smc_fvg_bull.valid &&
+      currentPrice >= g_smc_fvg_bull.low - fvgTol &&
+      currentPrice <= g_smc_fvg_bull.high + fvgTol)
+   {
+      bonus += InpSMC_FVG_BonusScore;
+      smcReason += StringFormat("BULL_FVG[%.2f-%.2f](+%.1f) ",
+                                g_smc_fvg_bull.low, g_smc_fvg_bull.high, InpSMC_FVG_BonusScore);
+   }
+   if(dir == -1 && g_smc_fvg_bear.valid &&
+      currentPrice >= g_smc_fvg_bear.low - fvgTol &&
+      currentPrice <= g_smc_fvg_bear.high + fvgTol)
+   {
+      bonus += InpSMC_FVG_BonusScore;
+      smcReason += StringFormat("BEAR_FVG[%.2f-%.2f](+%.1f) ",
+                                g_smc_fvg_bear.low, g_smc_fvg_bear.high, InpSMC_FVG_BonusScore);
+   }
+
+   // --- Kill zone timing ---
+   if(SMC_InKillZone())
+   {
+      bonus += InpSMC_KZ_BonusScore;
+      smcReason += StringFormat("KILL_ZONE(+%.1f) ", InpSMC_KZ_BonusScore);
+   }
+
+   return bonus;
+}
+
+//+------------------------------------------------------------------+
 //| GATE 2: SESSION FILTER (UTC)                                     |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
@@ -3528,8 +4024,10 @@ double GetSessionQuality()
 {
    MqlDateTime dt; TimeCurrent(dt);
    int h = dt.hour;
-   // London fix windows (special regime)
-   if((h == 10 && dt.min >= 20) || (h == 15 && dt.min <= 10)) return 0.65;
+   // v6.3.2: London fix windows — RAISED 0.65→0.85. The 10:00 and 15:00 London fix
+   // are high-liquidity directional events. Scoring them 0.65 was suppressing valid
+   // LONDON_FIX_PIN setups below the B-grade (3.0) combined threshold.
+   if((h == 10 && dt.min >= 20) || (h == 15 && dt.min <= 10)) return 0.85;
    // NY overlap 13-17 UTC
    if(h >= 13 && h < 17) return 1.00;
    // London 07-12 UTC
@@ -3584,6 +4082,21 @@ int ScoreSetups(double &score, string &setupName)
    double h1Distance = (atr > 0) ? MathAbs(close1 - h1F) / atr : 0;
    bool   h1Stretched = h1Distance > 1.5;
 
+   // v6.1.3 — HTF (context-TF / M30) trend direction for anti-trend veto
+   // bufEMAFast_H4 / bufEMASlow_H4 are loaded from InpContextTF (default M30).
+   double htfF = (ArraySize(bufEMAFast_H4) >= 2) ? bufEMAFast_H4[1] : 0.0;
+   double htfS = (ArraySize(bufEMASlow_H4) >= 2) ? bufEMASlow_H4[1] : 0.0;
+   double htfSpread = (htfS > 0) ? (htfF - htfS) / htfS : 0;
+   int    htfTrendDir = 0;
+   if(htfSpread >  0.0020) htfTrendDir =  1;   // context-TF clearly bullish
+   if(htfSpread < -0.0020) htfTrendDir = -1;   // context-TF clearly bearish
+   // Consensus: H1 + context-TF both agree = strong directional trend
+   // Mean-reversion sells during H1+HTF bull consensus = the #1 account-killer.
+   bool htfBullConsensus = (h1TrendDir == 1 && htfTrendDir == 1);
+   bool htfBearConsensus = (h1TrendDir == -1 && htfTrendDir == -1);
+   // v6.2.0: publish for CheckForEntry to use in scoring
+   g_htfConsensusDir = htfBullConsensus ? 1 : (htfBearConsensus ? -1 : 0);
+
    int bestDir = 0;
    double bestScore = 0;
    string bestName = "";
@@ -3592,11 +4105,23 @@ int ScoreSetups(double &score, string &setupName)
    // === SETUP 1: TREND PULLBACK ===
    // v5.8.0: DATA-DRIVEN KILL. 74 trades, 50% WR, -$48,961 net (PF 0.38).
    // This setup was responsible for 80% of historical losses. DISABLED.
+   // v6.1.4: HTF OVERRIDE — when H1+HTF consensus is active, also allow this setup
+   // in RANGING and LOW_VOL regimes so the bot buys M5 dips within a confirmed H1
+   // bull trend (or sells M5 rallies within a confirmed H1 bear trend).
+   // Without this, htfBullConsensus blocked all SELLs AND M5 RANGING/LOW_VOL had no
+   // BUY setup → bot sat silent all day even while gold trended up.
    if(InpAllowTrendPullback &&
-      (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_TRENDING_DOWN))
+      (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_TRENDING_DOWN ||
+       (htfBullConsensus && currentRegime != REGIME_DEAD) ||
+       (htfBearConsensus && currentRegime != REGIME_DEAD)))
    {
       double s = 0;
-      int dir = currentRegime == REGIME_TRENDING_UP ? 1 : -1;
+      // v6.1.4: When H1+HTF consensus active, force direction to match HTF regardless of M5 regime.
+      // This lets the bot buy the dip (in bull consensus) or sell the rally (in bear consensus).
+      int dir;
+      if(htfBullConsensus)       dir = 1;
+      else if(htfBearConsensus)  dir = -1;
+      else                        dir = (currentRegime == REGIME_TRENDING_UP) ? 1 : -1;
       if(dir == 1 && emaF > emaS) s += 1.0;
       if(dir == -1 && emaF < emaS) s += 1.0;
       if(dir == 1 && h1F > h1S) s += 1.5; // MTF aligned
@@ -3631,9 +4156,12 @@ int ScoreSetups(double &score, string &setupName)
       }
       if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "RANGE_REVERSAL"; bestType = 2; }
 
-      // SELL at upper BB
+      // SELL at upper BB — v6.3.2: allow neutral H1 (h1TrendDir <= 0) matching BUY symmetry.
+      // BUY allows h1TrendDir >= 0 (neutral or bullish). SELL was requiring h1TrendDir == -1 only,
+      // creating a bullish bias in RANGING — SELL setups needed confirmed bearish H1 while BUY
+      // only needed non-bearish. Hard-block on HTF bull consensus preserved.
       s = 0;
-      if(close1 >= bbU - (bbU - bbL) * 0.2 && h1TrendDir <= 0 && !h1Stretched)
+      if(close1 >= bbU - (bbU - bbL) * 0.2 && h1TrendDir <= 0 && !htfBullConsensus && !h1Stretched)
       {
          dir = -1; s += 1.0;
          if(rsi > 65) s += 1.5;
@@ -3641,7 +4169,7 @@ int ScoreSetups(double &score, string &setupName)
          if(close1 < open1) s += 1.0;
          if(m15RSI > 60) s += 0.5;
          if(close2 > close1) s += 0.5;
-         if(h1TrendDir == -1) s += 0.5;  // bonus if H1 actually aligned
+         if(htfTrendDir == -1) s += 0.5; // bonus if HTF also bearish
       }
       if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "RANGE_REVERSAL"; bestType = 2; }
    }
@@ -3666,6 +4194,7 @@ int ScoreSetups(double &score, string &setupName)
    }
 
    // === SETUP 4: SQUEEZE RELEASE ===
+   // v6.1.3: added H1 trend gate — no short-squeeze sells during H1 uptrend
    {
       double bbW = (bbU - bbL) / close1 * 100;
       double prevW = 0;
@@ -3674,13 +4203,19 @@ int ScoreSetups(double &score, string &setupName)
       {
          double s = 1.5;
          int dir = close1 > bbM ? 1 : -1;
-         if(body > atr * 0.4) s += 1.0;
-         if(dir == 1 && rsi > 50) s += 0.5;
-         if(dir == -1 && rsi < 50) s += 0.5;
-         if(dir == 1 && emaF > emaS) s += 1.0;
-         if(dir == -1 && emaF < emaS) s += 1.0;
-         if(dir == 1 && h1F > h1S) s += 1.0;
-         if(dir == -1 && h1F < h1S) s += 1.0;
+         // Block sell squeeze if H1 bullish; block buy squeeze if H1 bearish
+         if(dir == -1 && (h1TrendDir == 1 || htfBullConsensus)) s = 0;
+         if(dir ==  1 && (h1TrendDir == -1 || htfBearConsensus)) s = 0;
+         if(s > 0)
+         {
+            if(body > atr * 0.4) s += 1.0;
+            if(dir == 1 && rsi > 50) s += 0.5;
+            if(dir == -1 && rsi < 50) s += 0.5;
+            if(dir == 1 && emaF > emaS) s += 1.0;
+            if(dir == -1 && emaF < emaS) s += 1.0;
+            if(dir == 1 && h1F > h1S) s += 1.0;
+            if(dir == -1 && h1F < h1S) s += 1.0;
+         }
          if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "SQUEEZE_RELEASE"; bestType = 4; }
       }
    }
@@ -3694,16 +4229,20 @@ int ScoreSetups(double &score, string &setupName)
    }
 
    // === SETUP 6: LONDON FIX PIN ===
+   // v6.1.3: CRITICAL FIX — added H1 trend gate. Fading a spike into a strong bull
+   // trend is suicide. Only fade spikes that go AGAINST H1 trend (i.e. a down-spike
+   // in a downtrend = buy; an up-spike in an uptrend = DO NOT sell).
    {
       MqlDateTime dt; TimeCurrent(dt);
       bool isLondonFix = (dt.hour == 10 && dt.min >= 20 && dt.min <= 40) || (dt.hour == 15 && dt.min <= 15);
       if(isLondonFix)
       {
          double s = 1.5; int dir = 0;
-         // Fade the pin — if price spiked up, sell; if spiked down, buy
          double move = close1 - iClose(Symbol(), PERIOD_M5, 4);
-         if(move > atr * 0.8) { dir = -1; s += 1.5; } // spike up → fade sell
-         if(move < -atr * 0.8) { dir = 1; s += 1.5; } // spike down → fade buy
+         // Spike up → fade sell ONLY if H1 is NOT bullish (don't sell gold bull spikes)
+         if(move > atr * 0.8 && h1TrendDir != 1 && !htfBullConsensus) { dir = -1; s += 1.5; }
+         // Spike down → fade buy ONLY if H1 is NOT bearish (don't buy gold bear spikes)
+         if(move < -atr * 0.8 && h1TrendDir != -1 && !htfBearConsensus) { dir = 1; s += 1.5; }
          if(dir == 1 && rsi < 40) s += 1.0;
          if(dir == -1 && rsi > 60) s += 1.0;
          if(dir != 0 && body > atr * 0.3) s += 0.5;
@@ -3720,7 +4259,8 @@ int ScoreSetups(double &score, string &setupName)
       {
          dir = 1; s = 2.5 + (body > 0 && lowerWick > body * 0.5 ? 1.0 : 0) + (close1 > open1 ? 1.0 : 0);
       }
-      if(rsi > 72 && close1 > bbU - (bbU - bbL) * 0.15 && m15RSI > 65 && h1TrendDir <= 0 && !h1Stretched)
+      // v6.1.3: require h1TrendDir == -1 (not just <= 0) and block on bull consensus
+      if(rsi > 72 && close1 > bbU - (bbU - bbL) * 0.15 && m15RSI > 65 && h1TrendDir == -1 && !htfBullConsensus && !h1Stretched)
       {
          dir = -1; s = 2.5 + (body > 0 && upperWick > body * 0.5 ? 1.0 : 0) + (close1 < open1 ? 1.0 : 0);
       }
@@ -3769,6 +4309,83 @@ int ScoreSetups(double &score, string &setupName)
             }
          }
       }
+   }
+
+   // === SETUP 9: HTF TREND FOLLOW ===
+   // v6.2.0: The "professional trader" setup. A skilled gold trader sees H1+HTF
+   // both bullish and simply BUYS unless price is overbought or at a BB extreme.
+   // They don't need M5 regime to be perfect. They don't multiply confidence levels.
+   // They look at the big picture and take a position.
+   //
+   // This fills the gap where RANGING/LOW_VOL/CHOPPY M5 regime kills every other
+   // setup, leaving the bot silent all day while gold trends. A human would trade.
+   //
+   // Hard blocks: overbought RSI, price at BB extreme, or DEAD market.
+   // Everything else gets at least a B-grade entry via the HTF consensus bonus in
+   // CheckForEntry (which adds +2.5 to combined score for HTF-confirmed trades).
+   if(htfBullConsensus || htfBearConsensus)
+   {
+      int dir = htfBullConsensus ? 1 : -1;
+      double s = 0;
+      if(dir == 1 && currentRegime != REGIME_DEAD)
+      {
+         bool overextended = (rsi > 72) || (close1 >= bbU - (bbU - bbL) * 0.08);
+         if(!overextended)
+         {
+            s = 2.5;                                                    // base: H1+HTF consensus
+            if(h1F > h1S) s += 1.0;                                    // H1 EMA aligned
+            if(rsi < 55)  s += 1.0; else if(rsi < 66) s += 0.5;       // RSI has room
+            if(close1 > emaF)              s += 0.5;                   // above M5 EMA
+            if(close1 > open1 && body > range * 0.2) s += 0.5;        // bullish candle
+         }
+      }
+      if(dir == -1 && currentRegime != REGIME_DEAD)
+      {
+         bool overextended = (rsi < 28) || (close1 <= bbL + (bbU - bbL) * 0.08);
+         if(!overextended)
+         {
+            s = 2.5;
+            if(h1F < h1S) s += 1.0;                                    // H1 EMA aligned
+            if(rsi > 45)  s += 1.0; else if(rsi > 34) s += 0.5;       // RSI has room
+            if(close1 < emaF)              s += 0.5;                   // below M5 EMA
+            if(close1 < open1 && body > range * 0.2) s += 0.5;        // bearish candle
+         }
+      }
+      if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "HTF_TREND_FOLLOW"; bestType = 9; }
+   }
+
+   // v6.1.3 — GLOBAL ANTI-TREND VETO (last line of defence)
+   // When H1 + context-TF are both clearly trending, block mean-reversion counter-trend
+   // signals regardless of which setup generated them. Exemptions:
+   //   type 1 = TREND_PULLBACK (direction forced to HTF in v6.1.4)
+   //   type 3 = BREAKOUT (regime-aligned)
+   //   type 8 = ASIA_BREAKOUT (range-break, can be in consensus direction)
+   //   type 9 = HTF_TREND_FOLLOW (v6.2.0 — always in HTF consensus direction, never counter-trend)
+   if(bestDir == -1 && htfBullConsensus && bestType != 1 && bestType != 3 && bestType != 8 && bestType != 9)
+   {
+      Print("ANTI-TREND VETO: H1+HTF both BULL — SELL blocked | setup=", bestName,
+            " h1Spread=", DoubleToString(h1Spread*100, 3), "% htfSpread=", DoubleToString(htfSpread*100, 3), "%");
+      bestDir = 0; bestScore = 0; bestName = "";
+   }
+   if(bestDir == 1 && htfBearConsensus && bestType != 1 && bestType != 3 && bestType != 8 && bestType != 9)
+   {
+      Print("ANTI-TREND VETO: H1+HTF both BEAR — BUY blocked | setup=", bestName,
+            " h1Spread=", DoubleToString(h1Spread*100, 3), "% htfSpread=", DoubleToString(htfSpread*100, 3), "%");
+      bestDir = 0; bestScore = 0; bestName = "";
+   }
+   // v6.1.4: TREND_PULLBACK-specific veto removed. TREND_PULLBACK now forces direction
+   // to match HTF consensus, so a SELL can never fire when htfBullConsensus=true,
+   // and a BUY can never fire when htfBearConsensus=true. Safety check below is a
+   // backstop in case anything slips through.
+   if(bestDir == -1 && htfBullConsensus && bestType == 1)
+   {
+      Print("ANTI-TREND VETO BACKSTOP: TREND_PULLBACK SELL during htfBullConsensus (should not happen in v6.1.4)");
+      bestDir = 0; bestScore = 0; bestName = "";
+   }
+   if(bestDir == 1 && htfBearConsensus && bestType == 1)
+   {
+      Print("ANTI-TREND VETO BACKSTOP: TREND_PULLBACK BUY during htfBearConsensus (should not happen in v6.1.4)");
+      bestDir = 0; bestScore = 0; bestName = "";
    }
 
    score = bestScore;
@@ -5061,6 +5678,63 @@ void EPF_ManagePartials()
    }
 }
 
+// v6.0.4: Scheduled news calendar — pure GMT time-math, no external API required.
+// Returns true + fills `reason` if current time is inside a known high-impact window.
+bool IsScheduledNewsWindow(string &reason)
+{
+   if(!InpCalendarEnable) return false;
+   MqlDateTime dt; TimeGMT(dt);
+   int dow  = dt.day_of_week; // 0=Sun, 1=Mon ... 6=Sat
+   int gH   = dt.hour;
+   int gM   = dt.min;
+   int mNow = gH * 60 + gM; // minutes since midnight GMT
+
+   // Sunday market open — gap risk, thin liquidity, wild spread
+   if(InpCalSundayOpen && dow == 0 && mNow < 45)
+   { reason = "CALENDAR: Sunday open gap risk (00:00-00:45 GMT)"; return true; }
+
+   // Monday Asian open micro-spike
+   if(InpCalMondayOpen && dow == 1 && mNow < 30)
+   { reason = "CALENDAR: Monday Asian open spike window (00:00-00:30 GMT)"; return true; }
+
+   // Thursday US Jobless Claims — 12:15-13:30 GMT
+   if(InpCalThursJobless && dow == 4 && mNow >= 735 && mNow <= 810)
+   { reason = "CALENDAR: Thursday Jobless Claims window (12:15-13:30 GMT)"; return true; }
+
+   // Friday US data window (NFP on first Friday, other data other weeks) — 12:15-14:00 GMT
+   if(InpCalFridayData && dow == 5 && mNow >= 735 && mNow <= 840)
+   { reason = "CALENDAR: Friday US data window (12:15-14:00 GMT)"; return true; }
+
+   // Custom window 1
+   if(InpCalCustomDay1 >= 0 && dow == InpCalCustomDay1)
+   {
+      int winStart = InpCalCustomHour1 * 60 + InpCalCustomMin1;
+      if(mNow >= winStart && mNow < winStart + InpCalCustomDurMin1)
+      { reason = StringFormat("CALENDAR: Custom window 1 (day%d %02d:%02d GMT +%dmin)",
+                              InpCalCustomDay1, InpCalCustomHour1, InpCalCustomMin1, InpCalCustomDurMin1);
+        return true; }
+   }
+   // Custom window 2
+   if(InpCalCustomDay2 >= 0 && dow == InpCalCustomDay2)
+   {
+      int winStart = InpCalCustomHour2 * 60 + InpCalCustomMin2;
+      if(mNow >= winStart && mNow < winStart + InpCalCustomDurMin2)
+      { reason = StringFormat("CALENDAR: Custom window 2 (day%d %02d:%02d GMT +%dmin)",
+                              InpCalCustomDay2, InpCalCustomHour2, InpCalCustomMin2, InpCalCustomDurMin2);
+        return true; }
+   }
+   // Custom window 3
+   if(InpCalCustomDay3 >= 0 && dow == InpCalCustomDay3)
+   {
+      int winStart = InpCalCustomHour3 * 60 + InpCalCustomMin3;
+      if(mNow >= winStart && mNow < winStart + InpCalCustomDurMin3)
+      { reason = StringFormat("CALENDAR: Custom window 3 (day%d %02d:%02d GMT +%dmin)",
+                              InpCalCustomDay3, InpCalCustomHour3, InpCalCustomMin3, InpCalCustomDurMin3);
+        return true; }
+   }
+   return false;
+}
+
 void OnTick()
 {
    if(!licenseValid) { g_lastSkipReason = "LICENSE_INVALID (enter correct PIN in inputs)"; return; }
@@ -5323,6 +5997,20 @@ void OnTick()
                                        secsLeft, TimeToString(g_newsAftermathUntil, TIME_MINUTES));
       g_lastSkipReason = spreadBlockReason;
    }
+   // v6.0.4: scheduled news calendar — block entries during pre-defined high-impact windows
+   if(!spreadBlocksEntry)
+   {
+      string calReason = "";
+      if(IsScheduledNewsWindow(calReason))
+      {
+         static datetime lastCalLog = 0;
+         if(TimeCurrent() - lastCalLog >= 60)
+         { Print("NEWS-CALENDAR: ", calReason, " — entries blocked"); lastCalLog = TimeCurrent(); }
+         spreadBlocksEntry = true;
+         spreadBlockReason = calReason;
+         g_lastSkipReason  = calReason;
+      }
+   }
 
    // New M5 bar only for entries, with watchdog recovery.
    datetime barOpens[1];
@@ -5380,6 +6068,8 @@ void OnTick()
    g_indicatorBufferFailCount = 0;
    if(curBar > 0) g_lastEntryBarSeen = curBar;
    g_lastEntryScanAt = TimeCurrent();
+   // v6.1.0: SMC update runs HERE — after bufATR is loaded, ATR is always fresh
+   if(InpSMC_Enable) SMC_Update();
    XAU_UpdateBlockedSignalOutcomes();
    InTradeClassifier_Update(); // v6.0.1: classify open positions every bar (feeds ratchet + exit logic)
 
@@ -5435,6 +6125,26 @@ void OnTick()
    string setupName = "";
    int signal = ScoreSetups(setupScore, setupName);
 
+   // v6.1.0 — SMC confirmation layer (additive only; never blocks, never removes logic)
+   if(InpSMC_Enable && signal != 0)
+   {
+      string smcReason = "";
+      double smcBonus  = SMC_GetScoreBonus(signal, smcReason);
+      if(smcBonus > 0.0)
+         setupScore = MathMax(0.0, setupScore + smcBonus);
+      if(InpSMC_Log && StringLen(smcReason) > 0)
+         Print("SMC v6.1.0 | dir=", signal > 0 ? "BUY" : "SELL",
+               " | bonus=", DoubleToString(smcBonus, 2),
+               " | newScore=", DoubleToString(setupScore, 2),
+               " | setup=", setupName,
+               " | ", smcReason,
+               " | BOS=", g_smc_bos_dir,
+               " | OB_bull=", g_smc_ob_bull.valid ? "Y" : "n",
+               " | OB_bear=", g_smc_ob_bear.valid ? "Y" : "n",
+               " | FVG_bull=", g_smc_fvg_bull.valid ? "Y" : "n",
+               " | FVG_bear=", g_smc_fvg_bear.valid ? "Y" : "n");
+   }
+
    // Combined quality
    double combinedRaw = setupScore * regimeQuality * sessionQuality;
    // v5.1.5: floor the multiplicative drag — without this, fair-quality regimes
@@ -5480,6 +6190,27 @@ void OnTick()
       else if(signal == -1 && isTrendingUp) combinedScore = MathMax(0.0, combinedScore - 0.5);
    }
 
+   // v6.2.0 — HTF CONSENSUS BONUS.
+   // The regime quality multiplier (0.30–0.85) murders valid signals in non-trending
+   // M5 conditions. In RANGING regime a perfect setup (score 4.5) computes to combined
+   // 2.34 → SKIP, even when H1+HTF are both screaming bullish.
+   //
+   // A professional trader doesn't multiply confidence levels. When the bigger picture
+   // is clear (H1 AND HTF both agree), they require LESS M5 confirmation, not more.
+   //
+   // This bonus (+2.5) directly compensates the regime multiplier drag for trend-aligned
+   // signals during confirmed H1+HTF consensus. It is NOT applied to counter-trend
+   // signals — the anti-trend veto already handles those.
+   bool htfConsensusTrade = (g_htfConsensusDir == 1 && signal == 1) ||
+                            (g_htfConsensusDir == -1 && signal == -1);
+   if(htfConsensusTrade)
+   {
+      combinedScore += 2.5;
+      Print("HTF_CONSENSUS_BONUS +2.5 | dir=", signal > 0 ? "BUY" : "SELL",
+            " | setup=", setupName, " | combinedScore=", DoubleToString(combinedScore, 2),
+            " | regime=", RegimeName(), " | htfConsensusDir=", g_htfConsensusDir);
+   }
+
    string accelReason = "";
    double accelAdj = XAU_AcceleratedLearningAdjust(signal, setupName, combinedScore, accelReason);
    if(MathAbs(accelAdj) >= 0.01)
@@ -5517,14 +6248,24 @@ void OnTick()
    // got crushed when regime transitioned back to TREND_DN. Now B-grade is
    // demoted to SKIP in those regimes. A and A+ trades still allowed because
    // their score is genuinely high. Aggressive mode preserves legacy behavior.
+   //
+   // v6.2.0 EXCEPTION: HTF consensus trades are EXEMPT from LOW_VOL demotion.
+   // When H1+HTF are both confirmed bullish/bearish, a B-grade trend-follow
+   // in LOW_VOL is still valid — that's gold consolidating within a trend,
+   // not random chop. Only CHOPPY and DEAD remain hard-blocked for B-grade.
    if(grade == "B" && g_modeName != "aggressive")
    {
-      if(currentRegime == REGIME_CHOPPY ||
-         currentRegime == REGIME_DEAD   ||
-         currentRegime == REGIME_LOW_VOL)
+      bool exemptHTF = htfConsensusTrade; // v6.2.0: HTF consensus trades allowed in LOW_VOL
+      if(currentRegime == REGIME_DEAD || currentRegime == REGIME_CHOPPY)
       {
          Print("⚙ FIX-C: B-grade trade demoted to SKIP in regime ", RegimeName(),
-               " (mode=", g_modeName, ") — A/A+ only in unstable regimes");
+               " (mode=", g_modeName, ") — A/A+ only in dead/choppy market");
+         grade = "SKIP";
+      }
+      else if(currentRegime == REGIME_LOW_VOL && !exemptHTF)
+      {
+         Print("⚙ FIX-C: B-grade trade demoted to SKIP in LOW_VOL (non-HTF consensus). ",
+               "Setup=", setupName, " regime=", RegimeName());
          grade = "SKIP";
       }
    }
@@ -5847,18 +6588,12 @@ void OnTick()
    // STI is an additive intelligence layer: hard blocks only extreme cases,
    // borderline risk = lot reduction. The bot stays aggressive on quality setups.
    g_stiLotMulti = 1.0;  // reset each scan
-   g_pendingForensicStiTCP = 0.0;
-   g_pendingForensicStiExhaust = 0.0;
-   g_pendingForensicStiLate = 0.0;
    if(InpSTI_Enable && signal != 0 && grade != "SKIP")
    {
       double stiM5ATR = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
       double stiTCP     = STI_ComputeTCP(signal);
       double stiExhaust = STI_ComputeExhaustion(signal);
       double stiLate    = STI_ComputeLateEntryRisk(signal, stiM5ATR);
-      g_pendingForensicStiTCP = stiTCP;
-      g_pendingForensicStiExhaust = stiExhaust;
-      g_pendingForensicStiLate = stiLate;
 
       if(InpSTI_Log)
          PrintFormat("STI SCAN | %s %s | TCP=%.0f Exhaust=%.0f LateRisk=%.0f | macroDir=%s macro%.0f%%",
@@ -5953,6 +6688,23 @@ void OnTick()
       return;
    }
 
+   // v6.1.3 — BASKET DIRECTION LOSS BLOCK
+   // If existing same-direction trades are already in a net loss > threshold, do not add more.
+   // Prevents stacking sells into a rising gold market that is already burning the basket.
+   {
+      string bdlReason = "";
+      if(BasketDirectionLossBlock(signal, bdlReason))
+      {
+         Print("TRADE BLOCKED BECAUSE: ", bdlReason);
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, bdlReason);
+         CloudPostReasoning("BLOCK", bdlReason, RegimeName(), setupName,
+                            setupScore, combinedScore, "BASKET-DIR-LOSS", signal);
+         UpdateDashboard(0, combinedScore, "BASKET-LOSS");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "BASKET-LOSS";
+         return;
+      }
+   }
+
    // DIRECTION LOCKOUT — if this side has been losing repeatedly, skip it
    if(IsDirectionLocked(signal))
    {
@@ -5976,11 +6728,9 @@ void OnTick()
 
    // ============ GATE 4: RISK SIZING ============
    // v4.9.3 — Bigger lots scale with signal strength
-   double gradeBaseSizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;
-   double sizeMulti = gradeBaseSizeMulti;
+   double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;
    int    confidenceBoostPP = 0;   // in percentage points, informational
 
-   double adaptiveConfirmAppliedMult = 1.0;
    if(timingLotMult < 0.999)
    {
       sizeMulti *= timingLotMult;
@@ -5990,7 +6740,6 @@ void OnTick()
 
    if(g_adaptiveConfirmLotMulti < 0.999)
    {
-      adaptiveConfirmAppliedMult = g_adaptiveConfirmLotMulti;
       sizeMulti *= g_adaptiveConfirmLotMulti;
       Print("ADAPTIVE-CONFIRM SIZE: lot x",
             DoubleToString(g_adaptiveConfirmLotMulti, 2), " | ",
@@ -6000,10 +6749,9 @@ void OnTick()
 
    if(smartDamageSetup && InpSmartGuardDamageLotMulti > 0)
    {
-      double smartGuardAppliedMult = InpSmartGuardDamageLotMulti * smartGuardExtraLotMulti;
-      sizeMulti *= smartGuardAppliedMult;
+      sizeMulti *= InpSmartGuardDamageLotMulti * smartGuardExtraLotMulti;
       Print("SMART-GUARD SIZE: ", setupName, " risk x",
-            DoubleToString(smartGuardAppliedMult, 2),
+            DoubleToString(InpSmartGuardDamageLotMulti * smartGuardExtraLotMulti, 2),
             " (live-history defensive sizing)");
    }
 
@@ -6014,11 +6762,13 @@ void OnTick()
       double mlRaw = GetMLScoreWithSamples(signal, signature, mlSamples);
       double mlScore = SmoothedMLScore(mlRaw, signature);   // v5.8.6 — smooth only inside the same setup/direction signature
       bool mlTrusted = (mlSamples >= InpMLMinTrustedSamples);
-      Print("LOCAL ML AUDIT: signature samples=", mlSamples,
-            " trusted=", mlTrusted ? "Y" : "N",
-            " wr=", DoubleToString(mlRaw * 100.0, 0),
-            "% smoothed=", DoubleToString(mlScore * 100.0, 0),
-            "% min=", InpMLMinTrustedSamples);
+      if(!mlTrusted)
+         Print("LOCAL ML: learning mode — ", mlSamples, "/", InpMLMinTrustedSamples,
+               " matching samples, no authority yet");
+      else
+         Print("LOCAL ML AUDIT: samples=", mlSamples,
+               " wr=", DoubleToString(mlRaw * 100.0, 0),
+               "% smoothed=", DoubleToString(mlScore * 100.0, 0), "%");
       if(mlTrusted && mlScore <= 0.30)
       {
          Print("TRADE BLOCKED BECAUSE: LOCAL ML VETO — WR=", DoubleToString(mlScore * 100, 0),
@@ -6050,65 +6800,213 @@ void OnTick()
    { Print("HIVE BOOST: signature ", signature, " has WR >= 60% globally (+8pp)");
      sizeMulti += 0.15; confidenceBoostPP += 8; }
 
-   // ============ GATE 5: DUAL-AI ENTRY (Claude 4.5 + GPT-5.2) ============
-   if(grade == "A+" && InpUseAI && StringLen(InpServerURL) >= 10)
+   // ============ GATE 5: AI DIRECTOR (v6.3.0) ============
+   // The AI Director sits above all strategies. Strategies submitted signals.
+   // AI Director reviews full market context and decides: ALLOW/BLOCK/REDUCE/INCREASE.
+   // Hard safety rules (max loss, margin, DD) still sit above AI Director.
+   //
+   // Called for: ALL grades (A+, A, B) when InpAIDirectorAllGrades=true; A+ only otherwise.
+   // Authority: real veto and lot control (not advisory) when InpAIAdvisoryOnly=false.
+   bool callAI = InpUseAI && StringLen(InpServerURL) >= 10 && !InpBacktestMode;
+   bool gradeQualifiesForAI = (InpAIDirectorAllGrades)
+                               ? (grade == "A+" || grade == "A" || grade == "B")
+                               : (grade == "A+");
+   if(callAI && gradeQualifiesForAI)
    {
-      int aiResult = GetAIAnalysis(bufEMAFast[1], bufEMASlow[1], bufRSI[1], bufATR[1],
-         iClose(Symbol(), PERIOD_M5, 1),    // closed bar — consistent with setup scoring
-         bufEMAFast_H1[1] > bufEMASlow_H1[1] ? "BULL" : "BEAR", spread,
-         setupName, RegimeName(), signature,
-         ArraySize(bufStochK) >= 2 ? bufStochK[1] : 50.0,
-         iClose(Symbol(), PERIOD_M5, 1) - iClose(Symbol(), PERIOD_M5, 5));
-
-      if(InpAIAdvisoryOnly)
+      // --- Check AI offline state ---
+      if(g_aiOffline && !InpAIOfflineSafeMode)
       {
-         Print("AI ADVISORY ONLY: result=",
-               aiResult == signal ? "CONFIRM" : aiResult == 0 ? "UNAVAILABLE/NEUTRAL" : "DISAGREE",
-               " confidence=", lastAIConfidence,
-               "%. No entry veto, lot boost, or lot cut applied.");
+         // User chose: if AI is offline AND safe mode is off, trade normally (no AI)
+         Print("AI DIRECTOR OFFLINE — trading without AI oversight (safe mode disabled)");
       }
-      else if(aiResult == 0)
-      { Print("DUAL-AI: SKIP — reducing to B size"); sizeMulti = MathMin(sizeMulti, 0.55); }
-      else if(aiResult != signal)
-      { Print("DUAL-AI: Disagrees — reducing to B size"); sizeMulti = MathMin(sizeMulti, 0.55); }
+      else if(g_aiOffline && InpAIOfflineSafeMode)
+      {
+         // AI offline + safe mode: reduce lot size by 50%, no blocks/upgrades
+         sizeMulti *= 0.5;
+         Print("AI DIRECTOR OFFLINE — SAFE MODE: lot reduced 50%, no AI veto/boost. Fails=", g_aiConsecutiveFails);
+      }
       else
       {
-         Print("DUAL-AI: Confirms ", signal > 0 ? "BUY" : "SELL", " at ", lastAIConfidence, "% conf");
+         // AI is online — call AI Director
+         string h1DirStr = (bufEMAFast_H1[1] > bufEMASlow_H1[1]) ? "BULL" : "BEAR";
+         int aiResult = GetAIAnalysis(
+            bufEMAFast[1], bufEMASlow[1], bufRSI[1], bufATR[1],
+            iClose(Symbol(), PERIOD_M5, 1),
+            h1DirStr, spread,
+            setupName, RegimeName(), signature,
+            ArraySize(bufStochK) >= 2 ? bufStochK[1] : 50.0,
+            iClose(Symbol(), PERIOD_M5, 1) - iClose(Symbol(), PERIOD_M5, 5),
+            grade, setupScore, combinedScore);
 
-         // v4.5.0 — CONVICTION GATE: skip the trade entirely if AI is too uncertain.
-         // Prevents marginal 50-60% confidence trades that historically lose money.
-         if(InpConvictionSizing && lastAIConfidence > 0 && lastAIConfidence < InpMinAIConfidence)
-         {
-            Print("CONVICTION-VETO: AI confidence ", lastAIConfidence, "% < min ", InpMinAIConfidence, "% — SKIP");
-            UpdateDashboard(0, combinedScore, "LOW-CONV");
-            lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "LOW-CONV";
-            return;
-         }
+         // --- AI Director decision log ---
+         string aiVerdictStr = "UNKNOWN";
+         string aiDirStr = (aiResult == 1) ? "BUY" : (aiResult == -1) ? "SELL" : "SKIP";
+         bool aiConfirms    = (aiResult == signal);
+         bool aiDisagrees   = (aiResult != 0 && aiResult != signal);
+         // aiUnavailable: server returned 200 but no parseable action AND no skip_if/confidence
+         // (true no-response). If AI said SKIP with confidence or skip_if text, it's a real SKIP.
+         bool aiUnavailable = (aiResult == 0 && lastAIConfidence == 0 && StringLen(lastAISkipIf) == 0);
 
-         // v4.5.0 — CONVICTION-WEIGHTED SIZING:
-         //   < min        -> already skipped above
-         //   min .. normal -> 0.5x (low conviction = small size)
-         //   normal..high  -> 1.0x (standard size)
-         //   >= high       -> 1.3x (high conviction = bigger size)
-         if(InpConvictionSizing && lastAIConfidence > 0)
-         {
-            double convMult;
-            if(lastAIConfidence >= InpHighAIConfidence)
-               convMult = InpConvictionHighMulti;
-            else if(lastAIConfidence >= InpNormalAIConfidence)
-               convMult = 1.0;
-            else
-               convMult = InpConvictionLowMulti;
-            sizeMulti *= convMult;
-            Print("CONVICTION-SIZE: ", lastAIConfidence, "% -> size x",
-                  DoubleToString(convMult, 2), " (final sizeMulti=",
-                  DoubleToString(sizeMulti, 2), ")");
-         }
-
-         // v4.5.0 — Devil's Advocate log (for user visibility)
+         Print("══════════════════ AI DIRECTOR ══════════════════");
+         Print("Signal: ", setupName, " ", signal > 0 ? "BUY" : "SELL",
+               " | Grade: ", grade, " | Score: ", DoubleToString(combinedScore, 1));
+         Print("HTF Consensus: ", (g_htfConsensusDir == 1) ? "BULL" :
+                                  (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL",
+               " | Regime: ", RegimeName(),
+               " | RSI: ", DoubleToString(bufRSI[1], 1));
+         Print("AI Server: ", (g_aiConsecutiveFails == 0) ? "CONNECTED" : "DEGRADED",
+               " | Provider: Claude+GPT dual | Fails: ", g_aiConsecutiveFails);
+         Print("Claude Vote: ", g_aiClaudeVote, " | GPT Vote: ", g_aiGPTVote);
+         Print("AI Verdict: ", aiDirStr, " | Confidence: ", lastAIConfidence, "%");
+         if(StringLen(currentTradeThesis) > 0)
+            Print("AI Thesis: ", StringSubstr(currentTradeThesis, 0, 150));
          if(StringLen(lastAIBearishCase) > 0)
-            Print("DEVIL'S-ADVOCATE: ", lastAIBearishCase);
+            Print("AI Risk: ", StringSubstr(lastAIBearishCase, 0, 120));
+
+         // --- Apply AI Director authority ---
+         if(InpAIAdvisoryOnly)
+         {
+            // Advisory mode: log only, no actual effect on entry
+            aiVerdictStr = "ADVISORY";
+            Print("AI DIRECTOR MODE: ADVISORY — result logged but no authority exercised");
+            g_aiLastVerdict = "ADVISORY"; g_aiLastConfidence = lastAIConfidence;
+         }
+         else if(aiUnavailable)
+         {
+            // AI server responded HTTP 200 but returned no action — treat as neutral
+            aiVerdictStr = "NEUTRAL";
+            Print("AI DIRECTOR: Neutral/no-action response — trade proceeds at standard size");
+            g_aiLastVerdict = "NEUTRAL"; g_aiLastConfidence = 0;
+         }
+         else if(aiDisagrees)
+         {
+            // v6.3.1 FIX: AI disagreement only BLOCKS when it has enough conviction.
+            // A 51% AI should not kill a setup that passed every structural gate.
+            // HTF consensus is a hard rule-based structural signal — weak AI never overrides it.
+            bool htfConsensusTrade = (g_htfConsensusDir == 1 && signal == 1) ||
+                                     (g_htfConsensusDir == -1 && signal == -1);
+            if(htfConsensusTrade)
+            {
+               // HTF consensus overrides weak AI disagreement — reduce lot, never block
+               aiVerdictStr = "HTF-OVERRIDE";
+               sizeMulti = MathMin(sizeMulti, 0.70);
+               Print("AI DIRECTOR: HTF-CONSENSUS OVERRIDE — AI disagrees (", lastAIConfidence,
+                     "%) but HTF structure confirmed ", signal > 0 ? "BUY" : "SELL",
+                     " | reducing lot x0.70, not blocking");
+               g_aiLastVerdict = "HTF-OVERRIDE"; g_aiLastConfidence = lastAIConfidence;
+            }
+            else if(lastAIConfidence < InpAIDirectorMinConf)
+            {
+               // AI disagrees but with weak conviction — reduce lot, don't block
+               aiVerdictStr = "WEAK-DISAGREE";
+               sizeMulti = MathMin(sizeMulti, 0.65);
+               Print("AI DIRECTOR: WEAK-DISAGREE (conf=", lastAIConfidence, "% < min ",
+                     InpAIDirectorMinConf, "%) — reducing lot x0.65, not blocking");
+               g_aiLastVerdict = "WEAK-DISAGREE"; g_aiLastConfidence = lastAIConfidence;
+            }
+            else
+            {
+               // AI disagrees with sufficient conviction — BLOCK the trade
+               aiVerdictStr = "BLOCK";
+               string blockMsg = StringFormat(
+                  "AI DIRECTOR BLOCK: AI says %s (conf %d%%), strategy says %s. Sufficient conviction to veto.",
+                  aiDirStr, lastAIConfidence, signal > 0 ? "BUY" : "SELL");
+               Print("AI DIRECTOR: BLOCK — ", blockMsg);
+               XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
+               CloudPostReasoning("BLOCK", blockMsg, RegimeName(), setupName, setupScore, combinedScore, grade, signal);
+               UpdateDashboard(0, combinedScore, "AI-BLOCK");
+               lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "AI-BLOCK";
+               g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
+               Print("══════════════════════════════════════════════════");
+               return;
+            }
+         }
+         else if(aiResult == 0)
+         {
+            // AI says SKIP — block if confidence below minimum, else reduce size
+            if(lastAIConfidence < InpAIDirectorMinConf && lastAIConfidence > 0)
+            {
+               aiVerdictStr = "BLOCK";
+               string blockMsg = StringFormat(
+                  "AI DIRECTOR BLOCK: AI SKIP with confidence %d%% < min %.0f%%. Trade blocked.",
+                  lastAIConfidence, InpAIDirectorMinConf);
+               Print("AI DIRECTOR: BLOCK LOW-CONF — ", blockMsg);
+               XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
+               CloudPostReasoning("BLOCK", blockMsg, RegimeName(), setupName, setupScore, combinedScore, "AI-LOW-CONF", signal);
+               UpdateDashboard(0, combinedScore, "AI-BLOCK");
+               lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "AI-LOW-CONF";
+               g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
+               Print("══════════════════════════════════════════════════");
+               return;
+            }
+            // AI SKIP but no confidence score — reduce size, don't block
+            aiVerdictStr = "REDUCE";
+            sizeMulti = MathMin(sizeMulti, 0.50);
+            Print("AI DIRECTOR: REDUCE (AI SKIP/no confidence) — lot x0.50");
+            g_aiLastVerdict = "REDUCE"; g_aiLastConfidence = lastAIConfidence;
+         }
+         else if(aiConfirms)
+         {
+            // AI confirms same direction — apply conviction sizing
+            if(InpConvictionSizing && lastAIConfidence > 0)
+            {
+               // v6.3.2 FIX: when AI CONFIRMS direction with low confidence — NEVER block.
+               // AI agreement at any confidence level means reduce, not veto.
+               // Blocking a structurally sound setup because AI is 52% sure is backwards.
+               if(lastAIConfidence < InpAIDirectorMinConf)
+               {
+                  aiVerdictStr = "ALLOW_LOW_CONV";
+                  sizeMulti *= InpConvictionLowMulti; // 0.70x mild reduce
+                  Print("AI DIRECTOR: LOW-CONV CONFIRM — AI agrees at ", lastAIConfidence,
+                        "% < min ", InpAIDirectorMinConf, "% | lot x", DoubleToString(InpConvictionLowMulti, 2),
+                        " — NOT blocking (AI confirmed direction, just mild size-reduce)");
+                  g_aiLastVerdict = "ALLOW_LOW_CONV"; g_aiLastConfidence = lastAIConfidence;
+                  if(StringLen(lastAIBearishCase) > 0) Print("Devil's Advocate: ", lastAIBearishCase);
+               }
+               else
+               {
+               double convMult;
+               if(lastAIConfidence >= InpHighAIConfidence)
+               {
+                  convMult = InpConvictionHighMulti;
+                  aiVerdictStr = "ALLOW_INCREASE";
+               }
+               else if(lastAIConfidence >= InpNormalAIConfidence)
+               {
+                  convMult = 1.0;
+                  aiVerdictStr = "ALLOW";
+               }
+               else
+               {
+                  convMult = InpConvictionLowMulti;
+                  aiVerdictStr = "ALLOW_REDUCE";
+               }
+               sizeMulti *= convMult;
+               Print("AI DIRECTOR: ", aiVerdictStr, " — conf=", lastAIConfidence, "% → lot x",
+                     DoubleToString(convMult, 2), " (sizeMulti=", DoubleToString(sizeMulti, 2), ")");
+               }  // close else block (high/normal/low conviction branch)
+            }  // close if(InpConvictionSizing && lastAIConfidence > 0)
+            else
+            {
+               aiVerdictStr = "ALLOW";
+               Print("AI DIRECTOR: ALLOW — AI confirms ", signal > 0 ? "BUY" : "SELL",
+                     " at ", lastAIConfidence, "% confidence");
+            }
+            g_aiLastVerdict = aiVerdictStr; g_aiLastConfidence = lastAIConfidence;
+            if(StringLen(lastAIBearishCase) > 0)
+               Print("Devil's Advocate: ", lastAIBearishCase);
+         }
+
+         Print("Strategy Votes: ", setupName, "→", signal > 0 ? "BUY" : "SELL",
+               " | Memory Influence: W=", wins, "/L=", losses,
+               " | Final AI Decision: ", aiVerdictStr, " | LotMult=", DoubleToString(sizeMulti, 2));
+         Print("══════════════════════════════════════════════════");
       }
+   }
+   else if(callAI && !gradeQualifiesForAI)
+   {
+      // Grade is SKIP — shouldn't reach here, but defensive log
+      Print("AI DIRECTOR: grade=", grade, " below threshold — AI not called");
    }
 
    // Store signal context for ML + journal logging
@@ -6234,33 +7132,27 @@ void OnTick()
    if(InpCommitteeLog)
       Print(g_committee.thesis);
    double committeeSzMult = InpCommitteeLotAdj ? g_committee.lotMultiplier : 1.0;
-   if(InpForensicGrowthAudit)
-   {
-      string forensicEntry = XAU_ForensicEntrySnapshot(signal, setupName, grade,
-                                                       setupScore, combinedScore,
-                                                       g_pendingForensicStiTCP,
-                                                       g_pendingForensicStiExhaust,
-                                                       g_pendingForensicStiLate);
-      double finalSignalMult = sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult;
-      string forensicSize = StringFormat(
-         "FORENSIC_SIZE_STACK version=6.0.3 gradeBase=%.2f timing=%.2f adaptiveConfirm=%.2f brain=%.2f pg_epf_stack=%.2f sti=%.2f committee=%.2f finalSignalMult=%.3f committeeVotes=%d confidence=%d",
-         gradeBaseSizeMulti, timingLotMult, adaptiveConfirmAppliedMult, brainLotMult,
-         pgLotMult, g_stiLotMulti, committeeSzMult, finalSignalMult,
-         g_committee.totalScore, g_committee.confidence);
-      if(StringLen(forensicEntry) > 0)
-      {
-         Print(forensicEntry);
-         g_pendingBrainEntryAudit += " | " + forensicEntry;
-      }
-      Print(forensicSize);
-      g_pendingBrainEntryAudit += " | " + forensicSize;
-   }
 
    // Open trade with grade-scaled sizing (g_stiLotMulti = 1.0 unless STI reduced it)
    if(InpSTI_Enable && g_stiLotMulti < 0.999)
       Print(StringFormat("STI SIZE APPLIED | lot x%.2f | committee x%.2f | final sizeMulti=%.3f",
                          g_stiLotMulti, committeeSzMult, sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult));
-   OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult);
+
+   // v6.3.1 SIZE GUARD: prevent silent 0-lot order when multiple reduction layers stack.
+   // Multiplier stacking (grade B 0.45 × AI 0.5 × pgLot × STI × committee) can compound
+   // to near-zero; OpenTrade would try to submit a lot below broker minimum and fail silently.
+   double finalSzMult = sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult;
+   if(finalSzMult < 0.04)
+   {
+      Print("SIZE GUARD: finalSzMult=", DoubleToString(finalSzMult, 4),
+            " (sizeMulti=", DoubleToString(sizeMulti, 3),
+            " × pg=", DoubleToString(pgLotMult, 3),
+            " × sti=", DoubleToString(g_stiLotMulti, 2),
+            " × comm=", DoubleToString(committeeSzMult, 2),
+            ") — below minimum tradeable. Clamping to 0.10x to keep the trade alive.");
+      finalSzMult = 0.10;
+   }
+   OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", finalSzMult);
    // v5.3.1 — remember this entry's grade + score so adverse-pyramid logic and
    // high-grade ratchet looseness can reference them.
    g_lastEntryGrade = grade;
@@ -6719,11 +7611,13 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    {
       bool cleanHighGrade = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
       bool trendContinuation = IsTrendContinuationRegime(signal);
-      double asianMult = 0.40;
+      // v6.3.2: raised Asia floor 0.40→0.55 — 0.40× on B-grade was compounding to
+      // sub-minLot on small accounts (grade B 0.45 × asia 0.40 = 0.18× = $6 risk = 0-lot)
+      double asianMult = 0.55;
       if(trendContinuation && cleanHighGrade && !entryQualityScout)
-         asianMult = g_propFirmMode ? 0.55 : 0.68;
+         asianMult = g_propFirmMode ? 0.65 : 0.80;
       else if(trendContinuation && !entryQualityScout)
-         asianMult = g_propFirmMode ? 0.45 : 0.55;
+         asianMult = g_propFirmMode ? 0.55 : 0.65;
       sessionMult = asianMult;
       riskPct *= asianMult; // v5.8.54: do not crush clean A/A+ continuation trades on small non-prop accounts.
    }
@@ -6737,7 +7631,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       for(int p = patternCount - 1; p >= MathMax(0, patternCount - 5); p--)
          if(patterns[p].wasWinner) rW++;
       if(rW >= 4) { patternMult = 1.3; riskPct *= patternMult; }
-      else if(rW <= 1) { patternMult = 0.5; riskPct *= patternMult; }
+      else if(rW == 0) { patternMult = 0.70; riskPct *= patternMult; } // v6.3.2: changed rW<=1 to rW==0 — 4L+1W was penalising the recovery trade; only reduce when ALL 5 recent are losses
    }
    double riskAfterPattern = riskPct;
 
@@ -6798,17 +7692,21 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double brokerLimitedLots = MathMin(maxLot, lots);
    if(brokerLimitedLots < minLot)
    {
-      Print("LOT-CALC SKIP: balance=$", DoubleToString(balance,2),
-            " equity=$", DoubleToString(equityForSizing,2),
-            " finalRisk=", DoubleToString(riskPct,2), "%",
-            " riskUSD=$", DoubleToString(riskAmount,2),
-            " slDist=", DoubleToString(slDist,2),
-            " sl$/lot=$", DoubleToString(slDollarPerLotRaw,2),
-            " rawLots=", DoubleToString(rawLots,4),
-            " roundedLots=", DoubleToString(lots,4),
-            " brokerMin=", DoubleToString(minLot,4),
-            " reason=calculated size below broker minimum; skipped instead of over-risking.");
-      return;
+      // v6.3.2 FIX: if rawLots > 0 the setup is real — multiplier stacking (grade, AI,
+      // session, EPF, STI, pattern) compressed the size below broker minimum. Clamp to
+      // minLot rather than silently skip. A minLot trade is better than no trade.
+      if(rawLots > 0)
+      {
+         Print("LOT-CALC FLOOR: stacked multipliers compressed lots to ", DoubleToString(brokerLimitedLots,4),
+               " (below minLot=", DoubleToString(minLot,4), ") — clamping to minLot to keep valid signal alive.");
+         lots = minLot;
+      }
+      else
+      {
+         Print("LOT-CALC SKIP: zero rawLots — riskAmt=$", DoubleToString(riskAmount,2),
+               " slDist=", DoubleToString(slDist,2), " sl$/lot=$", DoubleToString(slDollarPerLotRaw,2));
+         return;
+      }
    }
    lots = brokerLimitedLots;
    double beforeInpMaxLots = lots;
@@ -6894,7 +7792,11 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       while(lots > minLot && marginNeeded > freeMargin * 0.5)
       {
          lots -= lotStep; lots = MathMax(minLot, lots);
-         OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded);
+         if(!OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
+         {
+            Print("OrderCalcMargin failed — skip trade");
+            return;
+         }
       }
       if(marginNeeded > freeMargin * 0.8) { Print("NO MARGIN"); return; }
    }
@@ -7902,10 +8804,26 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    bool momentumConfirmed = (momentumScore >= (trendAligned ? 3 : 2)) || rMult >= 4.0;
    if(rMult >= trailStartR && momentumConfirmed)
    {
-      // Tighter trail once we're past +4R (bank more of the move)
+      // v6.3.4 ADAPTIVE CHANDELIER: ATR multiplier adapts to market state in real time.
+      // Base: 3.2× (start) or 2.5× (after +4R). Adjusts up or down based on:
+      //   + HTF consensus still matches position dir  → widen (+0.5) — let runner run
+      //   + Momentum score 4-5/5                      → widen (+0.4) — trend accelerating
+      //   - Regime choppy/ranging                     → tighten (-0.7) — protect gains
+      //   - Momentum score ≤ 2                         → tighten (-0.5) — momentum fading
+      //   - RSI extreme against position               → tighten (-0.3) — overextended
+      // Floor: 1.8× (always gives price 1-2 ATR breathing room to avoid normal pullback exit)
       double chanATR = (rMult >= 4.0) ? EffCleanChandelierATR2() : EffCleanChandelierATR1();
-      if(trendAligned && momentumScore >= 4) chanATR += 0.60;
-      if(choppyRegime && momentumScore <= 2) chanATR = MathMax(1.80, chanATR - 0.70);
+      // Widen: HTF consensus still confirms our direction → trend is structurally sound → hold
+      bool htfStillWithUs = (isBuy && g_htfConsensusDir == 1) || (!isBuy && g_htfConsensusDir == -1);
+      if(htfStillWithUs) chanATR += 0.50;
+      if(trendAligned && momentumScore >= 4) chanATR += 0.40;
+      // Tighten: trend structure failing or momentum exhausting → protect what we have
+      if(choppyRegime) chanATR -= 0.70;
+      if(momentumScore <= 2) chanATR -= 0.50;
+      double rsiVal = bufRSI[0]; // current RSI
+      bool rsiExtreme = (isBuy && rsiVal > 75) || (!isBuy && rsiVal < 25);
+      if(rsiExtreme) chanATR -= 0.30; // overextended — tighten before reversal
+      chanATR = MathMax(1.80, chanATR); // never less than 1.8× — respect normal M5 pullbacks
       double chanDist = atr * chanATR;
       // Find highest high / lowest low over lookback bars (Chandelier Exit classic)
       int lb = InpCleanChandelierLookback;
@@ -8115,6 +9033,58 @@ void ManagePositions()
                PrintFormat("EXPECTANCY_SOFT_DERISK_SKIP #%I64u %s | wanted %.2f lots from %.2f, min %.2f, step %.4f, ret=%d err=%d",
                            ticket, dirStr, reduceLots, lotsOpen, minL, step,
                            trade.ResultRetcode(), GetLastError());
+            }
+         }
+      }
+
+      // ============ v6.3.4 AI PROACTIVE EXIT AUDIT (runs before CleanExits) ============
+      // Moved here from Path C so AI can HOLD/CLOSE/LOCK positions even when CleanExits=true.
+      // Previously, the `continue` at line 9021 meant AI exit override had ZERO effect.
+      // Now AI runs first, can: LOCK the SL to bank profit, or CLOSE early if thesis is dead.
+      // Cooldown: InpClaudeAuditSec (default 900s = 15min) — doesn't spam the API.
+      {
+         static datetime lastClaudeCheckCE = 0;
+         if(InpUseAI && InpAIExitOverride && !InpAIAdvisoryOnly &&
+            StringLen(InpServerURL) >= 10 && minsOpen >= 3 &&
+            TimeCurrent() - lastClaudeCheckCE > InpClaudeAuditSec &&
+            AIVetoCooldownOK(ticket, InpAIExitMinSec))
+         {
+            AIExitVerdict v = CheckPositionWithAI(
+               isBuy ? "BUY" : "SELL", openPx, curPrice, profit,
+               lotsOpen, rsi, emaF, emaS, atr, minsOpen, curSL, curTP,
+               peak, "", RegimeName());
+            lastClaudeCheckCE = TimeCurrent();
+            RecordAIVetoCall(ticket);
+
+            if(v.action == 1 && v.lockUSD > 0 && rDollars > 0)
+            {
+               // AI wants to LOCK profit — move SL to bank the specified USD amount
+               double lockDist = (v.lockUSD / rDollars) * slDist;
+               double newSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
+                                    : NormalizeDouble(openPx - lockDist, digits);
+               double pp2 = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+               long   slLvl2 = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+               double bufPts2 = MathMax(slLvl2 * pp2, pp2 * 30);
+               bool sane2   = isBuy ? (newSL > openPx && newSL < curPrice - bufPts2)
+                                    : (newSL < openPx && newSL > curPrice + bufPts2);
+               bool ratchet2 = isBuy ? (newSL > curSL) : (newSL < curSL || curSL == 0);
+               if(sane2 && ratchet2 && SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, "AI_LOCK_CE"))
+                  Print("AI DIRECTOR EXIT LOCK #", ticket, " — locked +$", DoubleToString(v.lockUSD,2),
+                        " | SL=", DoubleToString(newSL, digits), " | reason: ", v.reason);
+            }
+            else if(v.action == -1 && profit > rDollars * 0.3)
+            {
+               // AI wants to CLOSE — only execute if we're in meaningful profit (>0.3R).
+               // Never let AI close a losing trade early (let SL handle that).
+               Print("AI DIRECTOR EXIT CLOSE #", ticket, " | profit=$", DoubleToString(profit,2),
+                     " | reason: ", v.reason);
+               trade.PositionClose(ticket);
+               continue;
+            }
+            else if(v.action == 0)
+            {
+               // AI says HOLD — log it, do nothing (CleanExits still manages normally)
+               Print("AI DIRECTOR EXIT HOLD #", ticket, " | conf=", v.confidence, "% | ", v.reason);
             }
          }
       }
@@ -9046,31 +10016,118 @@ int ExtractJsonInt(const string &json, const string key, int fallback)
    return (int)ExtractJsonDouble(json, key, (double)fallback);
 }
 
+// v6.3.0: enriched GetAIAnalysis — sends full market context to AI Director
+// Added: htf_consensus, session, open_positions, basket_float_pl, recent_wins,
+//        recent_losses, account_equity, daily_pct, grade, setup_score, combined_score
 int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price, string h1Dir, double spread,
-                  string setup, string regime, string signature, double stoch, double mom)
+                  string setup, string regime, string signature, double stoch, double mom,
+                  string grade = "", double setupScore = 0, double combinedScore = 0)
 {
    // Reset cached outputs
    lastAIConfidence = 0;
    lastAIBearishCase = "";
    lastAISkipIf = "";
+   g_aiClaudeVote = "unknown";
+   g_aiGPTVote    = "unknown";
 
    if(!InpUseAI || InpBacktestMode || StringLen(InpServerURL) < 10) return 0;
+
+   // Gather rich context
+   string htfConsensusStr = (g_htfConsensusDir == 1) ? "BULL" : (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL";
+   string sessionName = "";
+   double sessQ = GetSessionQuality();
+   MqlDateTime dt; TimeCurrent(dt);
+   int gmt = dt.hour;
+   if(gmt >= 0  && gmt < 3)  sessionName = "SYDNEY";
+   else if(gmt >= 3  && gmt < 8)  sessionName = "TOKYO";
+   else if(gmt >= 8  && gmt < 13) sessionName = "LONDON";
+   else if(gmt >= 13 && gmt < 17) sessionName = "NEW_YORK";
+   else if(gmt >= 17 && gmt < 21) sessionName = "NY_LONDON_CLOSE";
+   else                            sessionName = "OFF_HOURS";
+
+   int openPositions = PositionsTotal();
+   double basketFloat = 0;
+   for(int pi = 0; pi < openPositions; pi++) {
+      ulong t = PositionGetTicket(pi);
+      if(t > 0 && PositionGetString(POSITION_SYMBOL) == Symbol())
+         basketFloat += PositionGetDouble(POSITION_PROFIT);
+   }
+   double balance  = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
+   double dailyPct = (dailyStartEquity > 0) ? ((equity - dailyStartEquity) / dailyStartEquity * 100.0) : 0.0;
+
    string url = InpServerURL + "/api/ai/analyze";
    string headers = "Content-Type: application/json\r\n";
    string body = StringFormat(
-      "{\"price\":%.2f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"rsi\":%.1f,\"stoch\":%.1f,\"mom\":%.2f,\"atr\":%.2f,\"h1_trend\":\"%s\",\"spread\":%.0f,\"setup\":\"%s\",\"regime\":\"%s\",\"signature\":\"%s\"}",
-      price, emaF, emaS, rsi, stoch, mom, atr, h1Dir, spread, setup, regime, signature);
+      "{\"price\":%.2f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"rsi\":%.1f,\"stoch\":%.1f,\"mom\":%.2f,\"atr\":%.2f,"
+      "\"h1_trend\":\"%s\",\"htf_consensus\":\"%s\",\"spread\":%.0f,\"setup\":\"%s\",\"regime\":\"%s\","
+      "\"session\":\"%s\",\"session_quality\":%.2f,\"open_positions\":%d,\"basket_float_pl\":%.2f,"
+      "\"recent_wins\":%d,\"recent_losses\":%d,\"account_equity\":%.2f,\"daily_pct\":%.2f,"
+      "\"grade\":\"%s\",\"setup_score\":%.2f,\"combined_score\":%.2f,\"signature\":\"%s\"}",
+      price, emaF, emaS, rsi, stoch, mom, atr,
+      h1Dir, htfConsensusStr, spread, setup, regime,
+      sessionName, sessQ, openPositions, basketFloat,
+      wins, losses, equity, dailyPct,
+      grade, setupScore, combinedScore, signature);
    char postData[], result[]; string rh;
    StringToCharArray(body, postData, 0, StringLen(body));
    int res = WebRequest("POST", url, headers, 15000, postData, result, rh);
-   if(res != 200) return 0;
+   if(res != 200)
+   {
+      g_aiConsecutiveFails++;
+      if(g_aiConsecutiveFails >= InpAIOfflineMaxFails && !g_aiOffline)
+      {
+         g_aiOffline = true;
+         g_aiOfflineSince = TimeCurrent();
+         Print("AI DIRECTOR OFFLINE: ", g_aiConsecutiveFails, " consecutive failures. Switching to SAFE DEGRADED mode (", InpAIOfflineSafeMode ? "50% lot size" : "full size, no AI checks", ")");
+      }
+      // v6.3.2: auto-recovery attempt — after 30 minutes offline, reset fail counter so
+      // the next call gets a fresh try instead of staying degraded indefinitely.
+      if(g_aiOffline && g_aiOfflineSince > 0 && (TimeCurrent() - g_aiOfflineSince) > 1800)
+      {
+         g_aiConsecutiveFails = 0;
+         g_aiOffline = false;
+         g_aiOfflineSince = 0;
+         Print("AI DIRECTOR AUTO-RECOVERY: 30 min elapsed — resetting fail counter for fresh retry.");
+      }
+      return 0;
+   }
+   // Success — reset fail counter
+   if(g_aiConsecutiveFails > 0 || g_aiOffline)
+   {
+      g_aiConsecutiveFails = 0;
+      if(g_aiOffline) { g_aiOffline = false; Print("AI DIRECTOR BACK ONLINE — resuming full authority"); }
+   }
    string response = CharArrayToString(result);
+
+   // v6.3.1 FIX: parse confidence FIRST (before action check) so that when AI
+   // returns SKIP, lastAIConfidence is populated and CheckForEntry can correctly
+   // distinguish a genuine SKIP (confidence known) from a no-response (confidence==0).
+   int confIdx0 = StringFind(response, "\"confidence\":");
+   if(confIdx0 >= 0)
+   {
+      int p0 = confIdx0 + StringLen("\"confidence\":");
+      while(p0 < StringLen(response) && (StringGetCharacter(response, p0) == ' ' ||
+            StringGetCharacter(response, p0) == '\t')) p0++;
+      string numStr0 = "";
+      while(p0 < StringLen(response)) {
+         ushort c0 = StringGetCharacter(response, p0);
+         if(c0 >= '0' && c0 <= '9') { numStr0 += ShortToString(c0); p0++; }
+         else break;
+      }
+      if(StringLen(numStr0) > 0) lastAIConfidence = (int)StringToInteger(numStr0);
+   }
+   // Also pre-parse skip_if so SKIP vs no-response is distinguishable downstream
+   lastAISkipIf = ExtractJsonString(response, "skip_if");
+
    int actIdx = StringFind(response, "\"action\":");
    if(actIdx < 0) return 0;
    string tail = StringSubstr(response, actIdx, 40);
    int dir = 0;
    if(StringFind(tail, "\"BUY\"")  >= 0) dir = 1;
    else if(StringFind(tail, "\"SELL\"") >= 0) dir = -1;
+   // AI returned SKIP — confidence and skip_if are already parsed above; return 0 so
+   // CheckForEntry falls into the aiResult==0 branch (not aiUnavailable).
    else return 0;
 
    // Capture the full trader thesis for storage + display
@@ -9079,25 +10136,38 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    currentTradeTarget       = ExtractJsonString(response, "target");
    currentTradeBearishCase  = ExtractJsonString(response, "bearish_case");
 
-   // v4.5.0 — Parse confidence integer from "confidence":NN (not a string)
-   int confIdx = StringFind(response, "\"confidence\":");
-   if(confIdx >= 0)
-   {
-      int p = confIdx + StringLen("\"confidence\":");
-      // Skip whitespace
-      while(p < StringLen(response) && (StringGetCharacter(response, p) == ' ' ||
-            StringGetCharacter(response, p) == '\t')) p++;
-      string numStr = "";
-      while(p < StringLen(response))
-      {
-         ushort c = StringGetCharacter(response, p);
-         if(c >= '0' && c <= '9') { numStr += ShortToString(c); p++; }
-         else break;
-      }
-      if(StringLen(numStr) > 0) lastAIConfidence = (int)StringToInteger(numStr);
-   }
+   // Confidence and skip_if already parsed above (before action check — v6.3.1 fix)
    lastAIBearishCase = currentTradeBearishCase;
-   lastAISkipIf      = ExtractJsonString(response, "skip_if");
+
+   // v6.3.0: extract individual Claude + GPT votes from backend dual-vote response
+   // Backend returns: "claude":{"action":"BUY","confidence":78}, "gpt":{"action":"BUY","confidence":72}
+   // We find the claude block first, then gpt block, extracting action from each
+   {
+      int cIdx = StringFind(response, "\"claude\":");
+      if(cIdx >= 0)
+      {
+         int aIdx = StringFind(response, "\"action\":", cIdx);
+         if(aIdx > cIdx && aIdx < cIdx + 120)
+         {
+            string tail = StringSubstr(response, aIdx, 30);
+            if(StringFind(tail, "\"BUY\"")  >= 0)  g_aiClaudeVote = "BUY";
+            else if(StringFind(tail, "\"SELL\"") >= 0) g_aiClaudeVote = "SELL";
+            else                                        g_aiClaudeVote = "SKIP";
+         }
+      }
+      int gIdx = StringFind(response, "\"gpt\":");
+      if(gIdx >= 0)
+      {
+         int aIdx = StringFind(response, "\"action\":", gIdx);
+         if(aIdx > gIdx && aIdx < gIdx + 120)
+         {
+            string tail = StringSubstr(response, aIdx, 30);
+            if(StringFind(tail, "\"BUY\"")  >= 0)  g_aiGPTVote = "BUY";
+            else if(StringFind(tail, "\"SELL\"") >= 0) g_aiGPTVote = "SELL";
+            else                                        g_aiGPTVote = "SKIP";
+         }
+      }
+   }
 
    if(StringLen(currentTradeThesis) > 0)
    {
@@ -9115,7 +10185,7 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
                                    double rsi, double emaF, double emaS, double atr, int minsOpen, double sl, double tp,
                                    double peakProfit, string pendingExitReason, string regime)
 {
-   AIExitVerdict v; v.action = 0; v.lockUSD = 0; v.reason = "";
+   AIExitVerdict v; v.action = 0; v.lockUSD = 0; v.reason = ""; v.confidence = 0;
    if(InpBacktestMode) return v;                   // Tester: no network
    if(StringLen(InpServerURL) < 10) return v;
    string url = InpServerURL + "/api/ai/manage-position";
@@ -9131,15 +10201,56 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
    StringReplace(invalEsc,  "\"", "'");
    StringReplace(invalEsc,  "\n", " ");
 
-   string body = StringFormat("{\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f,\"thesis\":\"%s\",\"invalidation\":\"%s\",\"confidence\":%d,\"peak_profit\":%.2f,\"pending_exit_reason\":\"%s\",\"regime\":\"%s\"}",
-      dir, entry, current, profit, lots, rsi, emaF, emaS, atr, minsOpen, sl, tp,
-      thesisEsc, invalEsc, currentTradeConfidence, peakProfit, pendingExitReason, regime);
+   // v6.3.5: enriched exit payload — add rMult, HTF consensus, session, setup, daily %, positions
+   double slDist2 = MathAbs(entry - sl);
+   double rMult2  = (slDist2 > 0 && profit != 0) ? profit / (slDist2 * lots * SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE) * SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE)) : 0;
+   // Simplified rMult: use profit vs estimated 1R (peakProfit can help gauge scale)
+   string htfConsStr = (g_htfConsensusDir == 1) ? "BULL" : (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL";
+   double dailyPct2  = (dailyStartEquity > 0) ? ((AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0) : 0.0;
+   string sessionNow = "";
+   MqlDateTime dt2; TimeCurrent(dt2);
+   int gh = dt2.hour;
+   if(gh >= 13 && gh < 17) sessionNow = "NY_LONDON";
+   else if(gh >= 8 && gh < 13) sessionNow = "LONDON";
+   else if(gh >= 0 && gh < 8) sessionNow = "ASIA";
+   else sessionNow = "OFF_HOURS";
+
+   string body = StringFormat(
+      "{\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,"
+      "\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,"
+      "\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f,\"thesis\":\"%s\",\"invalidation\":\"%s\","
+      "\"confidence\":%d,\"peak_profit\":%.2f,\"pending_exit_reason\":\"%s\",\"regime\":\"%s\","
+      "\"r_mult\":%.2f,\"htf_consensus\":\"%s\",\"session\":\"%s\","
+      "\"daily_pct\":%.2f,\"open_positions\":%d,\"setup_name\":\"%s\"}",
+      dir, entry, current, profit,
+      lots, rsi, emaF, emaS, atr,
+      minsOpen, sl, tp, thesisEsc, invalEsc,
+      currentTradeConfidence, peakProfit, pendingExitReason, regime,
+      rMult2, htfConsStr, sessionNow,
+      dailyPct2, PositionsTotal(), g_lastTradePattern);
    char postData[], result[]; string rh;
    StringToCharArray(body, postData, 0, StringLen(body));
    int res = WebRequest("POST", url, headers, 10000, postData, result, rh);
    if(res != 200) return v;
    string response = CharArrayToString(result);
    v.reason = ExtractJsonString(response, "reason");
+   // Parse confidence from exit verdict response and store on struct
+   {
+      int confIdx = StringFind(response, "\"confidence\":");
+      if(confIdx >= 0)
+      {
+         int cp = confIdx + StringLen("\"confidence\":");
+         while(cp < StringLen(response) && (StringGetCharacter(response, cp) == ' ' ||
+               StringGetCharacter(response, cp) == '\t')) cp++;
+         string cnum = "";
+         while(cp < StringLen(response)) {
+            ushort cc = StringGetCharacter(response, cp);
+            if(cc >= '0' && cc <= '9') { cnum += ShortToString(cc); cp++; }
+            else break;
+         }
+         if(StringLen(cnum) > 0) { lastAIConfidence = (int)StringToInteger(cnum); v.confidence = lastAIConfidence; }
+      }
+   }
    if(StringFind(response, "\"CLOSE\"") >= 0) { v.action = -1; return v; }
    if(StringFind(response, "\"LOCK\"")  >= 0)
    {
@@ -9210,7 +10321,7 @@ double GetMLScoreWithSamples(int dir, string signature, int &matchedSamples)
    {
       string target = rollups[lvl];
       int tLen = StringLen(target);
-      int matches = 0, wins = 0;
+      int matches = 0, loc_wins = 0;
       for(int i = 0; i < patternCount; i++)
       {
          if(patterns[i].direction != dir) continue;
@@ -9228,12 +10339,12 @@ double GetMLScoreWithSamples(int dir, string signature, int &matchedSamples)
          }
          if(!match) continue;
          matches++;
-         if(patterns[i].wasWinner) wins++;
+         if(patterns[i].wasWinner) loc_wins++;
       }
       if(matches >= 5)
       {
          matchedSamples = matches;
-         return (double)wins / matches;
+         return (double)loc_wins / matches;
       }
    }
    return 0.5;
@@ -9335,16 +10446,59 @@ void LoadPatterns()
       string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\"}", InpLicensePIN, Symbol());
       char pd[], result[]; string rh;
       StringToCharArray(body, pd, 0, StringLen(body));
-      int res = WebRequest("POST", url, headers, 10000, pd, result, rh);
+      int res = WebRequest("POST", url, headers, 15000, pd, result, rh);
       if(res == 200)
       {
          string response = CharArrayToString(result);
+         // v6.3.5 FIX: actually parse patterns[] from cloud JSON, not just log count
+         int arrStart = StringFind(response, "\"patterns\":[");
+         if(arrStart >= 0)
+         {
+            arrStart += 12; // skip past "patterns":[
+            int cloudCount = 0;
+            int pos = arrStart;
+            while(pos < StringLen(response) && cloudCount < InpMaxPatterns)
+            {
+               int objStart = StringFind(response, "{", pos);
+               if(objStart < 0) break;
+               int objEnd = StringFind(response, "}", objStart);
+               if(objEnd < 0) break;
+               string obj = StringSubstr(response, objStart, objEnd - objStart + 1);
+               TradePattern p;
+               p.direction  = ExtractJsonInt(obj, "d", 0);
+               p.emaDiff    = ExtractJsonDouble(obj, "ed", 0);
+               p.rsi        = ExtractJsonDouble(obj, "r", 50);
+               p.atr        = ExtractJsonDouble(obj, "a", 0);
+               p.hour       = ExtractJsonInt(obj, "h", 0);
+               p.dayOfWeek  = ExtractJsonInt(obj, "dw", 0);
+               p.regime     = ExtractJsonInt(obj, "rg", 0);
+               p.setupType  = ExtractJsonInt(obj, "st", 0);
+               p.wasWinner  = ExtractJsonInt(obj, "w", 0) == 1;
+               p.profit     = ExtractJsonDouble(obj, "p", 0);
+               p.signature  = ExtractJsonString(obj, "sig");
+               if(p.direction != 0 && StringLen(p.signature) > 0)
+               {
+                  ArrayResize(patterns, cloudCount + 1);
+                  patterns[cloudCount] = p;
+                  cloudCount++;
+               }
+               pos = objEnd + 1;
+            }
+            if(cloudCount > 0)
+            {
+               patternCount = cloudCount;
+               Print("ML CLOUD: Warm-start — loaded ", patternCount, " patterns, ML authority immediate");
+               SavePatterns(); // write local .bin so future restarts use fast local path
+               return;        // skip local file read — cloud data is authoritative
+            }
+         }
+         // No patterns array or empty — just log the server count
          int countIdx = StringFind(response, "\"count\":");
          if(countIdx >= 0)
          {
             string cs = StringSubstr(response, countIdx + 8, 10);
             int ci = StringFind(cs, ","); if(ci < 0) ci = StringFind(cs, "}");
-            if(ci > 0) { cs = StringSubstr(cs, 0, ci); if(StringToInteger(cs) > 0) { Print("ML CLOUD: ", cs, " patterns"); } }
+            if(ci > 0) { cs = StringSubstr(cs, 0, ci); Print("ML CLOUD: server reports ", cs, " patterns (none parsed — fresh start)"); }
          }
       }
    }
@@ -9595,69 +10749,24 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       double bestFloatingPnl = 0.0;
       { int bfIdx = FindPeakIdx(posId); if(bfIdx >= 0) bestFloatingPnl = peakProfits[bfIdx]; }
       double shieldMeaningfulUSD = StrategyReferenceBalance() * 0.015;
-      double forensicWatchUSD = MathMax(InpForensicGivebackWatchMinUSD,
-                                        StrategyReferenceBalance() * InpForensicGivebackWatchPct / 100.0);
-      double profitGiveback = MathMax(0.0, bestFloatingPnl - profit);
-      double givebackPct = (bestFloatingPnl > 0.0) ? profitGiveback / bestFloatingPnl * 100.0 : 0.0;
-      bool protectionShouldHaveTriggered = (InpForensicGrowthAudit &&
-                                            bestFloatingPnl >= forensicWatchUSD &&
-                                            givebackPct >= InpForensicGivebackAlertPct &&
-                                            profit < bestFloatingPnl * 0.40);
       if(outcome == "BREAK_EVEN" && bestFloatingPnl >= shieldMeaningfulUSD)
          outcome = "APLUS_PROTECTED_BE";   // had real profit, shield moved SL to entry — correct outcome
       else if(outcome == "LOSS" && bestFloatingPnl >= shieldMeaningfulUSD)
          outcome = "APLUS_GIVEBACK_LOSS";  // had real profit, still took a loss — shield may need tuning
-      else if(outcome == "WIN" && protectionShouldHaveTriggered)
-         outcome = "WIN_WITH_HEAVY_GIVEBACK";
-
-      bool entryLateOrBadLocation = (StringFind(brainRec.entryReason, "LATE") >= 0 ||
-                                     StringFind(brainRec.entryReason, "BAD-LOCATION") >= 0 ||
-                                     StringFind(brainRec.entryReason, "BAD-TIMING") >= 0 ||
-                                     StringFind(brainRec.entryReason, "missedMove=yes") >= 0 ||
-                                     StringFind(brainRec.entryReason, "badLoc=yes") >= 0);
-      string finalDiagnosis = "GOOD_TRADE";
-      if(outcome == "APLUS_PROTECTED_BE")
-         finalDiagnosis = "GOOD_EXIT_PROTECTED_BE";
-      else if(wasLoss && entryLateOrBadLocation)
-         finalDiagnosis = "BAD_ENTRY_LATE_OR_BAD_LOCATION";
-      else if(wasLoss && bestFloatingPnl >= forensicWatchUSD)
-         finalDiagnosis = "BAD_EXIT_WINNER_GIVEBACK_LOSS";
-      else if(wasLoss)
-         finalDiagnosis = "LOSS_REVIEW_MARKET_ENTRY_OR_SPREAD";
-      else if(protectionShouldHaveTriggered)
-         finalDiagnosis = "BAD_EXIT_PROFIT_GIVEBACK";
-      else if(wasWin && worstFloatingPnl < -MathMax(profit * 2.0, forensicWatchUSD))
-         finalDiagnosis = "BAD_ENTRY_RECOVERY_WIN";
-      else if(!wasWin && !wasLoss)
-         finalDiagnosis = "SCRATCH_OR_BREAKEVEN";
-
-      string forensicClose = StringFormat("FORENSIC_CLOSE_DIAGNOSIS version=6.0.3 bestFloating=%.2f profitGiveback=%.2f givebackPct=%.1f watchUSD=%.2f protectionShouldHaveTriggered=%s finalDiagnosis=%s entryLateOrBadLocation=%s shieldArmed=%s",
-                                          bestFloatingPnl, profitGiveback, givebackPct,
-                                          forensicWatchUSD,
-                                          protectionShouldHaveTriggered ? "Y" : "N",
-                                          finalDiagnosis,
-                                          entryLateOrBadLocation ? "Y" : "N",
-                                          APlusShieldArmed(posId) ? "Y" : "N");
-      string shieldExtra = StringFormat("bestFloating=%.2f shieldArmed=%s profitGiveback=%.2f givebackPct=%.1f protectionShouldHaveTriggered=%s finalDiagnosis=%s",
-                                        bestFloatingPnl, APlusShieldArmed(posId) ? "Y" : "N",
-                                        profitGiveback, givebackPct,
-                                        protectionShouldHaveTriggered ? "Y" : "N",
-                                        finalDiagnosis);
+      string shieldExtra = StringFormat("bestFloating=%.2f shieldArmed=%s",
+                                        bestFloatingPnl, APlusShieldArmed(posId) ? "Y" : "N");
 
       XAU_AppendTradeBrain("CLOSE", brainRec, dPrice, profit, worstFloatingPnl,
-                           secondsNegative, outcome, lastExitReason + " | " + shieldExtra + " | " + forensicClose);
+                           secondsNegative, outcome, lastExitReason + " | " + shieldExtra);
       XAU_BrainWatchClosedTrade(brainRec, dPrice, profit);
-      if(InpForensicGrowthAudit) Print(forensicClose);
       Print("TRADE-BRAIN CLOSE: ", outcome,
             " posId=", posId,
             " setup=", brainRec.setup,
             " grade=", XAU_GradeBucket(brainRec.grade),
             " profit=$", DoubleToString(profit, 2),
             " bestFloating=$", DoubleToString(bestFloatingPnl, 2),
-            " profitGiveback=$", DoubleToString(profitGiveback, 2),
             " worstFloating=$", DoubleToString(worstFloatingPnl, 2),
             " shieldArmed=", APlusShieldArmed(posId)?"Y":"N",
-            " diagnosis=", finalDiagnosis,
             " exitReason=", XAU_BlockReasonKey(lastExitReason));
       if(brainIdx >= 0) XAU_RemoveBrainOpen(brainIdx);
    }
@@ -9961,18 +11070,18 @@ int PG_HTFTrend()
    lastCheck = TimeCurrent();
    double ema[3], close[3], atr[3];
    int hEMA = iMA(Symbol(), InpPG_HTFTrendTF, 50, 0, MODE_EMA, PRICE_CLOSE);
-   int hATR = iATR(Symbol(), InpPG_HTFTrendTF, 14);
-   if(hEMA == INVALID_HANDLE || hATR == INVALID_HANDLE)
+   int loc_hATR = iATR(Symbol(), InpPG_HTFTrendTF, 14);
+   if(hEMA == INVALID_HANDLE || loc_hATR == INVALID_HANDLE)
    {
       if(hEMA != INVALID_HANDLE) IndicatorRelease(hEMA);
-      if(hATR != INVALID_HANDLE) IndicatorRelease(hATR);
+      if(loc_hATR != INVALID_HANDLE) IndicatorRelease(loc_hATR);
       return lastTrend;
    }
    bool dataOk = (CopyBuffer(hEMA, 0, 0, 3, ema)           > 0 &&
-                  CopyBuffer(hATR, 0, 0, 3, atr)           > 0 &&
+                  CopyBuffer(loc_hATR, 0, 0, 3, atr)       > 0 &&
                   CopyClose(Symbol(), InpPG_HTFTrendTF, 0, 3, close) > 0);
    IndicatorRelease(hEMA);
-   IndicatorRelease(hATR);
+   IndicatorRelease(loc_hATR);
    if(!dataOk) return lastTrend;
    double price = close[0];
    double diff  = price - ema[0];
@@ -10219,8 +11328,8 @@ bool IsMomentumWeak(int signal)
    double minL = MathMin(lo[0], MathMin(lo[1], lo[2]));
    double range = maxH - minL;
    if(range <= 0) return false;
-   double lastClose = cl[0];
-   double posPct = (lastClose - minL) / range;
+   double loc_lastClose = cl[0];
+   double posPct = (loc_lastClose - minL) / range;
    if(signal == +1 && posPct < 0.30) return true;       // close in lower 30% — buyers exhausted
    if(signal == -1 && posPct > 0.70) return true;       // close in upper 30% — sellers exhausted
    return false;
@@ -10581,7 +11690,7 @@ void XAU_RunStartupIntelligenceSync()
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double mid = (bid > 0.0 && ask > 0.0) ? (bid + ask) * 0.5 : iClose(Symbol(), PERIOD_M5, 0);
    double atr = (ArraySize(bufATR) > 1 ? bufATR[1] : 0.0);
-   string extra = StringFormat("version=6.0.3 syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
+   string extra = StringFormat("version=5.9.1 syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
                                (int)(TimeCurrent() - started), historyDeals, openRecovered,
                                tradeBrainRows, blockedRows, intelRows, barsM5,
                                InpStartupIntelMinCandles, contextTargetMet ? "Y" : "N",
@@ -10808,7 +11917,7 @@ double XAU_AcceleratedLearningAdjust(int signal, string setupName,
    int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE) return 0.0;
 
-   int samples = 0, wins = 0;
+   int samples = 0, loc_wins = 0;
    int asia = 0, london = 0, ny = 0;
    bool has24h = false;
    double grossWin = 0.0, grossLoss = 0.0, worstSum = 0.0, profitSum = 0.0;
@@ -10854,7 +11963,7 @@ double XAU_AcceleratedLearningAdjust(int signal, string setupName,
       samples++;
       profitSum += profit;
       worstSum += worst;
-      if(profit > 0.0) { wins++; grossWin += profit; }
+      if(profit > 0.0) { loc_wins++; grossWin += profit; }
       else grossLoss += MathAbs(profit);
       if(session == "ASIA") asia++;
       else if(session == "LONDON") london++;
@@ -10869,7 +11978,7 @@ double XAU_AcceleratedLearningAdjust(int signal, string setupName,
    int activeSessions = (asia > 0 ? 1 : 0) + (london > 0 ? 1 : 0) + (ny > 0 ? 1 : 0);
    if(activeSessions < 2) return 0.0;
 
-   double wr = samples > 0 ? (100.0 * wins / samples) : 0.0;
+   double wr = samples > 0 ? (100.0 * loc_wins / samples) : 0.0;
    double pf = grossLoss > 0.0 ? grossWin / grossLoss : (grossWin > 0.0 ? 99.0 : 0.0);
    double avg = samples > 0 ? profitSum / samples : 0.0;
    double avgWorst = samples > 0 ? worstSum / samples : 0.0;
@@ -11225,16 +12334,10 @@ bool XAU_TradeBrainPreEntry(int signal, string setupName, string grade, string s
 
    bool poorEntryQuality = (avgP > 0.0 && avgDD < 0.0 &&
                             MathAbs(avgDD) > avgP * InpTradeBrainBadDDProfitRatio);
-   bool negativeExpectancyPattern = (avgP < 0.0 && pf < InpTradeBrainMinPF);
    brainReason = StringFormat("TRADE-BRAIN AUDIT: samples=%d WR=%.0f%% PF=%.2f avgP=$%.0f avgWorstDD=$%.0f badRecovery=%.0f%% poorEntry=%s",
                               samples, wr, pf, avgP, avgDD, badRec,
                               poorEntryQuality ? "Y" : "N");
 
-   if(negativeExpectancyPattern)
-   {
-      brainReason = "TRADE-BRAIN BLOCK: similar executed trades have negative expectancy. " + brainReason;
-      return false;
-   }
    if(wr <= InpTradeBrainBlockWR && pf < InpTradeBrainMinPF)
    {
       brainReason = "TRADE-BRAIN BLOCK: similar executed trades have poor proven expectancy. " + brainReason;
@@ -12204,8 +13307,8 @@ string TFShortName(ENUM_TIMEFRAMES tf)
 int TFDirectionByEMA(int signal, ENUM_TIMEFRAMES tf, double atrThreshold, string &why)
 {
    int hEMA = iMA(Symbol(), tf, 50, 0, MODE_EMA, PRICE_CLOSE);
-   int hATR = iATR(Symbol(), tf, 14);
-   if(hEMA == INVALID_HANDLE || hATR == INVALID_HANDLE)
+   int loc_hATR = iATR(Symbol(), tf, 14);
+   if(hEMA == INVALID_HANDLE || loc_hATR == INVALID_HANDLE)
    {
       why = TFShortName(tf) + ":DATA";
       return 0;
@@ -12213,10 +13316,10 @@ int TFDirectionByEMA(int signal, ENUM_TIMEFRAMES tf, double atrThreshold, string
 
    double ema[2], atr[2], close[2];
    bool ok = (CopyBuffer(hEMA, 0, 0, 2, ema) > 0 &&
-              CopyBuffer(hATR, 0, 0, 2, atr) > 0 &&
+              CopyBuffer(loc_hATR, 0, 0, 2, atr) > 0 &&
               CopyClose(Symbol(), tf, 0, 2, close) > 0);
    IndicatorRelease(hEMA);
-   IndicatorRelease(hATR);
+   IndicatorRelease(loc_hATR);
    if(!ok || atr[0] <= 0.0)
    {
       why = TFShortName(tf) + ":WAIT";
@@ -12445,9 +13548,13 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
    if(htf == -1 && signal == +1 && !isAPlusOuter)
       return "PG HTF lock (M30 strong DOWN — buys blocked, A+ only would pass)";
 
-   // 5. Tier 2 — A+ only (block B/C grades regardless of trend)
-   if(tier >= 2 && !isAPlusOuter)
-      return "PG tier2 (>=50% daily gain — A+ setups only)";
+   // 5. Tier 2 — v6.3.2: allow A AND A+ through (only block B-grade at Tier 2).
+   // A-grade setups (score 4.0-5.4) scored through every structural gate and deserve
+   // to run on good days — blocking them at Tier 2 was capping earning on the bot's
+   // best days.
+   bool isAOuter = (grade == "A" || isAPlusOuter);
+   if(tier >= 2 && !isAOuter)
+      return "PG tier2 (>=50% daily gain — A/A+ pass, B-grade blocked)";
 
    // Log tier transitions once
    if(tier != pg_lastReportedTier)
@@ -12781,7 +13888,7 @@ CommitteeVote HumanReasoning_Assess(int signal, string setupName, string grade)
 // based on recent 30-day performance. Minimum 8 samples before adjusting.
 double TradeMemory_LotAdjust(string pattern)
 {
-   int    samples = 0, wins = 0;
+   int    samples = 0, loc_wins = 0;
    double totalR  = 0.0;
    datetime cutoff = TimeCurrent() - 30 * 24 * 3600;
    for(int i = 0; i < 100; i++)
@@ -12789,11 +13896,34 @@ double TradeMemory_LotAdjust(string pattern)
       if(!g_tradeMemory[i].valid || g_tradeMemory[i].pattern != pattern) continue;
       if(g_tradeMemory[i].closedAt < cutoff) continue;
       samples++;
-      if(g_tradeMemory[i].rMultiple > 0.0) wins++;
+      if(g_tradeMemory[i].rMultiple > 0.0) loc_wins++;
       totalR += g_tradeMemory[i].rMultiple;
    }
-   if(samples < 8) return 1.0;
-   double wr   = (double)wins / samples;
+
+   // v6.0.4: Grade-based prior warm start. Before we have 8 real samples, use a grade-informed
+   // prior instead of returning neutral 1.0. Blends out linearly as real data accumulates.
+   // Prior is conservative: A+ is historically proven, B has lower expectancy.
+   // At 8+ samples, prior weight = 0 and real data takes over completely.
+   double priorAdj = 1.0;
+   if(StringFind(pattern, "_A+") >= 0)     priorAdj = 1.06; // A+ grade historically ~70%+ WR
+   else if(StringFind(pattern, "_A") >= 0) priorAdj = 1.01; // A grade slightly positive prior
+   else if(StringFind(pattern, "_B") >= 0) priorAdj = 0.91; // B grade lower expectancy prior
+
+   if(samples < 8)
+   {
+      double priorWeight = 1.0 - (double)samples / 8.0; // 1.0 at 0 samples, 0.0 at 8 samples
+      double dataWeight  = 1.0 - priorWeight;
+      if(samples == 0) return priorAdj;
+      // Blend: prior × priorWeight + real_data_adj × dataWeight
+      double realWR  = (double)loc_wins / samples;
+      double realAvgR = totalR / samples;
+      double realAdj = (realWR >= 0.65 && realAvgR >= 0.5) ? MathMin(1.20, 1.0 + (realWR - 0.60) * 0.80)
+                     : (realWR <  0.38 || realAvgR < -0.30) ? MathMax(0.65, 1.0 - (0.45 - realWR) * 0.80)
+                     : 1.0;
+      return priorAdj * priorWeight + realAdj * dataWeight;
+   }
+
+   double wr   = (double)loc_wins / samples;
    double avgR = totalR / samples;
    if(wr >= 0.65 && avgR >= 0.5)  return MathMin(1.20, 1.0 + (wr - 0.60) * 0.80);
    if(wr <  0.38 || avgR < -0.30) return MathMax(0.65, 1.0 - (0.45 - wr) * 0.80);
@@ -12845,7 +13975,7 @@ CommitteeDecision Committee_Assemble(int signal, string setupName, string grade,
       else if(total == -1) lotMult = 0.92;
       else if(total == -2) lotMult = 0.82;
       else                 lotMult = 0.70;
-      lotMult = MathMax(0.50, MathMin(1.25, lotMult * memAdj));
+      lotMult = MathMax(0.70, MathMin(1.25, lotMult * memAdj)); // v6.0.3: floor raised 0.50→0.70 — prevents committee+STI stacking to microscopic lots on small account
    }
 
    int baseConf = (grade == "A+") ? 82 : (grade == "A") ? 68 : 50;
@@ -13051,8 +14181,16 @@ void PG_PerPositionRatchet()
          else
          {
             // trendCtx 1=cushion (small locked profit), 0=hard (zero profit = old behaviour)
-            double cushion = (trendCtx == 1) ? (atr * InpRatchetBECushionATR) : 0.0;
-            double beSL    = isBuy ? (entry + cushion) : (entry - cushion);
+            // v6.0.4: mid-zone step — at 2×ATR in CUSHIONED mode, lock 0.75×ATR instead of 0.35×ATR.
+            // Addresses the profit giveback gap between initial BE lock (1.5×ATR) and trail start (3.0×ATR).
+            double cushion;
+            if(trendCtx == 1 && profitInAtr >= 2.0)
+               cushion = atr * 0.75;   // mid-zone lock: 75% of ATR preserved
+            else if(trendCtx == 1)
+               cushion = atr * InpRatchetBECushionATR; // initial BE cushion (default 0.35×ATR)
+            else
+               cushion = 0.0;          // HARD: lock to exact entry
+            double beSL = isBuy ? (entry + cushion) : (entry - cushion);
             if(isBuy  && (curSL == 0 || curSL < beSL))  newSL = beSL;
             if(!isBuy && (curSL == 0 || curSL > beSL))  newSL = beSL;
          }
@@ -13100,7 +14238,8 @@ void PG_PerPositionRatchet()
       req.tp       = curTP;
       if(OrderSend(req, res) && res.retcode == TRADE_RETCODE_DONE)
       {
-         string ctxTag = (trendCtx == 2) ? "TRAIL_OVR"   // trail fired despite DEFERRED BE
+         string ctxTag = (trendCtx == 2) ? "TRAIL_OVR"
+                       : (trendCtx == 1 && profitInAtr >= 2.0) ? "CUSHION_MID" // v6.0.4 mid-zone lock
                        : (trendCtx == 1) ? "CUSHION_BE"
                        :                   "HARD_BE";
          Print("PG ratchet: ticket=", tk, " ", isBuy ? "BUY" : "SELL",
@@ -13252,7 +14391,7 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v6.0.3\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.9.1\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -13824,7 +14963,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v6.0.3 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v5.9.1 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);

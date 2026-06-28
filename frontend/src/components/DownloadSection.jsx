@@ -1,20 +1,40 @@
-import React from "react";
-import { DownloadSimple, FileCode, Package, Warning, ShieldCheck, CloudArrowUp } from "@phosphor-icons/react";
+import React, { useEffect, useState } from "react";
+import { DownloadSimple, FileCode, Package, Warning, ShieldCheck, CloudArrowUp, Spinner, CheckCircle } from "@phosphor-icons/react";
 
 export default function DownloadSection({ api }) {
+  const [info, setInfo]     = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${api}/download/info`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { setInfo(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [api]);
+
+  const version  = info?.version  || "v6.3.6";
+  const edition  = info?.edition  || "AI Director + ML Warm-Start + Adaptive Exits";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.3.6_AI_DIRECTOR.mq5";
+  const sizeKb   = info?.size_kb;
+  const checksum = info?.checksum_sha256_12;
+
   return (
     <div className="bg-[#07090d] text-white" data-testid="download-section">
       <div className="mx-auto max-w-7xl px-4 py-16 md:px-8 md:py-24">
+
+        {/* Header */}
         <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
           <div>
             <span className="inline-flex items-center gap-2 rounded-full border border-amber-300/25 bg-amber-300/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
               <DownloadSimple size={12} weight="bold" /> Download center
             </span>
             <h2 className="mt-5 max-w-3xl font-heading text-3xl font-semibold tracking-tight sm:text-5xl" data-testid="download-title">
-              Latest master build: v6.0.3 Forensic Growth Audit.
+              {loading
+                ? "Loading latest build…"
+                : `Latest release: ${version} — ${edition}.`}
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
-              This is the current build from this workspace. Public downloads are sanitized by the backend for customer safety; admin master download remains protected.
+              Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
@@ -23,6 +43,8 @@ export default function DownloadSection({ api }) {
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.08fr_0.92fr]">
+
+          {/* Primary EA card */}
           <div className="rounded-[28px] border border-white/10 bg-white/[0.055] p-5 shadow-2xl shadow-black/20 md:p-7" data-testid="download-ea-card">
             <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex gap-4">
@@ -31,37 +53,55 @@ export default function DownloadSection({ api }) {
                 </div>
                 <div>
                   <h3 className="font-heading text-2xl font-semibold">Expert Advisor (.mq5)</h3>
-                  <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                    v6.0.3 Forensic Growth Audit: the active master now records entry snapshots, exact lot-size stack, and close giveback diagnosis so VPS trade history can prove what changed before more tuning.
-                  </p>
+                  {loading
+                    ? <p className="mt-2 flex items-center gap-2 text-sm text-white/40"><Spinner size={13} className="animate-spin" /> Fetching release info…</p>
+                    : <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
+                        {version} · {edition}. Full AI Director on every entry, sizing, and exit. ML cloud warm-start gives instant pattern authority from tick one. Adaptive Chandelier exits trail winners without giving back.
+                      </p>}
                 </div>
               </div>
-              <span className="inline-flex w-fit rounded-full bg-emerald-300 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#06110c]">Current</span>
+              <span className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-300 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#06110c]">
+                <CheckCircle size={10} weight="fill" /> Stable
+              </span>
             </div>
 
+            {/* Release metadata */}
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               {[
-                ["Version", "6.0.3"],
-                ["File", "MQ5 source"],
-                ["Risk", "Account-sized"],
+                ["Version", loading ? "—" : version],
+                ["Size",    loading ? "—" : sizeKb ? `${sizeKb} KB` : "MQ5 source"],
+                ["SHA-256", loading ? "—" : checksum ? checksum : "—"],
               ].map(([k, v]) => (
                 <div key={k} className="rounded-2xl border border-white/10 bg-black/[0.24] p-4">
                   <div className="font-mono text-[10px] uppercase tracking-widest text-white/35">{k}</div>
-                  <div className="mt-1 font-mono text-sm font-bold">{v}</div>
+                  <div className="mt-1 truncate font-mono text-sm font-bold" title={v}>{v}</div>
                 </div>
               ))}
             </div>
 
+            {/* Filename display */}
+            {!loading && filename && (
+              <div className="mt-3 rounded-xl border border-white/[0.07] bg-black/20 px-4 py-2.5">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-white/30">Filename · </span>
+                <span className="font-mono text-[11px] text-white/55 break-all">{filename}</span>
+              </div>
+            )}
+
+            {/* Download buttons */}
             <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-              <a href={`${api}/download/ea`} data-testid="download-ea-button" className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
-                <DownloadSimple size={17} weight="bold" /> Download v6.0.3 .MQ5
+              <a href={`${api}/download/ea`} data-testid="download-ea-button"
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
+                <DownloadSimple size={17} weight="bold" />
+                {loading ? "Download .MQ5" : `Download ${version} .MQ5`}
               </a>
-              <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
+              <a href="/command"
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
                 Command setup
               </a>
             </div>
           </div>
 
+          {/* Package card */}
           <div className="rounded-[28px] border border-white/10 bg-white/[0.035] p-5 md:p-7" data-testid="download-package-card">
             <div className="flex items-start gap-4">
               <div className="flex h-12 w-12 flex-none items-center justify-center rounded-2xl border border-sky-300/20 bg-sky-300/10">
@@ -69,10 +109,13 @@ export default function DownloadSection({ api }) {
               </div>
               <div>
                 <h3 className="font-heading text-xl font-semibold">Complete package</h3>
-                <p className="mt-2 text-sm leading-6 text-white/55">EA bundle with the code package used by the backend download center.</p>
+                <p className="mt-2 text-sm leading-6 text-white/55">
+                  {loading ? "Loading…" : `${version} EA bundle as a ZIP. Includes the .mq5 and supporting files.`}
+                </p>
               </div>
             </div>
-            <a href={`${api}/download/package`} data-testid="download-package-button" className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
+            <a href={`${api}/download/package`} data-testid="download-package-button"
+              className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
               <DownloadSimple size={17} weight="bold" /> Download ZIP
             </a>
 
@@ -81,17 +124,26 @@ export default function DownloadSection({ api }) {
                 <ShieldCheck size={18} weight="fill" /> Safer by design
               </div>
               <p className="text-sm leading-6 text-white/56">
-                The customer endpoint strips protected operator settings before download. Use the admin portal only for protected master files.
+                Operator cloud tokens and fanout settings are stripped before any customer download. The file you receive runs fully standalone on your MT5 — no data leaves your machine by default.
+              </p>
+            </div>
+
+            {/* Release pipeline note */}
+            <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/25">Release pipeline</div>
+              <p className="mt-1 text-[12px] leading-5 text-white/38">
+                Version info is read live from the EA file. Upgrading the production build automatically updates the download button, filename, version badge, and checksum — no manual edits needed.
               </p>
             </div>
           </div>
         </div>
 
+        {/* Warning */}
         <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4" data-testid="download-warning">
           <div className="flex items-start gap-3">
             <Warning size={19} weight="fill" className="mt-0.5 flex-none text-amber-200" />
             <p className="text-sm leading-6 text-white/62">
-              Backtest before live use. This tool can improve discipline and risk control, but no trading system can guarantee profit.
+              Backtest before live use. This tool can improve discipline and risk control, but no trading system can guarantee profit. Start on demo and verify execution with your broker.
             </p>
           </div>
         </div>

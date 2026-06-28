@@ -365,6 +365,19 @@ async def paystack_webhook(request: Request):
     return {"status": "ok"}
 
 # --- Public Docs ---
+def _get_ea_meta(src: str) -> dict:
+    """Extract version, edition tag, and build display name from EA header comments."""
+    import re, hashlib
+    # Match e.g. "v6.3.6 — AI Director + ML Warm-Start + Adaptive Exits"
+    m = re.search(r'v(\d+\.\d+\.\d+)\s*[—\-]+\s*(.+)', src[:3000])
+    version = f"v{m.group(1)}" if m else "v6.x.x"
+    edition_full = m.group(2).strip() if m else "AI Director"
+    # Slug for filename: keep only alpha/digits, collapse to underscores
+    edition_slug = re.sub(r'[^A-Za-z0-9]+', '_', edition_full).strip('_').upper()
+    filename = f"XAUUSD_AI_Sniper_EA_MASTER_{version}_{edition_slug}.mq5"
+    checksum = hashlib.sha256(src.encode()).hexdigest()[:12]
+    return {"version": version, "edition": edition_full, "filename": filename, "checksum": checksum}
+
 def _sanitize_ea_for_customer(src: str) -> str:
     """Strip master-only secrets from the EA source so a customer can use it
     on their own MT5 WITHOUT accidentally posting their trades into our cloud.
@@ -390,48 +403,81 @@ def _sanitize_ea_for_customer(src: str) -> str:
               "// =====================================================================\n")
     return banner + out
 
+@api_router.get("/download/info")
+async def download_info():
+    """Return current EA release metadata — version, filename, size, checksum.
+    Frontend uses this to display live version info without hardcoding anything."""
+    import hashlib
+    p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="EA file not found")
+    src = p.read_text(encoding="utf-8", errors="ignore")
+    meta = _get_ea_meta(src)
+    stat = p.stat()
+    return {
+        "version":      meta["version"],
+        "edition":      meta["edition"],
+        "filename":     meta["filename"],
+        "size_bytes":   stat.st_size,
+        "size_kb":      round(stat.st_size / 1024, 1),
+        "checksum_sha256_12": meta["checksum"],
+        "last_modified": stat.st_mtime,
+        "download_url": "/api/download/ea",
+        "stable":       True,
+    }
+
 @api_router.get("/download/ea")
 async def download_ea():
-    """PUBLIC customer download — sanitized (no master token, fanout OFF)."""
+    """PUBLIC customer download — sanitized (no master token, fanout OFF).
+    Filename and version are derived dynamically from the EA file header."""
     p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
     if not p.exists(): raise HTTPException(status_code=404)
     src = p.read_text(encoding="utf-8", errors="ignore")
+    meta = _get_ea_meta(src)
     sanitized = _sanitize_ea_for_customer(src)
     return Response(
-        content=sanitized,
+        content=sanitized.encode("utf-8"),
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="XAUUSD_AI_Sniper_EA_MASTER_v6.0.3_FORENSIC_GROWTH_AUDIT.mq5"'},
+        headers={"Content-Disposition": f'attachment; filename="{meta["filename"]}"'},
     )
 
-# Admin-only: serves the FULL master EA with your agent token + cloud fanout
-# baked in. NEVER expose this URL publicly.
 @api_router.get("/admin/download/ea-master", dependencies=[Depends(get_current_admin)])
 async def admin_download_ea_master():
+    """Admin-only: serves the FULL master EA with agent token intact. Never expose publicly."""
     p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
     if not p.exists(): raise HTTPException(status_code=404)
+    src = p.read_text(encoding="utf-8", errors="ignore")
+    meta = _get_ea_meta(src)
     return FileResponse(
         path=str(p),
-        filename="XAUUSD_AI_Sniper_EA_MASTER_v6.0.3_FORENSIC_GROWTH_AUDIT.mq5",
+        filename=meta["filename"],
         media_type="application/octet-stream",
     )
 
 @api_router.get("/download/package")
 async def download_package():
-    """PUBLIC customer package — uses sanitized EA."""
+    """PUBLIC customer package — uses sanitized EA. Zip filename includes version."""
+    p_ea = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
+    if p_ea.exists():
+        src = p_ea.read_text(encoding="utf-8", errors="ignore")
+        meta = _get_ea_meta(src)
+        zip_name = f"XauAI_Sniper_{meta['version']}_Package.zip"
+    else:
+        zip_name = "XauAI_Sniper_Package.zip"
     d = ROOT_DIR / "ea_code"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
         for f in d.rglob("*"):
             if not f.is_file(): continue
             rel = f.relative_to(d)
-            # Sanitize the EA inside the zip too.
             if f.name == "XAUUSD_AI_Sniper_EA.mq5":
                 z.writestr(str(rel), _sanitize_ea_for_customer(
                     f.read_text(encoding="utf-8", errors="ignore")))
             else:
                 z.write(f, rel)
     buf.seek(0)
-    return StreamingResponse(buf, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=AI_Sniper_EA_Package.zip"})
+    return StreamingResponse(buf, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'})
 
 @api_router.get("/performance/summary")
 async def get_performance_summary():
