@@ -439,39 +439,71 @@ export default function CloudDashboard() {
       {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} />}
       {active==="control"      && <ControlPage commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
       {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} />}
-      {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} logout={logout} />}
+      {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
       <CommandModal command={modalCommand} onCancel={()=>setModalCommand(null)} onSubmit={queueCommand} busy={commandBusy} message={commandMsg} licenseKey={licenseInfo.activation_key} />
     </AppShell>
   );
 }
 
+// ─── Home helpers ─────────────────────────────────────────────────────────────
+function getSession() {
+  const h = new Date().getUTCHours();
+  if (h >= 22 || h < 7)  return { label:"Asia",         tone:"blue"    };
+  if (h >= 7  && h < 12) return { label:"London",       tone:"amber"   };
+  if (h >= 12 && h < 17) return { label:"London / NY",  tone:"green"   };
+  if (h >= 17 && h < 22) return { label:"New York",     tone:"amber"   };
+  return                         { label:"After Hours",  tone:"neutral" };
+}
+
+function getMarketBias(hb) {
+  const s = (hb.htf_consensus||hb.market_bias||hb.bot_state||"").toUpperCase();
+  if (s.includes("BULL") || s.includes("LONG"))  return { label:"Bullish", tone:"green" };
+  if (s.includes("BEAR") || s.includes("SHORT")) return { label:"Bearish", tone:"red"   };
+  return                                                 { label:"Neutral", tone:"neutral"};
+}
+
+function humanBotState(raw, openTrades, tradingOk, online) {
+  if (!online) return "Offline";
+  if (openTrades > 0) return "In Position";
+  const r = (raw||"").toUpperCase();
+  if (r.includes("PAUSE") || r.includes("STOP"))   return "Paused";
+  if (r.includes("BLOCK"))                          return "Blocked";
+  if (tradingOk)                                    return "Monitoring";
+  return "Standby";
+}
+
 // ─── Home ─────────────────────────────────────────────────────────────────────
 function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, setActive, refresh }) {
-  const openTrades  = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
-  const ddNum       = Number(heartbeat.drawdown||0);
-  const riskTone    = ddNum>5?"red":ddNum>2?"amber":"green";
-  const pnlPos      = Number(heartbeat.daily_pnl||0)>=0;
+  const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
+  const ddNum      = Number(heartbeat.drawdown||0);
+  const riskTone   = ddNum>5?"red":ddNum>2?"amber":"green";
+  const pnlNum     = Number(heartbeat.daily_pnl||0);
+  const pnlPos     = pnlNum >= 0;
+  const conf       = Number(heartbeat.ai_confidence||heartbeat.last_ai_confidence||0);
+  const session    = getSession();
+  const bias       = getMarketBias(heartbeat);
+  const botState   = humanBotState(heartbeat.bot_state, openTrades, tradingOk, online);
+  const stateTone  = openTrades>0?"amber":tradingOk?"green":"neutral";
+
   const offlineCopy = licenseInfo?.activation_key
-    ? status?.alerts?.[0]?.message || "License linked. Waiting for EA heartbeat from MT5."
-    : "Link your license key, attach the EA to MT5, and the Command Center will show live data.";
+    ? "License linked. Waiting for EA heartbeat from your MT5 terminal."
+    : "Link your license key, attach the EA to MT5, and live data will appear here.";
 
   return (
     <div className="space-y-4">
-      {/* Hero status card */}
-      <div className={`rounded-3xl border p-5 ${online?(tradingOk?"border-emerald-400/18 bg-emerald-300/[0.05]":"border-amber-300/18 bg-amber-300/[0.05]"):"border-white/[0.07] bg-white/[0.02]"}`} data-testid="bot-status-card">
+      {/* Hero status */}
+      <div className={`rounded-3xl border p-5 ${online?(openTrades>0?"border-amber-300/20 bg-amber-300/[0.05]":tradingOk?"border-emerald-400/18 bg-emerald-300/[0.05]":"border-white/[0.07] bg-white/[0.02]"):"border-white/[0.07] bg-white/[0.02]"}`} data-testid="bot-status-card">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className={`mb-2 flex items-center gap-2 ${MONO_LABEL}`}>
               {online
-                ? <><span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />Live connection</>
-                : <><Wifi className="h-3 w-3" />Waiting for EA heartbeat</>}
+                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {heartbeat.timeframe||"M5"} · Live</>
+                : <><Wifi className="h-3 w-3" />No connection</>}
             </div>
-            <h1 className="text-[2rem] font-black tracking-tight leading-none">
-              {online ? heartbeat.bot_state||"Bot online" : "No live bot connected"}
-            </h1>
+            <h1 className="text-[2rem] font-black tracking-tight leading-none">{botState}</h1>
             <p className="mt-2 text-[13px] leading-5 text-white/45 truncate">
               {online
-                ? `${heartbeat.account_number||"Account"} · ${heartbeat.broker_server||"Broker"} · ${heartbeat.symbol||"XAUUSD"} ${heartbeat.timeframe||"M5"}`
+                ? `${heartbeat.broker_server||"Broker"} · Account ${heartbeat.account_number||"—"}`
                 : offlineCopy}
             </p>
           </div>
@@ -480,44 +512,63 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
           </button>
         </div>
         <div className="mt-4">
-          <Sparkline points={equityPoints} tone={online?"#34d399":"#d4af37"} height="h-[72px]" />
+          <Sparkline points={equityPoints} tone={online?(openTrades>0?"#fbbf24":"#34d399"):"#d4af37"} height="h-[72px]" />
         </div>
       </div>
 
-      {/* 4 core metrics */}
+      {/* 4 core account metrics */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Equity"    value={online?money(heartbeat.equity):"—"} detail={online?`Balance ${money(heartbeat.balance)}`:"Not live"} icon={CircleDollarSign} tone={online?"green":"neutral"} />
-        <Metric label="Daily P&L" value={online?money(heartbeat.daily_pnl):"—"} detail="Today" icon={TrendingUp} tone={pnlPos?"green":"red"} />
-        <Metric label="Positions" value={openTrades}  detail={online?`Spread ${heartbeat.spread??"-"}pts`:"No data"} icon={History} tone={openTrades>0?"amber":"neutral"} />
-        <Metric label="Drawdown"  value={online?pct(heartbeat.drawdown):"—"}  detail={heartbeat.epf_state||"EPF"} icon={Gauge} tone={riskTone} />
+        <Metric label="Equity"      value={online?money(heartbeat.equity):"—"}       detail={online?`Balance ${money(heartbeat.balance)}`:"Not live"}     icon={CircleDollarSign} tone={online?"green":"neutral"} />
+        <Metric label="Today's P&L" value={online?money(pnlNum):"—"}                 detail={pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"} icon={TrendingUp} tone={pnlPos?"green":"red"} />
+        <Metric label="Open trades" value={online?openTrades:"—"}                    detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"}        icon={History}          tone={openTrades>0?"amber":"neutral"} />
+        <Metric label="Open risk"   value={online?pct(heartbeat.drawdown):"—"}       detail="Current drawdown"                                              icon={Gauge}            tone={riskTone} />
       </div>
 
-      {/* Secondary row */}
-      <div className="grid grid-cols-3 gap-3">
-        <Metric label="AI Director" value={heartbeat.ai_verdict||heartbeat.last_action||"Waiting"} detail={heartbeat.ai_confidence?`${heartbeat.ai_confidence}% confidence`:"No decision yet"} icon={Brain} tone="violet" />
-        <Metric label="Heartbeat"   value={relativeTime(heartbeat.last_heartbeat||heartbeat.ts)} detail={heartbeat.ea_version||"EA not reporting"} icon={Clock3} tone={online?"green":"neutral"} />
-        <Metric label="License"     value={licenseInfo.status||"Not linked"} detail={licenseInfo.activation_key||"Add license key"} icon={KeyRound} tone={licenseInfo.activation_key?"green":"amber"} />
+      {/* 4 market intelligence cards — trader-facing, no internal strings */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className={`${cardTone(bias.tone)} p-4 rounded-2xl min-w-0`}>
+          <div className={MONO_LABEL}>Market bias</div>
+          <div className="mt-2 font-mono text-xl font-black leading-none">{online?bias.label:"—"}</div>
+          <div className="mt-1.5 text-[11px] text-white/40">HTF consensus</div>
+        </div>
+        <div className={`${cardTone(conf>=70?"green":conf>0?"amber":"neutral")} p-4 rounded-2xl min-w-0`}>
+          <div className={MONO_LABEL}>AI confidence</div>
+          <div className="mt-2 font-mono text-xl font-black leading-none">{online&&conf>0?`${conf}%`:"—"}</div>
+          <div className="mt-1.5 text-[11px] text-white/40">{conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"}</div>
+        </div>
+        <div className={`${cardTone(session.tone)} p-4 rounded-2xl min-w-0`}>
+          <div className={MONO_LABEL}>Session</div>
+          <div className="mt-2 font-mono text-xl font-black leading-none">{session.label}</div>
+          <div className="mt-1.5 text-[11px] text-white/40">UTC {new Date().getUTCHours().toString().padStart(2,"0")}:00</div>
+        </div>
+        <div className={`${cardTone(stateTone)} p-4 rounded-2xl min-w-0`}>
+          <div className={MONO_LABEL}>Trading status</div>
+          <div className="mt-2 font-mono text-xl font-black leading-none">{botState}</div>
+          <div className="mt-1.5 text-[11px] text-white/40">{online?"EA connected":"No heartbeat"}</div>
+        </div>
       </div>
 
-      {/* Setup health */}
-      {(status?.setup_checks||[]).length>0 && <SetupHealth checks={status.setup_checks} />}
-
-      {/* Empty license CTA */}
+      {/* No license CTA */}
       {!licenseInfo.activation_key && (
-        <Empty title="Connect your license" body="The Command Center uses your ASE license key as identity. Link it once and live data from that MT5 account will appear here." icon={KeyRound} />
+        <Empty title="Connect your license" body="Link your ASE license key once and live data from your MT5 account will stream here automatically." icon={KeyRound} />
       )}
 
-      {/* Quick nav */}
-      <div className="grid grid-cols-2 gap-3">
-        <button onClick={()=>setActive("intelligence")} className={`${CARD} p-4 text-left hover:border-violet-400/20 transition`}>
-          <Brain className="mb-3 h-5 w-5 text-violet-400/70" />
-          <div className="text-[14px] font-semibold">AI Brain</div>
-          <p className="mt-1 text-[11px] leading-4 text-white/38">AI Director decisions, ML state, entry blocks, exits.</p>
+      {/* Quick nav — 3 cards */}
+      <div className="grid grid-cols-3 gap-3">
+        <button onClick={()=>setActive("trading")} className={`${CARD} p-4 text-left hover:border-amber-300/20 transition`}>
+          <LineChart className="mb-3 h-5 w-5 text-amber-300/60" />
+          <div className="text-[13px] font-semibold">Trading</div>
+          <p className="mt-1 text-[10px] leading-4 text-white/35">Open positions and trade timeline.</p>
         </button>
-        <button onClick={()=>setActive("control")} className={`${CARD} p-4 text-left hover:border-amber-300/20 transition`}>
-          <SlidersHorizontal className="mb-3 h-5 w-5 text-amber-300/70" />
-          <div className="text-[14px] font-semibold">Controls</div>
-          <p className="mt-1 text-[11px] leading-4 text-white/38">Queue safe commands with license verification.</p>
+        <button onClick={()=>setActive("intelligence")} className={`${CARD} p-4 text-left hover:border-violet-400/20 transition`}>
+          <Brain className="mb-3 h-5 w-5 text-violet-400/60" />
+          <div className="text-[13px] font-semibold">AI Brain</div>
+          <p className="mt-1 text-[10px] leading-4 text-white/35">AI decisions, ML state, blocks.</p>
+        </button>
+        <button onClick={()=>setActive("control")} className={`${CARD} p-4 text-left hover:border-white/15 transition`}>
+          <SlidersHorizontal className="mb-3 h-5 w-5 text-white/40" />
+          <div className="text-[13px] font-semibold">Controls</div>
+          <p className="mt-1 text-[10px] leading-4 text-white/35">Remote commands and Prop Firm.</p>
         </button>
       </div>
     </div>
@@ -855,7 +906,8 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
-function SettingsPage({ me, heartbeat, logout }) {
+function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
+  const [diagOpen, setDiagOpen] = useState(false);
   return (
     <div className="space-y-4">
       <Card title="Account">
@@ -875,6 +927,40 @@ function SettingsPage({ me, heartbeat, logout }) {
           </button>
         </div>
       </Card>
+
+      {/* ── Hidden diagnostics ── tap to expand, invisible to normal users */}
+      <div className="rounded-2xl border border-white/[0.05] bg-white/[0.01]">
+        <button onClick={()=>setDiagOpen(d=>!d)}
+          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+          <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/20">Developer diagnostics</span>
+          <span className="font-mono text-[10px] text-white/20">{diagOpen?"▲":"▼"}</span>
+        </button>
+
+        {diagOpen && (
+          <div className="border-t border-white/[0.05] px-4 pb-4 pt-3 space-y-2">
+            {[
+              ["Heartbeat",        relativeTime(heartbeat.last_heartbeat||heartbeat.ts)],
+              ["Raw bot state",    heartbeat.bot_state||"—"],
+              ["AI verdict",       heartbeat.ai_verdict||heartbeat.last_action||"—"],
+              ["AI confidence",    heartbeat.ai_confidence?`${heartbeat.ai_confidence}%`:"—"],
+              ["ML patterns",      heartbeat.ml_samples||heartbeat.pattern_count||"—"],
+              ["ML trusted",       String(heartbeat.ml_trusted||"false")],
+              ["Hive verdict",     heartbeat.hive_verdict||"—"],
+              ["EPF state",        heartbeat.epf_state||"—"],
+              ["EA version",       heartbeat.ea_version||"—"],
+              ["Account",          heartbeat.account_number||"—"],
+              ["License status",   licenseInfo?.status||"—"],
+              ["License key",      licenseInfo?.activation_key||"—"],
+              ["Setup checks",     `${(status?.setup_checks||[]).filter(c=>c.ok).length}/${(status?.setup_checks||[]).length} passing`],
+            ].map(([k,v])=>(
+              <div key={k} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.02] px-3 py-2">
+                <span className="font-mono text-[10px] text-white/30">{k}</span>
+                <span className="font-mono text-[10px] text-white/50 text-right break-all max-w-[55%]">{String(v)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
