@@ -7,12 +7,12 @@
 - [x] EA version string: v6.4.1
 - [x] Canonical filename: XAUUSD_AI_Sniper_EA_v6.4.1.mq5
 - [x] File size: 800 KB (819,205 bytes)
-- [ ] Commit hash: [HASH]
+- [x] Commit hash: 149f50e
 
 ### File Distribution
 - [x] MT5 Experts folder updated: XAUUSD_AI_Sniper_EA_v6.4.1.mq5
 - [x] backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 updated (website download)
-- [ ] GitHub main branch pushed
+- [x] GitHub main branch pushed
 
 ### Website / Backend
 - [ ] /api/download/info returns version = v6.4.1
