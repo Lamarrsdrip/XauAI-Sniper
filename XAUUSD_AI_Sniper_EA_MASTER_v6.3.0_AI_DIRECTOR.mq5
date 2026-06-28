@@ -314,8 +314,8 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.1"
-#property description "XAUUSD AI Sniper v6.4.1 — calibration parser fix, version discipline, RELEASE_CHECKLIST"
+#property version   "6.4.2"
+#property description "XAUUSD AI Sniper v6.4.2 — self-audit fixes: version strings, calibration key-order, squeeze weight guard"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."

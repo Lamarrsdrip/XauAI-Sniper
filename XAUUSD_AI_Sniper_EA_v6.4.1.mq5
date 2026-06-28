@@ -1,9 +1,23 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.1 — Market Personality Engine, per-strategy adaptive       |
-//|            weights, confidence calibration, decision scorecard     |
+//|   v6.4.2 — Self-audit: strategy weights, handle leak, FIFO,      |
+//|            startup version strings, calibration key-order fix     |
 //+------------------------------------------------------------------+
+// v6.4.2 CHANGES (2026-06-28) — SELF-AUDIT FIXES:
+//   1. VERSION STRINGS: Startup Print() and heartbeat now report v6.4.2 (was stale v5.9.1).
+//   2. CALIBRATION KEY COLLISION: ExtractJsonDouble called with bare key like "0-49" but the
+//      JSON response places "sample_counts" BEFORE "multipliers" — "0-49" under sample_counts
+//      (an integer like 12) would be returned instead of the multiplier (like 0.88). Fixed by
+//      searching for the "multipliers" sub-object first and then parsing inside it.
+//   3. SQUEEZE_RELEASE WEIGHT BUG: when dir is counter-trend s is set to 0, but the weight
+//      multiplication s *= g_stratWeight[4] still fires, yielding 0*weight=0 — which then
+//      wins the bestScore check against 0 if all other setups also scored 0. Added guard:
+//      weight and comparison only happen when s > 0.
+//   4. TRADEBRAIN FIFO RESTORE: LoadTradeBrainMemory() resets g_tradeMemHead=0 before loading.
+//      After loading N records, g_tradeMemHead = N % 500. The next write will correctly land
+//      at slot N (the slot after the last loaded record). This was already correct — confirmed clean.
+// v6.4.1 CHANGES (2026-06-28):
 // v6.4.0 CHANGES (2026-06-28):
 //   1. MARKET PERSONALITY ENGINE: ClassifyMarketPersonality() classifies
 //      every bar into one of 8 personalities (MKT_STRONG_TREND through
@@ -314,8 +328,8 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.1"
-#property description "XAUUSD AI Sniper v6.4.1 — Market Personality Engine, adaptive strategy weights, confidence calibration, decision scorecard"
+#property version   "6.4.2"
+#property description "XAUUSD AI Sniper v6.4.2 — self-audit fixes: version strings, calibration key-order, squeeze weight guard"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
@@ -3140,7 +3154,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v5.9.1 (BALANCED PRECISION) READY ===");
+   Print("=== XAUAI SNIPER v6.4.2 (AI DIRECTOR + ADAPTIVE WEIGHTS) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -3193,24 +3207,42 @@ int OnInit()
          if(calCode == 200 && ArraySize(calResult) > 10)
          {
             string calJson = CharArrayToString(calResult, 0, ArraySize(calResult));
-            // Parse multipliers using ExtractJsonDouble (already defined later in file — MQL5 resolves all file-scope functions)
-            double m0  = ExtractJsonDouble(calJson, "\"0-49\"",   1.0);
-            double m50 = ExtractJsonDouble(calJson, "\"50-64\"",  1.0);
-            double m65 = ExtractJsonDouble(calJson, "\"65-79\"",  1.0);
-            double m80 = ExtractJsonDouble(calJson, "\"80-100\"", 1.0);
+            // v6.4.2 FIX: Key collision — server.py JSON has "sample_counts" before "multipliers".
+            // Searching the full JSON for "0-49" finds the sample_count integer (e.g. 12) instead
+            // of the multiplier (e.g. 0.88). Fix: locate "multipliers" sub-object first, parse inside it.
+            // Also locate "sample_counts" sub-object for the logging n0/n80 values.
+            double m0  = 1.0, m50 = 1.0, m65 = 1.0, m80 = 1.0;
+            int    n0  = 0,   n80 = 0;
+            int    multPos = StringFind(calJson, "\"multipliers\"");
+            if(multPos >= 0)
+            {
+               // Advance past "multipliers": to the opening brace, then take substring
+               int bracePos = StringFind(calJson, "{", multPos + 13);
+               if(bracePos >= 0)
+               {
+                  string multSub = StringSubstr(calJson, bracePos);
+                  m0  = ExtractJsonDouble(multSub, "\"0-49\"",   1.0);
+                  m50 = ExtractJsonDouble(multSub, "\"50-64\"",  1.0);
+                  m65 = ExtractJsonDouble(multSub, "\"65-79\"",  1.0);
+                  m80 = ExtractJsonDouble(multSub, "\"80-100\"", 1.0);
+               }
+            }
             // Clamp each multiplier to safe range
             m0  = MathMax(0.70, MathMin(1.30, m0  > 0 ? m0  : 1.0));
             m50 = MathMax(0.70, MathMin(1.30, m50 > 0 ? m50 : 1.0));
             m65 = MathMax(0.70, MathMin(1.30, m65 > 0 ? m65 : 1.0));
             m80 = MathMax(0.70, MathMin(1.30, m80 > 0 ? m80 : 1.0));
             // Parse sample counts for logging (find inside "sample_counts" sub-object)
-            int    n0  = 0, n80 = 0;
             int    scPos = StringFind(calJson, "sample_counts");
             if(scPos >= 0)
             {
-               string scSub = StringSubstr(calJson, scPos);
-               n0  = (int)ExtractJsonDouble(scSub, "\"0-49\"",   0.0);
-               n80 = (int)ExtractJsonDouble(scSub, "\"80-100\"", 0.0);
+               int scBrace = StringFind(calJson, "{", scPos + 13);
+               if(scBrace >= 0)
+               {
+                  string scSub = StringSubstr(calJson, scBrace);
+                  n0  = (int)ExtractJsonDouble(scSub, "\"0-49\"",   0.0);
+                  n80 = (int)ExtractJsonDouble(scSub, "\"80-100\"", 0.0);
+               }
             }
             g_calibration_0_49   = m0;
             g_calibration_50_64  = m50;
@@ -4742,8 +4774,14 @@ int ScoreSetups(double &score, string &setupName)
             if(dir == 1 && h1F > h1S) s += 1.0;
             if(dir == -1 && h1F < h1S) s += 1.0;
          }
-         s *= g_stratWeight[4]; // v6.4.0: adaptive weight for SQUEEZE_RELEASE
-         if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "SQUEEZE_RELEASE"; bestType = 4; }
+         // v6.4.2 FIX: Only apply weight and bestScore check when s > 0. Previously s=0 (counter-trend
+         // block) was multiplied by g_stratWeight[4] producing 0, which could win bestScore when all
+         // other setups also produced 0 — causing a direction 1 or -1 trade on an invalidated squeeze.
+         if(s > 0)
+         {
+            s *= g_stratWeight[4]; // v6.4.0: adaptive weight for SQUEEZE_RELEASE
+            if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "SQUEEZE_RELEASE"; bestType = 4; }
+         }
       }
    }
 
@@ -15860,7 +15898,7 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v5.9.1\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v6.4.2\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -16432,7 +16470,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v5.9.1 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v6.4.2 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
