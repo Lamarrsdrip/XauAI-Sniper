@@ -660,7 +660,7 @@ input int    InpProfitTakeMax  = 500;      // Auto-close at this profit (USD, de
 input int    InpQuickExitMin   = 18;       // Auto-close minutes threshold (default 18)
 
 input group "=== RE-ENTRY ENGINE (reverse-move recovery) ==="
-input bool   InpUseReEntry     = false;    // v5.8.2: OFF by default; live report favors fewer revenge/recovery attempts
+input bool   InpUseReEntry     = true;     // v6.3.2: ON — re-entry on bounced stops during trends recovers free missed moves
 input int    InpReEntryWindow  = 900;      // Seconds after close to watch for reversal (15min)
 input double InpReEntryFactor  = 1.2;      // Price must move this x SL past original entry
 input double InpReEntrySize    = 0.5;      // Re-entry size multiplier (0.5 = half original)
@@ -1288,6 +1288,7 @@ int    g_htfConsensusDir = 0;
 // v6.3.0: AI Director state
 int    g_aiConsecutiveFails = 0;   // count of back-to-back AI server failures
 bool   g_aiOffline = false;        // true when AI fails InpAIOfflineMaxFails times in a row
+datetime g_aiOfflineSince = 0;     // v6.3.2: timestamp when AI went offline (for auto-recovery)
 string g_aiLastVerdict = "NONE";   // last AI Director verdict for dashboard
 int    g_aiLastConfidence = 0;     // last AI confidence % for dashboard
 string g_aiClaudeVote = "";        // Claude's vote this bar
@@ -2603,7 +2604,7 @@ bool ContextGateAllows(int signal, double atr)
          if(isSwingLow  && l < swingLow)  swingLow  = l;
       }
 
-      // BUY trying to enter within proxDist BELOW a swing high = entering into resistance
+      // BUY trying to enter within proxDist BELOW a swing high = entering into resistance — block
       if(signal == 1 && swingHigh > 0 && (swingHigh - curPrice) > 0 && (swingHigh - curPrice) < proxDist)
       {
          Print("⛔ CONTEXT-GATE: BUY blocked — price ", DoubleToString(curPrice, 2),
@@ -2613,14 +2614,17 @@ bool ContextGateAllows(int signal, double atr)
                "×ATR). Entering into resistance without break-retest.");
          return false;
       }
-      // SELL trying to enter within proxDist ABOVE a swing low = entering into support
-      if(signal == -1 && swingLow < 999999 && (curPrice - swingLow) > 0 && (curPrice - swingLow) < proxDist)
+      // v6.3.2 FIX: SELL near swing LOW is VALID for range-reversal/mean-reversion entries.
+      // Old logic blocked SELL within proxDist ABOVE support — but that's exactly where a
+      // RANGE_REVERSAL SELL triggers (fade the bounce from support back down).
+      // Corrected: only block SELL if price is far BELOW a swing low (over-extended downside).
+      // Block SELL if price is more than 2× ATR BELOW nearest swing low (over-extended, not near).
+      if(signal == -1 && swingLow < 999999 && curPrice < swingLow && (swingLow - curPrice) > proxDist * 2.0)
       {
          Print("⛔ CONTEXT-GATE: SELL blocked — price ", DoubleToString(curPrice, 2),
-               " is ", DoubleToString(curPrice - swingLow, 2),
-               " above swing low ", DoubleToString(swingLow, 2),
-               " (< ", DoubleToString(proxDist, 2), " = ", DoubleToString(InpSRProximityATR, 1),
-               "×ATR). Entering into support without break-retest.");
+               " is ", DoubleToString(swingLow - curPrice, 2),
+               " below swing low ", DoubleToString(swingLow, 2),
+               " — over-extended downside, not a good short entry.");
          return false;
       }
    }
@@ -4140,9 +4144,12 @@ int ScoreSetups(double &score, string &setupName)
       }
       if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "RANGE_REVERSAL"; bestType = 2; }
 
-      // SELL at upper BB — v6.1.3: require H1 bearish, hard-block if H1+HTF bull consensus
+      // SELL at upper BB — v6.3.2: allow neutral H1 (h1TrendDir <= 0) matching BUY symmetry.
+      // BUY allows h1TrendDir >= 0 (neutral or bullish). SELL was requiring h1TrendDir == -1 only,
+      // creating a bullish bias in RANGING — SELL setups needed confirmed bearish H1 while BUY
+      // only needed non-bearish. Hard-block on HTF bull consensus preserved.
       s = 0;
-      if(close1 >= bbU - (bbU - bbL) * 0.2 && h1TrendDir == -1 && !htfBullConsensus && !h1Stretched)
+      if(close1 >= bbU - (bbU - bbL) * 0.2 && h1TrendDir <= 0 && !htfBullConsensus && !h1Stretched)
       {
          dir = -1; s += 1.0;
          if(rsi > 65) s += 1.5;
@@ -7610,7 +7617,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       for(int p = patternCount - 1; p >= MathMax(0, patternCount - 5); p--)
          if(patterns[p].wasWinner) rW++;
       if(rW >= 4) { patternMult = 1.3; riskPct *= patternMult; }
-      else if(rW <= 1) { patternMult = 0.70; riskPct *= patternMult; } // v6.0.3: was 0.50 — on a growing account, halving after losses prevents recovery
+      else if(rW == 0) { patternMult = 0.70; riskPct *= patternMult; } // v6.3.2: changed rW<=1 to rW==0 — 4L+1W was penalising the recovery trade; only reduce when ALL 5 recent are losses
    }
    double riskAfterPattern = riskPct;
 
@@ -9985,7 +9992,17 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
       if(g_aiConsecutiveFails >= InpAIOfflineMaxFails && !g_aiOffline)
       {
          g_aiOffline = true;
+         g_aiOfflineSince = TimeCurrent();
          Print("AI DIRECTOR OFFLINE: ", g_aiConsecutiveFails, " consecutive failures. Switching to SAFE DEGRADED mode (", InpAIOfflineSafeMode ? "50% lot size" : "full size, no AI checks", ")");
+      }
+      // v6.3.2: auto-recovery attempt — after 30 minutes offline, reset fail counter so
+      // the next call gets a fresh try instead of staying degraded indefinitely.
+      if(g_aiOffline && g_aiOfflineSince > 0 && (TimeCurrent() - g_aiOfflineSince) > 1800)
+      {
+         g_aiConsecutiveFails = 0;
+         g_aiOffline = false;
+         g_aiOfflineSince = 0;
+         Print("AI DIRECTOR AUTO-RECOVERY: 30 min elapsed — resetting fail counter for fresh retry.");
       }
       return 0;
    }
