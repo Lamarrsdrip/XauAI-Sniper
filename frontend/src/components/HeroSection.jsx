@@ -42,11 +42,11 @@ export default function HeroSection({ performance }) {
           {/* Left: Copy */}
           <div>
             <h1 className="max-w-3xl font-heading text-[2.8rem] font-semibold leading-[1.04] tracking-tight sm:text-5xl lg:text-6xl" data-testid="hero-title">
-              Gold AI that knows when to hold and when to move.
+              The gold EA with a real AI making every decision.
             </h1>
 
             <p className="mt-5 max-w-xl text-[15px] leading-7 text-white/60">
-              XauAI Sniper v6.3.6 is a licensed MT5 gold EA powered by a real AI Director — Claude Sonnet + GPT dual-model authority over every entry, sizing, and exit decision. ML cloud warm-start gives instant pattern authority from the first tick. Adaptive Chandelier exits let winners run without giving back.
+              XauAI Sniper v6.3.6 runs on your MT5 with a full AI Director — Claude Sonnet and GPT jointly decide every entry, position size, and exit. ML cloud warm-start loads pattern history on the first tick. Adaptive Chandelier exits trail winners without giving back gains.
             </p>
 
             <div className="mt-7 grid grid-cols-2 gap-2 sm:grid-cols-4">
