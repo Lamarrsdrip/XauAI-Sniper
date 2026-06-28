@@ -193,9 +193,9 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
           <Link to="/command" className="flex min-w-0 items-center gap-3">
             <XauAiLogo size={34} className="flex-none" />
             <span className="min-w-0">
-              <span className="block truncate text-sm font-black">XAU AI Sniper</span>
+              <span className="block truncate text-sm font-bold">XAU AI Sniper</span>
               <span className="block truncate font-mono text-[9px] uppercase tracking-[0.24em] text-[#d4af37]/70">
-                Command Center
+                Command · v6.3.6
               </span>
             </span>
           </Link>
@@ -783,32 +783,77 @@ function AnalyticsPage({ heartbeat, events, equityPoints }) {
 
 function IntelligencePage({ heartbeat, events, status }) {
   const blocks = events.filter((e) => String(e.severity || "").toUpperCase() === "BLOCK");
-  const syncs = events.filter((e) => String(e.event_type || "").toUpperCase().includes("SYNC"));
-  const latestBrain = events.find((e) => /BLOCK|VETO|SIGNAL|SYNC|EXIT|SHADOW|LEARNING|CONFIDENCE/i.test(`${e.event_type} ${e.message}`));
+  const syncs  = events.filter((e) => String(e.event_type || "").toUpperCase().includes("SYNC"));
+  const aiEvents = events.filter((e) => /AI|DIRECTOR|CLAUDE|GPT|CONFIDENCE/i.test(`${e.event_type} ${e.message}`));
+  const mlEvents = events.filter((e) => /ML|HIVE|PATTERN|LEARNING|WARM/i.test(`${e.event_type} ${e.message}`));
+  const latestBrain = events.find((e) => /BLOCK|VETO|SIGNAL|SYNC|EXIT|SHADOW|LEARNING|CONFIDENCE|AI|ML/i.test(`${e.event_type} ${e.message}`));
+  const aiConfidence = heartbeat.ai_confidence || heartbeat.last_ai_confidence || 0;
+  const aiVerdict = heartbeat.ai_verdict || heartbeat.last_action || "";
+  const mlSamples = heartbeat.ml_samples || heartbeat.pattern_count || 0;
+  const mlTrusted = heartbeat.ml_trusted || (mlSamples >= 10);
+
   return (
     <div className="space-y-4">
-      <Section title="AI Brain" subtitle="What the EA sees, why it waits, why it enters, and why it blocks.">
-        <div className="rounded-[28px] border border-[#d4af37]/25 bg-[#d4af37]/10 p-5">
-          <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.24em] text-[#f5d36d]">
-            <Brain className="h-4 w-4" /> Current reasoning
-          </div>
-          <div className="text-2xl font-black">{heartbeat.last_action || latestBrain?.message || "Waiting for next EA decision"}</div>
-          <p className="mt-2 text-sm leading-6 text-white/55">
-            {latestBrain ? `${latestBrain.event_type} · ${relativeTime(latestBrain.ts)}` : "The EA will stream brain events here after heartbeat/activity is enabled for the linked license."}
-          </p>
+      {/* AI Director card */}
+      <section className="rounded-[28px] border border-violet-300/20 bg-violet-300/[0.07] p-5">
+        <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.24em] text-violet-300">
+          <Brain className="h-4 w-4" /> AI Director · Claude Sonnet + GPT
         </div>
-      </Section>
+        <div className="text-2xl font-black">{aiVerdict || latestBrain?.message || "Waiting for next decision"}</div>
+        <p className="mt-2 text-sm leading-6 text-white/50">
+          {latestBrain ? `${latestBrain.event_type} · ${relativeTime(latestBrain.ts)}` : "AI Director streams reasoning for every entry, sizing, and exit decision here."}
+        </p>
+        {aiConfidence > 0 && (
+          <div className="mt-4 flex items-center gap-3">
+            <div className="h-1.5 flex-1 rounded-full bg-white/10 overflow-hidden">
+              <div className="h-full rounded-full bg-violet-400 transition-all" style={{ width: `${aiConfidence}%` }} />
+            </div>
+            <span className="font-mono text-sm font-black text-violet-200">{aiConfidence}%</span>
+          </div>
+        )}
+      </section>
+
+      {/* ML state card */}
+      <section className="rounded-[28px] border border-sky-300/20 bg-sky-300/[0.06] p-5">
+        <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.24em] text-sky-300">
+          <Activity className="h-4 w-4" /> ML Warm-Start · Local + Hive
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <div className="font-mono text-[9px] uppercase tracking-widest text-white/35">Patterns loaded</div>
+            <div className="mt-1 font-mono text-xl font-black">{mlSamples || "—"}</div>
+          </div>
+          <div>
+            <div className="font-mono text-[9px] uppercase tracking-widest text-white/35">Authority</div>
+            <div className={`mt-1 font-mono text-xl font-black ${mlTrusted ? "text-emerald-300" : "text-amber-300"}`}>{mlTrusted ? "Active" : "Learning"}</div>
+          </div>
+          <div>
+            <div className="font-mono text-[9px] uppercase tracking-widest text-white/35">Hive</div>
+            <div className="mt-1 font-mono text-xl font-black text-sky-200">{heartbeat.hive_verdict || "Neutral"}</div>
+          </div>
+        </div>
+      </section>
+
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Metric label="Market regime" value={heartbeat.bot_state || "Unknown"} detail={heartbeat.symbol || "XAUUSD"} icon={Activity} tone="blue" />
-        <Metric label="Volatility" value={heartbeat.spread ? `${heartbeat.spread} pts` : "Waiting"} detail="Spread proxy" icon={Flame} tone="amber" />
-        <Metric label="Sync state" value={status?.intelligence_sync_state || heartbeat.sync_state || "Unknown"} detail={status?.equity_protection_state || heartbeat.epf_state || "EPF"} icon={RefreshCw} tone="amber" />
-        <Metric label="Blocks" value={blocks.length} detail="Recent veto/guard events" icon={Shield} tone={blocks.length ? "amber" : "green"} />
+        <Metric label="Spread" value={heartbeat.spread ? `${heartbeat.spread} pts` : "—"} detail="Current quote" icon={Flame} tone="amber" />
+        <Metric label="EPF state" value={heartbeat.epf_state || status?.equity_protection_state || "Unknown"} detail="Equity protection" icon={RefreshCw} tone="amber" />
+        <Metric label="Blocks" value={blocks.length} detail="Veto/guard events" icon={Shield} tone={blocks.length ? "amber" : "green"} />
       </section>
-      <Section title="Recent intelligence" subtitle="Entry reasons, block reasons, exit-brain decisions, shadow outcomes, and learning status.">
-        {[...blocks, ...syncs].slice(0, 12).length ? (
-          <div className="space-y-2">{[...blocks, ...syncs].slice(0, 12).map((e, i) => <EventRow key={e.id || i} event={e} />)}</div>
+
+      <Section title="AI Director events" subtitle="Entry confirmations, blocks, disagreements, and exit audits from Claude + GPT.">
+        {aiEvents.slice(0, 10).length ? (
+          <div className="space-y-2">{aiEvents.slice(0, 10).map((e, i) => <EventRow key={e.id || i} event={e} />)}</div>
         ) : (
-          <EmptyState title="The brain is quiet right now" body="No linked intelligence events yet. Once the EA reports, this screen becomes the operating system for understanding the bot." icon={Brain} />
+          <EmptyState title="No AI Director events yet" body="Entry decisions, conviction changes, and exit audits from the AI Director will appear here." icon={Brain} />
+        )}
+      </Section>
+
+      <Section title="ML / Hive events" subtitle="Pattern matching, warm-start loads, hive verdicts, and learning state.">
+        {[...mlEvents, ...syncs].slice(0, 10).length ? (
+          <div className="space-y-2">{[...mlEvents, ...syncs].slice(0, 10).map((e, i) => <EventRow key={e.id || i} event={e} />)}</div>
+        ) : (
+          <EmptyState title="ML is quiet" body="Pattern learning events, hive scores, and warm-start confirmations will appear here." icon={Activity} />
         )}
       </Section>
     </div>

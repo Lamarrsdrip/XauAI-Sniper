@@ -3,12 +3,82 @@ import axios from "axios";
 import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
   UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
-  FloppyDisk, ArrowCounterClockwise, ChartBar, Lightning, Flame,
-  House, TrendUp, TrendDown, Pulse,
+  FloppyDisk, ChartBar, Lightning, Flame,
+  House, Pulse, TrendUp,
 } from "@phosphor-icons/react";
 
 const ax = axios.create({ withCredentials: true });
+const auth = (token) => ({ headers: { Authorization: `Bearer ${token}` } });
 
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const BG   = "bg-[#060609]";
+const CARD = "bg-[#0c0d11] border border-white/[0.08] rounded-2xl";
+const LABEL = "font-mono text-[10px] uppercase tracking-[0.18em] text-white/35";
+const VALUE = "font-mono text-xl font-black";
+
+function Badge({ tone = "neutral", children }) {
+  const cls = {
+    green:  "bg-emerald-400/10 text-emerald-300 border-emerald-400/20",
+    red:    "bg-red-500/10 text-red-300 border-red-400/20",
+    amber:  "bg-amber-300/10 text-amber-200 border-amber-300/20",
+    neutral:"bg-white/[0.06] text-white/55 border-white/[0.08]",
+  }[tone] || "bg-white/[0.06] text-white/55 border-white/[0.08]";
+  return <span className={`inline-block rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${cls}`}>{children}</span>;
+}
+
+function StatCard({ label, value, sub, tone = "neutral", testId }) {
+  const color = { green: "text-emerald-300", red: "text-red-300", amber: "text-amber-200", neutral: "text-white" }[tone] || "text-white";
+  return (
+    <div className={`${CARD} p-4`} data-testid={testId}>
+      <div className={LABEL}>{label}</div>
+      <div className={`${VALUE} mt-2 ${color}`}>{value}</div>
+      {sub && <div className="mt-1 text-[11px] text-white/38">{sub}</div>}
+    </div>
+  );
+}
+
+function CardSection({ title, children, action }) {
+  return (
+    <div className={CARD}>
+      <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-white/[0.06]">
+        <h4 className="text-[11px] font-bold uppercase tracking-[0.15em] text-white/45">{title}</h4>
+        {action}
+      </div>
+      <div className="p-5">{children}</div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div>
+      <label className="block text-[12px] font-medium text-white/55 mb-1.5">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function Input({ className = "", ...props }) {
+  return (
+    <input
+      className={`w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-[13px] text-white outline-none placeholder:text-white/25 focus:border-amber-300/50 ${className}`}
+      {...props}
+    />
+  );
+}
+
+function Btn({ children, variant = "primary", className = "", ...props }) {
+  const base = "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[13px] font-bold transition disabled:opacity-40";
+  const v = {
+    primary: "bg-amber-300 text-black hover:bg-amber-200",
+    ghost:   "border border-white/[0.08] bg-white/[0.04] text-white/70 hover:text-white hover:bg-white/[0.08]",
+    danger:  "bg-red-500/15 text-red-300 border border-red-400/20 hover:bg-red-500/25",
+    green:   "bg-emerald-400/15 text-emerald-300 border border-emerald-400/20 hover:bg-emerald-400/25",
+  }[variant] || "";
+  return <button className={`${base} ${v} ${className}`} {...props}>{children}</button>;
+}
+
+// ─── Main portal ──────────────────────────────────────────────────────────────
 export default function AdminPortal({ api }) {
   const [token, setToken] = useState(localStorage.getItem("admin_token") || "");
   const [admin, setAdmin] = useState(null);
@@ -17,7 +87,7 @@ export default function AdminPortal({ api }) {
   const checkAuth = useCallback(async () => {
     if (!token) return;
     try {
-      const res = await ax.get(`${api}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await ax.get(`${api}/auth/me`, auth(token));
       setAdmin(res.data);
     } catch {
       setToken(""); localStorage.removeItem("admin_token");
@@ -26,65 +96,80 @@ export default function AdminPortal({ api }) {
 
   useEffect(() => { checkAuth(); }, [checkAuth]);
 
-  const handleLogin = (t) => { setToken(t); localStorage.setItem("admin_token", t); };
-  const handleLogout = () => { setToken(""); setAdmin(null); localStorage.removeItem("admin_token"); ax.post(`${api}/auth/logout`).catch(() => {}); };
+  const handleLogin  = (t) => { setToken(t); localStorage.setItem("admin_token", t); };
+  const handleLogout = () => {
+    setToken(""); setAdmin(null); localStorage.removeItem("admin_token");
+    ax.post(`${api}/auth/logout`).catch(() => {});
+  };
 
   if (!admin) return <LoginPage api={api} onLogin={handleLogin} />;
 
+  const TABS = [
+    { id: "dashboard",    label: "Dashboard",  icon: House          },
+    { id: "pins",         label: "Licenses",   icon: Key            },
+    { id: "command",      label: "Bot Ops",    icon: Pulse          },
+    { id: "settings",     label: "Settings",   icon: GearSix        },
+    { id: "configurator", label: "EA Config",  icon: ChartBar       },
+    { id: "transactions", label: "Payments",   icon: CurrencyNgn    },
+    { id: "account",      label: "Account",    icon: UserCircle     },
+  ];
+
   return (
-    <div className="min-h-screen bg-background" data-testid="admin-portal">
-      {/* Admin Header */}
-      <header className="sticky top-0 z-50 bg-[hsl(0,0%,4%)] text-white border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-6 md:px-8 h-14 flex items-center justify-between">
+    <div className={`min-h-screen ${BG} text-white`} data-testid="admin-portal">
+      {/* Header */}
+      <header className="sticky top-0 z-50 border-b border-white/[0.07] bg-[#060609]/92 backdrop-blur-2xl">
+        <div className="mx-auto flex h-[56px] max-w-7xl items-center justify-between gap-3 px-5 md:px-8">
           <div className="flex items-center gap-3">
-            <div className="w-7 h-7 bg-[hsl(43,74%,49%)] flex items-center justify-center">
-              <span className="font-mono text-xs font-bold text-black">AU</span>
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-300">
+              <span className="font-mono text-[10px] font-black text-black">XA</span>
             </div>
-            <span className="font-heading font-bold text-sm">XauAI Sniper</span>
-            <span className="text-xs bg-white/10 px-2 py-0.5 font-mono">ADMIN</span>
+            <span className="text-[14px] font-semibold">XauAI Sniper</span>
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.3.6</span>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-xs text-white/50">{admin.email}</span>
-            <a href="/" className="text-xs text-white/40 hover:text-white flex items-center gap-1"><ArrowLeft size={12} /> Public Site</a>
-            <button onClick={handleLogout} data-testid="logout-btn" className="text-xs text-white/40 hover:text-white flex items-center gap-1"><SignOut size={12} /> Logout</button>
+            <span className="hidden text-[11px] text-white/35 sm:block">{admin.email}</span>
+            <a href="/" className="flex items-center gap-1 text-[11px] text-white/35 hover:text-white/70 transition">
+              <ArrowLeft size={11} /> Site
+            </a>
+            <button onClick={handleLogout} data-testid="logout-btn" className="flex items-center gap-1 text-[11px] text-white/35 hover:text-white/70 transition">
+              <SignOut size={11} /> Logout
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Tabs */}
-      <div className="border-b border-border bg-card">
-        <div className="max-w-7xl mx-auto px-6 md:px-8 flex gap-0">
-          {[
-            { id: "dashboard", label: "DASHBOARD", icon: House },
-            { id: "pins", label: "LICENSES", icon: Key },
-            { id: "command", label: "BOT OPS", icon: Pulse },
-            { id: "settings", label: "SETTINGS", icon: GearSix },
-            { id: "configurator", label: "EA CONFIG", icon: ChartBar },
-            { id: "transactions", label: "PAYMENTS", icon: CurrencyNgn },
-            { id: "account", label: "ACCOUNT", icon: UserCircle },
-          ].map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} data-testid={`admin-tab-${t.id}`}
-              className={`px-5 py-3 text-xs font-bold tracking-[0.1em] flex items-center gap-2 border-b-2 transition-colors ${tab === t.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
-              <t.icon size={14} weight={tab === t.id ? "fill" : "regular"} /> {t.label}
-            </button>
-          ))}
+      {/* Tab bar */}
+      <div className="sticky top-[56px] z-40 border-b border-white/[0.06] bg-[#060609]/92 backdrop-blur-xl overflow-x-auto">
+        <div className="mx-auto flex max-w-7xl gap-0 px-5 md:px-8 min-w-max">
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button key={t.id} onClick={() => setTab(t.id)} data-testid={`admin-tab-${t.id}`}
+                className={`flex items-center gap-1.5 border-b-2 px-4 py-3 text-[12px] font-semibold transition-colors whitespace-nowrap ${active ? "border-amber-300 text-white" : "border-transparent text-white/38 hover:text-white/65"}`}>
+                <Icon size={13} weight={active ? "fill" : "regular"} />
+                {t.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 md:px-8 py-8">
-        {tab === "dashboard" && <DashboardTab api={api} token={token} />}
-        {tab === "pins" && <PinsTab api={api} token={token} />}
-        {tab === "command" && <CommandOpsTab api={api} token={token} />}
-        {tab === "settings" && <SettingsTab api={api} token={token} />}
-        {tab === "configurator" && <ConfigTab api={api} token={token} />}
+      {/* Content */}
+      <div className="mx-auto max-w-7xl px-5 md:px-8 py-7">
+        {tab === "dashboard"    && <DashboardTab    api={api} token={token} />}
+        {tab === "pins"         && <PinsTab         api={api} token={token} />}
+        {tab === "command"      && <CommandOpsTab   api={api} token={token} />}
+        {tab === "settings"     && <SettingsTab     api={api} token={token} />}
+        {tab === "configurator" && <ConfigTab       api={api} token={token} />}
         {tab === "transactions" && <TransactionsTab api={api} token={token} />}
-        {tab === "account" && <AccountTab api={api} token={token} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
+        {tab === "account"      && <AccountTab api={api} token={token} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
       </div>
     </div>
   );
 }
 
-// --- LOGIN PAGE ---
+// ─── Login ────────────────────────────────────────────────────────────────────
 function LoginPage({ api, onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -104,131 +189,112 @@ function LoginPage({ api, onLogin }) {
   };
 
   return (
-    <div className="min-h-screen bg-[hsl(0,0%,4%)] flex items-center justify-center p-6" data-testid="admin-login-page">
+    <div className={`min-h-screen ${BG} flex items-center justify-center p-6`} data-testid="admin-login-page">
       <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <div className="w-12 h-12 bg-[hsl(43,74%,49%)] flex items-center justify-center mx-auto mb-4">
-            <span className="font-mono text-lg font-bold text-black">AU</span>
+        <div className="text-center mb-7">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-300">
+            <span className="font-mono text-base font-black text-black">XA</span>
           </div>
-          <h1 className="font-heading text-2xl font-bold text-white">XauAI Admin</h1>
-          <p className="text-sm text-white/40 mt-1">XauAI Sniper EA Management</p>
+          <h1 className="text-2xl font-semibold text-white">XauAI Admin</h1>
+          <p className="mt-1 text-[13px] text-white/38">v6.3.6 management portal</p>
         </div>
-        <form onSubmit={handleSubmit} className="bg-white/5 border border-white/10 p-6 space-y-4">
-          <div>
-            <label className="text-sm text-white/60 block mb-1">Email</label>
+
+        <form onSubmit={handleSubmit} className={`${CARD} p-6 space-y-4`}>
+          <Field label="Email">
             <div className="relative">
-              <Envelope size={16} className="absolute left-3 top-3 text-white/30" />
-              <input data-testid="admin-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@aisniper.com"
-                className="w-full pl-10 pr-3 py-2.5 bg-white/5 border border-white/20 text-white text-sm focus:outline-none focus:ring-1 focus:ring-[hsl(43,74%,49%)]" />
+              <Envelope size={14} className="absolute left-3 top-3 text-white/30" />
+              <Input data-testid="admin-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@xauaisniper.com" className="pl-9" />
             </div>
-          </div>
-          <div>
-            <label className="text-sm text-white/60 block mb-1">Password</label>
+          </Field>
+
+          <Field label="Password">
             <div className="relative">
-              <Lock size={16} className="absolute left-3 top-3 text-white/30" />
-              <input data-testid="admin-password" type={showPw ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="Password"
-                className="w-full pl-10 pr-10 py-2.5 bg-white/5 border border-white/20 text-white text-sm focus:outline-none focus:ring-1 focus:ring-[hsl(43,74%,49%)]" />
-              <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-3 text-white/30 hover:text-white">
-                {showPw ? <EyeSlash size={16} /> : <Eye size={16} />}
+              <Lock size={14} className="absolute left-3 top-3 text-white/30" />
+              <Input data-testid="admin-password" type={showPw ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" className="pl-9 pr-9" />
+              <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-3 text-white/30 hover:text-white/60">
+                {showPw ? <EyeSlash size={14} /> : <Eye size={14} />}
               </button>
             </div>
-          </div>
-          {error && <div className="text-[hsl(348,83%,47%)] text-sm" data-testid="login-error">{error}</div>}
-          <button type="submit" disabled={loading} data-testid="admin-login-btn"
-            className="w-full py-3 bg-[hsl(43,74%,49%)] text-black font-bold text-sm disabled:opacity-50">
-            {loading ? "LOGGING IN..." : "LOGIN"}
-          </button>
+          </Field>
+
+          {error && <p className="text-[12px] text-red-300" data-testid="login-error">{error}</p>}
+
+          <Btn type="submit" disabled={loading} className="w-full" data-testid="admin-login-btn">
+            {loading ? "Logging in..." : "Log in"}
+          </Btn>
         </form>
-        <div className="text-center mt-4">
-          <a href="/" className="text-xs text-white/30 hover:text-white/60">Back to public site</a>
+
+        <div className="mt-4 text-center">
+          <a href="/" className="text-[11px] text-white/28 hover:text-white/55">← Back to site</a>
         </div>
       </div>
     </div>
   );
 }
 
-
-// --- DASHBOARD TAB ---
+// ─── Dashboard ────────────────────────────────────────────────────────────────
 function DashboardTab({ api, token }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const h = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
+  const h = useMemo(() => auth(token), [token]);
 
   useEffect(() => {
     ax.get(`${api}/admin/dashboard`, h).then(r => setData(r.data)).catch(() => {}).finally(() => setLoading(false));
   }, [api, h]);
 
-  if (loading) return <div className="text-center py-12 text-muted-foreground">Loading dashboard...</div>;
-  if (!data) return <div className="text-center py-12 text-muted-foreground">Failed to load dashboard</div>;
+  if (loading) return <div className="py-12 text-center text-white/40 text-sm">Loading dashboard…</div>;
+  if (!data)   return <div className="py-12 text-center text-white/40 text-sm">Failed to load dashboard</div>;
 
   const b = data.bots;
   const rev = data.revenue;
+
   return (
-    <div className="space-y-6" data-testid="admin-dashboard-tab">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <StatCard label="LICENSES ISSUED" value={b.total_sold} sub={`${b.sold_via_payment} paid | ${b.free_generated} manual`} color="text-foreground" testId="stat-total-sold" />
-        <StatCard label="ACTIVATED LICENSES" value={b.actively_trading} sub={`${b.purchased_not_activated} waiting for MT5 activation`} color="text-[hsl(142,71%,45%)]" testId="stat-active" />
-        <StatCard label="REVOKED" value={b.revoked} color="text-[hsl(348,83%,47%)]" testId="stat-revoked" />
-        <StatCard label="REVENUE" value={rev.formatted_revenue} sub={`${rev.successful_payments} payments`} color="text-primary" testId="stat-revenue" />
+    <div className="space-y-5" data-testid="admin-dashboard-tab">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard label="Licenses issued"   value={b.total_sold}       sub={`${b.sold_via_payment} paid · ${b.free_generated} manual`} testId="stat-total-sold" />
+        <StatCard label="Activated"         value={b.actively_trading} sub={`${b.purchased_not_activated} waiting`} tone="green" testId="stat-active" />
+        <StatCard label="Revoked"           value={b.revoked}          tone="red" testId="stat-revoked" />
+        <StatCard label="Revenue"           value={rev.formatted_revenue} sub={`${rev.successful_payments} payments`} tone="amber" testId="stat-revenue" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="border border-border bg-card" data-testid="license-business-overview">
-          <div className="px-5 py-3 border-b border-border bg-muted/30">
-            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground flex items-center gap-2"><Pulse size={14} /> LICENSE BUSINESS OVERVIEW</h4>
-          </div>
-          <div className="p-5 space-y-4">
-            <div className="text-sm leading-6 text-muted-foreground">
-              Admin now tracks the commercial product: licenses sold, activation status, payments, and live bot operations.
-              Trading performance belongs in structured EA reports and the user Command Center, not old cloud-copy dashboards.
+      <div className="grid gap-4 lg:grid-cols-2">
+        <CardSection title="License business overview" data-testid="license-business-overview">
+          <p className="text-[13px] leading-6 text-white/45 mb-4">
+            Tracks licenses sold, activation status, payments, and live bot operations. Trading performance lives in EA reports and the user Command Center.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className={`${CARD} p-4`}>
+              <div className={LABEL}>Paid licenses</div>
+              <div className={`${VALUE} mt-2 text-amber-200`}>{b.sold_via_payment}</div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="border border-border p-4">
-                <div className="text-[10px] font-bold tracking-[0.15em] text-muted-foreground">PAID LICENSES</div>
-                <div className="font-mono text-2xl font-bold text-primary mt-1">{b.sold_via_payment}</div>
-              </div>
-              <div className="border border-border p-4">
-                <div className="text-[10px] font-bold tracking-[0.15em] text-muted-foreground">MANUAL LICENSES</div>
-                <div className="font-mono text-2xl font-bold mt-1">{b.free_generated}</div>
-              </div>
+            <div className={`${CARD} p-4`}>
+              <div className={LABEL}>Manual licenses</div>
+              <div className={`${VALUE} mt-2`}>{b.free_generated}</div>
             </div>
           </div>
-        </div>
+        </CardSection>
 
-        <div className="border border-border bg-card" data-testid="admin-next-actions">
-          <div className="px-5 py-3 border-b border-border bg-muted/30">
-            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">ADMIN WORKFLOW</h4>
-          </div>
-          <div className="p-5 space-y-3">
+        <CardSection title="Admin workflow" data-testid="admin-next-actions">
+          <div className="space-y-2">
             {[
               ["Licenses", "Create, revoke, activate, and copy ASE license keys."],
-              ["Bot Ops", "Watch live heartbeat, command queue, and EA activity."],
+              ["Bot Ops",  "Watch live heartbeat, command queue, and EA activity."],
               ["Payments", "Review Paystack transactions and generated license keys."],
               ["Settings", "Set license price, payment keys, and email delivery."],
             ].map(([title, body]) => (
-              <div key={title} className="border border-border p-3">
-                <div className="font-bold text-sm">{title}</div>
-                <div className="text-xs text-muted-foreground mt-1">{body}</div>
+              <div key={title} className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
+                <div className="text-[13px] font-semibold">{title}</div>
+                <div className="mt-0.5 text-[11px] text-white/40">{body}</div>
               </div>
             ))}
           </div>
-        </div>
+        </CardSection>
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value, sub, color, testId }) {
-  return (
-    <div className="border border-border bg-card p-4" data-testid={testId}>
-      <div className="text-[10px] font-bold tracking-[0.15em] text-muted-foreground mb-1">{label}</div>
-      <div className={`font-mono text-2xl font-bold ${color || "text-foreground"}`}>{value}</div>
-      {sub && <div className="text-xs text-muted-foreground mt-1">{sub}</div>}
-    </div>
-  );
-}
-
-// --- PINS TAB ---
+// ─── Pins / Licenses ──────────────────────────────────────────────────────────
 function PinsTab({ api, token }) {
   const [pins, setPins] = useState([]);
   const [stats, setStats] = useState(null);
@@ -238,77 +304,108 @@ function PinsTab({ api, token }) {
   const [notes, setNotes] = useState("");
   const [copiedPin, setCopiedPin] = useState(null);
   const [generating, setGenerating] = useState(false);
-  const h = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
+  const h = useMemo(() => auth(token), [token]);
 
-  const fetch = useCallback(async () => {
+  const fetchPins = useCallback(async () => {
     try {
       const [p, s] = await Promise.all([ax.get(`${api}/admin/pins`, h), ax.get(`${api}/admin/pins/stats`, h)]);
       setPins(p.data.pins || []); setStats(s.data);
-    } catch (err) { process.env.NODE_ENV === 'development' && console.error("Failed to fetch pins:", err); }
+    } catch {}
   }, [api, h]);
 
-  useEffect(() => { fetch(); }, [fetch]);
+  useEffect(() => { fetchPins(); }, [fetchPins]);
 
   const generate = async () => {
     setGenerating(true);
-    try { await ax.post(`${api}/admin/pins/generate`, { count: genCount, buyer_name: buyerName, buyer_email: buyerEmail, notes }, h); setBuyerName(""); setBuyerEmail(""); setNotes(""); await fetch(); } catch (err) { process.env.NODE_ENV === 'development' && console.error("Generate PIN failed:", err); } finally { setGenerating(false); }
+    try {
+      await ax.post(`${api}/admin/pins/generate`, { count: genCount, buyer_name: buyerName, buyer_email: buyerEmail, notes }, h);
+      setBuyerName(""); setBuyerEmail(""); setNotes(""); await fetchPins();
+    } catch {} finally { setGenerating(false); }
   };
-  const revoke = async (pin) => { await ax.put(`${api}/admin/pins/${pin}/revoke`, {}, h); fetch(); };
-  const activate = async (pin) => { await ax.put(`${api}/admin/pins/${pin}/activate`, {}, h); fetch(); };
-  const del = async (pin) => { await ax.delete(`${api}/admin/pins/${pin}`, h); fetch(); };
+  const revoke   = async (pin) => { await ax.put(`${api}/admin/pins/${pin}/revoke`,   {}, h); fetchPins(); };
+  const activate = async (pin) => { await ax.put(`${api}/admin/pins/${pin}/activate`, {}, h); fetchPins(); };
+  const del      = async (pin) => { await ax.delete(`${api}/admin/pins/${pin}`,            h); fetchPins(); };
   const copy = (pin) => { navigator.clipboard.writeText(pin); setCopiedPin(pin); setTimeout(() => setCopiedPin(null), 2000); };
 
   return (
-    <div data-testid="admin-pins-tab">
+    <div className="space-y-5" data-testid="admin-pins-tab">
       {stats && (
-        <div className="grid grid-cols-5 gap-0 border border-border mb-6" data-testid="admin-pin-stats">
-          {[{l:"TOTAL",v:stats.total},{l:"ACTIVE",v:stats.active,c:"text-[hsl(142,71%,45%)]"},{l:"USED",v:stats.used,c:"text-primary"},{l:"UNUSED",v:stats.unused},{l:"REVOKED",v:stats.revoked,c:"text-[hsl(348,83%,47%)]"}].map((s,i) => (
-            <div key={s.l} className={`p-4 ${i<4?"border-r border-border":""}`}><div className="text-[10px] font-bold tracking-[0.15em] text-muted-foreground mb-1">{s.l}</div><div className={`font-mono text-2xl font-bold ${s.c||"text-foreground"}`}>{s.v}</div></div>
-          ))}
+        <div className="grid grid-cols-5 gap-3" data-testid="admin-pin-stats">
+          {[
+            { l: "Total",   v: stats.total,   tone: "neutral" },
+            { l: "Active",  v: stats.active,  tone: "green"   },
+            { l: "Used",    v: stats.used,    tone: "amber"   },
+            { l: "Unused",  v: stats.unused,  tone: "neutral" },
+            { l: "Revoked", v: stats.revoked, tone: "red"     },
+          ].map((s) => <StatCard key={s.l} label={s.l} value={s.v} tone={s.tone} />)}
         </div>
       )}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="border border-border bg-card" data-testid="admin-gen-form">
-          <div className="px-5 py-3 border-b border-border bg-muted/30"><h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">GENERATE FREE PINS</h4></div>
-          <div className="p-5 space-y-3">
-            <input data-testid="admin-pin-name" type="text" value={buyerName} onChange={e=>setBuyerName(e.target.value)} placeholder="Buyer Name" className="w-full px-3 py-2 border border-border bg-background text-sm" />
-            <input data-testid="admin-pin-email" type="email" value={buyerEmail} onChange={e=>setBuyerEmail(e.target.value)} placeholder="Email" className="w-full px-3 py-2 border border-border bg-background text-sm" />
-            <input type="text" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Notes" className="w-full px-3 py-2 border border-border bg-background text-sm" />
-            <input type="number" min={1} max={50} value={genCount} onChange={e=>setGenCount(parseInt(e.target.value)||1)} className="w-full px-3 py-2 border border-border bg-background text-sm font-mono" />
-            <button onClick={generate} disabled={generating} data-testid="admin-gen-btn" className="w-full px-4 py-3 bg-primary text-primary-foreground font-bold text-sm flex items-center justify-center gap-2 hover:-translate-y-[1px] transition-transform shadow-[2px_2px_0px_hsl(0,0%,4%)]">
-              <Plus size={14} weight="bold" /> {generating ? "GENERATING..." : `GENERATE ${genCount} PIN${genCount>1?"S":""}`}
-            </button>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        {/* Generate form */}
+        <CardSection title="Generate licenses" data-testid="admin-gen-form">
+          <div className="space-y-3">
+            <Field label="Buyer name">
+              <Input data-testid="admin-pin-name" type="text" value={buyerName} onChange={e => setBuyerName(e.target.value)} placeholder="Full name" />
+            </Field>
+            <Field label="Buyer email">
+              <Input data-testid="admin-pin-email" type="email" value={buyerEmail} onChange={e => setBuyerEmail(e.target.value)} placeholder="buyer@email.com" />
+            </Field>
+            <Field label="Notes">
+              <Input type="text" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional note" />
+            </Field>
+            <Field label="Count">
+              <Input type="number" min={1} max={50} value={genCount} onChange={e => setGenCount(parseInt(e.target.value) || 1)} className="font-mono" />
+            </Field>
+            <Btn onClick={generate} disabled={generating} className="w-full" data-testid="admin-gen-btn">
+              <Plus size={13} weight="bold" /> {generating ? "Generating…" : `Generate ${genCount} key${genCount > 1 ? "s" : ""}`}
+            </Btn>
           </div>
-        </div>
-        <div className="lg:col-span-2 border border-border bg-card" data-testid="admin-pin-list">
-          <div className="px-5 py-3 border-b border-border bg-muted/30 flex justify-between"><h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">ALL PINS</h4><span className="text-xs font-mono text-muted-foreground">{pins.length}</span></div>
-          <div className="max-h-[500px] overflow-y-auto divide-y divide-border">
-            {pins.length === 0 ? <div className="p-8 text-center text-sm text-muted-foreground">No PINs yet</div> :
-            pins.map(p => (
-              <div key={p.pin} className="px-5 py-3 flex items-center gap-3" data-testid={`admin-pin-${p.pin}`}>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5"><span className="font-mono text-sm font-bold">{p.pin}</span>
-                    <button onClick={()=>copy(p.pin)} className="text-muted-foreground hover:text-foreground">{copiedPin===p.pin?<Check size={12} className="text-[hsl(142,71%,45%)]"/>:<Copy size={12}/>}</button></div>
-                  <div className="text-xs text-muted-foreground flex gap-2">{p.buyer_name&&<span>{p.buyer_name}</span>}{p.buyer_email&&<span>{p.buyer_email}</span>}{p.payment_ref&&<span className="text-primary">PAID</span>}</div>
+        </CardSection>
+
+        {/* Pin list */}
+        <div className="lg:col-span-2">
+          <CardSection title={`All licenses · ${pins.length}`} data-testid="admin-pin-list">
+            <div className="max-h-[520px] overflow-y-auto -m-5 divide-y divide-white/[0.05]">
+              {pins.length === 0 ? (
+                <div className="p-8 text-center text-[13px] text-white/35">No licenses yet</div>
+              ) : pins.map((p) => (
+                <div key={p.pin} className="flex items-center gap-3 px-5 py-3" data-testid={`admin-pin-${p.pin}`}>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[13px] font-bold">{p.pin}</span>
+                      <button onClick={() => copy(p.pin)} className="text-white/30 hover:text-white/70">
+                        {copiedPin === p.pin ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+                      </button>
+                    </div>
+                    <div className="mt-0.5 flex flex-wrap gap-2 text-[11px] text-white/35">
+                      {p.buyer_name && <span>{p.buyer_name}</span>}
+                      {p.buyer_email && <span>{p.buyer_email}</span>}
+                      {p.payment_ref && <span className="text-amber-200">PAID</span>}
+                    </div>
+                  </div>
+                  <div className="flex flex-shrink-0 items-center gap-2">
+                    {p.is_used && <Badge tone="amber">Activated</Badge>}
+                    <Badge tone={p.is_active ? "green" : "red"}>{p.is_active ? "Active" : "Revoked"}</Badge>
+                  </div>
+                  <div className="flex flex-shrink-0 gap-1">
+                    {p.is_active
+                      ? <button onClick={() => revoke(p.pin)}   title="Revoke"   className="rounded-lg p-1.5 text-white/30 hover:bg-red-400/10 hover:text-red-300"><ShieldCheck size={13} /></button>
+                      : <button onClick={() => activate(p.pin)} title="Activate" className="rounded-lg p-1.5 text-white/30 hover:bg-emerald-400/10 hover:text-emerald-300"><ShieldCheck size={13} /></button>
+                    }
+                    <button onClick={() => del(p.pin)} title="Delete" className="rounded-lg p-1.5 text-white/30 hover:bg-red-400/10 hover:text-red-300"><Trash size={13} /></button>
+                  </div>
                 </div>
-                <div className="flex gap-1.5 flex-shrink-0">
-                  {p.is_used&&<span className="px-1.5 py-0.5 bg-primary/10 text-primary text-[9px] font-bold">ACTIVATED</span>}
-                  <span className={`px-1.5 py-0.5 text-[9px] font-bold ${p.is_active?"bg-[hsl(142,71%,45%)]/10 text-[hsl(142,71%,45%)]":"bg-[hsl(348,83%,47%)]/10 text-[hsl(348,83%,47%)]"}`}>{p.is_active?"ACTIVE":"REVOKED"}</span>
-                </div>
-                <div className="flex gap-1 flex-shrink-0">
-                  {p.is_active?<button onClick={()=>revoke(p.pin)} className="p-1 text-muted-foreground hover:text-[hsl(348,83%,47%)]" title="Revoke"><ShieldCheck size={14}/></button>:<button onClick={()=>activate(p.pin)} className="p-1 text-muted-foreground hover:text-[hsl(142,71%,45%)]" title="Activate"><ShieldCheck size={14}/></button>}
-                  <button onClick={()=>del(p.pin)} className="p-1 text-muted-foreground hover:text-[hsl(348,83%,47%)]" title="Delete"><Trash size={14}/></button>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </CardSection>
         </div>
       </div>
     </div>
   );
 }
 
-// --- SETTINGS TAB ---
+// ─── Settings ─────────────────────────────────────────────────────────────────
 function SettingsTab({ api, token }) {
   const [settings, setSettings] = useState(null);
   const [pk, setPk] = useState("");
@@ -317,12 +414,12 @@ function SettingsTab({ api, token }) {
   const [smtpPw, setSmtpPw] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const h = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
+  const h = useMemo(() => auth(token), [token]);
 
   useEffect(() => {
     ax.get(`${api}/admin/settings`, h).then(r => {
       setSettings(r.data); setPriceNaira(r.data.pin_price_naira || 300000); setSmtpEmail(r.data.smtp_email || "");
-    }).catch((err) => { process.env.NODE_ENV === 'development' && console.error("Failed to load settings:", err); });
+    }).catch(() => {});
   }, [api, h]);
 
   const save = async () => {
@@ -332,259 +429,267 @@ function SettingsTab({ api, token }) {
     updates.pin_price_kobo = Math.round(priceNaira * 100);
     if (smtpEmail) updates.smtp_email = smtpEmail;
     if (smtpPw) updates.smtp_password = smtpPw;
-    try { await ax.put(`${api}/admin/settings`, updates, h); setSaved(true); setPk(""); setSmtpPw(""); setTimeout(() => setSaved(false), 3000);
+    try {
+      await ax.put(`${api}/admin/settings`, updates, h);
+      setSaved(true); setPk(""); setSmtpPw(""); setTimeout(() => setSaved(false), 3000);
       const r = await ax.get(`${api}/admin/settings`, h); setSettings(r.data);
-    } catch (err) { process.env.NODE_ENV === 'development' && console.error("Save settings failed:", err); } finally { setSaving(false); }
+    } catch {} finally { setSaving(false); }
   };
 
   return (
-    <div className="max-w-2xl" data-testid="admin-settings-tab">
-      <h3 className="font-heading text-xl font-bold mb-6">Admin Settings</h3>
-      <div className="space-y-6">
-        {/* Paystack */}
-        <div className="border border-border bg-card p-5">
-          <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground mb-4 flex items-center gap-2"><CurrencyNgn size={14} /> PAYSTACK CONFIGURATION</h4>
-          <div className="space-y-3">
-            <div>
-              <label className="text-sm font-medium block mb-1">Paystack Secret Key</label>
-              <input data-testid="settings-paystack-key" type="password" value={pk} onChange={e=>setPk(e.target.value)} placeholder={settings?.paystack_configured ? "Key configured (enter new to change)" : "sk_live_xxxxx or sk_test_xxxxx"}
-                className="w-full px-3 py-2 border border-border bg-background font-mono text-sm" />
-              <p className="text-xs text-muted-foreground mt-1">Status: <span className={settings?.paystack_configured?"text-[hsl(142,71%,45%)]":"text-[hsl(348,83%,47%)]"}>{settings?.paystack_configured?"Configured":"Not set"}</span> {settings?.paystack_key_preview && settings.paystack_configured && <span className="font-mono">({settings.paystack_key_preview})</span>}</p>
+    <div className="max-w-2xl space-y-5" data-testid="admin-settings-tab">
+      <CardSection title="Paystack configuration">
+        <div className="space-y-4">
+          <Field label="Paystack secret key">
+            <Input data-testid="settings-paystack-key" type="password" value={pk} onChange={e => setPk(e.target.value)}
+              placeholder={settings?.paystack_configured ? "Configured — enter new key to change" : "sk_live_xxxxxx"} className="font-mono" />
+            <p className="mt-1 text-[11px] text-white/35">
+              Status: <span className={settings?.paystack_configured ? "text-emerald-400" : "text-red-400"}>{settings?.paystack_configured ? "Configured" : "Not set"}</span>
+              {settings?.paystack_key_preview && settings.paystack_configured && <span className="ml-1 font-mono">({settings.paystack_key_preview})</span>}
+            </p>
+          </Field>
+          <Field label="PIN price (Naira)">
+            <div className="flex items-center gap-2">
+              <span className="text-white/50">₦</span>
+              <Input data-testid="settings-price" type="number" value={priceNaira} onChange={e => setPriceNaira(parseInt(e.target.value) || 0)} className="font-mono" />
             </div>
-            <div>
-              <label className="text-sm font-medium block mb-1">PIN Price (Naira)</label>
-              <div className="flex items-center gap-2">
-                <span className="text-lg font-bold">₦</span>
-                <input data-testid="settings-price" type="number" value={priceNaira} onChange={e=>setPriceNaira(parseInt(e.target.value)||0)}
-                  className="w-full px-3 py-2 border border-border bg-background font-mono text-sm" />
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">Current: ₦{priceNaira?.toLocaleString()}</p>
-            </div>
-          </div>
+            <p className="mt-1 text-[11px] text-white/35">Current: ₦{priceNaira?.toLocaleString()}</p>
+          </Field>
         </div>
-        {/* Email */}
-        <div className="border border-border bg-card p-5">
-          <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground mb-4 flex items-center gap-2"><Envelope size={14} /> EMAIL CONFIGURATION (Gmail)</h4>
-          <p className="text-xs text-muted-foreground mb-3">Auto-send PINs to buyers after payment. Use a Gmail App Password (not your regular password). Go to myaccount.google.com &gt; Security &gt; App Passwords.</p>
-          <div className="space-y-3">
-            <div>
-              <label className="text-sm font-medium block mb-1">Gmail Address</label>
-              <input data-testid="settings-smtp-email" type="email" value={smtpEmail} onChange={e=>setSmtpEmail(e.target.value)} placeholder="yourname@gmail.com"
-                className="w-full px-3 py-2 border border-border bg-background text-sm" />
+      </CardSection>
+
+      <CardSection title="Email configuration (Gmail SMTP)">
+        <p className="text-[12px] text-white/40 mb-4 leading-5">Auto-send license keys to buyers after payment. Use a Gmail App Password — <span className="text-white/60">myaccount.google.com → Security → App Passwords.</span></p>
+        <div className="space-y-4">
+          <Field label="Gmail address">
+            <div className="relative">
+              <Envelope size={13} className="absolute left-3 top-3 text-white/30" />
+              <Input data-testid="settings-smtp-email" type="email" value={smtpEmail} onChange={e => setSmtpEmail(e.target.value)} placeholder="you@gmail.com" className="pl-9" />
             </div>
-            <div>
-              <label className="text-sm font-medium block mb-1">App Password</label>
-              <input data-testid="settings-smtp-password" type="password" value={smtpPw} onChange={e=>setSmtpPw(e.target.value)} placeholder={settings?.smtp_configured ? "Password configured (enter new to change)" : "xxxx xxxx xxxx xxxx"}
-                className="w-full px-3 py-2 border border-border bg-background font-mono text-sm" />
-              <p className="text-xs text-muted-foreground mt-1">Status: <span className={settings?.smtp_configured?"text-[hsl(142,71%,45%)]":"text-[hsl(348,83%,47%)]"}>{settings?.smtp_configured?"Configured":"Not set"}</span></p>
-            </div>
-          </div>
+          </Field>
+          <Field label="App password">
+            <Input data-testid="settings-smtp-password" type="password" value={smtpPw} onChange={e => setSmtpPw(e.target.value)}
+              placeholder={settings?.smtp_configured ? "Configured — enter new to change" : "xxxx xxxx xxxx xxxx"} className="font-mono" />
+            <p className="mt-1 text-[11px] text-white/35">Status: <span className={settings?.smtp_configured ? "text-emerald-400" : "text-red-400"}>{settings?.smtp_configured ? "Configured" : "Not set"}</span></p>
+          </Field>
         </div>
-        <button onClick={save} disabled={saving} data-testid="settings-save-btn"
-          className="px-6 py-3 bg-primary text-primary-foreground font-bold text-sm flex items-center gap-2 hover:-translate-y-[1px] transition-transform shadow-[2px_2px_0px_hsl(0,0%,4%)]">
-          <FloppyDisk size={16} weight="bold" /> {saving?"SAVING...":saved?"SAVED!":"SAVE SETTINGS"}
-        </button>
-      </div>
+      </CardSection>
+
+      <Btn onClick={save} disabled={saving} data-testid="settings-save-btn">
+        <FloppyDisk size={14} weight="bold" /> {saving ? "Saving…" : saved ? "Saved!" : "Save settings"}
+      </Btn>
     </div>
   );
 }
 
-// --- CONFIGURATOR TAB ---
+// ─── EA Config ────────────────────────────────────────────────────────────────
 function ConfigTab({ api, token }) {
   const PRESETS = [
-    { id:"conservative", label:"CONSERVATIVE", icon:ShieldCheck, wt:20, risk:0.5, trades:2, conf:85, color:"text-[hsl(142,71%,45%)]", bg:"bg-[hsl(142,71%,45%)]/10" },
-    { id:"moderate", label:"MODERATE", icon:Lightning, wt:35, risk:1.0, trades:3, conf:75, color:"text-primary", bg:"bg-primary/10" },
-    { id:"aggressive", label:"AGGRESSIVE", icon:Flame, wt:50, risk:1.5, trades:5, conf:65, color:"text-[hsl(348,83%,47%)]", bg:"bg-[hsl(348,83%,47%)]/10" },
+    { id: "conservative", label: "Conservative", icon: ShieldCheck, wt: 20, risk: 0.5,  trades: 2, conf: 85, tone: "green"  },
+    { id: "moderate",     label: "Moderate",     icon: Lightning,   wt: 35, risk: 1.0,  trades: 3, conf: 75, tone: "amber"  },
+    { id: "aggressive",   label: "Aggressive",   icon: Flame,       wt: 50, risk: 1.5,  trades: 5, conf: 65, tone: "red"    },
   ];
-  const [config, setConfig] = useState({name:"Default",risk_percent:1,daily_loss_limit:3,weekly_drawdown_limit:10,weekly_profit_target:35,max_open_trades:2,max_trades_per_day:3,enable_trend_mode:true,enable_range_mode:true,enable_breakout_mode:true,confidence_threshold:75,ema_fast:50,ema_slow:200,min_rr_ratio:1.5,partial_close_percent:50,trailing_atr_multi:1.5,sl_atr_multiplier:2,trade_london:true,trade_new_york:true,equity_protection:70,profit_mode:"moderate"});
+  const [config, setConfig] = useState({ name: "Default", risk_percent: 1, daily_loss_limit: 3, weekly_drawdown_limit: 10, weekly_profit_target: 35, max_open_trades: 2, max_trades_per_day: 3, enable_trend_mode: true, enable_range_mode: true, enable_breakout_mode: true, confidence_threshold: 75, ema_fast: 50, ema_slow: 200, min_rr_ratio: 1.5, partial_close_percent: 50, trailing_atr_multi: 1.5, sl_atr_multiplier: 2, trade_london: true, trade_new_york: true, equity_protection: 70, profit_mode: "moderate" });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const h = { headers: { Authorization: `Bearer ${token}` } };
 
-  const u = (k,v) => { setConfig(p=>({...p,[k]:v})); setSaved(false); };
-  const applyPreset = (p) => u("weekly_profit_target",p.wt) || u("risk_percent",p.risk) || u("max_trades_per_day",p.trades) || u("confidence_threshold",p.conf) || u("profit_mode",p.id) || setConfig(prev=>({...prev,weekly_profit_target:p.wt,risk_percent:p.risk,max_trades_per_day:p.trades,confidence_threshold:p.conf,profit_mode:p.id}));
-  const save = async () => { setSaving(true); try { await ax.post(`${api}/admin/configs`, config, h); setSaved(true); setTimeout(()=>setSaved(false),3000); } catch (err) { process.env.NODE_ENV === 'development' && console.error("Save config failed:", err); } finally { setSaving(false); } };
+  const u = (k, v) => { setConfig(p => ({ ...p, [k]: v })); setSaved(false); };
+  const applyPreset = (p) => setConfig(prev => ({ ...prev, weekly_profit_target: p.wt, risk_percent: p.risk, max_trades_per_day: p.trades, confidence_threshold: p.conf, profit_mode: p.id }));
+  const save = async () => {
+    setSaving(true);
+    try { await ax.post(`${api}/admin/configs`, config, h); setSaved(true); setTimeout(() => setSaved(false), 3000); } catch {} finally { setSaving(false); }
+  };
 
   return (
-    <div data-testid="admin-config-tab">
-      <h3 className="font-heading text-xl font-bold mb-4">EA Parameter Configuration</h3>
-      <div className="grid grid-cols-3 gap-3 mb-6">
-        {PRESETS.map(p=>{const I=p.icon;const sel=config.profit_mode===p.id;return(
-          <button key={p.id} onClick={()=>applyPreset(p)} data-testid={`admin-preset-${p.id}`} className={`text-left p-4 border transition-all ${sel?`${p.bg} border-current`:""} ${!sel?"border-border hover:border-foreground/20":""}`}>
-            <div className="flex items-center gap-2 mb-1"><I size={16} weight={sel?"fill":"regular"} className={sel?p.color:"text-muted-foreground"}/><span className={`text-xs font-bold tracking-[0.1em] ${sel?p.color:"text-muted-foreground"}`}>{p.label}</span></div>
-            <div className="font-mono text-2xl font-black">{p.wt}%<span className="text-xs font-medium text-muted-foreground ml-1">/week</span></div>
-            <div className="text-xs text-muted-foreground mt-1">Risk: {p.risk}% | Trades: {p.trades}/day</div>
-          </button>
-        );})}
+    <div className="space-y-5" data-testid="admin-config-tab">
+      <div className="grid grid-cols-3 gap-3">
+        {PRESETS.map((p) => {
+          const Icon = p.icon;
+          const sel = config.profit_mode === p.id;
+          const toneClasses = { green: "border-emerald-400/30 bg-emerald-400/10 text-emerald-300", amber: "border-amber-300/30 bg-amber-300/10 text-amber-200", red: "border-red-400/30 bg-red-500/10 text-red-300" };
+          return (
+            <button key={p.id} onClick={() => applyPreset(p)} data-testid={`admin-preset-${p.id}`}
+              className={`rounded-2xl border p-4 text-left transition ${sel ? toneClasses[p.tone] : "border-white/[0.08] bg-white/[0.03] text-white/55 hover:border-white/[0.14]"}`}>
+              <div className="flex items-center gap-2 mb-2">
+                <Icon size={14} weight={sel ? "fill" : "regular"} />
+                <span className="text-[11px] font-bold uppercase tracking-[0.1em]">{p.label}</span>
+              </div>
+              <div className="font-mono text-xl font-black">{p.wt}%<span className="text-[11px] font-medium text-white/40 ml-1">/wk</span></div>
+              <div className="mt-1 text-[11px] text-white/38">Risk {p.risk}% · {p.trades}/day max</div>
+            </button>
+          );
+        })}
       </div>
-      <div className="grid grid-cols-3 gap-4 mb-4">
-        {[["Risk %","risk_percent",0.1,3,0.1],["Daily Loss","daily_loss_limit",1,10,0.5],["Weekly DD","weekly_drawdown_limit",5,20,1],["Weekly Target","weekly_profit_target",10,100,5],["Confidence","confidence_threshold",50,95,5],["Min R:R","min_rr_ratio",1,5,0.1]].map(([l,k,mn,mx,st])=>{
-          const v=config[k];const pct=((v-mn)/(mx-mn))*100;return(
-          <div key={k}><div className="flex justify-between text-sm mb-1"><span>{l}</span><span className="font-mono font-bold">{Number.isInteger(v)?v:v.toFixed(1)}</span></div>
-          <input type="range" min={mn} max={mx} step={st} value={v} onChange={e=>u(k,parseFloat(e.target.value))} className="w-full h-1 appearance-none cursor-pointer accent-[hsl(43,74%,49%)]" style={{background:`linear-gradient(to right,hsl(43,74%,49%) ${pct}%,hsl(0,0%,90%) ${pct}%)`}} /></div>
-        );})}
-      </div>
-      <button onClick={save} disabled={saving} data-testid="admin-config-save"
-        className="px-6 py-3 bg-primary text-primary-foreground font-bold text-sm flex items-center gap-2 hover:-translate-y-[1px] transition-transform shadow-[2px_2px_0px_hsl(0,0%,4%)]">
-        <FloppyDisk size={16} weight="bold" /> {saving?"SAVING...":saved?"SAVED!":"SAVE CONFIG"}
-      </button>
+
+      <CardSection title="Parameters">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
+          {[["Risk %","risk_percent",0.1,3,0.1],["Daily loss","daily_loss_limit",1,10,0.5],["Weekly DD","weekly_drawdown_limit",5,20,1],["Weekly target","weekly_profit_target",10,100,5],["Confidence","confidence_threshold",50,95,5],["Min R:R","min_rr_ratio",1,5,0.1]].map(([l, k, mn, mx, st]) => {
+            const v = config[k];
+            const pct = ((v - mn) / (mx - mn)) * 100;
+            return (
+              <div key={k}>
+                <div className="flex justify-between mb-1.5">
+                  <span className="text-[12px] text-white/55">{l}</span>
+                  <span className="font-mono text-[12px] font-bold">{Number.isInteger(v) ? v : v.toFixed(1)}</span>
+                </div>
+                <input type="range" min={mn} max={mx} step={st} value={v} onChange={e => u(k, parseFloat(e.target.value))}
+                  className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-amber-300"
+                  style={{ background: `linear-gradient(to right, #d4af37 ${pct}%, rgba(255,255,255,0.1) ${pct}%)` }} />
+              </div>
+            );
+          })}
+        </div>
+      </CardSection>
+
+      <Btn onClick={save} disabled={saving} data-testid="admin-config-save">
+        <FloppyDisk size={14} weight="bold" /> {saving ? "Saving…" : saved ? "Saved!" : "Save config"}
+      </Btn>
     </div>
   );
 }
 
-// --- TRANSACTIONS TAB ---
+// ─── Transactions ─────────────────────────────────────────────────────────────
 function TransactionsTab({ api, token }) {
   const [txs, setTxs] = useState([]);
-  const h = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
-  useEffect(() => { ax.get(`${api}/admin/transactions`, h).then(r=>setTxs(r.data.transactions||[])).catch((err) => { process.env.NODE_ENV === 'development' && console.error("Failed to load transactions:", err); }); }, [api, h]);
+  const h = useMemo(() => auth(token), [token]);
+  useEffect(() => { ax.get(`${api}/admin/transactions`, h).then(r => setTxs(r.data.transactions || [])).catch(() => {}); }, [api, h]);
 
   return (
-    <div data-testid="admin-transactions-tab">
-      <h3 className="font-heading text-xl font-bold mb-4">Payment Transactions</h3>
-      <div className="border border-border bg-card">
-        <div className="px-5 py-3 border-b border-border bg-muted/30"><span className="text-xs font-bold tracking-[0.15em] text-muted-foreground">{txs.length} TRANSACTIONS</span></div>
-        {txs.length === 0 ? <div className="p-8 text-center text-sm text-muted-foreground">No transactions yet</div> :
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead><tr className="border-b border-border">
-              <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">REF</th>
-              <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">BUYER</th>
-              <th className="text-right px-4 py-2 text-xs font-bold text-muted-foreground">AMOUNT</th>
-              <th className="text-center px-4 py-2 text-xs font-bold text-muted-foreground">STATUS</th>
-              <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">PIN</th>
-              <th className="text-left px-4 py-2 text-xs font-bold text-muted-foreground">DATE</th>
-            </tr></thead>
-            <tbody>{txs.map(t=>(
-              <tr key={t.reference} className="border-b border-border last:border-0">
-                <td className="px-4 py-2 font-mono text-xs">{t.reference}</td>
-                <td className="px-4 py-2"><div className="text-xs">{t.buyer_name}</div><div className="text-xs text-muted-foreground">{t.buyer_email}</div></td>
-                <td className="px-4 py-2 text-right font-mono">₦{(t.amount_kobo/100).toLocaleString()}</td>
-                <td className="px-4 py-2 text-center"><span className={`px-2 py-0.5 text-[10px] font-bold ${t.payment_status==="success"?"bg-[hsl(142,71%,45%)]/10 text-[hsl(142,71%,45%)]":"bg-primary/10 text-primary"}`}>{(t.payment_status||"pending").toUpperCase()}</span></td>
-                <td className="px-4 py-2 font-mono text-xs">{t.pin_generated||"-"}</td>
-                <td className="px-4 py-2 text-xs text-muted-foreground">{t.created_at?.split("T")[0]}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>}
-      </div>
+    <div className="space-y-4" data-testid="admin-transactions-tab">
+      <CardSection title={`Payment transactions · ${txs.length}`}>
+        {txs.length === 0 ? (
+          <p className="py-6 text-center text-[13px] text-white/35">No transactions yet</p>
+        ) : (
+          <div className="overflow-x-auto -m-5">
+            <table className="w-full text-[12px] min-w-[640px]">
+              <thead>
+                <tr className="border-b border-white/[0.06]">
+                  {["Reference","Buyer","Amount","Status","PIN","Date"].map(h => (
+                    <th key={h} className={`px-5 py-2.5 text-[10px] font-bold uppercase tracking-[0.12em] text-white/35 ${h==="Amount" ? "text-right" : h==="Status" ? "text-center" : "text-left"}`}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/[0.04]">
+                {txs.map((t) => (
+                  <tr key={t.reference}>
+                    <td className="px-5 py-3 font-mono text-[11px] text-white/55">{t.reference}</td>
+                    <td className="px-5 py-3"><div>{t.buyer_name}</div><div className="text-white/35">{t.buyer_email}</div></td>
+                    <td className="px-5 py-3 text-right font-mono">₦{(t.amount_kobo / 100).toLocaleString()}</td>
+                    <td className="px-5 py-3 text-center">
+                      <Badge tone={t.payment_status === "success" ? "green" : "amber"}>{(t.payment_status || "pending").toUpperCase()}</Badge>
+                    </td>
+                    <td className="px-5 py-3 font-mono text-[11px]">{t.pin_generated || "—"}</td>
+                    <td className="px-5 py-3 text-white/40">{t.created_at?.split("T")[0]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardSection>
     </div>
   );
 }
 
+// ─── Bot Ops ──────────────────────────────────────────────────────────────────
 function CommandOpsTab({ api, token }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const h = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
+  const h = useMemo(() => auth(token), [token]);
 
-  const fetch = useCallback(async () => {
+  const fetchOps = useCallback(async () => {
     setLoading(true);
-    try {
-      const res = await ax.get(`${api}/admin/command-center/overview`, h);
-      setData(res.data);
-    } catch (err) {
-      process.env.NODE_ENV === "development" && console.error("Command Center overview failed:", err);
-    } finally {
-      setLoading(false);
-    }
+    try { const res = await ax.get(`${api}/admin/command-center/overview`, h); setData(res.data); } catch {} finally { setLoading(false); }
   }, [api, h]);
 
-  useEffect(() => { fetch(); }, [fetch]);
+  useEffect(() => { fetchOps(); }, [fetchOps]);
 
-  if (loading) return <div className="text-center py-12 text-muted-foreground">Loading bot operations...</div>;
-  if (!data) return <div className="text-center py-12 text-muted-foreground">Failed to load bot operations</div>;
+  if (loading) return <div className="py-12 text-center text-white/40 text-sm">Loading bot operations…</div>;
+  if (!data)   return <div className="py-12 text-center text-white/40 text-sm">Failed to load bot operations</div>;
 
-  const bot = data.bot || {};
+  const bot      = data.bot      || {};
   const licenses = data.licenses || {};
   const commands = data.commands || {};
   const activity = data.activity || [];
-  const statusClass = bot.online ? "text-[hsl(142,71%,45%)]" : "text-[hsl(348,83%,47%)]";
+  const online   = bot.online;
 
   return (
-    <div className="space-y-6" data-testid="admin-command-ops-tab">
-      <div className="flex items-start justify-between gap-4">
+    <div className="space-y-5" data-testid="admin-command-ops-tab">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h3 className="font-heading text-xl font-bold">Bot Operations</h3>
-          <p className="text-sm text-muted-foreground mt-1">Licensed bot fleet, heartbeat, command queue, and recent EA activity.</p>
+          <h3 className="text-lg font-semibold">Bot operations</h3>
+          <p className="mt-0.5 text-[13px] text-white/40">Fleet heartbeat, command queue, and recent EA events.</p>
         </div>
-        <button onClick={fetch} className="px-4 py-2 border border-border bg-card text-xs font-bold">REFRESH</button>
+        <Btn variant="ghost" onClick={fetchOps}>Refresh</Btn>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="ACTIVE LICENSES" value={licenses.active || 0} sub={`${licenses.activated || 0} activated`} color="text-primary" />
-        <StatCard label="LINKED MT5 ACCOUNTS" value={licenses.linked_accounts || 0} sub={`${licenses.total || 0} total licenses`} color="text-[hsl(142,71%,45%)]" />
-        <StatCard label="BOT HEARTBEAT" value={bot.online ? "ONLINE" : "OFFLINE"} sub={bot.last_heartbeat ? bot.last_heartbeat.slice(0, 16).replace("T", " ") : "never"} color={statusClass} />
-        <StatCard label="PENDING COMMANDS" value={commands.pending || 0} sub={`${commands.executed || 0} executed | ${commands.failed || 0} failed`} color={commands.failed ? "text-[hsl(348,83%,47%)]" : "text-foreground"} />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard label="Active licenses"      value={licenses.active || 0}           sub={`${licenses.activated || 0} activated`} tone="green" />
+        <StatCard label="Linked MT5 accounts"  value={licenses.linked_accounts || 0}  sub={`${licenses.total || 0} total`} />
+        <StatCard label="Bot heartbeat"        value={online ? "Online" : "Offline"}  sub={bot.last_heartbeat ? bot.last_heartbeat.slice(0, 16).replace("T", " ") : "never"} tone={online ? "green" : "red"} />
+        <StatCard label="Pending commands"     value={commands.pending || 0}           sub={`${commands.executed || 0} executed · ${commands.failed || 0} failed`} tone={commands.failed ? "red" : "neutral"} />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="border border-border bg-card">
-          <div className="px-5 py-3 border-b border-border bg-muted/30">
-            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">LATEST BOT HEARTBEAT</h4>
-          </div>
-          <div className="p-5 grid grid-cols-2 gap-4 text-sm">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <CardSection title="Latest bot heartbeat">
+          <div className="grid grid-cols-2 gap-3 text-[12px]">
             {[
-              ["Status", bot.status || (bot.online ? "ONLINE" : "OFFLINE")],
-              ["EA version", bot.ea_version || "-"],
-              ["Account", bot.account_number || "-"],
-              ["Broker", bot.broker_server || "-"],
-              ["Symbol", `${bot.symbol || "-"} ${bot.timeframe || ""}`.trim()],
-              ["Open positions", bot.open_positions || 0],
-              ["Algo trading", bot.algo_trading ? "Enabled" : "Disabled"],
-              ["Trading allowed", bot.trading_allowed ? "Yes" : "No"],
+              ["Status",         bot.status || (online ? "ONLINE" : "OFFLINE")],
+              ["EA version",     bot.ea_version || "—"],
+              ["Account",        bot.account_number || "—"],
+              ["Broker",         bot.broker_server  || "—"],
+              ["Symbol",         `${bot.symbol || "—"} ${bot.timeframe || ""}`.trim()],
+              ["Open positions", bot.open_positions ?? "—"],
+              ["Algo trading",   bot.algo_trading    ? "Enabled"  : "Disabled"],
+              ["Trading",        bot.trading_allowed ? "Allowed"  : "Not allowed"],
             ].map(([label, value]) => (
-              <div key={label}>
-                <div className="text-[10px] font-bold tracking-[0.15em] text-muted-foreground mb-1">{label.toUpperCase()}</div>
-                <div className="font-mono font-bold break-words">{value}</div>
+              <div key={label} className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2.5">
+                <div className={`${LABEL} mb-1`}>{label}</div>
+                <div className="font-mono text-[12px] font-bold break-words">{value}</div>
               </div>
             ))}
           </div>
-        </div>
+        </CardSection>
 
-        <div className="border border-border bg-card">
-          <div className="px-5 py-3 border-b border-border bg-muted/30">
-            <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">RECENT COMMANDS</h4>
-          </div>
-          <div className="divide-y divide-border max-h-[340px] overflow-y-auto">
+        <CardSection title="Recent commands">
+          <div className="-m-5 divide-y divide-white/[0.05] max-h-[340px] overflow-y-auto">
             {(commands.recent || []).length === 0 ? (
-              <div className="p-8 text-center text-sm text-muted-foreground">No remote commands yet.</div>
-            ) : commands.recent.map((cmd) => (
-              <div key={cmd.id} className="px-5 py-3 text-sm">
+              <p className="p-6 text-center text-[13px] text-white/35">No remote commands yet.</p>
+            ) : (commands.recent || []).map((cmd) => (
+              <div key={cmd.id} className="px-5 py-3">
                 <div className="flex justify-between gap-3">
-                  <div className="font-bold">{cmd.label || cmd.action}</div>
-                  <span className={`font-mono text-xs font-bold ${cmd.status === "FAILED" ? "text-[hsl(348,83%,47%)]" : cmd.status === "EXECUTED" ? "text-[hsl(142,71%,45%)]" : "text-primary"}`}>{cmd.status}</span>
+                  <div className="text-[13px] font-semibold">{cmd.label || cmd.action}</div>
+                  <Badge tone={cmd.status === "EXECUTED" ? "green" : cmd.status === "FAILED" ? "red" : "amber"}>{cmd.status}</Badge>
                 </div>
-                <div className="text-xs text-muted-foreground mt-1">{cmd.user_email || "user"} · {cmd.requested_at?.slice(0, 16).replace("T", " ")}</div>
+                <div className="mt-0.5 text-[11px] text-white/35">{cmd.user_email || "user"} · {cmd.requested_at?.slice(0, 16).replace("T", " ")}</div>
               </div>
             ))}
           </div>
-        </div>
+        </CardSection>
       </div>
 
-      <div className="border border-border bg-card">
-        <div className="px-5 py-3 border-b border-border bg-muted/30">
-          <h4 className="text-xs font-bold tracking-[0.15em] text-muted-foreground">RECENT BOT ACTIVITY</h4>
-        </div>
-        <div className="divide-y divide-border max-h-[420px] overflow-y-auto">
+      <CardSection title="Recent EA activity">
+        <div className="-m-5 divide-y divide-white/[0.05] max-h-[420px] overflow-y-auto">
           {activity.length === 0 ? (
-            <div className="p-8 text-center text-sm text-muted-foreground">No EA activity events yet.</div>
+            <p className="p-6 text-center text-[13px] text-white/35">No EA activity events yet.</p>
           ) : activity.map((event) => (
-            <div key={event.id} className="px-5 py-3 text-sm">
+            <div key={event.id} className="px-5 py-3">
               <div className="flex justify-between gap-3">
-                <div className="font-bold">{event.event_type}</div>
-                <span className="font-mono text-xs text-muted-foreground">{event.severity}</span>
+                <div className="text-[13px] font-semibold">{event.event_type}</div>
+                <Badge tone={["TRADE","COMMAND"].includes(event.severity) ? "green" : ["BLOCK","WARNING"].includes(event.severity) ? "amber" : ["ERROR","CRITICAL"].includes(event.severity) ? "red" : "neutral"}>{event.severity}</Badge>
               </div>
-              <div className="mt-1 text-muted-foreground">{event.message}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{event.account || "account"} · {event.ts?.slice(0, 16).replace("T", " ")}</div>
+              <div className="mt-0.5 text-[12px] text-white/50">{event.message}</div>
+              <div className="mt-0.5 text-[11px] text-white/30">{event.account || "account"} · {event.ts?.slice(0, 16).replace("T", " ")}</div>
             </div>
           ))}
         </div>
-      </div>
+      </CardSection>
     </div>
   );
 }
 
-
-// --- ACCOUNT TAB ---
+// ─── Account ──────────────────────────────────────────────────────────────────
 function AccountTab({ api, token, admin, onLogin, onLogout }) {
   const [newEmail, setNewEmail] = useState(admin?.email || "");
   const [newPassword, setNewPassword] = useState("");
@@ -599,21 +704,19 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
 
   const handleSave = async () => {
     setError(""); setMessage("");
-    if (!currentPassword) { setError("Enter your current password to make changes."); return; }
+    if (!currentPassword) { setError("Enter your current password to confirm changes."); return; }
     if (newPassword && newPassword !== confirmPassword) { setError("New passwords don't match."); return; }
-    if (newPassword && newPassword.length < 6) { setError("New password must be at least 6 characters."); return; }
+    if (newPassword && newPassword.length < 6) { setError("Password must be at least 6 characters."); return; }
     if (!newEmail.includes("@")) { setError("Enter a valid email address."); return; }
-
     setSaving(true);
     try {
       const body = { current_password: currentPassword };
       if (newEmail !== admin?.email) body.new_email = newEmail;
       if (newPassword) body.new_password = newPassword;
-
       const res = await ax.put(`${api}/admin/account`, body, h);
       if (res.data.updated) {
-        setMessage("Account updated successfully! " + (res.data.email !== admin?.email ? "You'll be logged in with the new email." : ""));
-        if (res.data.token) { onLogin(res.data.token); }
+        setMessage("Account updated.");
+        if (res.data.token) onLogin(res.data.token);
         setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
       } else {
         setMessage("No changes to save.");
@@ -625,78 +728,65 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
   };
 
   return (
-    <div className="max-w-xl" data-testid="admin-account-tab">
-      <h3 className="font-heading text-xl font-bold mb-6">Admin Account</h3>
-
-      <div className="border border-border bg-card p-6 space-y-5">
-        {/* Current info */}
-        <div className="pb-4 border-b border-border">
-          <div className="flex items-center gap-3 mb-1">
-            <UserCircle size={32} weight="duotone" className="text-primary" />
+    <div className="max-w-md space-y-5" data-testid="admin-account-tab">
+      <CardSection title="Admin account">
+        <div className="space-y-5">
+          <div className="flex items-center gap-3 pb-4 border-b border-white/[0.06]">
+            <UserCircle size={30} weight="duotone" className="text-amber-200" />
             <div>
-              <div className="font-bold text-sm">{admin?.name || "Admin"}</div>
-              <div className="text-xs text-muted-foreground">{admin?.email}</div>
+              <div className="text-[14px] font-semibold">{admin?.name || "Admin"}</div>
+              <div className="text-[12px] text-white/40">{admin?.email}</div>
+              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.3.6</div>
             </div>
           </div>
-          <div className="mt-2 text-xs text-muted-foreground">Role: <span className="font-mono font-bold text-primary">ADMIN</span></div>
-        </div>
 
-        {/* Change Email */}
-        <div>
-          <label className="text-sm font-medium block mb-1.5">Email Address</label>
-          <div className="relative">
-            <Envelope size={16} className="absolute left-3 top-3 text-muted-foreground" />
-            <input data-testid="account-email" type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)}
-              className="w-full pl-10 pr-3 py-2.5 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+          <Field label="Email address">
+            <div className="relative">
+              <Envelope size={13} className="absolute left-3 top-3 text-white/30" />
+              <Input data-testid="account-email" type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)} className="pl-9" />
+            </div>
+          </Field>
+
+          <Field label={<span>New password <span className="text-white/30 font-normal">(leave blank to keep)</span></span>}>
+            <div className="relative">
+              <Lock size={13} className="absolute left-3 top-3 text-white/30" />
+              <Input data-testid="account-new-password" type={showNew ? "text" : "password"} value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="New password" className="pl-9 pr-9" />
+              <button type="button" onClick={() => setShowNew(!showNew)} className="absolute right-3 top-3 text-white/30 hover:text-white/60">{showNew ? <EyeSlash size={13} /> : <Eye size={13} />}</button>
+            </div>
+          </Field>
+
+          {newPassword && (
+            <Field label="Confirm new password">
+              <Input data-testid="account-confirm-password" type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="Re-enter new password" />
+              {newPassword && confirmPassword && newPassword !== confirmPassword && (
+                <p className="mt-1 text-[11px] text-red-300">Passwords don't match</p>
+              )}
+            </Field>
+          )}
+
+          <div className="pt-4 border-t border-white/[0.06]">
+            <Field label={<span>Current password <span className="text-red-400">*</span></span>}>
+              <p className="mb-1.5 text-[11px] text-white/35">Required to confirm any changes</p>
+              <div className="relative">
+                <Lock size={13} className="absolute left-3 top-3 text-white/30" />
+                <Input data-testid="account-current-password" type={showCurrent ? "text" : "password"} value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} placeholder="Current password" className="pl-9 pr-9" />
+                <button type="button" onClick={() => setShowCurrent(!showCurrent)} className="absolute right-3 top-3 text-white/30 hover:text-white/60">{showCurrent ? <EyeSlash size={13} /> : <Eye size={13} />}</button>
+              </div>
+            </Field>
           </div>
+
+          {error   && <p className="text-[12px] text-red-300"     data-testid="account-error">{error}</p>}
+          {message && <p className="text-[12px] text-emerald-400" data-testid="account-success">{message}</p>}
+
+          <Btn onClick={handleSave} disabled={saving} className="w-full" data-testid="account-save-btn">
+            <FloppyDisk size={13} weight="bold" /> {saving ? "Updating…" : "Update account"}
+          </Btn>
+
+          <Btn variant="danger" onClick={onLogout} className="w-full">
+            <SignOut size={13} /> Log out
+          </Btn>
         </div>
-
-        {/* Change Password */}
-        <div>
-          <label className="text-sm font-medium block mb-1.5">New Password <span className="text-muted-foreground font-normal">(leave blank to keep current)</span></label>
-          <div className="relative">
-            <Lock size={16} className="absolute left-3 top-3 text-muted-foreground" />
-            <input data-testid="account-new-password" type={showNew ? "text" : "password"} value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="New password (optional)"
-              className="w-full pl-10 pr-10 py-2.5 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
-            <button type="button" onClick={() => setShowNew(!showNew)} className="absolute right-3 top-3 text-muted-foreground">
-              {showNew ? <EyeSlash size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-        </div>
-
-        {newPassword && (
-          <div>
-            <label className="text-sm font-medium block mb-1.5">Confirm New Password</label>
-            <input data-testid="account-confirm-password" type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="Re-enter new password"
-              className="w-full px-3 py-2.5 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
-            {newPassword && confirmPassword && newPassword !== confirmPassword && (
-              <p className="text-xs text-[hsl(348,83%,47%)] mt-1">Passwords don't match</p>
-            )}
-          </div>
-        )}
-
-        {/* Current Password (required) */}
-        <div className="pt-4 border-t border-border">
-          <label className="text-sm font-bold block mb-1.5 text-foreground">Current Password <span className="text-[hsl(348,83%,47%)]">*</span></label>
-          <p className="text-xs text-muted-foreground mb-2">Required to confirm any changes</p>
-          <div className="relative">
-            <Lock size={16} className="absolute left-3 top-3 text-muted-foreground" />
-            <input data-testid="account-current-password" type={showCurrent ? "text" : "password"} value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} placeholder="Enter current password"
-              className="w-full pl-10 pr-10 py-2.5 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
-            <button type="button" onClick={() => setShowCurrent(!showCurrent)} className="absolute right-3 top-3 text-muted-foreground">
-              {showCurrent ? <EyeSlash size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-        </div>
-
-        {error && <div className="text-[hsl(348,83%,47%)] text-sm font-medium" data-testid="account-error">{error}</div>}
-        {message && <div className="text-[hsl(142,71%,45%)] text-sm font-medium" data-testid="account-success">{message}</div>}
-
-        <button onClick={handleSave} disabled={saving} data-testid="account-save-btn"
-          className="w-full py-3 bg-primary text-primary-foreground font-bold text-sm flex items-center justify-center gap-2 hover:-translate-y-[1px] transition-transform shadow-[2px_2px_0px_hsl(0,0%,4%)]">
-          <FloppyDisk size={16} weight="bold" /> {saving ? "UPDATING..." : "UPDATE ACCOUNT"}
-        </button>
-      </div>
+      </CardSection>
     </div>
   );
 }
