@@ -4863,6 +4863,10 @@ async def cloud_agent_heartbeat(req: WorkerHeartbeatReq, request: Request):
 
 app.include_router(api_router)
 
+# Root-level health check for load balancers and Cloud Run (hits /health, not /api/health)
+@app.get("/health")
+async def root_health():
+    return {"status": "ok"}
 
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','), allow_methods=["*"], allow_headers=["*"])
 
