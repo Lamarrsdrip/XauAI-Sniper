@@ -1,69 +1,66 @@
 import React, { useState } from "react";
-import { MagnifyingGlass, Brain, Strategy, Gauge, Crosshair, ShieldCheck, Lightbulb, Target, CaretDown, CaretUp } from "@phosphor-icons/react";
+import { CaretDown, CaretUp } from "@phosphor-icons/react";
 
-const ICONS = [MagnifyingGlass, Brain, Strategy, Gauge, Crosshair, ShieldCheck, Lightbulb, Target];
+const FAQ = [
+  {
+    q: "Which broker is supported?",
+    a: "Trade.com is our official partner and recommended broker. The EA works on any MT5 broker that supports XAUUSD with a 5-digit quote.",
+  },
+  {
+    q: "Does it work on funded accounts?",
+    a: "Yes. The risk engine respects prop firm rules — drawdown limits, daily loss limits, and consistency targets are all configurable.",
+  },
+  {
+    q: "Can I use my own VPS?",
+    a: "Yes. Any Windows VPS with MT5 installed works. We recommend a VPS close to your broker's server for the lowest latency.",
+  },
+  {
+    q: "Is support included?",
+    a: "All license holders get WhatsApp support and free remote VPS activation. We'll help you set everything up.",
+  },
+  {
+    q: "When will I receive my license?",
+    a: "Your unique PIN is generated and emailed instantly after payment is confirmed — usually within 60 seconds.",
+  },
+];
 
-export default function HowItWorksSection({ data }) {
-  const [expandedStep, setExpandedStep] = useState(null);
-  const [expandedFaq, setExpandedFaq] = useState(null);
-  if (!data) return null;
-  const section = data.sections?.[0];
-  if (!section) return null;
+export default function HowItWorksSection() {
+  const [open, setOpen] = useState(null);
 
   return (
-    <div className="border-t border-gray-100" data-testid="how-it-works-section">
-      <div className="max-w-7xl mx-auto px-6 md:px-12 py-24">
-        <div className="mb-12">
-          <span className="text-[10px] font-mono font-medium tracking-[0.2em] text-gray-400 bg-gray-100 border border-gray-200 px-3 py-1.5 rounded-full"><Lightbulb size={12} weight="duotone" className="inline mr-1 text-[#C5A059]" />COMPLETE GUIDE</span>
-          <h2 className="font-heading text-3xl sm:text-4xl font-semibold tracking-tight mt-6 text-[#111]" data-testid="how-it-works-title">{section.title}</h2>
-          <p className="text-gray-500 mt-2 max-w-2xl">{section.subtitle}</p>
+    <div className="bg-[#060609] border-t border-white/[0.06] text-white" data-testid="how-it-works-section">
+      <div className="mx-auto max-w-3xl px-4 py-20 md:px-8 md:py-28">
+
+        <div className="mb-10">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
+            FAQ
+          </span>
+          <h2 className="mt-4 font-heading text-3xl font-semibold tracking-tight sm:text-4xl" data-testid="how-it-works-title">
+            Common questions.
+          </h2>
         </div>
 
-        <div className="space-y-3 mb-16">
-          {section.steps?.map((step, i) => {
-            const Icon = ICONS[i] || Lightbulb;
-            const open = expandedStep === i;
-            return (
-              <div key={step.id} className="bg-white border border-gray-200 rounded-2xl overflow-hidden card-hover" data-testid={`how-step-${step.id}`}>
-                <button className="w-full text-left px-6 py-5 flex items-start gap-4" onClick={() => setExpandedStep(open ? null : i)} data-testid={`how-step-btn-${step.id}`}>
-                  <div className="w-10 h-10 bg-[#C5A059]/10 border border-[#C5A059]/20 rounded-xl flex items-center justify-center flex-shrink-0">
-                    <Icon size={18} weight="duotone" className="text-[#C5A059]" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <span className="font-mono text-[10px] font-bold text-[#C5A059] tracking-[0.15em]">STEP {String(step.id).padStart(2, "0")}</span>
-                    <h4 className="font-heading text-base font-medium text-[#111] mt-1">{step.title}</h4>
-                    <p className="text-sm text-gray-400 mt-1">{step.description}</p>
-                  </div>
-                  {open ? <CaretUp size={14} className="text-gray-300 mt-2" /> : <CaretDown size={14} className="text-gray-300 mt-2" />}
-                </button>
-                {open && (
-                  <div className="px-6 pb-5 ml-14" data-testid={`how-step-detail-${step.id}`}>
-                    <div className="border-l-2 border-[#C5A059]/30 pl-4 py-2">
-                      <p className="text-sm text-gray-500 leading-relaxed">{step.detail}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {data.faq && (
-          <div data-testid="faq-section">
-            <h3 className="font-heading text-xl font-medium text-[#111] mb-6">FAQ</h3>
-            <div className="space-y-2">
-              {data.faq.map((item, i) => (
-                <div key={`faq-${item.q}`} className="bg-white border border-gray-200 rounded-2xl" data-testid={`faq-${i}`}>
-                  <button className="w-full text-left px-5 py-4 flex items-center justify-between" onClick={() => setExpandedFaq(expandedFaq === i ? null : i)} data-testid={`faq-btn-${i}`}>
-                    <span className="text-sm font-medium text-[#111]">{item.q}</span>
-                    {expandedFaq === i ? <CaretUp size={14} className="text-gray-300" /> : <CaretDown size={14} className="text-gray-300" />}
-                  </button>
-                  {expandedFaq === i && <div className="px-5 pb-4"><p className="text-sm text-gray-500 leading-relaxed">{item.a}</p></div>}
+        <div className="space-y-2" data-testid="faq-section">
+          {FAQ.map((item, i) => (
+            <div key={item.q} className="rounded-2xl border border-white/[0.08] bg-white/[0.03]" data-testid={`faq-${i}`}>
+              <button
+                className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+                onClick={() => setOpen(open === i ? null : i)}
+                data-testid={`faq-btn-${i}`}>
+                <span className="text-[15px] font-medium text-white/85">{item.q}</span>
+                {open === i
+                  ? <CaretUp size={14} className="flex-none text-white/30" />
+                  : <CaretDown size={14} className="flex-none text-white/30" />}
+              </button>
+              {open === i && (
+                <div className="px-5 pb-5">
+                  <p className="text-[13px] leading-6 text-white/50">{item.a}</p>
                 </div>
-              ))}
+              )}
             </div>
-          </div>
-        )}
+          ))}
+        </div>
+
       </div>
     </div>
   );
