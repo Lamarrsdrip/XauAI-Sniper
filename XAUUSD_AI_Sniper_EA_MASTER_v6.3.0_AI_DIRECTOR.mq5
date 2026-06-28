@@ -602,7 +602,7 @@ input int    InpMaxOpenTrades  = 3;        // Max open positions
 input int    InpMaxTradesPerDay= 15;       // v5.8.2 — reduce overtrading after choppy loss windows
 input bool   InpAdaptiveDailyCap = true;   // v5.8.8: strong trend days can trade more; weak days trade less
 input int    InpMaxTradesStrongDay = 24;   // v5.8.8: adaptive cap ceiling during clean trend/breakout sessions
-input double InpWeeklyTarget   = 100.0;    // v5.8.4 demo: weekly ROI target 100%
+input double InpWeeklyTarget   = 500.0;    // v6.3.2: raised 100→500 — CarefulMode lot-halving was crushing lots on any good week, preventing compounding
 input double InpWeeklyMaxLoss  = 0.0;      // v5.8.4 demo: disabled
 input bool   InpCarefulMode    = true;     // Scale down near target
 input bool   InpAccountSizeBoost = true;   // v5.8.8: lets larger accounts use slightly stronger risk, still capped
@@ -654,7 +654,7 @@ input bool   InpAdaptiveGradeB = false;    // v5.1.6: DEFAULT OFF — was perman
 input double InpAdaptiveGradeBMax = 3.0;   // when adaptive on: max tightening cap
 input int    InpStaleStreakHours = 6;      // when adaptive on: forget tightening after N hours of no trades
 input int    InpTradeCooldown  = 300;      // Seconds between trades after a close (default 300)
-input int    InpReversalCooldown = 600;    // Extra seconds required to flip direction (default 600)
+input int    InpReversalCooldown = 300;    // v6.3.2: reduced 600→300 — 10min blocked V-reversals on M5 gold (2 full bars); 5min is enough
 input int    InpProfitTakeMin  = 150;      // Start scanning for quick exit (USD, default 150)
 input int    InpProfitTakeMax  = 500;      // Auto-close at this profit (USD, default 500)
 input int    InpQuickExitMin   = 18;       // Auto-close minutes threshold (default 18)
@@ -671,7 +671,7 @@ input group "=== SMART FILTERS ==="
 input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
 input int    InpDXYRefreshSec  = 900;      // Refresh DXY every N seconds (15min)
 input bool   InpDrawdownMode   = true;     // Auto-reduce risk after losing streak
-input int    InpDrawdownLosses = 3;        // # losses in a day that trigger recovery
+input int    InpDrawdownLosses = 5;        // v6.3.2: raised 3→5 — 3 micro-losses were triggering half-risk mode all day
 input double InpDrawdownRisk   = 0.5;      // Risk % during recovery mode (default 0.5)
 input int    InpStreakCooldownLosses = 2;  // # losses in short window = pause
 input int    InpStreakWindowSec = 2700;    // Window for loss-streak detection (45min)
@@ -966,7 +966,7 @@ input bool   InpOneDirectionOnly          = true;  // v5.8.5: block opposite-dir
 input bool   InpBlockNewEntriesIfHedged   = true;  // v5.8.5: if account is already mixed BUY+SELL, pause fresh entries
 input bool   InpSmartGuardSkipBTrendBreak = true;  // v5.8.7: adaptive B-grade guard for TREND_PULLBACK/BREAKOUT
 input bool   InpSmartGuardRequireHTF      = true;  // Use adaptive XAU confirmation for TREND_PULLBACK/BREAKOUT
-input bool   InpSmartGuardNoDamageStack   = true;  // Do not open fresh damage-prone setup while another position is open
+input bool   InpSmartGuardNoDamageStack   = false; // v6.3.2: OFF — was killing all re-entries during active positions; SmartGuard lot reduction already handles damage-setup risk
 input double InpSmartGuardDamageLotMulti  = 0.75;  // v5.8.55 softer cut; protects damage setups without making A/A+ too timid
 input int    InpSmartGuardMinHardSamples  = 30;    // Need this many same-setup live patterns before hard expectancy veto
 input double InpSmartGuardHardExpectancy  = -150.0;// Hard-veto only when decayed avg P/L/trade is worse than this
@@ -1045,7 +1045,7 @@ input bool   InpSTI_Log                 = true;   // Print STI decisions and sco
 input double InpSTI_LateEntryMaxEMADist = 3.0;    // H4 EMA50 distance (in H4 ATR) = late territory
 input double InpSTI_LateEntryMaxMoveATR = 9.0;    // Consecutive M5 run in ATR multiples = late
 input double InpSTI_LateEntryBlockScore = 82.0;   // Late risk >= this = hard block (extreme only)
-input double InpSTI_LateEntryReduceScore= 58.0;   // Late risk >= this = lot reduction (x0.65)
+input double InpSTI_LateEntryReduceScore= 68.0;   // v6.3.2: raised 58→68 — at 58 two mild signals triggered 0.65x reduce, stacking to sub-minLot on Asia B-grade
 // Exhaustion Detection — RSI divergence + ATR contraction must agree
 input double InpSTI_ExhaustionBlock     = 80.0;   // Exhaustion >= this AND tcp < 60 = hard block
 input double InpSTI_ExhaustionReduce    = 62.0;   // Exhaustion >= this = lot reduction (x0.75)
@@ -1053,9 +1053,9 @@ input double InpSTI_ExhaustionReduce    = 62.0;   // Exhaustion >= this = lot re
 input double InpSTI_TCPContinueMinimum  = 62.0;   // TCP >= this: skip stagnant/stale close on profitable trade
 // Re-entry intelligence — after TP, wait for clean pullback before same-direction re-entry
 input bool   InpSTI_BlockLateReentry    = true;   // After TP, require pullback before same-dir re-entry
-input double InpSTI_ReentryPullbackATR  = 1.20;   // Pullback size (M5 ATR) required to unlock re-entry
+input double InpSTI_ReentryPullbackATR  = 0.60;   // v6.3.2: reduced 1.20→0.60 — 1.2 ATR was too deep, missed most real trend re-entries
 input int    InpSTI_ReentryMinWaitMin   = 20;     // Minutes to wait after TP before watching for pullback
-input int    InpSTI_ReentryMaxWindowMin = 90;     // After this many minutes post-TP the re-entry gate expires
+input int    InpSTI_ReentryMaxWindowMin = 30;     // v6.3.2: reduced 90→30 min — 90 min was blocking 5+ re-entries per trend day
 
 //+------------------------------------------------------------------+
 //| ENUMS                                                            |
@@ -3428,7 +3428,9 @@ bool BasketDirectionLossBlock(int dir, string &reason)
    if(!InpBasketDirLossBlock || dir == 0) return false;
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    if(balance <= 0) return false;
-   double threshold = -balance * InpBasketDirLossBlockPct / 100.0;
+   // v6.3.2 FIX: enforce $200 minimum so the block never fires from normal spread+noise
+   // float on small accounts (e.g. 2% of $3k = $60 — one open position in mild drawdown).
+   double threshold = -MathMax(balance * InpBasketDirLossBlockPct / 100.0, 200.0);
    double dirFloat  = 0.0;
    int    dirCount  = 0;
    for(int i = 0; i < PositionsTotal(); i++)
@@ -3590,7 +3592,7 @@ void UpdateDrawdownState(bool wasLoss)
       RecomputeAutoScale();      // re-scale thresholds to current balance
    }
    if(wasLoss) todayLossCount++;
-   else if(todayLossCount > 0) todayLossCount--;   // a win reduces recent-loss stress
+   else todayLossCount = 0;   // v6.3.2: single win fully resets loss counter (was -1 per win, stuck bot in recovery mode after 3L+1W)
    if(InpDrawdownMode)
    {
       bool newState = (todayLossCount >= InpDrawdownLosses);
@@ -4006,8 +4008,10 @@ double GetSessionQuality()
 {
    MqlDateTime dt; TimeCurrent(dt);
    int h = dt.hour;
-   // London fix windows (special regime)
-   if((h == 10 && dt.min >= 20) || (h == 15 && dt.min <= 10)) return 0.65;
+   // v6.3.2: London fix windows — RAISED 0.65→0.85. The 10:00 and 15:00 London fix
+   // are high-liquidity directional events. Scoring them 0.65 was suppressing valid
+   // LONDON_FIX_PIN setups below the B-grade (3.0) combined threshold.
+   if((h == 10 && dt.min >= 20) || (h == 15 && dt.min <= 10)) return 0.85;
    // NY overlap 13-17 UTC
    if(h >= 13 && h < 17) return 1.00;
    // London 07-12 UTC
@@ -6925,23 +6929,21 @@ void OnTick()
             // AI confirms same direction — apply conviction sizing
             if(InpConvictionSizing && lastAIConfidence > 0)
             {
-               // v6.3.1 FIX: unified threshold — use InpAIDirectorMinConf (55%) for both
-               // confirms and disagrees paths. InpMinAIConfidence (60%) was a hidden second
-               // threshold that blocked valid setups where AI agreed at 56-59%.
+               // v6.3.2 FIX: when AI CONFIRMS direction with low confidence — NEVER block.
+               // AI agreement at any confidence level means reduce, not veto.
+               // Blocking a structurally sound setup because AI is 52% sure is backwards.
                if(lastAIConfidence < InpAIDirectorMinConf)
                {
-                  aiVerdictStr = "BLOCK";
-                  string blockMsg = StringFormat(
-                     "AI DIRECTOR BLOCK: confirms direction but confidence %d%% < min %.0f%%.",
-                     lastAIConfidence, InpAIDirectorMinConf);
-                  Print("AI DIRECTOR: BLOCK LOW-CONV — ", blockMsg);
-                  XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
-                  UpdateDashboard(0, combinedScore, "LOW-CONV");
-                  lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "LOW-CONV";
-                  g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
-                  Print("══════════════════════════════════════════════════");
-                  return;
+                  aiVerdictStr = "ALLOW_LOW_CONV";
+                  sizeMulti *= InpConvictionLowMulti; // 0.70x mild reduce
+                  Print("AI DIRECTOR: LOW-CONV CONFIRM — AI agrees at ", lastAIConfidence,
+                        "% < min ", InpAIDirectorMinConf, "% | lot x", DoubleToString(InpConvictionLowMulti, 2),
+                        " — NOT blocking (AI confirmed direction, just mild size-reduce)");
+                  g_aiLastVerdict = "ALLOW_LOW_CONV"; g_aiLastConfidence = lastAIConfidence;
+                  if(StringLen(lastAIBearishCase) > 0) Print("Devil's Advocate: ", lastAIBearishCase);
                }
+               else
+               {
                double convMult;
                if(lastAIConfidence >= InpHighAIConfidence)
                {
@@ -6968,6 +6970,7 @@ void OnTick()
                Print("AI DIRECTOR: ALLOW — AI confirms ", signal > 0 ? "BUY" : "SELL",
                      " at ", lastAIConfidence, "% confidence");
             }
+            } // close else (conviction sizing block, opened in LOW-CONV fix above)
             g_aiLastVerdict = aiVerdictStr; g_aiLastConfidence = lastAIConfidence;
             if(StringLen(lastAIBearishCase) > 0)
                Print("Devil's Advocate: ", lastAIBearishCase);
@@ -7587,11 +7590,13 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    {
       bool cleanHighGrade = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
       bool trendContinuation = IsTrendContinuationRegime(signal);
-      double asianMult = 0.40;
+      // v6.3.2: raised Asia floor 0.40→0.55 — 0.40× on B-grade was compounding to
+      // sub-minLot on small accounts (grade B 0.45 × asia 0.40 = 0.18× = $6 risk = 0-lot)
+      double asianMult = 0.55;
       if(trendContinuation && cleanHighGrade && !entryQualityScout)
-         asianMult = g_propFirmMode ? 0.55 : 0.68;
+         asianMult = g_propFirmMode ? 0.65 : 0.80;
       else if(trendContinuation && !entryQualityScout)
-         asianMult = g_propFirmMode ? 0.45 : 0.55;
+         asianMult = g_propFirmMode ? 0.55 : 0.65;
       sessionMult = asianMult;
       riskPct *= asianMult; // v5.8.54: do not crush clean A/A+ continuation trades on small non-prop accounts.
    }
@@ -7666,17 +7671,21 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double brokerLimitedLots = MathMin(maxLot, lots);
    if(brokerLimitedLots < minLot)
    {
-      Print("LOT-CALC SKIP: balance=$", DoubleToString(balance,2),
-            " equity=$", DoubleToString(equityForSizing,2),
-            " finalRisk=", DoubleToString(riskPct,2), "%",
-            " riskUSD=$", DoubleToString(riskAmount,2),
-            " slDist=", DoubleToString(slDist,2),
-            " sl$/lot=$", DoubleToString(slDollarPerLotRaw,2),
-            " rawLots=", DoubleToString(rawLots,4),
-            " roundedLots=", DoubleToString(lots,4),
-            " brokerMin=", DoubleToString(minLot,4),
-            " reason=calculated size below broker minimum; skipped instead of over-risking.");
-      return;
+      // v6.3.2 FIX: if rawLots > 0 the setup is real — multiplier stacking (grade, AI,
+      // session, EPF, STI, pattern) compressed the size below broker minimum. Clamp to
+      // minLot rather than silently skip. A minLot trade is better than no trade.
+      if(rawLots > 0)
+      {
+         Print("LOT-CALC FLOOR: stacked multipliers compressed lots to ", DoubleToString(brokerLimitedLots,4),
+               " (below minLot=", DoubleToString(minLot,4), ") — clamping to minLot to keep valid signal alive.");
+         lots = minLot;
+      }
+      else
+      {
+         Print("LOT-CALC SKIP: zero rawLots — riskAmt=$", DoubleToString(riskAmount,2),
+               " slDist=", DoubleToString(slDist,2), " sl$/lot=$", DoubleToString(slDollarPerLotRaw,2));
+         return;
+      }
    }
    lots = brokerLimitedLots;
    double beforeInpMaxLots = lots;
@@ -13352,9 +13361,13 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
    if(htf == -1 && signal == +1 && !isAPlusOuter)
       return "PG HTF lock (M30 strong DOWN — buys blocked, A+ only would pass)";
 
-   // 5. Tier 2 — A+ only (block B/C grades regardless of trend)
-   if(tier >= 2 && !isAPlusOuter)
-      return "PG tier2 (>=50% daily gain — A+ setups only)";
+   // 5. Tier 2 — v6.3.2: allow A AND A+ through (only block B-grade at Tier 2).
+   // A-grade setups (score 4.0-5.4) scored through every structural gate and deserve
+   // to run on good days — blocking them at Tier 2 was capping earning on the bot's
+   // best days.
+   bool isAOuter = (grade == "A" || isAPlusOuter);
+   if(tier >= 2 && !isAOuter)
+      return "PG tier2 (>=50% daily gain — A/A+ pass, B-grade blocked)";
 
    // Log tier transitions once
    if(tier != pg_lastReportedTier)
