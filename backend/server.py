@@ -1986,6 +1986,66 @@ async def ai_feedback_stats():
         return {"error": str(e)}
 
 ########################################
+# v6.4.0 — CONFIDENCE CALIBRATION ENDPOINT
+########################################
+@api_router.get("/ai/calibration")
+async def ai_calibration():
+    """Compute calibration curve from ai_feedback_log.jsonl.
+    Returns a multiplier per confidence band so the EA can adjust its threshold.
+    Minimum 10 samples per band required for a non-unity multiplier."""
+    import json as _cjson
+    feedback_path = ROOT_DIR / "ai_feedback_log.jsonl"
+    if not feedback_path.exists():
+        return {"calibrated": False, "multipliers": {}, "sample_counts": {}, "message": "insufficient data"}
+
+    bands = {"0-49": [], "50-64": [], "65-79": [], "80-100": []}
+    try:
+        with open(feedback_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = _cjson.loads(line)
+                    conf = int(r.get("ai_confidence", 0))
+                    correct = r.get("outcome") in ["CORRECT", "CONSERVATIVE_CORRECT"]
+                    if conf < 50:   bands["0-49"].append(correct)
+                    elif conf < 65: bands["50-64"].append(correct)
+                    elif conf < 80: bands["65-79"].append(correct)
+                    else:           bands["80-100"].append(correct)
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.error(f"Calibration read error: {e}")
+        return {"calibrated": False, "multipliers": {}, "sample_counts": {}, "message": str(e)}
+
+    mid_map = {"0-49": 25, "50-64": 57, "65-79": 72, "80-100": 88}
+    result = {"calibrated": True, "multipliers": {}, "sample_counts": {}}
+    any_calibrated = False
+    for band, outcomes in bands.items():
+        n = len(outcomes)
+        result["sample_counts"][band] = n
+        if n >= 10:
+            actual_wr = sum(outcomes) / n
+            claimed_wr = mid_map[band] / 100.0
+            calibration_ratio = actual_wr / claimed_wr if claimed_wr > 0 else 1.0
+            # Cap adjustment: max 30% correction either direction
+            calibration_ratio = max(0.70, min(1.30, calibration_ratio))
+            result["multipliers"][band] = round(calibration_ratio, 3)
+            any_calibrated = True
+        else:
+            result["multipliers"][band] = 1.0  # not enough data, no adjustment
+
+    if not any_calibrated:
+        result["calibrated"] = False
+        result["message"] = "insufficient data (need >= 10 samples per band)"
+    else:
+        result["message"] = "ok"
+
+    logger.info(f"AI_CALIBRATION served: {result['multipliers']}")
+    return result
+
+########################################
 # NEWS AVOIDANCE
 ########################################
 @api_router.get("/news/check")

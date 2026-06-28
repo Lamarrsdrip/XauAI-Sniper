@@ -1,10 +1,29 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.3.9 — Verification & Hardening: TradeBrain audit, ATR-adaptive|
-//|            profit lock, smart growth safety overrides, gate file   |
-//|            reports, forward-test report mode                       |
+//|   v6.4.0 — Market Personality Engine, per-strategy adaptive       |
+//|            weights, confidence calibration, decision scorecard     |
 //+------------------------------------------------------------------+
+// v6.4.0 CHANGES (2026-06-28):
+//   1. MARKET PERSONALITY ENGINE: ClassifyMarketPersonality() classifies
+//      every bar into one of 8 personalities (MKT_STRONG_TREND through
+//      MKT_HIGH_VOLATILITY) using ATR, ADX-proxy, RSI, BB data.
+//      StrategyFitsPersonality() gates mismatched strategy+personality
+//      pairs: A+ always passes, lower grades blocked if poor fit.
+//      Global g_marketPersonality updated at the start of each bar scan.
+//   2. PER-STRATEGY ADAPTIVE WEIGHTS: g_stratWeight[10] array adjusts
+//      raw ScoreSetups() scores by each strategy's historical expectancy.
+//      Min 8 trades before adjusting; EMA-smoothed; range 0.70–1.20.
+//      Weights persisted to XAUAI_StratWeights_v1.csv.
+//      StratNameToIndex() maps strategy name→1-9 index.
+//   3. CONFIDENCE CALIBRATION: /api/ai/calibration endpoint (server.py)
+//      computes actual vs claimed win rates per confidence band.
+//      EA fetches on startup, applies CalibratedConfidence() to adjust
+//      raw AI confidence before threshold comparisons.
+//      Graceful fallback: if no data, raw confidence used unchanged.
+//   4. DECISION SCORECARD: WriteDecisionScorecard() logs every entry
+//      evaluation (open AND blocked) to a daily .txt file with all
+//      scored components for review and diagnostics.
 // v6.3.9 CHANGES (2026-06-28):
 //   1. TRADEBRAIN TYPO FIX: all Print() log strings corrected TRADEBBRAIN→TRADEBRAIN.
 //   2. GetPerformanceMultiplier() SAFETY OVERRIDES (5 new guards):
@@ -295,8 +314,8 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.3.9"
-#property description "XAUUSD AI Sniper v6.3.9 — TradeBrain audit, ATR-adaptive profit lock, smart growth safety overrides, gate file reports, forward-test report mode"
+#property version   "6.4.0"
+#property description "XAUUSD AI Sniper v6.4.0 — Market Personality Engine, adaptive strategy weights, confidence calibration, decision scorecard"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
@@ -1621,6 +1640,41 @@ int    g_ftReport_StratLosses[20];
 int    g_ftReport_StratCount  = 0;
 // 23:59 daily write guard
 int    g_ftReport_LastWriteDay = -1;
+
+// ====================================================================
+// v6.4.0 UPGRADE 1 — Market Personality Engine
+// ====================================================================
+enum ENUM_MARKET_PERSONALITY
+{
+   MKT_STRONG_TREND     = 0,   // ADX proxy > 35, consistent directional movement
+   MKT_WEAK_TREND       = 1,   // ADX proxy 20-35, directional but weak
+   MKT_RANGE            = 2,   // ADX proxy < 20, price oscillating between S/R
+   MKT_COMPRESSION      = 3,   // ATR well below 20-bar average, BB squeeze
+   MKT_EXPANSION        = 4,   // ATR > 1.5x 20-bar average, volatility expanding
+   MKT_MOMENTUM_CONT    = 5,   // Strong move + RSI not yet extreme, continuation likely
+   MKT_REVERSAL_ENV     = 6,   // RSI extreme + price near recent swing extreme
+   MKT_HIGH_VOLATILITY  = 7,   // ATR > 2x 20-bar average (news/spike conditions)
+};
+ENUM_MARKET_PERSONALITY g_marketPersonality = MKT_RANGE;
+
+// ====================================================================
+// v6.4.0 UPGRADE 2 — Per-Strategy Adaptive Weights
+// ====================================================================
+// Indexed 0..9; index 0 unused; 1-9 map to strategy types
+double g_stratWeight[10];   // initialized to 1.0 in OnInit; range 0.70-1.20
+int    g_stratWins[10];
+int    g_stratLosses[10];
+double g_stratTotalR[10];   // sum of R multiples per strategy
+int    g_stratCount[10];    // total trades per strategy
+
+// ====================================================================
+// v6.4.0 UPGRADE 3 — Confidence Calibration
+// ====================================================================
+double g_calibration_0_49   = 1.0;
+double g_calibration_50_64  = 1.0;
+double g_calibration_65_79  = 1.0;
+double g_calibration_80_100 = 1.0;
+bool   g_calibrationLoaded  = false;
 
 // Re-entry safety counters
 int        todayReEntryCount = 0;
@@ -3047,6 +3101,17 @@ int OnInit()
    g_drawdownPause       = false;
    g_perfMultLast        = 1.0;
    g_dailyProfitLockArmed = false;
+   // v6.4.0 UPGRADE 2: initialize strategy weight arrays (1.0 default)
+   for(int si = 0; si <= 9; si++)
+   {
+      g_stratWeight[si]  = 1.0;
+      g_stratWins[si]    = 0;
+      g_stratLosses[si]  = 0;
+      g_stratTotalR[si]  = 0.0;
+      g_stratCount[si]   = 0;
+   }
+   LoadStratWeights();  // override with persisted values if file exists
+
    // v6.3.8 Upgrade 6: initialize gate analytics timer
    g_gateReportLast = TimeCurrent();
    // v6.3.9: initialize forward-test report globals
@@ -3117,6 +3182,63 @@ int OnInit()
          PrintFormat("▸ WebRequest: ✗ URL NOT WHITELISTED! Go to Tools→Options→Expert Advisors, tick 'Allow WebRequest for listed URL', add: %s", InpServerURL);
       else
          PrintFormat("▸ WebRequest to %s: ⚠ HTTP %d (err %d) — server unreachable, AI/ML/license features disabled", InpServerURL, wrTest, GetLastError());
+
+      // v6.4.0 UPGRADE 3: fetch confidence calibration ratios from backend
+      if(wrTest == 200)
+      {
+         char calData[], calResult[]; string calHdr;
+         ResetLastError();
+         int calCode = WebRequest("GET", InpServerURL + "/api/ai/calibration",
+                                  "", 5000, calData, calResult, calHdr);
+         if(calCode == 200 && ArraySize(calResult) > 10)
+         {
+            string calJson = CharArrayToString(calResult, 0, ArraySize(calResult));
+            // Parse multipliers using inline string scanning (MQL5 has no JSON parser)
+            // Expected keys in "multipliers" JSON object: "0-49", "50-64", "65-79", "80-100"
+            double m0  = 1.0, m50 = 1.0, m65 = 1.0, m80 = 1.0;
+            int n0 = 0, n50 = 0, n65 = 0, n80 = 0;
+            // Parse "0-49" multiplier
+            {
+               string key = "\"0-49\":";
+               int pos = StringFind(calJson, key);
+               if(pos >= 0) { pos += StringLen(key); string num=""; while(pos<StringLen(calJson)){ushort ch=StringGetCharacter(calJson,pos); if((ch>='0'&&ch<='9')||ch=='.'||ch=='-'){num+=ShortToString(ch);pos++;}else break;} if(StringLen(num)>0){double v=StringToDouble(num);if(v>0)m0=MathMax(0.70,MathMin(1.30,v));} }
+            }
+            {
+               string key = "\"50-64\":";
+               int pos = StringFind(calJson, key);
+               if(pos >= 0) { pos += StringLen(key); string num=""; while(pos<StringLen(calJson)){ushort ch=StringGetCharacter(calJson,pos); if((ch>='0'&&ch<='9')||ch=='.'||ch=='-'){num+=ShortToString(ch);pos++;}else break;} if(StringLen(num)>0){double v=StringToDouble(num);if(v>0)m50=MathMax(0.70,MathMin(1.30,v));} }
+            }
+            {
+               string key = "\"65-79\":";
+               int pos = StringFind(calJson, key);
+               if(pos >= 0) { pos += StringLen(key); string num=""; while(pos<StringLen(calJson)){ushort ch=StringGetCharacter(calJson,pos); if((ch>='0'&&ch<='9')||ch=='.'||ch=='-'){num+=ShortToString(ch);pos++;}else break;} if(StringLen(num)>0){double v=StringToDouble(num);if(v>0)m65=MathMax(0.70,MathMin(1.30,v));} }
+            }
+            {
+               string key = "\"80-100\":";
+               int pos = StringFind(calJson, key);
+               if(pos >= 0) { pos += StringLen(key); string num=""; while(pos<StringLen(calJson)){ushort ch=StringGetCharacter(calJson,pos); if((ch>='0'&&ch<='9')||ch=='.'||ch=='-'){num+=ShortToString(ch);pos++;}else break;} if(StringLen(num)>0){double v=StringToDouble(num);if(v>0)m80=MathMax(0.70,MathMin(1.30,v));} }
+            }
+            // Parse sample_counts for the key bands (for logging)
+            {
+               string key = "\"0-49\":"; int spos = StringFind(calJson, "sample_counts");
+               if(spos >= 0) { string sub = StringSubstr(calJson, spos); int p2 = StringFind(sub, key); if(p2>=0){p2+=StringLen(key); string num=""; while(p2<StringLen(sub)){ushort ch=StringGetCharacter(sub,p2); if(ch>='0'&&ch<='9'){num+=ShortToString(ch);p2++;}else break;} if(StringLen(num)>0)n0=(int)StringToInteger(num);} }
+            }
+            {
+               string key = "\"80-100\":"; int spos = StringFind(calJson, "sample_counts");
+               if(spos >= 0) { string sub = StringSubstr(calJson, spos); int p2 = StringFind(sub, key); if(p2>=0){p2+=StringLen(key); string num=""; while(p2<StringLen(sub)){ushort ch=StringGetCharacter(sub,p2); if(ch>='0'&&ch<='9'){num+=ShortToString(ch);p2++;}else break;} if(StringLen(num)>0)n80=(int)StringToInteger(num);} }
+            }
+            g_calibration_0_49   = m0;
+            g_calibration_50_64  = m50;
+            g_calibration_65_79  = m65;
+            g_calibration_80_100 = m80;
+            g_calibrationLoaded  = true;
+            Print("CONFIDENCE CALIBRATION loaded:",
+                  " band 0-49 ratio=", DoubleToString(m0, 3), " (n=", n0, ")",
+                  " | band 80-100 ratio=", DoubleToString(m80, 3), " (n=", n80, ")");
+         }
+         else
+            Print("CONFIDENCE CALIBRATION: insufficient data or server error (HTTP=", calCode, ") — using raw confidence");
+      }
    }
    // Indicator buffer check
    int barsAvail = Bars(sym, PERIOD_M5);
@@ -4184,6 +4306,280 @@ double GetSessionQuality()
 }
 
 //+------------------------------------------------------------------+
+//| v6.4.0 UPGRADE 1 — MARKET PERSONALITY ENGINE                    |
+//+------------------------------------------------------------------+
+
+// Returns a string label for the market personality (for logging/scorecard)
+string MarketPersonalityStr(ENUM_MARKET_PERSONALITY p)
+{
+   switch(p)
+   {
+      case MKT_STRONG_TREND:    return "STRONG_TREND";
+      case MKT_WEAK_TREND:      return "WEAK_TREND";
+      case MKT_RANGE:           return "RANGE";
+      case MKT_COMPRESSION:     return "COMPRESSION";
+      case MKT_EXPANSION:       return "EXPANSION";
+      case MKT_MOMENTUM_CONT:   return "MOMENTUM_CONT";
+      case MKT_REVERSAL_ENV:    return "REVERSAL_ENV";
+      case MKT_HIGH_VOLATILITY: return "HIGH_VOLATILITY";
+      default:                  return "RANGE";
+   }
+}
+
+// Compute a proxy for ADX strength using EMA spread + BB bandwidth.
+// We do NOT create a new iADX handle here — we use the already-loaded
+// buffers (bufEMAFast, bufEMASlow, bufATR, bufBBUpper, bufBBLower, bufBBMid).
+// ADX proxy = absolute H1 EMA spread as a percentage, scaled 0-50.
+double ComputeADXProxy()
+{
+   if(ArraySize(bufEMAFast_H1) < 2 || ArraySize(bufEMASlow_H1) < 2) return 20.0;
+   double h1S = bufEMASlow_H1[1];
+   if(h1S <= 0) return 20.0;
+   double spread = MathAbs(bufEMAFast_H1[1] - h1S) / h1S;
+   // Map 0% → 0, 0.10% → 25, 0.14% → 35 (matches h1TrendDir thresholds in ScoreSetups)
+   return MathMin(50.0, spread / 0.0040 * 10.0);
+}
+
+// Compute 20-bar ATR median from the already-filled bufATR array.
+// bufATR is loaded with 5 bars in CheckForEntry. For personality we need more
+// bars; use the existing GetMedianATR() pattern (same as GetVolAdaptiveMult).
+double GetATR20Median()
+{
+   double arr[20];
+   if(hATR == INVALID_HANDLE) return bufATR[1];
+   int got = CopyBuffer(hATR, 0, 1, 20, arr);
+   if(got < 10) return bufATR[1];
+   ArraySort(arr);
+   return arr[got / 2];
+}
+
+ENUM_MARKET_PERSONALITY ClassifyMarketPersonality()
+{
+   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return MKT_RANGE;
+
+   double curATR  = bufATR[1];
+   double medATR  = GetATR20Median();
+   if(medATR <= 0) medATR = curATR;
+   double atrRatio = curATR / medATR;
+
+   // ATR-based volatility states take priority
+   if(atrRatio > 2.0)  return MKT_HIGH_VOLATILITY;
+   if(atrRatio > 1.5)  return MKT_EXPANSION;
+
+   // BB bandwidth (compression): bandwidth = (upper - lower) / mid
+   double bbBandwidth = 0.0;
+   if(ArraySize(bufBBUpper) >= 2 && ArraySize(bufBBLower) >= 2 && ArraySize(bufBBMid) >= 2 &&
+      bufBBMid[1] > 0)
+      bbBandwidth = (bufBBUpper[1] - bufBBLower[1]) / bufBBMid[1];
+
+   if(atrRatio < 0.6 && bbBandwidth < 0.006) return MKT_COMPRESSION;
+
+   // ADX proxy
+   double adx = ComputeADXProxy();
+   if(adx > 35.0)
+   {
+      // Strong trend — further classify momentum vs reversal
+      double rsi = (ArraySize(bufRSI) >= 2) ? bufRSI[1] : 50.0;
+      // RSI extreme in strong trend = reversal environment
+      if(rsi > 75.0 || rsi < 25.0) return MKT_REVERSAL_ENV;
+      // Check if RSI is in momentum continuation zone
+      bool h1Bull = (ArraySize(bufEMAFast_H1) >= 2 && ArraySize(bufEMASlow_H1) >= 2 &&
+                     bufEMAFast_H1[1] > bufEMASlow_H1[1]);
+      if((h1Bull && rsi >= 50.0 && rsi <= 70.0) || (!h1Bull && rsi >= 30.0 && rsi <= 50.0))
+         return MKT_MOMENTUM_CONT;
+      return MKT_STRONG_TREND;
+   }
+   if(adx > 20.0)
+   {
+      double rsi = (ArraySize(bufRSI) >= 2) ? bufRSI[1] : 50.0;
+      if(rsi > 75.0 || rsi < 25.0) return MKT_REVERSAL_ENV;
+      return MKT_WEAK_TREND;
+   }
+
+   // RSI extreme check (HTF — use M15 RSI as proxy for "HTF")
+   {
+      double rsiH = (ArraySize(bufRSI_M15) >= 2) ? bufRSI_M15[1] : 50.0;
+      if(rsiH > 75.0 || rsiH < 25.0) return MKT_REVERSAL_ENV;
+   }
+
+   return MKT_RANGE;
+}
+
+// Returns true if a given strategy is suitable for the current market personality.
+bool StrategyFitsPersonality(string setupName, ENUM_MARKET_PERSONALITY personality)
+{
+   bool isTrend    = (StringFind(setupName, "TREND_PULLBACK") >= 0 ||
+                      StringFind(setupName, "HTF_TREND_FOLLOW") >= 0);
+   bool isRange    = (StringFind(setupName, "RANGE_REVERSAL") >= 0 ||
+                      StringFind(setupName, "RSI_EXTREME") >= 0   ||
+                      StringFind(setupName, "MULTI_EXTREME") >= 0);
+   bool isBreakout = (StringFind(setupName, "BREAKOUT") >= 0 ||
+                      StringFind(setupName, "ASIA_BREAKOUT") >= 0);
+   bool isSqueeze  = (StringFind(setupName, "SQUEEZE_RELEASE") >= 0);
+   bool isLondon   = (StringFind(setupName, "LONDON_FIX_PIN") >= 0);
+
+   switch(personality)
+   {
+      case MKT_STRONG_TREND:
+         if(isTrend)    return true;
+         if(isRange)    return false;   // counter-trend in strong trend = poor
+         if(isBreakout) return true;
+         return true;   // others acceptable
+
+      case MKT_WEAK_TREND:
+         if(isTrend)    return true;
+         if(isLondon)   return true;
+         return true;
+
+      case MKT_RANGE:
+         if(isTrend)    return false;   // trending strategy in range = poor
+         if(isRange)    return true;
+         if(isSqueeze)  return true;
+         if(isBreakout) return false;   // breakout setup in confirmed range = poor
+         return true;
+
+      case MKT_COMPRESSION:
+         if(isSqueeze)  return true;   // best fit
+         if(isBreakout) return true;   // waiting for expansion
+         if(isRange)    return true;   // ranging while compressed = OK
+         if(isTrend)    return false;  // no trend momentum in compression
+         return true;
+
+      case MKT_EXPANSION:
+         if(isBreakout) return true;
+         if(isTrend)    return true;
+         if(isRange)    return false;  // reversal in expansion = risky
+         return true;
+
+      case MKT_MOMENTUM_CONT:
+         if(isTrend)    return true;
+         if(isBreakout) return true;
+         if(isRange)    return false;
+         return true;
+
+      case MKT_REVERSAL_ENV:
+         if(isRange)    return true;
+         if(isLondon)   return true;
+         if(isTrend)    return false;  // trend-follow into exhaustion = poor
+         return true;
+
+      case MKT_HIGH_VOLATILITY:
+         if(isSqueeze)  return false;  // squeeze in spike = unpredictable
+         if(isLondon)   return false;  // London pin in extreme vol = fake-out risk
+         if(isBreakout) return true;   // breakouts can be real in high vol
+         return true;
+   }
+   return true;   // default: allow
+}
+
+// v6.4.0 UPGRADE 2 — StratNameToIndex: maps strategy name string to 1-9 index
+int StratNameToIndex(string setupName)
+{
+   if(StringFind(setupName, "TREND_PULLBACK")  >= 0) return 1;
+   if(StringFind(setupName, "RANGE_REVERSAL")  >= 0) return 2;
+   if(StringFind(setupName, "BREAKOUT")        >= 0 &&
+      StringFind(setupName, "ASIA")            <  0) return 3;
+   if(StringFind(setupName, "SQUEEZE_RELEASE") >= 0) return 4;
+   if(StringFind(setupName, "RSI_EXTREME")     >= 0) return 5;
+   if(StringFind(setupName, "LONDON_FIX_PIN")  >= 0) return 6;
+   if(StringFind(setupName, "MULTI_EXTREME")   >= 0) return 7;
+   if(StringFind(setupName, "ASIA_BREAKOUT")   >= 0) return 8;
+   if(StringFind(setupName, "HTF_TREND_FOLLOW")>= 0) return 9;
+   return 0;
+}
+
+// v6.4.0 UPGRADE 3 — Calibrated confidence
+double CalibratedConfidence(int rawConf)
+{
+   if(!g_calibrationLoaded) return (double)rawConf;
+   double mult = (rawConf < 50)  ? g_calibration_0_49   :
+                 (rawConf < 65)  ? g_calibration_50_64  :
+                 (rawConf < 80)  ? g_calibration_65_79  :
+                                   g_calibration_80_100;
+   return rawConf * mult;
+}
+
+// v6.4.0 UPGRADE 4 — Decision Scorecard
+// Writes a structured scorecard entry for every evaluated signal.
+void WriteDecisionScorecard(int signal, string setupName, string grade,
+                             double setupScore, double combinedScore,
+                             int aiConf, string aiVerdict, string consensusSource,
+                             double tbWinRate, int tbSamples,
+                             ENUM_MARKET_PERSONALITY personality,
+                             string blockReason, bool tradeOpened)
+{
+   if(InpBacktestMode) return;  // no file I/O in backtest
+   string fname = "XAUAI_Scorecard_" + TimeToString(TimeCurrent(), TIME_DATE) + ".txt";
+   StringReplace(fname, ".", "_");  // avoid dots in filename
+   StringReplace(fname, " ", "_");
+   int fh = FileOpen(fname, FILE_READ|FILE_WRITE|FILE_TXT|FILE_COMMON);
+   if(fh == INVALID_HANDLE) fh = FileOpen(fname, FILE_WRITE|FILE_TXT|FILE_COMMON);
+   if(fh == INVALID_HANDLE) return;
+   FileSeek(fh, 0, SEEK_END);
+   string dir = signal == 1 ? "BUY" : signal == -1 ? "SELL" : "NEUTRAL";
+   int    sidx = StratNameToIndex(setupName);
+   string wStr = (sidx > 0) ? DoubleToString(g_stratWeight[sidx], 3) : "n/a";
+   FileWrite(fh, "--- " + TimeToString(TimeCurrent()) + " | " + setupName + " " + dir + " ---");
+   FileWrite(fh, "Market personality: " + MarketPersonalityStr(personality));
+   FileWrite(fh, "Setup score:        " + DoubleToString(setupScore, 2) + " | Grade: " + grade);
+   FileWrite(fh, "Combined score:     " + DoubleToString(combinedScore, 2));
+   FileWrite(fh, "AI verdict:         " + aiVerdict + " | Confidence: " + IntegerToString(aiConf) + "% | Source: " + consensusSource);
+   FileWrite(fh, "TradeBrain:         WR=" + DoubleToString(tbWinRate*100.0, 1) + "% samples=" + IntegerToString(tbSamples));
+   FileWrite(fh, "Strategy weight:    " + wStr);
+   FileWrite(fh, "Outcome:            " + (tradeOpened ? "TRADE OPENED" : "BLOCKED — " + blockReason));
+   FileWrite(fh, "");
+   FileClose(fh);
+}
+
+// v6.4.0: persist and load strategy weights
+#define STRATWTS_FILE  "XAUAI_StratWeights_v1.csv"
+
+void SaveStratWeights()
+{
+   if(InpBacktestMode) return;
+   int h = FileOpen(STRATWTS_FILE, FILE_WRITE|FILE_CSV|FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return;
+   FileWrite(h, "#XAUAI_StratWeights_v1");
+   FileWrite(h, "idx","weight","wins","losses","totalR","count");
+   for(int i = 1; i <= 9; i++)
+      FileWrite(h, IntegerToString(i), DoubleToString(g_stratWeight[i], 6),
+                IntegerToString(g_stratWins[i]), IntegerToString(g_stratLosses[i]),
+                DoubleToString(g_stratTotalR[i], 6), IntegerToString(g_stratCount[i]));
+   FileClose(h);
+}
+
+void LoadStratWeights()
+{
+   if(InpBacktestMode) return;
+   if(!FileIsExist(STRATWTS_FILE, FILE_COMMON)) return;
+   int h = FileOpen(STRATWTS_FILE, FILE_READ|FILE_CSV|FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return;
+   bool header = true;
+   while(!FileIsEnding(h))
+   {
+      string line1 = FileReadString(h);
+      if(StringLen(line1) == 0 && FileIsEnding(h)) break;
+      if(header || StringFind(line1, "#") == 0 || line1 == "idx") { header = false; continue; }
+      int    idx     = (int)StringToInteger(line1);
+      string wtStr   = FileReadString(h);
+      string winsStr = FileReadString(h);
+      string lossStr = FileReadString(h);
+      string totalR  = FileReadString(h);
+      string cntStr  = FileReadString(h);
+      if(idx >= 1 && idx <= 9)
+      {
+         g_stratWeight[idx]  = MathMax(0.70, MathMin(1.20, StringToDouble(wtStr)));
+         g_stratWins[idx]    = (int)StringToInteger(winsStr);
+         g_stratLosses[idx]  = (int)StringToInteger(lossStr);
+         g_stratTotalR[idx]  = StringToDouble(totalR);
+         g_stratCount[idx]   = (int)StringToInteger(cntStr);
+      }
+   }
+   FileClose(h);
+   Print("STRATEGY WEIGHTS LOADED from ", STRATWTS_FILE);
+}
+
+//+------------------------------------------------------------------+
 //| GATE 3: SETUP SCORING (7 patterns, score 0-7)                    |
 //| Returns: signal direction + score + setup name                   |
 //+------------------------------------------------------------------+
@@ -4277,6 +4673,7 @@ int ScoreSetups(double &score, string &setupName)
       if(dir == -1 && close1 < open1 && body > range * 0.3) s += 1.0;
       if(dir == 1 && m15RSI > 45 && m15RSI < 70) s += 0.5;
       if(dir == -1 && m15RSI > 30 && m15RSI < 55) s += 0.5;
+      s *= g_stratWeight[1]; // v6.4.0: adaptive weight for TREND_PULLBACK
       if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "TREND_PULLBACK"; bestType = 1; }
    }
 
@@ -4297,7 +4694,7 @@ int ScoreSetups(double &score, string &setupName)
          if(close2 < close1) s += 0.5; // momentum turning
          if(h1TrendDir == 1) s += 0.5;  // bonus if H1 actually aligned
       }
-      if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "RANGE_REVERSAL"; bestType = 2; }
+      { double sw = s * g_stratWeight[2]; if(sw > bestScore) { bestScore = sw; bestDir = dir; bestName = "RANGE_REVERSAL"; bestType = 2; } }
 
       // SELL at upper BB — v6.3.2: allow neutral H1 (h1TrendDir <= 0) matching BUY symmetry.
       // BUY allows h1TrendDir >= 0 (neutral or bullish). SELL was requiring h1TrendDir == -1 only,
@@ -4314,7 +4711,7 @@ int ScoreSetups(double &score, string &setupName)
          if(close2 > close1) s += 0.5;
          if(htfTrendDir == -1) s += 0.5; // bonus if HTF also bearish
       }
-      if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "RANGE_REVERSAL"; bestType = 2; }
+      { double sw = s * g_stratWeight[2]; if(sw > bestScore) { bestScore = sw; bestDir = dir; bestName = "RANGE_REVERSAL"; bestType = 2; } }
    }
 
    // === SETUP 3: BREAKOUT ===
@@ -4333,6 +4730,7 @@ int ScoreSetups(double &score, string &setupName)
       if(avgVol > 0 && vol > (long)(avgVol * 1.5)) s += 1.0; // volume spike
       if(dir == 1 && h1F > h1S) s += 1.0;
       if(dir == -1 && h1F < h1S) s += 1.0;
+      s *= g_stratWeight[3]; // v6.4.0: adaptive weight for BREAKOUT
       if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "BREAKOUT"; bestType = 3; }
    }
 
@@ -4359,6 +4757,7 @@ int ScoreSetups(double &score, string &setupName)
             if(dir == 1 && h1F > h1S) s += 1.0;
             if(dir == -1 && h1F < h1S) s += 1.0;
          }
+         s *= g_stratWeight[4]; // v6.4.0: adaptive weight for SQUEEZE_RELEASE
          if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "SQUEEZE_RELEASE"; bestType = 4; }
       }
    }
@@ -4368,6 +4767,7 @@ int ScoreSetups(double &score, string &setupName)
       double s = 0; int dir = 0;
       if(rsi < 25 && close1 > open1 && h1TrendDir >= 0 && !h1Stretched) { dir = 1; s = 2.0 + (close1 > emaF ? 1.0 : 0) + (m15RSI < 30 ? 1.0 : 0) + (body > 0 && lowerWick > body ? 1.0 : 0); }
       if(rsi > 75 && close1 < open1 && h1TrendDir <= 0 && !h1Stretched) { dir = -1; s = 2.0 + (close1 < emaF ? 1.0 : 0) + (m15RSI > 70 ? 1.0 : 0) + (body > 0 && upperWick > body ? 1.0 : 0); }
+      s *= g_stratWeight[5]; // v6.4.0: adaptive weight for RSI_EXTREME
       if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "RSI_EXTREME"; bestType = 5; }
    }
 
@@ -4389,6 +4789,7 @@ int ScoreSetups(double &score, string &setupName)
          if(dir == 1 && rsi < 40) s += 1.0;
          if(dir == -1 && rsi > 60) s += 1.0;
          if(dir != 0 && body > atr * 0.3) s += 0.5;
+         if(dir != 0) s *= g_stratWeight[6]; // v6.4.0: adaptive weight for LONDON_FIX_PIN
          if(s > bestScore && dir != 0) { bestScore = s; bestDir = dir; bestName = "LONDON_FIX_PIN"; bestType = 6; }
       }
    }
@@ -4407,6 +4808,7 @@ int ScoreSetups(double &score, string &setupName)
       {
          dir = -1; s = 2.5 + (body > 0 && upperWick > body * 0.5 ? 1.0 : 0) + (close1 < open1 ? 1.0 : 0);
       }
+      if(dir != 0) s *= g_stratWeight[7]; // v6.4.0: adaptive weight for MULTI_EXTREME
       if(s > bestScore && dir != 0) { bestScore = s; bestDir = dir; bestName = "MULTI_EXTREME"; bestType = 7; }
    }
 
@@ -4448,6 +4850,7 @@ int ScoreSetups(double &score, string &setupName)
                if(dir == -1 && h1F < h1S) s += 1.0;
                // London/NY power hours
                if(dt.hour >= 13 && dt.hour < 17) s += 0.5;
+               s *= g_stratWeight[8]; // v6.4.0: adaptive weight for ASIA_BREAKOUT
                if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "ASIA_BREAKOUT"; bestType = 8; }
             }
          }
@@ -4494,6 +4897,7 @@ int ScoreSetups(double &score, string &setupName)
             if(close1 < open1 && body > range * 0.2) s += 0.5;        // bearish candle
          }
       }
+      s *= g_stratWeight[9]; // v6.4.0: adaptive weight for HTF_TREND_FOLLOW
       if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "HTF_TREND_FOLLOW"; bestType = 9; }
    }
 
@@ -6221,6 +6625,11 @@ void OnTick()
    bool newM5Bar = (curBar > 0 && curBar != g_lastEntryBarSeen);
    // v6.0 STI: refresh macro trend state on every new M5 bar (cheap, bar-cached)
    if(newM5Bar) STI_Update();
+   // v6.4.0 UPGRADE 1: update market personality on every new M5 bar
+   // Note: bufATR/bufRSI/bufBBUpper may not be loaded yet at this point;
+   // ClassifyMarketPersonality() uses copies via direct CopyBuffer so it
+   // works even before CheckForEntry loads the global buffers. We call it
+   // after indicator buffer check below instead — see after buffer-load block.
    int secondsSinceScan = (g_lastEntryScanAt > 0) ? (int)(TimeCurrent() - g_lastEntryScanAt) : 999999;
    bool watchdogDue = (InpScanWatchdogMin > 0 && secondsSinceScan >= InpScanWatchdogMin * 60);
    bool timerForced = g_timerForceScan;
@@ -6267,6 +6676,8 @@ void OnTick()
    g_indicatorBufferFailCount = 0;
    if(curBar > 0) g_lastEntryBarSeen = curBar;
    g_lastEntryScanAt = TimeCurrent();
+   // v6.4.0 UPGRADE 1: classify market personality now that buffers are loaded
+   if(newM5Bar) g_marketPersonality = ClassifyMarketPersonality();
    // v6.1.0: SMC update runs HERE — after bufATR is loaded, ATR is always fresh
    if(InpSMC_Enable) SMC_Update();
    XAU_UpdateBlockedSignalOutcomes();
@@ -6342,6 +6753,39 @@ void OnTick()
                " | OB_bear=", g_smc_ob_bear.valid ? "Y" : "n",
                " | FVG_bull=", g_smc_fvg_bull.valid ? "Y" : "n",
                " | FVG_bear=", g_smc_fvg_bear.valid ? "Y" : "n");
+   }
+
+   // v6.4.0 UPGRADE 1 — Market Personality Gate
+   // Applied after ScoreSetups+SMC, before combinedScore is finalized.
+   // A+ setups: reduce score -1.5 if poor personality fit (never hard-block)
+   // B or lower: increment g_gateBlocks_Trend and return if poor fit
+   if(signal != 0 && StringLen(setupName) > 0)
+   {
+      bool fits = StrategyFitsPersonality(setupName, g_marketPersonality);
+      if(!fits)
+      {
+         Print("PERSONALITY GATE: ", setupName, " not ideal for ", MarketPersonalityStr(g_marketPersonality), " — adjusting");
+         // Compute grade preview (pre-combined) from raw setupScore to decide action
+         if(setupScore >= InpGradeAPlus || setupScore >= InpGradeA)
+         {
+            // A / A+: adjust score down -1.5 but proceed
+            setupScore = MathMax(0.0, setupScore - 1.5);
+         }
+         else
+         {
+            // B-grade or lower in wrong personality: block
+            g_gateBlocks_Trend++;
+            Print("PERSONALITY GATE BLOCK: ", setupName, " grade not A/A+ in ",
+                  MarketPersonalityStr(g_marketPersonality), " — skipping");
+            XAU_RememberBlockedSignal(signal, setupName, "PERSONALITY", setupScore, setupScore,
+                                      "Personality mismatch: " + MarketPersonalityStr(g_marketPersonality));
+            WriteDecisionScorecard(signal, setupName, "B", setupScore, setupScore,
+                                   lastAIConfidence, g_aiLastVerdict, "none",
+                                   0.0, 0, g_marketPersonality,
+                                   "PERSONALITY-GATE", false);
+            return;
+         }
+      }
    }
 
    // Combined quality
@@ -7148,12 +7592,13 @@ void OnTick()
                      " | reducing lot x0.70, not blocking");
                g_aiLastVerdict = "HTF-OVERRIDE"; g_aiLastConfidence = lastAIConfidence;
             }
-            else if(lastAIConfidence < InpAIDirectorMinConf)
+            else if(CalibratedConfidence(lastAIConfidence) < InpAIDirectorMinConf) // v6.4.0: calibrated
             {
                // AI disagrees but with weak conviction — reduce lot, don't block
                aiVerdictStr = "WEAK-DISAGREE";
                sizeMulti = MathMin(sizeMulti, 0.65);
-               Print("AI DIRECTOR: WEAK-DISAGREE (conf=", lastAIConfidence, "% < min ",
+               Print("AI DIRECTOR: WEAK-DISAGREE (conf=", lastAIConfidence, "% calibrated=",
+                     DoubleToString(CalibratedConfidence(lastAIConfidence), 1), "% < min ",
                      InpAIDirectorMinConf, "%) — reducing lot x0.65, not blocking");
                g_aiLastVerdict = "WEAK-DISAGREE"; g_aiLastConfidence = lastAIConfidence;
             }
@@ -7178,8 +7623,8 @@ void OnTick()
          }
          else if(aiResult == 0)
          {
-            // AI says SKIP — block if confidence below minimum, else reduce size
-            if(lastAIConfidence < InpAIDirectorMinConf && lastAIConfidence > 0)
+            // AI says SKIP — block if calibrated confidence below minimum, else reduce size
+            if(CalibratedConfidence(lastAIConfidence) < InpAIDirectorMinConf && lastAIConfidence > 0) // v6.4.0: calibrated
             {
                aiVerdictStr = "BLOCK";
                g_gateBlocks_AI++; // v6.3.8 Upgrade 6
@@ -7210,7 +7655,7 @@ void OnTick()
                // v6.3.2 FIX: when AI CONFIRMS direction with low confidence — NEVER block.
                // AI agreement at any confidence level means reduce, not veto.
                // Blocking a structurally sound setup because AI is 52% sure is backwards.
-               if(lastAIConfidence < InpAIDirectorMinConf)
+               if(CalibratedConfidence(lastAIConfidence) < InpAIDirectorMinConf) // v6.4.0: calibrated
                {
                   aiVerdictStr = "ALLOW_LOW_CONV";
                   sizeMulti *= InpConvictionLowMulti; // 0.70x mild reduce
@@ -7455,6 +7900,19 @@ void OnTick()
    lastDashSignal = signal;
    lastDashScore  = combinedScore;
    lastDashGrade  = grade;
+
+   // v6.4.0 UPGRADE 4 — Decision Scorecard (TRADE OPENED)
+   {
+      string csrc = "none";
+      bool cOk = (g_aiClaudeVote == "BUY" || g_aiClaudeVote == "SELL");
+      bool gOk = (g_aiGPTVote    == "BUY" || g_aiGPTVote    == "SELL");
+      if(cOk && gOk && g_aiClaudeVote == g_aiGPTVote) csrc = "dual_consensus";
+      else if(cOk && !gOk) csrc = "claude_only";
+      else if(!cOk &&  gOk) csrc = "gpt_only";
+      WriteDecisionScorecard(signal, setupName, grade, setupScore, combinedScore,
+                             lastAIConfidence, g_aiLastVerdict, csrc,
+                             0.0, g_tradeMemCount, g_marketPersonality, "", true);
+   }
 }
 
 int VolumeDigitsForSymbol()
@@ -14432,6 +14890,45 @@ void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
    if(g_tradeMemCount < 500) g_tradeMemCount++;
    // Upgrade 1: persist to disk every time a new entry is added
    SaveTradeBrainMemory();
+
+   // v6.4.0 UPGRADE 2: update per-strategy adaptive weights
+   {
+      int sidx = StratNameToIndex(pattern);
+      if(sidx >= 1 && sidx <= 9)
+      {
+         bool wasWinner = (rMult > 0.0);
+         if(wasWinner) g_stratWins[sidx]++;
+         else          g_stratLosses[sidx]++;
+         g_stratTotalR[sidx] += rMult;
+         g_stratCount[sidx]++;
+         // Recompute weight when we have enough data (min 8 trades per strategy)
+         if(g_stratCount[sidx] >= 8)
+         {
+            double wr  = (double)g_stratWins[sidx] / g_stratCount[sidx];
+            double avgR = g_stratTotalR[sidx] / g_stratCount[sidx];
+            double expectancy = wr * avgR - (1.0 - wr);
+            double newWeight;
+            if      (expectancy >= 0.5)  newWeight = 1.15;
+            else if (expectancy >= 0.2)  newWeight = 1.0;
+            else if (expectancy >= 0.0)  newWeight = 0.90;
+            else                         newWeight = 0.75;
+            // Clamp target
+            newWeight = MathMax(0.70, MathMin(1.20, newWeight));
+            // EMA smoothing — max change per trade ~0.025 (10% of [newWeight - current])
+            double smoothed = g_stratWeight[sidx] * 0.90 + newWeight * 0.10;
+            smoothed = MathMax(0.70, MathMin(1.20, smoothed));
+            // Log significant changes (>= 0.01 delta)
+            if(MathAbs(smoothed - g_stratWeight[sidx]) >= 0.010)
+               Print("STRATEGY WEIGHT UPDATE: ", pattern,
+                     " weight=", DoubleToString(smoothed, 3),
+                     " WR=", DoubleToString(wr*100.0, 1), "%",
+                     " E=", DoubleToString(expectancy, 3),
+                     " n=", g_stratCount[sidx]);
+            g_stratWeight[sidx] = smoothed;
+            SaveStratWeights();
+         }
+      }
+   }
 }
 
 // ============================================================
