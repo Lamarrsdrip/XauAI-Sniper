@@ -1420,6 +1420,13 @@ class PositionCheckRequest(BaseModel):
     peak_profit: float = 0      # highest profit reached on this trade
     pending_exit_reason: str = "" # "MOMENTUM_FADE" / "TIME_EXPIRED" / "STALE_DRIFT" / "" (regular audit)
     regime: str = ""            # current market regime (TRENDING_UP, RANGING, etc.)
+    # v6.3.5: enriched exit context
+    r_mult: float = 0.0         # current profit in R-multiples (e.g. 2.3R)
+    htf_consensus: str = "NEUTRAL"  # BULL / BEAR / NEUTRAL — structural trend alignment
+    session: str = ""           # current session name
+    setup_name: str = ""        # original setup type that triggered entry
+    daily_pct: float = 0.0      # account daily P&L %
+    open_positions: int = 1     # total open positions in basket
 
 @api_router.post("/ai/manage-position")
 async def ai_manage_position(req: PositionCheckRequest):
@@ -1468,28 +1475,34 @@ Rules:
 
         pnl_str = f"+${req.profit:.2f}" if req.profit > 0 else f"-${abs(req.profit):.2f}"
         peak_str = f"+${req.peak_profit:.2f}" if req.peak_profit > 0 else "n/a"
+        giveback = req.peak_profit - req.profit if req.peak_profit > req.profit else 0
         thesis_block = ""
         if has_thesis:
             thesis_block = f"""
 ORIGINAL ENTRY THESIS:
 "{req.thesis[:400]}"
 
-ORIGINAL INVALIDATION CONDITION:
-"{req.invalidation[:200] if req.invalidation else 'not specified'}"
-
+ORIGINAL INVALIDATION: "{req.invalidation[:200] if req.invalidation else 'not specified'}"
 ORIGINAL CONFIDENCE: {req.confidence}/100
 """
-        veto_block = f"\n⚠️  RULE-BASED EXIT WANTS TO CLOSE: '{req.pending_exit_reason}'. Veto this if thesis is still intact." if is_veto else ""
-        prompt = f"""OPEN {req.direction} POSITION on XAUUSD:
-- Entry: {req.entry_price} | Current: {req.current_price}
-- P/L: {pnl_str} | Peak: {peak_str} | ({req.lots} lots)
-- Open for: {req.minutes_open} minutes
-- SL: {req.sl} | TP: {req.tp}
-- RSI: {req.rsi} | ATR: {req.atr}
-- EMA50: {req.ema_fast} | EMA200: {req.ema_slow}
-- Trend: {"BULLISH" if req.ema_fast > req.ema_slow else "BEARISH"} | Regime: {req.regime or 'unknown'}{veto_block}
+        veto_block = f"\n⚠️  RULE WANTS TO CLOSE: '{req.pending_exit_reason}'. Veto this if thesis is still intact." if is_veto else ""
+        # v6.3.5: richer structured exit prompt
+        htf_line = f"HTF Consensus: {req.htf_consensus} | Regime: {req.regime or 'unknown'} | Session: {req.session or 'unknown'}"
+        perf_line = f"R-Multiple: {req.r_mult:.1f}R | Giveback from peak: ${giveback:.0f} | Daily P/L: {req.daily_pct:+.1f}% | Positions: {req.open_positions}"
+        prompt = f"""OPEN {req.direction} POSITION — XAUUSD M5
+
+POSITION STATE
+- Entry: {req.entry_price} | Now: {req.current_price} | Lots: {req.lots}
+- P/L: {pnl_str} | Peak: {peak_str} | {perf_line}
+- Open: {req.minutes_open} min | SL: {req.sl} | TP: {req.tp}
+- Setup: {req.setup_name or 'unknown'}
+
+MARKET STATE
+- {htf_line}
+- EMA Fast: {req.ema_fast:.2f} | EMA Slow: {req.ema_slow:.2f} ({"BULL" if req.ema_fast > req.ema_slow else "BEAR"})
+- RSI: {req.rsi:.1f} | ATR: {req.atr:.2f}{veto_block}
 {thesis_block}
-HOLD, CLOSE, or LOCK? JSON only."""
+Decision (HOLD / CLOSE / LOCK)? JSON only."""
 
         msg = UserMessage(text=prompt)
         response = await chat.send_message(msg)

@@ -368,7 +368,7 @@ input bool   InpVolKillXAUAdaptiveBypass = true; // v5.8.25: strong XAU fast con
 input bool   InpSpreadKillEnabled = true;   // Block entries when current spread > 2× 60-bar median (broker freakout)
 input double InpSpreadKillMultiplier = 2.0; // Multiplier vs median spread to trigger kill switch
 input double InpHardDailyDDPct    = 0.0;    // v5.8.4 demo: disabled
-input double InpSoftDDPct         = 0.0;    // v5.8.4 demo: disabled
+input double InpSoftDDPct         = 4.0;    // v6.3.5: enabled — reduce risk when daily DD exceeds 4% before hitting hard EPF tiers
 input double InpSoftDDLotMulti    = 0.7;    // lot multiplier while in soft DD mode (unused while soft DD disabled)
 input double InpPyramidMinSpaceATR = 1.0;   // Pyramid adds must be ≥ this × ATR away from PREVIOUS add (anti-clustering)
 input double InpAdvPyrMinScore    = 4.0;    // v5.3.1: combined score required for ADVERSE pyramids (≥ here OR no add). Trend-side adds skip this gate.
@@ -597,7 +597,7 @@ input double InpMaxLots        = 50.0;     // Hard max lots; final equity/margin
 input double InpMaxRiskPctEquity = 3.0;    // v5.8.4: restored original account-based max risk cap
 input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
 input double InpMaxAggregateRiskPct = 8.0; // v5.8.4: restored original aggregate risk room for demo/cloud testing
-input double InpDailyLossLimit = 0.0;      // v5.8.4 demo: disabled
+input double InpDailyLossLimit = 3.0;      // v6.3.5: enabled 3% daily loss limit — hard stop for catastrophic days, doesn't interfere with normal trading
 input int    InpMaxOpenTrades  = 3;        // Max open positions
 input int    InpMaxTradesPerDay= 15;       // v5.8.2 — reduce overtrading after choppy loss windows
 input bool   InpAdaptiveDailyCap = true;   // v5.8.8: strong trend days can trade more; weak days trade less
@@ -693,8 +693,8 @@ input group "=== SMART FEATURES (secondary) ==="
 input bool   InpUseNewsFilter  = true;     // Hard-block ±10min around news
 input bool   InpLearnPatterns  = true;     // ML learning loop
 input int    InpMaxPatterns    = 500;      // Pattern memory size
-input int    InpMLMinTrustedSamples = 20;  // Local ML cannot veto/boost until this many matching samples exist
-input int    InpHiveMinTrustedSamples = 30;// Hive cannot veto/boost until backend reports this many matching samples
+input int    InpMLMinTrustedSamples = 10;  // v6.3.5: lowered 20→10 — 10 samples gives reliable directional signal, less cold-start blind period
+input int    InpHiveMinTrustedSamples = 15;// v6.3.5: lowered 30→15 — hive authority from fewer global samples
 input string InpServerURL      = "https://xauaisniper.com";
 input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
 
@@ -839,8 +839,8 @@ input double InpCleanBECushionR     = 0.30;   // v6.3.4: lock 30% of risk at BE 
 input double InpCleanChandelierStartR = 2.00; // v6.3.4: trail from +2R not +3.5R — closes dead zone
 input double InpCleanChandelierATR1 = 3.2;    // v6.3.4: tightened 4.8→3.2 — still breathes but banks more profit
 input double InpCleanChandelierATR2 = 2.5;    // v6.3.4: tightened 3.8→2.5 — after +4R lock in the bulk
-input double InpCleanPartialR       = 3.20;   // v5.8.15: take partial later, after real move
-input double InpCleanPartialPct     = 12.0;   // Smaller partial; leaves 88% runner
+input double InpCleanPartialR       = 2.20;   // v6.3.5: take partial at 2.2R (was 3.2R) — bank profit as Chandelier starts, runner continues
+input double InpCleanPartialPct     = 22.0;   // v6.3.5: raised 12→22% partial — meaningful cash in pocket, 78% runner still runs
 input int    InpCleanChandelierLookback = 24; // Bars to scan for highest high / lowest low
 input bool   InpCleanMomentumInvalidation = true; // Cut trade if momentum flips hard against us
 input int    InpCleanStaleHours     = 3;      // Close if > X hours in AND profit < StaleMinR, unless trend still validates
@@ -10187,9 +10187,33 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
    StringReplace(invalEsc,  "\"", "'");
    StringReplace(invalEsc,  "\n", " ");
 
-   string body = StringFormat("{\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f,\"thesis\":\"%s\",\"invalidation\":\"%s\",\"confidence\":%d,\"peak_profit\":%.2f,\"pending_exit_reason\":\"%s\",\"regime\":\"%s\"}",
-      dir, entry, current, profit, lots, rsi, emaF, emaS, atr, minsOpen, sl, tp,
-      thesisEsc, invalEsc, currentTradeConfidence, peakProfit, pendingExitReason, regime);
+   // v6.3.5: enriched exit payload — add rMult, HTF consensus, session, setup, daily %, positions
+   double slDist2 = MathAbs(entry - sl);
+   double rMult2  = (slDist2 > 0 && profit != 0) ? profit / (slDist2 * lots * SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE) * SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE)) : 0;
+   // Simplified rMult: use profit vs estimated 1R (peakProfit can help gauge scale)
+   string htfConsStr = (g_htfConsensusDir == 1) ? "BULL" : (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL";
+   double dailyPct2  = (dailyStartEquity > 0) ? ((AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0) : 0.0;
+   string sessionNow = "";
+   MqlDateTime dt2; TimeCurrent(dt2);
+   int gh = dt2.hour;
+   if(gh >= 13 && gh < 17) sessionNow = "NY_LONDON";
+   else if(gh >= 8 && gh < 13) sessionNow = "LONDON";
+   else if(gh >= 0 && gh < 8) sessionNow = "ASIA";
+   else sessionNow = "OFF_HOURS";
+
+   string body = StringFormat(
+      "{\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,"
+      "\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,"
+      "\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f,\"thesis\":\"%s\",\"invalidation\":\"%s\","
+      "\"confidence\":%d,\"peak_profit\":%.2f,\"pending_exit_reason\":\"%s\",\"regime\":\"%s\","
+      "\"r_mult\":%.2f,\"htf_consensus\":\"%s\",\"session\":\"%s\","
+      "\"daily_pct\":%.2f,\"open_positions\":%d,\"setup_name\":\"%s\"}",
+      dir, entry, current, profit,
+      lots, rsi, emaF, emaS, atr,
+      minsOpen, sl, tp, thesisEsc, invalEsc,
+      currentTradeConfidence, peakProfit, pendingExitReason, regime,
+      rMult2, htfConsStr, sessionNow,
+      dailyPct2, PositionsTotal(), g_lastTradePattern);
    char postData[], result[]; string rh;
    StringToCharArray(body, postData, 0, StringLen(body));
    int res = WebRequest("POST", url, headers, 10000, postData, result, rh);
