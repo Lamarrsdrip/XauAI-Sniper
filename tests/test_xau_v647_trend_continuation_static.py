@@ -101,3 +101,13 @@ def test_news_aftermath_fast_track_and_blocked_memory_feedback():
     assert "BLOCKED-CONTINUATION MEMORY" in ea
     assert "BLOCK_MISSED_PROFIT" in ea
     assert "Use only in aggregate" in ea
+
+
+def test_broker_noise_no_longer_arms_fake_news_aftermath():
+    ea = read(EA_ROOT)
+
+    assert "InpNewsAftermathArmMulti" in ea
+    assert "InpNewsAftermathIgnoreBrokerNoise" in ea
+    assert "BROKER-SPREAD-NOISE" in ea
+    assert "no NEWS_AFTERMATH timer armed" in ea
+    assert re.search(r"spreadEventType\s*==\s*\"BROKER_NOISE\".*aftermathArmEvent\s*=\s*false", ea, re.S)
