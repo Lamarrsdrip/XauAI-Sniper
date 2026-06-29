@@ -7,12 +7,12 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depend
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio, re
+import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio, re, hashlib, json as _json
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 try:
     from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -31,9 +31,185 @@ JWT_SECRET = os.environ.get('JWT_SECRET', secrets.token_hex(32))
 JWT_ALGORITHM = "HS256"
 PAYSTACK_BASE_URL = "https://api.paystack.co"
 LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+AI_COST_DAILY_CALL_LIMIT = int(os.environ.get("AI_COST_DAILY_CALL_LIMIT", "120"))
+AI_COST_MIN_SECONDS = int(os.environ.get("AI_COST_MIN_SECONDS", "45"))
+AI_COST_CACHE_TTL_SECONDS = int(os.environ.get("AI_COST_CACHE_TTL_SECONDS", "240"))
+AI_COST_DUAL_AI_CONFIDENCE_GAP = int(os.environ.get("AI_COST_DUAL_AI_CONFIDENCE_GAP", "12"))
+AI_COST_TOKEN_PRICE_PER_1K = float(os.environ.get("AI_COST_TOKEN_PRICE_PER_1K", "0.003"))
+TRADE_MEMORY_PATH = ROOT_DIR / "ai_trade_memory.jsonl"
+TRADE_MEMORY_REPORT_PATH = ROOT_DIR / "ai_trade_memory_report.md"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+_ai_cost_cache: Dict[str, dict] = {}
+_ai_cost_stats = {
+    "day": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    "calls": 0,
+    "tokens": 0,
+    "estimated_cost": 0.0,
+    "cache_hits": 0,
+    "skipped": 0,
+    "last_call_at": 0.0,
+    "reasons": [],
+}
+
+def _ai_cost_reset_if_new_day() -> None:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _ai_cost_stats.get("day") == today:
+        return
+    _ai_cost_stats.update({
+        "day": today,
+        "calls": 0,
+        "tokens": 0,
+        "estimated_cost": 0.0,
+        "cache_hits": 0,
+        "skipped": 0,
+        "last_call_at": 0.0,
+        "reasons": [],
+    })
+    _ai_cost_cache.clear()
+
+def _estimate_ai_tokens(*texts: str) -> int:
+    chars = sum(len(t or "") for t in texts)
+    return max(1, int(chars / 4) + 1)
+
+def _estimate_ai_cost(tokens: int) -> float:
+    return round((tokens / 1000.0) * AI_COST_TOKEN_PRICE_PER_1K, 6)
+
+def _bucket(value: Any, size: float, default: str = "0") -> str:
+    try:
+        v = float(value)
+        if size <= 0:
+            return str(round(v, 2))
+        return str(int(round(v / size)))
+    except Exception:
+        return default
+
+def _ai_cost_state_hash(purpose: str, payload: dict) -> str:
+    """Hash only meaningful market state so repeated unchanged setups reuse AI output."""
+    symbol = str(payload.get("symbol", "XAUUSD")).upper()
+    setup = str(payload.get("setup") or payload.get("setup_name") or "NA").upper()
+    regime = str(payload.get("regime") or "NA").upper()
+    session = str(payload.get("session") or "NA").upper()
+    grade = str(payload.get("grade") or "NA").upper()
+    direction = str(payload.get("direction") or payload.get("h1_trend") or "NA").upper()
+    htf = str(payload.get("htf_consensus") or payload.get("h1_trend") or "NA").upper()
+    sig = str(payload.get("signature") or "")[:80]
+    features = {
+        "purpose": purpose,
+        "symbol": symbol,
+        "setup": setup,
+        "regime": regime,
+        "session": session,
+        "grade": grade,
+        "direction": direction,
+        "htf": htf,
+        "signature": sig,
+        "spread_b": _bucket(payload.get("spread", 0), 5),
+        "atr_b": _bucket(payload.get("atr", 0), 0.25),
+        "price_b": _bucket(payload.get("price") or payload.get("current_price") or payload.get("entry_price"), 0.50),
+        "rsi_b": _bucket(payload.get("rsi", 0), 5),
+        "score_b": _bucket(payload.get("combined_score", 0), 1),
+        "profit_b": _bucket(payload.get("profit", 0), 25),
+        "pending_exit": str(payload.get("pending_exit_reason") or "")[:40],
+    }
+    raw = _json.dumps(features, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+def _ai_cache_get(cache_key: str) -> Optional[dict]:
+    _ai_cost_reset_if_new_day()
+    item = _ai_cost_cache.get(cache_key)
+    if not item:
+        return None
+    if time.time() - float(item.get("created_at", 0)) > AI_COST_CACHE_TTL_SECONDS:
+        _ai_cost_cache.pop(cache_key, None)
+        return None
+    _ai_cost_stats["cache_hits"] += 1
+    result = dict(item.get("result", {}))
+    result["ai_cost"] = {
+        "cache_hit": True,
+        "cache_key": cache_key,
+        "reason": "AI_COST_CACHE_HIT",
+        "calls_today": _ai_cost_stats["calls"],
+        "tokens_today": _ai_cost_stats["tokens"],
+        "estimated_cost_today": round(_ai_cost_stats["estimated_cost"], 6),
+    }
+    logger.info("AI_COST_CACHE_HIT key=%s purpose=%s", cache_key, item.get("purpose", "?"))
+    return result
+
+def _ai_cache_put(cache_key: str, result: dict, purpose: str, tokens: int) -> None:
+    _ai_cost_cache[cache_key] = {
+        "created_at": time.time(),
+        "result": result,
+        "purpose": purpose,
+        "tokens": tokens,
+    }
+    if len(_ai_cost_cache) > 500:
+        oldest = sorted(_ai_cost_cache.items(), key=lambda kv: kv[1].get("created_at", 0))[:100]
+        for key, _ in oldest:
+            _ai_cost_cache.pop(key, None)
+
+def _ai_budget_allows(purpose: str, cache_key: str, high_impact: bool = False) -> tuple[bool, str]:
+    _ai_cost_reset_if_new_day()
+    if _ai_cost_stats["calls"] >= AI_COST_DAILY_CALL_LIMIT:
+        _ai_cost_stats["skipped"] += 1
+        return False, f"AI_COST_SKIP daily_limit {AI_COST_DAILY_CALL_LIMIT} reached"
+    elapsed = time.time() - float(_ai_cost_stats.get("last_call_at", 0))
+    if AI_COST_MIN_SECONDS > 0 and elapsed < AI_COST_MIN_SECONDS:
+        _ai_cost_stats["skipped"] += 1
+        impact = "high_impact" if high_impact else "normal"
+        return False, f"AI_COST_SKIP throttle {elapsed:.1f}s < {AI_COST_MIN_SECONDS}s ({impact}; local rules continue)"
+    return True, "ok"
+
+def _record_ai_cost(provider: str, model: str, prompt: str, response_text: str,
+                    purpose: str, cache_key: str, reason: str) -> dict:
+    _ai_cost_reset_if_new_day()
+    tokens = _estimate_ai_tokens(prompt, response_text)
+    cost = _estimate_ai_cost(tokens)
+    _ai_cost_stats["calls"] += 1
+    _ai_cost_stats["tokens"] += tokens
+    _ai_cost_stats["estimated_cost"] = round(float(_ai_cost_stats["estimated_cost"]) + cost, 6)
+    _ai_cost_stats["last_call_at"] = time.time()
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "purpose": purpose,
+        "provider": provider,
+        "model": model,
+        "tokens": tokens,
+        "cost": cost,
+        "reason": reason,
+        "cache_key": cache_key,
+    }
+    _ai_cost_stats["reasons"].append(entry)
+    _ai_cost_stats["reasons"] = _ai_cost_stats["reasons"][-50:]
+    logger.info("AI_COST_CALL purpose=%s provider=%s model=%s tokens=%d cost=%.6f reason=%s",
+                purpose, provider, model, tokens, cost, reason)
+    return {
+        "cache_hit": False,
+        "cache_key": cache_key,
+        "tokens": tokens,
+        "estimated_cost": cost,
+        "calls_today": _ai_cost_stats["calls"],
+        "tokens_today": _ai_cost_stats["tokens"],
+        "estimated_cost_today": round(_ai_cost_stats["estimated_cost"], 6),
+        "reason": reason,
+    }
+
+def _ai_cost_snapshot() -> dict:
+    _ai_cost_reset_if_new_day()
+    return {
+        "day": _ai_cost_stats["day"],
+        "daily_call_limit": AI_COST_DAILY_CALL_LIMIT,
+        "min_seconds": AI_COST_MIN_SECONDS,
+        "cache_ttl_seconds": AI_COST_CACHE_TTL_SECONDS,
+        "calls_today": _ai_cost_stats["calls"],
+        "estimated_tokens_today": _ai_cost_stats["tokens"],
+        "estimated_cost_today": round(_ai_cost_stats["estimated_cost"], 6),
+        "cache_hits_today": _ai_cost_stats["cache_hits"],
+        "skipped_today": _ai_cost_stats["skipped"],
+        "recent_reasons": list(_ai_cost_stats["reasons"])[-20:],
+    }
 
 # -------------------------------------------------------------------
 # AUTH HELPERS
@@ -1478,7 +1654,23 @@ class PositionCheckRequest(BaseModel):
 async def ai_manage_position(req: PositionCheckRequest):
     try:
         if not LLM_KEY:
-            return {"action": "HOLD", "reason": "AI not configured"}
+            return {"action": "HOLD", "reason": "AI not configured", "consensus_source": "local_only_cost_guard"}
+
+        payload = req.dict()
+        cache_key = _ai_cost_state_hash("exit", payload)
+        cached = _ai_cache_get(cache_key)
+        if cached:
+            return cached
+        high_impact = bool(req.pending_exit_reason) or abs(req.profit) >= 75 or req.peak_profit >= 150
+        allowed, budget_reason = _ai_budget_allows("exit", cache_key, high_impact=high_impact)
+        if not allowed:
+            logger.info("%s purpose=exit key=%s", budget_reason, cache_key)
+            return {
+                "action": "HOLD",
+                "reason": budget_reason,
+                "consensus_source": "local_only_cost_guard",
+                "ai_cost": {**_ai_cost_snapshot(), "cache_key": cache_key, "reason": budget_reason},
+            }
 
         # v4.7.0 — AI exit brain with action expansion.
         # Returns one of: HOLD, CLOSE, LOCK (with lock_usd $ amount)
@@ -1552,6 +1744,10 @@ Decision (HOLD / CLOSE / LOCK)? JSON only."""
 
         msg = UserMessage(text=prompt)
         response = await chat.send_message(msg)
+        cost_meta = _record_ai_cost("anthropic", "claude-sonnet-4-5-20250929",
+                                    system_msg + "\n" + prompt, response,
+                                    "exit", cache_key,
+                                    "exit conflict/news/profit-management audit")
 
         import json, re
         cleaned = response.strip()
@@ -1578,12 +1774,18 @@ Decision (HOLD / CLOSE / LOCK)? JSON only."""
                     # No valid lock amount → degrade to HOLD
                     result["action"] = "HOLD"
                     result["reason"] = "LOCK requested but no lock_usd → HOLD"
+            result["ai_cost"] = cost_meta
+            _ai_cache_put(cache_key, result, "exit", cost_meta["tokens"])
             return result
         except json.JSONDecodeError:
             up = response.upper()
             if '"CLOSE"' in up or "ACTION:CLOSE" in up.replace(" ", ""):
-                return {"action": "CLOSE", "reason": "parser fallback"}
-            return {"action": "HOLD", "reason": "AI response unclear"}
+                result = {"action": "CLOSE", "reason": "parser fallback", "ai_cost": cost_meta}
+                _ai_cache_put(cache_key, result, "exit", cost_meta["tokens"])
+                return result
+            result = {"action": "HOLD", "reason": "AI response unclear", "ai_cost": cost_meta}
+            _ai_cache_put(cache_key, result, "exit", cost_meta["tokens"])
+            return result
     except Exception as e:
         logger.error(f"Position manager error: {e}")
         return {"action": "HOLD", "reason": f"Error: {str(e)[:50]}"}
@@ -1619,6 +1821,185 @@ class AIAnalysisRequest(BaseModel):
     grade: str = ""
     setup_score: float = 0.0
     combined_score: float = 0.0
+
+class TradeMemoryRecord(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    event: str = "CLOSE"
+    time: str = ""
+    account: str = ""
+    broker: str = ""
+    ea_version: str = "v6.4.6"
+    build_hash: str = ""
+    input_hash: str = ""
+    symbol: str = "XAUUSD"
+    timeframe: str = "M5"
+    magic_number: int = 0
+    session: str = ""
+    strategy: str = ""
+    direction: str = ""
+    entry_price: float = 0.0
+    exit_price: float = 0.0
+    lot_size: float = 0.0
+    grade: str = ""
+    confidence: int = 0
+    market_regime: str = ""
+    news_state: str = ""
+    spread_state: str = ""
+    spread_points: float = 0.0
+    htf_trend: str = ""
+    m1_confirm: str = ""
+    m5_confirm: str = ""
+    m15_confirm: str = ""
+    m30_confirm: str = ""
+    h1_confirm: str = ""
+    entry_reason: str = ""
+    exit_reason: str = ""
+    max_floating_profit: float = 0.0
+    max_floating_loss: float = 0.0
+    profit_at_close: float = 0.0
+    profit_left_after_exit: float = 0.0
+    risk_avoided_after_exit: float = 0.0
+    entry_quality: str = ""
+    exit_quality: str = ""
+    lot_quality: str = ""
+    should_hold_longer: bool = False
+    should_close_earlier: bool = False
+    what_ai_should_remember: str = ""
+    block_reason: str = ""
+    checkpoint_min: int = 0
+    would_trade_have_won: bool = False
+    would_trade_have_lost: bool = False
+
+class TradeMemoryQuery(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    symbol: str = "XAUUSD"
+    account: str = ""
+    broker: str = ""
+    strategy: str = ""
+    direction: str = ""
+    session: str = ""
+    volatility: str = ""
+    spread_state: str = ""
+    htf_trend: str = ""
+    news_state: str = ""
+    fast_confirmation: str = ""
+    exhaustion: str = ""
+    liquidity: str = ""
+    grade: str = ""
+    limit: int = 250
+
+def _trade_memory_state_hash(data: dict) -> str:
+    fields = {
+        "symbol": str(data.get("symbol", "")).upper(),
+        "account": str(data.get("account", "")),
+        "broker": str(data.get("broker", "")).upper(),
+        "strategy": str(data.get("strategy", "")).upper(),
+        "direction": str(data.get("direction", "")).upper(),
+        "session": str(data.get("session", "")).upper(),
+        "grade": str(data.get("grade", "")).upper(),
+        "regime": str(data.get("market_regime") or data.get("volatility") or "").upper(),
+        "spread_state": str(data.get("spread_state", "")).upper(),
+        "htf_trend": str(data.get("htf_trend", "")).upper(),
+        "news_state": str(data.get("news_state", "")).upper(),
+    }
+    return hashlib.sha256(_json.dumps(fields, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+
+def _load_trade_memory(limit: int = 5000) -> list[dict]:
+    if not TRADE_MEMORY_PATH.exists():
+        return []
+    rows: list[dict] = []
+    with open(TRADE_MEMORY_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(_json.loads(line))
+            except Exception:
+                continue
+    return rows[-limit:]
+
+def _score_memory_similarity(query: dict, row: dict) -> float:
+    score = 0.0
+    checks = [
+        ("symbol", 3.0),
+        ("strategy", 4.0),
+        ("direction", 3.0),
+        ("session", 1.5),
+        ("spread_state", 1.5),
+        ("htf_trend", 2.0),
+        ("news_state", 1.0),
+        ("grade", 2.0),
+    ]
+    for field, weight in checks:
+        qv = str(query.get(field, "")).upper()
+        rv = str(row.get(field, "")).upper()
+        if qv and rv and qv == rv:
+            score += weight
+    q_regime = str(query.get("volatility") or query.get("market_regime") or "").upper()
+    r_regime = str(row.get("market_regime") or "").upper()
+    if q_regime and r_regime and q_regime == r_regime:
+        score += 2.0
+    if str(query.get("broker", "")).upper() and str(query.get("broker", "")).upper() == str(row.get("broker", "")).upper():
+        score += 0.75
+    return score
+
+def _memory_confidence_weight(samples: int) -> str:
+    # Aggregate-only rule:
+    # 1 similar memory = information only
+    # 5 similar memories = weak influence
+    # 20+ similar memories = strong influence
+    # 50+ similar memories = trusted pattern
+    if samples >= 50:
+        return "trusted pattern"
+    if samples >= 20:
+        return "strong influence"
+    if samples >= 5:
+        return "weak influence"
+    return "information only"
+
+def _build_memory_recommendation(query: dict, matches: list[dict]) -> dict:
+    samples = len(matches)
+    wins = sum(1 for r in matches if float(r.get("profit_at_close", 0) or 0) > 0)
+    losses = sum(1 for r in matches if float(r.get("profit_at_close", 0) or 0) < 0)
+    wr = round((wins / samples) * 100.0, 1) if samples else 0.0
+    avg_mfe = round(sum(float(r.get("max_floating_profit", 0) or 0) for r in matches) / samples, 2) if samples else 0.0
+    avg_mae = round(sum(float(r.get("max_floating_loss", 0) or 0) for r in matches) / samples, 2) if samples else 0.0
+    avg_left = round(sum(float(r.get("profit_left_after_exit", 0) or 0) for r in matches) / samples, 2) if samples else 0.0
+    early = sum(1 for r in matches if bool(r.get("should_hold_longer")) or str(r.get("exit_quality", "")).upper().find("EARLY") >= 0)
+    early_rate = round((early / samples) * 100.0, 1) if samples else 0.0
+    influence = _memory_confidence_weight(samples)
+
+    recommendation = "record only; not enough aggregate evidence"
+    if samples >= 5:
+        if early_rate >= 60.0 and avg_left > 0:
+            recommendation = "reduce early-exit pressure; similar trades often left profit after close"
+        elif wr <= 35.0 and losses > wins:
+            recommendation = "reduce lot or require stronger confirmation; similar setups have weak expectancy"
+        elif wr >= 62.0 and avg_mfe > abs(avg_mae):
+            recommendation = "allow normal trade management; similar setups show positive follow-through"
+        else:
+            recommendation = "neutral memory influence; keep local rules in control"
+
+    text = (
+        f"AI-MEMORY: Found {samples} similar {query.get('strategy','UNKNOWN')} "
+        f"{query.get('direction','')} setups. Win rate: {wr}%. Avg MFE: {avg_mfe}. "
+        f"Avg MAE: {avg_mae}. Early-exit rate: {early_rate}%. "
+        f"Confidence: {influence}. Recommendation: {recommendation}."
+    )
+    return {
+        "similar_memories": samples,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": wr,
+        "avg_mfe": avg_mfe,
+        "avg_mae": avg_mae,
+        "avg_profit_left_after_exit": avg_left,
+        "early_exit_rate": early_rate,
+        "confidence_weight": influence,
+        "recommendation": recommendation,
+        "text": text,
+    }
 
 # ------- shared helpers -------
 # v6.3.0: AI Director persona — full authority, not just advisory
@@ -1775,6 +2156,39 @@ async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> di
                 "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
                 "sl_adjust": 0, "tp_adjust": 0, "available": False}
 
+def _should_call_dual_ai(req: AIAnalysisRequest, primary: Optional[dict] = None) -> bool:
+    """Spend on a second LLM only for important, ambiguous decisions."""
+    grade = (req.grade or "").upper()
+    high_grade = grade in ("A", "A+", "B+")
+    high_score = req.combined_score >= 6.0 or req.setup_score >= 5.0
+    ambiguous_primary = False
+    if primary:
+        conf = int(primary.get("confidence", 0) or 0)
+        ambiguous_primary = (
+            primary.get("action") in ("BUY", "SELL") and
+            abs(conf - int(req.combined_score * 10)) >= AI_COST_DUAL_AI_CONFIDENCE_GAP
+        ) or (55 <= conf <= 70)
+    account_pressure = req.basket_float_pl < -75 or req.daily_pct < -1.5 or req.open_positions >= 2
+    return bool(high_grade and (high_score or account_pressure or ambiguous_primary))
+
+def _entry_local_only_response(reason: str, cache_key: str) -> dict:
+    return {
+        "action": "SKIP",
+        "confidence": 50,
+        "reason": reason[:240],
+        "thesis": "",
+        "bearish_case": "",
+        "skip_if": "",
+        "invalidation": "",
+        "target": "",
+        "claude": None,
+        "gpt": None,
+        "sl_adjust": 0,
+        "tp_adjust": 0,
+        "consensus_source": "local_only_cost_guard",
+        "ai_cost": {**_ai_cost_snapshot(), "cache_key": cache_key, "reason": reason},
+    }
+
 @api_router.post("/ai/analyze")
 async def ai_analyze_market(req: AIAnalysisRequest):
     """Dual-AI entry analysis: Claude 4.5 + GPT-4o vote in parallel.
@@ -1787,14 +2201,53 @@ async def ai_analyze_market(req: AIAnalysisRequest):
       - Both SKIP or both unavailable            -> SKIP
     """
     try:
-        if not LLM_KEY:
-            return {"action": "SKIP", "confidence": 50, "reason": "AI key not configured",
-                    "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
-                    "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0, "consensus_source": "none"}
+        payload = req.dict()
+        cache_key = _ai_cost_state_hash("entry", payload)
+        cached = _ai_cache_get(cache_key)
+        if cached:
+            return cached
 
-        claude_task = _ask_entry_ai("anthropic", "claude-sonnet-4-5-20250929", req)
-        gpt_task    = _ask_entry_ai("openai",    "gpt-4o",                     req)
-        claude, gpt = await asyncio.gather(claude_task, gpt_task)
+        if not LLM_KEY:
+            return _entry_local_only_response("AI key not configured", cache_key)
+
+        grade = (req.grade or "").upper()
+        high_impact = grade in ("A", "A+") or req.combined_score >= 6.0 or req.basket_float_pl < -100
+        if grade in ("", "SKIP") or (req.combined_score > 0 and req.combined_score < 3.0):
+            reason = "AI_COST_SKIP low-quality/no-trade state handled locally"
+            _ai_cost_stats["skipped"] += 1
+            logger.info("%s key=%s grade=%s score=%.2f", reason, cache_key, req.grade, req.combined_score)
+            return _entry_local_only_response(reason, cache_key)
+
+        allowed, budget_reason = _ai_budget_allows("entry", cache_key, high_impact=high_impact)
+        if not allowed:
+            logger.info("%s purpose=entry key=%s", budget_reason, cache_key)
+            return _entry_local_only_response(budget_reason, cache_key)
+
+        prompt_for_cost = _ENTRY_SYSTEM_PROMPT + "\n" + _build_entry_prompt(req)
+        claude = await _ask_entry_ai("anthropic", "claude-sonnet-4-5-20250929", req)
+        cost_entries = [
+            _record_ai_cost("anthropic", "claude-sonnet-4-5-20250929",
+                            prompt_for_cost, _json.dumps(claude, separators=(",", ":")),
+                            "entry", cache_key, "primary entry confirmation")
+        ]
+
+        if _should_call_dual_ai(req, claude):
+            second_allowed, second_reason = _ai_budget_allows("entry_dual", cache_key, high_impact=True)
+            if second_allowed:
+                gpt = await _ask_entry_ai("openai", "gpt-4o", req)
+                cost_entries.append(
+                    _record_ai_cost("openai", "gpt-4o",
+                                    prompt_for_cost, _json.dumps(gpt, separators=(",", ":")),
+                                    "entry_dual", cache_key, "high-impact/ambiguous dual check")
+                )
+            else:
+                gpt = {"action": "SKIP", "confidence": 0, "reason": second_reason,
+                       "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "",
+                       "target": "", "sl_adjust": 0, "tp_adjust": 0, "available": False}
+        else:
+            gpt = {"action": "SKIP", "confidence": 0, "reason": "dual AI skipped to save cost",
+                   "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "",
+                   "target": "", "sl_adjust": 0, "tp_adjust": 0, "available": False}
 
         c_act, g_act = claude["action"], gpt["action"]
         c_conf, g_conf = claude["confidence"], gpt["confidence"]
@@ -1874,7 +2327,14 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             "consensus_source": consensus_source,
             "claude": {"action": c_act, "confidence": c_conf, "reason": claude["reason"], "available": c_ok},
             "gpt":    {"action": g_act, "confidence": g_conf, "reason": gpt["reason"],    "available": g_ok},
+            "ai_cost": {
+                **_ai_cost_snapshot(),
+                "cache_hit": False,
+                "cache_key": cache_key,
+                "call_reasons": cost_entries,
+            },
         }
+        _ai_cache_put(cache_key, result, "entry", sum(int(x.get("tokens", 0) or 0) for x in cost_entries))
         try:
             await db.ai_analyses.insert_one({
                 "symbol": req.symbol, "request": req.dict(), "response": result,
@@ -1889,10 +2349,101 @@ async def ai_analyze_market(req: AIAnalysisRequest):
                 "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
                 "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0, "consensus_source": "none"}
 
+@api_router.get("/ai/cost/stats")
+async def ai_cost_stats():
+    return _ai_cost_snapshot()
+
+@api_router.post("/ai/memory/record")
+async def ai_memory_record(record: TradeMemoryRecord):
+    try:
+        data = record.dict()
+        data["recorded_at"] = datetime.now(timezone.utc).isoformat()
+        data["memory_hash"] = _trade_memory_state_hash(data)
+        data["bad_data_ignored"] = False
+        if not data.get("symbol") or not data.get("strategy") or data.get("lot_size", 0) < 0:
+            data["bad_data_ignored"] = True
+            return {"status": "ignored", "reason": "bad memory data"}
+        with open(TRADE_MEMORY_PATH, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(data, separators=(",", ":")) + "\n")
+        try:
+            await db.ai_trade_memory.insert_one(data)
+        except Exception:
+            pass
+        return {"status": "ok", "memory_hash": data["memory_hash"]}
+    except Exception as e:
+        logger.error("AI memory record error: %s", e)
+        return {"status": "error", "detail": str(e)}
+
+@api_router.post("/ai/memory/query")
+async def ai_memory_query(query: TradeMemoryQuery):
+    try:
+        q = query.dict()
+        rows = _load_trade_memory(limit=max(100, min(query.limit, 5000)))
+        scored = []
+        for row in rows:
+            score = _score_memory_similarity(q, row)
+            if score >= 5.0:
+                scored.append((score, row))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        matches = [row for _, row in scored[:250]]
+        rec = _build_memory_recommendation(q, matches)
+        return {
+            "status": "ok",
+            "query_hash": _trade_memory_state_hash(q),
+            **rec,
+            "matches": matches[:25],
+        }
+    except Exception as e:
+        logger.error("AI memory query error: %s", e)
+        return {"status": "error", "detail": str(e), "similar_memories": 0}
+
+@api_router.get("/ai/memory/report")
+async def ai_memory_report(limit: int = 2000):
+    try:
+        rows = _load_trade_memory(limit=max(100, min(limit, 10000)))
+        buckets: dict[str, list[dict]] = {}
+        for row in rows:
+            key = "|".join([
+                str(row.get("strategy", "UNKNOWN")),
+                str(row.get("direction", "NA")),
+                str(row.get("session", "NA")),
+                str(row.get("grade", "NA")),
+            ])
+            buckets.setdefault(key, []).append(row)
+        lines = [
+            "# XAU AI Sniper Conscious Memory Report",
+            "",
+            f"Generated: {datetime.now(timezone.utc).isoformat()}",
+            f"Records: {len(rows)}",
+            "",
+            "Memory influence tiers: 1 similar memory = information only; 5 similar memories = weak influence; 20+ similar memories = strong influence; 50+ similar memories = trusted pattern.",
+            "",
+        ]
+        summaries = []
+        for key, vals in buckets.items():
+            rec = _build_memory_recommendation({"strategy": key.split("|")[0], "direction": key.split("|")[1]}, vals)
+            summaries.append((rec["similar_memories"], rec["win_rate"], key, rec))
+        summaries.sort(reverse=True)
+        for _, _, key, rec in summaries[:30]:
+            lines += [
+                f"## {key}",
+                f"- Samples: {rec['similar_memories']} ({rec['confidence_weight']})",
+                f"- Win rate: {rec['win_rate']}%",
+                f"- Avg MFE/MAE: {rec['avg_mfe']} / {rec['avg_mae']}",
+                f"- Early-exit rate: {rec['early_exit_rate']}%",
+                f"- Recommendation: {rec['recommendation']}",
+                "",
+            ]
+        report = "\n".join(lines)
+        TRADE_MEMORY_REPORT_PATH.write_text(report, encoding="utf-8")
+        return {"status": "ok", "records": len(rows), "report_path": str(TRADE_MEMORY_REPORT_PATH), "report": report}
+    except Exception as e:
+        logger.error("AI memory report error: %s", e)
+        return {"status": "error", "detail": str(e)}
+
 ########################################
 # v6.3.8 UPGRADE 5 — AI Outcome Feedback Loop
 ########################################
-import json as _json
 
 @api_router.post("/ai/feedback")
 async def ai_feedback(data: dict):

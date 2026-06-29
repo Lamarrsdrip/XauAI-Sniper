@@ -831,6 +831,12 @@ input bool   InpAIDirectorAllGrades = true;  // v6.3.0: call AI Director for ALL
 input int    InpAIDirectorMinConf = 55;      // v6.3.0: minimum AI confidence % to ALLOW trade. Below = block/reduce.
 input bool   InpAIOfflineSafeMode = true;    // v6.3.0: if AI server fails, trade at 50% size (safe degraded mode)
 input int    InpAIOfflineMaxFails = 3;       // v6.3.0: consecutive AI call failures before declaring AI offline
+input int    InpAICostDailyCallLimit = 60;    // Paid LLM budget: max EA-triggered AI calls per broker day
+input int    InpAIMinEntryCallSec = 180;      // Paid LLM throttle: min seconds between entry AI calls
+input int    InpAIMarketStateCacheSec = 300;  // Reuse AI decision while market-state hash stays meaningfully similar
+input bool   InpAIOnlyHighImpact = true;      // Use paid LLM only on meaningful A/A+ or high-score decisions; local rules handle the rest
+input string InpAIMinGradeForLLM = "A";       // Minimum grade for paid LLM when high-impact mode is on
+input double InpAICostPer1KTokensUSD = 0.003; // Rough token-cost estimate for diagnostics only
 
 // v6.3.8 UPGRADE 3 — AI SL/TP Advisory System
 // Default: ADVISORY (logs AI suggestion, never applies automatically)
@@ -1540,6 +1546,29 @@ string g_aiLastVerdict = "NONE";   // last AI Director verdict for dashboard
 int    g_aiLastConfidence = 0;     // last AI confidence % for dashboard
 string g_aiClaudeVote = "";        // Claude's vote this bar
 string g_aiGPTVote = "";           // GPT's vote this bar
+int      g_aiCallsToday = 0;
+int      g_aiCacheHitsToday = 0;
+int      g_aiSkippedToday = 0;
+int      g_aiEstimatedTokensToday = 0;
+double   g_aiEstimatedCostToday = 0.0;
+datetime g_aiCostResetDay = 0;
+datetime g_aiLastEntryCallAt = 0;
+string   g_aiLastCallReason = "";
+string   g_aiLastSkipReason = "";
+string   g_aiLastStateHash = "";
+datetime g_aiLastStateAt = 0;
+int      g_aiStateCacheDir = 0;
+int      g_aiStateCacheConf = 0;
+string   g_aiStateCacheThesis = "";
+string   g_aiStateCacheInval = "";
+string   g_aiStateCacheTarget = "";
+string   g_aiStateCacheBearish = "";
+string   g_aiStateCacheSkipIf = "";
+string   g_aiStateCacheClaude = "";
+string   g_aiStateCacheGPT = "";
+string   g_memoryLastRecommendation = "";
+string   g_memoryLastInfluence = "information only";
+datetime g_memoryHoldBiasUntil = 0;
 string lastSignalSetup = "";
 string lastSignalSignature = "";
 string g_pendingBrainGrade = "";
@@ -1623,6 +1652,22 @@ struct TradeBrainClosedWatch
    TradeBrainOpen rec;
 };
 TradeBrainClosedWatch g_brainClosedWatch[];
+
+struct XAUConsciousMemoryStats
+{
+   int    samples;
+   int    wins;
+   int    losses;
+   double winRate;
+   double avgMFE;
+   double avgMAE;
+   double avgProfit;
+   double avgProfitLeft;
+   double avgRiskAvoided;
+   double earlyExitRate;
+   string influence;
+   string recommendation;
+};
 
 // Tester/audit proof counters. These are intentionally small and local so
 // the EA can prove which setup/exit families helped or hurt without adding
@@ -2487,6 +2532,13 @@ bool AIBlocksClose(string ruleName, ulong ticket, bool isBuy, double openPx, dou
    if(!InpAIExitOverride) return false;
    if(InpAIAdvisoryOnly)  return false;
    if(InpBacktestMode)    return false;
+   if(g_memoryHoldBiasUntil > TimeCurrent() && profit > 0.0 && peak >= InpAIExitMinProfit)
+   {
+      Print("AI-MEMORY HOLD BIAS #", ticket, " (", ruleName,
+            "): aggregate memory says similar exits were early; reducing early-exit pressure. ",
+            g_memoryLastInfluence);
+      return true;
+   }
    if(StringLen(InpServerURL) < 10) return false;
    // Cost gate: only spend an AI call if there's meaningful profit at stake
    if(MathMax(profit, peak) < InpAIExitMinProfit) return false;
@@ -8366,6 +8418,18 @@ void OnTick()
    else if(StringLen(brainReason) > 0)
       Print(brainReason);
 
+   double consciousLotMult = 1.0;
+   string consciousReason = "";
+   XAU_MemoryRecommendation(signal, setupName, grade, consciousLotMult, consciousReason);
+   if(StringLen(consciousReason) > 0)
+      Print(consciousReason);
+   if(consciousLotMult < 0.999 || consciousLotMult > 1.001)
+   {
+      sizeMulti *= consciousLotMult;
+      Print("AI-MEMORY LOT ADJUST: lot x", DoubleToString(consciousLotMult, 2),
+            " (aggregate evidence only; emergency safety unchanged)");
+   }
+
    // v6.0.1 — AI Trading Committee: synthesise market narrative + human rules + pattern memory
    g_committee = Committee_Assemble(signal, setupName, grade, combinedScore);
    g_lastTradePattern  = setupName + "_" + grade;
@@ -11445,6 +11509,117 @@ int ExtractJsonInt(const string &json, const string key, int fallback)
    return (int)ExtractJsonDouble(json, key, (double)fallback);
 }
 
+void XAU_AICostResetIfNewDay()
+{
+   MqlDateTime dt; TimeCurrent(dt);
+   datetime today = StringToTime(StringFormat("%04d.%02d.%02d", dt.year, dt.mon, dt.day));
+   if(g_aiCostResetDay == today) return;
+   g_aiCostResetDay = today;
+   g_aiCallsToday = 0;
+   g_aiCacheHitsToday = 0;
+   g_aiSkippedToday = 0;
+   g_aiEstimatedTokensToday = 0;
+   g_aiEstimatedCostToday = 0.0;
+   g_aiLastCallReason = "";
+   g_aiLastSkipReason = "";
+   g_aiLastStateHash = "";
+   g_aiLastStateAt = 0;
+}
+
+int XAU_AIGradeRank(string grade)
+{
+   if(StringFind(grade, "A+") >= 0) return 4;
+   if(grade == "A") return 3;
+   if(StringFind(grade, "B+") >= 0) return 2;
+   if(grade == "B") return 1;
+   return 0;
+}
+
+string XAU_AICostStateHash(string setup, string grade, string signature, string regime,
+                           string htf, double spread, double atr, double price,
+                           double rsi, double combinedScore)
+{
+   string state = StringFormat("sym=%s|tf=M5|setup=%s|grade=%s|sig=%s|regime=%s|htf=%s|spr=%d|atr=%d|px=%d|rsi=%d|score=%d|input=%s",
+                               Symbol(), setup, grade, signature, regime, htf,
+                               (int)MathRound(spread / 5.0),
+                               (int)MathRound(atr / 0.25),
+                               (int)MathRound(price / 0.50),
+                               (int)MathRound(rsi / 5.0),
+                               (int)MathRound(combinedScore),
+                               XAUAI_InputHash());
+   return XAUAI_HashString(state);
+}
+
+void XAU_AICostRecordSkip(string reason)
+{
+   XAU_AICostResetIfNewDay();
+   g_aiSkippedToday++;
+   g_aiLastSkipReason = reason;
+   Print("AI_COST_SKIP: ", reason,
+         " | callsToday=", g_aiCallsToday, "/", InpAICostDailyCallLimit,
+         " cacheHits=", g_aiCacheHitsToday,
+         " skipped=", g_aiSkippedToday);
+}
+
+bool XAU_AICostAllowEntry(string setup, string grade, double setupScore, double combinedScore,
+                          string stateHash, string &reason)
+{
+   XAU_AICostResetIfNewDay();
+   reason = "";
+   if(InpAICostDailyCallLimit > 0 && g_aiCallsToday >= InpAICostDailyCallLimit)
+   {
+      reason = StringFormat("daily AI call budget reached %d/%d; local rules continue",
+                            g_aiCallsToday, InpAICostDailyCallLimit);
+      XAU_AICostRecordSkip(reason);
+      return false;
+   }
+
+   bool highImpact = (XAU_AIGradeRank(grade) >= XAU_AIGradeRank(InpAIMinGradeForLLM) ||
+                      combinedScore >= 6.0 || setupScore >= 5.0);
+   if(InpAIOnlyHighImpact && !highImpact)
+   {
+      reason = StringFormat("low-impact %s setup score %.1f/%.1f handled locally",
+                            grade, setupScore, combinedScore);
+      XAU_AICostRecordSkip(reason);
+      return false;
+   }
+
+   if(g_aiLastStateHash == stateHash && g_aiLastStateAt > 0 &&
+      TimeCurrent() - g_aiLastStateAt <= InpAIMarketStateCacheSec)
+   {
+      g_aiCacheHitsToday++;
+      reason = "market-state cache hit; reused previous AI decision";
+      return false;
+   }
+
+   if(InpAIMinEntryCallSec > 0 && g_aiLastEntryCallAt > 0 &&
+      TimeCurrent() - g_aiLastEntryCallAt < InpAIMinEntryCallSec)
+   {
+      reason = StringFormat("entry AI throttle %ds/%ds (%s); local rules continue",
+                            (int)(TimeCurrent() - g_aiLastEntryCallAt), InpAIMinEntryCallSec,
+                            highImpact ? "high-impact" : "normal");
+      XAU_AICostRecordSkip(reason);
+      return false;
+   }
+   return true;
+}
+
+void XAU_AICostRecordCall(string reason, int requestChars, int responseChars)
+{
+   XAU_AICostResetIfNewDay();
+   int tokens = (requestChars + responseChars) / 4 + 1;
+   if(tokens < 1) tokens = 1;
+   g_aiCallsToday++;
+   g_aiEstimatedTokensToday += tokens;
+   g_aiEstimatedCostToday += ((double)tokens / 1000.0) * InpAICostPer1KTokensUSD;
+   g_aiLastEntryCallAt = TimeCurrent();
+   g_aiLastCallReason = reason;
+   Print("AI_COST_CALL: ", reason,
+         " tokens~", tokens,
+         " callsToday=", g_aiCallsToday, "/", InpAICostDailyCallLimit,
+         " estCostToday=$", DoubleToString(g_aiEstimatedCostToday, 4));
+}
+
 // v6.3.0: enriched GetAIAnalysis — sends full market context to AI Director
 // Added: htf_consensus, session, open_positions, basket_float_pl, recent_wins,
 //        recent_losses, account_equity, daily_pct, grade, setup_score, combined_score
@@ -11467,6 +11642,40 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    g_aiGPTVote    = "unknown";
 
    if(!InpUseAI || InpBacktestMode || StringLen(InpServerURL) < 10) return 0;
+
+   string htfConsensusStr = (g_htfConsensusDir == 1) ? "BULL" : (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL";
+   string aiStateHash = XAU_AICostStateHash(setup, grade, signature, regime, htfConsensusStr,
+                                            spread, atr, price, rsi, combinedScore);
+   if(g_aiLastStateHash == aiStateHash && g_aiLastStateAt > 0 &&
+      TimeCurrent() - g_aiLastStateAt <= InpAIMarketStateCacheSec)
+   {
+      lastAIConfidence          = g_aiStateCacheConf;
+      currentTradeThesis       = g_aiStateCacheThesis;
+      currentTradeInvalidation = g_aiStateCacheInval;
+      currentTradeTarget       = g_aiStateCacheTarget;
+      currentTradeBearishCase  = g_aiStateCacheBearish;
+      lastAIBearishCase        = g_aiStateCacheBearish;
+      lastAISkipIf             = g_aiStateCacheSkipIf;
+      g_aiClaudeVote           = g_aiStateCacheClaude;
+      g_aiGPTVote              = g_aiStateCacheGPT;
+      g_aiCacheHitsToday++;
+      g_aiLastCallReason = "market-state cache reused; no paid LLM call";
+      Print("AI DIRECTOR MARKET CACHE HIT: state=", aiStateHash,
+            " dir=", g_aiStateCacheDir,
+            " conf=", g_aiStateCacheConf,
+            "% | no LLM spend");
+      return g_aiStateCacheDir;
+   }
+
+   string aiCostReason = "";
+   if(!XAU_AICostAllowEntry(setup, grade, setupScore, combinedScore, aiStateHash, aiCostReason))
+   {
+      Print("AI DIRECTOR LOCAL-ONLY: ", aiCostReason,
+            " | setup=", setup,
+            " grade=", grade,
+            " score=", DoubleToString(combinedScore, 1));
+      return 0; // neutral/no-response; caller lets local strategy rules proceed
+   }
 
    // -----------------------------------------------------------------------
    // v6.3.7 IMPROVEMENT 2: Per-bar AI response cache.
@@ -11501,13 +11710,13 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
       lastAISkipIf             = g_aiCacheSkipIf;
       g_aiClaudeVote           = g_aiCacheClaudeV;
       g_aiGPTVote              = g_aiCacheGPTV;
+      g_aiCacheHitsToday++;
       Print("AI DIRECTOR CACHE HIT: reusing ", signature, " result from this bar (dir=",
             g_aiCacheDir, " conf=", g_aiCacheConf, "%) — no LLM call needed");
       return g_aiCacheDir;
    }
 
    // Gather rich context
-   string htfConsensusStr = (g_htfConsensusDir == 1) ? "BULL" : (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL";
    string sessionName = "";
    double sessQ = GetSessionQuality();
    MqlDateTime dt; TimeCurrent(dt);
@@ -11616,6 +11825,8 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
       if(g_aiOffline) { g_aiOffline = false; Print("AI DIRECTOR BACK ONLINE — resuming full authority"); }
    }
    string response = CharArrayToString(result);
+   XAU_AICostRecordCall("entry confirmation " + setup + " " + grade,
+                        StringLen(body), StringLen(response));
 
    // v6.3.1 FIX: parse confidence FIRST (before action check) so that when AI
    // returns SKIP, lastAIConfidence is populated and CheckForEntry can correctly
@@ -11645,7 +11856,21 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    else if(StringFind(tail, "\"SELL\"") >= 0) dir = -1;
    // AI returned SKIP — confidence and skip_if are already parsed above; return 0 so
    // CheckForEntry falls into the aiResult==0 branch (not aiUnavailable).
-   else return 0;
+   else
+   {
+      g_aiLastStateHash = aiStateHash;
+      g_aiLastStateAt = TimeCurrent();
+      g_aiStateCacheDir = 0;
+      g_aiStateCacheConf = lastAIConfidence;
+      g_aiStateCacheThesis = "";
+      g_aiStateCacheInval = "";
+      g_aiStateCacheTarget = "";
+      g_aiStateCacheBearish = "";
+      g_aiStateCacheSkipIf = lastAISkipIf;
+      g_aiStateCacheClaude = "SKIP";
+      g_aiStateCacheGPT = "SKIP";
+      return 0;
+   }
 
    // Capture the full trader thesis for storage + display
    currentTradeThesis       = ExtractJsonString(response, "thesis");
@@ -11712,6 +11937,18 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    g_aiCacheClaudeV  = g_aiClaudeVote;
    g_aiCacheGPTV     = g_aiGPTVote;
 
+   g_aiLastStateHash     = aiStateHash;
+   g_aiLastStateAt       = TimeCurrent();
+   g_aiStateCacheDir     = dir;
+   g_aiStateCacheConf    = lastAIConfidence;
+   g_aiStateCacheThesis  = currentTradeThesis;
+   g_aiStateCacheInval   = currentTradeInvalidation;
+   g_aiStateCacheTarget  = currentTradeTarget;
+   g_aiStateCacheBearish = currentTradeBearishCase;
+   g_aiStateCacheSkipIf  = lastAISkipIf;
+   g_aiStateCacheClaude  = g_aiClaudeVote;
+   g_aiStateCacheGPT     = g_aiGPTVote;
+
    // v6.3.9: AI CONSENSUS logging — determine and log consensus_source
    {
       string csSource = "none";
@@ -11738,6 +11975,12 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
    AIExitVerdict v; v.action = 0; v.lockUSD = 0; v.reason = ""; v.confidence = 0;
    if(InpBacktestMode) return v;                   // Tester: no network
    if(StringLen(InpServerURL) < 10) return v;
+   XAU_AICostResetIfNewDay();
+   if(InpAICostDailyCallLimit > 0 && g_aiCallsToday >= InpAICostDailyCallLimit)
+   {
+      XAU_AICostRecordSkip("exit AI skipped: daily paid LLM budget reached; local exit engine continues");
+      return v;
+   }
    string url = InpServerURL + "/api/ai/manage-position";
    string headers = "Content-Type: application/json\r\n";
 
@@ -11783,6 +12026,7 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
    int res = WebRequest("POST", url, headers, 10000, postData, result, rh);
    if(res != 200) return v;
    string response = CharArrayToString(result);
+   XAU_AICostRecordCall("exit management audit " + dir, StringLen(body), StringLen(response));
    v.reason = ExtractJsonString(response, "reason");
    // Parse confidence from exit verdict response and store on struct
    {
@@ -12372,6 +12616,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       XAU_AppendTradeBrain("CLOSE", brainRec, dPrice, profit, worstFloatingPnl,
                            secondsNegative, outcome, lastExitReason + " | " + shieldExtra);
       XAU_BrainWatchClosedTrade(brainRec, dPrice, profit);
+      XAU_PostTradeConsciousAnalysis(brainRec, dPrice, profit, bestFloatingPnl,
+                                     worstFloatingPnl, secondsNegative,
+                                     lastExitReason + " | " + shieldExtra);
+      XAU_WriteLearningReport();
       Print("TRADE-BRAIN CLOSE: ", outcome,
             " posId=", posId,
             " setup=", brainRec.setup,
@@ -13161,6 +13409,362 @@ string XAU_BlockReasonKey(string reason)
    return XAU_CsvSafe(r);
 }
 
+string XAU_SpreadState(double spreadPts)
+{
+   if(InpMaxSpread <= 0) return "UNKNOWN";
+   if(spreadPts <= InpMaxSpread * 0.50) return "LOW";
+   if(spreadPts <= InpMaxSpread) return "NORMAL";
+   if(spreadPts <= InpMaxSpread * 1.50) return "HIGH";
+   return "EXTREME";
+}
+
+string XAU_TFConfirmLabel(int signal, ENUM_TIMEFRAMES tf)
+{
+   string why = "";
+   int d = TFDirectionByEMA(signal, tf, 0.25, why);
+   if(d == signal) return "ALIGN";
+   if(d == -signal) return "AGAINST";
+   return "NEUTRAL";
+}
+
+string XAU_MemoryInfluenceLabel(int samples)
+{
+   if(samples >= 50) return "trusted pattern";
+   if(samples >= 20) return "strong influence";
+   if(samples >= 5)  return "weak influence";
+   if(samples < 5)   return "information only";
+   return "information only";
+}
+
+bool XAU_MemoryCanInfluence(int samples)
+{
+   return samples >= 5;
+}
+
+void XAU_SendMemoryRecordToBackend(string eventName, string strategy, int direction,
+                                   string grade, double entryPrice, double exitPrice,
+                                   double lots, int confidence, string entryReason,
+                                   string exitReason, double maxFloatingProfit,
+                                   double maxFloatingLoss, double profitAtClose,
+                                   double profitLeftAfterExit, double riskAvoidedAfterExit,
+                                   string entryQuality, string exitQuality,
+                                   string lotQuality, bool shouldHoldLonger,
+                                   bool shouldCloseEarlier, string whatAIShouldRemember)
+{
+   if(InpBacktestMode || StringLen(InpServerURL) < 10) return;
+   string body = StringFormat(
+      "{\"event\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"ea_version\":\"%s\",\"build_hash\":\"%s\",\"input_hash\":\"%s\","
+      "\"symbol\":\"%s\",\"timeframe\":\"M5\",\"magic_number\":%d,\"session\":\"%s\",\"strategy\":\"%s\",\"direction\":\"%s\","
+      "\"entry_price\":%.2f,\"exit_price\":%.2f,\"lot_size\":%.2f,\"grade\":\"%s\",\"confidence\":%d,"
+      "\"market_regime\":\"%s\",\"news_state\":\"%s\",\"spread_state\":\"%s\",\"spread_points\":%.0f,\"htf_trend\":\"%s\","
+      "\"m1_confirm\":\"%s\",\"m5_confirm\":\"%s\",\"m15_confirm\":\"%s\",\"m30_confirm\":\"%s\",\"h1_confirm\":\"%s\","
+      "\"entry_reason\":\"%s\",\"exit_reason\":\"%s\",\"max_floating_profit\":%.2f,\"max_floating_loss\":%.2f,"
+      "\"profit_at_close\":%.2f,\"profit_left_after_exit\":%.2f,\"risk_avoided_after_exit\":%.2f,"
+      "\"entry_quality\":\"%s\",\"exit_quality\":\"%s\",\"lot_quality\":\"%s\","
+      "\"should_hold_longer\":%s,\"should_close_earlier\":%s,\"what_ai_should_remember\":\"%s\"}",
+      CloudJsonSafe(eventName, 32),
+      AccountInfoInteger(ACCOUNT_LOGIN), CloudJsonSafe(AccountInfoString(ACCOUNT_SERVER), 64),
+      XAUAI_EA_VERSION, XAUAI_BUILD_HASH, XAUAI_InputHash(),
+      Symbol(), InpMagicNumber, CloudJsonSafe(SessionTag(), 24),
+      CloudJsonSafe(strategy, 48), direction > 0 ? "BUY" : "SELL",
+      entryPrice, exitPrice, lots, CloudJsonSafe(grade, 16), confidence,
+      CloudJsonSafe(RegimeName(), 32), CloudJsonSafe(XAUAI_NewsState(), 80),
+      XAU_SpreadState((double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD)),
+      (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD),
+      g_htfConsensusDir > 0 ? "BULL" : g_htfConsensusDir < 0 ? "BEAR" : "NEUTRAL",
+      XAU_TFConfirmLabel(direction, PERIOD_M1),
+      XAU_TFConfirmLabel(direction, PERIOD_M5),
+      XAU_TFConfirmLabel(direction, PERIOD_M15),
+      XAU_TFConfirmLabel(direction, PERIOD_M30),
+      XAU_TFConfirmLabel(direction, PERIOD_H1),
+      CloudJsonSafe(entryReason, 260), CloudJsonSafe(exitReason, 260),
+      maxFloatingProfit, maxFloatingLoss, profitAtClose,
+      profitLeftAfterExit, riskAvoidedAfterExit,
+      CloudJsonSafe(entryQuality, 48), CloudJsonSafe(exitQuality, 64), CloudJsonSafe(lotQuality, 48),
+      shouldHoldLonger ? "true" : "false",
+      shouldCloseEarlier ? "true" : "false",
+      CloudJsonSafe(whatAIShouldRemember, 300));
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   int code = WebRequest("POST", InpServerURL + "/api/ai/memory/record",
+                         "Content-Type: application/json\r\n", 4000, pd, res, rh);
+   if(code >= 200 && code < 300)
+      Print("AI-MEMORY BACKEND SYNC: ", eventName, " ", strategy, " ", direction > 0 ? "BUY" : "SELL");
+}
+
+void XAU_AppendConsciousMemory(string eventName, string strategy, int direction,
+                               string grade, double entryPrice, double exitPrice,
+                               double lots, int confidence, string entryReason,
+                               string exitReason, double maxFloatingProfit,
+                               double maxFloatingLoss, double profitAtClose,
+                               double profitLeftAfterExit, double riskAvoidedAfterExit,
+                               string entryQuality, string exitQuality,
+                               string lotQuality, bool shouldHoldLonger,
+                               bool shouldCloseEarlier, string whatAIShouldRemember)
+{
+   if(!InpTradeBrainMemory || !IsXAUFastSymbol() || direction == 0) return;
+   string fn = XAU_ConsciousMemoryFile();
+   bool exists = FileIsExist(fn, FILE_COMMON);
+   int h = exists
+           ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',')
+           : FileOpen(fn, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE)
+   {
+      Print("AI-MEMORY: FileOpen failed err=", GetLastError());
+      return;
+   }
+   if(exists) FileSeek(h, 0, SEEK_END);
+   if(!exists || FileTell(h) == 0)
+   {
+      FileWrite(h, "event", "time_date", "account", "broker", "ea_version", "build_hash", "input_hash",
+                "symbol", "timeframe", "magic_number", "session", "strategy", "trade_direction",
+                "entry_price", "exit_price", "lot_size", "grade", "confidence_score",
+                "market_regime", "news_state", "spread_state", "spread_points", "htf_trend",
+                "m1_confirm", "m5_confirm", "m15_confirm", "m30_confirm", "h1_confirm",
+                "entry_reason", "exit_reason", "max_floating_profit", "max_floating_loss",
+                "profit_at_close", "profit_left_after_exit", "risk_avoided_after_exit",
+                "entry_quality", "exit_quality", "lot_quality", "should_hold_longer",
+                "should_close_earlier", "what_ai_should_remember");
+   }
+   double spreadPts = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   FileWrite(h, eventName,
+             TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+             (string)AccountInfoInteger(ACCOUNT_LOGIN),
+             XAU_CsvSafe(AccountInfoString(ACCOUNT_SERVER)),
+             XAUAI_EA_VERSION,
+             XAUAI_BUILD_HASH,
+             XAUAI_InputHash(),
+             Symbol(),
+             "M5",
+             InpMagicNumber,
+             XAU_CsvSafe(SessionTag()),
+             XAU_CsvSafe(strategy),
+             direction > 0 ? "BUY" : "SELL",
+             DoubleToString(entryPrice, 2),
+             DoubleToString(exitPrice, 2),
+             DoubleToString(lots, VolumeDigitsForSymbol()),
+             XAU_CsvSafe(grade),
+             confidence,
+             XAU_CsvSafe(RegimeName()),
+             XAU_CsvSafe(XAUAI_NewsState()),
+             XAU_SpreadState(spreadPts),
+             DoubleToString(spreadPts, 0),
+             g_htfConsensusDir > 0 ? "BULL" : g_htfConsensusDir < 0 ? "BEAR" : "NEUTRAL",
+             XAU_TFConfirmLabel(direction, PERIOD_M1),
+             XAU_TFConfirmLabel(direction, PERIOD_M5),
+             XAU_TFConfirmLabel(direction, PERIOD_M15),
+             XAU_TFConfirmLabel(direction, PERIOD_M30),
+             XAU_TFConfirmLabel(direction, PERIOD_H1),
+             XAU_CsvSafe(entryReason),
+             XAU_CsvSafe(exitReason),
+             DoubleToString(maxFloatingProfit, 2),
+             DoubleToString(maxFloatingLoss, 2),
+             DoubleToString(profitAtClose, 2),
+             DoubleToString(profitLeftAfterExit, 2),
+             DoubleToString(riskAvoidedAfterExit, 2),
+             XAU_CsvSafe(entryQuality),
+             XAU_CsvSafe(exitQuality),
+             XAU_CsvSafe(lotQuality),
+             shouldHoldLonger ? "Y" : "N",
+             shouldCloseEarlier ? "Y" : "N",
+             XAU_CsvSafe(whatAIShouldRemember));
+   FileClose(h);
+   XAU_SendMemoryRecordToBackend(eventName, strategy, direction, grade, entryPrice, exitPrice,
+                                 lots, confidence, entryReason, exitReason,
+                                 maxFloatingProfit, maxFloatingLoss, profitAtClose,
+                                 profitLeftAfterExit, riskAvoidedAfterExit,
+                                 entryQuality, exitQuality, lotQuality,
+                                 shouldHoldLonger, shouldCloseEarlier,
+                                 whatAIShouldRemember);
+}
+
+bool XAU_QueryConsciousMemory(int signal, string setupName, string grade,
+                              XAUConsciousMemoryStats &stats)
+{
+   stats.samples = 0; stats.wins = 0; stats.losses = 0; stats.winRate = 0.0;
+   stats.avgMFE = 0.0; stats.avgMAE = 0.0; stats.avgProfit = 0.0;
+   stats.avgProfitLeft = 0.0; stats.avgRiskAvoided = 0.0; stats.earlyExitRate = 0.0;
+   stats.influence = "information only"; stats.recommendation = "record only";
+   string fn = XAU_ConsciousMemoryFile();
+   if(!FileIsExist(fn, FILE_COMMON)) return false;
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return false;
+
+   string wantDir = signal > 0 ? "BUY" : "SELL";
+   string wantGrade = XAU_GradeBucket(grade);
+   int early = 0;
+   while(!FileIsEnding(h))
+   {
+      string ev = FileReadString(h);
+      string tm = FileReadString(h);
+      string account = FileReadString(h);
+      string broker = FileReadString(h);
+      string ver = FileReadString(h);
+      string build = FileReadString(h);
+      string ih = FileReadString(h);
+      string sym = FileReadString(h);
+      string tf = FileReadString(h);
+      string magic = FileReadString(h);
+      string session = FileReadString(h);
+      string strategy = FileReadString(h);
+      string dir = FileReadString(h);
+      string entry = FileReadString(h);
+      string exitp = FileReadString(h);
+      string lots = FileReadString(h);
+      string gr = FileReadString(h);
+      string conf = FileReadString(h);
+      string regime = FileReadString(h);
+      string news = FileReadString(h);
+      string spreadState = FileReadString(h);
+      string spreadPts = FileReadString(h);
+      string htf = FileReadString(h);
+      string m1 = FileReadString(h);
+      string m5 = FileReadString(h);
+      string m15 = FileReadString(h);
+      string m30 = FileReadString(h);
+      string h1 = FileReadString(h);
+      string entryReason = FileReadString(h);
+      string exitReason = FileReadString(h);
+      string mfeTxt = FileReadString(h);
+      string maeTxt = FileReadString(h);
+      string profitTxt = FileReadString(h);
+      string leftTxt = FileReadString(h);
+      string avoidedTxt = FileReadString(h);
+      string entryQ = FileReadString(h);
+      string exitQ = FileReadString(h);
+      string lotQ = FileReadString(h);
+      string holdTxt = FileReadString(h);
+      string closeTxt = FileReadString(h);
+      string remember = FileReadString(h);
+
+      if(ev == "event" || ev == "OPEN" || sym != Symbol() || dir != wantDir || strategy != setupName)
+         continue;
+      if(gr != wantGrade && gr != grade) continue;
+      double p = StringToDouble(profitTxt);
+      stats.samples++;
+      stats.avgProfit += p;
+      stats.avgMFE += StringToDouble(mfeTxt);
+      stats.avgMAE += StringToDouble(maeTxt);
+      stats.avgProfitLeft += StringToDouble(leftTxt);
+      stats.avgRiskAvoided += StringToDouble(avoidedTxt);
+      if(p > 0.01) stats.wins++;
+      else if(p < -0.01) stats.losses++;
+      if(holdTxt == "Y" || StringFind(exitQ, "EARLY") >= 0) early++;
+   }
+   FileClose(h);
+   if(stats.samples <= 0) return false;
+   stats.winRate = (double)stats.wins / stats.samples * 100.0;
+   stats.avgProfit /= stats.samples;
+   stats.avgMFE /= stats.samples;
+   stats.avgMAE /= stats.samples;
+   stats.avgProfitLeft /= stats.samples;
+   stats.avgRiskAvoided /= stats.samples;
+   stats.earlyExitRate = (double)early / stats.samples * 100.0;
+   stats.influence = XAU_MemoryInfluenceLabel(stats.samples);
+   return true;
+}
+
+bool XAU_MemoryRecommendation(int signal, string setupName, string grade,
+                              double &lotMulti, string &reason)
+{
+   lotMulti = 1.0;
+   reason = "";
+   XAUConsciousMemoryStats st;
+   if(!XAU_QueryConsciousMemory(signal, setupName, grade, st))
+   {
+      g_memoryLastInfluence = "information only";
+      g_memoryLastRecommendation = "AI-MEMORY: no similar aggregate memory yet; record this setup.";
+      return true;
+   }
+   bool canInfluence = XAU_MemoryCanInfluence(st.samples);
+   string rec = "record only; not enough aggregate evidence";
+   if(canInfluence && st.earlyExitRate >= 60.0 && st.avgProfitLeft > 0.0)
+   {
+      rec = "reduce early-exit pressure; similar exits often left profit";
+      g_memoryHoldBiasUntil = TimeCurrent() + 90 * 60;
+   }
+   else if(st.samples >= 20 && st.winRate <= 35.0)
+   {
+      rec = "reduce lot and require cleaner confirmation; similar setups have weak expectancy";
+      lotMulti = 0.65;
+   }
+   else if(st.samples >= 50 && st.winRate >= 65.0 && st.avgMFE > MathAbs(st.avgMAE))
+   {
+      rec = "trusted positive pattern; preserve normal management and avoid choking winners";
+      lotMulti = 1.05;
+   }
+   reason = StringFormat("AI-MEMORY: Found %d similar %s %s setups. Win rate: %.1f%% Avg MFE $%.0f Avg MAE $%.0f Early exits %.1f%%. Confidence: %s. Recommendation: %s.",
+                         st.samples, setupName, signal > 0 ? "BUY" : "SELL",
+                         st.winRate, st.avgMFE, st.avgMAE, st.earlyExitRate,
+                         st.influence, rec);
+   g_memoryLastInfluence = st.influence;
+   g_memoryLastRecommendation = reason;
+   Print(reason);
+   return true;
+}
+
+void XAU_PostTradeConsciousAnalysis(TradeBrainOpen &r, double closePrice, double profit,
+                                    double bestFloatingPnl, double worstFloatingPnl,
+                                    int secondsNegative, string exitReason)
+{
+   double profitLeft = MathMax(0.0, bestFloatingPnl - profit);
+   string entryQuality = "OK";
+   if(profit < 0.0) entryQuality = "BAD_ENTRY_OR_BAD_CONTEXT";
+   else if(worstFloatingPnl < 0.0 && profit > 0.0 && profit / MathAbs(worstFloatingPnl) < 0.60)
+      entryQuality = "BAD_ENTRY_RECOVERY";
+   else if(profit > 0.0 && worstFloatingPnl > -MathMax(25.0, StrategyReferenceBalance() * 0.005))
+      entryQuality = "GOOD_ENTRY";
+
+   string exitQuality = "OK";
+   bool shouldHoldLonger = false;
+   bool shouldCloseEarlier = false;
+   if(profitLeft >= MathMax(25.0, StrategyReferenceBalance() * 0.006))
+   {
+      exitQuality = "EXIT_EARLY_CANDIDATE";
+      shouldHoldLonger = true;
+   }
+   if(profit < 0.0 && secondsNegative > 15 * 60)
+   {
+      shouldCloseEarlier = true;
+      exitQuality = "LOSS_HELD_TOO_LONG_CANDIDATE";
+   }
+
+   string lotQuality = "OK";
+   if(profit < -StrategyReferenceBalance() * 0.04) lotQuality = "OVERSIZED_LOSS";
+   else if(r.lots <= 0.0) lotQuality = "BAD_LOT_DATA";
+
+   string remember = StringFormat("Aggregate this only with similar setups. If many samples show early exits left profit, reduce early-exit pressure. bestFloating=%.2f profitLeft=%.2f worstFloating=%.2f",
+                                  bestFloatingPnl, profitLeft, worstFloatingPnl);
+   XAU_AppendConsciousMemory("CLOSE", r.setup, r.dir, XAU_GradeBucket(r.grade),
+                             r.entryPrice, closePrice, r.lots, r.aiConfidence,
+                             r.entryReason, exitReason,
+                             bestFloatingPnl, worstFloatingPnl, profit,
+                             profitLeft, 0.0, entryQuality, exitQuality,
+                             lotQuality, shouldHoldLonger, shouldCloseEarlier,
+                             remember);
+}
+
+void XAU_WriteLearningReport()
+{
+   if(!InpTradeBrainMemory || !IsXAUFastSymbol()) return;
+   string fn = XAU_LearningReportFile();
+   int h = FileOpen(fn, FILE_WRITE | FILE_TXT | FILE_COMMON);
+   if(h == INVALID_HANDLE) return;
+   FileWrite(h, "# XAU AI Sniper Learning Report");
+   FileWrite(h, "Generated: " + TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS));
+   FileWrite(h, "Memory file: " + XAU_ConsciousMemoryFile());
+   FileWrite(h, "");
+   FileWrite(h, "Influence tiers:");
+   FileWrite(h, "- 1 similar memory = information only");
+   FileWrite(h, "- 5 similar memories = weak influence");
+   FileWrite(h, "- 20+ similar memories = strong influence");
+   FileWrite(h, "- 50+ similar memories = trusted pattern");
+   FileWrite(h, "");
+   FileWrite(h, "Latest recommendation:");
+   FileWrite(h, g_memoryLastRecommendation);
+   FileClose(h);
+}
+
 string XAU_BlockedMemoryFile()
 {
    return "XAUAI_BlockedTradeMemory_" + Symbol() + ".csv";
@@ -13169,6 +13773,16 @@ string XAU_BlockedMemoryFile()
 string XAU_TradeBrainFile()
 {
    return "XAUAI_ExecutedTradeBrain_" + Symbol() + ".csv";
+}
+
+string XAU_ConsciousMemoryFile()
+{
+   return "XAUAI_ConsciousMemory_" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + "_" + Symbol() + ".csv";
+}
+
+string XAU_LearningReportFile()
+{
+   return "XAUAI_LearningReport_" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + "_" + Symbol() + ".md";
 }
 
 string XAU_EntryQualityFile()
@@ -13795,6 +14409,16 @@ void XAU_UpdateClosedTradeOutcomes()
       XAU_AppendTradeBrain("POST_CLOSE", r, mid, g_brainClosedWatch[i].closeProfit,
                            missedMoney, g_brainClosedWatch[i].nextCheckpointMin,
                            verdict, extra);
+      XAU_AppendConsciousMemory("POST_CLOSE", r.setup, r.dir, XAU_GradeBucket(r.grade),
+                                r.entryPrice, mid, r.lots, r.aiConfidence,
+                                r.entryReason, extra,
+                                MathMax(0.0, g_brainClosedWatch[i].closeProfit + missedMoney),
+                                -MathAbs(avoidedMoney), g_brainClosedWatch[i].closeProfit,
+                                MathMax(0.0, missedMoney), MathMax(0.0, avoidedMoney),
+                                "POST_CLOSE_REVIEW", verdict, "UNCHANGED",
+                                verdict == "EXIT_EARLY_LEFT_PROFIT",
+                                verdict == "EXIT_GOOD_AVOIDED_REVERSAL",
+                                "Aggregate post-close follow-through; do not react to one example.");
       Print("EXIT-BRAIN CHECK: posId=", r.posId,
             " ", extra);
 
@@ -14028,6 +14652,22 @@ void XAU_AppendBlockedMemory(string eventName, BlockedIdea &idea, int checkpoint
                    curPrice, idea.signalPrice, 0.0, 0.0, 0.0, 0.0, 0.0,
                    0.0, 0, checkpointMin, favATR, advATR,
                    "blockedSignal", "", "", 0, true, extra);
+   if(eventName == "CHECK")
+   {
+      bool wouldWin = (favATR >= 2.0 && advATR < 1.20);
+      bool wouldLose = (advATR >= 1.0 && favATR < 1.50);
+      string exitQ = wouldWin ? "BLOCK_MISSED_PROFIT" : wouldLose ? "BLOCK_PROTECTED_ACCOUNT" : "BLOCK_MIXED";
+      string remember = StringFormat("Blocked-trade follow-up %dm: fav=%.2fATR adv=%.2fATR. Use only in aggregate to judge whether this block reason is too strict.",
+                                     checkpointMin, favATR, advATR);
+      XAU_AppendConsciousMemory("BLOCK_CHECK", idea.setup, idea.dir, idea.grade,
+                                idea.signalPrice, curPrice, 0.0, 0,
+                                idea.reason, extra,
+                                favATR, -advATR, 0.0,
+                                wouldWin ? favATR : 0.0,
+                                wouldLose ? advATR : 0.0,
+                                "BLOCKED_ENTRY", exitQ, "NO_LOT",
+                                wouldWin, wouldLose, remember);
+   }
 }
 
 void XAU_TrackSignalFirstSeen(int signal, string setupName, string grade,
@@ -17188,12 +17828,15 @@ string XAUAI_InputHash()
                      EffBasketLockMinPct(), EffBasketBEPct(), InpCloudSafeDisablePartials ? 1 : 0,
                      InpCleanExits ? 1 : 0, EffCleanBEActivateR(), EffCleanChandelierATR1(),
                      InpEarlyConvictionCut ? 1 : 0, InpEarlyConvictionCutR);
-   s += StringFormat("ampl=%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f|volcap=%d,%.2f|ai=%d|cloud=%d|",
+   s += StringFormat("ampl=%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f|volcap=%d,%.2f|ai=%d,%d,%d,%d,%d,%s|cloud=%d|",
                      InpAMPL_Enable ? 1 : 0, InpAMPL_MinUSD, InpAMPL_GivebackPct,
                      InpAMPL_GivebackMinUSD, InpAMPL_MinRetainUSD,
                      InpAMPL_MinRetainPeakPct, InpAMPL_GivebackMinCurrentPct,
                      InpVolLotCapEnable ? 1 : 0, InpVolLotCapATRRatio,
-                     InpUseAI ? 1 : 0, InpCloudFanout ? 1 : 0);
+                     InpUseAI ? 1 : 0, InpAICostDailyCallLimit,
+                     InpAIMinEntryCallSec, InpAIMarketStateCacheSec,
+                     InpAIOnlyHighImpact ? 1 : 0, InpAIMinGradeForLLM,
+                     InpCloudFanout ? 1 : 0);
    s += StringFormat("symbol=%s|tf=M5|digits=%d|point=%s",
                      Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
                      DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), 8));
@@ -17257,6 +17900,12 @@ string XAUAI_DiagnosticsText()
    d += StringFormat("Spread now: %.0f\n", (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
    d += StringFormat("Average spread: %.1f\n", g_spreadEMA);
    d += StringFormat("Magic number: %d\n", InpMagicNumber);
+   d += StringFormat("AI Cost: $%.4f est | tokens~%d\n", g_aiEstimatedCostToday, g_aiEstimatedTokensToday);
+   d += StringFormat("AI calls today: %d/%d | AI cache hits: %d | skipped: %d\n",
+                     g_aiCallsToday, InpAICostDailyCallLimit, g_aiCacheHitsToday, g_aiSkippedToday);
+   d += "AI last call reason: " + (StringLen(g_aiLastCallReason) > 0 ? StringSubstr(g_aiLastCallReason, 0, 100) : "none") + "\n";
+   d += "AI last skip reason: " + (StringLen(g_aiLastSkipReason) > 0 ? StringSubstr(g_aiLastSkipReason, 0, 100) : "none") + "\n";
+   d += "AI memory: " + g_memoryLastInfluence + " | " + (StringLen(g_memoryLastRecommendation) > 0 ? StringSubstr(g_memoryLastRecommendation, 0, 120) : "learning") + "\n";
    d += "News state: " + XAUAI_NewsState() + "\n";
    d += "Trade state: " + XAUAI_TradeState() + "\n";
    d += "Exit engine state: " + XAUAI_ExitEngineState() + "\n";
