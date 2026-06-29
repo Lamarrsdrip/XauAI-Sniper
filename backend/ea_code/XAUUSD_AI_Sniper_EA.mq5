@@ -1,9 +1,18 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.7 — Adaptive Trend Continuation Mode + post-news fast-track  |
-//|            v6.4.6 news/expectancy engine preserved                  |
+//|   v6.4.8 — Protected peak profit floor for continuation runners     |
+//|            v6.4.7 trend-continuation/news fast-track preserved       |
 //+------------------------------------------------------------------+
+// v6.4.8 CHANGES (2026-06-29) — PROTECTED PEAK PROFIT FLOOR:
+//
+//   1. Meaningful floating peaks now create an earned profit floor before
+//      AI HOLD, Clean Exits, or Trend Continuation runner logic can hold.
+//   2. If a trade already breached that floor, the EA logs
+//      CONTINUATION_EXIT_PROFIT_PROTECTED and closes instead of letting a
+//      proven winner become a loser.
+//   3. Basket protection no longer breathes into red after a meaningful peak.
+//
 // v6.4.7 CHANGES (2026-06-29) — ADAPTIVE TREND CONTINUATION MODE:
 //
 //   1. TREND CONTINUATION MODE:
@@ -458,16 +467,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.7"
-#property description "XAUUSD AI Sniper v6.4.7 — adaptive trend continuation, post-news fast-track, remaining-room timing guard"
+#property version   "6.4.8"
+#property description "XAUUSD AI Sniper v6.4.8 — protected peak profit floor for trend-continuation runners"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.7"
-#define XAUAI_EA_VERSION_NUM "6.4.7"
-#define XAUAI_BUILD_HASH "v647-trend-continuation-20260629"
+#define XAUAI_EA_VERSION "v6.4.8"
+#define XAUAI_EA_VERSION_NUM "6.4.8"
+#define XAUAI_BUILD_HASH "v648-protected-profit-floor-20260629"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1171,6 +1180,15 @@ input double InpAMPL_GivebackMinUSD  = 65.0;   // v6.4.6: raised 40→65 — pea
 input double InpAMPL_MinRetainUSD    = 25.0;   // v6.4.6 audit: never tighten AMPL if it would lock less than this
 input double InpAMPL_MinRetainPeakPct= 30.0;   // v6.4.6 audit: AMPL giveback lock must retain this % of best floating
 input double InpAMPL_GivebackMinCurrentPct = 25.0; // v6.4.6 audit: current profit must still be meaningful vs peak
+
+input group "=== PROTECTED PEAK PROFIT FLOOR (v6.4.8) ==="
+input bool   InpProtectedPeakFloorEnable      = true;  // Master toggle: meaningful peak must leave protected profit behind
+input double InpProtectedPeakMinUSD           = 75.0;  // Arm once a position/basket proves this much floating profit
+input double InpProtectedPeakLockPct          = 45.0;  // Protected floor as % of best floating profit
+input double InpProtectedPeakMinRetainUSD     = 35.0;  // Minimum secured profit once the floor is armed
+input double InpProtectedPeakGivebackExitPct  = 65.0;  // Market-close if giveback is this severe and floor is not safe
+input bool   InpProtectedPeakCloseOnFloorBreak= true;  // If price already breached the floor, close instead of hoping
+input bool   InpProtectedPeakBasketCloseRed   = true;  // Basket cannot breathe into red after meaningful protected peak
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // v6.3.0: TRUE — AI Director can HOLD, CLOSE, or LOCK positions
@@ -1979,6 +1997,11 @@ datetime    g_smc_last_bar  = 0;  // gate: only run SMC_Update() once per M5 bar
 ulong      peakTickets[];
 double     peakProfits[];
 
+// v6.4.8 — Per-position protected peak floor state
+ulong      g_profitFloorTickets[];
+double     g_profitFloorLastFloorUSD[];
+datetime   g_profitFloorLastLogTime[];
+
 // v4.5.4 — Per-position partial-TP tracker (prevents double-firing the partial)
 ulong      partialTakenTickets[];
 
@@ -2439,6 +2462,149 @@ void ClearPeakProfit(ulong ticket)
    ArrayResize(peakProfits, n);
 }
 
+int XAU_ProfitFloorIndex(ulong ticket)
+{
+   for(int i = 0; i < ArraySize(g_profitFloorTickets); i++)
+      if(g_profitFloorTickets[i] == ticket) return i;
+   return -1;
+}
+
+int XAU_EnsureProfitFloorIndex(ulong ticket)
+{
+   int idx = XAU_ProfitFloorIndex(ticket);
+   if(idx >= 0) return idx;
+   int n = ArraySize(g_profitFloorTickets);
+   ArrayResize(g_profitFloorTickets, n + 1);
+   ArrayResize(g_profitFloorLastFloorUSD, n + 1);
+   ArrayResize(g_profitFloorLastLogTime, n + 1);
+   g_profitFloorTickets[n] = ticket;
+   g_profitFloorLastFloorUSD[n] = 0.0;
+   g_profitFloorLastLogTime[n] = 0;
+   return n;
+}
+
+void XAU_ClearProfitFloor(ulong ticket)
+{
+   int idx = XAU_ProfitFloorIndex(ticket);
+   if(idx < 0) return;
+   int n = ArraySize(g_profitFloorTickets) - 1;
+   for(int i = idx; i < n; i++)
+   {
+      g_profitFloorTickets[i] = g_profitFloorTickets[i + 1];
+      g_profitFloorLastFloorUSD[i] = g_profitFloorLastFloorUSD[i + 1];
+      g_profitFloorLastLogTime[i] = g_profitFloorLastLogTime[i + 1];
+   }
+   ArrayResize(g_profitFloorTickets, n);
+   ArrayResize(g_profitFloorLastFloorUSD, n);
+   ArrayResize(g_profitFloorLastLogTime, n);
+}
+
+double XAU_CurrentSLLockUSD(bool isBuy, double openPx, double curSL, double lotsOpen)
+{
+   if(curSL <= 0 || lotsOpen <= 0) return 0.0;
+   double lockDist = isBuy ? (curSL - openPx) : (openPx - curSL);
+   if(lockDist <= 0) return 0.0;
+   double tickVal = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+   double tickSz  = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
+   if(tickVal <= 0 || tickSz <= 0) return 0.0;
+   return MathMax(0.0, lockDist * lotsOpen * tickVal / tickSz);
+}
+
+bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double curPrice,
+                                double curSL, double curTP, double slDist, double atr,
+                                int digits, double profit, double peak, double rDollars,
+                                double lotsOpen, int momentumScore,
+                                bool trendAligned, bool structureConfirmedBroken)
+{
+   if(!InpProtectedPeakFloorEnable) return false;
+   if(peak < InpProtectedPeakMinUSD || rDollars <= 0 || slDist <= 0 || lotsOpen <= 0)
+      return false;
+
+   int idx = XAU_EnsureProfitFloorIndex(ticket);
+   double lockPct = MathMax(1.0, MathMin(InpProtectedPeakLockPct, 85.0));
+   double floorUSD = MathMax(InpProtectedPeakMinRetainUSD, peak * lockPct / 100.0);
+   floorUSD = MathMin(floorUSD, peak * 0.90);
+   double givebackPct = (peak > 0 && profit < peak) ? ((peak - profit) / peak) * 100.0 : 0.0;
+   double currentLockUSD = XAU_CurrentSLLockUSD(isBuy, openPx, curSL, lotsOpen);
+   bool firstArm = (g_profitFloorLastFloorUSD[idx] <= 0.0);
+   bool floorRaised = (floorUSD > g_profitFloorLastFloorUSD[idx] + 0.50);
+   bool floorAlreadyProtected = (currentLockUSD + 0.50 >= floorUSD);
+   bool floorBroken = (profit <= floorUSD);
+   bool severeGiveback = (givebackPct >= InpProtectedPeakGivebackExitPct);
+
+   if(firstArm)
+   {
+      PrintFormat("PEAK_PROFIT_REACHED #%I64u %s | peak=$%.2f floor=$%.2f current=$%.2f | trendAligned=%s momentum=%d/5 structBroken=%s",
+                  ticket, isBuy ? "BUY" : "SELL", peak, floorUSD, profit,
+                  trendAligned ? "Y" : "N", momentumScore, structureConfirmedBroken ? "Y" : "N");
+   }
+
+   if(floorRaised)
+      g_profitFloorLastFloorUSD[idx] = floorUSD;
+
+   if(!floorAlreadyProtected && profit > floorUSD)
+   {
+      double lockDist = (floorUSD / rDollars) * slDist;
+      double floorSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
+                             : NormalizeDouble(openPx - lockDist, digits);
+      double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+      long stopsLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+      double buffer = MathMax(stopsLevel * point, point * 30);
+      bool sane = isBuy ? (floorSL > openPx && floorSL < curPrice - buffer)
+                        : (floorSL < openPx && floorSL > curPrice + buffer);
+      bool ratchet = isBuy ? (floorSL > curSL) : (floorSL < curSL || curSL == 0);
+
+      if(sane && ratchet && SafeModifySL(ticket, floorSL, curTP, isBuy, curPrice, "PROFIT_FLOOR"))
+      {
+         currentLockUSD = floorUSD;
+         floorAlreadyProtected = true;
+         PrintFormat("PROFIT_FLOOR_SET #%I64u %s | peak=$%.2f floor=$%.2f current=$%.2f giveback=%.0f%% | SL=%s locks~$%.2f",
+                     ticket, isBuy ? "BUY" : "SELL", peak, floorUSD, profit, givebackPct,
+                     DoubleToString(floorSL, digits), floorUSD);
+      }
+   }
+
+   if(floorAlreadyProtected)
+   {
+      if(floorRaised && currentLockUSD > 0)
+      {
+         PrintFormat("PROFIT_FLOOR_SET #%I64u %s | existing SL already protects ~$%.2f >= floor $%.2f | peak=$%.2f current=$%.2f",
+                     ticket, isBuy ? "BUY" : "SELL", currentLockUSD, floorUSD, peak, profit);
+      }
+      if((trendAligned || momentumScore >= 3) && TimeCurrent() - g_profitFloorLastLogTime[idx] >= 60)
+      {
+         PrintFormat("CONTINUATION_HOLD_WITH_PROTECTION #%I64u %s | current=$%.2f peak=$%.2f floor=$%.2f protectedSL=$%.2f | momentum=%d/5 trend=%s",
+                     ticket, isBuy ? "BUY" : "SELL", profit, peak, floorUSD,
+                     currentLockUSD, momentumScore, trendAligned ? "Y" : "N");
+         g_profitFloorLastLogTime[idx] = TimeCurrent();
+      }
+      return false;
+   }
+
+   if(InpProtectedPeakCloseOnFloorBreak && (floorBroken || severeGiveback || profit <= 0.0))
+   {
+      lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED | peak $%.2f floor $%.2f current $%.2f giveback %.0f%%",
+                                    peak, floorUSD, profit, givebackPct);
+      string reason = lastExitReason;
+      PrintFormat("GIVEBACK_LIMIT_TRIGGERED #%I64u %s | peak=$%.2f floor=$%.2f current=$%.2f giveback=%.0f%% | protectedSL=$%.2f",
+                  ticket, isBuy ? "BUY" : "SELL", peak, floorUSD, profit, givebackPct, currentLockUSD);
+      PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED #%I64u %s | closing because earned floor was breached; trend=%s momentum=%d/5 structBroken=%s",
+                  ticket, isBuy ? "BUY" : "SELL",
+                  trendAligned ? "Y" : "N", momentumScore, structureConfirmedBroken ? "Y" : "N");
+      XAU_SetPendingExitReason(ticket, reason);
+      if(PositionSelectByTicket(ticket))
+      {
+         ulong ident = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+         if(ident > 0 && ident != ticket)
+            XAU_SetPendingExitReason(ident, reason);
+      }
+      trade.PositionClose(ticket);
+      return true;
+   }
+
+   return false;
+}
+
 // v4.5.4 — Partial-TP tracker helpers
 bool PartialAlreadyTaken(ulong ticket)
 {
@@ -2798,7 +2964,8 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       bool isEmergencyMod = (StringFind(logTag, "EPF")       >= 0 ||
                              StringFind(logTag, "CLOSE")      >= 0 ||
                              StringFind(logTag, "EMERGENCY")  >= 0 ||
-                             StringFind(logTag, "AI_LOCK")    >= 0);
+                             StringFind(logTag, "AI_LOCK")    >= 0 ||
+                             StringFind(logTag, "PROFIT_FLOOR") >= 0);
       if(!isEmergencyMod)
       {
          static datetime g_slThrottleSec = 0;
@@ -3475,6 +3642,7 @@ int OnInit()
    todayReEntryCount = 0;
    asiaRangeHigh = 0; asiaRangeLow = 0; asiaRangeLocked = false; asiaRangeDay = 0;
    ArrayResize(peakTickets, 0); ArrayResize(peakProfits, 0); ArrayResize(partialTakenTickets, 0);
+   ArrayResize(g_profitFloorTickets, 0); ArrayResize(g_profitFloorLastFloorUSD, 0); ArrayResize(g_profitFloorLastLogTime, 0);
    ArrayResize(aiVetoTickets, 0); ArrayResize(aiVetoLastCall, 0);
    ArrayResize(tpExtendTickets, 0); ArrayResize(tpExtendCount, 0);
    ArrayResize(g_exitReasonKeys, 0); ArrayResize(g_exitReasonTrades, 0);
@@ -9627,7 +9795,20 @@ bool ManageBasket()
                ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
                return true;
             }
-            PrintFormat("BASKET_FAST_REV_BREATHE │ peak $%.2f -> pnl $%.2f, drop %.1f%% in %ds, but basket is not profitable; SL/structure manages recovery",
+            if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= InpProtectedPeakMinUSD)
+            {
+               PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | FAST_REVERSAL peak=$%.2f pnl=$%.2f drop=%.1f%% in %ds",
+                           g_basketPeakUSD, totalPnL, dropPctOfPeak, InpBasketFastWindowSec);
+               lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | fast reversal peak $%.2f -> $%.2f", g_basketPeakUSD, totalPnL);
+               PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | closing red basket after meaningful peak instead of breathing into loss");
+               CloseAll(lastExitReason);
+               g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
+               g_basketArmed    = false; g_basketBEHit = false;
+               g_basketSoftLockTaken = false;
+               ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+               return true;
+            }
+            PrintFormat("BASKET_FAST_REV_BREATHE │ peak $%.2f -> pnl $%.2f, drop %.1f%% in %ds, but basket peak was not protected enough for red close; SL/structure manages recovery",
                         g_basketPeakUSD, totalPnL, dropPctOfPeak, InpBasketFastWindowSec);
          }
       }
@@ -9654,7 +9835,20 @@ bool ManageBasket()
                ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
                return true;
             }
-            PrintFormat("BASKET_HARD_CAP_BREATHE │ peak $%.2f -> pnl $%.2f, giveback $%.2f >= cap $%.2f, but basket is not profitable; holding for SL/structure",
+            if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= InpProtectedPeakMinUSD)
+            {
+               PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | HARD_CAP peak=$%.2f pnl=$%.2f giveback=$%.2f cap=$%.2f",
+                           g_basketPeakUSD, totalPnL, currGivebackUSD, maxGivebackUSD);
+               lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | hard cap peak $%.2f -> $%.2f", g_basketPeakUSD, totalPnL);
+               PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | closing red basket after protected peak hard-cap breach");
+               CloseAll(lastExitReason);
+               g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
+               g_basketArmed    = false; g_basketBEHit = false;
+               g_basketSoftLockTaken = false;
+               ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+               return true;
+            }
+            PrintFormat("BASKET_HARD_CAP_BREATHE │ peak $%.2f -> pnl $%.2f, giveback $%.2f >= cap $%.2f, but basket peak was not protected enough for red close; holding for SL/structure",
                         g_basketPeakUSD, totalPnL, currGivebackUSD, maxGivebackUSD);
          }
       }
@@ -9700,7 +9894,23 @@ bool ManageBasket()
          ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
          return true;
       }
-      PrintFormat("BASKET_LOCK_BREATHE │ PnL=$%.2f < Floor=$%.2f after peak $%.2f, but basket is red; no panic close, SL/structure owns exit",
+      if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= InpProtectedPeakMinUSD)
+      {
+         PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | FLOOR peak=$%.2f floor=$%.2f pnl=$%.2f",
+                     g_basketPeakUSD, g_basketFloorUSD, totalPnL);
+         lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | floor $%.2f from peak $%.2f breached at $%.2f",
+                                       g_basketFloorUSD, g_basketPeakUSD, totalPnL);
+         PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | closing red basket because earned floor was breached");
+         CloseAll(lastExitReason);
+         g_basketPeakUSD  = 0;
+         g_basketFloorUSD = 0;
+         g_basketArmed    = false;
+         g_basketBEHit    = false;
+         g_basketSoftLockTaken = false;
+         ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+         return true;
+      }
+      PrintFormat("BASKET_LOCK_BREATHE │ PnL=$%.2f < Floor=$%.2f after peak $%.2f, but protected basket close is disabled or peak is too small; SL/structure owns exit",
                   totalPnL, g_basketFloorUSD, g_basketPeakUSD);
    }
 
@@ -10500,6 +10710,19 @@ void ManagePositions()
 	      bool recoveryLikelyEA = CleanRecoveryLikely(isBuy, trendAlignedEA, momentumScoreEA,
 	                                                   structureConfirmedEA, emaAgainstEA,
 	                                                   rsiAgainstEA, rMultEA);
+
+      // v6.4.8 PROTECTED PEAK FLOOR
+      // Trend Continuation Mode may justify holding winners longer, but it must
+      // never allow a meaningful floating peak to give back into a loss without
+      // a logged, protective exit decision. Run before AI HOLD and CleanExits.
+      if(XAU_ProtectPeakProfitFloor(ticket, isBuy, openPx, curPrice, curSL, curTP,
+                                    slDist, atr, digits, profit, peak, rDollars,
+                                    lotsOpen, momentumScoreEA,
+                                    trendAlignedEA, structureConfirmedEA))
+      {
+         lastTradeClose = TimeCurrent();
+         continue;
+      }
 
 	      // v5.8.15 EXPECTANCY LOSS ARMOR
       // Breathe first: if drawdown becomes unhealthy, reduce part of the size
@@ -12879,7 +13102,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
 
    // v4.5.9 — Position fully closed (verified above) — clear trackers.
    // v5.8.52: also clear A+ shield armed state.
-   if(posId > 0) { ClearPeakProfit(posId); ClearPartialTaken(posId); ClearAIVeto(posId); ClearTPExtend(posId); APlusClearShield(posId); }
+   if(posId > 0) { ClearPeakProfit(posId); XAU_ClearProfitFloor(posId); ClearPartialTaken(posId); ClearAIVeto(posId); ClearTPExtend(posId); APlusClearShield(posId); }
    // Clear active thesis (no open position now until next entry)
    if(CountMyPositions() == 0)
    {
@@ -18375,6 +18598,14 @@ string XAUAI_InputHash()
                      InpAIMinEntryCallSec, InpAIMarketStateCacheSec,
                      InpAIOnlyHighImpact ? 1 : 0, InpAIMinGradeForLLM,
                      InpCloudFanout ? 1 : 0);
+   s += StringFormat("protectedPeak=%d,%.2f,%.2f,%.2f,%.2f,%d,%d|",
+                     InpProtectedPeakFloorEnable ? 1 : 0,
+                     InpProtectedPeakMinUSD,
+                     InpProtectedPeakLockPct,
+                     InpProtectedPeakMinRetainUSD,
+                     InpProtectedPeakGivebackExitPct,
+                     InpProtectedPeakCloseOnFloorBreak ? 1 : 0,
+                     InpProtectedPeakBasketCloseRed ? 1 : 0);
    s += StringFormat("symbol=%s|tf=M5|digits=%d|point=%s",
                      Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
                      DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), 8));
