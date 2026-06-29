@@ -7781,18 +7781,19 @@ void OnTick()
    // v6.4.6: VOLATILITY LOT CAP — when ATR spikes (news, high-vol event), the SL grows
    // proportionally in dollar terms. Scale down lot to maintain consistent dollar risk.
    // Prevents the -260 loss scenario: news spike ATR inflates SL AND lot simultaneously.
-   if(InpVolLotCapEnable)
+   if(InpVolLotCapEnable && ArraySize(bufATR) >= 2 && bufATR[1] > 0)
    {
+      double curATR_vol = bufATR[1];
       double medATR = GetATR20Median();
-      if(medATR > 0 && atr > medATR * InpVolLotCapATRRatio)
+      if(medATR > 0 && curATR_vol > medATR * InpVolLotCapATRRatio)
       {
          double volLotAdj;
-         if(atr >= medATR * 2.5)      volLotAdj = 0.45;
-         else if(atr >= medATR * 2.0) volLotAdj = 0.55;
-         else                          volLotAdj = 0.65;
+         if(curATR_vol >= medATR * 2.5)      volLotAdj = 0.45;
+         else if(curATR_vol >= medATR * 2.0) volLotAdj = 0.55;
+         else                                 volLotAdj = 0.65;
          sizeMulti *= volLotAdj;
          PrintFormat("VOL_LOT_CAP: ATR %.1f is %.1fx 20-bar median %.1f | lot x%.2f to maintain consistent dollar risk (prevents news-spike oversizing)",
-                     atr, atr/medATR, medATR, volLotAdj);
+                     curATR_vol, curATR_vol/medATR, medATR, volLotAdj);
       }
    }
 
