@@ -1,9 +1,25 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.2 — Self-audit: strategy weights, handle leak, FIFO,      |
-//|            startup version strings, calibration key-order fix     |
+//|   v6.4.3 — Adaptive Momentum Profit Lock (AMPL): USD-space profit |
+//|            protection for explosive XAUUSD impulse moves          |
 //+------------------------------------------------------------------+
+// v6.4.3 CHANGES (2026-06-29) — ADAPTIVE MOMENTUM PROFIT LOCK (AMPL):
+//   NEW FEATURE: AMPL in ManageCleanExitsForPosition().
+//   PROBLEM: Wide SL + large lot → large dollar profit at LOW R-multiple (e.g., $136
+//   floating at 0.33R with 30pt SL). R-based exit systems (BE@1.5R, Chandelier@2R,
+//   A+Shield@3R) never fire in time. Market retraces → EA exits at +$38 (72% giveback).
+//   SOLUTION: AMPL works in USD space, not R-multiples. Fires when DOLLAR profit >= $50
+//   AND the move qualifies as explosive (large directional candle or fast velocity over
+//   5 bars). Places adaptive tight SL just behind current price using SafeModifySL()
+//   (ratchet-only — never moves SL backward, never conflicts with other systems).
+//   Trail distance adapts: 4-5/5 momentum → 0.45×ATR, 3/5 → 0.30×ATR, 0-2/5 → 0.18×ATR.
+//   ALSO: profit give-back limit fires independently — when peak >= $40 AND giveback
+//   >= 32% of peak, tighten SL to prevent further bleed even on non-explosive moves.
+//   Re-entry after an AMPL stop is handled by the existing re-entry engine.
+//   New inputs: InpAMPL_Enable, InpAMPL_MinUSD, InpAMPL_ExplosiveBodyR,
+//   InpAMPL_VelATRFactor, InpAMPL_TrailATR_{Strong,Mid,Weak}, InpAMPL_GivebackPct,
+//   InpAMPL_GivebackMinUSD. Master toggle allows instant disable without recompile.
 // v6.4.2 CHANGES (2026-06-28) — SELF-AUDIT FIXES:
 //   1. VERSION STRINGS: Startup Print() and heartbeat now report v6.4.2 (was stale v5.9.1).
 //   2. CALIBRATION KEY COLLISION: ExtractJsonDouble called with bare key like "0-49" but the
@@ -328,8 +344,8 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.2"
-#property description "XAUUSD AI Sniper v6.4.2 — self-audit fixes: version strings, calibration key-order, squeeze weight guard"
+#property version   "6.4.3"
+#property description "XAUUSD AI Sniper v6.4.3 — Adaptive Momentum Profit Lock (AMPL): USD-space profit protection for explosive XAUUSD moves"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
@@ -983,6 +999,29 @@ input double InpAPlusForceExitGivePct       = 88.0; // If market-close enabled, 
 input bool   InpAPlusShieldAllowMarketClose = false;// Default OFF: tighten SL, do not close runners at tiny profit
 input double InpAPlusShieldPeakLockPct      = 45.0; // On confirmed reversal, try to lock this % of best floating profit
 input int    InpAPlusReversalMomentum       = 2;    // Trail/close only if momentum score <= this (confirms reversal, not pullback)
+
+input group "=== ADAPTIVE MOMENTUM PROFIT LOCK — AMPL (v6.4.3) ==="
+// AMPL prevents large profit givebacks on explosive XAUUSD impulse moves.
+// XAUUSD pattern: strong impulse → sharp retracement → then continuation.
+// AMPL detects explosive moves and places a TIGHT SL close behind price, capturing
+// most of the impulse. The EA can then re-enter if the trend resumes.
+//
+// Works in USD space — fires at dollar profit thresholds, NOT R-multiples.
+// This is critical for wide-SL / large-lot positions where R-based systems
+// (BE at 1.5R, Chandelier at 2.0R) never fire quickly enough to protect profit.
+//
+// Example: SELL 4064.74 → price falls to 4054 (+$136, but only 0.33R with wide SL).
+// Normal systems do not fire at 0.33R. AMPL fires because $136 >= $50 threshold
+// AND the fast move qualifies as explosive. SL moves to 4056-4057, locking $90+.
+input bool   InpAMPL_Enable          = true;   // MASTER TOGGLE
+input double InpAMPL_MinUSD          = 50.0;   // Min current profit ($) to arm explosive trail
+input double InpAMPL_ExplosiveBodyR  = 1.35;   // Candle body >= N×ATR in trade direction = explosive candle
+input double InpAMPL_VelATRFactor    = 1.50;   // Price moved >= N×ATR over last 5 bars = fast velocity
+input double InpAMPL_TrailATR_Strong = 0.45;   // Trail buffer (×ATR) when momentum 4-5/5 (trend running)
+input double InpAMPL_TrailATR_Mid    = 0.30;   // Trail buffer (×ATR) when momentum 3/5 (moderate)
+input double InpAMPL_TrailATR_Weak   = 0.18;   // Trail buffer (×ATR) when momentum 0-2/5 (exhausting — lock now)
+input double InpAMPL_GivebackPct     = 32.0;   // Giveback limit: fire when giving back this % of peak profit
+input double InpAMPL_GivebackMinUSD  = 40.0;   // Min peak ($) before giveback limit applies (prevents noise)
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // v6.3.0: TRUE — AI Director can HOLD, CLOSE, or LOCK positions
@@ -3154,7 +3193,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v6.4.2 (AI DIRECTOR + ADAPTIVE WEIGHTS) READY ===");
+   Print("=== XAUAI SNIPER v6.4.3 (AI DIRECTOR + ADAPTIVE WEIGHTS + AMPL) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -9527,6 +9566,107 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    }
    // ============ END A+ PROFIT SHIELD ============
 
+   // ============ v6.4.3 ADAPTIVE MOMENTUM PROFIT LOCK (AMPL) ============
+   //
+   // PROBLEM SOLVED: Wide SL + large lot → large dollar profit at LOW R-multiple.
+   // Example: SELL 4064.74, price falls to 4054 (+$136) but only 0.33R with 30pt SL.
+   // R-based systems never fire (BE@1.5R, Chandelier@2R, A+Shield@3R). Market
+   // retraces → EA exits at +$38. 72% of the move given back, preventably.
+   //
+   // AMPL works in USD space — fires at dollar profit thresholds, NOT R-multiples.
+   // This makes it effective precisely when the other systems are blind.
+   //
+   // Two independent triggers:
+   //   1. EXPLOSIVE: fast velocity or large directional candle + profit >= min$
+   //   2. GIVEBACK_LIMIT: retrace >= N% of peak profit (any position with meaningful peak)
+   //
+   // Trail distance adapts to momentum:
+   //   Strong (4-5/5) → 0.45×ATR buffer  — trend still running, give room to continue
+   //   Moderate (3/5) → 0.30×ATR buffer  — moderating, tighten
+   //   Weak (0-2/5)  → 0.18×ATR buffer  — exhausting, lock the majority now
+   //
+   // Fully additive: ratchet-only, never moves SL backward. Never conflicts with
+   // Chandelier, A+Shield, or any other system (the tightest active SL wins).
+   // Re-entry after an AMPL stop is handled by the existing re-entry engine.
+   if(InpAMPL_Enable && rDollars > 0)
+   {
+      double tickVal_a   = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+      double tickSz_a    = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
+      double amplProfit  = isBuy ? (curPrice - openPx) : (openPx - curPrice);
+      amplProfit        *= lotsOpen * tickVal_a / tickSz_a;
+
+      if(amplProfit > 0 && peak > 0)
+      {
+         // Signal 1: Explosive candle — large body in trade direction vs ATR
+         double barBody   = MathAbs(close1 - open1);
+         bool   bigCandle = (barBody >= atr * InpAMPL_ExplosiveBodyR) &&
+                            ((isBuy && close1 > open1) || (!isBuy && close1 < open1));
+
+         // Signal 2: Fast recent velocity — net move >= N×ATR over last 5 bars
+         double price5BarAgo = iClose(Symbol(), PERIOD_M5, 5);
+         double recentMove   = isBuy ? (curPrice - price5BarAgo) : (price5BarAgo - curPrice);
+         bool   fastVelocity = (atr > 0 && recentMove >= atr * InpAMPL_VelATRFactor);
+
+         bool explosiveMove = (bigCandle || fastVelocity) && (amplProfit >= InpAMPL_MinUSD);
+
+         // Signal 3: Give-back limit — fires regardless of explosive detection
+         double peakRetrace   = (amplProfit < peak) ? ((peak - amplProfit) / peak) * 100.0 : 0.0;
+         bool   givebackLimit = (peak >= InpAMPL_GivebackMinUSD) && (peakRetrace >= InpAMPL_GivebackPct);
+
+         if(explosiveMove || givebackLimit)
+         {
+            // Adaptive trail: stronger momentum → wider buffer (may continue), weaker → tighter
+            double trailATR;
+            if(momentumScore >= 4)      trailATR = InpAMPL_TrailATR_Strong;
+            else if(momentumScore == 3) trailATR = InpAMPL_TrailATR_Mid;
+            else                         trailATR = InpAMPL_TrailATR_Weak;
+
+            // RSI extreme → tighten (reversal increasingly likely)
+            if((isBuy && rsi > 74) || (!isBuy && rsi < 26))
+               trailATR = MathMax(trailATR - 0.08, 0.12);
+
+            // HTF still aligned + strong momentum → small extra breathing room
+            if(((isBuy && g_htfConsensusDir == 1) || (!isBuy && g_htfConsensusDir == -1))
+               && momentumScore >= 4)
+               trailATR += 0.10;
+
+            double trailDist = atr * trailATR;
+            double amplSL    = isBuy ? NormalizeDouble(curPrice - trailDist, digits)
+                                     : NormalizeDouble(curPrice + trailDist, digits);
+
+            // Safety gates: profit zone, broker stops level, ratchet only
+            double pt_a  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+            long   lvl_a = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+            double buf_a = MathMax(lvl_a * pt_a, pt_a * 30);
+            bool inProfit_a = isBuy ? (amplSL > openPx)           : (amplSL < openPx);
+            bool sane_a     = isBuy ? (amplSL < curPrice - buf_a) : (amplSL > curPrice + buf_a);
+            bool ratchet_a  = isBuy ? (amplSL > curSL)            : (amplSL < curSL || curSL == 0);
+
+            if(inProfit_a && sane_a && ratchet_a)
+            {
+               string amplTrigger = givebackLimit
+                                    ? StringFormat("GIVEBACK_%.0f%%", peakRetrace)
+                                    : (bigCandle ? "BIG_CANDLE" : "FAST_VELOCITY");
+               if(SafeModifySL(ticket, amplSL, curTP, isBuy, curPrice, "AMPL"))
+               {
+                  static datetime lastAMPLLog = 0;
+                  if(TimeCurrent() - lastAMPLLog >= 20)
+                  {
+                     PrintFormat("AMPL #%I64u %s | trigger=%s | profit=$%.2f peak=$%.2f retrace=%.0f%% | "
+                                 "mom=%d/5 trail=%.2f×ATR | SL %s→%s | locks~$%.2f",
+                                 ticket, isBuy?"BUY":"SELL", amplTrigger,
+                                 amplProfit, peak, peakRetrace, momentumScore, trailATR,
+                                 DoubleToString(curSL, digits), DoubleToString(amplSL, digits),
+                                 amplProfit);
+                     lastAMPLLog = TimeCurrent();
+                  }
+               }
+            }
+         }
+      }
+   }
+   // ============ END AMPL ============
+
    // ============ PHASE 1: BREAKEVEN LOCK @ +1R ============
    double beActivateR = EffCleanBEActivateR();
    if(trendAligned && momentumScore >= 4) beActivateR += 0.35;
@@ -15898,7 +16038,7 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v6.4.2\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v6.4.3\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -16470,7 +16610,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v6.4.2 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v6.4.3 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
