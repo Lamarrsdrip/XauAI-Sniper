@@ -11,14 +11,14 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_v646_version_identity_is_single_source_and_backend_matches_root():
+def test_v647_version_identity_is_single_source_and_backend_matches_root():
     root = read(EA_ROOT)
     backend = read(EA_BACKEND)
 
     assert root == backend
-    assert '#property version   "6.4.6"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.6"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.6"' in root
+    assert '#property version   "6.4.7"' in root
+    assert '#define XAUAI_EA_VERSION "v6.4.7"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.4.7"' in root
     assert '\\"ea_version\\":\\"%s\\"' in root
     assert "XAUAI_EA_VERSION" in root[root.index("void BotMonitorHeartbeat()"):]
     assert "XAUAI_DiagnosticsText()" in root

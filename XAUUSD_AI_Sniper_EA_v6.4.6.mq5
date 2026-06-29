@@ -1,9 +1,30 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.6 — NEWS_AFTERMATH fix + Post-News Intelligence +          |
-//|            Adaptive Expectancy Engine (early cut / hold winners)   |
+//|   v6.4.7 — Adaptive Trend Continuation Mode + post-news fast-track  |
+//|            v6.4.6 news/expectancy engine preserved                  |
 //+------------------------------------------------------------------+
+// v6.4.7 CHANGES (2026-06-29) — ADAPTIVE TREND CONTINUATION MODE:
+//
+//   1. TREND CONTINUATION MODE:
+//      Gold can continue aggressively after breakdowns/news. The timing guard
+//      now separates a real late chase from clean high-momentum continuation.
+//      Extended no longer automatically means finished.
+//
+//   2. REMAINING ROOM ESTIMATOR:
+//      BAD-RR no longer relies only on distance to the just-broken local low/high.
+//      Fresh breakdowns/breakouts estimate remaining directional room using
+//      ATR expansion, older structure, HTF alignment, post-news bias, and momentum.
+//
+//   3. NEWS_AFTERMATH FAST-TRACK:
+//      If spread normalizes and no scheduled high-impact window is active, A/A+
+//      entries in the confirmed post-news direction can move into
+//      POST_NEWS_FAST_TRACK instead of waiting on stale aftermath fear.
+//
+//   4. BLOCKED-MOVE LEARNING:
+//      When similar BAD-RR/late blocks repeatedly became BLOCK_MISSED_PROFIT,
+//      the timing guard reduces overblocking pressure in aggregate only.
+//
 // v6.4.6 CHANGES (2026-06-29) — NEWS INTELLIGENCE + EXPECTANCY ENGINE:
 //
 //   1. NEWS_AFTERMATH CRITICAL FIX:
@@ -437,16 +458,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.6"
-#property description "XAUUSD AI Sniper v6.4.6 — NEWS_AFTERMATH fix, post-news intelligence, early loser cut, hold winners longer, vol-adjusted lot sizing"
+#property version   "6.4.7"
+#property description "XAUUSD AI Sniper v6.4.7 — adaptive trend continuation, post-news fast-track, remaining-room timing guard"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.6"
-#define XAUAI_EA_VERSION_NUM "6.4.6"
-#define XAUAI_BUILD_HASH "v646-live-audit-20260629"
+#define XAUAI_EA_VERSION "v6.4.7"
+#define XAUAI_EA_VERSION_NUM "6.4.7"
+#define XAUAI_BUILD_HASH "v647-trend-continuation-20260629"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -591,10 +612,12 @@ input bool   InpCommitteeLotAdj  = true;    // Let committee adjust lot size (ra
 input bool   InpInTradeClassify  = true;    // Classify open positions every bar (HEALTHY/PULLBACK/REVERSING/etc.)
 
 input group "=== NEWS AFTERMATH FILTER (v6.0.2) ==="
-// Detects sudden spread spikes (news events) and pauses new entries for a safety window.
-// Spread EMA tracks normal baseline; if live spread exceeds N× that baseline, entries pause.
-input bool   InpNewsAftermathEnable  = true;  // Pause new entries after detected spread spike
-input double InpNewsSpreadMulti      = 2.5;   // Spread must exceed N× EMA baseline to trigger (2.5-3x = broker noise, 3x+ = likely news)
+// Detects sudden spread spikes and pauses new entries only for true news/extreme disorder.
+// Broker-noise widening is logged separately and does not arm a 10-minute NEWS_AFTERMATH timer.
+input bool   InpNewsAftermathEnable  = true;  // Pause new entries after true news/extreme spread spike
+input double InpNewsSpreadMulti      = 2.5;   // Broker-noise classifier threshold; no aftermath timer by itself
+input double InpNewsAftermathArmMulti= 3.5;   // v6.4.7: only this ratio (or scheduled news/extreme spread) arms NEWS_AFTERMATH
+input bool   InpNewsAftermathIgnoreBrokerNoise = true; // v6.4.7: spread noise logs, but does not create a fake news pause
 input int    InpNewsAftermathMins    = 10;    // Minutes to block new entries after spike (timer NOT reset on every tick — fixed v6.4.6)
 input int    InpPostNewsConfirmBars  = 3;     // Bars of directional closes to confirm post-news direction (1-5 recommended)
 input double InpPostNewsSpreadReturnX = 1.5;  // Spread must return to <= N× EMA baseline before post-news entries allowed
@@ -706,6 +729,12 @@ input int    InpXAU_MaxSignalAgeBars       = 6;     // After this many M5 bars, 
 input double InpXAU_MinLateRetestATR       = 0.90;  // Late continuation needs at least this pullback/retest from the new extreme
 input double InpXAU_ExtremeLateLotMulti    = 0.35;  // If late but still allowed after retest, force small lot
 input bool   InpXAU_BlockLateChasePyramids = true;  // Pyramid adds must not cluster near the exhausted end of a missed move
+input bool   InpXAU_TrendContinuationMode  = true;  // v6.4.7: allow strong XAU continuation after clean breakdown/breakout
+input double InpXAU_TCM_MinTrendScore      = 72.0;  // Minimum continuation strength before extended setups can pass
+input double InpXAU_TCM_MinRemainingRoomATR= 0.85;  // Required estimated room after the move, not just local low/high clearance
+input double InpXAU_TCM_LotMulti           = 0.60;  // Continuation after extension is allowed smaller, never recklessly full-size
+input bool   InpXAU_TCM_NewsFastTrack      = true;  // After spread normalizes, post-news aligned A/A+ continuation can resume early
+input double InpXAU_TCM_MemoryMinMissedProfitATR = 2.0; // Aggregate BLOCK_MISSED_PROFIT edge needed before easing future overblocks
 input bool   InpBlockedTradeMemoryReport   = true;  // Persist blocked-signal outcome learning to CSV for audits
 input int    InpBlockedMemoryMinSamples    = 8;     // Samples required before blocked-pattern stats can influence logs/size
 input bool   InpBlockedMemoryScoutEnable   = false; // v5.8.55 default OFF: learn/report blocked trades without opening tiny live scouts
@@ -6993,9 +7022,10 @@ void OnTick()
    // v6.4.6: Spread Classifier — determines the root cause of any spread widening
    // Returns: "NEWS_SPIKE", "BROKER_NOISE", "ROLLOVER", "SUNDAY_OPEN", "LOW_LIQUIDITY", "NORMAL"
    string spreadEventType = "NORMAL";
+   double spreadRatio = 0.0;
    if(g_spreadEMA > 5.0 && spread > 0)
    {
-      double spreadRatio = spread / g_spreadEMA;
+      spreadRatio = spread / g_spreadEMA;
       MqlDateTime dt; TimeGMT(dt);
       bool isRollover    = (dt.hour == 23 && dt.min >= 45) || (dt.hour == 0 && dt.min <= 15);
       bool isSundayOpen  = (dt.day_of_week == 0 && dt.hour == 0 && dt.min <= 45);
@@ -7004,14 +7034,22 @@ void OnTick()
       if     (isRollover)               spreadEventType = "ROLLOVER";
       else if(isSundayOpen)             spreadEventType = "SUNDAY_OPEN";
       else if(isLowLiquidity)           spreadEventType = "LOW_LIQUIDITY";
-      else if(spreadRatio >= 3.0)       spreadEventType = "NEWS_SPIKE";
+      else if(spreadRatio >= InpNewsAftermathArmMulti) spreadEventType = "NEWS_SPIKE";
       else if(spreadRatio >= InpNewsSpreadMulti) spreadEventType = "BROKER_NOISE";
    }
 
    // v6.4.6 CRITICAL FIX: Timer is ONLY SET at the start of a new spike window.
    // Old code reset g_newsAftermathUntil on EVERY TICK while spread was elevated,
    // creating an endless rolling block. Fix: only arm when NOT already in a block.
-   if(InpNewsAftermathEnable && g_spreadEMA > 5.0 && spread > g_spreadEMA * InpNewsSpreadMulti)
+   string scheduledNewsReason = "";
+   bool scheduledNewsNow = IsScheduledNewsWindow(scheduledNewsReason);
+   bool aftermathArmEvent = (spreadEventType == "NEWS_SPIKE" ||
+                             scheduledNewsNow ||
+                             spread >= InpMaxSpread * 1.50);
+   if(InpNewsAftermathIgnoreBrokerNoise && spreadEventType == "BROKER_NOISE")
+      aftermathArmEvent = false;
+
+   if(InpNewsAftermathEnable && g_spreadEMA > 5.0 && spread > g_spreadEMA * InpNewsSpreadMulti && aftermathArmEvent)
    {
       if(TimeCurrent() >= g_newsAftermathUntil)
       {
@@ -7023,11 +7061,22 @@ void OnTick()
          g_postNewsBias       = 0;
          g_postNewsConfirmCnt = 0;
          g_postNewsStateStart = TimeCurrent();
-         PrintFormat("NEWS-SPIKE-START [%s]: spread=%.0fpts baseline=%.0fpts ratio=%.1fx | entries blocked for %dmin (resumes %s)",
-                     spreadEventType, spread, g_spreadEMA, spread/g_spreadEMA,
+         PrintFormat("NEWS-SPIKE-START [%s]: spread=%.0fpts baseline=%.0fpts ratio=%.1fx armThreshold=%.1fx scheduledNews=%s | entries blocked for %dmin (resumes %s)",
+                     spreadEventType, spread, g_spreadEMA, spreadRatio, InpNewsAftermathArmMulti,
+                     scheduledNewsNow ? "Y" : "N",
                      InpNewsAftermathMins, TimeToString(g_newsAftermathUntil, TIME_MINUTES));
       }
       // else: still inside the same window — do NOT extend. Timer counts down cleanly.
+   }
+   else if(InpNewsAftermathEnable && spreadEventType == "BROKER_NOISE")
+   {
+      static datetime lastBrokerNoiseLog = 0;
+      if(TimeCurrent() - lastBrokerNoiseLog >= 120)
+      {
+         PrintFormat("BROKER-SPREAD-NOISE: spread=%.0fpts baseline=%.0fpts ratio=%.1fx | no NEWS_AFTERMATH timer armed; entries depend only on live spread/quality filters",
+                     spread, g_spreadEMA, spreadRatio);
+         lastBrokerNoiseLog = TimeCurrent();
+      }
    }
 
    // v6.4.6: Post-News State Machine — advance state after aftermath window expires
@@ -7748,6 +7797,23 @@ void OnTick()
       UpdateDashboard(signal, combinedScore, entryExecutionBlockGrade);
       lastDashSignal = signal; lastDashScore = combinedScore; lastDashGrade = entryExecutionBlockGrade;
       return;
+   }
+
+   if(spreadBlocksEntry && StringFind(spreadBlockReason, "NEWS_AFTERMATH") >= 0)
+   {
+      string fastTrackWhy = "";
+      if(XAU_NewsAftermathCanFastTrack(signal, setupName, grade, combinedScore, fastTrackWhy))
+      {
+         spreadBlocksEntry = false;
+         spreadBlockReason = "";
+         g_newsAftermathUntil = TimeCurrent();
+         if(g_postNewsState == PNS_AFTERMATH)
+         {
+            g_postNewsState = PNS_DISCOVERY;
+            g_postNewsStateStart = TimeCurrent();
+         }
+         Print(fastTrackWhy, " | NEWS_AFTERMATH converted to POST_NEWS_CONFIRMATION instead of stale pause.");
+      }
    }
 
    if(spreadBlocksEntry)
@@ -13412,16 +13478,16 @@ bool IsXAUConfirmedBreakoutContinuation(int signal, string setupName)
    if(ArraySize(bufATR) > 1) atr = bufATR[1];
    if(atr <= 0.0) return false;
 
-   double extensionATR = 0.0, resetATR = 0.0;
-   if(IsXAUExtensionResetMissing(signal, atr, extensionATR, resetATR))
-      return false; // Do not let the breakout exception sell bottoms / buy tops after the flush is already stretched.
-
    double bodyATR = MathAbs(c[0] - o[0]) / atr;
    double rangeATR = (h[0] - l[0]) / atr;
    bool directionalBody = (signal == 1 ? c[0] > o[0] : c[0] < o[0]);
    bool brokePriorSwing = (signal == 1 ? c[0] > MathMax(h[1], h[2])
                                       : c[0] < MathMin(l[1], l[2]));
    bool continuationClose = (signal == 1 ? c[0] > c[1] : c[0] < c[1]);
+   double extensionATR = 0.0, resetATR = 0.0;
+   bool extensionResetMissing = IsXAUExtensionResetMissing(signal, atr, extensionATR, resetATR);
+   if(extensionResetMissing && !(brokePriorSwing && directionalBody && bodyATR >= 0.30))
+      return false; // Still blocks pure stretched chase, but no longer blocks fresh structure expansion.
 
    return directionalBody &&
           continuationClose &&
@@ -15123,6 +15189,207 @@ bool XAU_BlockedMemoryRapidScout(string setupName, int signal, string reason, st
    return true;
 }
 
+bool XAU_BlockedContinuationMissedProfitBias(string setupName, int signal, string reason,
+                                             int &samples, double &winRate,
+                                             double &avgFavATR, double &avgAdvATR,
+                                             string &why)
+{
+   samples = 0;
+   winRate = 0.0;
+   avgFavATR = 0.0;
+   avgAdvATR = 0.0;
+   why = "";
+   if(!InpBlockedTradeMemoryReport || signal == 0 || !IsXAUFastSymbol()) return false;
+
+   int bestSamples = 0;
+   double bestWR = 0.0, bestFav = 0.0, bestAdv = 0.0;
+   string bestKey = "";
+
+   int s = 0;
+   double wr = 0.0, fav = 0.0, adv = 0.0;
+   if(XAU_BlockedMemoryStats(setupName, signal, reason, s, wr, fav, adv))
+   {
+      bestSamples = s; bestWR = wr; bestFav = fav; bestAdv = adv; bestKey = XAU_BlockReasonKey(reason);
+   }
+
+   s = 0; wr = 0.0; fav = 0.0; adv = 0.0;
+   if(XAU_BlockedMemoryStats(setupName, signal, "BAD-RR TIMING BLOCK", s, wr, fav, adv) &&
+      (bestKey == "" || fav - adv > bestFav - bestAdv))
+   {
+      bestSamples = s; bestWR = wr; bestFav = fav; bestAdv = adv; bestKey = "BAD-RR TIMING BLOCK";
+   }
+
+   s = 0; wr = 0.0; fav = 0.0; adv = 0.0;
+   if(XAU_BlockedMemoryStats(setupName, signal, "LATE-CHASE ENTRY BLOCK", s, wr, fav, adv) &&
+      (bestKey == "" || fav - adv > bestFav - bestAdv))
+   {
+      bestSamples = s; bestWR = wr; bestFav = fav; bestAdv = adv; bestKey = "LATE-CHASE ENTRY BLOCK";
+   }
+
+   s = 0; wr = 0.0; fav = 0.0; adv = 0.0;
+   if(XAU_BlockedMemoryStats(setupName, signal, "BAD-LOCATION BLOCK", s, wr, fav, adv) &&
+      (bestKey == "" || fav - adv > bestFav - bestAdv))
+   {
+      bestSamples = s; bestWR = wr; bestFav = fav; bestAdv = adv; bestKey = "BAD-LOCATION BLOCK";
+   }
+
+   if(bestKey == "") return false;
+   samples = bestSamples;
+   winRate = bestWR;
+   avgFavATR = bestFav;
+   avgAdvATR = bestAdv;
+
+   bool aggregateMissedProfit =
+      samples >= MathMax(5, InpBlockedMemoryMinSamples) &&
+      winRate >= 55.0 &&
+      avgFavATR >= InpXAU_TCM_MemoryMinMissedProfitATR &&
+      avgAdvATR <= 1.25;
+
+   if(!aggregateMissedProfit) return false;
+
+   why = StringFormat("BLOCKED-CONTINUATION MEMORY: key=%s samples=%d WR=%.0f%% avgFav=%.2fATR avgAdv=%.2fATR. Use only in aggregate; this reduces overblocking pressure, it does not force a trade.",
+                      bestKey, samples, winRate, avgFavATR, avgAdvATR);
+   return true;
+}
+
+double XAU_EstimatedContinuationRoomATR(int signal, double atr, double currentRoomATR,
+                                        double extensionDriveATR, bool freshStructureBreak,
+                                        bool htfAligned, bool postNewsAligned,
+                                        bool trueBreakoutContinuation)
+{
+   if(signal == 0 || atr <= 0.0) return currentRoomATR;
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   if(close1 <= 0.0) return currentRoomATR;
+
+   double structureRoomATR = currentRoomATR;
+   double olderHigh = 0.0;
+   double olderLow = 0.0;
+   for(int i = 8; i <= 72; i++)
+   {
+      double h = iHigh(Symbol(), PERIOD_M5, i);
+      double l = iLow(Symbol(), PERIOD_M5, i);
+      if(h > 0.0) olderHigh = (olderHigh <= 0.0) ? h : MathMax(olderHigh, h);
+      if(l > 0.0) olderLow  = (olderLow  <= 0.0) ? l : MathMin(olderLow, l);
+   }
+
+   if(signal == -1 && olderLow > 0.0 && olderLow < close1)
+      structureRoomATR = MathMax(structureRoomATR, (close1 - olderLow) / atr);
+   if(signal == 1 && olderHigh > 0.0 && olderHigh > close1)
+      structureRoomATR = MathMax(structureRoomATR, (olderHigh - close1) / atr);
+
+   double projectedRoomATR = 0.35;
+   if(freshStructureBreak)       projectedRoomATR += 0.35;
+   if(trueBreakoutContinuation)  projectedRoomATR += 0.25;
+   if(htfAligned)                projectedRoomATR += 0.25;
+   if(postNewsAligned)           projectedRoomATR += 0.25;
+   projectedRoomATR += MathMin(4.5, MathMax(0.0, extensionDriveATR)) * 0.16;
+
+   return MathMax(structureRoomATR, projectedRoomATR);
+}
+
+double XAU_TrendContinuationScore(int signal, string setupName, double atr,
+                                  double bodyATR, double impulseATR,
+                                  double atrExpansion, double threeBarDriveATR,
+                                  double extensionDriveATR,
+                                  bool freshStructureBreak,
+                                  bool structureContinuationCandidate,
+                                  bool trueBreakoutContinuation,
+                                  bool postNewsAligned,
+                                  bool failedImpulse,
+                                  bool wrongCandle,
+                                  bool hasRejection,
+                                  bool htfAligned,
+                                  bool regimeAligned,
+                                  bool hasExhaustionDivergence,
+                                  bool memoryBias,
+                                  string &why)
+{
+   double score = 0.0;
+   if(regimeAligned) score += 20.0; else score -= 12.0;
+   if(htfAligned) score += 18.0;
+   if(freshStructureBreak) score += 18.0;
+   if(trueBreakoutContinuation) score += 12.0;
+   if(structureContinuationCandidate) score += 12.0;
+   if(postNewsAligned) score += 10.0;
+   if(bodyATR >= 0.30) score += 8.0;
+   if(impulseATR >= 0.70) score += 6.0;
+   if(threeBarDriveATR >= 0.75) score += 7.0;
+   if(atrExpansion >= 1.05) score += 5.0;
+   if(extensionDriveATR >= InpXAU_MissedMoveDriveATR) score += 4.0;
+   if(hasRejection) score += 5.0;
+   if(memoryBias) score += 6.0;
+   if(failedImpulse) score -= 35.0;
+   if(wrongCandle) score -= 16.0;
+   if(hasExhaustionDivergence) score -= 24.0;
+
+   score = MathMax(0.0, MathMin(100.0, score));
+   why = StringFormat("score=%.0f regime=%s htf=%s freshBreak=%s breakout=%s postNews=%s memory=%s body=%.2fATR impulse=%.2fATR drive3=%.2fATR ext=%.2fATR divergence=%s failedImpulse=%s",
+                      score,
+                      regimeAligned ? "Y" : "N",
+                      htfAligned ? "Y" : "N",
+                      freshStructureBreak ? "Y" : "N",
+                      trueBreakoutContinuation ? "Y" : "N",
+                      postNewsAligned ? "Y" : "N",
+                      memoryBias ? "Y" : "N",
+                      bodyATR, impulseATR, threeBarDriveATR, extensionDriveATR,
+                      hasExhaustionDivergence ? "Y" : "N",
+                      failedImpulse ? "Y" : "N");
+   return score;
+}
+
+bool XAU_NewsAftermathCanFastTrack(int signal, string setupName, string grade,
+                                   double combinedScore, string &why)
+{
+   why = "";
+   if(!InpXAU_TCM_NewsFastTrack || !InpNewsAftermathEnable || signal == 0) return false;
+   if(g_postNewsState != PNS_AFTERMATH || TimeCurrent() >= g_newsAftermathUntil) return false;
+
+   double spreadNow = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   bool spreadNormal = (g_spreadEMA <= 0.0 ||
+                        spreadNow <= g_spreadEMA * InpPostNewsSpreadReturnX ||
+                        spreadNow <= InpMaxSpread * 0.85);
+   if(!spreadNormal) return false;
+
+   string calReason = "";
+   if(IsScheduledNewsWindow(calReason))
+   {
+      why = "scheduled high-impact window still active: " + calReason;
+      return false;
+   }
+
+   double mid = (SymbolInfoDouble(Symbol(), SYMBOL_BID) + SymbolInfoDouble(Symbol(), SYMBOL_ASK)) * 0.5;
+   int bias = g_postNewsBias;
+   if(bias == 0 && g_preNewsPrice > 0.0 && mid > 0.0)
+   {
+      double delta = mid - g_preNewsPrice;
+      if(MathAbs(delta) >= MathMax(SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10.0, 0.10))
+         bias = delta > 0.0 ? 1 : -1;
+   }
+
+   bool biasAligned = (bias == signal || bias == 0);
+   bool gradeOk = (grade == "A" || StringFind(grade, "A+") >= 0);
+   bool regimeAligned =
+      (signal == 1 && (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP)) ||
+      (signal == -1 && (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN));
+   bool htfAligned = (g_htfConsensusDir == signal);
+   bool setupOk = (StringFind(setupName, "TREND") >= 0 ||
+                   StringFind(setupName, "BREAKOUT") >= 0 ||
+                   StringFind(setupName, "SQUEEZE") >= 0 ||
+                   StringFind(setupName, "ASIA_BREAKOUT") >= 0);
+   bool scoreOk = (combinedScore >= 7.0 || gradeOk);
+
+   if(!(biasAligned && setupOk && scoreOk && (regimeAligned || htfAligned)))
+      return false;
+
+   why = StringFormat("POST_NEWS_FAST_TRACK: spread normalized %.0fpts baseline %.0fpts, bias=%s, regime=%s, htf=%s, setup=%s, grade=%s, combined=%.1f",
+                      spreadNow, g_spreadEMA,
+                      bias > 0 ? "BULLISH" : bias < 0 ? "BEARISH" : "UNCLEAR",
+                      RegimeName(),
+                      htfAligned ? "ALIGN" : "NEUTRAL",
+                      setupName, grade, combinedScore);
+   return true;
+}
+
 int XAU_FindQualityIdx(ulong posId)
 {
    for(int i = 0; i < ArraySize(g_qualityPosIds); i++)
@@ -15249,6 +15516,15 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       hi6 = MathMax(hi6, iHigh(Symbol(), PERIOD_M5, i));
       lo6 = MathMin(lo6, iLow(Symbol(), PERIOD_M5, i));
    }
+   double priorHigh6 = iHigh(Symbol(), PERIOD_M5, 2);
+   double priorLow6  = iLow(Symbol(), PERIOD_M5, 2);
+   for(int i = 3; i <= 7; i++)
+   {
+      double h = iHigh(Symbol(), PERIOD_M5, i);
+      double l = iLow(Symbol(), PERIOD_M5, i);
+      if(h > 0.0) priorHigh6 = MathMax(priorHigh6, h);
+      if(l > 0.0) priorLow6  = MathMin(priorLow6, l);
+   }
 
    int locLookback = (int)MathMax(6.0, MathMin((double)InpXAU_BadLocationLookbackBars, 30.0));
    double locHigh = high1, locLow = low1;
@@ -15364,7 +15640,30 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    bool impulseWarn  = (impulseATR >= InpXAU_ImpulseATRDowngrade || atrExpansion >= 1.45);
    bool vwapFar = (vwap > 0.0 && vwapDistATR > InpXAU_MaxVWAPDistanceATR);
    bool driveFar = (threeBarDriveATR > InpXAU_MaxThreeBarDriveATR);
-   bool cleanContinuation = (hasPullback && hasRejection && !wrongCandle && !badLocation);
+   bool trueBreakoutContinuation = IsXAUConfirmedBreakoutContinuation(signal, setupName);
+   bool regimeAligned =
+      (signal == 1 && (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP)) ||
+      (signal == -1 && (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN));
+   bool htfAligned = (g_htfConsensusDir == signal);
+   bool postNewsAligned = (g_postNewsBias == signal &&
+                           (g_postNewsState == PNS_DISCOVERY ||
+                            g_postNewsState == PNS_CONFIRMED ||
+                            g_postNewsState == PNS_ALLOWED ||
+                            g_postNewsState == PNS_AFTERMATH));
+   bool directionalPressure = (signal == -1)
+      ? (close1 < open1 || close1 < close2)
+      : (close1 > open1 || close1 > close2);
+   bool freshStructureBreak = (signal == -1)
+      ? (priorLow6 > 0.0 && (close1 < priorLow6 || low1 <= priorLow6 - atr * 0.05))
+      : (priorHigh6 > 0.0 && (close1 > priorHigh6 || high1 >= priorHigh6 + atr * 0.05));
+   bool structureContinuationCandidate = (trendSetup && !failedImpulse &&
+                                          directionalPressure &&
+                                          (freshStructureBreak ||
+                                           trueBreakoutContinuation ||
+                                           (postSweepTrap && !wrongCandle) ||
+                                           postNewsAligned));
+   bool cleanContinuation = ((hasPullback && hasRejection && !wrongCandle && !badLocation) ||
+                             (structureContinuationCandidate && hasRejection && !wrongCandle));
    bool locationBlock = (trendSetup && badLocation && !cleanContinuation);
    bool extensionNoReset = (trendSetup &&
                             extensionDriveATR >= InpXAU_MaxExtensionDriveATR &&
@@ -15372,9 +15671,9 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    bool failedImpulseBlock = (trendSetup && InpXAU_BlockFailedImpulse && failedImpulse && !cleanContinuation);
    bool cycleGivebackBlock = (trendSetup && cycleHot && cycleExtremeLocation && !cleanContinuation);
    bool cycleLotReduce = (trendSetup && cycleHot);
-   bool trueBreakoutContinuation = IsXAUConfirmedBreakoutContinuation(signal, setupName);
-   double directionalRoomATR = (signal == -1) ? lowClearanceATR : highClearanceATR;
-   bool nearLiquiditySweep = (directionalRoomATR < InpXAU_MinDirectionalRoomATR);
+   double localDirectionalRoomATR = (signal == -1) ? lowClearanceATR : highClearanceATR;
+   double directionalRoomATR = localDirectionalRoomATR;
+   bool rawNearLiquiditySweep = (localDirectionalRoomATR < InpXAU_MinDirectionalRoomATR);
    bool sameFirstSignal = (InpXAU_FirstSignalMemory &&
                            g_signalFirstSeenTime > 0 &&
                            g_signalFirstSeenDir == signal &&
@@ -15409,55 +15708,131 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
                       extensionDriveATR >= InpXAU_MissedMoveDriveATR &&
                       extensionResetATR < InpXAU_MinExtensionResetATR &&
                       !cleanContinuation);
+   int tcmMemSamples = 0;
+   double tcmMemWR = 0.0, tcmMemFav = 0.0, tcmMemAdv = 0.0;
+   string tcmMemoryWhy = "";
+   bool blockedMemoryBias = XAU_BlockedContinuationMissedProfitBias(setupName, signal,
+                                                                    "BAD-RR TIMING BLOCK",
+                                                                    tcmMemSamples, tcmMemWR,
+                                                                    tcmMemFav, tcmMemAdv,
+                                                                    tcmMemoryWhy);
+   bool hasExhaustionDiv = HasExhaustionDivergence(signal);
+   double estimatedContinuationRoomATR = XAU_EstimatedContinuationRoomATR(signal, atr,
+                                                                          localDirectionalRoomATR,
+                                                                          extensionDriveATR,
+                                                                          freshStructureBreak,
+                                                                          htfAligned,
+                                                                          postNewsAligned,
+                                                                          trueBreakoutContinuation);
+   bool continuationCandidate = (trendSetup &&
+                                 (missedMove || extensionNoReset || rawNearLiquiditySweep ||
+                                  freshStructureBreak || trueBreakoutContinuation ||
+                                  postSweepTrap || postNewsAligned || blockedMemoryBias) &&
+                                 !failedImpulse);
+   string trendContinuationWhy = "";
+   double trendContinuationScore = XAU_TrendContinuationScore(signal, setupName, atr,
+                                                              bodyATR, impulseATR,
+                                                              atrExpansion, threeBarDriveATR,
+                                                              extensionDriveATR,
+                                                              freshStructureBreak,
+                                                              structureContinuationCandidate,
+                                                              trueBreakoutContinuation,
+                                                              postNewsAligned,
+                                                              failedImpulse,
+                                                              wrongCandle,
+                                                              hasRejection,
+                                                              htfAligned,
+                                                              regimeAligned,
+                                                              hasExhaustionDiv,
+                                                              blockedMemoryBias,
+                                                              trendContinuationWhy);
+   bool trendContinuationQualified = (InpXAU_TrendContinuationMode &&
+                                      continuationCandidate &&
+                                      trendContinuationScore >= InpXAU_TCM_MinTrendScore &&
+                                      estimatedContinuationRoomATR >= InpXAU_TCM_MinRemainingRoomATR &&
+                                      !hasExhaustionDiv);
+   if(trendContinuationQualified)
+      directionalRoomATR = MathMax(directionalRoomATR, estimatedContinuationRoomATR);
+   bool nearLiquiditySweep = (directionalRoomATR < InpXAU_MinDirectionalRoomATR);
+   bool extendedContinuationSizing = (trendContinuationQualified &&
+                                      (missedMove || extensionNoReset || rawNearLiquiditySweep ||
+                                       postSweepTrap || signalPlayedOut || postNewsAligned));
    double exhaustionProb = 0.0;
    if(badLocation) exhaustionProb += 28.0;
    if(failedImpulse) exhaustionProb += 24.0;
-   if(postSweepTrap) exhaustionProb += 30.0;
-   if(extensionNoReset || missedMove) exhaustionProb += 18.0;
+   if(postSweepTrap) exhaustionProb += trendContinuationQualified ? 8.0 : 30.0;
+   if(extensionNoReset || missedMove) exhaustionProb += trendContinuationQualified ? 5.0 : 18.0;
    if(impulseWarn) exhaustionProb += 10.0;
    if(vwapFar) exhaustionProb += 8.0;
    if(wrongCandle) exhaustionProb += 12.0;
    if(nearLiquiditySweep) exhaustionProb += 16.0;
-   if(lateChaseEntry) exhaustionProb += 32.0;
-   if(spikeCooldown) exhaustionProb += 22.0;
-   if(!hasPullback) exhaustionProb += 10.0;
+   if(lateChaseEntry) exhaustionProb += trendContinuationQualified ? 6.0 : 32.0;
+   if(spikeCooldown) exhaustionProb += trendContinuationQualified ? 6.0 : 22.0;
+   if(!hasPullback && !trendContinuationQualified) exhaustionProb += 10.0;
    if(cleanContinuation) exhaustionProb -= 25.0;
+   if(trendContinuationQualified) exhaustionProb -= 22.0;
    exhaustionProb = MathMax(0.0, MathMin(100.0, exhaustionProb));
 
    double lateEntryProb = 0.0;
    if(chasingAway) lateEntryProb += 25.0;
    if(driveFar) lateEntryProb += 20.0;
    if(impulseWarn) lateEntryProb += 15.0;
-   if(extensionDriveATR >= InpXAU_MissedMoveDriveATR) lateEntryProb += 18.0;
-   if(!betterValue) lateEntryProb += 12.0;
+   if(extensionDriveATR >= InpXAU_MissedMoveDriveATR) lateEntryProb += trendContinuationQualified ? 5.0 : 18.0;
+   if(!betterValue && !trendContinuationQualified) lateEntryProb += 12.0;
    if(nearLiquiditySweep) lateEntryProb += 15.0;
-   if(postSweepTrap) lateEntryProb += 20.0;
-   if(signalPlayedOut) lateEntryProb += 30.0;
-   if(spikeCooldown) lateEntryProb += 20.0;
+   if(postSweepTrap) lateEntryProb += trendContinuationQualified ? 5.0 : 20.0;
+   if(signalPlayedOut) lateEntryProb += trendContinuationQualified ? 8.0 : 30.0;
+   if(spikeCooldown) lateEntryProb += trendContinuationQualified ? 5.0 : 20.0;
    if(cleanContinuation) lateEntryProb -= 30.0;
+   if(trendContinuationQualified) lateEntryProb -= 18.0;
    lateEntryProb = MathMax(0.0, MathMin(100.0, lateEntryProb));
 
    double entryEfficiency = 100.0;
    entryEfficiency -= lateEntryProb * 0.45;
    entryEfficiency -= exhaustionProb * 0.35;
-   if(!hasPullback) entryEfficiency -= 10.0;
-   if(!hasRejection) entryEfficiency -= 8.0;
+   if(!hasPullback && !trendContinuationQualified) entryEfficiency -= 10.0;
+   if(!hasRejection && !trendContinuationQualified) entryEfficiency -= 8.0;
    if(betterValue) entryEfficiency += 8.0;
    if(cleanContinuation) entryEfficiency += 12.0;
+   if(trendContinuationQualified) entryEfficiency += 10.0;
    entryEfficiency = MathMax(0.0, MathMin(100.0, entryEfficiency));
 
    double rrQuality = MathMin(100.0, (directionalRoomATR / MathMax(0.10, InpXAU_MinDirectionalRoomATR)) * 45.0);
    if(cleanContinuation) rrQuality = MathMin(100.0, rrQuality + 20.0);
-   if(missedMove || failedImpulse || lateChaseEntry) rrQuality = MathMax(0.0, rrQuality - 25.0);
+   if(trendContinuationQualified) rrQuality = MathMin(100.0, rrQuality + 18.0);
+   if((missedMove || lateChaseEntry) && !trendContinuationQualified) rrQuality = MathMax(0.0, rrQuality - 25.0);
+   if(failedImpulse) rrQuality = MathMax(0.0, rrQuality - 25.0);
 
-   string timingState = locationBlock ? "bad-location" : (cleanContinuation ? "clean-pullback" : "weak-timing");
+   string timingState = trendContinuationQualified
+                        ? (signal == -1 ? "clean-breakdown-continuation" : "clean-breakout-continuation")
+                        : (locationBlock ? "bad-location" : (cleanContinuation ? "clean-pullback" : "weak-timing"));
    if(extensionNoReset) timingState = "extended-no-reset";
    if(failedImpulseBlock) timingState = "failed-impulse";
    if(cycleGivebackBlock) timingState = "cycle-giveback";
    if(signalPlayedOut) timingState = realLateRetest ? "missed-move-retest" : "late-chase-entry";
    if(missedMove && timingState == "weak-timing") timingState = "missed-move";
+   if(trendContinuationQualified)
+      timingState = signal == -1 ? "clean-breakdown-continuation" : "clean-breakout-continuation";
    bool severeLate = trendSetup && chasingAway && (impulseBlock || driveFar || vwapFar) && !cleanContinuation;
    bool moderateLate = trendSetup && (chasingAway || impulseWarn || driveFar || vwapFar || !hasPullback || wrongCandle) && !cleanContinuation;
+
+   if(trendContinuationQualified && extendedContinuationSizing)
+   {
+      lotMulti *= InpXAU_TCM_LotMulti;
+      reason += StringFormat("TREND-CONTINUATION MODE: CONTINUATION QUALIFIED; extended setup is allowed smaller lot x%.2f because trend strength and remaining room justify continuation. remainingRoom=%.2fATR localLiquidity=%.2fATR tcmScore=%.0f %s. ",
+                             InpXAU_TCM_LotMulti, estimatedContinuationRoomATR,
+                             localDirectionalRoomATR, trendContinuationScore,
+                             trendContinuationWhy);
+      if(blockedMemoryBias)
+         reason += tcmMemoryWhy + " ";
+   }
+   else if(continuationCandidate)
+   {
+      reason += StringFormat("TREND-CONTINUATION MODE: qualification failed; TRUE-EXHAUSTION BLOCK remains possible if score/room/reversal evidence is weak. remainingRoom=%.2fATR minRoom=%.2fATR tcmScore=%.0f minScore=%.0f %s. ",
+                             estimatedContinuationRoomATR, InpXAU_TCM_MinRemainingRoomATR,
+                             trendContinuationScore, InpXAU_TCM_MinTrendScore,
+                             trendContinuationWhy);
+   }
 
    if(InpXAU_TimingQualityGrades && trendSetup && (grade == "A" || StringFind(grade, "A+") >= 0))
    {
@@ -15466,23 +15841,28 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
                                                           exhaustionProb, rrQuality,
                                                           directionalRoomATR,
                                                           cleanContinuation,
-                                                          trueBreakoutContinuation);
+                                                          (trueBreakoutContinuation || trendContinuationQualified));
       bool aPlusBadTiming = (wasAPlus && (!aPlusQualified ||
-	                                      missedMove || failedImpulse || postSweepTrap ||
-	                                      nearLiquiditySweep || lateChaseEntry));
-      bool aBadRR = (rrQuality < 35.0 && (missedMove || nearLiquiditySweep || failedImpulse || postSweepTrap || lateChaseEntry));
+	                                      failedImpulse ||
+	                                      ((missedMove || postSweepTrap ||
+	                                        nearLiquiditySweep || lateChaseEntry) &&
+	                                       !trendContinuationQualified)));
+      bool aBadRR = (rrQuality < 35.0 &&
+                     (missedMove || nearLiquiditySweep || failedImpulse || postSweepTrap || lateChaseEntry) &&
+                     !trendContinuationQualified);
       if(aPlusBadTiming)
       {
          string oldGrade = grade;
          grade = "A";
          lotMulti *= MathMin(0.80, InpXAU_FairTimingLotMulti);
-         reason = StringFormat("A+ EVIDENCE DEMOTION: %s→A because score strength was not matched by clean positioning. Trade remains eligible at A-size; this is an honest grade correction, not another veto. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f cleanContinuation=%s breakoutContinuation=%s missedMove=%s lateChase=%s failedImpulse=%s postSweep=%s liquidityDist=%.2fATR. ",
+         reason = StringFormat("A+ EVIDENCE DEMOTION: %s→A because score strength was not matched by clean positioning. Trade remains eligible at A-size; this is an honest grade correction, not another veto. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f cleanContinuation=%s breakoutContinuation=%s trendContinuation=%s missedMove=%s lateChase=%s failedImpulse=%s postSweep=%s liquidityDist=%.2fATR remainingRoom=%.2fATR. ",
                                oldGrade, entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
                                cleanContinuation ? "Y" : "N", trueBreakoutContinuation ? "Y" : "N",
+                               trendContinuationQualified ? "Y" : "N",
                                missedMove ? "Y" : "N", lateChaseEntry ? "Y" : "N", failedImpulse ? "Y" : "N",
-                               postSweepTrap ? "Y" : "N", directionalRoomATR);
+                               postSweepTrap ? "Y" : "N", localDirectionalRoomATR, estimatedContinuationRoomATR);
       }
-      if(wasAPlus && postSweepTrap && InpXAU_BlockLateA)
+      if(wasAPlus && postSweepTrap && InpXAU_BlockLateA && !trendContinuationQualified)
       {
          reason += StringFormat("POST-SWEEP A+ BLOCK: gold swept local liquidity then snapped back; not allowing A+ continuation chase until a fresh pullback/retest forms. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f liquidityDist=%.2fATR. ",
                                 entryEfficiency, lateEntryProb, exhaustionProb, rrQuality, directionalRoomATR);
@@ -15490,24 +15870,27 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       }
       if(aBadRR && InpXAU_BlockLateA)
       {
-         reason += StringFormat("BAD-RR TIMING BLOCK: A/A+ continuation has poor directional room after the move already travelled; waiting for fresh pullback/retest. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f liquidityDist=%.2fATR missedMove=%s lateChase=%s failedImpulse=%s postSweep=%s. ",
+         reason += StringFormat("BAD-RR TRUE BLOCK: A/A+ continuation has poor estimated remaining room after the move already travelled; waiting for fresh pullback/retest. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f localLiquidity=%.2fATR remainingRoom=%.2fATR missedMove=%s lateChase=%s failedImpulse=%s postSweep=%s tcmScore=%.0f. ",
                                 entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
-                                directionalRoomATR, missedMove ? "Y" : "N", lateChaseEntry ? "Y" : "N", failedImpulse ? "Y" : "N",
-                                postSweepTrap ? "Y" : "N");
+                                localDirectionalRoomATR, estimatedContinuationRoomATR,
+                                missedMove ? "Y" : "N", lateChaseEntry ? "Y" : "N", failedImpulse ? "Y" : "N",
+                                postSweepTrap ? "Y" : "N", trendContinuationScore);
          return false;
       }
    }
 
-   reason += StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s timingQ=%.0f lateProb=%.0f%% exhaustion=%.0f%% rrQ=%.0f signalFirstSeenPrice=%.2f entryPrice=%.2f missedMoveDistance=%.2f missedMoveATR=%.2f candlesSinceSignal=%d reasonBlockedAtFirstSignal=%s lateEntryVeto=%s spikeDetected=%s lotReductionReason=%s whyTradeAllowedAfterDelay=%s liquidityDist=%.2fATR expansionOrigin=%.2fATR expectedPullback=%.2fATR emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullbackFromExtreme=%.2fATR loc=%.0f%% lowClr=%.2fATR highClr=%.2fATR value=%s badLoc=%s rejection=%s wrongCandle=%s dayGain=%.1f%% cycle=%s failedImpulse=%s postSweep=%s missedMove=%s dropHigh=%.2fATR(%d) bounceLow=%.2fATR(%d)",
+   reason += StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s timingQ=%.0f lateProb=%.0f%% exhaustion=%.0f%% rrQ=%.0f tcmQualified=%s tcmScore=%.0f remainingRoom=%.2fATR signalFirstSeenPrice=%.2f entryPrice=%.2f missedMoveDistance=%.2f missedMoveATR=%.2f candlesSinceSignal=%d reasonBlockedAtFirstSignal=%s lateEntryVeto=%s spikeDetected=%s lotReductionReason=%s whyTradeAllowedAfterDelay=%s liquidityDist=%.2fATR expansionOrigin=%.2fATR expectedPullback=%.2fATR emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullbackFromExtreme=%.2fATR loc=%.0f%% lowClr=%.2fATR highClr=%.2fATR value=%s badLoc=%s rejection=%s wrongCandle=%s dayGain=%.1f%% cycle=%s failedImpulse=%s postSweep=%s missedMove=%s freshBreak=%s cleanContinuation=%s breakoutContinuation=%s dropHigh=%.2fATR(%d) bounceLow=%.2fATR(%d)",
                          setupName, grade, setupScore, combinedScore, timingState,
                          entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
+                         trendContinuationQualified ? "Y" : "N", trendContinuationScore,
+                         estimatedContinuationRoomATR,
                          sameFirstSignal ? g_signalFirstSeenPrice : 0.0, close1,
                          missedMoveDistance, missedMoveATRFromFirst, candlesSinceSignal,
                          StringLen(g_signalFirstBlockReason) > 0 ? XAU_BlockReasonKey(g_signalFirstBlockReason) : "none",
                          lateChaseEntry ? "Y" : "N",
                          (spikeCooldown || impulseBlock) ? "Y" : "N",
-                         signalPlayedOut ? (realLateRetest ? "late-retest-small-lot" : "missed-move-block") : "none",
-                         signalPlayedOut ? (realLateRetest ? "real-retest-structure-confirmed" : "not-allowed-move-played-out") : "fresh-signal",
+                         signalPlayedOut ? (realLateRetest ? "late-retest-small-lot" : (trendContinuationQualified ? "trend-continuation-small-lot" : "missed-move-block")) : "none",
+                         signalPlayedOut ? (realLateRetest ? "real-retest-structure-confirmed" : (trendContinuationQualified ? "continuation-qualified-after-missed-move" : "not-allowed-move-played-out")) : "fresh-signal",
                          directionalRoomATR, extensionDriveATR, InpXAU_MinExtensionResetATR,
                          emaDistATR, vwapDistATR, impulseATR, bodyATR, atrExpansion,
                          threeBarDriveATR, InpXAU_ExtensionLookbackBars, extensionDriveATR, extensionResetATR,
@@ -15521,12 +15904,15 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
                          failedImpulse ? "yes" : "no",
                          postSweepTrap ? "yes" : "no",
                          missedMove ? "yes" : "no",
+                         freshStructureBreak ? "yes" : "no",
+                         cleanContinuation ? "yes" : "no",
+                         trueBreakoutContinuation ? "yes" : "no",
                          dropFromFailHighATR, failHighShift,
                          bounceFromFailLowATR, failLowShift);
 
-   if(lateChaseEntry && InpXAU_BlockLateA)
+   if(lateChaseEntry && InpXAU_BlockLateA && !trendContinuationQualified)
    {
-      reason = StringFormat("LATE-CHASE ENTRY BLOCK: first %s %s was seen at %.2f, current entry %.2f after %.2f (%.2fATR) and %d M5 candles; the move already played out, so no full-size A/A+ chase without real pullback/retest/structure. ",
+      reason = StringFormat("TRUE-LATE BLOCK: first %s %s was seen at %.2f, current entry %.2f after %.2f (%.2fATR) and %d M5 candles; continuation qualification failed, so no full-size A/A+ chase without real pullback/retest/structure. ",
                             signal == 1 ? "BUY" : "SELL", setupName,
                             g_signalFirstSeenPrice, close1, missedMoveDistance,
                             missedMoveATRFromFirst, candlesSinceSignal) + reason;
@@ -15561,7 +15947,7 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
                             InpXAU_ExtremeLateLotMulti, oldGrade, grade) + reason;
    }
 
-   if(locationBlock)
+   if(locationBlock && !trendContinuationQualified)
    {
       reason = StringFormat("BAD-LOCATION BLOCK: %s is too close to the recent %s after movement; waiting for pullback into value area + rejection. ",
                             signal == -1 ? "SELL" : "BUY",
@@ -15586,7 +15972,7 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       return false;
    }
 
-   if(extensionNoReset)
+   if(extensionNoReset && !trendContinuationQualified)
    {
       reason = "BAD-TIMING BLOCK: extended XAU move has not reset yet; waiting for pullback before another same-direction entry. " + reason;
       return false;
@@ -15616,28 +16002,28 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       return false;
    }
 
-   if(cycleGivebackBlock)
+   if(cycleGivebackBlock && !trendContinuationQualified)
    {
       reason = StringFormat("CYCLE-GIVEBACK BLOCK: day already up %.1f%%; entry is near an exhaustion zone without clean continuation, so protecting session profit. ",
                             dayGainPct) + reason;
       return false;
    }
 
-	   if(severeLate && (InpXAU_BlockLateA || !cleanContinuation))
+	   if(severeLate && !trendContinuationQualified && (InpXAU_BlockLateA || !cleanContinuation))
 	   {
 	      reason = "BAD-TIMING BLOCK: late gold chase / overextended entry. " + reason +
 	               " | wait for retracement + rejection before entering.";
 	      return false;
 	   }
 
-	   if(InpXAU_RequireExcellentDamageTiming && trendSetup && !cleanContinuation && !trueBreakoutContinuation)
+	   if(InpXAU_RequireExcellentDamageTiming && trendSetup && !cleanContinuation && !trueBreakoutContinuation && !trendContinuationQualified)
 	   {
 	      reason = "DAMAGE-SETUP QUALITY BLOCK: trend/breakout setup is not a clean pullback and not a confirmed breakout continuation. " +
 	               reason + " | waiting for a cleaner entry instead of taking a fair/late reduced-lot trade.";
 	      return false;
 	   }
 
-	   if(moderateLate)
+	   if(moderateLate && !trendContinuationQualified)
 	   {
       string oldGrade = grade;
       lotMulti *= InpXAU_FairTimingLotMulti;
@@ -17961,11 +18347,20 @@ string XAUAI_InputHash()
                      XAUAI_EA_VERSION, InpMagicNumber, (int)InpAccountMode,
                      InpRiskPercent, InpMaxLots, InpMaxOpenTrades,
                      InpOneDirectionOnly ? 1 : 0, InpBlockNewEntriesIfHedged ? 1 : 0);
-   s += StringFormat("spread=%.1f,%d,%.2f|news=%d,%d,%.2f,%d,%.2f,%d|",
+   s += StringFormat("spread=%.1f,%d,%.2f|news=%d,%d,%.2f,%.2f,%d,%d,%.2f,%d|",
                      InpMaxSpread, InpSpreadKillEnabled ? 1 : 0, InpSpreadKillMultiplier,
                      InpUseNewsFilter ? 1 : 0, InpNewsAftermathEnable ? 1 : 0,
-                     InpNewsSpreadMulti, InpNewsAftermathMins,
+                     InpNewsSpreadMulti, InpNewsAftermathArmMulti,
+                     InpNewsAftermathIgnoreBrokerNoise ? 1 : 0,
+                     InpNewsAftermathMins,
                      InpPostNewsSpreadReturnX, InpPostNewsAvoidMins);
+   s += StringFormat("tcm=%d,%.1f,%.2f,%.2f,%d,%.2f|",
+                     InpXAU_TrendContinuationMode ? 1 : 0,
+                     InpXAU_TCM_MinTrendScore,
+                     InpXAU_TCM_MinRemainingRoomATR,
+                     InpXAU_TCM_LotMulti,
+                     InpXAU_TCM_NewsFastTrack ? 1 : 0,
+                     InpXAU_TCM_MemoryMinMissedProfitATR);
    s += StringFormat("basket=%d,%.2f,%.2f,%.2f,%.2f,%d|clean=%d,%.2f,%.2f,%d,%.2f|",
                      InpBasketMode ? 1 : 0, EffBasketArmPct(), InpBasketArmFloor,
                      EffBasketLockMinPct(), EffBasketBEPct(), InpCloudSafeDisablePartials ? 1 : 0,
