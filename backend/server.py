@@ -127,6 +127,7 @@ def _ai_cache_get(cache_key: str) -> Optional[dict]:
         return None
     _ai_cost_stats["cache_hits"] += 1
     result = dict(item.get("result", {}))
+    result["ai_status"] = "Cache Reuse"
     result["ai_cost"] = {
         "cache_hit": True,
         "cache_key": cache_key,
@@ -2118,9 +2119,12 @@ def _parse_entry_json(response: str) -> dict:
         }
     except (json.JSONDecodeError, ValueError, TypeError):
         up = (response or "").upper()
-        if '"BUY"' in up:  return {"action": "BUY",  "confidence": 55, "reason": "parser fallback", "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
-        if '"SELL"' in up: return {"action": "SELL", "confidence": 55, "reason": "parser fallback", "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
-        return {"action": "SKIP", "confidence": 50, "reason": "AI response unclear", "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0}
+        if '"BUY"' in up:  return {"action": "BUY",  "confidence": 55, "reason": "parser fallback", "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0, "ai_status": "Invalid AI Response"}
+        if '"SELL"' in up: return {"action": "SELL", "confidence": 55, "reason": "parser fallback", "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0, "ai_status": "Invalid AI Response"}
+        return {"action": "SKIP", "confidence": 0, "reason": "Invalid AI Response", "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "", "sl_adjust": 0, "tp_adjust": 0, "ai_status": "Invalid AI Response", "available": False}
+
+def _provider_label(provider: str) -> str:
+    return "Claude" if provider == "anthropic" else "GPT"
 
 async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> dict:
     t0 = time.time()
@@ -2135,7 +2139,11 @@ async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> di
         response = await asyncio.wait_for(chat.send_message(msg), timeout=8.0)
         latency = time.time() - t0
         result = _parse_entry_json(response)
-        result["available"] = True
+        if result.get("ai_status") == "Invalid AI Response":
+            result["available"] = False
+        else:
+            result["available"] = True
+            result["ai_status"] = "AI Decision"
         # v6.3.8 Upgrade 4: per-provider logging with latency
         if provider == "anthropic":
             logger.info(f"AI_CALL provider=claude model={model} status=ok latency={latency:.2f}s action={result.get('action','?')} conf={result.get('confidence',0)}")
@@ -2145,16 +2153,18 @@ async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> di
     except asyncio.TimeoutError:
         latency = time.time() - t0
         logger.warning(f"AI_CALL provider={provider} model={model} status=TIMEOUT latency={latency:.2f}s fallback=skip")
+        status = f"{_provider_label(provider)} Timeout"
         return {"action": "SKIP", "confidence": 0, "reason": f"{provider} timeout",
                 "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
-                "sl_adjust": 0, "tp_adjust": 0, "available": False}
+                "sl_adjust": 0, "tp_adjust": 0, "available": False, "ai_status": status}
     except Exception as e:
         latency = time.time() - t0
         fallback = "claude_only" if provider == "openai" else "gpt_only"
         logger.warning(f"AI_CALL provider={provider} model={model} status=FAILED error={str(e)[:120]} latency={latency:.2f}s fallback={fallback}")
+        status = f"{_provider_label(provider)} Error"
         return {"action": "SKIP", "confidence": 0, "reason": f"{provider} error",
                 "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
-                "sl_adjust": 0, "tp_adjust": 0, "available": False}
+                "sl_adjust": 0, "tp_adjust": 0, "available": False, "ai_status": status}
 
 def _should_call_dual_ai(req: AIAnalysisRequest, primary: Optional[dict] = None) -> bool:
     """Spend on a second LLM only for important, ambiguous decisions."""
@@ -2172,9 +2182,10 @@ def _should_call_dual_ai(req: AIAnalysisRequest, primary: Optional[dict] = None)
     return bool(high_grade and (high_score or account_pressure or ambiguous_primary))
 
 def _entry_local_only_response(reason: str, cache_key: str) -> dict:
+    status = "Provider Unavailable" if "key not configured" in reason.lower() else "Local Decision (Budget Guard)"
     return {
         "action": "SKIP",
-        "confidence": 50,
+        "confidence": 0,
         "reason": reason[:240],
         "thesis": "",
         "bearish_case": "",
@@ -2186,8 +2197,29 @@ def _entry_local_only_response(reason: str, cache_key: str) -> dict:
         "sl_adjust": 0,
         "tp_adjust": 0,
         "consensus_source": "local_only_cost_guard",
+        "ai_status": status,
+        "provider_status": {"claude": status, "gpt": status},
         "ai_cost": {**_ai_cost_snapshot(), "cache_key": cache_key, "reason": reason},
     }
+
+def _combined_entry_ai_status(claude: dict, gpt: dict, action: str, consensus_source: str) -> str:
+    c_status = claude.get("ai_status", "AI Decision")
+    g_status = gpt.get("ai_status", "AI Decision")
+    c_ok = claude.get("available", True)
+    g_ok = gpt.get("available", True)
+    if consensus_source == "local_only_cost_guard":
+        return "Local Decision (Budget Guard)"
+    if action in ("BUY", "SELL"):
+        if not c_ok and c_status != "Local Decision (Budget Guard)":
+            return f"AI Decision ({c_status})"
+        if not g_ok and g_status != "Local Decision (Budget Guard)":
+            return f"AI Decision ({g_status})"
+        return "AI Decision"
+    if not c_ok and c_status != "Local Decision (Budget Guard)":
+        return c_status
+    if not g_ok and g_status != "Local Decision (Budget Guard)":
+        return g_status
+    return "AI Decision"
 
 @api_router.post("/ai/analyze")
 async def ai_analyze_market(req: AIAnalysisRequest):
@@ -2243,11 +2275,13 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             else:
                 gpt = {"action": "SKIP", "confidence": 0, "reason": second_reason,
                        "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "",
-                       "target": "", "sl_adjust": 0, "tp_adjust": 0, "available": False}
+                       "target": "", "sl_adjust": 0, "tp_adjust": 0, "available": False,
+                       "ai_status": "Local Decision (Budget Guard)"}
         else:
             gpt = {"action": "SKIP", "confidence": 0, "reason": "dual AI skipped to save cost",
                    "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "",
-                   "target": "", "sl_adjust": 0, "tp_adjust": 0, "available": False}
+                   "target": "", "sl_adjust": 0, "tp_adjust": 0, "available": False,
+                   "ai_status": "Local Decision (Budget Guard)"}
 
         c_act, g_act = claude["action"], gpt["action"]
         c_conf, g_conf = claude["confidence"], gpt["confidence"]
@@ -2313,10 +2347,18 @@ async def ai_analyze_market(req: AIAnalysisRequest):
         else:
             consensus_source = "none"
 
+        ai_status = _combined_entry_ai_status(claude, gpt, action, consensus_source)
+        provider_status = {
+            "claude": claude.get("ai_status", "AI Decision"),
+            "gpt": gpt.get("ai_status", "AI Decision"),
+        }
+
         result = {
             "action": action,
             "confidence": confidence,
             "reason": reason[:240],
+            "ai_status": ai_status,
+            "provider_status": provider_status,
             "thesis": (thesis or "")[:500],
             "bearish_case": (bearish_case or "")[:500],
             "skip_if": (skip_if or "")[:200],
@@ -2334,7 +2376,9 @@ async def ai_analyze_market(req: AIAnalysisRequest):
                 "call_reasons": cost_entries,
             },
         }
-        _ai_cache_put(cache_key, result, "entry", sum(int(x.get("tokens", 0) or 0) for x in cost_entries))
+        if ai_status not in ("Claude Timeout", "GPT Timeout", "Claude Error", "GPT Error",
+                             "Invalid AI Response", "Provider Unavailable"):
+            _ai_cache_put(cache_key, result, "entry", sum(int(x.get("tokens", 0) or 0) for x in cost_entries))
         try:
             await db.ai_analyses.insert_one({
                 "symbol": req.symbol, "request": req.dict(), "response": result,
@@ -2347,7 +2391,9 @@ async def ai_analyze_market(req: AIAnalysisRequest):
         logger.error(f"AI analyze dual error: {e}")
         return {"action": "SKIP", "confidence": 50, "reason": f"AI error: {str(e)[:60]}",
                 "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
-                "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0, "consensus_source": "none"}
+                "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0,
+                "consensus_source": "none", "ai_status": "Provider Unavailable",
+                "provider_status": {"claude": "Provider Unavailable", "gpt": "Provider Unavailable"}}
 
 @api_router.get("/ai/cost/stats")
 async def ai_cost_stats():

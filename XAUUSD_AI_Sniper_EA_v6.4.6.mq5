@@ -1539,13 +1539,17 @@ int      g_hiveLastVerdict  = 0;
 int      g_hiveLastBar      = -1;
 
 // v6.3.0: AI Director state
-int    g_aiConsecutiveFails = 0;   // count of back-to-back AI server failures
+int    g_aiConsecutiveFails = 0;   // legacy mirror of g_aiTransportFails for offline-safe mode
+int    g_aiTransportFails = 0;     // consecutive AI decision failures: non-200 WebRequest/API timeout/provider unreachable/invalid response
 bool   g_aiOffline = false;        // true when AI fails InpAIOfflineMaxFails times in a row
 datetime g_aiOfflineSince = 0;     // v6.3.2: timestamp when AI went offline (for auto-recovery)
 string g_aiLastVerdict = "NONE";   // last AI Director verdict for dashboard
 int    g_aiLastConfidence = 0;     // last AI confidence % for dashboard
 string g_aiClaudeVote = "";        // Claude's vote this bar
 string g_aiGPTVote = "";           // GPT's vote this bar
+string g_aiLastStatus = "Not Called";
+string g_aiLastFailureReason = "";
+string g_aiLastProviderStatus = "";
 int      g_aiCallsToday = 0;
 int      g_aiCacheHitsToday = 0;
 int      g_aiSkippedToday = 0;
@@ -8079,7 +8083,7 @@ void OnTick()
       {
          // AI offline + safe mode: reduce lot size by 50%, no blocks/upgrades
          sizeMulti *= 0.5;
-         Print("AI DIRECTOR OFFLINE — SAFE MODE: lot reduced 50%, no AI veto/boost. Fails=", g_aiConsecutiveFails);
+         Print("AI DIRECTOR OFFLINE — SAFE MODE: lot reduced 50%, no AI veto/boost. Fails=", g_aiTransportFails);
       }
       else
       {
@@ -8102,6 +8106,7 @@ void OnTick()
          // aiUnavailable: server returned 200 but no parseable action AND no skip_if/confidence
          // (true no-response). If AI said SKIP with confidence or skip_if text, it's a real SKIP.
          bool aiUnavailable = (aiResult == 0 && lastAIConfidence == 0 && StringLen(lastAISkipIf) == 0);
+         string aiDisplayVerdict = aiUnavailable ? g_aiLastStatus : aiDirStr;
 
          Print("══════════════════ AI DIRECTOR ══════════════════");
          Print("Signal: ", setupName, " ", signal > 0 ? "BUY" : "SELL",
@@ -8110,10 +8115,13 @@ void OnTick()
                                   (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL",
                " | Regime: ", RegimeName(),
                " | RSI: ", DoubleToString(bufRSI[1], 1));
-         Print("AI Server: ", (g_aiConsecutiveFails == 0) ? "CONNECTED" : "DEGRADED",
-               " | Provider: Claude+GPT dual | Fails: ", g_aiConsecutiveFails);
+         Print("AI Server: ", (g_aiTransportFails == 0) ? "CONNECTED" : "DEGRADED",
+               " | Provider: Claude+GPT dual | Fails: ", g_aiTransportFails,
+               " (consecutive AI decision failures only)");
          Print("Claude Vote: ", g_aiClaudeVote, " | GPT Vote: ", g_aiGPTVote);
-         Print("AI Verdict: ", aiDirStr, " | Confidence: ", lastAIConfidence, "%");
+         Print("AI Verdict: ", aiDisplayVerdict, " | Confidence: ", lastAIConfidence, "%");
+         Print("AI status: ", g_aiLastStatus,
+               StringLen(g_aiLastFailureReason) > 0 ? " | " + g_aiLastFailureReason : "");
          if(StringLen(currentTradeThesis) > 0)
             Print("AI Thesis: ", StringSubstr(currentTradeThesis, 0, 150));
          if(StringLen(lastAIBearishCase) > 0)
@@ -8129,10 +8137,11 @@ void OnTick()
          }
          else if(aiUnavailable)
          {
-            // AI server responded HTTP 200 but returned no action — treat as neutral
-            aiVerdictStr = "NEUTRAL";
-            Print("AI DIRECTOR: Neutral/no-action response — trade proceeds at standard size");
-            g_aiLastVerdict = "NEUTRAL"; g_aiLastConfidence = 0;
+            // No usable AI decision. This is explicit now: budget guard, provider timeout/error,
+            // invalid AI response, cache-only, or provider unavailable. Local rules continue.
+            aiVerdictStr = g_aiLastStatus;
+            Print("AI DIRECTOR: ", g_aiLastStatus, " — local rules continue at standard size");
+            g_aiLastVerdict = g_aiLastStatus; g_aiLastConfidence = 0;
          }
          else if(aiDisagrees)
          {
@@ -8267,7 +8276,17 @@ void OnTick()
    else if(callAI && !gradeQualifiesForAI)
    {
       // Grade is SKIP — shouldn't reach here, but defensive log
+      XAU_AIRecordLocalDecision("Local Decision (Grade Filter)", "grade below AI Director threshold");
       Print("AI DIRECTOR: grade=", grade, " below threshold — AI not called");
+   }
+   else if(!callAI)
+   {
+      if(!InpUseAI)
+         XAU_AIRecordLocalDecision("Local Decision (AI Disabled)", "InpUseAI=false");
+      else if(InpBacktestMode)
+         XAU_AIRecordLocalDecision("Local Decision (Backtest)", "InpBacktestMode=true");
+      else if(StringLen(InpServerURL) < 10)
+         XAU_AIRecordProviderFailure("Provider Unavailable", "InpServerURL missing/invalid");
    }
 
    // Store signal context for ML + journal logging
@@ -11620,6 +11639,111 @@ void XAU_AICostRecordCall(string reason, int requestChars, int responseChars)
          " estCostToday=$", DoubleToString(g_aiEstimatedCostToday, 4));
 }
 
+bool XAU_AIStatusIsHardFailure(string status)
+{
+   return (status == "Claude Timeout" || status == "GPT Timeout" ||
+           status == "Claude Error" || status == "GPT Error" ||
+           status == "Invalid AI Response" || status == "Provider Unavailable");
+}
+
+void XAU_AICheckOfflineAfterFailure()
+{
+   if(g_aiTransportFails >= InpAIOfflineMaxFails && !g_aiOffline)
+   {
+      g_aiOffline = true;
+      g_aiOfflineSince = TimeCurrent();
+      Print("AI DIRECTOR OFFLINE: ", g_aiTransportFails,
+            " consecutive AI decision failures. Switching to SAFE DEGRADED mode (",
+            InpAIOfflineSafeMode ? "50% lot size" : "full size, no AI checks", ")");
+   }
+   if(g_aiOffline && g_aiOfflineSince > 0 && (TimeCurrent() - g_aiOfflineSince) > 1800)
+   {
+      g_aiTransportFails = 0;
+      g_aiConsecutiveFails = 0;
+      g_aiOffline = false;
+      g_aiOfflineSince = 0;
+      Print("AI DIRECTOR AUTO-RECOVERY: 30 min elapsed — resetting AI failure counter for fresh retry.");
+   }
+}
+
+void XAU_AIRecordProviderFailure(string status, string reason)
+{
+   g_aiTransportFails++;
+   g_aiConsecutiveFails = g_aiTransportFails;
+   g_aiLastStatus = status;
+   g_aiLastFailureReason = reason;
+   g_aiLastProviderStatus = status;
+   g_aiClaudeVote = status;
+   g_aiGPTVote = "not_used";
+   lastAIConfidence = 0;
+   Print("AI_STATUS: ", status, " | Fails count=", g_aiTransportFails,
+         " | reason=", reason);
+   XAU_AICheckOfflineAfterFailure();
+}
+
+void XAU_AIRecordSuccessfulResponse(string status)
+{
+   if(StringLen(status) <= 0) status = "AI Decision";
+   g_aiTransportFails = 0;
+   g_aiConsecutiveFails = 0;
+   if(g_aiOffline)
+   {
+      g_aiOffline = false;
+      g_aiOfflineSince = 0;
+      Print("AI DIRECTOR BACK ONLINE — received usable AI response");
+   }
+   g_aiLastStatus = status;
+   g_aiLastFailureReason = "";
+   g_aiLastProviderStatus = status;
+}
+
+void XAU_AIRecordLocalDecision(string status, string reason)
+{
+   g_aiTransportFails = 0;
+   g_aiConsecutiveFails = 0;
+   g_aiLastStatus = status;
+   g_aiLastFailureReason = "";
+   g_aiLastProviderStatus = "local-only";
+   g_aiClaudeVote = "LOCAL";
+   g_aiGPTVote = "LOCAL";
+   lastAIConfidence = 0;
+   if(StringLen(reason) > 0)
+      g_aiLastSkipReason = reason;
+}
+
+void XAU_AIRecordBudgetGuard(string reason)
+{
+   XAU_AIRecordLocalDecision("Local Decision (Budget Guard)", reason);
+}
+
+void XAU_AIRecordCacheReuse(string reason)
+{
+   g_aiTransportFails = 0;
+   g_aiConsecutiveFails = 0;
+   g_aiLastStatus = "Cache Reuse";
+   g_aiLastFailureReason = "";
+   g_aiLastProviderStatus = reason;
+}
+
+void XAU_AIRecordTransportFailure(int httpCode, int err, string response)
+{
+   string status = "Provider Unavailable";
+   if(httpCode == 408 || httpCode == 504 || err == 5203 || err == 5204 ||
+      StringFind(response, "timeout") >= 0 || StringFind(response, "Timeout") >= 0)
+      status = "Claude Timeout";
+   if(StringFind(response, "GPT Error") >= 0) status = "GPT Error";
+   if(StringFind(response, "Invalid AI Response") >= 0) status = "Invalid AI Response";
+   string reason = StringFormat("non-200 WebRequest/API timeout/provider unreachable http=%d err=%d response=%s",
+                                httpCode, err, StringSubstr(response, 0, 120));
+   XAU_AIRecordProviderFailure(status, reason);
+}
+
+void XAU_AIRecordInvalidResponse(string response)
+{
+   XAU_AIRecordProviderFailure("Invalid AI Response",
+                               "HTTP 200 but missing/invalid action JSON: " + StringSubstr(response, 0, 120));
+}
+
 // v6.3.0: enriched GetAIAnalysis — sends full market context to AI Director
 // Added: htf_consensus, session, open_positions, basket_float_pl, recent_wins,
 //        recent_losses, account_equity, daily_pct, grade, setup_score, combined_score
@@ -11638,10 +11762,26 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    lastAIConfidence = 0;
    lastAIBearishCase = "";
    lastAISkipIf = "";
-   g_aiClaudeVote = "unknown";
-   g_aiGPTVote    = "unknown";
+   g_aiClaudeVote = "not_called";
+   g_aiGPTVote    = "not_called";
+   g_aiLastStatus = "AI Request Pending";
+   g_aiLastFailureReason = "";
 
-   if(!InpUseAI || InpBacktestMode || StringLen(InpServerURL) < 10) return 0;
+   if(!InpUseAI)
+   {
+      XAU_AIRecordLocalDecision("Local Decision (AI Disabled)", "InpUseAI=false");
+      return 0;
+   }
+   if(InpBacktestMode)
+   {
+      XAU_AIRecordLocalDecision("Local Decision (Backtest)", "InpBacktestMode=true");
+      return 0;
+   }
+   if(StringLen(InpServerURL) < 10)
+   {
+      XAU_AIRecordProviderFailure("Provider Unavailable", "InpServerURL missing/invalid");
+      return 0;
+   }
 
    string htfConsensusStr = (g_htfConsensusDir == 1) ? "BULL" : (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL";
    string aiStateHash = XAU_AICostStateHash(setup, grade, signature, regime, htfConsensusStr,
@@ -11659,6 +11799,7 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
       g_aiClaudeVote           = g_aiStateCacheClaude;
       g_aiGPTVote              = g_aiStateCacheGPT;
       g_aiCacheHitsToday++;
+      XAU_AIRecordCacheReuse("market-state cache hit");
       g_aiLastCallReason = "market-state cache reused; no paid LLM call";
       Print("AI DIRECTOR MARKET CACHE HIT: state=", aiStateHash,
             " dir=", g_aiStateCacheDir,
@@ -11670,6 +11811,7 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    string aiCostReason = "";
    if(!XAU_AICostAllowEntry(setup, grade, setupScore, combinedScore, aiStateHash, aiCostReason))
    {
+      XAU_AIRecordBudgetGuard(aiCostReason);
       Print("AI DIRECTOR LOCAL-ONLY: ", aiCostReason,
             " | setup=", setup,
             " grade=", grade,
@@ -11711,6 +11853,7 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
       g_aiClaudeVote           = g_aiCacheClaudeV;
       g_aiGPTVote              = g_aiCacheGPTV;
       g_aiCacheHitsToday++;
+      XAU_AIRecordCacheReuse("same-bar cache hit");
       Print("AI DIRECTOR CACHE HIT: reusing ", signature, " result from this bar (dir=",
             g_aiCacheDir, " conf=", g_aiCacheConf, "%) — no LLM call needed");
       return g_aiCacheDir;
@@ -11800,31 +11943,25 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    int res = WebRequest("POST", url, headers, 15000, postData, result, rh);
    if(res != 200)
    {
-      g_aiConsecutiveFails++;
-      if(g_aiConsecutiveFails >= InpAIOfflineMaxFails && !g_aiOffline)
-      {
-         g_aiOffline = true;
-         g_aiOfflineSince = TimeCurrent();
-         Print("AI DIRECTOR OFFLINE: ", g_aiConsecutiveFails, " consecutive failures. Switching to SAFE DEGRADED mode (", InpAIOfflineSafeMode ? "50% lot size" : "full size, no AI checks", ")");
-      }
-      // v6.3.2: auto-recovery attempt — after 30 minutes offline, reset fail counter so
-      // the next call gets a fresh try instead of staying degraded indefinitely.
-      if(g_aiOffline && g_aiOfflineSince > 0 && (TimeCurrent() - g_aiOfflineSince) > 1800)
-      {
-         g_aiConsecutiveFails = 0;
-         g_aiOffline = false;
-         g_aiOfflineSince = 0;
-         Print("AI DIRECTOR AUTO-RECOVERY: 30 min elapsed — resetting fail counter for fresh retry.");
-      }
+      string failResponse = CharArrayToString(result);
+      XAU_AIRecordTransportFailure(res, GetLastError(), failResponse);
       return 0;
    }
-   // Success — reset fail counter
-   if(g_aiConsecutiveFails > 0 || g_aiOffline)
-   {
-      g_aiConsecutiveFails = 0;
-      if(g_aiOffline) { g_aiOffline = false; Print("AI DIRECTOR BACK ONLINE — resuming full authority"); }
-   }
    string response = CharArrayToString(result);
+   string responseStatus = ExtractJsonString(response, "ai_status");
+   if(StringLen(responseStatus) <= 0) responseStatus = "AI Decision";
+   if(responseStatus == "Local Decision (Budget Guard)")
+   {
+      XAU_AIRecordBudgetGuard(ExtractJsonString(response, "reason"));
+      return 0;
+   }
+   if(XAU_AIStatusIsHardFailure(responseStatus))
+   {
+      XAU_AIRecordProviderFailure(responseStatus, ExtractJsonString(response, "reason"));
+      return 0;
+   }
+   if(responseStatus == "Cache Reuse")
+      XAU_AIRecordCacheReuse("backend cache hit");
    XAU_AICostRecordCall("entry confirmation " + setup + " " + grade,
                         StringLen(body), StringLen(response));
 
@@ -11849,7 +11986,11 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    lastAISkipIf = ExtractJsonString(response, "skip_if");
 
    int actIdx = StringFind(response, "\"action\":");
-   if(actIdx < 0) return 0;
+   if(actIdx < 0)
+   {
+      XAU_AIRecordInvalidResponse(response);
+      return 0;
+   }
    string tail = StringSubstr(response, actIdx, 40);
    int dir = 0;
    if(StringFind(tail, "\"BUY\"")  >= 0) dir = 1;
@@ -11858,6 +11999,7 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    // CheckForEntry falls into the aiResult==0 branch (not aiUnavailable).
    else
    {
+      XAU_AIRecordSuccessfulResponse(responseStatus);
       g_aiLastStateHash = aiStateHash;
       g_aiLastStateAt = TimeCurrent();
       g_aiStateCacheDir = 0;
@@ -11871,6 +12013,7 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
       g_aiStateCacheGPT = "SKIP";
       return 0;
    }
+   XAU_AIRecordSuccessfulResponse(responseStatus);
 
    // Capture the full trader thesis for storage + display
    currentTradeThesis       = ExtractJsonString(response, "thesis");
@@ -17903,6 +18046,11 @@ string XAUAI_DiagnosticsText()
    d += StringFormat("AI Cost: $%.4f est | tokens~%d\n", g_aiEstimatedCostToday, g_aiEstimatedTokensToday);
    d += StringFormat("AI calls today: %d/%d | AI cache hits: %d | skipped: %d\n",
                      g_aiCallsToday, InpAICostDailyCallLimit, g_aiCacheHitsToday, g_aiSkippedToday);
+   d += "AI status: " + g_aiLastStatus + "\n";
+   d += StringFormat("Fails count: %d (consecutive AI decision failures; excludes budget guard/cache/local-only)\n",
+                     g_aiTransportFails);
+   if(StringLen(g_aiLastFailureReason) > 0)
+      d += "AI failure reason: " + StringSubstr(g_aiLastFailureReason, 0, 120) + "\n";
    d += "AI last call reason: " + (StringLen(g_aiLastCallReason) > 0 ? StringSubstr(g_aiLastCallReason, 0, 100) : "none") + "\n";
    d += "AI last skip reason: " + (StringLen(g_aiLastSkipReason) > 0 ? StringSubstr(g_aiLastSkipReason, 0, 100) : "none") + "\n";
    d += "AI memory: " + g_memoryLastInfluence + " | " + (StringLen(g_memoryLastRecommendation) > 0 ? StringSubstr(g_memoryLastRecommendation, 0, 120) : "learning") + "\n";
