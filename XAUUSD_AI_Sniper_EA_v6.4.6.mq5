@@ -437,12 +437,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.5"
+#property version   "6.4.6"
 #property description "XAUUSD AI Sniper v6.4.6 — NEWS_AFTERMATH fix, post-news intelligence, early loser cut, hold winners longer, vol-adjusted lot sizing"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
 #property strict
+
+#define XAUAI_EA_VERSION "v6.4.6"
+#define XAUAI_EA_VERSION_NUM "6.4.6"
+#define XAUAI_BUILD_HASH "v646-live-audit-20260629"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1129,6 +1133,9 @@ input double InpAMPL_TrailATR_Mid    = 0.33;   // v6.4.6: slight widening 0.30�
 input double InpAMPL_TrailATR_Weak   = 0.20;   // Trail buffer (×ATR) when momentum 0-2/5 (exhausting — lock now)
 input double InpAMPL_GivebackPct     = 40.0;   // v6.4.6: widened 32→40 — allow more giveback before locking tight
 input double InpAMPL_GivebackMinUSD  = 65.0;   // v6.4.6: raised 40→65 — peak must be meaningful before giveback triggers
+input double InpAMPL_MinRetainUSD    = 25.0;   // v6.4.6 audit: never tighten AMPL if it would lock less than this
+input double InpAMPL_MinRetainPeakPct= 30.0;   // v6.4.6 audit: AMPL giveback lock must retain this % of best floating
+input double InpAMPL_GivebackMinCurrentPct = 25.0; // v6.4.6 audit: current profit must still be meaningful vs peak
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // v6.3.0: TRUE — AI Director can HOLD, CLOSE, or LOCK positions
@@ -1927,6 +1934,8 @@ int        g_basketSnapMax = 60;      // store up to 60 samples (~1 sample / sec
 
 // v4.9.6 — DIAGNOSTIC HEARTBEAT state
 string     g_lastSkipReason  = "";    // Updated every time OnTick returns silently
+string     g_lastTradeReason = "";    // Last actual OpenTrade() reason sent to broker
+string     lastExitReason    = "";    // Last resolved exit reason visible on dashboard/logs
 datetime   g_lastHeartbeat   = 0;     // Throttle heartbeat to 1/minute
 datetime   g_lastBotMonitorHeartbeat = 0; // Remote dashboard heartbeat
 datetime   g_lastBotCommandPoll = 0;      // PIN-safe command queue poll cadence
@@ -1943,6 +1952,11 @@ int        g_indicatorBufferFailCount = 0; // v5.9.0: rebuild stale indicator ha
 datetime   g_lastIndicatorFailLog = 0;
 datetime   g_lastIndicatorRebuildAt = 0; // v5.8.25: throttle recovery loops
 datetime   g_indicatorWarmupUntil = 0;   // v5.8.25: let MT5 calculate new indicator buffers before retrying
+
+// v6.4.6 audit: pending exit attribution for broker-side SL/TP fills.
+ulong      g_pendingExitIds[];
+string     g_pendingExitReasons[];
+datetime   g_pendingExitTimes[];
 
 // v5.8.51 — LIVE EXECUTION TELEMETRY
 double     g_dailySlippageTotal = 0.0; // cumulative entry slippage today (in price units)
@@ -2513,6 +2527,122 @@ bool AIBlocksClose(string ruleName, ulong ticket, bool isBuy, double openPx, dou
 }
 
 //+------------------------------------------------------------------+
+//| v6.4.6 audit — broker-side exit attribution                      |
+//| Stores the most recent protective action per MT5 position id so   |
+//| a later broker SL/TP fill records the real engine that caused it. |
+//+------------------------------------------------------------------+
+void XAU_SetPendingExitReason(ulong posId, string reason)
+{
+   if(posId == 0 || StringLen(reason) == 0) return;
+   if(StringLen(reason) > 360) reason = StringSubstr(reason, 0, 360);
+
+   int n = ArraySize(g_pendingExitIds);
+   for(int i = 0; i < n; i++)
+   {
+      if(g_pendingExitIds[i] == posId)
+      {
+         g_pendingExitReasons[i] = reason;
+         g_pendingExitTimes[i] = TimeCurrent();
+         return;
+      }
+   }
+
+   if(n >= 32)
+   {
+      for(int j = 0; j < n - 1; j++)
+      {
+         g_pendingExitIds[j] = g_pendingExitIds[j + 1];
+         g_pendingExitReasons[j] = g_pendingExitReasons[j + 1];
+         g_pendingExitTimes[j] = g_pendingExitTimes[j + 1];
+      }
+      n = 31;
+      ArrayResize(g_pendingExitIds, n);
+      ArrayResize(g_pendingExitReasons, n);
+      ArrayResize(g_pendingExitTimes, n);
+   }
+
+   ArrayResize(g_pendingExitIds, n + 1);
+   ArrayResize(g_pendingExitReasons, n + 1);
+   ArrayResize(g_pendingExitTimes, n + 1);
+   g_pendingExitIds[n] = posId;
+   g_pendingExitReasons[n] = reason;
+   g_pendingExitTimes[n] = TimeCurrent();
+}
+
+string XAU_PopPendingExitReason(ulong posId)
+{
+   if(posId == 0) return "";
+   int n = ArraySize(g_pendingExitIds);
+   for(int i = 0; i < n; i++)
+   {
+      if(g_pendingExitIds[i] != posId) continue;
+      string reason = g_pendingExitReasons[i];
+      for(int j = i; j < n - 1; j++)
+      {
+         g_pendingExitIds[j] = g_pendingExitIds[j + 1];
+         g_pendingExitReasons[j] = g_pendingExitReasons[j + 1];
+         g_pendingExitTimes[j] = g_pendingExitTimes[j + 1];
+      }
+      ArrayResize(g_pendingExitIds, n - 1);
+      ArrayResize(g_pendingExitReasons, n - 1);
+      ArrayResize(g_pendingExitTimes, n - 1);
+      return reason;
+   }
+   return "";
+}
+
+string XAU_DealReasonName(ENUM_DEAL_REASON reason)
+{
+   switch(reason)
+   {
+      case DEAL_REASON_SL:     return "BROKER_SL";
+      case DEAL_REASON_TP:     return "BROKER_TP";
+      case DEAL_REASON_SO:     return "BROKER_STOP_OUT";
+      case DEAL_REASON_EXPERT: return "EA_MARKET_CLOSE";
+      case DEAL_REASON_CLIENT: return "MANUAL_DESKTOP_CLOSE";
+      case DEAL_REASON_MOBILE: return "MANUAL_MOBILE_CLOSE";
+      case DEAL_REASON_WEB:    return "MANUAL_WEB_CLOSE";
+      default:                 return EnumToString(reason);
+   }
+}
+
+string XAU_ResolveExitReason(ulong posId, ENUM_DEAL_REASON dealReason, double profit)
+{
+   string pending = XAU_PopPendingExitReason(posId);
+   string brokerReason = XAU_DealReasonName(dealReason);
+   if(StringLen(pending) > 0)
+      return pending + " | " + brokerReason;
+
+   if(dealReason == DEAL_REASON_SL || dealReason == DEAL_REASON_TP || dealReason == DEAL_REASON_SO)
+      return brokerReason;
+
+   if(StringLen(lastExitReason) > 0)
+      return lastExitReason + " | " + brokerReason;
+
+   if(profit > 0.01)  return "PROFIT_CLOSE | " + brokerReason;
+   if(profit < -0.01) return "LOSS_CLOSE | " + brokerReason;
+   return "BREAKEVEN_CLOSE | " + brokerReason;
+}
+
+void XAU_SetPendingSLReason(ulong ticket, double newSL, string logTag)
+{
+   ulong posId = ticket;
+   if(PositionSelectByTicket(ticket))
+   {
+      ulong ident = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      if(ident > 0) posId = ident;
+   }
+
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   string reason = "SL_MOD:" + logTag +
+                   " | sl=" + DoubleToString(newSL, digits) +
+                   " | spread=" + DoubleToString((double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD), 0) +
+                   " avgSpread=" + DoubleToString(g_spreadEMA, 1) +
+                   " | trade=" + g_lastTradeReason;
+   XAU_SetPendingExitReason(posId, reason);
+}
+
+//+------------------------------------------------------------------+
 //| v4.5.6 — SAFE POSITION MODIFY (freeze/stops aware)               |
 //| Broker brokers reject PositionModify when:                       |
 //|   • Price within SYMBOL_TRADE_FREEZE_LEVEL of SL/TP               |
@@ -2616,7 +2746,11 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       {
          Sleep(150);
          ResetLastError();
-         if(trade.PositionModify(ticket, newSL, tp)) return true;
+         if(trade.PositionModify(ticket, newSL, tp))
+         {
+            XAU_SetPendingSLReason(ticket, newSL, logTag);
+            return true;
+         }
          ret = trade.ResultRetcode();
          err = GetLastError();
       }
@@ -2641,6 +2775,7 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       }
       return false;
    }
+   XAU_SetPendingSLReason(ticket, newSL, logTag);
    return true;
 }
 
@@ -3318,7 +3453,10 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v6.4.6 (NEWS INTELLIGENCE + EXPECTANCY ENGINE) READY ===");
+   Print("=== XAUAI SNIPER ", XAUAI_EA_VERSION, " (NEWS INTELLIGENCE + EXPECTANCY ENGINE) READY ===");
+   PrintFormat("VERSION-DIAG | property=%s runtime=%s build=%s inputHash=%s account=%I64d broker=%s symbol=%s magic=%d",
+               XAUAI_EA_VERSION_NUM, XAUAI_EA_VERSION, XAUAI_BUILD_HASH, XAUAI_InputHash(),
+               AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), Symbol(), InpMagicNumber);
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -6546,7 +6684,7 @@ void OnTick()
 
    // Weekend
    if(InpWeekendClose && dtNow.day_of_week == 5 && dtNow.hour >= 20)
-   { if(CountMyPositions() > 0) { CloseAll(); Print("WEEKEND CLOSE"); } return; }
+   { if(CountMyPositions() > 0) { CloseAll("WEEKEND_CLOSE"); Print("WEEKEND CLOSE"); } return; }
 
    // v4.5.7 — HEARTBEAT: if any risk gate is active, log ONCE per 5 min so
    // user never has a silent EA again. Previously these only printed ONCE on
@@ -6565,13 +6703,13 @@ void OnTick()
                ". Closing exposure and pausing new trades before the firm's hard limit.");
          g_propFirmLockActive = true;
       }
-      if(CountMyPositions() > 0) CloseAll();
+      if(CountMyPositions() > 0) CloseAll("PROP_FIRM_LOSS_LOCK: " + propFirmLock);
       g_lastSkipReason = "PROP-FIRM LOSS LOCK: " + propFirmLock;
       return;
    }
    if(InpEquityProtect > 0 && equity < initialBalance * InpEquityProtect / 100.0)
    {
-      CloseAll();
+      CloseAll("EQUITY_PROTECT");
       if(heartbeatDue) { Print("⏸  EQUITY PROTECT ACTIVE — equity $", DoubleToString(equity,2),
          " < ", DoubleToString(InpEquityProtect,1), "% of $", DoubleToString(initialBalance,2),
          ". EA paused until equity recovers. Add funds or close losing trades.");
@@ -6582,7 +6720,7 @@ void OnTick()
    double weeklyPnL = equity - weeklyStartEquity;
    if(InpWeeklyTarget > 0 && weeklyPnL >= weeklyStartEquity * InpWeeklyTarget / 100.0)
    {
-      if(!weeklyTargetHit) { CloseAll(); Print("WEEKLY TARGET HIT: +$", DoubleToString(weeklyPnL, 2)); }
+      if(!weeklyTargetHit) { CloseAll("WEEKLY_TARGET_HIT"); Print("WEEKLY TARGET HIT: +$", DoubleToString(weeklyPnL, 2)); }
       weeklyTargetHit = true;
       if(heartbeatDue) { Print("⏸  WEEKLY TARGET HIT — +$", DoubleToString(weeklyPnL, 2),
          " reached (", DoubleToString(InpWeeklyTarget,1), "% of $", DoubleToString(weeklyStartEquity,2),
@@ -9003,6 +9141,13 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
          " TP=", DoubleToString(tp, digits),
          " Lots=", DoubleToString(lots, lotDigits),
          " | ", reason);
+   g_lastTradeReason = reason;
+   lastExitReason = "";
+   PrintFormat("TRADE-DIAG ENTRY | version=%s build=%s inputHash=%s account=%I64d broker=%s symbol=%s digits=%d point=%s spread=%.0f avgSpread=%.1f magic=%d timeframe=M5",
+               XAUAI_EA_VERSION, XAUAI_BUILD_HASH, XAUAI_InputHash(),
+               AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER),
+               Symbol(), digits, DoubleToString(point, digits),
+               (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD), g_spreadEMA, InpMagicNumber);
 
    bool ok;
    if(signal == 1) ok = trade.Buy(lots, Symbol(), 0, sl, tp, "XAU-SNIPER|" + reason);
@@ -9086,9 +9231,6 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
 //|   2. Full market context at close                                |
 //|   3. Plain-English reason                                        |
 //| Also saved to "lastExitReason" for dashboard + journal.          |
-//+------------------------------------------------------------------+
-string lastExitReason = "";    // visible on dashboard
-
 void LogExit(ulong ticket, string dir, double openPx, double closePx,
              double profit, double peak, int minsOpen,
              double rsi, double emaFast, double close1, double open1,
@@ -9329,7 +9471,7 @@ bool ManageBasket()
                PrintFormat(">>> BASKET FAST-REVERSAL │ dropped $%.2f (%.1f%% of peak $%.2f) in %ds → BANK PROFIT",
                            dropFromWinMax, dropPctOfPeak, g_basketPeakUSD, InpBasketFastWindowSec);
                lastExitReason = StringFormat("BASKET FAST-REV │ peak $%.2f → $%.2f in %ds", g_basketPeakUSD, totalPnL, InpBasketFastWindowSec);
-               CloseAll();
+               CloseAll(lastExitReason);
                PG_OnBasketWin();  // v5.1.2 — winner resets consecutive-loss streak
                g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
                g_basketArmed    = false; g_basketBEHit = false;
@@ -9356,7 +9498,7 @@ bool ManageBasket()
                PrintFormat(">>> BASKET HARD-CAP │ giveback $%.2f ≥ cap $%.2f (%.1f%% of bal) → BANK PROFIT",
                            currGivebackUSD, maxGivebackUSD, hardGivebackPct);
                lastExitReason = StringFormat("BASKET HARD-CAP │ peak $%.2f → $%.2f (giveback $%.2f)", g_basketPeakUSD, totalPnL, currGivebackUSD);
-               CloseAll();
+               CloseAll(lastExitReason);
                PG_OnBasketWin();  // v5.1.2
                g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
                g_basketArmed    = false; g_basketBEHit = false;
@@ -9399,7 +9541,7 @@ bool ManageBasket()
                      totalPnL, g_basketFloorUSD, g_basketPeakUSD,
                      g_basketPeakUSD > 0 ? (totalPnL / g_basketPeakUSD) * 100.0 : 0.0);
          lastExitReason = StringFormat("BASKET LOCK │ $%.2f peak → $%.2f banked", g_basketPeakUSD, totalPnL);
-         CloseAll();
+         CloseAll(lastExitReason);
          // reset so the state doesn't instantly re-arm if a residual slippage trade lingers
          g_basketPeakUSD  = 0;
          g_basketFloorUSD = 0;
@@ -9954,11 +10096,14 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 
          bool explosiveMove = (bigCandle || fastVelocity) && (amplProfit >= InpAMPL_MinUSD);
 
-         // Signal 3: Give-back limit — fires regardless of explosive detection
+         // Signal 3: Give-back limit — fires regardless of explosive detection,
+         // but v6.4.6 audit prevents late tiny locks after most of the peak is gone.
          double peakRetrace   = (amplProfit < peak) ? ((peak - amplProfit) / peak) * 100.0 : 0.0;
-         bool   givebackLimit = (peak >= InpAMPL_GivebackMinUSD) && (peakRetrace >= InpAMPL_GivebackPct);
+         bool   givebackSignal = (peak >= InpAMPL_GivebackMinUSD) && (peakRetrace >= InpAMPL_GivebackPct);
+         double amplRequiredCurrentUSD = MathMax(InpAMPL_MinRetainUSD, peak * InpAMPL_GivebackMinCurrentPct / 100.0);
+         bool   givebackLimit = givebackSignal && (amplProfit >= amplRequiredCurrentUSD);
 
-         if(explosiveMove || givebackLimit)
+         if(explosiveMove || givebackSignal)
          {
             // Adaptive trail: stronger momentum → wider buffer (may continue), weaker → tighter
             double trailATR;
@@ -9986,8 +10131,28 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
             bool inProfit_a = isBuy ? (amplSL > openPx)           : (amplSL < openPx);
             bool sane_a     = isBuy ? (amplSL < curPrice - buf_a) : (amplSL > curPrice + buf_a);
             bool ratchet_a  = isBuy ? (amplSL > curSL)            : (amplSL < curSL || curSL == 0);
+            double amplLockUSD = 0.0;
+            if(inProfit_a)
+            {
+               double lockDist = isBuy ? (amplSL - openPx) : (openPx - amplSL);
+               amplLockUSD = MathMax(0.0, lockDist * lotsOpen * tickVal_a / tickSz_a);
+            }
+            double amplRequiredLockUSD = MathMax(InpAMPL_MinRetainUSD, peak * InpAMPL_MinRetainPeakPct / 100.0);
+            bool amplTinyLockSkipped = false;
+            if(givebackSignal && (amplProfit < amplRequiredCurrentUSD || amplLockUSD < amplRequiredLockUSD))
+            {
+               amplTinyLockSkipped = true;
+               static datetime lastAMPLTinyLockLog = 0;
+               if(TimeCurrent() - lastAMPLTinyLockLog >= 20)
+               {
+                  PrintFormat("AMPL_GIVEBACK_HOLD_TINY_LOCK #%I64u %s | profit=$%.2f peak=$%.2f retrace=%.0f%% | proposedLock=$%.2f requiredLock=$%.2f requiredCurrent=$%.2f | holding runner; other exits still active",
+                              ticket, isBuy?"BUY":"SELL", amplProfit, peak, peakRetrace,
+                              amplLockUSD, amplRequiredLockUSD, amplRequiredCurrentUSD);
+                  lastAMPLTinyLockLog = TimeCurrent();
+               }
+            }
 
-            if(inProfit_a && sane_a && ratchet_a)
+            if(!amplTinyLockSkipped && inProfit_a && sane_a && ratchet_a)
             {
                string amplTrigger = givebackLimit
                                     ? StringFormat("GIVEBACK_%.0f%%", peakRetrace)
@@ -11937,6 +12102,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // so a pyramid add would overwrite it before the original position closed and recorded.
    if(entry == DEAL_ENTRY_IN)
    {
+      lastExitReason = "";
       ulong openPosId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
       if(openPosId > 0 && StringLen(g_lastTradePattern) > 0)
       {
@@ -12018,6 +12184,9 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    double dPrice      = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
    double dVolume     = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
    ENUM_DEAL_TYPE dType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+   ENUM_DEAL_REASON dealReason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
+   string resolvedExitReason = XAU_ResolveExitReason(posId, dealReason, profit);
+   lastExitReason = resolvedExitReason;
    // On exit, the closing deal is opposite side of the position
    string dirStr = (dType == DEAL_TYPE_SELL) ? "BUY" : "SELL";
 
@@ -12043,6 +12212,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    Print("CLOSED: ", wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK-EVEN",
          " $", DoubleToString(profit, 2),
          " | T:", totalTrades, " W:", wins, " L:", losses);
+   PrintFormat("TRADE-DIAG EXIT | posId=%I64u deal=%I64u reason=%s profit=$%.2f price=%.5f volume=%.2f spread=%.0f avgSpread=%.1f build=%s inputHash=%s",
+               posId, dealTicket, resolvedExitReason, profit, dPrice, dVolume,
+               (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD), g_spreadEMA,
+               XAUAI_BUILD_HASH, XAUAI_InputHash());
    bool aiInfluenced = (currentTradeConfidence > 0 || StringFind(lastExitReason, "AI") >= 0 || StringFind(lastExitReason, "CLAUDE") >= 0);
    if(aiInfluenced)
    {
@@ -12302,11 +12475,18 @@ int GetOpenExposureDirection()
    return 0;
 }
 
-void CloseAll()
+void CloseAll(string reason = "FORCE_CLOSE")
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
       if(posInfo.SelectByIndex(i) && posInfo.Magic() == InpMagicNumber && posInfo.Symbol() == Symbol())
-      { trade.PositionClose(posInfo.Ticket()); Print("FORCE CLOSE: #", posInfo.Ticket()); }
+      {
+         ulong ident = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+         XAU_SetPendingExitReason(posInfo.Ticket(), reason);
+         if(ident > 0 && ident != posInfo.Ticket())
+            XAU_SetPendingExitReason(ident, reason);
+         trade.PositionClose(posInfo.Ticket());
+         Print("FORCE CLOSE: #", posInfo.Ticket(), " reason=", reason);
+      }
 }
 
 double BasketFloatingPnL()
@@ -12357,7 +12537,7 @@ bool ExpectancyDayGivebackGuard()
                maxGiveback, InpExpectancyDayMaxGivePct);
    lastExitReason = StringFormat("EXPECTANCY DAY GUARD | gave back $%.2f of $%.2f peak gain",
                                  givebackUSD, dayPeakGain);
-   CloseAll();
+   CloseAll(lastExitReason);
    lastTradeClose = TimeCurrent();
    return true;
 }
@@ -16404,27 +16584,41 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v6.4.6\",\"account_number\":\"%I64d\","
-      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"%s\",\"build_hash\":\"%s\","
+      "\"input_hash\":\"%s\",\"account_number\":\"%I64d\","
+      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"digits\":%d,\"point\":%.8f,"
+      "\"magic_number\":%d,\"spread\":%.0f,\"avg_spread\":%.1f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
       "\"mt5_connected\":%s,\"account_connected\":%s,\"ea_active\":true,"
       "\"bot_state\":\"%s\",\"last_action\":\"%s\",\"last_tick_time\":\"%s\","
       "\"last_decision_time\":\"%s\",\"last_error\":\"%s\",\"epf_state\":\"T%d\","
+      "\"news_state\":\"%s\",\"trade_state\":\"%s\",\"exit_engine_state\":\"%s\","
+      "\"last_trade_reason\":\"%s\",\"last_exit_reason\":\"%s\","
       "\"sync_state\":\"%s\",\"prop_firm_mode\":%s,\"prop_daily_loss_pct\":%.2f,"
       "\"prop_max_loss_pct\":%.2f,\"prop_safety_buffer_pct\":%.2f,"
       "\"prop_risk_per_trade_pct\":%.2f,\"prop_max_basket_risk_pct\":%.2f}",
       BotMonitorJsonSafe(InpLicensePIN, 32),
       BotMonitorJsonSafe(InpLicensePIN, 32),
+      XAUAI_EA_VERSION,
+      XAUAI_BUILD_HASH,
+      XAUAI_InputHash(),
       AccountInfoInteger(ACCOUNT_LOGIN),
       BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER), 80),
-      Symbol(), spread, equity, balance, (equity - dailyStartEquity), dd, openPs,
+      Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
+      SymbolInfoDouble(Symbol(), SYMBOL_POINT), InpMagicNumber,
+      spread, g_spreadEMA, equity, balance, (equity - dailyStartEquity), dd, openPs,
       BotMonitorBool(termAlgo), BotMonitorBool(tradeAllowed),
       BotMonitorBool(termConn), BotMonitorBool(AccountInfoInteger(ACCOUNT_LOGIN) > 0),
       BotMonitorJsonSafe(state, 48), BotMonitorJsonSafe(StringLen(g_lastRemoteCommandState) > 0 ? g_lastRemoteCommandState : g_lastSkipReason, 180),
       TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
       TimeToString(g_lastEntryScanAt > 0 ? g_lastEntryScanAt : TimeCurrent(), TIME_DATE | TIME_SECONDS),
       BotMonitorJsonSafe(lastErr, 120), epf_tier,
+      BotMonitorJsonSafe(XAUAI_NewsState(), 120),
+      BotMonitorJsonSafe(XAUAI_TradeState(), 160),
+      BotMonitorJsonSafe(XAUAI_ExitEngineState(), 180),
+      BotMonitorJsonSafe(g_lastTradeReason, 220),
+      BotMonitorJsonSafe(lastExitReason, 220),
       BotMonitorJsonSafe(g_startupIntelSyncReason, 120),
       BotMonitorBool(g_propFirmMode), g_propFirmDailyLossPct,
       g_propFirmMaxLossPct, g_propFirmSafetyBufferPct,
@@ -16537,7 +16731,7 @@ void BotMonitorPollCommands()
    else if(action == "CLOSE_ALL_TRADES")
    {
       int before = CountMyPositions();
-      CloseAll();
+      CloseAll("REMOTE_COMMAND_CLOSE_ALL");
       status = "EXECUTED";
       result = StringFormat("Close-all requested; positions before command=%d.", before);
    }
@@ -16966,6 +17160,111 @@ void SendWeeklyReport()
    WebRequest("POST", InpServerURL + "/api/journal/weekly-report", "Content-Type: application/json\r\n", 10000, pd, res, rh);
 }
 
+string XAUAI_HashString(string s)
+{
+   ulong h = 1469598103934665603;
+   for(int i = 0; i < StringLen(s); i++)
+   {
+      h ^= (ulong)StringGetCharacter(s, i);
+      h *= 1099511628211;
+   }
+   return StringFormat("%I64u", h);
+}
+
+string XAUAI_InputHash()
+{
+   string s = "";
+   s += StringFormat("ver=%s|magic=%d|mode=%d|risk=%.3f|maxLots=%.2f|maxOpen=%d|oneDir=%d|hedgeBlock=%d|",
+                     XAUAI_EA_VERSION, InpMagicNumber, (int)InpAccountMode,
+                     InpRiskPercent, InpMaxLots, InpMaxOpenTrades,
+                     InpOneDirectionOnly ? 1 : 0, InpBlockNewEntriesIfHedged ? 1 : 0);
+   s += StringFormat("spread=%.1f,%d,%.2f|news=%d,%d,%.2f,%d,%.2f,%d|",
+                     InpMaxSpread, InpSpreadKillEnabled ? 1 : 0, InpSpreadKillMultiplier,
+                     InpUseNewsFilter ? 1 : 0, InpNewsAftermathEnable ? 1 : 0,
+                     InpNewsSpreadMulti, InpNewsAftermathMins,
+                     InpPostNewsSpreadReturnX, InpPostNewsAvoidMins);
+   s += StringFormat("basket=%d,%.2f,%.2f,%.2f,%.2f,%d|clean=%d,%.2f,%.2f,%d,%.2f|",
+                     InpBasketMode ? 1 : 0, EffBasketArmPct(), InpBasketArmFloor,
+                     EffBasketLockMinPct(), EffBasketBEPct(), InpCloudSafeDisablePartials ? 1 : 0,
+                     InpCleanExits ? 1 : 0, EffCleanBEActivateR(), EffCleanChandelierATR1(),
+                     InpEarlyConvictionCut ? 1 : 0, InpEarlyConvictionCutR);
+   s += StringFormat("ampl=%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f|volcap=%d,%.2f|ai=%d|cloud=%d|",
+                     InpAMPL_Enable ? 1 : 0, InpAMPL_MinUSD, InpAMPL_GivebackPct,
+                     InpAMPL_GivebackMinUSD, InpAMPL_MinRetainUSD,
+                     InpAMPL_MinRetainPeakPct, InpAMPL_GivebackMinCurrentPct,
+                     InpVolLotCapEnable ? 1 : 0, InpVolLotCapATRRatio,
+                     InpUseAI ? 1 : 0, InpCloudFanout ? 1 : 0);
+   s += StringFormat("symbol=%s|tf=M5|digits=%d|point=%s",
+                     Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
+                     DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), 8));
+   return XAUAI_HashString(s);
+}
+
+string XAUAI_PostNewsStateName()
+{
+   if(g_postNewsState == PNS_AFTERMATH) return "AFTERMATH";
+   if(g_postNewsState == PNS_DISCOVERY) return "DISCOVERY";
+   if(g_postNewsState == PNS_CONFIRMED) return "CONFIRMED";
+   if(g_postNewsState == PNS_ALLOWED)   return "ALLOWED";
+   if(g_postNewsState == PNS_AVOID)     return "AVOID";
+   return "NORMAL";
+}
+
+string XAUAI_NewsState()
+{
+   string state = XAUAI_PostNewsStateName();
+   if(InpNewsAftermathEnable && g_newsAftermathUntil > TimeCurrent())
+      state += StringFormat(" aftermath %ds", (int)(g_newsAftermathUntil - TimeCurrent()));
+   if(g_postNewsBias != 0)
+      state += g_postNewsBias > 0 ? " bias=BULLISH" : " bias=BEARISH";
+   return state;
+}
+
+string XAUAI_TradeState()
+{
+   if(g_remoteStopTrading) return "REMOTE_STOPPED";
+   if(g_remotePauseNewTrades) return "REMOTE_PAUSED";
+   int openPs = CountMyPositions();
+   if(openPs > 0) return StringFormat("MANAGING_%d_POSITION(S)", openPs);
+   if(StringLen(g_lastSkipReason) > 0) return "WAITING: " + StringSubstr(g_lastSkipReason, 0, 80);
+   return "SCANNING";
+}
+
+string XAUAI_ExitEngineState()
+{
+   string s = "";
+   s += InpCleanExits ? "Clean=ON" : "Clean=OFF";
+   s += InpAMPL_Enable ? " AMPL=ON" : " AMPL=OFF";
+   s += InpBasketMode ? " Basket=ON" : " Basket=OFF";
+   if(CountMyPositions() > 0)
+      s += StringFormat(" basketPeak=$%.2f floor=$%.2f", g_basketPeakUSD, g_basketFloorUSD);
+   return s;
+}
+
+string XAUAI_DiagnosticsText()
+{
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   string d = "";
+   d += "-- DIAGNOSTICS --\n";
+   d += "EA version: " + XAUAI_EA_VERSION + "\n";
+   d += "Build hash: " + XAUAI_BUILD_HASH + "\n";
+   d += "Input hash: " + XAUAI_InputHash() + "\n";
+   d += StringFormat("Account number: %I64d\n", AccountInfoInteger(ACCOUNT_LOGIN));
+   d += "Broker: " + AccountInfoString(ACCOUNT_SERVER) + "\n";
+   d += "Symbol: " + Symbol() + "\n";
+   d += StringFormat("Digits: %d\n", digits);
+   d += "Point: " + DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), digits) + "\n";
+   d += StringFormat("Spread now: %.0f\n", (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
+   d += StringFormat("Average spread: %.1f\n", g_spreadEMA);
+   d += StringFormat("Magic number: %d\n", InpMagicNumber);
+   d += "News state: " + XAUAI_NewsState() + "\n";
+   d += "Trade state: " + XAUAI_TradeState() + "\n";
+   d += "Exit engine state: " + XAUAI_ExitEngineState() + "\n";
+   d += "Last trade reason: " + (StringLen(g_lastTradeReason) > 0 ? StringSubstr(g_lastTradeReason, 0, 120) : "none") + "\n";
+   d += "Last exit reason: " + (StringLen(lastExitReason) > 0 ? StringSubstr(lastExitReason, 0, 120) : "none") + "\n";
+   return d;
+}
+
 //+------------------------------------------------------------------+
 //| DASHBOARD                                                        |
 //+------------------------------------------------------------------+
@@ -16976,7 +17275,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v6.4.6 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER " + XAUAI_EA_VERSION + " | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
@@ -17022,6 +17321,7 @@ void UpdateDashboard(int signal, double score, string grade)
       if(StringLen(currentTradeTarget) > 0)       d += "Target: " + currentTradeTarget + "\n";
    }
    if(StringLen(lastExitReason) > 0) d += StringFormat("Last Exit: %s\n", lastExitReason);
+   d += XAUAI_DiagnosticsText();
    d += "==========================================\n";
    if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT — RESTING <<\n";
    if(weeklyLossHit) d += "!! ADAPTIVE WEEKLY RECOVERY — A/A+ only | lot x0.50 | EA active !!\n";
