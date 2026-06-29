@@ -4,7 +4,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.6.mq5"
-EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.9.mq5"
+EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.11.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -12,16 +12,16 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_v649_has_clear_version_identity_and_named_source():
+def test_v6411_has_clear_version_identity_and_named_source():
     root = read(EA_ROOT)
     backend = read(EA_BACKEND)
     named = read(EA_NAMED)
 
     assert root == backend == named
-    assert '#property version   "6.4.9"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.9"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.9"' in root
-    assert '#define XAUAI_BUILD_HASH "v649-trade-lifecycle-manager-20260629"' in root
+    assert '#property version   "6.4.11"' in root
+    assert '#define XAUAI_EA_VERSION "v6.4.11"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.4.11"' in root
+    assert '#define XAUAI_BUILD_HASH "v6411-smart-exit-3layer-20260630"' in root
 
 
 def test_basket_lifecycle_inputs_and_state_exist():
@@ -83,3 +83,18 @@ def test_lifecycle_is_included_in_input_hash_and_diagnostics():
 
     assert "Trade lifecycle:" in diag
     assert "Profit/loss cycles:" in diag
+
+
+def test_open_basket_peak_is_reconstructed_after_reload():
+    ea = read(EA_ROOT)
+    helper = ea[ea.index("double XAU_ReconstructOpenBasketPeakUSD"):ea.index("bool XAU_BasketLifecycleManager")]
+    basket = ea[ea.index("bool ManageBasket()"):ea.index("//+------------------------------------------------------------------+\n//| v5.8.3")]
+
+    assert "CopyLow(Symbol(), PERIOD_M5" in helper
+    assert "CopyHigh(Symbol(), PERIOD_M5" in helper
+    assert "POSITION_TYPE_BUY" in helper
+    assert "POSITION_TYPE_SELL" in helper
+    assert "mixed direction" in helper
+    assert "PEAK_PROFIT_REACHED BASKET | reconstructed=Y" in basket
+    assert "XAU_ReconstructOpenBasketPeakUSD(totalPnL)" in basket
+    assert basket.index("XAU_ReconstructOpenBasketPeakUSD(totalPnL)") < basket.index("if(totalPnL > g_basketPeakUSD)")

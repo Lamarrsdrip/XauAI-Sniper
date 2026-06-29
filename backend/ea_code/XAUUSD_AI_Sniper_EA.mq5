@@ -1,9 +1,29 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.9 — Trade lifecycle manager protects continuation profits     |
+//|   v6.4.11 — Smart Exit 3-layer profit protection system          |
 //|            v6.4.7 trend-continuation/news fast-track preserved       |
 //+------------------------------------------------------------------+
+// v6.4.11 CHANGES (2026-06-30) — SMART EXIT 3-LAYER SYSTEM:
+//
+//   1. Adds explicit exit states: LET_IT_WORK, PROTECT_PROFIT,
+//      HOLD_RUNNER, GIVEBACK_WARNING, SECOND_CHANCE_EXIT,
+//      THESIS_BROKEN_EXIT, and CYCLE_DECAY_EXIT.
+//   2. Meaningful floating profit now gets a dynamic floor before
+//      legacy AMPL tightening, so a proven winner cannot quietly go red.
+//   3. Adds controlled partial + runner behavior. A partial is allowed
+//      after strong profit, but the runner only stays open with a protected
+//      stop and clean M5/M15 trend.
+//   4. Giveback limits adapt to trend strength: weak trend exits/tightens
+//      sooner; strong M5/M15 continuation gets more breathing room.
+//
+// v6.4.10 CHANGES (2026-06-29) — OPEN-BASKET PEAK RECOVERY:
+//
+//   1. When the EA is reloaded while positions are open, it reconstructs an
+//      approximate basket MFE from M5 highs/lows since entry before managing.
+//   2. This prevents a reload from forgetting a prior $191 floating peak and
+//      starting the lifecycle manager from zero on an already-proven trade.
+//
 // v6.4.9 CHANGES (2026-06-29) — TRADE LIFECYCLE MANAGER:
 //
 //   1. Basket lifecycle now tracks peak -> loss -> recovery cycles so a
@@ -477,16 +497,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.9"
-#property description "XAUUSD AI Sniper v6.4.9 — trade lifecycle manager protects continuation profits"
+#property version   "6.4.11"
+#property description "XAUUSD AI Sniper v6.4.11 — smart exit 3-layer profit protection"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.9"
-#define XAUAI_EA_VERSION_NUM "6.4.9"
-#define XAUAI_BUILD_HASH "v649-trade-lifecycle-manager-20260629"
+#define XAUAI_EA_VERSION "v6.4.11"
+#define XAUAI_EA_VERSION_NUM "6.4.11"
+#define XAUAI_BUILD_HASH "v6411-smart-exit-3layer-20260630"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1199,6 +1219,20 @@ input double InpProtectedPeakMinRetainUSD     = 35.0;  // Minimum secured profit
 input double InpProtectedPeakGivebackExitPct  = 65.0;  // Market-close if giveback is this severe and floor is not safe
 input bool   InpProtectedPeakCloseOnFloorBreak= true;  // If price already breached the floor, close instead of hoping
 input bool   InpProtectedPeakBasketCloseRed   = true;  // Basket cannot breathe into red after meaningful protected peak
+
+input group "=== SMART EXIT 3-LAYER SYSTEM (v6.4.11) ==="
+input bool   InpSmartExitEnable               = true;  // Master toggle: profit floor + partial runner + adaptive giveback
+input double InpSmartExitStrongProfitUSD      = 75.0;  // Absolute strong-profit floor for a $3k-style XAU account
+input double InpSmartExitStrongProfitEquityPct= 2.0;   // Account-aware strong-profit threshold; uses max(USD, equity%)
+input double InpSmartExitPartialPct           = 35.0;  // Bank this percent once strong profit is reached and stop is protected
+input bool   InpSmartExitPartialIgnoresCloudSafe = true; // Controlled winner partial can bypass old no-partial cloud switch
+input double InpSmartExitMinRetainUSD         = 35.0;  // Minimum profit floor after a meaningful peak
+input double InpSmartExitWeakLockPct          = 55.0;  // Weak trend: lock a larger slice of peak profit
+input double InpSmartExitStrongLockPct        = 45.0;  // Strong clean runner: lock enough profit but leave room
+input double InpSmartExitWeakGivebackPct      = 35.0;  // Weak trend max giveback from peak
+input double InpSmartExitNeutralGivebackPct   = 50.0;  // Mixed trend max giveback from peak
+input double InpSmartExitStrongGivebackPct    = 65.0;  // Clean M5/M15 trend max giveback from peak
+input bool   InpSmartExitM15Confirm           = true;  // Runner needs M15 confirmation, not just M5 noise
 
 input group "=== TRADE LIFECYCLE MANAGER (v6.4.9) ==="
 input bool   InpTradeLifecycleEnable          = true;  // Prevent proven winners from cycling profit-loss-profit-loss without action
@@ -2536,6 +2570,235 @@ double XAU_CurrentSLLockUSD(bool isBuy, double openPx, double curSL, double lots
    return MathMax(0.0, lockDist * lotsOpen * tickVal / tickSz);
 }
 
+enum XAU_SMART_EXIT_STATE
+{
+   LET_IT_WORK = 0,
+   PROTECT_PROFIT,
+   HOLD_RUNNER,
+   GIVEBACK_WARNING,
+   SECOND_CHANCE_EXIT,
+   THESIS_BROKEN_EXIT,
+   CYCLE_DECAY_EXIT
+};
+
+string XAU_SmartExitStateName(XAU_SMART_EXIT_STATE state)
+{
+   switch(state)
+   {
+      case LET_IT_WORK:        return "LET_IT_WORK";
+      case PROTECT_PROFIT:     return "PROTECT_PROFIT";
+      case HOLD_RUNNER:        return "HOLD_RUNNER";
+      case GIVEBACK_WARNING:   return "GIVEBACK_WARNING";
+      case SECOND_CHANCE_EXIT: return "SECOND_CHANCE_EXIT";
+      case THESIS_BROKEN_EXIT: return "THESIS_BROKEN_EXIT";
+      case CYCLE_DECAY_EXIT:   return "CYCLE_DECAY_EXIT";
+   }
+   return "LET_IT_WORK";
+}
+
+bool XAU_M5M15TrendClean(bool isBuy, int momentumScore, bool trendAligned,
+                         bool structureConfirmedBroken, bool emaAgainst,
+                         bool rsiAgainst, string &why)
+{
+   int signal = isBuy ? 1 : -1;
+   double tfThreshold = trendAligned ? 0.20 : 0.30;
+   string m5Why, m15Why;
+   int m5  = TFDirectionByEMA(signal, PERIOD_M5,  tfThreshold, m5Why);
+   int m15 = TFDirectionByEMA(signal, PERIOD_M15, tfThreshold, m15Why);
+
+   bool m5Clean = (m5 == signal);
+   bool m15Clean = InpSmartExitM15Confirm ? (m15 == signal) : (m15 != -signal);
+   bool noFailure = (!structureConfirmedBroken && !emaAgainst && !rsiAgainst);
+   bool clean = (m5Clean && m15Clean && noFailure && momentumScore >= 3);
+
+   why = StringFormat("%s | %s | momentum=%d/5 trendAligned=%s structBroken=%s emaAgainst=%s rsiAgainst=%s",
+                      m5Why, m15Why, momentumScore,
+                      trendAligned ? "Y" : "N",
+                      structureConfirmedBroken ? "Y" : "N",
+                      emaAgainst ? "Y" : "N",
+                      rsiAgainst ? "Y" : "N");
+   return clean;
+}
+
+double XAU_SmartExitAllowedGivebackPct(bool runnerClean, int momentumScore,
+                                       bool trendAligned,
+                                       bool structureConfirmedBroken,
+                                       bool emaAgainst, bool rsiAgainst)
+{
+   double weakGiveback = MathMax(10.0, MathMin(InpSmartExitWeakGivebackPct, 80.0));
+   double neutralGiveback = MathMax(weakGiveback, MathMin(InpSmartExitNeutralGivebackPct, 85.0));
+   double strongGiveback = MathMax(neutralGiveback, MathMin(InpSmartExitStrongGivebackPct, 90.0));
+
+   if(structureConfirmedBroken || (emaAgainst && rsiAgainst) || momentumScore <= 2)
+      return weakGiveback;
+   if(runnerClean && trendAligned && momentumScore >= 4)
+      return strongGiveback;
+   if(runnerClean && momentumScore >= 3)
+      return neutralGiveback;
+   return neutralGiveback;
+}
+
+double XAU_SmartExitLockPct(bool runnerClean, int momentumScore,
+                            bool structureConfirmedBroken, bool emaAgainst,
+                            bool rsiAgainst)
+{
+   double weakLock = MathMax(10.0, MathMin(InpSmartExitWeakLockPct, 85.0));
+   double strongLock = MathMax(10.0, MathMin(InpSmartExitStrongLockPct, 80.0));
+   if(structureConfirmedBroken || (emaAgainst && rsiAgainst) || momentumScore <= 2 || !runnerClean)
+      return MathMax(weakLock, strongLock);
+   return MathMin(weakLock, strongLock);
+}
+
+bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPrice,
+                         double curSL, double curTP, double slDist, double atr,
+                         int digits, double peak, double rDollars, double lotsOpen,
+                         int momentumScore, bool trendAligned,
+                         bool structureConfirmedBroken, bool emaAgainst,
+                         bool rsiAgainst, bool recoveryLikely, int minsOpen)
+{
+   if(!InpSmartExitEnable) return false;
+   if(peak <= 0.0 || rDollars <= 0.0 || slDist <= 0.0 || lotsOpen <= 0.0)
+      return false;
+
+   double tickVal = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+   double tickSz  = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
+   if(tickVal <= 0.0 || tickSz <= 0.0) return false;
+
+   double profitUSD = isBuy ? (curPrice - openPx) : (openPx - curPrice);
+   profitUSD *= lotsOpen * tickVal / tickSz;
+
+   double refBal = StrategyReferenceBalance();
+   double strongProfitUSD = MathMax(InpSmartExitStrongProfitUSD,
+                                    refBal * InpSmartExitStrongProfitEquityPct / 100.0);
+   bool strongProfitReached = (peak >= strongProfitUSD);
+   if(!strongProfitReached)
+      return false;
+
+   string trendWhy = "";
+   bool runnerClean = XAU_M5M15TrendClean(isBuy, momentumScore, trendAligned,
+                                          structureConfirmedBroken, emaAgainst,
+                                          rsiAgainst, trendWhy);
+   double givebackPct = (peak > 0.0 && profitUSD < peak)
+                        ? ((peak - profitUSD) / peak) * 100.0
+                        : 0.0;
+   double allowedGiveback = XAU_SmartExitAllowedGivebackPct(runnerClean, momentumScore,
+                                                            trendAligned,
+                                                            structureConfirmedBroken,
+                                                            emaAgainst, rsiAgainst);
+   double lockPct = XAU_SmartExitLockPct(runnerClean, momentumScore,
+                                         structureConfirmedBroken, emaAgainst, rsiAgainst);
+   double floorUSD = MathMax(InpSmartExitMinRetainUSD, peak * lockPct / 100.0);
+   floorUSD = MathMin(floorUSD, peak * 0.90);
+
+   int floorIdx = XAU_EnsureProfitFloorIndex(ticket);
+   bool floorRaised = (floorUSD > g_profitFloorLastFloorUSD[floorIdx] + 0.50);
+   if(floorRaised)
+      g_profitFloorLastFloorUSD[floorIdx] = floorUSD;
+
+   double currentLockUSD = XAU_CurrentSLLockUSD(isBuy, openPx, curSL, lotsOpen);
+   bool floorAlreadyProtected = (currentLockUSD + 0.50 >= floorUSD);
+   bool floorModified = false;
+
+   if(!floorAlreadyProtected && profitUSD > floorUSD)
+   {
+      double lockDist = (floorUSD / rDollars) * slDist;
+      double lockPx = isBuy ? NormalizeDouble(openPx + lockDist, digits)
+                            : NormalizeDouble(openPx - lockDist, digits);
+      double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+      long stopsLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+      double buffer = MathMax(stopsLevel * point, point * 30);
+      bool sane = isBuy ? (lockPx > openPx && lockPx < curPrice - buffer)
+                        : (lockPx < openPx && lockPx > curPrice + buffer);
+      bool ratchet = isBuy ? (lockPx > curSL) : (lockPx < curSL || curSL == 0.0);
+
+      if(sane && ratchet && SafeModifySL(ticket, lockPx, curTP, isBuy, curPrice, "SMART_EXIT_FLOOR"))
+      {
+         floorModified = true;
+         floorAlreadyProtected = true;
+         currentLockUSD = floorUSD;
+         PrintFormat("%s #%I64u %s | peak=$%.2f current=$%.2f floor=$%.2f lockPct=%.0f%% giveback=%.0f%% allowed=%.0f%% | SL=%s",
+                     XAU_SmartExitStateName(PROTECT_PROFIT),
+                     ticket, isBuy ? "BUY" : "SELL",
+                     peak, profitUSD, floorUSD, lockPct, givebackPct, allowedGiveback,
+                     DoubleToString(lockPx, digits));
+      }
+   }
+
+   bool partialsAllowed = (InpSmartExitPartialIgnoresCloudSafe || !InpCloudSafeDisablePartials);
+   if(partialsAllowed && floorAlreadyProtected && profitUSD >= strongProfitUSD &&
+      !CleanPartialAlreadyTaken(ticket) && InpSmartExitPartialPct > 0.0)
+   {
+      double minLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+      double partialLots = NormalizeVolumeDown(lotsOpen * InpSmartExitPartialPct / 100.0);
+      double remainingLots = NormalizeDouble(lotsOpen - partialLots, VolumeDigitsForSymbol());
+      if(partialLots >= minLot && remainingLots >= minLot)
+      {
+         if(trade.PositionClosePartial(ticket, partialLots))
+         {
+            CleanMarkPartialTaken(ticket);
+            PrintFormat("%s #%I64u %s | SMART_EXIT_PARTIAL closed %.2f lots (%.0f%%) at profit=$%.2f peak=$%.2f | runner=%.2f protectedFloor=$%.2f cleanTrend=%s",
+                        XAU_SmartExitStateName(PROTECT_PROFIT),
+                        ticket, isBuy ? "BUY" : "SELL",
+                        partialLots, InpSmartExitPartialPct,
+                        profitUSD, peak, remainingLots, floorUSD,
+                        runnerClean ? "Y" : "N");
+         }
+      }
+   }
+
+   if(profitUSD <= 0.0)
+   {
+      lastExitReason = StringFormat("%s | full giveback to red after peak $%.2f (current $%.2f)",
+                                    XAU_SmartExitStateName(THESIS_BROKEN_EXIT), peak, profitUSD);
+      PrintFormat("%s #%I64u %s | full giveback to red after strong profit | peak=$%.2f floor=$%.2f current=$%.2f giveback=%.0f%% | %s",
+                  XAU_SmartExitStateName(THESIS_BROKEN_EXIT),
+                  ticket, isBuy ? "BUY" : "SELL",
+                  peak, floorUSD, profitUSD, givebackPct, trendWhy);
+      XAU_SetPendingExitReason(ticket, lastExitReason);
+      trade.PositionClose(ticket);
+      return true;
+   }
+
+   bool floorBroken = (profitUSD <= floorUSD);
+   bool givebackWarning = (givebackPct >= allowedGiveback);
+   if(floorBroken || givebackWarning)
+   {
+      XAU_SMART_EXIT_STATE state = givebackWarning ? GIVEBACK_WARNING : PROTECT_PROFIT;
+      PrintFormat("%s #%I64u %s | peak=$%.2f current=$%.2f floor=$%.2f giveback=%.0f%% allowed=%.0f%% runnerClean=%s protected=$%.2f | %s",
+                  XAU_SmartExitStateName(state),
+                  ticket, isBuy ? "BUY" : "SELL",
+                  peak, profitUSD, floorUSD, givebackPct, allowedGiveback,
+                  runnerClean ? "Y" : "N", currentLockUSD, trendWhy);
+
+      if(floorBroken || !runnerClean || structureConfirmedBroken || !floorAlreadyProtected)
+      {
+         lastExitReason = StringFormat("%s | peak $%.2f floor $%.2f current $%.2f giveback %.0f%% cleanTrend=%s",
+                                       XAU_SmartExitStateName(THESIS_BROKEN_EXIT),
+                                       peak, floorUSD, profitUSD, givebackPct,
+                                       runnerClean ? "Y" : "N");
+         XAU_SetPendingExitReason(ticket, lastExitReason);
+         trade.PositionClose(ticket);
+         return true;
+      }
+   }
+
+   if(TimeCurrent() - g_profitFloorLastLogTime[floorIdx] >= 60)
+   {
+      XAU_SMART_EXIT_STATE state = runnerClean ? HOLD_RUNNER : PROTECT_PROFIT;
+      PrintFormat("%s #%I64u %s | peak=$%.2f current=$%.2f floor=$%.2f giveback=%.0f%% allowed=%.0f%% protected=$%.2f recoveryLikely=%s mins=%d | %s",
+                  XAU_SmartExitStateName(state),
+                  ticket, isBuy ? "BUY" : "SELL",
+                  peak, profitUSD, floorUSD, givebackPct, allowedGiveback,
+                  currentLockUSD, recoveryLikely ? "Y" : "N", minsOpen, trendWhy);
+      g_profitFloorLastLogTime[floorIdx] = TimeCurrent();
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| v6.4.8 — PROTECTED PEAK PROFIT FLOOR                             |
+//+------------------------------------------------------------------+
 bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double curPrice,
                                 double curSL, double curTP, double slDist, double atr,
                                 int digits, double profit, double peak, double rDollars,
@@ -9671,6 +9934,81 @@ void XAU_ResetBasketProtectionState()
    XAU_ResetBasketLifecycle();
 }
 
+double XAU_ReconstructOpenBasketPeakUSD(double currentPnL)
+{
+   double tickVal = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+   double tickSz  = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
+   if(tickVal <= 0.0 || tickSz <= 0.0) return MathMax(0.0, currentPnL);
+
+   int commonDir = 0;
+   datetime earliestOpen = 0;
+   int matched = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+
+      ENUM_POSITION_TYPE posType = posInfo.PositionType();
+      int posDir = (posType == POSITION_TYPE_BUY) ? 1 :
+                   (posType == POSITION_TYPE_SELL) ? -1 : 0;
+      if(posDir == 0) continue;
+      if(commonDir == 0) commonDir = posDir;
+      if(commonDir != posDir)
+      {
+         // mixed direction baskets are not reconstructed because separate legs
+         // can reach their best prices at different times and inflate the peak.
+         return MathMax(0.0, currentPnL);
+      }
+
+      datetime openedAt = posInfo.Time();
+      if(earliestOpen == 0 || openedAt < earliestOpen) earliestOpen = openedAt;
+      matched++;
+   }
+
+   if(matched <= 0 || commonDir == 0 || earliestOpen <= 0)
+      return MathMax(0.0, currentPnL);
+
+   int startShift = iBarShift(Symbol(), PERIOD_M5, earliestOpen, false);
+   if(startShift < 0) return MathMax(0.0, currentPnL);
+
+   int barsToCopy = (int)MathMin((double)(startShift + 1), 900.0);
+   if(barsToCopy <= 0) return MathMax(0.0, currentPnL);
+
+   double lows[];
+   double highs[];
+   int copiedLows = CopyLow(Symbol(), PERIOD_M5, 0, barsToCopy, lows);
+   int copiedHighs = CopyHigh(Symbol(), PERIOD_M5, 0, barsToCopy, highs);
+   if(copiedLows <= 0 || copiedHighs <= 0)
+      return MathMax(0.0, currentPnL);
+
+   double bestPrice = (commonDir > 0) ? highs[0] : lows[0];
+   int copied = (commonDir > 0) ? copiedHighs : copiedLows;
+   for(int i = 1; i < copied; i++)
+   {
+      if(commonDir > 0 && highs[i] > bestPrice) bestPrice = highs[i];
+      if(commonDir < 0 && lows[i] < bestPrice) bestPrice = lows[i];
+   }
+   if(bestPrice <= 0.0) return MathMax(0.0, currentPnL);
+
+   double reconstructed = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+
+      ENUM_POSITION_TYPE posType = posInfo.PositionType();
+      bool isBuy = (posType == POSITION_TYPE_BUY);
+      if(posType != POSITION_TYPE_BUY && posType != POSITION_TYPE_SELL) continue;
+      double openPx = posInfo.PriceOpen();
+      double move = isBuy ? (bestPrice - openPx) : (openPx - bestPrice);
+      if(move <= 0.0) continue;
+      reconstructed += move * posInfo.Volume() * tickVal / tickSz;
+   }
+
+   return MathMax(MathMax(0.0, currentPnL), reconstructed);
+}
+
 bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakActive, double floorUSD)
 {
    if(!InpTradeLifecycleEnable) return false;
@@ -9711,11 +10049,16 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
 
    if(totalPnL <= 0.0 && givebackPct >= InpLifecycleAdverseAfterProfitPct)
    {
+      PrintFormat("GIVEBACK_WARNING BASKET | peak=$%.2f pnl=$%.2f giveback=%.0f%% max=%.0f%% floor=$%.2f",
+                  g_basketPeakUSD, totalPnL, givebackPct,
+                  InpLifecycleAdverseAfterProfitPct, floorUSD);
       PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | peak=$%.2f pnl=$%.2f giveback=%.0f%% max=%.0f%% cycles=%d",
                   g_basketPeakUSD, totalPnL, givebackPct, InpLifecycleAdverseAfterProfitPct,
                   g_basketProfitLossCycles);
       PrintFormat("CONTINUATION_HOLD_REJECTED BASKET | proven winner lost protected floor; no AI/continuation override allowed");
-      lastExitReason = StringFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | peak $%.2f -> $%.2f", g_basketPeakUSD, totalPnL);
+      lastExitReason = StringFormat("%s BASKET | peak $%.2f -> $%.2f",
+                                    XAU_SmartExitStateName(THESIS_BROKEN_EXIT),
+                                    g_basketPeakUSD, totalPnL);
       CloseAll(lastExitReason);
       XAU_ResetBasketProtectionState();
       return true;
@@ -9723,6 +10066,8 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
 
    if(g_basketProfitToLossSeen && totalPnL >= secondChanceUSD)
    {
+      PrintFormat("SECOND_CHANCE_EXIT BASKET | recovered to $%.2f after peak $%.2f and %d profit/loss cycle(s); threshold=$%.2f",
+                  totalPnL, g_basketPeakUSD, g_basketProfitLossCycles, secondChanceUSD);
       PrintFormat("SECOND_CHANCE_PROFIT_EXIT BASKET | recovered to $%.2f after peak $%.2f and %d profit/loss cycle(s); threshold=$%.2f",
                   totalPnL, g_basketPeakUSD, g_basketProfitLossCycles, secondChanceUSD);
       if(g_basketProfitLossCycles >= InpLifecycleMaxProfitLossCycles)
@@ -9811,15 +10156,30 @@ bool ManageBasket()
       totalPnL += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
    }
 
+   double bal = StrategyReferenceBalance();
+   if(bal <= 0) return false;
+
+   if(g_basketPeakUSD <= 0.0)
+   {
+      double reconstructedPeak = XAU_ReconstructOpenBasketPeakUSD(totalPnL);
+      if(reconstructedPeak > g_basketPeakUSD + 0.50)
+      {
+         g_basketPeakUSD = reconstructedPeak;
+         g_basketPeakTime = TimeCurrent();
+         if(g_basketPeakUSD >= MathMax(1.0, InpLifecyclePeakMinUSD))
+         {
+            PrintFormat("PEAK_PROFIT_REACHED BASKET | reconstructed=Y peak=$%.2f current=$%.2f source=M5_since_open",
+                        g_basketPeakUSD, totalPnL);
+         }
+      }
+   }
+
    // Update peak
    if(totalPnL > g_basketPeakUSD)
    {
       g_basketPeakUSD = totalPnL;
       g_basketPeakTime = TimeCurrent();
    }
-
-   double bal = StrategyReferenceBalance();
-   if(bal <= 0) return false;
 
    // Arm the basket-lock once peak crosses threshold
    double armUSD = MathMax(InpBasketArmFloor, bal * EffBasketArmPct() / 100.0);
@@ -10593,6 +10953,12 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       }
    }
    // ============ END A+ PROFIT SHIELD ============
+
+   if(XAU_SmartExit3Layer(ticket, isBuy, openPx, curPrice, curSL, curTP,
+                          slDist, atr, digits, peak, rDollars, lotsOpen,
+                          momentumScore, trendAligned, structureConfirmedBroken,
+                          emaAgainst, rsiAgainst, recoveryLikely, minsOpen))
+      return true;
 
    // ============ v6.4.3 ADAPTIVE MOMENTUM PROFIT LOCK (AMPL) ============
    //
@@ -18788,6 +19154,19 @@ string XAUAI_InputHash()
                      InpProtectedPeakGivebackExitPct,
                      InpProtectedPeakCloseOnFloorBreak ? 1 : 0,
                      InpProtectedPeakBasketCloseRed ? 1 : 0);
+   s += StringFormat("smartExit=%d,%.2f,%.2f,%.2f,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d|",
+                     InpSmartExitEnable ? 1 : 0,
+                     InpSmartExitStrongProfitUSD,
+                     InpSmartExitStrongProfitEquityPct,
+                     InpSmartExitPartialPct,
+                     InpSmartExitPartialIgnoresCloudSafe ? 1 : 0,
+                     InpSmartExitMinRetainUSD,
+                     InpSmartExitWeakLockPct,
+                     InpSmartExitStrongLockPct,
+                     InpSmartExitWeakGivebackPct,
+                     InpSmartExitNeutralGivebackPct,
+                     InpSmartExitStrongGivebackPct,
+                     InpSmartExitM15Confirm ? 1 : 0);
    s += StringFormat("lifecycle=%d,%.2f,%.2f,%.2f,%d,%.2f,%d|",
                      InpTradeLifecycleEnable ? 1 : 0,
                      InpLifecyclePeakMinUSD,
@@ -18836,6 +19215,7 @@ string XAUAI_ExitEngineState()
 {
    string s = "";
    s += InpCleanExits ? "Clean=ON" : "Clean=OFF";
+   s += InpSmartExitEnable ? " SmartExit=ON" : " SmartExit=OFF";
    s += InpAMPL_Enable ? " AMPL=ON" : " AMPL=OFF";
    s += InpBasketMode ? " Basket=ON" : " Basket=OFF";
    if(CountMyPositions() > 0)
@@ -18873,6 +19253,15 @@ string XAUAI_DiagnosticsText()
    d += "News state: " + XAUAI_NewsState() + "\n";
    d += "Trade state: " + XAUAI_TradeState() + "\n";
    d += "Exit engine state: " + XAUAI_ExitEngineState() + "\n";
+   d += StringFormat("Smart exit: %s | strong $%.2f or %.2f%% | partial %.0f%% | giveback weak/neutral/strong %.0f/%.0f/%.0f%% | floor min $%.2f\n",
+                     InpSmartExitEnable ? "ON" : "OFF",
+                     InpSmartExitStrongProfitUSD,
+                     InpSmartExitStrongProfitEquityPct,
+                     InpSmartExitPartialPct,
+                     InpSmartExitWeakGivebackPct,
+                     InpSmartExitNeutralGivebackPct,
+                     InpSmartExitStrongGivebackPct,
+                     InpSmartExitMinRetainUSD);
    d += StringFormat("Trade lifecycle: %s | peak $%.2f | floor $%.2f | second chance $%.2f\n",
                      InpTradeLifecycleEnable ? "ON" : "OFF",
                      g_basketPeakUSD, g_basketFloorUSD,
