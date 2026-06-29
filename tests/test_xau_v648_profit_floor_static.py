@@ -11,15 +11,15 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_v648_version_and_backend_copy_match():
+def test_v649_version_and_backend_copy_match():
     root = read(EA_ROOT)
     backend = read(EA_BACKEND)
 
     assert root == backend
-    assert '#property version   "6.4.8"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.8"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.8"' in root
-    assert '#define XAUAI_BUILD_HASH "v648-protected-profit-floor-20260629"' in root
+    assert '#property version   "6.4.9"' in root
+    assert '#define XAUAI_EA_VERSION "v6.4.9"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.4.9"' in root
+    assert '#define XAUAI_BUILD_HASH "v649-trade-lifecycle-manager-20260629"' in root
 
 
 def test_protected_peak_floor_inputs_helpers_and_logs_exist():

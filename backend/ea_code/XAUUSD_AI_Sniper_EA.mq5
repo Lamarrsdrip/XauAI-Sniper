@@ -1,9 +1,19 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.8 — Protected peak profit floor for continuation runners     |
+//|   v6.4.9 — Trade lifecycle manager protects continuation profits     |
 //|            v6.4.7 trend-continuation/news fast-track preserved       |
 //+------------------------------------------------------------------+
+// v6.4.9 CHANGES (2026-06-29) — TRADE LIFECYCLE MANAGER:
+//
+//   1. Basket lifecycle now tracks peak -> loss -> recovery cycles so a
+//      proven winner cannot drift through repeated givebacks without a plan.
+//   2. Basket protected floors no longer depend only on the old classic
+//      basket arm threshold; a meaningful peak can arm protection directly.
+//   3. Added explicit logs: PROFIT_TO_LOSS_WARNING, SECOND_CHANCE_PROFIT_EXIT,
+//      CYCLE_DECAY_EXIT, HOLD_REASON_REQUIRED, CONTINUATION_HOLD_PROTECTED,
+//      and CONTINUATION_HOLD_REJECTED.
+//
 // v6.4.8 CHANGES (2026-06-29) — PROTECTED PEAK PROFIT FLOOR:
 //
 //   1. Meaningful floating peaks now create an earned profit floor before
@@ -467,16 +477,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.8"
-#property description "XAUUSD AI Sniper v6.4.8 — protected peak profit floor for trend-continuation runners"
+#property version   "6.4.9"
+#property description "XAUUSD AI Sniper v6.4.9 — trade lifecycle manager protects continuation profits"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.8"
-#define XAUAI_EA_VERSION_NUM "6.4.8"
-#define XAUAI_BUILD_HASH "v648-protected-profit-floor-20260629"
+#define XAUAI_EA_VERSION "v6.4.9"
+#define XAUAI_EA_VERSION_NUM "6.4.9"
+#define XAUAI_BUILD_HASH "v649-trade-lifecycle-manager-20260629"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1189,6 +1199,15 @@ input double InpProtectedPeakMinRetainUSD     = 35.0;  // Minimum secured profit
 input double InpProtectedPeakGivebackExitPct  = 65.0;  // Market-close if giveback is this severe and floor is not safe
 input bool   InpProtectedPeakCloseOnFloorBreak= true;  // If price already breached the floor, close instead of hoping
 input bool   InpProtectedPeakBasketCloseRed   = true;  // Basket cannot breathe into red after meaningful protected peak
+
+input group "=== TRADE LIFECYCLE MANAGER (v6.4.9) ==="
+input bool   InpTradeLifecycleEnable          = true;  // Prevent proven winners from cycling profit-loss-profit-loss without action
+input double InpLifecyclePeakMinUSD           = 75.0;  // Basket lifecycle arms once floating profit reaches this level
+input double InpLifecycleSecondChanceMinUSD   = 35.0;  // After profit->loss, take a recovered basket once profit is meaningful again
+input double InpLifecycleSecondChancePeakPct  = 20.0;  // Second-chance profit also scales from best floating profit
+input int    InpLifecycleMaxProfitLossCycles  = 2;     // Exit earlier once a basket repeatedly cycles through profit and loss
+input double InpLifecycleAdverseAfterProfitPct= 70.0;  // Max giveback from peak after lifecycle arm before rejecting hold
+input int    InpLifecycleMaxMinutesAfterPeak  = 180;   // Max time to keep a confused basket alive after its best peak
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // v6.3.0: TRUE — AI Director can HOLD, CLOSE, or LOCK positions
@@ -2026,6 +2045,13 @@ bool       g_basketArmed     = false; // True once peak has crossed arm threshol
 bool       g_basketBEHit     = false; // True once basket reached +BEPct% (then never let it go negative)
 bool       g_basketSoftLockTaken = false; // v5.8.15: partial basket bank already used for this basket
 datetime   g_basketLastLog   = 0;     // Throttle "basket state" prints
+// v6.4.9 — basket lifecycle state: prevents proven winners from cycling forever
+bool       g_basketProfitToLossSeen = false;
+int        g_basketProfitLossCycles = 0;
+bool       g_basketWasPositiveAfterPeak = false;
+datetime   g_basketPeakTime = 0;
+datetime   g_basketLastLifecycleLog = 0;
+double     g_basketLifecyclePeakLoggedUSD = 0.0;
 // v4.9.7 — Fast-reversal circuit breaker rolling buffer
 //   Stores the last N (timestamp, basketPnL) pairs so we can detect a sudden drop
 //   even if the floor hasn't been formally breached yet.
@@ -9622,6 +9648,134 @@ bool CloseBasketPartial(double closePct, string reason)
 
    return anyClosed;
 }
+
+void XAU_ResetBasketLifecycle()
+{
+   g_basketProfitToLossSeen = false;
+   g_basketProfitLossCycles = 0;
+   g_basketWasPositiveAfterPeak = false;
+   g_basketPeakTime = 0;
+   g_basketLastLifecycleLog = 0;
+   g_basketLifecyclePeakLoggedUSD = 0.0;
+}
+
+void XAU_ResetBasketProtectionState()
+{
+   g_basketPeakUSD  = 0;
+   g_basketFloorUSD = 0;
+   g_basketArmed    = false;
+   g_basketBEHit    = false;
+   g_basketSoftLockTaken = false;
+   ArrayResize(g_basketSnapPnL, 0);
+   ArrayResize(g_basketSnapTime, 0);
+   XAU_ResetBasketLifecycle();
+}
+
+bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakActive, double floorUSD)
+{
+   if(!InpTradeLifecycleEnable) return false;
+
+   double lifecyclePeakMin = MathMax(1.0, InpLifecyclePeakMinUSD);
+   if(g_basketPeakUSD < lifecyclePeakMin) return false;
+
+   if(g_basketPeakTime <= 0) g_basketPeakTime = TimeCurrent();
+
+   if(g_basketLifecyclePeakLoggedUSD + 0.50 < g_basketPeakUSD)
+   {
+      double lockFloor = MathMax(floorUSD, MathMax(InpProtectedPeakMinRetainUSD,
+                                                   g_basketPeakUSD * InpProtectedPeakLockPct / 100.0));
+      PrintFormat("PEAK_PROFIT_REACHED BASKET | peak=$%.2f floor=$%.2f pnl=$%.2f protected=%s classicArmed=%s",
+                  g_basketPeakUSD, lockFloor, totalPnL,
+                  protectedPeakActive ? "Y" : "N", g_basketArmed ? "Y" : "N");
+      g_basketLifecyclePeakLoggedUSD = g_basketPeakUSD;
+   }
+
+   double givebackPct = (g_basketPeakUSD > 0.0 && totalPnL < g_basketPeakUSD)
+                        ? ((g_basketPeakUSD - totalPnL) / g_basketPeakUSD) * 100.0
+                        : 0.0;
+   double secondChanceUSD = MathMax(InpLifecycleSecondChanceMinUSD,
+                                    g_basketPeakUSD * MathMax(1.0, InpLifecycleSecondChancePeakPct) / 100.0);
+   int minsAfterPeak = (g_basketPeakTime > 0) ? (int)((TimeCurrent() - g_basketPeakTime) / 60) : 0;
+
+   if(totalPnL > 0.0)
+      g_basketWasPositiveAfterPeak = true;
+
+   if(totalPnL <= 0.0 && g_basketWasPositiveAfterPeak)
+   {
+      g_basketProfitToLossSeen = true;
+      g_basketProfitLossCycles++;
+      g_basketWasPositiveAfterPeak = false;
+      PrintFormat("PROFIT_TO_LOSS_WARNING BASKET | peak=$%.2f pnl=$%.2f giveback=%.0f%% cycles=%d floor=$%.2f",
+                  g_basketPeakUSD, totalPnL, givebackPct, g_basketProfitLossCycles, floorUSD);
+   }
+
+   if(totalPnL <= 0.0 && givebackPct >= InpLifecycleAdverseAfterProfitPct)
+   {
+      PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | peak=$%.2f pnl=$%.2f giveback=%.0f%% max=%.0f%% cycles=%d",
+                  g_basketPeakUSD, totalPnL, givebackPct, InpLifecycleAdverseAfterProfitPct,
+                  g_basketProfitLossCycles);
+      PrintFormat("CONTINUATION_HOLD_REJECTED BASKET | proven winner lost protected floor; no AI/continuation override allowed");
+      lastExitReason = StringFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | peak $%.2f -> $%.2f", g_basketPeakUSD, totalPnL);
+      CloseAll(lastExitReason);
+      XAU_ResetBasketProtectionState();
+      return true;
+   }
+
+   if(g_basketProfitToLossSeen && totalPnL >= secondChanceUSD)
+   {
+      PrintFormat("SECOND_CHANCE_PROFIT_EXIT BASKET | recovered to $%.2f after peak $%.2f and %d profit/loss cycle(s); threshold=$%.2f",
+                  totalPnL, g_basketPeakUSD, g_basketProfitLossCycles, secondChanceUSD);
+      if(g_basketProfitLossCycles >= InpLifecycleMaxProfitLossCycles)
+         PrintFormat("CYCLE_DECAY_EXIT BASKET | cycles=%d max=%d; taking recovery instead of waiting for another reversal",
+                     g_basketProfitLossCycles, InpLifecycleMaxProfitLossCycles);
+      lastExitReason = StringFormat("SECOND_CHANCE_PROFIT_EXIT BASKET | peak $%.2f recovered $%.2f", g_basketPeakUSD, totalPnL);
+      CloseAll(lastExitReason);
+      PG_OnBasketWin();
+      XAU_ResetBasketProtectionState();
+      return true;
+   }
+
+   if(g_basketProfitToLossSeen && g_basketProfitLossCycles >= InpLifecycleMaxProfitLossCycles)
+   {
+      PrintFormat("CYCLE_DECAY_EXIT BASKET | cycles=%d max=%d pnl=$%.2f peak=$%.2f",
+                  g_basketProfitLossCycles, InpLifecycleMaxProfitLossCycles, totalPnL, g_basketPeakUSD);
+      PrintFormat("CONTINUATION_HOLD_REJECTED BASKET | repeated profit/loss cycling means continuation trust decayed");
+      lastExitReason = StringFormat("CYCLE_DECAY_EXIT BASKET | cycles %d after peak $%.2f",
+                                    g_basketProfitLossCycles, g_basketPeakUSD);
+      CloseAll(lastExitReason);
+      XAU_ResetBasketProtectionState();
+      return true;
+   }
+
+   if(InpLifecycleMaxMinutesAfterPeak > 0 &&
+      g_basketProfitToLossSeen &&
+      minsAfterPeak >= InpLifecycleMaxMinutesAfterPeak)
+   {
+      PrintFormat("CYCLE_DECAY_EXIT BASKET | max minutes after peak reached (%d >= %d) pnl=$%.2f peak=$%.2f",
+                  minsAfterPeak, InpLifecycleMaxMinutesAfterPeak, totalPnL, g_basketPeakUSD);
+      PrintFormat("CONTINUATION_HOLD_REJECTED BASKET | no indefinite hold after proven peak and failed recovery cycle");
+      lastExitReason = StringFormat("CYCLE_DECAY_EXIT BASKET | max hold %dmin after peak $%.2f",
+                                    InpLifecycleMaxMinutesAfterPeak, g_basketPeakUSD);
+      CloseAll(lastExitReason);
+      XAU_ResetBasketProtectionState();
+      return true;
+   }
+
+   if(TimeCurrent() - g_basketLastLifecycleLog >= 60)
+   {
+      PrintFormat("HOLD_REASON_REQUIRED BASKET | pnl=$%.2f peak=$%.2f floor=$%.2f giveback=%.0f%% cycles=%d secondChance=$%.2f minsAfterPeak=%d",
+                  totalPnL, g_basketPeakUSD, floorUSD, givebackPct,
+                  g_basketProfitLossCycles, secondChanceUSD, minsAfterPeak);
+      if(protectedPeakActive && floorUSD > 1.0 && totalPnL > floorUSD)
+      {
+         PrintFormat("CONTINUATION_HOLD_PROTECTED BASKET | pnl=$%.2f remains above protected floor $%.2f from peak $%.2f",
+                     totalPnL, floorUSD, g_basketPeakUSD);
+      }
+      g_basketLastLifecycleLog = TimeCurrent();
+   }
+
+   return false;
+}
 //+------------------------------------------------------------------+
 //| v4.9.4 — BASKET PROTECT                                          |
 //|   Treat ALL open EA positions as a single basket. Protect the    |
@@ -9640,15 +9794,11 @@ bool ManageBasket()
    // Reset state when flat
    if(CountMyPositions() == 0)
    {
-      if(g_basketArmed || g_basketBEHit || g_basketPeakUSD != 0 || g_basketFloorUSD != 0)
-      {
-         g_basketPeakUSD  = 0;
-         g_basketFloorUSD = 0;
-         g_basketArmed    = false;
-         g_basketBEHit    = false;
-         g_basketSoftLockTaken = false;
-         ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
-      }
+      if(g_basketArmed || g_basketBEHit || g_basketPeakUSD != 0 || g_basketFloorUSD != 0 ||
+         g_basketProfitToLossSeen || g_basketProfitLossCycles != 0 ||
+         g_basketWasPositiveAfterPeak || g_basketPeakTime != 0 ||
+         g_basketLifecyclePeakLoggedUSD != 0.0)
+         XAU_ResetBasketProtectionState();
       return false;
    }
 
@@ -9662,7 +9812,11 @@ bool ManageBasket()
    }
 
    // Update peak
-   if(totalPnL > g_basketPeakUSD) g_basketPeakUSD = totalPnL;
+   if(totalPnL > g_basketPeakUSD)
+   {
+      g_basketPeakUSD = totalPnL;
+      g_basketPeakTime = TimeCurrent();
+   }
 
    double bal = StrategyReferenceBalance();
    if(bal <= 0) return false;
@@ -9687,7 +9841,15 @@ bool ManageBasket()
             armUSD *= 1.25;     // give the trend extra room
       }
    }
+   bool basketProtectedPeakActive = InpProtectedPeakFloorEnable &&
+                                    g_basketPeakUSD >= MathMax(1.0, InpProtectedPeakMinUSD);
    if(!g_basketArmed && g_basketPeakUSD >= armUSD) g_basketArmed = true;
+   if(!g_basketArmed && basketProtectedPeakActive)
+   {
+      g_basketArmed = true;
+      PrintFormat("PROFIT_FLOOR_SET BASKET | protected peak arm: peak=$%.2f >= $%.2f even though classic arm=$%.2f",
+                  g_basketPeakUSD, InpProtectedPeakMinUSD, armUSD);
+   }
 
    // BE flag: once basket reached BE threshold, never let it go negative
    double beArmUSD = bal * EffBasketBEPct() / 100.0;
@@ -9708,12 +9870,29 @@ bool ManageBasket()
       if(g_basketPeakUSD >= t3USD) lockPct = MathMax(lockPct, 70.0);
       floorUSD = g_basketPeakUSD * lockPct / 100.0;
    }
+   if(basketProtectedPeakActive)
+   {
+      double protectedLockPct = MathMax(1.0, MathMin(InpProtectedPeakLockPct, 85.0));
+      double protectedFloorUSD = MathMax(InpProtectedPeakMinRetainUSD,
+                                         g_basketPeakUSD * protectedLockPct / 100.0);
+      protectedFloorUSD = MathMin(protectedFloorUSD, g_basketPeakUSD * 0.90);
+      floorUSD = MathMax(floorUSD, protectedFloorUSD);
+   }
 
    // BE safety: once BE armed, floor can never go below $1 (protect against full giveback)
    if(g_basketBEHit) floorUSD = MathMax(floorUSD, 1.0);
 
    // Floor can only ratchet UP, never down
-   if(floorUSD > g_basketFloorUSD) g_basketFloorUSD = floorUSD;
+   double prevBasketFloor = g_basketFloorUSD;
+   if(floorUSD > g_basketFloorUSD)
+   {
+      g_basketFloorUSD = floorUSD;
+      if(basketProtectedPeakActive && g_basketFloorUSD > prevBasketFloor + 0.50)
+      {
+         PrintFormat("PROFIT_FLOOR_SET BASKET | peak=$%.2f floor=$%.2f previous=$%.2f protectedPeak=Y",
+                     g_basketPeakUSD, g_basketFloorUSD, prevBasketFloor);
+      }
+   }
 
    // Log state every 60s so user can watch live
    if(TimeCurrent() - g_basketLastLog >= 60)
@@ -9723,6 +9902,9 @@ bool ManageBasket()
                   g_basketArmed ? "Y" : "N", g_basketBEHit ? "Y" : "N");
       g_basketLastLog = TimeCurrent();
    }
+
+   if(XAU_BasketLifecycleManager(totalPnL, bal, basketProtectedPeakActive, g_basketFloorUSD))
+      return true;
 
    // ============ v4.9.7 SMART GUARDS (run BEFORE floor trigger) ============
    //
@@ -9736,7 +9918,7 @@ bool ManageBasket()
    //   Regardless of percentage rules, never give back more than HardGivebackPct%
    //   of balance from peak. This is the absolute backstop for tail-risk events.
    //
-   if(g_basketArmed)
+   if(g_basketArmed || basketProtectedPeakActive)
    {
       // append snapshot
       int sz = ArraySize(g_basketSnapPnL);
@@ -9857,7 +10039,7 @@ bool ManageBasket()
    // TRIGGER: if armed and current falls below floor.
    // v5.8.15: first hit banks partial profit and keeps a runner alive. A later
    // floor hit can still close all if the remaining runner truly fails.
-   if(g_basketArmed && g_basketFloorUSD > 0 && totalPnL < g_basketFloorUSD)
+   if((g_basketArmed || basketProtectedPeakActive) && g_basketFloorUSD > 0 && totalPnL < g_basketFloorUSD)
    {
       if(InpBasketSoftLockFirst && !InpCloudSafeDisablePartials && !g_basketSoftLockTaken && totalPnL > 0)
       {
@@ -18606,6 +18788,14 @@ string XAUAI_InputHash()
                      InpProtectedPeakGivebackExitPct,
                      InpProtectedPeakCloseOnFloorBreak ? 1 : 0,
                      InpProtectedPeakBasketCloseRed ? 1 : 0);
+   s += StringFormat("lifecycle=%d,%.2f,%.2f,%.2f,%d,%.2f,%d|",
+                     InpTradeLifecycleEnable ? 1 : 0,
+                     InpLifecyclePeakMinUSD,
+                     InpLifecycleSecondChanceMinUSD,
+                     InpLifecycleSecondChancePeakPct,
+                     InpLifecycleMaxProfitLossCycles,
+                     InpLifecycleAdverseAfterProfitPct,
+                     InpLifecycleMaxMinutesAfterPeak);
    s += StringFormat("symbol=%s|tf=M5|digits=%d|point=%s",
                      Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
                      DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), 8));
@@ -18683,6 +18873,15 @@ string XAUAI_DiagnosticsText()
    d += "News state: " + XAUAI_NewsState() + "\n";
    d += "Trade state: " + XAUAI_TradeState() + "\n";
    d += "Exit engine state: " + XAUAI_ExitEngineState() + "\n";
+   d += StringFormat("Trade lifecycle: %s | peak $%.2f | floor $%.2f | second chance $%.2f\n",
+                     InpTradeLifecycleEnable ? "ON" : "OFF",
+                     g_basketPeakUSD, g_basketFloorUSD,
+                     MathMax(InpLifecycleSecondChanceMinUSD,
+                             g_basketPeakUSD * MathMax(1.0, InpLifecycleSecondChancePeakPct) / 100.0));
+   d += StringFormat("Profit/loss cycles: %d | profit-to-loss seen: %s | last peak age: %d min\n",
+                     g_basketProfitLossCycles,
+                     g_basketProfitToLossSeen ? "Y" : "N",
+                     g_basketPeakTime > 0 ? (int)((TimeCurrent() - g_basketPeakTime) / 60) : 0);
    d += "Last trade reason: " + (StringLen(g_lastTradeReason) > 0 ? StringSubstr(g_lastTradeReason, 0, 120) : "none") + "\n";
    d += "Last exit reason: " + (StringLen(lastExitReason) > 0 ? StringSubstr(lastExitReason, 0, 120) : "none") + "\n";
    return d;
