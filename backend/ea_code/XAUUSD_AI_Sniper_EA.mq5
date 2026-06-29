@@ -1,9 +1,73 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.2 — Self-audit: strategy weights, handle leak, FIFO,      |
-//|            startup version strings, calibration key-order fix     |
+//|   v6.4.5 — Full Over-Protective Logic Removal: all hard trade     |
+//|            freezes replaced with adaptive selectivity modes        |
 //+------------------------------------------------------------------+
+// v6.4.5 CHANGES (2026-06-29) — FULL OVER-PROTECTIVE LOGIC AUDIT:
+//
+//   PHILOSOPHY: When the EA takes a loss, the correct response is to become
+//   MORE SELECTIVE, not to stop. Stopping is fear-based programming. It causes
+//   the EA to miss high-quality recovery setups that appear after the loss.
+//   Losses → raise the bar. Never → pause the entire EA.
+//
+//   REMOVED — Hard Consecutive-Loss Cooldown (pg_pauseUntil enforcement):
+//   OLD: After 2 losses, pg_pauseUntil was set to 5 hours (InpTwoLossCooldownMin=300).
+//   3+ losses = 4 hours (InpPG_PostLossCooldown × 8). EA completely blocked.
+//   NEW: pg_pauseUntil enforcement converted to ADAPTIVE COOLDOWN MODE —
+//   B-grade blocked, A/A+ trades continue at reduced size. EA never fully stops.
+//   Defaults changed: InpTwoLossCooldownMin=0, InpPG_PostLossCooldown=0.
+//
+//   REMOVED — Hard Drawdown Watermark Pause (g_drawdownPause):
+//   OLD: When equity drops >8% from all-time watermark → new entries suppressed.
+//   Block only cleared when equity recovered to within 3% of watermark.
+//   NEW: g_drawdownPause converted to ADAPTIVE DRAWDOWN MODE — A/A+ only,
+//   50% size, all quality filters active. Resumes full normal on any win.
+//
+//   REMOVED — Hard Weekly Loss Block until Monday (weeklyLossHit):
+//   OLD: Weekly loss ≥ InpWeeklyMaxLoss% → blocked until Monday. Hard stop.
+//   NEW: Same as adaptive recovery mode — A/A+ only, 50% size, keep trading.
+//
+//   PRESERVED — True emergency stops (broker disconnect, corrupted data,
+//   margin danger, extreme spread, prop firm hard daily limit).
+//
+// v6.4.4 CHANGES (2026-06-29) — ADAPTIVE RECOVERY MODE:
+//   REMOVED: Hard daily loss lockout that paused trading for the rest of the day.
+//   The old behaviour: when daily P&L < -InpDailyLossLimit%, the EA called CloseAll()
+//   and blocked ALL new trades until midnight. This caused the EA to miss high-quality
+//   recovery setups that appeared after the loss threshold was crossed.
+//
+//   NEW BEHAVIOUR — g_adaptiveRecoveryMode:
+//   When daily loss >= threshold, the EA CONTINUES scanning and trading, but:
+//     1. Only A/A+ setups are allowed (B-grade blocked by RECOVERY_GATE)
+//     2. All lot sizes are reduced 50% (capital protection without full stop)
+//     3. All existing quality filters remain active (spread, news, volatility, confidence)
+//     4. Heartbeat logs confirm EA is active, not silent
+//   Recovery mode clears automatically when:
+//     a) A profitable trade closes (PG_OnBasketWin resets the flag)
+//     b) Daily equity recovers above the threshold
+//     c) New trading day begins (daily reset)
+//   InpDailyLossLimit is now the "Adaptive Recovery Mode trigger" — set 0 to disable.
+//
+//   Also removed: dailyLimitHit from CheckPyramidOpportunity gate.
+//   Also updated: dashboard shows "ADAPTIVE RECOVERY ACTIVE" not "DAILY LIMIT — CLOSED ALL".
+//
+// v6.4.3 CHANGES (2026-06-29) — ADAPTIVE MOMENTUM PROFIT LOCK (AMPL):
+//   NEW FEATURE: AMPL in ManageCleanExitsForPosition().
+//   PROBLEM: Wide SL + large lot → large dollar profit at LOW R-multiple (e.g., $136
+//   floating at 0.33R with 30pt SL). R-based exit systems (BE@1.5R, Chandelier@2R,
+//   A+Shield@3R) never fire in time. Market retraces → EA exits at +$38 (72% giveback).
+//   SOLUTION: AMPL works in USD space, not R-multiples. Fires when DOLLAR profit >= $50
+//   AND the move qualifies as explosive (large directional candle or fast velocity over
+//   5 bars). Places adaptive tight SL just behind current price using SafeModifySL()
+//   (ratchet-only — never moves SL backward, never conflicts with other systems).
+//   Trail distance adapts: 4-5/5 momentum → 0.45×ATR, 3/5 → 0.30×ATR, 0-2/5 → 0.18×ATR.
+//   ALSO: profit give-back limit fires independently — when peak >= $40 AND giveback
+//   >= 32% of peak, tighten SL to prevent further bleed even on non-explosive moves.
+//   Re-entry after an AMPL stop is handled by the existing re-entry engine.
+//   New inputs: InpAMPL_Enable, InpAMPL_MinUSD, InpAMPL_ExplosiveBodyR,
+//   InpAMPL_VelATRFactor, InpAMPL_TrailATR_{Strong,Mid,Weak}, InpAMPL_GivebackPct,
+//   InpAMPL_GivebackMinUSD. Master toggle allows instant disable without recompile.
 // v6.4.2 CHANGES (2026-06-28) — SELF-AUDIT FIXES:
 //   1. VERSION STRINGS: Startup Print() and heartbeat now report v6.4.2 (was stale v5.9.1).
 //   2. CALIBRATION KEY COLLISION: ExtractJsonDouble called with bare key like "0-49" but the
@@ -328,8 +392,8 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.2"
-#property description "XAUUSD AI Sniper v6.4.2 — self-audit fixes: version strings, calibration key-order, squeeze weight guard"
+#property version   "6.4.5"
+#property description "XAUUSD AI Sniper v6.4.5 — All hard trade freezes replaced with adaptive selectivity: losses raise the bar, never stop the EA"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
@@ -422,9 +486,9 @@ input ENUM_TIMEFRAMES InpPG_HTFTrendTF = PERIOD_M30;
 input double InpPG_HTFTrendATR      = 1.0;
 input bool   InpPG_ConsolidationCarveout = true;
 input double InpPG_ConsolidationATR = 0.8;
-input int    InpPG_PostLossCooldown = 30;    // BASE cooldown minutes (only used when InpProfitGuardian=true)
+input int    InpPG_PostLossCooldown = 0;     // v6.4.5: 0=disabled — cooldown now adaptive (A/A+ only + 50% size) not a hard block
 input bool   InpPG_AdaptiveCooldown = true;
-input int    InpTwoLossCooldownMin  = 300;   // Two distinct losing trade cycles pause fresh entries for 5h
+input int    InpTwoLossCooldownMin  = 0;     // v6.4.5: 0=disabled — two losses raise selectivity (A/A+ only), not a 5-hour hard freeze
 input int    InpLossCycleDedupSec    = 30;    // Layered basket closes inside this window count as one loss cycle
 input int    InpProfitLockCooldownMin = 300;  // Legacy HWM full-day halt becomes a 5h monitoring cooldown
 input bool   InpPG_PerPositionRatchet = true; // v5.1.3: KEY profit-protection — works INDEPENDENTLY of InpProfitGuardian
@@ -676,7 +740,7 @@ input double InpMaxLots        = 50.0;     // Hard max lots; final equity/margin
 input double InpMaxRiskPctEquity = 3.0;    // v5.8.4: restored original account-based max risk cap
 input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
 input double InpMaxAggregateRiskPct = 8.0; // v5.8.4: restored original aggregate risk room for demo/cloud testing
-input double InpDailyLossLimit = 3.0;      // v6.3.5: enabled 3% daily loss limit — hard stop for catastrophic days, doesn't interfere with normal trading
+input double InpDailyLossLimit = 3.0;      // v6.4.4: Adaptive Recovery Mode trigger — when daily loss >= this %, EA switches to A/A+ only + 50% size. Set 0 to disable. EA never pauses.
 input int    InpMaxOpenTrades  = 3;        // Max open positions
 input int    InpMaxTradesPerDay= 15;       // v5.8.2 — reduce overtrading after choppy loss windows
 input bool   InpAdaptiveDailyCap = true;   // v5.8.8: strong trend days can trade more; weak days trade less
@@ -983,6 +1047,29 @@ input double InpAPlusForceExitGivePct       = 88.0; // If market-close enabled, 
 input bool   InpAPlusShieldAllowMarketClose = false;// Default OFF: tighten SL, do not close runners at tiny profit
 input double InpAPlusShieldPeakLockPct      = 45.0; // On confirmed reversal, try to lock this % of best floating profit
 input int    InpAPlusReversalMomentum       = 2;    // Trail/close only if momentum score <= this (confirms reversal, not pullback)
+
+input group "=== ADAPTIVE MOMENTUM PROFIT LOCK — AMPL (v6.4.3) ==="
+// AMPL prevents large profit givebacks on explosive XAUUSD impulse moves.
+// XAUUSD pattern: strong impulse → sharp retracement → then continuation.
+// AMPL detects explosive moves and places a TIGHT SL close behind price, capturing
+// most of the impulse. The EA can then re-enter if the trend resumes.
+//
+// Works in USD space — fires at dollar profit thresholds, NOT R-multiples.
+// This is critical for wide-SL / large-lot positions where R-based systems
+// (BE at 1.5R, Chandelier at 2.0R) never fire quickly enough to protect profit.
+//
+// Example: SELL 4064.74 → price falls to 4054 (+$136, but only 0.33R with wide SL).
+// Normal systems do not fire at 0.33R. AMPL fires because $136 >= $50 threshold
+// AND the fast move qualifies as explosive. SL moves to 4056-4057, locking $90+.
+input bool   InpAMPL_Enable          = true;   // MASTER TOGGLE
+input double InpAMPL_MinUSD          = 50.0;   // Min current profit ($) to arm explosive trail
+input double InpAMPL_ExplosiveBodyR  = 1.35;   // Candle body >= N×ATR in trade direction = explosive candle
+input double InpAMPL_VelATRFactor    = 1.50;   // Price moved >= N×ATR over last 5 bars = fast velocity
+input double InpAMPL_TrailATR_Strong = 0.45;   // Trail buffer (×ATR) when momentum 4-5/5 (trend running)
+input double InpAMPL_TrailATR_Mid    = 0.30;   // Trail buffer (×ATR) when momentum 3/5 (moderate)
+input double InpAMPL_TrailATR_Weak   = 0.18;   // Trail buffer (×ATR) when momentum 0-2/5 (exhausting — lock now)
+input double InpAMPL_GivebackPct     = 32.0;   // Giveback limit: fire when giving back this % of peak profit
+input double InpAMPL_GivebackMinUSD  = 40.0;   // Min peak ($) before giveback limit applies (prevents noise)
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // v6.3.0: TRUE — AI Director can HOLD, CLOSE, or LOCK positions
@@ -1361,6 +1448,7 @@ int             g_modeFetchIntervalSec = 60;
 int    todayTradeCount;
 datetime lastDayReset, lastWeekReset, lastTradeClose;
 bool   dailyLimitHit, weeklyTargetHit, weeklyLossHit;
+bool   g_adaptiveRecoveryMode = false; // v6.4.4: true when daily loss >= threshold — A/A+ only, 50% size, EA keeps trading
 int    totalTrades, wins, losses, lastTradeDir;
 
 TradePattern patterns[];
@@ -3154,7 +3242,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER v6.4.2 (AI DIRECTOR + ADAPTIVE WEIGHTS) READY ===");
+   Print("=== XAUAI SNIPER v6.4.5 (FULL ADAPTIVE PROTECTION — NO HARD FREEZES) READY ===");
    XAU_LogTradingIntelStartupHealth();
    XAU_RunStartupIntelligenceSync();
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
@@ -5210,7 +5298,7 @@ void CheckPyramidOpportunity()
    if(!InpAllowPyramid) return;
    if(IsInStreakPause()) return;
    if(drawdownActive) return;             // don't stack in drawdown recovery
-   if(dailyLimitHit || weeklyLossHit) return;
+   // v6.4.5: weeklyLossHit no longer fully blocks — adaptive mode handles selectivity at entry
 
    // v4.9.7 — Don't stack new risk into a basket that's already armed and protecting profit.
    // Adding fresh trades right before a basket-flush just creates micro-loss tickets
@@ -6345,7 +6433,7 @@ void OnTick()
    {
       dailyStartEquity = accInfo.Equity();
       ResetPropFirmDailyBaseline();
-      todayTradeCount = 0; dailyLimitHit = false;
+      todayTradeCount = 0; dailyLimitHit = false; g_adaptiveRecoveryMode = false;
       lastDayReset = TimeCurrent();
       // v5.1.0 — reset Profit Guardian state at day boundary
       pg_dayHWM = accInfo.Equity();
@@ -6426,27 +6514,60 @@ void OnTick()
          lastGateHeartbeat = TimeCurrent(); }
       return;
    }
+   // v6.4.5: Weekly loss limit → Adaptive Weekly Recovery Mode (no hard block until Monday)
+   // EA continues scanning and trading at elevated selectivity. A/A+ only, 50% size.
+   // Same philosophy as daily adaptive recovery: losses raise the bar, never stop the bot.
    if(InpWeeklyMaxLoss > 0 && weeklyPnL < -(weeklyStartEquity * InpWeeklyMaxLoss / 100.0))
    {
-      if(!weeklyLossHit) { CloseAll(); Print("WEEKLY LOSS LIMIT"); }
-      weeklyLossHit = true;
-      if(heartbeatDue) { Print("⏸  WEEKLY LOSS LIMIT — down $", DoubleToString(MathAbs(weeklyPnL),2),
-         " (> ", DoubleToString(InpWeeklyMaxLoss,1), "% of weekly start $", DoubleToString(weeklyStartEquity,2),
-         "). EA paused until Monday. Set InpWeeklyMaxLoss=0 to disable this gate.");
-         lastGateHeartbeat = TimeCurrent(); }
-      return;
+      if(!weeklyLossHit)
+      {
+         weeklyLossHit = true;
+         if(!g_adaptiveRecoveryMode)
+         {
+            g_adaptiveRecoveryMode = true;
+            PrintFormat("ADAPTIVE_WEEKLY_RECOVERY: weekly -$%.2f (%.1f%%) | A/A+ only | lot x0.50 | EA continues trading",
+                        MathAbs(weeklyPnL), MathAbs(weeklyPnL) / weeklyStartEquity * 100.0);
+         }
+      }
+      if(heartbeatDue)
+      {
+         PrintFormat("ADAPTIVE_WEEKLY_RECOVERY_ACTIVE: weekly -$%.2f (%.1f%%) | A/A+ only | 50%% size | scanning for opportunities",
+                     MathAbs(weeklyPnL), MathAbs(weeklyPnL) / weeklyStartEquity * 100.0);
+         lastGateHeartbeat = TimeCurrent();
+      }
+      // No return. No CloseAll. EA continues in adaptive mode.
    }
 
+   // v6.4.4 — ADAPTIVE RECOVERY MODE (replaces hard daily loss lockout)
+   // OLD: when daily P&L < -X%, call CloseAll() and block all trades until midnight.
+   // NEW: EA continues scanning and trading, but raises the bar:
+   //   - Only A/A+ setups pass the RECOVERY_GATE at entry
+   //   - All lot sizes reduced 50% (capital protection without full freeze)
+   //   - All spread / volatility / news / confidence filters remain active
+   //   - Mode clears on: a) any profitable trade wins, b) equity recovers, c) new day
    double dailyPnL = equity - dailyStartEquity;
-   if(InpDailyLossLimit > 0 && dailyPnL < -(dailyStartEquity * InpDailyLossLimit / 100.0))
+   if(InpDailyLossLimit > 0)
    {
-      if(!dailyLimitHit) Print("DAILY LIMIT: -$", DoubleToString(MathAbs(dailyPnL), 2));
-      dailyLimitHit = true; if(CountMyPositions() > 0) CloseAll();
-      if(heartbeatDue) { Print("⏸  DAILY LOSS LIMIT — down $", DoubleToString(MathAbs(dailyPnL),2),
-         " (> ", DoubleToString(InpDailyLossLimit,1), "% of daily start $", DoubleToString(dailyStartEquity,2),
-         "). EA paused until next trading day. Set InpDailyLossLimit=0 to disable this gate.");
-         lastGateHeartbeat = TimeCurrent(); }
-      return;
+      bool dailyThresholdHit = (dailyPnL < -(dailyStartEquity * InpDailyLossLimit / 100.0));
+      if(dailyThresholdHit && !g_adaptiveRecoveryMode)
+      {
+         g_adaptiveRecoveryMode = true;
+         PrintFormat("ADAPTIVE_RECOVERY_ARMED: daily -$%.2f (%.1f%% of $%.2f daily start) | "
+                     "A/A+ setups only | lot x0.50 | all filters active | EA is NOT paused",
+                     MathAbs(dailyPnL), MathAbs(dailyPnL) / dailyStartEquity * 100.0, dailyStartEquity);
+      }
+      else if(!dailyThresholdHit && g_adaptiveRecoveryMode)
+      {
+         g_adaptiveRecoveryMode = false;
+         Print("ADAPTIVE_RECOVERY_CLEARED: daily equity recovered above threshold — resuming normal operation");
+      }
+      if(g_adaptiveRecoveryMode && heartbeatDue)
+      {
+         PrintFormat("ADAPTIVE_RECOVERY_ACTIVE: daily -$%.2f (%.1f%%) | A/A+ only | lot x0.50 | scanning",
+                     MathAbs(dailyPnL), MathAbs(dailyPnL) / dailyStartEquity * 100.0);
+         lastGateHeartbeat = TimeCurrent();
+      }
+      // No return. No CloseAll. EA continues.
    }
 
    // v5.8.15: protect the equity curve after a profitable run. This closes open
@@ -7446,9 +7567,29 @@ void OnTick()
    // Build exact signature for ML lookup + hive + journal
    string signature = BuildSignature(signal, setupName);
 
+   // v6.4.4: ADAPTIVE RECOVERY GATE — only A/A+ allowed after daily loss threshold
+   if(g_adaptiveRecoveryMode && grade != "A+" && grade != "A")
+   {
+      string recMsg = StringFormat("ADAPTIVE_RECOVERY: %s grade blocked — A/A+ only when daily loss threshold active; "
+                                   "resumes after profitable trade or equity recovery", grade);
+      Print("TRADE BLOCKED BECAUSE: ", recMsg);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, recMsg);
+      UpdateDashboard(0, combinedScore, "RECOVERY-GATE");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "RECOVERY-GATE";
+      return;
+   }
+
    // ============ GATE 4: RISK SIZING ============
    // v4.9.3 — Bigger lots scale with signal strength
    double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;
+
+   // v6.4.4: recovery mode size reduction (A/A+ only reached this point — 50% size)
+   if(g_adaptiveRecoveryMode)
+   {
+      sizeMulti *= 0.50;
+      Print("ADAPTIVE_RECOVERY_SIZE: lot x0.50 applied | grade=", grade,
+            " | clears after profitable trade or equity recovery");
+   }
    int    confidenceBoostPP = 0;   // in percentage points, informational
 
    if(timingLotMult < 0.999)
@@ -7758,13 +7899,23 @@ void OnTick()
    if(!ContextGateAllows(signal, bufATR[1]))
       return;
 
-   // v6.3.8 Upgrade 7: drawdown pause gate
+   // v6.4.5: drawdown watermark — adaptive mode, not a full entry block.
+   // When equity is >8% below watermark, we don't stop — we raise the bar.
+   // B-grade blocked. A/A+ continues at 50% size via g_adaptiveRecoveryMode flag.
    if(g_drawdownPause)
    {
-      g_gateBlocks_DailyLoss++; // re-use daily loss counter for watermark pause
-      Print("DRAWDOWN PAUSE ACTIVE: equity below watermark — new entry suppressed for ",
-            setupName, " ", signal==1?"BUY":"SELL");
-      return;
+      g_gateBlocks_DailyLoss++;
+      if(grade != "A+" && grade != "A")
+      {
+         Print("ADAPTIVE_DRAWDOWN: grade=", grade, " blocked (equity below watermark) — A/A+ setups still allowed");
+         return;
+      }
+      // A/A+ passes — activate adaptive recovery sizing if not already armed
+      if(!g_adaptiveRecoveryMode)
+      {
+         g_adaptiveRecoveryMode = true;
+         Print("ADAPTIVE_DRAWDOWN: equity below watermark — activating A/A+ only + 50% size mode");
+      }
    }
 
    // v5.1.0 — PROFIT GUARDIAN gate: blocks counter-trend stacks, tier-3 halt, post-loss cooldown
@@ -9526,6 +9677,107 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       }
    }
    // ============ END A+ PROFIT SHIELD ============
+
+   // ============ v6.4.3 ADAPTIVE MOMENTUM PROFIT LOCK (AMPL) ============
+   //
+   // PROBLEM SOLVED: Wide SL + large lot → large dollar profit at LOW R-multiple.
+   // Example: SELL 4064.74, price falls to 4054 (+$136) but only 0.33R with 30pt SL.
+   // R-based systems never fire (BE@1.5R, Chandelier@2R, A+Shield@3R). Market
+   // retraces → EA exits at +$38. 72% of the move given back, preventably.
+   //
+   // AMPL works in USD space — fires at dollar profit thresholds, NOT R-multiples.
+   // This makes it effective precisely when the other systems are blind.
+   //
+   // Two independent triggers:
+   //   1. EXPLOSIVE: fast velocity or large directional candle + profit >= min$
+   //   2. GIVEBACK_LIMIT: retrace >= N% of peak profit (any position with meaningful peak)
+   //
+   // Trail distance adapts to momentum:
+   //   Strong (4-5/5) → 0.45×ATR buffer  — trend still running, give room to continue
+   //   Moderate (3/5) → 0.30×ATR buffer  — moderating, tighten
+   //   Weak (0-2/5)  → 0.18×ATR buffer  — exhausting, lock the majority now
+   //
+   // Fully additive: ratchet-only, never moves SL backward. Never conflicts with
+   // Chandelier, A+Shield, or any other system (the tightest active SL wins).
+   // Re-entry after an AMPL stop is handled by the existing re-entry engine.
+   if(InpAMPL_Enable && rDollars > 0)
+   {
+      double tickVal_a   = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+      double tickSz_a    = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
+      double amplProfit  = isBuy ? (curPrice - openPx) : (openPx - curPrice);
+      amplProfit        *= lotsOpen * tickVal_a / tickSz_a;
+
+      if(amplProfit > 0 && peak > 0)
+      {
+         // Signal 1: Explosive candle — large body in trade direction vs ATR
+         double barBody   = MathAbs(close1 - open1);
+         bool   bigCandle = (barBody >= atr * InpAMPL_ExplosiveBodyR) &&
+                            ((isBuy && close1 > open1) || (!isBuy && close1 < open1));
+
+         // Signal 2: Fast recent velocity — net move >= N×ATR over last 5 bars
+         double price5BarAgo = iClose(Symbol(), PERIOD_M5, 5);
+         double recentMove   = isBuy ? (curPrice - price5BarAgo) : (price5BarAgo - curPrice);
+         bool   fastVelocity = (atr > 0 && recentMove >= atr * InpAMPL_VelATRFactor);
+
+         bool explosiveMove = (bigCandle || fastVelocity) && (amplProfit >= InpAMPL_MinUSD);
+
+         // Signal 3: Give-back limit — fires regardless of explosive detection
+         double peakRetrace   = (amplProfit < peak) ? ((peak - amplProfit) / peak) * 100.0 : 0.0;
+         bool   givebackLimit = (peak >= InpAMPL_GivebackMinUSD) && (peakRetrace >= InpAMPL_GivebackPct);
+
+         if(explosiveMove || givebackLimit)
+         {
+            // Adaptive trail: stronger momentum → wider buffer (may continue), weaker → tighter
+            double trailATR;
+            if(momentumScore >= 4)      trailATR = InpAMPL_TrailATR_Strong;
+            else if(momentumScore == 3) trailATR = InpAMPL_TrailATR_Mid;
+            else                         trailATR = InpAMPL_TrailATR_Weak;
+
+            // RSI extreme → tighten (reversal increasingly likely)
+            if((isBuy && rsi > 74) || (!isBuy && rsi < 26))
+               trailATR = MathMax(trailATR - 0.08, 0.12);
+
+            // HTF still aligned + strong momentum → small extra breathing room
+            if(((isBuy && g_htfConsensusDir == 1) || (!isBuy && g_htfConsensusDir == -1))
+               && momentumScore >= 4)
+               trailATR += 0.10;
+
+            double trailDist = atr * trailATR;
+            double amplSL    = isBuy ? NormalizeDouble(curPrice - trailDist, digits)
+                                     : NormalizeDouble(curPrice + trailDist, digits);
+
+            // Safety gates: profit zone, broker stops level, ratchet only
+            double pt_a  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+            long   lvl_a = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+            double buf_a = MathMax(lvl_a * pt_a, pt_a * 30);
+            bool inProfit_a = isBuy ? (amplSL > openPx)           : (amplSL < openPx);
+            bool sane_a     = isBuy ? (amplSL < curPrice - buf_a) : (amplSL > curPrice + buf_a);
+            bool ratchet_a  = isBuy ? (amplSL > curSL)            : (amplSL < curSL || curSL == 0);
+
+            if(inProfit_a && sane_a && ratchet_a)
+            {
+               string amplTrigger = givebackLimit
+                                    ? StringFormat("GIVEBACK_%.0f%%", peakRetrace)
+                                    : (bigCandle ? "BIG_CANDLE" : "FAST_VELOCITY");
+               if(SafeModifySL(ticket, amplSL, curTP, isBuy, curPrice, "AMPL"))
+               {
+                  static datetime lastAMPLLog = 0;
+                  if(TimeCurrent() - lastAMPLLog >= 20)
+                  {
+                     PrintFormat("AMPL #%I64u %s | trigger=%s | profit=$%.2f peak=$%.2f retrace=%.0f%% | "
+                                 "mom=%d/5 trail=%.2f×ATR | SL %s→%s | locks~$%.2f",
+                                 ticket, isBuy?"BUY":"SELL", amplTrigger,
+                                 amplProfit, peak, peakRetrace, momentumScore, trailATR,
+                                 DoubleToString(curSL, digits), DoubleToString(amplSL, digits),
+                                 amplProfit);
+                     lastAMPLLog = TimeCurrent();
+                  }
+               }
+            }
+         }
+      }
+   }
+   // ============ END AMPL ============
 
    // ============ PHASE 1: BREAKEVEN LOCK @ +1R ============
    double beActivateR = EffCleanBEActivateR();
@@ -14432,15 +14684,30 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
    if(StringLen(preBlock) > 0)
       return "Trade blocked — " + preBlock;
 
-   // v5.8.50: cooldown is independent of Profit Guardian. It pauses only fresh
-   // entries; OnTick continues market monitoring and open-position management.
+   // v6.4.5 ADAPTIVE COOLDOWN: pg_pauseUntil no longer fully blocks entries.
+   // After losses, the EA continues scanning and trading, but B-grade setups are
+   // blocked. A/A+ trades proceed with a reduced lot (size reduction is already
+   // applied via pg_selectiveActive or g_adaptiveRecoveryMode at OpenTrade).
+   // This replaces the old 5-hour and 4-hour hard freezes which caused the EA
+   // to miss quality recovery opportunities after a losing streak.
    if(pg_pauseUntil > 0 && TimeCurrent() < pg_pauseUntil)
    {
-      int secs = (int)(pg_pauseUntil - TimeCurrent());
-      return StringFormat("COOLDOWN_ACTIVE | Reason=consecutive-loss/profit-lock pause | LossCount=%d | PauseUntil=%s | Remaining=%d:%02d | ResumeCondition=time elapsed",
-                          pg_consecutiveLosses,
-                          TimeToString(pg_pauseUntil, TIME_DATE|TIME_MINUTES),
-                          secs/60, secs%60);
+      bool isAGrade = (StringCompare(grade, "A") == 0 || StringFind(grade, "A+") >= 0);
+      if(!isAGrade)
+      {
+         int secs = (int)(pg_pauseUntil - TimeCurrent());
+         return StringFormat("ADAPTIVE_COOLDOWN: %s grade blocked after %d losses — A/A+ setups still active. %d:%02d remaining.",
+                             grade, pg_consecutiveLosses, secs/60, secs%60);
+      }
+      // A/A+ passes — lot reduction is handled by pg_selectiveActive / g_adaptiveRecoveryMode
+      static datetime lastCooldownPassLog = 0;
+      if(TimeCurrent() - lastCooldownPassLog >= 60)
+      {
+         int secs = (int)(pg_pauseUntil - TimeCurrent());
+         PrintFormat("ADAPTIVE_COOLDOWN_PASS: %s grade allowed | %d losses | %d:%02d remaining | lot reduction active via selective mode",
+                     grade, pg_consecutiveLosses, secs/60, secs%60);
+         lastCooldownPassLog = TimeCurrent();
+      }
    }
 
    // v5.3.1 — Soft DD mode: keep trading but A/A+ only with high score.
@@ -14556,6 +14823,12 @@ void PG_OnBasketWin()
       Print("🛡 PROFIT GUARDIAN: winner reset cooldown streak (was ",
             pg_consecutiveLosses, ").");
       pg_consecutiveLosses = 0;
+   }
+   // v6.4.4: a winning trade proves the strategy is working — exit adaptive recovery mode
+   if(g_adaptiveRecoveryMode)
+   {
+      g_adaptiveRecoveryMode = false;
+      Print("ADAPTIVE_RECOVERY_CLEARED: profitable trade closed — resuming normal operation");
    }
 }
 
@@ -15898,7 +16171,7 @@ void BotMonitorHeartbeat()
    string lastErr = "";
    ResetLastError();
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v6.4.2\",\"account_number\":\"%I64d\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"v6.4.5\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"spread\":%.0f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -16470,7 +16743,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER v6.4.2 | MODE:" + g_modeName + " | ";
+   d += " XAUAI SNIPER v6.4.5 | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
@@ -16518,8 +16791,8 @@ void UpdateDashboard(int signal, double score, string grade)
    if(StringLen(lastExitReason) > 0) d += StringFormat("Last Exit: %s\n", lastExitReason);
    d += "==========================================\n";
    if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT — RESTING <<\n";
-   if(weeklyLossHit) d += "!! WEEKLY LOSS LIMIT — STOPPED !!\n";
-   if(dailyLimitHit) d += "!! DAILY LIMIT — CLOSED ALL !!\n";
+   if(weeklyLossHit) d += "!! ADAPTIVE WEEKLY RECOVERY — A/A+ only | lot x0.50 | EA active !!\n";
+   if(g_adaptiveRecoveryMode) d += "!! ADAPTIVE RECOVERY — A/A+ only | lot x0.50 | EA active !!\n";
    Comment(d);
 }
 //+------------------------------------------------------------------+

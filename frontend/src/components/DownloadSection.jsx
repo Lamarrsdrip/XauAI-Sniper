@@ -12,9 +12,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.3.6";
-  const edition  = info?.edition  || "AI Director + ML Warm-Start + Adaptive Exits";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.3.6_AI_DIRECTOR.mq5";
+  const version  = info?.version  || "v6.4.5";
+  const edition  = info?.edition  || "AI Director + Adaptive Protection + AMPL";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.4.5.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
