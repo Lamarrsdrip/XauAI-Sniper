@@ -263,7 +263,7 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
             <XauAiLogo size={30} className="flex-none" />
             <div className="min-w-0">
               <div className="truncate text-[14px] font-bold leading-none">XAU AI Sniper</div>
-              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.3.6</div>
+              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.4.14</div>
             </div>
           </Link>
           <div className="flex items-center gap-2">
@@ -800,7 +800,7 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
       </Card>
 
       {/* Prop Firm Mode */}
-      <Card title="Prop Firm Mode" subtitle="Set the firm's exact limits. The EA stays unchanged until it receives and acknowledges this command.">
+      <Card title="PROP FIRM MODE" subtitle="Set the firm's exact limits. The EA stays unchanged until it receives and acknowledges this command.">
         <div className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4 mb-5">
           <div>
             <div className="text-[14px] font-semibold">{propFirmForm.enabled?"Protection on":"Protection off"}</div>
@@ -815,7 +815,7 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
           <NumField label="Maximum total loss"  value={propFirmForm.max_loss_pct}      onChange={v=>upd("max_loss_pct",v)}      min={0.5} max={30} />
           <NumField label="Safety buffer"       value={propFirmForm.safety_buffer_pct} onChange={v=>upd("safety_buffer_pct",v)} min={0} max={10} note="EA locks this far before the firm's stated limit." />
           <NumField label="Risk per trade"      value={propFirmForm.risk_per_trade_pct} onChange={v=>upd("risk_per_trade_pct",v)} min={0.01} max={2} />
-          <NumField label="Max basket risk"     value={propFirmForm.max_basket_risk_pct} onChange={v=>upd("max_basket_risk_pct",v)} min={0.01} max={4} />
+          <NumField label="Maximum basket risk" value={propFirmForm.max_basket_risk_pct} onChange={v=>upd("max_basket_risk_pct",v)} min={0.01} max={4} />
         </div>
 
         <label className="mt-4 flex items-start gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] p-3.5 cursor-pointer">

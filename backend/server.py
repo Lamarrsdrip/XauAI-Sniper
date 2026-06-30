@@ -1829,7 +1829,7 @@ class TradeMemoryRecord(BaseModel):
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.4.6"
+    ea_version: str = "v6.4.14"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"
