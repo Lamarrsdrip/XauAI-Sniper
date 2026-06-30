@@ -1,9 +1,28 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.11 — Smart Exit 3-layer profit protection system          |
+//|   v6.4.12 — Adaptive Trade Management + Growth Guard             |
 //|            v6.4.7 trend-continuation/news fast-track preserved       |
 //+------------------------------------------------------------------+
+// v6.4.12 CHANGES (2026-06-30) — ADAPTIVE TRADE MANAGEMENT + EQUITY GROWTH GUARD:
+//
+//   1. Replaces broker tick-value shortcuts with OrderCalcProfit-based XAUUSD
+//      money conversion. Live evidence showed the old risk math undercounted
+//      actual XAU losses by roughly 10x on this account.
+//   2. Adds Growth Guard: minimum entry RR, actual dollar-risk lot cap,
+//      basket risk cap, daily-profit lock, oversize-loss pause, and
+//      consecutive-loss pause.
+//   3. Adds bad-entry emergency exit for trades that move against the thesis
+//      quickly after entry with structure/EMA/RSI confirmation.
+//   4. Blocks recovery re-entry after broker SL and blocks rescue pyramids
+//      unless the base trade is already protected or recovery evidence is clean.
+//   5. Adds adaptive trade-context classification: STRONG_TREND,
+//      NORMAL_PULLBACK, WEAK_TRADE, EXPLOSIVE_MOVE, and TREND_EXHAUSTION.
+//      The EA now adapts lock %, giveback room, partials, runner holding,
+//      and same-direction re-entry patience to what the market is doing now.
+//   6. Preserves runner logic: the bot should hold the good high-position trade
+//      with protected stop instead of banking tiny profit and selling lower.
+//
 // v6.4.11 CHANGES (2026-06-30) — SMART EXIT 3-LAYER SYSTEM:
 //
 //   1. Adds explicit exit states: LET_IT_WORK, PROTECT_PROFIT,
@@ -497,16 +516,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.11"
-#property description "XAUUSD AI Sniper v6.4.11 — smart exit 3-layer profit protection"
+#property version   "6.4.12"
+#property description "XAUUSD AI Sniper v6.4.12 — equity growth guard + real XAU risk math"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.11"
-#define XAUAI_EA_VERSION_NUM "6.4.11"
-#define XAUAI_BUILD_HASH "v6411-smart-exit-3layer-20260630"
+#define XAUAI_EA_VERSION "v6.4.12"
+#define XAUAI_EA_VERSION_NUM "6.4.12"
+#define XAUAI_BUILD_HASH "v6412-equity-growth-guard-20260630"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -861,6 +880,33 @@ input double InpMaxRiskPctEquity = 3.0;    // v5.8.4: restored original account-
 input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
 input double InpMaxAggregateRiskPct = 8.0; // v5.8.4: restored original aggregate risk room for demo/cloud testing
 input double InpDailyLossLimit = 3.0;      // v6.4.4: Adaptive Recovery Mode trigger — when daily loss >= this %, EA switches to A/A+ only + 50% size. Set 0 to disable. EA never pauses.
+
+input group "=== EQUITY GROWTH GUARD (v6.4.12 — real XAU risk + loss containment) ==="
+input bool   InpGrowthGuardEnable                 = true;  // Master switch for v6.4.12 equity growth controls
+input double InpGrowthMaxTradeLossEquityPct       = 1.50;  // Max actual-risk room per new trade and hard live-loss cap
+input double InpGrowthMaxBasketLossEquityPct      = 2.00;  // Max combined open XAU risk/loss before blocking or flattening
+input int    InpGrowthBadEntryMaxMinutes          = 0;     // 0 disables fast-failure exits; gold needs room for fake pushes
+input double InpGrowthBadEntryAdverseATR          = 0.70;  // Adverse move in ATR that marks a wrong fast entry when enabled
+input double InpGrowthBadEntryLossEquityPct       = 0.0;   // 0 disables early cut; hard risk cap still protects equity
+input double InpGrowthMinEntryRR                  = 1.50;  // Block entries whose realistic TP/SL reward:risk is below this
+input double InpGrowthPreferEntryRR               = 2.00;  // Log target: prefer 2R+ potential
+input double InpGrowthDailyLockArmPct             = 2.00;  // Once day is up this %, daily profit cannot be fully returned
+input double InpGrowthDailyLockGivebackPct        = 50.0;  // First lock: keep at least half of peak day profit
+input double InpGrowthDailyStrongLockArmPct       = 5.00;  // Strong day: lock a larger share of peak day profit
+input double InpGrowthDailyStrongLockPct          = 70.0;  // Strong lock retains this % of peak day profit
+input int    InpGrowthOversizeLossPauseMin        = 45;    // Pause after one larger-than-normal loss
+input int    InpGrowthConsecutiveLossPauseMin     = 60;    // Pause after two losing cycles
+input int    InpGrowthLossAfterWinPauseMin        = 90;    // Pause after a loss gives back a recent good winning streak
+input bool   InpGrowthRequireProtectedBaseForPyramid = true; // No rescue averaging unless the base trade is protected
+input bool   InpGrowthBlockRecoveryReEntryAfterSL    = true; // No same-side automatic recovery re-entry after broker SL
+
+input group "=== THESIS HOLD RUNNER (v6.4.12 — hold clean A+ trend trades) ==="
+input bool   InpThesisHoldRunnerEnable            = true;  // Prefer protected runners over early market exits while thesis is clean
+input int    InpThesisHoldMinHoldMinutes          = 35;    // Do not judge a clean trend runner as failed too early
+input double InpThesisHoldMinPeakUSD              = 45.0;  // Only apply thesis-hold behavior after meaningful open profit
+input double InpThesisHoldMaxGivebackPct          = 92.0;  // Wide pullback room while M5/M15 thesis remains valid
+input int    InpThesisHoldReentryCooldownMin      = 90;    // After a winner, avoid same-side lower re-entry until a real reset
+
 input int    InpMaxOpenTrades  = 3;        // Max open positions
 input int    InpMaxTradesPerDay= 15;       // v5.8.2 — reduce overtrading after choppy loss windows
 input bool   InpAdaptiveDailyCap = true;   // v5.8.8: strong trend days can trade more; weak days trade less
@@ -1569,6 +1615,18 @@ datetime pg_dayHaltDay        = 0;     // day this halt was triggered
 int      pg_lastReportedTier  = -1;    // throttle tier transition logs
 int      pg_consecutiveLosses = 0;     // v5.1.2: resets on any winner; drives adaptive cooldown
 datetime pg_lastLossCycleAt   = 0;     // layered closes from one basket count as one losing cycle
+
+// v6.4.12 — Equity Growth Guard state. This layer protects account growth after
+// live evidence showed one XAU loss could erase many wins when risk was mispriced.
+datetime g_growthPauseUntil = 0;
+string   g_growthPauseReason = "";
+double   g_growthDailyPeakProfit = 0.0;
+int      g_growthLossStreak = 0;
+double   g_growthLastWinProfit = 0.0;
+datetime g_growthLastWinAt = 0;
+int      g_growthLastWinDir = 0;
+datetime g_growthLastLossAt = 0;
+double   g_growthLastLoss = 0.0;
 
 // ====================================================================
 // v5.5.0 — Equity Preservation Framework state
@@ -2411,6 +2469,25 @@ double STI_ComputeLateEntryRisk(int signal, double m5atr)
    return cacheVal[idx];
 }
 
+int XAU_AdaptiveReentryWaitMin(int dir)
+{
+   int baseWait = MathMax(1, InpSTI_ReentryMinWaitMin);
+   if(!InpThesisHoldRunnerEnable || dir == 0)
+      return baseWait;
+
+   int thesisWait = (int)MathMax((double)baseWait, (double)InpThesisHoldReentryCooldownMin);
+   int halfThesisWait = (int)MathMax((double)baseWait, (double)(InpThesisHoldReentryCooldownMin / 2));
+   int softerWait = (int)MathMax((double)baseWait, (double)InpThesisHoldReentryCooldownMin * 0.75);
+
+   if(g_sti.macroDir == dir && g_sti.macroStrength >= 0.70)
+      return halfThesisWait;
+   if(g_sti.macroDir == -dir && g_sti.macroStrength >= 0.45)
+      return thesisWait;
+   if(g_sti.macroStrength <= 0.25)
+      return softerWait;
+   return thesisWait;
+}
+
 // Called every new M5 bar to refresh macro direction + pullback tracking.
 // Cheap: macro direction is the only state requiring recalculation every bar.
 void STI_Update()
@@ -2439,14 +2516,16 @@ void STI_Update()
    if(InpSTI_BlockLateReentry && g_sti.lastProfitDir != 0 && !g_sti.pullbackReady)
    {
       int elapsed = (int)(TimeCurrent() - g_sti.lastProfitClose);
-      bool windowExpired = (elapsed > InpSTI_ReentryMaxWindowMin * 60);
+      int effectiveMinWait = XAU_AdaptiveReentryWaitMin(g_sti.lastProfitDir);
+      int effectiveMaxWindow = (int)MathMax((double)InpSTI_ReentryMaxWindowMin, (double)(effectiveMinWait + 15));
+      bool windowExpired = (elapsed > effectiveMaxWindow * 60);
       if(windowExpired)
       {
          // Window expired — clear memory so the gate does not block indefinitely
          g_sti.lastProfitDir = 0;
          g_sti.pullbackReady = false;
       }
-      else if(elapsed >= InpSTI_ReentryMinWaitMin * 60)
+      else if(elapsed >= effectiveMinWait * 60)
       {
          double m5atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
          if(m5atr > 0)
@@ -2477,6 +2556,7 @@ void STI_Update()
 void STI_AfterProfitableClose(int dir, double closePrice)
 {
    if(!InpSTI_Enable || !InpSTI_BlockLateReentry) return;
+   int effectiveMinWait = XAU_AdaptiveReentryWaitMin(dir);
    g_sti.lastProfitClose = TimeCurrent();
    g_sti.lastProfitDir   = dir;
    g_sti.lastProfitPrice = closePrice;
@@ -2484,7 +2564,7 @@ void STI_AfterProfitableClose(int dir, double closePrice)
    if(InpSTI_Log)
       PrintFormat("STI_TP_MEMORY | dir=%s closePrice=%.2f | armed: waiting %d min then %.2f ATR pullback required before same-dir re-entry",
                   dir==1?"BUY":"SELL", closePrice,
-                  InpSTI_ReentryMinWaitMin, InpSTI_ReentryPullbackATR);
+                  effectiveMinWait, InpSTI_ReentryPullbackATR);
 }
 
 int FindPeakIdx(ulong ticket)
@@ -2562,12 +2642,8 @@ void XAU_ClearProfitFloor(ulong ticket)
 double XAU_CurrentSLLockUSD(bool isBuy, double openPx, double curSL, double lotsOpen)
 {
    if(curSL <= 0 || lotsOpen <= 0) return 0.0;
-   double lockDist = isBuy ? (curSL - openPx) : (openPx - curSL);
-   if(lockDist <= 0) return 0.0;
-   double tickVal = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-   double tickSz  = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
-   if(tickVal <= 0 || tickSz <= 0) return 0.0;
-   return MathMax(0.0, lockDist * lotsOpen * tickVal / tickSz);
+   double projected = XAU_ProjectProfitUSD(isBuy, openPx, curSL, lotsOpen);
+   return MathMax(0.0, projected);
 }
 
 enum XAU_SMART_EXIT_STATE
@@ -2596,6 +2672,41 @@ string XAU_SmartExitStateName(XAU_SMART_EXIT_STATE state)
    return "LET_IT_WORK";
 }
 
+enum XAU_TRADE_CONTEXT_STATE
+{
+   XAU_CONTEXT_STRONG_TREND = 0,
+   XAU_CONTEXT_NORMAL_PULLBACK,
+   XAU_CONTEXT_WEAK_TRADE,
+   XAU_CONTEXT_EXPLOSIVE_MOVE,
+   XAU_CONTEXT_TREND_EXHAUSTION
+};
+
+string XAU_ContextStateName(XAU_TRADE_CONTEXT_STATE state)
+{
+   switch(state)
+   {
+      case XAU_CONTEXT_STRONG_TREND:      return "STRONG_TREND";
+      case XAU_CONTEXT_NORMAL_PULLBACK:   return "NORMAL_PULLBACK";
+      case XAU_CONTEXT_WEAK_TRADE:        return "WEAK_TRADE";
+      case XAU_CONTEXT_EXPLOSIVE_MOVE:    return "EXPLOSIVE_MOVE";
+      case XAU_CONTEXT_TREND_EXHAUSTION:  return "TREND_EXHAUSTION";
+   }
+   return "NORMAL_PULLBACK";
+}
+
+string XAU_ContextAuditTag(XAU_TRADE_CONTEXT_STATE state)
+{
+   switch(state)
+   {
+      case XAU_CONTEXT_STRONG_TREND:      return "ADAPTIVE_CONTEXT_STRONG_TREND";
+      case XAU_CONTEXT_NORMAL_PULLBACK:   return "ADAPTIVE_CONTEXT_NORMAL_PULLBACK";
+      case XAU_CONTEXT_WEAK_TRADE:        return "ADAPTIVE_CONTEXT_WEAK_TRADE";
+      case XAU_CONTEXT_EXPLOSIVE_MOVE:    return "ADAPTIVE_CONTEXT_EXPLOSIVE_LOCK";
+      case XAU_CONTEXT_TREND_EXHAUSTION:  return "ADAPTIVE_CONTEXT_EXHAUSTION_EXIT";
+   }
+   return "ADAPTIVE_CONTEXT_NORMAL_PULLBACK";
+}
+
 bool XAU_M5M15TrendClean(bool isBuy, int momentumScore, bool trendAligned,
                          bool structureConfirmedBroken, bool emaAgainst,
                          bool rsiAgainst, string &why)
@@ -2620,6 +2731,65 @@ bool XAU_M5M15TrendClean(bool isBuy, int momentumScore, bool trendAligned,
    return clean;
 }
 
+XAU_TRADE_CONTEXT_STATE XAU_ClassifyTradeContext(bool runnerClean, int momentumScore,
+                                                 bool trendAligned,
+                                                 bool structureConfirmedBroken,
+                                                 bool emaAgainst, bool rsiAgainst,
+                                                 bool recoveryLikely,
+                                                 double givebackPct,
+                                                 double profitUSD, double peak,
+                                                 double rDollars, int minsOpen,
+                                                 double atr, double slDist)
+{
+   double profitR = (rDollars > 0.0) ? profitUSD / rDollars : 0.0;
+   double peakR = (rDollars > 0.0) ? peak / rDollars : 0.0;
+   bool hardBreak = (structureConfirmedBroken || (emaAgainst && rsiAgainst && momentumScore <= 2));
+   bool cleanContinuation = (runnerClean && trendAligned && momentumScore >= 4 && !hardBreak);
+   bool normalPullback = (trendAligned && momentumScore >= 3 && !hardBreak && recoveryLikely);
+
+   int fastWindow = MathMax(10, InpThesisHoldMinHoldMinutes / 2);
+   bool fastExpansion = (minsOpen <= fastWindow &&
+                         peakR >= 1.20 &&
+                         profitUSD >= peak * 0.65 &&
+                         momentumScore >= 3 &&
+                         !hardBreak);
+   bool abnormalRangeExpansion = (atr > 0.0 && slDist > 0.0 &&
+                                  peakR >= 1.50 &&
+                                  MathAbs(profitUSD) >= rDollars &&
+                                  slDist <= atr * 2.40 &&
+                                  momentumScore >= 4 &&
+                                  givebackPct <= 35.0 &&
+                                  !hardBreak);
+   if(fastExpansion || abnormalRangeExpansion)
+      return XAU_CONTEXT_EXPLOSIVE_MOVE;
+
+   bool exhaustion = (peakR >= 1.0 &&
+                      (hardBreak ||
+                       (givebackPct >= 55.0 && momentumScore <= 2) ||
+                       (givebackPct >= 70.0 && !runnerClean) ||
+                       (!trendAligned && !recoveryLikely && givebackPct >= 45.0)));
+   if(exhaustion)
+      return XAU_CONTEXT_TREND_EXHAUSTION;
+
+   bool weakTrade = ((minsOpen >= InpThesisHoldMinHoldMinutes &&
+                      peakR < 0.80 &&
+                      profitR < 0.30 &&
+                      !runnerClean &&
+                      momentumScore <= 2) ||
+                     (!trendAligned && momentumScore <= 2 && !recoveryLikely && givebackPct >= 35.0));
+   if(weakTrade)
+      return XAU_CONTEXT_WEAK_TRADE;
+
+   if(cleanContinuation)
+      return XAU_CONTEXT_STRONG_TREND;
+   if(normalPullback || (trendAligned && momentumScore >= 3 && !hardBreak))
+      return XAU_CONTEXT_NORMAL_PULLBACK;
+
+   if(runnerClean && !hardBreak)
+      return XAU_CONTEXT_NORMAL_PULLBACK;
+   return XAU_CONTEXT_WEAK_TRADE;
+}
+
 double XAU_SmartExitAllowedGivebackPct(bool runnerClean, int momentumScore,
                                        bool trendAligned,
                                        bool structureConfirmedBroken,
@@ -2638,6 +2808,28 @@ double XAU_SmartExitAllowedGivebackPct(bool runnerClean, int momentumScore,
    return neutralGiveback;
 }
 
+double XAU_ContextAllowedGivebackPct(XAU_TRADE_CONTEXT_STATE contextState,
+                                     double baseAllowedGiveback,
+                                     bool recoveryLikely)
+{
+   baseAllowedGiveback = MathMax(10.0, MathMin(baseAllowedGiveback, 92.0));
+   switch(contextState)
+   {
+      case XAU_CONTEXT_STRONG_TREND:
+         return MathMax(baseAllowedGiveback, MathMin(InpThesisHoldMaxGivebackPct, 92.0));
+      case XAU_CONTEXT_NORMAL_PULLBACK:
+         return recoveryLikely ? MathMax(baseAllowedGiveback, MathMin(baseAllowedGiveback + 8.0, 88.0))
+                               : baseAllowedGiveback;
+      case XAU_CONTEXT_EXPLOSIVE_MOVE:
+         return MathMin(baseAllowedGiveback, 45.0);
+      case XAU_CONTEXT_TREND_EXHAUSTION:
+         return MathMin(baseAllowedGiveback, 28.0);
+      case XAU_CONTEXT_WEAK_TRADE:
+         return MathMin(baseAllowedGiveback, 35.0);
+   }
+   return baseAllowedGiveback;
+}
+
 double XAU_SmartExitLockPct(bool runnerClean, int momentumScore,
                             bool structureConfirmedBroken, bool emaAgainst,
                             bool rsiAgainst)
@@ -2647,6 +2839,107 @@ double XAU_SmartExitLockPct(bool runnerClean, int momentumScore,
    if(structureConfirmedBroken || (emaAgainst && rsiAgainst) || momentumScore <= 2 || !runnerClean)
       return MathMax(weakLock, strongLock);
    return MathMin(weakLock, strongLock);
+}
+
+double XAU_ContextLockPct(XAU_TRADE_CONTEXT_STATE contextState, double baseLockPct)
+{
+   baseLockPct = MathMax(10.0, MathMin(baseLockPct, 85.0));
+   switch(contextState)
+   {
+      case XAU_CONTEXT_EXPLOSIVE_MOVE:
+         return MathMax(baseLockPct, 70.0);
+      case XAU_CONTEXT_TREND_EXHAUSTION:
+         return MathMax(baseLockPct, 60.0);
+      case XAU_CONTEXT_WEAK_TRADE:
+         return MathMax(baseLockPct, 55.0);
+      case XAU_CONTEXT_STRONG_TREND:
+         return MathMin(baseLockPct, 45.0);
+      case XAU_CONTEXT_NORMAL_PULLBACK:
+         return baseLockPct;
+   }
+   return baseLockPct;
+}
+
+bool XAU_ContextShouldTakePartial(XAU_TRADE_CONTEXT_STATE contextState,
+                                  bool runnerClean,
+                                  double profitUSD, double peak,
+                                  double strongProfitUSD, double rDollars,
+                                  int minsOpen)
+{
+   if(profitUSD <= 0.0 || peak <= 0.0 || rDollars <= 0.0)
+      return false;
+   if(profitUSD < strongProfitUSD)
+      return false;
+
+   double peakR = peak / rDollars;
+   switch(contextState)
+   {
+      case XAU_CONTEXT_EXPLOSIVE_MOVE:
+         return (peakR >= 1.20 && profitUSD >= peak * 0.60);
+      case XAU_CONTEXT_TREND_EXHAUSTION:
+         return (peakR >= 1.00);
+      case XAU_CONTEXT_WEAK_TRADE:
+         return (!runnerClean && minsOpen >= InpThesisHoldMinHoldMinutes && peakR >= 1.00);
+      case XAU_CONTEXT_STRONG_TREND:
+         return false;
+      case XAU_CONTEXT_NORMAL_PULLBACK:
+         return false;
+   }
+   return false;
+}
+
+bool XAU_ThesisHoldRunnerAllowed(ulong ticket, bool isBuy, bool runnerClean,
+                                 int momentumScore, bool trendAligned,
+                                 bool structureConfirmedBroken, bool emaAgainst,
+                                 bool rsiAgainst, double givebackPct,
+                                 double peak, int minsOpen,
+                                 XAU_TRADE_CONTEXT_STATE contextState)
+{
+   if(!InpThesisHoldRunnerEnable) return false;
+   if(peak < InpThesisHoldMinPeakUSD) return false;
+   if(structureConfirmedBroken) return false;
+   if(emaAgainst && rsiAgainst && momentumScore <= 2) return false;
+   if(contextState == XAU_CONTEXT_WEAK_TRADE || contextState == XAU_CONTEXT_TREND_EXHAUSTION)
+      return false;
+   if(contextState == XAU_CONTEXT_EXPLOSIVE_MOVE && !runnerClean && givebackPct >= 45.0)
+      return false;
+
+   bool trendHealthy = (runnerClean ||
+                        (trendAligned && momentumScore >= 3 && !(emaAgainst && rsiAgainst)) ||
+                        (trendAligned && momentumScore >= 4));
+   if(!trendHealthy) return false;
+
+   if(givebackPct > InpThesisHoldMaxGivebackPct &&
+      !runnerClean &&
+      minsOpen >= InpThesisHoldMinHoldMinutes)
+      return false;
+
+   bool highQualityRunner = true;
+   if(PositionSelectByTicket(ticket))
+   {
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringLen(c) > 0)
+      {
+         highQualityRunner = (StringFind(c, "A+") >= 0 ||
+                              StringFind(c, "[A]") >= 0 ||
+                              StringFind(c, "Grade A") >= 0 ||
+                              StringFind(c, "grade=A") >= 0 ||
+                              StringFind(c, "TREND_PULLBACK") >= 0 ||
+                              StringFind(c, "HTF_TREND") >= 0 ||
+                              StringFind(c, "BREAKOUT") >= 0);
+      }
+   }
+
+   if(!highQualityRunner && !trendAligned) return false;
+   if(contextState != XAU_CONTEXT_STRONG_TREND &&
+      contextState != XAU_CONTEXT_NORMAL_PULLBACK &&
+      contextState != XAU_CONTEXT_EXPLOSIVE_MOVE)
+      return false;
+   if(minsOpen < InpThesisHoldMinHoldMinutes)
+      return (runnerClean || contextState == XAU_CONTEXT_STRONG_TREND || contextState == XAU_CONTEXT_EXPLOSIVE_MOVE);
+   return (contextState == XAU_CONTEXT_STRONG_TREND ||
+           (contextState == XAU_CONTEXT_NORMAL_PULLBACK && (runnerClean || (trendAligned && momentumScore >= 3))) ||
+           (contextState == XAU_CONTEXT_EXPLOSIVE_MOVE && runnerClean));
 }
 
 bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPrice,
@@ -2660,12 +2953,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
    if(peak <= 0.0 || rDollars <= 0.0 || slDist <= 0.0 || lotsOpen <= 0.0)
       return false;
 
-   double tickVal = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-   double tickSz  = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
-   if(tickVal <= 0.0 || tickSz <= 0.0) return false;
-
-   double profitUSD = isBuy ? (curPrice - openPx) : (openPx - curPrice);
-   profitUSD *= lotsOpen * tickVal / tickSz;
+   double profitUSD = XAU_ProjectProfitUSD(isBuy, openPx, curPrice, lotsOpen);
 
    double refBal = StrategyReferenceBalance();
    double strongProfitUSD = MathMax(InpSmartExitStrongProfitUSD,
@@ -2681,12 +2969,25 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
    double givebackPct = (peak > 0.0 && profitUSD < peak)
                         ? ((peak - profitUSD) / peak) * 100.0
                         : 0.0;
-   double allowedGiveback = XAU_SmartExitAllowedGivebackPct(runnerClean, momentumScore,
-                                                            trendAligned,
-                                                            structureConfirmedBroken,
-                                                            emaAgainst, rsiAgainst);
-   double lockPct = XAU_SmartExitLockPct(runnerClean, momentumScore,
-                                         structureConfirmedBroken, emaAgainst, rsiAgainst);
+   XAU_TRADE_CONTEXT_STATE contextState = XAU_ClassifyTradeContext(runnerClean, momentumScore,
+                                                                   trendAligned,
+                                                                   structureConfirmedBroken,
+                                                                   emaAgainst, rsiAgainst,
+                                                                   recoveryLikely,
+                                                                   givebackPct,
+                                                                   profitUSD, peak,
+                                                                   rDollars, minsOpen,
+                                                                   atr, slDist);
+   double baseAllowedGiveback = XAU_SmartExitAllowedGivebackPct(runnerClean, momentumScore,
+                                                                trendAligned,
+                                                                structureConfirmedBroken,
+                                                                emaAgainst, rsiAgainst);
+   double allowedGiveback = XAU_ContextAllowedGivebackPct(contextState,
+                                                          baseAllowedGiveback,
+                                                          recoveryLikely);
+   double baseLockPct = XAU_SmartExitLockPct(runnerClean, momentumScore,
+                                             structureConfirmedBroken, emaAgainst, rsiAgainst);
+   double lockPct = XAU_ContextLockPct(contextState, baseLockPct);
    double floorUSD = MathMax(InpSmartExitMinRetainUSD, peak * lockPct / 100.0);
    floorUSD = MathMin(floorUSD, peak * 0.90);
 
@@ -2716,16 +3017,23 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
          floorModified = true;
          floorAlreadyProtected = true;
          currentLockUSD = floorUSD;
-         PrintFormat("%s #%I64u %s | peak=$%.2f current=$%.2f floor=$%.2f lockPct=%.0f%% giveback=%.0f%% allowed=%.0f%% | SL=%s",
+         PrintFormat("%s #%I64u %s | %s context=%s peak=$%.2f current=$%.2f floor=$%.2f lockPct=%.0f%% giveback=%.0f%% allowed=%.0f%% | SL=%s",
                      XAU_SmartExitStateName(PROTECT_PROFIT),
                      ticket, isBuy ? "BUY" : "SELL",
+                     XAU_ContextAuditTag(contextState),
+                     XAU_ContextStateName(contextState),
                      peak, profitUSD, floorUSD, lockPct, givebackPct, allowedGiveback,
                      DoubleToString(lockPx, digits));
       }
    }
 
    bool partialsAllowed = (InpSmartExitPartialIgnoresCloudSafe || !InpCloudSafeDisablePartials);
-   if(partialsAllowed && floorAlreadyProtected && profitUSD >= strongProfitUSD &&
+   bool contextPartial = XAU_ContextShouldTakePartial(contextState,
+                                                      runnerClean,
+                                                      profitUSD, peak,
+                                                      strongProfitUSD,
+                                                      rDollars, minsOpen);
+   if(partialsAllowed && contextPartial && floorAlreadyProtected &&
       !CleanPartialAlreadyTaken(ticket) && InpSmartExitPartialPct > 0.0)
    {
       double minLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
@@ -2736,9 +3044,11 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
          if(trade.PositionClosePartial(ticket, partialLots))
          {
             CleanMarkPartialTaken(ticket);
-            PrintFormat("%s #%I64u %s | SMART_EXIT_PARTIAL closed %.2f lots (%.0f%%) at profit=$%.2f peak=$%.2f | runner=%.2f protectedFloor=$%.2f cleanTrend=%s",
+            PrintFormat("%s #%I64u %s | %s context=%s SMART_EXIT_PARTIAL closed %.2f lots (%.0f%%) at profit=$%.2f peak=$%.2f | runner=%.2f protectedFloor=$%.2f cleanTrend=%s",
                         XAU_SmartExitStateName(PROTECT_PROFIT),
                         ticket, isBuy ? "BUY" : "SELL",
+                        XAU_ContextAuditTag(contextState),
+                        XAU_ContextStateName(contextState),
                         partialLots, InpSmartExitPartialPct,
                         profitUSD, peak, remainingLots, floorUSD,
                         runnerClean ? "Y" : "N");
@@ -2746,13 +3056,32 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
       }
    }
 
-   if(profitUSD <= 0.0)
+   bool thesisHoldAllowed = XAU_ThesisHoldRunnerAllowed(ticket, isBuy, runnerClean,
+                                                        momentumScore, trendAligned,
+                                                        structureConfirmedBroken,
+                                                        emaAgainst, rsiAgainst,
+                                                        givebackPct, peak, minsOpen,
+                                                        contextState);
+   if(thesisHoldAllowed && !floorAlreadyProtected && profitUSD <= floorUSD)
    {
-      lastExitReason = StringFormat("%s | full giveback to red after peak $%.2f (current $%.2f)",
-                                    XAU_SmartExitStateName(THESIS_BROKEN_EXIT), peak, profitUSD);
-      PrintFormat("%s #%I64u %s | full giveback to red after strong profit | peak=$%.2f floor=$%.2f current=$%.2f giveback=%.0f%% | %s",
+      PrintFormat("HOLD_RUNNER_THESIS_VALID #%I64u %s | %s context=%s but earned floor is not protected; disabling hold override | peak=$%.2f current=$%.2f floor=$%.2f",
+                  ticket, isBuy ? "BUY" : "SELL",
+                  XAU_ContextAuditTag(contextState),
+                  XAU_ContextStateName(contextState),
+                  peak, profitUSD, floorUSD);
+      thesisHoldAllowed = false;
+   }
+
+   if(profitUSD <= 0.0 && !thesisHoldAllowed)
+   {
+      lastExitReason = StringFormat("%s | %s full giveback to red after peak $%.2f (current $%.2f)",
+                                    XAU_SmartExitStateName(THESIS_BROKEN_EXIT),
+                                    XAU_ContextAuditTag(contextState), peak, profitUSD);
+      PrintFormat("%s #%I64u %s | %s context=%s full giveback to red after strong profit | peak=$%.2f floor=$%.2f current=$%.2f giveback=%.0f%% | %s",
                   XAU_SmartExitStateName(THESIS_BROKEN_EXIT),
                   ticket, isBuy ? "BUY" : "SELL",
+                  XAU_ContextAuditTag(contextState),
+                  XAU_ContextStateName(contextState),
                   peak, floorUSD, profitUSD, givebackPct, trendWhy);
       XAU_SetPendingExitReason(ticket, lastExitReason);
       trade.PositionClose(ticket);
@@ -2764,30 +3093,49 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
    if(floorBroken || givebackWarning)
    {
       XAU_SMART_EXIT_STATE state = givebackWarning ? GIVEBACK_WARNING : PROTECT_PROFIT;
-      PrintFormat("%s #%I64u %s | peak=$%.2f current=$%.2f floor=$%.2f giveback=%.0f%% allowed=%.0f%% runnerClean=%s protected=$%.2f | %s",
+      PrintFormat("%s #%I64u %s | %s context=%s peak=$%.2f current=$%.2f floor=$%.2f giveback=%.0f%% allowed=%.0f%% runnerClean=%s protected=$%.2f | %s",
                   XAU_SmartExitStateName(state),
                   ticket, isBuy ? "BUY" : "SELL",
+                  XAU_ContextAuditTag(contextState),
+                  XAU_ContextStateName(contextState),
                   peak, profitUSD, floorUSD, givebackPct, allowedGiveback,
                   runnerClean ? "Y" : "N", currentLockUSD, trendWhy);
 
-      if(floorBroken || !runnerClean || structureConfirmedBroken || !floorAlreadyProtected)
+      bool floorInvalid = (floorBroken && !thesisHoldAllowed);
+      bool givebackInvalid = (givebackWarning && !thesisHoldAllowed);
+      bool pullbackFailed = (givebackWarning && !runnerClean && !recoveryLikely && !thesisHoldAllowed);
+      bool contextExit = ((contextState == XAU_CONTEXT_TREND_EXHAUSTION && (floorBroken || givebackWarning)) ||
+                          (contextState == XAU_CONTEXT_WEAK_TRADE && givebackWarning));
+      if(floorInvalid || givebackInvalid || pullbackFailed || contextExit)
       {
-         lastExitReason = StringFormat("%s | peak $%.2f floor $%.2f current $%.2f giveback %.0f%% cleanTrend=%s",
+         lastExitReason = StringFormat("%s | %s peak $%.2f floor $%.2f current $%.2f giveback %.0f%% cleanTrend=%s",
                                        XAU_SmartExitStateName(THESIS_BROKEN_EXIT),
+                                       XAU_ContextAuditTag(contextState),
                                        peak, floorUSD, profitUSD, givebackPct,
                                        runnerClean ? "Y" : "N");
          XAU_SetPendingExitReason(ticket, lastExitReason);
          trade.PositionClose(ticket);
          return true;
       }
+      if(thesisHoldAllowed)
+      {
+         PrintFormat("HOLD_RUNNER_THESIS_VALID #%I64u %s | %s context=%s normal pullback protected, no market close | peak=$%.2f current=$%.2f floor=$%.2f giveback=%.0f%% allowed=%.0f%% cleanTrend=%s mins=%d | %s",
+                     ticket, isBuy ? "BUY" : "SELL",
+                     XAU_ContextAuditTag(contextState),
+                     XAU_ContextStateName(contextState),
+                     peak, profitUSD, floorUSD, givebackPct, allowedGiveback,
+                     runnerClean ? "Y" : "N", minsOpen, trendWhy);
+      }
    }
 
    if(TimeCurrent() - g_profitFloorLastLogTime[floorIdx] >= 60)
    {
       XAU_SMART_EXIT_STATE state = runnerClean ? HOLD_RUNNER : PROTECT_PROFIT;
-      PrintFormat("%s #%I64u %s | peak=$%.2f current=$%.2f floor=$%.2f giveback=%.0f%% allowed=%.0f%% protected=$%.2f recoveryLikely=%s mins=%d | %s",
+      PrintFormat("%s #%I64u %s | %s context=%s peak=$%.2f current=$%.2f floor=$%.2f giveback=%.0f%% allowed=%.0f%% protected=$%.2f recoveryLikely=%s mins=%d | %s",
                   XAU_SmartExitStateName(state),
                   ticket, isBuy ? "BUY" : "SELL",
+                  XAU_ContextAuditTag(contextState),
+                  XAU_ContextStateName(contextState),
                   peak, profitUSD, floorUSD, givebackPct, allowedGiveback,
                   currentLockUSD, recoveryLikely ? "Y" : "N", minsOpen, trendWhy);
       g_profitFloorLastLogTime[floorIdx] = TimeCurrent();
@@ -2810,21 +3158,48 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
       return false;
 
    int idx = XAU_EnsureProfitFloorIndex(ticket);
-   double lockPct = MathMax(1.0, MathMin(InpProtectedPeakLockPct, 85.0));
+   double givebackPct = (peak > 0 && profit < peak) ? ((peak - profit) / peak) * 100.0 : 0.0;
+   bool floorRunnerClean = (trendAligned && momentumScore >= 3 && !structureConfirmedBroken);
+   bool floorRecoveryLikely = (floorRunnerClean || (trendAligned && momentumScore >= 3));
+   XAU_TRADE_CONTEXT_STATE contextState = XAU_ClassifyTradeContext(floorRunnerClean, momentumScore,
+                                                                   trendAligned,
+                                                                   structureConfirmedBroken,
+                                                                   false, false,
+                                                                   floorRecoveryLikely,
+                                                                   givebackPct,
+                                                                   profit, peak,
+                                                                   rDollars, 0,
+                                                                   atr, slDist);
+   double baseLockPct = MathMax(1.0, MathMin(InpProtectedPeakLockPct, 85.0));
+   double lockPct = XAU_ContextLockPct(contextState, baseLockPct);
    double floorUSD = MathMax(InpProtectedPeakMinRetainUSD, peak * lockPct / 100.0);
    floorUSD = MathMin(floorUSD, peak * 0.90);
-   double givebackPct = (peak > 0 && profit < peak) ? ((peak - profit) / peak) * 100.0 : 0.0;
+   double allowedGiveback = XAU_ContextAllowedGivebackPct(contextState,
+                                                          InpProtectedPeakGivebackExitPct,
+                                                          floorRecoveryLikely);
    double currentLockUSD = XAU_CurrentSLLockUSD(isBuy, openPx, curSL, lotsOpen);
    bool firstArm = (g_profitFloorLastFloorUSD[idx] <= 0.0);
    bool floorRaised = (floorUSD > g_profitFloorLastFloorUSD[idx] + 0.50);
    bool floorAlreadyProtected = (currentLockUSD + 0.50 >= floorUSD);
    bool floorBroken = (profit <= floorUSD);
-   bool severeGiveback = (givebackPct >= InpProtectedPeakGivebackExitPct);
+   bool severeGiveback = (givebackPct >= allowedGiveback);
+   bool thesisHoldAllowed = XAU_ThesisHoldRunnerAllowed(ticket, isBuy, floorRunnerClean,
+                                                        momentumScore, trendAligned,
+                                                        structureConfirmedBroken,
+                                                        false, false,
+                                                        givebackPct, peak, 0,
+                                                        contextState);
+   if(thesisHoldAllowed && !floorAlreadyProtected && profit <= floorUSD)
+      thesisHoldAllowed = false;
 
    if(firstArm)
    {
-      PrintFormat("PEAK_PROFIT_REACHED #%I64u %s | peak=$%.2f floor=$%.2f current=$%.2f | trendAligned=%s momentum=%d/5 structBroken=%s",
-                  ticket, isBuy ? "BUY" : "SELL", peak, floorUSD, profit,
+      PrintFormat("PEAK_PROFIT_REACHED #%I64u %s | %s context=%s peak=$%.2f floor=$%.2f current=$%.2f lockPct=%.0f%% giveback=%.0f%% allowed=%.0f%% | trendAligned=%s momentum=%d/5 structBroken=%s",
+                  ticket, isBuy ? "BUY" : "SELL",
+                  XAU_ContextAuditTag(contextState),
+                  XAU_ContextStateName(contextState),
+                  peak, floorUSD, profit,
+                  lockPct, givebackPct, allowedGiveback,
                   trendAligned ? "Y" : "N", momentumScore, structureConfirmedBroken ? "Y" : "N");
    }
 
@@ -2847,8 +3222,11 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
       {
          currentLockUSD = floorUSD;
          floorAlreadyProtected = true;
-         PrintFormat("PROFIT_FLOOR_SET #%I64u %s | peak=$%.2f floor=$%.2f current=$%.2f giveback=%.0f%% | SL=%s locks~$%.2f",
-                     ticket, isBuy ? "BUY" : "SELL", peak, floorUSD, profit, givebackPct,
+         PrintFormat("PROFIT_FLOOR_SET #%I64u %s | %s context=%s peak=$%.2f floor=$%.2f current=$%.2f giveback=%.0f%% allowed=%.0f%% | SL=%s locks~$%.2f",
+                     ticket, isBuy ? "BUY" : "SELL",
+                     XAU_ContextAuditTag(contextState),
+                     XAU_ContextStateName(contextState),
+                     peak, floorUSD, profit, givebackPct, allowedGiveback,
                      DoubleToString(floorSL, digits), floorUSD);
       }
    }
@@ -2862,22 +3240,40 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
       }
       if((trendAligned || momentumScore >= 3) && TimeCurrent() - g_profitFloorLastLogTime[idx] >= 60)
       {
-         PrintFormat("CONTINUATION_HOLD_WITH_PROTECTION #%I64u %s | current=$%.2f peak=$%.2f floor=$%.2f protectedSL=$%.2f | momentum=%d/5 trend=%s",
-                     ticket, isBuy ? "BUY" : "SELL", profit, peak, floorUSD,
+         PrintFormat("CONTINUATION_HOLD_WITH_PROTECTION #%I64u %s | %s context=%s current=$%.2f peak=$%.2f floor=$%.2f protectedSL=$%.2f | momentum=%d/5 trend=%s",
+                     ticket, isBuy ? "BUY" : "SELL",
+                     XAU_ContextAuditTag(contextState),
+                     XAU_ContextStateName(contextState),
+                     profit, peak, floorUSD,
                      currentLockUSD, momentumScore, trendAligned ? "Y" : "N");
          g_profitFloorLastLogTime[idx] = TimeCurrent();
       }
       return false;
    }
 
-   if(InpProtectedPeakCloseOnFloorBreak && (floorBroken || severeGiveback || profit <= 0.0))
+   if(thesisHoldAllowed && (floorBroken || severeGiveback || profit <= 0.0))
    {
-      lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED | peak $%.2f floor $%.2f current $%.2f giveback %.0f%%",
-                                    peak, floorUSD, profit, givebackPct);
+      PrintFormat("THESIS_HOLD_PULLBACK #%I64u %s | %s context=%s floor/giveback touched but trade context still valid, holding protected runner | peak=$%.2f current=$%.2f floor=$%.2f giveback=%.0f%% allowed=%.0f%% trend=%s momentum=%d/5 protectedSL=$%.2f",
+                  ticket, isBuy ? "BUY" : "SELL",
+                  XAU_ContextAuditTag(contextState),
+                  XAU_ContextStateName(contextState),
+                  peak, profit, floorUSD, givebackPct,
+                  allowedGiveback,
+                  trendAligned ? "Y" : "N", momentumScore, currentLockUSD);
+      return false;
+   }
+
+   if(InpProtectedPeakCloseOnFloorBreak && !thesisHoldAllowed && (floorBroken || severeGiveback || profit <= 0.0))
+   {
+      lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED | %s peak $%.2f floor $%.2f current $%.2f giveback %.0f%%",
+                                    XAU_ContextAuditTag(contextState), peak, floorUSD, profit, givebackPct);
       string reason = lastExitReason;
-      PrintFormat("GIVEBACK_LIMIT_TRIGGERED #%I64u %s | peak=$%.2f floor=$%.2f current=$%.2f giveback=%.0f%% | protectedSL=$%.2f",
-                  ticket, isBuy ? "BUY" : "SELL", peak, floorUSD, profit, givebackPct, currentLockUSD);
-      PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED #%I64u %s | closing because earned floor was breached; trend=%s momentum=%d/5 structBroken=%s",
+      PrintFormat("GIVEBACK_LIMIT_TRIGGERED #%I64u %s | %s context=%s peak=$%.2f floor=$%.2f current=$%.2f giveback=%.0f%% allowed=%.0f%% | protectedSL=$%.2f",
+                  ticket, isBuy ? "BUY" : "SELL",
+                  XAU_ContextAuditTag(contextState),
+                  XAU_ContextStateName(contextState),
+                  peak, floorUSD, profit, givebackPct, allowedGiveback, currentLockUSD);
+      PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED #%I64u %s | closing because earned floor/context was breached; trend=%s momentum=%d/5 structBroken=%s",
                   ticket, isBuy ? "BUY" : "SELL",
                   trendAligned ? "Y" : "N", momentumScore, structureConfirmedBroken ? "Y" : "N");
       XAU_SetPendingExitReason(ticket, reason);
@@ -3940,6 +4336,10 @@ int OnInit()
    g_aiInfluencedTrades = 0; g_aiInfluencedWins = 0; g_aiInfluencedPnl = 0.0;
    g_nonAiTrades = 0; g_nonAiWins = 0; g_nonAiPnl = 0.0;
    g_peakEquityAudit = accInfo.Equity(); g_maxDrawdownAudit = 0.0;
+   g_growthPauseUntil = 0; g_growthPauseReason = "";
+   g_growthDailyPeakProfit = 0.0; g_growthLossStreak = 0;
+   g_growthLastWinProfit = 0.0; g_growthLastWinAt = 0; g_growthLastWinDir = 0;
+   g_growthLastLossAt = 0; g_growthLastLoss = 0.0;
    currentTradeThesis = ""; currentTradeInvalidation = ""; currentTradeTarget = "";
    currentTradeBearishCase = ""; currentTradeConfidence = 0;
    lastDashSignal = 0; lastDashScore = 0.0; lastDashGrade = "";
@@ -4817,6 +5217,15 @@ void CheckReEntryOpportunity()
 
    // Use latest ATR for new SL sizing; bail if indicators not ready
    if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return;
+
+   string growthReentryWhy = "";
+   if(!XAU_GrowthGuardReEntryAllowed(lastClose.dir, curPrice, bufATR[1], growthReentryWhy))
+   {
+      Print(growthReentryWhy);
+      lastClose.reEntered = true;
+      g_lastSkipReason = growthReentryWhy;
+      return;
+   }
 
    Print("RE-ENTRY TRIGGER (", todayReEntryCount+1, "/", InpMaxReEntriesPerDay, "): last ", lastClose.dir==1?"BUY":"SELL",
          " stopped at ", DoubleToString(lastClose.entryPrice, _Digits),
@@ -6304,6 +6713,22 @@ void CheckPyramidOpportunity()
                            regimeOk && cleanSpread && rescueTurn &&
                            noDivergence);
 
+   bool recoveryLikely = (regimeOk && cleanSpread && noDivergence &&
+                          retestAgainstZone && retestReject && !retestBreakAgainst &&
+                          momentumATR >= 0.20 && adverseATR <= 0.75);
+   string growthPyramidWhy = "";
+   if(!XAU_GrowthGuardCanPyramid(baseProtected, recoveryLikely, rescueCandidate,
+                                 movedATR, adverseATR, dir, growthPyramidWhy))
+   {
+      static datetime lastGrowthPyramidBlockLog = 0;
+      if(TimeCurrent() - lastGrowthPyramidBlockLog >= 60)
+      {
+         Print(growthPyramidWhy);
+         lastGrowthPyramidBlockLog = TimeCurrent();
+      }
+      return;
+   }
+
    if(g_propFirmMode && adverseTrigger)
    {
       if(!g_propFirmAllowOneRetestAdd || !retestRescue)
@@ -6824,6 +7249,7 @@ void CheckPyramidOpportunity()
          " | session=", DoubleToString(sessionQuality, 2),
          " | atrExp=", DoubleToString(atrExpansion, 2),
          " | baseProtected=", baseProtected ? "Y" : "N",
+         " | recoveryLikely=", recoveryLikely ? "Y" : "N",
          " | rescue=", rescueCandidate ? "Y" : "N",
          " | retestRescue=", retestRescue ? "Y" : "N",
          " | rejection=", rescueRejection ? "Y" : "N",
@@ -7324,6 +7750,26 @@ void OnTick()
          lastGateHeartbeat = TimeCurrent();
       }
       // No return. No CloseAll. EA continues.
+   }
+
+   // v6.4.12 — Growth Guard daily profit lock. Once the account has a real
+   // profitable day, do not let active exposure give back the whole day.
+   if(InpGrowthGuardEnable)
+   {
+      string growthDayLockWhy = "";
+      if(XAU_GrowthDailyLockTriggered(growthDayLockWhy))
+      {
+         if(CountMyPositions() > 0)
+         {
+            lastExitReason = "GROWTH_DAILY_LOCK_EXIT | " + growthDayLockWhy;
+            CloseAll(lastExitReason);
+         }
+         XAU_GrowthSetPause(MathMax(30, InpGrowthLossAfterWinPauseMin),
+                            "GROWTH_DAILY_LOCK_PAUSE: " + growthDayLockWhy);
+         g_lastSkipReason = growthDayLockWhy;
+         UpdateDashboard(lastDashSignal, lastDashScore, lastDashGrade);
+         return;
+      }
    }
 
    // v5.8.15: protect the equity curve after a profitable run. This closes open
@@ -9059,20 +9505,68 @@ double NormalizeVolumeDown(double lots)
    return NormalizeDouble(lots, VolumeDigitsForSymbol());
 }
 
+double XAU_ProjectProfitUSD(bool isBuy, double openPrice, double closePrice, double lots)
+{
+   if(openPrice <= 0.0 || closePrice <= 0.0 || lots <= 0.0) return 0.0;
+   double profit = 0.0;
+   ENUM_ORDER_TYPE orderType = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   ResetLastError();
+   if(OrderCalcProfit(orderType, Symbol(), lots, openPrice, closePrice, profit))
+      return profit;
+
+   double move = isBuy ? (closePrice - openPrice) : (openPrice - closePrice);
+   double contractSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_CONTRACT_SIZE);
+   if(contractSize > 0.0)
+      return move * contractSize * lots;
+
+   double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue > 0.0 && tickSize > 0.0)
+      return (move / tickSize) * tickValue * lots;
+   return 0.0;
+}
+
+double XAU_MoneyPerLotForDistance(double dist)
+{
+   if(dist <= 0.0) return 0.0;
+
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double ref = (bid > 0.0 && ask > 0.0) ? ((bid + ask) * 0.5) : SymbolInfoDouble(Symbol(), SYMBOL_LAST);
+   if(ref <= 0.0) ref = iClose(Symbol(), PERIOD_M5, 1);
+   if(ref <= dist) ref = MathMax(ref, dist * 2.0);
+   if(ref <= 0.0) return 0.0;
+
+   double buyProfit = 0.0;
+   double sellProfit = 0.0;
+   double buyLoss = 0.0;
+   double sellLoss = 0.0;
+   if(OrderCalcProfit(ORDER_TYPE_BUY, Symbol(), 1.0, ref, ref - dist, buyProfit))
+      buyLoss = MathAbs(buyProfit);
+   if(OrderCalcProfit(ORDER_TYPE_SELL, Symbol(), 1.0, ref, ref + dist, sellProfit))
+      sellLoss = MathAbs(sellProfit);
+   double brokerMoney = MathMax(buyLoss, sellLoss);
+   if(brokerMoney > 0.0) return brokerMoney;
+
+   double contractSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_CONTRACT_SIZE);
+   if(contractSize > 0.0) return dist * contractSize;
+
+   double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue > 0.0 && tickSize > 0.0)
+      return (dist / tickSize) * tickValue;
+   return 0.0;
+}
+
 double RiskPerLotForDistance(double dist)
 {
-   double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-   double tickSize  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
-   if(dist <= 0 || tickSize <= 0 || tickValue <= 0) return 0.0;
-   return (dist / tickSize) * tickValue;
+   return XAU_MoneyPerLotForDistance(dist);
 }
 
 double CurrentAggregateRiskToSL(double &openLots)
 {
    openLots = 0.0;
    double risk = 0.0;
-   double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-   double tickSize  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
    for(int i = 0; i < PositionsTotal(); i++)
    {
       ulong tk = PositionGetTicket(i);
@@ -9081,11 +9575,344 @@ double CurrentAggregateRiskToSL(double &openLots)
       double v = posInfo.Volume();
       openLots += v;
       double sl = posInfo.StopLoss();
-      if(sl <= 0 || tickSize <= 0 || tickValue <= 0) continue;
-      double dist = MathAbs(posInfo.PriceOpen() - sl);
-      risk += (dist / tickSize) * tickValue * v;
+      if(sl <= 0) continue;
+      bool isBuy = (posInfo.PositionType() == POSITION_TYPE_BUY);
+      double projected = XAU_ProjectProfitUSD(isBuy, posInfo.PriceOpen(), sl, v);
+      if(projected < 0.0) risk += MathAbs(projected);
    }
    return risk;
+}
+
+void XAU_GrowthUpdateDailyPeak()
+{
+   if(dailyStartEquity <= 0.0) return;
+   double dayProfit = AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity;
+   if(dayProfit > g_growthDailyPeakProfit)
+      g_growthDailyPeakProfit = dayProfit;
+}
+
+double XAU_GrowthBasketFloatingProfit()
+{
+   double pnl = 0.0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(!posInfo.SelectByTicket(tk)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      pnl += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+   }
+   return pnl;
+}
+
+void XAU_GrowthSetPause(int minutes, string reason)
+{
+   if(minutes <= 0) return;
+   datetime until = TimeCurrent() + minutes * 60;
+   if(until > g_growthPauseUntil)
+   {
+      g_growthPauseUntil = until;
+      g_growthPauseReason = reason;
+      Print(reason, " | pauseMin=", minutes,
+            " | until=", TimeToString(g_growthPauseUntil, TIME_DATE | TIME_MINUTES));
+   }
+}
+
+bool XAU_GrowthDailyLockTriggered(string &why)
+{
+   if(!InpGrowthGuardEnable || dailyStartEquity <= 0.0) return false;
+   XAU_GrowthUpdateDailyPeak();
+
+   double dayProfit = AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity;
+   double firstArmUSD = dailyStartEquity * InpGrowthDailyLockArmPct / 100.0;
+   double strongArmUSD = dailyStartEquity * InpGrowthDailyStrongLockArmPct / 100.0;
+   if(firstArmUSD <= 0.0 || g_growthDailyPeakProfit < firstArmUSD) return false;
+
+   double retainPct = InpGrowthDailyLockGivebackPct;
+   if(g_growthDailyPeakProfit >= strongArmUSD)
+      retainPct = MathMax(retainPct, InpGrowthDailyStrongLockPct);
+   retainPct = MathMax(5.0, MathMin(retainPct, 95.0));
+
+   double lockGivebackUSD = g_growthDailyPeakProfit * (100.0 - retainPct) / 100.0;
+   if(dayProfit <= g_growthDailyPeakProfit - lockGivebackUSD)
+   {
+      why = StringFormat("GROWTH_DAILY_LOCK_BLOCK: day peak $%.2f now $%.2f retain %.0f%% givebackRoom $%.2f",
+                         g_growthDailyPeakProfit, dayProfit, retainPct, lockGivebackUSD);
+      return true;
+   }
+   if(dayProfit <= 0.0 && g_growthDailyPeakProfit >= firstArmUSD)
+   {
+      why = StringFormat("GROWTH_DAILY_LOCK_BLOCK: day reached $%.2f then returned to $%.2f; no fresh risk",
+                         g_growthDailyPeakProfit, dayProfit);
+      return true;
+   }
+   return false;
+}
+
+string XAU_GrowthGuardEntryBlockReason(int signal, double price, double sl, double tp,
+                                       double atr, string reason)
+{
+   if(!InpGrowthGuardEnable) return "";
+   XAU_GrowthUpdateDailyPeak();
+
+   if(g_growthPauseUntil > TimeCurrent())
+      return "GROWTH_PAUSE_ACTIVE: " + g_growthPauseReason;
+
+   string dayLockWhy = "";
+   if(XAU_GrowthDailyLockTriggered(dayLockWhy))
+      return dayLockWhy;
+
+   if(price > 0.0 && sl > 0.0 && tp > 0.0 && InpGrowthMinEntryRR > 0.0)
+   {
+      double riskUSD = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, sl, 1.0));
+      double rewardUSD = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, tp, 1.0));
+      double rr = (riskUSD > 0.0) ? rewardUSD / riskUSD : 0.0;
+      if(rr > 0.0 && rr < InpGrowthMinEntryRR)
+      {
+         return StringFormat("GROWTH_RR_BLOCK: rr %.2fR < min %.2fR (prefer %.2fR) risk$/lot %.2f reward$/lot %.2f reason=%s",
+                             rr, InpGrowthMinEntryRR, InpGrowthPreferEntryRR,
+                             riskUSD, rewardUSD, reason);
+      }
+   }
+
+   double openLots = 0.0;
+   double openRisk = CurrentAggregateRiskToSL(openLots);
+   double maxBasketRisk = StrategyReferenceBalance() * InpGrowthMaxBasketLossEquityPct / 100.0;
+   if(maxBasketRisk > 0.0 && openRisk >= maxBasketRisk)
+   {
+      return StringFormat("GROWTH_BASKET_RISK_BLOCK: open risk $%.2f on %.2f lots >= max $%.2f",
+                          openRisk, openLots, maxBasketRisk);
+   }
+
+   return "";
+}
+
+double XAU_GrowthGuardCapLots(double lots, double slDollarPerLot, int signal, string reason)
+{
+   if(!InpGrowthGuardEnable || lots <= 0.0 || slDollarPerLot <= 0.0) return lots;
+
+   double minLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   double capped = lots;
+   double equity = StrategyReferenceBalance();
+
+   double maxTradeLoss = equity * InpGrowthMaxTradeLossEquityPct / 100.0;
+   if(maxTradeLoss > 0.0)
+   {
+      double maxTradeLots = maxTradeLoss / slDollarPerLot;
+      if(capped > maxTradeLots)
+      {
+         Print("GROWTH_TRADE_RISK_CAP: ", signal == 1 ? "BUY" : "SELL",
+               " lots ", DoubleToString(capped, VolumeDigitsForSymbol()),
+               " -> ", DoubleToString(maxTradeLots, VolumeDigitsForSymbol()),
+               " | risk $", DoubleToString(capped * slDollarPerLot, 2),
+               " > max $", DoubleToString(maxTradeLoss, 2),
+               " | reason=", reason);
+         capped = maxTradeLots;
+      }
+   }
+
+   double maxBasketLoss = equity * InpGrowthMaxBasketLossEquityPct / 100.0;
+   if(maxBasketLoss > 0.0)
+   {
+      double openLots = 0.0;
+      double openRisk = CurrentAggregateRiskToSL(openLots);
+      double room = maxBasketLoss - openRisk;
+      if(room <= 0.0)
+         capped = 0.0;
+      else if(capped * slDollarPerLot > room)
+      {
+         Print("GROWTH_BASKET_RISK_CAP: lots ",
+               DoubleToString(capped, VolumeDigitsForSymbol()),
+               " -> ", DoubleToString(room / slDollarPerLot, VolumeDigitsForSymbol()),
+               " | openRisk=$", DoubleToString(openRisk, 2),
+               " room=$", DoubleToString(room, 2),
+               " maxBasket=$", DoubleToString(maxBasketLoss, 2));
+         capped = room / slDollarPerLot;
+      }
+   }
+
+   capped = NormalizeVolumeDown(capped);
+   if(capped < minLot) return 0.0;
+   return capped;
+}
+
+bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
+                                   double curPrice, double curSL, double curTP,
+                                   double slDist, double atr, int minsOpen,
+                                   double profit, double lotsOpen,
+                                   int momentumScore, bool trendAligned,
+                                   bool structureConfirmed, bool emaAgainst,
+                                   bool rsiAgainst)
+{
+   if(!InpGrowthGuardEnable) return false;
+   XAU_GrowthUpdateDailyPeak();
+
+   double equity = StrategyReferenceBalance();
+   double maxTradeLossUSD = equity * InpGrowthMaxTradeLossEquityPct / 100.0;
+   double maxBasketLossUSD = equity * InpGrowthMaxBasketLossEquityPct / 100.0;
+   string dirStr = isBuy ? "BUY" : "SELL";
+   bool thesisFailing = (structureConfirmed || (emaAgainst && rsiAgainst) ||
+                         (!trendAligned && momentumScore <= 2));
+
+   double adverseMove = isBuy ? (openPx - curPrice) : (curPrice - openPx);
+   bool badEntryGuardOn = (InpGrowthBadEntryMaxMinutes > 0 && InpGrowthBadEntryLossEquityPct > 0.0);
+   bool earlyAdverse = (minsOpen <= InpGrowthBadEntryMaxMinutes &&
+                        atr > 0.0 &&
+                        adverseMove >= atr * InpGrowthBadEntryAdverseATR);
+   double earlyLossCap = equity * InpGrowthBadEntryLossEquityPct / 100.0;
+   if(badEntryGuardOn && earlyAdverse && thesisFailing && earlyLossCap > 0.0 && profit <= -earlyLossCap)
+   {
+      lastExitReason = StringFormat("BAD_ENTRY_EMERGENCY_EXIT | %s adverse %.2fATR loss $%.2f within %dmin; thesis broken",
+                                    dirStr, adverseMove / MathMax(atr, 0.000001), profit, minsOpen);
+      PrintFormat("BAD_ENTRY_EMERGENCY_EXIT #%I64u %s | open=%.2f cur=%.2f adverse=%.2fATR loss=$%.2f cap=$%.2f struct=%s emaAgainst=%s rsiAgainst=%s momentum=%d/5",
+                  ticket, dirStr, openPx, curPrice,
+                  adverseMove / MathMax(atr, 0.000001), profit, earlyLossCap,
+                  structureConfirmed ? "Y" : "N", emaAgainst ? "Y" : "N",
+                  rsiAgainst ? "Y" : "N", momentumScore);
+      XAU_SetPendingExitReason(ticket, lastExitReason);
+      trade.PositionClose(ticket);
+      lastTradeClose = TimeCurrent();
+      return true;
+   }
+
+   if(maxTradeLossUSD > 0.0 && profit <= -maxTradeLossUSD)
+   {
+      lastExitReason = StringFormat("GROWTH_HARD_LOSS_EXIT | %s loss $%.2f exceeded %.2f%% equity cap $%.2f",
+                                    dirStr, profit, InpGrowthMaxTradeLossEquityPct, maxTradeLossUSD);
+      if(thesisFailing || (badEntryGuardOn && minsOpen <= InpGrowthBadEntryMaxMinutes) || maxTradeLossUSD <= equity * 0.015)
+      {
+         PrintFormat("GROWTH_HARD_LOSS_EXIT #%I64u %s | loss=$%.2f cap=$%.2f thesisFailing=%s mins=%d lots=%.2f",
+                     ticket, dirStr, profit, maxTradeLossUSD,
+                     thesisFailing ? "Y" : "N", minsOpen, lotsOpen);
+         XAU_SetPendingExitReason(ticket, lastExitReason);
+         trade.PositionClose(ticket);
+         lastTradeClose = TimeCurrent();
+         return true;
+      }
+   }
+
+   double basketPnl = XAU_GrowthBasketFloatingProfit();
+   if(maxBasketLossUSD > 0.0 && basketPnl <= -maxBasketLossUSD)
+   {
+      lastExitReason = StringFormat("GROWTH_HARD_LOSS_EXIT BASKET | floating $%.2f <= max basket loss $%.2f",
+                                    basketPnl, maxBasketLossUSD);
+      PrintFormat("GROWTH_HARD_LOSS_EXIT #%I64u %s | basket floating=$%.2f cap=$%.2f closing to protect equity curve",
+                  ticket, dirStr, basketPnl, maxBasketLossUSD);
+      XAU_SetPendingExitReason(ticket, lastExitReason);
+      trade.PositionClose(ticket);
+      lastTradeClose = TimeCurrent();
+      return true;
+   }
+
+   if(badEntryGuardOn && thesisFailing && profit < 0.0 && minsOpen <= MathMax(InpGrowthBadEntryMaxMinutes + 3, 8))
+   {
+      double invalidLoss = MathMin(maxTradeLossUSD, equity * MathMax(InpGrowthBadEntryLossEquityPct, 0.30) / 100.0);
+      if(invalidLoss > 0.0 && profit <= -invalidLoss)
+      {
+         lastExitReason = StringFormat("THESIS_BROKEN_EXIT | %s early invalidation loss $%.2f cap $%.2f",
+                                       dirStr, profit, invalidLoss);
+         PrintFormat("THESIS_BROKEN_EXIT #%I64u %s | loss=$%.2f cap=$%.2f struct=%s emaAgainst=%s rsiAgainst=%s trendAligned=%s momentum=%d/5",
+                     ticket, dirStr, profit, invalidLoss,
+                     structureConfirmed ? "Y" : "N", emaAgainst ? "Y" : "N",
+                     rsiAgainst ? "Y" : "N", trendAligned ? "Y" : "N",
+                     momentumScore);
+         XAU_SetPendingExitReason(ticket, lastExitReason);
+         trade.PositionClose(ticket);
+         lastTradeClose = TimeCurrent();
+         return true;
+      }
+   }
+
+   return false;
+}
+
+bool XAU_GrowthGuardCanPyramid(bool baseProtected, bool recoveryLikely,
+                               bool rescueCandidate, double movedATR,
+                               double adverseATR, int dir, string &why)
+{
+   if(!InpGrowthGuardEnable) return true;
+   if(g_growthPauseUntil > TimeCurrent())
+   {
+      why = "GROWTH_PYRAMID_BLOCK: pause active - " + g_growthPauseReason;
+      return false;
+   }
+   if(InpGrowthRequireProtectedBaseForPyramid && rescueCandidate && !baseProtected &&
+      (!recoveryLikely || adverseATR > 0.75))
+   {
+      why = StringFormat("GROWTH_PYRAMID_BLOCK: rescue add blocked because baseProtected=N recoveryLikely=%s adverse=%.2fATR moved=%.2fATR dir=%s",
+                         recoveryLikely ? "Y" : "N", adverseATR, movedATR,
+                         dir > 0 ? "BUY" : "SELL");
+      return false;
+   }
+   string dayLockWhy = "";
+   if(XAU_GrowthDailyLockTriggered(dayLockWhy))
+   {
+      why = "GROWTH_PYRAMID_BLOCK: " + dayLockWhy;
+      return false;
+   }
+   return true;
+}
+
+bool XAU_GrowthGuardReEntryAllowed(int dir, double curPrice, double atr, string &why)
+{
+   if(!InpGrowthGuardEnable) return true;
+   if(g_growthPauseUntil > TimeCurrent())
+   {
+      why = "GROWTH_REENTRY_BLOCK: pause active - " + g_growthPauseReason;
+      return false;
+   }
+   if(InpGrowthBlockRecoveryReEntryAfterSL &&
+      StringFind(lastClose.exitReason, "BROKER_SL") >= 0)
+   {
+      why = StringFormat("GROWTH_REENTRY_BLOCK: last %s closed by broker SL; blocking automatic recovery re-entry at %.2f until a fresh full setup appears",
+                         dir > 0 ? "BUY" : "SELL", curPrice);
+      return false;
+   }
+   string dayLockWhy = "";
+   if(XAU_GrowthDailyLockTriggered(dayLockWhy))
+   {
+      why = "GROWTH_REENTRY_BLOCK: " + dayLockWhy;
+      return false;
+   }
+   return true;
+}
+
+void XAU_GrowthGuardOnClosedTrade(bool wasWin, bool wasLoss, double profit)
+{
+   if(!InpGrowthGuardEnable) return;
+   XAU_GrowthUpdateDailyPeak();
+
+   if(wasWin)
+   {
+      g_growthLossStreak = 0;
+      g_growthLastWinProfit = MathMax(g_growthLastWinProfit, profit);
+      g_growthLastWinAt = TimeCurrent();
+      g_growthLastWinDir = lastClose.dir;
+      return;
+   }
+   if(!wasLoss) return;
+
+   g_growthLossStreak++;
+   g_growthLastLossAt = TimeCurrent();
+   g_growthLastLoss = profit;
+
+   double equity = StrategyReferenceBalance();
+   double maxNormalLoss = equity * InpGrowthMaxTradeLossEquityPct / 100.0;
+   if(maxNormalLoss > 0.0 && MathAbs(profit) >= maxNormalLoss)
+      XAU_GrowthSetPause(InpGrowthOversizeLossPauseMin,
+                         "GROWTH_OVERSIZE_LOSS_PAUSE: loss $" + DoubleToString(profit, 2) +
+                         " exceeded normal cap $" + DoubleToString(maxNormalLoss, 2));
+
+   if(g_growthLossStreak >= 2)
+      XAU_GrowthSetPause(InpGrowthConsecutiveLossPauseMin,
+                         "GROWTH_CONSEC_LOSS_PAUSE: " + IntegerToString(g_growthLossStreak) +
+                         " losing cycles in a row; stop repeating same weak idea");
+
+   bool recentWin = (g_growthLastWinAt > 0 && TimeCurrent() - g_growthLastWinAt <= 4 * 3600);
+   bool gaveBackWin = (g_growthLastWinProfit > 0.0 && MathAbs(profit) >= g_growthLastWinProfit * 0.50);
+   if(recentWin && gaveBackWin)
+      XAU_GrowthSetPause(InpGrowthLossAfterWinPauseMin,
+                         "GROWTH_LOSS_AFTER_WIN_PAUSE: loss $" + DoubleToString(profit, 2) +
+                         " gave back recent win $" + DoubleToString(g_growthLastWinProfit, 2));
 }
 
 string SetupNameFromType(int setupType)
@@ -9408,6 +10235,31 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       tp = NormalizeDouble(price - slDist * tpM, digits);
    }
 
+   double growthRiskPerLotRR = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, sl, 1.0));
+   double growthRewardPerLotRR = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, tp, 1.0));
+   double growthRR = (growthRiskPerLotRR > 0.0) ? growthRewardPerLotRR / growthRiskPerLotRR : 0.0;
+   if(InpGrowthGuardEnable && InpGrowthMinEntryRR > 0.0 &&
+      growthRR > 0.0 && growthRR < InpGrowthMinEntryRR)
+   {
+      Print("GROWTH_RR_BLOCK: ", signal == 1 ? "BUY" : "SELL",
+            " rr=", DoubleToString(growthRR, 2),
+            "R < min ", DoubleToString(InpGrowthMinEntryRR, 2),
+            "R (prefer ", DoubleToString(InpGrowthPreferEntryRR, 2),
+            "R) risk$/lot=", DoubleToString(growthRiskPerLotRR, 2),
+            " reward$/lot=", DoubleToString(growthRewardPerLotRR, 2),
+            " reason=", reason);
+      g_lastSkipReason = "GROWTH_RR_BLOCK";
+      return;
+   }
+
+   string growthEntryBlock = XAU_GrowthGuardEntryBlockReason(signal, price, sl, tp, atr, reason);
+   if(StringLen(growthEntryBlock) > 0)
+   {
+      Print("TRADE BLOCKED BECAUSE: ", growthEntryBlock);
+      g_lastSkipReason = growthEntryBlock;
+      return;
+   }
+
    // Lot sizing with grade multiplier
    double balance = StrategyReferenceBalance();
    // v4.8.2 — Account Mode preset overrides InpRiskPercent
@@ -9558,14 +10410,18 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    }
 
    double riskAmount = balance * riskPct / 100.0;
-   double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
    double minLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
-   if(tickValue <= 0 || tickSize <= 0 || slDist <= 0) return;
+   if(lotStep <= 0 || slDist <= 0) return;
 
-   double slDollarPerLotRaw = (slDist / tickSize) * tickValue;
+   double slDollarPerLotRaw = RiskPerLotForDistance(slDist);
+   if(slDollarPerLotRaw <= 0.0)
+   {
+      Print("LOT-CALC SKIP: unable to calculate real XAU risk for slDist=",
+            DoubleToString(slDist, 2), ". Trade skipped safely.");
+      return;
+   }
    double rawLots = riskAmount / slDollarPerLotRaw;
    double lots = MathFloor(rawLots / lotStep) * lotStep;
    double brokerLimitedLots = MathMin(maxLot, lots);
@@ -9587,17 +10443,30 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
          return;
       }
    }
-   lots = brokerLimitedLots;
+   else
+      lots = brokerLimitedLots;
    double beforeInpMaxLots = lots;
    if(lots > InpMaxLots) lots = InpMaxLots;
    double afterInpMaxLots = lots;
+
+   double beforeGrowthLots = lots;
+   lots = XAU_GrowthGuardCapLots(lots, slDollarPerLotRaw, signal, reason);
+   if(lots < minLot)
+   {
+      Print("GROWTH_TRADE_RISK_CAP: final lot below broker min after real XAU risk cap. before=",
+            DoubleToString(beforeGrowthLots, VolumeDigitsForSymbol()),
+            " minLot=", DoubleToString(minLot, VolumeDigitsForSymbol()),
+            " sl$/lot=$", DoubleToString(slDollarPerLotRaw, 2),
+            ". Trade skipped.");
+      return;
+   }
 
    // v4.7.5 — HARD EQUITY-% CAP: regardless of risk math, no single trade can
    //   risk more than InpMaxRiskPctEquity% of current equity if SL hits.
    //   This is the absolute backstop that prevents the "5+ lot whacked for $4k"
    //   scenario the user reported on a $100k account. SL distance × tick value
    //   × lots = $-loss-if-SL-hit. Cap that at e.g. 1.5% of equity.
-   if(effectiveSingleCap > 0 && slDist > 0 && tickValue > 0 && tickSize > 0)
+   if(effectiveSingleCap > 0 && slDist > 0 && slDollarPerLotRaw > 0)
    {
       double equity = StrategyReferenceBalance();
       double maxDollarLoss = equity * effectiveSingleCap / 100.0;
@@ -9936,10 +10805,6 @@ void XAU_ResetBasketProtectionState()
 
 double XAU_ReconstructOpenBasketPeakUSD(double currentPnL)
 {
-   double tickVal = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-   double tickSz  = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
-   if(tickVal <= 0.0 || tickSz <= 0.0) return MathMax(0.0, currentPnL);
-
    int commonDir = 0;
    datetime earliestOpen = 0;
    int matched = 0;
@@ -10003,7 +10868,7 @@ double XAU_ReconstructOpenBasketPeakUSD(double currentPnL)
       double openPx = posInfo.PriceOpen();
       double move = isBuy ? (bestPrice - openPx) : (openPx - bestPrice);
       if(move <= 0.0) continue;
-      reconstructed += move * posInfo.Volume() * tickVal / tickSz;
+      reconstructed += MathMax(0.0, XAU_ProjectProfitUSD(isBuy, openPx, bestPrice, posInfo.Volume()));
    }
 
    return MathMax(MathMax(0.0, currentPnL), reconstructed);
@@ -10794,10 +11659,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       if(isAPlus)
       {
          double refBal        = StrategyReferenceBalance();
-         double tickVal       = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-         double tickSz        = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
-         double curProfitUSD  = isBuy ? (curPrice - openPx) : (openPx - curPrice);
-         curProfitUSD        *= lotsOpen * tickVal / tickSz;
+         double curProfitUSD  = XAU_ProjectProfitUSD(isBuy, openPx, curPrice, lotsOpen);
          double peakR         = (rDollars > 0) ? peak / rDollars : 0.0;
 
          // ---- TIER 1: arm condition (observe by default, no BE move) ----
@@ -10880,8 +11742,8 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                      }
 
                      double lockUSD  = MathMax(rDollars * 0.25, peak * InpAPlusShieldPeakLockPct / 100.0);
-                     double lockDist = (tickVal > 0 && lotsOpen > 0)
-                                       ? (lockUSD * tickSz / (lotsOpen * tickVal))
+                     double lockDist = (rDollars > 0.0 && slDist > 0.0)
+                                       ? (lockUSD / rDollars) * slDist
                                        : (slDist * 0.25);
                      double pt3  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
                      long   lvl3 = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
@@ -10984,10 +11846,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    // Re-entry after an AMPL stop is handled by the existing re-entry engine.
    if(InpAMPL_Enable && rDollars > 0)
    {
-      double tickVal_a   = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-      double tickSz_a    = MathMax(SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE), 0.000001);
-      double amplProfit  = isBuy ? (curPrice - openPx) : (openPx - curPrice);
-      amplProfit        *= lotsOpen * tickVal_a / tickSz_a;
+      double amplProfit  = XAU_ProjectProfitUSD(isBuy, openPx, curPrice, lotsOpen);
 
       if(amplProfit > 0 && peak > 0)
       {
@@ -11040,10 +11899,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
             bool ratchet_a  = isBuy ? (amplSL > curSL)            : (amplSL < curSL || curSL == 0);
             double amplLockUSD = 0.0;
             if(inProfit_a)
-            {
-               double lockDist = isBuy ? (amplSL - openPx) : (openPx - amplSL);
-               amplLockUSD = MathMax(0.0, lockDist * lotsOpen * tickVal_a / tickSz_a);
-            }
+               amplLockUSD = MathMax(0.0, XAU_ProjectProfitUSD(isBuy, openPx, amplSL, lotsOpen));
             double amplRequiredLockUSD = MathMax(InpAMPL_MinRetainUSD, peak * InpAMPL_MinRetainPeakPct / 100.0);
             bool amplTinyLockSkipped = false;
             if(givebackSignal && (amplProfit < amplRequiredCurrentUSD || amplLockUSD < amplRequiredLockUSD))
@@ -11230,13 +12086,11 @@ void ManagePositions()
       double slDist = isBuy ? (openPx - curSL) : (curSL - openPx);
       if(slDist <= 0) slDist = atr * InpSLMultiplier;
 
-      // Convert 1R into ACCOUNT CURRENCY so we can compare against `profit` (USD).
-      double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-      double tickSize  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+      // Convert 1R into ACCOUNT CURRENCY using MT5's profit calculator so XAU
+      // loss/profit decisions match actual broker-account P/L.
       double lotsOpen  = posInfo.Volume();
-      double rDollars  = (tickSize > 0 && tickValue > 0)
-                         ? lotsOpen * (slDist / tickSize) * tickValue
-                         : MathMax(30.0, MathAbs(profit));
+      double rDollars  = RiskPerLotForDistance(slDist) * lotsOpen;
+      if(rDollars <= 0.0) rDollars = MathMax(30.0, MathAbs(profit));
 
       // Track peak (for retrace exit + logging)
       double peak = UpdatePeakProfit(ticket, profit);
@@ -11258,6 +12112,15 @@ void ManagePositions()
 	      bool recoveryLikelyEA = CleanRecoveryLikely(isBuy, trendAlignedEA, momentumScoreEA,
 	                                                   structureConfirmedEA, emaAgainstEA,
 	                                                   rsiAgainstEA, rMultEA);
+
+      if(XAU_GrowthGuardManagePosition(ticket, isBuy, openPx, curPrice, curSL, curTP,
+                                       slDist, atr, minsOpen, profit, lotsOpen,
+                                       momentumScoreEA, trendAlignedEA,
+                                       structureConfirmedEA, emaAgainstEA, rsiAgainstEA))
+      {
+         lastTradeClose = TimeCurrent();
+         continue;
+      }
 
       // v6.4.8 PROTECTED PEAK FLOOR
       // Trend Continuation Mode may justify holding winners longer, but it must
@@ -12976,7 +13839,8 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
 
    // v6.3.5: enriched exit payload — add rMult, HTF consensus, session, setup, daily %, positions
    double slDist2 = MathAbs(entry - sl);
-   double rMult2  = (slDist2 > 0 && profit != 0) ? profit / (slDist2 * lots * SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE) * SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE)) : 0;
+   double oneR2 = RiskPerLotForDistance(slDist2) * lots;
+   double rMult2  = (oneR2 > 0 && profit != 0) ? profit / oneR2 : 0;
    // Simplified rMult: use profit vs estimated 1R (peakProfit can help gauge scale)
    string htfConsStr = (g_htfConsensusDir == 1) ? "BULL" : (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL";
    double dailyPct2  = (dailyStartEquity > 0) ? ((AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0) : 0.0;
@@ -15243,10 +16107,9 @@ void XAU_RemoveBrainOpen(int idx)
 
 double XAU_MoveToMoney(double move, double lots)
 {
-   double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
-   if(tickValue <= 0.0 || tickSize <= 0.0 || lots <= 0.0) return 0.0;
-   return (move / tickSize) * tickValue * lots;
+   if(lots <= 0.0) return 0.0;
+   double money = XAU_MoneyPerLotForDistance(MathAbs(move)) * lots;
+   return move < 0.0 ? -money : money;
 }
 
 void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
@@ -17187,6 +18050,8 @@ void PG_OnBasketWin()
 
 void RegisterClosedTradeCooldown(bool wasWin, bool wasLoss, double profit)
 {
+   XAU_GrowthGuardOnClosedTrade(wasWin, wasLoss, profit);
+
    if(wasWin)
    {
       PG_OnBasketWin();
@@ -19175,6 +20040,21 @@ string XAUAI_InputHash()
                      InpLifecycleMaxProfitLossCycles,
                      InpLifecycleAdverseAfterProfitPct,
                      InpLifecycleMaxMinutesAfterPeak);
+   s += StringFormat("growthGuard=%d,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d|",
+                     InpGrowthGuardEnable ? 1 : 0,
+                     InpGrowthMaxTradeLossEquityPct,
+                     InpGrowthMaxBasketLossEquityPct,
+                     InpGrowthMinEntryRR,
+                     InpGrowthDailyLockArmPct,
+                     InpGrowthDailyLockGivebackPct,
+                     InpGrowthRequireProtectedBaseForPyramid ? 1 : 0,
+                     InpGrowthBlockRecoveryReEntryAfterSL ? 1 : 0);
+   s += StringFormat("thesisHold=%d,%d,%.2f,%.2f,%d|",
+                     InpThesisHoldRunnerEnable ? 1 : 0,
+                     InpThesisHoldMinHoldMinutes,
+                     InpThesisHoldMinPeakUSD,
+                     InpThesisHoldMaxGivebackPct,
+                     InpThesisHoldReentryCooldownMin);
    s += StringFormat("symbol=%s|tf=M5|digits=%d|point=%s",
                      Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
                      DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), 8));

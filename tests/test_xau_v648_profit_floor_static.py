@@ -11,15 +11,15 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_v6411_version_and_backend_copy_match():
+def test_v6412_version_and_backend_copy_match():
     root = read(EA_ROOT)
     backend = read(EA_BACKEND)
 
     assert root == backend
-    assert '#property version   "6.4.11"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.11"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.11"' in root
-    assert '#define XAUAI_BUILD_HASH "v6411-smart-exit-3layer-20260630"' in root
+    assert '#property version   "6.4.12"' in root
+    assert '#define XAUAI_EA_VERSION "v6.4.12"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.4.12"' in root
+    assert '#define XAUAI_BUILD_HASH "v6412-equity-growth-guard-20260630"' in root
 
 
 def test_protected_peak_floor_inputs_helpers_and_logs_exist():
@@ -59,7 +59,9 @@ def test_floor_break_can_close_even_when_continuation_wants_to_hold():
     helper = ea[ea.index("bool XAU_ProtectPeakProfitFloor"):ea.index("//+------------------------------------------------------------------+\n//| v4.9.4 — BASKET PROTECT")]
 
     assert re.search(r"profit\s*<=\s*floorUSD", helper)
-    assert re.search(r"givebackPct\s*>=\s*InpProtectedPeakGivebackExitPct", helper)
+    assert "XAU_ContextAllowedGivebackPct(contextState" in helper
+    assert "InpProtectedPeakGivebackExitPct" in helper
+    assert re.search(r"givebackPct\s*>=\s*allowedGiveback", helper)
     assert "trade.PositionClose(ticket)" in helper
     assert "lastExitReason = StringFormat(\"CONTINUATION_EXIT_PROFIT_PROTECTED" in helper
     assert "trendAligned" in helper and "momentumScore" in helper
