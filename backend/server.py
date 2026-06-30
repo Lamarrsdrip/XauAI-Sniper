@@ -548,7 +548,7 @@ def _get_ea_meta(src: str) -> dict:
     # Match e.g. "v6.3.6 — AI Director + ML Warm-Start + Adaptive Exits"
     m = re.search(r'v(\d+\.\d+\.\d+)\s*[—\-]+\s*(.+)', src[:3000])
     version = f"v{m.group(1)}" if m else "v6.x.x"
-    edition_full = m.group(2).strip() if m else "AI Director"
+    edition_full = m.group(2).strip().rstrip("|").strip() if m else "AI Director"
     # Slug for filename: keep only alpha/digits, collapse to underscores
     edition_slug = re.sub(r'[^A-Za-z0-9]+', '_', edition_full).strip('_').upper()
     filename = f"XAUUSD_AI_Sniper_EA_MASTER_{version}_{edition_slug}.mq5"

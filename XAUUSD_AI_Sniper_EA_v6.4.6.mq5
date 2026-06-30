@@ -1,9 +1,21 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.13 — Live Report Heartbeat                                |
+//|   v6.4.14 — Lot Sizing Audit + Context-Aware Memory Floor        |
 //|            v6.4.7 trend-continuation/news fast-track preserved       |
 //+------------------------------------------------------------------+
+// v6.4.14 CHANGES (2026-06-30) — LOT SIZING AUDIT + MEMORY FLOOR:
+//
+//   1. Adds full LOT-SIZING-AUDIT logs showing base risk, balance, SL,
+//      ATR, raw lot, broker limits, risk-math lot, multipliers, Growth
+//      Guard cap, basket cap, final lot, and micro-collapse reason.
+//   2. Prevents broad aggregate memory from crushing clean A/A+ HTF
+//      consensus setups below a context-aware floor until exact TradeBrain
+//      evidence has enough samples.
+//   3. Adds risk-aware broker-step normalization so lots can round to the
+//      nearest step only when the extra SL risk is inside a configured
+//      tolerance.
+//
 // v6.4.13 CHANGES (2026-06-30) — LIVE REPORT HEARTBEAT:
 //
 //   1. Adds a local report heartbeat so GateReport / ForwardTest files refresh
