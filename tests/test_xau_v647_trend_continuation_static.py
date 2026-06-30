@@ -16,9 +16,9 @@ def test_v6412_version_and_backend_copy_match():
     backend = read(EA_BACKEND)
 
     assert root == backend
-    assert '#property version   "6.4.12"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.12"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.12"' in root
+    assert '#property version   "6.4.13"' in root
+    assert '#define XAUAI_EA_VERSION "v6.4.13"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.4.13"' in root
 
 
 def test_trend_continuation_inputs_and_helpers_exist():

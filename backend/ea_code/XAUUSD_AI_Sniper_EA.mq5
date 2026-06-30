@@ -1,9 +1,20 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.12 — Adaptive Trade Management + Growth Guard             |
+//|   v6.4.13 — Live Report Heartbeat                                |
 //|            v6.4.7 trend-continuation/news fast-track preserved       |
 //+------------------------------------------------------------------+
+// v6.4.13 CHANGES (2026-06-30) — LIVE REPORT HEARTBEAT:
+//
+//   1. Adds a local report heartbeat so GateReport / ForwardTest files refresh
+//      during live scanning instead of only at startup, deinit, and 23:59.
+//   2. Adds live status fields: heartbeat time, last scan time, trade state,
+//      open positions, spread, current skip/block reason, last trade reason,
+//      news state, and exit engine state.
+//   3. Fixes stale report identity: ForwardTest now prints the actual runtime
+//      version/build instead of the old v6.3.9 label.
+//   4. Trading decisions are untouched. This is observability only.
+//
 // v6.4.12 CHANGES (2026-06-30) — ADAPTIVE TRADE MANAGEMENT + EQUITY GROWTH GUARD:
 //
 //   1. Replaces broker tick-value shortcuts with OrderCalcProfit-based XAUUSD
@@ -516,16 +527,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.12"
-#property description "XAUUSD AI Sniper v6.4.12 — equity growth guard + real XAU risk math"
+#property version   "6.4.13"
+#property description "XAUUSD AI Sniper v6.4.13 - probability EV exit engine + live heartbeat"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.12"
-#define XAUAI_EA_VERSION_NUM "6.4.12"
-#define XAUAI_BUILD_HASH "v6412-equity-growth-guard-20260630"
+#define XAUAI_EA_VERSION "v6.4.13"
+#define XAUAI_EA_VERSION_NUM "6.4.13"
+#define XAUAI_BUILD_HASH "v6413-probability-ev-exit-20260630"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -805,6 +816,7 @@ input double InpEntryQualityScoutRiskCap    = 0.25;  // Tiny scouts cannot be ra
 input bool   InpTradingIntelDataset        = true;  // Unified CSV/JSONL black-box recorder for trades, blocks, vetoes, exits, cloud
 input bool   InpTradingIntelJson           = true;  // Also write JSONL rows for external analysis tools
 input bool   InpMarketIntelSnapshots       = true;  // Record one market-state row per M5 scan for Codex analysis
+input int    InpLocalReportHeartbeatSec    = 300;   // Refresh Gate/Forward/Heartbeat reports while live scanning; 0 disables
 input bool   InpStartupIntelSync           = true;  // Recover local memory + open positions + chart context before fresh entries
 input int    InpStartupIntelMinCandles     = 200;   // Startup context target; does not wait for 4h shadow outcomes
 input bool   InpAcceleratedLearningMode    = true;  // After evidence builds, adapt ranking/confidence only; never risk controls
@@ -1280,6 +1292,16 @@ input double InpSmartExitNeutralGivebackPct   = 50.0;  // Mixed trend max giveba
 input double InpSmartExitStrongGivebackPct    = 65.0;  // Clean M5/M15 trend max giveback from peak
 input bool   InpSmartExitM15Confirm           = true;  // Runner needs M15 confirmation, not just M5 noise
 
+input group "=== PROBABILITY EV EXIT ENGINE (v6.4.13) ==="
+input bool   InpEVExitEngineEnable            = true;  // Continuously score hold/protect/partial/exit by probability and EV
+input double InpEVMinHoldEdgeUSD              = 25.0;  // Hold only when expected continuation clearly beats exit/protect value
+input double InpEVExitEdgeUSD                 = 15.0;  // Exit/protect only when expected giveback risk has a real dollar edge
+input double InpEVContinuationHigh            = 0.62;  // Continuation probability needed for patient runner behavior
+input double InpEVExhaustionHigh              = 0.58;  // Exhaustion/reversal probability needed for aggressive protection
+input double InpEVReviewMinMoveATR            = 1.20;  // Post-close review must see this much follow-through/reversal to learn
+input double InpEVLearningBiasStep            = 0.04;  // Self-review adjustment step for future hold-vs-protect thresholds
+input double InpEVLearningBiasMax             = 0.18;  // Hard cap so learning nudges decisions but never takes over
+
 input group "=== TRADE LIFECYCLE MANAGER (v6.4.9) ==="
 input bool   InpTradeLifecycleEnable          = true;  // Prevent proven winners from cycling profit-loss-profit-loss without action
 input double InpLifecyclePeakMinUSD           = 75.0;  // Basket lifecycle arms once floating profit reaches this level
@@ -1627,6 +1649,8 @@ datetime g_growthLastWinAt = 0;
 int      g_growthLastWinDir = 0;
 datetime g_growthLastLossAt = 0;
 double   g_growthLastLoss = 0.0;
+double   g_evExitLearningBias = 0.0; // positive = exits were early, negative = protects earlier
+int      g_evExitReviewCount = 0;
 
 // ====================================================================
 // v5.5.0 — Equity Preservation Framework state
@@ -2003,6 +2027,7 @@ int g_gateBlocks_EPF        = 0;
 int g_totalSignals          = 0;
 int g_totalAllowed          = 0;
 datetime g_gateReportLast   = 0;  // last time 24h report was printed
+datetime g_localReportHeartbeatLast = 0;  // last live refresh of local report files
 
 // v6.3.8 UPGRADE 7 — Equity high watermark + drawdown pause
 double   g_equityHighWatermark = 0.0;  // updated whenever equity exceeds previous high
@@ -2860,6 +2885,196 @@ double XAU_ContextLockPct(XAU_TRADE_CONTEXT_STATE contextState, double baseLockP
    return baseLockPct;
 }
 
+enum XAU_EV_ACTION
+{
+   XAU_EV_HOLD = 0,
+   XAU_EV_PROTECT,
+   XAU_EV_PARTIAL,
+   XAU_EV_EXIT
+};
+
+struct XAU_EV_DECISION
+{
+   XAU_EV_ACTION decision;
+   double continuationProb;
+   double exhaustionProb;
+   double reversalProb;
+   double remainingPotentialUSD;
+   double profitAtRiskUSD;
+   double holdEV;
+   double exitEV;
+   double liquidityRoomATR;
+   double momentumScoreNorm;
+   string reason;
+};
+
+double XAU_Clamp01(double v)
+{
+   return MathMax(0.0, MathMin(1.0, v));
+}
+
+string XAU_EVDecisionName(XAU_EV_ACTION action)
+{
+   switch(action)
+   {
+      case XAU_EV_HOLD:    return "XAU_EV_HOLD";
+      case XAU_EV_PROTECT: return "XAU_EV_PROTECT";
+      case XAU_EV_PARTIAL: return "XAU_EV_PARTIAL";
+      case XAU_EV_EXIT:    return "XAU_EV_EXIT";
+   }
+   return "XAU_EV_HOLD";
+}
+
+XAU_EV_DECISION XAU_EvaluateExitEV(bool isBuy,
+                                   XAU_TRADE_CONTEXT_STATE contextState,
+                                   bool runnerClean,
+                                   int momentumScore,
+                                   bool trendAligned,
+                                   bool structureConfirmedBroken,
+                                   bool emaAgainst,
+                                   bool rsiAgainst,
+                                   bool recoveryLikely,
+                                   double givebackPct,
+                                   double profitUSD,
+                                   double peak,
+                                   double rDollars,
+                                   double lotsOpen,
+                                   double atr,
+                                   double openPx,
+                                   double curPrice,
+                                   int minsOpen,
+                                   double floorUSD,
+                                   double currentLockUSD)
+{
+   XAU_EV_DECISION ev;
+   ev.decision = XAU_EV_HOLD;
+   ev.continuationProb = 0.50;
+   ev.exhaustionProb = 0.30;
+   ev.reversalProb = 0.20;
+   ev.remainingPotentialUSD = 0.0;
+   ev.profitAtRiskUSD = 0.0;
+   ev.holdEV = 0.0;
+   ev.exitEV = 0.0;
+   ev.liquidityRoomATR = 0.0;
+   ev.momentumScoreNorm = XAU_Clamp01((double)momentumScore / 5.0);
+   ev.reason = "EV_DISABLED";
+
+   if(!InpEVExitEngineEnable || profitUSD <= 0.0 || peak <= 0.0 || lotsOpen <= 0.0)
+      return ev;
+
+   int signal = isBuy ? 1 : -1;
+   bool htfWithTrade = (g_htfConsensusDir == signal);
+   bool htfAgainst = (g_htfConsensusDir == -signal);
+   bool hardBreak = (structureConfirmedBroken || (emaAgainst && rsiAgainst && momentumScore <= 2));
+   double confidence = XAU_Clamp01((double)currentTradeConfidence / 100.0);
+
+   ev.continuationProb += runnerClean ? 0.12 : -0.08;
+   ev.continuationProb += trendAligned ? 0.10 : -0.07;
+   ev.continuationProb += htfWithTrade ? 0.09 : (htfAgainst ? -0.12 : 0.0);
+   ev.continuationProb += (ev.momentumScoreNorm - 0.50) * 0.22;
+   ev.continuationProb += recoveryLikely ? 0.04 : -0.03;
+   ev.continuationProb += (confidence - 0.50) * 0.08;
+   ev.continuationProb += g_evExitLearningBias;
+
+   ev.exhaustionProb += hardBreak ? 0.24 : 0.0;
+   ev.exhaustionProb += (!trendAligned ? 0.08 : -0.03);
+   ev.exhaustionProb += (givebackPct >= 45.0 ? 0.08 : 0.0);
+   ev.exhaustionProb += (givebackPct >= 65.0 ? 0.10 : 0.0);
+   ev.exhaustionProb += (minsOpen > InpLifecycleMaxMinutesAfterPeak ? 0.05 : 0.0);
+   ev.exhaustionProb -= (runnerClean && momentumScore >= 4 ? 0.09 : 0.0);
+   ev.exhaustionProb -= g_evExitLearningBias * 0.50;
+
+   ev.reversalProb += structureConfirmedBroken ? 0.22 : 0.0;
+   ev.reversalProb += (emaAgainst ? 0.07 : 0.0) + (rsiAgainst ? 0.06 : 0.0);
+   ev.reversalProb += htfAgainst ? 0.09 : 0.0;
+   ev.reversalProb += (contextState == XAU_CONTEXT_TREND_EXHAUSTION ? 0.12 : 0.0);
+   ev.reversalProb += (contextState == XAU_CONTEXT_WEAK_TRADE ? 0.06 : 0.0);
+   ev.reversalProb -= (runnerClean && htfWithTrade ? 0.08 : 0.0);
+
+   int lookback = 48;
+   int highShift = iHighest(Symbol(), PERIOD_M5, MODE_HIGH, lookback, 1);
+   int lowShift = iLowest(Symbol(), PERIOD_M5, MODE_LOW, lookback, 1);
+   double localHigh = (highShift >= 0) ? iHigh(Symbol(), PERIOD_M5, highShift) : curPrice;
+   double localLow = (lowShift >= 0) ? iLow(Symbol(), PERIOD_M5, lowShift) : curPrice;
+   double room = isBuy ? (localHigh - curPrice) : (curPrice - localLow);
+   if(atr > 0.0)
+      ev.liquidityRoomATR = MathMax(0.0, room / atr);
+   else
+      ev.liquidityRoomATR = 0.0;
+
+   if(ev.liquidityRoomATR >= 2.0) ev.continuationProb += 0.08;
+   else if(ev.liquidityRoomATR <= 0.60)
+   {
+      ev.exhaustionProb += 0.10;
+      ev.reversalProb += 0.05;
+   }
+
+   if(g_marketPersonality == MKT_STRONG_TREND || g_marketPersonality == MKT_MOMENTUM_CONT)
+      ev.continuationProb += 0.06;
+   else if(g_marketPersonality == MKT_COMPRESSION || g_marketPersonality == MKT_RANGE)
+      ev.exhaustionProb += 0.05;
+   else if(g_marketPersonality == MKT_EXPANSION)
+      ev.continuationProb += (momentumScore >= 4 ? 0.08 : -0.02);
+   else if(g_marketPersonality == MKT_REVERSAL_ENV)
+      ev.reversalProb += 0.08;
+
+   if(contextState == XAU_CONTEXT_STRONG_TREND) ev.continuationProb += 0.08;
+   if(contextState == XAU_CONTEXT_NORMAL_PULLBACK && recoveryLikely) ev.continuationProb += 0.04;
+   if(contextState == XAU_CONTEXT_EXPLOSIVE_MOVE)
+   {
+      ev.continuationProb += (momentumScore >= 4 && runnerClean) ? 0.06 : -0.04;
+      ev.exhaustionProb += (givebackPct >= 25.0 || ev.liquidityRoomATR <= 0.80) ? 0.12 : 0.04;
+   }
+   if(contextState == XAU_CONTEXT_TREND_EXHAUSTION) ev.exhaustionProb += 0.16;
+   if(contextState == XAU_CONTEXT_WEAK_TRADE) ev.exhaustionProb += 0.10;
+
+   ev.continuationProb = XAU_Clamp01(ev.continuationProb);
+   ev.exhaustionProb = XAU_Clamp01(ev.exhaustionProb);
+   ev.reversalProb = XAU_Clamp01(ev.reversalProb);
+
+   double availableRoomATR = MathMax(0.35, MathMin(ev.liquidityRoomATR, 4.0));
+   if(ev.liquidityRoomATR <= 0.0 && runnerClean)
+      availableRoomATR = 1.25;
+   double remainingMove = MathMax(atr * 0.35, atr * availableRoomATR);
+   ev.remainingPotentialUSD = XAU_MoneyPerLotForDistance(remainingMove) * lotsOpen;
+   double protectedUSD = MathMax(currentLockUSD, floorUSD);
+   ev.profitAtRiskUSD = MathMax(0.0, profitUSD - protectedUSD);
+   double givebackRiskUSD = MathMax(ev.profitAtRiskUSD, MathMax(rDollars * 0.20, peak * givebackPct / 100.0));
+
+   ev.holdEV = ev.continuationProb * ev.remainingPotentialUSD -
+               (ev.exhaustionProb * 0.85 + ev.reversalProb * 1.20) * givebackRiskUSD;
+   ev.exitEV = (ev.exhaustionProb + ev.reversalProb * 1.15) * ev.profitAtRiskUSD;
+
+   bool exitEdge = (ev.exitEV >= ev.holdEV + InpEVExitEdgeUSD);
+   bool holdEdge = (ev.holdEV >= ev.exitEV + InpEVMinHoldEdgeUSD);
+   if(hardBreak && exitEdge && ev.reversalProb >= InpEVExhaustionHigh)
+      ev.decision = XAU_EV_EXIT;
+   else if(contextState == XAU_CONTEXT_TREND_EXHAUSTION && exitEdge)
+      ev.decision = XAU_EV_EXIT;
+   else if(contextState == XAU_CONTEXT_EXPLOSIVE_MOVE &&
+           ev.exhaustionProb >= InpEVExhaustionHigh &&
+           ev.profitAtRiskUSD >= InpEVExitEdgeUSD)
+      ev.decision = XAU_EV_PARTIAL;
+   else if(holdEdge && ev.continuationProb >= InpEVContinuationHigh)
+      ev.decision = XAU_EV_HOLD;
+   else if(ev.exhaustionProb >= InpEVExhaustionHigh ||
+           ev.reversalProb >= InpEVExhaustionHigh ||
+           ev.profitAtRiskUSD >= InpEVExitEdgeUSD)
+      ev.decision = XAU_EV_PROTECT;
+   else
+      ev.decision = XAU_EV_HOLD;
+
+   ev.reason = StringFormat("%s continuationProb=%.2f exhaustionProb=%.2f reversalProb=%.2f remainingPotentialUSD=$%.2f profitAtRiskUSD=$%.2f holdEV=$%.2f exitEV=$%.2f liquidityRoomATR=%.2f momentumScore=%d runnerClean=%s htf=%d personality=%s confidence=%d bias=%.2f",
+                            XAU_EVDecisionName(ev.decision),
+                            ev.continuationProb, ev.exhaustionProb, ev.reversalProb,
+                            ev.remainingPotentialUSD, ev.profitAtRiskUSD,
+                            ev.holdEV, ev.exitEV, ev.liquidityRoomATR,
+                            momentumScore, runnerClean ? "Y" : "N",
+                            g_htfConsensusDir, MarketPersonalityStr(g_marketPersonality),
+                            currentTradeConfidence, g_evExitLearningBias);
+   return ev;
+}
+
 bool XAU_ContextShouldTakePartial(XAU_TRADE_CONTEXT_STATE contextState,
                                   bool runnerClean,
                                   double profitUSD, double peak,
@@ -3027,12 +3242,91 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
       }
    }
 
+   XAU_EV_DECISION ev = XAU_EvaluateExitEV(isBuy, contextState, runnerClean,
+                                           momentumScore, trendAligned,
+                                           structureConfirmedBroken, emaAgainst,
+                                           rsiAgainst, recoveryLikely,
+                                           givebackPct, profitUSD, peak,
+                                           rDollars, lotsOpen, atr, openPx,
+                                           curPrice, minsOpen, floorUSD,
+                                           currentLockUSD);
+
+   if(InpEVExitEngineEnable)
+   {
+      if(ev.decision == XAU_EV_EXIT)
+      {
+         PrintFormat("EV_EXIT #%I64u %s | %s context=%s %s | peak=$%.2f current=$%.2f floor=$%.2f protected=$%.2f",
+                     ticket, isBuy ? "BUY" : "SELL",
+                     XAU_ContextAuditTag(contextState),
+                     XAU_ContextStateName(contextState),
+                     ev.reason, peak, profitUSD, floorUSD, currentLockUSD);
+         lastExitReason = "EV_EXIT | " + ev.reason;
+         XAU_SetPendingExitReason(ticket, lastExitReason);
+         trade.PositionClose(ticket);
+         return true;
+      }
+
+      if(ev.decision == XAU_EV_PROTECT || ev.decision == XAU_EV_PARTIAL)
+      {
+         double evLockPct = (ev.decision == XAU_EV_PARTIAL) ? 70.0 : 60.0;
+         if(ev.exhaustionProb >= 0.70 || ev.reversalProb >= 0.65)
+            evLockPct = MathMax(evLockPct, 75.0);
+         lockPct = MathMax(lockPct, evLockPct);
+         allowedGiveback = MathMin(allowedGiveback, ev.decision == XAU_EV_PARTIAL ? 38.0 : 32.0);
+         floorUSD = MathMax(floorUSD, MathMax(InpSmartExitMinRetainUSD, peak * lockPct / 100.0));
+         floorUSD = MathMin(floorUSD, peak * 0.92);
+
+         bool evFloorRaised = (floorUSD > g_profitFloorLastFloorUSD[floorIdx] + 0.50);
+         if(evFloorRaised)
+            g_profitFloorLastFloorUSD[floorIdx] = floorUSD;
+
+         currentLockUSD = XAU_CurrentSLLockUSD(isBuy, openPx, curSL, lotsOpen);
+         floorAlreadyProtected = (currentLockUSD + 0.50 >= floorUSD);
+         if(!floorAlreadyProtected && profitUSD > floorUSD)
+         {
+            double evLockDist = (floorUSD / rDollars) * slDist;
+            double evLockPx = isBuy ? NormalizeDouble(openPx + evLockDist, digits)
+                                    : NormalizeDouble(openPx - evLockDist, digits);
+            double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+            long stopsLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+            double buffer = MathMax(stopsLevel * point, point * 30);
+            bool sane = isBuy ? (evLockPx > openPx && evLockPx < curPrice - buffer)
+                              : (evLockPx < openPx && evLockPx > curPrice + buffer);
+            bool ratchet = isBuy ? (evLockPx > curSL) : (evLockPx < curSL || curSL == 0.0);
+            if(sane && ratchet && SafeModifySL(ticket, evLockPx, curTP, isBuy, curPrice,
+                                               ev.decision == XAU_EV_PARTIAL ? "EV_PARTIAL_PROTECT" : "EV_PROTECT"))
+            {
+               floorModified = true;
+               floorAlreadyProtected = true;
+               currentLockUSD = floorUSD;
+            }
+         }
+
+         PrintFormat("%s #%I64u %s | %s context=%s %s | peak=$%.2f current=$%.2f floor=$%.2f protected=$%.2f allowedGiveback=%.0f%%",
+                     ev.decision == XAU_EV_PARTIAL ? "EV_PARTIAL" : "EV_PROTECT",
+                     ticket, isBuy ? "BUY" : "SELL",
+                     XAU_ContextAuditTag(contextState),
+                     XAU_ContextStateName(contextState),
+                     ev.reason, peak, profitUSD, floorUSD, currentLockUSD, allowedGiveback);
+      }
+      else if(ev.decision == XAU_EV_HOLD && TimeCurrent() - g_profitFloorLastLogTime[floorIdx] >= 60)
+      {
+         PrintFormat("EV_HOLD #%I64u %s | %s context=%s %s | peak=$%.2f current=$%.2f floor=$%.2f",
+                     ticket, isBuy ? "BUY" : "SELL",
+                     XAU_ContextAuditTag(contextState),
+                     XAU_ContextStateName(contextState),
+                     ev.reason, peak, profitUSD, floorUSD);
+      }
+   }
+
    bool partialsAllowed = (InpSmartExitPartialIgnoresCloudSafe || !InpCloudSafeDisablePartials);
    bool contextPartial = XAU_ContextShouldTakePartial(contextState,
                                                       runnerClean,
                                                       profitUSD, peak,
                                                       strongProfitUSD,
                                                       rDollars, minsOpen);
+   if(InpEVExitEngineEnable && ev.decision == XAU_EV_PARTIAL)
+      contextPartial = true;
    if(partialsAllowed && contextPartial && floorAlreadyProtected &&
       !CleanPartialAlreadyTaken(ticket) && InpSmartExitPartialPct > 0.0)
    {
@@ -3062,6 +3356,15 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                                                         emaAgainst, rsiAgainst,
                                                         givebackPct, peak, minsOpen,
                                                         contextState);
+   if(InpEVExitEngineEnable && ev.decision == XAU_EV_HOLD &&
+      ev.continuationProb >= InpEVContinuationHigh &&
+      ev.holdEV >= ev.exitEV + InpEVMinHoldEdgeUSD &&
+      floorAlreadyProtected &&
+      !structureConfirmedBroken)
+      thesisHoldAllowed = true;
+   if(InpEVExitEngineEnable && (ev.decision == XAU_EV_PROTECT || ev.decision == XAU_EV_PARTIAL) &&
+      (ev.exhaustionProb >= InpEVExhaustionHigh || ev.reversalProb >= InpEVExhaustionHigh))
+      thesisHoldAllowed = false;
    if(thesisHoldAllowed && !floorAlreadyProtected && profitUSD <= floorUSD)
    {
       PrintFormat("HOLD_RUNNER_THESIS_VALID #%I64u %s | %s context=%s but earned floor is not protected; disabling hold override | peak=$%.2f current=$%.2f floor=$%.2f",
@@ -4583,6 +4886,7 @@ int OnInit()
          InpSTI_ExhaustionBlock, InpSTI_ExhaustionReduce,
          InpSTI_TCPContinueMinimum,
          InpSTI_ReentryPullbackATR, InpSTI_ReentryMinWaitMin));
+   XAU_WriteLocalReportHeartbeat(true);
    return INIT_SUCCEEDED;
 }
 
@@ -4601,7 +4905,8 @@ void OnDeinit(const int reason)
    WriteGateReportToFile();
    // v6.3.9: final forward-test report on shutdown
    WriteForwardTestReport();
-   Print("=== v6.3.9 STI STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
+   XAU_WriteLocalReportHeartbeat(true);
+   Print("=== ", XAUAI_EA_VERSION, " STI STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
 void OnTimer()
@@ -7602,6 +7907,7 @@ void OnTick()
       else                 status = StringFormat("SCANNING — spread=%.0fpts, all systems OK, waiting for A/A+ setup", curSpr);
 
       PrintFormat("♥ HEARTBEAT │ %s", status);
+      XAU_WriteLocalReportHeartbeat(false);
       g_lastHeartbeat = TimeCurrent();
       // Reset the reason flag so stale entries don't mislead next cycle
       g_lastSkipReason = "";
@@ -16209,6 +16515,47 @@ void XAU_BrainWatchClosedTrade(TradeBrainOpen &r, double closePrice, double clos
          " will monitor 5/10/15/30/60m to judge early-vs-good exit.");
 }
 
+void XAU_EVPostCloseReview(TradeBrainOpen &r, string verdict,
+                           double moreATR, double reverseATR,
+                           double missedMoney, double avoidedMoney,
+                           double closeProfit)
+{
+   if(!InpEVExitEngineEnable || !IsXAUFastSymbol()) return;
+   if(moreATR < InpEVReviewMinMoveATR && reverseATR < InpEVReviewMinMoveATR)
+      return;
+
+   g_evExitReviewCount++;
+   double before = g_evExitLearningBias;
+   if(verdict == "EXIT_EARLY_LEFT_PROFIT")
+      g_evExitLearningBias = MathMin(InpEVLearningBiasMax,
+                                     g_evExitLearningBias + InpEVLearningBiasStep);
+   else if(verdict == "EXIT_GOOD_AVOIDED_REVERSAL")
+      g_evExitLearningBias = MathMax(-InpEVLearningBiasMax,
+                                     g_evExitLearningBias - InpEVLearningBiasStep);
+   else
+      g_evExitLearningBias *= 0.98;
+
+   PrintFormat("EV_POST_CLOSE_REVIEW posId=%I64u verdict=%s setup=%s closeProfit=$%.2f more=%.2fATR($%.0f) reverse=%.2fATR($%.0f) bias %.2f->%.2f samples=%d",
+               r.posId, verdict, r.setup, closeProfit, moreATR, missedMoney,
+               reverseATR, avoidedMoney, before, g_evExitLearningBias,
+               g_evExitReviewCount);
+   XAU_IntelAppend("EV_POST_CLOSE_REVIEW", (string)r.posId, r.posId, r.dir,
+                   r.setup, r.grade, r.signature, r.regime, r.session,
+                   "EXIT_EV", "LEARN", verdict,
+                   r.setupScore, r.combinedScore, r.atr, 0.0,
+                   r.entryPrice, 0.0, r.lots, r.sl, r.tp, closeProfit,
+                   missedMoney, (int)moreATR, (int)reverseATR,
+                   g_evExitLearningBias, 0.0,
+                   "Probability EV exit self-review", "",
+                   CloudMapGet(r.posId), 0, true,
+                   "Bounded learning bias; never changes max risk or disables emergency exits.");
+}
+
+void XAU_UpdateClosedTradeReviews()
+{
+   XAU_UpdateClosedTradeOutcomes();
+}
+
 void XAU_UpdateClosedTradeOutcomes()
 {
    if(!InpTradeBrainMemory || !InpTradeBrainMonitorAfterExit || !IsXAUFastSymbol()) return;
@@ -16243,6 +16590,9 @@ void XAU_UpdateClosedTradeOutcomes()
          verdict = "EXIT_GOOD_AVOIDED_REVERSAL";
       else if(moreATR >= InpExitBrainEarlyProfitATR && reverseATR >= InpExitBrainGoodAvoidATR)
          verdict = "EXIT_MIXED_VOLATILE_AFTER_CLOSE";
+
+      XAU_EVPostCloseReview(r, verdict, moreATR, reverseATR, missedMoney, avoidedMoney,
+                            g_brainClosedWatch[i].closeProfit);
 
       string extra = StringFormat("%s checkpoint=%dm closeProfit=$%.2f maxMore=%.2fATR($%.0f) maxReverse=%.2fATR($%.0f) closePrice=%.2f current=%.2f",
                                   verdict, g_brainClosedWatch[i].nextCheckpointMin,
@@ -18649,6 +18999,118 @@ double TradeBrain_GetATRNormWinRate(int signal, string pattern, string session, 
 // ============================================================
 // v6.3.8 UPGRADE 6 — Gate Analytics Report
 // ============================================================
+string XAU_ReportTextSafe(string s, int maxLen)
+{
+   StringReplace(s, "\r", " ");
+   StringReplace(s, "\n", " ");
+   StringReplace(s, "\t", " ");
+   StringReplace(s, "—", "-");
+   StringReplace(s, "–", "-");
+   StringReplace(s, "→", "->");
+   StringReplace(s, "≤", "<=");
+   StringReplace(s, "≥", ">=");
+   if(StringLen(s) > maxLen) s = StringSubstr(s, 0, maxLen);
+   return s;
+}
+
+string XAU_LocalReportStatus()
+{
+   bool termConn = (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
+   bool termAlgo = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
+   bool mqlAlgo  = (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
+   int openPs = CountMyPositions();
+
+   if(!termConn) return "MT5_DISCONNECTED";
+   if(!termAlgo) return "ALGO_DISABLED";
+   if(!mqlAlgo)  return "EA_TRADING_DISABLED";
+   if(g_remoteStopTrading) return "REMOTE_STOPPED";
+   if(g_remotePauseNewTrades) return "REMOTE_PAUSED";
+   if(openPs > 0) return StringFormat("MANAGING_%d_POSITION(S)", openPs);
+   if(StringLen(g_lastSkipReason) > 0) return "WAITING";
+   return "SCANNING";
+}
+
+string XAU_LocalReportReason()
+{
+   if(StringLen(g_lastSkipReason) > 0)
+      return XAU_ReportTextSafe(g_lastSkipReason, 220);
+   if(CountMyPositions() > 0)
+      return "Managing open protected position(s).";
+   return "Scanning; waiting for qualified setup.";
+}
+
+void WriteLocalHeartbeatReport()
+{
+   string fname = "XAUAI_LiveHeartbeat_" + Symbol() + ".txt";
+   int fh = FileOpen(fname, FILE_WRITE | FILE_TXT | FILE_COMMON);
+   if(fh == INVALID_HANDLE) { Print("LIVE HEARTBEAT REPORT: failed to open file (err=", GetLastError(), ")"); return; }
+
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double dailyPnl = equity - dailyStartEquity;
+   FileWrite(fh, "=== XAUAI LIVE HEARTBEAT ===");
+   FileWrite(fh, "Date: " + TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS));
+   FileWrite(fh, "EA version: " + XAUAI_EA_VERSION);
+   FileWrite(fh, "Build hash: " + XAUAI_BUILD_HASH);
+   FileWrite(fh, "Account: " + (string)AccountInfoInteger(ACCOUNT_LOGIN) + " / " + AccountInfoString(ACCOUNT_SERVER));
+   FileWrite(fh, "Symbol: " + Symbol() + " M5");
+   FileWrite(fh, "Status: " + XAU_LocalReportStatus());
+   FileWrite(fh, "Reason: " + XAU_LocalReportReason());
+   FileWrite(fh, "Last scan: " + TimeToString(g_lastEntryScanAt > 0 ? g_lastEntryScanAt : TimeCurrent(), TIME_DATE | TIME_SECONDS));
+   FileWrite(fh, "Open positions: " + IntegerToString(CountMyPositions()));
+   FileWrite(fh, "Spread: " + DoubleToString((double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD), 0) +
+                 " pts | Avg spread: " + DoubleToString(g_spreadEMA, 1));
+   FileWrite(fh, "Equity: $" + DoubleToString(equity, 2) +
+                 " | Balance: $" + DoubleToString(balance, 2) +
+                 " | Daily PnL: $" + DoubleToString(dailyPnl, 2));
+   FileWrite(fh, "Gate totals: signals=" + IntegerToString(g_totalSignals) +
+                 " allowed=" + IntegerToString(g_totalAllowed) +
+                 " blocked=" + IntegerToString(g_totalSignals - g_totalAllowed));
+   FileWrite(fh, "Biggest live block: " + XAU_ReportTextSafe(XAU_BiggestGateBlockName(), 80));
+   FileWrite(fh, "News state: " + XAU_ReportTextSafe(XAUAI_NewsState(), 160));
+   FileWrite(fh, "Trade state: " + XAU_ReportTextSafe(XAUAI_TradeState(), 160));
+   FileWrite(fh, "Exit engine: " + XAU_ReportTextSafe(XAUAI_ExitEngineState(), 180));
+   FileWrite(fh, "Last trade reason: " + (StringLen(g_lastTradeReason) > 0 ? XAU_ReportTextSafe(g_lastTradeReason, 220) : "none"));
+   FileWrite(fh, "Last exit reason: " + (StringLen(lastExitReason) > 0 ? XAU_ReportTextSafe(lastExitReason, 220) : "none"));
+   FileClose(fh);
+}
+
+string XAU_BiggestGateBlockName()
+{
+   int maxBlockVal = 0;
+   string maxBlockName = "None";
+   int blockVals[11];
+   string blockNames[11];
+   blockVals[0]=g_gateBlocks_Spread;     blockNames[0]="Spread";
+   blockVals[1]=g_gateBlocks_News;       blockNames[1]="News";
+   blockVals[2]=g_gateBlocks_Trend;      blockNames[2]="Trend/PG";
+   blockVals[3]=g_gateBlocks_Committee;  blockNames[3]="Committee";
+   blockVals[4]=g_gateBlocks_AI;         blockNames[4]="AI Director";
+   blockVals[5]=g_gateBlocks_TradeBrain; blockNames[5]="TradeBrain";
+   blockVals[6]=g_gateBlocks_STI;        blockNames[6]="STI";
+   blockVals[7]=g_gateBlocks_Basket;     blockNames[7]="Basket";
+   blockVals[8]=g_gateBlocks_DailyLoss;  blockNames[8]="Daily Loss";
+   blockVals[9]=g_gateBlocks_Volatility; blockNames[9]="Volatility";
+   blockVals[10]=g_gateBlocks_EPF;       blockNames[10]="EPF";
+   for(int bi = 0; bi < 11; bi++)
+      if(blockVals[bi] > maxBlockVal) { maxBlockVal = blockVals[bi]; maxBlockName = blockNames[bi]; }
+   return maxBlockName + " (" + IntegerToString(maxBlockVal) + " blocks)";
+}
+
+void XAU_WriteLocalReportHeartbeat(bool force=false)
+{
+   if(InpLocalReportHeartbeatSec <= 0 && !force) return;
+   int cadence = (int)MathMax(60.0, (double)InpLocalReportHeartbeatSec);
+   if(!force && g_localReportHeartbeatLast > 0 && TimeCurrent() - g_localReportHeartbeatLast < cadence)
+      return;
+
+   WriteGateReportToFile();
+   WriteForwardTestReport();
+   WriteLocalHeartbeatReport();
+   g_localReportHeartbeatLast = TimeCurrent();
+   Print("LOCAL REPORT HEARTBEAT: refreshed GateReport, ForwardTest, and LiveHeartbeat.");
+}
+
 void PrintGateReport()
 {
    g_gateReportLast = TimeCurrent();
@@ -18685,6 +19147,14 @@ void WriteGateReportToFile()
    double allowPct = (g_totalSignals > 0) ? (100.0 * g_totalAllowed / g_totalSignals) : 0.0;
    FileWrite(fh, "=== XAUAI GATE ANALYTICS REPORT ===");
    FileWrite(fh, "Date: " + TimeToString(TimeCurrent()));
+   FileWrite(fh, "EA version: " + XAUAI_EA_VERSION);
+   FileWrite(fh, "Build hash: " + XAUAI_BUILD_HASH);
+   FileWrite(fh, "Status: " + XAU_LocalReportStatus());
+   FileWrite(fh, "Reason: " + XAU_LocalReportReason());
+   FileWrite(fh, "Last scan: " + TimeToString(g_lastEntryScanAt > 0 ? g_lastEntryScanAt : TimeCurrent(), TIME_DATE | TIME_SECONDS));
+   FileWrite(fh, "Open positions: " + IntegerToString(CountMyPositions()));
+   FileWrite(fh, "Spread: " + DoubleToString((double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD), 0) +
+                 " pts | Avg spread: " + DoubleToString(g_spreadEMA, 1));
    FileWrite(fh, "Total signals:   " + IntegerToString(g_totalSignals));
    FileWrite(fh, "Allowed trades:  " + IntegerToString(g_totalAllowed) + " (" +
              DoubleToString(allowPct, 1) + "%)");
@@ -18700,6 +19170,10 @@ void WriteGateReportToFile()
    FileWrite(fh, "  Daily Loss:    " + IntegerToString(g_gateBlocks_DailyLoss));
    FileWrite(fh, "  Volatility:    " + IntegerToString(g_gateBlocks_Volatility));
    FileWrite(fh, "  EPF:           " + IntegerToString(g_gateBlocks_EPF));
+   FileWrite(fh, "Biggest gate block: " + XAU_BiggestGateBlockName());
+   FileWrite(fh, "News state: " + XAU_ReportTextSafe(XAUAI_NewsState(), 160));
+   FileWrite(fh, "Trade state: " + XAU_ReportTextSafe(XAUAI_TradeState(), 160));
+   FileWrite(fh, "Exit engine: " + XAU_ReportTextSafe(XAUAI_ExitEngineState(), 180));
    if(g_totalSignals > 20)
    {
       double passRate = allowPct;
@@ -18760,8 +19234,19 @@ void WriteForwardTestReport()
    double aiPassR = (g_ftReport_AIAllowed + g_ftReport_AIBlocked > 0)
                   ? (100.0 * g_ftReport_AIAllowed / (g_ftReport_AIAllowed + g_ftReport_AIBlocked)) : 0.0;
 
-   FileWrite(fh, "=== XAUAI SNIPER v6.3.9 — 24H FORWARD TEST REPORT ===");
+   FileWrite(fh, "=== XAUAI SNIPER " + XAUAI_EA_VERSION + " - 24H FORWARD TEST REPORT ===");
    FileWrite(fh, "Date:              " + dateStr);
+   FileWrite(fh, "EA version:        " + XAUAI_EA_VERSION);
+   FileWrite(fh, "Build hash:        " + XAUAI_BUILD_HASH);
+   FileWrite(fh, "Input hash:        " + XAUAI_InputHash());
+   FileWrite(fh, "Status:            " + XAU_LocalReportStatus());
+   FileWrite(fh, "Reason:            " + XAU_LocalReportReason());
+   FileWrite(fh, "Last scan:         " + (g_lastEntryScanAt > 0 ? TimeToString(g_lastEntryScanAt, TIME_DATE | TIME_SECONDS) : "never"));
+   FileWrite(fh, "Open positions:    " + IntegerToString(CountMyPositions()));
+   FileWrite(fh, "Spread points:     " + DoubleToString((SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID)) / _Point, 1));
+   FileWrite(fh, "News state:        " + XAUAI_NewsState());
+   FileWrite(fh, "Trade state:       " + XAUAI_TradeState());
+   FileWrite(fh, "Exit engine:       " + XAUAI_ExitEngineState());
    FileWrite(fh, "Start equity:      $" + DoubleToString(g_ftReport_StartEquity, 2));
    FileWrite(fh, "End equity:        $" + DoubleToString(curEq, 2));
    FileWrite(fh, "Net P&L:           " + (netPnL >= 0 ? "+" : "") + "$" +
@@ -20055,6 +20540,15 @@ string XAUAI_InputHash()
                      InpThesisHoldMinPeakUSD,
                      InpThesisHoldMaxGivebackPct,
                      InpThesisHoldReentryCooldownMin);
+   s += StringFormat("evExit=%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f|",
+                     InpEVExitEngineEnable ? 1 : 0,
+                     InpEVMinHoldEdgeUSD,
+                     InpEVExitEdgeUSD,
+                     InpEVContinuationHigh,
+                     InpEVExhaustionHigh,
+                     InpEVReviewMinMoveATR,
+                     InpEVLearningBiasStep,
+                     InpEVLearningBiasMax);
    s += StringFormat("symbol=%s|tf=M5|digits=%d|point=%s",
                      Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
                      DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), 8));
