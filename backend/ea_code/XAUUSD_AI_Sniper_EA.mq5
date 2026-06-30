@@ -527,16 +527,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.13"
-#property description "XAUUSD AI Sniper v6.4.13 - probability EV exit engine + live heartbeat"
+#property version   "6.4.14"
+#property description "XAUUSD AI Sniper v6.4.14 - lot sizing audit + context-aware memory floor"
 #property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
 #property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
 #property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.13"
-#define XAUAI_EA_VERSION_NUM "6.4.13"
-#define XAUAI_BUILD_HASH "v6413-probability-ev-exit-20260630"
+#define XAUAI_EA_VERSION "v6.4.14"
+#define XAUAI_EA_VERSION_NUM "6.4.14"
+#define XAUAI_BUILD_HASH "v6414-lot-sizing-audit-20260630"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -833,6 +833,9 @@ input double InpTradeBrainMinPF            = 0.75;  // Below this profit factor,
 input double InpTradeBrainBadDDProfitRatio = 2.50;  // Avg worst DD worse than this × avg profit = poor entry quality
 input double InpTradeBrainWeakLotMulti     = 0.45;  // Lot multiplier for weak-but-not-blocked repeated patterns
 input bool   InpTradeBrainMonitorAfterExit = true;  // After close, keep watching to learn whether exit was early, late, or correct
+input double InpMemoryAPlusHTFMinLotMulti  = 0.85;  // Broad aggregate memory cannot crush A/A+ HTF-consensus setups below this
+input int    InpMemoryExactEvidenceMinSamples = 12; // Need exact TradeBrain evidence before broad memory can fully reduce A/A+
+input double InpLotStepMaxRiskOvershootPct = 12.0;  // Round to nearest lot step only if extra SL risk stays within this %
 input bool   InpEntryQualityReview          = true;  // Write Entry Quality Review CSV for every closed trade
 input int    InpEntryQualityFastMinSamples  = 6;     // Faster warning window for repeated deep-drawdown patterns
 input double InpEntryQualityPoorMAEATR      = 0.80;  // More than this adverse ATR = poor entry timing
@@ -9811,6 +9814,33 @@ double NormalizeVolumeDown(double lots)
    return NormalizeDouble(lots, VolumeDigitsForSymbol());
 }
 
+double XAU_NormalizeVolumeForRisk(double rawLots, double lotStep, double minLot, double maxLot,
+                                  double slDollarPerLot, double riskAmount,
+                                  double &riskOvershootPct)
+{
+   riskOvershootPct = 0.0;
+   if(lotStep <= 0.0)
+      return NormalizeDouble(rawLots, VolumeDigitsForSymbol());
+
+   double floorLots = MathFloor(rawLots / lotStep) * lotStep;
+   double nearestLots = MathRound(rawLots / lotStep) * lotStep;
+   floorLots = MathMax(0.0, MathMin(maxLot, floorLots));
+   nearestLots = MathMax(0.0, MathMin(maxLot, nearestLots));
+
+   double lots = floorLots;
+   if(nearestLots > floorLots && slDollarPerLot > 0.0 && riskAmount > 0.0)
+   {
+      double nearestRisk = nearestLots * slDollarPerLot;
+      riskOvershootPct = ((nearestRisk - riskAmount) / riskAmount) * 100.0;
+      if(riskOvershootPct <= InpLotStepMaxRiskOvershootPct)
+         lots = nearestLots;
+   }
+
+   if(lots > 0.0 && lots < minLot)
+      lots = 0.0;
+   return NormalizeDouble(lots, VolumeDigitsForSymbol());
+}
+
 double XAU_ProjectProfitUSD(bool isBuy, double openPrice, double closePrice, double lots)
 {
    if(openPrice <= 0.0 || closePrice <= 0.0 || lots <= 0.0) return 0.0;
@@ -10617,13 +10647,17 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double riskAfterPG = riskPct;
 
    // DRAWDOWN RECOVERY MODE: cap risk at InpDrawdownRisk% until we get a win
+   double drawdownMult = 1.0;
    if(drawdownActive)
    {
+      double riskBeforeDrawdown = riskPct;
       double cappedRisk = MathMin(riskPct, InpDrawdownRisk);
       if(cappedRisk < riskPct)
       {
          Print("DRAWDOWN MODE: risk ", DoubleToString(riskPct,2), "% -> capped ", DoubleToString(cappedRisk,2), "%");
          riskPct = cappedRisk;
+         if(riskBeforeDrawdown > 0.0)
+            drawdownMult = cappedRisk / riskBeforeDrawdown;
       }
    }
 
@@ -10729,8 +10763,12 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       return;
    }
    double rawLots = riskAmount / slDollarPerLotRaw;
-   double lots = MathFloor(rawLots / lotStep) * lotStep;
-   double brokerLimitedLots = MathMin(maxLot, lots);
+   double riskOvershootPct = 0.0;
+   double lots = XAU_NormalizeVolumeForRisk(rawLots, lotStep, minLot, maxLot,
+                                            slDollarPerLotRaw, riskAmount,
+                                            riskOvershootPct);
+   double riskMathLots = lots;
+   double brokerLimitedLots = lots;
    if(brokerLimitedLots < minLot)
    {
       // v6.3.2 FIX: if rawLots > 0 the setup is real — multiplier stacking (grade, AI,
@@ -10757,6 +10795,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
 
    double beforeGrowthLots = lots;
    lots = XAU_GrowthGuardCapLots(lots, slDollarPerLotRaw, signal, reason);
+   double afterGrowthLots = lots;
    if(lots < minLot)
    {
       Print("GROWTH_TRADE_RISK_CAP: final lot below broker min after real XAU risk cap. before=",
@@ -10804,6 +10843,8 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       return;
    }
 
+   double beforeBasketCapLots = lots;
+   double afterBasketCapLots = lots;
    if(effectiveAggregateCap > 0 && slDollarPerLotRaw > 0)
    {
       double openLots = 0.0;
@@ -10834,6 +10875,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                   DoubleToString(minLot, lotDigits), ".");
             return;
          }
+         afterBasketCapLots = lots;
       }
    }
 
@@ -10855,6 +10897,41 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       if(marginNeeded > freeMargin * 0.8) { Print("NO MARGIN"); return; }
    }
    lots = NormalizeDouble(lots, lotDigits);
+   afterBasketCapLots = lots;
+
+   string microCollapseReason = "NONE";
+   if(lots <= minLot + (lotStep * 0.1))
+   {
+      microCollapseReason = "MIN_LOT_FINAL";
+      if(slDollarPerLotRaw > riskAmount)
+         microCollapseReason += "|WIDE_SL_RISK_MATH";
+      if(sizeMulti < 0.85)
+         microCollapseReason += "|SIGNAL_MEMORY_COMMITTEE_MULTIPLIER_STACK";
+      if(afterGrowthLots < beforeGrowthLots)
+         microCollapseReason += "|GROWTH_GUARD_CAP";
+      if(afterBasketCapLots < beforeBasketCapLots)
+         microCollapseReason += "|BASKET_CAP";
+   }
+
+   Print("LOT-SIZING-AUDIT | Base risk percent: ", DoubleToString(baseRisk, 2), "%",
+         " | Account balance: $", DoubleToString(balance, 2),
+         " | SL distance: ", DoubleToString(slDist, 2),
+         " | ATR: ", DoubleToString(atr, 2),
+         " | Raw calculated lot: ", DoubleToString(rawLots, 4),
+         " | Broker min/max/step: ", DoubleToString(minLot, lotDigits), "/",
+         DoubleToString(maxLot, lotDigits), "/", DoubleToString(lotStep, lotDigits),
+         " | Risk-math lot: ", DoubleToString(riskMathLots, lotDigits),
+         " | Volatility multiplier: ", DoubleToString(volMult, 2),
+         " | AI confidence multiplier: included in signalMult=", DoubleToString(sizeMulti, 2),
+         " | Strategy/grade multiplier: included in signalMult=", DoubleToString(sizeMulti, 2),
+         " | Recovery/drawdown multiplier: ", DoubleToString(drawdownMult, 2),
+         " | Growth Guard cap: ", DoubleToString(beforeGrowthLots, lotDigits), "->",
+         DoubleToString(afterGrowthLots, lotDigits),
+         " | Basket cap: ", DoubleToString(beforeBasketCapLots, lotDigits), "->",
+         DoubleToString(afterBasketCapLots, lotDigits),
+         " | Final lot: ", DoubleToString(lots, lotDigits),
+         " | riskOvershootPct=", DoubleToString(riskOvershootPct, 2),
+         " | microCollapseReason=", microCollapseReason);
 
    Print("LOT-CALC: balance=$", DoubleToString(balance,2),
          " equity=$", DoubleToString(equityForSizing,2),
@@ -10877,6 +10954,8 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
          " sl$/lot=$", DoubleToString(slDollarPerLotRaw,2),
          " rawLots=", DoubleToString(rawLots,3),
          " brokerLots=", DoubleToString(brokerLimitedLots,lotDigits),
+         " riskMathLots=", DoubleToString(riskMathLots,lotDigits),
+         " riskStepOvershoot=", DoubleToString(riskOvershootPct,2), "%",
          " beforeMax=", DoubleToString(beforeInpMaxLots,lotDigits),
          " maxInputLots=", DoubleToString(InpMaxLots,2),
          " afterMax=", DoubleToString(afterInpMaxLots,lotDigits),
@@ -15814,6 +15893,42 @@ bool XAU_QueryConsciousMemory(int signal, string setupName, string grade,
    return true;
 }
 
+double XAU_MemoryLotFloorForContext(int signal, string setupName, string grade,
+                                    bool &exactEvidence, bool &htfConsensus,
+                                    string &why)
+{
+   exactEvidence = false;
+   htfConsensus = false;
+   why = "";
+
+   bool highGrade = (grade == "A+" || grade == "A" || StringFind(grade, "A+") >= 0);
+   htfConsensus = (g_htfConsensusDir == signal &&
+                   (StringFind(setupName, "HTF") >= 0 ||
+                    StringFind(setupName, "TREND") >= 0 ||
+                    StringFind(setupName, "CONTINUATION") >= 0));
+
+   int samples = 0;
+   double winRate = 0.0, profitFactor = 0.0, avgProfit = 0.0;
+   double avgWorstDD = 0.0, badRecoveryRate = 0.0;
+   string exactSignature = lastSignalSignature;
+   if(XAU_TradeBrainStats(setupName, signal, grade, exactSignature, samples,
+                          winRate, profitFactor, avgProfit, avgWorstDD,
+                          badRecoveryRate))
+      exactEvidence = (samples >= InpMemoryExactEvidenceMinSamples);
+
+   if(highGrade && htfConsensus && !exactEvidence)
+   {
+      why = StringFormat("broad aggregate memory held at %.2f until exactEvidence has %d samples; setup=%s grade=%s exactSamples=%d htfConsensus=%s",
+                         InpMemoryAPlusHTFMinLotMulti,
+                         InpMemoryExactEvidenceMinSamples,
+                         setupName, grade, samples,
+                         htfConsensus ? "true" : "false");
+      return InpMemoryAPlusHTFMinLotMulti;
+   }
+
+   return 0.0;
+}
+
 bool XAU_MemoryRecommendation(int signal, string setupName, string grade,
                               double &lotMulti, string &reason)
 {
@@ -15842,6 +15957,17 @@ bool XAU_MemoryRecommendation(int signal, string setupName, string grade,
    {
       rec = "trusted positive pattern; preserve normal management and avoid choking winners";
       lotMulti = 1.05;
+   }
+   bool exactEvidence = false;
+   bool htfConsensus = false;
+   string memoryFloorWhy = "";
+   double memoryFloor = XAU_MemoryLotFloorForContext(signal, setupName, grade,
+                                                     exactEvidence, htfConsensus,
+                                                     memoryFloorWhy);
+   if(memoryFloor > 0.0 && lotMulti < memoryFloor)
+   {
+      rec += " | broad aggregate memory floor applied: " + memoryFloorWhy;
+      lotMulti = MathMax(lotMulti, memoryFloor);
    }
    reason = StringFormat("AI-MEMORY: Found %d similar %s %s setups. Win rate: %.1f%% Avg MFE $%.0f Avg MAE $%.0f Early exits %.1f%%. Confidence: %s. Recommendation: %s.",
                          st.samples, setupName, signal > 0 ? "BUY" : "SELL",
@@ -20549,6 +20675,10 @@ string XAUAI_InputHash()
                      InpEVReviewMinMoveATR,
                      InpEVLearningBiasStep,
                      InpEVLearningBiasMax);
+   s += StringFormat("lotAudit=%.2f,%d,%.2f|",
+                     InpMemoryAPlusHTFMinLotMulti,
+                     InpMemoryExactEvidenceMinSamples,
+                     InpLotStepMaxRiskOvershootPct);
    s += StringFormat("symbol=%s|tf=M5|digits=%d|point=%s",
                      Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
                      DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), 8));

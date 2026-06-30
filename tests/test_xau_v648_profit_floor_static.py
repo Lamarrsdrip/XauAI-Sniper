@@ -16,10 +16,10 @@ def test_v6412_version_and_backend_copy_match():
     backend = read(EA_BACKEND)
 
     assert root == backend
-    assert '#property version   "6.4.13"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.13"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.13"' in root
-    assert '#define XAUAI_BUILD_HASH "v6413-probability-ev-exit-20260630"' in root
+    assert '#property version   "6.4.14"' in root
+    assert '#define XAUAI_EA_VERSION "v6.4.14"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.4.14"' in root
+    assert '#define XAUAI_BUILD_HASH "v6414-lot-sizing-audit-20260630"' in root
 
 
 def test_protected_peak_floor_inputs_helpers_and_logs_exist():
