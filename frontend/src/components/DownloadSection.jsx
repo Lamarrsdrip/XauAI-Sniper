@@ -12,9 +12,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.4.16";
-  const edition  = info?.edition  || "Remove All Loss-Based Lot Reductions";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.4.16_REMOVE_ALL_LOSS_BASED_LOT_REDUCTIONS.mq5";
+  const version  = info?.version  || "v6.4.17";
+  const edition  = info?.edition  || "A+/A Full-Size Protection + LOT_TRACE";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.4.17_APLUS_FULLSIZE_PROTECTION.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
