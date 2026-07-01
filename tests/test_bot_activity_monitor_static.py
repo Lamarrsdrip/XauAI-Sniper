@@ -66,9 +66,9 @@ def test_cloud_dashboard_is_repurposed_as_mobile_monitor():
     assert "data-testid=\"bot-monitor-dashboard\"" in dashboard
     assert "data-testid=\"bot-status-card\"" in dashboard
     assert "activity-filter-trade" in dashboard
-    assert "No live bot connected" in dashboard
+    assert "No connection" in dashboard
     assert "Link your license" in dashboard
-    assert "Old cloud records are intentionally hidden" in dashboard
+    assert "Old cloud records are hidden" in dashboard
     assert "/cloud/command/request" in dashboard
     assert "Pause" in dashboard
     assert "Close all" in dashboard
@@ -81,8 +81,8 @@ def test_admin_dashboard_uses_license_and_bot_ops_not_old_cloud_panel():
 
     assert "admin-command-ops-tab" in admin
     assert "/admin/command-center/overview" in admin
-    assert "LICENSE BUSINESS OVERVIEW" in admin
-    assert "BOT OPS" in admin
+    assert "License business overview" in admin
+    assert "Bot operations" in admin
     assert "tab === \"cloud\"" not in admin
     assert "CloudAdminTab" not in admin
     assert "cloud-admin-tab" not in admin

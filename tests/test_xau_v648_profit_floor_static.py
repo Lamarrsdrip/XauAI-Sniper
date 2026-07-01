@@ -3,7 +3,7 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.6.mq5"
+EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.21.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -16,10 +16,10 @@ def test_v6412_version_and_backend_copy_match():
     backend = read(EA_BACKEND)
 
     assert root == backend
-    assert '#property version   "6.420"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.20"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.20"' in root
-    assert '#define XAUAI_BUILD_HASH "v6420-build-integrity-audit-20260701"' in root
+    assert '#property version   "6.421"' in root
+    assert '#define XAUAI_EA_VERSION "v6.4.21"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.4.21"' in root
+    assert '#define XAUAI_BUILD_HASH "v6421-trade-mode-fear-cage-audit-20260701"' in root
 
 
 def test_protected_peak_floor_inputs_helpers_and_logs_exist():

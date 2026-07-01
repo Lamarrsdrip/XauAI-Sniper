@@ -42,8 +42,8 @@ def test_command_center_dashboard_has_user_visible_runtime_checks():
     dashboard = read("frontend/src/components/cloud/CloudDashboard.jsx")
     assert "Command Center" in dashboard
     assert "MT5 binding" in dashboard
-    assert "Connected bot" in dashboard
-    assert "No account" in dashboard
+    assert "Connected EA" in dashboard
+    assert '["Account",          heartbeat.account_number||"—"]' in dashboard
     assert "Control" in dashboard
     assert "License key" in dashboard
     assert "/cloud/license/status" in dashboard

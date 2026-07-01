@@ -1829,7 +1829,7 @@ class TradeMemoryRecord(BaseModel):
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.4.20"
+    ea_version: str = "v6.4.21"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"
@@ -2003,8 +2003,8 @@ def _build_memory_recommendation(query: dict, matches: list[dict]) -> dict:
     }
 
 # ------- shared helpers -------
-# v6.3.0: AI Director persona — full authority, not just advisory
-_ENTRY_SYSTEM_PROMPT = """You are the AI Director for an institutional XAUUSD M5 scalping system. You are the final authority above all technical strategies. The rule engine has already scored and filtered signals — you review full market context and make the REAL decision: ALLOW, BLOCK, or ADJUST.
+# v6.4.21: AI Director persona — advisor/score input; local EA Trade Mode owns veto strictness
+_ENTRY_SYSTEM_PROMPT = """You are the AI Director for an institutional XAUUSD M5 scalping system. You are an expert advisor and probability scorer. The local EA rule engine and Trade Mode own final execution authority. You review full market context and recommend ALLOW, BLOCK, or ADJUST, but only true danger should be treated as a hard veto.
 
 You receive complete context: price, indicators, H1/HTF trend, session, open positions, basket P/L, account state, recent win/loss streak, trade grade, and setup scores. Use ALL of it.
 

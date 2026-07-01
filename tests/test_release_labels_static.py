@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CURRENT = "v6.4.20"
+CURRENT = "v6.4.21"
 OLD_LABELS = ["v6.3.6", "v6.4.9", "v6.4.13", "v6.4.14", "v6.4.18", "v6.4.19"]
 
 

@@ -12,9 +12,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.4.20";
-  const edition  = info?.edition  || "Full Build Integrity Audit + TTM Compile Fix";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.4.20_FULL_BUILD_INTEGRITY_AUDIT_TTM_COMPILE_FIX.mq5";
+  const version  = info?.version  || "v6.4.21";
+  const edition  = info?.edition  || "Trade Mode + June 17-19 Balance Lot Restore";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.4.21_TRADE_MODE_JUNE_17_19_BALANCE_LOT_RESTORE.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -56,7 +56,7 @@ export default function DownloadSection({ api }) {
                   {loading
                     ? <p className="mt-2 flex items-center gap-2 text-sm text-white/40"><Spinner size={13} className="animate-spin" /> Fetching release info…</p>
                     : <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                        {version} · {edition}. Dual AI (Claude + GPT) approves every entry. Trade Thesis Monitor scores open positions live every candle — exits when the original reason is gone, not when a timer runs out. AI Quality Gate ensures A+ trades are only taken at full size with strong AI confirmation.
+                        {version} · {edition}. Dual AI (Claude + GPT) advises trade quality, while Trade Mode decides how strict blockers should be. Trade Thesis Monitor scores open positions live every candle — exits when the original reason is gone, not when a timer runs out.
                       </p>}
                 </div>
               </div>
