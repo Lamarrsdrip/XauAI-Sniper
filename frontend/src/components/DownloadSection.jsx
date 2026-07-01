@@ -13,8 +13,8 @@ export default function DownloadSection({ api }) {
   }, [api]);
 
   const version  = info?.version  || "v6.4.20";
-  const edition  = info?.edition  || "Full Bug Audit — AI Quality Gate, Safe Close, Clean Logs";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.4.20_FULL_BUG_AUDIT.mq5";
+  const edition  = info?.edition  || "Full Build Integrity Audit + TTM Compile Fix";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.4.20_FULL_BUILD_INTEGRITY_AUDIT_TTM_COMPILE_FIX.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 

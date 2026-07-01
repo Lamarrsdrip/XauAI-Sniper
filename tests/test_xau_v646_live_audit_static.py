@@ -16,9 +16,9 @@ def test_v6412_version_identity_is_single_source_and_backend_matches_root():
     backend = read(EA_BACKEND)
 
     assert root == backend
-    assert '#property version   "6.4.14"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.14"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.14"' in root
+    assert '#property version   "6.420"' in root
+    assert '#define XAUAI_EA_VERSION "v6.4.20"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.4.20"' in root
     assert '\\"ea_version\\":\\"%s\\"' in root
     assert "XAUAI_EA_VERSION" in root[root.index("void BotMonitorHeartbeat()"):]
     assert "XAUAI_DiagnosticsText()" in root

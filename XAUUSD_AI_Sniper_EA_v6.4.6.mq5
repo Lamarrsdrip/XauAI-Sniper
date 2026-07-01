@@ -1,9 +1,106 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.14 — Lot Sizing Audit + Context-Aware Memory Floor        |
-//|            v6.4.7 trend-continuation/news fast-track preserved       |
+//|   v6.4.20 — Full Build Integrity Audit + TTM Compile Fix          |
+//|            version sync, SafePositionClose, AI gate fixes          |
 //+------------------------------------------------------------------+
+// v6.4.20 CHANGES (2026-07-01) — FULL BUILD INTEGRITY AUDIT:
+//
+//   1. Synchronizes release identity across header, runtime constants,
+//      dashboard, heartbeat, journals, reports, backend download metadata,
+//      Command Center, and Admin labels.
+//   2. Uses MQL Market-compatible #property version format while preserving
+//      human/runtime release label v6.4.20 everywhere else.
+//   3. Fixes Trade Thesis Monitor struct pointer usage that MetaEditor rejects.
+//   4. Preserves v6.4.19 TTM behavior: entry thesis snapshots, per-candle
+//      live thesis scoring, and thesis-dead exits.
+//
+// v6.4.19 CHANGES (2026-07-01) — TRADE THESIS MONITOR:
+//
+//   1. Stores the original trade thesis at entry: setup, grade, score, BOS,
+//      HTF consensus, RSI, ATR, and entry price.
+//   2. Re-scores each open trade by live thesis health instead of using a
+//      fixed hold/exit rule.
+//   3. Exits only when the thesis is objectively dead: score collapse,
+//      BOS reversal, HTF flip, or persistent low-score decay.
+//
+// v6.4.18 CHANGES (2026-07-01) — TRUE A/A+ FULL SIZE ENFORCEMENT:
+//
+// PHILOSOPHY: Quality control belongs BEFORE the entry gate and DURING exit
+// management — NOT in lot size reduction after losses.
+//
+// When the EA loses → improve trade selection, not reduce position size.
+// When a valid setup is found → trade it with the correct account-mode risk.
+// When confidence is low → SKIP the trade entirely, not take it at 0.01 lots.
+//
+// MODULES PERMANENTLY DISABLED for lot reduction:
+//
+//   1. GetPerformanceMultiplier() — loss-streak performance penalty
+//      (was: 3+ losses→0.70x, 5+ losses→0.50x)  NOW: always returns 1.0
+//
+//   2. patternMult in OpenTrade() — recent-win-rate lot penalty
+//      (was: 0/5 recent wins → 0.70x risk)  NOW: disabled entirely
+//
+//   3. drawdownActive risk cap — capped risk at InpDrawdownRisk% after N losses
+//      (was: InpDrawdownRisk cap applied)  NOW: removed; blocks via gate if needed
+//
+//   4. InpCarefulMode lot reduction — halved risk near weekly profit target
+//      (was: 0.25x/0.50x near target)  NOW: removal of lot effect
+//
+//   5. g_adaptiveRecoveryMode lot reduction — daily/weekly loss → 0.50x lots
+//      (was: sizeMulti *= 0.50 on A/A+ after daily/weekly loss threshold)
+//      NOW: mode still gates B-grade (quality selection), lot unchanged
+//
+//   6. pgLotMult (EPF/SelectiveMode/SoftDD) — protection-cage lot stack
+//      (was: pg_selectiveActive×0.60 × softDD×0.70 × EPF×0.40-0.85)
+//      NOW: pgLotMult = 1.0 always; blocks still work via EPF_EntryBlockReason
+//
+//   7. EPF_LotMultiplier() — tier-based daily-drawdown lot reduction
+//      (was: T1=0.85x, T2=0.65x, T3=0.40x)  NOW: always 1.0
+//
+//   8. PG_RiskMultiplier() — profit-guardian risk halving on big-profit days
+//      (was: up30%→0.50x, up50%→0.25x, up75%→block)
+//      NOW: lots unchanged (T3 hard block still active = acceptable skip-trade)
+//
+//   9. SmartGuard damage lot reduction — history-based damage-pattern penalty
+//      (was: sizeMulti × InpSmartGuardDamageLotMulti)  NOW: removed
+//
+// WHAT STILL CONTROLS LOT SIZE (by design):
+//   - Account mode preset (BALANCED=1.2%, CONSERVATIVE=0.6%, AGGRESSIVE=2.0%)
+//   - Balance × riskPct / slDollarPerLot (pure math)
+//   - Volatility cap (current ATR vs median) — current market, not history
+//   - Session scaling (Asia/London/NY) — current market, not history
+//   - AI Director (current analysis) — current market, not history
+//   - Broker min/max/step, margin, equity cap, basket cap
+//   - Proportional lot floor (v6.4.15) — keeps sizing proportional on small accounts
+//
+// v6.4.15 CHANGES (2026-07-01) — LOT SIZING ROOT-CAUSE FIX:
+//
+// INVESTIGATION FINDINGS:
+//   ROOT CAUSE 1 — DISPLAY BUG: Startup log printed InpRiskPercent (0.4%) as
+//   "Risk:" but InpRiskPercent is ALWAYS OVERRIDDEN by account-mode presets
+//   (BALANCED=1.2%, CONSERVATIVE=0.6%, AGGRESSIVE=2.0%). Fixed: startup now
+//   shows the actual base risk that will be used for lot calculation.
+//
+//   ROOT CAUSE 2 — MULTIPLIER COLLAPSE ON SMALL ACCOUNTS: On a $3,000 account
+//   with BALANCED mode (1.2% base = $36 risk budget), the combined B-grade
+//   multiplier (0.45x) × Asia session (0.55x) = 0.2475x total reduces the
+//   effective risk to $8.91. With InpSLMultiplier=2.5 and typical ATR $3,
+//   slDollarPerLot ≈ $750/lot → rawLots = $8.91/$750 = 0.012 → clamps to 0.01.
+//   This is mathematically correct but NOT proportional: a $10k account would
+//   trade 0.04 lots (4×) under identical conditions, not 1× (0.01).
+//
+//   FIX: Proportional Lot Floor (PROPORTIONAL_LOT_FLOOR): After all safety
+//   multipliers have applied, if the resulting rawLots is below 2.5× minLot
+//   on accounts < $25,000, apply a risk floor so at least 2.5× minLot is
+//   traded. The floor cannot exceed baseRisk% and never overrides drawdown
+//   mode, prop firm mode, or quality-scout entries. All downstream safety
+//   systems (GrowthGuard, equity cap, basket cap) still apply after the floor.
+//
+//   PHASE 7: Full LOT SIZE REPORT added with every execution showing each
+//   multiplier stage, why the final lot was chosen, and displayed vs actual
+//   risk% for dashboard parity.
+//
 // v6.4.14 CHANGES (2026-06-30) — LOT SIZING AUDIT + MEMORY FLOOR:
 //
 //   1. Adds full LOT-SIZING-AUDIT logs showing base risk, balance, SL,
@@ -539,16 +636,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.14"
-#property description "XAUUSD AI Sniper v6.4.14 - lot sizing audit + context-aware memory floor"
-#property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
-#property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
-#property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
+#property version   "6.420"
+#property description "XAUUSD AI Sniper v6.4.20 - build integrity audit"
+#property description "Trade Thesis Monitor, AI quality gate, safe close audit"
+#property description "Risk engine, exits, committee, EPF, basket protect preserved"
+#property description "SMC remains additive confirmation only"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.14"
-#define XAUAI_EA_VERSION_NUM "6.4.14"
-#define XAUAI_BUILD_HASH "v6414-lot-sizing-audit-20260630"
+#define XAUAI_EA_VERSION "v6.4.20"
+#define XAUAI_EA_VERSION_NUM "6.4.20"
+#define XAUAI_BUILD_HASH "v6420-build-integrity-audit-20260701"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1853,6 +1950,69 @@ struct TradeBrainClosedWatch
    TradeBrainOpen rec;
 };
 TradeBrainClosedWatch g_brainClosedWatch[];
+
+// ======================================================================
+// v6.4.19 — TRADE THESIS MONITOR (TTM)
+// Stores WHY we entered each trade. Per candle, re-evaluates whether that
+// reason still exists. Exits when the thesis is dead — not when ATR runs out.
+// Each component scores the current market state RELATIVE to the entry state.
+//
+// Live score (0-100) components:
+//   BOS alignment    30 pts  — was BOS +1, is it still +1?
+//   HTF alignment    20 pts  — was HTF bull/bear, is it still?
+//   Momentum          20 pts  — momentumScore/5 × 20
+//   Trend structure  15 pts  — M5/M15 regime still aligned
+//   RSI direction    10 pts  — RSI reading supports trade direction
+//   Structure intact  5 pts  — no confirmed BOS break against trade
+//
+// Action thresholds (applied ONLY after InpTTM_MinHoldBars bars):
+//   ≥ 70  STRONG HOLD — thesis healthy, consider pyramid
+//   50–69 HOLD        — thesis fine, normal management
+//   30–49 PROTECT     — thesis weakening, move SL toward BE
+//   < 30  EXIT        — thesis dead, close regardless of ATR
+//
+// Healthy pullback vs reversal:
+//   PULLBACK  = score dropped but BOS unchanged, HTF unchanged → HOLD
+//   REVERSAL  = BOS flipped OR HTF flipped + score < 35 → EXIT
+// ======================================================================
+struct TradeTTMRecord
+{
+   bool     active;
+   ulong    posId;
+   int      signal;           // 1=buy, -1=sell
+   string   setupName;
+   string   grade;
+   double   initialScore;     // combinedScore at entry
+
+   // Snapshot of market state when trade opened
+   int      entryBOS;         // g_smc_bos_dir at entry
+   int      entryHTF;         // g_htfConsensusDir at entry
+   double   entryRSI;
+   double   entryATR;
+   double   entryPrice;
+   int      entryMomentum;    // momentumScore at entry (0-5)
+   bool     entryTrendAligned;
+
+   // Live tracking — updated each candle
+   double   liveScore;
+   double   prevScore;
+   int      barsHeld;
+   int      consecutiveLowBars; // bars with score < 35 in a row
+
+   // Explicit thesis break record
+   bool     thesisBroken;
+   string   breakReason;
+   datetime breakTime;
+};
+
+#define TTM_MAX_POSITIONS 20
+TradeTTMRecord g_ttm[TTM_MAX_POSITIONS];
+input group "=== TRADE THESIS MONITOR (v6.4.20) ==="
+input bool   InpTTM_Enable           = true;   // Enable Trade Thesis Monitor
+input int    InpTTM_MinHoldBars      = 3;      // Min bars before TTM can trigger exit
+input double InpTTM_ExitThreshold    = 28.0;   // Exit if live score falls below this
+input int    InpTTM_PersistentBars   = 3;      // Exit if score below 35 for this many consecutive bars
+input bool   InpTTM_LogEveryBar      = true;   // Print TTM score every bar per position
 
 struct XAUConsciousMemoryStats
 {
@@ -3277,7 +3437,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                      ev.reason, peak, profitUSD, floorUSD, currentLockUSD);
          lastExitReason = "EV_EXIT | " + ev.reason;
          XAU_SetPendingExitReason(ticket, lastExitReason);
-         trade.PositionClose(ticket);
+         if(!SafePositionClose(ticket, "SMART_EXIT_EV")) return false;
          return true;
       }
 
@@ -3402,7 +3562,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                   XAU_ContextStateName(contextState),
                   peak, floorUSD, profitUSD, givebackPct, trendWhy);
       XAU_SetPendingExitReason(ticket, lastExitReason);
-      trade.PositionClose(ticket);
+      if(!SafePositionClose(ticket, "SMART_EXIT_FLOOR")) return false;
       return true;
    }
 
@@ -3432,7 +3592,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                                        peak, floorUSD, profitUSD, givebackPct,
                                        runnerClean ? "Y" : "N");
          XAU_SetPendingExitReason(ticket, lastExitReason);
-         trade.PositionClose(ticket);
+         if(!SafePositionClose(ticket, "SMART_EXIT_GIVEBACK")) return false;
          return true;
       }
       if(thesisHoldAllowed)
@@ -3601,7 +3761,7 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
          if(ident > 0 && ident != ticket)
             XAU_SetPendingExitReason(ident, reason);
       }
-      trade.PositionClose(ticket);
+      if(!SafePositionClose(ticket, "SMART_EXIT_TREND")) return false;
       return true;
    }
 
@@ -4572,6 +4732,9 @@ int OnInit()
    if(!licenseValid) { Alert("Invalid PIN: " + InpLicensePIN); return INIT_FAILED; }
    Print("LICENSE OK: ", InpLicensePIN);
 
+   // v6.4.19: initialize TTM record array
+   for(int _i = 0; _i < TTM_MAX_POSITIONS; _i++) { g_ttm[_i].active = false; g_ttm[_i].posId = 0; }
+
    // v5.2.0 — restore cloud position→signal map across EA restarts
    CloudMapLoad();
 
@@ -4825,8 +4988,20 @@ int OnInit()
    Print("─────────────── END DIAGNOSTICS ───────────────");
    if(!symOK || !termConn || !termAlgo || !mqlAlgo)
       Print("⚠⚠⚠  ONE OR MORE CRITICAL CHECKS FAILED — THE BOT WILL NOT TRADE UNTIL FIXED  ⚠⚠⚠");
-   Print("Balance: $", DoubleToString(initialBalance, 2), " | Risk: ", InpRiskPercent,
-         "% | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
+   // v6.4.15 FIX: Show actual effective base risk, not InpRiskPercent.
+   // InpRiskPercent is ALWAYS overridden by account-mode presets inside OpenTrade().
+   // Showing InpRiskPercent (0.4%) was the source of the "displayed 0.40% risk" confusion.
+   double startupBaseRisk = InpRiskPercent;
+   if(InpAccountMode == ACCT_BALANCED)     startupBaseRisk = 1.2;
+   if(InpAccountMode == ACCT_CONSERVATIVE) startupBaseRisk = 0.6;
+   if(InpAccountMode == ACCT_AGGRESSIVE)   startupBaseRisk = 2.0;
+   string acctModeStr = (InpAccountMode == ACCT_BALANCED) ? "BALANCED"
+                      : (InpAccountMode == ACCT_CONSERVATIVE) ? "CONSERVATIVE" : "AGGRESSIVE";
+   Print("Balance: $", DoubleToString(initialBalance, 2),
+         " | BaseRisk(actual): ", DoubleToString(startupBaseRisk, 2), "%",
+         " | Mode: ", acctModeStr,
+         " | InpRiskPercent(IGNORED by mode): ", DoubleToString(InpRiskPercent, 2), "%",
+         " | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
    Print("MODE: ", InpBacktestMode ? "BACKTEST (no network, no AI, no hive, no news)" : "LIVE (full features)");
    Print("THRESHOLDS: Grade A+ >= ", DoubleToString(InpGradeAPlus, 1),
          " | A >= ", DoubleToString(InpGradeA, 1),
@@ -7578,6 +7753,20 @@ void CheckPyramidOpportunity()
          " | riskPerLot=$", DoubleToString(pyramidRiskPerLot, 0),
          " | ", why);
 
+   // v6.4.17 — PYRAMID LOT TRACE (matches main LOT_TRACE format for easy comparison)
+   Print("===== [PYRAMID_LOT_TRACE] =====");
+   PrintFormat("  origLot       = %.4f  (the lot the original position was opened with)", origLot);
+   PrintFormat("  addNumber     = %d    (which pyramid add this is)", addNumber);
+   PrintFormat("  decayFactor   = %.4f  (InpPyramidSizeMulti^addNumber)", decayFactor);
+   PrintFormat("  pyrConfirmLot = %.4f  (AI/pattern confirmation multiplier)", pyrConfirmLot);
+   PrintFormat("  pyramidSizeMul= %.4f  (quality/grade/session/atr combo)", pyramidSizeMulti);
+   PrintFormat("  quality       = %.1f  (pyramid quality score, need >78 for 0.90x)", pyramidQuality);
+   PrintFormat("  addLotRaw     = %.4f  (origLot×decay×confirm×sizeMult before caps)", origLot * decayFactor * pyrConfirmLot * pyramidSizeMulti);
+   PrintFormat("  addLot_final  = %.4f  (after broker min/max/step and risk caps)", addLot);
+   PrintFormat("  why           = %s", why);
+   PrintFormat("  NOTE: if addLot=0.01, the root cause is small origLot (%.4f) × multipliers. Fix: ensure A+ original trade fires at full size.", origLot);
+   Print("==============================");
+
    bool ok;
    if(isBuy) ok = trade.Buy (addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
    else      ok = trade.Sell(addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
@@ -7675,15 +7864,10 @@ int EPF_ComputeTier()
 // Lot-size multiplier applied to every new entry (not pyramids).
 double EPF_LotMultiplier()
 {
-   if(!InpEPF_Enable) return 1.0;
-   switch(epf_tier)
-   {
-      case 1: return 0.85;
-      case 2: return 0.65;
-      case 3: return 0.40;
-      case 4: return InpEPF_T4AdaptiveAllowElite ? 1.0 : 0.0;   // adaptive T4 pass applies its own tiny multiplier
-      default: return 1.0;
-   }
+   // v6.4.16: DISABLED — EPF tier-based lot reductions removed.
+   // EPF_EntryBlockReason() still blocks/vetoes trades in T4 hard lockdown (acceptable: skip trade).
+   // Only the lot-reduction part (T1=0.85x, T2=0.65x, T3=0.40x) is removed.
+   return 1.0;
 }
 
 bool EPF_IsEliteGrade(string grade)
@@ -8812,7 +8996,7 @@ void OnTick()
    }
 
    bool smartDamageSetup = InpSmartGuardEnable && IsSmartGuardDamageSetup(setupName);
-   double smartGuardExtraLotMulti = 1.0;
+   // v6.4.20: smartGuardExtraLotMulti removed — SmartGuard lot reductions disabled in v6.4.16.
    if(smartDamageSetup)
    {
       if(InpSmartGuardSkipBTrendBreak && grade == "B")
@@ -8847,12 +9031,11 @@ void OnTick()
 
          if(!enoughSamples || hardBad || !strongRetest)
          {
-            smartGuardExtraLotMulti = InpSmartGuardSoftLotMulti;
             string mode = !enoughSamples ? "small-sample" : hardBad ? "negative-expectancy" : "B-grade-damage-class";
             string relax = inactivityRelaxed ? " | inactivity relax active: hard veto downgraded to soft retest" : "";
             string overrideTxt = strongRetest ? " | strong trend retest: HTF+momentum aligned" : "";
-            Print(StringFormat("SMART-GUARD SOFT: %s allowed with reduced risk x%.2f | mode=%s | combined %.1f | samples=%d W/L=%d/%d | decayed WR=%.0f%% exp=$%.0f%s%s",
-                               setupName, smartGuardExtraLotMulti, mode, combinedScore,
+            Print(StringFormat("SMART-GUARD SOFT: %s allowed at full risk (lot reductions removed v6.4.16) | mode=%s | combined %.1f | samples=%d W/L=%d/%d | decayed WR=%.0f%% exp=$%.0f%s%s",
+                               setupName, mode, combinedScore,
                                sgStats.samples, sgStats.wins, sgStats.losses,
                                sgStats.winRate, sgStats.expectancy, relax, overrideTxt));
          }
@@ -8877,9 +9060,8 @@ void OnTick()
          }
          if(confirmLot < 0.999)
          {
-            smartGuardExtraLotMulti *= confirmLot;
-            Print("SMART-GUARD FAST CONFIRM: allowed with H1 soft-context lot penalty x",
-                  DoubleToString(confirmLot, 2), " | ", confirmWhy);
+            // v6.4.20: lot reduction not applied (disabled v6.4.16). Log context only.
+            Print("SMART-GUARD FAST CONFIRM: allowed at full risk (lot reduction not applied v6.4.16) | ", confirmWhy);
          }
       }
       else if(bQualityReportScout)
@@ -9077,7 +9259,7 @@ void OnTick()
       int dxyBias = GetDXYBias();
       if(dxyBias != 0 && dxyBias != signal)
       {
-         string dxyMsg = StringFormat("DXY VETO — gold_bias=%d vs signal=%s",
+         string dxyMsg = StringFormat("DXY VETO — gold_bias=%s vs signal=%s",
                                        dxyGoldBias, signal>0?"BUY":"SELL");
          Print("TRADE BLOCKED BECAUSE: ", dxyMsg,
                " (set InpUseDXYFilter=false to disable)");
@@ -9253,57 +9435,86 @@ void OnTick()
    // v4.9.3 — Bigger lots scale with signal strength
    double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;
 
-   // v6.4.4: recovery mode size reduction (A/A+ only reached this point — 50% size)
-   if(g_adaptiveRecoveryMode)
-   {
-      sizeMulti *= 0.50;
-      Print("ADAPTIVE_RECOVERY_SIZE: lot x0.50 applied | grade=", grade,
-            " | clears after profitable trade or equity recovery");
-   }
+   // v6.4.16: REMOVED — recovery mode no longer reduces lot size.
+   // The B-grade quality gate above (ADAPTIVE_RECOVERY: blocks B-grade) handles selectivity.
+   // A/A+ trades that pass that gate trade at FULL account-mode size.
+   // if(g_adaptiveRecoveryMode) { sizeMulti *= 0.50; } ← REMOVED
    int    confidenceBoostPP = 0;   // in percentage points, informational
 
-   // v6.4.6: VOLATILITY LOT CAP — when ATR spikes (news, high-vol event), the SL grows
-   // proportionally in dollar terms. Scale down lot to maintain consistent dollar risk.
-   // Prevents the -260 loss scenario: news spike ATR inflates SL AND lot simultaneously.
+   // v6.4.18 — TRUE A/A+ FULL SIZE ENFORCEMENT
+   // Any soft reducer (timing, AI, memory, STI, committee) may BLOCK a trade by returning.
+   // But for A+/A they must NOT reduce lot — only skip or allow.
+   // This enforcement floor is applied AFTER all soft modules run, restoring sizeMulti to
+   // the grade baseline if soft code tried to shrink it.
+   bool   highGradeFullSize      = (grade == "A+" || grade == "A");
+   double originalGradeSizeMulti = sizeMulti;  // 1.10 (A+) or 0.85 (A) or 0.45 (B)
+
+   // Audit capture — each soft module records what it attempted
+   double lta_volCap      = 1.0;   // Vol cap (ScanSignals) — already bypassed for A+/A in v6.4.17
+   double lta_timing      = 1.0;   // timingLotMult
+   double lta_confirm     = 1.0;   // g_adaptiveConfirmLotMulti
+   double lta_ai          = 1.0;   // AI Director composite (sizeMulti delta)
+   double lta_brain       = 1.0;   // TradeBrain lot mult
+   double lta_conscious   = 1.0;   // Memory lot mult
+   double lta_sti         = 1.0;   // g_stiLotMulti (captured just before finalSzMult)
+   double lta_committee   = 1.0;   // committeeSzMult (captured just before finalSzMult)
+   string lta_aiVerdict   = "NOT_CALLED";
+
+   // v6.4.6: VOLATILITY LOT CAP — B-grade only from v6.4.17.
+   // A+/A: their SL is already wider during ATR spikes, which naturally reduces rawLots
+   // via the risk formula (riskAmount / slDollarPerLot). Adding a separate lot cap on top
+   // double-penalises high-grade trades and compounds with Asia session cut → micro-lots.
+   bool highGradeForVolCap = (grade == "A+" || grade == "A");
    if(InpVolLotCapEnable && ArraySize(bufATR) >= 2 && bufATR[1] > 0)
    {
       double curATR_vol = bufATR[1];
       double medATR = GetATR20Median();
       if(medATR > 0 && curATR_vol > medATR * InpVolLotCapATRRatio)
       {
-         double volLotAdj;
-         if(curATR_vol >= medATR * 2.5)      volLotAdj = 0.45;
-         else if(curATR_vol >= medATR * 2.0) volLotAdj = 0.55;
-         else                                 volLotAdj = 0.65;
-         sizeMulti *= volLotAdj;
-         PrintFormat("VOL_LOT_CAP: ATR %.1f is %.1fx 20-bar median %.1f | lot x%.2f to maintain consistent dollar risk (prevents news-spike oversizing)",
-                     curATR_vol, curATR_vol/medATR, medATR, volLotAdj);
+         if(highGradeForVolCap)
+         {
+            // v6.4.17: hard bypass — A+/A lot cap skipped
+            PrintFormat("[LOT_TRACE] VOL_LOT_CAP bypassed | grade=%s | ATR=%.1f (%.1fx median) | A/A+ hard-bypass: SL expansion already limits dollar risk",
+                        grade, curATR_vol, curATR_vol/medATR);
+         }
+         else
+         {
+            double volLotAdj;
+            if(curATR_vol >= medATR * 2.5)      volLotAdj = 0.45;
+            else if(curATR_vol >= medATR * 2.0) volLotAdj = 0.55;
+            else                                 volLotAdj = 0.65;
+            sizeMulti *= volLotAdj;
+            PrintFormat("VOL_LOT_CAP: ATR %.1f is %.1fx 20-bar median %.1f | lot x%.2f (grade=%s, B-grade vol cap applies)",
+                        curATR_vol, curATR_vol/medATR, medATR, volLotAdj, grade);
+         }
       }
    }
 
+   lta_timing = timingLotMult;   // capture for audit (enforcement floor handles A+/A below)
    if(timingLotMult < 0.999)
    {
       sizeMulti *= timingLotMult;
       Print("ENTRY-TIMING SIZE: lot x", DoubleToString(timingLotMult, 2),
-            " | finalGrade=", grade, " | ", timingReason);
+            " | finalGrade=", grade, " | ", timingReason,
+            highGradeFullSize ? " [will be restored by A+/A enforcement floor]" : "");
    }
 
+   lta_confirm = g_adaptiveConfirmLotMulti;   // capture before reset
    if(g_adaptiveConfirmLotMulti < 0.999)
    {
       sizeMulti *= g_adaptiveConfirmLotMulti;
       Print("ADAPTIVE-CONFIRM SIZE: lot x",
             DoubleToString(g_adaptiveConfirmLotMulti, 2), " | ",
-            g_adaptiveConfirmReason);
+            g_adaptiveConfirmReason,
+            highGradeFullSize ? " [will be restored by A+/A enforcement floor]" : "");
       g_adaptiveConfirmLotMulti = 1.0;
    }
 
-   if(smartDamageSetup && InpSmartGuardDamageLotMulti > 0)
-   {
-      sizeMulti *= InpSmartGuardDamageLotMulti * smartGuardExtraLotMulti;
-      Print("SMART-GUARD SIZE: ", setupName, " risk x",
-            DoubleToString(InpSmartGuardDamageLotMulti * smartGuardExtraLotMulti, 2),
-            " (live-history defensive sizing)");
-   }
+   // v6.4.16: REMOVED — SmartGuard damage-pattern lot reduction disabled.
+   // smartDamageSetup hard-veto (SMART-GUARD HARD block above) still prevents genuinely
+   // dangerous setups from trading at all. The lot reduction (defensive partial sizing)
+   // is removed: once a setup clears the SmartGuard hard-veto, it trades at full size.
+   // if(smartDamageSetup) { sizeMulti *= InpSmartGuardDamageLotMulti; } ← REMOVED
 
    // ----- LOCAL ML (hierarchical signature match, mirrors hive) -----
    if(InpLearnPatterns && patternCount >= 5)
@@ -9361,6 +9572,7 @@ void OnTick()
    bool gradeQualifiesForAI = (InpAIDirectorAllGrades)
                                ? (grade == "A+" || grade == "A" || grade == "B")
                                : (grade == "A+");
+   double szBeforeAI = sizeMulti;   // checkpoint to compute AI net multiplier
    if(callAI && gradeQualifiesForAI)
    {
       // --- Check AI offline state ---
@@ -9442,7 +9654,24 @@ void OnTick()
                                      (g_htfConsensusDir == -1 && signal == -1);
             if(htfConsensusTrade)
             {
-               // HTF consensus overrides weak AI disagreement — reduce lot, never block
+               if(highGradeFullSize)
+               {
+                  // v6.4.20: A+/A quality gate — enforcement floor would restore any reduction anyway.
+                  // If AI disagrees despite HTF consensus, this A+/A entry is not firmly confirmed.
+                  string blockMsg = StringFormat("[A+/A QUALITY GATE] %s grade=%s blocked: AI=HTF-OVERRIDE conf=%d%% — AI disagrees even with HTF support. A+/A requires strong AI confirm.",
+                                                 setupName, grade, lastAIConfidence);
+                  Print("AI DIRECTOR: ", blockMsg);
+                  g_gateBlocks_AI++; g_ftReport_AIBlocked++;
+                  XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
+                  CloudPostReasoning("BLOCK", blockMsg, RegimeName(), setupName, setupScore, combinedScore, "AI-WEAK-GRADE-GATE", signal);
+                  UpdateDashboard(0, combinedScore, "AI-WEAK-GATE");
+                  lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "AI-WEAK-GATE";
+                  g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
+                  g_lastSkipReason = blockMsg;
+                  Print("══════════════════════════════════════════════════");
+                  return;
+               }
+               // B-grade: HTF consensus overrides weak AI disagreement — reduce lot, never block
                aiVerdictStr = "HTF-OVERRIDE";
                sizeMulti = MathMin(sizeMulti, 0.70);
                Print("AI DIRECTOR: HTF-CONSENSUS OVERRIDE — AI disagrees (", lastAIConfidence,
@@ -9452,7 +9681,25 @@ void OnTick()
             }
             else if(CalibratedConfidence(lastAIConfidence) < InpAIDirectorMinConf) // v6.4.0: calibrated
             {
-               // AI disagrees but with weak conviction — reduce lot, don't block
+               if(highGradeFullSize)
+               {
+                  // v6.4.20: A+/A quality gate — weak disagree reduction would be overridden by floor.
+                  // Block instead: if AI weakly disagrees, this high-grade entry is not firmly confirmed.
+                  string blockMsg = StringFormat("[A+/A QUALITY GATE] %s grade=%s blocked: AI=WEAK-DISAGREE conf=%d%% (calibrated=%.1f%% < min %.0f%%) — weak AI opposition cannot silently become full-size. Block to maintain A+/A quality.",
+                                                 setupName, grade, lastAIConfidence,
+                                                 CalibratedConfidence(lastAIConfidence), InpAIDirectorMinConf);
+                  Print("AI DIRECTOR: ", blockMsg);
+                  g_gateBlocks_AI++; g_ftReport_AIBlocked++;
+                  XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
+                  CloudPostReasoning("BLOCK", blockMsg, RegimeName(), setupName, setupScore, combinedScore, "AI-WEAK-GRADE-GATE", signal);
+                  UpdateDashboard(0, combinedScore, "AI-WEAK-GATE");
+                  lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "AI-WEAK-GATE";
+                  g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
+                  g_lastSkipReason = blockMsg;
+                  Print("══════════════════════════════════════════════════");
+                  return;
+               }
+               // B-grade: AI disagrees but with weak conviction — reduce lot, don't block
                aiVerdictStr = "WEAK-DISAGREE";
                sizeMulti = MathMin(sizeMulti, 0.65);
                Print("AI DIRECTOR: WEAK-DISAGREE (conf=", lastAIConfidence, "% calibrated=",
@@ -9499,7 +9746,24 @@ void OnTick()
                Print("══════════════════════════════════════════════════");
                return;
             }
-            // AI SKIP but no confidence score — reduce size, don't block
+            if(highGradeFullSize)
+            {
+               // v6.4.20: A+/A quality gate — AI said SKIP with no parseable confidence.
+               // Cannot trade A+/A without AI direction; block to preserve signal quality.
+               string blockMsg = StringFormat("[A+/A QUALITY GATE] %s grade=%s blocked: AI=REDUCE (SKIP/no-confidence) — AI provides no usable direction for this A+/A entry. Block rather than silently full-size.",
+                                              setupName, grade);
+               Print("AI DIRECTOR: ", blockMsg);
+               g_gateBlocks_AI++; g_ftReport_AIBlocked++;
+               XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
+               CloudPostReasoning("BLOCK", blockMsg, RegimeName(), setupName, setupScore, combinedScore, "AI-WEAK-GRADE-GATE", signal);
+               UpdateDashboard(0, combinedScore, "AI-WEAK-GATE");
+               lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "AI-WEAK-GATE";
+               g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
+               g_lastSkipReason = blockMsg;
+               Print("══════════════════════════════════════════════════");
+               return;
+            }
+            // B-grade: AI SKIP but no confidence score — reduce size, don't block
             aiVerdictStr = "REDUCE";
             sizeMulti = MathMin(sizeMulti, 0.50);
             Print("AI DIRECTOR: REDUCE (AI SKIP/no confidence) — lot x0.50");
@@ -9515,11 +9779,14 @@ void OnTick()
                // Blocking a structurally sound setup because AI is 52% sure is backwards.
                if(CalibratedConfidence(lastAIConfidence) < InpAIDirectorMinConf) // v6.4.0: calibrated
                {
+                  // AI agrees but with sub-threshold conviction.
+                  // For A+/A: reduction is applied AND enforcement floor does NOT restore (weak-agree = reduced lot).
+                  // Only AI disagreement paths (HTF-OVERRIDE, WEAK-DISAGREE, REDUCE) block A+/A entirely.
                   aiVerdictStr = "ALLOW_LOW_CONV";
                   sizeMulti *= InpConvictionLowMulti; // 0.70x mild reduce
                   Print("AI DIRECTOR: LOW-CONV CONFIRM — AI agrees at ", lastAIConfidence,
                         "% < min ", InpAIDirectorMinConf, "% | lot x", DoubleToString(InpConvictionLowMulti, 2),
-                        " — NOT blocking (AI confirmed direction, just mild size-reduce)");
+                        highGradeFullSize ? " — A+/A: reduced size kept, floor will NOT restore for weak-agree" : " — standard mild reduce");
                   g_aiLastVerdict = "ALLOW_LOW_CONV"; g_aiLastConfidence = lastAIConfidence;
                   if(StringLen(lastAIBearishCase) > 0) Print("Devil's Advocate: ", lastAIBearishCase);
                }
@@ -9540,6 +9807,11 @@ void OnTick()
                {
                   convMult = InpConvictionLowMulti;
                   aiVerdictStr = "ALLOW_REDUCE";
+                  // For A+/A: reduction is applied AND enforcement floor does NOT restore.
+                  // AI agrees but at reduce-tier confidence → trade at reduced size, not full-size.
+                  if(highGradeFullSize)
+                     Print("AI DIRECTOR: ALLOW_REDUCE — A+/A: reduced lot kept, floor will NOT restore for weak-agree conf=",
+                           lastAIConfidence, "%");
                }
                sizeMulti *= convMult;
                Print("AI DIRECTOR: ", aiVerdictStr, " — conf=", lastAIConfidence, "% → lot x",
@@ -9578,6 +9850,10 @@ void OnTick()
       else if(StringLen(InpServerURL) < 10)
          XAU_AIRecordProviderFailure("Provider Unavailable", "InpServerURL missing/invalid");
    }
+
+   // Capture AI net multiplier (sizeMulti delta from before→after AI Director block)
+   lta_ai = (szBeforeAI > 0.0001) ? sizeMulti / szBeforeAI : 1.0;
+   lta_aiVerdict = g_aiLastVerdict;
 
    // Store signal context for ML + journal logging
    lastSignalDir = signal;
@@ -9679,29 +9955,26 @@ void OnTick()
       }
    }
 
-   // v5.1.9: while Selective Mode is active, reduce lot size by InpPG_SelectiveLotMulti
-   double pgLotMult = pg_selectiveActive ? InpPG_SelectiveLotMulti : 1.0;
-   // v5.3.1: soft-DD mode also reduces lots (multiplies on top of selective)
-   if(IsSoftDDMode()) pgLotMult *= InpSoftDDLotMulti;
-   // v5.5.0: EPF tier also reduces lots (stacks on top of selective + soft-DD)
-   pgLotMult *= EPF_LotMultiplier();
-   pgLotMult *= epfAdaptiveLotMult;
-   if(pgLotMult <= 0.0001) {
-      Print("🛑 EPF LOT MULT = 0 (lockdown active) — skipping entry");
-      return;
-   }
+   // v6.4.16: pgLotMult = 1.0 — all protection-cage lot reductions removed.
+   // SelectiveMode (pg_selectiveActive), SoftDD (IsSoftDDMode), EPF tiers, and
+   // EPF T4 adaptive lot reduction are all DISABLED as lot modifiers.
+   // Their BLOCK/VETO paths remain active (trade is skipped, not micro-sized).
+   // EPF_LotMultiplier() also returns 1.0 now — this line is now a no-op multiply.
+   double pgLotMult = 1.0;
+   // epfAdaptiveLotMult and EPF_LotMultiplier() both return 1.0 — kept for log/reporting only
+   double epfAdaptiveLotMult_unused = 1.0;
 
    if(epfT4AdaptivePass)
    {
       epf_t4AdaptiveTradesToday++;
       epf_t4LastAdaptiveTrade = TimeCurrent();
       Print("EPF-T4 ADAPTIVE PASS: elite ", grade, " ", (signal == 1 ? "BUY" : "SELL"),
-            " allowed with reduced lot x", DoubleToString(epfAdaptiveLotMult, 2),
+            " allowed at FULL lot (v6.4.16: T4 lot reduction removed) |",
             " setup=", DoubleToString(setupScore, 1),
             " combined=", DoubleToString(combinedScore, 1),
             " used=", epf_t4AdaptiveTradesToday, "/", InpEPF_T4MaxTradesPerDay);
-      CloudPostReasoning("EPF-T4", "Adaptive guarded pass: elite signal allowed with reduced lot",
-                         RegimeName(), setupName, setupScore, combinedScore, "EPF-T4-SOFT", signal);
+      CloudPostReasoning("EPF-T4", "Adaptive guarded pass: elite signal allowed at full lot (v6.4.16)",
+                         RegimeName(), setupName, setupScore, combinedScore, "EPF-T4-FULL", signal);
    }
 
    double brainLotMult = 1.0;
@@ -9719,10 +9992,11 @@ void OnTick()
       return;
    }
    g_ftReport_TBAllowed++; // v6.3.9: TradeBrain allowed this trade through
+   lta_brain = brainLotMult;   // capture for audit
    if(brainLotMult < 0.999)
    {
       sizeMulti *= brainLotMult;
-      Print(brainReason);
+      Print(brainReason, highGradeFullSize ? " [will be restored by A+/A enforcement floor]" : "");
    }
    else if(StringLen(brainReason) > 0)
       Print(brainReason);
@@ -9732,11 +10006,13 @@ void OnTick()
    XAU_MemoryRecommendation(signal, setupName, grade, consciousLotMult, consciousReason);
    if(StringLen(consciousReason) > 0)
       Print(consciousReason);
+   lta_conscious = consciousLotMult;   // capture for audit
    if(consciousLotMult < 0.999 || consciousLotMult > 1.001)
    {
       sizeMulti *= consciousLotMult;
       Print("AI-MEMORY LOT ADJUST: lot x", DoubleToString(consciousLotMult, 2),
-            " (aggregate evidence only; emergency safety unchanged)");
+            " (aggregate evidence only; emergency safety unchanged)",
+            highGradeFullSize && consciousLotMult < 0.999 ? " [will be restored by A+/A enforcement floor]" : "");
    }
 
    // v6.0.1 — AI Trading Committee: synthesise market narrative + human rules + pattern memory
@@ -9747,15 +10023,16 @@ void OnTick()
    if(InpCommitteeLog)
       Print(g_committee.thesis);
    double committeeSzMult = InpCommitteeLotAdj ? g_committee.lotMultiplier : 1.0;
+   lta_sti       = g_stiLotMulti;    // capture for audit
+   lta_committee = committeeSzMult;  // capture for audit
 
    // Open trade with grade-scaled sizing (g_stiLotMulti = 1.0 unless STI reduced it)
    if(InpSTI_Enable && g_stiLotMulti < 0.999)
       Print(StringFormat("STI SIZE APPLIED | lot x%.2f | committee x%.2f | final sizeMulti=%.3f",
-                         g_stiLotMulti, committeeSzMult, sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult));
+                         g_stiLotMulti, committeeSzMult, sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult),
+            highGradeFullSize ? " [will be restored by A+/A enforcement floor]" : "");
 
    // v6.3.1 SIZE GUARD: prevent silent 0-lot order when multiple reduction layers stack.
-   // Multiplier stacking (grade B 0.45 × AI 0.5 × pgLot × STI × committee) can compound
-   // to near-zero; OpenTrade would try to submit a lot below broker minimum and fail silently.
    double finalSzMult = sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult;
    if(finalSzMult < 0.04)
    {
@@ -9767,6 +10044,75 @@ void OnTick()
             ") — below minimum tradeable. Clamping to 0.10x to keep the trade alive.");
       finalSzMult = 0.10;
    }
+
+   // ======================================================================
+   // v6.4.18 — A+/A FULL SIZE ENFORCEMENT FLOOR
+   // Soft modules may BLOCK (return) a trade — that is allowed and correct.
+   // They must NOT reduce A+/A lot size. If any soft module shrunk sizeMulti
+   // below the grade baseline, restore it here before calling OpenTrade().
+   // Hard caps inside OpenTrade() (margin, broker, basket, prop) still apply.
+   // ======================================================================
+   double finalSzMultSoftReduced = finalSzMult;   // what soft modules produced
+   string lta_enforcementMsg = "";
+   // v6.4.20 patch: enforcement floor does NOT restore if AI gave a weak-agree verdict.
+   // Weak-agree (ALLOW_LOW_CONV / ALLOW_REDUCE) means AI confirms but at low conviction.
+   // Restoring to full size would override a legitimate quality signal.
+   // Only restore when soft modules (non-AI) reduced lot, or when AI strongly agreed.
+   bool aiWeakConfirmReduced = (lta_aiVerdict == "ALLOW_LOW_CONV" || lta_aiVerdict == "ALLOW_REDUCE");
+   if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && !aiWeakConfirmReduced)
+   {
+      finalSzMult = originalGradeSizeMulti;
+      lta_enforcementMsg = StringFormat(
+         "ENFORCED | grade=%s | softProduced=%.3f → restored=%.3f | "
+         "timing=%.2f confirm=%.2f AI=%.2f(verdict=%s) brain=%.2f conscious=%.2f sti=%.2f committee=%.2f",
+         grade, finalSzMultSoftReduced, finalSzMult,
+         lta_timing, lta_confirm, lta_ai, lta_aiVerdict,
+         lta_brain, lta_conscious, lta_sti, lta_committee);
+      PrintFormat("[LOT_TRACE] A+/A FULL SIZE ENFORCED: %s", lta_enforcementMsg);
+   }
+   else if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && aiWeakConfirmReduced)
+   {
+      lta_enforcementMsg = StringFormat(
+         "FLOOR_SKIPPED | grade=%s | AI=%s reduced to %.3f (grade=%.3f) — weak-agree kept, not restored",
+         grade, lta_aiVerdict, finalSzMult, originalGradeSizeMulti);
+      PrintFormat("[LOT_TRACE] A+/A FLOOR SKIPPED (WEAK-AI-AGREE): %s", lta_enforcementMsg);
+   }
+   else if(highGradeFullSize)
+   {
+      lta_enforcementMsg = StringFormat(
+         "NO_REDUCTION_NEEDED | grade=%s | finalSzMult=%.3f >= grade=%.3f | soft modules did not reduce",
+         grade, finalSzMult, originalGradeSizeMulti);
+   }
+
+   // ======= PRE-OPENTRADE LOT AUDIT (v6.4.18) =======
+   Print("[LOT_TRACE] ===== SOFT REDUCTION AUDIT =====");
+   PrintFormat("[LOT_TRACE] grade=%s | highGradeFullSize=%s | originalGradeSizeMulti=%.3f",
+               grade, highGradeFullSize ? "YES" : "NO", originalGradeSizeMulti);
+   PrintFormat("[LOT_TRACE] volCapMult      = %.3f | %s",
+               lta_volCap, highGradeFullSize ? "BYPASSED (A+/A hard-bypass in v6.4.17)" : "APPLIED");
+   PrintFormat("[LOT_TRACE] timingLotMult   = %.3f | %s",
+               lta_timing, highGradeFullSize && lta_timing < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
+   PrintFormat("[LOT_TRACE] confirmLotMult  = %.3f | %s",
+               lta_confirm, highGradeFullSize && lta_confirm < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
+   PrintFormat("[LOT_TRACE] AI lotMult      = %.3f | verdict=%s | %s",
+               lta_ai, lta_aiVerdict,
+               (highGradeFullSize && lta_ai < 0.999 && !aiWeakConfirmReduced) ? "attempted reduction — overridden by floor" :
+               (highGradeFullSize && lta_ai < 0.999 && aiWeakConfirmReduced)  ? "weak-agree kept (floor skipped)" :
+               "no reduction / block / allow");
+   PrintFormat("[LOT_TRACE] brainLotMult    = %.3f | %s",
+               lta_brain, highGradeFullSize && lta_brain < 0.999 ? "attempted reduction — overridden by floor" : "block or allow");
+   PrintFormat("[LOT_TRACE] consciousLotMult= %.3f | %s",
+               lta_conscious, highGradeFullSize && lta_conscious < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
+   PrintFormat("[LOT_TRACE] g_stiLotMulti   = %.3f | %s",
+               lta_sti, highGradeFullSize && lta_sti < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
+   PrintFormat("[LOT_TRACE] committeeSzMult = %.3f | %s",
+               lta_committee, highGradeFullSize && lta_committee < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
+   PrintFormat("[LOT_TRACE] pgLotMult       = 1.000 (disabled v6.4.16)");
+   PrintFormat("[LOT_TRACE] finalSzMult before enforcement = %.3f", finalSzMultSoftReduced);
+   PrintFormat("[LOT_TRACE] finalSzMult after  enforcement = %.3f", finalSzMult);
+   if(StringLen(lta_enforcementMsg) > 0)
+      PrintFormat("[LOT_TRACE] enforcement: %s", lta_enforcementMsg);
+   Print("[LOT_TRACE] ==========================================");
    // v6.3.8 Upgrade 6: count allowed trade
    g_totalAllowed++;
    // v6.3.9: track AI allow for forward-test report
@@ -10117,7 +10463,7 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
                   structureConfirmed ? "Y" : "N", emaAgainst ? "Y" : "N",
                   rsiAgainst ? "Y" : "N", momentumScore);
       XAU_SetPendingExitReason(ticket, lastExitReason);
-      trade.PositionClose(ticket);
+      if(!SafePositionClose(ticket, "GROWTH_HARD_LOSS")) return false;
       lastTradeClose = TimeCurrent();
       return true;
    }
@@ -10132,7 +10478,7 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
                      ticket, dirStr, profit, maxTradeLossUSD,
                      thesisFailing ? "Y" : "N", minsOpen, lotsOpen);
          XAU_SetPendingExitReason(ticket, lastExitReason);
-         trade.PositionClose(ticket);
+         if(!SafePositionClose(ticket, "GROWTH_HARD_LOSS_EXIT")) return false;
          lastTradeClose = TimeCurrent();
          return true;
       }
@@ -10146,7 +10492,7 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
       PrintFormat("GROWTH_HARD_LOSS_EXIT #%I64u %s | basket floating=$%.2f cap=$%.2f closing to protect equity curve",
                   ticket, dirStr, basketPnl, maxBasketLossUSD);
       XAU_SetPendingExitReason(ticket, lastExitReason);
-      trade.PositionClose(ticket);
+      if(!SafePositionClose(ticket, "GROWTH_BASKET_LOSS")) return false;
       lastTradeClose = TimeCurrent();
       return true;
    }
@@ -10164,7 +10510,7 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
                      rsiAgainst ? "Y" : "N", trendAligned ? "Y" : "N",
                      momentumScore);
          XAU_SetPendingExitReason(ticket, lastExitReason);
-         trade.PositionClose(ticket);
+         if(!SafePositionClose(ticket, "GROWTH_BAD_ENTRY_THESIS")) return false;
          lastTradeClose = TimeCurrent();
          return true;
       }
@@ -10426,9 +10772,11 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
          static datetime lastAggSkip = 0;
          if(TimeCurrent() - lastAggSkip > 60)
          {
-            Print("⛔ AGG-RISK BLOCK: open positions already risk $", DoubleToString(aggDollar, 0),
-                  " (", DoubleToString(aggLots, 2), " lots) > ", DoubleToString(effectiveAggregateCap, 2),
-                  "% equity (max $", DoubleToString(maxAggDollar, 0), "). New entries blocked until exposure drops.");
+            string aggMsg = StringFormat("AGG-RISK BLOCK: open $%.0f (%g lots) > %.2f%% equity cap $%.0f",
+                                          aggDollar, aggLots, effectiveAggregateCap, maxAggDollar);
+            Print("⛔ ", aggMsg, ". New entries blocked until exposure drops.");
+            g_lastSkipReason = aggMsg;
+            UpdateDashboard(0, 0.0, "AGG-RISK");
             lastAggSkip = TimeCurrent();
          }
          return;
@@ -10446,8 +10794,10 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
          static datetime lastLotSkip = 0;
          if(TimeCurrent() - lastLotSkip > 60)
          {
-            Print("⛔ TOTAL-LOTS BLOCK: open lots ", DoubleToString(aggLots, 2),
-                  " ≥ cap ", DoubleToString(maxTotal, 2), ". New entries blocked.");
+            string lotsMsg = StringFormat("TOTAL-LOTS BLOCK: open lots %.2f >= cap %.2f", aggLots, maxTotal);
+            Print("⛔ ", lotsMsg, ". New entries blocked.");
+            g_lastSkipReason = lotsMsg;
+            UpdateDashboard(0, 0.0, "LOT-CAP");
             lastLotSkip = TimeCurrent();
          }
          return;
@@ -10472,12 +10822,12 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       if(signal == -1) betterPrice = (newEntry >= prevEntry + minAdvanceATR);
       if(!betterPrice)
       {
-         Print("⏸  POST-WINNER ENTRY BLOCKED: Last ", signal==1?"BUY":"SELL",
-               " closed +profit @ ", DoubleToString(prevEntry, digits),
-               ". New @ ", DoubleToString(newEntry, digits),
-               " not ≥", DoubleToString(InpPostWinnerATRBump,2), "×ATR (",
-               DoubleToString(minAdvanceATR, 2), ") better. Cooldown ",
-               InpPostWinnerCoolMin, "min.");
+         string pwMsg = StringFormat("POST-WINNER ENTRY BLOCKED: last %s closed +profit @%.2f. New @%.2f not ≥%.2f×ATR (%.2f) better. Cooldown %dmin.",
+                                     signal==1?"BUY":"SELL", prevEntry, newEntry,
+                                     InpPostWinnerATRBump, minAdvanceATR, InpPostWinnerCoolMin);
+         Print("⏸  ", pwMsg);
+         g_lastSkipReason = pwMsg;
+         UpdateDashboard(0, 0.0, "POST-WIN");
          return;
       }
    }
@@ -10516,14 +10866,14 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                          StringFind(lastClose.exitReason, "peak") >= 0);
       if(!resetSeen && (chaseRisk || basketBank))
       {
-         Print("⏸  POST-WINNER CYCLE BLOCK: ", signal == 1 ? "BUY" : "SELL",
-               " winner closed @", DoubleToString(lastClose.closePrice, digits),
-               " profit $", DoubleToString(lastClose.profit, 2),
-               ". New @", DoubleToString(newEntryNow, digits),
-               " before reset ", DoubleToString(resetDist, 2),
-               " (", DoubleToString(InpPostWinnerResetATR, 2), "×ATR). Avoiding ",
-               signal == 1 ? "buying top after bank" : "selling bottom after bank",
-               ". Last exit=", lastClose.exitReason);
+         string cycleMsg = StringFormat("POST-WINNER CYCLE BLOCK: %s winner @%.2f +$%.2f. New @%.2f before reset %.2f (%.2f×ATR). Avoiding %s. Exit=%s",
+                                         signal==1?"BUY":"SELL", lastClose.closePrice, lastClose.profit,
+                                         newEntryNow, resetDist, InpPostWinnerResetATR,
+                                         signal==1?"buying top after bank":"selling bottom after bank",
+                                         lastClose.exitReason);
+         Print("⏸  ", cycleMsg);
+         g_lastSkipReason = cycleMsg;
+         UpdateDashboard(0, 0.0, "CYCLE-GUARD");
          return;
       }
    }
@@ -10620,6 +10970,13 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    bool entryQualityScout = (sizeMulti <= InpBlockedMemoryScoutLotMulti * 0.75 ||
                              StringFind(g_pendingBrainEntryAudit, "REPORT-FIT SCOUT") >= 0 ||
                              StringFind(g_pendingBrainEntryAudit, "BLOCKED-MEMORY SCOUT") >= 0);
+   // v6.4.20: A+/A enforcement floor already restored sizeMulti to grade baseline.
+   // The scout flag must not survive into OpenTrade for high-grade entries — it fights the floor.
+   if(entryQualityScout && (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0))
+   {
+      Print("[LOT_TRACE] SCOUT CAP SUPPRESSED: grade A/A+ — TradeBrain/memory scout markers do not downgrade high-grade entries. entryQualityScout cleared.");
+      entryQualityScout = false;
+   }
    double riskAfterSignal = riskPct;
 
    double acctSizeMult = AccountSizeRiskMultiplier();
@@ -10640,15 +10997,16 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    }
    double riskAfterAccount = riskPct;
 
-   // v5.1.0 — PROFIT GUARDIAN: tier-based risk scaling on top of everything else
+   // v6.4.16: Profit Guardian lot reduction removed. PG_RiskMultiplier() returns 1.0 for
+   // tiers 0/1/2 (no risk halving on big-profit days). Tier 3 returns 0.0 which skips
+   // the trade entirely (acceptable — this is a trade skip, not a micro-lot).
    double pgMult = PG_RiskMultiplier();
-   if(pgMult < 1.0)
+   if(pgMult <= 0.001)
    {
-      Print("🛡 PG risk×", DoubleToString(pgMult,2),
-            " (HWM=$", DoubleToString(pg_dayHWM,2), ")");
-      riskPct *= pgMult;
-      if(pgMult <= 0.001) return;   // tier 3: no new lots
+      Print("🛡 PG TIER 3: hard block — account up 75%+, trailing only. Skipping new entry.");
+      return;   // hard block (skip trade — acceptable)
    }
+   // pgMult is 1.0 for all other tiers — no lot reduction applied
    if(entryQualityScout && InpEntryQualityScoutRiskCap > 0.0 && riskPct > InpEntryQualityScoutRiskCap)
    {
       Print("SCOUT-RISK CAP: post-PG memory/scout risk ",
@@ -10658,73 +11016,76 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    }
    double riskAfterPG = riskPct;
 
-   // DRAWDOWN RECOVERY MODE: cap risk at InpDrawdownRisk% until we get a win
-   double drawdownMult = 1.0;
+   // v6.4.16: REMOVED — drawdown recovery risk cap disabled.
+   // drawdownActive still gates B-grade via the ADAPTIVE_RECOVERY gate earlier in ScanSignals.
+   // A/A+ trades that reach this point trade at FULL account-mode risk.
+   double drawdownMult = 1.0;   // kept for audit log compatibility (always 1.0 now)
    if(drawdownActive)
-   {
-      double riskBeforeDrawdown = riskPct;
-      double cappedRisk = MathMin(riskPct, InpDrawdownRisk);
-      if(cappedRisk < riskPct)
-      {
-         Print("DRAWDOWN MODE: risk ", DoubleToString(riskPct,2), "% -> capped ", DoubleToString(cappedRisk,2), "%");
-         riskPct = cappedRisk;
-         if(riskBeforeDrawdown > 0.0)
-            drawdownMult = cappedRisk / riskBeforeDrawdown;
-      }
-   }
+      Print("DRAWDOWN MODE active — lot sizing UNCHANGED (v6.4.16: protection via quality gate only)");
 
-   // Careful mode near weekly target
-   if(InpCarefulMode && weeklyStartEquity > 0)
-   {
-      double wPct = (accInfo.Equity() - weeklyStartEquity) / weeklyStartEquity * 100;
-      if(wPct > InpWeeklyTarget * 0.75) riskPct *= 0.25;
-      else if(wPct > InpWeeklyTarget * 0.5) riskPct *= 0.5;
-   }
-   double riskAfterCareful = riskPct;
+   // v6.4.16: REMOVED — InpCarefulMode lot reductions disabled.
+   // Weekly profit target is now advisory only; lot size is not reduced near the target.
+   // If the user wants to protect weekly gains, use the weekly target halt (InpWeeklyTarget)
+   // which stops trading entirely rather than taking tiny "fear trades."
+   double riskAfterCareful = riskPct;   // kept for audit log compatibility
 
-   // Session scaling
+   // Session scaling — v6.4.17: A+/A grade bypasses Asia session cut entirely.
+   // Root cause of 0.02 A+ trade: grade(1.10) × vol_cap(0.65) × asia(0.80) × vol_adapt(0.85)
+   // = 0.484x → micro-lot. A+ has passed the full quality gate; session time is not a reason
+   // to trade smaller. B-grade continues to be scaled down during Asia low-liquidity hours.
    MqlDateTime dt; TimeCurrent(dt);
    double sessionMult = 1.0;
+   bool highGradeSession = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
    if(dt.hour >= 0 && dt.hour < 8)
    {
-      bool cleanHighGrade = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
-      bool trendContinuation = IsTrendContinuationRegime(signal);
-      // v6.3.2: raised Asia floor 0.40→0.55 — 0.40× on B-grade was compounding to
-      // sub-minLot on small accounts (grade B 0.45 × asia 0.40 = 0.18× = $6 risk = 0-lot)
-      double asianMult = 0.55;
-      if(trendContinuation && cleanHighGrade && !entryQualityScout)
-         asianMult = g_propFirmMode ? 0.65 : 0.80;
-      else if(trendContinuation && !entryQualityScout)
-         asianMult = g_propFirmMode ? 0.55 : 0.65;
-      sessionMult = asianMult;
-      riskPct *= asianMult; // v5.8.54: do not crush clean A/A+ continuation trades on small non-prop accounts.
+      if(highGradeSession)
+      {
+         // v6.4.17: A+/A session cut REMOVED
+         sessionMult = 1.0;
+         PrintFormat("[LOT_TRACE] Asia session bypass | grade=A+/A | sessionMult=1.0 | "
+                     "hour=%d | (was: up to 0.80x) | full size maintained", dt.hour);
+      }
+      else
+      {
+         // B-grade: continue applying Asia scaling
+         bool trendContinuation = IsTrendContinuationRegime(signal);
+         double asianMult = 0.55;
+         if(trendContinuation && !entryQualityScout)
+            asianMult = g_propFirmMode ? 0.55 : 0.65;
+         sessionMult = asianMult;
+         riskPct *= asianMult;
+         PrintFormat("[LOT_TRACE] Asia session applied | grade=B | sessionMult=%.2f | hour=%d",
+                     asianMult, dt.hour);
+      }
    }
    double riskAfterSession = riskPct;
 
-   // v6.3.8 Upgrade 7: performance multiplier (anti-martingale, ATR-normalized)
-   double perfMult = GetPerformanceMultiplier();
-   if(perfMult != 1.0)
-      riskPct *= perfMult;
+   // v6.4.16: REMOVED — performance multiplier and pattern loss multiplier disabled.
+   // GetPerformanceMultiplier() returns 1.0 (disabled above). Pattern streak adjustments
+   // (loss streak → 0.70x, win streak → 1.3x) are also removed. Position size must not
+   // be influenced by previous wins or losses — only current market conditions.
+   double perfMult = GetPerformanceMultiplier();   // always 1.0 in v6.4.16
+   double patternMult = 1.0;                       // always 1.0 in v6.4.16
+   double riskAfterPattern = riskPct;              // kept for audit log compatibility
 
-   // Auto risk scaling from streaks
-   double patternMult = 1.0;
-   if(patternCount >= 5)
-   {
-      int rW = 0;
-      for(int p = patternCount - 1; p >= MathMax(0, patternCount - 5); p--)
-         if(patterns[p].wasWinner) rW++;
-      if(rW >= 4) { patternMult = 1.3; riskPct *= patternMult; }
-      else if(rW == 0) { patternMult = 0.70; riskPct *= patternMult; } // v6.3.2: changed rW<=1 to rW==0 — 4L+1W was penalising the recovery trade; only reduce when ALL 5 recent are losses
-   }
-   double riskAfterPattern = riskPct;
-
-   // VOLATILITY-ADAPTIVE SIZING (reduce in vol spikes, boost in calm)
-   double volMult = GetVolAdaptiveMult();
-   if(volMult != 1.0)
+   // VOLATILITY-ADAPTIVE SIZING — v6.4.17: bypassed for A+/A.
+   // On A+ SELL @3983 SL:3995: vol_cap(ScanSignals) + asia_session + vol_adapt =
+   // three separate vol cuts on the same trade → 0.65×0.80×0.85 = 0.44x on top of base.
+   // A+/A's SL is already wider in high-vol (via ATR-based placement), so the lot formula
+   // already captures the dollar risk adjustment. Explicit vol-adapt on top is redundant.
+   bool highGradeVol = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
+   double volMult = highGradeVol ? 1.0 : GetVolAdaptiveMult();
+   if(!highGradeVol && volMult != 1.0)
    {
       Print("VOL-ADAPT: risk × ", DoubleToString(volMult, 2),
             " (ATR vs median; ", volMult < 1.0 ? "high vol — shrinking" : "calm — slight boost", ")");
       riskPct *= volMult;
+   }
+   else if(highGradeVol)
+   {
+      double checkVol = GetVolAdaptiveMult();
+      if(MathAbs(checkVol - 1.0) > 0.01)
+         PrintFormat("[LOT_TRACE] VOL-ADAPT bypassed | grade=A+/A | wouldHaveBeen=%.2fx | hard-bypass prevents micro-lot stacking", checkVol);
    }
 
    if(g_propFirmMode && g_propFirmRiskPerTradePct > 0.0 &&
@@ -10775,6 +11136,48 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       return;
    }
    double rawLots = riskAmount / slDollarPerLotRaw;
+
+   // v6.4.15 — PROPORTIONAL LOT FLOOR FOR SMALL ACCOUNTS
+   // ROOT CAUSE FIX: On accounts < $25,000, multiplicative stacking of grade/session/
+   // safety multipliers can compress rawLots below broker minimum even when the trade
+   // signal is genuinely valid. This is NOT proportional: a $10k account trades 4× more
+   // than a $3k account under identical conditions, but both hit 0.01 lots at the floor.
+   //
+   // Fix: if rawLots < 2.5× minLot AND balance < $25k, apply a risk floor so at least
+   // 2.5× minLot is traded. The floor is capped at baseRisk% (the pre-multiplier base)
+   // so it cannot blindly override recovery/drawdown logic — it only counteracts
+   // excessive multiplier stacking on small accounts.
+   //
+   // Exclusions: quality-scout entries, prop-firm mode, and drawdown-recovery mode
+   // all keep their own intentionally reduced sizing.
+   double proportionalFloorApplied = 0.0;   // for audit logging
+   if(!entryQualityScout && !g_propFirmMode && !drawdownActive && rawLots > 0
+      && rawLots < minLot * 2.5 && balance < 25000.0 && slDollarPerLotRaw > 0)
+   {
+      // Risk% needed to trade 2.5× minLot with the current SL distance
+      double targetLots = minLot * 2.5;
+      double targetRiskPct = (targetLots * slDollarPerLotRaw / balance) * 100.0;
+      // Cap: floor cannot exceed the pre-multiplier base risk (safety systems remain)
+      double floorRiskPct = MathMin(targetRiskPct, baseRisk);
+      if(floorRiskPct > riskPct)
+      {
+         double floorRiskAmt = balance * floorRiskPct / 100.0;
+         double floorRawLots = floorRiskAmt / slDollarPerLotRaw;
+         proportionalFloorApplied = floorRiskPct;
+         PrintFormat(
+            "PROPORTIONAL_LOT_FLOOR | balance=$%.0f sizeMulti=%.3f riskPct=%.3f%% rawLots=%.4f < 2.5x minLot=%.2f | "
+            "floor risk %.3f%% → rawLots %.4f | reason: multiplier stack compressed lot below proportional minimum | "
+            "sizeMulti=%.3f pgMult=%.2f sessionMult=%.2f patternMult=%.2f volMult=%.2f | "
+            "downstream GrowthGuard/equityCap/basketCap still apply",
+            balance, sizeMulti, riskPct, rawLots, minLot,
+            floorRiskPct, floorRawLots,
+            sizeMulti, pgMult, sessionMult, patternMult, volMult);
+         rawLots   = floorRawLots;
+         riskPct   = floorRiskPct;
+         riskAmount = balance * riskPct / 100.0;
+      }
+   }
+
    double riskOvershootPct = 0.0;
    double lots = XAU_NormalizeVolumeForRisk(rawLots, lotStep, minLot, maxLot,
                                             slDollarPerLotRaw, riskAmount,
@@ -10788,8 +11191,16 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       // minLot rather than silently skip. A minLot trade is better than no trade.
       if(rawLots > 0)
       {
-         Print("LOT-CALC FLOOR: stacked multipliers compressed lots to ", DoubleToString(brokerLimitedLots,4),
-               " (below minLot=", DoubleToString(minLot,4), ") — clamping to minLot to keep valid signal alive.");
+         // v6.4.15: distinguish whether this is a genuine math result or a stacking artifact
+         string floorCollapseReason = (proportionalFloorApplied > 0)
+            ? "PROPORTIONAL_FLOOR_APPLIED_BUT_SL_TOO_WIDE_FOR_ACCOUNT"
+            : "STACKED_MULTIPLIERS_COMPRESSED_BELOW_MINLOT";
+         PrintFormat(
+            "LOT-CALC FLOOR: lots %.4f < minLot %.2f → clamped to minLot | "
+            "rawLots=%.4f riskAmt=$%.2f sl$/lot=$%.2f balance=$%.0f | reason=%s | "
+            "NOTE: 0.01 lot is mathematically correct here — account too small for wider lots at current SL/risk config",
+            brokerLimitedLots, minLot, rawLots, riskAmount, slDollarPerLotRaw, balance,
+            floorCollapseReason);
          lots = minLot;
       }
       else
@@ -10925,6 +11336,49 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
          microCollapseReason += "|BASKET_CAP";
    }
 
+   // v6.4.15 — FULL LOT SIZE REPORT (Phase 7)
+   // Every execution prints the complete stage-by-stage breakdown.
+   // "Displayed Risk" = what InpRiskPercent shows in settings (may differ from actual).
+   // "Configured Base Risk" = what is actually used after account-mode override.
+   // "Executed Risk" = final effective risk% sent to broker.
+   double executedRiskPct = (slDollarPerLotRaw > 0 && balance > 0)
+                            ? (lots * slDollarPerLotRaw / balance * 100.0) : riskPct;
+   Print("========== LOT SIZE REPORT ==========");
+   Print("  Balance:                 $", DoubleToString(balance, 2));
+   Print("  Equity:                  $", DoubleToString(equityForSizing, 2));
+   Print("  Displayed Risk (InpRiskPercent, IGNORED): ", DoubleToString(InpRiskPercent, 2), "%");
+   Print("  Configured Base Risk (mode override):     ", DoubleToString(baseRisk, 2), "% [mode=",
+         (InpAccountMode == ACCT_BALANCED ? "BALANCED" :
+          InpAccountMode == ACCT_CONSERVATIVE ? "CONSERVATIVE" : "AGGRESSIVE"), "]");
+   Print("  ATR:                     ", DoubleToString(atr, 2));
+   Print("  SL Distance:             ", DoubleToString(slDist, 2), " pts");
+   Print("  SL Dollar/Lot:           $", DoubleToString(slDollarPerLotRaw, 2));
+   Print("  Broker Min/Max/Step:     ", DoubleToString(minLot, lotDigits), "/",
+         DoubleToString(maxLot, lotDigits), "/", DoubleToString(lotStep, lotDigits));
+   Print("  ---");
+   Print("  After Grade Mult (", DoubleToString(sizeMulti, 3), "x):  risk=", DoubleToString(riskAfterSignal, 3), "%  $", DoubleToString(balance * riskAfterSignal / 100.0, 2));
+   Print("  After Acct Scale (", DoubleToString(acctSizeMult, 2), "x):   risk=", DoubleToString(riskAfterAccount, 3), "%");
+   Print("  After PG Mult (1.00x - disabled v6.4.16): risk=", DoubleToString(riskAfterPG, 3), "%");
+   Print("  Careful Mode (disabled v6.4.16):          risk=", DoubleToString(riskAfterCareful, 3), "%");
+   Print("  After Session (", DoubleToString(sessionMult, 2), "x):    risk=", DoubleToString(riskAfterSession, 3), "%");
+   Print("  Pattern Mult (disabled v6.4.16 = 1.00x): risk=", DoubleToString(riskAfterPattern, 3), "%");
+   Print("  After Vol Adapt (", DoubleToString(volMult, 2), "x):  final risk=", DoubleToString(riskPct, 3), "%");
+   Print("  Risk Amount:             $", DoubleToString(riskAmount, 2));
+   if(proportionalFloorApplied > 0)
+      Print("  ** PROPORTIONAL FLOOR:   Applied (balance<$25k, multiplier-stack too aggressive) → risk floored to ", DoubleToString(proportionalFloorApplied, 3), "%");
+   Print("  Raw Calculated Lot:      ", DoubleToString(rawLots, 4));
+   Print("  Risk-Math Lot:           ", DoubleToString(riskMathLots, lotDigits));
+   Print("  After InpMaxLots cap:    ", DoubleToString(afterInpMaxLots, lotDigits));
+   Print("  After Growth Guard:      ", DoubleToString(beforeGrowthLots, lotDigits), " → ", DoubleToString(afterGrowthLots, lotDigits));
+   Print("  After Basket Cap:        ", DoubleToString(beforeBasketCapLots, lotDigits), " → ", DoubleToString(afterBasketCapLots, lotDigits));
+   Print("  Final Lot Sent:          ", DoubleToString(lots, lotDigits));
+   Print("  Executed Risk%:          ", DoubleToString(executedRiskPct, 3), "% ($", DoubleToString(lots * slDollarPerLotRaw, 2), " at SL)");
+   Print("  Displayed vs Actual:     Displayed=", DoubleToString(InpRiskPercent, 2), "% | ConfigBase=",
+         DoubleToString(baseRisk, 2), "% | Executed=", DoubleToString(executedRiskPct, 3), "%",
+         (MathAbs(InpRiskPercent - executedRiskPct) > 0.05 ? " [MISMATCH — see PROPORTIONAL_LOT_FLOOR log]" : ""));
+   Print("  Micro Collapse Reason:   ", microCollapseReason);
+   Print("=====================================");
+
    Print("LOT-SIZING-AUDIT | Base risk percent: ", DoubleToString(baseRisk, 2), "%",
          " | Account balance: $", DoubleToString(balance, 2),
          " | SL distance: ", DoubleToString(slDist, 2),
@@ -10933,6 +11387,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
          " | Broker min/max/step: ", DoubleToString(minLot, lotDigits), "/",
          DoubleToString(maxLot, lotDigits), "/", DoubleToString(lotStep, lotDigits),
          " | Risk-math lot: ", DoubleToString(riskMathLots, lotDigits),
+         " | Proportional floor applied: ", DoubleToString(proportionalFloorApplied, 3), "%",
          " | Volatility multiplier: ", DoubleToString(volMult, 2),
          " | AI confidence multiplier: included in signalMult=", DoubleToString(sizeMulti, 2),
          " | Strategy/grade multiplier: included in signalMult=", DoubleToString(sizeMulti, 2),
@@ -11007,6 +11462,86 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       }
    }
 
+   // ======== v6.4.17 — MANDATORY LOT TRACE (fires before every OrderSend) ========
+   double lotTrace_baseRisk      = baseRisk;
+   double lotTrace_baseRiskLot   = (slDollarPerLotRaw > 0) ? (balance * baseRisk / 100.0 / slDollarPerLotRaw) : 0;
+   double lotTrace_afterGradeLot = (slDollarPerLotRaw > 0) ? (balance * baseRisk / 100.0 * sizeMulti / slDollarPerLotRaw) : 0;
+   double lotTrace_margCapDelta  = (desiredLots > lots + 0.001) ? desiredLots - lots : 0;
+   double lotTrace_bsktCapDelta  = (beforeBasketCapLots > afterBasketCapLots + 0.001) ? beforeBasketCapLots - afterBasketCapLots : 0;
+   string lotTrace_reductionSummary = "";
+   if(sessionMult < 0.999)
+      lotTrace_reductionSummary += StringFormat("sessionMult=%.2f ", sessionMult);
+   if(MathAbs(volMult - 1.0) > 0.01)
+      lotTrace_reductionSummary += StringFormat("volAdaptMult=%.2f ", volMult);
+   if(lotTrace_margCapDelta > 0.001)
+      lotTrace_reductionSummary += StringFormat("marginCap=%.2f ", lots);
+   if(lotTrace_bsktCapDelta > 0.001)
+      lotTrace_reductionSummary += StringFormat("basketCap=-%.2f ", lotTrace_bsktCapDelta);
+   if(StringLen(lotTrace_reductionSummary) == 0)
+      lotTrace_reductionSummary = "NONE — only hard safety (margin/broker/basket)";
+
+   Print("===== [LOT_TRACE] =====");
+   PrintFormat("  grade         = %s", StringFind(reason,"[A+]")>=0 ? "A+" : StringFind(reason,"[A]")>=0 ? "A" : "B");
+   PrintFormat("  balance       = $%.2f", balance);
+   PrintFormat("  entry         = %.5f", price);
+   PrintFormat("  sl            = %.5f", sl);
+   PrintFormat("  slDistance    = %.2f pts", slDist);
+   PrintFormat("  slDollarPerLot= $%.2f", slDollarPerLotRaw);
+   PrintFormat("  accountMode   = %s (baseRisk=%.2f%%)",
+               InpAccountMode == ACCT_BALANCED ? "BALANCED" :
+               InpAccountMode == ACCT_CONSERVATIVE ? "CONSERVATIVE" : "AGGRESSIVE",
+               lotTrace_baseRisk);
+   PrintFormat("  baseRiskLot   = %.4f  (no-multiplier: balance×%.2f%%÷slDollar)",
+               lotTrace_baseRiskLot, lotTrace_baseRisk);
+   PrintFormat("  afterGradeMult= %.4f  (×sizeMulti %.3f | A+=1.10, A=0.85, B=0.45)",
+               lotTrace_afterGradeLot, sizeMulti);
+   PrintFormat("  sessionMult   = %.2f  (%s)", sessionMult,
+               sessionMult < 0.999 ? "APPLIED — B-grade Asia reduction" : "1.00 — bypassed (A+/A or non-Asia)");
+   PrintFormat("  volCapMult    = bypassed for A/A+ in v6.4.17");
+   PrintFormat("  volAdaptMult  = %.2f  (%s)", volMult,
+               MathAbs(volMult-1.0)<0.01 ? "bypassed (A+/A) or flat" : "APPLIED");
+   PrintFormat("  pgMult        = %.2f  (1.0=normal; 0.0=T3 hard-block)", pgMult);
+   PrintFormat("  riskPctFinal  = %.3f%%  →  riskAmount=$%.2f", riskPct, riskAmount);
+   PrintFormat("  rawLots       = %.4f", rawLots);
+   PrintFormat("  desiredLots   = %.4f  (after InpMaxLots/growth/basket caps)", desiredLots);
+   PrintFormat("  marginCapLots = %.4f  (margin-reduced? %s)", lots,
+               lotTrace_margCapDelta > 0.001 ? "YES — margin too low for full size" : "NO");
+   PrintFormat("  finalLot      = %.4f", lots);
+   PrintFormat("  reductions    = %s", lotTrace_reductionSummary);
+
+   // v6.4.18: MICRO-LOT HARD-CAP DIAGNOSIS
+   // If lot is still tiny (≤2×minLot) after enforcement, explain exactly why.
+   if(lots <= minLot * 2.01)
+   {
+      bool isHighGrade = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
+      string microReason = "";
+      if(slDollarPerLotRaw > 0 && balance > 0)
+      {
+         double fullRiskAmt = balance * baseRisk * sizeMulti / 100.0;
+         double naturalLots = fullRiskAmt / slDollarPerLotRaw;
+         if(naturalLots <= minLot * 2.01)
+            microReason += " WIDE_SL_RISK_MATH(natural=" + DoubleToString(naturalLots,4) + " after full grade risk)";
+      }
+      if(lots < desiredLots - 0.001)
+      {
+         if(AccountInfoDouble(ACCOUNT_MARGIN_FREE) < AccountInfoDouble(ACCOUNT_EQUITY) * 0.10)
+            microReason += " MARGIN_CAP";
+         else
+            microReason += " BROKER_MIN_STEP_or_EQUITY_CAP";
+      }
+      if(beforeBasketCapLots > afterBasketCapLots + 0.001) microReason += " BASKET_CAP";
+      if(g_propFirmMode && g_propFirmRiskPerTradePct > 0.0) microReason += " PROP_FIRM_CAP";
+      if(StringLen(microReason) == 0) microReason = " BROKER_MIN_STEP";
+
+      PrintFormat("  *** MICRO-LOT DIAGNOSIS: lot=%.2f ≤2x minLot(%.2f) | grade=%s | hard-cap reasons:%s",
+                  lots, minLot, isHighGrade ? (StringFind(reason,"[A+]")>=0?"A+":"A") : "B", microReason);
+      if(isHighGrade)
+         PrintFormat("  *** NOTE: enforcement floor restored sizeMulti to %.3f (A+/A grade baseline). "
+                     "Micro-lot is due to HARD CAP(s) above, not soft reducers.", sizeMulti);
+   }
+   Print("======================");
+   // ======= END LOT TRACE ========
+
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
          " Price=", DoubleToString(price, digits),
          " SL=", DoubleToString(sl, digits),
@@ -11064,6 +11599,15 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                          StringFormat("FIRED %s %.2f lot @%.2f SL:%.2f TP:%.2f grade=%s",
                                       signal == 1 ? "BUY" : "SELL", lots, price, sl, tp,
                                       g_pendingBrainGrade));
+
+      // v6.4.19 — TRADE THESIS MONITOR: store entry snapshot so ManagePositions()
+      // can continuously re-evaluate whether the trade reason is still valid.
+      if(openedPosId > 0)
+         TTM_RecordEntry(openedPosId, signal,
+                         lastSignalSetup, g_pendingBrainGrade,
+                         g_pendingBrainCombinedScore,
+                         ArraySize(bufRSI) >= 2 ? bufRSI[1] : 50.0,
+                         atr, price);
    }
    else
    {
@@ -11124,6 +11668,7 @@ void LogExit(ulong ticket, string dir, double openPx, double closePx,
    Print("└─ Reason: ", reason);
 
    lastExitReason = path + " | $" + DoubleToString(profit, 2) + " | " + reason;
+   TTM_ReleaseSlot(ticket);   // v6.4.19: free the thesis record when position closes
 }
 
 bool CloseBasketPartial(double closePct, string reason)
@@ -11929,7 +12474,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                   (1.0 - InpEarlyConvictionCutR / MathMax(0.01, InpCleanMaxLossR)) * 100.0);
       lastExitReason = StringFormat("EARLY_CUT │ %.2fR all signals failed (%.0f%% vs full SL)", rMult,
                                     (1.0 - InpEarlyConvictionCutR / MathMax(0.01, InpCleanMaxLossR)) * 100.0);
-      trade.PositionClose(ticket);
+      if(!SafePositionClose(ticket, "EARLY_CONVICTION_CUT")) return false;
       return true;
    }
 
@@ -11962,7 +12507,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       PrintFormat("CLEAN_STAGNANT #%I64u %s | %dm open, %.2fR in %s → CLOSE",
                   ticket, isBuy?"BUY":"SELL", minsOpen, rMult, RegimeName());
       lastExitReason = StringFormat("STAGNANT │ %.2fR after %dm in %s", rMult, minsOpen, RegimeName());
-      trade.PositionClose(ticket);
+      if(!SafePositionClose(ticket, "CLEAN_STAGNANT")) return false;
       return true;
    }
 
@@ -11972,7 +12517,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       PrintFormat("CLEAN_STALE #%I64u %s | %dm open, %.2fR, trendAligned=%s momentum=%d/5 → CLOSE",
                   ticket, isBuy?"BUY":"SELL", minsOpen, rMult, trendAligned?"Y":"N", momentumScore);
       lastExitReason = StringFormat("STALE │ %.2fR after %dm momentum %d/5", rMult, minsOpen, momentumScore);
-      trade.PositionClose(ticket);
+      if(!SafePositionClose(ticket, "CLEAN_STALE")) return false;
       return true;
    }
 
@@ -11993,7 +12538,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                      emaAgainst?"Y":"N", rsiAgainst?"Y":"N", reversalCandle?"Y":"N",
                      recoveryLikely?"Y":"N");
          lastExitReason = StringFormat("INVALIDATION │ %.2fR score %d", rMult, invalidScore);
-         trade.PositionClose(ticket);
+         if(!SafePositionClose(ticket, "CLEAN_INVALID")) return false;
          return true;
       }
       else if(rMult < 0 && recoveryLikely && structureBroken)
@@ -12025,7 +12570,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                      structureBreakBars, InpGoldPullbackConfirmBars, momentumScore,
                      recoveryLikely?"Y":"N");
          lastExitReason = StringFormat("STRUCTURE_FAILFAST │ %.2fR confirmed failed structure", rMult);
-         trade.PositionClose(ticket);
+         if(!SafePositionClose(ticket, "STRUCTURE_FAILFAST")) return false;
          return true;
       }
    }
@@ -12134,7 +12679,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                                     trendStillWith?"Y":"N", rsi);
                         lastExitReason = StringFormat("APLUS_GIVEBACK_EXIT | %.0f%% giveback from $%.2f peak, reversal confirmed",
                                                       givebackPct, peak);
-                        trade.PositionClose(ticket);
+                        if(!SafePositionClose(ticket, "APLUS_GIVEBACK_EXIT")) return false;
                         return true;
                      }
 
@@ -12451,6 +12996,261 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 //| Path B: Smart Momentum (BE lock, quick profit, smart cut, stale) |
 //| Path C: Claude AI Semantic Exit                                  |
 //+------------------------------------------------------------------+
+// ======================================================================
+// v6.4.19 — TRADE THESIS MONITOR FUNCTIONS
+// ======================================================================
+
+// Find TTM slot for a position (creates new slot if not found)
+int TTM_FindOrCreateSlot(ulong posId)
+{
+   for(int i = 0; i < TTM_MAX_POSITIONS; i++)
+      if(g_ttm[i].active && g_ttm[i].posId == posId) return i;
+   for(int i = 0; i < TTM_MAX_POSITIONS; i++)
+      if(!g_ttm[i].active) return i;
+   return -1; // all slots full
+}
+
+// Release a slot when position closes
+void TTM_ReleaseSlot(ulong posId)
+{
+   for(int i = 0; i < TTM_MAX_POSITIONS; i++)
+   {
+      if(g_ttm[i].active && g_ttm[i].posId == posId)
+      {
+         g_ttm[i].active = false;
+         g_ttm[i].posId  = 0;
+         return;
+      }
+   }
+}
+
+// Called immediately after OrderSend succeeds — stores the entry thesis snapshot
+void TTM_RecordEntry(ulong posId, int signal, string setupName, string grade,
+                     double combinedScore, double rsi, double atr, double entryPrice)
+{
+   if(!InpTTM_Enable) return;
+   int idx = TTM_FindOrCreateSlot(posId);
+   if(idx < 0) { Print("[TTM] WARNING: no free slot for posId=", posId); return; }
+
+   TradeTTMRecord r;
+   r.active             = true;
+   r.posId              = posId;
+   r.signal             = signal;
+   r.setupName          = setupName;
+   r.grade              = grade;
+   r.initialScore       = combinedScore;
+   r.entryBOS           = g_smc_bos_dir;
+   r.entryHTF           = g_htfConsensusDir;
+   r.entryRSI           = rsi;
+   r.entryATR           = atr;
+   r.entryPrice         = entryPrice;
+   r.entryMomentum      = -1;      // set on first bar evaluation
+   r.entryTrendAligned  = false;   // set on first bar evaluation
+   r.liveScore          = 100.0;   // starts at 100 — proven at entry
+   r.prevScore          = 100.0;
+   r.barsHeld           = 0;
+   r.consecutiveLowBars = 0;
+   r.thesisBroken       = false;
+   r.breakReason        = "";
+   r.breakTime          = 0;
+   g_ttm[idx] = r;
+
+   PrintFormat("[TTM] ENTRY RECORDED | #%I64u %s | setup=%s grade=%s score=%.1f | "
+               "BOS=%+d HTF=%+d RSI=%.1f ATR=%.2f",
+               posId, signal > 0 ? "BUY" : "SELL",
+               setupName, grade, combinedScore,
+               g_smc_bos_dir, g_htfConsensusDir, rsi, atr);
+}
+
+// Calculate live thesis score (0-100) each candle, relative to entry state
+double TTM_CalcLiveScore(TradeTTMRecord &r, bool isBuy,
+                          double rsi, int momentumScore, bool trendAligned,
+                          bool structureBroken, bool emaAgainst,
+                          int currentBOS, int currentHTF)
+{
+   double score = 0;
+
+   // --- Component 1: BOS alignment (30 pts) ---
+   // The original BOS established the structural bias we traded with.
+   // If it holds → thesis structure intact. If it flipped → thesis broken.
+   if(r.entryBOS != 0)
+   {
+      if(currentBOS == r.entryBOS)        score += 30;  // still aligned
+      else if(currentBOS == 0)            score += 12;  // neutral — unsettled
+      else                                score += 0;   // flipped — structural invalidation
+   }
+   else
+   {
+      if(currentBOS == (isBuy ? 1 : -1)) score += 20;  // bonus: BOS now confirmed our direction
+      else                                score += 10;  // no BOS data — partial credit
+   }
+
+   // --- Component 2: HTF alignment (20 pts) ---
+   if(r.entryHTF != 0)
+   {
+      if(currentHTF == r.entryHTF)        score += 20;
+      else if(currentHTF == 0)            score += 8;
+      else                                score += 0;   // HTF flipped against trade
+   }
+   else
+   {
+      if(currentHTF == (isBuy ? 1 : -1)) score += 15;
+      else                                score += 8;
+   }
+
+   // --- Component 3: Current momentum (20 pts) ---
+   // Not compared to entry — this is current momentum quality
+   score += MathMin(20.0, momentumScore * 4.0);
+
+   // --- Component 4: Trend / regime aligned (15 pts) ---
+   if(trendAligned)         score += 15;
+   else if(!emaAgainst)     score += 6;   // regime not against us, just not supporting
+   // else 0 — regime actively against trade
+
+   // --- Component 5: RSI direction (10 pts) ---
+   if(isBuy)
+   {
+      if(rsi > 52)           score += 10;
+      else if(rsi >= 42)     score += 5;   // neutral zone — slight caution
+      // else 0 — RSI bearish for a long
+   }
+   else
+   {
+      if(rsi < 48)           score += 10;
+      else if(rsi <= 58)     score += 5;
+      // else 0 — RSI bullish for a short
+   }
+
+   // --- Component 6: Structure not broken (5 pts) ---
+   if(!structureBroken)     score += 5;
+
+   return MathMin(100.0, MathMax(0.0, score));
+}
+
+// Evaluate thesis — returns exit reason string or "" to hold
+string TTM_Evaluate(int idx, bool isBuy, double liveScore,
+                    double profit, double peak, int currentBOS, int currentHTF)
+{
+   if(idx < 0 || idx >= TTM_MAX_POSITIONS || !g_ttm[idx].active)
+      return "";
+
+   g_ttm[idx].prevScore = g_ttm[idx].liveScore;
+   g_ttm[idx].liveScore = liveScore;
+   g_ttm[idx].barsHeld++;
+
+   // Track consecutive low-score bars
+   if(liveScore < 35.0) g_ttm[idx].consecutiveLowBars++;
+   else                 g_ttm[idx].consecutiveLowBars = 0;
+
+   // Describe BOS and HTF status relative to entry
+   string bosStatus = (currentBOS == g_ttm[idx].entryBOS && g_ttm[idx].entryBOS != 0) ? "OK" :
+                      (currentBOS == 0)                                               ? "NEUTRAL" :
+                      (g_ttm[idx].entryBOS == 0)                                      ? "ESTABLISHED" : "FLIPPED!";
+   string htfStatus = (currentHTF == g_ttm[idx].entryHTF && g_ttm[idx].entryHTF != 0) ? "OK" :
+                      (currentHTF == 0)                                               ? "NEUTRAL" :
+                      (g_ttm[idx].entryHTF == 0)                                      ? "ESTABLISHED" : "FLIPPED!";
+
+   // ---- HOLD DECISIONS (not enough bars to judge) ----
+   if(g_ttm[idx].barsHeld < InpTTM_MinHoldBars)
+   {
+      if(InpTTM_LogEveryBar)
+         PrintFormat("[TTM] EARLY #%I64u %s | bar=%d (min=%d) | score=%.0f | %s grade=%s | hold: too early to judge",
+                     g_ttm[idx].posId, isBuy?"BUY":"SELL", g_ttm[idx].barsHeld, InpTTM_MinHoldBars,
+                     liveScore, g_ttm[idx].setupName, g_ttm[idx].grade);
+      return "";
+   }
+
+   // ---- EXIT DECISIONS ----
+
+   // 1. Hard thesis death — score collapsed
+   if(liveScore < InpTTM_ExitThreshold)
+   {
+      string why = StringFormat(
+         "TTM_THESIS_DEAD | score=%.0f < %.0f | BOS=%+d(%s) HTF=%+d(%s) | "
+         "entryBOS=%+d entryHTF=%+d | setup=%s grade=%s | bars=%d",
+         liveScore, InpTTM_ExitThreshold,
+         currentBOS, bosStatus, currentHTF, htfStatus,
+         g_ttm[idx].entryBOS, g_ttm[idx].entryHTF, g_ttm[idx].setupName, g_ttm[idx].grade, g_ttm[idx].barsHeld);
+      g_ttm[idx].thesisBroken = true;
+      g_ttm[idx].breakReason = why;
+      g_ttm[idx].breakTime = TimeCurrent();
+      return why;
+   }
+
+   // 2. Structural flip — BOS reversed against trade (regardless of score)
+   bool bosFlipped = (g_ttm[idx].entryBOS != 0 && currentBOS == -g_ttm[idx].entryBOS);
+   bool htfFlipped = (g_ttm[idx].entryHTF != 0 && currentHTF == -g_ttm[idx].entryHTF);
+   if(bosFlipped && liveScore < 45.0)
+   {
+      string why = StringFormat(
+         "TTM_BOS_REVERSED | BOS flipped %+d->%+d against %s trade | score=%.0f | setup=%s grade=%s | bars=%d",
+         g_ttm[idx].entryBOS, currentBOS, isBuy?"BUY":"SELL", liveScore,
+         g_ttm[idx].setupName, g_ttm[idx].grade, g_ttm[idx].barsHeld);
+      g_ttm[idx].thesisBroken = true;
+      g_ttm[idx].breakReason = why;
+      g_ttm[idx].breakTime = TimeCurrent();
+      return why;
+   }
+
+   // 3. HTF flipped + score deteriorated
+   if(htfFlipped && liveScore < 40.0)
+   {
+      string why = StringFormat(
+         "TTM_HTF_FLIPPED | HTF consensus %+d->%+d against %s trade | score=%.0f | setup=%s grade=%s | bars=%d",
+         g_ttm[idx].entryHTF, currentHTF, isBuy?"BUY":"SELL", liveScore,
+         g_ttm[idx].setupName, g_ttm[idx].grade, g_ttm[idx].barsHeld);
+      g_ttm[idx].thesisBroken = true;
+      g_ttm[idx].breakReason = why;
+      g_ttm[idx].breakTime = TimeCurrent();
+      return why;
+   }
+
+   // 4. Persistent score decay — thesis dying slowly
+   if(g_ttm[idx].consecutiveLowBars >= InpTTM_PersistentBars && liveScore < 38.0)
+   {
+      string why = StringFormat(
+         "TTM_PERSISTENT_WEAK | score=%.0f below 35 for %d bars | "
+         "BOS=%+d(%s) HTF=%+d(%s) | setup=%s grade=%s | bars=%d",
+         liveScore, g_ttm[idx].consecutiveLowBars,
+         currentBOS, bosStatus, currentHTF, htfStatus,
+         g_ttm[idx].setupName, g_ttm[idx].grade, g_ttm[idx].barsHeld);
+      g_ttm[idx].thesisBroken = true;
+      g_ttm[idx].breakReason = why;
+      g_ttm[idx].breakTime = TimeCurrent();
+      return why;
+   }
+
+   // ---- LOG HOLD (healthy) ----
+   if(InpTTM_LogEveryBar)
+   {
+      string action = liveScore >= 70 ? "STRONG HOLD" :
+                      liveScore >= 50 ? "HOLD" : "PROTECT - consider tightening SL";
+      PrintFormat("[TTM] %s #%I64u %s | bar=%d | score=%.0f->%.0f | "
+                  "BOS=%+d(%s) HTF=%+d(%s) | setup=%s grade=%s",
+                  action, g_ttm[idx].posId, isBuy?"BUY":"SELL",
+                  g_ttm[idx].barsHeld, g_ttm[idx].prevScore, liveScore,
+                  currentBOS, bosStatus, currentHTF, htfStatus,
+                  g_ttm[idx].setupName, g_ttm[idx].grade);
+   }
+   return "";   // HOLD
+}
+
+// ======================================================================
+// END TTM FUNCTIONS
+// ======================================================================
+
+// v6.4.20: Wrapper for every position close. Logs server retcode + GetLastError() on failure.
+// Returns true if MT5 accepted the close request, false if rejected.
+bool SafePositionClose(ulong ticket, string ctx = "")
+{
+   bool ok = trade.PositionClose(ticket);
+   if(!ok)
+      PrintFormat("⚠  CLOSE FAILED #%I64u ctx=%s ret=%u (%s) err=%d",
+                  ticket, ctx, trade.ResultRetcode(),
+                  trade.ResultRetcodeDescription(), GetLastError());
+   return ok;
+}
+
 void ManagePositions()
 {
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
@@ -12510,6 +13310,43 @@ void ManagePositions()
 	                                                   structureConfirmedEA, emaAgainstEA,
 	                                                   rsiAgainstEA, rMultEA);
 
+      // ======== v6.4.19 TRADE THESIS MONITOR ========
+      // Re-evaluate WHY we entered this trade. If the original thesis is dead,
+      // exit here — before the ATR trailing stop would have closed it.
+      if(InpTTM_Enable)
+      {
+         int ttmIdx = TTM_FindOrCreateSlot(ticket);
+         if(ttmIdx >= 0 && g_ttm[ttmIdx].active && g_ttm[ttmIdx].posId == ticket)
+         {
+            // Seed entryMomentum on first real bar after entry
+            if(g_ttm[ttmIdx].entryMomentum < 0)
+            {
+               g_ttm[ttmIdx].entryMomentum     = momentumScoreEA;
+               g_ttm[ttmIdx].entryTrendAligned  = trendAlignedEA;
+            }
+
+            double ttmLiveScore = TTM_CalcLiveScore(
+               g_ttm[ttmIdx], isBuy, rsi, momentumScoreEA, trendAlignedEA,
+               structureConfirmedEA, emaAgainstEA, g_smc_bos_dir, g_htfConsensusDir);
+
+            string ttmExit = TTM_Evaluate(ttmIdx, isBuy, ttmLiveScore,
+                                           profit, peak, g_smc_bos_dir, g_htfConsensusDir);
+            if(StringLen(ttmExit) > 0)
+            {
+               PrintFormat("[TTM] EXIT TRIGGERED #%I64u %s | %s", ticket, dirStr, ttmExit);
+               LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen,
+                       rsi, emaF, close1, open1, "TTM_EXIT", ttmExit);
+               if(SafePositionClose(ticket, "TTM_EXIT"))
+               {
+                  TTM_ReleaseSlot(ticket);
+                  lastTradeClose = TimeCurrent();
+               }
+               continue;
+            }
+         }
+      }
+      // ======== END TRADE THESIS MONITOR ========
+
       if(XAU_GrowthGuardManagePosition(ticket, isBuy, openPx, curPrice, curSL, curTP,
                                        slDist, atr, minsOpen, profit, lotsOpen,
                                        momentumScoreEA, trendAlignedEA,
@@ -12555,8 +13392,8 @@ void ManagePositions()
 	                    StringFormat("Cloud-safe no-partials active. Down %.2fR ($%.2f / 1R=$%.2f) >= smart cap $%.2f after %ds, with confirmed structure+EMA+RSI failure and momentum=%d/5. Closing full position instead of waiting for disaster cap.",
 	                                 MathAbs(profit) / rDollars, profit, rDollars, smartLossUSD, ageSec,
 	                                 momentumScoreEA));
-	            trade.PositionClose(ticket);
-	            lastTradeClose = TimeCurrent();
+	            if(SafePositionClose(ticket, "NO_PARTIAL_SMART_LOSS"))
+	               lastTradeClose = TimeCurrent();
 	            continue;
 	         }
 	      }
@@ -12586,8 +13423,8 @@ void ManagePositions()
 	                                    MathAbs(profit) / rDollars, profit, rDollars, hardLossUSD, ageSec,
 	                                    recoveryLikelyEA?"Y":"N", structureBreakBarsEA, InpGoldPullbackConfirmBars,
 	                                    momentumScoreEA, structureConfirmedEA?"broken":"emergency"));
-	               trade.PositionClose(ticket);
-	               lastTradeClose = TimeCurrent();
+	               if(SafePositionClose(ticket, "EXPECTANCY_MAX_LOSS"))
+	                  lastTradeClose = TimeCurrent();
 	               continue;
 	            }
 	            else
@@ -12687,8 +13524,7 @@ void ManagePositions()
                // Never let AI close a losing trade early (let SL handle that).
                Print("AI DIRECTOR EXIT CLOSE #", ticket, " | profit=$", DoubleToString(profit,2),
                      " | reason: ", v.reason);
-               trade.PositionClose(ticket);
-               continue;
+               SafePositionClose(ticket, "AI_DIRECTOR_EXIT_CLOSE"); continue;
             }
             else if(v.action == 0)
             {
@@ -12792,7 +13628,7 @@ void ManagePositions()
                  "HARD_STOP_R",
                  StringFormat("Down %.1fR ($%.2f of %.2f) — %.1fR catastrophic cap hit. Capital preservation.",
                               MathAbs(profit)/rDollars, profit, rDollars, InpHardStopRMulti));
-         trade.PositionClose(ticket); continue;
+         SafePositionClose(ticket, "HARD_STOP_R"); continue;
       }
       // Absolute $ cap ONLY fires if explicitly set and R-based disabled (legacy)
       if(!InpHardStopRBased && EffHardStopUSD() > 0 && profit <= -EffHardStopUSD())
@@ -12801,7 +13637,7 @@ void ManagePositions()
                  "HARD_STOP",
                  StringFormat("Loss $%.2f breached absolute cap $%.2f. Capital preservation override.",
                               profit, EffHardStopUSD()));
-         trade.PositionClose(ticket); continue;
+         SafePositionClose(ticket, "HARD_STOP"); continue;
       }
       if(InpEarlyAdverseCut && minsOpen <= InpEarlyAdverseMin &&
          profit <= -(rDollars * InpEarlyAdverseR))
@@ -12810,7 +13646,7 @@ void ManagePositions()
                  "EARLY_ADVERSE",
                  StringFormat("Down %.1fR ($%.2f of %.2f) within first %d min. Entry was wrong — cut fast.",
                               MathAbs(profit)/rDollars, profit, rDollars, InpEarlyAdverseMin));
-         trade.PositionClose(ticket); continue;
+         SafePositionClose(ticket, "EARLY_ADVERSE"); continue;
       }
       // v4.7.2 — In Preservation Mode, PEAK_RETRACE only fires on DEEP retraces
       //   from BIG peaks (90% retrace from $200+) — it's a runner-saver, not a scalper.
@@ -12826,7 +13662,7 @@ void ManagePositions()
                  "PEAK_RETRACE",
                  StringFormat("Peak was $%.2f, now $%.2f — gave back %.0f%% (threshold %.0f%%).",
                               peak, profit, retracePct, effRetracePct));
-         trade.PositionClose(ticket); continue;
+         SafePositionClose(ticket, "PEAK_RETRACE"); continue;
       }
 
       // ===== ADAPTIVE RUNNER (v4.7.7) — 2-stage tick-1 trailing =====
@@ -13343,7 +14179,7 @@ void ManagePositions()
                     StringFormat("Real reversal: structure-broken=%s rsi-turn=%s bar-reverse=%s ema-broken=%s streak-broken=%s. Profit $%.2f peak $%.2f.",
                                  structureBroken?"Y":"N", rsiTurning?"Y":"N", barReverse?"Y":"N", emaBroken?"Y":"N", streakBroken?"Y":"N",
                                  profit, peak));
-            trade.PositionClose(ticket); continue;
+            SafePositionClose(ticket, "MOMENTUM_FADE"); continue;
          }
 
          // v4.4.4 — CAP REACHED: only force-close if smart cap disabled.
@@ -13353,7 +14189,7 @@ void ManagePositions()
             LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                     "QUICK_PROFIT_CAP",
                     StringFormat("Hit max profit target $%.2f (cap $%.2f). Taking the win.", profit, EffProfitTakeMax()));
-            trade.PositionClose(ticket); continue;
+            SafePositionClose(ticket, "QUICK_PROFIT_CAP"); continue;
          }
          if(capReached && InpSmartCapExit)
          {
@@ -13409,7 +14245,7 @@ void ManagePositions()
                        "PROFIT_CEILING",
                        StringFormat("Hit absolute ceiling $%.2f (max $%.2f). Banking the monster.",
                                     profit, InpProfMaxCeilUSD));
-               trade.PositionClose(ticket); continue;
+               SafePositionClose(ticket, "PROFIT_CEILING"); continue;
             }
             // else: let it run, next tick evaluates again
          }
@@ -13429,7 +14265,7 @@ void ManagePositions()
                     "TIME_EXPIRED",
                     StringFormat("Open %d min > cap %d min; momentum score only %d/4. Book what we have.",
                                  minsOpen, InpQuickExitMin, strongScore));
-            trade.PositionClose(ticket); continue;
+            SafePositionClose(ticket, "TIME_EXPIRED"); continue;
          }
          if(timeExpired && InpMomentumGuard && momentumStrong)
          {
@@ -13478,7 +14314,7 @@ void ManagePositions()
                     StringFormat("%.2fR loss + %s (EMA-against=%s RSI-failing=%s). Stop bleeding.",
                                  MathAbs(profit)/rDollars, deepLoss?"deep+time":"no-recovery",
                                  emaAgainst?"Y":"N", rsiFailing?"Y":"N"));
-            trade.PositionClose(ticket); continue;
+            SafePositionClose(ticket, "SMART_CUT"); continue;
          }
       }
 
@@ -13497,7 +14333,7 @@ void ManagePositions()
                  "STALE_LOSS",
                  StringFormat("Open %d min > regime cap %d min at -%.2fR. Free the margin.",
                               minsOpen, staleCap, MathAbs(profit)/rDollars));
-         trade.PositionClose(ticket); continue;
+         SafePositionClose(ticket, "STALE_LOSS"); continue;
       }
       // v5.9.0: Only close drifting trades when EMA confirms the flat position has NO thesis.
       // If EMA fast is still above EMA slow for a BUY (or below for SELL), the trade is
@@ -13512,7 +14348,7 @@ void ManagePositions()
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "STALE_DRIFT",
                  StringFormat("Open %d min (>60min cap) with P/L $%.2f and EMA opposing trade. No valid thesis — free margin.", minsOpen, profit));
-         trade.PositionClose(ticket); continue;
+         SafePositionClose(ticket, "STALE_DRIFT"); continue;
       }
 
       // ===== PATH C: CLAUDE SEMANTIC EXIT (proactive audit, every InpClaudeAuditSec) =====
@@ -13560,7 +14396,7 @@ void ManagePositions()
                        "CLAUDE_AI",
                        StringFormat("Claude 4.5 said CLOSE. P/L $%.2f (%.2fR). %s",
                                     profit, profit/rDollars, v.reason));
-               trade.PositionClose(ticket); continue;
+               SafePositionClose(ticket, "CLAUDE_AI"); continue;
             }
          }
       }
@@ -15055,12 +15891,13 @@ int PG_Tier()
 // v5.1.3: returns 1.0 when InpProfitGuardian=false → no automatic risk reduction.
 double PG_RiskMultiplier()
 {
+   // v6.4.16: Lot reductions removed. Tier 3 hard block remains (returns 0.0 → trade skipped).
+   // Tiers 1/2 no longer halve lots — if profit-guardian concern is high, use selective mode
+   // (quality gate) not lot-size reduction.
    if(!InpProfitGuardian) return 1.0;
    int tier = PG_Tier();
-   if(tier == 1) return 0.50;   // halve risk when up 30%+
-   if(tier == 2) return 0.25;   // quarter risk when up 50%+
-   if(tier == 3) return 0.0;    // no new lots when up 75%+ (just trail)
-   return 1.0;
+   if(tier == 3) return 0.0;    // tier 3: hard block (acceptable — skip trade, not micro-lot)
+   return 1.0;                  // tiers 0/1/2: normal lot size, quality gates handle selectivity
 }
 
 // Daily HWM tracking + giveback halt (called every tick).
@@ -19468,6 +20305,13 @@ void WriteForwardTestReport()
 // ============================================================
 double GetPerformanceMultiplier()
 {
+   // v6.4.16: DISABLED — loss-streak-based lot reductions removed per design philosophy.
+   // The EA should not reduce lot size because of recent losses.
+   // When setup is poor → skip the trade. When setup is valid → trade at normal size.
+   // Loss streaks are addressed by improved signal selection (gates, AI, grade thresholds),
+   // never by shrinking position size on a valid signal.
+   return 1.0;
+
    // v6.3.9: SAFETY OVERRIDE 4 — TradeBrain sample size guard
    // If fewer than 10 historical patterns in memory, don't boost
    if(g_tradeMemCount < 10) return 1.0;
@@ -20805,7 +21649,12 @@ void UpdateDashboard(int signal, double score, string grade)
    d += " XAUAI SNIPER " + XAUAI_EA_VERSION + " | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
+   // v6.4.15: show actual base risk (account-mode preset), not InpRiskPercent which is always overridden
+   double dashBaseRisk = (InpAccountMode == ACCT_BALANCED) ? 1.2
+                       : (InpAccountMode == ACCT_CONSERVATIVE) ? 0.6 : 2.0;
    d += StringFormat("Bal: $%.0f | Eq: $%.0f\n", bal, eq);
+   d += StringFormat("BaseRisk: %.2f%% [mode] | InpRisk: %.2f%% [ignored by mode]\n",
+                     dashBaseRisk, InpRiskPercent);
    d += StringFormat("Daily: $%.0f | Weekly: $%.0f (%.1f%%/%.0f%%)\n", dPnL, wPnL, weeklyStartEquity > 0 ? wPnL/weeklyStartEquity*100 : 0.0, InpWeeklyTarget);
    d += "------------------------------------------\n";
    d += StringFormat("Regime: %s | Session: %.2f\n", RegimeName(), GetSessionQuality());

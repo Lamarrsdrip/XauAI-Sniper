@@ -17,7 +17,7 @@ const CARDS = [
     tone: "text-amber-300",
     border: "border-amber-300/20",
     glow: "bg-amber-300/[0.07]",
-    badge: "NEW v6.4.19",
+    badge: "NEW v6.4.20",
   },
   {
     icon: Funnel,

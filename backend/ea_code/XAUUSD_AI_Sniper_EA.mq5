@@ -1,9 +1,29 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.18 — TRUE A/A+ FULL SIZE: enforcement floor after all soft |
-//|            reducers, per-module audit trace, micro-lot diagnosis  |
+//|   v6.4.20 — Full Build Integrity Audit + TTM Compile Fix          |
+//|            version sync, SafePositionClose, AI gate fixes          |
 //+------------------------------------------------------------------+
+// v6.4.20 CHANGES (2026-07-01) — FULL BUILD INTEGRITY AUDIT:
+//
+//   1. Synchronizes release identity across header, runtime constants,
+//      dashboard, heartbeat, journals, reports, backend download metadata,
+//      Command Center, and Admin labels.
+//   2. Uses MQL Market-compatible #property version format while preserving
+//      human/runtime release label v6.4.20 everywhere else.
+//   3. Fixes Trade Thesis Monitor struct pointer usage that MetaEditor rejects.
+//   4. Preserves v6.4.19 TTM behavior: entry thesis snapshots, per-candle
+//      live thesis scoring, and thesis-dead exits.
+//
+// v6.4.19 CHANGES (2026-07-01) — TRADE THESIS MONITOR:
+//
+//   1. Stores the original trade thesis at entry: setup, grade, score, BOS,
+//      HTF consensus, RSI, ATR, and entry price.
+//   2. Re-scores each open trade by live thesis health instead of using a
+//      fixed hold/exit rule.
+//   3. Exits only when the thesis is objectively dead: score collapse,
+//      BOS reversal, HTF flip, or persistent low-score decay.
+//
 // v6.4.18 CHANGES (2026-07-01) — TRUE A/A+ FULL SIZE ENFORCEMENT:
 //
 // PHILOSOPHY: Quality control belongs BEFORE the entry gate and DURING exit
@@ -616,16 +636,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.4.20"
-#property description "XAUUSD AI Sniper v6.4.20 - Full bug audit: DXY log, AI weak-confirm A+/A gate, scout cap suppression, SafePositionClose, dead smartGuard lot var, hidden block logging"
-#property description "v6.1.0: SMC (Smart Money Concepts) additive confirmation layer. BOS direction bias, OB zone bonus, FVG zone bonus, ICT kill zone bonus."
-#property description "ALL existing logic preserved: risk engine, exits, committee, EPF, basket protect, STI, calendar — untouched."
-#property description "SMC is purely additive to setup score. Higher score = better grade = larger lot. Does NOT gate or block trades."
+#property version   "6.420"
+#property description "XAUUSD AI Sniper v6.4.20 - build integrity audit"
+#property description "Trade Thesis Monitor, AI quality gate, safe close audit"
+#property description "Risk engine, exits, committee, EPF, basket protect preserved"
+#property description "SMC remains additive confirmation only"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.19"
-#define XAUAI_EA_VERSION_NUM "6.4.19"
-#define XAUAI_BUILD_HASH "v6419-trade-thesis-monitor-20260701"
+#define XAUAI_EA_VERSION "v6.4.20"
+#define XAUAI_EA_VERSION_NUM "6.4.20"
+#define XAUAI_BUILD_HASH "v6420-build-integrity-audit-20260701"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1987,7 +2007,7 @@ struct TradeTTMRecord
 
 #define TTM_MAX_POSITIONS 20
 TradeTTMRecord g_ttm[TTM_MAX_POSITIONS];
-input group "=== TRADE THESIS MONITOR (v6.4.19) ==="
+input group "=== TRADE THESIS MONITOR (v6.4.20) ==="
 input bool   InpTTM_Enable           = true;   // Enable Trade Thesis Monitor
 input int    InpTTM_MinHoldBars      = 3;      // Min bars before TTM can trigger exit
 input double InpTTM_ExitThreshold    = 28.0;   // Exit if live score falls below this
@@ -13111,30 +13131,32 @@ double TTM_CalcLiveScore(TradeTTMRecord &r, bool isBuy,
 string TTM_Evaluate(int idx, bool isBuy, double liveScore,
                     double profit, double peak, int currentBOS, int currentHTF)
 {
-   TradeTTMRecord *r = &g_ttm[idx];
-   r.prevScore  = r.liveScore;
-   r.liveScore  = liveScore;
-   r.barsHeld++;
+   if(idx < 0 || idx >= TTM_MAX_POSITIONS || !g_ttm[idx].active)
+      return "";
+
+   g_ttm[idx].prevScore = g_ttm[idx].liveScore;
+   g_ttm[idx].liveScore = liveScore;
+   g_ttm[idx].barsHeld++;
 
    // Track consecutive low-score bars
-   if(liveScore < 35.0) r.consecutiveLowBars++;
-   else                 r.consecutiveLowBars = 0;
+   if(liveScore < 35.0) g_ttm[idx].consecutiveLowBars++;
+   else                 g_ttm[idx].consecutiveLowBars = 0;
 
    // Describe BOS and HTF status relative to entry
-   string bosStatus = (currentBOS == r.entryBOS && r.entryBOS != 0) ? "OK" :
-                      (currentBOS == 0)                              ? "NEUTRAL" :
-                      (r.entryBOS == 0)                              ? "ESTABLISHED" : "FLIPPED!";
-   string htfStatus = (currentHTF == r.entryHTF && r.entryHTF != 0) ? "OK" :
-                      (currentHTF == 0)                              ? "NEUTRAL" :
-                      (r.entryHTF == 0)                              ? "ESTABLISHED" : "FLIPPED!";
+   string bosStatus = (currentBOS == g_ttm[idx].entryBOS && g_ttm[idx].entryBOS != 0) ? "OK" :
+                      (currentBOS == 0)                                               ? "NEUTRAL" :
+                      (g_ttm[idx].entryBOS == 0)                                      ? "ESTABLISHED" : "FLIPPED!";
+   string htfStatus = (currentHTF == g_ttm[idx].entryHTF && g_ttm[idx].entryHTF != 0) ? "OK" :
+                      (currentHTF == 0)                                               ? "NEUTRAL" :
+                      (g_ttm[idx].entryHTF == 0)                                      ? "ESTABLISHED" : "FLIPPED!";
 
    // ---- HOLD DECISIONS (not enough bars to judge) ----
-   if(r.barsHeld < InpTTM_MinHoldBars)
+   if(g_ttm[idx].barsHeld < InpTTM_MinHoldBars)
    {
       if(InpTTM_LogEveryBar)
          PrintFormat("[TTM] EARLY #%I64u %s | bar=%d (min=%d) | score=%.0f | %s grade=%s | hold: too early to judge",
-                     r.posId, isBuy?"BUY":"SELL", r.barsHeld, InpTTM_MinHoldBars,
-                     liveScore, r.setupName, r.grade);
+                     g_ttm[idx].posId, isBuy?"BUY":"SELL", g_ttm[idx].barsHeld, InpTTM_MinHoldBars,
+                     liveScore, g_ttm[idx].setupName, g_ttm[idx].grade);
       return "";
    }
 
@@ -13148,21 +13170,25 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
          "entryBOS=%+d entryHTF=%+d | setup=%s grade=%s | bars=%d",
          liveScore, InpTTM_ExitThreshold,
          currentBOS, bosStatus, currentHTF, htfStatus,
-         r.entryBOS, r.entryHTF, r.setupName, r.grade, r.barsHeld);
-      r.thesisBroken = true; r.breakReason = why; r.breakTime = TimeCurrent();
+         g_ttm[idx].entryBOS, g_ttm[idx].entryHTF, g_ttm[idx].setupName, g_ttm[idx].grade, g_ttm[idx].barsHeld);
+      g_ttm[idx].thesisBroken = true;
+      g_ttm[idx].breakReason = why;
+      g_ttm[idx].breakTime = TimeCurrent();
       return why;
    }
 
    // 2. Structural flip — BOS reversed against trade (regardless of score)
-   bool bosFlipped = (r.entryBOS != 0 && currentBOS == -r.entryBOS);
-   bool htfFlipped = (r.entryHTF != 0 && currentHTF == -r.entryHTF);
+   bool bosFlipped = (g_ttm[idx].entryBOS != 0 && currentBOS == -g_ttm[idx].entryBOS);
+   bool htfFlipped = (g_ttm[idx].entryHTF != 0 && currentHTF == -g_ttm[idx].entryHTF);
    if(bosFlipped && liveScore < 45.0)
    {
       string why = StringFormat(
-         "TTM_BOS_REVERSED | BOS flipped %+d→%+d against %s trade | score=%.0f | setup=%s grade=%s | bars=%d",
-         r.entryBOS, currentBOS, isBuy?"BUY":"SELL", liveScore,
-         r.setupName, r.grade, r.barsHeld);
-      r.thesisBroken = true; r.breakReason = why; r.breakTime = TimeCurrent();
+         "TTM_BOS_REVERSED | BOS flipped %+d->%+d against %s trade | score=%.0f | setup=%s grade=%s | bars=%d",
+         g_ttm[idx].entryBOS, currentBOS, isBuy?"BUY":"SELL", liveScore,
+         g_ttm[idx].setupName, g_ttm[idx].grade, g_ttm[idx].barsHeld);
+      g_ttm[idx].thesisBroken = true;
+      g_ttm[idx].breakReason = why;
+      g_ttm[idx].breakTime = TimeCurrent();
       return why;
    }
 
@@ -13170,23 +13196,27 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
    if(htfFlipped && liveScore < 40.0)
    {
       string why = StringFormat(
-         "TTM_HTF_FLIPPED | HTF consensus %+d→%+d against %s trade | score=%.0f | setup=%s grade=%s | bars=%d",
-         r.entryHTF, currentHTF, isBuy?"BUY":"SELL", liveScore,
-         r.setupName, r.grade, r.barsHeld);
-      r.thesisBroken = true; r.breakReason = why; r.breakTime = TimeCurrent();
+         "TTM_HTF_FLIPPED | HTF consensus %+d->%+d against %s trade | score=%.0f | setup=%s grade=%s | bars=%d",
+         g_ttm[idx].entryHTF, currentHTF, isBuy?"BUY":"SELL", liveScore,
+         g_ttm[idx].setupName, g_ttm[idx].grade, g_ttm[idx].barsHeld);
+      g_ttm[idx].thesisBroken = true;
+      g_ttm[idx].breakReason = why;
+      g_ttm[idx].breakTime = TimeCurrent();
       return why;
    }
 
    // 4. Persistent score decay — thesis dying slowly
-   if(r.consecutiveLowBars >= InpTTM_PersistentBars && liveScore < 38.0)
+   if(g_ttm[idx].consecutiveLowBars >= InpTTM_PersistentBars && liveScore < 38.0)
    {
       string why = StringFormat(
          "TTM_PERSISTENT_WEAK | score=%.0f below 35 for %d bars | "
          "BOS=%+d(%s) HTF=%+d(%s) | setup=%s grade=%s | bars=%d",
-         liveScore, r.consecutiveLowBars,
+         liveScore, g_ttm[idx].consecutiveLowBars,
          currentBOS, bosStatus, currentHTF, htfStatus,
-         r.setupName, r.grade, r.barsHeld);
-      r.thesisBroken = true; r.breakReason = why; r.breakTime = TimeCurrent();
+         g_ttm[idx].setupName, g_ttm[idx].grade, g_ttm[idx].barsHeld);
+      g_ttm[idx].thesisBroken = true;
+      g_ttm[idx].breakReason = why;
+      g_ttm[idx].breakTime = TimeCurrent();
       return why;
    }
 
@@ -13194,13 +13224,13 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
    if(InpTTM_LogEveryBar)
    {
       string action = liveScore >= 70 ? "STRONG HOLD" :
-                      liveScore >= 50 ? "HOLD" : "PROTECT — consider tightening SL";
-      PrintFormat("[TTM] %s #%I64u %s | bar=%d | score=%.0f→%.0f | "
+                      liveScore >= 50 ? "HOLD" : "PROTECT - consider tightening SL";
+      PrintFormat("[TTM] %s #%I64u %s | bar=%d | score=%.0f->%.0f | "
                   "BOS=%+d(%s) HTF=%+d(%s) | setup=%s grade=%s",
-                  action, r.posId, isBuy?"BUY":"SELL",
-                  r.barsHeld, r.prevScore, liveScore,
+                  action, g_ttm[idx].posId, isBuy?"BUY":"SELL",
+                  g_ttm[idx].barsHeld, g_ttm[idx].prevScore, liveScore,
                   currentBOS, bosStatus, currentHTF, htfStatus,
-                  r.setupName, r.grade);
+                  g_ttm[idx].setupName, g_ttm[idx].grade);
    }
    return "";   // HOLD
 }

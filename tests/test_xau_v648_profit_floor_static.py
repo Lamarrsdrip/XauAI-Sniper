@@ -16,10 +16,10 @@ def test_v6412_version_and_backend_copy_match():
     backend = read(EA_BACKEND)
 
     assert root == backend
-    assert '#property version   "6.4.14"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.14"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.14"' in root
-    assert '#define XAUAI_BUILD_HASH "v6414-lot-sizing-audit-20260630"' in root
+    assert '#property version   "6.420"' in root
+    assert '#define XAUAI_EA_VERSION "v6.4.20"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.4.20"' in root
+    assert '#define XAUAI_BUILD_HASH "v6420-build-integrity-audit-20260701"' in root
 
 
 def test_protected_peak_floor_inputs_helpers_and_logs_exist():
@@ -62,7 +62,7 @@ def test_floor_break_can_close_even_when_continuation_wants_to_hold():
     assert "XAU_ContextAllowedGivebackPct(contextState" in helper
     assert "InpProtectedPeakGivebackExitPct" in helper
     assert re.search(r"givebackPct\s*>=\s*allowedGiveback", helper)
-    assert "trade.PositionClose(ticket)" in helper
+    assert "SafePositionClose(ticket" in helper
     assert "lastExitReason = StringFormat(\"CONTINUATION_EXIT_PROFIT_PROTECTED" in helper
     assert "trendAligned" in helper and "momentumScore" in helper
 

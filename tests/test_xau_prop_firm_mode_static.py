@@ -67,6 +67,6 @@ def test_command_center_has_editable_limits_and_applied_status():
 
 
 def test_version_is_updated():
-    assert "v6.4.14" in EA
+    assert "v6.4.20" in EA
     assert '\\"ea_version\\":\\"%s\\"' in EA
     assert "XAUAI_EA_VERSION" in EA

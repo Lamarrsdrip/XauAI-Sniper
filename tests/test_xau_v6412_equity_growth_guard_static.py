@@ -4,7 +4,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.6.mq5"
-EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.14.mq5"
+EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.20.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -22,10 +22,10 @@ def test_v6412_version_identity_and_synced_sources():
     named = read(EA_NAMED)
 
     assert root == backend == named
-    assert '#property version   "6.4.14"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.14"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.14"' in root
-    assert '#define XAUAI_BUILD_HASH "v6414-lot-sizing-audit-20260630"' in root
+    assert '#property version   "6.420"' in root
+    assert '#define XAUAI_EA_VERSION "v6.4.20"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.4.20"' in root
+    assert '#define XAUAI_BUILD_HASH "v6420-build-integrity-audit-20260701"' in root
 
 
 def test_xau_money_conversion_uses_order_calc_profit_not_raw_tick_value():
@@ -109,7 +109,7 @@ def test_loss_exit_runs_before_ai_and_clean_exit_can_cut_fast_bad_entries():
     assert "InpGrowthBadEntryMaxMinutes" in loss_guard
     assert "InpGrowthMaxTradeLossEquityPct" in loss_guard
     assert "InpGrowthMaxBasketLossEquityPct" in loss_guard
-    assert "trade.PositionClose(ticket)" in loss_guard
+    assert "SafePositionClose(ticket" in loss_guard
 
 
 def test_pyramid_and_reentry_are_blocked_until_base_or_thesis_is_clean():
