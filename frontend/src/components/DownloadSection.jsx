@@ -12,9 +12,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.4.21";
-  const edition  = info?.edition  || "Trade Mode + June 17-19 Balance Lot Restore";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.4.21_TRADE_MODE_JUNE_17_19_BALANCE_LOT_RESTORE.mq5";
+  const version  = info?.version  || "v6.4.22";
+  const edition  = info?.edition  || "Let Trades Breathe — Early Loss Close Gate";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.4.22.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 

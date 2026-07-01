@@ -5,6 +5,81 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.4.22 — 2026-07-01
+
+### EA Compile
+- [x] EA internal version: `#property version "6.422"`
+- [x] EA header comment: v6.4.22
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.4.22.mq5`
+- [x] `XAUAI_EA_VERSION` / `XAUAI_EA_VERSION_NUM` / `XAUAI_BUILD_HASH` updated
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (see `test_reports/metaeditor_v6422.log`)
+
+### Root Cause (see `test_reports/xau_v6_4_22_early_loss_close_audit_2026-07-01.md`)
+Live evidence: basket peak +$126.42 → `PROFIT_FLOOR_SET` → `GIVEBACK_WARNING` →
+`GIVEBACK_LIMIT_TRIGGERED` → `CONTINUATION_HOLD_REJECTED` → `FORCE CLOSE
+reason=THESIS_BROKEN_EXIT.BASKET` → `CLOSED: LOSS -$2.10`, followed by price
+resuming the original trade direction. `XAU_BasketLifecycleManager()` and
+several per-ticket "smart exit" / Growth Guard / TTM paths were closing
+losing trades on giveback %, cycle count, time-after-peak, or score decay
+alone — with no real structural proof — then mislabeling it `THESIS_BROKEN_EXIT`.
+
+### Bugs Fixed This Release
+1. **Basket giveback panic-close** (CRITICAL): `XAU_BasketLifecycleManager()`
+   closed the whole basket red on giveback % alone, with no structure check,
+   even when `InpProtectedPeakBasketCloseRed` was meant to gate red closes.
+   Same gap existed in `ManageBasket()`'s fast-reversal, hard-cap, and floor
+   red-close branches.
+2. **Per-ticket giveback/floor panic-close** (HIGH): `XAU_SmartExit3Layer()`
+   and `XAU_ProtectPeakProfitFloor()` closed red positions on floor/giveback
+   breach without requiring `structureConfirmedBroken`.
+3. **TTM pure score-decay close** (HIGH): `TTM_EXIT` closed on `liveScore <
+   InpTTM_ExitThreshold` alone — no BOS/HTF flip required.
+4. **Growth Guard early cuts** (MEDIUM): `GROWTH_HARD_LOSS` and
+   `GROWTH_BAD_ENTRY_THESIS` cut losers on EMA/RSI/momentum weakness without
+   requiring confirmed structure.
+5. **Clean Exits giveback/stagnant/stale cuts** (MEDIUM): `CLEAN_STAGNANT`,
+   `CLEAN_STALE`, part of `CLEAN_INVALID`, and `APLUS_GIVEBACK_EXIT` could
+   close red positions without a structure requirement.
+
+### Fix
+Added `InpAllowEarlyLossExit` (default `false`) and a single choke-point
+`XAU_GateEarlyLossClose()`. When a position/basket P/L is at or below $0, the
+close is blocked unless: it's already profitable, `InpAllowEarlyLossExit` is
+true, there's a true emergency (deep equity/R backstop), or structure is
+confirmed broken (H1 BOS flip via `g_smc_bos_dir`, HTF consensus flip via
+`g_htfConsensusDir`, or a confirmed M5 close through the swing level).
+Blocked attempts print `EARLY LOSS CLOSE BLOCKED — letting trade breathe.`
+Every attempt (allowed or blocked) prints a `MANUAL_CLOSE_DIAGNOSTIC` line.
+Paths that already required confirmed structure or a genuine emergency
+backstop (`EARLY_CONVICTION_CUT`, `STRUCTURE_FAILFAST`,
+`NO_PARTIAL_SMART_LOSS`, `EXPECTANCY_MAX_LOSS`, `HARD_STOP`/`HARD_STOP_R`,
+`GROWTH_HARD_LOSS_EXIT`/`GROWTH_BASKET_LOSS`, `AI_DIRECTOR_EXIT_CLOSE`) were
+left unchanged as legitimate backstops.
+
+### File Distribution
+- [x] MT5 Experts: `XAUUSD_AI_Sniper_EA_v6.4.22.mq5` + `.ex5`
+- [x] `/Applications/XAUUSD_AI_Sniper_EA_v6.4.22.mq5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` updated (website download)
+- [x] `backend/server.py` `ea_version` default bumped
+- [ ] GitHub main branch pushed
+
+### Website / Frontend
+- [x] Footer.jsx, AdminPortal.jsx, FeaturesSection.jsx: v6.4.22
+- [x] DownloadSection.jsx: fallback version/edition/filename bumped (reads live from API otherwise)
+
+### Testing Before Live
+- [ ] MT5 journal: `EARLY LOSS CLOSE BLOCKED — letting trade breathe.` appears on a giveback/score-decay attempt with no structure break
+- [ ] MT5 journal: a confirmed BOS/HTF/M5 structure break still closes a loser normally
+- [ ] MT5 journal: winners (P/L > 0) still protect/close exactly as before — ungated
+- [ ] `/api/download/info` returns version v6.4.22
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings (`test_reports/metaeditor_v6422.log`)
+- Safe for demo: YES
+- Safe for live: NO — validate on demo first that trades now ride to SL/real structure instead of panic-closing
+
+---
+
 ## v6.4.2 — 2026-06-28
 
 ### EA Compile

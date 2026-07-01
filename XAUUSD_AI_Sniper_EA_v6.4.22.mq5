@@ -1,9 +1,42 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.21 — Trade Mode + June 17-19 Balance Lot Restore           |
-//|            controlled aggression, B-grade context, LOT_MODE audit  |
+//|   v6.4.22 — Let Trades Breathe / Early Loss Close Gate             |
+//|            blocks panic-closing a loser before SL or real structure|
 //+------------------------------------------------------------------+
+// v6.4.22 CHANGES (2026-07-01) — LET TRADES BREATHE / EARLY LOSS CLOSE GATE:
+//   Forensic audit of live logs (basket peak +$126.42, then PROFIT_FLOOR_SET ->
+//   GIVEBACK_WARNING -> GIVEBACK_LIMIT_TRIGGERED -> CONTINUATION_HOLD_REJECTED ->
+//   FORCE CLOSE reason=THESIS_BROKEN_EXIT.BASKET -> CLOSED: LOSS -$2.10, followed
+//   by price resuming the original direction) showed the giveback/lifecycle/TTM/
+//   growth-guard protection stack was closing losing trades on pullback, score
+//   decay, or giveback % alone — mislabeling it THESIS_BROKEN_EXIT with no real
+//   structural proof.
+//   1. New input InpAllowEarlyLossExit (default false). When a position or basket
+//      is at/below $0 P/L, the EA may not manually close it unless: broker SL,
+//      a margin/spread/news emergency, or a CONFIRMED structural invalidation
+//      (H1 BOS flip, HTF consensus flip, or a confirmed M5 close through the
+//      swing/invalidation level with ATR buffer) — via the new
+//      XAU_GateEarlyLossClose() choke point.
+//   2. Wired the gate into every discretionary loss-close path: basket giveback/
+//      lifecycle (XAU_BasketLifecycleManager, Guard1 fast-reversal, Guard2 hard
+//      giveback cap, floor-trigger red close), per-ticket Smart Exit (giveback/
+//      floor/trend), Growth Guard bad-entry/thesis cuts, TTM_EXIT (now only
+//      bypasses the gate on a real BOS/HTF flip, not pure score decay), Clean
+//      Exits (stagnant/stale/invalid/A+ giveback), and the legacy B1-B4/PATH-C
+//      loss cuts. Paths that already require confirmed structure or a deep
+//      equity/R backstop (EARLY_CONVICTION_CUT, STRUCTURE_FAILFAST,
+//      NO_PARTIAL_SMART_LOSS, EXPECTANCY_MAX_LOSS, HARD_STOP/HARD_STOP_R,
+//      GROWTH_HARD_LOSS_EXIT/GROWTH_BASKET_LOSS, AI_DIRECTOR_EXIT_CLOSE) are
+//      left as emergency backstops.
+//   3. Every manual-close attempt now prints a MANUAL_CLOSE_DIAGNOSTIC line
+//      (ticket, direction, entry/current price, P/L, peak, giveback %, reason,
+//      BOS, HTF, TTM score where known, structureBroken, emergency,
+//      InpAllowEarlyLossExit, ALLOWED/BLOCKED). Blocked attempts also print
+//      "EARLY LOSS CLOSE BLOCKED — letting trade breathe."
+//   4. Preserves June 17-19 balance lot mode, B-grade allowance, AI-as-advisor
+//      growth mode, and the real broker SL — none of that changed.
+//
 // v6.4.21 CHANGES (2026-07-01) — REMOVE FEAR CAGE / RESTORE CONTROLLED AGGRESSION:
 //   1. Adds explicit Trade Mode: SAFE_MODE, BALANCED_MODE, AGGRESSIVE_GROWTH_MODE.
 //      Balanced keeps real risk math but downgrades weak non-danger blockers to
@@ -653,16 +686,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.421"
-#property description "XAUUSD AI Sniper v6.4.21 - trade mode + June 17-19 balance lot restore"
+#property version   "6.422"
+#property description "XAUUSD AI Sniper v6.4.22 - let trades breathe, early loss close gate"
 #property description "Trade Thesis Monitor, AI quality gate, safe close audit"
 #property description "Risk engine, exits, committee, EPF, basket protect preserved"
 #property description "SMC remains additive confirmation only"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.21"
-#define XAUAI_EA_VERSION_NUM "6.4.21"
-#define XAUAI_BUILD_HASH "v6421-trade-mode-fear-cage-audit-20260701"
+#define XAUAI_EA_VERSION "v6.4.22"
+#define XAUAI_EA_VERSION_NUM "6.4.22"
+#define XAUAI_BUILD_HASH "v6422-let-trades-breathe-early-loss-gate-20260701"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1448,6 +1481,9 @@ input double InpLifecycleSecondChancePeakPct  = 20.0;  // Second-chance profit a
 input int    InpLifecycleMaxProfitLossCycles  = 2;     // Exit earlier once a basket repeatedly cycles through profit and loss
 input double InpLifecycleAdverseAfterProfitPct= 70.0;  // Max giveback from peak after lifecycle arm before rejecting hold
 input int    InpLifecycleMaxMinutesAfterPeak  = 180;   // Max time to keep a confused basket alive after its best peak
+
+input group "=== v6.4.22 LET TRADES BREATHE — EARLY LOSS EXIT PROTECTION ==="
+input bool   InpAllowEarlyLossExit            = false; // false=DEFAULT: block EA panic-closes on a losing trade/basket. Only broker SL, margin/spread/news emergency, or a confirmed BOS/HTF/M5 structural invalidation may close a loser early. Giveback%, TTM score, weak momentum, and continuation-hold rejection are NOT enough by themselves.
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // v6.3.0: TRUE — AI Director can HOLD, CLOSE, or LOCK positions
@@ -3304,6 +3340,44 @@ bool XAU_ContextShouldTakePartial(XAU_TRADE_CONTEXT_STATE contextState,
    return false;
 }
 
+//+------------------------------------------------------------------+
+//| v6.4.22 — EARLY LOSS CLOSE GATE                                  |
+//|   Gold pulls back. A losing position/basket must be left to ride |
+//|   to broker SL unless there is a true emergency (margin, extreme |
+//|   spread/news) or PROVEN structural invalidation (BOS flip, HTF  |
+//|   flip, confirmed M5/M15 candle close through the invalidation   |
+//|   level). Giveback%, TTM score decay, weak momentum, and         |
+//|   continuation-hold rejection are NOT valid reasons by            |
+//|   themselves. Every manual-close attempt is logged with full     |
+//|   diagnostics whether it is allowed or blocked.                  |
+//+------------------------------------------------------------------+
+bool XAU_GateEarlyLossClose(ulong ticket, bool isBuy, double openPx, double curPrice,
+                            double currentPnL, double peakProfit, string reason,
+                            bool structureBroken, bool emergency,
+                            double ttmScore = -1.0)
+{
+   if(currentPnL > 0.0)      return true;   // never gate a close that banks profit
+   if(InpAllowEarlyLossExit) return true;   // user explicitly opted back into old behavior
+
+   bool allowed = emergency || structureBroken;
+   double givebackPct = (peakProfit > 0.0 && currentPnL < peakProfit)
+                        ? ((peakProfit - currentPnL) / peakProfit) * 100.0 : 0.0;
+   string ttmTxt = (ttmScore < 0.0) ? "N/A" : DoubleToString(ttmScore, 1);
+
+   PrintFormat("MANUAL_CLOSE_DIAGNOSTIC #%I64u %s | entry=%.2f current=%.2f pnl=$%.2f peak=$%.2f giveback=%.0f%% | reason=%s BOS=%+d HTF=%+d TTM=%s structureBroken=%s emergency=%s InpAllowEarlyLossExit=%s | %s",
+               ticket, isBuy ? "BUY" : "SELL", openPx, curPrice, currentPnL, peakProfit,
+               givebackPct, reason, g_smc_bos_dir, g_htfConsensusDir, ttmTxt,
+               structureBroken ? "YES" : "NO", emergency ? "YES" : "NO",
+               InpAllowEarlyLossExit ? "true" : "false",
+               allowed ? "ALLOWED" : "BLOCKED");
+
+   if(!allowed)
+      PrintFormat("EARLY LOSS CLOSE BLOCKED — letting trade breathe. #%I64u %s reason=%s pnl=$%.2f peak=$%.2f giveback=%.0f%%",
+                  ticket, isBuy ? "BUY" : "SELL", reason, currentPnL, peakProfit, givebackPct);
+
+   return allowed;
+}
+
 bool XAU_ThesisHoldRunnerAllowed(ulong ticket, bool isBuy, bool runnerClean,
                                  int momentumScore, bool trendAligned,
                                  bool structureConfirmedBroken, bool emaAgainst,
@@ -3587,6 +3661,9 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                   XAU_ContextAuditTag(contextState),
                   XAU_ContextStateName(contextState),
                   peak, floorUSD, profitUSD, givebackPct, trendWhy);
+      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profitUSD, peak,
+                                 "SMART_EXIT_FLOOR", structureConfirmedBroken, false))
+         return false;
       XAU_SetPendingExitReason(ticket, lastExitReason);
       if(!SafePositionClose(ticket, "SMART_EXIT_FLOOR")) return false;
       return true;
@@ -3617,6 +3694,9 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                                        XAU_ContextAuditTag(contextState),
                                        peak, floorUSD, profitUSD, givebackPct,
                                        runnerClean ? "Y" : "N");
+         if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profitUSD, peak,
+                                    "SMART_EXIT_GIVEBACK", structureConfirmedBroken, false))
+            return false;
          XAU_SetPendingExitReason(ticket, lastExitReason);
          if(!SafePositionClose(ticket, "SMART_EXIT_GIVEBACK")) return false;
          return true;
@@ -3780,6 +3860,9 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
       PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED #%I64u %s | closing because earned floor/context was breached; trend=%s momentum=%d/5 structBroken=%s",
                   ticket, isBuy ? "BUY" : "SELL",
                   trendAligned ? "Y" : "N", momentumScore, structureConfirmedBroken ? "Y" : "N");
+      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
+                                 "SMART_EXIT_TREND", structureConfirmedBroken, false))
+         return false;
       XAU_SetPendingExitReason(ticket, reason);
       if(PositionSelectByTicket(ticket))
       {
@@ -10584,6 +10667,9 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
                   adverseMove / MathMax(atr, 0.000001), profit, earlyLossCap,
                   structureConfirmed ? "Y" : "N", emaAgainst ? "Y" : "N",
                   rsiAgainst ? "Y" : "N", momentumScore);
+      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, 0.0,
+                                 "GROWTH_HARD_LOSS", structureConfirmed, false))
+         return false;
       XAU_SetPendingExitReason(ticket, lastExitReason);
       if(!SafePositionClose(ticket, "GROWTH_HARD_LOSS")) return false;
       lastTradeClose = TimeCurrent();
@@ -10631,6 +10717,9 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
                      structureConfirmed ? "Y" : "N", emaAgainst ? "Y" : "N",
                      rsiAgainst ? "Y" : "N", trendAligned ? "Y" : "N",
                      momentumScore);
+         if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, 0.0,
+                                    "GROWTH_BAD_ENTRY_THESIS", structureConfirmed, false))
+            return false;
          XAU_SetPendingExitReason(ticket, lastExitReason);
          if(!SafePositionClose(ticket, "GROWTH_BAD_ENTRY_THESIS")) return false;
          lastTradeClose = TimeCurrent();
@@ -11973,6 +12062,44 @@ double XAU_ReconstructOpenBasketPeakUSD(double currentPnL)
    return MathMax(MathMax(0.0, currentPnL), reconstructed);
 }
 
+// v6.4.22 — dominant direction of the open EA basket (+1 buy, -1 sell, 0 flat/mixed)
+int XAU_BasketDominantDirection()
+{
+   int buys = 0, sells = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      if(posInfo.PositionType() == POSITION_TYPE_BUY)  buys++;
+      if(posInfo.PositionType() == POSITION_TYPE_SELL) sells++;
+   }
+   if(buys > 0 && sells == 0) return 1;
+   if(sells > 0 && buys == 0) return -1;
+   return 0;   // flat or mixed-direction basket — no single structure to test
+}
+
+// v6.4.22 — true structural invalidation for the basket's direction: BOS flip (H1),
+// HTF consensus flip, or a confirmed M5 close through the recent swing level.
+// This is what "structure is actually broken" means for basket-level gating —
+// giveback %, cycle count, and time-after-peak are NOT structure.
+bool XAU_BasketStructureBroken(int basketDir)
+{
+   if(basketDir == 0) return false;
+   if(g_smc_bos_dir != 0 && g_smc_bos_dir == -basketDir) return true;
+   if(g_htfConsensusDir != 0 && g_htfConsensusDir == -basketDir) return true;
+
+   double swingLow, swingHigh;
+   CleanStructureLevels(InpCleanStructureLookback, swingLow, swingHigh);
+   double atrBuf[1];
+   int hATRBasket = iATR(Symbol(), PERIOD_M5, 14);
+   double structBuf = 0.0;
+   if(hATRBasket != INVALID_HANDLE && CopyBuffer(hATRBasket, 0, 0, 1, atrBuf) >= 1)
+      structBuf = atrBuf[0] * InpCleanStructureATRBuffer;
+   bool isBuy = (basketDir > 0);
+   int breakBars = CleanStructureBreakBars(isBuy, swingLow, swingHigh, structBuf);
+   return breakBars >= MathMax(1, InpGoldPullbackConfirmBars);
+}
+
 bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakActive, double floorUSD)
 {
    if(!InpTradeLifecycleEnable) return false;
@@ -12023,9 +12150,15 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
       lastExitReason = StringFormat("%s BASKET | peak $%.2f -> $%.2f",
                                     XAU_SmartExitStateName(THESIS_BROKEN_EXIT),
                                     g_basketPeakUSD, totalPnL);
-      CloseAll(lastExitReason);
-      XAU_ResetBasketProtectionState();
-      return true;
+      int basketDirGLT = XAU_BasketDominantDirection();
+      if(XAU_GateEarlyLossClose(0, basketDirGLT >= 0, 0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
+                                totalPnL, g_basketPeakUSD, "GIVEBACK_LIMIT_TRIGGERED BASKET",
+                                XAU_BasketStructureBroken(basketDirGLT), false))
+      {
+         CloseAll(lastExitReason);
+         XAU_ResetBasketProtectionState();
+         return true;
+      }
    }
 
    if(g_basketProfitToLossSeen && totalPnL >= secondChanceUSD)
@@ -12051,9 +12184,15 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
       PrintFormat("CONTINUATION_HOLD_REJECTED BASKET | repeated profit/loss cycling means continuation trust decayed");
       lastExitReason = StringFormat("CYCLE_DECAY_EXIT BASKET | cycles %d after peak $%.2f",
                                     g_basketProfitLossCycles, g_basketPeakUSD);
-      CloseAll(lastExitReason);
-      XAU_ResetBasketProtectionState();
-      return true;
+      int basketDirCD1 = XAU_BasketDominantDirection();
+      if(XAU_GateEarlyLossClose(0, basketDirCD1 >= 0, 0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
+                                totalPnL, g_basketPeakUSD, "CYCLE_DECAY_EXIT BASKET",
+                                XAU_BasketStructureBroken(basketDirCD1), false))
+      {
+         CloseAll(lastExitReason);
+         XAU_ResetBasketProtectionState();
+         return true;
+      }
    }
 
    if(InpLifecycleMaxMinutesAfterPeak > 0 &&
@@ -12065,9 +12204,15 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
       PrintFormat("CONTINUATION_HOLD_REJECTED BASKET | no indefinite hold after proven peak and failed recovery cycle");
       lastExitReason = StringFormat("CYCLE_DECAY_EXIT BASKET | max hold %dmin after peak $%.2f",
                                     InpLifecycleMaxMinutesAfterPeak, g_basketPeakUSD);
-      CloseAll(lastExitReason);
-      XAU_ResetBasketProtectionState();
-      return true;
+      int basketDirCD2 = XAU_BasketDominantDirection();
+      if(XAU_GateEarlyLossClose(0, basketDirCD2 >= 0, 0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
+                                totalPnL, g_basketPeakUSD, "CYCLE_DECAY_EXIT BASKET",
+                                XAU_BasketStructureBroken(basketDirCD2), false))
+      {
+         CloseAll(lastExitReason);
+         XAU_ResetBasketProtectionState();
+         return true;
+      }
    }
 
    if(TimeCurrent() - g_basketLastLifecycleLog >= 60)
@@ -12305,14 +12450,20 @@ bool ManageBasket()
             {
                PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | FAST_REVERSAL peak=$%.2f pnl=$%.2f drop=%.1f%% in %ds",
                            g_basketPeakUSD, totalPnL, dropPctOfPeak, InpBasketFastWindowSec);
-               lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | fast reversal peak $%.2f -> $%.2f", g_basketPeakUSD, totalPnL);
-               PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | closing red basket after meaningful peak instead of breathing into loss");
-               CloseAll(lastExitReason);
-               g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
-               g_basketArmed    = false; g_basketBEHit = false;
-               g_basketSoftLockTaken = false;
-               ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
-               return true;
+               int basketDirFR = XAU_BasketDominantDirection();
+               if(XAU_GateEarlyLossClose(0, basketDirFR >= 0, 0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
+                                         totalPnL, g_basketPeakUSD, "GIVEBACK_LIMIT_TRIGGERED BASKET FAST_REVERSAL",
+                                         XAU_BasketStructureBroken(basketDirFR), false))
+               {
+                  lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | fast reversal peak $%.2f -> $%.2f", g_basketPeakUSD, totalPnL);
+                  PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | closing red basket after meaningful peak instead of breathing into loss");
+                  CloseAll(lastExitReason);
+                  g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
+                  g_basketArmed    = false; g_basketBEHit = false;
+                  g_basketSoftLockTaken = false;
+                  ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+                  return true;
+               }
             }
             PrintFormat("BASKET_FAST_REV_BREATHE │ peak $%.2f -> pnl $%.2f, drop %.1f%% in %ds, but basket peak was not protected enough for red close; SL/structure manages recovery",
                         g_basketPeakUSD, totalPnL, dropPctOfPeak, InpBasketFastWindowSec);
@@ -12345,14 +12496,20 @@ bool ManageBasket()
             {
                PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | HARD_CAP peak=$%.2f pnl=$%.2f giveback=$%.2f cap=$%.2f",
                            g_basketPeakUSD, totalPnL, currGivebackUSD, maxGivebackUSD);
-               lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | hard cap peak $%.2f -> $%.2f", g_basketPeakUSD, totalPnL);
-               PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | closing red basket after protected peak hard-cap breach");
-               CloseAll(lastExitReason);
-               g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
-               g_basketArmed    = false; g_basketBEHit = false;
-               g_basketSoftLockTaken = false;
-               ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
-               return true;
+               int basketDirHC = XAU_BasketDominantDirection();
+               if(XAU_GateEarlyLossClose(0, basketDirHC >= 0, 0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
+                                         totalPnL, g_basketPeakUSD, "GIVEBACK_LIMIT_TRIGGERED BASKET HARD_CAP",
+                                         XAU_BasketStructureBroken(basketDirHC), false))
+               {
+                  lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | hard cap peak $%.2f -> $%.2f", g_basketPeakUSD, totalPnL);
+                  PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | closing red basket after protected peak hard-cap breach");
+                  CloseAll(lastExitReason);
+                  g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
+                  g_basketArmed    = false; g_basketBEHit = false;
+                  g_basketSoftLockTaken = false;
+                  ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+                  return true;
+               }
             }
             PrintFormat("BASKET_HARD_CAP_BREATHE │ peak $%.2f -> pnl $%.2f, giveback $%.2f >= cap $%.2f, but basket peak was not protected enough for red close; holding for SL/structure",
                         g_basketPeakUSD, totalPnL, currGivebackUSD, maxGivebackUSD);
@@ -12404,17 +12561,23 @@ bool ManageBasket()
       {
          PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | FLOOR peak=$%.2f floor=$%.2f pnl=$%.2f",
                      g_basketPeakUSD, g_basketFloorUSD, totalPnL);
-         lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | floor $%.2f from peak $%.2f breached at $%.2f",
-                                       g_basketFloorUSD, g_basketPeakUSD, totalPnL);
-         PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | closing red basket because earned floor was breached");
-         CloseAll(lastExitReason);
-         g_basketPeakUSD  = 0;
-         g_basketFloorUSD = 0;
-         g_basketArmed    = false;
-         g_basketBEHit    = false;
-         g_basketSoftLockTaken = false;
-         ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
-         return true;
+         int basketDirFL = XAU_BasketDominantDirection();
+         if(XAU_GateEarlyLossClose(0, basketDirFL >= 0, 0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
+                                   totalPnL, g_basketPeakUSD, "GIVEBACK_LIMIT_TRIGGERED BASKET FLOOR",
+                                   XAU_BasketStructureBroken(basketDirFL), false))
+         {
+            lastExitReason = StringFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | floor $%.2f from peak $%.2f breached at $%.2f",
+                                          g_basketFloorUSD, g_basketPeakUSD, totalPnL);
+            PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED BASKET | closing red basket because earned floor was breached");
+            CloseAll(lastExitReason);
+            g_basketPeakUSD  = 0;
+            g_basketFloorUSD = 0;
+            g_basketArmed    = false;
+            g_basketBEHit    = false;
+            g_basketSoftLockTaken = false;
+            ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+            return true;
+         }
       }
       PrintFormat("BASKET_LOCK_BREATHE │ PnL=$%.2f < Floor=$%.2f after peak $%.2f, but protected basket close is disabled or peak is too small; SL/structure owns exit",
                   totalPnL, g_basketFloorUSD, g_basketPeakUSD);
@@ -12631,6 +12794,11 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                   (1.0 - InpEarlyConvictionCutR / MathMax(0.01, InpCleanMaxLossR)) * 100.0);
       lastExitReason = StringFormat("EARLY_CUT │ %.2fR all signals failed (%.0f%% vs full SL)", rMult,
                                     (1.0 - InpEarlyConvictionCutR / MathMax(0.01, InpCleanMaxLossR)) * 100.0);
+      // invalidScore>=4 mathematically requires structureConfirmedBroken (its 2 points
+      // are needed to reach 4), so this is already a confirmed structural invalidation.
+      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
+                                 "EARLY_CONVICTION_CUT", structureConfirmedBroken, false))
+         return false;
       if(!SafePositionClose(ticket, "EARLY_CONVICTION_CUT")) return false;
       return true;
    }
@@ -12664,6 +12832,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       PrintFormat("CLEAN_STAGNANT #%I64u %s | %dm open, %.2fR in %s → CLOSE",
                   ticket, isBuy?"BUY":"SELL", minsOpen, rMult, RegimeName());
       lastExitReason = StringFormat("STAGNANT │ %.2fR after %dm in %s", rMult, minsOpen, RegimeName());
+      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
+                                 "CLEAN_STAGNANT", structureConfirmedBroken, false))
+         return false;
       if(!SafePositionClose(ticket, "CLEAN_STAGNANT")) return false;
       return true;
    }
@@ -12674,6 +12845,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       PrintFormat("CLEAN_STALE #%I64u %s | %dm open, %.2fR, trendAligned=%s momentum=%d/5 → CLOSE",
                   ticket, isBuy?"BUY":"SELL", minsOpen, rMult, trendAligned?"Y":"N", momentumScore);
       lastExitReason = StringFormat("STALE │ %.2fR after %dm momentum %d/5", rMult, minsOpen, momentumScore);
+      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
+                                 "CLEAN_STALE", structureConfirmedBroken, false))
+         return false;
       if(!SafePositionClose(ticket, "CLEAN_STALE")) return false;
       return true;
    }
@@ -12695,6 +12869,11 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                      emaAgainst?"Y":"N", rsiAgainst?"Y":"N", reversalCandle?"Y":"N",
                      recoveryLikely?"Y":"N");
          lastExitReason = StringFormat("INVALIDATION │ %.2fR score %d", rMult, invalidScore);
+         // emergencyInvalid = deep -InpCleanEmergencyLossR loss, a catastrophic-loss backstop
+         // independent of structure — treated as the "emergency" carve-out.
+         if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
+                                    "CLEAN_INVALID", structureConfirmedBroken, emergencyInvalid))
+            return false;
          if(!SafePositionClose(ticket, "CLEAN_INVALID")) return false;
          return true;
       }
@@ -12727,6 +12906,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                      structureBreakBars, InpGoldPullbackConfirmBars, momentumScore,
                      recoveryLikely?"Y":"N");
          lastExitReason = StringFormat("STRUCTURE_FAILFAST │ %.2fR confirmed failed structure", rMult);
+         if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
+                                    "STRUCTURE_FAILFAST", failedStructure, false))
+            return false;
          if(!SafePositionClose(ticket, "STRUCTURE_FAILFAST")) return false;
          return true;
       }
@@ -12836,6 +13018,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                                     trendStillWith?"Y":"N", rsi);
                         lastExitReason = StringFormat("APLUS_GIVEBACK_EXIT | %.0f%% giveback from $%.2f peak, reversal confirmed",
                                                       givebackPct, peak);
+                        if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, curProfitUSD, peak,
+                                                   "APLUS_GIVEBACK_EXIT", structureConfirmedBroken, false))
+                           return false;
                         if(!SafePositionClose(ticket, "APLUS_GIVEBACK_EXIT")) return false;
                         return true;
                      }
@@ -13286,8 +13471,10 @@ double TTM_CalcLiveScore(TradeTTMRecord &r, bool isBuy,
 
 // Evaluate thesis — returns exit reason string or "" to hold
 string TTM_Evaluate(int idx, bool isBuy, double liveScore,
-                    double profit, double peak, int currentBOS, int currentHTF)
+                    double profit, double peak, int currentBOS, int currentHTF,
+                    bool &isStructural)
 {
+   isStructural = false;
    if(idx < 0 || idx >= TTM_MAX_POSITIONS || !g_ttm[idx].active)
       return "";
 
@@ -13346,6 +13533,7 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
       g_ttm[idx].thesisBroken = true;
       g_ttm[idx].breakReason = why;
       g_ttm[idx].breakTime = TimeCurrent();
+      isStructural = true;
       return why;
    }
 
@@ -13359,6 +13547,7 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
       g_ttm[idx].thesisBroken = true;
       g_ttm[idx].breakReason = why;
       g_ttm[idx].breakTime = TimeCurrent();
+      isStructural = true;
       return why;
    }
 
@@ -13486,14 +13675,22 @@ void ManagePositions()
                g_ttm[ttmIdx], isBuy, rsi, momentumScoreEA, trendAlignedEA,
                structureConfirmedEA, emaAgainstEA, g_smc_bos_dir, g_htfConsensusDir);
 
+            bool ttmIsStructural = false;
             string ttmExit = TTM_Evaluate(ttmIdx, isBuy, ttmLiveScore,
-                                           profit, peak, g_smc_bos_dir, g_htfConsensusDir);
+                                           profit, peak, g_smc_bos_dir, g_htfConsensusDir,
+                                           ttmIsStructural);
             if(StringLen(ttmExit) > 0)
             {
                PrintFormat("[TTM] EXIT TRIGGERED #%I64u %s | %s", ticket, dirStr, ttmExit);
                LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen,
                        rsi, emaF, close1, open1, "TTM_EXIT", ttmExit);
-               if(SafePositionClose(ticket, "TTM_EXIT"))
+               if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
+                                          "TTM_EXIT", ttmIsStructural || structureConfirmedEA, false,
+                                          ttmLiveScore))
+               {
+                  // blocked: fall through to normal management this tick
+               }
+               else if(SafePositionClose(ticket, "TTM_EXIT"))
                {
                   TTM_ReleaseSlot(ticket);
                   lastTradeClose = TimeCurrent();
@@ -13803,7 +14000,10 @@ void ManagePositions()
                  "EARLY_ADVERSE",
                  StringFormat("Down %.1fR ($%.2f of %.2f) within first %d min. Entry was wrong — cut fast.",
                               MathAbs(profit)/rDollars, profit, rDollars, InpEarlyAdverseMin));
-         SafePositionClose(ticket, "EARLY_ADVERSE"); continue;
+         if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
+                                   "EARLY_ADVERSE", structureConfirmedEA, false))
+            SafePositionClose(ticket, "EARLY_ADVERSE");
+         continue;
       }
       // v4.7.2 — In Preservation Mode, PEAK_RETRACE only fires on DEEP retraces
       //   from BIG peaks (90% retrace from $200+) — it's a runner-saver, not a scalper.
@@ -13819,7 +14019,10 @@ void ManagePositions()
                  "PEAK_RETRACE",
                  StringFormat("Peak was $%.2f, now $%.2f — gave back %.0f%% (threshold %.0f%%).",
                               peak, profit, retracePct, effRetracePct));
-         SafePositionClose(ticket, "PEAK_RETRACE"); continue;
+         if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
+                                   "PEAK_RETRACE", structureConfirmedEA, false))
+            SafePositionClose(ticket, "PEAK_RETRACE");
+         continue;
       }
 
       // ===== ADAPTIVE RUNNER (v4.7.7) — 2-stage tick-1 trailing =====
@@ -14336,7 +14539,10 @@ void ManagePositions()
                     StringFormat("Real reversal: structure-broken=%s rsi-turn=%s bar-reverse=%s ema-broken=%s streak-broken=%s. Profit $%.2f peak $%.2f.",
                                  structureBroken?"Y":"N", rsiTurning?"Y":"N", barReverse?"Y":"N", emaBroken?"Y":"N", streakBroken?"Y":"N",
                                  profit, peak));
-            SafePositionClose(ticket, "MOMENTUM_FADE"); continue;
+            if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
+                                      "MOMENTUM_FADE", structureBroken, false))
+               SafePositionClose(ticket, "MOMENTUM_FADE");
+            continue;
          }
 
          // v4.4.4 — CAP REACHED: only force-close if smart cap disabled.
@@ -14471,7 +14677,10 @@ void ManagePositions()
                     StringFormat("%.2fR loss + %s (EMA-against=%s RSI-failing=%s). Stop bleeding.",
                                  MathAbs(profit)/rDollars, deepLoss?"deep+time":"no-recovery",
                                  emaAgainst?"Y":"N", rsiFailing?"Y":"N"));
-            SafePositionClose(ticket, "SMART_CUT"); continue;
+            if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
+                                      "SMART_CUT", structureConfirmedEA, false))
+               SafePositionClose(ticket, "SMART_CUT");
+            continue;
          }
       }
 
@@ -14490,7 +14699,10 @@ void ManagePositions()
                  "STALE_LOSS",
                  StringFormat("Open %d min > regime cap %d min at -%.2fR. Free the margin.",
                               minsOpen, staleCap, MathAbs(profit)/rDollars));
-         SafePositionClose(ticket, "STALE_LOSS"); continue;
+         if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
+                                   "STALE_LOSS", structureConfirmedEA, false))
+            SafePositionClose(ticket, "STALE_LOSS");
+         continue;
       }
       // v5.9.0: Only close drifting trades when EMA confirms the flat position has NO thesis.
       // If EMA fast is still above EMA slow for a BUY (or below for SELL), the trade is
@@ -14505,7 +14717,10 @@ void ManagePositions()
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "STALE_DRIFT",
                  StringFormat("Open %d min (>60min cap) with P/L $%.2f and EMA opposing trade. No valid thesis — free margin.", minsOpen, profit));
-         SafePositionClose(ticket, "STALE_DRIFT"); continue;
+         if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
+                                   "STALE_DRIFT", structureConfirmedEA, false))
+            SafePositionClose(ticket, "STALE_DRIFT");
+         continue;
       }
 
       // ===== PATH C: CLAUDE SEMANTIC EXIT (proactive audit, every InpClaudeAuditSec) =====
@@ -14553,7 +14768,10 @@ void ManagePositions()
                        "CLAUDE_AI",
                        StringFormat("Claude 4.5 said CLOSE. P/L $%.2f (%.2fR). %s",
                                     profit, profit/rDollars, v.reason));
-               SafePositionClose(ticket, "CLAUDE_AI"); continue;
+               if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
+                                         "CLAUDE_AI", structureConfirmedEA, false))
+                  SafePositionClose(ticket, "CLAUDE_AI");
+               continue;
             }
          }
       }
