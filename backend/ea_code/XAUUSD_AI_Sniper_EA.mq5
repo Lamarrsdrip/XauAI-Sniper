@@ -1,9 +1,39 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.23 — Full BOS/HTF Entry-vs-Current Close Diagnostics        |
-//|            blocks panic-closing a loser before SL or real structure|
+//|   v6.4.24 — Profit Giveback Gate: No Early-Bank Without Proof      |
+//|            good entry + real exit timing, not panic on both sides |
 //+------------------------------------------------------------------+
+// v6.4.24 CHANGES (2026-07-01) — PROFIT GIVEBACK GATE:
+//   Evidence pass across MQL5/Logs 20260624-20260701 found the SAME "act on
+//   giveback%/context alone, no reversal proof" bug from v6.4.22 also on the
+//   PROFIT side:
+//     - Basket: BASKET LOCK/HARD-CAP routinely banked only 37-59% of peak
+//       (e.g. peak $76.11->$34.50 banked, peak $234.80->$149.15 banked) with
+//       zero structure check, and Guard 1 (fast-reversal)/Guard 2 (hard-cap)
+//       full-closed a profitable basket on the FIRST breach, bypassing the
+//       softer partial-lock the floor-trigger already had.
+//     - Per-ticket: SMART_EXIT_GIVEBACK closed on context-based giveback
+//       caps (WEAK_TRADE allows only 35%) with no reversal confirmation.
+//       Clean case: posId #9383190740 closed at $51.45 (34% below its
+//       $77.91 peak, giveback 36%>=35% allowed) on ADAPTIVE_CONTEXT_WEAK_TRADE
+//       alone; price then added another ~$229 (EXIT-BRAIN
+//       EXIT_EARLY_LEFT_PROFIT, 60m checkpoint) that was left on the table —
+//       roughly 4.4x the banked amount, missed by treating a momentary
+//       momentum dip as proof of reversal.
+//   Fix: new input InpAllowGivebackPanicClose (default false) and an
+//   extension to XAU_GateEarlyLossClose (isGivebackTrigger=true) so a
+//   giveback%/context breach can no longer fully close a STILL-PROFITABLE
+//   position/basket without either (a) a confirmed reversal — structure
+//   break, or EMA+RSI+momentum genuinely against — or (b) this being a
+//   repeat breach after the position/basket already took its first soft-
+//   lock/partial. Applied to SMART_EXIT_GIVEBACK, SMART_EXIT_TREND, and
+//   basket Guard 1/Guard 2 (which now attempt the existing
+//   InpBasketSoftLockFirst partial-bank on the first breach instead of a
+//   full close, exactly like the floor-trigger already did). The floor SL
+//   already ratcheted into place keeps protecting regardless — this only
+//   changes whether the EA proactively market-closes on TOP of that SL.
+//
 // v6.4.23 CHANGES (2026-07-01) — FULL BOS/HTF ENTRY DIAGNOSTICS:
 //   MANUAL_CLOSE_DIAGNOSTIC previously printed only the CURRENT BOS/HTF
 //   values. Now looks up the position's TTM entry snapshot (read-only,
@@ -696,16 +726,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.423"
-#property description "XAUUSD AI Sniper v6.4.23 - let trades breathe, full BOS/HTF entry diagnostics"
+#property version   "6.424"
+#property description "XAUUSD AI Sniper v6.4.24 - profit giveback gate, no early-bank without proof"
 #property description "Trade Thesis Monitor, AI quality gate, safe close audit"
 #property description "Risk engine, exits, committee, EPF, basket protect preserved"
 #property description "SMC remains additive confirmation only"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.23"
-#define XAUAI_EA_VERSION_NUM "6.4.23"
-#define XAUAI_BUILD_HASH "v6423-bos-htf-entry-diagnostics-20260701"
+#define XAUAI_EA_VERSION "v6.4.24"
+#define XAUAI_EA_VERSION_NUM "6.4.24"
+#define XAUAI_BUILD_HASH "v6424-profit-giveback-gate-20260701"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1494,6 +1524,7 @@ input int    InpLifecycleMaxMinutesAfterPeak  = 180;   // Max time to keep a con
 
 input group "=== v6.4.22 LET TRADES BREATHE — EARLY LOSS EXIT PROTECTION ==="
 input bool   InpAllowEarlyLossExit            = false; // false=DEFAULT: block EA panic-closes on a losing trade/basket. Only broker SL, margin/spread/news emergency, or a confirmed BOS/HTF/M5 structural invalidation may close a loser early. Giveback%, TTM score, weak momentum, and continuation-hold rejection are NOT enough by themselves.
+input bool   InpAllowGivebackPanicClose       = false; // false=DEFAULT: a giveback%/context breach alone must not fully close a STILL-PROFITABLE position/basket either. Requires a confirmed reversal (or a repeat breach after the first soft-lock/partial). The floor SL already in place keeps protecting either way.
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = true;   // v6.3.0: TRUE — AI Director can HOLD, CLOSE, or LOCK positions
@@ -3364,10 +3395,17 @@ bool XAU_ContextShouldTakePartial(XAU_TRADE_CONTEXT_STATE contextState,
 bool XAU_GateEarlyLossClose(ulong ticket, bool isBuy, double openPx, double curPrice,
                             double currentPnL, double peakProfit, string reason,
                             bool structureBroken, bool emergency,
-                            double ttmScore = -1.0)
+                            double ttmScore = -1.0, bool isGivebackTrigger = false)
 {
-   if(currentPnL > 0.0)      return true;   // never gate a close that banks profit
-   if(InpAllowEarlyLossExit) return true;   // user explicitly opted back into old behavior
+   // v6.4.24: a giveback-triggered close (SMART_EXIT_GIVEBACK, SMART_EXIT_TREND,
+   // basket LOCK/HARD-CAP/FAST-REVERSAL) can fire while STILL profitable — that's
+   // exactly the "gives back too much" / "closes early, misses the bigger move"
+   // complaint. Those callers pass isGivebackTrigger=true so a positive P/L does
+   // NOT auto-allow the close; they still need confirmed reversal (or a repeat
+   // breach). Pure loss-panic callers are unaffected — profit still auto-allows.
+   if(currentPnL > 0.0 && !isGivebackTrigger) return true;
+   if(isGivebackTrigger && InpAllowGivebackPanicClose) return true;
+   if(!isGivebackTrigger && InpAllowEarlyLossExit)      return true;
 
    bool allowed = emergency || structureBroken;
    double givebackPct = (peakProfit > 0.0 && currentPnL < peakProfit)
@@ -3386,16 +3424,23 @@ bool XAU_GateEarlyLossClose(ulong ticket, bool isBuy, double openPx, double curP
    double ttmScoreEff = (ttmScore >= 0.0) ? ttmScore : (haveEntrySnap ? g_ttm[ttmIdxDiag].liveScore : -1.0);
    string ttmTxt = (ttmScoreEff < 0.0) ? "N/A" : DoubleToString(ttmScoreEff, 1);
 
-   PrintFormat("MANUAL_CLOSE_DIAGNOSTIC #%I64u %s | entry=%.2f current=%.2f pnl=$%.2f peak=$%.2f giveback=%.0f%% | reason=%s BOS(entry->cur)=%s HTF(entry->cur)=%s TTM=%s structureBroken=%s emergency=%s InpAllowEarlyLossExit=%s | %s",
+   PrintFormat("MANUAL_CLOSE_DIAGNOSTIC #%I64u %s | entry=%.2f current=%.2f pnl=$%.2f peak=$%.2f giveback=%.0f%% | reason=%s givebackTrigger=%s BOS(entry->cur)=%s HTF(entry->cur)=%s TTM=%s structureBroken=%s emergency=%s InpAllowEarlyLossExit=%s InpAllowGivebackPanicClose=%s | %s",
                ticket, isBuy ? "BUY" : "SELL", openPx, curPrice, currentPnL, peakProfit,
-               givebackPct, reason, bosTxt, htfTxt, ttmTxt,
+               givebackPct, reason, isGivebackTrigger ? "YES" : "NO", bosTxt, htfTxt, ttmTxt,
                structureBroken ? "YES" : "NO", emergency ? "YES" : "NO",
                InpAllowEarlyLossExit ? "true" : "false",
+               InpAllowGivebackPanicClose ? "true" : "false",
                allowed ? "ALLOWED" : "BLOCKED");
 
    if(!allowed)
-      PrintFormat("EARLY LOSS CLOSE BLOCKED — letting trade breathe. #%I64u %s reason=%s pnl=$%.2f peak=$%.2f giveback=%.0f%%",
-                  ticket, isBuy ? "BUY" : "SELL", reason, currentPnL, peakProfit, givebackPct);
+   {
+      if(isGivebackTrigger)
+         PrintFormat("PROFIT_GIVEBACK_CLOSE_BLOCKED — floor SL already protects; letting it ride instead of banking early. #%I64u %s reason=%s pnl=$%.2f peak=$%.2f giveback=%.0f%%",
+                     ticket, isBuy ? "BUY" : "SELL", reason, currentPnL, peakProfit, givebackPct);
+      else
+         PrintFormat("EARLY LOSS CLOSE BLOCKED — letting trade breathe. #%I64u %s reason=%s pnl=$%.2f peak=$%.2f giveback=%.0f%%",
+                     ticket, isBuy ? "BUY" : "SELL", reason, currentPnL, peakProfit, givebackPct);
+   }
 
    return allowed;
 }
@@ -3716,8 +3761,15 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                                        XAU_ContextAuditTag(contextState),
                                        peak, floorUSD, profitUSD, givebackPct,
                                        runnerClean ? "Y" : "N");
+         // v6.4.24: while still profitable, a giveback%/context breach alone (e.g.
+         // WEAK_TRADE context capping allowed giveback at 35%) is not proof of real
+         // reversal — require structure OR a genuinely confirmed EMA+RSI+momentum
+         // reversal, same bar as EARLY_CONVICTION_CUT uses for losers.
+         bool reversalConfirmedGiveback = structureConfirmedBroken ||
+                                          (emaAgainst && rsiAgainst && momentumScore <= 1);
          if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profitUSD, peak,
-                                    "SMART_EXIT_GIVEBACK", structureConfirmedBroken, false))
+                                    "SMART_EXIT_GIVEBACK", reversalConfirmedGiveback, false,
+                                    -1.0, true))
             return false;
          XAU_SetPendingExitReason(ticket, lastExitReason);
          if(!SafePositionClose(ticket, "SMART_EXIT_GIVEBACK")) return false;
@@ -3882,8 +3934,14 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
       PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED #%I64u %s | closing because earned floor/context was breached; trend=%s momentum=%d/5 structBroken=%s",
                   ticket, isBuy ? "BUY" : "SELL",
                   trendAligned ? "Y" : "N", momentumScore, structureConfirmedBroken ? "Y" : "N");
+      // v6.4.24: floor/giveback breach while still profitable is not proof of
+      // reversal by itself — require structure break or a genuinely weak/against
+      // trend+momentum reading before fully closing instead of trusting the
+      // floor SL already placed.
+      bool reversalConfirmedTrend = structureConfirmedBroken || (!trendAligned && momentumScore <= 1);
       if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
-                                 "SMART_EXIT_TREND", structureConfirmedBroken, false))
+                                 "SMART_EXIT_TREND", reversalConfirmedTrend, false,
+                                 -1.0, true))
          return false;
       XAU_SetPendingExitReason(ticket, reason);
       if(PositionSelectByTicket(ticket))
@@ -12458,15 +12516,43 @@ bool ManageBasket()
          {
             if(totalPnL > 0)
             {
-               PrintFormat(">>> BASKET FAST-REVERSAL │ dropped $%.2f (%.1f%% of peak $%.2f) in %ds → BANK PROFIT",
-                           dropFromWinMax, dropPctOfPeak, g_basketPeakUSD, InpBasketFastWindowSec);
-               lastExitReason = StringFormat("BASKET FAST-REV │ peak $%.2f → $%.2f in %ds", g_basketPeakUSD, totalPnL, InpBasketFastWindowSec);
-               CloseAll(lastExitReason);
-               PG_OnBasketWin();  // v5.1.2 — winner resets consecutive-loss streak
-               g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
-               g_basketArmed    = false; g_basketBEHit = false;
-               ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
-               return true;
+               // v6.4.24: a fast drop alone isn't proof of real reversal — bank a
+               // partial and keep a runner on the FIRST breach (same soft-lock the
+               // floor-trigger uses below), same as before only on a repeat breach,
+               // confirmed structure break, or opt-in.
+               int basketDirFRW = XAU_BasketDominantDirection();
+               bool fastRevConfirmed = g_basketSoftLockTaken || InpAllowGivebackPanicClose ||
+                                       XAU_BasketStructureBroken(basketDirFRW);
+               if(InpBasketSoftLockFirst && !InpCloudSafeDisablePartials && !g_basketSoftLockTaken)
+               {
+                  PrintFormat(">>> BASKET SOFT-LOCK (FAST-REVERSAL) │ dropped %.1f%% of peak $%.2f in %ds │ banking %.0f%%, runner stays alive",
+                              dropPctOfPeak, g_basketPeakUSD, InpBasketFastWindowSec, InpBasketSoftLockPct);
+                  bool partialDoneFR = CloseBasketPartial(InpBasketSoftLockPct,
+                                                          StringFormat("fast reversal peak $%.2f -> pnl $%.2f", g_basketPeakUSD, totalPnL));
+                  g_basketSoftLockTaken = true;
+                  if(partialDoneFR)
+                  {
+                     g_basketPeakUSD = totalPnL;
+                     g_basketFloorUSD = MathMax(1.0, totalPnL * InpBasketRunnerFloorPct / 100.0);
+                     ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+                     return true;
+                  }
+               }
+               if(fastRevConfirmed)
+               {
+                  PrintFormat(">>> BASKET FAST-REVERSAL │ dropped $%.2f (%.1f%% of peak $%.2f) in %ds → BANK PROFIT",
+                              dropFromWinMax, dropPctOfPeak, g_basketPeakUSD, InpBasketFastWindowSec);
+                  lastExitReason = StringFormat("BASKET FAST-REV │ peak $%.2f → $%.2f in %ds", g_basketPeakUSD, totalPnL, InpBasketFastWindowSec);
+                  CloseAll(lastExitReason);
+                  PG_OnBasketWin();  // v5.1.2 — winner resets consecutive-loss streak
+                  g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
+                  g_basketArmed    = false; g_basketBEHit = false;
+                  g_basketSoftLockTaken = false;
+                  ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+                  return true;
+               }
+               PrintFormat("BASKET_FAST_REV_PROFIT_BREATHE │ peak $%.2f -> pnl $%.2f, drop %.1f%% in %ds, already soft-locked once with no confirmed reversal; holding runner",
+                           g_basketPeakUSD, totalPnL, dropPctOfPeak, InpBasketFastWindowSec);
             }
             if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= InpProtectedPeakMinUSD)
             {
@@ -12504,15 +12590,42 @@ bool ManageBasket()
          {
             if(totalPnL > 0)
             {
-               PrintFormat(">>> BASKET HARD-CAP │ giveback $%.2f ≥ cap $%.2f (%.1f%% of bal) → BANK PROFIT",
-                           currGivebackUSD, maxGivebackUSD, hardGivebackPct);
-               lastExitReason = StringFormat("BASKET HARD-CAP │ peak $%.2f → $%.2f (giveback $%.2f)", g_basketPeakUSD, totalPnL, currGivebackUSD);
-               CloseAll(lastExitReason);
-               PG_OnBasketWin();  // v5.1.2
-               g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
-               g_basketArmed    = false; g_basketBEHit = false;
-               ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
-               return true;
+               // v6.4.24: same soft-lock-first treatment as Guard 1 — a hard $
+               // giveback cap alone isn't proof of reversal; bank a partial and
+               // keep a runner on the first breach.
+               int basketDirHCW = XAU_BasketDominantDirection();
+               bool hardCapConfirmed = g_basketSoftLockTaken || InpAllowGivebackPanicClose ||
+                                       XAU_BasketStructureBroken(basketDirHCW);
+               if(InpBasketSoftLockFirst && !InpCloudSafeDisablePartials && !g_basketSoftLockTaken)
+               {
+                  PrintFormat(">>> BASKET SOFT-LOCK (HARD-CAP) │ giveback $%.2f ≥ cap $%.2f (%.1f%% of bal) │ banking %.0f%%, runner stays alive",
+                              currGivebackUSD, maxGivebackUSD, hardGivebackPct, InpBasketSoftLockPct);
+                  bool partialDoneHC = CloseBasketPartial(InpBasketSoftLockPct,
+                                                          StringFormat("hard cap peak $%.2f -> pnl $%.2f", g_basketPeakUSD, totalPnL));
+                  g_basketSoftLockTaken = true;
+                  if(partialDoneHC)
+                  {
+                     g_basketPeakUSD = totalPnL;
+                     g_basketFloorUSD = MathMax(1.0, totalPnL * InpBasketRunnerFloorPct / 100.0);
+                     ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+                     return true;
+                  }
+               }
+               if(hardCapConfirmed)
+               {
+                  PrintFormat(">>> BASKET HARD-CAP │ giveback $%.2f ≥ cap $%.2f (%.1f%% of bal) → BANK PROFIT",
+                              currGivebackUSD, maxGivebackUSD, hardGivebackPct);
+                  lastExitReason = StringFormat("BASKET HARD-CAP │ peak $%.2f → $%.2f (giveback $%.2f)", g_basketPeakUSD, totalPnL, currGivebackUSD);
+                  CloseAll(lastExitReason);
+                  PG_OnBasketWin();  // v5.1.2
+                  g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
+                  g_basketArmed    = false; g_basketBEHit = false;
+                  g_basketSoftLockTaken = false;
+                  ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
+                  return true;
+               }
+               PrintFormat("BASKET_HARD_CAP_PROFIT_BREATHE │ peak $%.2f -> pnl $%.2f, giveback $%.2f >= cap $%.2f, already soft-locked once with no confirmed reversal; holding runner",
+                           g_basketPeakUSD, totalPnL, currGivebackUSD, maxGivebackUSD);
             }
             if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= InpProtectedPeakMinUSD)
             {

@@ -5,6 +5,47 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.4.24 — 2026-07-01
+
+### EA Compile
+- [x] EA internal version: `#property version "6.424"`
+- [x] EA header comment: v6.4.24
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.4.24.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6424.log`)
+
+### What changed (see `test_reports/xau_v6_4_24_profit_giveback_gate_audit_2026-07-01.md`)
+Same bug class as v6.4.22, mirrored on the profit side: giveback%/context
+breaches were fully closing STILL-PROFITABLE positions/baskets with no
+reversal proof — banking only 37-59% of peak on basket closes, or cutting a
+trade at $51 on a momentary WEAK_TRADE reclassification that then ran
+another ~$229 (4.4x the banked amount). New `InpAllowGivebackPanicClose`
+(default false) + `XAU_GateEarlyLossClose(..., isGivebackTrigger=true)`
+require confirmed reversal or a repeat breach (after an already-taken
+soft-lock/partial) before a full close. Basket Guard 1/Guard 2 now attempt
+the existing soft-lock partial on the first breach instead of full-closing
+immediately. Floor SL ratchet/AMPL trail mechanics unchanged.
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.4.24.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` + `backend/server.py` ea_version
+- [ ] GitHub main branch pushed
+
+### Website / Frontend
+- [x] Footer.jsx, AdminPortal.jsx, FeaturesSection.jsx, DownloadSection.jsx: v6.4.24
+
+### Testing Before Live
+- [ ] MT5 journal: `PROFIT_GIVEBACK_CLOSE_BLOCKED` appears on a giveback breach with no confirmed reversal, instead of an immediate full close
+- [ ] MT5 journal: `BASKET SOFT-LOCK (FAST-REVERSAL)` / `(HARD-CAP)` appears on first basket giveback breach instead of `BASKET FAST-REVERSAL`/`HARD-CAP` full close
+- [ ] MT5 journal: a confirmed structure break or repeat breach still fully closes as before
+- [ ] `/api/download/info` returns version v6.4.24
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — validate on demo first that winners now ride further before banking, and that a real reversal still closes promptly
+
+---
+
 ## v6.4.22 — 2026-07-01
 
 ### EA Compile
