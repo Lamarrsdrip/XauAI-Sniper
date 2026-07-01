@@ -5,6 +5,47 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.4.25 — 2026-07-01 — Phase 1 of the full ecosystem audit
+
+### EA Compile
+- [x] EA internal version: `#property version "6.425"`
+- [x] EA header comment: v6.4.25
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.4.25.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6425.log`)
+
+### Scope discipline
+- [x] Only the four Phase-1 defects from the ecosystem audit were touched (phantom peak, absolute-vs-flip structure gate, basket soft-lock cloud-safe gap, TTM tick-vs-bar). No Phase 2-5 items included.
+- [x] No new fear/protective layer added; no entry made stricter; no lot size reduced; no B-grade blocking reintroduced; no trade-frequency reduction. See `test_reports/xau_v6_4_25_phase1_exit_defects_2026-07-01.md` for the explicit justification.
+
+### Bugs Fixed This Release (see full report for evidence)
+1. Phantom basket peak reconstruction (`XAU_ReconstructOpenBasketPeakUSD`) — CRITICAL
+2. Absolute vs. flip-based structure test (`XAU_BasketStructureBroken`) — CRITICAL
+3. Basket soft-lock disabled by `InpCloudSafeDisablePartials` default — CRITICAL
+4. TTM counting ticks as bars (`TTM_Evaluate`) — HIGH
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.4.25.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` + `backend/server.py` ea_version
+- [ ] GitHub main branch pushed
+
+### Website / Frontend
+- [x] Footer.jsx, AdminPortal.jsx, FeaturesSection.jsx, DownloadSection.jsx: v6.4.25
+
+### Testing Before Live
+- [x] New regression suite `tests/test_xau_v6425_phase1_exit_defects_static.py` — 6/6 passed
+- [ ] MT5 journal: no `reconstructed=Y` peak logged for a position younger than one M5 bar
+- [ ] MT5 journal: a basket entered against a standing BOS is no longer force-closed on giveback alone (only on an actual BOS/HTF flip or confirmed M5 break)
+- [ ] MT5 journal: `BASKET SOFT-LOCK` lines appear on a first floor/giveback breach instead of an immediate full `BASKET LOCK`/`FAST-REVERSAL`/`HARD-CAP`
+- [ ] MT5 journal: `[TTM]` lines advance roughly once per 5 minutes per position, not multiple times per second
+- [ ] `/api/download/info` returns version v6.4.25
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — validate on demo first per the audit's Phase 0 recommendation (run one build long enough to observe real behavior; the last three releases never ran live long enough to prove anything)
+
+---
+
 ## v6.4.24 — 2026-07-01
 
 ### EA Compile

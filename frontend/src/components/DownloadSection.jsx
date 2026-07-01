@@ -12,9 +12,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.4.24";
+  const version  = info?.version  || "v6.4.25";
   const edition  = info?.edition  || "Let Trades Breathe — Early Loss Close Gate";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.4.24.mq5";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.4.25.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 

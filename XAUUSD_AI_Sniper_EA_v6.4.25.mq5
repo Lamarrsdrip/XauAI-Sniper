@@ -1,9 +1,59 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.24 — Profit Giveback Gate: No Early-Bank Without Proof      |
-//|            good entry + real exit timing, not panic on both sides |
+//|   v6.4.25 — Phase 1: Four Audit-Proven Exit Defects Fixed          |
+//|            no new protection layers — fixes only, evidence-based  |
 //+------------------------------------------------------------------+
+// v6.4.25 CHANGES (2026-07-01) — PHASE 1 OF THE FULL ECOSYSTEM AUDIT
+// (see test_reports/xau_v6_4_25_phase1_exit_defects_2026-07-01.md):
+// Fixes only the four CRITICAL/HIGH defects the audit proved with live-log
+// evidence. No new fear layers, no stricter entries, no lot reductions, no
+// B-grade blocking, no reduced trade frequency — every change below either
+// removes a fabricated/miscalibrated signal or unblocks a partial-bank path
+// that was already designed but silently disabled by an unrelated default.
+//
+//   1. PHANTOM BASKET PEAK (bug #1, CRITICAL): XAU_ReconstructOpenBasketPeakUSD()
+//      used the current, still-forming M5 bar's high/low as a "proven peak"
+//      even for positions opened seconds earlier — that bar's range can
+//      include price action from BEFORE the position existed. Live evidence:
+//      two same-day trades reconstructed peak=$78.96 and peak=$126.42 on
+//      positions ~1-2 seconds old with bestFloating=$0.00 per TradeBrain,
+//      then got force-closed on "giveback" from a peak that never existed.
+//      Fix: only reconstruct from CLOSED bars strictly after entry; skip
+//      reconstruction entirely if the position is younger than one full M5
+//      bar (live per-tick tracking picks up the real peak from there).
+//   2. ABSOLUTE VS FLIP STRUCTURE TEST (bug #2, CRITICAL): XAU_BasketStructureBroken()
+//      treated a BOS/HTF state that was ALREADY against the position at
+//      entry as "confirmed invalidation" — but entries are explicitly
+//      allowed against a standing BOS (SMC opposition is log-only, never a
+//      block). Replayed against the flagship incident (entered with BOS=+1
+//      against a sell), the v6.4.22 gate would have returned ALLOWED and
+//      the same panic close would repeat. Fix: snapshot BOS/HTF once when a
+//      basket cycle forms (g_basketEntryBOS/g_basketEntryHTF) and require an
+//      actual FLIP since then, exactly like TTM's per-ticket bosFlipped/
+//      htfFlipped already did.
+//   3. BASKET SOFT-LOCK SILENTLY DISABLED (bug #3, CRITICAL): InpCloudSafeDisablePartials
+//      defaults true, which made every basket soft-lock (partial bank, keep
+//      runner) unreachable — CloseBasketPartial() bailed immediately. That
+//      left the full "BASKET LOCK" close firing on the FIRST floor/giveback
+//      breach with nothing banked (live: peak $76.11->$34.50 banked 45.3%,
+//      peak $77.88->$31.98 banked 41.1%), contradicting v6.4.24's own stated
+//      design ("only fires as the second breach, after soft-lock already
+//      banked once"). Fix: new InpBasketSoftLockIgnoresCloudSafe (default
+//      true) bypasses the switch the same way InpSmartExitPartialIgnoresCloudSafe
+//      already does for per-ticket partials; g_basketSoftLockTaken is now
+//      only set on a partial that actually banked something (not on a
+//      skipped/failed attempt); and the remaining "BASKET LOCK" full close
+//      now requires either a genuine prior soft-lock or a confirmed
+//      structure break, same as Guard 1/Guard 2 already required.
+//   4. TTM COUNTING TICKS AS BARS (bug #4, HIGH): TTM_Evaluate() incremented
+//      barsHeld on every OnTick call with no new-bar guard — confirmed live
+//      at 39 "bars" in 30 seconds on one position. This collapsed
+//      InpTTM_MinHoldBars from its intended ~15 minutes of protection down
+//      to ~2 seconds, and let a few ticks of a transient dip satisfy
+//      InpTTM_PersistentBars. Fix: added TradeTTMRecord.lastEvalBarTime;
+//      TTM now only re-evaluates once per completed/new M5 bar.
+//
 // v6.4.24 CHANGES (2026-07-01) — PROFIT GIVEBACK GATE:
 //   Evidence pass across MQL5/Logs 20260624-20260701 found the SAME "act on
 //   giveback%/context alone, no reversal proof" bug from v6.4.22 also on the
@@ -726,16 +776,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.424"
-#property description "XAUUSD AI Sniper v6.4.24 - profit giveback gate, no early-bank without proof"
+#property version   "6.425"
+#property description "XAUUSD AI Sniper v6.4.25 - Phase 1 audit fixes: phantom peak, flip-based structure gate, basket soft-lock, TTM per-bar"
 #property description "Trade Thesis Monitor, AI quality gate, safe close audit"
 #property description "Risk engine, exits, committee, EPF, basket protect preserved"
 #property description "SMC remains additive confirmation only"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.24"
-#define XAUAI_EA_VERSION_NUM "6.4.24"
-#define XAUAI_BUILD_HASH "v6424-profit-giveback-gate-20260701"
+#define XAUAI_EA_VERSION "v6.4.25"
+#define XAUAI_EA_VERSION_NUM "6.4.25"
+#define XAUAI_BUILD_HASH "v6425-phase1-audit-exit-defects-20260701"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1349,6 +1399,7 @@ input double InpBasketHardGivebackPct   = 2.5;  // v6.3.4: raised 1.5→2.5 — 
 input bool   InpBasketBlockPyramidWhenArmed = true;  // v5.8.38: no fresh adds after basket protect is armed; let the current cycle resolve
 input bool   InpBasketSoftLockFirst     = true; // v5.8.15: first basket-floor hit banks partial only; runner stays alive
 input double InpBasketSoftLockPct       = 35.0; // % of each open layer to bank on first basket lock
+input bool   InpBasketSoftLockIgnoresCloudSafe = true; // v6.4.25 (audit bug #3): basket soft-lock can bypass InpCloudSafeDisablePartials, same as InpSmartExitPartialIgnoresCloudSafe already does for per-ticket partials — without this, InpCloudSafeDisablePartials=true (its own default) makes basket soft-lock unreachable and every floor/giveback breach fully closes on the FIRST hit with nothing banked
 input double InpBasketRunnerFloorPct    = 20.0; // After soft lock, keep only a small positive floor for the runner
 // v6.1.3 — Basket direction-loss block: stop adding same-direction trades into a losing basket
 input bool   InpBasketDirLossBlock      = true;  // Block new entries if same-direction trades are in net loss
@@ -2101,6 +2152,7 @@ struct TradeTTMRecord
    double   prevScore;
    int      barsHeld;
    int      consecutiveLowBars; // bars with score < 35 in a row
+   datetime lastEvalBarTime;   // v6.4.25 (audit bug #4): last M5 bar this slot was actually evaluated on
 
    // Explicit thesis break record
    bool     thesisBroken;
@@ -2440,6 +2492,12 @@ bool       g_basketArmed     = false; // True once peak has crossed arm threshol
 bool       g_basketBEHit     = false; // True once basket reached +BEPct% (then never let it go negative)
 bool       g_basketSoftLockTaken = false; // v5.8.15: partial basket bank already used for this basket
 datetime   g_basketLastLog   = 0;     // Throttle "basket state" prints
+// v6.4.25 (audit bug #2) — BOS/HTF snapshot at basket formation, so the
+// structure-broken test can detect an actual FLIP since entry instead of
+// treating a standing opposite BOS/HTF (which entries are allowed to take)
+// as "confirmed invalidation." -999 = not yet captured for this basket cycle.
+int        g_basketEntryBOS = -999;
+int        g_basketEntryHTF = -999;
 // v6.4.9 — basket lifecycle state: prevents proven winners from cycling forever
 bool       g_basketProfitToLossSeen = false;
 int        g_basketProfitLossCycles = 0;
@@ -11999,7 +12057,7 @@ void LogExit(ulong ticket, string dir, double openPx, double closePx,
 
 bool CloseBasketPartial(double closePct, string reason)
 {
-   if(InpCloudSafeDisablePartials)
+   if(InpCloudSafeDisablePartials && !InpBasketSoftLockIgnoresCloudSafe)
    {
       PrintFormat("BASKET PARTIAL SKIPPED: cloud-safe lifecycle enabled; no partial basket close (%s)", reason);
       return false;
@@ -12066,6 +12124,8 @@ void XAU_ResetBasketProtectionState()
    g_basketArmed    = false;
    g_basketBEHit    = false;
    g_basketSoftLockTaken = false;
+   g_basketEntryBOS = -999;
+   g_basketEntryHTF = -999;
    ArrayResize(g_basketSnapPnL, 0);
    ArrayResize(g_basketSnapTime, 0);
    XAU_ResetBasketLifecycle();
@@ -12105,13 +12165,28 @@ double XAU_ReconstructOpenBasketPeakUSD(double currentPnL)
    int startShift = iBarShift(Symbol(), PERIOD_M5, earliestOpen, false);
    if(startShift < 0) return MathMax(0.0, currentPnL);
 
-   int barsToCopy = (int)MathMin((double)(startShift + 1), 900.0);
+   // v6.4.25 (audit bug #1 — phantom basket peak): shift 0 is the still-FORMING
+   // M5 bar. Its high/low-so-far can include price action from BEFORE this
+   // position existed (if it opened mid-bar) and is not a completed, witnessed
+   // range. Reconstructing a "proven peak" from it fabricates floating profit
+   // that was never actually seen, which then arms giveback/lifecycle triggers
+   // on trades that are only seconds old (confirmed live: two same-day sells
+   // reconstructed peak=$78.96 and peak=$126.42 on positions ~1-2 seconds old
+   // with bestFloating=$0.00 per TradeBrain, then got force-closed on
+   // "giveback" from a peak that never existed). Only reconstruct from CLOSED
+   // bars strictly after entry; if the position is younger than one full M5
+   // bar, skip reconstruction entirely — live per-tick tracking below will
+   // pick up the real peak organically from this point forward.
+   if(startShift <= 0)
+      return MathMax(0.0, currentPnL);
+
+   int barsToCopy = (int)MathMin((double)startShift, 900.0);
    if(barsToCopy <= 0) return MathMax(0.0, currentPnL);
 
    double lows[];
    double highs[];
-   int copiedLows = CopyLow(Symbol(), PERIOD_M5, 0, barsToCopy, lows);
-   int copiedHighs = CopyHigh(Symbol(), PERIOD_M5, 0, barsToCopy, highs);
+   int copiedLows = CopyLow(Symbol(), PERIOD_M5, 1, barsToCopy, lows);
+   int copiedHighs = CopyHigh(Symbol(), PERIOD_M5, 1, barsToCopy, highs);
    if(copiedLows <= 0 || copiedHighs <= 0)
       return MathMax(0.0, currentPnL);
 
@@ -12162,11 +12237,20 @@ int XAU_BasketDominantDirection()
 // HTF consensus flip, or a confirmed M5 close through the recent swing level.
 // This is what "structure is actually broken" means for basket-level gating —
 // giveback %, cycle count, and time-after-peak are NOT structure.
+//
+// v6.4.25 (audit bug #2): the BOS/HTF checks were absolute ("currently
+// opposes basket direction"), not a FLIP since entry. Entries are explicitly
+// allowed against a standing BOS/HTF (SMC opposition is log-only, never a
+// block — InpSMC_OppPenalty is reserved/unused by design), so a standing
+// opposite reading is not evidence anything changed. It only counts as
+// broken structure if it FLIPPED against the basket after formation.
 bool XAU_BasketStructureBroken(int basketDir)
 {
    if(basketDir == 0) return false;
-   if(g_smc_bos_dir != 0 && g_smc_bos_dir == -basketDir) return true;
-   if(g_htfConsensusDir != 0 && g_htfConsensusDir == -basketDir) return true;
+   if(g_basketEntryBOS != -999 && g_basketEntryBOS != 0 && g_smc_bos_dir == -g_basketEntryBOS)
+      return true;
+   if(g_basketEntryHTF != -999 && g_basketEntryHTF != 0 && g_htfConsensusDir == -g_basketEntryHTF)
+      return true;
 
    double swingLow, swingHigh;
    CleanStructureLevels(InpCleanStructureLookback, swingLow, swingHigh);
@@ -12348,6 +12432,16 @@ bool ManageBasket()
    double bal = StrategyReferenceBalance();
    if(bal <= 0) return false;
 
+   // v6.4.25 (audit bug #2): snapshot the BOS/HTF regime once, the first tick
+   // this basket cycle has positions, so structure-broken checks below can
+   // detect a real FLIP since formation instead of comparing against a
+   // standing state the entry logic was already allowed to trade against.
+   if(g_basketEntryBOS == -999)
+   {
+      g_basketEntryBOS = g_smc_bos_dir;
+      g_basketEntryHTF = g_htfConsensusDir;
+   }
+
    if(g_basketPeakUSD <= 0.0)
    {
       double reconstructedPeak = XAU_ReconstructOpenBasketPeakUSD(totalPnL);
@@ -12523,15 +12617,23 @@ bool ManageBasket()
                int basketDirFRW = XAU_BasketDominantDirection();
                bool fastRevConfirmed = g_basketSoftLockTaken || InpAllowGivebackPanicClose ||
                                        XAU_BasketStructureBroken(basketDirFRW);
-               if(InpBasketSoftLockFirst && !InpCloudSafeDisablePartials && !g_basketSoftLockTaken)
+               // v6.4.25 (audit bug #3): InpCloudSafeDisablePartials defaults true, which
+               // made this soft-lock unreachable and left the full close below firing on
+               // every FIRST breach with nothing banked — contradicting the whole point of
+               // "soft-lock first, full close only on a repeat breach." Bypass it here the
+               // same way InpSmartExitPartialIgnoresCloudSafe already does per-ticket.
+               if(InpBasketSoftLockFirst && (InpBasketSoftLockIgnoresCloudSafe || !InpCloudSafeDisablePartials) && !g_basketSoftLockTaken)
                {
                   PrintFormat(">>> BASKET SOFT-LOCK (FAST-REVERSAL) │ dropped %.1f%% of peak $%.2f in %ds │ banking %.0f%%, runner stays alive",
                               dropPctOfPeak, g_basketPeakUSD, InpBasketFastWindowSec, InpBasketSoftLockPct);
                   bool partialDoneFR = CloseBasketPartial(InpBasketSoftLockPct,
                                                           StringFormat("fast reversal peak $%.2f -> pnl $%.2f", g_basketPeakUSD, totalPnL));
-                  g_basketSoftLockTaken = true;
+                  // v6.4.25 (audit bug #3): only count this as "already warned once" if the
+                  // partial actually banked something — a skipped/failed attempt (e.g. legs
+                  // below broker min lot) must not silently unlock a $0-banked full close.
                   if(partialDoneFR)
                   {
+                     g_basketSoftLockTaken = true;
                      g_basketPeakUSD = totalPnL;
                      g_basketFloorUSD = MathMax(1.0, totalPnL * InpBasketRunnerFloorPct / 100.0);
                      ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
@@ -12596,15 +12698,18 @@ bool ManageBasket()
                int basketDirHCW = XAU_BasketDominantDirection();
                bool hardCapConfirmed = g_basketSoftLockTaken || InpAllowGivebackPanicClose ||
                                        XAU_BasketStructureBroken(basketDirHCW);
-               if(InpBasketSoftLockFirst && !InpCloudSafeDisablePartials && !g_basketSoftLockTaken)
+               // v6.4.25 (audit bug #3): see Guard 1 above — bypass the cloud-safe
+               // switch that otherwise makes this soft-lock unreachable, and only
+               // mark it "taken" if the partial actually banked something.
+               if(InpBasketSoftLockFirst && (InpBasketSoftLockIgnoresCloudSafe || !InpCloudSafeDisablePartials) && !g_basketSoftLockTaken)
                {
                   PrintFormat(">>> BASKET SOFT-LOCK (HARD-CAP) │ giveback $%.2f ≥ cap $%.2f (%.1f%% of bal) │ banking %.0f%%, runner stays alive",
                               currGivebackUSD, maxGivebackUSD, hardGivebackPct, InpBasketSoftLockPct);
                   bool partialDoneHC = CloseBasketPartial(InpBasketSoftLockPct,
                                                           StringFormat("hard cap peak $%.2f -> pnl $%.2f", g_basketPeakUSD, totalPnL));
-                  g_basketSoftLockTaken = true;
                   if(partialDoneHC)
                   {
+                     g_basketSoftLockTaken = true;
                      g_basketPeakUSD = totalPnL;
                      g_basketFloorUSD = MathMax(1.0, totalPnL * InpBasketRunnerFloorPct / 100.0);
                      ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
@@ -12657,17 +12762,20 @@ bool ManageBasket()
    // floor hit can still close all if the remaining runner truly fails.
    if((g_basketArmed || basketProtectedPeakActive) && g_basketFloorUSD > 0 && totalPnL < g_basketFloorUSD)
    {
-      if(InpBasketSoftLockFirst && !InpCloudSafeDisablePartials && !g_basketSoftLockTaken && totalPnL > 0)
+      // v6.4.25 (audit bug #3): bypass the cloud-safe switch (see Guard 1/2 above)
+      // and only mark soft-lock "taken" once a partial actually banks something.
+      bool floorTriggerAlreadySoftLocked = g_basketSoftLockTaken;
+      if(InpBasketSoftLockFirst && (InpBasketSoftLockIgnoresCloudSafe || !InpCloudSafeDisablePartials) && !g_basketSoftLockTaken && totalPnL > 0)
       {
          PrintFormat(">>> BASKET SOFT-LOCK │ PnL=$%.2f < Floor=$%.2f │ Peak=$%.2f │ banking %.0f%%, runner stays alive",
                      totalPnL, g_basketFloorUSD, g_basketPeakUSD, InpBasketSoftLockPct);
 
          bool partialDone = CloseBasketPartial(InpBasketSoftLockPct,
                                                StringFormat("peak $%.2f -> pnl $%.2f", g_basketPeakUSD, totalPnL));
-         g_basketSoftLockTaken = true;
 
          if(partialDone)
          {
+            g_basketSoftLockTaken = true;
             lastExitReason = StringFormat("BASKET SOFT-LOCK │ peak $%.2f -> $%.2f; runner alive", g_basketPeakUSD, totalPnL);
             g_basketPeakUSD = totalPnL;
             g_basketFloorUSD = MathMax(1.0, totalPnL * InpBasketRunnerFloorPct / 100.0);
@@ -12676,8 +12784,22 @@ bool ManageBasket()
          }
       }
 
+      // v6.4.25 (audit bug #3): this full close is only truly justified as a
+      // "second breach after an already-banked soft-lock." If soft-lock was
+      // never attempted (disabled) or just failed above (e.g. legs below
+      // broker min lot), require the same reversal proof Guard 1/2 use instead
+      // of silently full-closing a still-profitable basket on the first hit.
       if(totalPnL > 0)
       {
+         int basketDirBL = XAU_BasketDominantDirection();
+         bool basketLockConfirmed = floorTriggerAlreadySoftLocked || InpAllowGivebackPanicClose ||
+                                    XAU_BasketStructureBroken(basketDirBL);
+         if(!basketLockConfirmed)
+         {
+            PrintFormat("BASKET_LOCK_PROFIT_BREATHE │ peak $%.2f -> pnl $%.2f < floor $%.2f, no prior soft-lock and no confirmed reversal; holding runner",
+                        g_basketPeakUSD, totalPnL, g_basketFloorUSD);
+            return false;
+         }
          PrintFormat(">>> BASKET CLOSE │ PnL=$%.2f < Floor=$%.2f │ Peak=$%.2f │ banking %.1f%% of peak",
                      totalPnL, g_basketFloorUSD, g_basketPeakUSD,
                      g_basketPeakUSD > 0 ? (totalPnL / g_basketPeakUSD) * 100.0 : 0.0);
@@ -13536,6 +13658,7 @@ void TTM_RecordEntry(ulong posId, int signal, string setupName, string grade,
    r.prevScore          = 100.0;
    r.barsHeld           = 0;
    r.consecutiveLowBars = 0;
+   r.lastEvalBarTime    = 0;       // v6.4.25: forces the first real evaluation to run
    r.thesisBroken       = false;
    r.breakReason        = "";
    r.breakTime          = 0;
@@ -13621,6 +13744,18 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
    isStructural = false;
    if(idx < 0 || idx >= TTM_MAX_POSITIONS || !g_ttm[idx].active)
       return "";
+
+   // v6.4.25 (audit bug #4): this is called from ManagePositions() every TICK,
+   // not once per bar. Without this guard, barsHeld was incrementing dozens of
+   // times per minute (confirmed live: "bar=1" to "bar=39" inside 30 seconds
+   // on one position), collapsing InpTTM_MinHoldBars from its intended ~15
+   // minutes of protection down to ~2 seconds, and letting a few ticks of a
+   // transient dip satisfy InpTTM_PersistentBars. Only re-evaluate once per
+   // completed/new M5 bar; hold the last verdict on every tick in between.
+   datetime curBarTime = iTime(Symbol(), PERIOD_M5, 0);
+   if(g_ttm[idx].lastEvalBarTime != 0 && curBarTime == g_ttm[idx].lastEvalBarTime)
+      return "";
+   g_ttm[idx].lastEvalBarTime = curBarTime;
 
    g_ttm[idx].prevScore = g_ttm[idx].liveScore;
    g_ttm[idx].liveScore = liveScore;
