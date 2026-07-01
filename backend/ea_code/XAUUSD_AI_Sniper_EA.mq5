@@ -9759,29 +9759,14 @@ void OnTick()
                // Blocking a structurally sound setup because AI is 52% sure is backwards.
                if(CalibratedConfidence(lastAIConfidence) < InpAIDirectorMinConf) // v6.4.0: calibrated
                {
-                  if(highGradeFullSize)
-                  {
-                     // v6.4.20: A+/A quality gate — AI agrees but with sub-threshold conviction.
-                     // A low-confidence confirm on A+/A would be restored to full size by floor — block instead.
-                     string blockMsg = StringFormat("[A+/A QUALITY GATE] %s grade=%s blocked: AI=ALLOW_LOW_CONV conf=%d%% (calibrated=%.1f%% < min %.0f%%) — AI confirmation is too weak for a full-size A+/A entry.",
-                                                    setupName, grade, lastAIConfidence,
-                                                    CalibratedConfidence(lastAIConfidence), InpAIDirectorMinConf);
-                     Print("AI DIRECTOR: ", blockMsg);
-                     g_gateBlocks_AI++; g_ftReport_AIBlocked++;
-                     XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
-                     CloudPostReasoning("BLOCK", blockMsg, RegimeName(), setupName, setupScore, combinedScore, "AI-WEAK-GRADE-GATE", signal);
-                     UpdateDashboard(0, combinedScore, "AI-WEAK-GATE");
-                     lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "AI-WEAK-GATE";
-                     g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
-                     g_lastSkipReason = blockMsg;
-                     Print("══════════════════════════════════════════════════");
-                     return;
-                  }
+                  // AI agrees but with sub-threshold conviction.
+                  // For A+/A: reduction is applied AND enforcement floor does NOT restore (weak-agree = reduced lot).
+                  // Only AI disagreement paths (HTF-OVERRIDE, WEAK-DISAGREE, REDUCE) block A+/A entirely.
                   aiVerdictStr = "ALLOW_LOW_CONV";
-                  sizeMulti *= InpConvictionLowMulti; // 0.70x mild reduce (B-grade only)
+                  sizeMulti *= InpConvictionLowMulti; // 0.70x mild reduce
                   Print("AI DIRECTOR: LOW-CONV CONFIRM — AI agrees at ", lastAIConfidence,
                         "% < min ", InpAIDirectorMinConf, "% | lot x", DoubleToString(InpConvictionLowMulti, 2),
-                        " — NOT blocking (AI confirmed direction, just mild size-reduce)");
+                        highGradeFullSize ? " — A+/A: reduced size kept, floor will NOT restore for weak-agree" : " — standard mild reduce");
                   g_aiLastVerdict = "ALLOW_LOW_CONV"; g_aiLastConfidence = lastAIConfidence;
                   if(StringLen(lastAIBearishCase) > 0) Print("Devil's Advocate: ", lastAIBearishCase);
                }
@@ -9802,23 +9787,11 @@ void OnTick()
                {
                   convMult = InpConvictionLowMulti;
                   aiVerdictStr = "ALLOW_REDUCE";
+                  // For A+/A: reduction is applied AND enforcement floor does NOT restore.
+                  // AI agrees but at reduce-tier confidence → trade at reduced size, not full-size.
                   if(highGradeFullSize)
-                  {
-                     // v6.4.20: A+/A quality gate — AI confirms but at reduce-level confidence.
-                     // This reduction would be overridden by enforcement floor; block instead.
-                     string blockMsg = StringFormat("[A+/A QUALITY GATE] %s grade=%s blocked: AI=ALLOW_REDUCE conf=%d%% — AI confirm confidence falls in the reduce tier. Require strong confirm (>= %.0f%%) for A+/A.",
-                                                    setupName, grade, lastAIConfidence, InpNormalAIConfidence);
-                     Print("AI DIRECTOR: ", blockMsg);
-                     g_gateBlocks_AI++; g_ftReport_AIBlocked++;
-                     XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsg);
-                     CloudPostReasoning("BLOCK", blockMsg, RegimeName(), setupName, setupScore, combinedScore, "AI-WEAK-GRADE-GATE", signal);
-                     UpdateDashboard(0, combinedScore, "AI-WEAK-GATE");
-                     lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "AI-WEAK-GATE";
-                     g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
-                     g_lastSkipReason = blockMsg;
-                     Print("══════════════════════════════════════════════════");
-                     return;
-                  }
+                     Print("AI DIRECTOR: ALLOW_REDUCE — A+/A: reduced lot kept, floor will NOT restore for weak-agree conf=",
+                           lastAIConfidence, "%");
                }
                sizeMulti *= convMult;
                Print("AI DIRECTOR: ", aiVerdictStr, " — conf=", lastAIConfidence, "% → lot x",
@@ -10061,7 +10034,12 @@ void OnTick()
    // ======================================================================
    double finalSzMultSoftReduced = finalSzMult;   // what soft modules produced
    string lta_enforcementMsg = "";
-   if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001)
+   // v6.4.20 patch: enforcement floor does NOT restore if AI gave a weak-agree verdict.
+   // Weak-agree (ALLOW_LOW_CONV / ALLOW_REDUCE) means AI confirms but at low conviction.
+   // Restoring to full size would override a legitimate quality signal.
+   // Only restore when soft modules (non-AI) reduced lot, or when AI strongly agreed.
+   bool aiWeakConfirmReduced = (lta_aiVerdict == "ALLOW_LOW_CONV" || lta_aiVerdict == "ALLOW_REDUCE");
+   if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && !aiWeakConfirmReduced)
    {
       finalSzMult = originalGradeSizeMulti;
       lta_enforcementMsg = StringFormat(
@@ -10071,6 +10049,13 @@ void OnTick()
          lta_timing, lta_confirm, lta_ai, lta_aiVerdict,
          lta_brain, lta_conscious, lta_sti, lta_committee);
       PrintFormat("[LOT_TRACE] A+/A FULL SIZE ENFORCED: %s", lta_enforcementMsg);
+   }
+   else if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && aiWeakConfirmReduced)
+   {
+      lta_enforcementMsg = StringFormat(
+         "FLOOR_SKIPPED | grade=%s | AI=%s reduced to %.3f (grade=%.3f) — weak-agree kept, not restored",
+         grade, lta_aiVerdict, finalSzMult, originalGradeSizeMulti);
+      PrintFormat("[LOT_TRACE] A+/A FLOOR SKIPPED (WEAK-AI-AGREE): %s", lta_enforcementMsg);
    }
    else if(highGradeFullSize)
    {
@@ -10091,7 +10076,9 @@ void OnTick()
                lta_confirm, highGradeFullSize && lta_confirm < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
    PrintFormat("[LOT_TRACE] AI lotMult      = %.3f | verdict=%s | %s",
                lta_ai, lta_aiVerdict,
-               highGradeFullSize && lta_ai < 0.999 ? "attempted reduction — overridden by floor" : "no reduction / block / allow");
+               (highGradeFullSize && lta_ai < 0.999 && !aiWeakConfirmReduced) ? "attempted reduction — overridden by floor" :
+               (highGradeFullSize && lta_ai < 0.999 && aiWeakConfirmReduced)  ? "weak-agree kept (floor skipped)" :
+               "no reduction / block / allow");
    PrintFormat("[LOT_TRACE] brainLotMult    = %.3f | %s",
                lta_brain, highGradeFullSize && lta_brain < 0.999 ? "attempted reduction — overridden by floor" : "block or allow");
    PrintFormat("[LOT_TRACE] consciousLotMult= %.3f | %s",

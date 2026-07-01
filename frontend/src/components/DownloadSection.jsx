@@ -56,7 +56,7 @@ export default function DownloadSection({ api }) {
                   {loading
                     ? <p className="mt-2 flex items-center gap-2 text-sm text-white/40"><Spinner size={13} className="animate-spin" /> Fetching release info…</p>
                     : <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                        {version} · {edition}. Full AI Director on every entry, sizing, and exit. ML cloud warm-start gives instant pattern authority from tick one. Adaptive Chandelier exits trail winners without giving back.
+                        {version} · {edition}. Dual AI (Claude + GPT) approves every entry. Trade Thesis Monitor scores open positions live every candle — exits when the original reason is gone, not when a timer runs out. AI Quality Gate ensures A+ trades are only taken at full size with strong AI confirmation.
                       </p>}
                 </div>
               </div>

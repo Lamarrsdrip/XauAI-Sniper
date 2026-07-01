@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Brain, ShieldCheck, Shuffle, Newspaper, Lightning, CloudArrowUp, CaretLeft, CaretRight } from "@phosphor-icons/react";
+import { Brain, ShieldCheck, Shuffle, Newspaper, Lightning, CloudArrowUp, ChartLine, Funnel, CaretLeft, CaretRight } from "@phosphor-icons/react";
 
 const CARDS = [
   {
@@ -11,9 +11,27 @@ const CARDS = [
     glow: "bg-violet-300/[0.07]",
   },
   {
+    icon: ChartLine,
+    title: "Trade Thesis Monitor",
+    body: "Every open trade is scored live against the exact reason it was entered — BOS direction, HTF trend, momentum, and structure. When the thesis dies the bot exits immediately, not when a timer runs out.",
+    tone: "text-amber-300",
+    border: "border-amber-300/20",
+    glow: "bg-amber-300/[0.07]",
+    badge: "NEW v6.4.19",
+  },
+  {
+    icon: Funnel,
+    title: "AI Quality Gate",
+    body: "A+ and A trades are only taken at full size when the AI strongly agrees. If AI weakly disagrees the trade is blocked entirely. If AI weakly agrees the lot is reduced. Weak AI signals can never silently become full-size trades.",
+    tone: "text-rose-300",
+    border: "border-rose-300/20",
+    glow: "bg-rose-300/[0.07]",
+    badge: "NEW v6.4.20",
+  },
+  {
     icon: ShieldCheck,
     title: "Smart Risk Management",
-    body: "Position sizing adapts automatically to protect your account on every trade.",
+    body: "Position sizing is based on account balance, stop distance, and grade — never reduced after losing trades.",
     tone: "text-sky-300",
     border: "border-sky-300/20",
     glow: "bg-sky-300/[0.07]",
@@ -143,8 +161,15 @@ export default function FeaturesSection() {
                 <div key={card.title}
                   className="flex-none w-full px-2 sm:w-1/2 lg:w-1/3">
                   <div className={`rounded-[24px] border ${card.border} ${card.glow} p-7 h-full`}>
-                    <div className={`mb-5 inline-flex h-11 w-11 items-center justify-center rounded-2xl border ${card.border} bg-black/20`}>
-                      <Icon size={21} weight="duotone" className={card.tone} />
+                    <div className="mb-5 flex items-start justify-between gap-3">
+                      <div className={`inline-flex h-11 w-11 flex-none items-center justify-center rounded-2xl border ${card.border} bg-black/20`}>
+                        <Icon size={21} weight="duotone" className={card.tone} />
+                      </div>
+                      {card.badge && (
+                        <span className={`mt-1 rounded-full border ${card.border} px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest ${card.tone}`}>
+                          {card.badge}
+                        </span>
+                      )}
                     </div>
                     <h3 className="mb-2.5 font-heading text-[17px] font-semibold text-white">{card.title}</h3>
                     <p className="text-[13px] leading-6 text-white/52">{card.body}</p>
