@@ -12,9 +12,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.4.18";
-  const edition  = info?.edition  || "True A+/A Full-Size Enforcement + Micro-Lot Diagnosis";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.4.18_TRUE_APLUS_FULLSIZE_ENFORCEMENT.mq5";
+  const version  = info?.version  || "v6.4.19";
+  const edition  = info?.edition  || "Trade Thesis Monitor — Structure-Aware Exit Intelligence";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_MASTER_v6.4.19_TRADE_THESIS_MONITOR.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
