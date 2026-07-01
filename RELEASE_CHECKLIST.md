@@ -5,6 +5,50 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.6.0 — 2026-07-02 — Market Mode Architecture (Gold + Index)
+
+### EA Compile
+- [x] EA internal version: `#property version "6.600"`
+- [x] EA header comment: v6.6.0
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.6.0.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v660.log`)
+
+### Scope discipline
+- [x] No index/synthetic symbol available on any configured broker (MetaQuotes-Demo, TRADE.com-Live, GoatFunded-Server, Default all gold+forex only) — no index strategy logic written, per explicit "no speculative live-money logic" instruction.
+- [x] Multi-symbol simultaneous scanning NOT started (469 hardcoded `Symbol()` sites, zero symbol-keyed state = structural rewrite, not a feature) — design-only in `docs/index_mode_state_and_scanner_design.md`.
+- [x] Index Mode places zero trades this release (`InpIndexModeLogOnly=true` hard safety switch, entry pipeline skipped entirely when resolved mode is INDEX_MODE).
+- [x] Gold Mode behavior completely unchanged.
+
+### What shipped
+1. Market auto-detection (`InpMarketMode`, `XAU_DetectMarketMode`, `MARKET_AUTO_DETECT` log line)
+2. Symbol-agnostic lot/risk engine (`XAU_CalcIndexLot`) + `INDEX_TRACE` diagnostics
+3. Backend Gold/Index/Combined reporting split (`classify_market_mode`) + trading-universe settings storage (not yet EA-consumed)
+4. Command Center "Trading Universe" panel + Admin "Market modes" panel + honest site copy
+5. Design docs for Project C (state separation + multi-symbol scanner) — not implemented
+6. Static-review fixes: phantom-peak off-by-one, `XAU_NewHostileStructureFlip` (direction-aware flip, fixes a real false-positive risk in v6.4.25/v6.5.0's own flip checks + a pre-existing TTM gap), TTM bar-boundary tightening, stale "version=5.9.1" log string fixed
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.6.0.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` + `backend/server.py` ea_version
+- [ ] GitHub main branch pushed
+
+### Website / Frontend
+- [x] Footer.jsx, AdminPortal.jsx, FeaturesSection.jsx, DownloadSection.jsx, CloudLanding.jsx, CloudDashboard.jsx: v6.6.0
+
+### Testing Before Live
+- [x] Full suite `tests/` — 132/132 passed (includes 6 new static-review regression tests)
+- [ ] MT5 journal: `MARKET_AUTO_DETECT` line appears on attach, correctly resolves GOLD_MODE on XAUUSD
+- [ ] MT5 journal: if attached to a non-gold symbol, `INDEX_MODE_MONITORING_ONLY` appears and no trade ever opens
+- [ ] `/api/download/info` returns version v6.6.0
+- [ ] Command Center "Trading Universe" panel loads and saves settings
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES (Gold Mode unchanged; Index Mode cannot trade)
+- Safe for live: Gold Mode — same standing as v6.5.0 (still awaiting a full live validation window). Index Mode — N/A, does not trade.
+
+---
+
 ## v6.5.0 — 2026-07-01 — Phases 2+4+5 of the full ecosystem audit (bundled)
 
 ### EA Compile

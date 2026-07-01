@@ -1,9 +1,95 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.5.0 — Phases 2+4+5: Growth Guard, Honest AI, Exit Arbiter     |
-//|            no new protection layers — fixes + consolidation only  |
+//|   v6.6.0 — Market Mode Architecture: Gold + Index Detection        |
+//|            Index Mode is monitoring-only — zero speculative trades|
 //+------------------------------------------------------------------+
+// v6.6.0 CHANGES (2026-07-02) — MARKET MODE ARCHITECTURE (Index Mode,
+// phase 1 of 3 — see docs/index_mode_state_and_scanner_design.md for the
+// deferred multi-symbol phase):
+//   Adds the GENERIC capability for the EA to recognize it's attached to a
+//   non-gold (index/synthetic) chart, size a lot correctly for that
+//   symbol's real contract specs, and log full diagnostics — WITHOUT
+//   writing any index-specific trading strategy. No real, broker-accessible
+//   index/synthetic symbol was available to test against (checked:
+//   MetaQuotes-Demo, TRADE.com-Live, GoatFunded-Server all show gold +
+//   forex only), so per explicit owner instruction, no speculative
+//   Boom/Crash/Volatility strategy logic was written. Gold Mode is
+//   completely unchanged — every existing entry/exit code path still runs
+//   exactly as before whenever the resolved mode is GOLD_MODE, which is
+//   what a live XAUUSD attachment always resolves to.
+//
+//   1. InpMarketMode (AUTO_DETECT/GOLD_MODE/INDEX_MODE, default AUTO_DETECT),
+//      InpIndexProfile, InpIndexAggression (both diagnostic-only this
+//      release — no profile/aggression-specific behavior exists yet).
+//      XAU_DetectMarketMode() resolves once at OnInit from the chart symbol
+//      name; an unrecognized symbol defaults to GOLD_MODE (the only tested
+//      behavior), never guesses into an unproven index path. Logs
+//      MARKET_AUTO_DETECT with the full resolution reason.
+//   2. InpIndexModeLogOnly (default true, hard safety switch): whenever the
+//      resolved mode is INDEX_MODE, the entire gold entry-scoring pipeline
+//      (setup scanning, SMC, AI Director entry check, OpenTrade) is skipped
+//      every tick — zero new positions open. Any position management for an
+//      existing index position still runs through the shared exit/basket/
+//      TTM systems, which are already symbol-agnostic (XAU_ProjectProfitUSD
+//      already uses OrderCalcProfit/tick math generically, not gold price
+//      assumptions).
+//   3. XAU_CalcIndexLot(): a new lot/risk function taking symbol as a
+//      parameter (not the built-in Symbol()) and computing size from
+//      SYMBOL_TRADE_TICK_VALUE/TICK_SIZE/VOLUME_MIN/MAX/STEP/CONTRACT_SIZE
+//      and OrderCalcMargin — zero gold-specific assumptions, so it's
+//      already safe to call for any symbol, a prerequisite for the
+//      (deferred) multi-symbol scanner. Not wired to any live entry path
+//      yet. XAU_LogIndexTrace() prints the full INDEX_TRACE diagnostic line
+//      (contract specs, lot math, regime placeholder) every 5 minutes while
+//      in Index Mode monitoring — illustrative only, never a trade signal.
+//   4. Backend: every heartbeat now carries market_mode/index_profile;
+//      trade/dashboard reporting classifies Gold vs Index performance
+//      purely from each record's own `symbol` field (classify_market_mode()
+//      mirrors the EA's own name-pattern logic) — no EA trade-schema change,
+//      TradeBrain's sync payload is untouched. New Command Center "Trading
+//      Universe" settings and admin "Market Modes" platform toggles are
+//      storage/UI only this release — the EA does not yet poll or consume
+//      them (there is no remote market-selection sync channel yet, only the
+//      existing pause/stop commands are live); wiring that up is future
+//      work alongside the real index strategy.
+//   5. Project C (simultaneous Gold+Index scanning from one EA / "Trading
+//      Universe: GOLD_AND_INDEX") is explicitly NOT started — research
+//      found 469 hardcoded Symbol() call sites and zero symbol-keyed state
+//      anywhere, meaning it is a 60-80%-of-file structural rewrite, not a
+//      feature. Full design in docs/index_mode_state_and_scanner_design.md;
+//      implementation waits for a tested single-symbol Index Mode strategy.
+//
+// v6.6.0 STATIC REVIEW FIXES (2026-07-02) — bundled into this same release,
+// found by a static review pass over the v6.4.25/v6.5.0 exit-arbiter work:
+//   6. XAU_ReconstructOpenBasketPeakUSD off-by-one: v6.4.25 rejected only the
+//      still-forming bar (shift 0) before reconstructing; a position whose
+//      entry candle was the most recently CLOSED bar (shift 1) could still
+//      have its own entry candle's pre-entry range counted as "peak"
+//      evidence. Now requires startShift >= 2 and copies bars strictly
+//      after the entry candle.
+//   7. XAU_NewHostileStructureFlip(): the v6.4.25/v6.5.0 flip checks
+//      (XAU_BasketStructureBroken, XAU_ReversalConfirmed) tested "did BOS/HTF
+//      flip away from its value at entry" but not whether the flip was
+//      actually HOSTILE to the trade direction. A trade entered against a
+//      standing BOS (explicitly allowed by the entry layer) that later
+//      flipped to align WITH the trade would have been misread as
+//      "structure broken" and eligible for an early close — punishing a
+//      favorable development. The new helper requires the current
+//      direction to be hostile to the trade AND the entry direction to NOT
+//      already have been hostile, i.e. a genuine new deterioration only.
+//      TTM's own internal bosFlipped/htfFlipped (pre-dating this release)
+//      had the identical gap and now uses the same helper.
+//   8. TTM_Evaluate() bar-boundary tightened: now keys off the last CLOSED
+//      bar (shift 1) rather than the still-forming bar (shift 0), and a new
+//      TradeTTMRecord.entryTime field ensures the entry candle itself is
+//      never counted toward InpTTM_MinHoldBars — a slightly more
+//      conservative (longer) hold before the first evaluation, consistent
+//      with "let it breathe."
+//   9. A pre-existing, unrelated bug: the startup intelligence sync log
+//      hardcoded an obsolete version string regardless of the actual
+//      running build. Now uses XAUAI_EA_VERSION.
+//
 // v6.5.0 CHANGES (2026-07-01) — PHASES 2, 4, 5 OF THE FULL ECOSYSTEM
 // AUDIT, BUNDLED INTO ONE RELEASE PER EXPLICIT OWNER REQUEST (see
 // test_reports/xau_v6_5_0_phases_2_4_5_2026-07-01.md for full detail).
@@ -848,16 +934,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.500"
-#property description "XAUUSD AI Sniper v6.5.0 - Phases 2+4+5: Growth Guard/June-mode fix, honest AI fallback, unified Exit Arbiter, platform hardening"
+#property version   "6.600"
+#property description "XAUUSD AI Sniper v6.6.0 - Market Mode architecture: Gold+Index auto-detection, symbol-agnostic lot engine, Index Mode monitoring-only"
 #property description "Trade Thesis Monitor, AI quality gate, safe close audit"
 #property description "Risk engine, exits, committee, EPF, basket protect preserved"
 #property description "SMC remains additive confirmation only"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.5.0"
-#define XAUAI_EA_VERSION_NUM "6.5.0"
-#define XAUAI_BUILD_HASH "v650-growth-guard-ai-fallback-exit-arbiter-20260701"
+#define XAUAI_EA_VERSION "v6.6.0"
+#define XAUAI_EA_VERSION_NUM "6.6.0"
+#define XAUAI_BUILD_HASH "v660-market-mode-architecture-20260702"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -890,6 +976,26 @@ input group "=== LOT SIZING MODE (v6.4.21 — real risk or June 16-19 balance lo
 enum ENUM_XAU_LOT_SIZING_MODE { REAL_RISK_MODE=0, JUNE_16_19_BALANCE_MODE=1 };
 input ENUM_XAU_LOT_SIZING_MODE InpLotSizingMode = JUNE_16_19_BALANCE_MODE; // JUNE mode restores balance-based lots; REAL mode uses OrderCalcProfit SL risk
 input double InpJuneBalanceLotPer1000 = 0.070; // $3k A trade ≈0.21 before broker/margin/maxlot; B≈0.15, A+≈0.26
+
+// v6.6.0 — MARKET MODE (Gold vs Index) — ARCHITECTURE PHASE ONLY.
+//   This release adds detection, symbol-agnostic lot math, and full
+//   diagnostics for a future Index Mode. It does NOT add any index trading
+//   strategy. When the resolved mode is INDEX_MODE, the EA runs detection,
+//   logging, and (if a position ever exists on that symbol) shared exit/
+//   risk management — it does NOT open new trades, because no real,
+//   evidence-tested index strategy exists yet ("no speculative live-money
+//   logic" — explicit owner instruction). GOLD_MODE behavior is completely
+//   unchanged: the entire existing entry/exit pipeline still runs exactly
+//   as before whenever the resolved mode is GOLD_MODE, which is what every
+//   live XAUUSD attachment resolves to today.
+input group "=== MARKET MODE (v6.6.0 — Gold/Index detection, architecture phase) ==="
+enum ENUM_XAU_MARKET_MODE { MARKET_AUTO_DETECT=0, MARKET_GOLD_MODE=1, MARKET_INDEX_MODE=2 };
+input ENUM_XAU_MARKET_MODE InpMarketMode = MARKET_AUTO_DETECT; // AUTO_DETECT reads the chart symbol once at startup; GOLD/INDEX force the mode regardless of symbol
+enum ENUM_XAU_INDEX_PROFILE { GENERIC_INDEX=0, VOLATILITY_INDEX=1, BOOM_CRASH=2, STEP_INDEX=3, RANGE_BREAK=4 };
+input ENUM_XAU_INDEX_PROFILE InpIndexProfile = GENERIC_INDEX; // diagnostic/forward-compat only this release — no profile-specific strategy exists yet
+enum ENUM_XAU_INDEX_AGGRESSION { INDEX_SAFE=0, INDEX_BALANCED=1, INDEX_AGGRESSIVE_GROWTH=2 };
+input ENUM_XAU_INDEX_AGGRESSION InpIndexAggression = INDEX_BALANCED; // diagnostic/forward-compat only this release — no index strategy exists yet to modulate
+input bool   InpIndexModeLogOnly = true; // v6.6.0 hard safety: while true, INDEX_MODE never opens a new position no matter what InpMarketMode/InpIndexProfile say. Only flip this once real, tested index entry logic exists.
 
 input group "=== PROFIT GUARDIAN (v5.1.3 — OFF by default; v4.9.7-style aggressive trading) ==="
 input bool   InpProfitGuardian      = false; // v5.1.3: DEFAULT OFF — tier risk-cuts + HTF trend lock + cooldown OFF (restores v4.9.7 aggression)
@@ -2207,6 +2313,7 @@ struct TradeTTMRecord
    bool     active;
    ulong    posId;
    int      signal;           // 1=buy, -1=sell
+   datetime entryTime;
    string   setupName;
    string   grade;
    double   initialScore;     // combinedScore at entry
@@ -2557,6 +2664,11 @@ double     autoHardStopUSD    = 0;
 double     autoProfitTakeMin  = 0;
 double     autoProfitTakeMax  = 0;
 double     autoPeakMinUSD     = 0;
+
+// v6.6.0 — MARKET MODE resolved state (set once in OnInit, never AUTO_DETECT
+// after resolution — always GOLD_MODE or INDEX_MODE).
+ENUM_XAU_MARKET_MODE g_marketMode = MARKET_GOLD_MODE;
+string     g_marketModeDetectReason = "";
 
 // v4.9.4 — BASKET PROTECT state (aggregate across all open EA positions)
 double     g_basketPeakUSD   = 0;     // Max total floating $ reached since last flat state
@@ -3592,6 +3704,13 @@ bool XAU_GateEarlyLossClose(ulong ticket, bool isBuy, double openPx, double curP
 //|   calls never used it, which is exactly the gap that made the    |
 //|   flagship v6.4.22 incident possible in the first place.         |
 //+------------------------------------------------------------------+
+bool XAU_NewHostileStructureFlip(int entryDir, int currentDir, int tradeDir)
+{
+   if(tradeDir == 0) return false;
+   int hostileDir = -tradeDir;
+   return (currentDir == hostileDir && entryDir != hostileDir);
+}
+
 bool XAU_ReversalConfirmed(ulong ticket, bool isBuy, bool structureConfirmedBroken,
                            bool emaAgainst, bool rsiAgainst, int momentumScore,
                            bool trendAligned)
@@ -3599,14 +3718,15 @@ bool XAU_ReversalConfirmed(ulong ticket, bool isBuy, bool structureConfirmedBrok
    if(structureConfirmedBroken) return true;
    if(emaAgainst && rsiAgainst && momentumScore <= 1) return true;
    if(!trendAligned && momentumScore <= 1) return true;
+   int tradeDir = isBuy ? 1 : -1;
 
    int ttmIdxRC = (ticket > 0) ? TTM_FindActiveSlot(ticket) : -1;
    if(ttmIdxRC >= 0)
    {
       int entryBOS = g_ttm[ttmIdxRC].entryBOS;
       int entryHTF = g_ttm[ttmIdxRC].entryHTF;
-      if(entryBOS != 0 && g_smc_bos_dir == -entryBOS) return true;
-      if(entryHTF != 0 && g_htfConsensusDir == -entryHTF) return true;
+      if(XAU_NewHostileStructureFlip(entryBOS, g_smc_bos_dir, tradeDir)) return true;
+      if(XAU_NewHostileStructureFlip(entryHTF, g_htfConsensusDir, tradeDir)) return true;
    }
    return false;
 }
@@ -5080,6 +5200,62 @@ string PropFirmLossLockReason()
 }
 
 //+------------------------------------------------------------------+
+//| v6.6.0 — MARKET MODE DETECTION                                   |
+//|   Resolves InpMarketMode into a concrete GOLD_MODE/INDEX_MODE     |
+//|   once at startup. AUTO_DETECT checks the chart symbol name       |
+//|   first — cheap and unambiguous for the overwhelming majority of  |
+//|   real symbol names. If the name matches neither a gold nor an    |
+//|   index keyword, it defaults to GOLD_MODE: this EA's entire       |
+//|   history and every live account today is gold-only, and          |
+//|   InpIndexModeLogOnly means INDEX_MODE places zero trades anyway,  |
+//|   so defaulting an unrecognized symbol to GOLD_MODE risks nothing  |
+//|   new, while defaulting to INDEX_MODE could silently stop trading  |
+//|   on what was actually meant to be a gold symbol under an unusual  |
+//|   broker suffix (e.g. "XAUUSD.m", "GOLD#"). A property-based       |
+//|   (tick value / contract size) fallback was deliberately left out  |
+//|   of this phase — there is no real index symbol yet to calibrate   |
+//|   such a heuristic against, and a wrong guess there would be a     |
+//|   silent behavior change rather than a safe no-op.                |
+//+------------------------------------------------------------------+
+ENUM_XAU_MARKET_MODE XAU_DetectMarketMode(string &reason)
+{
+   if(InpMarketMode == MARKET_GOLD_MODE)
+   {
+      reason = "explicit InpMarketMode=GOLD_MODE";
+      return MARKET_GOLD_MODE;
+   }
+   if(InpMarketMode == MARKET_INDEX_MODE)
+   {
+      reason = "explicit InpMarketMode=INDEX_MODE";
+      return MARKET_INDEX_MODE;
+   }
+
+   // AUTO_DETECT — name pattern match against the chart symbol
+   string sym = Symbol();
+   StringToUpper(sym);
+
+   if(StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0)
+   {
+      reason = StringFormat("symbol '%s' matched gold pattern (XAU/GOLD)", Symbol());
+      return MARKET_GOLD_MODE;
+   }
+
+   string indexKeywords[] = {"INDEX", "VOLATILITY", "VOL", "BOOM", "CRASH", "STEP",
+                              "JUMP", "RANGE", "SPREDIX", "VIX", "SYNTHETIC", "DERIV"};
+   for(int i = 0; i < ArraySize(indexKeywords); i++)
+   {
+      if(StringFind(sym, indexKeywords[i]) >= 0)
+      {
+         reason = StringFormat("symbol '%s' matched index keyword '%s'", Symbol(), indexKeywords[i]);
+         return MARKET_INDEX_MODE;
+      }
+   }
+
+   reason = StringFormat("symbol '%s' matched neither gold nor index pattern — defaulting to GOLD_MODE (no tested index strategy exists yet)", Symbol());
+   return MARKET_GOLD_MODE;
+}
+
+//+------------------------------------------------------------------+
 //| INIT                                                             |
 //+------------------------------------------------------------------+
 int OnInit()
@@ -5088,6 +5264,17 @@ int OnInit()
    licenseValid = ValidatePIN(InpLicensePIN);
    if(!licenseValid) { Alert("Invalid PIN: " + InpLicensePIN); return INIT_FAILED; }
    Print("LICENSE OK: ", InpLicensePIN);
+
+   // v6.6.0: resolve market mode once, before anything else touches Symbol()-derived logic.
+   g_marketMode = XAU_DetectMarketMode(g_marketModeDetectReason);
+   PrintFormat("MARKET_AUTO_DETECT: symbol=%s detectedMode=%s profile=%s aggression=%s inputMode=%s | reason=%s | indexLogOnly=%s",
+               Symbol(),
+               g_marketMode == MARKET_GOLD_MODE ? "GOLD_MODE" : "INDEX_MODE",
+               EnumToString(InpIndexProfile), EnumToString(InpIndexAggression),
+               EnumToString(InpMarketMode), g_marketModeDetectReason,
+               InpIndexModeLogOnly ? "true" : "false");
+   if(g_marketMode == MARKET_INDEX_MODE)
+      Print("INDEX_MODE ACTIVE: entries are monitoring-only this release — no index trading strategy is enabled yet. See InpIndexModeLogOnly.");
 
    // v6.4.19: initialize TTM record array
    for(int _i = 0; _i < TTM_MAX_POSITIONS; _i++) { g_ttm[_i].active = false; g_ttm[_i].posId = 0; }
@@ -8459,7 +8646,10 @@ void OnTick()
    {
       // Collect live state
       string sym = Symbol();
-      bool symOK = (StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0 || StringFind(sym, "Gold") >= 0);
+      // v6.6.0: a "wrong symbol" warning is only meaningful in GOLD_MODE —
+      // INDEX_MODE is expected to run on a non-gold symbol by design.
+      bool symOK = (g_marketMode == MARKET_INDEX_MODE) ||
+                   (StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0 || StringFind(sym, "Gold") >= 0);
       bool termConn = (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
       bool termAlgo = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
       bool mqlAlgo  = (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
@@ -8468,9 +8658,11 @@ void OnTick()
 
       string status;
       if(!termConn)        status = "BROKER DISCONNECTED — check internet/VPS connection";
-      else if(!symOK)      status = StringFormat("WRONG SYMBOL '%s' — attach EA to XAUUSD chart (your broker may call it XAUUSDm / XAUUSD.r / GOLD)", sym);
+      else if(!symOK)      status = StringFormat("WRONG SYMBOL '%s' — attach EA to XAUUSD chart (your broker may call it XAUUSDm / XAUUSD.r / GOLD), or set InpMarketMode=MARKET_INDEX_MODE if this is intentional", sym);
       else if(!termAlgo)   status = "ALGO TRADING OFF — click the 'Algo Trading' toolbar button until it turns GREEN";
       else if(!mqlAlgo)    status = "EA-LEVEL ALGO NOT ALLOWED — re-attach EA and tick 'Allow Algo Trading' in the Common tab";
+      else if(g_marketMode == MARKET_INDEX_MODE && InpIndexModeLogOnly)
+                            status = StringFormat("INDEX_MODE monitoring-only (%s) — no index entry strategy enabled yet, managing %d open position(s)", EnumToString(InpIndexProfile), openPs);
       else if(openPs > 0)  status = StringFormat("MANAGING %d OPEN POSITION(S) + SCANNING — analysis remains active while trades run", openPs);
       else if(StringLen(g_lastSkipReason) > 0) status = "IDLE — " + g_lastSkipReason;
       else                 status = StringFormat("SCANNING — spread=%.0fpts, all systems OK, waiting for A/A+ setup", curSpr);
@@ -8958,12 +9150,55 @@ void OnTick()
       if(IsScheduledNewsWindow(calReason))
       {
          static datetime lastCalLog = 0;
-         if(TimeCurrent() - lastCalLog >= 60)
+         int secsSinceLastCalLog = (int)(TimeCurrent() - lastCalLog);
+         if(secsSinceLastCalLog >= 60)
          { Print("NEWS-CALENDAR: ", calReason, " — entries blocked"); lastCalLog = TimeCurrent(); }
          spreadBlocksEntry = true;
          spreadBlockReason = calReason;
          g_lastSkipReason  = calReason;
       }
+   }
+
+   // v6.6.0 — INDEX MODE SAFETY GATE. Position/basket management above this
+   // point (ManageBasket/ManagePositions) already ran and keeps running
+   // normally for any existing position, using the shared exit/risk systems
+   // — that part is legitimately symbol-agnostic. Everything BELOW this
+   // point is the gold entry-scoring pipeline (setup scanning, SMC, AI
+   // Director entry check, OpenTrade). No index entry strategy exists yet,
+   // so when the resolved mode is INDEX_MODE and InpIndexModeLogOnly is
+   // true (the default, and the only supported value until a real index
+   // strategy ships), the EA stops here every tick: detection + diagnostics
+   // only, zero new positions. This is the literal enforcement of "no
+   // speculative live-money logic."
+   if(g_marketMode == MARKET_INDEX_MODE && InpIndexModeLogOnly)
+   {
+      static datetime lastIndexIdleLog = 0;
+      if(TimeCurrent() - lastIndexIdleLog >= 300)
+      {
+         PrintFormat("INDEX_MODE_MONITORING_ONLY | symbol=%s profile=%s aggression=%s | no index entry strategy is enabled yet — positions=%d managed by shared exit systems, no new entries will be opened",
+                     Symbol(), EnumToString(InpIndexProfile), EnumToString(InpIndexAggression), CountMyPositions());
+         // v6.6.0: illustrative-only INDEX_TRACE — proves the lot/risk math is
+         // live and correct for this symbol's real contract specs. Uses 1% of
+         // equity and this symbol's own ATR as a stand-in SL distance; this is
+         // NOT a trade signal, nothing here ever reaches OpenTrade().
+         int atrHIdx = (int)iATR(Symbol(), PERIOD_M5, 14);
+         double atrBufIdx[1];
+         double atrDistIdx = 0.0;
+         if(atrHIdx != INVALID_HANDLE)
+         {
+            int copiedIdx = CopyBuffer((int)atrHIdx, 0, 0, 1, atrBufIdx);
+            if(copiedIdx >= 1)
+               atrDistIdx = atrBufIdx[0] * 2.0;
+            IndicatorRelease(atrHIdx);
+         }
+         if(atrDistIdx > 0.0)
+            XAU_LogIndexTrace(Symbol(), accInfo.Equity() * 0.01, atrDistIdx,
+                              "UNCLASSIFIED (no regime classifier yet)", "NONE (no strategy engine yet)",
+                              "N/A — monitoring only", "N/A — monitoring only");
+         lastIndexIdleLog = TimeCurrent();
+      }
+      g_lastSkipReason = "INDEX_MODE_MONITORING_ONLY: no index entry strategy enabled yet";
+      return;
    }
 
    // New M5 bar only for entries, with watchdog recovery.
@@ -10726,6 +10961,130 @@ double RiskPerLotForDistance(double dist)
    return XAU_MoneyPerLotForDistance(dist);
 }
 
+//+------------------------------------------------------------------+
+//| v6.6.0 — SYMBOL-AGNOSTIC INDEX LOT/RISK ENGINE (architecture      |
+//|   phase — not wired to any live entry path yet; InpIndexModeLogOnly|
+//|   blocks all index entries until a real strategy exists). Built   |
+//|   and tested now so the math is ready to plug in later.           |
+//|                                                                    |
+//|   Computes a lot size from a $ risk budget and a price-distance   |
+//|   stop using ONLY the broker's own symbol properties — no gold    |
+//|   point/contract/spread assumptions of any kind. Every input is a |
+//|   function parameter (symbol included) rather than the built-in   |
+//|   Symbol(), so this is already safe to call for a symbol other    |
+//|   than the chart's own — a prerequisite for the future multi-     |
+//|   symbol scanner (see docs/index_mode_state_and_scanner_design.md).|
+//+------------------------------------------------------------------+
+double XAU_CalcIndexLot(string symbol, double riskAmountUSD, double slDistance,
+                        double &tickValueOut, double &tickSizeOut,
+                        double &minLotOut, double &maxLotOut, double &lotStepOut,
+                        double &contractSizeOut, double &moneyPerLotOut,
+                        string &capApplied)
+{
+   capApplied    = "NONE";
+   tickValueOut  = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+   tickSizeOut   = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   minLotOut     = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   maxLotOut     = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   lotStepOut    = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   contractSizeOut = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   moneyPerLotOut = 0.0;
+
+   if(riskAmountUSD <= 0.0 || slDistance <= 0.0)
+   {
+      capApplied = "INVALID_INPUT";
+      return 0.0;
+   }
+   if(tickValueOut <= 0.0 || tickSizeOut <= 0.0 || lotStepOut <= 0.0)
+   {
+      capApplied = "MISSING_SYMBOL_SPECS";
+      return 0.0;
+   }
+
+   // $ risk for 1.0 lot at this SL distance, from the broker's own tick math
+   // (works identically for gold, an index CFD, or a synthetic — the ratio
+   // between price distance and tick size/value is symbol-specific by
+   // construction, so no per-market assumption is needed here).
+   double moneyPerLot = (slDistance / tickSizeOut) * tickValueOut;
+   moneyPerLotOut = moneyPerLot;
+   if(moneyPerLot <= 0.0)
+   {
+      capApplied = "ZERO_MONEY_PER_LOT";
+      return 0.0;
+   }
+
+   double rawLots = riskAmountUSD / moneyPerLot;
+   double riskOvershootPct = 0.0;
+   double lots = XAU_NormalizeVolumeForRisk(rawLots, lotStepOut, minLotOut, maxLotOut,
+                                            moneyPerLot, riskAmountUSD, riskOvershootPct);
+   if(lots <= 0.0)
+   {
+      capApplied = "BELOW_BROKER_MIN_LOT";
+      return 0.0;
+   }
+
+   // Margin safety — never propose a size the account can't actually margin,
+   // using the same OrderCalcMargin approach the gold path already uses.
+   double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   if(price <= 0.0) price = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double freeMargin = accInfo.FreeMargin();
+   double marginNeeded = 0.0;
+   double marginSoftLimit = freeMargin * 0.5;
+   double marginHardLimit = freeMargin * 0.8;
+   if(price > 0.0 && OrderCalcMargin(ORDER_TYPE_BUY, symbol, lots, price, marginNeeded))
+   {
+      while(lots > minLotOut && marginNeeded > marginSoftLimit)
+      {
+         lots = NormalizeDouble(lots - lotStepOut, VolumeDigitsForSymbol());
+         lots = MathMax(minLotOut, lots);
+         if(!OrderCalcMargin(ORDER_TYPE_BUY, symbol, lots, price, marginNeeded))
+            break;
+      }
+      if(marginNeeded > marginHardLimit)
+      {
+         capApplied = "INSUFFICIENT_MARGIN";
+         return 0.0;
+      }
+      if(lots < rawLots - lotStepOut * 0.5) capApplied = "margin";
+   }
+
+   lots = NormalizeDouble(MathMin(lots, maxLotOut), VolumeDigitsForSymbol());
+   if(capApplied == "NONE" && lots < rawLots - lotStepOut * 0.5) capApplied = "maxLot";
+   return lots;
+}
+
+//+------------------------------------------------------------------+
+//| v6.6.0 — INDEX_TRACE diagnostic line. Safe to call for any symbol |
+//| regardless of whether InpIndexModeLogOnly is blocking entries —   |
+//| this only logs, it never trades.                                  |
+//+------------------------------------------------------------------+
+void XAU_LogIndexTrace(string symbol, double riskAmountUSD, double slDistance,
+                       string regime, string strategyType, string entryReason, string exitReason)
+{
+   double tickValue, tickSize, minLot, maxLot, lotStep, contractSize, moneyPerLot;
+   string capApplied;
+   double finalLot = XAU_CalcIndexLot(symbol, riskAmountUSD, slDistance,
+                                      tickValue, tickSize, minLot, maxLot, lotStep,
+                                      contractSize, moneyPerLot, capApplied);
+   int atrH = (int)iATR(symbol, PERIOD_M5, 14);
+   double atrVal = 0.0;
+   if(atrH != INVALID_HANDLE)
+   {
+      double atrBuf[1];
+      int copied = CopyBuffer((int)atrH, 0, 0, 1, atrBuf);
+      if(copied >= 1) atrVal = atrBuf[0];
+      IndicatorRelease(atrH);
+   }
+   double spreadPts = (double)SymbolInfoInteger(symbol, SYMBOL_SPREAD);
+
+   PrintFormat("INDEX_TRACE | symbol=%s profile=%s detectedMode=%s contractSize=%.2f tickValue=%.5f tickSize=%.5f minLot=%.4f maxLot=%.2f lotStep=%.4f spread=%.1f ATR=%.5f regime=%s strategyType=%s entryReason=%s exitReason=%s baseLot=%.4f finalLot=%.4f capApplied=%s",
+               symbol, EnumToString(InpIndexProfile),
+               g_marketMode == MARKET_INDEX_MODE ? "INDEX_MODE" : "GOLD_MODE",
+               contractSize, tickValue, tickSize, minLot, maxLot, lotStep, spreadPts, atrVal,
+               regime, strategyType, entryReason, exitReason,
+               moneyPerLot > 0.0 ? riskAmountUSD / moneyPerLot : 0.0, finalLot, capApplied);
+}
+
 double CurrentAggregateRiskToSL(double &openLots)
 {
    openLots = 0.0;
@@ -12331,13 +12690,13 @@ double XAU_ReconstructOpenBasketPeakUSD(double currentPnL)
    // reconstructed peak=$78.96 and peak=$126.42 on positions ~1-2 seconds old
    // with bestFloating=$0.00 per TradeBrain, then got force-closed on
    // "giveback" from a peak that never existed). Only reconstruct from CLOSED
-   // bars strictly after entry; if the position is younger than one full M5
-   // bar, skip reconstruction entirely — live per-tick tracking below will
-   // pick up the real peak organically from this point forward.
-   if(startShift <= 0)
+   // bars strictly AFTER the entry candle; if the position has not yet lived
+   // through one full post-entry M5 candle, skip reconstruction entirely —
+   // live per-tick tracking below will pick up the real peak organically.
+   if(startShift <= 1)
       return MathMax(0.0, currentPnL);
 
-   int barsToCopy = (int)MathMin((double)startShift, 900.0);
+   int barsToCopy = (int)MathMin((double)(startShift - 1), 900.0);
    if(barsToCopy <= 0) return MathMax(0.0, currentPnL);
 
    double lows[];
@@ -12404,9 +12763,9 @@ int XAU_BasketDominantDirection()
 bool XAU_BasketStructureBroken(int basketDir)
 {
    if(basketDir == 0) return false;
-   if(g_basketEntryBOS != -999 && g_basketEntryBOS != 0 && g_smc_bos_dir == -g_basketEntryBOS)
+   if(g_basketEntryBOS != -999 && XAU_NewHostileStructureFlip(g_basketEntryBOS, g_smc_bos_dir, basketDir))
       return true;
-   if(g_basketEntryHTF != -999 && g_basketEntryHTF != 0 && g_htfConsensusDir == -g_basketEntryHTF)
+   if(g_basketEntryHTF != -999 && XAU_NewHostileStructureFlip(g_basketEntryHTF, g_htfConsensusDir, basketDir))
       return true;
 
    double swingLow, swingHigh;
@@ -13823,6 +14182,7 @@ void TTM_RecordEntry(ulong posId, int signal, string setupName, string grade,
    r.active             = true;
    r.posId              = posId;
    r.signal             = signal;
+   r.entryTime          = TimeCurrent();
    r.setupName          = setupName;
    r.grade              = grade;
    r.initialScore       = combinedScore;
@@ -13924,17 +14284,16 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
    if(idx < 0 || idx >= TTM_MAX_POSITIONS || !g_ttm[idx].active)
       return "";
 
-   // v6.4.25 (audit bug #4): this is called from ManagePositions() every TICK,
-   // not once per bar. Without this guard, barsHeld was incrementing dozens of
-   // times per minute (confirmed live: "bar=1" to "bar=39" inside 30 seconds
-   // on one position), collapsing InpTTM_MinHoldBars from its intended ~15
-   // minutes of protection down to ~2 seconds, and letting a few ticks of a
-   // transient dip satisfy InpTTM_PersistentBars. Only re-evaluate once per
-   // completed/new M5 bar; hold the last verdict on every tick in between.
-   datetime curBarTime = iTime(Symbol(), PERIOD_M5, 0);
-   if(g_ttm[idx].lastEvalBarTime != 0 && curBarTime == g_ttm[idx].lastEvalBarTime)
+   // This runs every tick. Count only genuinely CLOSED M5 bars that opened
+   // after the trade's entry candle. Shift 0 is forming, and shift 1 can still
+   // be the entry candle immediately after one M5 close.
+   datetime closedBarTime = iTime(Symbol(), PERIOD_M5, 1);
+   if(closedBarTime <= 0) return "";
+   if(closedBarTime <= g_ttm[idx].entryTime)
       return "";
-   g_ttm[idx].lastEvalBarTime = curBarTime;
+   if(g_ttm[idx].lastEvalBarTime != 0 && closedBarTime == g_ttm[idx].lastEvalBarTime)
+      return "";
+   g_ttm[idx].lastEvalBarTime = closedBarTime;
 
    g_ttm[idx].prevScore = g_ttm[idx].liveScore;
    g_ttm[idx].liveScore = liveScore;
@@ -13944,12 +14303,16 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
    if(liveScore < 35.0) g_ttm[idx].consecutiveLowBars++;
    else                 g_ttm[idx].consecutiveLowBars = 0;
 
+   int tradeDir = isBuy ? 1 : -1;
+
    // Describe BOS and HTF status relative to entry
    string bosStatus = (currentBOS == g_ttm[idx].entryBOS && g_ttm[idx].entryBOS != 0) ? "OK" :
                       (currentBOS == 0)                                               ? "NEUTRAL" :
+                      XAU_NewHostileStructureFlip(g_ttm[idx].entryBOS, currentBOS, tradeDir) ? "HOSTILE_FLIP" :
                       (g_ttm[idx].entryBOS == 0)                                      ? "ESTABLISHED" : "FLIPPED!";
    string htfStatus = (currentHTF == g_ttm[idx].entryHTF && g_ttm[idx].entryHTF != 0) ? "OK" :
                       (currentHTF == 0)                                               ? "NEUTRAL" :
+                      XAU_NewHostileStructureFlip(g_ttm[idx].entryHTF, currentHTF, tradeDir) ? "HOSTILE_FLIP" :
                       (g_ttm[idx].entryHTF == 0)                                      ? "ESTABLISHED" : "FLIPPED!";
 
    // ---- HOLD DECISIONS (not enough bars to judge) ----
@@ -13980,8 +14343,8 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
    }
 
    // 2. Structural flip — BOS reversed against trade (regardless of score)
-   bool bosFlipped = (g_ttm[idx].entryBOS != 0 && currentBOS == -g_ttm[idx].entryBOS);
-   bool htfFlipped = (g_ttm[idx].entryHTF != 0 && currentHTF == -g_ttm[idx].entryHTF);
+   bool bosFlipped = XAU_NewHostileStructureFlip(g_ttm[idx].entryBOS, currentBOS, tradeDir);
+   bool htfFlipped = XAU_NewHostileStructureFlip(g_ttm[idx].entryHTF, currentHTF, tradeDir);
    if(bosFlipped && liveScore < 45.0)
    {
       string why = StringFormat(
@@ -17882,8 +18245,8 @@ void XAU_RunStartupIntelligenceSync()
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double mid = (bid > 0.0 && ask > 0.0) ? (bid + ask) * 0.5 : iClose(Symbol(), PERIOD_M5, 0);
    double atr = (ArraySize(bufATR) > 1 ? bufATR[1] : 0.0);
-   string extra = StringFormat("version=5.9.1 syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
-                               (int)(TimeCurrent() - started), historyDeals, openRecovered,
+   string extra = StringFormat("version=%s syncDurationSec=%d historyDeals=%d openPositions=%d tradeBrainRows=%d blockedRows=%d intelRows=%d barsM5=%d contextTarget=%d contextTargetMet=%s tradingEnabled=%s reason=%s",
+                               XAUAI_EA_VERSION, (int)(TimeCurrent() - started), historyDeals, openRecovered,
                                tradeBrainRows, blockedRows, intelRows, barsM5,
                                InpStartupIntelMinCandles, contextTargetMet ? "Y" : "N",
                                g_startupIntelSyncOk ? "Y" : "N",
@@ -21765,6 +22128,7 @@ void BotMonitorHeartbeat()
       "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"%s\",\"build_hash\":\"%s\","
       "\"input_hash\":\"%s\",\"account_number\":\"%I64d\","
       "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"digits\":%d,\"point\":%.8f,"
+      "\"market_mode\":\"%s\",\"index_profile\":\"%s\","
       "\"magic_number\":%d,\"spread\":%.0f,\"avg_spread\":%.1f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -21784,7 +22148,9 @@ void BotMonitorHeartbeat()
       AccountInfoInteger(ACCOUNT_LOGIN),
       BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER), 80),
       Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
-      SymbolInfoDouble(Symbol(), SYMBOL_POINT), InpMagicNumber,
+      SymbolInfoDouble(Symbol(), SYMBOL_POINT),
+      g_marketMode == MARKET_GOLD_MODE ? "GOLD_MODE" : "INDEX_MODE",
+      EnumToString(InpIndexProfile), InpMagicNumber,
       spread, g_spreadEMA, equity, balance, (equity - dailyStartEquity), dd, openPs,
       BotMonitorBool(termAlgo), BotMonitorBool(tradeAllowed),
       BotMonitorBool(termConn), BotMonitorBool(AccountInfoInteger(ACCOUNT_LOGIN) > 0),

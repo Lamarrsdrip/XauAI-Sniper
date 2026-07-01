@@ -17,7 +17,7 @@ const CARDS = [
     tone: "text-amber-300",
     border: "border-amber-300/20",
     glow: "bg-amber-300/[0.07]",
-    badge: "NEW v6.5.0",
+    badge: "NEW v6.6.0",
   },
   {
     icon: Funnel,
@@ -26,7 +26,7 @@ const CARDS = [
     tone: "text-rose-300",
     border: "border-rose-300/20",
     glow: "bg-rose-300/[0.07]",
-    badge: "NEW v6.5.0",
+    badge: "NEW v6.6.0",
   },
   {
     icon: ShieldCheck,
@@ -35,6 +35,15 @@ const CARDS = [
     tone: "text-sky-300",
     border: "border-sky-300/20",
     glow: "bg-sky-300/[0.07]",
+  },
+  {
+    icon: Shuffle,
+    title: "Gold + Index Market Detection",
+    body: "Attach the same EA to XAUUSD or an index chart — it auto-detects which market it's on and adapts. Gold Mode is the full, live-tested strategy. Index Mode currently runs detection and diagnostics only, honestly, until a real index strategy has been tested and shipped.",
+    tone: "text-emerald-300",
+    border: "border-emerald-300/20",
+    glow: "bg-emerald-300/[0.07]",
+    badge: "NEW v6.6.0",
   },
   {
     icon: Shuffle,

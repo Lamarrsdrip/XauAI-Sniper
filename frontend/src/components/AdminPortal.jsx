@@ -124,7 +124,7 @@ export default function AdminPortal({ api }) {
               <span className="font-mono text-[10px] font-black text-black">XA</span>
             </div>
             <span className="text-[14px] font-semibold">XauAI Sniper</span>
-            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.5.0</span>
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.6.0</span>
           </div>
           <div className="flex items-center gap-4">
             <span className="hidden text-[11px] text-white/35 sm:block">{admin.email}</span>
@@ -196,7 +196,7 @@ function LoginPage({ api, onLogin }) {
             <span className="font-mono text-base font-black text-black">XA</span>
           </div>
           <h1 className="text-2xl font-semibold text-white">XauAI Admin</h1>
-          <p className="mt-1 text-[13px] text-white/38">v6.5.0 management portal</p>
+          <p className="mt-1 text-[13px] text-white/38">v6.6.0 management portal</p>
         </div>
 
         <form onSubmit={handleSubmit} className={`${CARD} p-6 space-y-4`}>
@@ -416,6 +416,32 @@ function SettingsTab({ api, token }) {
   const [saved, setSaved] = useState(false);
   const h = useMemo(() => auth(token), [token]);
 
+  // v6.6.0 — global Gold/Index Mode platform switches (architecture phase)
+  const [marketSettings, setMarketSettings] = useState(null);
+  const [marketSaving, setMarketSaving] = useState(false);
+  const [marketSaved, setMarketSaved] = useState(false);
+  const [indexSymbolsInput, setIndexSymbolsInput] = useState("");
+
+  useEffect(() => {
+    ax.get(`${api}/admin/market-mode-settings`, h).then(r => {
+      setMarketSettings(r.data);
+      setIndexSymbolsInput((r.data.allowed_index_symbols || []).join(", "));
+    }).catch(() => {});
+  }, [api, h]);
+
+  const saveMarketSettings = async () => {
+    setMarketSaving(true);
+    const payload = {
+      ...marketSettings,
+      allowed_index_symbols: indexSymbolsInput.split(",").map(s => s.trim().toUpperCase()).filter(Boolean),
+    };
+    try {
+      const r = await ax.put(`${api}/admin/market-mode-settings`, payload, h);
+      setMarketSettings(r.data.settings);
+      setMarketSaved(true); setTimeout(() => setMarketSaved(false), 3000);
+    } catch {} finally { setMarketSaving(false); }
+  };
+
   useEffect(() => {
     ax.get(`${api}/admin/settings`, h).then(r => {
       setSettings(r.data); setPriceNaira(r.data.pin_price_naira || 300000); setSmtpEmail(r.data.smtp_email || "");
@@ -478,6 +504,60 @@ function SettingsTab({ api, token }) {
       <Btn onClick={save} disabled={saving} data-testid="settings-save-btn">
         <FloppyDisk size={14} weight="bold" /> {saving ? "Saving…" : saved ? "Saved!" : "Save settings"}
       </Btn>
+
+      {/* v6.6.0 — Market Modes (architecture phase). These gate what the
+          website/dashboard advertises, not live EA behavior — the EA's own
+          InpIndexModeLogOnly safety switch is what actually blocks index
+          trades until a real, tested index strategy exists. */}
+      <CardSection title="Market modes">
+        <p className="mb-4 text-[12px] leading-5 text-white/40">
+          Controls what the public site and Command Center offer. Gold Mode is the live, fully tested strategy.
+          Index Mode is currently detection + diagnostics only — no index entry strategy has shipped yet, so
+          enabling it here only affects what customers see, not what the EA trades.
+        </p>
+        {!marketSettings ? (
+          <p className="text-[12px] text-white/35">Loading…</p>
+        ) : (
+          <div className="space-y-4">
+            <label className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.03] p-3.5 cursor-pointer">
+              <span>
+                <span className="block text-[13px] font-semibold">Gold Mode enabled on platform</span>
+                <span className="mt-0.5 block text-[11px] text-white/38">Live and fully tested for XAUUSD.</span>
+              </span>
+              <input type="checkbox" checked={!!marketSettings.platform_gold_mode_enabled}
+                onChange={e => setMarketSettings(s => ({ ...s, platform_gold_mode_enabled: e.target.checked }))}
+                className="h-5 w-5 accent-amber-300" />
+            </label>
+            <label className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.06] bg-white/[0.015] p-3.5 cursor-pointer">
+              <span>
+                <span className="block text-[13px] font-semibold">Index Mode enabled on platform</span>
+                <span className="mt-0.5 block text-[11px] text-white/38">Detection-only until a real index strategy ships. Leave off until then.</span>
+              </span>
+              <input type="checkbox" checked={!!marketSettings.platform_index_mode_enabled}
+                onChange={e => setMarketSettings(s => ({ ...s, platform_index_mode_enabled: e.target.checked }))}
+                className="h-5 w-5 accent-amber-300" />
+            </label>
+            <Field label="Allowed index symbols (comma-separated)">
+              <Input value={indexSymbolsInput} onChange={e => setIndexSymbolsInput(e.target.value)}
+                placeholder="US30, NAS100, GER40" className="font-mono" />
+              <p className="mt-1 text-[11px] text-white/35">Only meaningful once a real index symbol/broker is confirmed — see docs/index_mode_state_and_scanner_design.md.</p>
+            </Field>
+            <Field label="Default trading universe">
+              <select value={marketSettings.default_trading_universe}
+                onChange={e => setMarketSettings(s => ({ ...s, default_trading_universe: e.target.value }))}
+                className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] text-white outline-none focus:border-amber-300/40">
+                <option value="GOLD_ONLY">Gold only</option>
+                <option value="INDEX_ONLY">Index only</option>
+                <option value="GOLD_AND_INDEX">Gold + Index</option>
+              </select>
+              <p className="mt-1 text-[11px] text-white/35">Stays Gold only until Index Mode is fully tested — matches the EA's own default.</p>
+            </Field>
+            <Btn onClick={saveMarketSettings} disabled={marketSaving}>
+              <FloppyDisk size={14} weight="bold" /> {marketSaving ? "Saving…" : marketSaved ? "Saved!" : "Save market modes"}
+            </Btn>
+          </div>
+        )}
+      </CardSection>
     </div>
   );
 }
@@ -736,7 +816,7 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
             <div>
               <div className="text-[14px] font-semibold">{admin?.name || "Admin"}</div>
               <div className="text-[12px] text-white/40">{admin?.email}</div>
-              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.5.0</div>
+              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.6.0</div>
             </div>
           </div>
 

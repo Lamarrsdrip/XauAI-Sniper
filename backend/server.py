@@ -105,6 +105,22 @@ def _estimate_ai_tokens(*texts: str) -> int:
 def _estimate_ai_cost(tokens: int) -> float:
     return round((tokens / 1000.0) * AI_COST_TOKEN_PRICE_PER_1K, 6)
 
+_INDEX_SYMBOL_KEYWORDS = ("INDEX", "VOLATILITY", "VOL", "BOOM", "CRASH", "STEP",
+                          "JUMP", "RANGE", "SPREDIX", "VIX", "SYNTHETIC", "DERIV")
+
+def classify_market_mode(symbol: str) -> str:
+    """v6.6.0: mirrors the EA's XAU_DetectMarketMode() name-pattern logic so
+    reporting can split Gold vs Index performance purely from the `symbol`
+    field already recorded on every trade/heartbeat — no EA-side trade
+    schema change needed, keeping TradeBrain's sync payload untouched."""
+    s = str(symbol or "").upper()
+    if "XAU" in s or "GOLD" in s:
+        return "GOLD_MODE"
+    for kw in _INDEX_SYMBOL_KEYWORDS:
+        if kw in s:
+            return "INDEX_MODE"
+    return "GOLD_MODE"  # same safe default as the EA when the symbol is unrecognized
+
 def _bucket(value: Any, size: float, default: str = "0") -> str:
     try:
         v = float(value)
@@ -881,6 +897,37 @@ async def update_admin_settings(req: AdminSettingsUpdate, admin: dict = Depends(
     if updates:
         await db.admin_settings.update_one({"key": "main"}, {"$set": updates}, upsert=True)
     return {"updated": True}
+
+# v6.6.0 — global Gold/Index Mode platform switches (architecture phase).
+# These gate what the WEBSITE/DASHBOARD advertises and allows users to select
+# — they do not themselves change EA behavior (the EA's own
+# InpIndexModeLogOnly is the actual trading safety switch). platform_index_mode_enabled
+# defaults false: the site should not offer Index Mode to customers until a
+# real, tested index strategy exists.
+class AdminMarketModeSettings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    platform_gold_mode_enabled: bool = True
+    platform_index_mode_enabled: bool = False
+    allowed_index_symbols: List[str] = Field(default_factory=list)
+    default_trading_universe: str = "GOLD_ONLY"  # GOLD_ONLY | INDEX_ONLY | GOLD_AND_INDEX
+
+@api_router.get("/admin/market-mode-settings")
+async def get_admin_market_mode_settings(admin: dict = Depends(get_current_admin)):
+    s = await db.admin_settings.find_one({"key": "main"}, {"_id": 0}) or {}
+    return AdminMarketModeSettings(**{k: v for k, v in s.items() if k in AdminMarketModeSettings.model_fields}).model_dump()
+
+@api_router.put("/admin/market-mode-settings")
+async def update_admin_market_mode_settings(req: AdminMarketModeSettings, admin: dict = Depends(get_current_admin)):
+    await db.admin_settings.update_one({"key": "main"}, {"$set": req.model_dump()}, upsert=True)
+    return {"updated": True, "settings": req.model_dump()}
+
+@api_router.get("/market-mode-status")
+async def public_market_mode_status():
+    """Public, unauthenticated — the website/download page reads this to know
+    whether to advertise Index Mode as available yet."""
+    s = await db.admin_settings.find_one({"key": "main"}, {"_id": 0}) or {}
+    settings = AdminMarketModeSettings(**{k: v for k, v in s.items() if k in AdminMarketModeSettings.model_fields})
+    return settings.model_dump()
 
 @api_router.post("/admin/pins/generate", dependencies=[Depends(get_current_admin)])
 async def admin_generate_pins(req: PinGenerateRequest):
@@ -1878,7 +1925,7 @@ class TradeMemoryRecord(BaseModel):
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.5.0"
+    ea_version: str = "v6.6.0"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"
@@ -3058,6 +3105,25 @@ class PaymentSubmitReq(BaseModel):
 class CloudPauseReq(BaseModel):
     paused: bool
 
+class TradingUniverseSettings(BaseModel):
+    """v6.6.0 — architecture-phase storage for Command Center trading-universe
+    controls. NOTE: the EA does not currently poll/consume these settings —
+    there is no remote-settings-sync channel for market selection yet (only
+    the existing pause/stop commands are consumed live). This model exists so
+    the dashboard UI and backend schema are ready; wiring the EA to actually
+    read these settings is future work, same as the Index strategy itself."""
+    model_config = ConfigDict(extra="ignore")
+    enable_gold: bool = True
+    enable_index: bool = False   # stays false until a real index strategy exists
+    selected_index_symbols: List[str] = Field(default_factory=list)
+    max_open_trades_gold: int = 0     # 0 = no override, use EA input default
+    max_open_trades_index: int = 0
+    max_total_exposure_usd: float = 0.0
+    gold_risk_mode: str = "BALANCED"      # SAFE | BALANCED | AGGRESSIVE_GROWTH
+    index_risk_mode: str = "BALANCED"     # SAFE | BALANCED | AGGRESSIVE_GROWTH
+    index_aggression: str = "INDEX_BALANCED"
+    updated_at: Optional[str] = None
+
 class CloudCommandReq(BaseModel):
     action: str
     pin: str
@@ -3861,6 +3927,24 @@ async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
               "wins": sum(1 for t in completed if float(t.get("profit") or 0) > 0),
               "losses": sum(1 for t in completed if float(t.get("profit") or 0) < 0),
               "net_pnl": sum(float(t.get("profit") or 0) for t in completed)}
+
+    # v6.6.0: Gold / Index / Combined performance split, derived from each
+    # trade's own `symbol` field — no schema change, no EA-side change.
+    def _market_totals(rows):
+        wins = sum(1 for t in rows if float(t.get("profit") or 0) > 0)
+        losses = sum(1 for t in rows if float(t.get("profit") or 0) < 0)
+        net = sum(float(t.get("profit") or 0) for t in rows)
+        n = len(rows)
+        return {"trades": n, "wins": wins, "losses": losses, "net_pnl": round(net, 2),
+                "win_rate": round((wins / n * 100.0), 1) if n > 0 else 0.0}
+
+    gold_completed = [t for t in completed if classify_market_mode(t.get("symbol")) == "GOLD_MODE"]
+    index_completed = [t for t in completed if classify_market_mode(t.get("symbol")) == "INDEX_MODE"]
+    totals["by_market_mode"] = {
+        "gold": _market_totals(gold_completed),
+        "index": _market_totals(index_completed),
+        "combined": _market_totals(completed),
+    }
     trades = trades[:50]
     # equity curve data (last 30 days aggregated daily)
     equity = []
@@ -3898,6 +3982,28 @@ async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
             "paused": user.get("paused", False),
             "plan": user.get("plan", "starter"),
             "status": user.get("status", "trial")}
+
+# -------- Trading Universe settings (v6.6.0 — architecture phase) --------
+@api_router.get("/cloud/trading-universe")
+async def get_trading_universe(user: dict = Depends(get_cloud_user)):
+    doc = await db.trading_universe_settings.find_one({"user_id": user["id"]}, {"_id": 0})
+    settings = TradingUniverseSettings(**(doc or {}))
+    return settings.model_dump()
+
+@api_router.post("/cloud/trading-universe")
+async def set_trading_universe(req: TradingUniverseSettings, user: dict = Depends(get_cloud_user)):
+    if req.enable_index:
+        # v6.6.0 hard safety: reporting/UI can show Index as "enabled" for
+        # planning purposes, but no index strategy exists yet — the EA's own
+        # InpIndexModeLogOnly is what actually blocks trades, independent of
+        # this dashboard setting. This flag does not yet do anything live.
+        pass
+    doc = req.model_dump()
+    doc["user_id"] = user["id"]
+    doc["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.trading_universe_settings.update_one(
+        {"user_id": user["id"]}, {"$set": doc}, upsert=True)
+    return {"ok": True, "settings": doc}
 
 # -------- Payments (user submits proof; admin approves) --------
 @api_router.post("/cloud/payments/submit")
@@ -4617,6 +4723,8 @@ class BotHeartbeatReq(BaseModel):
     broker_server: Optional[str] = ""
     symbol: Optional[str] = ""
     timeframe: Optional[str] = ""
+    market_mode: Optional[str] = "GOLD_MODE"  # v6.6.0: GOLD_MODE or INDEX_MODE, as resolved by the EA's XAU_DetectMarketMode()
+    index_profile: Optional[str] = ""          # v6.6.0: diagnostic only until a real index strategy ships
     spread: Optional[float] = 0.0
     equity: Optional[float] = 0.0
     balance: Optional[float] = 0.0

@@ -263,7 +263,7 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
             <XauAiLogo size={30} className="flex-none" />
             <div className="min-w-0">
               <div className="truncate text-[14px] font-bold leading-none">XAU AI Sniper</div>
-              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.5.0</div>
+              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.6.0</div>
             </div>
           </Link>
           <div className="flex items-center gap-2">
@@ -497,7 +497,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
           <div className="min-w-0">
             <div className={`mb-2 flex items-center gap-2 ${MONO_LABEL}`}>
               {online
-                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {heartbeat.timeframe||"M5"} · Live</>
+                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {heartbeat.timeframe||"M5"} · {heartbeat.market_mode==="INDEX_MODE"?`Index Mode (${heartbeat.index_profile||"GENERIC_INDEX"})`:"Gold Mode"} · Live</>
                 : <><Wifi className="h-3 w-3" />No connection</>}
             </div>
             <h1 className="text-[2rem] font-black tracking-tight leading-none">{botState}</h1>
@@ -750,6 +750,81 @@ function ActivityPage({ events, filter, setFilter }) {
 }
 
 // ─── Control ──────────────────────────────────────────────────────────────────
+// v6.6.0 — Trading Universe (architecture phase). Index Mode toggle is
+// intentionally disabled with an explanatory note: no real, tested index
+// entry strategy exists yet, and the EA's own InpIndexModeLogOnly safety
+// switch is what actually prevents index trades — this panel is settings
+// storage + visibility, not a live trading control, until that changes.
+function TradingUniverseCard({ linked, setActive }) {
+  const [settings, setSettings] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const fetchSettings = useCallback(async () => {
+    try { const r = await commandAxios.get("/cloud/trading-universe"); setSettings(r.data); }
+    catch { /* left as null — card shows a load-failed state */ }
+  }, []);
+  useEffect(() => { fetchSettings(); }, [fetchSettings]);
+
+  const save = async () => {
+    if (!settings) return;
+    setBusy(true); setMsg("");
+    try {
+      const r = await commandAxios.post("/cloud/trading-universe", settings);
+      setSettings(r.data.settings);
+      setMsg("Saved.");
+    } catch (e) { setMsg(e.response?.data?.detail || "Save failed"); }
+    finally { setBusy(false); }
+  };
+
+  const upd = (field, value) => setSettings(s => ({ ...s, [field]: value }));
+
+  return (
+    <Card title="TRADING UNIVERSE" subtitle="Gold Mode is live today. Index Mode is architecture-only — detection and diagnostics run, but no index trade will ever open until a real strategy ships.">
+      {!linked && (
+        <div className="mb-4 flex items-center gap-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-3.5 text-[13px] text-amber-200">
+          <AlertTriangle className="h-4 w-4 flex-none text-amber-400" />
+          <span>Link your license first. <button onClick={() => setActive("license")} className="font-semibold underline">Open License</button></span>
+        </div>
+      )}
+      {!settings ? (
+        <div className="text-[13px] text-white/40">Loading…</div>
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
+              <div>
+                <div className="text-[14px] font-semibold">Gold trading</div>
+                <div className="mt-0.5 text-[12px] text-white/40">Live — full entry + exit strategy.</div>
+              </div>
+              <Toggle value={settings.enable_gold} onChange={v => upd("enable_gold", v)} />
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 opacity-60">
+              <div>
+                <div className="text-[14px] font-semibold">Index trading</div>
+                <div className="mt-0.5 text-[12px] text-white/40">Detection-only — no strategy enabled yet.</div>
+              </div>
+              <Toggle value={settings.enable_index} onChange={v => upd("enable_index", v)} />
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <NumField label="Max open trades — Gold" value={settings.max_open_trades_gold} onChange={v => upd("max_open_trades_gold", v)} suffix="trades" min={0} max={20} step="1" note="0 = use EA input default" />
+            <NumField label="Max open trades — Index" value={settings.max_open_trades_index} onChange={v => upd("max_open_trades_index", v)} suffix="trades" min={0} max={20} step="1" note="0 = use EA input default" />
+          </div>
+
+          {msg && <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] p-3 text-[12px] text-amber-200">{msg}</div>}
+
+          <button onClick={save} disabled={busy}
+            className="mt-4 w-full rounded-2xl bg-amber-300 py-3 text-[13px] font-bold text-black disabled:opacity-35 disabled:cursor-not-allowed transition hover:bg-amber-200">
+            {busy ? "Saving…" : "Save trading universe settings"}
+          </button>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, setActive, propFirm, propFirmForm, setPropFirmForm, markDirty, propFirmConfirmed, setPropFirmConfirmed, propFirmBusy, applyPropFirm }) {
   const applied = propFirm?.applied||{};
   const upd = (field, value)=>{ markDirty(); setPropFirmForm(p=>({...p,[field]:value})); };
@@ -798,6 +873,9 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
           <Empty title="No commands yet" body={`Commands appear here after you confirm with license key ${licenseKey||"ASE-..."}.`} icon={Lock} />
         )}
       </Card>
+
+      {/* v6.6.0 — Trading Universe (architecture phase) */}
+      <TradingUniverseCard linked={linked} setActive={setActive} />
 
       {/* Prop Firm Mode */}
       <Card title="PROP FIRM MODE" subtitle="Set the firm's exact limits. The EA stays unchanged until it receives and acknowledges this command.">

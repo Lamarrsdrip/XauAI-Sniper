@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.5.0.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.6.0.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -28,13 +28,17 @@ def test_bug1_phantom_basket_peak_only_reconstructs_from_closed_bars():
     fn_end = ea.index("\n}\n", fn_start)
     fn_body = ea[fn_start:fn_end]
 
-    # shift 0 (the still-forming bar) must be rejected before any bar copy happens
-    assert "if(startShift <= 0)" in fn_body
+    # shift 0 is forming and shift 1 can still be the entry candle; both are
+    # rejected before reconstruction can fabricate a peak.
+    assert "if(startShift <= 1)" in fn_body
     assert "return MathMax(0.0, currentPnL);" in fn_body
 
-    # reconstruction must start at shift 1 (first CLOSED bar), never shift 0
+    # reconstruction starts at shift 1 but copies startShift-1 bars, so the
+    # entry candle is never included after the first post-entry M5 close.
+    assert "int barsToCopy = (int)MathMin((double)(startShift - 1), 900.0);" in fn_body
     assert "CopyLow(Symbol(), PERIOD_M5, 1, barsToCopy, lows)" in fn_body
     assert "CopyHigh(Symbol(), PERIOD_M5, 1, barsToCopy, highs)" in fn_body
+    assert "MathMin((double)startShift, 900.0)" not in fn_body
     assert "CopyLow(Symbol(), PERIOD_M5, 0, barsToCopy, lows)" not in fn_body
     assert "CopyHigh(Symbol(), PERIOD_M5, 0, barsToCopy, highs)" not in fn_body
 
@@ -54,10 +58,12 @@ def test_bug2_basket_structure_break_requires_a_flip_since_entry():
     fn_end = ea.index("\n}\n", fn_start)
     fn_body = ea[fn_start:fn_end]
 
-    # must compare against the entry snapshot (a FLIP), not the absolute
-    # "currently opposes basket direction" test the bug used
-    assert "g_basketEntryBOS != -999 && g_basketEntryBOS != 0 && g_smc_bos_dir == -g_basketEntryBOS" in fn_body
-    assert "g_basketEntryHTF != -999 && g_basketEntryHTF != 0 && g_htfConsensusDir == -g_basketEntryHTF" in fn_body
+    # must compare against the hostile direction for this basket, not merely
+    # the opposite of the entry snapshot. Favorable flips must not invalidate.
+    assert "XAU_NewHostileStructureFlip(g_basketEntryBOS, g_smc_bos_dir, basketDir)" in fn_body
+    assert "XAU_NewHostileStructureFlip(g_basketEntryHTF, g_htfConsensusDir, basketDir)" in fn_body
+    assert "g_smc_bos_dir == -g_basketEntryBOS" not in fn_body
+    assert "g_htfConsensusDir == -g_basketEntryHTF" not in fn_body
     assert "g_smc_bos_dir != 0 && g_smc_bos_dir == -basketDir" not in fn_body
     assert "g_htfConsensusDir != 0 && g_htfConsensusDir == -basketDir" not in fn_body
 
@@ -92,17 +98,22 @@ def test_bug3_basket_soft_lock_bypasses_cloud_safe_and_only_taken_on_success():
 def test_bug4_ttm_evaluates_once_per_bar_not_per_tick():
     ea = read(EA)
 
+    assert "datetime entryTime;" in ea
+    assert "r.entryTime          = TimeCurrent();" in ea
     assert "datetime lastEvalBarTime;" in ea
     assert "r.lastEvalBarTime    = 0;" in ea
 
     fn_start = ea.index('string TTM_Evaluate(int idx, bool isBuy, double liveScore,')
     fn_snippet = ea[fn_start:fn_start + 1200]
 
-    assert "datetime curBarTime = iTime(Symbol(), PERIOD_M5, 0);" in fn_snippet
-    assert 'if(g_ttm[idx].lastEvalBarTime != 0 && curBarTime == g_ttm[idx].lastEvalBarTime)\n      return "";' in fn_snippet
-    assert "g_ttm[idx].lastEvalBarTime = curBarTime;" in fn_snippet
+    assert "datetime closedBarTime = iTime(Symbol(), PERIOD_M5, 1);" in fn_snippet
+    assert "if(closedBarTime <= 0) return \"\";" in fn_snippet
+    assert "if(closedBarTime <= g_ttm[idx].entryTime)" in fn_snippet
+    assert 'if(g_ttm[idx].lastEvalBarTime != 0 && closedBarTime == g_ttm[idx].lastEvalBarTime)\n      return "";' in fn_snippet
+    assert "g_ttm[idx].lastEvalBarTime = closedBarTime;" in fn_snippet
+    assert "iTime(Symbol(), PERIOD_M5, 0)" not in fn_snippet
     # the guard must run BEFORE barsHeld is touched
-    assert fn_snippet.index("curBarTime == g_ttm[idx].lastEvalBarTime") < fn_snippet.index("g_ttm[idx].barsHeld++")
+    assert fn_snippet.index("closedBarTime <= g_ttm[idx].entryTime") < fn_snippet.index("g_ttm[idx].barsHeld++")
 
 
 def test_no_new_protective_or_restrictive_defaults_introduced():

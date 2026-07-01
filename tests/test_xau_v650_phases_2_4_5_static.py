@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.5.0.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.6.0.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 SERVER = ROOT / "backend" / "server.py"
 
@@ -11,16 +11,13 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore").replace("\x00", "")
 
 
-def test_v650_release_identity_and_download_source_are_synced():
+def test_v650_fixes_are_still_present_and_backend_stays_synced():
+    # v6.6.0: the exact v6.5.0 identity assertions are obsolete now that the
+    # file has moved on to v6.6.0 (verified by its own dedicated test file).
+    # Root/backend sync is the enduring check kept from this file's purpose.
     ea = read(EA)
     backend = read(BACKEND_EA)
-
     assert ea == backend
-    assert "v6.5.0" in ea[:1500]
-    assert '#property version   "6.500"' in ea
-    assert '#define XAUAI_EA_VERSION "v6.5.0"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.5.0"' in ea
-    assert '#define XAUAI_BUILD_HASH "v650-growth-guard-ai-fallback-exit-arbiter-20260701"' in ea
 
 
 def test_bug5_growth_guard_tautology_fixed_and_scales_with_june_mode():
@@ -84,8 +81,9 @@ def test_phase4_unified_reversal_confirmation_exists_and_is_used():
     # must incorporate the per-ticket BOS/HTF flip via TTM's entry snapshot —
     # the exact capability gap the audit found in per-ticket gate calls
     assert "TTM_FindActiveSlot(ticket)" in fn_body
-    assert "entryBOS != 0 && g_smc_bos_dir == -entryBOS" in fn_body
-    assert "entryHTF != 0 && g_htfConsensusDir == -entryHTF" in fn_body
+    assert "int tradeDir = isBuy ? 1 : -1;" in fn_body
+    assert "XAU_NewHostileStructureFlip(entryBOS, g_smc_bos_dir, tradeDir)" in fn_body
+    assert "XAU_NewHostileStructureFlip(entryHTF, g_htfConsensusDir, tradeDir)" in fn_body
 
     # both duplicated call sites must now route through the canonical function
     assert "bool reversalConfirmedGiveback = XAU_ReversalConfirmed(ticket, isBuy, structureConfirmedBroken," in ea
