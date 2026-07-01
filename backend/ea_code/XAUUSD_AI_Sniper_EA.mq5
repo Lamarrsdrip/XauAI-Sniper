@@ -1,9 +1,19 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.22 — Let Trades Breathe / Early Loss Close Gate             |
+//|   v6.4.23 — Full BOS/HTF Entry-vs-Current Close Diagnostics        |
 //|            blocks panic-closing a loser before SL or real structure|
 //+------------------------------------------------------------------+
+// v6.4.23 CHANGES (2026-07-01) — FULL BOS/HTF ENTRY DIAGNOSTICS:
+//   MANUAL_CLOSE_DIAGNOSTIC previously printed only the CURRENT BOS/HTF
+//   values. Now looks up the position's TTM entry snapshot (read-only,
+//   TTM_FindActiveSlot — no side effects) so every ticket-level close
+//   attempt logs "BOS(entry->cur)" and "HTF(entry->cur)", plus falls back to
+//   the position's live TTM score when the caller didn't pass one. Basket-
+//   level closes (no single ticket) still show current-only, since a
+//   multi-position basket has no single entry snapshot. No exit-decision
+//   logic changed — this is diagnostic completeness only.
+//
 // v6.4.22 CHANGES (2026-07-01) — LET TRADES BREATHE / EARLY LOSS CLOSE GATE:
 //   Forensic audit of live logs (basket peak +$126.42, then PROFIT_FLOOR_SET ->
 //   GIVEBACK_WARNING -> GIVEBACK_LIMIT_TRIGGERED -> CONTINUATION_HOLD_REJECTED ->
@@ -686,16 +696,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.422"
-#property description "XAUUSD AI Sniper v6.4.22 - let trades breathe, early loss close gate"
+#property version   "6.423"
+#property description "XAUUSD AI Sniper v6.4.23 - let trades breathe, full BOS/HTF entry diagnostics"
 #property description "Trade Thesis Monitor, AI quality gate, safe close audit"
 #property description "Risk engine, exits, committee, EPF, basket protect preserved"
 #property description "SMC remains additive confirmation only"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.22"
-#define XAUAI_EA_VERSION_NUM "6.4.22"
-#define XAUAI_BUILD_HASH "v6422-let-trades-breathe-early-loss-gate-20260701"
+#define XAUAI_EA_VERSION "v6.4.23"
+#define XAUAI_EA_VERSION_NUM "6.4.23"
+#define XAUAI_BUILD_HASH "v6423-bos-htf-entry-diagnostics-20260701"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -3362,11 +3372,23 @@ bool XAU_GateEarlyLossClose(ulong ticket, bool isBuy, double openPx, double curP
    bool allowed = emergency || structureBroken;
    double givebackPct = (peakProfit > 0.0 && currentPnL < peakProfit)
                         ? ((peakProfit - currentPnL) / peakProfit) * 100.0 : 0.0;
-   string ttmTxt = (ttmScore < 0.0) ? "N/A" : DoubleToString(ttmScore, 1);
 
-   PrintFormat("MANUAL_CLOSE_DIAGNOSTIC #%I64u %s | entry=%.2f current=%.2f pnl=$%.2f peak=$%.2f giveback=%.0f%% | reason=%s BOS=%+d HTF=%+d TTM=%s structureBroken=%s emergency=%s InpAllowEarlyLossExit=%s | %s",
+   // Pull the entry BOS/HTF snapshot from TTM (tracks every live position by
+   // default) so the diagnostic can show entry->current, not just current.
+   int ttmIdxDiag = (ticket > 0) ? TTM_FindActiveSlot(ticket) : -1;
+   bool haveEntrySnap = (ttmIdxDiag >= 0);
+   string bosTxt = haveEntrySnap
+      ? StringFormat("%+d->%+d", g_ttm[ttmIdxDiag].entryBOS, g_smc_bos_dir)
+      : StringFormat("N/A->%+d", g_smc_bos_dir);
+   string htfTxt = haveEntrySnap
+      ? StringFormat("%+d->%+d", g_ttm[ttmIdxDiag].entryHTF, g_htfConsensusDir)
+      : StringFormat("N/A->%+d", g_htfConsensusDir);
+   double ttmScoreEff = (ttmScore >= 0.0) ? ttmScore : (haveEntrySnap ? g_ttm[ttmIdxDiag].liveScore : -1.0);
+   string ttmTxt = (ttmScoreEff < 0.0) ? "N/A" : DoubleToString(ttmScoreEff, 1);
+
+   PrintFormat("MANUAL_CLOSE_DIAGNOSTIC #%I64u %s | entry=%.2f current=%.2f pnl=$%.2f peak=$%.2f giveback=%.0f%% | reason=%s BOS(entry->cur)=%s HTF(entry->cur)=%s TTM=%s structureBroken=%s emergency=%s InpAllowEarlyLossExit=%s | %s",
                ticket, isBuy ? "BUY" : "SELL", openPx, curPrice, currentPnL, peakProfit,
-               givebackPct, reason, g_smc_bos_dir, g_htfConsensusDir, ttmTxt,
+               givebackPct, reason, bosTxt, htfTxt, ttmTxt,
                structureBroken ? "YES" : "NO", emergency ? "YES" : "NO",
                InpAllowEarlyLossExit ? "true" : "false",
                allowed ? "ALLOWED" : "BLOCKED");
@@ -13350,6 +13372,15 @@ int TTM_FindOrCreateSlot(ulong posId)
    for(int i = 0; i < TTM_MAX_POSITIONS; i++)
       if(!g_ttm[i].active) return i;
    return -1; // all slots full
+}
+
+// v6.4.23 — read-only lookup (no side effects) so the early-loss gate can pull
+// the entry BOS/HTF snapshot for ANY close attempt, not just TTM_EXIT itself.
+int TTM_FindActiveSlot(ulong posId)
+{
+   for(int i = 0; i < TTM_MAX_POSITIONS; i++)
+      if(g_ttm[i].active && g_ttm[i].posId == posId) return i;
+   return -1;
 }
 
 // Release a slot when position closes
