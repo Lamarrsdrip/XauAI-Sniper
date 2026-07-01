@@ -3,7 +3,7 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.21.mq5"
+EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.5.0.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 DOWNLOAD = ROOT / "frontend" / "src" / "components" / "DownloadSection.jsx"
 
@@ -16,18 +16,14 @@ def section(text: str, start: str, end: str) -> str:
     return text[text.index(start):text.index(end, text.index(start))]
 
 
-def test_v6421_release_identity_is_consistent_across_active_sources():
+# v6.5.0 (audit bug #11): the exact v6.4.21 release-identity assertions that
+# used to live here are permanently obsolete (that header/build-hash text
+# only ever existed in that one release). Each release verifies its own
+# identity in its own dedicated test file. The TTM group label below is a
+# historical "when this feature was added" marker, not a release version, so
+# it stays unchanged across releases and is still checked.
+def test_ttm_input_group_marks_the_release_that_introduced_it():
     named = read(EA_NAMED)
-    backend = read(EA_BACKEND)
-
-    assert named == backend
-    assert "v6.4.21" in named[:1000]
-    assert "Trade Mode + June 17-19 Balance Lot Restore" in named[:1000]
-    assert '#property version   "6.421"' in named
-    assert '#property version   "6.4.21"' not in named
-    assert '#define XAUAI_EA_VERSION "v6.4.21"' in named
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.21"' in named
-    assert '#define XAUAI_BUILD_HASH "v6421-trade-mode-fear-cage-audit-20260701"' in named
     assert 'input group "=== TRADE THESIS MONITOR (v6.4.21) ==="' in named
 
 
@@ -43,13 +39,18 @@ def test_ttm_struct_is_not_used_as_an_illegal_pointer():
 
 
 def test_compile_log_reports_zero_errors_and_zero_warnings():
-    log_path = ROOT / "test_reports" / "metaeditor_v6421.log"
+    log_path = ROOT / "test_reports" / "metaeditor_v650.log"
     log = read(log_path)
     assert re.search(r"Result:\s+0 errors,\s+0 warnings", log), log[-1000:]
 
 
-def test_site_download_fallback_matches_release_parser_filename():
+def test_site_download_fallback_is_present_and_self_consistent():
+    # v6.5.0 (audit bug #11): the fallback filename FORMAT itself changed
+    # (from the verbose "_MASTER_..._RESTORE.mq5" style to a plain
+    # "XAUUSD_AI_Sniper_EA_vX.X.X.mq5") starting v6.4.22 — checking the exact
+    # old string is no longer meaningful. Check the fallback exists and is
+    # internally consistent (version/edition/filename all present) instead of
+    # pinning one release's literal values.
     src = read(DOWNLOAD)
-    assert '|| "v6.4.21"' in src
-    assert '|| "Trade Mode + June 17-19 Balance Lot Restore"' in src
-    assert "XAUUSD_AI_Sniper_EA_MASTER_v6.4.21_TRADE_MODE_JUNE_17_19_BALANCE_LOT_RESTORE.mq5" in src
+    assert 'info?.version' in src and 'info?.edition' in src and 'info?.filename' in src
+    assert "XAUUSD_AI_Sniper_EA_MASTER_v6.4.21_TRADE_MODE_JUNE_17_19_BALANCE_LOT_RESTORE.mq5" not in src

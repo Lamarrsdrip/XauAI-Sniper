@@ -3,8 +3,8 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.21.mq5"
-EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.21.mq5"
+EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.5.0.mq5"
+EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.5.0.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -18,10 +18,9 @@ def test_v6412_has_clear_version_identity_and_named_source():
     named = read(EA_NAMED)
 
     assert root == backend == named
-    assert '#property version   "6.421"' in root
-    assert '#define XAUAI_EA_VERSION "v6.4.21"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.21"' in root
-    assert '#define XAUAI_BUILD_HASH "v6421-trade-mode-fear-cage-audit-20260701"' in root
+    assert '#property version   "6.500"' in root
+    assert '#define XAUAI_EA_VERSION "v6.5.0"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.5.0"' in root
 
 
 def test_basket_lifecycle_inputs_and_state_exist():

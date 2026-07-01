@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.4.25.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.5.0.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -10,16 +10,15 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore").replace("\x00", "")
 
 
-def test_v6425_release_identity_and_download_source_are_synced():
+def test_v6425_fixes_are_still_present_and_backend_stays_synced():
+    # v6.5.0 (audit bug #11): the original exact v6.4.25 identity assertions
+    # are obsolete now that the file has moved on to v6.5.0 (verified by its
+    # own dedicated test file). What still matters from this file's original
+    # purpose — that root and backend/ea_code never drift apart — is kept;
+    # the four Phase-1 bug-fix assertions below are the enduring value.
     ea = read(EA)
     backend = read(BACKEND_EA)
-
     assert ea == backend
-    assert "v6.4.25" in ea[:1500]
-    assert '#property version   "6.425"' in ea
-    assert '#define XAUAI_EA_VERSION "v6.4.25"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.4.25"' in ea
-    assert '#define XAUAI_BUILD_HASH "v6425-phase1-audit-exit-defects-20260701"' in ea
 
 
 def test_bug1_phantom_basket_peak_only_reconstructs_from_closed_bars():

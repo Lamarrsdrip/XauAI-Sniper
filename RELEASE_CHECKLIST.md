@@ -5,6 +5,48 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.5.0 — 2026-07-01 — Phases 2+4+5 of the full ecosystem audit (bundled)
+
+### EA Compile
+- [x] EA internal version: `#property version "6.500"`
+- [x] EA header comment: v6.5.0
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.5.0.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v650.log`)
+
+### Scope discipline
+- [x] Only Phases 2, 4, 5 from the ecosystem audit are included, bundled into one release per explicit owner request (originally planned as v6.4.26/v6.5.0/v6.5.1). Phase 3 (threshold calibration) is explicitly excluded — it requires 2+ weeks of real live-trading data that cannot be substituted.
+- [x] No new fear/protective layer added; no entry made stricter; no lot size reduced; no B-grade blocking reintroduced; no trade-frequency reduction. See `test_reports/xau_v6_5_0_phases_2_4_5_2026-07-01.md` for the explicit justification per change.
+
+### Bugs Fixed / Consolidated This Release
+5. Growth Guard hard-loss tautology + June-mode SL scaling — CRITICAL
+8. AI fallback confidence=50 masquerading as real judgment — HIGH
+6. Remaining mechanical basket exits (SECOND_CHANCE/CYCLE_DECAY) — MEDIUM-HIGH
+   Phase 4: unified `XAU_ReversalConfirmed()` — consolidates 4 duplicate structure definitions into 1, adds per-ticket BOS/HTF flip detection
+9. Platform security hardening (admin password, JWT secret, cookie, CORS) + dead-code removal + README/test-suite staleness repair — see report
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.5.0.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` + `backend/server.py` ea_version
+- [ ] GitHub main branch pushed
+
+### Website / Frontend
+- [x] Footer.jsx, AdminPortal.jsx, FeaturesSection.jsx, DownloadSection.jsx, CloudLanding.jsx, CloudDashboard.jsx: v6.5.0 (the latter two had been missed since v6.4.22 — now in the standard distribution list)
+
+### Testing Before Live
+- [x] New regression suite `tests/test_xau_v650_phases_2_4_5_static.py` — 8/8 passed
+- [x] Full suite `tests/` — 126/126 passed (repaired from 71 failing before this release)
+- [ ] MT5 journal: `GROWTH_HARD_LOSS_CAP_JUNE_ADJUST` appears for June-mode trades, cap now matches real SL risk
+- [ ] MT5 journal: `NO-AI-ANSWER` appears instead of `REDUCE` when AI genuinely didn't respond
+- [ ] MT5 journal: `SECOND_CHANCE_HOLD_CONTINUING BASKET` appears on a recovering-but-not-exhausted basket instead of an automatic close
+- [ ] `/api/download/info` returns version v6.5.0
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — none of v6.4.22 through v6.5.0 has run live long enough to validate; per the audit's Phase 0 recommendation, run one build on demo long enough to actually observe the new diagnostic lines before going live
+
+---
+
 ## v6.4.25 — 2026-07-01 — Phase 1 of the full ecosystem audit
 
 ### EA Compile

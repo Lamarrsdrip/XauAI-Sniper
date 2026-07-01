@@ -132,3 +132,4 @@ credentials.json
 *.pem
 *.key
 .credentials
+backend/.jwt_secret

@@ -27,7 +27,35 @@ db = client[os.environ['DB_NAME']]
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
-JWT_SECRET = os.environ.get('JWT_SECRET', secrets.token_hex(32))
+def _load_or_create_jwt_secret() -> str:
+    """v6.5.0 (audit bug #9): a fresh secrets.token_hex(32) on every process
+    start invalidates every session on restart and, on a multi-worker
+    deployment, makes tokens minted by one worker invalid on another — and
+    the Fernet key derived from this secret makes any data encrypted with it
+    unrecoverable after a restart if the env var was never set. Persist a
+    generated secret to a local file so restarts/workers on the same machine
+    share it, while still preferring the JWT_SECRET env var when set (the
+    only option that also works across separate machines)."""
+    env_secret = os.environ.get('JWT_SECRET')
+    if env_secret:
+        return env_secret
+    secret_file = ROOT_DIR / '.jwt_secret'
+    try:
+        if secret_file.exists():
+            return secret_file.read_text(encoding='utf-8').strip()
+        new_secret = secrets.token_hex(32)
+        secret_file.write_text(new_secret, encoding='utf-8')
+        logging.getLogger(__name__).warning(
+            f"JWT_SECRET env var not set — generated and persisted a secret to {secret_file}. "
+            "Set JWT_SECRET explicitly for multi-machine deployments."
+        )
+        return new_secret
+    except OSError:
+        # can't persist (read-only filesystem, etc.) — fall back to the old
+        # per-process behavior rather than crashing startup.
+        return secrets.token_hex(32)
+
+JWT_SECRET = _load_or_create_jwt_secret()
 JWT_ALGORITHM = "HS256"
 PAYSTACK_BASE_URL = "https://api.paystack.co"
 LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
@@ -452,7 +480,13 @@ async def login(req: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = create_access_token(str(user["_id"]), user["email"])
     response = JSONResponse(content={"email": user["email"], "name": user.get("name","Admin"), "role": user.get("role","admin"), "token": token})
-    response.set_cookie(key="access_token", value=token, httponly=True, secure=False, samesite="lax", max_age=86400, path="/")
+    # v6.5.0 (audit bug #9): secure=False meant the admin session cookie could
+    # be sent over plain HTTP, exposing it to network interception. Default to
+    # secure=True (safe for the production HTTPS deployment); COOKIE_SECURE=false
+    # is available for local HTTP-only development.
+    response.set_cookie(key="access_token", value=token, httponly=True,
+                        secure=os.environ.get('COOKIE_SECURE', 'true').lower() != 'false',
+                        samesite="lax", max_age=86400, path="/")
     return response
 
 @api_router.get("/auth/me")
@@ -1563,11 +1597,26 @@ async def admin_monthly_report():
 async def startup():
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@aisniper.com").lower()
     admin_password_env = os.environ.get("ADMIN_PASSWORD")
-    admin_password = admin_password_env or "Admin@2026!"
+    # v6.5.0 (audit bug #9): a hardcoded fallback password ("Admin@2026!") sat
+    # in this file on a public GitHub repo — anyone who ever read the source
+    # knew the admin login for any deployment that hadn't set ADMIN_PASSWORD.
+    # Admin access grants master-EA download, Paystack/SMTP settings, and
+    # license operations, so no fallback should ever be a known constant.
+    # If ADMIN_PASSWORD isn't set, generate a random one-time password and
+    # log it (visible only in server logs) instead of a public default.
+    generated_password = None
+    if admin_password_env:
+        admin_password = admin_password_env
+    else:
+        generated_password = secrets.token_urlsafe(18)
+        admin_password = generated_password
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({"email": admin_email, "password_hash": hash_password(admin_password), "name": "Admin", "role": "admin", "created_at": datetime.now(timezone.utc).isoformat()})
-        logger.info(f"Admin seeded: {admin_email}")
+        if generated_password:
+            logger.warning(f"Admin seeded: {admin_email} — ADMIN_PASSWORD env var not set, generated one-time password: {generated_password} (set ADMIN_PASSWORD to avoid a new random password on next restart)")
+        else:
+            logger.info(f"Admin seeded: {admin_email}")
     elif admin_password_env and not verify_password(admin_password, existing["password_hash"]):
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
         logger.info("Admin password updated")
@@ -1829,7 +1878,7 @@ class TradeMemoryRecord(BaseModel):
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.4.25"
+    ea_version: str = "v6.5.0"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"
@@ -2331,8 +2380,23 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             target = gpt.get("target", "")
             sl_adj, tp_adj = gpt["sl_adjust"], gpt["tp_adjust"]
         else:
-            action, confidence = "SKIP", 50
-            reason = f"Both SKIP/unavailable (claude_ok={c_ok}, gpt_ok={g_ok})"
+            action = "SKIP"
+            if c_ok and g_ok:
+                # v6.5.0 (audit bug #8): both providers genuinely answered and
+                # both independently said SKIP — a real (if unenthusiastic)
+                # joint judgment, worth a real confidence value.
+                confidence = 50
+                reason = f"Both AIs genuinely say SKIP (claude={c_conf}%, gpt={g_conf}%)"
+            else:
+                # At least one provider never actually answered (unavailable
+                # or errored) — this is NOT a judgment, it's a fallback. The
+                # old code gave this the same confidence=50 as a real dual-SKIP
+                # verdict, making it indistinguishable downstream: 88 hard
+                # entry vetoes fired in one day (2026-06-30) off this constant,
+                # not an actual AI opinion. confidence=0 lets the EA tell
+                # "AI said no" from "AI didn't answer."
+                confidence = 0
+                reason = f"Both SKIP/unavailable (claude_ok={c_ok}, gpt_ok={g_ok}) — no real AI judgment made"
             thesis = (claude.get("thesis","") or gpt.get("thesis","") or "")[:400]
             bearish_case = ""; skip_if = ""; invalidation = ""; target = ""
             sl_adj, tp_adj = 0, 0
@@ -2389,7 +2453,10 @@ async def ai_analyze_market(req: AIAnalysisRequest):
         return result
     except Exception as e:
         logger.error(f"AI analyze dual error: {e}")
-        return {"action": "SKIP", "confidence": 50, "reason": f"AI error: {str(e)[:60]}",
+        # v6.5.0 (audit bug #8): a hard exception means NO provider answered at
+        # all — confidence=0, not 50, so this can never be mistaken for a real
+        # (if low-confidence) AI opinion downstream.
+        return {"action": "SKIP", "confidence": 0, "reason": f"AI error: {str(e)[:60]} — no real AI judgment made",
                 "thesis": "", "bearish_case": "", "skip_if": "", "invalidation": "", "target": "",
                 "claude": None, "gpt": None, "sl_adjust": 0, "tp_adjust": 0,
                 "consensus_source": "none", "ai_status": "Provider Unavailable",
@@ -5707,7 +5774,13 @@ app.include_router(api_router)
 async def root_health():
     return {"status": "ok"}
 
-app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','), allow_methods=["*"], allow_headers=["*"])
+# v6.5.0 (audit bug #9): allow_credentials=True with a wildcard '*' origin
+# (the default when CORS_ORIGINS is unset) is a browser-rejected but still
+# risky combination to declare server-side. Only allow credentialed CORS
+# once specific origins are actually configured.
+_cors_origins = os.environ.get('CORS_ORIGINS', '*').split(',')
+app.add_middleware(CORSMiddleware, allow_credentials=(_cors_origins != ['*']),
+                   allow_origins=_cors_origins, allow_methods=["*"], allow_headers=["*"])
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

@@ -1,9 +1,81 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.4.25 — Phase 1: Four Audit-Proven Exit Defects Fixed          |
-//|            no new protection layers — fixes only, evidence-based  |
+//|   v6.5.0 — Phases 2+4+5: Growth Guard, Honest AI, Exit Arbiter     |
+//|            no new protection layers — fixes + consolidation only  |
 //+------------------------------------------------------------------+
+// v6.5.0 CHANGES (2026-07-01) — PHASES 2, 4, 5 OF THE FULL ECOSYSTEM
+// AUDIT, BUNDLED INTO ONE RELEASE PER EXPLICIT OWNER REQUEST (see
+// test_reports/xau_v6_5_0_phases_2_4_5_2026-07-01.md for full detail).
+// Phase 3 (threshold calibration) is NOT included — it requires 2+ weeks of
+// real live-trading data that does not exist yet and cannot be substituted.
+// No new protection layers, no stricter entries, no lot reductions, no
+// B-grade blocking, no reduced trade frequency in any of the below.
+//
+//   PHASE 2 — reconcile Growth Guard with June-mode sizing, honest AI:
+//   5. GROWTH_HARD_LOSS_EXIT TAUTOLOGY (bug #5): the cap's "already tight
+//      enough to enforce without evidence" clause compared maxTradeLossUSD
+//      to the SAME 1.5% its own default equals, making it always true. In
+//      JUNE_16_19_BALANCE_MODE this created a hidden ~$45 structure-blind
+//      stop regardless of the trade's real SL risk (confirmed live: a
+//      +$77.91 winner survived by ~$2). Fixed the tautology and added
+//      InpGrowthJuneModeCapSLMultiple so the cap can never be tighter than
+//      the trade's actual SL-distance risk in June mode — the real broker
+//      SL becomes the operative stop, as intended.
+//   8. AI FALLBACK CONFIDENCE=50 (bug #8): backend returned confidence=50
+//      for BOTH a genuine dual-AI SKIP verdict AND a provider-unavailable/
+//      error fallback, making a missing opinion indistinguishable from a
+//      real one (88 hard entry vetoes fired in one day off the fallback
+//      constant). Backend now returns confidence=0 only when no provider
+//      actually answered; EA no longer applies the B-grade lot-halving when
+//      confidence=0 — no penalty for an AI that never weighed in.
+//   6. REMAINING MECHANICAL BASKET EXITS (bug #6): SECOND_CHANCE_PROFIT_EXIT
+//      had no gate at all, and both CYCLE_DECAY_EXIT branches auto-allowed
+//      on a still-profitable basket. All three now require confirmed
+//      reversal or genuine repeat-breach evidence, same as every other
+//      giveback-triggered close since v6.4.24.
+//
+//   PHASE 4 — unified Exit Arbiter (scoped to the CLOSE decision layer):
+//   New XAU_ReversalConfirmed() consolidates what the audit found as four
+//   different, sometimes-disagreeing "structure broken" definitions into
+//   one canonical check (M5 confirmed break, strong EMA+RSI+momentum
+//   against, or a per-ticket BOS/HTF flip since entry via TTM's snapshot —
+//   the same flip logic the basket-level gate got in v6.4.25, now also
+//   available per-ticket for the first time). SMART_EXIT_GIVEBACK and
+//   SMART_EXIT_TREND now route through it instead of each computing its own
+//   ad hoc combination. Scope note: this unifies the close DECISION, not
+//   the independent SL-trailing math of AMPL/EV/A+ Shield/Chandelier —
+//   those remain separate reversible ratchets, which is fine; the actual
+//   problem was competing, unproven FULL CLOSE decisions, not multiple
+//   stops getting tighter.
+//
+//   PHASE 5 — platform cleanup and security hardening:
+//   - Removed the hardcoded "Admin@2026!" fallback admin password (was
+//     sitting in plaintext on a public repo) — generates and logs a random
+//     one-time password if ADMIN_PASSWORD isn't set.
+//   - JWT_SECRET now persists to backend/.jwt_secret (gitignored) instead of
+//     regenerating every process restart and invalidating every session.
+//   - Admin session cookie: secure=False -> secure=True by default.
+//   - CORS: allow_credentials no longer true alongside a wildcard '*' origin.
+//   - Deleted confirmed-dead code: PinManagerSection.jsx (unmounted),
+//     backend_test.py (superseded standalone script from "Iteration 9").
+//   - README no longer hardcodes a version number (was stale at v6.4.21
+//     while backend served v6.4.24) — points at the live /api/download/info
+//     source of truth instead.
+//   - Fixed two site components (CloudLanding.jsx, CloudDashboard.jsx) that
+//     had been missed in every version bump since v6.4.22 and still showed
+//     v6.4.21 — caught by making the stale-label regression test dynamic
+//     instead of hardcoded, which also fixed the test itself going stale.
+//   - Repaired the regression suite: 71 of ~119 tests were failing before
+//     this release, entirely because of hardcoded references to EA
+//     filenames/version strings from superseded releases (the exact test-
+//     rot the audit flagged as bug #11). Repointed working tests at the
+//     current file, removed genuinely obsolete release-specific assertions
+//     (each superseded by its own release's dedicated test file), and made
+//     the generic release-identity tests derive the current version from
+//     the EA's own macro instead of a hardcoded literal, so this class of
+//     staleness cannot recur on future version bumps. Suite is now 118/118.
+//
 // v6.4.25 CHANGES (2026-07-01) — PHASE 1 OF THE FULL ECOSYSTEM AUDIT
 // (see test_reports/xau_v6_4_25_phase1_exit_defects_2026-07-01.md):
 // Fixes only the four CRITICAL/HIGH defects the audit proved with live-log
@@ -776,16 +848,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.425"
-#property description "XAUUSD AI Sniper v6.4.25 - Phase 1 audit fixes: phantom peak, flip-based structure gate, basket soft-lock, TTM per-bar"
+#property version   "6.500"
+#property description "XAUUSD AI Sniper v6.5.0 - Phases 2+4+5: Growth Guard/June-mode fix, honest AI fallback, unified Exit Arbiter, platform hardening"
 #property description "Trade Thesis Monitor, AI quality gate, safe close audit"
 #property description "Risk engine, exits, committee, EPF, basket protect preserved"
 #property description "SMC remains additive confirmation only"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.4.25"
-#define XAUAI_EA_VERSION_NUM "6.4.25"
-#define XAUAI_BUILD_HASH "v6425-phase1-audit-exit-defects-20260701"
+#define XAUAI_EA_VERSION "v6.5.0"
+#define XAUAI_EA_VERSION_NUM "6.5.0"
+#define XAUAI_BUILD_HASH "v650-growth-guard-ai-fallback-exit-arbiter-20260701"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1157,6 +1229,7 @@ input double InpDailyLossLimit = 3.0;      // v6.4.4: Adaptive Recovery Mode tri
 input group "=== EQUITY GROWTH GUARD (v6.4.12 — real XAU risk + loss containment) ==="
 input bool   InpGrowthGuardEnable                 = true;  // Master switch for v6.4.12 equity growth controls
 input double InpGrowthMaxTradeLossEquityPct       = 1.50;  // Max actual-risk room per new trade and hard live-loss cap
+input double InpGrowthJuneModeCapSLMultiple       = 1.0;   // v6.5.0 (audit bug #5): in JUNE_16_19_BALANCE_MODE, GROWTH_HARD_LOSS_EXIT's cap is raised to at least this multiple of the trade's REAL SL-distance risk, so the flat equity% backstop (sized for REAL_RISK_MODE) can no longer cut a June-mode trade at a fraction of its actual SL — the real broker SL becomes the operative stop, as intended
 input double InpGrowthMaxBasketLossEquityPct      = 2.00;  // Max combined open XAU risk/loss before blocking or flattening
 input int    InpGrowthBadEntryMaxMinutes          = 0;     // 0 disables fast-failure exits; gold needs room for fake pushes
 input double InpGrowthBadEntryAdverseATR          = 0.70;  // Adverse move in ATR that marks a wrong fast entry when enabled
@@ -3503,6 +3576,41 @@ bool XAU_GateEarlyLossClose(ulong ticket, bool isBuy, double openPx, double curP
    return allowed;
 }
 
+//+------------------------------------------------------------------+
+//| v6.5.0 — UNIFIED REVERSAL CONFIRMATION (Exit Arbiter, part 1)    |
+//|   The ecosystem audit found FOUR different, sometimes-disagreeing|
+//|   definitions of "structure broken" scattered across the exit    |
+//|   engine (M5 swing break, SMC H1 BOS, TTM entry-vs-current flip, |
+//|   and ad hoc EMA/RSI/momentum combos computed inline at each     |
+//|   close-decision site). This is the single canonical check every |
+//|   per-ticket close-decision gate should use instead of each one  |
+//|   recomputing its own combination. It is the UNION of what the   |
+//|   prior per-site checks already accepted (so no site loses        |
+//|   evidence it used to accept) plus the BOS/HTF flip-since-entry  |
+//|   check that only the basket-level gate (XAU_BasketStructureBroken,|
+//|   v6.4.25) and TTM's own internal logic had — per-ticket gate     |
+//|   calls never used it, which is exactly the gap that made the    |
+//|   flagship v6.4.22 incident possible in the first place.         |
+//+------------------------------------------------------------------+
+bool XAU_ReversalConfirmed(ulong ticket, bool isBuy, bool structureConfirmedBroken,
+                           bool emaAgainst, bool rsiAgainst, int momentumScore,
+                           bool trendAligned)
+{
+   if(structureConfirmedBroken) return true;
+   if(emaAgainst && rsiAgainst && momentumScore <= 1) return true;
+   if(!trendAligned && momentumScore <= 1) return true;
+
+   int ttmIdxRC = (ticket > 0) ? TTM_FindActiveSlot(ticket) : -1;
+   if(ttmIdxRC >= 0)
+   {
+      int entryBOS = g_ttm[ttmIdxRC].entryBOS;
+      int entryHTF = g_ttm[ttmIdxRC].entryHTF;
+      if(entryBOS != 0 && g_smc_bos_dir == -entryBOS) return true;
+      if(entryHTF != 0 && g_htfConsensusDir == -entryHTF) return true;
+   }
+   return false;
+}
+
 bool XAU_ThesisHoldRunnerAllowed(ulong ticket, bool isBuy, bool runnerClean,
                                  int momentumScore, bool trendAligned,
                                  bool structureConfirmedBroken, bool emaAgainst,
@@ -3819,12 +3927,12 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                                        XAU_ContextAuditTag(contextState),
                                        peak, floorUSD, profitUSD, givebackPct,
                                        runnerClean ? "Y" : "N");
-         // v6.4.24: while still profitable, a giveback%/context breach alone (e.g.
-         // WEAK_TRADE context capping allowed giveback at 35%) is not proof of real
-         // reversal — require structure OR a genuinely confirmed EMA+RSI+momentum
-         // reversal, same bar as EARLY_CONVICTION_CUT uses for losers.
-         bool reversalConfirmedGiveback = structureConfirmedBroken ||
-                                          (emaAgainst && rsiAgainst && momentumScore <= 1);
+         // v6.4.24/v6.5.0: while still profitable, a giveback%/context breach
+         // alone (e.g. WEAK_TRADE context capping allowed giveback at 35%) is
+         // not proof of real reversal — route through the single canonical
+         // reversal check (Exit Arbiter) instead of an ad hoc combination.
+         bool reversalConfirmedGiveback = XAU_ReversalConfirmed(ticket, isBuy, structureConfirmedBroken,
+                                                                emaAgainst, rsiAgainst, momentumScore, trendAligned);
          if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profitUSD, peak,
                                     "SMART_EXIT_GIVEBACK", reversalConfirmedGiveback, false,
                                     -1.0, true))
@@ -3992,11 +4100,13 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
       PrintFormat("CONTINUATION_EXIT_PROFIT_PROTECTED #%I64u %s | closing because earned floor/context was breached; trend=%s momentum=%d/5 structBroken=%s",
                   ticket, isBuy ? "BUY" : "SELL",
                   trendAligned ? "Y" : "N", momentumScore, structureConfirmedBroken ? "Y" : "N");
-      // v6.4.24: floor/giveback breach while still profitable is not proof of
-      // reversal by itself — require structure break or a genuinely weak/against
-      // trend+momentum reading before fully closing instead of trusting the
-      // floor SL already placed.
-      bool reversalConfirmedTrend = structureConfirmedBroken || (!trendAligned && momentumScore <= 1);
+      // v6.4.24/v6.5.0: floor/giveback breach while still profitable is not
+      // proof of reversal by itself — route through the same canonical
+      // reversal check as SMART_EXIT_GIVEBACK (Exit Arbiter). This function
+      // doesn't track EMA/RSI locally, so pass false/false for those (same as
+      // before); the new BOS/HTF flip check still applies on top.
+      bool reversalConfirmedTrend = XAU_ReversalConfirmed(ticket, isBuy, structureConfirmedBroken,
+                                                           false, false, momentumScore, trendAligned);
       if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
                                  "SMART_EXIT_TREND", reversalConfirmedTrend, false,
                                  -1.0, true))
@@ -10106,11 +10216,27 @@ void OnTick()
                return;
                }
             }
-            // B-grade: AI SKIP but no confidence score — reduce size, don't block
-            aiVerdictStr = "REDUCE";
-            sizeMulti = MathMin(sizeMulti, 0.50);
-            Print("AI DIRECTOR: REDUCE (AI SKIP/no confidence) — lot x0.50");
-            g_aiLastVerdict = "REDUCE"; g_aiLastConfidence = lastAIConfidence;
+            // v6.5.0 (audit bug #8): backend now returns confidence=0 specifically
+            // when NO provider actually answered (unavailable/error/budget-skip) —
+            // that's not an AI opinion, it's a missing one, and previously got the
+            // same lot-halving treatment as a genuine (if modest) confidence=50
+            // dual-SKIP verdict. 88 hard vetoes fired in one day off this exact
+            // fallback constant before the backend fix; this is the matching EA
+            // side — don't penalize lot size for an AI that never weighed in.
+            if(lastAIConfidence > 0)
+            {
+               // B-grade: AI genuinely evaluated and said SKIP — reduce size, don't block
+               aiVerdictStr = "REDUCE";
+               sizeMulti = MathMin(sizeMulti, 0.50);
+               Print("AI DIRECTOR: REDUCE (AI SKIP, real confidence=", lastAIConfidence, "%) — lot x0.50");
+               g_aiLastVerdict = "REDUCE"; g_aiLastConfidence = lastAIConfidence;
+            }
+            else
+            {
+               aiVerdictStr = "NO-AI-ANSWER";
+               Print("AI DIRECTOR: NO-AI-ANSWER (SKIP with confidence=0 — no provider actually answered) — proceeding at full size, no penalty for a missing opinion");
+               g_aiLastVerdict = "NO-AI-ANSWER"; g_aiLastConfidence = lastAIConfidence;
+            }
          }
          else if(aiConfirms)
          {
@@ -10787,6 +10913,28 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
    double maxTradeLossUSD = equity * InpGrowthMaxTradeLossEquityPct / 100.0;
    double maxBasketLossUSD = equity * InpGrowthMaxBasketLossEquityPct / 100.0;
    string dirStr = isBuy ? "BUY" : "SELL";
+
+   // v6.5.0 (audit bug #5): JUNE_16_19_BALANCE_MODE sizes lots off balance/grade,
+   // not the real SL distance — a 0.21-lot trade can carry ~$489 of real SL risk
+   // while this flat equity% cap (built for REAL_RISK_MODE, where lot size is
+   // already SL-risk-derived) defaults to ~$45, a structure-blind stop at under
+   // 10% of the trade's actual SL. Confirmed live: a +$77.91 winner survived this
+   // cap by about $2 (worstFloating -$43.68 vs a $45.70 cap) before running to
+   // profit. Raise the cap to at least the trade's real SL-distance risk in June
+   // mode so the broker SL — not a hidden tighter EA-side cap — is the real stop.
+   // REAL_RISK_MODE is unaffected: its lots are already sized so this is a no-op.
+   if(InpLotSizingMode == JUNE_16_19_BALANCE_MODE && slDist > 0.0 && lotsOpen > 0.0)
+   {
+      double realSLRiskUSD = RiskPerLotForDistance(slDist) * lotsOpen;
+      double juneFloorUSD = realSLRiskUSD * MathMax(0.0, InpGrowthJuneModeCapSLMultiple);
+      if(juneFloorUSD > maxTradeLossUSD)
+      {
+         PrintFormat("GROWTH_HARD_LOSS_CAP_JUNE_ADJUST #%I64u %s | flat equity cap=$%.2f (%.2f%%) < real SL risk=$%.2f (x%.2f) | raising cap to $%.2f",
+                     ticket, dirStr, maxTradeLossUSD, InpGrowthMaxTradeLossEquityPct,
+                     realSLRiskUSD, InpGrowthJuneModeCapSLMultiple, juneFloorUSD);
+         maxTradeLossUSD = juneFloorUSD;
+      }
+   }
    bool thesisFailing = (structureConfirmed || (emaAgainst && rsiAgainst) ||
                          (!trendAligned && momentumScore <= 2));
 
@@ -10818,7 +10966,16 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
    {
       lastExitReason = StringFormat("GROWTH_HARD_LOSS_EXIT | %s loss $%.2f exceeded %.2f%% equity cap $%.2f",
                                     dirStr, profit, InpGrowthMaxTradeLossEquityPct, maxTradeLossUSD);
-      if(thesisFailing || (badEntryGuardOn && minsOpen <= InpGrowthBadEntryMaxMinutes) || maxTradeLossUSD <= equity * 0.015)
+      // v6.5.0 (audit bug #5): this used to compare maxTradeLossUSD against
+      // equity*0.015 — the SAME 1.5% that InpGrowthMaxTradeLossEquityPct
+      // defaults to, making the clause always true by construction and the
+      // whole OR unconditional regardless of thesisFailing/badEntryGuardOn.
+      // Compare against a threshold genuinely TIGHTER than the default so
+      // this only fires without extra evidence when someone has explicitly
+      // configured an unusually conservative cap; otherwise require the same
+      // corroboration (thesis failing, or still inside the early-adverse
+      // window) as every other manual close.
+      if(thesisFailing || (badEntryGuardOn && minsOpen <= InpGrowthBadEntryMaxMinutes) || maxTradeLossUSD <= equity * 0.008)
       {
          PrintFormat("GROWTH_HARD_LOSS_EXIT #%I64u %s | loss=$%.2f cap=$%.2f thesisFailing=%s mins=%d lots=%.2f",
                      ticket, dirStr, profit, maxTradeLossUSD,
@@ -12334,6 +12491,24 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
       if(g_basketProfitLossCycles >= InpLifecycleMaxProfitLossCycles)
          PrintFormat("CYCLE_DECAY_EXIT BASKET | cycles=%d max=%d; taking recovery instead of waiting for another reversal",
                      g_basketProfitLossCycles, InpLifecycleMaxProfitLossCycles);
+      // v6.5.0 (audit bug #6): this closed unconditionally the instant a
+      // recovering basket crossed a fairly modest bar (max($35, 20% of
+      // peak)) — mechanically cutting what could be a genuine continuation,
+      // no different in kind from any other giveback-style close. A basket
+      // that already exhausted its cycle budget or shows a confirmed
+      // reversal has earned the bank-now decision; otherwise let it keep
+      // running instead of assuming a second wobble is coming.
+      int basketDirSC = XAU_BasketDominantDirection();
+      bool secondChanceEvidence = (g_basketProfitLossCycles >= InpLifecycleMaxProfitLossCycles) ||
+                                  XAU_BasketStructureBroken(basketDirSC);
+      if(!XAU_GateEarlyLossClose(0, basketDirSC >= 0, 0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
+                                 totalPnL, g_basketPeakUSD, "SECOND_CHANCE_PROFIT_EXIT BASKET",
+                                 secondChanceEvidence, false, -1.0, true))
+      {
+         PrintFormat("SECOND_CHANCE_HOLD_CONTINUING BASKET | recovered to $%.2f, cycles=%d/%d, no confirmed reversal; letting it run instead of banking a modest recovery",
+                     totalPnL, g_basketProfitLossCycles, InpLifecycleMaxProfitLossCycles);
+         return false;
+      }
       lastExitReason = StringFormat("SECOND_CHANCE_PROFIT_EXIT BASKET | peak $%.2f recovered $%.2f", g_basketPeakUSD, totalPnL);
       CloseAll(lastExitReason);
       PG_OnBasketWin();
@@ -12348,10 +12523,13 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
       PrintFormat("CONTINUATION_HOLD_REJECTED BASKET | repeated profit/loss cycling means continuation trust decayed");
       lastExitReason = StringFormat("CYCLE_DECAY_EXIT BASKET | cycles %d after peak $%.2f",
                                     g_basketProfitLossCycles, g_basketPeakUSD);
+      // v6.5.0 (audit bug #6): pass isGivebackTrigger=true so a still-
+      // profitable basket (totalPnL>0) isn't auto-allowed to close just
+      // because it cycled — it needs the same reversal proof a loser needs.
       int basketDirCD1 = XAU_BasketDominantDirection();
       if(XAU_GateEarlyLossClose(0, basketDirCD1 >= 0, 0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
                                 totalPnL, g_basketPeakUSD, "CYCLE_DECAY_EXIT BASKET",
-                                XAU_BasketStructureBroken(basketDirCD1), false))
+                                XAU_BasketStructureBroken(basketDirCD1), false, -1.0, true))
       {
          CloseAll(lastExitReason);
          XAU_ResetBasketProtectionState();
@@ -12368,10 +12546,11 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
       PrintFormat("CONTINUATION_HOLD_REJECTED BASKET | no indefinite hold after proven peak and failed recovery cycle");
       lastExitReason = StringFormat("CYCLE_DECAY_EXIT BASKET | max hold %dmin after peak $%.2f",
                                     InpLifecycleMaxMinutesAfterPeak, g_basketPeakUSD);
+      // v6.5.0 (audit bug #6): same isGivebackTrigger=true fix as above.
       int basketDirCD2 = XAU_BasketDominantDirection();
       if(XAU_GateEarlyLossClose(0, basketDirCD2 >= 0, 0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
                                 totalPnL, g_basketPeakUSD, "CYCLE_DECAY_EXIT BASKET",
-                                XAU_BasketStructureBroken(basketDirCD2), false))
+                                XAU_BasketStructureBroken(basketDirCD2), false, -1.0, true))
       {
          CloseAll(lastExitReason);
          XAU_ResetBasketProtectionState();
