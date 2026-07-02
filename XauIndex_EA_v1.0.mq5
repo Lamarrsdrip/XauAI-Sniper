@@ -1,8 +1,9 @@
 //+------------------------------------------------------------------+
 //|                                     XauIndex_EA.mq5              |
 //|                                     XauIndex — Gold + Index Edition|
-//|   v1.0.0 — forked from XauAI Sniper v1.0.0's Market Mode work.     |
-//|   A DIFFERENT PRODUCT, on purpose: XauAI Sniper (separate lineage, |
+//|   v1.0.0 — Market Mode Architecture, Gold + Index Auto-Detection   |
+//|   A DIFFERENT PRODUCT, on purpose: forked from XauAI Sniper's      |
+//|   v6.7.0 Market Mode work. XauAI Sniper (separate lineage,         |
 //|   maintained separately) stays pure gold. XauIndex is the one with |
 //|   Gold+Index market detection built in. Versioned independently    |
 //|   from 1.0.0 so the two are never confused with one another.       |
