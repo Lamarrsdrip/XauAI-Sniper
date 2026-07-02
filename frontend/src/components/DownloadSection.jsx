@@ -165,7 +165,7 @@ export default function DownloadSection({ api }) {
                 <ChartLineUp size={12} weight="bold" /> A different bot
               </span>
               <h2 className="mt-4 max-w-2xl font-heading text-2xl font-semibold tracking-tight sm:text-4xl">
-                XauIndex {xiLoading ? "" : (xiInfo?.version || "v1.0.0")} — Gold + Index, one EA.
+                XauIndex {xiLoading ? "" : (xiInfo?.version || "v2.0.0")} — Gold + Index, one EA.
               </h2>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
                 Not the same bot as above. XauAI Sniper (Gold-only, {version}) stays pure gold, maintained
@@ -188,7 +188,7 @@ export default function DownloadSection({ api }) {
                   {xiLoading
                     ? <p className="mt-2 flex items-center gap-2 text-sm text-white/40"><Spinner size={13} className="animate-spin" /> Fetching release info…</p>
                     : <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                        {xiInfo?.version || "v1.0.0"} · Market Mode architecture. Same dual-AI quality gate and Trade Thesis Monitor as XauAI Sniper, plus automatic Gold/Index detection and a symbol-agnostic lot engine, ready for index trading once a real strategy ships.
+                        {xiInfo?.version || "v2.0.0"} · Market Mode architecture. Same dual-AI quality gate and Trade Thesis Monitor as XauAI Sniper, plus automatic Gold/Index detection and a symbol-agnostic lot engine, ready for index trading once a real strategy ships.
                       </p>}
                 </div>
               </div>
@@ -199,7 +199,7 @@ export default function DownloadSection({ api }) {
 
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               {[
-                ["Version", xiLoading ? "—" : (xiInfo?.version || "v1.0.0")],
+                ["Version", xiLoading ? "—" : (xiInfo?.version || "v2.0.0")],
                 ["Size",    xiLoading ? "—" : xiInfo?.size_kb ? `${xiInfo.size_kb} KB` : "MQ5 source"],
                 ["SHA-256", xiLoading ? "—" : (xiInfo?.checksum_sha256_12 || "—")],
               ].map(([k, v]) => (
@@ -221,7 +221,7 @@ export default function DownloadSection({ api }) {
               <a href={`${api}/download/xauindex/ea`} data-testid="download-xauindex-button"
                 className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-emerald-200">
                 <DownloadSimple size={17} weight="bold" />
-                {xiLoading ? "Download .MQ5" : `Download XauIndex ${xiInfo?.version || "v1.0.0"} .MQ5`}
+                {xiLoading ? "Download .MQ5" : `Download XauIndex ${xiInfo?.version || "v2.0.0"} .MQ5`}
               </a>
               <a href={`${api}/download/xauindex/package`} data-testid="download-xauindex-package-button"
                 className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">

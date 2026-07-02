@@ -1,99 +1,189 @@
 //+------------------------------------------------------------------+
 //|                                     XauIndex_EA.mq5              |
 //|                                     XauIndex — Gold + Index Edition|
-//|   v1.0.0 — Market Mode Architecture, Gold + Index Auto-Detection   |
-//|   A DIFFERENT PRODUCT, on purpose: forked from XauAI Sniper's      |
-//|   v6.7.0 Market Mode work. XauAI Sniper (separate lineage,         |
-//|   maintained separately) stays pure gold. XauIndex is the one with |
-//|   Gold+Index market detection built in. Versioned independently    |
-//|   from 1.0.0 so the two are never confused with one another.       |
-//|   Index Mode is monitoring-only — zero speculative trades.         |
+//|   v2.0.0 — Adaptive Arbiter, Trade Recovery Intelligence, Live Feed |
+//|   Fix (rebuilt on gold v6.7.0-v6.9.0, Market Mode layer preserved)  |
 //+------------------------------------------------------------------+
-// v1.0.0 CHANGES (2026-07-02) — MARKET MODE ARCHITECTURE (Index Mode,
-// phase 1 of 3 — see docs/index_mode_state_and_scanner_design.md for the
-// deferred multi-symbol phase):
-//   Adds the GENERIC capability for the EA to recognize it's attached to a
-//   non-gold (index/synthetic) chart, size a lot correctly for that
-//   symbol's real contract specs, and log full diagnostics — WITHOUT
-//   writing any index-specific trading strategy. No real, broker-accessible
-//   index/synthetic symbol was available to test against (checked:
-//   MetaQuotes-Demo, TRADE.com-Live, GoatFunded-Server all show gold +
-//   forex only), so per explicit owner instruction, no speculative
-//   Boom/Crash/Volatility strategy logic was written. Gold Mode is
-//   completely unchanged — every existing entry/exit code path still runs
-//   exactly as before whenever the resolved mode is GOLD_MODE, which is
-//   what a live XAUUSD attachment always resolves to.
+// v2.0.0 CHANGES (2026-07-02) — PORTED FROM GOLD v6.7.0-v6.9.0:
+//   A DIFFERENT PRODUCT, on purpose: XauAI Sniper (separate lineage,
+//   maintained separately) stays pure gold. XauIndex has Gold+Index
+//   market detection built in, versioned independently so the two are
+//   never confused. This release rebuilds XauIndex directly on top of
+//   the CURRENT gold codebase (rather than hand-patching four versions
+//   of drift onto the old v1.0.0 base) so it inherits every gold fix
+//   exactly as built and tested, then re-applies the Market Mode/Index-
+//   detection layer on top. Everything below this point that isn't
+//   about Market Mode is inherited unchanged from gold v6.9.0 — see
+//   that file's own history for the full changelog of what's inside.
+//   New in this release for XauIndex specifically: No-Limit Trading
+//   Mode, the loss-close firewall, the Adaptive Entry/Exit Arbiter
+//   (SMC conflict penalty/block, HTF trigger requirement, AI Committee
+//   B-grade authority, adaptive profit-floor arming), Trade Recovery
+//   Intelligence (near-SL recovery classification, smart re-entry),
+//   and the Command Center live-feed fix (unconditional status
+//   heartbeat, per-position thesis data reaching the cloud, specific
+//   blocked-reason text, three-way would-enter-again verdict). Gold
+//   Mode behavior on a live XAUUSD attachment is unchanged by this
+//   release beyond what gold itself already shipped; Index Mode
+//   remains monitoring-only — InpIndexModeLogOnly still blocks every
+//   index entry, unchanged from v1.0.0.
 //
-//   1. InpMarketMode (AUTO_DETECT/GOLD_MODE/INDEX_MODE, default AUTO_DETECT),
-//      InpIndexProfile, InpIndexAggression (both diagnostic-only this
-//      release — no profile/aggression-specific behavior exists yet).
-//      XAU_DetectMarketMode() resolves once at OnInit from the chart symbol
-//      name; an unrecognized symbol defaults to GOLD_MODE (the only tested
-//      behavior), never guesses into an unproven index path. Logs
-//      MARKET_AUTO_DETECT with the full resolution reason.
-//   2. InpIndexModeLogOnly (default true, hard safety switch): whenever the
-//      resolved mode is INDEX_MODE, the entire gold entry-scoring pipeline
-//      (setup scanning, SMC, AI Director entry check, OpenTrade) is skipped
-//      every tick — zero new positions open. Any position management for an
-//      existing index position still runs through the shared exit/basket/
-//      TTM systems, which are already symbol-agnostic (XAU_ProjectProfitUSD
-//      already uses OrderCalcProfit/tick math generically, not gold price
-//      assumptions).
-//   3. XAU_CalcIndexLot(): a new lot/risk function taking symbol as a
-//      parameter (not the built-in Symbol()) and computing size from
-//      SYMBOL_TRADE_TICK_VALUE/TICK_SIZE/VOLUME_MIN/MAX/STEP/CONTRACT_SIZE
-//      and OrderCalcMargin — zero gold-specific assumptions, so it's
-//      already safe to call for any symbol, a prerequisite for the
-//      (deferred) multi-symbol scanner. Not wired to any live entry path
-//      yet. XAU_LogIndexTrace() prints the full INDEX_TRACE diagnostic line
-//      (contract specs, lot math, regime placeholder) every 5 minutes while
-//      in Index Mode monitoring — illustrative only, never a trade signal.
-//   4. Backend: every heartbeat now carries market_mode/index_profile;
-//      trade/dashboard reporting classifies Gold vs Index performance
-//      purely from each record's own `symbol` field (classify_market_mode()
-//      mirrors the EA's own name-pattern logic) — no EA trade-schema change,
-//      TradeBrain's sync payload is untouched. New Command Center "Trading
-//      Universe" settings and admin "Market Modes" platform toggles are
-//      storage/UI only this release — the EA does not yet poll or consume
-//      them (there is no remote market-selection sync channel yet, only the
-//      existing pause/stop commands are live); wiring that up is future
-//      work alongside the real index strategy.
-//   5. Project C (simultaneous Gold+Index scanning from one EA / "Trading
-//      Universe: GOLD_AND_INDEX") is explicitly NOT started — research
-//      found 469 hardcoded Symbol() call sites and zero symbol-keyed state
-//      anywhere, meaning it is a 60-80%-of-file structural rewrite, not a
-//      feature. Full design in docs/index_mode_state_and_scanner_design.md;
-//      implementation waits for a tested single-symbol Index Mode strategy.
+// v6.9.0 CHANGES (2026-07-02) — COMMAND CENTER LIVE FEED FIX (inherited from gold):
+//   Root cause of the Command Center showing stale "7d ago" cards: every
+//   cloud post used to come from deep inside the gated entry-scan pipeline
+//   (XAU_RecordMarketSnapshot) — if ANY of 8+ higher-level gates (equity
+//   protect, weekly target hit, growth daily lock, weekend close, prop-firm
+//   loss lock, etc.) was active, literally nothing posted to the cloud for
+//   as long as that gate stayed active, however long that was.
+//   1. The existing 60-second local heartbeat (previously Print-only) now
+//      ALSO posts BOT_STATUS_HEARTBEAT to the cloud, unconditionally,
+//      before any of those gates run. Classifies into one of the Command
+//      Center's status categories (SCANNING/WAITING/BLOCKED/MANAGING_
+//      TRADE/PROTECTING_PROFIT/HOLDING/PREPARING_EXIT — ENTERING/EXITING
+//      come from the trade-event posts themselves, which already worked).
+//   2. XAU_LogTradeThesisStatus (added v6.7.0/v6.8.0) was local-only — the
+//      MT5 journal got full thesis health, hold/protect/exit reasoning,
+//      and TRI recovery-mode detail, but none of it ever reached the
+//      dashboard. It now also posts to /api/cloud/monitor/thesis-status
+//      every time a position is evaluated, including distance to SL/TP.
+//   Backend: new /cloud/monitor/thesis-status ingest (upserted per ticket)
+//   and /cloud/monitor/bot-status read endpoint; /cloud/monitor/current-
+//   opinion now merges in thesis health, hold/protect/exit reasons,
+//   recovery-mode status, and distance to SL/TP; /cloud/monitor/decision-
+//   feed excludes the new heartbeat from the conversational card list
+//   (it has its own dedicated panel) and groups consecutive identical
+//   decisions into one card instead of spamming duplicates. Also fixed a
+//   real bug found along the way: the "Trade Blocked" card always said the
+//   same generic "Waiting for higher quality setup" regardless of the
+//   actual reason — it now shows the specific, humanized reason (RR too
+//   low, AI confidence weak, structure conflict, etc.).
+//   Frontend: new dedicated "Live Bot Thought" panel (always-current
+//   status, refreshed every 8s); "Open Trade Thinking" panel extended with
+//   recovery-mode banner, distance to SL/TP, hold/protect/exit reasoning,
+//   and a three-way YES/NO/WAIT "would enter again" verdict (was a binary
+//   guess before).
+//|   bank the second chance at breakeven, failed ones ride to SL       |
+//+------------------------------------------------------------------+
+// v6.8.0 CHANGES (2026-07-02) — TRADE RECOVERY INTELLIGENCE (TRI):
+//   Purpose is NOT to avoid losses — it recognizes when an entry was
+//   likely poor but the market gives a genuine second chance to escape
+//   or improve the position, and tells the difference from noise.
+//   1. STEP 1 — DETECT NEAR FAILURE: once adverse price movement reaches
+//      InpTRI_NearSLPct (default 85%) of the original SL distance, the
+//      trade enters Recovery Mode. This never closes or reduces anything —
+//      it only starts watching, recording MAE, momentum/HTF/AI-confidence
+//      snapshots at that moment.
+//   2. STEP 2 — WATCH THE RECOVERY: every subsequent tick tracks the worst
+//      adverse point reached (true MAE) and whether/when price reclaims
+//      breakeven.
+//   3. STEP 3 — CLASSIFY: the decision point is the moment price actually
+//      reclaims breakeven (profit >= 0) — never before. A weighted score
+//      (reclaim depth, momentum delta, HTF validity, structure health, AI
+//      confidence delta), threshold-adjusted for choppy regimes and
+//      self-tuned from historical outcomes, classifies STRONG (hold
+//      normally, no action) or WEAK (bank the second chance — close at
+//      breakeven/small profit right there, before it can roll over into a
+//      full SL cycle again). A trade that never reclaims breakeven at all
+//      gets tagged FAILED after InpTRI_FailedAfterBars — purely for
+//      logging/re-entry memory. FAILED does NOT force an exit; the trade
+//      keeps riding its normal SL/other exit systems exactly as before.
+//      An ambiguous score between the weak floor and strong threshold does
+//      nothing — "never exit solely because price returned to breakeven."
+//   4. STEP 4 — SMART RE-ENTRY: a WEAK-recovery bailout arms a re-entry
+//      watch for that direction. The next same-direction entry doesn't get
+//      blocked outright, but does need a genuinely fresh trigger (new BOS,
+//      liquidity sweep, pullback, OB/FVG reaction, strong momentum candle)
+//      instead of the same quality of signal that just failed — reusing
+//      the v6.7.0 HTF trigger-requirement logic. Goal: improve average
+//      entry price instead of stubbornly re-fighting a damaged read.
+//   SAFETY: TRI's only close action (TRI_WEAK_RECOVERY_EXIT) is only ever
+//   reachable at profit >= 0 — it never needs the loss-close firewall and
+//   never conflicts with No-Limit Trading Mode's "ride every trade to SL"
+//   default. Per explicit confirmation, FAILED recovery does NOT force an
+//   early loss-exit — "never end a trade unless it's SL, or it bounces
+//   back to entry, in which case end at entry or small profit."
+//   SCOPING NOTE: the adaptive threshold self-tuning (XAU_TRI_
+//   RecordStrongOutcome) is implemented but not yet wired to a close
+//   callback — there is no single universal per-ticket "trade closed" hook
+//   in this file today, and retrofitting one across every exit path was
+//   judged too risky to do quickly. The threshold safely stays at its
+//   input default until that hook exists; nothing depends on it firing.
+//+------------------------------------------------------------------+
+// v6.7.0 CHANGES (2026-07-02) — ADAPTIVE ENTRY/EXIT ARBITER (full audit +
+// redesign of entry scoring and exit decision architecture — see
+// test_reports/ for the complete audit + report):
+//   ENTRY SIDE:
+//   1. HTF_TREND_FOLLOW no longer fires on H1+HTF consensus alone — now
+//      requires at least one real trigger (pullback into value, confirmed
+//      BOS, OB/FVG reaction, or a genuinely strong momentum candle).
+//   2. SMC_GetScoreBonus was bonus-only; added SMC_GetConflictPenalty —
+//      opposing BOS + price inside the opposing OB/FVG now costs real
+//      score, and 2+ simultaneous structural conflicts hard-block the
+//      trade (downgrade to SKIP), respecting soft-block-warning mode.
+//   3. The A+/A full-size enforcement floor no longer restores size when
+//      the SMC hard-conflict flag is set (it already didn't restore for
+//      AI weak-agree — this closes the matching SMC gap).
+//   4. AI Committee gained real BLOCK authority over B-grade trades: a
+//      confidently-skipped B-grade (AI's own skip conviction clears the
+//      same bar used to hard-veto A+/A) now blocks instead of only ever
+//      reducing lot size to 0.50x.
+//   EXIT SIDE:
+//   5. XAU_ProtectPeakProfitFloor's arm threshold is no longer a single
+//      fixed USD figure — it's now the lesser of (fixed floor scaled by
+//      account size) or (this trade's own 1R times a configurable
+//      multiple), so protection arms proportionally for the account and
+//      the trade's own risk, not one hand-tuned number for one account size.
+//   6. The v6.6.1 loss-close firewall was silently blocking the EA's own
+//      objective-invalidation exits (EARLY_CONVICTION_CUT, CLEAN_INVALID,
+//      STRUCTURE_FAILFAST, a structurally-confirmed TTM exit) whenever the
+//      trade happened to be in a loss — exactly when a "cut a proven-wrong
+//      thesis fast" exit needs to fire. Per explicit confirmation, this
+//      only unblocks when No-Limit Trading Mode is OFF; the mode's default
+//      "ride every trade to SL" behavior is completely unchanged.
+//   7/8. TradeTTMRecord now stores a complete entry thesis (invalidation
+//      price, target zone, expected trade type, full entry reason, 1R in
+//      dollars) captured at OpenTrade() time; the new AI-exit-vs-structure
+//      precedence rule and TRADE_THESIS_STATUS logging both reference it
+//      instead of generic trailing math alone. AI's exit CLOSE call is now
+//      overridden into a protective SL move (not a panic close) whenever
+//      structure is still healthy — "if AI says exit but structure is
+//      healthy, protect instead of panic close."
+//   LOGGING: XAU_LogBotDecision() — one clean, parseable line per entry
+//      decision (ENTER/BLOCK/WAIT/REDUCE_SIZE + full context). New:
+//      XAU_LogTradeThesisStatus() — one line per open position per
+//      evaluation (healthy/pullback/warning/invalidated + hold/protect/
+//      exit reasons + peak/current/protected profit), pure observability,
+//      dashboard-ready.
+//   SCOPING NOTE: this is deliberately an additive orchestration layer over
+//   the existing (already quite sophisticated) exit stack — TTM, Growth
+//   Guard, Protected Peak Floor, and ManageCleanExitsForPosition's own
+//   R-multiple/account%-based invalidation scoring were found, on audit, to
+//   already implement much of what a "unified exit brain" needs. Rebuilding
+//   them from scratch risked reintroducing bugs those systems already fixed
+//   across many prior releases; the real gaps were the specific items above.
 //
-// v1.0.0 STATIC REVIEW FIXES (2026-07-02) — bundled into this same release,
-// found by a static review pass over the v6.4.25/v6.5.0 exit-arbiter work:
-//   6. XAU_ReconstructOpenBasketPeakUSD off-by-one: v6.4.25 rejected only the
-//      still-forming bar (shift 0) before reconstructing; a position whose
-//      entry candle was the most recently CLOSED bar (shift 1) could still
-//      have its own entry candle's pre-entry range counted as "peak"
-//      evidence. Now requires startShift >= 2 and copies bars strictly
-//      after the entry candle.
-//   7. XAU_NewHostileStructureFlip(): the v6.4.25/v6.5.0 flip checks
-//      (XAU_BasketStructureBroken, XAU_ReversalConfirmed) tested "did BOS/HTF
-//      flip away from its value at entry" but not whether the flip was
-//      actually HOSTILE to the trade direction. A trade entered against a
-//      standing BOS (explicitly allowed by the entry layer) that later
-//      flipped to align WITH the trade would have been misread as
-//      "structure broken" and eligible for an early close — punishing a
-//      favorable development. The new helper requires the current
-//      direction to be hostile to the trade AND the entry direction to NOT
-//      already have been hostile, i.e. a genuine new deterioration only.
-//      TTM's own internal bosFlipped/htfFlipped (pre-dating this release)
-//      had the identical gap and now uses the same helper.
-//   8. TTM_Evaluate() bar-boundary tightened: now keys off the last CLOSED
-//      bar (shift 1) rather than the still-forming bar (shift 0), and a new
-//      TradeTTMRecord.entryTime field ensures the entry candle itself is
-//      never counted toward InpTTM_MinHoldBars — a slightly more
-//      conservative (longer) hold before the first evaluation, consistent
-//      with "let it breathe."
-//   9. A pre-existing, unrelated bug: the startup intelligence sync log
-//      hardcoded an obsolete version string regardless of the actual
-//      running build. Now uses XAUAI_EA_VERSION.
+// v6.6.1 CHANGES (2026-07-02) — NO-LIMIT TRADING MODE:
+//   1. Added InpNoLimitTradingMode=true, with InpDisableAllDailyLocks and
+//      InpNoDailyLimitMode aliases, to bypass daily/growth/profit lock systems.
+//   2. Daily Growth Lock can no longer force-close trades, pause entries, or
+//      emit GROWTH_DAILY_LOCK_BLOCK / GROWTH_DAILY_LOCK_PAUSE when no-limit is
+//      active.
+//   3. Daily profit lock, expectancy day giveback guard, profit-guardian HWM
+//      pause/selective mode, daily loss recovery, weekly target halt, and
+//      entry cooldown pauses are bypassed when no-limit is active.
+//   4. Startup logs print the resolved no-limit/daily-lock state so the Journal
+//      shows NoLimitTradingMode=true and ForceCloseByDailyLock=false.
+//
+// v6.6.0 CHANGES (2026-07-02) — GOLD-ONLY STATIC REVIEW FIXES:
+//   1. XAU_ReconstructOpenBasketPeakUSD now excludes the entry candle fully
+//      when reconstructing basket peak profit.
+//   2. BOS/HTF flip checks are direction-aware. Favorable flips no longer
+//      count as thesis invalidation; standing hostile state at entry does not
+//      trigger a false exit.
+//   3. TTM barsHeld now counts only genuinely closed M5 bars after the entry
+//      candle.
+//   4. Startup sync version logging now uses XAUAI_EA_VERSION instead of a
+//      stale hardcoded version.
 //
 // v6.5.0 CHANGES (2026-07-01) — PHASES 2, 4, 5 OF THE FULL ECOSYSTEM
 // AUDIT, BUNDLED INTO ONE RELEASE PER EXPLICIT OWNER REQUEST (see
@@ -939,16 +1029,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauIndex by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "1.00"
-#property description "XauIndex v1.0.0 - Gold + Index market detection, symbol-agnostic lot engine, Index Mode monitoring-only. A separate product from XauAI Sniper (gold-only)."
-#property description "Trade Thesis Monitor, AI quality gate, safe close audit"
-#property description "Risk engine, exits, committee, EPF, basket protect preserved"
-#property description "SMC remains additive confirmation only"
+#property version   "2.00"
+#property description "XauIndex v2.0.0 - Rebuilt on gold v6.7.0-v6.9.0: Adaptive Arbiter, Trade Recovery Intelligence, Command Center fix"
+#property description "Gold + Index market detection preserved: Index Mode remains monitoring-only, InpIndexModeLogOnly blocks every index entry"
+#property description "A separate product from XauAI Sniper (gold-only, maintained separately) — versioned independently so the two are never confused"
+#property description "No-Limit Trading Mode, loss-close firewall, and every other gold fix inherited from the current gold codebase"
 #property strict
 
-#define XAUAI_EA_VERSION "v1.0.0"
-#define XAUAI_EA_VERSION_NUM "1.0.0"
-#define XAUAI_BUILD_HASH "xauindex-1.0.0-market-mode-20260702"
+#define XAUAI_EA_VERSION "v2.0.0"
+#define XAUAI_EA_VERSION_NUM "2.0.0"
+#define XAUAI_BUILD_HASH "xauindex-2.0.0-rebuilt-on-gold-v690-20260702"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -982,7 +1072,7 @@ enum ENUM_XAU_LOT_SIZING_MODE { REAL_RISK_MODE=0, JUNE_16_19_BALANCE_MODE=1 };
 input ENUM_XAU_LOT_SIZING_MODE InpLotSizingMode = JUNE_16_19_BALANCE_MODE; // JUNE mode restores balance-based lots; REAL mode uses OrderCalcProfit SL risk
 input double InpJuneBalanceLotPer1000 = 0.070; // $3k A trade ≈0.21 before broker/margin/maxlot; B≈0.15, A+≈0.26
 
-// v1.0.0 — MARKET MODE (Gold vs Index) — ARCHITECTURE PHASE ONLY.
+// XauIndex — MARKET MODE (Gold vs Index) — ARCHITECTURE PHASE ONLY.
 //   This release adds detection, symbol-agnostic lot math, and full
 //   diagnostics for a future Index Mode. It does NOT add any index trading
 //   strategy. When the resolved mode is INDEX_MODE, the EA runs detection,
@@ -990,17 +1080,24 @@ input double InpJuneBalanceLotPer1000 = 0.070; // $3k A trade ≈0.21 before bro
 //   risk management — it does NOT open new trades, because no real,
 //   evidence-tested index strategy exists yet ("no speculative live-money
 //   logic" — explicit owner instruction). GOLD_MODE behavior is completely
-//   unchanged: the entire existing entry/exit pipeline still runs exactly
-//   as before whenever the resolved mode is GOLD_MODE, which is what every
+//   unchanged: the entire existing entry/exit pipeline (including the
+//   v6.7.0-v6.9.0 Adaptive Entry/Exit Arbiter and Trade Recovery
+//   Intelligence, ported in from the gold lineage) still runs exactly as
+//   before whenever the resolved mode is GOLD_MODE, which is what every
 //   live XAUUSD attachment resolves to today.
-input group "=== MARKET MODE (v1.0.0 — Gold/Index detection, architecture phase) ==="
+input group "=== MARKET MODE (Gold/Index detection, architecture phase) ==="
 enum ENUM_XAU_MARKET_MODE { MARKET_AUTO_DETECT=0, MARKET_GOLD_MODE=1, MARKET_INDEX_MODE=2 };
 input ENUM_XAU_MARKET_MODE InpMarketMode = MARKET_AUTO_DETECT; // AUTO_DETECT reads the chart symbol once at startup; GOLD/INDEX force the mode regardless of symbol
 enum ENUM_XAU_INDEX_PROFILE { GENERIC_INDEX=0, VOLATILITY_INDEX=1, BOOM_CRASH=2, STEP_INDEX=3, RANGE_BREAK=4 };
 input ENUM_XAU_INDEX_PROFILE InpIndexProfile = GENERIC_INDEX; // diagnostic/forward-compat only this release — no profile-specific strategy exists yet
 enum ENUM_XAU_INDEX_AGGRESSION { INDEX_SAFE=0, INDEX_BALANCED=1, INDEX_AGGRESSIVE_GROWTH=2 };
 input ENUM_XAU_INDEX_AGGRESSION InpIndexAggression = INDEX_BALANCED; // diagnostic/forward-compat only this release — no index strategy exists yet to modulate
-input bool   InpIndexModeLogOnly = true; // v1.0.0 hard safety: while true, INDEX_MODE never opens a new position no matter what InpMarketMode/InpIndexProfile say. Only flip this once real, tested index entry logic exists.
+input bool   InpIndexModeLogOnly = true; // hard safety: while true, INDEX_MODE never opens a new position no matter what InpMarketMode/InpIndexProfile say. Only flip this once real, tested index entry logic exists.
+
+input group "=== NO-LIMIT TRADING MODE (v6.6.1 — disable daily stop/lock systems) ==="
+input bool   InpNoLimitTradingMode = true;      // TRUE = no daily/profit/growth lock force-close, no daily pause, no cooldown stop-for-day
+input bool   InpDisableAllDailyLocks = true;    // Alias/master override: bypass Daily Growth Lock, daily profit lock, retain-percent giveback locks
+input bool   InpNoDailyLimitMode = true;        // Alias/master override: bypass daily/weekly target/loss stop logic and daily pause logic
 
 input group "=== PROFIT GUARDIAN (v5.1.3 — OFF by default; v4.9.7-style aggressive trading) ==="
 input bool   InpProfitGuardian      = false; // v5.1.3: DEFAULT OFF — tier risk-cuts + HTF trend lock + cooldown OFF (restores v4.9.7 aggression)
@@ -1717,7 +1814,8 @@ input double InpAMPL_GivebackMinCurrentPct = 25.0; // v6.4.6 audit: current prof
 
 input group "=== PROTECTED PEAK PROFIT FLOOR (v6.4.8) ==="
 input bool   InpProtectedPeakFloorEnable      = true;  // Master toggle: meaningful peak must leave protected profit behind
-input double InpProtectedPeakMinUSD           = 75.0;  // Arm once a position/basket proves this much floating profit
+input double InpProtectedPeakMinUSD           = 75.0;  // Arm once a position/basket proves this much floating profit (scaled by account size, see InpProtectedPeakArmRMultiple)
+input double InpProtectedPeakArmRMultiple     = 0.45;  // v6.7.0: also arm once peak reaches this many R-multiples of the TRADE'S OWN risk, whichever is more protective for smaller/larger-than-default trades
 input double InpProtectedPeakLockPct          = 45.0;  // Protected floor as % of best floating profit
 input double InpProtectedPeakMinRetainUSD     = 35.0;  // Minimum secured profit once the floor is armed
 input double InpProtectedPeakGivebackExitPct  = 65.0;  // Market-close if giveback is this severe and floor is not safe
@@ -2212,6 +2310,20 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
+// v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — shared per-candidate state, set during
+// CheckForEntry() and consumed by XAU_EntryArbiter() right before OpenTrade
+// fires. Reset at the top of every CheckForEntry() pass.
+bool   g_smcHardBlockActive   = false;
+string g_smcConflictReason    = "";
+double g_smcConflictPenalty   = 0.0;
+bool   g_aiHardBlockB         = false;   // AI blocked a B-grade trade outright (new authority)
+string g_lastEntryArbiterDecision = ""; // ENTER | BLOCK | WAIT | REDUCE_SIZE, for BOT_DECISION log
+
+// XauIndex — MARKET MODE resolved state (set once in OnInit, never AUTO_DETECT
+// past that point) plus the reason string logged for MARKET_AUTO_DETECT.
+ENUM_XAU_MARKET_MODE g_marketMode = MARKET_GOLD_MODE;
+string     g_marketModeDetectReason = "";
+
 // v5.8.49 — Command Center-owned Prop Firm Mode with persistent EA enforcement.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
@@ -2343,6 +2455,29 @@ struct TradeTTMRecord
    bool     thesisBroken;
    string   breakReason;
    datetime breakTime;
+
+   // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — complete trade thesis, stored once
+   // at entry so every later exit decision can reference WHY this trade was
+   // taken instead of falling back to generic trailing math alone.
+   double   invalidationPrice; // price level whose breach means the entry idea was wrong (SL at entry)
+   double   targetZonePrice;   // price level the thesis expects to reach (TP at entry)
+   string   expectedTradeType; // TREND_CONTINUATION | PULLBACK_REVERSAL | BREAKOUT | RANGE_FADE | OTHER
+   string   entryReasonFull;   // full human-readable reason string logged at entry
+   double   entryRiskDollars;  // $ risk to invalidation at entry (1R), for R-multiple exit math
+
+   // v6.8.0 TRADE RECOVERY INTELLIGENCE (TRI) — a trade that came close to SL
+   // and is being watched for a genuine recovery vs. a weak/failed bounce.
+   bool     triActive;             // currently in Recovery Mode
+   datetime triEnteredAt;          // when price first crossed the near-SL threshold
+   double   triWorstAdversePct;    // worst % of original SL distance reached (MAE, as a fraction of 1R)
+   double   triWorstAdverseUSD;    // MAE in account currency
+   int      triMomentumAtEntry;    // momentum score snapshot the moment Recovery Mode was entered
+   bool     triTrendAlignedAtEntry;
+   int      triAIConfAtEntry;      // lastAIConfidence snapshot at Recovery Mode entry
+   int      triHTFAtEntry;         // g_htfConsensusDir snapshot at Recovery Mode entry
+   string   triClassification;     // "" | "PENDING" | "STRONG" | "WEAK" | "FAILED"
+   datetime triClassifiedAt;
+   bool     triExitTaken;          // TRI already closed this trade (weak-recovery bailout)
 };
 
 #define TTM_MAX_POSITIONS 20
@@ -2353,6 +2488,15 @@ input int    InpTTM_MinHoldBars      = 3;      // Min bars before TTM can trigge
 input double InpTTM_ExitThreshold    = 28.0;   // Exit if live score falls below this
 input int    InpTTM_PersistentBars   = 3;      // Exit if score below 35 for this many consecutive bars
 input bool   InpTTM_LogEveryBar      = true;   // Print TTM score every bar per position
+
+input group "=== TRADE RECOVERY INTELLIGENCE — TRI (v6.8.0) ==="
+input bool   InpTRI_Enable              = true;   // Master toggle
+input double InpTRI_NearSLPct           = 0.85;   // Enter Recovery Mode once adverse move reaches this % of original SL distance
+input double InpTRI_StrongThreshold     = 65.0;   // Recovery score (0-100) at/above this = STRONG (no action, keep holding)
+input double InpTRI_WeakFloor           = 35.0;   // Recovery score below this at breakeven-reclaim = WEAK (bail at BE/small profit)
+input int    InpTRI_FailedAfterBars     = 12;      // Bars in Recovery Mode without reclaiming breakeven = classify FAILED (informational only — does NOT force an exit)
+input bool   InpTRI_AdaptThresholds     = true;    // Nudge strong/weak thresholds using rolling historical outcomes
+input double InpTRI_ReEntryTriggerBars  = 30;      // How many bars a bailed-out zone stays "needs fresh trigger" for smart re-entry
 
 struct XAUConsciousMemoryStats
 {
@@ -2669,11 +2813,6 @@ double     autoHardStopUSD    = 0;
 double     autoProfitTakeMin  = 0;
 double     autoProfitTakeMax  = 0;
 double     autoPeakMinUSD     = 0;
-
-// v1.0.0 — MARKET MODE resolved state (set once in OnInit, never AUTO_DETECT
-// after resolution — always GOLD_MODE or INDEX_MODE).
-ENUM_XAU_MARKET_MODE g_marketMode = MARKET_GOLD_MODE;
-string     g_marketModeDetectReason = "";
 
 // v4.9.4 — BASKET PROTECT state (aggregate across all open EA positions)
 double     g_basketPeakUSD   = 0;     // Max total floating $ reached since last flat state
@@ -3968,7 +4107,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
       double remainingLots = NormalizeDouble(lotsOpen - partialLots, VolumeDigitsForSymbol());
       if(partialLots >= minLot && remainingLots >= minLot)
       {
-         if(trade.PositionClosePartial(ticket, partialLots))
+         if(SafePositionClosePartial(ticket, partialLots, "SMART_EXIT_PARTIAL"))
          {
             CleanMarkPartialTaken(ticket);
             PrintFormat("%s #%I64u %s | %s context=%s SMART_EXIT_PARTIAL closed %.2f lots (%.0f%%) at profit=$%.2f peak=$%.2f | runner=%.2f protectedFloor=$%.2f cleanTrend=%s",
@@ -4103,8 +4242,21 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
                                 bool trendAligned, bool structureConfirmedBroken)
 {
    if(!InpProtectedPeakFloorEnable) return false;
-   if(peak < InpProtectedPeakMinUSD || rDollars <= 0 || slDist <= 0 || lotsOpen <= 0)
-      return false;
+   if(rDollars <= 0 || slDist <= 0 || lotsOpen <= 0) return false;
+
+   // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER (audit item #5): the arm threshold
+   // used to be a single fixed dollar figure tuned for one specific account
+   // size, so a bigger account waited too long to arm protection (a "big"
+   // peak by that figure is trivial relative to its equity) and a trade
+   // with much wider or narrower risk than typical never got a threshold
+   // that reflected ITS OWN R. Scale the fixed floor by account size, and
+   // separately allow arming once peak reaches a meaningful R-multiple of
+   // this specific trade's own risk — whichever condition is met first.
+   double armUSD_accountScaled = InpProtectedPeakMinUSD * AccountSizeRiskMultiplier();
+   double armUSD_rBased        = rDollars * InpProtectedPeakArmRMultiple;
+   double armUSD = MathMin(armUSD_accountScaled, armUSD_rBased > 0.0 ? armUSD_rBased : armUSD_accountScaled);
+   armUSD = MathMax(armUSD, InpProtectedPeakMinRetainUSD); // never lower than the min-retain floor itself
+   if(peak < armUSD) return false;
 
    int idx = XAU_EnsureProfitFloorIndex(ticket);
    double givebackPct = (peak > 0 && profit < peak) ? ((peak - profit) / peak) * 100.0 : 0.0;
@@ -4506,6 +4658,9 @@ string XAU_ResolveExitReason(ulong posId, ENUM_DEAL_REASON dealReason, double pr
 {
    string pending = XAU_PopPendingExitReason(posId);
    string brokerReason = XAU_DealReasonName(dealReason);
+   if(dealReason == DEAL_REASON_CLIENT || dealReason == DEAL_REASON_MOBILE || dealReason == DEAL_REASON_WEB)
+      return brokerReason;
+
    if(StringLen(pending) > 0)
       return pending + " | " + brokerReason;
 
@@ -5205,7 +5360,7 @@ string PropFirmLossLockReason()
 }
 
 //+------------------------------------------------------------------+
-//| v1.0.0 — MARKET MODE DETECTION                                   |
+//| XauIndex — MARKET MODE DETECTION                                 |
 //|   Resolves InpMarketMode into a concrete GOLD_MODE/INDEX_MODE     |
 //|   once at startup. AUTO_DETECT checks the chart symbol name       |
 //|   first — cheap and unambiguous for the overwhelming majority of  |
@@ -5269,8 +5424,21 @@ int OnInit()
    licenseValid = ValidatePIN(InpLicensePIN);
    if(!licenseValid) { Alert("Invalid PIN: " + InpLicensePIN); return INIT_FAILED; }
    Print("LICENSE OK: ", InpLicensePIN);
+   bool noLimit = XAU_NoLimitTradingModeActive();
+   PrintFormat("NO_LIMIT_RESOLVED: NoLimitTradingMode=%s | DisableAllDailyLocks=%s | NoDailyLimitMode=%s | DailyGrowthLockEnabled=%s | DailyPauseEnabled=%s | DailyGrowthLock=%s | DailyProfitLock=%s | DailyPause=%s | Cooldown=%s | StopForDay=%s | ForceCloseByDailyLock=%s",
+               XAU_BoolText(noLimit),
+               XAU_BoolText(InpDisableAllDailyLocks),
+               XAU_BoolText(InpNoDailyLimitMode),
+               XAU_BoolText(!noLimit && InpGrowthGuardEnable),
+               XAU_BoolText(!noLimit),
+               XAU_BoolText(!noLimit && InpGrowthGuardEnable),
+               XAU_BoolText(!noLimit && InpDailyProfitLockPct > 0.0),
+               XAU_BoolText(!noLimit),
+               XAU_BoolText(!noLimit),
+               XAU_BoolText(!noLimit),
+               XAU_BoolText(!noLimit));
 
-   // v1.0.0: resolve market mode once, before anything else touches Symbol()-derived logic.
+   // XauIndex: resolve market mode once, before anything else touches Symbol()-derived logic.
    g_marketMode = XAU_DetectMarketMode(g_marketModeDetectReason);
    PrintFormat("MARKET_AUTO_DETECT: symbol=%s detectedMode=%s profile=%s aggression=%s inputMode=%s | reason=%s | indexLogOnly=%s",
                Symbol(),
@@ -5296,7 +5464,7 @@ int OnInit()
    else
       g_startupBarTime    = TimeCurrent();
    g_startupCooldownDone = false;
-   if(InpStartupCooldownMin > 0 || InpStartupRequireNewBar)
+   if(!XAU_NoLimitTradingModeActive() && (InpStartupCooldownMin > 0 || InpStartupRequireNewBar))
       Print("🟡 Startup detected — entering ", InpStartupCooldownMin,
             "-minute cooldown",
             (InpStartupRequireNewBar ? " + 1 fresh M5 bar" : ""),
@@ -5396,6 +5564,7 @@ int OnInit()
       g_stratCount[si]   = 0;
    }
    LoadStratWeights();  // override with persisted values if file exists
+   XAU_TRI_LoadStats(); // v6.8.0 — persisted TRI adaptive threshold, if any
 
    // v6.3.8 Upgrade 6: initialize gate analytics timer
    g_gateReportLast = TimeCurrent();
@@ -5965,6 +6134,8 @@ void RecordCloseForStreak(bool wasLoss)
    closeResults[n] = wasLoss;
    closeDirs[n] = lastTradeDir;    // latest trade direction captured at exit
    PruneStreak();
+   if(XAU_NoLimitTradingModeActive()) return;
+
    int recentLosses = 0;
    for(int i = 0; i < ArraySize(closeResults); i++)
       if(closeResults[i]) recentLosses++;
@@ -6162,6 +6333,7 @@ void PruneStreak()
 }
 bool IsInStreakPause()
 {
+   if(XAU_NoLimitTradingModeActive()) return false;
    return (streakPauseUntil > 0 && TimeCurrent() < streakPauseUntil);
 }
 
@@ -6178,6 +6350,11 @@ void UpdateDrawdownState(bool wasLoss)
       drawdownActive = false;
       todayReEntryCount = 0;     // reset re-entry quota daily
       RecomputeAutoScale();      // re-scale thresholds to current balance
+   }
+   if(XAU_NoLimitTradingModeActive())
+   {
+      drawdownActive = false;
+      return;
    }
    if(wasLoss) todayLossCount++;
    else todayLossCount = 0;   // v6.3.2: single win fully resets loss counter (was -1 per win, stuck bot in recovery mode after 3L+1W)
@@ -6213,7 +6390,7 @@ void CheckReEntryOpportunity()
             " is locked — respecting direction lockout");
       return;
    }
-   if(todayReEntryCount >= InpMaxReEntriesPerDay)
+   if(!XAU_NoLimitTradingModeActive() && todayReEntryCount >= InpMaxReEntriesPerDay)
    {
       // One-shot log to avoid spam
       static datetime lastCapLog = 0;
@@ -6564,6 +6741,71 @@ double SMC_GetScoreBonus(int dir, string &smcReason)
    return bonus;
 }
 
+// v6.7.0 ADAPTIVE ENTRY ARBITER — SMC was bonus-only (audit item #2): an
+// opposing BOS was logged but never cost anything, and price sitting inside
+// the OPPOSITE side's order block/FVG (exactly where that side is most
+// likely to defend) was invisible to the score. This adds a real penalty,
+// and a hard block when structure conflicts on multiple fronts at once —
+// SMC should be able to say no, not just add bonus points.
+double SMC_GetConflictPenalty(int dir, bool &hardBlock, string &conflictReason)
+{
+   hardBlock = false;
+   conflictReason = "";
+   if(!InpSMC_Enable || dir == 0) return 0.0;
+
+   double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   if(atr <= 0) return 0.0;
+
+   double currentPrice = iClose(Symbol(), PERIOD_M5, 1);
+   double obTol  = atr * InpSMC_OB_ToleranceATR;
+   double fvgTol = atr * InpSMC_FVG_ToleranceATR;
+   int conflicts = 0;
+   double penalty = 0.0;
+
+   bool bosOpposes = (g_smc_bos_dir != 0 && g_smc_bos_dir != dir);
+   if(bosOpposes)
+   {
+      conflicts++;
+      penalty += InpSMC_BOS_BonusScore * 0.6; // symmetric-ish cost to the bonus it would have earned aligned
+      conflictReason += StringFormat("BOS%+d_AGAINST ", g_smc_bos_dir);
+   }
+
+   // Sitting inside the OPPOSITE side's order block — the zone that side is
+   // most likely to defend — is a real structural headwind, not noise.
+   bool insideOpposingOB = (dir == 1 && g_smc_ob_bear.valid &&
+                             currentPrice >= g_smc_ob_bear.low - obTol && currentPrice <= g_smc_ob_bear.high + obTol) ||
+                            (dir == -1 && g_smc_ob_bull.valid &&
+                             currentPrice >= g_smc_ob_bull.low - obTol && currentPrice <= g_smc_ob_bull.high + obTol);
+   if(insideOpposingOB)
+   {
+      conflicts++;
+      penalty += InpSMC_OB_BonusScore * 0.8;
+      conflictReason += "INSIDE_OPPOSING_OB ";
+   }
+
+   bool insideOpposingFVG = (dir == 1 && g_smc_fvg_bear.valid &&
+                              currentPrice >= g_smc_fvg_bear.low - fvgTol && currentPrice <= g_smc_fvg_bear.high + fvgTol) ||
+                             (dir == -1 && g_smc_fvg_bull.valid &&
+                              currentPrice >= g_smc_fvg_bull.low - fvgTol && currentPrice <= g_smc_fvg_bull.high + fvgTol);
+   if(insideOpposingFVG)
+   {
+      conflicts++;
+      penalty += InpSMC_FVG_BonusScore * 0.8;
+      conflictReason += "INSIDE_OPPOSING_FVG ";
+   }
+
+   // Two or more independent structural signals against the trade at once
+   // (not just one noisy BOS read) — this is where SMC should be able to
+   // say no outright, not merely cost points.
+   if(conflicts >= 2)
+   {
+      hardBlock = true;
+      conflictReason += StringFormat("HARD_BLOCK(%d_conflicts) ", conflicts);
+   }
+
+   return penalty;
+}
+
 //+------------------------------------------------------------------+
 //| GATE 2: SESSION FILTER (UTC)                                     |
 //+------------------------------------------------------------------+
@@ -6845,6 +7087,149 @@ void WriteDecisionScorecard(int signal, string setupName, string grade,
    FileWrite(fh, "Outcome:            " + (tradeOpened ? "TRADE OPENED" : "BLOCKED — " + blockReason));
    FileWrite(fh, "");
    FileClose(fh);
+}
+
+// v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — single, structured, parseable log line
+// for every entry decision (ENTER, BLOCK, WAIT, REDUCE_SIZE), so the Command
+// Center dashboard can render one clean record per decision instead of
+// reconstructing it from scattered Prints. Deliberately key=value, easy to
+// regex/parse later without needing a new wire format.
+void XAU_LogBotDecision(string action, int direction, string setupName, string grade,
+                        int aiConfidence, double entryScore, string timingQuality,
+                        string smcState, string htfState, string aiView,
+                        string memoryView, string finalReason)
+{
+   g_lastEntryArbiterDecision = action;
+   PrintFormat("BOT_DECISION: time=%s action=%s direction=%s setup=%s grade=%s confidence=%d%% "
+               "entryScore=%.2f timingQuality=%s smcState=%s htfState=%s aiView=%s memoryView=%s reason=\"%s\"",
+               TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES | TIME_SECONDS),
+               action, direction == 1 ? "BUY" : direction == -1 ? "SELL" : "NONE",
+               setupName, grade, aiConfidence, entryScore, timingQuality,
+               smcState, htfState, aiView, memoryView, finalReason);
+}
+
+// v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — one clean, dashboard-ready status line
+// per open position, per evaluation. Pure observability: reads existing
+// TTM/profit-floor state, changes nothing. This is what lets a human (or
+// the Command Center UI) see "is the thesis still alive" without piecing
+// it together from TTM/AMPL/SmartExit/ProtectedPeakFloor's separate logs.
+void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double curSL,
+                              double lotsOpen, double profit, double peak,
+                              double curTP = 0.0, double curPrice = 0.0)
+{
+   int ttmIdx = TTM_FindActiveSlot(ticket);
+   string state = "healthy";
+   string holdReason = "";
+   string protectReason = "";
+   string exitReason = "";
+   string nextAction = "MONITOR";
+   double protectedProfit = XAU_CurrentSLLockUSD(isBuy, openPx, curSL, lotsOpen);
+   string expectedType = "OTHER";
+   string entryReason = "";
+
+   string recoveryMode = "NONE";
+   double recoveryWorstPct = 0.0;
+   string recoveryClassification = "";
+
+   if(ttmIdx >= 0)
+   {
+      expectedType = g_ttm[ttmIdx].expectedTradeType;
+      entryReason  = g_ttm[ttmIdx].entryReasonFull;
+      double liveScore = g_ttm[ttmIdx].liveScore;
+
+      // v6.8.0 TRI — a trade currently in Recovery Mode takes priority over
+      // the generic pullback/warning read, since it's a more specific and
+      // more informative state ("recovering from a near-SL event" vs just
+      // "pulled back").
+      if(g_ttm[ttmIdx].triActive)
+      {
+         recoveryMode = "ACTIVE";
+         recoveryWorstPct = g_ttm[ttmIdx].triWorstAdversePct * 100.0;
+         state = "warning";
+         holdReason = StringFormat("Recovery Mode: reached %.0f%% of SL distance, now watching for a genuine reclaim before deciding anything",
+                                    recoveryWorstPct);
+         nextAction = "WATCH_RECOVERY";
+      }
+      else if(g_ttm[ttmIdx].triClassification == "FAILED")
+      {
+         recoveryMode = "FAILED_NO_FORCED_EXIT";
+         recoveryClassification = "FAILED";
+         recoveryWorstPct = g_ttm[ttmIdx].triWorstAdversePct * 100.0;
+         state = "warning";
+         holdReason = "Recovery stalled after a near-SL event, but not force-exiting — still riding normal SL management, exactly as intended";
+         nextAction = "HOLD";
+      }
+      else if(g_ttm[ttmIdx].thesisBroken)
+      {
+         state = "invalidated";
+         exitReason = g_ttm[ttmIdx].breakReason;
+         nextAction = "EXIT_PENDING";
+      }
+      else if(liveScore < 45)
+      {
+         state = "warning";
+         holdReason = StringFormat("thesis score %.0f/100 weakening — watching for confirmation before acting", liveScore);
+         nextAction = "WATCH_CLOSELY";
+      }
+      else if(profit < peak * 0.7 && peak > 0)
+      {
+         state = "pullback";
+         holdReason = StringFormat("thesis score %.0f/100 still intact — treating as normal retracement", liveScore);
+         nextAction = "HOLD";
+      }
+      else
+      {
+         holdReason = StringFormat("thesis score %.0f/100 — original entry reason still valid", liveScore);
+         nextAction = protectedProfit > 0 ? "HOLD_PROTECTED" : "HOLD";
+      }
+   }
+   if(protectedProfit > 0.01)
+      protectReason = StringFormat("$%.2f locked via SL", protectedProfit);
+
+   PrintFormat("TRADE_THESIS_STATUS: ticket=%I64u state=%s type=%s peakProfit=%.2f currentProfit=%.2f "
+               "protectedProfit=%.2f holdReason=\"%s\" protectReason=\"%s\" exitReason=\"%s\" "
+               "nextAction=%s entryReason=\"%s\" recoveryMode=%s recoveryWorstPct=%.0f recoveryClassification=%s",
+               ticket, state, expectedType, peak, profit, protectedProfit,
+               holdReason, protectReason, exitReason, nextAction, entryReason,
+               recoveryMode, recoveryWorstPct, recoveryClassification);
+
+   // v6.9.0 — this used to be local-only (MT5 journal Print, never left the
+   // terminal). The Command Center's "Open Trade Thinking" panel needs this
+   // exact data (thesis health, hold/protect/exit reasons, recovery-mode
+   // status, distance to SL/TP), so it now also posts to the cloud, one
+   // purpose-built payload per position per evaluation (every M5 bar this
+   // position is managed).
+   if(BotMonitorEnabled())
+   {
+      double distToSL = (curSL > 0 && curPrice > 0) ? MathAbs(curPrice - curSL) : 0.0;
+      double distToTP = (curTP > 0 && curPrice > 0) ? MathAbs(curTP - curPrice) : 0.0;
+      string body = StringFormat(
+         "{\"pin\":\"%s\",\"license_key\":\"%s\",\"account\":\"%I64d\",\"symbol\":\"%s\","
+         "\"ticket\":\"%I64u\",\"state\":\"%s\",\"expected_type\":\"%s\",\"peak_profit\":%.2f,"
+         "\"current_profit\":%.2f,\"protected_profit\":%.2f,\"hold_reason\":\"%s\","
+         "\"protect_reason\":\"%s\",\"exit_reason\":\"%s\",\"next_action\":\"%s\","
+         "\"entry_reason\":\"%s\",\"recovery_mode\":\"%s\",\"recovery_worst_pct\":%.0f,"
+         "\"recovery_classification\":\"%s\",\"is_buy\":%s,\"open_price\":%.5f,"
+         "\"current_price\":%.5f,\"sl\":%.5f,\"tp\":%.5f,\"dist_to_sl\":%.5f,\"dist_to_tp\":%.5f}",
+         BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
+         AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), ticket,
+         BotMonitorJsonSafe(state, 20), BotMonitorJsonSafe(expectedType, 24),
+         peak, profit, protectedProfit,
+         BotMonitorJsonSafe(holdReason, 300), BotMonitorJsonSafe(protectReason, 120),
+         BotMonitorJsonSafe(exitReason, 200), BotMonitorJsonSafe(nextAction, 24),
+         BotMonitorJsonSafe(entryReason, 300), BotMonitorJsonSafe(recoveryMode, 24),
+         recoveryWorstPct, BotMonitorJsonSafe(recoveryClassification, 12),
+         BotMonitorBool(isBuy), openPx, curPrice, curSL, curTP, distToSL, distToTP);
+      char pd[], res[]; string rh;
+      StringToCharArray(body, pd, 0, StringLen(body));
+      string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+      ResetLastError();
+      int code = WebRequest("POST", InpCloudURL + "/api/cloud/monitor/thesis-status",
+                            hdr, InpCloudTimeoutMs, pd, res, rh);
+      if(code != 200)
+         Print("TRADE-THESIS-STATUS POST failed http=", code, " err=", GetLastError(),
+               " ticket=", ticket);
+   }
 }
 
 // v6.4.0: persist and load strategy weights
@@ -7195,7 +7580,28 @@ int ScoreSetups(double &score, string &setupName)
    {
       int dir = htfBullConsensus ? 1 : -1;
       double s = 0;
-      if(dir == 1 && currentRegime != REGIME_DEAD)
+
+      // v6.7.0 ADAPTIVE ENTRY ARBITER (audit item #1): HTF consensus alone
+      // used to be enough to fire this setup — "H1+HTF agree" with no
+      // requirement for an actual entry trigger, which is exactly the lazy
+      // late-entry pattern the audit flagged. Now require at least ONE real
+      // trigger: a pullback into fair value (near the M5 EMA), a confirmed
+      // BOS in the trade direction, price reacting inside the trade's own
+      // order block/FVG zone, or a genuinely strong momentum candle (not
+      // the old body>20%-of-range bar, which fires on almost every candle).
+      double obTolHtf  = (atr > 0) ? atr * InpSMC_OB_ToleranceATR  : 0.0;
+      double fvgTolHtf = (atr > 0) ? atr * InpSMC_FVG_ToleranceATR : 0.0;
+      bool pullbackIntoValue = (atr > 0) && (MathAbs(close1 - emaF) <= atr * 0.35);
+      bool bosConfirmed       = (g_smc_bos_dir == dir);
+      bool obReaction  = (dir == 1 && g_smc_ob_bull.valid  && close1 >= g_smc_ob_bull.low  - obTolHtf  && close1 <= g_smc_ob_bull.high  + obTolHtf) ||
+                          (dir == -1 && g_smc_ob_bear.valid && close1 >= g_smc_ob_bear.low  - obTolHtf  && close1 <= g_smc_ob_bear.high  + obTolHtf);
+      bool fvgReaction = (dir == 1 && g_smc_fvg_bull.valid && close1 >= g_smc_fvg_bull.low - fvgTolHtf && close1 <= g_smc_fvg_bull.high + fvgTolHtf) ||
+                          (dir == -1 && g_smc_fvg_bear.valid && close1 >= g_smc_fvg_bear.low - fvgTolHtf && close1 <= g_smc_fvg_bear.high + fvgTolHtf);
+      bool strongMomentumCandle = (atr > 0) && (body >= atr * 0.5) &&
+                                   ((dir == 1 && close1 > open1) || (dir == -1 && close1 < open1));
+      bool hasRealTrigger = pullbackIntoValue || bosConfirmed || obReaction || fvgReaction || strongMomentumCandle;
+
+      if(dir == 1 && currentRegime != REGIME_DEAD && hasRealTrigger)
       {
          bool overextended = (rsi > 72) || (close1 >= bbU - (bbU - bbL) * 0.08);
          if(!overextended)
@@ -7207,7 +7613,7 @@ int ScoreSetups(double &score, string &setupName)
             if(close1 > open1 && body > range * 0.2) s += 0.5;        // bullish candle
          }
       }
-      if(dir == -1 && currentRegime != REGIME_DEAD)
+      if(dir == -1 && currentRegime != REGIME_DEAD && hasRealTrigger)
       {
          bool overextended = (rsi < 28) || (close1 <= bbL + (bbU - bbL) * 0.08);
          if(!overextended)
@@ -7219,6 +7625,8 @@ int ScoreSetups(double &score, string &setupName)
             if(close1 < open1 && body > range * 0.2) s += 0.5;        // bearish candle
          }
       }
+      if((htfBullConsensus || htfBearConsensus) && !hasRealTrigger && InpSMC_Log)
+         Print("HTF_TREND_FOLLOW: consensus present but no real entry trigger (no pullback/BOS/OB/FVG/momentum) — setup withheld");
       s *= g_stratWeight[9]; // v6.4.0: adaptive weight for HTF_TREND_FOLLOW
       if(s > bestScore) { bestScore = s; bestDir = dir; bestName = "HTF_TREND_FOLLOW"; bestType = 9; }
    }
@@ -7375,6 +7783,7 @@ bool IsTrendContinuationRegime(int dir)
 
 int EffectiveMaxTradesPerDay()
 {
+   if(XAU_NoLimitTradingModeActive()) return 1000000;
    int cap = InpMaxTradesPerDay;
    if(!InpAdaptiveDailyCap || cap <= 0) return cap;
 
@@ -8389,6 +8798,7 @@ void CheckPyramidOpportunity()
 // driven SOLELY by daily P&L milestones and peak-retrace.
 int EPF_ComputeTier()
 {
+   if(XAU_NoLimitTradingModeActive()) return 0;
    if(!InpEPF_Enable || dailyStartEquity <= 0) return 0;
    double equity = accInfo.Equity();
    double dayGainPct = (equity - dailyStartEquity) / dailyStartEquity * 100.0;
@@ -8447,6 +8857,7 @@ string EPF_EntryBlockReason(string grade, double setupScore, double combinedScor
 {
    adaptiveLotMult = 1.0;
    adaptivePass = false;
+   if(XAU_NoLimitTradingModeActive()) return "";
    if(!InpEPF_Enable || epf_tier == 0) return "";
    if(epf_tier >= 4)
    {
@@ -8488,6 +8899,7 @@ string EPF_BlockReason(string grade, double setupScore, int signal)
 // (We don't block initial entries via this — that's EPF_BlockReason's job.)
 bool EPF_BlockPyramidAdd()
 {
+   if(XAU_NoLimitTradingModeActive()) return false;
    if(!InpEPF_Enable) return false;
    // T2+ disables NEW pyramid adds. Existing pyramids continue to be managed.
    return epf_tier >= 2;
@@ -8498,6 +8910,7 @@ bool EPF_BlockPyramidAdd()
 // in 3 minutes during a reversal" failure mode.
 bool EPF_IsClusteredEntry(int signal, double entryPx, double atr)
 {
+   if(XAU_NoLimitTradingModeActive()) return false;
    if(!InpEPF_Enable || !InpEPF_BlockClusters) return false;
    if(atr <= 0) return false;
    double minDist = atr * InpEPF_ClusterATR;
@@ -8543,6 +8956,7 @@ void EPF_MarkPartialClosed(ulong ticket)
 // phases.
 void EPF_ManagePartials()
 {
+   if(XAU_NoLimitTradingModeActive()) return;
    if(!InpEPF_Enable || !InpEPF_PartialClose || InpCloudSafeDisablePartials) return;
    if(epf_tier < 1) return;
    double atr = ArraySize(bufATR) > 1 ? bufATR[1] : 0;
@@ -8577,7 +8991,7 @@ void EPF_ManagePartials()
       if(step <= 0) step = 0.01;
       double half = MathFloor((volume / 2.0) / step) * step;
       if(half < step) continue;
-      if(trade.PositionClosePartial(t, half))
+      if(SafePositionClosePartial(t, half, "EPF_PARTIAL_CLOSE"))
          Print(StringFormat("EPF PARTIAL-CLOSE: ticket=%d closed %.2f of %.2f lots at +1.5R profit",
                             (int)t, half, volume));
       EPF_MarkPartialClosed(t);    // mark even on failure so we don't keep retrying
@@ -8651,7 +9065,7 @@ void OnTick()
    {
       // Collect live state
       string sym = Symbol();
-      // v1.0.0: a "wrong symbol" warning is only meaningful in GOLD_MODE —
+      // XauIndex: a "wrong symbol" warning is only meaningful in GOLD_MODE —
       // INDEX_MODE is expected to run on a non-gold symbol by design.
       bool symOK = (g_marketMode == MARKET_INDEX_MODE) ||
                    (StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0 || StringFind(sym, "Gold") >= 0);
@@ -8662,18 +9076,59 @@ void OnTick()
       int    openPs = CountMyPositions();
 
       string status;
-      if(!termConn)        status = "BROKER DISCONNECTED — check internet/VPS connection";
-      else if(!symOK)      status = StringFormat("WRONG SYMBOL '%s' — attach EA to XAUUSD chart (your broker may call it XAUUSDm / XAUUSD.r / GOLD), or set InpMarketMode=MARKET_INDEX_MODE if this is intentional", sym);
-      else if(!termAlgo)   status = "ALGO TRADING OFF — click the 'Algo Trading' toolbar button until it turns GREEN";
-      else if(!mqlAlgo)    status = "EA-LEVEL ALGO NOT ALLOWED — re-attach EA and tick 'Allow Algo Trading' in the Common tab";
+      // v6.9.0 — one of the 9 categories the Command Center shows as
+      // "Current Bot Decision": scanning/waiting/blocked/entering/
+      // managing_trade/protecting_profit/holding/preparing_exit/exiting.
+      // entering/exiting are momentary and already come from the
+      // TRADE_EXECUTED/TTM_EXIT event posts themselves; this periodic
+      // heartbeat classifies among the other 7.
+      string statusCategory;
+      if(!termConn)        { status = "BROKER DISCONNECTED — check internet/VPS connection"; statusCategory = "BLOCKED"; }
+      else if(!symOK)      { status = StringFormat("WRONG SYMBOL '%s' — attach EA to XAUUSD chart (your broker may call it XAUUSDm / XAUUSD.r / GOLD), or set InpMarketMode=MARKET_INDEX_MODE if this is intentional", sym); statusCategory = "BLOCKED"; }
+      else if(!termAlgo)   { status = "ALGO TRADING OFF — click the 'Algo Trading' toolbar button until it turns GREEN"; statusCategory = "BLOCKED"; }
+      else if(!mqlAlgo)    { status = "EA-LEVEL ALGO NOT ALLOWED — re-attach EA and tick 'Allow Algo Trading' in the Common tab"; statusCategory = "BLOCKED"; }
       else if(g_marketMode == MARKET_INDEX_MODE && InpIndexModeLogOnly)
-                            status = StringFormat("INDEX_MODE monitoring-only (%s) — no index entry strategy enabled yet, managing %d open position(s)", EnumToString(InpIndexProfile), openPs);
-      else if(openPs > 0)  status = StringFormat("MANAGING %d OPEN POSITION(S) + SCANNING — analysis remains active while trades run", openPs);
-      else if(StringLen(g_lastSkipReason) > 0) status = "IDLE — " + g_lastSkipReason;
-      else                 status = StringFormat("SCANNING — spread=%.0fpts, all systems OK, waiting for A/A+ setup", curSpr);
+                           { status = StringFormat("INDEX_MODE monitoring-only (%s) — no index entry strategy enabled yet, managing %d open position(s)", EnumToString(InpIndexProfile), openPs); statusCategory = "WAITING"; }
+      else if(openPs > 0)
+      {
+         // Check whether any open position is in TRI Recovery Mode — worth
+         // surfacing at the aggregate level, not just per-ticket.
+         bool anyRecovering = false;
+         for(int ri = 0; ri < TTM_MAX_POSITIONS; ri++)
+            if(g_ttm[ri].active && g_ttm[ri].triActive) { anyRecovering = true; break; }
+         if(anyRecovering)
+         {
+            status = StringFormat("MANAGING %d OPEN POSITION(S) — one is in Recovery Mode after a near-SL event, watching for a genuine reclaim", openPs);
+            statusCategory = "PROTECTING_PROFIT";
+         }
+         else
+         {
+            status = StringFormat("MANAGING %d OPEN POSITION(S) + SCANNING — analysis remains active while trades run", openPs);
+            statusCategory = "MANAGING_TRADE";
+         }
+      }
+      else if(StringLen(g_lastSkipReason) > 0) { status = "IDLE — " + g_lastSkipReason; statusCategory = "BLOCKED"; }
+      else                 { status = StringFormat("SCANNING — spread=%.0fpts, all systems OK, waiting for A/A+ setup", curSpr); statusCategory = "SCANNING"; }
 
       PrintFormat("♥ HEARTBEAT │ %s", status);
       XAU_WriteLocalReportHeartbeat(false);
+
+      // v6.9.0 — push this to the cloud unconditionally, BEFORE any of the
+      // deep entry-scan gates below can skip the rest of OnTick(). This is
+      // the root fix for the Command Center showing stale multi-day-old
+      // cards: previously the only cloud posts came from deep inside the
+      // gated entry-scan pipeline (XAU_RecordMarketSnapshot), so if ANY
+      // higher-level gate (equity protect, weekly target hit, growth daily
+      // lock, weekend close, etc.) was active, literally nothing posted for
+      // as long as that gate stayed active. This heartbeat fires every 60s
+      // regardless of any of those gates — well inside the "every 5
+      // minutes" the dashboard needs.
+      BotMonitorDecisionEvent("BOT_STATUS_HEARTBEAT", "INFO", "Heartbeat", status,
+                              true, g_lastSkipReason, statusCategory, "", 0.0, 0.0,
+                              "", "", false, false, false, false,
+                              "", "", "", 0.0, (double)g_aiLastConfidence, 0, "",
+                              statusCategory);
+
       g_lastHeartbeat = TimeCurrent();
       // Reset the reason flag so stale entries don't mislead next cycle
       g_lastSkipReason = "";
@@ -8734,8 +9189,9 @@ void OnTick()
 
    // Equity/daily/weekly limits — a value of 0 fully disables the gate (user choice)
    double equity = accInfo.Equity();
+   bool noLimitMode = XAU_NoLimitTradingModeActive();
    string propFirmLock = PropFirmLossLockReason();
-   if(StringLen(propFirmLock) > 0)
+   if(!noLimitMode && StringLen(propFirmLock) > 0)
    {
       if(!g_propFirmLockActive)
       {
@@ -8747,7 +9203,7 @@ void OnTick()
       g_lastSkipReason = "PROP-FIRM LOSS LOCK: " + propFirmLock;
       return;
    }
-   if(InpEquityProtect > 0 && equity < initialBalance * InpEquityProtect / 100.0)
+   if(!noLimitMode && InpEquityProtect > 0 && equity < initialBalance * InpEquityProtect / 100.0)
    {
       CloseAll("EQUITY_PROTECT");
       if(heartbeatDue) { Print("⏸  EQUITY PROTECT ACTIVE — equity $", DoubleToString(equity,2),
@@ -8758,7 +9214,7 @@ void OnTick()
    }
 
    double weeklyPnL = equity - weeklyStartEquity;
-   if(InpWeeklyTarget > 0 && weeklyPnL >= weeklyStartEquity * InpWeeklyTarget / 100.0)
+   if(!noLimitMode && InpWeeklyTarget > 0 && weeklyPnL >= weeklyStartEquity * InpWeeklyTarget / 100.0)
    {
       if(!weeklyTargetHit) { CloseAll("WEEKLY_TARGET_HIT"); Print("WEEKLY TARGET HIT: +$", DoubleToString(weeklyPnL, 2)); }
       weeklyTargetHit = true;
@@ -8771,7 +9227,7 @@ void OnTick()
    // v6.4.5: Weekly loss limit → Adaptive Weekly Recovery Mode (no hard block until Monday)
    // EA continues scanning and trading at elevated selectivity. A/A+ only, 50% size.
    // Same philosophy as daily adaptive recovery: losses raise the bar, never stop the bot.
-   if(InpWeeklyMaxLoss > 0 && weeklyPnL < -(weeklyStartEquity * InpWeeklyMaxLoss / 100.0))
+   if(!noLimitMode && InpWeeklyMaxLoss > 0 && weeklyPnL < -(weeklyStartEquity * InpWeeklyMaxLoss / 100.0))
    {
       if(!weeklyLossHit)
       {
@@ -8800,7 +9256,7 @@ void OnTick()
    //   - All spread / volatility / news / confidence filters remain active
    //   - Mode clears on: a) any profitable trade wins, b) equity recovers, c) new day
    double dailyPnL = equity - dailyStartEquity;
-   if(InpDailyLossLimit > 0)
+   if(!noLimitMode && InpDailyLossLimit > 0)
    {
       bool dailyThresholdHit = (dailyPnL < -(dailyStartEquity * InpDailyLossLimit / 100.0));
       if(dailyThresholdHit && !g_adaptiveRecoveryMode)
@@ -8826,7 +9282,7 @@ void OnTick()
 
    // v6.4.12 — Growth Guard daily profit lock. Once the account has a real
    // profitable day, do not let active exposure give back the whole day.
-   if(InpGrowthGuardEnable)
+   if(!noLimitMode && InpGrowthGuardEnable)
    {
       string growthDayLockWhy = "";
       if(XAU_GrowthDailyLockTriggered(growthDayLockWhy))
@@ -8847,7 +9303,7 @@ void OnTick()
    // v5.8.15: protect the equity curve after a profitable run. This closes open
    // positions when today's equity HWM gives back too much, even if daily loss
    // limits are disabled for demo testing.
-   if(ExpectancyDayGivebackGuard())
+   if(!noLimitMode && ExpectancyDayGivebackGuard())
    {
       UpdateDashboard(lastDashSignal, lastDashScore, lastDashGrade);
       return;
@@ -8871,7 +9327,7 @@ void OnTick()
 
    // === v5.5.0 EPF — update tier each tick + run partial-close manager ===
    // Cheap to run; tier transitions logged when they change.
-   epf_tier = EPF_ComputeTier();
+   epf_tier = noLimitMode ? 0 : EPF_ComputeTier();
    if(epf_tier != epf_lastLoggedTier)
    {
       string tierName = (epf_tier == 0) ? "NORMAL"
@@ -8885,7 +9341,7 @@ void OnTick()
                           tierName, dayPct, peakPct, pg_consecutiveLosses));
       epf_lastLoggedTier = epf_tier;
    }
-   EPF_ManagePartials();
+   if(!noLimitMode) EPF_ManagePartials();
 
    // === RE-ENTRY WATCHER (every tick, cheap) ===
    // If we just closed a loser and price has reversed back past our entry,
@@ -8928,13 +9384,13 @@ void OnTick()
       g_lastBotCommandPoll = TimeCurrent();
    }
    // v5.1.2 — Profit Guardian: HWM tracking + per-position ratchet every tick
-   PG_UpdateHWM();
+   if(!noLimitMode) PG_UpdateHWM();
    PG_PerPositionRatchet();
 
    // v6.3.9 UPGRADE — ATR-adaptive daily profit lock
    // Tightens all open SLs once per trigger (not on every tick). ATR-based distance
    // prevents over-tightening on high-volatility gold days with 40+ pip swings.
-   if(InpDailyProfitLockPct > 0 && dailyStartEquity > 0)
+   if(!noLimitMode && InpDailyProfitLockPct > 0 && dailyStartEquity > 0)
    {
       double dayGainPct = (AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0;
       if(dayGainPct >= InpDailyProfitLockPct && !g_dailyProfitLockArmed)
@@ -9129,7 +9585,7 @@ void OnTick()
       g_lastSkipReason = spreadBlockReason;
    }
    // v6.4.6: news aftermath block with improved logging (timer no longer resets every tick)
-   if(InpNewsAftermathEnable && TimeCurrent() < g_newsAftermathUntil && !spreadBlocksEntry)
+   if(!XAU_NoLimitTradingModeActive() && InpNewsAftermathEnable && TimeCurrent() < g_newsAftermathUntil && !spreadBlocksEntry)
    {
       int secsLeft = (int)(g_newsAftermathUntil - TimeCurrent());
       spreadBlocksEntry = true;
@@ -9140,7 +9596,7 @@ void OnTick()
       g_lastSkipReason = spreadBlockReason;
    }
    // PNS_AVOID also blocks entries
-   if(!spreadBlocksEntry && g_postNewsState == PNS_AVOID && TimeCurrent() < g_postNewsAvoidUntil)
+   if(!XAU_NoLimitTradingModeActive() && !spreadBlocksEntry && g_postNewsState == PNS_AVOID && TimeCurrent() < g_postNewsAvoidUntil)
    {
       int secsLeft = (int)(g_postNewsAvoidUntil - TimeCurrent());
       spreadBlocksEntry = true;
@@ -9155,8 +9611,7 @@ void OnTick()
       if(IsScheduledNewsWindow(calReason))
       {
          static datetime lastCalLog = 0;
-         int secsSinceLastCalLog = (int)(TimeCurrent() - lastCalLog);
-         if(secsSinceLastCalLog >= 60)
+         if(TimeCurrent() - lastCalLog >= 60)
          { Print("NEWS-CALENDAR: ", calReason, " — entries blocked"); lastCalLog = TimeCurrent(); }
          spreadBlocksEntry = true;
          spreadBlockReason = calReason;
@@ -9164,7 +9619,7 @@ void OnTick()
       }
    }
 
-   // v1.0.0 — INDEX MODE SAFETY GATE. Position/basket management above this
+   // XauIndex — INDEX MODE SAFETY GATE. Position/basket management above this
    // point (ManageBasket/ManagePositions) already ran and keeps running
    // normally for any existing position, using the shared exit/risk systems
    // — that part is legitimately symbol-agnostic. Everything BELOW this
@@ -9182,7 +9637,7 @@ void OnTick()
       {
          PrintFormat("INDEX_MODE_MONITORING_ONLY | symbol=%s profile=%s aggression=%s | no index entry strategy is enabled yet — positions=%d managed by shared exit systems, no new entries will be opened",
                      Symbol(), EnumToString(InpIndexProfile), EnumToString(InpIndexAggression), CountMyPositions());
-         // v1.0.0: illustrative-only INDEX_TRACE — proves the lot/risk math is
+         // illustrative-only INDEX_TRACE — proves the lot/risk math is
          // live and correct for this symbol's real contract specs. Uses 1% of
          // equity and this symbol's own ATR as a stand-in SL distance; this is
          // NOT a trade signal, nothing here ever reaches OpenTrade().
@@ -9286,7 +9741,7 @@ void OnTick()
       entryExecutionBlockReason = StringFormat("max open trades reached (%d/%d); market analysis continues but fresh entries are blocked",
                                                openNowForScan, InpMaxOpenTrades);
    }
-   else if(todayTradeCount >= maxTradesToday)
+   else if(!noLimitMode && todayTradeCount >= maxTradesToday)
    {
       entryExecutionBlocked = true;
       entryExecutionBlockGrade = "MAX-DAY";
@@ -9295,7 +9750,7 @@ void OnTick()
    }
 
    // Cooldown
-   if(!entryExecutionBlocked && lastTradeClose > 0 && TimeCurrent() - lastTradeClose < InpTradeCooldown)
+   if(!noLimitMode && !entryExecutionBlocked && lastTradeClose > 0 && TimeCurrent() - lastTradeClose < InpTradeCooldown)
    {
       entryExecutionBlocked = true;
       entryExecutionBlockGrade = "CD";
@@ -9304,7 +9759,7 @@ void OnTick()
    }
 
    // Streak pause (after multiple quick losses)
-   if(!entryExecutionBlocked && IsInStreakPause())
+   if(!noLimitMode && !entryExecutionBlocked && IsInStreakPause())
    {
       entryExecutionBlocked = true;
       entryExecutionBlockGrade = "PAUSED";
@@ -9326,19 +9781,37 @@ void OnTick()
    string setupName = "";
    int signal = ScoreSetups(setupScore, setupName);
 
-   // v6.1.0 — SMC confirmation layer (additive only; never blocks, never removes logic)
+   // v6.1.0 — SMC confirmation layer, bonus side (additive only)
+   // v6.7.0 — now paired with SMC_GetConflictPenalty: structure can also cost
+   // points or hard-block when it strongly disagrees (audit item #2). Reset
+   // per candidate so a prior signal's block state never leaks forward.
+   g_smcHardBlockActive = false;
+   g_smcConflictReason  = "";
+   g_smcConflictPenalty = 0.0;
    if(InpSMC_Enable && signal != 0)
    {
       string smcReason = "";
       double smcBonus  = SMC_GetScoreBonus(signal, smcReason);
       if(smcBonus > 0.0)
          setupScore = MathMax(0.0, setupScore + smcBonus);
-      if(InpSMC_Log && StringLen(smcReason) > 0)
+
+      bool smcHardBlock = false;
+      string smcConflictReason = "";
+      double smcPenalty = SMC_GetConflictPenalty(signal, smcHardBlock, smcConflictReason);
+      if(smcPenalty > 0.0)
+         setupScore = MathMax(0.0, setupScore - smcPenalty);
+      g_smcHardBlockActive = smcHardBlock;
+      g_smcConflictReason  = smcConflictReason;
+      g_smcConflictPenalty = smcPenalty;
+
+      if(InpSMC_Log && (StringLen(smcReason) > 0 || StringLen(smcConflictReason) > 0))
          Print("SMC v6.1.0 | dir=", signal > 0 ? "BUY" : "SELL",
                " | bonus=", DoubleToString(smcBonus, 2),
+               " | penalty=", DoubleToString(smcPenalty, 2),
+               " | hardBlock=", smcHardBlock ? "Y" : "n",
                " | newScore=", DoubleToString(setupScore, 2),
                " | setup=", setupName,
-               " | ", smcReason,
+               " | ", smcReason, smcConflictReason,
                " | BOS=", g_smc_bos_dir,
                " | OB_bull=", g_smc_ob_bull.valid ? "Y" : "n",
                " | OB_bear=", g_smc_ob_bear.valid ? "Y" : "n",
@@ -9469,6 +9942,62 @@ void OnTick()
                 : combinedScore >= InpGradeA    ? "A"
                 : combinedScore >= dynGradeB    ? "B"
                 : "SKIP";
+
+   // v6.7.0 ADAPTIVE ENTRY ARBITER (audit item #2): SMC was bonus-only —
+   // even a strong multi-signal structural conflict (BOS against + price
+   // sitting inside the opposing OB/FVG) could never actually stop a trade,
+   // only shave points off a score that other bonuses could still clear.
+   // A hard structural conflict now downgrades straight to SKIP, same as
+   // every other hard gate in this pipeline — with the same soft-block-
+   // warning respect for growth/dev modes as every other hard gate here.
+   if(signal != 0 && grade != "SKIP" && g_smcHardBlockActive)
+   {
+      if(XAU_ModeAllowsSoftBlockWarning())
+      {
+         Print("SMC HARD CONFLICT: ", g_smcConflictReason, " — grade=", grade,
+               " kept (soft-block-warning mode), size will be reduced by the SMC penalty already applied");
+      }
+      else
+      {
+         Print("SMC HARD CONFLICT BLOCK: ", g_smcConflictReason, " — grade ", grade, " downgraded to SKIP");
+         g_gateBlocks_AI++; // reuse existing block counter bucket for structural gates
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "SMC_HARD_CONFLICT: " + g_smcConflictReason);
+         XAU_LogBotDecision("BLOCK", signal, setupName, grade, 0, combinedScore,
+                            "n/a", StringFormat("BOS=%+d CONFLICT(%s)", g_smc_bos_dir, g_smcConflictReason),
+                            StringFormat("HTF=%+d", g_htfConsensusDir), "NOT_YET_EVALUATED",
+                            g_memoryLastInfluence, "SMC structural conflict — " + g_smcConflictReason);
+         grade = "SKIP";
+      }
+   }
+
+   // v6.8.0 TRI STEP 4 — SMART RE-ENTRY. A direction TRI recently bailed
+   // out of (weak recovery) doesn't get to re-enter on the same quality of
+   // signal that just failed — it needs a genuinely fresh trigger (new BOS,
+   // sweep, pullback, OB/FVG reaction). This is a HIGHER bar, not a block:
+   // any real trigger still lets the trade through immediately.
+   if(signal != 0 && grade != "SKIP")
+   {
+      string triWatchSetup = "";
+      if(XAU_TRI_InReEntryWatch(signal, triWatchSetup) && !XAU_TRI_FreshTriggerPresent(signal))
+      {
+         if(XAU_ModeAllowsSoftBlockWarning())
+         {
+            Print("TRI RE-ENTRY WATCH: ", signal == 1 ? "BUY" : "SELL", " direction recently bailed (", triWatchSetup,
+                  ") and no fresh trigger yet — kept (soft-block-warning mode)");
+         }
+         else
+         {
+            string triBlockMsg = StringFormat("TRI_REENTRY_WATCH: %s direction bailed out via weak recovery on %s recently — no fresh trigger (BOS/sweep/pullback/OB/FVG) yet, waiting for a better entry price instead of repeating the same read",
+                                              signal == 1 ? "BUY" : "SELL", triWatchSetup);
+            Print("TRI RE-ENTRY BLOCK: ", triBlockMsg);
+            XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, triBlockMsg);
+            XAU_LogBotDecision("WAIT", signal, setupName, grade, 0, combinedScore,
+                               "n/a", StringFormat("BOS=%+d", g_smc_bos_dir), StringFormat("HTF=%+d", g_htfConsensusDir),
+                               "NOT_YET_EVALUATED", g_memoryLastInfluence, triBlockMsg);
+            grade = "SKIP";
+         }
+      }
+   }
    XAU_RecordMarketSnapshot("SCAN_EVALUATED", signal, setupName, grade, setupScore, combinedScore);
    // v6.3.8 Upgrade 6: count every real (non-SKIP) signal through the pipeline
    if(signal != 0 && grade != "SKIP") { g_totalSignals++; g_ftReport_Signals++; }
@@ -10013,7 +10542,7 @@ void OnTick()
    // ============ END STI GATE ============
 
    // Anti-reversal (short cooldown for direction flip)
-   if(lastTradeDir != 0 && signal != lastTradeDir && lastTradeClose > 0 &&
+   if(!XAU_NoLimitTradingModeActive() && lastTradeDir != 0 && signal != lastTradeDir && lastTradeClose > 0 &&
       TimeCurrent() - lastTradeClose < InpReversalCooldown)
    {
       int rem = (int)(InpReversalCooldown - (TimeCurrent() - lastTradeClose));
@@ -10463,9 +10992,50 @@ void OnTick()
             // dual-SKIP verdict. 88 hard vetoes fired in one day off this exact
             // fallback constant before the backend fix; this is the matching EA
             // side — don't penalize lot size for an AI that never weighed in.
-            if(lastAIConfidence > 0)
+            if(lastAIConfidence >= InpAIDirectorMinConf)
             {
-               // B-grade: AI genuinely evaluated and said SKIP — reduce size, don't block
+               // v6.7.0 ADAPTIVE ENTRY ARBITER (audit item #4): B-grade previously
+               // only ever got sized down on an AI SKIP, never blocked, no matter
+               // how confidently the AI disagreed — the weakest-quality tier had
+               // the least real AI authority over it. A confidently-skipped
+               // B-grade (AI's own skip conviction clears the same bar used to
+               // hard-veto A+/A trades) is genuinely poor confluence; block it
+               // like any other confident AI disagreement, respecting the same
+               // soft-block-warning mode every other AI block already respects.
+               string blockMsgB = StringFormat("[AI-CONFIDENT-SKIP] %s grade=B blocked: AI skip confidence=%d%% >= min %.0f%% — AI is confident this setup is weak, not just uncertain.",
+                                                setupName, lastAIConfidence, InpAIDirectorMinConf);
+               if(XAU_ModeAllowsSoftBlockWarning())
+               {
+                  aiVerdictStr = "B-CONFIDENT-SKIP-WARN";
+                  sizeMulti = MathMin(sizeMulti, 0.35);
+                  XAU_LogSoftBlockDowngrade("AI_B_CONFIDENT_SKIP", blockMsgB, setupName, grade, combinedScore);
+                  g_aiLastVerdict = "B-CONFIDENT-SKIP-WARN"; g_aiLastConfidence = lastAIConfidence;
+                  Print("AI DIRECTOR: WARNING — confident B-grade skip is not a hard veto in ", XAU_TradeModeName(), "; lot x0.35 instead");
+               }
+               else
+               {
+                  Print("AI DIRECTOR: BLOCK — ", blockMsgB);
+                  g_aiHardBlockB = true;
+                  g_gateBlocks_AI++; g_ftReport_AIBlocked++;
+                  XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, blockMsgB);
+                  CloudPostReasoning("BLOCK", blockMsgB, RegimeName(), setupName, setupScore, combinedScore, "AI-B-CONFIDENT-SKIP", signal);
+                  UpdateDashboard(0, combinedScore, "AI-B-SKIP-BLOCK");
+                  lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "AI-B-SKIP-BLOCK";
+                  g_aiLastVerdict = "BLOCK"; g_aiLastConfidence = lastAIConfidence;
+                  g_lastSkipReason = blockMsgB;
+                  XAU_LogBotDecision("BLOCK", signal, setupName, grade, lastAIConfidence, combinedScore,
+                                     StringFormat("timingMult=%.2f", lta_timing),
+                                     StringFormat("BOS=%+d", g_smc_bos_dir),
+                                     StringFormat("HTF=%+d", g_htfConsensusDir),
+                                     StringFormat("CONFIDENT_SKIP(conf=%d%%)", lastAIConfidence),
+                                     g_memoryLastInfluence, blockMsgB);
+                  Print("══════════════════════════════════════════════════");
+                  return;
+               }
+            }
+            else if(lastAIConfidence > 0)
+            {
+               // B-grade: AI evaluated and said SKIP but without strong conviction — reduce size, don't block
                aiVerdictStr = "REDUCE";
                sizeMulti = MathMin(sizeMulti, 0.50);
                Print("AI DIRECTOR: REDUCE (AI SKIP, real confidence=", lastAIConfidence, "%) — lot x0.50");
@@ -10768,7 +11338,12 @@ void OnTick()
    // Restoring to full size would override a legitimate quality signal.
    // Only restore when soft modules (non-AI) reduced lot, or when AI strongly agreed.
    bool aiWeakConfirmReduced = (lta_aiVerdict == "ALLOW_LOW_CONV" || lta_aiVerdict == "ALLOW_REDUCE");
-   if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && !aiWeakConfirmReduced)
+   // v6.7.0 ADAPTIVE ENTRY ARBITER (audit item #3): the floor also must not
+   // silently restore full size when SMC structure hard-conflicts with the
+   // trade (2+ independent structural signals against it — see
+   // SMC_GetConflictPenalty). A+/A grade doesn't mean structure agrees.
+   bool smcHardConflictReduced = g_smcHardBlockActive;
+   if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && !aiWeakConfirmReduced && !smcHardConflictReduced)
    {
       finalSzMult = originalGradeSizeMulti;
       lta_enforcementMsg = StringFormat(
@@ -10785,6 +11360,13 @@ void OnTick()
          "FLOOR_SKIPPED | grade=%s | AI=%s reduced to %.3f (grade=%.3f) — weak-agree kept, not restored",
          grade, lta_aiVerdict, finalSzMult, originalGradeSizeMulti);
       PrintFormat("[LOT_TRACE] A+/A FLOOR SKIPPED (WEAK-AI-AGREE): %s", lta_enforcementMsg);
+   }
+   else if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && smcHardConflictReduced)
+   {
+      lta_enforcementMsg = StringFormat(
+         "FLOOR_SKIPPED | grade=%s | SMC hard conflict (%s) reduced to %.3f (grade=%.3f) — structure conflict kept, not restored",
+         grade, g_smcConflictReason, finalSzMult, originalGradeSizeMulti);
+      PrintFormat("[LOT_TRACE] A+/A FLOOR SKIPPED (SMC-HARD-CONFLICT): %s", lta_enforcementMsg);
    }
    else if(highGradeFullSize)
    {
@@ -10835,6 +11417,14 @@ void OnTick()
    // The actual SL/TP is set inside OpenTrade() using ATR-based logic (unchanged).
    if(InpAISLTPMode == AI_SLTP_ADVISORY)
       Print("AI SLTP ADVISORY: AI suggests slAdj=0 tpAdj=0 (from last AI response) | Using ATR-based SL/TP | Mode=ADVISORY (log only)");
+   XAU_LogBotDecision(finalSzMult < originalGradeSizeMulti - 0.001 ? "REDUCE_SIZE" : "ENTER",
+                      signal, setupName, grade, lastAIConfidence, combinedScore,
+                      StringFormat("timingMult=%.2f", lta_timing),
+                      StringFormat("BOS=%+d%s", g_smc_bos_dir, g_smcHardBlockActive ? " CONFLICT" : g_smcConflictPenalty > 0 ? " penalty" : ""),
+                      StringFormat("HTF=%+d", g_htfConsensusDir),
+                      StringFormat("%s(conf=%d%%)", g_aiLastVerdict, lastAIConfidence),
+                      g_memoryLastInfluence,
+                      StringFormat("%s lotMult=%.2f", setupName, finalSzMult));
    OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", finalSzMult);
    // v5.3.1 — remember this entry's grade + score so adverse-pyramid logic and
    // high-grade ratchet looseness can reference them.
@@ -10967,7 +11557,7 @@ double RiskPerLotForDistance(double dist)
 }
 
 //+------------------------------------------------------------------+
-//| v1.0.0 — SYMBOL-AGNOSTIC INDEX LOT/RISK ENGINE (architecture      |
+//| XauIndex — SYMBOL-AGNOSTIC INDEX LOT/RISK ENGINE (architecture    |
 //|   phase — not wired to any live entry path yet; InpIndexModeLogOnly|
 //|   blocks all index entries until a real strategy exists). Built   |
 //|   and tested now so the math is ready to plug in later.           |
@@ -11059,9 +11649,9 @@ double XAU_CalcIndexLot(string symbol, double riskAmountUSD, double slDistance,
 }
 
 //+------------------------------------------------------------------+
-//| v1.0.0 — INDEX_TRACE diagnostic line. Safe to call for any symbol |
-//| regardless of whether InpIndexModeLogOnly is blocking entries —   |
-//| this only logs, it never trades.                                  |
+//| XauIndex — INDEX_TRACE diagnostic line. Safe to call for any      |
+//| symbol regardless of whether InpIndexModeLogOnly is blocking       |
+//| entries — this only logs, it never trades.                        |
 //+------------------------------------------------------------------+
 void XAU_LogIndexTrace(string symbol, double riskAmountUSD, double slDistance,
                        string regime, string strategyType, string entryReason, string exitReason)
@@ -11133,6 +11723,7 @@ double XAU_GrowthBasketFloatingProfit()
 
 void XAU_GrowthSetPause(int minutes, string reason)
 {
+   if(XAU_NoLimitTradingModeActive()) return;
    if(minutes <= 0) return;
    datetime until = TimeCurrent() + minutes * 60;
    if(until > g_growthPauseUntil)
@@ -11146,6 +11737,26 @@ void XAU_GrowthSetPause(int minutes, string reason)
 
 bool XAU_GrowthDailyLockTriggered(string &why)
 {
+   if(XAU_NoLimitTradingModeActive())
+   {
+      XAU_GrowthUpdateDailyPeak();
+      double dayProfitNow = (dailyStartEquity > 0.0 ? AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity : 0.0);
+      static datetime lastNoLimitDailyLockFeed = 0;
+      if(TimeCurrent() - lastNoLimitDailyLockFeed >= 300)
+      {
+         lastNoLimitDailyLockFeed = TimeCurrent();
+         BotMonitorDecisionEvent("DAILY_LOCK_IGNORED", "OVERRIDE", "GrowthDailyLock",
+                                 "Daily lock attempted; NoLimitTradingMode ignored it",
+                                 true,
+                                 StringFormat("NoLimitTradingMode active. dayPeak=$%.2f currentDayPnl=$%.2f",
+                                              g_growthDailyPeakProfit, dayProfitNow),
+                                 "", "", dayProfitNow, 0.0,
+                                 "", "", false, false, false, false,
+                                 "NONE", "", "NO_DAILY_LOCK_CLOSE", 0.0,
+                                 (double)g_aiLastConfidence, 0, "", "");
+      }
+      return false;
+   }
    if(!InpGrowthGuardEnable || dailyStartEquity <= 0.0) return false;
    XAU_GrowthUpdateDailyPeak();
 
@@ -11178,7 +11789,7 @@ bool XAU_GrowthDailyLockTriggered(string &why)
 string XAU_GrowthGuardEntryBlockReason(int signal, double price, double sl, double tp,
                                        double atr, string reason)
 {
-   if(!InpGrowthGuardEnable) return "";
+   if(!InpGrowthGuardEnable || XAU_NoLimitTradingModeActive()) return "";
    XAU_GrowthUpdateDailyPeak();
 
    if(g_growthPauseUntil > TimeCurrent())
@@ -11270,7 +11881,7 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
                                    bool structureConfirmed, bool emaAgainst,
                                    bool rsiAgainst)
 {
-   if(!InpGrowthGuardEnable) return false;
+   if(!InpGrowthGuardEnable || XAU_NoLimitTradingModeActive()) return false;
    XAU_GrowthUpdateDailyPeak();
 
    double equity = StrategyReferenceBalance();
@@ -11394,7 +12005,7 @@ bool XAU_GrowthGuardCanPyramid(bool baseProtected, bool recoveryLikely,
                                double adverseATR, int dir, string &why)
 {
    if(!InpGrowthGuardEnable) return true;
-   if(g_growthPauseUntil > TimeCurrent())
+   if(!XAU_NoLimitTradingModeActive() && g_growthPauseUntil > TimeCurrent())
    {
       why = "GROWTH_PYRAMID_BLOCK: pause active - " + g_growthPauseReason;
       return false;
@@ -11419,7 +12030,7 @@ bool XAU_GrowthGuardCanPyramid(bool baseProtected, bool recoveryLikely,
 bool XAU_GrowthGuardReEntryAllowed(int dir, double curPrice, double atr, string &why)
 {
    if(!InpGrowthGuardEnable) return true;
-   if(g_growthPauseUntil > TimeCurrent())
+   if(!XAU_NoLimitTradingModeActive() && g_growthPauseUntil > TimeCurrent())
    {
       why = "GROWTH_REENTRY_BLOCK: pause active - " + g_growthPauseReason;
       return false;
@@ -11442,7 +12053,7 @@ bool XAU_GrowthGuardReEntryAllowed(int dir, double curPrice, double atr, string 
 
 void XAU_GrowthGuardOnClosedTrade(bool wasWin, bool wasLoss, double profit)
 {
-   if(!InpGrowthGuardEnable) return;
+   if(!InpGrowthGuardEnable || XAU_NoLimitTradingModeActive()) return;
    XAU_GrowthUpdateDailyPeak();
 
    if(wasWin)
@@ -12500,10 +13111,19 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                           lastSignalSetup, g_pendingBrainGrade, lastSignalSignature,
                           g_pendingBrainSetupScore, g_pendingBrainCombinedScore,
                           reason + " | " + g_pendingBrainEntryAudit);
-      BotMonitorActivity("TRADE_EXECUTED", "TRADE",
-                         StringFormat("FIRED %s %.2f lot @%.2f SL:%.2f TP:%.2f grade=%s",
-                                      signal == 1 ? "BUY" : "SELL", lots, price, sl, tp,
-                                      g_pendingBrainGrade));
+      BotMonitorDecisionEvent("TRADE_EXECUTED", "ENTRY", "EntryEngine",
+                              StringFormat("Entry allowed: %s %.2f lot @%.2f",
+                                           signal == 1 ? "BUY" : "SELL", lots, price),
+                              true,
+                              StringFormat("grade=%s setup=%s SL=%.2f TP=%.2f",
+                                           g_pendingBrainGrade, lastSignalSetup, sl, tp),
+                              "", (string)((long)openedPosId), 0.0, price,
+                              "", "", false, false, false, false,
+                              signal == 1 ? "BUY" : "SELL",
+                              StringFormat("LOT_MODE=%s lot=%.2f riskInput=%.2f%%",
+                                           XAU_LotSizingModeName(), lots, InpRiskPercent),
+                              "", g_pendingBrainCombinedScore,
+                              (double)g_aiLastConfidence, signal, g_pendingBrainGrade, "");
 
       // v6.4.19 — TRADE THESIS MONITOR: store entry snapshot so ManagePositions()
       // can continuously re-evaluate whether the trade reason is still valid.
@@ -12512,7 +13132,7 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                          lastSignalSetup, g_pendingBrainGrade,
                          g_pendingBrainCombinedScore,
                          ArraySize(bufRSI) >= 2 ? bufRSI[1] : 50.0,
-                         atr, price);
+                         atr, price, sl, tp, reason, lots);
    }
    else
    {
@@ -12612,7 +13232,7 @@ bool CloseBasketPartial(double closePct, string reason)
          continue;
       }
 
-      if(trade.PositionClosePartial(ticket, closeLots))
+      if(SafePositionClosePartial(ticket, closeLots, "BASKET_SOFT_LOCK_PARTIAL"))
       {
          anyClosed = true;
          PrintFormat("BASKET SOFT-LOCK #%I64u | %s | banked %.2f lots (%.0f%%), runner %.2f lots stays alive",
@@ -14063,7 +14683,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       // Must leave at least minL behind for the runner
       if(partialLots >= minL && (lotsOpen - partialLots) >= minL)
       {
-         if(trade.PositionClosePartial(ticket, partialLots))
+         if(SafePositionClosePartial(ticket, partialLots, "CLEAN_PARTIAL"))
          {
             CleanMarkPartialTaken(ticket);
             PrintFormat("CLEAN_PARTIAL #%I64u %s | %.2fR → closed %.2f lots (%.0f%%), runner=%.2f",
@@ -14175,9 +14795,31 @@ void TTM_ReleaseSlot(ulong posId)
    }
 }
 
-// Called immediately after OrderSend succeeds — stores the entry thesis snapshot
+// v6.7.0 — classify a setup name into the high-level trade-type family the
+// Exit Arbiter uses to pick appropriate giveback/hold tolerance (a trend
+// continuation should be allowed to run further than a range fade).
+string XAU_ExpectedTradeTypeFromSetup(string setupName)
+{
+   if(StringFind(setupName, "TREND_PULLBACK") >= 0 || StringFind(setupName, "HTF_TREND_FOLLOW") >= 0)
+      return "TREND_CONTINUATION";
+   if(StringFind(setupName, "BREAKOUT") >= 0 || StringFind(setupName, "SQUEEZE_RELEASE") >= 0)
+      return "BREAKOUT";
+   if(StringFind(setupName, "RANGE_REVERSAL") >= 0 || StringFind(setupName, "RSI_EXTREME") >= 0 ||
+      StringFind(setupName, "MULTI_EXTREME") >= 0)
+      return "PULLBACK_REVERSAL";
+   if(StringFind(setupName, "RANGE") >= 0 || StringFind(setupName, "PIN") >= 0)
+      return "RANGE_FADE";
+   return "OTHER";
+}
+
+// Called immediately after OrderSend succeeds — stores the entry thesis snapshot.
+// v6.7.0: extended with slPrice/tpPrice/fullReason so every open trade carries a
+// complete thesis (invalidation level, target zone, expected type, full reason)
+// the Exit Arbiter can reference instead of relying on generic trailing math.
 void TTM_RecordEntry(ulong posId, int signal, string setupName, string grade,
-                     double combinedScore, double rsi, double atr, double entryPrice)
+                     double combinedScore, double rsi, double atr, double entryPrice,
+                     double slPrice = 0.0, double tpPrice = 0.0, string fullReason = "",
+                     double lots = 0.0)
 {
    if(!InpTTM_Enable) return;
    int idx = TTM_FindOrCreateSlot(posId);
@@ -14206,13 +14848,30 @@ void TTM_RecordEntry(ulong posId, int signal, string setupName, string grade,
    r.thesisBroken       = false;
    r.breakReason        = "";
    r.breakTime          = 0;
+   r.invalidationPrice  = slPrice;
+   r.targetZonePrice    = tpPrice;
+   r.expectedTradeType  = XAU_ExpectedTradeTypeFromSetup(setupName);
+   r.entryReasonFull    = fullReason;
+   r.entryRiskDollars   = (slPrice > 0.0 && lots > 0.0) ? RiskPerLotForDistance(MathAbs(entryPrice - slPrice)) * lots : 0.0;
+   r.triActive             = false;
+   r.triEnteredAt          = 0;
+   r.triWorstAdversePct    = 0.0;
+   r.triWorstAdverseUSD    = 0.0;
+   r.triMomentumAtEntry    = -1;
+   r.triTrendAlignedAtEntry= false;
+   r.triAIConfAtEntry      = 0;
+   r.triHTFAtEntry         = 0;
+   r.triClassification     = "";
+   r.triClassifiedAt       = 0;
+   r.triExitTaken          = false;
    g_ttm[idx] = r;
 
    PrintFormat("[TTM] ENTRY RECORDED | #%I64u %s | setup=%s grade=%s score=%.1f | "
-               "BOS=%+d HTF=%+d RSI=%.1f ATR=%.2f",
+               "BOS=%+d HTF=%+d RSI=%.1f ATR=%.2f | invalidation=%.2f target=%.2f type=%s 1R=$%.2f",
                posId, signal > 0 ? "BUY" : "SELL",
                setupName, grade, combinedScore,
-               g_smc_bos_dir, g_htfConsensusDir, rsi, atr);
+               g_smc_bos_dir, g_htfConsensusDir, rsi, atr,
+               r.invalidationPrice, r.targetZonePrice, r.expectedTradeType, r.entryRiskDollars);
 }
 
 // Calculate live thesis score (0-100) each candle, relative to entry state
@@ -14411,14 +15070,367 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
 // END TTM FUNCTIONS
 // ======================================================================
 
-// v6.4.20: Wrapper for every position close. Logs server retcode + GetLastError() on failure.
-// Returns true if MT5 accepted the close request, false if rejected.
+// ======================================================================
+// v6.8.0 TRADE RECOVERY INTELLIGENCE (TRI)
+//
+// Purpose is NOT to avoid losses — it's to recognize when an entry was
+// likely poor but the market gives a second chance to escape or improve
+// the position. Never closes just because price got close to SL. Never
+// closes just because price returned to breakeven. The only thing that
+// closes a trade here is a QUALITY assessment made at the moment price
+// actually reclaims breakeven — if that reclaim looks weak (little
+// momentum, structure still shaky, AI still unconvinced), TRI banks the
+// second chance instead of risking another full stop-loss cycle. A
+// recovery that never reaches breakeven at all is tagged FAILED purely
+// for logging/re-entry memory — it is NOT force-closed; the trade keeps
+// riding its normal SL/other exit systems exactly as before, matching
+// "never end a trade unless it's SL, or it bounces back to entry."
+// ======================================================================
+#define TRI_ACTION_NONE            0
+#define TRI_ACTION_MONITOR         1
+#define TRI_ACTION_STRONG_CONTINUE 2
+#define TRI_ACTION_WEAK_EXIT       3
+
+// --- lightweight rolling stats so thresholds adapt instead of staying fixed ---
+double g_triAdaptStrongThreshold = 0.0; // 0 = not yet loaded from input default
+int    g_triStatSamples = 0, g_triStatStrongWins = 0, g_triStatStrongLosses = 0;
+#define TRI_STATS_FILE "XAUAI_TRI_Stats_v1.csv"
+
+void XAU_TRI_LoadStats()
+{
+   g_triAdaptStrongThreshold = InpTRI_StrongThreshold;
+   if(InpBacktestMode) return;
+   int h = FileOpen(TRI_STATS_FILE, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return;
+   if(!FileIsEnding(h))
+   {
+      string tag = FileReadString(h);
+      if(tag == "#XAUAI_TRI_Stats_v1" && !FileIsEnding(h))
+      {
+         g_triAdaptStrongThreshold = FileReadNumber(h);
+         g_triStatSamples          = (int)FileReadNumber(h);
+         g_triStatStrongWins       = (int)FileReadNumber(h);
+         g_triStatStrongLosses     = (int)FileReadNumber(h);
+      }
+   }
+   FileClose(h);
+   if(g_triAdaptStrongThreshold < 40.0 || g_triAdaptStrongThreshold > 90.0)
+      g_triAdaptStrongThreshold = InpTRI_StrongThreshold; // sanity guard against a corrupt file
+}
+
+void XAU_TRI_SaveStats()
+{
+   if(InpBacktestMode) return;
+   int h = FileOpen(TRI_STATS_FILE, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return;
+   FileWrite(h, "#XAUAI_TRI_Stats_v1");
+   FileWrite(h, DoubleToString(g_triAdaptStrongThreshold, 2),
+             IntegerToString(g_triStatSamples), IntegerToString(g_triStatStrongWins),
+             IntegerToString(g_triStatStrongLosses));
+   FileClose(h);
+}
+
+// Called once a trade that went through Recovery Mode and was classified
+// STRONG (left to run) actually closes, so the threshold can self-tune —
+// if STRONG-and-held recoveries have mostly gone on to lose, the bar for
+// "trustworthy recovery" was too low; if they've mostly won, it can relax.
+void XAU_TRI_RecordStrongOutcome(bool wasWin)
+{
+   if(!InpTRI_AdaptThresholds) return;
+   g_triStatSamples++;
+   if(wasWin) g_triStatStrongWins++; else g_triStatStrongLosses++;
+   if(g_triStatSamples >= 8) // need a real sample before nudging anything
+   {
+      double winRate = (double)g_triStatStrongWins / MathMax(1, g_triStatSamples);
+      if(winRate < 0.40 && g_triAdaptStrongThreshold < 85.0)
+         g_triAdaptStrongThreshold += 1.0; // recoveries we trusted keep failing — raise the bar
+      else if(winRate > 0.65 && g_triAdaptStrongThreshold > 45.0)
+         g_triAdaptStrongThreshold -= 1.0; // trusted recoveries keep working — allow it to trust a bit sooner
+   }
+   XAU_TRI_SaveStats();
+}
+
+// --- smart re-entry watchlist: a direction TRI recently bailed out of ---
+struct XAU_TRI_ReEntryWatch
+{
+   bool     active;
+   int      direction;      // 1 = was long, -1 = was short
+   string   setupName;
+   double   bailoutPrice;
+   datetime bailoutTime;
+   double   invalidationPrice;
+};
+#define TRI_REENTRY_MAX 10
+XAU_TRI_ReEntryWatch g_triReEntry[TRI_REENTRY_MAX];
+
+void XAU_TRI_RecordReEntryWatch(int direction, string setupName, double bailoutPrice, double invalidationPrice)
+{
+   int slot = 0;
+   datetime oldest = TimeCurrent();
+   for(int i = 0; i < TRI_REENTRY_MAX; i++)
+   {
+      if(!g_triReEntry[i].active) { slot = i; break; }
+      if(g_triReEntry[i].bailoutTime < oldest) { oldest = g_triReEntry[i].bailoutTime; slot = i; }
+   }
+   g_triReEntry[slot].active            = true;
+   g_triReEntry[slot].direction         = direction;
+   g_triReEntry[slot].setupName         = setupName;
+   g_triReEntry[slot].bailoutPrice      = bailoutPrice;
+   g_triReEntry[slot].bailoutTime       = TimeCurrent();
+   g_triReEntry[slot].invalidationPrice = invalidationPrice;
+   PrintFormat("[TRI] RE-ENTRY WATCH ARMED | dir=%s setup=%s bailoutPrice=%.2f — next same-direction entry needs a fresh trigger, not just the same read",
+               direction == 1 ? "BUY" : "SELL", setupName, bailoutPrice);
+}
+
+// True if `dir` currently sits inside an active, still-fresh bailout watch —
+// meaning the entry pipeline should require a genuinely fresh trigger
+// (handled by the caller) instead of accepting the same quality of signal
+// that just failed.
+bool XAU_TRI_InReEntryWatch(int dir, string &watchSetup)
+{
+   watchSetup = "";
+   datetime freshCutoff = TimeCurrent() - (datetime)(InpTRI_ReEntryTriggerBars * 300); // M5 bars -> seconds
+   for(int i = 0; i < TRI_REENTRY_MAX; i++)
+   {
+      if(!g_triReEntry[i].active) continue;
+      if(g_triReEntry[i].bailoutTime < freshCutoff) { g_triReEntry[i].active = false; continue; }
+      if(g_triReEntry[i].direction == dir)
+      {
+         watchSetup = g_triReEntry[i].setupName;
+         return true;
+      }
+   }
+   return false;
+}
+
+// Same underlying signals as the HTF_TREND_FOLLOW trigger requirement
+// (v6.7.0) — a self-contained, reusable "is there a genuinely fresh reason
+// to enter here" check, used to gate re-entry after a TRI bailout.
+bool XAU_TRI_FreshTriggerPresent(int dir)
+{
+   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return false;
+   double atr = bufATR[1];
+   double emaF = bufEMAFast[1];
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+   double body = MathAbs(close1 - open1);
+   double obTol  = atr * InpSMC_OB_ToleranceATR;
+   double fvgTol = atr * InpSMC_FVG_ToleranceATR;
+
+   bool pullbackIntoValue = MathAbs(close1 - emaF) <= atr * 0.35;
+   bool bosConfirmed = (g_smc_bos_dir == dir);
+   bool obReaction  = (dir == 1 && g_smc_ob_bull.valid  && close1 >= g_smc_ob_bull.low  - obTol  && close1 <= g_smc_ob_bull.high  + obTol) ||
+                       (dir == -1 && g_smc_ob_bear.valid && close1 >= g_smc_ob_bear.low  - obTol  && close1 <= g_smc_ob_bear.high  + obTol);
+   bool fvgReaction = (dir == 1 && g_smc_fvg_bull.valid && close1 >= g_smc_fvg_bull.low - fvgTol && close1 <= g_smc_fvg_bull.high + fvgTol) ||
+                       (dir == -1 && g_smc_fvg_bear.valid && close1 >= g_smc_fvg_bear.low - fvgTol && close1 <= g_smc_fvg_bear.high + fvgTol);
+   bool strongMomentumCandle = (body >= atr * 0.5) && ((dir == 1 && close1 > open1) || (dir == -1 && close1 < open1));
+   return pullbackIntoValue || bosConfirmed || obReaction || fvgReaction || strongMomentumCandle;
+}
+
+// The core evaluator. Called once per position per ManagePositions() pass.
+// Returns a TRI_ACTION_* code; `triReason` explains the decision in plain terms.
+int XAU_TRI_Evaluate(int ttmIdx, ulong ticket, bool isBuy, double openPx, double curPrice,
+                     double slDist, double profit, double rDollars,
+                     int momentumScore, bool trendAligned, bool structureConfirmedBroken,
+                     int currentHTF, string &triReason)
+{
+   triReason = "";
+   if(!InpTRI_Enable || ttmIdx < 0 || slDist <= 0) return TRI_ACTION_NONE;
+
+   double adverseDist = isBuy ? (openPx - curPrice) : (curPrice - openPx);
+   double adversePct  = MathMax(0.0, adverseDist / slDist); // 0 = at/above entry, 1.0 = at SL
+
+   if(!g_ttm[ttmIdx].triActive)
+   {
+      if(adversePct < InpTRI_NearSLPct) return TRI_ACTION_NONE; // nowhere near SL — nothing to do
+      // ---- STEP 1: DETECT NEAR FAILURE ----
+      g_ttm[ttmIdx].triActive              = true;
+      g_ttm[ttmIdx].triEnteredAt           = TimeCurrent();
+      g_ttm[ttmIdx].triWorstAdversePct     = adversePct;
+      g_ttm[ttmIdx].triWorstAdverseUSD     = MathAbs(profit);
+      g_ttm[ttmIdx].triMomentumAtEntry     = momentumScore;
+      g_ttm[ttmIdx].triTrendAlignedAtEntry = trendAligned;
+      g_ttm[ttmIdx].triAIConfAtEntry       = g_aiLastConfidence;
+      g_ttm[ttmIdx].triHTFAtEntry          = currentHTF;
+      g_ttm[ttmIdx].triClassification      = "PENDING";
+      triReason = StringFormat("Price reached %.0f%% of SL distance — entering Recovery Mode, watching for a genuine reclaim", adversePct * 100.0);
+      PrintFormat("[TRI] RECOVERY MODE ENTERED #%I64u %s | adverse=%.0f%% of SL | momentum=%d trendAligned=%s AIconf=%d htf=%+d regime=%s",
+                  ticket, isBuy ? "BUY" : "SELL", adversePct * 100.0, momentumScore, trendAligned ? "Y" : "N",
+                  g_aiLastConfidence, currentHTF, RegimeName());
+      return TRI_ACTION_MONITOR;
+   }
+
+   // ---- STEP 2: WATCH THE RECOVERY (already in Recovery Mode) ----
+   if(adversePct > g_ttm[ttmIdx].triWorstAdversePct)
+   {
+      g_ttm[ttmIdx].triWorstAdversePct = adversePct;
+      g_ttm[ttmIdx].triWorstAdverseUSD = MathMax(g_ttm[ttmIdx].triWorstAdverseUSD, MathAbs(profit));
+   }
+
+   bool reclaimedBreakeven = (profit >= 0.0);
+   int barsInRecovery = (int)((TimeCurrent() - g_ttm[ttmIdx].triEnteredAt) / 300); // M5 bars
+
+   if(!reclaimedBreakeven)
+   {
+      // Still underwater. Not yet a decision point — but if this has dragged
+      // on long enough without ever reclaiming breakeven, tag it FAILED for
+      // logging/re-entry memory only. This does NOT close the trade — it
+      // keeps riding its normal SL/other exit systems exactly as before.
+      if(barsInRecovery >= InpTRI_FailedAfterBars && g_ttm[ttmIdx].triClassification != "FAILED")
+      {
+         g_ttm[ttmIdx].triClassification = "FAILED";
+         g_ttm[ttmIdx].triClassifiedAt   = TimeCurrent();
+         triReason = StringFormat("Recovery stalled — %d bars in Recovery Mode without reclaiming breakeven. Not exiting early; still riding normal SL management.", barsInRecovery);
+         PrintFormat("[TRI] FAILED RECOVERY (informational, no forced exit) #%I64u %s | %s", ticket, isBuy ? "BUY" : "SELL", triReason);
+      }
+      return TRI_ACTION_MONITOR;
+   }
+
+   // ---- STEP 3: CLASSIFY THE RECOVERY (decision point: price just reclaimed breakeven) ----
+   double reclaimFrac = g_ttm[ttmIdx].triWorstAdversePct > 0.0
+      ? MathMin(1.0, (g_ttm[ttmIdx].triWorstAdversePct - MathMax(0.0, -profit / MathMax(1.0, rDollars))) / g_ttm[ttmIdx].triWorstAdversePct)
+      : 1.0;
+   double reclaimScore = MathMax(0.0, MathMin(1.0, reclaimFrac)) * 40.0;
+
+   double momentumDelta = momentumScore - g_ttm[ttmIdx].triMomentumAtEntry;
+   double momentumScorePts = MathMax(0.0, MathMin(1.0, (momentumDelta + 2.0) / 4.0)) * 20.0; // -2..+2 mapped to 0..20
+
+   int tradeDir = isBuy ? 1 : -1;
+   bool htfStillValid = (currentHTF == tradeDir) || (currentHTF == g_ttm[ttmIdx].triHTFAtEntry && currentHTF != -tradeDir);
+   double htfScorePts = htfStillValid ? 15.0 : 0.0;
+
+   double structureScorePts = structureConfirmedBroken ? 0.0 : 15.0;
+
+   int aiConfDelta = g_aiLastConfidence - g_ttm[ttmIdx].triAIConfAtEntry;
+   double aiScorePts = MathMax(0.0, MathMin(1.0, (aiConfDelta + 20.0) / 40.0)) * 10.0; // -20..+20 mapped to 0..10
+
+   double recoveryScore = reclaimScore + momentumScorePts + htfScorePts + structureScorePts + aiScorePts;
+
+   // Adaptive thresholds: raise the bar in choppy/rangey conditions where a
+   // reclaim is more likely to be noise, and use the self-tuned strong
+   // threshold learned from historical outcomes (see XAU_TRI_RecordStrongOutcome).
+   double strongThreshold = InpTRI_AdaptThresholds ? g_triAdaptStrongThreshold : InpTRI_StrongThreshold;
+   if(CleanChoppyRegime()) strongThreshold += 8.0;
+   double weakFloor = MathMin(InpTRI_WeakFloor, strongThreshold - 10.0);
+
+   g_ttm[ttmIdx].triClassifiedAt = TimeCurrent();
+
+   if(recoveryScore >= strongThreshold)
+   {
+      g_ttm[ttmIdx].triClassification = "STRONG";
+      g_ttm[ttmIdx].triActive = false; // recovery resolved — resume normal management
+      triReason = StringFormat("Strong recovery: score=%.0f/100 (reclaim=%.0f momentum=%.0f htf=%.0f structure=%.0f ai=%.0f) — holding normally",
+                                recoveryScore, reclaimScore, momentumScorePts, htfScorePts, structureScorePts, aiScorePts);
+      PrintFormat("[TRI] STRONG RECOVERY #%I64u %s | %s", ticket, isBuy ? "BUY" : "SELL", triReason);
+      return TRI_ACTION_STRONG_CONTINUE;
+   }
+
+   if(recoveryScore < weakFloor)
+   {
+      g_ttm[ttmIdx].triClassification = "WEAK";
+      g_ttm[ttmIdx].triActive = false;
+      g_ttm[ttmIdx].triExitTaken = true;
+      triReason = StringFormat("Weak recovery: score=%.0f/100 (below floor %.0f) — crawled back to breakeven with little conviction. Taking the second chance at $%.2f instead of risking another SL cycle.",
+                                recoveryScore, weakFloor, profit);
+      PrintFormat("[TRI] WEAK RECOVERY — BAILING AT BE/SMALL PROFIT #%I64u %s | %s", ticket, isBuy ? "BUY" : "SELL", triReason);
+      return TRI_ACTION_WEAK_EXIT;
+   }
+
+   // Between weak floor and strong threshold: genuinely ambiguous — the
+   // safety rule ("never exit solely because price returned to breakeven")
+   // means an ambiguous reclaim is NOT enough justification to act. Keep
+   // watching; the next evaluation (next tick/bar) re-scores fresh.
+   triReason = StringFormat("Ambiguous reclaim: score=%.0f/100 (between weak floor %.0f and strong %.0f) — not enough evidence either way yet, continuing to watch",
+                             recoveryScore, weakFloor, strongThreshold);
+   return TRI_ACTION_MONITOR;
+}
+
+bool XAU_EmergencyLossCloseAllowed(string ctx)
+{
+   string c = ctx;
+   StringToUpper(c);
+   if(StringFind(c, "BROKER_SL") >= 0) return true;
+   if(StringFind(c, "STOP_OUT") >= 0) return true;
+   if(StringFind(c, "MARGIN") >= 0) return true;
+   if(StringFind(c, "EMERGENCY") >= 0) return true;
+   if(StringFind(c, "EQUITY_PROTECT") >= 0) return true;
+   if(StringFind(c, "PROP_FIRM") >= 0) return true;
+   if(InpWeekendClose && StringFind(c, "WEEKEND_CLOSE") >= 0) return true;
+   // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER (audit item #6): No-Limit Trading
+   // Mode (default ON, this release) is an explicit, deliberately-tested
+   // decision that NO internal system may ever force-close a losing trade —
+   // only broker SL, manual close, or true emergencies. That default stays
+   // completely unchanged. This carve-out only activates when a user has
+   // explicitly turned No-Limit mode OFF: in that configuration, the EA's
+   // own objective-invalidation exits (EARLY_CONVICTION_CUT, CLEAN_INVALID,
+   // STRUCTURE_FAILFAST, a structurally-confirmed TTM exit) become allowed —
+   // each already requires multiple independent confirming signals
+   // (confirmed structure break + EMA + RSI + reversal candle, or a genuine
+   // BOS/HTF flip against the trade) before it ever reaches this firewall,
+   // so these are not panic closes. Softer signals like CLEAN_STAGNANT/
+   // CLEAN_STALE (regime/momentum alone, no structural confirmation) are
+   // deliberately NOT included even with No-Limit off.
+   if(!XAU_NoLimitTradingModeActive())
+   {
+      if(StringFind(c, "EARLY_CONVICTION_CUT") >= 0) return true;
+      if(StringFind(c, "CLEAN_INVALID") >= 0) return true;
+      if(StringFind(c, "STRUCTURE_FAILFAST") >= 0) return true;
+      if(StringFind(c, "TTM_STRUCTURAL_EXIT") >= 0) return true;
+   }
+   return false;
+}
+
+bool XAU_LossCloseFirewallAllows(ulong ticket, string ctx, double closeLots = 0.0)
+{
+   if(!PositionSelectByTicket(ticket)) return true;
+   string posSymbol = PositionGetString(POSITION_SYMBOL);
+   long posMagic = (long)PositionGetInteger(POSITION_MAGIC);
+   if(posSymbol != Symbol() || posMagic != InpMagicNumber) return true;
+
+   double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   if(pnl >= 0.0) return true;
+   if(XAU_EmergencyLossCloseAllowed(ctx)) return true;
+
+   ulong posId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+   if(posId > 0) XAU_PopPendingExitReason(posId);
+   XAU_PopPendingExitReason(ticket);
+   PrintFormat("LOSS_CLOSE_BLOCKED #%I64u ctx=%s pnl=$%.2f closeLots=%.2f | Negative trades may close only by broker SL, manual close, or emergency margin/account protection.",
+               ticket, ctx, pnl, closeLots);
+   long posType = PositionGetInteger(POSITION_TYPE);
+   string posDir = (posType == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+   double px = (posType == POSITION_TYPE_BUY) ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   BotMonitorDecisionEvent("LOSS_CLOSE_BLOCKED", "OVERRIDE", ctx,
+                           "Exit blocked because position was negative",
+                           false,
+                           "Only broker SL, manual close, or emergency margin/account protection may close a floating-loss trade.",
+                           ctx, (string)((long)ticket), pnl, px,
+                           "", ctx, false, false, false, false,
+                           posDir, "", "LOSS_CLOSE_BLOCKED", 0.0,
+                           (double)g_aiLastConfidence, posDir == "BUY" ? 1 : -1,
+                           "", "");
+   return false;
+}
+
+// v6.4.20/v6.6.1: Wrapper for every position close. Logs server retcode + GetLastError() on failure.
+// Returns true if MT5 accepted the close request, false if rejected or blocked by loss firewall.
 bool SafePositionClose(ulong ticket, string ctx = "")
 {
+   if(!XAU_LossCloseFirewallAllows(ticket, ctx, 0.0)) return false;
    bool ok = trade.PositionClose(ticket);
    if(!ok)
       PrintFormat("⚠  CLOSE FAILED #%I64u ctx=%s ret=%u (%s) err=%d",
                   ticket, ctx, trade.ResultRetcode(),
+                  trade.ResultRetcodeDescription(), GetLastError());
+   return ok;
+}
+
+bool SafePositionClosePartial(ulong ticket, double lots, string ctx = "")
+{
+   if(!XAU_LossCloseFirewallAllows(ticket, ctx, lots)) return false;
+   bool ok = trade.PositionClosePartial(ticket, lots);
+   if(!ok)
+      PrintFormat("⚠  PARTIAL CLOSE FAILED #%I64u ctx=%s lots=%.2f ret=%u (%s) err=%d",
+                  ticket, ctx, lots, trade.ResultRetcode(),
                   trade.ResultRetcodeDescription(), GetLastError());
    return ok;
 }
@@ -14464,6 +15476,12 @@ void ManagePositions()
       // Track peak (for retrace exit + logging)
       double peak = UpdatePeakProfit(ticket, profit);
       double retracePct = (peak > 0 && profit < peak) ? ((peak - profit) / peak) * 100.0 : 0.0;
+
+      // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — one clean status line per position,
+      // logged BEFORE any close decision runs so it always reflects the state
+      // that decision was made from (not "healthy" logged after a close).
+      if(InpTTM_Enable)
+         XAU_LogTradeThesisStatus(ticket, isBuy, openPx, curSL, lotsOpen, profit, peak, curTP, curPrice);
 
       // Dir string for logging
       string dirStr = isBuy ? "BUY" : "SELL";
@@ -14516,12 +15534,45 @@ void ManagePositions()
                {
                   // blocked: fall through to normal management this tick
                }
-               else if(SafePositionClose(ticket, "TTM_EXIT"))
+               // v6.7.0: only the structurally-confirmed TTM exit (BOS/HTF
+               // flipped against the trade) is recognized by the loss-close
+               // firewall as an objective invalidation — a plain score-decay
+               // TTM exit (TTM_THESIS_DEAD/TTM_PERSISTENT_WEAK) is a softer
+               // signal and stays subject to "let trades breathe."
+               else if(SafePositionClose(ticket, ttmIsStructural ? "TTM_STRUCTURAL_EXIT" : "TTM_EXIT"))
                {
                   TTM_ReleaseSlot(ticket);
                   lastTradeClose = TimeCurrent();
                }
                continue;
+            }
+
+            // ======== v6.8.0 TRADE RECOVERY INTELLIGENCE (TRI) ========
+            // TTM held (thesis not broken) — check whether this trade came
+            // close to SL and, if so, whether it's now recovering well
+            // enough to trust, or should take a safe exit at breakeven.
+            {
+               string triReason = "";
+               int triAction = XAU_TRI_Evaluate(ttmIdx, ticket, isBuy, openPx, curPrice,
+                                                slDist, profit, rDollars,
+                                                momentumScoreEA, trendAlignedEA, structureConfirmedEA,
+                                                g_htfConsensusDir, triReason);
+               if(triAction == TRI_ACTION_WEAK_EXIT)
+               {
+                  // Only ever reached with profit >= 0 (see XAU_TRI_Evaluate),
+                  // so this is always a breakeven-or-better close — never
+                  // needs the loss-close firewall, never fights No-Limit mode.
+                  if(SafePositionClose(ticket, "TRI_WEAK_RECOVERY_EXIT"))
+                  {
+                     XAU_TRI_RecordReEntryWatch(isBuy ? 1 : -1, g_ttm[ttmIdx].setupName, curPrice, g_ttm[ttmIdx].invalidationPrice);
+                     TTM_ReleaseSlot(ticket);
+                     lastTradeClose = TimeCurrent();
+                  }
+                  continue;
+               }
+               // TRI_ACTION_STRONG_CONTINUE / MONITOR / NONE: no forced
+               // action here — trade falls through to normal management
+               // below exactly as it would have without TRI.
             }
          }
       }
@@ -14644,7 +15695,7 @@ void ManagePositions()
             reduceLots = NormalizeDouble(reduceLots, lotDig);
             double remaining = NormalizeDouble(lotsOpen - reduceLots, lotDig);
 
-            if(reduceLots >= minL && remaining >= minL && trade.PositionClosePartial(ticket, reduceLots))
+            if(reduceLots >= minL && remaining >= minL && SafePositionClosePartial(ticket, reduceLots, "EXPECTANCY_SOFT_DERISK"))
             {
                CleanMarkLossReduceTaken(ticket);
                PrintFormat("EXPECTANCY_SOFT_DERISK #%I64u %s | loss $%.2f (%.2fR) >= soft cap $%.2f | recovery=%s structBars=%d/%d momentum=%d/5 | closed %.2f lots (%.0f%%), runner %.2f stays alive",
@@ -14700,11 +15751,34 @@ void ManagePositions()
             }
             else if(v.action == -1 && profit > rDollars * 0.3)
             {
-               // AI wants to CLOSE — only execute if we're in meaningful profit (>0.3R).
-               // Never let AI close a losing trade early (let SL handle that).
-               Print("AI DIRECTOR EXIT CLOSE #", ticket, " | profit=$", DoubleToString(profit,2),
-                     " | reason: ", v.reason);
-               SafePositionClose(ticket, "AI_DIRECTOR_EXIT_CLOSE"); continue;
+               // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER (explicit precedence rule):
+               // "if AI says exit but structure is healthy, protect instead of
+               // panic close." AI's CLOSE call used to execute unconditionally
+               // once minimally profitable — now it only full-closes when
+               // structure agrees something has actually deteriorated. If
+               // structure still looks healthy, lock in a meaningful chunk of
+               // profit instead of exiting a runner on an AI opinion alone.
+               bool structureStillHealthy = trendAlignedEA && !structureConfirmedEA && momentumScoreEA >= 2;
+               if(structureStillHealthy)
+               {
+                  double protectDist = slDist * 0.5; // lock roughly half the risk distance as profit
+                  double protectSL = isBuy ? NormalizeDouble(openPx + protectDist, digits)
+                                            : NormalizeDouble(openPx - protectDist, digits);
+                  bool protectRatchet = isBuy ? (protectSL > curSL) : (protectSL < curSL || curSL == 0);
+                  if(protectRatchet && SafeModifySL(ticket, protectSL, curTP, isBuy, curPrice, "AI_EXIT_OVERRIDDEN_BY_STRUCTURE"))
+                     Print("AI DIRECTOR EXIT OVERRIDDEN BY STRUCTURE #", ticket,
+                           " | AI wanted CLOSE (reason: ", v.reason, ") but trend still aligned, no structure break, momentum=",
+                           momentumScoreEA, "/5 — protecting profit instead of panic-closing | newSL=", DoubleToString(protectSL, digits));
+                  else
+                     Print("AI DIRECTOR EXIT — structure healthy, holding as-is (SL already at/beyond protect level) #", ticket);
+               }
+               else
+               {
+                  Print("AI DIRECTOR EXIT CLOSE #", ticket, " | profit=$", DoubleToString(profit,2),
+                        " | reason: ", v.reason, " | structure confirms: trendAligned=", trendAlignedEA?"N":"Y(broken)",
+                        " structureBroken=", structureConfirmedEA?"Y":"N", " momentum=", momentumScoreEA, "/5");
+                  SafePositionClose(ticket, "AI_DIRECTOR_EXIT_CLOSE"); continue;
+               }
             }
             else if(v.action == 0)
             {
@@ -15259,7 +16333,7 @@ void ManagePositions()
             double remaining = NormalizeDouble(curLots - partialLots, lotDig);
             if(partialLots >= minLot && remaining >= minLot)
             {
-               if(trade.PositionClosePartial(ticket, partialLots))
+               if(SafePositionClosePartial(ticket, partialLots, "PARTIAL_TP"))
                {
                   MarkPartialTaken(ticket);
                   // v4.5.6 — Use proportional profit math (closed_fraction × total P/L)
@@ -16708,6 +17782,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    ENUM_DEAL_TYPE dType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
    ENUM_DEAL_REASON dealReason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
    string resolvedExitReason = XAU_ResolveExitReason(posId, dealReason, profit);
+   string closeReasonExact = XAU_CloseReasonExactField(true, XAU_BlockReasonKey(resolvedExitReason), resolvedExitReason);
+   string closedBy = XAU_ClosedByField(true, closeReasonExact, "EXIT");
+   bool wasSLHitExact = XAU_WasSLHitField(true, closeReasonExact);
+   bool wasEAForcedClose = XAU_WasEAForcedCloseField(true, closeReasonExact, closedBy);
    lastExitReason = resolvedExitReason;
    // On exit, the closing deal is opposite side of the position
    string dirStr = (dType == DEAL_TYPE_SELL) ? "BUY" : "SELL";
@@ -16738,6 +17816,20 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                posId, dealTicket, resolvedExitReason, profit, dPrice, dVolume,
                (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD), g_spreadEMA,
                XAUAI_BUILD_HASH, XAUAI_InputHash());
+   PrintFormat("TRADE-CLOSE-AUDIT | posId=%I64u CloseReasonExact=%s ClosedBy=%s WasSLHit=%s WasEAForcedClose=%s FloatingProfitAtClose=$%.2f",
+               posId, closeReasonExact, closedBy,
+               wasSLHitExact ? "Y" : "N",
+               wasEAForcedClose ? "Y" : "N", profit);
+   bool wasManualClose = (dealReason == DEAL_REASON_CLIENT || dealReason == DEAL_REASON_MOBILE || dealReason == DEAL_REASON_WEB);
+   bool wasEmergencyMargin = (dealReason == DEAL_REASON_SO || StringFind(closeReasonExact, "MARGIN") >= 0 || StringFind(closeReasonExact, "STOP_OUT") >= 0);
+   BotMonitorDecisionEvent("TRADE_CLOSED", "EXIT", closedBy,
+                           StringFormat("Trade closed: %s $%.2f", wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK-EVEN", profit),
+                           true,
+                           closeReasonExact, "", (string)((long)posId), profit, dPrice,
+                           closeReasonExact, closedBy, wasSLHitExact, wasManualClose,
+                           wasEmergencyMargin, wasEAForcedClose, dirStr,
+                           "", closeReasonExact, 0.0, (double)g_aiLastConfidence,
+                           dirStr == "BUY" ? 1 : -1, "", "");
    bool aiInfluenced = (currentTradeConfidence > 0 || StringFind(lastExitReason, "AI") >= 0 || StringFind(lastExitReason, "CLAUDE") >= 0);
    if(aiInfluenced)
    {
@@ -17010,8 +18102,8 @@ void CloseAll(string reason = "FORCE_CLOSE")
          XAU_SetPendingExitReason(posInfo.Ticket(), reason);
          if(ident > 0 && ident != posInfo.Ticket())
             XAU_SetPendingExitReason(ident, reason);
-         trade.PositionClose(posInfo.Ticket());
-         Print("FORCE CLOSE: #", posInfo.Ticket(), " reason=", reason);
+         if(SafePositionClose(posInfo.Ticket(), reason))
+            Print("FORCE CLOSE: #", posInfo.Ticket(), " reason=", reason);
       }
 }
 
@@ -17029,6 +18121,7 @@ double BasketFloatingPnL()
 
 bool ExpectancyDayGivebackGuard()
 {
+   if(XAU_NoLimitTradingModeActive()) return false;
    if(!InpExpectancyLossArmor || !InpExpectancyUseDayGiveback || dailyStartEquity <= 0)
       return false;
 
@@ -17079,6 +18172,7 @@ bool ExpectancyDayGivebackGuard()
 // Returns 0/1/2/3. Higher tier = more protective.
 int PG_Tier()
 {
+   if(XAU_NoLimitTradingModeActive()) return 0;
    if(!InpProfitGuardian || dailyStartEquity <= 0) return 0;
    double equity = accInfo.Equity();
    double gainPct = (equity - dailyStartEquity) / dailyStartEquity * 100.0;
@@ -17092,6 +18186,7 @@ int PG_Tier()
 // v5.1.3: returns 1.0 when InpProfitGuardian=false → no automatic risk reduction.
 double PG_RiskMultiplier()
 {
+   if(XAU_NoLimitTradingModeActive()) return 1.0;
    // v6.4.16: Lot reductions removed. Tier 3 hard block remains (returns 0.0 → trade skipped).
    // Tiers 1/2 no longer halve lots — if profit-guardian concern is high, use selective mode
    // (quality gate) not lot-size reduction.
@@ -17115,6 +18210,7 @@ double PG_HWMGivebackPctEffective(double gainPct)
 
 void PG_UpdateHWM()
 {
+   if(XAU_NoLimitTradingModeActive()) return;
    // v5.1.3: runs whenever InpProfitLock OR InpProfitGuardian is on
    if((!InpProfitLock && !InpProfitGuardian) || dailyStartEquity <= 0) return;
    double equity = accInfo.Equity();
@@ -17264,6 +18360,11 @@ int PG_HTFTrend()
 // Once both pass, sets a sticky flag so we don't re-log every tick.
 string StartupCooldownReason()
 {
+   if(XAU_NoLimitTradingModeActive())
+   {
+      g_startupCooldownDone = true;
+      return "";
+   }
    if(g_remoteStopTrading) return "remote command stop trading active";
    if(g_remotePauseNewTrades) return "remote command pause new trades active";
    if(g_startupCooldownDone) return "";
@@ -17397,7 +18498,7 @@ string SpreadKillReason()
                           sp, median, ratio, InpSpreadKillMultiplier);
    }
    // v5.8.51: spread is currently normal but we may be in a post-spike window
-   if(g_spreadSpikeUntil > 0 && TimeCurrent() < g_spreadSpikeUntil)
+   if(!XAU_NoLimitTradingModeActive() && g_spreadSpikeUntil > 0 && TimeCurrent() < g_spreadSpikeUntil)
       return StringFormat("spread recovery (90s cooldown after spike — %ds remaining)",
                           (int)(g_spreadSpikeUntil - TimeCurrent()));
    return "";
@@ -17409,12 +18510,14 @@ string SpreadKillReason()
 // Replaces the old hard -3% blanket which was killing recovery cycles.
 bool IsSoftDDMode()
 {
+   if(XAU_NoLimitTradingModeActive()) return false;
    if(InpSoftDDPct <= 0 || dailyStartEquity <= 0) return false;
    double pnlPct = (accInfo.Equity() - dailyStartEquity) / dailyStartEquity * 100.0;
    return (pnlPct <= -InpSoftDDPct);
 }
 string HardDailyDDReason()
 {
+   if(XAU_NoLimitTradingModeActive()) return "";
    if(InpHardDailyDDPct <= 0 || dailyStartEquity <= 0) return "";
    double pnlPct = (accInfo.Equity() - dailyStartEquity) / dailyStartEquity * 100.0;
    if(pnlPct <= -InpHardDailyDDPct)
@@ -18268,6 +19371,25 @@ void XAU_RunStartupIntelligenceSync()
 void XAU_RecordMarketSnapshot(string phase, int signal, string setupName, string grade,
                               double setupScore, double combinedScore)
 {
+   {
+      bool candidate = (signal != 0 && grade != "SKIP");
+      double bidFeed = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      double askFeed = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+      double midFeed = (bidFeed > 0.0 && askFeed > 0.0) ? (bidFeed + askFeed) * 0.5 : iClose(Symbol(), PERIOD_M5, 0);
+      string scanDecision = candidate
+                            ? StringFormat("Entry candidate: %s %s setup", BotMonitorSignalName(signal), grade)
+                            : "No entry allowed on this M5 decision cycle";
+      string scanReason = candidate
+                          ? StringFormat("%s score=%.2f setupScore=%.2f", setupName, combinedScore, setupScore)
+                          : (StringLen(g_lastSkipReason) > 0 ? g_lastSkipReason : "No qualified M5 setup");
+      string blockedBy = candidate ? "" : (StringLen(g_lastSkipReason) > 0 ? XAU_BlockReasonKey(g_lastSkipReason) : "SCAN_FILTERS");
+      BotMonitorDecisionEvent("M5_DECISION", candidate ? "ENTRY" : "INFO",
+                              "DecisionCycle", scanDecision, candidate,
+                              scanReason, blockedBy, "", 0.0, midFeed,
+                              "", "", false, false, false, false,
+                              BotMonitorSignalName(signal), "", "", combinedScore,
+                              (double)g_aiLastConfidence, signal, grade, "");
+   }
    if(!InpMarketIntelSnapshots || !InpTradingIntelDataset || !IsXAUFastSymbol()) return;
    if(ArraySize(bufATR) < 2 || ArraySize(bufRSI) < 2 ||
       ArraySize(bufEMAFast) < 2 || ArraySize(bufEMASlow) < 2) return;
@@ -18310,6 +19432,58 @@ string XAU_IntelJsonSafe(string s, int maxLen)
    return s;
 }
 
+bool XAU_IntelIsClosedTradeEvent(string eventName, string action)
+{
+   string e = eventName;
+   string a = action;
+   StringToUpper(e);
+   StringToUpper(a);
+   return (e == "CLOSE" || a == "CLOSE");
+}
+
+string XAU_CloseReasonExactField(bool isCloseEvent, string reasonKey, string exitReason)
+{
+   if(!isCloseEvent) return "";
+   if(StringLen(exitReason) > 0) return exitReason;
+   if(StringLen(reasonKey) > 0) return reasonKey;
+   return "UNKNOWN_CLOSE_REASON";
+}
+
+string XAU_ClosedByField(bool isCloseEvent, string closeReasonExact, string owner)
+{
+   if(!isCloseEvent) return "";
+   string r = closeReasonExact;
+   StringToUpper(r);
+   if(StringFind(r, "BROKER_SL") >= 0) return "BROKER_SL";
+   if(StringFind(r, "BROKER_TP") >= 0) return "BROKER_TP";
+   if(StringFind(r, "BROKER_STOP_OUT") >= 0 || StringFind(r, "STOP_OUT") >= 0) return "BROKER_STOP_OUT";
+   if(StringFind(r, "MANUAL_DESKTOP_CLOSE") >= 0 ||
+      StringFind(r, "MANUAL_MOBILE_CLOSE") >= 0 ||
+      StringFind(r, "MANUAL_WEB_CLOSE") >= 0) return "MANUAL";
+   if(StringFind(r, "EA_MARKET_CLOSE") >= 0) return "EA";
+   if(StringFind(r, "CLOUD") >= 0) return "CLOUD";
+   if(StringLen(owner) > 0) return owner;
+   return "UNKNOWN";
+}
+
+bool XAU_WasSLHitField(bool isCloseEvent, string closeReasonExact)
+{
+   if(!isCloseEvent) return false;
+   string r = closeReasonExact;
+   StringToUpper(r);
+   return (StringFind(r, "BROKER_SL") >= 0);
+}
+
+bool XAU_WasEAForcedCloseField(bool isCloseEvent, string closeReasonExact, string closedBy)
+{
+   if(!isCloseEvent) return false;
+   string r = closeReasonExact;
+   string b = closedBy;
+   StringToUpper(r);
+   StringToUpper(b);
+   return (StringFind(r, "EA_MARKET_CLOSE") >= 0 || b == "EA");
+}
+
 void XAU_IntelAppendJson(string eventName, string decisionId, ulong posId, int dir,
                          string setupName, string grade, string signature, int regime,
                          string session, string owner, string action, string reasonKey,
@@ -18322,6 +19496,12 @@ void XAU_IntelAppendJson(string eventName, string decisionId, ulong posId, int d
                          bool cloudOk, string extra)
 {
    if(!InpTradingIntelJson) return;
+   bool isCloseEvent = XAU_IntelIsClosedTradeEvent(eventName, action);
+   string closeReasonExact = XAU_CloseReasonExactField(isCloseEvent, reasonKey, exitReason);
+   string closedBy = XAU_ClosedByField(isCloseEvent, closeReasonExact, owner);
+   bool wasSLHit = XAU_WasSLHitField(isCloseEvent, closeReasonExact);
+   bool wasEAForcedClose = XAU_WasEAForcedCloseField(isCloseEvent, closeReasonExact, closedBy);
+   double floatingProfitAtClose = isCloseEvent ? profit : 0.0;
    string fn = XAU_TradingIntelJsonFile();
    bool exists = FileIsExist(fn, FILE_COMMON);
    int h = exists
@@ -18368,6 +19548,11 @@ void XAU_IntelAppendJson(string eventName, string decisionId, ulong posId, int d
    line += ",\"advATR\":" + DoubleToString(advATR, 2);
    line += ",\"entryReason\":\"" + XAU_IntelJsonSafe(entryReason, 700) + "\"";
    line += ",\"exitReason\":\"" + XAU_IntelJsonSafe(exitReason, 700) + "\"";
+   line += ",\"CloseReasonExact\":\"" + XAU_IntelJsonSafe(closeReasonExact, 900) + "\"";
+   line += ",\"ClosedBy\":\"" + XAU_IntelJsonSafe(closedBy, 32) + "\"";
+   line += ",\"WasSLHit\":" + (wasSLHit ? "true" : "false");
+   line += ",\"WasEAForcedClose\":" + (wasEAForcedClose ? "true" : "false");
+   line += ",\"FloatingProfitAtClose\":" + DoubleToString(floatingProfitAtClose, 2);
    line += ",\"cloudSignalId\":\"" + XAU_IntelJsonSafe(cloudSignalId, 80) + "\"";
    line += ",\"cloudCode\":" + (string)cloudCode;
    line += ",\"cloudOk\":" + (cloudOk ? "true" : "false");
@@ -18389,6 +19574,12 @@ void XAU_IntelAppend(string eventName, string decisionId, ulong posId, int dir,
                      bool cloudOk, string extra)
 {
    if(!InpTradingIntelDataset || !IsXAUFastSymbol()) return;
+   bool isCloseEvent = XAU_IntelIsClosedTradeEvent(eventName, action);
+   string closeReasonExact = XAU_CloseReasonExactField(isCloseEvent, reasonKey, exitReason);
+   string closedBy = XAU_ClosedByField(isCloseEvent, closeReasonExact, owner);
+   bool wasSLHit = XAU_WasSLHitField(isCloseEvent, closeReasonExact);
+   bool wasEAForcedClose = XAU_WasEAForcedCloseField(isCloseEvent, closeReasonExact, closedBy);
+   double floatingProfitAtClose = isCloseEvent ? profit : 0.0;
    string fn = XAU_TradingIntelCsvFile();
    bool exists = FileIsExist(fn, FILE_COMMON);
    int h = exists
@@ -18407,7 +19598,9 @@ void XAU_IntelAppend(string eventName, string decisionId, ulong posId, int dir,
                 "owner", "action", "reasonKey", "setupScore", "combined", "atr",
                 "price", "entryPrice", "exitPrice", "lots", "sl", "tp", "profit",
                 "worstFloating", "secondsNegative", "checkpointMin", "favATR", "advATR",
-                "entryReason", "exitReason", "cloudSignalId", "cloudCode", "cloudOk", "extra");
+                "entryReason", "exitReason", "CloseReasonExact", "ClosedBy", "WasSLHit",
+                "WasEAForcedClose", "FloatingProfitAtClose",
+                "cloudSignalId", "cloudCode", "cloudOk", "extra");
    }
    MqlDateTime dt; TimeCurrent(dt);
    FileWrite(h,
@@ -18444,6 +19637,11 @@ void XAU_IntelAppend(string eventName, string decisionId, ulong posId, int dir,
              DoubleToString(advATR, 2),
              XAU_CsvSafe(entryReason),
              XAU_CsvSafe(exitReason),
+             XAU_CsvSafe(closeReasonExact),
+             XAU_CsvSafe(closedBy),
+             wasSLHit ? "Y" : "N",
+             wasEAForcedClose ? "Y" : "N",
+             DoubleToString(floatingProfitAtClose, 2),
              XAU_CsvSafe(cloudSignalId),
              cloudCode,
              cloudOk ? "Y" : "N",
@@ -20293,6 +21491,16 @@ string XAU_LotSizingModeName()
    return "REAL_RISK_MODE";
 }
 
+bool XAU_NoLimitTradingModeActive()
+{
+   return (InpNoLimitTradingMode || InpDisableAllDailyLocks || InpNoDailyLimitMode);
+}
+
+string XAU_BoolText(bool value)
+{
+   return value ? "true" : "false";
+}
+
 bool XAU_ModeAllowsSoftBlockWarning()
 {
    return (InpTradeMode == BALANCED_MODE || InpTradeMode == AGGRESSIVE_GROWTH_MODE);
@@ -20498,6 +21706,7 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
    string preBlock = PreTradeBlockReason(signal, setupName);
    if(StringLen(preBlock) > 0)
       return "Trade blocked — " + preBlock;
+   if(XAU_NoLimitTradingModeActive()) return "";
 
    // v6.4.5 ADAPTIVE COOLDOWN: pg_pauseUntil no longer fully blocks entries.
    // After losses, the EA continues scanning and trading, but B-grade setups are
@@ -20618,6 +21827,7 @@ int PG_AdaptiveCooldownMin()
 
 void PG_OnBasketLoss(double lossPct)
 {
+   if(XAU_NoLimitTradingModeActive()) return;
    if(!InpProfitGuardian) return;
    pg_consecutiveLosses++;
    if(lossPct >= 5.0 && InpPG_PostLossCooldown > 0)
@@ -20649,6 +21859,7 @@ void PG_OnBasketWin()
 
 void RegisterClosedTradeCooldown(bool wasWin, bool wasLoss, double profit)
 {
+   if(XAU_NoLimitTradingModeActive()) return;
    XAU_GrowthGuardOnClosedTrade(wasWin, wasLoss, profit);
 
    if(wasWin)
@@ -21272,8 +22483,8 @@ string XAU_LocalReportStatus()
    if(!termConn) return "MT5_DISCONNECTED";
    if(!termAlgo) return "ALGO_DISABLED";
    if(!mqlAlgo)  return "EA_TRADING_DISABLED";
-   if(g_remoteStopTrading) return "REMOTE_STOPPED";
-   if(g_remotePauseNewTrades) return "REMOTE_PAUSED";
+   if(!XAU_NoLimitTradingModeActive() && g_remoteStopTrading) return "REMOTE_STOPPED";
+   if(!XAU_NoLimitTradingModeActive() && g_remotePauseNewTrades) return "REMOTE_PAUSED";
    if(openPs > 0) return StringFormat("MANAGING_%d_POSITION(S)", openPs);
    if(StringLen(g_lastSkipReason) > 0) return "WAITING";
    return "SCANNING";
@@ -22075,6 +23286,82 @@ string BotMonitorBool(bool v)
    return v ? "true" : "false";
 }
 
+string BotMonitorSignalName(int dir)
+{
+   if(dir > 0) return "BUY";
+   if(dir < 0) return "SELL";
+   return "NONE";
+}
+
+void BotMonitorDecisionEvent(string eventType, string severity, string module, string decision,
+                             bool allowed, string reason, string blockedBy, string ticket,
+                             double profit, double price, string closeReasonExact,
+                             string closedByModule, bool wasBrokerSL, bool wasManual,
+                             bool wasEmergencyMargin, bool wasEAForcedClose,
+                             string positionDirection, string riskLotDecision,
+                             string exitDecision, double score, double aiConfidence,
+                             int signalDir, string grade, string mode)
+{
+   if(!BotMonitorEnabled()) return;
+   string ev = BotMonitorJsonSafe(eventType, 40);
+   string sev = BotMonitorJsonSafe(severity, 16);
+   string mod = BotMonitorJsonSafe(module, 80);
+   string dec = BotMonitorJsonSafe(decision, 260);
+   string why = BotMonitorJsonSafe(reason, 420);
+   string blocker = BotMonitorJsonSafe(blockedBy, 160);
+   string modeText = mode;
+   if(StringLen(modeText) <= 0)
+      modeText = XAU_TradeModeName() + " | " + XAU_LotSizingModeName();
+   string tradeStatus = XAUAI_TradeState();
+   string body = StringFormat(
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"event_type\":\"%s\",\"severity\":\"%s\","
+      "\"account\":\"%I64d\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"mode\":\"%s\","
+      "\"market_bias\":\"%s\",\"signal_direction\":\"%s\",\"ai_confidence\":%.2f,"
+      "\"score\":%.2f,\"trade_allowed\":%s,\"allowed\":%s,\"decision\":\"%s\","
+      "\"reason\":\"%s\",\"blocked_by\":\"%s\",\"current_trade_status\":\"%s\","
+      "\"exit_decision\":\"%s\",\"risk_lot_decision\":\"%s\",\"module\":\"%s\","
+      "\"ticket\":\"%s\",\"profit\":%.2f,\"price\":%.5f,\"close_reason_exact\":\"%s\","
+      "\"closed_by_module\":\"%s\",\"was_broker_sl\":%s,\"was_manual\":%s,"
+      "\"was_emergency_margin\":%s,\"was_ea_forced_close\":%s,"
+      "\"position_direction\":\"%s\",\"message\":\"%s\","
+      "\"details\":{\"module\":\"%s\",\"decision\":\"%s\",\"reason\":\"%s\","
+      "\"blocked_by\":\"%s\",\"ticket\":\"%s\",\"grade\":\"%s\",\"regime\":\"%s\","
+      "\"session\":\"%s\",\"last_skip\":\"%s\",\"no_limit_mode\":%s,"
+      "\"open_positions\":%d,\"close_reason_exact\":\"%s\",\"closed_by_module\":\"%s\","
+      "\"position_direction\":\"%s\",\"risk_lot_decision\":\"%s\",\"exit_decision\":\"%s\"}}",
+      BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
+      ev, sev, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(),
+      BotMonitorJsonSafe(modeText, 80), BotMonitorJsonSafe(RegimeName(), 32),
+      BotMonitorSignalName(signalDir), aiConfidence, score,
+      BotMonitorBool(allowed), BotMonitorBool(allowed), dec, why, blocker,
+      BotMonitorJsonSafe(tradeStatus, 180), BotMonitorJsonSafe(exitDecision, 220),
+      BotMonitorJsonSafe(riskLotDecision, 220), mod, BotMonitorJsonSafe(ticket, 40),
+      profit, price, BotMonitorJsonSafe(closeReasonExact, 180),
+      BotMonitorJsonSafe(closedByModule, 80), BotMonitorBool(wasBrokerSL),
+      BotMonitorBool(wasManual), BotMonitorBool(wasEmergencyMargin),
+      BotMonitorBool(wasEAForcedClose), BotMonitorJsonSafe(positionDirection, 12),
+      dec, mod, dec, why, blocker, BotMonitorJsonSafe(ticket, 40),
+      BotMonitorJsonSafe(grade, 24), BotMonitorJsonSafe(RegimeName(), 32),
+      BotMonitorJsonSafe(SessionTag(), 16), BotMonitorJsonSafe(g_lastSkipReason, 180),
+      BotMonitorBool(XAU_NoLimitTradingModeActive()), CountMyPositions(),
+      BotMonitorJsonSafe(closeReasonExact, 180), BotMonitorJsonSafe(closedByModule, 80),
+      BotMonitorJsonSafe(positionDirection, 12), BotMonitorJsonSafe(riskLotDecision, 220),
+      BotMonitorJsonSafe(exitDecision, 220));
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   ResetLastError();
+   int code = WebRequest("POST", InpCloudURL + "/api/cloud/monitor/activity",
+                         hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200)
+   {
+      string responseBody = CharArrayToString(res);
+      Print("BOT-DECISION activity POST failed url=", InpCloudURL, "/api/cloud/monitor/activity",
+            " http=", code, " err=", GetLastError(),
+            " event=", ev, " response=", BotMonitorJsonSafe(responseBody, 360));
+   }
+}
+
 void BotMonitorActivity(string eventType, string severity, string message)
 {
    if(!BotMonitorEnabled()) return;
@@ -22121,8 +23408,8 @@ void BotMonitorHeartbeat()
    else if(!termAlgo) state = "ALGO_DISABLED";
    else if(!mqlAlgo) state = "EA_TRADING_DISABLED";
    else if(!g_startupIntelSyncDone) state = "STARTUP_SYNCING";
-   else if(g_remoteStopTrading) state = "REMOTE_STOPPED";
-   else if(g_remotePauseNewTrades) state = "REMOTE_PAUSED";
+   else if(!XAU_NoLimitTradingModeActive() && g_remoteStopTrading) state = "REMOTE_STOPPED";
+   else if(!XAU_NoLimitTradingModeActive() && g_remotePauseNewTrades) state = "REMOTE_PAUSED";
    else if(openPs > 0) state = "MANAGING_TRADES";
    else if(StringLen(g_lastSkipReason) > 0) state = "WAITING";
    // Do not publish stale MQL runtime codes as live bot errors. Trade/order
@@ -22632,11 +23919,31 @@ void CloudPostReasoning(string event_type, string reason, string regime, string 
                         double setup_score, double combined_score, string grade, int signal_dir)
 {
    string monitorSeverity = "INFO";
-   if(event_type == "FIRE" || event_type == "PYR") monitorSeverity = "TRADE";
+   if(event_type == "FIRE" || event_type == "PYR") monitorSeverity = "ENTRY";
    else if(event_type == "BLOCK" || StringFind(reason, "VETO") >= 0) monitorSeverity = "BLOCK";
    else if(StringFind(reason, "ERROR") >= 0 || StringFind(reason, "FAILED") >= 0) monitorSeverity = "ERROR";
    else if(StringFind(reason, "SYNC") >= 0) monitorSeverity = "SYNC";
-   BotMonitorActivity(event_type, monitorSeverity, reason);
+   string upperEvent = event_type;
+   string upperReason = reason;
+   StringToUpper(upperEvent);
+   StringToUpper(upperReason);
+   bool allowed = !(upperEvent == "BLOCK" || StringFind(upperReason, "BLOCK") >= 0 || StringFind(upperReason, "VETO") >= 0);
+   string module = "DecisionEngine";
+   if(StringFind(upperReason, "AI") >= 0 || StringFind(upperReason, "DIRECTOR") >= 0) module = "AIDirector";
+   else if(StringFind(upperReason, "SMART") >= 0 || StringFind(upperReason, "GUARD") >= 0) module = "SmartGuard";
+   else if(StringFind(upperReason, "HTF") >= 0 || StringFind(upperReason, "BOS") >= 0) module = "Structure";
+   else if(StringFind(upperReason, "NEWS") >= 0) module = "NewsFilter";
+   else if(StringFind(upperReason, "SPREAD") >= 0) module = "SpreadFilter";
+   else if(StringFind(upperEvent, "EPF") >= 0 || StringFind(upperReason, "RISK") >= 0 || StringFind(upperReason, "LOCK") >= 0) module = "RiskManager";
+   string decision = allowed ? "Trade decision allowed" : "Trade decision blocked";
+   if(upperEvent == "FIRE") decision = "Entry allowed";
+   else if(upperEvent == "PYR") decision = "Pyramid decision allowed";
+   else if(upperEvent == "ALLOW") decision = "Warning downgraded; trade allowed";
+   BotMonitorDecisionEvent(event_type, monitorSeverity, module, decision, allowed,
+                           reason, allowed ? "" : module, "", 0.0, 0.0,
+                           "", "", false, false, false, false,
+                           BotMonitorSignalName(signal_dir), "", "", combined_score,
+                           (double)g_aiLastConfidence, signal_dir, grade, "");
    if(!CloudEnabled()) return;
    string r = CloudJsonSafe(reason, 240);
    string ev = CloudJsonSafe(event_type, 32);
@@ -22841,8 +24148,8 @@ string XAUAI_NewsState()
 
 string XAUAI_TradeState()
 {
-   if(g_remoteStopTrading) return "REMOTE_STOPPED";
-   if(g_remotePauseNewTrades) return "REMOTE_PAUSED";
+   if(!XAU_NoLimitTradingModeActive() && g_remoteStopTrading) return "REMOTE_STOPPED";
+   if(!XAU_NoLimitTradingModeActive() && g_remotePauseNewTrades) return "REMOTE_PAUSED";
    int openPs = CountMyPositions();
    if(openPs > 0) return StringFormat("MANAGING_%d_POSITION(S)", openPs);
    if(StringLen(g_lastSkipReason) > 0) return "WAITING: " + StringSubstr(g_lastSkipReason, 0, 80);
