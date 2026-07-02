@@ -45,7 +45,9 @@ def test_no_limit_bypasses_daily_growth_lock_and_day_giveback_close_paths():
     expectancy = body(ea, "bool ExpectancyDayGivebackGuard()")
     growth_manage = body(ea, "bool XAU_GrowthGuardManagePosition(")
 
-    assert "if(XAU_NoLimitTradingModeActive()) return false;" in growth_daily
+    assert "if(XAU_NoLimitTradingModeActive())" in growth_daily
+    assert "BotMonitorDecisionEvent(\"DAILY_LOCK_IGNORED\", \"OVERRIDE\"" in growth_daily
+    assert "return false;" in growth_daily
     assert "if(XAU_NoLimitTradingModeActive()) return false;" in expectancy
     assert "if(!InpGrowthGuardEnable || XAU_NoLimitTradingModeActive()) return false;" in growth_manage
     assert "GROWTH_HARD_LOSS_EXIT BASKET" in growth_manage

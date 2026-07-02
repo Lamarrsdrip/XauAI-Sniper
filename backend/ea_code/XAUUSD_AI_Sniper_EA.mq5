@@ -10851,7 +10851,26 @@ void XAU_GrowthSetPause(int minutes, string reason)
 
 bool XAU_GrowthDailyLockTriggered(string &why)
 {
-   if(XAU_NoLimitTradingModeActive()) return false;
+   if(XAU_NoLimitTradingModeActive())
+   {
+      XAU_GrowthUpdateDailyPeak();
+      double dayProfitNow = (dailyStartEquity > 0.0 ? AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity : 0.0);
+      static datetime lastNoLimitDailyLockFeed = 0;
+      if(TimeCurrent() - lastNoLimitDailyLockFeed >= 300)
+      {
+         lastNoLimitDailyLockFeed = TimeCurrent();
+         BotMonitorDecisionEvent("DAILY_LOCK_IGNORED", "OVERRIDE", "GrowthDailyLock",
+                                 "Daily lock attempted; NoLimitTradingMode ignored it",
+                                 true,
+                                 StringFormat("NoLimitTradingMode active. dayPeak=$%.2f currentDayPnl=$%.2f",
+                                              g_growthDailyPeakProfit, dayProfitNow),
+                                 "", "", dayProfitNow, 0.0,
+                                 "", "", false, false, false, false,
+                                 "NONE", "", "NO_DAILY_LOCK_CLOSE", 0.0,
+                                 (double)g_aiLastConfidence, 0, "", "");
+      }
+      return false;
+   }
    if(!InpGrowthGuardEnable || dailyStartEquity <= 0.0) return false;
    XAU_GrowthUpdateDailyPeak();
 
@@ -12206,10 +12225,19 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
                           lastSignalSetup, g_pendingBrainGrade, lastSignalSignature,
                           g_pendingBrainSetupScore, g_pendingBrainCombinedScore,
                           reason + " | " + g_pendingBrainEntryAudit);
-      BotMonitorActivity("TRADE_EXECUTED", "TRADE",
-                         StringFormat("FIRED %s %.2f lot @%.2f SL:%.2f TP:%.2f grade=%s",
-                                      signal == 1 ? "BUY" : "SELL", lots, price, sl, tp,
-                                      g_pendingBrainGrade));
+      BotMonitorDecisionEvent("TRADE_EXECUTED", "ENTRY", "EntryEngine",
+                              StringFormat("Entry allowed: %s %.2f lot @%.2f",
+                                           signal == 1 ? "BUY" : "SELL", lots, price),
+                              true,
+                              StringFormat("grade=%s setup=%s SL=%.2f TP=%.2f",
+                                           g_pendingBrainGrade, lastSignalSetup, sl, tp),
+                              "", (string)((long)openedPosId), 0.0, price,
+                              "", "", false, false, false, false,
+                              signal == 1 ? "BUY" : "SELL",
+                              StringFormat("LOT_MODE=%s lot=%.2f riskInput=%.2f%%",
+                                           XAU_LotSizingModeName(), lots, InpRiskPercent),
+                              "", g_pendingBrainCombinedScore,
+                              (double)g_aiLastConfidence, signal, g_pendingBrainGrade, "");
 
       // v6.4.19 — TRADE THESIS MONITOR: store entry snapshot so ManagePositions()
       // can continuously re-evaluate whether the trade reason is still valid.
@@ -14147,6 +14175,18 @@ bool XAU_LossCloseFirewallAllows(ulong ticket, string ctx, double closeLots = 0.
    XAU_PopPendingExitReason(ticket);
    PrintFormat("LOSS_CLOSE_BLOCKED #%I64u ctx=%s pnl=$%.2f closeLots=%.2f | Negative trades may close only by broker SL, manual close, or emergency margin/account protection.",
                ticket, ctx, pnl, closeLots);
+   long posType = PositionGetInteger(POSITION_TYPE);
+   string posDir = (posType == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+   double px = (posType == POSITION_TYPE_BUY) ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   BotMonitorDecisionEvent("LOSS_CLOSE_BLOCKED", "OVERRIDE", ctx,
+                           "Exit blocked because position was negative",
+                           false,
+                           "Only broker SL, manual close, or emergency margin/account protection may close a floating-loss trade.",
+                           ctx, (string)((long)ticket), pnl, px,
+                           "", ctx, false, false, false, false,
+                           posDir, "", "LOSS_CLOSE_BLOCKED", 0.0,
+                           (double)g_aiLastConfidence, posDir == "BUY" ? 1 : -1,
+                           "", "");
    return false;
 }
 
@@ -16497,6 +16537,16 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                posId, closeReasonExact, closedBy,
                wasSLHitExact ? "Y" : "N",
                wasEAForcedClose ? "Y" : "N", profit);
+   bool wasManualClose = (dealReason == DEAL_REASON_CLIENT || dealReason == DEAL_REASON_MOBILE || dealReason == DEAL_REASON_WEB);
+   bool wasEmergencyMargin = (dealReason == DEAL_REASON_SO || StringFind(closeReasonExact, "MARGIN") >= 0 || StringFind(closeReasonExact, "STOP_OUT") >= 0);
+   BotMonitorDecisionEvent("TRADE_CLOSED", "EXIT", closedBy,
+                           StringFormat("Trade closed: %s $%.2f", wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK-EVEN", profit),
+                           true,
+                           closeReasonExact, "", (string)((long)posId), profit, dPrice,
+                           closeReasonExact, closedBy, wasSLHitExact, wasManualClose,
+                           wasEmergencyMargin, wasEAForcedClose, dirStr,
+                           "", closeReasonExact, 0.0, (double)g_aiLastConfidence,
+                           dirStr == "BUY" ? 1 : -1, "", "");
    bool aiInfluenced = (currentTradeConfidence > 0 || StringFind(lastExitReason, "AI") >= 0 || StringFind(lastExitReason, "CLAUDE") >= 0);
    if(aiInfluenced)
    {
@@ -18038,6 +18088,25 @@ void XAU_RunStartupIntelligenceSync()
 void XAU_RecordMarketSnapshot(string phase, int signal, string setupName, string grade,
                               double setupScore, double combinedScore)
 {
+   {
+      bool candidate = (signal != 0 && grade != "SKIP");
+      double bidFeed = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      double askFeed = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+      double midFeed = (bidFeed > 0.0 && askFeed > 0.0) ? (bidFeed + askFeed) * 0.5 : iClose(Symbol(), PERIOD_M5, 0);
+      string scanDecision = candidate
+                            ? StringFormat("Entry candidate: %s %s setup", BotMonitorSignalName(signal), grade)
+                            : "No entry allowed on this M5 decision cycle";
+      string scanReason = candidate
+                          ? StringFormat("%s score=%.2f setupScore=%.2f", setupName, combinedScore, setupScore)
+                          : (StringLen(g_lastSkipReason) > 0 ? g_lastSkipReason : "No qualified M5 setup");
+      string blockedBy = candidate ? "" : (StringLen(g_lastSkipReason) > 0 ? XAU_BlockReasonKey(g_lastSkipReason) : "SCAN_FILTERS");
+      BotMonitorDecisionEvent("M5_DECISION", candidate ? "ENTRY" : "INFO",
+                              "DecisionCycle", scanDecision, candidate,
+                              scanReason, blockedBy, "", 0.0, midFeed,
+                              "", "", false, false, false, false,
+                              BotMonitorSignalName(signal), "", "", combinedScore,
+                              (double)g_aiLastConfidence, signal, grade, "");
+   }
    if(!InpMarketIntelSnapshots || !InpTradingIntelDataset || !IsXAUFastSymbol()) return;
    if(ArraySize(bufATR) < 2 || ArraySize(bufRSI) < 2 ||
       ArraySize(bufEMAFast) < 2 || ArraySize(bufEMASlow) < 2) return;
@@ -21934,6 +22003,82 @@ string BotMonitorBool(bool v)
    return v ? "true" : "false";
 }
 
+string BotMonitorSignalName(int dir)
+{
+   if(dir > 0) return "BUY";
+   if(dir < 0) return "SELL";
+   return "NONE";
+}
+
+void BotMonitorDecisionEvent(string eventType, string severity, string module, string decision,
+                             bool allowed, string reason, string blockedBy, string ticket,
+                             double profit, double price, string closeReasonExact,
+                             string closedByModule, bool wasBrokerSL, bool wasManual,
+                             bool wasEmergencyMargin, bool wasEAForcedClose,
+                             string positionDirection, string riskLotDecision,
+                             string exitDecision, double score, double aiConfidence,
+                             int signalDir, string grade, string mode)
+{
+   if(!BotMonitorEnabled()) return;
+   string ev = BotMonitorJsonSafe(eventType, 40);
+   string sev = BotMonitorJsonSafe(severity, 16);
+   string mod = BotMonitorJsonSafe(module, 80);
+   string dec = BotMonitorJsonSafe(decision, 260);
+   string why = BotMonitorJsonSafe(reason, 420);
+   string blocker = BotMonitorJsonSafe(blockedBy, 160);
+   string modeText = mode;
+   if(StringLen(modeText) <= 0)
+      modeText = XAU_TradeModeName() + " | " + XAU_LotSizingModeName();
+   string tradeStatus = XAUAI_TradeState();
+   string body = StringFormat(
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"event_type\":\"%s\",\"severity\":\"%s\","
+      "\"account\":\"%I64d\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"mode\":\"%s\","
+      "\"market_bias\":\"%s\",\"signal_direction\":\"%s\",\"ai_confidence\":%.2f,"
+      "\"score\":%.2f,\"trade_allowed\":%s,\"allowed\":%s,\"decision\":\"%s\","
+      "\"reason\":\"%s\",\"blocked_by\":\"%s\",\"current_trade_status\":\"%s\","
+      "\"exit_decision\":\"%s\",\"risk_lot_decision\":\"%s\",\"module\":\"%s\","
+      "\"ticket\":\"%s\",\"profit\":%.2f,\"price\":%.5f,\"close_reason_exact\":\"%s\","
+      "\"closed_by_module\":\"%s\",\"was_broker_sl\":%s,\"was_manual\":%s,"
+      "\"was_emergency_margin\":%s,\"was_ea_forced_close\":%s,"
+      "\"position_direction\":\"%s\",\"message\":\"%s\","
+      "\"details\":{\"module\":\"%s\",\"decision\":\"%s\",\"reason\":\"%s\","
+      "\"blocked_by\":\"%s\",\"ticket\":\"%s\",\"grade\":\"%s\",\"regime\":\"%s\","
+      "\"session\":\"%s\",\"last_skip\":\"%s\",\"no_limit_mode\":%s,"
+      "\"open_positions\":%d,\"close_reason_exact\":\"%s\",\"closed_by_module\":\"%s\","
+      "\"position_direction\":\"%s\",\"risk_lot_decision\":\"%s\",\"exit_decision\":\"%s\"}}",
+      BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
+      ev, sev, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(),
+      BotMonitorJsonSafe(modeText, 80), BotMonitorJsonSafe(RegimeName(), 32),
+      BotMonitorSignalName(signalDir), aiConfidence, score,
+      BotMonitorBool(allowed), BotMonitorBool(allowed), dec, why, blocker,
+      BotMonitorJsonSafe(tradeStatus, 180), BotMonitorJsonSafe(exitDecision, 220),
+      BotMonitorJsonSafe(riskLotDecision, 220), mod, BotMonitorJsonSafe(ticket, 40),
+      profit, price, BotMonitorJsonSafe(closeReasonExact, 180),
+      BotMonitorJsonSafe(closedByModule, 80), BotMonitorBool(wasBrokerSL),
+      BotMonitorBool(wasManual), BotMonitorBool(wasEmergencyMargin),
+      BotMonitorBool(wasEAForcedClose), BotMonitorJsonSafe(positionDirection, 12),
+      dec, mod, dec, why, blocker, BotMonitorJsonSafe(ticket, 40),
+      BotMonitorJsonSafe(grade, 24), BotMonitorJsonSafe(RegimeName(), 32),
+      BotMonitorJsonSafe(SessionTag(), 16), BotMonitorJsonSafe(g_lastSkipReason, 180),
+      BotMonitorBool(XAU_NoLimitTradingModeActive()), CountMyPositions(),
+      BotMonitorJsonSafe(closeReasonExact, 180), BotMonitorJsonSafe(closedByModule, 80),
+      BotMonitorJsonSafe(positionDirection, 12), BotMonitorJsonSafe(riskLotDecision, 220),
+      BotMonitorJsonSafe(exitDecision, 220));
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   ResetLastError();
+   int code = WebRequest("POST", InpCloudURL + "/api/cloud/monitor/activity",
+                         hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200)
+   {
+      string responseBody = CharArrayToString(res);
+      Print("BOT-DECISION activity POST failed url=", InpCloudURL, "/api/cloud/monitor/activity",
+            " http=", code, " err=", GetLastError(),
+            " event=", ev, " response=", BotMonitorJsonSafe(responseBody, 360));
+   }
+}
+
 void BotMonitorActivity(string eventType, string severity, string message)
 {
    if(!BotMonitorEnabled()) return;
@@ -22488,11 +22633,31 @@ void CloudPostReasoning(string event_type, string reason, string regime, string 
                         double setup_score, double combined_score, string grade, int signal_dir)
 {
    string monitorSeverity = "INFO";
-   if(event_type == "FIRE" || event_type == "PYR") monitorSeverity = "TRADE";
+   if(event_type == "FIRE" || event_type == "PYR") monitorSeverity = "ENTRY";
    else if(event_type == "BLOCK" || StringFind(reason, "VETO") >= 0) monitorSeverity = "BLOCK";
    else if(StringFind(reason, "ERROR") >= 0 || StringFind(reason, "FAILED") >= 0) monitorSeverity = "ERROR";
    else if(StringFind(reason, "SYNC") >= 0) monitorSeverity = "SYNC";
-   BotMonitorActivity(event_type, monitorSeverity, reason);
+   string upperEvent = event_type;
+   string upperReason = reason;
+   StringToUpper(upperEvent);
+   StringToUpper(upperReason);
+   bool allowed = !(upperEvent == "BLOCK" || StringFind(upperReason, "BLOCK") >= 0 || StringFind(upperReason, "VETO") >= 0);
+   string module = "DecisionEngine";
+   if(StringFind(upperReason, "AI") >= 0 || StringFind(upperReason, "DIRECTOR") >= 0) module = "AIDirector";
+   else if(StringFind(upperReason, "SMART") >= 0 || StringFind(upperReason, "GUARD") >= 0) module = "SmartGuard";
+   else if(StringFind(upperReason, "HTF") >= 0 || StringFind(upperReason, "BOS") >= 0) module = "Structure";
+   else if(StringFind(upperReason, "NEWS") >= 0) module = "NewsFilter";
+   else if(StringFind(upperReason, "SPREAD") >= 0) module = "SpreadFilter";
+   else if(StringFind(upperEvent, "EPF") >= 0 || StringFind(upperReason, "RISK") >= 0 || StringFind(upperReason, "LOCK") >= 0) module = "RiskManager";
+   string decision = allowed ? "Trade decision allowed" : "Trade decision blocked";
+   if(upperEvent == "FIRE") decision = "Entry allowed";
+   else if(upperEvent == "PYR") decision = "Pyramid decision allowed";
+   else if(upperEvent == "ALLOW") decision = "Warning downgraded; trade allowed";
+   BotMonitorDecisionEvent(event_type, monitorSeverity, module, decision, allowed,
+                           reason, allowed ? "" : module, "", 0.0, 0.0,
+                           "", "", false, false, false, false,
+                           BotMonitorSignalName(signal_dir), "", "", combined_score,
+                           (double)g_aiLastConfidence, signal_dir, grade, "");
    if(!CloudEnabled()) return;
    string r = CloudJsonSafe(reason, 240);
    string ev = CloudJsonSafe(event_type, 32);

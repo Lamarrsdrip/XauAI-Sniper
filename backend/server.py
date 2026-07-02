@@ -4758,7 +4758,32 @@ class BotActivityReq(BaseModel):
     account: Optional[str] = ""
     symbol: Optional[str] = ""
     message: str = ""
-    details: Optional[Dict] = None
+    details: Optional[Dict[str, Any]] = None
+    timeframe: Optional[str] = ""
+    mode: Optional[str] = ""
+    market_bias: Optional[str] = ""
+    signal_direction: Optional[str] = ""
+    ai_confidence: Optional[float] = None
+    score: Optional[float] = None
+    trade_allowed: Optional[bool] = None
+    allowed: Optional[bool] = None
+    decision: Optional[str] = ""
+    reason: Optional[str] = ""
+    blocked_by: Optional[str] = ""
+    current_trade_status: Optional[str] = ""
+    exit_decision: Optional[str] = ""
+    risk_lot_decision: Optional[str] = ""
+    module: Optional[str] = ""
+    ticket: Optional[str] = ""
+    profit: Optional[float] = None
+    price: Optional[float] = None
+    close_reason_exact: Optional[str] = ""
+    closed_by_module: Optional[str] = ""
+    was_broker_sl: Optional[bool] = None
+    was_manual: Optional[bool] = None
+    was_emergency_margin: Optional[bool] = None
+    was_ea_forced_close: Optional[bool] = None
+    position_direction: Optional[str] = ""
 
 def _dt_or_none(iso: str):
     if not iso:
@@ -4774,16 +4799,96 @@ async def _store_bot_activity(event_type: str, severity: str, message: str,
     sev = (severity or "INFO").upper()
     details = details or {}
     license_key = _normalize_license_key(details.get("license_key", ""))
+    ev = (event_type or "INFO").upper()
+    reason = str(details.get("reason") or message or "")[:300]
+    module = str(details.get("module") or "")[:80]
+    decision = str(details.get("decision") or "")[:160]
+    blocked_by = str(details.get("blocked_by") or "")[:120]
+    ticket = str(details.get("ticket") or "")
+    text = f"{ev} {sev} {module} {decision} {reason} {blocked_by}".upper()
+    if sev in {"OVERRIDE"} or any(k in text for k in ("OVERRIDE", "IGNORED", "LOSS_CLOSE_BLOCKED")):
+        category = "overrides"
+    elif sev in {"ENTRY", "TRADE"} or any(k in text for k in ("TRADE_EXECUTED", "FIRE", "PYR", "ENTRY")):
+        category = "entries"
+    elif sev in {"EXIT"} or any(k in text for k in ("EXIT", "CLOSE", "CLOSED")):
+        category = "exits"
+    elif sev in {"BLOCK"} or any(k in text for k in ("BLOCK", "VETO")):
+        category = "blocks"
+    elif sev in {"ERROR", "CRITICAL"} or any(k in text for k in ("ERROR", "FAILED")):
+        category = "errors"
+    elif any(k in text for k in ("RISK", "LOT", "GROWTH", "LOCK", "DRAWDOWN", "MARGIN")):
+        category = "risk"
+    elif any(k in text for k in ("AI", "DIRECTOR", "CONFIDENCE", "ML", "BRAIN")):
+        category = "ai"
+    else:
+        category = "info"
+
+    dedupe_source = "|".join([
+        license_key,
+        str(account or ""),
+        str(symbol or ""),
+        ev,
+        sev,
+        module,
+        decision,
+        reason,
+        blocked_by,
+        ticket,
+    ])
+    dedupe_key = hashlib.sha256(dedupe_source.encode("utf-8")).hexdigest()
+    window_start = (now - timedelta(minutes=15)).isoformat()
+    existing = await db.cloud_bot_activity.find_one(
+        {"dedupe_key": dedupe_key, "ts": {"$gte": window_start}},
+        {"_id": 0},
+        sort=[("ts", -1)]
+    )
+    if existing:
+        repeat_count = int(existing.get("repeat_count") or 1) + 1
+        await db.cloud_bot_activity.update_one(
+            {"id": existing["id"]},
+            {"$set": {
+                "ts": now.isoformat(),
+                "last_repeat_at": now.isoformat(),
+                "repeat_count": repeat_count,
+                "message": str(message or "")[:600],
+                "details": details,
+            }}
+        )
+        existing.update({
+            "ts": now.isoformat(),
+            "last_repeat_at": now.isoformat(),
+            "repeat_count": repeat_count,
+            "message": str(message or "")[:600],
+            "details": details,
+        })
+        return existing
+
     doc = {
         "id": str(uuid.uuid4()),
         "ts": now.isoformat(),
-        "event_type": (event_type or "INFO").upper(),
+        "first_seen_at": now.isoformat(),
+        "last_repeat_at": now.isoformat(),
+        "repeat_count": 1,
+        "dedupe_key": dedupe_key,
+        "event_type": ev,
         "severity": sev,
+        "event_category": category,
         "license_key": license_key,
         "account": str(account or ""),
         "symbol": str(symbol or ""),
         "message": str(message or "")[:600],
         "details": details,
+        "module": module,
+        "decision": decision,
+        "reason": reason,
+        "blocked_by": blocked_by,
+        "ticket": ticket,
+        "allowed": details.get("allowed", details.get("trade_allowed")),
+        "mode": str(details.get("mode") or ""),
+        "market_bias": str(details.get("market_bias") or ""),
+        "signal_direction": str(details.get("signal_direction") or ""),
+        "ai_confidence": details.get("ai_confidence"),
+        "score": details.get("score"),
     }
     await db.cloud_bot_activity.insert_one(doc.copy())
     total = await db.cloud_bot_activity.estimated_document_count()
@@ -4898,7 +5003,18 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
     """Remote monitoring only; this endpoint never executes trades."""
     license_key = _normalize_license_key(req.license_key or req.pin or "")
     lic = await _resolve_monitor_license(license_key, req.account or "", request)
-    details = req.details or {}
+    details = dict(req.details or {})
+    for field in (
+        "timeframe", "mode", "market_bias", "signal_direction", "ai_confidence",
+        "score", "trade_allowed", "allowed", "decision", "reason", "blocked_by",
+        "current_trade_status", "exit_decision", "risk_lot_decision", "module",
+        "ticket", "profit", "price", "close_reason_exact", "closed_by_module",
+        "was_broker_sl", "was_manual", "was_emergency_margin", "was_ea_forced_close",
+        "position_direction",
+    ):
+        value = getattr(req, field, None)
+        if value is not None and value != "":
+            details[field] = value
     if license_key:
         details = dict(details)
         details["license_key"] = license_key
@@ -5195,7 +5311,7 @@ async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
     }
 
 @api_router.get("/cloud/monitor/activity")
-async def cloud_monitor_activity_feed(kind: str = "all", limit: int = 80,
+async def cloud_monitor_activity_feed(kind: str = "all", limit: int = 80, search: str = "",
                                       user: dict = Depends(get_cloud_user)):
     n = max(1, min(int(limit), 200))
     k = (kind or "all").lower()
@@ -5205,22 +5321,46 @@ async def cloud_monitor_activity_feed(kind: str = "all", limit: int = 80,
     if not account_filter and not license_key:
         return {"events": [], "count": 0, "kind": k, "reason": "license_not_linked"}
     query = {}
-    if k == "trades":
-        query = {"severity": "TRADE"}
+    if k in {"entries", "trades", "entry"}:
+        query = {"$or": [{"event_category": "entries"}, {"severity": {"$in": ["ENTRY", "TRADE"]}}, {"event_type": {"$regex": "TRADE_EXECUTED|FIRE|PYR|ENTRY"}}]}
     elif k == "blocks":
-        query = {"$or": [{"severity": "BLOCK"}, {"event_type": {"$regex": "BLOCK|VETO"}}]}
+        query = {"$or": [{"event_category": "blocks"}, {"severity": "BLOCK"}, {"event_type": {"$regex": "BLOCK|VETO"}}]}
     elif k == "errors":
-        query = {"severity": {"$in": ["ERROR", "CRITICAL"]}}
+        query = {"$or": [{"event_category": "errors"}, {"severity": {"$in": ["ERROR", "CRITICAL"]}}]}
     elif k == "sync":
         query = {"$or": [{"severity": "SYNC"}, {"event_type": {"$regex": "SYNC"}}]}
-    elif k == "exit":
-        query = {"$or": [{"severity": "EXIT"}, {"event_type": {"$regex": "EXIT|CLOSE"}}]}
+    elif k in {"exit", "exits"}:
+        query = {"$or": [{"event_category": "exits"}, {"severity": "EXIT"}, {"event_type": {"$regex": "EXIT|CLOSE"}}]}
     elif k == "shadow":
         query = {"event_type": {"$regex": "SHADOW|BLOCK_CHECK"}}
     elif k == "risk":
-        query = {"event_type": {"$regex": "EPF|DRAWDOWN|RISK|LOCK"}}
+        query = {"$or": [{"event_category": "risk"}, {"event_type": {"$regex": "EPF|DRAWDOWN|RISK|LOCK|LOT|MARGIN"}}]}
+    elif k == "ai":
+        query = {"$or": [{"event_category": "ai"}, {"event_type": {"$regex": "AI|DIRECTOR|ML|BRAIN|CONFIDENCE"}}, {"message": {"$regex": "AI|DIRECTOR|ML|BRAIN|CONFIDENCE", "$options": "i"}}]}
+    elif k == "overrides":
+        query = {"$or": [{"event_category": "overrides"}, {"severity": "OVERRIDE"}, {"event_type": {"$regex": "OVERRIDE|LOSS_CLOSE_BLOCKED|IGNORED"}}]}
     scope = {"$or": [{"account": account_filter}, {"license_key": license_key}]} if account_filter and license_key else ({"account": account_filter} if account_filter else {"license_key": license_key})
     query = {"$and": [scope, query]} if query else scope
+    q = str(search or "").strip()
+    if q:
+        safe = re.escape(q[:80])
+        search_query = {"$or": [
+            {"event_type": {"$regex": safe, "$options": "i"}},
+            {"severity": {"$regex": safe, "$options": "i"}},
+            {"event_category": {"$regex": safe, "$options": "i"}},
+            {"message": {"$regex": safe, "$options": "i"}},
+            {"symbol": {"$regex": safe, "$options": "i"}},
+            {"module": {"$regex": safe, "$options": "i"}},
+            {"decision": {"$regex": safe, "$options": "i"}},
+            {"reason": {"$regex": safe, "$options": "i"}},
+            {"blocked_by": {"$regex": safe, "$options": "i"}},
+            {"ticket": {"$regex": safe, "$options": "i"}},
+            {"ts": {"$regex": safe, "$options": "i"}},
+            {"details.ticket": {"$regex": safe, "$options": "i"}},
+            {"details.reason": {"$regex": safe, "$options": "i"}},
+            {"details.module": {"$regex": safe, "$options": "i"}},
+        ]}
+        query = {"$and": [query, search_query]}
     rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", -1).to_list(n)
     return {"events": rows, "count": len(rows), "kind": k}
 

@@ -5,7 +5,7 @@ import {
   Activity, AreaChart, BarChart3, Bot, Brain, CheckCircle2, CircleDollarSign,
   Clock3, Copy, Flame, Gauge, History, Home, KeyRound, LineChart, Loader2,
   Lock, LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
-  SlidersHorizontal, Square, TerminalSquare, TrendingUp, Wifi, XCircle, AlertTriangle,
+  SlidersHorizontal, Square, TerminalSquare, TrendingUp, Wifi, XCircle, AlertTriangle, Search,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
@@ -33,8 +33,8 @@ const MORE_NAV = [
   ["settings",     "Settings",  Settings,          "Account and app settings"              ],
 ];
 const FILTERS = [
-  ["all","All"],["trades","Trades"],["blocks","Blocks"],
-  ["errors","Errors"],["sync","Sync"],["exit","Exit"],["risk","Risk"],
+  ["all","All"],["entries","Entries"],["blocks","Blocks"],["exits","Exits"],
+  ["risk","Risk"],["ai","AI"],["errors","Errors"],["overrides","Overrides"],
 ];
 const COMMANDS = [
   { action:"PAUSE_NEW_TRADES",   label:"Pause",          detail:"Pause fresh entries. Open trades keep being managed.", icon:Pause,    tone:"amber", dangerous:false },
@@ -66,10 +66,52 @@ const severityTone = (sev) => {
   const s = String(sev||"INFO").toUpperCase();
   if (["CRITICAL","ERROR"].includes(s))   return "red";
   if (["WARNING","BLOCK"].includes(s))    return "amber";
-  if (["TRADE","COMMAND"].includes(s))    return "green";
+  if (["TRADE","ENTRY","COMMAND"].includes(s))    return "green";
+  if (["OVERRIDE"].includes(s))           return "violet";
   if (["EXIT","SYNC"].includes(s))        return "blue";
   return "neutral";
 };
+
+const eventDetails = (event) => event?.details || {};
+const eventCategory = (event) => {
+  const d = eventDetails(event);
+  const raw = String(event?.event_category || d.event_category || "").toLowerCase();
+  if (raw) return raw;
+  const text = `${event?.event_type||""} ${event?.severity||""} ${event?.message||""} ${d.module||""} ${d.reason||""}`.toUpperCase();
+  if (/OVERRIDE|LOSS_CLOSE_BLOCKED|IGNORED/.test(text)) return "overrides";
+  if (/TRADE_EXECUTED|ENTRY|FIRE|PYR/.test(text) || ["TRADE","ENTRY"].includes(String(event?.severity||"").toUpperCase())) return "entries";
+  if (/BLOCK|VETO/.test(text)) return "blocks";
+  if (/EXIT|CLOSE|CLOSED/.test(text) || String(event?.severity||"").toUpperCase()==="EXIT") return "exits";
+  if (/ERROR|FAILED|CRITICAL/.test(text)) return "errors";
+  if (/RISK|LOT|GROWTH|LOCK|DRAWDOWN|MARGIN/.test(text)) return "risk";
+  if (/AI|DIRECTOR|ML|BRAIN|CONFIDENCE/.test(text)) return "ai";
+  return "info";
+};
+const getEventField = (event, key, fallback="") => {
+  const d = eventDetails(event);
+  return event?.[key] ?? d?.[key] ?? fallback;
+};
+const getEventTicket = (event) => String(getEventField(event, "ticket", "") || getEventField(event, "posId", "") || getEventField(event, "position_id", ""));
+const getEventDecision = (event) => getEventField(event, "decision", "") || event?.message || "Decision recorded";
+const getEventReason = (event) => getEventField(event, "reason", "") || event?.message || "";
+const eventRepeatText = (event) => {
+  const count = Number(event?.repeat_count || 1);
+  if (count <= 1) return "";
+  return `Repeated ${count - 1} times in last 15 minutes.`;
+};
+const eventMatchesSearch = (event, term) => {
+  const q = String(term||"").trim().toLowerCase();
+  if (!q) return true;
+  const d = eventDetails(event);
+  return [
+    event?.event_type, event?.severity, event?.symbol, event?.message, event?.ts,
+    event?.module, event?.decision, event?.reason, event?.blocked_by, event?.ticket,
+    d.module, d.decision, d.reason, d.blocked_by, d.ticket, d.symbol,
+    d.close_reason_exact, d.closed_by_module, d.position_direction,
+  ].filter(Boolean).some(v => String(v).toLowerCase().includes(q));
+};
+const latestDecisionEvent = (events=[]) => events.find(e => /entries|blocks|exits|risk|ai|errors|overrides/.test(eventCategory(e))) || events[0];
+const weightedEventCount = (events=[]) => events.reduce((sum,e)=>sum + Number(e.repeat_count||1), 0);
 
 // ─── Design tokens ───────────────────────────────────────────────────────────
 const CARD = "rounded-2xl border border-white/[0.07] bg-[#0d0e13]";
@@ -149,18 +191,146 @@ function Sparkline({ points=[], tone="#d4af37", height="h-20" }) {
 
 function EventRow({ event }) {
   const tone = severityTone(event.severity);
-  const dotColor = { red:"bg-red-400", amber:"bg-amber-300", green:"bg-emerald-400", blue:"bg-sky-300", neutral:"bg-white/30" }[tone]||"bg-white/30";
+  const d = eventDetails(event);
+  const dotColor = { red:"bg-red-400", amber:"bg-amber-300", green:"bg-emerald-400", blue:"bg-sky-300", violet:"bg-violet-300", neutral:"bg-white/30" }[tone]||"bg-white/30";
+  const module = getEventField(event, "module", "");
+  const decision = getEventDecision(event);
+  const reason = getEventReason(event);
+  const ticket = getEventTicket(event);
+  const allowed = getEventField(event, "allowed", getEventField(event, "trade_allowed", undefined));
+  const repeat = eventRepeatText(event);
+  const facts = [
+    ["Symbol", event.symbol || d.symbol],
+    ["Mode", getEventField(event, "mode", "")],
+    ["Bias", getEventField(event, "market_bias", "")],
+    ["Signal", getEventField(event, "signal_direction", "")],
+    ["AI", getEventField(event, "ai_confidence", "")],
+    ["Score", getEventField(event, "score", "")],
+    ["Allowed", allowed === undefined ? "" : allowed ? "YES" : "NO"],
+    ["Ticket", ticket],
+    ["P/L", getEventField(event, "profit", "")],
+    ["Close", getEventField(event, "close_reason_exact", "")],
+  ].filter(([,v]) => v !== undefined && v !== null && String(v) !== "");
   return (
     <div className="flex items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
       <span className={`mt-[6px] h-2 w-2 flex-none rounded-full ${dotColor}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className={MONO_LABEL}>{event.severity||"INFO"} · {event.event_type||"EVENT"}</span>
+          <span className={MONO_LABEL}>{event.severity||"INFO"} · {event.event_type||"EVENT"}{module?` · ${module}`:""}</span>
           <span className="flex-none text-[10px] text-white/30">{relativeTime(event.ts)}</span>
         </div>
-        <div className="mt-1 break-words text-[13px] leading-5 text-white/75">{event.message||"Event recorded"}</div>
+        <div className="mt-1 break-words text-[13px] leading-5 text-white/78">{decision}</div>
+        {reason && reason !== decision && <div className="mt-1 break-words text-[12px] leading-5 text-white/45">{reason}</div>}
+        {getEventField(event, "blocked_by", "") && <div className="mt-1 text-[12px] text-amber-200/80">Blocked by: {getEventField(event, "blocked_by", "")}</div>}
+        {facts.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {facts.slice(0,10).map(([k,v])=>(
+              <span key={`${k}-${v}`} className="rounded-full border border-white/[0.06] bg-black/20 px-2 py-0.5 text-[10px] text-white/45">{k}: {String(v)}</span>
+            ))}
+          </div>
+        )}
+        {repeat && <div className="mt-2 text-[11px] font-semibold text-violet-200">{repeat}</div>}
       </div>
     </div>
+  );
+}
+
+function DecisionSummaryCard({ events=[], heartbeat={}, setActive, title="Latest bot decision" }) {
+  const event = latestDecisionEvent(events);
+  const d = eventDetails(event);
+  const allowed = event ? getEventField(event, "allowed", getEventField(event, "trade_allowed", undefined)) : undefined;
+  const tone = event ? severityTone(event.severity) : "neutral";
+  return (
+    <Card
+      title={title}
+      subtitle="Clean M5 decision feed from the EA, deduplicated before it reaches this screen."
+      action={setActive && <button onClick={()=>setActive("activity")} className="rounded-full border border-white/[0.08] px-3 py-1.5 text-[11px] font-semibold text-white/55 hover:text-white">Open feed</button>}
+    >
+      {event ? (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={pill(tone)}>{event.severity||"INFO"}</span>
+            <span className={pill(eventCategory(event)==="overrides"?"violet":"neutral")}>{event.event_type||"DECISION"}</span>
+            {getEventField(event, "module", "") && <span className={pill("neutral")}>{getEventField(event, "module", "")}</span>}
+            <span className="ml-auto text-[10px] text-white/30">{relativeTime(event.ts)}</span>
+          </div>
+          <div className="text-[17px] font-black leading-tight">{getEventDecision(event)}</div>
+          <div className="text-[12px] leading-5 text-white/45">{getEventReason(event) || event.message}</div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Metric label="Allowed" value={allowed===undefined?"—":allowed?"YES":"NO"} detail={getEventField(event,"blocked_by","")||"Decision result"} icon={Shield} tone={allowed===false?"amber":allowed===true?"green":"neutral"} />
+            <Metric label="Bias" value={getEventField(event,"market_bias","—")||"—"} detail={event.symbol||heartbeat.symbol||"XAUUSD"} icon={Activity} tone="blue" />
+            <Metric label="AI" value={getEventField(event,"ai_confidence","—")||"—"} detail="Confidence" icon={Brain} tone="violet" />
+            <Metric label="Score" value={getEventField(event,"score","—")||"—"} detail={getEventField(event,"signal_direction","")||"Signal"} icon={Gauge} tone="amber" />
+          </div>
+          {eventRepeatText(event) && <div className="rounded-xl border border-violet-300/15 bg-violet-300/[0.05] p-3 text-[12px] text-violet-100">{eventRepeatText(event)}</div>}
+        </div>
+      ) : (
+        <Empty title="Waiting for decision feed" body="The EA will publish one clean M5 decision event once the next scan cycle runs." icon={Activity} />
+      )}
+    </Card>
+  );
+}
+
+function DecisionStats({ events=[] }) {
+  const counts = ["entries","blocks","exits","risk","ai","errors","overrides"].reduce((acc,key)=>{
+    acc[key] = weightedEventCount(events.filter(e=>eventCategory(e)===key));
+    return acc;
+  }, {});
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <Metric label="Entries" value={counts.entries||0} detail="Allowed/fired" icon={TrendingUp} tone="green" />
+      <Metric label="Blocks" value={counts.blocks||0} detail="Rejected signals" icon={Shield} tone={counts.blocks?"amber":"neutral"} />
+      <Metric label="Exits" value={counts.exits||0} detail="Close decisions" icon={History} tone="blue" />
+      <Metric label="Overrides" value={counts.overrides||0} detail="Safety bypasses" icon={AlertTriangle} tone={counts.overrides?"violet":"neutral"} />
+      <Metric label="Risk" value={counts.risk||0} detail="Lot/risk decisions" icon={Gauge} tone="amber" />
+      <Metric label="AI" value={counts.ai||0} detail="AI/ML events" icon={Brain} tone="violet" />
+      <Metric label="Errors" value={counts.errors||0} detail="Faults" icon={XCircle} tone={counts.errors?"red":"neutral"} />
+      <Metric label="Total" value={weightedEventCount(events)} detail="Deduped events" icon={Activity} tone="blue" />
+    </div>
+  );
+}
+
+function DecisionHistory({ events=[] }) {
+  const grouped = events.reduce((acc,event)=>{
+    const ticket = getEventTicket(event);
+    if (!ticket) return acc;
+    if (!acc[ticket]) acc[ticket] = [];
+    acc[ticket].push(event);
+    return acc;
+  }, {});
+  const rows = Object.entries(grouped)
+    .map(([ticket,items])=>[ticket, items.sort((a,b)=>new Date(a.ts)-new Date(b.ts))])
+    .sort((a,b)=>new Date(b[1][b[1].length-1]?.ts||0)-new Date(a[1][a[1].length-1]?.ts||0))
+    .slice(0,5);
+  return (
+    <Card title="Decision History" subtitle="Per-trade chain: entry, lot choice, hold/exit attempts, blocked exits, and final close reason.">
+      {rows.length ? (
+        <div className="space-y-3">
+          {rows.map(([ticket,items])=>(
+            <div key={ticket} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className={MONO_LABEL}>Ticket {ticket}</span>
+                <span className="text-[10px] text-white/30">{items.length} decisions</span>
+              </div>
+              <div className="space-y-2">
+                {items.slice(-8).map((e,i)=>(
+                  <div key={e.id||i} className="flex gap-2 text-[12px] leading-5">
+                    <span className="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-amber-300/70" />
+                    <div className="min-w-0">
+                      <span className="text-white/75">{getEventDecision(e)}</span>
+                      {getEventReason(e) && getEventReason(e)!==getEventDecision(e) && <span className="text-white/35"> · {getEventReason(e)}</span>}
+                      <span className="text-white/25"> · {relativeTime(e.ts)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Empty title="No trade decision history yet" body="When events include a ticket, the Command Center will group the complete decision chain here." icon={History} />
+      )}
+    </Card>
   );
 }
 
@@ -263,7 +433,7 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
             <XauAiLogo size={30} className="flex-none" />
             <div className="min-w-0">
               <div className="truncate text-[14px] font-bold leading-none">XAU AI Sniper</div>
-              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.7.0</div>
+              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.6.1</div>
             </div>
           </Link>
           <div className="flex items-center gap-2">
@@ -432,7 +602,7 @@ export default function CloudDashboard() {
 
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online}>
-      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} setActive={setActive} refresh={fetchAll} />}
+      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} events={events} setActive={setActive} refresh={fetchAll} />}
       {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} />}
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
@@ -473,7 +643,7 @@ function humanBotState(raw, openTrades, tradingOk, online) {
 }
 
 // ─── Home ─────────────────────────────────────────────────────────────────────
-function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, setActive, refresh }) {
+function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, events, setActive, refresh }) {
   const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
   const ddNum      = Number(heartbeat.drawdown||0);
   const riskTone   = ddNum>5?"red":ddNum>2?"amber":"green";
@@ -553,6 +723,8 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         <Empty title="Connect your license" body="Link your ASE license key once and live data from your MT5 account will stream here automatically." icon={KeyRound} />
       )}
 
+      <DecisionSummaryCard events={events} heartbeat={heartbeat} setActive={setActive} title="Bot Decision Feed" />
+
       {/* Quick nav — 3 cards */}
       <div className="grid grid-cols-3 gap-3">
         <button onClick={()=>setActive("trading")} className={`${CARD} p-4 text-left hover:border-amber-300/20 transition`}>
@@ -600,7 +772,7 @@ function SetupHealth({ checks=[] }) {
 
 // ─── Trading ──────────────────────────────────────────────────────────────────
 function TradingPage({ heartbeat, events, online }) {
-  const tradeEvents = events.filter(e=>["TRADE","EXIT"].includes(String(e.severity||"").toUpperCase()));
+  const tradeEvents = events.filter(e=>["entries","exits","overrides"].includes(eventCategory(e)));
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -609,7 +781,9 @@ function TradingPage({ heartbeat, events, online }) {
         <Metric label="Spread"      value={online?`${heartbeat.spread??"-"}pts`:"—"} detail="Current quote" icon={Activity} tone="amber" />
         <Metric label="Bot state"   value={heartbeat.bot_state||"Waiting"} detail={heartbeat.last_action||"No action yet"} icon={Bot} tone={online?"green":"neutral"} />
       </div>
-      <Card title="Trade timeline" subtitle="Real EA entries, modifications, and closes from the linked account.">
+      <DecisionSummaryCard events={tradeEvents.length ? tradeEvents : events} heartbeat={heartbeat} title="Latest trade decision" />
+      <DecisionHistory events={tradeEvents} />
+      <Card title="Trade timeline" subtitle="Real EA entries, lot decisions, exit attempts, blocked loss exits, and closes from the linked account.">
         {tradeEvents.length
           ? <div className="space-y-2">{tradeEvents.slice(0,25).map((e,i)=><EventRow key={e.id||i} event={e} />)}</div>
           : <Empty title="No trade events yet" body="When the EA opens, modifies, or closes a trade it will stream here from the linked MT5 account." icon={History} />}
@@ -620,9 +794,9 @@ function TradingPage({ heartbeat, events, online }) {
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
 function AnalyticsPage({ heartbeat, events, equityPoints }) {
-  const trades = events.filter(e=>String(e.severity||"").toUpperCase()==="TRADE").length;
-  const blocks = events.filter(e=>String(e.severity||"").toUpperCase()==="BLOCK").length;
-  const errors = events.filter(e=>["ERROR","CRITICAL"].includes(String(e.severity||"").toUpperCase())).length;
+  const trades = weightedEventCount(events.filter(e=>eventCategory(e)==="entries"));
+  const blocks = weightedEventCount(events.filter(e=>eventCategory(e)==="blocks"));
+  const errors = weightedEventCount(events.filter(e=>eventCategory(e)==="errors"));
   return (
     <div className="space-y-4">
       <Card title="Equity curve">
@@ -638,12 +812,22 @@ function AnalyticsPage({ heartbeat, events, equityPoints }) {
         <Metric label="Trade events"  value={trades}                     detail="Recent feed"         icon={TrendingUp}       tone="green" />
         <Metric label="Blocks/errors" value={`${blocks}/${errors}`}      detail="Protection vs faults" icon={Shield}          tone={errors?"red":"amber"} />
       </div>
-      <Card title="Performance modules" subtitle="Populate from structured EA report uploads.">
+      <Card title="Decision breakdown" subtitle="Counts include deduplicated repeats so repeated blocks are visible without flooding the feed.">
+        <DecisionStats events={events} />
+      </Card>
+      <Card title="Module breakdown" subtitle="Which EA modules are making the recent decisions.">
         <div className="grid gap-2 sm:grid-cols-2">
-          {["Signal performance","Exit performance","Block performance","Learning performance"].map(n=>(
-            <div key={n} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-              <div className="text-[13px] font-semibold">{n}</div>
-              <p className="mt-1 text-[11px] text-white/35">Waiting for linked report samples.</p>
+          {Object.entries(events.reduce((acc,e)=>{
+            const mod = getEventField(e,"module","Unspecified") || "Unspecified";
+            acc[mod] = (acc[mod] || 0) + Number(e.repeat_count||1);
+            return acc;
+          }, {})).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([module,count])=>(
+            <div key={module} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+              <div className="min-w-0">
+                <div className="truncate text-[13px] font-semibold">{module}</div>
+                <p className="mt-1 text-[11px] text-white/35">Recent decisions</p>
+              </div>
+              <span className="font-mono text-lg font-black text-amber-200">{count}</span>
             </div>
           ))}
         </div>
@@ -728,29 +912,44 @@ function IntelligencePage({ heartbeat, events, status }) {
 
 // ─── Activity ─────────────────────────────────────────────────────────────────
 function ActivityPage({ events, filter, setFilter }) {
+  const [search, setSearch] = useState("");
+  const visibleEvents = useMemo(()=>events.filter(e=>eventMatchesSearch(e, search)), [events, search]);
   return (
     <div className="space-y-4">
       {/* Filter chips */}
-      <div className="flex flex-wrap gap-2">
-        {FILTERS.map(([id,label])=>(
-          <button key={id} onClick={()=>setFilter(id)}
-            data-testid={id==="trades"?"activity-filter-trade":undefined}
-            className={`rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition ${filter===id?"bg-amber-300 text-black":"border border-white/[0.07] text-white/45 hover:text-white hover:border-white/15"}`}>
-            {label}
-          </button>
-        ))}
+      <div className="space-y-3">
+        <div className="flex flex-wrap gap-2">
+          {FILTERS.map(([id,label])=>(
+            <button key={id} onClick={()=>setFilter(id)}
+              data-testid={id==="entries"?"activity-filter-trade":undefined}
+              className={`rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition ${filter===id?"bg-amber-300 text-black":"border border-white/[0.07] text-white/45 hover:text-white hover:border-white/15"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <label className="flex items-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.035] px-3 py-2.5">
+          <Search className="h-4 w-4 text-white/30" />
+          <input
+            value={search}
+            onChange={e=>setSearch(e.target.value)}
+            placeholder="Search ticket, reason, module, symbol, time"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-white outline-none placeholder:text-white/25"
+          />
+        </label>
       </div>
-      <Card title="Event feed" subtitle="Every important bot event from the linked account only.">
-        {events.length
-          ? <div className="space-y-2">{events.map((e,i)=><EventRow key={e.id||i} event={e} />)}</div>
-          : <Empty title="No activity yet" body="Only events from your linked license and MT5 account will appear here. Old cloud records are hidden." icon={Activity} />}
+      <DecisionStats events={visibleEvents} />
+      <Card title="Bot Decision Feed" subtitle="Clean M5 decision timeline: entries, blocks, exits, risk, AI, errors, and overrides. Repeated noise is compressed.">
+        {visibleEvents.length
+          ? <div className="space-y-2">{visibleEvents.map((e,i)=><EventRow key={e.id||i} event={e} />)}</div>
+          : <Empty title="No matching activity yet" body="Only meaningful decisions from your linked license and MT5 account will appear here. Old cloud records are hidden." icon={Activity} />}
       </Card>
+      <DecisionHistory events={visibleEvents} />
     </div>
   );
 }
 
 // ─── Control ──────────────────────────────────────────────────────────────────
-// v6.7.0 — Trading Universe (architecture phase). Index Mode toggle is
+// v6.6.1 — Trading Universe (architecture phase). Index Mode toggle is
 // intentionally disabled with an explanatory note: no real, tested index
 // entry strategy exists yet, and the EA's own InpIndexModeLogOnly safety
 // switch is what actually prevents index trades — this panel is settings
@@ -874,7 +1073,7 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
         )}
       </Card>
 
-      {/* v6.7.0 — Trading Universe (architecture phase) */}
+      {/* v6.6.1 — Trading Universe (architecture phase) */}
       <TradingUniverseCard linked={linked} setActive={setActive} />
 
       {/* Prop Firm Mode */}
