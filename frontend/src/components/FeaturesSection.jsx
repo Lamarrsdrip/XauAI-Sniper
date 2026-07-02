@@ -17,7 +17,7 @@ const CARDS = [
     tone: "text-amber-300",
     border: "border-amber-300/20",
     glow: "bg-amber-300/[0.07]",
-    badge: "NEW v6.6.0",
+    badge: "NEW v6.7.0",
   },
   {
     icon: Funnel,
@@ -26,7 +26,7 @@ const CARDS = [
     tone: "text-rose-300",
     border: "border-rose-300/20",
     glow: "bg-rose-300/[0.07]",
-    badge: "NEW v6.6.0",
+    badge: "NEW v6.7.0",
   },
   {
     icon: ShieldCheck,
@@ -43,7 +43,7 @@ const CARDS = [
     tone: "text-emerald-300",
     border: "border-emerald-300/20",
     glow: "bg-emerald-300/[0.07]",
-    badge: "NEW v6.6.0",
+    badge: "NEW v6.7.0",
   },
   {
     icon: Shuffle,

@@ -5,13 +5,15 @@ A release is NOT complete until every line is checked.
 
 ---
 
-## v6.6.0 — 2026-07-02 — Market Mode Architecture (Gold + Index)
+## v6.7.0 — 2026-07-02 — Market Mode Architecture (Gold + Index)
+
+*(Renamed from v6.6.0 before wide distribution — same content, no functional changes, version identifiers only.)*
 
 ### EA Compile
-- [x] EA internal version: `#property version "6.600"`
-- [x] EA header comment: v6.6.0
-- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.6.0.mq5`
-- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v660.log`)
+- [x] EA internal version: `#property version "6.700"`
+- [x] EA header comment: v6.7.0
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.7.0.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v670.log`)
 
 ### Scope discipline
 - [x] No index/synthetic symbol available on any configured broker (MetaQuotes-Demo, TRADE.com-Live, GoatFunded-Server, Default all gold+forex only) — no index strategy logic written, per explicit "no speculative live-money logic" instruction.
@@ -28,18 +30,18 @@ A release is NOT complete until every line is checked.
 6. Static-review fixes: phantom-peak off-by-one, `XAU_NewHostileStructureFlip` (direction-aware flip, fixes a real false-positive risk in v6.4.25/v6.5.0's own flip checks + a pre-existing TTM gap), TTM bar-boundary tightening, stale "version=5.9.1" log string fixed
 
 ### File Distribution
-- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.6.0.mq5` + `.ex5`
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.7.0.mq5` + `.ex5`
 - [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` + `backend/server.py` ea_version
 - [ ] GitHub main branch pushed
 
 ### Website / Frontend
-- [x] Footer.jsx, AdminPortal.jsx, FeaturesSection.jsx, DownloadSection.jsx, CloudLanding.jsx, CloudDashboard.jsx: v6.6.0
+- [x] Footer.jsx, AdminPortal.jsx, FeaturesSection.jsx, DownloadSection.jsx, CloudLanding.jsx, CloudDashboard.jsx: v6.7.0
 
 ### Testing Before Live
 - [x] Full suite `tests/` — 132/132 passed (includes 6 new static-review regression tests)
 - [ ] MT5 journal: `MARKET_AUTO_DETECT` line appears on attach, correctly resolves GOLD_MODE on XAUUSD
 - [ ] MT5 journal: if attached to a non-gold symbol, `INDEX_MODE_MONITORING_ONLY` appears and no trade ever opens
-- [ ] `/api/download/info` returns version v6.6.0
+- [ ] `/api/download/info` returns version v6.7.0
 - [ ] Command Center "Trading Universe" panel loads and saves settings
 
 ### Sign-off

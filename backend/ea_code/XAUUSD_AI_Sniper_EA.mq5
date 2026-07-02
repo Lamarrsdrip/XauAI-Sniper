@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.6.0 — Market Mode Architecture: Gold + Index Detection        |
+//|   v6.7.0 — Market Mode Architecture: Gold + Index Detection        |
 //|            Index Mode is monitoring-only — zero speculative trades|
 //+------------------------------------------------------------------+
-// v6.6.0 CHANGES (2026-07-02) — MARKET MODE ARCHITECTURE (Index Mode,
+// v6.7.0 CHANGES (2026-07-02) — MARKET MODE ARCHITECTURE (Index Mode,
 // phase 1 of 3 — see docs/index_mode_state_and_scanner_design.md for the
 // deferred multi-symbol phase):
 //   Adds the GENERIC capability for the EA to recognize it's attached to a
@@ -60,7 +60,7 @@
 //      feature. Full design in docs/index_mode_state_and_scanner_design.md;
 //      implementation waits for a tested single-symbol Index Mode strategy.
 //
-// v6.6.0 STATIC REVIEW FIXES (2026-07-02) — bundled into this same release,
+// v6.7.0 STATIC REVIEW FIXES (2026-07-02) — bundled into this same release,
 // found by a static review pass over the v6.4.25/v6.5.0 exit-arbiter work:
 //   6. XAU_ReconstructOpenBasketPeakUSD off-by-one: v6.4.25 rejected only the
 //      still-forming bar (shift 0) before reconstructing; a position whose
@@ -934,16 +934,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.600"
-#property description "XAUUSD AI Sniper v6.6.0 - Market Mode architecture: Gold+Index auto-detection, symbol-agnostic lot engine, Index Mode monitoring-only"
+#property version   "6.700"
+#property description "XAUUSD AI Sniper v6.7.0 - Market Mode architecture: Gold+Index auto-detection, symbol-agnostic lot engine, Index Mode monitoring-only"
 #property description "Trade Thesis Monitor, AI quality gate, safe close audit"
 #property description "Risk engine, exits, committee, EPF, basket protect preserved"
 #property description "SMC remains additive confirmation only"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.6.0"
-#define XAUAI_EA_VERSION_NUM "6.6.0"
-#define XAUAI_BUILD_HASH "v660-market-mode-architecture-20260702"
+#define XAUAI_EA_VERSION "v6.7.0"
+#define XAUAI_EA_VERSION_NUM "6.7.0"
+#define XAUAI_BUILD_HASH "v670-market-mode-architecture-20260702"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -977,7 +977,7 @@ enum ENUM_XAU_LOT_SIZING_MODE { REAL_RISK_MODE=0, JUNE_16_19_BALANCE_MODE=1 };
 input ENUM_XAU_LOT_SIZING_MODE InpLotSizingMode = JUNE_16_19_BALANCE_MODE; // JUNE mode restores balance-based lots; REAL mode uses OrderCalcProfit SL risk
 input double InpJuneBalanceLotPer1000 = 0.070; // $3k A trade ≈0.21 before broker/margin/maxlot; B≈0.15, A+≈0.26
 
-// v6.6.0 — MARKET MODE (Gold vs Index) — ARCHITECTURE PHASE ONLY.
+// v6.7.0 — MARKET MODE (Gold vs Index) — ARCHITECTURE PHASE ONLY.
 //   This release adds detection, symbol-agnostic lot math, and full
 //   diagnostics for a future Index Mode. It does NOT add any index trading
 //   strategy. When the resolved mode is INDEX_MODE, the EA runs detection,
@@ -988,14 +988,14 @@ input double InpJuneBalanceLotPer1000 = 0.070; // $3k A trade ≈0.21 before bro
 //   unchanged: the entire existing entry/exit pipeline still runs exactly
 //   as before whenever the resolved mode is GOLD_MODE, which is what every
 //   live XAUUSD attachment resolves to today.
-input group "=== MARKET MODE (v6.6.0 — Gold/Index detection, architecture phase) ==="
+input group "=== MARKET MODE (v6.7.0 — Gold/Index detection, architecture phase) ==="
 enum ENUM_XAU_MARKET_MODE { MARKET_AUTO_DETECT=0, MARKET_GOLD_MODE=1, MARKET_INDEX_MODE=2 };
 input ENUM_XAU_MARKET_MODE InpMarketMode = MARKET_AUTO_DETECT; // AUTO_DETECT reads the chart symbol once at startup; GOLD/INDEX force the mode regardless of symbol
 enum ENUM_XAU_INDEX_PROFILE { GENERIC_INDEX=0, VOLATILITY_INDEX=1, BOOM_CRASH=2, STEP_INDEX=3, RANGE_BREAK=4 };
 input ENUM_XAU_INDEX_PROFILE InpIndexProfile = GENERIC_INDEX; // diagnostic/forward-compat only this release — no profile-specific strategy exists yet
 enum ENUM_XAU_INDEX_AGGRESSION { INDEX_SAFE=0, INDEX_BALANCED=1, INDEX_AGGRESSIVE_GROWTH=2 };
 input ENUM_XAU_INDEX_AGGRESSION InpIndexAggression = INDEX_BALANCED; // diagnostic/forward-compat only this release — no index strategy exists yet to modulate
-input bool   InpIndexModeLogOnly = true; // v6.6.0 hard safety: while true, INDEX_MODE never opens a new position no matter what InpMarketMode/InpIndexProfile say. Only flip this once real, tested index entry logic exists.
+input bool   InpIndexModeLogOnly = true; // v6.7.0 hard safety: while true, INDEX_MODE never opens a new position no matter what InpMarketMode/InpIndexProfile say. Only flip this once real, tested index entry logic exists.
 
 input group "=== PROFIT GUARDIAN (v5.1.3 — OFF by default; v4.9.7-style aggressive trading) ==="
 input bool   InpProfitGuardian      = false; // v5.1.3: DEFAULT OFF — tier risk-cuts + HTF trend lock + cooldown OFF (restores v4.9.7 aggression)
@@ -2665,7 +2665,7 @@ double     autoProfitTakeMin  = 0;
 double     autoProfitTakeMax  = 0;
 double     autoPeakMinUSD     = 0;
 
-// v6.6.0 — MARKET MODE resolved state (set once in OnInit, never AUTO_DETECT
+// v6.7.0 — MARKET MODE resolved state (set once in OnInit, never AUTO_DETECT
 // after resolution — always GOLD_MODE or INDEX_MODE).
 ENUM_XAU_MARKET_MODE g_marketMode = MARKET_GOLD_MODE;
 string     g_marketModeDetectReason = "";
@@ -5200,7 +5200,7 @@ string PropFirmLossLockReason()
 }
 
 //+------------------------------------------------------------------+
-//| v6.6.0 — MARKET MODE DETECTION                                   |
+//| v6.7.0 — MARKET MODE DETECTION                                   |
 //|   Resolves InpMarketMode into a concrete GOLD_MODE/INDEX_MODE     |
 //|   once at startup. AUTO_DETECT checks the chart symbol name       |
 //|   first — cheap and unambiguous for the overwhelming majority of  |
@@ -5265,7 +5265,7 @@ int OnInit()
    if(!licenseValid) { Alert("Invalid PIN: " + InpLicensePIN); return INIT_FAILED; }
    Print("LICENSE OK: ", InpLicensePIN);
 
-   // v6.6.0: resolve market mode once, before anything else touches Symbol()-derived logic.
+   // v6.7.0: resolve market mode once, before anything else touches Symbol()-derived logic.
    g_marketMode = XAU_DetectMarketMode(g_marketModeDetectReason);
    PrintFormat("MARKET_AUTO_DETECT: symbol=%s detectedMode=%s profile=%s aggression=%s inputMode=%s | reason=%s | indexLogOnly=%s",
                Symbol(),
@@ -8646,7 +8646,7 @@ void OnTick()
    {
       // Collect live state
       string sym = Symbol();
-      // v6.6.0: a "wrong symbol" warning is only meaningful in GOLD_MODE —
+      // v6.7.0: a "wrong symbol" warning is only meaningful in GOLD_MODE —
       // INDEX_MODE is expected to run on a non-gold symbol by design.
       bool symOK = (g_marketMode == MARKET_INDEX_MODE) ||
                    (StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0 || StringFind(sym, "Gold") >= 0);
@@ -9159,7 +9159,7 @@ void OnTick()
       }
    }
 
-   // v6.6.0 — INDEX MODE SAFETY GATE. Position/basket management above this
+   // v6.7.0 — INDEX MODE SAFETY GATE. Position/basket management above this
    // point (ManageBasket/ManagePositions) already ran and keeps running
    // normally for any existing position, using the shared exit/risk systems
    // — that part is legitimately symbol-agnostic. Everything BELOW this
@@ -9177,7 +9177,7 @@ void OnTick()
       {
          PrintFormat("INDEX_MODE_MONITORING_ONLY | symbol=%s profile=%s aggression=%s | no index entry strategy is enabled yet — positions=%d managed by shared exit systems, no new entries will be opened",
                      Symbol(), EnumToString(InpIndexProfile), EnumToString(InpIndexAggression), CountMyPositions());
-         // v6.6.0: illustrative-only INDEX_TRACE — proves the lot/risk math is
+         // v6.7.0: illustrative-only INDEX_TRACE — proves the lot/risk math is
          // live and correct for this symbol's real contract specs. Uses 1% of
          // equity and this symbol's own ATR as a stand-in SL distance; this is
          // NOT a trade signal, nothing here ever reaches OpenTrade().
@@ -10962,7 +10962,7 @@ double RiskPerLotForDistance(double dist)
 }
 
 //+------------------------------------------------------------------+
-//| v6.6.0 — SYMBOL-AGNOSTIC INDEX LOT/RISK ENGINE (architecture      |
+//| v6.7.0 — SYMBOL-AGNOSTIC INDEX LOT/RISK ENGINE (architecture      |
 //|   phase — not wired to any live entry path yet; InpIndexModeLogOnly|
 //|   blocks all index entries until a real strategy exists). Built   |
 //|   and tested now so the math is ready to plug in later.           |
@@ -11054,7 +11054,7 @@ double XAU_CalcIndexLot(string symbol, double riskAmountUSD, double slDistance,
 }
 
 //+------------------------------------------------------------------+
-//| v6.6.0 — INDEX_TRACE diagnostic line. Safe to call for any symbol |
+//| v6.7.0 — INDEX_TRACE diagnostic line. Safe to call for any symbol |
 //| regardless of whether InpIndexModeLogOnly is blocking entries —   |
 //| this only logs, it never trades.                                  |
 //+------------------------------------------------------------------+

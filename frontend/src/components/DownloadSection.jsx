@@ -12,9 +12,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.6.0";
+  const version  = info?.version  || "v6.7.0";
   const edition  = info?.edition  || "Market Mode Architecture — Gold Live, Index in Development";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.6.0.mq5";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.7.0.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 

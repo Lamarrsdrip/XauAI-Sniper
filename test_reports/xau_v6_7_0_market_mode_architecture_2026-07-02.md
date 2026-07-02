@@ -1,4 +1,4 @@
-# XAU AI Sniper v6.6.0 — Market Mode Architecture (Gold + Index)
+# XAU AI Sniper v6.7.0 — Market Mode Architecture (Gold + Index)
 
 Date: 2026-07-02
 
@@ -142,7 +142,7 @@ Full suite: **132/132 passed**.
 
 ## Verification
 
-- `test_reports/metaeditor_v660.log`: `Result: 0 errors, 0 warnings`.
+- `test_reports/metaeditor_v670.log`: `Result: 0 errors, 0 warnings`.
 - Full suite: 132/132 passed.
 - Manual read-through confirmed `XAU_NewHostileStructureFlip`'s logic is
   correct (`hostileDir = -tradeDir; return currentDir == hostileDir &&

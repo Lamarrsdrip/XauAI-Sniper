@@ -263,7 +263,7 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
             <XauAiLogo size={30} className="flex-none" />
             <div className="min-w-0">
               <div className="truncate text-[14px] font-bold leading-none">XAU AI Sniper</div>
-              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.6.0</div>
+              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.7.0</div>
             </div>
           </Link>
           <div className="flex items-center gap-2">
@@ -750,7 +750,7 @@ function ActivityPage({ events, filter, setFilter }) {
 }
 
 // ─── Control ──────────────────────────────────────────────────────────────────
-// v6.6.0 — Trading Universe (architecture phase). Index Mode toggle is
+// v6.7.0 — Trading Universe (architecture phase). Index Mode toggle is
 // intentionally disabled with an explanatory note: no real, tested index
 // entry strategy exists yet, and the EA's own InpIndexModeLogOnly safety
 // switch is what actually prevents index trades — this panel is settings
@@ -874,7 +874,7 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
         )}
       </Card>
 
-      {/* v6.6.0 — Trading Universe (architecture phase) */}
+      {/* v6.7.0 — Trading Universe (architecture phase) */}
       <TradingUniverseCard linked={linked} setActive={setActive} />
 
       {/* Prop Firm Mode */}
