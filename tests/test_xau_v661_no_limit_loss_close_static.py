@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.6.1.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.7.0.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -112,9 +112,21 @@ def test_loss_firewall_does_not_whitelist_normal_ea_exit_reasons():
     for allowed in ("BROKER_SL", "STOP_OUT", "MARGIN", "EMERGENCY"):
         assert allowed in emergency
 
+    # v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER: EARLY_CONVICTION_CUT, CLEAN_INVALID,
+    # STRUCTURE_FAILFAST and TTM_STRUCTURAL_EXIT are now recognized, but ONLY
+    # inside an `if(!XAU_NoLimitTradingModeActive())` guard — confirmed by the
+    # user as the resolution to a direct conflict with No-Limit Trading Mode's
+    # "ride every trade to SL" default. No-Limit mode itself (default ON)
+    # keeps its original, unconditional behavior for every one of these.
+    assert "if(!XAU_NoLimitTradingModeActive())" in emergency
+    gate_pos = emergency.index("if(!XAU_NoLimitTradingModeActive())")
+    for gated in ("EARLY_CONVICTION_CUT", "CLEAN_INVALID", "STRUCTURE_FAILFAST", "TTM_STRUCTURAL_EXIT"):
+        code_line = f'if(StringFind(c, "{gated}") >= 0) return true;'
+        assert code_line in emergency
+        assert emergency.index(code_line) > gate_pos, f"{gated} check must appear after the No-Limit-mode guard, not unconditionally"
+
     for blocked in (
         "AI_DIRECTOR_EXIT_CLOSE",
-        "CLEAN_INVALID",
         "SMART_EXIT",
         "GROWTH_BASKET_LOSS",
         "GROWTH_DAILY_LOCK",
@@ -124,6 +136,13 @@ def test_loss_firewall_does_not_whitelist_normal_ea_exit_reasons():
         "COOLDOWN",
     ):
         assert blocked not in emergency
+
+    # CLEAN_STAGNANT/CLEAN_STALE are deliberately excluded from the No-Limit-off
+    # carve-out (regime/momentum alone isn't objective structural invalidation) —
+    # confirm neither has its own recognized StringFind check, without banning
+    # the words entirely (the code comments name them to explain the exclusion).
+    for still_unguarded in ("CLEAN_STAGNANT", "CLEAN_STALE"):
+        assert f'if(StringFind(c, "{still_unguarded}") >= 0) return true;' not in emergency
 
 
 def test_closed_trade_reports_include_exact_close_audit_fields():

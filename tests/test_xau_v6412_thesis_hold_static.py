@@ -3,7 +3,7 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.6.1.mq5"
+EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.7.0.mq5"
 
 
 def read() -> str:

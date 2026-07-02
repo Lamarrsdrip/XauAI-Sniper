@@ -3,8 +3,8 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.6.1.mq5"
-EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.6.1.mq5"
+EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.7.0.mq5"
+EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.7.0.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -18,9 +18,9 @@ def test_v6412_has_clear_version_identity_and_named_source():
     named = read(EA_NAMED)
 
     assert root == backend == named
-    assert '#property version   "6.601"' in root
-    assert '#define XAUAI_EA_VERSION "v6.6.1"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.6.1"' in root
+    assert '#property version   "6.700"' in root
+    assert '#define XAUAI_EA_VERSION "v6.7.0"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.7.0"' in root
 
 
 def test_basket_lifecycle_inputs_and_state_exist():
