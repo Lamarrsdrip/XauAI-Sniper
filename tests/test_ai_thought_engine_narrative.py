@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "backend" / "server.py"
 
 _START_MARKER = "_REGIME_PHRASES = {"
-_END_MARKER = 'return {"answer": True, "reason": "Thesis still holds at current confidence."}'
+_END_MARKER = 'return {"answer": "YES", "reason": "Thesis still holds at current confidence."}'
 
 
 def _load_narrative_engine():
@@ -148,7 +148,11 @@ def test_trade_blocked_card_hides_raw_variables_and_shows_reasons():
     assert card["type"] == "TRADE_BLOCKED"
     assert card["headline"] == "Trade Blocked"
     assert card["tone"] == "danger"
-    assert card["decision_text"] == "Waiting for higher quality setup"
+    # v6.9.0: decision_text must show the SPECIFIC reason, not the old
+    # hardcoded generic phrase, regardless of whether the exact code is one
+    # of the recognized humanized phrases or falls back to a cleaned code.
+    assert card["decision_text"] != "Waiting for higher quality setup"
+    assert "ai confidence below minimum" in card["decision_text"].lower()
     assert card["reason_bullets"][0] == "AI confidence below minimum"
     # raw engine internals must never leak into the default (non-advanced) fields
     for field in ("headline", "decision_text", "simple_text"):
@@ -167,17 +171,31 @@ def test_advanced_payload_carries_raw_telemetry_for_developer_details():
     assert card["advanced"]["details"] == {"regime": "STRONG_TREND", "session": "LONDON"}
 
 
-def test_would_enter_again_verdict_reflects_confidence_and_tone():
+def test_would_enter_again_verdict_is_three_way_yes_no_wait():
     fn = ENGINE["_ai_would_enter_again"]
     healthy = {"confidence": 87, "tone": "neutral", "confidence_delta": 3}
     v = fn(healthy)
-    assert v["answer"] is True
+    assert v["answer"] == "YES"
 
-    weak = {"confidence": 60, "tone": "warning", "confidence_delta": -15}
-    v2 = fn(weak)
-    assert v2["answer"] is False
+    borderline = {"confidence": 60, "tone": "warning", "confidence_delta": -15}
+    v2 = fn(borderline)
+    assert v2["answer"] == "WAIT"
     assert "dropped" in v2["reason"].lower()
 
+    clearly_bad = {"confidence": 30, "tone": "danger", "confidence_delta": -20}
+    v3 = fn(clearly_bad)
+    assert v3["answer"] == "NO"
+
     unknown = {"confidence": None, "tone": "neutral"}
-    v3 = fn(unknown)
-    assert v3["answer"] is None
+    v4 = fn(unknown)
+    assert v4["answer"] == "WAIT"
+
+
+def test_block_reason_humanizer_maps_known_codes_and_degrades_gracefully():
+    fn = ENGINE["_ai_humanize_block_reason"]
+    assert "reward-to-risk" in fn("GROWTH_RR_BLOCK").lower()
+    assert "ai confidence" in fn("B-CONFIDENT-SKIP-WARN").lower()
+    assert "structure" in fn("SMC_HARD_CONFLICT").lower()
+    # unrecognized code still produces something specific, never blank
+    assert fn("") == ""
+    assert fn("SOME_NEW_CODE") == "Blocked: some new code"

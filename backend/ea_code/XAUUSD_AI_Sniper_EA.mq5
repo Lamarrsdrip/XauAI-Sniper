@@ -1,8 +1,44 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.8.0 — Trade Recovery Intelligence (TRI): a near-SL event is    |
-//|   watched, not panicked over — strong recoveries hold, weak ones    |
+//|   v6.9.0 — Command Center live feed fix: unconditional 60s status   |
+//|   heartbeat (root fix for stale multi-day-old dashboard cards) +    |
+//|   per-position thesis data now actually reaches the cloud           |
+//+------------------------------------------------------------------+
+// v6.9.0 CHANGES (2026-07-02) — COMMAND CENTER LIVE FEED FIX:
+//   Root cause of the Command Center showing stale "7d ago" cards: every
+//   cloud post used to come from deep inside the gated entry-scan pipeline
+//   (XAU_RecordMarketSnapshot) — if ANY of 8+ higher-level gates (equity
+//   protect, weekly target hit, growth daily lock, weekend close, prop-firm
+//   loss lock, etc.) was active, literally nothing posted to the cloud for
+//   as long as that gate stayed active, however long that was.
+//   1. The existing 60-second local heartbeat (previously Print-only) now
+//      ALSO posts BOT_STATUS_HEARTBEAT to the cloud, unconditionally,
+//      before any of those gates run. Classifies into one of the Command
+//      Center's status categories (SCANNING/WAITING/BLOCKED/MANAGING_
+//      TRADE/PROTECTING_PROFIT/HOLDING/PREPARING_EXIT — ENTERING/EXITING
+//      come from the trade-event posts themselves, which already worked).
+//   2. XAU_LogTradeThesisStatus (added v6.7.0/v6.8.0) was local-only — the
+//      MT5 journal got full thesis health, hold/protect/exit reasoning,
+//      and TRI recovery-mode detail, but none of it ever reached the
+//      dashboard. It now also posts to /api/cloud/monitor/thesis-status
+//      every time a position is evaluated, including distance to SL/TP.
+//   Backend: new /cloud/monitor/thesis-status ingest (upserted per ticket)
+//   and /cloud/monitor/bot-status read endpoint; /cloud/monitor/current-
+//   opinion now merges in thesis health, hold/protect/exit reasons,
+//   recovery-mode status, and distance to SL/TP; /cloud/monitor/decision-
+//   feed excludes the new heartbeat from the conversational card list
+//   (it has its own dedicated panel) and groups consecutive identical
+//   decisions into one card instead of spamming duplicates. Also fixed a
+//   real bug found along the way: the "Trade Blocked" card always said the
+//   same generic "Waiting for higher quality setup" regardless of the
+//   actual reason — it now shows the specific, humanized reason (RR too
+//   low, AI confidence weak, structure conflict, etc.).
+//   Frontend: new dedicated "Live Bot Thought" panel (always-current
+//   status, refreshed every 8s); "Open Trade Thinking" panel extended with
+//   recovery-mode banner, distance to SL/TP, hold/protect/exit reasoning,
+//   and a three-way YES/NO/WAIT "would enter again" verdict (was a binary
+//   guess before).
 //|   bank the second chance at breakeven, failed ones ride to SL       |
 //+------------------------------------------------------------------+
 // v6.8.0 CHANGES (2026-07-02) — TRADE RECOVERY INTELLIGENCE (TRI):
@@ -970,16 +1006,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.800"
-#property description "XAUUSD AI Sniper v6.8.0 - Trade Recovery Intelligence: adaptive near-SL recovery classification, smart re-entry after weak bailouts"
-#property description "Adaptive Entry/Exit Arbiter (v6.7.0) preserved: SMC conflict penalty/block, HTF trigger requirement, AI Committee B-grade authority"
+#property version   "6.900"
+#property description "XAUUSD AI Sniper v6.9.0 - Command Center live feed fix: unconditional status heartbeat, per-position thesis data now reaches the cloud"
+#property description "Trade Recovery Intelligence (v6.8.0) + Adaptive Entry/Exit Arbiter (v6.7.0) preserved"
 #property description "Risk engine, exits, committee, EPF, basket protect preserved; No-Limit Trading Mode default unchanged"
-#property description "TRI never force-exits on a loss — only banks weak-recovery bailouts at breakeven/small profit"
+#property description "Fixed: Trade Blocked cards showed a generic reason regardless of the real one — now specific"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.8.0"
-#define XAUAI_EA_VERSION_NUM "6.8.0"
-#define XAUAI_BUILD_HASH "v680-trade-recovery-intelligence-20260702"
+#define XAUAI_EA_VERSION "v6.9.0"
+#define XAUAI_EA_VERSION_NUM "6.9.0"
+#define XAUAI_BUILD_HASH "v690-command-center-live-feed-fix-20260702"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -6961,7 +6997,8 @@ void XAU_LogBotDecision(string action, int direction, string setupName, string g
 // the Command Center UI) see "is the thesis still alive" without piecing
 // it together from TTM/AMPL/SmartExit/ProtectedPeakFloor's separate logs.
 void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double curSL,
-                              double lotsOpen, double profit, double peak)
+                              double lotsOpen, double profit, double peak,
+                              double curTP = 0.0, double curPrice = 0.0)
 {
    int ttmIdx = TTM_FindActiveSlot(ticket);
    string state = "healthy";
@@ -7038,6 +7075,44 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
                ticket, state, expectedType, peak, profit, protectedProfit,
                holdReason, protectReason, exitReason, nextAction, entryReason,
                recoveryMode, recoveryWorstPct, recoveryClassification);
+
+   // v6.9.0 — this used to be local-only (MT5 journal Print, never left the
+   // terminal). The Command Center's "Open Trade Thinking" panel needs this
+   // exact data (thesis health, hold/protect/exit reasons, recovery-mode
+   // status, distance to SL/TP), so it now also posts to the cloud, one
+   // purpose-built payload per position per evaluation (every M5 bar this
+   // position is managed).
+   if(BotMonitorEnabled())
+   {
+      double distToSL = (curSL > 0 && curPrice > 0) ? MathAbs(curPrice - curSL) : 0.0;
+      double distToTP = (curTP > 0 && curPrice > 0) ? MathAbs(curTP - curPrice) : 0.0;
+      string body = StringFormat(
+         "{\"pin\":\"%s\",\"license_key\":\"%s\",\"account\":\"%I64d\",\"symbol\":\"%s\","
+         "\"ticket\":\"%I64u\",\"state\":\"%s\",\"expected_type\":\"%s\",\"peak_profit\":%.2f,"
+         "\"current_profit\":%.2f,\"protected_profit\":%.2f,\"hold_reason\":\"%s\","
+         "\"protect_reason\":\"%s\",\"exit_reason\":\"%s\",\"next_action\":\"%s\","
+         "\"entry_reason\":\"%s\",\"recovery_mode\":\"%s\",\"recovery_worst_pct\":%.0f,"
+         "\"recovery_classification\":\"%s\",\"is_buy\":%s,\"open_price\":%.5f,"
+         "\"current_price\":%.5f,\"sl\":%.5f,\"tp\":%.5f,\"dist_to_sl\":%.5f,\"dist_to_tp\":%.5f}",
+         BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
+         AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), ticket,
+         BotMonitorJsonSafe(state, 20), BotMonitorJsonSafe(expectedType, 24),
+         peak, profit, protectedProfit,
+         BotMonitorJsonSafe(holdReason, 300), BotMonitorJsonSafe(protectReason, 120),
+         BotMonitorJsonSafe(exitReason, 200), BotMonitorJsonSafe(nextAction, 24),
+         BotMonitorJsonSafe(entryReason, 300), BotMonitorJsonSafe(recoveryMode, 24),
+         recoveryWorstPct, BotMonitorJsonSafe(recoveryClassification, 12),
+         BotMonitorBool(isBuy), openPx, curPrice, curSL, curTP, distToSL, distToTP);
+      char pd[], res[]; string rh;
+      StringToCharArray(body, pd, 0, StringLen(body));
+      string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+      ResetLastError();
+      int code = WebRequest("POST", InpCloudURL + "/api/cloud/monitor/thesis-status",
+                            hdr, InpCloudTimeoutMs, pd, res, rh);
+      if(code != 200)
+         Print("TRADE-THESIS-STATUS POST failed http=", code, " err=", GetLastError(),
+               " ticket=", ticket);
+   }
 }
 
 // v6.4.0: persist and load strategy weights
@@ -8881,16 +8956,57 @@ void OnTick()
       int    openPs = CountMyPositions();
 
       string status;
-      if(!termConn)        status = "BROKER DISCONNECTED — check internet/VPS connection";
-      else if(!symOK)      status = StringFormat("WRONG SYMBOL '%s' — attach EA to XAUUSD chart (your broker may call it XAUUSDm / XAUUSD.r / GOLD)", sym);
-      else if(!termAlgo)   status = "ALGO TRADING OFF — click the 'Algo Trading' toolbar button until it turns GREEN";
-      else if(!mqlAlgo)    status = "EA-LEVEL ALGO NOT ALLOWED — re-attach EA and tick 'Allow Algo Trading' in the Common tab";
-      else if(openPs > 0)  status = StringFormat("MANAGING %d OPEN POSITION(S) + SCANNING — analysis remains active while trades run", openPs);
-      else if(StringLen(g_lastSkipReason) > 0) status = "IDLE — " + g_lastSkipReason;
-      else                 status = StringFormat("SCANNING — spread=%.0fpts, all systems OK, waiting for A/A+ setup", curSpr);
+      // v6.9.0 — one of the 9 categories the Command Center shows as
+      // "Current Bot Decision": scanning/waiting/blocked/entering/
+      // managing_trade/protecting_profit/holding/preparing_exit/exiting.
+      // entering/exiting are momentary and already come from the
+      // TRADE_EXECUTED/TTM_EXIT event posts themselves; this periodic
+      // heartbeat classifies among the other 7.
+      string statusCategory;
+      if(!termConn)        { status = "BROKER DISCONNECTED — check internet/VPS connection"; statusCategory = "BLOCKED"; }
+      else if(!symOK)      { status = StringFormat("WRONG SYMBOL '%s' — attach EA to XAUUSD chart (your broker may call it XAUUSDm / XAUUSD.r / GOLD)", sym); statusCategory = "BLOCKED"; }
+      else if(!termAlgo)   { status = "ALGO TRADING OFF — click the 'Algo Trading' toolbar button until it turns GREEN"; statusCategory = "BLOCKED"; }
+      else if(!mqlAlgo)    { status = "EA-LEVEL ALGO NOT ALLOWED — re-attach EA and tick 'Allow Algo Trading' in the Common tab"; statusCategory = "BLOCKED"; }
+      else if(openPs > 0)
+      {
+         // Check whether any open position is in TRI Recovery Mode — worth
+         // surfacing at the aggregate level, not just per-ticket.
+         bool anyRecovering = false;
+         for(int ri = 0; ri < TTM_MAX_POSITIONS; ri++)
+            if(g_ttm[ri].active && g_ttm[ri].triActive) { anyRecovering = true; break; }
+         if(anyRecovering)
+         {
+            status = StringFormat("MANAGING %d OPEN POSITION(S) — one is in Recovery Mode after a near-SL event, watching for a genuine reclaim", openPs);
+            statusCategory = "PROTECTING_PROFIT";
+         }
+         else
+         {
+            status = StringFormat("MANAGING %d OPEN POSITION(S) + SCANNING — analysis remains active while trades run", openPs);
+            statusCategory = "MANAGING_TRADE";
+         }
+      }
+      else if(StringLen(g_lastSkipReason) > 0) { status = "IDLE — " + g_lastSkipReason; statusCategory = "BLOCKED"; }
+      else                 { status = StringFormat("SCANNING — spread=%.0fpts, all systems OK, waiting for A/A+ setup", curSpr); statusCategory = "SCANNING"; }
 
       PrintFormat("♥ HEARTBEAT │ %s", status);
       XAU_WriteLocalReportHeartbeat(false);
+
+      // v6.9.0 — push this to the cloud unconditionally, BEFORE any of the
+      // deep entry-scan gates below can skip the rest of OnTick(). This is
+      // the root fix for the Command Center showing stale multi-day-old
+      // cards: previously the only cloud posts came from deep inside the
+      // gated entry-scan pipeline (XAU_RecordMarketSnapshot), so if ANY
+      // higher-level gate (equity protect, weekly target hit, growth daily
+      // lock, weekend close, etc.) was active, literally nothing posted for
+      // as long as that gate stayed active. This heartbeat fires every 60s
+      // regardless of any of those gates — well inside the "every 5
+      // minutes" the dashboard needs.
+      BotMonitorDecisionEvent("BOT_STATUS_HEARTBEAT", "INFO", "Heartbeat", status,
+                              true, g_lastSkipReason, statusCategory, "", 0.0, 0.0,
+                              "", "", false, false, false, false,
+                              "", "", "", 0.0, (double)g_aiLastConfidence, 0, "",
+                              statusCategory);
+
       g_lastHeartbeat = TimeCurrent();
       // Reset the reason flag so stale entries don't mislead next cycle
       g_lastSkipReason = "";
@@ -15077,7 +15193,7 @@ void ManagePositions()
       // logged BEFORE any close decision runs so it always reflects the state
       // that decision was made from (not "healthy" logged after a close).
       if(InpTTM_Enable)
-         XAU_LogTradeThesisStatus(ticket, isBuy, openPx, curSL, lotsOpen, profit, peak);
+         XAU_LogTradeThesisStatus(ticket, isBuy, openPx, curSL, lotsOpen, profit, peak, curTP, curPrice);
 
       // Dir string for logging
       string dirStr = isBuy ? "BUY" : "SELL";

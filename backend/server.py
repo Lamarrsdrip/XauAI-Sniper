@@ -2000,7 +2000,7 @@ class TradeMemoryRecord(BaseModel):
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.8.0"
+    ea_version: str = "v6.9.0"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"
@@ -4860,6 +4860,37 @@ class BotActivityReq(BaseModel):
     was_ea_forced_close: Optional[bool] = None
     position_direction: Optional[str] = ""
 
+# v6.9.0 — purpose-built payload for XAU_LogTradeThesisStatus's cloud post.
+# Kept separate from BotActivityReq's generic event schema since this is a
+# per-position live-state snapshot (upserted, not appended) rather than a
+# discrete event.
+class TradeThesisStatusReq(BaseModel):
+    pin: Optional[str] = ""
+    license_key: Optional[str] = ""
+    account: Optional[str] = ""
+    symbol: Optional[str] = ""
+    ticket: str = ""
+    state: Optional[str] = ""
+    expected_type: Optional[str] = ""
+    peak_profit: Optional[float] = None
+    current_profit: Optional[float] = None
+    protected_profit: Optional[float] = None
+    hold_reason: Optional[str] = ""
+    protect_reason: Optional[str] = ""
+    exit_reason: Optional[str] = ""
+    next_action: Optional[str] = ""
+    entry_reason: Optional[str] = ""
+    recovery_mode: Optional[str] = ""
+    recovery_worst_pct: Optional[float] = None
+    recovery_classification: Optional[str] = ""
+    is_buy: Optional[bool] = None
+    open_price: Optional[float] = None
+    current_price: Optional[float] = None
+    sl: Optional[float] = None
+    tp: Optional[float] = None
+    dist_to_sl: Optional[float] = None
+    dist_to_tp: Optional[float] = None
+
 def _dt_or_none(iso: str):
     if not iso:
         return None
@@ -5152,9 +5183,16 @@ def _ai_build_thought_card(ev: dict, prev_conf_by_ticket: dict) -> dict:
     elif card_type == "TRADE_BLOCKED":
         headline = "Trade Blocked"
         tone = "danger"
-        decision_text = "Waiting for higher quality setup"
-        if ev.get("blocked_by") and not any(ev["blocked_by"].lower() in b.lower() for b in bullets):
-            bullets.insert(0, ev["blocked_by"])
+        # v6.9.0: this used to always say "Waiting for higher quality setup"
+        # regardless of the actual reason — the real, specific block reason
+        # (blocked_by, or the first reason bullet) is now the headline
+        # decision line itself, not buried in the bullets underneath a
+        # generic phrase. "Waiting for higher quality setup" is now only
+        # the last-resort fallback when no specific reason is available.
+        blocked_by = str(ev.get("blocked_by") or "").strip()
+        if blocked_by and not any(blocked_by.lower() in b.lower() for b in bullets):
+            bullets.insert(0, blocked_by)
+        decision_text = _ai_humanize_block_reason(blocked_by) or (bullets[0] if bullets else "") or "Waiting for higher quality setup"
 
     if grade:
         grade_phrase = _GRADE_PHRASES.get(grade.upper(), "")
@@ -5203,18 +5241,69 @@ def _ai_build_thought_card(ev: dict, prev_conf_by_ticket: dict) -> dict:
     }
 
 
+# v6.9.0 — maps the EA's actual block-reason codes to the specific,
+# human-readable phrasing the Command Center should show instead of a
+# generic "waiting for higher quality setup." Matched by substring so new
+# codes degrade gracefully (falls through to a cleaned-up version of the
+# raw code) rather than ever going blank.
+_BLOCK_REASON_PHRASES = [
+    ("GROWTH_RR_BLOCK", "Blocked because the reward-to-risk ratio is too low for this setup"),
+    ("SMC_HARD_CONFLICT", "Blocked because market structure (order blocks / BOS) strongly disagrees with this direction"),
+    ("B-CONFIDENT-SKIP", "Blocked because AI confidence is weak on this setup"),
+    ("AI-CONFIDENT-SKIP", "Blocked because AI confidence is weak on this setup"),
+    ("HTF-CONSENSUS-OVERRIDE", "Blocked because the higher timeframe trend disagrees with this entry"),
+    ("HTF_OVERRIDE", "Blocked because the higher timeframe trend disagrees with this entry"),
+    ("WEAK-DISAGREE", "Blocked because AI disagrees with this setup, even if only mildly"),
+    ("LOW-CONF-SKIP", "Blocked because AI confidence was too low to confirm this setup"),
+    ("NO-CONF-SKIP", "Blocked because AI could not confirm this setup with any real confidence"),
+    ("PERSONALITY", "Blocked because this setup type doesn't fit current market conditions"),
+    ("TRI_REENTRY_WATCH", "Blocked because this direction recently bailed out of a weak recovery — waiting for a fresh, better-quality entry instead of repeating the same read"),
+    ("POST_NEWS_AVOID", "Blocked because price is still reacting to recent news — waiting for it to settle"),
+    ("SPREAD", "Blocked because the spread is too wide right now"),
+    ("NEWS", "Blocked because a high-impact news event is near"),
+    ("REGIME_DEAD", "Blocked because the market is too quiet/directionless right now"),
+    ("STRETCHED", "Blocked because price is already extended after a strong move — entry would be late"),
+    ("OVEREXTENDED", "Blocked because price is already extended after a strong move — entry would be late"),
+    ("RESISTANCE", "Blocked because price is too close to resistance"),
+    ("SUPPORT", "Blocked because price is too close to support"),
+    ("ANTI-TREND", "Blocked because this direction is fighting the higher timeframe trend"),
+    ("ANTI_TREND", "Blocked because this direction is fighting the higher timeframe trend"),
+]
+
+
+def _ai_humanize_block_reason(code: str) -> str:
+    c = str(code or "").upper()
+    if not c:
+        return ""
+    for needle, phrase in _BLOCK_REASON_PHRASES:
+        if needle in c:
+            return phrase
+    # Unrecognized code: still show something specific rather than a
+    # generic phrase — clean the raw code into readable words.
+    cleaned = re.sub(r"[_\-]+", " ", str(code)).strip()
+    if not cleaned:
+        return ""
+    return f"Blocked: {cleaned.lower()}"
+
+
 def _ai_would_enter_again(latest_card: dict) -> dict:
     """Heuristic 'would I take this trade again right now' verdict — derived
-    from current confidence + tone, not a separate ML call."""
+    from current confidence + tone, not a separate ML call. Three-way
+    (YES/NO/WAIT), matching the Command Center spec: a clearly weak read
+    says NO, a clearly healthy one says YES, and a genuinely ambiguous one
+    says WAIT rather than forcing a binary guess either way."""
     conf = latest_card.get("confidence")
     tone = latest_card.get("tone")
+    delta = latest_card.get("confidence_delta") or 0
     if conf is None:
-        return {"answer": None, "reason": "No live confidence reading yet."}
-    if tone in ("warning", "danger") or conf < 65:
-        why = "Confidence has dropped since entry" if latest_card.get("confidence_delta", 0) < 0 else \
-              "Confidence is below the bar for a fresh entry"
-        return {"answer": False, "reason": why}
-    return {"answer": True, "reason": "Thesis still holds at current confidence."}
+        return {"answer": "WAIT", "reason": "No live confidence reading yet — wait for the next evaluation."}
+    if tone == "danger" or conf < 45:
+        return {"answer": "NO", "reason": "Confidence is too weak to justify entering here."}
+    if tone == "warning" or conf < 65:
+        why = "Confidence has dropped and hasn't recovered yet" if delta < 0 else \
+              "Confidence is in a borderline zone — not clearly good or bad"
+        return {"answer": "WAIT", "reason": why + "; wait for a clearer read before acting."}
+    return {"answer": "YES", "reason": "Thesis still holds at current confidence."}
 
 @api_router.post("/cloud/master/reasoning")
 async def cloud_master_reasoning(req: MasterReasoningReq, request: Request):
@@ -5332,6 +5421,24 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
         "monitor_last_activity": doc,
     }}, upsert=True)
     return {"ok": True, "event_id": doc["id"]}
+
+@api_router.post("/cloud/monitor/thesis-status")
+async def cloud_monitor_thesis_status(req: TradeThesisStatusReq, request: Request):
+    """Live per-position state from XAU_LogTradeThesisStatus — upserted (one
+    current doc per ticket), not appended, since only the latest state
+    matters for the Command Center's Open Trade Thinking panel."""
+    license_key = _normalize_license_key(req.license_key or req.pin or "")
+    lic = await _resolve_monitor_license(license_key, req.account or "", request)
+    if not req.ticket:
+        raise HTTPException(status_code=400, detail="ticket is required")
+    doc = req.model_dump()
+    doc["license_key"] = license_key
+    doc["license_id"] = lic.get("id", "") if lic else ""
+    doc["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.cloud_trade_thesis_status.update_one(
+        {"license_key": license_key, "ticket": req.ticket},
+        {"$set": doc}, upsert=True)
+    return {"ok": True}
 
 @api_router.post("/cloud/command/request")
 async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_cloud_user)):
@@ -5670,6 +5777,36 @@ async def cloud_monitor_activity_feed(kind: str = "all", limit: int = 80, search
     rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", -1).to_list(n)
     return {"events": rows, "count": len(rows), "kind": k}
 
+# v6.9.0 — BOT_STATUS_HEARTBEAT posts every 60s unconditionally (the
+# staleness-fix heartbeat); it belongs in the dedicated Current Bot Decision
+# panel (/cloud/monitor/bot-status), not spamming the conversational feed
+# with a near-identical "still scanning" card every minute.
+_DECISION_FEED_EXCLUDED_EVENT_TYPES = ["BOT_STATUS_HEARTBEAT"]
+
+
+def _ai_group_repeated_cards(cards: list) -> list:
+    """Collapse consecutive cards with the same headline/decision/reason
+    into one card with a `repeated_at` timestamp list, so 10 identical
+    "waiting for higher quality setup" cards become one card that says
+    when it was last repeated — per the 'less noise' requirement. Cards
+    are expected newest-first; grouping only merges ADJACENT duplicates
+    (a genuinely new decision in between breaks the group)."""
+    grouped: list = []
+    for card in cards:
+        key = (card.get("type"), card.get("headline"), card.get("decision_text"))
+        if grouped:
+            prev = grouped[-1]
+            prev_key = (prev.get("type"), prev.get("headline"), prev.get("decision_text"))
+            if key == prev_key:
+                prev.setdefault("repeated_at", []).append(card.get("ts"))
+                prev["repeat_count"] = prev.get("repeat_count", 1) + 1
+                continue
+        card["repeated_at"] = []
+        card["repeat_count"] = 1
+        grouped.append(card)
+    return grouped
+
+
 @api_router.get("/cloud/monitor/decision-feed")
 async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = "",
                                       user: dict = Depends(get_cloud_user)):
@@ -5677,7 +5814,10 @@ async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = "",
     events as /cloud/monitor/activity, translated into plain-English
     'thought cards' plus a short timeline — no raw engine variables in the
     default payload (those still ride along under each card's `advanced`
-    key for the Developer Details view)."""
+    key for the Developer Details view). Consecutive identical decisions are
+    grouped into one card (repeat_count/repeated_at fields — the UI decides
+    how to word it); the periodic status heartbeat lives in its own
+    /cloud/monitor/bot-status endpoint instead of spamming this feed."""
     n = max(1, min(int(limit), 200))
     lic = await _get_user_license(user)
     license_key = _normalize_license_key((lic or {}).get("pin", ""))
@@ -5686,16 +5826,54 @@ async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = "",
         return {"cards": [], "timeline": [], "reason": "license_not_linked"}
     scope = {"$or": [{"account": account_filter}, {"license_key": license_key}]} if account_filter and license_key \
         else ({"account": account_filter} if account_filter else {"license_key": license_key})
-    query = scope
+    query = {"$and": [scope, {"event_type": {"$nin": _DECISION_FEED_EXCLUDED_EVENT_TYPES}}]}
     t = str(ticket or "").strip()
     if t:
-        query = {"$and": [scope, {"ticket": t}]}
+        query = {"$and": [scope, {"ticket": t}, {"event_type": {"$nin": _DECISION_FEED_EXCLUDED_EVENT_TYPES}}]}
     rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", 1).to_list(n * 3)
     rows = rows[-n:]
     prev_conf_by_ticket: dict = {}
     cards = [_ai_build_thought_card(ev, prev_conf_by_ticket) for ev in rows]
+    cards = list(reversed(cards))
+    cards = _ai_group_repeated_cards(cards)
     timeline = [{"ts": c["ts"], "label": c["decision_text"] or c["headline"], "tone": c["tone"]} for c in cards]
-    return {"cards": list(reversed(cards)), "timeline": timeline, "count": len(cards)}
+    return {"cards": cards, "timeline": timeline, "count": len(cards)}
+
+
+@api_router.get("/cloud/monitor/bot-status")
+async def cloud_monitor_bot_status(user: dict = Depends(get_cloud_user)):
+    """The 'Current Bot Decision' panel: the latest BOT_STATUS_HEARTBEAT,
+    posted every 60s unconditionally (regardless of any gate that might
+    otherwise suppress the EA's other cloud posts for extended periods —
+    see v6.9.0's OnTick() heartbeat). Category is one of SCANNING/WAITING/
+    BLOCKED/MANAGING_TRADE/PROTECTING_PROFIT/HOLDING/PREPARING_EXIT;
+    ENTERING/EXITING are momentary and come from the trade-event cards
+    themselves rather than this periodic snapshot."""
+    lic = await _get_user_license(user)
+    license_key = _normalize_license_key((lic or {}).get("pin", ""))
+    account_filter = str((lic or {}).get("mt5_account") or "").strip()
+    if not account_filter and not license_key:
+        return {"available": False, "reason": "license_not_linked"}
+    scope = {"$or": [{"account": account_filter}, {"license_key": license_key}]} if account_filter and license_key \
+        else ({"account": account_filter} if account_filter else {"license_key": license_key})
+    query = {"$and": [scope, {"event_type": "BOT_STATUS_HEARTBEAT"}]}
+    latest = await db.cloud_bot_activity.find_one(query, {"_id": 0}, sort=[("ts", -1)])
+    if not latest:
+        return {"available": False, "reason": "no_heartbeat_yet"}
+    category = str(latest.get("blocked_by") or latest.get("mode") or "SCANNING").upper()
+    age_sec = None
+    ts = _dt_or_none(latest.get("ts"))
+    if ts:
+        age_sec = int((datetime.now(timezone.utc) - ts).total_seconds())
+    return {
+        "available": True,
+        "category": category,
+        "status_text": latest.get("decision") or latest.get("message"),
+        "reason": latest.get("reason"),
+        "ts": latest.get("ts"),
+        "age_sec": age_sec,
+        "stale": age_sec is not None and age_sec > 360,  # heartbeat is every 60s; >6min means something's actually wrong
+    }
 
 @api_router.get("/cloud/monitor/current-opinion")
 async def cloud_monitor_current_opinion(ticket: str = "", user: dict = Depends(get_cloud_user)):
@@ -5734,6 +5912,16 @@ async def cloud_monitor_current_opinion(ticket: str = "", user: dict = Depends(g
     exit_probability = (100 - conf) if conf is not None else None
     reversal_probability = max(0, 100 - conf - 20) if conf is not None else None
     verdict = _ai_would_enter_again(latest)
+
+    # v6.9.0 — merge in the live per-position thesis snapshot (thesis
+    # health, hold/protect/exit reasons, TRI recovery-mode status, distance
+    # to SL/TP) posted by XAU_LogTradeThesisStatus, for the "Open Trade
+    # Thinking" panel. Best-effort: if the EA hasn't posted one yet for
+    # this ticket (older EA build, or first tick), these stay null rather
+    # than failing the whole response.
+    thesis = await db.cloud_trade_thesis_status.find_one(
+        {"license_key": license_key, "ticket": active_ticket}, {"_id": 0})
+
     return {
         "open": True,
         "ticket": active_ticket,
@@ -5747,6 +5935,18 @@ async def cloud_monitor_current_opinion(ticket: str = "", user: dict = Depends(g
         "would_enter_again": verdict["answer"],
         "would_enter_again_reason": verdict["reason"],
         "latest_card": latest,
+        "thesis_health": (thesis or {}).get("state"),
+        "hold_reason": (thesis or {}).get("hold_reason"),
+        "protect_reason": (thesis or {}).get("protect_reason"),
+        "exit_trigger_reason": (thesis or {}).get("exit_reason"),
+        "next_action": (thesis or {}).get("next_action"),
+        "peak_profit": (thesis or {}).get("peak_profit"),
+        "protected_profit": (thesis or {}).get("protected_profit"),
+        "distance_to_sl": (thesis or {}).get("dist_to_sl"),
+        "distance_to_tp": (thesis or {}).get("dist_to_tp"),
+        "recovery_mode": (thesis or {}).get("recovery_mode", "NONE"),
+        "recovery_worst_pct": (thesis or {}).get("recovery_worst_pct"),
+        "recovery_classification": (thesis or {}).get("recovery_classification"),
     }
 
 @api_router.get("/cloud/me/reasoning")

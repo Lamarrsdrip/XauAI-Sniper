@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.8.0.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.9.0.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -140,7 +140,7 @@ def test_bot_decision_and_trade_thesis_status_logging_exist():
 
     # actually wired into the live paths, not just defined
     assert "XAU_LogBotDecision(finalSzMult < originalGradeSizeMulti - 0.001 ? \"REDUCE_SIZE\" : \"ENTER\"," in ea
-    assert "XAU_LogTradeThesisStatus(ticket, isBuy, openPx, curSL, lotsOpen, profit, peak);" in ea
+    assert "XAU_LogTradeThesisStatus(ticket, isBuy, openPx, curSL, lotsOpen, profit, peak, curTP, curPrice);" in ea
 
 
 def test_no_new_protective_or_restrictive_defaults_introduced_for_gold_mode():

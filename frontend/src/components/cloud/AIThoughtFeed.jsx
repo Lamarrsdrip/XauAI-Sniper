@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useState } from "react";
 import axios from "axios";
 import {
   Brain, CheckCircle2, XCircle, AlertTriangle, TrendingUp, TrendingDown,
-  Clock3, ChevronDown, ChevronUp, Sparkles, ShieldQuestion,
+  Clock3, ChevronDown, ChevronUp, Sparkles, ShieldQuestion, Activity,
+  Search, Pause, ShieldAlert, Target, LifeBuoy,
 } from "lucide-react";
 import { API } from "@/lib/api";
 
@@ -62,6 +63,12 @@ function ThoughtCard({ card }) {
           <div>
             <div className={`text-[15px] font-bold ${tone.text}`}>{card.headline}</div>
             <div className="text-[11px] text-white/35">{clock(card.ts)} · {relTime(card.ts)}</div>
+            {card.repeat_count > 1 && (
+              <div className="mt-1 text-[10px] text-white/30">
+                Reason unchanged · repeated at {[...(card.repeated_at || [])].reverse().slice(0, 4).map(clock).join(", ")}
+                {card.repeat_count > 5 ? ` (+${card.repeat_count - 5} more)` : ""}
+              </div>
+            )}
           </div>
         </div>
         {card.grade && (
@@ -211,37 +218,96 @@ function DecisionTimeline({ items }) {
   );
 }
 
-// ─── Current Trade panel ────────────────────────────────────────────────────
+const VERDICT_STYLE = {
+  YES:  "border-emerald-400/25 bg-emerald-400/10 text-emerald-300",
+  NO:   "border-rose-400/25 bg-rose-400/10 text-rose-300",
+  WAIT: "border-amber-300/25 bg-amber-300/10 text-amber-200",
+};
+const HEALTH_STYLE = {
+  healthy:     { label: "Healthy",     cls: "text-emerald-300" },
+  pullback:    { label: "Pullback",    cls: "text-sky-300" },
+  warning:     { label: "Warning",     cls: "text-amber-200" },
+  invalidated: { label: "Invalidated", cls: "text-rose-300" },
+};
+const money2 = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}$${Number(v).toFixed(2)}`);
+
+// ─── Current Trade panel — "Open Trade Thinking" ───────────────────────────
 function CurrentTradePanel({ opinion }) {
   if (!opinion || !opinion.open) return null;
-  const yes = opinion.would_enter_again;
+  const verdict = opinion.would_enter_again || "WAIT";
+  const health = HEALTH_STYLE[opinion.thesis_health] || null;
+  const inRecovery = opinion.recovery_mode === "ACTIVE";
+  const failedRecovery = opinion.recovery_mode === "FAILED_NO_FORCED_EXIT";
+
   return (
     <div className="rounded-3xl border border-violet-400/20 bg-violet-300/[0.05] p-5" data-testid="current-trade-panel">
-      <div className={`mb-4 flex items-center gap-2 ${MONO_LABEL} text-violet-300`}>
-        <Sparkles className="h-3.5 w-3.5" /> Current AI Opinion
+      <div className={`mb-4 flex items-center justify-between gap-2 ${MONO_LABEL} text-violet-300`}>
+        <span className="flex items-center gap-2"><Sparkles className="h-3.5 w-3.5" /> Open Trade Thinking</span>
+        {health && <span className={`normal-case tracking-normal text-[11px] font-bold ${health.cls}`}>{health.label}</span>}
       </div>
+
+      {inRecovery && (
+        <div className="mb-4 flex items-center gap-2 rounded-2xl border border-amber-300/25 bg-amber-300/[0.08] p-3.5 text-[12px] text-amber-100">
+          <LifeBuoy className="h-4 w-4 flex-none text-amber-300" />
+          <span>Recovery Mode active — reached {Math.round(opinion.recovery_worst_pct || 0)}% of the way to SL, now watching for a genuine reclaim before deciding anything.</span>
+        </div>
+      )}
+      {failedRecovery && (
+        <div className="mb-4 flex items-center gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3.5 text-[12px] text-white/55">
+          <LifeBuoy className="h-4 w-4 flex-none text-white/40" />
+          <span>Recovery stalled after a near-SL event — not force-exiting, still riding normal SL management.</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Opinion label="Bias" value={opinion.current_bias || "—"} />
         <Opinion label="Confidence" value={opinion.confidence != null ? `${opinion.confidence}%` : "—"} />
-        <Opinion label="Hold probability" value={opinion.hold_probability != null ? `${opinion.hold_probability}%` : "—"} />
-        <Opinion label="Exit probability" value={opinion.exit_probability != null ? `${opinion.exit_probability}%` : "—"} />
+        <Opinion label="Peak profit" value={money2(opinion.peak_profit)} />
+        <Opinion label="Protected" value={money2(opinion.protected_profit)} />
       </div>
+
+      {(opinion.distance_to_sl != null || opinion.distance_to_tp != null) && (
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <Opinion label="Distance to SL" value={opinion.distance_to_sl != null ? opinion.distance_to_sl.toFixed(2) : "—"} />
+          <Opinion label="Distance to TP" value={opinion.distance_to_tp != null ? opinion.distance_to_tp.toFixed(2) : "—"} />
+        </div>
+      )}
+
       {opinion.entry_reason && (
         <div className="mt-4">
-          <div className={MONO_LABEL}>Entry Reason</div>
+          <div className={MONO_LABEL}>Why It Entered</div>
           <p className="mt-1 text-[13px] leading-5 text-white/70">{opinion.entry_reason}</p>
         </div>
       )}
+      {opinion.hold_reason && (
+        <div className="mt-3">
+          <div className={MONO_LABEL}>Why It's Holding</div>
+          <p className="mt-1 text-[13px] leading-5 text-white/70">{opinion.hold_reason}</p>
+        </div>
+      )}
+      {opinion.protect_reason && (
+        <div className="mt-3">
+          <div className={MONO_LABEL}>Protection</div>
+          <p className="mt-1 text-[13px] leading-5 text-white/70">{opinion.protect_reason}</p>
+        </div>
+      )}
+      {opinion.exit_trigger_reason && (
+        <div className="mt-3">
+          <div className={MONO_LABEL}>What Would Make It Close</div>
+          <p className="mt-1 text-[13px] leading-5 text-white/70">{opinion.exit_trigger_reason}</p>
+        </div>
+      )}
+
       <div className="mt-5 flex items-center justify-between gap-3 rounded-2xl border border-white/[0.07] bg-black/20 p-4">
         <div className="flex items-center gap-2 text-[13px] font-semibold text-white/80">
           <ShieldQuestion className="h-4 w-4 text-violet-300" />
           Would I enter this trade again right now?
         </div>
-        <span className={`rounded-full border px-3 py-1 text-[12px] font-black ${yes ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300" : "border-rose-400/25 bg-rose-400/10 text-rose-300"}`}>
-          {yes === null ? "—" : yes ? "YES" : "NO"}
+        <span className={`rounded-full border px-3 py-1 text-[12px] font-black ${VERDICT_STYLE[verdict] || VERDICT_STYLE.WAIT}`}>
+          {verdict}
         </span>
       </div>
-      {yes === false && opinion.would_enter_again_reason && (
+      {verdict !== "YES" && opinion.would_enter_again_reason && (
         <p className="mt-2 text-[12px] italic text-white/45">{opinion.would_enter_again_reason}</p>
       )}
     </div>
@@ -257,6 +323,54 @@ function Opinion({ label, value }) {
   );
 }
 
+// ─── Current Bot Decision — the always-live "what is it doing right now"
+// panel, sourced from the unconditional 60s heartbeat so it can never go
+// stale the way the old feed-only view could when the bot was idle/blocked
+// for a long stretch. ──────────────────────────────────────────────────────
+const BOT_STATUS_META = {
+  SCANNING:          { label: "Scanning",          icon: Search,      tone: "neutral" },
+  WAITING:           { label: "Waiting",            icon: Clock3,      tone: "neutral" },
+  BLOCKED:           { label: "Blocked",            icon: Pause,       tone: "warning" },
+  ENTERING:          { label: "Entering",           icon: TrendingUp,  tone: "success" },
+  MANAGING_TRADE:    { label: "Managing open trade", icon: Activity,   tone: "bullish" },
+  PROTECTING_PROFIT: { label: "Protecting profit",  icon: ShieldAlert, tone: "success" },
+  HOLDING:           { label: "Holding",            icon: Target,      tone: "neutral" },
+  PREPARING_EXIT:    { label: "Preparing exit",     icon: LifeBuoy,    tone: "warning" },
+  EXITING:           { label: "Exiting",            icon: XCircle,     tone: "danger" },
+};
+
+function BotDecisionPanel({ status }) {
+  if (!status || !status.available) return null;
+  const meta = BOT_STATUS_META[status.category] || { label: status.category, icon: Brain, tone: "neutral" };
+  const tone = toneOf(meta.tone);
+  const Icon = meta.icon;
+  return (
+    <div className={`rounded-3xl border ${tone.border} ${tone.bg} p-5`} data-testid="bot-decision-panel">
+      <div className={`mb-3 flex items-center justify-between gap-2 ${MONO_LABEL}`}>
+        <span className="flex items-center gap-2"><Brain className="h-3.5 w-3.5" /> Live Bot Thought</span>
+        {status.stale && (
+          <span className="normal-case tracking-normal text-[10px] font-bold text-rose-300">no update in {Math.floor((status.age_sec || 0) / 60)}m — check connection</span>
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        <div className={`flex h-11 w-11 flex-none items-center justify-center rounded-2xl border ${tone.border} bg-black/20`}>
+          <Icon className={`h-5 w-5 ${tone.text}`} />
+        </div>
+        <div className="min-w-0">
+          <div className={`text-[18px] font-bold ${tone.text}`}>{meta.label}</div>
+          <div className="text-[11px] text-white/35">{clock(status.ts)} · {relTime(status.ts)}</div>
+        </div>
+      </div>
+      {status.status_text && (
+        <p className="mt-4 text-[13px] leading-5 text-white/75">{status.status_text}</p>
+      )}
+      {status.reason && status.reason !== status.status_text && (
+        <p className="mt-2 text-[12px] leading-5 text-white/45">{status.reason}</p>
+      )}
+    </div>
+  );
+}
+
 // ─── Top-level export: the full AI Trading Assistant feed ─────────────────
 // compact=true renders a single-card teaser (used on the Home page) that
 // links into the full experience on the Trading tab, instead of duplicating
@@ -265,18 +379,21 @@ export default function AIThoughtFeed({ linked, compact = false, onOpenFull }) {
   const [cards, setCards] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [opinion, setOpinion] = useState(null);
+  const [botStatus, setBotStatus] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchAll = useCallback(async () => {
     if (!linked) { setLoading(false); return; }
     try {
-      const [feedR, opR] = await Promise.all([
+      const [feedR, opR, statusR] = await Promise.all([
         feedAxios.get("/cloud/monitor/decision-feed", { params: { limit: compact ? 1 : 30 } }),
         compact ? Promise.resolve({ data: null }) : feedAxios.get("/cloud/monitor/current-opinion"),
+        compact ? Promise.resolve({ data: null }) : feedAxios.get("/cloud/monitor/bot-status"),
       ]);
       setCards(feedR.data.cards || []);
       setTimeline(feedR.data.timeline || []);
       setOpinion(opR.data);
+      setBotStatus(statusR.data);
     } catch { /* keep last-known state on transient failure */ }
     finally { setLoading(false); }
   }, [linked, compact]);
@@ -305,6 +422,7 @@ export default function AIThoughtFeed({ linked, compact = false, onOpenFull }) {
 
   return (
     <div className="space-y-4" data-testid="ai-thought-feed">
+      <BotDecisionPanel status={botStatus} />
       <CurrentTradePanel opinion={opinion} />
       <div className={`flex items-center gap-2 ${MONO_LABEL}`}>
         <Brain className="h-3.5 w-3.5" /> AI Trading Assistant
