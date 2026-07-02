@@ -415,7 +415,7 @@ function useAuthGuard() {
   useEffect(()=>{ if(!localStorage.getItem("cloud_token")) navigate("/command/login"); },[navigate]);
 }
 
-function AppShell({ active, setActive, children, logout, statusText, online }) {
+function AppShell({ active, setActive, children, logout, statusText, online, eaVersion }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreActive = MORE_NAV.some(([id])=>id===active);
   const go = (id)=>{ setActive(id); setMoreOpen(false); };
@@ -434,7 +434,7 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
             <XauAiLogo size={30} className="flex-none" />
             <div className="min-w-0">
               <div className="truncate text-[14px] font-bold leading-none">XAU AI Sniper</div>
-              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.10.0</div>
+              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · {eaVersion || "Waiting"}</div>
             </div>
           </Link>
           <div className="flex items-center gap-2">
@@ -585,6 +585,7 @@ export default function CloudDashboard() {
   const online      = Boolean(status && !status.offline && heartbeat.account_number);
   const tradingOk   = Boolean(heartbeat.algo_trading && heartbeat.trading_allowed && heartbeat.mt5_connected);
   const statusText  = online ? heartbeat.bot_state||"ONLINE" : "NO HEARTBEAT";
+  const eaVersion   = heartbeat.ea_version || licenseInfo.ea_version || status?.license?.ea_version || "v6.10.0";
   const equityPoints = useMemo(()=>{
     const base = Number(heartbeat.balance||heartbeat.equity||0);
     if (!base) return [];
@@ -602,7 +603,7 @@ export default function CloudDashboard() {
   );
 
   return (
-    <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online}>
+    <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion}>
       {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} events={events} setActive={setActive} refresh={fetchAll} />}
       {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} linked={Boolean(license?.linked||status?.license?.linked)} />}
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} />}

@@ -46,6 +46,17 @@ def test_thesis_status_now_reaches_the_cloud_not_just_the_local_journal():
     assert 'WebRequest("POST", InpCloudURL + "/api/cloud/monitor/thesis-status"' in fn
     assert '\\"dist_to_sl\\":%.5f,\\"dist_to_tp\\":%.5f' in fn
     assert '\\"recovery_mode\\":\\"%s\\"' in fn
+    for payload_field in (
+        '\\"direction\\":\\"%s\\"',
+        '\\"lots\\":%.2f',
+        '\\"trade_age_minutes\\":%d',
+        '\\"setup_type\\":\\"%s\\"',
+        '\\"grade\\":\\"%s\\"',
+        '\\"ai_confidence\\":%d',
+        '\\"hold_probability\\":%.0f',
+        '\\"exit_probability\\":%.0f',
+    ):
+        assert payload_field in fn
 
 
 def test_backend_ingests_thesis_status_and_upserts_per_ticket():
@@ -54,6 +65,18 @@ def test_backend_ingests_thesis_status_and_upserts_per_ticket():
     endpoint = body(server, '@api_router.post("/cloud/monitor/thesis-status")', "\n    return {\"ok\": True}\n")
     assert "cloud_trade_thesis_status.update_one(" in endpoint
     assert "upsert=True" in endpoint
+    model = body(server, "class TradeThesisStatusReq(BaseModel):", "\n\ndef _dt_or_none")
+    for field in (
+        "direction:",
+        "lots:",
+        "trade_age_minutes:",
+        "setup_type:",
+        "grade:",
+        "ai_confidence:",
+        "hold_probability:",
+        "exit_probability:",
+    ):
+        assert field in model
 
 
 def test_bot_status_endpoint_exists_and_flags_staleness():
@@ -68,13 +91,45 @@ def test_decision_feed_excludes_heartbeat_spam_and_groups_repeats():
     server = read(SERVER)
     assert '_DECISION_FEED_EXCLUDED_EVENT_TYPES = ["BOT_STATUS_HEARTBEAT"]' in server
     feed = body(server, "async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = \"\",",
-                "return {\"cards\": cards, \"timeline\": timeline, \"count\": len(cards)}")
+                '"empty_message": empty_message,')
     assert "event_type" in feed and "$nin" in feed
     assert "_ai_group_repeated_cards(cards)" in feed
+    assert "timedelta(hours=24)" in feed
+    assert '"ts": {"$gte": fresh_cutoff_iso}' in feed
+    assert "min(int(limit), 20)" in feed
+    assert "No fresh AI decision yet. Waiting for next M5 evaluation." in feed
 
     group_fn = body(server, "def _ai_group_repeated_cards(cards: list) -> list:", "return grouped")
     assert 'prev.setdefault("repeated_at", [])' in group_fn
     assert 'prev["repeat_count"]' in group_fn
+
+
+def test_current_opinion_prefers_fresh_thesis_snapshot_and_returns_full_trade_management_fields():
+    server = read(SERVER)
+    endpoint = body(server, '@api_router.get("/cloud/monitor/current-opinion")',
+                    '    }\n\n@api_router.get("/cloud/me/reasoning")')
+    assert "cloud_trade_thesis_status.find_one" in endpoint
+    assert "updated_at" in endpoint and "fresh_cutoff_iso" in endpoint
+    assert '"source": "thesis_status"' in endpoint
+    for field in (
+        '"symbol":',
+        '"direction":',
+        '"lot_size":',
+        '"entry_price":',
+        '"current_price":',
+        '"sl":',
+        '"tp":',
+        '"floating_pl":',
+        '"trade_age_minutes":',
+        '"setup_type":',
+        '"grade":',
+        '"ai_confidence":',
+        '"hold_probability":',
+        '"exit_probability":',
+        '"current_bot_decision":',
+        '"what_would_close":',
+    ):
+        assert field in endpoint
 
 
 def test_blocked_reason_is_specific_not_generic():
@@ -108,10 +163,36 @@ def test_frontend_has_a_dedicated_current_bot_decision_panel():
 
 def test_frontend_current_trade_panel_shows_recovery_and_distance_to_sl_tp():
     src = read(FEED_JSX)
+    assert "No open trade" in src
+    for label in (
+        "Ticket",
+        "Direction",
+        "Lot size",
+        "Entry price",
+        "Current price",
+        "Floating P/L",
+        "Trade age",
+        "Setup type",
+        "AI confidence",
+        "Hold probability",
+        "Exit probability",
+        "Current Bot Decision",
+    ):
+        assert label in src
     assert "Recovery Mode active" in src
     assert "Distance to SL" in src
     assert "Distance to TP" in src
     assert "VERDICT_STYLE" in src and "WAIT:" in src
+
+
+def test_frontend_hides_stale_decision_cards_from_live_trading_page():
+    src = read(FEED_JSX)
+    assert "FRESH_DECISION_MS" in src
+    assert "freshCards(" in src
+    assert "No fresh AI decision yet. Waiting for next M5 evaluation." in src
+    assert "Recent Decisions" in src
+    assert "_t: Date.now()" in src
+    assert "setCards(fresh)" in src
 
 
 def test_frontend_still_polls_every_8_seconds_for_freshness():

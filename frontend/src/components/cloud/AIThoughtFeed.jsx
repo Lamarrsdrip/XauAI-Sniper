@@ -27,6 +27,29 @@ const TONE = {
   neutral: { border: "border-white/[0.08]", bg: "bg-white/[0.02]", text: "text-white/70", icon: Brain },
 };
 const toneOf = (t) => TONE[t] || TONE.neutral;
+const FRESH_DECISION_MS = 24 * 60 * 60 * 1000;
+const MAX_LIVE_DECISION_CARDS = 20;
+const NO_FRESH_DECISION_TEXT = "No fresh AI decision yet. Waiting for next M5 evaluation.";
+
+const tsMs = (iso) => {
+  if (!iso) return NaN;
+  const ms = new Date(iso).getTime();
+  return Number.isFinite(ms) ? ms : NaN;
+};
+
+const isFreshDecision = (card) => {
+  const ms = tsMs(card?.ts);
+  if (!Number.isFinite(ms)) return false;
+  const age = Date.now() - ms;
+  return age >= 0 && age <= FRESH_DECISION_MS;
+};
+
+const freshCards = (items = []) => (
+  items
+    .filter(isFreshDecision)
+    .sort((a, b) => tsMs(b.ts) - tsMs(a.ts))
+    .slice(0, MAX_LIVE_DECISION_CARDS)
+);
 
 const relTime = (iso) => {
   if (!iso) return "";
@@ -45,6 +68,15 @@ const clock = (iso) => {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
+const repeatText = (card) => {
+  const count = Number(card?.repeat_count || 1);
+  if (count <= 1) return "";
+  const times = [card.ts, ...(card.repeated_at || [])].map(tsMs).filter(Number.isFinite);
+  const spanMs = times.length > 1 ? Math.max(...times) - Math.min(...times) : 15 * 60 * 1000;
+  const minutes = Math.max(1, Math.round(spanMs / 60000));
+  return `Repeated ${count} times in last ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+};
+
 // ─── One conversational "thought" card ─────────────────────────────────────
 function ThoughtCard({ card }) {
   const [advanced, setAdvanced] = useState(false);
@@ -52,6 +84,7 @@ function ThoughtCard({ card }) {
   const tone = toneOf(card.tone);
   const Icon = tone.icon;
   const adv = card.advanced || {};
+  const repeated = repeatText(card);
 
   return (
     <div className={`rounded-3xl border ${tone.border} ${tone.bg} p-5`} data-testid="ai-thought-card">
@@ -63,10 +96,9 @@ function ThoughtCard({ card }) {
           <div>
             <div className={`text-[15px] font-bold ${tone.text}`}>{card.headline}</div>
             <div className="text-[11px] text-white/35">{clock(card.ts)} · {relTime(card.ts)}</div>
-            {card.repeat_count > 1 && (
+            {repeated && (
               <div className="mt-1 text-[10px] text-white/30">
-                Reason unchanged · repeated at {[...(card.repeated_at || [])].reverse().slice(0, 4).map(clock).join(", ")}
-                {card.repeat_count > 5 ? ` (+${card.repeat_count - 5} more)` : ""}
+                {repeated}
               </div>
             )}
           </div>
@@ -227,17 +259,48 @@ const HEALTH_STYLE = {
   healthy:     { label: "Healthy",     cls: "text-emerald-300" },
   pullback:    { label: "Pullback",    cls: "text-sky-300" },
   warning:     { label: "Warning",     cls: "text-amber-200" },
+  danger:      { label: "Danger",      cls: "text-rose-300" },
   invalidated: { label: "Invalidated", cls: "text-rose-300" },
+  HEALTHY:     { label: "HEALTHY",     cls: "text-emerald-300" },
+  PULLBACK:    { label: "PULLBACK",    cls: "text-sky-300" },
+  WARNING:     { label: "WARNING",     cls: "text-amber-200" },
+  DANGER:      { label: "DANGER",      cls: "text-rose-300" },
+  INVALIDATED: { label: "INVALIDATED", cls: "text-rose-300" },
 };
 const money2 = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}$${Number(v).toFixed(2)}`);
+const num2 = (v) => (v == null || v === "" ? "—" : Number(v).toFixed(2));
+const pct0 = (v) => (v == null || v === "" ? "—" : `${Math.round(Number(v))}%`);
+const lots2 = (v) => (v == null || v === "" ? "—" : Number(v).toFixed(2));
+const ageText = (minutes) => {
+  const m = Number(minutes);
+  if (!Number.isFinite(m) || m < 0) return "—";
+  if (m < 60) return `${Math.round(m)}m`;
+  const h = Math.floor(m / 60);
+  const rem = Math.round(m % 60);
+  return rem ? `${h}h ${rem}m` : `${h}h`;
+};
 
 // ─── Current Trade panel — "Open Trade Thinking" ───────────────────────────
 function CurrentTradePanel({ opinion }) {
-  if (!opinion || !opinion.open) return null;
+  if (!opinion || !opinion.open) {
+    return (
+      <div className="rounded-3xl border border-white/[0.07] bg-[#0d0e13] p-5" data-testid="current-trade-panel">
+        <div className={`mb-3 flex items-center gap-2 ${MONO_LABEL}`}>
+          <Sparkles className="h-3.5 w-3.5" /> Open Trade Thinking
+        </div>
+        <div className="rounded-2xl border border-white/[0.06] bg-black/15 p-4 text-[13px] text-white/50">
+          No open trade
+        </div>
+      </div>
+    );
+  }
   const verdict = opinion.would_enter_again || "WAIT";
   const health = HEALTH_STYLE[opinion.thesis_health] || null;
   const inRecovery = opinion.recovery_mode === "ACTIVE";
   const failedRecovery = opinion.recovery_mode === "FAILED_NO_FORCED_EXIT";
+  const decision = opinion.current_bot_decision || opinion.next_action || "WAIT";
+  const direction = (opinion.direction || "—").toUpperCase();
+  const pendingMessage = opinion.message || "";
 
   return (
     <div className="rounded-3xl border border-violet-400/20 bg-violet-300/[0.05] p-5" data-testid="current-trade-panel">
@@ -258,12 +321,31 @@ function CurrentTradePanel({ opinion }) {
           <span>Recovery stalled after a near-SL event — not force-exiting, still riding normal SL management.</span>
         </div>
       )}
+      {pendingMessage && (
+        <div className="mb-4 rounded-2xl border border-amber-300/20 bg-amber-300/[0.07] p-3.5 text-[12px] leading-5 text-amber-100">
+          {pendingMessage}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Opinion label="Bias" value={opinion.current_bias || "—"} />
-        <Opinion label="Confidence" value={opinion.confidence != null ? `${opinion.confidence}%` : "—"} />
+        <Opinion label="Ticket" value={opinion.ticket || "—"} />
+        <Opinion label="Symbol" value={opinion.symbol || "—"} />
+        <Opinion label="Direction" value={direction} />
+        <Opinion label="Lot size" value={lots2(opinion.lot_size)} />
+        <Opinion label="Entry price" value={num2(opinion.entry_price)} />
+        <Opinion label="Current price" value={num2(opinion.current_price)} />
+        <Opinion label="SL" value={num2(opinion.sl)} />
+        <Opinion label="TP" value={num2(opinion.tp)} />
+        <Opinion label="Floating P/L" value={money2(opinion.floating_pl)} />
         <Opinion label="Peak profit" value={money2(opinion.peak_profit)} />
         <Opinion label="Protected" value={money2(opinion.protected_profit)} />
+        <Opinion label="Trade age" value={ageText(opinion.trade_age_minutes)} />
+        <Opinion label="Setup type" value={opinion.setup_type || "—"} />
+        <Opinion label="Grade" value={opinion.grade || "—"} />
+        <Opinion label="AI confidence" value={pct0(opinion.ai_confidence ?? opinion.confidence)} />
+        <Opinion label="Hold probability" value={pct0(opinion.hold_probability)} />
+        <Opinion label="Exit probability" value={pct0(opinion.exit_probability)} />
+        <Opinion label="Current Bot Decision" value={decision} />
       </div>
 
       {(opinion.distance_to_sl != null || opinion.distance_to_tp != null) && (
@@ -273,6 +355,12 @@ function CurrentTradePanel({ opinion }) {
         </div>
       )}
 
+      {opinion.current_reason && (
+        <div className="mt-4">
+          <div className={MONO_LABEL}>Reason</div>
+          <p className="mt-1 text-[13px] leading-5 text-white/70">{opinion.current_reason}</p>
+        </div>
+      )}
       {opinion.entry_reason && (
         <div className="mt-4">
           <div className={MONO_LABEL}>Why It Entered</div>
@@ -295,6 +383,12 @@ function CurrentTradePanel({ opinion }) {
         <div className="mt-3">
           <div className={MONO_LABEL}>What Would Make It Close</div>
           <p className="mt-1 text-[13px] leading-5 text-white/70">{opinion.exit_trigger_reason}</p>
+        </div>
+      )}
+      {opinion.what_would_keep_holding && (
+        <div className="mt-3">
+          <div className={MONO_LABEL}>What Keeps It Holding</div>
+          <p className="mt-1 text-[13px] leading-5 text-white/70">{opinion.what_would_keep_holding}</p>
         </div>
       )}
 
@@ -385,13 +479,15 @@ export default function AIThoughtFeed({ linked, compact = false, onOpenFull }) {
   const fetchAll = useCallback(async () => {
     if (!linked) { setLoading(false); return; }
     try {
+      const bust = Date.now();
       const [feedR, opR, statusR] = await Promise.all([
-        feedAxios.get("/cloud/monitor/decision-feed", { params: { limit: compact ? 1 : 30 } }),
-        compact ? Promise.resolve({ data: null }) : feedAxios.get("/cloud/monitor/current-opinion"),
-        compact ? Promise.resolve({ data: null }) : feedAxios.get("/cloud/monitor/bot-status"),
+        feedAxios.get("/cloud/monitor/decision-feed", { params: { limit: compact ? 20 : 20, _t: Date.now() } }),
+        compact ? Promise.resolve({ data: null }) : feedAxios.get("/cloud/monitor/current-opinion", { params: { _t: bust } }),
+        compact ? Promise.resolve({ data: null }) : feedAxios.get("/cloud/monitor/bot-status", { params: { _t: bust } }),
       ]);
-      setCards(feedR.data.cards || []);
-      setTimeline(feedR.data.timeline || []);
+      const fresh = freshCards(feedR.data.cards || []);
+      setCards(fresh);
+      setTimeline(fresh.map((c) => ({ ts: c.ts, label: c.decision_text || c.headline, tone: c.tone })));
       setOpinion(opR.data);
       setBotStatus(statusR.data);
     } catch { /* keep last-known state on transient failure */ }
@@ -412,7 +508,7 @@ export default function AIThoughtFeed({ linked, compact = false, onOpenFull }) {
         {loading ? (
           <div className="rounded-2xl border border-white/[0.07] bg-[#0d0e13] p-6 text-center text-[12px] text-white/35">Reading the AI's thinking…</div>
         ) : cards.length === 0 ? (
-          <div className="rounded-2xl border border-white/[0.07] bg-[#0d0e13] p-6 text-center text-[12px] text-white/35">No AI activity yet.</div>
+          <div className="rounded-2xl border border-white/[0.07] bg-[#0d0e13] p-6 text-center text-[12px] text-white/35">{NO_FRESH_DECISION_TEXT}</div>
         ) : (
           <ThoughtCard card={cards[0]} />
         )}
@@ -425,7 +521,7 @@ export default function AIThoughtFeed({ linked, compact = false, onOpenFull }) {
       <BotDecisionPanel status={botStatus} />
       <CurrentTradePanel opinion={opinion} />
       <div className={`flex items-center gap-2 ${MONO_LABEL}`}>
-        <Brain className="h-3.5 w-3.5" /> AI Trading Assistant
+        <Brain className="h-3.5 w-3.5" /> Recent Decisions
       </div>
       {loading ? (
         <div className="rounded-3xl border border-white/[0.07] bg-[#0d0e13] p-8 text-center text-[13px] text-white/35">
@@ -433,7 +529,7 @@ export default function AIThoughtFeed({ linked, compact = false, onOpenFull }) {
         </div>
       ) : cards.length === 0 ? (
         <div className="rounded-3xl border border-white/[0.07] bg-[#0d0e13] p-8 text-center text-[13px] text-white/35">
-          No AI activity yet. As soon as the bot starts analyzing the market, you'll see its thinking here — in plain English, not logs.
+          {NO_FRESH_DECISION_TEXT}
         </div>
       ) : (
         <div className="space-y-3">

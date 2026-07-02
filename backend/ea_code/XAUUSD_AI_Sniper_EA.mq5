@@ -7061,6 +7061,11 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
    double protectedProfit = XAU_CurrentSLLockUSD(isBuy, openPx, curSL, lotsOpen);
    string expectedType = "OTHER";
    string entryReason = "";
+   string setupType = "OTHER";
+   string grade = "";
+   double liveScore = -1.0;
+   int barsHeld = 0;
+   int tradeAgeMinutes = 0;
 
    string recoveryMode = "NONE";
    double recoveryWorstPct = 0.0;
@@ -7069,8 +7074,12 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
    if(ttmIdx >= 0)
    {
       expectedType = g_ttm[ttmIdx].expectedTradeType;
+      setupType     = g_ttm[ttmIdx].setupName != "" ? g_ttm[ttmIdx].setupName : expectedType;
+      grade         = g_ttm[ttmIdx].grade;
       entryReason  = g_ttm[ttmIdx].entryReasonFull;
-      double liveScore = g_ttm[ttmIdx].liveScore;
+      liveScore    = g_ttm[ttmIdx].liveScore;
+      barsHeld     = g_ttm[ttmIdx].barsHeld;
+      tradeAgeMinutes = (int)MathMax(0, (TimeCurrent() - g_ttm[ttmIdx].entryTime) / 60);
 
       // v6.8.0 TRI — a trade currently in Recovery Mode takes priority over
       // the generic pullback/warning read, since it's a more specific and
@@ -7118,15 +7127,33 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
          nextAction = protectedProfit > 0 ? "HOLD_PROTECTED" : "HOLD";
       }
    }
+   if(tradeAgeMinutes <= 0 && PositionSelectByTicket(ticket))
+   {
+      datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(posTime > 0)
+         tradeAgeMinutes = (int)MathMax(0, (TimeCurrent() - posTime) / 60);
+   }
    if(protectedProfit > 0.01)
       protectReason = StringFormat("$%.2f locked via SL", protectedProfit);
 
+   string direction = isBuy ? "BUY" : "SELL";
+   int aiConfidence = MathMax(0, MathMin(100, g_aiLastConfidence));
+   double holdProbability = 50.0;
+   if(liveScore >= 0.0)
+      holdProbability = MathMax(0.0, MathMin(100.0, liveScore));
+   else if(aiConfidence > 0)
+      holdProbability = (double)aiConfidence;
+   double exitProbability = MathMax(0.0, MathMin(100.0, 100.0 - holdProbability));
+
    PrintFormat("TRADE_THESIS_STATUS: ticket=%I64u state=%s type=%s peakProfit=%.2f currentProfit=%.2f "
                "protectedProfit=%.2f holdReason=\"%s\" protectReason=\"%s\" exitReason=\"%s\" "
-               "nextAction=%s entryReason=\"%s\" recoveryMode=%s recoveryWorstPct=%.0f recoveryClassification=%s",
+               "nextAction=%s entryReason=\"%s\" recoveryMode=%s recoveryWorstPct=%.0f recoveryClassification=%s "
+               "direction=%s lots=%.2f ageMin=%d setup=%s grade=%s aiConf=%d holdProb=%.0f exitProb=%.0f",
                ticket, state, expectedType, peak, profit, protectedProfit,
                holdReason, protectReason, exitReason, nextAction, entryReason,
-               recoveryMode, recoveryWorstPct, recoveryClassification);
+               recoveryMode, recoveryWorstPct, recoveryClassification,
+               direction, lotsOpen, tradeAgeMinutes, setupType, grade,
+               aiConfidence, holdProbability, exitProbability);
 
    // v6.9.0 — this used to be local-only (MT5 journal Print, never left the
    // terminal). The Command Center's "Open Trade Thinking" panel needs this
@@ -7140,7 +7167,10 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
       double distToTP = (curTP > 0 && curPrice > 0) ? MathAbs(curTP - curPrice) : 0.0;
       string body = StringFormat(
          "{\"pin\":\"%s\",\"license_key\":\"%s\",\"account\":\"%I64d\",\"symbol\":\"%s\","
-         "\"ticket\":\"%I64u\",\"state\":\"%s\",\"expected_type\":\"%s\",\"peak_profit\":%.2f,"
+         "\"ticket\":\"%I64u\",\"direction\":\"%s\",\"lots\":%.2f,\"trade_age_minutes\":%d,"
+         "\"setup_type\":\"%s\",\"grade\":\"%s\",\"ai_confidence\":%d,\"thesis_score\":%.2f,"
+         "\"hold_probability\":%.0f,\"exit_probability\":%.0f,"
+         "\"state\":\"%s\",\"expected_type\":\"%s\",\"peak_profit\":%.2f,"
          "\"current_profit\":%.2f,\"protected_profit\":%.2f,\"hold_reason\":\"%s\","
          "\"protect_reason\":\"%s\",\"exit_reason\":\"%s\",\"next_action\":\"%s\","
          "\"entry_reason\":\"%s\",\"recovery_mode\":\"%s\",\"recovery_worst_pct\":%.0f,"
@@ -7148,6 +7178,9 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
          "\"current_price\":%.5f,\"sl\":%.5f,\"tp\":%.5f,\"dist_to_sl\":%.5f,\"dist_to_tp\":%.5f}",
          BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
          AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), ticket,
+         BotMonitorJsonSafe(direction, 8), lotsOpen, tradeAgeMinutes,
+         BotMonitorJsonSafe(setupType, 40), BotMonitorJsonSafe(grade, 8),
+         aiConfidence, liveScore, holdProbability, exitProbability,
          BotMonitorJsonSafe(state, 20), BotMonitorJsonSafe(expectedType, 24),
          peak, profit, protectedProfit,
          BotMonitorJsonSafe(holdReason, 300), BotMonitorJsonSafe(protectReason, 120),

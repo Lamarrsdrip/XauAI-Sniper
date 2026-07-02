@@ -4870,6 +4870,15 @@ class TradeThesisStatusReq(BaseModel):
     account: Optional[str] = ""
     symbol: Optional[str] = ""
     ticket: str = ""
+    direction: Optional[str] = ""
+    lots: Optional[float] = None
+    trade_age_minutes: Optional[int] = None
+    setup_type: Optional[str] = ""
+    grade: Optional[str] = ""
+    ai_confidence: Optional[int] = None
+    thesis_score: Optional[float] = None
+    hold_probability: Optional[float] = None
+    exit_probability: Optional[float] = None
     state: Optional[str] = ""
     expected_type: Optional[str] = ""
     peak_profit: Optional[float] = None
@@ -5818,18 +5827,21 @@ async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = "",
     grouped into one card (repeat_count/repeated_at fields — the UI decides
     how to word it); the periodic status heartbeat lives in its own
     /cloud/monitor/bot-status endpoint instead of spamming this feed."""
-    n = max(1, min(int(limit), 200))
+    n = max(1, min(int(limit), 20))
+    empty_message = "No fresh AI decision yet. Waiting for next M5 evaluation."
+    fresh_cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     lic = await _get_user_license(user)
     license_key = _normalize_license_key((lic or {}).get("pin", ""))
     account_filter = str((lic or {}).get("mt5_account") or "").strip()
     if not account_filter and not license_key:
-        return {"cards": [], "timeline": [], "reason": "license_not_linked"}
+        return {"cards": [], "timeline": [], "reason": "license_not_linked", "empty_message": empty_message}
     scope = {"$or": [{"account": account_filter}, {"license_key": license_key}]} if account_filter and license_key \
         else ({"account": account_filter} if account_filter else {"license_key": license_key})
-    query = {"$and": [scope, {"event_type": {"$nin": _DECISION_FEED_EXCLUDED_EVENT_TYPES}}]}
+    freshness = {"ts": {"$gte": fresh_cutoff_iso}}
+    query = {"$and": [scope, {"event_type": {"$nin": _DECISION_FEED_EXCLUDED_EVENT_TYPES}}, freshness]}
     t = str(ticket or "").strip()
     if t:
-        query = {"$and": [scope, {"ticket": t}, {"event_type": {"$nin": _DECISION_FEED_EXCLUDED_EVENT_TYPES}}]}
+        query = {"$and": [scope, {"ticket": t}, {"event_type": {"$nin": _DECISION_FEED_EXCLUDED_EVENT_TYPES}}, freshness]}
     rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", 1).to_list(n * 3)
     rows = rows[-n:]
     prev_conf_by_ticket: dict = {}
@@ -5837,7 +5849,20 @@ async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = "",
     cards = list(reversed(cards))
     cards = _ai_group_repeated_cards(cards)
     timeline = [{"ts": c["ts"], "label": c["decision_text"] or c["headline"], "tone": c["tone"]} for c in cards]
-    return {"cards": cards, "timeline": timeline, "count": len(cards)}
+    return {
+        "cards": cards,
+        "timeline": timeline,
+        "count": len(cards),
+        "fresh_since": fresh_cutoff_iso,
+        "max_age_hours": 24,
+        "source_priority": [
+            "latest EA heartbeat/live decision JSON",
+            "latest M5 decision cycle",
+            "latest open trade thinking",
+            "recent decision history fallback",
+        ],
+        "empty_message": empty_message,
+    }
 
 
 @api_router.get("/cloud/monitor/bot-status")
@@ -5889,64 +5914,124 @@ async def cloud_monitor_current_opinion(ticket: str = "", user: dict = Depends(g
     scope = {"$or": [{"account": account_filter}, {"license_key": license_key}]} if account_filter and license_key \
         else ({"account": account_filter} if account_filter else {"license_key": license_key})
     t = str(ticket or "").strip()
+    fresh_cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+
+    thesis_scope = scope
+    thesis_filters = [thesis_scope, {"updated_at": {"$gte": fresh_cutoff_iso}}]
     if t:
-        query = {"$and": [scope, {"ticket": t}]}
+        thesis_filters.append({"ticket": t})
+    thesis = await db.cloud_trade_thesis_status.find_one(
+        {"$and": thesis_filters}, {"_id": 0}, sort=[("updated_at", -1)])
+
+    active_ticket = str((thesis or {}).get("ticket") or t or "")
+    if active_ticket:
+        activity_query = {"$and": [scope, {"ticket": active_ticket}]}
     else:
-        query = {"$and": [scope, {"ticket": {"$ne": ""}}]}
-    rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", 1).to_list(400)
-    if not rows:
+        activity_query = {"$and": [scope, {"ticket": {"$ne": ""}}, {"ts": {"$gte": fresh_cutoff_iso}}]}
+    rows = await db.cloud_bot_activity.find(activity_query, {"_id": 0}).sort("ts", 1).to_list(400)
+
+    if not thesis and not rows:
+        hb_filters = []
+        if license_key:
+            hb_filters.append({"license_key": license_key})
+            hb_filters.append({"pin": license_key})
+        if account_filter:
+            hb_filters.append({"account_number": account_filter})
+        hb = await db.cloud_bot_heartbeats.find_one(
+            {"$or": hb_filters}, {"_id": 0}, sort=[("ts", -1)]) if hb_filters else None
+        if int((hb or {}).get("open_positions") or 0) > 0:
+            return {
+                "open": True,
+                "source": "heartbeat_pending",
+                "reason": "open_trade_thesis_pending",
+                "message": "Open trade detected. Waiting for EA trade thesis status.",
+                "current_bot_decision": "WAIT",
+                "thesis_health": "WARNING",
+                "what_would_close": "Waiting for the EA to send the live thesis snapshot.",
+            }
         return {"open": False, "reason": "no_open_trade"}
-    by_ticket: dict = {}
-    for r in rows:
-        by_ticket.setdefault(str(r.get("ticket") or ""), []).append(r)
-    active_ticket = t or next(iter(by_ticket))
-    ticket_rows = by_ticket.get(active_ticket, [])
-    if not ticket_rows or any(_ai_classify_card_type(r) == "TRADE_CLOSED" for r in ticket_rows[-1:]):
-        return {"open": False, "reason": "trade_already_closed"}
+
+    if not thesis:
+        by_ticket: dict = {}
+        for r in rows:
+            by_ticket.setdefault(str(r.get("ticket") or ""), []).append(r)
+        active_ticket = t
+        if not active_ticket:
+            for candidate, candidate_rows in reversed(list(by_ticket.items())):
+                if candidate and _ai_classify_card_type(candidate_rows[-1]) != "TRADE_CLOSED":
+                    active_ticket = candidate
+                    break
+        ticket_rows = by_ticket.get(active_ticket, [])
+        if not ticket_rows or any(_ai_classify_card_type(r) == "TRADE_CLOSED" for r in ticket_rows[-1:]):
+            return {"open": False, "reason": "trade_already_closed"}
+    else:
+        ticket_rows = rows
+
     prev_conf_by_ticket: dict = {}
     cards = [_ai_build_thought_card(ev, prev_conf_by_ticket) for ev in ticket_rows]
-    latest = cards[-1]
-    entry_card = next((c for c in cards if c["type"] == "TRADE_EXECUTED"), cards[0])
-    conf = latest.get("confidence")
-    hold_probability = conf if conf is not None else None
-    exit_probability = (100 - conf) if conf is not None else None
-    reversal_probability = max(0, 100 - conf - 20) if conf is not None else None
-    verdict = _ai_would_enter_again(latest)
+    latest = cards[-1] if cards else {}
+    entry_card = next((c for c in cards if c.get("type") == "TRADE_EXECUTED"), cards[0] if cards else {})
 
-    # v6.9.0 — merge in the live per-position thesis snapshot (thesis
-    # health, hold/protect/exit reasons, TRI recovery-mode status, distance
-    # to SL/TP) posted by XAU_LogTradeThesisStatus, for the "Open Trade
-    # Thinking" panel. Best-effort: if the EA hasn't posted one yet for
-    # this ticket (older EA build, or first tick), these stay null rather
-    # than failing the whole response.
-    thesis = await db.cloud_trade_thesis_status.find_one(
-        {"license_key": license_key, "ticket": active_ticket}, {"_id": 0})
+    thesis_conf = (thesis or {}).get("ai_confidence")
+    conf = thesis_conf if thesis_conf is not None else latest.get("confidence")
+    hold_probability = (thesis or {}).get("hold_probability")
+    if hold_probability is None:
+        hold_probability = conf if conf is not None else None
+    exit_probability = (thesis or {}).get("exit_probability")
+    if exit_probability is None:
+        exit_probability = (100 - conf) if conf is not None else None
+    reversal_probability = max(0, 100 - conf - 20) if conf is not None else None
+    verdict = _ai_would_enter_again(latest) if latest else {"answer": "WAIT", "reason": "Waiting for live confidence reading."}
+
+    direction = str((thesis or {}).get("direction") or ("BUY" if (thesis or {}).get("is_buy") is True else "SELL" if (thesis or {}).get("is_buy") is False else "")).upper()
+    entry_reason = (thesis or {}).get("entry_reason") or ". ".join(entry_card.get("reason_bullets") or []) or entry_card.get("decision_text")
+    current_bot_decision = (thesis or {}).get("next_action") or latest.get("decision_text") or "WAIT"
+    what_would_close = (thesis or {}).get("exit_reason") or "Broker SL/TP, manual close, emergency margin protection, or confirmed thesis invalidation."
+    current_reason = (thesis or {}).get("hold_reason") or (thesis or {}).get("protect_reason") or latest.get("decision_text") or "Waiting for the next M5 management cycle."
 
     return {
         "open": True,
+        "source": "thesis_status" if thesis else "activity_fallback",
         "ticket": active_ticket,
-        "current_bias": latest.get("bias"),
-        "confidence": conf,
-        "entry_reason": ". ".join(entry_card.get("reason_bullets") or []) or entry_card.get("decision_text"),
-        "current_risk": latest.get("advanced", {}).get("regime"),
-        "hold_probability": hold_probability,
-        "exit_probability": exit_probability,
-        "reversal_probability": reversal_probability,
-        "would_enter_again": verdict["answer"],
-        "would_enter_again_reason": verdict["reason"],
-        "latest_card": latest,
-        "thesis_health": (thesis or {}).get("state"),
-        "hold_reason": (thesis or {}).get("hold_reason"),
-        "protect_reason": (thesis or {}).get("protect_reason"),
-        "exit_trigger_reason": (thesis or {}).get("exit_reason"),
-        "next_action": (thesis or {}).get("next_action"),
+        "symbol": (thesis or {}).get("symbol") or latest.get("advanced", {}).get("symbol"),
+        "direction": direction,
+        "lot_size": (thesis or {}).get("lots"),
+        "entry_price": (thesis or {}).get("open_price"),
+        "current_price": (thesis or {}).get("current_price"),
+        "sl": (thesis or {}).get("sl"),
+        "tp": (thesis or {}).get("tp"),
+        "floating_pl": (thesis or {}).get("current_profit"),
         "peak_profit": (thesis or {}).get("peak_profit"),
         "protected_profit": (thesis or {}).get("protected_profit"),
         "distance_to_sl": (thesis or {}).get("dist_to_sl"),
         "distance_to_tp": (thesis or {}).get("dist_to_tp"),
+        "trade_age_minutes": (thesis or {}).get("trade_age_minutes"),
+        "entry_reason": entry_reason,
+        "setup_type": (thesis or {}).get("setup_type") or (thesis or {}).get("expected_type"),
+        "grade": (thesis or {}).get("grade"),
+        "ai_confidence": conf,
+        "current_bias": latest.get("bias") or direction,
+        "confidence": conf,
+        "current_risk": latest.get("advanced", {}).get("regime"),
+        "hold_probability": hold_probability,
+        "exit_probability": exit_probability,
+        "reversal_probability": reversal_probability,
+        "thesis_health": str((thesis or {}).get("state") or "WARNING").upper(),
+        "current_bot_decision": current_bot_decision,
+        "current_reason": current_reason,
+        "what_would_close": what_would_close,
+        "what_would_keep_holding": (thesis or {}).get("hold_reason") or "Trend thesis remains valid with acceptable risk.",
+        "would_enter_again": verdict["answer"],
+        "would_enter_again_reason": verdict["reason"],
+        "latest_card": latest,
+        "hold_reason": (thesis or {}).get("hold_reason"),
+        "protect_reason": (thesis or {}).get("protect_reason"),
+        "exit_trigger_reason": what_would_close,
+        "next_action": (thesis or {}).get("next_action"),
         "recovery_mode": (thesis or {}).get("recovery_mode", "NONE"),
         "recovery_worst_pct": (thesis or {}).get("recovery_worst_pct"),
         "recovery_classification": (thesis or {}).get("recovery_classification"),
+        "updated_at": (thesis or {}).get("updated_at"),
     }
 
 @api_router.get("/cloud/me/reasoning")
