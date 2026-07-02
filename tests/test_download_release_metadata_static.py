@@ -34,6 +34,23 @@ def test_backend_download_parser_strips_banner_pipe_from_edition():
     assert 'rstrip("|").strip()' in server
 
 
+def test_public_download_uses_clean_filename_and_admin_uses_master_filename():
+    server = read(ROOT / "backend" / "server.py")
+    assert 'def _get_ea_meta(src: str, filename_prefix: str = "XAUUSD_AI_Sniper_EA")' in server
+
+    public_download = server[
+        server.index('async def download_ea()'):
+        server.index('@api_router.get("/admin/download/ea-master"')
+    ]
+    admin_download = server[
+        server.index('async def admin_download_ea_master()'):
+        server.index('@api_router.get("/download/package"')
+    ]
+
+    assert 'filename_prefix="XAUUSD_AI_Sniper_EA_MASTER"' not in public_download
+    assert 'filename_prefix="XAUUSD_AI_Sniper_EA_MASTER"' in admin_download
+
+
 def test_frontend_download_fallback_is_current_and_self_consistent():
     # v6.5.0 (audit bug #11): check the fallback version/filename in the
     # frontend match the EA's own version macro, instead of pinning one

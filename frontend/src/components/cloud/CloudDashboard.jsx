@@ -434,7 +434,7 @@ function AppShell({ active, setActive, children, logout, statusText, online }) {
             <XauAiLogo size={30} className="flex-none" />
             <div className="min-w-0">
               <div className="truncate text-[14px] font-bold leading-none">XAU AI Sniper</div>
-              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.9.0</div>
+              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · v6.10.0</div>
             </div>
           </Link>
           <div className="flex items-center gap-2">

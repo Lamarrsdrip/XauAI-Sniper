@@ -592,7 +592,7 @@ async def paystack_webhook(request: Request):
     return {"status": "ok"}
 
 # --- Public Docs ---
-def _get_ea_meta(src: str, filename_prefix: str = "XAUUSD_AI_Sniper_EA_MASTER") -> dict:
+def _get_ea_meta(src: str, filename_prefix: str = "XAUUSD_AI_Sniper_EA") -> dict:
     """Extract version, edition tag, and build display name from EA header comments."""
     import re, hashlib
     # Match e.g. "v6.3.6 — AI Director + ML Warm-Start + Adaptive Exits"
@@ -674,7 +674,7 @@ async def admin_download_ea_master():
     p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
     if not p.exists(): raise HTTPException(status_code=404)
     src = p.read_text(encoding="utf-8", errors="ignore")
-    meta = _get_ea_meta(src)
+    meta = _get_ea_meta(src, filename_prefix="XAUUSD_AI_Sniper_EA_MASTER")
     return FileResponse(
         path=str(p),
         filename=meta["filename"],
@@ -2000,7 +2000,7 @@ class TradeMemoryRecord(BaseModel):
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.9.0"
+    ea_version: str = "v6.10.0"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"

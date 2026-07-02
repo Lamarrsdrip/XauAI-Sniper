@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.9.0";
-  const edition  = info?.edition  || "No-Limit Loss-Close Firewall";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.9.0.mq5";
+  const version  = info?.version  || "v6.10.0";
+  const edition  = info?.edition  || "ADAPTIVE NEWS MOMENTUM ENGINE";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.10.0.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.9.0.</span> Adds no-limit daily/growth-lock bypasses, a loss-close firewall for EA exit paths, and exact close-reason reporting while preserving the v6.6.0 static-review fixes.
+              <span className="font-semibold text-amber-200">Gold-only v6.10.0.</span> Adds adaptive news momentum logic: protect before release, observe the first impulse, then allow only confirmed post-news continuation with anti-chase and RR checks.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
