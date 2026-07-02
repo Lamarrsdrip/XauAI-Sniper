@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
+import AIThoughtFeed from "./AIThoughtFeed";
 import { API } from "@/lib/api";
 
 // ─── Axios ───────────────────────────────────────────────────────────────────
@@ -603,7 +604,7 @@ export default function CloudDashboard() {
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online}>
       {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} events={events} setActive={setActive} refresh={fetchAll} />}
-      {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} />}
+      {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} linked={Boolean(license?.linked||status?.license?.linked)} />}
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
       {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} />}
@@ -723,7 +724,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         <Empty title="Connect your license" body="Link your ASE license key once and live data from your MT5 account will stream here automatically." icon={KeyRound} />
       )}
 
-      <DecisionSummaryCard events={events} heartbeat={heartbeat} setActive={setActive} title="Bot Decision Feed" />
+      <AIThoughtFeed linked={Boolean(licenseInfo.activation_key)} compact onOpenFull={()=>setActive("trading")} />
 
       {/* Quick nav — 3 cards */}
       <div className="grid grid-cols-3 gap-3">
@@ -771,8 +772,7 @@ function SetupHealth({ checks=[] }) {
 }
 
 // ─── Trading ──────────────────────────────────────────────────────────────────
-function TradingPage({ heartbeat, events, online }) {
-  const tradeEvents = events.filter(e=>["entries","exits","overrides"].includes(eventCategory(e)));
+function TradingPage({ heartbeat, events, online, linked }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -781,13 +781,10 @@ function TradingPage({ heartbeat, events, online }) {
         <Metric label="Spread"      value={online?`${heartbeat.spread??"-"}pts`:"—"} detail="Current quote" icon={Activity} tone="amber" />
         <Metric label="Bot state"   value={heartbeat.bot_state||"Waiting"} detail={heartbeat.last_action||"No action yet"} icon={Bot} tone={online?"green":"neutral"} />
       </div>
-      <DecisionSummaryCard events={tradeEvents.length ? tradeEvents : events} heartbeat={heartbeat} title="Latest trade decision" />
-      <DecisionHistory events={tradeEvents} />
-      <Card title="Trade timeline" subtitle="Real EA entries, lot decisions, exit attempts, blocked loss exits, and closes from the linked account.">
-        {tradeEvents.length
-          ? <div className="space-y-2">{tradeEvents.slice(0,25).map((e,i)=><EventRow key={e.id||i} event={e} />)}</div>
-          : <Empty title="No trade events yet" body="When the EA opens, modifies, or closes a trade it will stream here from the linked MT5 account." icon={History} />}
-      </Card>
+      {/* AI Trading Assistant — the conversational feed lives here now,
+          not under Activity. Activity tab still has the raw log for anyone
+          who wants it; this is the default, human-readable experience. */}
+      <AIThoughtFeed linked={linked} />
     </div>
   );
 }

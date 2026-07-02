@@ -4985,6 +4985,237 @@ def _monitor_severity(event_type: str, reason: str = "") -> str:
         return "EXIT"
     return "INFO"
 
+# =====================================================================
+# AI THOUGHT ENGINE — translates raw engine telemetry (event_type,
+# regime codes, ATR-derived scores, etc.) into the plain-English
+# "watching the AI think" narrative the Trading page shows by default.
+#
+# Deliberately template-based, not a live LLM call: the EA already sends
+# near-natural-language fields (`reason`, `decision`, `grade`, and — when
+# the AI Director was actually consulted — `thesis`/`bearish_case` inside
+# `details`). This layer composes those into short bullets and a headline
+# rather than generating new wording, so it costs nothing and adds no
+# latency on every tick of an open trade. Numbers here (exit/hold/reversal
+# probability) are heuristic estimates derived from confidence + regime,
+# not literal ML model outputs — labeled as such wherever they're exposed.
+# =====================================================================
+
+_REGIME_PHRASES = {
+    "STRONG_TREND":   "the trend is strong",
+    "WEAK_TREND":     "a trend is present but weak",
+    "RANGE":          "the market is ranging",
+    "COMPRESSION":    "volatility is compressing",
+    "EXPANSION":      "volatility is expanding",
+    "MOMENTUM_CONT":  "momentum continuation is in play",
+    "REVERSAL_ENV":   "conditions favor a possible reversal",
+    "HIGH_VOLATILITY":"volatility is elevated",
+    "BULL_TREND":     "the trend is bullish",
+    "BEAR_TREND":     "the trend is bearish",
+}
+_SESSION_PHRASES = {
+    "LONDON": "London session", "NEW_YORK": "New York session", "NY": "New York session",
+    "ASIA": "Asian session", "ASIAN": "Asian session", "OVERLAP": "the London/NY overlap",
+}
+_GRADE_PHRASES = {"A+": "highest-quality setup", "A": "high-quality setup",
+                  "B": "moderate-quality setup", "B+": "moderate-quality setup"}
+
+
+def _ai_bias_word(direction) -> str:
+    d = str(direction or "").upper().strip()
+    if d in ("1", "+1", "BUY", "BULL", "BULLISH", "LONG"):
+        return "Bullish"
+    if d in ("-1", "SELL", "BEAR", "BEARISH", "SHORT"):
+        return "Bearish"
+    return ""
+
+
+def _ai_split_reason_clauses(*texts) -> List[str]:
+    """Break AI-written reason/thesis text into short bullet fragments."""
+    clauses: List[str] = []
+    seen = set()
+    for t in texts:
+        t = str(t or "").strip()
+        if not t:
+            continue
+        parts = re.split(r"\s*(?:;|\||\.\s+|\n)\s*", t)
+        for p in parts:
+            p = p.strip(" .")
+            if len(p) < 4:
+                continue
+            key = p.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clauses.append(p[0].upper() + p[1:] if p else p)
+    return clauses[:6]
+
+
+def _ai_classify_card_type(ev: dict) -> str:
+    category = str(ev.get("event_category") or "").lower()
+    event_type = str(ev.get("event_type") or "").upper()
+    decision = str(ev.get("decision") or "").upper()
+    allowed = ev.get("allowed")
+    ticket = str(ev.get("ticket") or "").strip()
+    if category == "entries" or "TRADE_EXECUTED" in event_type or "FIRE" in event_type or "PYR" in event_type:
+        return "TRADE_EXECUTED"
+    if category == "exits" or "EXIT" in event_type or "CLOSE" in event_type:
+        return "TRADE_CLOSED"
+    if category == "blocks" or allowed is False or "BLOCK" in event_type or "VETO" in decision:
+        return "TRADE_BLOCKED"
+    if not ticket and (category == "ai" or "DIRECTOR" in event_type or "SIGNAL" in event_type or "SETUP" in event_type):
+        return "MARKET_ANALYSIS"
+    if ticket:
+        return "LIVE_THOUGHT"
+    return "INFO"
+
+
+def _ai_build_thought_card(ev: dict, prev_conf_by_ticket: dict) -> dict:
+    """Turn one raw cloud_bot_activity document into a conversational card."""
+    details = ev.get("details") or {}
+    ticket = str(ev.get("ticket") or "").strip()
+    grade = str(ev.get("grade") or details.get("grade") or "").strip()
+    regime = str(details.get("regime") or ev.get("mode") or "").strip().upper()
+    session = str(details.get("session") or "").strip().upper()
+    confidence = ev.get("ai_confidence")
+    confidence = int(confidence) if isinstance(confidence, (int, float)) else None
+    bias = _ai_bias_word(ev.get("market_bias") or ev.get("signal_direction"))
+    reason_raw = ev.get("reason") or ""
+    thesis = str(details.get("thesis") or "")
+    bearish_case = str(details.get("bearish_case") or "")
+
+    card_type = _ai_classify_card_type(ev)
+
+    prev_conf = prev_conf_by_ticket.get(ticket) if ticket else None
+    confidence_delta = None
+    if confidence is not None and prev_conf is not None and confidence != prev_conf:
+        confidence_delta = confidence - prev_conf
+    if ticket and confidence is not None:
+        prev_conf_by_ticket[ticket] = confidence
+
+    bullets = _ai_split_reason_clauses(reason_raw, thesis)
+    if regime and _REGIME_PHRASES.get(regime) and not any(regime.lower() in b.lower() for b in bullets):
+        bullets.append(_REGIME_PHRASES[regime].capitalize())
+    if session and _SESSION_PHRASES.get(session) and not any("session" in b.lower() for b in bullets):
+        bullets.append(f"{_SESSION_PHRASES[session]} conditions")
+    bullets = bullets[:6]
+
+    tone = "neutral"
+    headline = "AI Update"
+    decision_text = str(ev.get("decision") or ev.get("message") or "").strip()
+    action_text = ""
+    result_usd = None
+
+    if card_type == "MARKET_ANALYSIS":
+        headline = "AI Market Analysis"
+        tone = "bullish" if bias == "Bullish" else "bearish" if bias == "Bearish" else "neutral"
+        # Always compose "Preparing BUY/SELL" from bias here — raw EA message
+        # text (e.g. "AI Director verdict") is an internal label, not the
+        # user-facing decision line; it still flows into reason_bullets above.
+        action_word = "BUY" if bias == "Bullish" else "SELL" if bias == "Bearish" else ""
+        decision_text = f"Preparing {action_word}" if action_word else "Analyzing setup"
+        action_text = "Waiting for confirmation..."
+    elif card_type == "TRADE_EXECUTED":
+        headline = "Trade Executed"
+        tone = "success"
+        # "BUY executed" / "SELL executed" reads clearer here than the raw
+        # decision label (e.g. "Entry allowed") the engine logs internally.
+        direction = ev.get("position_direction") or bias
+        decision_text = f"{direction} executed" if direction else (decision_text or "Trade executed")
+        if confidence_delta:
+            bullets.insert(0, f"Confidence {'increased' if confidence_delta > 0 else 'decreased'} "
+                               f"{'to' if prev_conf is None else 'from ' + str(prev_conf) + '% to'} {confidence}%")
+    elif card_type == "LIVE_THOUGHT":
+        # A normal pullback (e.g. 93% -> 81%) should still read as calm — only
+        # flag Warning once confidence itself is genuinely low, or the drop is
+        # sharp enough to be more than routine noise.
+        weakening = confidence is not None and confidence < 65
+        dropping = confidence_delta is not None and confidence_delta <= -20
+        if weakening or dropping:
+            headline = "Warning"
+            tone = "warning"
+            decision_text = decision_text or "Watching carefully"
+            action_text = "Not exiting yet — need confirmation."
+        else:
+            headline = "Live Thoughts"
+            tone = "neutral"
+            decision_text = decision_text or "Holding position"
+            action_text = "No exit signal yet."
+    elif card_type == "TRADE_CLOSED":
+        headline = "Trade Closed"
+        profit = ev.get("profit")
+        if isinstance(profit, (int, float)):
+            result_usd = round(float(profit), 2)
+            tone = "success" if result_usd >= 0 else "danger"
+        decision_text = ev.get("close_reason_exact") or decision_text or "Position closed"
+        if not bullets:
+            bullets = _ai_split_reason_clauses(ev.get("message") or "")
+    elif card_type == "TRADE_BLOCKED":
+        headline = "Trade Blocked"
+        tone = "danger"
+        decision_text = "Waiting for higher quality setup"
+        if ev.get("blocked_by") and not any(ev["blocked_by"].lower() in b.lower() for b in bullets):
+            bullets.insert(0, ev["blocked_by"])
+
+    if grade:
+        grade_phrase = _GRADE_PHRASES.get(grade.upper(), "")
+        if grade_phrase and not any(grade_phrase in b.lower() for b in bullets):
+            pass  # grade is surfaced as its own field, not duplicated into bullets
+
+    simple_parts = [headline]
+    if bias:
+        simple_parts.append(f"{bias} bias")
+    if confidence is not None:
+        simple_parts.append(f"{confidence}% confidence")
+    if decision_text:
+        simple_parts.append(decision_text)
+    simple_text = " — ".join(simple_parts)
+
+    return {
+        "id": ev.get("id"),
+        "ticket": ticket,
+        "ts": ev.get("ts"),
+        "type": card_type,
+        "tone": tone,
+        "headline": headline,
+        "bias": bias,
+        "confidence": confidence,
+        "confidence_delta": confidence_delta,
+        "decision_text": decision_text,
+        "reason_bullets": bullets,
+        "action_text": action_text,
+        "grade": grade or None,
+        "result_usd": result_usd,
+        "simple_text": simple_text,
+        "advanced": {
+            "event_type": ev.get("event_type"),
+            "severity": ev.get("severity"),
+            "module": ev.get("module"),
+            "score": ev.get("score"),
+            "regime": regime or None,
+            "session": session or None,
+            "market_bias": ev.get("market_bias"),
+            "signal_direction": ev.get("signal_direction"),
+            "symbol": ev.get("symbol"),
+            "message": ev.get("message"),
+            "close_reason_exact": ev.get("close_reason_exact"),
+            "details": details,
+        },
+    }
+
+
+def _ai_would_enter_again(latest_card: dict) -> dict:
+    """Heuristic 'would I take this trade again right now' verdict — derived
+    from current confidence + tone, not a separate ML call."""
+    conf = latest_card.get("confidence")
+    tone = latest_card.get("tone")
+    if conf is None:
+        return {"answer": None, "reason": "No live confidence reading yet."}
+    if tone in ("warning", "danger") or conf < 65:
+        why = "Confidence has dropped since entry" if latest_card.get("confidence_delta", 0) < 0 else \
+              "Confidence is below the bar for a fresh entry"
+        return {"answer": False, "reason": why}
+    return {"answer": True, "reason": "Thesis still holds at current confidence."}
+
 @api_router.post("/cloud/master/reasoning")
 async def cloud_master_reasoning(req: MasterReasoningReq, request: Request):
     await _require_agent_async(request)
@@ -5438,6 +5669,85 @@ async def cloud_monitor_activity_feed(kind: str = "all", limit: int = 80, search
         query = {"$and": [query, search_query]}
     rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", -1).to_list(n)
     return {"events": rows, "count": len(rows), "kind": k}
+
+@api_router.get("/cloud/monitor/decision-feed")
+async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = "",
+                                      user: dict = Depends(get_cloud_user)):
+    """The Trading-page conversational AI feed. Returns the same underlying
+    events as /cloud/monitor/activity, translated into plain-English
+    'thought cards' plus a short timeline — no raw engine variables in the
+    default payload (those still ride along under each card's `advanced`
+    key for the Developer Details view)."""
+    n = max(1, min(int(limit), 200))
+    lic = await _get_user_license(user)
+    license_key = _normalize_license_key((lic or {}).get("pin", ""))
+    account_filter = str((lic or {}).get("mt5_account") or "").strip()
+    if not account_filter and not license_key:
+        return {"cards": [], "timeline": [], "reason": "license_not_linked"}
+    scope = {"$or": [{"account": account_filter}, {"license_key": license_key}]} if account_filter and license_key \
+        else ({"account": account_filter} if account_filter else {"license_key": license_key})
+    query = scope
+    t = str(ticket or "").strip()
+    if t:
+        query = {"$and": [scope, {"ticket": t}]}
+    rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", 1).to_list(n * 3)
+    rows = rows[-n:]
+    prev_conf_by_ticket: dict = {}
+    cards = [_ai_build_thought_card(ev, prev_conf_by_ticket) for ev in rows]
+    timeline = [{"ts": c["ts"], "label": c["decision_text"] or c["headline"], "tone": c["tone"]} for c in cards]
+    return {"cards": list(reversed(cards)), "timeline": timeline, "count": len(cards)}
+
+@api_router.get("/cloud/monitor/current-opinion")
+async def cloud_monitor_current_opinion(ticket: str = "", user: dict = Depends(get_cloud_user)):
+    """The Current Trade panel: the AI's live read on whatever position is
+    open right now (or a specific ticket), including the heuristic
+    'would I enter this again' verdict. All probability figures here are
+    confidence-derived estimates, not literal ML model outputs."""
+    lic = await _get_user_license(user)
+    license_key = _normalize_license_key((lic or {}).get("pin", ""))
+    account_filter = str((lic or {}).get("mt5_account") or "").strip()
+    if not account_filter and not license_key:
+        return {"open": False, "reason": "license_not_linked"}
+    scope = {"$or": [{"account": account_filter}, {"license_key": license_key}]} if account_filter and license_key \
+        else ({"account": account_filter} if account_filter else {"license_key": license_key})
+    t = str(ticket or "").strip()
+    if t:
+        query = {"$and": [scope, {"ticket": t}]}
+    else:
+        query = {"$and": [scope, {"ticket": {"$ne": ""}}]}
+    rows = await db.cloud_bot_activity.find(query, {"_id": 0}).sort("ts", 1).to_list(400)
+    if not rows:
+        return {"open": False, "reason": "no_open_trade"}
+    by_ticket: dict = {}
+    for r in rows:
+        by_ticket.setdefault(str(r.get("ticket") or ""), []).append(r)
+    active_ticket = t or next(iter(by_ticket))
+    ticket_rows = by_ticket.get(active_ticket, [])
+    if not ticket_rows or any(_ai_classify_card_type(r) == "TRADE_CLOSED" for r in ticket_rows[-1:]):
+        return {"open": False, "reason": "trade_already_closed"}
+    prev_conf_by_ticket: dict = {}
+    cards = [_ai_build_thought_card(ev, prev_conf_by_ticket) for ev in ticket_rows]
+    latest = cards[-1]
+    entry_card = next((c for c in cards if c["type"] == "TRADE_EXECUTED"), cards[0])
+    conf = latest.get("confidence")
+    hold_probability = conf if conf is not None else None
+    exit_probability = (100 - conf) if conf is not None else None
+    reversal_probability = max(0, 100 - conf - 20) if conf is not None else None
+    verdict = _ai_would_enter_again(latest)
+    return {
+        "open": True,
+        "ticket": active_ticket,
+        "current_bias": latest.get("bias"),
+        "confidence": conf,
+        "entry_reason": ". ".join(entry_card.get("reason_bullets") or []) or entry_card.get("decision_text"),
+        "current_risk": latest.get("advanced", {}).get("regime"),
+        "hold_probability": hold_probability,
+        "exit_probability": exit_probability,
+        "reversal_probability": reversal_probability,
+        "would_enter_again": verdict["answer"],
+        "would_enter_again_reason": verdict["reason"],
+        "latest_card": latest,
+    }
 
 @api_router.get("/cloud/me/reasoning")
 async def cloud_me_reasoning(limit: int = 30, _user: dict = Depends(get_cloud_user)):
