@@ -17,7 +17,7 @@ const CARDS = [
     tone: "text-amber-300",
     border: "border-amber-300/20",
     glow: "bg-amber-300/[0.07]",
-    badge: "NEW v6.7.0",
+    badge: "NEW v6.6.1",
   },
   {
     icon: Funnel,
@@ -26,7 +26,7 @@ const CARDS = [
     tone: "text-rose-300",
     border: "border-rose-300/20",
     glow: "bg-rose-300/[0.07]",
-    badge: "NEW v6.7.0",
+    badge: "NEW v6.6.1",
   },
   {
     icon: ShieldCheck,
@@ -38,12 +38,12 @@ const CARDS = [
   },
   {
     icon: Shuffle,
-    title: "Gold + Index Market Detection",
-    body: "Attach the same EA to XAUUSD or an index chart — it auto-detects which market it's on and adapts. Gold Mode is the full, live-tested strategy. Index Mode currently runs detection and diagnostics only, honestly, until a real index strategy has been tested and shipped.",
+    title: "Gold + Index Market Detection (XauIndex)",
+    body: "A separate product, XauIndex, built on the same exit engine as XauAI Sniper. Attach it to XAUUSD or an index chart — it auto-detects which market it's on and adapts. Gold Mode is the full, live-tested strategy. Index Mode currently runs detection and diagnostics only, honestly, until a real index strategy has been tested and shipped. See the download section below.",
     tone: "text-emerald-300",
     border: "border-emerald-300/20",
     glow: "bg-emerald-300/[0.07]",
-    badge: "NEW v6.7.0",
+    badge: "NEW · XauIndex v1.0.0",
   },
   {
     icon: Shuffle,

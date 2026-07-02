@@ -1,15 +1,21 @@
 import React, { useEffect, useState } from "react";
-import { DownloadSimple, FileCode, Package, Warning, ShieldCheck, CloudArrowUp, Spinner, CheckCircle } from "@phosphor-icons/react";
+import { DownloadSimple, FileCode, Package, Warning, ShieldCheck, CloudArrowUp, Spinner, CheckCircle, ChartLineUp } from "@phosphor-icons/react";
 
 export default function DownloadSection({ api }) {
   const [info, setInfo]     = useState(null);
   const [loading, setLoading] = useState(true);
+  const [xiInfo, setXiInfo]     = useState(null);
+  const [xiLoading, setXiLoading] = useState(true);
 
   useEffect(() => {
     fetch(`${api}/download/info`)
       .then(r => r.ok ? r.json() : null)
       .then(d => { setInfo(d); setLoading(false); })
       .catch(() => setLoading(false));
+    fetch(`${api}/download/xauindex/info`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { setXiInfo(d); setXiLoading(false); })
+      .catch(() => setXiLoading(false));
   }, [api]);
 
   const version  = info?.version  || "v6.6.1";
@@ -147,6 +153,85 @@ export default function DownloadSection({ api }) {
             <Warning size={19} weight="fill" className="mt-0.5 flex-none text-amber-200" />
             <p className="text-sm leading-6 text-white/62">
               Backtest before live use. This tool can improve discipline and risk control, but no trading system can guarantee profit. Start on demo and verify execution with your broker.
+            </p>
+          </div>
+        </div>
+
+        {/* ─── XauIndex — a SEPARATE product/download, kept visually distinct ─── */}
+        <div className="mt-16 border-t border-white/10 pt-12" data-testid="xauindex-download-section">
+          <div className="mb-6 flex flex-col justify-between gap-3 md:flex-row md:items-end">
+            <div>
+              <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-200">
+                <ChartLineUp size={12} weight="bold" /> A different bot
+              </span>
+              <h2 className="mt-4 max-w-2xl font-heading text-2xl font-semibold tracking-tight sm:text-4xl">
+                XauIndex {xiLoading ? "" : (xiInfo?.version || "v1.0.0")} — Gold + Index, one EA.
+              </h2>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
+                Not the same bot as above. XauAI Sniper (Gold-only, {version}) stays pure gold, maintained
+                on its own. XauIndex is a separate product built on the same proven exit engine, with
+                Gold + Index market auto-detection added in. Attach it to XAUUSD and it trades gold exactly
+                the same way. Attach it to an index chart and it runs in monitoring-only Index Mode — full
+                diagnostics, no live index trades yet.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-emerald-300/15 bg-emerald-300/[0.03] p-5 shadow-2xl shadow-black/20 md:p-7" data-testid="download-xauindex-card">
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex gap-4">
+                <div className="flex h-14 w-14 flex-none items-center justify-center rounded-2xl border border-emerald-300/25 bg-emerald-300/10">
+                  <ChartLineUp size={25} weight="duotone" className="text-emerald-200" />
+                </div>
+                <div>
+                  <h3 className="font-heading text-2xl font-semibold">XauIndex Expert Advisor (.mq5)</h3>
+                  {xiLoading
+                    ? <p className="mt-2 flex items-center gap-2 text-sm text-white/40"><Spinner size={13} className="animate-spin" /> Fetching release info…</p>
+                    : <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
+                        {xiInfo?.version || "v1.0.0"} · Market Mode architecture. Same dual-AI quality gate and Trade Thesis Monitor as XauAI Sniper, plus automatic Gold/Index detection and a symbol-agnostic lot engine, ready for index trading once a real strategy ships.
+                      </p>}
+                </div>
+              </div>
+              <span className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-300 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#06110c]">
+                <CheckCircle size={10} weight="fill" /> New
+              </span>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              {[
+                ["Version", xiLoading ? "—" : (xiInfo?.version || "v1.0.0")],
+                ["Size",    xiLoading ? "—" : xiInfo?.size_kb ? `${xiInfo.size_kb} KB` : "MQ5 source"],
+                ["SHA-256", xiLoading ? "—" : (xiInfo?.checksum_sha256_12 || "—")],
+              ].map(([k, v]) => (
+                <div key={k} className="rounded-2xl border border-white/10 bg-black/[0.24] p-4">
+                  <div className="font-mono text-[10px] uppercase tracking-widest text-white/35">{k}</div>
+                  <div className="mt-1 truncate font-mono text-sm font-bold" title={v}>{v}</div>
+                </div>
+              ))}
+            </div>
+
+            {!xiLoading && xiInfo?.filename && (
+              <div className="mt-3 rounded-xl border border-white/[0.07] bg-black/20 px-4 py-2.5">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-white/30">Filename · </span>
+                <span className="font-mono text-[11px] text-white/55 break-all">{xiInfo.filename}</span>
+              </div>
+            )}
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+              <a href={`${api}/download/xauindex/ea`} data-testid="download-xauindex-button"
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-emerald-200">
+                <DownloadSimple size={17} weight="bold" />
+                {xiLoading ? "Download .MQ5" : `Download XauIndex ${xiInfo?.version || "v1.0.0"} .MQ5`}
+              </a>
+              <a href={`${api}/download/xauindex/package`} data-testid="download-xauindex-package-button"
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
+                <Package size={17} weight="bold" /> Download ZIP
+              </a>
+            </div>
+
+            <p className="mt-5 text-[11px] leading-5 text-white/35">
+              Index Mode is monitoring-only in this release — it detects and logs, it never places an index
+              trade. Gold trading on this build behaves the same as XauAI Sniper's exit/risk engine.
             </p>
           </div>
         </div>

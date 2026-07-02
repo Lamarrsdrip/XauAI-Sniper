@@ -3,8 +3,8 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.7.0.mq5"
-EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.7.0.mq5"
+EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.6.1.mq5"
+EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.6.1.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -22,9 +22,9 @@ def test_v6412_version_identity_and_synced_sources():
     named = read(EA_NAMED)
 
     assert root == backend == named
-    assert '#property version   "6.700"' in root
-    assert '#define XAUAI_EA_VERSION "v6.7.0"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.7.0"' in root
+    assert '#property version   "6.601"' in root
+    assert '#define XAUAI_EA_VERSION "v6.6.1"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.6.1"' in root
 
 
 def test_xau_money_conversion_uses_order_calc_profit_not_raw_tick_value():
@@ -39,12 +39,10 @@ def test_xau_money_conversion_uses_order_calc_profit_not_raw_tick_value():
     assert "ORDER_TYPE_SELL" in money_helper
     assert "SYMBOL_TRADE_CONTRACT_SIZE" in money_helper
 
-    # v6.6.0: XAU_CalcIndexLot/XAU_LogIndexTrace were added directly after
-    # RiskPerLotForDistance, so the section boundary must stop there (those
-    # new functions legitimately use SYMBOL_TRADE_TICK_VALUE/SIZE themselves
-    # for index lot math — that's correct for them, just not for this
-    # specific wrapper function under test).
-    risk_helper = section(ea, "double RiskPerLotForDistance", "double XAU_CalcIndexLot")
+    # This file now tracks the gold-only lineage (Codex's v6.6.1+), which
+    # does not include XauIndex's XAU_CalcIndexLot/XAU_LogIndexTrace —
+    # those live only in the separate XauIndex product. Original boundary.
+    risk_helper = section(ea, "double RiskPerLotForDistance", "double CurrentAggregateRiskToSL")
     assert "XAU_MoneyPerLotForDistance(dist)" in risk_helper
     assert "SYMBOL_TRADE_TICK_VALUE" not in risk_helper
     assert "SYMBOL_TRADE_TICK_SIZE" not in risk_helper

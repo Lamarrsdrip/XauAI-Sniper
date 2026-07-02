@@ -592,7 +592,7 @@ async def paystack_webhook(request: Request):
     return {"status": "ok"}
 
 # --- Public Docs ---
-def _get_ea_meta(src: str) -> dict:
+def _get_ea_meta(src: str, filename_prefix: str = "XAUUSD_AI_Sniper_EA_MASTER") -> dict:
     """Extract version, edition tag, and build display name from EA header comments."""
     import re, hashlib
     # Match e.g. "v6.3.6 — AI Director + ML Warm-Start + Adaptive Exits"
@@ -601,7 +601,7 @@ def _get_ea_meta(src: str) -> dict:
     edition_full = m.group(2).strip().rstrip("|").strip() if m else "AI Director"
     # Slug for filename: keep only alpha/digits, collapse to underscores
     edition_slug = re.sub(r'[^A-Za-z0-9]+', '_', edition_full).strip('_').upper()
-    filename = f"XAUUSD_AI_Sniper_EA_MASTER_{version}_{edition_slug}.mq5"
+    filename = f"{filename_prefix}_{version}_{edition_slug}.mq5"
     checksum = hashlib.sha256(src.encode()).hexdigest()[:12]
     return {"version": version, "edition": edition_full, "filename": filename, "checksum": checksum}
 
@@ -698,6 +698,81 @@ async def download_package():
             if not f.is_file(): continue
             rel = f.relative_to(d)
             if f.name == "XAUUSD_AI_Sniper_EA.mq5":
+                z.writestr(str(rel), _sanitize_ea_for_customer(
+                    f.read_text(encoding="utf-8", errors="ignore")))
+            else:
+                z.write(f, rel)
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'})
+
+# -------- XauIndex (separate product, separate download) --------
+# A DIFFERENT product from XauAI Sniper (gold-only, maintained separately).
+# XauIndex has Gold+Index market detection built in and is versioned
+# independently (1.0.0+) so the two are never confused with one another.
+# Mirrors the XauAI Sniper download endpoints exactly, pointed at its own
+# ea_code_xauindex/ directory instead.
+@api_router.get("/download/xauindex/info")
+async def download_xauindex_info():
+    p = ROOT_DIR / "ea_code_xauindex" / "XauIndex_EA.mq5"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="XauIndex EA file not found")
+    src = p.read_text(encoding="utf-8", errors="ignore")
+    meta = _get_ea_meta(src, filename_prefix="XauIndex_EA")
+    stat = p.stat()
+    return {
+        "version":      meta["version"],
+        "edition":      meta["edition"],
+        "filename":     meta["filename"],
+        "size_bytes":   stat.st_size,
+        "size_kb":      round(stat.st_size / 1024, 1),
+        "checksum_sha256_12": meta["checksum"],
+        "last_modified": stat.st_mtime,
+        "download_url": "/api/download/xauindex/ea",
+        "stable":       True,
+    }
+
+@api_router.get("/download/xauindex/ea")
+async def download_xauindex_ea():
+    p = ROOT_DIR / "ea_code_xauindex" / "XauIndex_EA.mq5"
+    if not p.exists(): raise HTTPException(status_code=404)
+    src = p.read_text(encoding="utf-8", errors="ignore")
+    meta = _get_ea_meta(src, filename_prefix="XauIndex_EA")
+    sanitized = _sanitize_ea_for_customer(src)
+    return Response(
+        content=sanitized.encode("utf-8"),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{meta["filename"]}"'},
+    )
+
+@api_router.get("/admin/download/xauindex-master", dependencies=[Depends(get_current_admin)])
+async def admin_download_xauindex_master():
+    p = ROOT_DIR / "ea_code_xauindex" / "XauIndex_EA.mq5"
+    if not p.exists(): raise HTTPException(status_code=404)
+    src = p.read_text(encoding="utf-8", errors="ignore")
+    meta = _get_ea_meta(src, filename_prefix="XauIndex_EA")
+    return FileResponse(
+        path=str(p),
+        filename=meta["filename"],
+        media_type="application/octet-stream",
+    )
+
+@api_router.get("/download/xauindex/package")
+async def download_xauindex_package():
+    p_ea = ROOT_DIR / "ea_code_xauindex" / "XauIndex_EA.mq5"
+    if p_ea.exists():
+        src = p_ea.read_text(encoding="utf-8", errors="ignore")
+        meta = _get_ea_meta(src, filename_prefix="XauIndex_EA")
+        zip_name = f"XauIndex_{meta['version']}_Package.zip"
+    else:
+        zip_name = "XauIndex_Package.zip"
+    d = ROOT_DIR / "ea_code_xauindex"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        for f in d.rglob("*"):
+            if not f.is_file(): continue
+            rel = f.relative_to(d)
+            if f.name == "XauIndex_EA.mq5":
                 z.writestr(str(rel), _sanitize_ea_for_customer(
                     f.read_text(encoding="utf-8", errors="ignore")))
             else:
@@ -1925,7 +2000,7 @@ class TradeMemoryRecord(BaseModel):
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.7.0"
+    ea_version: str = "v6.6.1"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"

@@ -124,7 +124,7 @@ export default function AdminPortal({ api }) {
               <span className="font-mono text-[10px] font-black text-black">XA</span>
             </div>
             <span className="text-[14px] font-semibold">XauAI Sniper</span>
-            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.7.0</span>
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.6.1</span>
           </div>
           <div className="flex items-center gap-4">
             <span className="hidden text-[11px] text-white/35 sm:block">{admin.email}</span>
@@ -196,7 +196,7 @@ function LoginPage({ api, onLogin }) {
             <span className="font-mono text-base font-black text-black">XA</span>
           </div>
           <h1 className="text-2xl font-semibold text-white">XauAI Admin</h1>
-          <p className="mt-1 text-[13px] text-white/38">v6.7.0 management portal</p>
+          <p className="mt-1 text-[13px] text-white/38">v6.6.1 management portal</p>
         </div>
 
         <form onSubmit={handleSubmit} className={`${CARD} p-6 space-y-4`}>
@@ -416,7 +416,7 @@ function SettingsTab({ api, token }) {
   const [saved, setSaved] = useState(false);
   const h = useMemo(() => auth(token), [token]);
 
-  // v6.7.0 — global Gold/Index Mode platform switches (architecture phase)
+  // v6.6.1 — global Gold/Index Mode platform switches (architecture phase)
   const [marketSettings, setMarketSettings] = useState(null);
   const [marketSaving, setMarketSaving] = useState(false);
   const [marketSaved, setMarketSaved] = useState(false);
@@ -505,7 +505,7 @@ function SettingsTab({ api, token }) {
         <FloppyDisk size={14} weight="bold" /> {saving ? "Saving…" : saved ? "Saved!" : "Save settings"}
       </Btn>
 
-      {/* v6.7.0 — Market Modes (architecture phase). These gate what the
+      {/* v6.6.1 — Market Modes (architecture phase). These gate what the
           website/dashboard advertises, not live EA behavior — the EA's own
           InpIndexModeLogOnly safety switch is what actually blocks index
           trades until a real, tested index strategy exists. */}
@@ -816,7 +816,7 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
             <div>
               <div className="text-[14px] font-semibold">{admin?.name || "Admin"}</div>
               <div className="text-[12px] text-white/40">{admin?.email}</div>
-              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.7.0</div>
+              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.6.1</div>
             </div>
           </div>
 
