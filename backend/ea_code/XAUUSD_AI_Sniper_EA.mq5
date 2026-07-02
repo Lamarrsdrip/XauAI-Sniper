@@ -1,9 +1,54 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.7.0 — Adaptive Entry/Exit Arbiter: SMC conflict penalty/block,|
-//|   HTF trigger requirement, AI Committee B-grade block authority,   |
-//|   adaptive profit-floor arming, objective-invalidation fast exit   |
+//|   v6.8.0 — Trade Recovery Intelligence (TRI): a near-SL event is    |
+//|   watched, not panicked over — strong recoveries hold, weak ones    |
+//|   bank the second chance at breakeven, failed ones ride to SL       |
+//+------------------------------------------------------------------+
+// v6.8.0 CHANGES (2026-07-02) — TRADE RECOVERY INTELLIGENCE (TRI):
+//   Purpose is NOT to avoid losses — it recognizes when an entry was
+//   likely poor but the market gives a genuine second chance to escape
+//   or improve the position, and tells the difference from noise.
+//   1. STEP 1 — DETECT NEAR FAILURE: once adverse price movement reaches
+//      InpTRI_NearSLPct (default 85%) of the original SL distance, the
+//      trade enters Recovery Mode. This never closes or reduces anything —
+//      it only starts watching, recording MAE, momentum/HTF/AI-confidence
+//      snapshots at that moment.
+//   2. STEP 2 — WATCH THE RECOVERY: every subsequent tick tracks the worst
+//      adverse point reached (true MAE) and whether/when price reclaims
+//      breakeven.
+//   3. STEP 3 — CLASSIFY: the decision point is the moment price actually
+//      reclaims breakeven (profit >= 0) — never before. A weighted score
+//      (reclaim depth, momentum delta, HTF validity, structure health, AI
+//      confidence delta), threshold-adjusted for choppy regimes and
+//      self-tuned from historical outcomes, classifies STRONG (hold
+//      normally, no action) or WEAK (bank the second chance — close at
+//      breakeven/small profit right there, before it can roll over into a
+//      full SL cycle again). A trade that never reclaims breakeven at all
+//      gets tagged FAILED after InpTRI_FailedAfterBars — purely for
+//      logging/re-entry memory. FAILED does NOT force an exit; the trade
+//      keeps riding its normal SL/other exit systems exactly as before.
+//      An ambiguous score between the weak floor and strong threshold does
+//      nothing — "never exit solely because price returned to breakeven."
+//   4. STEP 4 — SMART RE-ENTRY: a WEAK-recovery bailout arms a re-entry
+//      watch for that direction. The next same-direction entry doesn't get
+//      blocked outright, but does need a genuinely fresh trigger (new BOS,
+//      liquidity sweep, pullback, OB/FVG reaction, strong momentum candle)
+//      instead of the same quality of signal that just failed — reusing
+//      the v6.7.0 HTF trigger-requirement logic. Goal: improve average
+//      entry price instead of stubbornly re-fighting a damaged read.
+//   SAFETY: TRI's only close action (TRI_WEAK_RECOVERY_EXIT) is only ever
+//   reachable at profit >= 0 — it never needs the loss-close firewall and
+//   never conflicts with No-Limit Trading Mode's "ride every trade to SL"
+//   default. Per explicit confirmation, FAILED recovery does NOT force an
+//   early loss-exit — "never end a trade unless it's SL, or it bounces
+//   back to entry, in which case end at entry or small profit."
+//   SCOPING NOTE: the adaptive threshold self-tuning (XAU_TRI_
+//   RecordStrongOutcome) is implemented but not yet wired to a close
+//   callback — there is no single universal per-ticket "trade closed" hook
+//   in this file today, and retrofitting one across every exit path was
+//   judged too risky to do quickly. The threshold safely stays at its
+//   input default until that hook exists; nothing depends on it firing.
 //+------------------------------------------------------------------+
 // v6.7.0 CHANGES (2026-07-02) — ADAPTIVE ENTRY/EXIT ARBITER (full audit +
 // redesign of entry scoring and exit decision architecture — see
@@ -925,16 +970,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauAI Sniper by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "6.700"
-#property description "XAUUSD AI Sniper v6.7.0 - Adaptive Entry/Exit Arbiter: SMC conflict penalty/block, HTF trigger requirement, AI Committee B-grade authority, adaptive profit protection"
-#property description "Trade Thesis Monitor now stores a complete entry thesis; AI exit opinion vs structure precedence rule"
+#property version   "6.800"
+#property description "XAUUSD AI Sniper v6.8.0 - Trade Recovery Intelligence: adaptive near-SL recovery classification, smart re-entry after weak bailouts"
+#property description "Adaptive Entry/Exit Arbiter (v6.7.0) preserved: SMC conflict penalty/block, HTF trigger requirement, AI Committee B-grade authority"
 #property description "Risk engine, exits, committee, EPF, basket protect preserved; No-Limit Trading Mode default unchanged"
-#property description "SMC now has real conflict penalties and hard-block authority, not additive-only"
+#property description "TRI never force-exits on a loss — only banks weak-recovery bailouts at breakeven/small profit"
 #property strict
 
-#define XAUAI_EA_VERSION "v6.7.0"
-#define XAUAI_EA_VERSION_NUM "6.7.0"
-#define XAUAI_BUILD_HASH "v670-adaptive-entry-exit-arbiter-20260702"
+#define XAUAI_EA_VERSION "v6.8.0"
+#define XAUAI_EA_VERSION_NUM "6.8.0"
+#define XAUAI_BUILD_HASH "v680-trade-recovery-intelligence-20260702"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -2333,6 +2378,20 @@ struct TradeTTMRecord
    string   expectedTradeType; // TREND_CONTINUATION | PULLBACK_REVERSAL | BREAKOUT | RANGE_FADE | OTHER
    string   entryReasonFull;   // full human-readable reason string logged at entry
    double   entryRiskDollars;  // $ risk to invalidation at entry (1R), for R-multiple exit math
+
+   // v6.8.0 TRADE RECOVERY INTELLIGENCE (TRI) — a trade that came close to SL
+   // and is being watched for a genuine recovery vs. a weak/failed bounce.
+   bool     triActive;             // currently in Recovery Mode
+   datetime triEnteredAt;          // when price first crossed the near-SL threshold
+   double   triWorstAdversePct;    // worst % of original SL distance reached (MAE, as a fraction of 1R)
+   double   triWorstAdverseUSD;    // MAE in account currency
+   int      triMomentumAtEntry;    // momentum score snapshot the moment Recovery Mode was entered
+   bool     triTrendAlignedAtEntry;
+   int      triAIConfAtEntry;      // lastAIConfidence snapshot at Recovery Mode entry
+   int      triHTFAtEntry;         // g_htfConsensusDir snapshot at Recovery Mode entry
+   string   triClassification;     // "" | "PENDING" | "STRONG" | "WEAK" | "FAILED"
+   datetime triClassifiedAt;
+   bool     triExitTaken;          // TRI already closed this trade (weak-recovery bailout)
 };
 
 #define TTM_MAX_POSITIONS 20
@@ -2343,6 +2402,15 @@ input int    InpTTM_MinHoldBars      = 3;      // Min bars before TTM can trigge
 input double InpTTM_ExitThreshold    = 28.0;   // Exit if live score falls below this
 input int    InpTTM_PersistentBars   = 3;      // Exit if score below 35 for this many consecutive bars
 input bool   InpTTM_LogEveryBar      = true;   // Print TTM score every bar per position
+
+input group "=== TRADE RECOVERY INTELLIGENCE — TRI (v6.8.0) ==="
+input bool   InpTRI_Enable              = true;   // Master toggle
+input double InpTRI_NearSLPct           = 0.85;   // Enter Recovery Mode once adverse move reaches this % of original SL distance
+input double InpTRI_StrongThreshold     = 65.0;   // Recovery score (0-100) at/above this = STRONG (no action, keep holding)
+input double InpTRI_WeakFloor           = 35.0;   // Recovery score below this at breakeven-reclaim = WEAK (bail at BE/small profit)
+input int    InpTRI_FailedAfterBars     = 12;      // Bars in Recovery Mode without reclaiming breakeven = classify FAILED (informational only — does NOT force an exit)
+input bool   InpTRI_AdaptThresholds     = true;    // Nudge strong/weak thresholds using rolling historical outcomes
+input double InpTRI_ReEntryTriggerBars  = 30;      // How many bars a bailed-out zone stays "needs fresh trigger" for smart re-entry
 
 struct XAUConsciousMemoryStats
 {
@@ -5343,6 +5411,7 @@ int OnInit()
       g_stratCount[si]   = 0;
    }
    LoadStratWeights();  // override with persisted values if file exists
+   XAU_TRI_LoadStats(); // v6.8.0 — persisted TRI adaptive threshold, if any
 
    // v6.3.8 Upgrade 6: initialize gate analytics timer
    g_gateReportLast = TimeCurrent();
@@ -6904,12 +6973,39 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
    string expectedType = "OTHER";
    string entryReason = "";
 
+   string recoveryMode = "NONE";
+   double recoveryWorstPct = 0.0;
+   string recoveryClassification = "";
+
    if(ttmIdx >= 0)
    {
       expectedType = g_ttm[ttmIdx].expectedTradeType;
       entryReason  = g_ttm[ttmIdx].entryReasonFull;
       double liveScore = g_ttm[ttmIdx].liveScore;
-      if(g_ttm[ttmIdx].thesisBroken)
+
+      // v6.8.0 TRI — a trade currently in Recovery Mode takes priority over
+      // the generic pullback/warning read, since it's a more specific and
+      // more informative state ("recovering from a near-SL event" vs just
+      // "pulled back").
+      if(g_ttm[ttmIdx].triActive)
+      {
+         recoveryMode = "ACTIVE";
+         recoveryWorstPct = g_ttm[ttmIdx].triWorstAdversePct * 100.0;
+         state = "warning";
+         holdReason = StringFormat("Recovery Mode: reached %.0f%% of SL distance, now watching for a genuine reclaim before deciding anything",
+                                    recoveryWorstPct);
+         nextAction = "WATCH_RECOVERY";
+      }
+      else if(g_ttm[ttmIdx].triClassification == "FAILED")
+      {
+         recoveryMode = "FAILED_NO_FORCED_EXIT";
+         recoveryClassification = "FAILED";
+         recoveryWorstPct = g_ttm[ttmIdx].triWorstAdversePct * 100.0;
+         state = "warning";
+         holdReason = "Recovery stalled after a near-SL event, but not force-exiting — still riding normal SL management, exactly as intended";
+         nextAction = "HOLD";
+      }
+      else if(g_ttm[ttmIdx].thesisBroken)
       {
          state = "invalidated";
          exitReason = g_ttm[ttmIdx].breakReason;
@@ -6938,9 +7034,10 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
 
    PrintFormat("TRADE_THESIS_STATUS: ticket=%I64u state=%s type=%s peakProfit=%.2f currentProfit=%.2f "
                "protectedProfit=%.2f holdReason=\"%s\" protectReason=\"%s\" exitReason=\"%s\" "
-               "nextAction=%s entryReason=\"%s\"",
+               "nextAction=%s entryReason=\"%s\" recoveryMode=%s recoveryWorstPct=%.0f recoveryClassification=%s",
                ticket, state, expectedType, peak, profit, protectedProfit,
-               holdReason, protectReason, exitReason, nextAction, entryReason);
+               holdReason, protectReason, exitReason, nextAction, entryReason,
+               recoveryMode, recoveryWorstPct, recoveryClassification);
 }
 
 // v6.4.0: persist and load strategy weights
@@ -9590,6 +9687,35 @@ void OnTick()
                             StringFormat("HTF=%+d", g_htfConsensusDir), "NOT_YET_EVALUATED",
                             g_memoryLastInfluence, "SMC structural conflict — " + g_smcConflictReason);
          grade = "SKIP";
+      }
+   }
+
+   // v6.8.0 TRI STEP 4 — SMART RE-ENTRY. A direction TRI recently bailed
+   // out of (weak recovery) doesn't get to re-enter on the same quality of
+   // signal that just failed — it needs a genuinely fresh trigger (new BOS,
+   // sweep, pullback, OB/FVG reaction). This is a HIGHER bar, not a block:
+   // any real trigger still lets the trade through immediately.
+   if(signal != 0 && grade != "SKIP")
+   {
+      string triWatchSetup = "";
+      if(XAU_TRI_InReEntryWatch(signal, triWatchSetup) && !XAU_TRI_FreshTriggerPresent(signal))
+      {
+         if(XAU_ModeAllowsSoftBlockWarning())
+         {
+            Print("TRI RE-ENTRY WATCH: ", signal == 1 ? "BUY" : "SELL", " direction recently bailed (", triWatchSetup,
+                  ") and no fresh trigger yet — kept (soft-block-warning mode)");
+         }
+         else
+         {
+            string triBlockMsg = StringFormat("TRI_REENTRY_WATCH: %s direction bailed out via weak recovery on %s recently — no fresh trigger (BOS/sweep/pullback/OB/FVG) yet, waiting for a better entry price instead of repeating the same read",
+                                              signal == 1 ? "BUY" : "SELL", triWatchSetup);
+            Print("TRI RE-ENTRY BLOCK: ", triBlockMsg);
+            XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, triBlockMsg);
+            XAU_LogBotDecision("WAIT", signal, setupName, grade, 0, combinedScore,
+                               "n/a", StringFormat("BOS=%+d", g_smc_bos_dir), StringFormat("HTF=%+d", g_htfConsensusDir),
+                               "NOT_YET_EVALUATED", g_memoryLastInfluence, triBlockMsg);
+            grade = "SKIP";
+         }
       }
    }
    XAU_RecordMarketSnapshot("SCAN_EVALUATED", signal, setupName, grade, setupScore, combinedScore);
@@ -14323,6 +14449,17 @@ void TTM_RecordEntry(ulong posId, int signal, string setupName, string grade,
    r.expectedTradeType  = XAU_ExpectedTradeTypeFromSetup(setupName);
    r.entryReasonFull    = fullReason;
    r.entryRiskDollars   = (slPrice > 0.0 && lots > 0.0) ? RiskPerLotForDistance(MathAbs(entryPrice - slPrice)) * lots : 0.0;
+   r.triActive             = false;
+   r.triEnteredAt          = 0;
+   r.triWorstAdversePct    = 0.0;
+   r.triWorstAdverseUSD    = 0.0;
+   r.triMomentumAtEntry    = -1;
+   r.triTrendAlignedAtEntry= false;
+   r.triAIConfAtEntry      = 0;
+   r.triHTFAtEntry         = 0;
+   r.triClassification     = "";
+   r.triClassifiedAt       = 0;
+   r.triExitTaken          = false;
    g_ttm[idx] = r;
 
    PrintFormat("[TTM] ENTRY RECORDED | #%I64u %s | setup=%s grade=%s score=%.1f | "
@@ -14529,6 +14666,281 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
 // END TTM FUNCTIONS
 // ======================================================================
 
+// ======================================================================
+// v6.8.0 TRADE RECOVERY INTELLIGENCE (TRI)
+//
+// Purpose is NOT to avoid losses — it's to recognize when an entry was
+// likely poor but the market gives a second chance to escape or improve
+// the position. Never closes just because price got close to SL. Never
+// closes just because price returned to breakeven. The only thing that
+// closes a trade here is a QUALITY assessment made at the moment price
+// actually reclaims breakeven — if that reclaim looks weak (little
+// momentum, structure still shaky, AI still unconvinced), TRI banks the
+// second chance instead of risking another full stop-loss cycle. A
+// recovery that never reaches breakeven at all is tagged FAILED purely
+// for logging/re-entry memory — it is NOT force-closed; the trade keeps
+// riding its normal SL/other exit systems exactly as before, matching
+// "never end a trade unless it's SL, or it bounces back to entry."
+// ======================================================================
+#define TRI_ACTION_NONE            0
+#define TRI_ACTION_MONITOR         1
+#define TRI_ACTION_STRONG_CONTINUE 2
+#define TRI_ACTION_WEAK_EXIT       3
+
+// --- lightweight rolling stats so thresholds adapt instead of staying fixed ---
+double g_triAdaptStrongThreshold = 0.0; // 0 = not yet loaded from input default
+int    g_triStatSamples = 0, g_triStatStrongWins = 0, g_triStatStrongLosses = 0;
+#define TRI_STATS_FILE "XAUAI_TRI_Stats_v1.csv"
+
+void XAU_TRI_LoadStats()
+{
+   g_triAdaptStrongThreshold = InpTRI_StrongThreshold;
+   if(InpBacktestMode) return;
+   int h = FileOpen(TRI_STATS_FILE, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return;
+   if(!FileIsEnding(h))
+   {
+      string tag = FileReadString(h);
+      if(tag == "#XAUAI_TRI_Stats_v1" && !FileIsEnding(h))
+      {
+         g_triAdaptStrongThreshold = FileReadNumber(h);
+         g_triStatSamples          = (int)FileReadNumber(h);
+         g_triStatStrongWins       = (int)FileReadNumber(h);
+         g_triStatStrongLosses     = (int)FileReadNumber(h);
+      }
+   }
+   FileClose(h);
+   if(g_triAdaptStrongThreshold < 40.0 || g_triAdaptStrongThreshold > 90.0)
+      g_triAdaptStrongThreshold = InpTRI_StrongThreshold; // sanity guard against a corrupt file
+}
+
+void XAU_TRI_SaveStats()
+{
+   if(InpBacktestMode) return;
+   int h = FileOpen(TRI_STATS_FILE, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return;
+   FileWrite(h, "#XAUAI_TRI_Stats_v1");
+   FileWrite(h, DoubleToString(g_triAdaptStrongThreshold, 2),
+             IntegerToString(g_triStatSamples), IntegerToString(g_triStatStrongWins),
+             IntegerToString(g_triStatStrongLosses));
+   FileClose(h);
+}
+
+// Called once a trade that went through Recovery Mode and was classified
+// STRONG (left to run) actually closes, so the threshold can self-tune —
+// if STRONG-and-held recoveries have mostly gone on to lose, the bar for
+// "trustworthy recovery" was too low; if they've mostly won, it can relax.
+void XAU_TRI_RecordStrongOutcome(bool wasWin)
+{
+   if(!InpTRI_AdaptThresholds) return;
+   g_triStatSamples++;
+   if(wasWin) g_triStatStrongWins++; else g_triStatStrongLosses++;
+   if(g_triStatSamples >= 8) // need a real sample before nudging anything
+   {
+      double winRate = (double)g_triStatStrongWins / MathMax(1, g_triStatSamples);
+      if(winRate < 0.40 && g_triAdaptStrongThreshold < 85.0)
+         g_triAdaptStrongThreshold += 1.0; // recoveries we trusted keep failing — raise the bar
+      else if(winRate > 0.65 && g_triAdaptStrongThreshold > 45.0)
+         g_triAdaptStrongThreshold -= 1.0; // trusted recoveries keep working — allow it to trust a bit sooner
+   }
+   XAU_TRI_SaveStats();
+}
+
+// --- smart re-entry watchlist: a direction TRI recently bailed out of ---
+struct XAU_TRI_ReEntryWatch
+{
+   bool     active;
+   int      direction;      // 1 = was long, -1 = was short
+   string   setupName;
+   double   bailoutPrice;
+   datetime bailoutTime;
+   double   invalidationPrice;
+};
+#define TRI_REENTRY_MAX 10
+XAU_TRI_ReEntryWatch g_triReEntry[TRI_REENTRY_MAX];
+
+void XAU_TRI_RecordReEntryWatch(int direction, string setupName, double bailoutPrice, double invalidationPrice)
+{
+   int slot = 0;
+   datetime oldest = TimeCurrent();
+   for(int i = 0; i < TRI_REENTRY_MAX; i++)
+   {
+      if(!g_triReEntry[i].active) { slot = i; break; }
+      if(g_triReEntry[i].bailoutTime < oldest) { oldest = g_triReEntry[i].bailoutTime; slot = i; }
+   }
+   g_triReEntry[slot].active            = true;
+   g_triReEntry[slot].direction         = direction;
+   g_triReEntry[slot].setupName         = setupName;
+   g_triReEntry[slot].bailoutPrice      = bailoutPrice;
+   g_triReEntry[slot].bailoutTime       = TimeCurrent();
+   g_triReEntry[slot].invalidationPrice = invalidationPrice;
+   PrintFormat("[TRI] RE-ENTRY WATCH ARMED | dir=%s setup=%s bailoutPrice=%.2f — next same-direction entry needs a fresh trigger, not just the same read",
+               direction == 1 ? "BUY" : "SELL", setupName, bailoutPrice);
+}
+
+// True if `dir` currently sits inside an active, still-fresh bailout watch —
+// meaning the entry pipeline should require a genuinely fresh trigger
+// (handled by the caller) instead of accepting the same quality of signal
+// that just failed.
+bool XAU_TRI_InReEntryWatch(int dir, string &watchSetup)
+{
+   watchSetup = "";
+   datetime freshCutoff = TimeCurrent() - (datetime)(InpTRI_ReEntryTriggerBars * 300); // M5 bars -> seconds
+   for(int i = 0; i < TRI_REENTRY_MAX; i++)
+   {
+      if(!g_triReEntry[i].active) continue;
+      if(g_triReEntry[i].bailoutTime < freshCutoff) { g_triReEntry[i].active = false; continue; }
+      if(g_triReEntry[i].direction == dir)
+      {
+         watchSetup = g_triReEntry[i].setupName;
+         return true;
+      }
+   }
+   return false;
+}
+
+// Same underlying signals as the HTF_TREND_FOLLOW trigger requirement
+// (v6.7.0) — a self-contained, reusable "is there a genuinely fresh reason
+// to enter here" check, used to gate re-entry after a TRI bailout.
+bool XAU_TRI_FreshTriggerPresent(int dir)
+{
+   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return false;
+   double atr = bufATR[1];
+   double emaF = bufEMAFast[1];
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+   double body = MathAbs(close1 - open1);
+   double obTol  = atr * InpSMC_OB_ToleranceATR;
+   double fvgTol = atr * InpSMC_FVG_ToleranceATR;
+
+   bool pullbackIntoValue = MathAbs(close1 - emaF) <= atr * 0.35;
+   bool bosConfirmed = (g_smc_bos_dir == dir);
+   bool obReaction  = (dir == 1 && g_smc_ob_bull.valid  && close1 >= g_smc_ob_bull.low  - obTol  && close1 <= g_smc_ob_bull.high  + obTol) ||
+                       (dir == -1 && g_smc_ob_bear.valid && close1 >= g_smc_ob_bear.low  - obTol  && close1 <= g_smc_ob_bear.high  + obTol);
+   bool fvgReaction = (dir == 1 && g_smc_fvg_bull.valid && close1 >= g_smc_fvg_bull.low - fvgTol && close1 <= g_smc_fvg_bull.high + fvgTol) ||
+                       (dir == -1 && g_smc_fvg_bear.valid && close1 >= g_smc_fvg_bear.low - fvgTol && close1 <= g_smc_fvg_bear.high + fvgTol);
+   bool strongMomentumCandle = (body >= atr * 0.5) && ((dir == 1 && close1 > open1) || (dir == -1 && close1 < open1));
+   return pullbackIntoValue || bosConfirmed || obReaction || fvgReaction || strongMomentumCandle;
+}
+
+// The core evaluator. Called once per position per ManagePositions() pass.
+// Returns a TRI_ACTION_* code; `triReason` explains the decision in plain terms.
+int XAU_TRI_Evaluate(int ttmIdx, ulong ticket, bool isBuy, double openPx, double curPrice,
+                     double slDist, double profit, double rDollars,
+                     int momentumScore, bool trendAligned, bool structureConfirmedBroken,
+                     int currentHTF, string &triReason)
+{
+   triReason = "";
+   if(!InpTRI_Enable || ttmIdx < 0 || slDist <= 0) return TRI_ACTION_NONE;
+
+   double adverseDist = isBuy ? (openPx - curPrice) : (curPrice - openPx);
+   double adversePct  = MathMax(0.0, adverseDist / slDist); // 0 = at/above entry, 1.0 = at SL
+
+   if(!g_ttm[ttmIdx].triActive)
+   {
+      if(adversePct < InpTRI_NearSLPct) return TRI_ACTION_NONE; // nowhere near SL — nothing to do
+      // ---- STEP 1: DETECT NEAR FAILURE ----
+      g_ttm[ttmIdx].triActive              = true;
+      g_ttm[ttmIdx].triEnteredAt           = TimeCurrent();
+      g_ttm[ttmIdx].triWorstAdversePct     = adversePct;
+      g_ttm[ttmIdx].triWorstAdverseUSD     = MathAbs(profit);
+      g_ttm[ttmIdx].triMomentumAtEntry     = momentumScore;
+      g_ttm[ttmIdx].triTrendAlignedAtEntry = trendAligned;
+      g_ttm[ttmIdx].triAIConfAtEntry       = g_aiLastConfidence;
+      g_ttm[ttmIdx].triHTFAtEntry          = currentHTF;
+      g_ttm[ttmIdx].triClassification      = "PENDING";
+      triReason = StringFormat("Price reached %.0f%% of SL distance — entering Recovery Mode, watching for a genuine reclaim", adversePct * 100.0);
+      PrintFormat("[TRI] RECOVERY MODE ENTERED #%I64u %s | adverse=%.0f%% of SL | momentum=%d trendAligned=%s AIconf=%d htf=%+d regime=%s",
+                  ticket, isBuy ? "BUY" : "SELL", adversePct * 100.0, momentumScore, trendAligned ? "Y" : "N",
+                  g_aiLastConfidence, currentHTF, RegimeName());
+      return TRI_ACTION_MONITOR;
+   }
+
+   // ---- STEP 2: WATCH THE RECOVERY (already in Recovery Mode) ----
+   if(adversePct > g_ttm[ttmIdx].triWorstAdversePct)
+   {
+      g_ttm[ttmIdx].triWorstAdversePct = adversePct;
+      g_ttm[ttmIdx].triWorstAdverseUSD = MathMax(g_ttm[ttmIdx].triWorstAdverseUSD, MathAbs(profit));
+   }
+
+   bool reclaimedBreakeven = (profit >= 0.0);
+   int barsInRecovery = (int)((TimeCurrent() - g_ttm[ttmIdx].triEnteredAt) / 300); // M5 bars
+
+   if(!reclaimedBreakeven)
+   {
+      // Still underwater. Not yet a decision point — but if this has dragged
+      // on long enough without ever reclaiming breakeven, tag it FAILED for
+      // logging/re-entry memory only. This does NOT close the trade — it
+      // keeps riding its normal SL/other exit systems exactly as before.
+      if(barsInRecovery >= InpTRI_FailedAfterBars && g_ttm[ttmIdx].triClassification != "FAILED")
+      {
+         g_ttm[ttmIdx].triClassification = "FAILED";
+         g_ttm[ttmIdx].triClassifiedAt   = TimeCurrent();
+         triReason = StringFormat("Recovery stalled — %d bars in Recovery Mode without reclaiming breakeven. Not exiting early; still riding normal SL management.", barsInRecovery);
+         PrintFormat("[TRI] FAILED RECOVERY (informational, no forced exit) #%I64u %s | %s", ticket, isBuy ? "BUY" : "SELL", triReason);
+      }
+      return TRI_ACTION_MONITOR;
+   }
+
+   // ---- STEP 3: CLASSIFY THE RECOVERY (decision point: price just reclaimed breakeven) ----
+   double reclaimFrac = g_ttm[ttmIdx].triWorstAdversePct > 0.0
+      ? MathMin(1.0, (g_ttm[ttmIdx].triWorstAdversePct - MathMax(0.0, -profit / MathMax(1.0, rDollars))) / g_ttm[ttmIdx].triWorstAdversePct)
+      : 1.0;
+   double reclaimScore = MathMax(0.0, MathMin(1.0, reclaimFrac)) * 40.0;
+
+   double momentumDelta = momentumScore - g_ttm[ttmIdx].triMomentumAtEntry;
+   double momentumScorePts = MathMax(0.0, MathMin(1.0, (momentumDelta + 2.0) / 4.0)) * 20.0; // -2..+2 mapped to 0..20
+
+   int tradeDir = isBuy ? 1 : -1;
+   bool htfStillValid = (currentHTF == tradeDir) || (currentHTF == g_ttm[ttmIdx].triHTFAtEntry && currentHTF != -tradeDir);
+   double htfScorePts = htfStillValid ? 15.0 : 0.0;
+
+   double structureScorePts = structureConfirmedBroken ? 0.0 : 15.0;
+
+   int aiConfDelta = g_aiLastConfidence - g_ttm[ttmIdx].triAIConfAtEntry;
+   double aiScorePts = MathMax(0.0, MathMin(1.0, (aiConfDelta + 20.0) / 40.0)) * 10.0; // -20..+20 mapped to 0..10
+
+   double recoveryScore = reclaimScore + momentumScorePts + htfScorePts + structureScorePts + aiScorePts;
+
+   // Adaptive thresholds: raise the bar in choppy/rangey conditions where a
+   // reclaim is more likely to be noise, and use the self-tuned strong
+   // threshold learned from historical outcomes (see XAU_TRI_RecordStrongOutcome).
+   double strongThreshold = InpTRI_AdaptThresholds ? g_triAdaptStrongThreshold : InpTRI_StrongThreshold;
+   if(CleanChoppyRegime()) strongThreshold += 8.0;
+   double weakFloor = MathMin(InpTRI_WeakFloor, strongThreshold - 10.0);
+
+   g_ttm[ttmIdx].triClassifiedAt = TimeCurrent();
+
+   if(recoveryScore >= strongThreshold)
+   {
+      g_ttm[ttmIdx].triClassification = "STRONG";
+      g_ttm[ttmIdx].triActive = false; // recovery resolved — resume normal management
+      triReason = StringFormat("Strong recovery: score=%.0f/100 (reclaim=%.0f momentum=%.0f htf=%.0f structure=%.0f ai=%.0f) — holding normally",
+                                recoveryScore, reclaimScore, momentumScorePts, htfScorePts, structureScorePts, aiScorePts);
+      PrintFormat("[TRI] STRONG RECOVERY #%I64u %s | %s", ticket, isBuy ? "BUY" : "SELL", triReason);
+      return TRI_ACTION_STRONG_CONTINUE;
+   }
+
+   if(recoveryScore < weakFloor)
+   {
+      g_ttm[ttmIdx].triClassification = "WEAK";
+      g_ttm[ttmIdx].triActive = false;
+      g_ttm[ttmIdx].triExitTaken = true;
+      triReason = StringFormat("Weak recovery: score=%.0f/100 (below floor %.0f) — crawled back to breakeven with little conviction. Taking the second chance at $%.2f instead of risking another SL cycle.",
+                                recoveryScore, weakFloor, profit);
+      PrintFormat("[TRI] WEAK RECOVERY — BAILING AT BE/SMALL PROFIT #%I64u %s | %s", ticket, isBuy ? "BUY" : "SELL", triReason);
+      return TRI_ACTION_WEAK_EXIT;
+   }
+
+   // Between weak floor and strong threshold: genuinely ambiguous — the
+   // safety rule ("never exit solely because price returned to breakeven")
+   // means an ambiguous reclaim is NOT enough justification to act. Keep
+   // watching; the next evaluation (next tick/bar) re-scores fresh.
+   triReason = StringFormat("Ambiguous reclaim: score=%.0f/100 (between weak floor %.0f and strong %.0f) — not enough evidence either way yet, continuing to watch",
+                             recoveryScore, weakFloor, strongThreshold);
+   return TRI_ACTION_MONITOR;
+}
+
 bool XAU_EmergencyLossCloseAllowed(string ctx)
 {
    string c = ctx;
@@ -14729,6 +15141,34 @@ void ManagePositions()
                   lastTradeClose = TimeCurrent();
                }
                continue;
+            }
+
+            // ======== v6.8.0 TRADE RECOVERY INTELLIGENCE (TRI) ========
+            // TTM held (thesis not broken) — check whether this trade came
+            // close to SL and, if so, whether it's now recovering well
+            // enough to trust, or should take a safe exit at breakeven.
+            {
+               string triReason = "";
+               int triAction = XAU_TRI_Evaluate(ttmIdx, ticket, isBuy, openPx, curPrice,
+                                                slDist, profit, rDollars,
+                                                momentumScoreEA, trendAlignedEA, structureConfirmedEA,
+                                                g_htfConsensusDir, triReason);
+               if(triAction == TRI_ACTION_WEAK_EXIT)
+               {
+                  // Only ever reached with profit >= 0 (see XAU_TRI_Evaluate),
+                  // so this is always a breakeven-or-better close — never
+                  // needs the loss-close firewall, never fights No-Limit mode.
+                  if(SafePositionClose(ticket, "TRI_WEAK_RECOVERY_EXIT"))
+                  {
+                     XAU_TRI_RecordReEntryWatch(isBuy ? 1 : -1, g_ttm[ttmIdx].setupName, curPrice, g_ttm[ttmIdx].invalidationPrice);
+                     TTM_ReleaseSlot(ticket);
+                     lastTradeClose = TimeCurrent();
+                  }
+                  continue;
+               }
+               // TRI_ACTION_STRONG_CONTINUE / MONITOR / NONE: no forced
+               // action here — trade falls through to normal management
+               // below exactly as it would have without TRI.
             }
          }
       }

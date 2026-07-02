@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.7.0.mq5"
+EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.8.0.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 SERVER = ROOT / "backend" / "server.py"
 

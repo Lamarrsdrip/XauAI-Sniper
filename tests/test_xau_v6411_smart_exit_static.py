@@ -3,8 +3,8 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.7.0.mq5"
-EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.7.0.mq5"
+EA_ROOT = ROOT / "XAUUSD_AI_Sniper_EA_v6.8.0.mq5"
+EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.8.0.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -18,9 +18,9 @@ def test_v6412_version_identity_and_synced_sources():
     named = read(EA_NAMED)
 
     assert root == backend == named
-    assert '#property version   "6.700"' in root
-    assert '#define XAUAI_EA_VERSION "v6.7.0"' in root
-    assert '#define XAUAI_EA_VERSION_NUM "6.7.0"' in root
+    assert '#property version   "6.800"' in root
+    assert '#define XAUAI_EA_VERSION "v6.8.0"' in root
+    assert '#define XAUAI_EA_VERSION_NUM "6.8.0"' in root
 
 
 def test_smart_exit_state_machine_and_inputs_exist():

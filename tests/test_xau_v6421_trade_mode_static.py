@@ -3,7 +3,7 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.7.0.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.8.0.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 REPORT = ROOT / "test_reports" / "xau_v6_4_21_forensic_performance_comparison_2026-07-01.md"
 
