@@ -301,7 +301,7 @@ class EAConfig(BaseModel):
     name: str = "Default Configuration"
     risk_percent: float = 1.0
     daily_loss_limit: float = 3.0
-    weekly_drawdown_limit: float = 10.0
+    weekly_drawdown_limit: float = 5.0
     weekly_profit_target: float = 35.0
     max_open_trades: int = 2
     max_trades_per_day: int = 3
@@ -325,7 +325,7 @@ class EAConfigCreate(BaseModel):
     name: Optional[str] = "Default Configuration"
     risk_percent: Optional[float] = 1.0
     daily_loss_limit: Optional[float] = 3.0
-    weekly_drawdown_limit: Optional[float] = 10.0
+    weekly_drawdown_limit: Optional[float] = 5.0
     weekly_profit_target: Optional[float] = 35.0
     max_open_trades: Optional[int] = 2
     max_trades_per_day: Optional[int] = 3

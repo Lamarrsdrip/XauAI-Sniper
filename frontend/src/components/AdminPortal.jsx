@@ -569,7 +569,7 @@ function ConfigTab({ api, token }) {
     { id: "moderate",     label: "Moderate",     icon: Lightning,   wt: 35, risk: 1.0,  trades: 3, conf: 75, tone: "amber"  },
     { id: "aggressive",   label: "Aggressive",   icon: Flame,       wt: 50, risk: 1.5,  trades: 5, conf: 65, tone: "red"    },
   ];
-  const [config, setConfig] = useState({ name: "Default", risk_percent: 1, daily_loss_limit: 3, weekly_drawdown_limit: 10, weekly_profit_target: 35, max_open_trades: 2, max_trades_per_day: 3, enable_trend_mode: true, enable_range_mode: true, enable_breakout_mode: true, confidence_threshold: 75, ema_fast: 50, ema_slow: 200, min_rr_ratio: 1.5, partial_close_percent: 50, trailing_atr_multi: 1.5, sl_atr_multiplier: 2, trade_london: true, trade_new_york: true, equity_protection: 70, profit_mode: "moderate" });
+  const [config, setConfig] = useState({ name: "Default", risk_percent: 1, daily_loss_limit: 3, weekly_drawdown_limit: 5, weekly_profit_target: 35, max_open_trades: 2, max_trades_per_day: 3, enable_trend_mode: true, enable_range_mode: true, enable_breakout_mode: true, confidence_threshold: 75, ema_fast: 50, ema_slow: 200, min_rr_ratio: 1.5, partial_close_percent: 50, trailing_atr_multi: 1.5, sl_atr_multiplier: 2, trade_london: true, trade_new_york: true, equity_protection: 70, profit_mode: "moderate" });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const h = { headers: { Authorization: `Bearer ${token}` } };

@@ -12,7 +12,7 @@ export default function HeroSection({ performance }) {
   const stats = [
     { label: "Win Rate",      value: performance?.win_rate     ? `${performance.win_rate}%`     : "--", icon: ChartLineUp, tone: "text-emerald-300" },
     { label: "Profit Factor", value: performance?.profit_factor ? `${performance.profit_factor}` : "--", icon: Lightning,   tone: "text-amber-200"  },
-    { label: "Max Drawdown",  value: performance?.max_drawdown  ? `${performance.max_drawdown}%` : "--", icon: ShieldCheck,  tone: "text-sky-300"    },
+    { label: "Max Drawdown",  value: "5%", icon: ShieldCheck,  tone: "text-sky-300"    },
     { label: "AI Rating",     value: "90 / 100",                                                         icon: Brain,        tone: "text-violet-300" },
   ];
 

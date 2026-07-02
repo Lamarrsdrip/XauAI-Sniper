@@ -139,7 +139,7 @@ export default function InstallationSection({ data }) {
                 <h5 className="text-sm font-bold mb-2">Key Metrics to Watch</h5>
                 <ul className="text-sm text-muted-foreground space-y-1.5">
                   <li>Profit Factor &gt; 1.5</li>
-                  <li>Max Drawdown &lt; 15%</li>
+                  <li>Max Drawdown &lt; 5%</li>
                   <li>Win Rate &gt; 60%</li>
                   <li>Sharpe Ratio &gt; 1.0</li>
                   <li>Recovery Factor &gt; 3.0</li>

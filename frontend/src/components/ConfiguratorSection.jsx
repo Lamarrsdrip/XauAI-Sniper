@@ -48,7 +48,7 @@ const DEFAULT_CONFIG = {
   name: "Default Configuration",
   risk_percent: 1.0,
   daily_loss_limit: 3.0,
-  weekly_drawdown_limit: 10.0,
+  weekly_drawdown_limit: 5.0,
   weekly_profit_target: 35.0,
   max_open_trades: 2,
   max_trades_per_day: 3,
