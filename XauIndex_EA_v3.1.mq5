@@ -1,34 +1,83 @@
 //+------------------------------------------------------------------+
 //|                                     XauIndex_EA.mq5              |
 //|                                     XauIndex — Gold + Index Edition|
-//|   v3.0.0 — Real Index Entry Engine: structure, liquidity, trend,   |
-//|   breakout, volatility regime, momentum (rebuilt on gold v6.10.0)  |
+//|   v3.1.0 — Spike-Safe Index Engine: spike rejection, symbol-        |
+//|   relative spread/gap gate, real BOOM_CRASH risk profile            |
+//|   (rebuilt on gold v6.12.0)                                        |
 //+------------------------------------------------------------------+
-// v3.0.0 CHANGES (2026-07-02) — REAL INDEX ENTRY ENGINE:
-//   Replaces the v1.0.0/v2.0.0 "monitoring only" Index Mode with an actual
-//   signal-generating engine built from standard technical-analysis
-//   principles (not gold-specific tuning): swing-based market structure
-//   (BOS/CHoCH), liquidity-sweep detection, EMA-stack trend-regime
-//   classification, ATR-percentile volatility regime, RSI momentum
-//   filtering, pullback-in-trend entries, and breakout+retest entries. See
-//   the "INDEX ENTRY ENGINE" section for the full implementation. Adaptive
-//   exits and position management are NOT reimplemented — ManagePositions/
-//   ManageBasket/TTM/TRI already operate generically on Symbol() and the
-//   EA's own open positions, so they apply to an index position exactly
-//   as they do to a gold one.
-//   SAFETY MODEL (unchanged philosophy from v1.0.0/v2.0.0): the engine now
-//   genuinely scores and would place real trades, but InpIndexModeLogOnly
-//   still defaults to true, so it evaluates and logs (INDEX_TRACE) instead
-//   of trading live until a user explicitly flips it to false — the same
-//   opt-in-only pattern this codebase already uses for InpNoLimitTradingMode
-//   and every other capability that changes live-money behavior. This
-//   engine has not been validated against real index price history (no
-//   index symbols were available at build time); it should be run on
-//   demo/log-only against real index feeds before ever being enabled live.
-//   Rebuilt on the current gold v6.10.0 base (Adaptive News Momentum
-//   Engine) — see below for gold's own unchanged history.
+// v3.1.0 CHANGES (2026-07-03) — SPIKE-SAFE INDEX ENGINE:
+//   v3.0.0 shipped a real index entry engine, but a post-ship audit
+//   found it was not actually safe for Boom/Crash-style synthetics:
+//   the breakout detector could not tell a genuine breakout apart from
+//   a spike candle (both look like "tight range then one huge-bodied
+//   bar"), there was no spread/gap protection at all in Index Mode, and
+//   InpIndexProfile=BOOM_CRASH was a label with no effect on behavior.
+//   Fixed all three, plus gave Boom/Crash its own conservative risk
+//   defaults:
+//   1. SPIKE-REJECTION FILTER (XAU_IndexFindRecentSpike): scans recent
+//      bars for a candle whose range/body vastly exceeds normal ATR
+//      behavior. Never enters on the spike candle itself. Within a
+//      cooldown window after a spike, blind breakout entries are
+//      disabled outright; only a genuine post-spike continuation
+//      (price sustained well past the spike's own close) or a
+//      controlled pullback-with-rejection can qualify.
+//   2. SYMBOL-RELATIVE SPREAD/GAP GATE (XAU_IndexSpreadGapOK): no fixed
+//      XAUUSD point thresholds anywhere. Blocks entries when current
+//      spread exceeds a fraction of the symbol's own ATR, when spread
+//      abnormally widens vs. the EA's existing rolling spread EMA
+//      (g_spreadEMA — already symbol-agnostic), or when price gapped
+//      abnormally versus the last closed bar (tick-gap protection).
+//   3. BOOM_CRASH PROFILE ACTUALLY WIRED IN: risk %, max lot cap,
+//      spread/gap thresholds, spike cooldown length, and whether
+//      breakout entries are allowed at all now branch on
+//      InpIndexProfile==BOOM_CRASH via a single XAU_IndexIsBoomCrash-
+//      Profile() check threaded through the engine, spread gate, and
+//      lot sizing — not just logged as a label.
+//   4. Boom/Crash gets its own conservative defaults: smaller risk
+//      fraction, a hard max-lot cap independent of account-size
+//      scaling, a stricter spread/gap gate, breakout entries disabled
+//      entirely by default (pullback/continuation-only), and the same
+//      spike-aware exit awareness available to position management via
+//      the thesis-status log.
+//   5. InpIndexModeLogOnly still defaults true. Every Boom/Crash-
+//      relevant allow/block decision now logs its specific reason via
+//      INDEX_ENGINE/INDEX_TRACE — spike detection, spread/gap state,
+//      and which profile-specific rule fired.
+//   Rebuilt on the current gold v6.12.0 base (Calibrated Entry +
+//   Smarter Runners) — inherits every gold fix through v6.12.0 exactly
+//   as built and tested, with the Market Mode/Index-detection layer and
+//   v3.0.0's engine re-applied on top, now hardened per the above.
 //
-// v6.10.0 CHANGES (2026-07-02) — ADAPTIVE NEWS MOMENTUM ENGINE (inherited from gold):
+// v6.12.0 CHANGES (2026-07-03) — CALIBRATED ENTRY + SMARTER RUNNERS (inherited from gold):
+//   1. Fixes grade inflation where late trend confirmation could turn a
+//      stretched, bad-location TREND_PULLBACK into A+ even when value/room
+//      were weak. A+ now needs both thesis strength and clean entry location.
+//   2. Adds calibrated entry-quality telemetry: setupQuality, entryTiming,
+//      extensionRisk, expectedMAERisk, effectiveRRQuality, and final calibrated
+//      confidence. The Command/MT5 logs now explain why a strong trend may
+//      still be a B/B+ entry instead of fake A+.
+//   3. Prevents the A/A+ lot-size floor from overriding timing-risk reductions.
+//      Strong but late/extended entries stay smaller instead of restoring full
+//      size just because the grade label says A/A+.
+//   4. Lets healthy positive-EV runners breathe more. EV_PROTECT/AMPL still
+//      protect profit, but when HTF/trend/structure remain aligned and holdEV
+//      is clearly stronger than exitEV, the EA uses a wider runner floor instead
+//      of clipping a trade that still has real continuation value.
+//   Preserves all v6.11.0 Strong Momentum Override fixes.
+//+------------------------------------------------------------------+
+// v6.11.0 CHANGES (2026-07-03) - STRONG MOMENTUM OVERRIDE:
+//   1. Adds a controlled Strong Momentum Override for clean XAUUSD M5/M15
+//      continuation moves. It can soften cautious personality/B-quality/
+//      timing blocks only when structure, HTF, room, RR, and momentum agree.
+//   2. Adds Early Move Entry behavior: fresh post-news/breakout/structure
+//      continuation can enter before the move becomes a late chase.
+//   3. Preserves late-top protection: exhausted, hostile-HTF, failed-impulse,
+//      spike-cooldown, poor-room, and true late-chase conditions remain blocks.
+//   4. Timing reports now expose hard/soft block class, missed-move context,
+//      and what must change before an entry is allowed.
+//   Preserves all v6.10.0 Adaptive News Momentum Engine fixes.
+//+------------------------------------------------------------------+
+// v6.10.0 CHANGES (2026-07-02) — ADAPTIVE NEWS MOMENTUM ENGINE:
 //   1. Replaces binary post-news fear with a staged engine:
 //      NEWS_PROTECTION -> NEWS_RELEASE_COOLDOWN -> NEWS_OBSERVING ->
 //      NEWS_CONTINUATION_CONFIRMED / NEWS_ENTRY_ALLOWED.
@@ -1045,16 +1094,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauIndex by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "3.00"
-#property description "XauIndex v3.0.0 - Real Index Entry Engine: structure, liquidity, trend, breakout, volatility, momentum"
-#property description "Rebuilt on gold v6.10.0: No-Limit Trading Mode, Adaptive Arbiter, TRI, Command Center fix, News Momentum Engine all inherited"
+#property version   "3.10"
+#property description "XauIndex v3.1.0 - Spike-Safe Index Engine: spike rejection, symbol-relative spread/gap gate, real BOOM_CRASH risk profile"
+#property description "Rebuilt on gold v6.12.0: No-Limit Trading Mode, Adaptive Arbiter, TRI, Command Center fix, News Momentum, Calibrated Entry all inherited"
 #property description "A separate product from XauAI Sniper (gold-only, maintained separately) — versioned independently so the two are never confused"
 #property description "InpIndexModeLogOnly still defaults true — engine evaluates/logs live but never trades until explicitly enabled"
 #property strict
 
-#define XAUAI_EA_VERSION "v3.0.0"
-#define XAUAI_EA_VERSION_NUM "3.0.0"
-#define XAUAI_BUILD_HASH "xauindex-3.0.0-real-index-engine-on-gold-v6100-20260702"
+#define XAUAI_EA_VERSION "v3.1.0"
+#define XAUAI_EA_VERSION_NUM "3.1.0"
+#define XAUAI_BUILD_HASH "xauindex-3.1.0-spike-safe-index-engine-on-gold-v6120-20260703"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1088,20 +1137,20 @@ enum ENUM_XAU_LOT_SIZING_MODE { REAL_RISK_MODE=0, JUNE_16_19_BALANCE_MODE=1 };
 input ENUM_XAU_LOT_SIZING_MODE InpLotSizingMode = JUNE_16_19_BALANCE_MODE; // JUNE mode restores balance-based lots; REAL mode uses OrderCalcProfit SL risk
 input double InpJuneBalanceLotPer1000 = 0.070; // $3k A trade ≈0.21 before broker/margin/maxlot; B≈0.15, A+≈0.26
 
-// XauIndex — MARKET MODE (Gold vs Index). v3.0.0 adds a real index entry
-// engine (structure, liquidity, trend, breakout, volatility, momentum —
-// see the INDEX ENTRY ENGINE section) behind InpIndexModeLogOnly, which
-// still defaults to true (log-only) exactly like every other new capability
-// this codebase ships: built, tested, and available, but the user opts in
-// explicitly rather than it going live by surprise. GOLD_MODE behavior is
-// completely unchanged — the entire existing entry/exit pipeline still runs
-// exactly as before whenever the resolved mode is GOLD_MODE, which is what
-// every live XAUUSD attachment resolves to today.
+// XauIndex — MARKET MODE (Gold vs Index). v3.1.0 adds spike-aware,
+// spread/gap-protected, profile-differentiated index trading behind
+// InpIndexModeLogOnly, which still defaults to true (log-only) exactly
+// like every other new capability this codebase ships: built, tested,
+// and available, but the user opts in explicitly rather than it going
+// live by surprise. GOLD_MODE behavior is completely unchanged — the
+// entire existing entry/exit pipeline still runs exactly as before
+// whenever the resolved mode is GOLD_MODE, which is what every live
+// XAUUSD attachment resolves to today.
 input group "=== MARKET MODE (Gold/Index detection + Index entry engine) ==="
 enum ENUM_XAU_MARKET_MODE { MARKET_AUTO_DETECT=0, MARKET_GOLD_MODE=1, MARKET_INDEX_MODE=2 };
 input ENUM_XAU_MARKET_MODE InpMarketMode = MARKET_AUTO_DETECT; // AUTO_DETECT reads the chart symbol once at startup; GOLD/INDEX force the mode regardless of symbol
 enum ENUM_XAU_INDEX_PROFILE { GENERIC_INDEX=0, VOLATILITY_INDEX=1, BOOM_CRASH=2, STEP_INDEX=3, RANGE_BREAK=4 };
-input ENUM_XAU_INDEX_PROFILE InpIndexProfile = GENERIC_INDEX; // diagnostic label only — the entry engine itself is generic technical analysis, not profile-tuned yet
+input ENUM_XAU_INDEX_PROFILE InpIndexProfile = GENERIC_INDEX; // v3.1.0: BOOM_CRASH actually changes scoring/risk/entry/spread/spike/SL-TP/lot sizing — see INDEX ENTRY ENGINE section
 enum ENUM_XAU_INDEX_AGGRESSION { INDEX_SAFE=0, INDEX_BALANCED=1, INDEX_AGGRESSIVE_GROWTH=2 };
 input ENUM_XAU_INDEX_AGGRESSION InpIndexAggression = INDEX_BALANCED; // scales index setup grade thresholds and lot sizing the same way gold's own aggression settings do
 input bool   InpIndexModeLogOnly = true; // SAFETY SWITCH: while true, INDEX_MODE never opens a new position — it only logs what the entry engine would have done (INDEX_TRACE). Flip to false only after validating the engine on demo/your own index symbols.
@@ -1368,6 +1417,15 @@ input double InpXAU_TCM_MinRemainingRoomATR= 0.85;  // Required estimated room a
 input double InpXAU_TCM_LotMulti           = 0.60;  // Continuation after extension is allowed smaller, never recklessly full-size
 input bool   InpXAU_TCM_NewsFastTrack      = true;  // After spread normalizes, post-news aligned A/A+ continuation can resume early
 input double InpXAU_TCM_MemoryMinMissedProfitATR = 2.0; // Aggregate BLOCK_MISSED_PROFIT edge needed before easing future overblocks
+input bool   InpXAU_StrongMomentumOverride = true;  // v6.11.0: soften cautious blocks for fresh M5/M15 structure momentum only
+input double InpXAU_SMO_MinTrendScore      = 58.0;  // Early continuation score floor; lower than TCM but still structure/room gated
+input double InpXAU_SMO_MinRoomATR         = 1.05;  // Minimum realistic room left before override can allow entry
+input int    InpXAU_SMO_EarlyMaxSignalAgeBars = 4;  // Fresh idea window; older signals remain late-chase protected
+input double InpXAU_SMO_MaxMissedMoveATR   = 1.20;  // If already travelled farther from first signal, no override without retest
+input double InpXAU_SMO_MaxExhaustionProb  = 55.0;  // Override cannot pass exhaustion-heavy entries
+input double InpXAU_SMO_MinRRQuality       = 55.0;  // Override still requires usable reward/risk quality
+input double InpXAU_SMO_LotMulti           = 0.60;  // Controlled early entry size; never full-size just because momentum is strong
+input bool   InpXAU_SMO_AllowBGradeBalanced = true; // Balanced mode can trade clean B continuation instead of blind B blocking
 input bool   InpBlockedTradeMemoryReport   = true;  // Persist blocked-signal outcome learning to CSV for audits
 input int    InpBlockedMemoryMinSamples    = 8;     // Samples required before blocked-pattern stats can influence logs/size
 input bool   InpBlockedMemoryScoutEnable   = false; // v5.8.55 default OFF: learn/report blocked trades without opening tiny live scouts
@@ -4087,15 +4145,36 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
          return true;
       }
 
-      if(ev.decision == XAU_EV_PROTECT || ev.decision == XAU_EV_PARTIAL)
-      {
-         double evLockPct = (ev.decision == XAU_EV_PARTIAL) ? 70.0 : 60.0;
-         if(ev.exhaustionProb >= 0.70 || ev.reversalProb >= 0.65)
-            evLockPct = MathMax(evLockPct, 75.0);
-         lockPct = MathMax(lockPct, evLockPct);
-         allowedGiveback = MathMin(allowedGiveback, ev.decision == XAU_EV_PARTIAL ? 38.0 : 32.0);
-         floorUSD = MathMax(floorUSD, MathMax(InpSmartExitMinRetainUSD, peak * lockPct / 100.0));
-         floorUSD = MathMin(floorUSD, peak * 0.92);
+	      if(ev.decision == XAU_EV_PROTECT || ev.decision == XAU_EV_PARTIAL)
+	      {
+	         bool evHoldEdgeStrong = (ev.holdEV >= ev.exitEV + MathMax(InpEVMinHoldEdgeUSD, peak * 0.20));
+	         bool evThesisHealthyProtect = (ev.decision == XAU_EV_PROTECT &&
+	                                        evHoldEdgeStrong &&
+	                                        ev.continuationProb >= 0.40 &&
+	                                        trendAligned &&
+	                                        !structureConfirmedBroken &&
+	                                        !emaAgainst &&
+	                                        !rsiAgainst);
+	         double evLockPct = (ev.decision == XAU_EV_PARTIAL) ? 70.0 : 60.0;
+	         if(ev.exhaustionProb >= 0.70 || ev.reversalProb >= 0.65)
+	            evLockPct = MathMax(evLockPct, 75.0);
+	         if(evThesisHealthyProtect)
+	         {
+	            evLockPct = MathMax(30.0, InpSmartExitStrongLockPct - 8.0);
+	            lockPct = MathMin(lockPct, evLockPct);
+	            allowedGiveback = MathMax(allowedGiveback, InpSmartExitStrongGivebackPct);
+	            PrintFormat("EV_PROTECT_RUNNER_BREATHE #%I64u %s | holdEV %.2f > exitEV %.2f, continuationProb=%.2f, thesis healthy — using wider floor %.0f%% and giveback %.0f%%",
+	                        ticket, isBuy ? "BUY" : "SELL",
+	                        ev.holdEV, ev.exitEV, ev.continuationProb,
+	                        lockPct, allowedGiveback);
+	         }
+	         else
+	         {
+	            lockPct = MathMax(lockPct, evLockPct);
+	            allowedGiveback = MathMin(allowedGiveback, ev.decision == XAU_EV_PARTIAL ? 38.0 : 32.0);
+	         }
+	         floorUSD = MathMax(floorUSD, MathMax(InpSmartExitMinRetainUSD, peak * lockPct / 100.0));
+	         floorUSD = MathMin(floorUSD, peak * 0.92);
 
          bool evFloorRaised = (floorUSD > g_profitFloorLastFloorUSD[floorIdx] + 0.50);
          if(evFloorRaised)
@@ -5459,6 +5538,15 @@ ENUM_XAU_MARKET_MODE XAU_DetectMarketMode(string &reason)
    return MARKET_GOLD_MODE;
 }
 
+// XauIndex — resolves whether the current INDEX_PROFILE should be treated
+// as Boom/Crash-style (spike-driven synthetic) for the purposes of the
+// spike filter, spread/gap gate, and risk sizing below. Centralized here
+// so every consumer agrees on the same definition.
+bool XAU_IndexIsBoomCrashProfile()
+{
+   return (g_marketMode == MARKET_INDEX_MODE && InpIndexProfile == BOOM_CRASH);
+}
+
 //+------------------------------------------------------------------+
 //| INIT                                                             |
 //+------------------------------------------------------------------+
@@ -5484,14 +5572,16 @@ int OnInit()
 
    // XauIndex: resolve market mode once, before anything else touches Symbol()-derived logic.
    g_marketMode = XAU_DetectMarketMode(g_marketModeDetectReason);
-   PrintFormat("MARKET_AUTO_DETECT: symbol=%s detectedMode=%s profile=%s aggression=%s inputMode=%s | reason=%s | indexLogOnly=%s",
+   PrintFormat("MARKET_AUTO_DETECT: symbol=%s detectedMode=%s profile=%s aggression=%s inputMode=%s | reason=%s | indexLogOnly=%s | boomCrashProfile=%s",
                Symbol(),
                g_marketMode == MARKET_GOLD_MODE ? "GOLD_MODE" : "INDEX_MODE",
                EnumToString(InpIndexProfile), EnumToString(InpIndexAggression),
                EnumToString(InpMarketMode), g_marketModeDetectReason,
-               InpIndexModeLogOnly ? "true" : "false");
+               InpIndexModeLogOnly ? "true" : "false",
+               XAU_BoolText(XAU_IndexIsBoomCrashProfile()));
    if(g_marketMode == MARKET_INDEX_MODE)
-      Print("INDEX_MODE ACTIVE: entry engine live=", InpIndexModeLogOnly ? "false (log-only)" : "true (real orders)");
+      Print("INDEX_MODE ACTIVE: entry engine live=", InpIndexModeLogOnly ? "false (log-only)" : "true (real orders)",
+            " | boomCrashRiskProfile=", XAU_BoolText(XAU_IndexIsBoomCrashProfile()));
 
    // v6.4.19: initialize TTM record array
    for(int _i = 0; _i < TTM_MAX_POSITIONS; _i++) { g_ttm[_i].active = false; g_ttm[_i].posId = 0; }
@@ -10074,11 +10164,11 @@ void OnTick()
    // symbol-agnostic (R-multiple / %-of-SL based, not raw price levels) and
    // need no index-specific code. This block runs the dedicated index
    // entry engine (structure, liquidity, trend, pullback, breakout,
-   // volatility regime, momentum — see INDEX ENTRY ENGINE section above)
-   // once per new M5 bar. Everything BELOW this point is gold's own
-   // setup-scoring pipeline (SMC, AI Director, OpenTrade call site) —
-   // INDEX_MODE never falls through to it, it has its own OpenTrade() call
-   // right here instead.
+   // volatility regime, momentum, spike rejection, spread/gap protection —
+   // see INDEX ENTRY ENGINE section above) once per new M5 bar. Everything
+   // BELOW this point is gold's own setup-scoring pipeline (SMC, AI
+   // Director, OpenTrade call site) — INDEX_MODE never falls through to
+   // it, it has its own OpenTrade() call right here instead.
    if(g_marketMode == MARKET_INDEX_MODE)
    {
       static datetime lastIndexBarEval = 0;
@@ -10093,12 +10183,14 @@ void OnTick()
          double idxATRBuf[]; ArraySetAsSeries(idxATRBuf, true);
          double idxATR = (hATR != INVALID_HANDLE && CopyBuffer(hATR, 0, 1, 1, idxATRBuf) >= 1) ? idxATRBuf[0] : 0.0;
 
-         PrintFormat("INDEX_ENGINE | symbol=%s signal=%d grade=%s score=%.2f setup=%s reason=%s liveTrading=%s",
+         bool idxBoomCrash = XAU_IndexIsBoomCrashProfile();
+
+         PrintFormat("INDEX_ENGINE | symbol=%s signal=%d grade=%s score=%.2f setup=%s reason=%s liveTrading=%s profile=%s boomCrash=%s",
                      Symbol(), idxSignal, idxGrade, idxScore, idxSetup == "" ? "NONE" : idxSetup, idxReason,
-                     InpIndexModeLogOnly ? "false" : "true");
+                     InpIndexModeLogOnly ? "false" : "true", EnumToString(InpIndexProfile), XAU_BoolText(idxBoomCrash));
 
          if(idxATR > 0.0)
-            XAU_LogIndexTrace(Symbol(), accInfo.Equity() * 0.01, idxATR * 1.5,
+            XAU_LogIndexTrace(Symbol(), accInfo.Equity() * 0.01 * (idxBoomCrash ? InpIndexBoomCrashRiskMult : 1.0), idxATR * 1.5,
                               idxSetup == "" ? "NO_SETUP" : idxSetup,
                               idxGrade, idxReason,
                               InpIndexModeLogOnly ? "N/A — log-only mode, would size via same risk engine" : "adaptive (shared exit systems)");
@@ -10107,7 +10199,9 @@ void OnTick()
             && CountMyPositions() < InpMaxOpenTrades)
          {
             double idxSizeMulti = idxGrade == "A+" ? 1.10 : idxGrade == "A" ? 0.85 : 0.45;
+            if(idxBoomCrash) idxSizeMulti *= InpIndexBoomCrashRiskMult;
             OpenTrade(idxSignal, idxATR, idxSetup + " [" + idxGrade + "] " + idxReason, idxSizeMulti);
+            if(idxBoomCrash) XAU_IndexEnforceBoomCrashLotCap();
             g_lastSkipReason = "";
          }
          else if(InpIndexModeLogOnly)
@@ -10294,12 +10388,22 @@ void OnTick()
       bool fits = StrategyFitsPersonality(setupName, g_marketPersonality);
       if(!fits)
       {
+         string smoPreWhy = "";
+         bool strongMomentumPrecheck = XAU_BasicStrongMomentumPrecheck(signal, setupName, setupScore, "PRE-GRADE", smoPreWhy);
          Print("PERSONALITY GATE: ", setupName, " not ideal for ", MarketPersonalityStr(g_marketPersonality), " — adjusting");
          // Compute grade preview (pre-combined) from raw setupScore to decide action
          if(setupScore >= InpGradeAPlus || setupScore >= InpGradeA)
          {
             // A / A+: adjust score down -1.5 but proceed
             setupScore = MathMax(0.0, setupScore - 1.5);
+         }
+         else if(strongMomentumPrecheck && InpXAU_SMO_AllowBGradeBalanced)
+         {
+            setupScore = MathMax(setupScore, GetEffectiveGradeB());
+            Print("PERSONALITY-GATE SOFTENED: STRONG_MOMENTUM_OVERRIDE converted B/personality mismatch to warning | ",
+                  smoPreWhy, " | setupScore=", DoubleToString(setupScore, 2));
+            CloudPostReasoning("ALLOW", "PERSONALITY-GATE SOFTENED by STRONG_MOMENTUM_OVERRIDE: " + smoPreWhy,
+                               RegimeName(), setupName, setupScore, setupScore, "SMO-PERSONALITY", signal);
          }
          else
          {
@@ -10582,13 +10686,25 @@ void OnTick()
             CloudPostReasoning("ALLOW", "REPORT-FIT B-SCOUT: " + scoutWhy, RegimeName(), setupName,
                                setupScore, combinedScore, "B-SCOUT", signal);
          }
-         else
-         {
-         if(XAU_ModeAllowsAggressiveB() && combinedScore >= 4.20)
-         {
-            XAU_LogSoftBlockDowngrade("B_QUALITY_FAST_CONFIRM", bMsg, setupName, grade, combinedScore);
-            g_adaptiveConfirmReason = "Aggressive Growth allowed B-grade after fast-confirm warning: " + bQualityWhy;
-         }
+	         else
+	         {
+	         string smoBWhy = "";
+	         bool smoBPrecheck = XAU_BasicStrongMomentumPrecheck(signal, setupName, combinedScore, grade, smoBWhy);
+	         if(smoBPrecheck && InpXAU_SMO_AllowBGradeBalanced)
+	         {
+	            XAU_LogSoftBlockDowngrade("B_QUALITY_FAST_CONFIRM", "B-GRADE QUALITY SOFTENED by STRONG_MOMENTUM_OVERRIDE: " + bMsg + " | " + smoBWhy,
+	                                      setupName, grade, combinedScore);
+	            g_adaptiveConfirmLotMulti *= InpXAU_SMO_LotMulti;
+	            g_adaptiveConfirmReason = "B-GRADE QUALITY SOFTENED by STRONG_MOMENTUM_OVERRIDE: " + smoBWhy +
+	                                      " | original fast-confirm warning: " + bQualityWhy;
+	            CloudPostReasoning("ALLOW", g_adaptiveConfirmReason, RegimeName(), setupName,
+	                               setupScore, combinedScore, "SMO-B-QUALITY", signal);
+	         }
+	         else if(XAU_ModeAllowsAggressiveB() && combinedScore >= 4.20)
+	         {
+	            XAU_LogSoftBlockDowngrade("B_QUALITY_FAST_CONFIRM", bMsg, setupName, grade, combinedScore);
+	            g_adaptiveConfirmReason = "Aggressive Growth allowed B-grade after fast-confirm warning: " + bQualityWhy;
+	         }
          else
          {
          Print("TRADE BLOCKED BECAUSE: ", bMsg);
@@ -11839,7 +11955,8 @@ void OnTick()
    // trade (2+ independent structural signals against it — see
    // SMC_GetConflictPenalty). A+/A grade doesn't mean structure agrees.
    bool smcHardConflictReduced = g_smcHardBlockActive;
-   if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && !aiWeakConfirmReduced && !smcHardConflictReduced)
+   bool timingQualityReduced = (lta_timing < 0.999);
+   if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && !aiWeakConfirmReduced && !smcHardConflictReduced && !timingQualityReduced)
    {
       finalSzMult = originalGradeSizeMulti;
       lta_enforcementMsg = StringFormat(
@@ -11863,6 +11980,13 @@ void OnTick()
          "FLOOR_SKIPPED | grade=%s | SMC hard conflict (%s) reduced to %.3f (grade=%.3f) — structure conflict kept, not restored",
          grade, g_smcConflictReason, finalSzMult, originalGradeSizeMulti);
       PrintFormat("[LOT_TRACE] A+/A FLOOR SKIPPED (SMC-HARD-CONFLICT): %s", lta_enforcementMsg);
+   }
+   else if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && timingQualityReduced)
+   {
+      lta_enforcementMsg = StringFormat(
+         "FLOOR_SKIPPED | grade=%s | timing-risk reduced to %.3f (grade=%.3f) — entry timing/location risk kept, not restored",
+         grade, finalSzMult, originalGradeSizeMulti);
+      PrintFormat("[LOT_TRACE] A+/A FLOOR SKIPPED (TIMING-RISK): %s", lta_enforcementMsg);
    }
    else if(highGradeFullSize)
    {
@@ -12095,10 +12219,6 @@ double XAU_CalcIndexLot(string symbol, double riskAmountUSD, double slDistance,
       return 0.0;
    }
 
-   // $ risk for 1.0 lot at this SL distance, from the broker's own tick math
-   // (works identically for gold, an index CFD, or a synthetic — the ratio
-   // between price distance and tick size/value is symbol-specific by
-   // construction, so no per-market assumption is needed here).
    double moneyPerLot = (slDistance / tickSizeOut) * tickValueOut;
    moneyPerLotOut = moneyPerLot;
    if(moneyPerLot <= 0.0)
@@ -12117,8 +12237,6 @@ double XAU_CalcIndexLot(string symbol, double riskAmountUSD, double slDistance,
       return 0.0;
    }
 
-   // Margin safety — never propose a size the account can't actually margin,
-   // using the same OrderCalcMargin approach the gold path already uses.
    double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
    if(price <= 0.0) price = SymbolInfoDouble(symbol, SYMBOL_BID);
    double freeMargin = accInfo.FreeMargin();
@@ -12180,7 +12298,7 @@ void XAU_LogIndexTrace(string symbol, double riskAmountUSD, double slDistance,
 }
 
 //+------------------------------------------------------------------+
-//| XauIndex — REAL INDEX ENTRY ENGINE (v3.0.0)                       |
+//| XauIndex — REAL INDEX ENTRY ENGINE (v3.0.0, hardened v3.1.0)      |
 //|   Built from standard technical-analysis principles (market       |
 //|   structure, liquidity, trend continuation, pullback entries,     |
 //|   breakout confirmation, volatility regimes, momentum) rather     |
@@ -12194,11 +12312,17 @@ void XAU_LogIndexTrace(string symbol, double riskAmountUSD, double slDistance,
 //|   bar index 1 (last CLOSED bar) throughout, matching gold's own   |
 //|   OpenTrade(signal, bufATR[1], ...) convention, to avoid acting   |
 //|   on a partially-formed, still-repainting current bar.            |
+//|   v3.1.0 adds: spike-rejection (never trades the spike candle,    |
+//|   requires post-spike confirmation or a controlled pullback       |
+//|   during cooldown), symbol-relative spread/gap protection (no     |
+//|   fixed XAUUSD thresholds anywhere), and a real BOOM_CRASH risk    |
+//|   profile that changes entry rules, spread/spike thresholds, and  |
+//|   position sizing — not just a label.                             |
 //|   Output plugs into the EXISTING OpenTrade()/lot-sizing machinery |
 //|   unmodified: emits one of "A+"/"A"/"B"/"SKIP" and a signal       |
 //|   direction, exactly like gold's own ScoreSetups().               |
 //+------------------------------------------------------------------+
-input group "=== INDEX ENTRY ENGINE (v3.0.0 — structure/liquidity/trend/breakout/vol/momentum) ==="
+input group "=== INDEX ENTRY ENGINE (v3.1.0 — structure/liquidity/trend/breakout/vol/momentum) ==="
 input int    InpIndexSwingLookback   = 20;   // bars scanned for swing high/low structure
 input int    InpIndexVolLookback     = 100;  // bars used for ATR percentile (volatility regime)
 input double InpIndexVolExtremePct   = 90.0; // ATR percentile above which entries are skipped (unclassified spike regime, e.g. Boom/Crash)
@@ -12210,6 +12334,35 @@ input double InpIndexRSIPullbackLoLong  = 45.0;
 input double InpIndexRSIPullbackHiLong  = 70.0;
 input double InpIndexRSIPullbackLoShort = 30.0;
 input double InpIndexRSIPullbackHiShort = 55.0;
+
+input group "=== INDEX SPIKE PROTECTION (v3.1.0 — Boom/Crash spike-rejection) ==="
+input int    InpIndexSpikeLookbackBars   = 6;    // bars scanned for a recent spike candle
+input double InpIndexSpikeATRMultiple    = 3.0;  // a bar's range must exceed this multiple of ATR to count as a spike
+input double InpIndexSpikeBodyRatio      = 0.65; // body must be at least this fraction of the bar's range (near-vertical, not a long-wick reversal bar)
+input int    InpIndexSpikeCooldownBars   = 3;    // bars after a spike where blind breakout entries are disabled
+input double InpIndexSpikePostConfirmATR = 1.0;  // price must sustain this many ATRs beyond the spike's own close to count as a confirmed continuation
+
+input group "=== INDEX SPREAD/GAP PROTECTION (v3.1.0 — symbol-relative, never XAUUSD-fixed) ==="
+input double InpIndexSpreadATRMult      = 0.15; // block entries when current spread exceeds this fraction of current ATR
+input double InpIndexSpreadBaselineMult = 1.8;  // block entries when current spread exceeds this multiple of the EA's own rolling spread EMA (g_spreadEMA)
+input double InpIndexGapATRMult         = 1.0;  // block entries when price gapped this many ATRs versus the last closed bar's close
+
+input group "=== INDEX BOOM/CRASH RISK PROFILE (v3.1.0 — only applies when InpIndexProfile=BOOM_CRASH) ==="
+input double InpIndexBoomCrashRiskMult      = 0.5;   // multiplies normal per-trade risk (smaller default risk)
+input double InpIndexBoomCrashMaxLot        = 0.10;  // hard lot cap, independent of account-size scaling
+input double InpIndexBoomCrashSpreadMult    = 0.6;   // tightens the spread/gap thresholds by this factor (stricter gate)
+input bool   InpIndexBoomCrashAllowBreakout = false; // if false, breakout-type entries are disabled outright — pullback/continuation-only
+input int    InpIndexBoomCrashSpikeCooldownMult = 2; // multiplies the spike cooldown window (longer caution period after a spike)
+
+// (XAU_IndexIsBoomCrashProfile is defined earlier, alongside XAU_DetectMarketMode,
+// so it's available to OnInit's own diagnostic print — reused here as-is.)
+
+int XAU_IndexActiveSpikeCooldownBars()
+{
+   return XAU_IndexIsBoomCrashProfile()
+      ? InpIndexSpikeCooldownBars * InpIndexBoomCrashSpikeCooldownMult
+      : InpIndexSpikeCooldownBars;
+}
 
 // ATR percentile classification — the engine's volatility-regime gate.
 // Uses a rolling window of historical ATR readings, deliberately generic
@@ -12340,15 +12493,123 @@ bool XAU_IndexLiquiditySweep(int dir, string &reasonOut)
    return false;
 }
 
+// XauIndex — SPIKE DETECTOR (v3.1.0). Scans recent bars for a candle whose
+// range/body vastly exceeds normal ATR-based expectation — the signature
+// of a Boom/Crash-style spike event, distinct from a genuine breakout
+// candle which forms after real, ATR-scaled momentum build-up rather than
+// a single synthetic jump. Returns the bar shift (>=1) of the most recent
+// spike found within the (profile-aware) cooldown window, or -1 if none.
+int XAU_IndexFindRecentSpike(double atr, string &reasonOut)
+{
+   reasonOut = "";
+   if(atr <= 0) return -1;
+   int lookback = MathMax(InpIndexSpikeLookbackBars, XAU_IndexActiveSpikeCooldownBars());
+   for(int i = 1; i <= lookback; i++)
+   {
+      double hi = iHigh(Symbol(), PERIOD_M5, i);
+      double lo = iLow(Symbol(), PERIOD_M5, i);
+      double open = iOpen(Symbol(), PERIOD_M5, i);
+      double close = iClose(Symbol(), PERIOD_M5, i);
+      double range = hi - lo;
+      if(range <= 0) continue;
+      double body = MathAbs(close - open);
+      bool hugeVsATR = range > atr * InpIndexSpikeATRMultiple;
+      bool mostlyBody = body >= range * InpIndexSpikeBodyRatio;
+      if(hugeVsATR && mostlyBody)
+      {
+         reasonOut = StringFormat("spike candle %d bar(s) ago: range=%.5f (%.1fx ATR), body=%.0f%% of range",
+                                  i, range, range / atr, 100.0 * body / range);
+         return i;
+      }
+   }
+   return -1;
+}
+
+// XauIndex — SYMBOL-RELATIVE SPREAD/GAP PROTECTION (v3.1.0). Never compares
+// against a fixed XAUUSD point threshold — every check is relative to this
+// symbol's own ATR or its own rolling spread baseline (g_spreadEMA, already
+// tracked generically per-symbol by the EA's existing heartbeat/news-
+// aftermath logic). Boom/Crash gets a stricter multiplier.
+bool XAU_IndexSpreadGapOK(double atr, string &reasonOut)
+{
+   reasonOut = "";
+   if(atr <= 0) { reasonOut = "no ATR data for spread/gap check"; return false; }
+
+   bool boomCrash = XAU_IndexIsBoomCrashProfile();
+   double tightenMult = boomCrash ? InpIndexBoomCrashSpreadMult : 1.0;
+
+   double curSpreadPts = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   double curSpreadPrice = curSpreadPts * point;
+
+   double atrLimit = atr * InpIndexSpreadATRMult * tightenMult;
+   if(curSpreadPrice > atrLimit)
+   {
+      reasonOut = StringFormat("spread %.5f exceeds %.0f%% of ATR(%.5f)%s", curSpreadPrice,
+                               InpIndexSpreadATRMult * tightenMult * 100.0, atr,
+                               boomCrash ? " [BOOM_CRASH tightened]" : "");
+      return false;
+   }
+
+   if(g_spreadEMA > 0.0)
+   {
+      double baselineLimit = g_spreadEMA * InpIndexSpreadBaselineMult * tightenMult;
+      if(curSpreadPts > baselineLimit)
+      {
+         reasonOut = StringFormat("spread %.0fpts is %.1fx the recent average (%.0fpts)%s", curSpreadPts,
+                                  curSpreadPts / g_spreadEMA, g_spreadEMA,
+                                  boomCrash ? " [BOOM_CRASH tightened]" : "");
+         return false;
+      }
+   }
+
+   double lastBarClose = iClose(Symbol(), PERIOD_M5, 1);
+   double curBid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   if(lastBarClose > 0.0 && curBid > 0.0)
+   {
+      double gap = MathAbs(curBid - lastBarClose);
+      double gapLimit = atr * InpIndexGapATRMult * tightenMult;
+      if(gap > gapLimit)
+      {
+         reasonOut = StringFormat("abnormal tick gap: %.5f vs last close (%.1fx ATR)%s", gap, gap / atr,
+                                  boomCrash ? " [BOOM_CRASH tightened]" : "");
+         return false;
+      }
+   }
+
+   return true;
+}
+
 // Pullback-in-trend entry: the last closed bar pulled back into the M5
 // fast-EMA value zone and closed as a rejection candle back in the trend
-// direction — the classic continuation entry.
+// direction — the classic continuation entry. v3.1.0: spike-aware — never
+// fires on the spike candle itself, and during cooldown requires the
+// pullback direction to agree with the spike's own direction (a genuine
+// controlled pullback continuing the spike, not the initial reversion snap-back).
 bool XAU_IndexPullbackEntry(int dir, string &reasonOut)
 {
    double emaFast[];
    ArraySetAsSeries(emaFast, true);
    if(hEMAFast == INVALID_HANDLE || CopyBuffer(hEMAFast, 0, 1, 1, emaFast) < 1)
    { reasonOut = "no EMA data"; return false; }
+
+   double atrBuf[]; ArraySetAsSeries(atrBuf, true);
+   double atr = (hATR != INVALID_HANDLE && CopyBuffer(hATR, 0, 1, 1, atrBuf) >= 1) ? atrBuf[0] : 0.0;
+   if(atr > 0.0)
+   {
+      string spikeReason = "";
+      int spikeBar = XAU_IndexFindRecentSpike(atr, spikeReason);
+      if(spikeBar == 1)
+      { reasonOut = "rejected: last closed bar is itself a spike/anomaly — waiting for a controlled pullback, not the spike bar — " + spikeReason; return false; }
+      if(spikeBar >= 2 && spikeBar <= XAU_IndexActiveSpikeCooldownBars())
+      {
+         double spikeClose = iClose(Symbol(), PERIOD_M5, spikeBar);
+         double spikeOpenBar = iOpen(Symbol(), PERIOD_M5, spikeBar);
+         int spikeDir = spikeClose > spikeOpenBar ? 1 : -1;
+         if(spikeDir != dir)
+         { reasonOut = "blocked: recent spike opposes this pullback direction, waiting for it to fully resolve — " + spikeReason; return false; }
+      }
+   }
 
    double hi1 = iHigh(Symbol(), PERIOD_M5, 1);
    double lo1 = iLow(Symbol(), PERIOD_M5, 1);
@@ -12368,10 +12629,48 @@ bool XAU_IndexPullbackEntry(int dir, string &reasonOut)
 
 // Breakout-continuation entry: recent bars compressed into a tight range
 // relative to ATR (consolidation), then a strong-bodied breakout candle
-// clears that range in the candidate direction.
+// clears that range in the candidate direction. v3.1.0: spike-aware — a
+// spike candle looks identical to a genuine breakout (tight range then one
+// huge-bodied bar), so this never trusts the raw breakout read near a
+// spike. Never enters on the spike candle itself; during cooldown requires
+// an explicit, confirmed post-spike continuation (sustained move well past
+// the spike's own close) instead. BOOM_CRASH profile can disable breakout
+// entries entirely (InpIndexBoomCrashAllowBreakout=false by default).
 bool XAU_IndexBreakoutEntry(int dir, double atr, string &reasonOut)
 {
+   if(XAU_IndexIsBoomCrashProfile() && !InpIndexBoomCrashAllowBreakout)
+   { reasonOut = "breakout entries disabled for BOOM_CRASH profile — pullback/continuation-only"; return false; }
    if(atr <= 0) { reasonOut = "no ATR"; return false; }
+
+   string spikeReason = "";
+   int spikeBar = XAU_IndexFindRecentSpike(atr, spikeReason);
+   int cooldown = XAU_IndexActiveSpikeCooldownBars();
+
+   if(spikeBar == 1)
+   { reasonOut = "rejected: triggering candle is a spike/anomaly, not a genuine breakout — " + spikeReason; return false; }
+
+   double hi1 = iHigh(Symbol(), PERIOD_M5, 1);
+   double lo1 = iLow(Symbol(), PERIOD_M5, 1);
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+
+   if(spikeBar >= 2 && spikeBar <= cooldown)
+   {
+      double spikeClose = iClose(Symbol(), PERIOD_M5, spikeBar);
+      double spikeOpenBar = iOpen(Symbol(), PERIOD_M5, spikeBar);
+      int spikeDir = spikeClose > spikeOpenBar ? 1 : -1;
+      if(spikeDir != dir)
+      { reasonOut = "blocked: recent spike opposes this direction, waiting for it to fully resolve — " + spikeReason; return false; }
+
+      bool confirmed = (dir == 1 ? close1 > spikeClose + atr * InpIndexSpikePostConfirmATR
+                                  : close1 < spikeClose - atr * InpIndexSpikePostConfirmATR);
+      if(!confirmed)
+      { reasonOut = "blocked: post-spike continuation not yet confirmed (needs sustained move beyond spike close) — " + spikeReason; return false; }
+
+      reasonOut = StringFormat("post-spike continuation confirmed, %d bar(s) after spike — %s", spikeBar, spikeReason);
+      return true;
+   }
+
    int lookback = 10;
    double hi[], lo[];
    ArraySetAsSeries(hi, true); ArraySetAsSeries(lo, true);
@@ -12384,10 +12683,6 @@ bool XAU_IndexBreakoutEntry(int dir, double atr, string &reasonOut)
    double rangeSize = rangeHigh - rangeLow;
    bool tightRange = (rangeSize > 0 && rangeSize < atr * 2.0);
 
-   double hi1 = iHigh(Symbol(), PERIOD_M5, 1);
-   double lo1 = iLow(Symbol(), PERIOD_M5, 1);
-   double close1 = iClose(Symbol(), PERIOD_M5, 1);
-   double open1 = iOpen(Symbol(), PERIOD_M5, 1);
    double body1 = MathAbs(close1 - open1);
    bool strongBody = body1 > atr * 0.6;
 
@@ -12400,12 +12695,13 @@ bool XAU_IndexBreakoutEntry(int dir, double atr, string &reasonOut)
    return false;
 }
 
-// Composite index setup scorer — combines volatility regime, trend regime,
-// momentum, structure, liquidity, and either a pullback-in-trend or a
-// breakout+structure setup into a single confluence score, using gold's
-// own A+/A/B/SKIP grade vocabulary so the result plugs into the existing
-// OpenTrade()/lot-sizing machinery unmodified. Returns signal direction
-// (1/-1/0); 0 means no qualifying setup (check gradeOut == "SKIP").
+// Composite index setup scorer — combines volatility regime, spread/gap
+// protection, trend regime, momentum, structure, liquidity, and either a
+// pullback-in-trend or a breakout+structure setup into a single confluence
+// score, using gold's own A+/A/B/SKIP grade vocabulary so the result plugs
+// into the existing OpenTrade()/lot-sizing machinery unmodified. Returns
+// signal direction (1/-1/0); 0 means no qualifying setup (check
+// gradeOut == "SKIP").
 int XAU_IndexScoreSetup(double &scoreOut, string &setupNameOut, string &gradeOut, string &reasonOut)
 {
    scoreOut = 0.0; setupNameOut = ""; gradeOut = "SKIP"; reasonOut = "";
@@ -12418,6 +12714,10 @@ int XAU_IndexScoreSetup(double &scoreOut, string &setupNameOut, string &gradeOut
    if(volPct <= InpIndexVolLowPct)
    { reasonOut = StringFormat("volatility regime LOW (%.0f pctile) — insufficient range to trade", volPct); return 0; }
    if(curATR <= 0.0) { reasonOut = "no ATR data"; return 0; }
+
+   string spreadReason = "";
+   if(!XAU_IndexSpreadGapOK(curATR, spreadReason))
+   { reasonOut = "blocked by spread/gap protection: " + spreadReason; return 0; }
 
    string trendReason = "";
    int trendDir = XAU_IndexTrendRegime(trendReason);
@@ -12471,6 +12771,33 @@ int XAU_IndexScoreSetup(double &scoreOut, string &setupNameOut, string &gradeOut
               scoreOut >= InpIndexGradeB     ? "B"  : "SKIP";
    if(gradeOut == "SKIP") return 0;
    return bestDir;
+}
+
+// XauIndex — hard lot-size ceiling for Boom/Crash entries, applied AFTER
+// OpenTrade() places the trade (rather than modifying OpenTrade()'s shared,
+// gold-tested sizing internals) by immediately trimming any excess via the
+// same partial-close mechanism the exit systems already use.
+void XAU_IndexEnforceBoomCrashLotCap()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      if(vol > InpIndexBoomCrashMaxLot + 0.0000001)
+      {
+         double trimVol = NormalizeDouble(vol - InpIndexBoomCrashMaxLot, VolumeDigitsForSymbol());
+         if(trimVol > 0.0)
+         {
+            bool ok = trade.PositionClosePartial(ticket, trimVol);
+            PrintFormat("INDEX_BOOM_CRASH_LOT_CAP | ticket=%I64u opened=%.4f cap=%.4f trimmed=%.4f ok=%s",
+                        ticket, vol, InpIndexBoomCrashMaxLot, trimVol, XAU_BoolText(ok));
+         }
+      }
+   }
 }
 
 double CurrentAggregateRiskToSL(double &openLots)
@@ -15370,13 +15697,23 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          {
             // Adaptive trail: stronger momentum → wider buffer (may continue), weaker → tighter
             double trailATR;
-            if(momentumScore >= 4)      trailATR = InpAMPL_TrailATR_Strong;
-            else if(momentumScore == 3) trailATR = InpAMPL_TrailATR_Mid;
-            else                         trailATR = InpAMPL_TrailATR_Weak;
+	            if(momentumScore >= 4)      trailATR = InpAMPL_TrailATR_Strong;
+	            else if(momentumScore == 3) trailATR = InpAMPL_TrailATR_Mid;
+	            else                         trailATR = InpAMPL_TrailATR_Weak;
 
-            // RSI extreme → tighten (reversal increasingly likely)
-            if((isBuy && rsi > 74) || (!isBuy && rsi < 26))
-               trailATR = MathMax(trailATR - 0.08, 0.12);
+	            bool amplRunnerHealthy = (trendAligned &&
+	                                      !structureConfirmedBroken &&
+	                                      !emaAgainst &&
+	                                      !rsiAgainst &&
+	                                      (momentumScore >= 2 ||
+	                                       ((isBuy && g_htfConsensusDir == 1) ||
+	                                        (!isBuy && g_htfConsensusDir == -1))));
+	            if(amplRunnerHealthy)
+	               trailATR = MathMax(trailATR, InpStructureChandelierATR2 * 0.55);
+	
+	            // RSI extreme → tighten (reversal increasingly likely)
+	            if((isBuy && rsi > 74) || (!isBuy && rsi < 26))
+	               trailATR = MathMax(trailATR - 0.08, 0.12);
 
             // HTF still aligned + strong momentum → small extra breathing room
             if(((isBuy && g_htfConsensusDir == 1) || (!isBuy && g_htfConsensusDir == -1))
@@ -15422,12 +15759,13 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                   static datetime lastAMPLLog = 0;
                   if(TimeCurrent() - lastAMPLLog >= 20)
                   {
-                     PrintFormat("AMPL #%I64u %s | trigger=%s | profit=$%.2f peak=$%.2f retrace=%.0f%% | "
-                                 "mom=%d/5 trail=%.2f×ATR | SL %s→%s | locks~$%.2f",
-                                 ticket, isBuy?"BUY":"SELL", amplTrigger,
-                                 amplProfit, peak, peakRetrace, momentumScore, trailATR,
-                                 DoubleToString(curSL, digits), DoubleToString(amplSL, digits),
-                                 amplProfit);
+	                     PrintFormat("AMPL #%I64u %s | trigger=%s | profit=$%.2f peak=$%.2f retrace=%.0f%% | "
+	                                 "mom=%d/5 trail=%.2f×ATR %s | SL %s→%s | locks~$%.2f",
+	                                 ticket, isBuy?"BUY":"SELL", amplTrigger,
+	                                 amplProfit, peak, peakRetrace, momentumScore, trailATR,
+	                                 amplRunnerHealthy ? "AMPL_RUNNER_BREATHE" : "",
+	                                 DoubleToString(curSL, digits), DoubleToString(amplSL, digits),
+	                                 amplProfit);
                      lastAMPLLog = TimeCurrent();
                   }
                }
@@ -21622,6 +21960,208 @@ bool XAU_APlusPositioningQualified(double timingQuality, double lateProbability,
            structureConfirmed);
 }
 
+bool XAU_APlusEntryLocationQualified(int signal, bool trendSetup,
+                                     bool badLocation, bool betterValue,
+                                     double localDirectionalRoomATR,
+                                     double pullbackATR, double locPct,
+                                     bool cleanContinuation,
+                                     bool trueBreakoutContinuation,
+                                     bool trendContinuationQualified)
+{
+   if(signal == 0) return false;
+   if(!trendSetup) return true;
+
+   bool buyExtreme  = (signal == 1  && locPct >= 0.88);
+   bool sellExtreme = (signal == -1 && locPct <= 0.12);
+   bool extremeEntry = (buyExtreme || sellExtreme);
+   bool enoughLocalRoom = (localDirectionalRoomATR >= InpXAU_MinDirectionalRoomATR);
+   bool enoughPullbackValue = (pullbackATR >= InpXAU_MinPullbackValueATR);
+
+   if(cleanContinuation)
+      return (!badLocation && betterValue && enoughLocalRoom);
+
+   if(trueBreakoutContinuation)
+      return (enoughLocalRoom && !extremeEntry);
+
+   if(trendContinuationQualified)
+      return (betterValue && enoughLocalRoom && (!extremeEntry || enoughPullbackValue));
+
+   return (!badLocation && betterValue && enoughLocalRoom);
+}
+
+bool XAU_BasicStrongMomentumPrecheck(int signal, string setupName, double combinedScore,
+                                     string grade, string &why)
+{
+   why = "";
+   if(!InpXAU_StrongMomentumOverride || signal == 0 || !IsXAUFastSymbol()) return false;
+   if(!XAU_ModeAllowsSoftBlockWarning()) return false;
+   if(grade == "B" && !InpXAU_SMO_AllowBGradeBalanced) return false;
+
+   bool trendSetup = (StringFind(setupName, "TREND_PULLBACK") >= 0 ||
+                      StringFind(setupName, "BREAKOUT") >= 0 ||
+                      StringFind(setupName, "SQUEEZE") >= 0 ||
+                      StringFind(setupName, "ASIA_BREAKOUT") >= 0);
+   if(!trendSetup) return false;
+
+   if(g_htfConsensusDir == -signal)
+   {
+      why = "STRONG_MOMENTUM_OVERRIDE precheck rejected: HTF consensus is hostile";
+      return false;
+   }
+
+   bool regimeAligned =
+      (signal == 1 && (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP)) ||
+      (signal == -1 && (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN));
+   bool breakoutContinuation = IsXAUConfirmedBreakoutContinuation(signal, setupName);
+   bool scoreOk = (combinedScore >= MathMax(3.80, GetEffectiveGradeB() - 0.35) ||
+                   grade == "A" || StringFind(grade, "A+") >= 0);
+
+   string m5Why = "", m15Why = "";
+   int m5Dir = TFDirectionByEMA(signal, PERIOD_M5, 0.05, m5Why);
+   int m15Dir = TFDirectionByEMA(signal, PERIOD_M15, 0.05, m15Why);
+   bool m5MomentumStrong = (m5Dir == signal || breakoutContinuation);
+   bool m15MomentumStrong = (m15Dir == signal || g_htfConsensusDir == signal ||
+                             (regimeAligned && breakoutContinuation));
+
+   if(!(scoreOk && m5MomentumStrong && m15MomentumStrong &&
+        (regimeAligned || g_htfConsensusDir == signal || breakoutContinuation)))
+      return false;
+
+   why = StringFormat("STRONG_MOMENTUM_OVERRIDE precheck: setup=%s grade=%s combined=%.2f m5=%s m15=%s regime=%s htf=%+d breakout=%s",
+                      setupName, grade, combinedScore, m5Why, m15Why, RegimeName(),
+                      g_htfConsensusDir, breakoutContinuation ? "Y" : "N");
+   return true;
+}
+
+bool XAU_StrongMomentumOverrideAllowed(int signal, string setupName, double combinedScore,
+                                       double bodyATR, double impulseATR,
+                                       double threeBarDriveATR, double atrExpansion,
+                                       double estimatedContinuationRoomATR,
+                                       double trendContinuationScore,
+                                       double exhaustionProb, double rrQuality,
+                                       bool freshStructureBreak,
+                                       bool structureContinuationCandidate,
+                                       bool trueBreakoutContinuation,
+                                       bool postNewsAligned,
+                                       bool failedImpulse,
+                                       bool wrongCandle,
+                                       bool htfAligned,
+                                       bool regimeAligned,
+                                       bool hasExhaustionDiv,
+                                       bool sameFirstSignal,
+                                       int candlesSinceSignal,
+                                       double missedMoveATRFromFirst,
+                                       bool lateChaseEntry,
+                                       bool spikeCooldown,
+                                       bool hasRejection,
+                                       bool directionalPressure,
+                                       string &why)
+{
+   why = "";
+   if(!InpXAU_StrongMomentumOverride || signal == 0 || !IsXAUFastSymbol()) return false;
+
+   bool trendSetup = (StringFind(setupName, "TREND_PULLBACK") >= 0 ||
+                      StringFind(setupName, "BREAKOUT") >= 0 ||
+                      StringFind(setupName, "SQUEEZE") >= 0 ||
+                      StringFind(setupName, "ASIA_BREAKOUT") >= 0);
+   if(!trendSetup) return false;
+
+   if(g_htfConsensusDir == -signal)
+   {
+      why = "STRONG_MOMENTUM_OVERRIDE rejected: HTF consensus is hostile";
+      return false;
+   }
+
+   int earlyMaxBars = (int)MathMax(1.0, (double)InpXAU_SMO_EarlyMaxSignalAgeBars);
+   bool earlyWindow = (!sameFirstSignal ||
+                       candlesSinceSignal <= earlyMaxBars ||
+                       missedMoveATRFromFirst <= InpXAU_SMO_MaxMissedMoveATR);
+   if(!earlyWindow || lateChaseEntry)
+   {
+      why = StringFormat("STRONG_MOMENTUM_OVERRIDE rejected: missed move/late chase age=%d missedMoveATR=%.2f maxAge=%d maxATR=%.2f",
+                         candlesSinceSignal, missedMoveATRFromFirst,
+                         earlyMaxBars, InpXAU_SMO_MaxMissedMoveATR);
+      return false;
+   }
+
+   bool structureOk = (freshStructureBreak ||
+                       structureContinuationCandidate ||
+                       trueBreakoutContinuation ||
+                       postNewsAligned);
+
+   string m15Why = "";
+   int m15Dir = TFDirectionByEMA(signal, PERIOD_M15, 0.05, m15Why);
+   double m15Open = iOpen(Symbol(), PERIOD_M15, 1);
+   double m15Close = iClose(Symbol(), PERIOD_M15, 1);
+   bool m15CandlePressure = (m15Open > 0.0 && m15Close > 0.0 &&
+                             ((signal == 1 && m15Close > m15Open) ||
+                              (signal == -1 && m15Close < m15Open)));
+   bool m5MomentumStrong = (directionalPressure &&
+                            (bodyATR >= 0.22 ||
+                             impulseATR >= 0.55 ||
+                             threeBarDriveATR >= 0.70 ||
+                             freshStructureBreak ||
+                             trueBreakoutContinuation ||
+                             postNewsAligned));
+   bool m15MomentumStrong = (m15Dir == signal ||
+                             m15CandlePressure ||
+                             htfAligned ||
+                             postNewsAligned);
+
+   if(!structureOk || !m5MomentumStrong || !m15MomentumStrong)
+   {
+      why = StringFormat("STRONG_MOMENTUM_OVERRIDE rejected: structure=%s m5Momentum=%s m15Momentum=%s m15=%s",
+                         structureOk ? "Y" : "N",
+                         m5MomentumStrong ? "Y" : "N",
+                         m15MomentumStrong ? "Y" : "N",
+                         m15Why);
+      return false;
+   }
+
+   if(failedImpulse || wrongCandle || spikeCooldown || hasExhaustionDiv)
+   {
+      why = StringFormat("STRONG_MOMENTUM_OVERRIDE rejected: failedImpulse=%s wrongCandle=%s spikeCooldown=%s exhaustionDiv=%s",
+                         failedImpulse ? "Y" : "N",
+                         wrongCandle ? "Y" : "N",
+                         spikeCooldown ? "Y" : "N",
+                         hasExhaustionDiv ? "Y" : "N");
+      return false;
+   }
+
+   bool scoreOk = (trendContinuationScore >= InpXAU_SMO_MinTrendScore ||
+                   (combinedScore >= MathMax(4.20, GetEffectiveGradeB()) &&
+                    (freshStructureBreak || trueBreakoutContinuation || postNewsAligned)));
+   bool roomOk = (estimatedContinuationRoomATR >= InpXAU_SMO_MinRoomATR);
+   bool riskOk = (exhaustionProb <= InpXAU_SMO_MaxExhaustionProb &&
+                  rrQuality >= InpXAU_SMO_MinRRQuality);
+
+   if(!(scoreOk && roomOk && riskOk && (regimeAligned || htfAligned || postNewsAligned)))
+   {
+      why = StringFormat("STRONG_MOMENTUM_OVERRIDE rejected: score=%.0f/%.0f room=%.2f/%.2f exhaustion=%.0f/%.0f rrQ=%.0f/%.0f regime=%s htf=%s postNews=%s",
+                         trendContinuationScore, InpXAU_SMO_MinTrendScore,
+                         estimatedContinuationRoomATR, InpXAU_SMO_MinRoomATR,
+                         exhaustionProb, InpXAU_SMO_MaxExhaustionProb,
+                         rrQuality, InpXAU_SMO_MinRRQuality,
+                         regimeAligned ? "Y" : "N",
+                         htfAligned ? "Y" : "N",
+                         postNewsAligned ? "Y" : "N");
+      return false;
+   }
+
+   why = StringFormat("STRONG_MOMENTUM_OVERRIDE: ALLOW early continuation with controlled risk x%.2f | score=%.0f room=%.2fATR exhaustion=%.0f rrQ=%.0f body=%.2fATR impulse=%.2fATR drive3=%.2fATR atrExp=%.2fx freshBreak=%s breakout=%s postNews=%s m15=%s hardBlockOnly=false softBlockConverted=true",
+                      InpXAU_SMO_LotMulti,
+                      trendContinuationScore,
+                      estimatedContinuationRoomATR,
+                      exhaustionProb,
+                      rrQuality,
+                      bodyATR, impulseATR, threeBarDriveATR, atrExpansion,
+                      freshStructureBreak ? "Y" : "N",
+                      trueBreakoutContinuation ? "Y" : "N",
+                      postNewsAligned ? "Y" : "N",
+                      m15Why);
+   return true;
+}
+
 bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double combinedScore,
                          string &grade, double &lotMulti, string &reason)
 {
@@ -21953,6 +22493,87 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    if((missedMove || lateChaseEntry) && !trendContinuationQualified) rrQuality = MathMax(0.0, rrQuality - 25.0);
    if(failedImpulse) rrQuality = MathMax(0.0, rrQuality - 25.0);
 
+   double setupQuality = MathMin(100.0, MathMax(0.0, setupScore * 16.0));
+   double entryTimingQuality = entryEfficiency;
+   if(badLocation) entryTimingQuality -= 25.0;
+   if(trendSetup && !betterValue) entryTimingQuality -= 18.0;
+   if(localDirectionalRoomATR < InpXAU_MinDirectionalRoomATR) entryTimingQuality -= 20.0;
+   if((signal == 1 && locPct >= 0.90) || (signal == -1 && locPct <= 0.10))
+      entryTimingQuality -= 15.0;
+   if(cleanContinuation) entryTimingQuality += 10.0;
+   entryTimingQuality = MathMax(0.0, MathMin(100.0, entryTimingQuality));
+
+   double extensionRisk = 0.0;
+   extensionRisk += MathMin(45.0, MathMax(0.0, extensionDriveATR) * 14.0);
+   if(badLocation) extensionRisk += 22.0;
+   if(!betterValue && trendSetup) extensionRisk += 14.0;
+   if(impulseWarn) extensionRisk += 10.0;
+   if(localDirectionalRoomATR < InpXAU_MinDirectionalRoomATR) extensionRisk += 12.0;
+   if(cleanContinuation) extensionRisk -= 16.0;
+   extensionRisk = MathMax(0.0, MathMin(100.0, extensionRisk));
+
+   double expectedMAERisk = 0.0;
+   expectedMAERisk += exhaustionProb * 0.45;
+   expectedMAERisk += lateEntryProb * 0.30;
+   if(badLocation) expectedMAERisk += 16.0;
+   if(!betterValue && trendSetup) expectedMAERisk += 12.0;
+   if(localDirectionalRoomATR < InpXAU_MinDirectionalRoomATR) expectedMAERisk += 10.0;
+   if(cleanContinuation) expectedMAERisk -= 12.0;
+   expectedMAERisk = MathMax(0.0, MathMin(100.0, expectedMAERisk));
+
+   double effectiveRRQuality = rrQuality;
+   if(localDirectionalRoomATR < InpXAU_MinDirectionalRoomATR)
+      effectiveRRQuality = MathMin(effectiveRRQuality, 55.0);
+   if(badLocation && !betterValue)
+      effectiveRRQuality = MathMin(effectiveRRQuality, 50.0);
+   effectiveRRQuality = MathMax(0.0, MathMin(100.0, effectiveRRQuality));
+
+   double finalCalibratedConfidence =
+      setupQuality * 0.28 +
+      entryTimingQuality * 0.30 +
+      (100.0 - extensionRisk) * 0.16 +
+      (100.0 - expectedMAERisk) * 0.10 +
+      effectiveRRQuality * 0.16;
+   finalCalibratedConfidence = MathMax(0.0, MathMin(100.0, finalCalibratedConfidence));
+
+   bool strongMomentumOverrideQualified = false;
+   string strongMomentumOverrideWhy = "";
+   if(!trendContinuationQualified &&
+      XAU_StrongMomentumOverrideAllowed(signal, setupName, combinedScore,
+                                        bodyATR, impulseATR, threeBarDriveATR, atrExpansion,
+                                        estimatedContinuationRoomATR,
+                                        trendContinuationScore,
+                                        exhaustionProb, rrQuality,
+                                        freshStructureBreak,
+                                        structureContinuationCandidate,
+                                        trueBreakoutContinuation,
+                                        postNewsAligned,
+                                        failedImpulse,
+                                        wrongCandle,
+                                        htfAligned,
+                                        regimeAligned,
+                                        hasExhaustionDiv,
+                                        sameFirstSignal,
+                                        candlesSinceSignal,
+                                        missedMoveATRFromFirst,
+                                        lateChaseEntry,
+                                        spikeCooldown,
+                                        hasRejection,
+                                        directionalPressure,
+                                        strongMomentumOverrideWhy))
+   {
+      strongMomentumOverrideQualified = true;
+      trendContinuationQualified = true;
+      directionalRoomATR = MathMax(directionalRoomATR, estimatedContinuationRoomATR);
+      nearLiquiditySweep = (directionalRoomATR < InpXAU_MinDirectionalRoomATR);
+      extendedContinuationSizing = true;
+      exhaustionProb = MathMax(0.0, exhaustionProb - 14.0);
+      lateEntryProb = MathMax(0.0, lateEntryProb - 10.0);
+      entryEfficiency = MathMin(100.0, entryEfficiency + 8.0);
+      rrQuality = MathMin(100.0, rrQuality + 10.0);
+      reason += strongMomentumOverrideWhy + " ";
+   }
+
    string timingState = trendContinuationQualified
                         ? (signal == -1 ? "clean-breakdown-continuation" : "clean-breakout-continuation")
                         : (locationBlock ? "bad-location" : (cleanContinuation ? "clean-pullback" : "weak-timing"));
@@ -21968,9 +22589,11 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
 
    if(trendContinuationQualified && extendedContinuationSizing)
    {
-      lotMulti *= InpXAU_TCM_LotMulti;
-      reason += StringFormat("TREND-CONTINUATION MODE: CONTINUATION QUALIFIED; extended setup is allowed smaller lot x%.2f because trend strength and remaining room justify continuation. remainingRoom=%.2fATR localLiquidity=%.2fATR tcmScore=%.0f %s. ",
-                             InpXAU_TCM_LotMulti, estimatedContinuationRoomATR,
+      double continuationLotMulti = strongMomentumOverrideQualified ? InpXAU_SMO_LotMulti : InpXAU_TCM_LotMulti;
+      lotMulti *= continuationLotMulti;
+      reason += StringFormat("%s MODE: CONTINUATION QUALIFIED; extended setup is allowed controlled lot x%.2f because trend strength and remaining room justify continuation. remainingRoom=%.2fATR localLiquidity=%.2fATR tcmScore=%.0f %s. ",
+                             strongMomentumOverrideQualified ? "STRONG_MOMENTUM_OVERRIDE" : "TREND-CONTINUATION",
+                             continuationLotMulti, estimatedContinuationRoomATR,
                              localDirectionalRoomATR, trendContinuationScore,
                              trendContinuationWhy);
       if(blockedMemoryBias)
@@ -21987,14 +22610,25 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    if(InpXAU_TimingQualityGrades && trendSetup && (grade == "A" || StringFind(grade, "A+") >= 0))
    {
       bool wasAPlus = (StringFind(grade, "A+") >= 0);
+      bool aPlusLocationQualified = XAU_APlusEntryLocationQualified(signal, trendSetup,
+                                                                    badLocation, betterValue,
+                                                                    localDirectionalRoomATR,
+                                                                    pullbackATR, locPct,
+                                                                    cleanContinuation,
+                                                                    trueBreakoutContinuation,
+                                                                    trendContinuationQualified) &&
+                                    entryTimingQuality >= InpXAU_APlusMinTimingQuality &&
+                                    effectiveRRQuality >= InpXAU_APlusMinRRQuality &&
+                                    expectedMAERisk <= 55.0;
       bool aPlusQualified = XAU_APlusPositioningQualified(entryEfficiency, lateEntryProb,
                                                           exhaustionProb, rrQuality,
                                                           directionalRoomATR,
                                                           cleanContinuation,
-                                                          (trueBreakoutContinuation || trendContinuationQualified));
+                                                          (trueBreakoutContinuation || trendContinuationQualified)) &&
+                             aPlusLocationQualified;
       bool aPlusBadTiming = (wasAPlus && (!aPlusQualified ||
-	                                      failedImpulse ||
-	                                      ((missedMove || postSweepTrap ||
+		                                      failedImpulse ||
+		                                      ((missedMove || postSweepTrap ||
 	                                        nearLiquiditySweep || lateChaseEntry) &&
 	                                       !trendContinuationQualified)));
       bool aBadRR = (rrQuality < 35.0 &&
@@ -22029,10 +22663,46 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       }
    }
 
-   reason += StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s timingQ=%.0f lateProb=%.0f%% exhaustion=%.0f%% rrQ=%.0f tcmQualified=%s tcmScore=%.0f remainingRoom=%.2fATR signalFirstSeenPrice=%.2f entryPrice=%.2f missedMoveDistance=%.2f missedMoveATR=%.2f candlesSinceSignal=%d reasonBlockedAtFirstSignal=%s lateEntryVeto=%s spikeDetected=%s lotReductionReason=%s whyTradeAllowedAfterDelay=%s liquidityDist=%.2fATR expansionOrigin=%.2fATR expectedPullback=%.2fATR emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullbackFromExtreme=%.2fATR loc=%.0f%% lowClr=%.2fATR highClr=%.2fATR value=%s badLoc=%s rejection=%s wrongCandle=%s dayGain=%.1f%% cycle=%s failedImpulse=%s postSweep=%s missedMove=%s freshBreak=%s cleanContinuation=%s breakoutContinuation=%s dropHigh=%.2fATR(%d) bounceLow=%.2fATR(%d)",
-                         setupName, grade, setupScore, combinedScore, timingState,
-                         entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
-                         trendContinuationQualified ? "Y" : "N", trendContinuationScore,
+   bool timingBadRRForReport = (rrQuality < 35.0 &&
+                                (missedMove || nearLiquiditySweep || failedImpulse || postSweepTrap || lateChaseEntry) &&
+                                !trendContinuationQualified);
+   string blockClass = "NONE";
+   string whatNeedsToChange = "none";
+   if(strongMomentumOverrideQualified)
+   {
+      blockClass = "SOFT_BLOCK_CONVERTED";
+      whatNeedsToChange = "continue M5/M15 structure momentum, keep RR/room valid, avoid late-chase extension";
+   }
+   else if(lateChaseEntry || spikeCooldown || failedImpulseBlock || postSweepTrap || timingBadRRForReport)
+   {
+      blockClass = "HARD_BLOCK";
+      whatNeedsToChange = lateChaseEntry ? "fresh pullback/retest or new BOS after the missed move" :
+                          spikeCooldown ? "volatility reset plus controlled pullback" :
+                          failedImpulseBlock ? "fresh impulse acceptance without rejection" :
+                          postSweepTrap ? "liquidity sweep must reclaim and hold structure" :
+                          "more remaining room and better reward/risk";
+   }
+   else if(locationBlock || extensionNoReset || moderateLate || cycleGivebackBlock)
+   {
+      blockClass = "SOFT_BLOCK";
+      whatNeedsToChange = locationBlock ? "pullback into value area plus rejection" :
+                          extensionNoReset ? "extension reset before same-direction entry" :
+                          moderateLate ? "cleaner pullback, momentum candle, or structure confirmation" :
+                          "fresh continuation with lower cycle-giveback risk";
+   }
+
+   reason += StringFormat("CALIBRATED_ENTRY_QUALITY: setupQuality=%.0f/100 entryTimingQuality=%.0f/100 extensionRisk=%.0f/100 expectedMAERisk=%.0f/100 effectiveRRQuality=%.0f/100 finalCalibratedConfidence=%.0f/100. ",
+                          setupQuality, entryTimingQuality, extensionRisk,
+                          expectedMAERisk, effectiveRRQuality,
+                          finalCalibratedConfidence);
+
+   reason += StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s blockClass=%s whatNeedsToChange=%s timingQ=%.0f lateProb=%.0f%% exhaustion=%.0f%% rrQ=%.0f tcmQualified=%s smoQualified=%s tcmScore=%.0f remainingRoom=%.2fATR signalFirstSeenPrice=%.2f entryPrice=%.2f missedMoveDistance=%.2f missedMoveATR=%.2f candlesSinceSignal=%d reasonBlockedAtFirstSignal=%s lateEntryVeto=%s spikeDetected=%s lotReductionReason=%s whyTradeAllowedAfterDelay=%s liquidityDist=%.2fATR expansionOrigin=%.2fATR expectedPullback=%.2fATR emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullbackFromExtreme=%.2fATR loc=%.0f%% lowClr=%.2fATR highClr=%.2fATR value=%s badLoc=%s rejection=%s wrongCandle=%s dayGain=%.1f%% cycle=%s failedImpulse=%s postSweep=%s missedMove=%s freshBreak=%s cleanContinuation=%s breakoutContinuation=%s dropHigh=%.2fATR(%d) bounceLow=%.2fATR(%d)",
+                          setupName, grade, setupScore, combinedScore, timingState,
+                         blockClass, whatNeedsToChange,
+                          entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
+                         trendContinuationQualified ? "Y" : "N",
+                         strongMomentumOverrideQualified ? "Y" : "N",
+                         trendContinuationScore,
                          estimatedContinuationRoomATR,
                          sameFirstSignal ? g_signalFirstSeenPrice : 0.0, close1,
                          missedMoveDistance, missedMoveATRFromFirst, candlesSinceSignal,
@@ -22307,6 +22977,8 @@ bool XAU_StrongContextForSoftBypass(string grade, double combinedScore)
 {
    if(grade == "A+" || grade == "A") return true;
    if(grade == "B" && XAU_ModeAllowsAggressiveB() && combinedScore >= 4.20) return true;
+   if(grade == "B" && InpXAU_StrongMomentumOverride && InpXAU_SMO_AllowBGradeBalanced &&
+      XAU_ModeAllowsSoftBlockWarning() && combinedScore >= 4.20) return true;
    return false;
 }
 
@@ -23426,6 +24098,13 @@ void WriteGateReportToFile()
    FileWrite(fh, "News state: " + XAU_ReportTextSafe(XAUAI_NewsState(), 160));
    FileWrite(fh, "Trade state: " + XAU_ReportTextSafe(XAUAI_TradeState(), 160));
    FileWrite(fh, "Exit engine: " + XAU_ReportTextSafe(XAUAI_ExitEngineState(), 180));
+   FileWrite(fh, "Strong Momentum Override: " + (InpXAU_StrongMomentumOverride ? "ON" : "OFF") +
+             " | minScore=" + DoubleToString(InpXAU_SMO_MinTrendScore, 0) +
+             " | minRoom=" + DoubleToString(InpXAU_SMO_MinRoomATR, 2) + "ATR" +
+             " | earlyBars=" + IntegerToString(InpXAU_SMO_EarlyMaxSignalAgeBars) +
+             " | allowBInBalanced=" + (InpXAU_SMO_AllowBGradeBalanced ? "true" : "false"));
+   FileWrite(fh, "Block scoring policy: HARD=spread/invalid RR/hostile HTF/extreme late chase/news release chaos; SOFT=personality/B-quality/location warnings when M5/M15 structure momentum qualifies");
+   FileWrite(fh, "Missed-move protection: late chase remains blocked unless fresh retest/BOS/continuation room confirms the move is not exhausted");
    if(g_totalSignals > 20)
    {
       double passRate = allowPct;
@@ -23499,6 +24178,11 @@ void WriteForwardTestReport()
    FileWrite(fh, "News state:        " + XAUAI_NewsState());
    FileWrite(fh, "Trade state:       " + XAUAI_TradeState());
    FileWrite(fh, "Exit engine:       " + XAUAI_ExitEngineState());
+   FileWrite(fh, "Strong Momentum Override: " + (InpXAU_StrongMomentumOverride ? "ON" : "OFF") +
+             " | minScore=" + DoubleToString(InpXAU_SMO_MinTrendScore, 0) +
+             " | minRoom=" + DoubleToString(InpXAU_SMO_MinRoomATR, 2) + "ATR" +
+             " | lotMulti=" + DoubleToString(InpXAU_SMO_LotMulti, 2));
+   FileWrite(fh, "Decision fields: signal, direction, confidence, hard/soft block class, whatNeedsToChange, missedMoveATR, and STRONG_MOMENTUM_OVERRIDE qualification are printed in XAU-TIMING logs.");
    FileWrite(fh, "Start equity:      $" + DoubleToString(g_ftReport_StartEquity, 2));
    FileWrite(fh, "End equity:        $" + DoubleToString(curEq, 2));
    FileWrite(fh, "Net P&L:           " + (netPnL >= 0 ? "+" : "") + "$" +
@@ -24841,6 +25525,16 @@ string XAUAI_InputHash()
                      InpXAU_TCM_LotMulti,
                      InpXAU_TCM_NewsFastTrack ? 1 : 0,
                      InpXAU_TCM_MemoryMinMissedProfitATR);
+   s += StringFormat("smo=%d,%.1f,%.2f,%d,%.2f,%.1f,%.1f,%.2f,%d|",
+                     InpXAU_StrongMomentumOverride ? 1 : 0,
+                     InpXAU_SMO_MinTrendScore,
+                     InpXAU_SMO_MinRoomATR,
+                     InpXAU_SMO_EarlyMaxSignalAgeBars,
+                     InpXAU_SMO_MaxMissedMoveATR,
+                     InpXAU_SMO_MaxExhaustionProb,
+                     InpXAU_SMO_MinRRQuality,
+                     InpXAU_SMO_LotMulti,
+                     InpXAU_SMO_AllowBGradeBalanced ? 1 : 0);
    s += StringFormat("basket=%d,%.2f,%.2f,%.2f,%.2f,%d|clean=%d,%.2f,%.2f,%d,%.2f|",
                      InpBasketMode ? 1 : 0, EffBasketArmPct(), InpBasketArmFloor,
                      EffBasketLockMinPct(), EffBasketBEPct(), InpCloudSafeDisablePartials ? 1 : 0,

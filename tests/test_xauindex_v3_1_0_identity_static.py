@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XauIndex_EA_v3.0.mq5"
+EA = ROOT / "XauIndex_EA_v3.1.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code_xauindex" / "XauIndex_EA.mq5"
 GOLD_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 DOWNLOAD = ROOT / "frontend" / "src" / "components" / "DownloadSection.jsx"
@@ -24,17 +24,17 @@ def test_xauindex_source_and_backend_copy_stay_synced():
 def test_xauindex_is_versioned_and_branded_independently_from_xauai_sniper():
     ea = read(EA)
 
-    assert '#property version   "3.00"' in ea
-    assert '#define XAUAI_EA_VERSION "v3.0.0"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "3.0.0"' in ea
+    assert '#property version   "3.10"' in ea
+    assert '#define XAUAI_EA_VERSION "v3.1.0"' in ea
+    assert '#define XAUAI_EA_VERSION_NUM "3.1.0"' in ea
 
     assert '#property copyright "XauIndex by emriz.eth"' in ea
     assert 'Print("=== XAUINDEX ", XAUAI_EA_VERSION,' in ea
     assert 'XAUAI SNIPER' not in ea
 
 
-def test_xauindex_v3_inherits_gold_v6_10_0_and_earlier_systems():
-    # v3.0.0 rebase brings in everything gold shipped through v6.10.0
+def test_xauindex_v3_1_inherits_gold_v6_12_0_and_earlier_systems():
+    # v3.1.0 rebase brings in everything gold shipped through v6.12.0
     ea = read(EA)
     assert "input bool   InpNoLimitTradingMode = true;" in ea
     assert "double SMC_GetConflictPenalty(int dir, bool &hardBlock, string &conflictReason)" in ea
@@ -119,6 +119,100 @@ def test_xauindex_v3_safety_switch_still_defaults_to_log_only():
     # that changes live-money behavior (e.g. InpNoLimitTradingMode)
     ea = read(EA)
     assert "input bool   InpIndexModeLogOnly = true;" in ea
+
+
+def test_xauindex_v31_has_a_dedicated_spike_detector():
+    ea = read(EA)
+    assert "int XAU_IndexFindRecentSpike(double atr, string &reasonOut)" in ea
+    fn = body(ea, "int XAU_IndexFindRecentSpike(double atr, string &reasonOut)")
+    assert "hugeVsATR = range > atr * InpIndexSpikeATRMultiple" in fn
+    assert "mostlyBody = body >= range * InpIndexSpikeBodyRatio" in fn
+
+
+def test_xauindex_v31_breakout_never_enters_on_the_spike_candle_itself():
+    ea = read(EA)
+    fn = body(ea, "bool XAU_IndexBreakoutEntry(int dir, double atr, string &reasonOut)")
+    assert "if(spikeBar == 1)" in fn
+    reject_block = fn[fn.index("if(spikeBar == 1)"):fn.index("if(spikeBar == 1)") + 300]
+    assert "return false;" in reject_block
+
+
+def test_xauindex_v31_breakout_requires_post_spike_confirmation_during_cooldown():
+    ea = read(EA)
+    fn = body(ea, "bool XAU_IndexBreakoutEntry(int dir, double atr, string &reasonOut)")
+    assert "spikeBar >= 2 && spikeBar <= cooldown" in fn
+    assert "spikeDir != dir" in fn
+    assert "close1 > spikeClose + atr * InpIndexSpikePostConfirmATR" in fn
+    assert "close1 < spikeClose - atr * InpIndexSpikePostConfirmATR" in fn
+
+
+def test_xauindex_v31_pullback_also_rejects_the_spike_bar_and_checks_direction():
+    ea = read(EA)
+    fn = body(ea, "bool XAU_IndexPullbackEntry(int dir, string &reasonOut)")
+    assert "if(spikeBar == 1)" in fn
+    assert "spikeDir != dir" in fn
+
+
+def test_xauindex_v31_has_symbol_relative_spread_gap_gate_not_xauusd_fixed():
+    ea = read(EA)
+    fn = body(ea, "bool XAU_IndexSpreadGapOK(double atr, string &reasonOut)")
+    # relative to this symbol's own ATR and its own rolling spread EMA —
+    # never a fixed XAUUSD point constant
+    assert "atr * InpIndexSpreadATRMult" in fn
+    assert "g_spreadEMA * InpIndexSpreadBaselineMult" in fn
+    assert "atr * InpIndexGapATRMult" in fn
+    assert "InpMaxSpread" not in fn
+
+
+def test_xauindex_v31_scorer_blocks_on_spread_gap_before_scoring_setups():
+    ea = read(EA)
+    fn = body(ea, "int XAU_IndexScoreSetup(double &scoreOut, string &setupNameOut, string &gradeOut, string &reasonOut)")
+    assert "XAU_IndexSpreadGapOK(curATR, spreadReason)" in fn
+    gate_pos = fn.index("XAU_IndexSpreadGapOK")
+    loop_pos = fn.index("for(int d = 1; d >= -1; d -= 2)")
+    assert gate_pos < loop_pos, "spread/gap gate must run before setup scoring, not after"
+
+
+def test_xauindex_v31_boom_crash_profile_actually_changes_behavior():
+    ea = read(EA)
+    # not just a label: referenced by the spike cooldown, spread gate,
+    # breakout gate, and position sizing/lot-cap enforcement
+    assert ea.count("XAU_IndexIsBoomCrashProfile()") >= 4
+
+    breakout_fn = body(ea, "bool XAU_IndexBreakoutEntry(int dir, double atr, string &reasonOut)")
+    assert "InpIndexBoomCrashAllowBreakout" in breakout_fn
+
+    spread_fn = body(ea, "bool XAU_IndexSpreadGapOK(double atr, string &reasonOut)")
+    assert "InpIndexBoomCrashSpreadMult" in spread_fn
+
+    gate = body(ea, "if(g_marketMode == MARKET_INDEX_MODE)\n   {\n      static datetime lastIndexBarEval = 0;",
+                "\n      return;\n   }\n")
+    assert "InpIndexBoomCrashRiskMult" in gate
+    assert "XAU_IndexEnforceBoomCrashLotCap()" in gate
+
+
+def test_xauindex_v31_boom_crash_has_its_own_conservative_defaults():
+    ea = read(EA)
+    assert "input double InpIndexBoomCrashRiskMult      = 0.5;" in ea
+    assert "input double InpIndexBoomCrashMaxLot        = 0.10;" in ea
+    assert "input double InpIndexBoomCrashSpreadMult    = 0.6;" in ea
+    assert "input bool   InpIndexBoomCrashAllowBreakout = false;" in ea
+    assert "input int    InpIndexBoomCrashSpikeCooldownMult = 2;" in ea
+
+
+def test_xauindex_v31_hard_lot_cap_enforced_via_partial_close_not_reused_gold_internals():
+    ea = read(EA)
+    fn = body(ea, "void XAU_IndexEnforceBoomCrashLotCap()")
+    assert "vol > InpIndexBoomCrashMaxLot" in fn
+    assert "trade.PositionClosePartial(ticket, trimVol)" in fn
+
+
+def test_xauindex_v31_every_index_decision_logs_a_specific_reason():
+    ea = read(EA)
+    gate = body(ea, "if(g_marketMode == MARKET_INDEX_MODE)\n   {\n      static datetime lastIndexBarEval = 0;",
+                "\n      return;\n   }\n")
+    assert "INDEX_ENGINE |" in gate
+    assert "idxReason" in gate
 
 
 def test_xauindex_is_a_separate_file_from_the_gold_only_lineage():
