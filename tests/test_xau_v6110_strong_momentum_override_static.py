@@ -3,7 +3,7 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.11.0.mq5"
+EA_NAMED = ROOT / "XAUUSD_AI_Sniper_EA_v6.12.0.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -32,9 +32,9 @@ def test_v6110_identity_and_backend_sync():
     named = read(EA_NAMED)
     backend = read(EA_BACKEND)
 
-    assert '#define XAUAI_EA_VERSION "v6.11.0"' in named
+    assert '#define XAUAI_EA_VERSION "v6.12.0"' in named
     assert "STRONG_MOMENTUM_OVERRIDE" in named
-    assert "v6110-strong-momentum-override-20260703" in named
+    assert "v6120-calibrated-entry-runners-20260703" in named
     assert named == backend
 
 

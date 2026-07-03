@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.11.0.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.12.0.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -17,8 +17,8 @@ def section(ea: str, start: str, end: str) -> str:
 def test_v6413_identity_and_heartbeat_reporting_exist():
     ea = read(EA)
 
-    assert '#property version   "6.110"' in ea
-    assert '#define XAUAI_EA_VERSION "v6.11.0"' in ea
+    assert '#property version   "6.120"' in ea
+    assert '#define XAUAI_EA_VERSION "v6.12.0"' in ea
     assert "InpLocalReportHeartbeatSec" in ea
     assert "XAUAI_LiveHeartbeat_" in ea
     assert "XAU_WriteLocalReportHeartbeat(false)" in ea

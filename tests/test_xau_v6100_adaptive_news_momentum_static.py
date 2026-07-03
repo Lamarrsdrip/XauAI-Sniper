@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.11.0.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.12.0.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -18,11 +18,11 @@ def body(ea: str, start: str, end: str = "\n}\n") -> str:
 def test_v6100_version_labels_and_download_source_are_current():
     ea = read(EA)
 
-    assert 'v6.11.0 - STRONG MOMENTUM OVERRIDE' in ea
-    assert '#property version   "6.110"' in ea
-    assert '#define XAUAI_EA_VERSION "v6.11.0"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.11.0"' in ea
-    assert '#define XAUAI_BUILD_HASH "v6110-strong-momentum-override-20260703"' in ea
+    assert 'v6.12.0 - CALIBRATED ENTRY + SMARTER RUNNERS' in ea
+    assert '#property version   "6.120"' in ea
+    assert '#define XAUAI_EA_VERSION "v6.12.0"' in ea
+    assert '#define XAUAI_EA_VERSION_NUM "6.12.0"' in ea
+    assert '#define XAUAI_BUILD_HASH "v6120-calibrated-entry-runners-20260703"' in ea
     assert 'v6.10.0 CHANGES (2026-07-02) — ADAPTIVE NEWS MOMENTUM ENGINE' in ea  # preserve the previous line's news-engine fixes in the changelog.
     assert "v6.9.0" in ea  # preserve the previous line's live-feed fixes in the changelog.
     assert read(EA) == read(BACKEND_EA)
