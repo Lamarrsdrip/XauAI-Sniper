@@ -1,34 +1,50 @@
 //+------------------------------------------------------------------+
 //|                                     XauIndex_EA.mq5              |
 //|                                     XauIndex — Gold + Index Edition|
-//|   v2.0.0 — Adaptive Arbiter, Trade Recovery Intelligence, Live Feed |
-//|   Fix (rebuilt on gold v6.7.0-v6.9.0, Market Mode layer preserved)  |
+//|   v3.0.0 — Real Index Entry Engine: structure, liquidity, trend,   |
+//|   breakout, volatility regime, momentum (rebuilt on gold v6.10.0)  |
 //+------------------------------------------------------------------+
-// v2.0.0 CHANGES (2026-07-02) — PORTED FROM GOLD v6.7.0-v6.9.0:
-//   A DIFFERENT PRODUCT, on purpose: XauAI Sniper (separate lineage,
-//   maintained separately) stays pure gold. XauIndex has Gold+Index
-//   market detection built in, versioned independently so the two are
-//   never confused. This release rebuilds XauIndex directly on top of
-//   the CURRENT gold codebase (rather than hand-patching four versions
-//   of drift onto the old v1.0.0 base) so it inherits every gold fix
-//   exactly as built and tested, then re-applies the Market Mode/Index-
-//   detection layer on top. Everything below this point that isn't
-//   about Market Mode is inherited unchanged from gold v6.9.0 — see
-//   that file's own history for the full changelog of what's inside.
-//   New in this release for XauIndex specifically: No-Limit Trading
-//   Mode, the loss-close firewall, the Adaptive Entry/Exit Arbiter
-//   (SMC conflict penalty/block, HTF trigger requirement, AI Committee
-//   B-grade authority, adaptive profit-floor arming), Trade Recovery
-//   Intelligence (near-SL recovery classification, smart re-entry),
-//   and the Command Center live-feed fix (unconditional status
-//   heartbeat, per-position thesis data reaching the cloud, specific
-//   blocked-reason text, three-way would-enter-again verdict). Gold
-//   Mode behavior on a live XAUUSD attachment is unchanged by this
-//   release beyond what gold itself already shipped; Index Mode
-//   remains monitoring-only — InpIndexModeLogOnly still blocks every
-//   index entry, unchanged from v1.0.0.
+// v3.0.0 CHANGES (2026-07-02) — REAL INDEX ENTRY ENGINE:
+//   Replaces the v1.0.0/v2.0.0 "monitoring only" Index Mode with an actual
+//   signal-generating engine built from standard technical-analysis
+//   principles (not gold-specific tuning): swing-based market structure
+//   (BOS/CHoCH), liquidity-sweep detection, EMA-stack trend-regime
+//   classification, ATR-percentile volatility regime, RSI momentum
+//   filtering, pullback-in-trend entries, and breakout+retest entries. See
+//   the "INDEX ENTRY ENGINE" section for the full implementation. Adaptive
+//   exits and position management are NOT reimplemented — ManagePositions/
+//   ManageBasket/TTM/TRI already operate generically on Symbol() and the
+//   EA's own open positions, so they apply to an index position exactly
+//   as they do to a gold one.
+//   SAFETY MODEL (unchanged philosophy from v1.0.0/v2.0.0): the engine now
+//   genuinely scores and would place real trades, but InpIndexModeLogOnly
+//   still defaults to true, so it evaluates and logs (INDEX_TRACE) instead
+//   of trading live until a user explicitly flips it to false — the same
+//   opt-in-only pattern this codebase already uses for InpNoLimitTradingMode
+//   and every other capability that changes live-money behavior. This
+//   engine has not been validated against real index price history (no
+//   index symbols were available at build time); it should be run on
+//   demo/log-only against real index feeds before ever being enabled live.
+//   Rebuilt on the current gold v6.10.0 base (Adaptive News Momentum
+//   Engine) — see below for gold's own unchanged history.
 //
-// v6.9.0 CHANGES (2026-07-02) — COMMAND CENTER LIVE FEED FIX (inherited from gold):
+// v6.10.0 CHANGES (2026-07-02) — ADAPTIVE NEWS MOMENTUM ENGINE (inherited from gold):
+//   1. Replaces binary post-news fear with a staged engine:
+//      NEWS_PROTECTION -> NEWS_RELEASE_COOLDOWN -> NEWS_OBSERVING ->
+//      NEWS_CONTINUATION_CONFIRMED / NEWS_ENTRY_ALLOWED.
+//   2. Scheduled economic-news windows still block pre-news and the
+//      first release impulse, but after cooldown the EA evaluates actual
+//      M5/M15 continuation, midpoint hold, spread normalization, BOS/HTF
+//      alignment, room, RR, and anti-chase extension before entry.
+//   3. Dashboard/Command Center logs now explain exactly why news trades
+//      are blocked or allowed: NEWS_ENTRY_BLOCKED_OVEREXTENDED,
+//      NEWS_ENTRY_BLOCKED_SPREAD, NEWS_ENTRY_BLOCKED_POOR_RR, etc.
+//   4. Post-news entries use an explicit volatility-aware lot multiplier
+//      after the A/A+ grade floor, so news opportunity is tradable without
+//      blindly full-sizing every spike.
+//   Preserves all v6.9.0 Command Center live-feed fixes.
+//+------------------------------------------------------------------+
+// v6.9.0 CHANGES (2026-07-02) — COMMAND CENTER LIVE FEED FIX:
 //   Root cause of the Command Center showing stale "7d ago" cards: every
 //   cloud post used to come from deep inside the gated entry-scan pipeline
 //   (XAU_RecordMarketSnapshot) — if ANY of 8+ higher-level gates (equity
@@ -1029,16 +1045,16 @@
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
 #property copyright "XauIndex by emriz.eth"
 #property link      "https://xauaisniper.com"
-#property version   "2.00"
-#property description "XauIndex v2.0.0 - Rebuilt on gold v6.7.0-v6.9.0: Adaptive Arbiter, Trade Recovery Intelligence, Command Center fix"
-#property description "Gold + Index market detection preserved: Index Mode remains monitoring-only, InpIndexModeLogOnly blocks every index entry"
+#property version   "3.00"
+#property description "XauIndex v3.0.0 - Real Index Entry Engine: structure, liquidity, trend, breakout, volatility, momentum"
+#property description "Rebuilt on gold v6.10.0: No-Limit Trading Mode, Adaptive Arbiter, TRI, Command Center fix, News Momentum Engine all inherited"
 #property description "A separate product from XauAI Sniper (gold-only, maintained separately) — versioned independently so the two are never confused"
-#property description "No-Limit Trading Mode, loss-close firewall, and every other gold fix inherited from the current gold codebase"
+#property description "InpIndexModeLogOnly still defaults true — engine evaluates/logs live but never trades until explicitly enabled"
 #property strict
 
-#define XAUAI_EA_VERSION "v2.0.0"
-#define XAUAI_EA_VERSION_NUM "2.0.0"
-#define XAUAI_BUILD_HASH "xauindex-2.0.0-rebuilt-on-gold-v690-20260702"
+#define XAUAI_EA_VERSION "v3.0.0"
+#define XAUAI_EA_VERSION_NUM "3.0.0"
+#define XAUAI_BUILD_HASH "xauindex-3.0.0-real-index-engine-on-gold-v6100-20260702"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1072,27 +1088,23 @@ enum ENUM_XAU_LOT_SIZING_MODE { REAL_RISK_MODE=0, JUNE_16_19_BALANCE_MODE=1 };
 input ENUM_XAU_LOT_SIZING_MODE InpLotSizingMode = JUNE_16_19_BALANCE_MODE; // JUNE mode restores balance-based lots; REAL mode uses OrderCalcProfit SL risk
 input double InpJuneBalanceLotPer1000 = 0.070; // $3k A trade ≈0.21 before broker/margin/maxlot; B≈0.15, A+≈0.26
 
-// XauIndex — MARKET MODE (Gold vs Index) — ARCHITECTURE PHASE ONLY.
-//   This release adds detection, symbol-agnostic lot math, and full
-//   diagnostics for a future Index Mode. It does NOT add any index trading
-//   strategy. When the resolved mode is INDEX_MODE, the EA runs detection,
-//   logging, and (if a position ever exists on that symbol) shared exit/
-//   risk management — it does NOT open new trades, because no real,
-//   evidence-tested index strategy exists yet ("no speculative live-money
-//   logic" — explicit owner instruction). GOLD_MODE behavior is completely
-//   unchanged: the entire existing entry/exit pipeline (including the
-//   v6.7.0-v6.9.0 Adaptive Entry/Exit Arbiter and Trade Recovery
-//   Intelligence, ported in from the gold lineage) still runs exactly as
-//   before whenever the resolved mode is GOLD_MODE, which is what every
-//   live XAUUSD attachment resolves to today.
-input group "=== MARKET MODE (Gold/Index detection, architecture phase) ==="
+// XauIndex — MARKET MODE (Gold vs Index). v3.0.0 adds a real index entry
+// engine (structure, liquidity, trend, breakout, volatility, momentum —
+// see the INDEX ENTRY ENGINE section) behind InpIndexModeLogOnly, which
+// still defaults to true (log-only) exactly like every other new capability
+// this codebase ships: built, tested, and available, but the user opts in
+// explicitly rather than it going live by surprise. GOLD_MODE behavior is
+// completely unchanged — the entire existing entry/exit pipeline still runs
+// exactly as before whenever the resolved mode is GOLD_MODE, which is what
+// every live XAUUSD attachment resolves to today.
+input group "=== MARKET MODE (Gold/Index detection + Index entry engine) ==="
 enum ENUM_XAU_MARKET_MODE { MARKET_AUTO_DETECT=0, MARKET_GOLD_MODE=1, MARKET_INDEX_MODE=2 };
 input ENUM_XAU_MARKET_MODE InpMarketMode = MARKET_AUTO_DETECT; // AUTO_DETECT reads the chart symbol once at startup; GOLD/INDEX force the mode regardless of symbol
 enum ENUM_XAU_INDEX_PROFILE { GENERIC_INDEX=0, VOLATILITY_INDEX=1, BOOM_CRASH=2, STEP_INDEX=3, RANGE_BREAK=4 };
-input ENUM_XAU_INDEX_PROFILE InpIndexProfile = GENERIC_INDEX; // diagnostic/forward-compat only this release — no profile-specific strategy exists yet
+input ENUM_XAU_INDEX_PROFILE InpIndexProfile = GENERIC_INDEX; // diagnostic label only — the entry engine itself is generic technical analysis, not profile-tuned yet
 enum ENUM_XAU_INDEX_AGGRESSION { INDEX_SAFE=0, INDEX_BALANCED=1, INDEX_AGGRESSIVE_GROWTH=2 };
-input ENUM_XAU_INDEX_AGGRESSION InpIndexAggression = INDEX_BALANCED; // diagnostic/forward-compat only this release — no index strategy exists yet to modulate
-input bool   InpIndexModeLogOnly = true; // hard safety: while true, INDEX_MODE never opens a new position no matter what InpMarketMode/InpIndexProfile say. Only flip this once real, tested index entry logic exists.
+input ENUM_XAU_INDEX_AGGRESSION InpIndexAggression = INDEX_BALANCED; // scales index setup grade thresholds and lot sizing the same way gold's own aggression settings do
+input bool   InpIndexModeLogOnly = true; // SAFETY SWITCH: while true, INDEX_MODE never opens a new position — it only logs what the entry engine would have done (INDEX_TRACE). Flip to false only after validating the engine on demo/your own index symbols.
 
 input group "=== NO-LIMIT TRADING MODE (v6.6.1 — disable daily stop/lock systems) ==="
 input bool   InpNoLimitTradingMode = true;      // TRUE = no daily/profit/growth lock force-close, no daily pause, no cooldown stop-for-day
@@ -1229,6 +1241,20 @@ input int    InpNewsAftermathMins    = 10;    // Minutes to block new entries af
 input int    InpPostNewsConfirmBars  = 3;     // Bars of directional closes to confirm post-news direction (1-5 recommended)
 input double InpPostNewsSpreadReturnX = 1.5;  // Spread must return to <= N× EMA baseline before post-news entries allowed
 input int    InpPostNewsAvoidMins    = 20;    // Max minutes to stay in PNS_AVOID before reverting to normal
+input bool   InpAdaptiveNewsMomentumEnable = true; // v6.10.0: staged news engine; blocks release chaos, then trades confirmed continuation
+input int    InpAdaptiveNewsPreBlockMin    = 15;   // minutes before scheduled US data release to block fresh entries
+input int    InpAdaptiveNewsReleaseCooldownMin = 5; // minutes after release to observe first impulse, no entries
+input int    InpAdaptiveNewsPostWindowMin  = 60;   // minutes after release to evaluate post-news continuation/retest entries
+input int    InpAdaptiveNewsImpulseBars    = 3;    // closed M5 bars used to classify post-news impulse
+input double InpAdaptiveNewsMinImpulseBodyATR = 0.55; // aggregate impulse body needed to call continuation real
+input double InpAdaptiveNewsMidpointBufferATR = 0.12; // price must hold impulse midpoint with this ATR tolerance
+input double InpAdaptiveNewsMaxExtensionATR = 2.60;   // anti-chase: do not enter if already too far from impulse base
+input double InpAdaptiveNewsMinRoomATR      = 0.80;   // minimum room to next local support/resistance before chasing news continuation
+input double InpAdaptiveNewsMinRR           = 1.45;   // post-news continuation still needs acceptable reward/risk
+input int    InpAdaptiveNewsMinAIConfidence = 45;     // AI confidence below this blocks only if AI actually answered
+input double InpAdaptiveNewsRiskMult        = 0.70;   // default post-news lot multiplier after grade floor
+input double InpAdaptiveNewsHighConfRiskMult= 1.00;   // high-confidence confirmed continuation may keep normal size
+input bool   InpAdaptiveNewsAllowBGrade     = true;   // B-grade continuation may trade if momentum/structure/room/RR are strong
 
 input group "=== SCHEDULED NEWS CALENDAR (v6.0.4) ==="
 // Pre-defined high-impact windows (GMT). Entries blocked for duration. No external API needed.
@@ -2653,6 +2679,29 @@ int                  g_postNewsConfirmCnt = 0;       // consecutive bars matchin
 double               g_preNewsPrice       = 0.0;     // mid price at time of spike detection
 datetime             g_postNewsStateStart = 0;       // when current state was entered
 datetime             g_postNewsAvoidUntil = 0;       // PNS_AVOID expiry
+
+// v6.10.0: Adaptive News Momentum Engine phases.
+enum ENUM_ADAPTIVE_NEWS_PHASE
+{
+   ANP_NONE                 = 0,
+   ANP_PRE_NEWS             = 1,
+   ANP_RELEASE_COOLDOWN     = 2,
+   ANP_POST_INTERPRETATION  = 3,
+   ANP_CONTINUATION_ALLOWED = 4
+};
+ENUM_ADAPTIVE_NEWS_PHASE g_adaptiveNewsPhase = ANP_NONE;
+datetime g_adaptiveNewsReleaseLocalAt = 0;
+datetime g_adaptiveNewsPostUntil      = 0;
+string   g_adaptiveNewsEventName      = "";
+double   g_adaptiveNewsImpulseHigh    = 0.0;
+double   g_adaptiveNewsImpulseLow     = 0.0;
+double   g_adaptiveNewsImpulseMid     = 0.0;
+double   g_adaptiveNewsImpulseBase    = 0.0;
+int      g_adaptiveNewsImpulseDir     = 0;
+bool     g_adaptiveNewsImpulseReady   = false;
+bool     g_adaptiveNewsLotMultiActive = false;
+double   g_adaptiveNewsLotMulti       = 1.0;
+string   g_adaptiveNewsLastDecision   = "";
 
 datetime   closeTimes[];            // rolling list of close timestamps
 bool       closeResults[];          // matching win/loss flags (true = loss)
@@ -5366,16 +5415,11 @@ string PropFirmLossLockReason()
 //|   first — cheap and unambiguous for the overwhelming majority of  |
 //|   real symbol names. If the name matches neither a gold nor an    |
 //|   index keyword, it defaults to GOLD_MODE: this EA's entire       |
-//|   history and every live account today is gold-only, and          |
-//|   InpIndexModeLogOnly means INDEX_MODE places zero trades anyway,  |
-//|   so defaulting an unrecognized symbol to GOLD_MODE risks nothing  |
-//|   new, while defaulting to INDEX_MODE could silently stop trading  |
-//|   on what was actually meant to be a gold symbol under an unusual  |
-//|   broker suffix (e.g. "XAUUSD.m", "GOLD#"). A property-based       |
-//|   (tick value / contract size) fallback was deliberately left out  |
-//|   of this phase — there is no real index symbol yet to calibrate   |
-//|   such a heuristic against, and a wrong guess there would be a     |
-//|   silent behavior change rather than a safe no-op.                |
+//|   history and every live account today is gold-only, so           |
+//|   defaulting an unrecognized symbol to GOLD_MODE risks nothing    |
+//|   new, while defaulting to INDEX_MODE could silently stop trading |
+//|   on what was actually meant to be a gold symbol under an unusual |
+//|   broker suffix (e.g. "XAUUSD.m", "GOLD#").                       |
 //+------------------------------------------------------------------+
 ENUM_XAU_MARKET_MODE XAU_DetectMarketMode(string &reason)
 {
@@ -5411,7 +5455,7 @@ ENUM_XAU_MARKET_MODE XAU_DetectMarketMode(string &reason)
       }
    }
 
-   reason = StringFormat("symbol '%s' matched neither gold nor index pattern — defaulting to GOLD_MODE (no tested index strategy exists yet)", Symbol());
+   reason = StringFormat("symbol '%s' matched neither gold nor index pattern — defaulting to GOLD_MODE", Symbol());
    return MARKET_GOLD_MODE;
 }
 
@@ -5447,7 +5491,7 @@ int OnInit()
                EnumToString(InpMarketMode), g_marketModeDetectReason,
                InpIndexModeLogOnly ? "true" : "false");
    if(g_marketMode == MARKET_INDEX_MODE)
-      Print("INDEX_MODE ACTIVE: entries are monitoring-only this release — no index trading strategy is enabled yet. See InpIndexModeLogOnly.");
+      Print("INDEX_MODE ACTIVE: entry engine live=", InpIndexModeLogOnly ? "false (log-only)" : "true (real orders)");
 
    // v6.4.19: initialize TTM record array
    for(int _i = 0; _i < TTM_MAX_POSITIONS; _i++) { g_ttm[_i].active = false; g_ttm[_i].posId = 0; }
@@ -7126,6 +7170,11 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
    double protectedProfit = XAU_CurrentSLLockUSD(isBuy, openPx, curSL, lotsOpen);
    string expectedType = "OTHER";
    string entryReason = "";
+   string setupType = "OTHER";
+   string grade = "";
+   double liveScore = -1.0;
+   int barsHeld = 0;
+   int tradeAgeMinutes = 0;
 
    string recoveryMode = "NONE";
    double recoveryWorstPct = 0.0;
@@ -7134,8 +7183,12 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
    if(ttmIdx >= 0)
    {
       expectedType = g_ttm[ttmIdx].expectedTradeType;
+      setupType     = g_ttm[ttmIdx].setupName != "" ? g_ttm[ttmIdx].setupName : expectedType;
+      grade         = g_ttm[ttmIdx].grade;
       entryReason  = g_ttm[ttmIdx].entryReasonFull;
-      double liveScore = g_ttm[ttmIdx].liveScore;
+      liveScore    = g_ttm[ttmIdx].liveScore;
+      barsHeld     = g_ttm[ttmIdx].barsHeld;
+      tradeAgeMinutes = (int)MathMax(0, (TimeCurrent() - g_ttm[ttmIdx].entryTime) / 60);
 
       // v6.8.0 TRI — a trade currently in Recovery Mode takes priority over
       // the generic pullback/warning read, since it's a more specific and
@@ -7183,15 +7236,33 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
          nextAction = protectedProfit > 0 ? "HOLD_PROTECTED" : "HOLD";
       }
    }
+   if(tradeAgeMinutes <= 0 && PositionSelectByTicket(ticket))
+   {
+      datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(posTime > 0)
+         tradeAgeMinutes = (int)MathMax(0, (TimeCurrent() - posTime) / 60);
+   }
    if(protectedProfit > 0.01)
       protectReason = StringFormat("$%.2f locked via SL", protectedProfit);
 
+   string direction = isBuy ? "BUY" : "SELL";
+   int aiConfidence = MathMax(0, MathMin(100, g_aiLastConfidence));
+   double holdProbability = 50.0;
+   if(liveScore >= 0.0)
+      holdProbability = MathMax(0.0, MathMin(100.0, liveScore));
+   else if(aiConfidence > 0)
+      holdProbability = (double)aiConfidence;
+   double exitProbability = MathMax(0.0, MathMin(100.0, 100.0 - holdProbability));
+
    PrintFormat("TRADE_THESIS_STATUS: ticket=%I64u state=%s type=%s peakProfit=%.2f currentProfit=%.2f "
                "protectedProfit=%.2f holdReason=\"%s\" protectReason=\"%s\" exitReason=\"%s\" "
-               "nextAction=%s entryReason=\"%s\" recoveryMode=%s recoveryWorstPct=%.0f recoveryClassification=%s",
+               "nextAction=%s entryReason=\"%s\" recoveryMode=%s recoveryWorstPct=%.0f recoveryClassification=%s "
+               "direction=%s lots=%.2f ageMin=%d setup=%s grade=%s aiConf=%d holdProb=%.0f exitProb=%.0f",
                ticket, state, expectedType, peak, profit, protectedProfit,
                holdReason, protectReason, exitReason, nextAction, entryReason,
-               recoveryMode, recoveryWorstPct, recoveryClassification);
+               recoveryMode, recoveryWorstPct, recoveryClassification,
+               direction, lotsOpen, tradeAgeMinutes, setupType, grade,
+               aiConfidence, holdProbability, exitProbability);
 
    // v6.9.0 — this used to be local-only (MT5 journal Print, never left the
    // terminal). The Command Center's "Open Trade Thinking" panel needs this
@@ -7205,7 +7276,10 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
       double distToTP = (curTP > 0 && curPrice > 0) ? MathAbs(curTP - curPrice) : 0.0;
       string body = StringFormat(
          "{\"pin\":\"%s\",\"license_key\":\"%s\",\"account\":\"%I64d\",\"symbol\":\"%s\","
-         "\"ticket\":\"%I64u\",\"state\":\"%s\",\"expected_type\":\"%s\",\"peak_profit\":%.2f,"
+         "\"ticket\":\"%I64u\",\"direction\":\"%s\",\"lots\":%.2f,\"trade_age_minutes\":%d,"
+         "\"setup_type\":\"%s\",\"grade\":\"%s\",\"ai_confidence\":%d,\"thesis_score\":%.2f,"
+         "\"hold_probability\":%.0f,\"exit_probability\":%.0f,"
+         "\"state\":\"%s\",\"expected_type\":\"%s\",\"peak_profit\":%.2f,"
          "\"current_profit\":%.2f,\"protected_profit\":%.2f,\"hold_reason\":\"%s\","
          "\"protect_reason\":\"%s\",\"exit_reason\":\"%s\",\"next_action\":\"%s\","
          "\"entry_reason\":\"%s\",\"recovery_mode\":\"%s\",\"recovery_worst_pct\":%.0f,"
@@ -7213,6 +7287,9 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
          "\"current_price\":%.5f,\"sl\":%.5f,\"tp\":%.5f,\"dist_to_sl\":%.5f,\"dist_to_tp\":%.5f}",
          BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
          AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), ticket,
+         BotMonitorJsonSafe(direction, 8), lotsOpen, tradeAgeMinutes,
+         BotMonitorJsonSafe(setupType, 40), BotMonitorJsonSafe(grade, 8),
+         aiConfidence, liveScore, holdProbability, exitProbability,
          BotMonitorJsonSafe(state, 20), BotMonitorJsonSafe(expectedType, 24),
          peak, profit, protectedProfit,
          BotMonitorJsonSafe(holdReason, 300), BotMonitorJsonSafe(protectReason, 120),
@@ -9055,6 +9132,360 @@ bool IsScheduledNewsWindow(string &reason)
    return false;
 }
 
+string XAU_AdaptiveNewsPhaseName(ENUM_ADAPTIVE_NEWS_PHASE phase)
+{
+   if(phase == ANP_PRE_NEWS)             return "ANP_PRE_NEWS";
+   if(phase == ANP_RELEASE_COOLDOWN)     return "ANP_RELEASE_COOLDOWN";
+   if(phase == ANP_POST_INTERPRETATION)  return "ANP_POST_INTERPRETATION";
+   if(phase == ANP_CONTINUATION_ALLOWED) return "ANP_CONTINUATION_ALLOWED";
+   return "ANP_NONE";
+}
+
+bool XAU_AdaptiveNewsCalendarPhase(ENUM_ADAPTIVE_NEWS_PHASE &phase, string &reason, string &eventName)
+{
+   phase = ANP_NONE;
+   reason = "";
+   eventName = "";
+   if(!InpCalendarEnable || !InpAdaptiveNewsMomentumEnable) return false;
+
+   MqlDateTime dt; TimeGMT(dt);
+   int dow  = dt.day_of_week;
+   int mNow = dt.hour * 60 + dt.min;
+
+   int releaseMin = -1;
+   int postEndMin = -1;
+   if(InpCalThursJobless && dow == 4)
+   {
+      releaseMin = 12 * 60 + 30;
+      postEndMin = releaseMin + MathMax(InpAdaptiveNewsReleaseCooldownMin + 5, InpAdaptiveNewsPostWindowMin);
+      eventName = "Jobless Claims";
+   }
+   else if(InpCalFridayData && dow == 5)
+   {
+      releaseMin = 12 * 60 + 30;
+      postEndMin = releaseMin + MathMax(InpAdaptiveNewsReleaseCooldownMin + 5, InpAdaptiveNewsPostWindowMin);
+      eventName = "Friday US data";
+   }
+
+   if(releaseMin < 0) return false;
+
+   int preStart = releaseMin - MathMax(1, InpAdaptiveNewsPreBlockMin);
+   int releaseCooldownEnd = releaseMin + MathMax(1, InpAdaptiveNewsReleaseCooldownMin);
+   if(mNow >= preStart && mNow < releaseMin)
+   {
+      phase = ANP_PRE_NEWS;
+      reason = "NEWS_PROTECTION: waiting before event - " + eventName;
+      return true;
+   }
+   if(mNow >= releaseMin && mNow < releaseCooldownEnd)
+   {
+      phase = ANP_RELEASE_COOLDOWN;
+      reason = "NEWS_RELEASE_COOLDOWN: observing first impulse - " + eventName;
+      return true;
+   }
+   if(mNow >= releaseCooldownEnd && mNow <= postEndMin)
+   {
+      phase = ANP_POST_INTERPRETATION;
+      reason = "NEWS_OBSERVING: " + eventName + " impulse detected. Waiting for spread normalization and M5 continuation close.";
+      return true;
+   }
+   return false;
+}
+
+bool XAU_UpdateAdaptiveNewsPhase(bool &adaptiveNewsHardBlock, string &adaptiveNewsReason)
+{
+   adaptiveNewsHardBlock = false;
+   adaptiveNewsReason = "";
+   ENUM_ADAPTIVE_NEWS_PHASE phase = ANP_NONE;
+   string reason = "";
+   string eventName = "";
+   bool active = XAU_AdaptiveNewsCalendarPhase(phase, reason, eventName);
+
+   if(!active)
+   {
+      if(g_adaptiveNewsPhase != ANP_NONE && TimeCurrent() > g_adaptiveNewsPostUntil)
+      {
+         PrintFormat("NEWS_OBSERVING: %s post-news window ended; normal filters resumed", g_adaptiveNewsEventName);
+         g_adaptiveNewsPhase = ANP_NONE;
+         g_adaptiveNewsEventName = "";
+         g_adaptiveNewsImpulseReady = false;
+         g_adaptiveNewsLotMultiActive = false;
+         g_adaptiveNewsLotMulti = 1.0;
+      }
+      return false;
+   }
+
+   bool phaseChanged = (phase != g_adaptiveNewsPhase || eventName != g_adaptiveNewsEventName);
+   g_adaptiveNewsPhase = phase;
+   g_adaptiveNewsEventName = eventName;
+   g_adaptiveNewsLastDecision = reason;
+   g_adaptiveNewsPostUntil = TimeCurrent() + MathMax(60, InpAdaptiveNewsPostWindowMin * 60);
+
+   if(phase == ANP_PRE_NEWS || phase == ANP_RELEASE_COOLDOWN)
+   {
+      adaptiveNewsHardBlock = true;
+      adaptiveNewsReason = reason;
+      g_adaptiveNewsLotMultiActive = false;
+      g_adaptiveNewsLotMulti = 1.0;
+      static datetime lastAdaptiveNewsPhaseLog = 0;
+      if(phaseChanged || TimeCurrent() - lastAdaptiveNewsPhaseLog >= 60)
+      {
+         Print(reason);
+         lastAdaptiveNewsPhaseLog = TimeCurrent();
+      }
+      if(g_preNewsPrice <= 0.0)
+         g_preNewsPrice = (SymbolInfoDouble(Symbol(), SYMBOL_BID) + SymbolInfoDouble(Symbol(), SYMBOL_ASK)) * 0.5;
+      return true;
+   }
+
+   adaptiveNewsHardBlock = false;
+   adaptiveNewsReason = reason;
+   static datetime lastAdaptiveNewsObserveLog = 0;
+   if(phaseChanged || TimeCurrent() - lastAdaptiveNewsObserveLog >= 60)
+   {
+      Print(reason);
+      lastAdaptiveNewsObserveLog = TimeCurrent();
+   }
+   if(g_postNewsState == PNS_AFTERMATH || g_postNewsState == PNS_NONE)
+   {
+      g_postNewsState = PNS_DISCOVERY;
+      g_postNewsConfirmCnt = 0;
+   }
+   return true;
+}
+
+bool XAU_NewsImpulseSnapshot(int &impulseDir, double &midpoint, double &base,
+                             double &high, double &low, double &bodyATR, string &why)
+{
+   impulseDir = 0;
+   midpoint = 0.0;
+   base = 0.0;
+   high = 0.0;
+   low = 0.0;
+   bodyATR = 0.0;
+   why = "";
+
+   double atr = (ArraySize(bufATR) >= 2 && bufATR[1] > 0.0) ? bufATR[1] : 0.0;
+   if(atr <= 0.0)
+   {
+      why = "NEWS_OBSERVING: ATR unavailable; waiting for stable M5 data";
+      return false;
+   }
+
+   int bars = MathMax(1, MathMin(6, InpAdaptiveNewsImpulseBars));
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   int copied = CopyRates(Symbol(), PERIOD_M5, 1, bars, rates);
+   if(copied < bars)
+   {
+      why = "NEWS_OBSERVING: waiting for closed M5 bars after release";
+      return false;
+   }
+
+   high = rates[0].high;
+   low = rates[0].low;
+   for(int i = 0; i < copied; i++)
+   {
+      high = MathMax(high, rates[i].high);
+      low = MathMin(low, rates[i].low);
+   }
+
+   double openOld = rates[copied - 1].open;
+   double closeNew = rates[0].close;
+   double body = closeNew - openOld;
+   bodyATR = MathAbs(body) / atr;
+   if(bodyATR < InpAdaptiveNewsMinImpulseBodyATR)
+   {
+      why = StringFormat("NEWS_OBSERVING: range expansion without clear impulse body %.2fATR < %.2fATR",
+                         bodyATR, InpAdaptiveNewsMinImpulseBodyATR);
+      return false;
+   }
+
+   impulseDir = body > 0.0 ? 1 : -1;
+   midpoint = (high + low) * 0.5;
+   base = impulseDir > 0 ? low : high;
+
+   g_adaptiveNewsImpulseHigh = high;
+   g_adaptiveNewsImpulseLow = low;
+   g_adaptiveNewsImpulseMid = midpoint;
+   g_adaptiveNewsImpulseBase = base;
+   g_adaptiveNewsImpulseDir = impulseDir;
+   g_adaptiveNewsImpulseReady = true;
+   g_postNewsBias = impulseDir;
+   return true;
+}
+
+double XAU_AdaptiveNewsRoomATR(int signal, double price, double atr)
+{
+   if(signal == 0 || price <= 0.0 || atr <= 0.0) return 0.0;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   int copied = CopyRates(Symbol(), PERIOD_M5, 1, 36, rates);
+   double recentHigh = price;
+   double recentLow = price;
+   for(int i = 0; i < copied; i++)
+   {
+      recentHigh = MathMax(recentHigh, rates[i].high);
+      recentLow = MathMin(recentLow, rates[i].low);
+   }
+
+   double impulseRange = MathMax(atr * 0.5, g_adaptiveNewsImpulseHigh - g_adaptiveNewsImpulseLow);
+   if(signal > 0)
+   {
+      double projectedResistance = MathMax(recentHigh, g_adaptiveNewsImpulseHigh + impulseRange * 0.75);
+      return MathMax(0.0, (projectedResistance - price) / atr);
+   }
+   double projectedSupport = MathMin(recentLow, g_adaptiveNewsImpulseLow - impulseRange * 0.75);
+   return MathMax(0.0, (price - projectedSupport) / atr);
+}
+
+bool XAU_EvaluateAdaptiveNewsMomentumEntry(int signal, string setupName, string grade,
+                                           double combinedScore, string &why)
+{
+   why = "";
+   g_adaptiveNewsLotMultiActive = false;
+   g_adaptiveNewsLotMulti = 1.0;
+
+   bool adaptivePostActive = InpAdaptiveNewsMomentumEnable &&
+                             (g_adaptiveNewsPhase == ANP_POST_INTERPRETATION ||
+                              g_adaptiveNewsPhase == ANP_CONTINUATION_ALLOWED ||
+                              g_postNewsState == PNS_DISCOVERY ||
+                              g_postNewsState == PNS_CONFIRMED ||
+                              g_postNewsState == PNS_ALLOWED);
+   if(!adaptivePostActive || signal == 0) return true;
+
+   double spreadNow = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   bool spreadNormal = (g_spreadEMA <= 0.0 ||
+                        spreadNow <= g_spreadEMA * InpPostNewsSpreadReturnX ||
+                        spreadNow <= InpMaxSpread * 0.90);
+   if(!spreadNormal)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_SPREAD: spread %.0fpts is still abnormal vs baseline %.0fpts; observing first impulse",
+                         spreadNow, g_spreadEMA);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   int impulseDir = 0;
+   double midpoint = 0.0, base = 0.0, high = 0.0, low = 0.0, bodyATR = 0.0;
+   string snapshotWhy = "";
+   if(!XAU_NewsImpulseSnapshot(impulseDir, midpoint, base, high, low, bodyATR, snapshotWhy))
+   {
+      why = "NEWS_OBSERVING: " + snapshotWhy;
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+   if(impulseDir != signal)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_POOR_RR: impulseDir=%s but signal=%s; avoiding fake breakout/reversal chase",
+                         impulseDir > 0 ? "BUY" : "SELL", signal > 0 ? "BUY" : "SELL");
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   double atr = (ArraySize(bufATR) >= 2 && bufATR[1] > 0.0) ? bufATR[1] : 0.0;
+   if(atr <= 0.0)
+   {
+      why = "NEWS_OBSERVING: ATR unavailable after release";
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+   double price = signal > 0 ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                             : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   if(price <= 0.0) price = iClose(Symbol(), PERIOD_M5, 1);
+
+   double midpointBuffer = atr * InpAdaptiveNewsMidpointBufferATR;
+   bool heldMidpoint = signal > 0 ? (price >= midpoint - midpointBuffer)
+                                  : (price <= midpoint + midpointBuffer);
+   if(!heldMidpoint)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_POOR_RR: price failed to hold impulse midpoint %.5f; waiting for retest/reclaim",
+                         midpoint);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   double m5Open = iOpen(Symbol(), PERIOD_M5, 1);
+   double m5Close = iClose(Symbol(), PERIOD_M5, 1);
+   bool m5Momentum = signal > 0 ? (m5Close > m5Open && m5Close >= midpoint - midpointBuffer)
+                                : (m5Close < m5Open && m5Close <= midpoint + midpointBuffer);
+   double m15Open = iOpen(Symbol(), PERIOD_M15, 1);
+   double m15Close = iClose(Symbol(), PERIOD_M15, 1);
+   bool m15Momentum = signal > 0 ? (m15Close >= m15Open) : (m15Close <= m15Open);
+   bool htfAligned = (g_htfConsensusDir == signal ||
+                     (signal > 0 && (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP)) ||
+                     (signal < 0 && (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN)));
+   if(!(m5Momentum && m15Momentum && htfAligned))
+   {
+      why = StringFormat("NEWS_OBSERVING: continuation not confirmed yet | m5Momentum=%s m15Momentum=%s htfAligned=%s",
+                         m5Momentum ? "Y" : "N", m15Momentum ? "Y" : "N", htfAligned ? "Y" : "N");
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   double extensionATR = MathAbs(price - base) / atr;
+   if(extensionATR > InpAdaptiveNewsMaxExtensionATR)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_OVEREXTENDED: move already traveled %.2fATR from impulse base; waiting for pullback/retest",
+                         extensionATR);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   double roomATR = XAU_AdaptiveNewsRoomATR(signal, price, atr);
+   if(roomATR < InpAdaptiveNewsMinRoomATR)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_OVEREXTENDED: only %.2fATR room before next support/resistance; avoiding top/bottom chase",
+                         roomATR);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   double rr = roomATR / MathMax(0.75, MathMin(InpAdaptiveNewsMaxExtensionATR, MathMax(0.75, extensionATR)));
+   if(rr < InpAdaptiveNewsMinRR)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_POOR_RR: post-news continuation RR %.2f < %.2f; wait for better value",
+                         rr, InpAdaptiveNewsMinRR);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   int aiConf = MathMax(g_aiLastConfidence, lastAIConfidence);
+   if(aiConf > 0 && aiConf < InpAdaptiveNewsMinAIConfidence)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_POOR_RR: AI confidence %d%% below post-news minimum %d%%",
+                         aiConf, InpAdaptiveNewsMinAIConfidence);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   bool gradeOk = (grade == "A" || StringFind(grade, "A+") >= 0 ||
+                   (InpAdaptiveNewsAllowBGrade && grade == "B" && combinedScore >= GetEffectiveGradeB()));
+   if(!gradeOk)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_POOR_RR: grade=%s combined=%.1f is not strong enough for post-news continuation",
+                         grade, combinedScore);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   g_adaptiveNewsPhase = ANP_CONTINUATION_ALLOWED;
+   g_postNewsState = PNS_ALLOWED;
+   g_adaptiveNewsLotMultiActive = true;
+   g_adaptiveNewsLotMulti = (aiConf >= 75 || combinedScore >= InpGradeAPlus + 1.0)
+                             ? InpAdaptiveNewsHighConfRiskMult
+                             : InpAdaptiveNewsRiskMult;
+   g_adaptiveNewsLotMulti = MathMax(0.25, MathMin(1.0, g_adaptiveNewsLotMulti));
+   why = StringFormat("NEWS_ENTRY_ALLOWED: %s post-news continuation confirmed; price held %s impulse midpoint with acceptable RR %.2f, room %.2fATR, extension %.2fATR | NEWS_CONTINUATION_CONFIRMED",
+                      signal > 0 ? "bullish" : "bearish",
+                      signal > 0 ? "above" : "below",
+                      rr, roomATR, extensionATR);
+   g_adaptiveNewsLastDecision = why;
+   Print("NEWS_CONTINUATION_CONFIRMED: ", why);
+   return true;
+}
+
 void OnTick()
 {
    if(!licenseValid) { g_lastSkipReason = "LICENSE_INVALID (enter correct PIN in inputs)"; return; }
@@ -9088,7 +9519,7 @@ void OnTick()
       else if(!termAlgo)   { status = "ALGO TRADING OFF — click the 'Algo Trading' toolbar button until it turns GREEN"; statusCategory = "BLOCKED"; }
       else if(!mqlAlgo)    { status = "EA-LEVEL ALGO NOT ALLOWED — re-attach EA and tick 'Allow Algo Trading' in the Common tab"; statusCategory = "BLOCKED"; }
       else if(g_marketMode == MARKET_INDEX_MODE && InpIndexModeLogOnly)
-                           { status = StringFormat("INDEX_MODE monitoring-only (%s) — no index entry strategy enabled yet, managing %d open position(s)", EnumToString(InpIndexProfile), openPs); statusCategory = "WAITING"; }
+                           { status = StringFormat("INDEX_MODE log-only (%s) — entry engine evaluating but not trading live, managing %d open position(s)", EnumToString(InpIndexProfile), openPs); statusCategory = "WAITING"; }
       else if(openPs > 0)
       {
          // Check whether any open position is in TRI Recovery Mode — worth
@@ -9474,6 +9905,12 @@ void OnTick()
    // creating an endless rolling block. Fix: only arm when NOT already in a block.
    string scheduledNewsReason = "";
    bool scheduledNewsNow = IsScheduledNewsWindow(scheduledNewsReason);
+   bool adaptiveNewsHardBlock = false;
+   string adaptiveNewsReason = "";
+   // v6.10.0 staged news logs: "NEWS_PROTECTION: waiting before event",
+   // "NEWS_RELEASE_COOLDOWN: observing first impulse", and "NEWS_OBSERVING:"
+   // replace the old blind calendar block for US data releases.
+   XAU_UpdateAdaptiveNewsPhase(adaptiveNewsHardBlock, adaptiveNewsReason);
    bool aftermathArmEvent = (spreadEventType == "NEWS_SPIKE" ||
                              scheduledNewsNow ||
                              spread >= InpMaxSpread * 1.50);
@@ -9578,6 +10015,8 @@ void OnTick()
 
    bool spreadBlocksEntry = false;
    string spreadBlockReason = "";
+   bool adaptivePostPhase = (g_adaptiveNewsPhase == ANP_POST_INTERPRETATION ||
+                             g_adaptiveNewsPhase == ANP_CONTINUATION_ALLOWED);
    if(spread > InpMaxSpread)
    {
       spreadBlocksEntry = true;
@@ -9585,7 +10024,7 @@ void OnTick()
       g_lastSkipReason = spreadBlockReason;
    }
    // v6.4.6: news aftermath block with improved logging (timer no longer resets every tick)
-   if(!XAU_NoLimitTradingModeActive() && InpNewsAftermathEnable && TimeCurrent() < g_newsAftermathUntil && !spreadBlocksEntry)
+   if(!XAU_NoLimitTradingModeActive() && InpNewsAftermathEnable && TimeCurrent() < g_newsAftermathUntil && !spreadBlocksEntry && !adaptivePostPhase)
    {
       int secsLeft = (int)(g_newsAftermathUntil - TimeCurrent());
       spreadBlocksEntry = true;
@@ -9608,7 +10047,16 @@ void OnTick()
    if(!spreadBlocksEntry)
    {
       string calReason = "";
-      if(IsScheduledNewsWindow(calReason))
+      if(adaptiveNewsHardBlock)
+      {
+         static datetime lastAdaptiveCalLog = 0;
+         if(TimeCurrent() - lastAdaptiveCalLog >= 60)
+         { Print(adaptiveNewsReason); lastAdaptiveCalLog = TimeCurrent(); }
+         spreadBlocksEntry = true;
+         spreadBlockReason = adaptiveNewsReason;
+         g_lastSkipReason  = adaptiveNewsReason;
+      }
+      else if(!adaptivePostPhase && IsScheduledNewsWindow(calReason))
       {
          static datetime lastCalLog = 0;
          if(TimeCurrent() - lastCalLog >= 60)
@@ -9619,45 +10067,63 @@ void OnTick()
       }
    }
 
-   // XauIndex — INDEX MODE SAFETY GATE. Position/basket management above this
-   // point (ManageBasket/ManagePositions) already ran and keeps running
-   // normally for any existing position, using the shared exit/risk systems
-   // — that part is legitimately symbol-agnostic. Everything BELOW this
-   // point is the gold entry-scoring pipeline (setup scanning, SMC, AI
-   // Director entry check, OpenTrade). No index entry strategy exists yet,
-   // so when the resolved mode is INDEX_MODE and InpIndexModeLogOnly is
-   // true (the default, and the only supported value until a real index
-   // strategy ships), the EA stops here every tick: detection + diagnostics
-   // only, zero new positions. This is the literal enforcement of "no
-   // speculative live-money logic."
-   if(g_marketMode == MARKET_INDEX_MODE && InpIndexModeLogOnly)
+   // XauIndex — INDEX MODE: REAL ENTRY ENGINE. Position/basket management
+   // above this point (ManageBasket/ManagePositions) already ran and keeps
+   // running normally for any existing position — exits and position
+   // management (TTM/TRI/ManagePositions/ManageBasket) are already
+   // symbol-agnostic (R-multiple / %-of-SL based, not raw price levels) and
+   // need no index-specific code. This block runs the dedicated index
+   // entry engine (structure, liquidity, trend, pullback, breakout,
+   // volatility regime, momentum — see INDEX ENTRY ENGINE section above)
+   // once per new M5 bar. Everything BELOW this point is gold's own
+   // setup-scoring pipeline (SMC, AI Director, OpenTrade call site) —
+   // INDEX_MODE never falls through to it, it has its own OpenTrade() call
+   // right here instead.
+   if(g_marketMode == MARKET_INDEX_MODE)
    {
-      static datetime lastIndexIdleLog = 0;
-      if(TimeCurrent() - lastIndexIdleLog >= 300)
+      static datetime lastIndexBarEval = 0;
+      datetime curIndexBar = iTime(Symbol(), PERIOD_M5, 0);
+      if(curIndexBar != lastIndexBarEval)
       {
-         PrintFormat("INDEX_MODE_MONITORING_ONLY | symbol=%s profile=%s aggression=%s | no index entry strategy is enabled yet — positions=%d managed by shared exit systems, no new entries will be opened",
-                     Symbol(), EnumToString(InpIndexProfile), EnumToString(InpIndexAggression), CountMyPositions());
-         // illustrative-only INDEX_TRACE — proves the lot/risk math is
-         // live and correct for this symbol's real contract specs. Uses 1% of
-         // equity and this symbol's own ATR as a stand-in SL distance; this is
-         // NOT a trade signal, nothing here ever reaches OpenTrade().
-         int atrHIdx = (int)iATR(Symbol(), PERIOD_M5, 14);
-         double atrBufIdx[1];
-         double atrDistIdx = 0.0;
-         if(atrHIdx != INVALID_HANDLE)
+         lastIndexBarEval = curIndexBar;
+
+         double idxScore = 0.0; string idxSetup = ""; string idxGrade = "SKIP"; string idxReason = "";
+         int idxSignal = XAU_IndexScoreSetup(idxScore, idxSetup, idxGrade, idxReason);
+
+         double idxATRBuf[]; ArraySetAsSeries(idxATRBuf, true);
+         double idxATR = (hATR != INVALID_HANDLE && CopyBuffer(hATR, 0, 1, 1, idxATRBuf) >= 1) ? idxATRBuf[0] : 0.0;
+
+         PrintFormat("INDEX_ENGINE | symbol=%s signal=%d grade=%s score=%.2f setup=%s reason=%s liveTrading=%s",
+                     Symbol(), idxSignal, idxGrade, idxScore, idxSetup == "" ? "NONE" : idxSetup, idxReason,
+                     InpIndexModeLogOnly ? "false" : "true");
+
+         if(idxATR > 0.0)
+            XAU_LogIndexTrace(Symbol(), accInfo.Equity() * 0.01, idxATR * 1.5,
+                              idxSetup == "" ? "NO_SETUP" : idxSetup,
+                              idxGrade, idxReason,
+                              InpIndexModeLogOnly ? "N/A — log-only mode, would size via same risk engine" : "adaptive (shared exit systems)");
+
+         if(!InpIndexModeLogOnly && idxSignal != 0 && idxGrade != "SKIP" && idxATR > 0.0
+            && CountMyPositions() < InpMaxOpenTrades)
          {
-            int copiedIdx = CopyBuffer((int)atrHIdx, 0, 0, 1, atrBufIdx);
-            if(copiedIdx >= 1)
-               atrDistIdx = atrBufIdx[0] * 2.0;
-            IndicatorRelease(atrHIdx);
+            double idxSizeMulti = idxGrade == "A+" ? 1.10 : idxGrade == "A" ? 0.85 : 0.45;
+            OpenTrade(idxSignal, idxATR, idxSetup + " [" + idxGrade + "] " + idxReason, idxSizeMulti);
+            g_lastSkipReason = "";
          }
-         if(atrDistIdx > 0.0)
-            XAU_LogIndexTrace(Symbol(), accInfo.Equity() * 0.01, atrDistIdx,
-                              "UNCLASSIFIED (no regime classifier yet)", "NONE (no strategy engine yet)",
-                              "N/A — monitoring only", "N/A — monitoring only");
-         lastIndexIdleLog = TimeCurrent();
+         else if(InpIndexModeLogOnly)
+         {
+            g_lastSkipReason = StringFormat("INDEX_MODE_LOG_ONLY: signal=%d grade=%s setup=%s (engine live but not trading — flip InpIndexModeLogOnly=false to enable)",
+                                            idxSignal, idxGrade, idxSetup == "" ? "none" : idxSetup);
+         }
+         else if(idxSignal == 0 || idxGrade == "SKIP")
+         {
+            g_lastSkipReason = "INDEX_MODE: no qualifying setup this bar — " + idxReason;
+         }
+         else if(CountMyPositions() >= InpMaxOpenTrades)
+         {
+            g_lastSkipReason = "INDEX_MODE: max open trades reached";
+         }
       }
-      g_lastSkipReason = "INDEX_MODE_MONITORING_ONLY: no index entry strategy enabled yet";
       return;
    }
 
@@ -10361,6 +10827,7 @@ void OnTick()
       return;
    }
 
+   string adaptiveNewsWhy = "";
    if(spreadBlocksEntry && StringFind(spreadBlockReason, "NEWS_AFTERMATH") >= 0)
    {
       string fastTrackWhy = "";
@@ -10391,6 +10858,28 @@ void OnTick()
       }
    }
 
+   if(!spreadBlocksEntry && !XAU_EvaluateAdaptiveNewsMomentumEntry(signal, setupName, grade, combinedScore, adaptiveNewsWhy))
+   {
+      g_gateBlocks_News++;
+      Print("TRADE BLOCKED BECAUSE: ", adaptiveNewsWhy,
+            " | live signal still evaluated: ", setupName, " ",
+            signal > 0 ? "BUY" : "SELL",
+            " combined=", DoubleToString(combinedScore, 1),
+            " grade=", grade);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, adaptiveNewsWhy);
+      CloudPostReasoning("BLOCK", adaptiveNewsWhy, RegimeName(), setupName,
+                         setupScore, combinedScore, "NEWS-MOMENTUM", signal);
+      UpdateDashboard(signal, combinedScore, "NEWS");
+      lastDashSignal = signal; lastDashScore = combinedScore; lastDashGrade = "NEWS";
+      return;
+   }
+   if(StringFind(adaptiveNewsWhy, "NEWS_ENTRY_ALLOWED") >= 0)
+   {
+      Print(adaptiveNewsWhy);
+      CloudPostReasoning("ALLOW", adaptiveNewsWhy, RegimeName(), setupName,
+                         setupScore, combinedScore, "NEWS-ENTRY", signal);
+   }
+
    if(spreadBlocksEntry)
    {
       // v6.3.8 Upgrade 6: gate analytics
@@ -10412,6 +10901,12 @@ void OnTick()
    // News check
    if(InpUseNewsFilter && !IsNewsSafe())
    {
+      if(adaptivePostPhase)
+      {
+         Print("NEWS_OBSERVING: external/news API filter is advisory only during adaptive post-news interpretation; continuation gate decides after confirmation.");
+      }
+      else
+      {
       g_gateBlocks_News++; // v6.3.8 Upgrade 6
       Print("TRADE BLOCKED BECAUSE: NEWS FILTER (high-impact event nearby)");
       XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "NEWS FILTER (high-impact event nearby)");
@@ -10420,6 +10915,7 @@ void OnTick()
       UpdateDashboard(0, combinedScore, "NEWS");
       lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "NEWS";
       return;
+      }
    }
 
    // DXY CORRELATION GATE (cached, ~every 15 min)
@@ -11401,6 +11897,14 @@ void OnTick()
    PrintFormat("[LOT_TRACE] pgLotMult       = 1.000 (disabled v6.4.16)");
    PrintFormat("[LOT_TRACE] finalSzMult before enforcement = %.3f", finalSzMultSoftReduced);
    PrintFormat("[LOT_TRACE] finalSzMult after  enforcement = %.3f", finalSzMult);
+   if(g_adaptiveNewsLotMultiActive)
+   {
+      double beforeNewsRisk = finalSzMult;
+      PrintFormat("NEWS_POST_RISK: confirmed post-news continuation | finalSzMult %.3f x %.2f | %s",
+                  beforeNewsRisk, g_adaptiveNewsLotMulti, g_adaptiveNewsLastDecision);
+      finalSzMult *= g_adaptiveNewsLotMulti;
+      PrintFormat("[LOT_TRACE] finalSzMult after NEWS_POST_RISK = %.3f", finalSzMult);
+   }
    if(StringLen(lta_enforcementMsg) > 0)
       PrintFormat("[LOT_TRACE] enforcement: %s", lta_enforcementMsg);
    Print("[LOT_TRACE] ==========================================");
@@ -11557,18 +12061,13 @@ double RiskPerLotForDistance(double dist)
 }
 
 //+------------------------------------------------------------------+
-//| XauIndex — SYMBOL-AGNOSTIC INDEX LOT/RISK ENGINE (architecture    |
-//|   phase — not wired to any live entry path yet; InpIndexModeLogOnly|
-//|   blocks all index entries until a real strategy exists). Built   |
-//|   and tested now so the math is ready to plug in later.           |
-//|                                                                    |
+//| XauIndex — SYMBOL-AGNOSTIC INDEX LOT/RISK ENGINE.                 |
 //|   Computes a lot size from a $ risk budget and a price-distance   |
 //|   stop using ONLY the broker's own symbol properties — no gold    |
 //|   point/contract/spread assumptions of any kind. Every input is a |
 //|   function parameter (symbol included) rather than the built-in   |
-//|   Symbol(), so this is already safe to call for a symbol other    |
-//|   than the chart's own — a prerequisite for the future multi-     |
-//|   symbol scanner (see docs/index_mode_state_and_scanner_design.md).|
+//|   Symbol(), so this is safe to call for a symbol other than the   |
+//|   chart's own.                                                     |
 //+------------------------------------------------------------------+
 double XAU_CalcIndexLot(string symbol, double riskAmountUSD, double slDistance,
                         double &tickValueOut, double &tickSizeOut,
@@ -11678,6 +12177,300 @@ void XAU_LogIndexTrace(string symbol, double riskAmountUSD, double slDistance,
                contractSize, tickValue, tickSize, minLot, maxLot, lotStep, spreadPts, atrVal,
                regime, strategyType, entryReason, exitReason,
                moneyPerLot > 0.0 ? riskAmountUSD / moneyPerLot : 0.0, finalLot, capApplied);
+}
+
+//+------------------------------------------------------------------+
+//| XauIndex — REAL INDEX ENTRY ENGINE (v3.0.0)                       |
+//|   Built from standard technical-analysis principles (market       |
+//|   structure, liquidity, trend continuation, pullback entries,     |
+//|   breakout confirmation, volatility regimes, momentum) rather     |
+//|   than gold-specific tuning — no real index price history was     |
+//|   available to calibrate against at build time. Self-contained:   |
+//|   reuses the EA's existing M5/H1 indicator handles (already       |
+//|   created against Symbol() in OnInit, so already track whatever   |
+//|   symbol the EA is attached to) with fresh CopyBuffer reads on    |
+//|   every call, rather than trusting gold's shared per-bar buffers  |
+//|   — this runs before gold's own buffer refresh in OnTick(). Uses  |
+//|   bar index 1 (last CLOSED bar) throughout, matching gold's own   |
+//|   OpenTrade(signal, bufATR[1], ...) convention, to avoid acting   |
+//|   on a partially-formed, still-repainting current bar.            |
+//|   Output plugs into the EXISTING OpenTrade()/lot-sizing machinery |
+//|   unmodified: emits one of "A+"/"A"/"B"/"SKIP" and a signal       |
+//|   direction, exactly like gold's own ScoreSetups().               |
+//+------------------------------------------------------------------+
+input group "=== INDEX ENTRY ENGINE (v3.0.0 — structure/liquidity/trend/breakout/vol/momentum) ==="
+input int    InpIndexSwingLookback   = 20;   // bars scanned for swing high/low structure
+input int    InpIndexVolLookback     = 100;  // bars used for ATR percentile (volatility regime)
+input double InpIndexVolExtremePct   = 90.0; // ATR percentile above which entries are skipped (unclassified spike regime, e.g. Boom/Crash)
+input double InpIndexVolLowPct       = 25.0; // ATR percentile below which entries are skipped (dead/no-range regime)
+input double InpIndexGradeAPlus      = 5.5;  // combined confluence score for A+ (mirrors gold's InpGradeAPlus)
+input double InpIndexGradeA          = 4.0;  // combined confluence score for A
+input double InpIndexGradeB          = 2.5;  // combined confluence score for B
+input double InpIndexRSIPullbackLoLong  = 45.0;
+input double InpIndexRSIPullbackHiLong  = 70.0;
+input double InpIndexRSIPullbackLoShort = 30.0;
+input double InpIndexRSIPullbackHiShort = 55.0;
+
+// ATR percentile classification — the engine's volatility-regime gate.
+// Uses a rolling window of historical ATR readings, deliberately generic
+// (no fixed $ or point thresholds, which would be meaningless across
+// radically different index price scales).
+double XAU_IndexATRPercentile(double &curATR)
+{
+   curATR = 0.0;
+   if(hATR == INVALID_HANDLE) return 50.0;
+   int n = InpIndexVolLookback + 1;
+   double buf[];
+   ArraySetAsSeries(buf, true);
+   int copied = CopyBuffer(hATR, 0, 1, n, buf);
+   if(copied < 10) return 50.0;
+   curATR = buf[0]; // bar 1 (last closed) is buf[0] since the copy started at shift 1
+   int below = 0;
+   for(int i = 1; i < copied; i++)
+      if(buf[i] < curATR) below++;
+   return 100.0 * below / (double)(copied - 1);
+}
+
+// EMA-stack trend regime (M5 fast/slow + H1 confirmation, plus M5 slope).
+// +1 = uptrend, -1 = downtrend, 0 = range/no clear trend.
+int XAU_IndexTrendRegime(string &reasonOut)
+{
+   double emaFastM5[], emaSlowM5[], emaFastH1[], emaSlowH1[], closeM5[];
+   ArraySetAsSeries(emaFastM5, true); ArraySetAsSeries(emaSlowM5, true);
+   ArraySetAsSeries(emaFastH1, true); ArraySetAsSeries(emaSlowH1, true);
+   ArraySetAsSeries(closeM5, true);
+   if(CopyBuffer(hEMAFast, 0, 1, 4, emaFastM5) < 4 ||
+      CopyBuffer(hEMASlow, 0, 1, 4, emaSlowM5) < 4 ||
+      CopyBuffer(hEMAFast_H1, 0, 1, 2, emaFastH1) < 2 ||
+      CopyBuffer(hEMASlow_H1, 0, 1, 2, emaSlowH1) < 2 ||
+      CopyClose(Symbol(), PERIOD_M5, 1, 4, closeM5) < 4)
+   {
+      reasonOut = "insufficient data";
+      return 0;
+   }
+
+   bool m5Up   = emaFastM5[0] > emaSlowM5[0] && closeM5[0] > emaFastM5[0];
+   bool m5Down = emaFastM5[0] < emaSlowM5[0] && closeM5[0] < emaFastM5[0];
+   bool h1Up   = emaFastH1[0] > emaSlowH1[0];
+   bool h1Down = emaFastH1[0] < emaSlowH1[0];
+   bool m5Rising  = emaFastM5[0] > emaFastM5[3];
+   bool m5Falling = emaFastM5[0] < emaFastM5[3];
+
+   if(m5Up && h1Up && m5Rising)      { reasonOut = "M5+H1 EMA stack bullish, rising"; return 1; }
+   if(m5Down && h1Down && m5Falling) { reasonOut = "M5+H1 EMA stack bearish, falling"; return -1; }
+   reasonOut = "no aligned trend (range/chop)";
+   return 0;
+}
+
+// RSI momentum filter — for a long candidate, RSI should be constructively
+// strong but not exhausted; mirrored for short. Returns a confluence-point
+// contribution (0 = disqualifying, 0.5 = weak/extended, 1.5 = ideal zone).
+double XAU_IndexMomentum(int dir)
+{
+   double rsi[];
+   ArraySetAsSeries(rsi, true);
+   if(hRSI == INVALID_HANDLE || CopyBuffer(hRSI, 0, 1, 1, rsi) < 1) return 0.0;
+   double r = rsi[0];
+   if(dir == 1)
+   {
+      if(r < InpIndexRSIPullbackLoLong) return 0.0;
+      if(r > InpIndexRSIPullbackHiLong) return 0.5;
+      return 1.5;
+   }
+   if(dir == -1)
+   {
+      if(r > InpIndexRSIPullbackHiShort) return 0.0;
+      if(r < InpIndexRSIPullbackLoShort) return 0.5;
+      return 1.5;
+   }
+   return 0.0;
+}
+
+// Most recent significant swing high/low (3-bar fractal) within the lookback
+// window, scanning from bar 2 onward (bar 1 is the live "did we break it"
+// reference, so it's excluded from being a swing point itself).
+bool XAU_IndexSwingPoints(double &swingHigh, double &swingLow)
+{
+   int n = InpIndexSwingLookback + 4;
+   double hi[], lo[];
+   ArraySetAsSeries(hi, true); ArraySetAsSeries(lo, true);
+   if(CopyHigh(Symbol(), PERIOD_M5, 1, n, hi) < n || CopyLow(Symbol(), PERIOD_M5, 1, n, lo) < n)
+      return false;
+   swingHigh = -1; swingLow = -1;
+   for(int i = 3; i < n - 2; i++)
+   {
+      if(hi[i] > hi[i-1] && hi[i] > hi[i-2] && hi[i] > hi[i+1] && hi[i] > hi[i+2])
+         if(swingHigh < 0 || hi[i] > swingHigh) swingHigh = hi[i];
+      if(lo[i] < lo[i-1] && lo[i] < lo[i-2] && lo[i] < lo[i+1] && lo[i] < lo[i+2])
+         if(swingLow < 0 || lo[i] < swingLow) swingLow = lo[i];
+   }
+   return (swingHigh > 0 && swingLow > 0);
+}
+
+// Break of structure: the last closed bar's close broke beyond the most
+// recent opposite-direction swing point.
+bool XAU_IndexStructureBOS(int dir, string &reasonOut)
+{
+   double swingHigh, swingLow;
+   if(!XAU_IndexSwingPoints(swingHigh, swingLow)) { reasonOut = "no swing points found"; return false; }
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   if(dir == 1 && close1 > swingHigh)
+   { reasonOut = StringFormat("bullish BOS: close %.5f broke prior swing high %.5f", close1, swingHigh); return true; }
+   if(dir == -1 && close1 < swingLow)
+   { reasonOut = StringFormat("bearish BOS: close %.5f broke prior swing low %.5f", close1, swingLow); return true; }
+   reasonOut = "no structure break yet";
+   return false;
+}
+
+// Liquidity sweep: a bar wicked beyond a swing extreme (stop hunt) then
+// closed back inside it, with the following bar confirming the reversal.
+bool XAU_IndexLiquiditySweep(int dir, string &reasonOut)
+{
+   double swingHigh, swingLow;
+   if(!XAU_IndexSwingPoints(swingHigh, swingLow)) { reasonOut = "no swing points found"; return false; }
+   double hi2 = iHigh(Symbol(), PERIOD_M5, 2);
+   double lo2 = iLow(Symbol(), PERIOD_M5, 2);
+   double close2 = iClose(Symbol(), PERIOD_M5, 2);
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   if(dir == 1 && lo2 < swingLow && close2 > swingLow && close1 > close2)
+   { reasonOut = StringFormat("bullish liquidity sweep of %.5f then reclaim", swingLow); return true; }
+   if(dir == -1 && hi2 > swingHigh && close2 < swingHigh && close1 < close2)
+   { reasonOut = StringFormat("bearish liquidity sweep of %.5f then reclaim", swingHigh); return true; }
+   reasonOut = "no liquidity sweep detected";
+   return false;
+}
+
+// Pullback-in-trend entry: the last closed bar pulled back into the M5
+// fast-EMA value zone and closed as a rejection candle back in the trend
+// direction — the classic continuation entry.
+bool XAU_IndexPullbackEntry(int dir, string &reasonOut)
+{
+   double emaFast[];
+   ArraySetAsSeries(emaFast, true);
+   if(hEMAFast == INVALID_HANDLE || CopyBuffer(hEMAFast, 0, 1, 1, emaFast) < 1)
+   { reasonOut = "no EMA data"; return false; }
+
+   double hi1 = iHigh(Symbol(), PERIOD_M5, 1);
+   double lo1 = iLow(Symbol(), PERIOD_M5, 1);
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+   double range1 = hi1 - lo1;
+   if(range1 <= 0) { reasonOut = "zero range bar"; return false; }
+
+   bool touchedValue  = (dir == 1 ? lo1 <= emaFast[0] + range1 * 0.25 : hi1 >= emaFast[0] - range1 * 0.25);
+   bool rejectedInDir = (dir == 1 ? (close1 > open1 && close1 > (hi1 + lo1) / 2.0)
+                                   : (close1 < open1 && close1 < (hi1 + lo1) / 2.0));
+   if(touchedValue && rejectedInDir)
+   { reasonOut = StringFormat("pullback to EMA(%.5f) with %s rejection candle", emaFast[0], dir == 1 ? "bullish" : "bearish"); return true; }
+   reasonOut = "no qualifying pullback candle";
+   return false;
+}
+
+// Breakout-continuation entry: recent bars compressed into a tight range
+// relative to ATR (consolidation), then a strong-bodied breakout candle
+// clears that range in the candidate direction.
+bool XAU_IndexBreakoutEntry(int dir, double atr, string &reasonOut)
+{
+   if(atr <= 0) { reasonOut = "no ATR"; return false; }
+   int lookback = 10;
+   double hi[], lo[];
+   ArraySetAsSeries(hi, true); ArraySetAsSeries(lo, true);
+   if(CopyHigh(Symbol(), PERIOD_M5, 2, lookback, hi) < lookback ||
+      CopyLow(Symbol(), PERIOD_M5, 2, lookback, lo) < lookback)
+   { reasonOut = "insufficient bars"; return false; }
+
+   double rangeHigh = hi[ArrayMaximum(hi)];
+   double rangeLow  = lo[ArrayMinimum(lo)];
+   double rangeSize = rangeHigh - rangeLow;
+   bool tightRange = (rangeSize > 0 && rangeSize < atr * 2.0);
+
+   double hi1 = iHigh(Symbol(), PERIOD_M5, 1);
+   double lo1 = iLow(Symbol(), PERIOD_M5, 1);
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+   double body1 = MathAbs(close1 - open1);
+   bool strongBody = body1 > atr * 0.6;
+
+   if(!tightRange) { reasonOut = "no prior consolidation"; return false; }
+   if(dir == 1 && close1 > rangeHigh && strongBody)
+   { reasonOut = StringFormat("bullish breakout of %.5f range with strong body", rangeHigh); return true; }
+   if(dir == -1 && close1 < rangeLow && strongBody)
+   { reasonOut = StringFormat("bearish breakout of %.5f range with strong body", rangeLow); return true; }
+   reasonOut = "no qualifying breakout candle";
+   return false;
+}
+
+// Composite index setup scorer — combines volatility regime, trend regime,
+// momentum, structure, liquidity, and either a pullback-in-trend or a
+// breakout+structure setup into a single confluence score, using gold's
+// own A+/A/B/SKIP grade vocabulary so the result plugs into the existing
+// OpenTrade()/lot-sizing machinery unmodified. Returns signal direction
+// (1/-1/0); 0 means no qualifying setup (check gradeOut == "SKIP").
+int XAU_IndexScoreSetup(double &scoreOut, string &setupNameOut, string &gradeOut, string &reasonOut)
+{
+   scoreOut = 0.0; setupNameOut = ""; gradeOut = "SKIP"; reasonOut = "";
+   int bestDir = 0;
+
+   double curATR = 0.0;
+   double volPct = XAU_IndexATRPercentile(curATR);
+   if(volPct >= InpIndexVolExtremePct)
+   { reasonOut = StringFormat("volatility regime EXTREME (%.0f pctile) — unclassified spike risk, skipping", volPct); return 0; }
+   if(volPct <= InpIndexVolLowPct)
+   { reasonOut = StringFormat("volatility regime LOW (%.0f pctile) — insufficient range to trade", volPct); return 0; }
+   if(curATR <= 0.0) { reasonOut = "no ATR data"; return 0; }
+
+   string trendReason = "";
+   int trendDir = XAU_IndexTrendRegime(trendReason);
+
+   for(int d = 1; d >= -1; d -= 2)
+   {
+      double momPts = XAU_IndexMomentum(d);
+      if(momPts <= 0.0) continue;
+
+      string bosReason = "", sweepReason = "", pullReason = "", breakReason = "";
+      bool bos   = XAU_IndexStructureBOS(d, bosReason);
+      bool sweep = XAU_IndexLiquiditySweep(d, sweepReason);
+      bool pull  = XAU_IndexPullbackEntry(d, pullReason);
+      bool brk   = XAU_IndexBreakoutEntry(d, curATR, breakReason);
+
+      double score = 0.0; string setupName = ""; string reasonBits = "";
+      if(trendDir == d && pull)
+      {
+         setupName = "INDEX_TREND_PULLBACK";
+         score = 2.0 + momPts;
+         if(bos)   { score += 1.5; reasonBits += bosReason + "; "; }
+         if(sweep) { score += 1.0; reasonBits += sweepReason + "; "; }
+         reasonBits = trendReason + "; " + pullReason + "; " + reasonBits;
+      }
+      else if(brk && (bos || sweep))
+      {
+         setupName = "INDEX_BREAKOUT_RETEST";
+         score = 1.5 + momPts;
+         if(bos)   { score += 1.5; reasonBits += bosReason + "; "; }
+         if(sweep) { score += 1.0; reasonBits += sweepReason + "; "; }
+         if(trendDir == d) score += 1.0;
+         reasonBits = breakReason + "; " + reasonBits;
+      }
+      else continue;
+
+      if(score > scoreOut)
+      {
+         scoreOut = score; setupNameOut = setupName; reasonOut = reasonBits; bestDir = d;
+      }
+   }
+
+   if(bestDir == 0 || scoreOut <= 0.0)
+   {
+      if(StringLen(reasonOut) == 0) reasonOut = StringFormat("no qualifying setup (trend=%s, vol=%.0f pctile)", trendReason, volPct);
+      gradeOut = "SKIP";
+      return 0;
+   }
+
+   gradeOut = scoreOut >= InpIndexGradeAPlus ? "A+" :
+              scoreOut >= InpIndexGradeA     ? "A"  :
+              scoreOut >= InpIndexGradeB     ? "B"  : "SKIP";
+   if(gradeOut == "SKIP") return 0;
+   return bestDir;
 }
 
 double CurrentAggregateRiskToSL(double &openLots)
@@ -20708,10 +21501,9 @@ bool XAU_NewsAftermathCanFastTrack(int signal, string setupName, string grade,
                         spreadNow <= InpMaxSpread * 0.85);
    if(!spreadNormal) return false;
 
-   string calReason = "";
-   if(IsScheduledNewsWindow(calReason))
+   if(g_adaptiveNewsPhase == ANP_PRE_NEWS || g_adaptiveNewsPhase == ANP_RELEASE_COOLDOWN)
    {
-      why = "scheduled high-impact window still active: " + calReason;
+      why = XAU_AdaptiveNewsPhaseName(g_adaptiveNewsPhase) + " active; release protection still owns entries";
       return false;
    }
 

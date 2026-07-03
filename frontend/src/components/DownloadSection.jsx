@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.11.0";
-  const edition  = info?.edition  || "STRONG MOMENTUM OVERRIDE";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.11.0.mq5";
+  const version  = info?.version  || "v6.12.0";
+  const edition  = info?.edition  || "CALIBRATED ENTRY + SMARTER RUNNERS";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.12.0.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.11.0.</span> Adds Strong Momentum Override: cautious blocks can become controlled entries when M5/M15 structure momentum, HTF context, room, and RR agree, while late-top chase protection remains active.
+              <span className="font-semibold text-amber-200">Gold-only v6.12.0.</span> Adds Calibrated Entry + Smarter Runners: cautious blocks can become controlled entries when M5/M15 structure momentum, HTF context, room, and RR agree, while late-top chase protection remains active.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
@@ -165,14 +165,17 @@ export default function DownloadSection({ api }) {
                 <ChartLineUp size={12} weight="bold" /> A different bot
               </span>
               <h2 className="mt-4 max-w-2xl font-heading text-2xl font-semibold tracking-tight sm:text-4xl">
-                XauIndex {xiLoading ? "" : (xiInfo?.version || "v2.0.0")} — Gold + Index, one EA.
+                XauIndex {xiLoading ? "" : (xiInfo?.version || "v3.0.0")} — Gold + Index, one EA.
               </h2>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
                 Not the same bot as above. XauAI Sniper (Gold-only, {version}) stays pure gold, maintained
                 on its own. XauIndex is a separate product built on the same proven exit engine, with
                 Gold + Index market auto-detection added in. Attach it to XAUUSD and it trades gold exactly
-                the same way. Attach it to an index chart and it runs in monitoring-only Index Mode — full
-                diagnostics, no live index trades yet.
+                the same way. Attach it to an index chart and it now runs a real entry engine — market
+                structure, liquidity, trend continuation, pullback and breakout setups, volatility-regime
+                filtering, momentum — but ships log-only by default: it evaluates and shows its reasoning
+                live, and won't place a real index trade until you explicitly enable it after validating on
+                your own demo/index feed.
               </p>
             </div>
           </div>
@@ -188,7 +191,7 @@ export default function DownloadSection({ api }) {
                   {xiLoading
                     ? <p className="mt-2 flex items-center gap-2 text-sm text-white/40"><Spinner size={13} className="animate-spin" /> Fetching release info…</p>
                     : <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                        {xiInfo?.version || "v2.0.0"} · Market Mode architecture. Same dual-AI quality gate and Trade Thesis Monitor as XauAI Sniper, plus automatic Gold/Index detection and a symbol-agnostic lot engine, ready for index trading once a real strategy ships.
+                        {xiInfo?.version || "v3.0.0"} · Same dual-AI quality gate and Trade Thesis Monitor as XauAI Sniper, plus automatic Gold/Index detection and a real index entry engine (structure, liquidity, trend, breakout, volatility, momentum). Log-only by default until you enable live index trading.
                       </p>}
                 </div>
               </div>
@@ -199,7 +202,7 @@ export default function DownloadSection({ api }) {
 
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               {[
-                ["Version", xiLoading ? "—" : (xiInfo?.version || "v2.0.0")],
+                ["Version", xiLoading ? "—" : (xiInfo?.version || "v3.0.0")],
                 ["Size",    xiLoading ? "—" : xiInfo?.size_kb ? `${xiInfo.size_kb} KB` : "MQ5 source"],
                 ["SHA-256", xiLoading ? "—" : (xiInfo?.checksum_sha256_12 || "—")],
               ].map(([k, v]) => (
@@ -221,7 +224,7 @@ export default function DownloadSection({ api }) {
               <a href={`${api}/download/xauindex/ea`} data-testid="download-xauindex-button"
                 className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-emerald-200">
                 <DownloadSimple size={17} weight="bold" />
-                {xiLoading ? "Download .MQ5" : `Download XauIndex ${xiInfo?.version || "v2.0.0"} .MQ5`}
+                {xiLoading ? "Download .MQ5" : `Download XauIndex ${xiInfo?.version || "v3.0.0"} .MQ5`}
               </a>
               <a href={`${api}/download/xauindex/package`} data-testid="download-xauindex-package-button"
                 className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
