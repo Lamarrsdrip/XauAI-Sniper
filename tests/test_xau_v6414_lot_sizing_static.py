@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.13.0.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.14.0.mq5"
 EA_BACKEND = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -16,8 +16,8 @@ def section(text, start, end):
 
 def test_v6414_identity_and_synced_backend():
     ea = read(EA)
-    assert '#property version   "6.130"' in ea
-    assert '#define XAUAI_EA_VERSION "v6.13.0"' in ea
+    assert '#property version   "6.140"' in ea
+    assert '#define XAUAI_EA_VERSION "v6.14.0"' in ea
     assert read(EA) == read(EA_BACKEND)
 
 
