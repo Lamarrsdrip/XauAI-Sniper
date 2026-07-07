@@ -5,6 +5,59 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.17.2 — 2026-07-07 — Fix: legacy global anti-trend veto was undoing v6.17.0
+
+### EA Compile
+- [x] EA internal version: `#property version "6.172"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.2.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6172_final.log`)
+
+### Root cause (proven from the live journal, same day v6.17.0 shipped)
+User asked directly why a specific "no setup met regime criteria" log line was still appearing on
+v6.17.1. Pulled the exact log context around it and found the real story one line earlier:
+`ADAPTIVE-DIRECTION` correctly confirmed `DIRECTION_SELL_ONLY [STRONG tier]`, and — proof the v6.17.0
+fix itself worked — TREND_PULLBACK correctly proposed a SELL candidate this time. But immediately
+after, the journal showed: `ANTI-TREND VETO BACKSTOP: TREND_PULLBACK SELL during htfBullConsensus
+(should not happen in v6.1.4)`. That backstop, added in v6.1.3/v6.1.4 *before the Direction Engine
+existed*, assumed TREND_PULLBACK could never produce a countertrend signal while HTF read bullish —
+and zeroed the candidate right back out the moment it did, exactly reversing the v6.17.0 fix. A
+second, broader instance of the same veto (the non-backstop "GLOBAL ANTI-TREND VETO" a few lines
+above it) applies to every OTHER setup type as well (SQUEEZE_RELEASE, RANGE_REVERSAL, RSI_EXTREME,
+LONDON_FIX_PIN, MULTI_EXTREME) — meaning all five other v6.17.0 fixes were silently exposed to the
+same reversal, not just TREND_PULLBACK's backstop.
+
+The v6.17.0 fix was necessary but not sufficient: it fixed candidate *generation* inside each setup,
+but missed this separate veto *layer* that runs after every setup is scored, at the very end of
+`ScoreSetups()`.
+
+### Fix
+Both veto blocks now exempt candidates that `g_activeDirection` has already confirmed
+(`DIRECTION_SELL_ONLY`/`DIRECTION_BUY_ONLY`, MEDIUM/STRONG tier — real M5+M15 evidence). The veto
+still fires exactly as before for any candidate Active Direction has NOT confirmed — this is not a
+removal of the safety net, only an exemption for the case the Direction Engine has already validated.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v6172_global_antitrend_veto_fix_static.py` — 7/7 passing: verifies both
+      veto sites carry the exemption, confirms the veto still fires unconditionally otherwise, and
+      confirms the v6.17.0 direction fix and v6.17.1 indicator-lifecycle fix both survived intact
+- [x] Full suite: 265/294 passing, same class of pre-existing release-time sync staleness as every
+      prior release
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.2.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — same standing as v6.17.0/v6.17.1: needs a clean multi-hour observation window
+  showing a confirmed Direction Engine reversal actually reaching execution before trusting it live
+
+---
+
 ## v6.17.1 — 2026-07-07 — Fix: indicator-handle fail-counter rebuild loop
 
 ### EA Compile
