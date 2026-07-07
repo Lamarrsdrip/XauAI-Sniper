@@ -14,6 +14,52 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.4 — 2026-07-07 — Fix: TRANSITION_WAIT overstay guard
+
+### EA Compile
+- [x] EA internal version: `#property version "6.174"`, header banner updated too
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.4.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6174_final.log`)
+
+### Root cause
+User reported v6.17.2 reaching the Direction Engine correctly but repeatedly blocking with "no
+setup met regime criteria" while `Active Direction: DIRECTION_TRANSITION_WAIT` held for multiple
+consecutive M5 bars. Traced to `XAU_ComputeActiveDirection()`'s WEAK-tier opposition check:
+`XAU_AssessFailureAndSweep()` is a *rolling* 8-bar lookback comparison, not a one-time event flag,
+so a genuinely choppy/grinding market can keep re-triggering "failed continuation against HTF bias"
+bar after bar without any single break ever confirming a real reversal. The pullback-recognition
+branch (which would release to `DIRECTION_BOTH_ALLOWED`) is explicitly gated off by
+`noWeakSignalEither` whenever that flag is true, so there was no time-bounded escape — only a
+fresh MEDIUM/STRONG-tier break in either direction could end it. Result: both directions held
+closed indefinitely during real chop, a de facto permanent no-trade state.
+
+### Fix
+Added `g_transitionWaitStreak` (consecutive TRANSITION_WAIT bars, any cause) and
+`InpMaxTransitionWaitBars` (default 6, matching the ~6-7 bar streaks observed in the actual live
+journal). `XAU_ResolveOrReleaseTransitionWait()` releases to `DIRECTION_BOTH_ALLOWED` with a clear
+logged reason once the cap is exceeded. Does NOT touch the STRONG/MEDIUM confirmation thresholds
+themselves — a genuine bullish continuation or bearish flip still unlocks BUY/SELL the same bar it
+confirms; this only bounds how long *pure indecision* can hold both directions closed.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v6174_transition_wait_overstay_guard_static.py` — 10/10 passing
+- [x] Full suite: 281/315 passing, same class of pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.4.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — needs a clean observation window showing TRANSITION_WAIT actually releasing
+  after the bar cap during real chop, not just compiling
+
+---
+
 ## v6.17.3 — 2026-07-07 — Full-file audit: 6 more stale-HTF/bypass gaps + site version-banner bug
 
 ### EA Compile

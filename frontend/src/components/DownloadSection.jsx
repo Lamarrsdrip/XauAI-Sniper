@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.17.3";
-  const edition  = info?.edition  || "FULL AUDIT FIX";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.3.mq5";
+  const version  = info?.version  || "v6.17.4";
+  const edition  = info?.edition  || "OVERSTAY GUARD FIX";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.4.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.17.3.</span> Full-file audit fix: several more places (a momentum-override bypass, post-news entry checks) still hardcoded direction to the slow HTF trend or skipped the anti-repeat-loss guard. All now defer to Adaptive Direction's confirmed reversal read, consistent with the v6.17.0/v6.17.2 fixes — no thresholds lowered, no gates disabled.
+              <span className="font-semibold text-amber-200">Gold-only v6.17.4.</span> Runtime-proven fix: pure market indecision had no time limit, so a choppy stretch could hold both directions closed indefinitely. It now releases back to normal after a bounded number of bars with no confirmed break either way — a genuine bullish continuation or bearish flip still unlocks the same bar as before.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
