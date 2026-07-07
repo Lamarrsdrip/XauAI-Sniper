@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.17.4.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.17.5.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -28,9 +28,9 @@ def test_current_release_source_is_synced_to_backend():
     assert read(EA) == read(BACKEND_EA)
 
 
-def test_version_bumped_to_v6174():
+def test_version_bumped_to_v6175():
     ea = read(BACKEND_EA)
-    assert '#define XAUAI_EA_VERSION "v6.17.4"' in ea
+    assert '#define XAUAI_EA_VERSION "v6.17.5"' in ea
 
 
 def test_header_banner_matches_property_version_for_website_display():
@@ -38,7 +38,7 @@ def test_header_banner_matches_property_version_for_website_display():
     ea = read(BACKEND_EA)
     m = re.search(r'v(\d+\.\d+\.\d+)\s*[—\-]+\s*(.+)', ea[:3000])
     assert m is not None
-    assert f"v{m.group(1)}" == "v6.17.4"
+    assert f"v{m.group(1)}" == "v6.17.5"
 
 
 # ---------------------------------------------------------------------------

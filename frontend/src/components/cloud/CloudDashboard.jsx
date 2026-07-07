@@ -95,6 +95,7 @@ const getEventField = (event, key, fallback="") => {
 const getEventTicket = (event) => String(getEventField(event, "ticket", "") || getEventField(event, "posId", "") || getEventField(event, "position_id", ""));
 const getEventDecision = (event) => getEventField(event, "decision", "") || event?.message || "Decision recorded";
 const getEventReason = (event) => getEventField(event, "reason", "") || event?.message || "";
+const yesNo = (v) => v === undefined || v === null || v === "" ? "" : v ? "YES" : "NO";
 const eventRepeatText = (event) => {
   const count = Number(event?.repeat_count || 1);
   if (count <= 1) return "";
@@ -107,8 +108,10 @@ const eventMatchesSearch = (event, term) => {
   return [
     event?.event_type, event?.severity, event?.symbol, event?.message, event?.ts,
     event?.module, event?.decision, event?.reason, event?.blocked_by, event?.ticket,
+    event?.final_decision, event?.final_blocker, event?.pipeline_stage, event?.broker_retcode,
     d.module, d.decision, d.reason, d.blocked_by, d.ticket, d.symbol,
     d.close_reason_exact, d.closed_by_module, d.position_direction,
+    d.final_decision, d.final_blocker, d.pipeline_stage, d.broker_retcode,
   ].filter(Boolean).some(v => String(v).toLowerCase().includes(q));
 };
 const latestDecisionEvent = (events=[]) => events.find(e => /entries|blocks|exits|risk|ai|errors|overrides/.test(eventCategory(e))) || events[0];
@@ -199,6 +202,11 @@ function EventRow({ event }) {
   const reason = getEventReason(event);
   const ticket = getEventTicket(event);
   const allowed = getEventField(event, "allowed", getEventField(event, "trade_allowed", undefined));
+  const candidateAllowed = getEventField(event, "candidate_allowed", undefined);
+  const finalAllowed = getEventField(event, "final_execution_allowed", undefined);
+  const finalDecision = getEventField(event, "final_decision", "");
+  const finalBlocker = getEventField(event, "final_blocker", getEventField(event, "blocked_by", ""));
+  const openTradeCalled = getEventField(event, "open_trade_called", undefined);
   const repeat = eventRepeatText(event);
   const facts = [
     ["Symbol", event.symbol || d.symbol],
@@ -207,7 +215,12 @@ function EventRow({ event }) {
     ["Signal", getEventField(event, "signal_direction", "")],
     ["AI", getEventField(event, "ai_confidence", "")],
     ["Score", getEventField(event, "score", "")],
-    ["Allowed", allowed === undefined ? "" : allowed ? "YES" : "NO"],
+    ["Candidate", yesNo(candidateAllowed)],
+    ["Final", finalAllowed === undefined ? yesNo(allowed) : yesNo(finalAllowed)],
+    ["Decision", finalDecision],
+    ["FinalBlocker", finalBlocker],
+    ["OpenTrade", yesNo(openTradeCalled)],
+    ["Retcode", getEventField(event, "broker_retcode", "")],
     ["Ticket", ticket],
     ["P/L", getEventField(event, "profit", "")],
     ["Close", getEventField(event, "close_reason_exact", "")],
@@ -240,7 +253,11 @@ function DecisionSummaryCard({ events=[], heartbeat={}, setActive, title="Latest
   const event = latestDecisionEvent(events);
   const d = eventDetails(event);
   const allowed = event ? getEventField(event, "allowed", getEventField(event, "trade_allowed", undefined)) : undefined;
+  const finalAllowed = event ? getEventField(event, "final_execution_allowed", undefined) : undefined;
+  const finalDecision = event ? getEventField(event, "final_decision", "") : "";
+  const finalBlocker = event ? getEventField(event, "final_blocker", getEventField(event, "blocked_by", "")) : "";
   const tone = event ? severityTone(event.severity) : "neutral";
+  const displayAllowed = finalAllowed === undefined ? allowed : finalAllowed;
   return (
     <Card
       title={title}
@@ -258,7 +275,7 @@ function DecisionSummaryCard({ events=[], heartbeat={}, setActive, title="Latest
           <div className="text-[17px] font-black leading-tight">{getEventDecision(event)}</div>
           <div className="text-[12px] leading-5 text-white/45">{getEventReason(event) || event.message}</div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Metric label="Allowed" value={allowed===undefined?"—":allowed?"YES":"NO"} detail={getEventField(event,"blocked_by","")||"Decision result"} icon={Shield} tone={allowed===false?"amber":allowed===true?"green":"neutral"} />
+            <Metric label="Final" value={displayAllowed===undefined?"—":displayAllowed?"YES":"NO"} detail={finalDecision || finalBlocker || "Execution result"} icon={Shield} tone={displayAllowed===false?"amber":displayAllowed===true?"green":"neutral"} />
             <Metric label="Bias" value={getEventField(event,"market_bias","—")||"—"} detail={event.symbol||heartbeat.symbol||"XAUUSD"} icon={Activity} tone="blue" />
             <Metric label="AI" value={getEventField(event,"ai_confidence","—")||"—"} detail="Confidence" icon={Brain} tone="violet" />
             <Metric label="Score" value={getEventField(event,"score","—")||"—"} detail={getEventField(event,"signal_direction","")||"Signal"} icon={Gauge} tone="amber" />

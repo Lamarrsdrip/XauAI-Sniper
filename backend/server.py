@@ -4912,6 +4912,16 @@ class BotActivityReq(BaseModel):
     was_emergency_margin: Optional[bool] = None
     was_ea_forced_close: Optional[bool] = None
     position_direction: Optional[str] = ""
+    candidate_allowed: Optional[bool] = None
+    final_execution_allowed: Optional[bool] = None
+    final_decision: Optional[str] = ""
+    final_blocker: Optional[str] = ""
+    open_trade_called: Optional[bool] = None
+    trade_buy_called: Optional[bool] = None
+    trade_sell_called: Optional[bool] = None
+    broker_retcode: Optional[int] = None
+    broker_error: Optional[int] = None
+    pipeline_stage: Optional[str] = ""
 
 # v6.9.0 — purpose-built payload for XAU_LogTradeThesisStatus's cloud post.
 # Kept separate from BotActivityReq's generic event schema since this is a
@@ -5057,6 +5067,16 @@ async def _store_bot_activity(event_type: str, severity: str, message: str,
         "signal_direction": str(details.get("signal_direction") or ""),
         "ai_confidence": details.get("ai_confidence"),
         "score": details.get("score"),
+        "candidate_allowed": details.get("candidate_allowed"),
+        "final_execution_allowed": details.get("final_execution_allowed"),
+        "final_decision": str(details.get("final_decision") or ""),
+        "final_blocker": str(details.get("final_blocker") or ""),
+        "open_trade_called": details.get("open_trade_called"),
+        "trade_buy_called": details.get("trade_buy_called"),
+        "trade_sell_called": details.get("trade_sell_called"),
+        "broker_retcode": details.get("broker_retcode"),
+        "broker_error": details.get("broker_error"),
+        "pipeline_stage": str(details.get("pipeline_stage") or ""),
     }
     await db.cloud_bot_activity.insert_one(doc.copy())
     total = await db.cloud_bot_activity.estimated_document_count()
@@ -5147,8 +5167,22 @@ def _ai_classify_card_type(ev: dict) -> str:
     category = str(ev.get("event_category") or "").lower()
     event_type = str(ev.get("event_type") or "").upper()
     decision = str(ev.get("decision") or "").upper()
+    final_decision = str(ev.get("final_decision") or (ev.get("details") or {}).get("final_decision") or "").upper()
+    final_allowed = ev.get("final_execution_allowed")
     allowed = ev.get("allowed")
     ticket = str(ev.get("ticket") or "").strip()
+    if event_type == "M5_DECISION":
+        if final_decision in {"EXECUTED", "FILLED"} or final_allowed is True:
+            return "TRADE_EXECUTED"
+        if final_decision == "BLOCKED" or final_allowed is False and str(ev.get("candidate_allowed") or "").lower() != "true":
+            return "TRADE_BLOCKED"
+        return "MARKET_ANALYSIS"
+    if event_type == "EXECUTION_FUNNEL":
+        if final_decision == "EXECUTED" or final_allowed is True:
+            return "TRADE_EXECUTED"
+        if final_decision in {"BLOCKED", "ERROR"} or final_allowed is False:
+            return "TRADE_BLOCKED"
+        return "MARKET_ANALYSIS"
     if category == "entries" or "TRADE_EXECUTED" in event_type or "FIRE" in event_type or "PYR" in event_type:
         return "TRADE_EXECUTED"
     if category == "exits" or "EXIT" in event_type or "CLOSE" in event_type:
@@ -5173,6 +5207,8 @@ def _ai_build_thought_card(ev: dict, prev_conf_by_ticket: dict) -> dict:
     confidence = int(confidence) if isinstance(confidence, (int, float)) else None
     bias = _ai_bias_word(ev.get("market_bias") or ev.get("signal_direction"))
     reason_raw = ev.get("reason") or ""
+    final_decision = str(ev.get("final_decision") or details.get("final_decision") or "").strip()
+    final_blocker = str(ev.get("final_blocker") or details.get("final_blocker") or "").strip()
     thesis = str(details.get("thesis") or "")
     bearish_case = str(details.get("bearish_case") or "")
 
@@ -5251,10 +5287,12 @@ def _ai_build_thought_card(ev: dict, prev_conf_by_ticket: dict) -> dict:
         # decision line itself, not buried in the bullets underneath a
         # generic phrase. "Waiting for higher quality setup" is now only
         # the last-resort fallback when no specific reason is available.
-        blocked_by = str(ev.get("blocked_by") or "").strip()
+        blocked_by = final_blocker or str(ev.get("blocked_by") or "").strip()
         if blocked_by and not any(blocked_by.lower() in b.lower() for b in bullets):
             bullets.insert(0, blocked_by)
         decision_text = _ai_humanize_block_reason(blocked_by) or (bullets[0] if bullets else "") or "Waiting for higher quality setup"
+    elif card_type == "MARKET_ANALYSIS" and final_decision:
+        decision_text = final_decision if final_decision != "WAITING" else "Waiting for execution gates"
 
     if grade:
         grade_phrase = _GRADE_PHRASES.get(grade.upper(), "")
@@ -5298,6 +5336,12 @@ def _ai_build_thought_card(ev: dict, prev_conf_by_ticket: dict) -> dict:
             "symbol": ev.get("symbol"),
             "message": ev.get("message"),
             "close_reason_exact": ev.get("close_reason_exact"),
+            "candidate_allowed": ev.get("candidate_allowed") if ev.get("candidate_allowed") is not None else details.get("candidate_allowed"),
+            "final_execution_allowed": ev.get("final_execution_allowed") if ev.get("final_execution_allowed") is not None else details.get("final_execution_allowed"),
+            "final_decision": final_decision or None,
+            "final_blocker": final_blocker or None,
+            "open_trade_called": ev.get("open_trade_called") if ev.get("open_trade_called") is not None else details.get("open_trade_called"),
+            "broker_retcode": ev.get("broker_retcode") if ev.get("broker_retcode") is not None else details.get("broker_retcode"),
             "details": details,
         },
     }
@@ -5467,7 +5511,9 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
         "current_trade_status", "exit_decision", "risk_lot_decision", "module",
         "ticket", "profit", "price", "close_reason_exact", "closed_by_module",
         "was_broker_sl", "was_manual", "was_emergency_margin", "was_ea_forced_close",
-        "position_direction",
+        "position_direction", "candidate_allowed", "final_execution_allowed",
+        "final_decision", "final_blocker", "open_trade_called", "trade_buy_called",
+        "trade_sell_called", "broker_retcode", "broker_error", "pipeline_stage",
     ):
         value = getattr(req, field, None)
         if value is not None and value != "":
