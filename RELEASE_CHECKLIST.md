@@ -5,6 +5,87 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.15.0 — 2026-07-07 — June 17-18 Reconstruction: Strategy-Led Architecture
+
+### EA Compile
+- [x] EA internal version: `#property version "6.150"`
+- [x] EA header comment: v6.15.0
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.15.0.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6150_reconstruction.log`)
+
+### Root cause (see full forensic audit; MT5 trade reports 108492408 + 108458093, 79-commit git archaeology, live journal 20260703.log)
+Real trade data: TREND_PULLBACK averaged +$81 to +$137/trade on 2026-06-17/18, then
+-$1 to -$21/trade afterward — the identical strategy tag, inverted. Root cause:
+`XAU_StrongContextForSoftBypass()` (added v6.4.21, 528c080) unconditionally downgraded
+any hard structural block to a warning for A/A+ grade with no freshness/session-memory
+check, at 9 call sites (v6.13.0's same-day anti-repeat-loss guard only fenced 3). AI
+Director (v6.3.0, 401f225) gave AI real veto/lot authority firing on every grade. Three
+commits over 48h (06-29→07-01) disabled 9 loss-based lot-reduction mechanisms and every
+daily circuit breaker. Five commits (06-19→07-01) added "let it breathe" loss-cutting
+requirements with no symmetric requirement on win-banking (avg hold 25.8min→40.4min,
+losses growing to -$245/-$328/-$721 while wins stayed ~$41). HTF_TREND_FOLLOW (added
+06-26, 93b9492) fired on H1/H4 consensus alone with no M5 trigger — single largest loss
+contributor in the dataset (net -$1,622 on one account). Confirmed live in
+`MQL5/Logs/20260703.log`: `TRADE-MODE WARNING | gate=SMART_GUARD_FAST_CONFIRM downgraded
+hard block to warning | grade=A+` firing repeatedly during the July 3 incident window.
+
+### What shipped
+1. `InpAIMode` (AI_OFF/AI_ADVISOR_ONLY/AI_FILTER_ONLY/AI_DIRECTOR), default `AI_FILTER_ONLY`
+   — AI_DIRECTOR (legacy full authority) is now explicit opt-in, not the default.
+2. `XAU_ModeAllowsSoftBlockWarning()` now returns false for every mode except explicit
+   `AI_DIRECTOR` — this is the single choke point all 9 grade-based soft-bypass call
+   sites route through, so one function fix closes the loophole everywhere at once.
+3. **Adaptive Direction Engine** (`XAU_ComputeActiveDirection`, new): separates HTF Bias
+   (context only) from Active Direction (DIRECTION_BUY_ONLY/SELL_ONLY/BOTH_ALLOWED/
+   NO_TRADE/TRANSITION_WAIT, computed fresh every closed M5 bar from a real swing
+   break + H1 BOS). HTF_TREND_FOLLOW and PYR+RETEST_RESCUE now require Active
+   Direction to permit their direction before firing — HTF consensus alone can no
+   longer earn an entry against live M5 structure.
+4. Exit-side: `XAU_ProtectPeakProfitFloor` no longer takes zero action when a position
+   round-trips from peak profit to profit≤0 under thesis-hold — it now re-arms at
+   breakeven first (never a downgrade from an already-better SL).
+5. `GetPerformanceMultiplier()` rewritten: one bounded, auditable loss-streak lot tier
+   (0.85x/0.70x/0.50x at 2/3/4+ same-direction losses) active under
+   `InpJune18RestoreMode`, replacing the old 9-mechanism uncontrolled stack — not a
+   revival of the old dead code.
+6. `InpJune18RestoreMode` (default false): forces AI_ADVISOR_ONLY, keeps no-limit daily
+   locks off (`XAU_NoLimitTradingModeActive` now checks this first), and activates the
+   loss-streak lot tier — an explicit single-flag opt-in rather than flipping the three
+   no-limit defaults directly (those gate ~30 independent code paths; flipping them as
+   a side effect of an unrelated change is exactly the kind of thing that causes
+   hard-to-trace regressions later).
+7. Multi-instance fixes: `_ai_cost_state_hash()` (backend) now buckets account-risk
+   state (daily P/L, basket float, loss streak, open positions) so a cached AI verdict
+   reasoned about one account's risk posture can't be silently replayed onto another;
+   AI daily-call budget/throttle is now per-account (`_ai_cost_stats_by_account`,
+   backend) instead of one global pool that starved instances of each other's AI
+   opinions; EA sends `account_id` (`ACCOUNT_LOGIN`) on both AI endpoints; loss-streak/
+   cooldown state (`g_sameDirLossStreak` etc.) now persists via
+   `GlobalVariableSet/Get` and reconstructs at `OnInit()` instead of resetting to zero
+   on every EA restart.
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.15.0.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` (canonical source; download endpoint reads version from this file's header dynamically — no separate backend version bump needed)
+- [x] `backend/server.py` — cache-key + per-account budget fix (no schema/version field to bump)
+- [ ] GitHub main branch pushed
+
+### Testing Before Live
+- [x] Full recompile — 0 errors, 0 warnings (`test_reports/metaeditor_v6150_reconstruction.log`)
+- [ ] MT5 journal: `ADAPTIVE-DIRECTION | HTF Bias: ... | Active Direction: ...` line appears every closed M5 bar
+- [ ] MT5 journal: `HTF_TREND_FOLLOW: withheld — Active Direction=...` appears when HTF consensus disagrees with fresh M5 structure
+- [ ] MT5 journal: no `TRADE-MODE WARNING | ... downgraded hard block to warning` lines under default `AI_FILTER_ONLY` (only ever under explicit `AI_DIRECTOR`)
+- [ ] MT5 journal: `THESIS_HOLD_BE_REARM` appears instead of silent zero-action when a runner round-trips to profit≤0
+- [ ] `/api/download/info` returns version v6.15.0
+- [ ] 24h+ demo validation before considering this safe for live capital, per this checklist's own standing rule
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — this is an architectural change to the entry/exit/AI-authority hierarchy; validate on demo (both Mac and VPS instances) through at least one full session covering the kind of trending-then-reversing move that produced the July 3 incident before considering live capital
+
+---
+
 ## v6.7.0 — 2026-07-02 — Market Mode Architecture (Gold + Index)
 
 *(Renamed from v6.6.0 before wide distribution — same content, no functional changes, version identifiers only.)*

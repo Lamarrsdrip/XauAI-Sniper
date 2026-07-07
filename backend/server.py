@@ -71,6 +71,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 _ai_cost_cache: Dict[str, dict] = {}
+_ai_cost_stats_by_account: Dict[str, dict] = {}  # multi-instance fix: per-account daily-call/throttle buckets, see _ai_account_bucket()
 _ai_cost_stats = {
     "day": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     "calls": 0,
@@ -131,7 +132,21 @@ def _bucket(value: Any, size: float, default: str = "0") -> str:
         return default
 
 def _ai_cost_state_hash(purpose: str, payload: dict) -> str:
-    """Hash only meaningful market state so repeated unchanged setups reuse AI output."""
+    """Hash meaningful market state AND the account-risk-state fields the AI
+    prompt itself is told to weight, so repeated unchanged setups reuse AI
+    output but two accounts in genuinely different risk postures never share
+    a cached verdict that was actually reasoned about only one of them.
+
+    June 17-18 reconstruction / multi-instance fix: the prompt built in
+    _build_entry_prompt() explicitly tells the model "if on a loss streak,
+    require 75%+ confidence" and includes account_equity/daily_pct/
+    basket_float_pl/recent_losses — but this hash used to omit all of that,
+    so a cached verdict computed while one account was deep in a loss streak
+    could be silently replayed onto a different, healthy account hitting the
+    same market-structure bucket. Bucketing (not hashing exact account
+    identity) keeps the beneficial cross-instance cache reuse for accounts
+    that are in a genuinely similar risk posture, while separating accounts
+    that aren't."""
     symbol = str(payload.get("symbol", "XAUUSD")).upper()
     setup = str(payload.get("setup") or payload.get("setup_name") or "NA").upper()
     regime = str(payload.get("regime") or "NA").upper()
@@ -157,6 +172,13 @@ def _ai_cost_state_hash(purpose: str, payload: dict) -> str:
         "score_b": _bucket(payload.get("combined_score", 0), 1),
         "profit_b": _bucket(payload.get("profit", 0), 25),
         "pending_exit": str(payload.get("pending_exit_reason") or "")[:40],
+        # Account-risk-state buckets: coarse enough that two accounts in a
+        # similar posture still share a cache entry, fine enough that a deep
+        # drawdown/loss-streak account never gets confused with a healthy one.
+        "daily_pct_b": _bucket(payload.get("daily_pct", 0), 0.5),
+        "basket_pl_b": _bucket(payload.get("basket_float_pl", 0), 25),
+        "loss_streak_b": str(min(int(payload.get("recent_losses", 0) or 0), 5)),
+        "open_pos_b": str(min(int(payload.get("open_positions", 0) or 0), 4)),
     }
     raw = _json.dumps(features, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
@@ -195,20 +217,42 @@ def _ai_cache_put(cache_key: str, result: dict, purpose: str, tokens: int) -> No
         for key, _ in oldest:
             _ai_cost_cache.pop(key, None)
 
-def _ai_budget_allows(purpose: str, cache_key: str, high_impact: bool = False) -> tuple[bool, str]:
+def _ai_account_key(account_id: str) -> str:
+    return str(account_id or "").strip() or "_shared"
+
+def _ai_account_bucket(account_id: str) -> dict:
+    """Multi-instance fix: AI_COST_DAILY_CALL_LIMIT and AI_COST_MIN_SECONDS
+    used to be enforced against one process-wide counter shared by every EA
+    instance talking to this backend — as more instances were added they
+    increasingly starved each other's AI opinions at random (the mechanism
+    behind "one account takes a trade, another doesn't" that isn't explained
+    by genuine strategic disagreement). Each account now gets its own daily
+    budget and throttle. EA builds that don't yet send account_id share one
+    "_shared" bucket, preserving the old (imperfect) behavior for them only —
+    this is purely additive and backward compatible."""
+    key = _ai_account_key(account_id)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    bucket = _ai_cost_stats_by_account.get(key)
+    if not bucket or bucket.get("day") != today:
+        bucket = {"day": today, "calls": 0, "last_call_at": 0.0}
+        _ai_cost_stats_by_account[key] = bucket
+    return bucket
+
+def _ai_budget_allows(purpose: str, cache_key: str, high_impact: bool = False, account_id: str = "") -> tuple[bool, str]:
     _ai_cost_reset_if_new_day()
-    if _ai_cost_stats["calls"] >= AI_COST_DAILY_CALL_LIMIT:
+    bucket = _ai_account_bucket(account_id)
+    if bucket["calls"] >= AI_COST_DAILY_CALL_LIMIT:
         _ai_cost_stats["skipped"] += 1
-        return False, f"AI_COST_SKIP daily_limit {AI_COST_DAILY_CALL_LIMIT} reached"
-    elapsed = time.time() - float(_ai_cost_stats.get("last_call_at", 0))
+        return False, f"AI_COST_SKIP daily_limit {AI_COST_DAILY_CALL_LIMIT} reached (account={_ai_account_key(account_id)})"
+    elapsed = time.time() - float(bucket.get("last_call_at", 0))
     if AI_COST_MIN_SECONDS > 0 and elapsed < AI_COST_MIN_SECONDS:
         _ai_cost_stats["skipped"] += 1
         impact = "high_impact" if high_impact else "normal"
-        return False, f"AI_COST_SKIP throttle {elapsed:.1f}s < {AI_COST_MIN_SECONDS}s ({impact}; local rules continue)"
+        return False, f"AI_COST_SKIP throttle {elapsed:.1f}s < {AI_COST_MIN_SECONDS}s ({impact}; local rules continue, account={_ai_account_key(account_id)})"
     return True, "ok"
 
 def _record_ai_cost(provider: str, model: str, prompt: str, response_text: str,
-                    purpose: str, cache_key: str, reason: str) -> dict:
+                    purpose: str, cache_key: str, reason: str, account_id: str = "") -> dict:
     _ai_cost_reset_if_new_day()
     tokens = _estimate_ai_tokens(prompt, response_text)
     cost = _estimate_ai_cost(tokens)
@@ -216,6 +260,10 @@ def _record_ai_cost(provider: str, model: str, prompt: str, response_text: str,
     _ai_cost_stats["tokens"] += tokens
     _ai_cost_stats["estimated_cost"] = round(float(_ai_cost_stats["estimated_cost"]) + cost, 6)
     _ai_cost_stats["last_call_at"] = time.time()
+    # multi-instance fix: bump this account's own budget/throttle bucket too
+    account_bucket = _ai_account_bucket(account_id)
+    account_bucket["calls"] += 1
+    account_bucket["last_call_at"] = time.time()
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "purpose": purpose,
@@ -1793,6 +1841,7 @@ async def startup():
 # CLAUDE AI POSITION MANAGER (Active Trade Reasoning)
 ########################################
 class PositionCheckRequest(BaseModel):
+    account_id: str = ""  # multi-instance fix: per-account AI budget/throttle (falls back to a shared bucket when omitted by older EA builds)
     symbol: str = "XAUUSD"
     direction: str = ""
     entry_price: float = 0
@@ -1834,7 +1883,7 @@ async def ai_manage_position(req: PositionCheckRequest):
         if cached:
             return cached
         high_impact = bool(req.pending_exit_reason) or abs(req.profit) >= 75 or req.peak_profit >= 150
-        allowed, budget_reason = _ai_budget_allows("exit", cache_key, high_impact=high_impact)
+        allowed, budget_reason = _ai_budget_allows("exit", cache_key, high_impact=high_impact, account_id=req.account_id)
         if not allowed:
             logger.info("%s purpose=exit key=%s", budget_reason, cache_key)
             return {
@@ -1919,7 +1968,8 @@ Decision (HOLD / CLOSE / LOCK)? JSON only."""
         cost_meta = _record_ai_cost("anthropic", "claude-sonnet-4-5-20250929",
                                     system_msg + "\n" + prompt, response,
                                     "exit", cache_key,
-                                    "exit conflict/news/profit-management audit")
+                                    "exit conflict/news/profit-management audit",
+                                    account_id=req.account_id)
 
         import json, re
         cleaned = response.strip()
@@ -1966,6 +2016,7 @@ Decision (HOLD / CLOSE / LOCK)? JSON only."""
 # AI MARKET ANALYSIS (GPT-5.2)
 ########################################
 class AIAnalysisRequest(BaseModel):
+    account_id: str = ""  # multi-instance fix: per-account AI budget/throttle (falls back to a shared bucket when omitted by older EA builds)
     symbol: str = "XAUUSD"
     ema_fast: float = 0
     ema_slow: float = 0
@@ -2421,7 +2472,7 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             logger.info("%s key=%s grade=%s score=%.2f", reason, cache_key, req.grade, req.combined_score)
             return _entry_local_only_response(reason, cache_key)
 
-        allowed, budget_reason = _ai_budget_allows("entry", cache_key, high_impact=high_impact)
+        allowed, budget_reason = _ai_budget_allows("entry", cache_key, high_impact=high_impact, account_id=req.account_id)
         if not allowed:
             logger.info("%s purpose=entry key=%s", budget_reason, cache_key)
             return _entry_local_only_response(budget_reason, cache_key)
@@ -2431,17 +2482,19 @@ async def ai_analyze_market(req: AIAnalysisRequest):
         cost_entries = [
             _record_ai_cost("anthropic", "claude-sonnet-4-5-20250929",
                             prompt_for_cost, _json.dumps(claude, separators=(",", ":")),
-                            "entry", cache_key, "primary entry confirmation")
+                            "entry", cache_key, "primary entry confirmation",
+                            account_id=req.account_id)
         ]
 
         if _should_call_dual_ai(req, claude):
-            second_allowed, second_reason = _ai_budget_allows("entry_dual", cache_key, high_impact=True)
+            second_allowed, second_reason = _ai_budget_allows("entry_dual", cache_key, high_impact=True, account_id=req.account_id)
             if second_allowed:
                 gpt = await _ask_entry_ai("openai", "gpt-4o", req)
                 cost_entries.append(
                     _record_ai_cost("openai", "gpt-4o",
                                     prompt_for_cost, _json.dumps(gpt, separators=(",", ":")),
-                                    "entry_dual", cache_key, "high-impact/ambiguous dual check")
+                                    "entry_dual", cache_key, "high-impact/ambiguous dual check",
+                                    account_id=req.account_id)
                 )
             else:
                 gpt = {"action": "SKIP", "confidence": 0, "reason": second_reason,

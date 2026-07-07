@@ -585,7 +585,7 @@ export default function CloudDashboard() {
   const online      = Boolean(status && !status.offline && heartbeat.account_number);
   const tradingOk   = Boolean(heartbeat.algo_trading && heartbeat.trading_allowed && heartbeat.mt5_connected);
   const statusText  = online ? heartbeat.bot_state||"ONLINE" : "NO HEARTBEAT";
-  const eaVersion   = heartbeat.ea_version || licenseInfo.ea_version || status?.license?.ea_version || "v6.14.0";
+  const eaVersion   = heartbeat.ea_version || licenseInfo.ea_version || status?.license?.ea_version || "v6.15.0";
   const equityPoints = useMemo(()=>{
     const base = Number(heartbeat.balance||heartbeat.equity||0);
     if (!base) return [];
