@@ -48,12 +48,15 @@ def test_version_bumped_to_v6171():
 # and the Command Center observed.
 # ---------------------------------------------------------------------------
 def test_fail_counter_resets_on_bounded_time_between_failures():
+    # v6.17.7 superseded the single global g_indicatorBufferFailCount with a
+    # per-label streak (see test_xau_v6177's indicator-fail-streak tests) --
+    # the SAME decay-based reset behavior this test checks for now lives on
+    # g_indFailCounts[idx]/g_indFailAtTimes[idx] instead of the old globals.
     ea = read(BACKEND_EA)
     fn = body(ea, "bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &target[], string label)")
-    assert "g_lastIndicatorFailAt" in fn
     assert "indicatorFailDecaySec" in fn
-    assert "g_indicatorBufferFailCount = 0;" in fn  # decay reset before re-incrementing
-    assert "g_indicatorBufferFailCount++;" in fn
+    assert "g_indFailCounts[failIdx] = 0;" in fn  # decay reset before re-incrementing
+    assert "g_indFailCounts[failIdx]++;" in fn
 
 
 def test_warmup_is_still_bounded_and_not_removed():
@@ -66,18 +69,22 @@ def test_warmup_is_still_bounded_and_not_removed():
 def test_valid_handle_returns_true_immediately_without_touching_fail_state():
     ea = read(BACKEND_EA)
     fn = body(ea, "bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &target[], string label)")
-    # A successful CopyBuffer must return true before any fail-counter logic runs.
+    # A successful CopyBuffer must return true before any fail-counter logic runs
+    # (and, per v6.17.7, resets only THIS label's own streak on success).
     ok_idx = fn.index("if(got >= count)")
-    fail_idx = fn.index("g_indicatorBufferFailCount++;")
-    assert ok_idx < fail_idx
+    reset_idx = fn.index("XAU_ResetIndicatorFailStreak(label);")
+    fail_idx = fn.index("g_indFailCounts[failIdx]++;")
+    assert ok_idx < reset_idx < fail_idx
 
 
 def test_transient_failure_does_not_immediately_force_rebuild():
     ea = read(BACKEND_EA)
     fn = body(ea, "bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &target[], string label)")
-    # Rebuild only fires once the (decay-aware) count reaches InpIndicatorReloadFails,
-    # or the handle is truly INVALID_HANDLE -- never on a single transient blip alone.
-    assert "InpIndicatorReloadFails > 0 && g_indicatorBufferFailCount >= InpIndicatorReloadFails" in fn
+    # Rebuild only fires once the (decay-aware, per-label) count reaches
+    # InpIndicatorReloadFails, or the handle is truly INVALID_HANDLE -- never
+    # on a single transient blip alone, and never combined across unrelated
+    # labels (v6.17.7).
+    assert "InpIndicatorReloadFails > 0 && labelFailCount >= InpIndicatorReloadFails" in fn
     assert "staleHandle = (handle == INVALID_HANDLE)" in fn
 
 

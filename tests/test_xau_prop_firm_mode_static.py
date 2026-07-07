@@ -40,7 +40,9 @@ def test_prop_firm_mode_caps_risk_without_changing_entry_intelligence():
     assert "EffectiveAggregateRiskCapPct()" in EA
     assert "PROP-FIRM RISK CAP" in EA
     assert "PROP-FIRM MODE: large-account risk floor disabled" in EA
-    timing_guard = EA[EA.index("bool XAUEntryTimingGuard"):EA.index("void OpenTrade")]
+    # v6.17.7: OpenTrade changed from void to bool (item 4, deferred state
+    # commitment until confirmed broker execution) -- landmark updated.
+    timing_guard = EA[EA.index("bool XAUEntryTimingGuard"):EA.index("bool OpenTrade")]
     assert "g_propFirmMode" not in timing_guard
 
 

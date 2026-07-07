@@ -17,7 +17,8 @@ def test_prop_firm_reference_balance_owns_strategy_budgets():
 
     assert "double bal = StrategyReferenceBalance();" in EA[EA.index("void RecomputeAutoScale()"):]
     assert "double equity = StrategyReferenceBalance();" in EA[EA.index("double AccountSizeRiskMultiplier()"):]
-    assert "double balance = StrategyReferenceBalance();" in EA[EA.index("void OpenTrade("):]
+    # v6.17.7: OpenTrade changed from void to bool (item 4) -- landmark updated.
+    assert "double balance = StrategyReferenceBalance();" in EA[EA.index("bool OpenTrade("):]
     assert "double bal = StrategyReferenceBalance();" in EA[EA.index("bool ManageBasket()"):]
     assert "double propReference = StrategyReferenceBalance();" in EA
     assert "g_propFirmAccountStartEquity - equity" in EA

@@ -14,6 +14,108 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.7 — 2026-07-07 — Surgical correctness repair (9 independently-verified static-audit items)
+
+### EA Compile
+- [x] EA internal version: `#property version "6.177"`, header banner updated
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.7.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6177_final.log`)
+
+### Scope
+User supplied 9 independently-verified static-audit findings with an explicit instruction not to
+lower thresholds, remove SmartGuard/Adaptive Direction, or change lot-sizing/NoLimit philosophy --
+fix the actual logic defects only. All 9 verified against the real code before editing (none taken
+on faith); one claim (item 3, Personality Gate control flow) initially looked correct on a first
+read and was only confirmed as a real bug via programmatic brace/keyword verification.
+
+1. **Array-index series-semantics bug, 8 functions** (`STI_ComputeExhaustion`, `VolatilityKillReason`,
+   `HasExhaustionDivergence`, `IsMomentumWeak`, `IsXAUConfirmedBreakoutContinuation`, `IsFakeBreakout`,
+   `ManageBasket`'s dynamic basket momentum block, `PG_HTFTrend`) -- MQL5 fills a plain (non-series)
+   fixed array from `CopyBuffer`/`CopyOpen`/`CopyHigh`/`CopyLow`/`CopyClose` with index 0 = OLDEST
+   requested bar, not newest; all 8 functions' arithmetic assumed the opposite. First attempt
+   (`ArraySetAsSeries` on the existing fixed arrays) produced compiler warning 63 "cannot be used for
+   static allocated array" -- caught before it shipped as a silent no-op. Fix: converted every
+   affected declaration from fixed-size to dynamic (`double x[N]` -> `double x[]`) so
+   `ArraySetAsSeries(x, true)` actually takes effect.
+2. **`ComputeADXProxy` 10x scale bug** (regression A) -- `spread / 0.0040 * 10.0` produced 2.5/3.5 for
+   0.10%/0.14% spread where the function's own comment documents 25/35. `ClassifyMarketPersonality()`
+   almost never crossed its ADX>20/ADX>35 thresholds and fell through to `MKT_RANGE` far more often
+   than real trend strength justified -- the direct root cause of the PERSONALITY-vs-BREAKOUT
+   contradiction fixed in v6.17.6. Fixed the multiplier to `100.0`.
+3. **Personality Gate A/A+ unreachable-proceed bug** (regression E) -- the breakout-continuation/
+   momentum-override soft-pass chain (`if(continuationPersonalitySoftPass...) ... else if(...) ...
+   else { hard block; return; }`) was a STANDALONE `if`, not chained to the A/A+ branch above it via
+   `else`. An A/A+ candidate took its documented -1.5 penalty AND THEN separately fell into this
+   chain too -- unless it also happened to qualify for one of the soft-passes, it hit the chain's own
+   final `else` and was hard-blocked + returned anyway, completely undoing "A+ setups: never
+   hard-block" (the function's own doc comment). Fixed by chaining as `else if`.
+4. **`OpenTrade` void->bool, deferred state commitment** (regression F) -- changed signature to
+   `bool`; all 24 early-exit paths now `return false`, only a confirmed `trade.Buy`/`trade.Sell`
+   result returns true/false. Both call sites (RE_ENTRY, main entry) updated so `todayReEntryCount`/
+   `lastClose.reEntered`/`g_lastEntryGrade`/`g_lastEntryScore`/dashboard state/the "TRADE OPENED"
+   scorecard entry are only committed on a confirmed fill -- a risk block, broker rejection, or any
+   other early-exit no longer permanently burns a re-entry slot or claims a trade that never
+   happened. Pyramid state (`CheckPyramidOpportunity`) was audited and found already correctly gated
+   on its own `if(ok)` -- no change needed there, locked in with a regression test.
+5. **Neutral-HTF early-return bug** (regression G) -- `sequenceStillAgrees`/`noBosLevelBreakAgainst`/
+   `noWeakSignalEither` were all vacuously true whenever `htfBias==0`, so the "normal pullback" early
+   return fired unconditionally on neutral HTF, before the STRONG/MEDIUM M5/M15 tier checks ever ran.
+   Gated the early return on `htfBias != 0`; STRONG/MEDIUM's primary conditions are already
+   HTF-independent and now correctly evaluate on raw M5/M15 evidence when HTF is neutral.
+6. **Global -> per-label indicator fail streaks** (regression H) -- `g_indicatorBufferFailCount` was
+   one counter shared across all 14 entry-buffer labels; an unrelated transient blip on two different
+   indicators combined toward the same rebuild threshold. New `XAU_IndicatorFailStreakIndex`/
+   per-label `g_indFailCounts[]`/`g_indFailAtTimes[]` track each label independently; a label's own
+   successful copy resets only its own streak.
+7. **`XAU_AssessFailedBreakout` impossible condition rebuilt** (regression D) -- received the
+   caller's `swingHigh`/`swingLow` (computed over shifts 2-19) and tested shifts 2-7 (a strict
+   subset) against that same range, so `close[i] > swingHigh` was mathematically impossible
+   (`close[i] <= high[i] <= swingHigh` always, since `high[i]` is itself part of `swingHigh`'s max).
+   This function was dead code. Rebuilt to compute its own prior range from shifts 8-19 (excluding
+   the shift 2-7 test window entirely) before checking for a break-then-reclaim.
+8. **`XAU_ProtectPeakProfitFloor` unreachable `THESIS_HOLD_BE_REARM` branch** (regression I) -- an
+   earlier revocation (`if(thesisHoldAllowed && !floorAlreadyProtected && profit <= floorUSD)
+   thesisHoldAllowed = false;`) had no lower bound, and `profit <= 0.0` (the BE-rearm branch's own
+   trigger condition) always implies `profit <= floorUSD` (floorUSD is always > 0) -- so
+   `thesisHoldAllowed` was always already false by the time the BE-rearm branch's condition was
+   checked. Narrowed the revocation to `profit > 0.0` only, so the "round-tripped to/below breakeven
+   while thesis still valid" case it was built for can actually reach it.
+9. **M15 structure breaks now use M15 ATR, not M5 ATR** -- `m15BearBreak`/`m15BullBreak` reused
+   `structBuf` (scaled from M5 ATR), too tight for M15-level break detection given M15's inherently
+   larger bar ranges. Added a dedicated `structBufM15` from a fresh M15 ATR read; M5 checks unchanged.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v6177_surgical_correctness_repair_static.py` — 27/27 passing, covering all
+      9 items and all 9 named regression cases (A-I) with real arithmetic checks where applicable
+      (e.g. `0.0010/0.0040*100.0 == 25.0`)
+- [x] Fixed 8 pre-existing tests that broke on landmark/architecture changes from this release (not
+      dismissed as stale): `test_xau_prop_firm_mode_static.py` and `test_xau_v5850_evidence_refactor_static.py`
+      searched for `"void OpenTrade("` as a landmark (now `bool`); 3 tests in
+      `test_xau_v6171_indicator_handle_lifecycle_fix_static.py` asserted the old global
+      `g_indicatorBufferFailCount` mechanism directly superseded by item 6's per-label streaks; 3
+      window-size tests needed widening after longer explanatory comments pushed target code further
+      from their markers; `test_release_labels_static.py` needed the `server.py` `ea_version` default
+      bumped
+- [x] Full suite: 316/358 passing; the 42 remaining failures are individually confirmed (not assumed)
+      pure version-snapshot identity/string checks — none reference Direction Engine, SmartGuard, AI
+      mode, indicator recovery, OpenTrade, or broker execution behavior
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.7.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — this is the largest single correctness pass of the session (9 independent
+  defects across array indexing, scale math, control flow, and state-commitment timing); needs a
+  full clean observation window confirming each fix's behavior matches intent before any live capital
+
+---
+
 ## v6.17.6 — 2026-07-07 — Profit-impact audit: PERSONALITY soft-pass needlessly AI-gated
 
 ### EA Compile

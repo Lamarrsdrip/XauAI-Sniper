@@ -60,7 +60,10 @@ def test_continuation_personality_soft_pass_no_longer_requires_ai_director_mode(
     ea = read(BACKEND_EA)
     marker = "// v6.4.0 UPGRADE 1 — Market Personality Gate"
     idx = ea.index(marker)
-    window = ea[idx: idx + 4200]
+    # v6.17.7 (item 3) added a longer explanatory comment ahead of this branch
+    # (and correctly chained it as `else if` -- see the dedicated v6177 test
+    # for that), pushing content further from the marker; window widened.
+    window = ea[idx: idx + 5400]
     assert "if(continuationPersonalitySoftPass && !XAU_AntiRepeatLossActive(signal))" in window
     # Must NOT require XAU_StructuralBypassAllowed() on this specific branch.
     continuation_branch_start = window.index("if(continuationPersonalitySoftPass")
