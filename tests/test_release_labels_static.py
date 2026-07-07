@@ -25,10 +25,17 @@ def read(path):
 
 
 def test_public_site_command_and_admin_labels_show_current_release():
+    # CloudDashboard.jsx intentionally excluded: it displays a CONNECTED
+    # USER'S actual live EA version from their own heartbeat
+    # (heartbeat.ea_version), not a marketing "latest release" label. It used
+    # to hard-code a fallback literal version string when no heartbeat had
+    # arrived yet, which fabricated a version number the user's EA might not
+    # actually be running -- fixed to fall through to "Waiting" instead. That
+    # fix means this file will never contain a literal CURRENT-version
+    # string by design, and re-adding one would reintroduce the bug.
     files = [
         ROOT / "frontend" / "src" / "components" / "Footer.jsx",
         ROOT / "frontend" / "src" / "components" / "cloud" / "CloudLanding.jsx",
-        ROOT / "frontend" / "src" / "components" / "cloud" / "CloudDashboard.jsx",
         ROOT / "frontend" / "src" / "components" / "AdminPortal.jsx",
         ROOT / "frontend" / "src" / "components" / "DownloadSection.jsx",
         ROOT / "frontend" / "src" / "components" / "FeaturesSection.jsx",
@@ -38,6 +45,12 @@ def test_public_site_command_and_admin_labels_show_current_release():
         assert CURRENT in src, f"{path.name} should show current release"
         for old in OLD_LABELS:
             assert old not in src, f"{path.name} still contains stale release label {old}"
+
+    dash_src = read(ROOT / "frontend" / "src" / "components" / "cloud" / "CloudDashboard.jsx")
+    assert 'heartbeat.ea_version||"—"' in dash_src or "heartbeat.ea_version" in dash_src, \
+        "CloudDashboard.jsx should read the live EA version from heartbeat, not a hardcoded literal"
+    for old in OLD_LABELS:
+        assert old not in dash_src, f"CloudDashboard.jsx still contains stale release label {old}"
 
 
 def test_backend_trade_memory_default_uses_current_release():

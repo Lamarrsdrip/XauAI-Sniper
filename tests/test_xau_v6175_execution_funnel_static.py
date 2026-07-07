@@ -77,9 +77,14 @@ def test_personality_gate_softens_only_confirmed_breakout_continuation():
     # hour (~3.4R) with minimal adverse excursion first. The anti-repeat-loss
     # guard is kept as the baseline safety check; the AI-authority-mode gate is
     # not, since this path never was AI opinion in the first place.
+    # Window widened in v6.17.6: the explanatory comment above the fixed
+    # branch grew, pushing the STRONG_MOMENTUM_OVERRIDE branch this test also
+    # checks further from the section marker. Verified directly that both
+    # assertion targets are present in the source before widening -- this was
+    # a test window-size bug, not a code regression.
     ea = read(BACKEND_EA)
     marker = "// v6.4.0 UPGRADE 1 — Market Personality Gate"
-    window = ea[ea.index(marker): ea.index(marker) + 3400]
+    window = ea[ea.index(marker): ea.index(marker) + 4300]
     assert "continuationPersonalitySoftPass" in window
     assert "IsXAUConfirmedBreakoutContinuation(signal, setupName)" in window
     assert "regimeAlignedPersonality" in window

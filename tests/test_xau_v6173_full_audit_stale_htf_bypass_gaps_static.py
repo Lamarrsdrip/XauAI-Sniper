@@ -42,10 +42,16 @@ def test_damage_b_quality_bypass_has_antirepeat_and_structural_gate():
 
 
 def test_personality_gate_bypass_has_antirepeat_and_structural_gate():
+    # Window widened in v6.17.6: continuationPersonalitySoftPass was added
+    # (Codex, v6.17.5) plus a longer explanatory comment (v6.17.6), pushing
+    # the STRONG_MOMENTUM_OVERRIDE branch this test checks further from the
+    # section marker. Verified directly that the assertion target is still
+    # present in the source before widening this window -- this was a test
+    # window-size bug, not a code regression.
     ea = read(BACKEND_EA)
     marker = "// v6.4.0 UPGRADE 1 — Market Personality Gate"
     idx = ea.index(marker)
-    window = ea[idx: idx + 1800]
+    window = ea[idx: idx + 4700]
     assert "!XAU_AntiRepeatLossActive(signal) && XAU_StructuralBypassAllowed()" in window
 
 
