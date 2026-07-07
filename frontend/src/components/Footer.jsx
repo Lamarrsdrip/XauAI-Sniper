@@ -11,7 +11,7 @@ export default function Footer() {
             </div>
             <div>
               <span className="text-[13px] font-semibold text-white/70">XauAI Sniper</span>
-              <span className="ml-2 font-mono text-[10px] text-white/28">v6.16.0 · Direction Engine v2</span>
+              <span className="ml-2 font-mono text-[10px] text-white/28">v6.16.1 · Structural-AI Bypass Split</span>
             </div>
           </div>
 

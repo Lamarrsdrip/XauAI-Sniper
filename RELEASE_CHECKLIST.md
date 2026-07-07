@@ -5,6 +5,50 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.16.1 — 2026-07-07 — Self-audit fix: structural vs AI-opinion bypass split
+
+### EA Compile
+- [x] EA internal version: `#property version "6.161"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.16.1.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6161_final.log`)
+
+### Self-audit finding
+v6.16.0's `XAU_ModeAllowsSoftBlockWarning()` fix applied one unified rule to all 11 grade-based
+soft-bypass call sites. Re-auditing on request surfaced that these are two different categories:
+structural/market-fact gates (SmartGuard fast-TF, STI/TRI re-entry watch, news-aftermath, SMC
+conflict, AI_LOW_CONF_SKIP) vs. AI's-own-opinion-escalation gates (HTF-override, weak disagreement,
+no-confidence skip, confident-B-skip) plus one unrelated permissive feature-gate (Strong Momentum
+Precheck). Treating them identically meant AI weak-disagreement on a good structural A+/A setup was
+being fully blocked by default rather than allowed through at reduced size — more conservative than
+necessary and not what "AI can filter/reduce, cannot override structure" was supposed to mean.
+
+### Fix
+Split into `XAU_StructuralBypassAllowed()` (closed by default under AI_ADVISOR_ONLY/AI_FILTER_ONLY/
+AI_OFF/RestoreMode, only AI_DIRECTOR opens it — used at the 6 structural sites) and
+`XAU_ModeAllowsSoftBlockWarning()` (reverted to its original trade-mode-only logic — used at the 5
+AI-opinion/feature sites, which are already inert under ADVISOR_ONLY/RestoreMode since the whole AI
+Director cascade short-circuits earlier via `XAU_AIIsAdvisoryOnly()`).
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] `tests/test_xau_v6160_direction_engine_v2_and_risk_reconcile_static.py` updated + expanded —
+      20/20 passing (verifies both gates individually, all 6 + 5 call sites by name)
+- [x] Full suite: 245/269 passing; the 24 failures are the same pre-existing release-time sync tests
+      from v6.16.0 (confirmed unrelated to this change)
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.16.1.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — same standing as v6.16.0, demo-validate both fixes together
+
+---
+
 ## v6.16.0 — 2026-07-07 — Direction Engine v2 + Universal Risk Reconciliation
 
 ### EA Compile

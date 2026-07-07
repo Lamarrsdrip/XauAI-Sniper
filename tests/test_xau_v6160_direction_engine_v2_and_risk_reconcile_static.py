@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.16.0.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.16.1.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -39,12 +39,43 @@ def test_ai_mode_defaults_away_from_director():
     assert "input bool   InpJune18RestoreMode = false;" in ea
 
 
-def test_soft_bypass_closed_by_default_only_ai_director_preserves_it():
+def test_structural_bypass_closed_by_default_only_ai_director_preserves_it():
+    # v6.16.1 refinement: the 11 grade-based soft-bypass sites split into
+    # Category A (structural/market-fact -- SmartGuard, STI/TRI re-entry,
+    # news-aftermath, SMC conflict, AI_LOW_CONF_SKIP) which must stay closed
+    # by default, and Category B (AI's own opinion-escalation gates, plus the
+    # unrelated Strong Momentum feature-gate) which keep the original
+    # trade-mode-only logic since they're already inert under
+    # ADVISOR_ONLY/RestoreMode anyway.
     ea = read(BACKEND_EA)
-    fn = body(ea, "bool XAU_ModeAllowsSoftBlockWarning()")
-    assert "InpJune18RestoreMode" in fn
-    assert "InpAIMode != AI_DIRECTOR" in fn
-    assert "return false;" in fn
+    structural_fn = body(ea, "bool XAU_StructuralBypassAllowed()")
+    assert "InpJune18RestoreMode" in structural_fn
+    assert "InpAIMode != AI_DIRECTOR" in structural_fn
+    assert "return false;" in structural_fn
+
+    opinion_fn = body(ea, "bool XAU_ModeAllowsSoftBlockWarning()")
+    assert "InpAIMode" not in opinion_fn  # reverted to original trade-mode-only logic
+    assert "InpTradeMode == BALANCED_MODE" in opinion_fn
+
+
+def test_structural_gate_covers_all_six_named_sites():
+    ea = read(BACKEND_EA)
+    assert '!antiRepeatBlocks && XAU_StructuralBypassAllowed() && XAU_StrongContextForSoftBypass' in ea  # SMART_GUARD_FAST_CONFIRM
+    assert '!antiRepeatBlocksSTI && XAU_StructuralBypassAllowed() && XAU_StrongContextForSoftBypass' in ea  # STI_REENTRY_WAIT
+    assert '!antiRepeatBlocksAI && XAU_StructuralBypassAllowed() && XAU_StrongContextForSoftBypass' in ea  # AI_LOW_CONF_SKIP
+    assert 'else if(XAU_StructuralBypassAllowed() &&\n              StringFind(spreadBlockReason' in ea  # NEWS_AFTERMATH
+    assert 'if(XAU_StructuralBypassAllowed())\n      {\n         Print("SMC HARD CONFLICT' in ea  # SMC hard conflict
+    assert 'if(XAU_StructuralBypassAllowed())\n         {\n            Print("TRI RE-ENTRY WATCH' in ea  # TRI re-entry watch
+
+
+def test_ai_opinion_gate_still_covers_its_five_sites():
+    ea = read(BACKEND_EA)
+    marker = "bool XAU_StructuralBypassAllowed()"
+    before_structural_def = ea[: ea.index(marker)]
+    # HTF-override, weak-disagree, no-conf-skip, confident-B-skip, Strong
+    # Momentum Precheck -- all five must still use the original function
+    # (plus its own definition line = 6 occurrences before this point).
+    assert before_structural_def.count("XAU_ModeAllowsSoftBlockWarning()") == 6
 
 
 def test_no_limit_trading_mode_still_defaults_true_unless_restore_mode():
