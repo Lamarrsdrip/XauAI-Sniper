@@ -5,6 +5,68 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.17.0 — 2026-07-07 — Fix: setups hardcoded direction to stale HTF, never proposed the confirmed reversal
+
+### EA Compile
+- [x] EA internal version: `#property version "6.170"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.0.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6170_final.log`)
+
+### Root cause (proven from the live MT5 journal, not assumed)
+Real complaint: v6.16.x had not opened a trade for ~5h15m (10:55 -> 16:10 on 2026-07-07) despite
+meaningful XAUUSD movement. Reconstructed every M5 decision cycle in that window from
+`MQL5/Logs/20260707.log`:
+- Adaptive Direction Engine was working correctly: it held `DIRECTION_SELL_ONLY [STRONG tier]`
+  continuously from 15:00 to 16:10 (M5+M15 structure aligned bearish, confirmed LH/LL reversal) even
+  though HTF Bias stayed "Bullish" the whole time -- exactly the adaptive behavior it was built for.
+- But zero SELL trades executed. Root cause: `TREND_PULLBACK`, `SQUEEZE_RELEASE`, `RANGE_REVERSAL`,
+  `RSI_EXTREME`, `LONDON_FIX_PIN`, and `MULTI_EXTREME` all hardcode their candidate direction to
+  `htfBullConsensus`/`h1TrendDir` (stale H1/HTF EMA-spread), so none of them ever proposed a SELL
+  candidate while HTF read bullish -- regardless of what the Direction Engine had already confirmed.
+  28 `ADAPTIVE-DIRECTION BLOCK: TREND_PULLBACK BUY` events and 33 "no setup met regime criteria"
+  (zero candidates in either direction) events logged in the same window. The Direction Engine was
+  never the bottleneck; candidate generation was structurally incapable of trying the direction it
+  had already permitted.
+
+### Fix
+Added an Active-Direction-confirmed override to each of the 6 affected setups: when
+`g_activeDirection` is `DIRECTION_SELL_ONLY`/`DIRECTION_BUY_ONLY` (i.e. the Direction Engine has
+already confirmed a specific reversal via real M5+M15 evidence, MEDIUM/STRONG tier only), the setup
+evaluates that direction instead of blindly following stale HTF bias. The original HTF-alignment
+logic is preserved as the fallback for every other case -- this is additive, not a removal of the
+existing behavior. `HTF_TREND_FOLLOW` (setup 9) is deliberately NOT given this override, since its
+entire purpose is to follow HTF; it stays gated purely by its existing `directionAllowsHtfTf` check.
+`ASIA_RANGE_BREAKOUT` (setup 8) needed no fix -- confirmed it already derives direction from actual
+price breakout, not HTF bias.
+
+No thresholds were lowered, no gates were disabled, SmartGuard/AI/risk authority is unchanged --
+this is a candidate-generation fix, not a permissiveness change.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v6170_stale_htf_direction_fix_static.py` — 8/8 passing (verifies the
+      override in each of the 6 fixed setups by name, confirms HTF_TREND_FOLLOW and Asia Range
+      Breakout were correctly left alone)
+- [x] Full suite: 252/277 passing; 25 failures are the same class of pre-existing release-time sync
+      tests (each pinned to an old version snapshot that goes stale the moment any newer version
+      ships) -- one more than the v6.16.1 baseline of 24, because the v6.16.0/v6.16.1 regression
+      test's own "synced to backend" check is now itself one commit behind, same expected pattern
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.0.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — this fix has zero runtime hours itself yet; re-observe the Command Center /
+  journal for at least one more multi-hour stretch to confirm SELL/BUY candidates now actually reach
+  execution during a confirmed Direction Engine flip before considering live capital
+
+---
+
 ## v6.16.1 — 2026-07-07 — Self-audit fix: structural vs AI-opinion bypass split
 
 ### EA Compile
