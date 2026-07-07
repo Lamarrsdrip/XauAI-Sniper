@@ -5,6 +5,86 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.16.0 — 2026-07-07 — Direction Engine v2 + Universal Risk Reconciliation
+
+### EA Compile
+- [x] EA internal version: `#property version "6.160"`
+- [x] EA header comment: v6.16.0
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.16.0.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6160_final.log`)
+
+### Root cause — risk mismatch (live log: Executed=4.27% vs Displayed=0.40%/ConfigBase=1.20%)
+Traced the full lot path: `InpLotSizingMode` defaults to `JUNE_16_19_BALANCE_MODE`, which sizes
+lots from `(balance/1000) * InpJuneBalanceLotPer1000 * gradeMult` — **not** from actual SL distance.
+Worse, the equity-cap (`InpMaxRiskPctEquity`), Growth Guard cap, and aggregate-risk cap are all
+explicitly skipped when `juneBalanceLotMode` is true (`grep "risk caps bypassed"`), at both the main
+entry path and the pyramid-add path — so under the *default* lot mode, none of the risk-based safety
+caps ever ran. `InpRiskPercent` (labeled "Displayed" in the log) was never read by the sizing math at
+all — a second, independent cosmetic bug. Fix does NOT change lot-sizing philosophy or shrink normal
+trades: `XAU_ReconcileFinalRisk()` is a narrow backstop that only intervenes when the final lot would
+truly breach `InpMaxRiskPctEquity` (the EA's existing real hard-cap input), reducing to the maximum
+safe lot (rounded down to lot step) or blocking outright if even the broker minimum lot exceeds the
+cap. Logs `REQUESTED_RISK_PCT`/`APPROVED_MAX_RISK_PCT`/lot before+after/`ACTUAL_EQUITY_RISK_PCT`/
+`RECONCILIATION_ACTION` on every trade.
+
+### Adaptive Direction Engine v2
+Upgraded from v6.15.0's 2-tier (medium/strong, M5-only) to a 3-tier WEAK/MEDIUM/STRONG engine:
+- New: genuine HH/HL vs LH/LL swing-sequence read (`XAU_SwingSequenceDir`, fractal pivots, reused for
+  both M5 and M15) — this is what lets a normal pullback (sequence intact) be told apart from an
+  actual breakdown (sequence broken), the explicit goal of the upgrade.
+- New: CHoCH is now the real break of the most recent confirmed fractal swing point (from the
+  sequence scan), not a relabeled rolling-window proxy.
+- New: M15 structure check, feeding a "M5+M15 aligned" path into the STRONG tier.
+- New: failed-breakout (`XAU_AssessFailedBreakout`) distinct from failed-continuation — a breakout
+  attempt reversing back inside the range, vs. an established trend stalling.
+- WEAK tier (new): CHoCH-level warning / failed continuation → `DIRECTION_TRANSITION_WAIT`, pauses
+  only the weakening side, never forces the opposite.
+- Applied via one central gate (`CheckForEntry`, right after `ScoreSetups()`) covering
+  TREND_PULLBACK/BREAKOUT/RANGE_REVERSAL/SQUEEZE_RELEASE/HTF_TREND_FOLLOW/etc. uniformly, plus
+  dedicated gates at `RE_ENTRY` and the pyramid rescue family (PYR+RETEST_RESCUE/PYR+RESCUE/PYR+ADV).
+  PYR+TRN is a documented exception (only adds to an already-favorable move).
+- Exit side: `XAU_ReversalConfirmed()` (the existing v6.5.0 canonical Exit Arbiter) now also treats a
+  STRONG-tier opposite flip as confirmed structure invalidation — reuses the entry-side read instead
+  of adding a sixth competing exit system.
+- Anti-repeat-loss (`XAU_AntiRepeatLossActive`) is now graduated (0.25xATR recovery from the 1st
+  same-direction loss, 0.5xATR from `InpAntiRepeatLossStreak`) instead of a single on/off switch —
+  never a session-length ban or fixed-time cooldown, always evidence-gated.
+
+### Explicitly NOT changed (per owner instruction — no fear-based defaults)
+- `InpAIMode` stays `AI_FILTER_ONLY` default; `InpJune18RestoreMode` stays `false` default.
+- `InpNoLimitTradingMode`/`InpDisableAllDailyLocks`/`InpNoDailyLimitMode` still default `true`.
+- No new session-length direction bans, no fixed-time cooldowns.
+- Risk reconciliation only touches trades that would truly exceed `InpMaxRiskPctEquity` — normal
+  trades within cap are untouched; lot-sizing philosophy (grade/AI/enforcement-floor multipliers) is
+  unchanged.
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.16.0.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` (canonical source; download endpoint reads version dynamically)
+- [x] Frontend version strings (Footer.jsx, AdminPortal.jsx, FeaturesSection.jsx, DownloadSection.jsx, CloudLanding.jsx, CloudDashboard.jsx)
+- [ ] GitHub main branch pushed
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] Existing test suite: 243/267 passing; 24 pre-existing failures confirmed via `git stash` to
+      predate this session's changes (each is a release-time "source == old versioned snapshot" sync
+      test that goes stale the moment any newer version ships — a pre-existing test-suite design
+      artifact, not a regression)
+- [x] New regression suite `tests/test_xau_v6160_direction_engine_v2_and_risk_reconcile_static.py` —
+      19/19 passing
+- [ ] MT5 journal: `ADAPTIVE-DIRECTION | ... [STRONG/MEDIUM/WEAK/NONE tier]` line every closed M5 bar
+- [ ] MT5 journal: `RISK-RECONCILE | ... RECONCILIATION_ACTION=NONE_WITHIN_CAP` on normal trades (should
+      be the overwhelming majority — REDUCED/BLOCKED should be rare)
+- [ ] 24h+ demo validation before live capital
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — validate on demo that normal trades are NOT being reduced (only genuine
+  cap-breaching ones), and that direction flips react promptly without overblocking, before live capital
+
+---
+
 ## v6.15.0 — 2026-07-07 — June 17-18 Reconstruction: Strategy-Led Architecture
 
 ### EA Compile
