@@ -1,10 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                     XauIndex_EA.mq5              |
 //|                                     XauIndex — Gold + Index Edition|
-//|   v3.1.0 — Spike-Safe Index Engine: spike rejection, symbol-        |
-//|   relative spread/gap gate, real BOOM_CRASH risk profile            |
-//|   (rebuilt on gold v6.12.0)                                        |
+//|   v3.1.0 — Spike-Safe Index Engine                                 |
+//|   spike rejection, symbol-relative spread/gap gate, real            |
+//|   BOOM_CRASH risk profile (rebuilt on gold v6.12.0)                |
 //+------------------------------------------------------------------+
+// NOTE: the "vX.Y.Z — <one line>" line above drives the live website's
+// displayed edition (backend/server.py _get_ea_meta() regex only captures
+// up to end-of-line) -- keep the edition description on that single line.
 // v3.1.0 CHANGES (2026-07-03) — SPIKE-SAFE INDEX ENGINE:
 //   v3.0.0 shipped a real index entry engine, but a post-ship audit
 //   found it was not actually safe for Boom/Crash-style synthetics:

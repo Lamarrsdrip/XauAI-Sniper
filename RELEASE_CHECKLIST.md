@@ -3,6 +3,69 @@
 Use this checklist before calling any version "released."
 A release is NOT complete until every line is checked.
 
+**PERMANENT ITEM — added 2026-07-07 after a real incident:** update the top-of-file header banner
+(`v6.14.0 - 24H Runner Quality...` line) in `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` on EVERY
+release, not just `#property version`/`XAUAI_EA_VERSION`. `backend/server.py`'s `_get_ea_meta()`
+regex-parses the first 3000 chars of this file for `vX.Y.Z --- <edition>` to drive the live
+website's displayed version/edition/filename/ZIP name — five straight releases (v6.15.0-v6.17.2)
+updated the defines correctly but left this banner stale, so the live site kept showing v6.14.0
+regardless of any EA change underneath. Same rule applies to `backend/ea_code_xauindex/XauIndex_EA.mq5`.
+Keep the edition description on a single physical line — the regex does not match across line breaks.
+
+---
+
+## v6.17.3 — 2026-07-07 — Full-file audit: 6 more stale-HTF/bypass gaps + site version-banner bug
+
+### EA Compile
+- [x] EA internal version: `#property version "6.173"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.3.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6173_final.log`)
+
+### Trigger
+User asked for a full debug pass across the EA, backend, and site rather than one bug at a time.
+Launched three parallel audits (EA architecture, backend server.py, frontend/site).
+
+### EA findings and fixes
+1. **STRONG_MOMENTUM_OVERRIDE's B-grade-quality bypass and Personality-Gate bypass had NO
+   anti-repeat-loss guard and NO `XAU_StructuralBypassAllowed()` gate** — unlike the functionally
+   identical SMART-GUARD bypass a few dozen lines away, which had both. Both are live by default
+   (`InpXAU_StrongMomentumOverride=true`, `InpXAU_SMO_AllowBGradeBalanced=true`,
+   `InpTradeMode=BALANCED_MODE`), so a repeated same-direction B-grade signal could be softened
+   into a trade through this side door during an active loss streak — reproducing the 2026-07-03
+   incident pattern via an unaudited path. Fixed: both now require
+   `!XAU_AntiRepeatLossActive(signal) && XAU_StructuralBypassAllowed()`.
+2. **`XAU_BasicStrongMomentumPrecheck`/`XAU_StrongMomentumOverrideAllowed` hard-vetoed on stale
+   `g_htfConsensusDir` with no Active Direction exemption** — same bug shape as the already-fixed
+   `ScoreSetups()` sites, just in the override-rescue functions themselves. Fixed with the same
+   `g_activeDirection`-confirmed exemption pattern.
+3. **`XAU_EvaluateAdaptiveNewsMomentumEntry` and `XAU_NewsAftermathCanFastTrack` hard-required
+   `htfAligned` with no Active Direction exemption** — could silently kill a legitimate post-news
+   reversal for the entire discovery/confirmed/allowed window. Fixed the same way.
+4. **Header-banner site-version bug** (see PERMANENT ITEM above) — both `XAUUSD_AI_Sniper_EA.mq5`
+   and `XauIndex_EA.mq5` banners updated and verified against the actual `_get_ea_meta()` regex.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v6173_full_audit_stale_htf_bypass_gaps_static.py` — 11/11 passing,
+      including a test that runs the actual `_get_ea_meta()` regex against the file to lock in
+      correct version/edition parsing
+- [x] Full suite: 274/305 passing, same class of pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.3.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, `backend/ea_code_xauindex/XauIndex_EA.mq5`
+- [x] Frontend version strings + hardcoded-fallback fix (`CloudDashboard.jsx` no longer fabricates
+      a version number when no real heartbeat/license data exists)
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — same standing as v6.17.0/1/2, needs a clean observation window
+- **Backend security findings from this audit round are NOT yet fixed** (unauthenticated AI
+  endpoints, cache-poisoning risk, unbounded memory growth) — reported separately, pending decision
+  on how to close them without breaking the live AI integration
+
 ---
 
 ## v6.17.2 — 2026-07-07 — Fix: legacy global anti-trend veto was undoing v6.17.0
