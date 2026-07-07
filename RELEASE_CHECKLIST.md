@@ -5,6 +5,67 @@ A release is NOT complete until every line is checked.
 
 ---
 
+## v6.17.1 — 2026-07-07 — Fix: indicator-handle fail-counter rebuild loop
+
+### EA Compile
+- [x] EA internal version: `#property version "6.171"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.1.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6171_final.log`)
+
+### Root cause (proven from the live MT5 journal, both local Mac and matching the VPS-reported symptom)
+Command Center showed `INDICATOR_WARMUP: waiting Ns after handle rebuild before copying EMA_FAST_M5`
+repeating dozens of times. Traced `EMA_FAST_M5`'s full lifecycle end-to-end
+(`RebuildEntryIndicatorHandles()` / `CopyEntryBuffer()`): `g_indicatorBufferFailCount` only reset to
+0 after a FULLY CLEAN pass of all 14 entry buffers in the same scan. A single buffer's transient
+`ERR_INDICATOR_DATA_NOT_FOUND` (4807) blip -- explicitly documented in the codebase's own v5.8.51
+comment as a normal, expected, transient MT5 quirk at new-bar boundaries -- therefore accumulated
+forever across the session with no decay. Isolated blips hours apart eventually crossed
+`InpIndicatorReloadFails` (default 3) and triggered a real handle rebuild + `InpIndicatorWarmupSec`
+(12s) warm-up, over and over, even though the handles were never actually broken. Confirmed
+reproducing on the local Mac instance too (3 rebuild cycles in the first 17 minutes after v6.17.0
+was attached) -- not VPS-specific, a genuine code-level lifecycle bug.
+
+Audited every other fail/streak counter in the codebase (`g_aiTransportFails`, `g_cloudConsecutiveFails`,
+`g_sameDirLossStreak`, `g_growthLossStreak`, `g_failedContinuationStreak`, etc.) for the same "only
+resets on a full batch success, never decays" pattern -- confirmed none of the others have it; each
+resets per individual success or per relevant trading event, not a batched pass. This was an isolated
+architectural anomaly specific to the indicator-lifecycle counter, not a systemic pattern.
+
+### Fix
+Added `g_lastIndicatorFailAt` timestamp. If a new buffer failure arrives more than 45s after the
+previous one, the streak resets to 1 (a fresh incident) instead of continuing to add to a stale count.
+Only a genuine CLUSTER of failures close together in time now reaches the reload threshold and
+triggers a rebuild. Warm-up duration, recovery backoff, and the reload-fail threshold are all
+unchanged -- no safety bypassed, nothing loosened.
+
+Added the requested lifecycle telemetry tags for future diagnosis: `INDICATOR_HANDLE_CREATED`,
+`INDICATOR_NOT_READY`, `INDICATOR_COPY_RETRY`, `INDICATOR_HANDLE_INVALID`, `INDICATOR_REBUILD`,
+`INDICATOR_RECOVERED`.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v6171_indicator_handle_lifecycle_fix_static.py` — 10/10 passing: verifies
+      the decay logic, confirms warm-up/backoff/reload-threshold are untouched, confirms a valid
+      handle returns immediately without touching fail state, confirms all 6 telemetry tags exist,
+      and confirms the v6.17.0 Active Direction candidate-direction fix survived this change intact
+- [x] Full suite: 260/287 passing; failures are the same class of pre-existing release-time sync
+      staleness as every prior release in this log
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.1.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — needs at least one clean multi-hour observation window confirming the
+  `INDICATOR_WARMUP` cycling has stopped and decision cycles reach `ADAPTIVE-DIRECTION`/strategy
+  scoring normally before trusting this on live capital
+
+---
+
 ## v6.17.0 — 2026-07-07 — Fix: setups hardcoded direction to stale HTF, never proposed the confirmed reversal
 
 ### EA Compile
