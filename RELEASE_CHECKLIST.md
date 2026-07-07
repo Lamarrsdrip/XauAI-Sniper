@@ -14,6 +14,75 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.6 — 2026-07-07 — Profit-impact audit: PERSONALITY soft-pass needlessly AI-gated
+
+### EA Compile
+- [x] EA internal version: `#property version "6.176"`, header banner updated
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.6.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6176_final.log`)
+
+### Context
+Between v6.17.4 and this release, a second tool ("Codex") shipped **v6.17.5** directly to this repo
+(commit `19e2c49`) adding execution-funnel telemetry (`CandidateAllowed`/`FinalExecutionAllowed`/
+`FinalBlocker`/`OpenTradeCalled`/broker retcode, distinguishing candidate-stage approval from final
+execution in the Command Center) and a first attempt at exempting confirmed breakout continuation
+from the PERSONALITY gate (`continuationPersonalitySoftPass`). This release investigates and closes
+a gap in that same fix, using real journal evidence, per a user-requested full profit-impact audit
+of the late-stage execution funnel.
+
+### Root cause (proven from the live MT5 journal, not assumed)
+2026-07-07 19:55:11 (running v6.17.4, i.e. before Codex's v6.17.5 fix existed): Active Direction held
+`DIRECTION_SELL_ONLY [STRONG tier]` (confirmed LH/LL reversal), `currentRegime` had already confirmed
+`REGIME_BREAKOUT_DOWN`, and a BREAKOUT SELL candidate at price 4126.63 was hard-blocked:
+`PERSONALITY GATE BLOCK: BREAKOUT grade not A/A+ in RANGE — skipping` — because `g_marketPersonality`
+(a separate, slower ADX/ATR-based classifier) still read `MKT_RANGE`. Price fell to a confirmed swing
+low of 4092.19 within the next hour (~34pts, ~3.4R at this EA's typical SL distance), with the
+Direction Engine holding STRONG SELL essentially the whole way and no meaningful adverse excursion
+first — a real, quantified missed trade.
+
+Checked Codex's v6.17.5 fix against this exact scenario: `continuationPersonalitySoftPass` (confirmed
+breakout continuation + regime alignment + Active Direction not hostile) is structurally correct, but
+was gated behind `XAU_StructuralBypassAllowed()` — which only opens under `InpAIMode=AI_DIRECTOR`, not
+the default `AI_FILTER_ONLY`. So the fix could never fire under default settings. Same Category A
+(structural) vs Category B (AI-opinion) miscategorization already fixed at other sites this session —
+this exemption is objective market-fact evidence, not an AI opinion, so it shouldn't need an AI
+authority mode at all.
+
+Also investigated (per the audit request) two SQUEEZE_RELEASE SELL candidates blocked the same day by
+"momentum slowdown" (PROFIT GUARDIAN) and "FAILED-IMPULSE BLOCK". Traced both to real price action:
+both were genuine late chase-entries into an already-exhausted move (the swing low of 4092.19 was
+already established *before* either signal fired; price never made a new low after). **Those blocks
+were correct selectivity, not overblocking — deliberately left untouched.**
+
+### Fix
+Split the PERSONALITY-gate softening path: `continuationPersonalitySoftPass` now only requires
+`!XAU_AntiRepeatLossActive(signal)` (the baseline safety check every bypass in this codebase keeps),
+no longer `XAU_StructuralBypassAllowed()`. `strongMomentumPrecheck` (the AI-opinion-flavored
+STRONG_MOMENTUM_OVERRIDE path) keeps both gates, consistent with every other STRONG_MOMENTUM_OVERRIDE
+site fixed this session. This is a narrow, evidence-backed carve-out — not a general loosening of
+PERSONALITY-gate bypass conditions.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v6176_personality_breakout_gate_fix_static.py` — 8/8 passing
+- [x] Updated Codex's `tests/test_xau_v6175_execution_funnel_static.py` assertion that had locked in
+      the old (buggy) gating requirement
+- [x] Full suite: 290/331 passing, same class of pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.6.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — needs a clean observation window showing a confirmed breakout continuation
+  actually reaching execution under default AI_FILTER_ONLY mode, not just compiling
+
+---
+
 ## v6.17.4 — 2026-07-07 — Fix: TRANSITION_WAIT overstay guard
 
 ### EA Compile

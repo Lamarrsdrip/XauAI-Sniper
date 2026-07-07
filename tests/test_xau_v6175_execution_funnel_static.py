@@ -67,14 +67,27 @@ def test_open_trade_publishes_called_blocked_executed_and_broker_retcode():
 
 
 def test_personality_gate_softens_only_confirmed_breakout_continuation():
+    # v6.17.6 correction: continuationPersonalitySoftPass is structural/market-fact
+    # evidence (confirmed breakout continuation + regime alignment + Active
+    # Direction not hostile), not an AI opinion -- gating it behind
+    # XAU_StructuralBypassAllowed() (AI_DIRECTOR-mode only) meant it never fired
+    # under the default AI_FILTER_ONLY mode. Runtime-proven: a STRONG-tier
+    # Active-Direction-confirmed SELL BREAKOUT was hard-blocked by PERSONALITY on
+    # 2026-07-07 19:55:11 (signalPrice=4126.63); price fell to 4092.19 within the
+    # hour (~3.4R) with minimal adverse excursion first. The anti-repeat-loss
+    # guard is kept as the baseline safety check; the AI-authority-mode gate is
+    # not, since this path never was AI opinion in the first place.
     ea = read(BACKEND_EA)
     marker = "// v6.4.0 UPGRADE 1 — Market Personality Gate"
-    window = ea[ea.index(marker): ea.index(marker) + 2600]
+    window = ea[ea.index(marker): ea.index(marker) + 3400]
     assert "continuationPersonalitySoftPass" in window
     assert "IsXAUConfirmedBreakoutContinuation(signal, setupName)" in window
     assert "regimeAlignedPersonality" in window
     assert "!activeDirectionHostile" in window
-    assert "!XAU_AntiRepeatLossActive(signal) && XAU_StructuralBypassAllowed()" in window
+    assert "if(continuationPersonalitySoftPass && !XAU_AntiRepeatLossActive(signal))" in window
+    # STRONG_MOMENTUM_OVERRIDE (the AI-opinion-flavored quality override) keeps
+    # its AI-authority-mode gate.
+    assert "strongMomentumPrecheck && InpXAU_SMO_AllowBGradeBalanced &&\n                 !XAU_AntiRepeatLossActive(signal) && XAU_StructuralBypassAllowed()" in window
 
 
 def test_backend_accepts_execution_funnel_fields():

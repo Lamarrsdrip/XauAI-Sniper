@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.17.5";
-  const edition  = info?.edition  || "EXECUTION FUNNEL TELEMETRY";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.5.mq5";
+  const version  = info?.version  || "v6.17.6";
+  const edition  = info?.edition  || "PERSONALITY GATE FIX";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.6.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.17.5.</span> Runtime fix: candidate approval is now separated from final execution approval. The Command Center shows CandidateAllowed, FinalExecutionAllowed, FinalBlocker, OpenTradeCalled, and broker retcode so a good setup can no longer disappear after “Allowed:YES” without one clear final reason.
+              <span className="font-semibold text-amber-200">Gold-only v6.17.6.</span> Runtime-proven fix: a confirmed breakout continuation could still get hard-blocked by a slower market-condition read because the exemption only applied in one specific AI mode. It now applies whenever the breakout and direction evidence agree — structural evidence, not an AI opinion, so it works regardless of AI mode.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
