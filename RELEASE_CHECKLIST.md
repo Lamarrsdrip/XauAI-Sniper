@@ -14,6 +14,119 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.14 — 2026-07-08 — Risk Cap Raise + Spread Loosening + Fleet Consistency
+
+### Repo housekeeping
+- [x] `vps-test-v615-fixed` branch (and its worktree at
+      `/Users/libertyelectronics/XauAI-Sniper-vps-test`) fully removed — local branch deleted,
+      remote branch deleted, worktree removed. Confirmed no uncommitted work existed there before
+      removal. All future work is on `main` only.
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.14"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.14.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61714_final.log`)
+
+### Part 1 — user-directed threshold changes
+Traced the exact lot-sizing math for a real example (SELL 0.06 @ 4056.11, A+, TREND_PULLBACK,
+SL=4070.69, $3k account): the raw balance-based formula produces ~0.26 lots (matching the user's
+0.25-0.30 expectation exactly), but at this trade's 14.58pt SL distance that implies ~12.6% risk on
+one trade — the 0.06 lot was the 3%-risk-cap safety reconciliation correctly catching that, not
+over-protection. Presented the math and asked the user directly: raise the cap, or fix the formula
+to stay realistic. **User chose: raise the cap.**
+- `InpMaxRiskPctEquity`: 3.0 → 5.0
+- `InpMaxSpread`: 150 → 400 (user chose "loosen," not "remove" — confirmed via explicit question)
+- `InpPostNewsSpreadReturnX`: 1.5 → 2.5 (loosened alongside, same rationale)
+
+### Part 2 — cross-account signal-consistency audit (fleet-readiness)
+Audited the 18 requested divergence sources against the actual code:
+
+| # | Source | Finding |
+|---|---|---|
+| 1 | Tick-timing races | `ScoreSetups()`/grade computation only run once per **closed** M5 bar (`newM5Bar` gate) — tick arrival timing does not affect which candle's data is scored |
+| 2 | Forming vs. closed candle | Confirmed: all 4 remaining `iClose(..., 0)` uses are mid-price display/logging fallbacks only, never in signal scoring (`ScoreSetups` uses shift=1 throughout) |
+| 3-4 | Indicator readiness/backoff | **Root-caused and fixed in v6.17.13** — `err=4807` (a documented-transient MT5 quirk) was triggering full rebuild cycles that could stall a scan for 20+ minutes on one instance while others weren't affected |
+| 5-7 | Stale state / cooldown / re-entry counters | **Found and fixed here**: `XAU_AntiRepeatLossActive()` was keyed entirely off THIS account's own loss history — proven cause of "2 of 3 identical accounts fire, 1 doesn't." Exempted when Active Direction independently reaches STRONG tier in the same direction (a genuinely fresh, independent confirmation) |
+| 8 | Persisted memory differences | Blocked-signal/trade-memory state is intentionally per-account (reflects that account's own history) — not a bug, but now explicitly logged via `AccountSpecificBlocker`-style reasoning where relevant |
+| 9 | AI response differences | **Fixed in v6.17.11** — AI is advisory-only everywhere; it can no longer change BUY/SELL/BLOCK, only log/lot-shave |
+| 10 | Balance/equity influencing signal generation | Audited directly: `ScoreSetups()` has zero `AccountInfo`/`accInfo` references — confirmed account-state-independent. Balance only affects lot sizing, never the setup/direction/grade decision |
+| 11-13 | Spread / broker specs / candle-boundary | Legitimate real differences across brokers/accounts — correctly affect lot size and fills, not the underlying signal decision |
+| 14 | Position-state differences | Legitimate (an account already in a trade correctly won't open a second) — now clearly attributable via existing `MAX_OPEN_TRADES`/exposure-gate logging |
+| 15 | Scan watchdog timing | **Fixed in v6.17.12/13** — watchdog now measures actual scan completion, not attempt start, and no longer spams |
+| 16 | Random/non-deterministic paths | Audited directly: zero `MathRand`/`GetTickCount` usage anywhere in the file |
+| 17 | Stale cached regime/direction/personality | `DetectRegime()`/`XAU_ComputeActiveDirection()`/`ClassifyMarketPersonality()` all recompute fresh every closed bar from live indicator buffers — no cross-bar staleness found |
+| 18 | Execution failure vs. signal rejection | Already distinguished via `OpenTradeCalled`/`BrokerRetcode` fields from the v6.17.5 execution-funnel telemetry |
+
+**Honest scope note**: items 11-14 are legitimate, expected differences (spread, broker specs, fills,
+existing exposure) — the fix target was never "make everything identical," it was "make unexplained
+divergence in the SIGNAL decision impossible." That target is what items 3-4, 5-7, 9, 15-16 addressed.
+
+### DecisionFingerprint telemetry
+Added `DECISION_FINGERPRINT` log line to every completed M5 scan cycle: build hash, symbol, closed-bar
+timestamp, setup, direction, grade, raw/combined score, regime, HTF bias, Active Direction (+tier),
+spread, and final decision (CANDIDATE/NO_TRADE). Lets any two instances' decisions for the same
+closed candle be directly diffed.
+
+### PendingOpportunity missed-signal recovery
+The core fix for "one account silently misses a valid signal forever." When an A/A+ candidate is
+blocked by a genuine SOFT reason (`XAU_BlockerIsHardReason()` classifies ~20 real hard-blocker
+strings — spread, news, SMC hard conflict, exposure, margin, structural, etc. — as never eligible),
+it's preserved as a single `PendingOpportunity` and re-checked **exactly once** on the next closed M5
+bar (`XAU_CheckPendingOpportunityRecovery()`), reusing the same already-tested building blocks as the
+v6.17.8-10 Symmetric Opportunity Recheck work rather than new, unproven logic:
+1. Not expired (2-bar grace window)
+2. No new hard account block (position count, spread)
+3. Not overextended (price hasn't run >1×ATR further in the signal's favor since the original — anti-chase)
+4. Fresh M15+M30 (`TFDirectionByEMA`) still support the same direction — thesis re-check
+5. Re-graded with CURRENT regime/session quality (`XAU_ComputeCombinedGradeForCandidate`), not the stale original
+6. Personality fit or A/A+ threshold
+7. `AdaptiveXAUConfirm` (SmartGuard) passes fresh
+
+Only if all seven pass does it call `OpenTrade()`. Any rejection logs the exact reason
+(`RECOVERY_REJECTED: <id> reason=<EXPIRED|MAX_OPEN_TRADES|SPREAD_TOO_WIDE|OVEREXTENDED|
+THESIS_INVALIDATED|GRADE_NO_LONGER_QUALIFIES|PERSONALITY_MISMATCH|SMART_GUARD>`). Cleared
+unconditionally before any check runs — cannot fire twice for the same missed signal, never
+indefinitely chases.
+
+### On "deterministic replay tests" / 1000-instance simulation
+Full multi-instance simulation (spinning up many live MT5 terminals against identical historical
+data) is outside what this repo's static-analysis test harness can do — that would need an actual
+MT5 Strategy Tester / multi-terminal rig, not a Python source-inspection suite. What **was** done and
+is verifiable now: direct source-level proof that the signal-decision path (`ScoreSetups` → grade →
+Personality Gate → SmartGuard) has no account-state or randomness inputs (tests below), which is the
+structural precondition for two equivalent instances reaching the same decision on the same closed
+bar. Recommend an actual multi-terminal replay test as a dedicated follow-up once the fleet is larger
+than the current 3 accounts, using the new `DECISION_FINGERPRINT` lines to diff real instances
+directly rather than a simulated harness.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v61714_fleet_consistency_static.py` — 23/23 passing, covering: risk/spread
+      threshold changes, anti-repeat-loss exemption logic, zero account-state in `ScoreSetups`, zero
+      randomness anywhere, the full `PendingOpportunity` struct/classifier/recovery-function chain
+      (single-attempt clearing, expiry, anti-chase, thesis re-check, re-grade, personality,
+      SmartGuard, hard-account-state checks — in the correct order before any `OpenTrade` call), and
+      the `DECISION_FINGERPRINT` log
+- [x] Full suite: 396/459 passing, remaining failures are pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.14.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NEEDS OBSERVATION — the risk cap raise (5%) and spread loosening (400pts) are
+  explicit user choices with real, understood tradeoffs (bigger swings both directions; a genuine
+  news-spike spread event up to 400pts could now fill), not silent changes. The PendingOpportunity
+  recovery is new, real-money-relevant control flow — watch for `RECOVERY_EXECUTED`/
+  `RECOVERY_REJECTED` lines in the journal and confirm behavior matches expectations before treating
+  it as fully proven
+
+---
+
 ## v6.17.13 — 2026-07-08 — Indicator err=4807 Root Cause + Watchdog Dedup
 
 ### EA Compile
