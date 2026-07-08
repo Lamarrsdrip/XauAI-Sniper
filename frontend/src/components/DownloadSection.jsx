@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.17.18";
-  const edition  = info?.edition  || "PROFIT QUALITY EXIT GATE";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.18.mq5";
+  const version  = info?.version  || "v6.17.19";
+  const edition  = info?.edition  || "ACCOUNT-SIZE ADAPTIVE TP";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.19.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.17.18.</span> Protective exits are now profit-quality aware: a winner isn't locked to a flat percentage of its peak the instant it arms. Tiny or spread-eaten profit holds while the trade thesis is still clean, and a meaningful-but-not-huge win gets a loosened trail so real runners can breathe instead of being stopped out by ordinary noise.
+              <span className="font-semibold text-amber-200">Gold-only v6.17.19.</span> TP targets now scale with account size (0.85x-1.30x), the same equity ladder already used for lot sizing and risk tolerance -- bigger accounts hold for bigger targets, not just bigger lots.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
