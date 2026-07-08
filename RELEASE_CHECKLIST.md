@@ -14,6 +14,52 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.24 — 2026-07-08 — A-Z Audit: Countertrend Evidence-Side Bug Fix
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.24"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.24.mq5`
+- [x] Top-of-file header banner updated
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61724_final.log`)
+
+### What the audit found
+User asked for a full bug audit of the file before trusting v6.17.23 live ("know what you're doing,
+do it 100% complete"). Re-derived `XAU_ClassifySetup`'s countertrend branch by hand against a
+concrete oversold-in-a-downtrend scenario and found a real bug shipped in v6.17.23: the 6-signal
+evidence checklist (largeLegDone/nearExtreme/reclaimSeen/structBroken/roomAsymmetric/
+momentumFading) was built with `dirIsSell=(dir==-1)` — i.e. from the newly-proposed direction's own
+side — for both the trend-continuation self-check (correct there) AND the countertrend
+justification check (wrong). A countertrend BUY against a bearish old trend was being checked for
+"has this BUY already run up and gone overbought," which is nonsensical for a trade that hasn't
+been taken yet and nearly impossible to satisfy in an actual downtrend (price sits near lows, not
+highs) — meaning PULLBACK_SCALP/REVERSAL_RECLAIM would almost never have fired for a genuine
+oversold bounce, exactly the "allow a short-term BUY in a downtrend" case this feature exists for.
+
+A broader grep-based sweep (assignment-in-condition, unguarded division, indicator-handle leaks)
+across the rest of the ~28k-line file found the existing code already consistently guards these
+patterns (checked ~15 `/rDollars` divisions and several indicator-handle creations by hand — all
+guarded at the top of their enclosing function) — consistent with the file's own extensive prior
+audit history (v6.17.7 "9 independently-verified static-audit items," etc.). No other bugs
+confirmed within the scope reviewed.
+
+### Fix
+The countertrend branch now builds its checklist from `oldTrendIsSell=(oldBiasDir==-1)` — the OLD
+TREND's side — instead of `dir`'s own side. Two separate checklists now exist for two separate
+questions: "is dir itself exhausted" (continuation self-check, unchanged) vs. "is the trend dir is
+fighting against exhausted" (countertrend justification, fixed). `XAU_ExhaustionReversalGuard`
+(v6.17.21) was not touched.
+
+### Testing
+- [x] MetaEditor compile: 0 errors, 0 warnings
+- [x] `tests/test_xau_v61724_countertrend_evidence_fix_static.py` — 20 tests, including two new
+      end-to-end simulations that compute the real evidence from raw price/ATR/swing levels (not
+      hand-fed hits) for an oversold-bounce BUY and an overbought-pullback SELL, asserting neither
+      misclassifies as LATE_CHASE (the pre-fix bug's actual failure mode)
+- [x] Full suite re-run: 487→490+ passing (exact count shifts with each obsoleted identity test);
+      only the expected next-release-obsoletes-previous pattern remains
+
+---
+
 ## v6.17.23 — 2026-07-08 — Adaptive Timing + Countertrend Classifier
 
 ### EA Compile

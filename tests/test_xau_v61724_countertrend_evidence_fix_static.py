@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.17.23.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.17.24.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -28,9 +28,9 @@ def test_current_release_source_is_synced_to_backend():
     assert read(EA) == read(BACKEND_EA)
 
 
-def test_version_bumped_to_v61723():
+def test_version_bumped_to_v61724():
     ea = read(BACKEND_EA)
-    assert '#define XAUAI_EA_VERSION "v6.17.23"' in ea
+    assert '#define XAUAI_EA_VERSION "v6.17.24"' in ea
 
 
 def test_header_banner_matches_property_version_for_website_display():
@@ -38,7 +38,7 @@ def test_header_banner_matches_property_version_for_website_display():
     ea = read(BACKEND_EA)
     m = re.search(r'v(\d+\.\d+\.\d+)\s*[—\-]+\s*(.+)', ea[:3000])
     assert m is not None
-    assert f"v{m.group(1)}" == "v6.17.23"
+    assert f"v{m.group(1)}" == "v6.17.24"
 
 
 # ---------------------------------------------------------------------------
@@ -70,16 +70,30 @@ def test_classifier_agrees_with_trend_is_continuation():
     fn = body(ea, "void XAU_ClassifySetup(int dir, double atr, string setupName, XAU_SetupClassification &c)")
     assert "if(dirAgreesOldTrend)" in fn
     assert "c.type = XAU_TIMING_TREND_CONTINUATION;" in fn
-    assert "c.immediateConfirm = freshAgreesDir && (hits == 0);" in fn
+    assert "c.immediateConfirm = freshAgreesDir && (hitsAgainstDir == 0);" in fn
 
 
 def test_classifier_countertrend_requires_majority_plus_reclaim():
     ea = read(BACKEND_EA)
     fn = body(ea, "void XAU_ClassifySetup(int dir, double atr, string setupName, XAU_SetupClassification &c)")
-    assert "if(hits >= 4 && reclaimSeen)" in fn
+    assert "if(hitsAgainstOldTrend >= 4 && oldReclaimSeen)" in fn
     assert "c.type = XAU_TIMING_REVERSAL_RECLAIM;" in fn
     assert "c.type = XAU_TIMING_PULLBACK_SCALP;" in fn
-    assert "c.immediateConfirm = (hits >= 5);" in fn
+    assert "c.immediateConfirm = (hitsAgainstOldTrend >= 5);" in fn
+
+
+def test_classifier_countertrend_evidence_uses_old_trend_side_not_dirs_own_side():
+    # Regression guard for a real bug caught before ship: the countertrend
+    # checklist must be built from the OLD TREND's side (oldTrendIsSell),
+    # never from dir's own side (dirIsSell) -- otherwise a countertrend BUY
+    # against a bearish old trend gets checked for "has this BUY already run
+    # up," which is nonsensical for a trade that hasn't been taken and is
+    # nearly impossible to satisfy in an actual downtrend.
+    ea = read(BACKEND_EA)
+    fn = body(ea, "void XAU_ClassifySetup(int dir, double atr, string setupName, XAU_SetupClassification &c)")
+    countertrend_section = fn[fn.index("bool oldTrendIsSell"):]
+    assert "oldTrendIsSell ? (roomUp   >= 3.0) : (roomDown >= 3.0)" in countertrend_section
+    assert "bool oldTrendIsSell = (oldBiasDir == -1);" in fn
 
 
 def test_classifier_insufficient_evidence_is_late_chase():
@@ -172,3 +186,73 @@ def test_countertrend_bounce_within_trend_is_pullback_scalp():
 def test_countertrend_without_evidence_is_late_chase_never_immediate():
     t, imm = classify(dir_=1, old_bias_dir=-1, seq_dir=-1, hits=2, reclaim_seen=False)
     assert t == "LATE_CHASE" and imm is False
+
+
+# ---------------------------------------------------------------------------
+# End-to-end numeric simulation of the actual evidence math (roomUp/roomDown/
+# reclaim/etc from raw price/ATR), not hand-fed hits/reclaim -- this is what
+# actually catches the pre-fix bug (checklist built from dir's own side
+# instead of the old trend's side), not just the decision tree above it.
+# ---------------------------------------------------------------------------
+def classify_from_market(dir_, old_bias_dir, seq_dir, swing_high, swing_low, cur_price, atr,
+                          sweep_rej_up, sweep_rej_down, choch_bull, choch_bear, rsi, momentum):
+    room_up = (swing_high - cur_price) / atr
+    room_down = (cur_price - swing_low) / atr
+    dir_agrees_old_trend = (old_bias_dir == 0 or old_bias_dir == dir_)
+    fresh_agrees_dir = (seq_dir == 0 or seq_dir == dir_)
+
+    def checklist(is_sell):
+        large_leg = room_up >= 3.0 if is_sell else room_down >= 3.0
+        near_extreme = room_down <= 0.5 if is_sell else room_up <= 0.5
+        reclaim = (sweep_rej_up or seq_dir == 1) if is_sell else (sweep_rej_down or seq_dir == -1)
+        struct_broken = choch_bull if is_sell else choch_bear
+        room_asym = (room_down < room_up) if is_sell else (room_up < room_down)
+        mom_fading = (rsi > 50.0 or momentum > 0) if is_sell else (rsi < 50.0 or momentum < 0)
+        hits = sum([large_leg, near_extreme, reclaim, struct_broken, room_asym, mom_fading])
+        return hits, reclaim
+
+    if dir_agrees_old_trend:
+        hits, reclaim = checklist(is_sell=(dir_ == -1))
+        return ("TREND_CONTINUATION", fresh_agrees_dir and hits == 0)
+
+    # Countertrend: must use the OLD TREND's side, not dir's own side.
+    hits, reclaim = checklist(is_sell=(old_bias_dir == -1))
+    if hits >= 4 and reclaim:
+        return (("REVERSAL_RECLAIM" if fresh_agrees_dir else "PULLBACK_SCALP"), hits >= 5)
+    return ("LATE_CHASE", False)
+
+
+def test_oversold_bounce_in_downtrend_classifies_as_pullback_or_reclaim_not_late_chase():
+    # The exact real-world scenario the user described: "market is oversold
+    # in a downtrend" -- old trend bearish, price has fallen hard from a
+    # recent high, is sitting near the low, and shows a bullish reclaim
+    # (sweep + rejection off the low). A countertrend BUY here MUST classify
+    # as PULLBACK_SCALP/REVERSAL_RECLAIM, not LATE_CHASE, or the bug is back.
+    atr = 6.0
+    swing_high = 4080.0   # recent high
+    swing_low  = 4038.0   # recent low
+    cur_price  = 4039.0   # sitting right on the low -- classic oversold bounce spot
+    t, imm = classify_from_market(
+        dir_=1, old_bias_dir=-1, seq_dir=1,   # BUY proposed, old trend bearish, fresh structure already flipped bullish
+        swing_high=swing_high, swing_low=swing_low, cur_price=cur_price, atr=atr,
+        sweep_rej_up=True, sweep_rej_down=False, choch_bull=True, choch_bear=False,
+        rsi=55.0, momentum=0.1,
+    )
+    assert t in ("PULLBACK_SCALP", "REVERSAL_RECLAIM")
+
+
+def test_overbought_pullback_in_uptrend_classifies_as_pullback_or_reclaim_not_late_chase():
+    # Mirror: old trend bullish, price extended far above a recent low, sitting
+    # near the high, bearish reclaim seen -- a countertrend SELL must classify
+    # as an evidence-backed scalp/reclaim, not LATE_CHASE.
+    atr = 6.0
+    swing_high = 4082.0
+    swing_low  = 4040.0
+    cur_price  = 4081.0   # sitting right on the high
+    t, imm = classify_from_market(
+        dir_=-1, old_bias_dir=1, seq_dir=-1,   # SELL proposed, old trend bullish, fresh structure already flipped bearish
+        swing_high=swing_high, swing_low=swing_low, cur_price=cur_price, atr=atr,
+        sweep_rej_up=False, sweep_rej_down=True, choch_bull=False, choch_bear=True,
+        rsi=45.0, momentum=-0.1,
+    )
+    assert t in ("PULLBACK_SCALP", "REVERSAL_RECLAIM")

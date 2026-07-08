@@ -1,15 +1,42 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.17.23 - Adaptive Timing + Countertrend Classifier                |
-//|   The one-bar wait from v6.17.22 is now adaptive: a clean trend        |
-//|   continuation or a strong (>=5/6) evidence-backed countertrend        |
-//|   reclaim enters immediately, no wait. Every setup is classified as   |
-//|   TREND_CONTINUATION / PULLBACK_SCALP / REVERSAL_RECLAIM /             |
-//|   BREAKOUT_RETEST / LATE_CHASE, and Gate 1's HTF-trend block now lets |
-//|   evidence-backed countertrend scalps through instead of hard-        |
-//|   blocking every countertrend attempt.                                |
+//|   v6.17.24 - A-Z Audit: Countertrend Evidence-Side Bug Fix             |
+//|   User asked for a full bug audit before trusting v6.17.23 live. Found|
+//|   one real bug in it: XAU_ClassifySetup built countertrend evidence    |
+//|   from the NEW direction's own side instead of the OLD trend's side,  |
+//|   so an oversold-bounce BUY in a downtrend was checked for "has this  |
+//|   BUY already run up" (nonsensical, near-impossible in a downtrend)   |
+//|   instead of "has the SELL leg it's fighting gone far enough to be    |
+//|   exhausted." Fixed -- two separate checklists now, one for each      |
+//|   question, verified by a market-data (not hand-fed) simulation test. |
 //+------------------------------------------------------------------+
+// v6.17.24 CHANGES (2026-07-08) — A-Z AUDIT: COUNTERTREND EVIDENCE-SIDE FIX:
+//   Full-file audit requested after v6.17.23 shipped ("know what you're doing,
+//   do it 100% complete, don't make me come back debugging"). Re-derived
+//   XAU_ClassifySetup by hand against a concrete oversold-in-downtrend
+//   scenario and found the countertrend branch's 6-signal checklist
+//   (largeLegDone/nearExtreme/reclaimSeen/structBroken/roomAsymmetric/
+//   momentumFading) was built with dirIsSell=(dir==-1) -- i.e. from the
+//   NEWLY PROPOSED direction's own side -- for BOTH the trend-continuation
+//   self-check AND the countertrend justification check. That's correct for
+//   the former ("is dir itself already exhausted") but wrong for the latter:
+//   a countertrend BUY against a bearish old trend was being checked for
+//   "has this BUY already run up and gone overbought," which is nonsensical
+//   for a trade that hasn't been taken yet and is nearly impossible to
+//   satisfy in an actual downtrend (price is near lows, not highs) --
+//   meaning PULLBACK_SCALP/REVERSAL_RECLAIM would almost never fire for a
+//   genuine oversold bounce, exactly the "allow short-term BUY in a
+//   downtrend" case this feature exists for. Fixed: the countertrend branch
+//   now builds its checklist from oldTrendIsSell=(oldBiasDir==-1) -- the
+//   OLD TREND's side, i.e. "has the leg dir is fighting against gone far
+//   enough to be exhausted" -- which is the actual oversold/overbought
+//   evidence needed. Two static tests added that compute the real evidence
+//   from raw price/ATR (not hand-fed hits) for both the oversold-bounce and
+//   overbought-pullback scenarios and assert they no longer classify as
+//   LATE_CHASE. XAU_ExhaustionReversalGuard (v6.17.21) was not touched --
+//   confirmed independent per its own existing test.
+//
 // v6.17.23 CHANGES (2026-07-08) — ADAPTIVE TIMING + COUNTERTREND CLASSIFIER:
 //   User feedback on v6.17.22: a fixed one-bar wait risks missing a genuinely
 //   strong, already-confirmed signal's exact entry, and Gate 1's HTF-bias
@@ -1323,17 +1350,17 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.193"
-#property description "XAUUSD AI Sniper v6.17.23 - Adaptive Timing + Countertrend Classifier"
-#property description "Timing engine now skips its one-bar wait for already-clean signals and"
-#property description "classifies every entry as TREND_CONTINUATION/PULLBACK_SCALP/"
-#property description "REVERSAL_RECLAIM/BREAKOUT_RETEST/LATE_CHASE -- evidence-backed"
-#property description "countertrend scalps can now pass Gate 1, blind trend-fighting still can't."
+#property version   "6.194"
+#property description "XAUUSD AI Sniper v6.17.24 - A-Z Audit: Countertrend Evidence-Side Fix"
+#property description "Pre-ship audit caught a real bug in v6.17.23's classifier: countertrend"
+#property description "evidence was built from the NEW direction's own side instead of the OLD"
+#property description "trend's side, so oversold-bounce/overbought-pullback scalps almost never"
+#property description "classified correctly. Fixed -- verified by a market-data simulation test."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.17.23"
-#define XAUAI_EA_VERSION_NUM "6.17.23"
-#define XAUAI_BUILD_HASH "v61723-adaptive-timing-countertrend-classifier-20260708"
+#define XAUAI_EA_VERSION "v6.17.24"
+#define XAUAI_EA_VERSION_NUM "6.17.24"
+#define XAUAI_BUILD_HASH "v61724-az-audit-countertrend-evidence-fix-20260708"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -6130,19 +6157,35 @@ void XAU_ClassifySetup(int dir, double atr, string setupName, XAU_SetupClassific
    double momentum = bufEMAFast[1] - bufEMASlow[1];
    double rsiNow   = (ArraySize(bufRSI) > 1) ? bufRSI[1] : 50.0;
 
-   bool dirIsSell       = (dir == -1);
-   bool largeLegDone    = dirIsSell ? (roomUp   >= 3.0) : (roomDown >= 3.0);
-   bool nearExtreme     = dirIsSell ? (roomDown <= 0.5) : (roomUp   <= 0.5);
-   bool reclaimSeen     = dirIsSell ? (sweepRejUp || seqDir == 1) : (sweepRejDown || seqDir == -1);
-   bool structBroken    = dirIsSell ? chochBull : chochBear;
-   bool roomAsymmetric  = dirIsSell ? (roomDown < roomUp) : (roomUp < roomDown);
-   bool momentumFading  = dirIsSell ? (rsiNow > 50.0 || momentum > 0) : (rsiNow < 50.0 || momentum < 0);
-   int hits = (largeLegDone?1:0) + (nearExtreme?1:0) + (reclaimSeen?1:0) +
-              (structBroken?1:0) + (roomAsymmetric?1:0) + (momentumFading?1:0);
-
-   c.reversalHits = hits;
-   c.reclaimSeen  = reclaimSeen;
-   c.structBroken = structBroken;
+   // v6.17.23 BUG FIX (caught before ship, static-audit pass): the 6-signal
+   // checklist means "evidence that a move IN THIS SIDE'S direction is
+   // exhausted / reversing" -- e.g. for the sell side, "already fell a big
+   // leg, near the low, bullish reclaim seen, structure broke up, momentum
+   // no longer bearish" is evidence a SELL is exhausted (and, mechanically,
+   // evidence a BUY reclaim is underway). For a TREND_CONTINUATION check
+   // that question is naturally "is dir itself exhausted," so the checklist
+   // must be built from dir's own side. But for the COUNTERTREND branch the
+   // question is completely different: "is the OLD TREND dir is fighting
+   // against showing exhaustion" -- that has to be built from the OLD
+   // TREND's side, not dir's. An earlier draft of this function used dir's
+   // own side for both, which meant a countertrend BUY proposed against a
+   // bearish old trend was checked for "has this BUY already run up and
+   // gone overbought" (nonsensical for a trade that hasn't been taken yet,
+   // and near-impossible to satisfy in an actual downtrend) instead of "has
+   // the SELL leg it's fighting gone far enough to be exhausted" -- the
+   // exact oversold-bounce/overbought-pullback evidence the countertrend
+   // path exists to recognize. Two separate checklists fixes this: one
+   // built from dir's own side (continuation self-check), one built from
+   // the OLD TREND's side (countertrend justification check).
+   bool dirIsSell = (dir == -1);
+   bool dirLargeLegDone   = dirIsSell ? (roomUp   >= 3.0) : (roomDown >= 3.0);
+   bool dirNearExtreme    = dirIsSell ? (roomDown <= 0.5) : (roomUp   <= 0.5);
+   bool dirReclaimSeen    = dirIsSell ? (sweepRejUp || seqDir == 1) : (sweepRejDown || seqDir == -1);
+   bool dirStructBroken   = dirIsSell ? chochBull : chochBear;
+   bool dirRoomAsymmetric = dirIsSell ? (roomDown < roomUp) : (roomUp < roomDown);
+   bool dirMomentumFading = dirIsSell ? (rsiNow > 50.0 || momentum > 0) : (rsiNow < 50.0 || momentum < 0);
+   int hitsAgainstDir = (dirLargeLegDone?1:0) + (dirNearExtreme?1:0) + (dirReclaimSeen?1:0) +
+                        (dirStructBroken?1:0) + (dirRoomAsymmetric?1:0) + (dirMomentumFading?1:0);
 
    bool dirAgreesOldTrend = (oldBiasDir == 0 || oldBiasDir == dir);
    bool freshAgreesDir    = (seqDir == 0 || seqDir == dir);
@@ -6151,10 +6194,11 @@ void XAU_ClassifySetup(int dir, double atr, string setupName, XAU_SetupClassific
    {
       c.type = XAU_TIMING_BREAKOUT_RETEST;
       c.why  = "BREAKOUT setup";
+      c.reversalHits = hitsAgainstDir; c.reclaimSeen = dirReclaimSeen; c.structBroken = dirStructBroken;
       // A clean breakout with none of the 6 reversal/exhaustion signals
       // against it is immediately tradeable -- the breakout setup's own
       // scoring already requires a real break before it fires at all.
-      c.immediateConfirm = (hits == 0);
+      c.immediateConfirm = (hitsAgainstDir == 0);
       return;
    }
 
@@ -6162,41 +6206,61 @@ void XAU_ClassifySetup(int dir, double atr, string setupName, XAU_SetupClassific
    {
       c.type = XAU_TIMING_TREND_CONTINUATION;
       c.why  = StringFormat("dir agrees with OldTrendBias=%s", c.oldTrendBias);
+      c.reversalHits = hitsAgainstDir; c.reclaimSeen = dirReclaimSeen; c.structBroken = dirStructBroken;
       // Clean continuation: fresh structure doesn't oppose it either, and
       // none of the 6 reversal/exhaustion signals against this dir fired.
-      c.immediateConfirm = freshAgreesDir && (hits == 0);
+      c.immediateConfirm = freshAgreesDir && (hitsAgainstDir == 0);
       return;
    }
 
-   if(hits >= 4 && reclaimSeen)
+   // Countertrend: oldBiasDir is guaranteed nonzero and equal to -dir here
+   // (dirAgreesOldTrend already excluded 0/dir). Build the checklist from
+   // the OLD TREND's own side -- e.g. dir=BUY against a bearish old trend
+   // checks "has the SELL leg fallen far/near the low/shown a bullish
+   // reclaim/broken structure up/lost bearish momentum," which is exactly
+   // the oversold-in-a-downtrend evidence a BUY pullback/scalp needs.
+   bool oldTrendIsSell = (oldBiasDir == -1);
+   bool oldLargeLegDone   = oldTrendIsSell ? (roomUp   >= 3.0) : (roomDown >= 3.0);
+   bool oldNearExtreme    = oldTrendIsSell ? (roomDown <= 0.5) : (roomUp   <= 0.5);
+   bool oldReclaimSeen    = oldTrendIsSell ? (sweepRejUp || seqDir == 1) : (sweepRejDown || seqDir == -1);
+   bool oldStructBroken   = oldTrendIsSell ? chochBull : chochBear;
+   bool oldRoomAsymmetric = oldTrendIsSell ? (roomDown < roomUp) : (roomUp < roomDown);
+   bool oldMomentumFading = oldTrendIsSell ? (rsiNow > 50.0 || momentum > 0) : (rsiNow < 50.0 || momentum < 0);
+   int hitsAgainstOldTrend = (oldLargeLegDone?1:0) + (oldNearExtreme?1:0) + (oldReclaimSeen?1:0) +
+                             (oldStructBroken?1:0) + (oldRoomAsymmetric?1:0) + (oldMomentumFading?1:0);
+
+   c.reversalHits = hitsAgainstOldTrend;
+   c.reclaimSeen  = oldReclaimSeen;
+   c.structBroken = oldStructBroken;
+
+   if(hitsAgainstOldTrend >= 4 && oldReclaimSeen)
    {
       // Countertrend, but a majority of concrete evidence plus a confirmed
-      // reclaim already support it -- from THIS direction's own point of
-      // view this is the evidence-backed side (the mirror image of what
-      // XAU_ExhaustionReversalGuard uses to veto the OPPOSITE, stale-trend
-      // direction). Whether the broader trend has actually flipped yet
-      // (REVERSAL_RECLAIM) or this is a bounce within it (PULLBACK_SCALP)
-      // is read from the same fresh swing-sequence scan.
+      // reclaim already show the OLD trend is exhausted -- the mirror image
+      // of what XAU_ExhaustionReversalGuard uses to veto a stale-trend-only
+      // proposal in the opposite direction. Whether the broader trend has
+      // actually flipped yet (REVERSAL_RECLAIM) or this is a bounce within
+      // it (PULLBACK_SCALP) is read from the same fresh swing-sequence scan.
       if(freshAgreesDir)
       {
          c.type = XAU_TIMING_REVERSAL_RECLAIM;
-         c.why  = StringFormat("countertrend but FreshStructureBias=%s already agrees + %d/6 reversal signals", c.freshStructureBias, hits);
+         c.why  = StringFormat("countertrend but FreshStructureBias=%s already agrees + %d/6 old-trend-exhaustion signals", c.freshStructureBias, hitsAgainstOldTrend);
       }
       else
       {
          c.type = XAU_TIMING_PULLBACK_SCALP;
-         c.why  = StringFormat("countertrend bounce -- %d/6 reversal signals + reclaim, broader structure not flipped yet", hits);
+         c.why  = StringFormat("countertrend bounce -- %d/6 old-trend-exhaustion signals + reclaim, broader structure not flipped yet", hitsAgainstOldTrend);
       }
       // A strong reclaim (5+/6) is acted on now -- waiting a bar risks
       // missing the reclaim moment itself. A marginal 4/6 still waits one
       // more bar for confirmation like any other uncertain signal.
-      c.immediateConfirm = (hits >= 5);
+      c.immediateConfirm = (hitsAgainstOldTrend >= 5);
       return;
    }
 
    c.type = XAU_TIMING_LATE_CHASE;
-   c.why  = StringFormat("countertrend, OldTrendBias=%s disagrees, only %d/6 reversal signals (reclaim=%s) -- insufficient evidence",
-                         c.oldTrendBias, hits, reclaimSeen ? "Y" : "N");
+   c.why  = StringFormat("countertrend, OldTrendBias=%s disagrees, only %d/6 old-trend-exhaustion signals (reclaim=%s) -- insufficient evidence",
+                         c.oldTrendBias, hitsAgainstOldTrend, oldReclaimSeen ? "Y" : "N");
    c.immediateConfirm = false;
 }
 
