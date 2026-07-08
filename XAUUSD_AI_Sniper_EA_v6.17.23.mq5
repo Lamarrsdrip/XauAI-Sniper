@@ -1,14 +1,42 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.17.22 - Timing Engine: one-bar entry confirmation               |
-//|   Multi-day forensic audit (35 entries/6 days/12 EA versions) found  |
-//|   0% of entries favorable at the 10-min mark, universally. A fresh  |
-//|   signal that clears every gate now must reappear (same setup+dir)  |
-//|   on the VERY NEXT closed M5 bar before OpenTrade fires --           |
-//|   SIGNAL_DETECTED -> WAITING_FOR_ENTRY_WINDOW -> ENTRY_ALLOWED, or   |
-//|   -> ENTRY_WINDOW_EXPIRED -> REASSESS_FROM_CURRENT_MARKET.           |
+//|   v6.17.23 - Adaptive Timing + Countertrend Classifier                |
+//|   The one-bar wait from v6.17.22 is now adaptive: a clean trend        |
+//|   continuation or a strong (>=5/6) evidence-backed countertrend        |
+//|   reclaim enters immediately, no wait. Every setup is classified as   |
+//|   TREND_CONTINUATION / PULLBACK_SCALP / REVERSAL_RECLAIM /             |
+//|   BREAKOUT_RETEST / LATE_CHASE, and Gate 1's HTF-trend block now lets |
+//|   evidence-backed countertrend scalps through instead of hard-        |
+//|   blocking every countertrend attempt.                                |
 //+------------------------------------------------------------------+
+// v6.17.23 CHANGES (2026-07-08) — ADAPTIVE TIMING + COUNTERTREND CLASSIFIER:
+//   User feedback on v6.17.22: a fixed one-bar wait risks missing a genuinely
+//   strong, already-confirmed signal's exact entry, and Gate 1's HTF-bias
+//   block hard-blocks EVERY countertrend attempt even when fresh chart
+//   evidence -- not old H1/regime trend -- clearly supports it ("the bot
+//   should adapt to the current chart, not blindly follow old trend
+//   direction"). New XAU_ClassifySetup() answers three questions per entry:
+//   is this dir riding WITH the prevailing trend (TREND_CONTINUATION), is it
+//   a countertrend move backed by a majority (>=4/6) of concrete reversal/
+//   exhaustion signals plus a confirmed reclaim (PULLBACK_SCALP if the
+//   broader trend hasn't structurally flipped yet, REVERSAL_RECLAIM if
+//   fresh M5 structure already has), or is it fighting the trend with no
+//   real evidence at all (LATE_CHASE)? Deliberately does NOT touch
+//   XAU_ExhaustionReversalGuard (v6.17.21, already live-proven) -- this is
+//   an independent, additive classifier so a change here can never silently
+//   change that guard's tested behavior.
+//
+//   Two call sites: (1) Gate 1 in ContextGateAllows now lets
+//   PULLBACK_SCALP/REVERSAL_RECLAIM through its HTF-bias block instead of
+//   hard-blocking every countertrend attempt -- LATE_CHASE (no real
+//   evidence) is still blocked exactly as before; (2)
+//   XAU_TimingEngineConfirmsEntry skips its one-bar wait entirely
+//   (immediateConfirm=true) for a clean continuation (zero opposing
+//   reversal signals) or a strong 5+/6 countertrend reclaim -- a marginal
+//   4/6 still waits one bar like any uncertain signal, and the existing
+//   anti-chase/never-blindly-resume behavior from v6.17.22 is unchanged.
+//
 // v6.17.22 CHANGES (2026-07-08) — TIMING ENGINE (ONE-BAR ENTRY CONFIRMATION):
 //   Forensic audit of 35 entries across 6 trading days and 12 EA version eras
 //   (v6.8.0-v6.17.20; both directions; BREAKOUT/TREND_PULLBACK/HTF_TREND_FOLLOW/
@@ -1295,17 +1323,17 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.192"
-#property description "XAUUSD AI Sniper v6.17.22 - Timing Engine (one-bar entry confirmation)"
-#property description "Multi-day forensic audit (35 entries/6 days/12 EA versions) found 0%"
-#property description "of entries favorable at 10min, universally. Fresh signals now require"
-#property description "the same setup+direction to reconfirm one M5 bar later before OpenTrade"
-#property description "fires -- SIGNAL_DETECTED/WAITING_FOR_ENTRY_WINDOW/ENTRY_ALLOWED state."
+#property version   "6.193"
+#property description "XAUUSD AI Sniper v6.17.23 - Adaptive Timing + Countertrend Classifier"
+#property description "Timing engine now skips its one-bar wait for already-clean signals and"
+#property description "classifies every entry as TREND_CONTINUATION/PULLBACK_SCALP/"
+#property description "REVERSAL_RECLAIM/BREAKOUT_RETEST/LATE_CHASE -- evidence-backed"
+#property description "countertrend scalps can now pass Gate 1, blind trend-fighting still can't."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.17.22"
-#define XAUAI_EA_VERSION_NUM "6.17.22"
-#define XAUAI_BUILD_HASH "v61722-timing-engine-one-bar-confirmation-20260708"
+#define XAUAI_EA_VERSION "v6.17.23"
+#define XAUAI_EA_VERSION_NUM "6.17.23"
+#define XAUAI_BUILD_HASH "v61723-adaptive-timing-countertrend-classifier-20260708"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -2790,6 +2818,29 @@ struct PendingEntryConfirmation
    datetime firstSeenCandle;
 };
 PendingEntryConfirmation g_pendingEntryConfirm;
+
+// v6.17.23 ADAPTIVE TIMING: what kind of moment is this, not just which
+// direction. See XAU_ClassifySetup.
+enum ENUM_XAU_SetupTiming
+{
+   XAU_TIMING_TREND_CONTINUATION,  // dir agrees with the prevailing H1/regime trend
+   XAU_TIMING_PULLBACK_SCALP,      // evidence-backed countertrend bounce, broader trend not yet flipped
+   XAU_TIMING_REVERSAL_RECLAIM,    // evidence-backed countertrend AND fresh M5 structure has already flipped
+   XAU_TIMING_BREAKOUT_RETEST,     // BREAKOUT setup
+   XAU_TIMING_LATE_CHASE           // countertrend with insufficient concrete evidence -- fighting trend blind
+};
+
+struct XAU_SetupClassification
+{
+   ENUM_XAU_SetupTiming type;
+   int      reversalHits;      // 0-6 concrete reversal/exhaustion signals FOR this direction
+   bool     reclaimSeen;       // rejection/reclaim specifically seen for this direction
+   bool     structBroken;      // CHoCH-level M5 break in this direction's favor
+   bool     immediateConfirm;  // true -> evidence is already clean, skip the timing engine's 1-bar wait
+   string   oldTrendBias;
+   string   freshStructureBias;
+   string   why;
+};
 
 ulong       g_qualityPosIds[];
 double      g_qualityWorstPnl[];
@@ -6018,6 +6069,137 @@ bool XAU_ExhaustionReversalGuard(int dir, double atr,
    return true;
 }
 
+// v6.17.23 ADAPTIVE TIMING CLASSIFIER --------------------------------------
+// User-requested evolution of the fixed one-bar timing engine: "adapt to the
+// current chart, don't blindly wait, don't blindly follow old trend." This
+// answers three questions the file previously never asked explicitly: is this
+// dir riding WITH the prevailing trend (TREND_CONTINUATION), is it a
+// countertrend move backed by real evidence (PULLBACK_SCALP if the broader
+// trend hasn't flipped yet, REVERSAL_RECLAIM if fresh M5 structure already
+// has), or is it fighting the trend with no real evidence at all
+// (LATE_CHASE)? Feeds two call sites: Gate 1 below (lets an evidence-backed
+// countertrend scalp/reclaim through the HTF-bias block instead of hard-
+// blocking every countertrend attempt) and XAU_TimingEngineConfirmsEntry
+// (skips the one-bar wait when the evidence is already clean).
+//
+// Deliberately does NOT touch XAU_ExhaustionReversalGuard above, and
+// duplicates a small amount of its evidence computation (swing-sequence,
+// CHoCH, sweep-rejection, room, momentum) on purpose: that function is
+// already live-proven (posId 9483784022) and this file's stance is "don't
+// spoil what already works" -- keeping the two fully independent means a
+// change here can never silently change that guard's already-tested
+// behavior, and vice versa.
+void XAU_ClassifySetup(int dir, double atr, string setupName, XAU_SetupClassification &c)
+{
+   c.type = XAU_TIMING_TREND_CONTINUATION;
+   c.reversalHits = 0; c.reclaimSeen = false; c.structBroken = false;
+   c.immediateConfirm = false;
+   c.oldTrendBias = "NEUTRAL"; c.freshStructureBias = "NEUTRAL";
+   c.why = "";
+
+   if(atr <= 0 || ArraySize(bufEMAFast) < 2 || ArraySize(bufEMASlow) < 2)
+   {
+      c.why = "insufficient data -- defaulting to TREND_CONTINUATION, no adaptive evidence available";
+      return;
+   }
+
+   int oldBiasDir = 0;
+   if(g_smc_bos_dir == 1 || currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP) oldBiasDir = 1;
+   if(g_smc_bos_dir == -1 || currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN)
+      oldBiasDir = (oldBiasDir == 1) ? 0 : -1;
+   c.oldTrendBias = (oldBiasDir == 1) ? "BULLISH" : (oldBiasDir == -1) ? "BEARISH" : "NEUTRAL";
+
+   string seqWhy = ""; double lastSwHigh = 0.0, lastSwLow = 0.0;
+   int seqDir = XAU_SwingSequenceDir(PERIOD_M5, MathMax(30, InpCleanStructureLookback * 2), seqWhy, lastSwHigh, lastSwLow);
+   c.freshStructureBias = (seqDir == 1) ? "BULLISH" : (seqDir == -1) ? "BEARISH" : "MIXED";
+
+   bool failedContUp = false, failedContDown = false, sweepRejUp = false, sweepRejDown = false;
+   string failWhy = "";
+   XAU_AssessFailureAndSweep(atr, failedContUp, failedContDown, sweepRejUp, sweepRejDown, failWhy);
+
+   double structBuf = atr * 0.10;
+   double c1 = iClose(Symbol(), PERIOD_M5, 1);
+   bool chochBull = (lastSwHigh > 0 && c1 > lastSwHigh + structBuf);
+   bool chochBear = (lastSwLow  > 0 && c1 < lastSwLow  - structBuf);
+
+   double swingLow = DBL_MAX, swingHigh = -DBL_MAX;
+   CleanStructureLevels(InpCleanStructureLookback, swingLow, swingHigh);
+   double curPrice = (dir == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK) : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double roomUp   = (swingHigh > -DBL_MAX && curPrice > 0) ? (swingHigh - curPrice) / atr : 0.0;
+   double roomDown = (swingLow  <  DBL_MAX && curPrice > 0) ? (curPrice - swingLow)  / atr : 0.0;
+   double momentum = bufEMAFast[1] - bufEMASlow[1];
+   double rsiNow   = (ArraySize(bufRSI) > 1) ? bufRSI[1] : 50.0;
+
+   bool dirIsSell       = (dir == -1);
+   bool largeLegDone    = dirIsSell ? (roomUp   >= 3.0) : (roomDown >= 3.0);
+   bool nearExtreme     = dirIsSell ? (roomDown <= 0.5) : (roomUp   <= 0.5);
+   bool reclaimSeen     = dirIsSell ? (sweepRejUp || seqDir == 1) : (sweepRejDown || seqDir == -1);
+   bool structBroken    = dirIsSell ? chochBull : chochBear;
+   bool roomAsymmetric  = dirIsSell ? (roomDown < roomUp) : (roomUp < roomDown);
+   bool momentumFading  = dirIsSell ? (rsiNow > 50.0 || momentum > 0) : (rsiNow < 50.0 || momentum < 0);
+   int hits = (largeLegDone?1:0) + (nearExtreme?1:0) + (reclaimSeen?1:0) +
+              (structBroken?1:0) + (roomAsymmetric?1:0) + (momentumFading?1:0);
+
+   c.reversalHits = hits;
+   c.reclaimSeen  = reclaimSeen;
+   c.structBroken = structBroken;
+
+   bool dirAgreesOldTrend = (oldBiasDir == 0 || oldBiasDir == dir);
+   bool freshAgreesDir    = (seqDir == 0 || seqDir == dir);
+
+   if(setupName == "BREAKOUT")
+   {
+      c.type = XAU_TIMING_BREAKOUT_RETEST;
+      c.why  = "BREAKOUT setup";
+      // A clean breakout with none of the 6 reversal/exhaustion signals
+      // against it is immediately tradeable -- the breakout setup's own
+      // scoring already requires a real break before it fires at all.
+      c.immediateConfirm = (hits == 0);
+      return;
+   }
+
+   if(dirAgreesOldTrend)
+   {
+      c.type = XAU_TIMING_TREND_CONTINUATION;
+      c.why  = StringFormat("dir agrees with OldTrendBias=%s", c.oldTrendBias);
+      // Clean continuation: fresh structure doesn't oppose it either, and
+      // none of the 6 reversal/exhaustion signals against this dir fired.
+      c.immediateConfirm = freshAgreesDir && (hits == 0);
+      return;
+   }
+
+   if(hits >= 4 && reclaimSeen)
+   {
+      // Countertrend, but a majority of concrete evidence plus a confirmed
+      // reclaim already support it -- from THIS direction's own point of
+      // view this is the evidence-backed side (the mirror image of what
+      // XAU_ExhaustionReversalGuard uses to veto the OPPOSITE, stale-trend
+      // direction). Whether the broader trend has actually flipped yet
+      // (REVERSAL_RECLAIM) or this is a bounce within it (PULLBACK_SCALP)
+      // is read from the same fresh swing-sequence scan.
+      if(freshAgreesDir)
+      {
+         c.type = XAU_TIMING_REVERSAL_RECLAIM;
+         c.why  = StringFormat("countertrend but FreshStructureBias=%s already agrees + %d/6 reversal signals", c.freshStructureBias, hits);
+      }
+      else
+      {
+         c.type = XAU_TIMING_PULLBACK_SCALP;
+         c.why  = StringFormat("countertrend bounce -- %d/6 reversal signals + reclaim, broader structure not flipped yet", hits);
+      }
+      // A strong reclaim (5+/6) is acted on now -- waiting a bar risks
+      // missing the reclaim moment itself. A marginal 4/6 still waits one
+      // more bar for confirmation like any other uncertain signal.
+      c.immediateConfirm = (hits >= 5);
+      return;
+   }
+
+   c.type = XAU_TIMING_LATE_CHASE;
+   c.why  = StringFormat("countertrend, OldTrendBias=%s disagrees, only %d/6 reversal signals (reclaim=%s) -- insufficient evidence",
+                         c.oldTrendBias, hits, reclaimSeen ? "Y" : "N");
+   c.immediateConfirm = false;
+}
+
 //+------------------------------------------------------------------+
 //| CONTEXT GATE (v4.8.0) — HTF bias + Swing S/R proximity filter    |
 //| Blocks entries that fight H4 trend OR sit near a recent swing    |
@@ -6061,15 +6243,31 @@ bool ContextGateAllows(int signal, double atr)
          if(spread >= InpH4NeutralPct)
          {
             string tfName = EnumToString(ctxTF);
-            if(signal == 1 && !h4Up)
+            if((signal == 1 && !h4Up) || (signal == -1 && !h4Down))
             {
-               PrintFormat("⛔ CONTEXT-GATE: BUY blocked — %s EMA50 < EMA200 (bearish HTF bias) [mode=%s]. Don't fight the trend.", tfName, g_modeName);
-               return false;
-            }
-            if(signal == -1 && !h4Down)
-            {
-               PrintFormat("⛔ CONTEXT-GATE: SELL blocked — %s EMA50 > EMA200 (bullish HTF bias) [mode=%s]. Don't fight the trend.", tfName, g_modeName);
-               return false;
+               // v6.17.23: don't hard-block every countertrend attempt --
+               // classify it first. An evidence-backed countertrend scalp/
+               // reclaim (PULLBACK_SCALP/REVERSAL_RECLAIM: a majority of
+               // concrete reversal signals plus a confirmed reclaim) is
+               // allowed through; a countertrend attempt with no real
+               // evidence (LATE_CHASE) is still blocked exactly as before.
+               XAU_SetupClassification cgClass;
+               XAU_ClassifySetup(signal, atr, "", cgClass);
+               if(cgClass.type == XAU_TIMING_PULLBACK_SCALP || cgClass.type == XAU_TIMING_REVERSAL_RECLAIM)
+               {
+                  PrintFormat("✅ CONTEXT-GATE: %s countertrend allowed despite %s HTF bias -- classified %s (%s)",
+                              signal == 1 ? "BUY" : "SELL", tfName,
+                              cgClass.type == XAU_TIMING_PULLBACK_SCALP ? "PULLBACK_SCALP" : "REVERSAL_RECLAIM",
+                              cgClass.why);
+               }
+               else
+               {
+                  PrintFormat("⛔ CONTEXT-GATE: %s blocked — %s EMA50 %s EMA200 (%s HTF bias) [mode=%s]. %s",
+                              signal == 1 ? "BUY" : "SELL", tfName, signal == 1 ? "<" : ">",
+                              signal == 1 ? "bearish" : "bullish", g_modeName,
+                              cgClass.type == XAU_TIMING_LATE_CHASE ? cgClass.why : "Don't fight the trend.");
+                  return false;
+               }
             }
          }
       }
@@ -23350,8 +23548,33 @@ void XAU_TrackSignalFirstSeen(int signal, string setupName, string grade,
 // OpenTrade() regardless). State names match the requested architecture:
 // SIGNAL_DETECTED -> WAITING_FOR_ENTRY_WINDOW -> ENTRY_CONFIRMING ->
 // ENTRY_ALLOWED, or -> ENTRY_WINDOW_EXPIRED -> REASSESS_FROM_CURRENT_MARKET.
+// v6.17.23 ADAPTIVE UPGRADE: the fixed "always wait one bar" above was too
+// blunt -- a genuinely strong, already-confirmed signal loses its exact entry
+// waiting for a bar it didn't need, and can end up chasing whatever price
+// the market moved to instead. XAU_ClassifySetup answers "is this evidence
+// already clean" BEFORE the wait logic ever runs: a clean trend continuation
+// (no opposing reversal signal at all) or a strong (>=5/6) evidence-backed
+// countertrend reclaim skips the wait entirely (ENTRY_ALLOWED now, no
+// bar-of-delay); anything less certain still goes through the one-bar
+// reconfirmation exactly as before. This never removes the wait for a
+// genuinely uncertain signal, and never fires blind -- immediateConfirm is
+// only ever true when concrete evidence already supports it.
 bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double sizeMulti, double atr)
 {
+   XAU_SetupClassification tcls;
+   XAU_ClassifySetup(dir, atr, setup, tcls);
+   string typeStr = (tcls.type == XAU_TIMING_TREND_CONTINUATION) ? "TREND_CONTINUATION" :
+                    (tcls.type == XAU_TIMING_PULLBACK_SCALP)     ? "PULLBACK_SCALP" :
+                    (tcls.type == XAU_TIMING_REVERSAL_RECLAIM)   ? "REVERSAL_RECLAIM" :
+                    (tcls.type == XAU_TIMING_BREAKOUT_RETEST)    ? "BREAKOUT_RETEST" : "LATE_CHASE";
+   if(tcls.immediateConfirm)
+   {
+      PrintFormat("TIMING_ENGINE: %s confirmed now (%s %s) -> ENTRY_ALLOWED (no wait -- %s)",
+                  typeStr, setup, dir == 1 ? "BUY" : "SELL", tcls.why);
+      g_pendingEntryConfirm.active = false; // this signal is acting now, not pending
+      return true;
+   }
+
    double signalPrice = iClose(Symbol(), PERIOD_M5, 1);
    datetime nowCandle = iTime(Symbol(), PERIOD_M5, 0);
    string dirStr = (dir == 1) ? "BUY" : "SELL";
@@ -23398,8 +23621,8 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
    g_pendingEntryConfirm.signalPrice     = signalPrice;
    g_pendingEntryConfirm.atr             = atr;
    g_pendingEntryConfirm.firstSeenCandle = nowCandle;
-   PrintFormat("TIMING_ENGINE: SIGNAL_DETECTED (%s %s) grade=%s -> WAITING_FOR_ENTRY_WINDOW (confirm required on next M5 bar)",
-               setup, dirStr, grade);
+   PrintFormat("TIMING_ENGINE: %s SIGNAL_DETECTED (%s %s) grade=%s -> WAITING_FOR_ENTRY_WINDOW (%s; confirm required on next M5 bar)",
+               typeStr, setup, dirStr, grade, tcls.why);
    return false;
 }
 

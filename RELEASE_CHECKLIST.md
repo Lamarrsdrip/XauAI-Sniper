@@ -14,6 +14,58 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.23 — 2026-07-08 — Adaptive Timing + Countertrend Classifier
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.23"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.23.mq5`
+- [x] Top-of-file header banner updated
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61723_final.log`)
+
+### User feedback that drove this release
+v6.17.22's fixed one-bar wait was flagged as too blunt: a strong, already-confirmed signal could
+lose its exact entry waiting for a bar it didn't need and end up chasing; separately, Gate 1's
+HTF-bias block hard-blocks EVERY countertrend attempt even when fresh M5 chart evidence (not old
+H1/regime trend) clearly supports it. Explicit ask: "adapt to the current chart, don't blindly
+follow old trend direction," with named trade types (TREND_CONTINUATION / PULLBACK_SCALP /
+REVERSAL_RECLAIM / BREAKOUT_RETEST) and a requirement to never force a fixed delay or blindly
+chase.
+
+### Fix
+New `XAU_ClassifySetup()` — deliberately independent of `XAU_ExhaustionReversalGuard` (v6.17.21,
+already live-proven; not touched, verified by a static test that greps for its absence in that
+function). Classifies every entry attempt:
+- **TREND_CONTINUATION** — dir agrees with OldTrendBias (H1 BOS + regime). Immediate entry only if
+  fresh M5 structure agrees too AND zero of the 6 reversal/exhaustion signals oppose it.
+- **PULLBACK_SCALP** — countertrend, ≥4/6 reversal signals + a confirmed reclaim, but the broader
+  M5 structure hasn't flipped yet (a bounce within the still-intact old trend).
+- **REVERSAL_RECLAIM** — same evidence bar, but fresh M5 structure has already flipped in dir's
+  favor (a real structural reversal, not just a bounce).
+- **BREAKOUT_RETEST** — the existing BREAKOUT setup, labeled for telemetry.
+- **LATE_CHASE** — countertrend with <4/6 reversal signals or no reclaim — still blocked exactly
+  as before.
+
+Two call sites: `ContextGateAllows`'s Gate 1 now lets PULLBACK_SCALP/REVERSAL_RECLAIM through the
+HTF-bias block (LATE_CHASE still hard-blocked); `XAU_TimingEngineConfirmsEntry` skips its one-bar
+wait (`immediateConfirm`) for a clean continuation or a strong (≥5/6) countertrend reclaim — a
+marginal 4/6 still waits one bar like any uncertain signal. The v6.17.22 anti-chase/never-blindly-
+resume behavior is unchanged.
+
+### Testing
+- [x] MetaEditor compile: 0 errors, 0 warnings
+- [x] `tests/test_xau_v61723_adaptive_timing_static.py` — 17 tests: struct/enum presence, the
+      exhaustion guard's independence, Gate 1's exception, the timing engine's immediate-skip
+      ordering, and a Python behavioral simulation of all 5 classification outcomes (clean
+      continuation, marginal/strong countertrend reclaim, pullback-within-trend, late chase)
+- [x] Full suite re-run: only the expected "next release obsoletes the previous one's identity
+      checks" pattern remains (same as every prior release); one pre-existing fixed-window test
+      (`test_xau_v6173`) widened again for the same documented, non-regression reason as v6.17.6
+- [ ] Live forward-test measurement of missed-entries-from-waiting / chase-entries / immediate-
+      entry accuracy / pullback-scalp and reversal-reclaim win rates / MAE improvement — cannot be
+      done from this environment; requires a live or Strategy-Tester run.
+
+---
+
 ## v6.17.22 — 2026-07-08 — Timing Engine (one-bar entry confirmation)
 
 ### EA Compile

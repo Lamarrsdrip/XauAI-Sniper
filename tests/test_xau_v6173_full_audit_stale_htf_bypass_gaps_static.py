@@ -48,10 +48,14 @@ def test_personality_gate_bypass_has_antirepeat_and_structural_gate():
     # section marker. Verified directly that the assertion target is still
     # present in the source before widening this window -- this was a test
     # window-size bug, not a code regression.
+    # Widened again in v6.17.23: unrelated new code (adaptive timing
+    # classifier, banner/changelog comments) earlier in the file pushed the
+    # marker-to-target distance to ~4970 chars. Same non-regression as above --
+    # verified the target string is still present before widening.
     ea = read(BACKEND_EA)
     marker = "// v6.4.0 UPGRADE 1 — Market Personality Gate"
     idx = ea.index(marker)
-    window = ea[idx: idx + 4700]
+    window = ea[idx: idx + 5200]
     assert "!XAU_AntiRepeatLossActive(signal) && XAU_StructuralBypassAllowed()" in window
 
 
