@@ -14,6 +14,70 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.16 — 2026-07-08 — HARD_BLOCK Self-Consistency Fix
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.16"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.16.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61716_final.log`)
+
+### Evidence
+A background executed-vs-blocked expectancy audit
+(`audits/xau_expectancy_inversion_audit_2026-07-06_to_2026-07-08.md`) directly compared 19 executed
+trades against 106 blocked A/A+ signals in the same window. Headline: the filter stack is **not**
+broadly inverted (blocked A/A+ signals lean correctly protective, 55% would-be losses vs 17%
+would-be 2R wins; executed trades net +$232.85, PF≈1.26) — but **100% of this window's trading
+losses traced to one narrow, exact mechanism**: 3 of 19 executed trades carried the EA's own
+internal `blockClass=HARD_BLOCK` self-label at entry (from `XAUEntryTimingGuard()`'s calibrated
+timing/quality engine) and were executed anyway via an override path
+(`STRONG_MOMENTUM_OVERRIDE`/`TREND-CONTINUATION MODE` chase/`RECOVERY of missed signal` re-entry).
+None were clean wins (1 loss, 1 large loss, 1 narrow survival off a -$348 drawdown). Checked against
+~5 weeks of full local history, the same pattern occurred 5 times, net -$161.52 despite a 60%
+nominal win rate — small sample, but consistent direction at every scope checked.
+
+### Root cause
+`blockClass = "HARD_BLOCK"` is computed from `lateChaseEntry||spikeCooldown||failedImpulseBlock||
+postSweepTrap||timingBadRRForReport` and written into the entry's own diagnostic log text — but
+only the `lateChaseEntry` sub-case had an actual `return false;` wired to it (via a separate,
+narrower `if(lateChaseEntry && InpXAU_BlockLateA && !trendContinuationQualified)` check). The other
+four conditions got the "this is hard-block quality" label in their own text and were then allowed
+to fall through to whatever came next.
+
+### Fix
+Added `if(blockClass == "HARD_BLOCK") { ...; return false; }` immediately after the classification —
+unconditional, no `XAU_StructuralBypassAllowed()`/trade-mode softening, matching the audit's explicit
+"no override path should be able to admit it." This is a self-consistency fix, not a new fear rule:
+it makes the system respect a conclusion it was already, privately, reaching on its own.
+
+Also closed the matching gap in the v6.17.14 `PendingOpportunity` recovery classifier
+(`XAU_BlockerIsHardReason()`) — it did not previously recognize this same internal label, meaning a
+`blockClass=HARD_BLOCK`-flagged signal could theoretically be re-admitted via the missed-signal
+recovery path too (exactly what happened in the audit's trade #19: a `RECOVERY` re-entry of a
+`FAILED-IMPULSE BLOCK`ed, `blockClass=HARD_BLOCK` signal, which lost).
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v61716_hard_block_self_consistency_static.py` — 9/9 passing (confirms the
+      check is unconditional, runs before the old narrower check, and the classifier update is
+      present without touching the underlying classification logic)
+- [x] Full suite: 416/485 passing, remaining failures are pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.16.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: this REDUCES trade frequency slightly (it closes an unintended admission path, it
+  does not open one) — the expected effect is fewer, not more, executed trades in the narrow set of
+  cases this touches. Watch for `HARD_BLOCK_SELF_CONSISTENCY` journal lines to confirm it's firing
+  on the same class of candidate the audit identified.
+
+---
+
 ## v6.17.15 — 2026-07-08 — Command Center Force Open Trade
 
 ### EA Compile
