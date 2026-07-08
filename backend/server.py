@@ -3278,7 +3278,38 @@ SAFE_REMOTE_COMMANDS = {
     "FORCE_SYNC": "Force startup intelligence sync",
     "FORCE_REPORT_UPLOAD": "Force report upload marker",
     "UPDATE_PROP_FIRM_CONFIG": "Update prop firm protection",
+    "FORCE_OPEN_TRADE": "Manually force-open a blocked candidate",
 }
+
+def _normalize_force_open_payload(payload: Optional[Dict]) -> dict:
+    raw = payload or {}
+    direction = str(raw.get("direction", "")).strip().upper()
+    if direction not in {"BUY", "SELL"}:
+        raise HTTPException(status_code=400, detail="Force-open requires a valid BUY or SELL direction.")
+    setup = str(raw.get("setup", "")).strip()
+    if not setup:
+        raise HTTPException(status_code=400, detail="Force-open requires the original setup name.")
+    grade = str(raw.get("grade", "")).strip().upper() or "B"
+    original_blocker = str(raw.get("original_blocker", "")).strip() or "UNKNOWN"
+    try:
+        candle_time = float(raw.get("candle_time", 0))
+    except (TypeError, ValueError):
+        candle_time = 0.0
+    if candle_time <= 0:
+        raise HTTPException(status_code=400, detail="Force-open requires the original candle timestamp.")
+    # EA-side staleness check also enforces this, but reject obviously stale
+    # requests here too rather than queueing a command doomed to fail.
+    age_seconds = datetime.now(timezone.utc).timestamp() - candle_time
+    if age_seconds > 15 * 60:
+        raise HTTPException(status_code=400, detail="This blocked signal is too old to force-open (over 15 minutes). It may no longer reflect current market conditions.")
+    return {
+        "direction": direction,
+        "setup": setup,
+        "grade": grade,
+        "original_blocker": original_blocker,
+        "candle_time": candle_time,
+        "signal_id": str(raw.get("signal_id", "")).strip(),
+    }
 
 def _normalize_prop_firm_config(payload: Optional[Dict]) -> dict:
     raw = payload or {}
@@ -5561,6 +5592,8 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
     payload = req.payload or {}
     if action == "UPDATE_PROP_FIRM_CONFIG":
         payload = _normalize_prop_firm_config(payload)
+    elif action == "FORCE_OPEN_TRADE":
+        payload = _normalize_force_open_payload(payload)
     doc = {
         "id": command_id,
         "user_id": user["id"],

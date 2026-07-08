@@ -5,7 +5,7 @@ import {
   Activity, AreaChart, BarChart3, Bot, Brain, CheckCircle2, CircleDollarSign,
   Clock3, Copy, Flame, Gauge, History, Home, KeyRound, LineChart, Loader2,
   Lock, LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
-  SlidersHorizontal, Square, TerminalSquare, TrendingUp, Wifi, XCircle, AlertTriangle, Search,
+  SlidersHorizontal, Square, TerminalSquare, TrendingUp, Wifi, XCircle, AlertTriangle, Search, Zap,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
@@ -193,7 +193,7 @@ function Sparkline({ points=[], tone="#d4af37", height="h-20" }) {
   );
 }
 
-function EventRow({ event }) {
+function EventRow({ event, onForceOpen }) {
   const tone = severityTone(event.severity);
   const d = eventDetails(event);
   const dotColor = { red:"bg-red-400", amber:"bg-amber-300", green:"bg-emerald-400", blue:"bg-sky-300", violet:"bg-violet-300", neutral:"bg-white/30" }[tone]||"bg-white/30";
@@ -208,6 +208,38 @@ function EventRow({ event }) {
   const finalBlocker = getEventField(event, "final_blocker", getEventField(event, "blocked_by", ""));
   const openTradeCalled = getEventField(event, "open_trade_called", undefined);
   const repeat = eventRepeatText(event);
+
+  // Force Open eligibility: a real, recent blocked candidate with a usable
+  // direction + setup. Staleness (15min) and the remaining hard-safety
+  // checks are enforced authoritatively server-side (backend + EA) — this
+  // is just "don't even show the button for something obviously unusable."
+  const direction = getEventField(event, "signal_direction", "");
+  const setupName = event.setup || getEventField(event, "setup", "") || module;
+  const grade = event.grade || getEventField(event, "grade", "");
+  const eventAgeMin = event.ts ? (Date.now() - new Date(event.ts).getTime()) / 60000 : Infinity;
+  const canForceOpen = Boolean(
+    onForceOpen && String(event.severity).toUpperCase() === "BLOCK" &&
+    /BUY|SELL/i.test(direction) && setupName && eventAgeMin <= 15
+  );
+  const forceOpenClick = () => {
+    const candleTime = event.ts ? new Date(event.ts).getTime() / 1000 : Date.now() / 1000;
+    onForceOpen({
+      action: "FORCE_OPEN_TRADE",
+      label: "Force Open Trade",
+      detail: `This trade was blocked by: ${finalBlocker || reason || "soft filter"}. You are manually overriding the bot's soft filter. Hard risk and broker safety still apply — the EA will re-check spread, margin, stops, and your risk cap at current price before opening anything.`,
+      tone: "amber",
+      dangerous: true,
+      icon: AlertTriangle,
+      payload: {
+        direction: /BUY/i.test(direction) ? "BUY" : "SELL",
+        setup: setupName,
+        grade: grade || "B",
+        original_blocker: finalBlocker || reason || "UNKNOWN",
+        candle_time: candleTime,
+        signal_id: event.id || "",
+      },
+    });
+  };
   const facts = [
     ["Symbol", event.symbol || d.symbol],
     ["Mode", getEventField(event, "mode", "")],
@@ -244,6 +276,12 @@ function EventRow({ event }) {
           </div>
         )}
         {repeat && <div className="mt-2 text-[11px] font-semibold text-violet-200">{repeat}</div>}
+        {canForceOpen && (
+          <button onClick={forceOpenClick} data-testid="force-open-trade-button"
+            className="mt-2.5 inline-flex items-center gap-1.5 rounded-full border border-amber-300/25 bg-amber-300/10 px-3 py-1.5 text-[11px] font-bold text-amber-200 transition hover:bg-amber-300/20">
+            <Zap className="h-3 w-3" /> Force Open Trade
+          </button>
+        )}
       </div>
     </div>
   );
@@ -574,7 +612,9 @@ export default function CloudDashboard() {
     if (!modalCommand) return;
     setCommandBusy(true); setCommandMsg("");
     try {
-      const r = await commandAxios.post("/cloud/command/request",{ action:modalCommand.action, pin:licenseKey, confirm:true });
+      const body = { action:modalCommand.action, pin:licenseKey, confirm:true };
+      if (modalCommand.payload) body.payload = modalCommand.payload;
+      const r = await commandAxios.post("/cloud/command/request", body);
       setCommandMsg(`Queued ${modalCommand.label}: ${r.data.command_id}`);
       setModalCommand(null); fetchAll();
     } catch (e) { setCommandMsg(e.response?.data?.detail||"Command failed"); }
@@ -625,7 +665,7 @@ export default function CloudDashboard() {
       {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} linked={Boolean(license?.linked||status?.license?.linked)} />}
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
-      {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} />}
+      {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} />}
       {active==="control"      && <ControlPage commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
       {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} />}
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
@@ -926,7 +966,7 @@ function IntelligencePage({ heartbeat, events, status }) {
 }
 
 // ─── Activity ─────────────────────────────────────────────────────────────────
-function ActivityPage({ events, filter, setFilter }) {
+function ActivityPage({ events, filter, setFilter, onForceOpen }) {
   const [search, setSearch] = useState("");
   const visibleEvents = useMemo(()=>events.filter(e=>eventMatchesSearch(e, search)), [events, search]);
   return (
@@ -955,7 +995,7 @@ function ActivityPage({ events, filter, setFilter }) {
       <DecisionStats events={visibleEvents} />
       <Card title="Bot Decision Feed" subtitle="Clean M5 decision timeline: entries, blocks, exits, risk, AI, errors, and overrides. Repeated noise is compressed.">
         {visibleEvents.length
-          ? <div className="space-y-2">{visibleEvents.map((e,i)=><EventRow key={e.id||i} event={e} />)}</div>
+          ? <div className="space-y-2">{visibleEvents.map((e,i)=><EventRow key={e.id||i} event={e} onForceOpen={onForceOpen} />)}</div>
           : <Empty title="No matching activity yet" body="Only meaningful decisions from your linked license and MT5 account will appear here. Old cloud records are hidden." icon={Activity} />}
       </Card>
       <DecisionHistory events={visibleEvents} />

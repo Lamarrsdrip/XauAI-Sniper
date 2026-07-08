@@ -14,6 +14,79 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.15 — 2026-07-08 — Command Center Force Open Trade
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.15"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.15.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61715_final.log`)
+
+### Feature 1 — Force Open Trade
+User-facing manual override for a blocked candidate, requested from Command Center.
+
+**Architecture**: reused the EXISTING remote-command queue (`/api/cloud/command/request` →
+`cloud_bot_commands` → EA's `BotMonitorPollCommands()` poll, already used by
+PAUSE/RESUME/STOP/CLOSE_ALL/UPDATE_PROP_FIRM_CONFIG) rather than building a new channel. Added
+`FORCE_OPEN_TRADE` to `SAFE_REMOTE_COMMANDS`.
+
+**Backend** (`server.py`): `_normalize_force_open_payload()` validates direction (BUY/SELL only),
+requires a real setup name, and rejects payloads where the original candle is already >15 minutes
+old — before the command is even queued for the EA to see.
+
+**EA** (`XAU_TryForceOpenTrade()`): deliberately a thin wrapper, not a parallel execution path.
+`OpenTrade()` itself already computes entry/SL/TP fresh from CURRENT bid/ask + ATR at call time
+(never a stale stored price) and already enforces every hard-safety item on the explicit
+"must never bypass" list: invalid stops, broker min/max/step lot, max risk hard cap (final risk
+reconciliation), and margin/broker rejection via retcode. This wrapper only adds staleness (3 bars
+/ 15min), the spread hard cap (OpenTrade has none of its own), duplicate-same-candle protection,
+and symbol-trading-disabled — the few things `OpenTrade()` doesn't already check. Soft gates
+(Personality/AI/SmartGuard/B-grade quality) are bypassed simply by never calling
+`ScoreSetups`/`StrategyFitsPersonality`/`AdaptiveXAUConfirm`/`GetAIAnalysis` at all — confirmed
+absent from the function by direct source check.
+
+**Frontend** (`CloudDashboard.jsx`): "Force Open Trade" button added to `EventRow` (the Command
+Center's Bot Decision Feed), shown only for BLOCK-severity events with a real direction+setup and
+age ≤15 minutes. Click opens the existing `CommandModal` confirmation flow (now payload-aware),
+showing the original blocker reason before the user confirms.
+
+Every rejection returns an exact reason (`FORCE_OPEN_REJECTED_STALE_OR_INVALID`,
+`_DUPLICATE_SAME_CANDLE`, `_MAX_OPEN_TRADES`, `_SPREAD_TOO_WIDE`, `_NO_FRESH_DATA`,
+`_SYMBOL_TRADING_DISABLED`, `_EXECUTION_FAILED`) surfaced back through the existing command-ack
+flow.
+
+### Feature 2 — lot-size re-check
+Verified the reported "still opens 0.04-0.09 lots" is the SAME 5% risk cap raised in v6.17.14,
+correctly scaling with SL width: `0.06 lots at 3% cap × (5/3) = 0.10 lots at 5% cap` — the user's
+newer trades landing around 0.09 on similarly wide stops is the cap working as intended, not a new
+reducer. Reaching the originally-expected 0.25-0.30 on this SL width would require raising the cap
+to ~12-13% risk per trade, which was not done (that's a materially different risk decision than the
+5% already made explicitly). No code change needed here; documented the math for the user's own
+decision if they want to go further.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] Frontend production build (`craco build`) — compiled successfully
+- [x] New `tests/test_xau_v61715_force_open_static.py` — 17/17 passing (EA hard/soft gate
+      boundaries, backend payload validation, frontend button gating + confirmation content)
+- [x] Full suite: 410/476 passing, remaining failures are pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.15.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NEEDS OBSERVATION — this is new, real-money-relevant manual-override control flow.
+  Watch for `MANUAL_FORCE_OPEN_EXECUTING`/`FORCE_OPEN_REJECTED_*` journal lines and confirm a forced
+  trade is managed identically to a normal one afterward (same magic number, same exit management —
+  it flows through the same `OpenTrade()` path every other trade uses, so this should already be
+  true, but confirm before treating it as fully proven)
+
+---
+
 ## v6.17.14 — 2026-07-08 — Risk Cap Raise + Spread Loosening + Fleet Consistency
 
 ### Repo housekeeping
