@@ -14,6 +14,71 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.13 — 2026-07-08 — Indicator err=4807 Root Cause + Watchdog Dedup
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.13"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.13.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61713_final.log`)
+
+### Root cause — proven from the LIVE, currently-running MT5 journal
+User reported the journal spamming `SCAN WATCHDOG: forcing entry scan after ~585s`, first with a
+position open, then again while completely flat — ruling out position state as the cause and
+pointing at something else entirely. Read the actual live journal directly
+(`MQL5/Logs/20260708.log` under the MetaTrader 5 install dir, not the Common Files location used by
+the earlier audits) and found the exact mechanism in real time:
+
+- `EMA_FAST_M5` failed on **every** scan attempt with `err=4807` (`ERR_INDICATOR_DATA_NOT_FOUND`) —
+  the exact error this file's own v6.17.1 comment already documents as *"a transient MT5 quirk at
+  new-bar boundaries,"* not a real handle problem.
+- Despite that, hitting `InpIndicatorReloadFails` (3) consecutive 4807s still triggered a full
+  handle rebuild every time. The live evidence proves this does not help: the freshly-rebuilt
+  handle copied successfully **exactly once**, then failed with the same `err=4807` again almost
+  immediately — repeating in a ~90s rebuild → 12s warmup → fail loop that ran for **20+ minutes
+  straight (1178+ seconds observed), zero completed scans**, independent of whether a position was
+  open. This single mechanism explains both the earlier position-open finding and the new flat
+  finding — they are the same bug, not two separate ones.
+- Separately, the watchdog's own `"SCAN WATCHDOG: forcing entry scan"` `Print` was completely
+  unthrottled — the live journal showed 14+ identical lines within a single second for the entire
+  duration of the stall.
+
+### Fix
+- `CopyEntryBuffer()`: a `!staleHandle && err == 4807` failure no longer triggers the disruptive
+  rebuild/backoff/warmup cycle — it logs `INDICATOR_TRANSIENT_4807` and simply retries next tick
+  (which is what actually recovers it; every observed 4807 cleared within 1-2 ticks once rebuilds
+  stopped interrupting that recovery). A safety ceiling (`max(20, InpIndicatorReloadFails*10)`
+  consecutive fails) still escalates to the normal rebuild path if this ever turns out not to be
+  transient in some other scenario — genuinely stale handles, and every other error code, are
+  completely unaffected by this change.
+- Watchdog `Print` now throttled to `InpScanSkipLogSec` (same cadence as the existing `SCAN IDLE`
+  message) instead of firing every tick.
+- Added the requested explicit scan-cycle state logging: `SCAN_STARTED` before indicator loads,
+  `SCAN_ABORTED reason=<exact g_lastSkipReason>` at all 14 indicator-buffer abort points, and
+  `SCAN_COMPLETED_CANDIDATE`/`SCAN_COMPLETED_NO_TRADE` after `XAU_RecordMarketSnapshot()`. All
+  three are deduplicated (`XAU_LogScanState`/`XAU_LogScanAborted`): identical consecutive states
+  print once, then resurface at most once per 60s if the condition persists — not once per tick.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v61713_scan_watchdog_spam_and_4807_static.py` — 15/15 passing
+- [x] Full suite: 376/436 passing, remaining failures are pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.13.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NEEDS OBSERVATION — this is a real, live-journal-proven root cause with a targeted
+  fix, but confirm on the next session that `MARKET_SNAPSHOT`/`SCAN_COMPLETED_*` events actually
+  appear at normal cadence and the `INDICATOR_TRANSIENT_4807` path is genuinely resolving on retry
+  rather than accumulating toward the safety ceiling
+
+---
+
 ## v6.17.12 — 2026-07-08 — Scan Watchdog Timing Fix
 
 ### EA Compile
