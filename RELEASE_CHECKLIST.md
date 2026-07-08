@@ -14,6 +14,123 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.20 — 2026-07-08 — Exit Arm R-Floor (lot-blind threshold fix, Mac vs VPS)
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.20"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.20.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61720_final.log`)
+
+### Evidence — direct Mac vs VPS comparison from the user
+Same EA, two live accounts: Mac ($3k, small lots ~0.07-0.26, holds well — SELL 0.07 → $187, SELL
+0.26 → $193) vs VPS ($7k, bigger lots ~0.15-0.59 from the v6.17.17 account-lot-floor, exits far too
+early — SELL 0.17 → $43, SELL 0.15 → $53, SELL 0.59 → $28, SELL 0.59 → $49). Both accounts sit in
+the SAME `AccountSizeRiskMultiplier` tier (equity < $10k → 1.00x), so every flat-$/equity-%
+exit-arm threshold in the file was identical in dollars for both.
+
+### Root cause
+`rDollars` (a position's own $-per-R) scales with lot size; the v6.17.17 account-lot-floor can
+inflate lot size independent of the trade's SL distance/actual risk. Three separate flat-dollar
+arm/trigger thresholds don't know about a position's own lot size, so on VPS's much bigger,
+floored lot they fire at a tiny fraction of that trade's real R — while on Mac's smaller, unfloored
+lot the identical dollar figure represents a much more meaningful R:
+1. `XAU_ProtectPeakProfitFloor`'s `armUSD = MathMin(armUSD_accountScaled, armUSD_rBased)` — the
+   flat, account-tier-only `armUSD_accountScaled` ($75 for both accounts here) always wins the MIN
+   against the correctly lot-scaled `armUSD_rBased` once a lot is big enough, arming far too early
+   in R-terms on big lots.
+2. A+ Shield's `tier1ArmUSD`/`tier2ArmUSD` — pure equity-% figures (`refBal * Pct/100`), same
+   lot-blind pattern.
+3. `XAU_EvaluateExitEV`'s `InpEVExitEdgeUSD`(15)/`InpEVMinHoldEdgeUSD`(25) — flat dollar "edges"
+   compared against `profitAtRiskUSD`, which IS lot-scaled; a big lot crosses these flat edges (and
+   the direct `profitAtRiskUSD >= InpEVExitEdgeUSD` trigger straight into PARTIAL/PROTECT) almost
+   immediately.
+
+### Fix
+New shared `XAU_MinArmUSDForOwnR(dollarArm, rDollars)` floors any such threshold at
+`InpExitArmMinOwnR` (0.20R default) of the position's OWN risk, so a bigger lot can never make a
+dollar/equity-based threshold fire sooner, in R-terms, than a smaller lot would. Applied to all
+three sites above. Lot sizing completely untouched; no new entry-side rules.
+
+### Telemetry
+`XAU_ProfitQuality` (v6.17.18) gained `AccountNormalizedProfit` (profit as % of reference equity,
+lot-independent) and `LotSizeInfluence` (the actual lot on this position) — both threaded through
+`XAU_ProfitQualityTelemetry()` — so a Mac-vs-VPS-style audit can be done directly from the
+JSONL/CSV telemetry going forward instead of needing a live side-by-side repro.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v61720_exit_arm_r_floor_static.py` — 14/14 passing (helper formula proven
+      numerically against the exact Mac/VPS scenario, all three sites wired through the helper, the
+      EV_PROTECT direct-trigger no longer references the raw unfloored input, new telemetry fields
+      present and computed, lot sizing/entry-side untouched, prior fixes intact)
+- [x] Full suite: 456/536 passing, remaining failures are the same pre-existing release-time
+      sync-staleness pattern as every prior release
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.20.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings (Footer, CloudLanding, AdminPortal, DownloadSection, FeaturesSection)
+- [x] `backend/server.py` `ea_version` default
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NEEDS OBSERVATION on both accounts. This directly targets the reported VPS
+  early-exit pattern — watch VPS specifically for whether SL_MOD:PROFIT_FLOOR/A+ Shield/EV_PROTECT
+  events now arm later (check `LotSizeInfluence`/`AccountNormalizedProfit` in new telemetry against
+  `ProfitR` at each event) and whether $28-53-class early exits stop recurring on big-lot trades. No
+  live SSH/file access to the VPS instance was available in this session — could not directly confirm
+  which EA version/inputs the VPS was actually running, so this fix addresses the CODE-level root
+  cause (present regardless of machine) but the user should confirm the VPS is updated to v6.17.20
+  and re-observe before treating the disparity as fully resolved.
+
+---
+
+## v6.17.19 — 2026-07-08 — Account-Size Adaptive TP Targets
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.19"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.19.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61719_final.log`)
+
+### What changed
+User: "the bigger the account size the bigger the lots, the bigger the exit profit target/TP...
+basically everything should trade based on account size." Lot size already scaled with account size
+(v6.17.17) and risk tolerance already scaled with account size (`AccountSizeRiskMultiplier`,
+v5.8.8) — but the TP target distance itself was still a flat R-multiple (4.0R base / 6.5R
+structure-runner / 2.5R breakout) regardless of account size. New `AccountSizeTPMultiplier()`
+mirrors `AccountSizeRiskMultiplier`'s exact equity tiers for one consistent account-size ladder
+(0.85x-1.30x, capped slightly lower than the 1.35x risk boost since widening TP too aggressively can
+hurt fill probability). Applied to the trending/breakout TP multiplier in `OpenTrade()`; deliberately
+NOT applied to the `LOW_VOL`/`CHOPPY` safety-capped 1.5R override, which stays tight regardless of
+account size (volatility-regime safety, not a sizing preference). The v6.17.18 profit-quality exit
+gate's R-multiple thresholds needed no equivalent change — R is already account-size-normalized by
+construction (`profit / rDollars`, and `rDollars` scales with lot size).
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v61719_account_size_adaptive_tp_static.py` — 8/8 passing
+- [x] Full suite: 439/514 passing at ship time, remaining failures are the standard sync-staleness
+      pattern
+- [x] Also fixed a stale `ea_version = "v6.17.6"` default in `backend/server.py`, found while
+      touching this area (pre-existing staleness, unrelated to this release's actual change)
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.19.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [x] GitHub main branch pushed (commit `ed01ee4`)
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NEEDS OBSERVATION — wider TP on bigger accounts means trades held longer before the
+  fixed target; watch that large-account trades aren't giving back more on the way to a now-further
+  TP than they would have at the old flat multiplier.
+
+---
+
 ## v6.17.18 — 2026-07-08 — Profit Quality Exit Gate + Scan Warm-up Fix
 
 ### EA Compile

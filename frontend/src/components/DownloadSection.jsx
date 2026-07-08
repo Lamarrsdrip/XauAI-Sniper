@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.17.19";
-  const edition  = info?.edition  || "ACCOUNT-SIZE ADAPTIVE TP";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.19.mq5";
+  const version  = info?.version  || "v6.17.20";
+  const edition  = info?.edition  || "EXIT ARM R-FLOOR";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.20.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.17.19.</span> TP targets now scale with account size (0.85x-1.30x), the same equity ladder already used for lot sizing and risk tolerance -- bigger accounts hold for bigger targets, not just bigger lots.
+              <span className="font-semibold text-amber-200">Gold-only v6.17.20.</span> Every profit-lock/exit-arm threshold in the file is now floored at this trade's own R-multiple, so a bigger lot (e.g. from the account-size floor) can no longer trigger protection at a smaller R-fraction than a smaller lot would -- proven from a real cross-account comparison.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">

@@ -31,11 +31,11 @@ const CARDS = [
   {
     icon: ShieldCheck,
     title: "Smart Risk Management",
-    body: "Position sizing is based on account balance, stop distance, and grade — never reduced after losing trades. Take-profit targets scale with account size too, on the same equity ladder, so bigger accounts hold for bigger targets, not just bigger lots.",
+    body: "Position sizing is based on account balance, stop distance, and grade — never reduced after losing trades. Take-profit and profit-lock thresholds scale with account size and lot size too, so a bigger lot never triggers protection earlier, in R-multiple terms, than a smaller one would.",
     tone: "text-sky-300",
     border: "border-sky-300/20",
     glow: "bg-sky-300/[0.07]",
-    badge: "NEW v6.17.19",
+    badge: "NEW v6.17.20",
   },
   {
     icon: Shuffle,

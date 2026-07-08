@@ -11,7 +11,7 @@ export default function Footer() {
             </div>
             <div>
               <span className="text-[13px] font-semibold text-white/70">XauAI Sniper</span>
-              <span className="ml-2 font-mono text-[10px] text-white/28">v6.17.19 · Account-Size Adaptive TP</span>
+              <span className="ml-2 font-mono text-[10px] text-white/28">v6.17.20 · Exit Arm R-Floor</span>
             </div>
           </div>
 
