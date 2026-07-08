@@ -160,9 +160,9 @@ def test_personality_gate_final_else_still_hard_blocks_lower_grades():
 # ---------------------------------------------------------------------------
 def test_open_trade_returns_bool_and_reports_actual_broker_result():
     ea = read(BACKEND_EA)
-    assert "bool OpenTrade(int signal, double atr, string reason, double sizeMulti)" in ea
+    assert "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)" in ea
     assert "void OpenTrade(int signal, double atr, string reason, double sizeMulti)" not in ea
-    fn = body(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti)")
+    fn = body(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
     assert "return ok;" in fn
     # Every early-exit inside OpenTrade must be return false, not a bare return.
     assert "\n      return;\n" not in fn

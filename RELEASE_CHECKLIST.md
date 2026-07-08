@@ -14,6 +14,84 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.25 — 2026-07-08 — Entry-Path Consistency: Timing Engine Coverage
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.25"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.25.mq5`
+- [x] Top-of-file header banner updated
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61725_final.log`)
+
+### Entry execution graph (traced before any fix, per explicit instruction)
+Exactly 4 real `OpenTrade()` callers exist in the file (verified — no 5th caller found):
+
+| Caller | Entry type | Timing engine? | Fresh reassessment? | Bug or correct? |
+|---|---|---|---|---|
+| Normal scan path (`OnTick`→`ContextGateAllows`→`XAU_TimingEngineConfirmsEntry`) | Autonomous fresh signal | Yes | Yes (full pipeline re-runs each bar) | Correct (reference path) |
+| `CheckReEntryOpportunity` (RE_ENTRY) | Autonomous re-entry after a stopped-out loss | **No (bypassed)** | No (Active Direction is coarse, multi-bar) | **BUG — fixed** |
+| `XAU_CheckPendingOpportunityRecovery` | Autonomous recovery of a blocked signal | No (has its own M15/M30 + re-grade re-validation, and gets the v6.17.21 backstop via `OpenTrade()`) | Partial (M15/M30 only, no M5 structure check of its own) | **BUG — fixed** |
+| `XAU_TryForceOpenTrade` (MANUAL_FORCE_OPEN) | Explicit human override | N/A by design | N/A by design | **BUG — v6.17.21's backstop silently vetoed it; fixed** |
+
+Also found: `ContextGateAllows`'s Gate 1 called `XAU_ClassifySetup(signal, atr, "", cgClass)` — empty
+setup name meant the `BREAKOUT_RETEST` branch could never match there. **Bug — fixed.**
+
+Pyramid adds (`trade.Buy`/`trade.Sell` direct calls, not `OpenTrade`) are position-management on an
+*existing* trade, not a new independent directional decision — noted as out of scope, not silently
+ignored.
+
+### Root causes and fixes
+1. **RE_ENTRY bypass** — `CheckReEntryOpportunity` went from "Active Direction still agrees" straight
+   to `OpenTrade()`. Now calls `XAU_ClassifySetup` (rejects/cancels on `LATE_CHASE`, one-shot) and
+   routes through `XAU_TimingEngineConfirmsEntry` for the same adaptive immediate/wait decision the
+   normal path gets (a genuine wait, not a permanent cancel).
+2. **Recovery path gap** — `XAU_CheckPendingOpportunityRecovery` already re-validates M15/M30 trend
+   direction, re-grades, and gets the v6.17.21 Exhaustion/Reversal backstop automatically via
+   `OpenTrade()`, but had no explicit fresh-M5-structure check of its own. Now also calls
+   `XAU_ClassifySetup` and rejects on `LATE_CHASE` with reason `M5_STRUCTURE_NO_LONGER_SUPPORTS`.
+3. **ContextGate setup-identity loss** — `ContextGateAllows(int signal, double atr, string
+   setupName="")` now threads the real setup name through from its one call site to the classifier.
+4. **Manual override silently vetoed** — `OpenTrade(..., bool isManualOverride=false)`; the
+   Exhaustion/Reversal backstop (soft judgment) is skipped only when `isManualOverride` is true
+   (only `XAU_TryForceOpenTrade` passes it) — every hard safety check below it (hedge/exposure/
+   margin/broker/risk) is untouched and still applies unconditionally to every caller.
+5. **Related bug found while tracing #1**: `XAU_TimingEngineConfirmsEntry`'s one-bar reconfirmation
+   branch used to return `ENTRY_ALLOWED` whenever a signal simply persisted for one bar without
+   overextending, without re-checking whether the classification on that *second* bar was still
+   `LATE_CHASE`. Now requires the current bar's re-derived classification to not be `LATE_CHASE`
+   too — this closes a real "wave it through just for surviving a bar" gap in the normal path too,
+   not just RE_ENTRY.
+6. **Force-open diagnostics** — generic `STALE_OR_INVALID` split into `INVALID_CANDLE_TIME` vs
+   `STALE_CANDIDATE_N_BARS_OLD_MAX_3`; an informational (non-blocking) `XAU_ClassifySetup` read is
+   now surfaced in the execution log — the override still proceeds regardless, preserving
+   intentional-bypass semantics. "Did price move in your favor since the original candidate" needs
+   the original candidate's price plumbed end-to-end from the Command Center UI through the backend
+   to this command, which the current payload does not carry — flagged as a follow-up, not guessed.
+
+### Intentionally preserved behavior
+- `XAU_TryForceOpenTrade` still does not call `ScoreSetups`/`StrategyFitsPersonality`/
+  `AdaptiveXAUConfirm`/`GetAIAnalysis` — soft quality gates remain bypassed by design for a manual
+  override; only the *new* Exhaustion/Reversal exemption was a bug (it wasn't exempted before, when
+  it should have been).
+- Every hard safety check (hedge/exposure gate, `CountMyPositions`, spread cap, margin/broker via
+  `OpenTrade`) is unconditional for all 4 callers, manual override included.
+
+### Testing
+- [x] MetaEditor compile: 0 errors, 0 warnings
+- [x] `tests/test_xau_v61725_entry_path_consistency_static.py` — 27 tests covering all 4 fixes plus
+      the related timing-engine reconfirm bug, including behavioral simulations of: immediate entry,
+      marginal wait, pending-direction-switch (no stale reuse), overextension reassessment,
+      still-LATE_CHASE-on-confirm rejection, recovery cancel/execute, and stopped-out-retest-alone
+      rejection vs. valid-fresh-reentry execution
+- [x] Full suite re-run (511 passing) — 8 pre-existing tests across 6 files needed mechanical updates
+      for the legitimate `OpenTrade`/`ContextGateAllows` signature changes and the `STALE_OR_INVALID`
+      rename (verified each was a stale-string issue, not a masked regression, before updating)
+- [x] `git diff` against the last pushed commit reviewed line-by-line — no unintended scope beyond
+      the 4 traced fixes plus the reconfirm-branch bug found while tracing fix #1
+- [ ] Live/Strategy-Tester forward validation of the RE_ENTRY and recovery behavior changes — cannot
+      be done from this environment.
+
+---
+
 ## v6.17.24 — 2026-07-08 — A-Z Audit: Countertrend Evidence-Side Bug Fix
 
 ### EA Compile

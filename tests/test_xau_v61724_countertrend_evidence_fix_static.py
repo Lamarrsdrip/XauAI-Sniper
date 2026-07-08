@@ -107,9 +107,12 @@ def test_classifier_insufficient_evidence_is_late_chase():
 # Gate 1 countertrend exception
 # ---------------------------------------------------------------------------
 def test_gate1_allows_evidence_backed_countertrend_through():
+    # v6.17.25: ContextGateAllows gained a setupName parameter (propagating
+    # the real candidate setup instead of "") -- see test_xau_v61725 for
+    # that fix specifically.
     ea = read(BACKEND_EA)
-    fn = body(ea, "bool ContextGateAllows(int signal, double atr)")
-    assert "XAU_ClassifySetup(signal, atr, \"\", cgClass)" in fn
+    fn = body(ea, "bool ContextGateAllows(int signal, double atr, string setupName = \"\")")
+    assert "XAU_ClassifySetup(signal, atr, setupName, cgClass)" in fn
     assert "cgClass.type == XAU_TIMING_PULLBACK_SCALP || cgClass.type == XAU_TIMING_REVERSAL_RECLAIM" in fn
     # the LATE_CHASE / TREND_CONTINUATION-against-dir path must still return false
     gate1 = fn[:fn.index("// === Gate 2")]

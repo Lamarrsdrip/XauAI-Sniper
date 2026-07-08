@@ -1,16 +1,59 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.17.24 - A-Z Audit: Countertrend Evidence-Side Bug Fix             |
-//|   User asked for a full bug audit before trusting v6.17.23 live. Found|
-//|   one real bug in it: XAU_ClassifySetup built countertrend evidence    |
-//|   from the NEW direction's own side instead of the OLD trend's side,  |
-//|   so an oversold-bounce BUY in a downtrend was checked for "has this  |
-//|   BUY already run up" (nonsensical, near-impossible in a downtrend)   |
-//|   instead of "has the SELL leg it's fighting gone far enough to be    |
-//|   exhausted." Fixed -- two separate checklists now, one for each      |
-//|   question, verified by a market-data (not hand-fed) simulation test. |
+//|   v6.17.25 - Entry-Path Consistency: Timing Engine Coverage            |
+//|   Traced every OpenTrade() caller. RE_ENTRY and the missed-signal      |
+//|   recovery path called OpenTrade() directly, skipping the classifier/  |
+//|   timing-engine gates the normal scan path uses; ContextGateAllows     |
+//|   lost the real setup name (passed ""); and the v6.17.21 Exhaustion/   |
+//|   Reversal backstop silently vetoed manual FORCE_OPEN_TRADE commands,  |
+//|   contradicting its own "soft gates bypassed by design" comment. Fixed |
+//|   all four by extending ONE reused architecture, not four new ones.   |
 //+------------------------------------------------------------------+
+// v6.17.25 CHANGES (2026-07-08) — ENTRY-PATH CONSISTENCY: TIMING ENGINE COVERAGE:
+//   User traced the entry execution graph and found: (1) RE_ENTRY
+//   (CheckReEntryOpportunity) only checked Active Direction agreement + a
+//   "better price" retest before calling OpenTrade() directly -- a
+//   stopped-out BUY could re-buy purely because Active Direction (a coarse,
+//   multi-bar-persistent state) hadn't flipped, with zero fresh M5
+//   structure/momentum/exhaustion check; (2) XAU_CheckPendingOpportunityRecovery
+//   re-validated M15/M30 trend direction and re-graded, and does get the
+//   v6.17.21 Exhaustion/Reversal backstop automatically via OpenTrade(), but
+//   had no explicit fresh-M5-structure classification of its own to cancel
+//   on and no adaptive immediate/wait framing; (3)
+//   ContextGateAllows's Gate 1 called XAU_ClassifySetup(signal, atr, "",
+//   cgClass) with an empty setup name, so the BREAKOUT_RETEST branch could
+//   never match there and a BREAKOUT setup fighting HTF trend was
+//   misclassified; (4) XAU_TryForceOpenTrade's manual override calls
+//   OpenTrade(..., isManualOverride) -- except that parameter didn't exist
+//   yet, so the v6.17.21 Exhaustion/Reversal backstop (added as a
+//   supposedly-universal gate) silently vetoed a human operator's explicit
+//   FORCE_OPEN_TRADE command, contradicting the function's own comment that
+//   manual override bypasses soft judgment by design.
+//
+//   Fixes: ContextGateAllows(int signal, double atr, string setupName="")
+//   now threads the real setup name through to the classifier.
+//   OpenTrade(..., bool isManualOverride=false) skips the Exhaustion/
+//   Reversal backstop (soft judgment) for the one caller that passes true
+//   (XAU_TryForceOpenTrade) while every hard safety check below it (hedge/
+//   exposure/margin/broker/risk) still applies unconditionally to every
+//   caller. CheckReEntryOpportunity and XAU_CheckPendingOpportunityRecovery
+//   both now call the SAME XAU_ClassifySetup used everywhere else and
+//   reject/cancel on LATE_CHASE, reusing one architecture instead of
+//   inventing per-path timing logic; RE_ENTRY additionally routes through
+//   XAU_TimingEngineConfirmsEntry for the same adaptive immediate/wait
+//   decision the normal path gets. Also fixed a related bug found while
+//   tracing this: XAU_TimingEngineConfirmsEntry's one-bar reconfirmation
+//   branch used to return ENTRY_ALLOWED whenever a signal simply persisted
+//   for one bar without overextending, without re-checking whether the
+//   FRESH classification on that second bar was still LATE_CHASE -- now it
+//   requires the current bar's re-derived classification to not be
+//   LATE_CHASE too. XAU_TryForceOpenTrade's generic STALE_OR_INVALID split
+//   into precise reasons (INVALID_CANDLE_TIME vs STALE_CANDIDATE_N_BARS_OLD)
+//   and now surfaces an informational (non-blocking) current-chart
+//   classification -- manual override still proceeds regardless, preserving
+//   its intentional-bypass semantics.
+//
 // v6.17.24 CHANGES (2026-07-08) — A-Z AUDIT: COUNTERTREND EVIDENCE-SIDE FIX:
 //   Full-file audit requested after v6.17.23 shipped ("know what you're doing,
 //   do it 100% complete, don't make me come back debugging"). Re-derived
@@ -1350,17 +1393,17 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.194"
-#property description "XAUUSD AI Sniper v6.17.24 - A-Z Audit: Countertrend Evidence-Side Fix"
-#property description "Pre-ship audit caught a real bug in v6.17.23's classifier: countertrend"
-#property description "evidence was built from the NEW direction's own side instead of the OLD"
-#property description "trend's side, so oversold-bounce/overbought-pullback scalps almost never"
-#property description "classified correctly. Fixed -- verified by a market-data simulation test."
+#property version   "6.195"
+#property description "XAUUSD AI Sniper v6.17.25 - Entry-Path Consistency: Timing Engine Coverage"
+#property description "Traced every OpenTrade() caller: RE_ENTRY and recovery bypassed the timing/"
+#property description "classifier gates entirely, ContextGate lost setup identity, and manual"
+#property description "force-open was silently vetoed by a soft gate meant to exempt it. Fixed all"
+#property description "four with one reused classifier/timing architecture, not four new ones."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.17.24"
-#define XAUAI_EA_VERSION_NUM "6.17.24"
-#define XAUAI_BUILD_HASH "v61724-az-audit-countertrend-evidence-fix-20260708"
+#define XAUAI_EA_VERSION "v6.17.25"
+#define XAUAI_EA_VERSION_NUM "6.17.25"
+#define XAUAI_BUILD_HASH "v61725-entry-path-consistency-timing-coverage-20260708"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -6269,7 +6312,15 @@ void XAU_ClassifySetup(int dir, double atr, string setupName, XAU_SetupClassific
 //| Blocks entries that fight H4 trend OR sit near a recent swing    |
 //| level without a break+retest. Rule-based, zero LLM cost.         |
 //+------------------------------------------------------------------+
-bool ContextGateAllows(int signal, double atr)
+// v6.17.25 FIX: this used to call XAU_ClassifySetup(signal, atr, "", cgClass)
+// -- an empty setup name, not the real candidate's setup. That meant the
+// BREAKOUT_RETEST branch (setupName=="BREAKOUT") could never match here, so
+// a BREAKOUT setup fighting HTF trend fell through to the generic trend/
+// countertrend evaluation instead, which can produce a different allow/
+// block outcome than a setup-aware read would. setupName defaults to "" so
+// existing internal callers (there is only one, from the main scan pipeline
+// below, which now passes the real name) keep compiling.
+bool ContextGateAllows(int signal, double atr, string setupName = "")
 {
    // === Gate 1: HTF bias alignment (default M30, was H4 — see InpContextTF) ===
    // v5.1.8: respect admin Bot Mode override (Aggressive disables this entirely)
@@ -6316,7 +6367,7 @@ bool ContextGateAllows(int signal, double atr)
                // allowed through; a countertrend attempt with no real
                // evidence (LATE_CHASE) is still blocked exactly as before.
                XAU_SetupClassification cgClass;
-               XAU_ClassifySetup(signal, atr, "", cgClass);
+               XAU_ClassifySetup(signal, atr, setupName, cgClass);
                if(cgClass.type == XAU_TIMING_PULLBACK_SCALP || cgClass.type == XAU_TIMING_REVERSAL_RECLAIM)
                {
                   PrintFormat("✅ CONTEXT-GATE: %s countertrend allowed despite %s HTF bias -- classified %s (%s)",
@@ -7823,10 +7874,40 @@ void CheckReEntryOpportunity()
       return;
    }
 
+   // v6.17.25 FIX: confirmed bug -- this function used to go straight from
+   // "Active Direction still agrees" to OpenTrade(), with no fresh-chart
+   // check at all. Active Direction is a coarse, multi-bar-persistent state;
+   // agreeing with it is not evidence the SAME direction that just stopped
+   // out has regenerated a real thesis right now -- a stopped-out BUY could
+   // re-buy purely because Active Direction hadn't flipped yet, with no
+   // fresh structure/momentum/exhaustion read at all. Reuses the SAME
+   // classifier + timing engine the normal scan path uses (per the "one
+   // reusable execution-confirmation architecture, don't duplicate" review
+   // note) instead of inventing separate re-entry-specific timing logic.
+   XAU_SetupClassification reClass;
+   XAU_ClassifySetup(lastClose.dir, bufATR[1], "RE_ENTRY", reClass);
+   if(reClass.type == XAU_TIMING_LATE_CHASE)
+   {
+      Print("RE-ENTRY BLOCKED: ", reClass.why,
+            " — retest alone is not fresh structure confirmation, cancelling this re-entry");
+      lastClose.reEntered = true; // thesis genuinely invalidated -- one-shot cancel, not a retry-later wait
+      g_lastSkipReason = "RE-ENTRY BLOCKED: " + reClass.why;
+      return;
+   }
+   if(!XAU_TimingEngineConfirmsEntry(lastClose.dir, "RE_ENTRY", "A", InpReEntrySize, bufATR[1]))
+   {
+      // Uncertain/marginal evidence -- NOT a permanent cancel. Do not set
+      // reEntered=true here: the timing engine's own pending-confirmation
+      // state re-checks on the next bar, exactly like a fresh signal would.
+      g_lastSkipReason = "RE-ENTRY WAITING_FOR_ENTRY_WINDOW: " + reClass.why;
+      return;
+   }
+
    Print("RE-ENTRY TRIGGER (", todayReEntryCount+1, "/", InpMaxReEntriesPerDay, "): last ", lastClose.dir==1?"BUY":"SELL",
          " stopped at ", DoubleToString(lastClose.entryPrice, _Digits),
          " | price now ", DoubleToString(curPrice, _Digits),
-         " | retest distance ", DoubleToString(MathAbs(curPrice-lastClose.entryPrice)/lastClose.slDist, 2), "R");
+         " | retest distance ", DoubleToString(MathAbs(curPrice-lastClose.entryPrice)/lastClose.slDist, 2), "R",
+         " | ", reClass.why);
 
    lastSignalDir = lastClose.dir;
    lastSignalSignature = lastClose.signature;
@@ -14047,7 +14128,7 @@ void OnTick()
    //     (a) fight H4 bias (e.g., BUY signal but H4 EMA50 < EMA200)
    //     (b) sit within 0.4×ATR of a recent swing high/low without break-retest
    //   Rule-based, zero LLM cost.
-   if(!ContextGateAllows(signal, bufATR[1]))
+   if(!ContextGateAllows(signal, bufATR[1], setupName))
       return;
 
    // v6.4.5: drawdown watermark — adaptive mode, not a full entry block.
@@ -15105,7 +15186,18 @@ void PrintBacktestAuditReport()
 // main-entry call sites, which used to unconditionally consume re-entry
 // counts / update g_lastEntryGrade / dashboard state before OpenTrade had
 // even run, let alone succeeded.
-bool OpenTrade(int signal, double atr, string reason, double sizeMulti)
+// v6.17.25 FIX: isManualOverride defaults to false for every existing caller
+// (normal scan path, RE_ENTRY, recovery). XAU_TryForceOpenTrade -- the ONE
+// intentional user override path -- now passes true. Before this, the
+// v6.17.21 Exhaustion/Reversal backstop right below ran unconditionally for
+// every OpenTrade() caller including a manual FORCE_OPEN_TRADE command,
+// silently vetoing the human operator's explicit override with a SOFT
+// direction-quality judgment -- exactly what XAU_TryForceOpenTrade's own
+// comment says it deliberately does NOT do ("skipping that pipeline IS how
+// the soft blockers get bypassed, by design"). Hard safety below (hedge/
+// exposure/margin/broker/risk) is untouched and still applies to every
+// caller, manual override included.
+bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
 {
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
@@ -15147,10 +15239,16 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti)
       string whyOppositeRejected = (signal == 1)
          ? StringFormat("SELL not preferred: SELL_EDGE=%.0f vs BUY_EDGE=%.0f", sellEdge, buyEdge)
          : StringFormat("BUY not preferred: BUY_EDGE=%.0f vs SELL_EDGE=%.0f", buyEdge, sellEdge);
-      PrintFormat("DIRECTION_QUALITY | dir=%s reason=%s | OldTrendBias=%s FreshStructureBias=%s | SELL_EDGE=%.0f BUY_EDGE=%.0f ExhaustionRisk=%.0f ReversalEvidence=%.0f ChaseRisk=%.0f | WhyChosenDirection=%s | WhyOppositeRejected=%s",
+      PrintFormat("DIRECTION_QUALITY | dir=%s reason=%s | OldTrendBias=%s FreshStructureBias=%s | SELL_EDGE=%.0f BUY_EDGE=%.0f ExhaustionRisk=%.0f ReversalEvidence=%.0f ChaseRisk=%.0f | WhyChosenDirection=%s | WhyOppositeRejected=%s%s",
                  signal==1?"BUY":"SELL", reason, oldTrendBias, freshStructureBias, sellEdge, buyEdge,
-                 exhaustionRisk, reversalEvidence, chaseRisk, whyChosen, whyOppositeRejected);
-      if(!guardAllows)
+                 exhaustionRisk, reversalEvidence, chaseRisk, whyChosen, whyOppositeRejected,
+                 isManualOverride ? " | MANUAL_OVERRIDE: informational only, not enforced" : "");
+      // v6.17.25: a manual override intentionally bypasses this SOFT
+      // direction-quality judgment (see comment on the isManualOverride
+      // parameter above) -- the telemetry above still runs so the operator
+      // can see the classification, but it never blocks an explicit
+      // FORCE_OPEN_TRADE command.
+      if(!guardAllows && !isManualOverride)
       {
          PrintFormat("⛔ OPEN TRADE BLOCKED (Exhaustion/Reversal backstop): %s | OldTrendBias=%s FreshStructureBias=%s | reason=%s",
                      reason, oldTrendBias, freshStructureBias, blockReason);
@@ -23655,15 +23753,30 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
       // a brand-new candidate from current market conditions instead.
       double movedInFavor = (dir == 1) ? (signalPrice - g_pendingEntryConfirm.signalPrice)
                                         : (g_pendingEntryConfirm.signalPrice - signalPrice);
+      // v6.17.25 FIX: confirmed bug -- this branch used to return true
+      // whenever the direction/setup simply persisted for one bar without
+      // overextending, WITHOUT re-checking whether tcls (already re-derived
+      // fresh, from THIS bar's price/structure, at the top of this very
+      // call) still says the evidence is any good. A signal that was
+      // LATE_CHASE on bar 1 and is STILL LATE_CHASE on bar 2 would get
+      // waved through just for having "survived" a bar, which is exactly
+      // the "discard if structure/momentum/exhaustion state changes [for
+      // the worse]" case the confirmation window exists to catch. Now
+      // requires the CURRENT bar's classification to not be LATE_CHASE too.
       if(movedInFavor > g_pendingEntryConfirm.atr * 1.0)
       {
          PrintFormat("TIMING_ENGINE: ENTRY_WINDOW_EXPIRED (%s %s) reason=OVEREXTENDED_ON_CONFIRM moved=%.2f > 1.0xATR=%.2f -> REASSESS_FROM_CURRENT_MARKET",
                      setup, dirStr, movedInFavor, g_pendingEntryConfirm.atr);
       }
+      else if(tcls.type == XAU_TIMING_LATE_CHASE)
+      {
+         PrintFormat("TIMING_ENGINE: ENTRY_WINDOW_EXPIRED (%s %s) reason=STILL_LATE_CHASE_ON_CONFIRM (%s) -> REASSESS_FROM_CURRENT_MARKET",
+                     setup, dirStr, tcls.why);
+      }
       else
       {
-         PrintFormat("TIMING_ENGINE: ENTRY_CONFIRMING -> ENTRY_ALLOWED (%s %s) held direction one bar, moved %.2f in favor",
-                     setup, dirStr, movedInFavor);
+         PrintFormat("TIMING_ENGINE: %s ENTRY_CONFIRMING -> ENTRY_ALLOWED (%s %s) held direction one bar, moved %.2f in favor",
+                     typeStr, setup, dirStr, movedInFavor);
          g_pendingEntryConfirm.active = false;
          return true;
       }
@@ -23763,6 +23876,20 @@ void XAU_CheckPendingOpportunityRecovery()
       return;
    }
 
+   // v6.17.25 FIX: TFDirectionByEMA above covers M15/M30 -- add the same
+   // fresh M5 structure/exhaustion read every other entry path now uses.
+   // A recovered signal must mean "the CURRENT chart independently supports
+   // this direction now," not "the old blocked trade is allowed because
+   // time passed" -- LATE_CHASE here means M5 structure has moved against
+   // dir with no compensating evidence, which M15/M30 alone would miss.
+   XAU_SetupClassification recClass;
+   XAU_ClassifySetup(dir, atrNow, setup, recClass);
+   if(recClass.type == XAU_TIMING_LATE_CHASE)
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=M5_STRUCTURE_NO_LONGER_SUPPORTS (", recClass.why, ")");
+      return;
+   }
+
    // Re-grade with CURRENT regime/session quality, not the stale original.
    double regimeQualityNow  = DetectRegime();
    double sessionQualityNow = GetSessionQuality();
@@ -23787,10 +23914,10 @@ void XAU_CheckPendingOpportunityRecovery()
       return;
    }
 
-   string recoveryReason = StringFormat("[%s] %s RECOVERY of missed signal %s (original blocker: %s, still valid on re-check)",
-                                        oppGrade, setup, sid, originalBlocker);
+   string recoveryReason = StringFormat("[%s] %s RECOVERY of missed signal %s (original blocker: %s, current M5 structure: %s)",
+                                        oppGrade, setup, sid, originalBlocker, recClass.why);
    Print("RECOVERY_EXECUTED: ", sid, " | ", dir == 1 ? "BUY" : "SELL", " ", setup,
-         " grade=", oppGrade, " combined=", DoubleToString(oppCombined, 2));
+         " grade=", oppGrade, " combined=", DoubleToString(oppCombined, 2), " | ", recClass.why);
    bool opened = OpenTrade(dir, atrNow, recoveryReason, 1.0);
    if(!opened)
       Print("RECOVERY_OPEN_TRADE_FAILED: ", sid, " -- OpenTrade() itself declined (final risk/broker gate)");
@@ -23830,10 +23957,22 @@ bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalB
    // Staleness: the blocked candidate must be recent. More than 3 closed M5
    // bars old (15 min) is treated as no longer representing "the market
    // right now" -- reject rather than blindly re-fire an old read.
-   int barsElapsed = (candleTime > 0) ? (int)((TimeCurrent() - candleTime) / PeriodSeconds(PERIOD_M5)) : 999;
-   if(candleTime <= 0 || barsElapsed > 3)
+   // v6.17.25 FIX: these two conditions used to share one generic
+   // "STALE_OR_INVALID" reason, which told the operator neither which
+   // condition actually failed nor anything about current price. Split
+   // into precise reasons; "did price move in your favor" needs the
+   // ORIGINAL candidate's price, which this command's payload does not
+   // currently carry end-to-end (Command Center UI -> backend -> here) --
+   // flagged as a separate follow-up rather than guessed at.
+   if(candleTime <= 0)
    {
-      rejectReason = "STALE_OR_INVALID";
+      rejectReason = "INVALID_CANDLE_TIME";
+      return false;
+   }
+   int barsElapsed = (int)((TimeCurrent() - candleTime) / PeriodSeconds(PERIOD_M5));
+   if(barsElapsed > 3)
+   {
+      rejectReason = StringFormat("STALE_CANDIDATE_%d_BARS_OLD_MAX_3", barsElapsed);
       return false;
    }
 
@@ -23872,12 +24011,25 @@ bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalB
       return false;
    }
 
+   // v6.17.25: informational only, never rejects -- this is an intentional
+   // user override of soft strategy judgment (see the file header on
+   // isManualOverride), so the classification is surfaced for the operator
+   // to see, not enforced. Gives a real "here is what the chart currently
+   // looks like" read in place of the previous silence on this point.
+   XAU_SetupClassification foClass;
+   XAU_ClassifySetup(dir, atrNow, setup, foClass);
+   string foTypeStr = (foClass.type == XAU_TIMING_TREND_CONTINUATION) ? "TREND_CONTINUATION" :
+                      (foClass.type == XAU_TIMING_PULLBACK_SCALP)     ? "PULLBACK_SCALP" :
+                      (foClass.type == XAU_TIMING_REVERSAL_RECLAIM)   ? "REVERSAL_RECLAIM" :
+                      (foClass.type == XAU_TIMING_BREAKOUT_RETEST)    ? "BREAKOUT_RETEST" : "LATE_CHASE";
+
    g_lastForceOpenBar = curBarNow;
-   string forceReason = StringFormat("[%s] %s MANUAL_FORCE_OPEN (user override; original blocker: %s)",
-                                     grade, setup, originalBlocker);
+   string forceReason = StringFormat("[%s] %s MANUAL_FORCE_OPEN (user override; original blocker: %s; current read: %s/%s)",
+                                     grade, setup, originalBlocker, foTypeStr, foClass.why);
    Print("MANUAL_FORCE_OPEN_EXECUTING: ", dir == 1 ? "BUY" : "SELL", " ", setup,
-         " grade=", grade, " | user override of: ", originalBlocker);
-   bool opened = OpenTrade(dir, atrNow, forceReason, 1.0);
+         " grade=", grade, " | user override of: ", originalBlocker,
+         " | current chart read: ", foTypeStr, " (", foClass.why, ") -- informational only, override proceeds regardless");
+   bool opened = OpenTrade(dir, atrNow, forceReason, 1.0, true);
    if(!opened)
    {
       rejectReason = "EXECUTION_FAILED";

@@ -64,7 +64,7 @@ def test_tp_multiplier_top_tier_capped_slightly_below_risk_multiplier():
 
 def test_tp_scaling_applied_to_trending_and_breakout_not_to_chop_lowvol_safety_cap():
     ea = read(BACKEND_EA)
-    fn = body(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti)")
+    fn = body(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
     chop_idx = fn.index("if(currentRegime == REGIME_LOW_VOL || currentRegime == REGIME_CHOPPY)")
     window = fn[chop_idx: chop_idx + 260]
     # The chop/low-vol branch keeps a flat, unscaled safety cap.

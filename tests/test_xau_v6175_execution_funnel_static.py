@@ -58,7 +58,7 @@ def test_blocked_candidates_publish_final_blocker_without_open_trade_called():
 def test_open_trade_publishes_called_blocked_executed_and_broker_retcode():
     ea = read(BACKEND_EA)
     # v6.17.7: OpenTrade changed from void to bool (item 4) -- landmark updated.
-    fn = body(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti)")
+    fn = body(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
     assert '"OPEN_TRADE_CALLED"' in fn
     assert '"FINAL_RISK_RECONCILE"' in fn
     assert "trade.Buy" in fn and "trade.Sell" in fn

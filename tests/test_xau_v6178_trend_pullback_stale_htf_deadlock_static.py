@@ -113,4 +113,4 @@ def test_prior_session_fixes_still_intact():
     assert "InpMaxTransitionWaitBars" in ea  # v6.17.4
     assert "continuationPersonalitySoftPass" in ea  # v6.17.6
     assert "spread / 0.0040 * 100.0" in ea  # v6.17.7 ADX proxy fix
-    assert "bool OpenTrade(int signal, double atr, string reason, double sizeMulti)" in ea  # v6.17.7
+    assert "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)" in ea  # v6.17.7

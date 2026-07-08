@@ -99,7 +99,7 @@ def test_real_ai_block_messages_still_classified_as_ai():
 def test_ai_director_gate_has_zero_return_statements():
     ea = read(BACKEND_EA)
     start = ea.index("// ============ GATE 5: AI DIRECTOR")
-    end = ea.index("if(!ContextGateAllows(signal, bufATR[1]))")
+    end = ea.index("if(!ContextGateAllows(signal, bufATR[1], setupName))")
     gate5 = ea[start:end]
     # Strip comment-only lines (this fix's own explanatory comments mention
     # "return;" descriptively, referring to the OLD behavior) before checking
@@ -258,7 +258,7 @@ def test_prior_session_fixes_still_intact():
     assert "int pgOppSignalFound = ScoreSetups(pgOppScore, pgOppSetupName, signal);" in ea  # v6.17.10
     assert "freshM15Dir == -dir && freshM30Dir == -dir" in ea  # v6.17.8
     assert "spread / 0.0040 * 100.0" in ea  # v6.17.7
-    assert "bool OpenTrade(int signal, double atr, string reason, double sizeMulti)" in ea  # v6.17.7
+    assert "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)" in ea  # v6.17.7
 
 
 def test_smart_guard_and_structural_gates_still_block_normally():

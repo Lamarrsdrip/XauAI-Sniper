@@ -175,5 +175,5 @@ def test_prior_session_fixes_still_intact():
     assert "if(g_activeDirection == DIRECTION_SELL_ONLY)      dir = -1;" in ea  # v6.17.0
     assert "activeDirectionConfirmsSell" in ea  # v6.17.2
     assert "spread / 0.0040 * 100.0" in ea  # v6.17.7 ADX proxy fix
-    assert "bool OpenTrade(int signal, double atr, string reason, double sizeMulti)" in ea  # v6.17.7
+    assert "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)" in ea  # v6.17.7
     assert "freshM15Dir == -dir && freshM30Dir == -dir" in ea  # v6.17.8

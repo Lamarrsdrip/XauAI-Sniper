@@ -166,8 +166,12 @@ def test_exhaustion_reversal_guard_exists_with_six_conditions_per_side():
 
 
 def test_opentrade_calls_guard_as_backstop_for_every_caller():
+    # v6.17.25 nuance: the guard is COMPUTED and its telemetry printed for
+    # every caller, but only ENFORCED (able to return false) for autonomous
+    # callers -- an explicit isManualOverride=true caller (XAU_TryForceOpenTrade)
+    # intentionally skips enforcement. See test_xau_v61725 for that invariant.
     ea = read(BACKEND_EA)
-    fn = body(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti)")
+    fn = body(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
     assert "XAU_ExhaustionReversalGuard(signal, atr" in fn
     assert "DIRECTION_QUALITY" in fn
 
@@ -177,4 +181,4 @@ def test_recovery_and_force_open_paths_reach_opentrade_and_therefore_the_guard()
     recovery_fn = body(ea, "void XAU_CheckPendingOpportunityRecovery()")
     assert "OpenTrade(dir, atrNow, recoveryReason, 1.0)" in recovery_fn
     force_fn = body(ea, "bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalBlocker,")
-    assert "OpenTrade(dir, atrNow, forceReason, 1.0)" in force_fn
+    assert "OpenTrade(dir, atrNow, forceReason, 1.0, true)" in force_fn

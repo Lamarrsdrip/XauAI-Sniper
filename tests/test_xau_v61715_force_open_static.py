@@ -77,10 +77,14 @@ def test_force_open_rejects_invalid_direction_and_setup():
 
 
 def test_force_open_rejects_stale_candidates():
+    # v6.17.25: STALE_OR_INVALID was split into two precise reasons (a
+    # missing/invalid candle time vs. a genuinely stale-but-valid one) so the
+    # operator knows which condition actually failed.
     ea = read(BACKEND_EA)
     fn = body(ea, "bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalBlocker,")
     assert "barsElapsed > 3" in fn
-    assert 'rejectReason = "STALE_OR_INVALID";' in fn
+    assert 'rejectReason = "INVALID_CANDLE_TIME";' in fn
+    assert 'rejectReason = StringFormat("STALE_CANDIDATE_%d_BARS_OLD_MAX_3", barsElapsed);' in fn
 
 
 def test_force_open_rejects_duplicate_same_candle():
@@ -114,10 +118,14 @@ def test_force_open_never_calls_soft_quality_gates():
 
 
 def test_force_open_delegates_to_opentrade_only_after_hard_checks():
+    # v6.17.25: now passes isManualOverride=true so OpenTrade() skips the
+    # Exhaustion/Reversal SOFT-judgment backstop for this one intentional
+    # override caller (every hard safety check inside OpenTrade is untouched
+    # and still runs).
     ea = read(BACKEND_EA)
     fn = body(ea, "bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalBlocker,")
-    open_idx = fn.index("bool opened = OpenTrade(dir, atrNow, forceReason, 1.0);")
-    for marker in ['rejectReason = "INVALID_DIRECTION"', 'rejectReason = "STALE_OR_INVALID"',
+    open_idx = fn.index("bool opened = OpenTrade(dir, atrNow, forceReason, 1.0, true);")
+    for marker in ['rejectReason = "INVALID_DIRECTION"', 'rejectReason = "INVALID_CANDLE_TIME"',
                    'rejectReason = "DUPLICATE_SAME_CANDLE"', 'rejectReason = "MAX_OPEN_TRADES"',
                    'rejectReason = "SPREAD_TOO_WIDE"', 'rejectReason = "NO_FRESH_DATA"',
                    'rejectReason = "SYMBOL_TRADING_DISABLED"']:
