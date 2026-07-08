@@ -14,6 +14,80 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.10 — 2026-07-08 — Personality Gate Symmetric Recheck (evidence-driven)
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.10"` (`#property version` capped at
+      "6.180" — MQL5 requires strict xxx.yyy numeric format, 4-digit patch "1710" fails as
+      warning 68; this field is MQL5-Market-only bookkeeping, unrelated to the real version string)
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.10.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61710_final2.log`)
+
+### Evidence this release is based on
+User asked for a real opposite-direction counterfactual audit before any more code changes — not
+another general plan. A background analysis job reconstructed all 107 blocked signals from
+2026-07-06 to 2026-07-08 that lost or had no clear edge in their own proposed direction, and tested
+what the OPPOSITE direction would have done from the same decision timestamp using the EA's own
+logged forward-excursion data (`favATR`/`advATR` inversion, enriched with real `MARKET_SNAPSHOT`
+M5 price prints where available — see
+`audits/xau_opposite_direction_counterfactual_audit_2026-07-06_to_2026-07-08.md` for full
+methodology, data sources, and honest limitations).
+
+**Headline finding: 27 of 87 `CLEAN_1R_LOSS` blocked signals (31%; 44% of the 61 that were even
+tradeable) would have won if the opposite direction had been evaluated from the same timestamp.**
+Broken down by blocker type, **`Personality mismatch` was both the LARGEST sample (17 of 87) and
+the BEST-performing category (47% opposite-win rate)** — larger and better than `SMART-GUARD` (7
+signals, 43%), which v6.17.9 already covered. The Personality Gate itself had **zero** symmetric
+recheck before this release.
+
+The audit also confirmed `A+ EVIDENCE DEMOTION` is the WORST-performing category (1 of 5 wins, 4
+both-directions-bad) — checked the code and confirmed that reason is generated in
+`XAUEntryTimingGuard()`, which runs strictly *after* SmartGuard in the pipeline, so neither this
+fix nor v6.17.9's SmartGuard recheck can reach it at all. No speculative change was made there.
+
+### What changed
+Added a Symmetric Opportunity Recheck at the Personality Gate's hard-block site (previously a bare
+`return;`), structurally similar to v6.17.9's SmartGuard recheck but simpler: because this gate
+runs *before* grade computation/SMC-conflict/SmartGuard in the pipeline, swapping in the opposite
+candidate here means it naturally flows through all of that existing code once swapped — no
+duplicated grade/SMC logic needed (unlike the SmartGuard site, which required extracting a grade
+helper and re-running the SMC check, since those run earlier for the original direction there).
+
+The opposite candidate must independently fit personality (or qualify via the same A/A+
+"penalty-but-proceed" threshold, receiving the same -1.5 penalty for consistency) before being
+swapped in — no free pass just for arriving via the retry path. Active Direction eligibility
+(BUY_ONLY/SELL_ONLY/TRANSITION_WAIT's weakening-side rule) is checked identically to the v6.17.9
+SmartGuard recheck.
+
+**Every other candidate rule the audit's evidence supported was already satisfied by v6.17.9's
+existing design, verified rather than assumed**: direction-agnostic hard gates (spread, most news
+blocks) never reach either recheck since they're separate code paths; same-cycle-only evaluation
+already respects the audit's "15-minute confirmation window" finding; the mid-timeframe-vs-H1
+disagreement pattern the audit flagged as weak evidence (n=11) is already implicitly used via
+`AdaptiveXAUConfirm`'s own M5/M15/M30/H1 reads.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v61710_personality_gate_symmetric_recheck_static.py` — 10/10 passing,
+      including an explicit test confirming `XAUEntryTimingGuard` (A+ EVIDENCE DEMOTION) is
+      untouched by any recheck mechanism
+- [x] Full suite: 341/387 passing, remaining failures are pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.10.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NEEDS OBSERVATION — watch the journal for `PERSONALITY-GATE SYMMETRIC RECHECK`
+  lines and confirm a swapped-in trade executes cleanly before fully trusting it unattended, same
+  as v6.17.9's SmartGuard recheck
+
+---
+
 ## v6.17.9 — 2026-07-08 — Symmetric Opportunity Recheck
 
 ### EA Compile
