@@ -14,6 +14,80 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.11 — 2026-07-08 — AI Advisory-Only Architecture
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.11"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.11.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61711_final.log`)
+
+### Root cause #1 — mislabeling bug (not an AI decision at all)
+Live Command Center showed "Blocked by AIDirector" for a candidate whose detailed reason was
+"B-GRADE QUALITY BLOCK ... fastScore=30/85 required=70" — a 100% deterministic `AdaptiveXAUConfirm()`
+output with zero AI-model involvement. Traced to `CloudPostReasoning()`'s module classifier:
+`StringFind(upperReason, "AI") >= 0` matched the substring "AI" inside the word "AGAINST" (e.g.
+"M15:AGAINST"), which is SmartGuard's own deterministic per-timeframe confirmation text. Fixed by
+checking for real, specific AI-authored message prefixes ("AI DIRECTOR", "[AI-", "AI=", etc.)
+first, before falling back to the old substring guesses.
+
+### Root cause #2 — genuine AI veto authority (a real problem, not hypothetical)
+Auditing the actual "GATE 5: AI DIRECTOR" section found **six separate hard-block (`return;`) paths**
+driven by real AI-model output (disagreement, low confidence, confident skip), all reachable under
+the **default** `AI_FILTER_ONLY` mode — `XAU_AIIsAdvisoryOnly()` used to return `false` for that
+mode specifically (its own old comment: "AI keeps real block/reduce authority"). All six converted
+to advisory-only: log the AI's opinion/confidence/disagreement strength, apply at most a mild lot
+reduction, never `return`/block. `XAU_AIIsAdvisoryOnly()` is now hardcoded to always return `true`
+— the single, permanent, mode-independent source of truth every AI-gated path in the file reads
+(including the exit-side `AIBlocksClose()` veto), so AI can never regain authority through
+`InpAIMode`/`InpAIAdvisoryOnly` being changed back. `InpAIMode` still controls whether AI is called
+at all (`AI_OFF`) and whether its opinion is logged — only its *authority* is now fixed.
+
+Caught a subtlety during self-review: making `XAU_AIIsAdvisoryOnly()` always `true` would have made
+the generic `if(XAU_AIIsAdvisoryOnly()) {...ADVISORY...}` short-circuit (which used to sit first in
+the if/else-if chain) swallow every one of the 6 specific branches as dead code, losing their
+richer, more useful advisory detail (HTF-override context, disagreement strength, confidence-based
+sizing). Removed that short-circuit so the specific branches — all now safe — actually run.
+
+### Direction Engine speed
+User asked for faster reaction to genuine market-direction changes. `InpMaxTransitionWaitBars`
+tightened from 6 to 3 (30min → 15min) — TRANSITION_WAIT now releases to BOTH_ALLOWED sooner when
+structure hasn't confirmed either way, letting the v6.17.8-10 fresh-M15/M30-override fixes engage
+sooner instead of sitting on a stale directional lock.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v61711_ai_advisory_only_static.py` — 21/21 passing, explicitly proving:
+      AI disagreement/low-confidence/confident-skip/timeout/budget-skip/no-response cannot block;
+      the mislabeling classifier no longer mistakes deterministic text for AI; AI agreement path
+      untouched; `XAU_AIIsAdvisoryOnly()` hardcoded unconditionally
+- [x] Updated `tests/test_xau_v6160_direction_engine_v2_and_risk_reconcile_static.py` (2 tests) and
+      `tests/test_xau_v6174_transition_wait_overstay_guard_static.py` (1 test) for the intentional
+      architecture change
+- [x] Full suite: 359/413 passing, remaining failures are pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.11.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NEEDS OBSERVATION — confirm AI opinion still logs correctly (Print output +
+  Command Center `Auth=ADVISORY`) and that no trade gets silently held up by a residual AI code
+  path; watch a live session before fully trusting unattended
+
+### Note: unrelated git housekeeping mid-session
+Partway through this release, the local checkout was found on a stale branch
+(`vps-test-v615-fixed`, pointing at old commit `cb3b186`/v6.15.0) instead of `main` — origin unclear,
+did not happen via any command run in this session. `main` was confirmed untouched and fully intact
+at `463fef2` (v6.17.10) throughout; the AI-advisory work was redone cleanly on `main` after
+switching back. Flagging this so the user is aware a branch switch happened outside this session's
+own actions, in case it reflects other work in progress on the VPS.
+
+---
+
 ## v6.17.10 — 2026-07-08 — Personality Gate Symmetric Recheck (evidence-driven)
 
 ### EA Compile

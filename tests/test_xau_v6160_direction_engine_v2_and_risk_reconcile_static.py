@@ -59,23 +59,38 @@ def test_structural_bypass_closed_by_default_only_ai_director_preserves_it():
 
 
 def test_structural_gate_covers_all_six_named_sites():
+    # v6.17.11: AI_LOW_CONF_SKIP is no longer one of these sites -- it used to
+    # be a genuine hard-block-with-structural-bypass-exemption site, but the
+    # v6.17.11 AI-advisory-only architecture change made that whole block
+    # (and its XAU_StructuralBypassAllowed() escape hatch) unreachable dead
+    # logic, since AI can no longer hard-block regardless of structural
+    # bypass mode. The other five REAL structural/market-fact gates
+    # (SmartGuard fast-confirm, STI re-entry wait, news aftermath, SMC hard
+    # conflict, TRI re-entry watch) are untouched by that change and still
+    # use the same exemption mechanism.
     ea = read(BACKEND_EA)
     assert '!antiRepeatBlocks && XAU_StructuralBypassAllowed() && XAU_StrongContextForSoftBypass' in ea  # SMART_GUARD_FAST_CONFIRM
     assert '!antiRepeatBlocksSTI && XAU_StructuralBypassAllowed() && XAU_StrongContextForSoftBypass' in ea  # STI_REENTRY_WAIT
-    assert '!antiRepeatBlocksAI && XAU_StructuralBypassAllowed() && XAU_StrongContextForSoftBypass' in ea  # AI_LOW_CONF_SKIP
+    assert '!antiRepeatBlocksAI && XAU_StructuralBypassAllowed() && XAU_StrongContextForSoftBypass' not in ea  # AI_LOW_CONF_SKIP -- removed, AI can't block at all now
     assert 'else if(XAU_StructuralBypassAllowed() &&\n              StringFind(spreadBlockReason' in ea  # NEWS_AFTERMATH
     assert 'if(XAU_StructuralBypassAllowed())\n      {\n         Print("SMC HARD CONFLICT' in ea  # SMC hard conflict
     assert 'if(XAU_StructuralBypassAllowed())\n         {\n            Print("TRI RE-ENTRY WATCH' in ea  # TRI re-entry watch
 
 
 def test_ai_opinion_gate_still_covers_its_five_sites():
+    # v6.17.11: four of these five sites (HTF-override, weak-disagree,
+    # no-conf-skip, confident-B-skip) were AI Director hard-block paths --
+    # per the explicit "AI must never have final veto authority" requirement,
+    # they were converted to unconditional advisory-only (log + optional mild
+    # lot reduction), so their XAU_ModeAllowsSoftBlockWarning() conditional
+    # wrapper (which decided warn-vs-block) is gone; there is no more block
+    # branch to conditionally downgrade. Only Strong Momentum Precheck (a
+    # feature-gate, not an AI-veto path) still uses the function, plus its
+    # own definition -- confirmed at 3 occurrences, down from 6.
     ea = read(BACKEND_EA)
     marker = "bool XAU_StructuralBypassAllowed()"
     before_structural_def = ea[: ea.index(marker)]
-    # HTF-override, weak-disagree, no-conf-skip, confident-B-skip, Strong
-    # Momentum Precheck -- all five must still use the original function
-    # (plus its own definition line = 6 occurrences before this point).
-    assert before_structural_def.count("XAU_ModeAllowsSoftBlockWarning()") == 6
+    assert before_structural_def.count("XAU_ModeAllowsSoftBlockWarning()") == 3
 
 
 def test_no_limit_trading_mode_still_defaults_true_unless_restore_mode():

@@ -54,8 +54,12 @@ def test_header_banner_matches_property_version_for_website_display():
 # state, confirmed from the live journal.
 # ---------------------------------------------------------------------------
 def test_input_max_transition_wait_bars_exists_with_sane_default():
+    # v6.17.11: tightened 6->3 bars (30min->15min) -- user asked for a
+    # faster-reacting Direction Engine; a slow TRANSITION_WAIT release
+    # compounds the risk of holding a stale directional lock during a
+    # genuine reversal.
     ea = read(BACKEND_EA)
-    assert "input int    InpMaxTransitionWaitBars = 6;" in ea
+    assert "input int    InpMaxTransitionWaitBars = 3;" in ea
 
 
 def test_overstay_guard_function_releases_to_both_allowed():
