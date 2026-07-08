@@ -1,14 +1,35 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.17.21 - Scan-Recovery Fix + Exhaustion/Reversal Guard          |
-//|   Fixes the live SCAN_STARTED/SCAN_ABORTED backoff loop (one        |
-//|   explicit recovery state machine) and adds a pre-entry             |
-//|   Exhaustion/Reversal guard, backstopped inside OpenTrade() so it   |
-//|   covers the normal scan path AND recovery/force-open paths, that   |
-//|   vetoes a setup backed only by stale trend evidence against a      |
-//|   fresh M5 reversal majority -- proven from a live forensic audit.  |
+//|   v6.17.22 - Timing Engine: one-bar entry confirmation               |
+//|   Multi-day forensic audit (35 entries/6 days/12 EA versions) found  |
+//|   0% of entries favorable at the 10-min mark, universally. A fresh  |
+//|   signal that clears every gate now must reappear (same setup+dir)  |
+//|   on the VERY NEXT closed M5 bar before OpenTrade fires --           |
+//|   SIGNAL_DETECTED -> WAITING_FOR_ENTRY_WINDOW -> ENTRY_ALLOWED, or   |
+//|   -> ENTRY_WINDOW_EXPIRED -> REASSESS_FROM_CURRENT_MARKET.           |
 //+------------------------------------------------------------------+
+// v6.17.22 CHANGES (2026-07-08) — TIMING ENGINE (ONE-BAR ENTRY CONFIRMATION):
+//   Forensic audit of 35 entries across 6 trading days and 12 EA version eras
+//   (v6.8.0-v6.17.20; both directions; BREAKOUT/TREND_PULLBACK/HTF_TREND_FOLLOW/
+//   MULTI_EXTREME; every grade; every session) found 0/35 (0%) were favorable
+//   at the 10-minute mark -- every single entry required surviving real
+//   adverse movement first, regardless of setup, direction, or day. This is
+//   a timing defect, separate from the direction defect v6.17.21 already
+//   fixed: a signal can be directionally correct and still enter at a
+//   locally bad price because it executes the INSTANT it first clears every
+//   gate, with no requirement the move still be intact one bar later.
+//
+//   New XAU_TimingEngineConfirmsEntry() sits as the last check before
+//   OpenTrade(), after direction/setup/size are already decided (unchanged).
+//   It requires the SAME setup+direction to reappear on the next closed M5
+//   bar -- a bounded, self-expiring one-bar window, not a blanket blocker or
+//   a new score threshold. A signal that changes direction/setup, or moves
+//   more than 1xATR in its own favor before reconfirming (anti-chase), opens
+//   a brand-new window from current market conditions -- it never blindly
+//   inherits the old signal's direction, matching the explicit requirement
+//   that a reconsidered signal must be fully re-derived, not resumed.
+//
 // v6.17.21 CHANGES (2026-07-08) — SCAN-RECOVERY STATE FIX + EXHAUSTION/REVERSAL GUARD:
 //   User reported a live SCAN_STARTED/SCAN_ABORTED reason=INDICATOR_RECOVERY_BACKOFF
 //   loop that repeated every tick despite the backoff message itself saying to wait.
@@ -1274,17 +1295,17 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.191"
-#property description "XAUUSD AI Sniper v6.17.21 - Scan-Recovery Fix + Reversal Guard"
-#property description "Fixes the live SCAN_STARTED/SCAN_ABORTED backoff loop (one explicit"
-#property description "recovery state machine) and adds a pre-entry Exhaustion/Reversal guard"
-#property description "that vetoes a setup backed only by stale trend evidence against a fresh"
-#property description "M5 reversal majority -- proven from a real SELL-into-recovery trade."
+#property version   "6.192"
+#property description "XAUUSD AI Sniper v6.17.22 - Timing Engine (one-bar entry confirmation)"
+#property description "Multi-day forensic audit (35 entries/6 days/12 EA versions) found 0%"
+#property description "of entries favorable at 10min, universally. Fresh signals now require"
+#property description "the same setup+direction to reconfirm one M5 bar later before OpenTrade"
+#property description "fires -- SIGNAL_DETECTED/WAITING_FOR_ENTRY_WINDOW/ENTRY_ALLOWED state."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.17.21"
-#define XAUAI_EA_VERSION_NUM "6.17.21"
-#define XAUAI_BUILD_HASH "v61721-scan-recovery-exhaustion-guard-20260708"
+#define XAUAI_EA_VERSION "v6.17.22"
+#define XAUAI_EA_VERSION_NUM "6.17.22"
+#define XAUAI_BUILD_HASH "v61722-timing-engine-one-bar-confirmation-20260708"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -2754,6 +2775,21 @@ struct PendingOpportunity
    datetime expiry;           // recovery must be attempted by this time or it's dropped
 };
 PendingOpportunity g_pendingOpportunity;
+
+// v6.17.22 TIMING ENGINE: tracks a fresh signal waiting for one-bar
+// reconfirmation before OpenTrade fires. See XAU_TimingEngineConfirmsEntry.
+struct PendingEntryConfirmation
+{
+   bool     active;
+   int      dir;
+   string   setup;
+   string   grade;
+   double   sizeMulti;
+   double   signalPrice;
+   double   atr;
+   datetime firstSeenCandle;
+};
+PendingEntryConfirmation g_pendingEntryConfirm;
 
 ulong       g_qualityPosIds[];
 double      g_qualityWorstPnl[];
@@ -14035,6 +14071,12 @@ void OnTick()
                       StringFormat("%s(conf=%d%%)", g_aiLastVerdict, lastAIConfidence),
                       g_memoryLastInfluence,
                       StringFormat("%s lotMult=%.2f", setupName, finalSzMult));
+   // v6.17.22 TIMING ENGINE: direction/setup/size are all decided above this
+   // line -- this is the one place that asks whether NOW is the right moment
+   // to act on them. See XAU_TimingEngineConfirmsEntry for why.
+   if(!XAU_TimingEngineConfirmsEntry(signal, setupName, grade, finalSzMult, bufATR[1]))
+      return;
+
    // v6.17.7 FIX (item 4): g_lastEntryGrade/g_lastEntryScore/dashboard state/
    // the "TRADE OPENED" scorecard entry used to be written unconditionally
    // right after calling OpenTrade (then void, so the caller had no way to
@@ -23287,6 +23329,78 @@ void XAU_TrackSignalFirstSeen(int signal, string setupName, string grade,
             " score=", DoubleToString(setupScore, 1),
             " combined=", DoubleToString(combinedScore, 1));
    }
+}
+
+// v6.17.22 TIMING ENGINE: separates "direction/setup is valid" (everything
+// computed above this call, unchanged) from "is NOW the right moment to
+// execute." A multi-day forensic audit (35 entries, 6 trading days, 12 EA
+// version eras, both directions, every setup/grade/session) found 0/35 (0%)
+// of entries were favorable at the 10-minute mark -- universal, not specific
+// to any one setup, direction, or day. Root cause: a signal that clears
+// every gate above executes INSTANTLY on the bar it was first detected, with
+// no requirement that the move still be intact even one bar later.
+//
+// Fix: require the SAME setup+direction to reappear on the VERY NEXT closed
+// M5 bar (exactly one PeriodSeconds(PERIOD_M5) later) before OpenTrade fires.
+// This is a bounded, self-expiring confirmation window, not a blanket
+// blocker -- it costs at most one bar of delay, and a signal that changes
+// direction/setup on the next bar (or simply doesn't reappear) is dropped
+// and any later signal starts its OWN fresh window, never blindly inheriting
+// the expired one's direction/SL/TP (SL/TP are computed fresh inside
+// OpenTrade() regardless). State names match the requested architecture:
+// SIGNAL_DETECTED -> WAITING_FOR_ENTRY_WINDOW -> ENTRY_CONFIRMING ->
+// ENTRY_ALLOWED, or -> ENTRY_WINDOW_EXPIRED -> REASSESS_FROM_CURRENT_MARKET.
+bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double sizeMulti, double atr)
+{
+   double signalPrice = iClose(Symbol(), PERIOD_M5, 1);
+   datetime nowCandle = iTime(Symbol(), PERIOD_M5, 0);
+   string dirStr = (dir == 1) ? "BUY" : "SELL";
+
+   bool sameSignalOneBarLater = (g_pendingEntryConfirm.active &&
+                                 g_pendingEntryConfirm.dir == dir &&
+                                 g_pendingEntryConfirm.setup == setup &&
+                                 nowCandle == g_pendingEntryConfirm.firstSeenCandle + PeriodSeconds(PERIOD_M5));
+   if(sameSignalOneBarLater)
+   {
+      // Anti-chase: confirming is not the same as chasing -- if price already
+      // ran more than 1xATR in the signal's favor since first detection, this
+      // is no longer the same low-risk entry that was first seen; treat it as
+      // a brand-new candidate from current market conditions instead.
+      double movedInFavor = (dir == 1) ? (signalPrice - g_pendingEntryConfirm.signalPrice)
+                                        : (g_pendingEntryConfirm.signalPrice - signalPrice);
+      if(movedInFavor > g_pendingEntryConfirm.atr * 1.0)
+      {
+         PrintFormat("TIMING_ENGINE: ENTRY_WINDOW_EXPIRED (%s %s) reason=OVEREXTENDED_ON_CONFIRM moved=%.2f > 1.0xATR=%.2f -> REASSESS_FROM_CURRENT_MARKET",
+                     setup, dirStr, movedInFavor, g_pendingEntryConfirm.atr);
+      }
+      else
+      {
+         PrintFormat("TIMING_ENGINE: ENTRY_CONFIRMING -> ENTRY_ALLOWED (%s %s) held direction one bar, moved %.2f in favor",
+                     setup, dirStr, movedInFavor);
+         g_pendingEntryConfirm.active = false;
+         return true;
+      }
+   }
+   else if(g_pendingEntryConfirm.active)
+   {
+      PrintFormat("TIMING_ENGINE: ENTRY_WINDOW_EXPIRED (previous %s %s) -> REASSESS_FROM_CURRENT_MARKET (now %s %s)",
+                  g_pendingEntryConfirm.setup, g_pendingEntryConfirm.dir == 1 ? "BUY" : "SELL", setup, dirStr);
+   }
+
+   // No confirmed pending match (new candidate, thesis changed, or window
+   // aged out/overextended) -- open a brand-new confirmation window from
+   // THIS bar's evidence. Never resumes/reuses the old signal's direction.
+   g_pendingEntryConfirm.active          = true;
+   g_pendingEntryConfirm.dir             = dir;
+   g_pendingEntryConfirm.setup           = setup;
+   g_pendingEntryConfirm.grade           = grade;
+   g_pendingEntryConfirm.sizeMulti       = sizeMulti;
+   g_pendingEntryConfirm.signalPrice     = signalPrice;
+   g_pendingEntryConfirm.atr             = atr;
+   g_pendingEntryConfirm.firstSeenCandle = nowCandle;
+   PrintFormat("TIMING_ENGINE: SIGNAL_DETECTED (%s %s) grade=%s -> WAITING_FOR_ENTRY_WINDOW (confirm required on next M5 bar)",
+               setup, dirStr, grade);
+   return false;
 }
 
 // v6.17.14 FLEET-CONSISTENCY RECOVERY: exactly one re-check of the pending

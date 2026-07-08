@@ -14,6 +14,49 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.22 — 2026-07-08 — Timing Engine (one-bar entry confirmation)
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.22"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.22.mq5`
+- [x] Top-of-file header banner updated
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61722_final.log`)
+
+### Evidence — multi-day forensic audit (not tuned from one session)
+Parsed 6 trading days (2026-07-02 through 07-08; 07-01 excluded, its EA build predates the
+`TRADE_THESIS_STATUS` telemetry this audit depends on), 12 EA version eras (v6.8.0-v6.17.20),
+35 primary entries with real per-tick MAE/MFE. Result: **0/35 (0%) favorable at the 10-minute
+mark — universal**, not specific to July 8, to SELL, to TREND_PULLBACK, or to any one EA version.
+100% of entries showed adverse movement within 1 minute; 49% exceeded -$20 in that first minute.
+NY session was worst (73% >$20 adverse@1min, net -$984 across the sample); ASIA/LONDON sessions
+were both net positive with smaller adverse excursions. Recovery-of-missed-signal overrides
+averaged ~2x the 10-minute drawdown of fresh entries regardless of final outcome.
+
+### Root cause
+A signal that clears every existing gate (setup score, personality, SmartGuard, AI Director,
+lot sizing, ContextGateAllows) executes `OpenTrade()` INSTANTLY on the bar it was first detected —
+there was no requirement that the move still be intact even one bar later. Direction and setup
+quality were both fine; execution timing was not being checked at all as a separate concern.
+
+### Fix
+New `XAU_TimingEngineConfirmsEntry()` — the last check before `OpenTrade()`, after direction/
+setup/size are already decided (nothing upstream changed). Requires the SAME setup+direction to
+reappear on the very next closed M5 bar before firing: `SIGNAL_DETECTED -> WAITING_FOR_ENTRY_WINDOW
+-> ENTRY_CONFIRMING -> ENTRY_ALLOWED`, or `-> ENTRY_WINDOW_EXPIRED -> REASSESS_FROM_CURRENT_MARKET`.
+Not a blanket blocker or a new score threshold — a bounded, self-expiring one-bar window. A signal
+that changes direction/setup, or moves >1xATR in its own favor before reconfirming (anti-chase),
+opens a brand-new window from current market conditions; it never blindly inherits the expired
+signal's direction (SL/TP are computed fresh inside `OpenTrade()` regardless).
+
+### Testing
+- [x] MetaEditor compile: 0 errors, 0 warnings
+- [x] `tests/test_xau_v61722_timing_engine_static.py` — 9 tests, including a Python behavioral
+      simulation of the state machine (confirm/reject/re-arm/anti-chase paths)
+- [ ] Live forward-test measurement of MAE1/5/10/fav%@5/10/time-to-positive/MFE-MAE-ratio before
+      vs. after — cannot be done from this environment; requires a live or Strategy-Tester run.
+
+---
+
 ## v6.17.21 — 2026-07-08 — Scan-Recovery State Fix + Exhaustion/Reversal Guard
 
 ### EA Compile
