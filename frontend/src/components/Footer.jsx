@@ -11,7 +11,7 @@ export default function Footer() {
             </div>
             <div>
               <span className="text-[13px] font-semibold text-white/70">XauAI Sniper</span>
-              <span className="ml-2 font-mono text-[10px] text-white/28">v6.17.16 · HARD_BLOCK Self-Consistency Fix</span>
+              <span className="ml-2 font-mono text-[10px] text-white/28">v6.17.17 · Account-Size Lot Floor</span>
             </div>
           </div>
 

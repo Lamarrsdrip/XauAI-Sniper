@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.17.16";
-  const edition  = info?.edition  || "HARD_BLOCK SELF-CONSISTENCY FIX";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.16.mq5";
+  const version  = info?.version  || "v6.17.17";
+  const edition  = info?.edition  || "ACCOUNT-SIZE LOT FLOOR";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.17.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.17.16.</span> A real trade audit found the EA could privately conclude an entry was hard-block quality, log that label, and then take the trade anyway through an override path — 100% of one window's losses traced to exactly this. Fixed: that label now always stops the trade, no exceptions.
+              <span className="font-semibold text-amber-200">Gold-only v6.17.17.</span> Lot sizing now has an explicit account-size floor (0.10 at $1k, 0.25 at $3k, 0.50 at $6k), applied as the very last step so it reliably overrides any upstream reducer. By deliberate choice, this floor can exceed the risk cap on wide-stop trades.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">

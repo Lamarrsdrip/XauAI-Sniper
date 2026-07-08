@@ -14,6 +14,54 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.17 — 2026-07-08 — Account-Size Lot Floor
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.17"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.17.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61717_final.log`)
+
+### What changed
+User requested explicit minimum lot sizes by account balance: 0.10 at $1k, 0.25 at $3k, 0.50 at $6k.
+Before implementing, confirmed one real tradeoff directly: on a wide-SL trade, hitting these targets
+can mean risking more than the 5% cap raised in v6.17.14 (the earlier 14.58pt-SL example would need
+~12-13% risk to reach 0.25 lots). **Asked the user explicitly which should win — they chose: minimum
+lot always wins.**
+
+`InpMinAccountLotFloor = 0.10`, `InpAccountLotFloorPer1000 = 0.08333` →
+`floorLot = max(0.10, balance/1000 * 0.08333)` — verified numerically to hit all three targets
+exactly ($1k→0.10, $3k→0.25, $6k→0.50).
+
+Applied as the **last** step in `OpenTrade()`, after `XAU_ReconcileFinalRisk()` and every other
+multiplier/mode/penalty in the function. This is deliberate: rather than hunting down and adjusting
+every individual lot-reducing mechanism (risk cap, session scaling, AI/personality penalties, scout
+markers, the existing v6.4.15 small-account proportional floor), placing the new floor at the very
+end means it reliably lifts the final lot back up regardless of which upstream mechanism shrank it.
+Still respects true broker constraints (step/min/max) — those are real hard limits that can't be
+bypassed by any user preference.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v61717_account_lot_floor_static.py` — 11/11 passing (exact-target math,
+      floor position after reconciliation, floor never lowers, broker step/min/max still respected,
+      logs clearly when it overrides the risk cap)
+- [x] Full suite: 424/496 passing, remaining failures are pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.17.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: this is a DELIBERATE, user-confirmed increase in per-trade risk on wide-SL setups —
+  not silent. Watch for `ACCOUNT-LOT-FLOOR:` journal lines; each one shows the exact balance, the
+  lot it raised, and confirms this was the intended override, not a bug
+
+---
+
 ## v6.17.16 — 2026-07-08 — HARD_BLOCK Self-Consistency Fix
 
 ### EA Compile
