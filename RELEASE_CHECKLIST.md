@@ -14,6 +14,53 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.21 — 2026-07-08 — Scan-Recovery State Fix + Exhaustion/Reversal Guard
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.21"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.21.mq5`
+- [x] Top-of-file header banner updated (permanent checklist item above)
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61721_final.log`)
+
+### Bug 1 — SCAN_STARTED/SCAN_ABORTED infinite loop
+Live evidence: `SCAN_STARTED` / `SCAN_ABORTED reason=INDICATOR_RECOVERY_BACKOFF...retry in Xs`
+repeating every tick, never stopping, despite the message's own countdown. Root cause: (a)
+`XAU_LogScanState`'s dedup only collapses repeats of the SAME state string — SCAN_STARTED and
+SCAN_ABORTED alternate, so neither ever matched its predecessor and both printed unthrottled;
+(b) the scan watchdog re-forces a full scan attempt every tick once overdue, and nothing checked
+in advance whether an active backoff window already made that attempt's outcome certain. Fix: one
+explicit `g_recoveryState` machine (NONE/WARMUP/BACKOFF), gated at the top of `OnTick` before
+`SCAN_STARTED` — a known-backoff tick returns immediately, no indicator handle touched, no
+`SCAN_STARTED`/`SCAN_ABORTED` pair, just a 60s-throttled status line. WARMUP is intentionally not
+gated. Verified via a Python state-machine simulation (before/after): `reason=
+INDICATOR_RECOVERY_BACKOFF` aborts went from 744 to 3 over a 400s synthetic episode, with zero
+change to actual rebuild cadence (still 3 rebuilds either way).
+
+### Bug 2 — wrong-direction/late entries (forensic-audit-driven)
+Live forensic audit of 2026-07-08's full trade log (8 primary entries, all cross-checked against
+real per-tick `TRADE_THESIS_STATUS` running P/L, not estimated): posId 9483784022 (SELL
+TREND_PULLBACK, -$430.11, the single trade that flipped the day from +$198.68 to -$231.43 net) and
+posId 9477557258 (SELL "RECOVERY of missed signal" override of an original HARD_BLOCK that was
+right, -$153.18, adverse from minute 1) both fired with their direction supported ONLY by stale
+H1 BOS / regime evidence while fresher M5 structure already disagreed. New
+`XAU_ExhaustionReversalGuard` re-derives fresh M5 structure (swing-sequence, CHoCH, sweep-rejection
+— reusing existing validated helpers, no new detectors) and blocks a direction backed mainly by old
+trend evidence once >=4/6 concrete reversal signals plus a confirmed reclaim/sequence-flip already
+oppose it. Placed as a backstop inside `OpenTrade()` itself (not only `ContextGateAllows`) because
+the audit found `XAU_CheckPendingOpportunityRecovery`/`XAU_TryForceOpenTrade` call `OpenTrade()`
+directly, bypassing `ContextGateAllows` — exactly the path posId 9477557258 used. Adds
+`DIRECTION_QUALITY` telemetry (OldTrendBias/FreshStructureBias/SELL_EDGE/BUY_EDGE/ExhaustionRisk/
+ReversalEvidence/ChaseRisk/WhyChosenDirection/WhyOppositeRejected) on every trade attempt.
+
+### Testing
+- [x] MetaEditor compile: 0 errors, 0 warnings
+- [x] Python state-machine simulation of the scan-recovery fix (before/after comparison)
+- [x] Forensic audit script (`forensic_audit.py`) cross-referencing all 8 primary entries against
+      real per-tick `TRADE_THESIS_STATUS` MAE/MFE at 1/5/10/15/30min — not estimated
+- [ ] Live forward-test confirmation once deployed (cannot be done from this environment)
+
+---
+
 ## v6.17.20 — 2026-07-08 — Exit Arm R-Floor (lot-blind threshold fix, Mac vs VPS)
 
 ### EA Compile

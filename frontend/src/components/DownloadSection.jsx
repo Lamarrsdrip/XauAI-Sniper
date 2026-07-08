@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.17.20";
-  const edition  = info?.edition  || "EXIT ARM R-FLOOR";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.20.mq5";
+  const version  = info?.version  || "v6.17.21";
+  const edition  = info?.edition  || "SCAN-RECOVERY + REVERSAL GUARD";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.21.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 

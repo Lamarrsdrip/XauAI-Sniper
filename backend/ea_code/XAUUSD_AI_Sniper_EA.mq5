@@ -1,13 +1,50 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.17.20 - Exit Arm R-Floor (lot-blind threshold fix)             |
-//|   Every flat-$/equity-% exit-arm threshold now floors at this       |
-//|   trade's own R, so a bigger (e.g. account-lot-floored) lot can     |
-//|   no longer arm/trigger protection at a smaller R-fraction than a   |
-//|   smaller lot would -- proven from a real Mac (holds well) vs VPS   |
-//|   (bigger lots, exits early) account comparison at the same tier.   |
+//|   v6.17.21 - Scan-Recovery Fix + Exhaustion/Reversal Guard          |
+//|   Fixes the live SCAN_STARTED/SCAN_ABORTED backoff loop (one        |
+//|   explicit recovery state machine) and adds a pre-entry             |
+//|   Exhaustion/Reversal guard, backstopped inside OpenTrade() so it   |
+//|   covers the normal scan path AND recovery/force-open paths, that   |
+//|   vetoes a setup backed only by stale trend evidence against a      |
+//|   fresh M5 reversal majority -- proven from a live forensic audit.  |
 //+------------------------------------------------------------------+
+// v6.17.21 CHANGES (2026-07-08) — SCAN-RECOVERY STATE FIX + EXHAUSTION/REVERSAL GUARD:
+//   User reported a live SCAN_STARTED/SCAN_ABORTED reason=INDICATOR_RECOVERY_BACKOFF
+//   loop that repeated every tick despite the backoff message itself saying to wait.
+//   Root cause: XAU_LogScanState's dedup only collapses REPEATS of the identical
+//   state, and SCAN_STARTED/SCAN_ABORTED ping-ponged between two different states
+//   every tick, defeating it; separately, the scan watchdog kept forcing a doomed
+//   CopyEntryBuffer(EMA_FAST_M5) attempt every tick for the whole backoff window
+//   even though the outcome (fail, same reason) was already known in advance. Fix:
+//   one explicit g_recoveryState machine (NONE/WARMUP/BACKOFF) checked at the very
+//   top of OnTick's scan section -- if already inside a known BACKOFF window, the
+//   tick returns before SCAN_STARTED/any indicator handle is touched at all, with a
+//   60s-throttled status line instead. WARMUP is deliberately not gated (the
+//   existing opportunistic early-copy there is what recovers most cases in 1-2
+//   ticks). A Python state-machine simulation (before/after) showed
+//   reason=INDICATOR_RECOVERY_BACKOFF aborts collapsing from 744 to 3 over a 400s
+//   synthetic backoff episode, with zero change to actual rebuild cadence.
+//
+//   Separately, a live forensic audit of 2026-07-08's trade log (8 primary entries)
+//   found: (1) posId 9483784022, a SELL TREND_PULLBACK whose SELL bonus was
+//   anchored entirely to stale H1 BOS + TREND_DN regime, fired in the SAME scan
+//   cycle the M5 swing-sequence had already flipped bullish (Active Direction
+//   logged "no strong directional conviction... both directions structurally
+//   open") -- lost -$430.11, the single trade that flipped the whole day from
+//   +$198.68 to -$231.43 net; (2) posId 9477557258, a "RECOVERY of missed signal"
+//   override of an original HARD_BLOCK ("gold already rejected the latest flush
+//   low") that lost -$153.18, immediately adverse (-$104.85 by 10min) the entire
+//   time it was open -- the original block was right. New XAU_ExhaustionReversalGuard
+//   re-derives fresh M5 structure (swing-sequence, CHoCH, sweep-rejection --
+//   reusing existing validated helpers) and vetoes a direction backed mainly by
+//   OLD trend evidence when >=4/6 concrete reversal signals plus a confirmed
+//   reclaim/sequence-flip already disagree with it. Placed as a backstop inside
+//   OpenTrade() itself (not just ContextGateAllows) because the audit found
+//   XAU_CheckPendingOpportunityRecovery and XAU_TryForceOpenTrade call OpenTrade()
+//   directly, bypassing ContextGateAllows entirely -- exactly the path both
+//   flagged trades used.
+//
 // v6.17.20 CHANGES (2026-07-08) — EXIT ARM R-FLOOR (Mac vs VPS root cause):
 //   User ran the same EA on two accounts: Mac ($3k, small lots, holds well,
 //   $187-193 wins) and VPS ($7k, bigger lots from the v6.17.17 account-lot-
@@ -1237,18 +1274,17 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.190"
-#property description "XAUUSD AI Sniper v6.17.20 - Exit Arm R-Floor (lot-blind threshold fix)"
-#property description "Every flat-$/equity-% exit-arm threshold (Protect Peak Floor, A+ Shield,"
-#property description "EV_PROTECT) is now floored at this trade's own R -- a bigger, e.g."
-#property description "account-lot-floored, lot can no longer arm/trigger protection at a smaller"
-#property description "R-fraction than a smaller lot would. Proven from a real Mac vs VPS account"
-#property description "comparison at the same equity tier with different lot sizes."
+#property version   "6.191"
+#property description "XAUUSD AI Sniper v6.17.21 - Scan-Recovery Fix + Reversal Guard"
+#property description "Fixes the live SCAN_STARTED/SCAN_ABORTED backoff loop (one explicit"
+#property description "recovery state machine) and adds a pre-entry Exhaustion/Reversal guard"
+#property description "that vetoes a setup backed only by stale trend evidence against a fresh"
+#property description "M5 reversal majority -- proven from a real SELL-into-recovery trade."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.17.20"
-#define XAUAI_EA_VERSION_NUM "6.17.20"
-#define XAUAI_BUILD_HASH "v61720-exit-arm-r-floor-20260708"
+#define XAUAI_EA_VERSION "v6.17.21"
+#define XAUAI_EA_VERSION_NUM "6.17.21"
+#define XAUAI_BUILD_HASH "v61721-scan-recovery-exhaustion-guard-20260708"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -3265,6 +3301,23 @@ datetime   g_lastIndicatorFailLog = 0;
 datetime   g_lastIndicatorRebuildAt = 0; // v5.8.25: throttle recovery loops
 datetime   g_indicatorWarmupUntil = 0;   // v5.8.25: let MT5 calculate new indicator buffers before retrying
 datetime   g_lastIndicatorFailAt = 0;    // v6.17.1: when the current fail streak actually started
+// v6.17.21 FIX: one explicit, shared recovery state machine for the entry
+// indicator set (RebuildEntryIndicatorHandles rebuilds all handles together,
+// so there is only ever one recovery episode active at a time, never one per
+// label). Runtime-proven need: without this, OnTick had no way to know in
+// advance -- before calling CopyEntryBuffer at all -- that it was still
+// inside an active INDICATOR_RECOVERY_BACKOFF window, so the watchdog kept
+// re-forcing a doomed CopyEntryBuffer(EMA_FAST_M5) attempt (and a fresh,
+// unthrottled SCAN_STARTED/SCAN_ABORTED pair -- see XAU_LogScanState, whose
+// dedup only catches repeats of the SAME state and is defeated by ping-
+// ponging between two different ones) on literally every tick for the whole
+// backoff window, instead of exactly once per InpIndicatorRecoveryBackoffSec.
+enum ENUM_IndicatorRecoveryState { RECOVERY_NONE, RECOVERY_WARMUP, RECOVERY_BACKOFF };
+ENUM_IndicatorRecoveryState g_recoveryState = RECOVERY_NONE;
+string     g_recoveryLabel        = "";  // which label triggered the current recovery episode
+datetime   g_recoveryStartedAt    = 0;   // when this recovery episode began (NONE -> non-NONE)
+datetime   g_recoveryRetryAt      = 0;   // next moment a real retry is worth attempting
+datetime   g_recoveryLastStatusAt = 0;   // throttle for the "still recovering" status line
 // v6.17.7 FIX: g_indicatorBufferFailCount was a single counter SHARED across
 // all 14 entry-buffer labels (EMA_FAST_M5, RSI_M5, BB_UPPER, ... EMA_FAST_HTF,
 // STOCH_D). A transient blip on one indicator and a transient blip on a
@@ -5808,6 +5861,127 @@ bool ValidatePIN(string pin)
    return true;
 }
 
+// v6.17.21: EXHAUSTION / REVERSAL GUARD ------------------------------------
+// Direct root cause, live-log-proven (2026-07-08 terminal log, posId
+// 9483784022): SELL 0.27 TREND_PULLBACK @4038.25 SL-hit @4054.23 (-$430.11);
+// price then kept climbing for the next hour (4057->4069+, see the
+// EXIT-BRAIN CHECK lines that followed). At entry, TREND_PULLBACK's own SELL
+// bonus was anchored entirely to OLD/stale evidence -- H1 BOS bearish
+// (g_smc_bos_dir=-1) and a TREND_DN regime label ("SMC v6.1.0 dir=SELL
+// bonus=1.00 BOS-1"). In the exact same scan cycle, the M5 fractal
+// swing-sequence scan had ALREADY flipped bullish (ADAPTIVE-DIRECTION logged
+// "seq=HH/HL intact") and the Active Direction engine itself said "no strong
+// directional conviction... both directions structurally open" (tier=NONE).
+// Nothing cross-checked that fresh, same-cycle bullish read against the
+// stale-trend-anchored SELL before OpenTrade -- htfBias==0 (neutral) meant
+// XAU_ComputeActiveDirection's own "normal pullback" shortcut never even ran
+// (by design, see its v6.17.7 comment), so Active Direction fell through to
+// BOTH_ALLOWED/NONE and let the setup fire completely unchallenged.
+// This gate closes exactly that hole: it re-derives the same fresh M5
+// structure evidence (reusing XAU_SwingSequenceDir/XAU_AssessFailureAndSweep/
+// CleanStructureLevels -- already-validated helpers, not new detectors) and
+// vetoes an entry whose direction is supported mainly by OLD trend evidence
+// while a MAJORITY of concrete, fresh reversal/exhaustion signals already
+// disagree with it. It is a veto layer only -- it does not choose BUY vs
+// SELL itself; each setup (TREND_PULLBACK, HTF_TREND_FOLLOW, etc.) still
+// proposes its own direction the way it always has, this just gets a final
+// say before OpenTrade, same call site as the existing HTF-bias/Swing-SR
+// checks below.
+bool XAU_ExhaustionReversalGuard(int dir, double atr,
+                                 double &sellEdge, double &buyEdge,
+                                 double &exhaustionRisk, double &reversalEvidence,
+                                 double &chaseRisk, string &oldTrendBias,
+                                 string &freshStructureBias, string &blockReason)
+{
+   sellEdge = 50; buyEdge = 50; exhaustionRisk = 0; reversalEvidence = 0; chaseRisk = 0;
+   oldTrendBias = "NEUTRAL"; freshStructureBias = "NEUTRAL"; blockReason = "";
+   if(atr <= 0 || ArraySize(bufEMAFast) < 2 || ArraySize(bufEMASlow) < 2) return true;
+
+   // OldTrendBias: H1 BOS + regime label -- what a trend-following setup's
+   // own directional bonus is actually anchored to. Conflicting H1 BOS vs
+   // regime collapses to NEUTRAL rather than guessing.
+   int oldBiasDir = 0;
+   if(g_smc_bos_dir == 1 || currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP) oldBiasDir = 1;
+   if(g_smc_bos_dir == -1 || currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN)
+      oldBiasDir = (oldBiasDir == 1) ? 0 : -1;
+   oldTrendBias = (oldBiasDir == 1) ? "BULLISH" : (oldBiasDir == -1) ? "BEARISH" : "NEUTRAL";
+
+   // FreshStructureBias: the same M5 fractal swing-sequence scan the Active
+   // Direction engine uses -- the freshest confirmed structural read.
+   string seqWhy = ""; double lastSwHigh = 0.0, lastSwLow = 0.0;
+   int seqDir = XAU_SwingSequenceDir(PERIOD_M5, MathMax(30, InpCleanStructureLookback * 2), seqWhy, lastSwHigh, lastSwLow);
+   freshStructureBias = (seqDir == 1) ? "BULLISH" : (seqDir == -1) ? "BEARISH" : "MIXED";
+
+   bool failedContUp = false, failedContDown = false, sweepRejUp = false, sweepRejDown = false;
+   string failWhy = "";
+   XAU_AssessFailureAndSweep(atr, failedContUp, failedContDown, sweepRejUp, sweepRejDown, failWhy);
+
+   double structBuf = atr * 0.10;
+   double c1 = iClose(Symbol(), PERIOD_M5, 1);
+   bool chochBull = (lastSwHigh > 0 && c1 > lastSwHigh + structBuf);
+   bool chochBear = (lastSwLow  > 0 && c1 < lastSwLow  - structBuf);
+
+   double swingLow = DBL_MAX, swingHigh = -DBL_MAX;
+   CleanStructureLevels(InpCleanStructureLookback, swingLow, swingHigh);
+   double curPrice = (dir == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK) : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double roomUp   = (swingHigh > -DBL_MAX && curPrice > 0) ? (swingHigh - curPrice) / atr : 0.0;
+   double roomDown = (swingLow  <  DBL_MAX && curPrice > 0) ? (curPrice - swingLow)  / atr : 0.0;
+   double momentum = bufEMAFast[1] - bufEMASlow[1];
+   double rsiNow   = (ArraySize(bufRSI) > 1) ? bufRSI[1] : 50.0;
+
+   // ---- SELL-side exhaustion/reversal checklist (user-specified conditions) ----
+   bool sellLargeLegDone   = (roomUp >= 3.0);            // already made a large bearish leg
+   bool sellNearLow        = (roomDown <= 0.5);           // sitting on the recent selloff low
+   bool sellReclaimSeen    = (sweepRejUp || seqDir == 1); // rejection low / HH-HL bullish reclaim
+   bool sellStructBroken   = chochBull;                   // price breaks above short-term structure
+   bool sellRoomAsymmetric = (roomDown < roomUp);         // SELL room small vs BUY recovery room
+   bool sellMomentumFading = (rsiNow > 50.0 || momentum > 0); // momentum no longer bearish
+   int sellHits = (sellLargeLegDone?1:0) + (sellNearLow?1:0) + (sellReclaimSeen?1:0) +
+                  (sellStructBroken?1:0) + (sellRoomAsymmetric?1:0) + (sellMomentumFading?1:0);
+
+   // ---- BUY-side exhaustion/reversal checklist (mirror) ----
+   bool buyLargeLegDone    = (roomDown >= 3.0);
+   bool buyNearHigh        = (roomUp <= 0.5);
+   bool buyReclaimSeen     = (sweepRejDown || seqDir == -1);
+   bool buyStructBroken    = chochBear;
+   bool buyRoomAsymmetric  = (roomUp < roomDown);
+   bool buyMomentumFading  = (rsiNow < 50.0 || momentum < 0);
+   int buyHits = (buyLargeLegDone?1:0) + (buyNearHigh?1:0) + (buyReclaimSeen?1:0) +
+                 (buyStructBroken?1:0) + (buyRoomAsymmetric?1:0) + (buyMomentumFading?1:0);
+
+   exhaustionRisk   = (dir == -1) ? MathMin(100.0, roomUp   / 5.0 * 100.0) : MathMin(100.0, roomDown / 5.0 * 100.0);
+   reversalEvidence = (dir == -1) ? (sellHits / 6.0 * 100.0) : (buyHits / 6.0 * 100.0);
+   chaseRisk        = (dir == -1) ? (sellLargeLegDone && !sellStructBroken ? 60.0 : 20.0)
+                                   : (buyLargeLegDone  && !buyStructBroken  ? 60.0 : 20.0);
+   sellEdge = MathMax(0.0, MathMin(100.0,
+              (oldBiasDir == -1 ? 60.0 : oldBiasDir == 0 ? 30.0 : 10.0) +
+              (seqDir == -1 ? 25.0 : seqDir == 0 ? 0.0 : -25.0) - (sellHits * 8.0)));
+   buyEdge  = MathMax(0.0, MathMin(100.0,
+              (oldBiasDir == 1 ? 60.0 : oldBiasDir == 0 ? 30.0 : 10.0) +
+              (seqDir == 1 ? 25.0 : seqDir == 0 ? 0.0 : -25.0) - (buyHits * 8.0)));
+
+   // Block only on a MAJORITY (>=4/6) of concrete evidence AND a confirmed
+   // reclaim/sequence-flip specifically (never on momentum/room alone) --
+   // this is the exact combination present at posId 9483784022's entry.
+   if(dir == -1 && sellHits >= 4 && sellReclaimSeen)
+   {
+      blockReason = StringFormat(
+         "SELL blocked: %d/6 reversal signals (legDone=%s nearLow=%s reclaim=%s structBroke=%s roomAsym=%s momentumFading=%s)",
+         sellHits, sellLargeLegDone?"Y":"N", sellNearLow?"Y":"N", sellReclaimSeen?"Y":"N",
+         sellStructBroken?"Y":"N", sellRoomAsymmetric?"Y":"N", sellMomentumFading?"Y":"N");
+      return false;
+   }
+   if(dir == 1 && buyHits >= 4 && buyReclaimSeen)
+   {
+      blockReason = StringFormat(
+         "BUY blocked: %d/6 reversal signals (legDone=%s nearHigh=%s reclaim=%s structBroke=%s roomAsym=%s momentumFading=%s)",
+         buyHits, buyLargeLegDone?"Y":"N", buyNearHigh?"Y":"N", buyReclaimSeen?"Y":"N",
+         buyStructBroken?"Y":"N", buyRoomAsymmetric?"Y":"N", buyMomentumFading?"Y":"N");
+      return false;
+   }
+   return true;
+}
+
 //+------------------------------------------------------------------+
 //| CONTEXT GATE (v4.8.0) — HTF bias + Swing S/R proximity filter    |
 //| Blocks entries that fight H4 trend OR sit near a recent swing    |
@@ -5917,6 +6091,13 @@ bool ContextGateAllows(int signal, double atr)
       }
    }
 
+   // Note: the Exhaustion/Reversal guard (XAU_ExhaustionReversalGuard) is
+   // deliberately NOT called here. v6.17.21 forensic audit of live trades
+   // found OpenTrade() is also reached directly by
+   // XAU_CheckPendingOpportunityRecovery and XAU_TryForceOpenTrade, which
+   // never go through ContextGateAllows -- so the guard lives as a single
+   // backstop inside OpenTrade() itself instead, where every caller
+   // (this gate's normal path included) is guaranteed to pass through it.
    if(InpContextGateLog)
       Print("✅ CONTEXT-GATE PASS: ", signal==1?"BUY":"SELL",
             " cleared H4 bias + Swing-SR checks. Proceeding to OpenTrade.");
@@ -6514,6 +6695,15 @@ void OnTimer()
 bool RebuildEntryIndicatorHandles(string why)
 {
    g_lastIndicatorRebuildAt = TimeCurrent();
+   // v6.17.21: NONE -> non-NONE is the one true start of a recovery episode --
+   // fire the bookend event exactly once here, not on every backoff tick.
+   if(g_recoveryState == RECOVERY_NONE)
+   {
+      g_recoveryStartedAt = TimeCurrent();
+      Print("INDICATOR_RECOVERY_STARTED: ", why);
+   }
+   g_recoveryState        = RECOVERY_WARMUP;
+   g_recoveryLastStatusAt = TimeCurrent();
    Print("INDICATOR_REBUILD: rebuilding entry indicator handles because ", why);
 
    if(hEMAFast     != INVALID_HANDLE) IndicatorRelease(hEMAFast);
@@ -6635,6 +6825,22 @@ void XAU_LogScanAborted(string reason)
    XAU_LogScanState("SCAN_ABORTED reason=" + reason);
 }
 
+// v6.17.21: single exit point for the recovery state machine -- called from
+// both CopyEntryBuffer success paths below. Only the label that is actually
+// the current cause of the open recovery episode (g_recoveryLabel) can close
+// it; an unrelated label succeeding (which it always would -- only one
+// label is ever actually broken at a time) must not mask the real one.
+void XAU_RecoverySucceededIfMatch(string label)
+{
+   if(g_recoveryState == RECOVERY_NONE || label != g_recoveryLabel) return;
+   Print("INDICATOR_RECOVERY_SUCCEEDED: ", label, " healthy again after ",
+         (int)(TimeCurrent() - g_recoveryStartedAt), "s in recovery");
+   g_recoveryState     = RECOVERY_NONE;
+   g_recoveryLabel     = "";
+   g_recoveryStartedAt = 0;
+   g_recoveryRetryAt   = 0;
+}
+
 bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &target[], string label)
 {
    if(g_indicatorWarmupUntil > 0 && TimeCurrent() < g_indicatorWarmupUntil)
@@ -6657,6 +6863,7 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
          g_indicatorWarmupUntil = 0;
          Print("INDICATOR_RECOVERED: ", label, " copied OK before warm-up ceiling elapsed; scan resumes early.");
          XAU_ResetIndicatorFailStreak(label);
+         XAU_RecoverySucceededIfMatch(label);
          return true;
       }
       g_lastSkipReason = StringFormat("INDICATOR_WARMUP: waiting %ds after handle rebuild before copying %s",
@@ -6681,6 +6888,7 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
       // v6.17.7 FIX: reset only THIS label's streak on its own success -- a
       // different indicator's still-open streak (if any) is untouched.
       XAU_ResetIndicatorFailStreak(label);
+      XAU_RecoverySucceededIfMatch(label);
       return true;
    }
 
@@ -6769,8 +6977,15 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
       if(backoffSec < 15) backoffSec = 15;
       bool rebuildAllowed = (g_lastIndicatorRebuildAt <= 0 ||
                              TimeCurrent() - g_lastIndicatorRebuildAt >= backoffSec);
+      // v6.17.21: this is the ONLY place that discovers "we are inside an
+      // active backoff window" -- record it explicitly so OnTick can check
+      // it BEFORE attempting a scan, instead of rediscovering the same
+      // known-doomed outcome via a fresh CopyEntryBuffer call every tick.
+      g_recoveryLabel   = label;
+      g_recoveryRetryAt = g_lastIndicatorRebuildAt + backoffSec;
       if(!rebuildAllowed)
       {
+         g_recoveryState = RECOVERY_BACKOFF;
          g_lastSkipReason = StringFormat("INDICATOR_RECOVERY_BACKOFF: %s; retry rebuild in %ds",
                                          label, backoffSec - (int)(TimeCurrent() - g_lastIndicatorRebuildAt));
          if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
@@ -11685,6 +11900,39 @@ void OnTick()
    bool timerForced = g_timerForceScan;
    g_timerForceScan = false;
 
+   // v6.17.21 ROOT-CAUSE FIX: runtime-proven from the live journal --
+   // SCAN_STARTED/SCAN_ABORTED reason=INDICATOR_RECOVERY_BACKOFF alternated
+   // forever, once per tick, for the entire backoff window. Cause: the
+   // watchdog above keeps `watchdogDue` true on every tick once a scan is
+   // overdue (it can only clear on a scan that actually completes), so this
+   // function used to walk all the way down to SCAN_STARTED and a real
+   // CopyEntryBuffer(EMA_FAST_M5) attempt every single tick -- even though,
+   // by definition of being inside RECOVERY_BACKOFF, the outcome (fail,
+   // reason=INDICATOR_RECOVERY_BACKOFF) is already known before trying. That
+   // is also exactly what defeated XAU_LogScanState's dedup: it only
+   // collapses repeats of the SAME state, and SCAN_STARTED / SCAN_ABORTED are
+   // two DIFFERENT states ping-ponging every tick, so neither ever matched
+   // its own predecessor and both printed unthrottled.
+   // Fix: check the shared recovery state BEFORE any of that -- if we are
+   // provably still inside the backoff window, this is not a real scan
+   // attempt at all, so emit no SCAN_STARTED/SCAN_ABORTED pair and do not
+   // touch a single indicator handle; just resurface a rate-limited status
+   // line so a prolonged recovery stays visible. RECOVERY_WARMUP is
+   // deliberately NOT gated here -- CopyEntryBuffer's opportunistic early-
+   // copy during warmup is what lets most recoveries clear in 1-2 ticks
+   // instead of the full ceiling, and gating it would only slow that down.
+   if(g_recoveryState == RECOVERY_BACKOFF && TimeCurrent() < g_recoveryRetryAt)
+   {
+      if(TimeCurrent() - g_recoveryLastStatusAt >= 60)
+      {
+         Print("INDICATOR_RECOVERY_STATUS: ", g_recoveryLabel, " still recovering, elapsed ",
+               (int)(TimeCurrent() - g_recoveryStartedAt), "s, next rebuild retry in ",
+               (int)(g_recoveryRetryAt - TimeCurrent()), "s");
+         g_recoveryLastStatusAt = TimeCurrent();
+      }
+      return;
+   }
+
    if(!newM5Bar && !watchdogDue && !timerForced)
    {
       g_lastSkipReason = StringFormat("WAITING_FOR_NEW_M5_BAR: cur=%s last=%s sinceScan=%ds",
@@ -14570,6 +14818,45 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti)
                              true, false, false, 0, 0,
                              "OpenTrade reached; execution-layer gates are now checking risk, exposure, margin, and broker send.",
                              reason, 0.0);
+
+   // v6.17.21 — Execution-layer Exhaustion/Reversal backstop. Forensic audit
+   // of 2026-07-08's live log (8 primary entries) found the guard at
+   // ContextGateAllows() (called only from the normal fresh-scan path, line
+   // ~13733) never runs for XAU_CheckPendingOpportunityRecovery's or
+   // XAU_TryForceOpenTrade's calls into OpenTrade() -- exactly the paths
+   // behind posId 9477557258 (SELL "RECOVERY of missed signal", entered
+   // -$24 adverse in 1min, -$104 by 10min, closed -$153.18; its OWN original
+   // HARD_BLOCK said "gold already rejected the latest flush low, wait for
+   // fresh pullback" and was right) and posId 9482148224 (a similar
+   // recovery override that happened to win, but only after a -$144.82 paper
+   // drawdown). Same reasoning as the hedge backstop below: a gate that must
+   // hold for every caller belongs here, not duplicated at each call site.
+   {
+      double sellEdge, buyEdge, exhaustionRisk, reversalEvidence, chaseRisk;
+      string oldTrendBias, freshStructureBias, blockReason;
+      bool guardAllows = XAU_ExhaustionReversalGuard(signal, atr, sellEdge, buyEdge, exhaustionRisk,
+                                                      reversalEvidence, chaseRisk, oldTrendBias,
+                                                      freshStructureBias, blockReason);
+      string whyChosen = guardAllows
+         ? StringFormat("%s cleared: opposite side lacks a confirmed reversal majority", signal==1?"BUY":"SELL")
+         : "N/A — blocked, see reason";
+      string whyOppositeRejected = (signal == 1)
+         ? StringFormat("SELL not preferred: SELL_EDGE=%.0f vs BUY_EDGE=%.0f", sellEdge, buyEdge)
+         : StringFormat("BUY not preferred: BUY_EDGE=%.0f vs SELL_EDGE=%.0f", buyEdge, sellEdge);
+      PrintFormat("DIRECTION_QUALITY | dir=%s reason=%s | OldTrendBias=%s FreshStructureBias=%s | SELL_EDGE=%.0f BUY_EDGE=%.0f ExhaustionRisk=%.0f ReversalEvidence=%.0f ChaseRisk=%.0f | WhyChosenDirection=%s | WhyOppositeRejected=%s",
+                 signal==1?"BUY":"SELL", reason, oldTrendBias, freshStructureBias, sellEdge, buyEdge,
+                 exhaustionRisk, reversalEvidence, chaseRisk, whyChosen, whyOppositeRejected);
+      if(!guardAllows)
+      {
+         PrintFormat("⛔ OPEN TRADE BLOCKED (Exhaustion/Reversal backstop): %s | OldTrendBias=%s FreshStructureBias=%s | reason=%s",
+                     reason, oldTrendBias, freshStructureBias, blockReason);
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "ExhaustionReversalGate",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "EXHAUSTION_REVERSAL",
+                                   true, false, false, 0, 0, blockReason, reason, 0.0);
+         return false;
+      }
+   }
 
    // v5.8.6 — Execution-layer hedge backstop. The main signal path already
    // blocks this, but OpenTrade can also be reached by recovery/re-entry paths.
