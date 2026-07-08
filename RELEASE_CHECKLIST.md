@@ -14,6 +14,78 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.12 — 2026-07-08 — Scan Watchdog Timing Fix
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.12"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.12.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61712_final.log`)
+
+### Evidence
+A background direction-recognition-latency audit
+(`audits/xau_direction_recognition_latency_audit_2026-07-07_to_2026-07-08.md`) reconstructed 8
+executed trades and found the EA logs **zero `MARKET_SNAPSHOT`/`BLOCK_CHECK` events for the entire
+duration any position is open** — confirmed 8/8, zero exceptions, up to a 40-minute gap on one
+trade. This is what made a specific user-flagged trade (BUY at a local high → SL → SELL 92 seconds
+later) look like a "reverse after failure": the SELL was actually a fresh, independently-scored
+A-grade decision — the EA simply couldn't see the market reverse during the 40-minute BUY hold, and
+by the time it looked again the move was already largely finished.
+
+### Trace performed, and what it did and did not find
+Exhaustively traced the entire `OnTick()` pipeline from function start through
+`XAU_RecordMarketSnapshot()`: every `CountMyPositions()`-gated branch, `ManageBasket()`'s and
+`XAU_BasketLifecycleManager()`'s full return-statement semantics, the `newM5Bar` gate,
+`entryExecutionBlocked`'s only usage site, `IsXAUFastSymbol()`, `XAU_UpdateBlockedSignalOutcomes()`.
+**No single explicit "if a position is open, suppress all market evaluation" line was found** — the
+code's own comments explicitly document the opposite intent ("market analysis continues... fresh
+entries are blocked"). This is disclosed honestly rather than presented as a full root-cause fix.
+
+What **was** found and fixed, independently valuable regardless of the exact stall trigger: the
+scan-recovery watchdog (`InpScanWatchdogMin`, meant to force a fresh scan if none has completed in N
+minutes) was stamping its own timing anchor (`g_lastEntryScanAt`) **before** the scan pipeline even
+reaches `ScoreSetups()`/grade computation/Personality Gate/SmartGuard/`XAU_RecordMarketSnapshot()` —
+meaning any early return anywhere in that ~450-line span was invisible to the watchdog, since the
+anchor had already advanced. This explains why `InpScanWatchdogMin=7` (minutes) did not recover from
+the observed 40-minute gap: the watchdog believed scans were succeeding the whole time. Moved the
+stamp to immediately after `XAU_RecordMarketSnapshot()` completes, so the watchdog now measures
+actual scan completion — this is a safety net that forces recovery within 7 minutes of ANY silent
+early return in that span, independent of which specific line causes it.
+
+### Not done in this release (explicitly scoped out, not silently dropped)
+The user separately asked for a much larger feature: lightweight closed-bar market/thesis
+evaluation *while a position remains open* (thesis-still-valid check, opposite-structure detection,
+exit-warning/reverse-preparation logic, runner-continuation logic), plus a review of why the SELL
+leg of the flagged trade was closed for +$35 via `PROFIT_FLOOR` while price ran another $314/8.98
+ATR in its favor within the hour. The profit-floor exit is the same `XAU_ProtectPeakProfitFloor`
+mechanism already touched in v6.17.6/6.17.7 this release cycle, and matches the "cuts winners too
+early" pattern already documented in the original counterfactual audit — a tuning/design question,
+not a discrete bug, that needs its own evidence-based pass rather than a rushed change appended
+here. Both are real, well-scoped follow-ups, not abandoned.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v61712_scan_watchdog_timing_static.py` — 8/8 passing, confirms the
+      watchdog stamp moved to after `XAU_RecordMarketSnapshot()`, the old premature stamp location
+      is gone, `g_lastEntryBarSeen` tracking is untouched, and the watchdog input/bypass logic is
+      unchanged
+- [x] Full suite: 364/421 passing, remaining failures are pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.12.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NEEDS OBSERVATION — watch the journal for whether `MARKET_SNAPSHOT`/`BLOCK_CHECK`
+  events now appear during position holds (if the watchdog fires, a `⚠ SCAN WATCHDOG: forcing entry
+  scan` line will show why); this is a safety-net fix for a confirmed symptom, not a proven root
+  cause, so continued observation matters more than usual for this release
+
+---
+
 ## v6.17.11 — 2026-07-08 — AI Advisory-Only Architecture
 
 ### EA Compile
