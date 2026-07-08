@@ -34,7 +34,7 @@ export default function CloudLanding() {
             <XauAiLogo size={32} className="flex-none" />
             <span className="min-w-0">
               <span className="block truncate text-[15px] font-semibold">XAU AI Sniper Command Center</span>
-              <span className="block truncate font-mono text-[9px] uppercase tracking-[0.22em] text-white/35">v6.17.8 · TREND_PULLBACK Deadlock Fix</span>
+              <span className="block truncate font-mono text-[9px] uppercase tracking-[0.22em] text-white/35">v6.17.9 · Symmetric Opportunity Recheck</span>
             </span>
           </Link>
           <div className="flex items-center gap-2">
@@ -49,7 +49,7 @@ export default function CloudLanding() {
         <section className="mx-auto grid max-w-7xl gap-10 px-4 py-12 md:px-8 md:py-16 lg:grid-cols-2 lg:items-center">
           <div>
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-300" data-testid="hero-badge">
-              <RadioTower className="h-3 w-3" /> Live bot monitor · v6.17.8
+              <RadioTower className="h-3 w-3" /> Live bot monitor · v6.17.9
             </div>
             <h1 className="max-w-2xl font-heading text-4xl font-semibold leading-[1.08] tracking-tight sm:text-5xl lg:text-6xl" data-testid="hero-title">
               Monitor and control your gold bot from anywhere.
@@ -136,7 +136,7 @@ export default function CloudLanding() {
               <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-200 mb-2">How it works</div>
               <h2 className="text-2xl font-semibold tracking-tight mb-5">Buy, install, activate, monitor.</h2>
               <div className="space-y-2.5">
-                {["Buy a license and download the EA v6.17.8", "Install it on MT5 or your VPS, add your PIN", "Open /command — see heartbeat, AI decisions, trades, blocks, and errors"].map((step, i) => (
+                {["Buy a license and download the EA v6.17.9", "Install it on MT5 or your VPS, add your PIN", "Open /command — see heartbeat, AI decisions, trades, blocks, and errors"].map((step, i) => (
                   <div key={step} className="flex items-center gap-3 rounded-xl bg-black/[0.18] px-3 py-3">
                     <span className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-emerald-400 font-mono text-[11px] font-black text-black">{i + 1}</span>
                     <span className="text-[13px] text-white/75">{step}</span>

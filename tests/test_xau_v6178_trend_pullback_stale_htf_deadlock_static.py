@@ -45,8 +45,10 @@ def test_trend_pullback_defers_to_fresh_m15_m30_when_active_direction_neutral():
     ea = read(BACKEND_EA)
     marker = "int dir;\n      if(g_activeDirection == DIRECTION_SELL_ONLY)      dir = -1;"
     idx = ea.index(marker)
-    window = ea[idx: idx + 2500]
-    assert "if(g_activeDirection == DIRECTION_BOTH_ALLOWED)" in window
+    # v6.17.9 widened this window: the override was extended to also apply
+    # during TRANSITION_WAIT (Case C), not just BOTH_ALLOWED.
+    window = ea[idx: idx + 2900]
+    assert "if(g_activeDirection == DIRECTION_BOTH_ALLOWED || g_activeDirection == DIRECTION_TRANSITION_WAIT)" in window
     assert 'TFDirectionByEMA(dir, PERIOD_M15, 0.05, freshWhyM15)' in window
     assert 'TFDirectionByEMA(dir, InpContextTF, 0.05, freshWhyM30)' in window
     assert "if(freshM15Dir == -dir && freshM30Dir == -dir)" in window
@@ -57,7 +59,7 @@ def test_override_requires_both_m15_and_m30_to_disagree_not_just_one():
     # A single noisy timeframe must not flip the candidate -- both fast reads
     # must independently confirm the opposite direction.
     ea = read(BACKEND_EA)
-    marker = "if(g_activeDirection == DIRECTION_BOTH_ALLOWED)\n      {\n         string freshWhyM15"
+    marker = "if(g_activeDirection == DIRECTION_BOTH_ALLOWED || g_activeDirection == DIRECTION_TRANSITION_WAIT)\n      {\n         string freshWhyM15"
     assert marker in ea
     idx = ea.index(marker)
     window = ea[idx: idx + 600]
@@ -68,38 +70,39 @@ def test_override_requires_both_m15_and_m30_to_disagree_not_just_one():
 def test_override_only_applies_when_active_direction_is_neutral():
     # If Active Direction has already made a STRONG/MEDIUM call (SELL_ONLY/
     # BUY_ONLY), that call must NOT be second-guessed by this override --
-    # only the genuinely undecided BOTH_ALLOWED case triggers it.
+    # only the genuinely undecided BOTH_ALLOWED/TRANSITION_WAIT cases trigger it.
     ea = read(BACKEND_EA)
     marker = "if(g_activeDirection == DIRECTION_SELL_ONLY)      dir = -1;"
     idx = ea.index(marker)
-    window = ea[idx: idx + 2400]
-    override_idx = window.index("if(g_activeDirection == DIRECTION_BOTH_ALLOWED)")
+    window = ea[idx: idx + 2900]
+    override_idx = window.index("if(g_activeDirection == DIRECTION_BOTH_ALLOWED || g_activeDirection == DIRECTION_TRANSITION_WAIT)")
     # The override check must come AFTER the SELL_ONLY/BUY_ONLY branches, and
     # be a separate, narrower condition -- not replacing them.
     assert window.index("dir = -1;") < override_idx
     assert window.index("dir = 1;") < override_idx
 
 
-def test_missed_symmetric_opportunity_telemetry_present():
+def test_missed_symmetric_opportunity_telemetry_superseded_by_full_recheck():
+    # v6.17.9 upgraded this from a diagnostic-only YES/NO flag into a full,
+    # ACTIVE Symmetric Opportunity Recheck (see
+    # test_xau_v6179_symmetric_opportunity_recheck_static.py) -- the simple
+    # MissedSymmetricOpportunity=YES/NO strings no longer exist by design,
+    # replaced by the richer SYMMETRIC_OPPORTUNITY_RECHECK telemetry line.
     ea = read(BACKEND_EA)
-    assert "MissedSymmetricOpportunity=YES" in ea
-    assert "MissedSymmetricOpportunity=NO" in ea
-    marker = "double oppLot = 1.0; string oppWhy = \"\";"
-    idx = ea.index(marker)
-    window = ea[idx: idx + 400]
-    assert "AdaptiveXAUConfirm(-signal," in window
+    assert "MissedSymmetricOpportunity" not in ea
+    assert "SYMMETRIC_OPPORTUNITY_RECHECK" in ea
 
 
 def test_smart_guard_hard_block_return_still_present():
-    # The telemetry addition must not have removed the actual hard block --
-    # SmartGuard must still return when neither the original nor the
-    # symmetric check passes.
+    # The v6.17.9 Symmetric Opportunity Recheck must not have removed the
+    # actual hard block -- SmartGuard must still return when neither the
+    # original nor the opposite-direction retry passes.
     ea = read(BACKEND_EA)
-    marker = "MissedSymmetricOpportunity=NO"
+    marker = 'sgMsg += " | " + symMsg;'
     idx = ea.index(marker)
-    window = ea[idx: idx + 550]
+    window = ea[idx: idx + 560]
     assert 'Print("TRADE BLOCKED BECAUSE: ", sgMsg);' in window
-    assert "return;" in window or "return\n" in window
+    assert "return;" in window
 
 
 def test_prior_session_fixes_still_intact():

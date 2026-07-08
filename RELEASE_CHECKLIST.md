@@ -14,6 +14,81 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.9 — 2026-07-08 — Symmetric Opportunity Recheck
+
+### EA Compile
+- [x] EA internal version: `#property version "6.179"`, header banner updated
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.9.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6179_final2.log`)
+
+### What changed
+User's explicit complaint: a candidate proposed in one direction gets blocked at SmartGuard
+because fast timeframes disagree, and the EA just ends the cycle instead of checking whether the
+OPPOSITE direction has real evidence right now. v6.17.8 only fixed this for one setup
+(TREND_PULLBACK) at the direction-selection step. This release adds a general, cross-setup
+mechanism:
+
+1. **`ScoreSetups()` gained an `excludeDir` parameter.** All 10 bestScore commit points (9 setups,
+   RANGE_REVERSAL has 2 branches) now skip any candidate whose direction equals `excludeDir`. This
+   lets the recheck ask "what is the best candidate in the OTHER direction only" honestly — it
+   returns 0 if no real evidence exists on that side, nothing is fabricated.
+2. **Symmetric Opportunity Recheck at the SmartGuard block site.** When a candidate dies at
+   SmartGuard (and Active Direction doesn't explicitly forbid the opposite side — respects
+   BUY_ONLY/SELL_ONLY/TRANSITION_WAIT's weakening-side rule exactly as the existing Direction
+   Engine gate does), it now calls `ScoreSetups(excludeDir=original)`, computes a real grade for
+   whatever it finds via a newly extracted `XAU_ComputeCombinedGradeForCandidate()` (same formula:
+   floor, regime-direction bonus, HTF-consensus bonus, accelerated-learning adjust, grade
+   thresholds — not an approximation), re-checks personality fit, re-runs the SMC hard-structural-
+   conflict check (`SMC_GetScoreBonus`/`SMC_GetConflictPenalty` — see self-review note below), and
+   re-runs `AdaptiveXAUConfirm` for the opposite direction. Only if ALL of that passes does it swap
+   in the new candidate and fall through to the rest of the pipeline (AI, memory, news, risk
+   reconciliation, OpenTrade) — never opens both directions, this REPLACES the dead candidate.
+3. **TREND_PULLBACK's fresh-M15/M30 override (v6.17.8) extended to TRANSITION_WAIT**, not just
+   BOTH_ALLOWED — TRANSITION_WAIT is supposed to actively search both directions, not freeze.
+4. **RANGE_REVERSAL's BUY and SELL branches got the same fresh-M15/M30-vs-stale-htfTrendDir fix**
+   TREND_PULLBACK got in v6.17.8.
+5. **Full telemetry**: every recheck logs `SYMMETRIC_OPPORTUNITY_RECHECK | OriginalCandidateDirection
+   | OriginalBlocker | OppositeRecheckTriggered | OppositeCandidateFound | OppositeCandidateStrategy
+   | OppositeCandidateScore | OppositeFinalDecision | OppositeFinalBlocker`.
+
+### Self-review finding (caught before shipping, not after)
+First implementation swapped in the opposite candidate and fell through, but a careful trace of
+what runs between `ScoreSetups()` and the SmartGuard block in the existing pipeline found the SMC
+hard-structural-conflict check (`SMC_GetScoreBonus`/`SMC_GetConflictPenalty`, which downgrades
+grade straight to SKIP on a real structural conflict) only ran ONCE, earlier in the cycle, for the
+ORIGINAL direction — the retry candidate would have silently bypassed it entirely. Fixed by
+re-running the same SMC check for the opposite direction before allowing the swap.
+
+**Known, disclosed scope limit**: three narrower, B-grade-specific quality checks further down the
+original pipeline (`ApplyAntiBiasCorrection`, the FIX-C regime-based B-grade demotion, and the
+DAMAGE-B-QUALITY setup-name check) are NOT re-run for the retry candidate. These only apply when
+the retry candidate's grade is B (never A/A+), and are quality refinements, not hard structural
+safety gates — SmartGuard, Active Direction, and the SMC hard-conflict check (the actual hard
+gates) are all preserved. Flagged as a well-scoped follow-up if full fidelity is wanted.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v6179_symmetric_opportunity_recheck_static.py` — 15/15 passing
+- [x] Updated `tests/test_xau_v6178_trend_pullback_stale_htf_deadlock_static.py` and
+      `tests/test_xau_v6170_stale_htf_direction_fix_static.py` for the TRANSITION_WAIT extension
+      and RANGE_REVERSAL fresh-read override
+- [x] Full suite: 334/382 passing, remaining failures are pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.9.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NEEDS OBSERVATION — new control-flow path (candidate swap mid-function); watch
+  the journal for `SYMMETRIC_OPPORTUNITY_RECHECK` lines and confirm a swapped-in trade executes
+  cleanly end to end before fully trusting it unattended
+
+---
+
 ## v6.17.8 — 2026-07-08 — Fix: TREND_PULLBACK stale-HTF ~24h deadlock
 
 ### EA Compile

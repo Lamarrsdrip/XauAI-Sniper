@@ -57,7 +57,7 @@ def test_range_reversal_both_branches_respect_active_direction():
     ea = read(BACKEND_EA)
     marker = "// === SETUP 2: RANGE REVERSAL ==="
     idx = ea.index(marker)
-    window = ea[idx: idx + 2000]
+    window = ea[idx: idx + 2800]
     assert "rangeRevBuyDirConfirmed" in window
     assert "rangeRevSellDirConfirmed" in window
 
