@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.17.7";
-  const edition  = info?.edition  || "SURGICAL CORRECTNESS REPAIR";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.7.mq5";
+  const version  = info?.version  || "v6.17.8";
+  const edition  = info?.edition  || "TREND_PULLBACK DEADLOCK FIX";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.17.8.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.17.7.</span> Independent static-audit fixes: several internal readings (momentum, breakout confirmation, trend strength) were quietly using the wrong bar or a mis-scaled formula, one gate could hard-block a good setup it was meant to only warn on, and trade-state bookkeeping could get consumed even when an order never actually filled. All confirmed with real code paths and fixed without loosening any risk or entry threshold.
+              <span className="font-semibold text-amber-200">Gold-only v6.17.8.</span> Runtime-proven fix for a real ~24h no-trade stretch: one setup kept proposing a losing-cause direction from a slow trend reading while the fast, current readings its own quality gate checks had already turned the other way — so it died the same way, every cycle, for hours. It now defers to the fast readings when the direction isn't otherwise decided.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">

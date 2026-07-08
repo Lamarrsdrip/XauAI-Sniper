@@ -14,6 +14,65 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.8 — 2026-07-08 — Fix: TREND_PULLBACK stale-HTF ~24h deadlock
+
+### EA Compile
+- [x] EA internal version: `#property version "6.178"`, header banner updated
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.8.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6178_final.log`)
+
+### Root cause (proven from the live MT5 journal, v6.17.7, 2026-07-08 00:50-03:45)
+Gold moved 4145 -> 4097 -> 4120 and the bot did not trade for ~24 hours. Command Center showed a
+repeating pattern: TREND_PULLBACK proposes BUY, SmartGuard blocks it because "multiple fast TFs
+against BUY" (fastScore 0-20/85, required 50), same result every 5-10 minutes for hours (00:50,
+01:20, 01:30, 01:35, 01:45, 03:00, 03:10, 03:20, 03:25, 03:35, 03:40, 03:45 all logged this exact
+block). Active Direction was `DIRECTION_BOTH_ALLOWED` at every one of these timestamps — neither
+direction was structurally forced.
+
+Traced to two DIFFERENT measures of "trend direction" disagreeing for hours: `htfBullConsensus`
+(`h1TrendDir`/`htfTrendDir`, an EMA-vs-EMA CROSS measure — slow, lagging) stayed bullish, while
+SmartGuard's own `AdaptiveXAUConfirm`/`TFDirectionByEMA` (a PRICE-vs-single-EMA measure — fast,
+current) showed M15/M30/H1 all reading bearish. TREND_PULLBACK's direction fallback trusted the
+slow measure whenever Active Direction was neutral, so it proposed the same doomed BUY candidate
+every single cycle — a real, observed, hours-long propose-then-block deadlock, not correct
+selectivity.
+
+### Fix
+When Active Direction is `DIRECTION_BOTH_ALLOWED` (genuinely undecided) and `htfBullConsensus`/
+`htfBearConsensus` picked TREND_PULLBACK's candidate direction, check the same fast M15+M30
+price-position reads SmartGuard is about to check anyway. If BOTH independently disagree with the
+picked direction, defer to them instead — consistent with this codebase's own stated design
+("M5/M15/M30 carry the hard decision; H1 is soft context", per `TFDirectionByEMA`'s own comment).
+Requires BOTH M15 and M30 to agree (not just one) to avoid flipping on single-timeframe noise.
+Does not touch SmartGuard, does not touch Adaptive Direction's STRONG/MEDIUM/WEAK tiers, does not
+let A/A+ bypass any hard structural contradiction, does not force trades — it only stops candidate
+*generation* from repeatedly proposing a direction that's about to fail its own downstream check for
+reasons the setup already had the information to see.
+
+Also added `MissedSymmetricOpportunity=YES/NO` telemetry at the SmartGuard block site (checks
+whether the opposite direction would have passed the same fast-TF confirmation right now) — covers
+every other setup too and gives direct runtime evidence of whether this fix is sufficient.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v6178_trend_pullback_stale_htf_deadlock_static.py` — 9/9 passing
+- [x] Full suite: 322/367 passing, same class of pre-existing release-time sync staleness
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.8.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NO — needs a clean observation window confirming the deadlock is actually broken
+  (a SELL candidate reaching execution during a BOTH_ALLOWED + fast-TF-bearish stretch) before
+  trusting it live
+
+---
+
 ## v6.17.7 — 2026-07-07 — Surgical correctness repair (9 independently-verified static-audit items)
 
 ### EA Compile
