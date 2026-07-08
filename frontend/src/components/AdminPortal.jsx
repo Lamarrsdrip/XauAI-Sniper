@@ -124,7 +124,7 @@ export default function AdminPortal({ api }) {
               <span className="font-mono text-[10px] font-black text-black">XA</span>
             </div>
             <span className="text-[14px] font-semibold">XauAI Sniper</span>
-            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.17.17</span>
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.17.18</span>
           </div>
           <div className="flex items-center gap-4">
             <span className="hidden text-[11px] text-white/35 sm:block">{admin.email}</span>
@@ -196,7 +196,7 @@ function LoginPage({ api, onLogin }) {
             <span className="font-mono text-base font-black text-black">XA</span>
           </div>
           <h1 className="text-2xl font-semibold text-white">XauAI Admin</h1>
-          <p className="mt-1 text-[13px] text-white/38">v6.17.17 management portal</p>
+          <p className="mt-1 text-[13px] text-white/38">v6.17.18 management portal</p>
         </div>
 
         <form onSubmit={handleSubmit} className={`${CARD} p-6 space-y-4`}>
@@ -816,7 +816,7 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
             <div>
               <div className="text-[14px] font-semibold">{admin?.name || "Admin"}</div>
               <div className="text-[12px] text-white/40">{admin?.email}</div>
-              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.17.17</div>
+              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.17.18</div>
             </div>
           </div>
 

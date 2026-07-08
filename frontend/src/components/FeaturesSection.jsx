@@ -13,11 +13,11 @@ const CARDS = [
   {
     icon: ChartLine,
     title: "Trade Thesis Monitor",
-    body: "Every open trade is scored live against the exact reason it was entered — BOS direction, HTF trend, momentum, and structure. When the thesis dies the bot exits immediately, not when a timer runs out.",
+    body: "Every open trade is scored live against the exact reason it was entered — BOS direction, HTF trend, momentum, and structure. When the thesis dies the bot exits immediately, not when a timer runs out. Winners aren't locked to a flat percentage of peak the moment they arm — a still-clean thesis gets room to breathe.",
     tone: "text-amber-300",
     border: "border-amber-300/20",
     glow: "bg-amber-300/[0.07]",
-    badge: "NEW v6.17.17",
+    badge: "NEW v6.17.18",
   },
   {
     icon: Funnel,

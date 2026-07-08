@@ -14,6 +14,115 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.17.18 — 2026-07-08 — Profit Quality Exit Gate + Scan Warm-up Fix
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.17.18"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.17.18.mq5`
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v61718_final.log`)
+
+### Evidence — the exact follow-up v6.17.12 flagged and deferred
+v6.17.12 explicitly scoped this out: *"a review of why the SELL leg of the flagged trade was closed
+for +$35 via PROFIT_FLOOR while price ran another $314/8.98 ATR in its favor... matches the 'cuts
+winners too early' pattern... a tuning/design question, not a discrete bug, that needs its own
+evidence-based pass."* User re-raised it directly after the lot-size increase, with an explicit
+instruction: do not shrink the lot, do not add fear rules, fix exit intelligence.
+
+Pulled real trade data straight from `XAUAI_TradingIntelligence_XAUUSD.jsonl` (UTF-16, Common\Files)
+for the 48 closes 2026-07-02 → 2026-07-08 (the bigger-lot window, avg lots ~0.17-0.20 vs ~0.05 in
+mid-June): **15 of 35 winners (43%) were self-tagged `EXIT_EARLY_LEFT_PROFIT`** by the EA's own
+post-close 5/10/15/30/60-minute tracker. Breakdown of those 15 by exit tag: **7 `SL_MOD:PROFIT_FLOOR`**
+(dominant), 4 `SL_MOD:EV_PROTECT`, 1 `SL_MOD:AMPL`, 2 `BASKET HARD-CAP`/`BASKET LOCK` (giveback 71-96%
+of peak in those two). Concrete example: posId `9471531961` SELL 0.07 lots closed at $187.46 profit
+via `SL_MOD:PROFIT_FLOOR`, flagged `EXIT_EARLY_LEFT_PROFIT` at every checkpoint out to 15m.
+
+### Root cause
+`XAU_ProtectPeakProfitFloor()`: once peak crossed the arm threshold, the floor SL jumped straight to
+a flat `lockPct%` of peak (45% default, context-adjusted 45-70%) **unconditionally**. The
+thesis/structure-still-valid check (`thesisHoldAllowed`) only gated the *full close* path further
+down the function — it was never consulted before the SL-tightening step itself. So a clean runner
+with fully intact structure got its stop yanked to a flat percentage the instant it armed, and any
+ordinary pullback (not a real reversal) then stopped it out right before the move it was in
+continued — exactly the pattern the telemetry shows.
+
+### Fix — profit-quality gate on the LOCK itself, not just the close
+New `XAU_AssessProfitQuality()` / `XAU_ProfitQuality` struct, called before any SL-tightening or
+close decision in `XAU_ProtectPeakProfitFloor()`:
+- **HOLD** — profit is tiny (< `InpProfitQualityMinR`=0.80R) or spread-dominated (spread cost ≥
+  `InpProfitQualitySpreadImpactPct`=30% of current floating profit) while thesis/structure/momentum
+  are still fully clean, and it isn't yet a big win → skip tightening entirely this tick. New
+  `PROFIT_QUALITY_HOLD` telemetry line.
+- **PROTECT_WIDE** — profit is meaningful (≥ 0.80R) but not yet huge (< `InpProfitQualityBigWinRMultiple`=2.50R),
+  thesis still clean, context is `STRONG_TREND`/`NORMAL_PULLBACK` (never overrides the deliberately
+  tighter `EXPLOSIVE_MOVE`/`TREND_EXHAUSTION`/`WEAK_TRADE` contexts) → loosen the lock to
+  `InpProfitQualityRunnerLockPct`=22% of peak instead of the base 45%, so a normal pullback doesn't
+  trip the stop. New `PROFIT_QUALITY_WIDEN` telemetry line.
+- **PROTECT_TIGHT** — thesis has actually weakened (structure broken / momentum ≤2 / trend
+  misaligned) or the win is already large (≥ 2.50R) → unchanged, keeps the existing tighter
+  context-based lock and full-close safety logic exactly as before.
+
+Lot sizing is untouched everywhere — this only changes when/how tightly the protective SL ratchets.
+No new entry-side blocking/"fear" rules were added; this is exit-side only.
+
+### Telemetry
+`XAU_ProfitQualityTelemetry()` reports `NetProfitAfterCosts`, `ProfitR`, `ProfitATR`, `PeakProfit`,
+`GivebackPct`, `SpreadCostImpact`, `ThesisStillValid` (YES/NO), `ExitStrength` (0-5), `Decision`
+(HOLD/PROTECT_WIDE/PROTECT_TIGHT), `CloseKind` (HOLD/PROTECT/FULL_CLOSE), `WouldRunnerRemain`
+(YES/NO) — wired into the `PROFIT_QUALITY_HOLD`/`PROFIT_QUALITY_WIDEN`/`PROFIT_FLOOR_SET` journal
+lines and into `lastExitReason` on the full-close path, so it flows into the existing
+`exitReason`/`CloseReasonExact`/`extra` fields already wired into
+`XAU_IntelAppendJson`/`XAU_IntelAppend` (JSONL/CSV) without touching that 30+-parameter writer's
+signature or its many call sites.
+
+### Scan warm-up noise + speed fix (separate, smaller issue raised in the same session)
+User-reported live log: `SCAN_ABORTED reason=INDICATOR_WARMUP: waiting 7s after handle rebuild
+before copying EMA_FAST_M5` — noisy, and signal confirmation that used to land right at the exact
+5-minute bar close was arriving late. Two confirmed bugs:
+1. `XAU_LogScanState`'s dedup compared the raw state string, but the warmup reason embeds a live
+   countdown ("waiting 7s", "waiting 6s", ...) that changes every tick — every tick looked like a
+   NEW state and bypassed the intended 60s-resurface throttle, printing a fresh `SCAN_ABORTED` line
+   every tick for the whole warm-up window. Fixed with a digit-collapsed dedup key
+   (`XAU_ScanStateKey`) while keeping the original exact-match check as an explicit (redundant but
+   harmless) fast-path.
+2. `CopyEntryBuffer()` blind-waited the full `InpIndicatorWarmupSec` ceiling (12s default) before
+   even attempting a copy after a handle rebuild, even though MT5 usually finishes recalculating a
+   freshly-rebuilt M5 EMA/RSI/ATR handle within a tick or two. Fixed to try the copy opportunistically
+   first, only falling back to the timed wait if the data genuinely isn't ready yet.
+
+### Testing
+- [x] Full recompile — 0 errors, 0 warnings
+- [x] New `tests/test_xau_v61718_profit_quality_exit_gate_static.py` — 18/18 passing (input defaults,
+      decision-matrix ordering, HOLD returns before any SL tightening, WIDEN only applies to clean
+      continuation contexts, gate runs before context classification, full-close thesis-hold path
+      unchanged, telemetry fields present and wired in, scan-dedup key, opportunistic-copy ordering,
+      prior fixes still intact, no new entry-side restrictive defaults)
+- [x] Updated `tests/test_xau_v6171_indicator_handle_lifecycle_fix_static.py` (1 test) for the new
+      earlier opportunistic-copy success path — same invariant (success returns before fail-counter
+      logic) now verified on both the early and main copy attempts
+- [x] Full suite: 439/514 passing, remaining 75 failures are the same pre-existing release-time
+      sync-staleness pattern as every prior release (verified via before/after diff against the
+      pre-change baseline — 87 failed on HEAD before this change, 75 after; zero new failure classes)
+
+### File Distribution
+- [x] MT5 Experts + `/Applications`: `XAUUSD_AI_Sniper_EA_v6.17.18.mq5` + `.ex5`
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, header banner updated
+- [x] Frontend version strings (Footer, CloudLanding, AdminPortal, DownloadSection, FeaturesSection)
+- [ ] GitHub main branch pushed
+
+### Sign-off
+- Compile verified: YES — 0 errors, 0 warnings
+- Safe for demo: YES
+- Safe for live: NEEDS OBSERVATION — this changes real exit timing on profitable trades. Watch for
+  `PROFIT_QUALITY_HOLD`/`PROFIT_QUALITY_WIDEN` journal lines and confirm: (a) HOLD trades that later
+  reverse to a loss are rare and small (thesis-still-valid trades that round-trip are still covered
+  by the existing `THESIS_HOLD_BE_REARM` breakeven re-arm, untouched by this change), and (b) WIDEN
+  trades that do eventually stop out are closing at a genuinely later/larger point than the old 45%
+  lock would have, not just later for its own sake. Re-run the same `EXIT_EARLY_LEFT_PROFIT` audit
+  against 07-09+ telemetry once enough new-code trades have closed to compare against this release's
+  43% baseline.
+
+---
+
 ## v6.17.17 — 2026-07-08 — Account-Size Lot Floor
 
 ### EA Compile

@@ -71,10 +71,21 @@ def test_valid_handle_returns_true_immediately_without_touching_fail_state():
     fn = body(ea, "bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &target[], string label)")
     # A successful CopyBuffer must return true before any fail-counter logic runs
     # (and, per v6.17.7, resets only THIS label's own streak on success).
-    ok_idx = fn.index("if(got >= count)")
-    reset_idx = fn.index("XAU_ResetIndicatorFailStreak(label);")
+    # v6.17.18 added a second, EARLIER opportunistic-copy success path (tried
+    # during the post-rebuild warm-up window, before blind-waiting the full
+    # ceiling) that mirrors the exact same invariant on its own success --
+    # anchor on the main (post-warmup) "int got = CopyBuffer(...)" success
+    # block specifically, since it's still the one that precedes the
+    # fail-counter logic below it.
+    main_copy_idx = fn.index("int got = CopyBuffer(handle, buffer, start, count, target);")
+    ok_idx = fn.index("if(got >= count)", main_copy_idx)
+    reset_idx = fn.index("XAU_ResetIndicatorFailStreak(label);", ok_idx)
     fail_idx = fn.index("g_indFailCounts[failIdx]++;")
-    assert ok_idx < reset_idx < fail_idx
+    assert main_copy_idx < ok_idx < reset_idx < fail_idx
+    # The new early-opportunistic path must satisfy the identical invariant.
+    early_ok_idx = fn.index("if(gotEarly >= count)")
+    early_reset_idx = fn.index("XAU_ResetIndicatorFailStreak(label);", early_ok_idx)
+    assert early_ok_idx < early_reset_idx < main_copy_idx
 
 
 def test_transient_failure_does_not_immediately_force_rebuild():
