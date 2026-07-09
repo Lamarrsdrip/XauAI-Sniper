@@ -14,6 +14,62 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.18.1 — 2026-07-09 — Growth Engine: Exit-Arm + Pyramid Margin Safety
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.18.1"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.18.1.mq5`
+- [x] Top-of-file header banner updated (single physical line)
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6181_final2.log`)
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` byte-synced to canonical source
+- [x] `frontend/src/components/DownloadSection.jsx` fallback version/edition/filename strings updated
+- [x] `backend/server.py` `TradeMemoryRecord.ea_version` default updated
+- [x] Static test added: `tests/test_xau_v6181_exit_arm_pyramid_margin_static.py` (7 tests, all passing)
+
+### Items 4 and 5 of the v6.18.0 forensic audit's phased plan
+
+**Item 4 (exit-arm):** `XAU_ProtectPeakProfitFloor()`'s arm threshold used `InpProtectedPeakMinUSD *
+AccountSizeRiskMultiplier()` — that multiplier was retired from lot sizing in v6.18.0 but was still
+silently shaping this threshold via its old 0.75x–1.35x equity-tier steps. Replaced with
+`MathMax(InpProtectedPeakMinUSD, balance * InpProtectedPeakEquityPct / 100)` — new input
+`InpProtectedPeakEquityPct=2.5`, chosen to exactly reproduce the validated $75-at-$3k real-account
+behavior (`audits/xau_growth_engine_forensic_audit_2026-05-15_to_2026-07-08.md` §2.4) while scaling
+consistently at every other size. On investigation, the A+ Shield tiers (`InpAPlusShieldEquityPct`/
+`InpAPlusShieldProtectEquityPct`) and the `InpAutoScale` legacy exit path turned out to already be
+correctly account-relative — no change needed there; the original Phase 1 report's characterization
+of them as broken/orphaned did not survive full reading of the code.
+
+**Item 5 (pyramid):** Found and fixed a live, current gap while implementing this: `CheckPyramidOpportunity()`'s
+add-sizing block skipped `EffectiveSingleRiskCapPct()`/`EffectiveAggregateRiskCapPct()` entirely
+whenever `InpLotSizingMode == JUNE_16_19_BALANCE_MODE` — since that input still defaults to that
+value, every pyramid add was bypassing both risk caps, unconditionally, live. This is the direct
+mechanism behind the real 2026-06-17 loss cluster (posIds 57115047149/57115451390: ~112 lots across
+3 legs on one BUY thesis, one 12.17-lot leg added at 4331.38 — below the base entries at
+4343.10/4344.84, into an already-adverse move). Fix: risk caps now apply to every pyramid add, every
+mode. Added a real-time **PYRAMID MARGIN PROJECTION** check (same 50%/80%-of-free-margin standard
+`OpenTrade()` already uses) as the actual backstop against over-stacking, per Fable 5 risk-advisor
+review (2026-07-09): a %-scaled add-count curve "cannot fix a size granularity problem." Also
+replaced `EffectiveMaxPyramidAdds()`'s hard equity≥$25k/$50k cutoffs with a trend-evidence-only curve
+(same math at every account size) — corrected on closer reading: the original cutoffs only granted
+*extra* adds above the `InpMaxPyramidAdds=3` base, not a hard cap-at-1 as the Phase 1 report implied.
+
+**Also fixed:** `GROWTH_HARD_LOSS_CAP_JUNE_ADJUST` (an exit-side compensator) was gated on
+`InpLotSizingMode==JUNE_16_19_BALANCE_MODE`; since lot sizing is always real-SL-risk-derived now, made
+it unconditional instead of silently not applying to half of live traffic.
+
+**Documentation only, no behavior change:** added ROLE NOTE comments to `XAU_ClassifySetup`,
+`XAU_TimingEngineConfirmsEntry`, and `XAUEntryTimingGuard` — investigation (item 2 of the phased plan)
+found these are three distinct, non-overlapping authorities (setup/evidence classification,
+confirmation timing, anti-chase/location quality), not duplicates as the original Phase 1 report's
+quick read suggested. No merge performed.
+
+**Explicitly skipped (item 3):** SMART-GUARD/Personality-mismatch recalibration. Owner direction
+2026-07-09: no change without a fresh current-version live audit. The 43-47% would-have-won-if-
+flipped evidence backing "loosen these" predates several relevant fixes (symmetric opposite-direction
+recheck, soft-bypass-on-strong-context, inactivity relax), all already live in the current file.
+
+---
+
 ## v6.18.0 — 2026-07-09 — Growth Engine: Unified Account-Relative Sizing
 
 ### EA Compile
