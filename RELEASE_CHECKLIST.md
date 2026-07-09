@@ -14,6 +14,69 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.20.0 — 2026-07-09 — M5 Entry Delay, Phase B
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.20.0"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.20.0.mq5`
+- [x] Top-of-file header banner updated (single physical line)
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6200_final2.log`)
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` byte-synced to canonical source
+- [x] `frontend/src/components/DownloadSection.jsx` fallback version/edition/filename strings updated
+- [x] `backend/server.py` `TradeMemoryRecord.ea_version` default updated
+- [x] Static test added: `tests/test_xau_v6200_m5_entry_delay_static.py` (14 tests, all passing)
+- [x] **Independent audit performed** before shipping — found and fixed one low-severity input-validation gap
+
+### Owner request
+Second half of "adaptive entry-and-exit learning system" (Phase A, exit memory, shipped as v6.19.0).
+Explicit, detailed spec: keep M5 as the signal timeframe; do NOT wait for the next M5 bar; delay
+EXECUTION only, 60-120 seconds inside the same candle; re-validate thesis/structure/spread/chase-risk
+against current price before entering; integrate into the existing Timing Engine, do not build a
+second one. Owner's live observation motivating this: trades rarely go to profit immediately —
+typically 1-2 minutes of adverse movement first, which reverses before the next M5 candle, creating
+avoidable 5-8% drawdown before profit.
+
+### Mechanism
+Extends `XAU_TimingEngineConfirmsEntry()` (unchanged authority, same `PendingEntryConfirmation`
+struct, same `XAU_ClassifySetup` evidence) rather than forking a new timing system:
+- `InpUseM5EntryDelay` (default true) switches the existing wait-state machine's gating condition
+  from "has the next M5 bar started" (up to 5 minutes) to wall-clock elapsed time since first
+  detection, clamped into `[InpM5EntryDelayMinSeconds=60, InpM5EntryDelayMaxSeconds=120]` via
+  `InpM5EntryDelaySeconds=90`. When false, the original bar-based path runs unchanged — confirmed by
+  independent audit to be decision-logic-identical to pre-v6.20.0 via a line-by-line diff.
+- At delay-elapsed time, re-validates using evidence already freshly recomputed the same call: price
+  overextension (reused pre-existing math, threshold now `InpCancelIfPriceMovedTooFarATR`, tagged
+  `MISSED_TRADE` at ≥2.0 ATR per the owner's explicit "don't chase, mark as missed trade"
+  instruction), structure flip (reuses `tcls.freshStructureBias`, already computed inside
+  `XAU_ClassifySetup`), stale-evidence (`tcls.type==LATE_CHASE`), and spread (`XAU_SpreadState()`).
+  None of these duplicate existing checks — same functions, same evidence, called once.
+- `InpAllowImmediateAPlusMomentum` (default true) preserves today's clean-evidence immediate-entry
+  bypass exactly for A+ grade; false routes even clean A+ evidence through the delay.
+- No stale price: `OpenTrade()` already computes entry/SL/TP/lot from current market data at call
+  time (confirmed by reading its body, not new behavior), and because the whole scan pipeline
+  re-scores fresh every tick, the tick where the delay resolves calls `OpenTrade` with that tick's
+  fresh signal/atr/grade — nothing cached from first detection reaches the order.
+- Hard risk/margin/broker safety is not duplicated here — `OpenTrade()` enforces those unconditionally
+  for every caller, unchanged.
+
+### Independent audit — one bug found and fixed
+`InpM5EntryDelayMinSeconds`/`MaxSeconds` clamp had no protection against being misconfigured swapped
+(Min > Max) — would have silently pinned the delay to a fixed value regardless of
+`InpM5EntryDelaySeconds`, with no warning. Fixed: new shared helper `XAU_EffectiveM5EntryDelaySec()`
+normalizes bounds before clamping, also removing a duplicated inline expression. Two informational,
+non-blocking notes from the audit: (1) the "same signal" identity check (setup name + direction) is
+inherited unchanged from the pre-existing bar-based path, not a regression; (2) `g_pendingEntryConfirm.grade`/`.sizeMulti`
+are written but never read (the real `OpenTrade()` call always uses the caller's fresh per-tick
+values) — vestigial, no functional impact.
+
+### Explicitly NOT built in this release
+posId-correlated "did the delay improve the eventual trade outcome" and MAE-vs-baseline comparison —
+needs new fields threaded through `TradeBrainOpen` and its several existing call sites, deliberately
+left as a distinct follow-on rather than rushed into the same diff as the core execution-timing
+mechanism. All v6.19.x/v6.18.x work is unchanged.
+
+---
+
 ## v6.19.0 — 2026-07-09 — Adaptive Exit Memory, Phase A
 
 ### EA Compile

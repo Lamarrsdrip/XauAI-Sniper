@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.19.0";
-  const edition  = info?.edition  || "ADAPTIVE EXIT MEMORY, PHASE A";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.19.0.mq5";
+  const version  = info?.version  || "v6.20.0";
+  const edition  = info?.edition  || "M5 ENTRY DELAY, PHASE B";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.20.0.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.19.0.</span> Exit learning is now setup-and-direction aware, not one blended number -- a setup that reliably reverses after peak gets protected faster; one that runs gets more room to breathe, backed by real post-close evidence.
+              <span className="font-semibold text-amber-200">Gold-only v6.20.0.</span> Entries now wait 60-120 seconds inside the same M5 candle and re-check the trade before firing -- catching the pullback most signals actually get instead of buying/selling the first tick.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
