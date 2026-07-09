@@ -250,3 +250,19 @@ def test_effective_delay_clamped_between_60_and_120_seconds_by_default():
     assert "input int    InpM5EntryDelayMaxSeconds      = 120;" in ea
     fn = mql_body(ea, "double XAU_EffectiveM5EntryDelaySec()")
     assert "InpM5EntryDelayMinSeconds" in fn and "InpM5EntryDelayMaxSeconds" in fn and "InpM5EntryDelaySeconds" in fn
+
+
+def test_input_hash_includes_v6203_behavioral_controls():
+    ea = read(EA)
+    fn = mql_body(ea, "string XAUAI_InputHash()")
+    for marker in (
+        "InpUseM5EntryDelay",
+        "InpM5EntryDelaySeconds",
+        "InpM5EntryDelayMinSeconds",
+        "InpM5EntryDelayMaxSeconds",
+        "InpCancelIfPriceMovedTooFarATR",
+        "InpCrossInstanceEntryLockEnable",
+        "InpCrossInstanceEntryLockSec",
+        "InpExitArmMinOwnR",
+    ):
+        assert marker in fn, f"XAUAI_InputHash missing {marker}"

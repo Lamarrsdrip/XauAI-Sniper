@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.20.2.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.20.3.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 SERVER = ROOT / "backend" / "server.py"
 DASHBOARD = ROOT / "frontend" / "src" / "components" / "cloud" / "CloudDashboard.jsx"
@@ -46,11 +46,11 @@ def py_body(src: str, def_line: str) -> str:
     return "\n".join(out)
 
 
-def test_v6202_identity_and_download_source_sync():
+def test_current_identity_and_download_source_sync():
     ea = read(EA)
-    assert '#property version   "6.201"' in ea
-    assert '#define XAUAI_EA_VERSION "v6.20.2"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.20.2"' in ea
+    assert '#property version   "6.203"' in ea
+    assert '#define XAUAI_EA_VERSION "v6.20.3"' in ea
+    assert '#define XAUAI_EA_VERSION_NUM "6.20.3"' in ea
     assert read(EA) == read(BACKEND_EA)
 
 

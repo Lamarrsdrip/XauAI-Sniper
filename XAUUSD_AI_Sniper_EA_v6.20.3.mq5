@@ -1,11 +1,21 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.20.2 - Command Safety + Force-Control Audit                      |
-//|   No strategy rewrite. Remote force-open now carries original signal  |
-//|   price/symbol audit context end-to-end, and Command Center force     |
-//|   close can target one exact ticket with magic/symbol protection.     |
+//|   v6.20.3 - Telemetry + Recovery Guard + Entry Lock + Universal Delay |
+//|   Trade-brain telemetry now carries release/config identity, recovery |
+//|   respects same-direction loss memory, cross-instance entries lock    |
+//|   atomically, and every normal signal waits for M5 delay revalidation.|
 //+------------------------------------------------------------------+
+// v6.20.3 CHANGES (2026-07-09) — TELEMETRY + RECOVERY GUARD + ENTRY LOCK + UNIVERSAL DELAY:
+//   1. Trade-brain rows include version/build/config identity and calibrated
+//      entry-quality fields, plus restart reconciliation and in-hold checkpoints.
+//   2. Stored recovery opportunities now consult the anti-repeat-loss guard before
+//      re-executing a missed signal.
+//   3. Cross-instance duplicate entry lock is atomically claimed at the final
+//      broker-send choke point.
+//   4. Immediate/A+ momentum delay bypass was removed; normal signals route through
+//      the full M5 entry-delay window and revalidate before execution.
+//
 // v6.20.2 CHANGES (2026-07-09) — COMMAND SAFETY + FORCE-CONTROL AUDIT:
 //   1. FORCE_OPEN_TRADE payload now accepts original signal symbol, price,
 //      and score. EA logs original-vs-current execution price, missed move,
@@ -30295,6 +30305,15 @@ string XAUAI_InputHash()
                      InpMemoryAPlusHTFMinLotMulti,
                      InpMemoryExactEvidenceMinSamples,
                      InpLotStepMaxRiskOvershootPct);
+   s += StringFormat("entryDelay=%d,%d,%d,%d,%.2f|entryLock=%d,%d|exitArm=%.2f|",
+                     InpUseM5EntryDelay ? 1 : 0,
+                     InpM5EntryDelaySeconds,
+                     InpM5EntryDelayMinSeconds,
+                     InpM5EntryDelayMaxSeconds,
+                     InpCancelIfPriceMovedTooFarATR,
+                     InpCrossInstanceEntryLockEnable ? 1 : 0,
+                     InpCrossInstanceEntryLockSec,
+                     InpExitArmMinOwnR);
    s += StringFormat("symbol=%s|tf=M5|digits=%d|point=%s",
                      Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
                      DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), 8));
