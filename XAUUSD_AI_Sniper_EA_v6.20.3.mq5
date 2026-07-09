@@ -94,9 +94,10 @@
 //   (called by the same caller immediately after this returns true) already
 //   enforces those unconditionally for every caller, unchanged.
 //
-//   A+ MOMENTUM BYPASS: InpAllowImmediateAPlusMomentum (default true)
-//   preserves today's immediateConfirm bypass exactly for A+ grade; setting
-//   it false routes even clean A+ evidence through the delay.
+//   A+ MOMENTUM BYPASS: REMOVED in v6.20.3 (same-day follow-up). Every
+//   grade, including A+, now always routes through the full M5 entry delay
+//   -- InpAllowImmediateAPlusMomentum is inert, kept only as a documented,
+//   visible placeholder (see its input declaration comment).
 //
 //   FRESH PRICE, NOT STALE: OpenTrade() already computes entry price, SL,
 //   TP, and lot size from CURRENT market data at the moment it is called
@@ -1673,16 +1674,17 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.201"
-#property description "XAUUSD AI Sniper v6.20.2 - Command Safety + Force-Control Audit"
-#property description "Force-open carries original signal symbol/price/score audit context end-to-end."
-#property description "Force-close can target one exact EA ticket with symbol and magic protection."
-#property description "No entry, SmartGuard, exit, AI, or lot-sizing strategy rules changed."
+#property version   "6.203"
+#property description "XAUUSD AI Sniper v6.20.3 - Telemetry + Recovery Guard + Entry Lock + Universal Delay"
+#property description "A: entry-quality telemetry, in-hold checkpoints, OPEN/CLOSE reconciliation, version stamped."
+#property description "B: recovery path consults the anti-repeat-loss guard before re-executing a stored signal."
+#property description "C: cross-instance duplicate-entry lock; M5 entry delay now applies to every grade, no bypass."
+#property description "Entry scoring, exit/trailing rules, lot-sizing math, and regime logic unchanged otherwise."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.20.2"
-#define XAUAI_EA_VERSION_NUM "6.20.2"
-#define XAUAI_BUILD_HASH "v6202-command-safety-force-controls-20260709"
+#define XAUAI_EA_VERSION "v6.20.3"
+#define XAUAI_EA_VERSION_NUM "6.20.3"
+#define XAUAI_BUILD_HASH "v6203-telemetry-recovery-guard-entry-lock-universal-delay-20260709"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -1953,10 +1955,26 @@ input group "=== M5 ENTRY DELAY, PHASE B (v6.20.0) — short in-candle execution
 // create a second/competing timing authority. When InpUseM5EntryDelay=false, the
 // original bar-based wait behavior is preserved exactly, unchanged.
 input bool   InpUseM5EntryDelay             = true;   // Master switch. false = restore the original next-M5-bar wait behavior exactly
-input int    InpM5EntryDelaySeconds         = 90;     // Target delay, clamped into [InpM5EntryDelayMinSeconds, InpM5EntryDelayMaxSeconds]
+// v6.20.3 (Commit C) — closes two gaps found from the 2026-07-09 15:45 live
+// incident (two BUY 0.22 XAUUSD entries ~2s apart from two chart instances):
+input bool   InpCrossInstanceEntryLockEnable = true;   // Terminal-wide lock (GlobalVariable, same pattern as the loss-streak fix) blocking a second chart instance of this EA from independently executing the same symbol+magic+direction within the lock window
+input int    InpCrossInstanceEntryLockSec    = 10;     // Lock window in seconds -- must comfortably exceed realistic cross-instance decision-timing skew (observed live skew was ~2s) without meaningfully delaying legitimate distinct entries
+// v6.20.3 (same-day follow-up, explicit owner requirement): the M5 entry
+// delay must apply to EVERY grade, every trade, with NO exemption. The
+// former "clean evidence" (immediateConfirm) bypass -- which let ANY grade,
+// not just A+, skip the wait entirely, and was the direct cause of the
+// 2026-07-09 15:45 incident executing in 17s -- has been REMOVED from
+// XAU_TimingEngineConfirmsEntry, not merely disabled. InpImmediateConfirmRequiresAPlus
+// and InpAllowImmediateAPlusMomentum below are no longer read by that
+// function at all; they are kept only as named, visible inputs so a future,
+// EXPLICIT decision to reopen any exemption has an obvious place to wire
+// back in, rather than being silently reintroduced. Changing either input's
+// value right now has NO effect on trading behavior.
+input bool   InpImmediateConfirmRequiresAPlus = true;  // INERT as of v6.20.3 -- kept as a documented placeholder only, not read by any function. The full 0-wait bypass this used to gate has been deleted, not disabled.
+input int    InpM5EntryDelaySeconds         = 90;     // Target delay, clamped into [InpM5EntryDelayMinSeconds, InpM5EntryDelayMaxSeconds] -- applies unconditionally to every grade/setup, no exemption
 input int    InpM5EntryDelayMinSeconds      = 60;
 input int    InpM5EntryDelayMaxSeconds      = 120;
-input bool   InpAllowImmediateAPlusMomentum = true;   // A+ grade + already-clean evidence (XAU_ClassifySetup.immediateConfirm) bypasses the delay entirely, same as today. false = even A+ momentum must wait out the full delay.
+input bool   InpAllowImmediateAPlusMomentum = true;   // INERT as of v6.20.3 -- kept as a documented placeholder only, not read by any function. A+ no longer bypasses the delay; every grade waits the full target above.
 input double InpCancelIfPriceMovedTooFarATR = 1.00;   // Delay-elapsed re-check: price already ran this many ATR in the signal's favor = chasing, not confirming -- cancel and reassess instead of entering at the now-worse price
 input bool   InpRecalculateSLTPAfterDelay   = true;   // Documents the (architecturally inherent, always-on) behavior: OpenTrade() computes entry/SL/TP/lot from CURRENT price at the moment it is finally called, never from the stale signal price -- this input is not wired to a "false" path because using stale price would contradict the explicit "do not use stale signal price blindly" requirement this feature was built to satisfy
 
@@ -3171,6 +3189,83 @@ void XAU_RestoreLossStreakState()
                   (TimeCurrent() - savedAt) / 60.0);
 }
 
+// v6.20.3 (Commit C, live incident 2026-07-09 15:45 — two BUY 0.22 XAUUSD
+// entries at 4123.83/4123.81 opened ~2 seconds apart) — CROSS-INSTANCE ENTRY
+// LOCK. Root cause confirmed from the live journal: this terminal runs the
+// EA attached to two separate charts on the same symbol/account (M5 and H1
+// context tags interleaved throughout the log in roughly equal volume, with
+// two independent FIRST-SIGNAL detections 106ms apart at different prices —
+// impossible for one instance, since a chart's period is fixed for that
+// instance's lifetime). Each instance keeps its own independent in-memory
+// state for every mechanism in this file EXCEPT the loss-streak guard above,
+// which was already fixed for exactly this reason on 2026-06-17/18 via the
+// same GlobalVariableSet/Get pattern reused here. This lock closes the same
+// gap for the entry-execution moment itself: before OpenTrade() is allowed
+// to proceed for a non-manual signal, it must claim a short terminal-wide
+// lock keyed by symbol+magic+direction; a second instance attempting the
+// same-direction entry within the coordination window is blocked outright,
+// regardless of how each instance's own delay/anti-chase logic scored it
+// independently.
+string XAU_EntryLockGVKey(int dir)
+{
+   return "XAUAI_ENTRYLOCK_" + Symbol() + "_" + IntegerToString(InpMagicNumber) + "_" + (dir == 1 ? "BUY" : "SELL");
+}
+
+// Read-only, fail-fast check: true if the lock is currently held (by this or
+// another instance) within the coordination window. Used EARLY in
+// OpenTrade() so a plainly-locked signal doesn't waste time on the rest of
+// the function's checks. Does not claim or modify anything -- the real,
+// atomic claim happens separately via XAU_TryClaimEntryLock(), called again
+// immediately before the broker send (see that call site for why the check
+// alone is not sufficient).
+bool XAU_CrossInstanceEntryLockActive(int dir)
+{
+   if(!InpCrossInstanceEntryLockEnable) return false;
+   string key = XAU_EntryLockGVKey(dir);
+   if(!GlobalVariableCheck(key)) return false;
+   datetime claimedAt = (datetime)GlobalVariableGet(key);
+   double elapsed = (double)(TimeCurrent() - claimedAt);
+   if(claimedAt > 0 && elapsed < InpCrossInstanceEntryLockSec)
+   {
+      PrintFormat("ENTRY_LOCK_ACTIVE: %s %s blocked -- another chart instance (or this one) claimed this exact symbol+magic+direction %.0fs ago (< %ds lock window). This prevents two chart attachments of the same EA from independently executing the same real-world signal.",
+                  Symbol(), dir == 1 ? "BUY" : "SELL", elapsed, InpCrossInstanceEntryLockSec);
+      return true;
+   }
+   return false;
+}
+
+// v6.20.3 adversarial-review fix: the original design split a plain
+// GlobalVariableGet() (check) from a plain GlobalVariableSet() (claim) as
+// two separate calls -- a genuine TOCTOU race between two chart instances
+// each running their own thread, however small the window. This version
+// uses GlobalVariableSetOnCondition() as a real compare-and-swap: it only
+// succeeds if the global's value is STILL exactly what we just read (oldVal)
+// at the instant of the write. If another instance claimed it in between,
+// the CAS fails and this function correctly reports "did not claim" instead
+// of silently overwriting the other instance's claim. Called a second time,
+// right before the broker send (not just once, early) -- see the review
+// finding this addresses: claiming too early left the lock phantom-held for
+// the full window if a later hard gate (margin/risk/broker) rejected the
+// trade with nothing actually opened.
+bool XAU_TryClaimEntryLock(int dir)
+{
+   if(!InpCrossInstanceEntryLockEnable) return true; // lock disabled entirely = never blocks
+   string key = XAU_EntryLockGVKey(dir);
+   double oldVal = GlobalVariableCheck(key) ? GlobalVariableGet(key) : 0.0;
+   double elapsed = (oldVal > 0.0) ? (double)(TimeCurrent() - (datetime)oldVal) : 1.0e9;
+   if(elapsed < InpCrossInstanceEntryLockSec)
+   {
+      PrintFormat("ENTRY_LOCK_CLAIM_FAILED: %s %s -- lock already held (%.0fs ago, window=%ds) at the moment of claim, even though an earlier check may have passed.",
+                  Symbol(), dir == 1 ? "BUY" : "SELL", elapsed, InpCrossInstanceEntryLockSec);
+      return false;
+   }
+   bool claimed = GlobalVariableSetOnCondition(key, (double)TimeCurrent(), oldVal);
+   if(!claimed)
+      PrintFormat("ENTRY_LOCK_CLAIM_RACE: %s %s -- another instance claimed this exact key between our read and our write (compare-and-swap failed). Correctly backing off instead of overwriting.",
+                  Symbol(), dir == 1 ? "BUY" : "SELL");
+   return claimed;
+}
+
 // v6.3.5: Hive verdict cache — one WebRequest per bar per signature
 string   g_hiveLastSig     = "";
 int      g_hiveLastVerdict  = 0;
@@ -3445,7 +3540,67 @@ struct TradeBrainOpen
    string   signature;
    string   session;
    string   entryReason;
+   // v6.20.3 — structured entry-quality fields captured directly from the
+   // numeric variables XAUEntryTimingGuard() already computes, independent
+   // of the free-text `entryReason` narrative. Added because the audit
+   // (xau_lifecycle_forensic_audit_FINAL_2026-07-09.md) found entryReason
+   // truncated/absent before these fields on 3 of 15 real trades — 2 of
+   // which were losses — making them unrecoverable from text alone.
+   // Telemetry only: these fields are written to the brain CSV and read by
+   // nothing else in the EA; no entry/exit decision depends on them.
+   double   qualitySetup;
+   double   qualityTiming;
+   double   qualityExtensionRisk;
+   double   qualityMAERisk;
+   double   qualityEffectiveRR;
+   double   qualityFinalConfidence;
+   string   qualityBlockClass;
+   int      qualityCandlesSinceSignal;
+   double   qualityMissedMoveDistance;
+   double   qualityMissedMoveATR;
+   double   qualitySignalFirstSeenPrice;
+   // v6.20.3 — in-hold checkpoint progress. Index into g_checkpointMinutes[]
+   // of the next not-yet-logged checkpoint for this open position.
+   int      checkpointNextIdx;
 };
+
+// v6.20.3 — in-hold checkpoint schedule (minutes since entry). Telemetry
+// only: read by XAU_CheckInHoldCheckpoint(), never by any entry/exit
+// decision. Addresses the audit's Section 0.4 finding that MAE/MFE could
+// previously only be reconstructed as a single worst/best-over-the-whole-
+// hold value (from OPEN/CLOSE/POST_CLOSE snapshots), never at a fixed point
+// in time during the hold.
+int g_checkpointMinutes[] = {1, 2, 3, 5, 10, 20, 30, 60};
+
+// v6.20.3 — last-computed entry-quality snapshot, set as a side effect by
+// XAUEntryTimingGuard() at the point each value is already being formatted
+// into entryReason text. Read once, immediately after a signal is scored,
+// by the OPEN-recording call path (XAU_BrainRecordOpen) so the brain CSV
+// gets these fields even when the narrative text is later truncated.
+// Deliberately global+scalar (not per-position) to avoid touching
+// XAUEntryTimingGuard's widely-used by-reference signature — the same
+// codebase pattern already used for g_lastTradePattern/g_lastTradeDirLabel.
+double   g_lastEntryQ_SetupQuality           = 0.0;
+double   g_lastEntryQ_TimingQuality          = 0.0;
+double   g_lastEntryQ_ExtensionRisk          = 0.0;
+double   g_lastEntryQ_MAERisk                = 0.0;
+double   g_lastEntryQ_EffectiveRRQuality     = 0.0;
+double   g_lastEntryQ_FinalConfidence        = 0.0;
+string   g_lastEntryQ_BlockClass             = "";
+int      g_lastEntryQ_CandlesSinceSignal     = 0;
+double   g_lastEntryQ_MissedMoveDistance     = 0.0;
+double   g_lastEntryQ_MissedMoveATR          = 0.0;
+double   g_lastEntryQ_SignalFirstSeenPrice   = 0.0;
+// v6.20.3 adversarial-review fix — validity markers. XAU_CheckPendingOpportunityRecovery
+// and XAU_TryForceOpenTrade never call XAUEntryTimingGuard, so without these
+// markers, XAU_BrainRecordOpen would copy whichever signal's numbers happened
+// to be sitting in the globals above -- possibly a rejected signal, possibly
+// the opposite direction, possibly minutes stale. XAU_BrainRecordOpen only
+// trusts g_lastEntryQ_* when dir+setup match the position being recorded AND
+// the capture happened within the last few seconds (same decision cycle).
+int      g_lastEntryQ_Dir                    = 0;
+string   g_lastEntryQ_Setup                  = "";
+datetime g_lastEntryQ_CapturedAt             = 0;
 TradeBrainOpen g_brainOpenTrades[];
 
 struct TradeBrainClosedWatch
@@ -7556,6 +7711,7 @@ int OnInit()
          InpSTI_TCPContinueMinimum,
          InpSTI_ReentryPullbackATR, InpSTI_ReentryMinWaitMin));
    XAU_WriteLocalReportHeartbeat(true);
+   XAU_ReconcileTradeBrainOnInit();
    return INIT_SUCCEEDED;
 }
 
@@ -15840,6 +15996,34 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                              "OpenTrade reached; execution-layer gates are now checking risk, exposure, margin, and broker send.",
                              reason, 0.0);
 
+   // v6.20.3 (Commit C) — cross-instance entry lock. Every caller reaches
+   // OpenTrade() (fresh scan, recovery, force-open) so this is the one place
+   // a check here is guaranteed to apply regardless of which path decided to
+   // trade -- same reasoning as the Exhaustion/Reversal backstop just below.
+   // Deliberately BEFORE that backstop and everything else: if another chart
+   // instance already claimed this exact symbol+magic+direction moments ago,
+   // there is no point evaluating anything further. isManualOverride is
+   // exempt for the same reason it is exempt from the backstop below -- an
+   // explicit human FORCE_OPEN_TRADE command is not the failure mode this
+   // guards against.
+   if(!isManualOverride && XAU_CrossInstanceEntryLockActive(signal))
+   {
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "CrossInstanceEntryLock",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "CROSS_INSTANCE_DUPLICATE",
+                                true, false, false, 0, 0,
+                                "Another chart instance of this EA claimed this exact symbol+magic+direction within the lock window.",
+                                reason, 0.0);
+      return false;
+   }
+   // v6.20.3 adversarial-review fix: the REAL atomic claim happens
+   // immediately before the broker send below (search
+   // XAU_TryClaimEntryLock further down in this function), not here. This
+   // early pass is only the cheap fail-fast check above -- claiming this
+   // early left the lock phantom-held for the full window even when a
+   // later hard gate (margin/risk/broker) rejected the trade with nothing
+   // actually opened, needlessly blocking a legitimate retry.
+
    // v6.17.21 — Execution-layer Exhaustion/Reversal backstop. Forensic audit
    // of 2026-07-08's live log (8 primary entries) found the guard at
    // ContextGateAllows() (called only from the normal fresh-scan path, line
@@ -16896,6 +17080,26 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // ~0.25 at $3k, ~0.50 at $6-8k) at realistic SL distances — organically, from one
    // honest risk-%, not from a post-hoc override. InpMinAccountLotFloor/
    // InpAccountLotFloorPer1000 remain declared for back-compat but no longer act here.
+
+   // v6.20.3 (Commit C, adversarial-review fix) — the real, atomic
+   // cross-instance claim happens HERE, immediately before the broker send,
+   // not earlier in this function: every hard gate above (Exhaustion/
+   // Reversal backstop, hedge/exposure/margin/risk caps) has already had its
+   // chance to reject this trade, so a phantom lock claim is no longer
+   // possible for a trade that never actually opens. Uses
+   // GlobalVariableSetOnCondition-based compare-and-swap (see
+   // XAU_TryClaimEntryLock), not a plain Get-then-Set, closing the TOCTOU
+   // race between the early check above and this point.
+   if(!isManualOverride && !XAU_TryClaimEntryLock(signal))
+   {
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "CrossInstanceEntryLock",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "CROSS_INSTANCE_DUPLICATE_AT_CLAIM",
+                                true, false, false, 0, 0,
+                                "Lock claim failed at the final pre-send moment -- another instance claimed this exact symbol+magic+direction first.",
+                                reason, 0.0);
+      return false;
+   }
 
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
          " Price=", DoubleToString(price, digits),
@@ -18089,6 +18293,36 @@ bool CleanRecoveryLikely(bool isBuy, bool trendAligned, int momentumScore,
    return false;
 }
 
+// v6.20.3 — TELEMETRY-ONLY in-hold checkpoint logger. Called once per tick
+// per open position from ManageCleanExitsForPosition() (immediately after
+// rMult is computed there, using values that function already has on hand).
+// Writes one "CHECKPOINT" row to the trade brain CSV the first time elapsed
+// minutes-open crosses each threshold in g_checkpointMinutes[]. Does not
+// return a value, does not modify SL/TP/lots, and is not consulted by any
+// exit/entry logic — it only observes and records.
+void XAU_CheckInHoldCheckpoint(ulong ticket, int minsOpen, double rMult, double floatingUSD, double peakUSD)
+{
+   if(!InpTradeBrainMemory || !IsXAUFastSymbol()) return;
+   if(!PositionSelectByTicket(ticket)) return;
+   ulong posId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+   int idx = XAU_FindBrainOpen(posId);
+   if(idx < 0) return; // no open-side record to attach this checkpoint to
+
+   int maxIdx = ArraySize(g_checkpointMinutes);
+   while(g_brainOpenTrades[idx].checkpointNextIdx < maxIdx &&
+         minsOpen >= g_checkpointMinutes[g_brainOpenTrades[idx].checkpointNextIdx])
+   {
+      int thresholdMin = g_checkpointMinutes[g_brainOpenTrades[idx].checkpointNextIdx];
+      string checkpointNote = StringFormat(
+         "CHECKPOINT checkpointMin=%d actualMinsOpen=%d floatingUSD=%.2f currentR=%.3f peakUSD=%.2f regime=%s spread=%.0f",
+         thresholdMin, minsOpen, floatingUSD, rMult, peakUSD, RegimeName(),
+         (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
+      XAU_AppendTradeBrain("CHECKPOINT", g_brainOpenTrades[idx], 0.0, floatingUSD, 0.0, minsOpen * 60,
+                           "IN_HOLD", checkpointNote);
+      g_brainOpenTrades[idx].checkpointNextIdx++;
+   }
+}
+
 // Returns true if position was closed this tick (caller should skip further logic)
 bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double curPrice,
                                  double curSL, double curTP, double slDist, double atr,
@@ -18104,6 +18338,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    // Compute current R-multiple of profit in price terms
    double priceProfit = isBuy ? (curPrice - openPx) : (openPx - curPrice);
    double rMult = priceProfit / slDist;   // negative if underwater
+   // v6.20.3 telemetry-only — see XAU_CheckInHoldCheckpoint() declaration
+   // comment. Does not affect anything computed below; purely observes.
+   XAU_CheckInHoldCheckpoint(ticket, minsOpen, rMult, rMult * rDollars, peak);
    double close2 = iClose(Symbol(), PERIOD_M5, 2);
    int momentumScore = CleanMomentumScore(isBuy, close1, open1, close2, emaF, emaS, rsi);
    bool trendAligned = CleanRegimeAligned(isBuy);
@@ -21962,6 +22199,18 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          brainRec.signature = lastSignalSignature;
          brainRec.session = SessionTag();
          brainRec.entryReason = "fallback: open record not found";
+         // v6.20.3 adversarial-review fix: this fallback branch previously
+         // left the 12 quality/checkpoint fields to MQL5's implicit
+         // zero-initialization. Every other TradeBrainOpen construction site
+         // in this file sets every field explicitly -- don't make the one
+         // path that fires precisely when telemetry is already degraded
+         // (no open record found) the one relying on implicit behavior.
+         brainRec.qualitySetup = 0.0; brainRec.qualityTiming = 0.0;
+         brainRec.qualityExtensionRisk = 0.0; brainRec.qualityMAERisk = 0.0;
+         brainRec.qualityEffectiveRR = 0.0; brainRec.qualityFinalConfidence = 0.0;
+         brainRec.qualityBlockClass = ""; brainRec.qualityCandlesSinceSignal = 0;
+         brainRec.qualityMissedMoveDistance = 0.0; brainRec.qualityMissedMoveATR = 0.0;
+         brainRec.qualitySignalFirstSeenPrice = 0.0; brainRec.checkpointNextIdx = 0;
       }
       string outcome = wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK_EVEN";
       if(wasWin && worstFloatingPnl <= -10000.0)
@@ -23418,10 +23667,10 @@ void XAU_WriteLearningReport()
    // v6.20.0 M5 ENTRY DELAY, PHASE B
    FileWrite(h, "## M5 Entry Delay (Phase B, v6.20.0)");
    FileWrite(h, "");
-   FileWrite(h, StringFormat("Enabled: %s | Target delay: %ds (clamped to [%d,%d]s) | A+ momentum bypass: %s | Chase cap: %.2fATR",
+   FileWrite(h, StringFormat("Enabled: %s | Target delay: %ds (clamped to [%d,%d]s) | Bypass for any grade: REMOVED v6.20.3 (every grade always waits the full delay) | Chase cap: %.2fATR",
                              InpUseM5EntryDelay ? "YES" : "NO (original next-M5-bar wait active)",
                              InpM5EntryDelaySeconds, InpM5EntryDelayMinSeconds, InpM5EntryDelayMaxSeconds,
-                             InpAllowImmediateAPlusMomentum ? "ON" : "OFF", InpCancelIfPriceMovedTooFarATR));
+                             InpCancelIfPriceMovedTooFarATR));
    int m5DelayTotal = g_m5DelayConfirmedCount + g_m5DelayCancelledCount;
    if(m5DelayTotal == 0)
    {
@@ -24088,7 +24337,13 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
       FileWrite(h, "event", "time", "posId", "symbol", "dir", "setup", "grade", "signature",
                 "regime", "session", "hour", "entryPrice", "exitPrice", "lots", "sl", "tp",
                 "profit", "worstFloating", "secondsNegative", "outcome", "exitReason",
-                "entryReason", "setupScore", "combined", "atr", "aiConfidence");
+                "entryReason", "setupScore", "combined", "atr", "aiConfidence",
+                // v6.20.3 telemetry-completeness columns (additive; readers using
+                // csv.DictReader-style column-name lookup are unaffected):
+                "eaVersion", "buildHash", "magicNumber",
+                "setupQuality", "entryTimingQuality", "extensionRisk", "expectedMAERisk",
+                "effectiveRRQuality", "finalCalibratedConfidence", "blockClass",
+                "candlesSinceSignal", "missedMoveDistance", "missedMoveATR", "signalFirstSeenPrice");
    }
    MqlDateTime dt; TimeCurrent(dt);
    FileWrite(h, eventName,
@@ -24116,7 +24371,21 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
              DoubleToString(r.setupScore, 2),
              DoubleToString(r.combinedScore, 2),
              DoubleToString(r.atr, 2),
-             r.aiConfidence);
+             r.aiConfidence,
+             XAUAI_EA_VERSION,
+             XAUAI_BUILD_HASH,
+             InpMagicNumber,
+             DoubleToString(r.qualitySetup, 1),
+             DoubleToString(r.qualityTiming, 1),
+             DoubleToString(r.qualityExtensionRisk, 1),
+             DoubleToString(r.qualityMAERisk, 1),
+             DoubleToString(r.qualityEffectiveRR, 1),
+             DoubleToString(r.qualityFinalConfidence, 1),
+             XAU_CsvSafe(r.qualityBlockClass),
+             r.qualityCandlesSinceSignal,
+             DoubleToString(r.qualityMissedMoveDistance, 2),
+             DoubleToString(r.qualityMissedMoveATR, 2),
+             DoubleToString(r.qualitySignalFirstSeenPrice, 2));
    FileClose(h);
 
    string owner = "TRADE";
@@ -24294,6 +24563,220 @@ void XAU_UpdateClosedTradeOutcomes()
    }
 }
 
+// v6.20.3 — TELEMETRY-ONLY reconciliation, called once from OnInit().
+//
+// Root cause this addresses (xau_lifecycle_forensic_audit_FINAL_2026-07-09.md
+// and xau_remediation_map_PRE_IMPLEMENTATION_2026-07-09.md, Phase 0 item 7):
+// g_brainOpenTrades[] is the ONLY place OPEN-side entry reasoning is stored
+// while a position is running, and it lives in memory only. If the EA
+// reloads (a new version attach, a terminal restart, a chart recompile —
+// this account's own VPS journal shows 8 reloads in a single day) while a
+// position is open, that in-memory record is lost. When the position later
+// closes, OnTradeTransaction's DEAL_ENTRY_OUT handler cannot find it via
+// XAU_FindBrainOpen() and falls back to a blank record ("fallback: open
+// record not found" — confirmed in real data on posId 2938698098). If the
+// CLOSE deal itself arrives while the EA is not attached at all (not just a
+// mid-life reload), MQL5 does not replay missed OnTradeTransaction events,
+// so no CLOSE row is ever written (confirmed in real data on posId
+// 2940184690, whose outcome is still unresolved as of this audit).
+//
+// This function does two READ-ONLY-to-trading-decisions things:
+//   (A) For every currently-open position under this EA's magic number that
+//       has no in-memory brain record (true on every fresh OnInit, since
+//       g_brainOpenTrades[] always starts empty), reconstruct a minimal
+//       record from the LIVE position's own broker-side fields so a future
+//       close can be recorded instead of falling back to blank. The
+//       reconstructed entryReason is explicitly labelled as reconstructed —
+//       it is never presented as if it were the original decision text.
+//   (B) For deals in the recent broker history (bounded lookback) that show
+//       a position already fully closed with our magic number, but for
+//       which no CLOSE row exists yet in the brain CSV at all, write one
+//       now from the broker's own deal record, explicitly tagged so it is
+//       never confused with a normally-observed close.
+//
+// This function does not open, close, modify, or size any position. It only
+// reads existing broker/position state and writes telemetry.
+void XAU_ReconcileTradeBrainOnInit()
+{
+   if(!InpTradeBrainMemory || !IsXAUFastSymbol()) return;
+
+   // --- Part A: restore in-memory records for positions still open now ---
+   int restored = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+
+      ulong posId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      if(posId == 0 || XAU_FindBrainOpen(posId) >= 0) continue; // already tracked
+
+      int n = ArraySize(g_brainOpenTrades);
+      ArrayResize(g_brainOpenTrades, n + 1);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      g_brainOpenTrades[n].posId          = posId;
+      g_brainOpenTrades[n].entryTime      = (datetime)PositionGetInteger(POSITION_TIME);
+      g_brainOpenTrades[n].dir            = (posType == POSITION_TYPE_BUY) ? 1 : -1;
+      g_brainOpenTrades[n].entryPrice     = PositionGetDouble(POSITION_PRICE_OPEN);
+      g_brainOpenTrades[n].sl             = PositionGetDouble(POSITION_SL);
+      g_brainOpenTrades[n].tp             = PositionGetDouble(POSITION_TP);
+      g_brainOpenTrades[n].lots           = PositionGetDouble(POSITION_VOLUME);
+      g_brainOpenTrades[n].atr            = 0.0;
+      g_brainOpenTrades[n].setupScore     = 0.0;
+      g_brainOpenTrades[n].combinedScore  = 0.0;
+      g_brainOpenTrades[n].regime         = (int)currentRegime;
+      g_brainOpenTrades[n].aiConfidence   = 0;
+      g_brainOpenTrades[n].setup          = "";
+      g_brainOpenTrades[n].grade          = "";
+      g_brainOpenTrades[n].signature      = "";
+      g_brainOpenTrades[n].session        = SessionTag();
+      g_brainOpenTrades[n].entryReason    = StringFormat(
+         "RECONCILED_AFTER_RESTART: original entry reasoning lost to an EA reload while this position (posId=%I64u) was open; fields reconstructed from live broker position state at reload time, not from the original decision.",
+         posId);
+      g_brainOpenTrades[n].qualitySetup = 0.0; g_brainOpenTrades[n].qualityTiming = 0.0;
+      g_brainOpenTrades[n].qualityExtensionRisk = 0.0; g_brainOpenTrades[n].qualityMAERisk = 0.0;
+      g_brainOpenTrades[n].qualityEffectiveRR = 0.0; g_brainOpenTrades[n].qualityFinalConfidence = 0.0;
+      g_brainOpenTrades[n].qualityBlockClass = "";
+      g_brainOpenTrades[n].qualityCandlesSinceSignal = 0;
+      g_brainOpenTrades[n].qualityMissedMoveDistance = 0.0;
+      g_brainOpenTrades[n].qualityMissedMoveATR = 0.0;
+      g_brainOpenTrades[n].qualitySignalFirstSeenPrice = 0.0;
+      // v6.20.3 adversarial-review fix: advance past thresholds that are
+      // already behind us given this position's real age, instead of
+      // starting at 0 -- starting at 0 for e.g. a 3-hour-old position made
+      // the very next tick fire all 8 CHECKPOINT rows at once, each
+      // stamping the position's CURRENT floating/R value against a PAST
+      // minute-mark (1m/2m/3m/.../60m) that had already passed, which is
+      // misleading regardless of the checkpointMin label in the row.
+      // Checkpoints that already elapsed before this restart are genuinely
+      // unrecoverable (their true value at that historical instant is
+      // gone) -- the correct behavior is to skip them, not fire them late
+      // with the wrong instant's data.
+      {
+         int elapsedMin = (int)((TimeCurrent() - g_brainOpenTrades[n].entryTime) / 60);
+         int ci = 0;
+         while(ci < ArraySize(g_checkpointMinutes) && g_checkpointMinutes[ci] <= elapsedMin) ci++;
+         g_brainOpenTrades[n].checkpointNextIdx = ci;
+      }
+      restored++;
+      Print("RECONCILIATION: restored in-memory brain record for still-open posId=", posId,
+            " after EA reload — original entry reasoning is not recoverable, future CLOSE will be traceable instead of blank.");
+   }
+
+   // --- Part B: backfill CLOSE rows for deals the EA never got to record ---
+   datetime lookbackFrom = TimeCurrent() - 3 * 24 * 60 * 60; // bounded 72h window, cheap and sufficient for reload gaps
+   if(!HistorySelect(lookbackFrom, TimeCurrent())) return;
+   int deals = HistoryDealsTotal();
+   int backfilled = 0;
+   ulong seenPosIds[]; // avoid processing the same posId's OUT deal twice in this pass
+   for(int d = 0; d < deals; d++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(d);
+      if(dealTicket == 0) continue;
+      if((long)HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != Symbol()) continue;
+      if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+
+      ulong posId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      if(posId == 0) continue;
+      bool already = false;
+      for(int s = 0; s < ArraySize(seenPosIds); s++) if(seenPosIds[s] == posId) { already = true; break; }
+      if(already) continue;
+
+      // Still genuinely open? Then it's not a missed close — skip.
+      bool stillOpen = false;
+      for(int i = 0; i < PositionsTotal(); i++)
+      {
+         ulong tk = PositionGetTicket(i);
+         if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+         if((ulong)PositionGetInteger(POSITION_IDENTIFIER) == posId) { stillOpen = true; break; }
+      }
+      if(stillOpen) continue;
+
+      if(XAU_TradeBrainHasCloseRow(posId)) continue; // already recorded normally, nothing to backfill
+
+      int n = ArraySize(seenPosIds);
+      ArrayResize(seenPosIds, n + 1);
+      seenPosIds[n] = posId;
+
+      int idx = XAU_FindBrainOpen(posId);
+      TradeBrainOpen r;
+      if(idx >= 0)
+      {
+         r = g_brainOpenTrades[idx];
+      }
+      else
+      {
+         // No open-side record at all (missed both OPEN and CLOSE, or OPEN
+         // predates this reconciliation's lookback) — reconstruct the
+         // minimum from the closing deal itself so the row is not blank.
+         r.posId = posId;
+         r.entryTime = 0;
+         r.dir = ((ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE) == DEAL_TYPE_SELL) ? 1 : -1; // closing deal is opposite side
+         r.entryPrice = 0.0; r.sl = 0.0; r.tp = 0.0;
+         r.lots = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+         r.atr = 0.0; r.setupScore = 0.0; r.combinedScore = 0.0;
+         r.regime = (int)currentRegime; r.aiConfidence = 0;
+         r.setup = ""; r.grade = ""; r.signature = ""; r.session = SessionTag();
+         r.entryReason = "RECONCILED_POST_RESTART: no OPEN telemetry existed for this position either; only the closing deal's own broker record is available.";
+         r.qualitySetup = 0.0; r.qualityTiming = 0.0; r.qualityExtensionRisk = 0.0;
+         r.qualityMAERisk = 0.0; r.qualityEffectiveRR = 0.0; r.qualityFinalConfidence = 0.0;
+         r.qualityBlockClass = ""; r.qualityCandlesSinceSignal = 0;
+         r.qualityMissedMoveDistance = 0.0; r.qualityMissedMoveATR = 0.0; r.qualitySignalFirstSeenPrice = 0.0;
+         r.checkpointNextIdx = 0;
+      }
+      double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                    + HistoryDealGetDouble(dealTicket, DEAL_SWAP)
+                    + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+      double exitPrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+      XAU_AppendTradeBrain("CLOSE", r, exitPrice, profit, 0.0, 0,
+                           profit >= 0.01 ? "WIN" : (profit <= -0.01 ? "LOSS" : "BE"),
+                           "RECONCILED_POST_RESTART: close deal found in broker history but no CLOSE telemetry existed for it; backfilled by OnInit reconciliation. worstFloating/secondsNegative are unavailable (not observed live) and are reported as 0.");
+      if(idx >= 0) XAU_RemoveBrainOpen(idx);
+      backfilled++;
+      Print("RECONCILIATION: backfilled missing CLOSE row for posId=", posId,
+            " profit=$", DoubleToString(profit, 2), " (deal found in broker history, no prior telemetry existed)");
+   }
+
+   if(restored > 0 || backfilled > 0)
+      Print("RECONCILIATION SUMMARY: restored=", restored, " open record(s), backfilled=", backfilled, " missing close row(s).");
+}
+
+// v6.20.3 — cheap linear scan of the brain CSV to check whether a CLOSE row
+// already exists for posId, used only by XAU_ReconcileTradeBrainOnInit()
+// above so it never double-writes a close that was already recorded
+// normally. Column order matches XAU_AppendTradeBrain's header exactly:
+// event(0), time(1), posId(2), ...
+bool XAU_TradeBrainHasCloseRow(ulong posId)
+{
+   string fn = XAU_TradeBrainFile();
+   if(!FileIsExist(fn, FILE_COMMON)) return false;
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return false;
+   bool found = false;
+   string posIdStr = (string)posId;
+   // Column order: event(0), time(1), posId(2), then everything else.
+   // Read exactly those three, then skip whatever remains of the row using
+   // FileIsLineEnding() rather than a fixed count — the schema grew from 26
+   // to 39 columns in v6.20.3, so older rows in an existing file have fewer
+   // trailing fields than newer ones, and a fixed skip-count would
+   // misalign the parser for the rest of the file.
+   while(!FileIsEnding(h))
+   {
+      string eventName = FileReadString(h);
+      if(StringLen(eventName) == 0 && FileIsEnding(h)) break;
+      if(FileIsLineEnding(h) || FileIsEnding(h)) continue; // malformed/blank row, move on
+      string time_ = FileReadString(h);
+      if(FileIsLineEnding(h) || FileIsEnding(h)) continue;
+      string posIdField = FileReadString(h);
+      if(eventName == "CLOSE" && posIdField == posIdStr) { found = true; break; }
+      while(!FileIsLineEnding(h) && !FileIsEnding(h)) FileReadString(h);
+   }
+   FileClose(h);
+   return found;
+}
+
 void XAU_BrainRecordOpen(ulong posId, int signal, double entryPrice, double sl, double tp,
                          double lots, double atr, string setupName, string grade,
                          string signature, double setupScore, double combinedScore,
@@ -24324,6 +24807,32 @@ void XAU_BrainRecordOpen(ulong posId, int signal, double entryPrice, double sl, 
    g_brainOpenTrades[idx].signature = signature;
    g_brainOpenTrades[idx].session = SessionTag();
    g_brainOpenTrades[idx].entryReason = entryReason;
+   // v6.20.3 adversarial-review fix: only trust g_lastEntryQ_* when it was
+   // captured for THIS exact dir+setup within the last few seconds (i.e.
+   // during THIS decision cycle). XAU_CheckPendingOpportunityRecovery and
+   // XAU_TryForceOpenTrade never call XAUEntryTimingGuard, so without this
+   // check the globals could hold a different signal's numbers (a rejected
+   // candidate, the opposite direction, or simply stale from minutes ago) —
+   // originally this comment claimed those paths would "correctly" see
+   // 0.0/"", but MQL5 globals persist across calls, so that was only true on
+   // a fresh terminal start. Explicitly checking freshness+identity here is
+   // the actual fix, not an assumption about initial state.
+   bool entryQFresh = (g_lastEntryQ_Dir == signal &&
+                       g_lastEntryQ_Setup == setupName &&
+                       g_lastEntryQ_CapturedAt > 0 &&
+                       (TimeCurrent() - g_lastEntryQ_CapturedAt) <= 5);
+   g_brainOpenTrades[idx].qualitySetup             = entryQFresh ? g_lastEntryQ_SetupQuality : 0.0;
+   g_brainOpenTrades[idx].qualityTiming            = entryQFresh ? g_lastEntryQ_TimingQuality : 0.0;
+   g_brainOpenTrades[idx].qualityExtensionRisk     = entryQFresh ? g_lastEntryQ_ExtensionRisk : 0.0;
+   g_brainOpenTrades[idx].qualityMAERisk           = entryQFresh ? g_lastEntryQ_MAERisk : 0.0;
+   g_brainOpenTrades[idx].qualityEffectiveRR       = entryQFresh ? g_lastEntryQ_EffectiveRRQuality : 0.0;
+   g_brainOpenTrades[idx].qualityFinalConfidence   = entryQFresh ? g_lastEntryQ_FinalConfidence : 0.0;
+   g_brainOpenTrades[idx].qualityBlockClass        = entryQFresh ? g_lastEntryQ_BlockClass : "";
+   g_brainOpenTrades[idx].qualityCandlesSinceSignal = entryQFresh ? g_lastEntryQ_CandlesSinceSignal : 0;
+   g_brainOpenTrades[idx].qualityMissedMoveDistance = entryQFresh ? g_lastEntryQ_MissedMoveDistance : 0.0;
+   g_brainOpenTrades[idx].qualityMissedMoveATR     = entryQFresh ? g_lastEntryQ_MissedMoveATR : 0.0;
+   g_brainOpenTrades[idx].qualitySignalFirstSeenPrice = entryQFresh ? g_lastEntryQ_SignalFirstSeenPrice : 0.0;
+   g_brainOpenTrades[idx].checkpointNextIdx = 0;
    XAU_AppendTradeBrain("OPEN", g_brainOpenTrades[idx], 0.0, 0.0, 0.0, 0, "OPEN", "");
    Print("TRADE-BRAIN OPEN: posId=", posId,
          " ", signal > 0 ? "BUY" : "SELL",
@@ -24636,32 +25145,28 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
                     (tcls.type == XAU_TIMING_BREAKOUT_RETEST)    ? "BREAKOUT_RETEST" : "LATE_CHASE";
    string dirStr = (dir == 1) ? "BUY" : "SELL";
 
-   // v6.20.0: A+ momentum bypass. immediateConfirm already means "evidence is
-   // already clean, no wait needed" (XAU_ClassifySetup), unchanged for every
-   // grade except A+, which InpAllowImmediateAPlusMomentum can now force through
-   // the M5 entry delay anyway (default true = today's behavior, unchanged).
-   bool aPlusBypassAllowed = (grade != "A+" || InpAllowImmediateAPlusMomentum);
-   if(tcls.immediateConfirm && aPlusBypassAllowed)
-   {
-      PrintFormat("TIMING_ENGINE: %s confirmed now (%s %s) -> ENTRY_ALLOWED (no wait -- %s)",
-                  typeStr, setup, dirStr, tcls.why);
-      g_pendingEntryConfirm.active = false; // this signal is acting now, not pending
-      // v6.20.1: mailbox for delayed-entry outcome telemetry -- immediate entry
-      // is the degenerate "no delay" case: original==decision time/price.
-      double immPrice = (dir == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK) : SymbolInfoDouble(Symbol(), SYMBOL_BID);
-      g_lastEntryTimingDecision.valid              = true;
-      g_lastEntryTimingDecision.wasDelayed         = false;
-      g_lastEntryTimingDecision.originalSignalTime = TimeCurrent();
-      g_lastEntryTimingDecision.originalSignalPrice= immPrice;
-      g_lastEntryTimingDecision.decisionTime       = TimeCurrent();
-      g_lastEntryTimingDecision.delaySeconds       = 0.0;
-      g_lastEntryTimingDecision.priceImprovement   = 0.0;
-      g_lastEntryTimingDecision.entryReasonText    = grade == "A+" ? "IMMEDIATE_APLUS_MOMENTUM" : "IMMEDIATE_CLEAN_EVIDENCE";
-      return true;
-   }
-   if(tcls.immediateConfirm && !aPlusBypassAllowed)
-      PrintFormat("TIMING_ENGINE: %s clean evidence (%s %s) but InpAllowImmediateAPlusMomentum=false for A+ -- routing through M5 entry delay anyway",
-                  typeStr, setup, dirStr);
+   // v6.20.0 ORIGINAL BEHAVIOR (REMOVED in v6.20.3 Commit C+): this used to
+   // let "clean evidence" (tcls.immediateConfirm) skip the M5 entry delay
+   // entirely for any grade, with InpAllowImmediateAPlusMomentum only adding
+   // an extra restriction for A+ specifically. The 2026-07-09 15:45 live
+   // incident (grade A, immediateConfirm=true, executed in 17s) proved this
+   // reachable for ordinary A-grade trades, not just A+ -- and the owner then
+   // explicitly required the delay to apply to EVERY grade with NO bypass at
+   // all, not merely a narrower one. The entire immediate-return branch that
+   // used to sit here has been removed (not merely disabled) -- every signal
+   // now always falls through to the wait-then-revalidate logic below,
+   // using the FULL XAU_EffectiveM5EntryDelaySec() target regardless of
+   // grade or tcls.immediateConfirm. "Clean evidence" is still computed and
+   // still used elsewhere (e.g. as one input to LATE_CHASE classification
+   // and to the post-wait revalidation), it just no longer shortens or skips
+   // the wait itself. InpAllowImmediateAPlusMomentum and
+   // InpImmediateConfirmRequiresAPlus inputs are left in place, unused by
+   // this function, only so a future explicit decision to reopen an
+   // exemption has a named toggle to wire back in -- neither input does
+   // anything on its own anymore.
+   if(tcls.immediateConfirm)
+      PrintFormat("TIMING_ENGINE: %s clean evidence (%s %s grade=%s) -- still routes through the full M5 entry delay, no exemption for any grade per explicit requirement",
+                  typeStr, setup, dirStr, grade);
 
    double signalPrice = iClose(Symbol(), PERIOD_M5, 1);
    datetime nowCandle = iTime(Symbol(), PERIOD_M5, 0);
@@ -24680,6 +25185,9 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
       // shorter window, not a second competing timing system.
       if(sameSignalPending)
       {
+         // v6.20.3 (Commit C, tightened again same day per explicit
+         // instruction): always the FULL target delay, unconditionally --
+         // tcls.immediateConfirm no longer shortens this for any grade.
          double delaySec = XAU_EffectiveM5EntryDelaySec();
          double elapsedSec = (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime);
          if(elapsedSec < delaySec)
@@ -24862,6 +25370,29 @@ void XAU_CheckPendingOpportunityRecovery()
             " > ", DoubleToString(InpMaxSpread, 0), ")");
       return;
    }
+
+   // v6.20.3 (Commit B, xau_remediation_map_PRE_IMPLEMENTATION_2026-07-09.md
+   // Item 5) — wire the EXISTING XAU_AntiRepeatLossActive() guard into the
+   // recovery path. This guard already runs on the fresh-signal path (7
+   // other call sites) and is proven live (VPS journal 2026-07-08: tracked
+   // a 3-loss SELL streak correctly and blocked a later fresh candidate
+   // with "hard block stands despite A grade"); it was never consulted here,
+   // meaning a stored recovery opportunity could re-fire in the same
+   // direction this account just lost on, with no check that this specific
+   // account's own recent loss history in that direction has been priced
+   // back through. The guard's own exemption (Active Direction independently
+   // reaching STRONG tier) still applies here for free -- a genuinely fresh,
+   // independently-confirmed reversal is not blocked by this change.
+   if(XAU_AntiRepeatLossActive(dir))
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=ANTI_REPEAT_LOSS_ACTIVE (streak=", g_sameDirLossStreak,
+            " lastLossDir=", g_lastLossDir == 1 ? "BUY" : (g_lastLossDir == -1 ? "SELL" : "NONE"),
+            " dir=", dir == 1 ? "BUY" : "SELL", ") -- this account's own recent same-direction loss has not been",
+            " price-recovered and Active Direction has not independently reached STRONG tier in this direction;",
+            " recovering this signal now would be resuming a thesis this account just lost on, not fresh evidence.");
+      return;
+   }
+
    double atrNow = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
    double curPrice = iClose(Symbol(), PERIOD_M5, 1);
    if(atrNow <= 0.0 || curPrice <= 0.0)
@@ -26315,6 +26846,19 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       effectiveRRQuality * 0.16;
    finalCalibratedConfidence = MathMax(0.0, MathMin(100.0, finalCalibratedConfidence));
 
+   // v6.20.3 telemetry-only capture — see g_lastEntryQ_* declaration comment.
+   // Does not affect setupQuality/entryTimingQuality/etc. or any decision below.
+   g_lastEntryQ_SetupQuality       = setupQuality;
+   g_lastEntryQ_TimingQuality      = entryTimingQuality;
+   g_lastEntryQ_ExtensionRisk      = extensionRisk;
+   g_lastEntryQ_MAERisk            = expectedMAERisk;
+   g_lastEntryQ_EffectiveRRQuality = effectiveRRQuality;
+   g_lastEntryQ_FinalConfidence    = finalCalibratedConfidence;
+   g_lastEntryQ_CandlesSinceSignal = candlesSinceSignal;
+   g_lastEntryQ_MissedMoveDistance = missedMoveDistance;
+   g_lastEntryQ_MissedMoveATR      = missedMoveATRFromFirst;
+   g_lastEntryQ_SignalFirstSeenPrice = sameFirstSignal ? g_signalFirstSeenPrice : 0.0;
+
    bool strongMomentumOverrideQualified = false;
    string strongMomentumOverrideWhy = "";
    if(!trendContinuationQualified &&
@@ -26469,6 +27013,23 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
                           moderateLate ? "cleaner pullback, momentum candle, or structure confirmation" :
                           "fresh continuation with lower cycle-giveback risk";
    }
+
+   // v6.20.3 telemetry-only capture — see g_lastEntryQ_* declaration comment.
+   // v6.20.3 adversarial-review fix: this is the LAST point in the function
+   // where every quality field (numeric, set earlier, plus blockClass, just
+   // finalized above) is known-consistent for THIS call -- two return paths
+   // exist between the earlier numeric capture and here, so validity
+   // markers (dir/setup/timestamp) are deliberately set ONLY here, together,
+   // never at the earlier numeric-only capture point. If this line is never
+   // reached (an early return fired first), the markers stay at whatever
+   // the last FULLY-COMPLETED call left them, which XAU_BrainRecordOpen's
+   // freshness check (dir+setup+age all matching) will correctly recognize
+   // as not belonging to the position it is about to record, rather than
+   // silently attributing a stale or unrelated signal's numbers to it.
+   g_lastEntryQ_BlockClass = blockClass;
+   g_lastEntryQ_Dir        = signal;
+   g_lastEntryQ_Setup      = setupName;
+   g_lastEntryQ_CapturedAt = TimeCurrent();
 
    reason += StringFormat("CALIBRATED_ENTRY_QUALITY: setupQuality=%.0f/100 entryTimingQuality=%.0f/100 extensionRisk=%.0f/100 expectedMAERisk=%.0f/100 effectiveRRQuality=%.0f/100 finalCalibratedConfidence=%.0f/100. ",
                           setupQuality, entryTimingQuality, extensionRisk,
