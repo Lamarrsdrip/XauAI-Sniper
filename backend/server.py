@@ -2051,7 +2051,7 @@ class TradeMemoryRecord(BaseModel):
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.20.1"
+    ea_version: str = "v6.20.2"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"
@@ -3275,6 +3275,7 @@ SAFE_REMOTE_COMMANDS = {
     "RESUME_TRADING": "Resume trading",
     "STOP_TRADING": "Stop trading",
     "CLOSE_ALL_TRADES": "Close all trades",
+    "FORCE_CLOSE_TRADE": "Force-close one exact ticket",
     "FORCE_SYNC": "Force startup intelligence sync",
     "FORCE_REPORT_UPLOAD": "Force report upload marker",
     "UPDATE_PROP_FIRM_CONFIG": "Update prop firm protection",
@@ -3302,13 +3303,42 @@ def _normalize_force_open_payload(payload: Optional[Dict]) -> dict:
     age_seconds = datetime.now(timezone.utc).timestamp() - candle_time
     if age_seconds > 15 * 60:
         raise HTTPException(status_code=400, detail="This blocked signal is too old to force-open (over 15 minutes). It may no longer reflect current market conditions.")
+    try:
+        signal_price = float(raw.get("signal_price", 0) or 0)
+    except (TypeError, ValueError):
+        signal_price = 0.0
+    try:
+        score = float(raw.get("score", 0) or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+    symbol = str(raw.get("symbol", "")).strip().upper()
+    if symbol and len(symbol) > 24:
+        raise HTTPException(status_code=400, detail="Force-open symbol is too long.")
     return {
         "direction": direction,
+        "symbol": symbol,
         "setup": setup,
         "grade": grade,
         "original_blocker": original_blocker,
         "candle_time": candle_time,
+        "signal_price": signal_price,
+        "score": score,
+        "event_time": str(raw.get("event_time", "")).strip()[:40],
         "signal_id": str(raw.get("signal_id", "")).strip(),
+    }
+
+def _normalize_force_close_payload(payload: Optional[Dict]) -> dict:
+    raw = payload or {}
+    ticket = str(raw.get("ticket", "")).strip()
+    if not ticket or not ticket.isdigit():
+        raise HTTPException(status_code=400, detail="Force-close requires the exact open MT5 ticket id.")
+    symbol = str(raw.get("symbol", "")).strip().upper()
+    if symbol and len(symbol) > 24:
+        raise HTTPException(status_code=400, detail="Force-close symbol is too long.")
+    return {
+        "ticket": ticket,
+        "symbol": symbol,
+        "reason": str(raw.get("reason", "USER_FORCE_CLOSE_TRADE")).strip()[:120] or "USER_FORCE_CLOSE_TRADE",
     }
 
 def _normalize_prop_firm_config(payload: Optional[Dict]) -> dict:
@@ -5594,6 +5624,8 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
         payload = _normalize_prop_firm_config(payload)
     elif action == "FORCE_OPEN_TRADE":
         payload = _normalize_force_open_payload(payload)
+    elif action == "FORCE_CLOSE_TRADE":
+        payload = _normalize_force_close_payload(payload)
     doc = {
         "id": command_id,
         "user_id": user["id"],

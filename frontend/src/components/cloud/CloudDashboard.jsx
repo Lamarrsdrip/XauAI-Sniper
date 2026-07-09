@@ -216,6 +216,12 @@ function EventRow({ event, onForceOpen }) {
   const direction = getEventField(event, "signal_direction", "");
   const setupName = event.setup || getEventField(event, "setup", "") || module;
   const grade = event.grade || getEventField(event, "grade", "");
+  const symbol = event.symbol || d.symbol || getEventField(event, "symbol", "XAUUSD");
+  const signalPriceRaw = getEventField(event, "signal_price",
+    getEventField(event, "price", getEventField(event, "entry_price", "")));
+  const signalPrice = Number(signalPriceRaw);
+  const scoreRaw = getEventField(event, "score", "");
+  const score = Number(scoreRaw);
   const eventAgeMin = event.ts ? (Date.now() - new Date(event.ts).getTime()) / 60000 : Infinity;
   const canForceOpen = Boolean(
     onForceOpen && String(event.severity).toUpperCase() === "BLOCK" &&
@@ -232,16 +238,20 @@ function EventRow({ event, onForceOpen }) {
       icon: AlertTriangle,
       payload: {
         direction: /BUY/i.test(direction) ? "BUY" : "SELL",
+        symbol,
         setup: setupName,
         grade: grade || "B",
         original_blocker: finalBlocker || reason || "UNKNOWN",
         candle_time: candleTime,
+        signal_price: Number.isFinite(signalPrice) ? signalPrice : undefined,
+        score: Number.isFinite(score) ? score : undefined,
+        event_time: event.ts || "",
         signal_id: event.id || "",
       },
     });
   };
   const facts = [
-    ["Symbol", event.symbol || d.symbol],
+    ["Symbol", symbol],
     ["Mode", getEventField(event, "mode", "")],
     ["Bias", getEventField(event, "market_bias", "")],
     ["Signal", getEventField(event, "signal_direction", "")],
@@ -662,7 +672,7 @@ export default function CloudDashboard() {
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion}>
       {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} events={events} setActive={setActive} refresh={fetchAll} />}
-      {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} linked={Boolean(license?.linked||status?.license?.linked)} />}
+      {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} />}
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
       {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} />}
@@ -830,7 +840,7 @@ function SetupHealth({ checks=[] }) {
 }
 
 // ─── Trading ──────────────────────────────────────────────────────────────────
-function TradingPage({ heartbeat, events, online, linked }) {
+function TradingPage({ heartbeat, events, online, linked, openCommand }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -842,7 +852,7 @@ function TradingPage({ heartbeat, events, online, linked }) {
       {/* AI Trading Assistant — the conversational feed lives here now,
           not under Activity. Activity tab still has the raw log for anyone
           who wants it; this is the default, human-readable experience. */}
-      <AIThoughtFeed linked={linked} />
+      <AIThoughtFeed linked={linked} onForceClose={openCommand} />
     </div>
   );
 }

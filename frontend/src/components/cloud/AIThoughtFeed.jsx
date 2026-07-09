@@ -281,7 +281,7 @@ const ageText = (minutes) => {
 };
 
 // ─── Current Trade panel — "Open Trade Thinking" ───────────────────────────
-function CurrentTradePanel({ opinion }) {
+function CurrentTradePanel({ opinion, onForceClose }) {
   if (!opinion || !opinion.open) {
     return (
       <div className="rounded-3xl border border-white/[0.07] bg-[#0d0e13] p-5" data-testid="current-trade-panel">
@@ -301,12 +301,43 @@ function CurrentTradePanel({ opinion }) {
   const decision = opinion.current_bot_decision || opinion.next_action || "WAIT";
   const direction = (opinion.direction || "—").toUpperCase();
   const pendingMessage = opinion.message || "";
+  const ticket = opinion.ticket ? String(opinion.ticket) : "";
+  const symbol = opinion.symbol || "XAUUSD";
+  const canForceClose = Boolean(onForceClose && ticket);
+  const forceCloseClick = () => {
+    if (!canForceClose) return;
+    onForceClose({
+      action: "FORCE_CLOSE_TRADE",
+      label: "Force Close Ticket",
+      detail: `Close only ticket ${ticket} on ${symbol}. The EA will reject the command if that ticket is not open, belongs to another symbol, or was not opened by this EA magic number.`,
+      tone: "red",
+      dangerous: true,
+      icon: XCircle,
+      payload: {
+        ticket,
+        symbol,
+        direction,
+        reason: "USER_FORCE_CLOSE_TRADE",
+      },
+    });
+  };
 
   return (
     <div className="rounded-3xl border border-violet-400/20 bg-violet-300/[0.05] p-5" data-testid="current-trade-panel">
       <div className={`mb-4 flex items-center justify-between gap-2 ${MONO_LABEL} text-violet-300`}>
         <span className="flex items-center gap-2"><Sparkles className="h-3.5 w-3.5" /> Open Trade Thinking</span>
-        {health && <span className={`normal-case tracking-normal text-[11px] font-bold ${health.cls}`}>{health.label}</span>}
+        <span className="flex items-center gap-2">
+          {canForceClose && (
+            <button
+              type="button"
+              onClick={forceCloseClick}
+              className="rounded-full border border-rose-300/25 bg-rose-400/10 px-2.5 py-1 text-[10px] font-black normal-case tracking-normal text-rose-200 transition hover:border-rose-300/45 hover:bg-rose-400/15"
+            >
+              Force close
+            </button>
+          )}
+          {health && <span className={`normal-case tracking-normal text-[11px] font-bold ${health.cls}`}>{health.label}</span>}
+        </span>
       </div>
 
       {inRecovery && (
@@ -328,8 +359,8 @@ function CurrentTradePanel({ opinion }) {
       )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Opinion label="Ticket" value={opinion.ticket || "—"} />
-        <Opinion label="Symbol" value={opinion.symbol || "—"} />
+        <Opinion label="Ticket" value={ticket || "—"} />
+        <Opinion label="Symbol" value={symbol || "—"} />
         <Opinion label="Direction" value={direction} />
         <Opinion label="Lot size" value={lots2(opinion.lot_size)} />
         <Opinion label="Entry price" value={num2(opinion.entry_price)} />
@@ -469,7 +500,7 @@ function BotDecisionPanel({ status }) {
 // compact=true renders a single-card teaser (used on the Home page) that
 // links into the full experience on the Trading tab, instead of duplicating
 // the raw "Bot Decision Feed" log card that used to live there.
-export default function AIThoughtFeed({ linked, compact = false, onOpenFull }) {
+export default function AIThoughtFeed({ linked, compact = false, onOpenFull, onForceClose }) {
   const [cards, setCards] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [opinion, setOpinion] = useState(null);
@@ -519,7 +550,7 @@ export default function AIThoughtFeed({ linked, compact = false, onOpenFull }) {
   return (
     <div className="space-y-4" data-testid="ai-thought-feed">
       <BotDecisionPanel status={botStatus} />
-      <CurrentTradePanel opinion={opinion} />
+      <CurrentTradePanel opinion={opinion} onForceClose={onForceClose} />
       <div className={`flex items-center gap-2 ${MONO_LABEL}`}>
         <Brain className="h-3.5 w-3.5" /> Recent Decisions
       </div>
