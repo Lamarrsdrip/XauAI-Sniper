@@ -4949,10 +4949,11 @@ bool XAU_RunnerConvictionActive(int signal,
                                 double peak,
                                 double profitUSD,
                                 double roomATR,
-                                XAU_TRADE_CONTEXT_STATE contextState)
+                                XAU_TRADE_CONTEXT_STATE contextState,
+                                double rDollars = 0.0)
 {
    if(!InpRunnerConvictionHoldEnable) return false;
-   if(signal == 0 || peak < InpRunnerConvictionMinPeakUSD || profitUSD <= 0.0) return false;
+   if(signal == 0 || peak < XAU_AdaptiveProfitArmUSD(InpRunnerConvictionMinPeakUSD, rDollars) || profitUSD <= 0.0) return false;
    if(!runnerClean || !trendAligned || structureConfirmedBroken) return false;
    if(emaAgainst || rsiAgainst) return false;
    if(momentumScore < InpRunnerConvictionMinMomentum) return false;
@@ -5280,10 +5281,11 @@ bool XAU_ThesisHoldRunnerAllowed(ulong ticket, bool isBuy, bool runnerClean,
                                  bool structureConfirmedBroken, bool emaAgainst,
                                  bool rsiAgainst, double givebackPct,
                                  double peak, int minsOpen,
-                                 XAU_TRADE_CONTEXT_STATE contextState)
+                                 XAU_TRADE_CONTEXT_STATE contextState,
+                                 double rDollars = 0.0)
 {
    if(!InpThesisHoldRunnerEnable) return false;
-   if(peak < InpThesisHoldMinPeakUSD) return false;
+   if(peak < XAU_AdaptiveProfitArmUSD(InpThesisHoldMinPeakUSD, rDollars)) return false;
    if(structureConfirmedBroken) return false;
    if(emaAgainst && rsiAgainst && momentumScore <= 2) return false;
    if(contextState == XAU_CONTEXT_WEAK_TRADE || contextState == XAU_CONTEXT_TREND_EXHAUSTION)
@@ -5345,6 +5347,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
    double refBal = StrategyReferenceBalance();
    double strongProfitUSD = MathMax(InpSmartExitStrongProfitUSD,
                                     refBal * InpSmartExitStrongProfitEquityPct / 100.0);
+   strongProfitUSD = XAU_AdaptiveProfitArmUSD(strongProfitUSD, rDollars);
    bool strongProfitReached = (peak >= strongProfitUSD);
    if(!strongProfitReached)
       return false;
@@ -5386,7 +5389,8 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                                                           peak,
                                                           profitUSD,
                                                           runnerRoomATR,
-                                                          contextState);
+                                                          contextState,
+                                                          rDollars);
    if(runnerConvictionHold)
    {
       lockPct = MathMin(lockPct, MathMax(10.0, MathMin(InpRunnerConvictionFloorPct, 55.0)));
@@ -5398,7 +5402,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                   peak, profitUSD, runnerRoomATR, momentumScore,
                   lockPct, allowedGiveback);
    }
-   double floorUSD = MathMax(InpSmartExitMinRetainUSD, peak * lockPct / 100.0);
+   double floorUSD = MathMax(XAU_AdaptiveProfitArmUSD(InpSmartExitMinRetainUSD, rDollars), peak * lockPct / 100.0);
    floorUSD = MathMin(floorUSD, peak * 0.90);
 
    int floorIdx = XAU_EnsureProfitFloorIndex(ticket);
@@ -5502,7 +5506,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
 	            lockPct = MathMax(lockPct, evLockPct);
 	            allowedGiveback = MathMin(allowedGiveback, ev.decision == XAU_EV_PARTIAL ? 38.0 : 32.0);
 	         }
-	         floorUSD = MathMax(floorUSD, MathMax(InpSmartExitMinRetainUSD, peak * lockPct / 100.0));
+	         floorUSD = MathMax(floorUSD, MathMax(XAU_AdaptiveProfitArmUSD(InpSmartExitMinRetainUSD, rDollars), peak * lockPct / 100.0));
 	         floorUSD = MathMin(floorUSD, peak * 0.92);
 
          bool evFloorRaised = (floorUSD > g_profitFloorLastFloorUSD[floorIdx] + 0.50);
@@ -5584,7 +5588,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                                                         structureConfirmedBroken,
                                                         emaAgainst, rsiAgainst,
                                                         givebackPct, peak, minsOpen,
-                                                        contextState);
+                                                        contextState, rDollars);
    if(runnerConvictionHold)
       thesisHoldAllowed = true;
    if(InpEVExitEngineEnable && ev.decision == XAU_EV_HOLD &&
@@ -5868,7 +5872,7 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
          lockPct = loosened;
       }
    }
-   double floorUSD = MathMax(InpProtectedPeakMinRetainUSD, peak * lockPct / 100.0);
+   double floorUSD = MathMax(XAU_AdaptiveProfitArmUSD(InpProtectedPeakMinRetainUSD, rDollars), peak * lockPct / 100.0);
    floorUSD = MathMin(floorUSD, peak * 0.90);
    double allowedGiveback = XAU_ContextAllowedGivebackPct(contextState,
                                                           InpProtectedPeakGivebackExitPct,
@@ -5884,7 +5888,7 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
                                                         structureConfirmedBroken,
                                                         false, false,
                                                         givebackPct, peak, 0,
-                                                        contextState);
+                                                        contextState, rDollars);
    // v6.17.7 FIX (item 8): this used to revoke thesisHoldAllowed whenever
    // profit <= floorUSD, with no lower bound -- but profit <= 0.0 (the
    // condition guarding the THESIS_HOLD_BE_REARM branch further below) always
@@ -10733,10 +10737,42 @@ double AccountSizeTPMultiplier()
 // R-terms"). Floors any such threshold at InpExitArmMinOwnR (0.20R default)
 // of the position's OWN risk so a bigger lot can never make it fire sooner,
 // in R-terms, than a smaller one would.
+// v6.20.4 (Commit E) — ONE central adaptive profit-protection threshold
+// function, per explicit owner requirement: "no module should independently
+// invent flat $20/$30/$50 protection levels anymore." Every exit/protection
+// module's flat-$/equity-% threshold should be computed as before (each
+// module's own tuned "raw" base value, preserving its individual character),
+// then passed through here instead of used directly.
+//
+// Design choice, stated explicitly rather than silently decided: this
+// function's mandatory inputs are the ones with real, load-bearing evidence
+// behind them (position/basket risk in dollars) -- the VPS-vs-Mac account
+// size difference already flows through here correctly because bigger
+// accounts get bigger lots get bigger rDollars, which this function already
+// scales against. Setup/grade/account-type are accepted as OPTIONAL
+// adjustment inputs (adjMult) rather than hard-coded into this function's
+// own logic, because baking "grade A gets X, setup Y gets Z" directly into
+// the shared threshold function would silently reintroduce the exact
+// per-module bespoke-logic problem this function exists to eliminate --
+// callers that have a genuine, evidenced reason to scale further can pass
+// adjMult; this function does not invent grade/setup-specific rules itself.
+//
+// XAU_MinArmUSDForOwnR() (used by EV_PROTECT and A+ Shield already) is now
+// a thin wrapper over this, so those 2 existing call sites are unchanged.
+double XAU_AdaptiveProfitArmUSD(double rawDollarThreshold, double positionRiskUSD,
+                                double basketRiskUSD = 0.0, double minOwnR = -1.0,
+                                double adjMult = 1.0)
+{
+   double effectiveRisk = MathMax(positionRiskUSD, basketRiskUSD);
+   if(effectiveRisk <= 0.0) return rawDollarThreshold; // no known risk figure yet -- fail safe to the module's own pre-existing behavior, never guess
+   double minR = (minOwnR > 0.0) ? minOwnR : InpExitArmMinOwnR;
+   double adjustedThreshold = MathMax(1.0, adjMult) * rawDollarThreshold;
+   return MathMax(adjustedThreshold, effectiveRisk * minR);
+}
+
 double XAU_MinArmUSDForOwnR(double dollarArm, double rDollars)
 {
-   if(rDollars <= 0.0) return dollarArm;
-   return MathMax(dollarArm, rDollars * InpExitArmMinOwnR);
+   return XAU_AdaptiveProfitArmUSD(dollarArm, rDollars);
 }
 
 int EffectiveMaxPyramidAdds(int dir, double moved, double atr)
@@ -17479,11 +17515,11 @@ bool XAU_BasketStructureBroken(int basketDir)
    return breakBars >= MathMax(1, InpGoldPullbackConfirmBars);
 }
 
-bool XAU_BasketRunnerConvictionActive(int basketDir, double totalPnL, double peakUSD, string &why)
+bool XAU_BasketRunnerConvictionActive(int basketDir, double totalPnL, double peakUSD, string &why, double basketRDollars = 0.0)
 {
    why = "";
    if(!InpRunnerConvictionHoldEnable) return false;
-   if(basketDir == 0 || totalPnL <= 0.0 || peakUSD < InpRunnerConvictionMinPeakUSD)
+   if(basketDir == 0 || totalPnL <= 0.0 || peakUSD < XAU_AdaptiveProfitArmUSD(InpRunnerConvictionMinPeakUSD, basketRDollars))
       return false;
    if(XAU_BasketStructureBroken(basketDir))
    {
@@ -17519,11 +17555,11 @@ bool XAU_BasketRunnerConvictionActive(int basketDir, double totalPnL, double pea
    return (m5M15Clean && (htfAligned || regimeAligned) && roomOk);
 }
 
-bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakActive, double floorUSD)
+bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakActive, double floorUSD, double basketRDollars = 0.0)
 {
    if(!InpTradeLifecycleEnable) return false;
 
-   double lifecyclePeakMin = MathMax(1.0, InpLifecyclePeakMinUSD);
+   double lifecyclePeakMin = MathMax(1.0, XAU_AdaptiveProfitArmUSD(InpLifecyclePeakMinUSD, basketRDollars));
    if(g_basketPeakUSD < lifecyclePeakMin) return false;
 
    if(g_basketPeakTime <= 0) g_basketPeakTime = TimeCurrent();
@@ -17541,7 +17577,7 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
    double givebackPct = (g_basketPeakUSD > 0.0 && totalPnL < g_basketPeakUSD)
                         ? ((g_basketPeakUSD - totalPnL) / g_basketPeakUSD) * 100.0
                         : 0.0;
-   double secondChanceUSD = MathMax(InpLifecycleSecondChanceMinUSD,
+   double secondChanceUSD = MathMax(XAU_AdaptiveProfitArmUSD(InpLifecycleSecondChanceMinUSD, basketRDollars),
                                     g_basketPeakUSD * MathMax(1.0, InpLifecycleSecondChancePeakPct) / 100.0);
    int minsAfterPeak = (g_basketPeakTime > 0) ? (int)((TimeCurrent() - g_basketPeakTime) / 60) : 0;
 
@@ -17699,11 +17735,29 @@ bool ManageBasket()
 
    // Aggregate floating PnL across all EA positions on this symbol
    double totalPnL = 0.0;
+   // v6.20.4 (Commit D) — aggregate basket risk (sum of each open position's
+   // own lots * risk-per-lot-for-its-own-SL-distance), the basket-level
+   // analog of the per-position rDollars already used by EV_PROTECT/A+
+   // Shield via XAU_MinArmUSDForOwnR(). Used below so Basket Lock's floor
+   // can be judged against the basket's OWN real risk instead of a flat
+   // percentage of peak, closing the gap the 2026-07-09 audit found: this
+   // was the one exit path never given the same R-normalization the other
+   // two already have. Also logs each position's own floating profit next
+   // to the aggregate so the previously-found g_basketPeakUSD-vs-bestFloating
+   // discrepancy can be observed live going forward rather than assumed.
+   double basketRDollars = 0.0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(!posInfo.SelectByIndex(i)) continue;
       if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
       totalPnL += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+      double posSL = posInfo.StopLoss();
+      double posSlDist = (posSL > 0.0) ? MathAbs(posInfo.PriceOpen() - posSL) : 0.0;
+      if(posSlDist > 0.0)
+         basketRDollars += RiskPerLotForDistance(posSlDist) * posInfo.Volume();
+      if(TimeCurrent() - g_basketLastLog >= 60)
+         PrintFormat("BASKET_PEAK_DIAG posId=%I64u ownFloatingUSD=%.2f vs aggregateBasketPeakUSD=%.2f (diagnostic only, not yet used in any decision -- tracks the previously-found peak-tracker discrepancy)",
+                     posInfo.Ticket(), posInfo.Profit() + posInfo.Swap() + posInfo.Commission(), g_basketPeakUSD);
    }
 
    double bal = StrategyReferenceBalance();
@@ -17765,14 +17819,40 @@ bool ManageBasket()
             armUSD *= 1.25;     // give the trend extra room
       }
    }
+   // v6.20.4 (Commit D) — R-normalize the basket arm threshold the same way
+   // EV_PROTECT (line ~5089) and A+ Shield (line ~18567) already do via
+   // XAU_MinArmUSDForOwnR(). Without this, armUSD is a flat dollar/equity-%
+   // value: a bigger-lot basket's floating profit crosses it after a SMALLER
+   // price move (fewer R) than a smaller-lot basket would need, "arming"
+   // protection sooner in R-terms purely because the lot is bigger -- the
+   // exact VPS-vs-Mac symptom this function's own prior fix (line ~10736)
+   // was built to solve for two OTHER exit paths but never applied here.
+   // basketRDollars (computed in the position loop above) is 0.0 if no open
+   // position has a broker-side SL set yet, in which case this is a no-op
+   // (MathMax(armUSD, 0.0*0.20) == armUSD) -- deliberately fails safe to the
+   // pre-existing behavior rather than guessing a risk figure.
+   if(basketRDollars > 0.0)
+   {
+      double armUSDBeforeRNorm = armUSD;
+      armUSD = XAU_MinArmUSDForOwnR(armUSD, basketRDollars);
+      if(armUSD > armUSDBeforeRNorm + 0.01)
+         PrintFormat("BASKET_ARM_R_NORMALIZED: raw armUSD=$%.2f -> $%.2f (basket risk=$%.2f, floor=%.0f%% of own R) -- prevents a bigger-lot basket from arming protection sooner in R-terms than a smaller one would",
+                     armUSDBeforeRNorm, armUSD, basketRDollars, InpExitArmMinOwnR * 100.0);
+   }
+   // v6.20.3: same R-normalization as the classic armUSD above -- a flat-$
+   // InpProtectedPeakMinUSD is meaningless across account sizes/lot sizes on
+   // its own, so require it to also clear InpExitArmMinOwnR of this basket's
+   // own risk. Computed once and reused at every InpProtectedPeakMinUSD gate
+   // in this function so they can't drift apart.
+   double basketProtectedPeakMinUSD_R = XAU_AdaptiveProfitArmUSD(InpProtectedPeakMinUSD, basketRDollars);
    bool basketProtectedPeakActive = InpProtectedPeakFloorEnable &&
-                                    g_basketPeakUSD >= MathMax(1.0, InpProtectedPeakMinUSD);
+                                    g_basketPeakUSD >= MathMax(1.0, basketProtectedPeakMinUSD_R);
    if(!g_basketArmed && g_basketPeakUSD >= armUSD) g_basketArmed = true;
    if(!g_basketArmed && basketProtectedPeakActive)
    {
       g_basketArmed = true;
-      PrintFormat("PROFIT_FLOOR_SET BASKET | protected peak arm: peak=$%.2f >= $%.2f even though classic arm=$%.2f",
-                  g_basketPeakUSD, InpProtectedPeakMinUSD, armUSD);
+      PrintFormat("PROFIT_FLOOR_SET BASKET | protected peak arm: peak=$%.2f >= $%.2f (R-normalized from $%.2f) even though classic arm=$%.2f",
+                  g_basketPeakUSD, basketProtectedPeakMinUSD_R, InpProtectedPeakMinUSD, armUSD);
    }
 
    // BE flag: once basket reached BE threshold, never let it go negative
@@ -17797,7 +17877,7 @@ bool ManageBasket()
    if(basketProtectedPeakActive)
    {
       double protectedLockPct = MathMax(1.0, MathMin(InpProtectedPeakLockPct, 85.0));
-      double protectedFloorUSD = MathMax(InpProtectedPeakMinRetainUSD,
+      double protectedFloorUSD = MathMax(XAU_AdaptiveProfitArmUSD(InpProtectedPeakMinRetainUSD, basketRDollars),
                                          g_basketPeakUSD * protectedLockPct / 100.0);
       protectedFloorUSD = MathMin(protectedFloorUSD, g_basketPeakUSD * 0.90);
       floorUSD = MathMax(floorUSD, protectedFloorUSD);
@@ -17827,7 +17907,7 @@ bool ManageBasket()
       g_basketLastLog = TimeCurrent();
    }
 
-   if(XAU_BasketLifecycleManager(totalPnL, bal, basketProtectedPeakActive, g_basketFloorUSD))
+   if(XAU_BasketLifecycleManager(totalPnL, bal, basketProtectedPeakActive, g_basketFloorUSD, basketRDollars))
       return true;
 
    // ============ v4.9.7 SMART GUARDS (run BEFORE floor trigger) ============
@@ -17924,7 +18004,7 @@ bool ManageBasket()
                if(fastRevConfirmed)
                {
                   string basketRunnerWhyFR = "";
-                  if(XAU_BasketRunnerConvictionActive(basketDirFRW, totalPnL, g_basketPeakUSD, basketRunnerWhyFR))
+                  if(XAU_BasketRunnerConvictionActive(basketDirFRW, totalPnL, g_basketPeakUSD, basketRunnerWhyFR, basketRDollars))
                   {
                      PrintFormat("BASKET_RUNNER_CONVICTION_HOLD │ fast-reversal close deferred; runner trend still valid | %s",
                                  basketRunnerWhyFR);
@@ -17946,7 +18026,7 @@ bool ManageBasket()
                PrintFormat("BASKET_FAST_REV_PROFIT_BREATHE │ peak $%.2f -> pnl $%.2f, drop %.1f%% in %ds, already soft-locked once with no confirmed reversal; holding runner",
                            g_basketPeakUSD, totalPnL, dropPctOfPeak, InpBasketFastWindowSec);
             }
-            if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= InpProtectedPeakMinUSD)
+            if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= basketProtectedPeakMinUSD_R)
             {
                PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | FAST_REVERSAL peak=$%.2f pnl=$%.2f drop=%.1f%% in %ds",
                            g_basketPeakUSD, totalPnL, dropPctOfPeak, InpBasketFastWindowSec);
@@ -18009,7 +18089,7 @@ bool ManageBasket()
                if(hardCapConfirmed)
                {
                   string basketRunnerWhyHC = "";
-                  if(XAU_BasketRunnerConvictionActive(basketDirHCW, totalPnL, g_basketPeakUSD, basketRunnerWhyHC))
+                  if(XAU_BasketRunnerConvictionActive(basketDirHCW, totalPnL, g_basketPeakUSD, basketRunnerWhyHC, basketRDollars))
                   {
                      PrintFormat("BASKET_RUNNER_CONVICTION_HOLD │ hard-cap close deferred; runner trend still valid | %s",
                                  basketRunnerWhyHC);
@@ -18031,7 +18111,7 @@ bool ManageBasket()
                PrintFormat("BASKET_HARD_CAP_PROFIT_BREATHE │ peak $%.2f -> pnl $%.2f, giveback $%.2f >= cap $%.2f, already soft-locked once with no confirmed reversal; holding runner",
                            g_basketPeakUSD, totalPnL, currGivebackUSD, maxGivebackUSD);
             }
-            if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= InpProtectedPeakMinUSD)
+            if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= basketProtectedPeakMinUSD_R)
             {
                PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | HARD_CAP peak=$%.2f pnl=$%.2f giveback=$%.2f cap=$%.2f",
                            g_basketPeakUSD, totalPnL, currGivebackUSD, maxGivebackUSD);
@@ -18100,7 +18180,7 @@ bool ManageBasket()
             return false;
          }
          string basketRunnerWhyBL = "";
-         if(XAU_BasketRunnerConvictionActive(basketDirBL, totalPnL, g_basketPeakUSD, basketRunnerWhyBL))
+         if(XAU_BasketRunnerConvictionActive(basketDirBL, totalPnL, g_basketPeakUSD, basketRunnerWhyBL, basketRDollars))
          {
             PrintFormat("BASKET_RUNNER_CONVICTION_HOLD │ basket-lock close deferred; runner trend still valid | %s",
                         basketRunnerWhyBL);
@@ -18122,7 +18202,7 @@ bool ManageBasket()
          ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
          return true;
       }
-      if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= InpProtectedPeakMinUSD)
+      if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= basketProtectedPeakMinUSD_R)
       {
          PrintFormat("GIVEBACK_LIMIT_TRIGGERED BASKET | FLOOR peak=$%.2f floor=$%.2f pnl=$%.2f",
                      g_basketPeakUSD, g_basketFloorUSD, totalPnL);
@@ -18746,13 +18826,20 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          double recentMove   = isBuy ? (curPrice - price5BarAgo) : (price5BarAgo - curPrice);
          bool   fastVelocity = (atr > 0 && recentMove >= atr * InpAMPL_VelATRFactor);
 
-         bool explosiveMove = (bigCandle || fastVelocity) && (amplProfit >= InpAMPL_MinUSD);
+         // v6.20.4 (Commit E) — AMPL was the one exit module using pure
+         // flat-$ thresholds (InpAMPL_MinUSD/GivebackMinUSD/MinRetainUSD)
+         // with NO risk-scaling at all, unlike EV_PROTECT/A+ Shield/Basket
+         // Lock's arm. Wrapped in XAU_AdaptiveProfitArmUSD so a bigger-lot
+         // (bigger rDollars) position needs proportionally more profit
+         // before AMPL treats a move as "explosive" or a giveback as
+         // "meaningful" -- same fix, same reasoning, extended to this module.
+         bool explosiveMove = (bigCandle || fastVelocity) && (amplProfit >= XAU_AdaptiveProfitArmUSD(InpAMPL_MinUSD, rDollars));
 
          // Signal 3: Give-back limit — fires regardless of explosive detection,
          // but v6.4.6 audit prevents late tiny locks after most of the peak is gone.
          double peakRetrace   = (amplProfit < peak) ? ((peak - amplProfit) / peak) * 100.0 : 0.0;
-         bool   givebackSignal = (peak >= InpAMPL_GivebackMinUSD) && (peakRetrace >= InpAMPL_GivebackPct);
-         double amplRequiredCurrentUSD = MathMax(InpAMPL_MinRetainUSD, peak * InpAMPL_GivebackMinCurrentPct / 100.0);
+         bool   givebackSignal = (peak >= XAU_AdaptiveProfitArmUSD(InpAMPL_GivebackMinUSD, rDollars)) && (peakRetrace >= InpAMPL_GivebackPct);
+         double amplRequiredCurrentUSD = MathMax(XAU_AdaptiveProfitArmUSD(InpAMPL_MinRetainUSD, rDollars), peak * InpAMPL_GivebackMinCurrentPct / 100.0);
          bool   givebackLimit = givebackSignal && (amplProfit >= amplRequiredCurrentUSD);
 
          if(explosiveMove || givebackSignal)
@@ -18796,7 +18883,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
             double amplLockUSD = 0.0;
             if(inProfit_a)
                amplLockUSD = MathMax(0.0, XAU_ProjectProfitUSD(isBuy, openPx, amplSL, lotsOpen));
-            double amplRequiredLockUSD = MathMax(InpAMPL_MinRetainUSD, peak * InpAMPL_MinRetainPeakPct / 100.0);
+            double amplRequiredLockUSD = MathMax(XAU_AdaptiveProfitArmUSD(InpAMPL_MinRetainUSD, rDollars), peak * InpAMPL_MinRetainPeakPct / 100.0);
             bool amplTinyLockSkipped = false;
             if(givebackSignal && (amplProfit < amplRequiredCurrentUSD || amplLockUSD < amplRequiredLockUSD))
             {
@@ -20111,6 +20198,7 @@ void ManagePositions()
       //   from BIG peaks (90% retrace from $200+) — it's a runner-saver, not a scalper.
       double effRetracePct = InpPreservationMode ? MathMax(InpPeakRetracePct, 90.0) : InpPeakRetracePct;
       double effPeakMin    = InpPreservationMode ? MathMax(EffPeakMinUSD(), 200.0)  : EffPeakMinUSD();
+      effPeakMin = XAU_AdaptiveProfitArmUSD(effPeakMin, rDollars);
       if(InpPeakRetraceExit && peak >= effPeakMin && retracePct >= effRetracePct)
       {
          if(AIBlocksClose("PEAK_RETRACE", ticket, isBuy, openPx, curPrice,
