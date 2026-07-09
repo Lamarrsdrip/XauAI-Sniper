@@ -14,6 +14,79 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.19.0 — 2026-07-09 — Adaptive Exit Memory, Phase A
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.19.0"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.19.0.mq5`
+- [x] Top-of-file header banner updated (single physical line)
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6190_final4.log`)
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` byte-synced to canonical source
+- [x] `frontend/src/components/DownloadSection.jsx` fallback version/edition/filename strings updated
+- [x] `backend/server.py` `TradeMemoryRecord.ea_version` default updated
+- [x] Static test added: `tests/test_xau_v6190_adaptive_exit_memory_phase_a_static.py` (12 tests, all passing)
+- [x] **Independent audit performed** (separate agent, no involvement in writing the change) before shipping — found and fixed one real bug (see below)
+
+### Owner request
+"Build an adaptive entry-and-exit learning system." Explicit process requirement: Phase A (exit)
+implemented, audited, and tested BEFORE any Phase B (entry timing) work; Phase B must start
+observation-only (collect evidence, do not let it alter entries yet). This release is Phase A only.
+
+### Investigation before writing any code (per explicit instruction not to fork a new system)
+Found the codebase already has two relevant pieces of live learning infrastructure:
+- `XAUAI_ConsciousMemory_*.csv` (`XAU_QueryConsciousMemory`/`XAU_AppendConsciousMemory`) — aggregate
+  setup+direction+grade stats, currently only feeds lot-size (`XAU_MemoryRecommendation`).
+- `g_evExitLearningBias` — a post-close 5/10/15/30/60-minute price-tracking self-review
+  (`XAU_EVPostCloseReview`/`XAU_UpdateClosedTradeOutcomes`, verdicts `EXIT_EARLY_LEFT_PROFIT`/
+  `EXIT_GOOD_AVOIDED_REVERSAL`), already live inside `XAU_EvaluateExitEV`'s continuation/exhaustion
+  probabilities — this is the real, already-working answer to "does the bot learn from its own exits."
+
+Also found `g_memoryHoldBiasUntil` (a third, separate hold-bias signal) is **dead code** — gated
+behind `AIBlocksClose()`, which returns `false` unconditionally at `XAU_AIIsAdvisoryOnly()` (correct,
+deliberate v6.17.11 behavior: AI can never veto a trade) before ever reaching the memory check.
+Computed every trade, never consulted. Left as-is, documented rather than revived — reviving it would
+mean routing a real decision back through the AI-veto path this file deliberately closed.
+
+### The actual gap and the fix
+`g_evExitLearningBias` is **one global scalar** shared by every setup and direction — a SELL
+TREND_PULLBACK that reliably reverses hard after peak and a BUY BREAKOUT that reliably keeps running
+get averaged into the same number. Segmented the SAME mechanism (same verdicts, same step/cap
+constants) by `(setup, direction)` via a new bounded array `g_exitBiasKeys[]` (cap 40, evicts oldest).
+`XAU_GetExitLearningBias(setup, dir)` returns a key's own bias only once it has
+`InpExitBiasMinSamples`(3) of its own same-key evidence (Part 4: never adapt on a thin sample) and
+decays it linearly to 0 over `InpExitBiasDecayDays`(14) without a fresh same-key review (Part 4:
+memory must decay); otherwise returns the existing global bias unchanged — cold start is today's live
+behavior exactly, never worse or undefined. `XAU_EvaluateExitEV()` now takes this resolved value as a
+parameter instead of reading the global directly. `XAU_EVPostCloseReview()` now also skips both the
+global and keyed update during an active news window or HIGH/EXTREME spread (Part 4: don't learn from
+abnormal conditions) — logs `SKIPPED_ABNORMAL_CONDITION` instead. `XAU_WriteLearningReport()` extended
+with a per-key table.
+
+### Independent audit — one bug found and fixed
+Decay math (`ageDays = (TimeCurrent() - lastUpdate) / 86400`) had no floor at 0. A backward clock jump
+(VPS NTP resync, broker server clock adjustment, snapshot restore) between a write and a later read
+would make `ageDays` negative, pushing `decay` above 1.0 and letting the resolved bias momentarily
+exceed `InpEVLearningBiasMax` — the one hard cap this mechanism is supposed to never break. Fixed:
+`ageDays = MathMax(0.0, ...)`.
+
+### Owner follow-up: "a real winner should never round-trip back to a loss"
+Investigated rather than built blind: `XAU_SmartExit3Layer` (line ~4952, `InpSmartExitEnable=true` by
+default) already provides this, unconditionally, not R-gated. Arms once peak reaches
+`MathMax(InpSmartExitStrongProfitUSD=75, equity*InpSmartExitStrongProfitEquityPct%)` and moves the SL
+via a ratcheted `SafeModifySL` call to lock `MathMax(InpSmartExitMinRetainUSD=35, peak*lockPct%)` of
+profit. Given this release's own v6.18.0 change raised typical risk-per-trade to 9-15% of equity, a
+$75 arm point now sits at roughly 0.17R for a typical trade — earlier in R-terms than before, not
+later. No new mechanism built; this requirement is already satisfied by existing, live, default-on
+code. (Independent audit separately found `XAU_ProtectPeakProfitFloor`, a *different* peak-floor
+mechanism, is R-gated and becomes a structural no-op for wide-stop/high-risk trades specifically — not
+a gap in the "never round-trip" guarantee, since `XAU_SmartExit3Layer` covers it unconditionally, but
+worth knowing the two mechanisms aren't redundant with each other for that trade profile.)
+
+### Explicitly NOT touched in this release
+Entry timing (Phase B), SMART-GUARD/Personality recalibration, and all v6.18.x work are unchanged.
+
+---
+
 ## v6.18.1 — 2026-07-09 — Growth Engine: Exit-Arm + Pyramid Margin Safety
 
 ### EA Compile
