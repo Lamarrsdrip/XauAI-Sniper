@@ -3282,6 +3282,46 @@ SAFE_REMOTE_COMMANDS = {
     "FORCE_OPEN_TRADE": "Manually force-open a blocked candidate",
 }
 
+REMOTE_COMMAND_EXPIRY_MINUTES = {
+    "FORCE_OPEN_TRADE": 15,
+    "FORCE_CLOSE_TRADE": 5,
+    "CLOSE_ALL_TRADES": 5,
+    "PAUSE_NEW_TRADES": 15,
+    "STOP_TRADING": 15,
+    "RESUME_TRADING": 15,
+    "FORCE_SYNC": 30,
+    "FORCE_REPORT_UPLOAD": 30,
+    "UPDATE_PROP_FIRM_CONFIG": 60,
+}
+
+async def _expire_stale_pending_commands(now: Optional[datetime] = None) -> int:
+    """Never serve stale manual commands to the EA command poller.
+
+    The EA validates force-open market context, but the queue itself also has to
+    be time-aware. Otherwise an old pending force-close/close-all/pause command
+    can be delivered much later after the trader's intent and market state have
+    changed.
+    """
+    now = now or datetime.now(timezone.utc)
+    expired_total = 0
+    for action, minutes in REMOTE_COMMAND_EXPIRY_MINUTES.items():
+        cutoff = (now - timedelta(minutes=minutes)).isoformat()
+        res = await db.cloud_bot_commands.update_many(
+            {
+                "status": "PENDING",
+                "action": action,
+                "requested_at": {"$lt": cutoff},
+            },
+            {"$set": {
+                "status": "EXPIRED",
+                "ack_status": "EXPIRED",
+                "ack_at": now.isoformat(),
+                "ack_message": f"Command expired before EA acknowledgement after {minutes} minutes.",
+            }},
+        )
+        expired_total += int(getattr(res, "modified_count", 0) or 0)
+    return expired_total
+
 def _normalize_force_open_payload(payload: Optional[Dict]) -> dict:
     raw = payload or {}
     direction = str(raw.get("direction", "")).strip().upper()
@@ -5665,6 +5705,7 @@ async def cloud_command_pending(request: Request, limit: int = 5,
                                 pin: str = "", license_key: str = "", account: str = ""):
     raw = _normalize_license_key(license_key or pin or "")
     lic = await _resolve_monitor_license(raw, account, request)
+    expired = await _expire_stale_pending_commands()
     n = max(1, min(int(limit), 10))
     query = {"status": "PENDING"}
     if lic and lic.get("pin"):
@@ -5672,7 +5713,8 @@ async def cloud_command_pending(request: Request, limit: int = 5,
     if account:
         query["$or"] = [{"mt5_account": str(account)}, {"account": str(account)}, {"mt5_account": ""}, {"mt5_account": {"$exists": False}}]
     rows = await db.cloud_bot_commands.find(query, {"_id": 0}).sort("requested_at", 1).to_list(n)
-    return {"ok": True, "commands": rows, "next": rows[0] if rows else None, "count": len(rows)}
+    return {"ok": True, "commands": rows, "next": rows[0] if rows else None,
+            "count": len(rows), "expired": expired}
 
 @api_router.post("/cloud/command/ack")
 async def cloud_command_ack(req: CloudCommandAckReq, request: Request):

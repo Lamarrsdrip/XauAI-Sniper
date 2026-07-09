@@ -12659,7 +12659,8 @@ void OnTick()
                             : (pSL == 0 || (newSL < pSL - SymbolInfoDouble(Symbol(), SYMBOL_POINT) && newSL > curPx + minStop));
             if(slImproves)
             {
-               bool ok = trade.PositionModify(ticket, newSL, PositionGetDouble(POSITION_TP));
+               bool ok = SafeModifySL(ticket, newSL, PositionGetDouble(POSITION_TP),
+                                      (pDir == 0), curPx, "DAILY_PROFIT_LOCK");
                if(ok) Print("PROFIT LOCK: ticket=", ticket,
                             " SL moved to ", DoubleToString(newSL, digits),
                             " (lockDist=", DoubleToString(lockDist, 2), " ATR-adaptive)");
@@ -19826,6 +19827,12 @@ void ManagePositions()
                         " reached ", DoubleToString(EffTPExtendTriggerPct(),0), "% of TP, regime=",
                         RegimeName(), " — TP pushed ", DoubleToString(tpAdd, digits),
                         " further to ", DoubleToString(newTP, digits), ". Runner keeps running.");
+               }
+               else if(tpSane)
+               {
+                  PrintFormat("TP_EXTEND FAIL #%I64u ret=%u (%s) err=%d curSL=%.5f newTP=%.5f | runner TP extension will retry only if conditions remain valid.",
+                              ticket, trade.ResultRetcode(), trade.ResultRetcodeDescription(),
+                              GetLastError(), curSL, newTP);
                }
             }
          }
@@ -28532,6 +28539,11 @@ void PG_PerPositionRatchet()
          Print("PG ratchet: ticket=", tk, " ", isBuy ? "BUY" : "SELL",
                " profit=", DoubleToString(profitInAtr, 2), "xATR [", ctxTag, "]",
                "  SL: ", DoubleToString(curSL, digits), " -> ", DoubleToString(newSL, digits));
+      }
+      else
+      {
+         PrintFormat("PG ratchet modify failed: ticket=%I64u ret=%u err=%d SL %.5f -> %.5f TP=%.5f | broker rejected SLTP update; will retry if ratchet remains valid.",
+                     tk, res.retcode, GetLastError(), curSL, newSL, curTP);
       }
    }
 }

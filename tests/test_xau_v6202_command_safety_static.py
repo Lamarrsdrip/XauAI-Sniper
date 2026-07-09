@@ -78,6 +78,16 @@ def test_force_close_ticket_is_exact_magic_symbol_scoped():
         assert marker in fn
 
 
+def test_ea_sl_tp_modify_paths_do_not_fail_silently():
+    ea = read(BACKEND_EA)
+    assert 'SafeModifySL(ticket, newSL, PositionGetDouble(POSITION_TP),' in ea
+    assert '"DAILY_PROFIT_LOCK"' in ea
+    assert "TP_EXTEND FAIL" in ea
+    assert "trade.ResultRetcodeDescription()" in ea
+    assert "PG ratchet modify failed" in ea
+    assert "broker rejected SLTP update" in ea
+
+
 def test_ea_command_poller_has_separate_force_close_branch():
     ea = read(BACKEND_EA)
     branch = ea[ea.index('else if(action == "FORCE_CLOSE_TRADE")'):ea.index('else if(action == "FORCE_SYNC")')]
@@ -104,6 +114,19 @@ def test_force_open_carries_signal_price_symbol_and_score_to_ea():
 def test_backend_validates_force_close_and_extends_force_open_payload():
     server = read(SERVER)
     assert '"FORCE_CLOSE_TRADE": "Force-close one exact ticket"' in server
+    assert '"FORCE_CLOSE_TRADE": 5' in server
+    assert '"CLOSE_ALL_TRADES": 5' in server
+    assert '"FORCE_OPEN_TRADE": 15' in server
+    assert "async def _expire_stale_pending_commands" in server
+    expiry_fn = py_body(server, "async def _expire_stale_pending_commands(now: Optional[datetime] = None) -> int:")
+    for marker in [
+        '"status": "PENDING"',
+        '"requested_at": {"$lt": cutoff}',
+        '"status": "EXPIRED"',
+        '"ack_status": "EXPIRED"',
+        "Command expired before EA acknowledgement",
+    ]:
+        assert marker in expiry_fn
     open_fn = py_body(server, "def _normalize_force_open_payload(payload: Optional[Dict]) -> dict:")
     for marker in ['"symbol": symbol', '"signal_price": signal_price', '"score": score', '"event_time":']:
         assert marker in open_fn
@@ -113,6 +136,18 @@ def test_backend_validates_force_close_and_extends_force_open_payload():
     handler_start = server.index("async def cloud_command_request")
     request_window = server[handler_start:server.index("doc = {", handler_start)]
     assert "_normalize_force_close_payload(payload)" in request_window
+
+
+def test_backend_pending_endpoint_expires_stale_commands_before_serving():
+    server = read(SERVER)
+    start = server.index("async def cloud_command_pending")
+    end = server.index("@api_router.post(\"/cloud/command/ack\")", start)
+    pending_fn = server[start:end]
+    expire_idx = pending_fn.index("expired = await _expire_stale_pending_commands()")
+    query_idx = pending_fn.index('query = {"status": "PENDING"}')
+    find_idx = pending_fn.index("db.cloud_bot_commands.find(query")
+    assert expire_idx < query_idx < find_idx
+    assert '"expired": expired' in pending_fn
 
 
 def test_frontend_force_open_payload_includes_audit_fields():
