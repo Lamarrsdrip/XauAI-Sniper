@@ -14,6 +14,62 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.20.1 — 2026-07-09 — Delayed-Entry Outcome Telemetry
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.20.1"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.20.1.mq5`
+- [x] Top-of-file header banner updated (single physical line)
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6201_final2.log`)
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` byte-synced to canonical source
+- [x] `frontend/src/components/DownloadSection.jsx` fallback version/edition/filename strings updated
+- [x] `backend/server.py` `TradeMemoryRecord.ea_version` default updated
+- [x] Static test added: `tests/test_xau_v6201_delayed_entry_outcome_telemetry_static.py` (13 tests, all passing)
+- [x] **Independent audit performed** before shipping — found and fixed one real correctness bug plus one accuracy gap
+
+### Owner request
+"Do not change strategy again yet" — pure instrumentation to prove whether v6.20.0's M5 entry delay
+is actually improving timing. For every delayed candidate that becomes a real trade: original signal
+time/price, delayed entry time/price, delay seconds, price improvement/worsening, entry reason,
+ticket. After close: actual MAE/MFE/P&L, whether the delayed entry improved on the original signal
+price, an estimated instant-entry MAE/MFE using the original price, and a helped/hurt verdict. Add to
+watchdog/report.
+
+### Mechanism
+One-shot "mailbox" (`XAU_LastEntryTimingDecision g_lastEntryTimingDecision`) written by
+`XAU_TimingEngineConfirmsEntry()` immediately before each of its three `return true` paths (immediate/
+A+-momentum, M5-delay-confirmed, legacy bar-based) — no entry/exit decision logic touched, confirmed
+by independent audit. `OpenTrade()` consumes it into a new bounded, posId-keyed array
+(`g_delayOutcome[]`, cap 60) right after its existing trade-open bookkeeping call. At close, the
+existing close-handling block (already has posId, actual MAE, actual MFE, final P/L, and the real
+lot size) calls a new `XAU_ReportDelayOutcome()`, which computes an estimated instant-entry
+MAE/MFE/P&L by shifting the actual numbers by the dollar value of the price improvement, verdict
+DELAY_HELPED/HURT/NEUTRAL/NO_DELAY. Logged per-trade via the same Print/PrintFormat pattern used
+throughout this file (Command Center scrapes it same as every other decision line) and aggregated
+into `XAU_WriteLearningReport()`'s new "Delayed-Entry Outcome" section.
+
+### Independent audit — one real bug found and fixed, one accuracy gap closed
+**Bug (High, telemetry correctness):** `XAU_TimingEngineConfirmsEntry()` has a second caller
+(`CheckReEntryOpportunity`, the RE_ENTRY path) that can also set the mailbox — the first pass only
+cleared it at the main-scan caller, leaving it dangling on every RE_ENTRY attempt. A later, unrelated
+`OpenTrade()` call (from missed-signal recovery or manual force-open, neither of which sets this
+mailbox itself) could have wrongly consumed the stale RE_ENTRY data, misattributing one trade's
+original-signal/delay data to a completely different trade and corrupting the aggregate proof stats
+this release exists to produce. Fixed: RE_ENTRY's caller now also unconditionally clears the mailbox
+after its own `OpenTrade()` call, mirroring the main-scan caller exactly. Confirmed via `grep` that
+these are the only two callers of `XAU_TimingEngineConfirmsEntry()` in the file.
+
+**Accuracy gap (Low-Medium):** the dollar-shift estimate used a hardcoded `$100/lot` (100oz contract)
+constant instead of `XAU_MoneyPerLotForDistance()`, the broker-aware `OrderCalcProfit`-based helper
+already used elsewhere in this file for the same price-distance-to-dollars conversion. Fixed to reuse
+it, so the estimate stays correct under any broker's actual contract size or account currency instead
+of silently diverging from the file's own established precision.
+
+### Explicitly NOT built in this release
+No strategy changes, per explicit owner instruction. All v6.20.0/v6.19.x/v6.18.x work is unchanged.
+
+---
+
 ## v6.20.0 — 2026-07-09 — M5 Entry Delay, Phase B
 
 ### EA Compile
