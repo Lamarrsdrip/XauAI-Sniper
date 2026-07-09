@@ -14,6 +14,62 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.18.0 — 2026-07-09 — Growth Engine: Unified Account-Relative Sizing
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.18.0"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.18.0.mq5`
+- [x] Top-of-file header banner updated (single physical line, regex-verified against `backend/server.py::_get_ea_meta()`)
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`test_reports/metaeditor_v6180_final.log`)
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` byte-synced to canonical source
+- [x] `frontend/src/components/DownloadSection.jsx` fallback version/edition/filename strings updated
+- [x] `backend/server.py` `TradeMemoryRecord.ea_version` default updated
+- [x] Static test added: `tests/test_xau_v6180_growth_engine_sizing_static.py` (7 tests, all passing)
+
+### Forensic basis
+Owner-directed audit (`audits/xau_growth_engine_forensic_audit_2026-05-15_to_2026-07-08.md`) of the
+real May19–June17 growth run: verified trade log shows $100k starting balance, +$351,118 net by
+2026-06-15 (74% win rate, PF 3.07, 92.8% of profit from TREND_PULLBACK), ending in a real loss
+cluster on 2026-06-17 before the owner switched to a separate account. A follow-up lot-sizing audit
+found the live default (`InpLotSizingMode = JUNE_16_19_BALANCE_MODE`) silently overrode every risk-%
+cap the codebase computes and displays, forcing 12.5–30% risk per trade depending on account size —
+while `InpMaxRiskPctEquity` (5%) and `InpMaxAggregateRiskPct` (8%) claimed to be the limit and were
+never actually consulted for the live path. Two systems disagreeing about the true ceiling.
+
+### Root cause and fix
+One entry-sizing authority replaces the two that disagreed:
+- `InpNormalRiskPct = 15.0` — uniform target risk-per-trade across every account size (owner
+  direction 2026-07-09: "cap all acc to start from 15%", matching the ~15.5% average risk/trade
+  already observed in the real growth-run data).
+- `InpReducedRiskFloorPct = 9.0` — hard floor (60% of normal) for legitimate evidence-based risk
+  reduction (weaker grade, thin AI/memory/volatility evidence). A qualified trade can no longer
+  collapse below this floor no matter how many soft multipliers stack — enforced by a final clamp
+  applied *after* every legacy multiplier (Asia session, volatility-adaptive, prop-firm, large-
+  account floor), not just at the top of the sizing function.
+- `InpMaxRiskPctEquity` raised 5.0 → 15.0, `InpMaxAggregateRiskPct` raised 8.0 → 35.0, so the hard
+  backstops agree with the new target instead of silently contradicting it.
+- `JUNE_16_19_BALANCE_MODE` / `REAL_RISK_MODE` branch retired — both converge on one real-SL-risk
+  formula. The enum/input stay declared for display/back-compat only.
+- The old v6.17.17 unconditional account-size lot-floor override (`acctFloorLot`, applied as "the
+  LAST step... regardless of which upstream reducer shrank the lot") is retired — it was the
+  two-systems-fighting bug this release closes. The unified risk-% system reproduces the same
+  nominal lot sizes (~0.10 at $1k, ~0.25 at $3k, ~0.50 at $6-8k) organically at realistic SL
+  distances, without a post-hoc override fighting the risk cap.
+- `XAU_GrowthGuardCapLots()` no longer runs at entry time — it shared its 1.5%/2.0% inputs with the
+  in-trade defensive "thesis broken, cut the loss" exit logic (untouched, correct at that smaller
+  value for *that* purpose). Conflating the two meant it would have silently re-clamped every trade
+  back to ~1.5% the moment the June-mode bypass was removed.
+- `AccountSizeRiskMultiplier()`'s equity-tiered boost (0.75x–1.35x) no longer scales entry risk —
+  explicit owner direction: "same mathematics, without blindly multiplying nominal lots beyond safe
+  exposure" at large balances.
+
+### Explicitly NOT touched in this release
+Entry signal generation, direction selection, exit management, and pyramid/rescue logic are
+unchanged — tracked separately as items 2–5 of the forensic audit's phased plan (entry-timing
+consolidation, SMART-GUARD/Personality recalibration, exit-arm unification, pyramid gate redesign).
+
+---
+
 ## v6.17.25 — 2026-07-08 — Entry-Path Consistency: Timing Engine Coverage
 
 ### EA Compile

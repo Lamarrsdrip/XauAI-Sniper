@@ -2051,7 +2051,7 @@ class TradeMemoryRecord(BaseModel):
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.17.25"
+    ea_version: str = "v6.18.0"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"
