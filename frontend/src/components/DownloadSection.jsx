@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.20.5";
+  const version  = info?.version  || "v6.20.6";
   const edition  = info?.edition  || "RECOVERED TRADE EXPANSION MANAGER";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.20.5.mq5";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.20.6.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.20.5.</span> Recovered trades that survived deep MAE now protect the recovery and hold for meaningful own-R while structure and momentum remain valid.
+              <span className="font-semibold text-amber-200">Gold-only v6.20.6.</span> Adds Counter-Excursion Capture — a separately-owned tactical strategy that reacts to genuinely blocked signals with real immediate opposite-direction pressure, off by default. Recovered trades that survived deep MAE still protect the recovery and hold for meaningful own-R while structure and momentum remain valid.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
