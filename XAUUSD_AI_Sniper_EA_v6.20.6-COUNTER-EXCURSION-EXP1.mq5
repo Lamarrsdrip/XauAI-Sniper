@@ -2720,10 +2720,10 @@ input ENUM_COUNTER_MODE InpCounterExcursionMode        = COUNTER_OFF;
 input double InpCounterRiskFractionOfNormal            = 0.15;   // fraction of the NORMAL bot's calculated dollar risk for this trade, NOT a fraction of account equity
 input double InpCounterExcursionSLATRMult              = 1.2;    // counter trade's OWN, tighter SL distance (ATR multiple) -- independent of normal InpSLMultiplier
 input int    InpCounterExcursionMaxHoldMinutes         = 30;     // tactical only -- not a swing strategy
-input double InpCounterExcursionProtectAtR             = 0.20;   // begin protecting profit
-input double InpCounterExcursionDefaultExitR           = 0.30;   // minimum successful objective; full close allowed from here
-input double InpCounterExcursionPreferredCloseR        = 0.50;   // preferred full-close zone unless momentum exceptionally strong
-input double InpCounterExcursionMaxTargetR             = 1.00;   // hard cap -- never held beyond this in v1
+input double InpCounterExcursionProtectAtR             = 0.20;   // minimum tactical success zone -- begin strong profit protection
+input double InpCounterExcursionDefaultExitR           = 0.30;   // normal preferred profit-taking area; full close allowed from here if momentum isn't sustained
+input double InpCounterExcursionPreferredCloseR        = 0.50;   // informational checkpoint only (target05R telemetry) -- InpCounterExcursionMaxTargetR is the sole hard-cap authority below
+input double InpCounterExcursionMaxTargetR             = 0.50;   // OWNER SPEC (2026-07-10): unconditional hard cap -- never held beyond this, no "exceptionally strong momentum" exception in this version
 input int    InpCounterExcursionMagicNumber            = 90205001; // dedicated identity; does not collide with normal (2025xxxx) or any inverse-experiment (9019xxxx) range
 
 input group "=== LOSS PROTECTION (v4.4.5 — trust the SL, stop scalping out) ==="
@@ -7878,6 +7878,7 @@ int OnInit()
          InpSTI_ReentryPullbackATR, InpSTI_ReentryMinWaitMin));
    XAU_WriteLocalReportHeartbeat(true);
    XAU_ReconcileTradeBrainOnInit();
+   XAU_ReconcileCounterExcursionOnInit();
    return INIT_SUCCEEDED;
 }
 
@@ -26539,6 +26540,16 @@ bool XAU_IsInverseExperimentGradeEligible(string originalGrade)
 // data, corrupted/stale state, generic uncertainty), then require positive
 // proof from markers already emitted elsewhere in this file's own decision
 // engines (grep-verified against real generated reason text, not guessed).
+//
+// FAIL-CLOSED BY CONSTRUCTION: eligibility requires an explicit POSITIVE
+// match against a known directional-opposition marker -- it is not merely
+// "absence of a known-bad reason." A block reason this classifier has never
+// seen before (invalid price, connection problem, insufficient history, a
+// new safety gate added later, generic low confidence with no directional
+// evidence, anything ambiguous) matches neither list and returns false, the
+// same as an explicitly excluded one. WAIT is always the default; only a
+// reason this function can specifically name as directional opposition ever
+// creates a counter candidate.
 bool XAU_CounterExcursionEligible(int signal, string reason, string &category)
 {
    category = "NOT_ELIGIBLE";
@@ -26619,6 +26630,61 @@ bool XAU_CounterExcursionFreshMicroConfirm(int counterDir, string &whyFail)
    return true;
 }
 
+// RESTART/STATE SAFETY: g_counterEx is a volatile, RAM-only global. If MT5
+// or the terminal restarts while a real counter-excursion position is open
+// on the broker, g_counterEx.active resets to false on reload -- without
+// this reconciliation, XAU_ManageCounterExcursionPosition() would return
+// immediately (its first line is "if(!g_counterEx.active) return false;")
+// and the position would sit completely unmanaged: no R-staged profit
+// protection, no fast-failure exits, nothing but its raw broker SL/TP.
+// Ownership is reconstructed from the one thing that survives a restart --
+// the actual broker position, matched by InpCounterExcursionMagicNumber --
+// never assumed from memory. originalSignalDirection/grade/blockReason are
+// NOT recoverable after a restart (that context lived only in RAM); they
+// are explicitly marked UNKNOWN_POST_RESTART rather than guessed, and R is
+// computed the same way the manager always computes it: from the broker's
+// own open price and stop-loss distance, not from anything cached.
+void XAU_ReconcileCounterExcursionOnInit()
+{
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpCounterExcursionMagicNumber) continue;
+
+      bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+      double openPx = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl = PositionGetDouble(POSITION_SL);
+      double slDist = (sl > 0.0) ? MathAbs(openPx - sl) : 0.0;
+      if(slDist <= 0.0 && ArraySize(bufATR) >= 2 && bufATR[1] > 0.0)
+         slDist = bufATR[1] * InpCounterExcursionSLATRMult; // broker SL missing/stripped -- reconstruct from the same ATR multiple used at entry
+
+      g_counterEx.active                  = true;
+      g_counterEx.ticket                  = tk;
+      g_counterEx.originalSignalDirection = isBuy ? -1 : 1; // this module only ever executes the inverse -- broker direction is always the counter direction
+      g_counterEx.counterExecutedDirection= isBuy ? 1 : -1;
+      g_counterEx.inversionApplied        = true;
+      g_counterEx.originalCandidateId     = "UNKNOWN_POST_RESTART";
+      g_counterEx.originalSetup           = "UNKNOWN_POST_RESTART";
+      g_counterEx.originalGrade           = "UNKNOWN_POST_RESTART";
+      g_counterEx.originalBlockReason     = "UNKNOWN_POST_RESTART -- position recovered from broker state, not from memory";
+      g_counterEx.entryPrice              = openPx;
+      g_counterEx.slPrice                 = sl;
+      g_counterEx.slDist                  = slDist;
+      g_counterEx.openTime                = (datetime)PositionGetInteger(POSITION_TIME);
+      g_counterEx.peakR                   = 0.0; // conservatively re-armed -- pre-restart peak is not recoverable, so the profit floor starts fresh rather than assuming a peak that can't be proven
+      g_counterEx.maeR                    = 0.0;
+      g_counterEx.mfeR                    = 0.0;
+      g_counterEx.protectedFloorR         = -999.0;
+
+      PrintFormat("COUNTER_EXCURSION_RESTART_RECONCILED | ticket=%I64u direction=%s entry=%.2f SL=%.2f slDist=%.2f openTime=%s | ownership restored from broker state, not memory",
+                  tk, isBuy ? "BUY" : "SELL", openPx, sl, slDist,
+                  TimeToString(g_counterEx.openTime, TIME_DATE | TIME_SECONDS));
+      return; // one countertrade max per symbol -- if more than one somehow exists, the first found is adopted and logged; investigate manually
+   }
+}
+
 void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string grade,
                                    double setupScore, double combinedScore, string blockReason)
 {
@@ -26628,9 +26694,25 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    if(TimeCurrent() < g_counterExCooldownUntil) return;
    if(g_counterEx.active) return; // one countertrade max per symbol
 
+   // NO-DELAY PROOF: candidateFirstSeen is stamped the instant this module
+   // recognizes a real candidate, and every FAST_CHECK/EXECUTING line below
+   // is timed against it. This function never yields control between here
+   // and the broker send (or a SKIP) -- it runs to completion inside the
+   // same OnTick() call that invoked it, so elapsedSeconds below will always
+   // be ~0. There is no sleep, no re-arming, no multi-tick wait state
+   // anywhere in this function or in anything it calls (XAU_CounterExcursionEligible,
+   // XAU_CounterExcursionFreshMicroConfirm, XAU_IsInverseExperimentGradeEligible) --
+   // none of them read or write the normal strategy's own entry-timing gate
+   // function, its pending-confirmation state, its timing-proof mailbox, or
+   // its delay-enable input. That mechanism is the normal strategy's own,
+   // separate, unmodified mechanism.
+   datetime candidateFirstSeen = TimeCurrent();
    string category;
    int counterDir = -originalSignal;
    string candidateId = StringFormat("CEC_%s_%s_%I64d", setupName, originalSignal == 1 ? "BUY" : "SELL", (long)TimeCurrent());
+   PrintFormat("COUNTER_EXCURSION_CANDIDATE timestamp=%s originalDirection=%s counterDirection=%s grade=%s candidateId=%s",
+               TimeToString(candidateFirstSeen, TIME_DATE | TIME_SECONDS),
+               originalSignal == 1 ? "BUY" : "SELL", counterDir == 1 ? "BUY" : "SELL", grade, candidateId);
 
    // The experiment deliberately uses the finalized ORIGINAL grade passed by
    // the normal strategy brain, captured BEFORE any inversion decision -- it
@@ -26681,20 +26763,37 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
                normalPositionOpen ? "true" : "false", counterPositionOpen ? "true" : "false");
 
    if(!eligible) return;
-   if(normalPositionOpen) { Print("COUNTER_EXCURSION_SKIP: normal position already open on symbol -- position-conflict safety"); return; }
-   if(counterPositionOpen) { Print("COUNTER_EXCURSION_SKIP: counter position already open -- one countertrade max per symbol"); return; }
+   if(normalPositionOpen)
+   {
+      Print("COUNTER_EXCURSION_SKIP: normal position already open on symbol -- position-conflict safety");
+      PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=POSITION_CONFLICT detail=NORMAL_POSITION_OPEN");
+      return;
+   }
+   if(counterPositionOpen)
+   {
+      Print("COUNTER_EXCURSION_SKIP: counter position already open -- one countertrade max per symbol");
+      PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=POSITION_CONFLICT detail=COUNTER_POSITION_ALREADY_ACTIVE");
+      return;
+   }
 
    string whyFail;
    if(!XAU_CounterExcursionFreshMicroConfirm(counterDir, whyFail))
    {
       Print("COUNTER_EXCURSION_SKIP: fast micro-confirmation failed | ", whyFail);
+      PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=%s",
+                  whyFail == "SPREAD_UNSAFE" ? "SPREAD_UNSAFE" : "MICRO_CONFIRM_FAILED:" + whyFail);
       return;
    }
 
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double atr = bufATR[1];
    double entryPrice = (counterDir == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK) : SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   if(entryPrice <= 0) { Print("COUNTER_EXCURSION_SKIP: invalid price"); return; }
+   if(entryPrice <= 0)
+   {
+      Print("COUNTER_EXCURSION_SKIP: invalid price");
+      PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=STALE_SIGNAL detail=NO_VALID_BID_ASK");
+      return;
+   }
    double slDist = atr * InpCounterExcursionSLATRMult;
    double slPrice = (counterDir == 1) ? NormalizeDouble(entryPrice - slDist, digits) : NormalizeDouble(entryPrice + slDist, digits);
    long stopLevelPts = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
@@ -26703,7 +26802,12 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    if(minDist > 0 && MathAbs(entryPrice - slPrice) < minDist)
       slPrice = (counterDir == 1) ? NormalizeDouble(entryPrice - minDist, digits) : NormalizeDouble(entryPrice + minDist, digits);
    slDist = MathAbs(entryPrice - slPrice);
-   if(slDist <= 0) { Print("COUNTER_EXCURSION_SKIP: invalid SL distance"); return; }
+   if(slDist <= 0)
+   {
+      Print("COUNTER_EXCURSION_SKIP: invalid SL distance");
+      PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=STALE_SIGNAL detail=INVALID_SL_DISTANCE");
+      return;
+   }
 
    // CORRECTED risk model: the counter-trade risks a controlled FRACTION of
    // what the normal bot would have risked on a trade like this -- never a
@@ -26739,6 +26843,7 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    {
       PrintFormat("COUNTER_EXCURSION_SKIP_BROKER_MIN_EXCEEDS_RISK: computed lot %.4f below broker minimum %.4f for normalRiskUSD=%.2f -- skipping, not inflating.",
                   lots, minLot, riskUSD);
+      PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=BROKER_MIN_LOT detail=PRE_RECONCILE");
       return;
    }
    string counterRiskBlock = "";
@@ -26746,6 +26851,7 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
                               EffectiveSingleRiskCapPct(), "COUNTER_EXCURSION:" + setupName, counterRiskBlock))
    {
       Print("COUNTER_EXCURSION_SKIP_FINAL_RISK_RECONCILE: ", counterRiskBlock);
+      PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=RISK_TOO_HIGH detail=%s", counterRiskBlock);
       return;
    }
    lots = NormalizeDouble(lots, lotDigits);
@@ -26753,20 +26859,36 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    {
       PrintFormat("COUNTER_EXCURSION_SKIP_POST_RECONCILE_LOT_BELOW_MIN: lot %.4f below broker minimum %.4f after normal-bot risk reconciliation.",
                   lots, minLot);
+      PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=BROKER_MIN_LOT detail=POST_RECONCILE");
       return;
    }
 
    double target03R = (counterDir == 1) ? entryPrice + slDist * InpCounterExcursionDefaultExitR : entryPrice - slDist * InpCounterExcursionDefaultExitR;
    double target05R = (counterDir == 1) ? entryPrice + slDist * InpCounterExcursionPreferredCloseR : entryPrice - slDist * InpCounterExcursionPreferredCloseR;
-   double target10R = (counterDir == 1) ? entryPrice + slDist * InpCounterExcursionMaxTargetR : entryPrice - slDist * InpCounterExcursionMaxTargetR;
-   double tpPrice = target10R;
+   // OWNER SPEC (2026-07-10): targetMaxR IS the 0.5R hard cap (InpCounterExcursionMaxTargetR),
+   // not the old 1.0R -- renamed from target10R for accuracy; the broker TP is set here.
+   double targetMaxR = (counterDir == 1) ? entryPrice + slDist * InpCounterExcursionMaxTargetR : entryPrice - slDist * InpCounterExcursionMaxTargetR;
+   double tpPrice = targetMaxR;
    string comment = "XAU-COUNTER-EXC|ORIGINAL_" + (originalSignal == 1 ? "BUY" : "SELL") + "|EXECUTED_" + (counterDir == 1 ? "BUY" : "SELL");
+
+   // Every check this module runs (grade, opposite-pressure eligibility,
+   // position conflict, fast micro-confirmation, price/SL validity, risk
+   // reconciliation) has now passed in the same function call that started
+   // at candidateFirstSeen -- no tick boundary, no wait state, no re-arm was
+   // possible between detection and this point.
+   datetime executionTime = TimeCurrent();
+   PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=PASS reason=ALL_CHECKS_PASSED");
+   PrintFormat("COUNTER_EXCURSION_EXECUTING candidateFirstSeen=%s executionTime=%s elapsedSeconds=%.0f",
+               TimeToString(candidateFirstSeen, TIME_DATE | TIME_SECONDS),
+               TimeToString(executionTime, TIME_DATE | TIME_SECONDS),
+               (double)(executionTime - candidateFirstSeen));
 
    if(InpCounterExcursionMode == COUNTER_SHADOW)
    {
-      PrintFormat("COUNTER_EXCURSION_OPEN (SHADOW -- no order sent) | originalDirection=%s actualDirection=%s entry=%.2f SL=%.2f target03R=%.2f target05R=%.2f target10R=%.2f riskUSD=%.2f lot=%.2f entryConfirmation=PASSED",
-                  originalSignal == 1 ? "BUY" : "SELL", counterDir == 1 ? "BUY" : "SELL",
-                  entryPrice, slPrice, target03R, target05R, target10R, riskUSD, lots);
+      PrintFormat("COUNTER_EXCURSION_OPEN (SHADOW -- no order sent) | strategyOwner=COUNTER_EXCURSION_CAPTURE originalDirection=%s originalGrade=%s originalBlockReason=%s counterDirection=%s counterEligibility=%s fastValidationResult=PASS executionDirection=%s entry=%.2f SL=%.2f target03R=%.2f target05R=%.2f targetMaxR=%.2f riskUSD=%.2f lot=%.2f entryConfirmation=PASSED",
+                  originalSignal == 1 ? "BUY" : "SELL", originalFinalGrade, blockReason, counterDir == 1 ? "BUY" : "SELL", category,
+                  counterDir == 1 ? "BUY" : "SELL",
+                  entryPrice, slPrice, target03R, target05R, targetMaxR, riskUSD, lots);
       return;
    }
 
@@ -26811,9 +26933,10 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    g_counterEx.mfeR = 0.0;
    g_counterEx.protectedFloorR = -999.0;
 
-   PrintFormat("COUNTER_EXCURSION_OPEN | strategyOwner=COUNTER_EXCURSION_CAPTURE originalDirection=%s actualDirection=%s ticket=%I64u entry=%.2f SL=%.2f target03R=%.2f target05R=%.2f target10R=%.2f riskUSD=%.2f lot=%.2f entryConfirmation=PASSED",
-               originalSignal == 1 ? "BUY" : "SELL", counterDir == 1 ? "BUY" : "SELL", ticket,
-               g_counterEx.entryPrice, slPrice, target03R, target05R, target10R, riskUSD, lots);
+   PrintFormat("COUNTER_EXCURSION_OPEN | strategyOwner=COUNTER_EXCURSION_CAPTURE originalDirection=%s originalGrade=%s originalBlockReason=%s counterDirection=%s counterEligibility=%s fastValidationResult=PASS executionDirection=%s ticket=%I64u entry=%.2f SL=%.2f target03R=%.2f target05R=%.2f targetMaxR=%.2f riskUSD=%.2f lot=%.2f entryConfirmation=PASSED",
+               originalSignal == 1 ? "BUY" : "SELL", originalFinalGrade, blockReason, counterDir == 1 ? "BUY" : "SELL", category,
+               counterDir == 1 ? "BUY" : "SELL", ticket,
+               g_counterEx.entryPrice, slPrice, target03R, target05R, targetMaxR, riskUSD, lots);
 }
 
 // COUNTER_EXCURSION_MANAGER -- sole exit owner for the counter-excursion
@@ -26875,14 +26998,27 @@ bool XAU_ManageCounterExcursionPosition()
    double spreadNow = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
    bool spreadUnsafe = spreadNow > InpMaxSpread * 1.5; // tighter than normal -- this is a tactical trade
 
+   // OWNER SPEC (2026-07-10) staged floor: 0.2R = strong protection begins
+   // (breakeven floor). 0.3R = preferred capture zone -- once reached, lock
+   // in at least the 0.2R protection level while still leaving room to run
+   // to the 0.5R hard cap without being floor-closed the instant it arrives
+   // (the floor threshold is deliberately BELOW the zone-entry threshold it
+   // locks in for, or every candidate would floor-close itself the same
+   // tick it first reaches 0.3R).
    double floorR = g_counterEx.protectedFloorR;
-   if(g_counterEx.peakR >= InpCounterExcursionPreferredCloseR) floorR = MathMax(floorR, InpCounterExcursionDefaultExitR);
+   if(g_counterEx.peakR >= InpCounterExcursionDefaultExitR) floorR = MathMax(floorR, InpCounterExcursionProtectAtR);
    else if(g_counterEx.peakR >= InpCounterExcursionProtectAtR) floorR = MathMax(floorR, 0.0); // breakeven
    g_counterEx.protectedFloorR = floorR;
 
+   // OWNER SPEC (2026-07-10): +0.5R (InpCounterExcursionMaxTargetR) is an
+   // UNCONDITIONAL hard cap -- no "exceptionally strong momentum" exception,
+   // never held beyond it. Between 0.3R and 0.5R, continuation is allowed
+   // only while momentum remains strong (COUNTER_03R_MOMENTUM_NOT_SUSTAINED
+   // below closes early the moment it isn't); the floor ratchet above
+   // protects the downside the whole way.
    string exitReason = "";
    if(R >= InpCounterExcursionMaxTargetR)
-      exitReason = "COUNTER_TARGET_1R_HARD_CAP";
+      exitReason = "COUNTER_TARGET_MAXR_HARD_CAP";
    else if(spreadUnsafe)
       exitReason = "COUNTER_SPREAD_UNSAFE";
    else if(momentumFailed)
@@ -26893,11 +27029,6 @@ bool XAU_ManageCounterExcursionPosition()
       exitReason = "COUNTER_MAX_HOLD_TIME";
    else if(floorR > -999.0 && R <= floorR)
       exitReason = "COUNTER_PROFIT_FLOOR_HIT";
-   else if(g_counterEx.peakR >= InpCounterExcursionPreferredCloseR && R >= InpCounterExcursionPreferredCloseR)
-   {
-      bool exceptionallyStrong = (momentumScore >= 4 && CleanRegimeAligned(isBuy));
-      if(!exceptionallyStrong) exitReason = "COUNTER_05R_PREFERRED_CLOSE";
-   }
    else if(g_counterEx.peakR >= InpCounterExcursionDefaultExitR && R >= InpCounterExcursionDefaultExitR && momentumScore <= 1)
       exitReason = "COUNTER_03R_MOMENTUM_NOT_SUSTAINED";
 

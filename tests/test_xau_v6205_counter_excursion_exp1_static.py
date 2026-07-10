@@ -325,6 +325,10 @@ def test_real_account_execution_blocked_by_default():
 
 
 def test_max_target_hard_cap_unchanged():
+    # Owner directive 2026-07-10 deliberately lowered the hard cap from 1.0R
+    # to 0.5R with no "exceptionally strong momentum" exception -- the cap
+    # mechanism itself (InpCounterExcursionMaxTargetR gate) is unchanged,
+    # only its value and label are, matching the new spec exactly.
     fn = manager_fn(read(EA))
     assert "if(R >= InpCounterExcursionMaxTargetR)" in fn
-    assert "COUNTER_TARGET_1R_HARD_CAP" in fn
+    assert "COUNTER_TARGET_MAXR_HARD_CAP" in fn
