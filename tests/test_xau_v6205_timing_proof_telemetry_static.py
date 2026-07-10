@@ -1,4 +1,4 @@
-"""Static source tests for v6.20.4 Change A -- timing-proof telemetry.
+"""Static source tests for v6.20.5 Change A -- timing-proof telemetry.
 
 Background: a forensic audit of ticket 9512120625 (SELL 0.36 XAUUSD @4102.20,
 candidateId TREND_PULLBACK_SELL_1783682700_1783683018) proved
@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.20.4.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.20.5.mq5"
 
 
 def read(path: Path) -> str:

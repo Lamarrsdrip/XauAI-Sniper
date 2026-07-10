@@ -32,7 +32,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.20.4.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.20.5.mq5"
 
 
 def read(path: Path) -> str:

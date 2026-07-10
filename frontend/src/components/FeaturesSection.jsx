@@ -31,11 +31,11 @@ const CARDS = [
   {
     icon: ShieldCheck,
     title: "Smart Risk Management",
-    body: "Position sizing is based on account balance, stop distance, and grade — never reduced after losing trades. Take-profit and profit-lock thresholds scale with account size and lot size too, so a bigger lot never triggers protection earlier, in R-multiple terms, than a smaller one would.",
+    body: "Position sizing is based on account balance, stop distance, and grade — never reduced after losing trades. Recovered trades that survive deep drawdown now protect the recovery and hold for meaningful own-R while the thesis still works.",
     tone: "text-sky-300",
     border: "border-sky-300/20",
     glow: "bg-sky-300/[0.07]",
-    badge: "CURRENT v6.20.4",
+    badge: "CURRENT v6.20.5",
   },
   {
     icon: Shuffle,
@@ -138,7 +138,7 @@ export default function FeaturesSection() {
         <div className="mb-10 flex items-end justify-between">
           <div>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
-              Features · v6.20.4
+              Features · v6.20.5
             </span>
             <h2 className="mt-4 max-w-lg font-heading text-3xl font-semibold tracking-tight text-white sm:text-4xl">
               Built for every market condition.
