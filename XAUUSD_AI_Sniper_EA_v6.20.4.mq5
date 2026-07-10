@@ -3442,6 +3442,39 @@ struct XAU_LastEntryTimingDecision
 };
 XAU_LastEntryTimingDecision g_lastEntryTimingDecision;
 
+// v6.20.5 (TELEMETRY ONLY -- Change A) — full timing-path proof record.
+// Distinct from XAU_LastEntryTimingDecision above: that mailbox only ever
+// gets written by XAU_TimingEngineConfirmsEntry, so it is blind to any
+// OpenTrade() caller that does not go through the timing engine at all
+// (exactly the RECOVERY-path bypass this release documents). This record is
+// populated by EVERY OpenTrade() caller (FRESH, RECOVERY, REENTRY, manual
+// FORCE_OPEN) right before calling OpenTrade(), so "did the timing gate even
+// run" is itself an observed fact, not an inference. Single-slot / one-shot,
+// same lifecycle as g_lastEntryTimingDecision: populated by the caller,
+// finalized (thesisId/execution time/price) and appended to a durable CSV by
+// OpenTrade() itself the moment the resulting posId is known, then
+// invalidated unconditionally so it can never leak into a later, unrelated
+// OpenTrade call within the same tick.
+struct XAU_TimingProofRecord
+{
+   bool     active;
+   string   candidateId;
+   string   sourcePath;             // FRESH | RECOVERY | REENTRY | PYRAMID | OTHER
+   datetime firstSeenTime;          // earliest moment THIS candidate was observed, whatever path found it
+   double   firstSeenPrice;
+   bool     timingGateRequired;     // true unless an explicit, named exemption applies (manual force-open)
+   double   requiredDelaySeconds;   // XAU_EffectiveM5EntryDelaySec() (or bar-based fallback) at proof time
+   datetime timingGateStartTime;    // when XAU_TimingEngineConfirmsEntry actually armed for this candidate; 0 if it never ran
+   double   recoveryWaitSeconds;    // time spent in the recovery gauntlet/idle-wait BEFORE any timing-engine involvement (0 unless sourcePath==RECOVERY)
+   double   timingEngineWaitSeconds;// time actually spent inside the timing engine's own delay window (0 if it never ran)
+   datetime revalidationTime;
+   string   revalidationResult;     // e.g. CONFIRMED / CANCELLED:<reason> / RECOVERY_GAUNTLET_PASSED / NOT_RUN / MANUAL_OVERRIDE_NOT_APPLICABLE
+   bool     bypassUsed;
+   string   bypassReason;           // named, non-empty only when bypassUsed
+   string   openTradeCaller;        // exact function/call-site tag that is about to call OpenTrade()
+};
+XAU_TimingProofRecord g_pendingTimingProof;
+
 // Bounded, posId-keyed record of the above, consumed once the trade closes to
 // compute actual-vs-estimated-instant-entry MAE/MFE and a delay-helped-or-hurt
 // verdict. Evicts oldest on overflow, same pattern as g_exitBiasKeys/
@@ -8635,6 +8668,26 @@ void CheckReEntryOpportunity()
    lastSignalDir = lastClose.dir;
    lastSignalSignature = lastClose.signature;
    lastSignalSetup = "RE_ENTRY";
+
+   // v6.20.5 (TELEMETRY ONLY -- Change A): see FRESH-path comment above for
+   // field meanings; this caller also went through XAU_TimingEngineConfirmsEntry
+   // (just above) so the same mailbox applies.
+   g_pendingTimingProof.active                = true;
+   g_pendingTimingProof.candidateId           = StringFormat("RE_ENTRY_%s_%d", lastClose.dir == 1 ? "BUY" : "SELL", (int)g_lastEntryTimingDecision.originalSignalTime);
+   g_pendingTimingProof.sourcePath             = "REENTRY";
+   g_pendingTimingProof.firstSeenTime         = g_lastEntryTimingDecision.originalSignalTime;
+   g_pendingTimingProof.firstSeenPrice        = g_lastEntryTimingDecision.originalSignalPrice;
+   g_pendingTimingProof.timingGateRequired    = true;
+   g_pendingTimingProof.requiredDelaySeconds  = InpUseM5EntryDelay ? XAU_EffectiveM5EntryDelaySec() : (double)PeriodSeconds(PERIOD_M5);
+   g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
+   g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
+   g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
+   g_pendingTimingProof.revalidationTime      = g_lastEntryTimingDecision.decisionTime;
+   g_pendingTimingProof.revalidationResult    = g_lastEntryTimingDecision.entryReasonText;
+   g_pendingTimingProof.bypassUsed            = false;
+   g_pendingTimingProof.bypassReason          = "";
+   g_pendingTimingProof.openTradeCaller       = "ReEntry->OpenTrade";
+
    // v6.17.7 FIX (item 4): reEntered/todayReEntryCount used to be consumed
    // BEFORE calling OpenTrade (then void, so no way to know if it actually
    // opened a position) -- a risk block, broker rejection, or any other
@@ -15241,6 +15294,26 @@ void OnTick()
    if(!XAU_TimingEngineConfirmsEntry(signal, setupName, grade, finalSzMult, bufATR[1]))
       return;
 
+   // v6.20.5 (TELEMETRY ONLY -- Change A): full timing-path proof, derived
+   // from the mailbox XAU_TimingEngineConfirmsEntry just wrote above (it
+   // returned true or this line would already have returned). See
+   // XAU_TimingProofRecord for field meanings.
+   g_pendingTimingProof.active                = true;
+   g_pendingTimingProof.candidateId           = StringFormat("%s_%s_%d", setupName, signal == 1 ? "BUY" : "SELL", (int)g_lastEntryTimingDecision.originalSignalTime);
+   g_pendingTimingProof.sourcePath             = "FRESH";
+   g_pendingTimingProof.firstSeenTime         = g_lastEntryTimingDecision.originalSignalTime;
+   g_pendingTimingProof.firstSeenPrice        = g_lastEntryTimingDecision.originalSignalPrice;
+   g_pendingTimingProof.timingGateRequired    = true;
+   g_pendingTimingProof.requiredDelaySeconds  = InpUseM5EntryDelay ? XAU_EffectiveM5EntryDelaySec() : (double)PeriodSeconds(PERIOD_M5);
+   g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
+   g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
+   g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
+   g_pendingTimingProof.revalidationTime      = g_lastEntryTimingDecision.decisionTime;
+   g_pendingTimingProof.revalidationResult    = g_lastEntryTimingDecision.entryReasonText;
+   g_pendingTimingProof.bypassUsed            = false;
+   g_pendingTimingProof.bypassReason          = "";
+   g_pendingTimingProof.openTradeCaller       = "FreshScan->OpenTrade";
+
    // v6.17.7 FIX (item 4): g_lastEntryGrade/g_lastEntryScore/dashboard state/
    // the "TRADE OPENED" scorecard entry used to be written unconditionally
    // right after calling OpenTrade (then void, so the caller had no way to
@@ -17219,6 +17292,34 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                 g_lastEntryTimingDecision.delaySeconds,
                                 g_lastEntryTimingDecision.priceImprovement,
                                 g_lastEntryTimingDecision.entryReasonText);
+
+      // v6.20.5 (TELEMETRY ONLY -- Change A): finalize and durably record the
+      // full timing-path proof for this executed trade, regardless of which
+      // of the 4 callers (FRESH/RECOVERY/REENTRY/manual force-open) populated
+      // it. This is the one place every caller converges, so it is the one
+      // place this can be guaranteed to run. Zero effect on whether the trade
+      // opened -- purely observational.
+      if(g_pendingTimingProof.active)
+      {
+         XAU_AppendTimingProof(g_pendingTimingProof, openedPosId, TimeCurrent(), price,
+                               signal == 1 ? "OpenTrade->trade.Buy" : "OpenTrade->trade.Sell");
+         string timingProofSummary = StringFormat(
+            "candidateId=%s sourcePath=%s recoveryWaitSec=%.0f timingEngineWaitSec=%.0f requiredDelaySec=%.0f timingGateRan=%s revalidation=%s bypassUsed=%s bypassReason=%s",
+            g_pendingTimingProof.candidateId, g_pendingTimingProof.sourcePath,
+            g_pendingTimingProof.recoveryWaitSeconds, g_pendingTimingProof.timingEngineWaitSeconds,
+            g_pendingTimingProof.requiredDelaySeconds,
+            g_pendingTimingProof.timingGateStartTime > 0 ? "Y" : "N",
+            g_pendingTimingProof.revalidationResult,
+            g_pendingTimingProof.bypassUsed ? "Y" : "N",
+            g_pendingTimingProof.bypassReason);
+         BotMonitorDecisionEvent("TIMING_PROOF", "INFO", "TimingProof", g_pendingTimingProof.sourcePath,
+                                 true, timingProofSummary, "", (string)((long)openedPosId), 0.0, price,
+                                 "", "", false, false, false, false,
+                                 signal == 1 ? "BUY" : "SELL", "", "",
+                                 0.0, 0.0, signal, g_pendingBrainGrade, "");
+      }
+      g_pendingTimingProof.active = false;
+
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ENTRY", "OrderSend",
                                 signal, funnelSetup, funnelGrade, funnelScore,
                                 true, true, "EXECUTED", "",
@@ -17254,6 +17355,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    }
    else
    {
+      // v6.20.5 (TELEMETRY ONLY -- Change A): broker rejected the trade --
+      // the timing proof describes an attempt that never became a position,
+      // so it is not written to the durable CSV (which is keyed by a real
+      // execution), but must still be invalidated so it can never leak into
+      // a later, unrelated OpenTrade call within the same tick.
+      g_pendingTimingProof.active = false;
       Print("TRADE FAILED: Err=", GetLastError(), " Ret=", trade.ResultRetcode());
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ERROR", "OrderSend",
                                 signal, funnelSetup, funnelGrade, funnelScore,
@@ -23828,6 +23935,77 @@ string XAU_TradeBrainFile()
    return "XAUAI_ExecutedTradeBrain_" + Symbol() + ".csv";
 }
 
+// v6.20.5 (TELEMETRY ONLY -- Change A) — durable, structured record of the
+// full timing path for every executed trade, independent of and additional
+// to XAUAI_ExecutedTradeBrain (which is posId-keyed and does not capture
+// pre-execution candidate timing). See XAU_TimingProofRecord for field
+// meanings; this file exists specifically so "did the configured delay
+// actually run for this trade" is answerable from a durable log without
+// re-deriving it from the Journal, per the explicit forensic requirement
+// that produced this change.
+string XAU_TimingProofFile()
+{
+   return "XAUAI_TimingProof_" + Symbol() + ".csv";
+}
+
+void XAU_AppendTimingProof(XAU_TimingProofRecord &r, ulong thesisId,
+                           datetime finalExecutionTime, double executionPrice,
+                           string executionOwner)
+{
+   string fn = XAU_TimingProofFile();
+   bool exists = FileIsExist(fn, FILE_COMMON);
+   int h = exists
+           ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',')
+           : FileOpen(fn, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE)
+   {
+      Print("TIMING-PROOF: FileOpen failed err=", GetLastError());
+      return;
+   }
+   if(exists) FileSeek(h, 0, SEEK_END);
+   if(!exists || FileTell(h) == 0)
+   {
+      FileWrite(h, "candidateId", "thesisId", "sourcePath",
+                "firstSeenTime", "firstSeenPrice",
+                "timingGateRequired", "requiredDelaySeconds", "timingGateStartTime",
+                "recoveryWaitSeconds", "timingEngineWaitSeconds",
+                "revalidationTime", "revalidationResult",
+                "bypassUsed", "bypassReason",
+                "finalExecutionTime", "executionPrice",
+                "openTradeCaller", "executionOwner",
+                "eaVersion", "buildHash");
+   }
+   FileWrite(h, XAU_CsvSafe(r.candidateId), (string)thesisId, r.sourcePath,
+             TimeToString(r.firstSeenTime, TIME_DATE | TIME_SECONDS),
+             DoubleToString(r.firstSeenPrice, 2),
+             r.timingGateRequired ? "Y" : "N",
+             DoubleToString(r.requiredDelaySeconds, 0),
+             r.timingGateStartTime > 0 ? TimeToString(r.timingGateStartTime, TIME_DATE | TIME_SECONDS) : "",
+             DoubleToString(r.recoveryWaitSeconds, 0),
+             DoubleToString(r.timingEngineWaitSeconds, 0),
+             r.revalidationTime > 0 ? TimeToString(r.revalidationTime, TIME_DATE | TIME_SECONDS) : "",
+             XAU_CsvSafe(r.revalidationResult),
+             r.bypassUsed ? "Y" : "N",
+             XAU_CsvSafe(r.bypassReason),
+             TimeToString(finalExecutionTime, TIME_DATE | TIME_SECONDS),
+             DoubleToString(executionPrice, 2),
+             XAU_CsvSafe(r.openTradeCaller),
+             XAU_CsvSafe(executionOwner),
+             XAUAI_EA_VERSION, XAUAI_BUILD_HASH);
+   FileClose(h);
+
+   PrintFormat("TIMING_PROOF: candidateId=%s thesisId=%I64u sourcePath=%s | RECOVERY_WAIT=%.0fs TIMING_ENGINE=%s%.0fs required=%.0fs | revalidation=%s | bypassUsed=%s%s | exec=%s @%.2f via %s",
+               r.candidateId, thesisId, r.sourcePath,
+               r.recoveryWaitSeconds,
+               r.timingGateStartTime > 0 ? "" : "NOT_RUN ",
+               r.timingEngineWaitSeconds, r.requiredDelaySeconds,
+               r.revalidationResult,
+               r.bypassUsed ? "Y" : "N",
+               r.bypassUsed ? (" reason=" + r.bypassReason) : "",
+               TimeToString(finalExecutionTime, TIME_DATE | TIME_SECONDS),
+               executionPrice, executionOwner);
+}
+
 string XAU_ConsciousMemoryFile()
 {
    return "XAUAI_ConsciousMemory_" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + "_" + Symbol() + ".csv";
@@ -25299,8 +25477,11 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
          double elapsedSec = (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime);
          if(elapsedSec < delaySec)
          {
-            PrintFormat("TIMING_ENGINE: %s M5_ENTRY_DELAY waiting (%s %s) elapsed=%.0fs / target=%.0fs OriginalSignalPrice=%.2f",
-                        typeStr, setup, dirStr, elapsedSec, delaySec, g_pendingEntryConfirm.signalPrice);
+            // v6.20.5 (TELEMETRY ONLY -- Change A): remaining= added, same
+            // cadence/throttle as before (none -- unchanged from pre-existing
+            // behavior), purely an additional field on an existing line.
+            PrintFormat("TIMING_ENGINE: %s M5_ENTRY_DELAY waiting (%s %s) elapsed=%.0fs / target=%.0fs / remaining=%.0fs OriginalSignalPrice=%.2f",
+                        typeStr, setup, dirStr, elapsedSec, delaySec, MathMax(0.0, delaySec - elapsedSec), g_pendingEntryConfirm.signalPrice);
             return false;
          }
 
@@ -25574,6 +25755,33 @@ void XAU_CheckPendingOpportunityRecovery()
                                         oppGrade, setup, sid, originalBlocker, recClass.why);
    Print("RECOVERY_EXECUTED: ", sid, " | ", dir == 1 ? "BUY" : "SELL", " ", setup,
          " grade=", oppGrade, " combined=", DoubleToString(oppCombined, 2), " | ", recClass.why);
+
+   // v6.20.5 (TELEMETRY ONLY -- Change A): this is the CONFIRMED bypass this
+   // release exists to document -- XAU_CheckPendingOpportunityRecovery calls
+   // OpenTrade() directly, below, without ever calling
+   // XAU_TimingEngineConfirmsEntry(). storedAt is recovered from `expiry`
+   // (set to TimeCurrent()+2 M5-bar-periods at storage time in
+   // PENDING_OPPORTUNITY_STORED) rather than adding a new struct field, since
+   // it is exactly recoverable and this change must not alter
+   // PendingOpportunity's shape. Change B (a separate, not-yet-applied
+   // change) is what fixes this; this commit only proves it happened.
+   datetime storedAt = expiry - (datetime)(PeriodSeconds(PERIOD_M5) * 2);
+   g_pendingTimingProof.active                = true;
+   g_pendingTimingProof.candidateId           = sid;
+   g_pendingTimingProof.sourcePath             = "RECOVERY";
+   g_pendingTimingProof.firstSeenTime         = storedAt;
+   g_pendingTimingProof.firstSeenPrice        = signalPrice;
+   g_pendingTimingProof.timingGateRequired    = true;
+   g_pendingTimingProof.requiredDelaySeconds  = InpUseM5EntryDelay ? XAU_EffectiveM5EntryDelaySec() : (double)PeriodSeconds(PERIOD_M5);
+   g_pendingTimingProof.timingGateStartTime   = 0; // never armed -- this is the bypass
+   g_pendingTimingProof.recoveryWaitSeconds   = (double)(TimeCurrent() - storedAt);
+   g_pendingTimingProof.timingEngineWaitSeconds = 0.0;
+   g_pendingTimingProof.revalidationTime      = TimeCurrent();
+   g_pendingTimingProof.revalidationResult    = "RECOVERY_GAUNTLET_PASSED_TIMING_NOT_RUN";
+   g_pendingTimingProof.bypassUsed            = true;
+   g_pendingTimingProof.bypassReason          = "RECOVERY_DIRECT_OPENTRADE";
+   g_pendingTimingProof.openTradeCaller       = "XAU_CheckPendingOpportunityRecovery->OpenTrade";
+
    bool opened = OpenTrade(dir, atrNow, recoveryReason, 1.0);
    if(!opened)
       Print("RECOVERY_OPEN_TRADE_FAILED: ", sid, " -- OpenTrade() itself declined (final risk/broker gate)");
@@ -25716,6 +25924,29 @@ bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalB
          " grade=", grade, " | user override of: ", originalBlocker,
          " | ", priceAudit,
          " | current chart read: ", foTypeStr, " (", foClass.why, ") -- informational only, override proceeds regardless");
+
+   // v6.20.5 (TELEMETRY ONLY -- Change A): manual/emergency Command Center
+   // override -- per explicit requirement, this is NOT treated as a normal
+   // autonomous strategy entry. The exemption is named, logged, and
+   // strategy-specific (isManualOverride=true, only reachable from an
+   // explicit human FORCE_OPEN_TRADE command), matching the
+   // EXPLICIT_APPROVED_EXEMPTION category rather than a silent bypass.
+   g_pendingTimingProof.active                = true;
+   g_pendingTimingProof.candidateId           = StringFormat("%s_%s_%d", setup, dir == 1 ? "BUY" : "SELL", (int)candleTime);
+   g_pendingTimingProof.sourcePath             = "OTHER";
+   g_pendingTimingProof.firstSeenTime         = candleTime;
+   g_pendingTimingProof.firstSeenPrice        = originalSignalPrice;
+   g_pendingTimingProof.timingGateRequired    = false; // explicit, named, human-triggered exemption
+   g_pendingTimingProof.requiredDelaySeconds  = InpUseM5EntryDelay ? XAU_EffectiveM5EntryDelaySec() : (double)PeriodSeconds(PERIOD_M5);
+   g_pendingTimingProof.timingGateStartTime   = 0;
+   g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
+   g_pendingTimingProof.timingEngineWaitSeconds = 0.0;
+   g_pendingTimingProof.revalidationTime      = TimeCurrent();
+   g_pendingTimingProof.revalidationResult    = "MANUAL_OVERRIDE_NOT_APPLICABLE";
+   g_pendingTimingProof.bypassUsed            = true;
+   g_pendingTimingProof.bypassReason          = "MANUAL_FORCE_OPEN_EXEMPT";
+   g_pendingTimingProof.openTradeCaller       = "XAU_TryForceOpenTrade->OpenTrade";
+
    bool opened = OpenTrade(dir, atrNow, forceReason, 1.0, true);
    if(!opened)
    {
