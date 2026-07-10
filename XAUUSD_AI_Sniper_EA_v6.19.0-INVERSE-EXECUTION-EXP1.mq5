@@ -16857,24 +16857,18 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          execTP = NormalizeDouble(execPrice + execSLDist, digits);
       else
          execTP = NormalizeDouble(execPrice - execSLDist, digits);
-      // Independent risk recheck: inversion + fresh price can shift true SL distance
-      // (spread asymmetry, stop-level clamp above). Rescale lot so the SAME configured
-      // risk-% / risk-USD as the baseline normal strategy is honored for the trade
-      // actually being sent -- never the original-direction lot reused blindly.
-      double originalRiskUSD = RiskPerLotForDistance(originalSLDist) * originalLots;
-      double inverseRiskPerLot = RiskPerLotForDistance(execSLDist);
+      // CORRECTED (owner directive): do NOT rescale the lot for the inverted
+      // trade's own SL distance. The original "independent risk recheck"
+      // could legitimately shrink the lot toward the broker minimum (0.01)
+      // whenever the inverted side's stop/freeze-level clamp or spread
+      // asymmetry pushed execSLDist noticeably wider than originalSLDist --
+      // a real computed number, not a bug in the math, but not the intended
+      // behavior either. The bot must size EXACTLY like the normal strategy
+      // already decided (originalLots, from the same InpNormalRiskPct/
+      // InpReducedRiskFloorPct engine production uses) -- the only
+      // difference this experiment introduces is direction, never size.
+      double originalRiskUSD = RiskPerLotForDistance(originalSLDist) * originalLots; // kept for telemetry only, no longer drives sizing
       execLots = originalLots;
-      if(inverseRiskPerLot > 0.0 && originalRiskUSD > 0.0)
-         execLots = NormalizeVolumeDown(originalRiskUSD / inverseRiskPerLot);
-      else if(execSLDist > 0 && originalSLDist > 0)
-         execLots = NormalizeVolumeDown(originalLots * (originalSLDist / execSLDist));
-      if(execLots < minLot)
-      {
-         Print("INVERSE_EXPERIMENT_SKIP_BROKER_MIN_EXCEEDS_RISK: recalculated inverse lot ",
-               DoubleToString(execLots, lotDigits), " below broker minimum ", DoubleToString(minLot, lotDigits),
-               " -- broker minimum would exceed configured experimental risk. Skipping, not inflating lot.");
-         return false;
-      }
 
       double execR03 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist * 0.30 : -execSLDist * 0.30), digits);
       double execR05 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist * 0.50 : -execSLDist * 0.50), digits);
@@ -16884,11 +16878,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       PrintFormat("INVERSE_EXPERIMENT_DECISION | candidateId=%s | originalSignalDirection=%s executedDirection=%s | "
                   "originalEntryPlan=%.2f/%.2f/%.2f originalSLDist=%.2f | "
                   "inverseEntryPlan=%.2f/%.2f/%.2f inverseSLDist=%.2f inverseTPDist=%.2f r03=%.2f r05=%.2f r10=%.2f | "
-                  "originalLot=%.2f inverseLot=%.2f originalRiskUSD=%.2f inverseRiskPerLot=%.2f magic=%d reason=MANDATORY_DIRECTION_INVERSION | %s",
+                  "originalLot=%.2f inverseLot=%.2f originalRiskUSD=%.2f lotSizingPolicy=SAME_AS_NORMAL_BOT_NO_RESCALE magic=%d reason=MANDATORY_DIRECTION_INVERSION | %s",
                   candidateId, originalSignal==1?"BUY":"SELL", execSignal==1?"BUY":"SELL",
                   originalPrice, originalSL, originalTP, originalSLDist,
                   execPrice, execSL, execTP, execSLDist, MathAbs(execTP-execPrice), execR03, execR05, execR10,
-                  originalLots, execLots, originalRiskUSD, inverseRiskPerLot, InpMagicNumber, reason);
+                  originalLots, execLots, originalRiskUSD, InpMagicNumber, reason);
 
       Print("NORMAL BOT DECISION: ", originalSignal > 0 ? "BUY" : "SELL");
       Print("EXPERIMENTAL RULE: INVERT EXECUTION");

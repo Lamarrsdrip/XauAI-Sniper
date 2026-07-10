@@ -61,12 +61,21 @@ def test_r_levels_are_calculated_from_actual_inverse_risk():
     assert "double execR10 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist : -execSLDist), digits);" in text
 
 
-def test_inverse_lot_recalculation_uses_broker_risk_math():
+def test_inverse_lot_is_never_rescaled_and_matches_normal_bot_exactly():
+    # CORRECTED (owner directive): a live 0.01-lot execution was observed on
+    # the Mac -- traced to the old "independent risk recheck," which rescaled
+    # the lot for the inverted trade's own (often wider, due to stop/freeze-
+    # level clamps or spread asymmetry) SL distance, and could legitimately
+    # shrink all the way to the broker minimum. The experiment must size
+    # EXACTLY like the normal bot decided -- direction is the only thing that
+    # changes. The old rescaling call and its skip-on-tiny-lot branch must be
+    # fully gone, not merely disabled.
     text = src()
-    assert "double originalRiskUSD = RiskPerLotForDistance(originalSLDist) * originalLots;" in text
-    assert "double inverseRiskPerLot = RiskPerLotForDistance(execSLDist);" in text
-    assert "execLots = NormalizeVolumeDown(originalRiskUSD / inverseRiskPerLot);" in text
-    assert "INVERSE_EXPERIMENT_SKIP_BROKER_MIN_EXCEEDS_RISK" in text
+    assert "execLots = originalLots;" in text
+    assert "execLots = NormalizeVolumeDown(originalRiskUSD / inverseRiskPerLot);" not in text
+    assert "double inverseRiskPerLot = RiskPerLotForDistance(execSLDist);" not in text
+    assert "INVERSE_EXPERIMENT_SKIP_BROKER_MIN_EXCEEDS_RISK" not in text
+    assert "lotSizingPolicy=SAME_AS_NORMAL_BOT_NO_RESCALE" in text
 
 
 def test_inverse_profit_manager_protects_captures_and_closes_by_one_r():
