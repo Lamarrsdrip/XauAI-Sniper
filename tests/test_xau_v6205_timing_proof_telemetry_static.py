@@ -103,18 +103,20 @@ def test_reentry_path_populates_proof_before_opentrade_with_no_bypass():
     assert idx < call_idx, "proof must be populated BEFORE the re-entry OpenTrade call"
 
 
-def test_recovery_path_populates_proof_as_a_confirmed_bypass():
+def test_recovery_path_no_longer_bypasses_timing_after_change_b():
+    # NOTE: at the moment Change A was committed, this test asserted the
+    # OPPOSITE (bypassUsed=true, direct OpenTrade call) -- that was the
+    # confirmed bug this whole release documents. Change B (a separate,
+    # later commit) fixes it by routing recovery through
+    # XAU_CheckRecoveryAwaitingTiming() instead. See
+    # test_xau_v6205b_recovery_timing_integration_static.py for the full
+    # Change B verification; this test only pins down that the OLD direct
+    # bypass call is gone from XAU_CheckPendingOpportunityRecovery.
     ea = read(EA)
-    idx = ea.index('g_pendingTimingProof.openTradeCaller       = "XAU_CheckPendingOpportunityRecovery->OpenTrade";')
-    window = ea[idx - 1200:idx + 200]
-    assert 'g_pendingTimingProof.sourcePath             = "RECOVERY";' in window
-    assert "g_pendingTimingProof.bypassUsed            = true;" in window
-    assert 'g_pendingTimingProof.bypassReason          = "RECOVERY_DIRECT_OPENTRADE";' in window
-    assert "g_pendingTimingProof.timingGateStartTime   = 0;" in window
-    assert "g_pendingTimingProof.timingEngineWaitSeconds = 0.0;" in window
-    assert "g_pendingTimingProof.recoveryWaitSeconds   = (double)(TimeCurrent() - storedAt);" in window
-    call_idx = ea.index("bool opened = OpenTrade(dir, atrNow, recoveryReason, 1.0);")
-    assert idx < call_idx, "proof must be populated BEFORE the recovery OpenTrade call"
+    fn = mql_body(ea, "void XAU_CheckPendingOpportunityRecovery()")
+    assert "bool opened = OpenTrade(dir, atrNow, recoveryReason, 1.0);" not in fn, \
+        "XAU_CheckPendingOpportunityRecovery must no longer call OpenTrade() directly -- it must register into the timing engine instead (Change B)"
+    assert "g_recoveryAwaitingTiming.active" in fn
 
 
 def test_manual_force_open_populates_proof_as_a_named_exemption():

@@ -3475,6 +3475,29 @@ struct XAU_TimingProofRecord
 };
 XAU_TimingProofRecord g_pendingTimingProof;
 
+// v6.20.5 (Change B) — a recovery candidate that PASSED its own gauntlet
+// ("is this previously blocked idea still valid?") but must still clear the
+// SAME authoritative timing engine ("is this exact moment/location good
+// enough?") every other autonomous entry clears, before OpenTrade() is ever
+// called. Deliberately thin: carries only what XAU_TimingEngineConfirmsEntry
+// and OpenTrade() need, reusing that one function's own delay/revalidate/
+// cancel state machine (g_pendingEntryConfirm) rather than inventing a
+// second timer. See XAU_CheckRecoveryAwaitingTiming().
+struct XAU_RecoveryAwaitingTiming
+{
+   bool     active;
+   string   signalId;
+   int      dir;
+   string   setup;
+   string   grade;
+   double   atr;
+   string   recoveryReason;
+   datetime firstSeenTime;       // original PENDING_OPPORTUNITY_STORED time
+   double   firstSeenPrice;      // original signal price at block time
+   double   recoveryWaitSeconds; // fixed at the moment the gauntlet passed -- does not keep growing
+};
+XAU_RecoveryAwaitingTiming g_recoveryAwaitingTiming;
+
 // Bounded, posId-keyed record of the above, consumed once the trade closes to
 // compute actual-vs-estimated-instant-entry MAE/MFE and a delay-helped-or-hurt
 // verdict. Evicts oldest on overflow, same pattern as g_exitBiasKeys/
@@ -13254,6 +13277,12 @@ void OnTick()
    // this can never fire more than once per bar no matter how many times
    // OnTick re-enters this function on that bar.
    if(newM5Bar) XAU_CheckPendingOpportunityRecovery();
+   // v6.20.5 (Change B): deliberately NOT gated to newM5Bar -- a candidate
+   // already registered into the timing engine (by the gauntlet check just
+   // above, on a PRIOR bar) must be re-observed every tick, exactly like a
+   // fresh signal's own pending confirmation is, so its 60-120s wall-clock
+   // window can actually elapse and resolve without waiting for the next bar.
+   XAU_CheckRecoveryAwaitingTiming();
    // v6.17.12: g_lastEntryScanAt used to be stamped HERE -- before ScoreSetups,
    // grade computation, the Personality Gate, SmartGuard, and the
    // XAU_RecordMarketSnapshot() call that actually records market analysis.
@@ -25753,38 +25782,102 @@ void XAU_CheckPendingOpportunityRecovery()
 
    string recoveryReason = StringFormat("[%s] %s RECOVERY of missed signal %s (original blocker: %s, current M5 structure: %s)",
                                         oppGrade, setup, sid, originalBlocker, recClass.why);
-   Print("RECOVERY_EXECUTED: ", sid, " | ", dir == 1 ? "BUY" : "SELL", " ", setup,
-         " grade=", oppGrade, " combined=", DoubleToString(oppCombined, 2), " | ", recClass.why);
 
-   // v6.20.5 (TELEMETRY ONLY -- Change A): this is the CONFIRMED bypass this
-   // release exists to document -- XAU_CheckPendingOpportunityRecovery calls
-   // OpenTrade() directly, below, without ever calling
-   // XAU_TimingEngineConfirmsEntry(). storedAt is recovered from `expiry`
-   // (set to TimeCurrent()+2 M5-bar-periods at storage time in
-   // PENDING_OPPORTUNITY_STORED) rather than adding a new struct field, since
-   // it is exactly recoverable and this change must not alter
-   // PendingOpportunity's shape. Change B (a separate, not-yet-applied
-   // change) is what fixes this; this commit only proves it happened.
+   // v6.20.5 (Change B) — FIX for the Change-A-documented bypass: the
+   // recovery gauntlet above answers "is this previously blocked idea still
+   // valid?" -- it does NOT answer "is this exact moment/location good
+   // enough to execute?", which is the timing engine's job. Previously this
+   // called OpenTrade() directly here. Now it registers into the SAME
+   // authoritative timing engine every other autonomous path uses
+   // (XAU_TimingEngineConfirmsEntry via g_pendingEntryConfirm) and defers
+   // execution to XAU_CheckRecoveryAwaitingTiming(), called every tick.
+   // Per the explicit decision on whether recovery-wait counts toward the
+   // timing minimum (documented in the v6.20.5 commit message): it does NOT
+   // -- the wait between PENDING_OPPORTUNITY_STORED and this gauntlet pass
+   // had zero continuous timing-engine observation (a separate struct,
+   // simply idle), so the full timing delay begins fresh from here. storedAt
+   // is recovered from `expiry` (set to TimeCurrent()+2 M5-bar-periods at
+   // storage time) rather than adding a field to PendingOpportunity, since it
+   // is exactly recoverable and that struct's shape should not change.
    datetime storedAt = expiry - (datetime)(PeriodSeconds(PERIOD_M5) * 2);
-   g_pendingTimingProof.active                = true;
-   g_pendingTimingProof.candidateId           = sid;
-   g_pendingTimingProof.sourcePath             = "RECOVERY";
-   g_pendingTimingProof.firstSeenTime         = storedAt;
-   g_pendingTimingProof.firstSeenPrice        = signalPrice;
-   g_pendingTimingProof.timingGateRequired    = true;
-   g_pendingTimingProof.requiredDelaySeconds  = InpUseM5EntryDelay ? XAU_EffectiveM5EntryDelaySec() : (double)PeriodSeconds(PERIOD_M5);
-   g_pendingTimingProof.timingGateStartTime   = 0; // never armed -- this is the bypass
-   g_pendingTimingProof.recoveryWaitSeconds   = (double)(TimeCurrent() - storedAt);
-   g_pendingTimingProof.timingEngineWaitSeconds = 0.0;
-   g_pendingTimingProof.revalidationTime      = TimeCurrent();
-   g_pendingTimingProof.revalidationResult    = "RECOVERY_GAUNTLET_PASSED_TIMING_NOT_RUN";
-   g_pendingTimingProof.bypassUsed            = true;
-   g_pendingTimingProof.bypassReason          = "RECOVERY_DIRECT_OPENTRADE";
-   g_pendingTimingProof.openTradeCaller       = "XAU_CheckPendingOpportunityRecovery->OpenTrade";
+   g_recoveryAwaitingTiming.active              = true;
+   g_recoveryAwaitingTiming.signalId            = sid;
+   g_recoveryAwaitingTiming.dir                 = dir;
+   g_recoveryAwaitingTiming.setup               = setup;
+   g_recoveryAwaitingTiming.grade               = oppGrade;
+   g_recoveryAwaitingTiming.atr                 = atrNow;
+   g_recoveryAwaitingTiming.recoveryReason       = recoveryReason;
+   g_recoveryAwaitingTiming.firstSeenTime       = storedAt;
+   g_recoveryAwaitingTiming.firstSeenPrice      = signalPrice;
+   g_recoveryAwaitingTiming.recoveryWaitSeconds = (double)(TimeCurrent() - storedAt);
+   PrintFormat("RECOVERY_GAUNTLET_PASSED: %s | %s %s grade=%s combined=%.2f | %s | recoveryWaitSeconds=%.0f -- now entering the SAME timing engine every fresh signal uses; full delay starts fresh from here",
+               sid, dir == 1 ? "BUY" : "SELL", setup, oppGrade, oppCombined, recClass.why,
+               g_recoveryAwaitingTiming.recoveryWaitSeconds);
+}
 
-   bool opened = OpenTrade(dir, atrNow, recoveryReason, 1.0);
-   if(!opened)
-      Print("RECOVERY_OPEN_TRADE_FAILED: ", sid, " -- OpenTrade() itself declined (final risk/broker gate)");
+// v6.20.5 (Change B) — polls, EVERY TICK (not gated to newM5Bar, unlike the
+// gauntlet check above), whether a recovery candidate that already passed
+// its own gauntlet has now also cleared the shared timing engine. No Sleep,
+// no second timer: this repeatedly calls the exact same
+// XAU_TimingEngineConfirmsEntry() the fresh-signal path calls every tick,
+// which owns all delay/elapsed/cancel state via g_pendingEntryConfirm. This
+// function's only job is to recognize the three possible outcomes of that
+// call for THIS candidate and act once, on whichever tick resolves it.
+void XAU_CheckRecoveryAwaitingTiming()
+{
+   if(!g_recoveryAwaitingTiming.active) return;
+
+   bool confirmed = XAU_TimingEngineConfirmsEntry(g_recoveryAwaitingTiming.dir,
+                                                  g_recoveryAwaitingTiming.setup,
+                                                  g_recoveryAwaitingTiming.grade,
+                                                  1.0, g_recoveryAwaitingTiming.atr);
+   if(confirmed)
+   {
+      // v6.20.5 (Change B): timing engine confirmed -- record the FULL,
+      // honest proof (bypassUsed=false now; the gate genuinely ran) before
+      // calling OpenTrade(), same convergence point every other caller uses.
+      g_pendingTimingProof.active                = true;
+      g_pendingTimingProof.candidateId           = g_recoveryAwaitingTiming.signalId;
+      g_pendingTimingProof.sourcePath             = "RECOVERY";
+      g_pendingTimingProof.firstSeenTime         = g_recoveryAwaitingTiming.firstSeenTime;
+      g_pendingTimingProof.firstSeenPrice        = g_recoveryAwaitingTiming.firstSeenPrice;
+      g_pendingTimingProof.timingGateRequired    = true;
+      g_pendingTimingProof.requiredDelaySeconds  = InpUseM5EntryDelay ? XAU_EffectiveM5EntryDelaySec() : (double)PeriodSeconds(PERIOD_M5);
+      g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
+      g_pendingTimingProof.recoveryWaitSeconds   = g_recoveryAwaitingTiming.recoveryWaitSeconds;
+      g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
+      g_pendingTimingProof.revalidationTime      = g_lastEntryTimingDecision.decisionTime;
+      g_pendingTimingProof.revalidationResult    = g_lastEntryTimingDecision.entryReasonText;
+      g_pendingTimingProof.bypassUsed            = false;
+      g_pendingTimingProof.bypassReason          = "";
+      g_pendingTimingProof.openTradeCaller       = "XAU_CheckRecoveryAwaitingTiming->OpenTrade";
+
+      Print("RECOVERY_TIMING_CONFIRMED: ", g_recoveryAwaitingTiming.signalId,
+            " -- timing engine passed, executing now");
+      bool opened = OpenTrade(g_recoveryAwaitingTiming.dir, g_recoveryAwaitingTiming.atr,
+                             g_recoveryAwaitingTiming.recoveryReason, 1.0);
+      if(!opened)
+         Print("RECOVERY_OPEN_TRADE_FAILED: ", g_recoveryAwaitingTiming.signalId,
+               " -- OpenTrade() itself declined (final risk/broker gate)");
+      g_recoveryAwaitingTiming.active = false;
+      return;
+   }
+
+   // Not confirmed this tick -- distinguish "still legitimately waiting for
+   // THIS exact candidate" from "the timing engine cancelled it, or a
+   // different candidate reset the shared window" (e.g. structure flipped,
+   // overextended, spread extreme, still late-chase, or an unrelated fresh
+   // signal claimed the shared g_pendingEntryConfirm slot first). Only the
+   // former should be left to try again next tick.
+   bool stillMine = g_pendingEntryConfirm.active &&
+                    g_pendingEntryConfirm.dir == g_recoveryAwaitingTiming.dir &&
+                    g_pendingEntryConfirm.setup == g_recoveryAwaitingTiming.setup;
+   if(!stillMine)
+   {
+      Print("RECOVERY_TIMING_CANCELLED: ", g_recoveryAwaitingTiming.signalId,
+            " -- timing engine cancelled/expired this candidate (or it was superseded) before confirming; recovery dropped, not retried");
+      g_recoveryAwaitingTiming.active = false;
+   }
 }
 
 // v6.17.15 COMMAND CENTER FORCE OPEN: user/manual override of a blocked
