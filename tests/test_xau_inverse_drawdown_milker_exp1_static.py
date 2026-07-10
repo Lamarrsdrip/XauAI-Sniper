@@ -148,16 +148,16 @@ def _entry_gate_block(text):
 
 
 # --------------------------------------------------------------------------
-# Grade-eligibility correction (owner directive): the original baseline
-# inverted EVERY grade unconditionally ("MANDATORY... No exceptions"),
-# which is wrong -- B is the bot's currently accurate/working grade and must
-# execute normally, un-inverted. B+/A/A+ remain eligible for inversion.
+# Grade-eligibility rule, SECOND REVISION (owner directive): every real
+# grade (B, B+, A, A+) now inverts and uses the same full-size lot
+# treatment. Only an empty/unrecognized grade fails closed to non-inverted
+# execution (a safety net for malformed data, not a deliberate exclusion).
 # --------------------------------------------------------------------------
 
-def test_grade_helper_exists_with_exact_match_and_fail_closed_semantics():
+def test_grade_helper_exists_with_exact_match_and_all_real_grades_eligible():
     text = src()
     fn = _grade_helper_fn(text)
-    assert 'if(g == "B") return false;' in fn
+    assert 'if(g == "B") return true;' in fn
     assert 'if(g == "B+") return true;' in fn
     assert 'if(g == "A") return true;' in fn
     assert 'if(g == "A+") return true;' in fn
@@ -166,40 +166,28 @@ def test_grade_helper_exists_with_exact_match_and_fail_closed_semantics():
     assert "StringFind" not in fn
 
 
-def test_b_grade_preserved_normal_no_inversion():
+def test_b_grade_now_inverts_same_as_the_other_grades():
     text = src()
     gate = _entry_gate_block(text)
     assert "bool inversionEligible = XAU_IsInverseExperimentGradeEligible(originalFinalGrade);" in gate
-    assert '(originalFinalGrade == "B") ? "NORMAL_B_PRESERVED"' in gate
-    # the not-eligible branch must reuse the ORIGINAL signal/price/SL/TP/lot untouched
+    assert 'string gradePolicy = inversionEligible ? "INVERSE_ELIGIBLE" : "NOT_ELIGIBLE_FAIL_CLOSED";' in gate
+    # the not-eligible (fail-closed) branch is only reachable for an
+    # empty/unrecognized grade now -- B goes through the eligible branch
     normal_branch = text[text.index("if(!inversionEligible)"):text.index("else\n   {\n      // From here")]
-    assert "execSignal = originalSignal;" in normal_branch
-    assert "execPrice  = originalPrice;" in normal_branch
-    assert "execSL     = originalSL;" in normal_branch
-    assert "execTP     = originalTP;" in normal_branch
-    assert "execLots   = originalLots;" in normal_branch
-    assert "INVERSION_APPLIED=false" in normal_branch
+    assert "Only reachable for an empty/unrecognized grade now" in normal_branch
 
 
-def test_bplus_a_aplus_remain_eligible_for_inversion():
+def test_exact_match_only_never_substring():
     text = src()
     fn = _grade_helper_fn(text)
-    assert 'if(g == "B+") return true;' in fn
-    assert 'if(g == "A") return true;' in fn
-    assert 'if(g == "A+") return true;' in fn
-
-
-def test_exact_comparison_prevents_bplus_confused_with_b():
-    text = src()
-    fn = _grade_helper_fn(text)
-    b_idx = fn.index('if(g == "B") return false;')
-    bplus_idx = fn.index('if(g == "B+") return true;')
-    assert b_idx < bplus_idx
     assert "StringFind" not in fn
     assert "StringSubstr(g, 0, 1)" not in fn
+    b_idx = fn.index('if(g == "B") return true;')
+    bplus_idx = fn.index('if(g == "B+") return true;')
+    assert b_idx < bplus_idx  # B checked (and matched) before B+, exact string, no fallthrough confusion
 
 
-def test_empty_and_unknown_grade_fail_closed():
+def test_empty_and_unknown_grade_still_fail_closed():
     text = src()
     fn = _grade_helper_fn(text)
     for bad in ("C", "D", "FALLBACK", ""):
@@ -224,10 +212,48 @@ def test_executed_direction_and_inversion_flag_stored_separately_from_original()
     assert "bool     inversionApplied;" in struct_body
 
 
-def test_b_grade_never_recorded_into_inverse_experiment_dataset():
+def test_b_grade_now_recorded_into_inverse_experiment_dataset_like_the_others():
+    # Second revision: B is no longer excluded from the experiment, so its
+    # rows now belong in the comparison CSV like every other eligible grade.
     text = src()
-    idx = text.index("if(inversionEligible)\n         XAU_InverseExperimentRecordOpen(")
-    assert idx > 0  # guarded call exists -- B-grade rows never contaminate the experiment CSV
+    assert "if(inversionEligible)\n         XAU_InverseExperimentRecordOpen(" in text
+    csv_write_fn = text[text.index("void XAU_InverseExperimentAppend("):text.index("int XAU_InverseExperimentFind")]
+    assert '"INVERSE_ELIGIBLE"' in csv_write_fn
+    assert "NORMAL_B_PRESERVED" not in csv_write_fn
+
+
+# --------------------------------------------------------------------------
+# Lot-sizing correction (owner directive, live bug): a B-grade trade was
+# observed executing at 0.01 lots. Root cause: the "TRUE A/A+ FULL SIZE
+# ENFORCEMENT" floor -- which restores a grade's lot size if soft reducers
+# (STI/committee/PG) shrink it -- only ever protected A/A+. B/B+ had no such
+# floor, so soft-reducer stacking could compound them down to the SIZE
+# GUARD's 0.10 floor and the broker minimum. Now every grade gets the same
+# baseline multiplier (0.85, matching A; A+ keeps its 1.10 premium) and the
+# same full-size restoration floor.
+# --------------------------------------------------------------------------
+
+def test_b_and_bplus_no_longer_use_reduced_baseline_multiplier():
+    text = src()
+    assert 'double sizeMulti = grade == "A+" ? 1.10 : 0.85;' in text
+    assert 'double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;' not in text
+
+
+def test_full_size_enforcement_floor_now_protects_every_grade():
+    text = src()
+    assert "bool   highGradeFullSize      = true;  // was: (grade == \"A+\" || grade == \"A\")" in text
+    assert 'bool   highGradeFullSize      = (grade == "A+" || grade == "A");' not in text
+
+
+def test_full_size_enforcement_still_respects_genuine_hard_conflict_reducers():
+    # The fix only removes the grade restriction -- it must NOT remove the
+    # existing safety exceptions (weak-AI-agree, SMC hard conflict, timing-
+    # risk), which correctly still block the floor from firing.
+    text = src()
+    assert "bool aiWeakConfirmReduced = (lta_aiVerdict ==" in text
+    assert "bool smcHardConflictReduced = g_smcHardBlockActive;" in text
+    assert "bool timingQualityReduced = (lta_timing < 0.999);" in text
+    assert "if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && !aiWeakConfirmReduced && !smcHardConflictReduced && !timingQualityReduced)" in text
 
 
 def test_telemetry_has_all_required_fields_both_branches():

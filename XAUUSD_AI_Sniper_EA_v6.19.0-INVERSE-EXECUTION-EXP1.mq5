@@ -14083,7 +14083,12 @@ void OnTick()
 
    // ============ GATE 4: RISK SIZING ============
    // v4.9.3 — Bigger lots scale with signal strength
-   double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;
+   // CORRECTED (owner directive, inverse-experiment build only): every grade
+   // now goes through the SAME signal-direction-changing experiment (B/B+/A/A+
+   // all invert) and must be sized the same way -- B is no longer singled out
+   // for a reduced 0.45x baseline. Matches A's 0.85x; A+ keeps its 1.10x
+   // premium. This does not touch production (v6.19.0.mq5/v6.20.4/v6.20.5).
+   double sizeMulti = grade == "A+" ? 1.10 : 0.85;
    // June 17-18 reconstruction: a MEDIUM-tier Active Direction flip (tactical
    // countertrend trade, opposite of the still-live HTF bias) is a deliberate
    // structural risk reduction, not a "soft" quality reducer — fold it into
@@ -14103,8 +14108,16 @@ void OnTick()
    // But for A+/A they must NOT reduce lot — only skip or allow.
    // This enforcement floor is applied AFTER all soft modules run, restoring sizeMulti to
    // the grade baseline if soft code tried to shrink it.
-   bool   highGradeFullSize      = (grade == "A+" || grade == "A");
-   double originalGradeSizeMulti = sizeMulti;  // 1.10 (A+) or 0.85 (A) or 0.45 (B)
+   // CORRECTED (owner directive, inverse-experiment build only): the A/A+
+   // full-size enforcement floor now protects EVERY grade -- B and B+ were
+   // previously excluded, leaving them exposed to STI/committee/PG soft-
+   // reducer stacking with nothing to restore against, which is exactly what
+   // compounded a B-grade trade down to the SIZE GUARD's 0.10 floor and a
+   // 0.01 broker-minimum lot. Legitimate hard-conflict reducers (weak-AI-
+   // agree, SMC hard conflict, timing-risk) are unaffected below -- this only
+   // restores size against generic soft-multiplier collapse, for every grade.
+   bool   highGradeFullSize      = true;  // was: (grade == "A+" || grade == "A")
+   double originalGradeSizeMulti = sizeMulti;  // 1.10 (A+) or 0.85 (A/B+/B, now uniform)
 
    // Audit capture — each soft module records what it attempted
    double lta_volCap      = 1.0;   // Vol cap (ScanSignals) — already bypassed for A+/A in v6.4.17
@@ -15643,24 +15656,21 @@ void PrintBacktestAuditReport()
 // the soft blockers get bypassed, by design"). Hard safety below (hedge/
 // exposure/margin/broker/risk) is untouched and still applies to every
 // caller, manual override included.
-// CORRECTED grade-eligibility rule for the inverse-execution/drawdown-milker
-// experiment (owner directive, supersedes the original baseline which
-// inverted every grade unconditionally with "no exceptions"). B-grade is
-// observed to be the bot's currently accurate/working grade (lower
-// immediate drawdown, better timing) and does NOT benefit from drawdown-
-// milking inversion -- it must run under fully normal, non-inverted
-// behavior. B+ is a DIFFERENT grade from B (exact-match comparison only --
-// never substring/StringFind, which would silently fold "B+" into "B") and
-// DOES remain eligible, alongside A and A+. Unknown/empty/C/fallback grades
-// fail closed (not eligible -- normal execution, not inverted) rather than
-// guessing.
+// UPDATED grade-eligibility rule for the inverse-execution/drawdown-milker
+// experiment (owner directive, second revision): B now ALSO inverts, same
+// as B+/A/A+ -- every real grade is treated identically for direction
+// purposes. Exact-match comparison only (never substring/StringFind, so
+// "B+" is never folded into "B"). Unknown/empty/C/fallback grades still
+// fail closed (not eligible -- normal, non-inverted execution) since those
+// are not real grades the normal strategy brain would ever finalize, not a
+// deliberate exclusion the way B originally was.
 bool XAU_IsInverseExperimentGradeEligible(string originalGrade)
 {
    string g = originalGrade;
    StringTrimLeft(g);
    StringTrimRight(g);
    StringToUpper(g);
-   if(g == "B") return false;         // explicitly excluded -- preserve normal behavior
+   if(g == "B") return true;
    if(g == "B+") return true;
    if(g == "A") return true;
    if(g == "A+") return true;
@@ -16761,25 +16771,21 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          " Lots=", DoubleToString(lots, lotDigits),
          " | ", reason);
 
-   // ===== INVERSE EXECUTION EXPERIMENT: grade-gated direction inversion =====
-   // CORRECTED (owner directive): the original baseline inverted EVERY trade
-   // unconditionally ("MANDATORY: normal BUY -> SELL... No exceptions"),
-   // including B-grade. Observation: B is currently the bot's accurate,
-   // working grade (lower immediate drawdown, better timing) and does NOT
-   // benefit from drawdown-milking inversion -- it must execute under fully
-   // normal, non-inverted behavior, exactly as v6.20.4/v6.20.5 already do.
-   // B+, A, and A+ remain eligible for mandatory inversion. Grade is read
-   // from funnelGrade (the SAME finalized-grade variable this function
-   // already computes above for telemetry), captured BEFORE any inversion
-   // decision and never recalculated afterward.
+   // ===== INVERSE EXECUTION EXPERIMENT: direction inversion (all grades) =====
+   // UPDATED (owner directive, second revision): every real grade (B, B+, A,
+   // A+) now inverts -- B is no longer excluded. Grade is read from
+   // funnelGrade (the SAME finalized-grade variable this function already
+   // computes above for telemetry), captured BEFORE any inversion decision
+   // and never recalculated afterward. Only an empty/unrecognized grade
+   // (which the normal strategy brain should never actually finalize) fails
+   // closed to non-inverted execution.
    string originalSignalDirStr = (signal == 1) ? "BUY" : "SELL";
    string originalFinalGrade = funnelGrade;
    StringTrimLeft(originalFinalGrade);
    StringTrimRight(originalFinalGrade);
    StringToUpper(originalFinalGrade);
    bool inversionEligible = XAU_IsInverseExperimentGradeEligible(originalFinalGrade);
-   string gradePolicy = (originalFinalGrade == "B") ? "NORMAL_B_PRESERVED"
-                                                     : (inversionEligible ? "INVERSE_ELIGIBLE" : "NOT_ELIGIBLE");
+   string gradePolicy = inversionEligible ? "INVERSE_ELIGIBLE" : "NOT_ELIGIBLE_FAIL_CLOSED";
 
    // Normal analysis (scoring, filters, risk sizing) is fully complete above --
    // nothing before this point is touched. originalXxx below is the baseline
@@ -16796,9 +16802,10 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
 
    if(!inversionEligible)
    {
-      // B (or an empty/unknown/fallback grade, fail-closed): preserve fully
-      // normal, non-inverted execution -- same signal/price/SL/TP/lot the
-      // normal strategy already computed above, untouched.
+      // Only reachable for an empty/unrecognized grade now (fail-closed
+      // safety net -- B/B+/A/A+ are all eligible). Preserve fully normal,
+      // non-inverted execution -- same signal/price/SL/TP/lot the normal
+      // strategy already computed above, untouched.
       execSignal = originalSignal;
       execPrice  = originalPrice;
       execSL     = originalSL;
@@ -19422,7 +19429,7 @@ void XAU_InverseExperimentAppend(string eventType, XAU_InverseExperimentRecord &
    FileWrite(h, eventType, TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
              (long)AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), XAUAI_EA_VERSION,
              (long)r.posId, r.setup, r.grade,
-             r.grade == "B" ? "NORMAL_B_PRESERVED" : "INVERSE_ELIGIBLE", // this CSV only ever holds eligible rows (B is never recorded here)
+             "INVERSE_ELIGIBLE", // every real grade (B/B+/A/A+) is now inverse-eligible; this CSV only ever holds eligible rows
              r.originalSignal == 1 ? "BUY" : "SELL",
              r.actualDirection == 1 ? "BUY" : "SELL",
              r.inversionApplied ? "true" : "false",
