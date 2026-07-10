@@ -3245,8 +3245,9 @@ struct XAU_InverseExperimentRecord
    bool     active;
    ulong    posId;
    datetime entryTime;
-   int      originalSignal;
-   int      actualDirection;
+   int      originalSignal;         // the NORMAL strategy's finalized direction, captured before any inversion decision
+   int      actualDirection;        // what was actually sent to the broker
+   bool     inversionApplied;       // always true for any record in this array -- B-grade (no inversion) is never recorded here
    double   entry;
    double   lot;
    double   sl;
@@ -15642,6 +15643,30 @@ void PrintBacktestAuditReport()
 // the soft blockers get bypassed, by design"). Hard safety below (hedge/
 // exposure/margin/broker/risk) is untouched and still applies to every
 // caller, manual override included.
+// CORRECTED grade-eligibility rule for the inverse-execution/drawdown-milker
+// experiment (owner directive, supersedes the original baseline which
+// inverted every grade unconditionally with "no exceptions"). B-grade is
+// observed to be the bot's currently accurate/working grade (lower
+// immediate drawdown, better timing) and does NOT benefit from drawdown-
+// milking inversion -- it must run under fully normal, non-inverted
+// behavior. B+ is a DIFFERENT grade from B (exact-match comparison only --
+// never substring/StringFind, which would silently fold "B+" into "B") and
+// DOES remain eligible, alongside A and A+. Unknown/empty/C/fallback grades
+// fail closed (not eligible -- normal execution, not inverted) rather than
+// guessing.
+bool XAU_IsInverseExperimentGradeEligible(string originalGrade)
+{
+   string g = originalGrade;
+   StringTrimLeft(g);
+   StringTrimRight(g);
+   StringToUpper(g);
+   if(g == "B") return false;         // explicitly excluded -- preserve normal behavior
+   if(g == "B+") return true;
+   if(g == "A") return true;
+   if(g == "A+") return true;
+   return false;                      // empty / C / unknown / fallback -- fail closed
+}
+
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
 {
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
@@ -16736,13 +16761,30 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          " Lots=", DoubleToString(lots, lotDigits),
          " | ", reason);
 
-   // ===== INVERSE EXECUTION EXPERIMENT: mandatory direction inversion =====
+   // ===== INVERSE EXECUTION EXPERIMENT: grade-gated direction inversion =====
+   // CORRECTED (owner directive): the original baseline inverted EVERY trade
+   // unconditionally ("MANDATORY: normal BUY -> SELL... No exceptions"),
+   // including B-grade. Observation: B is currently the bot's accurate,
+   // working grade (lower immediate drawdown, better timing) and does NOT
+   // benefit from drawdown-milking inversion -- it must execute under fully
+   // normal, non-inverted behavior, exactly as v6.20.4/v6.20.5 already do.
+   // B+, A, and A+ remain eligible for mandatory inversion. Grade is read
+   // from funnelGrade (the SAME finalized-grade variable this function
+   // already computes above for telemetry), captured BEFORE any inversion
+   // decision and never recalculated afterward.
+   string originalSignalDirStr = (signal == 1) ? "BUY" : "SELL";
+   string originalFinalGrade = funnelGrade;
+   StringTrimLeft(originalFinalGrade);
+   StringTrimRight(originalFinalGrade);
+   StringToUpper(originalFinalGrade);
+   bool inversionEligible = XAU_IsInverseExperimentGradeEligible(originalFinalGrade);
+   string gradePolicy = (originalFinalGrade == "B") ? "NORMAL_B_PRESERVED"
+                                                     : (inversionEligible ? "INVERSE_ELIGIBLE" : "NOT_ELIGIBLE");
+
    // Normal analysis (scoring, filters, risk sizing) is fully complete above --
    // nothing before this point is touched. originalXxx below is the baseline
-   // decision, kept ONLY for comparison telemetry. From here we compute an
-   // INDEPENDENT inverse trade plan: same risk distances (same R), opposite
-   // direction, fresh executable price for that opposite side -- never the
-   // stale original-direction price/SL/TP reused blindly.
+   // decision, kept for comparison telemetry regardless of which branch below
+   // actually executes.
    int    originalSignal = signal;
    double originalPrice  = price;
    double originalSL     = sl;
@@ -16750,88 +16792,113 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double originalSLDist = MathAbs(originalPrice - originalSL);
    double originalLots   = lots;
 
-   int execSignal = -originalSignal;   // MANDATORY: normal BUY -> SELL, normal SELL -> BUY. No exceptions.
-   double execPrice, execSL, execTP;
-   if(execSignal == 1)
+   int execSignal; double execPrice, execSL, execTP, execLots; string candidateId;
+
+   if(!inversionEligible)
    {
-      execPrice = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-      execSL    = NormalizeDouble(execPrice - originalSLDist, digits);
-      execTP    = NormalizeDouble(execPrice + originalSLDist, digits);
+      // B (or an empty/unknown/fallback grade, fail-closed): preserve fully
+      // normal, non-inverted execution -- same signal/price/SL/TP/lot the
+      // normal strategy already computed above, untouched.
+      execSignal = originalSignal;
+      execPrice  = originalPrice;
+      execSL     = originalSL;
+      execTP     = originalTP;
+      execLots   = originalLots;
+      candidateId = reason; // keep the ORIGINAL reason text -- not a synthetic inverse-experiment ID
+      PrintFormat("ORIGINAL_SIGNAL=%s ORIGINAL_GRADE=%s GRADE_POLICY=%s ACTUAL_EXECUTION=%s INVERSION_APPLIED=false",
+                  originalSignalDirStr, originalFinalGrade, gradePolicy, originalSignalDirStr);
    }
    else
    {
-      execPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-      execSL    = NormalizeDouble(execPrice + originalSLDist, digits);
-      execTP    = NormalizeDouble(execPrice - originalSLDist, digits);
-   }
-   if(execPrice <= 0)
-   {
-      Print("INVERSE_EXPERIMENT_ABORT: invalid inverse-side bid/ask; order not sent.");
-      return false;
-   }
-   // Broker stop-level / freeze-level clamp, evaluated fresh on the inverse side --
-   // spread/level checks are side-specific and the original-direction pass does not
-   // validate them for the opposite side.
-   {
-      long stopLevelPts   = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-      long freezeLevelPts = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
-      double minStopDist  = MathMax(stopLevelPts, freezeLevelPts) * point;
-      if(minStopDist > 0)
+      // From here we compute an INDEPENDENT inverse trade plan: same risk
+      // distances (same R), opposite direction, fresh executable price for
+      // that opposite side -- never the stale original-direction price/SL/TP
+      // reused blindly. Unchanged from the original baseline logic, just now
+      // gated to B+/A/A+ only.
+      execSignal = -originalSignal;   // MANDATORY for eligible grades: normal BUY -> SELL, normal SELL -> BUY.
+      if(execSignal == 1)
       {
-         if(execSignal == 1)
+         execPrice = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+         execSL    = NormalizeDouble(execPrice - originalSLDist, digits);
+         execTP    = NormalizeDouble(execPrice + originalSLDist, digits);
+      }
+      else
+      {
+         execPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+         execSL    = NormalizeDouble(execPrice + originalSLDist, digits);
+         execTP    = NormalizeDouble(execPrice - originalSLDist, digits);
+      }
+      if(execPrice <= 0)
+      {
+         Print("INVERSE_EXPERIMENT_ABORT: invalid inverse-side bid/ask; order not sent.");
+         return false;
+      }
+      // Broker stop-level / freeze-level clamp, evaluated fresh on the inverse side --
+      // spread/level checks are side-specific and the original-direction pass does not
+      // validate them for the opposite side.
+      {
+         long stopLevelPts   = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+         long freezeLevelPts = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
+         double minStopDist  = MathMax(stopLevelPts, freezeLevelPts) * point;
+         if(minStopDist > 0)
          {
-            if(execPrice - execSL < minStopDist) execSL = NormalizeDouble(execPrice - minStopDist, digits);
-         }
-         else
-         {
-            if(execSL - execPrice < minStopDist) execSL = NormalizeDouble(execPrice + minStopDist, digits);
+            if(execSignal == 1)
+            {
+               if(execPrice - execSL < minStopDist) execSL = NormalizeDouble(execPrice - minStopDist, digits);
+            }
+            else
+            {
+               if(execSL - execPrice < minStopDist) execSL = NormalizeDouble(execPrice + minStopDist, digits);
+            }
          }
       }
+      double execSLDist = MathAbs(execPrice - execSL);
+      if(execSignal == 1)
+         execTP = NormalizeDouble(execPrice + execSLDist, digits);
+      else
+         execTP = NormalizeDouble(execPrice - execSLDist, digits);
+      // Independent risk recheck: inversion + fresh price can shift true SL distance
+      // (spread asymmetry, stop-level clamp above). Rescale lot so the SAME configured
+      // risk-% / risk-USD as the baseline normal strategy is honored for the trade
+      // actually being sent -- never the original-direction lot reused blindly.
+      double originalRiskUSD = RiskPerLotForDistance(originalSLDist) * originalLots;
+      double inverseRiskPerLot = RiskPerLotForDistance(execSLDist);
+      execLots = originalLots;
+      if(inverseRiskPerLot > 0.0 && originalRiskUSD > 0.0)
+         execLots = NormalizeVolumeDown(originalRiskUSD / inverseRiskPerLot);
+      else if(execSLDist > 0 && originalSLDist > 0)
+         execLots = NormalizeVolumeDown(originalLots * (originalSLDist / execSLDist));
+      if(execLots < minLot)
+      {
+         Print("INVERSE_EXPERIMENT_SKIP_BROKER_MIN_EXCEEDS_RISK: recalculated inverse lot ",
+               DoubleToString(execLots, lotDigits), " below broker minimum ", DoubleToString(minLot, lotDigits),
+               " -- broker minimum would exceed configured experimental risk. Skipping, not inflating lot.");
+         return false;
+      }
+
+      double execR03 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist * 0.30 : -execSLDist * 0.30), digits);
+      double execR05 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist * 0.50 : -execSLDist * 0.50), digits);
+      double execR10 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist : -execSLDist), digits);
+
+      candidateId = reason + "_" + IntegerToString((int)TimeCurrent());
+      PrintFormat("INVERSE_EXPERIMENT_DECISION | candidateId=%s | originalSignalDirection=%s executedDirection=%s | "
+                  "originalEntryPlan=%.2f/%.2f/%.2f originalSLDist=%.2f | "
+                  "inverseEntryPlan=%.2f/%.2f/%.2f inverseSLDist=%.2f inverseTPDist=%.2f r03=%.2f r05=%.2f r10=%.2f | "
+                  "originalLot=%.2f inverseLot=%.2f originalRiskUSD=%.2f inverseRiskPerLot=%.2f magic=%d reason=MANDATORY_DIRECTION_INVERSION | %s",
+                  candidateId, originalSignal==1?"BUY":"SELL", execSignal==1?"BUY":"SELL",
+                  originalPrice, originalSL, originalTP, originalSLDist,
+                  execPrice, execSL, execTP, execSLDist, MathAbs(execTP-execPrice), execR03, execR05, execR10,
+                  originalLots, execLots, originalRiskUSD, inverseRiskPerLot, InpMagicNumber, reason);
+
+      Print("NORMAL BOT DECISION: ", originalSignal > 0 ? "BUY" : "SELL");
+      Print("EXPERIMENTAL RULE: INVERT EXECUTION");
+      Print("ACTUAL ACTION: ", execSignal > 0 ? "BUY" : "SELL");
+      Print("PURPOSE: CAPTURE THE MOVE THAT WOULD NORMALLY BECOME ",
+            originalSignal > 0 ? "BUY" : "SELL", " DRAWDOWN");
+      Print("TARGET MODE: FAST 0.3R-0.5R CAPTURE; 1R MAXIMUM IF MOMENTUM REMAINS STRONG");
+      PrintFormat("ORIGINAL_SIGNAL=%s ORIGINAL_GRADE=%s GRADE_POLICY=%s ACTUAL_EXECUTION=%s INVERSION_APPLIED=true",
+                  originalSignalDirStr, originalFinalGrade, gradePolicy, execSignal==1?"BUY":"SELL");
    }
-   double execSLDist = MathAbs(execPrice - execSL);
-   if(execSignal == 1)
-      execTP = NormalizeDouble(execPrice + execSLDist, digits);
-   else
-      execTP = NormalizeDouble(execPrice - execSLDist, digits);
-   // Independent risk recheck: inversion + fresh price can shift true SL distance
-   // (spread asymmetry, stop-level clamp above). Rescale lot so the SAME configured
-   // risk-% / risk-USD as the baseline normal strategy is honored for the trade
-   // actually being sent -- never the original-direction lot reused blindly.
-   double originalRiskUSD = RiskPerLotForDistance(originalSLDist) * originalLots;
-   double inverseRiskPerLot = RiskPerLotForDistance(execSLDist);
-   double execLots = originalLots;
-   if(inverseRiskPerLot > 0.0 && originalRiskUSD > 0.0)
-      execLots = NormalizeVolumeDown(originalRiskUSD / inverseRiskPerLot);
-   else if(execSLDist > 0 && originalSLDist > 0)
-      execLots = NormalizeVolumeDown(originalLots * (originalSLDist / execSLDist));
-   if(execLots < minLot)
-   {
-      Print("INVERSE_EXPERIMENT_SKIP_BROKER_MIN_EXCEEDS_RISK: recalculated inverse lot ",
-            DoubleToString(execLots, lotDigits), " below broker minimum ", DoubleToString(minLot, lotDigits),
-            " -- broker minimum would exceed configured experimental risk. Skipping, not inflating lot.");
-      return false;
-   }
-
-   double execR03 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist * 0.30 : -execSLDist * 0.30), digits);
-   double execR05 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist * 0.50 : -execSLDist * 0.50), digits);
-   double execR10 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist : -execSLDist), digits);
-
-   string candidateId = reason + "_" + IntegerToString((int)TimeCurrent());
-   PrintFormat("INVERSE_EXPERIMENT_DECISION | candidateId=%s | originalSignalDirection=%s executedDirection=%s | "
-               "originalEntryPlan=%.2f/%.2f/%.2f originalSLDist=%.2f | "
-               "inverseEntryPlan=%.2f/%.2f/%.2f inverseSLDist=%.2f inverseTPDist=%.2f r03=%.2f r05=%.2f r10=%.2f | "
-               "originalLot=%.2f inverseLot=%.2f originalRiskUSD=%.2f inverseRiskPerLot=%.2f magic=%d reason=MANDATORY_DIRECTION_INVERSION | %s",
-               candidateId, originalSignal==1?"BUY":"SELL", execSignal==1?"BUY":"SELL",
-               originalPrice, originalSL, originalTP, originalSLDist,
-               execPrice, execSL, execTP, execSLDist, MathAbs(execTP-execPrice), execR03, execR05, execR10,
-               originalLots, execLots, originalRiskUSD, inverseRiskPerLot, InpMagicNumber, reason);
-
-   Print("NORMAL BOT DECISION: ", originalSignal > 0 ? "BUY" : "SELL");
-   Print("EXPERIMENTAL RULE: INVERT EXECUTION");
-   Print("ACTUAL ACTION: ", execSignal > 0 ? "BUY" : "SELL");
-   Print("PURPOSE: CAPTURE THE MOVE THAT WOULD NORMALLY BECOME ",
-         originalSignal > 0 ? "BUY" : "SELL", " DRAWDOWN");
-   Print("TARGET MODE: FAST 0.3R-0.5R CAPTURE; 1R MAXIMUM IF MOMENTUM REMAINS STRONG");
 
    // Reassign the SAME variable names the rest of this function (and everything
    // called with them downstream: telemetry, ticket tracking, position bookkeeping)
@@ -16844,7 +16911,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    lots   = execLots;
    reason = candidateId; // stable ID so normal-vs-inverse pairing is possible later; original reason text logged above
 
-   Print("EXECUTING (INVERSE): ", signal > 0 ? "BUY" : "SELL",
+   Print(inversionEligible ? "EXECUTING (INVERSE): " : "EXECUTING (NORMAL, GRADE=B PRESERVED): ", signal > 0 ? "BUY" : "SELL",
          " (normal analysis said ", originalSignal > 0 ? "BUY" : "SELL", ") Price=", DoubleToString(price, digits),
          " SL=", DoubleToString(sl, digits),
          " TP=", DoubleToString(tp, digits),
@@ -16858,7 +16925,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD), g_spreadEMA, InpMagicNumber);
 
    bool ok;
-   string inverseComment = "INV_EXP|NORMAL_" + (originalSignal==1?"BUY":"SELL") + "|ACTUAL_" + (signal==1?"BUY":"SELL");
+   string inverseComment = inversionEligible
+      ? ("INV_EXP|NORMAL_" + (originalSignal==1?"BUY":"SELL") + "|ACTUAL_" + (signal==1?"BUY":"SELL"))
+      : ("INV_EXP|GRADE_B_NORMAL|" + (signal==1?"BUY":"SELL")); // NOT an inversion -- grade B preserved, labeled distinctly in broker history
    if(signal == 1) ok = trade.Buy(lots, Symbol(), 0, sl, tp, inverseComment);
    else ok = trade.Sell(lots, Symbol(), 0, sl, tp, inverseComment);
 
@@ -16911,8 +16980,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                           lastSignalSetup, g_pendingBrainGrade, lastSignalSignature,
                           g_pendingBrainSetupScore, g_pendingBrainCombinedScore,
                           reason + " | " + g_pendingBrainEntryAudit);
-      XAU_InverseExperimentRecordOpen(openedPosId, originalSignal, signal, price,
-                                      lots, sl, tp, lastSignalSetup, g_pendingBrainGrade);
+      // Only trades where inversion actually applied belong in the inverse-
+      // experiment's own comparison dataset -- a preserved-normal B-grade
+      // trade is not part of that hypothesis test and must not contaminate it.
+      if(inversionEligible)
+         XAU_InverseExperimentRecordOpen(openedPosId, originalSignal, signal, price,
+                                         lots, sl, tp, lastSignalSetup, g_pendingBrainGrade);
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ENTRY", "OrderSend",
                                 signal, funnelSetup, funnelGrade, funnelScore,
                                 true, true, "EXECUTED", "",
@@ -19342,7 +19415,7 @@ void XAU_InverseExperimentAppend(string eventType, XAU_InverseExperimentRecord &
    if(!exists)
    {
       FileWrite(h, "event", "time", "account", "symbol", "version", "ticket",
-                "setup", "grade", "originalSignal", "actualExecution", "entry",
+                "setup", "grade", "gradePolicy", "originalSignal", "actualExecution", "inversionApplied", "entry",
                 "lot", "sl", "tp", "oneRDistance", "r03Level", "r05Level",
                 "r10Level", "mae", "mfe", "timeTo03Sec", "timeTo05Sec",
                 "timeTo10Sec", "peakR", "realizedR", "realizedUSD",
@@ -19355,8 +19428,10 @@ void XAU_InverseExperimentAppend(string eventType, XAU_InverseExperimentRecord &
    FileWrite(h, eventType, TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
              (long)AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), XAUAI_EA_VERSION,
              (long)r.posId, r.setup, r.grade,
+             r.grade == "B" ? "NORMAL_B_PRESERVED" : "INVERSE_ELIGIBLE", // this CSV only ever holds eligible rows (B is never recorded here)
              r.originalSignal == 1 ? "BUY" : "SELL",
              r.actualDirection == 1 ? "BUY" : "SELL",
+             r.inversionApplied ? "true" : "false",
              DoubleToString(r.entry, _Digits), DoubleToString(r.lot, 2),
              DoubleToString(r.sl, _Digits), DoubleToString(r.tp, _Digits),
              DoubleToString(r.rDist, _Digits), DoubleToString(r.r03, _Digits),
@@ -19394,6 +19469,7 @@ void XAU_InverseExperimentRecordOpen(ulong posId, int originalSignal, int actual
    g_inverseExpRecords[idx].entryTime = TimeCurrent();
    g_inverseExpRecords[idx].originalSignal = originalSignal;
    g_inverseExpRecords[idx].actualDirection = actualDirection;
+   g_inverseExpRecords[idx].inversionApplied = true; // only ever reached for an eligible (B+/A/A+) inversion
    g_inverseExpRecords[idx].entry = entry;
    g_inverseExpRecords[idx].lot = lot;
    g_inverseExpRecords[idx].sl = sl;
