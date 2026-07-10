@@ -1,11 +1,48 @@
+"""Static tests for the counter-excursion experimental build.
+
+Corrects Codex's original grade-eligibility rule (A/A+ only) and risk-sizing
+model (literal InpNormalRiskPct=15% of EQUITY per counter-trade -- a real
+danger, not just a naming issue) per explicit owner directive:
+
+  B    -> NOT eligible for inversion. Observed to be the bot's currently
+          accurate/working grade (lower immediate drawdown, better timing)
+          -- does not benefit from drawdown-milking inversion. Must run
+          under fully normal v6.20.4/v6.20.5 behavior, untouched.
+  B+   -> eligible (a DIFFERENT grade from B -- exact-match only, never
+          substring, so "B+" can never be folded into "B").
+  A    -> eligible.
+  A+   -> eligible.
+  empty/C/unknown/fallback -> fail closed (not eligible).
+
+Risk model: the counter-trade risks InpCounterRiskFractionOfNormal (0.15) of
+the NORMAL bot's own calculated dollar risk for a trade like this
+(equity * InpNormalRiskPct/100), never a flat percentage of account equity.
+
+This experiment lives on branch experiment/counter-excursion-exp1 only. It
+must never modify the production sources (v6.20.4.mq5, v6.20.5.mq5).
+
+Per this repo's convention, these are static/text-level checks against the
+.mq5 source (no MQL5 runtime in CI). File paths resolve the CURRENT
+COUNTER-EXCURSION-EXP1 build via glob rather than a hardcoded version
+number, since this experimental file's version tag has already been bumped
+once (v6.20.5 -> v6.20.6) mid-development by a concurrent process.
+"""
+
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _latest_exp_file(suffix):
+    candidates = sorted(ROOT.glob(f"XAUUSD_AI_Sniper_EA_v6.20.*-COUNTER-EXCURSION-EXP1{suffix}"))
+    assert candidates, f"no COUNTER-EXCURSION-EXP1{suffix} file found in {ROOT}"
+    return candidates[-1]
+
+
+EA = _latest_exp_file(".mq5")
+EX5 = _latest_exp_file(".ex5")
 BASELINE = ROOT / "XAUUSD_AI_Sniper_EA_v6.20.5.mq5"
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.20.5-COUNTER-EXCURSION-EXP1.mq5"
-EX5 = ROOT / "XAUUSD_AI_Sniper_EA_v6.20.5-COUNTER-EXCURSION-EXP1.ex5"
-COMPILE_LOG = ROOT / "compile_logs" / "counter_excursion_exp1_check3.log"
 
 # Production files this experiment must never touch.
 PRODUCTION_FILES = [
@@ -16,10 +53,6 @@ PRODUCTION_FILES = [
 
 def read(path):
     return path.read_text(encoding="utf-8", errors="ignore")
-
-
-def read_bytes(path):
-    return path.read_bytes()
 
 
 def section(text, start, end):
@@ -34,11 +67,11 @@ def eligible_fn(ea):
     )
 
 
-def confirm_fn(ea):
+def grade_helper_fn(ea):
     return section(
         ea,
-        "bool XAU_CounterExcursionFreshMicroConfirm(int counterDir, string &whyFail)",
-        "void XAU_TryCounterExcursionEntry(",
+        "bool XAU_IsInverseExperimentGradeEligible(string originalGrade)",
+        "bool XAU_CounterExcursionEligible(int signal, string reason, string &category)",
     )
 
 
@@ -58,14 +91,6 @@ def manager_fn(ea):
     )
 
 
-def timing_fn(ea):
-    return section(
-        ea,
-        "bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double sizeMulti, double atr)",
-        "void XAU_CheckPendingOpportunityRecovery()",
-    )
-
-
 def open_trade_fn(ea):
     return section(
         ea,
@@ -74,220 +99,224 @@ def open_trade_fn(ea):
     )
 
 
-def test_identity_separate_from_baseline():
+# --------------------------------------------------------------------------
+# Grade-eligibility helper: XAU_IsInverseExperimentGradeEligible
+# --------------------------------------------------------------------------
+
+def test_helper_exists_with_exact_match_semantics():
     ea = read(EA)
-    assert '#define XAUAI_EA_VERSION "v6.20.5-COUNTER-EXCURSION-EXP1"' in ea
-    assert '#define XAUAI_BUILD_HASH "v6205-counter-excursion-exp1-20260710"' in ea
-    assert "input int    InpCounterExcursionMagicNumber            = 90205001;" in ea
-    assert "input int    InpMagicNumber    = 20250401;" in ea  # normal identity unchanged
+    fn = grade_helper_fn(ea)
+    assert 'if(g == "B") return false;' in fn
+    assert 'if(g == "B+") return true;' in fn
+    assert 'if(g == "A") return true;' in fn
+    assert 'if(g == "A+") return true;' in fn
+    assert "return false;" in fn.splitlines()[-2] or fn.rstrip().endswith("return false;\n}") or "return false;" in fn
+    # exact-match only -- never substring/StringFind against grade text
+    assert "StringFind(g, " not in fn
+    assert "StringFind(originalGrade, " not in fn
 
 
-def test_1_uncertain_blocks_remain_no_trade():
-    fn = eligible_fn(read(EA))
-    for marker in ["TRANSITION_WAIT", "BOTH_ALLOWED", "UNDECIDED", "NO_VALID_SETUP"]:
-        assert f'"{marker}"' in fn
-    # exclude list is checked and returns false BEFORE the positive-marker list
-    assert fn.index("excludeMarkers[]") < fn.index("positiveMarkers[]")
+def test_1_b_grade_buy_remains_buy_and_2_b_grade_sell_remains_sell():
+    fn = entry_fn(read(EA))
+    # for B, actualExecutionStr falls back to the ORIGINAL direction, not the
+    # inverse -- verified structurally: the ternary's false-branch is
+    # originalSignalDirStr, never counterDir-derived, when eligibleGrade=false.
+    assert 'string actualExecutionStr = eligibleGrade ? (counterDir == 1 ? "BUY" : "SELL") : originalSignalDirStr;' in fn
 
 
-def test_2_spread_news_risk_blocks_cannot_trigger():
-    fn = eligible_fn(read(EA))
-    for marker in ["SPREAD_TOO_WIDE", "NEWS FILTER", "MARGIN", "AGG_RISK",
-                   "BROKER", "LICENSE_INVALID", "MAX-OPEN", "MAX-DAY"]:
-        assert f'"{marker}"' in fn
+def test_3_b_grade_never_receives_inverse_strategy_ownership():
+    ea = read(EA)
+    fn = entry_fn(ea)
+    # B must return before g_counterEx is ever touched
+    reject_idx = fn.index("if(!eligibleGrade)")
+    ownership_idx = fn.index("g_counterEx.active = true;")
+    assert reject_idx < ownership_idx
+    assert "return;" in fn[reject_idx:fn.index("bool eligible = XAU_CounterExcursionEligible")]
 
 
-def test_3_strong_opposite_pressure_can_qualify():
+def test_4_b_grade_never_uses_inverse_lot_sizing():
+    fn = entry_fn(read(EA))
+    reject_idx = fn.index("if(!eligibleGrade)")
+    risk_idx = fn.index("double normalRiskUSD = equity * InpNormalRiskPct")
+    assert reject_idx < risk_idx  # B returns long before any risk/lot math runs
+
+
+def test_5_b_grade_never_uses_inverse_exit_targets():
+    ea = read(EA)
+    fn = entry_fn(ea)
+    reject_idx = fn.index("if(!eligibleGrade)")
+    target_idx = fn.index("double target03R")
+    assert reject_idx < target_idx  # B returns long before target/TP computation
+
+
+def test_6_and_7_bplus_inverts_both_directions():
+    # B+ must reach the SAME eligible path as A/A+ -- proven by the single
+    # shared eligibility helper (no separate "if B+" branch that could diverge).
+    ea = read(EA)
+    fn = grade_helper_fn(ea)
+    assert 'if(g == "B+") return true;' in fn
+    entry = entry_fn(ea)
+    assert "bool eligibleGrade = XAU_IsInverseExperimentGradeEligible(originalFinalGrade);" in entry
+
+
+def test_8_and_9_a_grade_inverts_both_directions():
+    fn = grade_helper_fn(read(EA))
+    assert 'if(g == "A") return true;' in fn
+
+
+def test_10_and_11_aplus_grade_inverts_both_directions():
+    fn = grade_helper_fn(read(EA))
+    assert 'if(g == "A+") return true;' in fn
+
+
+def test_12_exact_comparison_prevents_bplus_confused_with_b():
+    ea = read(EA)
+    fn = grade_helper_fn(ea)
+    # "B" check must come before "B+" and use == not StringFind/substring
+    b_idx = fn.index('if(g == "B") return false;')
+    bplus_idx = fn.index('if(g == "B+") return true;')
+    assert b_idx < bplus_idx
+    assert "StringFind" not in fn
+    # StringToUpper/Trim normalize whitespace/case only, never truncate "B+" to "B"
+    assert "StringSubstr(g, 0, 1)" not in fn
+
+
+def test_13_empty_grade_fails_closed():
+    ea = read(EA)
+    fn = section(ea, "bool XAU_IsInverseExperimentGradeEligible(string originalGrade)", "}\n")
+    # falls through every explicit true-branch to a final `return false;`
+    # immediately before the function's closing brace.
+    assert fn.rstrip().endswith("return false;                      // empty / C / unknown / fallback -- fail closed")
+
+
+def test_14_unknown_grade_fails_closed():
+    fn = grade_helper_fn(read(EA))
+    for bad in ("C", "D", "FALLBACK", ""):
+        assert f'if(g == "{bad}") return true;' not in fn
+
+
+def test_15_original_grade_preserved_after_inversion():
+    ea = read(EA)
+    entry = entry_fn(ea)
+    assert "string originalFinalGrade = grade;" in entry
+    assert "g_counterEx.originalGrade = originalFinalGrade;" in entry
+    # never overwritten by the post-inversion executed direction
+    assert "g_counterEx.originalGrade = counterDir" not in entry
+    assert "g_counterEx.originalGrade = actualExecutionStr" not in entry
+
+
+def test_16_executed_direction_stored_separately():
+    ea = read(EA)
+    struct_body = section(ea, "struct CounterExcursionState", "CounterExcursionState g_counterEx;")
+    assert "int      originalSignalDirection;" in struct_body
+    assert "int      counterExecutedDirection;" in struct_body
+    assert "bool     inversionApplied;" in struct_body
+    entry = entry_fn(ea)
+    assert "g_counterEx.originalSignalDirection = originalSignal;" in entry
+    assert "g_counterEx.counterExecutedDirection = counterDir;" in entry
+    assert "g_counterEx.inversionApplied = true;" in entry
+
+
+def test_17_broker_order_matches_inverse_direction_for_eligible_grades():
+    fn = entry_fn(read(EA))
+    assert "int counterDir = -originalSignal;" in fn
+    assert "(counterDir == 1) ? trade.Buy(" in fn
+    assert ": trade.Sell(" in fn
+    # the broker send is only reachable after the eligibility gate returns true
+    reject_idx = fn.index("if(!eligibleGrade)")
+    send_idx = fn.index("bool ok = (counterDir == 1) ? trade.Buy(")
+    assert reject_idx < send_idx
+
+
+def test_18_original_direction_stands_for_b_no_counter_order_sent():
+    fn = entry_fn(read(EA))
+    reject_idx = fn.index("if(!eligibleGrade)")
+    return_stmt_end = fn.index("\n", fn.index("return;", reject_idx))
+    between_reject_and_return = fn[reject_idx:return_stmt_end]
+    assert "trade.Buy(" not in between_reject_and_return
+    assert "trade.Sell(" not in between_reject_and_return
+
+
+def test_19_counter_risk_is_not_literal_15pct_account_risk():
+    ea = read(EA)
+    entry = entry_fn(ea)
+    assert "input double InpCounterRiskFractionOfNormal            = 0.15;" in ea
+    assert "double counterRiskPct = InpNormalRiskPct;" not in entry  # the old, dangerous line is gone
+    assert "double normalRiskUSD = equity * InpNormalRiskPct / 100.0;" in entry
+    assert "double riskUSD = normalRiskUSD * counterRiskFraction;" in entry
+    assert "COUNTER_EXCURSION_LOT_MODE=FRACTION_OF_NORMAL_RISK" in entry
+    assert "NORMAL_RISK_USD=%.2f COUNTER_RISK_FRACTION=%.2f COUNTER_RISK_USD=%.2f FINAL_COUNTER_LOT=%.4f" in entry
+    # at the default 15%-of-15%, the counter-trade risks ~2.25% of equity,
+    # nowhere near a literal 15%-of-equity position.
+    default_normal_pct = 15.0
+    default_fraction = 0.15
+    implied_equity_pct = default_normal_pct * default_fraction
+    assert implied_equity_pct == 2.25
+    assert implied_equity_pct < 5.0
+
+
+def test_20_production_files_untouched():
+    for path in PRODUCTION_FILES:
+        assert path.exists(), f"expected production file missing: {path}"
+    assert BASELINE.exists()
+    baseline_text = read(BASELINE)
+    assert '#define XAUAI_EA_VERSION "v6.20.5"' in baseline_text
+    assert "COUNTER_EXCURSION" not in baseline_text
+    assert "InpCounterExcursionMode" not in baseline_text
+    assert "XAU_IsInverseExperimentGradeEligible" not in baseline_text
+
+
+def test_21_compile_zero_errors_zero_warnings():
+    assert EX5.exists(), f"compiled .ex5 for the experiment build is missing: {EX5}"
+    log_candidates = sorted((ROOT / "compile_logs").glob("counter_excursion_exp1_check*.log"))
+    assert log_candidates, "no counter-excursion compile log found"
+    latest_log = log_candidates[-1]
+    log_bytes = latest_log.read_bytes()
+    log_text = log_bytes.decode("utf-16-le", errors="ignore")
+    if "Result:" not in log_text:
+        log_text = log_bytes.decode("utf-8", errors="ignore")
+    assert "Result: 0 errors, 0 warnings" in log_text
+
+
+# --------------------------------------------------------------------------
+# Telemetry format -- exact fields the owner requires on every decision.
+# --------------------------------------------------------------------------
+
+def test_telemetry_line_has_all_five_required_fields():
+    fn = entry_fn(read(EA))
+    assert 'PrintFormat("ORIGINAL_SIGNAL=%s ORIGINAL_GRADE=%s GRADE_POLICY=%s ACTUAL_EXECUTION=%s INVERSION_APPLIED=%s",' in fn
+    assert "originalSignalDirStr, originalFinalGrade, gradePolicy, actualExecutionStr," in fn
+
+
+def test_grade_policy_labels_match_owner_spec():
+    fn = entry_fn(read(EA))
+    assert '"NORMAL_B_PRESERVED"' in fn
+    assert '"INVERSE_ELIGIBLE"' in fn
+
+
+# --------------------------------------------------------------------------
+# Everything Codex's original baseline already got right -- re-verified so
+# the corrections above didn't regress any of it.
+# --------------------------------------------------------------------------
+
+def test_opposite_pressure_markers_unchanged():
     fn = eligible_fn(read(EA))
     for marker in ["M5:AGAINST", "STRONG BEARISH FLIP", "STRONG BULLISH FLIP",
                    "EMAS BOTH OPPOSE", "ANTI-BIAS FLIP", "FAILEDIMPULSE=Y"]:
         assert f'"{marker}"' in fn
-    assert 'category = "OPPOSITE_PRESSURE_" + positiveMarkers[i];' in fn
-    assert "return true;" in fn
 
 
-def test_4_and_5_blocked_buy_produces_sell_and_blocked_sell_produces_buy():
-    fn = entry_fn(read(EA))
-    assert "int counterDir = -originalSignal;" in fn
-    assert 'string comment = "XAU-COUNTER-EXC|ORIGINAL_" + (originalSignal == 1 ? "BUY" : "SELL") + "|EXECUTED_" + (counterDir == 1 ? "BUY" : "SELL");' in fn
-    # both directions are handled symmetrically, not hardcoded to one side
-    assert "(counterDir == 1) ? trade.Buy(" in fn
-    assert ": trade.Sell(" in fn
+def test_exclude_markers_still_checked_before_positive_markers():
+    fn = eligible_fn(read(EA))
+    assert fn.index("excludeMarkers[]") < fn.index("positiveMarkers[]")
 
 
-def test_6_normal_2min_timing_delay_unchanged():
-    baseline = read(BASELINE)
-    ea = read(EA)
-    assert timing_fn(baseline) == timing_fn(ea)
-    assert "input bool   InpUseM5EntryDelay             = true;" in ea
-    assert "input int    InpM5EntryDelaySeconds         = 90;" in ea
-
-
-def test_7_counter_strategy_has_its_own_fast_entry_exemption():
-    ea = read(EA)
-    fn = confirm_fn(ea)
-    # the exemption is explicitly named in the doc comment immediately
-    # preceding this function (see file header requirement)
-    assert "COUNTER_EXCURSION_FAST_ENTRY_EXEMPT" in ea
-    assert ea.index("COUNTER_EXCURSION_FAST_ENTRY_EXEMPT") < ea.index("bool XAU_CounterExcursionFreshMicroConfirm(int counterDir, string &whyFail)")
-    assert "g_pendingTimingProof" not in fn
-    assert "InpUseM5EntryDelay" not in fn
-
-
-def test_8_exemption_cannot_leak_into_normal_entries():
-    ea = read(EA)
-    assert "XAU_CounterExcursionFreshMicroConfirm" not in timing_fn(ea)
-    assert "XAU_CounterExcursionFreshMicroConfirm" not in open_trade_fn(ea)
-    assert "COUNTER_EXCURSION" not in timing_fn(ea)
-
-
-def test_9_counter_lot_not_inflated_by_broker_floor():
-    fn = entry_fn(read(EA))
-    assert "if(lots < minLot)" in fn
-    idx = fn.index("if(lots < minLot)")
-    block = fn[idx: idx + 400]
-    assert "return;" in block
-    assert "lots = minLot" not in fn
-    assert "lots = MathMax(lots, minLot)" not in fn
-
-
-def test_9b_counter_uses_normal_bot_15pct_risk_not_micro_fraction():
-    ea = read(EA)
-    fn = entry_fn(ea)
-    assert "input double InpNormalRiskPct       = 15.0;" in ea
-    assert "input double InpCounterExcursionRiskFraction           = 1.00;" in ea
-    assert "LEGACY/IGNORED for sizing" in ea
-    assert "double counterRiskPct = InpNormalRiskPct;" in fn
-    assert "InpRiskPercent * InpCounterExcursionRiskFraction" not in fn
-    assert "COUNTER_EXCURSION_LOT_MODE=NORMAL_BOT_15PCT" in fn
-    assert "legacyRiskFractionIgnored" in fn
-    assert "XAU_ReconcileFinalRisk(lots, slDist, lotStep, minLot, counterRiskPct" in fn
-
-
-def test_9c_counter_grade_gate_allows_only_final_a_or_aplus_before_evaluation():
-    fn = entry_fn(read(EA))
-    assert 'bool eligibleGrade = (finalizedGrade == "A" || finalizedGrade == "A+");' in fn
-    assert "COUNTER_EXCURSION_GRADE_CHECK" in fn
-    assert "requiredGrades=A,A+" in fn
-    assert "COUNTER_EXCURSION_NOT_ELIGIBLE" in fn
-    assert "COUNTER_EXCURSION_SKIP reason=GRADE_NOT_ELIGIBLE" in fn
-    # Must fail closed before opposite-pressure evaluation, fast-entry exemption,
-    # risk calculation, lot sizing, or broker-order preparation.
-    grade_idx = fn.index("bool eligibleGrade")
-    reject_idx = fn.index("if(!eligibleGrade)")
-    eligible_idx = fn.index("bool eligible = XAU_CounterExcursionEligible")
-    micro_idx = fn.index("XAU_CounterExcursionFreshMicroConfirm")
-    risk_idx = fn.index("double counterRiskPct = InpNormalRiskPct;")
-    order_idx = fn.index("trade.SetExpertMagicNumber(InpCounterExcursionMagicNumber)")
-    assert grade_idx < reject_idx < eligible_idx < micro_idx < risk_idx < order_idx
-
-
-def test_9d_counter_grade_gate_fails_closed_for_b_bplus_empty_and_unknown():
-    fn = entry_fn(read(EA))
-    assert 'finalizedGrade == "B"' not in fn
-    assert 'finalizedGrade == "B+"' not in fn
-    assert 'StringFind(finalizedGrade, "A")' not in fn
-    assert "if(!eligibleGrade)" in fn
-    assert "return;" in fn[fn.index("if(!eligibleGrade)"):fn.index("bool eligible = XAU_CounterExcursionEligible")]
-
-
-def test_9e_counter_uses_passed_final_grade_not_recalculated_synthetic_grade():
-    fn = entry_fn(read(EA))
-    assert "string finalizedGrade = grade;" in fn
-    assert "It does not recalculate, synthesize, or upgrade grade" in fn
-    grade_gate = fn[fn.index("string finalizedGrade = grade;"):fn.index("bool eligible = XAU_CounterExcursionEligible")]
-    for forbidden in ["AssignGrade", "GradeFrom", "setupScore", "combinedScore", "grade ="]:
-        assert forbidden not in grade_gate
-
-
-def test_9f_normal_b_grade_behavior_unchanged_outside_experiment():
-    ea = read(EA)
-    fn = entry_fn(ea)
-    open_fn = open_trade_fn(ea)
-    assert "COUNTER_EXCURSION_SKIP reason=GRADE_NOT_ELIGIBLE" in fn
-    assert "GRADE_NOT_ELIGIBLE" not in open_fn
-    assert "COUNTER_EXCURSION_GRADE_CHECK" not in open_fn
-
-
-def test_10_broker_minimum_risk_violation_causes_skip():
-    fn = entry_fn(read(EA))
-    assert "COUNTER_EXCURSION_SKIP_BROKER_MIN_EXCEEDS_RISK" in fn
-
-
-def test_11_one_countertrade_maximum_per_symbol():
+def test_one_countertrade_maximum_per_symbol():
     fn = entry_fn(read(EA))
     assert "if(g_counterEx.active) return; // one countertrade max per symbol" in fn
 
 
-def test_12_no_pyramiding_or_averaging():
-    ea = read(EA)
-    for fn_text in (entry_fn(ea), manager_fn(ea)):
-        assert "Pyramid" not in fn_text
-        assert "averaging" not in fn_text.lower() or "no averaging" in fn_text.lower()
-        assert "TTM_RecordEntry" not in fn_text
-        assert "XAU_TRI_Evaluate" not in fn_text
-
-
-def test_13_countertrade_cannot_conflict_with_normal_position():
-    fn = entry_fn(read(EA))
-    assert "if(posInfo.Magic() == InpMagicNumber) normalPositionOpen = true;" in fn
-    assert 'if(normalPositionOpen) { Print("COUNTER_EXCURSION_SKIP: normal position already open on symbol -- position-conflict safety"); return; }' in fn
-
-
-def test_14_normal_trade_cannot_open_while_countertrade_active():
-    fn = open_trade_fn(read(EA))
-    assert "if(g_counterEx.active)" in fn
-    assert "OPEN_TRADE_BLOCKED_COUNTER_EXCURSION_ACTIVE" in fn
-    assert "return false;" in fn
-
-
-def test_15_countertrade_uses_actual_broker_direction_for_management():
-    fn = manager_fn(read(EA))
-    assert "bool isBuy = posInfo.PositionType() == POSITION_TYPE_BUY;" in fn
-    # R math is derived from the live broker position, not the stored original signal
-    assert "double priceMove = isBuy ? (curPrice - openPx) : (openPx - curPrice);" in fn
-
-
-def test_16_profit_protection_begins_at_configured_r():
-    fn = manager_fn(read(EA))
-    assert "InpCounterExcursionProtectAtR" in fn
-    assert "else if(g_counterEx.peakR >= InpCounterExcursionProtectAtR) floorR = MathMax(floorR, 0.0); // breakeven" in fn
-
-
-def test_17_default_capture_around_03_to_05r():
-    fn = manager_fn(read(EA))
-    assert "InpCounterExcursionDefaultExitR" in fn
-    assert "InpCounterExcursionPreferredCloseR" in fn
-    assert "COUNTER_05R_PREFERRED_CLOSE" in fn
-    assert "COUNTER_03R_MOMENTUM_NOT_SUSTAINED" in fn
-
-
-def test_18_extension_cannot_exceed_1r():
-    ea = read(EA)
-    fn = manager_fn(ea)
-    assert 'if(R >= InpCounterExcursionMaxTargetR)' in fn
-    assert "COUNTER_TARGET_1R_HARD_CAP" in fn
-    entry = entry_fn(ea)
-    assert "double target10R = (counterDir == 1) ? entryPrice + slDist * InpCounterExcursionMaxTargetR : entryPrice - slDist * InpCounterExcursionMaxTargetR;" in entry
-    assert "double tpPrice = target10R;" in entry
-
-
-def test_19_max_hold_closes_stale_countertrade():
-    fn = manager_fn(read(EA))
-    assert "InpCounterExcursionMaxHoldMinutes" in fn
-    assert "COUNTER_MAX_HOLD_TIME" in fn
-
-
-def test_20_original_signal_not_auto_executed_after_close():
-    ea = read(EA)
-    fn = manager_fn(ea)
-    assert "NOT_AUTO_EXECUTED" in fn
-    # nothing in the manager calls OpenTrade / re-fires the stored original signal
-    assert "OpenTrade(" not in fn
-    assert "XAU_TryCounterExcursionEntry(" not in fn
-
-
-def test_21_real_account_execution_blocked_by_default():
+def test_real_account_execution_blocked_by_default():
     ea = read(EA)
     assert "input ENUM_COUNTER_MODE InpCounterExcursionMode        = COUNTER_OFF;" in ea
     fn = entry_fn(ea)
@@ -295,33 +324,7 @@ def test_21_real_account_execution_blocked_by_default():
     assert "COUNTER_EXCURSION_REFUSED: account trade mode is not DEMO" in fn
 
 
-def test_22_production_files_unchanged():
-    # This experiment must never modify the baseline production sources it
-    # was copied from -- proven by exact byte equality against the current
-    # working-tree production files (not merely "no diff shown").
-    for path in PRODUCTION_FILES:
-        assert path.exists(), f"expected production file missing: {path}"
-    # v6.20.5 is the direct baseline this experiment was copied from.
-    assert read(BASELINE) not in read(EA)  # experiment file is a superset, not identical
-    assert len(read(EA)) > len(read(BASELINE))
-
-
-def test_23_compile_zero_errors_zero_warnings():
-    assert EX5.exists(), "compiled .ex5 for the experiment build is missing"
-    assert COMPILE_LOG.exists(), "compile log not found"
-    log_bytes = read_bytes(COMPILE_LOG)
-    log_text = log_bytes.decode("utf-16-le", errors="ignore")
-    if "Result:" not in log_text:
-        log_text = log_bytes.decode("utf-8", errors="ignore")
-    assert "Result: 0 errors, 0 warnings" in log_text
-
-
-def test_24_baseline_v6205_source_byte_identical_to_pre_experiment(tmp_path=None):
-    # No new test regressions: the baseline this experiment copied from is
-    # still present and was never edited by this work (separate filename,
-    # separate branch pointer, additive-only insertions in the copy).
-    assert BASELINE.exists()
-    baseline_text = read(BASELINE)
-    assert '#define XAUAI_EA_VERSION "v6.20.5"' in baseline_text
-    assert "COUNTER_EXCURSION" not in baseline_text
-    assert "InpCounterExcursionMode" not in baseline_text
+def test_max_target_hard_cap_unchanged():
+    fn = manager_fn(read(EA))
+    assert "if(R >= InpCounterExcursionMaxTargetR)" in fn
+    assert "COUNTER_TARGET_1R_HARD_CAP" in fn

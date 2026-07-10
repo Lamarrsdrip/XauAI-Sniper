@@ -1,10 +1,11 @@
 //+------------------------------------------------------------------+
-//|                XAUUSD_AI_Sniper_EA_v6.20.5-COUNTER-EXCURSION-EXP1.mq5 |
+//|                XAUUSD_AI_Sniper_EA_v6.20.6-COUNTER-EXCURSION-EXP1.mq5 |
 //|         EXPERIMENTAL BRANCH -- DEMO ACCOUNTS ONLY -- DO NOT DEPLOY    |
 //+------------------------------------------------------------------+
 //| Baseline: v6.20.5 (Recovered Trade Expansion Manager), the latest    |
 //| working-tree source as of this build -- layered on local main HEAD   |
-//| e0269f6 (v6.20.4 + Change A/B M5 timing-engine work). Branch:        |
+//| e0269f6 (v6.20.4 + Change A/B M5 timing-engine work). Experiment      |
+//| build number bumped to v6.20.6 on 2026-07-10. Branch:                |
 //| experiment/counter-excursion-v6204.                                  |
 //|                                                                        |
 //| Adds ONE new, independent, separately-owned strategy:                 |
@@ -1727,16 +1728,17 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.250"
-#property description "XAUUSD AI Sniper v6.20.5-COUNTER-EXCURSION-EXP1 - EXPERIMENTAL, DEMO ONLY"
+#property version   "6.260"
+#property description "XAUUSD AI Sniper v6.20.6-COUNTER-EXCURSION-EXP1 - EXPERIMENTAL, DEMO ONLY"
 #property description "Adds independent COUNTER_EXCURSION_CAPTURE: fast tactical countertrade when a"
 #property description "blocked candidate's reason proves real immediate opposite pressure."
-#property description "Normal v6.20.5 strategy, filters, risk sizing, 2-min delay unchanged."
+#property description "Normal strategy (v6.20.5 Recovered Trade Expansion Manager base), filters, risk"
+#property description "sizing, 2-min delay unchanged. Experiment build number bumped to 6.20.6."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.20.5-COUNTER-EXCURSION-EXP1"
-#define XAUAI_EA_VERSION_NUM "6.20.5.9101"
-#define XAUAI_BUILD_HASH "v6205-counter-excursion-exp1-20260710"
+#define XAUAI_EA_VERSION "v6.20.6-COUNTER-EXCURSION-EXP1"
+#define XAUAI_EA_VERSION_NUM "6.20.6.9101"
+#define XAUAI_BUILD_HASH "v6206-counter-excursion-exp1-20260710"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -2704,7 +2706,18 @@ enum ENUM_COUNTER_MODE
    COUNTER_DEMO_EXECUTE  = 2   // sends real orders -- demo accounts only, hard-enforced below
 };
 input ENUM_COUNTER_MODE InpCounterExcursionMode        = COUNTER_OFF;
-input double InpCounterExcursionRiskFraction           = 1.00;   // LEGACY/IGNORED for sizing: experiment now uses the normal bot InpNormalRiskPct risk authority so old .set files cannot force 0.01 lots
+// CORRECTED (owner directive): the prior baseline set counterRiskPct =
+// InpNormalRiskPct directly -- InpNormalRiskPct is the MAIN bot's own flat
+// 15%-of-EQUITY target for a fully-qualified A/A+ trade (see its definition:
+// "Uniform target risk-per-trade, ALL account sizes"). Reading it directly
+// here meant this experiment risked a literal 15% of account equity per
+// counter-trade -- not "15% of the normal bot's risk," a dangerous
+// unintended consequence of borrowing that constant unscaled. This input is
+// now an unambiguous FRACTION applied on top of the normal bot's own
+// calculated dollar risk for this exact trade (equity * InpNormalRiskPct/100),
+// so the counter-trade risks InpCounterRiskFractionOfNormal (15%) OF that
+// figure -- roughly 2.25% of equity at the default 15%/15%, not 15% flat.
+input double InpCounterRiskFractionOfNormal            = 0.15;   // fraction of the NORMAL bot's calculated dollar risk for this trade, NOT a fraction of account equity
 input double InpCounterExcursionSLATRMult              = 1.2;    // counter trade's OWN, tighter SL distance (ATR multiple) -- independent of normal InpSLMultiplier
 input int    InpCounterExcursionMaxHoldMinutes         = 30;     // tactical only -- not a swing strategy
 input double InpCounterExcursionProtectAtR             = 0.20;   // begin protecting profit
@@ -8454,6 +8467,10 @@ bool BasketDirectionLossBlock(int dir, string &reason)
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      // Magic-scoped: this gate reasons about the NORMAL strategy's own
+      // basket. A counter-excursion position (separate magic, separate risk
+      // budget) must never inflate or shrink this threshold.
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
       int posDir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
       if(posDir != dir) continue;
       dirFloat += PositionGetDouble(POSITION_PROFIT);
@@ -26475,10 +26492,11 @@ struct CounterExcursionState
    bool     active;
    ulong    ticket;
    int      originalSignalDirection;   // 1=BUY, -1=SELL -- the NORMAL strategy's blocked direction
-   int      counterExecutedDirection;  // always -originalSignalDirection
+   int      counterExecutedDirection;  // always -originalSignalDirection for this module
+   bool     inversionApplied;          // always true while active -- this module only ever executes the inverse direction; kept explicit per telemetry requirement, never inferred at display time
    string   originalCandidateId;
    string   originalSetup;
-   string   originalGrade;
+   string   originalGrade;             // the FINALIZED grade from the normal strategy brain, captured before any inversion decision -- never recalculated or overwritten afterward
    string   originalBlockReason;
    double   entryPrice;
    double   slPrice;
@@ -26492,6 +26510,28 @@ struct CounterExcursionState
 CounterExcursionState g_counterEx;
 datetime g_counterExCooldownUntil = 0;
 double   g_counterExLastR = 0.0; // cached each tick by XAU_ManageCounterExcursionPosition for Command Center display
+
+// CORRECTED grade-eligibility rule (owner directive, supersedes the
+// original A/A+-only baseline): B-grade signals are observed to be the
+// bot's currently-accurate, working signals -- lower immediate drawdown,
+// better timing -- so they do NOT benefit from drawdown-milking inversion
+// and must be left running under fully normal v6.20.4/v6.20.5 behavior.
+// B+ is a DIFFERENT grade from B (exact-match comparison only -- never
+// substring/StringFind, which would silently fold "B+" into "B") and DOES
+// remain eligible, alongside A and A+. Unknown/empty/C/fallback grades fail
+// closed (not eligible) rather than guessing.
+bool XAU_IsInverseExperimentGradeEligible(string originalGrade)
+{
+   string g = originalGrade;
+   StringTrimLeft(g);
+   StringTrimRight(g);
+   StringToUpper(g);
+   if(g == "B") return false;         // explicitly excluded -- preserve normal behavior
+   if(g == "B+") return true;
+   if(g == "A") return true;
+   if(g == "A+") return true;
+   return false;                      // empty / C / unknown / fallback -- fail closed
+}
 
 // Does this block reason prove real, immediate, opposite-direction market
 // pressure (not merely "trade not allowed")? Exclude list first (spread,
@@ -26591,24 +26631,39 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    string category;
    int counterDir = -originalSignal;
    string candidateId = StringFormat("CEC_%s_%s_%I64d", setupName, originalSignal == 1 ? "BUY" : "SELL", (long)TimeCurrent());
-   string finalizedGrade = grade;
-   StringTrimLeft(finalizedGrade);
-   StringTrimRight(finalizedGrade);
-   StringToUpper(finalizedGrade);
-   bool eligibleGrade = (finalizedGrade == "A" || finalizedGrade == "A+");
-   PrintFormat("COUNTER_EXCURSION_GRADE_CHECK | originalGrade=%s eligibleGrade=%s requiredGrades=A,A+ decision=%s",
-               grade, eligibleGrade ? "yes" : "no",
-               eligibleGrade ? "EVALUATE_COUNTER_EXCURSION" : "COUNTER_EXCURSION_NOT_ELIGIBLE");
+
+   // The experiment deliberately uses the finalized ORIGINAL grade passed by
+   // the normal strategy brain, captured BEFORE any inversion decision -- it
+   // is never recalculated, synthesized, or upgraded after the fact, and it
+   // must never be overwritten by which direction actually executes (an
+   // original A+ SELL must never be displayed as if it were a B BUY).
+   string originalSignalDirStr = (originalSignal == 1) ? "BUY" : "SELL";
+   string originalFinalGrade = grade;
+   StringTrimLeft(originalFinalGrade);
+   StringTrimRight(originalFinalGrade);
+   StringToUpper(originalFinalGrade);
+
+   // CORRECTED (owner directive): B is observed to be the bot's currently
+   // accurate/working grade (lower immediate drawdown, better timing) and
+   // does NOT benefit from drawdown-milking inversion -- it must run under
+   // fully normal v6.20.4/v6.20.5 behavior, untouched by this module. B+,
+   // A, and A+ remain eligible. Exact-match only (XAU_IsInverseExperimentGradeEligible),
+   // never substring, so "B+" can never be folded into "B".
+   bool eligibleGrade = XAU_IsInverseExperimentGradeEligible(originalFinalGrade);
+   string gradePolicy = (originalFinalGrade == "B") ? "NORMAL_B_PRESERVED"
+                                                     : (eligibleGrade ? "INVERSE_ELIGIBLE" : "NOT_ELIGIBLE");
+   string actualExecutionStr = eligibleGrade ? (counterDir == 1 ? "BUY" : "SELL") : originalSignalDirStr;
+   PrintFormat("ORIGINAL_SIGNAL=%s ORIGINAL_GRADE=%s GRADE_POLICY=%s ACTUAL_EXECUTION=%s INVERSION_APPLIED=%s",
+               originalSignalDirStr, originalFinalGrade, gradePolicy, actualExecutionStr,
+               eligibleGrade ? "true" : "false");
    if(!eligibleGrade)
    {
-      PrintFormat("COUNTER_EXCURSION_SKIP reason=GRADE_NOT_ELIGIBLE | originalGrade=%s | finalizedOriginalGrade=%s | normalBehavior=UNCHANGED",
-                  grade, finalizedGrade);
+      PrintFormat("COUNTER_EXCURSION_SKIP reason=%s | originalGrade=%s | finalizedOriginalGrade=%s | normalBehavior=UNCHANGED (executes/stays-blocked exactly as v6.20.4/v6.20.5 already decided elsewhere; this module does not touch it)",
+                  originalFinalGrade == "B" ? "NORMAL_B_PRESERVED" : "GRADE_NOT_ELIGIBLE",
+                  grade, originalFinalGrade);
       return;
    }
 
-   // The experiment deliberately uses the finalized original grade passed by the
-   // normal pipeline. It does not recalculate, synthesize, or upgrade grade just
-   // to activate a countertrade.
    bool eligible = XAU_CounterExcursionEligible(originalSignal, blockReason, category);
 
    bool normalPositionOpen = false, counterPositionOpen = false;
@@ -26650,9 +26705,19 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    slDist = MathAbs(entryPrice - slPrice);
    if(slDist <= 0) { Print("COUNTER_EXCURSION_SKIP: invalid SL distance"); return; }
 
+   // CORRECTED risk model: the counter-trade risks a controlled FRACTION of
+   // what the normal bot would have risked on a trade like this -- never a
+   // flat percentage of account equity taken directly from the main bot's
+   // own InpNormalRiskPct constant (that was the prior baseline's danger:
+   // literal 15%-of-equity per counter-trade). normalRiskUSD reproduces
+   // exactly what the main bot's own risk authority would compute for a
+   // fully-qualified trade of this size; counterRiskUSD is then a small,
+   // explicit slice of that, sized to test meaningfully without approaching
+   // anything close to the main bot's own per-trade risk budget.
    double equity = StrategyReferenceBalance();
-   double counterRiskPct = InpNormalRiskPct;
-   double riskUSD = equity * counterRiskPct / 100.0;
+   double normalRiskUSD = equity * InpNormalRiskPct / 100.0;
+   double counterRiskFraction = MathMax(0.0, InpCounterRiskFractionOfNormal);
+   double riskUSD = normalRiskUSD * counterRiskFraction;
    double dollarPerLot = RiskPerLotForDistance(slDist);
    double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
    double minLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
@@ -26666,9 +26731,10 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
                                             dollarPerLot, riskUSD,
                                             riskOvershootPct);
    lots = NormalizeDouble(lots, lotDigits);
-   PrintFormat("COUNTER_EXCURSION_LOT_MODE=NORMAL_BOT_15PCT | balance=$%.2f | normalRiskPct=%.2f%% | riskUSD=$%.2f | slDist=%.2f | slDollarPerLot=$%.2f | rawLot=%.4f | finalLot=%.4f | legacyRiskFractionIgnored=%.2f",
-               equity, counterRiskPct, riskUSD, slDist, dollarPerLot, rawLots, lots,
-               InpCounterExcursionRiskFraction);
+   PrintFormat("COUNTER_EXCURSION_LOT_MODE=FRACTION_OF_NORMAL_RISK | NORMAL_RISK_USD=%.2f COUNTER_RISK_FRACTION=%.2f COUNTER_RISK_USD=%.2f FINAL_COUNTER_LOT=%.4f | balance=$%.2f normalRiskPct=%.2f%% slDist=%.2f slDollarPerLot=$%.2f rawLot=%.4f",
+               normalRiskUSD, counterRiskFraction, riskUSD, lots,
+               equity, InpNormalRiskPct, slDist, dollarPerLot, rawLots);
+   double counterRiskPct = (equity > 0.0) ? (riskUSD / equity * 100.0) : 0.0; // derived, informational only -- used by the final risk-reconcile call below
    if(lots < minLot)
    {
       PrintFormat("COUNTER_EXCURSION_SKIP_BROKER_MIN_EXCEEDS_RISK: computed lot %.4f below broker minimum %.4f for normalRiskUSD=%.2f -- skipping, not inflating.",
@@ -26731,9 +26797,10 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    g_counterEx.ticket = ticket;
    g_counterEx.originalSignalDirection = originalSignal;
    g_counterEx.counterExecutedDirection = counterDir;
+   g_counterEx.inversionApplied = true; // this module only ever reaches here for an eligible inversion (B+/A/A+)
    g_counterEx.originalCandidateId = candidateId;
    g_counterEx.originalSetup = setupName;
-   g_counterEx.originalGrade = grade;
+   g_counterEx.originalGrade = originalFinalGrade; // the FINALIZED original grade, captured pre-inversion -- never the post-inversion direction/grade
    g_counterEx.originalBlockReason = blockReason;
    g_counterEx.entryPrice = trade.ResultPrice() > 0 ? trade.ResultPrice() : entryPrice;
    g_counterEx.slPrice = slPrice;
