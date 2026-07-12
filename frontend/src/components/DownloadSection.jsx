@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.21.0";
+  const version  = info?.version  || "v6.21.1";
   const edition  = info?.edition  || "R-BASED EXIT MANAGER";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.21.0.mq5";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.21.1.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.21.0.</span> Replaces the prior stack of competing profit-exit systems with one centralized, R-normalized exit manager: holds below 0.3R, arms ~0.15R protection at 0.3R, captures ~0.5R on weak continuation or holds toward a hard 1R target when momentum and trend stay strong, and closes on a 45% peak giveback. Entry logic, grading, lot sizing, and risk are unchanged.
+              <span className="font-semibold text-amber-200">Gold-only v6.21.1.</span> Forensic hardening pass on the R-based exit manager: core protection/giveback/1R management no longer depends on indicator warm-up, closes are retry-safe and broker-confirmed, and exit state now survives an EA or terminal restart. Entry logic, grading, lot sizing, and risk are unchanged.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">

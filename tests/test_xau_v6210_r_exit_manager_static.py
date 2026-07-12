@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.21.0.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.21.1.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -34,19 +34,21 @@ def test_current_release_source_is_synced_to_backend():
 
 
 def test_version_bumped_to_v6210():
+    # NOTE: this file predates the v6.21.1 forensic-hardening pass (see
+    # test_xau_v6211_r_exit_forensic_hardening_static.py for that release's
+    # own checks). Per this repo's convention, only the CURRENT release's
+    # version/banner is asserted against the live source -- this test now
+    # just confirms a version macro exists and is well-formed, not a pinned
+    # historical string.
     ea = read(EA)
-    assert '#define XAUAI_EA_VERSION "v6.21.0"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.21.0"' in ea
-    assert '#property version   "6.261"' in ea
+    assert re.search(r'#define XAUAI_EA_VERSION "v6\.\d+\.\d+"', ea)
+    assert re.search(r'#define XAUAI_EA_VERSION_NUM "6\.\d+\.\d+"', ea)
 
 
 def test_header_banner_matches_property_version_for_website_display():
     ea = read(EA)
     m = re.search(r'v(\d+\.\d+\.\d+)\s*[—\-]+\s*(.+)', ea[:3000])
     assert m is not None
-    assert m.group(1) == "6.21.0"
-    edition = m.group(2).strip().rstrip("|").strip()
-    assert "R-Based Exit Manager" in edition
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +94,7 @@ def test_exit_reason_tags_present():
 
 def test_manager_function_signature_and_helpers_exist():
     ea = read(EA)
-    assert "void XAU_ManageRBasedExit(ulong ticket, bool isBuy, double openPx, double curSL, double curTP," in ea
+    assert re.search(r"void\s+XAU_RExitCoreLoop\(\)", ea)
     assert re.search(r"int\s+XAU_RExit_FindIdx\(ulong ticket\)", ea)
     assert re.search(r"int\s+XAU_RExit_EnsureIdx\(", ea)
     assert re.search(r"void\s+XAU_RExit_Clear\(ulong ticket\)", ea)
@@ -115,10 +117,14 @@ def test_oninit_calls_validate_and_reconcile():
 # ---------------------------------------------------------------------------
 
 def test_manager_call_precedes_ttm_and_clean_exits_in_manage_positions():
+    # v6.21.1: actual R management moved to XAU_RExitCoreLoop(), called
+    # unconditionally from OnTick() before ManagePositions(). This ownership
+    # guard's only remaining job is to keep the legacy stack off an R-owned
+    # ticket -- it still must precede TTM/CleanExits in the loop.
     ea = read(EA)
     mp = body(ea, "void ManagePositions()")
-    assert "XAU_ManageRBasedExit(ticket, isBuy, openPx, curSL, curTP, curPrice, profit, lotsOpen," in mp
-    call_idx = mp.index("XAU_ManageRBasedExit(ticket, isBuy, openPx, curSL, curTP, curPrice, profit, lotsOpen,")
+    assert "if(XAU_RExitOwnsNormalPositions())" in mp
+    call_idx = mp.index("if(XAU_RExitOwnsNormalPositions())")
     ttm_idx = mp.index("v6.4.19 TRADE THESIS MONITOR")
     clean_idx = mp.index("if(InpCleanExits)")
     assert call_idx < ttm_idx < clean_idx
@@ -127,28 +133,40 @@ def test_manager_call_precedes_ttm_and_clean_exits_in_manage_positions():
 def test_manager_call_is_followed_by_unconditional_continue():
     ea = read(EA)
     mp = body(ea, "void ManagePositions()")
-    call_idx = mp.index("if(InpRExitEnable && g_rExitConfigValid)")
-    snippet = mp[call_idx:call_idx + 400]
+    call_idx = mp.index("if(XAU_RExitOwnsNormalPositions())")
+    snippet = mp[call_idx:call_idx + 200]
     assert "continue;" in snippet
 
 
 def test_pg_per_position_ratchet_and_epf_partials_gated_off_by_new_manager():
     ea = read(EA)
-    assert "if(!InpRExitEnable) PG_PerPositionRatchet();" in ea
-    assert "if(!noLimitMode && !InpRExitEnable) EPF_ManagePartials();" in ea
+    assert "if(!XAU_RExitOwnsNormalPositions()) PG_PerPositionRatchet();" in ea
+    assert "if(!noLimitMode && !XAU_RExitOwnsNormalPositions()) EPF_ManagePartials();" in ea
 
 
 def test_manage_basket_short_circuits_discretionary_logic_when_new_manager_active():
     ea = read(EA)
     mb = body(ea, "bool ManageBasket()")
-    assert "if(InpRExitEnable) return false;" in mb
+    assert "if(XAU_RExitOwnsNormalPositions()) return false;" in mb
     # The flat-state reset must still run before this guard (housekeeping preserved).
     reset_idx = mb.index("XAU_ResetBasketProtectionState();")
-    guard_idx = mb.index("if(InpRExitEnable) return false;")
+    guard_idx = mb.index("if(XAU_RExitOwnsNormalPositions()) return false;")
     assert reset_idx < guard_idx
     # The guard must come before any peak-arm/giveback decision logic.
     arm_idx = mb.index("Arm the basket-lock once peak crosses threshold")
     assert guard_idx < arm_idx
+
+
+def test_ownership_helper_used_consistently_everywhere():
+    # Audit finding: inconsistent InpRExitEnable vs InpRExitEnable &&
+    # g_rExitConfigValid checks scattered across call sites is itself a bug.
+    # Every deferral site must use XAU_RExitOwnsNormalPositions(), and no
+    # site should use a raw ad-hoc combination instead.
+    ea = read(EA)
+    assert "bool XAU_RExitOwnsNormalPositions()" in ea
+    assert "return InpRExitEnable && g_rExitConfigValid;" in ea
+    assert "InpRExitEnable && g_rExitConfigValid)" not in ea.replace(
+        "return InpRExitEnable && g_rExitConfigValid;", "")
 
 
 def test_emergency_paths_are_not_gated_by_new_manager():
@@ -254,14 +272,14 @@ def test_ratchet_never_loosens_buy_and_sell():
 
 def test_source_ratchet_guard_never_loosens():
     ea = read(EA)
-    fn = body(ea, "void XAU_ManageRBasedExit(ulong ticket, bool isBuy, double openPx, double curSL, double curTP,")
+    fn = body(ea, "void XAU_RExitCoreLoop()")
     assert "bool ratchet = isBuy ? (protectedSL > curSL) : (protectedSL < curSL || curSL == 0);" in fn
     assert "bool runRatchet = isBuy ? (runLockSL > curSL) : (runLockSL < curSL || curSL == 0);" in fn
 
 
 def test_source_never_forces_invalid_stop_level():
     ea = read(EA)
-    fn = body(ea, "void XAU_ManageRBasedExit(ulong ticket, bool isBuy, double openPx, double curSL, double curTP,")
+    fn = body(ea, "void XAU_RExitCoreLoop()")
     # Both SL moves are gated on `sane && ratchet && SafeModifySL(...)` -- an
     # invalid (insane) proposal is silently skipped, not forced, and
     # SafeModifySL itself clamps to broker stops/freeze levels and retries
@@ -276,11 +294,8 @@ def test_source_never_forces_invalid_stop_level():
 
 def test_direction_is_read_from_position_type_not_a_stored_signal():
     ea = read(EA)
-    mp = body(ea, "void ManagePositions()")
-    assert "bool isBuy = posInfo.PositionType() == POSITION_TYPE_BUY;" in mp
-    call_idx = mp.index("if(InpRExitEnable && g_rExitConfigValid)")
-    isbuy_idx = mp.index("bool isBuy = posInfo.PositionType() == POSITION_TYPE_BUY;")
-    assert isbuy_idx < call_idx  # isBuy is captured from broker state before being passed in
+    core = body(ea, "void XAU_RExitCoreLoop()")
+    assert "bool isBuy     = posInfo.PositionType() == POSITION_TYPE_BUY;" in core
 
 
 def test_current_price_basis_is_bid_for_buy_ask_for_sell():

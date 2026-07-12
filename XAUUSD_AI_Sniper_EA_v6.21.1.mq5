@@ -1,9 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.21.0 - R-Based Exit Manager                                      |
-//|   One centralized, R-normalized exit authority replaces the prior     |
-//|   stack of competing discretionary profit-exit systems.               |
+//|   v6.21.1 - R-Exit Forensic Hardening                                 |
+//|   Release-blocking audit of the v6.21.0 R-Based Exit Manager: core    |
+//|   R management no longer depends on indicator warm-up, closes are     |
+//|   retry-safe and broker-confirmed, and R state survives a restart.    |
 //+------------------------------------------------------------------+
 //| Forensic redesign of the normal bot's EXIT system only. 1R is fixed   |
 //| at entry (original SL distance x symbol/volume value) and never       |
@@ -1741,15 +1742,15 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.261"
+#property version   "6.262"
 #property description "XAUUSD AI Sniper v6.20.6"
 #property description "Adds independent COUNTER_EXCURSION_CAPTURE: fast tactical countertrade when a"
 #property description "blocked candidate's reason proves real immediate opposite pressure. Normal"
 #property description "strategy, filters, risk sizing, and 2-min entry delay are unchanged."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.21.0"
-#define XAUAI_EA_VERSION_NUM "6.21.0"
+#define XAUAI_EA_VERSION "v6.21.1"
+#define XAUAI_EA_VERSION_NUM "6.21.1"
 #define XAUAI_BUILD_HASH "v6206-counter-excursion-capture-20260710"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
@@ -2630,6 +2631,7 @@ input double InpRMaxGivebackPct           = 45.0;   // R_EXIT: close and bank re
 input int    InpRContinuationMinFactors   = 4;      // R_EXIT: of 6 continuation factors (trend/EMA/RSI/structure/momentum/spread), minimum to hold toward 1R
 input double InpRMaxSpreadPoints          = 400;    // R_EXIT: spread ceiling (points) counted as a continuation factor at the 0.5R decision
 input bool   InpRUseClosedBarMomentum     = true;   // R_EXIT: reserved for future use -- the momentum/trend inputs consumed today are already closed-bar based
+input int    InpRRunnerFailureMinHostile  = 3;      // R_EXIT: of 5 hostile factors (trend/EMA/RSI/momentum/spread), minimum to confirm RUN_TO_1R continuation failure on a closed bar
 
 input group "=== SMART EXIT 3-LAYER SYSTEM (v6.4.11) ==="
 input bool   InpSmartExitEnable               = true;  // Master toggle: profit floor + partial runner + adaptive giveback
@@ -7905,6 +7907,12 @@ int OnInit()
    XAU_ReconcileTradeBrainOnInit();
    XAU_ReconcileCounterExcursionOnInit();
    XAU_ValidateRExitConfig();
+   if(InpRExitEnable && !g_rExitConfigValid)
+   {
+      Print("R_EXIT_CONFIG ERROR: InpRExitEnable=true but configuration is invalid -- refusing to initialize rather than run with hybrid/undefined exit ownership. Fix the InpR* inputs above and reattach.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   XAU_RExit_LoadPersistedState();
    XAU_ReconcileRExitOnInit();
    return INIT_SUCCEEDED;
 }
@@ -12022,6 +12030,28 @@ void CheckPyramidOpportunity()
                          StringFormat("PYRAMID #%d %.2f lot @%.2f - %s",
                                       openCount + 1, addLot, entryPx, why));
 
+      // v6.21.1 audit fix: pyramid adds send via trade.Buy/trade.Sell directly
+      // (not through OpenTrade()), so they need their own immediate R-state
+      // capture rather than relying on XAU_RExitCoreLoop()'s next-tick lazy
+      // capture. Netting/hedging policy: XAU_RExit_EnsureIdx() is a no-op for
+      // a ticket that already has state (netting-mode merge into the same
+      // posId) -- the ORIGINAL fill's risk stays the fixed 1R baseline for
+      // that ticket's whole life; a pyramid add is additional deliberate risk,
+      // not a redefinition of 1R. A genuinely distinct new posId (hedging
+      // mode, or netting's own first fill) gets its own independent state.
+      {
+         ulong pyrDealTicket = trade.ResultDeal();
+         ulong pyrPosId = 0;
+         if(pyrDealTicket > 0 && HistoryDealSelect(pyrDealTicket))
+            pyrPosId = (ulong)HistoryDealGetInteger(pyrDealTicket, DEAL_POSITION_ID);
+         if(pyrPosId == 0) pyrPosId = trade.ResultOrder();
+         if(pyrPosId > 0)
+         {
+            XAU_RExit_EnsureIdx(pyrPosId, isBuy, entryPx, pyramidSL, addLot, false);
+            XAU_RExit_SaveState();
+         }
+      }
+
       // v5.2.2 — fan pyramid add to XauAi Cloud subscribers (was previously
       // missing; pyramid adds went master-only, breaking 1:1 mirror).
       if(CloudEnabled())
@@ -12940,10 +12970,33 @@ void OnTick()
       }
    }
 
+   // v6.21.1: the R-based exit manager's core management (0.3R protect, 45%
+   // giveback, 1R close, pending-close retries) must run every tick
+   // UNCONDITIONALLY, before any system below that can short-circuit the
+   // rest of OnTick() with an early return (ExpectancyDayGivebackGuard,
+   // ManageBasket) or before indicator warm-up could otherwise gate it
+   // (ManagePositions()'s own early returns). This is the audit fix for
+   // "R manager stops running during indicator warm-up/failure."
+   XAU_RExitCoreLoop();
+
    // v5.8.15: protect the equity curve after a profitable run. This closes open
    // positions when today's equity HWM gives back too much, even if daily loss
    // limits are disabled for demo testing.
-   if(!noLimitMode && ExpectancyDayGivebackGuard())
+   // v6.21.1: this is ORDINARY daily-profit preservation (a basket-wide
+   // CloseAll()), not a true account-survival emergency -- while the R-based
+   // exit manager owns normal positions it must not compete for the same
+   // tickets. It may still observe/log.
+   if(!noLimitMode && XAU_RExitOwnsNormalPositions())
+   {
+      // Observation only: report what the guard WOULD have done, without acting.
+      static datetime lastExpectancyObserveLog = 0;
+      if(TimeCurrent() - lastExpectancyObserveLog >= 60)
+      {
+         lastExpectancyObserveLog = TimeCurrent();
+         Print("EXPECTANCY_DAY_GUARD OBSERVATION_ONLY -- R-based exit manager owns normal positions; this guard's closing authority is disabled while it owns them.");
+      }
+   }
+   else if(!noLimitMode && ExpectancyDayGivebackGuard())
    {
       UpdateDashboard(lastDashSignal, lastDashScore, lastDashGrade);
       return;
@@ -12991,7 +13044,7 @@ void OnTick()
    // v6.21.0: partial closes are out of scope for v1 of the R-based exit
    // manager (see spec) -- disabled whenever it owns exits, on top of its
    // pre-existing noLimitMode gate.
-   if(!noLimitMode && !InpRExitEnable) EPF_ManagePartials();
+   if(!noLimitMode && !XAU_RExitOwnsNormalPositions()) EPF_ManagePartials();
 
    // === RE-ENTRY WATCHER (every tick, cheap) ===
    // If we just closed a loser and price has reversed back past our entry,
@@ -13038,12 +13091,26 @@ void OnTick()
    // (raw OrderSend, bypasses SafeModifySL) that would otherwise fight the
    // new R-based exit manager over the same SL. Disabled by the manager.
    if(!noLimitMode) PG_UpdateHWM();
-   if(!InpRExitEnable) PG_PerPositionRatchet();
+   if(!XAU_RExitOwnsNormalPositions()) PG_PerPositionRatchet();
 
    // v6.3.9 UPGRADE — ATR-adaptive daily profit lock
    // Tightens all open SLs once per trigger (not on every tick). ATR-based distance
    // prevents over-tightening on high-volatility gold days with 40+ pip swings.
-   if(!noLimitMode && InpDailyProfitLockPct > 0 && dailyStartEquity > 0)
+   // v6.21.1: this is a second, independent SL-modifying authority (Known
+   // Conflict 3) -- it must not touch R-owned tickets with unrelated
+   // ATR-based logic while the R-based exit manager owns them.
+   if(!noLimitMode && InpDailyProfitLockPct > 0 && dailyStartEquity > 0 && XAU_RExitOwnsNormalPositions())
+   {
+      static datetime lastDailyLockObserveLog = 0;
+      double dayGainPctObs = (AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0;
+      if(dayGainPctObs >= InpDailyProfitLockPct && TimeCurrent() - lastDailyLockObserveLog >= 60)
+      {
+         lastDailyLockObserveLog = TimeCurrent();
+         Print("DAILY_PROFIT_LOCK OBSERVATION_ONLY -- day gain ", DoubleToString(dayGainPctObs, 1),
+               "% would have armed SL tightening, but R-based exit manager owns normal positions; no SL modified.");
+      }
+   }
+   else if(!noLimitMode && InpDailyProfitLockPct > 0 && dailyStartEquity > 0)
    {
       double dayGainPct = (AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0;
       if(dayGainPct >= InpDailyProfitLockPct && !g_dailyProfitLockArmed)
@@ -17522,11 +17589,20 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       // v6.4.19 — TRADE THESIS MONITOR: store entry snapshot so ManagePositions()
       // can continuously re-evaluate whether the trade reason is still valid.
       if(openedPosId > 0)
+      {
          TTM_RecordEntry(openedPosId, signal,
                          lastSignalSetup, g_pendingBrainGrade,
                          g_pendingBrainCombinedScore,
                          ArraySize(bufRSI) >= 2 ? bufRSI[1] : 50.0,
                          atr, price, sl, tp, reason, lots);
+
+         // v6.21.1 audit fix: capture original R-state immediately on broker
+         // entry confirmation, not lazily on the next ManagePositions tick --
+         // covers the primary/re-entry/recovery/force-open paths (all of
+         // which funnel through this single OpenTrade() success block).
+         XAU_RExit_EnsureIdx(openedPosId, signal == 1, price, sl, lots, false);
+         XAU_RExit_SaveState();
+      }
    }
    else
    {
@@ -18075,7 +18151,7 @@ bool ManageBasket()
    // close, prop-firm loss lock, equity protect, weekly target, remote
    // close-all) live earlier in OnTick() as independent CloseAll() calls and
    // are NOT affected by this early return.
-   if(InpRExitEnable) return false;
+   if(XAU_RExitOwnsNormalPositions()) return false;
 
    // Aggregate floating PnL across all EA positions on this symbol
    double totalPnL = 0.0;
@@ -20304,6 +20380,13 @@ bool SafePositionClosePartial(ulong ticket, double lots, string ctx = "")
 #define R_STAGE_RUNNING    2
 #define R_STAGE_CLOSED     3
 
+#define R_CLOSE_NONE          0
+#define R_CLOSE_HOLD_TO_1R    1
+#define R_CLOSE_REQUESTED     2
+#define R_CLOSE_PENDING_RETRY 3
+#define R_CLOSE_CONFIRMED     4
+#define R_EXIT_STATE_SCHEMA_VERSION 1
+
 struct XAU_RExitState
 {
    ulong    ticket;
@@ -20326,10 +20409,28 @@ struct XAU_RExitState
    bool     rCheckpointHit[6];
    bool     reconciledFromRestart;    // true if original risk is a conservative estimate, not the true entry-time value
    datetime lastTelemetryLog;
+   int      closeState;               // NONE / HOLD_TO_1R / CLOSE_REQUESTED / CLOSE_PENDING_RETRY / CLOSE_CONFIRMED
+   string   pendingCloseReason;       // preserved across retries -- never lost on a broker rejection
+   datetime lastCloseAttemptTime;
+   int      closeAttemptCount;
+   bool     finalTelemetryLogged;     // dedup guard so OnTradeTransaction cleanup can't double-report
+   datetime lastRunnerRecheckBarTime; // throttles RUN_TO_1R continuation-failure recheck to once per closed bar
 };
 XAU_RExitState g_rExit[];
 double g_rCheckpointLevels[6] = {0.20, 0.30, 0.40, 0.50, 0.75, 1.00};
 bool   g_rExitConfigValid = true;
+
+//+------------------------------------------------------------------+
+//| Single ownership authority. Every legacy/competing system that    |
+//| must defer to the R-based exit manager checks THIS, and only      |
+//| this, everywhere -- never a raw InpRExitEnable or a hand-rolled   |
+//| InpRExitEnable && g_rExitConfigValid combination (audit finding:  |
+//| inconsistent conditions across call sites are themselves a bug).  |
+//+------------------------------------------------------------------+
+bool XAU_RExitOwnsNormalPositions()
+{
+   return InpRExitEnable && g_rExitConfigValid;
+}
 
 int XAU_RExit_FindIdx(ulong ticket)
 {
@@ -20432,7 +20533,10 @@ void XAU_ValidateRExitConfig()
 //+------------------------------------------------------------------+
 void XAU_ReconcileRExitOnInit()
 {
-   ArrayResize(g_rExit, 0);
+   // NOTE: does NOT wipe g_rExit[] first -- XAU_RExit_LoadPersistedState() must
+   // run before this, and any ticket it already restored (validated against
+   // account/server/symbol/magic/ticket/direction) must survive here.
+   // XAU_RExit_EnsureIdx() below is a no-op for any ticket already present.
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(!posInfo.SelectByIndex(i)) continue;
@@ -20443,13 +20547,197 @@ void XAU_ReconcileRExitOnInit()
       double curSL = posInfo.StopLoss();
       double lots = posInfo.Volume();
       double profit = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+      bool alreadyRestoredFromFile = (XAU_RExit_FindIdx(ticket) >= 0);
       int idx = XAU_RExit_EnsureIdx(ticket, isBuy, openPx, curSL, lots, true);
+      if(alreadyRestoredFromFile)
+      {
+         // XAU_RExit_LoadPersistedState() already validated and restored this
+         // ticket's exact state (including a trustworthy peak/trough) -- do not
+         // overwrite it with a conservative from-current-profit estimate.
+         continue;
+      }
       g_rExit[idx].peakProfitUSD = MathMax(0.0, profit);
       g_rExit[idx].troughProfitUSD = MathMin(0.0, profit);
       g_rExit[idx].peakR = g_rExit[idx].originalRiskUSD > 0 ? g_rExit[idx].peakProfitUSD / g_rExit[idx].originalRiskUSD : 0.0;
       g_rExit[idx].troughR = g_rExit[idx].originalRiskUSD > 0 ? g_rExit[idx].troughProfitUSD / g_rExit[idx].originalRiskUSD : 0.0;
-      PrintFormat("R_EXIT_MANAGER RESTART_RECONCILE ticket=%I64u direction=%s | resumed with riskUSD=%.2f currentProfitUSD=%.2f (peak initialized from current profit -- historical peak unknown)",
+      PrintFormat("R_EXIT_MANAGER RESTART_RECONCILE ticket=%I64u direction=%s | resumed with riskUSD=%.2f currentProfitUSD=%.2f (peak initialized from current profit -- historical peak unknown, no valid persisted state found)",
                   ticket, isBuy ? "BUY" : "SELL", g_rExit[idx].originalRiskUSD, profit);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| File-based cross-restart persistence. Keyed into the filename by  |
+//| account login + server + symbol + magic so a wrong-account/wrong- |
+//| broker/wrong-symbol file can never be read back as if it were     |
+//| this instance's own state.                                        |
+//+------------------------------------------------------------------+
+string XAU_RExit_StateFilePath()
+{
+   long login = AccountInfoInteger(ACCOUNT_LOGIN);
+   string server = AccountInfoString(ACCOUNT_SERVER);
+   StringReplace(server, " ", "_");
+   StringReplace(server, "\\", "_");
+   StringReplace(server, "/", "_");
+   return StringFormat("RExitState_%d_%s_%s_%d.csv", login, server, Symbol(), InpMagicNumber);
+}
+
+void XAU_RExit_SaveState()
+{
+   string path = XAU_RExit_StateFilePath();
+   int h = FileOpen(path, FILE_WRITE | FILE_TXT | FILE_COMMON | FILE_ANSI);
+   if(h == INVALID_HANDLE)
+   {
+      PrintFormat("R_EXIT_MANAGER STATE_SAVE_FAILED path=%s err=%d", path, GetLastError());
+      return;
+   }
+   long login = AccountInfoInteger(ACCOUNT_LOGIN);
+   string server = AccountInfoString(ACCOUNT_SERVER);
+   for(int i = 0; i < ArraySize(g_rExit); i++)
+   {
+      FileWrite(h, R_EXIT_STATE_SCHEMA_VERSION, login, server, Symbol(), InpMagicNumber,
+                 g_rExit[i].ticket, g_rExit[i].positionDirection,
+                 DoubleToString(g_rExit[i].originalEntryPrice, 5), DoubleToString(g_rExit[i].originalStopLoss, 5),
+                 DoubleToString(g_rExit[i].originalStopDistance, 5), DoubleToString(g_rExit[i].originalRiskUSD, 2),
+                 DoubleToString(g_rExit[i].peakProfitUSD, 2), DoubleToString(g_rExit[i].peakR, 4),
+                 (long)g_rExit[i].timePeakReached,
+                 DoubleToString(g_rExit[i].troughProfitUSD, 2), DoubleToString(g_rExit[i].troughR, 4),
+                 g_rExit[i].stageReached, g_rExit[i].decisionMadeAt05R ? 1 : 0,
+                 g_rExit[i].closeState, g_rExit[i].pendingCloseReason,
+                 DoubleToString(g_rExit[i].lastProtectedSL, 5), g_rExit[i].reconciledFromRestart ? 1 : 0);
+   }
+   FileClose(h);
+   static datetime lastSaveLog = 0;
+   static int lastSaveCount = -1;
+   if(ArraySize(g_rExit) != lastSaveCount || TimeCurrent() - lastSaveLog >= 30)
+   {
+      lastSaveLog = TimeCurrent();
+      lastSaveCount = ArraySize(g_rExit);
+      PrintFormat("R_EXIT_STATE_SAVED path=%s tickets=%d", path, ArraySize(g_rExit));
+   }
+}
+
+void XAU_RExit_LoadPersistedState()
+{
+   string path = XAU_RExit_StateFilePath();
+   if(!FileIsExist(path, FILE_COMMON))
+   {
+      PrintFormat("R_EXIT_STATE_RESTORED path=%s result=NO_FILE (fresh state, nothing to restore)", path);
+      return;
+   }
+   int h = FileOpen(path, FILE_READ | FILE_TXT | FILE_COMMON | FILE_ANSI);
+   if(h == INVALID_HANDLE)
+   {
+      PrintFormat("R_EXIT_STATE_RESTORED path=%s result=OPEN_FAILED err=%d", path, GetLastError());
+      return;
+   }
+
+   long myLogin = AccountInfoInteger(ACCOUNT_LOGIN);
+   string myServer = AccountInfoString(ACCOUNT_SERVER);
+   int restored = 0, mismatched = 0;
+
+   while(!FileIsEnding(h))
+   {
+      int schema     = (int)FileReadNumber(h);
+      long login     = (long)FileReadNumber(h);
+      string server  = FileReadString(h);
+      string symbol  = FileReadString(h);
+      long magic     = (long)FileReadNumber(h);
+      ulong ticket   = (ulong)FileReadNumber(h);
+      int direction  = (int)FileReadNumber(h);
+      double origEntry = FileReadNumber(h);
+      double origSL     = FileReadNumber(h);
+      double origDist   = FileReadNumber(h);
+      double origRisk   = FileReadNumber(h);
+      double peakUSD    = FileReadNumber(h);
+      double peakR      = FileReadNumber(h);
+      datetime peakTime = (datetime)FileReadNumber(h);
+      double troughUSD  = FileReadNumber(h);
+      double troughR    = FileReadNumber(h);
+      int stage         = (int)FileReadNumber(h);
+      bool decided      = FileReadNumber(h) != 0;
+      int closeState    = (int)FileReadNumber(h);
+      string pendingReason = FileReadString(h);
+      double lastSL     = FileReadNumber(h);
+      bool reconciled   = FileReadNumber(h) != 0;
+
+      if(schema != R_EXIT_STATE_SCHEMA_VERSION || login != myLogin || server != myServer ||
+         symbol != Symbol() || magic != InpMagicNumber)
+      {
+         mismatched++;
+         continue; // foreign/stale record -- never applied to this instance
+      }
+      if(!PositionSelectByTicket(ticket))
+      {
+         PrintFormat("R_EXIT_STATE_MISMATCH ticket=%I64u reason=NO_LIVE_POSITION (saved state discarded)", ticket);
+         continue;
+      }
+      bool liveIsBuy = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+      int liveDir = liveIsBuy ? 1 : -1;
+      if(liveDir != direction)
+      {
+         PrintFormat("R_EXIT_STATE_MISMATCH ticket=%I64u reason=DIRECTION_MISMATCH saved=%d live=%d (saved state discarded)",
+                     ticket, direction, liveDir);
+         continue;
+      }
+
+      int idx = XAU_RExit_FindIdx(ticket);
+      if(idx < 0)
+      {
+         int n = ArraySize(g_rExit);
+         ArrayResize(g_rExit, n + 1);
+         ZeroMemory(g_rExit[n]);
+         idx = n;
+      }
+      g_rExit[idx].ticket = ticket;
+      g_rExit[idx].positionDirection = direction;
+      g_rExit[idx].originalEntryPrice = origEntry;
+      g_rExit[idx].originalStopLoss = origSL;
+      g_rExit[idx].originalStopDistance = origDist;
+      g_rExit[idx].originalRiskUSD = origRisk;
+      g_rExit[idx].peakProfitUSD = peakUSD;
+      g_rExit[idx].peakR = peakR;
+      g_rExit[idx].timePeakReached = peakTime;
+      g_rExit[idx].troughProfitUSD = troughUSD;
+      g_rExit[idx].troughR = troughR;
+      g_rExit[idx].stageReached = stage;
+      g_rExit[idx].decisionMadeAt05R = decided;
+      g_rExit[idx].closeState = closeState;
+      g_rExit[idx].pendingCloseReason = pendingReason;
+      g_rExit[idx].lastProtectedSL = lastSL;
+      g_rExit[idx].reconciledFromRestart = reconciled;
+      restored++;
+      PrintFormat("R_EXIT_STATE_RESTORED ticket=%I64u direction=%s stage=%d riskUSD=%.2f peakR=%.3f pendingClose=%s",
+                  ticket, direction == 1 ? "BUY" : "SELL", stage, origRisk, peakR,
+                  StringLen(pendingReason) > 0 ? pendingReason : "NONE");
+      if(closeState == R_CLOSE_REQUESTED || closeState == R_CLOSE_PENDING_RETRY)
+         PrintFormat("R_EXIT_PENDING_CLOSE_RESTORED ticket=%I64u reason=%s", ticket, pendingReason);
+   }
+   FileClose(h);
+   PrintFormat("R_EXIT_STATE_RESTORE_SUMMARY restored=%d mismatched=%d", restored, mismatched);
+}
+
+//+------------------------------------------------------------------+
+//| Periodic orphan reconciliation: any g_rExit[] entry whose ticket  |
+//| no longer corresponds to a live broker position is removed. This  |
+//| is the safety net for closes this EA did not itself observe       |
+//| (e.g. a missed tick around a broker-side event) on top of the     |
+//| primary OnTradeTransaction cleanup hook. Also caps g_rExit[] from |
+//| growing unbounded.                                                |
+//+------------------------------------------------------------------+
+void XAU_RExit_ReconcileOrphans()
+{
+   for(int i = ArraySize(g_rExit) - 1; i >= 0; i--)
+   {
+      if(!PositionSelectByTicket(g_rExit[i].ticket))
+      {
+         PrintFormat("R_EXIT_MANAGER ORPHAN_CLEANUP ticket=%I64u | no live position found -- state removed",
+                     g_rExit[i].ticket);
+         if(!g_rExit[i].finalTelemetryLogged)
+            XAU_RExit_LogCounterfactual(i, "ORPHAN_CLEANUP_UNKNOWN_CLOSE_REASON");
+         int last = ArraySize(g_rExit) - 1;
+         if(i != last) g_rExit[i] = g_rExit[last];
+         ArrayResize(g_rExit, last);
+      }
    }
 }
 
@@ -20470,158 +20758,308 @@ void XAU_RExit_LogCounterfactual(int idx, string exitReason)
 }
 
 //+------------------------------------------------------------------+
-//| The stage engine. Called once per ticket per tick from the top of |
-//| ManagePositions()'s per-position loop, BEFORE any legacy exit     |
-//| system runs -- when InpRExitEnable is true this is the only       |
-//| normal exit decision made for the ticket this tick.               |
+//| Retry-safe, broker-confirmed close request. Preserves the close   |
+//| reason across retries (never silently switches to HOLD because of |
+//| a transient broker failure), throttles repeat attempts, logs the  |
+//| broker retcode via SafePositionClose's own logging, and only ever |
+//| clears state once the position is verifiably gone.                |
 //+------------------------------------------------------------------+
-void XAU_ManageRBasedExit(ulong ticket, bool isBuy, double openPx, double curSL, double curTP,
-                           double curPrice, double profit, double lots,
-                           int momentumScore, bool trendAligned, bool emaAgainst, bool rsiAgainst,
-                           bool structureBrokenAgainst, double atr, int digits)
+bool XAU_RExit_RequestClose(int idx, ulong ticket, string reason)
 {
-   int idx = XAU_RExit_EnsureIdx(ticket, isBuy, openPx, curSL, lots, false);
+   datetime now = TimeCurrent();
+   if(g_rExit[idx].closeState == R_CLOSE_PENDING_RETRY && now - g_rExit[idx].lastCloseAttemptTime < 3)
+      return false; // throttled -- no duplicate request this tick
 
-   double riskUSD = g_rExit[idx].originalRiskUSD;
-   double currentR = riskUSD > 0 ? profit / riskUSD : 0.0;
-   g_rExit[idx].currentProfitUSD = profit;
-   g_rExit[idx].currentR = currentR;
-
-   // Peak / trough -- unconditional, independent of stage.
-   if(profit > g_rExit[idx].peakProfitUSD)
+   if(g_rExit[idx].closeState != R_CLOSE_REQUESTED && g_rExit[idx].closeState != R_CLOSE_PENDING_RETRY)
    {
-      g_rExit[idx].peakProfitUSD = profit;
-      g_rExit[idx].peakR = currentR;
-      g_rExit[idx].timePeakReached = TimeCurrent();
-   }
-   if(profit < g_rExit[idx].troughProfitUSD)
-   {
-      g_rExit[idx].troughProfitUSD = profit;
-      g_rExit[idx].troughR = currentR;
+      g_rExit[idx].pendingCloseReason = reason;
+      g_rExit[idx].closeState = R_CLOSE_REQUESTED;
+      g_rExit[idx].closeAttemptCount = 0;
    }
 
-   // Counterfactual R-checkpoint snapshots (data-only, never read by any decision below).
-   for(int c = 0; c < 6; c++)
+   g_rExit[idx].lastCloseAttemptTime = now;
+   g_rExit[idx].closeAttemptCount++;
+
+   bool sendOk = SafePositionClose(ticket, g_rExit[idx].pendingCloseReason);
+   bool stillOpen = PositionSelectByTicket(ticket);
+   if(sendOk && !stillOpen)
    {
-      if(!g_rExit[idx].rCheckpointHit[c] && currentR >= g_rCheckpointLevels[c])
+      g_rExit[idx].closeState = R_CLOSE_CONFIRMED;
+      if(!g_rExit[idx].finalTelemetryLogged)
       {
-         g_rExit[idx].rCheckpointHit[c] = true;
-         g_rExit[idx].rCheckpointProfitUSD[c] = profit;
+         XAU_RExit_LogCounterfactual(idx, g_rExit[idx].pendingCloseReason);
+         g_rExit[idx].finalTelemetryLogged = true;
       }
+      XAU_RExit_Clear(ticket);
+      XAU_RExit_SaveState();
+      return true;
    }
 
-   double peakR = g_rExit[idx].peakR;
-   string dirStr = isBuy ? "BUY" : "SELL";
+   // Broker rejected the request, or the position is still selectable this
+   // tick (fill not yet reflected) -- stay pending, never revert to HOLD.
+   g_rExit[idx].closeState = R_CLOSE_PENDING_RETRY;
+   PrintFormat("R_EXIT_MANAGER ticket=%I64u action=CLOSE_PENDING_RETRY reason=%s attempt=%d sendOk=%s stillOpen=%s",
+               ticket, g_rExit[idx].pendingCloseReason, g_rExit[idx].closeAttemptCount,
+               sendOk ? "true" : "false", stillOpen ? "true" : "false");
+   XAU_RExit_SaveState();
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Core R-exit loop. Runs UNCONDITIONALLY every tick from OnTick(),  |
+//| independent of ManagePositions()'s indicator-warm-up early returns|
+//| (audit fix -- core R management must never be gateable by         |
+//| optional indicator availability). Handles, in strict priority     |
+//| order: pending-close retries, the 1R hard close, the 45% giveback |
+//| close, the 0.3R->1R stage machine, and the RUN_TO_1R continuation |
+//| recheck. Only the 0.5R continuation *decision* itself may depend  |
+//| on momentum/trend/EMA/RSI/structure -- and even then, if those     |
+//| are unavailable, it falls back to closing at 0.5R rather than      |
+//| silently stalling.                                                |
+//+------------------------------------------------------------------+
+void XAU_RExitCoreLoop()
+{
+   if(!XAU_RExitOwnsNormalPositions()) return;
+
+   bool indicatorsReady = (ArraySize(bufATR) >= 2 && bufATR[1] > 0 &&
+                            ArraySize(bufRSI) >= 2 && ArraySize(bufEMAFast) >= 2 && ArraySize(bufEMASlow) >= 2);
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    long stopsLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
    double buffer = MathMax(stopsLevel * point, point * 30);
+   bool anyTicket = false;
 
-   // ---- Stage 0: below protect trigger -- let the trade work, do nothing. ----
-   if(peakR < InpRProtectTrigger && currentR < InpRProtectTrigger)
-      return;
-
-   // ---- Stage 1: arm ~0.15R profit protection (ratchet-only, never loosens). ----
-   if(g_rExit[idx].stageReached < R_STAGE_PROTECTED)
-      g_rExit[idx].stageReached = R_STAGE_PROTECTED;
-
-   double lockDist = InpRInitialLock * g_rExit[idx].originalStopDistance;
-   double protectedSL = isBuy ? NormalizeDouble(g_rExit[idx].originalEntryPrice + lockDist, digits)
-                              : NormalizeDouble(g_rExit[idx].originalEntryPrice - lockDist, digits);
-   bool sane = isBuy ? (protectedSL > g_rExit[idx].originalEntryPrice && protectedSL < curPrice - buffer)
-                     : (protectedSL < g_rExit[idx].originalEntryPrice && protectedSL > curPrice + buffer);
-   bool ratchet = isBuy ? (protectedSL > curSL) : (protectedSL < curSL || curSL == 0);
-
-   if(sane && ratchet && SafeModifySL(ticket, protectedSL, curTP, isBuy, curPrice, "R_EXIT_PROTECT_03R"))
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      g_rExit[idx].lastProtectedSL = protectedSL;
-      curSL = protectedSL;
-      PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentR=%.3f peakR=%.3f stage=PROTECT_0_3R action=MOVE_SL newLockR=%.2f newSL=%s",
-                  ticket, dirStr, riskUSD, profit, currentR, peakR, InpRInitialLock, DoubleToString(protectedSL, digits));
-   }
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      anyTicket = true;
 
-   // ---- Stage 2: giveback protection, active once 0.3R has been reached. ----
-   if(g_rExit[idx].peakProfitUSD > 0.0)
-   {
-      double givebackPct = (g_rExit[idx].peakProfitUSD - profit) / g_rExit[idx].peakProfitUSD * 100.0;
-      if(givebackPct >= InpRMaxGivebackPct && profit > 0.0)
+      ulong ticket   = posInfo.Ticket();
+      bool isBuy     = posInfo.PositionType() == POSITION_TYPE_BUY;
+      double openPx  = posInfo.PriceOpen();
+      double curSL   = posInfo.StopLoss();
+      double curTP   = posInfo.TakeProfit();
+      double curPrice= posInfo.PriceCurrent();
+      double lots    = posInfo.Volume();
+      double profit  = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+      string dirStr  = isBuy ? "BUY" : "SELL";
+
+      int idx = XAU_RExit_EnsureIdx(ticket, isBuy, openPx, curSL, lots, false);
+
+      // ---- Priority 1: a close already in flight always wins -- no other
+      //      discretionary action runs for this ticket this tick. ----
+      if(g_rExit[idx].closeState == R_CLOSE_REQUESTED || g_rExit[idx].closeState == R_CLOSE_PENDING_RETRY)
       {
-         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f peakR=%.3f givebackPct=%.1f action=CLOSE reason=R_EXIT_GIVEBACK_45 bankedUSD=%.2f",
-                     ticket, dirStr, currentR, peakR, givebackPct, profit);
-         if(SafePositionClose(ticket, "R_EXIT_GIVEBACK_45"))
+         XAU_RExit_RequestClose(idx, ticket, g_rExit[idx].pendingCloseReason);
+         continue;
+      }
+
+      double riskUSD = g_rExit[idx].originalRiskUSD;
+      double currentR = riskUSD > 0 ? profit / riskUSD : 0.0;
+      g_rExit[idx].currentProfitUSD = profit;
+      g_rExit[idx].currentR = currentR;
+
+      if(profit > g_rExit[idx].peakProfitUSD)
+      { g_rExit[idx].peakProfitUSD = profit; g_rExit[idx].peakR = currentR; g_rExit[idx].timePeakReached = TimeCurrent(); }
+      if(profit < g_rExit[idx].troughProfitUSD)
+      { g_rExit[idx].troughProfitUSD = profit; g_rExit[idx].troughR = currentR; }
+
+      for(int c = 0; c < 6; c++)
+         if(!g_rExit[idx].rCheckpointHit[c] && currentR >= g_rCheckpointLevels[c])
+         { g_rExit[idx].rCheckpointHit[c] = true; g_rExit[idx].rCheckpointProfitUSD[c] = profit; }
+
+      double peakR = g_rExit[idx].peakR;
+
+      // ---- Priority 2: 1R hard close. Indicator-independent, always evaluated,
+      //      always wins over the 0.5R decision/holding state. ----
+      if(currentR >= InpRFinalTarget)
+      {
+         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f peakR=%.3f action=CLOSE reason=R_EXIT_TP_1R",
+                     ticket, dirStr, currentR, peakR);
+         XAU_RExit_RequestClose(idx, ticket, "R_EXIT_TP_1R");
+         continue;
+      }
+
+      // ---- Priority 3: 45% giveback close, only once 0.3R has been armed,
+      //      only while still profitable. Indicator-independent. ----
+      if(peakR >= InpRProtectTrigger && g_rExit[idx].peakProfitUSD > 0.0)
+      {
+         double givebackPct = (g_rExit[idx].peakProfitUSD - profit) / g_rExit[idx].peakProfitUSD * 100.0;
+         if(givebackPct >= InpRMaxGivebackPct && profit > 0.0)
          {
-            XAU_RExit_LogCounterfactual(idx, "R_EXIT_GIVEBACK_45");
-            XAU_RExit_Clear(ticket);
+            PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f peakR=%.3f givebackPct=%.1f action=CLOSE reason=R_EXIT_GIVEBACK_45",
+                        ticket, dirStr, currentR, peakR, givebackPct);
+            XAU_RExit_RequestClose(idx, ticket, "R_EXIT_GIVEBACK_45");
+            continue;
          }
-         return;
       }
-   }
 
-   // ---- Stage 3: 0.5R continuation decision -- one-shot, evaluated on first crossing. ----
-   if(!g_rExit[idx].decisionMadeAt05R && currentR >= InpRCaptureTarget)
-   {
-      g_rExit[idx].decisionMadeAt05R = true;
-      double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-
-      int strongFactors = 0;
-      if(trendAligned) strongFactors++;
-      if(!emaAgainst) strongFactors++;
-      if(!rsiAgainst) strongFactors++;
-      if(!structureBrokenAgainst) strongFactors++;
-      if(momentumScore >= 3) strongFactors++;
-      if(spread <= InpRMaxSpreadPoints) strongFactors++;
-
-      if(strongFactors < InpRContinuationMinFactors)
+      // ---- Stage 0: below protect trigger -- let the trade work. ----
+      if(peakR < InpRProtectTrigger && currentR < InpRProtectTrigger)
       {
-         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f momentumStrong=%s trendAligned=%s structureHealthy=%s factors=%d/6 action=CLOSE reason=R_EXIT_CAPTURE_0_5R",
-                     ticket, dirStr, currentR, (momentumScore >= 3) ? "true" : "false", trendAligned ? "true" : "false",
-                     (!structureBrokenAgainst) ? "true" : "false", strongFactors);
-         if(SafePositionClose(ticket, "R_EXIT_CAPTURE_0_5R"))
+         if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 60)
          {
-            XAU_RExit_LogCounterfactual(idx, "R_EXIT_CAPTURE_0_5R");
-            XAU_RExit_Clear(ticket);
+            g_rExit[idx].lastTelemetryLog = TimeCurrent();
+            PrintFormat("R_EXIT_MANAGER R_EXIT_CORE_MANAGEMENT_ACTIVE ticket=%I64u direction=%s riskUSD=%.2f currentR=%.3f stage=HOLD",
+                        ticket, dirStr, riskUSD, currentR);
          }
-         return;
+         continue;
       }
-      else
-      {
-         g_rExit[idx].stageReached = R_STAGE_RUNNING;
-         double lockR = (strongFactors >= 5) ? InpRStrongContinuationLock : InpRWeakContinuationLock;
-         double runLockDist = lockR * g_rExit[idx].originalStopDistance;
-         double runLockSL = isBuy ? NormalizeDouble(g_rExit[idx].originalEntryPrice + runLockDist, digits)
-                                  : NormalizeDouble(g_rExit[idx].originalEntryPrice - runLockDist, digits);
-         bool runSane = isBuy ? (runLockSL > g_rExit[idx].originalEntryPrice && runLockSL < curPrice - buffer)
-                              : (runLockSL < g_rExit[idx].originalEntryPrice && runLockSL > curPrice + buffer);
-         bool runRatchet = isBuy ? (runLockSL > curSL) : (runLockSL < curSL || curSL == 0);
-         if(runSane && runRatchet && SafeModifySL(ticket, runLockSL, curTP, isBuy, curPrice, "R_EXIT_HOLD_TO_1R"))
-            g_rExit[idx].lastProtectedSL = runLockSL;
 
-         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f factors=%d/6 action=HOLD reason=CONTINUATION_STRONG lockR=%.2f",
-                     ticket, dirStr, currentR, strongFactors, lockR);
+      // ---- Priority 5: 0.3R protection (ratchet-only, indicator-independent). ----
+      if(g_rExit[idx].stageReached < R_STAGE_PROTECTED)
+         g_rExit[idx].stageReached = R_STAGE_PROTECTED;
+
+      double lockDist = InpRInitialLock * g_rExit[idx].originalStopDistance;
+      double protectedSL = isBuy ? NormalizeDouble(g_rExit[idx].originalEntryPrice + lockDist, digits)
+                                 : NormalizeDouble(g_rExit[idx].originalEntryPrice - lockDist, digits);
+      bool sane = isBuy ? (protectedSL > g_rExit[idx].originalEntryPrice && protectedSL < curPrice - buffer)
+                        : (protectedSL < g_rExit[idx].originalEntryPrice && protectedSL > curPrice + buffer);
+      bool ratchet = isBuy ? (protectedSL > curSL) : (protectedSL < curSL || curSL == 0);
+      if(sane && ratchet && SafeModifySL(ticket, protectedSL, curTP, isBuy, curPrice, "R_EXIT_PROTECT_03R"))
+      {
+         g_rExit[idx].lastProtectedSL = protectedSL;
+         curSL = protectedSL;
+         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentR=%.3f peakR=%.3f stage=PROTECT_0_3R action=MOVE_SL newLockR=%.2f newSL=%s",
+                     ticket, dirStr, riskUSD, profit, currentR, peakR, InpRInitialLock, DoubleToString(protectedSL, digits));
+      }
+
+      // ---- Priority 4: 0.5R continuation decision -- one-shot. This is the
+      //      ONLY discretionary decision allowed to depend on indicators, and
+      //      even then only to choose HOLD vs CLOSE; if indicators are not
+      //      ready, the safe fallback is to close and bank at 0.5R. ----
+      if(!g_rExit[idx].decisionMadeAt05R && currentR >= InpRCaptureTarget)
+      {
+         if(!indicatorsReady)
+         {
+            PrintFormat("R_EXIT_MANAGER R_EXIT_INDICATORS_UNAVAILABLE ticket=%I64u direction=%s currentR=%.3f", ticket, dirStr, currentR);
+            PrintFormat("R_EXIT_MANAGER R_EXIT_05R_FALLBACK ticket=%I64u direction=%s currentR=%.3f action=CLOSE reason=R_EXIT_CAPTURE_0_5R (indicators unavailable -- safe fallback)",
+                        ticket, dirStr, currentR);
+            g_rExit[idx].decisionMadeAt05R = true;
+            XAU_RExit_RequestClose(idx, ticket, "R_EXIT_CAPTURE_0_5R");
+            continue;
+         }
+
+         double close1 = iClose(Symbol(), PERIOD_M5, 1);
+         double open1  = iOpen(Symbol(), PERIOD_M5, 1);
+         double close2 = iClose(Symbol(), PERIOD_M5, 2);
+         double emaF = bufEMAFast[1];
+         double emaS = bufEMASlow[1];
+         double rsi  = bufRSI[1];
+         double atrNow = bufATR[1];
+         int momentumScore = CleanMomentumScore(isBuy, close1, open1, close2, emaF, emaS, rsi);
+         bool trendAligned = CleanRegimeAligned(isBuy);
+         bool emaAgainst = isBuy ? (close1 < emaF && emaF < emaS) : (close1 > emaF && emaF > emaS);
+         bool rsiAgainst = isBuy ? (rsi < 42) : (rsi > 58);
+         double swingLowEA, swingHighEA;
+         CleanStructureLevels(InpCleanStructureLookback, swingLowEA, swingHighEA);
+         double structBufEA = atrNow * InpCleanStructureATRBuffer;
+         int structureBreakBarsEA = CleanStructureBreakBars(isBuy, swingLowEA, swingHighEA, structBufEA);
+         bool structureBrokenAgainst = (structureBreakBarsEA >= MathMax(1, InpGoldPullbackConfirmBars));
+         double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+
+         int strongFactors = 0;
+         if(trendAligned) strongFactors++;
+         if(!emaAgainst) strongFactors++;
+         if(!rsiAgainst) strongFactors++;
+         if(!structureBrokenAgainst) strongFactors++;
+         if(momentumScore >= 3) strongFactors++;
+         if(spread <= InpRMaxSpreadPoints) strongFactors++;
+
+         g_rExit[idx].decisionMadeAt05R = true;
+
+         if(strongFactors < InpRContinuationMinFactors)
+         {
+            PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f momentumStrong=%s trendAligned=%s structureHealthy=%s factors=%d/6 action=CLOSE reason=R_EXIT_CAPTURE_0_5R",
+                        ticket, dirStr, currentR, (momentumScore >= 3) ? "true" : "false", trendAligned ? "true" : "false",
+                        (!structureBrokenAgainst) ? "true" : "false", strongFactors);
+            XAU_RExit_RequestClose(idx, ticket, "R_EXIT_CAPTURE_0_5R");
+            continue;
+         }
+         else
+         {
+            g_rExit[idx].stageReached = R_STAGE_RUNNING;
+            g_rExit[idx].closeState = R_CLOSE_HOLD_TO_1R;
+            double lockR = (strongFactors >= 5) ? InpRStrongContinuationLock : InpRWeakContinuationLock;
+            double runLockDist = lockR * g_rExit[idx].originalStopDistance;
+            double runLockSL = isBuy ? NormalizeDouble(g_rExit[idx].originalEntryPrice + runLockDist, digits)
+                                     : NormalizeDouble(g_rExit[idx].originalEntryPrice - runLockDist, digits);
+            bool runSane = isBuy ? (runLockSL > g_rExit[idx].originalEntryPrice && runLockSL < curPrice - buffer)
+                                 : (runLockSL < g_rExit[idx].originalEntryPrice && runLockSL > curPrice + buffer);
+            bool runRatchet = isBuy ? (runLockSL > curSL) : (runLockSL < curSL || curSL == 0);
+            if(runSane && runRatchet && SafeModifySL(ticket, runLockSL, curTP, isBuy, curPrice, "R_EXIT_HOLD_TO_1R"))
+            { g_rExit[idx].lastProtectedSL = runLockSL; curSL = runLockSL; }
+
+            PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f factors=%d/6 action=HOLD reason=CONTINUATION_STRONG lockR=%.2f",
+                        ticket, dirStr, currentR, strongFactors, lockR);
+            continue;
+         }
+      }
+
+      // ---- RUN_TO_1R continuation-failure recheck: closed-bar granularity
+      //      only (never a single noisy tick), and only when indicators are
+      //      available -- this is a health check, not core management, so it
+      //      is allowed to simply skip a cycle if indicators are unavailable. ----
+      if(g_rExit[idx].stageReached == R_STAGE_RUNNING && indicatorsReady)
+      {
+         datetime barTime = iTime(Symbol(), PERIOD_M5, 1);
+         if(barTime > 0 && barTime != g_rExit[idx].lastRunnerRecheckBarTime)
+         {
+            g_rExit[idx].lastRunnerRecheckBarTime = barTime;
+            double close1 = iClose(Symbol(), PERIOD_M5, 1);
+            double open1  = iOpen(Symbol(), PERIOD_M5, 1);
+            double close2 = iClose(Symbol(), PERIOD_M5, 2);
+            double emaF = bufEMAFast[1];
+            double emaS = bufEMASlow[1];
+            double rsi  = bufRSI[1];
+            double atrNow = bufATR[1];
+            int momentumScore = CleanMomentumScore(isBuy, close1, open1, close2, emaF, emaS, rsi);
+            bool trendAligned = CleanRegimeAligned(isBuy);
+            bool emaAgainst = isBuy ? (close1 < emaF && emaF < emaS) : (close1 > emaF && emaF > emaS);
+            bool rsiAgainst = isBuy ? (rsi < 42) : (rsi > 58);
+            double swingLowEA, swingHighEA;
+            CleanStructureLevels(InpCleanStructureLookback, swingLowEA, swingHighEA);
+            double structBufEA = atrNow * InpCleanStructureATRBuffer;
+            int structureBreakBarsEA = CleanStructureBreakBars(isBuy, swingLowEA, swingHighEA, structBufEA);
+            bool structureBrokenAgainst = (structureBreakBarsEA >= MathMax(1, InpGoldPullbackConfirmBars));
+            double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+
+            int hostileFactors = 0;
+            if(!trendAligned) hostileFactors++;
+            if(emaAgainst) hostileFactors++;
+            if(rsiAgainst) hostileFactors++;
+            if(momentumScore < 3) hostileFactors++;
+            if(spread > InpRMaxSpreadPoints) hostileFactors++;
+
+            if(structureBrokenAgainst || hostileFactors >= InpRRunnerFailureMinHostile)
+            {
+               PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f structureBroken=%s hostileFactors=%d/5 action=CLOSE reason=R_EXIT_RUNNER_CONTINUATION_FAILED",
+                           ticket, dirStr, currentR, structureBrokenAgainst ? "true" : "false", hostileFactors);
+               XAU_RExit_RequestClose(idx, ticket, "R_EXIT_RUNNER_CONTINUATION_FAILED");
+               continue;
+            }
+         }
+      }
+
+      // Throttled routine telemetry for stages that didn't already log above (max once/30s per ticket).
+      if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
+      {
+         g_rExit[idx].lastTelemetryLog = TimeCurrent();
+         double givebackNow = g_rExit[idx].peakProfitUSD > 0 ? (g_rExit[idx].peakProfitUSD - profit) / g_rExit[idx].peakProfitUSD * 100.0 : 0.0;
+         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentR=%.3f peakR=%.3f givebackPct=%.1f stage=%s currentSL=%s",
+                     ticket, dirStr, riskUSD, profit, currentR, peakR, givebackNow,
+                     g_rExit[idx].stageReached == R_STAGE_RUNNING ? "RUN_TO_1R" : "PROTECT_0_3R",
+                     DoubleToString(curSL, digits));
       }
    }
 
-   // ---- Stage 4: 1R hard cap -- closes regardless of the Stage-3 outcome. ----
-   if(currentR >= InpRFinalTarget)
+   XAU_RExit_ReconcileOrphans();
+   static datetime lastSave = 0;
+   if(anyTicket || ArraySize(g_rExit) > 0 || TimeCurrent() - lastSave >= 30)
    {
-      PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f peakR=%.3f action=CLOSE reason=R_EXIT_TP_1R",
-                  ticket, dirStr, currentR, peakR);
-      if(SafePositionClose(ticket, "R_EXIT_TP_1R"))
-      {
-         XAU_RExit_LogCounterfactual(idx, "R_EXIT_TP_1R");
-         XAU_RExit_Clear(ticket);
-      }
-      return;
-   }
-
-   // Throttled routine telemetry for stages that didn't already log above (max once/30s per ticket).
-   if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
-   {
-      g_rExit[idx].lastTelemetryLog = TimeCurrent();
-      double givebackNow = g_rExit[idx].peakProfitUSD > 0 ? (g_rExit[idx].peakProfitUSD - profit) / g_rExit[idx].peakProfitUSD * 100.0 : 0.0;
-      PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentR=%.3f peakR=%.3f givebackPct=%.1f stage=%s currentSL=%s",
-                  ticket, dirStr, riskUSD, profit, currentR, peakR, givebackNow,
-                  g_rExit[idx].stageReached == R_STAGE_RUNNING ? "RUN_TO_1R" : "PROTECT_0_3R",
-                  DoubleToString(curSL, digits));
+      XAU_RExit_SaveState();
+      lastSave = TimeCurrent();
    }
 }
 
@@ -20691,16 +21129,14 @@ void ManagePositions()
 	                                                   rsiAgainstEA, rMultEA);
 
       // ======== R-BASED EXIT MANAGER (v6.21.0) -- SOLE NORMAL EXIT AUTHORITY ========
-      // Must run before every legacy exit system below. When enabled (default),
-      // this ticket's exit decision is made here and nothing below this point
-      // in the loop ever runs for it this tick.
-      if(InpRExitEnable && g_rExitConfigValid)
-      {
-         XAU_ManageRBasedExit(ticket, isBuy, openPx, curSL, curTP, curPrice, profit, lotsOpen,
-                               momentumScoreEA, trendAlignedEA, emaAgainstEA, rsiAgainstEA,
-                               structureConfirmedEA, atr, digits);
+      // v6.21.1 audit fix: actual per-tick R management now happens in
+      // XAU_RExitCoreLoop(), called unconditionally from OnTick() BEFORE this
+      // function -- so indicator warm-up/failure inside ManagePositions()'s own
+      // early-return guards can no longer disable core R management. This guard
+      // only prevents the legacy exit stack below from ALSO touching an
+      // R-owned ticket (single-authority guarantee).
+      if(XAU_RExitOwnsNormalPositions())
          continue;
-      }
 
       // ======== v6.4.19 TRADE THESIS MONITOR ========
       // Re-evaluate WHY we entered this trade. If the original thesis is dead,
@@ -22983,6 +23419,31 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          }
       }
    }
+   // v6.21.1: R-exit state cleanup lifecycle hook. This fires for EVERY full
+   // close regardless of cause (R-manager close, broker SL/TP, margin
+   // stop-out, manual close, remote close, weekend/equity/prop-firm close,
+   // basket close) -- OnTradeTransaction is the one place that reliably sees
+   // every close, including ones XAU_RExitCoreLoop() never gets a chance to
+   // observe again (the ticket simply vanishes from PositionsTotal() on the
+   // next tick). Idempotent: harmless if XAU_RExit_RequestClose() already
+   // cleared this ticket's state.
+   if(!stillOpen && posId > 0)
+   {
+      int rIdx = XAU_RExit_FindIdx(posId);
+      if(rIdx >= 0)
+      {
+         if(!g_rExit[rIdx].finalTelemetryLogged)
+         {
+            ENUM_DEAL_REASON dReason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
+            string closeCause = "EXTERNAL_CLOSE_" + XAU_DealReasonName(dReason);
+            XAU_RExit_LogCounterfactual(rIdx, closeCause);
+            g_rExit[rIdx].finalTelemetryLogged = true;
+         }
+         XAU_RExit_Clear(posId);
+         XAU_RExit_SaveState();
+      }
+   }
+
    if(stillOpen)
    {
       // Partial close — log and skip all counters/cleanup.

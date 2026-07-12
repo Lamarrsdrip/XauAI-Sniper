@@ -14,6 +14,98 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.21.1 — 2026-07-12 — R-Exit Forensic Hardening (release-blocking audit)
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.21.1"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.21.1.mq5`
+- [x] Top-of-file header banner updated (single physical line)
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`compile_logs/v6211_r_exit_forensic_hardening_compile.log`)
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` byte-synced to canonical source
+- [x] `frontend/src/components/DownloadSection.jsx`, `Footer.jsx`, `cloud/CloudLanding.jsx`, `AdminPortal.jsx`, `FeaturesSection.jsx` version/edition/filename strings updated
+- [x] `backend/server.py` `TradeMemoryRecord.ea_version` default updated
+- [x] Static test added: `tests/test_xau_v6211_r_exit_forensic_hardening_static.py` (33 tests), plus `tests/test_xau_v6210_r_exit_manager_static.py` updated in place for the new architecture (31 tests) — 64 total, all passing
+- [x] Full existing suite re-run: 746 passed, 120 pre-existing (unrelated version-pin-staleness) failures — byte-for-byte the same failing set as the pre-change baseline, confirmed via a throwaway comparison worktree at commit 895fc5b
+
+### Owner request
+Release-blocking forensic audit, repair, compilation, and validation of the v6.21.0 R-Based Exit
+Manager: prove the whole bot is internally consistent, no systems fight each other, no hidden
+bypasses, and the exit system works correctly in every runtime state (indicator warm-up/failure,
+broker rejection, restart, every close cause). Explicitly must not touch the entry strategy.
+
+### Bugs found and fixed (release-blocking)
+1. **[Critical] R-manager stopped running during indicator warm-up.** `ManagePositions()` has
+   early returns when `bufATR`/`bufRSI`/`bufEMAFast`/`bufEMASlow` aren't ready; the R-manager call
+   lived inside that same function, so core protection/giveback/1R-close silently never ran until
+   indicators warmed up. Fix: extracted `XAU_RExitCoreLoop()`, called unconditionally from
+   `OnTick()` before `ManagePositions()`/`ManageBasket()`; only the 0.5R continuation *decision*
+   still depends on indicators, and even then falls back to closing at 0.5R
+   (`R_EXIT_INDICATORS_UNAVAILABLE` / `R_EXIT_05R_FALLBACK`) rather than stalling.
+2. **[Critical] A rejected/incomplete close silently vanished.** The old code called
+   `SafePositionClose()` once per decision with no retry state; a broker rejection meant the close
+   reason was lost and the ticket fell through to ordinary management next tick. Fix: added a
+   persistent per-ticket close-state machine (`R_CLOSE_NONE/HOLD_TO_1R/REQUESTED/PENDING_RETRY/
+   CONFIRMED`) via `XAU_RExit_RequestClose()` — preserves the reason across retries, throttles
+   repeat attempts (3s), only clears state once `PositionSelectByTicket()` confirms the position is
+   actually gone, and gives any pending close top priority over all other decisions.
+3. **[High] Daily Profit Lock could modify SL on R-owned tickets** with unrelated ATR-based logic
+   (own `OnTick()` call site, filtered only by magic number, no R-ownership check). Fix: gated
+   behind `!XAU_RExitOwnsNormalPositions()`; observes and logs instead while R owns positions.
+4. **[Medium] ExpectancyDayGivebackGuard could basket-close R-owned positions.** Confirmed via
+   code read to be ordinary daily-profit preservation (a `CloseAll()`), not a true account-survival
+   emergency. Fix: gated behind R-ownership, observation-only log added.
+5. **[Medium] Inconsistent ownership conditions across call sites** (`InpRExitEnable` alone in some
+   places, `InpRExitEnable && g_rExitConfigValid` in others) was itself a latent hybrid-ownership
+   bug. Fix: single `XAU_RExitOwnsNormalPositions()` helper used at every deferral site.
+6. **[Medium] R state did not survive a restart**, and any position still open across a restart
+   permanently lost its stage/peak/pending-close. Fix: file-based persistence
+   (`XAU_RExit_SaveState()`/`XAU_RExit_LoadPersistedState()`), keyed by account login + broker
+   server + symbol + magic in the filename, validated against the live position's ticket and
+   direction before being applied; a stale/foreign/mismatched record is discarded and logged
+   (`R_EXIT_STATE_MISMATCH`), never silently trusted.
+7. **[Medium] No unified cleanup lifecycle.** A position closed by anything other than the
+   R-manager itself (broker SL, manual, remote, weekend, equity, prop-firm) left orphaned state.
+   Fix: `OnTradeTransaction()` now clears R state on every full close regardless of cause, with a
+   periodic `XAU_RExit_ReconcileOrphans()` safety net and a `finalTelemetryLogged` dedup guard.
+8. **[Medium] Original risk was captured lazily** on the first `ManagePositions()` tick after
+   entry rather than immediately on fill. Fix: capture hooked directly into `OpenTrade()`'s and
+   `CheckPyramidOpportunity()`'s post-fill success blocks (same established pattern as the
+   pre-existing `TTM_RecordEntry`/Cloud-signal hooks) — purely additive, proven via body-diff
+   against the pre-change source.
+9. **[Low] RUN_TO_1R held blind until 1R or a full reversal.** Fix: added a closed-bar-only
+   (never single-tick) continuation-failure recheck; closes on confirmed structure break or a
+   configurable hostile-factor majority, reason `R_EXIT_RUNNER_CONTINUATION_FAILED`.
+
+### Exit conflict matrix (see full report for all systems)
+Every profit-taking/SL-modifying authority found in the v6.21.0 audit remains **DISABLED WHILE R
+MANAGER OWNS POSITION** as before, now via the single `XAU_RExitOwnsNormalPositions()` helper
+instead of ad-hoc per-site conditions. Daily Profit Lock and ExpectancyDayGivebackGuard are newly
+added to that classification (previously unaudited). Broker SL/TP, margin stop-out, weekend/
+prop-firm/equity/weekly-target closes, and remote force-close remain **ACCOUNT EMERGENCY
+OVERRIDE**/**BROKER-LEVEL SAFETY**, untouched.
+
+### Entry-regression proof
+`ScoreSetups()`, `XAU_ComputeCombinedGradeForCandidate()`, `CheckReEntryOpportunity()` bodies are
+byte-identical to the pre-R-exit baseline (50ba04e). `OpenTrade()` and `CheckPyramidOpportunity()`
+diffs (vs. that same baseline) are purely additive post-fill capture hooks — verified via
+line-by-line unified diff, not just a function-existence check. `InpNormalRiskPct`/
+`InpMaxOpenTrades` declaration lines unchanged.
+
+### Independent audit
+Self-verified during implementation against every requirement in the owner's audit spec: indicator
+independence, retry-safe closes, Daily Profit Lock / Expectancy Guard conflicts, ownership-helper
+consistency, restart persistence with validation, full cleanup lifecycle, immediate risk capture,
+stage priority ordering, RUN_TO_1R reevaluation, geometry/math/symbol-suffix/spread-unit checks,
+Counter-Excursion isolation (confirmed pre-existing and adequate), and the entry-regression diff.
+
+### Explicitly NOT built/touched in this release
+No partial closes. No extension beyond 1R. No changes to signal generation, grading, lot sizing,
+gating, re-entry qualification, pyramid qualification, spread/margin entry checks, or broker-safety
+checks. RELEASE_CHECKLIST.md's own historical gap (entries between v6.20.1 and v6.20.6 were never
+backfilled) was not addressed — out of scope for this release.
+
+---
+
 ## v6.21.0 — 2026-07-12 — R-Based Exit Manager (forensic exit-system redesign)
 
 ### EA Compile
