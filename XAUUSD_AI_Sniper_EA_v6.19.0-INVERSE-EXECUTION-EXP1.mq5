@@ -2024,7 +2024,7 @@ input double InpThesisHoldMinPeakUSD              = 45.0;  // Only apply thesis-
 input double InpThesisHoldMaxGivebackPct          = 92.0;  // Wide pullback room while M5/M15 thesis remains valid
 input int    InpThesisHoldReentryCooldownMin      = 90;    // After a winner, avoid same-side lower re-entry until a real reset
 
-input int    InpMaxOpenTrades  = 1;        // INVERSE EXP1: one clear inverse position at a time
+input int    InpMaxOpenTrades  = 3;        // Max open positions
 input int    InpMaxTradesPerDay= 15;       // v5.8.2 — reduce overtrading after choppy loss windows
 input bool   InpAdaptiveDailyCap = true;   // v5.8.8: strong trend days can trade more; weak days trade less
 input int    InpMaxTradesStrongDay = 24;   // v5.8.8: adaptive cap ceiling during clean trend/breakout sessions
@@ -2098,7 +2098,7 @@ input int    InpProfitTakeMax  = 500;      // Auto-close at this profit (USD, de
 input int    InpQuickExitMin   = 18;       // Auto-close minutes threshold (default 18)
 
 input group "=== RE-ENTRY ENGINE (reverse-move recovery) ==="
-input bool   InpUseReEntry     = false;    // INVERSE EXP1: no automatic re-entry; keep comparison clean
+input bool   InpUseReEntry     = true;     // v6.3.2: ON — re-entry on bounced stops during trends recovers free missed moves
 input int    InpReEntryWindow  = 900;      // Seconds after close to watch for reversal (15min)
 input double InpReEntryFactor  = 1.2;      // Price must move this x SL past original entry
 input double InpReEntrySize    = 0.5;      // Re-entry size multiplier (0.5 = half original)
@@ -2507,7 +2507,7 @@ input bool   InpMomentumGuard  = true;     // Don't cut winners if momentum is s
 input int    InpMomentumFadeScore = 4;     // Fade trigger needs ALL 4 signals (was 3 = premature)
 
 input group "=== PYRAMID / SCALE-IN (v4.4.5 — stack up to 5 in same direction) ==="
-input bool   InpAllowPyramid    = false;   // INVERSE EXP1: no pyramiding / averaging / recovery adds
+input bool   InpAllowPyramid    = true;    // Stack multiple trades in same direction when signal holds
 
 // ====================================================================
 // v5.8.0 — DATA-DRIVEN SETUP TOGGLES
@@ -2548,7 +2548,7 @@ input double InpSmartGuardOverrideScore   = 3.8;   // Strong trend pullbacks at/
 input bool   InpPyramidRequireGradeA      = false; // v5.8.38: B can pyramid only when protected-quality gates pass
 input bool   InpPyramidRequireHTF         = true;  // Only pyramid when adaptive fast confirmation still supports direction
 
-input int    InpMaxPyramidAdds  = 0;       // INVERSE EXP1: no add-on positions
+input int    InpMaxPyramidAdds  = 3;       // v5.8.38: controlled compounding in clean trends/rescue cycles
 input double InpPyramidMinATR   = 0.65;    // Price must move at least this × ATR before adding
 input double InpPyramidSizeMulti= 0.58;    // Each add is this × previous size (prevents stack blow-up)
 input int    InpPyramidMinGapSec= 180;     // Min seconds between pyramid adds
@@ -3247,7 +3247,8 @@ struct XAU_InverseExperimentRecord
    datetime entryTime;
    int      originalSignal;         // the NORMAL strategy's finalized direction, captured before any inversion decision
    int      actualDirection;        // what was actually sent to the broker
-   bool     inversionApplied;       // always true for any record in this array -- B-grade (no inversion) is never recorded here
+   bool     inversionApplied;       // always true for any record in this array -- all normal-approved grades are inverted
+   string   decisionId;
    double   entry;
    double   lot;
    double   sl;
@@ -7010,6 +7011,8 @@ int OnInit()
    }
    Print("INVERSE_EXPERIMENT_DEMO_CHECK_PASSED: account=", AccountInfoInteger(ACCOUNT_LOGIN),
          " server=", AccountInfoString(ACCOUNT_SERVER), " tradeMode=DEMO");
+   Print("EXPERIMENTAL OPPOSITE EXECUTION ACTIVE: EVERY NORMAL APPROVED TRADE WILL BE EXECUTED IN THE OPPOSITE DIRECTION. NO GRADE EXCEPTIONS.");
+   XAU_LogExperimentAccountParity("STARTUP");
 
    // Large visible chart warning, per spec.
    {
@@ -8162,7 +8165,6 @@ void UpdateDrawdownState(bool wasLoss)
 //+------------------------------------------------------------------+
 void CheckReEntryOpportunity()
 {
-   if(XAUAI_INVERSE_EXPERIMENT) return;
    if(!InpUseReEntry) return;
    if(!lastClose.valid || !lastClose.wasLoss || lastClose.reEntered) return;
    if(TimeCurrent() - lastClose.closeTime > InpReEntryWindow) return;
@@ -10521,7 +10523,6 @@ int AdaptivePyramidMaxAdds(int dir, double moved, double atr, double quality,
 
 void CheckPyramidOpportunity()
 {
-   if(XAUAI_INVERSE_EXPERIMENT) return;
    if(!InpAllowPyramid) return;
    if(IsInStreakPause()) return;
    if(drawdownActive) return;             // don't stack in drawdown recovery
@@ -14082,13 +14083,9 @@ void OnTick()
    }
 
    // ============ GATE 4: RISK SIZING ============
-   // v4.9.3 — Bigger lots scale with signal strength
-   // CORRECTED (owner directive, inverse-experiment build only): every grade
-   // now goes through the SAME signal-direction-changing experiment (B/B+/A/A+
-   // all invert) and must be sized the same way -- B is no longer singled out
-   // for a reduced 0.45x baseline. Matches A's 0.85x; A+ keeps its 1.10x
-   // premium. This does not touch production (v6.19.0.mq5/v6.20.4/v6.20.5).
-   double sizeMulti = grade == "A+" ? 1.10 : 0.85;
+   // v4.9.3 — Bigger lots scale with signal strength. Keep normal strategy
+   // sizing semantics unchanged: A+=1.10, A=0.85, sub-A=0.45.
+   double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;
    // June 17-18 reconstruction: a MEDIUM-tier Active Direction flip (tactical
    // countertrend trade, opposite of the still-live HTF bias) is a deliberate
    // structural risk reduction, not a "soft" quality reducer — fold it into
@@ -14108,16 +14105,8 @@ void OnTick()
    // But for A+/A they must NOT reduce lot — only skip or allow.
    // This enforcement floor is applied AFTER all soft modules run, restoring sizeMulti to
    // the grade baseline if soft code tried to shrink it.
-   // CORRECTED (owner directive, inverse-experiment build only): the A/A+
-   // full-size enforcement floor now protects EVERY grade -- B and B+ were
-   // previously excluded, leaving them exposed to STI/committee/PG soft-
-   // reducer stacking with nothing to restore against, which is exactly what
-   // compounded a B-grade trade down to the SIZE GUARD's 0.10 floor and a
-   // 0.01 broker-minimum lot. Legitimate hard-conflict reducers (weak-AI-
-   // agree, SMC hard conflict, timing-risk) are unaffected below -- this only
-   // restores size against generic soft-multiplier collapse, for every grade.
-   bool   highGradeFullSize      = true;  // was: (grade == "A+" || grade == "A")
-   double originalGradeSizeMulti = sizeMulti;  // 1.10 (A+) or 0.85 (A/B+/B, now uniform)
+   bool   highGradeFullSize      = (grade == "A+" || grade == "A");
+   double originalGradeSizeMulti = sizeMulti;  // 1.10 (A+) or 0.85 (A) or 0.45 (B)
 
    // Audit capture — each soft module records what it attempted
    double lta_volCap      = 1.0;   // Vol cap (ScanSignals) — already bypassed for A+/A in v6.4.17
@@ -15656,25 +15645,42 @@ void PrintBacktestAuditReport()
 // the soft blockers get bypassed, by design"). Hard safety below (hedge/
 // exposure/margin/broker/risk) is untouched and still applies to every
 // caller, manual override included.
-// UPDATED grade-eligibility rule for the inverse-execution/drawdown-milker
-// experiment (owner directive, second revision): B now ALSO inverts, same
-// as B+/A/A+ -- every real grade is treated identically for direction
-// purposes. Exact-match comparison only (never substring/StringFind, so
-// "B+" is never folded into "B"). Unknown/empty/C/fallback grades still
-// fail closed (not eligible -- normal, non-inverted execution) since those
-// are not real grades the normal strategy brain would ever finalize, not a
-// deliberate exclusion the way B originally was.
-bool XAU_IsInverseExperimentGradeEligible(string originalGrade)
+string XAU_MaskedAccount()
 {
-   string g = originalGrade;
-   StringTrimLeft(g);
-   StringTrimRight(g);
-   StringToUpper(g);
-   if(g == "B") return true;
-   if(g == "B+") return true;
-   if(g == "A") return true;
-   if(g == "A+") return true;
-   return false;                      // empty / C / unknown / fallback -- fail closed
+   string a = (string)AccountInfoInteger(ACCOUNT_LOGIN);
+   int n = StringLen(a);
+   if(n <= 4) return "****";
+   return "****" + StringSubstr(a, n - 4);
+}
+
+string XAU_ExperimentDecisionId(string setup, string grade, int originalSignal)
+{
+   datetime signalCandle = iTime(Symbol(), PERIOD_M5, 1);
+   if(signalCandle <= 0) signalCandle = TimeCurrent();
+   return StringFormat("%s|%s|%s|%s|%I64d",
+                       Symbol(), setup, grade,
+                       originalSignal == 1 ? "BUY" : "SELL",
+                       (long)signalCandle);
+}
+
+void XAU_LogExperimentAccountParity(string stage)
+{
+   PrintFormat("INVERSE_EXPERIMENT_ACCOUNT_PARITY | stage=%s | accountMasked=%s | server=%s | currency=%s | leverage=%d | balance=%.2f | equity=%.2f | freeMargin=%.2f | symbol=%s | digits=%d | tickSize=%.8f | tickValue=%.8f | contractSize=%.2f | minLot=%.4f | maxLot=%.4f | lotStep=%.4f | stopLevel=%d | freezeLevel=%d | spread=%.0f | terminalTime=%s | tickTime=%s",
+               stage, XAU_MaskedAccount(), AccountInfoString(ACCOUNT_SERVER),
+               AccountInfoString(ACCOUNT_CURRENCY), (int)AccountInfoInteger(ACCOUNT_LEVERAGE),
+               AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
+               AccountInfoDouble(ACCOUNT_MARGIN_FREE), Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
+               SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE),
+               SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE),
+               SymbolInfoDouble(Symbol(), SYMBOL_TRADE_CONTRACT_SIZE),
+               SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN),
+               SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX),
+               SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP),
+               (int)SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL),
+               (int)SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL),
+               (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD),
+               TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+               TimeToString((datetime)SymbolInfoInteger(Symbol(), SYMBOL_TIME), TIME_DATE | TIME_SECONDS));
 }
 
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
@@ -15694,18 +15700,6 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                              true, false, false, 0, 0,
                              "OpenTrade reached; execution-layer gates are now checking risk, exposure, margin, and broker send.",
                              reason, 0.0);
-
-   if(XAUAI_INVERSE_EXPERIMENT && CountMyPositions() > 0)
-   {
-      Print("INVERSE_EXPERIMENT_ONE_TRADE_ONLY: existing position is already open; new inverse trade skipped.");
-      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "InverseExperiment",
-                                signal, funnelSetup, funnelGrade, funnelScore,
-                                true, false, "BLOCKED", "INVERSE_EXPERIMENT_ONE_TRADE_ONLY",
-                                true, false, false, 0, 0,
-                                "Inverse experiment allows exactly one position per symbol/account.",
-                                reason, 0.0);
-      return false;
-   }
 
    // v6.17.21 — Execution-layer Exhaustion/Reversal backstop. Forensic audit
    // of 2026-07-08's live log (8 primary entries) found the guard at
@@ -16771,21 +16765,23 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          " Lots=", DoubleToString(lots, lotDigits),
          " | ", reason);
 
-   // ===== INVERSE EXECUTION EXPERIMENT: direction inversion (all grades) =====
-   // UPDATED (owner directive, second revision): every real grade (B, B+, A,
-   // A+) now inverts -- B is no longer excluded. Grade is read from
-   // funnelGrade (the SAME finalized-grade variable this function already
-   // computes above for telemetry), captured BEFORE any inversion decision
-   // and never recalculated afterward. Only an empty/unrecognized grade
-   // (which the normal strategy brain should never actually finalize) fails
-   // closed to non-inverted execution.
+   // ===== INVERSE EXECUTION EXPERIMENT: one inversion at the execution boundary =====
+   // If the normal strategy reaches this point, the trade is approved. This
+   // experiment must not add grade/strategy/confidence eligibility gates:
+   // every approved normal BUY becomes SELL, every approved normal SELL becomes
+   // BUY, at this one boundary only.
    string originalSignalDirStr = (signal == 1) ? "BUY" : "SELL";
    string originalFinalGrade = funnelGrade;
    StringTrimLeft(originalFinalGrade);
    StringTrimRight(originalFinalGrade);
    StringToUpper(originalFinalGrade);
-   bool inversionEligible = XAU_IsInverseExperimentGradeEligible(originalFinalGrade);
-   string gradePolicy = inversionEligible ? "INVERSE_ELIGIBLE" : "NOT_ELIGIBLE_FAIL_CLOSED";
+   string gradePolicy = "INVERSE_ALL_APPROVED_TRADES";
+   string pairedDecisionId = XAU_ExperimentDecisionId(lastSignalSetup, originalFinalGrade, signal);
+   datetime signalCandleTime = iTime(Symbol(), PERIOD_M5, 1);
+   datetime approvalTime = TimeCurrent();
+   double spreadAtApproval = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   PrintFormat("INVERSE_EXPERIMENT_PARITY_GATE | DecisionId=%s | originalGrade=%s | gradePolicy=%s | normalApproved=true | experimentalApproved=true | noExperimentalEligibilityGate=true",
+               pairedDecisionId, originalFinalGrade, gradePolicy);
 
    // Normal analysis (scoring, filters, risk sizing) is fully complete above --
    // nothing before this point is touched. originalXxx below is the baseline
@@ -16796,44 +16792,28 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double originalSL     = sl;
    double originalTP     = tp;
    double originalSLDist = MathAbs(originalPrice - originalSL);
+   double originalTPDist = MathAbs(originalTP - originalPrice);
    double originalLots   = lots;
 
    int execSignal; double execPrice, execSL, execTP, execLots; string candidateId;
 
-   if(!inversionEligible)
    {
-      // Only reachable for an empty/unrecognized grade now (fail-closed
-      // safety net -- B/B+/A/A+ are all eligible). Preserve fully normal,
-      // non-inverted execution -- same signal/price/SL/TP/lot the normal
-      // strategy already computed above, untouched.
-      execSignal = originalSignal;
-      execPrice  = originalPrice;
-      execSL     = originalSL;
-      execTP     = originalTP;
-      execLots   = originalLots;
-      candidateId = reason; // keep the ORIGINAL reason text -- not a synthetic inverse-experiment ID
-      PrintFormat("ORIGINAL_SIGNAL=%s ORIGINAL_GRADE=%s GRADE_POLICY=%s ACTUAL_EXECUTION=%s INVERSION_APPLIED=false",
-                  originalSignalDirStr, originalFinalGrade, gradePolicy, originalSignalDirStr);
-   }
-   else
-   {
-      // From here we compute an INDEPENDENT inverse trade plan: same risk
-      // distances (same R), opposite direction, fresh executable price for
-      // that opposite side -- never the stale original-direction price/SL/TP
-      // reused blindly. Unchanged from the original baseline logic, just now
-      // gated to B+/A/A+ only.
-      execSignal = -originalSignal;   // MANDATORY for eligible grades: normal BUY -> SELL, normal SELL -> BUY.
+      // From here we compute the inverse trade plan: same original stop and
+      // target distances, opposite direction, fresh executable price for that
+      // opposite side -- never the stale original-direction price/SL/TP reused
+      // blindly. The normal strategy brain is complete before this block.
+      execSignal = -originalSignal;   // MANDATORY: every approved normal BUY -> SELL, every approved normal SELL -> BUY.
       if(execSignal == 1)
       {
          execPrice = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
          execSL    = NormalizeDouble(execPrice - originalSLDist, digits);
-         execTP    = NormalizeDouble(execPrice + originalSLDist, digits);
+         execTP    = NormalizeDouble(execPrice + originalTPDist, digits);
       }
       else
       {
          execPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
          execSL    = NormalizeDouble(execPrice + originalSLDist, digits);
-         execTP    = NormalizeDouble(execPrice - originalSLDist, digits);
+         execTP    = NormalizeDouble(execPrice - originalTPDist, digits);
       }
       if(execPrice <= 0)
       {
@@ -16860,10 +16840,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          }
       }
       double execSLDist = MathAbs(execPrice - execSL);
-      if(execSignal == 1)
-         execTP = NormalizeDouble(execPrice + execSLDist, digits);
-      else
-         execTP = NormalizeDouble(execPrice - execSLDist, digits);
+      double execTPDist = MathAbs(execTP - execPrice);
       // CORRECTED (owner directive): do NOT rescale the lot for the inverted
       // trade's own SL distance. The original "independent risk recheck"
       // could legitimately shrink the lot toward the broker minimum (0.01)
@@ -16881,14 +16858,26 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       double execR05 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist * 0.50 : -execSLDist * 0.50), digits);
       double execR10 = NormalizeDouble(execPrice + (execSignal == 1 ? execSLDist : -execSLDist), digits);
 
-      candidateId = reason + "_" + IntegerToString((int)TimeCurrent());
+      candidateId = pairedDecisionId;
+      int directionInversions = (execSignal == -originalSignal) ? 1 : 0;
+      if(directionInversions != 1)
+      {
+         PrintFormat("INVERSE_EXPERIMENT_CRITICAL_ABORT | DecisionId=%s | directionInversions=%d | original=%s | execution=%s",
+                     candidateId, directionInversions, originalSignal==1?"BUY":"SELL", execSignal==1?"BUY":"SELL");
+         return false;
+      }
+      XAU_LogExperimentAccountParity("ORDER_BOUNDARY");
       PrintFormat("INVERSE_EXPERIMENT_DECISION | candidateId=%s | originalSignalDirection=%s executedDirection=%s | "
+                  "DecisionId=%s SignalDirection=%s ExecutionDirection=%s DirectionInversions=%d signalCandleTime=%s approvalTime=%s spreadAtApproval=%.0f | "
                   "originalEntryPlan=%.2f/%.2f/%.2f originalSLDist=%.2f | "
                   "inverseEntryPlan=%.2f/%.2f/%.2f inverseSLDist=%.2f inverseTPDist=%.2f r03=%.2f r05=%.2f r10=%.2f | "
                   "originalLot=%.2f inverseLot=%.2f originalRiskUSD=%.2f lotSizingPolicy=SAME_AS_NORMAL_BOT_NO_RESCALE magic=%d reason=MANDATORY_DIRECTION_INVERSION | %s",
                   candidateId, originalSignal==1?"BUY":"SELL", execSignal==1?"BUY":"SELL",
+                  candidateId, originalSignal==1?"BUY":"SELL", execSignal==1?"BUY":"SELL", directionInversions,
+                  TimeToString(signalCandleTime, TIME_DATE | TIME_SECONDS),
+                  TimeToString(approvalTime, TIME_DATE | TIME_SECONDS), spreadAtApproval,
                   originalPrice, originalSL, originalTP, originalSLDist,
-                  execPrice, execSL, execTP, execSLDist, MathAbs(execTP-execPrice), execR03, execR05, execR10,
+                  execPrice, execSL, execTP, execSLDist, execTPDist, execR03, execR05, execR10,
                   originalLots, execLots, originalRiskUSD, InpMagicNumber, reason);
 
       Print("NORMAL BOT DECISION: ", originalSignal > 0 ? "BUY" : "SELL");
@@ -16912,7 +16901,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    lots   = execLots;
    reason = candidateId; // stable ID so normal-vs-inverse pairing is possible later; original reason text logged above
 
-   Print(inversionEligible ? "EXECUTING (INVERSE): " : "EXECUTING (NORMAL, GRADE=B PRESERVED): ", signal > 0 ? "BUY" : "SELL",
+   Print("EXECUTING (INVERSE ALL APPROVED GRADES): ", signal > 0 ? "BUY" : "SELL",
          " (normal analysis said ", originalSignal > 0 ? "BUY" : "SELL", ") Price=", DoubleToString(price, digits),
          " SL=", DoubleToString(sl, digits),
          " TP=", DoubleToString(tp, digits),
@@ -16926,9 +16915,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD), g_spreadEMA, InpMagicNumber);
 
    bool ok;
-   string inverseComment = inversionEligible
-      ? ("INV_EXP|NORMAL_" + (originalSignal==1?"BUY":"SELL") + "|ACTUAL_" + (signal==1?"BUY":"SELL"))
-      : ("INV_EXP|GRADE_B_NORMAL|" + (signal==1?"BUY":"SELL")); // NOT an inversion -- grade B preserved, labeled distinctly in broker history
+   string inverseComment = "INV_EXP|NORMAL_" + (originalSignal==1?"BUY":"SELL") + "|ACTUAL_" + (signal==1?"BUY":"SELL");
+   datetime orderSendTime = TimeCurrent();
+   double spreadAtSend = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
    if(signal == 1) ok = trade.Buy(lots, Symbol(), 0, sl, tp, inverseComment);
    else ok = trade.Sell(lots, Symbol(), 0, sl, tp, inverseComment);
 
@@ -16940,10 +16929,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       string origDirStr = originalSignal == 1 ? "BUY" : "SELL";
       string execDirStr = signal == 1 ? "BUY" : "SELL";
       bool inversionConfirmed = ok && (signal == -originalSignal);
-      PrintFormat("ORIGINAL_SIGNAL=%s INVERSE_EXECUTION=%s BROKER_ORDER_SENT=%s INVERSION_CONFIRMED=%s retcode=%d candidateId=%s",
+      PrintFormat("ORIGINAL_SIGNAL=%s INVERSE_EXECUTION=%s BROKER_ORDER_SENT=%s INVERSION_CONFIRMED=%s retcode=%d candidateId=%s DecisionId=%s orderSendTime=%s spreadAtSend=%.0f",
                   origDirStr, execDirStr, execDirStr,
                   inversionConfirmed ? "true" : "false",
-                  (int)trade.ResultRetcode(), candidateId);
+                  (int)trade.ResultRetcode(), candidateId, candidateId,
+                  TimeToString(orderSendTime, TIME_DATE | TIME_SECONDS), spreadAtSend);
    }
 
    ulong openedDealTicket = ok ? trade.ResultDeal() : 0;
@@ -16977,16 +16967,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
       todayTradeCount++;
       lastTradeDir = signal;
-      XAU_BrainRecordOpen(openedPosId, signal, price, sl, tp, lots, atr,
-                          lastSignalSetup, g_pendingBrainGrade, lastSignalSignature,
-                          g_pendingBrainSetupScore, g_pendingBrainCombinedScore,
-                          reason + " | " + g_pendingBrainEntryAudit);
-      // Only trades where inversion actually applied belong in the inverse-
-      // experiment's own comparison dataset -- a preserved-normal B-grade
-      // trade is not part of that hypothesis test and must not contaminate it.
-      if(inversionEligible)
-         XAU_InverseExperimentRecordOpen(openedPosId, originalSignal, signal, price,
-                                         lots, sl, tp, lastSignalSetup, g_pendingBrainGrade);
+      // Memory isolation: inverse outcomes are experiment data, not production
+      // TradeBrain evidence. Do not teach the normal strategy that an
+      // original BUY was a SELL or vice versa.
+      XAU_InverseExperimentRecordOpen(openedPosId, candidateId, originalSignal, signal, price,
+                                      lots, sl, tp, lastSignalSetup, g_pendingBrainGrade);
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ENTRY", "OrderSend",
                                 signal, funnelSetup, funnelGrade, funnelScore,
                                 true, true, "EXECUTED", "",
@@ -19415,7 +19400,7 @@ void XAU_InverseExperimentAppend(string eventType, XAU_InverseExperimentRecord &
    }
    if(!exists)
    {
-      FileWrite(h, "event", "time", "account", "symbol", "version", "ticket",
+      FileWrite(h, "event", "time", "accountMasked", "server", "symbol", "version", "decisionId", "ticket",
                 "setup", "grade", "gradePolicy", "originalSignal", "actualExecution", "inversionApplied", "entry",
                 "lot", "sl", "tp", "oneRDistance", "r03Level", "r05Level",
                 "r10Level", "mae", "mfe", "timeTo03Sec", "timeTo05Sec",
@@ -19427,9 +19412,9 @@ void XAU_InverseExperimentAppend(string eventType, XAU_InverseExperimentRecord &
    int t05 = (r.time05 > 0 ? (int)(r.time05 - r.entryTime) : -1);
    int t10 = (r.time10 > 0 ? (int)(r.time10 - r.entryTime) : -1);
    FileWrite(h, eventType, TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
-             (long)AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), XAUAI_EA_VERSION,
-             (long)r.posId, r.setup, r.grade,
-             "INVERSE_ELIGIBLE", // every real grade (B/B+/A/A+) is now inverse-eligible; this CSV only ever holds eligible rows
+             XAU_MaskedAccount(), AccountInfoString(ACCOUNT_SERVER), Symbol(), XAUAI_EA_VERSION,
+             r.decisionId, (long)r.posId, r.setup, r.grade,
+             "INVERSE_ALL_APPROVED_TRADES",
              r.originalSignal == 1 ? "BUY" : "SELL",
              r.actualDirection == 1 ? "BUY" : "SELL",
              r.inversionApplied ? "true" : "false",
@@ -19452,7 +19437,7 @@ int XAU_InverseExperimentFind(ulong posId)
    return -1;
 }
 
-void XAU_InverseExperimentRecordOpen(ulong posId, int originalSignal, int actualDirection,
+void XAU_InverseExperimentRecordOpen(ulong posId, string decisionId, int originalSignal, int actualDirection,
                                      double entry, double lot, double sl, double tp,
                                      string setup, string grade)
 {
@@ -19468,9 +19453,10 @@ void XAU_InverseExperimentRecordOpen(ulong posId, int originalSignal, int actual
    g_inverseExpRecords[idx].active = true;
    g_inverseExpRecords[idx].posId = posId;
    g_inverseExpRecords[idx].entryTime = TimeCurrent();
+   g_inverseExpRecords[idx].decisionId = decisionId;
    g_inverseExpRecords[idx].originalSignal = originalSignal;
    g_inverseExpRecords[idx].actualDirection = actualDirection;
-   g_inverseExpRecords[idx].inversionApplied = true; // only ever reached for an eligible (B+/A/A+) inversion
+   g_inverseExpRecords[idx].inversionApplied = true; // every normal-approved trade is inverted
    g_inverseExpRecords[idx].entry = entry;
    g_inverseExpRecords[idx].lot = lot;
    g_inverseExpRecords[idx].sl = sl;
@@ -24753,11 +24739,6 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
 // same missed signal (no indefinite chasing, per explicit requirement).
 void XAU_CheckPendingOpportunityRecovery()
 {
-   if(XAUAI_INVERSE_EXPERIMENT)
-   {
-      g_pendingOpportunity.active = false;
-      return;
-   }
    if(!g_pendingOpportunity.active) return;
 
    string sid               = g_pendingOpportunity.signalId;

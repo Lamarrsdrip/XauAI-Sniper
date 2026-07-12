@@ -20,11 +20,14 @@ def test_experiment_file_is_separate_from_production():
     assert 'XAUAI_EA_VERSION "v6.19.0"' in prod
 
 
-def test_normal_buy_executes_sell_and_normal_sell_executes_buy_for_eligible_grades():
+def test_normal_buy_executes_sell_and_normal_sell_executes_buy_for_all_approved_grades():
     text = src()
-    # inversion now only happens inside the eligible-grade branch (owner
-    # correction: the old baseline inverted EVERY grade unconditionally)
-    assert "execSignal = -originalSignal;   // MANDATORY for eligible grades: normal BUY -> SELL, normal SELL -> BUY." in text
+    # The experiment is not a separate selector. Once the normal bot reaches
+    # the execution boundary, every approved BUY becomes SELL and every
+    # approved SELL becomes BUY, regardless of grade.
+    assert "execSignal = -originalSignal;   // MANDATORY for eligible grades: normal BUY -> SELL, normal SELL -> BUY." not in text
+    assert "execSignal = -originalSignal;   // MANDATORY for eligible grades" not in text
+    assert "execSignal = -originalSignal;" in text
     assert 'originalSignalDirection=%s executedDirection=%s' in text
     assert 'ORIGINAL_SIGNAL=%s INVERSE_EXECUTION=%s BROKER_ORDER_SENT=%s INVERSION_CONFIRMED=%s' in text
     assert re.search(r"if\(signal == 1\) ok = trade\.Buy", text)
@@ -33,7 +36,7 @@ def test_normal_buy_executes_sell_and_normal_sell_executes_buy_for_eligible_grad
 
 def _eligible_inversion_block(text):
     start = text.index("int    originalSignal = signal;")
-    end = text.index("candidateId = reason + \"_\" + IntegerToString((int)TimeCurrent());")
+    end = text.index("XAU_LogExperimentAccountParity(\"ORDER_BOUNDARY\");")
     return text[start:end]
 
 
@@ -46,12 +49,14 @@ def test_inverse_sl_is_mirrored_from_actual_inverse_price_not_original_absolute_
     assert "sl = originalSL" not in inversion_block
 
 
-def test_inverse_tp_is_actual_one_r_not_original_tp_distance():
+def test_inverse_tp_preserves_original_target_distance():
     text = src()
-    assert "execTP = NormalizeDouble(execPrice + execSLDist, digits);" in text
-    assert "execTP = NormalizeDouble(execPrice - execSLDist, digits);" in text
+    assert "double originalTPDist = MathAbs(originalTP - originalPrice);" in text
+    assert "execTP    = NormalizeDouble(execPrice + originalTPDist, digits);" in text
+    assert "execTP    = NormalizeDouble(execPrice - originalTPDist, digits);" in text
     inversion_block = _eligible_inversion_block(text)
-    assert "originalTPDist" not in inversion_block
+    assert "execTP = NormalizeDouble(execPrice + execSLDist, digits);" not in inversion_block
+    assert "execTP = NormalizeDouble(execPrice - execSLDist, digits);" not in inversion_block
 
 
 def test_r_levels_are_calculated_from_actual_inverse_risk():
@@ -95,20 +100,20 @@ def test_inverse_profit_manager_protects_captures_and_closes_by_one_r():
 def test_position_management_uses_actual_executed_direction():
     text = src()
     assert "signal = execSignal;" in text
-    assert "XAU_BrainRecordOpen(openedPosId, signal, price, sl, tp, lots" in text
-    assert "XAU_InverseExperimentRecordOpen(openedPosId, originalSignal, signal, price" in text
+    assert "XAU_InverseExperimentRecordOpen(openedPosId, candidateId, originalSignal, signal, price" in text
+    open_success_block = text[text.index("if(ok)"):text.index('BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ENTRY", "OrderSend"')]
+    assert "XAU_BrainRecordOpen(openedPosId, signal, price, sl, tp, lots" not in open_success_block
     assert "int actualDir = isBuy ? 1 : -1;" in text
 
 
-def test_experiment_disables_pyramids_reentry_recovery_and_multiple_positions():
+def test_experiment_preserves_normal_trade_count_controls():
     text = src()
-    assert "input int    InpMaxOpenTrades  = 1;" in text
-    assert "input bool   InpAllowPyramid    = false;" in text
-    assert "input int    InpMaxPyramidAdds  = 0;" in text
-    assert "input bool   InpUseReEntry     = false;" in text
-    assert "if(XAUAI_INVERSE_EXPERIMENT) return;" in text
-    assert "INVERSE_EXPERIMENT_ONE_TRADE_ONLY" in text
-    assert "g_pendingOpportunity.active = false;" in text
+    assert "input int    InpMaxOpenTrades  = 3;" in text
+    assert "input bool   InpAllowPyramid    = true;" in text
+    assert "input int    InpMaxPyramidAdds  = 3;" in text
+    assert "input bool   InpUseReEntry     = true;" in text
+    assert "INVERSE_EXPERIMENT_ONE_TRADE_ONLY" not in text
+    assert "g_pendingOpportunity.active = false;\n      return;" not in text
 
 
 def test_magic_number_is_experimental_and_does_not_collide_with_production_style():
@@ -136,9 +141,7 @@ def test_demo_only_guard_and_clear_journal_language_exist():
 
 
 def _grade_helper_fn(text):
-    start = text.index("bool XAU_IsInverseExperimentGradeEligible(string originalGrade)")
-    end = text.index("bool OpenTrade(int signal, double atr, string reason")
-    return text[start:end]
+    return ""
 
 
 def _entry_gate_block(text):
@@ -148,50 +151,51 @@ def _entry_gate_block(text):
 
 
 # --------------------------------------------------------------------------
-# Grade-eligibility rule, SECOND REVISION (owner directive): every real
-# grade (B, B+, A, A+) now inverts and uses the same full-size lot
-# treatment. Only an empty/unrecognized grade fails closed to non-inverted
-# execution (a safety net for malformed data, not a deliberate exclusion).
+# Parity rule: every normal-approved trade inverts. There is no grade
+# eligibility layer in the experiment.
 # --------------------------------------------------------------------------
 
-def test_grade_helper_exists_with_exact_match_and_all_real_grades_eligible():
+def test_no_experimental_grade_eligibility_gate_exists():
     text = src()
-    fn = _grade_helper_fn(text)
-    assert 'if(g == "B") return true;' in fn
-    assert 'if(g == "B+") return true;' in fn
-    assert 'if(g == "A") return true;' in fn
-    assert 'if(g == "A+") return true;' in fn
-    assert "return false;                      // empty / C / unknown / fallback -- fail closed" in fn
-    assert fn.rstrip().endswith("}")
-    assert "StringFind" not in fn
+    forbidden = [
+        "XAU_IsInverseExperimentGradeEligible",
+        "GRADE_NOT_ELIGIBLE",
+        "INVERSE_GRADE_NOT_ELIGIBLE",
+        "INVERSE_EXPERIMENT_NOT_ELIGIBLE",
+        "eligibleGrade",
+        "requiredGrades=A,A+",
+        "NOT_ELIGIBLE_FAIL_CLOSED",
+        "INVERSE_A_A_PLUS_ONLY",
+    ]
+    for marker in forbidden:
+        assert marker not in text
 
 
-def test_b_grade_now_inverts_same_as_the_other_grades():
+def test_all_grades_reach_unconditional_inversion_boundary():
     text = src()
     gate = _entry_gate_block(text)
-    assert "bool inversionEligible = XAU_IsInverseExperimentGradeEligible(originalFinalGrade);" in gate
-    assert 'string gradePolicy = inversionEligible ? "INVERSE_ELIGIBLE" : "NOT_ELIGIBLE_FAIL_CLOSED";' in gate
-    # the not-eligible (fail-closed) branch is only reachable for an
-    # empty/unrecognized grade now -- B goes through the eligible branch
-    normal_branch = text[text.index("if(!inversionEligible)"):text.index("else\n   {\n      // From here")]
-    assert "Only reachable for an empty/unrecognized grade now" in normal_branch
+    assert 'string gradePolicy = "INVERSE_ALL_APPROVED_TRADES";' in gate
+    assert "INVERSE_EXPERIMENT_PARITY_GATE" in gate
+    assert "normalApproved=true" in gate
+    assert "experimentalApproved=true" in gate
+    assert "noExperimentalEligibilityGate=true" in gate
+    assert "return false;" not in gate
 
 
-def test_exact_match_only_never_substring():
+def test_no_grade_substring_matching_or_grade_skip_path():
     text = src()
-    fn = _grade_helper_fn(text)
-    assert "StringFind" not in fn
-    assert "StringSubstr(g, 0, 1)" not in fn
-    b_idx = fn.index('if(g == "B") return true;')
-    bplus_idx = fn.index('if(g == "B+") return true;')
-    assert b_idx < bplus_idx  # B checked (and matched) before B+, exact string, no fallthrough confusion
+    boundary = text[text.index("string originalSignalDirStr = (signal == 1)"):text.index("int    originalSignal = signal;")]
+    assert "StringFind" not in boundary
+    assert "StringSubstr" not in boundary
+    assert "if(originalFinalGrade" not in boundary
 
 
-def test_empty_and_unknown_grade_still_fail_closed():
+def test_b_bplus_a_aplus_all_share_same_inversion_code_path():
     text = src()
-    fn = _grade_helper_fn(text)
-    for bad in ("C", "D", "FALLBACK", ""):
-        assert f'if(g == "{bad}") return true;' not in fn
+    inversion_block = _eligible_inversion_block(text)
+    assert "execSignal = -originalSignal;" in inversion_block
+    assert "if(originalFinalGrade" not in inversion_block
+    assert "if(g_pendingBrainGrade" not in inversion_block
 
 
 def test_original_grade_preserved_and_never_overwritten_by_executed_direction():
@@ -210,39 +214,30 @@ def test_executed_direction_and_inversion_flag_stored_separately_from_original()
     assert "int      originalSignal;" in struct_body
     assert "int      actualDirection;" in struct_body
     assert "bool     inversionApplied;" in struct_body
+    assert "string   decisionId;" in struct_body
 
 
-def test_b_grade_now_recorded_into_inverse_experiment_dataset_like_the_others():
-    # Second revision: B is no longer excluded from the experiment, so its
-    # rows now belong in the comparison CSV like every other eligible grade.
+def test_every_executed_inverse_trade_recorded_into_inverse_experiment_dataset():
     text = src()
-    assert "if(inversionEligible)\n         XAU_InverseExperimentRecordOpen(" in text
+    assert "XAU_InverseExperimentRecordOpen(openedPosId, candidateId, originalSignal, signal, price" in text
     csv_write_fn = text[text.index("void XAU_InverseExperimentAppend("):text.index("int XAU_InverseExperimentFind")]
-    assert '"INVERSE_ELIGIBLE"' in csv_write_fn
+    assert '"INVERSE_ALL_APPROVED_TRADES"' in csv_write_fn
+    assert '"decisionId"' in csv_write_fn
     assert "NORMAL_B_PRESERVED" not in csv_write_fn
 
 
 # --------------------------------------------------------------------------
-# Lot-sizing correction (owner directive, live bug): a B-grade trade was
-# observed executing at 0.01 lots. Root cause: the "TRUE A/A+ FULL SIZE
-# ENFORCEMENT" floor -- which restores a grade's lot size if soft reducers
-# (STI/committee/PG) shrink it -- only ever protected A/A+. B/B+ had no such
-# floor, so soft-reducer stacking could compound them down to the SIZE
-# GUARD's 0.10 floor and the broker minimum. Now every grade gets the same
-# baseline multiplier (0.85, matching A; A+ keeps its 1.10 premium) and the
-# same full-size restoration floor.
+# Lot-sizing parity: the experiment must not alter normal grade sizing.
 # --------------------------------------------------------------------------
 
-def test_b_and_bplus_no_longer_use_reduced_baseline_multiplier():
+def test_b_and_bplus_keep_normal_reduced_baseline_multiplier():
     text = src()
-    assert 'double sizeMulti = grade == "A+" ? 1.10 : 0.85;' in text
-    assert 'double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;' not in text
+    assert 'double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;' in text
 
 
-def test_full_size_enforcement_floor_now_protects_every_grade():
+def test_full_size_enforcement_floor_remains_a_aplus_only():
     text = src()
-    assert "bool   highGradeFullSize      = true;  // was: (grade == \"A+\" || grade == \"A\")" in text
-    assert 'bool   highGradeFullSize      = (grade == "A+" || grade == "A");' not in text
+    assert 'bool   highGradeFullSize      = (grade == "A+" || grade == "A");' in text
 
 
 def test_full_size_enforcement_still_respects_genuine_hard_conflict_reducers():
@@ -258,8 +253,10 @@ def test_full_size_enforcement_still_respects_genuine_hard_conflict_reducers():
 
 def test_telemetry_has_all_required_fields_both_branches():
     text = src()
-    assert 'PrintFormat("ORIGINAL_SIGNAL=%s ORIGINAL_GRADE=%s GRADE_POLICY=%s ACTUAL_EXECUTION=%s INVERSION_APPLIED=false",' in text
     assert 'PrintFormat("ORIGINAL_SIGNAL=%s ORIGINAL_GRADE=%s GRADE_POLICY=%s ACTUAL_EXECUTION=%s INVERSION_APPLIED=true",' in text
+    assert "INVERSE_EXPERIMENT_PARITY_GATE" in text
+    assert "DirectionInversions=%d" in text
+    assert "INVERSE_EXPERIMENT_ACCOUNT_PARITY" in text
 
 
 def test_risk_sizing_here_is_not_a_flat_equity_percentage():
@@ -275,7 +272,6 @@ def test_risk_sizing_here_is_not_a_flat_equity_percentage():
 
 def test_production_v6190_untouched():
     prod = PROD.read_text(encoding="utf-8", errors="ignore")
-    assert "XAU_IsInverseExperimentGradeEligible" not in prod
     assert "INVERSE EXECUTION EXPERIMENT" not in prod
 
 
