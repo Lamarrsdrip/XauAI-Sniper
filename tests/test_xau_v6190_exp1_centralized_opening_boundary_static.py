@@ -113,7 +113,11 @@ def test_pyramid_derives_normal_direction_from_persisted_inverse_state_contract(
     text = src()
     assert "dir = g_inverseExpRecords[baseInverseIdx].originalSignal;" in text
     assert "int normalPyramidDirection = dir;" in text
-    assert "int experimentalPyramidDirection = -normalPyramidDirection;" in text
+    # experimentalPyramidDirection is tied directly to executionIsBuy (the
+    # SAME variable already used for the real order's price/SL/lot below),
+    # not re-derived independently -- one source of truth for the actual
+    # execution side, algebraically equal to -normalPyramidDirection.
+    assert "int experimentalPyramidDirection = executionIsBuy ? 1 : -1;" in text
     fn_start = text.index("void CheckPyramidOpportunity()")
     fn_end = text.index("\n//+", text.index("PYRAMID FAILED"))
     body = text[fn_start:fn_end]
@@ -135,20 +139,47 @@ def test_pyramid_keeps_normal_and_actual_direction_separate():
 def test_re_entry_no_longer_passes_actual_closed_direction_straight_into_open_trade():
     text = src()
     assert "if(OpenTrade(lastClose.dir, bufATR[1], \"RE_ENTRY\", InpReEntrySize))" not in text
-    assert "int normalReEntryDirection = lastClose.dir;" in text
+    # v6.19.0-EXP1: experiment-local re-entry is now armed (not disabled).
+    # lastClose.dir is the ACTUAL closed side; OpenTrade() needs the NORMAL
+    # side (originalNormalDir, stored on the inverse-experiment record at
+    # close time) so its single inversion reproduces lastClose.dir.
+    assert "int normalReEntryDirection = lastClose.originalNormalDir;" in text
     assert "if(OpenTrade(normalReEntryDirection, bufATR[1], \"RE_ENTRY\", InpReEntrySize))" in text
-    assert "INVERSE_REENTRY_PARITY_UNAVAILABLE" in text
+    assert "INVERSE_REENTRY_ARMED" in text
+    assert "INVERSE_REENTRY_PARITY_UNAVAILABLE" not in text
+    # the assignment must be guarded by a parity assertion before OpenTrade
+    # is ever called, so a corrupted record aborts instead of silently
+    # double-inverting or reopening the wrong side.
+    assert "expectedReEntryExecutionDirection != lastClose.dir" in text
 
 
-def test_re_entry_qualification_uses_original_normal_direction_contract():
+def test_re_entry_qualification_uses_actual_closed_direction_contract():
     text = src()
     fn_start = text.index("void CheckReEntryOpportunity()")
-    fn_end = text.index("int normalReEntryDirection = lastClose.dir;")
+    fn_end = text.index("int normalReEntryDirection = lastClose.originalNormalDir;")
     body = text[fn_start:fn_end]
     assert "IsDirectionLocked(lastClose.dir)" in body
     assert "double curPrice = (lastClose.dir == 1) ? ask : bid;" in body
     assert "XAU_ClassifySetup(lastClose.dir, bufATR[1], \"RE_ENTRY\", reClass);" in body
     assert "XAU_TimingEngineConfirmsEntry(lastClose.dir, \"RE_ENTRY\", \"A\", InpReEntrySize, bufATR[1])" in body
+
+
+def test_inverse_close_handler_arms_reentry_with_stored_normal_direction():
+    text = src()
+    fn_start = text.index("if(XAUAI_INVERSE_EXPERIMENT)\n   {\n      int inverseIdx = XAU_InverseExperimentFind(posId);")
+    fn = text[fn_start:text.index("XAU_InverseCompactRecords();", fn_start)]
+    assert "lastClose.valid             = true;" in fn
+    assert "lastClose.dir               = actualExecutionDirection;" in fn
+    assert "lastClose.originalNormalDir = originalNormalDirection;" in fn
+    assert "int expectedActualExecutionDirection = -originalNormalDirection;" in fn
+    assert "INVERSE_REENTRY_ARMED" in fn
+
+
+def test_inverse_close_handler_still_isolates_normal_learning():
+    text = src()
+    fn_start = text.index("if(XAUAI_INVERSE_EXPERIMENT)\n   {\n      int inverseIdx = XAU_InverseExperimentFind(posId);")
+    fn = text[fn_start:text.index("\n   totalTrades++;", fn_start)]
+    assert fn.rstrip().endswith("return;\n   }")
 
 
 # --------------------------------------------------------------------------
@@ -268,3 +299,130 @@ def test_close_and_modify_utilities_are_ticket_based_not_direction_inferred():
     assert "bool SafePositionClose(ulong ticket, string ctx = \"\")" in text
     assert "bool SafePositionClosePartial(ulong ticket, double lots, string ctx = \"\")" in text
     assert "bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curPrice, string logTag)" in text
+
+
+# --------------------------------------------------------------------------
+# 9. Forensic repair: exposure gates use the PLANNED EXECUTION direction,
+#    not the pre-inversion normal signal, when compared against real broker
+#    exposure (item 1).
+# --------------------------------------------------------------------------
+
+def test_planned_execution_direction_helper_exists_and_is_correct():
+    text = src()
+    fn = text[text.index("int XAU_PlannedExecutionDirection(int normalDirection)"):
+              text.index("bool OpenTrade(int signal")]
+    assert "return XAUAI_INVERSE_EXPERIMENT ? -normalDirection : normalDirection;" in fn
+
+
+def test_primary_scan_one_direction_gate_uses_planned_execution_direction():
+    text = src()
+    assert "int plannedExecutionDirection = XAU_PlannedExecutionDirection(signal);" in text
+    assert "if(InpOneDirectionOnly && openDir != 0 && openDir != plannedExecutionDirection)" in text
+    # the raw pre-inversion backwards comparison must be gone
+    assert "if(InpOneDirectionOnly && openDir != 0 && openDir != signal)" not in text
+
+
+def test_epf_cluster_protection_uses_planned_execution_direction():
+    text = src()
+    assert "if(EPF_IsClusteredEntry(plannedExecutionDirection, curPx, bufATR[1]))" in text
+    assert "if(EPF_IsClusteredEntry(signal, curPx, bufATR[1]))" not in text
+
+
+# --------------------------------------------------------------------------
+# 10. Forensic repair: post-inversion risk/margin revalidation and the
+#     authoritative send-boundary refresh live inside the centralized
+#     function (items 2, 3, 4). Same-lot-as-normal contract: abort, never
+#     silently shrink.
+# --------------------------------------------------------------------------
+
+def test_centralized_function_revalidates_actual_inverse_risk_and_margin():
+    text = src()
+    fn = text[text.index("bool XAU_CentralizedOpeningExecute("):text.index("bool OpenTrade(")]
+    assert "double actualInverseSLDistance = MathAbs(sendPrice - refreshedSL);" in fn
+    assert "double actualInverseRiskPerLot = RiskPerLotForDistance(actualInverseSLDistance);" in fn
+    assert "reason=INVERSE_RISK_EXCEEDS_SINGLE_CAP" in fn
+    assert "reason=INVERSE_RISK_EXCEEDS_AGGREGATE_CAP" in fn
+    assert "reason=INVERSE_MARGIN_LIMIT_EXCEEDED" in fn
+    # never a reduction loop for the inverse-side margin check -- retain or abort only
+    assert "marginNeeded -= " not in fn
+    assert "lots -= " not in fn
+    assert "decision=RETAIN_OR_ABORT" in fn
+
+
+def test_centralized_function_refreshes_quote_and_stop_geometry_before_send():
+    text = src()
+    fn = text[text.index("bool XAU_CentralizedOpeningExecute("):text.index("bool OpenTrade(")]
+    assert "SymbolInfoTick(Symbol(), tick)" in fn
+    assert "reason=INVALID_STOP_GEOMETRY_AT_SEND" in fn
+    assert "double priceDriftPts = MathAbs(sendPrice - plannedEntryPrice)" in fn
+    # order-send call must use the freshly refreshed/validated levels, not the caller's originals
+    assert "trade.Buy (lots, Symbol(), 0, refreshedSL, refreshedTP, sendComment)" in fn
+    assert "trade.Sell(lots, Symbol(), 0, refreshedSL, refreshedTP, sendComment)" in fn
+
+
+def test_centralized_function_reasserts_exposure_immediately_before_send():
+    text = src()
+    fn = text[text.index("bool XAU_CentralizedOpeningExecute("):text.index("bool OpenTrade(")]
+    assert "int sendBoundaryOpenDir = GetOpenExposureDirection();" in fn
+    assert "reason=SEND_BOUNDARY_MIXED_EXPOSURE" in fn
+    assert "reason=SEND_BOUNDARY_ONE_DIRECTION_CONFLICT" in fn
+
+
+def test_both_callers_pass_planned_entry_price_for_drift_logging():
+    text = src()
+    assert "originalLots, originalSLDist, originalTPDist, price);" in text
+    assert "MathAbs(entryPx - pyramidSL), MathAbs(origTP - entryPx), entryPx);" in text
+
+
+# --------------------------------------------------------------------------
+# 11. Forensic repair: netting-account state merge applies to every add
+#     path, not only PYRAMID, and never resets lifecycle state (item 5).
+# --------------------------------------------------------------------------
+
+def test_netting_merge_applies_to_every_add_path_not_only_pyramid():
+    text = src()
+    fn = text[text.index("bool XAU_InverseExperimentRecordOpen("):text.index("bool XAU_InverseInitializeMissingLiveState")]
+    assert 'if(existingRecord && entryPath == "PYRAMID")' not in fn
+    assert "if(existingRecord)" in fn
+    assert "if(existingRecord && entryPath == \"RESTART_RESTORE\")" in fn
+    assert "reason=NETTING_ADD_DIRECTION_CONTRACT" in fn
+    assert "INVERSE_NETTING_STATE_MERGED" in fn
+
+
+def test_netting_merge_preserves_lifecycle_and_extends_decision_trail():
+    text = src()
+    fn = text[text.index("bool XAU_InverseExperimentRecordOpen("):text.index("bool XAU_InverseInitializeMissingLiveState")]
+    # the merge branch must never touch entryTime/peak/trough/mae/mfe/stage/
+    # checkpoints -- those assignments only exist in the fresh-open path below
+    merge_block = fn[fn.index("if(existingRecord)"):fn.index("g_inverseExpRecords[idx].active = true;")]
+    for forbidden_field in [".entryTime =", ".peakProfit =", ".troughProfit =", ".mae =", ".mfe =",
+                             ".stage =", ".checkpoint03 =", ".checkpoint05 =", ".checkpoint10 ="]:
+        assert forbidden_field not in merge_block
+    assert 'g_inverseExpRecords[idx].entryPath = g_inverseExpRecords[idx].entryPath + "+" + entryPath;' in merge_block
+    assert 'g_inverseExpRecords[idx].decisionId = g_inverseExpRecords[idx].decisionId + ";" + decisionId;' in merge_block
+
+
+def test_hedging_accounts_reject_unexpected_posid_collision():
+    text = src()
+    assert "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING" in text
+    assert "reason=UNEXPECTED_POSID_COLLISION_ON_HEDGING_ACCOUNT" in text
+
+
+# --------------------------------------------------------------------------
+# 12. Forensic repair: accepted-but-untracked positions block new entries
+#     until reconciled, never treated as telemetry-only (item 7).
+# --------------------------------------------------------------------------
+
+def test_state_recovery_flag_blocks_new_entries_and_clears_on_reconcile():
+    text = src()
+    assert "bool   g_inverseStateRecoveryRequired = false;" in text
+    fn = text[text.index("bool XAU_CentralizedOpeningExecute("):text.index("bool OpenTrade(")]
+    assert "reason=STATE_RECOVERY_REQUIRED_BLOCKING_NEW_ENTRIES" in fn
+    assert "INVERSE_STATE_RECOVERY_RESOLVED" in text
+    assert "g_inverseStateRecoveryRequired = false;" in text
+
+
+def test_post_fill_capture_retries_before_declaring_recovery_required():
+    text = src()
+    assert "for(int captureRetry = 0; captureRetry < 3 && !stateCaptured; captureRetry++)" in text
+    assert "reason=POST_FILL_STATE_CAPTURE_FAILED_AFTER_RETRY" in text

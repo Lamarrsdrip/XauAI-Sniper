@@ -2764,6 +2764,12 @@ double bufEMAFast_H4[], bufEMASlow_H4[];  // v4.8.0
 double bufStochK[], bufStochD[];
 
 double initialBalance, dailyStartEquity, weeklyStartEquity;
+// v6.19.0-EXP1 item 7: set when a broker-accepted order's post-fill state
+// capture fails after retry (position exists but is not in g_inverseExpRecords).
+// Blocks ALL new opening sends (checked inside XAU_CentralizedOpeningExecute)
+// until XAU_InverseReconcileUntracked() successfully recovers or emergency-
+// closes the untracked position. Never treat this as telemetry-only.
+bool   g_inverseStateRecoveryRequired = false;
 bool   g_propFirmMode = false;
 double g_propFirmConfiguredBalance = 0.0;
 double g_propFirmDailyLossPct = 4.0;
@@ -3450,7 +3456,7 @@ struct LastClose
    bool   valid;
    bool   wasLoss;
    bool   reEntered;
-   int    dir;             // +1 BUY, -1 SELL
+   int    dir;             // +1 BUY, -1 SELL -- the ACTUAL side that closed (used by every price/timing/lockout qualification check in CheckReEntryOpportunity, which correctly reasons in actual-frame)
    double entryPrice;
    double closePrice;
    double slDist;          // price distance of SL at entry
@@ -3460,6 +3466,7 @@ struct LastClose
    string signature;
    string setup;
    string exitReason;
+   int    originalNormalDir; // v6.19.0-EXP1: the NORMAL (pre-inversion) strategy direction that produced `dir`. Only OpenTrade()'s direction argument may use this field -- every other re-entry qualification check must keep using `dir` (actual-frame).
 };
 LastClose  lastClose;
 
@@ -7187,6 +7194,7 @@ int OnInit()
    lastClose.valid = false; lastClose.reEntered = false; lastClose.wasLoss = false;
    lastClose.dir = 0; lastClose.entryPrice = 0; lastClose.slDist = 0;
    lastClose.lots = 0; lastClose.closeTime = 0; lastClose.signature = ""; lastClose.setup = "";
+   lastClose.originalNormalDir = 0;
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
    // v6.3.8 Upgrade 1: load TradeBrain memory from disk on startup
@@ -8340,7 +8348,11 @@ void CheckReEntryOpportunity()
          " | retest distance ", DoubleToString(MathAbs(curPrice-lastClose.entryPrice)/lastClose.slDist, 2), "R",
          " | ", reClass.why);
 
-   lastSignalDir = lastClose.dir;
+   // lastSignalDir's convention file-wide is the NORMAL (pre-inversion)
+   // decision direction (see the primary-scan assignment `lastSignalDir =
+   // signal` before OpenTrade() inverts) -- use originalNormalDir, not the
+   // actual `lastClose.dir`, to keep that convention consistent here too.
+   lastSignalDir = lastClose.originalNormalDir;
    lastSignalSignature = lastClose.signature;
    lastSignalSetup = "RE_ENTRY";
    // v6.17.7 FIX (item 4): reEntered/todayReEntryCount used to be consumed
@@ -8350,12 +8362,27 @@ void CheckReEntryOpportunity()
    // re-entries and marked this closed trade as "already re-entered" even
    // though no re-entry ever happened. Only consume them on a confirmed fill.
    //
-   // In the inverse build lastClose.dir, when supplied by a legitimate normal
-   // lifecycle source, is always the ORIGINAL NORMAL direction. Inverse deal
-   // outcomes never populate lastClose because they cannot prove what the
-   // corresponding normal trade outcome would have been. OpenTrade performs
-   // the one and only inversion at the centralized execution boundary.
-   int normalReEntryDirection = lastClose.dir;
+   // v6.19.0-EXP1 CRITICAL: lastClose.dir is the ACTUAL (already-inverted)
+   // side that closed -- every gate ABOVE this line in this function
+   // (direction lockout, price-improvement, XAU_ClassifySetup,
+   // XAU_TimingEngineConfirmsEntry) correctly reasons against it. OpenTrade()
+   // unconditionally applies its OWN single inversion to whatever direction
+   // it receives, so passing lastClose.dir straight through here would
+   // double-invert (this exact bug was fixed once already for this call
+   // site -- see git history). lastClose.originalNormalDir carries the
+   // STORED original normal decision for the trade that just closed
+   // (populated only by the inverse-experiment close handler); passing THAT
+   // lets OpenTrade's single inversion correctly reproduce lastClose.dir as
+   // the executed re-entry side.
+   int normalReEntryDirection = lastClose.originalNormalDir;
+   int expectedReEntryExecutionDirection = -normalReEntryDirection;
+   if(normalReEntryDirection == 0 || expectedReEntryExecutionDirection != lastClose.dir)
+   {
+      PrintFormat("INVERSE_REENTRY_ABORT reason=PARITY_ASSERTION_FAILED originalNormalDir=%d priorActualDir=%d expectedExecution=%d",
+                  normalReEntryDirection, lastClose.dir, expectedReEntryExecutionDirection);
+      lastClose.reEntered = true; // one-shot: do not keep retrying a corrupted record
+      return;
+   }
    if(OpenTrade(normalReEntryDirection, bufATR[1], "RE_ENTRY", InpReEntrySize))
    {
       lastClose.reEntered = true;  // one-shot per original close
@@ -11498,24 +11525,25 @@ void CheckPyramidOpportunity()
       }
    }
 
-   // v6.19.0-EXP1: `dir`/`isBuy` here is derived from origType, i.e. the ACTUAL
-   // broker side of the position already open in this account -- which, in the
-   // experiment, is already the inverted side (OpenTrade() did the one real
-   // inversion when the base trade was opened). Adding to that SAME actual
-   // side is therefore already the correct experimental behavior and needs no
-   // second inversion here. What was missing was routing through the audited
-   // boundary: normalPyramidDirection is derived (Opposite of the actual side)
-   // purely so the telemetry/decision architecture never loses track of what
-   // the normal bot's corresponding pyramid decision was, per the requirement
-   // that the experiment must not infer that fact only from its own actual
-   // position side.
+   // v6.19.0-EXP1: `dir`/`isBuy` above are resolved to the base position's
+   // PERSISTED ORIGINAL NORMAL DIRECTION (g_inverseExpRecords[...].originalSignal),
+   // not the actual broker side -- every qualification gate in this function
+   // (regime, retest, momentum, structure, timing) therefore evaluates
+   // exactly as the normal, non-inverted bot would for its own position,
+   // using the persisted normal-side plan entry/SL (origPx/origSL) for all
+   // price-distance math. `executionIsBuy`/`actualBaseEntry`/`actualBaseSL`
+   // are the REAL actual-side values, used only for the final order's price/
+   // SL geometry below. normalPyramidDirection is what the normal bot's own
+   // pyramid decision was; the executed add is its exact opposite -- one
+   // inversion, proven at the centralized boundary, never inferred solely
+   // from the actual position's side.
    int normalPyramidDirection = dir;
-   int experimentalPyramidDirection = -normalPyramidDirection;
+   int experimentalPyramidDirection = executionIsBuy ? 1 : -1;
    string pyramidDecisionId = XAU_ExperimentDecisionId("PYRAMID:" + why, g_lastEntryGrade, normalPyramidDirection);
    bool ok = XAU_CentralizedOpeningExecute("PYRAMID", pyramidDecisionId, normalPyramidDirection, experimentalPyramidDirection,
                                            addLot, pyramidSL, origTP, "XAU-SNIPER|" + why,
                                            g_lastEntryGrade, why, addLot,
-                                           MathAbs(entryPx - pyramidSL), MathAbs(origTP - entryPx));
+                                           MathAbs(entryPx - pyramidSL), MathAbs(origTP - entryPx), entryPx);
 
    if(ok)
    {
@@ -13881,10 +13909,20 @@ void OnTick()
       lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "HEDGE";
       return;
    }
-   if(InpOneDirectionOnly && openDir != 0 && openDir != signal)
+   // v6.19.0-EXP1 CRITICAL FIX: `openDir` is REAL broker exposure -- in this
+   // inverse build that exposure is already on the INVERTED side. Comparing
+   // it against `signal` (the pre-inversion normal decision) is backwards:
+   // it can block a normal-BUY-that-will-execute-SELL from adding to an
+   // existing actual SELL (false block), and separately let a normal-SELL-
+   // that-will-execute-BUY through against an existing actual SELL, creating
+   // mixed exposure despite InpOneDirectionOnly=true (false allow -- the
+   // dangerous direction). Compare against the PLANNED EXECUTION direction.
+   int plannedExecutionDirection = XAU_PlannedExecutionDirection(signal);
+   if(InpOneDirectionOnly && openDir != 0 && openDir != plannedExecutionDirection)
    {
-      string hedgeMsg = StringFormat("HEDGE-GUARD: open %s exists; blocking new %s until current exposure closes.",
+      string hedgeMsg = StringFormat("HEDGE-GUARD: open %s exists; blocking new %s (normal decision %s) until current exposure closes.",
                                      openDir == 1 ? "BUY" : "SELL",
+                                     plannedExecutionDirection == 1 ? "BUY" : "SELL",
                                      signal == 1 ? "BUY" : "SELL");
       Print("TRADE BLOCKED BECAUSE: ", hedgeMsg);
       CloudPostReasoning("BLOCK", hedgeMsg, RegimeName(), setupName,
@@ -14746,11 +14784,17 @@ void OnTick()
    }
    // Cluster protection: reject fresh entries too close in price+time to an
    // existing same-direction position. Prevents reversal-amplifying stacks.
+   // v6.19.0-EXP1 CRITICAL FIX: this compares against REAL open positions
+   // (PositionType() inside EPF_IsClusteredEntry), which in this inverse
+   // build sit on the EXECUTION side, not the normal-decision side -- both
+   // the comparison direction and the reference price must use the planned
+   // execution direction (same `plannedExecutionDirection` resolved above
+   // for the exposure gate), not the raw pre-inversion `signal`.
    {
-      double curPx = (signal == 1)
+      double curPx = (plannedExecutionDirection == 1)
                      ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
                      : SymbolInfoDouble(Symbol(), SYMBOL_BID);
-      if(EPF_IsClusteredEntry(signal, curPx, bufATR[1]))
+      if(EPF_IsClusteredEntry(plannedExecutionDirection, curPx, bufATR[1]))
       {
          g_gateBlocks_EPF++; // v6.3.8 Upgrade 6
          Print("EPF CLUSTER VETO: entry too close to existing same-direction position");
@@ -15814,8 +15858,15 @@ bool XAU_CentralizedOpeningExecute(string entryPath, string decisionId,
                                     double lots, double slPrice, double tpPrice,
                                     string comment, string grade, string strategy,
                                     double requestedLot, double originalStopDistance,
-                                    double originalTargetDistance)
+                                    double originalTargetDistance,
+                                    double plannedEntryPrice)
 {
+   // ---- Structural input validation (never fall through to the SELL branch
+   // on a bad value) ----
+   if(normalDecisionDirection != 1 && normalDecisionDirection != -1)
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVALID_NORMAL_DECISION_DIRECTION value=%d", entryPath, decisionId, normalDecisionDirection); return false; }
+   if(executionDirection != 1 && executionDirection != -1)
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVALID_EXECUTION_DIRECTION value=%d", entryPath, decisionId, executionDirection); return false; }
    int directionInversions = (executionDirection == -normalDecisionDirection) ? 1
                             : (executionDirection ==  normalDecisionDirection) ? 0 : -1;
    if(XAUAI_INVERSE_EXPERIMENT && directionInversions != 1)
@@ -15823,17 +15874,219 @@ bool XAU_CentralizedOpeningExecute(string entryPath, string decisionId,
       PrintFormat("INVERSE_EXPERIMENT_CRITICAL_ABORT | EntryPath=%s | DecisionId=%s | DirectionInversions=%d | "
                   "NormalDecisionDirection=%s | ExecutionDirection=%s | order NOT sent",
                   entryPath, decisionId, directionInversions,
-                  normalDecisionDirection == 1 ? "BUY" : (normalDecisionDirection == -1 ? "SELL" : "NONE"),
-                  executionDirection == 1 ? "BUY" : (executionDirection == -1 ? "SELL" : "NONE"));
+                  normalDecisionDirection == 1 ? "BUY" : "SELL", executionDirection == 1 ? "BUY" : "SELL");
+      return false;
+   }
+   if(!(lots > 0.0) || !MathIsValidNumber(lots))
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVALID_LOTS value=%.6f", entryPath, decisionId, lots); return false; }
+   if(!(slPrice > 0.0) || !MathIsValidNumber(slPrice))
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVALID_SL_PRICE value=%.6f", entryPath, decisionId, slPrice); return false; }
+   if(!(tpPrice > 0.0) || !MathIsValidNumber(tpPrice))
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVALID_TP_PRICE value=%.6f", entryPath, decisionId, tpPrice); return false; }
+   if(StringLen(decisionId) == 0)
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | reason=EMPTY_DECISION_ID", entryPath); return false; }
+   // Item 7: a previously accepted order exists on the broker with no
+   // matching state record. Refuse every new open until it is reconciled --
+   // an accepted-but-untracked position must never be treated as a
+   // telemetry-only problem.
+   if(g_inverseStateRecoveryRequired)
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=STATE_RECOVERY_REQUIRED_BLOCKING_NEW_ENTRIES", entryPath, decisionId); return false; }
+
+   // ---- Duplicate-send protection: the SAME resolved DecisionId must never
+   // reach trade.Buy/Sell twice (a caller re-entering this function on a
+   // retry of the same already-resolved decision must not double-fire). ----
+   static string   g_lastSentDecisionId = "";
+   static datetime g_lastSentDecisionAt = 0;
+   if(decisionId == g_lastSentDecisionId && TimeCurrent() - g_lastSentDecisionAt < 3)
+   {
+      PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=DUPLICATE_SEND_SAME_DECISION_ID", entryPath, decisionId);
       return false;
    }
 
-   double entryPriceUsed = (executionDirection == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
-                                                       : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   // ---- Broker/symbol tradability ----
+   ENUM_SYMBOL_TRADE_MODE tmode = (ENUM_SYMBOL_TRADE_MODE)SymbolInfoInteger(Symbol(), SYMBOL_TRADE_MODE);
+   if(tmode == SYMBOL_TRADE_MODE_DISABLED || tmode == SYMBOL_TRADE_MODE_CLOSEONLY)
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=SYMBOL_TRADE_MODE_BLOCKED mode=%d", entryPath, decisionId, (int)tmode); return false; }
+   if(!(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=ACCOUNT_TRADE_NOT_ALLOWED", entryPath, decisionId); return false; }
+   if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=AUTOTRADING_DISABLED", entryPath, decisionId); return false; }
+
+   // ---- Item 1 (final piece): re-read ACTUAL exposure immediately before
+   // send. Between the caller's early gate and this call, another EA
+   // instance, a manual trade, a copier or an async broker event may have
+   // changed real exposure. Reject rather than send into a state the early
+   // gate never saw. ----
+   int sendBoundaryOpenDir = GetOpenExposureDirection();
+   if(InpBlockNewEntriesIfHedged && sendBoundaryOpenDir == 2)
+   {
+      PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=SEND_BOUNDARY_MIXED_EXPOSURE "
+                  "NormalDecisionDirection=%s ExecutionDirection=%s CurrentExposure=MIXED",
+                  entryPath, decisionId, normalDecisionDirection == 1 ? "BUY" : "SELL", executionDirection == 1 ? "BUY" : "SELL");
+      return false;
+   }
+   if(InpOneDirectionOnly && sendBoundaryOpenDir != 0 && sendBoundaryOpenDir != executionDirection)
+   {
+      PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=SEND_BOUNDARY_ONE_DIRECTION_CONFLICT "
+                  "NormalDecisionDirection=%s ExecutionDirection=%s CurrentExposure=%s",
+                  entryPath, decisionId, normalDecisionDirection == 1 ? "BUY" : "SELL", executionDirection == 1 ? "BUY" : "SELL",
+                  sendBoundaryOpenDir == 1 ? "BUY" : "SELL");
+      return false;
+   }
+
+   // ---- Item 4: this function is the authoritative final broker boundary.
+   // Refresh the quote, rebuild SL/TP from the ORIGINAL intended distances
+   // anchored to the CURRENT price (never trust a quote captured at planning
+   // time), reapply stop/freeze-level and tick-size normalization, and
+   // verify the result is still geometrically valid before sending. ----
+   MqlTick tick;
+   if(!SymbolInfoTick(Symbol(), tick) || tick.bid <= 0.0 || tick.ask <= 0.0)
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVALID_TICK", entryPath, decisionId); return false; }
+   double spreadPts = (tick.ask - tick.bid);
+   if(!MathIsValidNumber(spreadPts) || spreadPts < 0.0)
+   { PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVALID_SPREAD", entryPath, decisionId); return false; }
+
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+   if(tickSize <= 0.0) tickSize = point;
+   long stopLevelPts = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+   long freezeLevelPts = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
+   double minStopDist = MathMax(stopLevelPts, freezeLevelPts) * point;
+
+   double sendPrice = (executionDirection == 1) ? tick.ask : tick.bid;
+   double useStopDistance   = (originalStopDistance   > 0.0) ? originalStopDistance   : MathAbs(plannedEntryPrice - slPrice);
+   double useTargetDistance = (originalTargetDistance > 0.0) ? originalTargetDistance : MathAbs(tpPrice - plannedEntryPrice);
+   double refreshedSL = (executionDirection == 1)
+                       ? NormalizeDouble(sendPrice - useStopDistance, digits)
+                       : NormalizeDouble(sendPrice + useStopDistance, digits);
+   double refreshedTP = (executionDirection == 1)
+                       ? NormalizeDouble(sendPrice + useTargetDistance, digits)
+                       : NormalizeDouble(sendPrice - useTargetDistance, digits);
+   if(minStopDist > 0.0)
+   {
+      if(executionDirection == 1) { if(sendPrice - refreshedSL < minStopDist) refreshedSL = NormalizeDouble(sendPrice - minStopDist, digits); }
+      else                        { if(refreshedSL - sendPrice < minStopDist) refreshedSL = NormalizeDouble(sendPrice + minStopDist, digits); }
+   }
+   if(tickSize > 0.0)
+   {
+      refreshedSL = NormalizeDouble(MathRound(refreshedSL / tickSize) * tickSize, digits);
+      refreshedTP = NormalizeDouble(MathRound(refreshedTP / tickSize) * tickSize, digits);
+   }
+   bool slOnCorrectSide = (executionDirection == 1) ? (refreshedSL < sendPrice) : (refreshedSL > sendPrice);
+   bool tpOnCorrectSide = (executionDirection == 1) ? (refreshedTP > sendPrice) : (refreshedTP < sendPrice);
+   if(!slOnCorrectSide || !tpOnCorrectSide)
+   {
+      PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVALID_STOP_GEOMETRY_AT_SEND "
+                  "executionDirection=%s sendPrice=%.2f refreshedSL=%.2f refreshedTP=%.2f slOnCorrectSide=%s tpOnCorrectSide=%s",
+                  entryPath, decisionId, executionDirection == 1 ? "BUY" : "SELL", sendPrice, refreshedSL, refreshedTP,
+                  slOnCorrectSide ? "true" : "false", tpOnCorrectSide ? "true" : "false");
+      return false;
+   }
+   double priceDriftPts = MathAbs(sendPrice - plannedEntryPrice) / (point > 0.0 ? point : 1.0);
+
+   // ---- Items 2 & 3: revalidate ACTUAL inverse-side risk and margin using
+   // the REFRESHED geometry. The contract is "same lot as the normal bot" --
+   // never silently shrink it. Either it passes every hard cap unchanged, or
+   // the trade is aborted outright. ----
+   double actualInverseSLDistance = MathAbs(sendPrice - refreshedSL);
+   double actualInverseRiskPerLot = RiskPerLotForDistance(actualInverseSLDistance);
+   double actualInverseRiskUSD    = actualInverseRiskPerLot * lots;
+   double equityNow = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   double effSingleCapPct = EffectiveSingleRiskCapPct();
+   if(effSingleCapPct > 0.0 && equityNow > 0.0)
+   {
+      double maxSingleUSD = equityNow * effSingleCapPct / 100.0;
+      if(actualInverseRiskUSD > maxSingleUSD * 1.02) // 2% tolerance for lot-step rounding, matches XAU_ReconcileFinalRisk
+      {
+         PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVERSE_RISK_EXCEEDS_SINGLE_CAP "
+                     "actualInverseRiskUSD=%.2f capUSD=%.2f capPct=%.2f lots=%.2f slDistance=%.2f",
+                     entryPath, decisionId, actualInverseRiskUSD, maxSingleUSD, effSingleCapPct, lots, actualInverseSLDistance);
+         return false;
+      }
+   }
+
+   double effAggCapPct = EffectiveAggregateRiskCapPct();
+   double existingOpenLots = 0.0;
+   double existingAggRiskUSD = CurrentAggregateRiskToSL(existingOpenLots);
+   if(effAggCapPct > 0.0 && equityNow > 0.0)
+   {
+      double maxAggUSD = equityNow * effAggCapPct / 100.0;
+      if(existingAggRiskUSD + actualInverseRiskUSD > maxAggUSD * 1.02)
+      {
+         PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVERSE_RISK_EXCEEDS_AGGREGATE_CAP "
+                     "existingAggRiskUSD=%.2f actualInverseRiskUSD=%.2f capUSD=%.2f capPct=%.2f",
+                     entryPath, decisionId, existingAggRiskUSD, actualInverseRiskUSD, maxAggUSD, effAggCapPct);
+         return false;
+      }
+   }
+
+   double maxTotalLotsCap = InpMaxTotalLots;
+   if(maxTotalLotsCap <= 0.0) maxTotalLotsCap = MathMax(0.5, equityNow * 0.03 / 160.0); // same auto formula OpenTrade uses
+   if(existingOpenLots + lots > maxTotalLotsCap * 1.02)
+   {
+      PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVERSE_TOTAL_LOTS_EXCEEDS_CAP "
+                  "existingOpenLots=%.2f lots=%.2f capLots=%.2f", entryPath, decisionId, existingOpenLots, lots, maxTotalLotsCap);
+      return false;
+   }
+
+   double brokerMinLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   double brokerMaxLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
+   double brokerLotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+   if(lots < brokerMinLot - 1e-9 || lots > brokerMaxLot + 1e-9)
+   {
+      PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVERSE_LOT_OUTSIDE_BROKER_RANGE "
+                  "lots=%.4f min=%.4f max=%.4f", entryPath, decisionId, lots, brokerMinLot, brokerMaxLot);
+      return false;
+   }
+   if(brokerLotStep > 0.0)
+   {
+      double steps = lots / brokerLotStep;
+      if(MathAbs(steps - MathRound(steps)) > 0.001)
+      {
+         PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVERSE_LOT_NOT_STEP_ALIGNED "
+                     "lots=%.4f step=%.4f", entryPath, decisionId, lots, brokerLotStep);
+         return false;
+      }
+   }
+
+   // Item 3: margin check using the ACTUAL inverse order type/price/lots --
+   // never the pre-inversion normal-side estimate. Preferred behaviour is
+   // retain-or-abort, NOT a reduction loop, so the same-lot-as-normal-bot
+   // contract can never be quietly distorted by this check.
+   double freeMarginNow = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   double marginNeeded = 0.0;
+   ENUM_ORDER_TYPE inverseOrderType = (executionDirection == 1) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(OrderCalcMargin(inverseOrderType, Symbol(), lots, sendPrice, marginNeeded))
+   {
+      if(marginNeeded > freeMarginNow * 0.8)
+      {
+         PrintFormat("INVERSE_EXPERIMENT_ABORT | EntryPath=%s | DecisionId=%s | reason=INVERSE_MARGIN_LIMIT_EXCEEDED "
+                     "marginNeeded=%.2f freeMargin=%.2f thresholdPct=80 lots=%.2f | "
+                     "decision=RETAIN_OR_ABORT (never silently reduce the inverse lot to force it under margin)",
+                     entryPath, decisionId, marginNeeded, freeMarginNow, lots);
+         return false;
+      }
+   }
+
+   // ---- Broker comment length: truncate defensively rather than reject a
+   // safety-clean trade over a cosmetic string (MT5 comment fields are
+   // broker-limited, commonly ~63 bytes). ----
+   string sendComment = comment;
+   if(StringLen(sendComment) > 63)
+   {
+      sendComment = StringSubstr(sendComment, 0, 63);
+      PrintFormat("INVERSE_EXPERIMENT_COMMENT_TRUNCATED | DecisionId=%s | original=%s | truncated=%s", decisionId, comment, sendComment);
+   }
+
+   g_lastSentDecisionId = decisionId;
+   g_lastSentDecisionAt = TimeCurrent();
+
    datetime orderSendTime = TimeCurrent();
    bool ok = (executionDirection == 1)
-           ? trade.Buy (lots, Symbol(), 0, slPrice, tpPrice, comment)
-           : trade.Sell(lots, Symbol(), 0, slPrice, tpPrice, comment);
+           ? trade.Buy (lots, Symbol(), 0, refreshedSL, refreshedTP, sendComment)
+           : trade.Sell(lots, Symbol(), 0, refreshedSL, refreshedTP, sendComment);
    uint retcode = trade.ResultRetcode();
    bool accepted = ok && (retcode == TRADE_RETCODE_DONE || retcode == TRADE_RETCODE_DONE_PARTIAL ||
                           retcode == TRADE_RETCODE_PLACED);
@@ -15841,15 +16094,33 @@ bool XAU_CentralizedOpeningExecute(string entryPath, string decisionId,
    PrintFormat("OPENING_TELEMETRY | DecisionId=%s | EntryPath=%s | NormalDecisionDirection=%s | "
                "ExperimentalExecutionDirection=%s | DirectionInversions=%d | OriginalGrade=%s | Strategy=%s | "
                "RequestedLot=%.2f | FinalLot=%.2f | OriginalStopDistance=%.2f | OriginalTargetDistance=%.2f | "
-               "InverseEntryPrice=%.2f | InverseSL=%.2f | InverseTP=%.2f | OrderSendTime=%s | BrokerRetcode=%d | OrderSendOK=%s",
+               "PlannedEntryPrice=%.2f | SendBoundaryEntryPrice=%.2f | PriceDriftPoints=%.1f | "
+               "InverseEntryPrice=%.2f | InverseSL=%.2f | InverseTP=%.2f | ActualInverseRiskUSD=%.2f | "
+               "OrderSendTime=%s | BrokerRetcode=%d | OrderSendOK=%s",
                decisionId, entryPath,
                normalDecisionDirection == 1 ? "BUY" : "SELL", executionDirection == 1 ? "BUY" : "SELL",
                directionInversions, grade, strategy, requestedLot, lots,
                originalStopDistance, originalTargetDistance,
-               entryPriceUsed, slPrice, tpPrice,
+               plannedEntryPrice, sendPrice, priceDriftPts,
+               sendPrice, refreshedSL, refreshedTP, actualInverseRiskUSD,
                TimeToString(orderSendTime, TIME_DATE | TIME_SECONDS),
                (int)retcode, accepted ? "true" : "false");
    return accepted;
+}
+
+// Returns the direction that will actually reach the broker for a given
+// normal-strategy decision, WITHOUT sending anything. Every direction-
+// sensitive BROKER EXPOSURE gate (one-direction-only, duplicate-direction,
+// opposite-position checks, recovery/retry/manual duplicate checks) must
+// compare real account exposure against THIS value, never against the raw
+// normal-strategy signal -- the account's actual open positions are already
+// on the inverted side, so comparing them to the pre-inversion signal is
+// backwards and can both wrongly block a same-side add and wrongly allow a
+// genuine opposite-side conflict through.
+int XAU_PlannedExecutionDirection(int normalDirection)
+{
+   if(normalDirection != 1 && normalDirection != -1) return 0;
+   return XAUAI_INVERSE_EXPERIMENT ? -normalDirection : normalDirection;
 }
 
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
@@ -15928,9 +16199,17 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                 true, false, false, 0, 0, hedgeMsg, reason, 0.0);
       return false;
    }
-   if(InpOneDirectionOnly && openDir != 0 && openDir != signal)
+   // v6.19.0-EXP1 CRITICAL FIX: same backwards-comparison bug as the primary
+   // scan gate -- `signal` here is the NORMAL (pre-inversion) decision for
+   // every caller (primary, re-entry, recovery, manual all pass the normal
+   // direction into OpenTrade(), which performs the single inversion below),
+   // while `openDir` is REAL, already-inverted broker exposure. Must compare
+   // against the planned execution direction, not the raw normal signal.
+   int plannedExecutionDirection = XAU_PlannedExecutionDirection(signal);
+   if(InpOneDirectionOnly && openDir != 0 && openDir != plannedExecutionDirection)
    {
-      string oneDirMsg = StringFormat("OPEN TRADE BLOCKED: one-direction mode active. Existing exposure dir=%d new signal=%d", openDir, signal);
+      string oneDirMsg = StringFormat("OPEN TRADE BLOCKED: one-direction mode active. Existing exposure dir=%d normalSignal=%d plannedExecution=%d",
+                                      openDir, signal, plannedExecutionDirection);
       Print(oneDirMsg);
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "ExposureGate",
                                 signal, funnelSetup, funnelGrade, funnelScore,
@@ -17094,7 +17373,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    bool ok = XAU_CentralizedOpeningExecute(entryPath, candidateId, originalSignal, signal,
                                            lots, sl, tp, inverseComment,
                                            originalFinalGrade, funnelSetup,
-                                           originalLots, originalSLDist, originalTPDist);
+                                           originalLots, originalSLDist, originalTPDist, price);
    datetime orderSendTime = TimeCurrent();
 
    // Mandatory, explicit, greppable proof the BROKER ORDER ITSELF was inverted --
@@ -17166,9 +17445,26 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                                            originalSignal, signal,
                                                            originalPrice, originalSL, originalTP,
                                                            sl, tp, lastSignalSetup, g_pendingBrainGrade);
+      // v6.19.0-EXP1 item 7: a broker-accepted order can momentarily fail
+      // state capture (ResultDeal()==0, history not yet synchronized,
+      // position-lookup race). Never treat "accepted but untracked" as a
+      // telemetry-only problem -- retry briefly, then block further NEW
+      // entries until XAU_InverseReconcileUntracked() (called every tick)
+      // recovers this exact position.
+      for(int captureRetry = 0; captureRetry < 3 && !stateCaptured; captureRetry++)
+      {
+         Sleep(150);
+         stateCaptured = XAU_InverseExperimentRecordOpen(openedPosId, candidateId, entryPath, originalReason,
+                                                          originalSignal, signal,
+                                                          originalPrice, originalSL, originalTP,
+                                                          sl, tp, lastSignalSetup, g_pendingBrainGrade);
+      }
       if(!stateCaptured)
-         PrintFormat("INVERSE_STATE_MISMATCH DecisionId=%s posId=%I64u reason=POST_FILL_STATE_CAPTURE_FAILED",
-                     candidateId, openedPosId);
+      {
+         g_inverseStateRecoveryRequired = true;
+         PrintFormat("INVERSE_STATE_RECOVERY_REQUIRED DecisionId=%s posId=%I64u reason=POST_FILL_STATE_CAPTURE_FAILED_AFTER_RETRY "
+                     "action=NEW_ENTRIES_BLOCKED_UNTIL_RECONCILED", candidateId, openedPosId);
+      }
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ENTRY", "OrderSend",
                                 signal, funnelSetup, funnelGrade, funnelScore,
                                 true, true, "EXECUTED", "",
@@ -19852,15 +20148,46 @@ bool XAU_InverseExperimentRecordOpen(ulong posId, string decisionId, string entr
                   livePosId, actualEntry, actualSL, actualLot, originalRiskUSD);
       return false;
    }
-   if(existingRecord && entryPath == "PYRAMID")
+   ENUM_ACCOUNT_MARGIN_MODE marginMode = (ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE);
+
+   if(existingRecord && entryPath == "RESTART_RESTORE")
    {
-      // Netting accounts keep one POSITION_IDENTIFIER when adding. Merge the
-      // broker's new weighted-average position geometry into the existing
-      // inverse state without resetting peak/trough, close intent, or stage.
+      // A restart re-processes an ALREADY-TRACKED position with no new
+      // broker deal behind it -- resync live geometry only, never add risk
+      // or touch lifecycle/peak/trough/checkpoint state (item 7/restart
+      // restoration must not corrupt or re-seed the experiment record).
+      g_inverseExpRecords[idx].ticket = ticket;
+      g_inverseExpRecords[idx].entry  = actualEntry;
+      g_inverseExpRecords[idx].lot    = actualLot;
+      g_inverseExpRecords[idx].sl     = actualSL;
+      g_inverseExpRecords[idx].tp     = actualTP;
+      PrintFormat("INVERSE_STATE_RESYNC_ON_RESTART posId=%I64u ticket=%I64u marginMode=%d", livePosId, ticket, (int)marginMode);
+      return true;
+   }
+
+   if(existingRecord)
+   {
+      // v6.19.0-EXP1 CRITICAL FIX: on a NETTING account, a second leg from
+      // ANY add path -- PRIMARY, RE_ENTRY, RECOVERY, RETRY, MANUAL or
+      // PYRAMID -- can be merged by the broker into the SAME
+      // POSITION_IDENTIFIER as an already-tracked inverse position. This
+      // used to only be handled for entryPath=="PYRAMID"; every other add
+      // path fell through to the fresh-open block below and OVERWROTE the
+      // record, resetting original entry time, peak/trough, MAE/MFE,
+      // aggregate risk, stage and checkpoints. Merge every add path here.
+      if(marginMode == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+      {
+         // Hedging accounts give every position its own POSITION_IDENTIFIER;
+         // reaching here means posId collided with an existing record,
+         // which should never happen for a genuinely distinct position.
+         PrintFormat("INVERSE_STATE_MISMATCH posId=%I64u reason=UNEXPECTED_POSID_COLLISION_ON_HEDGING_ACCOUNT entryPath=%s marginMode=%d",
+                     livePosId, entryPath, (int)marginMode);
+         return false;
+      }
       if(g_inverseExpRecords[idx].originalSignal != originalSignal ||
          g_inverseExpRecords[idx].actualDirection != actualDirection)
       {
-         PrintFormat("INVERSE_STATE_MISMATCH posId=%I64u reason=NETTING_PYRAMID_DIRECTION_CONTRACT", livePosId);
+         PrintFormat("INVERSE_STATE_MISMATCH posId=%I64u reason=NETTING_ADD_DIRECTION_CONTRACT entryPath=%s", livePosId, entryPath);
          return false;
       }
       double oldVolume = g_inverseExpRecords[idx].lot;
@@ -19872,6 +20199,13 @@ bool XAU_InverseExperimentRecordOpen(ulong posId, string decisionId, string entr
          addFill = HistoryDealGetDouble(addDeal, DEAL_PRICE);
          addedVolume = HistoryDealGetDouble(addDeal, DEAL_VOLUME);
       }
+      if(addedVolume <= 0.0)
+      {
+         // No genuine new volume -- a duplicate/no-op re-call for the same
+         // live state. Leave the tracked record untouched.
+         PrintFormat("INVERSE_STATE_RECORD_OPEN_NOOP posId=%I64u reason=NO_NEW_VOLUME entryPath=%s", livePosId, entryPath);
+         return true;
+      }
       if(addFill <= 0.0) addFill = actualEntry;
       double addedRiskUSD = RiskPerLotForDistance(MathAbs(addFill - plannedInverseSL)) * addedVolume;
       double aggregateOriginalRiskUSD = g_inverseExpRecords[idx].originalRiskUSD + addedRiskUSD;
@@ -19880,6 +20214,7 @@ bool XAU_InverseExperimentRecordOpen(ulong posId, string decisionId, string entr
       g_inverseExpRecords[idx].ticket = ticket;
       g_inverseExpRecords[idx].entry = actualEntry;
       g_inverseExpRecords[idx].lot = actualLot;
+      g_inverseExpRecords[idx].sl = actualSL;
       g_inverseExpRecords[idx].tp = actualTP;
       g_inverseExpRecords[idx].rDist = aggregateRDist;
       g_inverseExpRecords[idx].targetDist = targetDist;
@@ -19887,13 +20222,20 @@ bool XAU_InverseExperimentRecordOpen(ulong posId, string decisionId, string entr
       g_inverseExpRecords[idx].r03 = NormalizeDouble(actualEntry + (actualDirection == 1 ? aggregateRDist * 0.30 : -aggregateRDist * 0.30), _Digits);
       g_inverseExpRecords[idx].r05 = NormalizeDouble(actualEntry + (actualDirection == 1 ? aggregateRDist * 0.50 : -aggregateRDist * 0.50), _Digits);
       g_inverseExpRecords[idx].r10 = NormalizeDouble(actualEntry + (actualDirection == 1 ? aggregateRDist : -aggregateRDist), _Digits);
-      g_inverseExpRecords[idx].entryPath = "PRIMARY+PYRAMID";
-      XAU_InverseExperimentAppend("PYRAMID_ADD", g_inverseExpRecords[idx], actualEntry,
+      // entryPath/decisionId become append-only trails so every leg's own
+      // candidate/DecisionId remains individually auditable -- never
+      // replaced, only extended.
+      if(StringFind(g_inverseExpRecords[idx].entryPath, entryPath) < 0)
+         g_inverseExpRecords[idx].entryPath = g_inverseExpRecords[idx].entryPath + "+" + entryPath;
+      if(StringFind(g_inverseExpRecords[idx].decisionId, decisionId) < 0)
+         g_inverseExpRecords[idx].decisionId = g_inverseExpRecords[idx].decisionId + ";" + decisionId;
+      XAU_InverseExperimentAppend(entryPath + "_ADD", g_inverseExpRecords[idx], actualEntry,
                                   aggregateOriginalRiskUSD > 0.0 ? PositionGetDouble(POSITION_PROFIT) / aggregateOriginalRiskUSD : 0.0,
-                                  0.0, (int)(TimeCurrent() - g_inverseExpRecords[idx].entryTime), "PYRAMID_ADD");
+                                  0.0, (int)(TimeCurrent() - g_inverseExpRecords[idx].entryTime), entryPath + "_ADD");
       XAU_InverseStateSave(true);
-      PrintFormat("INVERSE_NETTING_PYRAMID_STATE_MERGED ticket=%I64u posId=%I64u volume=%.2f weightedEntry=%.5f originalRiskUSD=%.2f",
-                  ticket, livePosId, actualLot, actualEntry, aggregateOriginalRiskUSD);
+      PrintFormat("INVERSE_NETTING_STATE_MERGED ticket=%I64u posId=%I64u entryPath=%s addedVolume=%.2f volume=%.2f weightedEntry=%.5f "
+                  "addedRiskUSD=%.2f originalRiskUSD=%.2f marginMode=%d",
+                  ticket, livePosId, entryPath, addedVolume, actualLot, actualEntry, addedRiskUSD, aggregateOriginalRiskUSD, (int)marginMode);
       return true;
    }
    g_inverseExpRecords[idx].active = true;
@@ -20345,6 +20687,14 @@ void XAU_ManageInverseExperimentPositionsCore()
          if(!XAU_InverseInitializeMissingLiveState()) continue;
          idx = XAU_InverseExperimentFind(posId);
          if(idx < 0 || !posInfo.SelectByTicket(ticket)) continue;
+         // Item 7: this tick's per-position reconciliation just recovered a
+         // previously untracked live position -- if that was the reason new
+         // entries were blocked, clear the block now that it is tracked.
+         if(g_inverseStateRecoveryRequired)
+         {
+            g_inverseStateRecoveryRequired = false;
+            PrintFormat("INVERSE_STATE_RECOVERY_RESOLVED posId=%I64u ticket=%I64u action=NEW_ENTRIES_UNBLOCKED", posId, ticket);
+         }
       }
       double curPrice = posInfo.PriceCurrent();
       double curSL = posInfo.StopLoss();
@@ -22765,17 +23115,48 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       if(inverseNet >= 0.01) wins++;
       else if(inverseNet <= -0.01) losses++;
       lastTradeClose = TimeCurrent();
-      lastClose.valid = false;
-      lastClose.reEntered = false;
       PrintFormat("INVERSE_EXPERIMENT_CLOSE_CONFIRMED posId=%I64u deal=%I64u DecisionId=%s originalNormalDirection=%s actualExecutionDirection=%s exitReason=%s realizedR=%.3f realizedUSD=%.2f price=%.5f normalLearningWrites=SKIPPED",
                   posId, dealTicket, decisionId,
                   originalNormalDirection == 1 ? "BUY" : "SELL",
                   actualExecutionDirection == 1 ? "BUY" : "SELL",
                   inverseExitReason, inverseR, inverseNet, finalExitPrice);
-      PrintFormat("INVERSE_REENTRY_PARITY_UNAVAILABLE posId=%I64u DecisionId=%s action=DO_NOT_DERIVE_NORMAL_REENTRY_FROM_INVERSE_OUTCOME originalNormalDirection=%s actualExecutionDirection=%s",
+
+      // v6.19.0-EXP1: experiment-local re-entry. `lastClose.dir` is the
+      // ACTUAL side that closed -- every existing qualification check in
+      // CheckReEntryOpportunity() (direction lockout, price-improvement,
+      // XAU_ClassifySetup, XAU_TimingEngineConfirmsEntry) keeps reasoning
+      // against it unchanged, exactly as before. `lastClose.originalNormalDir`
+      // additionally carries the STORED original normal decision for this
+      // same trade, so the eventual OpenTrade() call can pass the normal
+      // direction (not the actual direction) and let OpenTrade's own single
+      // inversion reproduce the correct actual re-entry side -- this is the
+      // exact bug class fixed earlier for the primary RE_ENTRY path, now
+      // applied to the inverse-experiment lifecycle too. No normal
+      // production learning counter is touched anywhere in this block.
+      lastClose.valid             = true;
+      lastClose.wasLoss           = (inverseNet <= -0.01);
+      lastClose.reEntered         = false;
+      lastClose.dir               = actualExecutionDirection;
+      lastClose.originalNormalDir = originalNormalDirection;
+      lastClose.entryPrice        = g_inverseExpRecords[inverseIdx].entry;
+      lastClose.closePrice        = finalExitPrice;
+      lastClose.slDist            = g_inverseExpRecords[inverseIdx].rDist;
+      lastClose.lots              = g_inverseExpRecords[inverseIdx].lot;
+      lastClose.profit            = inverseNet;
+      lastClose.closeTime         = TimeCurrent();
+      lastClose.signature         = decisionId;
+      lastClose.setup             = g_inverseExpRecords[inverseIdx].setup;
+      lastClose.exitReason        = inverseExitReason;
+
+      int expectedActualExecutionDirection = -originalNormalDirection;
+      PrintFormat("INVERSE_REENTRY_ARMED posId=%I64u DecisionId=%s OriginalNormalDirection=%s PriorActualDirection=%s "
+                  "NextNormalDecisionDirection=%s ExpectedActualExecutionDirection=%s ParityHolds=%s",
                   posId, decisionId,
                   originalNormalDirection == 1 ? "BUY" : "SELL",
-                  actualExecutionDirection == 1 ? "BUY" : "SELL");
+                  actualExecutionDirection == 1 ? "BUY" : "SELL",
+                  originalNormalDirection == 1 ? "BUY" : "SELL",
+                  expectedActualExecutionDirection == 1 ? "BUY" : "SELL",
+                  (expectedActualExecutionDirection == actualExecutionDirection) ? "true" : "false");
       BotMonitorDecisionEvent("INVERSE_TRADE_CLOSED", "EXIT", "INVERSE_EXPERIMENT_MANAGER",
                               StringFormat("Inverse experiment closed: %.3fR $%.2f", inverseR, inverseNet),
                               true, inverseExitReason, "INVERSE_EXPERIMENT", (string)((long)posId),

@@ -37,8 +37,12 @@ def test_normal_buy_executes_sell_and_normal_sell_executes_buy_for_all_approved_
         r"bool ok = XAU_CentralizedOpeningExecute\(entryPath, candidateId, originalSignal, signal,",
         text,
     )
-    assert re.search(r"\? trade\.Buy \(lots, Symbol\(\), 0, slPrice, tpPrice, comment\)", text)
-    assert re.search(r": trade\.Sell\(lots, Symbol\(\), 0, slPrice, tpPrice, comment\);", text)
+    # v6.19.0-EXP1 forensic repair: the centralized function is now the
+    # authoritative final send boundary -- it refreshes the quote and rebuilds
+    # SL/TP immediately before sending rather than trusting the caller's
+    # (possibly stale) planning-time slPrice/tpPrice.
+    assert re.search(r"\? trade\.Buy \(lots, Symbol\(\), 0, refreshedSL, refreshedTP, sendComment\)", text)
+    assert re.search(r": trade\.Sell\(lots, Symbol\(\), 0, refreshedSL, refreshedTP, sendComment\);", text)
 
 
 def _eligible_inversion_block(text):
@@ -407,18 +411,26 @@ def test_pyramid_uses_explicit_normal_contract_and_centralized_opposite_executio
     pyramid = text[start:text.index("void OnTick()", start)]
     assert "dir = g_inverseExpRecords[baseInverseIdx].originalSignal" in pyramid
     assert "int normalPyramidDirection = dir;" in pyramid
-    assert "int experimentalPyramidDirection = -normalPyramidDirection;" in pyramid
+    # tied to the SAME variable used for the real order's price/SL/lot below,
+    # not re-derived independently -- algebraically equal to -normalPyramidDirection
+    assert "int experimentalPyramidDirection = executionIsBuy ? 1 : -1;" in pyramid
     assert 'XAU_CentralizedOpeningExecute("PYRAMID"' in pyramid
     assert 'XAU_InverseExperimentRecordOpen(pyramidPosId, pyramidDecisionId, "PYRAMID"' in pyramid
 
 
 def test_netting_pyramid_merges_only_an_existing_record():
+    # v6.19.0-EXP1 forensic repair: merging is no longer limited to PYRAMID --
+    # any add path (PRIMARY, RE_ENTRY, RECOVERY, RETRY, MANUAL, PYRAMID) on a
+    # netting account merges into an existing tracked record; RESTART_RESTORE
+    # gets its own resync-only branch. See test_xau_v6190_exp1_centralized_
+    # opening_boundary_static.py for the full merge-generalization proof.
     text = src()
     record = text[text.index("bool XAU_InverseExperimentRecordOpen("):text.index("void XAU_InverseExperimentUpdate(")]
     assert "bool existingRecord = (idx >= 0);" in record
-    assert 'if(existingRecord && entryPath == "PYRAMID")' in record
-    assert "INVERSE_NETTING_PYRAMID_STATE_MERGED" in record
-    merge = record[record.index('if(existingRecord && entryPath == "PYRAMID")'):record.index("g_inverseExpRecords[idx].active = true;")]
+    assert 'if(existingRecord && entryPath == "PYRAMID")' not in record
+    assert "if(existingRecord)" in record
+    assert "INVERSE_NETTING_STATE_MERGED" in record
+    merge = record[record.index("if(existingRecord)"):record.index("g_inverseExpRecords[idx].active = true;")]
     assert "peakProfit =" not in merge
     assert "troughProfit =" not in merge
     assert "closeState =" not in merge
