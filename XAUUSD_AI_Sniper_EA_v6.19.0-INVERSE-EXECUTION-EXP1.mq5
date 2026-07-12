@@ -1572,7 +1572,7 @@
 
 #define XAUAI_EA_VERSION "v6.19.0-INVERSE-EXECUTION-EXP1"
 #define XAUAI_EA_VERSION_NUM "6.19.0.9001"
-#define XAUAI_BUILD_HASH "v6190-inverse-execution-exp1-20260710"
+#define XAUAI_BUILD_HASH "v6190-inverse-exp1-hardening-20260712"
 #define XAUAI_INVERSE_EXPERIMENT true
 
 #include <Trade\Trade.mqh>
@@ -3240,33 +3240,77 @@ struct TradeBrainClosedWatch
 };
 TradeBrainClosedWatch g_brainClosedWatch[];
 
+enum ENUM_XAU_InverseCloseState
+{
+   INVERSE_CLOSE_NONE = 0,
+   INVERSE_CLOSE_HOLD_TO_1R,
+   INVERSE_CLOSE_REQUESTED,
+   INVERSE_CLOSE_PENDING_RETRY,
+   INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION,
+   INVERSE_CLOSE_CLOSED_CONFIRMED
+};
+
+#define XAU_INVERSE_STATE_SCHEMA 2
+
 struct XAU_InverseExperimentRecord
 {
    bool     active;
+   bool     finalized;
+   long     accountLogin;
+   string   brokerServer;
+   string   symbol;
+   long     magic;
+   ulong    ticket;
    ulong    posId;
    datetime entryTime;
    int      originalSignal;         // the NORMAL strategy's finalized direction, captured before any inversion decision
    int      actualDirection;        // what was actually sent to the broker
    bool     inversionApplied;       // always true for any record in this array -- all normal-approved grades are inverted
+   bool     exactRiskKnown;
    string   decisionId;
+   string   entryPath;
+   string   entryReason;
+   double   originalPlanEntry;
+   double   originalPlanSL;
+   double   originalPlanTP;
    double   entry;
    double   lot;
    double   sl;
    double   tp;
    double   rDist;
+   double   targetDist;
+   double   originalRiskUSD;
    double   r03;
    double   r05;
    double   r10;
    double   mae;
    double   mfe;
+   double   peakProfit;
+   double   troughProfit;
    double   peakR;
+   double   troughR;
    datetime time03;
    datetime time05;
    datetime time10;
+   int      stage;
+   ENUM_XAU_InverseCloseState closeState;
+   string   pendingCloseReason;
+   datetime firstCloseRequestTime;
+   datetime lastCloseRetryTime;
+   int      closeRetryCount;
+   long     lastBrokerRetcode;
+   int      lastCloseError;
+   double   requestedCloseR;
+   double   requestedCloseProfit;
+   double   lastProtectedSL;
+   bool     checkpoint03;
+   bool     checkpoint05;
+   bool     checkpoint10;
    string   setup;
    string   grade;
 };
 XAU_InverseExperimentRecord g_inverseExpRecords[];
+datetime g_inverseLastStateSaveAt = 0;
 
 // ======================================================================
 // v6.4.19 — TRADE THESIS MONITOR (TTM)
@@ -7395,6 +7439,8 @@ int OnInit()
          InpSTI_ExhaustionBlock, InpSTI_ExhaustionReduce,
          InpSTI_TCPContinueMinimum,
          InpSTI_ReentryPullbackATR, InpSTI_ReentryMinWaitMin));
+   XAU_InverseStateLoad();
+   XAU_InverseReconcileState(true);
    XAU_WriteLocalReportHeartbeat(true);
    return INIT_SUCCEEDED;
 }
@@ -7402,6 +7448,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   XAU_InverseStateSave(true);
    PrintBacktestAuditReport();
    IndicatorRelease(hEMAFast); IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI); IndicatorRelease(hATR); IndicatorRelease(hBBUpper);
@@ -8303,19 +8350,12 @@ void CheckReEntryOpportunity()
    // re-entries and marked this closed trade as "already re-entered" even
    // though no re-entry ever happened. Only consume them on a confirmed fill.
    //
-   // v6.19.0-EXP1 CRITICAL FIX: lastClose.dir is the ACTUAL (already-inverted)
-   // broker side of the position that just closed (derived from the closing
-   // deal's DEAL_TYPE, not from a fresh normal-strategy signal -- see the
-   // dirStr assignment near the TRADE-BRAIN CLOSE block). OpenTrade()
-   // unconditionally applies exactly one inversion to whatever direction it
-   // receives. Passing lastClose.dir straight through therefore silently
-   // double-inverted every re-entry: a SELL that just stopped out was being
-   // re-opened as BUY, contradicting this function's own documented contract
-   // ("RE_ENTRY re-adds the SAME direction that just stopped out", file header
-   // above). Pass the normal-equivalent direction (Opposite of the actual
-   // closed side) so OpenTrade's single inversion reproduces lastClose.dir --
-   // the actually-intended re-entry side -- as the executed direction.
-   int normalReEntryDirection = -lastClose.dir;
+   // In the inverse build lastClose.dir, when supplied by a legitimate normal
+   // lifecycle source, is always the ORIGINAL NORMAL direction. Inverse deal
+   // outcomes never populate lastClose because they cannot prove what the
+   // corresponding normal trade outcome would have been. OpenTrade performs
+   // the one and only inversion at the centralized execution boundary.
+   int normalReEntryDirection = lastClose.dir;
    if(OpenTrade(normalReEntryDirection, bufATR[1], "RE_ENTRY", InpReEntrySize))
    {
       lastClose.reEntered = true;  // one-shot per original close
@@ -10568,7 +10608,7 @@ void CheckPyramidOpportunity()
    if(openCount >= InpMaxOpenTrades) return;                // global cap
 
    // Find the ORIGINAL (oldest) position in our magic + determine direction
-   ulong  origTicket = 0;
+   ulong  origTicket = 0, origPosId = 0;
    datetime origTime = 0;
    long   origType   = -1;
    double origPx     = 0, origSL = 0, origLot = 0, smallestLot = 1e9;
@@ -10583,6 +10623,7 @@ void CheckPyramidOpportunity()
       datetime pt = (datetime)PositionGetInteger(POSITION_TIME);
       if(origTime == 0 || pt < origTime)
       { origTime = pt; origTicket = tk; origType = posInfo.PositionType();
+        origPosId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
         origPx = posInfo.PriceOpen(); origSL = posInfo.StopLoss();
         origLot = posInfo.Volume(); }
       if(posInfo.PositionType() == POSITION_TYPE_BUY)  totalBuys++;
@@ -10593,8 +10634,20 @@ void CheckPyramidOpportunity()
    }
    if(origTicket == 0 || origType < 0) return;
 
-   bool isBuy = (origType == POSITION_TYPE_BUY);
-   int dir = isBuy ? 1 : -1;
+   bool actualBaseIsBuy = (origType == POSITION_TYPE_BUY);
+   int actualBaseDirection = actualBaseIsBuy ? 1 : -1;
+   double actualBaseEntry = origPx;
+   double actualBaseSL = origSL;
+   int baseInverseIdx = XAU_InverseExperimentFind(origPosId);
+   int dir = actualBaseDirection;
+   if(XAUAI_INVERSE_EXPERIMENT && baseInverseIdx >= 0)
+   {
+      dir = g_inverseExpRecords[baseInverseIdx].originalSignal;
+      origPx = g_inverseExpRecords[baseInverseIdx].originalPlanEntry;
+      origSL = g_inverseExpRecords[baseInverseIdx].originalPlanSL;
+   }
+   bool isBuy = (dir == 1); // normal v6.19 pyramid decision semantics
+   bool executionIsBuy = !isBuy; // exactly one inversion at final execution
 
    // Must not have opposite positions hedging (skip — ambiguous)
    if(totalBuys > 0 && totalSells > 0) return;
@@ -11213,8 +11266,8 @@ void CheckPyramidOpportunity()
       return;
    }
    double marginNeeded = 0;
-   ENUM_ORDER_TYPE ot = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   if(OrderCalcMargin(ot, Symbol(), addLot, isBuy ? ask : bid, marginNeeded))
+   ENUM_ORDER_TYPE ot = executionIsBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(OrderCalcMargin(ot, Symbol(), addLot, executionIsBuy ? ask : bid, marginNeeded))
    {
       // v4.6.0 — relaxed from 0.5 → 0.7 so pyramid can fire even when 60% of margin is in use
       if(marginNeeded > freeMargin * 0.7)
@@ -11230,7 +11283,7 @@ void CheckPyramidOpportunity()
 
    // SL same as original's SL (anchor risk).  TP = original's TP (shared).
    int    digits  = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
-   double entryPx = isBuy ? ask : bid;
+   double entryPx = executionIsBuy ? ask : bid;
 
    // Compose reason label
    string why = "";
@@ -11260,19 +11313,19 @@ void CheckPyramidOpportunity()
    // pyramid add would inherit a dangerously tight SL relative to its own entry
    // price (adverse/trend continuation price). Instead, place a fresh ATR-based
    // SL for the pyramid add so it has normal breathing room.
-   double pyramidSL = origSL;
+   double pyramidSL = actualBaseSL;
    double freshSlDist = atr * InpSLMultiplier;
-   if(isBuy && origSL > origPx)
+   if(executionIsBuy && actualBaseSL > actualBaseEntry)
    {
       pyramidSL = NormalizeDouble(entryPx - freshSlDist, digits);
-      Print("PYRAMID SL: origSL ", DoubleToString(origSL, digits),
+      Print("PYRAMID SL: origSL ", DoubleToString(actualBaseSL, digits),
             " was BE-locked — using fresh SL ", DoubleToString(pyramidSL, digits),
             " (", DoubleToString(freshSlDist, 2), " pts = ", DoubleToString(InpSLMultiplier, 2), "xATR)");
    }
-   if(!isBuy && origSL > 0 && origSL < origPx)
+   if(!executionIsBuy && actualBaseSL > 0 && actualBaseSL < actualBaseEntry)
    {
       pyramidSL = NormalizeDouble(entryPx + freshSlDist, digits);
-      Print("PYRAMID SL: origSL ", DoubleToString(origSL, digits),
+      Print("PYRAMID SL: origSL ", DoubleToString(actualBaseSL, digits),
             " was BE-locked — using fresh SL ", DoubleToString(pyramidSL, digits),
             " (", DoubleToString(freshSlDist, 2), " pts = ", DoubleToString(InpSLMultiplier, 2), "xATR)");
    }
@@ -11356,12 +11409,12 @@ void CheckPyramidOpportunity()
    {
       double pyrMarginNeeded = 0.0;
       double pyrFreeMargin = accInfo.FreeMargin();
-      if(OrderCalcMargin(isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), addLot, entryPx, pyrMarginNeeded))
+      if(OrderCalcMargin(executionIsBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), addLot, entryPx, pyrMarginNeeded))
       {
          while(addLot > minLot && pyrMarginNeeded > pyrFreeMargin * 0.5)
          {
             addLot -= lotStep; addLot = MathMax(minLot, addLot);
-            if(!OrderCalcMargin(isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), addLot, entryPx, pyrMarginNeeded))
+            if(!OrderCalcMargin(executionIsBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), addLot, entryPx, pyrMarginNeeded))
             {
                Print("PYRAMID MARGIN PROJECTION: OrderCalcMargin failed while reducing add -- skip add.");
                return;
@@ -11456,15 +11509,49 @@ void CheckPyramidOpportunity()
    // the normal bot's corresponding pyramid decision was, per the requirement
    // that the experiment must not infer that fact only from its own actual
    // position side.
-   int normalPyramidDirection = XAUAI_INVERSE_EXPERIMENT ? -dir : dir;
+   int normalPyramidDirection = dir;
+   int experimentalPyramidDirection = -normalPyramidDirection;
    string pyramidDecisionId = XAU_ExperimentDecisionId("PYRAMID:" + why, g_lastEntryGrade, normalPyramidDirection);
-   bool ok = XAU_CentralizedOpeningExecute("PYRAMID", pyramidDecisionId, normalPyramidDirection, dir,
+   bool ok = XAU_CentralizedOpeningExecute("PYRAMID", pyramidDecisionId, normalPyramidDirection, experimentalPyramidDirection,
                                            addLot, pyramidSL, origTP, "XAU-SNIPER|" + why,
                                            g_lastEntryGrade, why, addLot,
                                            MathAbs(entryPx - pyramidSL), MathAbs(origTP - entryPx));
 
    if(ok)
    {
+      ulong pyramidDeal = trade.ResultDeal();
+      ulong pyramidPosId = 0;
+      if(pyramidDeal > 0 && HistoryDealSelect(pyramidDeal))
+         pyramidPosId = (ulong)HistoryDealGetInteger(pyramidDeal, DEAL_POSITION_ID);
+      if(pyramidPosId == 0)
+      {
+         datetime newestPyr = 0;
+         for(int pi = PositionsTotal() - 1; pi >= 0; pi--)
+         {
+            ulong tk = PositionGetTicket(pi);
+            if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+            if((long)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber || PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+            int liveDir = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+            datetime openedAt = (datetime)PositionGetInteger(POSITION_TIME);
+            if(liveDir == experimentalPyramidDirection && openedAt >= TimeCurrent() - 5 && openedAt >= newestPyr)
+            {
+               newestPyr = openedAt;
+               pyramidPosId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+            }
+         }
+      }
+      double normalPyramidEntry = normalPyramidDirection == 1 ? ask : bid;
+      double pyramidRiskDist = MathAbs(entryPx - pyramidSL);
+      double normalPyramidSL = normalPyramidDirection == 1
+                             ? normalPyramidEntry - pyramidRiskDist
+                             : normalPyramidEntry + pyramidRiskDist;
+      double normalPyramidTP = normalPyramidDirection == 1
+                             ? normalPyramidEntry + MathAbs(origTP - entryPx)
+                             : normalPyramidEntry - MathAbs(origTP - entryPx);
+      XAU_InverseExperimentRecordOpen(pyramidPosId, pyramidDecisionId, "PYRAMID", why,
+                                      normalPyramidDirection, experimentalPyramidDirection,
+                                      normalPyramidEntry, normalPyramidSL, normalPyramidTP,
+                                      pyramidSL, origTP, why, g_lastEntryGrade);
       lastPyramidAddTime = TimeCurrent();
       lastPyramidPx      = entryPx;       // v5.3.0 — for ATR spacing gate
       todayTradeCount++;
@@ -11486,7 +11573,7 @@ void CheckPyramidOpportunity()
          if(InpAccountMode == ACCT_BALANCED)     riskHintPct = 1.2;
          if(InpAccountMode == ACCT_CONSERVATIVE) riskHintPct = 0.6;
          if(InpAccountMode == ACCT_AGGRESSIVE)   riskHintPct = 2.0;
-         string sigId = CloudPostSignal(Symbol(), isBuy ? "BUY" : "SELL",
+         string sigId = CloudPostSignal(Symbol(), executionIsBuy ? "BUY" : "SELL",
                                         entryPx, pyramidSL, origTP,
                                         "PYR", riskHintPct,
                                         addLot, accInfo.Balance());
@@ -11494,7 +11581,7 @@ void CheckPyramidOpportunity()
          CloudPostReasoning("PYR", StringFormat("PYRAMID #%d %.2f lot @%.2f — %s | q=%.0f sizeMulti=%.2f",
                                                 openCount + 1, addLot, entryPx, why,
                                                 pyramidQuality, pyramidSizeMulti),
-                            RegimeName(), "", 0.0, 0.0, "PYR", isBuy ? +1 : -1);
+                            RegimeName(), "", 0.0, 0.0, "PYR", executionIsBuy ? +1 : -1);
       }
    }
    else
@@ -12303,7 +12390,7 @@ void OnTick()
    }
 
    double weeklyPnL = equity - weeklyStartEquity;
-   if(!noLimitMode && InpWeeklyTarget > 0 && weeklyPnL >= weeklyStartEquity * InpWeeklyTarget / 100.0)
+   if(!XAUAI_INVERSE_EXPERIMENT && !noLimitMode && InpWeeklyTarget > 0 && weeklyPnL >= weeklyStartEquity * InpWeeklyTarget / 100.0)
    {
       if(!weeklyTargetHit) { CloseAll("WEEKLY_TARGET_HIT"); Print("WEEKLY TARGET HIT: +$", DoubleToString(weeklyPnL, 2)); }
       weeklyTargetHit = true;
@@ -15747,6 +15834,9 @@ bool XAU_CentralizedOpeningExecute(string entryPath, string decisionId,
    bool ok = (executionDirection == 1)
            ? trade.Buy (lots, Symbol(), 0, slPrice, tpPrice, comment)
            : trade.Sell(lots, Symbol(), 0, slPrice, tpPrice, comment);
+   uint retcode = trade.ResultRetcode();
+   bool accepted = ok && (retcode == TRADE_RETCODE_DONE || retcode == TRADE_RETCODE_DONE_PARTIAL ||
+                          retcode == TRADE_RETCODE_PLACED);
 
    PrintFormat("OPENING_TELEMETRY | DecisionId=%s | EntryPath=%s | NormalDecisionDirection=%s | "
                "ExperimentalExecutionDirection=%s | DirectionInversions=%d | OriginalGrade=%s | Strategy=%s | "
@@ -15758,8 +15848,8 @@ bool XAU_CentralizedOpeningExecute(string entryPath, string decisionId,
                originalStopDistance, originalTargetDistance,
                entryPriceUsed, slPrice, tpPrice,
                TimeToString(orderSendTime, TIME_DATE | TIME_SECONDS),
-               (int)trade.ResultRetcode(), ok ? "true" : "false");
-   return ok;
+               (int)retcode, accepted ? "true" : "false");
+   return accepted;
 }
 
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
@@ -16873,6 +16963,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double originalSLDist = MathAbs(originalPrice - originalSL);
    double originalTPDist = MathAbs(originalTP - originalPrice);
    double originalLots   = lots;
+   string originalReason = reason;
+   string entryPath = isManualOverride ? "MANUAL"
+                    : (StringFind(originalReason, "RE_ENTRY") >= 0) ? "RE_ENTRY"
+                    : (StringFind(originalReason, "RECOVERY") >= 0) ? "RECOVERY"
+                    : (StringFind(originalReason, "RETRY") >= 0) ? "RETRY"
+                    : "PRIMARY";
 
    int execSignal; double execPrice, execSL, execTP, execLots; string candidateId;
 
@@ -16995,10 +17091,6 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
 
    string inverseComment = "INV_EXP|NORMAL_" + (originalSignal==1?"BUY":"SELL") + "|ACTUAL_" + (signal==1?"BUY":"SELL");
    double spreadAtSend = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-   string entryPath = isManualOverride ? "MANUAL"
-                     : (StringFind(reason, "RE_ENTRY") >= 0)  ? "RE_ENTRY"
-                     : (StringFind(reason, "RECOVERY") >= 0)  ? "RECOVERY"
-                     : "PRIMARY";
    bool ok = XAU_CentralizedOpeningExecute(entryPath, candidateId, originalSignal, signal,
                                            lots, sl, tp, inverseComment,
                                            originalFinalGrade, funnelSetup,
@@ -17024,7 +17116,23 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    ulong openedPosId = 0;
    if(ok && openedDealTicket > 0 && HistoryDealSelect(openedDealTicket))
       openedPosId = (ulong)HistoryDealGetInteger(openedDealTicket, DEAL_POSITION_ID);
-   if(ok && openedPosId == 0) openedPosId = trade.ResultOrder(); // fallback (broker-dependent)
+   if(ok && openedPosId == 0)
+   {
+      datetime newest = 0;
+      for(int pi = PositionsTotal() - 1; pi >= 0; pi--)
+      {
+         ulong tk = PositionGetTicket(pi);
+         if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+         if((long)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber || PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+         int liveDir = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+         datetime openedAt = (datetime)PositionGetInteger(POSITION_TIME);
+         if(liveDir == signal && openedAt >= approvalTime - 5 && openedAt >= newest)
+         {
+            newest = openedAt;
+            openedPosId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+         }
+      }
+   }
 
    if(ok)
    {
@@ -17054,8 +17162,13 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       // Memory isolation: inverse outcomes are experiment data, not production
       // TradeBrain evidence. Do not teach the normal strategy that an
       // original BUY was a SELL or vice versa.
-      XAU_InverseExperimentRecordOpen(openedPosId, candidateId, originalSignal, signal, price,
-                                      lots, sl, tp, lastSignalSetup, g_pendingBrainGrade);
+      bool stateCaptured = XAU_InverseExperimentRecordOpen(openedPosId, candidateId, entryPath, originalReason,
+                                                           originalSignal, signal,
+                                                           originalPrice, originalSL, originalTP,
+                                                           sl, tp, lastSignalSetup, g_pendingBrainGrade);
+      if(!stateCaptured)
+         PrintFormat("INVERSE_STATE_MISMATCH DecisionId=%s posId=%I64u reason=POST_FILL_STATE_CAPTURE_FAILED",
+                     candidateId, openedPosId);
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ENTRY", "OrderSend",
                                 signal, funnelSetup, funnelGrade, funnelScore,
                                 true, true, "EXECUTED", "",
@@ -19468,6 +19581,177 @@ string XAU_InverseExperimentFile()
    return "XAUAI_Inverse_Experiment_" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + "_" + Symbol() + ".csv";
 }
 
+string XAU_InverseSafeKey(string value)
+{
+   StringReplace(value, "\\", "_");
+   StringReplace(value, "/", "_");
+   StringReplace(value, ":", "_");
+   StringReplace(value, ".", "_");
+   StringReplace(value, " ", "_");
+   return value;
+}
+
+string XAU_InverseStateFile()
+{
+   return "XAUAI_INV_STATE_v2_" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + "_" +
+          XAU_InverseSafeKey(AccountInfoString(ACCOUNT_SERVER)) + "_" +
+          XAU_InverseSafeKey(Symbol()) + "_" + (string)InpMagicNumber + ".csv";
+}
+
+string XAU_InverseCloseStateName(ENUM_XAU_InverseCloseState state)
+{
+   if(state == INVERSE_CLOSE_HOLD_TO_1R) return "HOLD_TO_1R";
+   if(state == INVERSE_CLOSE_REQUESTED) return "CLOSE_REQUESTED";
+   if(state == INVERSE_CLOSE_PENDING_RETRY) return "CLOSE_PENDING_RETRY";
+   if(state == INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION) return "CLOSE_ACCEPTED_AWAITING_CONFIRMATION";
+   if(state == INVERSE_CLOSE_CLOSED_CONFIRMED) return "CLOSED_CONFIRMED";
+   return "NONE";
+}
+
+bool XAU_InverseSelectLivePosition(ulong posId, ulong ticket = 0)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      ulong ident = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      if((posId > 0 && ident == posId) || (ticket > 0 && tk == ticket)) return true;
+   }
+   return false;
+}
+
+int XAU_InverseExperimentFind(ulong key)
+{
+   for(int i = 0; i < ArraySize(g_inverseExpRecords); i++)
+      if(g_inverseExpRecords[i].active &&
+         (g_inverseExpRecords[i].posId == key || g_inverseExpRecords[i].ticket == key))
+         return i;
+   return -1;
+}
+
+bool XAU_IsInverseExperimentPosition(ulong key)
+{
+   if(!XAUAI_INVERSE_EXPERIMENT) return false;
+   if(XAU_InverseExperimentFind(key) >= 0) return true;
+   if(PositionSelectByTicket(key))
+      return ((long)PositionGetInteger(POSITION_MAGIC) == InpMagicNumber &&
+              PositionGetString(POSITION_SYMBOL) == Symbol());
+   return false;
+}
+
+void XAU_InverseCompactRecords()
+{
+   int writeAt = 0;
+   int total = ArraySize(g_inverseExpRecords);
+   for(int i = 0; i < total; i++)
+   {
+      if(!g_inverseExpRecords[i].active) continue;
+      if(writeAt != i) g_inverseExpRecords[writeAt] = g_inverseExpRecords[i];
+      writeAt++;
+   }
+   if(writeAt != total) ArrayResize(g_inverseExpRecords, writeAt);
+}
+
+void XAU_InverseStateSave(bool force = false)
+{
+   if(!XAUAI_INVERSE_EXPERIMENT) return;
+   if(!force && TimeCurrent() == g_inverseLastStateSaveAt) return;
+   XAU_InverseCompactRecords();
+   int h = FileOpen(XAU_InverseStateFile(), FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE)
+   {
+      PrintFormat("INVERSE_STATE_SAVE_FAILED file=%s err=%d", XAU_InverseStateFile(), GetLastError());
+      return;
+   }
+   FileWrite(h, "SCHEMA", XAU_INVERSE_STATE_SCHEMA, ArraySize(g_inverseExpRecords));
+   for(int i = 0; i < ArraySize(g_inverseExpRecords); i++)
+   {
+      XAU_InverseExperimentRecord r = g_inverseExpRecords[i];
+      FileWrite(h, r.active ? 1 : 0, r.finalized ? 1 : 0,
+                (string)r.accountLogin, r.brokerServer, r.symbol, (string)r.magic,
+                (string)r.ticket, (string)r.posId, (string)r.entryTime,
+                r.originalSignal, r.actualDirection, r.inversionApplied ? 1 : 0,
+                r.exactRiskKnown ? 1 : 0, r.decisionId, r.entryPath, r.entryReason,
+                r.originalPlanEntry, r.originalPlanSL, r.originalPlanTP,
+                r.entry, r.lot, r.sl, r.tp, r.rDist, r.targetDist, r.originalRiskUSD,
+                r.r03, r.r05, r.r10, r.mae, r.mfe, r.peakProfit, r.troughProfit,
+                r.peakR, r.troughR, (string)r.time03, (string)r.time05, (string)r.time10,
+                r.stage, (int)r.closeState, r.pendingCloseReason,
+                (string)r.firstCloseRequestTime, (string)r.lastCloseRetryTime,
+                r.closeRetryCount, r.lastBrokerRetcode, r.lastCloseError,
+                r.requestedCloseR, r.requestedCloseProfit, r.lastProtectedSL,
+                r.checkpoint03 ? 1 : 0, r.checkpoint05 ? 1 : 0, r.checkpoint10 ? 1 : 0,
+                r.setup, r.grade);
+   }
+   FileClose(h);
+   g_inverseLastStateSaveAt = TimeCurrent();
+   static datetime lastStateSaveLog = 0;
+   if(force || TimeCurrent() - lastStateSaveLog >= 60)
+   {
+      PrintFormat("INVERSE_STATE_SAVED records=%d file=%s", ArraySize(g_inverseExpRecords), XAU_InverseStateFile());
+      lastStateSaveLog = TimeCurrent();
+   }
+}
+
+void XAU_InverseStateLoad()
+{
+   ArrayResize(g_inverseExpRecords, 0);
+   string fn = XAU_InverseStateFile();
+   if(!FileIsExist(fn, FILE_COMMON)) return;
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(h == INVALID_HANDLE) return;
+   string marker = FileReadString(h);
+   int schema = (int)FileReadInteger(h);
+   int count = (int)FileReadInteger(h);
+   if(marker != "SCHEMA" || schema != XAU_INVERSE_STATE_SCHEMA || count < 0 || count > 100)
+   {
+      PrintFormat("INVERSE_STATE_MISMATCH marker=%s schema=%d count=%d expected=%d", marker, schema, count, XAU_INVERSE_STATE_SCHEMA);
+      FileClose(h);
+      return;
+   }
+   ArrayResize(g_inverseExpRecords, count);
+   for(int i = 0; i < count; i++)
+   {
+      XAU_InverseExperimentRecord r;
+      r.active = ((int)FileReadInteger(h) != 0);
+      r.finalized = ((int)FileReadInteger(h) != 0);
+      r.accountLogin = (long)StringToInteger(FileReadString(h));
+      r.brokerServer = FileReadString(h); r.symbol = FileReadString(h);
+      r.magic = (long)StringToInteger(FileReadString(h));
+      r.ticket = (ulong)StringToInteger(FileReadString(h));
+      r.posId = (ulong)StringToInteger(FileReadString(h));
+      r.entryTime = (datetime)StringToInteger(FileReadString(h));
+      r.originalSignal = (int)FileReadInteger(h); r.actualDirection = (int)FileReadInteger(h);
+      r.inversionApplied = ((int)FileReadInteger(h) != 0);
+      r.exactRiskKnown = ((int)FileReadInteger(h) != 0);
+      r.decisionId = FileReadString(h); r.entryPath = FileReadString(h); r.entryReason = FileReadString(h);
+      r.originalPlanEntry = FileReadNumber(h); r.originalPlanSL = FileReadNumber(h); r.originalPlanTP = FileReadNumber(h);
+      r.entry = FileReadNumber(h); r.lot = FileReadNumber(h); r.sl = FileReadNumber(h); r.tp = FileReadNumber(h);
+      r.rDist = FileReadNumber(h); r.targetDist = FileReadNumber(h); r.originalRiskUSD = FileReadNumber(h);
+      r.r03 = FileReadNumber(h); r.r05 = FileReadNumber(h); r.r10 = FileReadNumber(h);
+      r.mae = FileReadNumber(h); r.mfe = FileReadNumber(h); r.peakProfit = FileReadNumber(h); r.troughProfit = FileReadNumber(h);
+      r.peakR = FileReadNumber(h); r.troughR = FileReadNumber(h);
+      r.time03 = (datetime)StringToInteger(FileReadString(h));
+      r.time05 = (datetime)StringToInteger(FileReadString(h));
+      r.time10 = (datetime)StringToInteger(FileReadString(h));
+      r.stage = (int)FileReadInteger(h); r.closeState = (ENUM_XAU_InverseCloseState)FileReadInteger(h);
+      r.pendingCloseReason = FileReadString(h);
+      r.firstCloseRequestTime = (datetime)StringToInteger(FileReadString(h));
+      r.lastCloseRetryTime = (datetime)StringToInteger(FileReadString(h));
+      r.closeRetryCount = (int)FileReadInteger(h); r.lastBrokerRetcode = (long)FileReadInteger(h);
+      r.lastCloseError = (int)FileReadInteger(h); r.requestedCloseR = FileReadNumber(h);
+      r.requestedCloseProfit = FileReadNumber(h); r.lastProtectedSL = FileReadNumber(h);
+      r.checkpoint03 = ((int)FileReadInteger(h) != 0); r.checkpoint05 = ((int)FileReadInteger(h) != 0);
+      r.checkpoint10 = ((int)FileReadInteger(h) != 0);
+      r.setup = FileReadString(h); r.grade = FileReadString(h);
+      g_inverseExpRecords[i] = r;
+   }
+   FileClose(h);
+   PrintFormat("INVERSE_STATE_RESTORED records=%d file=%s", count, fn);
+}
+
 void XAU_InverseExperimentAppend(string eventType, XAU_InverseExperimentRecord &r,
                                  double currentPrice, double realizedR,
                                  double realizedUSD, int holdSeconds, string exitReason)
@@ -19486,7 +19770,7 @@ void XAU_InverseExperimentAppend(string eventType, XAU_InverseExperimentRecord &
    {
       FileWrite(h, "event", "time", "accountMasked", "server", "symbol", "version", "decisionId", "ticket",
                 "setup", "grade", "gradePolicy", "originalSignal", "actualExecution", "inversionApplied", "entry",
-                "lot", "sl", "tp", "oneRDistance", "r03Level", "r05Level",
+                "lot", "sl", "tp", "oneRDistance", "originalRiskUSD", "r03Level", "r05Level",
                 "r10Level", "mae", "mfe", "timeTo03Sec", "timeTo05Sec",
                 "timeTo10Sec", "peakR", "realizedR", "realizedUSD",
                 "holdSeconds", "exitReason", "currentPrice");
@@ -19504,7 +19788,7 @@ void XAU_InverseExperimentAppend(string eventType, XAU_InverseExperimentRecord &
              r.inversionApplied ? "true" : "false",
              DoubleToString(r.entry, _Digits), DoubleToString(r.lot, 2),
              DoubleToString(r.sl, _Digits), DoubleToString(r.tp, _Digits),
-             DoubleToString(r.rDist, _Digits), DoubleToString(r.r03, _Digits),
+             DoubleToString(r.rDist, _Digits), DoubleToString(r.originalRiskUSD, 2), DoubleToString(r.r03, _Digits),
              DoubleToString(r.r05, _Digits), DoubleToString(r.r10, _Digits),
              DoubleToString(r.mae, 2), DoubleToString(r.mfe, 2),
              t03, t05, t10, DoubleToString(r.peakR, 2),
@@ -19513,66 +19797,185 @@ void XAU_InverseExperimentAppend(string eventType, XAU_InverseExperimentRecord &
    FileClose(h);
 }
 
-int XAU_InverseExperimentFind(ulong posId)
-{
-   for(int i = 0; i < ArraySize(g_inverseExpRecords); i++)
-      if(g_inverseExpRecords[i].active && g_inverseExpRecords[i].posId == posId)
-         return i;
-   return -1;
-}
-
-void XAU_InverseExperimentRecordOpen(ulong posId, string decisionId, int originalSignal, int actualDirection,
-                                     double entry, double lot, double sl, double tp,
+bool XAU_InverseExperimentRecordOpen(ulong posId, string decisionId, string entryPath, string entryReason,
+                                     int originalSignal, int actualDirection,
+                                     double originalPlanEntry, double originalPlanSL, double originalPlanTP,
+                                     double plannedInverseSL, double plannedInverseTP,
                                      string setup, string grade)
 {
-   if(posId == 0) return;
+   if(posId == 0) return false;
+   if(!XAU_InverseSelectLivePosition(posId, 0))
+   {
+      PrintFormat("INVERSE_STATE_MISMATCH posId=%I64u reason=LIVE_POSITION_NOT_FOUND_AFTER_ACCEPT", posId);
+      return false;
+   }
+   ulong ticket = (ulong)PositionGetInteger(POSITION_TICKET);
+   ulong livePosId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+   int liveDir = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+   double actualEntry = PositionGetDouble(POSITION_PRICE_OPEN);
+   double actualSL = PositionGetDouble(POSITION_SL);
+   double actualTP = PositionGetDouble(POSITION_TP);
+   double actualLot = PositionGetDouble(POSITION_VOLUME);
+   if(liveDir != actualDirection || actualEntry <= 0.0 || actualLot <= 0.0)
+   {
+      PrintFormat("INVERSE_STATE_MISMATCH posId=%I64u ticket=%I64u expectedDir=%d actualDir=%d entry=%.5f lot=%.2f",
+                  livePosId, ticket, actualDirection, liveDir, actualEntry, actualLot);
+      return false;
+   }
+   if(actualSL <= 0.0)
+   {
+      double curPx = actualDirection == 1 ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+      bool attached = SafeModifySL(ticket, plannedInverseSL, actualTP > 0.0 ? actualTP : plannedInverseTP,
+                                   actualDirection == 1, curPx, "INVERSE_ENTRY_ATTACH_REQUIRED_SL");
+      if(attached && XAU_InverseSelectLivePosition(livePosId, ticket)) actualSL = PositionGetDouble(POSITION_SL);
+      if(actualSL <= 0.0)
+      {
+         PrintFormat("INVERSE_UNPROTECTED_ENTRY_EMERGENCY_CLOSE ticket=%I64u reason=BROKER_POSITION_HAS_NO_SL", ticket);
+         trade.PositionClose(ticket);
+         return false;
+      }
+   }
    int idx = XAU_InverseExperimentFind(posId);
+   bool existingRecord = (idx >= 0);
    if(idx < 0)
    {
       int n = ArraySize(g_inverseExpRecords);
       ArrayResize(g_inverseExpRecords, n + 1);
       idx = n;
    }
-   double rDist = MathAbs(entry - sl);
+   double rDist = MathAbs(actualEntry - actualSL);
+   double targetDist = MathAbs(actualTP - actualEntry);
+   double originalRiskUSD = RiskPerLotForDistance(rDist) * actualLot;
+   if(rDist <= 0.0 || originalRiskUSD <= 0.0)
+   {
+      PrintFormat("INVERSE_STATE_MISMATCH posId=%I64u reason=INVALID_ACTUAL_RISK fill=%.5f sl=%.5f lot=%.2f riskUSD=%.2f",
+                  livePosId, actualEntry, actualSL, actualLot, originalRiskUSD);
+      return false;
+   }
+   if(existingRecord && entryPath == "PYRAMID")
+   {
+      // Netting accounts keep one POSITION_IDENTIFIER when adding. Merge the
+      // broker's new weighted-average position geometry into the existing
+      // inverse state without resetting peak/trough, close intent, or stage.
+      if(g_inverseExpRecords[idx].originalSignal != originalSignal ||
+         g_inverseExpRecords[idx].actualDirection != actualDirection)
+      {
+         PrintFormat("INVERSE_STATE_MISMATCH posId=%I64u reason=NETTING_PYRAMID_DIRECTION_CONTRACT", livePosId);
+         return false;
+      }
+      double oldVolume = g_inverseExpRecords[idx].lot;
+      double addedVolume = MathMax(0.0, actualLot - oldVolume);
+      double addFill = trade.ResultPrice();
+      ulong addDeal = trade.ResultDeal();
+      if(addDeal > 0 && HistoryDealSelect(addDeal))
+      {
+         addFill = HistoryDealGetDouble(addDeal, DEAL_PRICE);
+         addedVolume = HistoryDealGetDouble(addDeal, DEAL_VOLUME);
+      }
+      if(addFill <= 0.0) addFill = actualEntry;
+      double addedRiskUSD = RiskPerLotForDistance(MathAbs(addFill - plannedInverseSL)) * addedVolume;
+      double aggregateOriginalRiskUSD = g_inverseExpRecords[idx].originalRiskUSD + addedRiskUSD;
+      double onePointRisk = RiskPerLotForDistance(1.0) * actualLot;
+      double aggregateRDist = onePointRisk > 0.0 ? aggregateOriginalRiskUSD / onePointRisk : rDist;
+      g_inverseExpRecords[idx].ticket = ticket;
+      g_inverseExpRecords[idx].entry = actualEntry;
+      g_inverseExpRecords[idx].lot = actualLot;
+      g_inverseExpRecords[idx].tp = actualTP;
+      g_inverseExpRecords[idx].rDist = aggregateRDist;
+      g_inverseExpRecords[idx].targetDist = targetDist;
+      g_inverseExpRecords[idx].originalRiskUSD = aggregateOriginalRiskUSD;
+      g_inverseExpRecords[idx].r03 = NormalizeDouble(actualEntry + (actualDirection == 1 ? aggregateRDist * 0.30 : -aggregateRDist * 0.30), _Digits);
+      g_inverseExpRecords[idx].r05 = NormalizeDouble(actualEntry + (actualDirection == 1 ? aggregateRDist * 0.50 : -aggregateRDist * 0.50), _Digits);
+      g_inverseExpRecords[idx].r10 = NormalizeDouble(actualEntry + (actualDirection == 1 ? aggregateRDist : -aggregateRDist), _Digits);
+      g_inverseExpRecords[idx].entryPath = "PRIMARY+PYRAMID";
+      XAU_InverseExperimentAppend("PYRAMID_ADD", g_inverseExpRecords[idx], actualEntry,
+                                  aggregateOriginalRiskUSD > 0.0 ? PositionGetDouble(POSITION_PROFIT) / aggregateOriginalRiskUSD : 0.0,
+                                  0.0, (int)(TimeCurrent() - g_inverseExpRecords[idx].entryTime), "PYRAMID_ADD");
+      XAU_InverseStateSave(true);
+      PrintFormat("INVERSE_NETTING_PYRAMID_STATE_MERGED ticket=%I64u posId=%I64u volume=%.2f weightedEntry=%.5f originalRiskUSD=%.2f",
+                  ticket, livePosId, actualLot, actualEntry, aggregateOriginalRiskUSD);
+      return true;
+   }
    g_inverseExpRecords[idx].active = true;
-   g_inverseExpRecords[idx].posId = posId;
+   g_inverseExpRecords[idx].finalized = false;
+   g_inverseExpRecords[idx].accountLogin = AccountInfoInteger(ACCOUNT_LOGIN);
+   g_inverseExpRecords[idx].brokerServer = AccountInfoString(ACCOUNT_SERVER);
+   g_inverseExpRecords[idx].symbol = Symbol();
+   g_inverseExpRecords[idx].magic = InpMagicNumber;
+   g_inverseExpRecords[idx].ticket = ticket;
+   g_inverseExpRecords[idx].posId = livePosId;
    g_inverseExpRecords[idx].entryTime = TimeCurrent();
    g_inverseExpRecords[idx].decisionId = decisionId;
+   g_inverseExpRecords[idx].entryPath = entryPath;
+   g_inverseExpRecords[idx].entryReason = entryReason;
    g_inverseExpRecords[idx].originalSignal = originalSignal;
    g_inverseExpRecords[idx].actualDirection = actualDirection;
    g_inverseExpRecords[idx].inversionApplied = true; // every normal-approved trade is inverted
-   g_inverseExpRecords[idx].entry = entry;
-   g_inverseExpRecords[idx].lot = lot;
-   g_inverseExpRecords[idx].sl = sl;
-   g_inverseExpRecords[idx].tp = tp;
+   g_inverseExpRecords[idx].exactRiskKnown = true;
+   g_inverseExpRecords[idx].originalPlanEntry = originalPlanEntry;
+   g_inverseExpRecords[idx].originalPlanSL = originalPlanSL;
+   g_inverseExpRecords[idx].originalPlanTP = originalPlanTP;
+   g_inverseExpRecords[idx].entry = actualEntry;
+   g_inverseExpRecords[idx].lot = actualLot;
+   g_inverseExpRecords[idx].sl = actualSL;
+   g_inverseExpRecords[idx].tp = actualTP;
    g_inverseExpRecords[idx].rDist = rDist;
-   g_inverseExpRecords[idx].r03 = NormalizeDouble(entry + (actualDirection == 1 ? rDist * 0.30 : -rDist * 0.30), _Digits);
-   g_inverseExpRecords[idx].r05 = NormalizeDouble(entry + (actualDirection == 1 ? rDist * 0.50 : -rDist * 0.50), _Digits);
-   g_inverseExpRecords[idx].r10 = NormalizeDouble(entry + (actualDirection == 1 ? rDist : -rDist), _Digits);
+   g_inverseExpRecords[idx].targetDist = targetDist;
+   g_inverseExpRecords[idx].originalRiskUSD = originalRiskUSD;
+   g_inverseExpRecords[idx].r03 = NormalizeDouble(actualEntry + (actualDirection == 1 ? rDist * 0.30 : -rDist * 0.30), _Digits);
+   g_inverseExpRecords[idx].r05 = NormalizeDouble(actualEntry + (actualDirection == 1 ? rDist * 0.50 : -rDist * 0.50), _Digits);
+   g_inverseExpRecords[idx].r10 = NormalizeDouble(actualEntry + (actualDirection == 1 ? rDist : -rDist), _Digits);
    g_inverseExpRecords[idx].mae = 0.0;
    g_inverseExpRecords[idx].mfe = 0.0;
+   g_inverseExpRecords[idx].peakProfit = 0.0;
+   g_inverseExpRecords[idx].troughProfit = 0.0;
    g_inverseExpRecords[idx].peakR = 0.0;
+   g_inverseExpRecords[idx].troughR = 0.0;
    g_inverseExpRecords[idx].time03 = 0;
    g_inverseExpRecords[idx].time05 = 0;
    g_inverseExpRecords[idx].time10 = 0;
+   g_inverseExpRecords[idx].stage = 0;
+   g_inverseExpRecords[idx].closeState = INVERSE_CLOSE_NONE;
+   g_inverseExpRecords[idx].pendingCloseReason = "";
+   g_inverseExpRecords[idx].firstCloseRequestTime = 0;
+   g_inverseExpRecords[idx].lastCloseRetryTime = 0;
+   g_inverseExpRecords[idx].closeRetryCount = 0;
+   g_inverseExpRecords[idx].lastBrokerRetcode = 0;
+   g_inverseExpRecords[idx].lastCloseError = 0;
+   g_inverseExpRecords[idx].requestedCloseR = 0.0;
+   g_inverseExpRecords[idx].requestedCloseProfit = 0.0;
+   g_inverseExpRecords[idx].lastProtectedSL = actualSL;
+   g_inverseExpRecords[idx].checkpoint03 = false;
+   g_inverseExpRecords[idx].checkpoint05 = false;
+   g_inverseExpRecords[idx].checkpoint10 = false;
    g_inverseExpRecords[idx].setup = setup;
    g_inverseExpRecords[idx].grade = grade;
-   XAU_InverseExperimentAppend("OPEN", g_inverseExpRecords[idx], entry, 0.0, 0.0, 0, "OPEN");
+   XAU_InverseExperimentAppend("OPEN", g_inverseExpRecords[idx], actualEntry, 0.0, 0.0, 0, "OPEN");
+   XAU_InverseStateSave(true);
+   PrintFormat("INVERSE_ACTUAL_FILL_CAPTURED ticket=%I64u posId=%I64u fill=%.5f sl=%.5f tp=%.5f lot=%.2f originalRiskUSD=%.2f entryPath=%s",
+               ticket, livePosId, actualEntry, actualSL, actualTP, actualLot, originalRiskUSD, entryPath);
+   return true;
 }
 
-void XAU_InverseExperimentUpdate(ulong posId, int actualDirection, double entry, double currentPrice,
-                                 double profit, double rDollars)
+void XAU_InverseExperimentUpdate(int idx, double currentPrice, double netProfit)
 {
-   int idx = XAU_InverseExperimentFind(posId);
-   if(idx < 0) return;
-   double move = (actualDirection == 1) ? (currentPrice - entry) : (entry - currentPrice);
+   if(idx < 0 || idx >= ArraySize(g_inverseExpRecords)) return;
+   XAU_InverseExperimentRecord r = g_inverseExpRecords[idx];
+   double move = (r.actualDirection == 1) ? (currentPrice - r.entry) : (r.entry - currentPrice);
    if(move > g_inverseExpRecords[idx].mfe) g_inverseExpRecords[idx].mfe = move;
    if(move < g_inverseExpRecords[idx].mae) g_inverseExpRecords[idx].mae = move;
-   double rNow = (rDollars > 0 ? profit / rDollars : 0.0);
+   if(netProfit > g_inverseExpRecords[idx].peakProfit) g_inverseExpRecords[idx].peakProfit = netProfit;
+   if(netProfit < g_inverseExpRecords[idx].troughProfit) g_inverseExpRecords[idx].troughProfit = netProfit;
+   double rNow = (r.originalRiskUSD > 0 ? netProfit / r.originalRiskUSD : 0.0);
    if(rNow > g_inverseExpRecords[idx].peakR) g_inverseExpRecords[idx].peakR = rNow;
+   if(rNow < g_inverseExpRecords[idx].troughR) g_inverseExpRecords[idx].troughR = rNow;
    if(rNow >= 0.30 && g_inverseExpRecords[idx].time03 == 0) g_inverseExpRecords[idx].time03 = TimeCurrent();
    if(rNow >= 0.50 && g_inverseExpRecords[idx].time05 == 0) g_inverseExpRecords[idx].time05 = TimeCurrent();
    if(rNow >= 1.00 && g_inverseExpRecords[idx].time10 == 0) g_inverseExpRecords[idx].time10 = TimeCurrent();
+   if(rNow >= 0.30) g_inverseExpRecords[idx].checkpoint03 = true;
+   if(rNow >= 0.50) g_inverseExpRecords[idx].checkpoint05 = true;
+   if(rNow >= 1.00) g_inverseExpRecords[idx].checkpoint10 = true;
+   XAU_InverseStateSave(false);
 }
 
 void XAU_InverseExperimentRecordClose(ulong posId, double currentPrice, double realizedR,
@@ -19580,10 +19983,14 @@ void XAU_InverseExperimentRecordClose(ulong posId, double currentPrice, double r
 {
    int idx = XAU_InverseExperimentFind(posId);
    if(idx < 0) return;
+   if(g_inverseExpRecords[idx].finalized) return;
    int holdSeconds = (int)(TimeCurrent() - g_inverseExpRecords[idx].entryTime);
    XAU_InverseExperimentAppend("CLOSE", g_inverseExpRecords[idx], currentPrice,
                                realizedR, realizedUSD, holdSeconds, exitReason);
+   g_inverseExpRecords[idx].finalized = true;
+   g_inverseExpRecords[idx].closeState = INVERSE_CLOSE_CLOSED_CONFIRMED;
    g_inverseExpRecords[idx].active = false;
+   XAU_InverseStateSave(true);
 }
 
 // v6.4.20/v6.6.1: Wrapper for every position close. Logs server retcode + GetLastError() on failure.
@@ -19610,89 +20017,364 @@ bool SafePositionClosePartial(ulong ticket, double lots, string ctx = "")
    return ok;
 }
 
-bool XAU_InverseExperimentClose(ulong ticket, string reason, double curPrice, double profit, double rMult)
+bool XAU_InverseAttemptPendingClose(int idx)
 {
+   if(idx < 0 || idx >= ArraySize(g_inverseExpRecords)) return false;
+   if(!g_inverseExpRecords[idx].active) return true;
+   ulong ticket = g_inverseExpRecords[idx].ticket;
+   ulong posId = g_inverseExpRecords[idx].posId;
+   if(!XAU_InverseSelectLivePosition(posId, ticket))
+   {
+      g_inverseExpRecords[idx].closeState = INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION;
+      XAU_InverseStateSave(true);
+      return true;
+   }
+   ticket = (ulong)PositionGetInteger(POSITION_TICKET);
+   g_inverseExpRecords[idx].ticket = ticket;
+   datetime now = TimeCurrent();
+   if(g_inverseExpRecords[idx].lastCloseRetryTime > 0 &&
+      now - g_inverseExpRecords[idx].lastCloseRetryTime < 3)
+      return false;
+
+   string reason = g_inverseExpRecords[idx].pendingCloseReason;
+   XAU_SetPendingExitReason(ticket, reason);
+   if(posId > 0 && posId != ticket) XAU_SetPendingExitReason(posId, reason);
+   g_inverseExpRecords[idx].lastCloseRetryTime = now;
+   g_inverseExpRecords[idx].closeRetryCount++;
+   ResetLastError();
    bool ok = SafePositionClose(ticket, reason);
+   g_inverseExpRecords[idx].lastBrokerRetcode = (long)trade.ResultRetcode();
+   g_inverseExpRecords[idx].lastCloseError = GetLastError();
    if(ok)
    {
-      XAU_InverseExperimentRecordClose(ticket, curPrice, rMult, profit, reason);
-      PrintFormat("INVERSE_EXPERIMENT_CLOSE #%I64u reason=%s realizedR=%.2f profit=%.2f",
-                  ticket, reason, rMult, profit);
+      g_inverseExpRecords[idx].closeState = INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION;
+      PrintFormat("INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION ticket=%I64u posId=%I64u reason=%s retry=%d retcode=%d",
+                  ticket, posId, reason, g_inverseExpRecords[idx].closeRetryCount,
+                  g_inverseExpRecords[idx].lastBrokerRetcode);
    }
+   else
+   {
+      g_inverseExpRecords[idx].closeState = INVERSE_CLOSE_PENDING_RETRY;
+      PrintFormat("INVERSE_CLOSE_PENDING_RETRY ticket=%I64u posId=%I64u reason=%s retry=%d retcode=%d err=%d",
+                  ticket, posId, reason, g_inverseExpRecords[idx].closeRetryCount,
+                  g_inverseExpRecords[idx].lastBrokerRetcode,
+                  g_inverseExpRecords[idx].lastCloseError);
+   }
+   XAU_InverseStateSave(true);
    return ok;
 }
 
-bool XAU_InverseExperimentManagePosition(ulong ticket, bool isBuy, double openPx,
-                                         double curPrice, double curSL, double curTP,
-                                         double slDist, double profit, double peak,
-                                         double rDollars, int momentumScore, bool trendAligned)
+bool XAU_InverseExperimentClose(int idx, string reason, double curPrice, double profit, double rMult)
 {
-   int actualDir = isBuy ? 1 : -1;
-   double rMult = (rDollars > 0 ? profit / rDollars : 0.0);
-   XAU_InverseExperimentUpdate(ticket, actualDir, openPx, curPrice, profit, rDollars);
+   if(idx < 0 || idx >= ArraySize(g_inverseExpRecords)) return false;
+   ENUM_XAU_InverseCloseState state = g_inverseExpRecords[idx].closeState;
+   if(state == INVERSE_CLOSE_REQUESTED || state == INVERSE_CLOSE_PENDING_RETRY ||
+      state == INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION)
+      return XAU_InverseAttemptPendingClose(idx);
+   g_inverseExpRecords[idx].closeState = INVERSE_CLOSE_REQUESTED;
+   g_inverseExpRecords[idx].pendingCloseReason = reason;
+   g_inverseExpRecords[idx].firstCloseRequestTime = TimeCurrent();
+   g_inverseExpRecords[idx].requestedCloseR = rMult;
+   g_inverseExpRecords[idx].requestedCloseProfit = profit;
+   PrintFormat("INVERSE_CLOSE_REQUESTED ticket=%I64u posId=%I64u reason=%s requestedR=%.3f profit=%.2f price=%.5f",
+               g_inverseExpRecords[idx].ticket, g_inverseExpRecords[idx].posId,
+               reason, rMult, profit, curPrice);
+   XAU_InverseStateSave(true);
+   return XAU_InverseAttemptPendingClose(idx);
+}
+
+bool XAU_InverseExperimentManagePosition(int idx, double curPrice, double curSL, double curTP,
+                                         double netProfit, bool indicatorsReady,
+                                         int momentumScore, bool trendAligned)
+{
+   if(idx < 0 || idx >= ArraySize(g_inverseExpRecords)) return false;
+   XAU_InverseExperimentUpdate(idx, curPrice, netProfit);
+   double originalRiskUSD = g_inverseExpRecords[idx].originalRiskUSD;
+   double rMult = (originalRiskUSD > 0.0 ? netProfit / originalRiskUSD : 0.0);
+   ulong ticket = g_inverseExpRecords[idx].ticket;
+   bool isBuy = (g_inverseExpRecords[idx].actualDirection == 1);
+
+   ENUM_XAU_InverseCloseState closeState = g_inverseExpRecords[idx].closeState;
+   if(closeState == INVERSE_CLOSE_REQUESTED || closeState == INVERSE_CLOSE_PENDING_RETRY ||
+      closeState == INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION)
+   {
+      if(closeState == INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION &&
+         TimeCurrent() - g_inverseExpRecords[idx].lastCloseRetryTime >= 5 &&
+         XAU_InverseSelectLivePosition(g_inverseExpRecords[idx].posId, ticket))
+         g_inverseExpRecords[idx].closeState = INVERSE_CLOSE_PENDING_RETRY;
+      XAU_InverseAttemptPendingClose(idx);
+      return true;
+   }
 
    static datetime lastInverseManageLog = 0;
    if(TimeCurrent() - lastInverseManageLog >= 60)
    {
-      PrintFormat("INVERSE_EXPERIMENT_MANAGER #%I64u actual=%s profit=%.2f r=%.2f peak=%.2f momentum=%d trendAligned=%s mode=FAST_0_3R_TO_0_5R_1R_MAX",
-                  ticket, isBuy ? "BUY" : "SELL", profit, rMult, peak,
-                  momentumScore, trendAligned ? "Y" : "N");
+      PrintFormat("INVERSE_EXIT_CORE_ACTIVE ticket=%I64u actual=%s profit=%.2f currentR=%.3f peakR=%.3f troughR=%.3f state=%s indicators=%s mode=FAST_0_3R_TO_0_5R_1R_MAX",
+                  ticket, isBuy ? "BUY" : "SELL", netProfit, rMult,
+                  g_inverseExpRecords[idx].peakR, g_inverseExpRecords[idx].troughR,
+                  XAU_InverseCloseStateName(g_inverseExpRecords[idx].closeState),
+                  indicatorsReady ? "READY" : "UNAVAILABLE");
       lastInverseManageLog = TimeCurrent();
    }
 
+   // Explicit priority: pending retry, 1R, giveback, 0.5R, 0.3R protection.
    if(rMult >= 1.0)
-      return XAU_InverseExperimentClose(ticket, "INVERSE_EXP_TP_1R", curPrice, profit, rMult);
+      return XAU_InverseExperimentClose(idx, "INVERSE_EXP_TP_1R", curPrice, netProfit, rMult);
+
+   if(g_inverseExpRecords[idx].checkpoint03 && g_inverseExpRecords[idx].peakProfit > 0.0)
+   {
+      double peakProfit = g_inverseExpRecords[idx].peakProfit;
+      double givebackPct = (netProfit < peakProfit ? (peakProfit - netProfit) / peakProfit * 100.0 : 0.0);
+      if(givebackPct >= 45.0 && netProfit > 0.0)
+         return XAU_InverseExperimentClose(idx, "INVERSE_EXP_GIVEBACK_AFTER_0_3R", curPrice, netProfit, rMult);
+   }
+
+   if(rMult >= 0.50)
+   {
+      if(!indicatorsReady)
+      {
+         PrintFormat("INVERSE_EXIT_INDICATORS_UNAVAILABLE ticket=%I64u stage=0.5R", ticket);
+         PrintFormat("INVERSE_EXIT_05R_FALLBACK_CAPTURE ticket=%I64u currentR=%.3f", ticket, rMult);
+         return XAU_InverseExperimentClose(idx, "INVERSE_EXP_CAPTURE_0_5R", curPrice, netProfit, rMult);
+      }
+      bool extendToOneR = (momentumScore >= 4 && trendAligned);
+      if(!extendToOneR)
+         return XAU_InverseExperimentClose(idx, "INVERSE_EXP_CAPTURE_0_5R", curPrice, netProfit, rMult);
+      g_inverseExpRecords[idx].closeState = INVERSE_CLOSE_HOLD_TO_1R;
+      g_inverseExpRecords[idx].stage = 2;
+      PrintFormat("INVERSE_EXPERIMENT_EXTEND_TO_1R #%I64u currentR=%.2f momentum=%d trendAligned=%s",
+                  ticket, rMult, momentumScore, trendAligned ? "Y" : "N");
+   }
 
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    long stopLevelPts = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
    long freezeLevelPts = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
    double minStopDist = MathMax(stopLevelPts, freezeLevelPts) * point;
-   double protectR = 0.0;
-
-   if(rMult >= 0.50)
-      protectR = (momentumScore >= 4 && trendAligned) ? 0.35 : 0.40;
-   else if(rMult >= 0.30)
-      protectR = 0.15;
-
-   if(protectR > 0.0 && slDist > 0.0)
+   double protectR = rMult >= 0.50 ? 0.35 : (rMult >= 0.30 ? 0.15 : 0.0);
+   double frozenRDist = g_inverseExpRecords[idx].rDist;
+   if(protectR > 0.0 && frozenRDist > 0.0)
    {
       double lockSL = isBuy
-                    ? NormalizeDouble(openPx + slDist * protectR, digits)
-                    : NormalizeDouble(openPx - slDist * protectR, digits);
+                    ? NormalizeDouble(g_inverseExpRecords[idx].entry + frozenRDist * protectR, digits)
+                    : NormalizeDouble(g_inverseExpRecords[idx].entry - frozenRDist * protectR, digits);
       bool sane = isBuy ? (lockSL < curPrice - minStopDist) : (lockSL > curPrice + minStopDist);
       bool ratchet = (curSL <= 0.0) || (isBuy ? lockSL > curSL + point : lockSL < curSL - point);
-      if(sane && ratchet)
+      if(sane && ratchet && SafeModifySL(ticket, lockSL, curTP, isBuy, curPrice, "INVERSE_EXP_PROTECT"))
       {
-         if(SafeModifySL(ticket, lockSL, curTP, isBuy, curPrice, "INVERSE_EXP_PROTECT"))
-            PrintFormat("INVERSE_EXPERIMENT_PROTECT #%I64u lockR=%.2f SL=%.2f currentR=%.2f",
-                        ticket, protectR, lockSL, rMult);
+         g_inverseExpRecords[idx].lastProtectedSL = lockSL;
+         g_inverseExpRecords[idx].stage = MathMax(g_inverseExpRecords[idx].stage, 1);
+         XAU_InverseStateSave(true);
+         PrintFormat("INVERSE_EXPERIMENT_PROTECT #%I64u lockR=%.2f SL=%.2f currentR=%.2f",
+                     ticket, protectR, lockSL, rMult);
       }
    }
-
-   if(rMult >= 0.50)
-   {
-      bool extendToOneR = (momentumScore >= 4 && trendAligned);
-      if(!extendToOneR)
-         return XAU_InverseExperimentClose(ticket, "INVERSE_EXP_CAPTURE_0_5R", curPrice, profit, rMult);
-      PrintFormat("INVERSE_EXPERIMENT_EXTEND_TO_1R #%I64u currentR=%.2f momentum=%d trendAligned=%s",
-                  ticket, rMult, momentumScore, trendAligned ? "Y" : "N");
-      return true;
-   }
-
-   if(rMult >= 0.30 && peak > 0.0)
-   {
-      double givebackPct = (profit < peak ? (peak - profit) / peak * 100.0 : 0.0);
-      if(givebackPct >= 45.0 && profit > 0.0)
-         return XAU_InverseExperimentClose(ticket, "INVERSE_EXP_GIVEBACK_AFTER_0_3R", curPrice, profit, rMult);
-   }
-
-   // Owner consumed this inverse trade. Normal exit stack is intentionally skipped.
    return true;
+}
+
+double XAU_InversePositionHistoryNet(ulong posId, double &lastExitPrice)
+{
+   lastExitPrice = 0.0;
+   double total = 0.0;
+   if(posId == 0 || !HistorySelectByPosition(posId)) return 0.0;
+   int deals = HistoryDealsTotal();
+   for(int i = 0; i < deals; i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal == 0 || (ulong)HistoryDealGetInteger(deal, DEAL_POSITION_ID) != posId) continue;
+      total += HistoryDealGetDouble(deal, DEAL_PROFIT)
+             + HistoryDealGetDouble(deal, DEAL_SWAP)
+             + HistoryDealGetDouble(deal, DEAL_COMMISSION);
+      if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal, DEAL_ENTRY) == DEAL_ENTRY_OUT)
+         lastExitPrice = HistoryDealGetDouble(deal, DEAL_PRICE);
+   }
+   return total;
+}
+
+bool XAU_InverseInitializeMissingLiveState()
+{
+   ulong ticket = (ulong)PositionGetInteger(POSITION_TICKET);
+   ulong posId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+   if(ticket == 0 || posId == 0) return false;
+   int actualDir = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+   double liveEntry = PositionGetDouble(POSITION_PRICE_OPEN);
+   double historicalEntry = 0.0, historicalSL = 0.0, historicalTP = 0.0;
+   datetime historicalTime = (datetime)PositionGetInteger(POSITION_TIME);
+   if(HistorySelectByPosition(posId))
+   {
+      int deals = HistoryDealsTotal();
+      for(int i = 0; i < deals; i++)
+      {
+         ulong deal = HistoryDealGetTicket(i);
+         if(deal == 0 || (ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+         historicalEntry = HistoryDealGetDouble(deal, DEAL_PRICE);
+         historicalTime = (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
+         ulong order = (ulong)HistoryDealGetInteger(deal, DEAL_ORDER);
+         if(order > 0 && HistoryOrderSelect(order))
+         {
+            historicalSL = HistoryOrderGetDouble(order, ORDER_SL);
+            historicalTP = HistoryOrderGetDouble(order, ORDER_TP);
+         }
+         break;
+      }
+   }
+   if(historicalEntry <= 0.0) historicalEntry = liveEntry;
+   bool historicalSLValid = historicalSL > 0.0 &&
+                            (actualDir == 1 ? historicalSL < historicalEntry : historicalSL > historicalEntry);
+   double liveSL = PositionGetDouble(POSITION_SL);
+   double liveTP = PositionGetDouble(POSITION_TP);
+   double fallbackDist = 0.0;
+   bool exact = historicalSLValid;
+   if(!historicalSLValid)
+   {
+      bool liveSLAdverse = liveSL > 0.0 && (actualDir == 1 ? liveSL < liveEntry : liveSL > liveEntry);
+      if(liveSLAdverse) fallbackDist = MathAbs(liveEntry - liveSL);
+      else if(ArraySize(bufATR) >= 2 && bufATR[1] > 0.0) fallbackDist = bufATR[1] * InpSLMultiplier;
+      else fallbackDist = MathMax(100.0 * SymbolInfoDouble(Symbol(), SYMBOL_POINT), 0.01);
+      historicalSL = actualDir == 1 ? liveEntry - fallbackDist : liveEntry + fallbackDist;
+      PrintFormat("INVERSE_STATE_FALLBACK_ESTIMATE ticket=%I64u posId=%I64u fill=%.5f estimatedSL=%.5f reason=NO_RELIABLE_SAVED_OR_ORDER_SL",
+                  ticket, posId, historicalEntry, historicalSL);
+   }
+   if(historicalTP <= 0.0) historicalTP = liveTP;
+   double rDist = MathAbs(historicalEntry - historicalSL);
+   double originalPlanEntry = historicalEntry;
+   double originalPlanSL = (-actualDir == 1) ? originalPlanEntry - rDist : originalPlanEntry + rDist;
+   double targetDist = MathAbs(historicalTP - historicalEntry);
+   double originalPlanTP = (-actualDir == 1) ? originalPlanEntry + targetDist : originalPlanEntry - targetDist;
+   string decisionId = StringFormat("RESTORED|%s|%I64u", Symbol(), posId);
+   if(!XAU_InverseExperimentRecordOpen(posId, decisionId, "RESTART_RESTORE", "LIVE_POSITION_STATE_RECOVERY",
+                                       -actualDir, actualDir, originalPlanEntry, originalPlanSL, originalPlanTP,
+                                       historicalSL, historicalTP, "RESTORED_UNKNOWN", "UNKNOWN"))
+      return false;
+   int idx = XAU_InverseExperimentFind(posId);
+   if(idx < 0) return false;
+   g_inverseExpRecords[idx].entry = historicalEntry;
+   g_inverseExpRecords[idx].entryTime = historicalTime;
+   g_inverseExpRecords[idx].sl = historicalSL;
+   g_inverseExpRecords[idx].tp = historicalTP;
+   g_inverseExpRecords[idx].rDist = rDist;
+   g_inverseExpRecords[idx].targetDist = targetDist;
+   g_inverseExpRecords[idx].originalRiskUSD = RiskPerLotForDistance(rDist) * g_inverseExpRecords[idx].lot;
+   g_inverseExpRecords[idx].exactRiskKnown = exact;
+   g_inverseExpRecords[idx].r03 = NormalizeDouble(historicalEntry + (actualDir == 1 ? rDist * 0.30 : -rDist * 0.30), _Digits);
+   g_inverseExpRecords[idx].r05 = NormalizeDouble(historicalEntry + (actualDir == 1 ? rDist * 0.50 : -rDist * 0.50), _Digits);
+   g_inverseExpRecords[idx].r10 = NormalizeDouble(historicalEntry + (actualDir == 1 ? rDist : -rDist), _Digits);
+   XAU_InverseStateSave(true);
+   return true;
+}
+
+void XAU_InverseReconcileState(bool startup)
+{
+   long account = AccountInfoInteger(ACCOUNT_LOGIN);
+   string server = AccountInfoString(ACCOUNT_SERVER);
+   bool changed = false;
+   for(int i = ArraySize(g_inverseExpRecords) - 1; i >= 0; i--)
+   {
+      if(!g_inverseExpRecords[i].active) continue;
+      bool identityOk = (g_inverseExpRecords[i].accountLogin == account &&
+                         g_inverseExpRecords[i].brokerServer == server &&
+                         g_inverseExpRecords[i].symbol == Symbol() &&
+                         g_inverseExpRecords[i].magic == InpMagicNumber &&
+                         g_inverseExpRecords[i].actualDirection == -g_inverseExpRecords[i].originalSignal);
+      if(!identityOk)
+      {
+         PrintFormat("INVERSE_STATE_MISMATCH ticket=%I64u posId=%I64u reason=IDENTITY_OR_DIRECTION_CONTRACT",
+                     g_inverseExpRecords[i].ticket, g_inverseExpRecords[i].posId);
+         g_inverseExpRecords[i].active = false;
+         changed = true;
+         continue;
+      }
+      if(XAU_InverseSelectLivePosition(g_inverseExpRecords[i].posId, g_inverseExpRecords[i].ticket))
+      {
+         int liveDir = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+         if(liveDir != g_inverseExpRecords[i].actualDirection)
+         {
+            PrintFormat("INVERSE_STATE_MISMATCH posId=%I64u reason=LIVE_DIRECTION_CHANGED", g_inverseExpRecords[i].posId);
+            g_inverseExpRecords[i].active = false;
+            changed = true;
+         }
+         else if(startup)
+         {
+            g_inverseExpRecords[i].ticket = (ulong)PositionGetInteger(POSITION_TICKET);
+            PrintFormat("INVERSE_STATE_RESTORED ticket=%I64u posId=%I64u riskUSD=%.2f peakR=%.3f troughR=%.3f closeState=%s",
+                        g_inverseExpRecords[i].ticket, g_inverseExpRecords[i].posId,
+                        g_inverseExpRecords[i].originalRiskUSD, g_inverseExpRecords[i].peakR,
+                        g_inverseExpRecords[i].troughR,
+                        XAU_InverseCloseStateName(g_inverseExpRecords[i].closeState));
+            if(g_inverseExpRecords[i].closeState == INVERSE_CLOSE_PENDING_RETRY ||
+               g_inverseExpRecords[i].closeState == INVERSE_CLOSE_REQUESTED ||
+               g_inverseExpRecords[i].closeState == INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION)
+               PrintFormat("INVERSE_PENDING_CLOSE_RESTORED ticket=%I64u reason=%s retries=%d",
+                           g_inverseExpRecords[i].ticket, g_inverseExpRecords[i].pendingCloseReason,
+                           g_inverseExpRecords[i].closeRetryCount);
+         }
+         continue;
+      }
+      double exitPrice = 0.0;
+      double net = XAU_InversePositionHistoryNet(g_inverseExpRecords[i].posId, exitPrice);
+      double realizedR = g_inverseExpRecords[i].originalRiskUSD > 0.0 ? net / g_inverseExpRecords[i].originalRiskUSD : 0.0;
+      string reason = StringLen(g_inverseExpRecords[i].pendingCloseReason) > 0
+                    ? g_inverseExpRecords[i].pendingCloseReason : "INVERSE_EXTERNAL_OR_BROKER_CLOSE";
+      PrintFormat("INVERSE_ORPHAN_STATE_REMOVED posId=%I64u reason=%s", g_inverseExpRecords[i].posId, reason);
+      XAU_InverseExperimentRecordClose(g_inverseExpRecords[i].posId, exitPrice, realizedR, net, reason);
+      changed = true;
+   }
+   if(changed || startup) XAU_InverseStateSave(true);
+}
+
+void XAU_ManageInverseExperimentPositionsCore()
+{
+   bool indicatorsReady = (ArraySize(bufATR) >= 2 && bufATR[1] > 0.0 &&
+                           ArraySize(bufRSI) >= 2 && ArraySize(bufEMAFast) >= 2 &&
+                           ArraySize(bufEMASlow) >= 2);
+   static datetime lastUnavailableLog = 0;
+   if(!indicatorsReady && TimeCurrent() - lastUnavailableLog >= 60)
+   {
+      Print("INVERSE_EXIT_INDICATORS_UNAVAILABLE core risk/peak/close/retry management remains active");
+      lastUnavailableLog = TimeCurrent();
+   }
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      ulong ticket = posInfo.Ticket();
+      ulong posId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      int idx = XAU_InverseExperimentFind(posId);
+      if(idx < 0)
+      {
+         if(!XAU_InverseInitializeMissingLiveState()) continue;
+         idx = XAU_InverseExperimentFind(posId);
+         if(idx < 0 || !posInfo.SelectByTicket(ticket)) continue;
+      }
+      double curPrice = posInfo.PriceCurrent();
+      double curSL = posInfo.StopLoss();
+      double curTP = posInfo.TakeProfit();
+      double netProfit = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+      bool isBuy = (g_inverseExpRecords[idx].actualDirection == 1);
+      int momentum = 0;
+      bool trendAligned = false;
+      if(indicatorsReady)
+      {
+         double close1 = iClose(Symbol(), PERIOD_M5, 1);
+         double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+         double close2 = iClose(Symbol(), PERIOD_M5, 2);
+         momentum = CleanMomentumScore(isBuy, close1, open1, close2,
+                                       bufEMAFast[1], bufEMASlow[1], bufRSI[1]);
+         trendAligned = CleanRegimeAligned(isBuy);
+      }
+      XAU_InverseExperimentManagePosition(idx, curPrice, curSL, curTP,
+                                          netProfit, indicatorsReady, momentum, trendAligned);
+   }
+   XAU_InverseReconcileState(false);
 }
 
 void ManagePositions()
 {
+   if(XAUAI_INVERSE_EXPERIMENT)
+   {
+      XAU_ManageInverseExperimentPositionsCore();
+      return;
+   }
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return;
    // GUARD: Do not attempt any momentum logic until ALL indicator buffers are ready.
@@ -19755,19 +20437,6 @@ void ManagePositions()
 	      bool recoveryLikelyEA = CleanRecoveryLikely(isBuy, trendAlignedEA, momentumScoreEA,
 	                                                   structureConfirmedEA, emaAgainstEA,
 	                                                   rsiAgainstEA, rMultEA);
-
-      // INVERSE EXP1: once the inverted broker position exists, manage the
-      // ACTUAL executed direction only. This intentionally consumes the
-      // position before TTM/GrowthGuard/CleanExit/runner/basket logic so the
-      // experiment stays one clean manager, not another stack of systems.
-      if(XAUAI_INVERSE_EXPERIMENT)
-      {
-         XAU_InverseExperimentManagePosition(ticket, isBuy, openPx, curPrice,
-                                             curSL, curTP, slDist, profit,
-                                             peak, rDollars, momentumScoreEA,
-                                             trendAlignedEA);
-         continue;
-      }
 
       // ======== v6.4.19 TRADE THESIS MONITOR ========
       // Re-evaluate WHY we entered this trade. If the original thesis is dead,
@@ -21973,6 +22642,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    if(entry == DEAL_ENTRY_IN)
    {
       lastExitReason = "";
+      // The inverse build captures authoritative fill/state in OpenTrade()
+      // and the dedicated inverse dataset. Never seed normal committee or
+      // TradeBrain lifecycle records from an opposite-execution deal.
+      if(XAUAI_INVERSE_EXPERIMENT) return;
       ulong openPosId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
       if(openPosId > 0 && StringLen(g_lastTradePattern) > 0)
       {
@@ -22063,6 +22736,68 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    lastExitReason = resolvedExitReason;
    // On exit, the closing deal is opposite side of the position
    string dirStr = (dType == DEAL_TYPE_SELL) ? "BUY" : "SELL";
+
+   // Canonical inverse close lifecycle. Every inverse outcome terminates here
+   // before any normal strategy learning, cooldown, loss-streak, re-entry,
+   // committee, AI-feedback, or direction-stat write can run.
+   if(XAUAI_INVERSE_EXPERIMENT)
+   {
+      int inverseIdx = XAU_InverseExperimentFind(posId);
+      if(inverseIdx < 0)
+      {
+         PrintFormat("INVERSE_STATE_MISMATCH posId=%I64u deal=%I64u reason=CLOSE_WITHOUT_ACTIVE_STATE; normal learning still skipped",
+                     posId, dealTicket);
+         return;
+      }
+      int originalNormalDirection = g_inverseExpRecords[inverseIdx].originalSignal;
+      int actualExecutionDirection = g_inverseExpRecords[inverseIdx].actualDirection;
+      string decisionId = g_inverseExpRecords[inverseIdx].decisionId;
+      string inverseExitReason = StringLen(g_inverseExpRecords[inverseIdx].pendingCloseReason) > 0
+                               ? g_inverseExpRecords[inverseIdx].pendingCloseReason
+                               : resolvedExitReason;
+      double finalExitPrice = 0.0;
+      double inverseNet = XAU_InversePositionHistoryNet(posId, finalExitPrice);
+      if(finalExitPrice <= 0.0) finalExitPrice = dPrice;
+      double inverseR = g_inverseExpRecords[inverseIdx].originalRiskUSD > 0.0
+                      ? inverseNet / g_inverseExpRecords[inverseIdx].originalRiskUSD : 0.0;
+      XAU_InverseExperimentRecordClose(posId, finalExitPrice, inverseR, inverseNet, inverseExitReason);
+      totalTrades++;
+      if(inverseNet >= 0.01) wins++;
+      else if(inverseNet <= -0.01) losses++;
+      lastTradeClose = TimeCurrent();
+      lastClose.valid = false;
+      lastClose.reEntered = false;
+      PrintFormat("INVERSE_EXPERIMENT_CLOSE_CONFIRMED posId=%I64u deal=%I64u DecisionId=%s originalNormalDirection=%s actualExecutionDirection=%s exitReason=%s realizedR=%.3f realizedUSD=%.2f price=%.5f normalLearningWrites=SKIPPED",
+                  posId, dealTicket, decisionId,
+                  originalNormalDirection == 1 ? "BUY" : "SELL",
+                  actualExecutionDirection == 1 ? "BUY" : "SELL",
+                  inverseExitReason, inverseR, inverseNet, finalExitPrice);
+      PrintFormat("INVERSE_REENTRY_PARITY_UNAVAILABLE posId=%I64u DecisionId=%s action=DO_NOT_DERIVE_NORMAL_REENTRY_FROM_INVERSE_OUTCOME originalNormalDirection=%s actualExecutionDirection=%s",
+                  posId, decisionId,
+                  originalNormalDirection == 1 ? "BUY" : "SELL",
+                  actualExecutionDirection == 1 ? "BUY" : "SELL");
+      BotMonitorDecisionEvent("INVERSE_TRADE_CLOSED", "EXIT", "INVERSE_EXPERIMENT_MANAGER",
+                              StringFormat("Inverse experiment closed: %.3fR $%.2f", inverseR, inverseNet),
+                              true, inverseExitReason, "INVERSE_EXPERIMENT", (string)((long)posId),
+                              inverseNet, finalExitPrice, inverseExitReason, "INVERSE_EXPERIMENT_MANAGER",
+                              dealReason == DEAL_REASON_SL,
+                              dealReason == DEAL_REASON_CLIENT || dealReason == DEAL_REASON_MOBILE || dealReason == DEAL_REASON_WEB,
+                              dealReason == DEAL_REASON_SO, wasEAForcedClose,
+                              actualExecutionDirection == 1 ? "BUY" : "SELL",
+                              "", inverseExitReason, 0.0, 0.0, actualExecutionDirection, "", "");
+      if(posId > 0)
+      {
+         ClearPeakProfit(posId); XAU_ClearProfitFloor(posId); ClearPartialTaken(posId);
+         ClearAIVeto(posId); ClearTPExtend(posId); APlusClearShield(posId);
+         CloudMapPop(posId);
+      }
+      double inverseDiscardWorst = 0.0;
+      int inverseDiscardSeconds = 0;
+      XAU_PopTradeQuality(posId, inverseDiscardWorst, inverseDiscardSeconds); // cleanup only
+      XAU_InverseCompactRecords();
+      XAU_InverseStateSave(true);
+      return;
+   }
 
    totalTrades++;
    // Treat anything <= -$0.01 as real loss; anything >= $0.01 as win; else BE (no counter change)

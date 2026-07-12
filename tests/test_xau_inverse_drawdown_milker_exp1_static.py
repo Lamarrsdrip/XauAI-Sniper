@@ -100,17 +100,17 @@ def test_inverse_profit_manager_protects_captures_and_closes_by_one_r():
     assert "INVERSE_EXP_CAPTURE_0_5R" in text
     assert "INVERSE_EXP_TP_1R" in text
     assert "INVERSE_EXPERIMENT_EXTEND_TO_1R" in text
-    close_func = text[text.index("bool XAU_InverseExperimentClose"):text.index("bool XAU_InverseExperimentManagePosition")]
-    assert close_func.index("bool ok = SafePositionClose") < close_func.index("XAU_InverseExperimentRecordClose")
+    close_func = text[text.index("bool XAU_InverseAttemptPendingClose"):text.index("bool XAU_InverseExperimentManagePosition")]
+    assert "bool ok = SafePositionClose" in close_func
+    assert "INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION" in close_func
+    assert "XAU_InverseExperimentRecordClose" not in close_func
 
 
 def test_position_management_uses_actual_executed_direction():
     text = src()
     assert "signal = execSignal;" in text
-    assert "XAU_InverseExperimentRecordOpen(openedPosId, candidateId, originalSignal, signal, price" in text
-    open_success_block = text[text.index("if(ok)"):text.index('BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ENTRY", "OrderSend"')]
-    assert "XAU_BrainRecordOpen(openedPosId, signal, price, sl, tp, lots" not in open_success_block
-    assert "int actualDir = isBuy ? 1 : -1;" in text
+    assert re.search(r"XAU_InverseExperimentRecordOpen\(openedPosId, candidateId, entryPath, originalReason,", text)
+    assert "actualDirection == 1" in text
 
 
 def test_experiment_preserves_normal_trade_count_controls():
@@ -226,8 +226,9 @@ def test_executed_direction_and_inversion_flag_stored_separately_from_original()
 
 def test_every_executed_inverse_trade_recorded_into_inverse_experiment_dataset():
     text = src()
-    assert "XAU_InverseExperimentRecordOpen(openedPosId, candidateId, originalSignal, signal, price" in text
-    csv_write_fn = text[text.index("void XAU_InverseExperimentAppend("):text.index("int XAU_InverseExperimentFind")]
+    assert re.search(r"XAU_InverseExperimentRecordOpen\(openedPosId, candidateId, entryPath, originalReason,", text)
+    start = text.index("void XAU_InverseExperimentAppend(")
+    csv_write_fn = text[start:text.index("bool XAU_InverseExperimentRecordOpen(", start)]
     assert '"INVERSE_ALL_APPROVED_TRADES"' in csv_write_fn
     assert '"decisionId"' in csv_write_fn
     assert "NORMAL_B_PRESERVED" not in csv_write_fn
@@ -300,3 +301,150 @@ def test_separate_csv_performance_recording_exists():
         "exitReason",
     ]:
         assert field in text
+
+
+def test_original_r_is_frozen_from_actual_broker_position():
+    text = src()
+    record = text[text.index("bool XAU_InverseExperimentRecordOpen("):text.index("void XAU_InverseExperimentUpdate(")]
+    manager = text[text.index("bool XAU_InverseExperimentManagePosition("):text.index("double XAU_InversePositionHistoryNet(")]
+    assert "PositionGetDouble(POSITION_PRICE_OPEN)" in record
+    assert "PositionGetDouble(POSITION_SL)" in record
+    assert "PositionGetDouble(POSITION_VOLUME)" in record
+    assert "originalRiskUSD = RiskPerLotForDistance(rDist) * actualLot" in record
+    assert "g_inverseExpRecords[idx].originalRiskUSD" in manager
+    assert "profit / rDollars" not in manager
+    assert "atr * InpSLMultiplier" not in manager
+
+
+def test_inverse_core_runs_before_indicator_guards():
+    text = src()
+    manage = text[text.index("void ManagePositions()") : text.index("// ======== v6.4.19 TRADE THESIS MONITOR")]
+    assert manage.index("XAU_ManageInverseExperimentPositionsCore();") < manage.index("if(ArraySize(bufATR) < 2")
+    core = text[text.index("void XAU_ManageInverseExperimentPositionsCore()") : text.index("void ManagePositions()")]
+    assert "INVERSE_EXIT_INDICATORS_UNAVAILABLE" in core
+    assert "netProfit = posInfo.Profit() + posInfo.Swap() + posInfo.Commission()" in core
+
+
+def test_exit_priority_is_pending_then_one_r_then_giveback_then_half_r_then_protection():
+    text = src()
+    manager = text[text.index("bool XAU_InverseExperimentManagePosition("):text.index("double XAU_InversePositionHistoryNet(")]
+    pending = manager.index("closeState == INVERSE_CLOSE_REQUESTED")
+    one_r = manager.index("if(rMult >= 1.0)")
+    giveback = manager.index("givebackPct >= 45.0")
+    half_r = manager.index("if(rMult >= 0.50)")
+    protect = manager.index("double protectR")
+    assert pending < one_r < giveback < half_r < protect
+
+
+def test_close_decision_is_persistent_and_confirmed_by_transaction():
+    text = src()
+    for marker in [
+        "INVERSE_CLOSE_REQUESTED",
+        "INVERSE_CLOSE_PENDING_RETRY",
+        "INVERSE_CLOSE_ACCEPTED_AWAITING_CONFIRMATION",
+        "INVERSE_CLOSE_CLOSED_CONFIRMED",
+        "pendingCloseReason",
+        "closeRetryCount",
+        "lastBrokerRetcode",
+        "requestedCloseR",
+    ]:
+        assert marker in text
+    assert "INVERSE_EXPERIMENT_CLOSE_CONFIRMED" in text
+    assert "XAU_InverseExperimentRecordClose(posId" in text
+
+
+def test_inverse_state_persists_identity_r_extrema_and_close_intent():
+    text = src()
+    for marker in [
+        "XAU_INVERSE_STATE_SCHEMA",
+        "XAU_InverseStateSave",
+        "XAU_InverseStateLoad",
+        "XAU_InverseReconcileState",
+        "originalRiskUSD",
+        "peakProfit",
+        "troughProfit",
+        "peakR",
+        "troughR",
+        "lastProtectedSL",
+        "pendingCloseReason",
+    ]:
+        assert marker in text
+    assert "XAU_InverseStateLoad();" in text
+    assert "XAU_InverseReconcileState(true);" in text
+    assert "XAU_InverseStateSave(true);" in text
+
+
+def test_inverse_close_returns_before_normal_learning_writes():
+    text = src()
+    tx = text[text.index("void OnTradeTransaction("):text.index("//+------------------------------------------------------------------+\n//| HELPERS")]
+    branch_start = tx.index("// Canonical inverse close lifecycle")
+    branch_end = tx.index("\n   totalTrades++;", branch_start)
+    inverse_branch = tx[branch_start:branch_end]
+    assert "return;" in inverse_branch
+    assert "normalLearningWrites=SKIPPED" in inverse_branch
+    for forbidden in [
+        "TradeMemory_Record(",
+        "XAU_AppendTradeBrain(",
+        "XAU_PostTradeConsciousAnalysis(",
+        "RecordPattern(",
+        "/api/ai/feedback",
+    ]:
+        assert forbidden not in inverse_branch
+
+
+def test_entry_path_is_captured_before_reason_becomes_decision_id():
+    text = src()
+    start = text.index("string originalReason = reason;")
+    block = text[start:text.index("bool ok = XAU_CentralizedOpeningExecute(", start)]
+    assert block.index("string entryPath") < block.index("reason = candidateId")
+    for path in ["MANUAL", "RE_ENTRY", "RECOVERY", "RETRY", "PRIMARY"]:
+        assert f'"{path}"' in block
+
+
+def test_pyramid_uses_explicit_normal_contract_and_centralized_opposite_execution():
+    text = src()
+    start = text.index("void CheckPyramidOpportunity()")
+    pyramid = text[start:text.index("void OnTick()", start)]
+    assert "dir = g_inverseExpRecords[baseInverseIdx].originalSignal" in pyramid
+    assert "int normalPyramidDirection = dir;" in pyramid
+    assert "int experimentalPyramidDirection = -normalPyramidDirection;" in pyramid
+    assert 'XAU_CentralizedOpeningExecute("PYRAMID"' in pyramid
+    assert 'XAU_InverseExperimentRecordOpen(pyramidPosId, pyramidDecisionId, "PYRAMID"' in pyramid
+
+
+def test_netting_pyramid_merges_only_an_existing_record():
+    text = src()
+    record = text[text.index("bool XAU_InverseExperimentRecordOpen("):text.index("void XAU_InverseExperimentUpdate(")]
+    assert "bool existingRecord = (idx >= 0);" in record
+    assert 'if(existingRecord && entryPath == "PYRAMID")' in record
+    assert "INVERSE_NETTING_PYRAMID_STATE_MERGED" in record
+    merge = record[record.index('if(existingRecord && entryPath == "PYRAMID")'):record.index("g_inverseExpRecords[idx].active = true;")]
+    assert "peakProfit =" not in merge
+    assert "troughProfit =" not in merge
+    assert "closeState =" not in merge
+
+
+def test_only_centralized_boundary_opens_market_exposure():
+    text = src()
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+    assert len(re.findall(r"\?\s*trade\.Buy\s*\(", code)) == 1
+    assert len(re.findall(r":\s*trade\.Sell\s*\(", code)) == 1
+    boundary = text[text.index("bool XAU_CentralizedOpeningExecute("):text.index("bool OpenTrade(")]
+    assert "trade.Buy" in boundary and "trade.Sell" in boundary
+
+
+def test_inverse_discretionary_exit_stack_is_single_owner():
+    text = src()
+    tick = text[text.index("void OnTick()") :]
+    assert "if(!XAUAI_INVERSE_EXPERIMENT && ManageBasket())" in tick
+    assert "if(!XAUAI_INVERSE_EXPERIMENT && !noLimitMode) EPF_ManagePartials();" in tick
+    assert "if(!XAUAI_INVERSE_EXPERIMENT) PG_PerPositionRatchet();" in tick
+    assert "if(!XAUAI_INVERSE_EXPERIMENT && !noLimitMode && InpWeeklyTarget > 0" in tick
+    assert "XAU_ManageInverseExperimentPositionsCore();\n      return;" in text
+
+
+def test_demo_and_ownership_guards_are_account_symbol_magic_scoped():
+    text = src()
+    assert "ACCOUNT_TRADE_MODE_DEMO" in text
+    assert "posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()" in text
+    assert "accountLogin" in text and "brokerServer" in text and "magic" in text

@@ -16,10 +16,10 @@ These tests prove, from the source text alone (no MT5 runtime available):
   2. Every opening path (primary, re-entry, recovery, pyramid, manual) routes
      through it, passing an explicit (normalDirection, executionDirection)
      pair rather than recomputing/inferring direction locally.
-  3. The re-entry double-inversion bug is fixed: OpenTrade() is no longer
-     handed lastClose.dir directly.
-  4. The pyramid path derives normalPyramidDirection from Opposite(actual),
-     never from a fresh/independent signal re-scan.
+  3. Re-entry never derives a normal decision from an inverse outcome; when
+     a legitimate normal lifecycle supplies lastClose.dir, OpenTrade inverts it once.
+  4. Pyramid qualification uses the persisted original-normal-direction
+     contract and the centralized boundary executes its opposite once.
   5. The centralized function aborts and refuses to send when
      XAUAI_INVERSE_EXPERIMENT and directionInversions != 1.
   6. No experimental-only entry-eligibility gate was introduced anywhere.
@@ -109,24 +109,23 @@ def test_open_trade_passes_original_and_exec_signal_explicitly():
     assert "bool ok = XAU_CentralizedOpeningExecute(entryPath, candidateId, originalSignal, signal," in text
 
 
-def test_pyramid_derives_normal_direction_from_opposite_of_actual_not_fresh_signal():
+def test_pyramid_derives_normal_direction_from_persisted_inverse_state_contract():
     text = src()
-    assert "int normalPyramidDirection = XAUAI_INVERSE_EXPERIMENT ? -dir : dir;" in text
+    assert "dir = g_inverseExpRecords[baseInverseIdx].originalSignal;" in text
+    assert "int normalPyramidDirection = dir;" in text
+    assert "int experimentalPyramidDirection = -normalPyramidDirection;" in text
     fn_start = text.index("void CheckPyramidOpportunity()")
     fn_end = text.index("\n//+", text.index("PYRAMID FAILED"))
     body = text[fn_start:fn_end]
-    # execution direction must be the SAME `dir` used for every qualification
-    # gate above it in the function -- not re-derived from any fresh signal.
-    assert "XAU_CentralizedOpeningExecute(\"PYRAMID\", pyramidDecisionId, normalPyramidDirection, dir," in body
+    assert "XAU_CentralizedOpeningExecute(\"PYRAMID\", pyramidDecisionId, normalPyramidDirection, experimentalPyramidDirection," in body
 
 
-def test_pyramid_direction_definition_unchanged_still_from_actual_open_position():
-    # The base position's ACTUAL side is what pyramid adds to -- confirms we
-    # did not touch qualification/regime/momentum/timing logic at all, only
-    # the final order-send boundary.
+def test_pyramid_keeps_normal_and_actual_direction_separate():
     text = src()
-    assert "bool isBuy = (origType == POSITION_TYPE_BUY);" in text
-    assert "int dir = isBuy ? 1 : -1;" in text
+    assert "int actualBaseDirection = actualBaseIsBuy ? 1 : -1;" in text
+    assert "int dir = actualBaseDirection;" in text
+    assert "bool isBuy = (dir == 1); // normal v6.19 pyramid decision semantics" in text
+    assert "bool executionIsBuy = !isBuy; // exactly one inversion at final execution" in text
 
 
 # --------------------------------------------------------------------------
@@ -136,18 +135,15 @@ def test_pyramid_direction_definition_unchanged_still_from_actual_open_position(
 def test_re_entry_no_longer_passes_actual_closed_direction_straight_into_open_trade():
     text = src()
     assert "if(OpenTrade(lastClose.dir, bufATR[1], \"RE_ENTRY\", InpReEntrySize))" not in text
-    assert "int normalReEntryDirection = -lastClose.dir;" in text
+    assert "int normalReEntryDirection = lastClose.dir;" in text
     assert "if(OpenTrade(normalReEntryDirection, bufATR[1], \"RE_ENTRY\", InpReEntrySize))" in text
+    assert "INVERSE_REENTRY_PARITY_UNAVAILABLE" in text
 
 
-def test_re_entry_qualification_logic_still_uses_actual_closed_direction_unchanged():
-    # Only the OpenTrade() call site changes. Direction lockout, price-window,
-    # and timing/classification gates all still correctly reason about the
-    # ACTUAL side that just closed ("should I retry the same real side"),
-    # which is a different question from "what does OpenTrade() need."
+def test_re_entry_qualification_uses_original_normal_direction_contract():
     text = src()
     fn_start = text.index("void CheckReEntryOpportunity()")
-    fn_end = text.index("int normalReEntryDirection = -lastClose.dir;")
+    fn_end = text.index("int normalReEntryDirection = lastClose.dir;")
     body = text[fn_start:fn_end]
     assert "IsDirectionLocked(lastClose.dir)" in body
     assert "double curPrice = (lastClose.dir == 1) ? ask : bid;" in body
@@ -225,21 +221,15 @@ def test_approval_parity_normal_approved_equals_experimental_approved():
 
 def test_exit_isolation_bypass_for_inverse_positions_is_unchanged():
     text = src()
-    assert (
-        "if(XAUAI_INVERSE_EXPERIMENT)\n"
-        "      {\n"
-        "         XAU_InverseExperimentManagePosition(ticket, isBuy, openPx, curPrice,\n"
-        "                                             curSL, curTP, slDist, profit,\n"
-        "                                             peak, rDollars, momentumScoreEA,\n"
-        "                                             trendAlignedEA);\n"
-        "         continue;\n"
-        "      }"
-    ) in text
+    manage = text[text.index("void ManagePositions()") : text.index("// ======== v6.4.19 TRADE THESIS MONITOR")]
+    assert "if(XAUAI_INVERSE_EXPERIMENT)" in manage
+    assert "XAU_ManageInverseExperimentPositionsCore();" in manage
+    assert "return;" in manage
 
 
 def test_inverse_exit_manager_constants_and_thresholds_untouched():
     text = src()
-    assert "bool XAU_InverseExperimentManagePosition(ulong ticket, bool isBuy, double openPx," in text
+    assert "bool XAU_InverseExperimentManagePosition(int idx, double curPrice, double curSL, double curTP," in text
     assert "INVERSE_EXP_TP_1R" in text
     assert "INVERSE_EXP_CAPTURE_0_5R" in text
     assert "INVERSE_EXP_GIVEBACK_AFTER_0_3R" in text
