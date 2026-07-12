@@ -14,6 +14,91 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.21.0 — 2026-07-12 — R-Based Exit Manager (forensic exit-system redesign)
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.21.0"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.21.0.mq5`
+- [x] Top-of-file header banner updated (single physical line)
+- [x] **COMPILE IN METAEDITOR — 0 errors, 0 warnings** (`compile_logs/v6210_r_exit_manager_compile.log`)
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` byte-synced to canonical source
+- [x] `frontend/src/components/DownloadSection.jsx`, `Footer.jsx`, `cloud/CloudLanding.jsx`, `AdminPortal.jsx`, `FeaturesSection.jsx` version/edition/filename strings updated
+- [x] `backend/server.py` `TradeMemoryRecord.ea_version` default updated
+- [x] Static test added: `tests/test_xau_v6210_r_exit_manager_static.py` (30 tests, all passing)
+- [x] Full existing suite re-run: 712 passed, 120 pre-existing (unrelated, version-pin-staleness) failures identical to the pre-change baseline — zero new regressions
+
+### Owner request
+Full forensic redesign of the normal bot's EXIT system only, per explicit spec: replace the stack
+of competing discretionary profit-exit systems with one centralized, R-normalized exit manager.
+1R fixed at entry (original SL distance × symbol/volume value via the existing `RiskPerLotForDistance`
+helper), never recomputed from a later, moved stop. Stages: hold below 0.3R; arm ~0.15R protection
+at 0.3R; close ~0.5R on weak continuation or hold toward 1R (locking ~0.35-0.40R) on strong
+continuation; hard close at 1R; close on 45% peak giveback once armed. Explicitly must NOT touch
+signal generation, grading, lot sizing, gating, re-entry, or pyramid qualification.
+
+### Architecture found / conflicts found
+Sixteen independently active discretionary profit-exit authorities were found competing over the
+same tickets: `XAU_SmartExit3Layer`, `XAU_ProtectPeakProfitFloor`, the A+ Profit Shield block, AMPL,
+three Clean-Exit trail/partial systems, `PG_PerPositionRatchet` (independent `OnTick()` call site,
+bypasses `SafeModifySL` via raw `OrderSend`), the AI proactive-exit auditor, `EPF_ManagePartials`,
+Recovery-Expansion, TTM, TRI, and basket-level soft-lock/lifecycle closes (`ManageBasket()` runs
+*before* `ManagePositions()` and short-circuits it entirely on a basket-level decision). None shared
+state — three independent "already partialed" trackers existed. "1R" was not a stable concept
+anywhere: it was recomputed live from whatever the *current* SL happened to be, which several of
+these systems were simultaneously ratcheting.
+
+### New authority
+`XAU_ManageRBasedExit()` (new, in the .mq5 immediately before `ManagePositions()`) is inserted as the
+very first action per ticket inside `ManagePositions()`'s loop — before the AI block, before TTM,
+before Clean Exits — and `continue`s unconditionally when `InpRExitEnable` is true (default), so
+nothing downstream in that loop runs for the ticket that tick. `PG_PerPositionRatchet` and
+`EPF_ManagePartials` (their independent `OnTick()` call sites) are wrapped with
+`if(!InpRExitEnable)`. `ManageBasket()` gets a one-line internal early-return
+(`if(InpRExitEnable) return false;`) placed *after* its flat-state-reset housekeeping but *before*
+any peak-arm/giveback decision, so basket bookkeeping still runs but discretionary basket profit
+exits do not. True emergency/account-safety paths (broker SL/margin stop-out, `WEEKEND_CLOSE`,
+`PROP_FIRM_LOSS_LOCK`, `EQUITY_PROTECT`, `WEEKLY_TARGET_HIT`, remote force-close/close-all) are
+separate, unconditional `OnTick()`-level `CloseAll()`/`SafePositionClose()` calls entirely outside
+`ManagePositions()`/`ManageBasket()` and were not touched.
+
+Per-ticket state (`struct XAU_RExitState`, dynamic array `g_rExit[]`, keyed strictly by ticket —
+same established pattern as the existing `peakTickets[]/peakProfits[]`) captures `originalEntryPrice`
+from `POSITION_PRICE_OPEN` (broker-immutable) and `originalStopLoss`/`originalStopDistance`/
+`originalRiskUSD` from the SL in place the first tick the manager observes the ticket — no hook into
+`OpenTrade()` or `CheckPyramidOpportunity()` was needed, since this manager is now the sole
+SL-modifying authority. Positions already open at deploy time (or after a terminal restart, via the
+new `XAU_ReconcileRExitOnInit()`, modeled on the existing `XAU_ReconcileTradeBrainOnInit()` pattern)
+get a conservative first-observation estimate, explicitly tagged `reconciledFromRestart` and logged
+— peak/trough are seeded from current profit only, never fabricated.
+
+Continuation scoring at the 0.5R decision reuses signals already computed once per position, per
+tick, in `ManagePositions()` (`momentumScoreEA`, `trendAlignedEA`, `emaAgainstEA`, `rsiAgainstEA`,
+`structureConfirmedEA`, plus live spread) — no new indicator handles. Net current profit reuses the
+established `posInfo.Profit() + posInfo.Swap() + posInfo.Commission()` idiom already used elsewhere
+in `ManagePositions()`. Counterfactual instrumentation (MFE, MAE, R-at-exit, and profit snapshots at
+first-crossing of 0.2/0.3/0.4/0.5/0.75/1.0R) is logged at every close (`R_EXIT_COUNTERFACTUAL`) but
+is read by no live decision — the default 1R target is unchanged.
+
+### Entry-regression proof
+`OpenTrade()`, `CheckPyramidOpportunity()`, `CheckReEntryOpportunity()`, `ScoreSetups()`, and
+`XAU_ComputeCombinedGradeForCandidate()` function bodies are byte-for-byte identical to v6.20.6
+(verified via brace-matched extraction + direct string comparison, not just a visual diff).
+`InpNormalRiskPct` and `InpMaxOpenTrades` declaration lines are unchanged.
+
+### Independent audit
+Self-verified during implementation: a `git diff --stat`-based grep audit confirmed every disabled
+tag is either unreachable downstream of the new manager's `continue` or behind an
+`if(!InpRExitEnable)`/`if(InpRExitEnable) return false;` guard, while every emergency `CloseAll()`
+call site was grepped and confirmed to have no `InpRExitEnable` reference within 200 characters
+(i.e., not accidentally wrapped).
+
+### Explicitly NOT built/touched in this release
+No partial closes (per spec, v1 is full-close only). No extension beyond 1R (counterfactual data is
+collected but not acted on). No changes to entry timing, signal generation, grading, lot sizing, or
+pyramid/re-entry qualification.
+
+---
+
 ## v6.20.1 — 2026-07-09 — Delayed-Entry Outcome Telemetry
 
 ### EA Compile
