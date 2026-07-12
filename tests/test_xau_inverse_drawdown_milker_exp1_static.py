@@ -30,8 +30,15 @@ def test_normal_buy_executes_sell_and_normal_sell_executes_buy_for_all_approved_
     assert "execSignal = -originalSignal;" in text
     assert 'originalSignalDirection=%s executedDirection=%s' in text
     assert 'ORIGINAL_SIGNAL=%s INVERSE_EXECUTION=%s BROKER_ORDER_SENT=%s INVERSION_CONFIRMED=%s' in text
-    assert re.search(r"if\(signal == 1\) ok = trade\.Buy", text)
-    assert re.search(r"else ok = trade\.Sell", text)
+    # v6.19.0-EXP1 centralization: OpenTrade() no longer calls trade.Buy/Sell
+    # inline -- it hands (originalSignal, signal) to the single centralized
+    # opening-execution boundary, which performs the BUY/SELL branch itself.
+    assert re.search(
+        r"bool ok = XAU_CentralizedOpeningExecute\(entryPath, candidateId, originalSignal, signal,",
+        text,
+    )
+    assert re.search(r"\? trade\.Buy \(lots, Symbol\(\), 0, slPrice, tpPrice, comment\)", text)
+    assert re.search(r": trade\.Sell\(lots, Symbol\(\), 0, slPrice, tpPrice, comment\);", text)
 
 
 def _eligible_inversion_block(text):

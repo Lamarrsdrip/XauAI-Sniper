@@ -8302,7 +8302,21 @@ void CheckReEntryOpportunity()
    // early-exit inside OpenTrade permanently burned one of the day's limited
    // re-entries and marked this closed trade as "already re-entered" even
    // though no re-entry ever happened. Only consume them on a confirmed fill.
-   if(OpenTrade(lastClose.dir, bufATR[1], "RE_ENTRY", InpReEntrySize))
+   //
+   // v6.19.0-EXP1 CRITICAL FIX: lastClose.dir is the ACTUAL (already-inverted)
+   // broker side of the position that just closed (derived from the closing
+   // deal's DEAL_TYPE, not from a fresh normal-strategy signal -- see the
+   // dirStr assignment near the TRADE-BRAIN CLOSE block). OpenTrade()
+   // unconditionally applies exactly one inversion to whatever direction it
+   // receives. Passing lastClose.dir straight through therefore silently
+   // double-inverted every re-entry: a SELL that just stopped out was being
+   // re-opened as BUY, contradicting this function's own documented contract
+   // ("RE_ENTRY re-adds the SAME direction that just stopped out", file header
+   // above). Pass the normal-equivalent direction (Opposite of the actual
+   // closed side) so OpenTrade's single inversion reproduces lastClose.dir --
+   // the actually-intended re-entry side -- as the executed direction.
+   int normalReEntryDirection = -lastClose.dir;
+   if(OpenTrade(normalReEntryDirection, bufATR[1], "RE_ENTRY", InpReEntrySize))
    {
       lastClose.reEntered = true;  // one-shot per original close
       todayReEntryCount++;
@@ -11431,9 +11445,23 @@ void CheckPyramidOpportunity()
       }
    }
 
-   bool ok;
-   if(isBuy) ok = trade.Buy (addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
-   else      ok = trade.Sell(addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
+   // v6.19.0-EXP1: `dir`/`isBuy` here is derived from origType, i.e. the ACTUAL
+   // broker side of the position already open in this account -- which, in the
+   // experiment, is already the inverted side (OpenTrade() did the one real
+   // inversion when the base trade was opened). Adding to that SAME actual
+   // side is therefore already the correct experimental behavior and needs no
+   // second inversion here. What was missing was routing through the audited
+   // boundary: normalPyramidDirection is derived (Opposite of the actual side)
+   // purely so the telemetry/decision architecture never loses track of what
+   // the normal bot's corresponding pyramid decision was, per the requirement
+   // that the experiment must not infer that fact only from its own actual
+   // position side.
+   int normalPyramidDirection = XAUAI_INVERSE_EXPERIMENT ? -dir : dir;
+   string pyramidDecisionId = XAU_ExperimentDecisionId("PYRAMID:" + why, g_lastEntryGrade, normalPyramidDirection);
+   bool ok = XAU_CentralizedOpeningExecute("PYRAMID", pyramidDecisionId, normalPyramidDirection, dir,
+                                           addLot, pyramidSL, origTP, "XAU-SNIPER|" + why,
+                                           g_lastEntryGrade, why, addLot,
+                                           MathAbs(entryPx - pyramidSL), MathAbs(origTP - entryPx));
 
    if(ok)
    {
@@ -15683,6 +15711,57 @@ void XAU_LogExperimentAccountParity(string stage)
                TimeToString((datetime)SymbolInfoInteger(Symbol(), SYMBOL_TIME), TIME_DATE | TIME_SECONDS));
 }
 
+// ===== CENTRALIZED OPENING-EXECUTION BOUNDARY =====
+// The ONLY function in this file allowed to call trade.Buy()/trade.Sell() to
+// OPEN new exposure (pending/limit/stop orders are not used anywhere in this
+// EA). Every opening path -- primary entry, re-entry, recovery, pyramid add,
+// manual force-open -- must resolve its own normalDecisionDirection (what the
+// normal, non-inverted bot would have decided) and executionDirection (what
+// actually gets sent to the broker), then hand BOTH here unchanged. This
+// function does not choose or influence direction, grade, timing, or
+// eligibility -- it only (1) proves exactly one inversion occurred, (2)
+// refuses to send if that proof fails, (3) logs one standardized telemetry
+// line every caller shares, and (4) sends the order.
+bool XAU_CentralizedOpeningExecute(string entryPath, string decisionId,
+                                    int normalDecisionDirection, int executionDirection,
+                                    double lots, double slPrice, double tpPrice,
+                                    string comment, string grade, string strategy,
+                                    double requestedLot, double originalStopDistance,
+                                    double originalTargetDistance)
+{
+   int directionInversions = (executionDirection == -normalDecisionDirection) ? 1
+                            : (executionDirection ==  normalDecisionDirection) ? 0 : -1;
+   if(XAUAI_INVERSE_EXPERIMENT && directionInversions != 1)
+   {
+      PrintFormat("INVERSE_EXPERIMENT_CRITICAL_ABORT | EntryPath=%s | DecisionId=%s | DirectionInversions=%d | "
+                  "NormalDecisionDirection=%s | ExecutionDirection=%s | order NOT sent",
+                  entryPath, decisionId, directionInversions,
+                  normalDecisionDirection == 1 ? "BUY" : (normalDecisionDirection == -1 ? "SELL" : "NONE"),
+                  executionDirection == 1 ? "BUY" : (executionDirection == -1 ? "SELL" : "NONE"));
+      return false;
+   }
+
+   double entryPriceUsed = (executionDirection == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                                                       : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   datetime orderSendTime = TimeCurrent();
+   bool ok = (executionDirection == 1)
+           ? trade.Buy (lots, Symbol(), 0, slPrice, tpPrice, comment)
+           : trade.Sell(lots, Symbol(), 0, slPrice, tpPrice, comment);
+
+   PrintFormat("OPENING_TELEMETRY | DecisionId=%s | EntryPath=%s | NormalDecisionDirection=%s | "
+               "ExperimentalExecutionDirection=%s | DirectionInversions=%d | OriginalGrade=%s | Strategy=%s | "
+               "RequestedLot=%.2f | FinalLot=%.2f | OriginalStopDistance=%.2f | OriginalTargetDistance=%.2f | "
+               "InverseEntryPrice=%.2f | InverseSL=%.2f | InverseTP=%.2f | OrderSendTime=%s | BrokerRetcode=%d | OrderSendOK=%s",
+               decisionId, entryPath,
+               normalDecisionDirection == 1 ? "BUY" : "SELL", executionDirection == 1 ? "BUY" : "SELL",
+               directionInversions, grade, strategy, requestedLot, lots,
+               originalStopDistance, originalTargetDistance,
+               entryPriceUsed, slPrice, tpPrice,
+               TimeToString(orderSendTime, TIME_DATE | TIME_SECONDS),
+               (int)trade.ResultRetcode(), ok ? "true" : "false");
+   return ok;
+}
+
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
 {
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
@@ -16914,12 +16993,17 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                Symbol(), digits, DoubleToString(point, digits),
                (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD), g_spreadEMA, InpMagicNumber);
 
-   bool ok;
    string inverseComment = "INV_EXP|NORMAL_" + (originalSignal==1?"BUY":"SELL") + "|ACTUAL_" + (signal==1?"BUY":"SELL");
-   datetime orderSendTime = TimeCurrent();
    double spreadAtSend = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-   if(signal == 1) ok = trade.Buy(lots, Symbol(), 0, sl, tp, inverseComment);
-   else ok = trade.Sell(lots, Symbol(), 0, sl, tp, inverseComment);
+   string entryPath = isManualOverride ? "MANUAL"
+                     : (StringFind(reason, "RE_ENTRY") >= 0)  ? "RE_ENTRY"
+                     : (StringFind(reason, "RECOVERY") >= 0)  ? "RECOVERY"
+                     : "PRIMARY";
+   bool ok = XAU_CentralizedOpeningExecute(entryPath, candidateId, originalSignal, signal,
+                                           lots, sl, tp, inverseComment,
+                                           originalFinalGrade, funnelSetup,
+                                           originalLots, originalSLDist, originalTPDist);
+   datetime orderSendTime = TimeCurrent();
 
    // Mandatory, explicit, greppable proof the BROKER ORDER ITSELF was inverted --
    // not merely telemetry text. INVERSION_CONFIRMED is only ever true when the
@@ -24843,6 +24927,13 @@ void XAU_CheckPendingOpportunityRecovery()
                                         oppGrade, setup, sid, originalBlocker, recClass.why);
    Print("RECOVERY_EXECUTED: ", sid, " | ", dir == 1 ? "BUY" : "SELL", " ", setup,
          " grade=", oppGrade, " combined=", DoubleToString(oppCombined, 2), " | ", recClass.why);
+   // Direction contract: `dir` here is g_pendingOpportunity.dir, which
+   // XAU_RememberBlockedSignal() populates from the normal scan pipeline's
+   // fresh `signal` BEFORE any inversion -- this is the normal decision
+   // direction, not an actual/executed position side. Passing it straight to
+   // OpenTrade() is correct: OpenTrade() applies the single inversion.
+   PrintFormat("RECOVERY_DIRECTION_CONTRACT | NormalDecisionDirection=%s | WillExecuteAs=%s",
+               dir == 1 ? "BUY" : "SELL", dir == 1 ? "SELL" : "BUY");
    bool opened = OpenTrade(dir, atrNow, recoveryReason, 1.0);
    if(!opened)
       Print("RECOVERY_OPEN_TRADE_FAILED: ", sid, " -- OpenTrade() itself declined (final risk/broker gate)");
@@ -24954,6 +25045,16 @@ bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalB
    Print("MANUAL_FORCE_OPEN_EXECUTING: ", dir == 1 ? "BUY" : "SELL", " ", setup,
          " grade=", grade, " | user override of: ", originalBlocker,
          " | current chart read: ", foTypeStr, " (", foClass.why, ") -- informational only, override proceeds regardless");
+   // Direction contract (explicit, not left ambiguous): the `direction` field
+   // in a FORCE_OPEN_TRADE command names the NORMAL bot's blocked decision
+   // (the same direction shown for this candidate everywhere else it was
+   // logged -- blocked-idea memory, Command Center dashboard, recovery
+   // telemetry), NOT a literal broker-side instruction. OpenTrade() applies
+   // the same single inversion to a manual override that it applies to every
+   // other approved candidate: NORMAL_DECISION_BUY -> experimental SELL,
+   // NORMAL_DECISION_SELL -> experimental BUY.
+   PrintFormat("MANUAL_FORCE_OPEN_DIRECTION_CONTRACT | NormalDecisionDirection=%s | ExperimentalExecutionDirection=%s",
+               dir == 1 ? "BUY" : "SELL", dir == 1 ? "SELL" : "BUY");
    bool opened = OpenTrade(dir, atrNow, forceReason, 1.0, true);
    if(!opened)
    {
@@ -28932,6 +29033,10 @@ void BotMonitorPollCommands()
       // OpenTrade()) vs. what it cannot bypass (every hard safety check
       // already inside OpenTrade(), plus staleness/spread/duplicate checks
       // added here).
+      // v6.19.0-EXP1: `direction` names the NORMAL bot's decision (the same
+      // direction the blocked-candidate dashboard already shows), not a
+      // literal broker instruction -- see XAU_TryForceOpenTrade's explicit
+      // MANUAL_FORCE_OPEN_DIRECTION_CONTRACT log line for the resolved pair.
       string fDirRaw    = JsonStringField(body, "direction");
       string fSetup     = JsonStringField(body, "setup");
       string fGrade     = JsonStringField(body, "grade");
