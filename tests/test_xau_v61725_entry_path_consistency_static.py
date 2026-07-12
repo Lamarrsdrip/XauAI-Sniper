@@ -149,10 +149,14 @@ def test_recovery_calls_classifier_and_rejects_late_chase():
 # Fix 5: timing engine reconfirm branch re-checks LATE_CHASE on the confirming bar
 # ---------------------------------------------------------------------------
 def test_timing_engine_reconfirm_rejects_still_late_chase():
+    # v6.21.2 audit fix: the bar-based STILL_LATE_CHASE_ON_CONFIRM branch was
+    # part of the now-removed next-bar wait path. The wall-clock revalidation
+    # path re-checks the same condition under the name
+    # STILL_LATE_CHASE_AFTER_DELAY.
     ea = read(BACKEND_EA)
     fn = body(ea, "bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double sizeMulti, double atr)")
-    assert "else if(tcls.type == XAU_TIMING_LATE_CHASE)" in fn
-    assert "STILL_LATE_CHASE_ON_CONFIRM" in fn
+    assert 'else if(tcls.type == XAU_TIMING_LATE_CHASE)' in fn
+    assert "STILL_LATE_CHASE_AFTER_DELAY" in fn
 
 
 # ---------------------------------------------------------------------------

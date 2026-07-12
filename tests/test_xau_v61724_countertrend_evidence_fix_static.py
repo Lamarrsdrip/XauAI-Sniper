@@ -133,10 +133,14 @@ def test_timing_engine_skips_wait_when_immediate_confirm():
 
 
 def test_timing_engine_one_bar_wait_logic_still_present_for_uncertain_signals():
+    # v6.21.2 audit fix: the one-bar wait for uncertain signals has been
+    # REMOVED -- uncertain/marginal signals now go through the SAME bounded
+    # 120-180s wall-clock delay as every other signal (no exemption, no bar
+    # wait), with the equivalent chase-rejection now PRICE_RAN_TOO_FAR_CHASE.
     ea = read(BACKEND_EA)
     fn = body(ea, "bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double sizeMulti, double atr)")
-    assert "nowCandle == g_pendingEntryConfirm.firstSeenCandle + PeriodSeconds(PERIOD_M5)" in fn
-    assert "OVEREXTENDED_ON_CONFIRM" in fn
+    assert "nowCandle == g_pendingEntryConfirm.firstSeenCandle + PeriodSeconds(PERIOD_M5)" not in fn
+    assert "PRICE_RAN_TOO_FAR_CHASE" in fn
 
 
 # ---------------------------------------------------------------------------

@@ -133,9 +133,18 @@ def test_only_a_or_aplus_soft_blocked_candidates_become_pending():
 
 
 def test_recovery_checked_exactly_once_per_new_bar_only():
+    # v6.21.2 audit fix: recovery used to be gated on a new M5 bar (up to ~5
+    # minutes before the gauntlet even ran once). It is now called
+    # unconditionally every tick and the actual wait-then-revalidate delay is
+    # provided by the shared wall-clock timing engine downstream
+    # (XAU_CheckRecoveryAwaitingTiming -> XAU_TimingEngineConfirmsEntry) --
+    # single-attempt semantics are preserved (XAU_CheckPendingOpportunityRecovery
+    # clears g_pendingOpportunity.active unconditionally before any check),
+    # just no longer bar-gated.
     ea = read(BACKEND_EA)
-    marker = "if(newM5Bar) XAU_CheckPendingOpportunityRecovery();"
-    assert marker in ea
+    assert "if(newM5Bar) XAU_CheckPendingOpportunityRecovery();" not in ea
+    assert "XAU_CheckPendingOpportunityRecovery();" in ea
+    assert "g_pendingOpportunity.active = false; // single-attempt: clear now regardless of outcome below" in ea
 
 
 def test_recovery_clears_pending_flag_before_any_validity_check():

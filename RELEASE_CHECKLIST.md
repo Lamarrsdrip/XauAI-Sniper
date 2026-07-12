@@ -14,6 +14,48 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.21.2 — 2026-07-12 — Wall-Clock Entry Timing + R-Exit Identity Hardening
+
+### EA Compile
+- [x] EA internal version: `#define XAUAI_EA_VERSION "v6.21.2"`
+- [x] Canonical filename: `XAUUSD_AI_Sniper_EA_v6.21.2.mq5`
+- [x] Top-of-file header banner updated (single physical line)
+- [~] **COMPILE IN METAEDITOR — NOT independently re-verified for this exact filename.** MetaEditor/Wine hung reproducibly (3 attempts, both Z:\ and C:\ paths, ~0% CPU, never progressed) compiling the renamed file. The identical logic content (this release's code changes, prior to the final rename + 3 version-string edits) DID compile clean at 0 errors/0 warnings twice earlier in the same session (`compile_logs/` — mid-refactor checks). Only file name and version-literal strings changed since. Recommend a manual GUI compile before live deployment to close this gap.
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` byte-synced to canonical source
+- [x] Frontend version/edition/filename strings updated (5 files)
+- [x] `backend/server.py` `TradeMemoryRecord.ea_version` default updated
+- [x] Static tests added/updated: `tests/test_xau_v6212_timing_and_identity_hardening_static.py` (29 tests) + 4 older release test files updated in place where they asserted now-intentionally-removed bar-wait behavior
+- [x] Full existing suite re-run: 718 passed; remaining failures are pre-existing version-pin staleness (same set as baseline, confirmed via throwaway comparison worktree) — zero unexplained new regressions
+
+### Owner request
+Two-scope release-blocking repair: (1) complete the remaining R-Based Exit Manager identity/actual-fill/netting-risk/persistence/lifecycle items from the v6.21.1 audit; (2) remove every intentional 5-minute or next-M5-bar entry wait (fresh signal, re-entry, recovery, startup) and replace with one bounded 120-180s (default 150s) wall-clock delay. M5 remains the signal/analysis timeframe throughout.
+
+### Timing changes
+- `XAU_TimingEngineConfirmsEntry()`: removed the `InpUseM5EntryDelay=false` next-bar branch entirely (was: `nowCandle == firstSeenCandle + PeriodSeconds(PERIOD_M5)`, up to ~5 min). `false` now logs `ENTRY_TIMING_LEGACY_BAR_WAIT_REMOVED` and uses the same bounded wall-clock path as `true`.
+- `XAU_EffectiveEntryDelaySeconds()` (renamed from `XAU_EffectiveM5EntryDelaySec`, old name kept as an alias): defaults changed 60/90/120s → 120/150/180s; now also clamps to an absolute [120,180] production floor/ceiling independent of `.set` misconfiguration.
+- Startup: `InpStartupCooldownMin=5` (minutes) + `InpStartupRequireNewBar=true` → `InpStartupCooldownSeconds=150` wall-clock, no bar requirement (`InpStartupRequireNewBar` now inert).
+- Recovery (`XAU_CheckPendingOpportunityRecovery`): call site un-gated from `if(newM5Bar)` to every tick; the actual wait-then-revalidate delay is provided once, downstream, by the shared timing engine (avoided a double-wait bug caught during implementation).
+- Re-entry (`CheckReEntryOpportunity`): already routed through the shared timing engine — inherits the fix with no separate change needed.
+- Manual force-open (`XAU_TryForceOpenTrade`): confirmed intentionally immediate (no timing-engine call), only a same-bar dedup guard — documented as such, not touched.
+- No broker-retry loop exists for entry opens in this codebase (only for R-exit closes, already retry-safe) — "broker retry restarts the timer" is not a reachable bug here; noted rather than inventing new retry infrastructure.
+
+### R-exit identity/persistence changes
+- `XAU_RExitState` now separates `positionId` (canonical, `POSITION_IDENTIFIER`) from `currentTicket` (`POSITION_TICKET`, broker calls only); all lookups/restore/orphan-cleanup resolve live positions via `XAU_FindLivePositionByIdentifier()` (iteration), never `PositionSelectByTicket()` on a persisted/foreign value.
+- Original-risk capture in `OpenTrade()`/`CheckPyramidOpportunity()` now reads ACTUAL broker-confirmed fields via `XAU_FindLivePositionByIdentifier()` post-fill, not the requested price/SL/lot locals; falls back to `R_EXIT_ENTRY_CAPTURE_PENDING` + next-tick core-loop capture if not yet selectable.
+- Netting pyramids: new `cumulativeOriginalRiskUSD`/`totalOriginalVolume`/`addCount`, accumulated by `XAU_RExit_SyncNettingState()` on merge detection; this is now the R-math denominator everywhere (behaves identically to the old single-fill `originalRiskUSD` when `addCount==1`).
+- `XAU_GrowthDailyLockTriggered`'s one `CloseAll()`-triggering call site gated observation-only while R owns positions (entry/pyramid-blocking call sites of the same function left untouched — different concern).
+- Persistence: dirty-flag-gated saves (`g_rExitStateDirty`) instead of unconditional per-tick writes, forced flush on close request/confirm/OnDeinit, temp-file + atomic rename, malformed/schema-mismatched rows rejected on load.
+- `OnTradeTransaction` cleanup now also fires on `DEAL_ENTRY_OUT_BY`, not just `DEAL_ENTRY_OUT`.
+- Broker SL geometry buffer now includes `SYMBOL_TRADE_FREEZE_LEVEL`, not just stops level.
+
+### Entry-regression proof
+`ScoreSetups()`, `XAU_ComputeCombinedGradeForCandidate()` unchanged. `OpenTrade()`/`CheckPyramidOpportunity()` diffs are purely additive (post-fill R-capture hooks). No signal-generation, grading, lot-sizing, or entry-gating logic touched.
+
+### Explicitly NOT built/touched in this release
+Strategy Tester run (not available in this environment — static/compile verification only, see compile caveat above). `R_EXIT_ENTRY_CAPTURE_FAILED` log tag is defined structurally reachable-only-in-theory (capture always eventually succeeds via the core loop given the design) — noted rather than fabricated. No entry-strategy change beyond the required timing replacement.
+
+---
+
 ## v6.21.1 — 2026-07-12 — R-Exit Forensic Hardening (release-blocking audit)
 
 ### EA Compile

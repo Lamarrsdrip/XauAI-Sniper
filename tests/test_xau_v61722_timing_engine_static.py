@@ -48,12 +48,17 @@ def test_pending_entry_confirmation_struct_exists():
 
 
 def test_timing_engine_requires_next_bar_reconfirmation():
+    # v6.21.2 audit fix: the bar-boundary reconfirmation branch
+    # (nowCandle == firstSeenCandle + PeriodSeconds(PERIOD_M5)) has been
+    # REMOVED -- entry confirmation is now a bounded 120-180s wall-clock
+    # delay (XAU_EffectiveEntryDelaySeconds()), never a bar wait.
     ea = read(BACKEND_EA)
     fn = body(ea, "bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double sizeMulti, double atr)")
-    assert "nowCandle == g_pendingEntryConfirm.firstSeenCandle + PeriodSeconds(PERIOD_M5)" in fn
-    assert "SIGNAL_DETECTED" in fn and "WAITING_FOR_ENTRY_WINDOW" in fn
-    assert "ENTRY_CONFIRMING" in fn and "ENTRY_ALLOWED" in fn
-    assert "ENTRY_WINDOW_EXPIRED" in fn and "REASSESS_FROM_CURRENT_MARKET" in fn
+    assert "nowCandle == g_pendingEntryConfirm.firstSeenCandle + PeriodSeconds(PERIOD_M5)" not in fn
+    assert "XAU_EffectiveEntryDelaySeconds()" in fn
+    assert "SIGNAL_DETECTED" in fn and "ENTRY_DELAY_STARTED" in fn
+    assert "ENTRY_DELAY_REVALIDATING" in fn and "ENTRY_ALLOWED" in fn
+    assert "ENTRY_DELAY_EXPIRED" in fn and "REASSESS_FROM_CURRENT_MARKET" in fn
 
 
 def test_timing_engine_never_blindly_resumes_a_different_signal():
@@ -72,10 +77,14 @@ def test_timing_engine_never_blindly_resumes_a_different_signal():
 
 
 def test_timing_engine_anti_chase_rejects_overextended_confirmation():
+    # v6.21.2 audit fix: the bar-based OVEREXTENDED_ON_CONFIRM check (1.0xATR,
+    # part of the now-removed next-bar branch) is superseded by the
+    # wall-clock path's own chase-rejection, configurable via
+    # InpCancelIfPriceMovedTooFarATR, tag PRICE_RAN_TOO_FAR_CHASE.
     ea = read(BACKEND_EA)
     fn = body(ea, "bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double sizeMulti, double atr)")
-    assert "movedInFavor > g_pendingEntryConfirm.atr * 1.0" in fn
-    assert "OVEREXTENDED_ON_CONFIRM" in fn
+    assert "movedInFavor > g_pendingEntryConfirm.atr * InpCancelIfPriceMovedTooFarATR" in fn
+    assert "PRICE_RAN_TOO_FAR_CHASE" in fn
 
 
 def test_opentrade_call_site_gated_by_timing_engine():

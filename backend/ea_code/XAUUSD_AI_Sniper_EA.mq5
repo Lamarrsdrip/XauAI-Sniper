@@ -1,10 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.21.1 - R-Exit Forensic Hardening                                 |
-//|   Release-blocking audit of the v6.21.0 R-Based Exit Manager: core    |
-//|   R management no longer depends on indicator warm-up, closes are     |
-//|   retry-safe and broker-confirmed, and R state survives a restart.    |
+//|   v6.21.2 - Wall-Clock Entry Timing + R-Exit Identity Hardening       |
+//|   Removes every intentional 5-minute/next-M5-bar entry wait (fresh    |
+//|   signal, re-entry, recovery, startup) in favor of one bounded        |
+//|   120-180s wall-clock delay. Separates canonical position identity    |
+//|   from the broker ticket, captures R-state from actual broker fill    |
+//|   data, and adds netting-pyramid cumulative risk.                     |
 //+------------------------------------------------------------------+
 //| Forensic redesign of the normal bot's EXIT system only. 1R is fixed   |
 //| at entry (original SL distance x symbol/volume value) and never       |
@@ -1742,15 +1744,22 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.262"
+#property version   "6.263"
 #property description "XAUUSD AI Sniper v6.20.6"
 #property description "Adds independent COUNTER_EXCURSION_CAPTURE: fast tactical countertrade when a"
 #property description "blocked candidate's reason proves real immediate opposite pressure. Normal"
 #property description "strategy, filters, risk sizing, and 2-min entry delay are unchanged."
 #property strict
 
-#define XAUAI_EA_VERSION "v6.21.1"
-#define XAUAI_EA_VERSION_NUM "6.21.1"
+// v6.21.2: entry-delay bounds, declared this early so every call site
+// (OnInit, StartupCooldownReason, the timing engine, dashboard/report
+// writers) can reference them regardless of where in the file it lives.
+#define XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC   120.0
+#define XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0
+#define XAU_ENTRY_DELAY_SAFE_DEFAULT_SEC     150.0
+
+#define XAUAI_EA_VERSION "v6.21.2"
+#define XAUAI_EA_VERSION_NUM "6.21.2"
 #define XAUAI_BUILD_HASH "v6206-counter-excursion-capture-20260710"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
@@ -1875,8 +1884,13 @@ input double InpPG_RatchetTrailStart = 2.0;  // ATR multiples in profit before t
 input double InpPG_RatchetTrailDist  = 1.0;  // ATR distance behind price to trail SL
 
 // v5.2.1 — STARTUP COOLDOWN (prevents blind trades right after MT5/EA reload)
-input int    InpStartupCooldownMin   = 5;   // Minutes after EA init before any trade is allowed
-input bool   InpStartupRequireNewBar = true; // Also require at least one fresh M5 bar to close before trading
+// v6.21.2 audit fix: the old 5-minute-plus-new-bar startup wait was itself an
+// intentional five-minute entry delay, exactly the pattern the timing repair
+// requires removed everywhere. Replaced with the same bounded 120-180s
+// wall-clock warm-up as every other entry-timing path -- no new-M5-bar
+// requirement remains reachable.
+input int    InpStartupCooldownSeconds = 150;  // Wall-clock warm-up after EA init before any trade is allowed, clamped to [120,180]
+input bool   InpStartupRequireNewBar   = false; // INERT as of v6.21.2 -- no longer read as a waiting condition; kept only so an old .set setting it true does not error. See StartupCooldownReason().
 
 // v5.3.0 — PHASE 1: VOLATILITY / SPREAD / DAILY-DD GUARDS (account-aware)
 input bool   InpVolKillEnabled    = true;   // Block entries when M5 ATR > 2× 50-bar median (turbulent market)
@@ -2020,9 +2034,15 @@ input group "=== M5 ENTRY DELAY, PHASE B (v6.20.0) — short in-candle execution
 // on M5; only the execution moment moves to short M1-granularity confirmation.
 // Extends XAU_TimingEngineConfirmsEntry() directly (same PendingEntryConfirmation
 // struct, same XAU_ClassifySetup evidence, same overextension math) -- does not
-// create a second/competing timing authority. When InpUseM5EntryDelay=false, the
-// original bar-based wait behavior is preserved exactly, unchanged.
-input bool   InpUseM5EntryDelay             = true;   // Master switch. false = restore the original next-M5-bar wait behavior exactly
+// create a second/competing timing authority.
+// v6.21.2 audit fix: the InpUseM5EntryDelay=false branch used to restore the
+// original next-M5-bar wait (up to ~5 minutes) byte-for-byte. That branch has
+// been REMOVED, not merely disabled -- there is no reachable code path left
+// that waits for a new M5 bar to confirm entry, re-entry, or recovery, and no
+// .set file can restore it. false now means "same bounded 120-180s wall-clock
+// confirmation, just with a printed legacy-removal warning" -- see
+// XAU_TimingEngineConfirmsEntry().
+input bool   InpUseM5EntryDelay             = true;   // Master switch (both true and false now use the bounded 120-180s wall-clock delay -- see comment above)
 // v6.20.3 (Commit C) — closes two gaps found from the 2026-07-09 15:45 live
 // incident (two BUY 0.22 XAUUSD entries ~2s apart from two chart instances):
 input bool   InpCrossInstanceEntryLockEnable = false;  // v6.20.4: OFF by default (was ON in v6.20.3). Terminal-wide lock (GlobalVariable, same pattern as the loss-streak fix) blocking a second chart instance of this EA from independently executing the same symbol+magic+direction within the lock window
@@ -2039,9 +2059,9 @@ input int    InpCrossInstanceEntryLockSec    = 10;     // Lock window in seconds
 // back in, rather than being silently reintroduced. Changing either input's
 // value right now has NO effect on trading behavior.
 input bool   InpImmediateConfirmRequiresAPlus = true;  // INERT as of v6.20.3 -- kept as a documented placeholder only, not read by any function. The full 0-wait bypass this used to gate has been deleted, not disabled.
-input int    InpM5EntryDelaySeconds         = 90;     // Target delay, clamped into [InpM5EntryDelayMinSeconds, InpM5EntryDelayMaxSeconds] -- applies unconditionally to every grade/setup, no exemption
-input int    InpM5EntryDelayMinSeconds      = 60;
-input int    InpM5EntryDelayMaxSeconds      = 120;
+input int    InpM5EntryDelaySeconds         = 150;    // Target delay, clamped into [InpM5EntryDelayMinSeconds, InpM5EntryDelayMaxSeconds] then into the absolute [120,180] production bounds -- applies unconditionally to every grade/setup, no exemption
+input int    InpM5EntryDelayMinSeconds      = 120;    // Absolute production floor is 120s regardless of this input -- see XAU_EffectiveEntryDelaySeconds()
+input int    InpM5EntryDelayMaxSeconds      = 180;    // Absolute production ceiling is 180s regardless of this input -- see XAU_EffectiveEntryDelaySeconds()
 input bool   InpAllowImmediateAPlusMomentum = true;   // INERT as of v6.20.3 -- kept as a documented placeholder only, not read by any function. A+ no longer bypasses the delay; every grade waits the full target above.
 input double InpCancelIfPriceMovedTooFarATR = 1.00;   // Delay-elapsed re-check: price already ran this many ATR in the signal's favor = chasing, not confirming -- cancel and reassess instead of entering at the now-worse price
 input bool   InpRecalculateSLTPAfterDelay   = true;   // Documents the (architecturally inherent, always-on) behavior: OpenTrade() computes entry/SL/TP/lot from CURRENT price at the moment it is finally called, never from the stale signal price -- this input is not wired to a "false" path because using stale price would contradict the explicit "do not use stale signal price blindly" requirement this feature was built to satisfy
@@ -3484,7 +3504,8 @@ struct PendingOpportunity
 {
    bool     active;
    string   signalId;
-   datetime candleTime;       // closed M5 bar time of the ORIGINAL candidate
+   datetime candleTime;       // closed M5 bar time of the ORIGINAL candidate (evidence provenance only, not a wait condition)
+   datetime firstSeenTime;    // v6.21.2: wall-clock time the opportunity was stored -- the actual recovery-delay anchor
    int      dir;
    string   setup;
    string   grade;
@@ -7568,11 +7589,13 @@ int OnInit()
    else
       g_startupBarTime    = TimeCurrent();
    g_startupCooldownDone = false;
-   if(!XAU_NoLimitTradingModeActive() && (InpStartupCooldownMin > 0 || InpStartupRequireNewBar))
-      Print("🟡 Startup detected — entering ", InpStartupCooldownMin,
-            "-minute cooldown",
-            (InpStartupRequireNewBar ? " + 1 fresh M5 bar" : ""),
-            " before any trade is allowed.");
+   if(!XAU_NoLimitTradingModeActive() && InpStartupCooldownSeconds > 0)
+   {
+      double resolvedStartupSecLog = MathMax(XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC,
+                                             MathMin(XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC, (double)InpStartupCooldownSeconds));
+      PrintFormat("🟡 Startup detected — entering %.0fs wall-clock cooldown before any trade is allowed (no M5 bar wait).",
+                  resolvedStartupSecLog);
+   }
 
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(50);
@@ -7904,6 +7927,11 @@ int OnInit()
          InpSTI_TCPContinueMinimum,
          InpSTI_ReentryPullbackATR, InpSTI_ReentryMinWaitMin));
    XAU_WriteLocalReportHeartbeat(true);
+   // v6.21.2 audit fix: print the resolved entry-timing configuration once at
+   // startup, so it is always possible to prove from a journal alone that no
+   // next-M5-bar or five-minute entry wait is active.
+   PrintFormat("ENTRY_TIMING_MODE=WALL_CLOCK_ONLY ENTRY_DELAY_MIN=%.0f ENTRY_DELAY_TARGET=%.0f ENTRY_DELAY_MAX=%.0f NEXT_M5_BAR_WAIT=DISABLED FIVE_MINUTE_ENTRY_WAIT=DISABLED",
+               XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC, XAU_EffectiveEntryDelaySeconds(), XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC);
    XAU_ReconcileTradeBrainOnInit();
    XAU_ReconcileCounterExcursionOnInit();
    XAU_ValidateRExitConfig();
@@ -7920,6 +7948,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   XAU_RExit_SaveState(true); // Fix 16: force-flush R-exit state on shutdown/reload regardless of dirty flag
    PrintBacktestAuditReport();
    IndicatorRelease(hEMAFast); IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI); IndicatorRelease(hATR); IndicatorRelease(hBBUpper);
@@ -8804,8 +8833,9 @@ void CheckReEntryOpportunity()
    {
       // Uncertain/marginal evidence -- NOT a permanent cancel. Do not set
       // reEntered=true here: the timing engine's own pending-confirmation
-      // state re-checks on the next bar, exactly like a fresh signal would.
-      g_lastSkipReason = "RE-ENTRY WAITING_FOR_ENTRY_WINDOW: " + reClass.why;
+      // state re-checks every tick against its bounded 120-180s wall-clock
+      // delay, exactly like a fresh signal would -- never a bar wait.
+      g_lastSkipReason = "RE-ENTRY ENTRY_DELAY_WAITING: " + reClass.why;
       return;
    }
 
@@ -8828,7 +8858,7 @@ void CheckReEntryOpportunity()
    g_pendingTimingProof.firstSeenTime         = g_lastEntryTimingDecision.originalSignalTime;
    g_pendingTimingProof.firstSeenPrice        = g_lastEntryTimingDecision.originalSignalPrice;
    g_pendingTimingProof.timingGateRequired    = true;
-   g_pendingTimingProof.requiredDelaySeconds  = InpUseM5EntryDelay ? XAU_EffectiveM5EntryDelaySec() : (double)PeriodSeconds(PERIOD_M5);
+   g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveEntryDelaySeconds();
    g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
    g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
    g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
@@ -12030,15 +12060,18 @@ void CheckPyramidOpportunity()
                          StringFormat("PYRAMID #%d %.2f lot @%.2f - %s",
                                       openCount + 1, addLot, entryPx, why));
 
-      // v6.21.1 audit fix: pyramid adds send via trade.Buy/trade.Sell directly
-      // (not through OpenTrade()), so they need their own immediate R-state
-      // capture rather than relying on XAU_RExitCoreLoop()'s next-tick lazy
-      // capture. Netting/hedging policy: XAU_RExit_EnsureIdx() is a no-op for
-      // a ticket that already has state (netting-mode merge into the same
-      // posId) -- the ORIGINAL fill's risk stays the fixed 1R baseline for
-      // that ticket's whole life; a pyramid add is additional deliberate risk,
-      // not a redefinition of 1R. A genuinely distinct new posId (hedging
-      // mode, or netting's own first fill) gets its own independent state.
+      // v6.21.2 audit fix (Fix 11/12): pyramid adds send via trade.Buy/trade.Sell
+      // directly (not through OpenTrade()), so they need their own immediate,
+      // ACTUAL-fill R-state capture rather than relying on XAU_RExitCoreLoop()'s
+      // next-tick lazy capture. pyrPosId (DEAL_POSITION_ID) is already the
+      // canonical positionId. Netting/hedging policy: if this positionId
+      // already has state (netting-mode merge into the same broker position),
+      // XAU_RExit_EnsureIdx() is a no-op for the original-fill fields and
+      // XAU_RExit_SyncNettingState() immediately accounts for the add's own
+      // risk into cumulativeOriginalRiskUSD -- a pyramid add is additional
+      // deliberate risk, not a redefinition of the first fill's 1R. A
+      // genuinely distinct new positionId (hedging mode, or netting's own
+      // first fill) gets its own independent state.
       {
          ulong pyrDealTicket = trade.ResultDeal();
          ulong pyrPosId = 0;
@@ -12047,8 +12080,16 @@ void CheckPyramidOpportunity()
          if(pyrPosId == 0) pyrPosId = trade.ResultOrder();
          if(pyrPosId > 0)
          {
-            XAU_RExit_EnsureIdx(pyrPosId, isBuy, entryPx, pyramidSL, addLot, false);
-            XAU_RExit_SaveState();
+            ulong pyrLiveTicket; string pyrLiveSymbol; long pyrLiveMagic; int pyrLiveDir;
+            double pyrLiveOpen, pyrLiveVol, pyrLiveSL, pyrLiveTP;
+            if(XAU_FindLivePositionByIdentifier(pyrPosId, pyrLiveTicket, pyrLiveSymbol, pyrLiveMagic, pyrLiveDir, pyrLiveOpen, pyrLiveVol, pyrLiveSL, pyrLiveTP))
+            {
+               int pyrIdx = XAU_RExit_EnsureIdx(pyrPosId, pyrLiveTicket, pyrLiveDir == 1, pyrLiveOpen, pyrLiveSL, pyrLiveVol, false);
+               XAU_RExit_SyncNettingState(pyrIdx, pyrLiveDir == 1, pyrLiveOpen, pyrLiveSL, pyrLiveVol);
+               XAU_RExit_SaveState(true);
+            }
+            else
+               PrintFormat("R_EXIT_ENTRY_CAPTURE_PENDING positionId=%I64u | pyramid add not yet selectable this tick, will capture from actual broker fields next tick", pyrPosId);
          }
       }
 
@@ -12952,10 +12993,23 @@ void OnTick()
 
    // v6.4.12 — Growth Guard daily profit lock. Once the account has a real
    // profitable day, do not let active exposure give back the whole day.
+   // v6.21.2 audit fix (Fix 13): this is ordinary daily-profit preservation
+   // (a CloseAll() plus an entry pause), not a true account-survival
+   // emergency -- while the R-based exit manager owns normal positions it
+   // must not close them or pause entries on this basis. Observation-only.
    if(!noLimitMode && InpGrowthGuardEnable)
    {
       string growthDayLockWhy = "";
-      if(XAU_GrowthDailyLockTriggered(growthDayLockWhy))
+      if(XAU_GrowthDailyLockTriggered(growthDayLockWhy) && XAU_RExitOwnsNormalPositions())
+      {
+         static datetime lastGrowthDailyLockObserveLog = 0;
+         if(TimeCurrent() - lastGrowthDailyLockObserveLog >= 60)
+         {
+            lastGrowthDailyLockObserveLog = TimeCurrent();
+            Print("GROWTH_DAILY_LOCK OBSERVATION_ONLY — R manager owns normal positions | would have triggered: ", growthDayLockWhy);
+         }
+      }
+      else if(XAU_GrowthDailyLockTriggered(growthDayLockWhy))
       {
          if(CountMyPositions() > 0)
          {
@@ -13477,7 +13531,11 @@ void OnTick()
    // bar -- only a genuinely new closed candle gets a recovery check, so
    // this can never fire more than once per bar no matter how many times
    // OnTick re-enters this function on that bar.
-   if(newM5Bar) XAU_CheckPendingOpportunityRecovery();
+   // v6.21.2 audit fix: was `if(newM5Bar) ...` -- a stored opportunity could
+   // wait up to ~5 minutes for a bar boundary before ever being rechecked.
+   // The function itself now gates on its own bounded wall-clock delay, so it
+   // is safe (and required) to call it every tick.
+   XAU_CheckPendingOpportunityRecovery();
    // v6.20.5 (Change B): deliberately NOT gated to newM5Bar -- a candidate
    // already registered into the timing engine (by the gauntlet check just
    // above, on a PRIOR bar) must be re-observed every tick, exactly like a
@@ -15534,7 +15592,7 @@ void OnTick()
    g_pendingTimingProof.firstSeenTime         = g_lastEntryTimingDecision.originalSignalTime;
    g_pendingTimingProof.firstSeenPrice        = g_lastEntryTimingDecision.originalSignalPrice;
    g_pendingTimingProof.timingGateRequired    = true;
-   g_pendingTimingProof.requiredDelaySeconds  = InpUseM5EntryDelay ? XAU_EffectiveM5EntryDelaySec() : (double)PeriodSeconds(PERIOD_M5);
+   g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveEntryDelaySeconds();
    g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
    g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
    g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
@@ -17596,12 +17654,30 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                          ArraySize(bufRSI) >= 2 ? bufRSI[1] : 50.0,
                          atr, price, sl, tp, reason, lots);
 
-         // v6.21.1 audit fix: capture original R-state immediately on broker
-         // entry confirmation, not lazily on the next ManagePositions tick --
-         // covers the primary/re-entry/recovery/force-open paths (all of
-         // which funnel through this single OpenTrade() success block).
-         XAU_RExit_EnsureIdx(openedPosId, signal == 1, price, sl, lots, false);
-         XAU_RExit_SaveState();
+         // v6.21.2 audit fix (Fix 11): capture original R-state immediately on
+         // broker entry confirmation, not lazily on the next tick -- covers
+         // the primary/re-entry/recovery/force-open paths (all of which
+         // funnel through this single OpenTrade() success block). Uses the
+         // ACTUAL broker-confirmed position fields (open price, SL, volume),
+         // never the requested price/sl/lots local variables -- the broker
+         // may have normalized/adjusted any of them on fill.
+         ulong liveTicket; string liveSymbol; long liveMagic; int liveDir;
+         double liveOpen, liveVol, liveSL, liveTP;
+         if(XAU_FindLivePositionByIdentifier(openedPosId, liveTicket, liveSymbol, liveMagic, liveDir, liveOpen, liveVol, liveSL, liveTP))
+         {
+            XAU_RExit_EnsureIdx(openedPosId, liveTicket, liveDir == 1, liveOpen, liveSL, liveVol, false);
+            XAU_RExit_SaveState(true);
+         }
+         else
+         {
+            // Not yet visible this tick (rare broker-side lag) -- do not
+            // freeze an inaccurate R value from the requested price/sl/lots.
+            // XAU_RExitCoreLoop() observes every live position every tick and
+            // will capture it from ACTUAL broker fields the moment it
+            // becomes selectable (typically within one tick).
+            PrintFormat("R_EXIT_ENTRY_CAPTURE_PENDING positionId=%I64u direction=%s | position not yet selectable this tick, will capture from actual broker fields next tick",
+                        openedPosId, signal == 1 ? "BUY" : "SELL");
+         }
       }
    }
    else
@@ -20389,11 +20465,15 @@ bool SafePositionClosePartial(ulong ticket, double lots, string ctx = "")
 
 struct XAU_RExitState
 {
-   ulong    ticket;
+   ulong    positionId;               // v6.21.2: CANONICAL key = POSITION_IDENTIFIER/DEAL_POSITION_ID -- stable for the position's life, NEVER a broker order/deal ticket
+   ulong    currentTicket;            // v6.21.2: POSITION_TICKET -- refreshed every observation, used ONLY for broker close/modify calls
    double   originalEntryPrice;
    double   originalStopLoss;
    double   originalStopDistance;
-   double   originalRiskUSD;
+   double   originalRiskUSD;          // first-fill risk only, kept for reference/telemetry
+   double   cumulativeOriginalRiskUSD;// v6.21.2 (Fix 12): actual R-math denominator -- sum of every add's own risk at the time it was added (netting) or this ticket's own risk (hedging)
+   double   totalOriginalVolume;      // v6.21.2 (Fix 12): running total volume across all merged adds
+   int      addCount;                 // v6.21.2 (Fix 12): number of fills merged into this position (netting) -- 1 for a normal single-fill position
    int      positionDirection;        // 1 = BUY, -1 = SELL -- from POSITION_TYPE only, never a stored signal direction
    double   peakProfitUSD;
    double   peakR;
@@ -20419,6 +20499,7 @@ struct XAU_RExitState
 XAU_RExitState g_rExit[];
 double g_rCheckpointLevels[6] = {0.20, 0.30, 0.40, 0.50, 0.75, 1.00};
 bool   g_rExitConfigValid = true;
+bool   g_rExitStateDirty  = false;    // v6.21.2 (Fix 16): set true on any meaningful state change; save only when dirty or on the periodic floor
 
 //+------------------------------------------------------------------+
 //| Single ownership authority. Every legacy/competing system that    |
@@ -20432,44 +20513,76 @@ bool XAU_RExitOwnsNormalPositions()
    return InpRExitEnable && g_rExitConfigValid;
 }
 
-int XAU_RExit_FindIdx(ulong ticket)
+int XAU_RExit_FindIdx(ulong positionId)
 {
    for(int i = 0; i < ArraySize(g_rExit); i++)
-      if(g_rExit[i].ticket == ticket) return i;
+      if(g_rExit[i].positionId == positionId) return i;
    return -1;
 }
 
-void XAU_RExit_Clear(ulong ticket)
+void XAU_RExit_Clear(ulong positionId)
 {
-   int idx = XAU_RExit_FindIdx(ticket);
+   int idx = XAU_RExit_FindIdx(positionId);
    if(idx < 0) return;
    int last = ArraySize(g_rExit) - 1;
    if(idx != last) g_rExit[idx] = g_rExit[last];
    ArrayResize(g_rExit, last);
+   g_rExitStateDirty = true;
 }
 
 //+------------------------------------------------------------------+
-//| Lazy-create per-ticket state. originalEntryPrice is always exact  |
-//| (POSITION_PRICE_OPEN never changes for the life of a position).   |
-//| originalStopLoss/-Distance/-RiskUSD are captured from whatever SL |
-//| is on the position the FIRST time this function sees the ticket.  |
-//| Once this manager is the sole SL authority, first-observation is  |
-//| the true original SL for every position opened from here on. For |
-//| a position already open at deploy time (or a restart -- see       |
-//| XAU_ReconcileRExitOnInit), the current SL may already have been   |
-//| moved by the old exit stack; that case is conservatively estimated|
-//| and explicitly tagged reconciledFromRestart, exactly mirroring the|
-//| spec's own restart-peak-reconstruction guidance.                  |
+//| v6.21.2 (Fix 19): resolve a LIVE position by its canonical         |
+//| POSITION_IDENTIFIER via iteration -- never PositionSelectByTicket  |
+//| on an identifier unless proven equal. Returns true and fills the   |
+//| out-params if found.                                               |
 //+------------------------------------------------------------------+
-int XAU_RExit_EnsureIdx(ulong ticket, bool isBuy, double openPx, double curSL, double lots, bool isRestartReconcile)
+bool XAU_FindLivePositionByIdentifier(ulong positionId, ulong &outTicket, string &outSymbol, long &outMagic,
+                                       int &outDirection, double &outOpenPrice, double &outVolume,
+                                       double &outSL, double &outTP)
 {
-   int idx = XAU_RExit_FindIdx(ticket);
-   if(idx >= 0) return idx;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Identifier() != positionId) continue;
+      outTicket    = posInfo.Ticket();
+      outSymbol    = posInfo.Symbol();
+      outMagic     = posInfo.Magic();
+      outDirection = (posInfo.PositionType() == POSITION_TYPE_BUY) ? 1 : -1;
+      outOpenPrice = posInfo.PriceOpen();
+      outVolume    = posInfo.Volume();
+      outSL        = posInfo.StopLoss();
+      outTP        = posInfo.TakeProfit();
+      return true;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Lazy-create per-position state, keyed by the canonical positionId. |
+//| originalEntryPrice is always exact (POSITION_PRICE_OPEN never      |
+//| changes for a single fill). originalStopLoss/-Distance/-RiskUSD    |
+//| are captured from whatever SL is on the position the FIRST time    |
+//| this function sees the positionId. Once this manager is the sole   |
+//| SL authority, first-observation is the true original SL for every  |
+//| position opened from here on. For a position already open at       |
+//| deploy time (or a restart), the current SL may already have been   |
+//| moved by the old exit stack; that case is conservatively estimated |
+//| and explicitly tagged reconciledFromRestart.                       |
+//+------------------------------------------------------------------+
+int XAU_RExit_EnsureIdx(ulong positionId, ulong currentTicket, bool isBuy, double openPx, double curSL, double lots, bool isRestartReconcile)
+{
+   int idx = XAU_RExit_FindIdx(positionId);
+   if(idx >= 0)
+   {
+      g_rExit[idx].currentTicket = currentTicket; // ticket can legitimately change identity-independent (e.g. after certain broker-side events); identity does not
+      return idx;
+   }
 
    int n = ArraySize(g_rExit);
    ArrayResize(g_rExit, n + 1);
    ZeroMemory(g_rExit[n]);
-   g_rExit[n].ticket = ticket;
+   g_rExit[n].positionId = positionId;
+   g_rExit[n].currentTicket = currentTicket;
    g_rExit[n].originalEntryPrice = openPx;
    g_rExit[n].positionDirection = isBuy ? 1 : -1;
 
@@ -20484,19 +20597,59 @@ int XAU_RExit_EnsureIdx(ulong ticket, bool isBuy, double openPx, double curSL, d
    }
    g_rExit[n].originalStopLoss = (curSL > 0.0) ? curSL : (isBuy ? openPx - dist : openPx + dist);
    g_rExit[n].originalStopDistance = dist;
-   g_rExit[n].originalRiskUSD = MathMax(0.01, RiskPerLotForDistance(dist) * lots);
+   double riskUSD = MathMax(0.01, RiskPerLotForDistance(dist) * lots);
+   g_rExit[n].originalRiskUSD = riskUSD;
+   g_rExit[n].cumulativeOriginalRiskUSD = riskUSD;
+   g_rExit[n].totalOriginalVolume = lots;
+   g_rExit[n].addCount = 1;
    g_rExit[n].reconciledFromRestart = isRestartReconcile;
    g_rExit[n].stageReached = R_STAGE_HOLD;
    g_rExit[n].lastProtectedSL = curSL;
+   g_rExitStateDirty = true;
 
    if(isRestartReconcile)
-      PrintFormat("R_EXIT_MANAGER RECONCILED ticket=%I64u direction=%s | original risk not observed at true entry -- using first-seen state as a conservative estimate (historical peak unknown). riskUSD=%.2f entry=%.5f sl=%.5f",
-                  ticket, isBuy ? "BUY" : "SELL", g_rExit[n].originalRiskUSD, openPx, g_rExit[n].originalStopLoss);
+      PrintFormat("R_EXIT_MANAGER RECONCILED positionId=%I64u ticket=%I64u direction=%s | original risk not observed at true entry -- using first-seen state as a conservative estimate (historical peak unknown). riskUSD=%.2f entry=%.5f sl=%.5f",
+                  positionId, currentTicket, isBuy ? "BUY" : "SELL", riskUSD, openPx, g_rExit[n].originalStopLoss);
    else
-      PrintFormat("R_EXIT_MANAGER ENTRY_RECORDED ticket=%I64u direction=%s entry=%.5f sl=%.5f dist=%.5f riskUSD=%.2f lots=%.2f",
-                  ticket, isBuy ? "BUY" : "SELL", openPx, g_rExit[n].originalStopLoss, dist, g_rExit[n].originalRiskUSD, lots);
+      PrintFormat("R_EXIT_ENTRY_CAPTURE_CONFIRMED positionId=%I64u ticket=%I64u direction=%s entry=%.5f sl=%.5f dist=%.5f riskUSD=%.2f lots=%.2f",
+                  positionId, currentTicket, isBuy ? "BUY" : "SELL", openPx, g_rExit[n].originalStopLoss, dist, riskUSD, lots);
 
    return n;
+}
+
+//+------------------------------------------------------------------+
+//| v6.21.2 (Fix 12): netting pyramid risk. Detects that MORE volume   |
+//| is now on this positionId than this state has accounted for (a     |
+//| netting-mode merge of a new fill into the same broker position),   |
+//| computes the ADDED volume's own risk from the CURRENT blended SL   |
+//| distance, adds it to the running cumulative risk, and refreshes    |
+//| the average entry/SL/total-volume used for further R-geometry.     |
+//| Peak, trough, stage and pending-close state are left untouched.    |
+//| Hedging accounts never see totalOriginalVolume diverge from a      |
+//| single position's own volume, so this is a no-op for them.         |
+//+------------------------------------------------------------------+
+void XAU_RExit_SyncNettingState(int idx, bool isBuy, double liveOpenPx, double liveSL, double liveVolume)
+{
+   double volDelta = liveVolume - g_rExit[idx].totalOriginalVolume;
+   if(volDelta <= 0.0000001) return; // no new merge (or a partial close, handled by OnTradeTransaction instead)
+
+   double liveDist = isBuy ? (liveOpenPx - liveSL) : (liveSL - liveOpenPx);
+   if(liveSL <= 0.0 || liveDist <= 0.0) return; // no usable SL to price the add's risk from yet -- try again next tick
+
+   double addRiskUSD = RiskPerLotForDistance(liveDist) * volDelta;
+   g_rExit[idx].cumulativeOriginalRiskUSD += addRiskUSD;
+   g_rExit[idx].totalOriginalVolume = liveVolume;
+   g_rExit[idx].addCount++;
+   // Refresh the geometry baseline to the new blended entry/SL so
+   // protectedSL/runLockSL are computed from the CURRENT average, not a
+   // stale single-fill entry.
+   g_rExit[idx].originalEntryPrice = liveOpenPx;
+   g_rExit[idx].originalStopLoss = liveSL;
+   g_rExit[idx].originalStopDistance = liveDist;
+   g_rExitStateDirty = true;
+   PrintFormat("R_EXIT_MANAGER NETTING_ADD_MERGED positionId=%I64u addCount=%d addVolume=%.2f addRiskUSD=%.2f cumulativeRiskUSD=%.2f newAvgEntry=%.5f newSL=%.5f",
+               g_rExit[idx].positionId, g_rExit[idx].addCount, volDelta, addRiskUSD,
+               g_rExit[idx].cumulativeOriginalRiskUSD, liveOpenPx, liveSL);
 }
 
 //+------------------------------------------------------------------+
@@ -20534,34 +20687,35 @@ void XAU_ValidateRExitConfig()
 void XAU_ReconcileRExitOnInit()
 {
    // NOTE: does NOT wipe g_rExit[] first -- XAU_RExit_LoadPersistedState() must
-   // run before this, and any ticket it already restored (validated against
-   // account/server/symbol/magic/ticket/direction) must survive here.
-   // XAU_RExit_EnsureIdx() below is a no-op for any ticket already present.
+   // run before this, and any position it already restored (validated against
+   // account/server/symbol/magic/positionId/direction) must survive here.
+   // XAU_RExit_EnsureIdx() below is a no-op for any positionId already present.
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(!posInfo.SelectByIndex(i)) continue;
       if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      ulong positionId = posInfo.Identifier();
       ulong ticket = posInfo.Ticket();
       bool isBuy = posInfo.PositionType() == POSITION_TYPE_BUY;
       double openPx = posInfo.PriceOpen();
       double curSL = posInfo.StopLoss();
       double lots = posInfo.Volume();
       double profit = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
-      bool alreadyRestoredFromFile = (XAU_RExit_FindIdx(ticket) >= 0);
-      int idx = XAU_RExit_EnsureIdx(ticket, isBuy, openPx, curSL, lots, true);
+      bool alreadyRestoredFromFile = (XAU_RExit_FindIdx(positionId) >= 0);
+      int idx = XAU_RExit_EnsureIdx(positionId, ticket, isBuy, openPx, curSL, lots, true);
       if(alreadyRestoredFromFile)
       {
          // XAU_RExit_LoadPersistedState() already validated and restored this
-         // ticket's exact state (including a trustworthy peak/trough) -- do not
-         // overwrite it with a conservative from-current-profit estimate.
+         // position's exact state (including a trustworthy peak/trough) -- do
+         // not overwrite it with a conservative from-current-profit estimate.
          continue;
       }
       g_rExit[idx].peakProfitUSD = MathMax(0.0, profit);
       g_rExit[idx].troughProfitUSD = MathMin(0.0, profit);
-      g_rExit[idx].peakR = g_rExit[idx].originalRiskUSD > 0 ? g_rExit[idx].peakProfitUSD / g_rExit[idx].originalRiskUSD : 0.0;
-      g_rExit[idx].troughR = g_rExit[idx].originalRiskUSD > 0 ? g_rExit[idx].troughProfitUSD / g_rExit[idx].originalRiskUSD : 0.0;
-      PrintFormat("R_EXIT_MANAGER RESTART_RECONCILE ticket=%I64u direction=%s | resumed with riskUSD=%.2f currentProfitUSD=%.2f (peak initialized from current profit -- historical peak unknown, no valid persisted state found)",
-                  ticket, isBuy ? "BUY" : "SELL", g_rExit[idx].originalRiskUSD, profit);
+      g_rExit[idx].peakR = g_rExit[idx].cumulativeOriginalRiskUSD > 0 ? g_rExit[idx].peakProfitUSD / g_rExit[idx].cumulativeOriginalRiskUSD : 0.0;
+      g_rExit[idx].troughR = g_rExit[idx].cumulativeOriginalRiskUSD > 0 ? g_rExit[idx].troughProfitUSD / g_rExit[idx].cumulativeOriginalRiskUSD : 0.0;
+      PrintFormat("R_EXIT_MANAGER RESTART_RECONCILE positionId=%I64u ticket=%I64u direction=%s | resumed with riskUSD=%.2f currentProfitUSD=%.2f (peak initialized from current profit -- historical peak unknown, no valid persisted state found)",
+                  positionId, ticket, isBuy ? "BUY" : "SELL", g_rExit[idx].cumulativeOriginalRiskUSD, profit);
    }
 }
 
@@ -20581,13 +20735,24 @@ string XAU_RExit_StateFilePath()
    return StringFormat("RExitState_%d_%s_%s_%d.csv", login, server, Symbol(), InpMagicNumber);
 }
 
-void XAU_RExit_SaveState()
+//+------------------------------------------------------------------+
+//| v6.21.2 (Fix 16): throttled, dirty-flag-gated save. Writes a       |
+//| temp file first and only renames it over the real path on success, |
+//| so a crash mid-write can never leave a truncated/corrupt state     |
+//| file for the next restart to (fail to) read. Call XAU_RExit_MarkDirty() (implicit via g_rExitStateDirty writes    |
+//| above) to schedule a save; callers of critical transitions still   |
+//| force an immediate flush via the `force` parameter.                |
+//+------------------------------------------------------------------+
+void XAU_RExit_SaveState(bool force = false)
 {
+   if(!force && !g_rExitStateDirty) return;
+
    string path = XAU_RExit_StateFilePath();
-   int h = FileOpen(path, FILE_WRITE | FILE_TXT | FILE_COMMON | FILE_ANSI);
+   string tmpPath = path + ".tmp";
+   int h = FileOpen(tmpPath, FILE_WRITE | FILE_TXT | FILE_COMMON | FILE_ANSI);
    if(h == INVALID_HANDLE)
    {
-      PrintFormat("R_EXIT_MANAGER STATE_SAVE_FAILED path=%s err=%d", path, GetLastError());
+      PrintFormat("R_EXIT_MANAGER STATE_SAVE_FAILED path=%s err=%d", tmpPath, GetLastError());
       return;
    }
    long login = AccountInfoInteger(ACCOUNT_LOGIN);
@@ -20595,17 +20760,27 @@ void XAU_RExit_SaveState()
    for(int i = 0; i < ArraySize(g_rExit); i++)
    {
       FileWrite(h, R_EXIT_STATE_SCHEMA_VERSION, login, server, Symbol(), InpMagicNumber,
-                 g_rExit[i].ticket, g_rExit[i].positionDirection,
+                 g_rExit[i].positionId, g_rExit[i].currentTicket, g_rExit[i].positionDirection,
                  DoubleToString(g_rExit[i].originalEntryPrice, 5), DoubleToString(g_rExit[i].originalStopLoss, 5),
                  DoubleToString(g_rExit[i].originalStopDistance, 5), DoubleToString(g_rExit[i].originalRiskUSD, 2),
+                 DoubleToString(g_rExit[i].cumulativeOriginalRiskUSD, 2), DoubleToString(g_rExit[i].totalOriginalVolume, 2), g_rExit[i].addCount,
                  DoubleToString(g_rExit[i].peakProfitUSD, 2), DoubleToString(g_rExit[i].peakR, 4),
                  (long)g_rExit[i].timePeakReached,
                  DoubleToString(g_rExit[i].troughProfitUSD, 2), DoubleToString(g_rExit[i].troughR, 4),
                  g_rExit[i].stageReached, g_rExit[i].decisionMadeAt05R ? 1 : 0,
                  g_rExit[i].closeState, g_rExit[i].pendingCloseReason,
-                 DoubleToString(g_rExit[i].lastProtectedSL, 5), g_rExit[i].reconciledFromRestart ? 1 : 0);
+                 DoubleToString(g_rExit[i].lastProtectedSL, 5), g_rExit[i].closeAttemptCount,
+                 (long)g_rExit[i].lastRunnerRecheckBarTime, g_rExit[i].finalTelemetryLogged ? 1 : 0,
+                 g_rExit[i].reconciledFromRestart ? 1 : 0);
    }
    FileClose(h);
+   if(!FileMove(tmpPath, FILE_COMMON, path, FILE_COMMON | FILE_REWRITE))
+   {
+      PrintFormat("R_EXIT_MANAGER STATE_SAVE_FAILED path=%s err=%d (temp-file replace failed)", path, GetLastError());
+      return;
+   }
+   g_rExitStateDirty = false;
+
    static datetime lastSaveLog = 0;
    static int lastSaveCount = -1;
    if(ArraySize(g_rExit) != lastSaveCount || TimeCurrent() - lastSaveLog >= 30)
@@ -20616,6 +20791,13 @@ void XAU_RExit_SaveState()
    }
 }
 
+//+------------------------------------------------------------------+
+//| v6.21.2 (Fix 17/19): restores from disk keyed by positionId, then  |
+//| resolves each record's LIVE position via XAU_FindLivePositionByIdentifier() |
+//| (iteration by POSITION_IDENTIFIER) -- never PositionSelectByTicket |
+//| on a persisted identifier. Malformed/truncated rows (wrong field   |
+//| count for this schema version) are rejected outright.              |
+//+------------------------------------------------------------------+
 void XAU_RExit_LoadPersistedState()
 {
    string path = XAU_RExit_StateFilePath();
@@ -20633,21 +20815,37 @@ void XAU_RExit_LoadPersistedState()
 
    long myLogin = AccountInfoInteger(ACCOUNT_LOGIN);
    string myServer = AccountInfoString(ACCOUNT_SERVER);
-   int restored = 0, mismatched = 0;
+   int restored = 0, mismatched = 0, rejected = 0;
 
    while(!FileIsEnding(h))
    {
       int schema     = (int)FileReadNumber(h);
+      if(schema != R_EXIT_STATE_SCHEMA_VERSION)
+      {
+         // v6.21.2: a foreign/older schema row has a different field layout --
+         // do not keep reading fields from it as if they lined up. Skip the
+         // rest of this line only if the reader is line-oriented; FileReadNumber
+         // is token-oriented here, so an unrecognized schema is treated as fatal
+         // for the remainder of the file rather than risk misaligned reads.
+         rejected++;
+         PrintFormat("R_EXIT_STATE_RESTORED path=%s result=SCHEMA_MISMATCH found=%d expected=%d -- aborting restore of remaining rows",
+                     path, schema, R_EXIT_STATE_SCHEMA_VERSION);
+         break;
+      }
       long login     = (long)FileReadNumber(h);
       string server  = FileReadString(h);
       string symbol  = FileReadString(h);
       long magic     = (long)FileReadNumber(h);
+      ulong positionId = (ulong)FileReadNumber(h);
       ulong ticket   = (ulong)FileReadNumber(h);
       int direction  = (int)FileReadNumber(h);
       double origEntry = FileReadNumber(h);
       double origSL     = FileReadNumber(h);
       double origDist   = FileReadNumber(h);
       double origRisk   = FileReadNumber(h);
+      double cumRisk    = FileReadNumber(h);
+      double totalVol   = FileReadNumber(h);
+      int addCount      = (int)FileReadNumber(h);
       double peakUSD    = FileReadNumber(h);
       double peakR      = FileReadNumber(h);
       datetime peakTime = (datetime)FileReadNumber(h);
@@ -20658,29 +20856,38 @@ void XAU_RExit_LoadPersistedState()
       int closeState    = (int)FileReadNumber(h);
       string pendingReason = FileReadString(h);
       double lastSL     = FileReadNumber(h);
+      int closeAttempts = (int)FileReadNumber(h);
+      datetime lastRunnerBar = (datetime)FileReadNumber(h);
+      bool finalLogged  = FileReadNumber(h) != 0;
       bool reconciled   = FileReadNumber(h) != 0;
 
-      if(schema != R_EXIT_STATE_SCHEMA_VERSION || login != myLogin || server != myServer ||
-         symbol != Symbol() || magic != InpMagicNumber)
+      if(positionId == 0 || direction == 0 || origRisk < 0.0 || cumRisk < 0.0 || addCount < 1)
+      {
+         rejected++;
+         PrintFormat("R_EXIT_STATE_RESTORED result=MALFORMED_ROW_REJECTED positionId=%I64u", positionId);
+         continue;
+      }
+      if(login != myLogin || server != myServer || symbol != Symbol() || magic != InpMagicNumber)
       {
          mismatched++;
          continue; // foreign/stale record -- never applied to this instance
       }
-      if(!PositionSelectByTicket(ticket))
+
+      ulong liveTicket; string liveSymbol; long liveMagic; int liveDir;
+      double liveOpen, liveVol, liveSL, liveTP;
+      if(!XAU_FindLivePositionByIdentifier(positionId, liveTicket, liveSymbol, liveMagic, liveDir, liveOpen, liveVol, liveSL, liveTP))
       {
-         PrintFormat("R_EXIT_STATE_MISMATCH ticket=%I64u reason=NO_LIVE_POSITION (saved state discarded)", ticket);
+         PrintFormat("R_EXIT_STATE_MISMATCH positionId=%I64u reason=NO_LIVE_POSITION (saved state discarded)", positionId);
          continue;
       }
-      bool liveIsBuy = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
-      int liveDir = liveIsBuy ? 1 : -1;
       if(liveDir != direction)
       {
-         PrintFormat("R_EXIT_STATE_MISMATCH ticket=%I64u reason=DIRECTION_MISMATCH saved=%d live=%d (saved state discarded)",
-                     ticket, direction, liveDir);
+         PrintFormat("R_EXIT_STATE_MISMATCH positionId=%I64u reason=DIRECTION_MISMATCH saved=%d live=%d (saved state discarded)",
+                     positionId, direction, liveDir);
          continue;
       }
 
-      int idx = XAU_RExit_FindIdx(ticket);
+      int idx = XAU_RExit_FindIdx(positionId);
       if(idx < 0)
       {
          int n = ArraySize(g_rExit);
@@ -20688,12 +20895,16 @@ void XAU_RExit_LoadPersistedState()
          ZeroMemory(g_rExit[n]);
          idx = n;
       }
-      g_rExit[idx].ticket = ticket;
+      g_rExit[idx].positionId = positionId;
+      g_rExit[idx].currentTicket = liveTicket; // always the freshly-resolved LIVE ticket, never the possibly-stale persisted one
       g_rExit[idx].positionDirection = direction;
       g_rExit[idx].originalEntryPrice = origEntry;
       g_rExit[idx].originalStopLoss = origSL;
       g_rExit[idx].originalStopDistance = origDist;
       g_rExit[idx].originalRiskUSD = origRisk;
+      g_rExit[idx].cumulativeOriginalRiskUSD = cumRisk > 0 ? cumRisk : origRisk; // schema-upgrade safety for a hypothetical older row
+      g_rExit[idx].totalOriginalVolume = totalVol > 0 ? totalVol : liveVol;
+      g_rExit[idx].addCount = MathMax(1, addCount);
       g_rExit[idx].peakProfitUSD = peakUSD;
       g_rExit[idx].peakR = peakR;
       g_rExit[idx].timePeakReached = peakTime;
@@ -20704,39 +20915,45 @@ void XAU_RExit_LoadPersistedState()
       g_rExit[idx].closeState = closeState;
       g_rExit[idx].pendingCloseReason = pendingReason;
       g_rExit[idx].lastProtectedSL = lastSL;
+      g_rExit[idx].closeAttemptCount = closeAttempts;
+      g_rExit[idx].lastRunnerRecheckBarTime = lastRunnerBar;
+      g_rExit[idx].finalTelemetryLogged = finalLogged;
       g_rExit[idx].reconciledFromRestart = reconciled;
       restored++;
-      PrintFormat("R_EXIT_STATE_RESTORED ticket=%I64u direction=%s stage=%d riskUSD=%.2f peakR=%.3f pendingClose=%s",
-                  ticket, direction == 1 ? "BUY" : "SELL", stage, origRisk, peakR,
+      PrintFormat("R_EXIT_STATE_RESTORED positionId=%I64u ticket=%I64u direction=%s stage=%d riskUSD=%.2f peakR=%.3f pendingClose=%s",
+                  positionId, liveTicket, direction == 1 ? "BUY" : "SELL", stage, cumRisk, peakR,
                   StringLen(pendingReason) > 0 ? pendingReason : "NONE");
       if(closeState == R_CLOSE_REQUESTED || closeState == R_CLOSE_PENDING_RETRY)
-         PrintFormat("R_EXIT_PENDING_CLOSE_RESTORED ticket=%I64u reason=%s", ticket, pendingReason);
+         PrintFormat("R_EXIT_PENDING_CLOSE_RESTORED positionId=%I64u ticket=%I64u reason=%s", positionId, liveTicket, pendingReason);
    }
    FileClose(h);
-   PrintFormat("R_EXIT_STATE_RESTORE_SUMMARY restored=%d mismatched=%d", restored, mismatched);
+   PrintFormat("R_EXIT_STATE_RESTORE_SUMMARY restored=%d mismatched=%d rejected=%d", restored, mismatched, rejected);
 }
 
 //+------------------------------------------------------------------+
-//| Periodic orphan reconciliation: any g_rExit[] entry whose ticket  |
-//| no longer corresponds to a live broker position is removed. This  |
-//| is the safety net for closes this EA did not itself observe       |
-//| (e.g. a missed tick around a broker-side event) on top of the     |
-//| primary OnTradeTransaction cleanup hook. Also caps g_rExit[] from |
-//| growing unbounded.                                                |
+//| Periodic orphan reconciliation: any g_rExit[] entry whose          |
+//| positionId no longer corresponds to a live broker position is      |
+//| removed. This is the safety net for closes this EA did not itself  |
+//| observe (e.g. a missed tick around a broker-side event) on top of  |
+//| the primary OnTradeTransaction cleanup hook. Also caps g_rExit[]   |
+//| from growing unbounded. Resolution is by POSITION_IDENTIFIER        |
+//| iteration, never PositionSelectByTicket.                           |
 //+------------------------------------------------------------------+
 void XAU_RExit_ReconcileOrphans()
 {
    for(int i = ArraySize(g_rExit) - 1; i >= 0; i--)
    {
-      if(!PositionSelectByTicket(g_rExit[i].ticket))
+      ulong t; string s; long m; int d; double o, v, sl, tp;
+      if(!XAU_FindLivePositionByIdentifier(g_rExit[i].positionId, t, s, m, d, o, v, sl, tp))
       {
-         PrintFormat("R_EXIT_MANAGER ORPHAN_CLEANUP ticket=%I64u | no live position found -- state removed",
-                     g_rExit[i].ticket);
+         PrintFormat("R_EXIT_MANAGER ORPHAN_CLEANUP positionId=%I64u | no live position found -- state removed",
+                     g_rExit[i].positionId);
          if(!g_rExit[i].finalTelemetryLogged)
             XAU_RExit_LogCounterfactual(i, "ORPHAN_CLEANUP_UNKNOWN_CLOSE_REASON");
          int last = ArraySize(g_rExit) - 1;
          if(i != last) g_rExit[i] = g_rExit[last];
          ArrayResize(g_rExit, last);
+         g_rExitStateDirty = true;
       }
    }
 }
@@ -20752,8 +20969,9 @@ void XAU_RExit_LogCounterfactual(int idx, string exitReason)
    for(int c = 0; c < 6; c++)
       cf += StringFormat("%.2fR=%s ", g_rCheckpointLevels[c],
                           g_rExit[idx].rCheckpointHit[c] ? DoubleToString(g_rExit[idx].rCheckpointProfitUSD[c], 2) : "n/a");
-   PrintFormat("R_EXIT_COUNTERFACTUAL ticket=%I64u exitReason=%s riskUSD=%.2f exitR=%.3f exitProfitUSD=%.2f MFE_peakR=%.3f MFE_peakUSD=%.2f MAE_troughR=%.3f MAE_troughUSD=%.2f checkpoints: %s",
-               g_rExit[idx].ticket, exitReason, g_rExit[idx].originalRiskUSD, g_rExit[idx].currentR, g_rExit[idx].currentProfitUSD,
+   PrintFormat("R_EXIT_COUNTERFACTUAL positionId=%I64u ticket=%I64u exitReason=%s riskUSD=%.2f addCount=%d exitR=%.3f exitProfitUSD=%.2f MFE_peakR=%.3f MFE_peakUSD=%.2f MAE_troughR=%.3f MAE_troughUSD=%.2f checkpoints: %s",
+               g_rExit[idx].positionId, g_rExit[idx].currentTicket, exitReason, g_rExit[idx].cumulativeOriginalRiskUSD, g_rExit[idx].addCount,
+               g_rExit[idx].currentR, g_rExit[idx].currentProfitUSD,
                g_rExit[idx].peakR, g_rExit[idx].peakProfitUSD, g_rExit[idx].troughR, g_rExit[idx].troughProfitUSD, cf);
 }
 
@@ -20762,9 +20980,11 @@ void XAU_RExit_LogCounterfactual(int idx, string exitReason)
 //| reason across retries (never silently switches to HOLD because of |
 //| a transient broker failure), throttles repeat attempts, logs the  |
 //| broker retcode via SafePositionClose's own logging, and only ever |
-//| clears state once the position is verifiably gone.                |
+//| clears state once the position is verifiably gone. Takes the      |
+//| CURRENT ticket explicitly (broker close calls need a ticket, not   |
+//| the canonical positionId).                                        |
 //+------------------------------------------------------------------+
-bool XAU_RExit_RequestClose(int idx, ulong ticket, string reason)
+bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
 {
    datetime now = TimeCurrent();
    if(g_rExit[idx].closeState == R_CLOSE_PENDING_RETRY && now - g_rExit[idx].lastCloseAttemptTime < 3)
@@ -20779,9 +20999,10 @@ bool XAU_RExit_RequestClose(int idx, ulong ticket, string reason)
 
    g_rExit[idx].lastCloseAttemptTime = now;
    g_rExit[idx].closeAttemptCount++;
+   g_rExitStateDirty = true;
 
-   bool sendOk = SafePositionClose(ticket, g_rExit[idx].pendingCloseReason);
-   bool stillOpen = PositionSelectByTicket(ticket);
+   bool sendOk = SafePositionClose(currentTicket, g_rExit[idx].pendingCloseReason);
+   bool stillOpen = PositionSelectByTicket(currentTicket);
    if(sendOk && !stillOpen)
    {
       g_rExit[idx].closeState = R_CLOSE_CONFIRMED;
@@ -20790,8 +21011,8 @@ bool XAU_RExit_RequestClose(int idx, ulong ticket, string reason)
          XAU_RExit_LogCounterfactual(idx, g_rExit[idx].pendingCloseReason);
          g_rExit[idx].finalTelemetryLogged = true;
       }
-      XAU_RExit_Clear(ticket);
-      XAU_RExit_SaveState();
+      XAU_RExit_Clear(g_rExit[idx].positionId);
+      XAU_RExit_SaveState(true); // critical transition -- force immediate flush
       return true;
    }
 
@@ -20799,9 +21020,9 @@ bool XAU_RExit_RequestClose(int idx, ulong ticket, string reason)
    // tick (fill not yet reflected) -- stay pending, never revert to HOLD.
    g_rExit[idx].closeState = R_CLOSE_PENDING_RETRY;
    PrintFormat("R_EXIT_MANAGER ticket=%I64u action=CLOSE_PENDING_RETRY reason=%s attempt=%d sendOk=%s stillOpen=%s",
-               ticket, g_rExit[idx].pendingCloseReason, g_rExit[idx].closeAttemptCount,
+               currentTicket, g_rExit[idx].pendingCloseReason, g_rExit[idx].closeAttemptCount,
                sendOk ? "true" : "false", stillOpen ? "true" : "false");
-   XAU_RExit_SaveState();
+   XAU_RExit_SaveState(true); // critical transition -- force immediate flush
    return false;
 }
 
@@ -20826,7 +21047,12 @@ void XAU_RExitCoreLoop()
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    long stopsLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-   double buffer = MathMax(stopsLevel * point, point * 30);
+   long freezeLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
+   // Fix 14: minimum safe distance is max(stops level, freeze level) x point --
+   // SafeModifySL() itself is still the final broker-facing freeze/stops
+   // gatekeeper; this is the pre-check used to decide whether a candidate SL
+   // is even worth proposing.
+   double buffer = MathMax(MathMax(stopsLevel, freezeLevel) * point, point * 30);
    bool anyTicket = false;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -20835,7 +21061,8 @@ void XAU_RExitCoreLoop()
       if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
       anyTicket = true;
 
-      ulong ticket   = posInfo.Ticket();
+      ulong positionId = posInfo.Identifier();  // canonical key -- Fix 10
+      ulong ticket   = posInfo.Ticket();        // CURRENT ticket -- broker calls only, never a state key
       bool isBuy     = posInfo.PositionType() == POSITION_TYPE_BUY;
       double openPx  = posInfo.PriceOpen();
       double curSL   = posInfo.StopLoss();
@@ -20845,7 +21072,8 @@ void XAU_RExitCoreLoop()
       double profit  = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
       string dirStr  = isBuy ? "BUY" : "SELL";
 
-      int idx = XAU_RExit_EnsureIdx(ticket, isBuy, openPx, curSL, lots, false);
+      int idx = XAU_RExit_EnsureIdx(positionId, ticket, isBuy, openPx, curSL, lots, false);
+      XAU_RExit_SyncNettingState(idx, isBuy, openPx, curSL, lots); // Fix 12: netting pyramid adds
 
       // ---- Priority 1: a close already in flight always wins -- no other
       //      discretionary action runs for this ticket this tick. ----
@@ -20855,7 +21083,7 @@ void XAU_RExitCoreLoop()
          continue;
       }
 
-      double riskUSD = g_rExit[idx].originalRiskUSD;
+      double riskUSD = g_rExit[idx].cumulativeOriginalRiskUSD; // Fix 12: netting-aware denominator (== originalRiskUSD when addCount==1)
       double currentR = riskUSD > 0 ? profit / riskUSD : 0.0;
       g_rExit[idx].currentProfitUSD = profit;
       g_rExit[idx].currentR = currentR;
@@ -23398,7 +23626,11 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       }
       return;
    }
-   if(entry != DEAL_ENTRY_OUT) return;
+   // v6.21.2 audit fix (Fix 18): DEAL_ENTRY_OUT_BY (position closed by an
+   // opposite one) must reach the same cleanup path as an ordinary
+   // DEAL_ENTRY_OUT close -- previously only DEAL_ENTRY_OUT was handled here,
+   // so an OUT_BY close would silently skip R-exit state cleanup entirely.
+   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY) return;
 
    // v4.5.9 — Detect PARTIAL close vs FULL close.
    // A partial close still leaves the position open with the same posId.
@@ -23440,7 +23672,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
             g_rExit[rIdx].finalTelemetryLogged = true;
          }
          XAU_RExit_Clear(posId);
-         XAU_RExit_SaveState();
+         XAU_RExit_SaveState(true); // critical transition -- force immediate flush
       }
    }
 
@@ -24179,11 +24411,13 @@ int PG_HTFTrend()
 }
 
 // v5.2.1 — Startup cooldown gate. Returns "" if OK to trade, otherwise a reason.
-// Two stacked conditions:
-//   (a) at least InpStartupCooldownMin minutes have elapsed since OnInit
-//   (b) at least one fresh M5 bar has CLOSED since OnInit (so no carry-over
-//       signal from before the restart can fire on the same candle)
-// Once both pass, sets a sticky flag so we don't re-log every tick.
+// v6.21.2 audit fix: this used to stack a 5-minute-default wait with a
+// requirement for a fresh M5 bar to close (potentially another ~5 minutes on
+// top) -- a second, independent five-minute-style entry wait, separate from
+// the main signal timing engine. Replaced with the SAME bounded 120-180s
+// wall-clock warm-up (XAU_EffectiveEntryDelaySeconds() shape, own seconds
+// input) and no bar-boundary requirement at all. Once it passes, a sticky
+// flag stops re-logging every tick.
 string StartupCooldownReason()
 {
    if(XAU_NoLimitTradingModeActive())
@@ -24201,21 +24435,22 @@ string StartupCooldownReason()
       if(!g_startupIntelSyncOk)
          return "startup intelligence sync failed: " + g_startupIntelSyncReason;
    }
-   datetime now = TimeCurrent();
-   int waitedMin = (int)((now - g_startupAt) / 60);
-   if(InpStartupCooldownMin > 0 && waitedMin < InpStartupCooldownMin)
-      return StringFormat("startup cooldown (%d/%d min elapsed)",
-                          waitedMin, InpStartupCooldownMin);
    if(InpStartupRequireNewBar)
    {
-      datetime barOpens[1];
-      if(CopyTime(Symbol(), PERIOD_M5, 0, 1, barOpens) <= 0)
-         return "startup cooldown (waiting on M5 bar data)";
-      // Require the current open bar to be DIFFERENT from the one at boot —
-      // i.e. at least one bar boundary has crossed.
-      if(barOpens[0] <= g_startupBarTime)
-         return "startup cooldown (waiting for next M5 bar)";
+      static bool warnedStartupBarWaitRemoved = false;
+      if(!warnedStartupBarWaitRemoved)
+      {
+         Print("ENTRY_TIMING_LEGACY_BAR_WAIT_REMOVED — InpStartupRequireNewBar is inert; startup uses the bounded 2-3-minute wall-clock warm-up only");
+         warnedStartupBarWaitRemoved = true;
+      }
    }
+   datetime now = TimeCurrent();
+   int waitedSec = (int)(now - g_startupAt);
+   double resolvedStartupSec = MathMax(XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC,
+                                       MathMin(XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC, (double)InpStartupCooldownSeconds));
+   if(waitedSec < resolvedStartupSec)
+      return StringFormat("startup cooldown (%d/%.0f sec elapsed, wall-clock only)",
+                          waitedSec, resolvedStartupSec);
    g_startupCooldownDone = true;
    Print("🟢 Startup cooldown complete — trading enabled.");
    return "";
@@ -25166,9 +25401,8 @@ void XAU_WriteLearningReport()
    // v6.20.0 M5 ENTRY DELAY, PHASE B
    FileWrite(h, "## M5 Entry Delay (Phase B, v6.20.0)");
    FileWrite(h, "");
-   FileWrite(h, StringFormat("Enabled: %s | Target delay: %ds (clamped to [%d,%d]s) | Bypass for any grade: REMOVED v6.20.3 (every grade always waits the full delay) | Chase cap: %.2fATR",
-                             InpUseM5EntryDelay ? "YES" : "NO (original next-M5-bar wait active)",
-                             InpM5EntryDelaySeconds, InpM5EntryDelayMinSeconds, InpM5EntryDelayMaxSeconds,
+   FileWrite(h, StringFormat("Mode: WALL_CLOCK_ONLY (next-M5-bar wait REMOVED v6.21.2, unreachable) | Resolved delay: %.0fs (bounded [%.0f,%.0f]s) | Bypass for any grade: REMOVED v6.20.3 (every grade always waits the full delay) | Chase cap: %.2fATR",
+                             XAU_EffectiveEntryDelaySeconds(), XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC, XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC,
                              InpCancelIfPriceMovedTooFarATR));
    int m5DelayTotal = g_m5DelayConfirmedCount + g_m5DelayCancelledCount;
    if(m5DelayTotal == 0)
@@ -26693,12 +26927,25 @@ void XAU_TrackSignalFirstSeen(int signal, string setupName, string grade,
 // evaluates to a fixed Min-sized delay regardless of InpM5EntryDelaySeconds,
 // with no warning. One shared helper (was inlined twice) also removes the
 // duplicate clamp expression.
-double XAU_EffectiveM5EntryDelaySec()
+// v6.21.2 audit fix: no .set file, however misconfigured, can push the
+// resolved delay outside [120,180] -- the min/max inputs are themselves first
+// clamped into that absolute production range before being used to clamp the
+// target. This is the single authoritative entry-delay resolver; there is no
+// other timing engine.
+double XAU_EffectiveEntryDelaySeconds()
 {
-   double lo = MathMin((double)InpM5EntryDelayMinSeconds, (double)InpM5EntryDelayMaxSeconds);
-   double hi = MathMax((double)InpM5EntryDelayMinSeconds, (double)InpM5EntryDelayMaxSeconds);
-   return MathMax(lo, MathMin(hi, (double)InpM5EntryDelaySeconds));
+   double rawLo = MathMin((double)InpM5EntryDelayMinSeconds, (double)InpM5EntryDelayMaxSeconds);
+   double rawHi = MathMax((double)InpM5EntryDelayMinSeconds, (double)InpM5EntryDelayMaxSeconds);
+   double lo = MathMax(XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC, MathMin(XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC, rawLo));
+   double hi = MathMax(XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC, MathMin(XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC, rawHi));
+   if(hi < lo) hi = lo;
+   double target = MathMax(lo, MathMin(hi, (double)InpM5EntryDelaySeconds));
+   return MathMax(XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC, MathMin(XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC, target));
 }
+
+// Backward-compatible alias for the handful of pre-existing call sites named
+// after the old M5-specific function name -- same function, same guarantees.
+double XAU_EffectiveM5EntryDelaySec() { return XAU_EffectiveEntryDelaySeconds(); }
 
 // v6.18.0 ROLE NOTE: this is authority #2 of 3 for entry timing (see
 // XAU_ClassifySetup's ROLE NOTE above) -- CONFIRMATION / WAIT / REASSESS.
@@ -26745,139 +26992,108 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
                             g_pendingEntryConfirm.dir == dir &&
                             g_pendingEntryConfirm.setup == setup);
 
-   if(InpUseM5EntryDelay)
+   // v6.21.2 audit fix: the legacy InpUseM5EntryDelay=false "wait for the next
+   // M5 bar" branch has been REMOVED (not merely disabled) -- there is no
+   // reachable code path left that waits for a bar boundary to confirm entry.
+   // false still routes through the exact same bounded 120-180s wall-clock
+   // logic below; only a one-time startup warning differs.
+   if(!InpUseM5EntryDelay)
    {
-      // v6.20.0 M5 ENTRY DELAY: signal detection stays on M5 (unchanged above);
-      // this replaces the "wait for the next M5 bar" (up to 5 minutes) branch
-      // below with a short, wall-clock 60-120s delay INSIDE the same M5 candle.
-      // Same PendingEntryConfirmation struct, same XAU_ClassifySetup evidence
-      // (tcls, already freshly recomputed above on THIS call) -- one authority,
-      // shorter window, not a second competing timing system.
-      if(sameSignalPending)
+      static bool warnedLegacyRemoved = false;
+      if(!warnedLegacyRemoved)
       {
-         // v6.20.3 (Commit C, tightened again same day per explicit
-         // instruction): always the FULL target delay, unconditionally --
-         // tcls.immediateConfirm no longer shortens this for any grade.
-         double delaySec = XAU_EffectiveM5EntryDelaySec();
-         double elapsedSec = (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime);
-         if(elapsedSec < delaySec)
-         {
-            // v6.20.5 (TELEMETRY ONLY -- Change A): remaining= added, same
-            // cadence/throttle as before (none -- unchanged from pre-existing
-            // behavior), purely an additional field on an existing line.
-            PrintFormat("TIMING_ENGINE: %s M5_ENTRY_DELAY waiting (%s %s) elapsed=%.0fs / target=%.0fs / remaining=%.0fs OriginalSignalPrice=%.2f",
-                        typeStr, setup, dirStr, elapsedSec, delaySec, MathMax(0.0, delaySec - elapsedSec), g_pendingEntryConfirm.signalPrice);
-            return false;
-         }
-
-         // Delay window elapsed -- re-validate everything fresh before executing.
-         // tcls above already re-derived setup type/evidence/freshStructureBias
-         // from CURRENT price/structure this same call (nothing here is stale).
-         double curPriceNow = (dir == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK) : SymbolInfoDouble(Symbol(), SYMBOL_BID);
-         double movedInFavor = (dir == 1) ? (curPriceNow - g_pendingEntryConfirm.signalPrice)
-                                          : (g_pendingEntryConfirm.signalPrice - curPriceNow);
-         double moveATR = (g_pendingEntryConfirm.atr > 0.0) ? movedInFavor / g_pendingEntryConfirm.atr : 0.0;
-         double spreadPts = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-         string spreadState = XAU_SpreadState(spreadPts);
-         bool structureFlipped = (dir == 1 && tcls.freshStructureBias == "BEARISH") ||
-                                 (dir == -1 && tcls.freshStructureBias == "BULLISH");
-         string cancelReason = "";
-
-         if(movedInFavor > g_pendingEntryConfirm.atr * InpCancelIfPriceMovedTooFarATR)
-            cancelReason = StringFormat("PRICE_RAN_TOO_FAR_CHASE moved=%.2f (%.2fATR) > cap %.2fATR -- %s",
-                                        movedInFavor, moveATR, InpCancelIfPriceMovedTooFarATR,
-                                        moveATR >= 2.0 ? "MISSED_TRADE (already well into what would be profit, not chasing it)" : "reassessing from current market");
-         else if(structureFlipped)
-            cancelReason = StringFormat("STRUCTURE_FLIPPED freshStructureBias=%s now opposes %s", tcls.freshStructureBias, dirStr);
-         else if(tcls.type == XAU_TIMING_LATE_CHASE)
-            cancelReason = StringFormat("STILL_LATE_CHASE_AFTER_DELAY (%s)", tcls.why);
-         else if(spreadState == "EXTREME")
-            cancelReason = StringFormat("SPREAD_TOO_WIDE %.0f pts (%s)", spreadPts, spreadState);
-
-         if(StringLen(cancelReason) > 0)
-         {
-            PrintFormat("TIMING_ENGINE: %s M5_ENTRY_DELAY_CANCELLED (%s %s) CancelReason=%s | OriginalSignalTime=%s OriginalSignalPrice=%.2f EntryDelaySeconds=%.0f ThesisStillValid=NO",
-                        typeStr, setup, dirStr, cancelReason,
-                        TimeToString(g_pendingEntryConfirm.firstSeenTime, TIME_DATE | TIME_SECONDS),
-                        g_pendingEntryConfirm.signalPrice, elapsedSec);
-            g_pendingEntryConfirm.active = false;
-            g_m5DelayCancelledCount++;
-            // Do not silently re-arm a fresh window this same tick -- if a
-            // genuinely new candidate exists, the next tick's fresh scoring
-            // (dir/setup re-derived from scratch by ScoreSetups) will find it
-            // and fall through to the "start a brand-new window" block below.
-            return false;
-         }
-
-         double priceImprovement = movedInFavor; // + = better than original signal price, - = worse (still within cap, so acceptable)
-         PrintFormat("TIMING_ENGINE: %s M5_ENTRY_DELAY_CONFIRMED (%s %s) -> ENTRY_ALLOWED | OriginalSignalTime=%s OriginalSignalPrice=%.2f DelayedEntryTime=%s DelayedEntryPrice=%.2f EntryDelaySeconds=%.0f PriceImprovementOrWorsening=%.2f ThesisStillValid=YES",
-                     typeStr, setup, dirStr,
-                     TimeToString(g_pendingEntryConfirm.firstSeenTime, TIME_DATE | TIME_SECONDS),
-                     g_pendingEntryConfirm.signalPrice,
-                     TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
-                     curPriceNow, elapsedSec, priceImprovement);
-         // v6.20.1: mailbox for delayed-entry outcome telemetry.
-         g_lastEntryTimingDecision.valid              = true;
-         g_lastEntryTimingDecision.wasDelayed         = true;
-         g_lastEntryTimingDecision.originalSignalTime = g_pendingEntryConfirm.firstSeenTime;
-         g_lastEntryTimingDecision.originalSignalPrice= g_pendingEntryConfirm.signalPrice;
-         g_lastEntryTimingDecision.decisionTime       = TimeCurrent();
-         g_lastEntryTimingDecision.delaySeconds       = elapsedSec;
-         g_lastEntryTimingDecision.priceImprovement   = priceImprovement;
-         g_lastEntryTimingDecision.entryReasonText    = "M5_ENTRY_DELAY_CONFIRMED";
-         g_pendingEntryConfirm.active = false;
-         g_m5DelayConfirmedCount++;
-         g_m5DelaySumPriceImprovement += priceImprovement;
-         return true;
-      }
-      else if(g_pendingEntryConfirm.active)
-      {
-         PrintFormat("TIMING_ENGINE: M5_ENTRY_DELAY_EXPIRED (previous %s %s) -> REASSESS_FROM_CURRENT_MARKET (now %s %s)",
-                     g_pendingEntryConfirm.setup, g_pendingEntryConfirm.dir == 1 ? "BUY" : "SELL", setup, dirStr);
+         Print("ENTRY_TIMING_LEGACY_BAR_WAIT_REMOVED — using bounded 2-3-minute wall-clock confirmation");
+         warnedLegacyRemoved = true;
       }
    }
-   else
+
+   // v6.20.0 M5 ENTRY DELAY: signal detection stays on M5 (unchanged above);
+   // this is a short, wall-clock 120-180s delay INSIDE the same M5 candle.
+   // Same PendingEntryConfirmation struct, same XAU_ClassifySetup evidence
+   // (tcls, already freshly recomputed above on THIS call) -- one authority.
+   if(sameSignalPending)
    {
-      // InpUseM5EntryDelay=false: original next-M5-bar wait, byte-for-byte
-      // unchanged from pre-v6.20.0 behavior.
-      bool sameSignalOneBarLater = (sameSignalPending &&
-                                    nowCandle == g_pendingEntryConfirm.firstSeenCandle + PeriodSeconds(PERIOD_M5));
-      if(sameSignalOneBarLater)
+      // v6.20.3 (Commit C, tightened again same day per explicit
+      // instruction): always the FULL target delay, unconditionally --
+      // tcls.immediateConfirm no longer shortens this for any grade.
+      double delaySec = XAU_EffectiveEntryDelaySeconds();
+      double elapsedSec = (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime);
+      if(elapsedSec < delaySec)
       {
-         double movedInFavor = (dir == 1) ? (signalPrice - g_pendingEntryConfirm.signalPrice)
-                                          : (g_pendingEntryConfirm.signalPrice - signalPrice);
-         if(movedInFavor > g_pendingEntryConfirm.atr * 1.0)
-         {
-            PrintFormat("TIMING_ENGINE: ENTRY_WINDOW_EXPIRED (%s %s) reason=OVEREXTENDED_ON_CONFIRM moved=%.2f > 1.0xATR=%.2f -> REASSESS_FROM_CURRENT_MARKET",
-                        setup, dirStr, movedInFavor, g_pendingEntryConfirm.atr);
-         }
-         else if(tcls.type == XAU_TIMING_LATE_CHASE)
-         {
-            PrintFormat("TIMING_ENGINE: ENTRY_WINDOW_EXPIRED (%s %s) reason=STILL_LATE_CHASE_ON_CONFIRM (%s) -> REASSESS_FROM_CURRENT_MARKET",
-                        setup, dirStr, tcls.why);
-         }
-         else
-         {
-            PrintFormat("TIMING_ENGINE: %s ENTRY_CONFIRMING -> ENTRY_ALLOWED (%s %s) held direction one bar, moved %.2f in favor",
-                        typeStr, setup, dirStr, movedInFavor);
-            // v6.20.1: mailbox for delayed-entry outcome telemetry (bar-based path).
-            g_lastEntryTimingDecision.valid              = true;
-            g_lastEntryTimingDecision.wasDelayed         = true;
-            g_lastEntryTimingDecision.originalSignalTime = g_pendingEntryConfirm.firstSeenTime;
-            g_lastEntryTimingDecision.originalSignalPrice= g_pendingEntryConfirm.signalPrice;
-            g_lastEntryTimingDecision.decisionTime       = TimeCurrent();
-            g_lastEntryTimingDecision.delaySeconds       = (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime);
-            g_lastEntryTimingDecision.priceImprovement   = movedInFavor;
-            g_lastEntryTimingDecision.entryReasonText    = "BAR_BASED_CONFIRMED";
-            g_pendingEntryConfirm.active = false;
-            return true;
-         }
+         // v6.20.5 (TELEMETRY ONLY -- Change A): remaining= added, same
+         // cadence/throttle as before (none -- unchanged from pre-existing
+         // behavior), purely an additional field on an existing line.
+         PrintFormat("TIMING_ENGINE: %s ENTRY_DELAY_WAITING (%s %s) elapsed=%.0fs / target=%.0fs / remaining=%.0fs OriginalSignalPrice=%.2f",
+                     typeStr, setup, dirStr, elapsedSec, delaySec, MathMax(0.0, delaySec - elapsedSec), g_pendingEntryConfirm.signalPrice);
+         return false;
       }
-      else if(g_pendingEntryConfirm.active)
+
+      // Delay window elapsed -- re-validate everything fresh before executing.
+      // tcls above already re-derived setup type/evidence/freshStructureBias
+      // from CURRENT price/structure this same call (nothing here is stale).
+      PrintFormat("TIMING_ENGINE: %s ENTRY_DELAY_REVALIDATING (%s %s) elapsed=%.0fs / target=%.0fs",
+                  typeStr, setup, dirStr, elapsedSec, delaySec);
+      double curPriceNow = (dir == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK) : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      double movedInFavor = (dir == 1) ? (curPriceNow - g_pendingEntryConfirm.signalPrice)
+                                       : (g_pendingEntryConfirm.signalPrice - curPriceNow);
+      double moveATR = (g_pendingEntryConfirm.atr > 0.0) ? movedInFavor / g_pendingEntryConfirm.atr : 0.0;
+      double spreadPts = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+      string spreadState = XAU_SpreadState(spreadPts);
+      bool structureFlipped = (dir == 1 && tcls.freshStructureBias == "BEARISH") ||
+                              (dir == -1 && tcls.freshStructureBias == "BULLISH");
+      string cancelReason = "";
+
+      if(movedInFavor > g_pendingEntryConfirm.atr * InpCancelIfPriceMovedTooFarATR)
+         cancelReason = StringFormat("PRICE_RAN_TOO_FAR_CHASE moved=%.2f (%.2fATR) > cap %.2fATR -- %s",
+                                     movedInFavor, moveATR, InpCancelIfPriceMovedTooFarATR,
+                                     moveATR >= 2.0 ? "MISSED_TRADE (already well into what would be profit, not chasing it)" : "reassessing from current market");
+      else if(structureFlipped)
+         cancelReason = StringFormat("STRUCTURE_FLIPPED freshStructureBias=%s now opposes %s", tcls.freshStructureBias, dirStr);
+      else if(tcls.type == XAU_TIMING_LATE_CHASE)
+         cancelReason = StringFormat("STILL_LATE_CHASE_AFTER_DELAY (%s)", tcls.why);
+      else if(spreadState == "EXTREME")
+         cancelReason = StringFormat("SPREAD_TOO_WIDE %.0f pts (%s)", spreadPts, spreadState);
+
+      if(StringLen(cancelReason) > 0)
       {
-         PrintFormat("TIMING_ENGINE: ENTRY_WINDOW_EXPIRED (previous %s %s) -> REASSESS_FROM_CURRENT_MARKET (now %s %s)",
-                     g_pendingEntryConfirm.setup, g_pendingEntryConfirm.dir == 1 ? "BUY" : "SELL", setup, dirStr);
+         PrintFormat("TIMING_ENGINE: %s ENTRY_DELAY_CANCELLED (%s %s) CancelReason=%s | OriginalSignalTime=%s OriginalSignalPrice=%.2f EntryDelaySeconds=%.0f ThesisStillValid=NO",
+                     typeStr, setup, dirStr, cancelReason,
+                     TimeToString(g_pendingEntryConfirm.firstSeenTime, TIME_DATE | TIME_SECONDS),
+                     g_pendingEntryConfirm.signalPrice, elapsedSec);
+         g_pendingEntryConfirm.active = false;
+         g_m5DelayCancelledCount++;
+         // Do not silently re-arm a fresh window this same tick -- if a
+         // genuinely new candidate exists, the next tick's fresh scoring
+         // (dir/setup re-derived from scratch by ScoreSetups) will find it
+         // and fall through to the "start a brand-new window" block below.
+         return false;
       }
+
+      double priceImprovement = movedInFavor; // + = better than original signal price, - = worse (still within cap, so acceptable)
+      PrintFormat("TIMING_ENGINE: %s ENTRY_DELAY_CONFIRMED (%s %s) -> ENTRY_ALLOWED | OriginalSignalTime=%s OriginalSignalPrice=%.2f DelayedEntryTime=%s DelayedEntryPrice=%.2f EntryDelaySeconds=%.0f PriceImprovementOrWorsening=%.2f ThesisStillValid=YES",
+                  typeStr, setup, dirStr,
+                  TimeToString(g_pendingEntryConfirm.firstSeenTime, TIME_DATE | TIME_SECONDS),
+                  g_pendingEntryConfirm.signalPrice,
+                  TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+                  curPriceNow, elapsedSec, priceImprovement);
+      // v6.20.1: mailbox for delayed-entry outcome telemetry.
+      g_lastEntryTimingDecision.valid              = true;
+      g_lastEntryTimingDecision.wasDelayed         = true;
+      g_lastEntryTimingDecision.originalSignalTime = g_pendingEntryConfirm.firstSeenTime;
+      g_lastEntryTimingDecision.originalSignalPrice= g_pendingEntryConfirm.signalPrice;
+      g_lastEntryTimingDecision.decisionTime       = TimeCurrent();
+      g_lastEntryTimingDecision.delaySeconds       = elapsedSec;
+      g_lastEntryTimingDecision.priceImprovement   = priceImprovement;
+      g_lastEntryTimingDecision.entryReasonText    = "ENTRY_DELAY_CONFIRMED";
+      g_pendingEntryConfirm.active = false;
+      g_m5DelayConfirmedCount++;
+      g_m5DelaySumPriceImprovement += priceImprovement;
+      return true;
+   }
+   else if(g_pendingEntryConfirm.active)
+   {
+      PrintFormat("TIMING_ENGINE: ENTRY_DELAY_EXPIRED (previous %s %s) -> REASSESS_FROM_CURRENT_MARKET (now %s %s)",
+                  g_pendingEntryConfirm.setup, g_pendingEntryConfirm.dir == 1 ? "BUY" : "SELL", setup, dirStr);
    }
 
    // No confirmed pending match (new candidate, thesis changed, or window
@@ -26892,25 +27108,30 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
    g_pendingEntryConfirm.atr             = atr;
    g_pendingEntryConfirm.firstSeenCandle = nowCandle;
    g_pendingEntryConfirm.firstSeenTime   = TimeCurrent();
-   if(InpUseM5EntryDelay)
-      PrintFormat("TIMING_ENGINE: %s SIGNAL_DETECTED (%s %s) grade=%s -> M5_ENTRY_DELAY armed for %.0fs (%s) OriginalSignalPrice=%.2f",
-                  typeStr, setup, dirStr, grade, XAU_EffectiveM5EntryDelaySec(),
-                  tcls.why, signalPrice);
-   else
-      PrintFormat("TIMING_ENGINE: %s SIGNAL_DETECTED (%s %s) grade=%s -> WAITING_FOR_ENTRY_WINDOW (%s; confirm required on next M5 bar)",
-                  typeStr, setup, dirStr, grade, tcls.why);
+   PrintFormat("TIMING_ENGINE: %s SIGNAL_DETECTED (%s %s) grade=%s -> ENTRY_DELAY_STARTED for %.0fs (%s) OriginalSignalPrice=%.2f",
+               typeStr, setup, dirStr, grade, XAU_EffectiveEntryDelaySeconds(),
+               tcls.why, signalPrice);
    return false;
 }
 
 // v6.17.14 FLEET-CONSISTENCY RECOVERY: exactly one re-check of the pending
-// missed opportunity, on the very next closed M5 bar. Reuses the same,
-// already-tested building blocks as the v6.17.9/10 Symmetric Opportunity
-// Recheck and the v6.17.8 stale-HTF fix (TFDirectionByEMA,
-// XAU_ComputeCombinedGradeForCandidate, AdaptiveXAUConfirm) rather than
-// inventing new validity logic -- this is deliberate: every check below is
-// something this file already trusts elsewhere. Clears the pending slot
-// unconditionally before returning, so this can never fire twice for the
+// missed opportunity. Reuses the same, already-tested building blocks as the
+// v6.17.9/10 Symmetric Opportunity Recheck and the v6.17.8 stale-HTF fix
+// (TFDirectionByEMA, XAU_ComputeCombinedGradeForCandidate, AdaptiveXAUConfirm)
+// rather than inventing new validity logic -- this is deliberate: every check
+// below is something this file already trusts elsewhere. Clears the pending
+// slot unconditionally once it fires, so this can never fire twice for the
 // same missed signal (no indefinite chasing, per explicit requirement).
+// v6.21.2 audit fix: this used to only be CALLED on a new M5 bar (so the
+// gauntlet re-check itself could be delayed by up to ~5 minutes after the
+// opportunity was stored, BEFORE the actual wall-clock wait even begins). It
+// is now called every tick and runs its gauntlet promptly. The bounded
+// 120-180s wall-clock wait-then-revalidate itself is intentionally NOT
+// duplicated here -- once this gauntlet passes, it hands off to
+// XAU_CheckRecoveryAwaitingTiming(), which calls the SAME shared
+// XAU_TimingEngineConfirmsEntry() every other entry path uses (already fixed
+// to the bounded wall-clock delay above). Adding a second wait here would
+// stack two delays and silently recreate a near-5-minute total wait.
 void XAU_CheckPendingOpportunityRecovery()
 {
    if(!g_pendingOpportunity.active) return;
@@ -27051,11 +27272,13 @@ void XAU_CheckPendingOpportunityRecovery()
    // timing minimum (documented in the v6.20.5 commit message): it does NOT
    // -- the wait between PENDING_OPPORTUNITY_STORED and this gauntlet pass
    // had zero continuous timing-engine observation (a separate struct,
-   // simply idle), so the full timing delay begins fresh from here. storedAt
-   // is recovered from `expiry` (set to TimeCurrent()+2 M5-bar-periods at
-   // storage time) rather than adding a field to PendingOpportunity, since it
-   // is exactly recoverable and that struct's shape should not change.
-   datetime storedAt = expiry - (datetime)(PeriodSeconds(PERIOD_M5) * 2);
+   // simply idle), so the full timing delay begins fresh from here.
+   // v6.21.2: storedAt is now read directly from PendingOpportunity's own
+   // firstSeenTime field (added for this fix) instead of being reconstructed
+   // from `expiry`, since expiry's formula changed (bounded wall-clock delay
+   // + margin, not 2 M5-bar-periods) and reconstructing from it would silently
+   // drift out of sync with the actual storage time.
+   datetime storedAt = g_pendingOpportunity.firstSeenTime;
    g_recoveryAwaitingTiming.active              = true;
    g_recoveryAwaitingTiming.signalId            = sid;
    g_recoveryAwaitingTiming.dir                 = dir;
@@ -27098,7 +27321,7 @@ void XAU_CheckRecoveryAwaitingTiming()
       g_pendingTimingProof.firstSeenTime         = g_recoveryAwaitingTiming.firstSeenTime;
       g_pendingTimingProof.firstSeenPrice        = g_recoveryAwaitingTiming.firstSeenPrice;
       g_pendingTimingProof.timingGateRequired    = true;
-      g_pendingTimingProof.requiredDelaySeconds  = InpUseM5EntryDelay ? XAU_EffectiveM5EntryDelaySec() : (double)PeriodSeconds(PERIOD_M5);
+      g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveEntryDelaySeconds();
       g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
       g_pendingTimingProof.recoveryWaitSeconds   = g_recoveryAwaitingTiming.recoveryWaitSeconds;
       g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
@@ -27286,7 +27509,7 @@ bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalB
    g_pendingTimingProof.firstSeenTime         = candleTime;
    g_pendingTimingProof.firstSeenPrice        = originalSignalPrice;
    g_pendingTimingProof.timingGateRequired    = false; // explicit, named, human-triggered exemption
-   g_pendingTimingProof.requiredDelaySeconds  = InpUseM5EntryDelay ? XAU_EffectiveM5EntryDelaySec() : (double)PeriodSeconds(PERIOD_M5);
+   g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveEntryDelaySeconds();
    g_pendingTimingProof.timingGateStartTime   = 0;
    g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
    g_pendingTimingProof.timingEngineWaitSeconds = 0.0;
@@ -27947,6 +28170,7 @@ void XAU_RememberBlockedSignal(int signal, string setupName, string grade,
          g_pendingOpportunity.signalId      = StringFormat("%s_%s_%d_%I64d", setupName, signal == 1 ? "BUY" : "SELL",
                                                             (int)iTime(Symbol(), PERIOD_M5, 1), (long)TimeCurrent());
          g_pendingOpportunity.candleTime    = iTime(Symbol(), PERIOD_M5, 1);
+         g_pendingOpportunity.firstSeenTime = TimeCurrent();
          g_pendingOpportunity.dir           = signal;
          g_pendingOpportunity.setup         = setupName;
          g_pendingOpportunity.grade         = grade;
@@ -27955,7 +28179,12 @@ void XAU_RememberBlockedSignal(int signal, string setupName, string grade,
          g_pendingOpportunity.signalPrice   = poPx;
          g_pendingOpportunity.atr           = poAtr;
          g_pendingOpportunity.originalBlocker = reason;
-         g_pendingOpportunity.expiry        = TimeCurrent() + PeriodSeconds(PERIOD_M5) * 2; // one bar's worth of grace, plus margin
+         // v6.21.2 audit fix: expiry used to be pegged to 2 M5 bars (up to 10
+         // minutes) because recovery itself only used to run on a new bar.
+         // Recovery now runs on its own bounded 120-180s wall-clock delay
+         // (see XAU_CheckPendingOpportunityRecovery), so expiry only needs to
+         // cover that delay plus a small margin for a late tick.
+         g_pendingOpportunity.expiry        = TimeCurrent() + (datetime)XAU_EffectiveEntryDelaySeconds() + 30;
          Print("PENDING_OPPORTUNITY_STORED: ", g_pendingOpportunity.signalId,
                " | ", signal == 1 ? "BUY" : "SELL", " ", setupName, " grade=", grade,
                " | originalBlocker=", reason,
