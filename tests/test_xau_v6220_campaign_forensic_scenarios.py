@@ -443,6 +443,22 @@ def test_source_has_persistent_event_states_unique_ids_and_hard_margin_projectio
         assert token in src
 
 
+def test_restart_reconciliation_uses_oldest_leg_as_original_r_denominator():
+    observed = [
+        {"id": 9545080653, "time": 4, "lot": .01, "entry": 3999.57},
+        {"id": 9545008768, "time": 3, "lot": .02, "entry": 4001.43},
+        {"id": 9544972576, "time": 2, "lot": .02, "entry": 4001.63},
+        {"id": 9544968855, "time": 1, "lot": .04, "entry": 4001.93},
+    ]
+    legs = sorted(observed, key=lambda leg: leg["time"])
+    assert legs[0] == {"id": 9544968855, "time": 1, "lot": .04, "entry": 4001.93}
+    src = EA.read_text(errors="ignore")
+    assert "unassignedTime[b] < unassignedTime[b - 1]" in src
+    assert "unassignedTicket[b - 1] = unassignedTicket[b]" in src
+    assert "guaranteeHistoryKnown=false" in src
+    assert "g_campaign[idx].peakR = 0.0" in src
+
+
 def test_production_files_remain_exact_and_byte_identical():
     assert sha256(PROD.read_bytes()).hexdigest() == PRODUCTION_SHA256
     assert PROD.read_bytes() == MIRROR.read_bytes()

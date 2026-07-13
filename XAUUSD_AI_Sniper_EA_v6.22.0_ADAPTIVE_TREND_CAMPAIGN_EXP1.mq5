@@ -23077,6 +23077,7 @@ void XAU_CampaignCoreLoop()
    double   unassignedVol[16];
    double   unassignedOpenPx[16];
    double   unassignedSL[16];
+   double   unassignedProfit[16];
    datetime unassignedTime[16];
    int unassignedCount = 0;
 
@@ -23100,6 +23101,7 @@ void XAU_CampaignCoreLoop()
             unassignedVol[unassignedCount]     = posInfo.Volume();
             unassignedOpenPx[unassignedCount]  = posInfo.PriceOpen();
             unassignedSL[unassignedCount]      = posInfo.StopLoss();
+            unassignedProfit[unassignedCount]  = profit;
             unassignedTime[unassignedCount]    = posInfo.Time();
             unassignedCount++;
          }
@@ -23108,6 +23110,26 @@ void XAU_CampaignCoreLoop()
       anyLegSeen[idx] = true;
       aggProfit[idx] += profit;
       repCurPrice[idx] = posInfo.PriceCurrent();
+   }
+
+   // Broker position enumeration order is not chronological. Sort every
+   // captured field oldest-first before assigning leg 0; otherwise the newest
+   // tiny pyramid can be mistaken for the original and catastrophically
+   // shrink the stable R denominator during restart reconstruction.
+   for(int a = 1; a < unassignedCount; a++)
+   {
+      int b = a;
+      while(b > 0 && unassignedTime[b] < unassignedTime[b - 1])
+      {
+         ulong tTicket = unassignedTicket[b - 1]; unassignedTicket[b - 1] = unassignedTicket[b]; unassignedTicket[b] = tTicket;
+         bool tBuy = unassignedIsBuy[b - 1]; unassignedIsBuy[b - 1] = unassignedIsBuy[b]; unassignedIsBuy[b] = tBuy;
+         double tVol = unassignedVol[b - 1]; unassignedVol[b - 1] = unassignedVol[b]; unassignedVol[b] = tVol;
+         double tOpen = unassignedOpenPx[b - 1]; unassignedOpenPx[b - 1] = unassignedOpenPx[b]; unassignedOpenPx[b] = tOpen;
+         double tSL = unassignedSL[b - 1]; unassignedSL[b - 1] = unassignedSL[b]; unassignedSL[b] = tSL;
+         double tProfit = unassignedProfit[b - 1]; unassignedProfit[b - 1] = unassignedProfit[b]; unassignedProfit[b] = tProfit;
+         datetime tTime = unassignedTime[b - 1]; unassignedTime[b - 1] = unassignedTime[b]; unassignedTime[b] = tTime;
+         b--;
+      }
    }
 
    // ---- Restart/attach-time reconciliation: a live campaign-magic position
@@ -23150,25 +23172,32 @@ void XAU_CampaignCoreLoop()
          g_campaign[idx].entryHTF = g_htfConsensusDir;
          g_campaign[idx].reconciledFromRestart = true;
          g_campaign[idx].historyIncomplete = true;
+         g_campaign[idx].pyramidEventState = PYRAMID_IDLE;
+         g_campaign[idx].lastPyramidOpenTime = unassignedTime[u];
+         g_campaign[idx].lastPyramidOpenBar = unassignedTime[u];
+         g_campaign[idx].lastPyramidEntryPrice = unassignedOpenPx[u];
          bool brokerSLProtectsProfit = unassignedSL[u] > 0.0 &&
             (dirWanted == 1 ? unassignedSL[u] > unassignedOpenPx[u] : unassignedSL[u] < unassignedOpenPx[u]);
          if(brokerSLProtectsProfit)
          {
             // The original losing-side SL is no longer observable. Use the
             // configured account-risk amount as a conservative denominator;
-            // do not pretend the moved profitable SL was the original risk.
+            // preserve the broker's already-protected price, but do not
+            // invent a historical 0.50R peak or claim the permanent campaign
+            // guarantee was armed when its prior state file is unavailable.
             g_campaign[idx].initialRiskUSD = AccountInfoDouble(ACCOUNT_EQUITY) * InpNormalRiskPct / 100.0;
-            g_campaign[idx].guaranteeArmed = true;
+            double perLotOnePriceUnit = RiskPerLotForDistance(1.0) * unassignedVol[u];
+            if(perLotOnePriceUnit > 0.0)
+               g_campaign[idx].originalStopDistance = g_campaign[idx].initialRiskUSD / perLotOnePriceUnit;
+            g_campaign[idx].guaranteeArmed = false;
             g_campaign[idx].protectedFloorPrice = unassignedSL[u];
-            g_campaign[idx].protectedFloorR = MathMax(InpCampaignGuaranteedFloorR,
-               XAU_ProjectProfitUSD(dirWanted == 1, unassignedOpenPx[u], unassignedSL[u], unassignedVol[u]) /
-               g_campaign[idx].initialRiskUSD);
-            g_campaign[idx].peakR = MathMax(InpCampaignGuaranteeArmR, g_campaign[idx].protectedFloorR);
+            g_campaign[idx].protectedFloorR = -999.0;
+            g_campaign[idx].peakR = 0.0;
          }
          PrintFormat("CAMPAIGN_RECONCILED_ON_ATTACH | campaignId=%s | direction=%s | entryPrice=%.5f | historyIncomplete=true | "
-                     "brokerSL=%.5f | inferredGuaranteeArmed=%s | pyramidsBlocked=true",
+                     "brokerSL=%.5f | brokerProtectionPreserved=%s | guaranteeHistoryKnown=false | inferredGuaranteeArmed=false | pyramidsBlocked=true",
                      g_campaign[idx].campaignId, dirWanted == 1 ? "BUY" : "SELL", g_campaign[idx].entryPrice,
-                     unassignedSL[u], g_campaign[idx].guaranteeArmed ? "true" : "false");
+                     unassignedSL[u], brokerSLProtectsProfit ? "true" : "false");
       }
       int slot = g_campaign[idx].legCount;
       if(slot < 6)
@@ -23187,11 +23216,9 @@ void XAU_CampaignCoreLoop()
          if(slot > 0) g_campaign[idx].pyramidsAdded = MathMax(g_campaign[idx].pyramidsAdded, slot);
       }
       anyLegSeen[idx] = true;
-      if(PositionSelectByTicket(unassignedTicket[u]))
-      {
-         aggProfit[idx] += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-         repCurPrice[idx] = PositionGetDouble(POSITION_PRICE_CURRENT);
-      }
+      aggProfit[idx] += unassignedProfit[u];
+      repCurPrice[idx] = unassignedIsBuy[u] ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
+                                            : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    }
 
    // ---- Pass 2: manage each campaign once, on its aggregate.
