@@ -7974,6 +7974,7 @@ int OnInit()
       Print("CAMPAIGN_MANAGER CONFIG ERROR: InpCampaignEnable=true but configuration is invalid -- refusing to initialize rather than run with hybrid/undefined exit ownership. Fix the InpCampaign* inputs above and reattach.");
       return INIT_PARAMETERS_INCORRECT;
    }
+   XAU_ValidateMaturityConfig();
    XAU_Campaign_LoadState();
    return INIT_SUCCEEDED;
 }
@@ -13064,6 +13065,11 @@ void OnTick()
    // "R manager stops running during indicator warm-up/failure."
    XAU_RExitCoreLoop();
 
+   // v6.22.0 EXPERIMENT: trend maturity/reversal update -- runs unconditionally
+   // (own closed-bar gate inside) so it stays current whether or not a
+   // campaign is open; new-campaign decisions need it even with nothing open.
+   XAU_TrendMaturity_Update();
+
    // v6.21.3 — shadow-track skipped COUNTER_EXCURSION candidates' hypothetical
    // outcomes. Pure observation (never sends an order); runs unconditionally
    // for the same reason XAU_RExitCoreLoop() does -- must not be gateable by
@@ -16470,6 +16476,19 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    string funnelSetup = StringLen(lastSignalSetup) > 0 ? lastSignalSetup : reason;
    string funnelGrade = StringLen(g_pendingBrainGrade) > 0 ? g_pendingBrainGrade : CloudExtractGrade(reason);
    double funnelScore = g_pendingBrainCombinedScore;
+
+   // v6.22.0 EXPERIMENT: trend maturity influence on NEW campaign creation.
+   // Progressively stricter as the tracked direction's move matures/shows
+   // reversal evidence -- never blocks an opposite-direction signal, never
+   // additionally restricts EARLY/DEVELOPING/HEALTHY/MATURE trends (the
+   // existing grading pipeline already sets the bar there).
+   string maturityBlockReason = "";
+   if(!XAU_TrendMaturity_NewCampaignAllowed(signal, funnelGrade, maturityBlockReason))
+   {
+      Print("OPEN_TRADE_BLOCKED_TREND_MATURITY: ", maturityBlockReason);
+      return false;
+   }
+
    BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "INFO", "OpenTrade",
                              signal, funnelSetup, funnelGrade, funnelScore,
                              true, false, "OPEN_TRADE_CALLED", "",
@@ -21138,6 +21157,489 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
    return false;
 }
 //+------------------------------------------------------------------+
+//| ADAPTIVE TREND MATURITY & EARLY REVERSAL ENGINE (v6.22.0 exp)      |
+//| Owner spec (2026-07-13): NOT a confirmation filter, NOT another    |
+//| indicator, NOT another reason to block trades. A probability       |
+//| layer estimating where the current directional move sits in its   |
+//| lifecycle (EARLY..CONFIRMED_REVERSAL) and how SELL/BUY confidence  |
+//| should gradually transition -- so the bot can start campaigns      |
+//| early, get progressively more selective about NEW campaigns as a   |
+//| trend matures, and recognize reversal risk building before a full  |
+//| structural reversal is confirmed, WITHOUT panicking positions      |
+//| already held. It influences (never gates outright, except at the   |
+//| two most extreme states) campaign creation, pyramiding, protection |
+//| tightening, exit classification (as one more vote among the        |
+//| existing hostile-factor count, not a new competing exit path), and |
+//| post-campaign re-entry patience. It does NOT touch signal          |
+//| generation, grading, or lot sizing.                                 |
+//+------------------------------------------------------------------+
+
+input group "=== ADAPTIVE TREND MATURITY & EARLY REVERSAL ENGINE (v6.22.0 experiment) ==="
+input bool   InpMaturityEngineEnable                = true;
+input int    InpMaturityLookbackBars                = 24;      // closed M5 bars examined for momentum/continuation/swing factors
+input double InpMaturityDistanceCapATR              = 14.0;    // distance from direction-start price (in ATR) treated as "fully mature" for the distance factor
+input double InpMaturityDurationCapHours            = 30.0;    // time since direction-start treated as "fully mature" for the duration factor
+input double InpMaturityScoreDevelopingThreshold    = 20.0;
+input double InpMaturityScoreHealthyThreshold       = 40.0;
+input double InpMaturityScoreMatureThreshold        = 60.0;
+input double InpMaturityScoreLateThreshold          = 80.0;    // owner-directed counterfactual validation (2026-07-13, 25-day XAUUSDm history): raised from 75 -- see the validation report for the precision evidence
+input double InpMaturityExhaustionRiskThreshold     = 50.0;    // reversalConfidence level that (combined with LATE+ maturity) marks EXHAUSTION_RISK -- raised from 40 after counterfactual validation showed 40 flagged exhaustion correctly only 28% of the time (11/40) vs 57-67% at 50 (fewer, higher-precision flags; small samples, see validation report)
+input double InpMaturityTransitionThreshold         = 55.0;    // reversalConfidence level marking TRANSITION (roughly balanced)
+input double InpMaturityEarlyReversalThreshold      = 70.0;    // reversalConfidence level marking EARLY_REVERSAL
+input double InpMaturityExceptionalContinuationConf = 65.0;    // continuationConfidence a signal must still clear to open a NEW campaign during EXHAUSTION_RISK/TRANSITION
+input double InpMaturityHostileFactorThreshold      = 65.0;    // reversalConfidence level that adds one vote to an existing campaign's hostile-factor exit count
+input double InpMaturityPyramidBlockState           = 5.0;     // pyramids fully stop at/above this state ordinal (5 = EXHAUSTION_RISK)
+input double InpMaturityPyramidStrictState          = 3.0;     // pyramids require stricter continuation confirmation at/above this state ordinal (3 = MATURE)
+input double InpMaturityProtectionTighteningMaxPct  = 15.0;    // maximum extra peak-share percentage added to campaign protection at full exhaustion
+
+enum ENUM_TREND_LIFECYCLE_STATE
+{
+   TREND_STATE_EARLY              = 0,
+   TREND_STATE_DEVELOPING         = 1,
+   TREND_STATE_HEALTHY            = 2,
+   TREND_STATE_MATURE             = 3,
+   TREND_STATE_LATE               = 4,
+   TREND_STATE_EXHAUSTION_RISK    = 5,
+   TREND_STATE_TRANSITION         = 6,
+   TREND_STATE_EARLY_REVERSAL     = 7,
+   TREND_STATE_CONFIRMED_REVERSAL = 8
+};
+
+string XAU_TrendState_Name(ENUM_TREND_LIFECYCLE_STATE s)
+{
+   switch(s)
+   {
+      case TREND_STATE_EARLY:              return "EARLY_TREND";
+      case TREND_STATE_DEVELOPING:         return "DEVELOPING_TREND";
+      case TREND_STATE_HEALTHY:            return "HEALTHY_TREND";
+      case TREND_STATE_MATURE:             return "MATURE_TREND";
+      case TREND_STATE_LATE:               return "LATE_TREND";
+      case TREND_STATE_EXHAUSTION_RISK:    return "EXHAUSTION_RISK";
+      case TREND_STATE_TRANSITION:         return "TRANSITION";
+      case TREND_STATE_EARLY_REVERSAL:     return "EARLY_REVERSAL";
+      case TREND_STATE_CONFIRMED_REVERSAL: return "CONFIRMED_REVERSAL";
+   }
+   return "UNKNOWN";
+}
+
+struct XAU_TrendMaturity
+{
+   int      direction;             // direction currently being scored -- STICKY, only changes via a controlled CONFIRMED_REVERSAL transition; 0 = not yet bootstrapped
+   ENUM_TREND_LIFECYCLE_STATE state;
+   double   maturityScore;         // 0-100, cumulative/structural "how used up is this move"
+   double   sellConfidence;
+   double   buyConfidence;
+   double   continuationConfidence;// 0-100
+   double   reversalConfidence;    // 0-100, complementary to continuationConfidence
+   datetime directionStartTime;
+   double   directionStartPrice;
+   double   earlyVelocityATRPerBar;// captured once, shortly after direction start -- the move's own early pace, for decay comparison
+   bool     earlyVelocityCaptured;
+   datetime lastUpdateBar;
+};
+XAU_TrendMaturity g_trendMaturity;
+
+//+------------------------------------------------------------------+
+//| Distinct evidence factors -- deliberately not five indicators      |
+//| measuring the same thing. Each returns roughly 0..1 (0 = no        |
+//| maturity/reversal evidence, 1 = maximum). Reuses existing, proven  |
+//| primitives (CleanMomentumScore, CleanStructureLevels, currentRegime,|
+//| the shared hATR handle) rather than duplicating indicator logic.   |
+//+------------------------------------------------------------------+
+
+double XAU_Maturity_DistanceFactor(double curPrice, double atr)
+{
+   if(atr <= 0 || g_trendMaturity.directionStartPrice <= 0) return 0.0;
+   double distATR = MathAbs(curPrice - g_trendMaturity.directionStartPrice) / atr;
+   return MathMin(1.0, distATR / InpMaturityDistanceCapATR);
+}
+
+double XAU_Maturity_DurationFactor()
+{
+   if(g_trendMaturity.directionStartTime <= 0) return 0.0;
+   double hours = (double)(TimeCurrent() - g_trendMaturity.directionStartTime) / 3600.0;
+   return MathMin(1.0, hours / InpMaturityDurationCapHours);
+}
+
+// Velocity decay: today's recent pace vs. this same move's own early pace.
+// A move that started fast and has since slowed is more likely running out
+// of steam than one moving at a constant rate -- distinct from momentum
+// score (which measures directional agreement of EMA/RSI/candle, not speed).
+double XAU_Maturity_VelocityDecayFactor(double atr)
+{
+   if(!g_trendMaturity.earlyVelocityCaptured || g_trendMaturity.earlyVelocityATRPerBar <= 0 || atr <= 0) return 0.0;
+   double recentClose = iClose(Symbol(), PERIOD_M5, 1);
+   double pastClose = iClose(Symbol(), PERIOD_M5, MathMin(6, InpMaturityLookbackBars));
+   double recentVelocity = MathAbs(recentClose - pastClose) / (MathMin(6, InpMaturityLookbackBars) * atr);
+   double decay = 1.0 - (recentVelocity / g_trendMaturity.earlyVelocityATRPerBar);
+   return MathMax(0.0, MathMin(1.0, decay));
+}
+
+// Momentum persistence/decay across the lookback window using the SAME
+// CleanMomentumScore() the rest of the file already relies on -- no new
+// momentum math, just measured over time instead of a single snapshot.
+double XAU_Maturity_MomentumDecayFactor(int direction, int lookback, bool recentOnly)
+{
+   if(ArraySize(bufEMAFast) < lookback + 2 || ArraySize(bufEMASlow) < lookback + 2 || ArraySize(bufRSI) < lookback + 2) return 0.0;
+   bool isBuy = (direction == 1);
+   int half = MathMax(2, lookback / 2);
+   int startBar = recentOnly ? 1 : (half + 1);
+   int endBar = recentOnly ? half : lookback;
+   double sum = 0.0; int count = 0;
+   for(int b = startBar; b <= endBar && b + 1 < ArraySize(bufEMAFast); b++)
+   {
+      double close1 = iClose(Symbol(), PERIOD_M5, b);
+      double open1 = iOpen(Symbol(), PERIOD_M5, b);
+      double close2 = iClose(Symbol(), PERIOD_M5, b + 1);
+      int score = CleanMomentumScore(isBuy, close1, open1, close2, bufEMAFast[b], bufEMASlow[b], bufRSI[b]);
+      sum += score; count++;
+   }
+   if(count == 0) return 0.0;
+   double avgScore = sum / count; // CleanMomentumScore range is exactly 0..5 (5 independent +1 conditions)
+   return MathMax(0.0, MathMin(1.0, 1.0 - (avgScore / 5.0)));
+}
+
+// Pullback depth: the deepest retracement (in ATR) against the trend
+// direction within the lookback window -- distinct from distance (which is
+// the NET move) and from momentum (which is directional agreement, not
+// magnitude of counter-moves).
+double XAU_Maturity_PullbackDepthFactor(int direction, double atr, int lookback)
+{
+   if(atr <= 0) return 0.0;
+   bool isBuy = (direction == 1);
+   double extreme = isBuy ? -DBL_MAX : DBL_MAX;
+   double worstPullback = 0.0;
+   for(int b = 1; b <= lookback; b++)
+   {
+      double h = iHigh(Symbol(), PERIOD_M5, b);
+      double l = iLow(Symbol(), PERIOD_M5, b);
+      if(isBuy)
+      {
+         if(h > extreme) extreme = h;
+         double pull = (extreme - l) / atr;
+         if(pull > worstPullback) worstPullback = pull;
+      }
+      else
+      {
+         if(l < extreme) extreme = l;
+         double pull = (h - extreme) / atr;
+         if(pull > worstPullback) worstPullback = pull;
+      }
+   }
+   return MathMax(0.0, MathMin(1.0, worstPullback / 3.0)); // a 3xATR pullback against trend = fully mature pullback behaviour
+}
+
+// Continuation/breakout success rate: of the bars that attempted a new
+// extreme in the trend direction, how many actually held/extended vs
+// immediately failed back -- distinct from momentum (agreement) and
+// distance (net progress); this measures HOW the progress is being made.
+double XAU_Maturity_ContinuationFailureFactor(int direction, int lookback)
+{
+   bool isBuy = (direction == 1);
+   int attempts = 0, failures = 0;
+   for(int b = 2; b <= lookback; b++)
+   {
+      double priorExtreme = isBuy ? iHigh(Symbol(), PERIOD_M5, b + 1) : iLow(Symbol(), PERIOD_M5, b + 1);
+      double thisExtreme = isBuy ? iHigh(Symbol(), PERIOD_M5, b) : iLow(Symbol(), PERIOD_M5, b);
+      bool madeNewExtreme = isBuy ? (thisExtreme > priorExtreme) : (thisExtreme < priorExtreme);
+      if(!madeNewExtreme) continue;
+      attempts++;
+      double closeAfter = iClose(Symbol(), PERIOD_M5, b - 1 >= 1 ? b - 1 : 1);
+      bool held = isBuy ? (closeAfter >= thisExtreme - (thisExtreme - priorExtreme) * 0.3)
+                        : (closeAfter <= thisExtreme + (priorExtreme - thisExtreme) * 0.3);
+      if(!held) failures++;
+   }
+   if(attempts == 0) return 0.0;
+   return MathMax(0.0, MathMin(1.0, (double)failures / attempts));
+}
+
+// Swing progression weakening: for a SELL trend, is the most recent extreme
+// low SHALLOWER (higher) than the older window's extreme low -- literally
+// "new lows becoming weaker" from the owner spec, in ATR terms. Symmetric
+// for a BUY trend's highs.
+double XAU_Maturity_SwingWeakeningFactor(int direction, double atr, int lookback)
+{
+   if(atr <= 0) return 0.0;
+   bool isBuy = (direction == 1);
+   int half = MathMax(3, lookback / 2);
+   double recentLow, recentHigh;
+   CleanStructureLevels(half, recentLow, recentHigh);
+   double olderLow, olderHigh;
+   CleanStructureLevels(lookback, olderLow, olderHigh);
+   if(recentLow == DBL_MAX || olderLow == DBL_MAX) return 0.0;
+   double weakeningATR = isBuy ? (olderHigh - recentHigh) : (recentLow - olderLow);
+   return MathMax(0.0, MathMin(1.0, weakeningATR / (atr * 2.0)));
+}
+
+// Absorption: recent closed bars showing a long wick AGAINST the trend
+// direction with a small body -- the classic "rejection" candle shape --
+// counted as a fraction of the lookback window. Distinct from pullback
+// depth (magnitude of retracement) and momentum (EMA/RSI agreement).
+double XAU_Maturity_AbsorptionFactor(int direction, int lookback)
+{
+   bool isBuy = (direction == 1);
+   int rejections = 0;
+   for(int b = 1; b <= lookback; b++)
+   {
+      double o = iOpen(Symbol(), PERIOD_M5, b);
+      double c = iClose(Symbol(), PERIOD_M5, b);
+      double h = iHigh(Symbol(), PERIOD_M5, b);
+      double l = iLow(Symbol(), PERIOD_M5, b);
+      double range = h - l;
+      if(range <= 0) continue;
+      double body = MathAbs(c - o);
+      double oppositeWick = isBuy ? (h - MathMax(o, c)) : (MathMin(o, c) - l);
+      if(oppositeWick > range * 0.5 && body < range * 0.35) rejections++;
+   }
+   return MathMax(0.0, MathMin(1.0, (double)rejections / MathMax(1, lookback / 3)));
+}
+
+// Volatility expansion/compression: current ATR vs its own recent average.
+// Compression late in a mature move often precedes a transition; strong
+// expansion late in a move can mark climactic exhaustion. Either deviation
+// from "normal" contributes evidence, distinct from every factor above.
+double XAU_Maturity_VolatilityRatio()
+{
+   double atrHist[];
+   if(CopyBuffer(hATR, 0, 1, 20, atrHist) < 20) return 1.0;
+   double avg = 0.0;
+   for(int i = 0; i < 20; i++) avg += atrHist[i];
+   avg /= 20.0;
+   if(avg <= 0) return 1.0;
+   return atrHist[0] / avg; // >1 = expanding, <1 = compressing
+}
+
+//+------------------------------------------------------------------+
+//| Composite update. Runs once per new closed M5 bar (closed-bar      |
+//| evidence, matching the rest of this experiment's convention) --    |
+//| called unconditionally from OnTick so it stays current whether or  |
+//| not a campaign is open (new-campaign decisions need it too).       |
+//+------------------------------------------------------------------+
+void XAU_TrendMaturity_Update()
+{
+   if(!InpMaturityEngineEnable) return;
+   datetime bar0 = iTime(Symbol(), PERIOD_M5, 0);
+   if(bar0 == g_trendMaturity.lastUpdateBar) return;
+   g_trendMaturity.lastUpdateBar = bar0;
+
+   double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   double curPrice = iClose(Symbol(), PERIOD_M5, 1);
+   if(atr <= 0 || curPrice <= 0) return;
+
+   // The engine tracks ONE direction at a time, and that tracked direction
+   // is STICKY -- it changes only when the engine's OWN state machine below
+   // reaches CONFIRMED_REVERSAL (a controlled transition). It deliberately
+   // does NOT follow every fluctuation of g_htfConsensusDir: g_htfConsensusDir
+   // is itself the primary "is trend still X" signal used elsewhere in the
+   // file, so using it as both the tracked value AND its own confirmation
+   // trigger would be circular and would reset the lifecycle to zero every
+   // time that global merely flickered, defeating the entire point of a
+   // maturity/reversal LIFECYCLE. Structural confirmation instead requires
+   // TWO independent signals to agree: the H1 BOS direction (g_smc_bos_dir)
+   // and the broader HTF consensus (g_htfConsensusDir).
+   if(g_trendMaturity.direction == 0 && g_htfConsensusDir != 0)
+   {
+      g_trendMaturity.direction = g_htfConsensusDir;
+      g_trendMaturity.directionStartTime = TimeCurrent();
+      g_trendMaturity.directionStartPrice = curPrice;
+      g_trendMaturity.earlyVelocityCaptured = false;
+      g_trendMaturity.earlyVelocityATRPerBar = 0.0;
+   }
+   int direction = g_trendMaturity.direction;
+   if(direction == 0)
+   {
+      g_trendMaturity.state = TREND_STATE_TRANSITION;
+      g_trendMaturity.sellConfidence = 50.0;
+      g_trendMaturity.buyConfidence = 50.0;
+      return;
+   }
+
+   // Capture the move's own early pace once, ~6 bars (30 min) after it
+   // starts, as the decay-comparison baseline.
+   if(!g_trendMaturity.earlyVelocityCaptured &&
+      TimeCurrent() - g_trendMaturity.directionStartTime >= 1800)
+   {
+      double startClose = iClose(Symbol(), PERIOD_M5, MathMin(6, InpMaturityLookbackBars));
+      g_trendMaturity.earlyVelocityATRPerBar = MathAbs(curPrice - startClose) / (MathMin(6, InpMaturityLookbackBars) * atr);
+      g_trendMaturity.earlyVelocityCaptured = true;
+   }
+
+   int lb = InpMaturityLookbackBars;
+   double distanceF   = XAU_Maturity_DistanceFactor(curPrice, atr);
+   double durationF    = XAU_Maturity_DurationFactor();
+   double velocityF     = XAU_Maturity_VelocityDecayFactor(atr);
+   double momentumLongF = XAU_Maturity_MomentumDecayFactor(direction, lb, false);
+   double pullbackF      = XAU_Maturity_PullbackDepthFactor(direction, atr, lb);
+   double volRatio        = XAU_Maturity_VolatilityRatio();
+   double volDeviationF    = MathMin(1.0, MathAbs(volRatio - 1.0)); // deviation from "normal" either way
+
+   double momentumRecentF = XAU_Maturity_MomentumDecayFactor(direction, lb, true);
+   double absorptionF       = XAU_Maturity_AbsorptionFactor(direction, lb);
+   double swingWeakF         = XAU_Maturity_SwingWeakeningFactor(direction, atr, lb);
+   double contFailF           = XAU_Maturity_ContinuationFailureFactor(direction, lb);
+   bool bosOpposed = (g_smc_bos_dir != 0 && g_smc_bos_dir == -direction);
+   bool htfConsensusOpposed = (g_htfConsensusDir != 0 && g_htfConsensusDir == -direction);
+   bool structurallyConfirmed = bosOpposed && htfConsensusOpposed;
+
+   // ---- Maturity score: cumulative/structural "how far along" evidence.
+   double maturity =
+        distanceF   * 30.0 +
+        durationF    * 15.0 +
+        velocityF     * 15.0 +
+        momentumLongF * 15.0 +
+        pullbackF      * 15.0 +
+        volDeviationF   * 10.0;
+   g_trendMaturity.maturityScore = MathMax(0.0, MathMin(100.0, maturity));
+
+   // ---- Reversal confidence: active/recent evidence of opposition building.
+   double reversal =
+        momentumRecentF * 25.0 +
+        absorptionF       * 20.0 +
+        swingWeakF         * 20.0 +
+        contFailF           * 20.0 +
+        (bosOpposed ? 15.0 : 0.0);
+   g_trendMaturity.reversalConfidence = MathMax(0.0, MathMin(100.0, reversal));
+   g_trendMaturity.continuationConfidence = 100.0 - g_trendMaturity.reversalConfidence;
+
+   if(direction == 1)
+   {
+      g_trendMaturity.buyConfidence = g_trendMaturity.continuationConfidence;
+      g_trendMaturity.sellConfidence = g_trendMaturity.reversalConfidence;
+   }
+   else
+   {
+      g_trendMaturity.sellConfidence = g_trendMaturity.continuationConfidence;
+      g_trendMaturity.buyConfidence = g_trendMaturity.reversalConfidence;
+   }
+
+   // ---- State derivation.
+   ENUM_TREND_LIFECYCLE_STATE prevState = g_trendMaturity.state;
+   ENUM_TREND_LIFECYCLE_STATE newState;
+   if(g_trendMaturity.reversalConfidence >= InpMaturityEarlyReversalThreshold && structurallyConfirmed)
+      newState = TREND_STATE_CONFIRMED_REVERSAL;
+   else if(g_trendMaturity.reversalConfidence >= InpMaturityEarlyReversalThreshold)
+      newState = TREND_STATE_EARLY_REVERSAL;
+   else if(g_trendMaturity.reversalConfidence >= InpMaturityTransitionThreshold)
+      newState = TREND_STATE_TRANSITION;
+   else if(g_trendMaturity.reversalConfidence >= InpMaturityExhaustionRiskThreshold &&
+           g_trendMaturity.maturityScore >= InpMaturityScoreLateThreshold)
+      newState = TREND_STATE_EXHAUSTION_RISK;
+   else if(g_trendMaturity.maturityScore >= InpMaturityScoreLateThreshold)
+      newState = TREND_STATE_LATE;
+   else if(g_trendMaturity.maturityScore >= InpMaturityScoreMatureThreshold)
+      newState = TREND_STATE_MATURE;
+   else if(g_trendMaturity.maturityScore >= InpMaturityScoreHealthyThreshold)
+      newState = TREND_STATE_HEALTHY;
+   else if(g_trendMaturity.maturityScore >= InpMaturityScoreDevelopingThreshold)
+      newState = TREND_STATE_DEVELOPING;
+   else
+      newState = TREND_STATE_EARLY;
+
+   PrintFormat("TREND_MATURITY_UPDATE | direction=%s | state=%s | maturityScore=%.1f | sellConfidence=%.1f | "
+               "buyConfidence=%.1f | continuationConfidence=%.1f | reversalConfidence=%.1f | distanceATR=%.2f | "
+               "durationHours=%.1f | velocityDecay=%.2f | momentumDecayLong=%.2f | momentumDecayRecent=%.2f | "
+               "pullbackDepthATR=%.2f | absorption=%.2f | swingWeakening=%.2f | continuationFailRate=%.2f | "
+               "volatilityRatio=%.2f | bosOpposed=%s | htfConsensusOpposed=%s | regime=%s",
+               direction == 1 ? "BUY" : "SELL", XAU_TrendState_Name(newState), g_trendMaturity.maturityScore,
+               g_trendMaturity.sellConfidence, g_trendMaturity.buyConfidence, g_trendMaturity.continuationConfidence,
+               g_trendMaturity.reversalConfidence, distanceF * InpMaturityDistanceCapATR, durationF * InpMaturityDurationCapHours,
+               velocityF, momentumLongF, momentumRecentF, pullbackF * 3.0, absorptionF, swingWeakF, contFailF,
+               volRatio, bosOpposed ? "true" : "false", htfConsensusOpposed ? "true" : "false", RegimeName());
+
+   if(prevState != newState)
+      PrintFormat("TREND_MATURITY_STATE_TRANSITION | direction=%s | from=%s | to=%s | maturityScore=%.1f | reversalConfidence=%.1f",
+                  direction == 1 ? "BUY" : "SELL", XAU_TrendState_Name(prevState), XAU_TrendState_Name(newState),
+                  g_trendMaturity.maturityScore, g_trendMaturity.reversalConfidence);
+
+   if(newState == TREND_STATE_CONFIRMED_REVERSAL)
+   {
+      // Controlled transition: the tracked direction flips HERE, and only
+      // here. The lifecycle for the new direction starts fresh at EARLY on
+      // the bar after this one.
+      int newDir = -direction;
+      g_trendMaturity.direction = newDir;
+      g_trendMaturity.directionStartTime = TimeCurrent();
+      g_trendMaturity.directionStartPrice = curPrice;
+      g_trendMaturity.earlyVelocityCaptured = false;
+      g_trendMaturity.earlyVelocityATRPerBar = 0.0;
+      g_trendMaturity.state = TREND_STATE_EARLY;
+      g_trendMaturity.maturityScore = 0.0;
+      g_trendMaturity.reversalConfidence = 0.0;
+      g_trendMaturity.continuationConfidence = 100.0;
+      if(newDir == 1) { g_trendMaturity.buyConfidence = 100.0; g_trendMaturity.sellConfidence = 0.0; }
+      else { g_trendMaturity.sellConfidence = 100.0; g_trendMaturity.buyConfidence = 0.0; }
+   }
+   else
+   {
+      g_trendMaturity.state = newState;
+   }
+}
+
+void XAU_ValidateMaturityConfig()
+{
+   if(!InpMaturityEngineEnable) return;
+   string why = "";
+   if(InpMaturityScoreDevelopingThreshold >= InpMaturityScoreHealthyThreshold ||
+      InpMaturityScoreHealthyThreshold >= InpMaturityScoreMatureThreshold ||
+      InpMaturityScoreMatureThreshold >= InpMaturityScoreLateThreshold)
+      why = "maturity score thresholds must be strictly ascending (Developing<Healthy<Mature<Late)";
+   else if(InpMaturityExhaustionRiskThreshold >= InpMaturityTransitionThreshold ||
+           InpMaturityTransitionThreshold >= InpMaturityEarlyReversalThreshold)
+      why = "reversal confidence thresholds must be strictly ascending (ExhaustionRisk<Transition<EarlyReversal)";
+   PrintFormat("TREND_MATURITY_ENGINE CONFIG | enable=%s | lookbackBars=%d | distanceCapATR=%.1f | durationCapHours=%.1f | "
+               "scoreThresholds=%.0f/%.0f/%.0f/%.0f | reversalThresholds=%.0f/%.0f/%.0f | valid=%s%s%s",
+               InpMaturityEngineEnable ? "true" : "false", InpMaturityLookbackBars, InpMaturityDistanceCapATR, InpMaturityDurationCapHours,
+               InpMaturityScoreDevelopingThreshold, InpMaturityScoreHealthyThreshold, InpMaturityScoreMatureThreshold, InpMaturityScoreLateThreshold,
+               InpMaturityExhaustionRiskThreshold, InpMaturityTransitionThreshold, InpMaturityEarlyReversalThreshold,
+               StringLen(why) == 0 ? "true" : "false", StringLen(why) > 0 ? " | invalidReason=" : "", why);
+}
+
+//+------------------------------------------------------------------+
+//| Campaign-creation influence. NOT a general filter -- only          |
+//| constrains a NEW campaign in the direction the maturity engine is  |
+//| currently tracking as mature/exhausting/reversing. A signal in the |
+//| OPPOSITE direction (exactly what a genuine reversal should produce)|
+//| is never touched here. Progressively stricter, not a blanket block,|
+//| except at the two most extreme states (spec: "refuse new campaigns|
+//| unless exceptional continuation evidence appears" / a campaign      |
+//| against an already-confirmed reversal).                            |
+//+------------------------------------------------------------------+
+bool XAU_TrendMaturity_NewCampaignAllowed(int signal, string grade, string &reason)
+{
+   if(!InpMaturityEngineEnable) return true;
+   if(g_trendMaturity.direction == 0 || g_trendMaturity.direction != signal) return true;
+
+   bool allowed = true;
+   switch(g_trendMaturity.state)
+   {
+      case TREND_STATE_CONFIRMED_REVERSAL:
+         reason = "CONFIRMED_REVERSAL_AGAINST_SIGNAL_DIRECTION";
+         allowed = false;
+         break;
+      case TREND_STATE_EARLY_REVERSAL:
+         if(grade != "A+") { reason = "EARLY_REVERSAL_REQUIRES_A+_GRADE"; allowed = false; }
+         break;
+      case TREND_STATE_EXHAUSTION_RISK:
+      case TREND_STATE_TRANSITION:
+         if(grade != "A+" || g_trendMaturity.continuationConfidence < InpMaturityExceptionalContinuationConf)
+         { reason = "EXHAUSTION_OR_TRANSITION_REQUIRES_EXCEPTIONAL_CONTINUATION_EVIDENCE"; allowed = false; }
+         break;
+      case TREND_STATE_LATE:
+         if(grade == "B" || grade == "B+")
+         { reason = "LATE_TREND_GRADE_TOO_WEAK_FOR_A_NEW_CAMPAIGN"; allowed = false; }
+         break;
+      default:
+         break; // EARLY/DEVELOPING/HEALTHY/MATURE: not additionally restricted here -- the existing grading pipeline already sets the bar
+   }
+
+   PrintFormat("TREND_MATURITY_CAMPAIGN_GATE | signal=%s | state=%s | maturityScore=%.1f | continuationConfidence=%.1f | "
+               "reversalConfidence=%.1f | grade=%s | decision=%s | reason=%s",
+               signal == 1 ? "BUY" : "SELL", XAU_TrendState_Name(g_trendMaturity.state), g_trendMaturity.maturityScore,
+               g_trendMaturity.continuationConfidence, g_trendMaturity.reversalConfidence, grade,
+               allowed ? "ALLOW" : "BLOCK", allowed ? "no_additional_restriction" : reason);
+   return allowed;
+}
+//+------------------------------------------------------------------+
 //| ADAPTIVE_TREND_CAMPAIGN_MANAGER (v6.22.0 experiment, 2026-07-13)   |
 //| Sole non-emergency authority for campaign-owned positions: state,  |
 //| hold/exit, protected profit, pyramid eligibility/sizing, campaign- |
@@ -21518,7 +22020,16 @@ void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double 
    double structureFloorR = -999.0;
    if(peakR >= InpCampaignAdaptiveShareStartR)
    {
-      double rawPeakShareFloorR = peakR * (InpCampaignAdaptivePeakSharePct / 100.0);
+      // v6.22.0 EXPERIMENT: trend maturity tightens protection as the
+      // campaign's own direction matures/shows reversal evidence -- an
+      // ADDITIVE bonus on top of the existing peak-share percentage, never
+      // a reduction (this can only make the floor tighter, and the
+      // ratchet below still guarantees it never loosens).
+      double maturityTighteningPct = 0.0;
+      if(InpMaturityEngineEnable && g_trendMaturity.direction == g_campaign[idx].direction)
+         maturityTighteningPct = (g_trendMaturity.maturityScore / 100.0) * InpMaturityProtectionTighteningMaxPct;
+      double effectiveSharePct = MathMin(95.0, InpCampaignAdaptivePeakSharePct + maturityTighteningPct);
+      double rawPeakShareFloorR = peakR * (effectiveSharePct / 100.0);
       double structPrice = XAU_Campaign_StructureFloorPrice(g_campaign[idx].direction, atr);
       if(structPrice > 0 && g_campaign[idx].originalStopDistance > 0)
       {
@@ -21531,9 +22042,9 @@ void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double 
          newFloorR = adaptiveFloorR;
          reason = "ADAPTIVE_PEAK_SHARE";
       }
-      PrintFormat("CAMPAIGN_ADAPTIVE_FLOOR | campaignId=%s | peakR=%.3f | peakSharePct=%.1f | rawPeakFloorR=%.3f | "
+      PrintFormat("CAMPAIGN_ADAPTIVE_FLOOR | campaignId=%s | peakR=%.3f | peakSharePct=%.1f | maturityTighteningPct=%.1f | rawPeakFloorR=%.3f | "
                   "structureFloorR=%.3f | previousFloorR=%.3f | newFloorR=%.3f | regime=entryBOS=%d,liveBOS=%d | reason=%s",
-                  g_campaign[idx].campaignId, peakR, InpCampaignAdaptivePeakSharePct, rawPeakShareFloorR,
+                  g_campaign[idx].campaignId, peakR, effectiveSharePct, maturityTighteningPct, rawPeakShareFloorR,
                   structureFloorR, prevFloorR, MathMax(newFloorR, prevFloorR), g_campaign[idx].entryBOS, g_smc_bos_dir, reason);
    }
 
@@ -21648,10 +22159,20 @@ string XAU_Campaign_ClassifyMarket(int idx, bool isBuy, double close1, double op
    double valueZoneDistATR = (atr > 0) ? MathAbs(close1 - g_campaign[idx].entryPrice) / atr : 0.0;
    bool severelyOverextended = valueZoneDistATR > InpCampaignOverextendedATR * 1.5; // exhaustion territory, not just "can't add"
 
+   // v6.22.0 EXPERIMENT: trend maturity contributes ONE vote among the
+   // existing hostile-factor count -- it never independently triggers
+   // THESIS_DAMAGED/INVALIDATED (those already require 2-3 votes), so a
+   // maturing trend alone can never panic-exit an existing campaign; it
+   // only makes the bot more receptive to genuine structural evidence
+   // arriving alongside it, exactly per spec ("hold unless thesis fails").
+   bool maturityHostile = (InpMaturityEngineEnable && g_trendMaturity.direction == g_campaign[idx].direction &&
+                           g_trendMaturity.reversalConfidence >= InpMaturityHostileFactorThreshold);
+
    if(bosFlipped) hostileCount++;
    if(htfFlipped) hostileCount++;
    if(structureBroken) hostileCount++;
    if(momentumHostile) hostileCount++;
+   if(maturityHostile) hostileCount++;
 
    string classification;
    if(bosFlipped && htfFlipped && structureBroken)
@@ -21788,6 +22309,22 @@ void XAU_Campaign_EvaluatePyramid(int idx, bool isBuy, double curPrice, double a
    bool spreadSafe = (g_spreadEMA <= 0) || (spread <= g_spreadEMA * 1.6);
    bool continuationConfirmed = structureConfirmed && momentumScore >= 3;
 
+   // v6.22.0 EXPERIMENT: trend maturity influence on pyramiding. Only
+   // constrains adds in the direction the maturity engine is currently
+   // tracking -- never touches a campaign running opposite to it (which by
+   // definition isn't "mature" in that sense). EXHAUSTION_RISK+ stops new
+   // pyramids outright (spec: "no new pyramids"); MATURE/LATE require a
+   // stricter continuation bar rather than a blanket stop (spec: "stop
+   // AGGRESSIVE pyramids", not all of them).
+   bool maturityBlocksAllAdds = false;
+   bool maturityRequiresStricter = false;
+   if(InpMaturityEngineEnable && g_trendMaturity.direction == g_campaign[idx].direction)
+   {
+      if((double)g_trendMaturity.state >= InpMaturityPyramidBlockState) maturityBlocksAllAdds = true;
+      else if((double)g_trendMaturity.state >= InpMaturityPyramidStrictState) maturityRequiresStricter = true;
+   }
+   if(maturityRequiresStricter) continuationConfirmed = continuationConfirmed && momentumScore >= 4;
+
    double projectedAddRiskUSD = 0.0;
    if(proposedLot > 0)
    {
@@ -21805,6 +22342,8 @@ void XAU_Campaign_EvaluatePyramid(int idx, bool isBuy, double curPrice, double a
       reason = "CAMPAIGN_NOT_PROFITABLE";
    else if(thesisDamaged)
       reason = "THESIS_NOT_CONFIRMED_VALID: " + g_campaign[idx].lastClassification;
+   else if(maturityBlocksAllAdds)
+      reason = "TREND_MATURITY_" + XAU_TrendState_Name(g_trendMaturity.state) + "_NO_NEW_PYRAMIDS";
    else if(overextended)
       reason = "OVEREXTENDED_" + DoubleToString(distFromValueZoneATR, 2) + "ATR_FROM_VALUE_ZONE";
    else if(!spreadSafe)
@@ -22187,6 +22726,14 @@ void XAU_Campaign_PostResetEvaluate()
       freshStructure = momentumScoreForReset >= 3;
    }
 
+   // v6.22.0 EXPERIMENT: if the trend maturity engine still shows elevated
+   // reversal evidence for the SAME direction as the campaign that just
+   // closed, require more patience before approving a same-direction
+   // re-entry -- exactly the spec's "require more evidence" ask. This
+   // raises the bar for APPROVE; it never CANCELs the reset by itself.
+   bool maturityStillCautious = (InpMaturityEngineEnable && g_trendMaturity.direction == g_postCampaignReset.direction &&
+                                 (double)g_trendMaturity.state >= (double)TREND_STATE_EXHAUSTION_RISK);
+
    ENUM_POST_CAMPAIGN_STATE prevState = g_postCampaignReset.state;
    string decision;
    if(hostileStructure)
@@ -22194,7 +22741,7 @@ void XAU_Campaign_PostResetEvaluate()
       g_postCampaignReset.state = POST_CAMPAIGN_CANCELLED;
       decision = "CANCEL";
    }
-   else if(valueZoneReached && htfStillAligned && freshStructure)
+   else if(valueZoneReached && htfStillAligned && freshStructure && !maturityStillCautious)
    {
       g_postCampaignReset.state = POST_CAMPAIGN_FRESH_APPROVED;
       decision = "APPROVE";

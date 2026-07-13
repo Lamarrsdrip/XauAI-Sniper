@@ -302,7 +302,12 @@ def test_guarantee_floor_is_ratchet_only_never_loosens():
 def test_adaptive_peak_share_floor_uses_configured_percentage_and_structure_blend():
     exp = read(EXP)
     fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double atr, int digits)")
-    assert "peakR * (InpCampaignAdaptivePeakSharePct / 100.0)" in fn
+    # v6.22.0 trend-maturity follow-up: the base InpCampaignAdaptivePeakSharePct
+    # now feeds into an effectiveSharePct (base + maturity tightening bonus)
+    # before being applied -- see test_protection_tightening_is_additive_never_a_reduction
+    # in the maturity engine test file for the addition itself.
+    assert "effectiveSharePct = MathMin(95.0, InpCampaignAdaptivePeakSharePct + maturityTighteningPct);" in fn
+    assert "peakR * (effectiveSharePct / 100.0)" in fn
     assert "MathMax(rawPeakShareFloorR, structureFloorR)" in fn
     assert "InpCampaignAdaptiveShareStartR        = 0.60;" in exp
 
