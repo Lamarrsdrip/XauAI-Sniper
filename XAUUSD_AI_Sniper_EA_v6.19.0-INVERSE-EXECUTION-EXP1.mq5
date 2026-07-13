@@ -23236,6 +23236,20 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       if(finalExitPrice <= 0.0) finalExitPrice = dPrice;
       double inverseR = g_inverseExpRecords[inverseIdx].originalRiskUSD > 0.0
                       ? inverseNet / g_inverseExpRecords[inverseIdx].originalRiskUSD : 0.0;
+      // Forensic fix (2026-07-13): capture every field this block still needs
+      // from g_inverseExpRecords[inverseIdx] BEFORE calling
+      // XAU_InverseExperimentRecordClose() below -- that call marks this
+      // record inactive and forces XAU_InverseStateSave(true), which compacts
+      // (ArrayResize-shrinks) g_inverseExpRecords[] as a side effect. Reading
+      // g_inverseExpRecords[inverseIdx] again afterward with the same index
+      // was a stale/out-of-bounds read once the array had already shrunk --
+      // reproducible "array out of range" crash on every inverse-experiment
+      // close, confirmed live on 2026-07-13 11:29:14 (crashed the EA for the
+      // ~19 minutes until manual restart at 11:48:00).
+      double closedEntry  = g_inverseExpRecords[inverseIdx].entry;
+      double closedRDist  = g_inverseExpRecords[inverseIdx].rDist;
+      double closedLot    = g_inverseExpRecords[inverseIdx].lot;
+      string closedSetup  = g_inverseExpRecords[inverseIdx].setup;
       XAU_InverseExperimentRecordClose(posId, finalExitPrice, inverseR, inverseNet, inverseExitReason);
       // totalTrades/wins/losses counted once, below, using the shared baseline
       // logic (profit-based) so this build's own stats stay internally
@@ -23264,14 +23278,14 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       lastClose.reEntered         = false;
       lastClose.dir               = actualExecutionDirection;
       lastClose.originalNormalDir = originalNormalDirection;
-      lastClose.entryPrice        = g_inverseExpRecords[inverseIdx].entry;
+      lastClose.entryPrice        = closedEntry;
       lastClose.closePrice        = finalExitPrice;
-      lastClose.slDist            = g_inverseExpRecords[inverseIdx].rDist;
-      lastClose.lots              = g_inverseExpRecords[inverseIdx].lot;
+      lastClose.slDist            = closedRDist;
+      lastClose.lots              = closedLot;
       lastClose.profit            = inverseNet;
       lastClose.closeTime         = TimeCurrent();
       lastClose.signature         = decisionId;
-      lastClose.setup             = g_inverseExpRecords[inverseIdx].setup;
+      lastClose.setup             = closedSetup;
       lastClose.exitReason        = inverseExitReason;
 
       int expectedActualExecutionDirection = -originalNormalDirection;
