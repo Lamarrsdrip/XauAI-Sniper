@@ -2793,6 +2793,8 @@ input double InpCounterExcursionDefaultExitR           = 0.30;   // normal prefe
 input double InpCounterExcursionPreferredCloseR        = 0.50;   // informational checkpoint only (target05R telemetry) -- InpCounterExcursionMaxTargetR is the sole hard-cap authority below
 input double InpCounterExcursionMaxTargetR             = 0.50;   // OWNER SPEC (2026-07-10): unconditional hard cap -- never held beyond this, no "exceptionally strong momentum" exception in this version
 input int    InpCounterExcursionMagicNumber            = 90205001; // dedicated identity; does not collide with normal (2025xxxx) or any inverse-experiment (9019xxxx) range
+input int    InpCounterOpportunityMinScore             = 2;        // v6.21.3: minimum XAU_CounterExcursionOpportunityScore() to execute (of 6 positive/2 negative factors, range -2..+6). Owner directive 2026-07-13: initial value, provisional pending live COUNTER_SKIPPED_OUTCOME evidence at this and neighboring thresholds.
+input int    InpCounterShadowTrackMinutes              = 30;       // v6.21.3: how long to shadow-track a skipped candidate's hypothetical outcome before logging COUNTER_SKIPPED_OUTCOME and expiring
 
 input group "=== LOSS PROTECTION (v4.4.5 — trust the SL, stop scalping out) ==="
 input double InpHardStopUSD    = 0;        // Hard $ loss cap per trade (0 = OFF, SL handles it)
@@ -13087,6 +13089,12 @@ void OnTick()
    // (ManagePositions()'s own early returns). This is the audit fix for
    // "R manager stops running during indicator warm-up/failure."
    XAU_RExitCoreLoop();
+
+   // v6.21.3 — shadow-track skipped COUNTER_EXCURSION candidates' hypothetical
+   // outcomes. Pure observation (never sends an order); runs unconditionally
+   // for the same reason XAU_RExitCoreLoop() does -- must not be gateable by
+   // indicator warm-up or an early return further down.
+   XAU_ManageCounterShadowTracks();
 
    // v5.8.15: protect the equity curve after a profitable run. This closes open
    // positions when today's equity HWM gives back too much, even if daily loss
@@ -27662,6 +27670,97 @@ CounterExcursionState g_counterEx;
 datetime g_counterExCooldownUntil = 0;
 double   g_counterExLastR = 0.0; // cached each tick by XAU_ManageCounterExcursionPosition for Command Center display
 
+// v6.21.3 — SHADOW OUTCOME TRACKING (owner rule 2026-07-13). For every
+// candidate that passes mandatory checks but misses InpCounterOpportunityMinScore,
+// track what price actually does afterward, exactly as if the trade had been
+// taken, without risking real money. This is the live evidence stream that
+// eventually justifies (or corrects) InpCounterOpportunityMinScore -- it is
+// NOT a second execution path; XAU_ManageCounterShadowTracks() never calls
+// OrderSend/trade.Buy/trade.Sell, only Print.
+#define COUNTER_SHADOW_MAX_TRACKS 5
+struct XAU_CounterShadowTrack
+{
+   bool     active;
+   string   candidateId;
+   int      direction;          // 1=BUY, -1=SELL (the counter direction that was skipped)
+   double   entryPrice;
+   double   slDist;
+   int      score;
+   datetime startTime;
+   double   peakR;
+   double   troughR;
+   bool     hit02R;
+   bool     hit03R;
+   bool     hit05R;
+   bool     slHitFirst;
+   double   r30s, r60s, r120s, r300s;
+   bool     r30sSet, r60sSet, r120sSet, r300sSet;
+};
+XAU_CounterShadowTrack g_counterShadow[COUNTER_SHADOW_MAX_TRACKS];
+
+void XAU_RegisterCounterShadowTrack(string candidateId, int direction, double entryPrice, double slDist, int score)
+{
+   int slot = -1;
+   for(int i = 0; i < COUNTER_SHADOW_MAX_TRACKS; i++)
+      if(!g_counterShadow[i].active) { slot = i; break; }
+   if(slot < 0) slot = 0; // ring-buffer fallback: overwrite the oldest slot rather than drop tracking silently
+   ZeroMemory(g_counterShadow[slot]);
+   g_counterShadow[slot].active = true;
+   g_counterShadow[slot].candidateId = candidateId;
+   g_counterShadow[slot].direction = direction;
+   g_counterShadow[slot].entryPrice = entryPrice;
+   g_counterShadow[slot].slDist = slDist;
+   g_counterShadow[slot].score = score;
+   g_counterShadow[slot].startTime = TimeCurrent();
+   g_counterShadow[slot].peakR = -999.0;
+   g_counterShadow[slot].troughR = 999.0;
+}
+
+void XAU_FinalizeCounterShadowTrack(int i)
+{
+   PrintFormat("COUNTER_SKIPPED_OUTCOME | candidateId=%s | score=%d | R_30s=%s | R_60s=%s | R_120s=%s | R_300s=%s | MFE_30m=%.3f | MAE_30m=%.3f | hit_0.2R_before_SL=%s | hit_0.3R_before_SL=%s | hit_0.5R_before_SL=%s",
+               g_counterShadow[i].candidateId, g_counterShadow[i].score,
+               g_counterShadow[i].r30sSet  ? DoubleToString(g_counterShadow[i].r30s, 3)  : "n/a",
+               g_counterShadow[i].r60sSet  ? DoubleToString(g_counterShadow[i].r60s, 3)  : "n/a",
+               g_counterShadow[i].r120sSet ? DoubleToString(g_counterShadow[i].r120s, 3) : "n/a",
+               g_counterShadow[i].r300sSet ? DoubleToString(g_counterShadow[i].r300s, 3) : "n/a",
+               g_counterShadow[i].peakR, g_counterShadow[i].troughR,
+               g_counterShadow[i].hit02R ? "true" : "false",
+               g_counterShadow[i].hit03R ? "true" : "false",
+               g_counterShadow[i].hit05R ? "true" : "false");
+   g_counterShadow[i].active = false;
+}
+
+// Called every tick from OnTick(). Pure observation -- never sends an order.
+void XAU_ManageCounterShadowTracks()
+{
+   for(int i = 0; i < COUNTER_SHADOW_MAX_TRACKS; i++)
+   {
+      if(!g_counterShadow[i].active) continue;
+      bool isBuy = (g_counterShadow[i].direction == 1);
+      double price = isBuy ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK); // conservative exit-side price
+      if(price <= 0 || g_counterShadow[i].slDist <= 0) continue;
+      double r = isBuy ? (price - g_counterShadow[i].entryPrice) / g_counterShadow[i].slDist
+                       : (g_counterShadow[i].entryPrice - price) / g_counterShadow[i].slDist;
+
+      if(r > g_counterShadow[i].peakR) g_counterShadow[i].peakR = r;
+      if(r < g_counterShadow[i].troughR) g_counterShadow[i].troughR = r;
+      if(!g_counterShadow[i].slHitFirst && r <= -1.0) g_counterShadow[i].slHitFirst = true;
+      if(!g_counterShadow[i].hit02R && r >= 0.20 && !g_counterShadow[i].slHitFirst) g_counterShadow[i].hit02R = true;
+      if(!g_counterShadow[i].hit03R && r >= 0.30 && !g_counterShadow[i].slHitFirst) g_counterShadow[i].hit03R = true;
+      if(!g_counterShadow[i].hit05R && r >= 0.50 && !g_counterShadow[i].slHitFirst) g_counterShadow[i].hit05R = true;
+
+      double elapsed = (double)(TimeCurrent() - g_counterShadow[i].startTime);
+      if(!g_counterShadow[i].r30sSet  && elapsed >= 30)  { g_counterShadow[i].r30s  = r; g_counterShadow[i].r30sSet  = true; }
+      if(!g_counterShadow[i].r60sSet  && elapsed >= 60)  { g_counterShadow[i].r60s  = r; g_counterShadow[i].r60sSet  = true; }
+      if(!g_counterShadow[i].r120sSet && elapsed >= 120) { g_counterShadow[i].r120s = r; g_counterShadow[i].r120sSet = true; }
+      if(!g_counterShadow[i].r300sSet && elapsed >= 300) { g_counterShadow[i].r300s = r; g_counterShadow[i].r300sSet = true; }
+
+      if(elapsed >= InpCounterShadowTrackMinutes * 60)
+         XAU_FinalizeCounterShadowTrack(i);
+   }
+}
+
 // CORRECTED grade-eligibility rule (owner directive, supersedes the
 // original A/A+-only baseline): B-grade signals are observed to be the
 // bot's currently-accurate, working signals -- lower immediate drawdown,
@@ -27745,39 +27844,106 @@ bool XAU_CounterExcursionEligible(int signal, string reason, string &category)
 // g_pendingTimingProof, or any shared timing-engine state -- the normal
 // 2-minute delay path is completely untouched and this exemption cannot
 // leak into it.
-bool XAU_CounterExcursionFreshMicroConfirm(int counterDir, string &whyFail)
+// v6.21.3 — owner rule 2026-07-13: replaces the old all-or-nothing
+// PASS/FAIL micro-confirmation with a weighted opportunity score. Live VPS
+// counterfactual evidence (6 real rejected candidates, all rejected on the
+// old all-or-nothing gate): 4/6 (67%) reached 0.5R before their hypothetical
+// SL, only 2/6 hit SL first -- the old gate was demonstrably rejecting more
+// winners than losers on this sample. Mandatory hard-fails are unchanged
+// (buffers ready, spread safe, room feasible -- these map to "valid broker
+// conditions"/"valid SL geometry", not momentum uncertainty). The old
+// ORIGINAL_STRUCTURE_ALREADY_RECLAIMED hard-fail is now a scored negative
+// factor (hostileReversal) instead of an outright block, per owner spec.
+// The mandatory "block reason proves real directional opposition" check
+// still lives one level up in XAU_CounterExcursionEligible() and is
+// unchanged -- this function never runs for a candidate that didn't already
+// pass that gate.
+int XAU_CounterExcursionOpportunityScore(int counterDir, string &hardFailReason,
+                                         bool &m1Momentum, bool &m5Momentum, bool &displacement,
+                                         bool &structureSupport, bool &acceleration, bool &adverseExcursion,
+                                         bool &overextension, bool &hostileReversal)
 {
-   whyFail = "";
-   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) { whyFail = "NO_ATR"; return false; }
-   if(ArraySize(bufRSI) < 2 || ArraySize(bufEMAFast) < 2 || ArraySize(bufEMASlow) < 2) { whyFail = "BUFFERS_NOT_READY"; return false; }
+   hardFailReason = "";
+   m1Momentum = m5Momentum = displacement = structureSupport = acceleration = adverseExcursion = false;
+   overextension = hostileReversal = false;
+
+   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) { hardFailReason = "NO_ATR"; return 0; }
+   if(ArraySize(bufRSI) < 2 || ArraySize(bufEMAFast) < 2 || ArraySize(bufEMASlow) < 2) { hardFailReason = "BUFFERS_NOT_READY"; return 0; }
 
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-   if(spread > InpMaxSpread) { whyFail = "SPREAD_UNSAFE"; return false; }
+   if(spread > InpMaxSpread) { hardFailReason = "SPREAD_UNSAFE"; return 0; }
 
    bool isBuy = (counterDir == 1);
    double atr = bufATR[1], rsi = bufRSI[1], emaF = bufEMAFast[1], emaS = bufEMASlow[1];
-   double close1 = iClose(Symbol(), PERIOD_M5, 1);
-   double open1  = iOpen(Symbol(), PERIOD_M5, 1);
-   double close2 = iClose(Symbol(), PERIOD_M5, 2);
+   double close1M5 = iClose(Symbol(), PERIOD_M5, 1);
+   double open1M5  = iOpen(Symbol(), PERIOD_M5, 1);
+   double close2M5 = iClose(Symbol(), PERIOD_M5, 2);
 
-   int momentumScore = CleanMomentumScore(isBuy, close1, open1, close2, emaF, emaS, rsi);
-   if(momentumScore < 3) { whyFail = "M1_M5_MOMENTUM_NOT_SUPPORTIVE"; return false; }
-
+   // Mandatory: enough room to the nearest structure level to make the trade
+   // worth taking at all -- this is a geometry/feasibility check, not a
+   // momentum-agreement check, so it stays mandatory.
    double swingLow, swingHigh;
    CleanStructureLevels(InpCleanStructureLookback, swingLow, swingHigh);
    double structBuf = atr * InpCleanStructureATRBuffer;
-   // CleanStructureBreakBars(isBuy,...) with the COUNTER's own isBuy returns
-   // bars where structure broke AGAINST the counter direction -- i.e. the
-   // ORIGINAL direction already reclaiming before we even entered.
-   int breakBarsAgainstCounter = CleanStructureBreakBars(isBuy, swingLow, swingHigh, structBuf);
-   if(breakBarsAgainstCounter >= MathMax(1, InpGoldPullbackConfirmBars)) { whyFail = "ORIGINAL_STRUCTURE_ALREADY_RECLAIMED"; return false; }
-
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK), bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
    double roomPts = isBuy ? (swingHigh > -DBL_MAX ? swingHigh - ask : atr * 3.0)
                           : (swingLow  <  DBL_MAX ? bid - swingLow  : atr * 3.0);
-   if(roomPts < atr * InpCounterExcursionSLATRMult * 0.8) { whyFail = "INSUFFICIENT_ROOM"; return false; }
+   if(roomPts < atr * InpCounterExcursionSLATRMult * 0.8) { hardFailReason = "INSUFFICIENT_ROOM"; return 0; }
 
-   return true;
+   // --- Positive factor 1: M5 momentum supports counter (existing 5-factor
+   //     scored sub-model, kept as-is; "supports" = at least 3 of 5). ---
+   int m5Raw = CleanMomentumScore(isBuy, close1M5, open1M5, close2M5, emaF, emaS, rsi);
+   m5Momentum = (m5Raw >= 3);
+
+   // --- Positive factor 2: M1 momentum supports counter -- a genuinely
+   //     separate, faster timeframe read (candle direction + 2-bar
+   //     momentum), independent of the M5 read above. ---
+   double close1M1 = iClose(Symbol(), PERIOD_M1, 1);
+   double open1M1  = iOpen(Symbol(), PERIOD_M1, 1);
+   double close2M1 = iClose(Symbol(), PERIOD_M1, 2);
+   double close3M1 = iClose(Symbol(), PERIOD_M1, 3);
+   m1Momentum = isBuy ? (close1M1 > open1M1 && close1M1 > close2M1)
+                      : (close1M1 < open1M1 && close1M1 < close2M1);
+
+   // --- Positive factor 3: current M1 candle displacement in the counter
+   //     direction is real, not noise (>= 0.10x ATR body). ---
+   double body1M1 = isBuy ? (close1M1 - open1M1) : (open1M1 - close1M1);
+   displacement = (body1M1 > atr * 0.10);
+
+   // --- Positive factor 4: price has already broken/reclaimed a nearby
+   //     micro structure level in the counter's favor. ---
+   structureSupport = isBuy ? (ask > swingHigh - structBuf * 0.5 && swingHigh < DBL_MAX)
+                            : (bid < swingLow  + structBuf * 0.5 && swingLow  > -DBL_MAX);
+
+   // --- Positive factor 5: acceleration -- the latest M1 move is bigger
+   //     than the prior one, in the counter direction (momentum building,
+   //     not fading). ---
+   double move1 = isBuy ? (close1M1 - close2M1) : (close2M1 - close1M1);
+   double move2 = isBuy ? (close2M1 - close3M1) : (close3M1 - close2M1);
+   acceleration = (move1 > 0 && move1 > move2);
+
+   // --- Positive factor 6: adverse excursion -- the ORIGINAL blocked
+   //     direction's own most recent M5 candle is failing to continue (e.g.
+   //     original SELL, but the last M5 candle closed up) -- direct evidence
+   //     the normal trade's thesis is already under pressure right now. ---
+   adverseExcursion = isBuy ? (close1M5 > open1M5) : (close1M5 < open1M5);
+
+   // --- Negative factor 1: severe overextension (RSI at an extreme in
+   //     either direction) -- entering a countertrend scalp into an already
+   //     exhausted move is exactly the "blind opposite trading" the owner
+   //     does not want. ---
+   overextension = (rsi > 80.0 || rsi < 20.0);
+
+   // --- Negative factor 2: hostile reversal -- structure has already broken
+   //     AGAINST the counter direction (the OLD hard-fail, now a penalty
+   //     instead of an outright block; still visible, still counted). ---
+   int breakBarsAgainstCounter = CleanStructureBreakBars(isBuy, swingLow, swingHigh, structBuf);
+   hostileReversal = (breakBarsAgainstCounter >= MathMax(1, InpGoldPullbackConfirmBars));
+
+   int score = (m1Momentum ? 1 : 0) + (m5Momentum ? 1 : 0) + (displacement ? 1 : 0) +
+               (structureSupport ? 1 : 0) + (acceleration ? 1 : 0) + (adverseExcursion ? 1 : 0) -
+               (overextension ? 1 : 0) - (hostileReversal ? 1 : 0);
+   return score;
 }
 
 // RESTART/STATE SAFETY: g_counterEx is a volatile, RAM-only global. If MT5
@@ -27926,12 +28092,18 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
       return;
    }
 
-   string whyFail;
-   if(!XAU_CounterExcursionFreshMicroConfirm(counterDir, whyFail))
+   string hardFailReason;
+   bool sf_m1Momentum, sf_m5Momentum, sf_displacement, sf_structureSupport, sf_acceleration, sf_adverseExcursion;
+   bool sf_overextension, sf_hostileReversal;
+   int opportunityScore = XAU_CounterExcursionOpportunityScore(counterDir, hardFailReason,
+                              sf_m1Momentum, sf_m5Momentum, sf_displacement, sf_structureSupport,
+                              sf_acceleration, sf_adverseExcursion, sf_overextension, sf_hostileReversal);
+
+   if(StringLen(hardFailReason) > 0)
    {
-      Print("COUNTER_EXCURSION_SKIP: fast micro-confirmation failed | ", whyFail);
+      Print("COUNTER_EXCURSION_SKIP: mandatory check failed | ", hardFailReason);
       PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=%s",
-                  whyFail == "SPREAD_UNSAFE" ? "SPREAD_UNSAFE" : "MICRO_CONFIRM_FAILED:" + whyFail);
+                  hardFailReason == "SPREAD_UNSAFE" ? "SPREAD_UNSAFE" : "MANDATORY_CHECK_FAILED:" + hardFailReason);
       return;
    }
 
@@ -27956,6 +28128,25 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    {
       Print("COUNTER_EXCURSION_SKIP: invalid SL distance");
       PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=STALE_SIGNAL detail=INVALID_SL_DISTANCE");
+      return;
+   }
+
+   // v6.21.3 required telemetry -- fires for EVERY candidate that reached
+   // scoring, whether it executes or not, so the evidence stream is complete.
+   bool scorePassed = (opportunityScore >= InpCounterOpportunityMinScore);
+   PrintFormat("COUNTER_OPPORTUNITY_SCORE | candidateId=%s | originalDirection=%s | counterDirection=%s | blockReason=%s | M1Momentum=%s | M5Momentum=%s | displacement=%s | structure=%s | acceleration=%s | adverseExcursion=%s | overextension=%s | hostileReversal=%s | score=%d | minimumRequired=%d | decision=%s | hardFailReason=NONE",
+               candidateId, originalSignal == 1 ? "BUY" : "SELL", counterDir == 1 ? "BUY" : "SELL", blockReason,
+               sf_m1Momentum ? "true" : "false", sf_m5Momentum ? "true" : "false", sf_displacement ? "true" : "false",
+               sf_structureSupport ? "true" : "false", sf_acceleration ? "true" : "false", sf_adverseExcursion ? "true" : "false",
+               sf_overextension ? "true" : "false", sf_hostileReversal ? "true" : "false",
+               opportunityScore, InpCounterOpportunityMinScore, scorePassed ? "EXECUTE" : "SKIP");
+
+   if(!scorePassed)
+   {
+      Print("COUNTER_EXCURSION_SKIP: opportunity score below minimum | score=", opportunityScore,
+            " required=", InpCounterOpportunityMinScore);
+      PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=SCORE_BELOW_MINIMUM:%d/%d", opportunityScore, InpCounterOpportunityMinScore);
+      XAU_RegisterCounterShadowTrack(candidateId, counterDir, entryPrice, slDist, opportunityScore);
       return;
    }
 
