@@ -27703,7 +27703,17 @@ void XAU_RegisterCounterShadowTrack(string candidateId, int direction, double en
    int slot = -1;
    for(int i = 0; i < COUNTER_SHADOW_MAX_TRACKS; i++)
       if(!g_counterShadow[i].active) { slot = i; break; }
-   if(slot < 0) slot = 0; // ring-buffer fallback: overwrite the oldest slot rather than drop tracking silently
+   if(slot < 0)
+   {
+      // All slots full: evict the genuinely oldest track by startTime (not
+      // always slot 0 -- audit fix 2026-07-13), and finalize/log it first so
+      // its outcome-so-far is never silently dropped.
+      slot = 0;
+      datetime oldest = g_counterShadow[0].startTime;
+      for(int i = 1; i < COUNTER_SHADOW_MAX_TRACKS; i++)
+         if(g_counterShadow[i].startTime < oldest) { oldest = g_counterShadow[i].startTime; slot = i; }
+      XAU_FinalizeCounterShadowTrack(slot);
+   }
    ZeroMemory(g_counterShadow[slot]);
    g_counterShadow[slot].active = true;
    g_counterShadow[slot].candidateId = candidateId;
