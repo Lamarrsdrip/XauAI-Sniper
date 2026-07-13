@@ -459,6 +459,14 @@ def test_restart_reconciliation_uses_oldest_leg_as_original_r_denominator():
     assert "g_campaign[idx].peakR = 0.0" in src
 
 
+def test_campaign_startup_logs_do_not_claim_legacy_managers_own_live_positions():
+    src = EA.read_text(errors="ignore")
+    assert "CAMPAIGN_AUTHORITY_ACTIVE" in src
+    assert "legacyPyramid=STANDBY" in src
+    assert "campaignMode=INFORMATIONAL_ONLY_NO_LOT_AUTHORITY" in src
+    assert "CampaignAggregateRiskCap=%.2f%%" in src
+
+
 def test_production_files_remain_exact_and_byte_identical():
     assert sha256(PROD.read_bytes()).hexdigest() == PRODUCTION_SHA256
     assert PROD.read_bytes() == MIRROR.read_bytes()

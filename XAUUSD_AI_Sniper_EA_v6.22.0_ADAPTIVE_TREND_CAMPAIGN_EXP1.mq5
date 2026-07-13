@@ -7675,8 +7675,8 @@ int OnInit()
             "% -- a mismatch would silently reopen the retired quality-band reduction.");
       return INIT_PARAMETERS_INCORRECT;
    }
-   PrintFormat("RISK_CONFIG_ASSERTION_PASSED | ConfiguredRisk=%.2f%% | SingleTradeCap=%.2f%% | AggregateRiskCap=%.2f%% | mode=FULL_RISK_BINARY",
-               InpNormalRiskPct, InpMaxRiskPctEquity, InpMaxAggregateRiskPct);
+   PrintFormat("RISK_CONFIG_ASSERTION_PASSED | ConfiguredRisk=%.2f%% | SingleTradeCap=%.2f%% | CampaignAggregateRiskCap=%.2f%% | legacyAggregateCap=%.2f%%_not_authoritative | mode=FULL_RISK_BINARY",
+               InpNormalRiskPct, InpMaxRiskPctEquity, InpCampaignMaxAggregateRiskPct, InpMaxAggregateRiskPct);
 
    // v6.22.0 EXPERIMENT: COUNTER_EXCURSION is fully removed from this build (not
    // merely disabled) -- no detection, eligibility, scoring, entries, exits, shadow
@@ -7966,6 +7966,7 @@ int OnInit()
    if(InpAccountMode == ACCT_BALANCED)     startupBaseRisk = 1.2;
    if(InpAccountMode == ACCT_CONSERVATIVE) startupBaseRisk = 0.6;
    if(InpAccountMode == ACCT_AGGRESSIVE)   startupBaseRisk = 2.0;
+   if(InpCampaignEnable) startupBaseRisk = InpNormalRiskPct;
    string acctModeStr = (InpAccountMode == ACCT_BALANCED) ? "BALANCED"
                       : (InpAccountMode == ACCT_CONSERVATIVE) ? "CONSERVATIVE" : "AGGRESSIVE";
    Print("Balance: $", DoubleToString(initialBalance, 2),
@@ -7980,20 +7981,24 @@ int OnInit()
          " | A >= ", DoubleToString(InpGradeA, 1),
          " | B >= ", DoubleToString(InpGradeB, 1),
          " | Cooldown=", InpTradeCooldown, "s | Reversal=", InpReversalCooldown, "s");
-   Print("EXITS: QuickTake $", InpProfitTakeMin, "-$", InpProfitTakeMax, " | QuickExitMin=", InpQuickExitMin, "min");
-   Print("SMART: ReEntry=", InpUseReEntry?"ON":"OFF",
+   if(InpCampaignEnable)
+      Print("CAMPAIGN_AUTHORITY_ACTIVE | exits=ADAPTIVE_TREND_CAMPAIGN_MANAGER | initialRisk=", DoubleToString(InpNormalRiskPct, 2),
+            "% | fixedTP=OFF | legacyExitManagers=STANDBY | legacyPyramid=STANDBY | legacyReEntry=STANDBY");
+   else
+      Print("EXITS: QuickTake $", InpProfitTakeMin, "-$", InpProfitTakeMax, " | QuickExitMin=", InpQuickExitMin, "min");
+   if(!InpCampaignEnable) Print("SMART: ReEntry=", InpUseReEntry?"ON":"OFF",
          " (", InpReEntryWindow/60, "min win, ", DoubleToString(InpReEntrySize,2), "x, cap ", InpMaxReEntriesPerDay, "/day) | DXY=", InpUseDXYFilter?"ON":"OFF",
          " | Drawdown=", InpDrawdownMode?"ON":"OFF",
          " (", InpDrawdownLosses, "losses->", DoubleToString(InpDrawdownRisk,2), "%) | Streak=", InpStreakCooldownLosses, " in ", InpStreakWindowSec/60, "min");
    Print("ADAPTIVE: ", InpAdaptiveGrades?"ON":"OFF",
          " (auto-tunes GradeB on recent WR) | AsiaBreakout: ", InpAsiaRangeBreakout?"ON":"OFF");
-   Print("ARMOR v4.4.5: HardStop=",
+   if(!InpCampaignEnable) Print("ARMOR v4.4.5: HardStop=",
          InpHardStopRBased ? StringFormat("R-BASED %.1fR (adaptive)", InpHardStopRMulti)
                            : StringFormat("$-ABS $%.2f", EffHardStopUSD()),
          " | EarlyAdverse=", InpEarlyAdverseCut?"ON":"OFF", " (", InpEarlyAdverseMin, "min,", DoubleToString(InpEarlyAdverseR,1), "R)",
          " | PeakRetrace=", InpPeakRetraceExit?"ON":"OFF", " (", DoubleToString(InpPeakRetracePct,0), "%,min$", DoubleToString(EffPeakMinUSD(),2), ")",
          " | MomentumGuard=", InpMomentumGuard?"ON":"OFF", " (fade ≥", InpMomentumFadeScore, "/4)");
-   Print("PYRAMID: ", InpAllowPyramid?"ON":"OFF",
+   if(!InpCampaignEnable) Print("PYRAMID: ", InpAllowPyramid?"ON":"OFF",
          " | MaxAdds=", InpMaxPyramidAdds, " (total=", 1+InpMaxPyramidAdds, ")",
          " | MinATR=", DoubleToString(InpPyramidMinATR,2),
          " | SizeMulti=", DoubleToString(InpPyramidSizeMulti,2),
@@ -8004,7 +8009,7 @@ int OnInit()
          " | Rescue=", InpPyramidRescueMode?"Y":"N",
          " (max ", DoubleToString(InpPyramidRescueMaxATR,2), "ATR, size×",
          DoubleToString(InpPyramidRescueSizeMulti,2), ")");
-   if(InpAutoScale)
+   if(InpAutoScale && !InpCampaignEnable)
       Print("AUTO-SCALE ON | Balance: $", DoubleToString(accInfo.Balance(),2),
             " -> HardStop:$", DoubleToString(autoHardStopUSD,2),
             " ProfitMin:$", DoubleToString(autoProfitTakeMin,2),
@@ -8024,8 +8029,9 @@ int OnInit()
    Print("CONVICTION: ", InpConvictionSizing?"ON":"OFF",
          " | NormalConf=", InpNormalAIConfidence, "% (x1.0)",
          " | HighConf=", InpHighAIConfidence, "% (x", DoubleToString(InpConvictionHighMulti, 2), ")",
-         " | LowMulti=x", DoubleToString(InpConvictionLowMulti, 2), " (55-74% = mild reduce)");
-   Print("TRAIL v4.5.2: BE activate=+", DoubleToString(InpBELockActivateR,2), "R  lock=+",
+         " | LowMulti=x", DoubleToString(InpConvictionLowMulti, 2),
+         InpCampaignEnable ? " | campaignMode=INFORMATIONAL_ONLY_NO_LOT_AUTHORITY" : " (55-74% = mild reduce)");
+   if(!InpCampaignEnable) Print("TRAIL v4.5.2: BE activate=+", DoubleToString(InpBELockActivateR,2), "R  lock=+",
          DoubleToString(InpBELockProfitR,2), "R",
          " | TrendAware=", InpTrendAwareTrail?"ON":"OFF",
          " | Trend=", DoubleToString(InpTrendTrailMulti,2), "xATR",
@@ -8034,11 +8040,11 @@ int OnInit()
          " Choppy=", DoubleToString(InpChoppyTrailMulti,2), "xATR",
          " LowVol=", DoubleToString(InpLowVolTrailMulti,2), "xATR",
          " | ClaudeAudit=", InpClaudeAuditSec, "s");
-   Print("CONVICTION-RUNNER v4.5.3: ", InpConvictionRunner?"ON":"OFF",
+   if(!InpCampaignEnable) Print("CONVICTION-RUNNER v4.5.3: ", InpConvictionRunner?"ON":"OFF",
          " | Min conf=", InpConvRunMinConf, "%",
          " | Min profit=", DoubleToString(InpConvRunMinR,2), "R",
          " | Trail=", DoubleToString(InpConvRunnerMulti,2), "xATR (monster)");
-   Print("PARTIAL-TP v4.5.4: ", (InpPartialTP && !InpCloudSafeDisablePartials)?"ON":"OFF",
+   if(!InpCampaignEnable) Print("PARTIAL-TP v4.5.4: ", (InpPartialTP && !InpCloudSafeDisablePartials)?"ON":"OFF",
          " | Fires at +", DoubleToString(InpPartialTPAtR,2), "R",
          " | Close ", DoubleToString(InpPartialPct*100, 0), "% of position",
          " | Skip on ≥", InpConvRunMinConf, "% conf=", InpPartialSkipHighConf?"Y":"N",
