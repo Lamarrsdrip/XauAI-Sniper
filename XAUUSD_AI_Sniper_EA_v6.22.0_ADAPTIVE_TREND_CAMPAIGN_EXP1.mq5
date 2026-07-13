@@ -63,7 +63,7 @@
 //| PG_PerPositionRatchet, EPF partials, RecoveryExpansion/TTM/TRI        |
 //| discretionary closes, and basket-level soft-lock/lifecycle profit     |
 //| closes as the one normal exit authority (InpRExitEnable, default on). |
-//| Broker SL/margin stop-out, weekend/prop-firm/equity/weekly-target     |
+//| Broker SL/margin stop-out and weekend/prop-firm/equity emergencies    |
 //| closes, and remote force-close are untouched, independent emergency   |
 //| safety paths. Does NOT touch signal generation, grading, lot sizing,  |
 //| gating, re-entry, or pyramid-qualification logic anywhere.            |
@@ -1776,7 +1776,7 @@
 #property description "Replaces the scalper exit lifecycle with ADAPTIVE_TREND_CAMPAIGN_MANAGER:"
 #property description "one coherent campaign owns entry, pyramiding, protection and exit for its"
 #property description "own positions from establishment through confirmed thesis invalidation."
-#property description "COUNTER_EXCURSION is fully removed from this build (not merely disabled)."
+#property description "Legacy counter-entry module is absent from this experimental build."
 #property strict
 
 // v6.21.2: entry-delay bounds, declared this early so every call site
@@ -1788,7 +1788,7 @@
 
 #define XAUAI_EA_VERSION "v6.22.0-ADAPTIVE-TREND-CAMPAIGN-EXP1"
 #define XAUAI_EA_VERSION_NUM "6.22.0"
-#define XAUAI_BUILD_HASH "v6220-adaptive-trend-campaign-exp1-20260713"
+#define XAUAI_BUILD_HASH "v6220-campaign-forensic-repair-20260713"
 #define XAU_EXPERIMENT_BUILD true
 #define XAU_CAMPAIGN_MEMORY_TAG "_CAMPAIGNEXP1"
 
@@ -2074,7 +2074,7 @@ input group "=== M5 ENTRY DELAY, PHASE B (v6.20.0) — short in-candle execution
 input bool   InpUseM5EntryDelay             = true;   // Master switch (both true and false now use the bounded 120-180s wall-clock delay -- see comment above)
 // v6.20.3 (Commit C) — closes two gaps found from the 2026-07-09 15:45 live
 // incident (two BUY 0.22 XAUUSD entries ~2s apart from two chart instances):
-input bool   InpCrossInstanceEntryLockEnable = false;  // v6.20.4: OFF by default (was ON in v6.20.3). Terminal-wide lock (GlobalVariable, same pattern as the loss-streak fix) blocking a second chart instance of this EA from independently executing the same symbol+magic+direction within the lock window
+input bool   InpCrossInstanceEntryLockEnable = true;   // mandatory for this experiment: terminal-wide atomic symbol+magic+direction claim
 input int    InpCrossInstanceEntryLockSec    = 10;     // Lock window in seconds -- must comfortably exceed realistic cross-instance decision-timing skew (observed live skew was ~2s) without meaningfully delaying legitimate distinct entries
 // v6.20.3 (same-day follow-up, explicit owner requirement): the M5 entry
 // delay must apply to EVERY grade, every trade, with NO exemption. The
@@ -2337,6 +2337,7 @@ input ENUM_AI_SLTP_MODE InpAISLTPMode = AI_SLTP_ADVISORY; // AI SL/TP mode: ADVI
 
 input group "=== XAU COMMAND CENTER (heartbeat, activity, safe remote commands) ==="
 input bool   InpCloudFanout       = false;   // Local-first default: reports/brain work without VPS/cloud. Turn ON only if using copy cloud.
+input bool   InpExperimentBackendLearning = false; // isolation default: never write production AI feedback/memory endpoints
 input string InpCloudURL          = "https://xauaisniper.com";  // Cloud API base URL — ALREADY SET. Add this to MT5 WebRequest whitelist!
 input string InpCloudAgentToken   = "";      // Optional legacy worker token. Command Center heartbeat uses InpLicensePIN.
 input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms)
@@ -3398,6 +3399,74 @@ bool XAU_TryClaimEntryLock(int dir)
       PrintFormat("ENTRY_LOCK_CLAIM_RACE: %s %s -- another instance claimed this exact key between our read and our write (compare-and-swap failed). Correctly backing off instead of overwriting.",
                   Symbol(), dir == 1 ? "BUY" : "SELL");
    return claimed;
+}
+
+bool     g_campaignInstanceOwner = false;
+bool     g_campaignLeaseNewlyAcquired = false;
+double   g_campaignInstanceToken = 0.0;
+
+string XAU_CampaignLeaseOwnerKey()
+{
+   return StringFormat("XAUAI_CMPLEASE_%I64d_%s_%d", AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), InpMagicNumber);
+}
+
+string XAU_CampaignLeaseHeartbeatKey()
+{
+   return XAU_CampaignLeaseOwnerKey() + "_HB";
+}
+
+void XAU_InitInstanceCoordinationGlobals()
+{
+   for(int dir = -1; dir <= 1; dir += 2)
+   {
+      string entryKey = XAU_EntryLockGVKey(dir);
+      if(!GlobalVariableCheck(entryKey)) GlobalVariableSet(entryKey, 0.0);
+   }
+   if(!GlobalVariableCheck(XAU_CampaignLeaseOwnerKey())) GlobalVariableSet(XAU_CampaignLeaseOwnerKey(), 0.0);
+   if(!GlobalVariableCheck(XAU_CampaignLeaseHeartbeatKey())) GlobalVariableSet(XAU_CampaignLeaseHeartbeatKey(), 0.0);
+   g_campaignInstanceToken = (double)ChartID();
+}
+
+bool XAU_Campaign_EnsureInstanceOwnership()
+{
+   string ownerKey = XAU_CampaignLeaseOwnerKey();
+   string hbKey = XAU_CampaignLeaseHeartbeatKey();
+   double owner = GlobalVariableGet(ownerKey);
+   datetime hb = (datetime)GlobalVariableGet(hbKey);
+   if(owner == g_campaignInstanceToken)
+   {
+      GlobalVariableSet(hbKey, (double)TimeCurrent());
+      g_campaignInstanceOwner = true;
+      return true;
+   }
+   if(owner != 0.0 && TimeCurrent() - hb <= 15)
+   {
+      g_campaignInstanceOwner = false;
+      return false;
+   }
+   if(GlobalVariableSetOnCondition(ownerKey, g_campaignInstanceToken, owner))
+   {
+      GlobalVariableSet(hbKey, (double)TimeCurrent());
+      g_campaignInstanceOwner = true;
+      g_campaignLeaseNewlyAcquired = true;
+      PrintFormat("CAMPAIGN_INSTANCE_LEASE_ACQUIRED | chartId=%I64d | symbol=%s | magic=%d",
+                  ChartID(), Symbol(), InpMagicNumber);
+      return true;
+   }
+   g_campaignInstanceOwner = false;
+   return false;
+}
+
+void XAU_Campaign_ReleaseInstanceOwnership()
+{
+   if(!g_campaignInstanceOwner) return;
+   string ownerKey = XAU_CampaignLeaseOwnerKey();
+   if(GlobalVariableGet(ownerKey) == g_campaignInstanceToken)
+   {
+      GlobalVariableSet(ownerKey, 0.0);
+      GlobalVariableSet(XAU_CampaignLeaseHeartbeatKey(), 0.0);
+   }
+   g_campaignInstanceOwner = false;
 }
 
 // v6.3.5: Hive verdict cache — one WebRequest per bar per signature
@@ -7559,6 +7628,35 @@ int OnInit()
    if(!licenseValid) { Alert("Invalid PIN: " + InpLicensePIN); return INIT_FAILED; }
    Print("LICENSE OK: ", InpLicensePIN);
 
+   if(!InpCampaignEnable)
+   {
+      Print("CAMPAIGN_MANAGER CONFIG ERROR: this isolated experiment cannot run with InpCampaignEnable=false; refusing a legacy-manager fallback from an old .set file.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(!InpMaturityEngineEnable)
+   {
+      Print("CAMPAIGN_MANAGER CONFIG ERROR: trend maturity/reversal engine is mandatory for this experiment.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(!InpCrossInstanceEntryLockEnable)
+   {
+      Print("CAMPAIGN_MANAGER CONFIG ERROR: cross-instance entry lock is mandatory for this experiment.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   XAU_InitInstanceCoordinationGlobals();
+   bool initialLeaseOwner = XAU_Campaign_EnsureInstanceOwnership();
+   if(InpCloudFanout || InpExperimentBackendLearning)
+   {
+      Print("CAMPAIGN_MANAGER ISOLATION ERROR: cloud fanout and backend learning writes must remain disabled for this experiment.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(MathAbs(InpNormalRiskPct - 15.0) > 0.0001 || MathAbs(InpCampaignMaxAggregateRiskPct - 30.0) > 0.0001)
+   {
+      PrintFormat("CAMPAIGN_MANAGER CONFIG ERROR: experiment contract requires initialRisk=15.00%% and campaignAggregateCap=30.00%%; got %.4f%%/%.4f%%",
+                  InpNormalRiskPct, InpCampaignMaxAggregateRiskPct);
+      return INIT_PARAMETERS_INCORRECT;
+   }
+
    // v6.21.2 Part 3 — CONFIG-AGREEMENT ASSERTION: InpNormalRiskPct (the sole normal-
    // entry risk authority) and InpMaxRiskPctEquity (the hard equity-% backstop) must
    // agree, or a valid approved trade could be silently clamped below the risk the
@@ -7796,7 +7894,7 @@ int OnInit()
          PrintFormat("▸ WebRequest to %s: ⚠ HTTP %d (err %d) — server unreachable, AI/ML/license features disabled", InpServerURL, wrTest, GetLastError());
 
       // v6.4.0 UPGRADE 3: fetch confidence calibration ratios from backend
-      if(wrTest == 200)
+      if(wrTest == 200 && InpExperimentBackendLearning)
       {
          char calData[], calResult[]; string calHdr;
          ResetLastError();
@@ -7959,14 +8057,9 @@ int OnInit()
    PrintFormat("ENTRY_TIMING_MODE=WALL_CLOCK_ONLY ENTRY_DELAY_MIN=%.0f ENTRY_DELAY_TARGET=%.0f ENTRY_DELAY_MAX=%.0f NEXT_M5_BAR_WAIT=DISABLED FIVE_MINUTE_ENTRY_WAIT=DISABLED",
                XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC, XAU_EffectiveEntryDelaySeconds(), XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC);
    XAU_ReconcileTradeBrainOnInit();
-   XAU_ValidateRExitConfig();
-   if(InpRExitEnable && !g_rExitConfigValid)
-   {
-      Print("R_EXIT_CONFIG ERROR: InpRExitEnable=true but configuration is invalid -- refusing to initialize rather than run with hybrid/undefined exit ownership. Fix the InpR* inputs above and reattach.");
-      return INIT_PARAMETERS_INCORRECT;
-   }
-   XAU_RExit_LoadPersistedState();
-   XAU_ReconcileRExitOnInit();
+   // The legacy R manager is unreachable in this experiment. Do not read or
+   // reconcile its production-era state file during experiment startup.
+   g_rExitConfigValid = false;
 
    XAU_ValidateCampaignConfig();
    if(InpCampaignEnable && !g_campaignConfigValid)
@@ -7974,15 +8067,22 @@ int OnInit()
       Print("CAMPAIGN_MANAGER CONFIG ERROR: InpCampaignEnable=true but configuration is invalid -- refusing to initialize rather than run with hybrid/undefined exit ownership. Fix the InpCampaign* inputs above and reattach.");
       return INIT_PARAMETERS_INCORRECT;
    }
-   XAU_ValidateMaturityConfig();
-   XAU_Campaign_LoadState();
+   if(!XAU_ValidateMaturityConfig()) return INIT_PARAMETERS_INCORRECT;
+   if(initialLeaseOwner)
+   {
+      XAU_Campaign_LoadState();
+      g_campaignLeaseNewlyAcquired = false;
+   }
+   else
+      Print("CAMPAIGN_INSTANCE_PASSIVE | another chart in this terminal owns campaign execution; legacy managers remain disabled and this chart will take over only after lease expiry.");
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason)
 {
    EventKillTimer();
-   XAU_RExit_SaveState(true); // Fix 16: force-flush R-exit state on shutdown/reload regardless of dirty flag
+   if(g_campaignInstanceOwner) XAU_Campaign_SaveState();
+   XAU_Campaign_ReleaseInstanceOwnership();
    PrintBacktestAuditReport();
    IndicatorRelease(hEMAFast); IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI); IndicatorRelease(hATR); IndicatorRelease(hBBUpper);
@@ -9534,7 +9634,7 @@ void WriteDecisionScorecard(int signal, string setupName, string grade,
                              string blockReason, bool tradeOpened)
 {
    if(InpBacktestMode) return;  // no file I/O in backtest
-   string fname = "XAUAI_Scorecard_" + TimeToString(TimeCurrent(), TIME_DATE) + ".txt";
+   string fname = "XAUAI_Scorecard_CAMPAIGNEXP1_" + TimeToString(TimeCurrent(), TIME_DATE) + ".txt";
    StringReplace(fname, ".", "_");  // avoid dots in filename
    StringReplace(fname, " ", "_");
    int fh = FileOpen(fname, FILE_READ|FILE_WRITE|FILE_TXT|FILE_COMMON);
@@ -9733,7 +9833,7 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
 }
 
 // v6.4.0: persist and load strategy weights
-#define STRATWTS_FILE  "XAUAI_StratWeights_v1.csv"
+#define STRATWTS_FILE  "XAUAI_StratWeights_v1_CAMPAIGNEXP1.csv"
 
 void SaveStratWeights()
 {
@@ -12959,13 +13059,13 @@ void OnTick()
    double weeklyPnL = equity - weeklyStartEquity;
    if(!noLimitMode && InpWeeklyTarget > 0 && weeklyPnL >= weeklyStartEquity * InpWeeklyTarget / 100.0)
    {
-      if(!weeklyTargetHit) { CloseAll("WEEKLY_TARGET_HIT"); Print("WEEKLY TARGET HIT: +$", DoubleToString(weeklyPnL, 2)); }
+      if(!weeklyTargetHit) Print("WEEKLY TARGET HIT: +$", DoubleToString(weeklyPnL, 2), " | existing campaign remains under campaign-manager authority; new campaigns stay paused.");
       weeklyTargetHit = true;
       if(heartbeatDue) { Print("⏸  WEEKLY TARGET HIT — +$", DoubleToString(weeklyPnL, 2),
          " reached (", DoubleToString(InpWeeklyTarget,1), "% of $", DoubleToString(weeklyStartEquity,2),
          "). EA paused until Monday to protect gains.");
          lastGateHeartbeat = TimeCurrent(); }
-      return;
+      if(CountMyPositions() == 0) return;
    }
    // v6.4.5: Weekly loss limit → Adaptive Weekly Recovery Mode (no hard block until Monday)
    // EA continues scanning and trading at elevated selectivity. A/A+ only, 50% size.
@@ -13038,7 +13138,7 @@ void OnTick()
          if(TimeCurrent() - lastGrowthDailyLockObserveLog >= 60)
          {
             lastGrowthDailyLockObserveLog = TimeCurrent();
-            Print("GROWTH_DAILY_LOCK OBSERVATION_ONLY — R manager owns normal positions | would have triggered: ", growthDayLockWhy);
+            Print("GROWTH_DAILY_LOCK OBSERVATION_ONLY — ADAPTIVE_TREND_CAMPAIGN_MANAGER owns positions | would have triggered: ", growthDayLockWhy);
          }
       }
       else if(XAU_GrowthDailyLockTriggered(growthDayLockWhy))
@@ -13056,19 +13156,18 @@ void OnTick()
       }
    }
 
-   // v6.21.1: the R-based exit manager's core management (0.3R protect, 45%
-   // giveback, 1R close, pending-close retries) must run every tick
+   // The delegated campaign core (profit floor, thesis state and pending-close
+   // retries) must run every tick
    // UNCONDITIONALLY, before any system below that can short-circuit the
    // rest of OnTick() with an early return (ExpectancyDayGivebackGuard,
    // ManageBasket) or before indicator warm-up could otherwise gate it
    // (ManagePositions()'s own early returns). This is the audit fix for
    // "R manager stops running during indicator warm-up/failure."
-   XAU_RExitCoreLoop();
-
    // v6.22.0 EXPERIMENT: trend maturity/reversal update -- runs unconditionally
    // (own closed-bar gate inside) so it stays current whether or not a
    // campaign is open; new-campaign decisions need it even with nothing open.
    XAU_TrendMaturity_Update();
+   XAU_RExitCoreLoop();
 
    // v6.21.3 — shadow-track skipped COUNTER_EXCURSION candidates' hypothetical
    // outcomes. Pure observation (never sends an order); runs unconditionally
@@ -13089,7 +13188,7 @@ void OnTick()
       if(TimeCurrent() - lastExpectancyObserveLog >= 60)
       {
          lastExpectancyObserveLog = TimeCurrent();
-         Print("EXPECTANCY_DAY_GUARD OBSERVATION_ONLY -- R-based exit manager owns normal positions; this guard's closing authority is disabled while it owns them.");
+         Print("EXPECTANCY_DAY_GUARD OBSERVATION_ONLY -- ADAPTIVE_TREND_CAMPAIGN_MANAGER owns positions; this guard's closing authority is disabled.");
       }
    }
    else if(!noLimitMode && ExpectancyDayGivebackGuard())
@@ -13201,7 +13300,7 @@ void OnTick()
       {
          lastDailyLockObserveLog = TimeCurrent();
          Print("DAILY_PROFIT_LOCK OBSERVATION_ONLY -- day gain ", DoubleToString(dayGainPctObs, 1),
-               "% would have armed SL tightening, but R-based exit manager owns normal positions; no SL modified.");
+               "% would have armed SL tightening, but ADAPTIVE_TREND_CAMPAIGN_MANAGER owns positions; no SL modified.");
       }
    }
    else if(!noLimitMode && InpDailyProfitLockPct > 0 && dailyStartEquity > 0)
@@ -15724,26 +15823,119 @@ double XAU_NormalizeVolumeForRisk(double rawLots, double lotStep, double minLot,
                                   double &riskOvershootPct)
 {
    riskOvershootPct = 0.0;
-   if(lotStep <= 0.0)
-      return NormalizeDouble(rawLots, VolumeDigitsForSymbol());
+   if(lotStep <= 0.0 || rawLots <= 0.0)
+      return 0.0;
 
+   // Broker volume granularity may leave risk slightly below target, but it
+   // must never round an approved campaign above the configured risk.
    double floorLots = MathFloor(rawLots / lotStep) * lotStep;
-   double nearestLots = MathRound(rawLots / lotStep) * lotStep;
    floorLots = MathMax(0.0, MathMin(maxLot, floorLots));
-   nearestLots = MathMax(0.0, MathMin(maxLot, nearestLots));
+   if(floorLots > 0.0 && floorLots < minLot)
+      floorLots = 0.0;
+   return NormalizeDouble(floorLots, VolumeDigitsForSymbol());
+}
 
-   double lots = floorLots;
-   if(nearestLots > floorLots && slDollarPerLot > 0.0 && riskAmount > 0.0)
+double XAU_Campaign_ExtremeLow(ENUM_TIMEFRAMES tf, int bars)
+{
+   double v = DBL_MAX;
+   for(int i = 1; i <= bars; i++)
    {
-      double nearestRisk = nearestLots * slDollarPerLot;
-      riskOvershootPct = ((nearestRisk - riskAmount) / riskAmount) * 100.0;
-      if(riskOvershootPct <= InpLotStepMaxRiskOvershootPct)
-         lots = nearestLots;
+      double x = iLow(Symbol(), tf, i);
+      if(x > 0.0 && x < v) v = x;
+   }
+   return v == DBL_MAX ? 0.0 : v;
+}
+
+double XAU_Campaign_ExtremeHigh(ENUM_TIMEFRAMES tf, int bars)
+{
+   double v = 0.0;
+   for(int i = 1; i <= bars; i++)
+   {
+      double x = iHigh(Symbol(), tf, i);
+      if(x > v) v = x;
+   }
+   return v;
+}
+
+// Price a closed-bar, multi-timeframe thesis invalidation. This is separate
+// from the retired M5 ATR scalper stop: weak/choppy or unbounded geometry is
+// rejected instead of being assigned an arbitrary huge stop.
+bool XAU_Campaign_CalculateInvalidationSL(int signal, double entry, double atr,
+                                          int digits, double brokerMinDist,
+                                          double &sl, string &evidence,
+                                          string &blockReason)
+{
+   sl = 0.0; evidence = ""; blockReason = "";
+   if(entry <= 0.0 || atr <= 0.0)
+   {
+      blockReason = "CAMPAIGN_INVALIDATION_INPUT_NOT_READY";
+      return false;
    }
 
-   if(lots > 0.0 && lots < minLot)
-      lots = 0.0;
-   return NormalizeDouble(lots, VolumeDigitsForSymbol());
+   bool bosHostile = (g_smc_bos_dir != 0 && g_smc_bos_dir != signal);
+   bool htfHostile = (g_htfConsensusDir != 0 && g_htfConsensusDir != signal);
+   if(bosHostile && htfHostile)
+   {
+      blockReason = "CAMPAIGN_INVALIDATION_BLOCK_BOS_AND_HTF_OPPOSED";
+      return false;
+   }
+   if((currentRegime == REGIME_CHOPPY || currentRegime == REGIME_LOW_VOL) &&
+      (g_smc_bos_dir != signal || g_htfConsensusDir != signal))
+   {
+      blockReason = "CAMPAIGN_INVALIDATION_BLOCK_WEAK_CHOP_NO_DIRECTIONAL_STRUCTURE";
+      return false;
+   }
+
+   int localBars = MathMax(4, InpCampaignInvalidationLocalBars);
+   int htfBars = MathMax(4, InpCampaignInvalidationHTFBars);
+   double localLevel = signal == 1 ? XAU_Campaign_ExtremeLow(PERIOD_M15, localBars)
+                                   : XAU_Campaign_ExtremeHigh(PERIOD_M15, localBars);
+   double htfLevel = signal == 1 ? XAU_Campaign_ExtremeLow(PERIOD_H1, htfBars)
+                                 : XAU_Campaign_ExtremeHigh(PERIOD_H1, htfBars);
+   double majorLevel = signal == 1 ? XAU_Campaign_ExtremeLow(PERIOD_H4, MathMax(4, htfBars / 2))
+                                   : XAU_Campaign_ExtremeHigh(PERIOD_H4, MathMax(4, htfBars / 2));
+   if(localLevel <= 0.0 || htfLevel <= 0.0)
+   {
+      blockReason = "CAMPAIGN_INVALIDATION_BLOCK_M15_OR_H1_STRUCTURE_UNAVAILABLE";
+      return false;
+   }
+
+   // Use the nearest defensible support/resistance shared by the local/HTF
+   // evidence, then enforce the ATR noise floor below. Choosing the oldest
+   // extreme unconditionally would over-block most valid campaigns with an
+   // unjustifiably enormous stop.
+   double structureAnchor = signal == 1 ? MathMax(localLevel, htfLevel)
+                                        : MathMin(localLevel, htfLevel);
+   double structureSL = signal == 1 ? structureAnchor - atr * InpCampaignInvalidationATRBuffer
+                                    : structureAnchor + atr * InpCampaignInvalidationATRBuffer;
+   double volatilitySL = signal == 1 ? entry - atr * InpCampaignInvalidationMinATR
+                                     : entry + atr * InpCampaignInvalidationMinATR;
+   sl = signal == 1 ? MathMin(structureSL, volatilitySL)
+                    : MathMax(structureSL, volatilitySL);
+
+   double dist = MathAbs(entry - sl);
+   double minimum = MathMax(brokerMinDist, atr * InpCampaignInvalidationMinATR);
+   if(dist < minimum)
+   {
+      blockReason = StringFormat("CAMPAIGN_INVALIDATION_BLOCK_INSIDE_NORMAL_NOISE dist=%.5f min=%.5f", dist, minimum);
+      return false;
+   }
+   if(dist > atr * InpCampaignInvalidationMaxATR)
+   {
+      blockReason = StringFormat("CAMPAIGN_INVALIDATION_BLOCK_TOO_WIDE distATR=%.2f maxATR=%.2f", dist / atr, InpCampaignInvalidationMaxATR);
+      return false;
+   }
+   if((signal == 1 && sl >= entry) || (signal == -1 && sl <= entry))
+   {
+      blockReason = "CAMPAIGN_INVALIDATION_BLOCK_DIRECTIONAL_GEOMETRY";
+      return false;
+   }
+
+   sl = NormalizeDouble(sl, digits);
+   evidence = StringFormat("M15=%.5f H1=%.5f H4Major=%.5f anchor=%.5f ATR=%.5f distATR=%.2f BOS=%d HTF=%d regime=%s",
+                           localLevel, htfLevel, majorLevel, structureAnchor, atr,
+                           dist / atr, g_smc_bos_dir, g_htfConsensusDir, RegimeName());
+   return true;
 }
 
 double XAU_ProjectProfitUSD(bool isBuy, double openPrice, double closePrice, double lots)
@@ -16454,6 +16646,19 @@ void PrintBacktestAuditReport()
 // caller, manual override included.
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
 {
+   if(!XAU_Campaign_EnsureInstanceOwnership())
+   {
+      Print("OPEN_TRADE_BLOCKED_PASSIVE_INSTANCE: campaign lease is owned by another chart instance.");
+      return false;
+   }
+   // All additions belong to XAU_Campaign_EvaluatePyramid. A normal/recovery/
+   // re-entry call may never manufacture a second campaign while this magic
+   // already has live exposure (manual and foreign-magic positions are ignored).
+   if(CountMyPositions() > 0)
+   {
+      Print("OPEN_TRADE_BLOCKED_EXISTING_CAMPAIGN: own magic position already live; only campaign-manager pyramids may add exposure.");
+      return false;
+   }
    // v6.22.0 EXPERIMENT: anti-chase post-campaign reset. A same-direction
    // entry attempt while a prior profitable campaign's reset is still
    // pending (market hasn't genuinely retraced/consolidated/formed a fresh
@@ -16470,9 +16675,10 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    long stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-   double minDist = stopLevel * point;
+   long freezeLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
+   double minDist = MathMax(stopLevel, freezeLevel) * point;
    double effectiveSingleCap = EffectiveSingleRiskCapPct();
-   double effectiveAggregateCap = EffectiveAggregateRiskCapPct();
+   double effectiveAggregateCap = MathMin(EffectiveAggregateRiskCapPct(), InpCampaignMaxAggregateRiskPct);
    string funnelSetup = StringLen(lastSignalSetup) > 0 ? lastSignalSetup : reason;
    string funnelGrade = StringLen(g_pendingBrainGrade) > 0 ? g_pendingBrainGrade : CloudExtractGrade(reason);
    double funnelScore = g_pendingBrainCombinedScore;
@@ -16764,16 +16970,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    }
    double price, sl, tp, slDist;
 
-   // Dynamic SL/TP: Low vol = tighter, trending = wider
-   double slM = InpSLMultiplier;
-   double tpM = EffTPMultiplier();
-   if(currentRegime == REGIME_LOW_VOL || currentRegime == REGIME_CHOPPY)
-   { slM = MathMax(0.8, slM * 0.5); tpM = 1.5; } // safety-capped for chop/low-vol -- deliberately NOT account-size scaled
-   else if(currentRegime == REGIME_BREAKOUT_UP || currentRegime == REGIME_BREAKOUT_DOWN)
-   { tpM = 2.5 * AccountSizeTPMultiplier(); }
-   else
-   { tpM = tpM * AccountSizeTPMultiplier(); }
-
+   // Campaign entry has no fixed TP. Its initial SL is a closed-bar M15/H1
+   // structural thesis invalidation with ATR/liquidity room and explicit
+   // min/max bounds; invalid geometry blocks the trade.
    if(signal == 1)
    {
       price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
@@ -16786,9 +16985,6 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                    "Invalid ask price; order not sent.", reason, price);
          return false;
       }
-      slDist = MathMax(atr * slM, minDist);
-      sl = NormalizeDouble(price - slDist, digits);
-      tp = NormalizeDouble(price + slDist * tpM, digits);
    }
    else
    {
@@ -16802,10 +16998,25 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                    "Invalid bid price; order not sent.", reason, price);
          return false;
       }
-      slDist = MathMax(atr * slM, minDist);
-      sl = NormalizeDouble(price + slDist, digits);
-      tp = NormalizeDouble(price - slDist * tpM, digits);
    }
+
+   string invalidationEvidence = "";
+   string invalidationBlock = "";
+   if(!XAU_Campaign_CalculateInvalidationSL(signal, price, atr, digits, minDist,
+                                             sl, invalidationEvidence, invalidationBlock))
+   {
+      Print("CAMPAIGN_INITIAL_INVALIDATION_BLOCK | ", invalidationBlock);
+      g_lastSkipReason = invalidationBlock;
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "CampaignInvalidation",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "INVALIDATION_GEOMETRY",
+                                true, false, false, 0, 0, invalidationBlock, reason, price);
+      return false;
+   }
+   slDist = MathAbs(price - sl);
+   tp = 0.0; // the campaign manager, not a legacy fixed-R broker TP, owns exit
+   PrintFormat("CAMPAIGN_INITIAL_INVALIDATION | direction=%s | entry=%.5f | sl=%.5f | distance=%.5f | evidence=%s",
+               signal == 1 ? "BUY" : "SELL", price, sl, slDist, invalidationEvidence);
 
    double growthRiskPerLotRR = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, sl, 1.0));
    double growthRewardPerLotRR = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, tp, 1.0));
@@ -16849,7 +17060,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // or it is BLOCKED outright. sizeMulti (grade+AI+memory+committee+volatility+
    // STI) remains a PASS/BLOCK signal upstream in ScanSignals; it is no longer read
    // here to shrink the lot of an approved trade.
-   double balance = StrategyReferenceBalance();
+   double balance = AccountInfoDouble(ACCOUNT_EQUITY); // stable full-risk rule is account-relative to live equity
+   if(balance <= 0.0)
+   {
+      Print("ENTRY BLOCKED: current account equity is not positive; risk cannot be priced.");
+      return false;
+   }
    double baseRisk = InpNormalRiskPct;                 // uniform target, ALL account sizes, ALL grades
    double riskPct  = baseRisk;                          // FULL-RISK BINARY MODE: no quality band
    PrintFormat(
@@ -16955,14 +17171,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    if(g_propFirmMode && g_propFirmRiskPerTradePct > 0.0 &&
       riskPct > g_propFirmRiskPerTradePct)
    {
-      Print("PROP-FIRM RISK CAP: calculated entry risk ",
-            DoubleToString(riskPct, 2), "% -> ",
-            DoubleToString(g_propFirmRiskPerTradePct, 2),
-            "%. Signal remains allowed; only position size is reduced.");
-      riskPct = g_propFirmRiskPerTradePct;
+      PrintFormat("ENTRY BLOCKED FULL_RISK_BINARY: prop-firm cap %.2f%% cannot support configured %.2f%%; no reduced-risk campaign is permitted.",
+                  g_propFirmRiskPerTradePct, riskPct);
+      return false;
    }
 
-   double equityForSizing = StrategyReferenceBalance();
+   double equityForSizing = balance;
    double largeFloor = 0.0;
    if(g_propFirmMode)
       Print("PROP-FIRM MODE: large-account risk floor disabled.");
@@ -17036,6 +17250,17 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                balance, lotGrade, riskPct, riskAmount, slDist, rawLots,
                InpLotSizingMode == JUNE_16_19_BALANCE_MODE ? "JUNE_16_19_BALANCE_MODE" : "REAL_RISK_MODE");
 
+   if(rawLots > maxLot + lotStep * 0.001)
+   {
+      PrintFormat("ENTRY BLOCKED FULL_RISK_BINARY: required raw lot %.5f exceeds broker maximum %.5f; broker max will not silently reduce risk.", rawLots, maxLot);
+      return false;
+   }
+   if(InpMaxLots > 0.0 && rawLots > InpMaxLots + lotStep * 0.001)
+   {
+      PrintFormat("ENTRY BLOCKED FULL_RISK_BINARY: required raw lot %.5f exceeds configured maximum %.5f; no reduced-lot campaign.", rawLots, InpMaxLots);
+      return false;
+   }
+
    // v6.4.15's PROPORTIONAL LOT FLOOR (compensating for grade/session/volatility
    // multiplier stacking on small accounts) is REMOVED in v6.21.2 FULL-RISK BINARY
    // MODE: there is no more multiplier stack to compensate for. riskPct is always
@@ -17072,7 +17297,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    else
       lots = brokerLimitedLots;
    double beforeInpMaxLots = lots;
-   if(lots > InpMaxLots) lots = InpMaxLots;
+   if(InpMaxLots > 0.0 && lots > InpMaxLots)
+   {
+      PrintFormat("ENTRY BLOCKED FULL_RISK_BINARY: required lot %.4f exceeds InpMaxLots %.4f; refusing silent lot reduction.", lots, InpMaxLots);
+      return false;
+   }
    double afterInpMaxLots = lots;
 
    // v6.18.0: XAU_GrowthGuardCapLots() no longer runs at entry time. It shares its two
@@ -17110,7 +17339,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    //   × lots = $-loss-if-SL-hit. Cap that at e.g. 1.5% of equity.
    if(!juneBalanceLotMode && effectiveSingleCap > 0 && slDist > 0 && slDollarPerLotRaw > 0)
    {
-      double equity = StrategyReferenceBalance();
+      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
       double maxDollarLoss = equity * effectiveSingleCap / 100.0;
       double slDollarPerLot = slDollarPerLotRaw;
       if(slDollarPerLot > 0)
@@ -17118,12 +17347,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          double maxAllowedLots = maxDollarLoss / slDollarPerLot;
          if(lots > maxAllowedLots)
          {
-            Print("⚠️  EQUITY-CAP: lots ", DoubleToString(lots, 2), " → ",
-                  DoubleToString(maxAllowedLots, 2),
-                  " (would risk $", DoubleToString(lots * slDollarPerLot, 0),
-                  " > ", DoubleToString(effectiveSingleCap, 2), "% equity = $",
-                  DoubleToString(maxDollarLoss, 0), ")");
-            lots = maxAllowedLots;
+            PrintFormat("ENTRY BLOCKED FULL_RISK_BINARY: required lot %.4f risks $%.2f above single cap $%.2f; no cap-based lot reduction.",
+                        lots, lots * slDollarPerLot, maxDollarLoss);
+            return false;
          }
       }
    }
@@ -17151,7 +17377,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    {
       double openLots = 0.0;
       double openRisk = CurrentAggregateRiskToSL(openLots);
-      double maxAggDollar = StrategyReferenceBalance() * effectiveAggregateCap / 100.0;
+      double maxAggDollar = AccountInfoDouble(ACCOUNT_EQUITY) * effectiveAggregateCap / 100.0;
       double candidateRisk = lots * slDollarPerLotRaw;
       double remainingRisk = maxAggDollar - openRisk;
       if(remainingRisk <= 0)
@@ -17168,26 +17394,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
       if(candidateRisk > remainingRisk)
       {
-         double beforeAggLots = lots;
-         lots = NormalizeVolumeDown(remainingRisk / slDollarPerLotRaw);
-         Print("AGG-RISK FINAL CAP: lots ", DoubleToString(beforeAggLots, lotDigits),
-               " -> ", DoubleToString(lots, lotDigits),
-               " | openRisk=$", DoubleToString(openRisk, 0),
-               " candidate=$", DoubleToString(candidateRisk, 0),
-               " remaining=$", DoubleToString(remainingRisk, 0),
-               " maxAgg=$", DoubleToString(maxAggDollar, 0));
-         if(lots < minLot)
-         {
-            Print("AGG-RISK FINAL SKIP: remaining risk room cannot support broker min lot ",
-                  DoubleToString(minLot, lotDigits), ".");
-            BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "AggregateRiskGate",
-                                      signal, funnelSetup, funnelGrade, funnelScore,
-                                      true, false, "BLOCKED", "AGG_RISK_NO_MIN_LOT_ROOM",
-                                      true, false, false, 0, 0,
-                                      "Remaining aggregate risk room cannot support broker min lot.", reason, price);
-            return false;
-         }
-         afterBasketCapLots = lots;
+         PrintFormat("AGG-RISK FINAL BLOCK FULL_RISK_BINARY: openRisk=$%.2f candidate=$%.2f remaining=$%.2f max=$%.2f; initial leg will not be reduced.",
+                     openRisk, candidateRisk, remainingRisk, maxAggDollar);
+         return false;
       }
    }
 
@@ -17197,30 +17406,22 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double desiredLots = lots;   // v4.5.5 — remember pre-clamp lot for WARN log
    if(OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
    {
-      while(lots > minLot && marginNeeded > freeMargin * 0.5)
+      if(marginNeeded > freeMargin * 0.5)
       {
-         lots -= lotStep; lots = MathMax(minLot, lots);
-         if(!OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
-         {
-            Print("OrderCalcMargin failed — skip trade");
-            BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ERROR", "MarginGate",
-                                      signal, funnelSetup, funnelGrade, funnelScore,
-                                      true, false, "ERROR", "ORDER_CALC_MARGIN_FAILED",
-                                      true, false, false, 0, GetLastError(),
-                                      "OrderCalcMargin failed while reducing lot.", reason, price);
-            return false;
-         }
-      }
-      if(marginNeeded > freeMargin * 0.8)
-      {
-         Print("NO MARGIN");
+         PrintFormat("ENTRY BLOCKED FULL_RISK_BINARY: full configured-risk lot needs margin $%.2f > safe 50%% of free margin $%.2f; no reduced-lot fallback.",
+                     marginNeeded, freeMargin);
          BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "MarginGate",
                                    signal, funnelSetup, funnelGrade, funnelScore,
                                    true, false, "BLOCKED", "NO_MARGIN",
                                    true, false, false, 0, 0,
-                                   "Free margin could not support broker minimum lot safely.", reason, price);
+                                   "Free margin cannot support the full configured-risk lot safely.", reason, price);
          return false;
       }
+   }
+   else
+   {
+      Print("ENTRY BLOCKED: OrderCalcMargin failed for the full-risk lot.");
+      return false;
    }
    lots = NormalizeDouble(lots, lotDigits);
    afterBasketCapLots = lots;
@@ -17581,9 +17782,36 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       // sole authority for this ticket from here on (see XAU_CampaignCoreLoop,
       // called every tick via the XAU_RExitCoreLoop delegation).
       if(XAU_AdaptiveCampaignOwnsPosition())
+      {
+         double confirmedEntry = trade.ResultPrice() > 0 ? trade.ResultPrice() : price;
+         double confirmedSL = sl;
+         double confirmedLots = lots;
+         if(PositionSelectByTicket(openedPosId))
+         {
+            confirmedEntry = PositionGetDouble(POSITION_PRICE_OPEN);
+            confirmedSL = PositionGetDouble(POSITION_SL);
+            confirmedLots = PositionGetDouble(POSITION_VOLUME);
+         }
+         double confirmedRiskUSD = MathAbs(XAU_ProjectProfitUSD(signal == 1, confirmedEntry, confirmedSL, confirmedLots));
+         if(confirmedRiskUSD <= 0.0)
+         {
+            PrintFormat("CAMPAIGN_CREATE_RISK_RESOLUTION_FAILED | positionId=%I64u | requestedRiskUSD=%.2f | manager will retain conservative requested denominator",
+                        openedPosId, riskAmount);
+            confirmedRiskUSD = riskAmount;
+         }
          XAU_CampaignCreate(openedPosId, signal, funnelSetup, funnelGrade,
-                            trade.ResultPrice() > 0 ? trade.ResultPrice() : price, sl, lots, riskAmount,
+                            confirmedEntry, confirmedSL, confirmedLots, confirmedRiskUSD,
                             g_lastEntryWasPostResetReentry, g_lastPostResetPreviousCampaignId);
+         bool slConfirmed = confirmedSL > 0.0 && (signal == 1 ? confirmedSL < confirmedEntry : confirmedSL > confirmedEntry);
+         double liveRiskLimit = AccountInfoDouble(ACCOUNT_EQUITY) * InpNormalRiskPct / 100.0;
+         if(!slConfirmed || confirmedRiskUSD > liveRiskLimit * 1.001)
+         {
+            int emergencyIdx = XAU_Campaign_FindIdx(openedPosId);
+            PrintFormat("CAMPAIGN_INITIAL_POSTFILL_VALIDATION_FAILED | positionId=%I64u | slConfirmed=%s | confirmedRiskUSD=%.2f | live15PctLimit=%.2f | action=retry_safe_close",
+                        openedPosId, slConfirmed ? "true" : "false", confirmedRiskUSD, liveRiskLimit);
+            if(emergencyIdx >= 0) XAU_Campaign_Finalize(emergencyIdx, "INITIAL_POSTFILL_RISK_OR_SL_UNCONFIRMED");
+         }
+      }
 
       // v6.21.3 — owner rule 2026-07-13 point 6: audit-log when a fresh,
       // independently-approved normal entry (this IS one -- it already passed
@@ -18254,7 +18482,7 @@ bool ManageBasket()
    // R-based exit manager over the same tickets. Spec requires exactly one
    // exit authority; per-position is the chosen/preferred one, so basket
    // profit-taking is disabled here. True account-level emergencies (weekend
-   // close, prop-firm loss lock, equity protect, weekly target, remote
+   // close, prop-firm loss lock, equity protect, remote operator
    // close-all) live earlier in OnTick() as independent CloseAll() calls and
    // are NOT affected by this early return.
    if(XAU_RExitOwnsNormalPositions()) return false;
@@ -19907,7 +20135,7 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
 // --- lightweight rolling stats so thresholds adapt instead of staying fixed ---
 double g_triAdaptStrongThreshold = 0.0; // 0 = not yet loaded from input default
 int    g_triStatSamples = 0, g_triStatStrongWins = 0, g_triStatStrongLosses = 0;
-#define TRI_STATS_FILE "XAUAI_TRI_Stats_v1.csv"
+#define TRI_STATS_FILE "XAUAI_TRI_Stats_v1_CAMPAIGNEXP1.csv"
 
 void XAU_TRI_LoadStats()
 {
@@ -20478,7 +20706,7 @@ bool SafePositionClosePartial(ulong ticket, double lots, string ctx = "")
 //| EPF partials, RecoveryExpansion, TTM/TRI discretionary closes, and|
 //| basket-level soft-lock/lifecycle profit closes as the normal      |
 //| discretionary exit path (see RELEASE_CHECKLIST v6.21.0). Broker   |
-//| SL/margin stop-out, weekend/prop-firm/equity/weekly-target closes |
+//| SL/margin stop-out and weekend/prop-firm/equity emergency closes  |
 //| and remote force-close remain fully independent and untouched.    |
 //+------------------------------------------------------------------+
 #define R_STAGE_HOLD       0
@@ -20835,7 +21063,7 @@ string XAU_RExit_StateFilePath()
    StringReplace(server, " ", "_");
    StringReplace(server, "\\", "_");
    StringReplace(server, "/", "_");
-   return StringFormat("RExitState_%d_%s_%s_%d.csv", login, server, Symbol(), InpMagicNumber);
+   return StringFormat("RExitState_CAMPAIGNEXP1_%d_%s_%s_%d.csv", login, server, Symbol(), InpMagicNumber);
 }
 
 //+------------------------------------------------------------------+
@@ -21236,6 +21464,7 @@ struct XAU_TrendMaturity
    double   earlyVelocityATRPerBar;// captured once, shortly after direction start -- the move's own early pace, for decay comparison
    bool     earlyVelocityCaptured;
    datetime lastUpdateBar;
+   datetime confirmedReversalBar;
 };
 XAU_TrendMaturity g_trendMaturity;
 
@@ -21426,6 +21655,30 @@ void XAU_TrendMaturity_Update()
    double curPrice = iClose(Symbol(), PERIOD_M5, 1);
    if(atr <= 0 || curPrice <= 0) return;
 
+   // Keep CONFIRMED_REVERSAL observable for one complete closed-bar cycle so
+   // old-direction entries are blocked and campaign exits can consume it.
+   // The controlled direction flip happens on the following closed bar.
+   if(g_trendMaturity.state == TREND_STATE_CONFIRMED_REVERSAL &&
+      g_trendMaturity.confirmedReversalBar > 0 && bar0 > g_trendMaturity.confirmedReversalBar)
+   {
+      int newDir = -g_trendMaturity.direction;
+      g_trendMaturity.direction = newDir;
+      g_trendMaturity.directionStartTime = TimeCurrent();
+      g_trendMaturity.directionStartPrice = curPrice;
+      g_trendMaturity.earlyVelocityCaptured = false;
+      g_trendMaturity.earlyVelocityATRPerBar = 0.0;
+      g_trendMaturity.confirmedReversalBar = 0;
+      g_trendMaturity.state = TREND_STATE_EARLY;
+      g_trendMaturity.maturityScore = 0.0;
+      g_trendMaturity.reversalConfidence = 0.0;
+      g_trendMaturity.continuationConfidence = 100.0;
+      if(newDir == 1) { g_trendMaturity.buyConfidence = 100.0; g_trendMaturity.sellConfidence = 0.0; }
+      else { g_trendMaturity.sellConfidence = 100.0; g_trendMaturity.buyConfidence = 0.0; }
+      PrintFormat("TREND_MATURITY_DIRECTION_FLIP_CONFIRMED | newDirection=%s | state=EARLY_TREND",
+                  newDir == 1 ? "BUY" : "SELL");
+      return;
+   }
+
    // The engine tracks ONE direction at a time, and that tracked direction
    // is STICKY -- it changes only when the engine's OWN state machine below
    // reaches CONFIRMED_REVERSAL (a controlled transition). It deliberately
@@ -21553,21 +21806,8 @@ void XAU_TrendMaturity_Update()
 
    if(newState == TREND_STATE_CONFIRMED_REVERSAL)
    {
-      // Controlled transition: the tracked direction flips HERE, and only
-      // here. The lifecycle for the new direction starts fresh at EARLY on
-      // the bar after this one.
-      int newDir = -direction;
-      g_trendMaturity.direction = newDir;
-      g_trendMaturity.directionStartTime = TimeCurrent();
-      g_trendMaturity.directionStartPrice = curPrice;
-      g_trendMaturity.earlyVelocityCaptured = false;
-      g_trendMaturity.earlyVelocityATRPerBar = 0.0;
-      g_trendMaturity.state = TREND_STATE_EARLY;
-      g_trendMaturity.maturityScore = 0.0;
-      g_trendMaturity.reversalConfidence = 0.0;
-      g_trendMaturity.continuationConfidence = 100.0;
-      if(newDir == 1) { g_trendMaturity.buyConfidence = 100.0; g_trendMaturity.sellConfidence = 0.0; }
-      else { g_trendMaturity.sellConfidence = 100.0; g_trendMaturity.buyConfidence = 0.0; }
+      g_trendMaturity.state = TREND_STATE_CONFIRMED_REVERSAL;
+      g_trendMaturity.confirmedReversalBar = bar0;
    }
    else
    {
@@ -21575,9 +21815,9 @@ void XAU_TrendMaturity_Update()
    }
 }
 
-void XAU_ValidateMaturityConfig()
+bool XAU_ValidateMaturityConfig()
 {
-   if(!InpMaturityEngineEnable) return;
+   if(!InpMaturityEngineEnable) return true;
    string why = "";
    if(InpMaturityScoreDevelopingThreshold >= InpMaturityScoreHealthyThreshold ||
       InpMaturityScoreHealthyThreshold >= InpMaturityScoreMatureThreshold ||
@@ -21592,6 +21832,7 @@ void XAU_ValidateMaturityConfig()
                InpMaturityScoreDevelopingThreshold, InpMaturityScoreHealthyThreshold, InpMaturityScoreMatureThreshold, InpMaturityScoreLateThreshold,
                InpMaturityExhaustionRiskThreshold, InpMaturityTransitionThreshold, InpMaturityEarlyReversalThreshold,
                StringLen(why) == 0 ? "true" : "false", StringLen(why) > 0 ? " | invalidReason=" : "", why);
+   return StringLen(why) == 0;
 }
 
 //+------------------------------------------------------------------+
@@ -21650,7 +21891,7 @@ bool XAU_TrendMaturity_NewCampaignAllowed(int signal, string grade, string &reas
 //| (see XAU_RExitOwnsNormalPositions, ManagePositions, and the OnTick |
 //| CheckPyramidOpportunity/CheckReEntryOpportunity call sites). Broker |
 //| SL and true account-emergency paths (equity protect, prop-firm     |
-//| lock, weekend/weekly close, remote close-all) are untouched.       |
+//| lock, weekend close, and remote operator close-all are untouched.  |
 //|                                                                     |
 //| Hypothesis under test: hold one coherent campaign from entry       |
 //| through confirmed thesis invalidation instead of a fixed 1R target |
@@ -21663,6 +21904,11 @@ input double InpCampaignGuaranteeArmR              = 0.50;    // peakR that perm
 input double InpCampaignGuaranteedFloorR           = 0.25;    // minimum protected campaign result once armed (ratchet-only)
 input double InpCampaignAdaptiveShareStartR        = 0.60;    // peakR where the adaptive peak-share floor begins contributing
 input double InpCampaignAdaptivePeakSharePct       = 60.0;    // % of peak campaign R protected once above the start threshold
+input int    InpCampaignInvalidationLocalBars      = 12;      // closed M15 bars used for local thesis structure
+input int    InpCampaignInvalidationHTFBars        = 10;      // closed H1 bars used for higher-timeframe invalidation
+input double InpCampaignInvalidationMinATR         = 1.80;    // expected pullback/noise room; never place an initial stop inside this
+input double InpCampaignInvalidationMaxATR         = 8.00;    // hard safety bound; wider setup is blocked, never silently clamped
+input double InpCampaignInvalidationATRBuffer      = 0.35;    // liquidity/swing buffer beyond the structural anchor
 input int    InpCampaignStructureLookbackBars      = 12;      // closed-bar swing lookback for the structure-based floor
 input double InpCampaignStructureATRBuffer         = 0.50;    // ATR room added beyond structure swing when placing the floor
 input double InpCampaignPyramidFrac1               = 0.70;    // pyramid leg 1 as a fraction of campaignBaseLot
@@ -21673,7 +21919,18 @@ input double InpCampaignPyramidFrac5               = 0.10;    // pyramid leg 5
 input int    InpCampaignMaxPyramidLegs             = 5;       // max adds beyond the initial leg
 input double InpCampaignMaxAggregateRiskPct        = 30.0;    // hard ceiling on total campaign worst-case-SL risk as % equity -- justification: initial leg already uses the full 15% single-trade risk; a descending ladder (100/70/50/30/20/10% of base) summed over 5 adds adds at most another ~2.8x the base leg's risk, so a 15%-risk base leg could reach ~15%*(1+0.7+0.5+0.3+0.2+0.1)=~42% undiscounted -- 30% keeps the realistic worst-case (broker SL on every leg simultaneously) inside a survivable single-symbol drawdown while still allowing the ladder to run most of its course before blocking further adds
 input int    InpCampaignPyramidMinSecondsBetween   = 300;     // minimum spacing between pyramid adds (fresh-evidence requirement, not a timer-driven add)
+input int    InpCampaignPyramidMinClosedBars       = 2;       // completed M5 bars required after the previous leg before another add
+input double InpCampaignPyramidMinSeparationATR    = 0.40;    // directional distance from the previous leg; spacing is necessary but never sufficient
+input double InpCampaignPyramidImpulseMinATR       = 0.30;    // minimum fresh closed-bar impulse/BOS displacement that may create an event
+input double InpCampaignPyramidMinResetDepthATR    = 0.20;    // mandatory pullback depth, unless a closed-bar consolidation/retest is proved
+input double InpCampaignPyramidMinCampaignR        = 0.50;    // campaign must be meaningfully profitable before any pyramid event can execute
+input bool   InpCampaignPyramidRequireFloorAfter1  = true;    // add 2+ requires the permanent campaign profit guarantee to be armed
+input double InpCampaignPyramidMinRewardRisk       = 1.50;    // minimum remaining obstacle room / proposed-leg risk distance
+input double InpCampaignPyramidMinPostMarginLevel  = 200.0;   // projected account margin level after the proposed add
+input double InpCampaignPyramidFreeReservePct      = 20.0;    // projected free-margin reserve as % of current equity
+input double InpCampaignPyramidFreeReserveUSD      = 100.0;   // absolute projected free-margin reserve (larger of USD and % is used)
 input double InpCampaignOverextendedATR            = 2.5;     // ATR distance from the campaign's own value zone (entry) beyond which an add is considered overextended
+input double InpCampaignMinObstacleRoomATR          = 0.75;    // minimum closed-H1 room to the next opposing obstacle before an add
 input int    InpCampaignHostileFactorsForDamaged   = 2;       // hostile factor count -> THESIS_DAMAGED (reduce late legs)
 input int    InpCampaignHostileFactorsForInvalid   = 3;       // hostile factor count -> THESIS_INVALIDATED (close campaign)
 input double InpCampaignSmallWinRetraceR           = 0.30;    // required retracement (in R of the closed campaign) before a normal-size-win re-entry
@@ -21706,6 +21963,32 @@ enum ENUM_POST_CAMPAIGN_STATE
    POST_CAMPAIGN_FRESH_APPROVED        = 5,
    POST_CAMPAIGN_CANCELLED             = 6
 };
+
+enum ENUM_PYRAMID_EVENT_STATE
+{
+   PYRAMID_IDLE                      = 0,
+   PYRAMID_IMPULSE_DETECTED          = 1,
+   PYRAMID_WAITING_FOR_RESET         = 2,
+   PYRAMID_RESET_CONFIRMED           = 3,
+   PYRAMID_CONTINUATION_CONFIRMATION = 4,
+   PYRAMID_ADD_APPROVED              = 5,
+   PYRAMID_EVENT_CONSUMED            = 6
+};
+
+string XAU_PyramidEvent_StateName(ENUM_PYRAMID_EVENT_STATE s)
+{
+   switch(s)
+   {
+      case PYRAMID_IDLE:                      return "PYRAMID_IDLE";
+      case PYRAMID_IMPULSE_DETECTED:          return "IMPULSE_DETECTED";
+      case PYRAMID_WAITING_FOR_RESET:         return "WAITING_FOR_RESET";
+      case PYRAMID_RESET_CONFIRMED:           return "RESET_CONFIRMED";
+      case PYRAMID_CONTINUATION_CONFIRMATION: return "CONTINUATION_CONFIRMATION";
+      case PYRAMID_ADD_APPROVED:              return "ADD_APPROVED";
+      case PYRAMID_EVENT_CONSUMED:            return "EVENT_CONSUMED";
+   }
+   return "UNKNOWN";
+}
 
 string XAU_Campaign_StateName(ENUM_CAMPAIGN_STATE s)
 {
@@ -21779,18 +22062,40 @@ struct XAU_Campaign
    double   protectedFloorR;      // ratchet-only, -999 = not yet armed / structural only
    double   protectedFloorPrice;
    bool     floorGeometryBlocked;
+   datetime lastFloorDecisionLogTime;
+   datetime lastSLModifyAttemptTime;
+   double   lastDesiredSL;
 
    double   aggregateRiskUSD;
    double   aggregateLots;
 
    datetime lastPyramidEvalTime;
+   datetime lastPyramidSignalBar;
    int      pyramidsAdded;
+   ENUM_PYRAMID_EVENT_STATE pyramidEventState;
+   long     pyramidEventSequence;
+   string   pyramidEventId;
+   datetime pyramidImpulseBar;
+   double   pyramidImpulseExtreme;
+   double   pyramidImpulseDistanceATR;
+   datetime pyramidResetBar;
+   string   pyramidResetType;
+   double   pyramidResetExtreme;
+   datetime lastPyramidOpenTime;
+   datetime lastPyramidOpenBar;
+   double   lastPyramidEntryPrice;
+   string   lastContinuationSignalId;
 
    int      entryBOS;
    int      entryHTF;
    string   lastClassification;
 
    bool     reconciledFromRestart;
+   bool     historyIncomplete;
+   bool     closeRequested;
+   string   pendingCloseReason;
+   datetime closeRequestedTime;
+   datetime lastCloseAttemptTime;
 };
 
 #define XAU_CAMPAIGN_MAX_SLOTS 2
@@ -21808,6 +22113,7 @@ struct XAU_PostCampaignReset
    datetime exitTime;
    ENUM_POST_CAMPAIGN_STATE state;
    double   requiredRetraceR;
+   double   originalStopDistance;
 };
 XAU_PostCampaignReset g_postCampaignReset;
 
@@ -21833,6 +22139,8 @@ void XAU_ValidateCampaignConfig()
    if(InpCampaignGuaranteedFloorR >= InpCampaignGuaranteeArmR) { g_campaignConfigValid = false; why = "GuaranteedFloorR must be < GuaranteeArmR"; }
    if(InpCampaignAdaptiveShareStartR < InpCampaignGuaranteeArmR) { g_campaignConfigValid = false; why = "AdaptiveShareStartR must be >= GuaranteeArmR"; }
    if(InpCampaignPyramidFrac1 <= 0 || InpCampaignPyramidFrac1 > 1.0 ||
+      InpCampaignPyramidFrac2 <= 0 || InpCampaignPyramidFrac3 <= 0 ||
+      InpCampaignPyramidFrac4 <= 0 || InpCampaignPyramidFrac5 <= 0 ||
       InpCampaignPyramidFrac2 > InpCampaignPyramidFrac1 ||
       InpCampaignPyramidFrac3 > InpCampaignPyramidFrac2 ||
       InpCampaignPyramidFrac4 > InpCampaignPyramidFrac3 ||
@@ -21840,6 +22148,16 @@ void XAU_ValidateCampaignConfig()
    { g_campaignConfigValid = false; why = "pyramid ladder fractions must be descending and leg1 in (0,1]"; }
    if(InpCampaignMaxAggregateRiskPct <= 0 || InpCampaignMaxAggregateRiskPct > 100)
    { g_campaignConfigValid = false; why = "InpCampaignMaxAggregateRiskPct out of range"; }
+   if(InpCampaignMaxPyramidLegs < 0 || InpCampaignMaxPyramidLegs > 5)
+   { g_campaignConfigValid = false; why = "InpCampaignMaxPyramidLegs must be in [0,5]"; }
+   if(InpCampaignInvalidationMinATR <= 0.0 || InpCampaignInvalidationMaxATR <= InpCampaignInvalidationMinATR)
+   { g_campaignConfigValid = false; why = "campaign invalidation ATR bounds are invalid"; }
+   if(InpCampaignPyramidMinClosedBars < 2 || InpCampaignPyramidMinSeparationATR <= 0.0 ||
+      InpCampaignPyramidImpulseMinATR <= 0.0 || InpCampaignPyramidMinResetDepthATR <= 0.0 ||
+      InpCampaignPyramidMinCampaignR < 0.0 || InpCampaignPyramidMinRewardRisk <= 0.0 ||
+      InpCampaignPyramidMinPostMarginLevel <= 100.0 || InpCampaignPyramidFreeReservePct < 0.0 ||
+      InpCampaignPyramidFreeReserveUSD < 0.0)
+   { g_campaignConfigValid = false; why = "pyramid event/margin safeguards are invalid"; }
    PrintFormat("CAMPAIGN_MANAGER CONFIG | enable=%s valid=%s guaranteeArmR=%.2f guaranteedFloorR=%.2f "
                "adaptiveShareStartR=%.2f adaptiveSharePct=%.1f maxAggregateRiskPct=%.1f maxPyramidLegs=%d%s%s",
                InpCampaignEnable ? "true" : "false", g_campaignConfigValid ? "true" : "false",
@@ -21858,10 +22176,25 @@ int XAU_Campaign_FindIdx(ulong positionId)
    for(int i = 0; i < XAU_CAMPAIGN_MAX_SLOTS; i++)
    {
       if(!g_campaign[i].active) continue;
+      if(g_campaign[i].positionId == positionId) return i;
       for(int L = 0; L < g_campaign[i].legCount && L < 6; L++)
          if(g_campaign[i].legs[L].active && g_campaign[i].legs[L].ticket == positionId) return i;
    }
    return -1;
+}
+
+bool XAU_Campaign_SelectByIdentifier(ulong positionId, ulong &currentTicket)
+{
+   currentTicket = 0;
+   for(int p = PositionsTotal() - 1; p >= 0; p--)
+   {
+      if(!posInfo.SelectByIndex(p)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      if(posInfo.Identifier() != positionId) continue;
+      currentTicket = posInfo.Ticket();
+      return true;
+   }
+   return false;
 }
 
 int XAU_Campaign_FindFreeSlot()
@@ -21909,7 +22242,7 @@ void XAU_CampaignCreate(ulong positionId, int direction, string setup, string gr
    }
    ZeroMemory(g_campaign[idx]);
    g_campaign[idx].active = true;
-   g_campaign[idx].campaignId = StringFormat("CAMPAIGN_%s_%s_%I64d", setup, direction == 1 ? "BUY" : "SELL", (long)TimeCurrent());
+   g_campaign[idx].campaignId = StringFormat("CAMPAIGN_%s_%s_%I64d_%I64u", setup, direction == 1 ? "BUY" : "SELL", (long)TimeCurrent(), positionId);
    g_campaign[idx].positionId = positionId;
    g_campaign[idx].direction = direction;
    g_campaign[idx].setup = setup;
@@ -21939,6 +22272,11 @@ void XAU_CampaignCreate(ulong positionId, int direction, string setup, string gr
    g_campaign[idx].aggregateRiskUSD = riskUSD;
    g_campaign[idx].aggregateLots = lots;
    g_campaign[idx].pyramidsAdded = 0;
+   g_campaign[idx].pyramidEventState = PYRAMID_IDLE;
+   g_campaign[idx].pyramidEventSequence = 0;
+   g_campaign[idx].lastPyramidOpenTime = TimeCurrent();
+   g_campaign[idx].lastPyramidOpenBar = iTime(Symbol(), PERIOD_M5, 0);
+   g_campaign[idx].lastPyramidEntryPrice = entryPrice;
    g_campaign[idx].entryBOS = g_smc_bos_dir;
    g_campaign[idx].entryHTF = g_htfConsensusDir;
    g_campaign[idx].lastClassification = "NEW";
@@ -21954,10 +22292,15 @@ void XAU_CampaignCreate(ulong positionId, int direction, string setup, string gr
                SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX), SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP));
 
    if(isPostResetReentry)
+   {
       PrintFormat("FRESH_CAMPAIGN_REENTRY | previousCampaignId=%s | newCampaignId=%s | newSignalId=%s | direction=%s | "
                   "entryPrice=%.5f | stopDistance=%.5f | riskPct=%.2f | resetEvidence=marketResetConfirmed | continuationEvidence=freshApprovedSignal",
                   postResetPreviousId, g_campaign[idx].campaignId, g_campaign[idx].campaignId,
                   direction == 1 ? "BUY" : "SELL", entryPrice, g_campaign[idx].originalStopDistance, InpNormalRiskPct);
+      // The reset is consumed only after broker-confirmed campaign creation.
+      g_postCampaignReset.active = false;
+      g_postCampaignReset.state = POST_CAMPAIGN_NONE;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -21982,6 +22325,60 @@ double XAU_Campaign_StructureFloorPrice(int direction, double atr)
       if(swingHigh <= 0) return 0.0;
       return swingHigh + buf;
    }
+}
+
+double XAU_Campaign_ProjectNetAtPrice(int idx, bool isBuy, double price)
+{
+   double projected = 0.0;
+   bool hedgingMode = AccountInfoInteger(ACCOUNT_MARGIN_MODE) == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING;
+   if(!hedgingMode)
+   {
+      // Netting broker truth is one merged position; a reduction does not
+      // create a separately surviving "original ticket". Price all floors
+      // from the live merged volume/open price and log reductions honestly.
+      for(int p = PositionsTotal() - 1; p >= 0; p--)
+      {
+         if(!posInfo.SelectByIndex(p)) continue;
+         if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+         if(XAU_Campaign_FindIdx(posInfo.Identifier()) != idx) continue;
+         projected += XAU_ProjectProfitUSD(isBuy, posInfo.PriceOpen(), price, posInfo.Volume());
+         projected += posInfo.Swap() + posInfo.Commission();
+         return projected;
+      }
+   }
+   for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)
+   {
+      if(!g_campaign[idx].legs[L].active) continue;
+      projected += XAU_ProjectProfitUSD(isBuy, g_campaign[idx].legs[L].entryPrice,
+                                        price, g_campaign[idx].legs[L].lots);
+      ulong currentTicket = 0;
+      if(XAU_Campaign_SelectByIdentifier(g_campaign[idx].legs[L].ticket, currentTicket))
+         projected += posInfo.Swap() + posInfo.Commission();
+   }
+   return projected;
+}
+
+double XAU_Campaign_FloorPriceForR(int idx, bool isBuy, double targetR)
+{
+   if(g_campaign[idx].initialRiskUSD <= 0.0 || g_campaign[idx].originalStopDistance <= 0.0) return 0.0;
+   double targetUSD = targetR * g_campaign[idx].initialRiskUSD;
+   double span = g_campaign[idx].originalStopDistance * 20.0;
+   double lo = g_campaign[idx].entryPrice - span;
+   double hi = g_campaign[idx].entryPrice + span;
+   for(int i = 0; i < 64; i++)
+   {
+      double mid = (lo + hi) * 0.5;
+      double pnl = XAU_Campaign_ProjectNetAtPrice(idx, isBuy, mid);
+      if(isBuy)
+      {
+         if(pnl < targetUSD) lo = mid; else hi = mid;
+      }
+      else
+      {
+         if(pnl < targetUSD) hi = mid; else lo = mid;
+      }
+   }
+   return (lo + hi) * 0.5;
 }
 
 //+------------------------------------------------------------------+
@@ -22030,11 +22427,13 @@ void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double 
          maturityTighteningPct = (g_trendMaturity.maturityScore / 100.0) * InpMaturityProtectionTighteningMaxPct;
       double effectiveSharePct = MathMin(95.0, InpCampaignAdaptivePeakSharePct + maturityTighteningPct);
       double rawPeakShareFloorR = peakR * (effectiveSharePct / 100.0);
-      double structPrice = XAU_Campaign_StructureFloorPrice(g_campaign[idx].direction, atr);
+      double structPrice = atr > 0.0 ? XAU_Campaign_StructureFloorPrice(g_campaign[idx].direction, atr) : 0.0;
       if(structPrice > 0 && g_campaign[idx].originalStopDistance > 0)
       {
-         structureFloorR = isBuy ? (structPrice - g_campaign[idx].entryPrice) / g_campaign[idx].originalStopDistance
-                                  : (g_campaign[idx].entryPrice - structPrice) / g_campaign[idx].originalStopDistance;
+         structureFloorR = XAU_Campaign_ProjectNetAtPrice(idx, isBuy, structPrice) / g_campaign[idx].initialRiskUSD;
+         // Structure may tighten protection, but never to an unearned level
+         // inside ordinary noise or beyond 85% of the actually observed peak.
+         structureFloorR = MathMin(structureFloorR, peakR * 0.85);
       }
       double adaptiveFloorR = MathMax(rawPeakShareFloorR, structureFloorR);
       if(adaptiveFloorR > newFloorR)
@@ -22042,19 +22441,19 @@ void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double 
          newFloorR = adaptiveFloorR;
          reason = "ADAPTIVE_PEAK_SHARE";
       }
-      PrintFormat("CAMPAIGN_ADAPTIVE_FLOOR | campaignId=%s | peakR=%.3f | peakSharePct=%.1f | maturityTighteningPct=%.1f | rawPeakFloorR=%.3f | "
-                  "structureFloorR=%.3f | previousFloorR=%.3f | newFloorR=%.3f | regime=entryBOS=%d,liveBOS=%d | reason=%s",
-                  g_campaign[idx].campaignId, peakR, effectiveSharePct, maturityTighteningPct, rawPeakShareFloorR,
-                  structureFloorR, prevFloorR, MathMax(newFloorR, prevFloorR), g_campaign[idx].entryBOS, g_smc_bos_dir, reason);
+      if(newFloorR > prevFloorR + 0.001 || TimeCurrent() - g_campaign[idx].lastFloorDecisionLogTime >= 60)
+         PrintFormat("CAMPAIGN_ADAPTIVE_FLOOR | campaignId=%s | peakR=%.3f | peakSharePct=%.1f | maturityTighteningPct=%.1f | rawPeakFloorR=%.3f | "
+                     "structureFloorR=%.3f | previousFloorR=%.3f | newFloorR=%.3f | regime=entryBOS=%d,liveBOS=%d | reason=%s",
+                     g_campaign[idx].campaignId, peakR, effectiveSharePct, maturityTighteningPct, rawPeakShareFloorR,
+                     structureFloorR, prevFloorR, MathMax(newFloorR, prevFloorR), g_campaign[idx].entryBOS, g_smc_bos_dir, reason);
    }
 
    // RATCHET-ONLY: never move backward.
    newFloorR = MathMax(newFloorR, prevFloorR);
    if(newFloorR <= -998.0) return; // still fully below guarantee threshold -- structural SL untouched
 
-   double lockDist = newFloorR * g_campaign[idx].originalStopDistance;
-   double desiredSL = isBuy ? NormalizeDouble(g_campaign[idx].entryPrice + lockDist, digits)
-                             : NormalizeDouble(g_campaign[idx].entryPrice - lockDist, digits);
+   double desiredSL = NormalizeDouble(XAU_Campaign_FloorPriceForR(idx, isBuy, newFloorR), digits);
+   if(desiredSL <= 0.0) return;
 
    bool floorSane = isBuy ? (desiredSL < curPrice) : (desiredSL > curPrice);
 
@@ -22070,17 +22469,20 @@ void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double 
    // the shared campaign floor must be applied to EACH active leg's own
    // ticket individually rather than a single shared position.
    bool anyMoved = false, anyRejected = false;
+   bool modifyAttemptAllowed = TimeCurrent() - g_campaign[idx].lastSLModifyAttemptTime >= 3;
    for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)
    {
       if(!g_campaign[idx].legs[L].active) continue;
-      ulong legTicket = g_campaign[idx].legs[L].ticket;
-      if(!PositionSelectByTicket(legTicket)) continue;
+      ulong legIdentifier = g_campaign[idx].legs[L].ticket, legTicket = 0;
+      if(!XAU_Campaign_SelectByIdentifier(legIdentifier, legTicket)) continue;
       double legCurSL = PositionGetDouble(POSITION_SL);
       bool floorRatchet = (legCurSL == 0) ? true : (isBuy ? desiredSL > legCurSL : desiredSL < legCurSL);
       if(!floorSane || !floorRatchet) continue; // this leg's SL is already at/beyond the floor
 
       if(!geometryAllowed) { anyRejected = true; continue; }
+      if(!modifyAttemptAllowed) { anyRejected = true; continue; }
 
+      g_campaign[idx].lastSLModifyAttemptTime = TimeCurrent();
       if(SafeModifySL(legTicket, desiredSL, 0, isBuy, curPrice, "CAMPAIGN_FLOOR"))
       {
          anyMoved = true;
@@ -22099,13 +22501,19 @@ void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double 
       }
    }
 
-   PrintFormat("CAMPAIGN_SL_EVALUATION | campaignId=%s | peakR=%.3f | currentR=%.3f | originalSL=%.5f | "
-               "minimumGuaranteeFloorR=%.2f | peakShareFloorR=%.3f | structureFloorR=%.3f | ATRRoom=%.2f | "
-               "desiredSL=%.5f | geometryAllowed=%s | decision=%s | reason=%s",
-               g_campaign[idx].campaignId, peakR, g_campaign[idx].currentR, g_campaign[idx].invalidationPrice,
-               InpCampaignGuaranteedFloorR, newFloorR, structureFloorR, InpCampaignStructureATRBuffer,
-               desiredSL, geometryAllowed ? "true" : "false",
-               anyMoved ? "MOVE_SL" : (anyRejected ? "INTERNAL_FLOOR_ONLY" : "HOLD_SL"), reason);
+   if(anyMoved || MathAbs(desiredSL - g_campaign[idx].lastDesiredSL) > SymbolInfoDouble(Symbol(), SYMBOL_POINT) ||
+      TimeCurrent() - g_campaign[idx].lastFloorDecisionLogTime >= 60)
+   {
+      PrintFormat("CAMPAIGN_SL_EVALUATION | campaignId=%s | peakR=%.3f | currentR=%.3f | originalSL=%.5f | "
+                  "minimumGuaranteeFloorR=%.2f | peakShareFloorR=%.3f | structureFloorR=%.3f | ATRRoom=%.2f | "
+                  "desiredSL=%.5f | geometryAllowed=%s | decision=%s | reason=%s",
+                  g_campaign[idx].campaignId, peakR, g_campaign[idx].currentR, g_campaign[idx].invalidationPrice,
+                  InpCampaignGuaranteedFloorR, newFloorR, structureFloorR, InpCampaignStructureATRBuffer,
+                  desiredSL, geometryAllowed ? "true" : "false",
+                  anyMoved ? "MOVE_SL" : (anyRejected ? "INTERNAL_FLOOR_ONLY" : "HOLD_SL"), reason);
+      g_campaign[idx].lastFloorDecisionLogTime = TimeCurrent();
+      g_campaign[idx].lastDesiredSL = desiredSL;
+   }
 
    g_campaign[idx].floorGeometryBlocked = anyRejected;
    g_campaign[idx].protectedFloorPrice = desiredSL;
@@ -22115,17 +22523,18 @@ void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double 
    // placed at the desired protected level, and price has now crossed that
    // internal floor, close the whole campaign (retry-safe, per leg) rather
    // than let a genuinely guaranteed campaign finish worse than its floor.
-   if(g_campaign[idx].floorGeometryBlocked)
+   if(g_campaign[idx].protectedFloorR > -998.0)
    {
       bool breached = isBuy ? (curPrice <= desiredSL) : (curPrice >= desiredSL);
       if(breached)
       {
          PrintFormat("CAMPAIGN_HARD_CLOSE_DECISION | campaignId=%s | duration=%ds | peakR=%.3f | currentR=%.3f | "
                      "protectedFloorR=%.3f | structureInvalidated=false | directionChanged=false | hostileFactors=0 | "
-                     "decision=EXIT | reason=INTERNAL_FLOOR_BREACH_GEOMETRY_BLOCKED",
+                     "decision=EXIT | reason=PROTECTED_FLOOR_BREACH",
                      g_campaign[idx].campaignId, (int)(TimeCurrent() - g_campaign[idx].createdTime), peakR,
                      g_campaign[idx].currentR, newFloorR);
-         XAU_Campaign_Finalize(idx, "INTERNAL_FLOOR_BREACH_GEOMETRY_BLOCKED");
+         XAU_Campaign_Finalize(idx, "PROTECTED_FLOOR_BREACH");
+         return;
       }
    }
 }
@@ -22210,19 +22619,41 @@ void XAU_Campaign_ReduceLatestLeg(int idx, string deteriorationEvidence)
       if(g_campaign[idx].legs[i].active) { latestIdx = i; break; }
    if(latestIdx < 0) return;
 
-   ulong legTicket = g_campaign[idx].legs[latestIdx].ticket;
+   ulong legIdentifier = g_campaign[idx].legs[latestIdx].ticket, legTicket = 0;
    double legProfit = 0.0;
-   if(PositionSelectByTicket(legTicket))
+   if(XAU_Campaign_SelectByIdentifier(legIdentifier, legTicket))
       legProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
-   // HEDGING MODE: this leg is its own independent position -- close it in
-   // full, exactly (no netting-partial-close approximation needed).
-   PrintFormat("CAMPAIGN_LATE_LEG_REDUCTION | campaignId=%s | ticket=%I64u | legNumber=%d | legProfit=%.2f | "
-               "campaignPeakR=%.3f | campaignCurrentR=%.3f | deteriorationEvidence=%s | reason=reduce_latest_leg_preserve_original_entry",
-               g_campaign[idx].campaignId, legTicket, g_campaign[idx].legs[latestIdx].legNumber, legProfit,
-               g_campaign[idx].peakR, g_campaign[idx].currentR, deteriorationEvidence);
+   bool hedgingMode = AccountInfoInteger(ACCOUNT_MARGIN_MODE) == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING;
+   PrintFormat("CAMPAIGN_LATE_LEG_REDUCTION | campaignId=%s | accountMode=%s | ticket=%I64u | legNumber=%d | legProfit=%.2f | "
+               "campaignPeakR=%.3f | campaignCurrentR=%.3f | deteriorationEvidence=%s | reason=%s",
+               g_campaign[idx].campaignId, hedgingMode ? "HEDGING_EXACT_TICKET" : "NETTING_VOLUME_REDUCTION",
+               legTicket, g_campaign[idx].legs[latestIdx].legNumber, legProfit,
+               g_campaign[idx].peakR, g_campaign[idx].currentR, deteriorationEvidence,
+               hedgingMode ? "close_exact_latest_ticket_preserve_original" : "reduce_merged_net_volume_latest_internal_allocation");
 
-   if(SafePositionClose(legTicket, "CAMPAIGN_LATE_LEG_REDUCTION:" + deteriorationEvidence))
+   bool reduced = false;
+   if(hedgingMode)
+      reduced = SafePositionClose(legTicket, "CAMPAIGN_LATE_LEG_REDUCTION:" + deteriorationEvidence);
+   else
+   {
+      // Netting has no independently closeable leg ticket. Reduce the merged
+      // position by the internally recorded latest-leg volume and report that
+      // truthfully; an opposite market deal decreases, never reverses, because
+      // the requested reduction is bounded by the live merged volume.
+      if(XAU_Campaign_SelectByIdentifier(legIdentifier, legTicket))
+      {
+         double liveVolume = PositionGetDouble(POSITION_VOLUME);
+         double reduceVolume = NormalizeVolumeDown(MathMin(g_campaign[idx].legs[latestIdx].lots, liveVolume));
+         bool netIsBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+         double minBrokerLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+         if(reduceVolume > 0.0 && liveVolume - reduceVolume >= minBrokerLot - 1e-9)
+            reduced = netIsBuy ? trade.Sell(reduceVolume, Symbol(), 0, 0, 0, "XAU-CAMPAIGN-EXP1|NET_REDUCE")
+                               : trade.Buy(reduceVolume, Symbol(), 0, 0, 0, "XAU-CAMPAIGN-EXP1|NET_REDUCE");
+      }
+   }
+
+   if(reduced)
    {
       g_campaign[idx].legs[latestIdx].active = false;
       g_campaign[idx].aggregateLots -= g_campaign[idx].legs[latestIdx].lots;
@@ -22232,38 +22663,77 @@ void XAU_Campaign_ReduceLatestLeg(int idx, string deteriorationEvidence)
 
 void XAU_Campaign_Finalize(int idx, string exitReason)
 {
+   if(idx < 0 || idx >= XAU_CAMPAIGN_MAX_SLOTS || !g_campaign[idx].active) return;
+   if(StringLen(exitReason) == 0) exitReason = g_campaign[idx].pendingCloseReason;
+   if(StringLen(exitReason) == 0) exitReason = "CAMPAIGN_CLOSE_REQUESTED";
+
+   if(!g_campaign[idx].closeRequested)
+   {
+      g_campaign[idx].closeRequested = true;
+      g_campaign[idx].pendingCloseReason = exitReason;
+      g_campaign[idx].closeRequestedTime = TimeCurrent();
+      g_campaign[idx].state = CAMPAIGN_EXIT_PENDING;
+      PrintFormat("CAMPAIGN_CLOSE_REQUESTED | campaignId=%s | reason=%s | brokerConfirmationRequired=true",
+                  g_campaign[idx].campaignId, exitReason);
+      XAU_Campaign_SaveState();
+   }
+
+   bool anyStillLive = false;
+   if(TimeCurrent() - g_campaign[idx].lastCloseAttemptTime >= 1)
+   {
+      g_campaign[idx].lastCloseAttemptTime = TimeCurrent();
+      for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)
+      {
+         if(!g_campaign[idx].legs[L].active) continue;
+         ulong legIdentifier = g_campaign[idx].legs[L].ticket, legTicket = 0;
+         if(!XAU_Campaign_SelectByIdentifier(legIdentifier, legTicket))
+         {
+            g_campaign[idx].legs[L].active = false;
+            continue;
+         }
+         if(!SafePositionClose(legTicket, "CAMPAIGN_CLOSE_RETRY:" + g_campaign[idx].pendingCloseReason))
+            PrintFormat("CAMPAIGN_CLOSE_REJECTED | campaignId=%s | ticket=%I64u | retcode=%d | retryPending=true",
+                        g_campaign[idx].campaignId, legTicket, (int)trade.ResultRetcode());
+      }
+   }
+
+   // Broker truth, not the return value of a close request, controls finality.
+   for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)
+   {
+      if(!g_campaign[idx].legs[L].active) continue;
+      ulong currentTicket = 0;
+      if(XAU_Campaign_SelectByIdentifier(g_campaign[idx].legs[L].ticket, currentTicket)) anyStillLive = true;
+      else g_campaign[idx].legs[L].active = false;
+   }
+   if(anyStillLive)
+   {
+      XAU_Campaign_SaveState();
+      return;
+   }
+
    double realizedR = g_campaign[idx].currentR;
    double peakR = g_campaign[idx].peakR;
    int duration = (int)(TimeCurrent() - g_campaign[idx].createdTime);
-   bool thesisInvalidated = (exitReason == "THESIS_INVALIDATED" || exitReason == "CONFIRMED_DIRECTION_CHANGE" ||
-                             exitReason == "INTERNAL_FLOOR_BREACH_GEOMETRY_BLOCKED");
+   bool thesisInvalidated = (exitReason == "THESIS_INVALIDATED" || exitReason == "CONFIRMED_DIRECTION_CHANGE");
    bool directionChanged = (exitReason == "CONFIRMED_DIRECTION_CHANGE");
 
    double weightedEntry = 0.0;
    double lotSum = 0.0;
    for(int i = 0; i < g_campaign[idx].legCount; i++)
-      if(g_campaign[idx].legs[i].active)
-      {
-         weightedEntry += g_campaign[idx].legs[i].entryPrice * g_campaign[idx].legs[i].lots;
-         lotSum += g_campaign[idx].legs[i].lots;
-      }
+   {
+      weightedEntry += g_campaign[idx].legs[i].entryPrice * g_campaign[idx].legs[i].lots;
+      lotSum += g_campaign[idx].legs[i].lots;
+   }
    if(lotSum > 0) weightedEntry /= lotSum; else weightedEntry = g_campaign[idx].entryPrice;
 
-   PrintFormat("CAMPAIGN_CLOSED | campaignId=%s | duration=%ds | legs=%d | initialEntry=%.5f | weightedEntry=%.5f | "
+   double confirmedExitPrice = g_campaign[idx].direction == 1 ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
+                                                               : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   PrintFormat("CAMPAIGN_CLOSE_CONFIRMED | campaignId=%s | duration=%ds | legs=%d | initialEntry=%.5f | weightedEntry=%.5f | "
                "peakR=%.3f | realizedR=%.3f | grossProfit=n/a_see_broker_history | netProfit=n/a_see_broker_history | "
                "exitReason=%s | thesisInvalidated=%s | marketDirectionChanged=%s",
                g_campaign[idx].campaignId, duration, g_campaign[idx].legCount, g_campaign[idx].entryPrice,
                weightedEntry, peakR, realizedR, exitReason, thesisInvalidated ? "true" : "false",
                directionChanged ? "true" : "false");
-
-   // HEDGING MODE: the campaign may own several independent leg positions
-   // (initial entry + pyramid adds) -- close every one still active, not
-   // just a single position looked up by the campaign's identity field.
-   for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)
-   {
-      if(!g_campaign[idx].legs[L].active) continue;
-      SafePositionClose(g_campaign[idx].legs[L].ticket, "CAMPAIGN_CLOSED:" + exitReason);
-   }
 
    // Only a genuinely profitable, thesis-intact close (not an emergency/
    // invalidation close) arms the anti-chase post-campaign reset -- a losing
@@ -22271,122 +22741,252 @@ void XAU_Campaign_Finalize(int idx, string exitReason)
    // gating already applies via the ordinary signal pipeline.
    if(realizedR > 0 && !thesisInvalidated)
       XAU_PostCampaignReset_Arm(g_campaign[idx].campaignId, g_campaign[idx].direction, realizedR, peakR,
-                                g_campaign[idx].entryPrice, exitReason);
+                                confirmedExitPrice, g_campaign[idx].originalStopDistance, exitReason);
 
    ZeroMemory(g_campaign[idx]);
    g_campaign[idx].active = false;
    XAU_Campaign_SaveState();
 }
 
-//+------------------------------------------------------------------+
-//| Pyramid evaluation: each add is a fresh continuation signal that   |
-//| must independently re-prove the thesis, not a timer/R-interval     |
-//| event. No martingale, no averaging into a loss, no add while the   |
-//| campaign is in loss or thesis-damaged, no add at overextension.    |
-//+------------------------------------------------------------------+
+double XAU_Campaign_LiveWorstCaseRiskUSD(int idx, bool &allStopsConfirmed)
+{
+   allStopsConfirmed = true;
+   double riskUSD = 0.0;
+   for(int p = PositionsTotal() - 1; p >= 0; p--)
+   {
+      if(!posInfo.SelectByIndex(p)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      if(XAU_Campaign_FindIdx(posInfo.Identifier()) != idx) continue;
+      double brokerSL = posInfo.StopLoss();
+      if(brokerSL <= 0.0) { allStopsConfirmed = false; continue; }
+      bool buy = posInfo.PositionType() == POSITION_TYPE_BUY;
+      double atSL = XAU_ProjectProfitUSD(buy, posInfo.PriceOpen(), brokerSL, posInfo.Volume());
+      if(atSL < 0.0) riskUSD += MathAbs(atSL);
+      // Confirmed protected profit is deliberately not netted against another
+      // leg's loss: the 30% ceiling remains a conservative loss-only sum.
+   }
+   return riskUSD;
+}
+
+// One closed M5 bar advances at most one state. An add can only follow a
+// distinct IMPULSE -> RESET -> CONTINUATION cycle; a continuously-true trend
+// condition cannot recycle into another order.
 void XAU_Campaign_EvaluatePyramid(int idx, bool isBuy, double curPrice, double atr,
                                   int momentumScore, bool structureConfirmed)
 {
-   if(g_campaign[idx].pyramidsAdded >= InpCampaignMaxPyramidLegs) return;
-   if(TimeCurrent() - g_campaign[idx].lastPyramidEvalTime < InpCampaignPyramidMinSecondsBetween) return;
+   if(g_campaign[idx].pyramidsAdded >= InpCampaignMaxPyramidLegs || atr <= 0.0) return;
+   datetime signalBar = iTime(Symbol(), PERIOD_M5, 1);
+   if(signalBar <= 0 || signalBar == g_campaign[idx].lastPyramidSignalBar) return;
    g_campaign[idx].lastPyramidEvalTime = TimeCurrent();
+   g_campaign[idx].lastPyramidSignalBar = signalBar;
 
-   int legNumber = g_campaign[idx].pyramidsAdded + 1;
-   double frac = XAU_Campaign_PyramidFraction(legNumber);
-   double proposedLotRaw = g_campaign[idx].campaignBaseLot * frac;
-   double proposedLot = NormalizeVolumeDown(proposedLotRaw);
+   double open1 = iOpen(Symbol(), PERIOD_M5, 1), close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double high1 = iHigh(Symbol(), PERIOD_M5, 1), low1 = iLow(Symbol(), PERIOD_M5, 1);
+   double high2 = iHigh(Symbol(), PERIOD_M5, 2), low2 = iLow(Symbol(), PERIOD_M5, 2);
+   double range1 = high1 - low1, range2 = high2 - low2;
+   bool directionBar = isBuy ? close1 > open1 : close1 < open1;
+   bool freshClosedBOS = isBuy ? close1 > high2 : close1 < low2;
+   double separationATR = MathAbs(close1 - g_campaign[idx].lastPyramidEntryPrice) / atr;
+   int barsSinceLastAdd = iBarShift(Symbol(), PERIOD_M5, g_campaign[idx].lastPyramidOpenTime, false);
+   if(barsSinceLastAdd < 0) barsSinceLastAdd = 0;
 
-   string decision = "WAIT";
-   string reason = "";
+   // A consumed event may create another event only from a later, genuinely
+   // displaced closed-bar impulse. No reset means no continuation order.
+   if(g_campaign[idx].pyramidEventState == PYRAMID_IDLE ||
+      g_campaign[idx].pyramidEventState == PYRAMID_EVENT_CONSUMED)
+   {
+      double impulseDistanceATR = MathAbs(close1 - g_campaign[idx].lastPyramidEntryPrice) / atr;
+      bool freshImpulse = signalBar > g_campaign[idx].lastPyramidOpenBar &&
+                          barsSinceLastAdd >= InpCampaignPyramidMinClosedBars &&
+                          directionBar && freshClosedBOS && structureConfirmed && momentumScore >= 3 &&
+                          impulseDistanceATR >= InpCampaignPyramidImpulseMinATR;
+      if(!freshImpulse)
+      {
+         PrintFormat("[PYRAMID_ADD_BLOCKED] campaignId=%s eventId=NONE reason=%s barsSinceLastAdd=%d priceSeparationATR=%.3f detail=NO_NEW_CLOSED_BAR_IMPULSE_BOS",
+                     g_campaign[idx].campaignId,
+                     signalBar == g_campaign[idx].lastPyramidOpenBar ? "SAME_BAR" : "NO_RESET",
+                     barsSinceLastAdd, separationATR);
+         return;
+      }
+      g_campaign[idx].pyramidEventSequence++;
+      g_campaign[idx].pyramidEventId = StringFormat("%s_EVT_%I64d_%I64d", g_campaign[idx].campaignId,
+                                                     g_campaign[idx].pyramidEventSequence, (long)signalBar);
+      g_campaign[idx].pyramidImpulseBar = signalBar;
+      g_campaign[idx].pyramidImpulseExtreme = isBuy ? high1 : low1;
+      g_campaign[idx].pyramidImpulseDistanceATR = impulseDistanceATR;
+      g_campaign[idx].pyramidResetBar = 0;
+      g_campaign[idx].pyramidResetType = "";
+      g_campaign[idx].pyramidEventState = PYRAMID_IMPULSE_DETECTED;
+      PrintFormat("[PYRAMID_EVENT_CREATED] campaignId=%s eventId=%s impulseBar=%s impulseDistanceATR=%.3f previousLeg=%d previousLegPrice=%.5f",
+                  g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId,
+                  TimeToString(signalBar, TIME_DATE | TIME_MINUTES), g_campaign[idx].pyramidImpulseDistanceATR,
+                  g_campaign[idx].pyramidsAdded, g_campaign[idx].lastPyramidEntryPrice);
+      XAU_Campaign_SaveState();
+      return;
+   }
 
-   bool campaignLosing = g_campaign[idx].currentR <= 0;
-   bool thesisDamaged = (g_campaign[idx].lastClassification == "THESIS_DAMAGED" ||
-                         g_campaign[idx].lastClassification == "THESIS_INVALIDATED" ||
-                         g_campaign[idx].lastClassification == "TREND_WARNING");
-   double distFromValueZoneATR = (atr > 0) ? MathAbs(curPrice - g_campaign[idx].entryPrice) / atr : 0.0;
-   bool overextended = distFromValueZoneATR > InpCampaignOverextendedATR;
-   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-   bool spreadSafe = (g_spreadEMA <= 0) || (spread <= g_spreadEMA * 1.6);
-   bool continuationConfirmed = structureConfirmed && momentumScore >= 3;
+   if(g_campaign[idx].pyramidEventState == PYRAMID_WAITING_FOR_RESET ||
+      g_campaign[idx].pyramidEventState == PYRAMID_IMPULSE_DETECTED)
+   {
+      if(g_campaign[idx].pyramidEventState == PYRAMID_IMPULSE_DETECTED)
+         g_campaign[idx].pyramidEventState = PYRAMID_WAITING_FOR_RESET;
+      if(isBuy && high1 > g_campaign[idx].pyramidImpulseExtreme) g_campaign[idx].pyramidImpulseExtreme = high1;
+      if(!isBuy && low1 < g_campaign[idx].pyramidImpulseExtreme) g_campaign[idx].pyramidImpulseExtreme = low1;
+      double pullbackDepthATR = isBuy ? (g_campaign[idx].pyramidImpulseExtreme - low1) / atr
+                                      : (high1 - g_campaign[idx].pyramidImpulseExtreme) / atr;
+      bool consolidation = range1 <= atr * 0.70 && range2 <= atr * 0.70 && high1 >= low2 && low1 <= high2;
+      bool pullback = pullbackDepthATR >= InpCampaignPyramidMinResetDepthATR;
+      bool retest = !directionBar && pullbackDepthATR >= InpCampaignPyramidMinResetDepthATR * 0.75;
+      bool thesisIntact = structureConfirmed && g_campaign[idx].lastClassification != "THESIS_DAMAGED" &&
+                          g_campaign[idx].lastClassification != "THESIS_INVALIDATED" &&
+                          g_campaign[idx].lastClassification != "CONFIRMED_DIRECTION_CHANGE";
+      bool structureHeld = thesisIntact && (isBuy ? low1 > g_campaign[idx].invalidationPrice
+                                                  : high1 < g_campaign[idx].invalidationPrice);
+      bool valueZoneHeld = isBuy ? close1 >= g_campaign[idx].lastPyramidEntryPrice - atr * 0.50
+                                 : close1 <= g_campaign[idx].lastPyramidEntryPrice + atr * 0.50;
+      PrintFormat("[PYRAMID_WAITING_FOR_RESET] campaignId=%s eventId=%s barsSinceLastAdd=%d priceSeparationATR=%.3f pullbackDepthATR=%.3f consolidationDetected=%s",
+                  g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId, barsSinceLastAdd,
+                  separationATR, pullbackDepthATR, consolidation ? "true" : "false");
+      if(!(structureHeld && valueZoneHeld && (pullback || consolidation || retest))) return;
+      g_campaign[idx].pyramidResetBar = signalBar;
+      g_campaign[idx].pyramidResetExtreme = isBuy ? low1 : high1;
+      g_campaign[idx].pyramidResetType = pullback ? "PULLBACK" : (consolidation ? "CONSOLIDATION" : "RETEST");
+      g_campaign[idx].pyramidEventState = PYRAMID_RESET_CONFIRMED;
+      PrintFormat("[PYRAMID_RESET_CONFIRMED] campaignId=%s eventId=%s resetType=%s structureHeld=true valueZoneHeld=true",
+                  g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId, g_campaign[idx].pyramidResetType);
+      XAU_Campaign_SaveState();
+      return;
+   }
 
-   // v6.22.0 EXPERIMENT: trend maturity influence on pyramiding. Only
-   // constrains adds in the direction the maturity engine is currently
-   // tracking -- never touches a campaign running opposite to it (which by
-   // definition isn't "mature" in that sense). EXHAUSTION_RISK+ stops new
-   // pyramids outright (spec: "no new pyramids"); MATURE/LATE require a
-   // stricter continuation bar rather than a blanket stop (spec: "stop
-   // AGGRESSIVE pyramids", not all of them).
-   bool maturityBlocksAllAdds = false;
-   bool maturityRequiresStricter = false;
+   if(g_campaign[idx].pyramidEventState != PYRAMID_RESET_CONFIRMED &&
+      g_campaign[idx].pyramidEventState != PYRAMID_CONTINUATION_CONFIRMATION) return;
+   if(signalBar <= g_campaign[idx].pyramidResetBar)
+   {
+      PrintFormat("[PYRAMID_ADD_BLOCKED] campaignId=%s eventId=%s reason=SAME_BAR", g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId);
+      return;
+   }
+
+   bool maturityBlocksAllAdds = false, maturityRequiresStricter = false;
    if(InpMaturityEngineEnable && g_trendMaturity.direction == g_campaign[idx].direction)
    {
       if((double)g_trendMaturity.state >= InpMaturityPyramidBlockState) maturityBlocksAllAdds = true;
       else if((double)g_trendMaturity.state >= InpMaturityPyramidStrictState) maturityRequiresStricter = true;
    }
+   bool continuationConfirmed = directionBar && freshClosedBOS && structureConfirmed && momentumScore >= 3;
    if(maturityRequiresStricter) continuationConfirmed = continuationConfirmed && momentumScore >= 4;
+   if(!continuationConfirmed)
+   {
+      PrintFormat("[PYRAMID_ADD_BLOCKED] campaignId=%s eventId=%s reason=NO_RESET detail=RESET_CONFIRMED_BUT_NO_FRESH_CLOSED_BAR_BOS",
+                  g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId);
+      return;
+   }
+   g_campaign[idx].pyramidEventState = PYRAMID_CONTINUATION_CONFIRMATION;
+   string freshSignalId = StringFormat("%s_CONT_%I64d_BOS1", g_campaign[idx].pyramidEventId, (long)signalBar);
+   if(freshSignalId == g_campaign[idx].lastContinuationSignalId)
+   {
+      PrintFormat("[PYRAMID_ADD_BLOCKED] campaignId=%s eventId=%s reason=SAME_EVENT signalId=%s",
+                  g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId, freshSignalId);
+      return;
+   }
+
+   int legNumber = g_campaign[idx].pyramidsAdded + 1;
+   double frac = XAU_Campaign_PyramidFraction(legNumber);
+   double proposedLotRaw = g_campaign[idx].campaignBaseLot * frac;
+   double proposedLot = NormalizeVolumeDown(proposedLotRaw);
+   double pyramidSL = g_campaign[idx].protectedFloorR > -998.0 ? g_campaign[idx].protectedFloorPrice : g_campaign[idx].invalidationPrice;
+   double legRiskDistance = MathMax(MathAbs(close1 - pyramidSL), atr * 0.50);
+   double nextObstacle = isBuy ? XAU_Campaign_ExtremeHigh(PERIOD_H1, InpCampaignInvalidationHTFBars)
+                               : XAU_Campaign_ExtremeLow(PERIOD_H1, InpCampaignInvalidationHTFBars);
+   double obstacleRoom = isBuy ? nextObstacle - close1 : close1 - nextObstacle;
+   bool obstacleKnownAhead = nextObstacle > 0.0 && obstacleRoom > 0.0;
+   double roomToObstacleR = obstacleKnownAhead ? obstacleRoom / legRiskDistance : 999.0;
+   PrintFormat("[PYRAMID_CONTINUATION_CONFIRMED] campaignId=%s eventId=%s signalId=%s closedBarTime=%s BOS=true momentumExpansion=%d roomToObstacleR=%.3f",
+               g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId, freshSignalId,
+               TimeToString(signalBar, TIME_DATE | TIME_MINUTES), momentumScore, roomToObstacleR);
+
+   bool notAveragingDown = isBuy ? close1 > g_campaign[idx].lastPyramidEntryPrice
+                                 : close1 < g_campaign[idx].lastPyramidEntryPrice;
+   bool campaignLosing = g_campaign[idx].currentR <= 0;
+   bool protectedEnough = g_campaign[idx].currentR >= InpCampaignPyramidMinCampaignR &&
+                          (legNumber <= 1 || !InpCampaignPyramidRequireFloorAfter1 || g_campaign[idx].guaranteeArmed);
+   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   bool spreadSafe = g_spreadEMA <= 0.0 || spread <= g_spreadEMA * 1.6;
+   double distFromValueZoneATR = MathAbs(close1 - g_campaign[idx].entryPrice) / atr;
+   bool overextended = distFromValueZoneATR > InpCampaignOverextendedATR;
 
    double projectedAddRiskUSD = 0.0;
-   if(proposedLot > 0)
+   if(proposedLot > 0.0)
    {
-      double slDollarPerLot = RiskPerLotForDistance(g_campaign[idx].originalStopDistance);
-      projectedAddRiskUSD = slDollarPerLot * proposedLot;
+      double projectedAtSL = XAU_ProjectProfitUSD(isBuy, close1, pyramidSL, proposedLot);
+      projectedAddRiskUSD = projectedAtSL < 0.0 ? MathAbs(projectedAtSL) : 0.0;
    }
-   double projectedAggregateRiskUSD = g_campaign[idx].aggregateRiskUSD + projectedAddRiskUSD;
-   double equity = accInfo.Equity();
-   double projectedAggregateRiskPct = (equity > 0) ? projectedAggregateRiskUSD / equity * 100.0 : 999.0;
+   bool allStopsConfirmed = false;
+   double liveRiskUSD = XAU_Campaign_LiveWorstCaseRiskUSD(idx, allStopsConfirmed);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double projectedAggregateRiskUSD = liveRiskUSD + projectedAddRiskUSD;
+   double projectedAggregateRiskPct = equity > 0.0 ? projectedAggregateRiskUSD / equity * 100.0 : 999.0;
    bool aggregateRiskOK = projectedAggregateRiskPct <= InpCampaignMaxAggregateRiskPct;
 
-   if(proposedLot <= 0.0)
-      reason = "PROPOSED_LOT_BELOW_BROKER_MINIMUM";
-   else if(campaignLosing)
-      reason = "CAMPAIGN_NOT_PROFITABLE";
-   else if(thesisDamaged)
-      reason = "THESIS_NOT_CONFIRMED_VALID: " + g_campaign[idx].lastClassification;
-   else if(maturityBlocksAllAdds)
-      reason = "TREND_MATURITY_" + XAU_TrendState_Name(g_trendMaturity.state) + "_NO_NEW_PYRAMIDS";
-   else if(overextended)
-      reason = "OVEREXTENDED_" + DoubleToString(distFromValueZoneATR, 2) + "ATR_FROM_VALUE_ZONE";
-   else if(!spreadSafe)
-      reason = "SPREAD_UNSAFE";
-   else if(!aggregateRiskOK)
-      reason = "AGGREGATE_RISK_CEILING_" + DoubleToString(projectedAggregateRiskPct, 1) + "PCT_EXCEEDS_" + DoubleToString(InpCampaignMaxAggregateRiskPct, 1) + "PCT";
-   else if(!continuationConfirmed)
-      reason = "NO_FRESH_CONTINUATION_CONFIRMATION";
-   else
+   double addMargin = 0.0;
+   bool marginPriced = proposedLot > 0.0 && OrderCalcMargin(isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL,
+                                                           Symbol(), proposedLot, close1, addMargin);
+   double currentMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+   double currentFreeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   double projectedMargin = currentMargin + addMargin;
+   double projectedFreeMargin = currentFreeMargin - addMargin;
+   double projectedMarginLevel = projectedMargin > 0.0 ? equity / projectedMargin * 100.0 : 99999.0;
+   double requiredFreeReserve = MathMax(InpCampaignPyramidFreeReserveUSD, equity * InpCampaignPyramidFreeReservePct / 100.0);
+   bool marginOK = marginPriced && projectedFreeMargin >= requiredFreeReserve &&
+                   projectedMarginLevel >= InpCampaignPyramidMinPostMarginLevel;
+
+   string blockReason = "";
+   if(signalBar == g_campaign[idx].lastPyramidOpenBar) blockReason = "SAME_BAR";
+   else if(proposedLot <= 0.0) blockReason = "TOO_CLOSE:LOT_BELOW_BROKER_MINIMUM";
+   else if(g_campaign[idx].historyIncomplete) blockReason = "SAME_EVENT:RESTART_HISTORY_INCOMPLETE";
+   else if(barsSinceLastAdd < InpCampaignPyramidMinClosedBars) blockReason = "TOO_CLOSE";
+   else if(separationATR < InpCampaignPyramidMinSeparationATR) blockReason = "TOO_CLOSE";
+   else if(campaignLosing) blockReason = "NOT_PROTECTED:CAMPAIGN_LOSING";
+   else if(!protectedEnough) blockReason = "NOT_PROTECTED";
+   else if(!notAveragingDown) blockReason = "TOO_CLOSE:NEVER_AVERAGE_DOWN";
+   else if(maturityBlocksAllAdds || overextended) blockReason = "OVEREXTENDED";
+   else if(!spreadSafe) blockReason = "TOO_CLOSE:SPREAD_UNSAFE";
+   else if(roomToObstacleR < InpCampaignPyramidMinRewardRisk) blockReason = "NO_REWARD_ROOM";
+   else if(!allStopsConfirmed) blockReason = "NOT_PROTECTED:BROKER_SL_UNCONFIRMED";
+   else if(!aggregateRiskOK) blockReason = "NOT_PROTECTED:AGGREGATE_RISK";
+   else if(!marginOK) blockReason = "LOW_MARGIN";
+   if(StringLen(blockReason) > 0)
    {
-      decision = "ADD";
-      reason = "FRESH_CONTINUATION_CONFIRMED_PROFITABLE_CAMPAIGN";
+      g_campaign[idx].lastContinuationSignalId = freshSignalId;
+      PrintFormat("[PYRAMID_ADD_BLOCKED] campaignId=%s eventId=%s reason=%s barsSinceLastAdd=%d priceSeparationATR=%.3f currentR=%.3f floorArmed=%s expectedPostMarginLevel=%.2f expectedPostFreeMargin=%.2f requiredFreeMargin=%.2f aggregateRiskPct=%.2f",
+                  g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId, blockReason,
+                  barsSinceLastAdd, separationATR, g_campaign[idx].currentR,
+                  g_campaign[idx].guaranteeArmed ? "true" : "false", projectedMarginLevel,
+                  projectedFreeMargin, requiredFreeReserve, projectedAggregateRiskPct);
+      return;
    }
 
-   PrintFormat("CAMPAIGN_PYRAMID_SIGNAL | campaignId=%s | legNumber=%d | newSignalId=%s_L%d | baseLot=%.4f | "
-               "ladderFraction=%.2f | proposedLot=%.4f | currentCampaignR=%.3f | peakCampaignR=%.3f | "
-               "protectedFloorR=%.3f | continuationScore=%d | structureState=%s | HTFState=%d | overextended=%s | "
-               "aggregateRiskPct=%.2f | decision=%s | reason=%s",
-               g_campaign[idx].campaignId, legNumber, g_campaign[idx].campaignId, legNumber,
-               g_campaign[idx].campaignBaseLot, frac, proposedLot, g_campaign[idx].currentR, g_campaign[idx].peakR,
-               g_campaign[idx].protectedFloorR, momentumScore, g_campaign[idx].lastClassification, g_htfConsensusDir,
-               overextended ? "true" : "false", projectedAggregateRiskPct, decision, reason);
-
-   if(decision != "ADD") return;
-
-   double pyramidSL = g_campaign[idx].protectedFloorR > -998.0 ? g_campaign[idx].protectedFloorPrice : g_campaign[idx].invalidationPrice;
+   g_campaign[idx].pyramidEventState = PYRAMID_ADD_APPROVED;
+   g_campaign[idx].lastContinuationSignalId = freshSignalId;
+   if(!XAU_TryClaimEntryLock(g_campaign[idx].direction))
+   {
+      PrintFormat("[PYRAMID_ADD_BLOCKED] campaignId=%s eventId=%s reason=SAME_EVENT detail=CROSS_INSTANCE_CLAIM_FAILED",
+                  g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId);
+      g_campaign[idx].pyramidEventState = PYRAMID_RESET_CONFIRMED;
+      return;
+   }
    bool ok = isBuy ? trade.Buy(proposedLot, Symbol(), 0, pyramidSL, 0, StringFormat("XAU-CAMPAIGN-EXP1|PYRAMID_L%d", legNumber))
                    : trade.Sell(proposedLot, Symbol(), 0, pyramidSL, 0, StringFormat("XAU-CAMPAIGN-EXP1|PYRAMID_L%d", legNumber));
    if(!ok)
    {
-      PrintFormat("CAMPAIGN_PYRAMID_ADD_FAILED | campaignId=%s | legNumber=%d | retcode=%d", g_campaign[idx].campaignId, legNumber, (int)trade.ResultRetcode());
+      PrintFormat("CAMPAIGN_PYRAMID_ADD_FAILED | campaignId=%s | eventId=%s | legNumber=%d | retcode=%d",
+                  g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId, legNumber, (int)trade.ResultRetcode());
+      g_campaign[idx].pyramidEventState = PYRAMID_RESET_CONFIRMED;
       return;
    }
 
-   double fillPrice = trade.ResultPrice() > 0 ? trade.ResultPrice() : curPrice;
-   // HEDGING MODE: this add is its own independent position, not a merge
-   // onto the original ticket -- resolve its actual position identifier the
-   // same way OpenTrade() does for the initial leg (deal -> DEAL_POSITION_ID,
-   // falling back to the order ticket), never the raw deal ticket itself.
-   ulong addDealTicket = trade.ResultDeal();
-   ulong addPositionId = 0;
-   if(addDealTicket > 0 && HistoryDealSelect(addDealTicket))
-      addPositionId = (ulong)HistoryDealGetInteger(addDealTicket, DEAL_POSITION_ID);
+   double fillPrice = trade.ResultPrice() > 0.0 ? trade.ResultPrice() : close1;
+   ulong addDealTicket = trade.ResultDeal(), addPositionId = 0;
+   if(addDealTicket > 0 && HistoryDealSelect(addDealTicket)) addPositionId = (ulong)HistoryDealGetInteger(addDealTicket, DEAL_POSITION_ID);
    if(addPositionId == 0) addPositionId = trade.ResultOrder();
    int slotIdx = g_campaign[idx].legCount;
    if(slotIdx < 6)
@@ -22403,11 +23003,29 @@ void XAU_Campaign_EvaluatePyramid(int idx, bool isBuy, double curPrice, double a
    g_campaign[idx].pyramidsAdded = legNumber;
    g_campaign[idx].aggregateLots += proposedLot;
    g_campaign[idx].aggregateRiskUSD += projectedAddRiskUSD;
+   g_campaign[idx].lastPyramidOpenTime = TimeCurrent();
+   g_campaign[idx].lastPyramidOpenBar = signalBar;
+   g_campaign[idx].lastPyramidEntryPrice = fillPrice;
+   g_campaign[idx].pyramidEventState = PYRAMID_EVENT_CONSUMED;
 
-   PrintFormat("CAMPAIGN_PYRAMID_OPENED | campaignId=%s | legNumber=%d | ticket=%I64u | lot=%.4f | price=%.5f | "
-               "newAggregateLots=%.4f | newAggregateRiskUSD=%.2f | reason=%s",
-               g_campaign[idx].campaignId, legNumber, g_campaign[idx].legs[slotIdx < 6 ? slotIdx : 0].ticket,
-               proposedLot, fillPrice, g_campaign[idx].aggregateLots, g_campaign[idx].aggregateRiskUSD, reason);
+   bool postStopsConfirmed = false;
+   double confirmedLiveRisk = XAU_Campaign_LiveWorstCaseRiskUSD(idx, postStopsConfirmed);
+   ulong currentAddTicket = 0;
+   bool addVisibleAtBroker = XAU_Campaign_SelectByIdentifier(addPositionId, currentAddTicket);
+   double postRiskPct = equity > 0.0 ? MathMax(confirmedLiveRisk, projectedAggregateRiskUSD) / equity * 100.0 : 999.0;
+   if(!postStopsConfirmed || !addVisibleAtBroker)
+   {
+      PrintFormat("CAMPAIGN_PYRAMID_POSTFILL_PROTECTION_UNCONFIRMED | campaignId=%s | leg=%d | brokerVisible=%s | allStopsConfirmed=%s | remediation=close_campaign_retry_safe",
+                  g_campaign[idx].campaignId, legNumber, addVisibleAtBroker ? "true" : "false", postStopsConfirmed ? "true" : "false");
+      XAU_Campaign_Finalize(idx, "PYRAMID_POSTFILL_PROTECTION_UNCONFIRMED");
+      return;
+   }
+   if(postRiskPct > InpCampaignMaxAggregateRiskPct + 0.01)
+      XAU_Campaign_ReduceLatestLeg(idx, "POSTFILL_AGGREGATE_RISK_BREACH");
+
+   PrintFormat("[PYRAMID_ADD_OPENED] campaignId=%s eventId=%s legNumber=%d entryPrice=%.5f lot=%.4f barsSincePreviousAdd=%d priceSeparationATR=%.3f freshSignalId=%s expectedPostMarginLevel=%.2f expectedPostFreeMargin=%.2f",
+               g_campaign[idx].campaignId, g_campaign[idx].pyramidEventId, legNumber, fillPrice,
+               proposedLot, barsSinceLastAdd, separationATR, freshSignalId, projectedMarginLevel, projectedFreeMargin);
    XAU_Campaign_SaveState();
 }
 
@@ -22434,6 +23052,15 @@ datetime g_campaignLastClassifiedBar = 0;
 //+------------------------------------------------------------------+
 void XAU_CampaignCoreLoop()
 {
+   if(!XAU_Campaign_EnsureInstanceOwnership()) return;
+   if(g_campaignLeaseNewlyAcquired)
+   {
+      for(int clearIdx = 0; clearIdx < XAU_CAMPAIGN_MAX_SLOTS; clearIdx++) ZeroMemory(g_campaign[clearIdx]);
+      ZeroMemory(g_postCampaignReset);
+      XAU_Campaign_LoadState();
+      g_campaignLeaseNewlyAcquired = false;
+      Print("CAMPAIGN_INSTANCE_TAKEOVER_RECONCILED | persisted state reloaded before broker-position adoption.");
+   }
    bool indicatorsReady = (ArraySize(bufATR) >= 2 && bufATR[1] > 0 &&
                            ArraySize(bufRSI) >= 2 && ArraySize(bufEMAFast) >= 2 && ArraySize(bufEMASlow) >= 2);
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
@@ -22514,14 +23141,34 @@ void XAU_CampaignCoreLoop()
          g_campaign[idx].originalStopDistance = MathAbs(g_campaign[idx].entryPrice - g_campaign[idx].invalidationPrice);
          g_campaign[idx].campaignBaseLot = unassignedVol[u];
          double slDollarPerLotRec = RiskPerLotForDistance(g_campaign[idx].originalStopDistance);
-         g_campaign[idx].initialRiskUSD = MathMax(30.0, slDollarPerLotRec * unassignedVol[u]);
+         g_campaign[idx].initialRiskUSD = slDollarPerLotRec * unassignedVol[u];
+         if(g_campaign[idx].initialRiskUSD <= 0.0)
+            g_campaign[idx].initialRiskUSD = AccountInfoDouble(ACCOUNT_EQUITY) * InpNormalRiskPct / 100.0;
          g_campaign[idx].legCount = 0;
          g_campaign[idx].protectedFloorR = -999.0;
          g_campaign[idx].entryBOS = g_smc_bos_dir;
          g_campaign[idx].entryHTF = g_htfConsensusDir;
          g_campaign[idx].reconciledFromRestart = true;
-         PrintFormat("CAMPAIGN_RECONCILED_ON_ATTACH | campaignId=%s | direction=%s | entryPrice=%.5f",
-                     g_campaign[idx].campaignId, dirWanted == 1 ? "BUY" : "SELL", g_campaign[idx].entryPrice);
+         g_campaign[idx].historyIncomplete = true;
+         bool brokerSLProtectsProfit = unassignedSL[u] > 0.0 &&
+            (dirWanted == 1 ? unassignedSL[u] > unassignedOpenPx[u] : unassignedSL[u] < unassignedOpenPx[u]);
+         if(brokerSLProtectsProfit)
+         {
+            // The original losing-side SL is no longer observable. Use the
+            // configured account-risk amount as a conservative denominator;
+            // do not pretend the moved profitable SL was the original risk.
+            g_campaign[idx].initialRiskUSD = AccountInfoDouble(ACCOUNT_EQUITY) * InpNormalRiskPct / 100.0;
+            g_campaign[idx].guaranteeArmed = true;
+            g_campaign[idx].protectedFloorPrice = unassignedSL[u];
+            g_campaign[idx].protectedFloorR = MathMax(InpCampaignGuaranteedFloorR,
+               XAU_ProjectProfitUSD(dirWanted == 1, unassignedOpenPx[u], unassignedSL[u], unassignedVol[u]) /
+               g_campaign[idx].initialRiskUSD);
+            g_campaign[idx].peakR = MathMax(InpCampaignGuaranteeArmR, g_campaign[idx].protectedFloorR);
+         }
+         PrintFormat("CAMPAIGN_RECONCILED_ON_ATTACH | campaignId=%s | direction=%s | entryPrice=%.5f | historyIncomplete=true | "
+                     "brokerSL=%.5f | inferredGuaranteeArmed=%s | pyramidsBlocked=true",
+                     g_campaign[idx].campaignId, dirWanted == 1 ? "BUY" : "SELL", g_campaign[idx].entryPrice,
+                     unassignedSL[u], g_campaign[idx].guaranteeArmed ? "true" : "false");
       }
       int slot = g_campaign[idx].legCount;
       if(slot < 6)
@@ -22551,6 +23198,11 @@ void XAU_CampaignCoreLoop()
    for(int idx = 0; idx < XAU_CAMPAIGN_MAX_SLOTS; idx++)
    {
       if(!g_campaign[idx].active) continue;
+      if(g_campaign[idx].closeRequested || g_campaign[idx].state == CAMPAIGN_EXIT_PENDING)
+      {
+         XAU_Campaign_Finalize(idx, g_campaign[idx].pendingCloseReason);
+         continue;
+      }
       if(!anyLegSeen[idx])
       {
          // No live leg found at all -- the whole campaign closed via broker
@@ -22581,8 +23233,11 @@ void XAU_CampaignCoreLoop()
          g_campaign[idx].state = CAMPAIGN_MATURE_TREND;
       if(prevState != g_campaign[idx].state) g_campaign[idx].lastTransitionTime = TimeCurrent();
 
-      if(indicatorsReady)
-         XAU_Campaign_UpdateProtection(idx, isBuy, curPrice, atr, digits);
+      // Guarantee arming and ratchet are price/P&L invariants and may never be
+      // skipped merely because optional indicators are warming up. Structure
+      // contributes only when ATR is ready inside UpdateProtection().
+      XAU_Campaign_UpdateProtection(idx, isBuy, curPrice, atr, digits);
+      if(g_campaign[idx].state == CAMPAIGN_EXIT_PENDING) continue;
 
       string classification = g_campaign[idx].lastClassification;
       int hostileCount = 0;
@@ -22632,7 +23287,7 @@ void XAU_CampaignCoreLoop()
          }
       }
 
-      if(indicatorsReady && classification != "THESIS_DAMAGED" && classification != "TREND_WARNING" &&
+      if(indicatorsReady && newM5Bar && classification != "THESIS_DAMAGED" && classification != "TREND_WARNING" &&
          classification != "THESIS_INVALIDATED" && classification != "CONFIRMED_DIRECTION_CHANGE" && currentR > 0)
       {
          double close1 = iClose(Symbol(), PERIOD_M5, 1);
@@ -22660,7 +23315,7 @@ string   g_lastPostResetPreviousCampaignId = "";
 //| before a same-direction re-entry is even considered.               |
 //+------------------------------------------------------------------+
 void XAU_PostCampaignReset_Arm(string previousCampaignId, int direction, double realizedR, double peakR,
-                               double exitPrice, string exitReason)
+                               double exitPrice, double originalStopDistance, string exitReason)
 {
    ZeroMemory(g_postCampaignReset);
    g_postCampaignReset.active = true;
@@ -22672,6 +23327,7 @@ void XAU_PostCampaignReset_Arm(string previousCampaignId, int direction, double 
    g_postCampaignReset.exitReason = exitReason;
    g_postCampaignReset.exitTime = TimeCurrent();
    g_postCampaignReset.state = POST_CAMPAIGN_PROFIT_RECORDED;
+   g_postCampaignReset.originalStopDistance = originalStopDistance;
 
    string requiredResetType;
    if(peakR >= InpCampaignVeryLargeWinR) { g_postCampaignReset.requiredRetraceR = InpCampaignVeryLargeWinRetraceR; requiredResetType = "VERY_LARGE_RUN_STRICT_BASE_REQUIRED"; }
@@ -22709,7 +23365,8 @@ void XAU_Campaign_PostResetEvaluate()
    double atr = bufATR[1];
    double curPrice = (g_postCampaignReset.direction == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double distanceFromExit = MathAbs(curPrice - g_postCampaignReset.exitPrice);
-   double retracementR = (atr > 0) ? (distanceFromExit / (atr * InpSLMultiplier)) : 0.0; // ATR-based R proxy -- the closed campaign's own struct (and its exact originalStopDistance) no longer exists post-finalize
+   double retracementR = (g_postCampaignReset.originalStopDistance > 0.0)
+                         ? distanceFromExit / g_postCampaignReset.originalStopDistance : 0.0;
    bool isRetraced = (g_postCampaignReset.direction == 1) ? (curPrice < g_postCampaignReset.exitPrice) : (curPrice > g_postCampaignReset.exitPrice);
    bool valueZoneReached = isRetraced && retracementR >= g_postCampaignReset.requiredRetraceR;
    bool overextended = !isRetraced || retracementR < (g_postCampaignReset.requiredRetraceR * 0.5);
@@ -22791,8 +23448,6 @@ bool XAU_Campaign_PostResetGate(int signal, string &blockReason)
    {
       g_lastEntryWasPostResetReentry = true;
       g_lastPostResetPreviousCampaignId = g_postCampaignReset.previousCampaignId;
-      g_postCampaignReset.active = false;
-      g_postCampaignReset.state = POST_CAMPAIGN_NONE;
       return true;
    }
 
@@ -22800,7 +23455,7 @@ bool XAU_Campaign_PostResetGate(int signal, string &blockReason)
    return false;
 }
 
-#define XAU_CAMPAIGN_STATE_SCHEMA_VERSION 1
+#define XAU_CAMPAIGN_STATE_SCHEMA_VERSION 3
 
 string XAU_Campaign_StateFilePath()
 {
@@ -22819,6 +23474,7 @@ string XAU_Campaign_StateFilePath()
 //+------------------------------------------------------------------+
 void XAU_Campaign_SaveState()
 {
+   if(!g_campaignInstanceOwner) return;
    string path = XAU_Campaign_StateFilePath();
    string tmpPath = path + ".tmp";
    int h = FileOpen(tmpPath, FILE_WRITE | FILE_TXT | FILE_COMMON | FILE_ANSI);
@@ -22839,7 +23495,20 @@ void XAU_Campaign_SaveState()
                 g_campaign[i].guaranteeArmed ? 1 : 0, DoubleToString(g_campaign[i].protectedFloorR, 4),
                 DoubleToString(g_campaign[i].protectedFloorPrice, 5), DoubleToString(g_campaign[i].aggregateRiskUSD, 2),
                 DoubleToString(g_campaign[i].aggregateLots, 4), g_campaign[i].pyramidsAdded,
-                g_campaign[i].entryBOS, g_campaign[i].entryHTF, g_campaign[i].lastClassification);
+                g_campaign[i].entryBOS, g_campaign[i].entryHTF, g_campaign[i].lastClassification,
+                (long)g_campaign[i].lastPyramidEvalTime, (long)g_campaign[i].lastPyramidSignalBar,
+                g_campaign[i].closeRequested ? 1 : 0, g_campaign[i].pendingCloseReason,
+                (long)g_campaign[i].closeRequestedTime, (long)g_campaign[i].lastCloseAttemptTime,
+                g_campaign[i].historyIncomplete ? 1 : 0,
+                (int)g_campaign[i].pyramidEventState, g_campaign[i].pyramidEventSequence,
+                g_campaign[i].pyramidEventId, (long)g_campaign[i].pyramidImpulseBar,
+                DoubleToString(g_campaign[i].pyramidImpulseExtreme, 5),
+                DoubleToString(g_campaign[i].pyramidImpulseDistanceATR, 4),
+                (long)g_campaign[i].pyramidResetBar, g_campaign[i].pyramidResetType,
+                DoubleToString(g_campaign[i].pyramidResetExtreme, 5),
+                (long)g_campaign[i].lastPyramidOpenTime, (long)g_campaign[i].lastPyramidOpenBar,
+                DoubleToString(g_campaign[i].lastPyramidEntryPrice, 5),
+                g_campaign[i].lastContinuationSignalId);
       for(int L = 0; L < g_campaign[i].legCount && L < 6; L++)
          FileWrite(h, XAU_CAMPAIGN_STATE_SCHEMA_VERSION, "LEG", g_campaign[i].positionId, L,
                    g_campaign[i].legs[L].ticket, g_campaign[i].legs[L].legNumber,
@@ -22852,7 +23521,15 @@ void XAU_Campaign_SaveState()
                 g_postCampaignReset.direction, DoubleToString(g_postCampaignReset.realizedR, 4),
                 DoubleToString(g_postCampaignReset.peakR, 4), DoubleToString(g_postCampaignReset.exitPrice, 5),
                 g_postCampaignReset.exitReason, (long)g_postCampaignReset.exitTime, (int)g_postCampaignReset.state,
-                DoubleToString(g_postCampaignReset.requiredRetraceR, 4));
+                DoubleToString(g_postCampaignReset.requiredRetraceR, 4),
+                DoubleToString(g_postCampaignReset.originalStopDistance, 5));
+   FileWrite(h, XAU_CAMPAIGN_STATE_SCHEMA_VERSION, "MATURITY", g_trendMaturity.direction,
+             (int)g_trendMaturity.state, DoubleToString(g_trendMaturity.maturityScore, 4),
+             DoubleToString(g_trendMaturity.sellConfidence, 4), DoubleToString(g_trendMaturity.buyConfidence, 4),
+             DoubleToString(g_trendMaturity.continuationConfidence, 4), DoubleToString(g_trendMaturity.reversalConfidence, 4),
+             (long)g_trendMaturity.directionStartTime, DoubleToString(g_trendMaturity.directionStartPrice, 5),
+             DoubleToString(g_trendMaturity.earlyVelocityATRPerBar, 6), g_trendMaturity.earlyVelocityCaptured ? 1 : 0,
+             (long)g_trendMaturity.lastUpdateBar, (long)g_trendMaturity.confirmedReversalBar);
    FileClose(h);
    ResetLastError();
    if(!FileMove(tmpPath, FILE_COMMON, path, FILE_COMMON | FILE_REWRITE))
@@ -22870,7 +23547,7 @@ void XAU_Campaign_LoadState()
    while(!FileIsEnding(h))
    {
       int schemaVer = (int)FileReadNumber(h);
-      if(schemaVer != XAU_CAMPAIGN_STATE_SCHEMA_VERSION) { FileReadString(h); break; } // unknown schema -- stop rather than misparse
+      if(schemaVer != 1 && schemaVer != 2 && schemaVer != XAU_CAMPAIGN_STATE_SCHEMA_VERSION) { FileReadString(h); break; }
       string rowType = FileReadString(h);
       if(rowType == "CAMPAIGN")
       {
@@ -22904,8 +23581,51 @@ void XAU_Campaign_LoadState()
          g_campaign[idx].entryBOS = (int)FileReadNumber(h);
          g_campaign[idx].entryHTF = (int)FileReadNumber(h);
          g_campaign[idx].lastClassification = FileReadString(h);
-         g_campaign[idx].reconciledFromRestart = true;
-         restoredCampaigns++;
+         if(schemaVer >= 2)
+         {
+            g_campaign[idx].lastPyramidEvalTime = (datetime)FileReadNumber(h);
+            g_campaign[idx].lastPyramidSignalBar = (datetime)FileReadNumber(h);
+            g_campaign[idx].closeRequested = FileReadNumber(h) != 0;
+            g_campaign[idx].pendingCloseReason = FileReadString(h);
+            g_campaign[idx].closeRequestedTime = (datetime)FileReadNumber(h);
+            g_campaign[idx].lastCloseAttemptTime = (datetime)FileReadNumber(h);
+            g_campaign[idx].historyIncomplete = FileReadNumber(h) != 0;
+         }
+         if(schemaVer >= 3)
+         {
+            g_campaign[idx].pyramidEventState = (ENUM_PYRAMID_EVENT_STATE)(int)FileReadNumber(h);
+            g_campaign[idx].pyramidEventSequence = (long)FileReadNumber(h);
+            g_campaign[idx].pyramidEventId = FileReadString(h);
+            g_campaign[idx].pyramidImpulseBar = (datetime)FileReadNumber(h);
+            g_campaign[idx].pyramidImpulseExtreme = StringToDouble(FileReadString(h));
+            g_campaign[idx].pyramidImpulseDistanceATR = StringToDouble(FileReadString(h));
+            g_campaign[idx].pyramidResetBar = (datetime)FileReadNumber(h);
+            g_campaign[idx].pyramidResetType = FileReadString(h);
+            g_campaign[idx].pyramidResetExtreme = StringToDouble(FileReadString(h));
+            g_campaign[idx].lastPyramidOpenTime = (datetime)FileReadNumber(h);
+            g_campaign[idx].lastPyramidOpenBar = (datetime)FileReadNumber(h);
+            g_campaign[idx].lastPyramidEntryPrice = StringToDouble(FileReadString(h));
+            g_campaign[idx].lastContinuationSignalId = FileReadString(h);
+         }
+         else
+         {
+            // Older campaign files have no trustworthy impulse/reset history.
+            // They may be adopted and protected, but never pyramid after restart.
+            g_campaign[idx].pyramidEventState = PYRAMID_IDLE;
+            g_campaign[idx].lastPyramidOpenTime = g_campaign[idx].createdTime;
+            g_campaign[idx].lastPyramidOpenBar = g_campaign[idx].createdTime;
+            g_campaign[idx].lastPyramidEntryPrice = g_campaign[idx].entryPrice;
+            g_campaign[idx].historyIncomplete = true;
+         }
+         g_campaign[idx].reconciledFromRestart = false;
+         if((g_campaign[idx].direction != 1 && g_campaign[idx].direction != -1) ||
+            g_campaign[idx].entryPrice <= 0.0 || g_campaign[idx].initialRiskUSD <= 0.0 ||
+            StringLen(g_campaign[idx].campaignId) == 0)
+         {
+            PrintFormat("CAMPAIGN_STATE_ROW_REJECTED | positionId=%I64u | reason=malformed_required_fields", positionId);
+            ZeroMemory(g_campaign[idx]);
+         }
+         else restoredCampaigns++;
       }
       else if(rowType == "LEG")
       {
@@ -22943,6 +23663,29 @@ void XAU_Campaign_LoadState()
          g_postCampaignReset.exitTime = (datetime)FileReadNumber(h);
          g_postCampaignReset.state = (ENUM_POST_CAMPAIGN_STATE)(int)FileReadNumber(h);
          g_postCampaignReset.requiredRetraceR = StringToDouble(FileReadString(h));
+         if(schemaVer >= 2)
+            g_postCampaignReset.originalStopDistance = StringToDouble(FileReadString(h));
+         if(g_postCampaignReset.direction != 1 && g_postCampaignReset.direction != -1)
+            ZeroMemory(g_postCampaignReset);
+      }
+      else if(rowType == "MATURITY" && schemaVer >= 2)
+      {
+         g_trendMaturity.direction = (int)FileReadNumber(h);
+         g_trendMaturity.state = (ENUM_TREND_LIFECYCLE_STATE)(int)FileReadNumber(h);
+         g_trendMaturity.maturityScore = StringToDouble(FileReadString(h));
+         g_trendMaturity.sellConfidence = StringToDouble(FileReadString(h));
+         g_trendMaturity.buyConfidence = StringToDouble(FileReadString(h));
+         g_trendMaturity.continuationConfidence = StringToDouble(FileReadString(h));
+         g_trendMaturity.reversalConfidence = StringToDouble(FileReadString(h));
+         g_trendMaturity.directionStartTime = (datetime)FileReadNumber(h);
+         g_trendMaturity.directionStartPrice = StringToDouble(FileReadString(h));
+         g_trendMaturity.earlyVelocityATRPerBar = StringToDouble(FileReadString(h));
+         g_trendMaturity.earlyVelocityCaptured = FileReadNumber(h) != 0;
+         g_trendMaturity.lastUpdateBar = (datetime)FileReadNumber(h);
+         g_trendMaturity.confirmedReversalBar = (datetime)FileReadNumber(h);
+         if(g_trendMaturity.direction < -1 || g_trendMaturity.direction > 1 ||
+            g_trendMaturity.state < TREND_STATE_EARLY || g_trendMaturity.state > TREND_STATE_CONFIRMED_REVERSAL)
+            ZeroMemory(g_trendMaturity);
       }
    }
    FileClose(h);
@@ -24958,13 +25701,13 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    // _ai_account_bucket() server-side).
    string aiAccountId = IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN));
    string body = StringFormat(
-      "{\"account_id\":\"%s\",\"price\":%.2f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"rsi\":%.1f,\"stoch\":%.1f,\"mom\":%.2f,\"atr\":%.2f,"
+      "{\"experiment_namespace\":\"CAMPAIGNEXP1\",\"build_hash\":\"%s\",\"magic_number\":%d,\"account_id\":\"%s\",\"price\":%.2f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"rsi\":%.1f,\"stoch\":%.1f,\"mom\":%.2f,\"atr\":%.2f,"
       "\"h1_trend\":\"%s\",\"htf_consensus\":\"%s\",\"spread\":%.0f,\"setup\":\"%s\",\"regime\":\"%s\","
       "\"session\":\"%s\",\"session_quality\":%.2f,\"open_positions\":%d,\"basket_float_pl\":%.2f,"
       "\"recent_wins\":%d,\"recent_losses\":%d,\"account_equity\":%.2f,\"daily_pct\":%.2f,"
       "\"grade\":\"%s\",\"setup_score\":%.2f,\"combined_score\":%.2f,\"signature\":\"%s\","
       "\"recent_candles\":\"%s\"}",
-      aiAccountId, price, emaF, emaS, rsi, stoch, mom, atr,
+      XAUAI_BUILD_HASH, InpMagicNumber, aiAccountId, price, emaF, emaS, rsi, stoch, mom, atr,
       h1Dir, htfConsensusStr, spread, setup, regime,
       sessionName, sessQ, openPositions, basketFloat,
       recentWins10, recentLosses10, equity, dailyPct,
@@ -25185,13 +25928,13 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
    else sessionNow = "OFF_HOURS";
 
    string body = StringFormat(
-      "{\"account_id\":\"%s\",\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,"
+      "{\"experiment_namespace\":\"CAMPAIGNEXP1\",\"build_hash\":\"%s\",\"magic_number\":%d,\"account_id\":\"%s\",\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,"
       "\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,"
       "\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f,\"thesis\":\"%s\",\"invalidation\":\"%s\","
       "\"confidence\":%d,\"peak_profit\":%.2f,\"pending_exit_reason\":\"%s\",\"regime\":\"%s\","
       "\"r_mult\":%.2f,\"htf_consensus\":\"%s\",\"session\":\"%s\","
       "\"daily_pct\":%.2f,\"open_positions\":%d,\"setup_name\":\"%s\"}",
-      IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)), dir, entry, current, profit,
+      XAUAI_BUILD_HASH, InpMagicNumber, IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)), dir, entry, current, profit,
       lots, rsi, emaF, emaS, atr,
       minsOpen, sl, tp, thesisEsc, invalEsc,
       currentTradeConfidence, peakProfit, pendingExitReason, regime,
@@ -25370,7 +26113,7 @@ void SavePatterns()
       FileClose(h);
    }
    // Cloud save (skip in backtest)
-   if(!InpBacktestMode && StringLen(InpServerURL) >= 10)
+   if(InpExperimentBackendLearning && !InpBacktestMode && StringLen(InpServerURL) >= 10)
    {
       string url = InpServerURL + "/api/ml/patterns/save";
       string headers = "Content-Type: application/json\r\n";
@@ -25409,7 +26152,7 @@ void LoadPatterns()
    }
 
    // Try cloud first (skip in backtest)
-   if(!InpBacktestMode && StringLen(InpServerURL) >= 10)
+   if(InpExperimentBackendLearning && !InpBacktestMode && StringLen(InpServerURL) >= 10)
    {
       string url = InpServerURL + "/api/ml/patterns/load";
       string headers = "Content-Type: application/json\r\n";
@@ -25762,7 +26505,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
             Print(StringFormat("COMMITTEE-MEMORY: stored pattern=%s dir=%s conf=%d%% rMult=%.2f P/L=$%.2f aiVerdict=%s",
                                memPattern, memDirLabel, memConf, rMult, profit, g_lastAIVerdict_ForMemory));
          // v6.3.8 Upgrade 5: send AI outcome feedback to backend
-         if(!InpBacktestMode && StringLen(InpServerURL) >= 10 && StringLen(g_lastAIVerdict_ForMemory) > 0)
+         if(InpExperimentBackendLearning && !InpBacktestMode && StringLen(InpServerURL) >= 10 && StringLen(g_lastAIVerdict_ForMemory) > 0)
          {
             string outcome = "";
             if(g_lastAIVerdict_ForMemory == "ALLOW" || g_lastAIVerdict_ForMemory == "ALLOW_LOW_CONV")
@@ -25779,7 +26522,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                StringReplace(fbReasonEsc, "\"", "'");
                StringReplace(fbReasonEsc, "\n", " ");
                string fbBody = StringFormat(
-                  "{\"trade_id\":\"%I64u\",\"ai_verdict\":\"%s\",\"ai_confidence\":%d,"
+                  "{\"experiment_namespace\":\"CAMPAIGNEXP1\",\"trade_id\":\"%I64u\",\"ai_verdict\":\"%s\",\"ai_confidence\":%d,"
                   "\"ai_reason\":\"%s\",\"outcome\":\"%s\",\"r_multiple\":%.2f,"
                   "\"strategy\":\"%s\",\"session\":\"%s\",\"regime\":\"%s\","
                   "\"direction\":\"%s\"}",
@@ -26831,9 +27574,9 @@ void XAU_SendMemoryRecordToBackend(string eventName, string strategy, int direct
                                    string lotQuality, bool shouldHoldLonger,
                                    bool shouldCloseEarlier, string whatAIShouldRemember)
 {
-   if(InpBacktestMode || StringLen(InpServerURL) < 10) return;
+   if(!InpExperimentBackendLearning || InpBacktestMode || StringLen(InpServerURL) < 10) return;
    string body = StringFormat(
-      "{\"event\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"ea_version\":\"%s\",\"build_hash\":\"%s\",\"input_hash\":\"%s\","
+      "{\"experiment_namespace\":\"CAMPAIGNEXP1\",\"event\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"ea_version\":\"%s\",\"build_hash\":\"%s\",\"input_hash\":\"%s\","
       "\"symbol\":\"%s\",\"timeframe\":\"M5\",\"magic_number\":%d,\"session\":\"%s\",\"strategy\":\"%s\",\"direction\":\"%s\","
       "\"entry_price\":%.2f,\"exit_price\":%.2f,\"lot_size\":%.2f,\"grade\":\"%s\",\"confidence\":%d,"
       "\"market_regime\":\"%s\",\"news_state\":\"%s\",\"spread_state\":\"%s\",\"spread_points\":%.0f,\"htf_trend\":\"%s\","
@@ -27379,7 +28122,7 @@ string XAU_TradeBrainFile()
 // that produced this change.
 string XAU_TimingProofFile()
 {
-   return "XAUAI_TimingProof_" + Symbol() + ".csv";
+   return "XAUAI_TimingProof_" + Symbol() + "_CAMPAIGNEXP1.csv";
 }
 
 void XAU_AppendTimingProof(XAU_TimingProofRecord &r, ulong thesisId,
@@ -27452,7 +28195,7 @@ string XAU_LearningReportFile()
 
 string XAU_EntryQualityFile()
 {
-   return "XAUAI_EntryQualityReview_" + Symbol() + ".csv";
+   return "XAUAI_EntryQualityReview_" + Symbol() + "_CAMPAIGNEXP1.csv";
 }
 
 string XAU_TradingIntelCsvFile()
@@ -31526,7 +32269,7 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
       if(TimeCurrent() - lastCooldownPassLog >= 60)
       {
          int secs = (int)(pg_pauseUntil - TimeCurrent());
-         PrintFormat("ADAPTIVE_COOLDOWN_PASS: %s grade allowed | %d losses | %d:%02d remaining | lot reduction active via selective mode",
+         PrintFormat("ADAPTIVE_COOLDOWN_PASS: %s grade allowed | %d losses | %d:%02d remaining | FULL_RISK_BINARY quality gate only (no lot reduction)",
                      grade, pg_consecutiveLosses, secs/60, secs%60);
          lastCooldownPassLog = TimeCurrent();
       }
@@ -32057,8 +32800,8 @@ void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
 // v6.3.8 UPGRADE 1 — TradeBrain disk persistence
 // File: MQL5/Files/XAUAI_TradeBrain_v1.csv (common files folder)
 // ============================================================
-#define TRADEBBRAIN_FILE  "XAUAI_TradeBrain_v1.csv"
-#define TRADEBBRAIN_HEADER "#XAUAI_TradeBrain_v1"
+#define TRADEBBRAIN_FILE  "XAUAI_TradeBrain_v1_CAMPAIGNEXP1.csv"
+#define TRADEBBRAIN_HEADER "#XAUAI_TradeBrain_v1_CAMPAIGNEXP1"
 
 void SaveTradeBrainMemory()
 {
@@ -32953,7 +33696,7 @@ string  g_cloudSigIds[];
 // v5.2.0 — persistence file. Without this, an EA restart/recompile wipes the
 // in-memory map, so when the master later closes a position the mirrored cloud
 // trades stay open forever. Persist after every Add/Pop and load on OnInit.
-#define CLOUD_MAP_FILE "xauai_cloud_map.csv"
+#define CLOUD_MAP_FILE "xauai_cloud_map_CAMPAIGNEXP1.csv"
 
 void CloudMapSave()
 {
@@ -33402,9 +34145,14 @@ void BotMonitorPollCommands()
    else if(action == "CLOSE_ALL_TRADES")
    {
       int before = CountMyPositions();
-      CloseAll("REMOTE_COMMAND_CLOSE_ALL");
+      if(XAU_AdaptiveCampaignOwnsPosition())
+      {
+         for(int ci = 0; ci < XAU_CAMPAIGN_MAX_SLOTS; ci++)
+            if(g_campaign[ci].active) XAU_Campaign_Finalize(ci, "REMOTE_COMMAND_CLOSE_ALL");
+      }
+      else CloseAll("REMOTE_COMMAND_CLOSE_ALL");
       status = "EXECUTED";
-      result = StringFormat("Close-all requested; positions before command=%d.", before);
+      result = StringFormat("Retry-safe close-all requested; positions before command=%d.", before);
    }
    else if(action == "FORCE_CLOSE_TRADE")
    {

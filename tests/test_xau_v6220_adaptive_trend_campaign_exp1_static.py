@@ -149,10 +149,10 @@ def test_no_fixed_1r_hard_close_reachable_for_campaign_positions():
 
 def test_true_emergency_paths_remain_unconditional():
     exp = read(EXP)
-    # weekend / prop-firm / equity-protect / weekly-target / remote-close-all
-    # must still be reachable and NOT gated behind campaign ownership.
-    for marker in ("WEEKEND_CLOSE", "PROP_FIRM_LOSS_LOCK", "EQUITY_PROTECT", "WEEKLY_TARGET_HIT"):
+    # Only survival/emergency overrides may bypass campaign ownership.
+    for marker in ("WEEKEND_CLOSE", "PROP_FIRM_LOSS_LOCK", "EQUITY_PROTECT"):
         assert marker in exp
+    assert 'CloseAll("WEEKLY_TARGET_HIT")' not in exp
     assert "bool XAU_EmergencyLossCloseAllowed(string ctx)" in exp
     assert "bool SafePositionClose(ulong ticket, string ctx = \"\")" in exp
 
@@ -193,7 +193,7 @@ def test_open_trade_passes_the_actual_computed_lots_and_risk_into_campaign_creat
     fn = body(exp, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
     idx = fn.index("XAU_CampaignCreate(")
     call = fn[idx:idx + 300]
-    assert "lots" in call and "riskAmount" in call
+    assert "confirmedLots" in call and "confirmedRiskUSD" in call
     assert re.search(r"XAU_CampaignCreate\([^)]*,\s*0\.\d+\s*,", call) is None
 
 
@@ -221,7 +221,7 @@ def test_pyramid_lot_normalization_blocks_rather_than_rounds_up():
     exp = read(EXP)
     fn = body(exp, "void XAU_Campaign_EvaluatePyramid(int idx, bool isBuy, double curPrice, double atr,")
     assert "NormalizeVolumeDown(proposedLotRaw)" in fn
-    assert 'reason = "PROPOSED_LOT_BELOW_BROKER_MINIMUM";' in fn
+    assert 'proposedLot <= 0.0) blockReason = "TOO_CLOSE:LOT_BELOW_BROKER_MINIMUM"' in fn
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +232,7 @@ def test_no_pyramid_while_campaign_losing():
     exp = read(EXP)
     fn = body(exp, "void XAU_Campaign_EvaluatePyramid(int idx, bool isBuy, double curPrice, double atr,")
     assert "campaignLosing = g_campaign[idx].currentR <= 0" in fn
-    assert 'reason = "CAMPAIGN_NOT_PROFITABLE";' in fn
+    assert 'campaignLosing) blockReason = "NOT_PROTECTED:CAMPAIGN_LOSING"' in fn
 
 
 def test_no_pyramid_at_severe_overextension():
@@ -256,7 +256,7 @@ def test_aggregate_risk_ceiling_cannot_be_bypassed():
     fn = body(exp, "void XAU_Campaign_EvaluatePyramid(int idx, bool isBuy, double curPrice, double atr,")
     assert "InpCampaignMaxAggregateRiskPct" in fn
     assert "aggregateRiskOK" in fn
-    idx = fn.index("decision = \"ADD\";")
+    idx = fn.index("pyramidEventState = PYRAMID_ADD_APPROVED")
     gate_block = fn[:idx]
     assert "aggregateRiskOK" in gate_block  # aggregate check happens before any ADD decision
 
@@ -323,7 +323,7 @@ def test_geometry_blocked_sl_retains_internal_floor_and_can_force_close_on_breac
     fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double atr, int digits)")
     assert "g_campaign[idx].floorGeometryBlocked = anyRejected;" in fn
     assert "breached" in fn
-    assert "XAU_Campaign_Finalize(idx, \"INTERNAL_FLOOR_BREACH_GEOMETRY_BLOCKED\");" in fn
+    assert "XAU_Campaign_Finalize(idx, \"PROTECTED_FLOOR_BREACH\");" in fn
 
 
 def test_protection_update_reuses_safe_modify_sl_not_a_raw_ordersend():
@@ -359,7 +359,7 @@ def test_protection_applies_the_shared_floor_to_every_active_leg():
     exp = read(EXP)
     fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double atr, int digits)")
     assert "for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)" in fn
-    assert "PositionSelectByTicket(legTicket)" in fn
+    assert "XAU_Campaign_SelectByIdentifier(legIdentifier, legTicket)" in fn
 
 
 def test_reduce_latest_leg_closes_that_legs_own_ticket_in_full():
@@ -373,7 +373,8 @@ def test_finalize_closes_every_active_leg_not_a_single_lookup():
     exp = read(EXP)
     fn = body(exp, "void XAU_Campaign_Finalize(int idx, string exitReason)")
     assert "for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)" in fn
-    assert "SafePositionClose(g_campaign[idx].legs[L].ticket," in fn
+    assert "SafePositionClose(legTicket," in fn
+    assert "if(anyStillLive)" in fn
 
 
 def test_core_loop_aggregates_profit_across_all_legs_before_computing_r():

@@ -114,10 +114,12 @@ def test_confirmed_reversal_requires_two_independent_structural_signals():
 def test_direction_flip_only_happens_inside_the_confirmed_reversal_branch():
     exp = read(EXP)
     fn = body(exp, UPDATE_FN_SIG)
-    idx = fn.index("if(newState == TREND_STATE_CONFIRMED_REVERSAL)")
-    flip_block = fn[idx:idx + 500]
+    idx = fn.index("if(g_trendMaturity.state == TREND_STATE_CONFIRMED_REVERSAL")
+    flip_block = fn[idx:idx + 900]
     assert "g_trendMaturity.direction = newDir;" in flip_block
-    assert "int newDir = -direction;" in flip_block
+    assert "int newDir = -g_trendMaturity.direction;" in flip_block
+    # the confirmed state remains observable for one full closed-bar cycle
+    assert "bar0 > g_trendMaturity.confirmedReversalBar" in flip_block
 
 
 def test_update_runs_only_once_per_closed_bar():
@@ -285,29 +287,28 @@ def test_post_reset_maturity_raises_the_bar_never_cancels_by_itself():
 
 def test_config_validation_requires_ascending_score_thresholds():
     exp = read(EXP)
-    fn = body(exp, "void XAU_ValidateMaturityConfig()")
+    fn = body(exp, "bool XAU_ValidateMaturityConfig()")
     assert "InpMaturityScoreDevelopingThreshold >= InpMaturityScoreHealthyThreshold" in fn
     assert "InpMaturityScoreMatureThreshold >= InpMaturityScoreLateThreshold" in fn
 
 
 def test_config_validation_requires_ascending_reversal_thresholds():
     exp = read(EXP)
-    fn = body(exp, "void XAU_ValidateMaturityConfig()")
+    fn = body(exp, "bool XAU_ValidateMaturityConfig()")
     assert "InpMaturityExhaustionRiskThreshold >= InpMaturityTransitionThreshold" in fn
     assert "InpMaturityTransitionThreshold >= InpMaturityEarlyReversalThreshold" in fn
 
 
 def test_config_validation_called_from_oninit():
     exp = read(EXP)
-    init_fn = body(exp, "int OnInit()")
-    assert "XAU_ValidateMaturityConfig();" in init_fn
+    assert "if(!XAU_ValidateMaturityConfig()) return INIT_PARAMETERS_INCORRECT;" in exp
 
 
 def test_update_called_unconditionally_from_ontick():
     exp = read(EXP)
-    idx = exp.index("XAU_RExitCoreLoop();")
-    update_idx = exp.index("XAU_TrendMaturity_Update();", idx)
-    gap = exp[idx:update_idx]
+    update_idx = exp.index("XAU_TrendMaturity_Update();")
+    core_idx = exp.index("XAU_RExitCoreLoop();", update_idx)
+    gap = exp[update_idx:core_idx]
     assert gap.count("\n") < 10
 
 
