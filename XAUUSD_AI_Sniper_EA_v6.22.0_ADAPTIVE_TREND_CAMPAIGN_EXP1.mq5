@@ -21347,10 +21347,18 @@ void XAU_ValidateCampaignConfig()
                StringLen(why) > 0 ? " | invalidReason=" : "", why);
 }
 
+// HEDGING MODE: every leg (initial entry + each pyramid add) is its own
+// independent broker position with its own positionId -- match against ANY
+// active leg of ANY campaign, not just the campaign's identity field (which
+// only ever holds the initial leg's id).
 int XAU_Campaign_FindIdx(ulong positionId)
 {
    for(int i = 0; i < XAU_CAMPAIGN_MAX_SLOTS; i++)
-      if(g_campaign[i].active && g_campaign[i].positionId == positionId) return i;
+   {
+      if(!g_campaign[i].active) continue;
+      for(int L = 0; L < g_campaign[i].legCount && L < 6; L++)
+         if(g_campaign[i].legs[L].active && g_campaign[i].legs[L].ticket == positionId) return i;
+   }
    return -1;
 }
 
@@ -21484,7 +21492,7 @@ double XAU_Campaign_StructureFloorPrice(int direction, double atr)
 //| the broker SL, keeps an internal floor and force-closes if price   |
 //| crosses it before the broker accepts the modification.             |
 //+------------------------------------------------------------------+
-void XAU_Campaign_UpdateProtection(int idx, ulong ticket, bool isBuy, double curPrice, double curSL, double atr, int digits)
+void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double atr, int digits)
 {
    double peakR = g_campaign[idx].peakR;
    double prevFloorR = g_campaign[idx].protectedFloorR;
@@ -21537,9 +21545,7 @@ void XAU_Campaign_UpdateProtection(int idx, ulong ticket, bool isBuy, double cur
    double desiredSL = isBuy ? NormalizeDouble(g_campaign[idx].entryPrice + lockDist, digits)
                              : NormalizeDouble(g_campaign[idx].entryPrice - lockDist, digits);
 
-   // Sanity + ratchet at the price level too (never loosen the broker SL).
    bool floorSane = isBuy ? (desiredSL < curPrice) : (desiredSL > curPrice);
-   bool floorRatchet = (curSL == 0) ? true : (isBuy ? desiredSL > curSL : desiredSL < curSL);
 
    long stopsLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
    long freezeLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
@@ -21547,52 +21553,57 @@ void XAU_Campaign_UpdateProtection(int idx, ulong ticket, bool isBuy, double cur
    double minDist = MathMax(MathMax(stopsLevel, freezeLevel) * point, point * 10);
    bool geometryAllowed = isBuy ? (curPrice - desiredSL >= minDist) : (desiredSL - curPrice >= minDist);
 
-   string decision = "HOLD_SL";
-   if(floorSane && floorRatchet && geometryAllowed)
+   // HEDGING MODE (confirmed live on both this experiment's demo account and
+   // the production VPS account -- there is no netting merge to rely on):
+   // every leg is an independent broker position with its own SL field, so
+   // the shared campaign floor must be applied to EACH active leg's own
+   // ticket individually rather than a single shared position.
+   bool anyMoved = false, anyRejected = false;
+   for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)
    {
-      PrintFormat("CAMPAIGN_SL_EVALUATION | campaignId=%s | peakR=%.3f | currentR=%.3f | originalSL=%.5f | "
-                  "currentBrokerSL=%.5f | minimumGuaranteeFloorR=%.2f | peakShareFloorR=%.3f | structureFloorR=%.3f | "
-                  "ATRRoom=%.2f | desiredSL=%.5f | geometryAllowed=true | decision=MOVE_SL | reason=%s",
-                  g_campaign[idx].campaignId, peakR, g_campaign[idx].currentR, g_campaign[idx].invalidationPrice,
-                  curSL, InpCampaignGuaranteedFloorR, newFloorR, structureFloorR, InpCampaignStructureATRBuffer,
-                  desiredSL, reason);
-      if(SafeModifySL(ticket, desiredSL, 0, isBuy, curPrice, "CAMPAIGN_FLOOR"))
+      if(!g_campaign[idx].legs[L].active) continue;
+      ulong legTicket = g_campaign[idx].legs[L].ticket;
+      if(!PositionSelectByTicket(legTicket)) continue;
+      double legCurSL = PositionGetDouble(POSITION_SL);
+      bool floorRatchet = (legCurSL == 0) ? true : (isBuy ? desiredSL > legCurSL : desiredSL < legCurSL);
+      if(!floorSane || !floorRatchet) continue; // this leg's SL is already at/beyond the floor
+
+      if(!geometryAllowed) { anyRejected = true; continue; }
+
+      if(SafeModifySL(legTicket, desiredSL, 0, isBuy, curPrice, "CAMPAIGN_FLOOR"))
       {
-         PrintFormat("CAMPAIGN_SL_MOVED | campaignId=%s | previousSL=%.5f | newSL=%.5f | protectedFloorR=%.3f | "
-                     "structureReference=%.5f | ATRBuffer=%.2f | reason=%s",
-                     g_campaign[idx].campaignId, curSL, desiredSL, newFloorR, structureFloorR,
-                     InpCampaignStructureATRBuffer, reason);
-         g_campaign[idx].protectedFloorPrice = desiredSL;
-         g_campaign[idx].floorGeometryBlocked = false;
-         decision = "MOVE_SL";
+         anyMoved = true;
+         PrintFormat("CAMPAIGN_SL_MOVED | campaignId=%s | leg=%d | ticket=%I64u | previousSL=%.5f | newSL=%.5f | "
+                     "protectedFloorR=%.3f | structureReference=%.5f | ATRBuffer=%.2f | reason=%s",
+                     g_campaign[idx].campaignId, L, legTicket, legCurSL, desiredSL, newFloorR,
+                     structureFloorR, InpCampaignStructureATRBuffer, reason);
       }
       else
       {
-         PrintFormat("CAMPAIGN_SL_MOVE_REJECTED | campaignId=%s | desiredSL=%.5f | brokerSL=%.5f | retcode=%d | "
-                     "freezeLevel=%d | stopsLevel=%d | internalFloorR=%.3f | retryScheduled=true",
-                     g_campaign[idx].campaignId, desiredSL, curSL, (int)trade.ResultRetcode(),
+         anyRejected = true;
+         PrintFormat("CAMPAIGN_SL_MOVE_REJECTED | campaignId=%s | leg=%d | ticket=%I64u | desiredSL=%.5f | brokerSL=%.5f | "
+                     "retcode=%d | freezeLevel=%d | stopsLevel=%d | internalFloorR=%.3f | retryScheduled=true",
+                     g_campaign[idx].campaignId, L, legTicket, desiredSL, legCurSL, (int)trade.ResultRetcode(),
                      (int)freezeLevel, (int)stopsLevel, newFloorR);
-         g_campaign[idx].floorGeometryBlocked = true;
-         decision = "INTERNAL_FLOOR_ONLY";
       }
    }
-   else if(!geometryAllowed && floorRatchet)
-   {
-      g_campaign[idx].floorGeometryBlocked = true;
-      decision = "INTERNAL_FLOOR_ONLY";
-      PrintFormat("CAMPAIGN_SL_EVALUATION | campaignId=%s | peakR=%.3f | currentR=%.3f | originalSL=%.5f | "
-                  "currentBrokerSL=%.5f | minimumGuaranteeFloorR=%.2f | peakShareFloorR=%.3f | structureFloorR=%.3f | "
-                  "ATRRoom=%.2f | desiredSL=%.5f | geometryAllowed=false | decision=INTERNAL_FLOOR_ONLY | reason=broker_stops_level_too_close",
-                  g_campaign[idx].campaignId, peakR, g_campaign[idx].currentR, g_campaign[idx].invalidationPrice,
-                  curSL, InpCampaignGuaranteedFloorR, newFloorR, structureFloorR, InpCampaignStructureATRBuffer, desiredSL);
-   }
 
+   PrintFormat("CAMPAIGN_SL_EVALUATION | campaignId=%s | peakR=%.3f | currentR=%.3f | originalSL=%.5f | "
+               "minimumGuaranteeFloorR=%.2f | peakShareFloorR=%.3f | structureFloorR=%.3f | ATRRoom=%.2f | "
+               "desiredSL=%.5f | geometryAllowed=%s | decision=%s | reason=%s",
+               g_campaign[idx].campaignId, peakR, g_campaign[idx].currentR, g_campaign[idx].invalidationPrice,
+               InpCampaignGuaranteedFloorR, newFloorR, structureFloorR, InpCampaignStructureATRBuffer,
+               desiredSL, geometryAllowed ? "true" : "false",
+               anyMoved ? "MOVE_SL" : (anyRejected ? "INTERNAL_FLOOR_ONLY" : "HOLD_SL"), reason);
+
+   g_campaign[idx].floorGeometryBlocked = anyRejected;
+   g_campaign[idx].protectedFloorPrice = desiredSL;
    g_campaign[idx].protectedFloorR = newFloorR;
 
-   // Internal-floor-breach forced close: if the broker SL could not be placed
-   // at the desired protected level, and price has now crossed that internal
-   // floor, issue a retry-safe market close rather than let a genuinely
-   // guaranteed campaign finish worse than its protected floor.
+   // Internal-floor-breach forced close: if ANY leg's broker SL could not be
+   // placed at the desired protected level, and price has now crossed that
+   // internal floor, close the whole campaign (retry-safe, per leg) rather
+   // than let a genuinely guaranteed campaign finish worse than its floor.
    if(g_campaign[idx].floorGeometryBlocked)
    {
       bool breached = isBuy ? (curPrice <= desiredSL) : (curPrice >= desiredSL);
@@ -21670,7 +21681,7 @@ string XAU_Campaign_ClassifyMarket(int idx, bool isBuy, double close1, double op
 //| oldest-preserved -- the position's average entry price will shift  |
 //| toward the surviving (earlier, better) legs as a result.           |
 //+------------------------------------------------------------------+
-void XAU_Campaign_ReduceLatestLeg(int idx, ulong ticket, string deteriorationEvidence)
+void XAU_Campaign_ReduceLatestLeg(int idx, string deteriorationEvidence)
 {
    if(g_campaign[idx].legCount <= 1) return; // nothing but the original entry left
    int latestIdx = -1;
@@ -21678,20 +21689,22 @@ void XAU_Campaign_ReduceLatestLeg(int idx, ulong ticket, string deteriorationEvi
       if(g_campaign[idx].legs[i].active) { latestIdx = i; break; }
    if(latestIdx < 0) return;
 
-   double reduceLots = g_campaign[idx].legs[latestIdx].lots;
-   double liveLots = PositionGetDouble(POSITION_VOLUME);
-   reduceLots = MathMin(reduceLots, liveLots - SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN));
-   if(reduceLots <= 0) return;
+   ulong legTicket = g_campaign[idx].legs[latestIdx].ticket;
+   double legProfit = 0.0;
+   if(PositionSelectByTicket(legTicket))
+      legProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
-   PrintFormat("CAMPAIGN_LATE_LEG_REDUCTION | campaignId=%s | ticket=%I64u | legNumber=%d | legProfit=unavailable_netted | "
+   // HEDGING MODE: this leg is its own independent position -- close it in
+   // full, exactly (no netting-partial-close approximation needed).
+   PrintFormat("CAMPAIGN_LATE_LEG_REDUCTION | campaignId=%s | ticket=%I64u | legNumber=%d | legProfit=%.2f | "
                "campaignPeakR=%.3f | campaignCurrentR=%.3f | deteriorationEvidence=%s | reason=reduce_latest_leg_preserve_original_entry",
-               g_campaign[idx].campaignId, ticket, g_campaign[idx].legs[latestIdx].legNumber,
+               g_campaign[idx].campaignId, legTicket, g_campaign[idx].legs[latestIdx].legNumber, legProfit,
                g_campaign[idx].peakR, g_campaign[idx].currentR, deteriorationEvidence);
 
-   if(SafePositionClosePartial(ticket, reduceLots, "CAMPAIGN_LATE_LEG_REDUCTION:" + deteriorationEvidence))
+   if(SafePositionClose(legTicket, "CAMPAIGN_LATE_LEG_REDUCTION:" + deteriorationEvidence))
    {
       g_campaign[idx].legs[latestIdx].active = false;
-      g_campaign[idx].aggregateLots -= reduceLots;
+      g_campaign[idx].aggregateLots -= g_campaign[idx].legs[latestIdx].lots;
       g_campaign[idx].aggregateRiskUSD -= g_campaign[idx].legs[latestIdx].riskUSD;
    }
 }
@@ -21722,15 +21735,13 @@ void XAU_Campaign_Finalize(int idx, string exitReason)
                weightedEntry, peakR, realizedR, exitReason, thesisInvalidated ? "true" : "false",
                directionChanged ? "true" : "false");
 
-   ulong liveTicket = g_campaign[idx].positionId;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   // HEDGING MODE: the campaign may own several independent leg positions
+   // (initial entry + pyramid adds) -- close every one still active, not
+   // just a single position looked up by the campaign's identity field.
+   for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)
    {
-      if(!posInfo.SelectByIndex(i)) continue;
-      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
-      if(posInfo.Identifier() != g_campaign[idx].positionId) continue;
-      liveTicket = posInfo.Ticket();
-      SafePositionClose(liveTicket, "CAMPAIGN_CLOSED:" + exitReason);
-      break;
+      if(!g_campaign[idx].legs[L].active) continue;
+      SafePositionClose(g_campaign[idx].legs[L].ticket, "CAMPAIGN_CLOSED:" + exitReason);
    }
 
    // Only a genuinely profitable, thesis-intact close (not an emergency/
@@ -21829,10 +21840,19 @@ void XAU_Campaign_EvaluatePyramid(int idx, bool isBuy, double curPrice, double a
    }
 
    double fillPrice = trade.ResultPrice() > 0 ? trade.ResultPrice() : curPrice;
+   // HEDGING MODE: this add is its own independent position, not a merge
+   // onto the original ticket -- resolve its actual position identifier the
+   // same way OpenTrade() does for the initial leg (deal -> DEAL_POSITION_ID,
+   // falling back to the order ticket), never the raw deal ticket itself.
+   ulong addDealTicket = trade.ResultDeal();
+   ulong addPositionId = 0;
+   if(addDealTicket > 0 && HistoryDealSelect(addDealTicket))
+      addPositionId = (ulong)HistoryDealGetInteger(addDealTicket, DEAL_POSITION_ID);
+   if(addPositionId == 0) addPositionId = trade.ResultOrder();
    int slotIdx = g_campaign[idx].legCount;
    if(slotIdx < 6)
    {
-      g_campaign[idx].legs[slotIdx].ticket = trade.ResultDeal();
+      g_campaign[idx].legs[slotIdx].ticket = addPositionId;
       g_campaign[idx].legs[slotIdx].legNumber = legNumber;
       g_campaign[idx].legs[slotIdx].lots = proposedLot;
       g_campaign[idx].legs[slotIdx].entryPrice = fillPrice;
@@ -21862,6 +21882,17 @@ datetime g_campaignLastClassifiedBar = 0;
 //| early return elsewhere in OnTick(), matching the same guarantee    |
 //| the R-exit manager relied on.                                      |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| HEDGING MODE (confirmed live on both this experiment's demo        |
+//| account and the production VPS account -- there is no netting      |
+//| merge to rely on): every pyramid add opens a genuinely independent |
+//| broker position with its own ticket/positionId. This loop is       |
+//| therefore two passes: (1) scan every live position with our magic  |
+//| and attribute it to its owning campaign leg, aggregating profit    |
+//| across all of that campaign's legs; (2) manage each campaign once  |
+//| on the AGGREGATE, never on a single leg in isolation -- exactly    |
+//| the "protected floor applies to the whole basket" requirement.     |
+//+------------------------------------------------------------------+
 void XAU_CampaignCoreLoop()
 {
    bool indicatorsReady = (ArraySize(bufATR) >= 2 && bufATR[1] > 0 &&
@@ -21870,66 +21901,132 @@ void XAU_CampaignCoreLoop()
    double atr = indicatorsReady ? bufATR[1] : 0.0;
    bool newM5Bar = (iTime(Symbol(), PERIOD_M5, 0) != g_campaignLastClassifiedBar);
 
-   bool sawLivePosition[XAU_CAMPAIGN_MAX_SLOTS];
-   for(int s = 0; s < XAU_CAMPAIGN_MAX_SLOTS; s++) sawLivePosition[s] = false;
+   double aggProfit[XAU_CAMPAIGN_MAX_SLOTS];
+   bool   anyLegSeen[XAU_CAMPAIGN_MAX_SLOTS];
+   double repCurPrice[XAU_CAMPAIGN_MAX_SLOTS];
+   for(int s = 0; s < XAU_CAMPAIGN_MAX_SLOTS; s++) { aggProfit[s] = 0.0; anyLegSeen[s] = false; repCurPrice[s] = 0.0; }
 
+   ulong    unassignedTicket[16];
+   bool     unassignedIsBuy[16];
+   double   unassignedVol[16];
+   double   unassignedOpenPx[16];
+   double   unassignedSL[16];
+   datetime unassignedTime[16];
+   int unassignedCount = 0;
+
+   // ---- Pass 1: attribute every live campaign-magic position to its owner.
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(!posInfo.SelectByIndex(i)) continue;
       if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
 
       ulong positionId = posInfo.Identifier();
-      ulong ticket = posInfo.Ticket();
       bool isBuy = posInfo.PositionType() == POSITION_TYPE_BUY;
-      double curPrice = posInfo.PriceCurrent();
-      double curSL = posInfo.StopLoss();
       double profit = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
 
       int idx = XAU_Campaign_FindIdx(positionId);
       if(idx < 0)
       {
-         // Restart/attach-time reconciliation: a live campaign-magic position
-         // exists with no in-memory record (terminal/EA restart). Adopt it
-         // conservatively -- state persistence (XAU_Campaign_LoadState, called
-         // from OnInit) should normally have already restored this; this path
-         // only fires if that failed or this is a position opened outside the
-         // campaign flow.
+         if(unassignedCount < 16)
+         {
+            unassignedTicket[unassignedCount]  = positionId;
+            unassignedIsBuy[unassignedCount]   = isBuy;
+            unassignedVol[unassignedCount]     = posInfo.Volume();
+            unassignedOpenPx[unassignedCount]  = posInfo.PriceOpen();
+            unassignedSL[unassignedCount]      = posInfo.StopLoss();
+            unassignedTime[unassignedCount]    = posInfo.Time();
+            unassignedCount++;
+         }
+         continue;
+      }
+      anyLegSeen[idx] = true;
+      aggProfit[idx] += profit;
+      repCurPrice[idx] = posInfo.PriceCurrent();
+   }
+
+   // ---- Restart/attach-time reconciliation: a live campaign-magic position
+   // exists with no in-memory record (terminal/EA restart, or
+   // XAU_Campaign_LoadState failed to restore it). Group unassigned
+   // positions by direction into one reconciled campaign each -- legs are
+   // ordered oldest-open-time-first so leg 0 is treated as the original
+   // entry, matching how a real campaign would have been built.
+   for(int u = 0; u < unassignedCount; u++)
+   {
+      int dirWanted = unassignedIsBuy[u] ? 1 : -1;
+      int idx = -1;
+      for(int s = 0; s < XAU_CAMPAIGN_MAX_SLOTS; s++)
+         if(g_campaign[s].active && g_campaign[s].reconciledFromRestart && g_campaign[s].direction == dirWanted) { idx = s; break; }
+      if(idx < 0)
+      {
          idx = XAU_Campaign_FindFreeSlot();
          if(idx < 0) continue;
          ZeroMemory(g_campaign[idx]);
          g_campaign[idx].active = true;
-         g_campaign[idx].campaignId = StringFormat("CAMPAIGN_RECONCILED_%I64u", positionId);
-         g_campaign[idx].positionId = positionId;
-         g_campaign[idx].direction = isBuy ? 1 : -1;
+         g_campaign[idx].campaignId = StringFormat("CAMPAIGN_RECONCILED_%I64u", unassignedTicket[u]);
+         g_campaign[idx].positionId = unassignedTicket[u];
+         g_campaign[idx].direction = dirWanted;
          g_campaign[idx].setup = "UNKNOWN_POST_RESTART";
          g_campaign[idx].grade = "UNKNOWN_POST_RESTART";
          g_campaign[idx].state = CAMPAIGN_INITIAL_POSITION;
-         g_campaign[idx].createdTime = posInfo.Time();
-         g_campaign[idx].entryPrice = posInfo.PriceOpen();
-         g_campaign[idx].invalidationPrice = curSL > 0 ? curSL : (isBuy ? posInfo.PriceOpen() - atr * InpSLMultiplier : posInfo.PriceOpen() + atr * InpSLMultiplier);
+         g_campaign[idx].createdTime = unassignedTime[u];
+         g_campaign[idx].entryPrice = unassignedOpenPx[u];
+         g_campaign[idx].invalidationPrice = unassignedSL[u] > 0 ? unassignedSL[u]
+            : (unassignedIsBuy[u] ? unassignedOpenPx[u] - atr * InpSLMultiplier : unassignedOpenPx[u] + atr * InpSLMultiplier);
          g_campaign[idx].originalStopDistance = MathAbs(g_campaign[idx].entryPrice - g_campaign[idx].invalidationPrice);
-         g_campaign[idx].campaignBaseLot = posInfo.Volume();
+         g_campaign[idx].campaignBaseLot = unassignedVol[u];
          double slDollarPerLotRec = RiskPerLotForDistance(g_campaign[idx].originalStopDistance);
-         g_campaign[idx].initialRiskUSD = MathMax(30.0, slDollarPerLotRec * posInfo.Volume());
-         g_campaign[idx].legs[0].ticket = positionId;
-         g_campaign[idx].legs[0].lots = posInfo.Volume();
-         g_campaign[idx].legs[0].entryPrice = posInfo.PriceOpen();
-         g_campaign[idx].legs[0].riskUSD = g_campaign[idx].initialRiskUSD;
-         g_campaign[idx].legs[0].active = true;
-         g_campaign[idx].legCount = 1;
-         g_campaign[idx].aggregateLots = posInfo.Volume();
-         g_campaign[idx].aggregateRiskUSD = g_campaign[idx].initialRiskUSD;
+         g_campaign[idx].initialRiskUSD = MathMax(30.0, slDollarPerLotRec * unassignedVol[u]);
+         g_campaign[idx].legCount = 0;
          g_campaign[idx].protectedFloorR = -999.0;
          g_campaign[idx].entryBOS = g_smc_bos_dir;
          g_campaign[idx].entryHTF = g_htfConsensusDir;
          g_campaign[idx].reconciledFromRestart = true;
-         PrintFormat("CAMPAIGN_RECONCILED_ON_ATTACH | campaignId=%s | positionId=%I64u | direction=%s | entryPrice=%.5f | lots=%.4f",
-                     g_campaign[idx].campaignId, positionId, isBuy ? "BUY" : "SELL", g_campaign[idx].entryPrice, posInfo.Volume());
+         PrintFormat("CAMPAIGN_RECONCILED_ON_ATTACH | campaignId=%s | direction=%s | entryPrice=%.5f",
+                     g_campaign[idx].campaignId, dirWanted == 1 ? "BUY" : "SELL", g_campaign[idx].entryPrice);
       }
-      sawLivePosition[idx] = true;
+      int slot = g_campaign[idx].legCount;
+      if(slot < 6)
+      {
+         double slDollarPerLotAdd = RiskPerLotForDistance(g_campaign[idx].originalStopDistance);
+         g_campaign[idx].legs[slot].ticket = unassignedTicket[u];
+         g_campaign[idx].legs[slot].legNumber = slot;
+         g_campaign[idx].legs[slot].lots = unassignedVol[u];
+         g_campaign[idx].legs[slot].entryPrice = unassignedOpenPx[u];
+         g_campaign[idx].legs[slot].riskUSD = MathMax(0.0, slDollarPerLotAdd * unassignedVol[u]);
+         g_campaign[idx].legs[slot].openTime = unassignedTime[u];
+         g_campaign[idx].legs[slot].active = true;
+         g_campaign[idx].legCount++;
+         g_campaign[idx].aggregateLots += unassignedVol[u];
+         g_campaign[idx].aggregateRiskUSD += g_campaign[idx].legs[slot].riskUSD;
+         if(slot > 0) g_campaign[idx].pyramidsAdded = MathMax(g_campaign[idx].pyramidsAdded, slot);
+      }
+      anyLegSeen[idx] = true;
+      if(PositionSelectByTicket(unassignedTicket[u]))
+      {
+         aggProfit[idx] += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         repCurPrice[idx] = PositionGetDouble(POSITION_PRICE_CURRENT);
+      }
+   }
 
+   // ---- Pass 2: manage each campaign once, on its aggregate.
+   for(int idx = 0; idx < XAU_CAMPAIGN_MAX_SLOTS; idx++)
+   {
+      if(!g_campaign[idx].active) continue;
+      if(!anyLegSeen[idx])
+      {
+         // No live leg found at all -- the whole campaign closed via broker
+         // SL, manual intervention, or another path this manager doesn't own.
+         PrintFormat("CAMPAIGN_ORPHAN_CLEANUP | campaignId=%s | positionId=%I64u | reason=no_matching_live_position_found",
+                     g_campaign[idx].campaignId, g_campaign[idx].positionId);
+         XAU_Campaign_Finalize(idx, "ORPHAN_CLEANUP_POSITION_CLOSED_EXTERNALLY");
+         continue;
+      }
+
+      bool isBuy = (g_campaign[idx].direction == 1);
+      double curPrice = repCurPrice[idx] > 0 ? repCurPrice[idx]
+                        : (isBuy ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK));
       double riskUSD = g_campaign[idx].initialRiskUSD;
-      double currentR = riskUSD > 0 ? profit / riskUSD : 0.0;
+      double currentR = riskUSD > 0 ? aggProfit[idx] / riskUSD : 0.0;
       g_campaign[idx].currentR = currentR;
       if(currentR > g_campaign[idx].peakR) g_campaign[idx].peakR = currentR;
       if(currentR < g_campaign[idx].troughR) g_campaign[idx].troughR = currentR;
@@ -21946,7 +22043,7 @@ void XAU_CampaignCoreLoop()
       if(prevState != g_campaign[idx].state) g_campaign[idx].lastTransitionTime = TimeCurrent();
 
       if(indicatorsReady)
-         XAU_Campaign_UpdateProtection(idx, ticket, isBuy, curPrice, curSL, atr, digits);
+         XAU_Campaign_UpdateProtection(idx, isBuy, curPrice, atr, digits);
 
       string classification = g_campaign[idx].lastClassification;
       int hostileCount = 0;
@@ -21979,7 +22076,7 @@ void XAU_CampaignCoreLoop()
                         classification == "THESIS_DAMAGED" ? "true" : "false",
                         classification == "THESIS_DAMAGED" ? "REDUCE_LATE_LEGS" : "TIGHTEN");
             if(classification == "THESIS_DAMAGED")
-               XAU_Campaign_ReduceLatestLeg(idx, ticket, classification);
+               XAU_Campaign_ReduceLatestLeg(idx, classification);
          }
          else if(classification == "THESIS_INVALIDATED" || classification == "CONFIRMED_DIRECTION_CHANGE")
          {
@@ -21992,7 +22089,7 @@ void XAU_CampaignCoreLoop()
                         classification == "CONFIRMED_DIRECTION_CHANGE" ? "true" : "false",
                         hostileCount, classification);
             XAU_Campaign_Finalize(idx, classification);
-            continue; // slot cleared -- nothing else to do for this ticket this tick
+            continue; // slot cleared -- nothing else to do for this campaign this tick
          }
       }
 
@@ -22010,21 +22107,6 @@ void XAU_CampaignCoreLoop()
    }
 
    if(newM5Bar) g_campaignLastClassifiedBar = iTime(Symbol(), PERIOD_M5, 0);
-
-   // Orphan cleanup: a campaign slot is active but no live position matches --
-   // the position closed via broker SL, manual intervention, or another path
-   // this manager doesn't own (e.g. true account emergency). Finalize cleanly
-   // rather than leave stale state.
-   for(int s = 0; s < XAU_CAMPAIGN_MAX_SLOTS; s++)
-   {
-      if(g_campaign[s].active && !sawLivePosition[s])
-      {
-         PrintFormat("CAMPAIGN_ORPHAN_CLEANUP | campaignId=%s | positionId=%I64u | reason=no_matching_live_position_found",
-                     g_campaign[s].campaignId, g_campaign[s].positionId);
-         XAU_Campaign_Finalize(s, "ORPHAN_CLEANUP_POSITION_CLOSED_EXTERNALLY");
-      }
-   }
-
    XAU_Campaign_PostResetEvaluate();
 }
 

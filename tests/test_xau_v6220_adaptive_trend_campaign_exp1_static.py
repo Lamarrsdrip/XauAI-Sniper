@@ -267,7 +267,7 @@ def test_aggregate_risk_ceiling_cannot_be_bypassed():
 
 def test_late_leg_reduction_preserves_the_original_entry():
     exp = read(EXP)
-    fn = body(exp, "void XAU_Campaign_ReduceLatestLeg(int idx, ulong ticket, string deteriorationEvidence)")
+    fn = body(exp, "void XAU_Campaign_ReduceLatestLeg(int idx, string deteriorationEvidence)")
     assert "legCount <= 1" in fn  # never reduces below the original leg via this path
     assert "for(int i = g_campaign[idx].legCount - 1; i >= 1; i--)" in fn  # scans from newest down to leg 1 (never leg 0)
 
@@ -277,7 +277,7 @@ def test_thesis_damaged_triggers_late_leg_reduction_not_full_close():
     loop = body(exp, "void XAU_CampaignCoreLoop()")
     idx = loop.index('classification == "THESIS_DAMAGED"')
     window = loop[idx:idx + 1200]
-    assert "XAU_Campaign_ReduceLatestLeg(idx, ticket, classification);" in window
+    assert "XAU_Campaign_ReduceLatestLeg(idx, classification);" in window
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ def test_thesis_damaged_triggers_late_leg_reduction_not_full_close():
 
 def test_guarantee_arms_at_the_configured_threshold_not_before():
     exp = read(EXP)
-    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, ulong ticket, bool isBuy, double curPrice, double curSL, double atr, int digits)")
+    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double atr, int digits)")
     assert "!g_campaign[idx].guaranteeArmed && peakR >= InpCampaignGuaranteeArmR" in fn
     assert "InpCampaignGuaranteeArmR              = 0.50;" in exp
     assert "InpCampaignGuaranteedFloorR           = 0.25;" in exp
@@ -294,14 +294,14 @@ def test_guarantee_arms_at_the_configured_threshold_not_before():
 
 def test_guarantee_floor_is_ratchet_only_never_loosens():
     exp = read(EXP)
-    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, ulong ticket, bool isBuy, double curPrice, double curSL, double atr, int digits)")
+    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double atr, int digits)")
     assert "newFloorR = MathMax(newFloorR, prevFloorR);" in fn
     assert "RATCHET-ONLY" in fn
 
 
 def test_adaptive_peak_share_floor_uses_configured_percentage_and_structure_blend():
     exp = read(EXP)
-    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, ulong ticket, bool isBuy, double curPrice, double curSL, double atr, int digits)")
+    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double atr, int digits)")
     assert "peakR * (InpCampaignAdaptivePeakSharePct / 100.0)" in fn
     assert "MathMax(rawPeakShareFloorR, structureFloorR)" in fn
     assert "InpCampaignAdaptiveShareStartR        = 0.60;" in exp
@@ -315,16 +315,75 @@ def test_config_validation_requires_adaptive_share_start_at_or_after_guarantee_a
 
 def test_geometry_blocked_sl_retains_internal_floor_and_can_force_close_on_breach():
     exp = read(EXP)
-    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, ulong ticket, bool isBuy, double curPrice, double curSL, double atr, int digits)")
-    assert "floorGeometryBlocked = true;" in fn
+    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double atr, int digits)")
+    assert "g_campaign[idx].floorGeometryBlocked = anyRejected;" in fn
     assert "breached" in fn
     assert "XAU_Campaign_Finalize(idx, \"INTERNAL_FLOOR_BREACH_GEOMETRY_BLOCKED\");" in fn
 
 
 def test_protection_update_reuses_safe_modify_sl_not_a_raw_ordersend():
     exp = read(EXP)
-    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, ulong ticket, bool isBuy, double curPrice, double curSL, double atr, int digits)")
-    assert "SafeModifySL(ticket, desiredSL, 0, isBuy, curPrice, \"CAMPAIGN_FLOOR\")" in fn
+    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double atr, int digits)")
+    assert "SafeModifySL(legTicket, desiredSL, 0, isBuy, curPrice, \"CAMPAIGN_FLOOR\")" in fn
+
+
+# ---------------------------------------------------------------------------
+# Hedging mode: both live accounts (VPS 436698921, Mac demo 108492408) are
+# confirmed hedging-mode via the Journal -- every pyramid add opens a fully
+# independent position, it never merges into the original ticket the way
+# netting mode would. These lock in the fix for that: campaign identity is
+# tracked per-leg, not by a single shared positionId.
+# ---------------------------------------------------------------------------
+
+def test_find_idx_scans_every_leg_not_just_the_campaign_identity_field():
+    exp = read(EXP)
+    fn = body(exp, "int XAU_Campaign_FindIdx(ulong positionId)")
+    assert "for(int L = 0; L < g_campaign[i].legCount && L < 6; L++)" in fn
+    assert "g_campaign[i].legs[L].ticket == positionId" in fn
+
+
+def test_pyramid_add_resolves_its_own_position_id_not_the_raw_deal_ticket():
+    exp = read(EXP)
+    fn = body(exp, "void XAU_Campaign_EvaluatePyramid(int idx, bool isBuy, double curPrice, double atr,")
+    assert "HistoryDealGetInteger(addDealTicket, DEAL_POSITION_ID)" in fn
+    assert "legs[slotIdx].ticket = addPositionId;" in fn
+    assert "legs[slotIdx].ticket = trade.ResultDeal();" not in fn
+
+
+def test_protection_applies_the_shared_floor_to_every_active_leg():
+    exp = read(EXP)
+    fn = body(exp, "void XAU_Campaign_UpdateProtection(int idx, bool isBuy, double curPrice, double atr, int digits)")
+    assert "for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)" in fn
+    assert "PositionSelectByTicket(legTicket)" in fn
+
+
+def test_reduce_latest_leg_closes_that_legs_own_ticket_in_full():
+    exp = read(EXP)
+    fn = body(exp, "void XAU_Campaign_ReduceLatestLeg(int idx, string deteriorationEvidence)")
+    assert "SafePositionClose(legTicket," in fn
+    assert "SafePositionClosePartial" not in fn
+
+
+def test_finalize_closes_every_active_leg_not_a_single_lookup():
+    exp = read(EXP)
+    fn = body(exp, "void XAU_Campaign_Finalize(int idx, string exitReason)")
+    assert "for(int L = 0; L < g_campaign[idx].legCount && L < 6; L++)" in fn
+    assert "SafePositionClose(g_campaign[idx].legs[L].ticket," in fn
+
+
+def test_core_loop_aggregates_profit_across_all_legs_before_computing_r():
+    exp = read(EXP)
+    fn = body(exp, "void XAU_CampaignCoreLoop()")
+    assert "aggProfit[idx] += profit;" in fn
+    assert "currentR = riskUSD > 0 ? aggProfit[idx] / riskUSD : 0.0;" in fn
+
+
+def test_core_loop_never_finalizes_a_campaign_while_any_leg_is_still_live():
+    exp = read(EXP)
+    fn = body(exp, "void XAU_CampaignCoreLoop()")
+    idx = fn.index("CAMPAIGN_ORPHAN_CLEANUP")
+    window = fn[max(0, idx - 300):idx]
+    assert "!anyLegSeen[idx]" in window
 
 
 # ---------------------------------------------------------------------------
