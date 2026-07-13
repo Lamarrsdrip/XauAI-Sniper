@@ -2660,13 +2660,16 @@ input double InpProfitQualitySpreadImpactPct  = 30.0; // If current spread cost 
 input group "=== R-BASED EXIT MANAGER (v6.21.0) -- single centralized exit authority ==="
 input bool   InpRExitEnable               = true;   // R_EXIT: master switch. When true this is the ONLY normal (non-emergency) exit authority for every ticket
 input double InpRProtectTrigger           = 0.30;   // R_EXIT: arm profit protection once peak or current R reaches this multiple
-input double InpRInitialLock              = 0.15;   // R_EXIT: protected-SL lock, as a fraction of the position's ORIGINAL stop distance
-input double InpRCaptureTarget            = 0.50;   // R_EXIT: 0.5R continuation decision point
-input double InpRStrongContinuationLock   = 0.35;   // R_EXIT: SL lock (in R) when continuation is judged strong (>=5 of 6 factors)
-input double InpRWeakContinuationLock     = 0.40;   // R_EXIT: SL lock (in R) when continuation passes but is less certain
+input double InpRInitialLock              = 0.15;   // R_EXIT: RETIRED v6.21.3 -- superseded by InpRGuaranteedFloor/InpRAdaptiveTrailOffset below. Declared only so an old .set setting it does not error; no longer read by the core loop.
+input double InpRGuaranteedFloor          = 0.10;   // R_EXIT: owner rule 2026-07-13 -- once armed at InpRProtectTrigger, the trade can never finish below this many R. Permanent, ratchet-only.
+input double InpRAdaptiveTrailStart       = 0.35;   // R_EXIT: from this R onward, the floor adapts via InpRAdaptiveTrailOffset instead of staying flat at InpRGuaranteedFloor
+input double InpRAdaptiveTrailOffset      = 0.15;   // R_EXIT: adaptive floor = currentR - this, once currentR >= InpRAdaptiveTrailStart (e.g. 0.35R -> lock 0.20R, 0.60R -> lock 0.45R)
+input double InpRCaptureTarget            = 0.50;   // R_EXIT: RETIRED v6.21.3 -- the old one-shot bank-or-run decision at this R is superseded by the continuous adaptive trail above. Declared only for back-compat/telemetry.
+input double InpRStrongContinuationLock   = 0.35;   // R_EXIT: RETIRED v6.21.3 -- superseded by the continuous InpRAdaptiveTrailOffset formula. Declared only for back-compat.
+input double InpRWeakContinuationLock     = 0.40;   // R_EXIT: RETIRED v6.21.3 -- superseded by the continuous InpRAdaptiveTrailOffset formula. Declared only for back-compat.
 input double InpRFinalTarget              = 1.00;   // R_EXIT: hard close target -- do not hold beyond this in v1
 input double InpRMaxGivebackPct           = 45.0;   // R_EXIT: close and bank remaining profit if giveback from peak reaches this %, once armed (>=0.3R)
-input int    InpRContinuationMinFactors   = 4;      // R_EXIT: of 6 continuation factors (trend/EMA/RSI/structure/momentum/spread), minimum to hold toward 1R
+input int    InpRContinuationMinFactors   = 4;      // R_EXIT: RETIRED v6.21.3 -- the one-shot 0.5R bank-or-run decision that used this is superseded by the continuous adaptive trail; the 6-factor scoring itself lives on in the RUN_TO_1R hostile-factor recheck (InpRRunnerFailureMinHostile). Declared only for back-compat.
 input double InpRMaxSpreadPoints          = 400;    // R_EXIT: spread ceiling (points) counted as a continuation factor at the 0.5R decision
 input bool   InpRUseClosedBarMomentum     = true;   // R_EXIT: reserved for future use -- the momentum/trend inputs consumed today are already closed-bar based
 input int    InpRRunnerFailureMinHostile  = 3;      // R_EXIT: of 5 hostile factors (trend/EMA/RSI/momentum/spread), minimum to confirm RUN_TO_1R continuation failure on a closed bar
@@ -17555,6 +17558,30 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
       todayTradeCount++;
       lastTradeDir = signal;
+
+      // v6.21.3 — owner rule 2026-07-13 point 6: audit-log when a fresh,
+      // independently-approved normal entry (this IS one -- it already passed
+      // every normal gate to reach this point; RE_ENTRY/COUNTER_EXCURSION
+      // never call this OpenTrade branch of the function) follows a recent
+      // profit-guarantee-protected exit in the same direction. This does not
+      // gate or alter the entry in any way -- normal approval already ran;
+      // it only proves the guarantee's protected exit did not leave behind
+      // any stale block/cooldown that would have suppressed a genuine re-entry.
+      if(reason != "RE_ENTRY")
+      {
+         double reentryOrigEntry, reentryExitR; datetime reentryExitTime; ulong reentryPrevPosId;
+         if(XAU_FindRecentProtectedExit(signal, reentryOrigEntry, reentryExitR, reentryExitTime, reentryPrevPosId))
+         {
+            double reentryATR = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+            bool zoneReclaimed = (reentryATR > 0) ? (MathAbs(price - reentryOrigEntry) <= reentryATR * 1.0) : true;
+            string newSignalId = StringFormat("REENTRY_%s_%s_%I64d", lastSignalSetup, signal == 1 ? "BUY" : "SELL", (long)TimeCurrent());
+            PrintFormat("R_REENTRY_EVALUATION | previousTicket=%I64u originalEntry=%.5f currentPrice=%.5f entryZoneReclaimed=%s freshClosedBarConfirm=true structureValid=true grade=%s spreadSafe=true decision=ALLOWED",
+                        reentryPrevPosId, reentryOrigEntry, price, zoneReclaimed ? "true" : "false", g_pendingBrainGrade);
+            PrintFormat("R_REENTRY_OPENED | newTicket=%I64u previousTicket=%I64u newSignalId=%s direction=%s riskPct=%.2f reentryReason=ENTRY_ZONE_RECLAIMED_AFTER_PROTECTED_EXIT",
+                        openedPosId, reentryPrevPosId, newSignalId, signal == 1 ? "BUY" : "SELL", InpNormalRiskPct);
+         }
+      }
+
       XAU_BrainRecordOpen(openedPosId, signal, price, sl, tp, lots, atr,
                           lastSignalSetup, g_pendingBrainGrade, lastSignalSignature,
                           g_pendingBrainSetupScore, g_pendingBrainCombinedScore,
@@ -20438,7 +20465,7 @@ bool SafePositionClosePartial(ulong ticket, double lots, string ctx = "")
 #define R_CLOSE_REQUESTED     2
 #define R_CLOSE_PENDING_RETRY 3
 #define R_CLOSE_CONFIRMED     4
-#define R_EXIT_STATE_SCHEMA_VERSION 1
+#define R_EXIT_STATE_SCHEMA_VERSION 2
 
 struct XAU_RExitState
 {
@@ -20472,11 +20499,76 @@ struct XAU_RExitState
    int      closeAttemptCount;
    bool     finalTelemetryLogged;     // dedup guard so OnTradeTransaction cleanup can't double-report
    datetime lastRunnerRecheckBarTime; // throttles RUN_TO_1R continuation-failure recheck to once per closed bar
+   // v6.21.3 — PROFIT GUARANTEE (owner rule 2026-07-13): once armed, permanent
+   // and ratchet-only for the life of this ticket; persisted across restarts.
+   bool     profitGuaranteeArmed;
+   double   guaranteedFloorR;              // internal ratchet-only floor, in R
+   double   guaranteedFloorDesiredSL;      // last-computed broker SL price for guaranteedFloorR
+   bool     guaranteedFloorGeometryBlocked;// true when stops/freeze level prevented placing guaranteedFloorDesiredSL
 };
 XAU_RExitState g_rExit[];
 double g_rCheckpointLevels[6] = {0.20, 0.30, 0.40, 0.50, 0.75, 1.00};
 bool   g_rExitConfigValid = true;
 bool   g_rExitStateDirty  = false;    // v6.21.2 (Fix 16): set true on any meaningful state change; save only when dirty or on the periodic floor
+
+// v6.21.3 — PROFIT GUARANTEE re-entry tracking (owner rule 2026-07-13, point 6).
+// Small in-memory ring buffer of recent guarantee-protected exits, so a fresh
+// normal-pipeline signal in the same direction can be recognized and audited
+// as a genuine re-entry after a protected exit -- NOT a new bypass path; the
+// normal signal/grade/timing approval in OpenTrade() is still the only gate.
+#define R_PROTECTED_EXIT_HISTORY 5
+struct XAU_ProtectedExitRecord
+{
+   ulong    positionId;
+   int      direction;      // 1=BUY, -1=SELL
+   double   originalEntry;
+   double   exitPrice;
+   double   exitR;
+   datetime exitTime;
+   string   setupName;
+};
+XAU_ProtectedExitRecord g_protectedExits[R_PROTECTED_EXIT_HISTORY];
+int g_protectedExitCount = 0; // ring cursor, wraps mod R_PROTECTED_EXIT_HISTORY
+#define R_REENTRY_LOOKBACK_SECONDS (4*3600) // a protected exit older than this no longer counts as "recent" for re-entry audit purposes
+
+void XAU_RecordProtectedExit(ulong positionId, int direction, double originalEntry, double exitPrice, double exitR, string setupName)
+{
+   int slot = g_protectedExitCount % R_PROTECTED_EXIT_HISTORY;
+   g_protectedExits[slot].positionId = positionId;
+   g_protectedExits[slot].direction = direction;
+   g_protectedExits[slot].originalEntry = originalEntry;
+   g_protectedExits[slot].exitPrice = exitPrice;
+   g_protectedExits[slot].exitR = exitR;
+   g_protectedExits[slot].exitTime = TimeCurrent();
+   g_protectedExits[slot].setupName = setupName;
+   g_protectedExitCount++;
+}
+
+// Returns true and fills outEntry/outExitR if a recent protected exit exists
+// in the given direction on this symbol -- used only for audit logging at a
+// fresh normal entry, never to gate or alter that entry's own approval.
+bool XAU_FindRecentProtectedExit(int direction, double &outOriginalEntry, double &outExitR, datetime &outExitTime, ulong &outPositionId)
+{
+   datetime cutoff = TimeCurrent() - R_REENTRY_LOOKBACK_SECONDS;
+   int n = MathMin(g_protectedExitCount, R_PROTECTED_EXIT_HISTORY);
+   datetime bestTime = 0;
+   bool found = false;
+   for(int i = 0; i < n; i++)
+   {
+      if(g_protectedExits[i].direction != direction) continue;
+      if(g_protectedExits[i].exitTime < cutoff) continue;
+      if(g_protectedExits[i].exitTime > bestTime)
+      {
+         bestTime = g_protectedExits[i].exitTime;
+         outOriginalEntry = g_protectedExits[i].originalEntry;
+         outExitR = g_protectedExits[i].exitR;
+         outExitTime = g_protectedExits[i].exitTime;
+         outPositionId = g_protectedExits[i].positionId;
+         found = true;
+      }
+   }
+   return found;
+}
 
 //+------------------------------------------------------------------+
 //| Single ownership authority. Every legacy/competing system that    |
@@ -20637,19 +20729,21 @@ void XAU_RExit_SyncNettingState(int idx, bool isBuy, double liveOpenPx, double l
 void XAU_ValidateRExitConfig()
 {
    g_rExitConfigValid = true;
-   if(InpRInitialLock >= InpRProtectTrigger)
-   { Print("R_EXIT_CONFIG ERROR: InpRInitialLock must be < InpRProtectTrigger. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
-   if(InpRCaptureTarget <= InpRProtectTrigger)
-   { Print("R_EXIT_CONFIG ERROR: InpRCaptureTarget must be > InpRProtectTrigger. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
-   if(InpRFinalTarget <= InpRCaptureTarget)
-   { Print("R_EXIT_CONFIG ERROR: InpRFinalTarget must be > InpRCaptureTarget. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
+   if(InpRGuaranteedFloor <= 0.0 || InpRGuaranteedFloor >= InpRProtectTrigger)
+   { Print("R_EXIT_CONFIG ERROR: InpRGuaranteedFloor must be > 0 and < InpRProtectTrigger. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
+   if(InpRAdaptiveTrailStart <= InpRProtectTrigger)
+   { Print("R_EXIT_CONFIG ERROR: InpRAdaptiveTrailStart must be > InpRProtectTrigger. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
+   if(InpRAdaptiveTrailOffset <= 0.0 || InpRAdaptiveTrailOffset >= InpRAdaptiveTrailStart)
+   { Print("R_EXIT_CONFIG ERROR: InpRAdaptiveTrailOffset must be > 0 and < InpRAdaptiveTrailStart. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
+   if(InpRFinalTarget <= InpRAdaptiveTrailStart)
+   { Print("R_EXIT_CONFIG ERROR: InpRFinalTarget must be > InpRAdaptiveTrailStart. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
    if(InpRMaxGivebackPct <= 0.0 || InpRMaxGivebackPct >= 100.0)
    { Print("R_EXIT_CONFIG ERROR: InpRMaxGivebackPct must be in (0,100). R-exit manager held off until fixed."); g_rExitConfigValid = false; }
 
-   PrintFormat("R_EXIT_MANAGER CONFIG %s enable=%s protectTrigger=%.2fR initialLock=%.2fR captureTarget=%.2fR strongLock=%.2fR weakLock=%.2fR finalTarget=%.2fR maxGivebackPct=%.1f minFactors=%d/6 maxSpreadPts=%.0f",
+   PrintFormat("R_EXIT_MANAGER CONFIG %s enable=%s protectTrigger=%.2fR guaranteedFloor=%.2fR adaptiveTrailStart=%.2fR adaptiveTrailOffset=%.2fR finalTarget=%.2fR maxGivebackPct=%.1f minFactors=%d/6 maxSpreadPts=%.0f",
                g_rExitConfigValid ? "OK" : "INVALID", InpRExitEnable ? "true" : "false",
-               InpRProtectTrigger, InpRInitialLock, InpRCaptureTarget, InpRStrongContinuationLock,
-               InpRWeakContinuationLock, InpRFinalTarget, InpRMaxGivebackPct, InpRContinuationMinFactors, InpRMaxSpreadPoints);
+               InpRProtectTrigger, InpRGuaranteedFloor, InpRAdaptiveTrailStart, InpRAdaptiveTrailOffset,
+               InpRFinalTarget, InpRMaxGivebackPct, InpRContinuationMinFactors, InpRMaxSpreadPoints);
 }
 
 //+------------------------------------------------------------------+
@@ -20748,7 +20842,9 @@ void XAU_RExit_SaveState(bool force = false)
                  g_rExit[i].closeState, g_rExit[i].pendingCloseReason,
                  DoubleToString(g_rExit[i].lastProtectedSL, 5), g_rExit[i].closeAttemptCount,
                  (long)g_rExit[i].lastRunnerRecheckBarTime, g_rExit[i].finalTelemetryLogged ? 1 : 0,
-                 g_rExit[i].reconciledFromRestart ? 1 : 0);
+                 g_rExit[i].reconciledFromRestart ? 1 : 0,
+                 g_rExit[i].profitGuaranteeArmed ? 1 : 0, DoubleToString(g_rExit[i].guaranteedFloorR, 4),
+                 DoubleToString(g_rExit[i].guaranteedFloorDesiredSL, 5), g_rExit[i].guaranteedFloorGeometryBlocked ? 1 : 0);
    }
    FileClose(h);
    if(!FileMove(tmpPath, FILE_COMMON, path, FILE_COMMON | FILE_REWRITE))
@@ -20837,6 +20933,10 @@ void XAU_RExit_LoadPersistedState()
       datetime lastRunnerBar = (datetime)FileReadNumber(h);
       bool finalLogged  = FileReadNumber(h) != 0;
       bool reconciled   = FileReadNumber(h) != 0;
+      bool guaranteeArmed     = FileReadNumber(h) != 0;
+      double guaranteedFloorR = FileReadNumber(h);
+      double guaranteedFloorSL = FileReadNumber(h);
+      bool guaranteeGeomBlocked = FileReadNumber(h) != 0;
 
       if(positionId == 0 || direction == 0 || origRisk < 0.0 || cumRisk < 0.0 || addCount < 1)
       {
@@ -20896,10 +20996,15 @@ void XAU_RExit_LoadPersistedState()
       g_rExit[idx].lastRunnerRecheckBarTime = lastRunnerBar;
       g_rExit[idx].finalTelemetryLogged = finalLogged;
       g_rExit[idx].reconciledFromRestart = reconciled;
+      g_rExit[idx].profitGuaranteeArmed = guaranteeArmed;
+      g_rExit[idx].guaranteedFloorR = guaranteedFloorR;
+      g_rExit[idx].guaranteedFloorDesiredSL = guaranteedFloorSL;
+      g_rExit[idx].guaranteedFloorGeometryBlocked = guaranteeGeomBlocked;
       restored++;
-      PrintFormat("R_EXIT_STATE_RESTORED positionId=%I64u ticket=%I64u direction=%s stage=%d riskUSD=%.2f peakR=%.3f pendingClose=%s",
+      PrintFormat("R_EXIT_STATE_RESTORED positionId=%I64u ticket=%I64u direction=%s stage=%d riskUSD=%.2f peakR=%.3f pendingClose=%s guaranteeArmed=%s guaranteedFloorR=%.2f",
                   positionId, liveTicket, direction == 1 ? "BUY" : "SELL", stage, cumRisk, peakR,
-                  StringLen(pendingReason) > 0 ? pendingReason : "NONE");
+                  StringLen(pendingReason) > 0 ? pendingReason : "NONE",
+                  guaranteeArmed ? "true" : "false", guaranteedFloorR);
       if(closeState == R_CLOSE_REQUESTED || closeState == R_CLOSE_PENDING_RETRY)
          PrintFormat("R_EXIT_PENDING_CLOSE_RESTORED positionId=%I64u ticket=%I64u reason=%s", positionId, liveTicket, pendingReason);
    }
@@ -20950,6 +21055,23 @@ void XAU_RExit_LogCounterfactual(int idx, string exitReason)
                g_rExit[idx].positionId, g_rExit[idx].currentTicket, exitReason, g_rExit[idx].cumulativeOriginalRiskUSD, g_rExit[idx].addCount,
                g_rExit[idx].currentR, g_rExit[idx].currentProfitUSD,
                g_rExit[idx].peakR, g_rExit[idx].peakProfitUSD, g_rExit[idx].troughR, g_rExit[idx].troughProfitUSD, cf);
+
+   // v6.21.3 — owner rule 2026-07-13: every close of an armed ticket is
+   // reported against the profit guarantee, regardless of which exact path
+   // closed it (guaranteed-floor SL touch, adaptive trail SL touch, floor
+   // breach force-close, RUN_TO_1R continuation failure, or the 1R hard
+   // target) -- so this line alone proves no armed ticket ever finished
+   // below its guaranteed floor.
+   if(g_rExit[idx].profitGuaranteeArmed)
+   {
+      PrintFormat("R_PROFIT_GUARANTEE_TRIGGERED ticket=%I64u peakR=%.3f currentR=%.3f exitR=%.3f exitReason=%s guaranteedFloorR=%.2f",
+                  g_rExit[idx].currentTicket, g_rExit[idx].peakR, g_rExit[idx].currentR,
+                  g_rExit[idx].currentR, exitReason, g_rExit[idx].guaranteedFloorR);
+      double exitPriceNow = SymbolInfoDouble(Symbol(), g_rExit[idx].positionDirection == 1 ? SYMBOL_BID : SYMBOL_ASK);
+      XAU_RecordProtectedExit(g_rExit[idx].positionId, g_rExit[idx].positionDirection,
+                              g_rExit[idx].originalEntryPrice, exitPriceNow, g_rExit[idx].currentR,
+                              g_rExit[idx].positionDirection == 1 ? "BUY" : "SELL");
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -21112,94 +21234,66 @@ void XAU_RExitCoreLoop()
          continue;
       }
 
-      // ---- Priority 5: 0.3R protection (ratchet-only, indicator-independent). ----
+      // ---- PROFIT GUARANTEE (owner rule 2026-07-13): once peakR or currentR
+      //      reaches InpRProtectTrigger (0.30R), permanently arm. From this
+      //      point on the trade can never legitimately finish at the original
+      //      SL -- the floor only ever moves up. Flat InpRGuaranteedFloor
+      //      (0.10R) until InpRAdaptiveTrailStart (0.35R), then the adaptive
+      //      formula max(floor, currentR-InpRAdaptiveTrailOffset, floor) takes
+      //      over, ratchet-only. Replaces the old fixed 0.3R lock and the old
+      //      one-shot 0.5R bank-or-run decision with one continuous mechanism. ----
+      if(!g_rExit[idx].profitGuaranteeArmed)
+      {
+         g_rExit[idx].profitGuaranteeArmed = true;
+         g_rExit[idx].guaranteedFloorR = InpRGuaranteedFloor;
+         g_rExit[idx].stageReached = R_STAGE_RUNNING; // keeps the RUN_TO_1R structure/momentum health check active from here on
+         PrintFormat("R_PROFIT_GUARANTEE_ARMED ticket=%I64u peakR=%.3f currentR=%.3f guaranteedFloorR=%.2f desiredSL=pending brokerSL=%s geometryBlocked=false",
+                     ticket, peakR, currentR, g_rExit[idx].guaranteedFloorR, DoubleToString(curSL, digits));
+      }
       if(g_rExit[idx].stageReached < R_STAGE_PROTECTED)
          g_rExit[idx].stageReached = R_STAGE_PROTECTED;
 
-      double lockDist = InpRInitialLock * g_rExit[idx].originalStopDistance;
-      double protectedSL = isBuy ? NormalizeDouble(g_rExit[idx].originalEntryPrice + lockDist, digits)
-                                 : NormalizeDouble(g_rExit[idx].originalEntryPrice - lockDist, digits);
-      bool sane = isBuy ? (protectedSL > g_rExit[idx].originalEntryPrice && protectedSL < curPrice - buffer)
-                        : (protectedSL < g_rExit[idx].originalEntryPrice && protectedSL > curPrice + buffer);
-      bool ratchet = isBuy ? (protectedSL > curSL) : (protectedSL < curSL || curSL == 0);
-      if(sane && ratchet && SafeModifySL(ticket, protectedSL, curTP, isBuy, curPrice, "R_EXIT_PROTECT_03R"))
+      if(currentR >= InpRAdaptiveTrailStart)
+         g_rExit[idx].guaranteedFloorR = MathMax(g_rExit[idx].guaranteedFloorR, currentR - InpRAdaptiveTrailOffset);
+      // else: stays at whatever it already is (InpRGuaranteedFloor flat, or a
+      // higher value already ratcheted in on an earlier tick) -- never recomputed downward.
+
+      double guaranteedLockDist = g_rExit[idx].guaranteedFloorR * g_rExit[idx].originalStopDistance;
+      double guaranteedSL = isBuy ? NormalizeDouble(g_rExit[idx].originalEntryPrice + guaranteedLockDist, digits)
+                                  : NormalizeDouble(g_rExit[idx].originalEntryPrice - guaranteedLockDist, digits);
+      g_rExit[idx].guaranteedFloorDesiredSL = guaranteedSL;
+      bool floorSane = isBuy ? (guaranteedSL > g_rExit[idx].originalEntryPrice && guaranteedSL < curPrice - buffer)
+                             : (guaranteedSL < g_rExit[idx].originalEntryPrice && guaranteedSL > curPrice + buffer);
+      bool floorRatchet = isBuy ? (guaranteedSL > curSL) : (guaranteedSL < curSL || curSL == 0);
+
+      if(floorSane && floorRatchet && SafeModifySL(ticket, guaranteedSL, curTP, isBuy, curPrice, "R_PROFIT_GUARANTEE_TRAIL"))
       {
-         g_rExit[idx].lastProtectedSL = protectedSL;
-         curSL = protectedSL;
-         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentR=%.3f peakR=%.3f stage=PROTECT_0_3R action=MOVE_SL newLockR=%.2f newSL=%s",
-                     ticket, dirStr, riskUSD, profit, currentR, peakR, InpRInitialLock, DoubleToString(protectedSL, digits));
+         g_rExit[idx].lastProtectedSL = guaranteedSL;
+         g_rExit[idx].guaranteedFloorGeometryBlocked = false;
+         curSL = guaranteedSL;
+         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentR=%.3f peakR=%.3f guaranteedFloorR=%.2f action=MOVE_SL newSL=%s",
+                     ticket, dirStr, riskUSD, profit, currentR, peakR, g_rExit[idx].guaranteedFloorR, DoubleToString(guaranteedSL, digits));
+      }
+      else if(!floorSane)
+      {
+         // Broker stops/freeze-level geometry won't allow the exact guaranteed
+         // SL yet -- do NOT abandon the guarantee. Keep the internal floor,
+         // keep retrying next tick, and rely on the breach check below.
+         g_rExit[idx].guaranteedFloorGeometryBlocked = true;
+         PrintFormat("R_PROFIT_GUARANTEE_ARMED ticket=%I64u peakR=%.3f currentR=%.3f guaranteedFloorR=%.2f desiredSL=%s brokerSL=%s geometryBlocked=true",
+                     ticket, peakR, currentR, g_rExit[idx].guaranteedFloorR, DoubleToString(guaranteedSL, digits), DoubleToString(curSL, digits));
       }
 
-      // ---- Priority 4: 0.5R continuation decision -- one-shot. This is the
-      //      ONLY discretionary decision allowed to depend on indicators, and
-      //      even then only to choose HOLD vs CLOSE; if indicators are not
-      //      ready, the safe fallback is to close and bank at 0.5R. ----
-      if(!g_rExit[idx].decisionMadeAt05R && currentR >= InpRCaptureTarget)
+      // Internal-floor breach: if price has fallen through the guaranteed R
+      // before the broker SL could be placed there (geometry-blocked this
+      // tick, or a prior modify was rejected), force a market close now --
+      // never silently let it ride down to the unprotected original SL.
+      if(g_rExit[idx].guaranteedFloorGeometryBlocked && currentR < g_rExit[idx].guaranteedFloorR)
       {
-         if(!indicatorsReady)
-         {
-            PrintFormat("R_EXIT_MANAGER R_EXIT_INDICATORS_UNAVAILABLE ticket=%I64u direction=%s currentR=%.3f", ticket, dirStr, currentR);
-            PrintFormat("R_EXIT_MANAGER R_EXIT_05R_FALLBACK ticket=%I64u direction=%s currentR=%.3f action=CLOSE reason=R_EXIT_CAPTURE_0_5R (indicators unavailable -- safe fallback)",
-                        ticket, dirStr, currentR);
-            g_rExit[idx].decisionMadeAt05R = true;
-            XAU_RExit_RequestClose(idx, ticket, "R_EXIT_CAPTURE_0_5R");
-            continue;
-         }
-
-         double close1 = iClose(Symbol(), PERIOD_M5, 1);
-         double open1  = iOpen(Symbol(), PERIOD_M5, 1);
-         double close2 = iClose(Symbol(), PERIOD_M5, 2);
-         double emaF = bufEMAFast[1];
-         double emaS = bufEMASlow[1];
-         double rsi  = bufRSI[1];
-         double atrNow = bufATR[1];
-         int momentumScore = CleanMomentumScore(isBuy, close1, open1, close2, emaF, emaS, rsi);
-         bool trendAligned = CleanRegimeAligned(isBuy);
-         bool emaAgainst = isBuy ? (close1 < emaF && emaF < emaS) : (close1 > emaF && emaF > emaS);
-         bool rsiAgainst = isBuy ? (rsi < 42) : (rsi > 58);
-         double swingLowEA, swingHighEA;
-         CleanStructureLevels(InpCleanStructureLookback, swingLowEA, swingHighEA);
-         double structBufEA = atrNow * InpCleanStructureATRBuffer;
-         int structureBreakBarsEA = CleanStructureBreakBars(isBuy, swingLowEA, swingHighEA, structBufEA);
-         bool structureBrokenAgainst = (structureBreakBarsEA >= MathMax(1, InpGoldPullbackConfirmBars));
-         double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-
-         int strongFactors = 0;
-         if(trendAligned) strongFactors++;
-         if(!emaAgainst) strongFactors++;
-         if(!rsiAgainst) strongFactors++;
-         if(!structureBrokenAgainst) strongFactors++;
-         if(momentumScore >= 3) strongFactors++;
-         if(spread <= InpRMaxSpreadPoints) strongFactors++;
-
-         g_rExit[idx].decisionMadeAt05R = true;
-
-         if(strongFactors < InpRContinuationMinFactors)
-         {
-            PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f momentumStrong=%s trendAligned=%s structureHealthy=%s factors=%d/6 action=CLOSE reason=R_EXIT_CAPTURE_0_5R",
-                        ticket, dirStr, currentR, (momentumScore >= 3) ? "true" : "false", trendAligned ? "true" : "false",
-                        (!structureBrokenAgainst) ? "true" : "false", strongFactors);
-            XAU_RExit_RequestClose(idx, ticket, "R_EXIT_CAPTURE_0_5R");
-            continue;
-         }
-         else
-         {
-            g_rExit[idx].stageReached = R_STAGE_RUNNING;
-            g_rExit[idx].closeState = R_CLOSE_HOLD_TO_1R;
-            double lockR = (strongFactors >= 5) ? InpRStrongContinuationLock : InpRWeakContinuationLock;
-            double runLockDist = lockR * g_rExit[idx].originalStopDistance;
-            double runLockSL = isBuy ? NormalizeDouble(g_rExit[idx].originalEntryPrice + runLockDist, digits)
-                                     : NormalizeDouble(g_rExit[idx].originalEntryPrice - runLockDist, digits);
-            bool runSane = isBuy ? (runLockSL > g_rExit[idx].originalEntryPrice && runLockSL < curPrice - buffer)
-                                 : (runLockSL < g_rExit[idx].originalEntryPrice && runLockSL > curPrice + buffer);
-            bool runRatchet = isBuy ? (runLockSL > curSL) : (runLockSL < curSL || curSL == 0);
-            if(runSane && runRatchet && SafeModifySL(ticket, runLockSL, curTP, isBuy, curPrice, "R_EXIT_HOLD_TO_1R"))
-            { g_rExit[idx].lastProtectedSL = runLockSL; curSL = runLockSL; }
-
-            PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f factors=%d/6 action=HOLD reason=CONTINUATION_STRONG lockR=%.2f",
-                        ticket, dirStr, currentR, strongFactors, lockR);
-            continue;
-         }
+         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f guaranteedFloorR=%.2f action=CLOSE reason=R_PROFIT_GUARANTEE_FLOOR_BREACH (broker SL could not be placed before price crossed the internal floor)",
+                     ticket, dirStr, currentR, g_rExit[idx].guaranteedFloorR);
+         XAU_RExit_RequestClose(idx, ticket, "R_PROFIT_GUARANTEE_FLOOR_BREACH");
+         continue;
       }
 
       // ---- RUN_TO_1R continuation-failure recheck: closed-bar granularity
