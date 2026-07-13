@@ -1,6 +1,22 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
+//|   v6.21.3 - Full-Risk Binary Mode + Isolated COUNTER_EXCURSION       |
+//|   Forensic repair of the 0.01-lot regression: OpenTrade no longer     |
+//|   scales riskPct into a 9-15% quality band or clamps a sub-minLot     |
+//|   result up to minLot. A valid approved trade now uses the full      |
+//|   InpNormalRiskPct (15%) with no grade/AI/session/volatility/        |
+//|   drawdown scaling; an invalid one is blocked outright, with an      |
+//|   explicit reason (RISK_BLOCKED_LOT_BELOW_MIN), never opened at a    |
+//|   silent token size. Added a startup config-agreement assertion      |
+//|   (InpNormalRiskPct/InpMaxRiskPctEquity/InpReducedRiskFloorPct must   |
+//|   agree) and a NORMAL_ENTRY_AUDIT log before every order send.       |
+//|   COUNTER_EXCURSION_CAPTURE flipped ON by default (was COUNTER_OFF)  |
+//|   -- verified isolated from InpMaxOpenTrades, todayTradeCount, and   |
+//|   the cross-instance lock via its own magic number, comment prefix,  |
+//|   cooldown, and risk model. See branch                               |
+//|   fix/v6212-full-risk-and-entry-restore for the full forensic audit. |
+//+------------------------------------------------------------------+
 //|   v6.21.2 - Wall-Clock Entry Timing + R-Exit Identity Hardening       |
 //|   Removes every intentional 5-minute/next-M5-bar entry wait (fresh    |
 //|   signal, re-entry, recovery, startup) in favor of one bounded        |
@@ -1744,11 +1760,13 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.263"
-#property description "XAUUSD AI Sniper v6.20.6"
-#property description "Adds independent COUNTER_EXCURSION_CAPTURE: fast tactical countertrade when a"
-#property description "blocked candidate's reason proves real immediate opposite pressure. Normal"
-#property description "strategy, filters, risk sizing, and 2-min entry delay are unchanged."
+#property version   "6.264"
+#property description "XAUUSD AI Sniper v6.21.3"
+#property description "Full-risk binary mode: a valid approved trade uses the full configured"
+#property description "InpNormalRiskPct with no grade/AI/session/volatility scaling; a lot that"
+#property description "can't clear broker minimum blocks instead of silently opening at 0.01."
+#property description "COUNTER_EXCURSION_CAPTURE is now ON by default, fully isolated from normal"
+#property description "trade count, cooldown, lock, and risk sizing."
 #property strict
 
 // v6.21.2: entry-delay bounds, declared this early so every call site
@@ -1758,9 +1776,9 @@
 #define XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0
 #define XAU_ENTRY_DELAY_SAFE_DEFAULT_SEC     150.0
 
-#define XAUAI_EA_VERSION "v6.21.2"
-#define XAUAI_EA_VERSION_NUM "6.21.2"
-#define XAUAI_BUILD_HASH "v6206-counter-excursion-capture-20260710"
+#define XAUAI_EA_VERSION "v6.21.3"
+#define XAUAI_EA_VERSION_NUM "6.21.3"
+#define XAUAI_BUILD_HASH "v6213-full-risk-binary-mode-20260713"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
