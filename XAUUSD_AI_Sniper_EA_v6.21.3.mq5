@@ -13527,7 +13527,21 @@ void OnTick()
       return;
    }
 
-   if(!newM5Bar && !watchdogDue && !timerForced)
+   // v6.21.3 forensic fix (2026-07-13 owner incident, proven live: signal at
+   // 15:35:20 armed a 150s wall-clock delay, but the next re-check of that
+   // delay didn't happen until 15:40:17 -- 297s later -- because this WHOLE
+   // scan pipeline, including XAU_TimingEngineConfirmsEntry()'s elapsed-time
+   // check, was unreachable until the next M5 bar opened. The delay's own
+   // math was always wall-clock-correct; only the CADENCE that re-evaluates
+   // it was bar-gated. Fix: once a pending confirmation's own configured
+   // delay has elapsed, bypass the M5-bar wait for THIS reason alone (not a
+   // general per-tick rescan) so XAU_TimingEngineConfirmsEntry() gets called
+   // again promptly instead of up to ~5 minutes late. Detection/scoring of
+   // brand-new candidates is still M5-bar-cadenced, unchanged.
+   bool pendingConfirmDue = (g_pendingEntryConfirm.active &&
+                             (TimeCurrent() - g_pendingEntryConfirm.firstSeenTime) >= XAU_EffectiveEntryDelaySeconds());
+
+   if(!newM5Bar && !watchdogDue && !timerForced && !pendingConfirmDue)
    {
       g_lastSkipReason = StringFormat("WAITING_FOR_NEW_M5_BAR: cur=%s last=%s sinceScan=%ds",
                                       TimeToString(curBar, TIME_MINUTES),
@@ -13541,6 +13555,10 @@ void OnTick()
       }
       return;
    }
+   if(pendingConfirmDue && !newM5Bar && !watchdogDue && !timerForced)
+      PrintFormat("TIMING_ENGINE: PENDING_CONFIRM_DUE_MIDBAR bypassing M5-bar wait -- %s %s elapsed=%.0fs target=%.0fs (re-checking now instead of waiting for the next bar)",
+                  g_pendingEntryConfirm.dir == 1 ? "BUY" : "SELL", g_pendingEntryConfirm.setup,
+                  (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime), XAU_EffectiveEntryDelaySeconds());
 
    // v6.17.13 FIX: this Print used to fire completely unthrottled -- every
    // single tick while watchdogDue stayed true, which (live-journal-proven)
