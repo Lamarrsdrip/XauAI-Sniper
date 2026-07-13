@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.21.2";
-  const edition  = info?.edition  || "R-BASED EXIT MANAGER";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.21.2.mq5";
+  const version  = info?.version  || "v6.21.3";
+  const edition  = info?.edition  || "FULL-RISK BINARY MODE";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.21.3.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
