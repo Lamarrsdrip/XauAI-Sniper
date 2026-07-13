@@ -2226,7 +2226,7 @@ input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN 
 input double InpMaxAggregateRiskPct = 35.0;
 input group "=== ACCOUNT-RELATIVE GROWTH SIZING (v6.18.0 — one risk-%% authority for every account size) ==="
 input double InpNormalRiskPct       = 15.0; // Uniform target risk-per-trade, ALL account sizes, for a fully-qualified (A/A+, clean evidence) trade. Evidence: real growth-era trades averaged ~15.5% risk/trade; owner explicit direction 2026-07-09: "cap all acc to start from 15%".
-input double InpReducedRiskFloorPct = 9.0;  // Floor for legitimate evidence-based risk reduction (weaker grade, thin volatility/AI/memory evidence) = 60% of InpNormalRiskPct, matching owner's stated 0.25-lot-normal / 0.15-lot-reduced ratio. A qualified trade can never be sized below this floor by multiplier stacking.
+input double InpReducedRiskFloorPct = 15.0;  // v6.21.2 FULL-RISK BINARY MODE: set equal to InpNormalRiskPct on purpose -- there is no more quality-band reduction, so floor==ceiling collapses the band clamp to a no-op. A trade is either approved at the full 15% or blocked; nothing sizes in between.
 input double InpDailyLossLimit = 3.0;      // v6.4.4: Adaptive Recovery Mode trigger — when daily loss >= this %, EA switches to A/A+ only + 50% size. Set 0 to disable. EA never pauses.
 
 input group "=== EQUITY GROWTH GUARD (v6.4.12 — real XAU risk + loss containment) ==="
@@ -2752,7 +2752,7 @@ enum ENUM_COUNTER_MODE
    COUNTER_SHADOW        = 1,  // detects + simulates + logs; sends no order
    COUNTER_EXECUTE  = 2   // sends real orders -- demo AND live accounts, same as the normal strategy
 };
-input ENUM_COUNTER_MODE InpCounterExcursionMode        = COUNTER_OFF;
+input ENUM_COUNTER_MODE InpCounterExcursionMode        = COUNTER_EXECUTE; // v6.21.2 owner directive 2026-07-13: this feature was built to be active and used -- ON by default. Fully isolated from the normal path (own magic InpCounterExcursionMagicNumber, own comment prefix, own cooldown, own risk model -- see XAU_TryCounterExcursionEntry). Does not consume InpMaxOpenTrades slots or todayTradeCount (those only count InpMagicNumber positions/opens) and never claims the normal cross-instance lock.
 // CORRECTED (owner directive): the prior baseline set counterRiskPct =
 // InpNormalRiskPct directly -- InpNormalRiskPct is the MAIN bot's own flat
 // 15%-of-EQUITY target for a fully-qualified A/A+ trade (see its definition:
@@ -7560,6 +7560,40 @@ int OnInit()
    licenseValid = ValidatePIN(InpLicensePIN);
    if(!licenseValid) { Alert("Invalid PIN: " + InpLicensePIN); return INIT_FAILED; }
    Print("LICENSE OK: ", InpLicensePIN);
+
+   // v6.21.2 Part 3 — CONFIG-AGREEMENT ASSERTION: InpNormalRiskPct (the sole normal-
+   // entry risk authority) and InpMaxRiskPctEquity (the hard equity-% backstop) must
+   // agree, or a valid approved trade could be silently clamped below the risk the
+   // owner configured. Refuse to start rather than trade on a self-contradicting config.
+   if(MathAbs(InpNormalRiskPct - InpMaxRiskPctEquity) > 0.0001)
+   {
+      Print("CONFIG ERROR: InpNormalRiskPct and InpMaxRiskPctEquity disagree. InpNormalRiskPct=",
+            DoubleToString(InpNormalRiskPct, 4), "% InpMaxRiskPctEquity=", DoubleToString(InpMaxRiskPctEquity, 4),
+            "% -- these must be equal so the configured risk is never silently capped below what it claims to be.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(MathAbs(InpReducedRiskFloorPct - InpNormalRiskPct) > 0.0001)
+   {
+      Print("CONFIG ERROR: InpReducedRiskFloorPct must equal InpNormalRiskPct in full-risk binary mode. InpReducedRiskFloorPct=",
+            DoubleToString(InpReducedRiskFloorPct, 4), "% InpNormalRiskPct=", DoubleToString(InpNormalRiskPct, 4),
+            "% -- a mismatch would silently reopen the retired quality-band reduction.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   PrintFormat("RISK_CONFIG_ASSERTION_PASSED | ConfiguredRisk=%.2f%% | SingleTradeCap=%.2f%% | AggregateRiskCap=%.2f%% | mode=FULL_RISK_BINARY",
+               InpNormalRiskPct, InpMaxRiskPctEquity, InpMaxAggregateRiskPct);
+
+   // v6.21.2 Part 10 (owner directive 2026-07-13) — COUNTER_EXCURSION runtime proof.
+   // enabled=true by default; isolation flags below are structural facts about this
+   // build (CountMyPositions()/todayTradeCount/XAU_TryClaimEntryLock all key off
+   // InpMagicNumber only -- the counter path never touches any of them), not aspirational.
+   PrintFormat(
+      "COUNTER_EXCURSION: enabled=%s | mode=%s | magic=%d | normalMagic=%d | riskFraction=%.3f | "
+      "normalSlotIsolation=true | normalCooldownIsolation=true | normalLockIsolation=true | "
+      "normalDailyCountIsolation=true | commentPrefix=XAU-COUNTER-EXC| normalCommentPrefix=XAU-SNIPER|",
+      InpCounterExcursionMode != COUNTER_OFF ? "true" : "false",
+      InpCounterExcursionMode == COUNTER_OFF ? "COUNTER_OFF" : (InpCounterExcursionMode == COUNTER_SHADOW ? "COUNTER_SHADOW" : "COUNTER_EXECUTE"),
+      InpCounterExcursionMagicNumber, InpMagicNumber, InpCounterRiskFractionOfNormal);
+
    bool noLimit = XAU_NoLimitTradingModeActive();
    PrintFormat("NO_LIMIT_RESOLVED: NoLimitTradingMode=%s | DisableAllDailyLocks=%s | NoDailyLimitMode=%s | DailyGrowthLockEnabled=%s | DailyPauseEnabled=%s | DailyGrowthLock=%s | DailyProfitLock=%s | DailyPause=%s | Cooldown=%s | StopForDay=%s | ForceCloseByDailyLock=%s",
                XAU_BoolText(noLimit),
@@ -12946,13 +12980,13 @@ void OnTick()
          if(!g_adaptiveRecoveryMode)
          {
             g_adaptiveRecoveryMode = true;
-            PrintFormat("ADAPTIVE_WEEKLY_RECOVERY: weekly -$%.2f (%.1f%%) | A/A+ only | lot x0.50 | EA continues trading",
+            PrintFormat("ADAPTIVE_WEEKLY_RECOVERY: weekly -$%.2f (%.1f%%) | A/A+ only (lot size NOT reduced -- v6.21.2 binary risk mode) | EA continues trading",
                         MathAbs(weeklyPnL), MathAbs(weeklyPnL) / weeklyStartEquity * 100.0);
          }
       }
       if(heartbeatDue)
       {
-         PrintFormat("ADAPTIVE_WEEKLY_RECOVERY_ACTIVE: weekly -$%.2f (%.1f%%) | A/A+ only | 50%% size | scanning for opportunities",
+         PrintFormat("ADAPTIVE_WEEKLY_RECOVERY_ACTIVE: weekly -$%.2f (%.1f%%) | A/A+ only (lot size NOT reduced) | scanning for opportunities",
                      MathAbs(weeklyPnL), MathAbs(weeklyPnL) / weeklyStartEquity * 100.0);
          lastGateHeartbeat = TimeCurrent();
       }
@@ -12963,7 +12997,7 @@ void OnTick()
    // OLD: when daily P&L < -X%, call CloseAll() and block all trades until midnight.
    // NEW: EA continues scanning and trading, but raises the bar:
    //   - Only A/A+ setups pass the RECOVERY_GATE at entry
-   //   - All lot sizes reduced 50% (capital protection without full freeze)
+   //   - v6.21.2: lot size is NOT reduced (binary risk mode) -- capital protection is via the A/A+-only quality gate alone
    //   - All spread / volatility / news / confidence filters remain active
    //   - Mode clears on: a) any profitable trade wins, b) equity recovers, c) new day
    double dailyPnL = equity - dailyStartEquity;
@@ -12974,7 +13008,7 @@ void OnTick()
       {
          g_adaptiveRecoveryMode = true;
          PrintFormat("ADAPTIVE_RECOVERY_ARMED: daily -$%.2f (%.1f%% of $%.2f daily start) | "
-                     "A/A+ setups only | lot x0.50 | all filters active | EA is NOT paused",
+                     "A/A+ setups only (lot size NOT reduced -- v6.21.2 binary risk mode) | all filters active | EA is NOT paused",
                      MathAbs(dailyPnL), MathAbs(dailyPnL) / dailyStartEquity * 100.0, dailyStartEquity);
       }
       else if(!dailyThresholdHit && g_adaptiveRecoveryMode)
@@ -12984,7 +13018,7 @@ void OnTick()
       }
       if(g_adaptiveRecoveryMode && heartbeatDue)
       {
-         PrintFormat("ADAPTIVE_RECOVERY_ACTIVE: daily -$%.2f (%.1f%%) | A/A+ only | lot x0.50 | scanning",
+         PrintFormat("ADAPTIVE_RECOVERY_ACTIVE: daily -$%.2f (%.1f%%) | A/A+ only (lot size NOT reduced) | scanning",
                      MathAbs(dailyPnL), MathAbs(dailyPnL) / dailyStartEquity * 100.0);
          lastGateHeartbeat = TimeCurrent();
       }
@@ -15166,14 +15200,14 @@ void OnTick()
                sizeMulti = MathMin(sizeMulti, 0.35);
                XAU_LogSoftBlockDowngrade("AI_B_CONFIDENT_SKIP", blockMsgB, setupName, grade, combinedScore);
                g_aiLastVerdict = "B-CONFIDENT-SKIP-WARN"; g_aiLastConfidence = lastAIConfidence;
-               Print("AI DIRECTOR: ADVISORY — confident B-grade skip logged, lot x0.35, not blocking.");
+               Print("AI DIRECTOR: ADVISORY — confident B-grade skip logged (sizeMulti informational only, lot size NOT reduced -- v6.21.2 binary risk mode), not blocking.");
             }
             else if(lastAIConfidence > 0)
             {
                // B-grade: AI evaluated and said SKIP but without strong conviction — reduce size, don't block
                aiVerdictStr = "REDUCE";
                sizeMulti = MathMin(sizeMulti, 0.50);
-               Print("AI DIRECTOR: REDUCE (AI SKIP, real confidence=", lastAIConfidence, "%) — lot x0.50");
+               Print("AI DIRECTOR: ADVISORY (AI SKIP, real confidence=", lastAIConfidence, "%) — sizeMulti informational only, lot size NOT reduced -- v6.21.2 binary risk mode");
                g_aiLastVerdict = "REDUCE"; g_aiLastConfidence = lastAIConfidence;
             }
             else
@@ -16770,54 +16804,44 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       return false;
    }
 
-   // Lot sizing — v6.18.0 UNIFIED ACCOUNT-RELATIVE GROWTH SIZING (replaces the old
-   // InpAccountMode 0.6/1.2/2.0% base + REAL_RISK_MODE/JUNE_16_19_BALANCE_MODE split).
-   // ONE authority now: InpNormalRiskPct (15%, uniform across every account size) is
-   // the target for a fully-qualified trade; sizeMulti (grade + AI + memory + committee
-   // + volatility + STI, all already computed upstream in ScanSignals, A+/A protected
-   // by the v6.4.18 enforcement floor) is rescaled from its native ~0.45(B)-1.10(A+)
-   // range into a 60%-100% band of that target, so quality still matters but a
-   // qualified trade can never collapse below InpReducedRiskFloorPct (9%) or exceed
-   // InpNormalRiskPct (15%) no matter how many soft multipliers stack. This directly
-   // implements the pipeline requested 2026-07-09: ACCOUNT SCALE -> NORMAL TARGET
-   // EXPOSURE -> QUALITY/VOLATILITY ADJUSTMENT -> ACCOUNT-RELATIVE REDUCED FLOOR ->
-   // HARD SAFETY -> FINAL LOT. At realistic SL distances (~$13-17 on XAUUSD, matching
-   // real growth-era trades) this reproduces the owner's stated nominal lot sizes
-   // (~0.10 at $1k, ~0.25 at $3k, ~0.50 at $6-8k) organically, because that's what a
-   // 9-15% real risk-per-trade actually looks like at those SL distances — it no
-   // longer needs a separate unconditional lot-floor override fighting the risk cap.
+   // Lot sizing — v6.21.2 FULL-RISK BINARY MODE (replaces the v6.18.0 60%-100%
+   // quality band). Owner directive 2026-07-13: a trade is either APPROVED, in
+   // which case it uses the full configured InpNormalRiskPct with no grade / AI /
+   // memory / committee / session / volatility / performance / drawdown scaling,
+   // or it is BLOCKED outright. sizeMulti (grade+AI+memory+committee+volatility+
+   // STI) remains a PASS/BLOCK signal upstream in ScanSignals; it is no longer read
+   // here to shrink the lot of an approved trade.
    double balance = StrategyReferenceBalance();
-   double qualityFrac = MathMax(0.0, MathMin(1.10, sizeMulti)) / 1.10;      // 0..1, 1.0 = A+ baseline
-   double qualityBandMult = MathMax(0.60, MathMin(1.00, 0.60 + 0.40 * qualityFrac)); // -> [0.60..1.00]
-   double baseRisk = InpNormalRiskPct;                 // uniform 15% target, ALL account sizes
-   double riskPct  = baseRisk * qualityBandMult;        // quality-adjusted, 9%..15%, floor/ceiling guaranteed
-   PrintFormat("[LOT_TRACE] UNIFIED SIZING v6.18.0 | grade sizeMulti=%.3f -> qualityFrac=%.3f -> qualityBandMult=%.3f | normalTarget=%.2f%% -> riskPct=%.2f%% (floor=%.2f%%, ceiling=%.2f%%)",
-               sizeMulti, qualityFrac, qualityBandMult, InpNormalRiskPct, riskPct, InpReducedRiskFloorPct, InpNormalRiskPct);
+   double baseRisk = InpNormalRiskPct;                 // uniform target, ALL account sizes, ALL grades
+   double riskPct  = baseRisk;                          // FULL-RISK BINARY MODE: no quality band
+   PrintFormat(
+      "[LOT_TRACE] FULL-RISK BINARY MODE | approved setup=%s | grade=%s | sizeMulti=%.3f (informational only, not applied) | "
+      "configuredRisk=%.2f%% | effectiveRisk=%.2f%%",
+      lastSignalSetup, g_pendingBrainGrade, sizeMulti, InpNormalRiskPct, riskPct);
    bool entryQualityScout = (sizeMulti <= InpBlockedMemoryScoutLotMulti * 0.75 ||
                              StringFind(g_pendingBrainEntryAudit, "REPORT-FIT SCOUT") >= 0 ||
                              StringFind(g_pendingBrainEntryAudit, "BLOCKED-MEMORY SCOUT") >= 0);
-   // v6.4.20: A+/A enforcement floor already restored sizeMulti to grade baseline.
-   // The scout flag must not survive into OpenTrade for high-grade entries — it fights the floor.
-   if(entryQualityScout && (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0))
+   // Binary mode: a scout/insufficient-evidence classification is no longer a
+   // reason to open a token-size trade. It is a BLOCK, for every grade -- there
+   // is no more "reduced-size normal trade."
+   if(entryQualityScout)
    {
-      Print("[LOT_TRACE] SCOUT CAP SUPPRESSED: grade A/A+ — TradeBrain/memory scout markers do not downgrade high-grade entries. entryQualityScout cleared.");
-      entryQualityScout = false;
+      Print("ENTRY BLOCKED: setup classified as scout/insufficient evidence (sizeMulti=",
+            DoubleToString(sizeMulti, 3), "). Binary mode does not permit reduced-size normal trades.");
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "EntryQualityScout",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "SCOUT_CLASSIFICATION_BINARY_BLOCK",
+                                true, false, false, 0, 0,
+                                "Scout/insufficient-evidence setup blocked outright (no reduced-size fallback).",
+                                reason, price);
+      return false;
    }
    double riskAfterSignal = riskPct;
 
    // v6.18.0: AccountSizeRiskMultiplier() no longer scales riskPct — InpNormalRiskPct is
-   // now DELIBERATELY uniform across every account size ("same mathematics, without
-   // blindly multiplying nominal lots beyond safe exposure" — owner direction 2026-07-09).
-   // acctSizeMult is still computed (kept for telemetry/other callers) but held at 1.0 here.
+   // DELIBERATELY uniform across every account size. acctSizeMult is still computed
+   // (kept for telemetry/other callers) but held at 1.0 here.
    double acctSizeMult = 1.0; AccountSizeRiskMultiplier();
-   if(entryQualityScout && InpEntryQualityScoutRiskCap > 0.0 && riskPct > InpEntryQualityScoutRiskCap)
-   {
-      Print("SCOUT-RISK CAP: memory/scout entry risk ",
-            DoubleToString(riskPct, 2), "% -> ",
-            DoubleToString(InpEntryQualityScoutRiskCap, 2),
-            "% so blocked-memory recovery cannot become a full-size trade.");
-      riskPct = InpEntryQualityScoutRiskCap;
-   }
    double riskAfterAccount = riskPct;
 
    // v6.4.16: Profit Guardian lot reduction removed. PG_RiskMultiplier() returns 1.0 for
@@ -16835,14 +16859,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                 reason, price);
       return false;   // hard block (skip trade — acceptable)
    }
-   // pgMult is 1.0 for all other tiers — no lot reduction applied
-   if(entryQualityScout && InpEntryQualityScoutRiskCap > 0.0 && riskPct > InpEntryQualityScoutRiskCap)
-   {
-      Print("SCOUT-RISK CAP: post-PG memory/scout risk ",
-            DoubleToString(riskPct, 2), "% -> ",
-            DoubleToString(InpEntryQualityScoutRiskCap, 2), "%");
-      riskPct = InpEntryQualityScoutRiskCap;
-   }
+   // pgMult is 1.0 for all other tiers — no lot reduction applied.
+   // (entryQualityScout already returned false above -- binary mode has no
+   // reduced-size scout path left to cap here.)
    double riskAfterPG = riskPct;
 
    // v6.4.16: REMOVED — drawdown recovery risk cap disabled.
@@ -16858,34 +16877,22 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // which stops trading entirely rather than taking tiny "fear trades."
    double riskAfterCareful = riskPct;   // kept for audit log compatibility
 
-   // Session scaling — v6.4.17: A+/A grade bypasses Asia session cut entirely.
-   // Root cause of 0.02 A+ trade: grade(1.10) × vol_cap(0.65) × asia(0.80) × vol_adapt(0.85)
-   // = 0.484x → micro-lot. A+ has passed the full quality gate; session time is not a reason
-   // to trade smaller. B-grade continues to be scaled down during Asia low-liquidity hours.
+   // Session scaling — v6.21.2 FULL-RISK BINARY MODE: session time is a PASS/BLOCK
+   // signal upstream (spread/liquidity gates in ScanSignals), never a lot reducer.
+   // sessionMult is still computed and logged for telemetry (what the old Asia cut
+   // WOULD have been) but is no longer multiplied into riskPct for any grade.
    MqlDateTime dt; TimeCurrent(dt);
    double sessionMult = 1.0;
    bool highGradeSession = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
-   if(dt.hour >= 0 && dt.hour < 8)
+   if(dt.hour >= 0 && dt.hour < 8 && !highGradeSession)
    {
-      if(highGradeSession)
-      {
-         // v6.4.17: A+/A session cut REMOVED
-         sessionMult = 1.0;
-         PrintFormat("[LOT_TRACE] Asia session bypass | grade=A+/A | sessionMult=1.0 | "
-                     "hour=%d | (was: up to 0.80x) | full size maintained", dt.hour);
-      }
-      else
-      {
-         // B-grade: continue applying Asia scaling
-         bool trendContinuation = IsTrendContinuationRegime(signal);
-         double asianMult = 0.55;
-         if(trendContinuation && !entryQualityScout)
-            asianMult = g_propFirmMode ? 0.55 : 0.65;
-         sessionMult = asianMult;
-         riskPct *= asianMult;
-         PrintFormat("[LOT_TRACE] Asia session applied | grade=B | sessionMult=%.2f | hour=%d",
-                     asianMult, dt.hour);
-      }
+      bool trendContinuation = IsTrendContinuationRegime(signal);
+      double asianMult = 0.55;
+      if(trendContinuation)
+         asianMult = g_propFirmMode ? 0.55 : 0.65;
+      sessionMult = asianMult;
+      PrintFormat("[LOT_TRACE] Asia session — informational only, NOT applied to lot size | grade=B | wouldHaveBeen=%.2fx | hour=%d",
+                  asianMult, dt.hour);
    }
    double riskAfterSession = riskPct;
 
@@ -16897,25 +16904,15 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double patternMult = 1.0;                       // always 1.0 in v6.4.16
    double riskAfterPattern = riskPct;              // kept for audit log compatibility
 
-   // VOLATILITY-ADAPTIVE SIZING — v6.4.17: bypassed for A+/A.
-   // On A+ SELL @3983 SL:3995: vol_cap(ScanSignals) + asia_session + vol_adapt =
-   // three separate vol cuts on the same trade → 0.65×0.80×0.85 = 0.44x on top of base.
-   // A+/A's SL is already wider in high-vol (via ATR-based placement), so the lot formula
-   // already captures the dollar risk adjustment. Explicit vol-adapt on top is redundant.
+   // VOLATILITY-ADAPTIVE SIZING — v6.21.2 FULL-RISK BINARY MODE: volatility is a
+   // PASS/BLOCK signal upstream (ATR-based SL placement already captures it in the
+   // dollar-risk formula). volMult is still computed and logged for telemetry but
+   // is no longer multiplied into riskPct for any grade.
    bool highGradeVol = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
    double volMult = highGradeVol ? 1.0 : GetVolAdaptiveMult();
    if(!highGradeVol && volMult != 1.0)
-   {
-      Print("VOL-ADAPT: risk × ", DoubleToString(volMult, 2),
-            " (ATR vs median; ", volMult < 1.0 ? "high vol — shrinking" : "calm — slight boost", ")");
-      riskPct *= volMult;
-   }
-   else if(highGradeVol)
-   {
-      double checkVol = GetVolAdaptiveMult();
-      if(MathAbs(checkVol - 1.0) > 0.01)
-         PrintFormat("[LOT_TRACE] VOL-ADAPT bypassed | grade=A+/A | wouldHaveBeen=%.2fx | hard-bypass prevents micro-lot stacking", checkVol);
-   }
+      PrintFormat("[LOT_TRACE] VOL-ADAPT — informational only, NOT applied to lot size | wouldHaveBeen=%.2fx (%s)",
+                  volMult, volMult < 1.0 ? "high vol" : "calm");
 
    if(g_propFirmMode && g_propFirmRiskPerTradePct > 0.0 &&
       riskPct > g_propFirmRiskPerTradePct)
@@ -16951,16 +16948,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       riskPct = largeFloor;
    }
 
-   // v6.18.0 — FINAL BAND CLAMP: guarantee the InpReducedRiskFloorPct(9%)..
-   // InpNormalRiskPct(15%) band survives every legacy multiplier above (Asia session,
-   // volatility-adaptive, prop-firm, large-account floor), not just the quality-band
-   // math at the top of this function. Without this, a B-grade trade during Asia
-   // session (qualityBand ~0.76 * sessionMult 0.55 = ~0.42) could still stack below
-   // the promised floor — exactly the "several independent multipliers silently stack"
-   // failure mode this release exists to close. Exempted: entryQualityScout (deliberate
-   // small recon size) and g_propFirmMode (its own separate, explicit risk budget) —
-   // both are intentional reductions, not multiplier-stack accidents.
-   if(!entryQualityScout && !g_propFirmMode)
+   // v6.21.2 — DEFENSIVE INVARIANT: riskPct must equal InpNormalRiskPct exactly for
+   // every normal approved trade (entryQualityScout already blocked the trade above,
+   // so it can never reach here; g_propFirmMode is the one explicitly-enabled
+   // exception, per owner directive). InpReducedRiskFloorPct is set equal to
+   // InpNormalRiskPct so this clamp is a no-op band-of-one, not a reduction path.
+   if(!g_propFirmMode)
       riskPct = MathMax(InpReducedRiskFloorPct, MathMin(InpNormalRiskPct, riskPct));
 
    double riskAmount = balance * riskPct / 100.0;
@@ -17005,46 +16998,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                balance, lotGrade, riskPct, riskAmount, slDist, rawLots,
                InpLotSizingMode == JUNE_16_19_BALANCE_MODE ? "JUNE_16_19_BALANCE_MODE" : "REAL_RISK_MODE");
 
-   // v6.4.15 — PROPORTIONAL LOT FLOOR FOR SMALL ACCOUNTS
-   // ROOT CAUSE FIX: On accounts < $25,000, multiplicative stacking of grade/session/
-   // safety multipliers can compress rawLots below broker minimum even when the trade
-   // signal is genuinely valid. This is NOT proportional: a $10k account trades 4× more
-   // than a $3k account under identical conditions, but both hit 0.01 lots at the floor.
-   //
-   // Fix: if rawLots < 2.5× minLot AND balance < $25k, apply a risk floor so at least
-   // 2.5× minLot is traded. The floor is capped at baseRisk% (the pre-multiplier base)
-   // so it cannot blindly override recovery/drawdown logic — it only counteracts
-   // excessive multiplier stacking on small accounts.
-   //
-   // Exclusions: quality-scout entries, prop-firm mode, and drawdown-recovery mode
-   // all keep their own intentionally reduced sizing.
-   double proportionalFloorApplied = 0.0;   // for audit logging
-   if(!juneBalanceLotMode && !entryQualityScout && !g_propFirmMode && !drawdownActive && rawLots > 0
-      && rawLots < minLot * 2.5 && balance < 25000.0 && slDollarPerLotRaw > 0)
-   {
-      // Risk% needed to trade 2.5× minLot with the current SL distance
-      double targetLots = minLot * 2.5;
-      double targetRiskPct = (targetLots * slDollarPerLotRaw / balance) * 100.0;
-      // Cap: floor cannot exceed the pre-multiplier base risk (safety systems remain)
-      double floorRiskPct = MathMin(targetRiskPct, baseRisk);
-      if(floorRiskPct > riskPct)
-      {
-         double floorRiskAmt = balance * floorRiskPct / 100.0;
-         double floorRawLots = floorRiskAmt / slDollarPerLotRaw;
-         proportionalFloorApplied = floorRiskPct;
-         PrintFormat(
-            "PROPORTIONAL_LOT_FLOOR | balance=$%.0f sizeMulti=%.3f riskPct=%.3f%% rawLots=%.4f < 2.5x minLot=%.2f | "
-            "floor risk %.3f%% → rawLots %.4f | reason: multiplier stack compressed lot below proportional minimum | "
-            "sizeMulti=%.3f pgMult=%.2f sessionMult=%.2f patternMult=%.2f volMult=%.2f | "
-            "downstream GrowthGuard/equityCap/basketCap still apply",
-            balance, sizeMulti, riskPct, rawLots, minLot,
-            floorRiskPct, floorRawLots,
-            sizeMulti, pgMult, sessionMult, patternMult, volMult);
-         rawLots   = floorRawLots;
-         riskPct   = floorRiskPct;
-         riskAmount = balance * riskPct / 100.0;
-      }
-   }
+   // v6.4.15's PROPORTIONAL LOT FLOOR (compensating for grade/session/volatility
+   // multiplier stacking on small accounts) is REMOVED in v6.21.2 FULL-RISK BINARY
+   // MODE: there is no more multiplier stack to compensate for. riskPct is always
+   // exactly InpNormalRiskPct for an approved normal trade, so rawLots is the
+   // honest balance×15%÷slDollarPerLot result with nothing left to counteract.
+   double proportionalFloorApplied = 0.0;   // always 0 now; kept only so downstream log lines still compile
 
    double riskOvershootPct = 0.0;
    double lots = XAU_NormalizeVolumeForRisk(rawLots, lotStep, minLot, maxLot,
@@ -17054,34 +17013,23 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double brokerLimitedLots = lots;
    if(brokerLimitedLots < minLot)
    {
-      // v6.3.2 FIX: if rawLots > 0 the setup is real — multiplier stacking (grade, AI,
-      // session, EPF, STI, pattern) compressed the size below broker minimum. Clamp to
-      // minLot rather than silently skip. A minLot trade is better than no trade.
-      if(rawLots > 0)
-      {
-         // v6.4.15: distinguish whether this is a genuine math result or a stacking artifact
-         string floorCollapseReason = (proportionalFloorApplied > 0)
-            ? "PROPORTIONAL_FLOOR_APPLIED_BUT_SL_TOO_WIDE_FOR_ACCOUNT"
-            : "STACKED_MULTIPLIERS_COMPRESSED_BELOW_MINLOT";
-         PrintFormat(
-            "LOT-CALC FLOOR: lots %.4f < minLot %.2f → clamped to minLot | "
-            "rawLots=%.4f riskAmt=$%.2f sl$/lot=$%.2f balance=$%.0f | reason=%s | "
-            "NOTE: 0.01 lot is mathematically correct here — account too small for wider lots at current SL/risk config",
-            brokerLimitedLots, minLot, rawLots, riskAmount, slDollarPerLotRaw, balance,
-            floorCollapseReason);
-         lots = minLot;
-      }
-      else
-      {
-         Print("LOT-CALC SKIP: zero rawLots — riskAmt=$", DoubleToString(riskAmount,2),
-               " slDist=", DoubleToString(slDist,2), " sl$/lot=$", DoubleToString(slDollarPerLotRaw,2));
-         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "RiskSizing",
-                                   signal, funnelSetup, funnelGrade, funnelScore,
-                                   true, false, "BLOCKED", "ZERO_RAW_LOT",
-                                   true, false, false, 0, 0,
-                                   "Raw lot calculated as zero; order not sent.", reason, price);
-         return false;
-      }
+      // v6.21.2 FULL-RISK BINARY MODE FIX (Part 7): a calculated lot below broker
+      // minimum is NEVER silently substituted with minLot. Binary rule: valid trade
+      // = full configured risk; if the real math (balance × InpNormalRiskPct ÷
+      // slDollarPerLot) doesn't reach minLot, the trade is skipped with an explicit
+      // reason, not silently opened at a token size the owner never approved.
+      string blockReasonTxt = (rawLots > 0)
+         ? StringFormat("RISK_MATH_BELOW_BROKER_MIN: rawLots=%.4f < minLot=%.4f at configuredRisk=%.2f%% (riskAmt=$%.2f, sl$/lot=$%.2f, balance=$%.2f)",
+                        rawLots, minLot, riskPct, riskAmount, slDollarPerLotRaw, balance)
+         : StringFormat("ZERO_RAW_LOT: riskAmt=$%.2f, slDist=%.2f, sl$/lot=$%.2f",
+                        riskAmount, slDist, slDollarPerLotRaw);
+      PrintFormat("ENTRY BLOCKED: calculated lot %.5f below broker minimum %.5f. No silent 0.01 fallback. %s",
+                  brokerLimitedLots, minLot, blockReasonTxt);
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "RiskSizing",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "RISK_BLOCKED_LOT_BELOW_MIN",
+                                true, false, false, 0, 0, blockReasonTxt, reason, price);
+      return false;
    }
    else
       lots = brokerLimitedLots;
@@ -17267,25 +17215,21 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    Print("  Balance:                 $", DoubleToString(balance, 2));
    Print("  Equity:                  $", DoubleToString(equityForSizing, 2));
    Print("  Displayed Risk (InpRiskPercent, IGNORED): ", DoubleToString(InpRiskPercent, 2), "%");
-   Print("  Configured Base Risk (mode override):     ", DoubleToString(baseRisk, 2), "% [mode=",
-         (InpAccountMode == ACCT_BALANCED ? "BALANCED" :
-          InpAccountMode == ACCT_CONSERVATIVE ? "CONSERVATIVE" : "AGGRESSIVE"), "]");
+   Print("  Configured Risk (InpNormalRiskPct, FULL-RISK BINARY MODE):     ", DoubleToString(baseRisk, 2), "%");
    Print("  ATR:                     ", DoubleToString(atr, 2));
    Print("  SL Distance:             ", DoubleToString(slDist, 2), " pts");
    Print("  SL Dollar/Lot:           $", DoubleToString(slDollarPerLotRaw, 2));
    Print("  Broker Min/Max/Step:     ", DoubleToString(minLot, lotDigits), "/",
          DoubleToString(maxLot, lotDigits), "/", DoubleToString(lotStep, lotDigits));
    Print("  ---");
-   Print("  After Grade Mult (", DoubleToString(sizeMulti, 3), "x):  risk=", DoubleToString(riskAfterSignal, 3), "%  $", DoubleToString(balance * riskAfterSignal / 100.0, 2));
-   Print("  After Acct Scale (", DoubleToString(acctSizeMult, 2), "x):   risk=", DoubleToString(riskAfterAccount, 3), "%");
-   Print("  After PG Mult (1.00x - disabled v6.4.16): risk=", DoubleToString(riskAfterPG, 3), "%");
+   Print("  Grade Mult (", DoubleToString(sizeMulti, 3), "x): informational only, NOT applied to lot size — risk=", DoubleToString(riskAfterSignal, 3), "%");
+   Print("  Acct Scale (", DoubleToString(acctSizeMult, 2), "x): disabled v6.18.0 — risk=", DoubleToString(riskAfterAccount, 3), "%");
+   Print("  PG Mult (1.00x - disabled v6.4.16): risk=", DoubleToString(riskAfterPG, 3), "%");
    Print("  Careful Mode (disabled v6.4.16):          risk=", DoubleToString(riskAfterCareful, 3), "%");
-   Print("  After Session (", DoubleToString(sessionMult, 2), "x):    risk=", DoubleToString(riskAfterSession, 3), "%");
+   Print("  Session Mult (", DoubleToString(sessionMult, 2), "x): informational only, NOT applied — risk=", DoubleToString(riskAfterSession, 3), "%");
    Print("  Pattern Mult (disabled v6.4.16 = 1.00x): risk=", DoubleToString(riskAfterPattern, 3), "%");
-   Print("  After Vol Adapt (", DoubleToString(volMult, 2), "x):  final risk=", DoubleToString(riskPct, 3), "%");
+   Print("  Vol Adapt Mult (", DoubleToString(volMult, 2), "x): informational only, NOT applied — final risk=", DoubleToString(riskPct, 3), "%");
    Print("  Risk Amount:             $", DoubleToString(riskAmount, 2));
-   if(proportionalFloorApplied > 0)
-      Print("  ** PROPORTIONAL FLOOR:   Applied (balance<$25k, multiplier-stack too aggressive) → risk floored to ", DoubleToString(proportionalFloorApplied, 3), "%");
    Print("  Raw Calculated Lot:      ", DoubleToString(rawLots, 4));
    Print("  Risk-Math Lot:           ", DoubleToString(riskMathLots, lotDigits));
    Print("  After InpMaxLots cap:    ", DoubleToString(afterInpMaxLots, lotDigits));
@@ -17295,8 +17239,8 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          " (candidate risk ", DoubleToString(executedRiskPct, 3), "% / $",
          DoubleToString(lots * slDollarPerLotRaw, 2), " at SL — see RISK-RECONCILE line below for the TRUE final number)");
    Print("  ConfigBase=", DoubleToString(baseRisk, 2), "% (InpRiskPercent input is NOT the live cap — ",
-         "InpAccountMode overrides it to this value; the real hard cap is InpMaxRiskPctEquity=",
-         DoubleToString(InpMaxRiskPctEquity, 2), "%, enforced by RISK-RECONCILE regardless of lot-sizing mode)");
+         "InpNormalRiskPct is the sole normal-entry risk authority; the hard backstop is InpMaxRiskPctEquity=",
+         DoubleToString(InpMaxRiskPctEquity, 2), "%, enforced by RISK-RECONCILE)");
    Print("  Micro Collapse Reason:   ", microCollapseReason);
    Print("=====================================");
 
@@ -17394,11 +17338,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double lotTrace_afterGradeLot = (slDollarPerLotRaw > 0) ? (balance * baseRisk / 100.0 * sizeMulti / slDollarPerLotRaw) : 0;
    double lotTrace_margCapDelta  = (desiredLots > lots + 0.001) ? desiredLots - lots : 0;
    double lotTrace_bsktCapDelta  = (beforeBasketCapLots > afterBasketCapLots + 0.001) ? beforeBasketCapLots - afterBasketCapLots : 0;
+   // v6.21.2 FULL-RISK BINARY MODE: sessionMult/volMult are informational-only
+   // (see [LOT_TRACE] lines above) and are never applied to riskPct/lots for any
+   // grade, so they are NOT listed as reductions here. Only real, applied lot
+   // reducers appear: broker margin and the aggregate basket-risk cap.
    string lotTrace_reductionSummary = "";
-   if(sessionMult < 0.999)
-      lotTrace_reductionSummary += StringFormat("sessionMult=%.2f ", sessionMult);
-   if(MathAbs(volMult - 1.0) > 0.01)
-      lotTrace_reductionSummary += StringFormat("volAdaptMult=%.2f ", volMult);
    if(lotTrace_margCapDelta > 0.001)
       lotTrace_reductionSummary += StringFormat("marginCap=%.2f ", lots);
    if(lotTrace_bsktCapDelta > 0.001)
@@ -17528,6 +17472,21 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                 reason, 0.0);
       return false;
    }
+
+   // v6.21.2 Part 12 — DEFINITIVE ENTRY/LOT AUDIT LOG. Fires once, right before the
+   // broker send, using the truly final `lots` (post margin/basket/reconcile). Every
+   // approved normal trade's finalLots must be explainable from this single line.
+   PrintFormat(
+      "NORMAL_ENTRY_AUDIT | version=%s | setup=%s | grade=%s | direction=%s | "
+      "referenceEquity=%.2f | configuredRiskPct=%.2f | effectiveRiskPct=%.2f | riskMoney=%.2f | "
+      "entry=%.5f | sl=%.5f | slDistance=%.2f | slDollarPerLot=%.2f | rawLots=%.4f | "
+      "brokerMin=%.4f | brokerMax=%.2f | brokerStep=%.4f | marginSupportedLots=%.4f | "
+      "finalLots=%.4f | lotReducers=%s",
+      XAUAI_EA_VERSION, funnelSetup, funnelGrade, signal > 0 ? "BUY" : "SELL",
+      balance, InpNormalRiskPct, riskPct, riskAmount,
+      price, sl, slDist, slDollarPerLotRaw, rawLots,
+      minLot, maxLot, lotStep, lots,
+      lots, lotTrace_reductionSummary);
 
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
          " Price=", DoubleToString(price, digits),
@@ -27962,6 +27921,16 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
                TimeToString(executionTime, TIME_DATE | TIME_SECONDS),
                (double)(executionTime - candidateFirstSeen));
 
+   // v6.21.2 Part 11 (owner directive 2026-07-13) — required COUNTER_AUDIT line.
+   // normalPathUnaffected=true is a structural fact, not a claim: this function
+   // never writes todayTradeCount, never calls XAU_TryClaimEntryLock, and never
+   // touches CountMyPositions()'s InpMagicNumber-filtered count.
+   PrintFormat(
+      "COUNTER_AUDIT | sourceBlockedSetup=%s | sourceBlockReason=%s | counterDirection=%s | "
+      "counterRiskPct=%.3f | counterLot=%.4f | normalPositions=%d | counterPositions=%d | normalPathUnaffected=true",
+      setupName, blockReason, counterDir == 1 ? "BUY" : "SELL",
+      counterRiskPct, lots, CountMyPositions(), counterPositionOpen ? 1 : 0);
+
    if(InpCounterExcursionMode == COUNTER_SHADOW)
    {
       PrintFormat("COUNTER_EXCURSION_OPEN (SHADOW -- no order sent) | strategyOwner=COUNTER_EXCURSION_CAPTURE originalDirection=%s originalGrade=%s originalBlockReason=%s counterDirection=%s counterEligibility=%s fastValidationResult=PASS executionDirection=%s entry=%.2f SL=%.2f target03R=%.2f target05R=%.2f targetMaxR=%.2f riskUSD=%.2f lot=%.2f entryConfirmation=PASSED",
@@ -32911,8 +32880,8 @@ void UpdateDashboard(int signal, double score, string grade)
    d += XAUAI_DiagnosticsText();
    d += "==========================================\n";
    if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT — RESTING <<\n";
-   if(weeklyLossHit) d += "!! ADAPTIVE WEEKLY RECOVERY — A/A+ only | lot x0.50 | EA active !!\n";
-   if(g_adaptiveRecoveryMode) d += "!! ADAPTIVE RECOVERY — A/A+ only | lot x0.50 | EA active !!\n";
+   if(weeklyLossHit) d += "!! ADAPTIVE WEEKLY RECOVERY — A/A+ only (lot size NOT reduced) | EA active !!\n";
+   if(g_adaptiveRecoveryMode) d += "!! ADAPTIVE RECOVERY — A/A+ only (lot size NOT reduced) | EA active !!\n";
    // v6.4.6: Post-news state
    if(g_postNewsState == PNS_AFTERMATH)
       d += StringFormat(">> POST-NEWS: AFTERMATH — entries blocked, %ds remaining\n",
