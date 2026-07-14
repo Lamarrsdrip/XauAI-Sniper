@@ -1,0 +1,55 @@
+{
+  "schema": "anonymized_manual_transition_fixture_v1",
+  "window": {
+    "start": "2026-07-13T13:00:00+01:00",
+    "end": "2026-07-14T11:15:00+01:00",
+    "timezone": "Africa/Lagos",
+    "symbol": "XAUUSD",
+    "position_mode": "hedging",
+    "evidence_scope": "read-only positions, deals, orders and owner-provided chart screenshots"
+  },
+  "capital_reconstruction": {
+    "inferred_starting_balance": 1461.58,
+    "closed_net_profit": 1725.11,
+    "ending_realized_balance": 3186.69,
+    "observed_equity_during_open_buy_recovery": 3687.49,
+    "basis": "The starting balance is inferred as ending realized balance minus reconciled closed-window net profit; it was not captured as a separate terminal snapshot."
+  },
+  "closed_positions": [
+    {"opened": "2026-07-13T13:04:13+01:00", "closed": "2026-07-13T14:05:53+01:00", "direction": "SELL", "volume": 0.10, "entry": 4069.34, "exit": 4065.96, "gross_result": 33.80, "swap": 0.00, "exit_mechanism": "protected_stop"},
+    {"opened": "2026-07-13T13:04:14+01:00", "closed": "2026-07-13T13:41:16+01:00", "direction": "SELL", "volume": 0.10, "entry": 4069.51, "exit": 4061.00, "gross_result": 85.10, "swap": 0.00, "exit_mechanism": "target"},
+    {"opened": "2026-07-13T13:04:15+01:00", "closed": "2026-07-13T13:41:53+01:00", "direction": "SELL", "volume": 0.10, "entry": 4069.42, "exit": 4057.00, "gross_result": 124.20, "swap": 0.00, "exit_mechanism": "target"},
+    {"opened": "2026-07-13T13:07:03+01:00", "closed": "2026-07-13T13:41:12+01:00", "direction": "SELL", "volume": 0.05, "entry": 4069.35, "exit": 4064.00, "gross_result": 26.75, "swap": 0.00, "exit_mechanism": "target"},
+    {"opened": "2026-07-13T16:37:43+01:00", "closed": "2026-07-13T19:31:31+01:00", "direction": "SELL", "volume": 0.10, "entry": 4059.91, "exit": 4002.51, "gross_result": 574.00, "swap": 0.00, "exit_mechanism": "manual_or_unproven"},
+    {"opened": "2026-07-13T16:37:44+01:00", "closed": "2026-07-13T17:06:32+01:00", "direction": "SELL", "volume": 0.10, "entry": 4059.92, "exit": 4035.00, "gross_result": 249.20, "swap": 0.00, "exit_mechanism": "target"},
+    {"opened": "2026-07-13T19:31:41+01:00", "closed": "2026-07-14T11:10:35+01:00", "direction": "BUY", "volume": 0.10, "entry": 4003.94, "exit": 4017.23, "gross_result": 132.90, "swap": -1.26, "exit_mechanism": "manual"},
+    {"opened": "2026-07-13T19:31:42+01:00", "closed": "2026-07-14T11:10:35+01:00", "direction": "BUY", "volume": 0.10, "entry": 4004.05, "exit": 4017.23, "gross_result": 131.80, "swap": -1.26, "exit_mechanism": "manual"},
+    {"opened": "2026-07-13T19:31:42+01:00", "closed": "2026-07-14T11:10:35+01:00", "direction": "BUY", "volume": 0.10, "entry": 4004.06, "exit": 4017.25, "gross_result": 131.90, "swap": -1.26, "exit_mechanism": "manual"},
+    {"opened": "2026-07-13T19:34:31+01:00", "closed": "2026-07-14T11:10:35+01:00", "direction": "BUY", "volume": 0.10, "entry": 3993.20, "exit": 4017.25, "gross_result": 240.50, "swap": -1.26, "exit_mechanism": "manual"}
+  ],
+  "open_position_snapshot": {
+    "as_of": "2026-07-14T11:15:00+01:00",
+    "outcome": "unproven_live_snapshot",
+    "positions": [
+      {"direction": "SELL", "volume": 0.02, "entry": 4017.34, "stop": null, "target": 3993.79},
+      {"direction": "SELL", "volume": 0.10, "entry": 4017.08, "stop": null, "target": null},
+      {"direction": "SELL", "volume": 0.10, "entry": 4017.03, "stop": null, "target": 4000.78},
+      {"direction": "SELL", "volume": 0.10, "entry": 4017.42, "stop": null, "target": null}
+    ]
+  },
+  "decision_sequence": [
+    {"stage": "healthy_sell_4069", "owner": "SELL", "old_v6231": "SELL", "new_v6231": "SELL", "exhaustion": 42, "failed_extremes": 0, "micro_sweep_reclaim": false, "micro_retest": false, "micro_displacement": false, "micro_persistence": 1, "counter_opposite": 0, "remaining_reward_r": 3.2, "location_good": true, "consumed_pct": 28},
+    {"stage": "healthy_sell_4059", "owner": "SELL", "old_v6231": "SELL", "new_v6231": "SELL", "exhaustion": 58, "failed_extremes": 1, "micro_sweep_reclaim": false, "micro_retest": false, "micro_displacement": false, "micro_persistence": 1, "counter_opposite": 0, "remaining_reward_r": 2.3, "location_good": true, "consumed_pct": 48},
+    {"stage": "exhausted_low_search", "owner": "STOP_SELL_SEARCH_BUY", "old_v6231": "BLOCK_SELL_WAIT_M5", "new_v6231": "BLOCK_SELL_SEARCH_BUY", "exhaustion": 86, "failed_extremes": 3, "micro_sweep_reclaim": false, "micro_retest": false, "micro_displacement": false, "micro_persistence": 1, "counter_opposite": 35, "remaining_reward_r": 2.6, "location_good": true, "consumed_pct": 18},
+    {"stage": "single_wick_3970", "owner": "WAIT", "old_v6231": "WAIT", "new_v6231": "WAIT", "exhaustion": 88, "failed_extremes": 3, "micro_sweep_reclaim": true, "micro_retest": false, "micro_displacement": false, "micro_persistence": 1, "counter_opposite": 35, "remaining_reward_r": 2.8, "location_good": true, "consumed_pct": 12},
+    {"stage": "initial_reclaim_near_4004", "owner": "BUY", "old_v6231": "WAIT_M5", "new_v6231": "WAIT_FOR_PULLBACK", "exhaustion": 88, "failed_extremes": 3, "micro_sweep_reclaim": true, "micro_retest": true, "micro_displacement": true, "micro_persistence": 3, "counter_opposite": 35, "remaining_reward_r": 1.9, "location_good": false, "consumed_pct": 76},
+    {"stage": "value_retest_near_3993", "owner": "BUY", "old_v6231": "WAIT_M5", "new_v6231": "BUY", "exhaustion": 88, "failed_extremes": 3, "micro_sweep_reclaim": true, "micro_retest": true, "micro_displacement": true, "micro_persistence": 3, "counter_opposite": 35, "remaining_reward_r": 2.5, "location_good": true, "consumed_pct": 46},
+    {"stage": "developing_buy_normal_pullback", "owner": "HOLD_BUY", "old_v6231": "HOLD_BUY", "new_v6231": "HOLD_BUY", "exhaustion": 38, "failed_extremes": 0, "micro_sweep_reclaim": false, "micro_retest": false, "micro_displacement": false, "micro_persistence": 1, "counter_opposite": 0, "remaining_reward_r": 1.8, "location_good": true, "consumed_pct": 55},
+    {"stage": "recovery_matures_near_4033", "owner": "EXIT_BUY_PREPARE_SELL", "old_v6231": "SELL_REQUIRES_FRESH_EVIDENCE", "new_v6231": "SELL_REQUIRES_FRESH_EVIDENCE", "exhaustion": 74, "failed_extremes": 2, "micro_sweep_reclaim": true, "micro_retest": true, "micro_displacement": false, "micro_persistence": 3, "counter_opposite": 0, "remaining_reward_r": 1.6, "location_good": true, "consumed_pct": 61}
+  ],
+  "limitations": [
+    "Exact historical M1 OHLC export was unavailable; sweep, reclaim and retest labels are high-confidence chart reconstruction from the supplied screenshots and terminal charts.",
+    "The live open SELL campaign had no proven outcome at snapshot time and is not labelled successful.",
+    "Missing visible stops in the manual evidence are not a rule to copy; automated broker and risk safety remain mandatory."
+  ]
+}
