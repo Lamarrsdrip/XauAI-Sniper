@@ -155,7 +155,7 @@ Hard invariants:
 - The direction/location subset includes 17 deterministic tests for bad-location blocking, persistent opportunity identity, value reset, same-impulse reuse, Counter location, four-trade replay, and symmetry.
 - Baseline historical `tests/`: 208 failed, 789 passed.
 - Pre-addendum v6.23.1 comparison point: 208 failed, 813 passed.
-- Final historical `tests/`: 208 failed, 838 passed. The failure-name set is unchanged from the pre-repair comparison; the remaining failures are historical version-pinned fixtures, not new implementation regressions.
+- ACTIVE addendum historical `tests/`: 208 failed, 840 passed. The 208 failure-name set is unchanged from the pre-repair comparison; the remaining failures are historical version-pinned fixtures, not new implementation regressions.
 - Full repository collection including `backend/tests` cannot collect in this worktree because a pre-existing test unconditionally opens `/app/frontend/.env`; this is an environment fixture failure, not an EA test failure.
 - Backend Python syntax: passed.
 - Frontend production build: not run because `frontend/node_modules` is absent in the isolated worktree.
@@ -188,15 +188,15 @@ This is a deterministic decision replay over proven logged incident states, not 
 
 ### Branch/commit
 
-Branch: `audit/production-transition-reversal-forensic-repair`. The immutable commit SHA is reported in the final handoff because a commit cannot embed its own hash without changing that hash.
+The completed repair was promoted to `main` at the owner's direction. The ACTIVE deployment commit is reported in the final handoff because a commit cannot embed its own hash without changing that hash.
 
 ### VPS deployment status
 
-Not deployed or attached during this repair. The live VPS remains on the proven v6.23.0 build. The candidate was compiled from an isolated VPS temp path, copied back, and all temp source/EX5/log artifacts were removed. No live EA file, chart, process, input, or terminal state was changed.
+The original forensic repair was not deployed. The owner then attached v6.23.1 manually at 2026-07-14 10:41 VPS local time. A later read-only audit proved one terminal, one `XAUUSDm,M5` v6.23.1 instance, demo mode, and build `v6231-adaptive-transition-location-authority-20260714` running in SHADOW. Its EX5/source/chart/Journal were preserved before the authorized ACTIVE deployment.
 
-### Shadow mode
+### ACTIVE-mode authorization addendum
 
-Default input is `ADAPTIVE_TRANSITION_SHADOW`. The exact ACTIVE decision is computed and logged, but SHADOW does not alter entries/exits. Required logs are implemented:
+The owner explicitly authorized production demo ACTIVE mode after the SHADOW Journal proved decisions such as `WOULD_BLOCK` and `WAIT_FOR_PULLBACK` were being calculated but not enforced. The shipped default is now `ADAPTIVE_TRANSITION_ACTIVE`; the actual attached chart input and preset are deployed as ACTIVE and independently verified from Journal startup evidence. Required logs include:
 
 - `[MARKET_LIFECYCLE]`
 - `[EXHAUSTION_ENTRY_AUDIT]`
@@ -204,24 +204,25 @@ Default input is `ADAPTIVE_TRANSITION_SHADOW`. The exact ACTIVE decision is comp
 - `[REVERSAL_ENTRY_AUDIT]`
 - `[COUNTER_TRANSITION_EVIDENCE]`
 - `FINAL_DIRECTION_DECISION`
+- `[ACTIVE_FINAL_ENTRY_ASSERTION]`
+- `ADAPTIVE_TRANSITION_ACTIVE_ASSERTION_PASSED`
 
-No live shadow evidence exists yet because the owner has not deployed/attached v6.23.1.
+ACTIVE does not mean a blanket gate: healthy continuation below 60% remains eligible, 60–69% is selective, and only 70%+ creates the hard old-direction entry invariant. Direction-correct/bad-location reversals wait for value without prohibiting the other valid market states.
 
 ### Rollback
 
-1. Stop Algo Trading before changing the attached EA.
-2. Preserve the current v6.23.0 EX5 (its SHA is recorded above).
-3. Attach v6.23.1 in SHADOW only and confirm one chart/one terminal.
-4. To roll back, remove v6.23.1 from the chart, restore/attach the verified v6.23.0 EX5, and confirm the Journal build marker.
-5. Do not attach v6.23.0 and v6.23.1 simultaneously with the same normal magic.
+1. Stop the one terminal cleanly so the current chart and position state persist.
+2. Restore the preserved v6.23.1 SHADOW EX5, MQ5, and chart from the timestamped VPS rollback directory reported in the final handoff.
+3. Restart the terminal and confirm build `v6231-adaptive-transition-location-authority-20260714`, `mode=SHADOW`, and one `XAUUSDm,M5` instance.
+4. Do not attach two v6.23.1 instances with the same normal magic.
 
 ## X–Y. Remaining limitations and facts not yet proven live
 
-- Thresholds are deterministic and incident-tested but not yet calibrated on several days of live SHADOW evidence.
+- Thresholds are deterministic and incident-tested but have not yet accumulated several days of ACTIVE natural-market evidence.
 - No tick-accurate Strategy Tester replay was possible without broker ticks/tester export.
 - Fast reversal timing, transition exits, and the Counter evidence bridge compile and pass deterministic tests but have not executed on a live market.
-- Reversal opportunity origin/value persistence and same-impulse location authority are deterministic and incident-tested but have not yet produced live SHADOW telemetry.
+- Reversal opportunity origin/value persistence and same-impulse location authority are deterministic and incident-tested; ALLOW/BLOCK/WAIT behavior still needs continued natural-market observation.
 - No claim is made that v6.23.1 would realize the manual account's exact BUY entries or P/L.
-- SHADOW should be reviewed for false exhaustion blocks, missed continuations, reversal timing, and frequency before switching to ACTIVE.
-- ACTIVE must be enabled explicitly; the shipped default is SHADOW.
+- ACTIVE was explicitly authorized by the owner for the VPS demo only. No claim is made about readiness for real money.
+- Trade-frequency monitoring remains required so ACTIVE can be evaluated for false exhaustion blocks and missed healthy continuations.
 - v6.22.0 Adaptive Trend Campaign remains isolated and unchanged.

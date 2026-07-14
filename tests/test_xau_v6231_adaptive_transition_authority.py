@@ -306,17 +306,23 @@ def test_actual_vps_fixture_blocks_both_proven_losing_sells():
 def test_source_declares_real_mode_and_final_authority():
     source = EA.read_text()
     assert "enum ENUM_ADAPTIVE_TRANSITION_MODE" in source
-    assert "InpAdaptiveTransitionMode = ADAPTIVE_TRANSITION_SHADOW" in source
+    assert "InpAdaptiveTransitionMode = ADAPTIVE_TRANSITION_ACTIVE" in source
+    assert "ADAPTIVE_TRANSITION_ACTIVE_ASSERTION_PASSED" in source
+    assert 'InpAdaptiveTransitionPresetId       = "XAUUSD_AI_Sniper_EA_v6.23.1_ACTIVE.set"' in source
     assert "XAU_FinalAdaptiveDirectionDecision" in source
     assert "FINAL_DIRECTION_DECISION" in source
 
 
 def test_all_autonomous_entry_sources_obey_one_choke_point():
     source = EA.read_text()
-    open_trade = source[source.index("bool OpenTrade(") : source.index("// v5.8.6 — Execution-layer hedge backstop")]
+    open_start = source.index("bool OpenTrade(")
+    open_trade = source[open_start : source.index("void LogExit", open_start)]
     pyramid = source[source.index("void CheckPyramidOpportunity()") : source.index("bool EPF_IsEliteGrade")]
     assert "XAU_FinalAdaptiveDirectionDecision(signal, \"OPEN_TRADE\"" in open_trade
     assert "XAU_FinalAdaptiveDirectionDecision(dir, \"PYRAMID\"" in pyramid
+    assert 'XAU_FinalAdaptiveDirectionDecision(signal,"FINAL_PRE_SEND"' in open_trade
+    assert 'XAU_FinalAdaptiveDirectionDecision(dir,"PYRAMID_FINAL_PRE_SEND"' in pyramid
+    assert "[ACTIVE_FINAL_ENTRY_ASSERTION]" in source
     for source_name in ("PRIMARY", "RE_ENTRY", "RECOVERY", "RETRY", "PYRAMID"):
         assert source_name in source
 
@@ -328,6 +334,28 @@ def test_risk_and_timing_contracts_are_unchanged():
     assert "XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0" in source
     assert "FULL_RISK_BINARY" in source
     assert "No silent 0.01 fallback" in source
+
+
+def test_active_configuration_fails_closed_without_becoming_blanket_strict():
+    source = EA.read_text()
+    validator = source[source.index("bool XAU_ValidateAdaptiveTransitionConfig") : source.index("string XAU_ATLifecycleName")]
+    assert "return INIT_PARAMETERS_INCORRECT" in source
+    assert "InpTransitionExhaustThreshold-70.0" in validator
+    assert "ACTIVE requires transition position authority" in validator
+    assert "ACTIVE preset identity does not match" in validator
+    final = source[source.index("bool XAU_FinalAdaptiveDirectionDecision") : source.index("//+------------------------------------------------------------------+", source.index("bool XAU_FinalAdaptiveDirectionDecision"))]
+    assert "exhaustionProbability>=60.0 && d.exhaustionProbability<70.0" in final
+    assert 'if(source=="PYRAMID") allowed=false' in final
+    assert "continuationConfidence<55.0 || d.remainingRewardR<InpTransitionMinRewardR" in final
+    assert "if(oldDirection && d.exhaustionProbability>=70.0) allowed=false" in final
+
+
+def test_production_active_preset_cannot_silently_select_shadow():
+    preset = (ROOT / "config/XAUUSD_AI_Sniper_EA_v6.23.1_ACTIVE.set").read_text()
+    assert "InpAdaptiveTransitionMode=2" in preset
+    assert "InpAdaptiveTransitionMode=1" not in preset
+    assert "InpTransitionExhaustThreshold=70.0" in preset
+    assert "InpTransitionMatureThreshold=60.0" in preset
 
 
 def test_counter_outcome_invalidates_same_bar_lifecycle_cache():

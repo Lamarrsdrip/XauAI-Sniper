@@ -257,7 +257,7 @@ def test_source_identity_and_mirror_are_exact():
     source = EA_PATH.read_text()
     assert '#property version   "6.231"' in source
     assert '#define XAUAI_EA_VERSION "v6.23.1"' in source
-    assert 'XAUAI_BUILD_HASH "v6231-adaptive-transition-location-authority-20260714"' in source
+    assert 'XAUAI_BUILD_HASH "v6231-adaptive-transition-location-authority-active-20260714"' in source
 
 
 def test_source_full_risk_fail_closed_wiring():

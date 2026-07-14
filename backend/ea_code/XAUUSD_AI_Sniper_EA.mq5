@@ -1787,7 +1787,7 @@
 
 #define XAUAI_EA_VERSION "v6.23.1"
 #define XAUAI_EA_VERSION_NUM "6.23.1"
-#define XAUAI_BUILD_HASH "v6231-adaptive-transition-location-authority-20260714"
+#define XAUAI_BUILD_HASH "v6231-adaptive-transition-location-authority-active-20260714"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -1824,7 +1824,8 @@ enum ENUM_ADAPTIVE_TRANSITION_MODE
    ADAPTIVE_TRANSITION_SHADOW = 1,
    ADAPTIVE_TRANSITION_ACTIVE = 2
 };
-input ENUM_ADAPTIVE_TRANSITION_MODE InpAdaptiveTransitionMode = ADAPTIVE_TRANSITION_SHADOW; // first production deployment is diagnostic; ACTIVE uses the exact same decision as real entry/exit authority
+input ENUM_ADAPTIVE_TRANSITION_MODE InpAdaptiveTransitionMode = ADAPTIVE_TRANSITION_ACTIVE; // owner-directed production authority: direction AND location decisions control execution
+input string InpAdaptiveTransitionPresetId       = "XAUUSD_AI_Sniper_EA_v6.23.1_ACTIVE.set"; // deployment identity; chart/preset must preserve this exact production marker
 input int    InpTransitionPersistenceBars       = 3;     // closed M5 bars required before a directional lifecycle transition becomes authoritative
 input double InpTransitionMatureThreshold       = 60.0;
 input double InpTransitionExhaustThreshold      = 70.0;   // invariant: >=70 blocks every old-direction autonomous entry source
@@ -7733,6 +7734,11 @@ int OnInit()
    }
    PrintFormat("RISK_CONFIG_ASSERTION_PASSED | ConfiguredRisk=%.2f%% | SingleTradeCap=%.2f%% | AggregateRiskCap=%.2f%% | mode=FULL_RISK_BINARY",
                InpNormalRiskPct, InpMaxRiskPctEquity, InpMaxAggregateRiskPct);
+   if(!XAU_ValidateAdaptiveTransitionConfig())
+   {
+      Print("ADAPTIVE_TRANSITION_CONFIG ERROR: refusing initialization rather than running with contradictory direction/location authority.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
 
    // v6.21.2 Part 10 (owner directive 2026-07-13) — COUNTER_EXCURSION runtime proof.
    // enabled=true by default; isolation flags below are structural facts about this
@@ -10414,6 +10420,54 @@ double XAU_ATClamp(double value, double lo=0.0, double hi=100.0)
    return MathMax(lo, MathMin(hi, value));
 }
 
+bool XAU_ValidateAdaptiveTransitionConfig()
+{
+   string why="";
+   if((int)InpAdaptiveTransitionMode<(int)ADAPTIVE_TRANSITION_OFF ||
+      (int)InpAdaptiveTransitionMode>(int)ADAPTIVE_TRANSITION_ACTIVE)
+      why="transition mode is outside OFF/SHADOW/ACTIVE";
+   else if(InpAdaptiveTransitionMode!=ADAPTIVE_TRANSITION_OFF &&
+      (InpTransitionPersistenceBars<2 || InpTransitionPersistenceBars>6 ||
+       InpTransitionMatureThreshold<0.0 || InpTransitionMatureThreshold>=InpTransitionExhaustThreshold ||
+       MathAbs(InpTransitionExhaustThreshold-70.0)>0.0001 ||
+       InpTransitionPreferredOppositeAt<=InpTransitionExhaustThreshold || InpTransitionPreferredOppositeAt>100.0 ||
+       InpTransitionProbabilityThreshold<=0.0 || InpTransitionProbabilityThreshold>100.0 ||
+       InpTransitionReversalThreshold<InpTransitionProbabilityThreshold || InpTransitionReversalThreshold>100.0 ||
+       InpTransitionMinRewardR<=0.0 || InpTransitionMinRewardR>10.0 ||
+       InpTransitionFastConfirmSeconds<15 || InpTransitionFastConfirmSeconds>60 ||
+       InpTransitionOldConfidenceCap<0.0 || InpTransitionOldConfidenceCap>45.0 ||
+       InpTransitionCounterDecayMinutes<15 || InpTransitionCounterDecayMinutes>1440 ||
+       InpTransitionMaxOriginExtensionATR<=0.0 || InpTransitionMaxOriginExtensionATR>10.0 ||
+       InpTransitionMaxValueDistanceATR<=0.0 || InpTransitionMaxValueDistanceATR>5.0 ||
+       InpTransitionMaxConsumedPct<=0.0 || InpTransitionMaxConsumedPct>=100.0 ||
+       InpTransitionPullbackResetATR<0.10 || InpTransitionPullbackResetATR>3.0))
+      why="transition thresholds, timing, decay, or location geometry are inconsistent/outside safe bounds";
+   else if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !InpTransitionActiveExitAuthority)
+      why="ACTIVE requires transition position authority enabled so entries and existing positions share one lifecycle decision";
+   else if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE &&
+           InpAdaptiveTransitionPresetId!="XAUUSD_AI_Sniper_EA_v6.23.1_ACTIVE.set")
+      why="ACTIVE preset identity does not match the production v6.23.1 ACTIVE preset";
+
+   PrintFormat("ADAPTIVE_TRANSITION_AUTHORITY_CONFIG mode=%s exhaustionHardBlock=%.0f preferredOppositeAt=%.0f persistence=%d transitionAt=%.0f reversalAt=%.0f fastConfirmSec=%d minRewardR=%.2f maxOriginATR=%.2f maxValueATR=%.2f maxConsumedPct=%.0f pullbackResetATR=%.2f oldConfidenceCap=%.0f counterDecayMin=%d activeExitAuthority=%s valid=%s%s%s",
+               InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF",
+               InpTransitionExhaustThreshold,InpTransitionPreferredOppositeAt,InpTransitionPersistenceBars,
+               InpTransitionProbabilityThreshold,InpTransitionReversalThreshold,InpTransitionFastConfirmSeconds,
+               InpTransitionMinRewardR,InpTransitionMaxOriginExtensionATR,InpTransitionMaxValueDistanceATR,
+               InpTransitionMaxConsumedPct,InpTransitionPullbackResetATR,InpTransitionOldConfidenceCap,
+               InpTransitionCounterDecayMinutes,InpTransitionActiveExitAuthority?"true":"false",
+               StringLen(why)==0?"true":"false",StringLen(why)>0?" invalidReason=":"",why);
+   if(StringLen(why)>0) return false;
+   if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE)
+      PrintFormat("ADAPTIVE_TRANSITION_ACTIVE_ASSERTION_PASSED mode=ACTIVE version=%s build=%s account=%I64d symbol=%s magic=%I64d preset=MQL5/Presets/%s exhaustionHardBlock=%.0f preferredOppositeAt=%.0f persistence=%d fastConfirmSec=%d maxOriginATR=%.2f maxValueATR=%.2f maxConsumedPct=%.0f pullbackResetATR=%.2f",
+                  XAUAI_EA_VERSION,XAUAI_BUILD_HASH,AccountInfoInteger(ACCOUNT_LOGIN),Symbol(),InpMagicNumber,InpAdaptiveTransitionPresetId,
+                  InpTransitionExhaustThreshold,InpTransitionPreferredOppositeAt,InpTransitionPersistenceBars,
+                  InpTransitionFastConfirmSeconds,InpTransitionMaxOriginExtensionATR,InpTransitionMaxValueDistanceATR,
+                  InpTransitionMaxConsumedPct,InpTransitionPullbackResetATR);
+   else
+      Print("ADAPTIVE_TRANSITION_ACTIVE_ASSERTION_NOT_PASSED mode is not ACTIVE; adaptive decisions are observation-only.");
+   return true;
+}
+
 string XAU_ATLifecycleName(ENUM_XAU_MARKET_LIFECYCLE state)
 {
    switch(state)
@@ -10961,14 +11015,29 @@ bool XAU_FinalAdaptiveDirectionDecision(int requestedDirection, string source, s
       }
    }
    string mode=InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF";
+   double auditATR=(ArraySize(bufATR)>1 && bufATR[1]>0.0)?bufATR[1]:0.0;
+   double liveAuditPrice=requestedDirection==1?SymbolInfoDouble(Symbol(),SYMBOL_ASK):SymbolInfoDouble(Symbol(),SYMBOL_BID);
+   double travelSinceCandidateATR=(auditATR>0.0 && liveAuditPrice>0.0 && g_reversalOpportunity.firstDetectionPrice>0.0)?
+                                  MathAbs(liveAuditPrice-g_reversalOpportunity.firstDetectionPrice)/auditATR:0.0;
    decisionReason=StringFormat("source=%s requested=%s lifecycle=%s continuation=%.0f exhaustion=%.0f transition=%.0f reversal=%.0f oldRemainingReward=%.2fR oppositeRemainingReward=%.2fR locationQuality=%.0f consumed=%.0f%% entryDecision=%s decision=%s reason=%s",
                                source,requestedDirection==1?"BUY":"SELL",XAU_ATLifecycleName(d.lifecycle),d.continuationConfidence,d.exhaustionProbability,d.transitionProbability,d.reversalProbability,d.remainingRewardR,d.oppositeRemainingRewardR,d.entryLocationQuality,d.moveAlreadyConsumedPct,d.entryDecision,allowed?"ALLOW":"BLOCK",d.reason);
-   PrintFormat("FINAL_DIRECTION_DECISION normalBias=%s trendHealth=%.0f maturity=%.0f continuationConfidence=%.0f transitionProbability=%.0f reversalProbability=%.0f counterEvidence=%.0f entryLocationQuality=%.0f moveAlreadyConsumedPct=%.0f distanceFromValueATR=%.2f impulseExtensionATR=%.2f oppositeRemainingRewardR=%.2f entryDecision=%s opportunityId=%s freshSellAllowed=%s freshBuyAllowed=%s existingSellAction=%s existingBuyAction=%s mode=%s source=%s reason=%s",
-               d.dominantDirection==1?"BUY":"SELL",d.trendHealth,d.trendMaturity,d.continuationConfidence,d.transitionProbability,d.reversalProbability,d.counterEvidence,
-               d.entryLocationQuality,d.moveAlreadyConsumedPct,d.distanceFromValueATR,d.impulseExtensionATR,d.oppositeRemainingRewardR,d.entryDecision,XAU_ATReversalOpportunityId(),
+   PrintFormat("FINAL_DIRECTION_DECISION normalBias=%s trendHealth=%.0f maturity=%.0f continuationConfidence=%.0f exhaustionProbability=%.0f transitionProbability=%.0f reversalProbability=%.0f counterEvidence=%.0f entryLocationQuality=%.0f moveAlreadyConsumedPct=%.0f distanceFromValueATR=%.2f impulseExtensionATR=%.2f priceTravelSinceCandidateATR=%.2f oppositeRemainingRewardR=%.2f reversalOrigin=%.2f firstDetectionPrice=%.2f latestAcceptablePrice=%.2f expectedPullbackPrice=%.2f pullbackOpportunityExpected=%s entryDecision=%s opportunityId=%s freshSellAllowed=%s freshBuyAllowed=%s existingSellAction=%s existingBuyAction=%s mode=%s source=%s reason=%s",
+               d.dominantDirection==1?"BUY":"SELL",d.trendHealth,d.trendMaturity,d.continuationConfidence,d.exhaustionProbability,d.transitionProbability,d.reversalProbability,d.counterEvidence,
+               d.entryLocationQuality,d.moveAlreadyConsumedPct,d.distanceFromValueATR,d.impulseExtensionATR,travelSinceCandidateATR,d.oppositeRemainingRewardR,
+               g_reversalOpportunity.originPrice,g_reversalOpportunity.firstDetectionPrice,g_reversalOpportunity.latestAcceptablePrice,
+               g_reversalOpportunity.expectedPullbackPrice,d.reversalWaitForPullback?"true":"false",d.entryDecision,XAU_ATReversalOpportunityId(),
                d.freshSellAllowed?"true":"false",d.freshBuyAllowed?"true":"false",XAU_ATActionName(d.existingSellAction),XAU_ATActionName(d.existingBuyAction),mode,source,d.reason);
    string candidateId=StringLen(g_pendingTimingProof.candidateId)>0?g_pendingTimingProof.candidateId:
                       StringFormat("%s_%s_%d",source,requestedDirection==1?"BUY":"SELL",(int)d.evaluatedBar);
+   bool finalLocationWait=opportunityDirection &&
+                          (!d.reversalLocationGood || d.reversalWaitForPullback ||
+                           g_reversalOpportunity.impulseConsumedByEntry);
+   double requestedRemainingRewardR=oldDirection?d.remainingRewardR:d.oppositeRemainingRewardR;
+   PrintFormat("[ACTIVE_FINAL_ENTRY_ASSERTION] mode=%s source=%s candidateId=%s direction=%s exhaustion=%.0f transitionState=%s locationQuality=%.0f badLocation=%s moveConsumedPct=%.0f remainingRewardR=%.2f decision=%s reason=%s",
+               mode,source,candidateId,requestedDirection==1?"BUY":"SELL",d.exhaustionProbability,
+               XAU_ATLifecycleName(d.lifecycle),d.entryLocationQuality,finalLocationWait?"true":"false",
+               d.moveAlreadyConsumedPct,requestedRemainingRewardR,
+               allowed?"ALLOW":finalLocationWait?"WAIT":"BLOCK",d.reason);
    PrintFormat("[EXHAUSTION_ENTRY_AUDIT] candidateId=%s direction=%s distanceTravelledATR=%.2f sessionRangeConsumed=%.0f continuationQuality=%.0f remainingRewardR=%.2f decision=%s reason=%s",
                candidateId,requestedDirection==1?"BUY":"SELL",d.distanceTravelledATR,d.sessionRangeConsumed,d.continuationConfidence,d.remainingRewardR,allowed?"WOULD_ALLOW":"WOULD_BLOCK",d.reason);
    if(isManualOverride || InpAdaptiveTransitionMode!=ADAPTIVE_TRANSITION_ACTIVE) return true;
@@ -12839,6 +12908,14 @@ void CheckPyramidOpportunity()
       }
    }
 
+   {
+      string finalPyramidAuthorityWhy="";
+      if(!XAU_FinalAdaptiveDirectionDecision(dir,"PYRAMID_FINAL_PRE_SEND",why,false,finalPyramidAuthorityWhy))
+      {
+         Print("PYRAMID FINAL PRE-SEND BLOCK (Adaptive Transition Authority): ",finalPyramidAuthorityWhy);
+         return;
+      }
+   }
    bool ok;
    if(isBuy) ok = trade.Buy (addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
    else      ok = trade.Sell(addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
@@ -14441,19 +14518,24 @@ void OnTick()
    // v6.23.1 dedicated early-reversal candidate. At >=70% the engine is
    // already searching; at >=80% a compact, persistent closed-bar package
    // may create a fresh opposite candidate without waiting for H1/H4 to
-   // cross. SHADOW reports WOULD_ENTER but leaves production decisions
-   // untouched. ACTIVE creates a new candidate identity and the ordinary
+   // cross. ACTIVE creates a new candidate identity and the ordinary
    // spread/news/risk/geometry/anti-chase gates still apply downstream.
    XAU_AdaptiveTransitionDecision transitionNow=XAU_AdaptiveMarketTransitionEngine();
    int adaptiveReversalDir=-transitionNow.dominantDirection;
    if(transitionNow.oppositeEntryPreparing)
    {
-      PrintFormat("[REVERSAL_ENTRY_AUDIT] candidateId=%s oldDirection=%s newDirection=%s reclaim=%s retestHeld=%s displacement=%s entryLocationQuality=%.0f moveAlreadyConsumedPct=%.0f distanceFromValueATR=%.2f impulseExtensionATR=%.2f remainingRewardR=%.2f HTFContext=%s decision=%s reason=%s",
-                  XAU_ATReversalOpportunityId(),
-                  transitionNow.dominantDirection==1?"BUY":"SELL",adaptiveReversalDir==1?"BUY":"SELL",
+      double reversalAuditATR=(ArraySize(bufATR)>1 && bufATR[1]>0.0)?bufATR[1]:0.0;
+      double travelSinceFirstATR=(reversalAuditATR>0.0 && g_reversalOpportunity.firstDetectionPrice>0.0)?
+                                  MathAbs(iClose(Symbol(),PERIOD_M5,1)-g_reversalOpportunity.firstDetectionPrice)/reversalAuditATR:0.0;
+      PrintFormat("[REVERSAL_ENTRY_AUDIT] candidateId=%s oldDirection=%s newDirection=%s opportunityCreated=%s reversalOrigin=%.2f firstDetectionPrice=%.2f reclaimPrice=%.2f latestAcceptablePrice=%.2f impulsePeak=%.2f expectedPullbackPrice=%.2f priceTravelSinceCandidateATR=%.2f reclaim=%s retestHeld=%s displacement=%s entryLocationQuality=%.0f moveAlreadyConsumedPct=%.0f distanceFromValueATR=%.2f impulseExtensionATR=%.2f remainingRewardR=%.2f pullbackOpportunityExpected=%s HTFContext=%s decision=%s reason=%s",
+                  XAU_ATReversalOpportunityId(),transitionNow.dominantDirection==1?"BUY":"SELL",adaptiveReversalDir==1?"BUY":"SELL",
+                  TimeToString(g_reversalOpportunity.createdAt,TIME_DATE|TIME_MINUTES),g_reversalOpportunity.originPrice,
+                  g_reversalOpportunity.firstDetectionPrice,g_reversalOpportunity.reclaimPrice,g_reversalOpportunity.latestAcceptablePrice,
+                  g_reversalOpportunity.impulsePeak,g_reversalOpportunity.expectedPullbackPrice,travelSinceFirstATR,
                   transitionNow.oppositeReclaim?"true":"false",transitionNow.oppositeRetestHeld?"true":"false",
                   transitionNow.oppositeDisplacement?"true":"false",transitionNow.entryLocationQuality,transitionNow.moveAlreadyConsumedPct,
                   transitionNow.distanceFromValueATR,transitionNow.impulseExtensionATR,transitionNow.oppositeRemainingRewardR,
+                  transitionNow.reversalWaitForPullback?"true":"false",
                   g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",
                   transitionNow.oppositeEntryAllowed?"WOULD_ENTER":"WAIT",transitionNow.reason);
    }
@@ -18384,6 +18466,19 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // GlobalVariableSetOnCondition-based compare-and-swap (see
    // XAU_TryClaimEntryLock), not a plain Get-then-Set, closing the TOCTOU
    // race between the early check above and this point.
+   if(!isManualOverride)
+   {
+      string finalAdaptiveWhy="";
+      if(!XAU_FinalAdaptiveDirectionDecision(signal,"FINAL_PRE_SEND",reason,false,finalAdaptiveWhy))
+      {
+         Print("FINAL PRE-SEND BLOCK (Adaptive Transition Authority): ",finalAdaptiveWhy);
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL","BLOCK","AdaptiveTransitionFinalPreSend",
+                                   signal,funnelSetup,funnelGrade,funnelScore,true,false,
+                                   "BLOCKED","ADAPTIVE_TRANSITION_FINAL_PRE_SEND",true,false,false,
+                                   0,0,finalAdaptiveWhy,reason,price);
+         return false;
+      }
+   }
    if(!isManualOverride && !XAU_TryClaimEntryLock(signal))
    {
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "CrossInstanceEntryLock",
@@ -29352,6 +29447,42 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
                   originalSignal == 1 ? "BUY" : "SELL", originalFinalGrade, blockReason, counterDir == 1 ? "BUY" : "SELL", category,
                   counterDir == 1 ? "BUY" : "SELL",
                   entryPrice, slPrice, target03R, target05R, targetMaxR, riskUSD, lots);
+      return;
+   }
+
+   XAU_AdaptiveTransitionDecision finalCounterTransition=XAU_AdaptiveMarketTransitionEngine();
+   double finalCounterPrice=counterDir==1?SymbolInfoDouble(Symbol(),SYMBOL_ASK):SymbolInfoDouble(Symbol(),SYMBOL_BID);
+   bool finalCounterOldDirection=(counterDir==finalCounterTransition.dominantDirection);
+   bool finalCounterHighExhaustionBlock=finalCounterOldDirection &&
+                                         finalCounterTransition.exhaustionProbability>=InpTransitionExhaustThreshold;
+   bool finalCounterOpportunityDirection=g_reversalOpportunity.active &&
+                                         g_reversalOpportunity.direction==counterDir;
+   bool finalCounterChase=finalCounterOpportunityDirection &&
+                          (counterDir==1?finalCounterPrice>g_reversalOpportunity.latestAcceptablePrice:
+                                         finalCounterPrice<g_reversalOpportunity.latestAcceptablePrice);
+   bool finalCounterLocationWait=finalCounterOpportunityDirection &&
+                                 (!finalCounterTransition.reversalLocationGood || finalCounterChase ||
+                                  g_reversalOpportunity.impulseConsumedByEntry);
+   bool finalCounterAllowed=!finalCounterHighExhaustionBlock && !finalCounterLocationWait;
+   string finalCounterDecision=finalCounterAllowed?"ALLOW":finalCounterLocationWait?"WAIT":"BLOCK";
+   string finalCounterReason=finalCounterHighExhaustionBlock?"OLD_DIRECTION_EXHAUSTION_HARD_BLOCK":
+                             finalCounterLocationWait?"REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK":
+                             "COUNTER_ISOLATED_SAFETY_AND_LOCATION_CHECKS_PASSED";
+   PrintFormat("[ACTIVE_FINAL_ENTRY_ASSERTION] mode=%s source=COUNTER candidateId=%s direction=%s exhaustion=%.0f transitionState=%s locationQuality=%.0f badLocation=%s moveConsumedPct=%.0f remainingRewardR=%.2f decision=%s reason=%s",
+               InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF",
+               candidateId,counterDir==1?"BUY":"SELL",finalCounterTransition.exhaustionProbability,
+               XAU_ATLifecycleName(finalCounterTransition.lifecycle),finalCounterTransition.entryLocationQuality,
+               finalCounterLocationWait?"true":"false",finalCounterTransition.moveAlreadyConsumedPct,
+               finalCounterOldDirection?finalCounterTransition.remainingRewardR:finalCounterTransition.oppositeRemainingRewardR,
+               finalCounterDecision,finalCounterReason);
+   if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !finalCounterAllowed)
+   {
+      PrintFormat("COUNTER_EXCURSION_FINAL_PRE_SEND_BLOCK id=%s direction=%s livePrice=%.2f latestAcceptable=%.2f locationQuality=%.0f consumed=%.0f%% remainingRewardR=%.2f reason=%s",
+                  XAU_ATReversalOpportunityId(),counterDir==1?"BUY":"SELL",finalCounterPrice,
+                  g_reversalOpportunity.latestAcceptablePrice,finalCounterTransition.entryLocationQuality,
+                  finalCounterTransition.moveAlreadyConsumedPct,
+                  finalCounterOldDirection?finalCounterTransition.remainingRewardR:finalCounterTransition.oppositeRemainingRewardR,
+                  finalCounterReason);
       return;
    }
 

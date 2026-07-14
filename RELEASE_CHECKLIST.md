@@ -24,7 +24,7 @@ Keep the edition description on a single physical line — the regex does not ma
 - [x] Exact incident reconstructed from broker history, Journal/Experts logs, Counter logs, timing proof, and R-exit telemetry
 
 ### Adaptive transition authority
-- [x] OFF / SHADOW / ACTIVE input; default SHADOW
+- [x] OFF / SHADOW / ACTIVE input; production default ACTIVE after explicit owner authorization
 - [x] Separate historical direction, trend health, maturity, continuation, exhaustion, transition, reversal, and remaining reward
 - [x] 60–69% mature/selective behavior with pyramids stopped
 - [x] 70% hard invariant blocks PRIMARY, RE_ENTRY, RECOVERY, RETRY, and PYRAMID in the exhausted direction
@@ -53,11 +53,11 @@ Keep the edition description on a single physical line — the regex does not ma
 - [~] Broader `backend/tests` collection blocked by pre-existing hardcoded `/app/frontend/.env` fixture dependency
 
 ### Production boundary
-- [x] No live VPS EA/chart/process/input modified
-- [x] Isolated compiler temp artifacts removed from VPS after validation
-- [x] Live VPS remains on verified v6.23.0
-- [ ] Deploy/attach v6.23.1 manually in SHADOW and collect live evidence
-- [ ] Review SHADOW thresholds before explicit ACTIVE authorization
+- [x] Pre-change VPS v6.23.1 SHADOW EX5/source/chart/Journal preserved under a timestamped rollback directory
+- [x] ACTIVE retains healthy-trend permission below hard exhaustion; 60–69% is selective and 70%+ is the explicit old-direction hard block
+- [x] Final pre-send assertion is immediately upstream of normal, re-entry/recovery/retry, pyramid, and isolated Counter broker sends
+- [ ] Compile and deploy the ACTIVE build, patch the persisted chart input, and confirm the startup assertion in Journal
+- [ ] Observe natural-market ALLOW/BLOCK/WAIT decisions; do not place a manual test order
 
 Full evidence: `audits/xau_v6231_transition_reversal_forensic_report_2026-07-14.md`.
 
