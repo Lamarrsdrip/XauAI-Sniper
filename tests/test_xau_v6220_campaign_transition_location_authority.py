@@ -79,7 +79,7 @@ def persistent_exhaustion(previous: float, raw: float, *, real_reset: bool) -> f
 
 def test_build_identity_and_active_default_are_explicit():
     text = source()
-    assert '#define XAUAI_BUILD_HASH "v6220-campaign-manual-micro-transition-active-20260714"' in text
+    assert '#define XAUAI_BUILD_HASH "v6220-active-intelligence-repair-20260714"' in text
     assert "InpCampaignTransitionMode = CAMPAIGN_TRANSITION_ACTIVE" in text
     assert "CAMPAIGN_TRANSITION_ACTIVE_ASSERTION_PASSED" in text
     assert "CAMPAIGN_TRANSITION_OFF" in text and "CAMPAIGN_TRANSITION_ACTIVE" in text
@@ -217,7 +217,9 @@ def test_high_exhaustion_cannot_decay_from_elapsed_bars():
     assert persistent_exhaustion(86, 30, real_reset=True) == 76
     fn = body(source(), "XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()")
     assert "realContinuationReset" in fn
-    assert "g_campaignPersistentExhaustion-10.0" in fn
+    assert "g_campaignContinuationResetScore>=65.0" in fn
+    assert "g_campaignContinuationResetBars>=2" in fn
+    assert "g_campaignPersistentExhaustion-12.0" in fn
     assert "InpMaxTransitionWaitBars" not in fn
 
 
