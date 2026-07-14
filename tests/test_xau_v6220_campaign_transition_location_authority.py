@@ -49,9 +49,12 @@ def final_decision(*, exhaustion: float, old_direction: bool, source_name: str,
 
 def location_decision(*, extension_atr: float, consumed_pct: float,
                       value_distance_atr: float, reward_r: float,
-                      already_entered: bool, pullback_from_peak_atr: float = 0.0) -> str:
+                      already_entered: bool, pullback_from_peak_atr: float = 0.0,
+                      structural_reset: bool = False, base_reset: bool = False,
+                      later_closed_bar: bool = True) -> str:
     value_reset = (
-        pullback_from_peak_atr >= 0.75
+        later_closed_bar
+        and (pullback_from_peak_atr >= 0.75 or structural_reset or base_reset)
         and value_distance_atr <= 1.0
         and reward_r >= 1.2
     )
@@ -74,10 +77,11 @@ def persistent_exhaustion(previous: float, raw: float, *, real_reset: bool) -> f
     return previous
 
 
-def test_build_identity_and_shadow_default_are_explicit():
+def test_build_identity_and_active_default_are_explicit():
     text = source()
-    assert '#define XAUAI_BUILD_HASH "v6220-campaign-manual-micro-transition-20260714"' in text
-    assert "InpCampaignTransitionMode = CAMPAIGN_TRANSITION_SHADOW" in text
+    assert '#define XAUAI_BUILD_HASH "v6220-campaign-manual-micro-transition-active-20260714"' in text
+    assert "InpCampaignTransitionMode = CAMPAIGN_TRANSITION_ACTIVE" in text
+    assert "CAMPAIGN_TRANSITION_ACTIVE_ASSERTION_PASSED" in text
     assert "CAMPAIGN_TRANSITION_OFF" in text and "CAMPAIGN_TRANSITION_ACTIVE" in text
 
 
@@ -89,13 +93,16 @@ def test_counter_excursion_remains_removed_from_experiment_contract():
     assert "XAU_CounterTransitionEvidence" not in text
 
 
-def test_one_final_choke_is_inside_open_trade_before_broker_send():
+def test_one_final_execution_backstop_owns_broker_send():
     text = source()
     fn = body(text, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
-    choke = fn.index("XAU_FinalAdaptiveCampaignDirectionDecision")
-    buy = fn.index("trade.Buy(lots")
-    assert choke < buy
-    assert 'XAU_CTEntrySource(reason,"PRIMARY")' not in fn  # source inference is centralized inside final decision
+    backstop = body(text, "bool XAU_CampaignAuthorizedMarketSend(int requestedDirection,double lots,double sl,double tp,")
+    assert "XAU_FinalAdaptiveCampaignDirectionDecision" in backstop
+    assert "XAU_TryClaimEntryLock" in backstop
+    assert "[CAMPAIGN_ACTIVE_ENTRY_AUTHORITY]" in backstop
+    assert "trade.Buy(lots" in backstop and "trade.Sell(lots" in backstop
+    assert "XAU_CampaignAuthorizedMarketSend" in fn
+    assert 'XAU_CTEntrySource(reason,"PRIMARY")' in fn  # source identity is forwarded to the centralized backstop
 
 
 def test_all_automated_open_trade_sources_are_classified():
@@ -108,10 +115,12 @@ def test_both_direct_pyramid_paths_obey_same_final_choke():
     text = source()
     legacy = body(text, "void CheckPyramidOpportunity()")
     campaign = body(text, "void XAU_Campaign_EvaluatePyramid(int idx, bool isBuy, double curPrice, double atr,")
-    assert "XAU_FinalAdaptiveCampaignDirectionDecision" in legacy
+    assert "XAU_CampaignAuthorizedMarketSend" in legacy
     assert "XAU_FinalAdaptiveCampaignDirectionDecision" in campaign
-    assert legacy.index("XAU_FinalAdaptiveCampaignDirectionDecision") < legacy.index("trade.Buy (addLot")
-    assert campaign.index("XAU_FinalAdaptiveCampaignDirectionDecision") < campaign.index("trade.Buy(proposedLot")
+    assert "XAU_CampaignAuthorizedMarketSend" in legacy
+    assert "XAU_CampaignAuthorizedMarketSend" in campaign
+    assert "trade.Buy (addLot" not in legacy
+    assert "trade.Buy(proposedLot" not in campaign
 
 
 def test_active_mode_makes_legacy_exhaustion_guard_observation_only():
@@ -163,7 +172,9 @@ def test_closed_m1_bridge_requires_high_exhaustion_and_compact_package():
     assert "bool microBridgeActive=d.exhaustionProbability>=InpCampaignTransitionExhaustAt" in fn
     assert "earlyMicroPackage=failedExtremes>=2 && d.oppositeMicroSweepReclaim" in fn
     assert "d.oppositeMicroRetestHeld || d.oppositeMicroDisplacement" in fn
-    assert "d.oppositeMicroPersistence>=InpCampaignTransitionMicroPersistence" in fn
+    assert "d.oppositeMicroConsecutive>=InpCampaignTransitionMicroPersistence" in fn
+    assert "d.oppositeMicroEnvironmentSafe" in fn
+    assert "microDirectionalProgress" in fn
     assert "d.exhaustionProbability>=90.0" in fn
     assert "d.oppositeMicroRetestHeld" in fn
 
@@ -178,7 +189,7 @@ def test_m1_recompute_cannot_age_m5_hysteresis_or_decay_exhaustion():
 def test_campaign_hold_manager_is_not_replaced_by_micro_bridge():
     text = source()
     fn = body(text, "bool XAU_Campaign_ApplyTransitionPositionAuthority(int idx, double currentR, string classification)")
-    assert "d.oppositeEntryAllowed" in fn
+    assert "CAMPAIGN_OPPOSITE_CONFIRMED" in fn
     assert "XAU_Campaign_Finalize" in fn
     assert "trade.PositionClose" not in fn
     assert "XAU_RExit_RequestClose" not in fn
@@ -192,6 +203,9 @@ def test_micro_configuration_is_validated_logged_and_build_identifying():
         "InpCampaignTransitionMicroPersistence",
         "InpCampaignTransitionMicroDisplaceATR",
         "InpCampaignTransitionMicroSweepATR",
+        "InpCampaignTransitionMicroMaxBarATR",
+        "InpCampaignTransitionMinConfidenceGap",
+        "InpCampaignTransitionValueResetBars",
     ):
         assert name in validate
         assert name in input_hash
@@ -211,8 +225,9 @@ def test_reversal_opportunity_persists_identity_and_consumption_across_restart()
     text = source()
     save = body(text, "void XAU_CTSavePersistentState()")
     load = body(text, "void XAU_CTLoadPersistentState()")
-    for field in ("revOrigin", "revFirst", "revReclaim", "revLatest", "revPeak", "revPullback", "revEntry", "revConsumed", "revState"):
+    for field in ("revOrigin", "revFirst", "revReclaim", "revLatest", "revPeak", "revPullback", "revEntry", "revEntryAt", "revConsumed", "revState", "candidateBars", "restartSafe"):
         assert field in save and field in load
+    assert "g_campaignTransitionRestartConservative" in load
 
 
 def test_correct_direction_at_bad_location_waits_for_pullback():
@@ -231,6 +246,16 @@ def test_value_reset_requires_market_pullback_not_time():
         extension_atr=2.2, consumed_pct=75, value_distance_atr=0.7,
         reward_r=1.5, already_entered=True, pullback_from_peak_atr=0.75,
     ) == "ALLOW_VALUE_RESET"
+    assert location_decision(
+        extension_atr=2.2, consumed_pct=75, value_distance_atr=0.7,
+        reward_r=1.5, already_entered=True, pullback_from_peak_atr=0.3,
+        structural_reset=True,
+    ) == "ALLOW_VALUE_RESET"
+    assert location_decision(
+        extension_atr=2.2, consumed_pct=75, value_distance_atr=0.7,
+        reward_r=1.5, already_entered=True, pullback_from_peak_atr=0.75,
+        later_closed_bar=False,
+    ) == "WAIT_FOR_PULLBACK"
 
 
 def test_fast_reversal_timing_is_active_only_and_bounded():

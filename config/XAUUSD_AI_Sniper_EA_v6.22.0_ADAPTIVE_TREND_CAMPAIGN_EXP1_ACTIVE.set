@@ -1,0 +1,32 @@
+; v6.22.0 isolated Adaptive Trend Campaign experiment — ACTIVE authority
+; Build: v6220-campaign-manual-micro-transition-active-20260714
+; Demo experiment only. Never use this preset with the production v6.23.x EA.
+InpCampaignEnable=true
+InpMaturityEngineEnable=true
+InpCampaignTransitionMode=2
+InpCampaignTransitionExitAuthority=true
+InpCrossInstanceEntryLockEnable=true
+InpCampaignTransitionPersistenceBars=3
+InpCampaignTransitionMatureAt=60.0
+InpCampaignTransitionExhaustAt=70.0
+InpCampaignTransitionProbabilityAt=57.0
+InpCampaignTransitionReversalAt=68.0
+InpCampaignTransitionPreferredAt=80.0
+InpCampaignTransitionMinRewardR=1.20
+InpCampaignTransitionFastConfirmSec=30
+InpCampaignTransitionMaxOriginATR=2.00
+InpCampaignTransitionMaxValueATR=1.00
+InpCampaignTransitionMaxConsumedPct=70.0
+InpCampaignTransitionPullbackResetATR=0.75
+InpCampaignTransitionMicroPersistence=3
+InpCampaignTransitionMicroDisplaceATR=0.18
+InpCampaignTransitionMicroSweepATR=0.05
+InpCampaignTransitionMicroMaxBarATR=0.90
+InpCampaignTransitionMinConfidenceGap=12.0
+InpCampaignTransitionValueResetBars=3
+InpNormalRiskPct=15.0
+InpReducedRiskFloorPct=15.0
+InpMagicNumber=62200001
+InpCampaignPyramidMinCampaignR=0.50
+InpCampaignPyramidRequireFloorAfter1=true
+InpCampaignMaxAggregateRiskPct=30.0

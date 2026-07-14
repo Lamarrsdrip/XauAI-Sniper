@@ -213,7 +213,7 @@ def test_open_trade_calls_the_gate_before_any_order_send():
     exp = read(EXP)
     fn = body(exp, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
     gate_idx = fn.index("XAU_TrendMaturity_NewCampaignAllowed(")
-    send_idx = fn.index("trade.Buy(lots, Symbol(), 0, sl, tp,")
+    send_idx = fn.index("XAU_CampaignAuthorizedMarketSend(")
     assert gate_idx < send_idx
 
 
