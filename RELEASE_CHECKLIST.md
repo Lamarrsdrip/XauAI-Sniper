@@ -14,6 +14,33 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.23.2 — 2026-07-14 — Production ACTIVE Intelligence Hardening
+
+### Proven production gaps repaired
+- [x] v6.22.0 experiment excluded from source, preset, tests, deployment, and commit scope
+- [x] Reclaim, retest, and displacement accumulate across a bounded sequence of closed M5 bars
+- [x] One wick or one evidence category still cannot authorize reversal
+- [x] Recent M5 base is the primary reversal-value anchor; slow EMA is blended only while locally relevant
+- [x] WAIT/consumed opportunities release only through ATR pullback or proven structure/base reset
+- [x] Stale or contradicted reversal opportunities expire without clearing directional exhaustion
+- [x] Same opportunity owns one timer even if its setup label changes
+- [x] Manual closure clears same-direction pending, timing, and recovery state and consumes the opportunity
+- [x] Generic per-tick final-assertion spam replaced with candidate-grain decision audit
+- [x] Exact final pre-send assertion covers normal, pyramid, and isolated Counter sends
+
+### Identity and validation
+- [x] Canonical source: `XAUUSD_AI_Sniper_EA_v6.23.2.mq5`
+- [x] Build marker: `v6232-production-active-intelligence-20260714`
+- [x] Production ACTIVE preset: `config/XAUUSD_AI_Sniper_EA_v6.23.2_ACTIVE.set`
+- [x] Exact-source MetaEditor compile: **0 errors, 0 warnings**
+- [x] Thirty mandatory v6.23.2 production ACTIVE gates plus focused compatibility tests pass
+- [x] Redacted candidate-grain audit produced from VPS data with repeated tick assertions deduplicated
+- [ ] Full-suite comparison completed
+- [ ] Exact EX5 installed on VPS and one ACTIVE startup assertion verified
+- [ ] Commit pushed to the production audit branch
+
+---
+
 ## v6.23.1 — 2026-07-14 — Adaptive Transition + Entry-Location Authority
 
 ### Production identity and forensic baseline

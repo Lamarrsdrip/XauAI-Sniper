@@ -1,4 +1,4 @@
-"""Executable scenario models and source-wiring checks for production v6.23.1.
+"""Executable scenario models and source-wiring checks for production v6.23.2.
 
 The scenario models exercise the release invariants without pretending to be
 an MT5 broker integration. Tests named ``test_source_*`` are explicitly static;
@@ -14,7 +14,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA_PATH = ROOT / "XAUUSD_AI_Sniper_EA_v6.23.1.mq5"
+EA_PATH = ROOT / "XAUUSD_AI_Sniper_EA_v6.23.2.mq5"
 MIRROR_PATH = ROOT / "backend/ea_code/XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -255,9 +255,9 @@ def test_r_peak_giveback_uses_persistent_peak():
 def test_source_identity_and_mirror_are_exact():
     assert EA_PATH.read_bytes() == MIRROR_PATH.read_bytes()
     source = EA_PATH.read_text()
-    assert '#property version   "6.231"' in source
-    assert '#define XAUAI_EA_VERSION "v6.23.1"' in source
-    assert 'XAUAI_BUILD_HASH "v6231-adaptive-transition-location-authority-active-20260714"' in source
+    assert '#property version   "6.232"' in source
+    assert '#define XAUAI_EA_VERSION "v6.23.2"' in source
+    assert 'XAUAI_BUILD_HASH "v6232-production-active-intelligence-20260714"' in source
 
 
 def test_source_full_risk_fail_closed_wiring():

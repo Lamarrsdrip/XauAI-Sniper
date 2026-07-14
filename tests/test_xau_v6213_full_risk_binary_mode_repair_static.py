@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.23.1.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.23.2.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -53,8 +53,8 @@ def test_repo_source_is_synced_to_backend():
 
 def test_version_bumped_to_v6213():
     ea = read(EA)
-    assert '#define XAUAI_EA_VERSION "v6.23.1"' in ea
-    assert '#property version   "6.231"' in ea
+    assert '#define XAUAI_EA_VERSION "v6.23.2"' in ea
+    assert '#property version   "6.232"' in ea
 
 
 # ---------------------------------------------------------------------------
