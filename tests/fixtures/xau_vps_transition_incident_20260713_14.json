@@ -1,0 +1,56 @@
+{
+  "source": "read-only VPS MT5 terminal/Experts logs and broker history, 2026-07-14",
+  "clock_note": "broker-history and terminal-log clocks differ; tickets/prices/direction establish correlation",
+  "experiment_contract": "Counter-Excursion remains absent; Counter outcomes are incident evidence only and cannot create experiment orders",
+  "sequence": [
+    {
+      "id": "counter_buy_bottom",
+      "source": "COUNTER_EVIDENCE_ONLY",
+      "direction": 1,
+      "entry": 3990.325,
+      "result_usd": 72.61,
+      "old_sell_exhaustion_pct": 86.0,
+      "expected_experiment_decision": "OLD_SELL_BLOCKED_REVERSAL_SEARCH_ACTIVE"
+    },
+    {
+      "id": "losing_sell_1",
+      "source": "PRIMARY_TREND_PULLBACK",
+      "direction": -1,
+      "entry": 3997.631,
+      "exit": 4017.559,
+      "result_usd": -1036.26,
+      "expected_experiment_decision": "BLOCK_OLD_DIRECTION_AT_FINAL_CHOKE"
+    },
+    {
+      "id": "losing_sell_2",
+      "source": "PRIMARY_HTF_TREND_FOLLOW",
+      "direction": -1,
+      "entry": 4015.021,
+      "exit": 4023.192,
+      "result_usd": -890.64,
+      "expected_experiment_decision": "BLOCK_STALE_SELL_RECOVERY_REENTRY_RETRY"
+    },
+    {
+      "id": "later_counter_buy",
+      "source": "COUNTER_EVIDENCE_ONLY",
+      "direction": 1,
+      "entry": 4027.886,
+      "result_usd": 56.46,
+      "expected_experiment_decision": "NO_COUNTER_ORDER_MARK_REVERSAL_LEG_AS_LOCATION_EVIDENCE"
+    },
+    {
+      "id": "later_normal_buy_bad_location",
+      "source": "PRIMARY_TREND_PULLBACK",
+      "direction": 1,
+      "entry": 4028.551,
+      "exit": 4019.553,
+      "result_usd": -755.83,
+      "logged_value": false,
+      "logged_bad_location": true,
+      "origin_extension_atr": 2.19,
+      "local_position_pct": 74.0,
+      "local_room_atr": 1.56,
+      "expected_experiment_decision": "REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK"
+    }
+  ]
+}

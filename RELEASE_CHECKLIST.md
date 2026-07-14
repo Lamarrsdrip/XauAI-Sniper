@@ -14,6 +14,36 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.22.0 EXP1 — 2026-07-14 — Campaign Transition + Entry-Location Authority Port
+
+### Scope and isolation
+- [x] Updated only `XAUUSD_AI_Sniper_EA_v6.22.0_ADAPTIVE_TREND_CAMPAIGN_EXP1.mq5` and its experiment binary.
+- [x] Preserved the experiment's single `ADAPTIVE_TREND_CAMPAIGN_MANAGER`, magic `62200001`, and full-risk campaign sizing contract.
+- [x] Counter-Excursion remains removed from this experiment; production Counter code was not imported. Historical Counter outcomes are bounded replay evidence only.
+- [x] `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` intentionally remains the production mirror and was not synchronized to this experiment.
+- [x] Default mode is `CAMPAIGN_TRANSITION_SHADOW`; no VPS deployment or chart attachment was performed.
+
+### Authority and incident behavior
+- [x] Added one final campaign direction choke point covering PRIMARY, RE_ENTRY, RECOVERY, RETRY, PYRAMID, and ADAPTIVE_REVERSAL sources.
+- [x] At 70% persistent exhaustion, fresh old-direction entries, re-entry, retry/recovery, and pyramids are prohibited in ACTIVE mode.
+- [x] At 80%+, the opposite direction still requires a compact closed-bar reversal package and acceptable entry location; exhaustion alone never reverses at market.
+- [x] Exhaustion cannot clear because a timer or four bars elapsed; decay requires a real continuation reset and is bounded.
+- [x] Persistent reversal opportunities remember origin/value/peak/consumption so a correct direction at a bad late price waits for a pullback.
+- [x] Campaign manager remains the sole position-close owner; transition authority requests finalize actions through it rather than adding a competing closer.
+- [x] Replay expectations block the losing SELLs at 3997.631 and 4015.021, while the later bad-location BUY at 4028.551 remains a wait-for-pullback decision.
+
+### Validation
+- [x] MetaEditor compile: **0 errors, 0 warnings** (`compile_logs/v6220_campaign_transition_location_authority.log`).
+- [x] Source SHA-256: `bde48d03c929b0d3cb9c75fdfbe0b44c6c43fae4f651e78f3bfe9e85bf917f45`.
+- [x] EX5 SHA-256: `6f4df9ce5e0eb9ade806433ae8e8ae41ea3ab04c276e5b5d7db4925fecba55cb`.
+- [x] Focused campaign/transition suite: **158 passed**.
+- [x] Full suite: **914 passed, 208 failed** versus baseline **886 passed, 208 failed**; exact failing-test set unchanged, therefore zero new regressions. The 208 historical failures are primarily older version/backend-mirror assertions and are not concealed as passes.
+- [x] Deterministic incident and symmetry scenarios added. No claim of tick-level Strategy Tester or live shadow proof is made.
+
+See `audits/v6220_campaign_transition_location_authority_2026-07-14.md` for ownership, evidence, limitations, and rollback details.
+
+---
+
 ## v6.21.2 — 2026-07-12 — Wall-Clock Entry Timing + R-Exit Identity Hardening
 
 ### EA Compile
