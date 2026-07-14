@@ -229,4 +229,6 @@ def test_deployment_script_and_checklist_are_active_demo_only():
     script = DEPLOY.read_text()
     checklist = CHECKLIST.read_text()
     assert "--demo-confirmed" in script and "InpCampaignTransitionMode=2" in script
+    assert 'DEST_RUNTIME_PRESETS="$TERMINAL_DATA_DIR/MQL5/Presets"' in script
+    assert 'cp -p "$PRESET" "$DEST_RUNTIME_PRESETS/${EA}_ACTIVE.set"' in script
     assert "Production v6.23.1" in checklist and "CAMPAIGN_TRANSITION_ACTIVE_ASSERTION_PASSED" in checklist

@@ -27,8 +27,9 @@ grep -Eq '^InpCampaignTransitionMode=2$' "$PRESET" || { echo "Preset is not ACTI
 
 DEST_EXPERTS="$TERMINAL_DATA_DIR/MQL5/Experts"
 DEST_PRESETS="$TERMINAL_DATA_DIR/MQL5/Profiles/Presets"
+DEST_RUNTIME_PRESETS="$TERMINAL_DATA_DIR/MQL5/Presets"
 ROLLBACK="$TERMINAL_DATA_DIR/MQL5/Experts/rollback_v6220_$(date +%Y%m%d_%H%M%S)"
-mkdir -p "$DEST_EXPERTS" "$DEST_PRESETS" "$ROLLBACK"
+mkdir -p "$DEST_EXPERTS" "$DEST_PRESETS" "$DEST_RUNTIME_PRESETS" "$ROLLBACK"
 if [[ -f "$DEST_EXPERTS/$EA.ex5" ]]; then
   cp -p "$DEST_EXPERTS/$EA.ex5" "$ROLLBACK/$EA.ex5"
 fi
@@ -38,6 +39,7 @@ fi
 cp -p "$SOURCE" "$DEST_EXPERTS/$EA.mq5"
 cp -p "$BINARY" "$DEST_EXPERTS/$EA.ex5"
 cp -p "$PRESET" "$DEST_PRESETS/${EA}_ACTIVE.set"
+cp -p "$PRESET" "$DEST_RUNTIME_PRESETS/${EA}_ACTIVE.set"
 
 SOURCE_SHA="$(shasum -a 256 "$BINARY" | awk '{print $1}')"
 INSTALLED_SHA="$(shasum -a 256 "$DEST_EXPERTS/$EA.ex5" | awk '{print $1}')"
