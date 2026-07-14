@@ -13,6 +13,7 @@ EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.22.0_ADAPTIVE_TREND_CAMPAIGN_EXP1.mq5"
 SET = ROOT / "config/XAUUSD_AI_Sniper_EA_v6.22.0_ADAPTIVE_TREND_CAMPAIGN_EXP1_ACTIVE.set"
 DEPLOY = ROOT / "scripts/deploy_v6220_experiment_active.sh"
 CHECKLIST = ROOT / "docs/v6220_experiment_active_release_checklist.md"
+STARTUP = ROOT / "config/v6220_experiment_active_startup.ini"
 MANUAL = ROOT / "tests/fixtures/xau_owner_manual_transition_20260713_14.json"
 
 
@@ -232,3 +233,7 @@ def test_deployment_script_and_checklist_are_active_demo_only():
     assert 'DEST_RUNTIME_PRESETS="$TERMINAL_DATA_DIR/MQL5/Presets"' in script
     assert 'cp -p "$PRESET" "$DEST_RUNTIME_PRESETS/${EA}_ACTIVE.set"' in script
     assert "Production v6.23.1" in checklist and "CAMPAIGN_TRANSITION_ACTIVE_ASSERTION_PASSED" in checklist
+    startup = STARTUP.read_text()
+    assert "AllowLiveTrading=1" in startup
+    assert "Expert=XAUUSD_AI_Sniper_EA_v6.22.0_ADAPTIVE_TREND_CAMPAIGN_EXP1" in startup
+    assert "ExpertParameters=XAUUSD_AI_Sniper_EA_v6.22.0_ADAPTIVE_TREND_CAMPAIGN_EXP1_ACTIVE.set" in startup
