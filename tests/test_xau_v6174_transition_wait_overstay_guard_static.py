@@ -62,13 +62,14 @@ def test_input_max_transition_wait_bars_exists_with_sane_default():
     assert "input int    InpMaxTransitionWaitBars = 3;" in ea
 
 
-def test_overstay_guard_function_releases_to_both_allowed():
+def test_overstay_guard_cannot_release_to_both_allowed_on_time_alone():
     ea = read(BACKEND_EA)
     fn = body(ea, "ENUM_XAU_ACTIVE_DIRECTION XAU_ResolveOrReleaseTransitionWait(int enteringStreak, string &reason)")
     assert "g_transitionWaitStreak = enteringStreak + 1;" in fn
     assert "InpMaxTransitionWaitBars > 0 && g_transitionWaitStreak > InpMaxTransitionWaitBars" in fn
-    assert "return DIRECTION_BOTH_ALLOWED;" in fn
-    assert "g_transitionWaitStreak = 0;" in fn  # clears after releasing, doesn't just keep counting
+    assert "return DIRECTION_BOTH_ALLOWED;" not in fn
+    assert "return DIRECTION_TRANSITION_WAIT;" in fn
+    assert "no time/bar-count release" in fn
 
 
 def test_weak_tier_routes_through_overstay_guard():

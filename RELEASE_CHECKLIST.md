@@ -14,6 +14,51 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.23.1 — 2026-07-14 — Adaptive Transition Authority
+
+### Production identity and forensic baseline
+- [x] Branch created from exact deployed-production commit `b894d171a76d5f0a12cbced95732cee9ebde8647`
+- [x] VPS v6.23.0 EX5 hash matched that commit's binary exactly
+- [x] One terminal, one attached production chart, hedging mode, `XAUUSDm,M5`; no duplicate trader found
+- [x] v6.22.0 experiment remained isolated and unchanged
+- [x] Exact incident reconstructed from broker history, Journal/Experts logs, Counter logs, timing proof, and R-exit telemetry
+
+### Adaptive transition authority
+- [x] OFF / SHADOW / ACTIVE input; default SHADOW
+- [x] Separate historical direction, trend health, maturity, continuation, exhaustion, transition, reversal, and remaining reward
+- [x] 60–69% mature/selective behavior with pyramids stopped
+- [x] 70% hard invariant blocks PRIMARY, RE_ENTRY, RECOVERY, RETRY, and PYRAMID in the exhausted direction
+- [x] 80%+ compact reversal package can create a fresh opposite candidate before HTF crossover
+- [x] One wick or exhaustion alone cannot reverse
+- [x] High exhaustion persists across restart and cannot decay by elapsed bars
+- [x] Only real continuation reset evidence decays exhaustion
+- [x] Successful Counter outcomes feed bounded, time-decaying transition evidence
+- [x] Existing-position actions are consumed inside the sole R-based broker-close owner
+- [x] Dedicated 30-second default fast reversal confirmation retains closed-bar proof and anti-chase revalidation
+
+### Artifacts and validation
+- [x] Canonical source: `XAUUSD_AI_Sniper_EA_v6.23.1.mq5`
+- [x] Source/download mirror byte-identical; SHA-256 `0a7bd8371dfa6508b7045ce4f64dbab4a9133a9ca66a55ee415e844ebc1aa18f`
+- [x] MetaEditor exact-source compile: **0 errors, 0 warnings**
+- [x] EX5: 1,372,438 bytes; SHA-256 `9b84beb9d72cc777987bafc24099c52d3e474fb10a3489c7a16a5219c7a30870`
+- [x] Transition/incident suite: 24 passed
+- [x] Focused production/release suite: 133 passed
+- [x] Full historical `tests/`: 208 failed, 813 passed versus baseline 208 failed, 789 passed; identical legacy failure set
+- [x] Backend syntax compilation passed
+- [~] Frontend build skipped because isolated worktree has no `frontend/node_modules`
+- [~] Broader `backend/tests` collection blocked by pre-existing hardcoded `/app/frontend/.env` fixture dependency
+
+### Production boundary
+- [x] No live VPS EA/chart/process/input modified
+- [x] Isolated compiler temp artifacts removed from VPS after validation
+- [x] Live VPS remains on verified v6.23.0
+- [ ] Deploy/attach v6.23.1 manually in SHADOW and collect live evidence
+- [ ] Review SHADOW thresholds before explicit ACTIVE authorization
+
+Full evidence: `audits/xau_v6231_transition_reversal_forensic_report_2026-07-14.md`.
+
+---
+
 ## v6.23.0 — 2026-07-14 — Production Forensic Hardening
 
 ### Release identity and artifacts

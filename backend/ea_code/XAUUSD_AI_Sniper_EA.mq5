@@ -1,15 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.23.0 - Production Forensic Hardening                         |
-//|   Full-risk binary sizing is now fail-closed end to end: broker   |
-//|   max, configured max, aggregate exposure, equity cap, margin,    |
-//|   and lot-step geometry may block but can never silently shrink an |
-//|   approved normal trade. Counter-Excursion no longer blocks normal |
-//|   approvals, is disabled on netting accounts, and retains close    |
-//|   ownership until the broker confirms the position is gone.        |
-//|   Persistent learning/state files are scoped by account, server,   |
-//|   symbol, and magic so production and experiments cannot collide.  |
+//|   v6.23.1 - Adaptive Transition Authority                         |
+//|   One lifecycle engine now separates historical trend, trend      |
+//|   health, exhaustion, remaining reward, transition, and reversal. |
+//|   At 70% exhaustion every autonomous old-direction entry path is  |
+//|   blocked; at 80% a compact closed-bar reclaim/retest package may  |
+//|   create a prompt opposite candidate before slow HTF crossover.   |
+//|   Counter outcomes feed bounded decaying evidence, and only real  |
+//|   continuation proof can decay remembered high exhaustion.        |
 //+------------------------------------------------------------------+
 //|   v6.21.3 - Full-Risk Binary Mode + Isolated COUNTER_EXCURSION       |
 //|   Forensic repair of the 0.01-lot regression: OpenTrade no longer     |
@@ -1770,8 +1769,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.230"
-#property description "XAUUSD AI Sniper v6.23.0 - Production Forensic Hardening"
+#property version   "6.231"
+#property description "XAUUSD AI Sniper v6.23.1 - Adaptive Transition Authority"
 #property description "Approved normal entries use full configured risk or fail closed; no"
 #property description "margin, aggregate, broker-limit, or lot-step silent downscaling."
 #property description "Counter-Excursion is broker-confirmed, retry-safe, hedging-only, and"
@@ -1785,9 +1784,9 @@
 #define XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0
 #define XAU_ENTRY_DELAY_SAFE_DEFAULT_SEC     150.0
 
-#define XAUAI_EA_VERSION "v6.23.0"
-#define XAUAI_EA_VERSION_NUM "6.23.0"
-#define XAUAI_BUILD_HASH "v6230-production-forensic-hardening-20260714"
+#define XAUAI_EA_VERSION "v6.23.1"
+#define XAUAI_EA_VERSION_NUM "6.23.1"
+#define XAUAI_BUILD_HASH "v6231-adaptive-transition-authority-20260714"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -1816,6 +1815,26 @@ input ENUM_ACCT_MODE InpAccountMode = ACCT_BALANCED;  // v5.8.4: original defaul
 input group "=== TRADE MODE (v6.4.21 — blocker strictness profile) ==="
 enum ENUM_XAU_TRADE_MODE { SAFE_MODE=0, BALANCED_MODE=1, AGGRESSIVE_GROWTH_MODE=2 };
 input ENUM_XAU_TRADE_MODE InpTradeMode = BALANCED_MODE; // SAFE=stricter blocks, BALANCED=context-aware, AGGRESSIVE=allow clean B/continuation warnings
+
+input group "=== ADAPTIVE MARKET TRANSITION AUTHORITY (v6.23.1) ==="
+enum ENUM_ADAPTIVE_TRANSITION_MODE
+{
+   ADAPTIVE_TRANSITION_OFF    = 0,
+   ADAPTIVE_TRANSITION_SHADOW = 1,
+   ADAPTIVE_TRANSITION_ACTIVE = 2
+};
+input ENUM_ADAPTIVE_TRANSITION_MODE InpAdaptiveTransitionMode = ADAPTIVE_TRANSITION_SHADOW; // first production deployment is diagnostic; ACTIVE uses the exact same decision as real entry/exit authority
+input int    InpTransitionPersistenceBars       = 3;     // closed M5 bars required before a directional lifecycle transition becomes authoritative
+input double InpTransitionMatureThreshold       = 60.0;
+input double InpTransitionExhaustThreshold      = 70.0;   // invariant: >=70 blocks every old-direction autonomous entry source
+input double InpTransitionProbabilityThreshold = 57.0;
+input double InpTransitionReversalThreshold     = 68.0;
+input double InpTransitionMinRewardR            = 1.20;
+input double InpTransitionPreferredOppositeAt   = 80.0;   // compact local reversal package may approve before HTF flips
+input int    InpTransitionFastConfirmSeconds    = 30;     // dedicated high-exhaustion reversal confirmation, closed-bar/microstructure proven and anti-chase guarded
+input double InpTransitionOldConfidenceCap      = 35.0;   // successful opposite counter evidence during high exhaustion caps old confidence
+input int    InpTransitionCounterDecayMinutes   = 120;   // successful counter evidence fades; it cannot remain permanently bullish/bearish
+input bool   InpTransitionActiveExitAuthority   = true;  // when ACTIVE, R manager remains sole broker-close owner and consumes transition recommendations
 
 input group "=== AI AUTHORITY MODE (June 17-18 reconstruction) ==="
 // Restores the pre-v6.3.0 hierarchy: strategy + structure decide, AI advises/filters.
@@ -2546,7 +2565,7 @@ input double InpCleanStaleMinR      = 0.10;   // Threshold below which we consid
 input double InpCleanMaxLossR       = 2.60;   // v5.8.17: give XAU pullbacks room before invalidation close
 input double InpCleanEmergencyLossR = 4.20;   // Emergency close only after a true failed setup/disaster move
 input int    InpCleanStructureLookback = 18;  // Wider swing window for gold structure invalidation
-input int    InpMaxTransitionWaitBars = 3;    // v6.17.11: force DIRECTION_TRANSITION_WAIT to release to BOTH_ALLOWED after this many consecutive M5 bars with no confirmed break either way (0 = no cap, not recommended). Reduced from 6->3 (30min->15min): a slow-to-release Direction Engine compounds with any setup that hasn't yet gotten the v6.17.8-11 fresh-M15/M30-override fix, holding a stale directional lock longer than needed during a genuine reversal.
+input int    InpMaxTransitionWaitBars = 3;    // legacy telemetry threshold only in v6.23.1; time/bar count can NEVER release to BOTH_ALLOWED. Real continuation reset or opposite confirmation is required.
 input double InpCleanStructureATRBuffer = 0.35; // Close must break swing by this ATR fraction
 input int    InpCleanMinInvalidationMin = 40; // Do not judge normal early XAU pullback too fast
 input int    InpCleanStagnantMinutes = 120;   // Time-based exit for flat/choppy trades with no progress
@@ -3296,6 +3315,63 @@ int g_transitionWaitStreak = 0;
 // continuation followed by structural break" condition.
 int      g_failedContinuationStreak    = 0;
 int      g_failedContinuationStreakDir = 0;
+
+// v6.23.1 — one production lifecycle model.  Historical direction is kept
+// separate from continuation value and from permission to reverse.  This is
+// the authoritative state consumed by PRIMARY/RE_ENTRY/RECOVERY/RETRY and
+// PYRAMID paths; SHADOW computes the identical decision but does not enforce.
+enum ENUM_XAU_MARKET_LIFECYCLE
+{
+   TREND_EARLY=0, TREND_DEVELOPING=1, TREND_HEALTHY=2, TREND_MATURE=3,
+   TREND_LATE=4, TREND_EXHAUSTING=5, TRANSITION_NEUTRAL=6,
+   OPPOSITE_DIRECTION_FORMING=7, OPPOSITE_DIRECTION_CONFIRMED=8
+};
+enum ENUM_XAU_TRANSITION_POSITION_ACTION
+{
+   TRANSITION_HOLD=0, TRANSITION_STOP_ADDS=1, TRANSITION_TIGHTEN_PROTECTION=2,
+   TRANSITION_EXIT_PROFITABLE=3, TRANSITION_EXIT_CONTROLLED=4,
+   TRANSITION_WAIT_FOR_OPPOSITE_SETUP=5
+};
+struct XAU_AdaptiveTransitionDecision
+{
+   datetime evaluatedBar;
+   int dominantDirection;
+   double buyConfidence;
+   double sellConfidence;
+   double continuationConfidence;
+   double exhaustionProbability;
+   double transitionProbability;
+   double reversalProbability;
+   double trendMaturity;
+   double trendHealth;
+   double remainingRewardR;
+   double distanceTravelledATR;
+   double sessionRangeConsumed;
+   double counterEvidence;
+   int failedExtremeCount;
+   bool oppositeReclaim;
+   bool oppositeRetestHeld;
+   bool oppositeDisplacement;
+   bool continuationEntryAllowed;
+   bool continuationEntryPaused;
+   bool oppositeEntryPreparing;
+   bool oppositeEntryAllowed;
+   bool freshBuyAllowed;
+   bool freshSellAllowed;
+   ENUM_XAU_MARKET_LIFECYCLE lifecycle;
+   ENUM_XAU_TRANSITION_POSITION_ACTION existingBuyAction;
+   ENUM_XAU_TRANSITION_POSITION_ACTION existingSellAction;
+   string reason;
+};
+XAU_AdaptiveTransitionDecision g_transitionDecision;
+int      g_transitionCandidateState = -1;
+int      g_transitionCandidateBars = 0;
+datetime g_transitionLastComputedBar = 0;
+double   g_counterTransitionEvidence = 0.0; // signed: +BUY evidence, -SELL evidence
+datetime g_counterTransitionEvidenceAt = 0;
+bool     g_counterTransitionEvidenceLoaded = false;
+double   g_transitionPersistentExhaustion = 0.0;
+int      g_transitionPersistentDirection = 0;
 
 // v6.13.0 ANTI-REPEAT-LOSS GUARD — tracks consecutive same-direction losses
 // within the current session, plus whether the market is still genuinely
@@ -8919,7 +8995,7 @@ void CheckReEntryOpportunity()
    g_pendingTimingProof.firstSeenTime         = g_lastEntryTimingDecision.originalSignalTime;
    g_pendingTimingProof.firstSeenPrice        = g_lastEntryTimingDecision.originalSignalPrice;
    g_pendingTimingProof.timingGateRequired    = true;
-   g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveEntryDelaySeconds();
+   g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveAdaptiveEntryDelaySeconds(lastClose.dir);
    g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
    g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
    g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
@@ -10048,10 +10124,9 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ResolveOrReleaseTransitionWait(int enteringStreak,
    g_transitionWaitStreak = enteringStreak + 1;
    if(InpMaxTransitionWaitBars > 0 && g_transitionWaitStreak > InpMaxTransitionWaitBars)
    {
-      reason = StringFormat("TRANSITION_WAIT OVERSTAY RELEASE: stuck %d consecutive M5 bars with no confirmed break either way (cap=%d) — releasing to BOTH_ALLOWED, market is genuinely undecided rather than reversed | prior reason: %s",
+      reason = StringFormat("TRANSITION_WAIT PERSISTED: %d consecutive M5 bars (legacy cap=%d ignored by v6.23.1) — no time/bar-count release; only proven continuation reset or opposite confirmation may change authority | prior reason: %s",
                             g_transitionWaitStreak, InpMaxTransitionWaitBars, reason);
-      g_transitionWaitStreak = 0;
-      return DIRECTION_BOTH_ALLOWED;
+      return DIRECTION_TRANSITION_WAIT;
    }
    return DIRECTION_TRANSITION_WAIT;
 }
@@ -10282,6 +10357,367 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ComputeActiveDirection(int htfBias, string &reason
 
    reason = StringFormat("no fresh opposing structure — HTF is context only, both directions structurally open | seq=%s", seqWhy);
    return DIRECTION_BOTH_ALLOWED;
+}
+
+//+------------------------------------------------------------------+
+//| v6.23.1 ADAPTIVE MARKET TRANSITION AUTHORITY                     |
+//| Independent evidence categories are normalized once here.       |
+//| Slow HTF direction is context; it can never by itself make a     |
+//| mature/low-reward continuation entry valuable.                   |
+//+------------------------------------------------------------------+
+double XAU_ATClamp(double value, double lo=0.0, double hi=100.0)
+{
+   return MathMax(lo, MathMin(hi, value));
+}
+
+string XAU_ATLifecycleName(ENUM_XAU_MARKET_LIFECYCLE state)
+{
+   switch(state)
+   {
+      case TREND_EARLY:                    return "TREND_EARLY";
+      case TREND_DEVELOPING:               return "TREND_DEVELOPING";
+      case TREND_HEALTHY:                  return "TREND_HEALTHY";
+      case TREND_MATURE:                   return "TREND_MATURE";
+      case TREND_LATE:                     return "TREND_LATE";
+      case TREND_EXHAUSTING:               return "TREND_EXHAUSTING";
+      case TRANSITION_NEUTRAL:              return "TRANSITION_NEUTRAL";
+      case OPPOSITE_DIRECTION_FORMING:     return "OPPOSITE_DIRECTION_FORMING";
+      case OPPOSITE_DIRECTION_CONFIRMED:   return "OPPOSITE_DIRECTION_CONFIRMED";
+   }
+   return "TREND_EARLY";
+}
+
+string XAU_ATActionName(ENUM_XAU_TRANSITION_POSITION_ACTION action)
+{
+   switch(action)
+   {
+      case TRANSITION_STOP_ADDS:               return "STOP_ADDS";
+      case TRANSITION_TIGHTEN_PROTECTION:      return "TIGHTEN_PROTECTION";
+      case TRANSITION_EXIT_PROFITABLE:         return "EXIT_PROFITABLE";
+      case TRANSITION_EXIT_CONTROLLED:         return "EXIT_CONTROLLED";
+      case TRANSITION_WAIT_FOR_OPPOSITE_SETUP: return "WAIT_FOR_OPPOSITE_SETUP";
+   }
+   return "HOLD";
+}
+
+string XAU_ATGVPrefix()
+{
+   return "XAUAI_AT_" + XAU_ProductionStateScope() + "_";
+}
+
+void XAU_ATLoadPersistentState()
+{
+   if(g_counterTransitionEvidenceLoaded) return;
+   g_counterTransitionEvidenceLoaded = true;
+   string p = XAU_ATGVPrefix();
+   if(GlobalVariableCheck(p + "counter"))
+      g_counterTransitionEvidence = GlobalVariableGet(p + "counter");
+   if(GlobalVariableCheck(p + "counterAt"))
+      g_counterTransitionEvidenceAt = (datetime)GlobalVariableGet(p + "counterAt");
+   if(GlobalVariableCheck(p + "lifecycle"))
+      g_transitionCandidateState = (int)GlobalVariableGet(p + "lifecycle");
+   if(GlobalVariableCheck(p + "exhaustion"))
+      g_transitionPersistentExhaustion = GlobalVariableGet(p + "exhaustion");
+   if(GlobalVariableCheck(p + "direction"))
+      g_transitionPersistentDirection = (int)GlobalVariableGet(p + "direction");
+}
+
+void XAU_ATSavePersistentState()
+{
+   string p = XAU_ATGVPrefix();
+   GlobalVariableSet(p + "counter", g_counterTransitionEvidence);
+   GlobalVariableSet(p + "counterAt", (double)g_counterTransitionEvidenceAt);
+   GlobalVariableSet(p + "lifecycle", (double)g_transitionDecision.lifecycle);
+   GlobalVariableSet(p + "exhaustion", g_transitionPersistentExhaustion);
+   GlobalVariableSet(p + "direction", (double)g_transitionPersistentDirection);
+}
+
+double XAU_CounterTransitionEvidence()
+{
+   XAU_ATLoadPersistentState();
+   if(g_counterTransitionEvidenceAt <= 0 || InpTransitionCounterDecayMinutes <= 0)
+      return 0.0;
+   double ageMin = MathMax(0.0, (double)(TimeCurrent() - g_counterTransitionEvidenceAt) / 60.0);
+   double decay = MathMax(0.0, 1.0 - ageMin / (double)InpTransitionCounterDecayMinutes);
+   return g_counterTransitionEvidence * decay;
+}
+
+void XAU_RecordCounterTransitionEvidence(int direction, double candidateScore,
+                                         double mfeR, double maeR, double realizedR,
+                                         bool structureAligned)
+{
+   if(direction != 1 && direction != -1) return;
+   XAU_ATLoadPersistentState();
+   double quality = XAU_ATClamp(candidateScore / 6.0 * 35.0 +
+                                 MathMax(0.0, mfeR) * 55.0 +
+                                 MathMax(0.0, realizedR) * 25.0 -
+                                 MathMax(0.0, maeR - 0.35) * 20.0 +
+                                 (structureAligned ? 12.0 : 0.0));
+   // A failure records weak negative feedback; one counter event can never
+   // force reversal because the final gate still requires structure,
+   // persistence, reclaim, retest and displacement.
+   if(mfeR < 0.20 && realizedR < 0.0) quality = -MathMin(25.0, 10.0 + MathAbs(realizedR) * 15.0);
+   double prior = XAU_CounterTransitionEvidence();
+   g_counterTransitionEvidence = XAU_ATClamp(prior * 0.55 + direction * quality, -100.0, 100.0);
+   g_counterTransitionEvidenceAt = TimeCurrent();
+   XAU_ATSavePersistentState();
+   PrintFormat("[COUNTER_TRANSITION_EVIDENCE] counterDirection=%s score=%.1f MFE=%.3f MAE=%.3f outcomeR=%.3f structureAligned=%s normalContinuationConfidenceImpact=%.1f decayMinutes=%d",
+               direction == 1 ? "BUY" : "SELL", candidateScore, mfeR, maeR, realizedR,
+               structureAligned ? "true" : "false", direction * quality, InpTransitionCounterDecayMinutes);
+}
+
+int XAU_ATDominantDirection(double atr)
+{
+   double c1 = iClose(Symbol(), PERIOD_M5, 1);
+   double c49 = iClose(Symbol(), PERIOD_M5, 49);
+   if(c1 > 0 && c49 > 0 && atr > 0 && MathAbs(c1 - c49) >= atr * 0.60)
+      return c1 > c49 ? 1 : -1;
+   if(g_htfConsensusDir != 0) return g_htfConsensusDir;
+   if(g_activeDirection == DIRECTION_BUY_ONLY) return 1;
+   if(g_activeDirection == DIRECTION_SELL_ONLY) return -1;
+   return 0;
+}
+
+XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
+{
+   datetime bar = iTime(Symbol(), PERIOD_M5, 1);
+   if(bar > 0 && bar == g_transitionLastComputedBar)
+      return g_transitionDecision;
+
+   XAU_AdaptiveTransitionDecision d;
+   ZeroMemory(d);
+   d.evaluatedBar = bar;
+   d.lifecycle = TREND_EARLY;
+   d.existingBuyAction = TRANSITION_HOLD;
+   d.existingSellAction = TRANSITION_HOLD;
+   d.remainingRewardR = 9.0;
+
+   double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   if(atr <= 0.0) atr = XAU_AvgATR(40);
+   double c1 = iClose(Symbol(), PERIOD_M5, 1);
+   if(bar <= 0 || atr <= 0.0 || c1 <= 0.0)
+   {
+      d.reason = "closed-bar/ATR evidence unavailable — fail closed in ACTIVE";
+      d.continuationEntryPaused = true;
+      g_transitionDecision = d;
+      return d;
+   }
+
+   d.dominantDirection = XAU_ATDominantDirection(atr);
+   if(d.dominantDirection == 0)
+      d.dominantDirection = g_htfConsensusDir != 0 ? g_htfConsensusDir : (iClose(Symbol(), PERIOD_M5, 12) < c1 ? 1 : -1);
+   int dir = d.dominantDirection;
+
+   // A. Trend travel / session-campaign memory: rolling 24h, deliberately
+   // not reset at broker midnight.  A restart reconstructs this from bars.
+   double rangeHigh = -DBL_MAX, rangeLow = DBL_MAX;
+   int valid = 0;
+   for(int i=1; i<=288; i++)
+   {
+      double h = iHigh(Symbol(), PERIOD_M5, i);
+      double l = iLow(Symbol(), PERIOD_M5, i);
+      if(h <= 0 || l <= 0) continue;
+      rangeHigh = MathMax(rangeHigh, h);
+      rangeLow = MathMin(rangeLow, l);
+      valid++;
+   }
+   double range = (valid >= 48 && rangeHigh > rangeLow) ? rangeHigh - rangeLow : atr * 4.0;
+   double travel = dir == 1 ? c1 - rangeLow : rangeHigh - c1;
+   d.distanceTravelledATR = MathMax(0.0, travel / atr);
+   d.sessionRangeConsumed = XAU_ATClamp(travel / MathMax(range, atr) * 100.0);
+
+   // B/C/D/F. One normalized score per independent evidence category.
+   int oldBars=0, oppositeBars=0, failedExtremes=0;
+   double oldBody=0.0, oppositeBody=0.0, absorption=0.0;
+   for(int i=1; i<=8; i++)
+   {
+      double o=iOpen(Symbol(),PERIOD_M5,i), c=iClose(Symbol(),PERIOD_M5,i);
+      double h=iHigh(Symbol(),PERIOD_M5,i), l=iLow(Symbol(),PERIOD_M5,i);
+      double body=MathAbs(c-o), span=MathMax(h-l, SymbolInfoDouble(Symbol(),SYMBOL_POINT));
+      bool withOld = dir==1 ? c>o : c<o;
+      if(withOld) { oldBars++; oldBody += body; }
+      else { oppositeBars++; oppositeBody += body; }
+      double opposingWick = dir==1 ? MathMin(o,c)-l : h-MathMax(o,c);
+      absorption += XAU_ATClamp(opposingWick/span*100.0);
+   }
+   absorption = XAU_ATClamp(absorption / 8.0 * 1.35);
+   double bodyTotal = oldBody + oppositeBody;
+   double oppositeMomentum = bodyTotal > 0 ? XAU_ATClamp(oppositeBody/bodyTotal*100.0) : 50.0;
+
+   double newestExtreme = dir==1 ? -DBL_MAX : DBL_MAX;
+   double olderExtreme  = dir==1 ? -DBL_MAX : DBL_MAX;
+   for(int i=1;i<=3;i++) newestExtreme = dir==1 ? MathMax(newestExtreme,iHigh(Symbol(),PERIOD_M5,i)) : MathMin(newestExtreme,iLow(Symbol(),PERIOD_M5,i));
+   for(int i=4;i<=9;i++) olderExtreme  = dir==1 ? MathMax(olderExtreme, iHigh(Symbol(),PERIOD_M5,i)) : MathMin(olderExtreme, iLow(Symbol(),PERIOD_M5,i));
+   bool freshProgress = dir==1 ? newestExtreme > olderExtreme + atr*0.10 : newestExtreme < olderExtreme - atr*0.10;
+   if(!freshProgress) failedExtremes++;
+   for(int i=1;i<=3;i++)
+   {
+      double ext = dir==1 ? iHigh(Symbol(),PERIOD_M5,i) : iLow(Symbol(),PERIOD_M5,i);
+      double close = iClose(Symbol(),PERIOD_M5,i);
+      if(dir==1 ? (ext-close)>atr*0.25 : (close-ext)>atr*0.25) failedExtremes++;
+   }
+   d.failedExtremeCount = failedExtremes;
+   double continuationQuality = XAU_ATClamp(oldBars/8.0*55.0 + (freshProgress?30.0:5.0) + MathMax(0.0, 15.0-oppositeMomentum*0.15));
+
+   // E. Local structure/reclaim/retest.  Closed bars only.  Reversal entry
+   // requires the three distinct facts; one wick cannot satisfy them.
+   double priorHigh=-DBL_MAX, priorLow=DBL_MAX;
+   for(int i=4;i<=12;i++)
+   { priorHigh=MathMax(priorHigh,iHigh(Symbol(),PERIOD_M5,i)); priorLow=MathMin(priorLow,iLow(Symbol(),PERIOD_M5,i)); }
+   d.oppositeReclaim = dir==-1 ? c1 > priorHigh : c1 < priorLow;
+   double c2=iClose(Symbol(),PERIOD_M5,2), c3=iClose(Symbol(),PERIOD_M5,3);
+   d.oppositeRetestHeld = dir==-1 ? (c1>c2 && iLow(Symbol(),PERIOD_M5,1)>=iLow(Symbol(),PERIOD_M5,3))
+                                  : (c1<c2 && iHigh(Symbol(),PERIOD_M5,1)<=iHigh(Symbol(),PERIOD_M5,3));
+   double body1=MathAbs(c1-iOpen(Symbol(),PERIOD_M5,1));
+   d.oppositeDisplacement = body1>=atr*0.55 && (dir==-1 ? c1>iOpen(Symbol(),PERIOD_M5,1) : c1<iOpen(Symbol(),PERIOD_M5,1));
+   int oppositePersistence=0;
+   for(int i=1;i<=5;i++)
+   { double o=iOpen(Symbol(),PERIOD_M5,i), c=iClose(Symbol(),PERIOD_M5,i); if(dir==-1 ? c>o : c<o) oppositePersistence++; }
+   double structureOpposite = XAU_ATClamp((d.oppositeReclaim?42.0:0.0)+(d.oppositeRetestHeld?25.0:0.0)+(failedExtremes*8.0));
+
+   // H. Remaining reward is room to the rolling extreme, normalized by the
+   // normal initial-risk geometry (2.2 ATR proxy). At an exhausted extreme
+   // this approaches zero even while H1 still points in the old direction.
+   double room = dir==1 ? rangeHigh-c1 : c1-rangeLow;
+   d.remainingRewardR = MathMax(0.0, room / MathMax(atr*2.2, atr));
+   d.counterEvidence = XAU_CounterTransitionEvidence();
+   double counterOpposite = dir==-1 ? MathMax(0.0,d.counterEvidence) : MathMax(0.0,-d.counterEvidence);
+
+   d.trendMaturity = XAU_ATClamp(d.distanceTravelledATR*14.0 + d.sessionRangeConsumed*0.42);
+   d.continuationConfidence = XAU_ATClamp(continuationQuality - absorption*0.18 - oppositeMomentum*0.15 - counterOpposite*0.12);
+   double rawExhaustion = XAU_ATClamp(d.trendMaturity*0.34 + (100.0-d.continuationConfidence)*0.28 + absorption*0.18 + oppositeMomentum*0.10 + (d.remainingRewardR<1.0?25.0:0.0) + counterOpposite*0.10);
+   // Exhaustion memory is evidence-decayed, never bar-count-decayed.  The
+   // 2026-07-14 failure (86% -> forgotten -> SELL again) is impossible here:
+   // only a genuine reset package may lower a remembered high reading.
+   bool realContinuationReset = freshProgress && continuationQuality>=82.0 &&
+                                oppositeMomentum<=30.0 && failedExtremes<=1 &&
+                                d.remainingRewardR>=InpTransitionMinRewardR;
+   if(g_transitionPersistentDirection!=dir)
+   {
+      g_transitionPersistentDirection=dir;
+      g_transitionPersistentExhaustion=rawExhaustion;
+   }
+   else if(rawExhaustion>=g_transitionPersistentExhaustion)
+      g_transitionPersistentExhaustion=rawExhaustion;
+   else if(realContinuationReset)
+      g_transitionPersistentExhaustion=MathMax(rawExhaustion,g_transitionPersistentExhaustion-10.0);
+   d.exhaustionProbability=XAU_ATClamp(g_transitionPersistentExhaustion);
+   if(d.exhaustionProbability>=70.0)
+      d.continuationConfidence=MathMin(d.continuationConfidence,45.0);
+   if(d.exhaustionProbability>=70.0 && counterOpposite>0.0)
+      d.continuationConfidence=MathMin(d.continuationConfidence,InpTransitionOldConfidenceCap);
+   d.transitionProbability = XAU_ATClamp(d.exhaustionProbability*0.38 + structureOpposite*0.30 + oppositeMomentum*0.12 + counterOpposite*0.12 + MathMin(18.0,failedExtremes*6.0));
+   if(d.exhaustionProbability>=70.0) d.transitionProbability=XAU_ATClamp(d.transitionProbability+12.0);
+   if(d.exhaustionProbability>=80.0) d.transitionProbability=XAU_ATClamp(d.transitionProbability+8.0);
+   d.reversalProbability = XAU_ATClamp(d.transitionProbability*0.55 + (d.oppositeReclaim?15.0:0.0) + (d.oppositeRetestHeld?12.0:0.0) + (d.oppositeDisplacement?12.0:0.0));
+   d.trendHealth = XAU_ATClamp(d.continuationConfidence - d.exhaustionProbability*0.35);
+   d.buyConfidence = dir==1 ? d.continuationConfidence : d.reversalProbability;
+   d.sellConfidence = dir==-1 ? d.continuationConfidence : d.reversalProbability;
+
+   bool mature = d.trendMaturity >= InpTransitionMatureThreshold || d.exhaustionProbability>=60.0;
+   bool exhausting = d.exhaustionProbability >= InpTransitionExhaustThreshold;
+   bool transitionReady = d.transitionProbability >= InpTransitionProbabilityThreshold && oppositePersistence >= 2;
+   bool compactReversalPackage = failedExtremes>=2 && d.oppositeReclaim &&
+                                 (d.oppositeRetestHeld || d.oppositeDisplacement) &&
+                                 oppositePersistence>=2;
+   bool fullReversalPackage = compactReversalPackage && d.oppositeRetestHeld &&
+                              d.oppositeDisplacement &&
+                              oppositePersistence>=InpTransitionPersistenceBars;
+   bool reversalReady = d.exhaustionProbability>=InpTransitionPreferredOppositeAt &&
+                        d.reversalProbability>=InpTransitionReversalThreshold &&
+                        (d.exhaustionProbability>=90.0?compactReversalPackage:fullReversalPackage) &&
+                        d.remainingRewardR>=InpTransitionMinRewardR;
+   ENUM_XAU_MARKET_LIFECYCLE rawState = TREND_HEALTHY;
+   if(reversalReady) rawState=OPPOSITE_DIRECTION_CONFIRMED;
+   else if(transitionReady && d.oppositeReclaim) rawState=OPPOSITE_DIRECTION_FORMING;
+   else if(transitionReady) rawState=TRANSITION_NEUTRAL;
+   else if(exhausting) rawState=TREND_EXHAUSTING;
+   else if(mature) rawState=TREND_MATURE;
+   else if(d.distanceTravelledATR<1.2) rawState=TREND_EARLY;
+   else if(d.distanceTravelledATR<2.2) rawState=TREND_DEVELOPING;
+
+   // Hysteresis classifies lifecycle labels; it never weakens the hard >=70
+   // entry invariant. Only realContinuationReset can decay exhaustion.
+   if((int)rawState != g_transitionCandidateState)
+   { g_transitionCandidateState=(int)rawState; g_transitionCandidateBars=1; }
+   else g_transitionCandidateBars++;
+   int needed = (rawState>=TREND_EXHAUSTING) ? MathMax(2,InpTransitionPersistenceBars) : 2;
+   if(g_transitionLastComputedBar==0 || g_transitionCandidateBars>=needed)
+      d.lifecycle=rawState;
+   else
+      d.lifecycle=g_transitionDecision.lifecycle;
+
+   bool authoritativeExhaustion = d.exhaustionProbability>=InpTransitionExhaustThreshold;
+   bool authoritativeTransition = d.lifecycle>=TRANSITION_NEUTRAL;
+   d.continuationEntryAllowed = !authoritativeExhaustion && !authoritativeTransition;
+   d.continuationEntryPaused = !d.continuationEntryAllowed;
+   d.oppositeEntryPreparing = authoritativeExhaustion;
+   d.oppositeEntryAllowed = reversalReady;
+   d.freshBuyAllowed = (dir==1) ? d.continuationEntryAllowed : d.oppositeEntryAllowed;
+   d.freshSellAllowed = (dir==-1) ? d.continuationEntryAllowed : d.oppositeEntryAllowed;
+
+   ENUM_XAU_TRANSITION_POSITION_ACTION oldAction=TRANSITION_HOLD;
+   if(d.lifecycle==TREND_MATURE || d.lifecycle==TREND_LATE) oldAction=TRANSITION_STOP_ADDS;
+   if(d.lifecycle==TREND_EXHAUSTING || d.lifecycle==TRANSITION_NEUTRAL || d.lifecycle==OPPOSITE_DIRECTION_FORMING) oldAction=TRANSITION_TIGHTEN_PROTECTION;
+   if(d.lifecycle==OPPOSITE_DIRECTION_CONFIRMED) oldAction=TRANSITION_WAIT_FOR_OPPOSITE_SETUP;
+   if(dir==1) d.existingBuyAction=oldAction; else d.existingSellAction=oldAction;
+   d.reason=StringFormat("travel=%.2fATR rangeConsumed=%.0f continuation=%.0f absorption=%.0f oppositeMomentum=%.0f failedExtremes=%d reclaim=%s retest=%s displacement=%s counter=%.0f remainingReward=%.2fR persistence=%d",
+                         d.distanceTravelledATR,d.sessionRangeConsumed,d.continuationConfidence,absorption,oppositeMomentum,failedExtremes,
+                         d.oppositeReclaim?"Y":"N",d.oppositeRetestHeld?"Y":"N",d.oppositeDisplacement?"Y":"N",d.counterEvidence,d.remainingRewardR,oppositePersistence);
+   g_transitionDecision=d;
+   g_transitionLastComputedBar=bar;
+   XAU_ATSavePersistentState();
+   PrintFormat("[MARKET_LIFECYCLE] state=%s trendDirection=%s trendHealth=%.0f maturity=%.0f continuationConfidence=%.0f transitionProbability=%.0f reversalProbability=%.0f",
+               XAU_ATLifecycleName(d.lifecycle),dir==1?"BUY":"SELL",d.trendHealth,d.trendMaturity,d.continuationConfidence,d.transitionProbability,d.reversalProbability);
+   return d;
+}
+
+string XAU_AdaptiveEntrySource(string reason, string fallback)
+{
+   string u=reason; StringToUpper(u);
+   if(StringFind(u,"PYRAMID")>=0) return "PYRAMID";
+   if(StringFind(u,"RE-ENTRY")>=0 || StringFind(u,"RE_ENTRY")>=0) return "RE_ENTRY";
+   if(StringFind(u,"RECOVERY")>=0) return "RECOVERY";
+   if(StringFind(u,"RETRY")>=0) return "RETRY";
+   return fallback; // PRIMARY and explicit future callers
+}
+
+bool XAU_FinalAdaptiveDirectionDecision(int requestedDirection, string source, string reason,
+                                        bool isManualOverride, string &decisionReason)
+{
+   XAU_AdaptiveTransitionDecision d=XAU_AdaptiveMarketTransitionEngine();
+   source=XAU_AdaptiveEntrySource(reason,source);
+   bool allowed=requestedDirection==1?d.freshBuyAllowed:d.freshSellAllowed;
+   bool oldDirection=(requestedDirection==d.dominantDirection);
+   if(oldDirection && d.exhaustionProbability>=60.0 && d.exhaustionProbability<70.0)
+   {
+      if(source=="PYRAMID") allowed=false; // mature trend: no aggressive adds
+      else if(d.continuationConfidence<55.0 || d.remainingRewardR<InpTransitionMinRewardR)
+         allowed=false; // selective continuation, not a blanket 60-69 lock
+   }
+   if(oldDirection && d.exhaustionProbability>=70.0) allowed=false;
+   if(d.exhaustionProbability>=70.0 && oldDirection && allowed)
+   {
+      Print("ADAPTIVE_TRANSITION_INVARIANT_VIOLATION: exhaustion>=70 but old-direction entry resolved ALLOW — forcing BLOCK");
+      allowed=false;
+   }
+   if(d.exhaustionProbability>=80.0 && d.oppositeEntryAllowed && requestedDirection==-d.dominantDirection && !allowed)
+   {
+      Print("ADAPTIVE_TRANSITION_INVARIANT_REPAIR: compact reversal package passed at >=80; forcing opposite ALLOW before broker/account safety gates");
+      allowed=true;
+   }
+   string mode=InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF";
+   decisionReason=StringFormat("source=%s requested=%s lifecycle=%s continuation=%.0f exhaustion=%.0f transition=%.0f reversal=%.0f remainingReward=%.2fR decision=%s reason=%s",
+                               source,requestedDirection==1?"BUY":"SELL",XAU_ATLifecycleName(d.lifecycle),d.continuationConfidence,d.exhaustionProbability,d.transitionProbability,d.reversalProbability,d.remainingRewardR,allowed?"ALLOW":"BLOCK",d.reason);
+   PrintFormat("FINAL_DIRECTION_DECISION normalBias=%s trendHealth=%.0f maturity=%.0f continuationConfidence=%.0f transitionProbability=%.0f reversalProbability=%.0f counterEvidence=%.0f freshSellAllowed=%s freshBuyAllowed=%s existingSellAction=%s existingBuyAction=%s mode=%s source=%s reason=%s",
+               d.dominantDirection==1?"BUY":"SELL",d.trendHealth,d.trendMaturity,d.continuationConfidence,d.transitionProbability,d.reversalProbability,d.counterEvidence,
+               d.freshSellAllowed?"true":"false",d.freshBuyAllowed?"true":"false",XAU_ATActionName(d.existingSellAction),XAU_ATActionName(d.existingBuyAction),mode,source,d.reason);
+   string candidateId=StringLen(g_pendingTimingProof.candidateId)>0?g_pendingTimingProof.candidateId:
+                      StringFormat("%s_%s_%d",source,requestedDirection==1?"BUY":"SELL",(int)d.evaluatedBar);
+   PrintFormat("[EXHAUSTION_ENTRY_AUDIT] candidateId=%s direction=%s distanceTravelledATR=%.2f sessionRangeConsumed=%.0f continuationQuality=%.0f remainingRewardR=%.2f decision=%s reason=%s",
+               candidateId,requestedDirection==1?"BUY":"SELL",d.distanceTravelledATR,d.sessionRangeConsumed,d.continuationConfidence,d.remainingRewardR,allowed?"WOULD_ALLOW":"WOULD_BLOCK",d.reason);
+   if(isManualOverride || InpAdaptiveTransitionMode!=ADAPTIVE_TRANSITION_ACTIVE) return true;
+   return allowed;
 }
 
 //+------------------------------------------------------------------+
@@ -11285,6 +11721,19 @@ void CheckPyramidOpportunity()
 
    bool isBuy = (origType == POSITION_TYPE_BUY);
    int dir = isBuy ? 1 : -1;
+
+   // v6.23.1: pyramids send directly through trade.Buy/Sell and therefore
+   // require their own call to the exact same final authority used by
+   // OpenTrade. At >=70% old-direction exhaustion this is a hard stop in
+   // ACTIVE, regardless of grade, HTF bias, profit, or add type.
+   {
+      string adaptiveWhy="";
+      if(!XAU_FinalAdaptiveDirectionDecision(dir, "PYRAMID", "PYRAMID", false, adaptiveWhy))
+      {
+         Print("PYRAMID BLOCKED (Adaptive Transition Authority): ",adaptiveWhy);
+         return;
+      }
+   }
 
    // Must not have opposite positions hedging (skip — ambiguous)
    if(totalBuys > 0 && totalSells > 0) return;
@@ -13731,6 +14180,33 @@ void OnTick()
    string setupName = "";
    int signal = ScoreSetups(setupScore, setupName);
 
+   // v6.23.1 dedicated early-reversal candidate. At >=70% the engine is
+   // already searching; at >=80% a compact, persistent closed-bar package
+   // may create a fresh opposite candidate without waiting for H1/H4 to
+   // cross. SHADOW reports WOULD_ENTER but leaves production decisions
+   // untouched. ACTIVE creates a new candidate identity and the ordinary
+   // spread/news/risk/geometry/anti-chase gates still apply downstream.
+   XAU_AdaptiveTransitionDecision transitionNow=XAU_AdaptiveMarketTransitionEngine();
+   int adaptiveReversalDir=-transitionNow.dominantDirection;
+   if(transitionNow.oppositeEntryPreparing)
+   {
+      PrintFormat("[REVERSAL_ENTRY_AUDIT] candidateId=ADAPTIVE_REVERSAL_%s_%d oldDirection=%s newDirection=%s reclaim=%s retestHeld=%s displacement=%s HTFContext=%s decision=%s reason=%s",
+                  adaptiveReversalDir==1?"BUY":"SELL",(int)transitionNow.evaluatedBar,
+                  transitionNow.dominantDirection==1?"BUY":"SELL",adaptiveReversalDir==1?"BUY":"SELL",
+                  transitionNow.oppositeReclaim?"true":"false",transitionNow.oppositeRetestHeld?"true":"false",
+                  transitionNow.oppositeDisplacement?"true":"false",g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",
+                  transitionNow.oppositeEntryAllowed?"WOULD_ENTER":"WAIT",transitionNow.reason);
+   }
+   if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && transitionNow.oppositeEntryAllowed && adaptiveReversalDir!=0)
+   {
+      signal=adaptiveReversalDir;
+      setupName="ADAPTIVE_REVERSAL_RECLAIM";
+      setupScore=6.80;
+      PrintFormat("ADAPTIVE_REVERSAL_CANDIDATE_CREATED id=%s_%d direction=%s score=%.2f oldHTF=%s reason=%s",
+                  setupName,(int)transitionNow.evaluatedBar,signal==1?"BUY":"SELL",setupScore,
+                  g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",transitionNow.reason);
+   }
+
    // June 17-18 reconstruction: Active Direction applies to every setup
    // ScoreSetups can return (TREND_PULLBACK, BREAKOUT, RANGE_REVERSAL,
    // SQUEEZE_RELEASE, MULTI_EXTREME, LONDON_FIX_PIN, HTF_TREND_FOLLOW, etc.)
@@ -13754,6 +14230,8 @@ void OnTick()
    {
       bool blockThisSignal = false;
       string ddReason = "";
+      bool adaptiveReversalAuthority = (InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE &&
+                                        transitionNow.oppositeEntryAllowed && signal==adaptiveReversalDir);
       if(g_activeDirection == DIRECTION_NO_TRADE)
       {
          blockThisSignal = true;
@@ -13779,6 +14257,14 @@ void OnTick()
          blockThisSignal = true;
          ddReason = "Active Direction=TRANSITION_WAIT, pausing the weakening " +
                     (signal == 1 ? "BUY" : "SELL") + " side (" + g_activeDirectionReason + ")";
+      }
+      if(blockThisSignal)
+      {
+         if(adaptiveReversalAuthority)
+         {
+            Print("ADAPTIVE-DIRECTION LEGACY VETO SUPERSEDED: compact high-exhaustion reversal package has centralized ACTIVE authority; slow HTF remains context only.");
+            blockThisSignal=false;
+         }
       }
       if(blockThisSignal)
       {
@@ -15700,7 +16186,7 @@ void OnTick()
    g_pendingTimingProof.firstSeenTime         = g_lastEntryTimingDecision.originalSignalTime;
    g_pendingTimingProof.firstSeenPrice        = g_lastEntryTimingDecision.originalSignalPrice;
    g_pendingTimingProof.timingGateRequired    = true;
-   g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveEntryDelaySeconds();
+   g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveAdaptiveEntryDelaySeconds(signal);
    g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
    g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
    g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
@@ -16557,6 +17043,23 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // early left the lock phantom-held for the full window even when a
    // later hard gate (margin/risk/broker) rejected the trade with nothing
    // actually opened, needlessly blocking a legitimate retry.
+
+   // v6.23.1 — FINAL adaptive-direction choke point. Every autonomous path
+   // into OpenTrade (PRIMARY, RE_ENTRY, RECOVERY and any future RETRY) is
+   // evaluated here after its final timing revalidation but before risk or
+   // broker execution. SHADOW logs the identical answer; ACTIVE enforces it.
+   {
+      string adaptiveWhy="";
+      if(!XAU_FinalAdaptiveDirectionDecision(signal, "OPEN_TRADE", reason, isManualOverride, adaptiveWhy))
+      {
+         Print("OPEN TRADE BLOCKED (Adaptive Transition Authority): ",adaptiveWhy);
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL","BLOCK","AdaptiveTransitionAuthority",
+                                   signal,funnelSetup,funnelGrade,funnelScore,true,false,
+                                   "BLOCKED","ADAPTIVE_TRANSITION_AUTHORITY",true,false,false,
+                                   0,0,adaptiveWhy,reason,0.0);
+         return false;
+      }
+   }
 
    // v6.17.21 — Execution-layer Exhaustion/Reversal backstop. Forensic audit
    // of 2026-07-08's live log (8 primary entries) found the guard at
@@ -21168,6 +21671,57 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
    return false;
 }
 
+// v6.23.1 position-side consumer. The R manager remains the sole normal
+// broker-close owner; this function only supplies its transition action and
+// uses its retry-safe close request. High exhaustion alone tightens/observes;
+// an early controlled exit requires the persisted compact reversal package.
+bool XAU_ApplyTransitionPositionAuthority(int idx, ulong ticket, bool isBuy,
+                                          double curPrice, double curSL, double curTP,
+                                          double currentR, double profit, double peakR,
+                                          int digits, double buffer)
+{
+   if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_OFF) return false;
+   XAU_AdaptiveTransitionDecision d=XAU_AdaptiveMarketTransitionEngine();
+   int posDir=isBuy?1:-1;
+   bool oldDirection=(posDir==d.dominantDirection);
+   ENUM_XAU_TRANSITION_POSITION_ACTION action=TRANSITION_HOLD;
+   if(oldDirection && d.exhaustionProbability>=60.0) action=TRANSITION_STOP_ADDS;
+   if(oldDirection && d.exhaustionProbability>=70.0) action=TRANSITION_TIGHTEN_PROTECTION;
+   if(oldDirection && d.oppositeEntryAllowed && profit>0.0) action=TRANSITION_EXIT_PROFITABLE;
+   else if(oldDirection && d.oppositeEntryAllowed && currentR>=-0.35) action=TRANSITION_EXIT_CONTROLLED;
+
+   if(TimeCurrent()-g_rExit[idx].lastTelemetryLog>=30)
+   {
+      PrintFormat("[TRANSITION_POSITION_AUDIT] ticket=%I64u currentDirection=%s currentR=%.3f peakR=%.3f oldThesisHealth=%.0f opposingEvidence=%.0f recommendedAction=%s mode=%s",
+                  ticket,isBuy?"BUY":"SELL",currentR,peakR,d.trendHealth,d.reversalProbability,
+                  XAU_ATActionName(action),InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":"SHADOW");
+   }
+   if(InpAdaptiveTransitionMode!=ADAPTIVE_TRANSITION_ACTIVE || !InpTransitionActiveExitAuthority || !oldDirection)
+      return false;
+
+   if(action==TRANSITION_EXIT_PROFITABLE)
+      return XAU_RExit_RequestClose(idx,ticket,"TRANSITION_EXIT_PROFITABLE");
+   if(action==TRANSITION_EXIT_CONTROLLED)
+      return XAU_RExit_RequestClose(idx,ticket,"TRANSITION_EXIT_CONTROLLED");
+
+   if(action==TRANSITION_TIGHTEN_PROTECTION && profit>0.0 && peakR>=0.10)
+   {
+      double floorR=MathMax(0.02,peakR*0.35);
+      double dist=floorR*g_rExit[idx].originalStopDistance;
+      double targetSL=isBuy?NormalizeDouble(g_rExit[idx].originalEntryPrice+dist,digits):
+                            NormalizeDouble(g_rExit[idx].originalEntryPrice-dist,digits);
+      bool sane=isBuy?(targetSL<curPrice-buffer):(targetSL>curPrice+buffer);
+      bool improves=isBuy?(targetSL>curSL):(targetSL<curSL || curSL==0.0);
+      if(sane && improves && SafeModifySL(ticket,targetSL,curTP,isBuy,curPrice,"TRANSITION_TIGHTEN_PROTECTION"))
+      {
+         g_rExit[idx].lastProtectedSL=targetSL;
+         PrintFormat("TRANSITION_POSITION_ACTION ticket=%I64u action=TIGHTEN_PROTECTION exhaustion=%.0f peakR=%.3f protectedFloorR=%.3f newSL=%s",
+                     ticket,d.exhaustionProbability,peakR,floorR,DoubleToString(targetSL,digits));
+      }
+   }
+   return false;
+}
+
 //+------------------------------------------------------------------+
 //| Core R-exit loop. Runs UNCONDITIONALLY every tick from OnTick(),  |
 //| independent of ManagePositions()'s indicator-warm-up early returns|
@@ -21240,6 +21794,15 @@ void XAU_RExitCoreLoop()
          { g_rExit[idx].rCheckpointHit[c] = true; g_rExit[idx].rCheckpointProfitUSD[c] = profit; }
 
       double peakR = g_rExit[idx].peakR;
+
+      // v6.23.1 transition consumer runs inside the single R-exit owner.
+      // A broker-close request returns true only after confirmed absence; a
+      // pending request remains sticky and will be retried at Priority 1.
+      if(XAU_ApplyTransitionPositionAuthority(idx,ticket,isBuy,curPrice,curSL,curTP,
+                                               currentR,profit,peakR,digits,buffer))
+         continue;
+      if(g_rExit[idx].closeState==R_CLOSE_REQUESTED || g_rExit[idx].closeState==R_CLOSE_PENDING_RETRY)
+         continue;
 
       // ---- Priority 2: 1R hard close. Indicator-independent, always evaluated,
       //      always wins over the 0.5R decision/holding state. ----
@@ -27061,6 +27624,15 @@ double XAU_EffectiveEntryDelaySeconds()
 // after the old M5-specific function name -- same function, same guarantees.
 double XAU_EffectiveM5EntryDelaySec() { return XAU_EffectiveEntryDelaySeconds(); }
 
+double XAU_EffectiveAdaptiveEntryDelaySeconds(int dir)
+{
+   XAU_AdaptiveTransitionDecision d=XAU_AdaptiveMarketTransitionEngine();
+   bool fastReversal=(d.exhaustionProbability>=InpTransitionPreferredOppositeAt &&
+                      d.oppositeEntryAllowed && dir==-d.dominantDirection);
+   if(!fastReversal) return XAU_EffectiveEntryDelaySeconds();
+   return MathMax(15.0,MathMin(60.0,(double)InpTransitionFastConfirmSeconds));
+}
+
 // v6.18.0 ROLE NOTE: this is authority #2 of 3 for entry timing (see
 // XAU_ClassifySetup's ROLE NOTE above) -- CONFIRMATION / WAIT / REASSESS.
 // Distinct from XAUEntryTimingGuard (anti-chase/location quality, a
@@ -27075,6 +27647,19 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
                     (tcls.type == XAU_TIMING_REVERSAL_RECLAIM)   ? "REVERSAL_RECLAIM" :
                     (tcls.type == XAU_TIMING_BREAKOUT_RETEST)    ? "BREAKOUT_RETEST" : "LATE_CHASE";
    string dirStr = (dir == 1) ? "BUY" : "SELL";
+   string earlyAuthorityWhy="";
+   if(!XAU_FinalAdaptiveDirectionDecision(dir,"PRIMARY",setup,false,earlyAuthorityWhy))
+   {
+      if(g_pendingEntryConfirm.active && g_pendingEntryConfirm.dir==dir)
+         g_pendingEntryConfirm.active=false; // stale old-direction identity cannot recycle
+      Print("TIMING_ENGINE CANCELLED BY ADAPTIVE TRANSITION AUTHORITY: ",earlyAuthorityWhy);
+      return false;
+   }
+   double adaptiveDelaySec=XAU_EffectiveAdaptiveEntryDelaySeconds(dir);
+   bool fastAdaptiveReversal=(adaptiveDelaySec<XAU_EffectiveEntryDelaySeconds());
+   if(fastAdaptiveReversal)
+      PrintFormat("TIMING_ENGINE: ADAPTIVE_REVERSAL_FAST_CONFIRM direction=%s target=%.0fs exhaustion=%.0f — compact closed-bar package already passed; anti-chase and fresh revalidation remain mandatory",
+                  dirStr,adaptiveDelaySec,g_transitionDecision.exhaustionProbability);
 
    // v6.20.0 ORIGINAL BEHAVIOR (REMOVED in v6.20.3 Commit C+): this used to
    // let "clean evidence" (tcls.immediateConfirm) skip the M5 entry delay
@@ -27130,7 +27715,7 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
       // v6.20.3 (Commit C, tightened again same day per explicit
       // instruction): always the FULL target delay, unconditionally --
       // tcls.immediateConfirm no longer shortens this for any grade.
-      double delaySec = XAU_EffectiveEntryDelaySeconds();
+      double delaySec = adaptiveDelaySec;
       double elapsedSec = (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime);
       if(elapsedSec < delaySec)
       {
@@ -27222,8 +27807,9 @@ bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double s
    g_pendingEntryConfirm.atr             = atr;
    g_pendingEntryConfirm.firstSeenCandle = nowCandle;
    g_pendingEntryConfirm.firstSeenTime   = TimeCurrent();
-   PrintFormat("TIMING_ENGINE: %s SIGNAL_DETECTED (%s %s) grade=%s -> ENTRY_DELAY_STARTED for %.0fs (%s) OriginalSignalPrice=%.2f",
-               typeStr, setup, dirStr, grade, XAU_EffectiveEntryDelaySeconds(),
+   PrintFormat("TIMING_ENGINE: %s SIGNAL_DETECTED (%s %s) grade=%s -> ENTRY_DELAY_STARTED for %.0fs (%s%s) OriginalSignalPrice=%.2f",
+               typeStr, setup, dirStr, grade, adaptiveDelaySec,
+               fastAdaptiveReversal?"ADAPTIVE_REVERSAL_FAST_CONFIRM | ":"",
                tcls.why, signalPrice);
    return false;
 }
@@ -27435,7 +28021,7 @@ void XAU_CheckRecoveryAwaitingTiming()
       g_pendingTimingProof.firstSeenTime         = g_recoveryAwaitingTiming.firstSeenTime;
       g_pendingTimingProof.firstSeenPrice        = g_recoveryAwaitingTiming.firstSeenPrice;
       g_pendingTimingProof.timingGateRequired    = true;
-      g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveEntryDelaySeconds();
+      g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveAdaptiveEntryDelaySeconds(g_recoveryAwaitingTiming.dir);
       g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
       g_pendingTimingProof.recoveryWaitSeconds   = g_recoveryAwaitingTiming.recoveryWaitSeconds;
       g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
@@ -27700,6 +28286,8 @@ struct CounterExcursionState
    double   maeR;
    double   mfeR;
    double   protectedFloorR;           // -999 = none yet (broker SL from open still governs)
+   int      opportunityScore;          // bounded bridge input captured at candidate evaluation
+   bool     transitionEvidenceRecorded;
    int      closeState;                // requested/pending is retained until broker absence is confirmed
    string   pendingCloseReason;
    datetime lastCloseAttemptTime;
@@ -27713,6 +28301,20 @@ double   g_counterExLastR = 0.0; // cached each tick by XAU_ManageCounterExcursi
 #define COUNTER_CLOSE_REQUESTED     1
 #define COUNTER_CLOSE_PENDING_RETRY 2
 #define COUNTER_CLOSE_CONFIRMED     3
+
+void XAU_FinalizeCounterTransitionEvidence(double realizedR)
+{
+   if(g_counterEx.transitionEvidenceRecorded) return;
+   g_counterEx.transitionEvidenceRecorded=true;
+   bool structureAligned=(StringFind(g_counterEx.originalBlockReason,"structure")>=0 ||
+                          StringFind(g_counterEx.originalBlockReason,"STRUCTURE")>=0 ||
+                          StringFind(g_counterEx.originalBlockReason,"exhaust")>=0 ||
+                          StringFind(g_counterEx.originalBlockReason,"EXHAUST")>=0);
+   XAU_RecordCounterTransitionEvidence(g_counterEx.counterExecutedDirection,
+                                       (double)g_counterEx.opportunityScore,
+                                       g_counterEx.mfeR,g_counterEx.maeR,
+                                       realizedR,structureAligned);
+}
 
 // Broker state is authoritative. This deliberately searches by the isolated
 // counter magic because ResultOrder()/ResultDeal() is not guaranteed to be
@@ -27741,6 +28343,7 @@ bool XAU_RequestCounterExcursionClose(string reason)
    {
       PrintFormat("COUNTER_EXCURSION_CLOSE_CONFIRMED | ticket=%I64u | reason=%s | attempts=%d | brokerPositionAbsent=true",
                   g_counterEx.ticket, g_counterEx.pendingCloseReason, g_counterEx.closeAttemptCount);
+      XAU_FinalizeCounterTransitionEvidence(g_counterExLastR);
       g_counterEx.closeState = COUNTER_CLOSE_CONFIRMED;
       g_counterEx.active = false;
       g_counterExCooldownUntil = TimeCurrent() + 60;
@@ -27762,6 +28365,7 @@ bool XAU_RequestCounterExcursionClose(string reason)
    {
       PrintFormat("COUNTER_EXCURSION_CLOSE_CONFIRMED | ticket=%I64u | reason=%s | attempts=%d | requestAccepted=%s | brokerPositionAbsent=true",
                   liveTicket, g_counterEx.pendingCloseReason, g_counterEx.closeAttemptCount, accepted ? "true" : "false");
+      XAU_FinalizeCounterTransitionEvidence(g_counterExLastR);
       g_counterEx.closeState = COUNTER_CLOSE_CONFIRMED;
       g_counterEx.active = false;
       g_counterExCooldownUntil = TimeCurrent() + 60;
@@ -28109,6 +28713,8 @@ void XAU_ReconcileCounterExcursionOnInit()
       g_counterEx.maeR                    = 0.0;
       g_counterEx.mfeR                    = 0.0;
       g_counterEx.protectedFloorR         = -999.0;
+      g_counterEx.opportunityScore        = 0;
+      g_counterEx.transitionEvidenceRecorded = false;
       g_counterEx.closeState              = COUNTER_CLOSE_NONE;
       g_counterEx.pendingCloseReason      = "";
       g_counterEx.lastCloseAttemptTime    = 0;
@@ -28407,6 +29013,8 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    g_counterEx.maeR = 0.0;
    g_counterEx.mfeR = 0.0;
    g_counterEx.protectedFloorR = -999.0;
+   g_counterEx.opportunityScore = opportunityScore;
+   g_counterEx.transitionEvidenceRecorded = false;
    g_counterEx.closeState = COUNTER_CLOSE_NONE;
    g_counterEx.pendingCloseReason = "";
    g_counterEx.lastCloseAttemptTime = 0;
@@ -28437,6 +29045,7 @@ bool XAU_ManageCounterExcursionPosition()
    {
       Print("COUNTER_EXCURSION_CLOSE | ticket=", g_counterEx.ticket,
             " exitReason=CLOSED_EXTERNALLY_OR_BY_BROKER_SLTP brokerPositionAbsent=true originalCandidateOutcome=NOT_AUTO_EXECUTED");
+      XAU_FinalizeCounterTransitionEvidence(g_counterExLastR);
       g_counterEx.closeState = COUNTER_CLOSE_CONFIRMED;
       g_counterEx.active = false;
       g_counterExCooldownUntil = TimeCurrent() + 60;

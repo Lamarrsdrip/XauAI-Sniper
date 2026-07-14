@@ -172,12 +172,13 @@ def test_re_entry_and_rescue_family_gated_on_active_direction():
 
 def test_central_direction_gate_covers_all_scoresetups_families_with_documented_exceptions():
     ea = read(BACKEND_EA)
-    marker = "int signal = ScoreSetups(setupScore, setupName);"
-    idx = ea.index(marker)
-    window = ea[idx: idx + 3500]
-    assert "ADAPTIVE-DIRECTION BLOCK" in window
-    assert "Documented exceptions (NOT gated here, by design):" in window
-    assert "PYR+TRN" in window and "RE_ENTRY" in window
+    # v6.23.1 supersedes the former PYR/RE_ENTRY exceptions: every autonomous
+    # source reaches one final transition authority, with an explicit pyramid
+    # call because that path sends directly rather than through OpenTrade.
+    assert 'XAU_FinalAdaptiveDirectionDecision(signal, "OPEN_TRADE"' in ea
+    assert 'XAU_FinalAdaptiveDirectionDecision(dir, "PYRAMID"' in ea
+    for source in ("PRIMARY", "RE_ENTRY", "RECOVERY", "RETRY", "PYRAMID"):
+        assert source in ea
 
 
 def test_exit_arbiter_reuses_direction_engine_instead_of_a_sixth_system():
