@@ -35,10 +35,11 @@ def test_ea_persists_remote_config_and_reports_applied_state():
     assert "prop_max_basket_risk_pct" in EA
 
 
-def test_prop_firm_mode_caps_risk_without_changing_entry_intelligence():
+def test_prop_firm_mode_blocks_when_its_cap_cannot_fund_full_normal_risk():
     assert "EffectiveSingleRiskCapPct()" in EA
     assert "EffectiveAggregateRiskCapPct()" in EA
-    assert "PROP-FIRM RISK CAP" in EA
+    assert "PROP_FIRM_CAP_BELOW_FULL_RISK" in EA
+    assert "FULL_RISK_BINARY_BLOCK" in EA
     assert "PROP-FIRM MODE: large-account risk floor disabled" in EA
     # v6.17.7: OpenTrade changed from void to bool (item 4, deferred state
     # commitment until confirmed broker execution) -- landmark updated.

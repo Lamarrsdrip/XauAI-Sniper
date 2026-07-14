@@ -135,7 +135,9 @@ def test_ai_disagreement_sufficient_conviction_cannot_block():
     window = ea[max(0, idx - 400): idx + 400]
     assert "return;" not in window
     assert "STRONG-DISAGREE-WARN" in window
-    assert "sizeMulti = MathMin(sizeMulti, 0.50);" in window
+    assert "sizeMulti = MathMin(sizeMulti, 0.50);" not in window
+    assert "approved normal risk unchanged" in window
+    assert "sizeMulti = szBeforeAI;" in ea
 
 
 def test_ai_low_confidence_skip_cannot_block():

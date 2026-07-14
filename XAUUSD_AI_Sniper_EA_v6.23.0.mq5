@@ -1,6 +1,16 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
+//|   v6.23.0 - Production Forensic Hardening                         |
+//|   Full-risk binary sizing is now fail-closed end to end: broker   |
+//|   max, configured max, aggregate exposure, equity cap, margin,    |
+//|   and lot-step geometry may block but can never silently shrink an |
+//|   approved normal trade. Counter-Excursion no longer blocks normal |
+//|   approvals, is disabled on netting accounts, and retains close    |
+//|   ownership until the broker confirms the position is gone.        |
+//|   Persistent learning/state files are scoped by account, server,   |
+//|   symbol, and magic so production and experiments cannot collide.  |
+//+------------------------------------------------------------------+
 //|   v6.21.3 - Full-Risk Binary Mode + Isolated COUNTER_EXCURSION       |
 //|   Forensic repair of the 0.01-lot regression: OpenTrade no longer     |
 //|   scales riskPct into a 9-15% quality band or clamps a sub-minLot     |
@@ -1760,13 +1770,12 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.264"
-#property description "XAUUSD AI Sniper v6.21.3"
-#property description "Full-risk binary mode: a valid approved trade uses the full configured"
-#property description "InpNormalRiskPct with no grade/AI/session/volatility scaling; a lot that"
-#property description "can't clear broker minimum blocks instead of silently opening at 0.01."
-#property description "COUNTER_EXCURSION_CAPTURE is now ON by default, fully isolated from normal"
-#property description "trade count, cooldown, lock, and risk sizing."
+#property version   "6.230"
+#property description "XAUUSD AI Sniper v6.23.0 - Production Forensic Hardening"
+#property description "Approved normal entries use full configured risk or fail closed; no"
+#property description "margin, aggregate, broker-limit, or lot-step silent downscaling."
+#property description "Counter-Excursion is broker-confirmed, retry-safe, hedging-only, and"
+#property description "cannot delay or block an approved normal entry."
 #property strict
 
 // v6.21.2: entry-delay bounds, declared this early so every call site
@@ -1776,9 +1785,9 @@
 #define XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0
 #define XAU_ENTRY_DELAY_SAFE_DEFAULT_SEC     150.0
 
-#define XAUAI_EA_VERSION "v6.21.3"
-#define XAUAI_EA_VERSION_NUM "6.21.3"
-#define XAUAI_BUILD_HASH "v6213-full-risk-binary-mode-20260713"
+#define XAUAI_EA_VERSION "v6.23.0"
+#define XAUAI_EA_VERSION_NUM "6.23.0"
+#define XAUAI_BUILD_HASH "v6230-production-forensic-hardening-20260714"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -2171,7 +2180,7 @@ input double InpTradeBrainWeakLotMulti     = 0.45;  // Lot multiplier for weak-b
 input bool   InpTradeBrainMonitorAfterExit = true;  // After close, keep watching to learn whether exit was early, late, or correct
 input double InpMemoryAPlusHTFMinLotMulti  = 0.85;  // Broad aggregate memory cannot crush A/A+ HTF-consensus setups below this
 input int    InpMemoryExactEvidenceMinSamples = 12; // Need exact TradeBrain evidence before broad memory can fully reduce A/A+
-input double InpLotStepMaxRiskOvershootPct = 12.0;  // Round to nearest lot step only if extra SL risk stays within this %
+input double InpLotStepMaxRiskOvershootPct = 0.0;   // RETIRED: production volume normalization is floor-only; upward rounding may never exceed configured risk
 input bool   InpEntryQualityReview          = true;  // Write Entry Quality Review CSV for every closed trade
 input int    InpEntryQualityFastMinSamples  = 6;     // Faster warning window for repeated deep-drawdown patterns
 input double InpEntryQualityPoorMAEATR      = 0.80;  // More than this adverse ATR = poor entry timing
@@ -2310,7 +2319,7 @@ input bool   InpUseAI          = true;     // Enable AI Director (Claude + GPT d
 input bool   InpAIAdvisoryOnly = false;    // v6.3.0: FALSE = AI has real authority. TRUE = log-only (advisory). Default: AUTHORITY MODE.
 input bool   InpAIDirectorAllGrades = true;  // v6.3.0: call AI Director for ALL grades (A,A+,B), not just A+
 input int    InpAIDirectorMinConf = 55;      // v6.3.0: minimum AI confidence % to ALLOW trade. Below = block/reduce.
-input bool   InpAIOfflineSafeMode = true;    // v6.3.0: if AI server fails, trade at 50% size (safe degraded mode)
+input bool   InpAIOfflineSafeMode = true;    // Legacy telemetry switch; AI outage is advisory and cannot reduce binary full-risk sizing
 input int    InpAIOfflineMaxFails = 3;       // v6.3.0: consecutive AI call failures before declaring AI offline
 input int    InpAICostDailyCallLimit = 60;    // Paid LLM budget: max EA-triggered AI calls per broker day
 input int    InpAIMinEntryCallSec = 180;      // Paid LLM throttle: min seconds between entry AI calls
@@ -2358,7 +2367,7 @@ input bool   InpReEntryBetterPriceOnly = true; // After a loss, do not auto re-e
 input group "=== SMART FILTERS ==="
 input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
 input int    InpDXYRefreshSec  = 900;      // Refresh DXY every N seconds (15min)
-input bool   InpDrawdownMode   = true;     // Auto-reduce risk after losing streak
+input bool   InpDrawdownMode   = true;     // Tracks loss state for quality diagnostics; never reduces approved normal-trade risk
 input int    InpDrawdownLosses = 5;        // v6.3.2: raised 3→5 — 3 micro-losses were triggering half-risk mode all day
 input double InpDrawdownRisk   = 0.5;      // Risk % during recovery mode (default 0.5)
 input int    InpStreakCooldownLosses = 2;  // # losses in short window = pause
@@ -2387,7 +2396,7 @@ input string InpServerURL      = "https://xauaisniper.com";
 input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
 
 input group "=== CONVICTION-WEIGHTED SIZING (v4.5.0 — use Claude/GPT confidence) ==="
-input bool   InpConvictionSizing = true;   // v6.3.0: TRUE — AI confidence now drives lot sizing by default
+input bool   InpConvictionSizing = true;   // Legacy AI telemetry switch; confidence cannot alter binary full-risk sizing
 // v6.3.1: InpMinAIConfidence removed — threshold is now InpAIDirectorMinConf (55%) for all paths
 // (was 60%, causing blocks when AI agreed at 56-59% on valid setups)
 input int    InpNormalAIConfidence = 75;   // At/above this, use normal 1.0x size
@@ -3316,7 +3325,7 @@ datetime g_lastLossAt         = 0;
 // collide with each other's state.
 string XAU_LossStreakGVPrefix()
 {
-   return "XAUAI_LS_" + Symbol() + "_" + IntegerToString(InpMagicNumber) + "_";
+   return "XAUAI_LS_" + XAU_ProductionStateScope() + "_";
 }
 
 void XAU_PersistLossStreakState()
@@ -3367,7 +3376,7 @@ void XAU_RestoreLossStreakState()
 // independently.
 string XAU_EntryLockGVKey(int dir)
 {
-   return "XAUAI_ENTRYLOCK_" + Symbol() + "_" + IntegerToString(InpMagicNumber) + "_" + (dir == 1 ? "BUY" : "SELL");
+   return "XAUAI_ENTRYLOCK_" + XAU_ProductionStateScope() + "_" + (dir == 1 ? "BUY" : "SELL");
 }
 
 // Read-only, fail-fast check: true if the lock is currently held (by this or
@@ -7892,19 +7901,16 @@ int OnInit()
    Print("─────────────── END DIAGNOSTICS ───────────────");
    if(!symOK || !termConn || !termAlgo || !mqlAlgo)
       Print("⚠⚠⚠  ONE OR MORE CRITICAL CHECKS FAILED — THE BOT WILL NOT TRADE UNTIL FIXED  ⚠⚠⚠");
-   // v6.4.15 FIX: Show actual effective base risk, not InpRiskPercent.
-   // InpRiskPercent is ALWAYS overridden by account-mode presets inside OpenTrade().
-   // Showing InpRiskPercent (0.4%) was the source of the "displayed 0.40% risk" confusion.
-   double startupBaseRisk = InpRiskPercent;
-   if(InpAccountMode == ACCT_BALANCED)     startupBaseRisk = 1.2;
-   if(InpAccountMode == ACCT_CONSERVATIVE) startupBaseRisk = 0.6;
-   if(InpAccountMode == ACCT_AGGRESSIVE)   startupBaseRisk = 2.0;
+   // One production authority: every approved normal entry targets
+   // InpNormalRiskPct. Legacy account-mode and confidence values are visible
+   // for diagnostics only and must never be presented as effective risk.
+   double startupBaseRisk = InpNormalRiskPct;
    string acctModeStr = (InpAccountMode == ACCT_BALANCED) ? "BALANCED"
                       : (InpAccountMode == ACCT_CONSERVATIVE) ? "CONSERVATIVE" : "AGGRESSIVE";
    Print("Balance: $", DoubleToString(initialBalance, 2),
-         " | BaseRisk(actual): ", DoubleToString(startupBaseRisk, 2), "%",
-         " | Mode: ", acctModeStr,
-         " | InpRiskPercent(IGNORED by mode): ", DoubleToString(InpRiskPercent, 2), "%",
+         " | NormalRiskAuthority: ", DoubleToString(startupBaseRisk, 2), "% FULL-RISK BINARY",
+         " | LegacyAccountMode(telemetry only): ", acctModeStr,
+         " | LegacyInpRiskPercent(ignored): ", DoubleToString(InpRiskPercent, 2), "%",
          " | TRADE_MODE=", XAU_TradeModeName(),
          " | LOT_MODE=", XAU_LotSizingModeName(),
          " | AI: ", InpUseAI ? "ON" : "OFF", " | ML: ", InpLearnPatterns ? "ON" : "OFF");
@@ -7915,9 +7921,9 @@ int OnInit()
          " | Cooldown=", InpTradeCooldown, "s | Reversal=", InpReversalCooldown, "s");
    Print("EXITS: QuickTake $", InpProfitTakeMin, "-$", InpProfitTakeMax, " | QuickExitMin=", InpQuickExitMin, "min");
    Print("SMART: ReEntry=", InpUseReEntry?"ON":"OFF",
-         " (", InpReEntryWindow/60, "min win, ", DoubleToString(InpReEntrySize,2), "x, cap ", InpMaxReEntriesPerDay, "/day) | DXY=", InpUseDXYFilter?"ON":"OFF",
+         " (", InpReEntryWindow/60, "min window, legacy size hint ", DoubleToString(InpReEntrySize,2), "x not applied to approved normal risk, cap ", InpMaxReEntriesPerDay, "/day) | DXY=", InpUseDXYFilter?"ON":"OFF",
          " | Drawdown=", InpDrawdownMode?"ON":"OFF",
-         " (", InpDrawdownLosses, "losses->", DoubleToString(InpDrawdownRisk,2), "%) | Streak=", InpStreakCooldownLosses, " in ", InpStreakWindowSec/60, "min");
+         " (quality state after ", InpDrawdownLosses, " losses; approved risk remains ", DoubleToString(InpNormalRiskPct,2), "%) | Streak=", InpStreakCooldownLosses, " in ", InpStreakWindowSec/60, "min");
    Print("ADAPTIVE: ", InpAdaptiveGrades?"ON":"OFF",
          " (auto-tunes GradeB on recent WR) | AsiaBreakout: ", InpAsiaRangeBreakout?"ON":"OFF");
    Print("ARMOR v4.4.5: HardStop=",
@@ -7946,18 +7952,16 @@ int OnInit()
             " | Bounds: $", DoubleToString(InpProfMaxFloorUSD,0), "-$", DoubleToString(InpProfMaxCeilUSD,0),
             " | SmartCap=", InpSmartCapExit?"ON (trail, let run)":"OFF (force close)");
    Print("VOL-ADAPT: ", InpVolAdaptiveLots?"ON":"OFF",
-         " (spike>", DoubleToString(InpVolSpikeMulti,2), "x ATR → size×",DoubleToString(InpVolSpikeReduce,2),
-         ", calm<", DoubleToString(InpVolCalmMulti,2), "x → size×", DoubleToString(InpVolCalmBoost,2), ")");
+         " (advisory only; ATR still changes SL distance, approved risk remains full ", DoubleToString(InpNormalRiskPct,2), "%)");
    Print("AI DIRECTOR: ", InpUseAI?"ON":"OFF",
          " | Mode=", EnumToString(InpAIMode), InpJune18RestoreMode?" (June18RestoreMode forces ADVISOR)":"",
          " | Auth=", XAU_AIIsAdvisoryOnly()?"ADVISORY":"REAL-AUTHORITY",
          " | AllGrades=", InpAIDirectorAllGrades?"YES":"A+-only",
          " | MinConf=", InpAIDirectorMinConf, "% (block below this)",
-         " | OfflineSafe=", InpAIOfflineSafeMode?"50%-lot":"disabled");
+         " | OfflinePolicy=", InpAIOfflineSafeMode?"ADVISORY_FULL_RISK":"ADVISORY_FULL_RISK");
    Print("CONVICTION: ", InpConvictionSizing?"ON":"OFF",
-         " | NormalConf=", InpNormalAIConfidence, "% (x1.0)",
-         " | HighConf=", InpHighAIConfidence, "% (x", DoubleToString(InpConvictionHighMulti, 2), ")",
-         " | LowMulti=x", DoubleToString(InpConvictionLowMulti, 2), " (55-74% = mild reduce)");
+         " | advisory telemetry only; AI confidence cannot change approved normal lot | NormalConf=", InpNormalAIConfidence,
+         "% | HighConf=", InpHighAIConfidence, "%");
    Print("TRAIL v4.5.2: BE activate=+", DoubleToString(InpBELockActivateR,2), "R  lock=+",
          DoubleToString(InpBELockProfitR,2), "R",
          " | TrendAware=", InpTrendAwareTrail?"ON":"OFF",
@@ -9557,7 +9561,7 @@ void WriteDecisionScorecard(int signal, string setupName, string grade,
                              string blockReason, bool tradeOpened)
 {
    if(InpBacktestMode) return;  // no file I/O in backtest
-   string fname = "XAUAI_Scorecard_" + TimeToString(TimeCurrent(), TIME_DATE) + ".txt";
+   string fname = "XAUAI_Scorecard_" + XAU_ProductionStateScope() + "_" + TimeToString(TimeCurrent(), TIME_DATE) + ".txt";
    StringReplace(fname, ".", "_");  // avoid dots in filename
    StringReplace(fname, " ", "_");
    int fh = FileOpen(fname, FILE_READ|FILE_WRITE|FILE_TXT|FILE_COMMON);
@@ -9755,13 +9759,40 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
    }
 }
 
+// Every FILE_COMMON learning/state artifact is isolated by the production
+// account, broker server, symbol and normal-strategy magic. This prevents a
+// VPS production instance, a second account, or an experiment with another
+// magic from silently training or controlling this instance.
+string XAU_SanitizeStateToken(string value)
+{
+   StringReplace(value, "\\", "_");
+   StringReplace(value, "/", "_");
+   StringReplace(value, ":", "_");
+   StringReplace(value, "*", "_");
+   StringReplace(value, "?", "_");
+   StringReplace(value, "\"", "_");
+   StringReplace(value, "<", "_");
+   StringReplace(value, ">", "_");
+   StringReplace(value, "|", "_");
+   StringReplace(value, " ", "_");
+   return value;
+}
+
+string XAU_ProductionStateScope()
+{
+   return (string)AccountInfoInteger(ACCOUNT_LOGIN) + "_" +
+          XAU_SanitizeStateToken(AccountInfoString(ACCOUNT_SERVER)) + "_" +
+          XAU_SanitizeStateToken(Symbol()) + "_" + (string)InpMagicNumber;
+}
+
 // v6.4.0: persist and load strategy weights
-#define STRATWTS_FILE  "XAUAI_StratWeights_v1.csv"
+string XAU_StratWeightsFile() { return "XAUAI_StratWeights_v1_" + XAU_ProductionStateScope() + ".csv"; }
 
 void SaveStratWeights()
 {
    if(InpBacktestMode) return;
-   int h = FileOpen(STRATWTS_FILE, FILE_WRITE|FILE_CSV|FILE_COMMON, ',');
+   string fn = XAU_StratWeightsFile();
+   int h = FileOpen(fn, FILE_WRITE|FILE_CSV|FILE_COMMON, ',');
    if(h == INVALID_HANDLE) return;
    FileWrite(h, "#XAUAI_StratWeights_v1");
    FileWrite(h, "idx","weight","wins","losses","totalR","count");
@@ -9775,8 +9806,9 @@ void SaveStratWeights()
 void LoadStratWeights()
 {
    if(InpBacktestMode) return;
-   if(!FileIsExist(STRATWTS_FILE, FILE_COMMON)) return;
-   int h = FileOpen(STRATWTS_FILE, FILE_READ|FILE_CSV|FILE_COMMON, ',');
+   string fn = XAU_StratWeightsFile();
+   if(!FileIsExist(fn, FILE_COMMON)) return;
+   int h = FileOpen(fn, FILE_READ|FILE_CSV|FILE_COMMON, ',');
    if(h == INVALID_HANDLE) return;
    bool header = true;
    while(!FileIsEnding(h))
@@ -9800,7 +9832,7 @@ void LoadStratWeights()
       }
    }
    FileClose(h);
-   Print("STRATEGY WEIGHTS LOADED from ", STRATWTS_FILE);
+   Print("STRATEGY WEIGHTS LOADED from ", fn);
 }
 
 // ============================================================
@@ -14802,19 +14834,19 @@ void OnTick()
          }
       }
 
-      // --- 4. SOFT REDUCTIONS (borderline: reduce lot instead of blocking) ---
+      // --- 4. QUALITY EVIDENCE (never changes approved normal-trade risk) ---
       if(stiLate >= InpSTI_LateEntryReduceScore)
       {
          g_stiLotMulti = 0.65;
          if(InpSTI_Log)
-            PrintFormat("STI_LATE_REDUCE | %s lateRisk=%.0f → lot x%.2f | still tradeable but reduced risk",
+            PrintFormat("STI_LATE_QUALITY | %s lateRisk=%.0f | legacyQualityMult=%.2f | approved risk remains binary/full",
                         setupName, stiLate, g_stiLotMulti);
       }
       else if(stiExhaust >= InpSTI_ExhaustionReduce && stiTCP < 75.0)
       {
          g_stiLotMulti = 0.75;
          if(InpSTI_Log)
-            PrintFormat("STI_EXHAUST_REDUCE | %s exhaust=%.0f tcp=%.0f → lot x%.2f",
+            PrintFormat("STI_EXHAUST_QUALITY | %s exhaust=%.0f tcp=%.0f | legacyQualityMult=%.2f | approved risk remains binary/full",
                         setupName, stiExhaust, stiTCP, g_stiLotMulti);
       }
    }
@@ -14947,7 +14979,7 @@ void OnTick()
             else if(curATR_vol >= medATR * 2.0) volLotAdj = 0.55;
             else                                 volLotAdj = 0.65;
             sizeMulti *= volLotAdj;
-            PrintFormat("VOL_LOT_CAP: ATR %.1f is %.1fx 20-bar median %.1f | lot x%.2f (grade=%s, B-grade vol cap applies)",
+            PrintFormat("VOL_QUALITY_SIGNAL: ATR %.1f is %.1fx 20-bar median %.1f | legacyQualityMult=%.2f (grade=%s) | approved risk remains binary/full",
                         curATR_vol, curATR_vol/medATR, medATR, volLotAdj, grade);
          }
       }
@@ -14957,19 +14989,19 @@ void OnTick()
    if(timingLotMult < 0.999)
    {
       sizeMulti *= timingLotMult;
-      Print("ENTRY-TIMING SIZE: lot x", DoubleToString(timingLotMult, 2),
+      Print("ENTRY-TIMING QUALITY: legacyQualityMult=", DoubleToString(timingLotMult, 2),
             " | finalGrade=", grade, " | ", timingReason,
-            highGradeFullSize ? " [will be restored by A+/A enforcement floor]" : "");
+            " | approved risk remains binary/full");
    }
 
    lta_confirm = g_adaptiveConfirmLotMulti;   // capture before reset
    if(g_adaptiveConfirmLotMulti < 0.999)
    {
       sizeMulti *= g_adaptiveConfirmLotMulti;
-      Print("ADAPTIVE-CONFIRM SIZE: lot x",
+      Print("ADAPTIVE-CONFIRM QUALITY: legacyQualityMult=",
             DoubleToString(g_adaptiveConfirmLotMulti, 2), " | ",
             g_adaptiveConfirmReason,
-            highGradeFullSize ? " [will be restored by A+/A enforcement floor]" : "");
+            " | approved risk remains binary/full");
       g_adaptiveConfirmLotMulti = 1.0;
    }
 
@@ -15046,9 +15078,9 @@ void OnTick()
       }
       else if(g_aiOffline && InpAIOfflineSafeMode)
       {
-         // AI offline + safe mode: reduce lot size by 50%, no blocks/upgrades
-         sizeMulti *= 0.5;
-         Print("AI DIRECTOR OFFLINE — SAFE MODE: lot reduced 50%, no AI veto/boost. Fails=", g_aiTransportFails);
+         // AI is advisory-only. An outage cannot silently de-risk an otherwise
+         // approved normal trade; deterministic gates still decide PASS/BLOCK.
+         Print("AI DIRECTOR OFFLINE — ADVISORY FALLBACK: local deterministic rules continue; approved normal risk unchanged. Fails=", g_aiTransportFails);
       }
       else
       {
@@ -15138,10 +15170,9 @@ void OnTick()
                {
                   // B-grade: HTF consensus overrides weak AI disagreement — reduce lot, never block
                   aiVerdictStr = "HTF-OVERRIDE";
-                  if(InpTradeMode == SAFE_MODE) sizeMulti = MathMin(sizeMulti, 0.70);
                   Print("AI DIRECTOR: HTF-CONSENSUS OVERRIDE — AI disagrees (", lastAIConfidence,
                         "%) but HTF structure confirmed ", signal > 0 ? "BUY" : "SELL",
-                        InpTradeMode == SAFE_MODE ? " | reducing lot x0.70, not blocking" : " | trade mode keeps calculated lot");
+                        " | advisory only; approved normal risk unchanged");
                   g_aiLastVerdict = "HTF-OVERRIDE"; g_aiLastConfidence = lastAIConfidence;
                }
             }
@@ -15164,11 +15195,9 @@ void OnTick()
                {
                   // B-grade: AI disagrees but with weak conviction — reduce only in SAFE, warning in growth modes
                   aiVerdictStr = "WEAK-DISAGREE";
-                  if(InpTradeMode == SAFE_MODE) sizeMulti = MathMin(sizeMulti, 0.65);
                   Print("AI DIRECTOR: WEAK-DISAGREE (conf=", lastAIConfidence, "% calibrated=",
                         DoubleToString(CalibratedConfidence(lastAIConfidence), 1), "% < min ",
-                        InpAIDirectorMinConf, "%) — ",
-                        InpTradeMode == SAFE_MODE ? "reducing lot x0.65" : "warning only in trade mode");
+                        InpAIDirectorMinConf, "%) — advisory only; approved normal risk unchanged");
                   g_aiLastVerdict = "WEAK-DISAGREE"; g_aiLastConfidence = lastAIConfidence;
                }
             }
@@ -15176,12 +15205,11 @@ void OnTick()
             {
                // v6.17.11: AI disagrees with real conviction. Previously an
                // unconditional hard veto -- now advisory-only, matching every
-               // other AI path in this gate: log the disagreement, reduce lot
-               // to respect the strength of the disagreement, never block.
+               // other AI path in this gate: log the disagreement, never
+               // reduce or block the deterministic normal decision.
                aiVerdictStr = "STRONG-DISAGREE-WARN";
-               sizeMulti = MathMin(sizeMulti, 0.50);
                string blockMsg = StringFormat(
-                  "AI DIRECTOR ADVISORY: AI says %s (conf %d%%), strategy says %s. Confident disagreement logged, lot reduced x0.50, not blocking.",
+                  "AI DIRECTOR ADVISORY: AI says %s (conf %d%%), strategy says %s. Confident disagreement logged; approved normal risk unchanged.",
                   aiDirStr, lastAIConfidence, signal > 0 ? "BUY" : "SELL");
                Print("AI DIRECTOR: ", blockMsg);
                XAU_LogSoftBlockDowngrade("AI_STRONG_DISAGREE", blockMsg, setupName, grade, combinedScore);
@@ -15244,7 +15272,6 @@ void OnTick()
                string blockMsgB = StringFormat("[AI-CONFIDENT-SKIP] %s grade=B: AI skip confidence=%d%% >= min %.0f%% — AI is confident this setup is weak (advisory only, not blocking).",
                                                 setupName, lastAIConfidence, InpAIDirectorMinConf);
                aiVerdictStr = "B-CONFIDENT-SKIP-WARN";
-               sizeMulti = MathMin(sizeMulti, 0.35);
                XAU_LogSoftBlockDowngrade("AI_B_CONFIDENT_SKIP", blockMsgB, setupName, grade, combinedScore);
                g_aiLastVerdict = "B-CONFIDENT-SKIP-WARN"; g_aiLastConfidence = lastAIConfidence;
                Print("AI DIRECTOR: ADVISORY — confident B-grade skip logged (sizeMulti informational only, lot size NOT reduced -- v6.21.2 binary risk mode), not blocking.");
@@ -15253,7 +15280,6 @@ void OnTick()
             {
                // B-grade: AI evaluated and said SKIP but without strong conviction — reduce size, don't block
                aiVerdictStr = "REDUCE";
-               sizeMulti = MathMin(sizeMulti, 0.50);
                Print("AI DIRECTOR: ADVISORY (AI SKIP, real confidence=", lastAIConfidence, "%) — sizeMulti informational only, lot size NOT reduced -- v6.21.2 binary risk mode");
                g_aiLastVerdict = "REDUCE"; g_aiLastConfidence = lastAIConfidence;
             }
@@ -15274,14 +15300,11 @@ void OnTick()
                // Blocking a structurally sound setup because AI is 52% sure is backwards.
                if(CalibratedConfidence(lastAIConfidence) < InpAIDirectorMinConf) // v6.4.0: calibrated
                {
-                  // AI agrees but with sub-threshold conviction.
-                  // For A+/A: reduction is applied AND enforcement floor does NOT restore (weak-agree = reduced lot).
-                  // Only AI disagreement paths (HTF-OVERRIDE, WEAK-DISAGREE, REDUCE) block A+/A entirely.
+                  // AI agrees but with sub-threshold conviction. Confidence is
+                  // telemetry only in full-risk binary mode.
                   aiVerdictStr = "ALLOW_LOW_CONV";
-                  sizeMulti *= InpConvictionLowMulti; // 0.70x mild reduce
                   Print("AI DIRECTOR: LOW-CONV CONFIRM — AI agrees at ", lastAIConfidence,
-                        "% < min ", InpAIDirectorMinConf, "% | lot x", DoubleToString(InpConvictionLowMulti, 2),
-                        highGradeFullSize ? " — A+/A: reduced size kept, floor will NOT restore for weak-agree" : " — standard mild reduce");
+                        "% < min ", InpAIDirectorMinConf, "% | advisory only; approved normal risk unchanged");
                   g_aiLastVerdict = "ALLOW_LOW_CONV"; g_aiLastConfidence = lastAIConfidence;
                   if(StringLen(lastAIBearishCase) > 0) Print("Devil's Advocate: ", lastAIBearishCase);
                }
@@ -15308,9 +15331,9 @@ void OnTick()
                      Print("AI DIRECTOR: ALLOW_REDUCE — A+/A: reduced lot kept, floor will NOT restore for weak-agree conf=",
                            lastAIConfidence, "%");
                }
-               sizeMulti *= convMult;
-               Print("AI DIRECTOR: ", aiVerdictStr, " — conf=", lastAIConfidence, "% → lot x",
-                     DoubleToString(convMult, 2), " (sizeMulti=", DoubleToString(sizeMulti, 2), ")");
+               Print("AI DIRECTOR: ", aiVerdictStr, " — conf=", lastAIConfidence,
+                     "% | legacy conviction multiplier=", DoubleToString(convMult, 2),
+                     " informational only; approved normal risk unchanged");
                }  // close else block (high/normal/low conviction branch)
             }  // close if(InpConvictionSizing && lastAIConfidence > 0)
             else
@@ -15326,7 +15349,7 @@ void OnTick()
 
          Print("Strategy Votes: ", setupName, "→", signal > 0 ? "BUY" : "SELL",
                " | Memory Influence: W=", wins, "/L=", losses,
-               " | Final AI Decision: ", aiVerdictStr, " | LotMult=", DoubleToString(sizeMulti, 2));
+               " | Final AI Advisory: ", aiVerdictStr, " | normalRiskImpact=NONE");
          Print("══════════════════════════════════════════════════");
       }
    }
@@ -15346,8 +15369,11 @@ void OnTick()
          XAU_AIRecordProviderFailure("Provider Unavailable", "InpServerURL missing/invalid");
    }
 
-   // Capture AI net multiplier (sizeMulti delta from before→after AI Director block)
-   lta_ai = (szBeforeAI > 0.0001) ? sizeMulti / szBeforeAI : 1.0;
+   // Enforce the advisory-only contract at the gate boundary. This prevents
+   // any legacy internal multiplier from leaking into a later scout/block
+   // classification, as well as preventing a lot reduction.
+   sizeMulti = szBeforeAI;
+   lta_ai = 1.0;
    lta_aiVerdict = g_aiLastVerdict;
 
    // Store signal context for ML + journal logging
@@ -15505,9 +15531,8 @@ void OnTick()
    if(consciousLotMult < 0.999 || consciousLotMult > 1.001)
    {
       sizeMulti *= consciousLotMult;
-      Print("AI-MEMORY LOT ADJUST: lot x", DoubleToString(consciousLotMult, 2),
-            " (aggregate evidence only; emergency safety unchanged)",
-            highGradeFullSize && consciousLotMult < 0.999 ? " [will be restored by A+/A enforcement floor]" : "");
+      Print("MEMORY QUALITY SIGNAL: legacyQualityMult=", DoubleToString(consciousLotMult, 2),
+            " | aggregate evidence only; approved risk remains binary/full");
    }
 
    // v6.0.1 — AI Trading Committee: synthesise market narrative + human rules + pattern memory
@@ -15523,7 +15548,7 @@ void OnTick()
 
    // Open trade with grade-scaled sizing (g_stiLotMulti = 1.0 unless STI reduced it)
    if(InpSTI_Enable && g_stiLotMulti < 0.999)
-      Print(StringFormat("STI SIZE APPLIED | lot x%.2f | committee x%.2f | final sizeMulti=%.3f",
+      Print(StringFormat("QUALITY EVIDENCE | STI=%.2f | committee=%.2f | combined=%.3f | approved risk remains binary/full",
                          g_stiLotMulti, committeeSzMult, sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult),
             highGradeFullSize ? " [will be restored by A+/A enforcement floor]" : "");
 
@@ -15531,13 +15556,15 @@ void OnTick()
    double finalSzMult = sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult;
    if(finalSzMult < 0.04)
    {
-      Print("SIZE GUARD: finalSzMult=", DoubleToString(finalSzMult, 4),
+      string zeroQualityReason = StringFormat("FULL_RISK_BINARY_BLOCK: combined quality evidence %.4f is below executable threshold; block instead of clamping to a token-size order", finalSzMult);
+      Print("SIZE GUARD BLOCK: finalSzMult=", DoubleToString(finalSzMult, 4),
             " (sizeMulti=", DoubleToString(sizeMulti, 3),
             " × pg=", DoubleToString(pgLotMult, 3),
             " × sti=", DoubleToString(g_stiLotMulti, 2),
             " × comm=", DoubleToString(committeeSzMult, 2),
-            ") — below minimum tradeable. Clamping to 0.10x to keep the trade alive.");
-      finalSzMult = 0.10;
+            ") — ", zeroQualityReason);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, zeroQualityReason);
+      return;
    }
 
    // ======================================================================
@@ -15649,14 +15676,14 @@ void OnTick()
    // The actual SL/TP is set inside OpenTrade() using ATR-based logic (unchanged).
    if(InpAISLTPMode == AI_SLTP_ADVISORY)
       Print("AI SLTP ADVISORY: AI suggests slAdj=0 tpAdj=0 (from last AI response) | Using ATR-based SL/TP | Mode=ADVISORY (log only)");
-   XAU_LogBotDecision(finalSzMult < originalGradeSizeMulti - 0.001 ? "REDUCE_SIZE" : "ENTER",
+   XAU_LogBotDecision("ENTER_FULL_RISK_CANDIDATE",
                       signal, setupName, grade, lastAIConfidence, combinedScore,
                       StringFormat("timingMult=%.2f", lta_timing),
                       StringFormat("BOS=%+d%s", g_smc_bos_dir, g_smcHardBlockActive ? " CONFLICT" : g_smcConflictPenalty > 0 ? " penalty" : ""),
                       StringFormat("HTF=%+d", g_htfConsensusDir),
                       StringFormat("%s(conf=%d%%)", g_aiLastVerdict, lastAIConfidence),
                       g_memoryLastInfluence,
-                      StringFormat("%s lotMult=%.2f", setupName, finalSzMult));
+                      StringFormat("%s qualityEvidence=%.2f normalRisk=%.2f%%", setupName, finalSzMult, InpNormalRiskPct));
    // v6.17.22 TIMING ENGINE: direction/setup/size are all decided above this
    // line -- this is the one place that asks whether NOW is the right moment
    // to act on them. See XAU_TimingEngineConfirmsEntry for why.
@@ -15750,23 +15777,15 @@ double XAU_NormalizeVolumeForRisk(double rawLots, double lotStep, double minLot,
    if(lotStep <= 0.0)
       return NormalizeDouble(rawLots, VolumeDigitsForSymbol());
 
+   // v6.23.0: floor-only normalization. The former nearest-step branch could
+   // deliberately round UP when the overshoot was within a configured
+   // tolerance, which contradicted the exact-risk rule. Broker geometry may
+   // leave a small amount of risk unused; it may never create extra risk.
    double floorLots = MathFloor(rawLots / lotStep) * lotStep;
-   double nearestLots = MathRound(rawLots / lotStep) * lotStep;
    floorLots = MathMax(0.0, MathMin(maxLot, floorLots));
-   nearestLots = MathMax(0.0, MathMin(maxLot, nearestLots));
-
-   double lots = floorLots;
-   if(nearestLots > floorLots && slDollarPerLot > 0.0 && riskAmount > 0.0)
-   {
-      double nearestRisk = nearestLots * slDollarPerLot;
-      riskOvershootPct = ((nearestRisk - riskAmount) / riskAmount) * 100.0;
-      if(riskOvershootPct <= InpLotStepMaxRiskOvershootPct)
-         lots = nearestLots;
-   }
-
-   if(lots > 0.0 && lots < minLot)
-      lots = 0.0;
-   return NormalizeDouble(lots, VolumeDigitsForSymbol());
+   if(floorLots > 0.0 && floorLots < minLot)
+      floorLots = 0.0;
+   return NormalizeDouble(floorLots, VolumeDigitsForSymbol());
 }
 
 double XAU_ProjectProfitUSD(bool isBuy, double openPrice, double closePrice, double lots)
@@ -15885,12 +15904,25 @@ bool XAU_ReconcileFinalRisk(double &lots, double actualSLDistance, double lotSte
    // number, and it does not touch trades that are already within cap.
    string action = "NONE_WITHIN_CAP";
    bool proceed = true;
-   // 2% tolerance absorbs lot-step rounding noise only — not a loophole for real overshoot.
-   if(approvedCapPct > 0.0 && actualDollarRiskBefore > approvedDollarCap * 1.02)
+   bool binaryNormalEntry = (StringFind(context, "ENTRY:") == 0);
+   double allowedMultiplier = binaryNormalEntry ? 1.000001 : 1.02;
+   // Normal production entries are binary: if the final candidate exceeds
+   // the approved account/equity cap, block it. Only non-normal contexts
+   // (counter/pyramid) retain the legacy reduce-to-cap behavior.
+   if(approvedCapPct > 0.0 && actualDollarRiskBefore > approvedDollarCap * allowedMultiplier)
    {
       double maxAllowedLots = approvedDollarCap / slDollarPerLot;
       double steppedLots = (lotStep > 0) ? MathFloor(maxAllowedLots / lotStep) * lotStep : maxAllowedLots;
-      if(steppedLots < minLot)
+      if(binaryNormalEntry)
+      {
+         action = "BLOCKED_BINARY_FULL_RISK_EXCEEDS_CAP";
+         proceed = false;
+         blockReason = StringFormat(
+            "FULL_RISK_BINARY_BLOCK [%s]: normalized full-risk lot %.4f would risk $%.2f (%.3f%% equity), above approved cap %.3f%% ($%.2f). Blocking instead of silently reducing to %.4f lots",
+            context, lotsBefore, actualDollarRiskBefore, actualRiskPctBefore,
+            approvedCapPct, approvedDollarCap, steppedLots);
+      }
+      else if(steppedLots < minLot)
       {
          action = "BLOCKED_MINLOT_EXCEEDS_CAP";
          proceed = false;
@@ -16477,17 +16509,10 @@ void PrintBacktestAuditReport()
 // caller, manual override included.
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
 {
-   // COUNTER_EXCURSION position-conflict safety: the normal strategy must
-   // never open opposite (or same-side duplicate exposure against) a live
-   // counter-excursion trade. The countertrade always closes first, then
-   // the original candidate must pass the FULL normal pipeline again next
-   // cycle -- this function does not, and must not, auto-fire it.
-   if(g_counterEx.active)
-   {
-      Print("OPEN_TRADE_BLOCKED_COUNTER_EXCURSION_ACTIVE: a COUNTER_EXCURSION_CAPTURE position (ticket=",
-            g_counterEx.ticket, ") is open on this symbol; normal entry waits for it to close first. reason=", reason);
-      return false;
-   }
+   // v6.23.0: Counter-Excursion is subordinate to the normal strategy. On a
+   // hedging account its separate-magic position may coexist and must never
+   // block/delay/cancel an approved normal entry. Counter execution itself is
+   // disabled on netting/exchange accounts, where true isolation is impossible.
 
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
@@ -16964,11 +16989,15 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    if(g_propFirmMode && g_propFirmRiskPerTradePct > 0.0 &&
       riskPct > g_propFirmRiskPerTradePct)
    {
-      Print("PROP-FIRM RISK CAP: calculated entry risk ",
-            DoubleToString(riskPct, 2), "% -> ",
-            DoubleToString(g_propFirmRiskPerTradePct, 2),
-            "%. Signal remains allowed; only position size is reduced.");
-      riskPct = g_propFirmRiskPerTradePct;
+      string propRiskBlock = StringFormat(
+         "FULL_RISK_BINARY_BLOCK: configured normal risk %.2f%% exceeds active prop-firm per-trade cap %.2f%%; blocking instead of silently reducing size",
+         riskPct, g_propFirmRiskPerTradePct);
+      Print(propRiskBlock);
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "PropFirmRiskGate",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "PROP_FIRM_CAP_BELOW_FULL_RISK",
+                                true, false, false, 0, 0, propRiskBlock, reason, price);
+      return false;
    }
 
    double equityForSizing = StrategyReferenceBalance();
@@ -17052,6 +17081,19 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // honest balance×15%÷slDollarPerLot result with nothing left to counteract.
    double proportionalFloorApplied = 0.0;   // always 0 now; kept only so downstream log lines still compile
 
+   if(maxLot <= 0.0 || rawLots > maxLot + 0.0000001)
+   {
+      string brokerMaxBlock = StringFormat(
+         "FULL_RISK_BINARY_BLOCK: raw full-risk lot %.4f exceeds broker maximum %.4f; blocking instead of silently downscaling",
+         rawLots, maxLot);
+      Print(brokerMaxBlock);
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "RiskSizing",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "BROKER_MAX_BELOW_FULL_RISK",
+                                true, false, false, 0, 0, brokerMaxBlock, reason, price);
+      return false;
+   }
+
    double riskOvershootPct = 0.0;
    double lots = XAU_NormalizeVolumeForRisk(rawLots, lotStep, minLot, maxLot,
                                             slDollarPerLotRaw, riskAmount,
@@ -17081,7 +17123,18 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    else
       lots = brokerLimitedLots;
    double beforeInpMaxLots = lots;
-   if(lots > InpMaxLots) lots = InpMaxLots;
+   if(InpMaxLots > 0.0 && lots > InpMaxLots + 0.0000001)
+   {
+      string configuredMaxBlock = StringFormat(
+         "FULL_RISK_BINARY_BLOCK: normalized full-risk lot %.4f exceeds InpMaxLots %.4f; blocking instead of silently downscaling",
+         lots, InpMaxLots);
+      Print(configuredMaxBlock);
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "RiskSizing",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "CONFIGURED_MAX_LOTS_BELOW_FULL_RISK",
+                                true, false, false, 0, 0, configuredMaxBlock, reason, price);
+      return false;
+   }
    double afterInpMaxLots = lots;
 
    // v6.18.0: XAU_GrowthGuardCapLots() no longer runs at entry time. It shares its two
@@ -17127,12 +17180,15 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          double maxAllowedLots = maxDollarLoss / slDollarPerLot;
          if(lots > maxAllowedLots)
          {
-            Print("⚠️  EQUITY-CAP: lots ", DoubleToString(lots, 2), " → ",
-                  DoubleToString(maxAllowedLots, 2),
-                  " (would risk $", DoubleToString(lots * slDollarPerLot, 0),
-                  " > ", DoubleToString(effectiveSingleCap, 2), "% equity = $",
-                  DoubleToString(maxDollarLoss, 0), ")");
-            lots = maxAllowedLots;
+            string equityCapBlock = StringFormat(
+               "FULL_RISK_BINARY_BLOCK: full-risk lot %.4f would risk $%.2f above %.2f%% reference-equity cap $%.2f; blocking instead of reducing to %.4f",
+               lots, lots * slDollarPerLot, effectiveSingleCap, maxDollarLoss, maxAllowedLots);
+            Print(equityCapBlock);
+            BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "RiskSizing",
+                                      signal, funnelSetup, funnelGrade, funnelScore,
+                                      true, false, "BLOCKED", "EQUITY_CAP_BELOW_FULL_RISK",
+                                      true, false, false, 0, 0, equityCapBlock, reason, price);
+            return false;
          }
       }
    }
@@ -17177,26 +17233,15 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
       if(candidateRisk > remainingRisk)
       {
-         double beforeAggLots = lots;
-         lots = NormalizeVolumeDown(remainingRisk / slDollarPerLotRaw);
-         Print("AGG-RISK FINAL CAP: lots ", DoubleToString(beforeAggLots, lotDigits),
-               " -> ", DoubleToString(lots, lotDigits),
-               " | openRisk=$", DoubleToString(openRisk, 0),
-               " candidate=$", DoubleToString(candidateRisk, 0),
-               " remaining=$", DoubleToString(remainingRisk, 0),
-               " maxAgg=$", DoubleToString(maxAggDollar, 0));
-         if(lots < minLot)
-         {
-            Print("AGG-RISK FINAL SKIP: remaining risk room cannot support broker min lot ",
-                  DoubleToString(minLot, lotDigits), ".");
-            BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "AggregateRiskGate",
-                                      signal, funnelSetup, funnelGrade, funnelScore,
-                                      true, false, "BLOCKED", "AGG_RISK_NO_MIN_LOT_ROOM",
-                                      true, false, false, 0, 0,
-                                      "Remaining aggregate risk room cannot support broker min lot.", reason, price);
-            return false;
-         }
-         afterBasketCapLots = lots;
+         string aggregateBlock = StringFormat(
+            "FULL_RISK_BINARY_BLOCK: full-risk candidate $%.2f plus open risk $%.2f exceeds aggregate cap $%.2f (remaining $%.2f); blocking instead of partial-size entry",
+            candidateRisk, openRisk, maxAggDollar, remainingRisk);
+         Print(aggregateBlock);
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "AggregateRiskGate",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "AGG_RISK_BELOW_FULL_RISK_ROOM",
+                                   true, false, false, 0, 0, aggregateBlock, reason, price);
+         return false;
       }
    }
 
@@ -17206,33 +17251,30 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double desiredLots = lots;   // v4.5.5 — remember pre-clamp lot for WARN log
    if(OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
    {
-      while(lots > minLot && marginNeeded > freeMargin * 0.5)
+      if(marginNeeded > freeMargin * 0.5)
       {
-         lots -= lotStep; lots = MathMax(minLot, lots);
-         if(!OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
-         {
-            Print("OrderCalcMargin failed — skip trade");
-            BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ERROR", "MarginGate",
-                                      signal, funnelSetup, funnelGrade, funnelScore,
-                                      true, false, "ERROR", "ORDER_CALC_MARGIN_FAILED",
-                                      true, false, false, 0, GetLastError(),
-                                      "OrderCalcMargin failed while reducing lot.", reason, price);
-            return false;
-         }
-      }
-      if(marginNeeded > freeMargin * 0.8)
-      {
-         Print("NO MARGIN");
+         string marginBlock = StringFormat(
+            "FULL_RISK_BINARY_BLOCK: full-risk lot %.4f requires margin $%.2f, above safe 50%% of free margin $%.2f; blocking instead of silently reducing size",
+            lots, marginNeeded, freeMargin);
+         Print(marginBlock);
          BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "MarginGate",
                                    signal, funnelSetup, funnelGrade, funnelScore,
-                                   true, false, "BLOCKED", "NO_MARGIN",
-                                   true, false, false, 0, 0,
-                                   "Free margin could not support broker minimum lot safely.", reason, price);
+                                   true, false, "BLOCKED", "MARGIN_BELOW_FULL_RISK",
+                                   true, false, false, 0, 0, marginBlock, reason, price);
          return false;
       }
    }
+   else
+   {
+      Print("OrderCalcMargin failed — full-risk trade blocked");
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ERROR", "MarginGate",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "ERROR", "ORDER_CALC_MARGIN_FAILED",
+                                true, false, false, 0, GetLastError(),
+                                "OrderCalcMargin failed for the full-risk lot; order not sent.", reason, price);
+      return false;
+   }
    lots = NormalizeDouble(lots, lotDigits);
-   afterBasketCapLots = lots;
 
    // v6.18.0: per-mode "capApplied" log removed along with the June/RealRisk branch —
    // LOT_TRACE below already reports every cap stage for the one unified path.
@@ -17343,7 +17385,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // v5.8.52: append structured lot-sizing detail for Command Center / Intelligence CSV.
    {
       string lotDetail = StringFormat(
-         " | APLUS_LOT_REDUCED_REASON: gradeLotMultiplier=%.2f baseRisk=%.2f%% "
+         " | NORMAL_LOT_AUDIT: gradeMultiplierInformational=%.2f baseRisk=%.2f%% "
          "acctMult=%.2f pgMult=%.2f sessionMult=%.2f patternMult=%.2f "
          "volMult=%.2f finalRisk=%.2f%% riskCap=%.2f%% equityRisk=$%.2f "
          "slDist=%.2f rawLot=%.3f finalLot=%.2f",
@@ -17352,50 +17394,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       g_pendingBrainEntryAudit += lotDetail;
    }
 
-   // v4.5.5 — LOUD WARN if margin forced a lot reduction > 20%.
-   // v4.5.6 — Throttled to once per 5 min to avoid log spam.
-   if(desiredLots > 0 && (desiredLots - lots) / desiredLots > 0.20)
-   {
-      static datetime lastMarginWarnTime = 0;
-      if(TimeCurrent() - lastMarginWarnTime > 300)
-      {
-         Print("⚠️  MARGIN-CAPPED: desired ", DoubleToString(desiredLots, lotDigits),
-               " lots → reduced to ", DoubleToString(lots, lotDigits),
-               " (free margin $", DoubleToString(freeMargin,2),
-               " too low to support full size). Consider closing some open positions.");
-         lastMarginWarnTime = TimeCurrent();
-      }
-      // Extra guard: if resulting lot is at/near minLot AND we wanted much bigger,
-      // SKIP entirely rather than opening a pointless minLot trade + pyramid chain.
-      if(lots <= minLot * 1.01 && desiredLots >= minLot * 5)
-      {
-         Print("⚠️  SKIPPING TRADE: margin-clamp dropped lot to broker minimum — trade would be meaningless.");
-         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "MarginGate",
-                                   signal, funnelSetup, funnelGrade, funnelScore,
-                                   true, false, "BLOCKED", "MARGIN_CLAMP_MINLOT",
-                                   true, false, false, 0, 0,
-                                   "Margin clamp reduced a much larger desired lot to broker minimum.", reason, price);
-         return false;
-      }
-   }
-
    // ======== v6.4.17 — MANDATORY LOT TRACE (fires before every OrderSend) ========
    double lotTrace_baseRisk      = baseRisk;
    double lotTrace_baseRiskLot   = (slDollarPerLotRaw > 0) ? (balance * baseRisk / 100.0 / slDollarPerLotRaw) : 0;
    double lotTrace_afterGradeLot = (slDollarPerLotRaw > 0) ? (balance * baseRisk / 100.0 * sizeMulti / slDollarPerLotRaw) : 0;
-   double lotTrace_margCapDelta  = (desiredLots > lots + 0.001) ? desiredLots - lots : 0;
-   double lotTrace_bsktCapDelta  = (beforeBasketCapLots > afterBasketCapLots + 0.001) ? beforeBasketCapLots - afterBasketCapLots : 0;
-   // v6.21.2 FULL-RISK BINARY MODE: sessionMult/volMult are informational-only
-   // (see [LOT_TRACE] lines above) and are never applied to riskPct/lots for any
-   // grade, so they are NOT listed as reductions here. Only real, applied lot
-   // reducers appear: broker margin and the aggregate basket-risk cap.
-   string lotTrace_reductionSummary = "";
-   if(lotTrace_margCapDelta > 0.001)
-      lotTrace_reductionSummary += StringFormat("marginCap=%.2f ", lots);
-   if(lotTrace_bsktCapDelta > 0.001)
-      lotTrace_reductionSummary += StringFormat("basketCap=-%.2f ", lotTrace_bsktCapDelta);
-   if(StringLen(lotTrace_reductionSummary) == 0)
-      lotTrace_reductionSummary = "NONE — only hard safety (margin/broker/basket)";
+   string lotTrace_reductionSummary = "NONE — unsafe full-risk orders are blocked, never reduced";
 
    Print("===== [LOT_TRACE] =====");
    PrintFormat("  grade         = %s", StringFind(reason,"[A+]")>=0 ? "A+" : StringFind(reason,"[A]")>=0 ? "A" : "B");
@@ -17413,16 +17416,15 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    PrintFormat("  afterGradeMult= %.4f  (×sizeMulti %.3f | A+=1.10, A=0.85, B=0.45)",
                lotTrace_afterGradeLot, sizeMulti);
    PrintFormat("  sessionMult   = %.2f  (%s)", sessionMult,
-               sessionMult < 0.999 ? "APPLIED — B-grade Asia reduction" : "1.00 — bypassed (A+/A or non-Asia)");
+               sessionMult < 0.999 ? "informational only — NOT applied" : "1.00 — no historical session reduction");
    PrintFormat("  volCapMult    = bypassed for A/A+ in v6.4.17");
    PrintFormat("  volAdaptMult  = %.2f  (%s)", volMult,
-               MathAbs(volMult-1.0)<0.01 ? "bypassed (A+/A) or flat" : "APPLIED");
+               MathAbs(volMult-1.0)<0.01 ? "flat/informational" : "informational only — NOT applied");
    PrintFormat("  pgMult        = %.2f  (1.0=normal; 0.0=T3 hard-block)", pgMult);
    PrintFormat("  riskPctFinal  = %.3f%%  →  riskAmount=$%.2f", riskPct, riskAmount);
    PrintFormat("  rawLots       = %.4f", rawLots);
-   PrintFormat("  desiredLots   = %.4f  (after InpMaxLots/growth/basket caps)", desiredLots);
-   PrintFormat("  marginCapLots = %.4f  (margin-reduced? %s)", lots,
-               lotTrace_margCapDelta > 0.001 ? "YES — margin too low for full size" : "NO");
+   PrintFormat("  fullRiskLots  = %.4f  (broker-step floor; all later caps are PASS/BLOCK)", desiredLots);
+   PrintFormat("  marginCheck   = PASS | required=$%.2f | free=$%.2f | finalLot unchanged=%.4f", marginNeeded, freeMargin, lots);
    PrintFormat("  finalLot      = %.4f", lots);
    PrintFormat("  reductions    = %s", lotTrace_reductionSummary);
 
@@ -17434,20 +17436,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       string microReason = "";
       if(slDollarPerLotRaw > 0 && balance > 0)
       {
-         double fullRiskAmt = balance * baseRisk * sizeMulti / 100.0;
+         double fullRiskAmt = balance * baseRisk / 100.0;
          double naturalLots = fullRiskAmt / slDollarPerLotRaw;
          if(naturalLots <= minLot * 2.01)
             microReason += " WIDE_SL_RISK_MATH(natural=" + DoubleToString(naturalLots,4) + " after full grade risk)";
       }
-      if(lots < desiredLots - 0.001)
-      {
-         if(AccountInfoDouble(ACCOUNT_MARGIN_FREE) < AccountInfoDouble(ACCOUNT_EQUITY) * 0.10)
-            microReason += " MARGIN_CAP";
-         else
-            microReason += " BROKER_MIN_STEP_or_EQUITY_CAP";
-      }
-      if(beforeBasketCapLots > afterBasketCapLots + 0.001) microReason += " BASKET_CAP";
-      if(g_propFirmMode && g_propFirmRiskPerTradePct > 0.0) microReason += " PROP_FIRM_CAP";
       if(StringLen(microReason) == 0) microReason = " BROKER_MIN_STEP";
 
       PrintFormat("  *** MICRO-LOT DIAGNOSIS: lot=%.2f ≤2x minLot(%.2f) | grade=%s | hard-cap reasons:%s",
@@ -17489,6 +17482,28 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
    }
 
+   // v6.23.0 final binary invariant. The only permitted difference from the
+   // mathematical raw lot is the broker-step FLOOR already captured in
+   // riskMathLots. No downstream safety system may silently produce a smaller
+   // normal order, and no rounding may push actual risk above riskAmount.
+   double actualRiskUSD = lots * slDollarPerLotRaw;
+   double actualRiskPctOfReference = (balance > 0.0) ? actualRiskUSD / balance * 100.0 : 0.0;
+   if(MathAbs(lots - riskMathLots) > lotStep * 0.1 || actualRiskUSD > riskAmount + 0.01)
+   {
+      string binaryInvariantBlock = StringFormat(
+         "FULL_RISK_BINARY_BLOCK: final lot %.4f differs from floor-normalized full-risk lot %.4f or actual risk $%.2f exceeds requested $%.2f; order not sent",
+         lots, riskMathLots, actualRiskUSD, riskAmount);
+      Print(binaryInvariantBlock);
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "BinaryRiskInvariant",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "FULL_RISK_BINARY_INVARIANT",
+                                true, false, false, 0, 0, binaryInvariantBlock, reason, price);
+      return false;
+   }
+   PrintFormat("FULL_RISK_BINARY_VALIDATED | referenceBalance=%.2f | accountEquity=%.2f | configuredRiskPct=%.2f | requestedRiskUSD=%.2f | rawLots=%.4f | floorNormalizedLots=%.4f | actualRiskUSD=%.2f | actualRiskPctOfReference=%.3f | lotStep=%.4f",
+               balance, accInfo.Equity(), riskPct, riskAmount, rawLots, lots,
+               actualRiskUSD, actualRiskPctOfReference, lotStep);
+
    // v6.18.0: the old v6.17.17 unconditional "ACCOUNT-SIZE LOT FLOOR" (which explicitly
    // overrode InpMaxRiskPctEquity "as the LAST step... regardless of which upstream
    // reducer shrank the lot") is RETIRED. It was the two-systems-fighting bug this
@@ -17525,14 +17540,14 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // approved normal trade's finalLots must be explainable from this single line.
    PrintFormat(
       "NORMAL_ENTRY_AUDIT | version=%s | setup=%s | grade=%s | direction=%s | "
-      "referenceEquity=%.2f | configuredRiskPct=%.2f | effectiveRiskPct=%.2f | riskMoney=%.2f | "
+      "referenceBalance=%.2f | accountEquity=%.2f | configuredRiskPct=%.2f | effectiveRiskPct=%.2f | requestedRiskMoney=%.2f | actualRiskMoney=%.2f | "
       "entry=%.5f | sl=%.5f | slDistance=%.2f | slDollarPerLot=%.2f | rawLots=%.4f | "
-      "brokerMin=%.4f | brokerMax=%.2f | brokerStep=%.4f | marginSupportedLots=%.4f | "
+      "brokerMin=%.4f | brokerMax=%.2f | brokerStep=%.4f | marginRequired=%.2f | freeMargin=%.2f | fullRiskMarginApproved=true | "
       "finalLots=%.4f | lotReducers=%s",
       XAUAI_EA_VERSION, funnelSetup, funnelGrade, signal > 0 ? "BUY" : "SELL",
-      balance, InpNormalRiskPct, riskPct, riskAmount,
+      balance, accInfo.Equity(), InpNormalRiskPct, riskPct, riskAmount, actualRiskUSD,
       price, sl, slDist, slDollarPerLotRaw, rawLots,
-      minLot, maxLot, lotStep, lots,
+      minLot, maxLot, lotStep, marginNeeded, freeMargin,
       lots, lotTrace_reductionSummary);
 
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
@@ -19907,13 +19922,14 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
 // --- lightweight rolling stats so thresholds adapt instead of staying fixed ---
 double g_triAdaptStrongThreshold = 0.0; // 0 = not yet loaded from input default
 int    g_triStatSamples = 0, g_triStatStrongWins = 0, g_triStatStrongLosses = 0;
-#define TRI_STATS_FILE "XAUAI_TRI_Stats_v1.csv"
+string XAU_TRIStatsFile() { return "XAUAI_TRI_Stats_v1_" + XAU_ProductionStateScope() + ".csv"; }
 
 void XAU_TRI_LoadStats()
 {
    g_triAdaptStrongThreshold = InpTRI_StrongThreshold;
    if(InpBacktestMode) return;
-   int h = FileOpen(TRI_STATS_FILE, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   string fn = XAU_TRIStatsFile();
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE) return;
    if(!FileIsEnding(h))
    {
@@ -19934,7 +19950,8 @@ void XAU_TRI_LoadStats()
 void XAU_TRI_SaveStats()
 {
    if(InpBacktestMode) return;
-   int h = FileOpen(TRI_STATS_FILE, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   string fn = XAU_TRIStatsFile();
+   int h = FileOpen(fn, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE) return;
    FileWrite(h, "#XAUAI_TRI_Stats_v1");
    FileWrite(h, DoubleToString(g_triAdaptStrongThreshold, 2),
@@ -25543,12 +25560,12 @@ void XAU_WriteLearningReport()
 
 string XAU_BlockedMemoryFile()
 {
-   return "XAUAI_BlockedTradeMemory_" + Symbol() + ".csv";
+   return "XAUAI_BlockedTradeMemory_" + XAU_ProductionStateScope() + ".csv";
 }
 
 string XAU_TradeBrainFile()
 {
-   return "XAUAI_ExecutedTradeBrain_" + Symbol() + ".csv";
+   return "XAUAI_ExecutedTradeBrain_" + XAU_ProductionStateScope() + ".csv";
 }
 
 // v6.20.5 (TELEMETRY ONLY -- Change A) — durable, structured record of the
@@ -25561,7 +25578,7 @@ string XAU_TradeBrainFile()
 // that produced this change.
 string XAU_TimingProofFile()
 {
-   return "XAUAI_TimingProof_" + Symbol() + ".csv";
+   return "XAUAI_TimingProof_" + XAU_ProductionStateScope() + ".csv";
 }
 
 void XAU_AppendTimingProof(XAU_TimingProofRecord &r, ulong thesisId,
@@ -25624,27 +25641,27 @@ void XAU_AppendTimingProof(XAU_TimingProofRecord &r, ulong thesisId,
 
 string XAU_ConsciousMemoryFile()
 {
-   return "XAUAI_ConsciousMemory_" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + "_" + Symbol() + ".csv";
+   return "XAUAI_ConsciousMemory_" + XAU_ProductionStateScope() + ".csv";
 }
 
 string XAU_LearningReportFile()
 {
-   return "XAUAI_LearningReport_" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + "_" + Symbol() + ".md";
+   return "XAUAI_LearningReport_" + XAU_ProductionStateScope() + ".md";
 }
 
 string XAU_EntryQualityFile()
 {
-   return "XAUAI_EntryQualityReview_" + Symbol() + ".csv";
+   return "XAUAI_EntryQualityReview_" + XAU_ProductionStateScope() + ".csv";
 }
 
 string XAU_TradingIntelCsvFile()
 {
-   return "XAUAI_TradingIntelligence_" + Symbol() + ".csv";
+   return "XAUAI_TradingIntelligence_" + XAU_ProductionStateScope() + ".csv";
 }
 
 string XAU_TradingIntelJsonFile()
 {
-   return "XAUAI_TradingIntelligence_" + Symbol() + ".jsonl";
+   return "XAUAI_TradingIntelligence_" + XAU_ProductionStateScope() + ".jsonl";
 }
 
 int XAU_CountCsvDataRows(string fn)
@@ -27683,10 +27700,81 @@ struct CounterExcursionState
    double   maeR;
    double   mfeR;
    double   protectedFloorR;           // -999 = none yet (broker SL from open still governs)
+   int      closeState;                // requested/pending is retained until broker absence is confirmed
+   string   pendingCloseReason;
+   datetime lastCloseAttemptTime;
+   int      closeAttemptCount;
 };
 CounterExcursionState g_counterEx;
 datetime g_counterExCooldownUntil = 0;
 double   g_counterExLastR = 0.0; // cached each tick by XAU_ManageCounterExcursionPosition for Command Center display
+
+#define COUNTER_CLOSE_NONE          0
+#define COUNTER_CLOSE_REQUESTED     1
+#define COUNTER_CLOSE_PENDING_RETRY 2
+#define COUNTER_CLOSE_CONFIRMED     3
+
+// Broker state is authoritative. This deliberately searches by the isolated
+// counter magic because ResultOrder()/ResultDeal() is not guaranteed to be
+// the live position ticket on every broker/account mode.
+ulong XAU_FindLiveCounterExcursionTicket()
+{
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpCounterExcursionMagicNumber) continue;
+      return tk;
+   }
+   return 0;
+}
+
+bool XAU_RequestCounterExcursionClose(string reason)
+{
+   if(StringLen(g_counterEx.pendingCloseReason) == 0)
+      g_counterEx.pendingCloseReason = reason;
+   g_counterEx.closeState = COUNTER_CLOSE_REQUESTED;
+
+   ulong liveTicket = XAU_FindLiveCounterExcursionTicket();
+   if(liveTicket == 0)
+   {
+      PrintFormat("COUNTER_EXCURSION_CLOSE_CONFIRMED | ticket=%I64u | reason=%s | attempts=%d | brokerPositionAbsent=true",
+                  g_counterEx.ticket, g_counterEx.pendingCloseReason, g_counterEx.closeAttemptCount);
+      g_counterEx.closeState = COUNTER_CLOSE_CONFIRMED;
+      g_counterEx.active = false;
+      g_counterExCooldownUntil = TimeCurrent() + 60;
+      return true;
+   }
+
+   g_counterEx.ticket = liveTicket;
+   if(g_counterEx.lastCloseAttemptTime > 0 && TimeCurrent() - g_counterEx.lastCloseAttemptTime < 3)
+   {
+      g_counterEx.closeState = COUNTER_CLOSE_PENDING_RETRY;
+      return false;
+   }
+
+   g_counterEx.lastCloseAttemptTime = TimeCurrent();
+   g_counterEx.closeAttemptCount++;
+   bool accepted = SafePositionClose(liveTicket, g_counterEx.pendingCloseReason);
+   ulong remainingTicket = XAU_FindLiveCounterExcursionTicket();
+   if(remainingTicket == 0)
+   {
+      PrintFormat("COUNTER_EXCURSION_CLOSE_CONFIRMED | ticket=%I64u | reason=%s | attempts=%d | requestAccepted=%s | brokerPositionAbsent=true",
+                  liveTicket, g_counterEx.pendingCloseReason, g_counterEx.closeAttemptCount, accepted ? "true" : "false");
+      g_counterEx.closeState = COUNTER_CLOSE_CONFIRMED;
+      g_counterEx.active = false;
+      g_counterExCooldownUntil = TimeCurrent() + 60;
+      return true;
+   }
+
+   g_counterEx.ticket = remainingTicket;
+   g_counterEx.closeState = COUNTER_CLOSE_PENDING_RETRY;
+   PrintFormat("COUNTER_EXCURSION_CLOSE_PENDING_RETRY | ticket=%I64u | reason=%s | attempt=%d | requestAccepted=%s | retcode=%u (%s)",
+               remainingTicket, g_counterEx.pendingCloseReason, g_counterEx.closeAttemptCount,
+               accepted ? "true" : "false", trade.ResultRetcode(), trade.ResultRetcodeDescription());
+   return false;
+}
 
 // v6.21.3 — SHADOW OUTCOME TRACKING (owner rule 2026-07-13). For every
 // candidate that passes mandatory checks but misses InpCounterOpportunityMinScore,
@@ -28021,6 +28109,10 @@ void XAU_ReconcileCounterExcursionOnInit()
       g_counterEx.maeR                    = 0.0;
       g_counterEx.mfeR                    = 0.0;
       g_counterEx.protectedFloorR         = -999.0;
+      g_counterEx.closeState              = COUNTER_CLOSE_NONE;
+      g_counterEx.pendingCloseReason      = "";
+      g_counterEx.lastCloseAttemptTime    = 0;
+      g_counterEx.closeAttemptCount       = 0;
 
       PrintFormat("COUNTER_EXCURSION_RESTART_RECONCILED | ticket=%I64u direction=%s entry=%.2f SL=%.2f slDist=%.2f openTime=%s | ownership restored from broker state, not memory",
                   tk, isBuy ? "BUY" : "SELL", openPx, sl, slDist,
@@ -28037,6 +28129,16 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    if(!IsXAUFastSymbol()) return;
    if(TimeCurrent() < g_counterExCooldownUntil) return;
    if(g_counterEx.active) return; // one countertrade max per symbol
+
+   // Independent normal/counter ownership requires separate tickets. A
+   // netting account merges symbol exposure, so the separate magic/state
+   // contract cannot be proven there and the counter path must fail closed.
+   if((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+   {
+      PrintFormat("COUNTER_EXCURSION_SKIP: NETTING_UNSUPPORTED_INDEPENDENT_MAGIC | marginMode=%d | normalPathUnaffected=true",
+                  (int)AccountInfoInteger(ACCOUNT_MARGIN_MODE));
+      return;
+   }
 
    // NO-DELAY PROOF: candidateFirstSeen is stamped the instant this module
    // recognizes a real candidate, and every FAST_CHECK/EXECUTING line below
@@ -28305,6 +28407,10 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    g_counterEx.maeR = 0.0;
    g_counterEx.mfeR = 0.0;
    g_counterEx.protectedFloorR = -999.0;
+   g_counterEx.closeState = COUNTER_CLOSE_NONE;
+   g_counterEx.pendingCloseReason = "";
+   g_counterEx.lastCloseAttemptTime = 0;
+   g_counterEx.closeAttemptCount = 0;
 
    PrintFormat("COUNTER_EXCURSION_OPEN | strategyOwner=COUNTER_EXCURSION_CAPTURE originalDirection=%s originalGrade=%s originalBlockReason=%s counterDirection=%s counterEligibility=%s fastValidationResult=PASS executionDirection=%s ticket=%I64u entry=%.2f SL=%.2f target03R=%.2f target05R=%.2f targetMaxR=%.2f riskUSD=%.2f lot=%.2f entryConfirmation=PASSED",
                originalSignal == 1 ? "BUY" : "SELL", originalFinalGrade, blockReason, counterDir == 1 ? "BUY" : "SELL", category,
@@ -28319,14 +28425,30 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
 bool XAU_ManageCounterExcursionPosition()
 {
    if(!g_counterEx.active) return false;
-   if(!posInfo.SelectByTicket(g_counterEx.ticket))
+   if(g_counterEx.closeState == COUNTER_CLOSE_REQUESTED ||
+      g_counterEx.closeState == COUNTER_CLOSE_PENDING_RETRY)
+   {
+      XAU_RequestCounterExcursionClose(g_counterEx.pendingCloseReason);
+      return true;
+   }
+
+   ulong liveTicket = XAU_FindLiveCounterExcursionTicket();
+   if(liveTicket == 0)
    {
       Print("COUNTER_EXCURSION_CLOSE | ticket=", g_counterEx.ticket,
-            " exitReason=CLOSED_EXTERNALLY_OR_BY_BROKER_SLTP originalCandidateOutcome=NOT_AUTO_EXECUTED");
+            " exitReason=CLOSED_EXTERNALLY_OR_BY_BROKER_SLTP brokerPositionAbsent=true originalCandidateOutcome=NOT_AUTO_EXECUTED");
+      g_counterEx.closeState = COUNTER_CLOSE_CONFIRMED;
       g_counterEx.active = false;
       g_counterExCooldownUntil = TimeCurrent() + 60;
       return true;
    }
+   if(liveTicket != g_counterEx.ticket)
+   {
+      PrintFormat("COUNTER_EXCURSION_TICKET_RECONCILED | cached=%I64u | broker=%I64u",
+                  g_counterEx.ticket, liveTicket);
+      g_counterEx.ticket = liveTicket;
+   }
+   if(!posInfo.SelectByTicket(g_counterEx.ticket)) return true;
    if(posInfo.Magic() != InpCounterExcursionMagicNumber || posInfo.Symbol() != Symbol())
       return false;
 
@@ -28409,9 +28531,7 @@ bool XAU_ManageCounterExcursionPosition()
    {
       PrintFormat("COUNTER_EXCURSION_CLOSE | ticket=%I64u realizedR=%.3f realizedUSD=%.2f holdSeconds=%d exitReason=%s originalCandidateOutcome=NOT_AUTO_EXECUTED_MUST_REVALIDATE",
                   g_counterEx.ticket, R, profit, holdSeconds, exitReason);
-      SafePositionClose(g_counterEx.ticket, exitReason);
-      g_counterEx.active = false;
-      g_counterExCooldownUntil = TimeCurrent() + 60;
+      XAU_RequestCounterExcursionClose(exitReason);
       return true;
    }
 
@@ -28420,7 +28540,8 @@ bool XAU_ManageCounterExcursionPosition()
       double targetSL = isBuy ? NormalizeDouble(openPx + floorR * slDist, digits) : NormalizeDouble(openPx - floorR * slDist, digits);
       bool improves = isBuy ? (targetSL > curSL + SymbolInfoDouble(Symbol(), SYMBOL_POINT))
                              : (targetSL < curSL - SymbolInfoDouble(Symbol(), SYMBOL_POINT));
-      if(improves) trade.PositionModify(g_counterEx.ticket, targetSL, curTP);
+      if(improves)
+         SafeModifySL(g_counterEx.ticket, targetSL, curTP, isBuy, curPrice, "COUNTER_PROFIT_FLOOR");
    }
 
    PrintFormat("COUNTER_EXCURSION_STATUS | ticket=%I64u currentR=%.3f peakR=%.3f MAE_R=%.3f MFE_R=%.3f holdSeconds=%d momentumState=%d structureState=%s protectedFloor=%s",
@@ -28444,9 +28565,7 @@ void XAU_CounterExcursionEmergencyClose(string reason)
    if(!g_counterEx.active) return;
    PrintFormat("COUNTER_EXCURSION_CLOSE | ticket=%I64u exitReason=ACCOUNT_LEVEL_SAFETY:%s originalCandidateOutcome=NOT_AUTO_EXECUTED",
                g_counterEx.ticket, reason);
-   SafePositionClose(g_counterEx.ticket, "ACCOUNT_LEVEL_SAFETY:" + reason);
-   g_counterEx.active = false;
-   g_counterExCooldownUntil = TimeCurrent() + 60;
+   XAU_RequestCounterExcursionClose("ACCOUNT_LEVEL_SAFETY:" + reason);
 }
 
 void XAU_RememberBlockedSignal(int signal, string setupName, string grade,
@@ -28488,7 +28607,7 @@ void XAU_RememberBlockedSignal(int signal, string setupName, string grade,
          Print("PENDING_OPPORTUNITY_STORED: ", g_pendingOpportunity.signalId,
                " | ", signal == 1 ? "BUY" : "SELL", " ", setupName, " grade=", grade,
                " | originalBlocker=", reason,
-               " | will re-check on next closed M5 bar");
+               " | wall-clock recheck due in ", XAU_EffectiveEntryDelaySeconds(), " seconds (independent of M5 rollover)");
       }
    }
 
@@ -31037,13 +31156,14 @@ void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
 // v6.3.8 UPGRADE 1 — TradeBrain disk persistence
 // File: MQL5/Files/XAUAI_TradeBrain_v1.csv (common files folder)
 // ============================================================
-#define TRADEBBRAIN_FILE  "XAUAI_TradeBrain_v1.csv"
 #define TRADEBBRAIN_HEADER "#XAUAI_TradeBrain_v1"
+string XAU_LegacyTradeBrainFile() { return "XAUAI_TradeBrain_v1_" + XAU_ProductionStateScope() + ".csv"; }
 
 void SaveTradeBrainMemory()
 {
    if(InpBacktestMode) return; // no file I/O in strategy tester
-   int h = FileOpen(TRADEBBRAIN_FILE, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   string fn = XAU_LegacyTradeBrainFile();
+   int h = FileOpen(fn, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE)
    {
       Print("TRADEBRAIN SAVE ERROR: cannot open file for write (err=", GetLastError(), ")");
@@ -31085,8 +31205,9 @@ void SaveTradeBrainMemory()
 void LoadTradeBrainMemory()
 {
    if(InpBacktestMode) return;
-   if(!FileIsExist(TRADEBBRAIN_FILE, FILE_COMMON)) return; // first run — start empty
-   int h = FileOpen(TRADEBBRAIN_FILE, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   string fn = XAU_LegacyTradeBrainFile();
+   if(!FileIsExist(fn, FILE_COMMON)) return; // first run — start empty
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE) { Print("TRADEBRAIN LOAD: cannot open file (err=", GetLastError(), ")"); return; }
 
    // First line must be the version header
@@ -31279,7 +31400,7 @@ string XAU_LocalReportReason()
 
 void WriteLocalHeartbeatReport()
 {
-   string fname = "XAUAI_LiveHeartbeat_" + Symbol() + ".txt";
+   string fname = "XAUAI_LiveHeartbeat_" + XAU_ProductionStateScope() + ".txt";
    int fh = FileOpen(fname, FILE_WRITE | FILE_TXT | FILE_COMMON);
    if(fh == INVALID_HANDLE) { Print("LIVE HEARTBEAT REPORT: failed to open file (err=", GetLastError(), ")"); return; }
 
@@ -31378,7 +31499,7 @@ void PrintGateReport()
 // ============================================================
 void WriteGateReportToFile()
 {
-   string fname = "XAUAI_GateReport_" + TimeToString(TimeCurrent(), TIME_DATE) + ".txt";
+   string fname = "XAUAI_GateReport_" + XAU_ProductionStateScope() + "_" + TimeToString(TimeCurrent(), TIME_DATE) + ".txt";
    int fh = FileOpen(fname, FILE_WRITE | FILE_TXT | FILE_COMMON);
    if(fh == INVALID_HANDLE) { Print("GATE REPORT: failed to open file (err=", GetLastError(), ")"); return; }
    int blocked = g_totalSignals - g_totalAllowed;
@@ -31461,7 +31582,7 @@ void WriteForwardTestReport()
 {
    MqlDateTime dt; TimeCurrent(dt);
    string dateStr = StringFormat("%04d.%02d.%02d", dt.year, dt.mon, dt.day);
-   string fname = "XAUAI_ForwardTest_" + dateStr + ".txt";
+   string fname = "XAUAI_ForwardTest_" + XAU_ProductionStateScope() + "_" + dateStr + ".txt";
    int fh = FileOpen(fname, FILE_WRITE | FILE_TXT | FILE_COMMON);
    if(fh == INVALID_HANDLE) { Print("FT REPORT: failed to open file (err=", GetLastError(), ")"); return; }
 
@@ -31933,11 +32054,12 @@ string  g_cloudSigIds[];
 // v5.2.0 — persistence file. Without this, an EA restart/recompile wipes the
 // in-memory map, so when the master later closes a position the mirrored cloud
 // trades stay open forever. Persist after every Add/Pop and load on OnInit.
-#define CLOUD_MAP_FILE "xauai_cloud_map.csv"
+string XAU_CloudMapFile() { return "xauai_cloud_map_" + XAU_ProductionStateScope() + ".csv"; }
 
 void CloudMapSave()
 {
-   int h = FileOpen(CLOUD_MAP_FILE, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   string fn = XAU_CloudMapFile();
+   int h = FileOpen(fn, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE) { Print("CloudMapSave: FileOpen err=", GetLastError()); return; }
    int n = ArraySize(g_cloudPosIds);
    for(int i = 0; i < n; i++)
@@ -31949,8 +32071,9 @@ void CloudMapSave()
 
 void CloudMapLoad()
 {
-   if(!FileIsExist(CLOUD_MAP_FILE, FILE_COMMON)) return;
-   int h = FileOpen(CLOUD_MAP_FILE, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   string fn = XAU_CloudMapFile();
+   if(!FileIsExist(fn, FILE_COMMON)) return;
+   int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE) { Print("CloudMapLoad: FileOpen err=", GetLastError()); return; }
    ArrayResize(g_cloudPosIds, 0);
    ArrayResize(g_cloudSigIds, 0);

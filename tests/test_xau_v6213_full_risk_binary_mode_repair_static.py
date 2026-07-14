@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.21.3.mq5"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.23.0.mq5"
 BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
 
 
@@ -53,8 +53,8 @@ def test_repo_source_is_synced_to_backend():
 
 def test_version_bumped_to_v6213():
     ea = read(EA)
-    assert '#define XAUAI_EA_VERSION "v6.21.3"' in ea
-    assert '#property version   "6.264"' in ea
+    assert '#define XAUAI_EA_VERSION "v6.23.0"' in ea
+    assert '#property version   "6.230"' in ea
 
 
 # ---------------------------------------------------------------------------
@@ -89,10 +89,11 @@ def test_session_and_volatility_multipliers_no_longer_applied_to_risk_pct():
 
 
 def test_ai_confidence_sizemulti_no_longer_reaches_lot_size():
-    # ScanSignals still computes an AI-based sizeMulti reduction (advisory logging),
-    # but OpenTrade's riskPct must never read sizeMulti to scale the lot.
+    # AI is advisory-only: its gate restores the pre-AI quality value, and
+    # OpenTrade never reads sizeMulti to scale riskPct.
     ea = read(EA)
-    assert "sizeMulti = MathMin(sizeMulti, 0.50)" in ea  # still computed upstream (informational)
+    assert "sizeMulti = szBeforeAI;" in ea
+    assert "lta_ai = 1.0;" in ea
     fn = open_trade_body(ea)
     # sizeMulti may appear in diagnostics/entryQualityScout gating, but never multiplied into riskPct.
     assert not re.search(r"riskPct\s*\*=\s*sizeMulti", fn)
@@ -137,9 +138,11 @@ def test_sub_minlot_raw_lots_blocks_instead_of_clamping():
     assert "RISK_BLOCKED_LOT_BELOW_MIN" in fn
 
 
-def test_margin_reduction_still_blocks_rather_than_floors_below_min():
+def test_margin_shortfall_blocks_without_a_reduction_loop():
     fn = open_trade_body(read(EA))
-    assert "NO MARGIN" in fn
+    assert "MARGIN_BELOW_FULL_RISK" in fn
+    assert "blocking instead of silently reducing size" in fn
+    assert "while(lots >= minLot)" not in fn
     assert 'BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "MarginGate"' in fn
 
 
@@ -174,9 +177,9 @@ def test_normal_entry_audit_log_present_before_order_send():
     send_idx = fn.index('trade.Buy(lots, Symbol(), 0, sl, tp, "XAU-SNIPER|"')
     assert audit_idx < send_idx, "NORMAL_ENTRY_AUDIT must fire before the broker send"
     audit_call = fn[max(0, audit_idx - 200):audit_idx + 1200]
-    for field in ("configuredRiskPct", "effectiveRiskPct", "riskMoney", "slDistance",
+    for field in ("configuredRiskPct", "effectiveRiskPct", "requestedRiskMoney", "actualRiskMoney", "slDistance",
                   "slDollarPerLot", "rawLots", "brokerMin", "brokerMax", "brokerStep",
-                  "marginSupportedLots", "finalLots", "lotReducers"):
+                  "marginRequired", "freeMargin", "fullRiskMarginApproved", "finalLots", "lotReducers"):
         assert field in audit_call, f"NORMAL_ENTRY_AUDIT missing field {field}"
 
 

@@ -5,7 +5,7 @@ const CARDS = [
   {
     icon: Brain,
     title: "AI Market Analysis",
-    body: "Claude and GPT jointly analyze every setup and agree before a trade opens.",
+    body: "Claude and GPT analyze trade quality as an advisory signal. Their confidence cannot silently resize or veto an otherwise approved production entry.",
     tone: "text-violet-300",
     border: "border-violet-300/20",
     glow: "bg-violet-300/[0.07]",
@@ -13,7 +13,7 @@ const CARDS = [
   {
     icon: ChartLine,
     title: "Trade Thesis Monitor",
-    body: "Every open trade is scored live against the exact reason it was entered — BOS direction, HTF trend, momentum, and structure. When the thesis dies the bot exits immediately, not when a timer runs out. Winners aren't locked to a flat percentage of peak the moment they arm — a still-clean thesis gets room to breathe.",
+    body: "The centralized R-based exit manager owns ordinary protection and exits for normal positions, with stable original-risk math, broker-confirmed close retries, restart persistence, profit floors, and continuation checks.",
     tone: "text-amber-300",
     border: "border-amber-300/20",
     glow: "bg-amber-300/[0.07]",
@@ -22,7 +22,7 @@ const CARDS = [
   {
     icon: Funnel,
     title: "AI Quality Gate",
-    body: "A+ and A trades are only taken at full size when the AI strongly agrees. If AI weakly disagrees the trade is blocked entirely. If AI weakly agrees the lot is reduced. Weak AI signals can never silently become full-size trades.",
+    body: "Approved normal trades use the configured full account-relative risk after broker-step downward normalization. If broker limits, margin, aggregate exposure, or another hard safety rule cannot support that order, it is blocked with an explicit reason instead of silently downsized.",
     tone: "text-rose-300",
     border: "border-rose-300/20",
     glow: "bg-rose-300/[0.07]",
@@ -31,7 +31,7 @@ const CARDS = [
   {
     icon: ShieldCheck,
     title: "Smart Risk Management",
-    body: "Position sizing is based on account balance, stop distance, and grade — never reduced after losing trades. Recovered trades that survive deep drawdown now protect the recovery and hold for meaningful own-R while the thesis still works.",
+    body: "Position sizing uses the production reference balance, final stop distance, real symbol tick economics, and broker volume step. Grade, AI, session, volatility, and loss history do not reduce an approved normal order.",
     tone: "text-sky-300",
     border: "border-sky-300/20",
     glow: "bg-sky-300/[0.07]",
@@ -40,11 +40,11 @@ const CARDS = [
   {
     icon: Lightning,
     title: "Counter-Excursion Capture",
-    body: "When a candidate is blocked and the block reason itself proves real, immediate opposite-direction pressure — not uncertainty, not spread or news — a separately-owned tactical strategy can take a small, fast countertrade with its own risk budget, its own fast validation (no timing delay), and a 0.2R–0.5R exit policy. Off by default.",
+    body: "After a normal candidate is blocked for proven opposite pressure, a separately-owned tactical strategy may take one small immediate countertrade with its own magic, risk, state, and exit manager. It is enabled by default only where independent tickets are provable; netting accounts fail closed.",
     tone: "text-emerald-300",
     border: "border-emerald-300/20",
     glow: "bg-emerald-300/[0.07]",
-    badge: "CURRENT v6.21.2",
+    badge: "CURRENT v6.23.0",
   },
   {
     icon: Shuffle,
@@ -147,7 +147,7 @@ export default function FeaturesSection() {
         <div className="mb-10 flex items-end justify-between">
           <div>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
-              Features · v6.21.2
+              Features · v6.23.0
             </span>
             <h2 className="mt-4 max-w-lg font-heading text-3xl font-semibold tracking-tight text-white sm:text-4xl">
               Built for every market condition.

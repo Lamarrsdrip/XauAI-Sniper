@@ -14,6 +14,47 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.23.0 — 2026-07-14 — Production Forensic Hardening
+
+### Release identity and artifacts
+- [x] Branch created from exact production baseline `02b08936275eb79892a3211dafe2cd18493a391f`: `audit/main-production-forensic-v6.23.0`
+- [x] EA internal/header/property/build versions agree on `v6.23.0`
+- [x] Canonical source: `XAUUSD_AI_Sniper_EA_v6.23.0.mq5`
+- [x] Canonical source and backend download mirror are byte-identical: SHA-256 `20eb7570e7d3e413c9872cb97dfff505861641334e9b519a8cb3c93ea0424908`
+- [x] Exact canonical source compiled in MetaEditor: **0 errors, 0 warnings** (`compile_logs/v6230_production_forensic_hardening.log`)
+- [x] Compiled EX5: 1,343,460 bytes; SHA-256 `06a313171bd2766c18a02ee92e3a295e398686599ced6666fe7b51c6c2d33e03`
+- [x] Backend metadata and customer-facing version/edition/download labels updated
+
+### Release-blocking fixes
+- [x] Normal entries are full configured risk or blocked: no broker-max, configured-max, equity-cap, aggregate-cap, prop-firm-cap, or margin-driven silent downsizing
+- [x] Lot-step normalization is floor-only; the former upward-rounding tolerance is retired
+- [x] Final pre-send invariant proves the requested normal risk was preserved and not exceeded
+- [x] AI remains advisory and cannot shrink or block an already approved normal entry
+- [x] Counter-excursion no longer blocks normal entry; its broker state and close lifecycle are independently reconciled
+- [x] Counter close requests retain state/reason and retry until broker absence confirms closure
+- [x] Independent counter execution fails closed on non-hedging accounts
+- [x] FILE_COMMON learning/telemetry and terminal GlobalVariables are scoped by account, server, symbol, and normal magic
+- [x] Startup, timing, sizing, and customer-facing logs corrected to match actual behavior
+
+### Verification
+- [x] Deterministic v6.23.0 sizing/timing/counter/R/state-isolation tests added
+- [x] Current-release targeted suite: 102 passed
+- [x] Release metadata suite: 7 passed
+- [x] Corrected stale prop-firm/AI assertions: 2 passed
+- [x] Backend Python syntax compilation passed
+- [ ] Frontend production bundle could not be built from the repository as checked out: the isolated worktree has no installed dependencies, and the main worktree's dependency tree is incomplete/incompatible (`react-dom/client` unresolved); static release-label tests passed
+- [x] Full historical suite: **208 failed, 789 passed** versus baseline **208 failed, 756 passed** — same failure count, 33 added passes, zero new implementation regressions; remaining failures are historical version-pin tests
+
+### Production boundary
+- [x] VPS `173.212.249.202` inspected read-only; no file, chart, terminal, or process changed
+- [x] VPS currently remains on its existing v6.21.3 EA
+- [x] Mac MT5 and its adaptive-trend experiment were not touched
+- [x] **No deployment/attachment performed. Owner will install and attach manually.**
+
+Full evidence and remaining limitations: `audits/xau_v6230_production_forensic_audit_2026-07-14.md`.
+
+---
+
 ## v6.21.2 — 2026-07-12 — Wall-Clock Entry Timing + R-Exit Identity Hardening
 
 ### EA Compile
