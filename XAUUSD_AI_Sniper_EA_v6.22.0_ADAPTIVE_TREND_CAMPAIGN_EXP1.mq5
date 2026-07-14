@@ -14778,6 +14778,47 @@ void OnTick()
                         combinedRaw, regimeQuality, sessionQuality, g_modeName);
       bool activeCanSynthesize=(InpCampaignTransitionMode==CAMPAIGN_TRANSITION_ACTIVE &&
                                 signal!=0 && setupScore>=4.0);
+      // Bounded reclaim-evidence override: when the classic setup detectors
+      // produced NOTHING at all (signal==0, "no setup met regime criteria" —
+      // the #1 block reason on 2026-07-14, 90x, 55 of them before 11:00) but
+      // there is real accumulating base/reclaim evidence, let the campaign's
+      // own dominant-direction read in even though regime/HTF classification
+      // never generated a classic candidate. This does not skip any downstream
+      // gate — XAU_ActiveIntelligenceDecision/XAUEntryTimingGuard still apply
+      // in full afterward; it only stops a genuine reclaim from dying before
+      // ever reaching them (forensic audit root cause #1).
+      if(!activeCanSynthesize && signal==0 &&
+         InpCampaignTransitionMode==CAMPAIGN_TRANSITION_ACTIVE && bufATR[1]>0.0)
+      {
+         int reclaimDir=XAU_CTDominantDirection(bufATR[1]);
+         if(reclaimDir!=0)
+         {
+            int higherLowBars=0, lowerHighBars=0;
+            for(int rb=1; rb<=5; rb++)
+            {
+               double lo=iLow(Symbol(),PERIOD_M5,rb), loPrev=iLow(Symbol(),PERIOD_M5,rb+1);
+               double hi=iHigh(Symbol(),PERIOD_M5,rb), hiPrev=iHigh(Symbol(),PERIOD_M5,rb+1);
+               if(lo<=0.0 || loPrev<=0.0 || hi<=0.0 || hiPrev<=0.0) continue;
+               if(lo>loPrev) higherLowBars++;
+               if(hi<hiPrev) lowerHighBars++;
+            }
+            double c1r=iClose(Symbol(),PERIOD_M5,1);
+            bool reclaimedFastEMA = (ArraySize(bufEMAFast)>=2 && bufEMAFast[1]>0.0) &&
+                                    (reclaimDir==1 ? c1r>bufEMAFast[1] : c1r<bufEMAFast[1]);
+            bool structureEvidence = reclaimDir==1 ? (higherLowBars>=2) : (lowerHighBars>=2);
+            if(structureEvidence && reclaimedFastEMA)
+            {
+               signal=reclaimDir;
+               setupName="CAMPAIGN_RECLAIM_SYNTH";
+               setupScore=MathMax(setupScore,4.0);
+               grade="B";
+               activeCanSynthesize=true;
+               activeAnalyticalWarnings += "RECLAIM_SYNTH_NO_CLASSIC_SETUP;";
+               PrintFormat("[ACTIVE_ANALYTICAL_EVIDENCE] advisory=RECLAIM_SYNTH: no classic setup, but higherLowBars=%d lowerHighBars=%d + EMA reclaim justify continuing to timing/location analysis | dir=%s",
+                           higherLowBars, lowerHighBars, reclaimDir==1?"BUY":"SELL");
+            }
+         }
+      }
       if(activeCanSynthesize)
       {
          activeAnalyticalWarnings += "LEGACY_GRADE_THRESHOLD;";
@@ -21664,6 +21705,42 @@ input double InpCampaignEvidenceDecayPerBar        = 7.0;    // bounded cross-ba
 input int    InpCampaignEvidenceMaxAgeBars         = 18;     // stale opportunity evidence expires after contradiction, never merely because a timer elapsed
 input int    InpCampaignWaitCancelBars             = 6;      // consecutive market-proof contradictions required to cancel a waiting opportunity
 
+// Campaign-state model mapping (2026-07-14 forensic audit deliverable — the
+// requested BASE_BUILDING..REVERSAL_PREPARING_OPPOSITE sequence is documented
+// against the states that already exist here, rather than renamed, to avoid
+// a mechanical rename across ~15+ call sites in a live-trading file):
+//   BASE_BUILDING              -- upstream of this enum entirely: setup
+//                                 detection/regime read before a dominant
+//                                 direction is even confirmed. Once a
+//                                 direction is picked, starts at TREND_EARLY.
+//                                 XAU_CTHasOpenExposureInDirection() (Fix B)
+//                                 and the bounded reclaim-evidence override
+//                                 (Fix C, see the CAMPAIGN_RECLAIM_SYNTH path
+//                                 above XAU_ActiveIntelligenceDecision) are
+//                                 what let a base-and-reclaim reach this enum
+//                                 at all when regime/HTF read is still stale.
+//   REVERSAL_PREPARING         -> CAMPAIGN_OPPOSITE_FORMING
+//   EARLY_TREND                -> CAMPAIGN_TREND_EARLY
+//   BREAKOUT                   -- not a lifecycle state: a `setup`
+//                                 classification (XAU_ClassifySetup ==
+//                                 BREAKOUT/BREAKOUT_RETEST) that arms the
+//                                 120-180s entry-timing window
+//                                 (XAU_TimingEngineConfirmsEntry); can occur
+//                                 while lifecycle is EARLY or DEVELOPING.
+//   PULLBACK_ENTRY              -- also a `setup` classification
+//                                 (TREND_PULLBACK/PULLBACK_SCALP), not a
+//                                 lifecycle state; can occur across
+//                                 EARLY/DEVELOPING/HEALTHY.
+//   HEALTHY_CAMPAIGN            -> CAMPAIGN_TREND_HEALTHY
+//   MATURE_CAMPAIGN              -> CAMPAIGN_TREND_MATURE / CAMPAIGN_TREND_LATE
+//   EXHAUSTING                  -> CAMPAIGN_TREND_EXHAUSTING
+//   REVERSAL_PREPARING_OPPOSITE -> CAMPAIGN_OPPOSITE_CONFIRMED
+//                                 (reversalThesisConfirmed snaps directly to
+//                                 this; CAMPAIGN_OPPOSITE_FORMING is the
+//                                 "preparing" half, CONFIRMED is the
+//                                 "prepared, thesis proven" half)
+//   (no requested equivalent)   -- CAMPAIGN_TRANSITION_NEUTRAL: the
+//                                 ambiguous/between-states catch-all.
 enum ENUM_CAMPAIGN_MARKET_LIFECYCLE
 {
    CAMPAIGN_TREND_EARLY=0,
@@ -22094,6 +22171,25 @@ string XAU_CTGVPrefix()
    return "XCT_"+XAUAI_HashString(scope)+"_";
 }
 
+// Is there a real open position (this symbol, this EA's magic) in `direction`?
+// Used to decide whether a restart with incomplete persisted campaign state
+// actually has exposure worth protecting, instead of assuming the worst on
+// every redeploy (2026-07-14 forensic audit, root cause #3).
+bool XAU_CTHasOpenExposureInDirection(int direction)
+{
+   if(direction == 0) return false;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      int posDir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+      if(posDir == direction) return true;
+   }
+   return false;
+}
+
 void XAU_CTLoadPersistentState()
 {
    if(g_campaignTransitionStateLoaded) return;
@@ -22149,16 +22245,32 @@ void XAU_CTLoadPersistentState()
    if(hasAny && (!coreComplete || !opportunityComplete || stateVersion<2))
    {
       // A partial/legacy restart must never fabricate a new entry or forget
-      // an exhausted old direction. Keep the old direction hard-blocked
-      // until a real closed-M5 continuation reset proves the state safe.
-      g_campaignTransitionRestartConservative=true;
-      g_campaignPersistentExhaustion=MathMax(g_campaignPersistentExhaustion,InpCampaignTransitionExhaustAt);
-      if(g_campaignTransitionCandidateState<CAMPAIGN_TREND_EXHAUSTING)
-         g_campaignTransitionCandidateState=CAMPAIGN_TREND_EXHAUSTING;
-      g_campaignTransitionCandidateBars=MathMax(1,g_campaignTransitionCandidateBars);
-      g_campaignTransitionDecision.lifecycle=CAMPAIGN_TREND_EXHAUSTING;
-      PrintFormat("CAMPAIGN_TRANSITION_RESTART_CONSERVATIVE reason=partial_or_legacy_state version=%d exhaustion=%.0f oldDirectionEntries=BLOCK_UNTIL_REAL_RESET",
-                  stateVersion,g_campaignPersistentExhaustion);
+      // an exhausted old direction WHILE REAL EXPOSURE IS AT RISK. But this
+      // subsystem gets iterated same-day (7 redeploys on 2026-07-14 alone) —
+      // floor-forcing on every incomplete-state restart regardless of whether
+      // a position exists latched exhaustion>=70 through a clean base and
+      // breakout with nothing actually open to protect (forensic audit root
+      // cause #3). Only engage the conservative floor when a real open
+      // position exists in the persisted/dominant direction; otherwise a
+      // restart with nothing at risk starts neutral, same as any cold start.
+      int restartDir = hasDirection ? g_campaignPersistentDirection : 0;
+      bool realExposureAtRisk = XAU_CTHasOpenExposureInDirection(restartDir);
+      if(realExposureAtRisk)
+      {
+         g_campaignTransitionRestartConservative=true;
+         g_campaignPersistentExhaustion=MathMax(g_campaignPersistentExhaustion,InpCampaignTransitionExhaustAt);
+         if(g_campaignTransitionCandidateState<CAMPAIGN_TREND_EXHAUSTING)
+            g_campaignTransitionCandidateState=CAMPAIGN_TREND_EXHAUSTING;
+         g_campaignTransitionCandidateBars=MathMax(1,g_campaignTransitionCandidateBars);
+         g_campaignTransitionDecision.lifecycle=CAMPAIGN_TREND_EXHAUSTING;
+         PrintFormat("CAMPAIGN_TRANSITION_RESTART_CONSERVATIVE reason=partial_or_legacy_state_with_open_exposure version=%d dir=%s exhaustion=%.0f oldDirectionEntries=BLOCK_UNTIL_REAL_RESET",
+                     stateVersion,restartDir==1?"BUY":"SELL",g_campaignPersistentExhaustion);
+      }
+      else
+      {
+         PrintFormat("CAMPAIGN_TRANSITION_RESTART_NEUTRAL reason=partial_or_legacy_state_no_open_exposure version=%d — no real position at risk, starting neutral instead of exhaustion-floored",
+                     stateVersion);
+      }
    }
 }
 
@@ -22296,17 +22408,34 @@ XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()
    int dir = d.dominantDirection;
 
    // A. Travel/session context: rolling 24 hours survives broker midnight
-   // and reconstructs naturally after restart.
+   // and reconstructs naturally after restart. `range`/rangeHigh/rangeLow stay
+   // day-scale (used only as the sessionRangeConsumed denominator below).
    double rangeHigh = -DBL_MAX, rangeLow = DBL_MAX;
    int valid = 0;
+   // Leg-origin walk-back: `travel` must measure the CURRENT directional push,
+   // not the whole day's range. Anchoring to the 24h extreme scored a breakout
+   // as already-mature on the bar it started (2026-07-14 forensic audit, root
+   // cause #2 — 06:45/13:40/16:10 all HARD_BLOCKed at first sight this way).
+   // Walk backward from the latest closed bar; the first >=1.8ATR retracement
+   // against dir marks the swing point the current leg actually began from.
+   // Falls back to the full 288-bar scan (identical to the old behavior) if no
+   // such reset is found, so this can only shrink the measured distance, never
+   // silently break on thin history.
+   double legExtreme = dir==1 ? iHigh(Symbol(), PERIOD_M5, 1) : iLow(Symbol(), PERIOD_M5, 1);
+   double legOrigin   = dir==1 ? iLow(Symbol(), PERIOD_M5, 1)  : iHigh(Symbol(), PERIOD_M5, 1);
    for(int i=1; i<=288; i++)
    {
       double h = iHigh(Symbol(), PERIOD_M5, i), l = iLow(Symbol(), PERIOD_M5, i);
       if(h <= 0.0 || l <= 0.0) continue;
       rangeHigh = MathMax(rangeHigh, h); rangeLow = MathMin(rangeLow, l); valid++;
+      if(i == 1) continue; // bar 1 already seeded legExtreme/legOrigin above
+      bool legReset = dir==1 ? (legExtreme - l >= atr*1.8) : (h - legExtreme >= atr*1.8);
+      if(legReset) { legOrigin = dir==1 ? l : h; break; }
+      legExtreme = dir==1 ? MathMax(legExtreme, h) : MathMin(legExtreme, l);
+      legOrigin  = dir==1 ? l : h;
    }
    double range = (valid >= 48 && rangeHigh > rangeLow) ? rangeHigh-rangeLow : atr*4.0;
-   double travel = dir==1 ? c1-rangeLow : rangeHigh-c1;
+   double travel = dir==1 ? c1-legOrigin : legOrigin-c1;
    d.distanceTravelledATR = MathMax(0.0, travel/atr);
    d.sessionRangeConsumed = XAU_CTClamp(travel/MathMax(range,atr)*100.0);
 
@@ -22430,7 +22559,18 @@ XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()
                                       (d.oppositeMicroDisplacement?18.0:0.0));
 
    // H. Old-direction and opposite-direction reward are separate questions.
+   // room-to-rangeHigh/rangeLow is self-referential while dir is actively
+   // making fresh 24h extremes: on a still-expanding leg, rangeHigh IS
+   // ~c1, so "room" silently collapses toward zero at the exact moment the
+   // trend is freshest (2026-07-14 forensic audit — logged remainingRewardR
+   // =0.36R at 16:10 mid-breakout with no real overhead resistance present).
+   // If there's no overhead obstacle in the lookback (rangeHigh/rangeLow is
+   // essentially current price) and the leg is still confirmed advancing,
+   // don't starve reward off a level price itself just set.
    double room=dir==1 ? rangeHigh-c1 : c1-rangeLow;
+   bool freshHighsNoOverhead = dir==1 ? (rangeHigh-c1) <= atr*0.5 : (c1-rangeLow) <= atr*0.5;
+   if(freshHighsNoOverhead && freshProgress)
+      room = MathMax(room, atr*InpCampaignTransitionMinRewardR*2.2);
    d.remainingRewardR=MathMax(0.0,room/MathMax(atr*2.2,atr));
    double localObstacleHigh=-DBL_MAX, localObstacleLow=DBL_MAX;
    for(int i=2;i<=48;i++) { localObstacleHigh=MathMax(localObstacleHigh,iHigh(Symbol(),PERIOD_M5,i)); localObstacleLow=MathMin(localObstacleLow,iLow(Symbol(),PERIOD_M5,i)); }
