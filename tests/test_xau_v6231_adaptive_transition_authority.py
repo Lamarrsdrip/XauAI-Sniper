@@ -150,6 +150,25 @@ def test_69_percent_exhaustion_does_not_disable_all_continuation():
     assert d.continuation_allowed
 
 
+def test_active_does_not_collapse_frequency_across_healthy_trend_matrix():
+    scenarios = [
+        Evidence(
+            direction=direction,
+            htf_direction=direction,
+            travel_atr=travel,
+            range_consumed=0.25 + 0.08 * index,
+            continuation=88.0 - 3.0 * index,
+            absorption=8.0 + 2.0 * index,
+            momentum_opposite=8.0 + index,
+            remaining_reward_r=2.8 - 0.15 * index,
+        )
+        for direction in (-1, 1)
+        for index, travel in enumerate((0.7, 1.1, 1.5, 1.9, 2.3))
+    ]
+    decisions = [decide(s).continuation_allowed for s in scenarios]
+    assert sum(decisions) / len(decisions) >= 0.80
+
+
 def test_70_percent_exhaustion_blocks_every_old_direction_source():
     d = decide(Evidence(exhaustion_override=70.0, failed_extremes=2))
     assert not d.continuation_allowed

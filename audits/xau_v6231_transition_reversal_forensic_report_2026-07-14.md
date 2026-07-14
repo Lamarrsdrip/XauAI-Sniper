@@ -149,6 +149,57 @@ Hard invariants:
 - Reversal origin, first detection, reclaim, latest acceptable price, impulse peak, expected pullback, entry consumption, state, and opportunity ID persist across restart.
 - The same reversal impulse cannot be recreated at progressively worse prices by PRIMARY or Counter. A new entry requires at least a 0.75 ATR pullback to value with sufficient remaining reward.
 
+## ACTIVE production-demo deployment addendum — 2026-07-14
+
+This section supersedes the earlier SHADOW deployment status. The owner explicitly authorized ACTIVE for the VPS demo production instance only.
+
+### Previous mode and instance proof
+
+- One `terminal64.exe` process and one attached `XAUUSDm,M5` v6.23.1 instance were found; no duplicate terminal or second production EA was active.
+- Journal build before deployment: `v6231-adaptive-transition-location-authority-20260714`.
+- Journal repeatedly printed `mode=SHADOW`, including live `WOULD_BLOCK` decisions that remained observation-only.
+- Previous EX5 SHA-256: `b891371331893a1ed73857b2165a35db7c96d8f9fe1f6b2146f4ab11c7ca8d5b`.
+- Previous source SHA-256: `d136f57e822807ba16475f7d18c095b383128faf3e67aba8f69c0270b9e3408f`.
+- The chart, EX5, MQ5, and Journal were copied to `MQL5/Backups/v6231_shadow_before_active_20260714_164350`; a second deployment-time rollback exists at `MQL5/Backups/v6231_active_deploy_20260714_165643`.
+
+### Deployed identity and configuration
+
+- Git branch/commit: `main` / `c34d020` (`release: activate v6.23.1 transition authority`).
+- Build: `v6231-adaptive-transition-location-authority-active-20260714`.
+- Source and backend-mirror SHA-256: `8751d4a7be892713b4917150d22542a4639f1d702ec5aa84667dddd289aa89e9`.
+- EX5 SHA-256: `563b0c7222ab98591c04a77e9ad57b4d8884c4cb9b18fa6b1889e762ad40c794` (1,396,560 bytes).
+- Preset: `MQL5/Presets/XAUUSD_AI_Sniper_EA_v6.23.1_ACTIVE.set`, SHA-256 `385ec9f3333f3e1e4ad469a1ee0cde70e5eabf980f389f9474bc7b4d986eac78`.
+- Persisted chart proves `InpAdaptiveTransitionMode=2`, the ACTIVE preset identity, 15% normal risk, and the unchanged production magic.
+- One terminal restarted in the existing interactive RDP session. The existing broker-open position was adopted by the R-exit manager; no manual order, modification, or close was sent.
+
+### Startup and live enforcement evidence
+
+At 16:57:48 VPS local time the Journal printed:
+
+- `ADAPTIVE_TRANSITION_AUTHORITY_CONFIG mode=ACTIVE ... valid=true`.
+- `ADAPTIVE_TRANSITION_ACTIVE_ASSERTION_PASSED ... build=v6231-adaptive-transition-location-authority-active-20260714 ... preset=MQL5/Presets/XAUUSD_AI_Sniper_EA_v6.23.1_ACTIVE.set`.
+- `VERSION-DIAG ... runtime=v6.23.1 build=v6231-adaptive-transition-location-authority-active-20260714`.
+- `RISK_CONFIG_ASSERTION_PASSED ... ConfiguredRisk=15.00% ... mode=FULL_RISK_BINARY`.
+- Startup context sync completed with trading enabled and one existing position; the R-exit manager reconciled that position rather than fabricating a new trade.
+
+The first natural ACTIVE pre-send opportunity was a same-direction pyramid while the current move measured 94% exhaustion. The final log printed `[ACTIVE_FINAL_ENTRY_ASSERTION] mode=ACTIVE source=PYRAMID ... decision=BLOCK`; no pyramid reached the broker send. This proves ACTIVE is controlling execution rather than logging only.
+
+### “ACTIVE is not block everything” proof
+
+- The final function retains ordinary continuation permission below authoritative exhaustion/transition.
+- 60–69% exhaustion blocks pyramids and only low-confidence/low-reward continuation; it is not a blanket entry lock.
+- The 70% hard rule is direction-specific: it blocks the exhausted old direction while starting an opposite search, not both directions forever.
+- Opposite entry still requires compact persistent reversal proof and good location; bad location resolves to WAIT, not permanent BLOCK.
+- Focused production suite: 93 passed, including a symmetric healthy-trend matrix with at least 80% continuation permission, the 69% non-blanket case, the 70% hard old-direction invariant, good-value reversal eligibility, incident replay, and risk/timing preservation.
+- Full suite before the final added frequency assertion: 840 passed / 208 historical version-pinned failures, with the same 208 failure-name baseline. The added assertion subsequently passed in the focused suite; production code did not change after the full run.
+
+### Still unproven live
+
+- The current market immediately supplied an exhausted-move BLOCK, not a healthy-continuation ALLOW or a fresh reversal WAIT/ALLOW. Those remain deterministic/compile-tested but must be observed naturally; no manual test trade was created.
+- The persisted R-exit file initially reported a schema mismatch and was rejected safely; the manager reconstructed the live position from broker fields and wrote current schema state. Historical peak before restart is therefore unknown, as explicitly logged.
+- This deployment is evidence for the demo production account only. It is not authorization or proof for a real-money account.
+- The v6.22.0 Adaptive Trend Campaign experiment was not changed or deployed.
+
 ## Q–R. Tests, scenario replay, and backtest limits
 
 - Targeted transition, incident, direction/location, identity, and compatibility suite: 52 passed.

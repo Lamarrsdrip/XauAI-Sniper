@@ -56,8 +56,8 @@ Keep the edition description on a single physical line — the regex does not ma
 - [x] Pre-change VPS v6.23.1 SHADOW EX5/source/chart/Journal preserved under a timestamped rollback directory
 - [x] ACTIVE retains healthy-trend permission below hard exhaustion; 60–69% is selective and 70%+ is the explicit old-direction hard block
 - [x] Final pre-send assertion is immediately upstream of normal, re-entry/recovery/retry, pyramid, and isolated Counter broker sends
-- [ ] Compile and deploy the ACTIVE build, patch the persisted chart input, and confirm the startup assertion in Journal
-- [ ] Observe natural-market ALLOW/BLOCK/WAIT decisions; do not place a manual test order
+- [x] Compiled and deployed the ACTIVE build, patched the persisted chart input, and confirmed the startup assertion in Journal
+- [~] Natural-market BLOCK was observed and enforced immediately; healthy ALLOW and reversal WAIT remain pending market-provided candidates. No manual test order was placed.
 
 Full evidence: `audits/xau_v6231_transition_reversal_forensic_report_2026-07-14.md`.
 
