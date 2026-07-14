@@ -8465,6 +8465,18 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
       g_recoveryRetryAt = g_lastIndicatorRebuildAt + backoffSec;
       if(!rebuildAllowed)
       {
+         // v6.23.2 fix: this branch can move g_recoveryState straight to
+         // RECOVERY_BACKOFF without ever going through
+         // RebuildEntryIndicatorHandles() (the only other place that sets
+         // g_recoveryStartedAt) -- e.g. a different label's rebuild already
+         // consumed the shared g_lastIndicatorRebuildAt window, or a prior
+         // episode just reset g_recoveryStartedAt to 0 via
+         // XAU_RecoverySucceededIfMatch(). Left unguarded, the "elapsed"
+         // field in the status/succeeded log lines computes
+         // TimeCurrent() - 0, printing a ~56-year value. Log-only field --
+         // it never gates retry timing (g_recoveryRetryAt does that, from
+         // g_lastIndicatorRebuildAt) -- but never compute elapsed from 0.
+         if(g_recoveryStartedAt <= 0) g_recoveryStartedAt = TimeCurrent();
          g_recoveryState = RECOVERY_BACKOFF;
          g_lastSkipReason = StringFormat("INDICATOR_RECOVERY_BACKOFF: %s; retry rebuild in %ds",
                                          label, backoffSec - (int)(TimeCurrent() - g_lastIndicatorRebuildAt));

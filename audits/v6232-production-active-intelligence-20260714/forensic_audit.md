@@ -116,3 +116,19 @@ The pre-change VPS EX5, preset, chart, and Journal were preserved under:
 `MQL5\Backups\v6231_active_intelligence_audit_20260714_170723`
 
 The deployment installer also creates its own timestamped v6.23.2 rollback directory before modifying the persisted chart.
+
+## Post-deploy addendum — recovery-timestamp fix (same day)
+
+Live observation on the VPS shortly after the initial v6.23.2 deploy surfaced `INDICATOR_RECOVERY_STATUS` / `INDICATOR_RECOVERY_SUCCEEDED` lines printing an `elapsed` value of `1784047822`s (~56 years) for `RSI_M5`.
+
+Traced to `g_recoveryStartedAt`: the only place that initializes it is `RebuildEntryIndicatorHandles()` on the `RECOVERY_NONE -> non-NONE` transition. A separate branch can move `g_recoveryState` directly to `RECOVERY_BACKOFF` (when a different label's rebuild already consumed the shared `g_lastIndicatorRebuildAt` backoff window, or a prior episode had just reset the timestamp to 0 via `XAU_RecoverySucceededIfMatch`) without ever calling that function, leaving `g_recoveryStartedAt` at 0 while the state machine was already in `BACKOFF`.
+
+Verified before fixing: `g_recoveryStartedAt` is read in exactly two places, both inside `Print(...)` diagnostics. The actual backoff/retry gate (`if(g_recoveryState==RECOVERY_BACKOFF && TimeCurrent()<g_recoveryRetryAt)`) and the rebuild-allowed check both key off `g_recoveryRetryAt`/`g_lastIndicatorRebuildAt`, never `g_recoveryStartedAt`. Confirmed log-only: no retry-cadence change, no repeated immediate retries, no indicator left permanently unavailable (`RSI_M5` recovered in the expected ~43s), and no path from this field into `XAU_AdaptiveMarketTransitionEngine()` or any entry decision.
+
+Fix applied: guard `if(g_recoveryStartedAt<=0) g_recoveryStartedAt=TimeCurrent();` immediately before the direct `g_recoveryState=RECOVERY_BACKOFF` assignment, so elapsed can never be computed from timestamp 0.
+
+- New source SHA-256: `2c76a0113e5ce7c7230aea8f2b9ec3e32b789d9f2a100d619f143e90e33c48e6`.
+- New EX5 SHA-256: `ab92950a28ffff49d392d4e0641995d90efab9a7ce70f6f23f8a1b5297f92c34`.
+- MetaEditor: 0 errors, 0 warnings.
+- Regression tests added: `test_31_recovery_started_at_cannot_stay_zero_when_entering_backoff`, `test_32_recovery_elapsed_fields_are_log_only_not_a_trade_gate` — focused suite now 86/86.
+- Full-suite regression check re-run: identical 208 pre-existing failures, zero new regressions.

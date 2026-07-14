@@ -35,9 +35,19 @@ Keep the edition description on a single physical line — the regex does not ma
 - [x] Exact-source MetaEditor compile: **0 errors, 0 warnings**
 - [x] Thirty mandatory v6.23.2 production ACTIVE gates plus focused compatibility tests pass
 - [x] Redacted candidate-grain audit produced from VPS data with repeated tick assertions deduplicated
-- [ ] Full-suite comparison completed
-- [ ] Exact EX5 installed on VPS and one ACTIVE startup assertion verified
-- [ ] Commit pushed to the production audit branch
+- [x] Full-suite comparison completed — identical 208 pre-existing failures before/after, zero new regressions
+- [x] Exact EX5 installed on VPS and one ACTIVE startup assertion verified
+- [x] Commit pushed to the production audit branch (`678b288`, fast-forwarded to `origin/main`)
+
+### Post-deploy fix — recovery-timestamp elapsed value
+- [x] Live VPS observation caught `INDICATOR_RECOVERY_STATUS`/`INDICATOR_RECOVERY_SUCCEEDED` printing a ~56-year `elapsed` value for `RSI_M5`
+- [x] Traced: `g_recoveryStartedAt` stays 0 when `g_recoveryState` jumps straight to `RECOVERY_BACKOFF` without passing through `RebuildEntryIndicatorHandles()`
+- [x] Confirmed log-only before fixing: field is read only inside `Print(...)`; the real backoff gate keys off `g_recoveryRetryAt`/`g_lastIndicatorRebuildAt`, unaffected
+- [x] Fix: initialize `g_recoveryStartedAt` on direct entry to `RECOVERY_BACKOFF` if still `<= 0`
+- [x] New source SHA-256: `2c76a0113e5ce7c7230aea8f2b9ec3e32b789d9f2a100d619f143e90e33c48e6`
+- [x] New EX5 SHA-256: `ab92950a28ffff49d392d4e0641995d90efab9a7ce70f6f23f8a1b5297f92c34`
+- [x] MetaEditor: 0 errors, 0 warnings
+- [x] Regression tests added (`test_31`, `test_32`); focused suite 86/86; full-suite comparison re-run, still zero new regressions
 
 ---
 

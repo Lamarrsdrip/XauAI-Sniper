@@ -269,3 +269,60 @@ def test_production_only_release_has_no_experiment_reference():
     for path in (EA, PRESET, ROOT / "deploy/install_v6232_active_vps.ps1"):
         text = path.read_text()
         assert "v6.22" not in text and "CAMPAIGN_TRANSITION" not in text
+
+
+def test_31_recovery_started_at_cannot_stay_zero_when_entering_backoff():
+    """Forensic regression: g_recoveryState could jump straight to
+    RECOVERY_BACKOFF (a different label's rebuild already consumed the
+    shared backoff window, or a prior episode had just reset the timestamp
+    via XAU_RecoverySucceededIfMatch) without ever passing through
+    RebuildEntryIndicatorHandles(), the only other place that sets
+    g_recoveryStartedAt. Left unguarded, elapsed = TimeCurrent() - 0 prints
+    a ~56-year value in INDICATOR_RECOVERY_STATUS / INDICATOR_RECOVERY_SUCCEEDED.
+    Confirms the guard exists immediately before that assignment.
+    """
+    s = source()
+    backoff_entry = re.search(
+        r"if\(!rebuildAllowed\)\s*\{\s*"
+        r"(?://[^\n]*\n\s*)*"
+        r"if\(g_recoveryStartedAt<=0\)\s*g_recoveryStartedAt\s*=\s*TimeCurrent\(\);\s*"
+        r"g_recoveryState\s*=\s*RECOVERY_BACKOFF;",
+        re.sub(r"[ \t]+", "", s),
+    )
+    assert backoff_entry, (
+        "g_recoveryStartedAt must be initialized before g_recoveryState=RECOVERY_BACKOFF "
+        "in the direct-entry branch, or elapsed can be computed from timestamp 0"
+    )
+
+
+def test_32_recovery_elapsed_fields_are_log_only_not_a_trade_gate():
+    """The buggy field must never be load-bearing: only g_recoveryRetryAt
+    (derived from g_lastIndicatorRebuildAt, unaffected by this bug) may gate
+    the backoff-window early return that skips a scan."""
+    s = source()
+    gate = re.search(
+        r"if\(g_recoveryState\s*==\s*RECOVERY_BACKOFF\s*&&\s*TimeCurrent\(\)\s*<\s*g_recoveryRetryAt\)",
+        s,
+    )
+    assert gate, "backoff gate must key off g_recoveryRetryAt, not g_recoveryStartedAt"
+    # g_recoveryStartedAt may appear only inside Print(...) diagnostics,
+    # its own declaration/assignment, or a code comment -- never a live
+    # conditional that would make retry/rebuild/signal behavior depend on it.
+    for match in re.finditer(r"g_recoveryStartedAt", s):
+        line_start = s.rfind("\n", 0, match.start()) + 1
+        line_end = s.find("\n", match.end())
+        line = s[line_start:line_end]
+        stripped = line.strip()
+        is_comment = stripped.startswith("//")
+        is_declaration = "datetime" in line and "=" in line and "TimeCurrent" not in line
+        is_print_arg = "Print(" in s[max(0, line_start - 200):line_end] or "elapsed " in s[max(0, line_start - 100):line_end]
+        is_assignment = re.match(r"\s*g_recoveryStartedAt\s*=", line) is not None
+        is_init_guard = re.match(
+            r"\s*if\s*\(\s*g_recoveryStartedAt\s*<=\s*0\s*\)\s*g_recoveryStartedAt\s*=\s*TimeCurrent\(\);\s*$",
+            line,
+        ) is not None
+        is_conditional = re.search(r"\b(if|while|for)\s*\(.*g_recoveryStartedAt", line) is not None and not is_init_guard
+        assert not is_conditional, f"g_recoveryStartedAt must not gate unrelated control flow: {stripped}"
+        assert is_comment or is_declaration or is_print_arg or is_assignment, (
+            f"unexpected g_recoveryStartedAt read outside logging/assignment/comment: {stripped}"
+        )
