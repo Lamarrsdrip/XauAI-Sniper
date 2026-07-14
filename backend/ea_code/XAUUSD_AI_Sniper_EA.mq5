@@ -1787,7 +1787,7 @@
 
 #define XAUAI_EA_VERSION "v6.23.1"
 #define XAUAI_EA_VERSION_NUM "6.23.1"
-#define XAUAI_BUILD_HASH "v6231-manual-micro-transition-authority-20260714"
+#define XAUAI_BUILD_HASH "v6231-adaptive-transition-location-authority-20260714"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -1840,9 +1840,6 @@ input double InpTransitionMaxOriginExtensionATR = 2.00;  // first reversal leg b
 input double InpTransitionMaxValueDistanceATR   = 1.00;  // correct direction is not enough when price is too far from local value
 input double InpTransitionMaxConsumedPct        = 70.0;  // percentage of origin-to-next-obstacle leg already consumed
 input double InpTransitionPullbackResetATR       = 0.75;  // evidence-based pullback from impulse peak required before same-opportunity re-entry
-input int    InpTransitionMicroPersistenceBars   = 3;     // closed M1 opposite bars required inside an existing high-exhaustion opportunity
-input double InpTransitionMicroDisplacementATR   = 0.18;  // compact M1 displacement threshold, normalized by M5 ATR
-input double InpTransitionMicroSweepBufferATR    = 0.05;  // minimum closed M1 sweep beyond the prior micro range before reclaim can count
 
 input group "=== AI AUTHORITY MODE (June 17-18 reconstruction) ==="
 // Restores the pre-v6.3.0 hierarchy: strategy + structure decide, AI advises/filters.
@@ -3343,7 +3340,6 @@ enum ENUM_XAU_TRANSITION_POSITION_ACTION
 struct XAU_AdaptiveTransitionDecision
 {
    datetime evaluatedBar;
-   datetime evaluatedMicroBar;
    int dominantDirection;
    double buyConfidence;
    double sellConfidence;
@@ -3366,10 +3362,6 @@ struct XAU_AdaptiveTransitionDecision
    bool oppositeReclaim;
    bool oppositeRetestHeld;
    bool oppositeDisplacement;
-   bool oppositeMicroSweepReclaim;
-   bool oppositeMicroRetestHeld;
-   bool oppositeMicroDisplacement;
-   int oppositeMicroPersistence;
    bool continuationEntryAllowed;
    bool continuationEntryPaused;
    bool oppositeEntryPreparing;
@@ -3388,7 +3380,6 @@ XAU_AdaptiveTransitionDecision g_transitionDecision;
 int      g_transitionCandidateState = -1;
 int      g_transitionCandidateBars = 0;
 datetime g_transitionLastComputedBar = 0;
-datetime g_transitionLastComputedMicroBar = 0;
 double   g_counterTransitionEvidence = 0.0; // signed: +BUY evidence, -SELL evidence
 datetime g_counterTransitionEvidenceAt = 0;
 bool     g_counterTransitionEvidenceLoaded = false;
@@ -10553,7 +10544,6 @@ void XAU_ATMarkOpportunityEntry(int direction,double price,string source)
    g_reversalOpportunity.lastEntryPrice=price;
    g_reversalOpportunity.state=REVERSAL_ENTRY_ALLOWED_STATE;
    g_transitionLastComputedBar=0;
-   g_transitionLastComputedMicroBar=0;
    if(direction==1) g_reversalOpportunity.impulsePeak=MathMax(g_reversalOpportunity.impulsePeak,price);
    else g_reversalOpportunity.impulsePeak=MathMin(g_reversalOpportunity.impulsePeak,price);
    XAU_ATSavePersistentState();
@@ -10594,7 +10584,6 @@ void XAU_RecordCounterTransitionEvidence(int direction, double candidateScore,
    // next authority query to recompute immediately with the new bounded
    // evidence.  Price/structure inputs remain closed-bar-only.
    g_transitionLastComputedBar = 0;
-   g_transitionLastComputedMicroBar = 0;
    XAU_ATSavePersistentState();
    PrintFormat("[COUNTER_TRANSITION_EVIDENCE] counterDirection=%s score=%.1f MFE=%.3f MAE=%.3f outcomeR=%.3f structureAligned=%s normalContinuationConfidenceImpact=%.1f decayMinutes=%d",
                direction == 1 ? "BUY" : "SELL", candidateScore, mfeR, maeR, realizedR,
@@ -10616,18 +10605,12 @@ int XAU_ATDominantDirection(double atr)
 XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
 {
    datetime bar = iTime(Symbol(), PERIOD_M5, 1);
-   datetime microBar = iTime(Symbol(), PERIOD_M1, 1);
-   bool m5EvidenceAdvanced = bar > 0 && bar != g_transitionDecision.evaluatedBar;
-   bool microEvidenceAdvanced = microBar > 0 && microBar != g_transitionDecision.evaluatedMicroBar;
-   if(bar > 0 && microBar > 0 &&
-      !m5EvidenceAdvanced && !microEvidenceAdvanced &&
-      bar == g_transitionLastComputedBar && microBar == g_transitionLastComputedMicroBar)
+   if(bar > 0 && bar == g_transitionLastComputedBar)
       return g_transitionDecision;
 
    XAU_AdaptiveTransitionDecision d;
    ZeroMemory(d);
    d.evaluatedBar = bar;
-   d.evaluatedMicroBar = microBar;
    d.lifecycle = TREND_EARLY;
    d.existingBuyAction = TRANSITION_HOLD;
    d.existingSellAction = TRANSITION_HOLD;
@@ -10717,58 +10700,6 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    int oppositePersistence=0;
    for(int i=1;i<=5;i++)
    { double o=iOpen(Symbol(),PERIOD_M5,i), c=iClose(Symbol(),PERIOD_M5,i); if(dir==-1 ? c>o : c<o) oppositePersistence++; }
-
-   // Fast reversal bridge: closed M1 evidence may refine an already active
-   // high-exhaustion opportunity before the enclosing M5 bar closes.  It is
-   // deliberately not a second trend engine: a closed sweep/reclaim, later
-   // held retest or real displacement, persistence, failed M5 continuation,
-   // reward and the shared anti-chase location gate must all agree.
-   double microPriorHigh=-DBL_MAX,microPriorLow=DBL_MAX;
-   for(int i=6;i<=20;i++)
-   {
-      double h=iHigh(Symbol(),PERIOD_M1,i),l=iLow(Symbol(),PERIOD_M1,i);
-      if(h<=0.0 || l<=0.0) continue;
-      microPriorHigh=MathMax(microPriorHigh,h);
-      microPriorLow=MathMin(microPriorLow,l);
-   }
-   int microSweepShift=0;
-   double microSweepExtreme=0.0;
-   if(microPriorHigh>-DBL_MAX/2.0 && microPriorLow<DBL_MAX/2.0)
-   {
-      for(int i=1;i<=5;i++)
-      {
-         double h=iHigh(Symbol(),PERIOD_M1,i),l=iLow(Symbol(),PERIOD_M1,i),c=iClose(Symbol(),PERIOD_M1,i);
-         bool sweptAndClosedBack=dir==-1 ? (l<microPriorLow-atr*InpTransitionMicroSweepBufferATR && c>microPriorLow)
-                                         : (h>microPriorHigh+atr*InpTransitionMicroSweepBufferATR && c<microPriorHigh);
-         if(sweptAndClosedBack)
-         {
-            d.oppositeMicroSweepReclaim=true;
-            microSweepShift=i;
-            microSweepExtreme=dir==-1?l:h;
-            break;
-         }
-      }
-   }
-   if(microSweepShift>1)
-   {
-      for(int i=microSweepShift-1;i>=1;i--)
-      {
-         double h=iHigh(Symbol(),PERIOD_M1,i),l=iLow(Symbol(),PERIOD_M1,i),c=iClose(Symbol(),PERIOD_M1,i);
-         bool held=dir==-1 ? (c>microPriorLow && l>=microSweepExtreme-atr*0.02)
-                           : (c<microPriorHigh && h<=microSweepExtreme+atr*0.02);
-         if(held) { d.oppositeMicroRetestHeld=true; break; }
-      }
-   }
-   for(int i=1;i<=5;i++)
-   {
-      double o=iOpen(Symbol(),PERIOD_M1,i),c=iClose(Symbol(),PERIOD_M1,i);
-      if(dir==-1 ? c>o : c<o) d.oppositeMicroPersistence++;
-      if(i<=3 && MathAbs(c-o)>=atr*InpTransitionMicroDisplacementATR && (dir==-1 ? c>o : c<o))
-         d.oppositeMicroDisplacement=true;
-   }
-   double microStructure=XAU_ATClamp((d.oppositeMicroSweepReclaim?42.0:0.0)+
-                                      (d.oppositeMicroRetestHeld?25.0:0.0)+
-                                      (d.oppositeMicroDisplacement?18.0:0.0));
    double structureOpposite = XAU_ATClamp((d.oppositeReclaim?42.0:0.0)+(d.oppositeRetestHeld?25.0:0.0)+(failedExtremes*8.0));
 
    // H. Remaining reward is room to the rolling extreme, normalized by the
@@ -10807,44 +10738,32 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    }
    else if(rawExhaustion>=g_transitionPersistentExhaustion)
       g_transitionPersistentExhaustion=rawExhaustion;
-   else if(realContinuationReset && m5EvidenceAdvanced)
+   else if(realContinuationReset)
       g_transitionPersistentExhaustion=MathMax(rawExhaustion,g_transitionPersistentExhaustion-10.0);
    d.exhaustionProbability=XAU_ATClamp(g_transitionPersistentExhaustion);
    if(d.exhaustionProbability>=70.0)
       d.continuationConfidence=MathMin(d.continuationConfidence,45.0);
    if(d.exhaustionProbability>=70.0 && counterOpposite>0.0)
       d.continuationConfidence=MathMin(d.continuationConfidence,InpTransitionOldConfidenceCap);
-   // The M1 bridge has no lifecycle authority in a healthy/maturing trend.
-   // It becomes usable only after the centralized campaign model has already
-   // established the mandatory >=70 high-exhaustion regime.
-   bool microBridgeActive=d.exhaustionProbability>=InpTransitionExhaustThreshold;
-   if(microBridgeActive) structureOpposite=MathMax(structureOpposite,microStructure);
    d.transitionProbability = XAU_ATClamp(d.exhaustionProbability*0.38 + structureOpposite*0.30 + oppositeMomentum*0.12 + counterOpposite*0.12 + MathMin(18.0,failedExtremes*6.0));
    if(oldDirectionFailureActive && d.exhaustionProbability>=70.0)
       d.transitionProbability=XAU_ATClamp(d.transitionProbability+10.0);
    if(d.exhaustionProbability>=70.0) d.transitionProbability=XAU_ATClamp(d.transitionProbability+12.0);
    if(d.exhaustionProbability>=80.0) d.transitionProbability=XAU_ATClamp(d.transitionProbability+8.0);
-   bool effectiveReclaim=d.oppositeReclaim || (microBridgeActive && d.oppositeMicroSweepReclaim);
-   bool effectiveRetest=d.oppositeRetestHeld || (microBridgeActive && d.oppositeMicroRetestHeld);
-   bool effectiveDisplacement=d.oppositeDisplacement || (microBridgeActive && d.oppositeMicroDisplacement);
-   d.reversalProbability = XAU_ATClamp(d.transitionProbability*0.55 + (effectiveReclaim?15.0:0.0) + (effectiveRetest?12.0:0.0) + (effectiveDisplacement?12.0:0.0));
+   d.reversalProbability = XAU_ATClamp(d.transitionProbability*0.55 + (d.oppositeReclaim?15.0:0.0) + (d.oppositeRetestHeld?12.0:0.0) + (d.oppositeDisplacement?12.0:0.0));
    d.trendHealth = XAU_ATClamp(d.continuationConfidence - d.exhaustionProbability*0.35);
    d.buyConfidence = dir==1 ? d.continuationConfidence : d.reversalProbability;
    d.sellConfidence = dir==-1 ? d.continuationConfidence : d.reversalProbability;
 
    bool mature = d.trendMaturity >= InpTransitionMatureThreshold || d.exhaustionProbability>=60.0;
    bool exhausting = d.exhaustionProbability >= InpTransitionExhaustThreshold;
-   int effectivePersistence=microBridgeActive?MathMax(oppositePersistence,d.oppositeMicroPersistence):oppositePersistence;
-   bool transitionReady = d.transitionProbability >= InpTransitionProbabilityThreshold && effectivePersistence >= 2;
+   bool transitionReady = d.transitionProbability >= InpTransitionProbabilityThreshold && oppositePersistence >= 2;
    bool compactReversalPackage = failedExtremes>=2 && d.oppositeReclaim &&
                                  (d.oppositeRetestHeld || d.oppositeDisplacement) &&
                                  oppositePersistence>=2;
    bool fullReversalPackage = compactReversalPackage && d.oppositeRetestHeld &&
                               d.oppositeDisplacement &&
                               oppositePersistence>=InpTransitionPersistenceBars;
-   bool earlyMicroReversalPackage = failedExtremes>=2 && d.oppositeMicroSweepReclaim &&
-                                    (d.oppositeMicroRetestHeld || d.oppositeMicroDisplacement) &&
-                                    d.oppositeMicroPersistence>=InpTransitionMicroPersistenceBars;
 
    // Persistent reversal-opportunity lifecycle.  The first high-exhaustion
    // detection owns the origin and acceptable-price zone; later bars may
@@ -10872,7 +10791,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
       int trackedDir=g_reversalOpportunity.direction;
       if(trackedDir==1) g_reversalOpportunity.impulsePeak=MathMax(g_reversalOpportunity.impulsePeak,c1);
       else g_reversalOpportunity.impulsePeak=MathMin(g_reversalOpportunity.impulsePeak,c1);
-      if(trackedDir==opportunityDir && effectiveReclaim && g_reversalOpportunity.reclaimPrice<=0.0)
+      if(trackedDir==opportunityDir && d.oppositeReclaim && g_reversalOpportunity.reclaimPrice<=0.0)
       {
          g_reversalOpportunity.reclaimPrice=c1;
          g_reversalOpportunity.state=REVERSAL_EARLY_RECLAIM_DETECTED;
@@ -10932,22 +10851,15 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
       }
       else d.entryDecision="REVERSAL_FORMING_NOT_READY";
    }
-   bool microPackageAuthorized = earlyMicroReversalPackage &&
-                                 (d.exhaustionProbability>=90.0 ||
-                                  (d.exhaustionProbability>=InpTransitionPreferredOppositeAt &&
-                                   (d.oppositeMicroRetestHeld || counterOpposite>=20.0)));
-   bool reversalEvidencePassed = d.exhaustionProbability>=90.0 ?
-                                 (compactReversalPackage || microPackageAuthorized) :
-                                 (fullReversalPackage || microPackageAuthorized);
    bool reversalReady = d.exhaustionProbability>=InpTransitionPreferredOppositeAt &&
                         g_reversalOpportunity.active && g_reversalOpportunity.direction==opportunityDir &&
                         d.reversalProbability>=InpTransitionReversalThreshold &&
-                        reversalEvidencePassed &&
+                        (d.exhaustionProbability>=90.0?compactReversalPackage:fullReversalPackage) &&
                         d.oppositeRemainingRewardR>=InpTransitionMinRewardR &&
                         d.reversalLocationGood;
    ENUM_XAU_MARKET_LIFECYCLE rawState = TREND_HEALTHY;
    if(reversalReady) rawState=OPPOSITE_DIRECTION_CONFIRMED;
-   else if(transitionReady && effectiveReclaim) rawState=OPPOSITE_DIRECTION_FORMING;
+   else if(transitionReady && d.oppositeReclaim) rawState=OPPOSITE_DIRECTION_FORMING;
    else if(transitionReady) rawState=TRANSITION_NEUTRAL;
    else if(exhausting) rawState=TREND_EXHAUSTING;
    else if(mature) rawState=TREND_MATURE;
@@ -10956,14 +10868,11 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
 
    // Hysteresis classifies lifecycle labels; it never weakens the hard >=70
    // entry invariant. Only realContinuationReset can decay exhaustion.
-   if(m5EvidenceAdvanced)
-   {
-      if((int)rawState != g_transitionCandidateState)
-      { g_transitionCandidateState=(int)rawState; g_transitionCandidateBars=1; }
-      else g_transitionCandidateBars++;
-   }
+   if((int)rawState != g_transitionCandidateState)
+   { g_transitionCandidateState=(int)rawState; g_transitionCandidateBars=1; }
+   else g_transitionCandidateBars++;
    int needed = (rawState>=TREND_EXHAUSTING) ? MathMax(2,InpTransitionPersistenceBars) : 2;
-   if(reversalReady || g_transitionDecision.evaluatedBar<=0 || g_transitionCandidateBars>=needed)
+   if(g_transitionLastComputedBar==0 || g_transitionCandidateBars>=needed)
       d.lifecycle=rawState;
    else
       d.lifecycle=g_transitionDecision.lifecycle;
@@ -10987,14 +10896,11 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    if(d.lifecycle==TREND_EXHAUSTING || d.lifecycle==TRANSITION_NEUTRAL || d.lifecycle==OPPOSITE_DIRECTION_FORMING) oldAction=TRANSITION_TIGHTEN_PROTECTION;
    if(d.lifecycle==OPPOSITE_DIRECTION_CONFIRMED) oldAction=TRANSITION_WAIT_FOR_OPPOSITE_SETUP;
    if(dir==1) d.existingBuyAction=oldAction; else d.existingSellAction=oldAction;
-   d.reason=StringFormat("travel=%.2fATR rangeConsumed=%.0f continuation=%.0f absorption=%.0f oppositeMomentum=%.0f failedExtremes=%d reclaim=%s retest=%s displacement=%s microSweepReclaim=%s microRetest=%s microDisplacement=%s microPersistence=%d microBar=%s counter=%.0f oldDirectionFailure=%s oldRemainingReward=%.2fR oppositeRemainingReward=%.2fR valueDistance=%.2fATR impulseExtension=%.2fATR consumed=%.0f%% locationQuality=%.0f entryDecision=%s opportunityId=%s opportunityState=%s persistence=%d",
+   d.reason=StringFormat("travel=%.2fATR rangeConsumed=%.0f continuation=%.0f absorption=%.0f oppositeMomentum=%.0f failedExtremes=%d reclaim=%s retest=%s displacement=%s counter=%.0f oldDirectionFailure=%s oldRemainingReward=%.2fR oppositeRemainingReward=%.2fR valueDistance=%.2fATR impulseExtension=%.2fATR consumed=%.0f%% locationQuality=%.0f entryDecision=%s opportunityId=%s opportunityState=%s persistence=%d",
                          d.distanceTravelledATR,d.sessionRangeConsumed,d.continuationConfidence,absorption,oppositeMomentum,failedExtremes,
-                         d.oppositeReclaim?"Y":"N",d.oppositeRetestHeld?"Y":"N",d.oppositeDisplacement?"Y":"N",
-                         d.oppositeMicroSweepReclaim?"Y":"N",d.oppositeMicroRetestHeld?"Y":"N",d.oppositeMicroDisplacement?"Y":"N",d.oppositeMicroPersistence,TimeToString(microBar,TIME_DATE|TIME_MINUTES),
-                         d.counterEvidence,oldDirectionFailureActive?"Y":"N",d.remainingRewardR,d.oppositeRemainingRewardR,d.distanceFromValueATR,d.impulseExtensionATR,d.moveAlreadyConsumedPct,d.entryLocationQuality,d.entryDecision,XAU_ATReversalOpportunityId(),XAU_ATReversalStateName(g_reversalOpportunity.state),oppositePersistence);
+                         d.oppositeReclaim?"Y":"N",d.oppositeRetestHeld?"Y":"N",d.oppositeDisplacement?"Y":"N",d.counterEvidence,oldDirectionFailureActive?"Y":"N",d.remainingRewardR,d.oppositeRemainingRewardR,d.distanceFromValueATR,d.impulseExtensionATR,d.moveAlreadyConsumedPct,d.entryLocationQuality,d.entryDecision,XAU_ATReversalOpportunityId(),XAU_ATReversalStateName(g_reversalOpportunity.state),oppositePersistence);
    g_transitionDecision=d;
    g_transitionLastComputedBar=bar;
-   g_transitionLastComputedMicroBar=microBar;
    XAU_ATSavePersistentState();
    PrintFormat("[MARKET_LIFECYCLE] state=%s trendDirection=%s trendHealth=%.0f maturity=%.0f continuationConfidence=%.0f transitionProbability=%.0f reversalProbability=%.0f",
                XAU_ATLifecycleName(d.lifecycle),dir==1?"BUY":"SELL",d.trendHealth,d.trendMaturity,d.continuationConfidence,d.transitionProbability,d.reversalProbability);
@@ -34249,26 +34155,6 @@ string XAUAI_InputHash()
                      InpCrossInstanceEntryLockEnable ? 1 : 0,
                      InpCrossInstanceEntryLockSec,
                      InpExitArmMinOwnR);
-   s += StringFormat("transition=%d,%d,%.1f,%.1f,%.1f,%.1f,%.2f,%.1f,%d,%.1f,%d,%d,%.2f,%.2f,%.2f,%.2f,%d,%.2f,%.2f|",
-                     (int)InpAdaptiveTransitionMode,
-                     InpTransitionPersistenceBars,
-                     InpTransitionMatureThreshold,
-                     InpTransitionExhaustThreshold,
-                     InpTransitionProbabilityThreshold,
-                     InpTransitionReversalThreshold,
-                     InpTransitionMinRewardR,
-                     InpTransitionPreferredOppositeAt,
-                     InpTransitionFastConfirmSeconds,
-                     InpTransitionOldConfidenceCap,
-                     InpTransitionCounterDecayMinutes,
-                     InpTransitionActiveExitAuthority ? 1 : 0,
-                     InpTransitionMaxOriginExtensionATR,
-                     InpTransitionMaxValueDistanceATR,
-                     InpTransitionMaxConsumedPct,
-                     InpTransitionPullbackResetATR,
-                     InpTransitionMicroPersistenceBars,
-                     InpTransitionMicroDisplacementATR,
-                     InpTransitionMicroSweepBufferATR);
    s += StringFormat("symbol=%s|tf=M5|digits=%d|point=%s",
                      Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
                      DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), 8));
