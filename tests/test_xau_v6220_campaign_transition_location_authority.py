@@ -76,7 +76,7 @@ def persistent_exhaustion(previous: float, raw: float, *, real_reset: bool) -> f
 
 def test_build_identity_and_shadow_default_are_explicit():
     text = source()
-    assert '#define XAUAI_BUILD_HASH "v6220-campaign-transition-location-authority-20260714"' in text
+    assert '#define XAUAI_BUILD_HASH "v6220-campaign-manual-micro-transition-20260714"' in text
     assert "InpCampaignTransitionMode = CAMPAIGN_TRANSITION_SHADOW" in text
     assert "CAMPAIGN_TRANSITION_OFF" in text and "CAMPAIGN_TRANSITION_ACTIVE" in text
 
@@ -156,6 +156,46 @@ def test_one_wick_cannot_satisfy_reversal_package_static():
     assert "failedExtremes>=2 && d.oppositeReclaim" in fn
     assert "d.oppositeRetestHeld || d.oppositeDisplacement" in fn
     assert "oppositePersistence>=2" in fn
+
+
+def test_closed_m1_bridge_requires_high_exhaustion_and_compact_package():
+    fn = body(source(), "XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()")
+    assert "bool microBridgeActive=d.exhaustionProbability>=InpCampaignTransitionExhaustAt" in fn
+    assert "earlyMicroPackage=failedExtremes>=2 && d.oppositeMicroSweepReclaim" in fn
+    assert "d.oppositeMicroRetestHeld || d.oppositeMicroDisplacement" in fn
+    assert "d.oppositeMicroPersistence>=InpCampaignTransitionMicroPersistence" in fn
+    assert "d.exhaustionProbability>=90.0" in fn
+    assert "d.oppositeMicroRetestHeld" in fn
+
+
+def test_m1_recompute_cannot_age_m5_hysteresis_or_decay_exhaustion():
+    fn = body(source(), "XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()")
+    assert "else if(realContinuationReset && m5EvidenceAdvanced)" in fn
+    candidate = fn[fn.index("if(m5EvidenceAdvanced)") : fn.index("bool authoritativeExhaustion")]
+    assert "g_campaignTransitionCandidateBars++" in candidate
+
+
+def test_campaign_hold_manager_is_not_replaced_by_micro_bridge():
+    text = source()
+    fn = body(text, "bool XAU_Campaign_ApplyTransitionPositionAuthority(int idx, double currentR, string classification)")
+    assert "d.oppositeEntryAllowed" in fn
+    assert "XAU_Campaign_Finalize" in fn
+    assert "trade.PositionClose" not in fn
+    assert "XAU_RExit_RequestClose" not in fn
+
+
+def test_micro_configuration_is_validated_logged_and_build_identifying():
+    text = source()
+    validate = body(text, "bool XAU_ValidateMaturityConfig()")
+    input_hash = body(text, "string XAUAI_InputHash()")
+    for name in (
+        "InpCampaignTransitionMicroPersistence",
+        "InpCampaignTransitionMicroDisplaceATR",
+        "InpCampaignTransitionMicroSweepATR",
+    ):
+        assert name in validate
+        assert name in input_hash
+    assert "microPersistence=%d" in text
 
 
 def test_high_exhaustion_cannot_decay_from_elapsed_bars():

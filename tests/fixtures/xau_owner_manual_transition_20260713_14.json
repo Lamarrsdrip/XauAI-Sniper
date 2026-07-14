@@ -1,0 +1,27 @@
+{
+  "schema": "anonymized_owner_manual_campaign_v1",
+  "window": {"start": "2026-07-13T13:00:00+01:00", "end": "2026-07-14T11:15:00+01:00", "timezone": "Africa/Lagos", "symbol": "XAUUSD", "mode": "hedging"},
+  "capital": {"inferred_start": 1461.58, "closed_net": 1725.11, "ending_balance": 3186.69, "observed_open_equity": 3687.49, "starting_value_is_inferred": true},
+  "closed": [
+    {"open": "2026-07-13T13:04:13+01:00", "close": "2026-07-13T14:05:53+01:00", "side": "SELL", "lot": 0.10, "entry": 4069.34, "exit": 4065.96, "gross": 33.80, "swap": 0.00},
+    {"open": "2026-07-13T13:04:14+01:00", "close": "2026-07-13T13:41:16+01:00", "side": "SELL", "lot": 0.10, "entry": 4069.51, "exit": 4061.00, "gross": 85.10, "swap": 0.00},
+    {"open": "2026-07-13T13:04:15+01:00", "close": "2026-07-13T13:41:53+01:00", "side": "SELL", "lot": 0.10, "entry": 4069.42, "exit": 4057.00, "gross": 124.20, "swap": 0.00},
+    {"open": "2026-07-13T13:07:03+01:00", "close": "2026-07-13T13:41:12+01:00", "side": "SELL", "lot": 0.05, "entry": 4069.35, "exit": 4064.00, "gross": 26.75, "swap": 0.00},
+    {"open": "2026-07-13T16:37:43+01:00", "close": "2026-07-13T19:31:31+01:00", "side": "SELL", "lot": 0.10, "entry": 4059.91, "exit": 4002.51, "gross": 574.00, "swap": 0.00},
+    {"open": "2026-07-13T16:37:44+01:00", "close": "2026-07-13T17:06:32+01:00", "side": "SELL", "lot": 0.10, "entry": 4059.92, "exit": 4035.00, "gross": 249.20, "swap": 0.00},
+    {"open": "2026-07-13T19:31:41+01:00", "close": "2026-07-14T11:10:35+01:00", "side": "BUY", "lot": 0.10, "entry": 4003.94, "exit": 4017.23, "gross": 132.90, "swap": -1.26},
+    {"open": "2026-07-13T19:31:42+01:00", "close": "2026-07-14T11:10:35+01:00", "side": "BUY", "lot": 0.10, "entry": 4004.05, "exit": 4017.23, "gross": 131.80, "swap": -1.26},
+    {"open": "2026-07-13T19:31:42+01:00", "close": "2026-07-14T11:10:35+01:00", "side": "BUY", "lot": 0.10, "entry": 4004.06, "exit": 4017.25, "gross": 131.90, "swap": -1.26},
+    {"open": "2026-07-13T19:34:31+01:00", "close": "2026-07-14T11:10:35+01:00", "side": "BUY", "lot": 0.10, "entry": 3993.20, "exit": 4017.25, "gross": 240.50, "swap": -1.26}
+  ],
+  "sequence": [
+    {"stage": "healthy_sell_4069", "owner": "SELL", "exhaustion": 42, "failed_extremes": 0, "sweep": false, "retest": false, "displacement": false, "persistence": 1, "reward_r": 3.2, "location_good": true, "consumed_pct": 28, "expected": "OLD_ALLOWED"},
+    {"stage": "healthy_sell_4059", "owner": "SELL", "exhaustion": 58, "failed_extremes": 1, "sweep": false, "retest": false, "displacement": false, "persistence": 1, "reward_r": 2.3, "location_good": true, "consumed_pct": 48, "expected": "OLD_ALLOWED"},
+    {"stage": "high_exhaustion_search", "owner": "STOP_SELL_SEARCH_BUY", "exhaustion": 86, "failed_extremes": 3, "sweep": false, "retest": false, "displacement": false, "persistence": 1, "reward_r": 2.6, "location_good": true, "consumed_pct": 18, "expected": "BLOCK_OLD_WAIT"},
+    {"stage": "single_sweep_wick", "owner": "WAIT", "exhaustion": 88, "failed_extremes": 3, "sweep": true, "retest": false, "displacement": false, "persistence": 1, "reward_r": 2.8, "location_good": true, "consumed_pct": 12, "expected": "BLOCK_OLD_WAIT"},
+    {"stage": "first_reclaim_4004", "owner": "BUY", "exhaustion": 88, "failed_extremes": 3, "sweep": true, "retest": true, "displacement": true, "persistence": 3, "reward_r": 1.9, "location_good": false, "consumed_pct": 76, "expected": "WAIT_PULLBACK"},
+    {"stage": "value_retest_3993", "owner": "BUY", "exhaustion": 88, "failed_extremes": 3, "sweep": true, "retest": true, "displacement": true, "persistence": 3, "reward_r": 2.5, "location_good": true, "consumed_pct": 46, "expected": "OPPOSITE_ALLOWED"},
+    {"stage": "developing_buy_pullback", "owner": "HOLD_BUY", "exhaustion": 38, "failed_extremes": 0, "sweep": false, "retest": false, "displacement": false, "persistence": 1, "reward_r": 1.8, "location_good": true, "consumed_pct": 55, "expected": "OLD_ALLOWED"}
+  ],
+  "limitations": ["Historical M1 OHLC export was unavailable; microstructure labels are high-confidence chart reconstruction.", "Open SELL positions were unresolved at snapshot time.", "Visible missing stops in manual evidence are not copied into automated safety logic."]
+}
