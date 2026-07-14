@@ -1,4 +1,4 @@
-# XAU AI Sniper v6.23.1 — Production Transition/Reversal Forensic Report
+# XAU AI Sniper v6.23.1 — Production Transition, Reversal, and Entry-Location Forensic Report
 
 Date: 2026-07-14  
 Repair branch: `audit/production-transition-reversal-forensic-repair`  
@@ -74,6 +74,17 @@ Fields not present in broker history or the retained logs are marked `not record
 6. At the first bad SELL scan, HTF and regime bonuses produced an A+ TREND_PULLBACK. The final direction-quality guard reported SELL edge 77, BUY edge 0, exhaustion 24, reversal 17.
 7. At the second bad SELL scan, the engine called rising/mixed structure a normal pullback. Entry timing reported setup/timing 100/100 and exhaustion 0 despite the prior 86% reading, the successful Counter BUY, and the first full SELL SL.
 
+### Urgent live addendum: right direction, wrong location
+
+The 2026-07-14 VPS logs were re-copied after the owner reported two newer BUYs. The terminal and Experts logs prove the following; broker-history and terminal log clocks differ, so both are retained where available.
+
+| Trade | Proven source and first detection | Execution | Location evidence present at approval | Result and corrected decision |
+|---|---|---|---|---|
+| BUY 0.27 at 4027.886 | Counter-Excursion, not a normal BUY. At terminal 09:10:47, normal A-grade HTF SELL was blocked with 74% exhaustion; Counter BUY score 4/2 executed immediately. | 0-second Counter delay; SL 4023.705, TP 4029.977 | The old engine had no persistent reversal origin/value zone and classified Counter overextension false. | +$56.46 at broker TP. Under v6.23.1 this same first reversal opportunity is checked for origin extension, value distance, consumed leg, and remaining reward; if already extended it waits for pullback. |
+| BUY 0.84 at 4028.551 | Normal PRIMARY `TREND_PULLBACK` BUY. First normal BUY candidate at terminal 09:26:29, price 4028.54. | 162-second normal delay; requested 4028.595, broker fill 4028.551; SL 4019.553, TP 4087.368. Price worsened only 0.05, so the delay itself was not the main loss cause. | Its own log said `value=no`, `badLoc=yes`, expansion origin 2.19 ATR, local position 74%, extension risk 51/100, effective RR quality 50/100, only 1.56 ATR local room. Momentum/SmartGuard overrides nevertheless admitted it at full risk. | -$755.83 at broker SL. Corrected decision: `REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK`; the earlier Counter entry also marks the same impulse consumed, preventing a second worse-price BUY without value reset. |
+
+The owner-provided “BUY opened 08:02:53” timestamp is the broker-history close time; terminal evidence proves the 0.84 normal BUY opened at terminal 09:29:12 and closed at terminal 10:02:53. This correction does not change the complaint: direction was bullish, but entry value was poor.
+
 ## F–M. Proven causes and severity
 
 ### Critical
@@ -89,17 +100,19 @@ Fields not present in broker history or the retained logs are marked `not record
 6. **HTF/regime bonuses overpowered local transition.** A +2.5 HTF bonus helped turn mature/late SELL candidates into A+ entries.
 7. **Timing revalidated stale direction, not lifecycle.** The first delay worsened price, but even an instant entry still modeled a large loss; direction was the primary error. The second delay was neutral.
 8. **Independent quality subsystems contradicted each other.** One measured 86% exhaustion; a later entry path measured 0 and had authority to trade.
+9. **Direction and entry location were conflated.** The losing BUY was approved even while the same audit record explicitly said `value=no`, `badLoc=yes`, 2.19 ATR extension, and weak local room.
+10. **Reversal opportunity identity did not persist.** Counter bought the first bullish impulse, closed profitably, then the normal system treated a slightly worse-price BUY five minutes later as a fresh opportunity.
 
 ### Medium
 
-9. **Counter 0.5R hard target capped reversal capture.** This close was intentional and correct under the configured Counter rules; the defect was discarding its evidence afterward.
-10. **AI had no corrective authority and did not independently solve the transition.** This is by design and is not the primary cause.
-11. **TradeBrain did not directly cause the entries, but it also had no transition campaign context capable of vetoing them.**
+11. **Counter 0.5R hard target capped reversal capture.** This close was intentional and correct under the configured Counter rules; the defects were discarding its evidence and not marking the first impulse consumed.
+12. **AI had no corrective authority and did not independently solve the transition.** This is by design and is not the primary cause.
+13. **TradeBrain did not directly cause the entries, but it also had no transition campaign context capable of vetoing them.**
 
 ### Low / not causal
 
-12. Indicator-recovery noise exists in logs but did not create the two proven v6.23.0 SELL entries.
-13. No duplicate terminal/EA instance was found.
+14. Indicator-recovery noise exists in logs but did not create the proven entries.
+15. No duplicate terminal/EA instance was found.
 
 ## N–P. Architecture, final ownership, functions and line references
 
@@ -109,15 +122,15 @@ The repair is one centralized authority, not a stack of unrelated indicators.
 |---|---|
 | `ENUM_ADAPTIVE_TRANSITION_MODE` — line 1820 | OFF / SHADOW / ACTIVE; default SHADOW |
 | `XAU_ResolveOrReleaseTransitionWait` — line 10122 | Time/bar-count release removed; remains waiting until market proof changes state |
-| `XAU_RecordCounterTransitionEvidence` — line 10445 | Bounded signed Counter evidence with time decay and outcome/MFE/MAE inputs |
-| `XAU_AdaptiveMarketTransitionEngine` — line 10481 | Central closed-bar lifecycle, travel, maturity, continuation, absorption, structure, momentum, reward, Counter bridge, persistence, and evidence-only exhaustion decay |
-| `XAU_FinalAdaptiveDirectionDecision` — line 10685 | Final direction choke and 60/70/80 invariants |
-| `CheckPyramidOpportunity` call — line 11731 | Direct-send pyramid path obeys the same authority |
-| Reversal candidate creation — line 14189 | ACTIVE-only fresh `ADAPTIVE_REVERSAL_RECLAIM`; SHADOW logs only |
-| `OpenTrade` call — line 17053 | PRIMARY / RE_ENTRY / RECOVERY / future RETRY final fail-safe |
-| `XAU_ApplyTransitionPositionAuthority` — line 21678 | Existing-position recommendation/authority consumed inside sole R close owner |
-| `XAU_EffectiveAdaptiveEntryDelaySeconds` — line 27627 | 30-second default bounded fast confirm only after 80%+ compact reversal package; ordinary continuation remains 120–180 seconds |
-| `XAU_FinalizeCounterTransitionEvidence` — line 28305 | Feeds executed Counter outcome back once, including broker TP/SL/external disappearance |
+| `XAU_RecordCounterTransitionEvidence` — line 10564 | Bounded signed Counter evidence with time decay and outcome/MFE/MAE inputs; invalidates same-bar lifecycle cache |
+| `XAU_AdaptiveMarketTransitionEngine` — line 10605 | Central lifecycle plus distinct old-direction reward, opposite reward, location quality, value distance, impulse extension, and consumed-move percentage |
+| `XAU_FinalAdaptiveDirectionDecision` — line 10918 | Final direction-and-location choke; all normal/re-entry/recovery/retry sources converge here |
+| `CheckPyramidOpportunity` call — line 11986 | Direct-send pyramid path obeys the same authority |
+| Reversal candidate execution lane — line 14469 | ACTIVE-only dedicated reversal path; retains account/news/spread/risk/geometry/anti-chase safety while legacy trend opinions become observation-only |
+| `OpenTrade` call — line 17405 | Final execution fail-safe and opportunity-consumption record for normal orders |
+| `XAU_ApplyTransitionPositionAuthority` — line 22036 | Existing-position recommendation/authority consumed inside sole R close owner |
+| `XAU_EffectiveAdaptiveEntryDelaySeconds` — line 27985 | 30-second default bounded fast confirm only after direction, reversal package, reward, and location pass |
+| Counter location audit — line 29220 | Counter stays separate-magic/isolated but may not chase a consumed adaptive reversal opportunity in ACTIVE mode |
 
 Final authority record:
 
@@ -132,13 +145,17 @@ Hard invariants:
 - 90%+: compact package may approve sooner, still never from exhaustion alone or one wick.
 - High exhaustion cannot decay because bars elapsed. It decays by at most ten points per closed bar only after fresh extreme progress, strong continuation quality, weak opposite momentum, few failures, and acceptable remaining reward.
 - A successful opposite Counter during high exhaustion caps old-direction confidence and adds bounded, decaying transition evidence.
+- Direction confidence and entry-location quality are independent. A correct direction can resolve to `WAIT_FOR_PULLBACK`.
+- Reversal origin, first detection, reclaim, latest acceptable price, impulse peak, expected pullback, entry consumption, state, and opportunity ID persist across restart.
+- The same reversal impulse cannot be recreated at progressively worse prices by PRIMARY or Counter. A new entry requires at least a 0.75 ATR pullback to value with sufficient remaining reward.
 
 ## Q–R. Tests, scenario replay, and backtest limits
 
-- Targeted transition and incident suite: 24 passed.
-- Focused production/release suite: 133 passed.
+- Targeted transition, incident, direction/location, identity, and compatibility suite: 52 passed.
+- The direction/location subset includes 17 deterministic tests for bad-location blocking, persistent opportunity identity, value reset, same-impulse reuse, Counter location, four-trade replay, and symmetry.
 - Baseline historical `tests/`: 208 failed, 789 passed.
-- Repaired historical `tests/`: 208 failed, 813 passed after updating two obsolete assertions that explicitly required the removed bypasses. Failure set otherwise equals baseline.
+- Pre-addendum v6.23.1 comparison point: 208 failed, 813 passed.
+- Final historical `tests/`: 208 failed, 838 passed. The failure-name set is unchanged from the pre-repair comparison; the remaining failures are historical version-pinned fixtures, not new implementation regressions.
 - Full repository collection including `backend/tests` cannot collect in this worktree because a pre-existing test unconditionally opens `/app/frontend/.env`; this is an environment fixture failure, not an EA test failure.
 - Backend Python syntax: passed.
 - Frontend production build: not run because `frontend/node_modules` is absent in the isolated worktree.
@@ -153,6 +170,8 @@ Actual-incident fixture: `tests/fixtures/xau_vps_transition_incident_20260713_14
 | SELL 3997.631 | A+ SELL, allowed | BLOCK SELL at final choke and cancel stale timing identity |
 | Reclaim/retest/displacement package | Wait for slow trend or keep SELL bias | Fresh BUY candidate, short bounded confirmation, anti-chase revalidation |
 | SELL 4015.021 | A+ SELL, allowed | BLOCK SELL; cannot reopen through HTF, recovery, re-entry, retry, or pyramid |
+| Counter BUY 4027.886 | Immediate separate-magic BUY, then 0.5R TP | If first reversal leg is already extended/low-reward, WAIT_FOR_BUY_PULLBACK; otherwise one allowed entry consumes this opportunity |
+| Normal BUY 4028.551 | A-grade BUY admitted despite `value=no`, `badLoc=yes` | BLOCK immediate execution: same impulse already used, 2.19 ATR extension, poor value, insufficient local reward; monitor for value reset |
 
 This is a deterministic decision replay over proven logged incident states, not a tick-accurate Strategy Tester backtest. Complete broker tick data and an exported MT5 Strategy Tester dataset were not present, so no claim of simulated P/L is made.
 
@@ -161,10 +180,11 @@ This is a deterministic decision replay over proven logged incident states, not 
 ### Compile
 
 - Exact final source: 0 errors, 0 warnings.
-- Source SHA-256: `0a7bd8371dfa6508b7045ce4f64dbab4a9133a9ca66a55ee415e844ebc1aa18f`.
-- EX5 SHA-256: `9b84beb9d72cc777987bafc24099c52d3e474fb10a3489c7a16a5219c7a30870`.
-- EX5 size: 1,372,438 bytes.
-- Compile log: `compile_logs/v6231_adaptive_transition_authority.log`.
+- Source SHA-256: `d136f57e822807ba16475f7d18c095b383128faf3e67aba8f69c0270b9e3408f`.
+- Backend mirror SHA-256: `d136f57e822807ba16475f7d18c095b383128faf3e67aba8f69c0270b9e3408f`.
+- EX5 SHA-256: `40ccc62dab9ea1449db8fa156df0a4105f47cfcef0d73500331337eef9b33979`.
+- EX5 size: 1,390,538 bytes.
+- Compile log: `compile_logs/v6231_final_authority_audit.log`.
 
 ### Branch/commit
 
@@ -200,6 +220,7 @@ No live shadow evidence exists yet because the owner has not deployed/attached v
 - Thresholds are deterministic and incident-tested but not yet calibrated on several days of live SHADOW evidence.
 - No tick-accurate Strategy Tester replay was possible without broker ticks/tester export.
 - Fast reversal timing, transition exits, and the Counter evidence bridge compile and pass deterministic tests but have not executed on a live market.
+- Reversal opportunity origin/value persistence and same-impulse location authority are deterministic and incident-tested but have not yet produced live SHADOW telemetry.
 - No claim is made that v6.23.1 would realize the manual account's exact BUY entries or P/L.
 - SHADOW should be reviewed for false exhaustion blocks, missed continuations, reversal timing, and frequency before switching to ACTIVE.
 - ACTIVE must be enabled explicitly; the shipped default is SHADOW.

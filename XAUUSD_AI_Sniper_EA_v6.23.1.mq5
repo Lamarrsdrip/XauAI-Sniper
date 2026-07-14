@@ -1,14 +1,15 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.23.1 - Adaptive Transition Authority                         |
+//|   v6.23.1 - Adaptive Transition + Entry-Location Authority        |
 //|   One lifecycle engine now separates historical trend, trend      |
 //|   health, exhaustion, remaining reward, transition, and reversal. |
 //|   At 70% exhaustion every autonomous old-direction entry path is  |
 //|   blocked; at 80% a compact closed-bar reclaim/retest package may  |
 //|   create a prompt opposite candidate before slow HTF crossover.   |
-//|   Counter outcomes feed bounded decaying evidence, and only real  |
-//|   continuation proof can decay remembered high exhaustion.        |
+//|   Counter outcomes feed bounded decaying evidence; reversal origin |
+//|   and value zones prevent a correct direction becoming a late     |
+//|   chase, while real pullback/reset proof reopens the opportunity.  |
 //+------------------------------------------------------------------+
 //|   v6.21.3 - Full-Risk Binary Mode + Isolated COUNTER_EXCURSION       |
 //|   Forensic repair of the 0.01-lot regression: OpenTrade no longer     |
@@ -1786,7 +1787,7 @@
 
 #define XAUAI_EA_VERSION "v6.23.1"
 #define XAUAI_EA_VERSION_NUM "6.23.1"
-#define XAUAI_BUILD_HASH "v6231-adaptive-transition-authority-20260714"
+#define XAUAI_BUILD_HASH "v6231-adaptive-transition-location-authority-20260714"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -1835,6 +1836,10 @@ input int    InpTransitionFastConfirmSeconds    = 30;     // dedicated high-exha
 input double InpTransitionOldConfidenceCap      = 35.0;   // successful opposite counter evidence during high exhaustion caps old confidence
 input int    InpTransitionCounterDecayMinutes   = 120;   // successful counter evidence fades; it cannot remain permanently bullish/bearish
 input bool   InpTransitionActiveExitAuthority   = true;  // when ACTIVE, R manager remains sole broker-close owner and consumes transition recommendations
+input double InpTransitionMaxOriginExtensionATR = 2.00;  // first reversal leg beyond this is consumed; wait for value reset instead of chasing
+input double InpTransitionMaxValueDistanceATR   = 1.00;  // correct direction is not enough when price is too far from local value
+input double InpTransitionMaxConsumedPct        = 70.0;  // percentage of origin-to-next-obstacle leg already consumed
+input double InpTransitionPullbackResetATR       = 0.75;  // evidence-based pullback from impulse peak required before same-opportunity re-entry
 
 input group "=== AI AUTHORITY MODE (June 17-18 reconstruction) ==="
 // Restores the pre-v6.3.0 hierarchy: strategy + structure decide, AI advises/filters.
@@ -3345,6 +3350,11 @@ struct XAU_AdaptiveTransitionDecision
    double trendMaturity;
    double trendHealth;
    double remainingRewardR;
+   double oppositeRemainingRewardR;
+   double entryLocationQuality;
+   double moveAlreadyConsumedPct;
+   double distanceFromValueATR;
+   double impulseExtensionATR;
    double distanceTravelledATR;
    double sessionRangeConsumed;
    double counterEvidence;
@@ -3356,12 +3366,15 @@ struct XAU_AdaptiveTransitionDecision
    bool continuationEntryPaused;
    bool oppositeEntryPreparing;
    bool oppositeEntryAllowed;
+   bool reversalLocationGood;
+   bool reversalWaitForPullback;
    bool freshBuyAllowed;
    bool freshSellAllowed;
    ENUM_XAU_MARKET_LIFECYCLE lifecycle;
    ENUM_XAU_TRANSITION_POSITION_ACTION existingBuyAction;
    ENUM_XAU_TRANSITION_POSITION_ACTION existingSellAction;
    string reason;
+   string entryDecision;
 };
 XAU_AdaptiveTransitionDecision g_transitionDecision;
 int      g_transitionCandidateState = -1;
@@ -3372,6 +3385,37 @@ datetime g_counterTransitionEvidenceAt = 0;
 bool     g_counterTransitionEvidenceLoaded = false;
 double   g_transitionPersistentExhaustion = 0.0;
 int      g_transitionPersistentDirection = 0;
+
+enum ENUM_XAU_REVERSAL_OPPORTUNITY_STATE
+{
+   REVERSAL_OPPORTUNITY_NONE=0,
+   REVERSAL_WATCH_CREATED=1,
+   REVERSAL_EARLY_RECLAIM_DETECTED=2,
+   REVERSAL_ENTRY_ZONE_AVAILABLE=3,
+   REVERSAL_ENTRY_CONFIRMATION=4,
+   REVERSAL_ENTRY_ALLOWED_STATE=5,
+   REVERSAL_IMPULSE_EXTENDED=6,
+   REVERSAL_WAITING_FOR_PULLBACK=7,
+   REVERSAL_VALUE_RESET=8,
+   REVERSAL_REENTRY_ALLOWED=9,
+   REVERSAL_OPPORTUNITY_EXPIRED=10
+};
+struct XAU_ReversalOpportunityState
+{
+   bool active;
+   int direction;
+   datetime createdAt;
+   double originPrice;
+   double firstDetectionPrice;
+   double reclaimPrice;
+   double latestAcceptablePrice;
+   double impulsePeak;
+   double expectedPullbackPrice;
+   double lastEntryPrice;
+   bool impulseConsumedByEntry;
+   ENUM_XAU_REVERSAL_OPPORTUNITY_STATE state;
+};
+XAU_ReversalOpportunityState g_reversalOpportunity;
 
 // v6.13.0 ANTI-REPEAT-LOSS GUARD — tracks consecutive same-direction losses
 // within the current session, plus whether the market is still genuinely
@@ -10420,6 +10464,30 @@ void XAU_ATLoadPersistentState()
       g_transitionPersistentExhaustion = GlobalVariableGet(p + "exhaustion");
    if(GlobalVariableCheck(p + "direction"))
       g_transitionPersistentDirection = (int)GlobalVariableGet(p + "direction");
+   if(GlobalVariableCheck(p + "revActive"))
+      g_reversalOpportunity.active = GlobalVariableGet(p + "revActive") > 0.5;
+   if(GlobalVariableCheck(p + "revDir"))
+      g_reversalOpportunity.direction = (int)GlobalVariableGet(p + "revDir");
+   if(GlobalVariableCheck(p + "revAt"))
+      g_reversalOpportunity.createdAt = (datetime)GlobalVariableGet(p + "revAt");
+   if(GlobalVariableCheck(p + "revOrigin"))
+      g_reversalOpportunity.originPrice = GlobalVariableGet(p + "revOrigin");
+   if(GlobalVariableCheck(p + "revFirst"))
+      g_reversalOpportunity.firstDetectionPrice = GlobalVariableGet(p + "revFirst");
+   if(GlobalVariableCheck(p + "revReclaim"))
+      g_reversalOpportunity.reclaimPrice = GlobalVariableGet(p + "revReclaim");
+   if(GlobalVariableCheck(p + "revLatest"))
+      g_reversalOpportunity.latestAcceptablePrice = GlobalVariableGet(p + "revLatest");
+   if(GlobalVariableCheck(p + "revPeak"))
+      g_reversalOpportunity.impulsePeak = GlobalVariableGet(p + "revPeak");
+   if(GlobalVariableCheck(p + "revPullback"))
+      g_reversalOpportunity.expectedPullbackPrice = GlobalVariableGet(p + "revPullback");
+   if(GlobalVariableCheck(p + "revEntry"))
+      g_reversalOpportunity.lastEntryPrice = GlobalVariableGet(p + "revEntry");
+   if(GlobalVariableCheck(p + "revConsumed"))
+      g_reversalOpportunity.impulseConsumedByEntry = GlobalVariableGet(p + "revConsumed") > 0.5;
+   if(GlobalVariableCheck(p + "revState"))
+      g_reversalOpportunity.state = (ENUM_XAU_REVERSAL_OPPORTUNITY_STATE)(int)GlobalVariableGet(p + "revState");
 }
 
 void XAU_ATSavePersistentState()
@@ -10430,6 +10498,57 @@ void XAU_ATSavePersistentState()
    GlobalVariableSet(p + "lifecycle", (double)g_transitionDecision.lifecycle);
    GlobalVariableSet(p + "exhaustion", g_transitionPersistentExhaustion);
    GlobalVariableSet(p + "direction", (double)g_transitionPersistentDirection);
+   GlobalVariableSet(p + "revActive", g_reversalOpportunity.active ? 1.0 : 0.0);
+   GlobalVariableSet(p + "revDir", (double)g_reversalOpportunity.direction);
+   GlobalVariableSet(p + "revAt", (double)g_reversalOpportunity.createdAt);
+   GlobalVariableSet(p + "revOrigin", g_reversalOpportunity.originPrice);
+   GlobalVariableSet(p + "revFirst", g_reversalOpportunity.firstDetectionPrice);
+   GlobalVariableSet(p + "revReclaim", g_reversalOpportunity.reclaimPrice);
+   GlobalVariableSet(p + "revLatest", g_reversalOpportunity.latestAcceptablePrice);
+   GlobalVariableSet(p + "revPeak", g_reversalOpportunity.impulsePeak);
+   GlobalVariableSet(p + "revPullback", g_reversalOpportunity.expectedPullbackPrice);
+   GlobalVariableSet(p + "revEntry", g_reversalOpportunity.lastEntryPrice);
+   GlobalVariableSet(p + "revConsumed", g_reversalOpportunity.impulseConsumedByEntry ? 1.0 : 0.0);
+   GlobalVariableSet(p + "revState", (double)g_reversalOpportunity.state);
+}
+
+string XAU_ATReversalOpportunityId()
+{
+   if(!g_reversalOpportunity.active) return "NONE";
+   return StringFormat("REV_%s_%d",g_reversalOpportunity.direction==1?"BUY":"SELL",(int)g_reversalOpportunity.createdAt);
+}
+
+string XAU_ATReversalStateName(ENUM_XAU_REVERSAL_OPPORTUNITY_STATE state)
+{
+   switch(state)
+   {
+      case REVERSAL_WATCH_CREATED: return "REVERSAL_WATCH_CREATED";
+      case REVERSAL_EARLY_RECLAIM_DETECTED: return "EARLY_RECLAIM_DETECTED";
+      case REVERSAL_ENTRY_ZONE_AVAILABLE: return "ENTRY_ZONE_AVAILABLE";
+      case REVERSAL_ENTRY_CONFIRMATION: return "ENTRY_CONFIRMATION";
+      case REVERSAL_ENTRY_ALLOWED_STATE: return "ENTRY_ALLOWED";
+      case REVERSAL_IMPULSE_EXTENDED: return "IMPULSE_EXTENDED";
+      case REVERSAL_WAITING_FOR_PULLBACK: return "WAITING_FOR_PULLBACK";
+      case REVERSAL_VALUE_RESET: return "VALUE_RESET";
+      case REVERSAL_REENTRY_ALLOWED: return "REENTRY_ALLOWED";
+      case REVERSAL_OPPORTUNITY_EXPIRED: return "OPPORTUNITY_EXPIRED";
+   }
+   return "NONE";
+}
+
+void XAU_ATMarkOpportunityEntry(int direction,double price,string source)
+{
+   XAU_ATLoadPersistentState();
+   if(!g_reversalOpportunity.active || g_reversalOpportunity.direction!=direction) return;
+   g_reversalOpportunity.impulseConsumedByEntry=true;
+   g_reversalOpportunity.lastEntryPrice=price;
+   g_reversalOpportunity.state=REVERSAL_ENTRY_ALLOWED_STATE;
+   g_transitionLastComputedBar=0;
+   if(direction==1) g_reversalOpportunity.impulsePeak=MathMax(g_reversalOpportunity.impulsePeak,price);
+   else g_reversalOpportunity.impulsePeak=MathMin(g_reversalOpportunity.impulsePeak,price);
+   XAU_ATSavePersistentState();
+   PrintFormat("REVERSAL_OPPORTUNITY_CONSUMED id=%s source=%s direction=%s entryPrice=%.2f — another entry requires evidence-based value reset",
+               XAU_ATReversalOpportunityId(),source,direction==1?"BUY":"SELL",price);
 }
 
 double XAU_CounterTransitionEvidence()
@@ -10460,6 +10579,11 @@ void XAU_RecordCounterTransitionEvidence(int direction, double candidateScore,
    double prior = XAU_CounterTransitionEvidence();
    g_counterTransitionEvidence = XAU_ATClamp(prior * 0.55 + direction * quality, -100.0, 100.0);
    g_counterTransitionEvidenceAt = TimeCurrent();
+   // Counter outcomes are event evidence, not bar evidence.  A lifecycle
+   // decision may already be cached for this same closed M5 bar, so force the
+   // next authority query to recompute immediately with the new bounded
+   // evidence.  Price/structure inputs remain closed-bar-only.
+   g_transitionLastComputedBar = 0;
    XAU_ATSavePersistentState();
    PrintFormat("[COUNTER_TRANSITION_EVIDENCE] counterDirection=%s score=%.1f MFE=%.3f MAE=%.3f outcomeR=%.3f structureAligned=%s normalContinuationConfidenceImpact=%.1f decayMinutes=%d",
                direction == 1 ? "BUY" : "SELL", candidateScore, mfeR, maeR, realizedR,
@@ -10491,6 +10615,9 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    d.existingBuyAction = TRANSITION_HOLD;
    d.existingSellAction = TRANSITION_HOLD;
    d.remainingRewardR = 9.0;
+   d.oppositeRemainingRewardR = 0.0;
+   d.entryLocationQuality = 0.0;
+   d.entryDecision = "REVERSAL_FORMING_NOT_READY";
 
    double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
    if(atr <= 0.0) atr = XAU_AvgATR(40);
@@ -10580,12 +10707,24 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    // this approaches zero even while H1 still points in the old direction.
    double room = dir==1 ? rangeHigh-c1 : c1-rangeLow;
    d.remainingRewardR = MathMax(0.0, room / MathMax(atr*2.2, atr));
+   // Direction and entry value are separate.  Opposite reward uses the next
+   // LOCAL obstacle, not the exhausted old-direction room and not the full
+   // 24h extreme.  This is the quantity a reversal order can actually earn.
+   double localObstacleHigh=-DBL_MAX,localObstacleLow=DBL_MAX;
+   for(int i=2;i<=48;i++)
+   {
+      localObstacleHigh=MathMax(localObstacleHigh,iHigh(Symbol(),PERIOD_M5,i));
+      localObstacleLow=MathMin(localObstacleLow,iLow(Symbol(),PERIOD_M5,i));
+   }
+   double oppositeRoom=dir==-1?localObstacleHigh-c1:c1-localObstacleLow;
+   d.oppositeRemainingRewardR=MathMax(0.0,oppositeRoom/MathMax(atr*2.2,atr));
    d.counterEvidence = XAU_CounterTransitionEvidence();
    double counterOpposite = dir==-1 ? MathMax(0.0,d.counterEvidence) : MathMax(0.0,-d.counterEvidence);
 
    d.trendMaturity = XAU_ATClamp(d.distanceTravelledATR*14.0 + d.sessionRangeConsumed*0.42);
    d.continuationConfidence = XAU_ATClamp(continuationQuality - absorption*0.18 - oppositeMomentum*0.15 - counterOpposite*0.12);
-   double rawExhaustion = XAU_ATClamp(d.trendMaturity*0.34 + (100.0-d.continuationConfidence)*0.28 + absorption*0.18 + oppositeMomentum*0.10 + (d.remainingRewardR<1.0?25.0:0.0) + counterOpposite*0.10);
+   bool oldDirectionFailureActive=(g_sameDirLossStreak>0 && g_lastLossDir==dir);
+   double rawExhaustion = XAU_ATClamp(d.trendMaturity*0.34 + (100.0-d.continuationConfidence)*0.28 + absorption*0.18 + oppositeMomentum*0.10 + (d.remainingRewardR<1.0?25.0:0.0) + counterOpposite*0.10 + (oldDirectionFailureActive?12.0:0.0));
    // Exhaustion memory is evidence-decayed, never bar-count-decayed.  The
    // 2026-07-14 failure (86% -> forgotten -> SELL again) is impossible here:
    // only a genuine reset package may lower a remembered high reading.
@@ -10607,6 +10746,8 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    if(d.exhaustionProbability>=70.0 && counterOpposite>0.0)
       d.continuationConfidence=MathMin(d.continuationConfidence,InpTransitionOldConfidenceCap);
    d.transitionProbability = XAU_ATClamp(d.exhaustionProbability*0.38 + structureOpposite*0.30 + oppositeMomentum*0.12 + counterOpposite*0.12 + MathMin(18.0,failedExtremes*6.0));
+   if(oldDirectionFailureActive && d.exhaustionProbability>=70.0)
+      d.transitionProbability=XAU_ATClamp(d.transitionProbability+10.0);
    if(d.exhaustionProbability>=70.0) d.transitionProbability=XAU_ATClamp(d.transitionProbability+12.0);
    if(d.exhaustionProbability>=80.0) d.transitionProbability=XAU_ATClamp(d.transitionProbability+8.0);
    d.reversalProbability = XAU_ATClamp(d.transitionProbability*0.55 + (d.oppositeReclaim?15.0:0.0) + (d.oppositeRetestHeld?12.0:0.0) + (d.oppositeDisplacement?12.0:0.0));
@@ -10623,10 +10764,99 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    bool fullReversalPackage = compactReversalPackage && d.oppositeRetestHeld &&
                               d.oppositeDisplacement &&
                               oppositePersistence>=InpTransitionPersistenceBars;
+
+   // Persistent reversal-opportunity lifecycle.  The first high-exhaustion
+   // detection owns the origin and acceptable-price zone; later bars may
+   // update its peak/retest state but may not recreate it at a worse price.
+   int opportunityDir=-dir;
+   if(d.exhaustionProbability>=InpTransitionExhaustThreshold &&
+      (!g_reversalOpportunity.active || g_reversalOpportunity.direction!=opportunityDir))
+   {
+      ZeroMemory(g_reversalOpportunity);
+      g_reversalOpportunity.active=true;
+      g_reversalOpportunity.direction=opportunityDir;
+      g_reversalOpportunity.createdAt=bar;
+      g_reversalOpportunity.originPrice=dir==-1?rangeLow:rangeHigh;
+      g_reversalOpportunity.firstDetectionPrice=c1;
+      g_reversalOpportunity.reclaimPrice=0.0;
+      g_reversalOpportunity.latestAcceptablePrice=c1+opportunityDir*atr*0.85;
+      g_reversalOpportunity.impulsePeak=c1;
+      g_reversalOpportunity.expectedPullbackPrice=c1-opportunityDir*atr*InpTransitionPullbackResetATR;
+      g_reversalOpportunity.state=REVERSAL_WATCH_CREATED;
+      PrintFormat("REVERSAL_OPPORTUNITY_CREATED id=%s direction=%s origin=%.2f firstDetection=%.2f latestAcceptable=%.2f",
+                  XAU_ATReversalOpportunityId(),opportunityDir==1?"BUY":"SELL",g_reversalOpportunity.originPrice,c1,g_reversalOpportunity.latestAcceptablePrice);
+   }
+   if(g_reversalOpportunity.active)
+   {
+      int trackedDir=g_reversalOpportunity.direction;
+      if(trackedDir==1) g_reversalOpportunity.impulsePeak=MathMax(g_reversalOpportunity.impulsePeak,c1);
+      else g_reversalOpportunity.impulsePeak=MathMin(g_reversalOpportunity.impulsePeak,c1);
+      if(trackedDir==opportunityDir && d.oppositeReclaim && g_reversalOpportunity.reclaimPrice<=0.0)
+      {
+         g_reversalOpportunity.reclaimPrice=c1;
+         g_reversalOpportunity.state=REVERSAL_EARLY_RECLAIM_DETECTED;
+      }
+   }
+
+   double localValue=(ArraySize(bufEMASlow)>=2 && bufEMASlow[1]>0.0)?bufEMASlow[1]:0.0;
+   if(localValue<=0.0)
+   {
+      localValue=0.0; int valueBars=0;
+      for(int i=1;i<=12;i++){ double v=iClose(Symbol(),PERIOD_M5,i); if(v>0){localValue+=v;valueBars++;} }
+      if(valueBars>0) localValue/=valueBars; else localValue=c1;
+   }
+   if(g_reversalOpportunity.active)
+   {
+      int trackedDir=g_reversalOpportunity.direction;
+      double trackedRoom=trackedDir==1?localObstacleHigh-c1:c1-localObstacleLow;
+      d.oppositeRemainingRewardR=MathMax(0.0,trackedRoom/MathMax(atr*2.2,atr));
+      d.impulseExtensionATR=MathAbs(c1-g_reversalOpportunity.originPrice)/atr;
+      d.distanceFromValueATR=MathAbs(c1-localValue)/atr;
+      double totalLeg=MathAbs(c1-g_reversalOpportunity.originPrice)+MathMax(0.0,trackedRoom);
+      d.moveAlreadyConsumedPct=totalLeg>0.0?XAU_ATClamp(MathAbs(c1-g_reversalOpportunity.originPrice)/totalLeg*100.0):100.0;
+      double pullbackFromPeak=trackedDir==1?g_reversalOpportunity.impulsePeak-c1:c1-g_reversalOpportunity.impulsePeak;
+      bool valueReset=pullbackFromPeak>=atr*InpTransitionPullbackResetATR &&
+                      d.distanceFromValueATR<=InpTransitionMaxValueDistanceATR &&
+                      d.oppositeRemainingRewardR>=InpTransitionMinRewardR;
+      bool newlyReset=valueReset && g_reversalOpportunity.state!=REVERSAL_VALUE_RESET &&
+                                     g_reversalOpportunity.state!=REVERSAL_REENTRY_ALLOWED;
+      if(newlyReset)
+      {
+         g_reversalOpportunity.impulseConsumedByEntry=false;
+         g_reversalOpportunity.firstDetectionPrice=c1;
+         g_reversalOpportunity.latestAcceptablePrice=c1+trackedDir*atr*0.85;
+         g_reversalOpportunity.expectedPullbackPrice=c1;
+         g_reversalOpportunity.state=REVERSAL_VALUE_RESET;
+      }
+      bool liveBeyondInitialZone=trackedDir==1?c1>g_reversalOpportunity.latestAcceptablePrice:c1<g_reversalOpportunity.latestAcceptablePrice;
+      bool initialImpulseExtended=d.impulseExtensionATR>InpTransitionMaxOriginExtensionATR ||
+                                  d.moveAlreadyConsumedPct>InpTransitionMaxConsumedPct ||
+                                  liveBeyondInitialZone;
+      d.reversalLocationGood=d.oppositeRemainingRewardR>=InpTransitionMinRewardR &&
+                             d.distanceFromValueATR<=InpTransitionMaxValueDistanceATR &&
+                             ((!initialImpulseExtended && !g_reversalOpportunity.impulseConsumedByEntry) || valueReset);
+      d.reversalWaitForPullback=!d.reversalLocationGood && (initialImpulseExtended || g_reversalOpportunity.impulseConsumedByEntry);
+      d.entryLocationQuality=XAU_ATClamp(100.0-d.distanceFromValueATR*28.0-d.moveAlreadyConsumedPct*0.45+
+                                         MathMin(30.0,d.oppositeRemainingRewardR*12.0));
+      if(d.reversalWaitForPullback)
+      {
+         g_reversalOpportunity.state=REVERSAL_WAITING_FOR_PULLBACK;
+         g_reversalOpportunity.expectedPullbackPrice=g_reversalOpportunity.impulsePeak-trackedDir*atr*InpTransitionPullbackResetATR;
+         d.entryDecision="REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK";
+      }
+      else if(d.reversalLocationGood)
+      {
+         g_reversalOpportunity.state=valueReset?REVERSAL_REENTRY_ALLOWED:REVERSAL_ENTRY_ZONE_AVAILABLE;
+         d.entryDecision=valueReset?"DIRECTION_CORRECT_ENTRY_GOOD_VALUE_RESET":"REVERSAL_CONFIRMED_ENTRY_ALLOWED";
+      }
+      else d.entryDecision="REVERSAL_FORMING_NOT_READY";
+   }
    bool reversalReady = d.exhaustionProbability>=InpTransitionPreferredOppositeAt &&
+                        g_reversalOpportunity.active && g_reversalOpportunity.direction==opportunityDir &&
                         d.reversalProbability>=InpTransitionReversalThreshold &&
                         (d.exhaustionProbability>=90.0?compactReversalPackage:fullReversalPackage) &&
-                        d.remainingRewardR>=InpTransitionMinRewardR;
+                        d.oppositeRemainingRewardR>=InpTransitionMinRewardR &&
+                        d.reversalLocationGood;
    ENUM_XAU_MARKET_LIFECYCLE rawState = TREND_HEALTHY;
    if(reversalReady) rawState=OPPOSITE_DIRECTION_CONFIRMED;
    else if(transitionReady && d.oppositeReclaim) rawState=OPPOSITE_DIRECTION_FORMING;
@@ -10655,15 +10885,20 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    d.oppositeEntryAllowed = reversalReady;
    d.freshBuyAllowed = (dir==1) ? d.continuationEntryAllowed : d.oppositeEntryAllowed;
    d.freshSellAllowed = (dir==-1) ? d.continuationEntryAllowed : d.oppositeEntryAllowed;
+   if(g_reversalOpportunity.active && !d.reversalLocationGood)
+   {
+      if(g_reversalOpportunity.direction==1) d.freshBuyAllowed=false;
+      else d.freshSellAllowed=false;
+   }
 
    ENUM_XAU_TRANSITION_POSITION_ACTION oldAction=TRANSITION_HOLD;
    if(d.lifecycle==TREND_MATURE || d.lifecycle==TREND_LATE) oldAction=TRANSITION_STOP_ADDS;
    if(d.lifecycle==TREND_EXHAUSTING || d.lifecycle==TRANSITION_NEUTRAL || d.lifecycle==OPPOSITE_DIRECTION_FORMING) oldAction=TRANSITION_TIGHTEN_PROTECTION;
    if(d.lifecycle==OPPOSITE_DIRECTION_CONFIRMED) oldAction=TRANSITION_WAIT_FOR_OPPOSITE_SETUP;
    if(dir==1) d.existingBuyAction=oldAction; else d.existingSellAction=oldAction;
-   d.reason=StringFormat("travel=%.2fATR rangeConsumed=%.0f continuation=%.0f absorption=%.0f oppositeMomentum=%.0f failedExtremes=%d reclaim=%s retest=%s displacement=%s counter=%.0f remainingReward=%.2fR persistence=%d",
+   d.reason=StringFormat("travel=%.2fATR rangeConsumed=%.0f continuation=%.0f absorption=%.0f oppositeMomentum=%.0f failedExtremes=%d reclaim=%s retest=%s displacement=%s counter=%.0f oldDirectionFailure=%s oldRemainingReward=%.2fR oppositeRemainingReward=%.2fR valueDistance=%.2fATR impulseExtension=%.2fATR consumed=%.0f%% locationQuality=%.0f entryDecision=%s opportunityId=%s opportunityState=%s persistence=%d",
                          d.distanceTravelledATR,d.sessionRangeConsumed,d.continuationConfidence,absorption,oppositeMomentum,failedExtremes,
-                         d.oppositeReclaim?"Y":"N",d.oppositeRetestHeld?"Y":"N",d.oppositeDisplacement?"Y":"N",d.counterEvidence,d.remainingRewardR,oppositePersistence);
+                         d.oppositeReclaim?"Y":"N",d.oppositeRetestHeld?"Y":"N",d.oppositeDisplacement?"Y":"N",d.counterEvidence,oldDirectionFailureActive?"Y":"N",d.remainingRewardR,d.oppositeRemainingRewardR,d.distanceFromValueATR,d.impulseExtensionATR,d.moveAlreadyConsumedPct,d.entryLocationQuality,d.entryDecision,XAU_ATReversalOpportunityId(),XAU_ATReversalStateName(g_reversalOpportunity.state),oppositePersistence);
    g_transitionDecision=d;
    g_transitionLastComputedBar=bar;
    XAU_ATSavePersistentState();
@@ -10706,11 +10941,31 @@ bool XAU_FinalAdaptiveDirectionDecision(int requestedDirection, string source, s
       Print("ADAPTIVE_TRANSITION_INVARIANT_REPAIR: compact reversal package passed at >=80; forcing opposite ALLOW before broker/account safety gates");
       allowed=true;
    }
+   // A direction can be correct while the current price is wrong.  Once a
+   // high-exhaustion reversal opportunity exists, every autonomous source in
+   // that direction shares its origin/value/consumption state.  A normal
+   // TREND_PULLBACK cannot recreate the same missed reversal at a worse price.
+   bool opportunityDirection=(g_reversalOpportunity.active && requestedDirection==g_reversalOpportunity.direction);
+   if(opportunityDirection)
+   {
+      double livePrice=requestedDirection==1?SymbolInfoDouble(Symbol(),SYMBOL_ASK):SymbolInfoDouble(Symbol(),SYMBOL_BID);
+      bool liveChase=requestedDirection==1?livePrice>g_reversalOpportunity.latestAcceptablePrice:
+                                           livePrice<g_reversalOpportunity.latestAcceptablePrice;
+      if(!d.reversalLocationGood || liveChase || g_reversalOpportunity.impulseConsumedByEntry)
+      {
+         allowed=false;
+         PrintFormat("REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK id=%s source=%s direction=%s livePrice=%.2f latestAcceptable=%.2f locationQuality=%.0f consumed=%.0f%% distanceFromValue=%.2fATR impulseExtension=%.2fATR oppositeReward=%.2fR alreadyEntered=%s",
+                     XAU_ATReversalOpportunityId(),source,requestedDirection==1?"BUY":"SELL",livePrice,g_reversalOpportunity.latestAcceptablePrice,
+                     d.entryLocationQuality,d.moveAlreadyConsumedPct,d.distanceFromValueATR,d.impulseExtensionATR,d.oppositeRemainingRewardR,
+                     g_reversalOpportunity.impulseConsumedByEntry?"true":"false");
+      }
+   }
    string mode=InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF";
-   decisionReason=StringFormat("source=%s requested=%s lifecycle=%s continuation=%.0f exhaustion=%.0f transition=%.0f reversal=%.0f remainingReward=%.2fR decision=%s reason=%s",
-                               source,requestedDirection==1?"BUY":"SELL",XAU_ATLifecycleName(d.lifecycle),d.continuationConfidence,d.exhaustionProbability,d.transitionProbability,d.reversalProbability,d.remainingRewardR,allowed?"ALLOW":"BLOCK",d.reason);
-   PrintFormat("FINAL_DIRECTION_DECISION normalBias=%s trendHealth=%.0f maturity=%.0f continuationConfidence=%.0f transitionProbability=%.0f reversalProbability=%.0f counterEvidence=%.0f freshSellAllowed=%s freshBuyAllowed=%s existingSellAction=%s existingBuyAction=%s mode=%s source=%s reason=%s",
+   decisionReason=StringFormat("source=%s requested=%s lifecycle=%s continuation=%.0f exhaustion=%.0f transition=%.0f reversal=%.0f oldRemainingReward=%.2fR oppositeRemainingReward=%.2fR locationQuality=%.0f consumed=%.0f%% entryDecision=%s decision=%s reason=%s",
+                               source,requestedDirection==1?"BUY":"SELL",XAU_ATLifecycleName(d.lifecycle),d.continuationConfidence,d.exhaustionProbability,d.transitionProbability,d.reversalProbability,d.remainingRewardR,d.oppositeRemainingRewardR,d.entryLocationQuality,d.moveAlreadyConsumedPct,d.entryDecision,allowed?"ALLOW":"BLOCK",d.reason);
+   PrintFormat("FINAL_DIRECTION_DECISION normalBias=%s trendHealth=%.0f maturity=%.0f continuationConfidence=%.0f transitionProbability=%.0f reversalProbability=%.0f counterEvidence=%.0f entryLocationQuality=%.0f moveAlreadyConsumedPct=%.0f distanceFromValueATR=%.2f impulseExtensionATR=%.2f oppositeRemainingRewardR=%.2f entryDecision=%s opportunityId=%s freshSellAllowed=%s freshBuyAllowed=%s existingSellAction=%s existingBuyAction=%s mode=%s source=%s reason=%s",
                d.dominantDirection==1?"BUY":"SELL",d.trendHealth,d.trendMaturity,d.continuationConfidence,d.transitionProbability,d.reversalProbability,d.counterEvidence,
+               d.entryLocationQuality,d.moveAlreadyConsumedPct,d.distanceFromValueATR,d.impulseExtensionATR,d.oppositeRemainingRewardR,d.entryDecision,XAU_ATReversalOpportunityId(),
                d.freshSellAllowed?"true":"false",d.freshBuyAllowed?"true":"false",XAU_ATActionName(d.existingSellAction),XAU_ATActionName(d.existingBuyAction),mode,source,d.reason);
    string candidateId=StringLen(g_pendingTimingProof.candidateId)>0?g_pendingTimingProof.candidateId:
                       StringFormat("%s_%s_%d",source,requestedDirection==1?"BUY":"SELL",(int)d.evaluatedBar);
@@ -14019,8 +14274,11 @@ void OnTick()
    // general per-tick rescan) so XAU_TimingEngineConfirmsEntry() gets called
    // again promptly instead of up to ~5 minutes late. Detection/scoring of
    // brand-new candidates is still M5-bar-cadenced, unchanged.
+   double pendingRequiredDelay = g_pendingEntryConfirm.active
+                                 ? XAU_EffectiveAdaptiveEntryDelaySeconds(g_pendingEntryConfirm.dir)
+                                 : XAU_EffectiveEntryDelaySeconds();
    bool pendingConfirmDue = (g_pendingEntryConfirm.active &&
-                             (TimeCurrent() - g_pendingEntryConfirm.firstSeenTime) >= XAU_EffectiveEntryDelaySeconds());
+                             (TimeCurrent() - g_pendingEntryConfirm.firstSeenTime) >= pendingRequiredDelay);
 
    if(!newM5Bar && !watchdogDue && !timerForced && !pendingConfirmDue)
    {
@@ -14039,7 +14297,7 @@ void OnTick()
    if(pendingConfirmDue && !newM5Bar && !watchdogDue && !timerForced)
       PrintFormat("TIMING_ENGINE: PENDING_CONFIRM_DUE_MIDBAR bypassing M5-bar wait -- %s %s elapsed=%.0fs target=%.0fs (re-checking now instead of waiting for the next bar)",
                   g_pendingEntryConfirm.dir == 1 ? "BUY" : "SELL", g_pendingEntryConfirm.setup,
-                  (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime), XAU_EffectiveEntryDelaySeconds());
+                  (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime), pendingRequiredDelay);
 
    // v6.17.13 FIX: this Print used to fire completely unthrottled -- every
    // single tick while watchdogDue stayed true, which (live-journal-proven)
@@ -14190,11 +14448,13 @@ void OnTick()
    int adaptiveReversalDir=-transitionNow.dominantDirection;
    if(transitionNow.oppositeEntryPreparing)
    {
-      PrintFormat("[REVERSAL_ENTRY_AUDIT] candidateId=ADAPTIVE_REVERSAL_%s_%d oldDirection=%s newDirection=%s reclaim=%s retestHeld=%s displacement=%s HTFContext=%s decision=%s reason=%s",
-                  adaptiveReversalDir==1?"BUY":"SELL",(int)transitionNow.evaluatedBar,
+      PrintFormat("[REVERSAL_ENTRY_AUDIT] candidateId=%s oldDirection=%s newDirection=%s reclaim=%s retestHeld=%s displacement=%s entryLocationQuality=%.0f moveAlreadyConsumedPct=%.0f distanceFromValueATR=%.2f impulseExtensionATR=%.2f remainingRewardR=%.2f HTFContext=%s decision=%s reason=%s",
+                  XAU_ATReversalOpportunityId(),
                   transitionNow.dominantDirection==1?"BUY":"SELL",adaptiveReversalDir==1?"BUY":"SELL",
                   transitionNow.oppositeReclaim?"true":"false",transitionNow.oppositeRetestHeld?"true":"false",
-                  transitionNow.oppositeDisplacement?"true":"false",g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",
+                  transitionNow.oppositeDisplacement?"true":"false",transitionNow.entryLocationQuality,transitionNow.moveAlreadyConsumedPct,
+                  transitionNow.distanceFromValueATR,transitionNow.impulseExtensionATR,transitionNow.oppositeRemainingRewardR,
+                  g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",
                   transitionNow.oppositeEntryAllowed?"WOULD_ENTER":"WAIT",transitionNow.reason);
    }
    if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && transitionNow.oppositeEntryAllowed && adaptiveReversalDir!=0)
@@ -14202,9 +14462,101 @@ void OnTick()
       signal=adaptiveReversalDir;
       setupName="ADAPTIVE_REVERSAL_RECLAIM";
       setupScore=6.80;
-      PrintFormat("ADAPTIVE_REVERSAL_CANDIDATE_CREATED id=%s_%d direction=%s score=%.2f oldHTF=%s reason=%s",
-                  setupName,(int)transitionNow.evaluatedBar,signal==1?"BUY":"SELL",setupScore,
-                  g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",transitionNow.reason);
+      PrintFormat("ADAPTIVE_REVERSAL_CANDIDATE_CREATED id=%s direction=%s score=%.2f oldHTF=%s locationQuality=%.0f consumed=%.0f%% reason=%s",
+                  XAU_ATReversalOpportunityId(),signal==1?"BUY":"SELL",setupScore,
+                  g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",transitionNow.entryLocationQuality,transitionNow.moveAlreadyConsumedPct,transitionNow.reason);
+
+      // v6.23.1 centralized ACTIVE reversal lane.  Once the adaptive engine
+      // has proved the compact high-exhaustion package, legacy trend-following
+      // scorers must not veto it later.  Keep only the explicitly authorized
+      // hard protections here: account/cadence controls, spread/news, severe
+      // chase/location, the shared timing revalidation, and every execution-
+      // layer exposure/risk/margin/broker/SL-geometry check in OpenTrade().
+      string adaptiveGrade="A+";
+      const double adaptiveCombined=6.80;
+
+      if(entryExecutionBlocked)
+      {
+         Print("ADAPTIVE REVERSAL BLOCKED (account/cadence safety): ",entryExecutionBlockReason);
+         XAU_RememberBlockedSignal(signal,setupName,adaptiveGrade,setupScore,adaptiveCombined,entryExecutionBlockReason);
+         return;
+      }
+      if(spreadBlocksEntry)
+      {
+         Print("ADAPTIVE REVERSAL BLOCKED (spread/news safety): ",spreadBlockReason);
+         XAU_RememberBlockedSignal(signal,setupName,adaptiveGrade,setupScore,adaptiveCombined,spreadBlockReason);
+         return;
+      }
+      if(InpUseNewsFilter && !IsNewsSafe() && !adaptivePostPhase)
+      {
+         string adaptiveNewsBlock="ADAPTIVE_REVERSAL_NEWS_BLOCK: high-impact event nearby";
+         Print("ADAPTIVE REVERSAL BLOCKED (news safety): ",adaptiveNewsBlock);
+         XAU_RememberBlockedSignal(signal,setupName,adaptiveGrade,setupScore,adaptiveCombined,adaptiveNewsBlock);
+         return;
+      }
+
+      double adaptiveTimingLot=1.0;
+      string adaptiveTimingWhy="";
+      if(!XAUEntryTimingGuard(signal,setupName,setupScore,adaptiveCombined,
+                              adaptiveGrade,adaptiveTimingLot,adaptiveTimingWhy))
+      {
+         Print("ADAPTIVE REVERSAL BLOCKED (anti-chase/location): ",adaptiveTimingWhy);
+         XAU_RememberBlockedSignal(signal,setupName,adaptiveGrade,setupScore,adaptiveCombined,adaptiveTimingWhy);
+         return;
+      }
+      if(adaptiveTimingLot<0.999)
+         PrintFormat("ADAPTIVE REVERSAL TIMING CAUTION: suggested multiplier %.2f recorded only; binary approved risk remains full",adaptiveTimingLot);
+
+      // Populate the same audit context consumed by OpenTrade.  The risk
+      // multiplier is deliberately 1.0: approve at configured full risk or
+      // block; never create a hidden token-size reversal.
+      lastSignalDir=signal;
+      lastSignalRSI=bufRSI[1];
+      lastSignalEMADiff=(bufEMAFast[1]-bufEMASlow[1])/bufEMASlow[1]*10000;
+      lastSignalATR=bufATR[1];
+      lastSignalSetup=setupName;
+      g_pendingBrainGrade=adaptiveGrade;
+      g_pendingBrainSetupScore=setupScore;
+      g_pendingBrainCombinedScore=adaptiveCombined;
+      g_pendingBrainEntryAudit=adaptiveTimingWhy;
+
+      if(!XAU_TimingEngineConfirmsEntry(signal,setupName,adaptiveGrade,1.0,bufATR[1]))
+         return;
+
+      g_pendingTimingProof.active=true;
+      g_pendingTimingProof.candidateId=StringFormat("%s_%s_%d",setupName,signal==1?"BUY":"SELL",(int)g_lastEntryTimingDecision.originalSignalTime);
+      g_pendingTimingProof.sourcePath="ADAPTIVE_REVERSAL";
+      g_pendingTimingProof.firstSeenTime=g_lastEntryTimingDecision.originalSignalTime;
+      g_pendingTimingProof.firstSeenPrice=g_lastEntryTimingDecision.originalSignalPrice;
+      g_pendingTimingProof.timingGateRequired=true;
+      g_pendingTimingProof.requiredDelaySeconds=XAU_EffectiveAdaptiveEntryDelaySeconds(signal);
+      g_pendingTimingProof.timingGateStartTime=g_lastEntryTimingDecision.originalSignalTime;
+      g_pendingTimingProof.recoveryWaitSeconds=0.0;
+      g_pendingTimingProof.timingEngineWaitSeconds=g_lastEntryTimingDecision.delaySeconds;
+      g_pendingTimingProof.revalidationTime=g_lastEntryTimingDecision.decisionTime;
+      g_pendingTimingProof.revalidationResult=g_lastEntryTimingDecision.entryReasonText;
+      g_pendingTimingProof.bypassUsed=false;
+      g_pendingTimingProof.bypassReason="";
+      g_pendingTimingProof.openTradeCaller="AdaptiveReversal->OpenTrade";
+
+      XAU_LogBotDecision("ENTER_FULL_RISK_ADAPTIVE_REVERSAL",signal,setupName,adaptiveGrade,
+                         lastAIConfidence,adaptiveCombined,"fast-confirm",
+                         StringFormat("BOS=%+d",g_smc_bos_dir),
+                         StringFormat("HTF=%+d context-only",g_htfConsensusDir),
+                         "ADAPTIVE_AUTHORITY",g_memoryLastInfluence,transitionNow.reason);
+      bool adaptiveOpened=OpenTrade(signal,bufATR[1],setupName+" [A+]",1.0);
+      g_lastEntryTimingDecision.valid=false;
+      if(adaptiveOpened)
+      {
+         g_totalAllowed++;
+         g_lastEntryGrade=adaptiveGrade;
+         g_lastEntryScore=adaptiveCombined;
+         UpdateDashboard(signal,adaptiveCombined,adaptiveGrade);
+         lastDashSignal=signal;
+         lastDashScore=adaptiveCombined;
+         lastDashGrade=adaptiveGrade;
+      }
+      return; // never fall back into the legacy trend-following gauntlet
    }
 
    // June 17-18 reconstruction: Active Direction applies to every setup
@@ -17094,7 +17446,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       // parameter above) -- the telemetry above still runs so the operator
       // can see the classification, but it never blocks an explicit
       // FORCE_OPEN_TRADE command.
-      if(!guardAllows && !isManualOverride)
+      bool adaptiveCentralAuthority=(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !isManualOverride);
+      if(!guardAllows && adaptiveCentralAuthority)
+      {
+         PrintFormat("DIRECTION_QUALITY OBSERVATION_ONLY: legacy Exhaustion/Reversal guard disagreed (%s), but ACTIVE centralized adaptive authority already resolved direction; hard execution safety remains enforced",blockReason);
+      }
+      if(!guardAllows && !isManualOverride && !adaptiveCentralAuthority)
       {
          PrintFormat("⛔ OPEN TRADE BLOCKED (Exhaustion/Reversal backstop): %s | OldTrendBias=%s FreshStructureBias=%s | reason=%s",
                      reason, oldTrendBias, freshStructureBias, blockReason);
@@ -18079,6 +18436,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
 
    if(ok)
    {
+      XAU_ATMarkOpportunityEntry(signal,trade.ResultPrice()>0.0?trade.ResultPrice():price,"NORMAL");
       // v5.8.51: slippage monitoring — tracks difference between requested and filled price.
       // On live ECN accounts, slippage is a real cost. Logged when > 0.20×ATR.
       {
@@ -28852,6 +29210,24 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
       PrintFormat("COUNTER_EXCURSION_FAST_CHECK result=FAIL reason=STALE_SIGNAL detail=NO_VALID_BID_ASK");
       return;
    }
+   XAU_AdaptiveTransitionDecision counterTransition=XAU_AdaptiveMarketTransitionEngine();
+   if(g_reversalOpportunity.active && g_reversalOpportunity.direction==counterDir)
+   {
+      bool counterLiveChase=counterDir==1?entryPrice>g_reversalOpportunity.latestAcceptablePrice:
+                                          entryPrice<g_reversalOpportunity.latestAcceptablePrice;
+      bool counterLocationAllows=counterTransition.reversalLocationGood && !counterLiveChase &&
+                                 !g_reversalOpportunity.impulseConsumedByEntry;
+      PrintFormat("COUNTER_REVERSAL_LOCATION_AUDIT id=%s direction=%s price=%.2f latestAcceptable=%.2f locationQuality=%.0f consumed=%.0f%% reward=%.2fR decision=%s mode=%s",
+                  XAU_ATReversalOpportunityId(),counterDir==1?"BUY":"SELL",entryPrice,g_reversalOpportunity.latestAcceptablePrice,
+                  counterTransition.entryLocationQuality,counterTransition.moveAlreadyConsumedPct,counterTransition.oppositeRemainingRewardR,
+                  counterLocationAllows?"WOULD_ALLOW":"WOULD_WAIT_FOR_PULLBACK",
+                  InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF");
+      if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !counterLocationAllows)
+      {
+         Print("COUNTER_EXCURSION_SKIP: REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK — Counter remains isolated but cannot chase a consumed adaptive reversal opportunity");
+         return;
+      }
+   }
    double slDist = atr * InpCounterExcursionSLATRMult;
    double slPrice = (counterDir == 1) ? NormalizeDouble(entryPrice - slDist, digits) : NormalizeDouble(entryPrice + slDist, digits);
    long stopLevelPts = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
@@ -29006,6 +29382,7 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    g_counterEx.originalGrade = originalFinalGrade; // the FINALIZED original grade, captured pre-inversion -- never the post-inversion direction/grade
    g_counterEx.originalBlockReason = blockReason;
    g_counterEx.entryPrice = trade.ResultPrice() > 0 ? trade.ResultPrice() : entryPrice;
+   XAU_ATMarkOpportunityEntry(counterDir,g_counterEx.entryPrice,"COUNTER_EXCURSION");
    g_counterEx.slPrice = slPrice;
    g_counterEx.slDist = slDist;
    g_counterEx.openTime = TimeCurrent();

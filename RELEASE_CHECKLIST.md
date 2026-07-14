@@ -14,7 +14,7 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
-## v6.23.1 — 2026-07-14 — Adaptive Transition Authority
+## v6.23.1 — 2026-07-14 — Adaptive Transition + Entry-Location Authority
 
 ### Production identity and forensic baseline
 - [x] Branch created from exact deployed-production commit `b894d171a76d5f0a12cbced95732cee9ebde8647`
@@ -35,15 +35,19 @@ Keep the edition description on a single physical line — the regex does not ma
 - [x] Successful Counter outcomes feed bounded, time-decaying transition evidence
 - [x] Existing-position actions are consumed inside the sole R-based broker-close owner
 - [x] Dedicated 30-second default fast reversal confirmation retains closed-bar proof and anti-chase revalidation
+- [x] Direction confidence and entry-location quality are separate final requirements
+- [x] Reversal origin, first detection, reclaim, acceptable chase price, impulse peak, expected pullback, consumption, and opportunity ID persist across restart
+- [x] Normal and Counter execution cannot reuse a consumed reversal impulse at a worse price without an evidence-based value reset
+- [x] Old-direction remaining reward and opposite-direction obstacle reward are computed independently
 
 ### Artifacts and validation
 - [x] Canonical source: `XAUUSD_AI_Sniper_EA_v6.23.1.mq5`
-- [x] Source/download mirror byte-identical; SHA-256 `0a7bd8371dfa6508b7045ce4f64dbab4a9133a9ca66a55ee415e844ebc1aa18f`
+- [x] Source/download mirror byte-identical; SHA-256 `d136f57e822807ba16475f7d18c095b383128faf3e67aba8f69c0270b9e3408f`
 - [x] MetaEditor exact-source compile: **0 errors, 0 warnings**
-- [x] EX5: 1,372,438 bytes; SHA-256 `9b84beb9d72cc777987bafc24099c52d3e474fb10a3489c7a16a5219c7a30870`
-- [x] Transition/incident suite: 24 passed
+- [x] EX5: 1,390,538 bytes; SHA-256 `40ccc62dab9ea1449db8fa156df0a4105f47cfcef0d73500331337eef9b33979`
+- [x] Transition/incident/location + identity/compatibility suite: 52 passed
 - [x] Focused production/release suite: 133 passed
-- [x] Full historical `tests/`: 208 failed, 813 passed versus baseline 208 failed, 789 passed; identical legacy failure set
+- [x] Full historical `tests/`: 208 failed, 838 passed versus pre-repair 208 failed, 813 passed; identical legacy failure-name set
 - [x] Backend syntax compilation passed
 - [~] Frontend build skipped because isolated worktree has no `frontend/node_modules`
 - [~] Broader `backend/tests` collection blocked by pre-existing hardcoded `/app/frontend/.env` fixture dependency

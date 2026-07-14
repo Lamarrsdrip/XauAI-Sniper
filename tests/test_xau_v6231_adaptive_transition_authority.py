@@ -8,6 +8,7 @@ indicator backtest.
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 from typing import Optional
 
 
@@ -279,6 +280,8 @@ def test_actual_vps_fixture_blocks_both_proven_losing_sells():
     fixture = json.loads((ROOT / "tests/fixtures/xau_vps_transition_incident_20260713_14.json").read_text())
     decisions = {}
     for row in fixture:
+        if "failed_extremes" not in row:
+            continue
         d = decide(
             Evidence(
                 exhaustion_override=row["exhaustion"],
@@ -325,3 +328,64 @@ def test_risk_and_timing_contracts_are_unchanged():
     assert "XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0" in source
     assert "FULL_RISK_BINARY" in source
     assert "No silent 0.01 fallback" in source
+
+
+def test_counter_outcome_invalidates_same_bar_lifecycle_cache():
+    source = EA.read_text()
+    record = source[source.index("void XAU_RecordCounterTransitionEvidence") : source.index("int XAU_ATDominantDirection")]
+    assert "g_transitionLastComputedBar = 0" in record
+    assert record.index("g_transitionLastComputedBar = 0") < record.index("XAU_ATSavePersistentState()")
+
+
+def test_pending_recheck_cadence_uses_adaptive_reversal_delay():
+    source = EA.read_text()
+    cadence = source[source.index("double pendingRequiredDelay") : source.index("// v6.17.13 FIX", source.index("double pendingRequiredDelay"))]
+    assert "XAU_EffectiveAdaptiveEntryDelaySeconds(g_pendingEntryConfirm.dir)" in cadence
+    assert ">= pendingRequiredDelay" in cadence
+    assert "PENDING_CONFIRM_DUE_MIDBAR" in cadence
+
+
+def test_confirmed_reversal_has_dedicated_authoritative_execution_lane():
+    source = EA.read_text()
+    start = source.index("// v6.23.1 centralized ACTIVE reversal lane")
+    end = source.index("// June 17-18 reconstruction", start)
+    lane = source[start:end]
+    assert "entryExecutionBlocked" in lane
+    assert "spreadBlocksEntry" in lane
+    assert "IsNewsSafe()" in lane
+    assert "XAUEntryTimingGuard" in lane
+    assert "XAU_TimingEngineConfirmsEntry" in lane
+    assert "OpenTrade(signal,bufATR[1],setupName+\" [A+]\",1.0)" in lane
+    assert "return; // never fall back into the legacy trend-following gauntlet" in lane
+    assert source.index("OpenTrade(signal,bufATR[1],setupName+\" [A+]\",1.0)", start) < end
+
+
+def test_active_central_authority_cannot_be_overruled_by_legacy_direction_guard():
+    source = EA.read_text()
+    open_trade = source[source.index("bool OpenTrade(") : source.index("// v5.8.6 — Execution-layer hedge backstop")]
+    assert "adaptiveCentralAuthority=(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE" in open_trade
+    assert "DIRECTION_QUALITY OBSERVATION_ONLY" in open_trade
+    assert "!isManualOverride && !adaptiveCentralAuthority" in open_trade
+
+
+def test_backend_distribution_mirror_is_exact():
+    backend = ROOT / "backend/ea_code/XAUUSD_AI_Sniper_EA.mq5"
+    assert backend.read_bytes() == EA.read_bytes()
+
+
+def test_only_three_order_open_owners_exist_and_are_scoped():
+    source = EA.read_text()
+    # Normal/re-entry/recovery converge on OpenTrade; pyramids have the same
+    # final authority; Counter remains isolated by design under its own magic.
+    assert len(re.findall(r"\btrade\.Buy\s*\(", source)) == 3
+    assert len(re.findall(r"\btrade\.Sell\s*\(", source)) == 3
+    pyramid = source[source.index("void CheckPyramidOpportunity()") : source.index("bool EPF_IsEliteGrade")]
+    assert "XAU_FinalAdaptiveDirectionDecision(dir, \"PYRAMID\"" in pyramid
+    assert "trade.Buy (addLot" in pyramid and "trade.Sell(addLot" in pyramid
+    open_start = source.index("bool OpenTrade(int signal")
+    open_trade = source[open_start : source.index("void LogExit", open_start)]
+    assert "XAU_FinalAdaptiveDirectionDecision(signal, \"OPEN_TRADE\"" in open_trade
+    counter_start = source.index("void XAU_TryCounterExcursionEntry")
+    counter = source[counter_start : source.index("bool XAU_ManageCounterExcursionPosition", counter_start)]
+    assert "trade.SetExpertMagicNumber(InpCounterExcursionMagicNumber)" in counter
+    assert "trade.SetExpertMagicNumber(InpMagicNumber)" in counter

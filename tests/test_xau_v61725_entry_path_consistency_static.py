@@ -85,10 +85,16 @@ def test_normal_scan_path_passes_real_setup_name_to_contextgate():
 # ---------------------------------------------------------------------------
 # Fix 2: manual override bypasses soft judgment, never hard safety
 # ---------------------------------------------------------------------------
-def test_exhaustion_guard_backstop_skipped_only_for_manual_override():
+def test_exhaustion_guard_backstop_skipped_only_for_manual_or_active_central_authority():
     ea = read(BACKEND_EA)
     fn = body(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
-    assert "if(!guardAllows && !isManualOverride)" in fn
+    # v6.23.1: in ACTIVE mode the new final adaptive decision is the sole
+    # direction owner. The legacy guard remains telemetry-only there; it
+    # still enforces normally in OFF/SHADOW and remains advisory for an
+    # explicit manual override.
+    assert "adaptiveCentralAuthority=(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE" in fn
+    assert "if(!guardAllows && !isManualOverride && !adaptiveCentralAuthority)" in fn
+    assert "DIRECTION_QUALITY OBSERVATION_ONLY" in fn
 
 
 def test_hard_safety_gates_have_no_manual_override_exemption():

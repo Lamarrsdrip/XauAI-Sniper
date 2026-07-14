@@ -73,5 +73,38 @@
     "displacement": false,
     "persistence": 2,
     "remaining_reward_r": 1.8
+  },
+  {
+    "stage": "late_counter_buy_4027",
+    "broker_time": "2026-07-14T07:24:11",
+    "terminal_time": "2026-07-14T09:10:47",
+    "price": 4027.886,
+    "source": "COUNTER_EXCURSION",
+    "old_decision": "BUY_EXECUTED_IMMEDIATELY_AND_TP",
+    "new_expected": "WAIT_FOR_BUY_PULLBACK",
+    "exhaustion": 74.0,
+    "reversal_origin": 3990.325,
+    "atr": 3.4,
+    "distance_from_value_atr": 2.1,
+    "move_consumed_pct": 78.0,
+    "opposite_remaining_reward_r": 0.75,
+    "already_entered": false
+  },
+  {
+    "stage": "late_normal_buy_4028",
+    "broker_time": "2026-07-14T08:02:53",
+    "terminal_open_time": "2026-07-14T09:29:12",
+    "terminal_close_time": "2026-07-14T10:02:53",
+    "price": 4028.551,
+    "source": "PRIMARY_TREND_PULLBACK",
+    "old_decision": "BUY_ALLOWED_A_AFTER_162S_DELAY",
+    "new_expected": "WAIT_FOR_BUY_PULLBACK",
+    "exhaustion": 44.0,
+    "reversal_origin": 3990.325,
+    "atr": 3.4,
+    "distance_from_value_atr": 1.76,
+    "move_consumed_pct": 82.0,
+    "opposite_remaining_reward_r": 0.71,
+    "already_entered": true
   }
 ]

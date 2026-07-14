@@ -40,10 +40,11 @@ def test_repo_source_is_synced_to_backend():
 
 def test_pending_confirm_due_bypasses_the_m5_bar_gate():
     ea = read(EA)
-    idx = ea.index("bool pendingConfirmDue")
+    idx = ea.index("double pendingRequiredDelay")
     window = ea[idx:idx + 1400]
     assert "g_pendingEntryConfirm.active" in window
-    assert "TimeCurrent() - g_pendingEntryConfirm.firstSeenTime) >= XAU_EffectiveEntryDelaySeconds()" in window
+    assert "XAU_EffectiveAdaptiveEntryDelaySeconds(g_pendingEntryConfirm.dir)" in window
+    assert "TimeCurrent() - g_pendingEntryConfirm.firstSeenTime) >= pendingRequiredDelay" in window
     assert "if(!newM5Bar && !watchdogDue && !timerForced && !pendingConfirmDue)" in window
 
 
