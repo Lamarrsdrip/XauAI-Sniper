@@ -14812,6 +14812,19 @@ void OnTick()
                setupName="CAMPAIGN_RECLAIM_SYNTH";
                setupScore=MathMax(setupScore,4.0);
                grade="B";
+               // 2026-07-15 forensic audit: combinedScore/gradeThresholdPassed were
+               // already computed from the pre-synthesis setupScore==0 a few lines
+               // above and never recomputed here, so every synthesized candidate
+               // reached XAU_ActiveIntelligenceDecision with combined=0.00 and
+               // gradeThresholdPassed=false — 42/42 CAMPAIGN_RECLAIM_SYNTH candidates
+               // observed live were dead on arrival regardless of market conditions.
+               // Recompute with the exact same formula the rest of this function
+               // uses (line ~14209) so the synthesized candidate is scored
+               // consistently with every other candidate, not left at zero.
+               combinedRaw=setupScore*regimeQuality*sessionQuality;
+               combinedFloor=setupScore*effFloor*regimeFloorScale;
+               combinedScore=MathMax(combinedRaw,combinedFloor);
+               gradeThresholdPassed=true;
                activeCanSynthesize=true;
                activeAnalyticalWarnings += "RECLAIM_SYNTH_NO_CLASSIC_SETUP;";
                PrintFormat("[ACTIVE_ANALYTICAL_EVIDENCE] advisory=RECLAIM_SYNTH: no classic setup, but higherLowBars=%d lowerHighBars=%d + EMA reclaim justify continuing to timing/location analysis | dir=%s",
@@ -22851,8 +22864,20 @@ XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()
       bool beyondZone=trackedDir==1 ? c1>g_campaignReversalOpportunity.latestAcceptablePrice : c1<g_campaignReversalOpportunity.latestAcceptablePrice;
       bool impulseExtended=d.impulseExtensionATR>InpCampaignTransitionMaxOriginATR ||
                            d.moveAlreadyConsumedPct>InpCampaignTransitionMaxConsumedPct || beyondZone;
+      // 2026-07-15 forensic audit: distanceFromValueATR is measured against a
+      // value anchor set when the opportunity/reset was first detected, but
+      // full reclaim+retest+displacement evidence can take many bars to
+      // confirm — by then price has typically moved well past a 1.00 ATR
+      // cap (observed live: distanceFromValueATR=2.71 with confidenceGap=87
+      // and reclaim=Y/retest=Y/displacement=Y all simultaneously true, still
+      // rejected). The cap stays in force for ordinary/partial evidence;
+      // only the strongest, already-defined evidence tier (fullPackage —
+      // reclaim+retest+displacement+persistence, not just a fresh reset)
+      // earns a wider (not unlimited) allowance. impulseExtended/consumed%/
+      // beyondZone remain fully enforced either way.
+      double valueDistanceCapATR=fullPackage ? InpCampaignTransitionMaxValueATR*2.0 : InpCampaignTransitionMaxValueATR;
       d.reversalLocationGood=d.oppositeRemainingRewardR>=InpCampaignTransitionMinRewardR &&
-                             d.distanceFromValueATR<=InpCampaignTransitionMaxValueATR &&
+                             d.distanceFromValueATR<=valueDistanceCapATR &&
                              ((!impulseExtended && !g_campaignReversalOpportunity.impulseConsumedByEntry) || valueReset);
       d.reversalWaitForPullback=!d.reversalLocationGood && (impulseExtended || g_campaignReversalOpportunity.impulseConsumedByEntry);
       d.entryLocationQuality=XAU_CTClamp(100.0-d.distanceFromValueATR*28.0-d.moveAlreadyConsumedPct*0.45+
@@ -23004,7 +23029,18 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
       action=ACTIVE_WAIT_FOR_VALUE;
    else if(!timingSnapshotValid)
       action=timingPassed ? ACTIVE_CANCEL_OPPORTUNITY : ACTIVE_WAIT_FOR_VALUE;
-   else if(oldDirection && d.exhaustionProbability>=InpCampaignTransitionExhaustAt)
+   // 2026-07-15 forensic audit: exhaustion>=70 was an absolute veto on the
+   // dominant direction here regardless of remaining reward — genuineContinuationReset
+   // (already computed below, used elsewhere) was never consulted at this gate,
+   // so 12 fully-qualified A/A+ setups with 2.7-3.0R of remaining room were
+   // BLOCK_OLD_DIRECTION'd purely on lifecycle state. The exhaustion invariant
+   // stays in force; it now only yields when there is BOTH real accumulated
+   // reset evidence (>=65 score over >=2 closed bars, same bar-persistence
+   // standard used for the restart latch) AND the campaign engine's own
+   // remaining-reward read still clears the normal minimum — never on
+   // exhaustion score alone.
+   else if(oldDirection && d.exhaustionProbability>=InpCampaignTransitionExhaustAt &&
+           !(genuineContinuationReset && d.remainingRewardR>=InpCampaignTransitionMinRewardR))
       action=ACTIVE_BLOCK_OLD_DIRECTION;
    else if(!oldDirection)
    {
@@ -23105,10 +23141,32 @@ bool XAU_FinalAdaptiveCampaignDirectionDecision(int requestedDirection, string s
       if(source=="PYRAMID") allowed=false;
       else if(d.continuationConfidence<55.0 || d.remainingRewardR<InpCampaignTransitionMinRewardR) allowed=false;
    }
-   if(oldDirection && d.exhaustionProbability>=70.0) allowed=false;
-   if(d.exhaustionProbability>=70.0 && oldDirection && allowed)
+   // 2026-07-15 forensic audit: this invariant was unconditional (any oldDirection
+   // at exhaustion>=70 forced BLOCK, no exceptions), while the SAME "genuine
+   // continuation reset" evidence standard already used above for the 60-69%
+   // band (line ~23116) and for ACTIVE_BLOCK_OLD_DIRECTION was never extended
+   // here — so a legitimate reset+reward-backed continuation was always
+   // silently forced to BLOCK by this exact invariant on the OpenTrade path,
+   // independent of and downstream from the ACTIVE decision. Apply the
+   // identical narrow standard here instead of blocking outright: the
+   // invariant still holds for every case except real reset evidence plus
+   // adequate remaining reward, same bar as line ~23116.
+   bool legitimateResetOverride=genuineContinuationReset && d.continuationConfidence>=55.0 &&
+                                d.remainingRewardR>=InpCampaignTransitionMinRewardR && source!="PYRAMID";
+   if(oldDirection && d.exhaustionProbability>=70.0)
    {
-      Print("CAMPAIGN_TRANSITION_INVARIANT_VIOLATION: exhaustion>=70 but old direction resolved ALLOW — forcing BLOCK");
+      if(legitimateResetOverride)
+      {
+         allowed=true;
+         PrintFormat("[ACTIVE_LIFECYCLE_RELEASE] source=%s direction=%s continuationReset=%.0f/%d continuation=%.0f exhaustion=%.0f reward=%.2fR note=exhaustion_ge_70_override",
+                     source,requestedDirection==1?"BUY":"SELL",g_campaignContinuationResetScore,
+                     g_campaignContinuationResetBars,d.continuationConfidence,d.exhaustionProbability,d.remainingRewardR);
+      }
+      else allowed=false;
+   }
+   if(d.exhaustionProbability>=70.0 && oldDirection && allowed && !legitimateResetOverride)
+   {
+      Print("CAMPAIGN_TRANSITION_INVARIANT_VIOLATION: exhaustion>=70 but old direction resolved ALLOW without qualifying reset evidence — forcing BLOCK");
       allowed=false;
    }
    if(d.exhaustionProbability>=80.0 && d.oppositeEntryAllowed && requestedDirection==-d.dominantDirection && !allowed)
