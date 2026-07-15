@@ -1779,7 +1779,7 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.264"
+#property version   "6.265"
 #property description "XAUUSD AI Sniper v6.22.0 ADAPTIVE CAMPAIGN TRANSITION EXP1"
 #property description "EXPERIMENT BRANCH - NOT PRODUCTION. Baseline: v6.21.3 commit 02b0893."
 #property description "Replaces the scalper exit lifecycle with ADAPTIVE_TREND_CAMPAIGN_MANAGER:"
@@ -1797,7 +1797,7 @@
 
 #define XAUAI_EA_VERSION "v6.22.0-ADAPTIVE-CAMPAIGN-TRANSITION-EXP1"
 #define XAUAI_EA_VERSION_NUM "6.22.0"
-#define XAUAI_BUILD_HASH "v6220-active-intelligence-repair-20260714"
+#define XAUAI_BUILD_HASH "v6220-unified-campaign-thesis-20260715"
 #define XAU_EXPERIMENT_BUILD true
 #define XAU_CAMPAIGN_MEMORY_TAG "_CAMPAIGNEXP1"
 
@@ -3872,6 +3872,16 @@ bool     g_lastEntryQ_FreshStructure         = false;
 double   g_lastEntryQ_RemainingRoomATR       = 0.0;
 double   g_lastEntryQ_Exhaustion             = 100.0;
 double   g_lastEntryQ_LateProbability        = 100.0;
+// 2026-07-15 owner-directed evolution, Phase 2a. blockClass="HARD_BLOCK"
+// conflates 5 independent booleans into one string with no way to tell
+// them apart downstream. spikeCooldown (raw tick/volatility data-quality
+// protection) stays a genuine hard stop; the other 4 become weighted
+// evidence in XAU_ActiveIntelligenceDecision instead of an automatic block.
+bool     g_lastEntryQ_LateChaseEntry         = false;
+bool     g_lastEntryQ_SpikeCooldown          = false;
+bool     g_lastEntryQ_FailedImpulseBlock     = false;
+bool     g_lastEntryQ_PostSweepTrap          = false;
+bool     g_lastEntryQ_TimingBadRR            = false;
 // v6.20.3 adversarial-review fix — validity markers. XAU_CheckPendingOpportunityRecovery
 // and XAU_TryForceOpenTrade never call XAUEntryTimingGuard, so without these
 // markers, XAU_BrainRecordOpen would copy whichever signal's numbers happened
@@ -9405,14 +9415,19 @@ double SMC_GetConflictPenalty(int dir, bool &hardBlock, string &conflictReason)
       conflictReason += "INSIDE_OPPOSING_FVG ";
    }
 
-   // Two or more independent structural signals against the trade at once
-   // (not just one noisy BOS read) — this is where SMC should be able to
-   // say no outright, not merely cost points.
+   // 2026-07-15 owner-directed evolution, Phase 2c: 2+ independent
+   // structural signals against the trade used to hard-block outright here
+   // (downstream: grade forced to SKIP) regardless of how strong the
+   // unified thesis's confidence was elsewhere. Per the owner's explicit
+   // policy, ordinary conflicting structural evidence should reduce
+   // confidence/size, not automatically block -- `penalty` above already
+   // does exactly that (subtracted straight from setupScore at the call
+   // site). No separate SMC-specific hard-block remains; the one reserved
+   // hard-stop category for genuinely severe structural invalidation is
+   // the opposing STRONG-tier HTF read, already enforced upstream at the
+   // ADAPTIVE-DIRECTION gate (Phase 2b) -- not duplicated here.
    if(conflicts >= 2)
-   {
-      hardBlock = true;
-      conflictReason += StringFormat("HARD_BLOCK(%d_conflicts) ", conflicts);
-   }
+      conflictReason += StringFormat("MULTI_CONFLICT(%d) ", conflicts);
 
    return penalty;
 }
@@ -13961,26 +13976,27 @@ void OnTick()
          blockThisSignal = true;
          ddReason = "Active Direction=NO_TRADE (" + g_activeDirectionReason + ")";
       }
-      else if(g_activeDirection == DIRECTION_BUY_ONLY && signal == -1)
+      // 2026-07-15 owner-directed evolution, Phase 2b: MEDIUM/WEAK-tier
+      // opposition used to zero `signal` outright here, before the campaign
+      // engine or any grading ever saw the candidate. Per the owner's
+      // policy, a hard stop is reserved for data unavailability
+      // (DIRECTION_NO_TRADE, above) and for the file's own existing
+      // STRONG-tier bar (multiple independent confirmations already
+      // agreeing: BOS-level M5 break + H1 BOS, or M5+M15 structural
+      // alignment, or a confirmed swing-sequence reversal). MEDIUM/WEAK
+      // opposition and TRANSITION_WAIT no longer zero the signal here --
+      // they remain visible as g_activeDirection/g_activeDirectionTier for
+      // XAU_ActiveIntelligenceDecision to weigh as evidence downstream,
+      // instead of dying before that reasoning ever runs.
+      else if(g_activeDirection == DIRECTION_BUY_ONLY && signal == -1 && g_activeDirectionTier == "STRONG")
       {
          blockThisSignal = true;
-         ddReason = "Active Direction=BUY_ONLY, blocking SELL (" + g_activeDirectionReason + ")";
+         ddReason = "Active Direction=BUY_ONLY [STRONG], blocking SELL (" + g_activeDirectionReason + ")";
       }
-      else if(g_activeDirection == DIRECTION_SELL_ONLY && signal == 1)
+      else if(g_activeDirection == DIRECTION_SELL_ONLY && signal == 1 && g_activeDirectionTier == "STRONG")
       {
          blockThisSignal = true;
-         ddReason = "Active Direction=SELL_ONLY, blocking BUY (" + g_activeDirectionReason + ")";
-      }
-      else if(g_activeDirection == DIRECTION_TRANSITION_WAIT && signal == g_htfConsensusDir && g_htfConsensusDir != 0)
-      {
-         // TRANSITION_WAIT only pauses the specific direction that's
-         // weakening (the current HTF-aligned side) — it does not forbid
-         // the opposite direction, which stays subject to its own normal
-         // setup/grading/AI/risk requirements exactly as if Active
-         // Direction were BOTH_ALLOWED.
-         blockThisSignal = true;
-         ddReason = "Active Direction=TRANSITION_WAIT, pausing the weakening " +
-                    (signal == 1 ? "BUY" : "SELL") + " side (" + g_activeDirectionReason + ")";
+         ddReason = "Active Direction=SELL_ONLY [STRONG], blocking BUY (" + g_activeDirectionReason + ")";
       }
       if(blockThisSignal)
       {
@@ -13988,6 +14004,14 @@ void OnTick()
             Print("ADAPTIVE-DIRECTION BLOCK: ", setupName, " ", signal == 1 ? "BUY" : "SELL",
                   " withheld — ", ddReason);
          signal = 0; setupName = ""; setupScore = 0;
+      }
+      else if(g_activeDirection == DIRECTION_BUY_ONLY || g_activeDirection == DIRECTION_SELL_ONLY ||
+              g_activeDirection == DIRECTION_TRANSITION_WAIT)
+      {
+         if(InpSMC_Log)
+            Print("ADAPTIVE-DIRECTION EVIDENCE (not blocked): ", setupName, " ", signal == 1 ? "BUY" : "SELL",
+                  " tier=", g_activeDirectionTier, " state=", EnumToString(g_activeDirection),
+                  " — continuing to unified evidence weighing (", g_activeDirectionReason, ")");
       }
    }
 
@@ -17055,6 +17079,19 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                  signal==1?"BUY":"SELL", reason, oldTrendBias, freshStructureBias, sellEdge, buyEdge,
                  exhaustionRisk, reversalEvidence, chaseRisk, whyChosen, whyOppositeRejected,
                  isManualOverride ? " | MANUAL_OVERRIDE: informational only, not enforced" : "");
+      // 2026-07-15 owner-directed evolution, Phase 2d: this guard's
+      // exhaustionRisk/reversalEvidence/chaseRisk were computed and printed
+      // every call but never fed anywhere -- a fully independent, fully
+      // redundant parallel computation. It stays advisory-only in ACTIVE
+      // mode exactly as before (unchanged below); its numbers now nudge the
+      // persistent thesis objects (small, bounded, clamped) instead of
+      // being discarded, so this second independent exhaustion/reversal
+      // read actually informs the one unified model for future bars rather
+      // than sitting unused.
+      if(g_campaignThesisPrimary.direction == signal)
+         g_campaignThesisPrimary.confidence = XAU_CTClamp(g_campaignThesisPrimary.confidence - exhaustionRisk*0.10 - chaseRisk*0.08);
+      if(g_campaignThesisChallenger.direction == signal)
+         g_campaignThesisChallenger.confidence = XAU_CTClamp(g_campaignThesisChallenger.confidence + reversalEvidence*0.10);
       // v6.17.25: a manual override intentionally bypasses this SOFT
       // direction-quality judgment (see comment on the isManualOverride
       // parameter above) -- the telemetry above still runs so the operator
@@ -21896,6 +21933,81 @@ double   g_campaignContinuationResetScore = 0.0;
 int      g_campaignContinuationResetBars = 0;
 datetime g_campaignContinuationResetLastBar = 0;
 
+// 2026-07-15 owner-directed evolution: ONE persistent, bar-updating market
+// thesis, generalized from XAU_CampaignReversalOpportunity above so the
+// continuation/dominant direction gets the same evolving memory the
+// reversal side already had. Same struct shape and evidence-decay
+// mechanics, reused for both roles -- not a second, parallel state machine.
+enum ENUM_CAMPAIGN_THESIS_ROLE
+{
+   THESIS_ROLE_PRIMARY=0,     // tracks the dominant/continuation direction
+   THESIS_ROLE_CHALLENGER=1   // tracks the opposite/reversal direction
+};
+
+enum ENUM_CAMPAIGN_THESIS_STATE
+{
+   THESIS_NONE=0,
+   THESIS_WATCH=1,
+   THESIS_RECLAIM=2,
+   THESIS_ZONE=3,
+   THESIS_CONFIRMING=4,
+   THESIS_ALLOWED=5,
+   THESIS_EXTENDED=6,
+   THESIS_WAIT_PULLBACK=7,
+   THESIS_VALUE_RESET=8,
+   THESIS_REENTRY=9,
+   THESIS_EXPIRED=10
+};
+
+struct XAU_CampaignThesis
+{
+   bool     active;
+   int      direction;
+   datetime createdAt;
+   double   originPrice;
+   double   firstDetectionPrice;
+   double   reclaimPrice;
+   double   latestAcceptablePrice;
+   double   impulsePeak;
+   double   expectedPullbackPrice;
+   double   lastEntryPrice;
+   datetime lastEntryAt;
+   bool     impulseConsumedByEntry;
+   // Same stateful, bounded evidence memory as XAU_CampaignReversalOpportunity:
+   // accumulate only on a newly observed closed-bar event, decay when
+   // absent, cancelled by contradictory proof.
+   double   reclaimEvidence;
+   double   retestEvidence;
+   double   displacementEvidence;
+   double   persistenceEvidence;
+   datetime reclaimAt;
+   datetime retestAt;
+   datetime displacementAt;
+   datetime lastEvidenceAt;
+   bool     reclaimVisible;
+   bool     retestVisible;
+   bool     displacementVisible;
+   int      evidenceBars;
+   int      contradictionBars;
+   ENUM_CAMPAIGN_THESIS_STATE state;
+   // New: the smoothly-evolving confidence score (0-100) and its own
+   // persistence-gated reset pair -- generalizes g_campaignPersistentExhaustion
+   // and g_campaignContinuationResetScore/Bars into a per-instance home so
+   // both primary and challenger get the memory only reversal had before.
+   double   confidence;
+   double   resetScore;
+   int      resetBars;
+   datetime resetLastBar;
+   // Phase 3: projected structural target levels (zeroed/unused until then).
+   double   projectedTarget1;
+   double   projectedTarget2;
+   double   idealEntryLow;
+   double   idealEntryHigh;
+};
+
+XAU_CampaignThesis g_campaignThesisPrimary;      // dominant/continuation direction
+XAU_CampaignThesis g_campaignThesisChallenger;   // opposite/reversal direction
+
 input group "=== ADAPTIVE TREND MATURITY & EARLY REVERSAL ENGINE (v6.22.0 experiment) ==="
 input bool   InpMaturityEngineEnable                = true;
 input int    InpMaturityLookbackBars                = 24;      // closed M5 bars examined for momentum/continuation/swing factors
@@ -22349,6 +22461,122 @@ string XAU_CTReversalStateName(ENUM_CAMPAIGN_REVERSAL_OPPORTUNITY_STATE state)
       case CAMPAIGN_REVERSAL_EXPIRED:       return "OPPORTUNITY_EXPIRED";
    }
    return "NONE";
+}
+
+string XAU_CTThesisStateName(ENUM_CAMPAIGN_THESIS_STATE state)
+{
+   switch(state)
+   {
+      case THESIS_WATCH:         return "WATCH";
+      case THESIS_RECLAIM:       return "RECLAIM";
+      case THESIS_ZONE:          return "ZONE";
+      case THESIS_CONFIRMING:    return "CONFIRMING";
+      case THESIS_ALLOWED:       return "ALLOWED";
+      case THESIS_EXTENDED:      return "EXTENDED";
+      case THESIS_WAIT_PULLBACK: return "WAIT_PULLBACK";
+      case THESIS_VALUE_RESET:   return "VALUE_RESET";
+      case THESIS_REENTRY:       return "REENTRY";
+      case THESIS_EXPIRED:       return "EXPIRED";
+   }
+   return "NONE";
+}
+
+// 2026-07-15 owner-directed evolution, Phase 1: ONE persistent, bar-updating
+// thesis update, shared by both the primary (continuation) and challenger
+// (reversal) roles -- same evidence-accumulation/decay mechanics already
+// proven in g_campaignReversalOpportunity, just generalized so continuation
+// gets the same memory reversal already had. Phase 1 is observe-only: this
+// populates `thesis` for telemetry/replay verification but nothing reads
+// from it into a trading gate yet (that's Phase 2).
+void XAU_CampaignThesis_Update(XAU_CampaignThesis &thesis, ENUM_CAMPAIGN_THESIS_ROLE role, int direction,
+                                double rawConfidence, bool reclaimNow, bool retestNow, bool displacementNow,
+                                int persistenceCount, int persistenceNeeded, double c1, double atr,
+                                datetime bar, bool m5EvidenceAdvanced)
+{
+   if(thesis.direction != direction)
+   {
+      // Direction changed under this role: fresh start, same intent as the
+      // direction-flip reset already proven for g_campaignPersistentExhaustion
+      // (lines ~22721-22728) -- a structurally different direction cannot
+      // inherit the old direction's confidence/evidence.
+      ZeroMemory(thesis);
+      thesis.direction = direction;
+      thesis.active = true;
+      thesis.createdAt = bar;
+      thesis.originPrice = c1;
+      thesis.firstDetectionPrice = c1;
+      thesis.impulsePeak = c1;
+      thesis.confidence = rawConfidence;
+      thesis.state = THESIS_WATCH;
+   }
+
+   // Pattern A (from g_campaignPersistentExhaustion, lines ~22729-22734):
+   // rise freely when evidence agrees, fall only at a capped rate otherwise.
+   if(rawConfidence >= thesis.confidence) thesis.confidence = rawConfidence;
+   else thesis.confidence = MathMax(rawConfidence, thesis.confidence - 12.0);
+   thesis.confidence = XAU_CTClamp(thesis.confidence);
+
+   if(direction == 1) thesis.impulsePeak = MathMax(thesis.impulsePeak, c1);
+   else thesis.impulsePeak = MathMin(thesis.impulsePeak, c1);
+
+   if(m5EvidenceAdvanced && bar != thesis.resetLastBar)
+   {
+      double decay = MathMax(1.0, InpCampaignEvidenceDecayPerBar);
+
+      // Pattern B (from g_campaignContinuationResetScore/Bars, lines
+      // ~22679-22697): accumulate-with-persistence-gate, requires proof
+      // across >=2 distinct closed bars, not one candle.
+      double barEvidence = 0.0;
+      if(reclaimNow) barEvidence += 25.0;
+      if(retestNow) barEvidence += 20.0;
+      if(displacementNow) barEvidence += 20.0;
+      if(persistenceNeeded > 0 && persistenceCount >= persistenceNeeded) barEvidence += 15.0;
+      if(rawConfidence >= 55.0) barEvidence += 20.0;
+      if(barEvidence >= 60.0)
+      {
+         thesis.resetScore = XAU_CTClamp(thesis.resetScore + barEvidence*0.28);
+         thesis.resetBars++;
+      }
+      else
+      {
+         thesis.resetScore = MathMax(0.0, thesis.resetScore - 14.0);
+         if(barEvidence < 35.0) thesis.resetBars = 0;
+      }
+      thesis.resetLastBar = bar;
+
+      // Rising-edges-only evidence memory, identical pattern to
+      // g_campaignReversalOpportunity (lines ~22796-22849).
+      if(reclaimNow && !thesis.reclaimVisible)
+      { thesis.reclaimEvidence = XAU_CTClamp(thesis.reclaimEvidence + 40.0); thesis.reclaimAt = bar; thesis.lastEvidenceAt = bar; thesis.evidenceBars++; }
+      else if(!reclaimNow) thesis.reclaimEvidence = MathMax(0.0, thesis.reclaimEvidence - decay);
+
+      if(retestNow && !thesis.retestVisible)
+      { thesis.retestEvidence = XAU_CTClamp(thesis.retestEvidence + 36.0); thesis.retestAt = bar; thesis.lastEvidenceAt = bar; thesis.evidenceBars++; }
+      else if(!retestNow) thesis.retestEvidence = MathMax(0.0, thesis.retestEvidence - decay);
+
+      if(displacementNow && !thesis.displacementVisible)
+      { thesis.displacementEvidence = XAU_CTClamp(thesis.displacementEvidence + 34.0); thesis.displacementAt = bar; thesis.lastEvidenceAt = bar; thesis.evidenceBars++; }
+      else if(!displacementNow) thesis.displacementEvidence = MathMax(0.0, thesis.displacementEvidence - decay);
+
+      double persistenceNow = persistenceNeeded > 0 ? MathMin(100.0, (double)persistenceCount/persistenceNeeded*100.0) : 0.0;
+      thesis.persistenceEvidence = MathMax(MathMax(0.0, thesis.persistenceEvidence - decay), persistenceNow);
+      thesis.reclaimVisible = reclaimNow; thesis.retestVisible = retestNow; thesis.displacementVisible = displacementNow;
+   }
+
+   // Owner-specified confidence-tier ladder. Phase 1: informational state
+   // label only -- no gate reads `thesis.state`/`thesis.confidence` yet.
+   if(thesis.confidence < 55.0) thesis.state = THESIS_WATCH;
+   else if(thesis.confidence < 70.0) thesis.state = THESIS_RECLAIM;
+   else if(thesis.confidence < 80.0) thesis.state = THESIS_ZONE;
+   else if(thesis.confidence < 90.0) thesis.state = THESIS_CONFIRMING;
+   else thesis.state = THESIS_ALLOWED;
+
+   PrintFormat("[CAMPAIGN_THESIS] role=%s direction=%s confidence=%.0f state=%s resetScore=%.0f/%d reclaim=%s retest=%s displacement=%s evidenceMemory=%.0f/%.0f/%.0f/%.0f evidenceBars=%d",
+               role==THESIS_ROLE_PRIMARY?"PRIMARY":"CHALLENGER", direction==1?"BUY":"SELL",
+               thesis.confidence, XAU_CTThesisStateName(thesis.state), thesis.resetScore, thesis.resetBars,
+               reclaimNow?"Y":"N", retestNow?"Y":"N", displacementNow?"Y":"N",
+               thesis.reclaimEvidence, thesis.retestEvidence, thesis.displacementEvidence, thesis.persistenceEvidence,
+               thesis.evidenceBars);
 }
 
 void XAU_CTMarkOpportunityEntry(int direction, double price, string source)
@@ -22970,6 +23198,18 @@ XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()
                          d.remainingRewardR,d.oppositeRemainingRewardR,d.distanceFromValueATR,d.impulseExtensionATR,d.moveAlreadyConsumedPct,
                          d.entryLocationQuality,d.entryDecision,XAU_CTReversalOpportunityId(),XAU_CTReversalStateName(g_campaignReversalOpportunity.state),oppositePersistence,
                          g_campaignContinuationResetScore,g_campaignContinuationResetBars);
+   // 2026-07-15 owner-directed evolution, Phase 1: populate the persistent
+   // thesis objects from the same raw quantities already computed above --
+   // no new market-reading logic, purely restructuring what already exists
+   // into a bar-over-bar-evolving home. Observe-only: nothing reads from
+   // g_campaignThesisPrimary/Challenger into a trading gate yet (Phase 2).
+   XAU_CampaignThesis_Update(g_campaignThesisPrimary, THESIS_ROLE_PRIMARY, dir,
+                              d.continuationConfidence, freshProgress, failedExtremes<=1, oldBars>=5,
+                              oldBars, 5, c1, atr, bar, m5EvidenceAdvanced);
+   XAU_CampaignThesis_Update(g_campaignThesisChallenger, THESIS_ROLE_CHALLENGER, -dir,
+                              d.reversalProbability, effectiveReclaim, effectiveRetest, effectiveDisplacement,
+                              effectivePersistence, InpCampaignTransitionPersistenceBars, c1, atr, bar, m5EvidenceAdvanced);
+
    g_campaignTransitionDecision=d;
    g_campaignTransitionLastComputedBar=bar;
    g_campaignTransitionLastComputedMicroBar=microBar;
@@ -23020,12 +23260,42 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
    ENUM_ACTIVE_INTELLIGENCE_ACTION action=ACTIVE_CANCEL_OPPORTUNITY;
    double weightedScore=0.0;
    bool oldDirection=(signal==d.dominantDirection);
-   bool hardTiming=timingSnapshotValid && g_lastEntryQ_BlockClass=="HARD_BLOCK";
+   // 2026-07-15 owner-directed evolution, Phase 2a: blockClass=="HARD_BLOCK"
+   // conflated 5 independent booleans and was checked as `hardTiming`, the
+   // very FIRST branch in this function -- before any of the campaign-aware
+   // logic below ever ran. That was the literal, named cause of two clean
+   // A-grade breakouts (06:45/13:40) being killed the instant they were
+   // first recognized: the "one reasoned decision" function deferred to a
+   // blind local veto before consulting its own reasoning at all.
+   // spikeCooldown (raw tick/volatility data-quality protection, closer to
+   // a broker-safety category than a market-structure judgment) alone
+   // remains a genuine hard stop. The other 4 (lateChaseEntry,
+   // failedImpulseBlock, postSweepTrap, timingBadRR) become weighted
+   // evidence below instead of an automatic veto.
+   bool hardStopFromSpike=timingSnapshotValid && g_lastEntryQ_SpikeCooldown;
+   double timingEvidencePenalty=0.0;
+   if(timingSnapshotValid)
+   {
+      if(g_lastEntryQ_LateChaseEntry)     timingEvidencePenalty+=18.0;
+      if(g_lastEntryQ_FailedImpulseBlock) timingEvidencePenalty+=18.0;
+      if(g_lastEntryQ_PostSweepTrap)      timingEvidencePenalty+=15.0;
+      if(g_lastEntryQ_TimingBadRR)        timingEvidencePenalty+=12.0;
+   }
+   // Phase 2b: HTF direction opposition below STRONG tier (STRONG itself
+   // already hard-blocked upstream at the ADAPTIVE-DIRECTION gate) no
+   // longer zeroes the signal before this function runs -- it arrives here
+   // and is weighed as evidence instead, scaled by tier (MEDIUM is a
+   // firmer read than WEAK).
+   bool htfOpposed=(signal==1 && g_activeDirection==DIRECTION_SELL_ONLY) ||
+                   (signal==-1 && g_activeDirection==DIRECTION_BUY_ONLY) ||
+                   (g_activeDirection==DIRECTION_TRANSITION_WAIT && signal==g_htfConsensusDir && g_htfConsensusDir!=0);
+   if(htfOpposed)
+      timingEvidencePenalty += (g_activeDirectionTier=="MEDIUM") ? 20.0 : 10.0;
    bool opportunityDirection=g_campaignReversalOpportunity.active && signal==g_campaignReversalOpportunity.direction;
    bool centralFreshAllowed=signal==1 ? d.freshBuyAllowed : d.freshSellAllowed;
    bool genuineContinuationReset=g_campaignContinuationResetScore>=65.0 && g_campaignContinuationResetBars>=2;
 
-   if(hardTiming)
+   if(hardStopFromSpike)
       action=ACTIVE_WAIT_FOR_VALUE;
    else if(!timingSnapshotValid)
       action=timingPassed ? ACTIVE_CANCEL_OPPORTUNITY : ACTIVE_WAIT_FOR_VALUE;
@@ -23044,7 +23314,13 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
       action=ACTIVE_BLOCK_OLD_DIRECTION;
    else if(!oldDirection)
    {
-      if(centralFreshAllowed && d.reversalLocationGood && !d.reversalWaitForPullback)
+      // Owner-directed policy: ordinary conflicting timing evidence reduces
+      // confidence and requires more proof, it does not automatically
+      // block. Reuse the Phase 1 persistent challenger thesis (already
+      // tracking this exact direction's confidence bar-over-bar) as the
+      // extra proof required, instead of inventing a fresh ad hoc threshold.
+      bool timingEvidenceClearing=(timingEvidencePenalty<=0.0) || (g_campaignThesisChallenger.confidence>=80.0);
+      if(centralFreshAllowed && d.reversalLocationGood && !d.reversalWaitForPullback && timingEvidenceClearing)
          action=ACTIVE_TRADE_NOW;
       else if(opportunityDirection || d.oppositeEntryPreparing)
          action=ACTIVE_WAIT_FOR_VALUE;
@@ -23065,6 +23341,12 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
       double setupQuality=XAU_CTClamp(MathMax(g_lastEntryQ_SetupQuality,setupScore/6.8*100.0));
       weightedScore=directionQuality*0.20+trendQuality*0.15+exhaustionSafety*0.15+
                     locationQuality*0.18+rewardQuality*0.14+resetQuality*0.13+setupQuality*0.05;
+      // Owner-directed policy: the 4 non-spike timing flags (lateChaseEntry/
+      // failedImpulseBlock/postSweepTrap/timingBadRR) reduce the weighted
+      // score instead of independently vetoing -- a strong-enough case can
+      // still clear `required` below, a marginal one now correctly falls
+      // short instead of being silently admitted with no penalty at all.
+      weightedScore=XAU_CTClamp(weightedScore-timingEvidencePenalty*0.5);
 
       bool cleanContinuationAtUsableLocation=g_lastEntryQ_CleanContinuation &&
                                              g_lastEntryQ_TimingQuality>=75.0 &&
@@ -23084,7 +23366,12 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
                               weightedScore>=required+5.0);
       bool lifecycleReleased=centralFreshAllowed ||
                              (genuineContinuationReset && d.exhaustionProbability<InpCampaignTransitionExhaustAt);
-      bool matureProof=!mature || ((g_lastEntryQ_CleanContinuation || g_lastEntryQ_ValueReset || genuineContinuationReset) &&
+      // Phase 1's persistent primary thesis (bar-over-bar confidence, not
+      // recomputed from scratch each call) can also satisfy this proof --
+      // ZONE tier (>=70) or higher is real accumulated conviction, the
+      // same standard the confidence-tier ladder uses to unlock a campaign.
+      bool matureProof=!mature || ((g_lastEntryQ_CleanContinuation || g_lastEntryQ_ValueReset || genuineContinuationReset ||
+                                    g_campaignThesisPrimary.confidence>=70.0) &&
                                   g_lastEntryQ_TimingQuality>=65.0);
       double minFinalConfidence=mature ? 70.0 : 60.0;
 
@@ -23099,7 +23386,7 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
          action=ACTIVE_WAIT_FOR_VALUE;
    }
 
-   decisionReason=StringFormat("candidateId=%s action=%s weightedScore=%.1f direction=%s dominant=%s lifecycle=%s trendHealth=%.0f continuation=%.0f exhaustion=%.0f location=%.0f timing=%.0f extension=%.0f late=%.0f rewardQ=%.0f remainingRoom=%.2fATR oldReward=%.2fR reset=%s freshStructure=%s grade=%s raw=%.2f combined=%.2f gradeThresholdPassed=%s timingPassed=%s timingClass=%s centralFreshAllowed=%s continuationReset=%.0f/%d warnings=%s",
+   decisionReason=StringFormat("candidateId=%s action=%s weightedScore=%.1f direction=%s dominant=%s lifecycle=%s trendHealth=%.0f continuation=%.0f exhaustion=%.0f location=%.0f timing=%.0f extension=%.0f late=%.0f rewardQ=%.0f remainingRoom=%.2fATR oldReward=%.2fR reset=%s freshStructure=%s grade=%s raw=%.2f combined=%.2f gradeThresholdPassed=%s timingPassed=%s timingClass=%s centralFreshAllowed=%s continuationReset=%.0f/%d hardStopFromSpike=%s timingEvidencePenalty=%.0f thesisPrimary=%.0f thesisChallenger=%.0f warnings=%s",
                                candidateId,XAU_ActiveActionName(action),weightedScore,signal==1?"BUY":"SELL",
                                d.dominantDirection==1?"BUY":"SELL",XAU_CTLifecycleName(d.lifecycle),d.trendHealth,
                                d.continuationConfidence,d.exhaustionProbability,d.entryLocationQuality,
@@ -23111,6 +23398,8 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
                                gradeThresholdPassed?"Y":"N",timingPassed?"Y":"N",
                                timingSnapshotValid?g_lastEntryQ_BlockClass:"UNAVAILABLE",centralFreshAllowed?"Y":"N",
                                g_campaignContinuationResetScore,g_campaignContinuationResetBars,
+                               hardStopFromSpike?"Y":"N",timingEvidencePenalty,
+                               g_campaignThesisPrimary.confidence,g_campaignThesisChallenger.confidence,
                                StringLen(legacyWarnings)>0?legacyWarnings:"none");
    Print("[ACTIVE_INTELLIGENCE_DECISION] ",decisionReason);
    return action;
@@ -33423,6 +33712,11 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    g_lastEntryQ_Dir        = signal;
    g_lastEntryQ_Setup      = setupName;
    g_lastEntryQ_CapturedAt = TimeCurrent();
+   g_lastEntryQ_LateChaseEntry     = lateChaseEntry;
+   g_lastEntryQ_SpikeCooldown      = spikeCooldown;
+   g_lastEntryQ_FailedImpulseBlock = failedImpulseBlock;
+   g_lastEntryQ_PostSweepTrap      = postSweepTrap;
+   g_lastEntryQ_TimingBadRR        = timingBadRRForReport;
 
    reason += StringFormat("CALIBRATED_ENTRY_QUALITY: setupQuality=%.0f/100 entryTimingQuality=%.0f/100 extensionRisk=%.0f/100 expectedMAERisk=%.0f/100 effectiveRRQuality=%.0f/100 finalCalibratedConfidence=%.0f/100. ",
                           setupQuality, entryTimingQuality, extensionRisk,
