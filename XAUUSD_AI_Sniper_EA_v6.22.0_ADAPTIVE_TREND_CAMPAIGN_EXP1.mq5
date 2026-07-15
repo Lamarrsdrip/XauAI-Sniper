@@ -1779,7 +1779,7 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.265"
+#property version   "6.266"
 #property description "XAUUSD AI Sniper v6.22.0 ADAPTIVE CAMPAIGN TRANSITION EXP1"
 #property description "EXPERIMENT BRANCH - NOT PRODUCTION. Baseline: v6.21.3 commit 02b0893."
 #property description "Replaces the scalper exit lifecycle with ADAPTIVE_TREND_CAMPAIGN_MANAGER:"
@@ -1797,7 +1797,7 @@
 
 #define XAUAI_EA_VERSION "v6.22.0-ADAPTIVE-CAMPAIGN-TRANSITION-EXP1"
 #define XAUAI_EA_VERSION_NUM "6.22.0"
-#define XAUAI_BUILD_HASH "v6220-unified-campaign-thesis-20260715"
+#define XAUAI_BUILD_HASH "v6220-unified-campaign-phase3-20260715"
 #define XAU_EXPERIMENT_BUILD true
 #define XAU_CAMPAIGN_MEMORY_TAG "_CAMPAIGNEXP1"
 
@@ -17088,10 +17088,47 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       // being discarded, so this second independent exhaustion/reversal
       // read actually informs the one unified model for future bars rather
       // than sitting unused.
+      // reversalEvidence is evidence AGAINST the requested direction. The
+      // original Phase 2d wiring added it to whichever challenger happened
+      // to equal `signal`, which inverted its meaning and usually failed to
+      // inform the actual opposite thesis. Apply the same signed evidence to
+      // either role based solely on direction: requested side loses
+      // exhaustion/reversal/chase confidence; opposite side gains the
+      // bounded reversal contribution.
+      double againstRequested=exhaustionRisk*0.10+reversalEvidence*0.10+chaseRisk*0.08;
       if(g_campaignThesisPrimary.direction == signal)
-         g_campaignThesisPrimary.confidence = XAU_CTClamp(g_campaignThesisPrimary.confidence - exhaustionRisk*0.10 - chaseRisk*0.08);
+         g_campaignThesisPrimary.confidence = XAU_CTClamp(g_campaignThesisPrimary.confidence-againstRequested);
+      else if(g_campaignThesisPrimary.direction == -signal)
+         g_campaignThesisPrimary.confidence = XAU_CTClamp(g_campaignThesisPrimary.confidence+reversalEvidence*0.10);
       if(g_campaignThesisChallenger.direction == signal)
-         g_campaignThesisChallenger.confidence = XAU_CTClamp(g_campaignThesisChallenger.confidence + reversalEvidence*0.10);
+         g_campaignThesisChallenger.confidence = XAU_CTClamp(g_campaignThesisChallenger.confidence-againstRequested);
+      else if(g_campaignThesisChallenger.direction == -signal)
+         g_campaignThesisChallenger.confidence = XAU_CTClamp(g_campaignThesisChallenger.confidence+reversalEvidence*0.10);
+      // This evidence is discovered inside OpenTrade so it is later than the
+      // normal ACTIVE synthesis call. Revalidate the SAME unified confidence
+      // authorization after applying it; otherwise an 80+ thesis could be
+      // reduced below 80 here and still send the order. This also closes the
+      // recovery/force-open caller gap without reviving guardAllows as an
+      // independent veto. Explicit manual override retains its documented
+      // bypass.
+      double postEvidenceConfidence=-1.0;
+      if(g_campaignThesisPrimary.direction==signal)
+         postEvidenceConfidence=g_campaignThesisPrimary.confidence;
+      else if(g_campaignThesisChallenger.direction==signal)
+         postEvidenceConfidence=g_campaignThesisChallenger.confidence;
+      if(InpCampaignTransitionMode==CAMPAIGN_TRANSITION_ACTIVE && !isManualOverride &&
+         postEvidenceConfidence>=0.0 && postEvidenceConfidence<80.0)
+      {
+         string confidenceBlock=StringFormat("ACTIVE_THESIS_AUTHORIZATION_REVOKED: direction=%s postEvidenceConfidence=%.1f < 80 after signed exhaustion/reversal/chase evidence %.1f",
+                                             signal==1?"BUY":"SELL",postEvidenceConfidence,againstRequested);
+         Print("TRADE BLOCKED BECAUSE: ",confidenceBlock);
+         g_lastSkipReason=confidenceBlock;
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "UnifiedThesisAuthorization",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "THESIS_BELOW_80",
+                                   true, false, false, 0, 0, confidenceBlock, reason, 0.0);
+         return false;
+      }
       // v6.17.25: a manual override intentionally bypasses this SOFT
       // direction-quality judgment (see comment on the isManualOverride
       // parameter above) -- the telemetry above still runs so the operator
@@ -17354,8 +17391,18 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    PrintFormat("CAMPAIGN_INITIAL_INVALIDATION | direction=%s | entry=%.5f | sl=%.5f | distance=%.5f | evidence=%s",
                signal == 1 ? "BUY" : "SELL", price, sl, slDist, invalidationEvidence);
 
+   double projectedTarget1=0.0;
+   if(g_campaignThesisPrimary.direction==signal)
+      projectedTarget1=g_campaignThesisPrimary.projectedTarget1;
+   else if(g_campaignThesisChallenger.direction==signal)
+      projectedTarget1=g_campaignThesisChallenger.projectedTarget1;
+   // Never convert a behind-price obstacle into apparent reward through the
+   // absolute-value calculation below. Zero means structural target unknown,
+   // so the existing remainingRewardR and all downstream gates still decide.
+   if((signal==1 && projectedTarget1<=price) || (signal==-1 && projectedTarget1>=price))
+      projectedTarget1=0.0;
    double growthRiskPerLotRR = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, sl, 1.0));
-   double growthRewardPerLotRR = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, tp, 1.0));
+   double growthRewardPerLotRR = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, projectedTarget1, 1.0));
    double growthRR = (growthRiskPerLotRR > 0.0) ? growthRewardPerLotRR / growthRiskPerLotRR : 0.0;
    if(InpGrowthGuardEnable && InpGrowthMinEntryRR > 0.0 &&
       growthRR > 0.0 && growthRR < InpGrowthMinEntryRR)
@@ -17366,6 +17413,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
             "R (prefer ", DoubleToString(InpGrowthPreferEntryRR, 2),
             "R) risk$/lot=", DoubleToString(growthRiskPerLotRR, 2),
             " reward$/lot=", DoubleToString(growthRewardPerLotRR, 2),
+            " projectedTarget1=", DoubleToString(projectedTarget1, digits),
             " reason=", reason);
       g_lastSkipReason = "GROWTH_RR_BLOCK";
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "GrowthGuard",
@@ -22491,9 +22539,11 @@ string XAU_CTThesisStateName(ENUM_CAMPAIGN_THESIS_STATE state)
 void XAU_CampaignThesis_Update(XAU_CampaignThesis &thesis, ENUM_CAMPAIGN_THESIS_ROLE role, int direction,
                                 double rawConfidence, bool reclaimNow, bool retestNow, bool displacementNow,
                                 int persistenceCount, int persistenceNeeded, double c1, double atr,
-                                datetime bar, bool m5EvidenceAdvanced)
+                                datetime bar, bool m5EvidenceAdvanced, double projectedTarget1,
+                                double projectedTarget2, double idealEntryLow, double idealEntryHigh)
 {
-   if(thesis.direction != direction)
+   bool directionChanged = (thesis.direction != direction);
+   if(directionChanged)
    {
       // Direction changed under this role: fresh start, same intent as the
       // direction-flip reset already proven for g_campaignPersistentExhaustion
@@ -22510,10 +22560,16 @@ void XAU_CampaignThesis_Update(XAU_CampaignThesis &thesis, ENUM_CAMPAIGN_THESIS_
       thesis.state = THESIS_WATCH;
    }
 
-   // Pattern A (from g_campaignPersistentExhaustion, lines ~22729-22734):
-   // rise freely when evidence agrees, fall only at a capped rate otherwise.
-   if(rawConfidence >= thesis.confidence) thesis.confidence = rawConfidence;
-   else thesis.confidence = MathMax(rawConfidence, thesis.confidence - 12.0);
+   // Pattern A (from g_campaignPersistentExhaustion): rise freely when
+   // CLOSED-M5 evidence agrees, fall only at a capped rate otherwise.  The
+   // transition engine also refreshes on M1 for timing telemetry; allowing
+   // those refreshes to smooth confidence manufactured five updates per M5
+   // bar and collapsed the intended persistence horizon.
+   if(!directionChanged && m5EvidenceAdvanced)
+   {
+      if(rawConfidence >= thesis.confidence) thesis.confidence = rawConfidence;
+      else thesis.confidence = MathMax(rawConfidence, thesis.confidence - 12.0);
+   }
    thesis.confidence = XAU_CTClamp(thesis.confidence);
 
    if(direction == 1) thesis.impulsePeak = MathMax(thesis.impulsePeak, c1);
@@ -22563,20 +22619,38 @@ void XAU_CampaignThesis_Update(XAU_CampaignThesis &thesis, ENUM_CAMPAIGN_THESIS_
       thesis.reclaimVisible = reclaimNow; thesis.retestVisible = retestNow; thesis.displacementVisible = displacementNow;
    }
 
-   // Owner-specified confidence-tier ladder. Phase 1: informational state
-   // label only -- no gate reads `thesis.state`/`thesis.confidence` yet.
-   if(thesis.confidence < 55.0) thesis.state = THESIS_WATCH;
-   else if(thesis.confidence < 70.0) thesis.state = THESIS_RECLAIM;
-   else if(thesis.confidence < 80.0) thesis.state = THESIS_ZONE;
-   else if(thesis.confidence < 90.0) thesis.state = THESIS_CONFIRMING;
-   else thesis.state = THESIS_ALLOWED;
+   // Owner-specified confidence-tier ladder. Below 35 there is no thesis;
+   // 35 is observation, 55 watchlist, 70 campaign build, and 80 execution
+   // authorization (still subject to location/reward/risk). 90/95 remain
+   // visible in the continuous confidence value for high-confidence and
+   // protected-pyramid decisions; they do not need duplicate enum states.
+   if(thesis.confidence < 35.0)
+   { thesis.active = false; thesis.state = THESIS_NONE; }
+   else if(thesis.confidence < 55.0)
+   { thesis.active = true; thesis.state = THESIS_WATCH; }
+   else if(thesis.confidence < 70.0)
+   { thesis.active = true; thesis.state = THESIS_RECLAIM; }
+   else if(thesis.confidence < 80.0)
+   { thesis.active = true; thesis.state = THESIS_ZONE; }
+   else
+   { thesis.active = true; thesis.state = THESIS_ALLOWED; }
 
-   PrintFormat("[CAMPAIGN_THESIS] role=%s direction=%s confidence=%.0f state=%s resetScore=%.0f/%d reclaim=%s retest=%s displacement=%s evidenceMemory=%.0f/%.0f/%.0f/%.0f evidenceBars=%d",
-               role==THESIS_ROLE_PRIMARY?"PRIMARY":"CHALLENGER", direction==1?"BUY":"SELL",
-               thesis.confidence, XAU_CTThesisStateName(thesis.state), thesis.resetScore, thesis.resetBars,
-               reclaimNow?"Y":"N", retestNow?"Y":"N", displacementNow?"Y":"N",
-               thesis.reclaimEvidence, thesis.retestEvidence, thesis.displacementEvidence, thesis.persistenceEvidence,
-               thesis.evidenceBars);
+   // Phase 3 is telemetry/corroboration only. Targets reuse the existing H1
+   // structural-extreme and rolling-range reads; the entry zone reuses the
+   // transition engine's existing value anchor and value-distance allowance.
+   thesis.projectedTarget1 = projectedTarget1;
+   thesis.projectedTarget2 = projectedTarget2;
+   thesis.idealEntryLow = idealEntryLow;
+   thesis.idealEntryHigh = idealEntryHigh;
+
+   if(directionChanged || m5EvidenceAdvanced)
+      PrintFormat("[CAMPAIGN_THESIS] role=%s direction=%s confidence=%.0f state=%s resetScore=%.0f/%d reclaim=%s retest=%s displacement=%s evidenceMemory=%.0f/%.0f/%.0f/%.0f evidenceBars=%d target1=%.2f target2=%.2f idealEntry=%.2f..%.2f",
+                  role==THESIS_ROLE_PRIMARY?"PRIMARY":"CHALLENGER", direction==1?"BUY":"SELL",
+                  thesis.confidence, XAU_CTThesisStateName(thesis.state), thesis.resetScore, thesis.resetBars,
+                  reclaimNow?"Y":"N", retestNow?"Y":"N", displacementNow?"Y":"N",
+                  thesis.reclaimEvidence, thesis.retestEvidence, thesis.displacementEvidence, thesis.persistenceEvidence,
+                  thesis.evidenceBars, thesis.projectedTarget1, thesis.projectedTarget2,
+                  thesis.idealEntryLow, thesis.idealEntryHigh);
 }
 
 void XAU_CTMarkOpportunityEntry(int direction, double price, string source)
@@ -22644,6 +22718,13 @@ XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()
    d.dominantDirection = XAU_CTDominantDirection(atr);
    if(d.dominantDirection == 0)
       d.dominantDirection = iClose(Symbol(), PERIOD_M5, 12) < c1 ? 1 : -1;
+   // M1 refreshes exist for execution telemetry, not for rewriting the
+   // campaign story. Keep the last closed-M5 direction between M5 advances;
+   // otherwise fallback HTF/active-direction changes can reset both thesis
+   // objects mid-bar and flip them back on the next close.
+   if(!m5EvidenceAdvanced && g_campaignTransitionDecision.evaluatedBar==bar &&
+      g_campaignTransitionDecision.dominantDirection!=0)
+      d.dominantDirection=g_campaignTransitionDecision.dominantDirection;
    if(g_campaignTransitionRestartConservative && g_campaignPersistentDirection!=0)
       d.dominantDirection=g_campaignPersistentDirection;
    int dir = d.dominantDirection;
@@ -22664,14 +22745,24 @@ XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()
    // silently break on thin history.
    double legExtreme = dir==1 ? iHigh(Symbol(), PERIOD_M5, 1) : iLow(Symbol(), PERIOD_M5, 1);
    double legOrigin   = dir==1 ? iLow(Symbol(), PERIOD_M5, 1)  : iHigh(Symbol(), PERIOD_M5, 1);
+   bool legOriginFound = false;
    for(int i=1; i<=288; i++)
    {
       double h = iHigh(Symbol(), PERIOD_M5, i), l = iLow(Symbol(), PERIOD_M5, i);
       if(h <= 0.0 || l <= 0.0) continue;
       rangeHigh = MathMax(rangeHigh, h); rangeLow = MathMin(rangeLow, l); valid++;
-      if(i == 1) continue; // bar 1 already seeded legExtreme/legOrigin above
+      // Keep scanning all 288 bars for the true rolling 24h range even after
+      // the current leg origin has been found. The prior implementation
+      // `break`ed here, contradicting its own day-scale-range contract and
+      // usually forcing the ATR*4 fallback after only a handful of bars.
+      if(i == 1 || legOriginFound) continue;
       bool legReset = dir==1 ? (legExtreme - l >= atr*1.8) : (h - legExtreme >= atr*1.8);
-      if(legReset) { legOrigin = dir==1 ? l : h; break; }
+      if(legReset)
+      {
+         legOrigin = dir==1 ? l : h;
+         legOriginFound = true;
+         continue;
+      }
       legExtreme = dir==1 ? MathMax(legExtreme, h) : MathMin(legExtreme, l);
       legOrigin  = dir==1 ? l : h;
    }
@@ -23198,6 +23289,24 @@ XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()
                          d.remainingRewardR,d.oppositeRemainingRewardR,d.distanceFromValueATR,d.impulseExtensionATR,d.moveAlreadyConsumedPct,
                          d.entryLocationQuality,d.entryDecision,XAU_CTReversalOpportunityId(),XAU_CTReversalStateName(g_campaignReversalOpportunity.state),oppositePersistence,
                          g_campaignContinuationResetScore,g_campaignContinuationResetBars);
+   // Phase 3 projected path: two existing structural lookups per bar, no
+   // simulation. A target is retained only when it is genuinely ahead in
+   // that thesis's direction; zero means no corroborating target is known.
+   double primaryTarget1 = dir==1 ? XAU_Campaign_ExtremeHigh(PERIOD_H1,InpCampaignInvalidationHTFBars)
+                                   : XAU_Campaign_ExtremeLow(PERIOD_H1,InpCampaignInvalidationHTFBars);
+   double challengerTarget1 = dir==1 ? XAU_Campaign_ExtremeLow(PERIOD_H1,InpCampaignInvalidationHTFBars)
+                                      : XAU_Campaign_ExtremeHigh(PERIOD_H1,InpCampaignInvalidationHTFBars);
+   double primaryTarget2 = dir==1 ? rangeHigh : rangeLow;
+   double challengerTarget2 = dir==1 ? rangeLow : rangeHigh;
+   if((dir==1 && primaryTarget1<=c1) || (dir==-1 && primaryTarget1>=c1)) primaryTarget1=0.0;
+   if((dir==1 && primaryTarget2<=c1) || (dir==-1 && primaryTarget2>=c1)) primaryTarget2=0.0;
+   int challengerDir=-dir;
+   if((challengerDir==1 && challengerTarget1<=c1) || (challengerDir==-1 && challengerTarget1>=c1)) challengerTarget1=0.0;
+   if((challengerDir==1 && challengerTarget2<=c1) || (challengerDir==-1 && challengerTarget2>=c1)) challengerTarget2=0.0;
+   double idealEntryHalfWidth=atr*InpCampaignTransitionMaxValueATR;
+   double idealEntryLow=localValue-idealEntryHalfWidth;
+   double idealEntryHigh=localValue+idealEntryHalfWidth;
+
    // 2026-07-15 owner-directed evolution, Phase 1: populate the persistent
    // thesis objects from the same raw quantities already computed above --
    // no new market-reading logic, purely restructuring what already exists
@@ -23205,10 +23314,12 @@ XAU_CampaignTransitionDecision XAU_AdaptiveCampaignTransitionEngine()
    // g_campaignThesisPrimary/Challenger into a trading gate yet (Phase 2).
    XAU_CampaignThesis_Update(g_campaignThesisPrimary, THESIS_ROLE_PRIMARY, dir,
                               d.continuationConfidence, freshProgress, failedExtremes<=1, oldBars>=5,
-                              oldBars, 5, c1, atr, bar, m5EvidenceAdvanced);
+                              oldBars, 5, c1, atr, bar, m5EvidenceAdvanced,
+                              primaryTarget1,primaryTarget2,idealEntryLow,idealEntryHigh);
    XAU_CampaignThesis_Update(g_campaignThesisChallenger, THESIS_ROLE_CHALLENGER, -dir,
                               d.reversalProbability, effectiveReclaim, effectiveRetest, effectiveDisplacement,
-                              effectivePersistence, InpCampaignTransitionPersistenceBars, c1, atr, bar, m5EvidenceAdvanced);
+                              effectivePersistence, InpCampaignTransitionPersistenceBars, c1, atr, bar, m5EvidenceAdvanced,
+                              challengerTarget1,challengerTarget2,idealEntryLow,idealEntryHigh);
 
    g_campaignTransitionDecision=d;
    g_campaignTransitionLastComputedBar=bar;
@@ -23246,6 +23357,11 @@ string XAU_ActiveActionName(ENUM_ACTIVE_INTELLIGENCE_ACTION action)
    return "CANCEL_OPPORTUNITY";
 }
 
+// Defined after the campaign struct/globals. Keeping this as a relay helper
+// lets ACTIVE expose the campaign manager's existing HOLD/EXIT conclusion
+// without duplicating or recomputing its market-classification logic here.
+bool XAU_ActiveExistingCampaignAction(ENUM_ACTIVE_INTELLIGENCE_ACTION &action,string &reason);
+
 // ACTIVE market-analysis synthesis. Broker/account/news/spread/risk safety is
 // intentionally outside this function and remains hard-fail. This function
 // replaces only competing analytical vetoes with one reasoned decision.
@@ -23253,11 +23369,17 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
    int signal,string setupName,double setupScore,double combinedScore,string grade,
    bool gradeThresholdPassed,bool timingPassed,string legacyWarnings,string &decisionReason)
 {
+   ENUM_ACTIVE_INTELLIGENCE_ACTION action=ACTIVE_CANCEL_OPPORTUNITY;
+   if(XAU_ActiveExistingCampaignAction(action,decisionReason))
+   {
+      Print("[ACTIVE_INTELLIGENCE_DECISION] ",decisionReason);
+      return action;
+   }
+
    XAU_CampaignTransitionDecision d=XAU_AdaptiveCampaignTransitionEngine();
    bool timingSnapshotValid=g_lastEntryQ_Dir==signal && g_lastEntryQ_Setup==setupName &&
                             g_lastEntryQ_CapturedAt>0 && TimeCurrent()-g_lastEntryQ_CapturedAt<=5;
    string candidateId=StringFormat("ACTIVE_%s_%s_%d",setupName,signal==1?"BUY":"SELL",(int)d.evaluatedBar);
-   ENUM_ACTIVE_INTELLIGENCE_ACTION action=ACTIVE_CANCEL_OPPORTUNITY;
    double weightedScore=0.0;
    bool oldDirection=(signal==d.dominantDirection);
    // 2026-07-15 owner-directed evolution, Phase 2a: blockClass=="HARD_BLOCK"
@@ -23291,6 +23413,8 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
                    (g_activeDirection==DIRECTION_TRANSITION_WAIT && signal==g_htfConsensusDir && g_htfConsensusDir!=0);
    if(htfOpposed)
       timingEvidencePenalty += (g_activeDirectionTier=="MEDIUM") ? 20.0 : 10.0;
+   double netPrimaryConfidence=XAU_CTClamp(g_campaignThesisPrimary.confidence-timingEvidencePenalty*0.50);
+   double netChallengerConfidence=XAU_CTClamp(g_campaignThesisChallenger.confidence-timingEvidencePenalty*0.50);
    bool opportunityDirection=g_campaignReversalOpportunity.active && signal==g_campaignReversalOpportunity.direction;
    bool centralFreshAllowed=signal==1 ? d.freshBuyAllowed : d.freshSellAllowed;
    bool genuineContinuationReset=g_campaignContinuationResetScore>=65.0 && g_campaignContinuationResetBars>=2;
@@ -23319,7 +23443,7 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
       // block. Reuse the Phase 1 persistent challenger thesis (already
       // tracking this exact direction's confidence bar-over-bar) as the
       // extra proof required, instead of inventing a fresh ad hoc threshold.
-      bool timingEvidenceClearing=(timingEvidencePenalty<=0.0) || (g_campaignThesisChallenger.confidence>=80.0);
+      bool timingEvidenceClearing=netChallengerConfidence>=80.0;
       if(centralFreshAllowed && d.reversalLocationGood && !d.reversalWaitForPullback && timingEvidenceClearing)
          action=ACTIVE_TRADE_NOW;
       else if(opportunityDirection || d.oppositeEntryPreparing)
@@ -23361,9 +23485,19 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
       double required=mature ? InpCampaignActiveMatureMinScore : InpCampaignActiveHealthyMinScore;
       bool gradeRecoveryAllowed=gradeThresholdPassed ||
                                 (setupScore>=4.0 && evidenceFresh && weightedScore>=required+5.0);
+      // In ACTIVE mode the timing guard's non-spike HARD_BLOCK is evidence,
+      // not a hidden veto. It may release only when the persistent thesis is
+      // execution-authorized and the already-penalized unified score clears
+      // the same mature/healthy threshold. Raw spike cooldown remains the
+      // hard stop above, and location/reward/final-confidence gates below
+      // remain unconditional.
+      bool unifiedHardTimingRelease=(g_lastEntryQ_BlockClass=="HARD_BLOCK" &&
+                                     !hardStopFromSpike && evidenceFresh &&
+                                     netPrimaryConfidence>=80.0 &&
+                                     weightedScore>=required);
       bool softTimingRelease=timingPassed ||
                              (g_lastEntryQ_BlockClass=="SOFT_BLOCK" && evidenceFresh &&
-                              weightedScore>=required+5.0);
+                              weightedScore>=required+5.0) || unifiedHardTimingRelease;
       bool lifecycleReleased=centralFreshAllowed ||
                              (genuineContinuationReset && d.exhaustionProbability<InpCampaignTransitionExhaustAt);
       // Phase 1's persistent primary thesis (bar-over-bar confidence, not
@@ -23379,14 +23513,19 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
          action=ACTIVE_WAIT_FOR_VALUE;
       else if(!lifecycleReleased)
          action=ACTIVE_WAIT_FOR_VALUE;
-      else if(weightedScore>=required && gradeRecoveryAllowed && softTimingRelease && matureProof &&
+      // The owner's confidence ladder is an authorization contract, not
+      // telemetry: 70 builds the campaign; only net confidence >=80 may
+      // execute. Ordinary conflicts remain graduated evidence through the
+      // penalty above rather than becoming independent vetoes.
+      else if(netPrimaryConfidence>=80.0 && weightedScore>=required &&
+              gradeRecoveryAllowed && softTimingRelease && matureProof &&
               g_lastEntryQ_FinalConfidence>=minFinalConfidence)
          action=ACTIVE_TRADE_NOW;
       else
          action=ACTIVE_WAIT_FOR_VALUE;
    }
 
-   decisionReason=StringFormat("candidateId=%s action=%s weightedScore=%.1f direction=%s dominant=%s lifecycle=%s trendHealth=%.0f continuation=%.0f exhaustion=%.0f location=%.0f timing=%.0f extension=%.0f late=%.0f rewardQ=%.0f remainingRoom=%.2fATR oldReward=%.2fR reset=%s freshStructure=%s grade=%s raw=%.2f combined=%.2f gradeThresholdPassed=%s timingPassed=%s timingClass=%s centralFreshAllowed=%s continuationReset=%.0f/%d hardStopFromSpike=%s timingEvidencePenalty=%.0f thesisPrimary=%.0f thesisChallenger=%.0f warnings=%s",
+   decisionReason=StringFormat("candidateId=%s action=%s weightedScore=%.1f direction=%s dominant=%s lifecycle=%s trendHealth=%.0f continuation=%.0f exhaustion=%.0f location=%.0f timing=%.0f extension=%.0f late=%.0f rewardQ=%.0f remainingRoom=%.2fATR oldReward=%.2fR reset=%s freshStructure=%s grade=%s raw=%.2f combined=%.2f gradeThresholdPassed=%s timingPassed=%s timingClass=%s centralFreshAllowed=%s continuationReset=%.0f/%d hardStopFromSpike=%s timingEvidencePenalty=%.0f thesisPrimary=%.0f netPrimary=%.0f thesisChallenger=%.0f netChallenger=%.0f warnings=%s",
                                candidateId,XAU_ActiveActionName(action),weightedScore,signal==1?"BUY":"SELL",
                                d.dominantDirection==1?"BUY":"SELL",XAU_CTLifecycleName(d.lifecycle),d.trendHealth,
                                d.continuationConfidence,d.exhaustionProbability,d.entryLocationQuality,
@@ -23399,7 +23538,9 @@ ENUM_ACTIVE_INTELLIGENCE_ACTION XAU_ActiveIntelligenceDecision(
                                timingSnapshotValid?g_lastEntryQ_BlockClass:"UNAVAILABLE",centralFreshAllowed?"Y":"N",
                                g_campaignContinuationResetScore,g_campaignContinuationResetBars,
                                hardStopFromSpike?"Y":"N",timingEvidencePenalty,
-                               g_campaignThesisPrimary.confidence,g_campaignThesisChallenger.confidence,
+                               g_campaignThesisPrimary.confidence,netPrimaryConfidence,
+                               g_campaignThesisChallenger.confidence,
+                               netChallengerConfidence,
                                StringLen(legacyWarnings)>0?legacyWarnings:"none");
    Print("[ACTIVE_INTELLIGENCE_DECISION] ",decisionReason);
    return action;
@@ -24068,6 +24209,26 @@ struct XAU_Campaign
 
 #define XAU_CAMPAIGN_MAX_SLOTS 2
 XAU_Campaign g_campaign[XAU_CAMPAIGN_MAX_SLOTS];
+
+bool XAU_ActiveExistingCampaignAction(ENUM_ACTIVE_INTELLIGENCE_ACTION &action,string &reason)
+{
+   for(int i=0;i<XAU_CAMPAIGN_MAX_SLOTS;i++)
+   {
+      if(!g_campaign[i].active) continue;
+      string classification=g_campaign[i].lastClassification;
+      bool exitConclusion=g_campaign[i].closeRequested ||
+                          g_campaign[i].state==CAMPAIGN_EXIT_PENDING ||
+                          classification=="THESIS_INVALIDATED" ||
+                          classification=="CONFIRMED_DIRECTION_CHANGE";
+      action=exitConclusion ? ACTIVE_EXIT_DAMAGED_THESIS : ACTIVE_HOLD_EXISTING;
+      reason=StringFormat("campaignId=%s action=%s classification=%s state=%s relay=CAMPAIGN_MANAGER_EXISTING_CONCLUSION",
+                          g_campaign[i].campaignId,XAU_ActiveActionName(action),
+                          StringLen(classification)>0?classification:"PENDING_FIRST_CLASSIFICATION",
+                          XAU_Campaign_StateName(g_campaign[i].state));
+      return true;
+   }
+   return false;
+}
 
 struct XAU_PostCampaignReset
 {
@@ -33150,6 +33311,11 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    g_lastEntryQ_RemainingRoomATR=0.0;
    g_lastEntryQ_Exhaustion=100.0;
    g_lastEntryQ_LateProbability=100.0;
+   g_lastEntryQ_LateChaseEntry=false;
+   g_lastEntryQ_SpikeCooldown=false;
+   g_lastEntryQ_FailedImpulseBlock=false;
+   g_lastEntryQ_PostSweepTrap=false;
+   g_lastEntryQ_TimingBadRR=false;
    if(!InpXAU_TimingGuard || signal == 0) return true;
    if(!IsXAUFastSymbol()) return true;
    if(ArraySize(bufATR) < 2 || ArraySize(bufEMAFast) < 2 || bufATR[1] <= 0.0 || bufEMAFast[1] <= 0.0)
@@ -33655,7 +33821,10 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
       {
          reason += StringFormat("POST-SWEEP A+ BLOCK: gold swept local liquidity then snapped back; not allowing A+ continuation chase until a fresh pullback/retest forms. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f liquidityDist=%.2fATR. ",
                                 entryEfficiency, lateEntryProb, exhaustionProb, rrQuality, directionalRoomATR);
-         return false;
+         // ACTIVE owns the final analytical decision. Continue to the common
+         // telemetry capture so postSweepTrap becomes weighted evidence;
+         // legacy modes preserve the original immediate veto.
+         if(InpCampaignTransitionMode!=CAMPAIGN_TRANSITION_ACTIVE) return false;
       }
       if(aBadRR && InpXAU_BlockLateA)
       {
@@ -33664,7 +33833,9 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
                                 localDirectionalRoomATR, estimatedContinuationRoomATR,
                                 missedMove ? "Y" : "N", lateChaseEntry ? "Y" : "N", failedImpulse ? "Y" : "N",
                                 postSweepTrap ? "Y" : "N", trendContinuationScore);
-         return false;
+         // The unified ACTIVE reward gates remain unconditional; capture the
+         // numeric RR evidence instead of dying before they can read it.
+         if(InpCampaignTransitionMode!=CAMPAIGN_TRANSITION_ACTIVE) return false;
       }
    }
 
@@ -33772,14 +33943,15 @@ bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double
    // (labeled HARD_BLOCK, executed anyway) occurred 3 times, none were
    // clean wins (1 loss, 1 large loss, 1 narrow survival off a -$348
    // drawdown); across ~5 weeks of local history it occurred 5 times, net
-   // -$161.52 despite a 60% nominal win rate. This is not a new fear rule --
-   // it makes the system respect the label it already, on its own,
-   // privately concluded was hard-block-quality. No override path may admit
-   // a candidate once this label is set.
+   // -$161.52 despite a 60% nominal win rate. In legacy modes this remains
+   // final. ACTIVE deliberately receives the captured constituent evidence
+   // and may release only a non-spike case through its unified confidence,
+   // location, reward and risk gates.
    if(blockClass == "HARD_BLOCK")
    {
       Print("HARD_BLOCK_SELF_CONSISTENCY: ", setupName, " ", signal == 1 ? "BUY" : "SELL",
-            " blockClass=HARD_BLOCK (", whatNeedsToChange, ") -- no override path may admit this candidate.");
+            " blockClass=HARD_BLOCK (", whatNeedsToChange,
+            ") -- local timing decision=false; ACTIVE may only weigh captured non-spike evidence.");
       return false;
    }
 
