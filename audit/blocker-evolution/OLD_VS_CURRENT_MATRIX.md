@@ -1,0 +1,29 @@
+# Old vs. Current — Side-by-Side Matrix
+
+**OLD** = `v5.8.50 "Evidence Refactor"`, commit `de2984c`, 2026-06-11 (12,065 lines)
+**CURRENT** = `v6.23.3`, commit `e13d669`, 2026-07-15, HEAD of `origin/main` (34,750 lines)
+
+All counts below are independently derived in this audit (see `EVIDENCE_COMMANDS.txt` for exact commands) — not carried from any prior audit.
+
+| Metric | OLD (v5.8.50) | CURRENT (v6.23.3) | Δ |
+|---|---|---|---|
+| File length (lines) | 12,065 | 34,750 | **+188%** |
+| `return false` occurrences | 114 | 379 | **+232%** |
+| `HARD_BLOCK`/`blockClass`/`BlockReason`/`reject` occurrences | 71 | 221 | **+211%** |
+| Unique named blocker/gate/lock/veto/wait/guard dashboard-or-log tag strings (`grep -noE` on `"...(BLOCK\|VETO\|GATE\|GUARD\|LOCK\|WAIT\|COOLDOWN\|-CD\|TRAP)..."`) | **19** | **61** | **+42 new tags, 0 removed** (all 19 old tags still present verbatim in current) |
+| Blocker-pattern function/global definitions (name matches `Block\|Guard\|Gate\|Veto\|Eligib\|CanTrade\|AllowTrade\|ShouldTrade\|Confirm\|Cooldown\|Lock\|Filter\|Suppress\|Demot\|Downgrad\|Reject`) | ~40 | ~85 | **+45** |
+| Sequential veto stages in the primary entry path, signal-scored → `OpenTrade()` (see `ENTRY_DECISION_PATH_*.md`) | **24** distinct `return`/hard-exit points | **38** distinct stages, several multi-branch (>45 line-level exit points) | **+14 to +21** |
+| Additional hard gates living *inside* `OpenTrade()` itself, after the caller's own gauntlet | 0 confirmed (old `OpenTrade()` at line 5538 was not traced for internal gates in this pass — old version's internal safety checks were smaller; margin/lot-step/broker-rejection only, per code comments) | **3 confirmed** (`XAU_CrossInstanceEntryLockActive`, `XAU_FinalAdaptiveDirectionDecision`, `XAU_GrowthGuardEntryBlockReason`) | +3 |
+| Distinct `OpenTrade()` call sites (entry-path fan-in) | 2 (primary signal path line 5352, `RE_ENTRY` line 2732) | 5 (primary 16855, `RE_ENTRY` 9091, A+ adaptive 14845, recovery-timing 28713, force-open 28899) | +3 |
+| Functions independently answering "is entry timing acceptable right now" | 1 (`XAUEntryTimingGuard`, introduced 2026-05-19) | **3** (`XAUEntryTimingGuard` + `XAU_ClassifySetup` countertrend classifier, v6.17.23 + `XAU_TimingEngineConfirmsEntry` one-bar/wall-clock reconfirmation, v6.17.22) — a real, self-acknowledged duplication (see `DUPLICATED_AND_CONTRADICTORY_BLOCKERS.md`) | +2 |
+| AI's power over a trade | Dual-AI: `CONVICTION-VETO` — AI confidence below `InpMinAIConfidence` **hard-skips** the trade (v4.5.0-era code, present verbatim in v5.8.50) | AI Director: framed as "advisory-only... AI can never veto a trade again" (v6.17.11 commit message) **but** its own code at line 16360-16362 still emits `"AI DIRECTOR BLOCK: ... Trade blocked."` on a low-confidence AI SKIP — a direct contradiction between commit message and shipped code (see `DUPLICATED_AND_CONTRADICTORY_BLOCKERS.md`) | Not simply "less AI power" — the *label* changed, the underlying hard-block code path did not fully go away |
+| Explicit self-counters tracking how much the bot is currently blocking | none found | `g_gateBlocks_Spread/News/Trend/AI/TradeBrain/Basket/DailyLoss/Volatility/Committee/STI/EPF` (11 named counters) + `PrintGateReport()`/`WriteGateReportToFile()`/`XAU_BiggestGateBlockName()` (introduced v6.3.8, 2026-06-28) | New — the team built dashboards specifically because blocking had become frequent enough to need measuring |
+| Applies specifically to TREND_PULLBACK (the setup that drove ~93% of growth-window profit per `audits/xau_growth_engine_forensic_audit_...`) | Same shared gate stack as every other setup; no TREND_PULLBACK-specific hard gate found in v5.8.50 beyond the generic ones | Same shared gate stack **plus** STI late/exhaustion blocks, Personality Gate, SMC conflict block, and (until v6.23.3's fix, see main report) the `failedImpulseBlock` continuation-health gate that specifically hard-blocked clean trend continuations 33% of the time in one audited VPS session | TREND_PULLBACK, the strategy that mattered most, accumulated the most new veto exposure |
+| Applies specifically to re-entry | `IsDirectionLocked`, `InpReversalCooldown` | Same, plus `XAU_GrowthGuardReEntryAllowed`, `TRI RE-ENTRY BLOCK`, `RECOVERY-GATE`, `XAU_RecoveryExpansionBasketVeto` | +4 |
+| Applies specifically to pyramiding | `EPF_BlockPyramidAdd`, `PyramidAdaptiveConfirmPass`, rescue-threshold inputs (byte-identical values still in current per prior audit's finding, independently spot-checked: `InpPyramidRescueMaxATR=1.80` present in current at line 2901) | Same math **plus** `EffectiveMaxPyramidAdds()` hard equity-tier cutoffs (not in v5.8.50 — introduced later), `XAU_GrowthGuardCanPyramid` | +2 gates, math itself unchanged |
+| Post-news continuation handling | `InpUseNewsFilter` hard block only | Hard `NEWS FILTER` block **plus** a documented advisory-only carve-out during "adaptive post-news interpretation" (line 15853) **plus** `XAU_EvaluateAdaptiveNewsMomentumEntry` gate (line 15808) — three different, only partially reconciled systems | Net: more code, not necessarily more consistent |
+| Current-bar vs. closed-bar reliance | Not separately audited in this pass for OLD (**INVESTIGATE_MORE**) | Multiple commits (`v6.17.8` "stale-HTF ~24h deadlock", `v6.17.22` "prior rename captured pre-edit content, not the timing engine", `v6.20.0` "M5 Entry Delay") show closed-bar/stale-HTF handling was an active, repeatedly-patched problem area through July 2026 | — |
+
+## Bottom line
+
+Every single quantitative axis moves the same direction: **more code, more named gates, more sequential stages, more independent veto authorities, more self-monitoring of how often blocking happens** — and **zero** of the 19 original OLD-era gate tags were removed; they are all still present verbatim in current production. This is additive architecture, not a redesign.
