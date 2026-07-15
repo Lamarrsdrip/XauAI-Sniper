@@ -1,0 +1,18 @@
+{
+  "starting_version": "v6.23.3",
+  "release_version": "v6.24.0",
+  "starting_blocker_concepts": 44,
+  "starting_executable_veto_or_delay_locations": 48,
+  "concepts_completely_removed": 36,
+  "executable_locations_removed_or_neutralized": 48,
+  "modules_merged_into_named_authorities": 7,
+  "final_meaningful_hard_blocker_locations": 15,
+  "preserved_timing_delay_seconds": {
+    "minimum": 120,
+    "default": 150,
+    "maximum": 180
+  },
+  "removed_recovery_mailboxes": 1,
+  "removed_duplicate_timing_state_machines": 2,
+  "normal_inverse_routes_added": 0
+}

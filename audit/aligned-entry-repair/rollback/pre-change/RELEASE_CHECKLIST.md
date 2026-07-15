@@ -14,48 +14,6 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
-## v6.24.1 — 2026-07-15 — 15% Risk Margin Fix (on Aligned Entry Engine)
-
-### Production repair
-- [x] Owner report: every valid trade reached `OpenTrade()` and was then blocked at the margin gate (`FULL_RISK_BINARY_BLOCK`/`MARGIN_BELOW_FULL_RISK`) — example: BUY candidate, full-risk lot 0.56, required margin ~$2,262, free margin ~$3,016 (well within broker capacity), blocked anyway because required margin exceeded an arbitrary "50% of free margin" ceiling
-- [x] Bug confirmed present in v6.24.0 Aligned Entry Engine (untouched by that release's blocker removal — margin gate is a separate code path)
-- [x] `InpNormalRiskPct`=15% stop-risk sizing itself was already correct and untouched — only the downstream margin veto was wrong
-- [x] 50%-of-free-margin ceiling removed. Margin gate now verifies real broker margin via `OrderCalcMargin()` against free margin minus a small `InpMarginReservePct` buffer (default 10%, not 50%)
-- [x] If the 15%-risk lot doesn't fit, the EA computes and logs the true maximum broker-margin-supported lot and blocks transparently with `INSUFFICIENT_BROKER_MARGIN` — never a silent reduction to 0.01 — unless the new `InpMarginFallbackReduceToMax` input (default `false`) is explicitly enabled
-- [x] Genuine protections preserved untouched: `OrderCalcMargin` failure, broker max/min lot, lot step, InpMaxLots, equity-% cap, aggregate-risk cap, invalid SL/TP, prop-firm cap
-- [x] New `RISK_MARGIN_TRACE` log line on every approved trade
-
-### Identity and validation
-- [x] Canonical source: `XAUUSD_AI_Sniper_EA_v6.24.1.mq5`
-- [x] Build marker: `v6241-aligned-entry-engine-margin-fix-20260715`
-- [x] Compatibility preset: `config/XAUUSD_AI_Sniper_EA_v6.24.1_ACTIVE.set`
-- [x] MetaEditor compile: **0 errors, 0 warnings**
-- [x] New regression tests: `tests/test_xau_v6241_15pct_risk_margin_fix_static.py`
-
----
-
-## v6.24.0 — 2026-07-15 — Aligned Entry Engine
-
-### Production repair
-- [x] Reconstructed the 11:03 AM July 15 incident: valid SELL available near 4033, delayed entry at 4026.671, then loss on retrace
-- [x] Physically removed the duplicate elapsed-confirmation/recovery stack while preserving one shared 120–180 second delay (150 seconds default) per owner instruction
-- [x] Removed independent Active Direction, personality, SMC-conflict, TRI, STI, AI, memory, drawdown, recovery, Profit Guardian, Growth Guard and TradeBrain entry vetoes from the normal scan
-- [x] Adaptive reversal now creates an ordinary candidate and uses the shared path
-- [x] One freshness/extension authority follows first candidate time/price, ATR travel, reset, remaining reward and candidate generation
-- [x] Primary, re-entry and pyramid paths call shared structure, freshness, 2–3 minute timing, news and operational authorities; separate lane clocks cannot reset one another
-- [x] OpenTrade contains operational safety only; approved normal trades use configured binary risk
-
-### Identity and validation
-- [x] Canonical source: `XAUUSD_AI_Sniper_EA_v6.24.0.mq5`
-- [x] Build marker: `v6240-aligned-entry-engine-20260715`
-- [x] Compatibility preset: `config/XAUUSD_AI_Sniper_EA_v6.24.0_ACTIVE.set`
-- [x] Focused aligned-entry suite: 22/22
-- [x] MetaEditor exact-source compile: **0 errors, 0 warnings**
-- [x] Canonical backend, unversioned active source and v6.24.0 release source are byte-identical
-- [x] No terminal deployment or chart attachment performed
-
----
-
 ## v6.23.3 — 2026-07-15 — Trend Continuation Health Reasoning
 
 ### Proven production gap repaired

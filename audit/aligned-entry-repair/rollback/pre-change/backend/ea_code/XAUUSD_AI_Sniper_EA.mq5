@@ -1,21 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
-//|   v6.24.1 - 15% Risk Margin Fix (on Aligned Entry Engine)         |
-//|   Removed the arbitrary "required margin must be <=50% of free    |
-//|   margin" ceiling (FULL_RISK_BINARY_BLOCK/MARGIN_BELOW_FULL_RISK) |
-//|   that was blocking valid InpNormalRiskPct=15% trades the broker  |
-//|   could actually support (e.g. lot=0.56 needing ~$2,262 margin    |
-//|   against ~$3,016 free margin). The margin gate now verifies real |
-//|   broker margin via OrderCalcMargin against free margin minus a   |
-//|   small InpMarginReservePct buffer (default 10%), not a made-up   |
-//|   percentage. If the exact 15%-risk lot doesn't fit, the EA now   |
-//|   reports the true maximum broker-margin-supported lot and blocks |
-//|   transparently with INSUFFICIENT_BROKER_MARGIN (never a silent   |
-//|   0.01 fallback), unless InpMarginFallbackReduceToMax=true opts   |
-//|   into auto-sizing down to that maximum instead.                  |
-//+------------------------------------------------------------------+
-//|   v6.24.0 - Aligned Entry Engine                             |
+//|   v6.23.3 - Trend Continuation Health Reasoning              |
 //|   One lifecycle engine now separates historical trend, trend      |
 //|   health, exhaustion, remaining reward, transition, and reversal. |
 //|   At 70% exhaustion every autonomous old-direction entry path is  |
@@ -131,7 +117,7 @@
 //   instrumentation, no entry/exit decision logic touched.
 //
 //   MECHANISM: one-shot "mailbox" (XAU_LastEntryTimingDecision,
-//   g_lastEntryTimingDecision) written by REMOVED_ELAPSED_CONFIRMATION_ENGINE()
+//   g_lastEntryTimingDecision) written by XAU_TimingEngineConfirmsEntry()
 //   immediately before each of its three `return true` paths (immediate/
 //   A+-momentum, M5_ENTRY_DELAY_CONFIRMED, and the legacy bar-based path),
 //   describing original signal time/price, decision time, delay seconds,
@@ -139,7 +125,7 @@
 //   a new bounded, posId-keyed array g_delayOutcome[], cap 60, evicts
 //   oldest) the moment it has the resulting posId, right after its existing
 //   XAU_BrainRecordOpen() call. The caller (the one call site that follows
-//   REMOVED_ELAPSED_CONFIRMATION_ENGINE) unconditionally invalidates the mailbox
+//   XAU_TimingEngineConfirmsEntry) unconditionally invalidates the mailbox
 //   immediately after OpenTrade() returns, success or fail, so it can never
 //   leak into a later, unrelated OpenTrade call (RE_ENTRY/recovery/force-
 //   open) within the same tick -- those callers never set the mailbox, so
@@ -177,9 +163,9 @@
 //   M5 bar; only delay EXECUTION by 60-120 seconds inside the same candle;
 //   integrate into the existing Timing Engine, do not create a second one.
 //
-//   MECHANISM: REMOVED_ELAPSED_CONFIRMATION_ENGINE() already ran a state machine
+//   MECHANISM: XAU_TimingEngineConfirmsEntry() already ran a state machine
 //   (SIGNAL_DETECTED -> WAITING -> CONFIRMING -> ALLOWED/EXPIRED) gated on
-//   the NEXT M5 BAR closing (up to 5 minutes) via REMOVED_PENDING_CONFIRMATION_STATE.
+//   the NEXT M5 BAR closing (up to 5 minutes) via PendingEntryConfirmation.
 //   Added InpUseM5EntryDelay (default true): when on, the same struct/state
 //   machine is gated on wall-clock elapsed time (InpM5EntryDelaySeconds=90,
 //   clamped to [InpM5EntryDelayMinSeconds=60, InpM5EntryDelayMaxSeconds=120])
@@ -345,7 +331,7 @@
 //   real-SL-risk-derived now (v6.18.0), made this protective widening
 //   unconditional instead of silently not applying to half of live traffic.
 //   Also: added ROLE NOTE header comments to XAU_ClassifySetup,
-//   REMOVED_ELAPSED_CONFIRMATION_ENGINE, and XAU_FreshnessExtensionAuthority clarifying they
+//   XAU_TimingEngineConfirmsEntry, and XAUEntryTimingGuard clarifying they
 //   are three distinct, non-overlapping authorities (setup/evidence
 //   classifier, confirmation timing, anti-chase/location quality) after
 //   investigation found the original Phase 1 report's "consolidate these
@@ -407,12 +393,12 @@
 //   "better price" retest before calling OpenTrade() directly -- a
 //   stopped-out BUY could re-buy purely because Active Direction (a coarse,
 //   multi-bar-persistent state) hadn't flipped, with zero fresh M5
-//   structure/momentum/exhaustion check; (2) deleted timed recovery path
+//   structure/momentum/exhaustion check; (2) XAU_CheckPendingOpportunityRecovery
 //   re-validated M15/M30 trend direction and re-graded, and does get the
 //   v6.17.21 Exhaustion/Reversal backstop automatically via OpenTrade(), but
 //   had no explicit fresh-M5-structure classification of its own to cancel
 //   on and no adaptive immediate/wait framing; (3)
-//   deleted legacy context gate's Gate 1 called XAU_ClassifySetup(signal, atr, "",
+//   ContextGateAllows's Gate 1 called XAU_ClassifySetup(signal, atr, "",
 //   cgClass) with an empty setup name, so the BREAKOUT_RETEST branch could
 //   never match there and a BREAKOUT setup fighting HTF trend was
 //   misclassified; (4) XAU_TryForceOpenTrade's manual override calls
@@ -422,19 +408,19 @@
 //   FORCE_OPEN_TRADE command, contradicting the function's own comment that
 //   manual override bypasses soft judgment by design.
 //
-//   Fixes: deleted legacy context gate(int signal, double atr, string setupName="")
+//   Fixes: ContextGateAllows(int signal, double atr, string setupName="")
 //   now threads the real setup name through to the classifier.
 //   OpenTrade(..., bool isManualOverride=false) skips the Exhaustion/
 //   Reversal backstop (soft judgment) for the one caller that passes true
 //   (XAU_TryForceOpenTrade) while every hard safety check below it (hedge/
 //   exposure/margin/broker/risk) still applies unconditionally to every
-//   caller. CheckReEntryOpportunity and deleted timed recovery path
+//   caller. CheckReEntryOpportunity and XAU_CheckPendingOpportunityRecovery
 //   both now call the SAME XAU_ClassifySetup used everywhere else and
 //   reject/cancel on LATE_CHASE, reusing one architecture instead of
 //   inventing per-path timing logic; RE_ENTRY additionally routes through
-//   REMOVED_ELAPSED_CONFIRMATION_ENGINE for the same adaptive immediate/wait
+//   XAU_TimingEngineConfirmsEntry for the same adaptive immediate/wait
 //   decision the normal path gets. Also fixed a related bug found while
-//   tracing this: REMOVED_ELAPSED_CONFIRMATION_ENGINE's one-bar reconfirmation
+//   tracing this: XAU_TimingEngineConfirmsEntry's one-bar reconfirmation
 //   branch used to return ENTRY_ALLOWED whenever a signal simply persisted
 //   for one bar without overextending, without re-checking whether the
 //   FRESH classification on that second bar was still LATE_CHASE -- now it
@@ -488,11 +474,11 @@
 //   an independent, additive classifier so a change here can never silently
 //   change that guard's tested behavior.
 //
-//   Two call sites: (1) Gate 1 in deleted legacy context gate now lets
+//   Two call sites: (1) Gate 1 in ContextGateAllows now lets
 //   PULLBACK_SCALP/REVERSAL_RECLAIM through its HTF-bias block instead of
 //   hard-blocking every countertrend attempt -- LATE_CHASE (no real
 //   evidence) is still blocked exactly as before; (2)
-//   REMOVED_ELAPSED_CONFIRMATION_ENGINE skips its one-bar wait entirely
+//   XAU_TimingEngineConfirmsEntry skips its one-bar wait entirely
 //   (immediateConfirm=true) for a clean continuation (zero opposing
 //   reversal signals) or a strong 5+/6 countertrend reclaim -- a marginal
 //   4/6 still waits one bar like any uncertain signal, and the existing
@@ -509,7 +495,7 @@
 //   locally bad price because it executes the INSTANT it first clears every
 //   gate, with no requirement the move still be intact one bar later.
 //
-//   New REMOVED_ELAPSED_CONFIRMATION_ENGINE() sits as the last check before
+//   New XAU_TimingEngineConfirmsEntry() sits as the last check before
 //   OpenTrade(), after direction/setup/size are already decided (unchanged).
 //   It requires the SAME setup+direction to reappear on the next closed M5
 //   bar -- a bounded, self-expiring one-bar window, not a blanket blocker or
@@ -550,9 +536,9 @@
 //   reusing existing validated helpers) and vetoes a direction backed mainly by
 //   OLD trend evidence when >=4/6 concrete reversal signals plus a confirmed
 //   reclaim/sequence-flip already disagree with it. Placed as a backstop inside
-//   OpenTrade() itself (not just deleted legacy context gate) because the audit found
-//   deleted timed recovery path and XAU_TryForceOpenTrade call OpenTrade()
-//   directly, bypassing deleted legacy context gate entirely -- exactly the path both
+//   OpenTrade() itself (not just ContextGateAllows) because the audit found
+//   XAU_CheckPendingOpportunityRecovery and XAU_TryForceOpenTrade call OpenTrade()
+//   directly, bypassing ContextGateAllows entirely -- exactly the path both
 //   flagged trades used.
 //
 // v6.17.20 CHANGES (2026-07-08) — EXIT ARM R-FLOOR (Mac vs VPS root cause):
@@ -714,7 +700,7 @@
 //      XAU_AntiRepeatLossActive): once InpAntiRepeatLossStreak (default 2)
 //      consecutive same-direction losses have happened this session AND
 //      price hasn't recovered half an ATR past where the last loss closed,
-//      the SMART_GUARD_FAST_CONFIRM / REMOVED_STI_REENTRY_DELAY / AI_LOW_CONF_SKIP
+//      the SMART_GUARD_FAST_CONFIRM / STI_REENTRY_WAIT / AI_LOW_CONF_SKIP
 //      soft-bypass sites no longer downgrade their hard block to a warning
 //      for that direction — the block stands regardless of grade. Adaptive,
 //      not a blanket ban: the moment price recovers, or the streak resets
@@ -1559,7 +1545,7 @@
 //   live-scout engine.
 // v5.9.0 CHANGES (Precision Audit 2026-06-21):
 //   1. PERFORMANCE: GetVolAdaptiveMult() O(n²) bubble sort replaced with ArraySort() — 25× faster on every tick
-//   2. PERFORMANCE: deleted legacy context gate() caches HTF EMA handles via static locals instead of create/release per call
+//   2. PERFORMANCE: ContextGateAllows() caches HTF EMA handles via static locals instead of create/release per call
 //   3. PERFORMANCE: PG_PerPositionRatchet() uses global bufATR[1] instead of creating a new iATR handle every tick
 //   4. PRECISION: SafeModifySL throttle raised 1→3 mods/sec so all open positions can lock BE in the same second
 //   5. INTELLIGENCE: GetTrailATRMulti() widens trail 15% during strong directional RSI to reduce premature stop-outs
@@ -1588,7 +1574,7 @@
 //   No new strategy or features — pure polish.
 //   FROM CLAUDE (v5.9.0 Precision Audit — all preserved):
 //     ArraySort() in GetVolAdaptiveMult() replaces O(n²) bubble sort — 25× faster.
-//     deleted legacy context gate() caches HTF EMA handles per-TF via static locals.
+//     ContextGateAllows() caches HTF EMA handles per-TF via static locals.
 //     PG_PerPositionRatchet() reads global bufATR[1] — no per-tick iATR handle create.
 //     SafeModifySL throttle: 3 mods/sec (was 1) — all basket positions can lock BE together.
 //     GetTrailATRMulti() RSI momentum factor: 15% wider trail on strong directional RSI (68-80 / 20-32).
@@ -1784,12 +1770,10 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.241"
-#property description "XAUUSD AI Sniper v6.24.1 - Aligned Entry Engine + 15% Risk Margin Fix"
+#property version   "6.233"
+#property description "XAUUSD AI Sniper v6.23.3 - Continuation Health Reasoning"
 #property description "Approved normal entries use full configured risk or fail closed; no"
 #property description "margin, aggregate, broker-limit, or lot-step silent downscaling."
-#property description "Margin gate verifies real broker margin (OrderCalcMargin) with a small"
-#property description "reserve, not an arbitrary 50%-of-free-margin ceiling."
 #property description "Counter-Excursion is broker-confirmed, retry-safe, hedging-only, and"
 #property description "cannot delay or block an approved normal entry."
 #property strict
@@ -1801,9 +1785,9 @@
 #define XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0
 #define XAU_ENTRY_DELAY_SAFE_DEFAULT_SEC     150.0
 
-#define XAUAI_EA_VERSION "v6.24.1"
-#define XAUAI_EA_VERSION_NUM "6.24.1"
-#define XAUAI_BUILD_HASH "v6241-aligned-entry-engine-margin-fix-20260715"
+#define XAUAI_EA_VERSION "v6.23.3"
+#define XAUAI_EA_VERSION_NUM "6.23.3"
+#define XAUAI_BUILD_HASH "v6233-continuation-health-reasoning-20260715"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -1833,7 +1817,7 @@ input group "=== TRADE MODE (v6.4.21 — blocker strictness profile) ==="
 enum ENUM_XAU_TRADE_MODE { SAFE_MODE=0, BALANCED_MODE=1, AGGRESSIVE_GROWTH_MODE=2 };
 input ENUM_XAU_TRADE_MODE InpTradeMode = BALANCED_MODE; // SAFE=stricter blocks, BALANCED=context-aware, AGGRESSIVE=allow clean B/continuation warnings
 
-input group "=== ADAPTIVE MARKET TRANSITION CONTEXT (v6.24.0) ==="
+input group "=== ADAPTIVE MARKET TRANSITION AUTHORITY (v6.23.3) ==="
 enum ENUM_ADAPTIVE_TRANSITION_MODE
 {
    ADAPTIVE_TRANSITION_OFF    = 0,
@@ -1841,7 +1825,7 @@ enum ENUM_ADAPTIVE_TRANSITION_MODE
    ADAPTIVE_TRANSITION_ACTIVE = 2
 };
 input ENUM_ADAPTIVE_TRANSITION_MODE InpAdaptiveTransitionMode = ADAPTIVE_TRANSITION_ACTIVE; // owner-directed production authority: direction AND location decisions control execution
-input string InpAdaptiveTransitionPresetId       = "XAUUSD_AI_Sniper_EA_v6.24.1_ACTIVE.set"; // deployment identity; chart/preset must preserve this exact production marker
+input string InpAdaptiveTransitionPresetId       = "XAUUSD_AI_Sniper_EA_v6.23.3_ACTIVE.set"; // deployment identity; chart/preset must preserve this exact production marker
 input int    InpTransitionPersistenceBars       = 3;     // closed M5 bars required before a directional lifecycle transition becomes authoritative
 input double InpTransitionMatureThreshold       = 60.0;
 input double InpTransitionExhaustThreshold      = 70.0;   // invariant: >=70 blocks every old-direction autonomous entry source
@@ -2102,7 +2086,7 @@ input group "=== M5 ENTRY DELAY, PHASE B (v6.20.0) — short in-candle execution
 // full 5-minute M5 bar) with a much shorter, wall-clock 60-120s delay INSIDE the
 // same M5 candle -- "this is NOT wait for the next M5 bar." Signal detection stays
 // on M5; only the execution moment moves to short M1-granularity confirmation.
-// Extends REMOVED_ELAPSED_CONFIRMATION_ENGINE() directly (same REMOVED_PENDING_CONFIRMATION_STATE
+// Extends XAU_TimingEngineConfirmsEntry() directly (same PendingEntryConfirmation
 // struct, same XAU_ClassifySetup evidence, same overextension math) -- does not
 // create a second/competing timing authority.
 // v6.21.2 audit fix: the InpUseM5EntryDelay=false branch used to restore the
@@ -2111,7 +2095,7 @@ input group "=== M5 ENTRY DELAY, PHASE B (v6.20.0) — short in-candle execution
 // that waits for a new M5 bar to confirm entry, re-entry, or recovery, and no
 // .set file can restore it. false now means "same bounded 120-180s wall-clock
 // confirmation, just with a printed legacy-removal warning" -- see
-// REMOVED_ELAPSED_CONFIRMATION_ENGINE().
+// XAU_TimingEngineConfirmsEntry().
 input bool   InpUseM5EntryDelay             = true;   // Master switch (both true and false now use the bounded 120-180s wall-clock delay -- see comment above)
 // v6.20.3 (Commit C) — closes two gaps found from the 2026-07-09 15:45 live
 // incident (two BUY 0.22 XAUUSD entries ~2s apart from two chart instances):
@@ -2122,7 +2106,7 @@ input int    InpCrossInstanceEntryLockSec    = 10;     // Lock window in seconds
 // former "clean evidence" (immediateConfirm) bypass -- which let ANY grade,
 // not just A+, skip the wait entirely, and was the direct cause of the
 // 2026-07-09 15:45 incident executing in 17s -- has been REMOVED from
-// REMOVED_ELAPSED_CONFIRMATION_ENGINE, not merely disabled. InpImmediateConfirmRequiresAPlus
+// XAU_TimingEngineConfirmsEntry, not merely disabled. InpImmediateConfirmRequiresAPlus
 // and InpAllowImmediateAPlusMomentum below are no longer read by that
 // function at all; they are kept only as named, visible inputs so a future,
 // EXPLICIT decision to reopen any exemption has an obvious place to wire
@@ -2300,9 +2284,6 @@ input group "=== ACCOUNT-RELATIVE GROWTH SIZING (v6.18.0 — one risk-%% authori
 input double InpNormalRiskPct       = 15.0; // Uniform target risk-per-trade, ALL account sizes, for a fully-qualified (A/A+, clean evidence) trade. Evidence: real growth-era trades averaged ~15.5% risk/trade; owner explicit direction 2026-07-09: "cap all acc to start from 15%".
 input double InpReducedRiskFloorPct = 15.0;  // v6.21.2 FULL-RISK BINARY MODE: set equal to InpNormalRiskPct on purpose -- there is no more quality-band reduction, so floor==ceiling collapses the band clamp to a no-op. A trade is either approved at the full 15% or blocked; nothing sizes in between.
 input double InpDailyLossLimit = 3.0;      // v6.4.4: Adaptive Recovery Mode trigger — when daily loss >= this %, EA switches to A/A+ only + 50% size. Set 0 to disable. EA never pauses.
-input group "=== MARGIN VERIFICATION (v6.24.1 — real broker margin, not an arbitrary ceiling) ==="
-input double InpMarginReservePct         = 10.0;  // v6.24.1: small emergency buffer kept out of the margin check, as a % of current free margin. NOT a risk-sizing rule — SL-based risk (InpNormalRiskPct) and margin usage are independent. Replaces the old flat "must be <=50% of free margin" block, which rejected valid 15%-risk trades the broker could actually support.
-input bool   InpMarginFallbackReduceToMax = false; // v6.24.1: when the 15%-risk lot needs more margin than is available, false (default) = block transparently with the true broker-margin reason and report the max supported lot; true = "use maximum safe lot" mode, auto-reduce to the largest broker-margin-supported lot instead of blocking.
 
 input group "=== EQUITY GROWTH GUARD (v6.4.12 — real XAU risk + loss containment) ==="
 input bool   InpGrowthGuardEnable                 = true;  // Master switch for v6.4.12 equity growth controls
@@ -3657,30 +3638,6 @@ double   g_signalFirstSetupScore = 0.0;
 double   g_signalFirstCombined = 0.0;
 double   g_signalFirstATR = 0.0;
 
-// v6.24.0 ALIGNED ENTRY ENGINE: one identity follows a candidate from its
-// first actionable price.  These are observations, not a second scoring
-// system.  Only XAU_FreshnessExtensionAuthority may turn them into a veto.
-struct XAU_AlignedCandidateState
-{
-   datetime firstCandidateTime;
-   double   firstCandidatePrice;
-   double   impulseOrigin;
-   int      candidateDirection;
-   string   candidateSetup;
-   double   requiredDelaySeconds;
-   int      barsElapsed;
-   double   atrTravelled;
-   double   bestAvailableEntry;
-   double   remainingRewardR;
-   bool     objectiveReached;
-   bool     marketReset;
-   bool     confirmationAfterExtension;
-   long     candidateGeneration;
-};
-// Separate state slots prevent PRIMARY, RE_ENTRY and PYRAMID from resetting
-// one another's 2-3 minute clocks while still using the same authorities.
-XAU_AlignedCandidateState g_alignedCandidates[3];
-
 struct BlockedIdea
 {
    bool     active;
@@ -3703,13 +3660,55 @@ BlockedIdea g_blockedIdeas[];
 int         g_blockedIdeaCount = 0;
 datetime    g_lastBlockedMemorySummary = 0;
 
+// v6.17.14 FLEET-CONSISTENCY: a genuine A/A+ candidate that died to a SOFT
+// blocker (not a real, account-specific hard reason) is preserved here and
+// re-checked exactly once on the NEXT closed M5 bar -- this is what
+// prevents "one account silently misses a valid signal forever" across a
+// fleet of otherwise-identical instances. Single-slot by design: only the
+// most recent qualifying miss is tracked, and it is checked exactly once
+// (never indefinitely chased) before being cleared, win or lose.
+struct PendingOpportunity
+{
+   bool     active;
+   string   signalId;
+   datetime candleTime;       // closed M5 bar time of the ORIGINAL candidate (evidence provenance only, not a wait condition)
+   datetime firstSeenTime;    // v6.21.2: wall-clock time the opportunity was stored -- the actual recovery-delay anchor
+   int      dir;
+   string   setup;
+   string   grade;
+   double   score;
+   double   combinedScore;
+   double   signalPrice;      // price at the moment of the original candidate
+   double   atr;
+   string   originalBlocker;
+   datetime expiry;           // recovery must be attempted by this time or it's dropped
+};
+PendingOpportunity g_pendingOpportunity;
+
+// v6.17.22 TIMING ENGINE: tracks a fresh signal waiting for one-bar
+// reconfirmation before OpenTrade fires. See XAU_TimingEngineConfirmsEntry.
+struct PendingEntryConfirmation
+{
+   bool     active;
+   int      dir;
+   string   setup;
+   string   grade;
+   double   sizeMulti;
+   double   signalPrice;
+   double   atr;
+   datetime firstSeenCandle;
+   datetime firstSeenTime;   // v6.20.0: wall-clock (not bar-aligned) -- drives the M5 entry delay window
+   string   opportunityId;   // v6.23.2: one market opportunity owns one timer even if its setup label changes
+};
+PendingEntryConfirmation g_pendingEntryConfirm;
+
 // v6.20.0 M5 ENTRY DELAY telemetry counters (report only, no decision authority)
 int g_m5DelayConfirmedCount = 0;
 int g_m5DelayCancelledCount = 0;
 double g_m5DelaySumPriceImprovement = 0.0;
 
 // v6.20.1 DELAYED-ENTRY OUTCOME TELEMETRY (report only, no decision authority).
-// One-shot "mailbox": REMOVED_ELAPSED_CONFIRMATION_ENGINE() writes this immediately
+// One-shot "mailbox": XAU_TimingEngineConfirmsEntry() writes this immediately
 // before every `return true`, describing HOW this entry was allowed (immediate
 // vs delayed, and if delayed, the original-vs-final price/time). OpenTrade()
 // consumes it (into g_delayOutcome[] below) the moment it knows the resulting
@@ -3729,10 +3728,14 @@ struct XAU_LastEntryTimingDecision
 };
 XAU_LastEntryTimingDecision g_lastEntryTimingDecision;
 
-// Full timing-path proof record. The aligned timing authority populates this
-// for PRIMARY, RE_ENTRY and PYRAMID. The only named exemption is an explicit
-// human FORCE_OPEN command, so "did the 2-3 minute timing gate run" is an
-// observed fact rather than an inference. Single-slot / one-shot,
+// v6.20.5 (TELEMETRY ONLY -- Change A) — full timing-path proof record.
+// Distinct from XAU_LastEntryTimingDecision above: that mailbox only ever
+// gets written by XAU_TimingEngineConfirmsEntry, so it is blind to any
+// OpenTrade() caller that does not go through the timing engine at all
+// (exactly the RECOVERY-path bypass this release documents). This record is
+// populated by EVERY OpenTrade() caller (FRESH, RECOVERY, REENTRY, manual
+// FORCE_OPEN) right before calling OpenTrade(), so "did the timing gate even
+// run" is itself an observed fact, not an inference. Single-slot / one-shot,
 // same lifecycle as g_lastEntryTimingDecision: populated by the caller,
 // finalized (thesisId/execution time/price) and appended to a durable CSV by
 // OpenTrade() itself the moment the resulting posId is known, then
@@ -3742,21 +3745,44 @@ struct XAU_TimingProofRecord
 {
    bool     active;
    string   candidateId;
-   string   sourcePath;             // FRESH | REENTRY | PYRAMID | OTHER
+   string   sourcePath;             // FRESH | RECOVERY | REENTRY | PYRAMID | OTHER
    datetime firstSeenTime;          // earliest moment THIS candidate was observed, whatever path found it
    double   firstSeenPrice;
    bool     timingGateRequired;     // true unless an explicit, named exemption applies (manual force-open)
-   double   requiredDelaySeconds;   // bounded 120-180 second delay at proof time
-   datetime timingGateStartTime;    // when the aligned timing authority armed; 0 only for a manual exemption
-   double   recoveryWaitSeconds;    // legacy telemetry column; always 0 for v6.24.0 autonomous entries
+   double   requiredDelaySeconds;   // XAU_EffectiveM5EntryDelaySec() (or bar-based fallback) at proof time
+   datetime timingGateStartTime;    // when XAU_TimingEngineConfirmsEntry actually armed for this candidate; 0 if it never ran
+   double   recoveryWaitSeconds;    // time spent in the recovery gauntlet/idle-wait BEFORE any timing-engine involvement (0 unless sourcePath==RECOVERY)
    double   timingEngineWaitSeconds;// time actually spent inside the timing engine's own delay window (0 if it never ran)
    datetime revalidationTime;
-   string   revalidationResult;     // WAITING / DELAY_SATISFIED_AND_FRESHNESS_RECHECKED / MANUAL_OVERRIDE_NOT_APPLICABLE
+   string   revalidationResult;     // e.g. CONFIRMED / CANCELLED:<reason> / RECOVERY_GAUNTLET_PASSED / NOT_RUN / MANUAL_OVERRIDE_NOT_APPLICABLE
    bool     bypassUsed;
    string   bypassReason;           // named, non-empty only when bypassUsed
    string   openTradeCaller;        // exact function/call-site tag that is about to call OpenTrade()
 };
 XAU_TimingProofRecord g_pendingTimingProof;
+
+// v6.20.5 (Change B) — a recovery candidate that PASSED its own gauntlet
+// ("is this previously blocked idea still valid?") but must still clear the
+// SAME authoritative timing engine ("is this exact moment/location good
+// enough?") every other autonomous entry clears, before OpenTrade() is ever
+// called. Deliberately thin: carries only what XAU_TimingEngineConfirmsEntry
+// and OpenTrade() need, reusing that one function's own delay/revalidate/
+// cancel state machine (g_pendingEntryConfirm) rather than inventing a
+// second timer. See XAU_CheckRecoveryAwaitingTiming().
+struct XAU_RecoveryAwaitingTiming
+{
+   bool     active;
+   string   signalId;
+   int      dir;
+   string   setup;
+   string   grade;
+   double   atr;
+   string   recoveryReason;
+   datetime firstSeenTime;       // original PENDING_OPPORTUNITY_STORED time
+   double   firstSeenPrice;      // original signal price at block time
+   double   recoveryWaitSeconds; // fixed at the moment the gauntlet passed -- does not keep growing
+};
+XAU_RecoveryAwaitingTiming g_recoveryAwaitingTiming;
 
 // Bounded, posId-keyed record of the above, consumed once the trade closes to
 // compute actual-vs-estimated-instant-entry MAE/MFE and a delay-helped-or-hurt
@@ -3843,7 +3869,7 @@ struct XAU_SetupClassification
    int      reversalHits;      // 0-6 concrete reversal/exhaustion signals FOR this direction
    bool     reclaimSeen;       // rejection/reclaim specifically seen for this direction
    bool     structBroken;      // CHoCH-level M5 break in this direction's favor
-   bool     immediateConfirm;  // evidence observation only; never bypasses the 2-3 minute delay
+   bool     immediateConfirm;  // true -> evidence is already clean, skip the timing engine's 1-bar wait
    string   oldTrendBias;
    string   freshStructureBias;
    string   why;
@@ -3876,7 +3902,7 @@ struct TradeBrainOpen
    string   session;
    string   entryReason;
    // v6.20.3 — structured entry-quality fields captured directly from the
-   // numeric variables XAU_FreshnessExtensionAuthority() already computes, independent
+   // numeric variables XAUEntryTimingGuard() already computes, independent
    // of the free-text `entryReason` narrative. Added because the audit
    // (xau_lifecycle_forensic_audit_FINAL_2026-07-09.md) found entryReason
    // truncated/absent before these fields on 3 of 15 real trades — 2 of
@@ -3908,12 +3934,12 @@ struct TradeBrainOpen
 int g_checkpointMinutes[] = {1, 2, 3, 5, 10, 20, 30, 60};
 
 // v6.20.3 — last-computed entry-quality snapshot, set as a side effect by
-// XAU_FreshnessExtensionAuthority() at the point each value is already being formatted
+// XAUEntryTimingGuard() at the point each value is already being formatted
 // into entryReason text. Read once, immediately after a signal is scored,
 // by the OPEN-recording call path (XAU_BrainRecordOpen) so the brain CSV
 // gets these fields even when the narrative text is later truncated.
 // Deliberately global+scalar (not per-position) to avoid touching
-// XAU_FreshnessExtensionAuthority's widely-used by-reference signature — the same
+// XAUEntryTimingGuard's widely-used by-reference signature — the same
 // codebase pattern already used for g_lastTradePattern/g_lastTradeDirLabel.
 double   g_lastEntryQ_SetupQuality           = 0.0;
 double   g_lastEntryQ_TimingQuality          = 0.0;
@@ -3926,8 +3952,8 @@ int      g_lastEntryQ_CandlesSinceSignal     = 0;
 double   g_lastEntryQ_MissedMoveDistance     = 0.0;
 double   g_lastEntryQ_MissedMoveATR          = 0.0;
 double   g_lastEntryQ_SignalFirstSeenPrice   = 0.0;
-// v6.20.3 adversarial-review fix — validity markers. deleted timed recovery path
-// and XAU_TryForceOpenTrade never call XAU_FreshnessExtensionAuthority, so without these
+// v6.20.3 adversarial-review fix — validity markers. XAU_CheckPendingOpportunityRecovery
+// and XAU_TryForceOpenTrade never call XAUEntryTimingGuard, so without these
 // markers, XAU_BrainRecordOpen would copy whichever signal's numbers happened
 // to be sitting in the globals above -- possibly a rejected signal, possibly
 // the opposite direction, possibly minutes stale. XAU_BrainRecordOpen only
@@ -7184,7 +7210,7 @@ bool XAU_ExhaustionReversalGuard(int dir, double atr,
 // has), or is it fighting the trend with no real evidence at all
 // (LATE_CHASE)? Feeds two call sites: Gate 1 below (lets an evidence-backed
 // countertrend scalp/reclaim through the HTF-bias block instead of hard-
-// blocking every countertrend attempt) and REMOVED_ELAPSED_CONFIRMATION_ENGINE
+// blocking every countertrend attempt) and XAU_TimingEngineConfirmsEntry
 // (skips the one-bar wait when the evidence is already clean).
 //
 // Deliberately does NOT touch XAU_ExhaustionReversalGuard above, and
@@ -7202,10 +7228,10 @@ bool XAU_ExhaustionReversalGuard(int dir, double atr,
 //      Answers "what KIND of setup is this" (TREND_CONTINUATION,
 //      PULLBACK_SCALP, REVERSAL_RECLAIM, BREAKOUT_RETEST, LATE_CHASE) given
 //      the current trend context. Pure classification, no side effects.
-//   2. REMOVED_ELAPSED_CONFIRMATION_ENGINE -> CONFIRMATION / WAIT / REASSESS.
+//   2. XAU_TimingEngineConfirmsEntry -> CONFIRMATION / WAIT / REASSESS.
 //      Consumes this classifier's output to decide WHEN: enter immediately,
 //      wait one bar for confirmation, or reassess from current market.
-//   3. XAU_FreshnessExtensionAuthority           -> ANTI-CHASE / LOCATION QUALITY.
+//   3. XAUEntryTimingGuard           -> ANTI-CHASE / LOCATION QUALITY.
 //      A separate question: independent of trend classification, has THIS
 //      specific move already played out, and is the current candle/location
 //      a bad place to chase from (failed impulse, post-sweep trap, bad
@@ -7375,7 +7401,138 @@ void XAU_ClassifySetup(int dir, double atr, string setupName, XAU_SetupClassific
 // block outcome than a setup-aware read would. setupName defaults to "" so
 // existing internal callers (there is only one, from the main scan pipeline
 // below, which now passes the real name) keep compiling.
-/* v6.24.0: legacy ContextGate strategic veto deleted; structure and timing now have one shared authority each. */
+bool ContextGateAllows(int signal, double atr, string setupName = "")
+{
+   // === Gate 1: HTF bias alignment (default M30, was H4 — see InpContextTF) ===
+   // v5.1.8: respect admin Bot Mode override (Aggressive disables this entirely)
+   if(GetEffectiveUseHTFBias())
+   {
+      // v5.9.0: cache HTF EMA handles in static locals. Previously created and released
+      // on every call, which adds significant overhead per tick during active scanning.
+      // Handles are rebuilt only when the effective context TF changes (rare — admin mode flip).
+      ENUM_TIMEFRAMES ctxTF = GetEffectiveContextTF();
+      static int      hF_ctx    = INVALID_HANDLE;
+      static int      hS_ctx    = INVALID_HANDLE;
+      static ENUM_TIMEFRAMES lastCtxTF = PERIOD_CURRENT;
+      if(hF_ctx == INVALID_HANDLE || hS_ctx == INVALID_HANDLE || ctxTF != lastCtxTF)
+      {
+         if(hF_ctx != INVALID_HANDLE) IndicatorRelease(hF_ctx);
+         if(hS_ctx != INVALID_HANDLE) IndicatorRelease(hS_ctx);
+         hF_ctx   = iMA(Symbol(), ctxTF, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
+         hS_ctx   = iMA(Symbol(), ctxTF, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
+         lastCtxTF = ctxTF;
+      }
+      double h4F = 0, h4S = 0;
+      if(hF_ctx != INVALID_HANDLE && hS_ctx != INVALID_HANDLE)
+      {
+         double bufF[3], bufS[3];
+         if(CopyBuffer(hF_ctx, 0, 0, 3, bufF) >= 2 && CopyBuffer(hS_ctx, 0, 0, 3, bufS) >= 2)
+         {
+            h4F = bufF[1]; h4S = bufS[1];
+         }
+      }
+      if(h4F > 0 && h4S > 0)
+      {
+         bool h4Up   = (h4F > h4S);
+         bool h4Down = (h4F < h4S);
+         double spread = MathAbs(h4F - h4S) / h4S * 100;
+         if(spread >= InpH4NeutralPct)
+         {
+            string tfName = EnumToString(ctxTF);
+            if((signal == 1 && !h4Up) || (signal == -1 && !h4Down))
+            {
+               // v6.17.23: don't hard-block every countertrend attempt --
+               // classify it first. An evidence-backed countertrend scalp/
+               // reclaim (PULLBACK_SCALP/REVERSAL_RECLAIM: a majority of
+               // concrete reversal signals plus a confirmed reclaim) is
+               // allowed through; a countertrend attempt with no real
+               // evidence (LATE_CHASE) is still blocked exactly as before.
+               XAU_SetupClassification cgClass;
+               XAU_ClassifySetup(signal, atr, setupName, cgClass);
+               if(cgClass.type == XAU_TIMING_PULLBACK_SCALP || cgClass.type == XAU_TIMING_REVERSAL_RECLAIM)
+               {
+                  PrintFormat("✅ CONTEXT-GATE: %s countertrend allowed despite %s HTF bias -- classified %s (%s)",
+                              signal == 1 ? "BUY" : "SELL", tfName,
+                              cgClass.type == XAU_TIMING_PULLBACK_SCALP ? "PULLBACK_SCALP" : "REVERSAL_RECLAIM",
+                              cgClass.why);
+               }
+               else
+               {
+                  PrintFormat("⛔ CONTEXT-GATE: %s blocked — %s EMA50 %s EMA200 (%s HTF bias) [mode=%s]. %s",
+                              signal == 1 ? "BUY" : "SELL", tfName, signal == 1 ? "<" : ">",
+                              signal == 1 ? "bearish" : "bullish", g_modeName,
+                              cgClass.type == XAU_TIMING_LATE_CHASE ? cgClass.why : "Don't fight the trend.");
+                  return false;
+               }
+            }
+         }
+      }
+   }
+
+   // === Gate 2: Swing S/R proximity ===
+   if(InpUseSRFilter && InpSRLookback >= 20 && atr > 0)
+   {
+      double curPrice = (signal == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                                       : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      double proxDist = atr * InpSRProximityATR;
+
+      // Find recent swing high and swing low on M5 (last InpSRLookback bars)
+      // Swing = bar whose high/low is highest/lowest within ±3 bars window.
+      double swingHigh = 0;
+      double swingLow  = 999999;
+      for(int i = 3; i < InpSRLookback - 3; i++)
+      {
+         double h = iHigh(Symbol(), PERIOD_M5, i);
+         double l = iLow(Symbol(),  PERIOD_M5, i);
+         bool isSwingHigh = true;
+         bool isSwingLow  = true;
+         for(int j = 1; j <= 3; j++)
+         {
+            if(iHigh(Symbol(), PERIOD_M5, i-j) >= h || iHigh(Symbol(), PERIOD_M5, i+j) >= h) isSwingHigh = false;
+            if(iLow(Symbol(),  PERIOD_M5, i-j) <= l || iLow(Symbol(),  PERIOD_M5, i+j) <= l)  isSwingLow  = false;
+            if(!isSwingHigh && !isSwingLow) break;
+         }
+         if(isSwingHigh && h > swingHigh) swingHigh = h;
+         if(isSwingLow  && l < swingLow)  swingLow  = l;
+      }
+
+      // BUY trying to enter within proxDist BELOW a swing high = entering into resistance — block
+      if(signal == 1 && swingHigh > 0 && (swingHigh - curPrice) > 0 && (swingHigh - curPrice) < proxDist)
+      {
+         Print("⛔ CONTEXT-GATE: BUY blocked — price ", DoubleToString(curPrice, 2),
+               " is ", DoubleToString(swingHigh - curPrice, 2),
+               " below swing high ", DoubleToString(swingHigh, 2),
+               " (< ", DoubleToString(proxDist, 2), " = ", DoubleToString(InpSRProximityATR, 1),
+               "×ATR). Entering into resistance without break-retest.");
+         return false;
+      }
+      // v6.3.2 FIX: SELL near swing LOW is VALID for range-reversal/mean-reversion entries.
+      // Old logic blocked SELL within proxDist ABOVE support — but that's exactly where a
+      // RANGE_REVERSAL SELL triggers (fade the bounce from support back down).
+      // Corrected: only block SELL if price is far BELOW a swing low (over-extended downside).
+      // Block SELL if price is more than 2× ATR BELOW nearest swing low (over-extended, not near).
+      if(signal == -1 && swingLow < 999999 && curPrice < swingLow && (swingLow - curPrice) > proxDist * 2.0)
+      {
+         Print("⛔ CONTEXT-GATE: SELL blocked — price ", DoubleToString(curPrice, 2),
+               " is ", DoubleToString(swingLow - curPrice, 2),
+               " below swing low ", DoubleToString(swingLow, 2),
+               " — over-extended downside, not a good short entry.");
+         return false;
+      }
+   }
+
+   // Note: the Exhaustion/Reversal guard (XAU_ExhaustionReversalGuard) is
+   // deliberately NOT called here. v6.17.21 forensic audit of live trades
+   // found OpenTrade() is also reached directly by
+   // XAU_CheckPendingOpportunityRecovery and XAU_TryForceOpenTrade, which
+   // never go through ContextGateAllows -- so the guard lives as a single
+   // backstop inside OpenTrade() itself instead, where every caller
+   // (this gate's normal path included) is guaranteed to pass through it.
+   if(InpContextGateLog)
+      Print("✅ CONTEXT-GATE PASS: ", signal==1?"BUY":"SELL",
+            " cleared H4 bias + Swing-SR checks. Proceeding to OpenTrade.");
+   return true;
+}
 
 string PropFirmBaselineKey()
 {
@@ -8773,51 +8930,178 @@ void UpdateDrawdownState(bool wasLoss)
 //+------------------------------------------------------------------+
 void CheckReEntryOpportunity()
 {
-   if(!InpUseReEntry || !lastClose.valid || !lastClose.wasLoss || lastClose.reEntered) return;
+   if(!InpUseReEntry) return;
+   if(!lastClose.valid || !lastClose.wasLoss || lastClose.reEntered) return;
    if(TimeCurrent() - lastClose.closeTime > InpReEntryWindow) return;
-   if(CountMyPositions() > 0) return;
-   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0.0) return;
+   if(CountMyPositions() > 0) return;                  // Don't stack
+   if(IsInStreakPause()) return;
+   // Respect direction lockout — don't re-enter a side that's just been shown to fail
+   if(IsDirectionLocked(lastClose.dir))
+   {
+      lastClose.reEntered = true;   // mark done so we don't keep checking
+      Print("RE-ENTRY BLOCKED: side ", lastClose.dir==1?"BUY":"SELL",
+            " is locked — respecting direction lockout");
+      return;
+   }
+   if(!XAU_NoLimitTradingModeActive() && todayReEntryCount >= InpMaxReEntriesPerDay)
+   {
+      // One-shot log to avoid spam
+      static datetime lastCapLog = 0;
+      if(TimeCurrent() - lastCapLog > 3600)
+      { Print("RE-ENTRY CAP reached for today (", todayReEntryCount, "/", InpMaxReEntriesPerDay, ")"); lastCapLog = TimeCurrent(); }
+      return;
+   }
+   if(InpUseNewsFilter && !IsNewsSafe()) return;
 
    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-   double curPrice = lastClose.dir == 1 ? ask : bid;
-   if(curPrice <= 0.0) return;
-
-   // A re-entry must be a genuine better-value retest, never a worse-price
-   // recovery chase after a loss.
-   double betterBuffer = bufATR[1] * InpPostLossBetterATR;
-   bool betterPrice = lastClose.dir == 1
-                      ? curPrice <= lastClose.entryPrice - betterBuffer
-                      : curPrice >= lastClose.entryPrice + betterBuffer;
-   if(InpReEntryBetterPriceOnly && !betterPrice) return;
-
-   string sharedWhy = "";
-   if(!XAU_StructureAuthorityAllows(lastClose.dir, "RE_ENTRY", sharedWhy)) return;
-
-   string reGrade = "A";
-   double reLot = 1.0;
-   if(!XAU_FreshnessExtensionAuthority(lastClose.dir, "RE_ENTRY", 0.0, 0.0,
-                                       reGrade, reLot, sharedWhy))
+   if(bid <= 0 || ask <= 0) return;
+   double curPrice = (lastClose.dir == 1) ? ask : bid;
+   if(InpReEntryBetterPriceOnly && lastClose.entryPrice > 0)
    {
-      Print("RE_ENTRY FRESHNESS BLOCK: ",sharedWhy);
+      double betterBuffer = 0.0;
+      if(ArraySize(bufATR) >= 2 && bufATR[1] > 0)
+         betterBuffer = bufATR[1] * InpPostLossBetterATR;
+      bool betterPrice = (lastClose.dir == 1)
+                         ? (curPrice <= lastClose.entryPrice - betterBuffer)
+                         : (curPrice >= lastClose.entryPrice + betterBuffer);
+      if(!betterPrice)
+      {
+         static datetime lastBetterPriceLog = 0;
+         if(TimeCurrent() - lastBetterPriceLog > 60)
+         {
+            Print("RE-ENTRY BLOCKED: last ", lastClose.dir==1?"BUY":"SELL",
+                  " lost from entry ", DoubleToString(lastClose.entryPrice, _Digits),
+                  ". Current ", DoubleToString(curPrice, _Digits),
+                  " is not a better retest by ", DoubleToString(InpPostLossBetterATR, 2),
+                  "x ATR; avoiding worse-price chase after loss.");
+            lastBetterPriceLog = TimeCurrent();
+         }
+         return;
+      }
+   }
+   // Legacy mode chased price past the failed entry. Better-price mode turns
+   // re-entry into a retest-only recovery path.
+   double trigger = lastClose.slDist * InpReEntryFactor;
+   bool reversalBuy  = InpReEntryBetterPriceOnly
+                       ? (lastClose.dir ==  1)
+                       : (lastClose.dir ==  1 && curPrice >= lastClose.entryPrice + trigger);
+   bool reversalSell = InpReEntryBetterPriceOnly
+                       ? (lastClose.dir == -1)
+                       : (lastClose.dir == -1 && curPrice <= lastClose.entryPrice - trigger);
+   if(!reversalBuy && !reversalSell) return;
+
+   // Use latest ATR for new SL sizing; bail if indicators not ready
+   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return;
+
+   string growthReentryWhy = "";
+   if(!XAU_GrowthGuardReEntryAllowed(lastClose.dir, curPrice, bufATR[1], growthReentryWhy))
+   {
+      Print(growthReentryWhy);
       lastClose.reEntered = true;
+      g_lastSkipReason = growthReentryWhy;
       return;
    }
-   if(!XAU_TimingAuthorityAllows(lastClose.dir, "RE_ENTRY", bufATR[1], sharedWhy)) return;
-   if(!XAU_NewsAuthorityAllows(sharedWhy)) return;
-   if(!XAU_ReentryPyramidAuthority(lastClose.dir, "RE_ENTRY", sharedWhy)) return;
-   if(!XAU_FinalEntryArbiter("RE_ENTRY",true,true,true,true,true,true,sharedWhy)) return;
 
-   PrintFormat("RE_ENTRY SHARED_PATH: %s better retest %.2f | %s",
-               lastClose.dir==1?"BUY":"SELL",curPrice,sharedWhy);
+   // June 17-18 reconstruction: RE_ENTRY re-adds the SAME direction that just
+   // stopped out, with no scoring/grading at all — exactly the bypass
+   // mechanism the audit flagged (comment tag "XAU-SNIPER|RE_ENTRY", no
+   // setup name/grade suffix). Gate it on Active Direction like every other
+   // entry family: if short-term structure has since moved against this
+   // direction, a retest back toward the old entry is not evidence the
+   // thesis is still valid.
+   bool reEntryDirAllowed = (g_activeDirection == DIRECTION_BOTH_ALLOWED) ||
+                            (lastClose.dir == 1  && g_activeDirection == DIRECTION_BUY_ONLY) ||
+                            (lastClose.dir == -1 && g_activeDirection == DIRECTION_SELL_ONLY);
+   if(!reEntryDirAllowed)
+   {
+      Print("RE-ENTRY BLOCKED: Active Direction=", EnumToString(g_activeDirection),
+            " (", g_activeDirectionReason, ") does not permit ", lastClose.dir==1?"BUY":"SELL",
+            " — retest alone is not fresh structure confirmation");
+      lastClose.reEntered = true; // one-shot: don't keep re-checking every tick for this same closed trade
+      g_lastSkipReason = "RE-ENTRY BLOCKED: Active Direction disagrees";
+      return;
+   }
+
+   // v6.17.25 FIX: confirmed bug -- this function used to go straight from
+   // "Active Direction still agrees" to OpenTrade(), with no fresh-chart
+   // check at all. Active Direction is a coarse, multi-bar-persistent state;
+   // agreeing with it is not evidence the SAME direction that just stopped
+   // out has regenerated a real thesis right now -- a stopped-out BUY could
+   // re-buy purely because Active Direction hadn't flipped yet, with no
+   // fresh structure/momentum/exhaustion read at all. Reuses the SAME
+   // classifier + timing engine the normal scan path uses (per the "one
+   // reusable execution-confirmation architecture, don't duplicate" review
+   // note) instead of inventing separate re-entry-specific timing logic.
+   XAU_SetupClassification reClass;
+   XAU_ClassifySetup(lastClose.dir, bufATR[1], "RE_ENTRY", reClass);
+   if(reClass.type == XAU_TIMING_LATE_CHASE)
+   {
+      Print("RE-ENTRY BLOCKED: ", reClass.why,
+            " — retest alone is not fresh structure confirmation, cancelling this re-entry");
+      lastClose.reEntered = true; // thesis genuinely invalidated -- one-shot cancel, not a retry-later wait
+      g_lastSkipReason = "RE-ENTRY BLOCKED: " + reClass.why;
+      return;
+   }
+   if(!XAU_TimingEngineConfirmsEntry(lastClose.dir, "RE_ENTRY", "A", InpReEntrySize, bufATR[1]))
+   {
+      // Uncertain/marginal evidence -- NOT a permanent cancel. Do not set
+      // reEntered=true here: the timing engine's own pending-confirmation
+      // state re-checks every tick against its bounded 120-180s wall-clock
+      // delay, exactly like a fresh signal would -- never a bar wait.
+      g_lastSkipReason = "RE-ENTRY ENTRY_DELAY_WAITING: " + reClass.why;
+      return;
+   }
+
+   Print("RE-ENTRY TRIGGER (", todayReEntryCount+1, "/", InpMaxReEntriesPerDay, "): last ", lastClose.dir==1?"BUY":"SELL",
+         " stopped at ", DoubleToString(lastClose.entryPrice, _Digits),
+         " | price now ", DoubleToString(curPrice, _Digits),
+         " | retest distance ", DoubleToString(MathAbs(curPrice-lastClose.entryPrice)/lastClose.slDist, 2), "R",
+         " | ", reClass.why);
+
    lastSignalDir = lastClose.dir;
    lastSignalSignature = lastClose.signature;
    lastSignalSetup = "RE_ENTRY";
-   bool opened = OpenTrade(lastClose.dir, bufATR[1], "RE_ENTRY", 1.0);
-   g_alignedCandidates[1].firstCandidateTime = 0;
-   if(opened)
+
+   // v6.20.5 (TELEMETRY ONLY -- Change A): see FRESH-path comment above for
+   // field meanings; this caller also went through XAU_TimingEngineConfirmsEntry
+   // (just above) so the same mailbox applies.
+   g_pendingTimingProof.active                = true;
+   g_pendingTimingProof.candidateId           = StringFormat("RE_ENTRY_%s_%d", lastClose.dir == 1 ? "BUY" : "SELL", (int)g_lastEntryTimingDecision.originalSignalTime);
+   g_pendingTimingProof.sourcePath             = "REENTRY";
+   g_pendingTimingProof.firstSeenTime         = g_lastEntryTimingDecision.originalSignalTime;
+   g_pendingTimingProof.firstSeenPrice        = g_lastEntryTimingDecision.originalSignalPrice;
+   g_pendingTimingProof.timingGateRequired    = true;
+   g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveAdaptiveEntryDelaySeconds(lastClose.dir);
+   g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
+   g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
+   g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
+   g_pendingTimingProof.revalidationTime      = g_lastEntryTimingDecision.decisionTime;
+   g_pendingTimingProof.revalidationResult    = g_lastEntryTimingDecision.entryReasonText;
+   g_pendingTimingProof.bypassUsed            = false;
+   g_pendingTimingProof.bypassReason          = "";
+   g_pendingTimingProof.openTradeCaller       = "ReEntry->OpenTrade";
+
+   // v6.17.7 FIX (item 4): reEntered/todayReEntryCount used to be consumed
+   // BEFORE calling OpenTrade (then void, so no way to know if it actually
+   // opened a position) -- a risk block, broker rejection, or any other
+   // early-exit inside OpenTrade permanently burned one of the day's limited
+   // re-entries and marked this closed trade as "already re-entered" even
+   // though no re-entry ever happened. Only consume them on a confirmed fill.
+   bool reEntryOpened = OpenTrade(lastClose.dir, bufATR[1], "RE_ENTRY", InpReEntrySize);
+   // v6.20.1 audit fix: this caller also goes through XAU_TimingEngineConfirmsEntry
+   // (line 8433) and can therefore also set the entry-timing mailbox -- the
+   // original v6.20.1 diff only cleared it at the main-scan caller, leaving it
+   // dangling here on every RE_ENTRY attempt (success or fail). A dangling
+   // valid=true mailbox could then be wrongly consumed by a LATER, unrelated
+   // OpenTrade call (XAU_CheckPendingOpportunityRecovery or a manual force-open,
+   // neither of which sets this mailbox themselves), misattributing one trade's
+   // original-signal/delay data to a completely different trade and corrupting
+   // the aggregate DELAY_HELPED/HURT proof this release exists to produce.
+   g_lastEntryTimingDecision.valid = false;
+   if(reEntryOpened)
    {
-      lastClose.reEntered = true;
+      lastClose.reEntered = true;  // one-shot per original close
       todayReEntryCount++;
    }
 }
@@ -10190,8 +10474,8 @@ bool XAU_ValidateAdaptiveTransitionConfig()
    else if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !InpTransitionActiveExitAuthority)
       why="ACTIVE requires transition position authority enabled so entries and existing positions share one lifecycle decision";
    else if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE &&
-           InpAdaptiveTransitionPresetId!="XAUUSD_AI_Sniper_EA_v6.24.1_ACTIVE.set")
-      why="ACTIVE preset identity does not match the production v6.24.0 ACTIVE preset";
+           InpAdaptiveTransitionPresetId!="XAUUSD_AI_Sniper_EA_v6.23.3_ACTIVE.set")
+      why="ACTIVE preset identity does not match the production v6.23.3 ACTIVE preset";
 
    PrintFormat("ADAPTIVE_TRANSITION_AUTHORITY_CONFIG mode=%s exhaustionHardBlock=%.0f preferredOppositeAt=%.0f persistence=%d transitionAt=%.0f reversalAt=%.0f fastConfirmSec=%d minRewardR=%.2f maxOriginATR=%.2f maxValueATR=%.2f maxConsumedPct=%.0f pullbackResetATR=%.2f evidenceWindowBars=%d opportunityMaxBars=%d oldConfidenceCap=%.0f counterDecayMin=%d activeExitAuthority=%s valid=%s%s%s",
                InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF",
@@ -10379,7 +10663,13 @@ void XAU_ATHandleManualClose(int closedDirection,double closePrice)
    if(closedDirection!=1 && closedDirection!=-1) return;
    XAU_ATLoadPersistentState();
    string dirTag=closedDirection==1?"BUY":"SELL";
-   bool clearedTiming=false,consumed=false;
+   bool clearedPending=false,clearedTiming=false,clearedRecovery=false,consumed=false;
+   if(g_pendingOpportunity.active && g_pendingOpportunity.dir==closedDirection)
+   { g_pendingOpportunity.active=false; clearedPending=true; }
+   if(g_pendingEntryConfirm.active && g_pendingEntryConfirm.dir==closedDirection)
+   { g_pendingEntryConfirm.active=false; clearedTiming=true; }
+   if(g_recoveryAwaitingTiming.active && g_recoveryAwaitingTiming.dir==closedDirection)
+   { g_recoveryAwaitingTiming.active=false; clearedRecovery=true; }
    string proofId=g_pendingTimingProof.candidateId; StringToUpper(proofId);
    if(g_pendingTimingProof.active && StringFind(proofId,dirTag)>=0)
    { g_pendingTimingProof.active=false; clearedTiming=true; }
@@ -10401,9 +10691,9 @@ void XAU_ATHandleManualClose(int closedDirection,double closePrice)
    g_lastManualCloseResetAt=TimeCurrent();
    g_lastManualCloseResetDirection=closedDirection;
    XAU_ATSavePersistentState();
-   PrintFormat("[MANUAL_CLOSE_OPPORTUNITY_RESET] direction=%s closePrice=%.2f timingTelemetryCleared=%s opportunityConsumed=%s opportunityId=%s decision=REQUIRE_GENUINE_MARKET_RESET",
-               dirTag,closePrice,clearedTiming?"true":"false",
-               consumed?"true":"false",XAU_ATReversalOpportunityId());
+   PrintFormat("[MANUAL_CLOSE_OPPORTUNITY_RESET] direction=%s closePrice=%.2f pendingCleared=%s timingCleared=%s recoveryCleared=%s opportunityConsumed=%s opportunityId=%s decision=REQUIRE_GENUINE_MARKET_RESET",
+               dirTag,closePrice,clearedPending?"true":"false",clearedTiming?"true":"false",
+               clearedRecovery?"true":"false",consumed?"true":"false",XAU_ATReversalOpportunityId());
 }
 
 double XAU_CounterTransitionEvidence()
@@ -10763,7 +11053,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
       {
          g_reversalOpportunity.state=REVERSAL_WAITING_FOR_PULLBACK;
          g_reversalOpportunity.expectedPullbackPrice=g_reversalOpportunity.impulsePeak-trackedDir*atr*InpTransitionPullbackResetATR;
-         d.entryDecision="REVERSAL_LOCATION_CONTEXT_ONLY";
+         d.entryDecision="REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK";
       }
       else if(d.reversalLocationGood)
       {
@@ -10858,7 +11148,85 @@ string XAU_AdaptiveEntrySource(string reason, string fallback)
    return fallback; // PRIMARY and explicit future callers
 }
 
-/* v6.24.0: legacy adaptive final-direction veto deleted from the normal strategy. */
+bool XAU_FinalAdaptiveDirectionDecision(int requestedDirection, string source, string reason,
+                                        bool isManualOverride, string &decisionReason)
+{
+   XAU_AdaptiveTransitionDecision d=XAU_AdaptiveMarketTransitionEngine();
+   source=XAU_AdaptiveEntrySource(reason,source);
+   bool allowed=requestedDirection==1?d.freshBuyAllowed:d.freshSellAllowed;
+   bool oldDirection=(requestedDirection==d.dominantDirection);
+   if(oldDirection && d.exhaustionProbability>=60.0 && d.exhaustionProbability<70.0)
+   {
+      if(source=="PYRAMID") allowed=false; // mature trend: no aggressive adds
+      else if(d.continuationConfidence<55.0 || d.remainingRewardR<InpTransitionMinRewardR)
+         allowed=false; // selective continuation, not a blanket 60-69 lock
+   }
+   if(oldDirection && d.exhaustionProbability>=70.0) allowed=false;
+   if(d.exhaustionProbability>=70.0 && oldDirection && allowed)
+   {
+      Print("ADAPTIVE_TRANSITION_INVARIANT_VIOLATION: exhaustion>=70 but old-direction entry resolved ALLOW — forcing BLOCK");
+      allowed=false;
+   }
+   if(d.exhaustionProbability>=80.0 && d.oppositeEntryAllowed && requestedDirection==-d.dominantDirection && !allowed)
+   {
+      Print("ADAPTIVE_TRANSITION_INVARIANT_REPAIR: compact reversal package passed at >=80; forcing opposite ALLOW before broker/account safety gates");
+      allowed=true;
+   }
+   // A direction can be correct while the current price is wrong.  Once a
+   // high-exhaustion reversal opportunity exists, every autonomous source in
+   // that direction shares its origin/value/consumption state.  A normal
+   // TREND_PULLBACK cannot recreate the same missed reversal at a worse price.
+   bool opportunityDirection=(g_reversalOpportunity.active && requestedDirection==g_reversalOpportunity.direction);
+   if(opportunityDirection)
+   {
+      double livePrice=requestedDirection==1?SymbolInfoDouble(Symbol(),SYMBOL_ASK):SymbolInfoDouble(Symbol(),SYMBOL_BID);
+      bool liveChase=requestedDirection==1?livePrice>g_reversalOpportunity.latestAcceptablePrice:
+                                           livePrice<g_reversalOpportunity.latestAcceptablePrice;
+      if(!d.reversalLocationGood || liveChase || g_reversalOpportunity.impulseConsumedByEntry)
+      {
+         allowed=false;
+         PrintFormat("REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK id=%s source=%s direction=%s livePrice=%.2f latestAcceptable=%.2f locationQuality=%.0f consumed=%.0f%% distanceFromValue=%.2fATR impulseExtension=%.2fATR oppositeReward=%.2fR alreadyEntered=%s",
+                     XAU_ATReversalOpportunityId(),source,requestedDirection==1?"BUY":"SELL",livePrice,g_reversalOpportunity.latestAcceptablePrice,
+                     d.entryLocationQuality,d.moveAlreadyConsumedPct,d.distanceFromValueATR,d.impulseExtensionATR,d.oppositeRemainingRewardR,
+                     g_reversalOpportunity.impulseConsumedByEntry?"true":"false");
+      }
+   }
+   string mode=InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF";
+   double auditATR=(ArraySize(bufATR)>1 && bufATR[1]>0.0)?bufATR[1]:0.0;
+   double liveAuditPrice=requestedDirection==1?SymbolInfoDouble(Symbol(),SYMBOL_ASK):SymbolInfoDouble(Symbol(),SYMBOL_BID);
+   double travelSinceCandidateATR=(auditATR>0.0 && liveAuditPrice>0.0 && g_reversalOpportunity.firstDetectionPrice>0.0)?
+                                  MathAbs(liveAuditPrice-g_reversalOpportunity.firstDetectionPrice)/auditATR:0.0;
+   decisionReason=StringFormat("source=%s requested=%s lifecycle=%s continuation=%.0f exhaustion=%.0f transition=%.0f reversal=%.0f oldRemainingReward=%.2fR oppositeRemainingReward=%.2fR locationQuality=%.0f consumed=%.0f%% entryDecision=%s decision=%s reason=%s",
+                               source,requestedDirection==1?"BUY":"SELL",XAU_ATLifecycleName(d.lifecycle),d.continuationConfidence,d.exhaustionProbability,d.transitionProbability,d.reversalProbability,d.remainingRewardR,d.oppositeRemainingRewardR,d.entryLocationQuality,d.moveAlreadyConsumedPct,d.entryDecision,allowed?"ALLOW":"BLOCK",d.reason);
+   PrintFormat("FINAL_DIRECTION_DECISION normalBias=%s trendHealth=%.0f maturity=%.0f continuationConfidence=%.0f exhaustionProbability=%.0f transitionProbability=%.0f reversalProbability=%.0f counterEvidence=%.0f entryLocationQuality=%.0f moveAlreadyConsumedPct=%.0f distanceFromValueATR=%.2f impulseExtensionATR=%.2f priceTravelSinceCandidateATR=%.2f oppositeRemainingRewardR=%.2f reversalOrigin=%.2f firstDetectionPrice=%.2f latestAcceptablePrice=%.2f expectedPullbackPrice=%.2f pullbackOpportunityExpected=%s entryDecision=%s opportunityId=%s freshSellAllowed=%s freshBuyAllowed=%s existingSellAction=%s existingBuyAction=%s mode=%s source=%s reason=%s",
+               d.dominantDirection==1?"BUY":"SELL",d.trendHealth,d.trendMaturity,d.continuationConfidence,d.exhaustionProbability,d.transitionProbability,d.reversalProbability,d.counterEvidence,
+               d.entryLocationQuality,d.moveAlreadyConsumedPct,d.distanceFromValueATR,d.impulseExtensionATR,travelSinceCandidateATR,d.oppositeRemainingRewardR,
+               g_reversalOpportunity.originPrice,g_reversalOpportunity.firstDetectionPrice,g_reversalOpportunity.latestAcceptablePrice,
+               g_reversalOpportunity.expectedPullbackPrice,d.reversalWaitForPullback?"true":"false",d.entryDecision,XAU_ATReversalOpportunityId(),
+               d.freshSellAllowed?"true":"false",d.freshBuyAllowed?"true":"false",XAU_ATActionName(d.existingSellAction),XAU_ATActionName(d.existingBuyAction),mode,source,d.reason);
+   string candidateId=StringLen(g_pendingTimingProof.candidateId)>0?g_pendingTimingProof.candidateId:
+                      StringFormat("%s_%s_%d",source,requestedDirection==1?"BUY":"SELL",(int)d.evaluatedBar);
+   bool finalLocationWait=opportunityDirection &&
+                          (!d.reversalLocationGood || d.reversalWaitForPullback ||
+                           g_reversalOpportunity.impulseConsumedByEntry);
+   double requestedRemainingRewardR=oldDirection?d.remainingRewardR:d.oppositeRemainingRewardR;
+   string decisionAuditKey=StringFormat("%s|%s|%s|%s",candidateId,source,requestedDirection==1?"BUY":"SELL",
+                                        allowed?"ALLOW":finalLocationWait?"WAIT":"BLOCK");
+   if(decisionAuditKey!=g_lastAdaptiveDecisionAuditKey || d.evaluatedBar!=g_lastAdaptiveDecisionAuditBar)
+   {
+      PrintFormat("[PRODUCTION_ACTIVE_DECISION_AUDIT] mode=%s source=%s candidateId=%s opportunityId=%s direction=%s exhaustion=%.0f transitionState=%s locationQuality=%.0f badLocation=%s moveConsumedPct=%.0f remainingRewardR=%.2f decision=%s reason=%s",
+                  mode,source,candidateId,XAU_ATReversalOpportunityId(),requestedDirection==1?"BUY":"SELL",d.exhaustionProbability,
+                  XAU_ATLifecycleName(d.lifecycle),d.entryLocationQuality,finalLocationWait?"true":"false",
+                  d.moveAlreadyConsumedPct,requestedRemainingRewardR,
+                  allowed?"ALLOW":finalLocationWait?"WAIT_FOR_VALUE":"BLOCK_OLD_DIRECTION",d.reason);
+      PrintFormat("[EXHAUSTION_ENTRY_AUDIT] candidateId=%s direction=%s distanceTravelledATR=%.2f sessionRangeConsumed=%.0f continuationQuality=%.0f remainingRewardR=%.2f decision=%s reason=%s",
+                  candidateId,requestedDirection==1?"BUY":"SELL",d.distanceTravelledATR,d.sessionRangeConsumed,d.continuationConfidence,d.remainingRewardR,allowed?"WOULD_ALLOW":"WOULD_BLOCK",d.reason);
+      g_lastAdaptiveDecisionAuditKey=decisionAuditKey;
+      g_lastAdaptiveDecisionAuditBar=d.evaluatedBar;
+   }
+   if(isManualOverride || InpAdaptiveTransitionMode!=ADAPTIVE_TRANSITION_ACTIVE) return true;
+   return allowed;
+}
 
 void XAU_ProductionActiveFinalEntryAssertion(int direction,string source,string reason,bool allowed)
 {
@@ -11834,141 +12202,1011 @@ int AdaptivePyramidMaxAdds(int dir, double moved, double atr, double quality,
 void CheckPyramidOpportunity()
 {
    if(!InpAllowPyramid) return;
+   if(IsInStreakPause()) return;
+   if(drawdownActive) return;             // don't stack in drawdown recovery
+   // v6.4.5: weeklyLossHit no longer fully blocks — adaptive mode handles selectivity at entry
 
-   int openCount = 0;
-   int totalBuys = 0, totalSells = 0;
-   ulong origTicket = 0;
+   // v4.9.7 — Don't stack new risk into a basket that's already armed and protecting profit.
+   // Adding fresh trades right before a basket-flush just creates micro-loss tickets
+   // (e.g. fresh trade closes at -0.25 pips when basket triggers).
+   if(InpBasketMode && g_basketArmed && (InpBasketBlockPyramidWhenArmed || InpPyramidNoAddIntoArmedBasket))
+   {
+      static datetime lastBlockLog = 0;
+      if(TimeCurrent() - lastBlockLog > 120)
+      {
+         Print("PYRAMID BLOCKED: basket is ARMED — no new stacks until current cycle resolves. This prevents late add tickets from closing red during basket protection.");
+         lastBlockLog = TimeCurrent();
+      }
+      return;
+   }
+
+   // Spread guard
+   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   if(spread > InpMaxSpread) return;
+
+   if(g_lastPyramidFailTime > 0 && TimeCurrent() - g_lastPyramidFailTime < InpPyramidFailCooldownSec)
+      return;
+
+   int openCount = CountMyPositions();
+   if(openCount == 0) return;                               // no base trade to stack on
+   if(openCount >= InpMaxOpenTrades) return;                // global cap
+
+   // Find the ORIGINAL (oldest) position in our magic + determine direction
+   ulong  origTicket = 0;
    datetime origTime = 0;
-   long origType = -1;
-   double origPx = 0.0, origSL = 0.0, origTP = 0.0, origLot = 0.0;
-   for(int i=0; i<PositionsTotal(); i++)
+   long   origType   = -1;
+   double origPx     = 0, origSL = 0, origLot = 0, smallestLot = 1e9;
+   int    totalBuys  = 0, totalSells = 0;
+   double totalLots  = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
    {
-      ulong tk=PositionGetTicket(i);
+      ulong tk = PositionGetTicket(i);
       if(!posInfo.SelectByTicket(tk)) continue;
-      if(posInfo.Magic()!=InpMagicNumber || posInfo.Symbol()!=Symbol()) continue;
-      openCount++;
-      if(posInfo.PositionType()==POSITION_TYPE_BUY) totalBuys++; else totalSells++;
-      datetime pt=(datetime)PositionGetInteger(POSITION_TIME);
-      if(origTime==0 || pt<origTime)
+      if(posInfo.Magic() != InpMagicNumber) continue;
+      if(posInfo.Symbol() != Symbol()) continue;
+      datetime pt = (datetime)PositionGetInteger(POSITION_TIME);
+      if(origTime == 0 || pt < origTime)
+      { origTime = pt; origTicket = tk; origType = posInfo.PositionType();
+        origPx = posInfo.PriceOpen(); origSL = posInfo.StopLoss();
+        origLot = posInfo.Volume(); }
+      if(posInfo.PositionType() == POSITION_TYPE_BUY)  totalBuys++;
+      else                                              totalSells++;
+      double v = posInfo.Volume();
+      if(v < smallestLot) smallestLot = v;
+      totalLots += v;
+   }
+   if(origTicket == 0 || origType < 0) return;
+
+   bool isBuy = (origType == POSITION_TYPE_BUY);
+   int dir = isBuy ? 1 : -1;
+
+   // v6.23.1: pyramids send directly through trade.Buy/Sell and therefore
+   // require their own call to the exact same final authority used by
+   // OpenTrade. At >=70% old-direction exhaustion this is a hard stop in
+   // ACTIVE, regardless of grade, HTF bias, profit, or add type.
+   {
+      string adaptiveWhy="";
+      if(!XAU_FinalAdaptiveDirectionDecision(dir, "PYRAMID", "PYRAMID", false, adaptiveWhy))
       {
-         origTime=pt; origTicket=tk; origType=posInfo.PositionType();
-         origPx=posInfo.PriceOpen(); origSL=posInfo.StopLoss();
-         origTP=posInfo.TakeProfit(); origLot=posInfo.Volume();
-      }
-   }
-   if(origTicket==0 || openCount==0 || (totalBuys>0 && totalSells>0)) return;
-
-   int configuredAdds=MathMax(0,MathMin(InpMaxPyramidAdds,InpMaxOpenTrades-1));
-   int addsAlready=MathMax(0,openCount-1);
-   if(addsAlready>=configuredAdds || openCount>=InpMaxOpenTrades) return;
-
-   bool isBuy=(origType==POSITION_TYPE_BUY);
-   int dir=isBuy?1:-1;
-   double atr=(ArraySize(bufATR)>=2)?bufATR[1]:0.0;
-   if(atr<=0.0) return;
-   double entryPx=isBuy?SymbolInfoDouble(Symbol(),SYMBOL_ASK):SymbolInfoDouble(Symbol(),SYMBOL_BID);
-   if(entryPx<=0.0) return;
-
-   // Controlled campaign adds only after favourable spacing. Rescue averaging,
-   // equity tiers, loss locks and strategy-specific add cages are removed.
-   double spacingAnchor=lastPyramidPx>0.0?lastPyramidPx:origPx;
-   double favourableMove=dir>0?entryPx-spacingAnchor:spacingAnchor-entryPx;
-   if(!InpPyramidOnTrend || favourableMove<atr*InpPyramidMinATR) return;
-
-   string authorityWhy="";
-   if(!XAU_StructureAuthorityAllows(dir,"PYRAMID",authorityWhy)) return;
-   string pyramidGrade="A";
-   double ignoredLotMulti=1.0;
-   if(!XAU_FreshnessExtensionAuthority(dir,"PYRAMID",g_lastEntryScore,g_lastEntryScore,
-                                       pyramidGrade,ignoredLotMulti,authorityWhy)) return;
-   if(!XAU_TimingAuthorityAllows(dir,"PYRAMID",atr,authorityWhy)) return;
-   if(!XAU_NewsAuthorityAllows(authorityWhy)) return;
-   if(!XAU_ReentryPyramidAuthority(dir, "PYRAMID", authorityWhy)) return;
-   if(!XAU_FinalEntryArbiter("PYRAMID",true,true,true,true,true,true,authorityWhy)) return;
-
-   double minLot=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MIN);
-   double maxLot=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MAX);
-   double lotStep=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_STEP);
-   int lotDigits=VolumeDigitsForSymbol();
-   double addLot=origLot*MathPow(MathMax(0.05,InpPyramidSizeMulti),addsAlready+1);
-   addLot=NormalizeVolumeDown(addLot);
-   if(addLot<minLot || addLot>maxLot || lotStep<=0.0) return;
-
-   int digits=(int)SymbolInfoInteger(Symbol(),SYMBOL_DIGITS);
-   double minDist=MathMax((double)SymbolInfoInteger(Symbol(),SYMBOL_TRADE_STOPS_LEVEL),
-                          (double)SymbolInfoInteger(Symbol(),SYMBOL_TRADE_FREEZE_LEVEL))*
-                          SymbolInfoDouble(Symbol(),SYMBOL_POINT);
-   double slDist=MathMax(atr*InpSLMultiplier,minDist);
-   double pyramidSL=NormalizeDouble(dir>0?entryPx-slDist:entryPx+slDist,digits);
-   double pyramidTP=origTP>0.0?origTP:NormalizeDouble(dir>0?entryPx+slDist*EffTPMultiplier():
-                                                       entryPx-slDist*EffTPMultiplier(),digits);
-
-   double riskPerLot=RiskPerLotForDistance(slDist);
-   if(riskPerLot<=0.0) return;
-   double openLots=0.0;
-   double openRisk=CurrentAggregateRiskToSL(openLots);
-   double maxBasketRisk=accInfo.Equity()*EffectiveAggregateRiskCapPct()/100.0;
-   if(maxBasketRisk>0.0 && openRisk+addLot*riskPerLot>maxBasketRisk)
-   {
-      PrintFormat("PYRAMID_RISK_AUTHORITY_BLOCK: projected $%.2f > basket cap $%.2f",
-                  openRisk+addLot*riskPerLot,maxBasketRisk);
-      return;
-   }
-
-   string riskWhy="";
-   double requestedPct=accInfo.Equity()>0.0?addLot*riskPerLot/accInfo.Equity()*100.0:0.0;
-   if(!XAU_ReconcileFinalRisk(addLot,slDist,lotStep,minLot,requestedPct,
-                              EffectiveSingleRiskCapPct(),"PYRAMID",riskWhy)) return;
-   addLot=NormalizeVolumeDown(addLot);
-   if(addLot<minLot) return;
-
-   double marginNeeded=0.0;
-   if(!OrderCalcMargin(isBuy?ORDER_TYPE_BUY:ORDER_TYPE_SELL,Symbol(),addLot,entryPx,marginNeeded))
-      return;
-   if(marginNeeded>accInfo.FreeMargin()*0.50) return;
-
-   string why=StringFormat("PYRAMID_SHARED_AUTHORITY add=%d/%d spacing=%.2fATR",
-                           addsAlready+1,configuredAdds,favourableMove/atr);
-   bool ok=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)
-                :trade.Sell(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why);
-   g_alignedCandidates[2].firstCandidateTime = 0;
-   if(!ok)
-   {
-      Print("PYRAMID FAILED: Err=",GetLastError()," Ret=",trade.ResultRetcode());
-      return;
-   }
-
-   lastPyramidAddTime=TimeCurrent();
-   lastPyramidPx=entryPx;
-   todayTradeCount++;
-   PrintFormat("PYRAMID OK: %s %.2f lots @ %.2f | %s",
-               isBuy?"BUY":"SELL",addLot,entryPx,why);
-
-   ulong dealTicket=trade.ResultDeal();
-   ulong posId=0;
-   if(dealTicket>0 && HistoryDealSelect(dealTicket))
-      posId=(ulong)HistoryDealGetInteger(dealTicket,DEAL_POSITION_ID);
-   if(posId==0) posId=trade.ResultOrder();
-   if(posId>0)
-   {
-      ulong liveTicket; string liveSymbol; long liveMagic; int liveDir;
-      double liveOpen,liveVol,liveSL,liveTP;
-      if(XAU_FindLivePositionByIdentifier(posId,liveTicket,liveSymbol,liveMagic,
-                                          liveDir,liveOpen,liveVol,liveSL,liveTP))
-      {
-         int idx=XAU_RExit_EnsureIdx(posId,liveTicket,liveDir==1,liveOpen,liveSL,liveVol,false);
-         XAU_RExit_SyncNettingState(idx,liveDir==1,liveOpen,liveSL,liveVol);
-         XAU_RExit_SaveState(true);
+         Print("PYRAMID BLOCKED (Adaptive Transition Authority): ",adaptiveWhy);
+         return;
       }
    }
 
-   BotMonitorActivity("PYRAMID_ADD","TRADE",
-                      StringFormat("%s %.2f lot @%.2f - %s",isBuy?"BUY":"SELL",addLot,entryPx,why));
-   if(CloudEnabled())
+   // Must not have opposite positions hedging (skip — ambiguous)
+   if(totalBuys > 0 && totalSells > 0) return;
+
+   // Respect direction lockout (a lost side should not be re-pyramided)
+   if(IsDirectionLocked(dir)) return;
+
+   bool pyramidGradeA = IsGradeAtLeastA(g_lastEntryGrade);
+   if(InpPyramidRequireGradeA && !pyramidGradeA && !InpPyramidAllowProtectedB)
    {
-      string sigId=CloudPostSignal(Symbol(),isBuy?"BUY":"SELL",entryPx,pyramidSL,pyramidTP,
-                                   "PYR",requestedPct,addLot,accInfo.Balance());
-      if(StringLen(sigId)>0 && posId>0) CloudMapAdd(posId,sigId);
+      static datetime lastPyrGradeLog = 0;
+      if(TimeCurrent() - lastPyrGradeLog > 120)
+      {
+         Print("PYRAMID SKIPPED: original entry grade ", g_lastEntryGrade,
+               " is below A. Smart Guard requires A/A+ before stacking.");
+         lastPyrGradeLog = TimeCurrent();
+      }
+      return;
+   }
+
+   double pyrConfirmLot = 1.0;
+   string pyrConfirmWhy = "";
+   bool pyrSoftConfirm = false;
+   if(!PyramidAdaptiveConfirmPass(dir, g_lastEntryScore, g_lastEntryGrade,
+                                  pyrConfirmLot, pyrConfirmWhy, pyrSoftConfirm))
+   {
+      static datetime lastPyrHtfLog = 0;
+      if(TimeCurrent() - lastPyrHtfLog > 120)
+      {
+         Print("PYRAMID SKIPPED: adaptive fast confirmation failed for ",
+               dir == 1 ? "BUY" : "SELL", " direction. ", pyrConfirmWhy);
+         lastPyrHtfLog = TimeCurrent();
+      }
+      return;
+   }
+   if(pyrSoftConfirm)
+   {
+      static datetime lastPyrSoftConfirmLog = 0;
+      if(TimeCurrent() - lastPyrSoftConfirmLog > 120)
+      {
+         Print("PYRAMID SOFT-CONFIRM: ", dir == 1 ? "BUY" : "SELL",
+               " reduced-size rescue path enabled. ", pyrConfirmWhy);
+         lastPyrSoftConfirmLog = TimeCurrent();
+      }
+   }
+
+   // Regime must still support the direction
+   ENUM_REGIME r = currentRegime;
+   bool regimeOk = false;
+   if(isBuy)
+      regimeOk = (r == REGIME_TRENDING_UP || r == REGIME_BREAKOUT_UP);
+   else
+      regimeOk = (r == REGIME_TRENDING_DOWN || r == REGIME_BREAKOUT_DOWN);
+   if(!regimeOk) return;
+
+   // Need ATR for distance gate
+   double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0;
+   if(atr <= 0) return;
+
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double curPx = isBuy ? bid : ask;
+   if(curPx <= 0) return;
+
+   // Distance from original entry
+   double moved = isBuy ? (curPx - origPx) : (origPx - curPx);   // +ve = with us, -ve = against
+   double minMove = atr * InpPyramidMinATR;
+
+   bool adverseTrigger = (InpPyramidOnAdverse || InpPyramidRescueMode) && moved <= -minMove;
+   bool trendTrigger   = InpPyramidOnTrend   && moved >= minMove;
+   if(!adverseTrigger && !trendTrigger) return;
+
+   double movedATR = moved / atr;
+   double avgAtr = XAU_AvgATR(40);
+   double atrExpansion = (avgAtr > 0.0) ? atr / avgAtr : 1.0;
+   double sessionQuality = GetSessionQuality();
+   double momentumATR = PyramidMomentumATR(dir, atr);
+   double open1 = iOpen(Symbol(), PERIOD_M5, 1);
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double close2 = iClose(Symbol(), PERIOD_M5, 2);
+   double high1 = iHigh(Symbol(), PERIOD_M5, 1);
+   double low1 = iLow(Symbol(), PERIOD_M5, 1);
+   double body = MathAbs(close1 - open1);
+   double barRange = MathMax(high1 - low1, 0.0);
+   double upperWick = high1 - MathMax(open1, close1);
+   double lowerWick = MathMin(open1, close1) - low1;
+   bool rescueRejection = (barRange > 0.0 &&
+                           ((dir < 0 && upperWick >= barRange * 0.28) ||
+                            (dir > 0 && lowerWick >= barRange * 0.28)));
+   bool baseProtected = (origSL > 0 && ((isBuy && origSL >= origPx) || (!isBuy && origSL <= origPx)));
+   bool baseHealthy = (movedATR >= InpPyramidMinHealthATR || baseProtected);
+   double adverseATR = MathMax(-movedATR, 0.0);
+   bool cleanSpread = (InpMaxSpread <= 0 || spread <= InpMaxSpread * InpPyramidMaxSpreadFrac);
+   double extensionATR = 0.0;
+   double resetATR = 0.0;
+   bool extensionNoReset = IsXAUExtensionResetMissing(dir, atr, extensionATR, resetATR);
+   bool noDivergence = !HasExhaustionDivergence(dir);
+   bool pyramidBaseWasLateChase = false;
+   double pyramidBaseMissedMove = 0.0;
+   double pyramidBaseMissedATR = 0.0;
+   if(InpXAU_BlockLateChasePyramids &&
+      g_signalFirstSeenTime > 0 &&
+      g_signalFirstSeenDir == dir &&
+      g_signalFirstSeenPrice > 0.0)
+   {
+      pyramidBaseMissedMove = dir > 0 ? (origPx - g_signalFirstSeenPrice)
+                                      : (g_signalFirstSeenPrice - origPx);
+      double anchorAtr = MathMax(atr, g_signalFirstATR);
+      pyramidBaseMissedATR = anchorAtr > 0.0 ? pyramidBaseMissedMove / anchorAtr : 0.0;
+      pyramidBaseWasLateChase = (pyramidBaseMissedMove > 0.0 &&
+                                 (pyramidBaseMissedATR >= InpXAU_MaxMissedMoveATR ||
+                                  pyramidBaseMissedMove >= InpXAU_MaxMissedMoveUSD));
+   }
+   if(pyramidBaseWasLateChase && !baseProtected)
+   {
+      static datetime lastLatePyrBlockLog = 0;
+      if(TimeCurrent() - lastLatePyrBlockLog >= 60)
+      {
+         Print("PYRAMID BLOCKED: base trade was a late chase from first signal zone. firstPrice=",
+               DoubleToString(g_signalFirstSeenPrice, 2),
+               " baseEntry=", DoubleToString(origPx, 2),
+               " missedMove=", DoubleToString(pyramidBaseMissedMove, 2),
+               " (", DoubleToString(pyramidBaseMissedATR, 2),
+               "ATR). No clustered add until base is protected or a fresh setup resets.");
+         lastLatePyrBlockLog = TimeCurrent();
+      }
+      return;
+   }
+   bool eliteTrend = (g_lastEntryScore >= InpPyramidEliteScore && (pyramidGradeA || InpPyramidAllowProtectedB) && momentumATR >= 0.50);
+   bool moderateTrend = (g_lastEntryScore >= InpPyramidModerateScore && momentumATR >= 0.25);
+   bool rescueMode = (adverseTrigger && !trendTrigger && InpPyramidRescueMode);
+   bool rescueElite = (g_lastEntryScore >= InpPyramidRescueEliteScore &&
+                       adverseATR <= MathMin(InpPyramidRescueMaxATR, 1.45) &&
+                       openCount == 1 && regimeOk && cleanSpread &&
+                       noDivergence &&
+                       pyrConfirmLot >= InpPyramidRescueConfirmMultiMin);
+   bool rescueSmartNoTurn = (InpPyramidEliteRescueNoTurn && rescueElite);
+   bool rescueSoftNoTurn = (pyrSoftConfirm &&
+                            g_lastEntryScore >= InpPyramidSoftConfirmMinScore &&
+                            adverseATR <= MathMin(InpPyramidRescueMaxATR, 1.25) &&
+                            openCount == 1 && regimeOk && cleanSpread &&
+                            noDivergence);
+   int retestLookback = (int)MathMax(6.0, MathMin((double)InpPyramidRetestLookbackBars, 30.0));
+   double retestHigh = 0.0, retestLow = DBL_MAX;
+   for(int k = 2; k <= retestLookback + 1; k++)
+   {
+      double h = iHigh(Symbol(), PERIOD_M5, k);
+      double l = iLow(Symbol(), PERIOD_M5, k);
+      if(h > 0.0) retestHigh = MathMax(retestHigh, h);
+      if(l > 0.0) retestLow = MathMin(retestLow, l);
+   }
+   if(retestHigh <= 0.0) retestHigh = high1;
+   if(retestLow == DBL_MAX) retestLow = low1;
+   double ema50 = (ArraySize(bufEMAFast) >= 2) ? bufEMAFast[1] : 0.0;
+   double vwap = XAU_SessionVWAP(96);
+   double retestZone = atr * InpPyramidRetestZoneATR;
+   double breakZone = atr * InpPyramidRetestBreakATR;
+   bool retestAgainstZone = false;
+   bool retestReject = false;
+   bool retestBreakAgainst = false;
+   if(dir < 0)
+   {
+      retestAgainstZone = ((retestHigh > 0.0 && high1 >= retestHigh - retestZone) ||
+                           (ema50 > 0.0 && high1 >= ema50 - retestZone) ||
+                           (vwap > 0.0 && high1 >= vwap - retestZone));
+      retestReject = ((upperWick >= MathMax(body * 0.45, atr * 0.08) && close1 <= open1) ||
+                      (close1 < open1 && close1 < close2));
+      retestBreakAgainst = (retestHigh > 0.0 && close1 > retestHigh + breakZone && body >= atr * 0.30);
+   }
+   else
+   {
+      retestAgainstZone = ((retestLow > 0.0 && low1 <= retestLow + retestZone) ||
+                           (ema50 > 0.0 && low1 <= ema50 + retestZone) ||
+                           (vwap > 0.0 && low1 <= vwap + retestZone));
+      retestReject = ((lowerWick >= MathMax(body * 0.45, atr * 0.08) && close1 >= open1) ||
+                      (close1 > open1 && close1 > close2));
+      retestBreakAgainst = (retestLow > 0.0 && close1 < retestLow - breakZone && body >= atr * 0.30);
+   }
+   // June 17-18 reconstruction: PYR+RETEST_RESCUE's confirmation is a shallow
+   // retest-and-rejection-wick at an old S/R zone, not a fresh break of
+   // structure — it was never gated on whether the Active Direction Engine
+   // still permits adding to `dir` at all. Require that agreement now: no
+   // averaging into a direction that fresh M5 structure has already broken
+   // against, regardless of how the rescue candle itself looks.
+   bool directionAllowsRescue = (dir == 1)
+      ? (g_activeDirection == DIRECTION_BUY_ONLY  || g_activeDirection == DIRECTION_BOTH_ALLOWED)
+      : (g_activeDirection == DIRECTION_SELL_ONLY || g_activeDirection == DIRECTION_BOTH_ALLOWED);
+   bool retestRescue = (InpPyramidRetestRescueMode &&
+                        rescueMode &&
+                        openCount == 1 &&
+                        adverseATR <= InpPyramidRescueMaxATR &&
+                        g_lastEntryScore >= InpPyramidRescueMinScore &&
+                        regimeOk && cleanSpread && noDivergence &&
+                        retestAgainstZone && retestReject && !retestBreakAgainst &&
+                        pyrConfirmLot >= InpPyramidRescueConfirmMultiMin &&
+                        directionAllowsRescue);
+   bool rescueTurn = (momentumATR >= 0.05 || rescueRejection || retestRescue ||
+                      (!InpPyramidRequireTurnForRescue && (rescueSmartNoTurn || rescueSoftNoTurn)));
+   // Same Active Direction requirement extended to the broader adverse-add
+   // family (PYR+RESCUE / PYR+ADV, not just PYR+RETEST_RESCUE) — all of them
+   // are "average into a position that's currently moving against us" by
+   // definition (adverseTrigger), so all of them need fresh structure to
+   // still permit `dir`, not just a rejection-wick read on the rescue candle.
+   bool rescueCandidate = (rescueMode &&
+                           openCount == 1 &&
+                           adverseATR <= InpPyramidRescueMaxATR &&
+                           g_lastEntryScore >= InpPyramidRescueMinScore &&
+                           regimeOk && cleanSpread && rescueTurn &&
+                           noDivergence &&
+                           directionAllowsRescue);
+
+   bool recoveryLikely = (regimeOk && cleanSpread && noDivergence &&
+                          retestAgainstZone && retestReject && !retestBreakAgainst &&
+                          momentumATR >= 0.20 && adverseATR <= 0.75);
+   string growthPyramidWhy = "";
+   if(!XAU_GrowthGuardCanPyramid(baseProtected, recoveryLikely, rescueCandidate,
+                                 movedATR, adverseATR, dir, growthPyramidWhy))
+   {
+      static datetime lastGrowthPyramidBlockLog = 0;
+      if(TimeCurrent() - lastGrowthPyramidBlockLog >= 60)
+      {
+         Print(growthPyramidWhy);
+         lastGrowthPyramidBlockLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(g_propFirmMode && adverseTrigger)
+   {
+      if(!g_propFirmAllowOneRetestAdd || !retestRescue)
+      {
+         Print("PROP-FIRM PYRAMID BLOCK: adverse averaging is disabled; only one confirmed retest add may pass.");
+         return;
+      }
+      if(openCount > 1)
+      {
+         Print("PROP-FIRM PYRAMID BLOCK: one confirmed retest add already used.");
+         return;
+      }
+   }
+
+   double pyramidQuality = 0.0;
+   if(regimeOk) pyramidQuality += 22.0;
+   if(baseHealthy || rescueCandidate) pyramidQuality += 20.0;
+   if(baseProtected) pyramidQuality += 10.0;
+   if(cleanSpread) pyramidQuality += 12.0;
+   if(sessionQuality >= 0.95) pyramidQuality += 10.0;
+   else if(sessionQuality >= InpPyramidSessionMin) pyramidQuality += 6.0;
+   if(atrExpansion >= InpPyramidVolMinExpansion && atrExpansion <= 1.30) pyramidQuality += 12.0;
+   else if(atrExpansion <= InpPyramidVolMaxExpansion) pyramidQuality += 6.0;
+   if(momentumATR >= 0.55) pyramidQuality += 14.0;
+   else if(momentumATR >= 0.35) pyramidQuality += 8.0;
+   else if(rescueCandidate && momentumATR >= 0.10) pyramidQuality += 5.0;
+   if(pyramidGradeA) pyramidQuality += 8.0;
+   else if(g_lastEntryScore >= InpPyramidModerateScore) pyramidQuality += 3.0;
+   if(rescueCandidate) pyramidQuality += 8.0;
+   if(retestRescue) pyramidQuality += 10.0;
+   if(rescueSmartNoTurn) pyramidQuality += 6.0;
+   if(rescueSoftNoTurn) pyramidQuality += 5.0;
+   if(extensionNoReset) pyramidQuality -= 35.0;
+
+   static datetime lastPyramidAuditLog = 0;
+   bool pyrAuditDue = (TimeCurrent() - lastPyramidAuditLog >= 60);
+
+   if(!cleanSpread)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID BLOCKED: spread not clean for add. spread=", DoubleToString(spread, 1),
+               " maxAdd=", DoubleToString(InpMaxSpread * InpPyramidMaxSpreadFrac, 1),
+               " | quality=", DoubleToString(pyramidQuality, 1));
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(atrExpansion < InpPyramidVolMinExpansion || atrExpansion > InpPyramidVolMaxExpansion)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID BLOCKED: volatility not suitable. atrExp=", DoubleToString(atrExpansion, 2),
+               " allowed=", DoubleToString(InpPyramidVolMinExpansion, 2), "-",
+               DoubleToString(InpPyramidVolMaxExpansion, 2),
+               " | quality=", DoubleToString(pyramidQuality, 1));
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(extensionNoReset && trendTrigger)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID BLOCKED: move already extended without reset. drive=",
+               DoubleToString(extensionATR, 2), "ATR reset=", DoubleToString(resetATR, 2),
+               "ATR | prevents late add near exhaustion.");
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(sessionQuality < InpPyramidSessionMin)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID BLOCKED: weak session quality ", DoubleToString(sessionQuality, 2),
+               " < ", DoubleToString(InpPyramidSessionMin, 2));
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(rescueMode && !rescueCandidate)
+   {
+      if(pyrAuditDue)
+      {
+         string retestWhy = "";
+         if(InpPyramidRetestRescueMode)
+         {
+            if(retestBreakAgainst)
+               retestWhy = " | RETEST_RESCUE_BLOCKED_BREAKOUT_AGAINST_TRADE";
+            else if(!retestAgainstZone)
+               retestWhy = " | RETEST_RESCUE_BLOCKED_NOT_AT_RETEST_ZONE";
+            else if(!retestReject)
+               retestWhy = " | RETEST_RESCUE_BLOCKED_NO_REJECTION";
+            else
+               retestWhy = " | RETEST_RESCUE_READY_BUT_OTHER_GATE_FAILED";
+         }
+         Print("PYRAMID-RESCUE BLOCKED: adverse add failed safety test. adverse=",
+               DoubleToString(adverseATR, 2), "ATR max=", DoubleToString(InpPyramidRescueMaxATR, 2),
+               " score=", DoubleToString(g_lastEntryScore, 2),
+               " turn=", rescueTurn ? "Y" : "N",
+               " reject=", rescueRejection ? "Y" : "N",
+               " elite=", rescueElite ? "Y" : "N",
+               " confirmMulti=", DoubleToString(pyrConfirmLot, 2),
+               " noTurnOK=", rescueSmartNoTurn ? "Y" : "N",
+               " soft=", rescueSoftNoTurn ? "Y" : "N",
+               " retest=", retestRescue ? "Y" : "N",
+               " zone=", retestAgainstZone ? "Y" : "N",
+               " retestReject=", retestReject ? "Y" : "N",
+               " breakAgainst=", retestBreakAgainst ? "Y" : "N",
+               " open=", openCount,
+               " divergence=", HasExhaustionDivergence(dir) ? "Y" : "N",
+               retestWhy);
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(trendTrigger && !baseHealthy)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID WAIT: base trade not healthy enough. moved=",
+               DoubleToString(movedATR, 2), "ATR protected=", baseProtected ? "Y" : "N",
+               " need=", DoubleToString(InpPyramidMinHealthATR, 2), "ATR/protected.");
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(!pyramidGradeA)
+   {
+      if(!(rescueCandidate || (InpPyramidAllowProtectedB && baseHealthy && regimeOk && moderateTrend && pyramidQuality >= InpPyramidProtectedBQuality)))
+      {
+         if(pyrAuditDue)
+         {
+            Print("PYRAMID BLOCKED: B-grade add did not pass protected-continuation test. grade=",
+                  g_lastEntryGrade, " score=", DoubleToString(g_lastEntryScore, 2),
+                  " momentum=", DoubleToString(momentumATR, 2),
+                  " quality=", DoubleToString(pyramidQuality, 1));
+            lastPyramidAuditLog = TimeCurrent();
+         }
+         return;
+      }
+   }
+
+   int adaptiveGapSec = InpPyramidMinGapSec;
+   if(InpPyramidAdaptiveEngine && rescueCandidate)
+   {
+      adaptiveGapSec = InpPyramidMinGapSec / 2;
+      if(adaptiveGapSec < 90) adaptiveGapSec = 90;
+   }
+   else if(InpPyramidAdaptiveEngine && eliteTrend && sessionQuality >= 0.95 && atrExpansion <= 1.25)
+   {
+      adaptiveGapSec = InpPyramidMinGapSec / 2;
+      if(adaptiveGapSec < 120) adaptiveGapSec = 120;
+   }
+   if(!rescueCandidate && InpPyramidAdaptiveEngine && (atrExpansion > 1.45 || (!pyramidGradeA && !rescueCandidate)))
+   {
+      if(adaptiveGapSec < InpPyramidMinGapSec) adaptiveGapSec = InpPyramidMinGapSec;
+      if(adaptiveGapSec < 420) adaptiveGapSec = 420;
+   }
+
+   if(TimeCurrent() - lastPyramidAddTime < adaptiveGapSec)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID WAIT: adaptive gap active. elapsed=", TimeCurrent() - lastPyramidAddTime,
+               "s need=", adaptiveGapSec,
+               "s | quality=", DoubleToString(pyramidQuality, 1),
+               " elite=", eliteTrend ? "Y" : "N");
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(EPF_BlockPyramidAdd())
+   {
+      bool epfOverride = (InpPyramidAdaptiveEngine &&
+                          epf_tier <= InpPyramidAllowEPFUpToTier &&
+                          ((trendTrigger && baseProtected && eliteTrend) || rescueCandidate) &&
+                          pyramidQuality >= InpPyramidEPFOverrideQuality);
+      if(!epfOverride)
+      {
+         if(pyrAuditDue)
+         {
+            Print("EPF-T", epf_tier, " PYRAMID BLOCKED: preservation mode. quality=",
+                  DoubleToString(pyramidQuality, 1),
+                  " protected=", baseProtected ? "Y" : "N",
+                  " elite=", eliteTrend ? "Y" : "N");
+            lastPyramidAuditLog = TimeCurrent();
+         }
+         return;
+      }
+      if(pyrAuditDue)
+      {
+         Print("EPF-T", epf_tier, " PYRAMID SOFT-ALLOW: protected elite continuation; size will be reduced.");
+         lastPyramidAuditLog = TimeCurrent();
+      }
+   }
+
+   if(!rescueCandidate && momentumATR < 0.15)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID BLOCKED: momentum not accelerating with trade. mom=",
+               DoubleToString(momentumATR, 2), "ATR quality=", DoubleToString(pyramidQuality, 1));
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   int maxAddsAllowed = AdaptivePyramidMaxAdds(dir, moved, atr, pyramidQuality,
+                                               baseProtected, atrExpansion, sessionQuality);
+   if(rescueCandidate) maxAddsAllowed = MathMin(maxAddsAllowed, 1);
+   if(openCount >= 1 + maxAddsAllowed)
+   {
+      static datetime lastPyrCapLog = 0;
+      if(TimeCurrent() - lastPyrCapLog > 180)
+      {
+         Print("PYRAMID SKIPPED: adaptive cap hit. Open=", openCount,
+               " allowed total=", 1 + maxAddsAllowed,
+               " | regime=", RegimeName(),
+               " | grade=", g_lastEntryGrade,
+               " | score=", DoubleToString(g_lastEntryScore, 2));
+         lastPyrCapLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(trendTrigger && !baseProtected && moved < atr * 1.15 && !eliteTrend)
+   {
+      static datetime lastPyrProtectLog = 0;
+      if(TimeCurrent() - lastPyrProtectLog > 180)
+      {
+         Print("PYRAMID SKIPPED: base trade not protected yet and trend move only ",
+               DoubleToString(moved / atr, 2), " ATR. Waiting for SL lock or stronger continuation.");
+         lastPyrProtectLog = TimeCurrent();
+      }
+      return;
+   }
+
+   // v5.3.1 — ADVERSE-PYRAMID SIGNAL-STRENGTH GATE.
+   // Adverse adds (averaging-in against the move) are only allowed when the
+   // ORIGINAL entry was a high-confidence A/A+ setup AND combined score still
+   // ≥ InpAdvPyrMinScore. Trend-side adds (price moving with us) skip this
+   // gate — those already proved themselves.
+   if(adverseTrigger && !trendTrigger && !rescueCandidate)
+   {
+      bool isHighGrade = (StringCompare(g_lastEntryGrade, "A") == 0 || StringFind(g_lastEntryGrade, "A+") >= 0);
+      if(!isHighGrade)
+      {
+         Print("PYRAMID-ADVERSE SKIPPED: original entry grade ", g_lastEntryGrade,
+               " is not A/A+ (signal too weak to add into drawdown)");
+         return;
+      }
+      if(g_lastEntryScore < InpAdvPyrMinScore)
+      {
+         Print("PYRAMID-ADVERSE SKIPPED: original entry score ",
+               DoubleToString(g_lastEntryScore, 2),
+               " < min ", DoubleToString(InpAdvPyrMinScore, 2));
+         return;
+      }
+      // Also require structure to STILL support the original direction —
+      // if an exhaustion divergence has appeared, abort the adverse stack.
+      if(HasExhaustionDivergence(isBuy ? +1 : -1))
+      {
+         Print("PYRAMID-ADVERSE SKIPPED: RSI divergence appeared — structure no longer supports add");
+         return;
+      }
+   }
+
+   // v5.3.0 — ATR spacing gate: prevent stacking 4 pyramids inside a 1-bar
+   // micro-move (which is what caused the 09:15 / 13:45 disasters). Require
+   // the new price to be ≥ InpPyramidMinSpaceATR × ATR away from the previous
+   // pyramid add.
+   if(InpPyramidMinSpaceATR > 0 && lastPyramidPx > 0)
+   {
+      double adaptiveSpaceATR = InpPyramidMinSpaceATR;
+      if(InpPyramidAdaptiveEngine && eliteTrend && sessionQuality >= 0.95 && atrExpansion <= 1.20)
+         adaptiveSpaceATR = MathMax(0.45, InpPyramidMinSpaceATR * 0.75);
+      if(InpPyramidAdaptiveEngine && !rescueCandidate && (atrExpansion > 1.45 || !pyramidGradeA))
+         adaptiveSpaceATR = InpPyramidMinSpaceATR * 1.15;
+      if(InpPyramidAdaptiveEngine && rescueCandidate)
+         adaptiveSpaceATR = MathMax(0.50, InpPyramidMinSpaceATR * 0.80);
+      double minSpace = atr * adaptiveSpaceATR;
+      if(MathAbs(curPx - lastPyramidPx) < minSpace)
+      {
+         Print("PYRAMID SKIPPED: spacing ", DoubleToString(MathAbs(curPx - lastPyramidPx), 2),
+               " < min ", DoubleToString(minSpace, 2), " (", DoubleToString(adaptiveSpaceATR, 2),
+               "× ATR ", DoubleToString(atr, 2), ")");
+         return;
+      }
+   }
+
+   // v5.3.0 — share the master pre-trade gate with pyramid adds too. If
+   // volatility/spread/exhaustion/news says don't trade, don't pyramid either.
+   string preBlock = PreTradeBlockReason(isBuy ? +1 : -1, "PYRAMID");
+   if(StringLen(preBlock) > 0)
+   {
+      if(pyrAuditDue)
+      {
+         Print("PYRAMID SKIPPED: ", preBlock);
+         lastPyramidAuditLog = TimeCurrent();
+      }
+      return;
+   }
+
+   // v4.5.5 — PYRAMID SIZING FIX
+   // Previous bug: used smallestLot × 0.6 which compounded: once first add hit
+   // min-lot (0.01), every subsequent add was 0.01 too. Now we base off the
+   // ORIGINAL position's lot size with geometric decrement (add#N = orig × multi^N).
+   // This keeps sizing predictable and symmetric regardless of partial-TP state.
+   double minLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+   int lotDigits = 2;
+   if(lotStep > 0 && lotStep < 0.01)  lotDigits = 3;
+   if(lotStep > 0 && lotStep < 0.001) lotDigits = 4;
+
+   // Base lot = ORIGINAL entry (oldest position in our magic)
+   if(origLot <= 0) origLot = smallestLot;    // fallback safety
+   if(origLot <= 0 || origLot >= 1e9) return; // sanity
+   int addNumber = openCount; // 0th existing = original, so this is addNumber'th add
+   // Geometric decrement: pow(multi, addNumber) → add#1=0.6x, add#2=0.36x, add#3=0.22x...
+   double effectivePyramidSizeMulti = InpPyramidSizeMulti;
+   if(InpTradeMode == AGGRESSIVE_GROWTH_MODE && eliteTrend && pyramidQuality >= 88.0 && !rescueCandidate)
+      effectivePyramidSizeMulti = MathMax(effectivePyramidSizeMulti, 0.82);
+   else if(InpTradeMode == BALANCED_MODE && eliteTrend && pyramidQuality >= 92.0 && !rescueCandidate)
+      effectivePyramidSizeMulti = MathMax(effectivePyramidSizeMulti, 0.68);
+   double decayFactor = MathPow(effectivePyramidSizeMulti, addNumber);
+   double pyramidSizeMulti = 1.0;
+   if(InpPyramidAdaptiveEngine)
+   {
+      if(retestRescue) pyramidSizeMulti = InpPyramidRetestRescueSizeMulti;
+      else if(rescueCandidate) pyramidSizeMulti = InpPyramidRescueSizeMulti;
+      else if(eliteTrend && pyramidQuality >= 88.0) pyramidSizeMulti = 1.15;
+      else if(pyramidQuality >= 78.0) pyramidSizeMulti = 0.90;
+      else pyramidSizeMulti = 0.65;
+      if(!rescueCandidate)
+      {
+         if(!pyramidGradeA) pyramidSizeMulti *= 0.82;
+         if(atrExpansion > 1.45) pyramidSizeMulti *= 0.75;
+         if(sessionQuality < 0.95) pyramidSizeMulti *= 0.90;
+         if(EPF_BlockPyramidAdd()) pyramidSizeMulti *= 0.70;
+      }
+   }
+   if(g_propFirmMode && retestRescue)
+      pyramidSizeMulti *= g_propFirmRetestAddLotMulti;
+   double addLotRaw = origLot * decayFactor * pyrConfirmLot * pyramidSizeMulti;
+   double addLot = MathFloor(addLotRaw / lotStep) * lotStep;
+   addLot = NormalizeDouble(addLot, lotDigits);
+
+   // v4.5.5 — SKIP pyramid entirely if the calculated lot would clamp to broker
+   // minimum. A 0.01 pyramid add is pointless (doesn't change avg, adds spread/commission
+   // risk) and causes the infinite-minLot-spam bug the user hit.
+   if(addLot < minLot)
+   {
+      Print("PYRAMID: SKIP — origLot=", DoubleToString(origLot, lotDigits),
+            " × ", DoubleToString(decayFactor, 3), " = ",
+            DoubleToString(addLotRaw, 4),
+            " would clamp to minLot ", DoubleToString(minLot, lotDigits),
+            ". Pyramid pointless at this scale.");
+      return;
+   }
+
+   // Hard caps
+   if(addLot > maxLot)      addLot = NormalizeDouble(maxLot, lotDigits);
+   if(addLot > InpMaxLots)  addLot = NormalizeDouble(InpMaxLots, lotDigits);
+
+   // v4.6.0 — Stricter margin gate: require at least 25% free margin buffer.
+   //          Throttled SKIP log so it doesn't spam every tick.
+   double freeMargin = accInfo.FreeMargin();
+   double equityNow  = accInfo.Equity();
+   double freeMarginPct = equityNow > 0 ? (freeMargin / equityNow * 100.0) : 0;
+   static datetime lastPyramidSkipLog = 0;
+   bool pyrLogDue = (TimeCurrent() - lastPyramidSkipLog >= 60);
+   if(freeMarginPct < 25.0)
+   {
+      if(pyrLogDue) {
+         Print("PYRAMID: SKIP — free margin only ", DoubleToString(freeMarginPct,1),
+               "% of equity (need ≥25%). Account too committed for another add.");
+         lastPyramidSkipLog = TimeCurrent();
+      }
+      return;
+   }
+   double marginNeeded = 0;
+   ENUM_ORDER_TYPE ot = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(OrderCalcMargin(ot, Symbol(), addLot, isBuy ? ask : bid, marginNeeded))
+   {
+      // v4.6.0 — relaxed from 0.5 → 0.7 so pyramid can fire even when 60% of margin is in use
+      if(marginNeeded > freeMargin * 0.7)
+      {
+         if(pyrLogDue) {
+            Print("PYRAMID: SKIP — add needs $", DoubleToString(marginNeeded,2),
+                  " margin, only $", DoubleToString(freeMargin,2), " free.");
+            lastPyramidSkipLog = TimeCurrent();
+         }
+         return;
+      }
+   }
+
+   // SL same as original's SL (anchor risk).  TP = original's TP (shared).
+   int    digits  = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   double entryPx = isBuy ? ask : bid;
+
+   // Compose reason label
+   string why = "";
+   if(adverseTrigger)
+   {
+      if(retestRescue)
+         why = StringFormat("PYR+RETEST_RESCUE (%.2f ATR pullback, reject=Y, q=%.0f)",
+                            MathAbs(moved)/atr, pyramidQuality);
+      else if(rescueCandidate)
+         why = StringFormat("PYR+RESCUE (%.2f ATR pullback, turn=%s, q=%.0f)",
+                            MathAbs(moved)/atr, rescueTurn ? "Y" : "N", pyramidQuality);
+      else
+         why = StringFormat("PYR+ADV (%.2f ATR adverse, avg-in)", MathAbs(moved)/atr);
+   }
+   else
+   {
+      why = StringFormat("PYR+TRN (%.2f ATR with trend, q=%.0f, mom=%.2f, atrExp=%.2f)",
+                         moved/atr, pyramidQuality, momentumATR, atrExpansion);
+   }
+
+   // Get original TP too
+   posInfo.SelectByTicket(origTicket);
+   double origTP = posInfo.TakeProfit();
+
+   // v4.5.6 — Don't inherit a BE-locked SL. If the original SL has been moved
+   // past breakeven (i.e., "above entry" for BUY, "below entry" for SELL), the
+   // pyramid add would inherit a dangerously tight SL relative to its own entry
+   // price (adverse/trend continuation price). Instead, place a fresh ATR-based
+   // SL for the pyramid add so it has normal breathing room.
+   double pyramidSL = origSL;
+   double freshSlDist = atr * InpSLMultiplier;
+   if(isBuy && origSL > origPx)
+   {
+      pyramidSL = NormalizeDouble(entryPx - freshSlDist, digits);
+      Print("PYRAMID SL: origSL ", DoubleToString(origSL, digits),
+            " was BE-locked — using fresh SL ", DoubleToString(pyramidSL, digits),
+            " (", DoubleToString(freshSlDist, 2), " pts = ", DoubleToString(InpSLMultiplier, 2), "xATR)");
+   }
+   if(!isBuy && origSL > 0 && origSL < origPx)
+   {
+      pyramidSL = NormalizeDouble(entryPx + freshSlDist, digits);
+      Print("PYRAMID SL: origSL ", DoubleToString(origSL, digits),
+            " was BE-locked — using fresh SL ", DoubleToString(pyramidSL, digits),
+            " (", DoubleToString(freshSlDist, 2), " pts = ", DoubleToString(InpSLMultiplier, 2), "xATR)");
+   }
+
+   double pyramidRiskPerLot = RiskPerLotForDistance(MathAbs(entryPx - pyramidSL));
+   double beforeRiskCapLot = addLot;
+   // v6.18.0: the InpLotSizingMode==JUNE_16_19_BALANCE_MODE bypass here is
+   // retired -- same "one authority" fix as OpenTrade()'s entry sizing. This was
+   // a live, current gap: since InpLotSizingMode still DEFAULTS to
+   // JUNE_16_19_BALANCE_MODE, every pyramid add was skipping BOTH the single-
+   // trade and aggregate risk caps entirely, unconditionally -- the real trade
+   // log's 2026-06-17 loss cluster (~112 lots across 3 legs on one directional
+   // thesis, one leg added at a WORSE price into an already-adverse move) is
+   // exactly the failure mode this bypass made possible. Risk caps now apply to
+   // every pyramid add, every mode, same as a fresh entry.
+   if(pyramidRiskPerLot > 0)
+   {
+      double equity = accInfo.Equity();
+      double effectiveSingleCap = EffectiveSingleRiskCapPct();
+      if(effectiveSingleCap > 0)
+      {
+         double maxSingleLoss = equity * effectiveSingleCap / 100.0;
+         double maxSingleLots = maxSingleLoss / pyramidRiskPerLot;
+         if(addLot > maxSingleLots)
+         {
+            addLot = NormalizeVolumeDown(maxSingleLots);
+            Print("PYRAMID SINGLE-RISK CAP: ", DoubleToString(beforeRiskCapLot, lotDigits),
+                  " -> ", DoubleToString(addLot, lotDigits),
+                  " | candidate risk $", DoubleToString(beforeRiskCapLot * pyramidRiskPerLot, 0),
+                  " > ", DoubleToString(effectiveSingleCap, 2), "% equity ($",
+                  DoubleToString(maxSingleLoss, 0), ")");
+         }
+      }
+
+      double effectiveAggregateCap = EffectiveAggregateRiskCapPct();
+      if(effectiveAggregateCap > 0)
+      {
+         double openRiskLots = 0.0;
+         double openRisk = CurrentAggregateRiskToSL(openRiskLots);
+         double maxAggRisk = equity * effectiveAggregateCap / 100.0;
+         double remainingRisk = maxAggRisk - openRisk;
+         if(remainingRisk <= 0)
+         {
+            Print("PYRAMID BLOCKED: aggregate risk already $", DoubleToString(openRisk, 0),
+                  " (", DoubleToString(openRiskLots, 2), " lots) >= max $",
+                  DoubleToString(maxAggRisk, 0), ". No room for add.");
+            return;
+         }
+         double maxAggLots = remainingRisk / pyramidRiskPerLot;
+         if(addLot > maxAggLots)
+         {
+            double beforeAggCapLot = addLot;
+            addLot = NormalizeVolumeDown(maxAggLots);
+            Print("PYRAMID AGG-RISK CAP: ", DoubleToString(beforeAggCapLot, lotDigits),
+                  " -> ", DoubleToString(addLot, lotDigits),
+                  " | openRisk=$", DoubleToString(openRisk, 0),
+                  " candidate=$", DoubleToString(beforeAggCapLot * pyramidRiskPerLot, 0),
+                  " maxAgg=$", DoubleToString(maxAggRisk, 0));
+         }
+      }
+
+      if(addLot < minLot)
+      {
+         Print("PYRAMID SKIPPED: risk caps reduced add below broker min. minLot=",
+               DoubleToString(minLot, lotDigits),
+               " riskPerLot=$", DoubleToString(pyramidRiskPerLot, 2));
+         return;
+      }
+   }
+
+   // v6.18.0 PYRAMID MARGIN PROJECTION: real-time safety backstop against
+   // over-stacking, independent of add-count/equity-tier proxies (Fable 5
+   // risk-advisor review, 2026-07-09: "gate each add on a projected post-add
+   // margin level ... a %-scaled timing curve cannot fix a size granularity
+   // problem"). Projects free-margin-level AFTER this specific add using the
+   // SAME 50%/80%-of-free-margin thresholds OpenTrade() already uses for a
+   // fresh entry (XAUUSD_AI_Sniper_EA_v6.18.0.mq5, margin check block) -- one
+   // consistent margin-safety standard for every order this file sends,
+   // fresh or pyramided.
+   if(addLot >= minLot)
+   {
+      double pyrMarginNeeded = 0.0;
+      double pyrFreeMargin = accInfo.FreeMargin();
+      if(OrderCalcMargin(isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), addLot, entryPx, pyrMarginNeeded))
+      {
+         while(addLot > minLot && pyrMarginNeeded > pyrFreeMargin * 0.5)
+         {
+            addLot -= lotStep; addLot = MathMax(minLot, addLot);
+            if(!OrderCalcMargin(isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), addLot, entryPx, pyrMarginNeeded))
+            {
+               Print("PYRAMID MARGIN PROJECTION: OrderCalcMargin failed while reducing add -- skip add.");
+               return;
+            }
+         }
+         if(pyrMarginNeeded > pyrFreeMargin * 0.8)
+         {
+            Print("PYRAMID MARGIN PROJECTION: blocked -- projected margin $", DoubleToString(pyrMarginNeeded, 2),
+                  " would exceed 80% of free margin $", DoubleToString(pyrFreeMargin, 2),
+                  " even at broker-minimum add size. No room for another leg on this basket.");
+            return;
+         }
+      }
+   }
+   if(addLot < minLot)
+   {
+      Print("PYRAMID SKIPPED: margin projection reduced add below broker min.");
+      return;
+   }
+
+   Print("PYRAMID: adding #", openCount + 1, "/", (1 + maxAddsAllowed),
+         " ", isBuy?"BUY":"SELL", " ", DoubleToString(addLot, lotDigits),
+         " lots @ ", DoubleToString(entryPx, digits),
+         " | origPx=", DoubleToString(origPx, digits),
+         " | moved=", DoubleToString(moved, 2),
+         " (", DoubleToString(movedATR, 2), "ATR)",
+         " | totalLots=", DoubleToString(totalLots, lotDigits),
+         " | quality=", DoubleToString(pyramidQuality, 1),
+         " | sizeMulti=", DoubleToString(pyramidSizeMulti, 2),
+         " | confirmMulti=", DoubleToString(pyrConfirmLot, 2),
+         " | session=", DoubleToString(sessionQuality, 2),
+         " | atrExp=", DoubleToString(atrExpansion, 2),
+         " | baseProtected=", baseProtected ? "Y" : "N",
+         " | recoveryLikely=", recoveryLikely ? "Y" : "N",
+         " | rescue=", rescueCandidate ? "Y" : "N",
+         " | retestRescue=", retestRescue ? "Y" : "N",
+         " | rejection=", rescueRejection ? "Y" : "N",
+         " | retestZone=", retestAgainstZone ? "Y" : "N",
+         " | retestBreakAgainst=", retestBreakAgainst ? "Y" : "N",
+         " | riskPerLot=$", DoubleToString(pyramidRiskPerLot, 0),
+         " | ", why);
+
+   // v6.4.17 — PYRAMID LOT TRACE (matches main LOT_TRACE format for easy comparison)
+   Print("===== [PYRAMID_LOT_TRACE] =====");
+   PrintFormat("  origLot       = %.4f  (the lot the original position was opened with)", origLot);
+   PrintFormat("  addNumber     = %d    (which pyramid add this is)", addNumber);
+   PrintFormat("  decayFactor   = %.4f  (effectivePyramidSizeMulti %.2f^addNumber | input %.2f | mode=%s)",
+               decayFactor, effectivePyramidSizeMulti, InpPyramidSizeMulti, XAU_TradeModeName());
+   PrintFormat("  pyrConfirmLot = %.4f  (AI/pattern confirmation multiplier)", pyrConfirmLot);
+   PrintFormat("  pyramidSizeMul= %.4f  (quality/grade/session/atr combo)", pyramidSizeMulti);
+   PrintFormat("  quality       = %.1f  (pyramid quality score, need >78 for 0.90x)", pyramidQuality);
+   PrintFormat("  addLotRaw     = %.4f  (origLot×decay×confirm×sizeMult before caps)", origLot * decayFactor * pyrConfirmLot * pyramidSizeMulti);
+   PrintFormat("  addLot_final  = %.4f  (after broker min/max/step and risk caps)", addLot);
+   PrintFormat("  why           = %s", why);
+   PrintFormat("  NOTE: if addLot=0.01, the root cause is small origLot (%.4f) × multipliers. Fix: ensure A+ original trade fires at full size.", origLot);
+   Print("==============================");
+
+   // Risk-mismatch fix: same universal reconciliation as the main entry path.
+   // Pyramid/rescue lot sizing has its own separate multiplier stack; the
+   // June-balance-mode bypass that used to skip the caps above was removed
+   // in v6.18.1 (see CheckPyramidOpportunity's own risk-cap block earlier in
+   // this function) -- this reconciliation call remains as the universal
+   // backstop, using the pyramid add's own actual SL distance.
+   {
+      double equityNowRR = accInfo.Equity();
+      double requestedPyramidRiskPct = (equityNowRR > 0 && pyramidRiskPerLot > 0)
+         ? (beforeRiskCapLot * pyramidRiskPerLot / equityNowRR * 100.0) : 0.0;
+      string riskBlockReason = "";
+      if(!XAU_ReconcileFinalRisk(addLot, MathAbs(entryPx - pyramidSL), lotStep, minLot,
+                                 requestedPyramidRiskPct, EffectiveSingleRiskCapPct(),
+                                 "PYRAMID:" + why, riskBlockReason))
+      {
+         Print("PYRAMID BLOCKED: ", riskBlockReason);
+         return;
+      }
+      addLot = NormalizeDouble(addLot, lotDigits);
+      if(addLot < minLot)
+      {
+         Print("PYRAMID SKIPPED: post-reconciliation add-lot below broker minimum.");
+         return;
+      }
+   }
+
+   {
+      string finalPyramidAuthorityWhy="";
+      bool finalPyramidAllowed=XAU_FinalAdaptiveDirectionDecision(dir,"PYRAMID_FINAL_PRE_SEND",why,false,finalPyramidAuthorityWhy);
+      XAU_ProductionActiveFinalEntryAssertion(dir,"PYRAMID",why,finalPyramidAllowed);
+      if(!finalPyramidAllowed)
+      {
+         Print("PYRAMID FINAL PRE-SEND BLOCK (Adaptive Transition Authority): ",finalPyramidAuthorityWhy);
+         return;
+      }
+   }
+   bool ok;
+   if(isBuy) ok = trade.Buy (addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
+   else      ok = trade.Sell(addLot, Symbol(), 0, pyramidSL, origTP, "XAU-SNIPER|" + why);
+
+   if(ok)
+   {
+      lastPyramidAddTime = TimeCurrent();
+      lastPyramidPx      = entryPx;       // v5.3.0 — for ATR spacing gate
+      todayTradeCount++;
+      Print("PYRAMID OK");
+      BotMonitorActivity("PYRAMID_ADD", "TRADE",
+                         StringFormat("PYRAMID #%d %.2f lot @%.2f - %s",
+                                      openCount + 1, addLot, entryPx, why));
+
+      // v6.21.2 audit fix (Fix 11/12): pyramid adds send via trade.Buy/trade.Sell
+      // directly (not through OpenTrade()), so they need their own immediate,
+      // ACTUAL-fill R-state capture rather than relying on XAU_RExitCoreLoop()'s
+      // next-tick lazy capture. pyrPosId (DEAL_POSITION_ID) is already the
+      // canonical positionId. Netting/hedging policy: if this positionId
+      // already has state (netting-mode merge into the same broker position),
+      // XAU_RExit_EnsureIdx() is a no-op for the original-fill fields and
+      // XAU_RExit_SyncNettingState() immediately accounts for the add's own
+      // risk into cumulativeOriginalRiskUSD -- a pyramid add is additional
+      // deliberate risk, not a redefinition of the first fill's 1R. A
+      // genuinely distinct new positionId (hedging mode, or netting's own
+      // first fill) gets its own independent state.
+      {
+         ulong pyrDealTicket = trade.ResultDeal();
+         ulong pyrPosId = 0;
+         if(pyrDealTicket > 0 && HistoryDealSelect(pyrDealTicket))
+            pyrPosId = (ulong)HistoryDealGetInteger(pyrDealTicket, DEAL_POSITION_ID);
+         if(pyrPosId == 0) pyrPosId = trade.ResultOrder();
+         if(pyrPosId > 0)
+         {
+            ulong pyrLiveTicket; string pyrLiveSymbol; long pyrLiveMagic; int pyrLiveDir;
+            double pyrLiveOpen, pyrLiveVol, pyrLiveSL, pyrLiveTP;
+            if(XAU_FindLivePositionByIdentifier(pyrPosId, pyrLiveTicket, pyrLiveSymbol, pyrLiveMagic, pyrLiveDir, pyrLiveOpen, pyrLiveVol, pyrLiveSL, pyrLiveTP))
+            {
+               int pyrIdx = XAU_RExit_EnsureIdx(pyrPosId, pyrLiveTicket, pyrLiveDir == 1, pyrLiveOpen, pyrLiveSL, pyrLiveVol, false);
+               XAU_RExit_SyncNettingState(pyrIdx, pyrLiveDir == 1, pyrLiveOpen, pyrLiveSL, pyrLiveVol);
+               XAU_RExit_SaveState(true);
+            }
+            else
+               PrintFormat("R_EXIT_ENTRY_CAPTURE_PENDING positionId=%I64u | pyramid add not yet selectable this tick, will capture from actual broker fields next tick", pyrPosId);
+         }
+      }
+
+      // v5.2.2 — fan pyramid add to XauAi Cloud subscribers (was previously
+      // missing; pyramid adds went master-only, breaking 1:1 mirror).
+      if(CloudEnabled())
+      {
+         ulong dealTicket = trade.ResultDeal();
+         ulong posId = 0;
+         if(dealTicket > 0 && HistoryDealSelect(dealTicket))
+            posId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+         if(posId == 0) posId = trade.ResultOrder();
+         double riskHintPct = InpRiskPercent;
+         if(InpAccountMode == ACCT_BALANCED)     riskHintPct = 1.2;
+         if(InpAccountMode == ACCT_CONSERVATIVE) riskHintPct = 0.6;
+         if(InpAccountMode == ACCT_AGGRESSIVE)   riskHintPct = 2.0;
+         string sigId = CloudPostSignal(Symbol(), isBuy ? "BUY" : "SELL",
+                                        entryPx, pyramidSL, origTP,
+                                        "PYR", riskHintPct,
+                                        addLot, accInfo.Balance());
+         if(StringLen(sigId) > 0 && posId > 0) CloudMapAdd(posId, sigId);
+         CloudPostReasoning("PYR", StringFormat("PYRAMID #%d %.2f lot @%.2f — %s | q=%.0f sizeMulti=%.2f",
+                                                openCount + 1, addLot, entryPx, why,
+                                                pyramidQuality, pyramidSizeMulti),
+                            RegimeName(), "", 0.0, 0.0, "PYR", isBuy ? +1 : -1);
+      }
+   }
+   else
+   {
+      Print("PYRAMID FAILED: Err=", GetLastError(), " Ret=", trade.ResultRetcode());
+      g_lastPyramidFailTime = TimeCurrent();
    }
 }
 
@@ -12452,7 +13690,169 @@ double XAU_AdaptiveNewsRoomATR(int signal, double price, double atr)
    return MathMax(0.0, (price - projectedSupport) / atr);
 }
 
-/* v6.24.0: the separate post-news momentum entry veto was deleted; XAU_NewsAuthorityAllows is the sole news owner. */
+bool XAU_EvaluateAdaptiveNewsMomentumEntry(int signal, string setupName, string grade,
+                                           double combinedScore, string &why)
+{
+   why = "";
+   g_adaptiveNewsLotMultiActive = false;
+   g_adaptiveNewsLotMulti = 1.0;
+
+   bool adaptivePostActive = InpAdaptiveNewsMomentumEnable &&
+                             (g_adaptiveNewsPhase == ANP_POST_INTERPRETATION ||
+                              g_adaptiveNewsPhase == ANP_CONTINUATION_ALLOWED ||
+                              g_postNewsState == PNS_DISCOVERY ||
+                              g_postNewsState == PNS_CONFIRMED ||
+                              g_postNewsState == PNS_ALLOWED);
+   if(!adaptivePostActive || signal == 0) return true;
+
+   double spreadNow = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   bool spreadNormal = (g_spreadEMA <= 0.0 ||
+                        spreadNow <= g_spreadEMA * InpPostNewsSpreadReturnX ||
+                        spreadNow <= InpMaxSpread * 0.90);
+   if(!spreadNormal)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_SPREAD: spread %.0fpts is still abnormal vs baseline %.0fpts; observing first impulse",
+                         spreadNow, g_spreadEMA);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   int impulseDir = 0;
+   double midpoint = 0.0, base = 0.0, high = 0.0, low = 0.0, bodyATR = 0.0;
+   string snapshotWhy = "";
+   if(!XAU_NewsImpulseSnapshot(impulseDir, midpoint, base, high, low, bodyATR, snapshotWhy))
+   {
+      why = "NEWS_OBSERVING: " + snapshotWhy;
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+   if(impulseDir != signal)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_POOR_RR: impulseDir=%s but signal=%s; avoiding fake breakout/reversal chase",
+                         impulseDir > 0 ? "BUY" : "SELL", signal > 0 ? "BUY" : "SELL");
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   double atr = (ArraySize(bufATR) >= 2 && bufATR[1] > 0.0) ? bufATR[1] : 0.0;
+   if(atr <= 0.0)
+   {
+      why = "NEWS_OBSERVING: ATR unavailable after release";
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+   double price = signal > 0 ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                             : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   if(price <= 0.0) price = iClose(Symbol(), PERIOD_M5, 1);
+
+   double midpointBuffer = atr * InpAdaptiveNewsMidpointBufferATR;
+   bool heldMidpoint = signal > 0 ? (price >= midpoint - midpointBuffer)
+                                  : (price <= midpoint + midpointBuffer);
+   if(!heldMidpoint)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_POOR_RR: price failed to hold impulse midpoint %.5f; waiting for retest/reclaim",
+                         midpoint);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   double m5Open = iOpen(Symbol(), PERIOD_M5, 1);
+   double m5Close = iClose(Symbol(), PERIOD_M5, 1);
+   bool m5Momentum = signal > 0 ? (m5Close > m5Open && m5Close >= midpoint - midpointBuffer)
+                                : (m5Close < m5Open && m5Close <= midpoint + midpointBuffer);
+   double m15Open = iOpen(Symbol(), PERIOD_M15, 1);
+   double m15Close = iClose(Symbol(), PERIOD_M15, 1);
+   bool m15Momentum = signal > 0 ? (m15Close >= m15Open) : (m15Close <= m15Open);
+   // v6.17.3 FIX: added Active Direction exemption -- news releases commonly trigger
+   // genuine reversals that the fast M5/M15 Direction Engine catches well before the
+   // slow H1/M30 g_htfConsensusDir does; this could otherwise silently kill a
+   // legitimate post-news reversal for the entire discovery/confirmed/allowed window.
+   bool htfAligned = (g_htfConsensusDir == signal ||
+                     (signal == 1 && g_activeDirection == DIRECTION_BUY_ONLY) ||
+                     (signal == -1 && g_activeDirection == DIRECTION_SELL_ONLY) ||
+                     (signal > 0 && (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP)) ||
+                     (signal < 0 && (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN)));
+   bool strongImpulseFastTrack = (InpAdaptiveNewsFastTrackM15 &&
+                                  htfAligned &&
+                                  bodyATR >= InpAdaptiveNewsMinImpulseBodyATR * 1.25);
+   bool m15MomentumAccepted = (m15Momentum || strongImpulseFastTrack);
+   if(!(m5Momentum && m15MomentumAccepted && htfAligned))
+   {
+      why = StringFormat("NEWS_OBSERVING: continuation not confirmed yet | m5Momentum=%s m15Momentum=%s fastTrackM15=%s htfAligned=%s",
+                         m5Momentum ? "Y" : "N", m15Momentum ? "Y" : "N",
+                         strongImpulseFastTrack ? "Y" : "N", htfAligned ? "Y" : "N");
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   double extensionATR = MathAbs(price - base) / atr;
+   if(extensionATR > InpAdaptiveNewsMaxExtensionATR)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_OVEREXTENDED: move already traveled %.2fATR from impulse base; waiting for pullback/retest",
+                         extensionATR);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   double roomATR = XAU_AdaptiveNewsRoomATR(signal, price, atr);
+   if(roomATR < InpAdaptiveNewsMinRoomATR)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_OVEREXTENDED: only %.2fATR room before next support/resistance; avoiding top/bottom chase",
+                         roomATR);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   double rr = roomATR / MathMax(0.75, MathMin(InpAdaptiveNewsMaxExtensionATR, MathMax(0.75, extensionATR)));
+   double minNewsRR = InpAdaptiveNewsMinRR;
+   bool highQualityNewsContinuation = (strongImpulseFastTrack &&
+                                       roomATR >= InpAdaptiveNewsMinRoomATR * 1.35 &&
+                                       extensionATR <= InpAdaptiveNewsMaxExtensionATR * 0.90);
+   if(highQualityNewsContinuation)
+      minNewsRR = MathMax(1.15, InpAdaptiveNewsMinRR - 0.15);
+   if(rr < minNewsRR)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_POOR_RR: post-news continuation RR %.2f < %.2f; wait for better value",
+                         rr, minNewsRR);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   int aiConf = MathMax(g_aiLastConfidence, lastAIConfidence);
+   if(aiConf > 0 && aiConf < InpAdaptiveNewsMinAIConfidence)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_POOR_RR: AI confidence %d%% below post-news minimum %d%%",
+                         aiConf, InpAdaptiveNewsMinAIConfidence);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   bool gradeOk = (grade == "A" || StringFind(grade, "A+") >= 0 ||
+                   (InpAdaptiveNewsAllowBGrade && grade == "B" && combinedScore >= GetEffectiveGradeB()));
+   if(!gradeOk)
+   {
+      why = StringFormat("NEWS_ENTRY_BLOCKED_POOR_RR: grade=%s combined=%.1f is not strong enough for post-news continuation",
+                         grade, combinedScore);
+      g_adaptiveNewsLastDecision = why;
+      return false;
+   }
+
+   g_adaptiveNewsPhase = ANP_CONTINUATION_ALLOWED;
+   g_postNewsState = PNS_ALLOWED;
+   g_adaptiveNewsLotMultiActive = true;
+   g_adaptiveNewsLotMulti = (aiConf >= 75 || combinedScore >= InpGradeAPlus + 1.0)
+                             ? InpAdaptiveNewsHighConfRiskMult
+                             : InpAdaptiveNewsRiskMult;
+   g_adaptiveNewsLotMulti = MathMax(0.25, MathMin(1.0, g_adaptiveNewsLotMulti));
+   why = StringFormat("NEWS_ENTRY_ALLOWED: %s post-news continuation confirmed; price held %s impulse midpoint with acceptable RR %.2f, room %.2fATR, extension %.2fATR fastTrackM15=%s | NEWS_CONTINUATION_CONFIRMED",
+                      signal > 0 ? "bullish" : "bearish",
+                      signal > 0 ? "above" : "below",
+                      rr, roomATR, extensionATR,
+                      strongImpulseFastTrack ? "Y" : "N");
+   g_adaptiveNewsLastDecision = why;
+   Print("NEWS_CONTINUATION_CONFIRMED: ", why);
+   return true;
+}
 
 void OnTick()
 {
@@ -13111,12 +14511,6 @@ void OnTick()
    if(curBar <= 0)  curBar = iTime(Symbol(), PERIOD_M5, 0);
 
    bool newM5Bar = (curBar > 0 && curBar != g_lastEntryBarSeen);
-   double primaryDelayRequired = g_alignedCandidates[0].requiredDelaySeconds > 0.0
-                                 ? g_alignedCandidates[0].requiredDelaySeconds
-                                 : XAU_EffectiveEntryDelaySeconds();
-   bool alignedPrimaryDelayDue =
-      (g_alignedCandidates[0].firstCandidateTime > 0 &&
-       TimeCurrent() - g_alignedCandidates[0].firstCandidateTime >= primaryDelayRequired);
    // v6.0 STI: refresh macro trend state on every new M5 bar (cheap, bar-cached)
    if(newM5Bar) STI_Update();
    // v6.4.0 UPGRADE 1: update market personality on every new M5 bar
@@ -13162,11 +14556,24 @@ void OnTick()
       return;
    }
 
-   // A PRIMARY candidate is discovered on the normal M5 cadence, then gets
-   // exactly one prompt wall-clock re-evaluation when its configured 2-3
-   // minute delay matures. This avoids both per-tick rescoring and the old
-   // failure where a 150-second delay was not checked until the next M5 bar.
-   if(!newM5Bar && !watchdogDue && !timerForced && !alignedPrimaryDelayDue)
+   // v6.21.3 forensic fix (2026-07-13 owner incident, proven live: signal at
+   // 15:35:20 armed a 150s wall-clock delay, but the next re-check of that
+   // delay didn't happen until 15:40:17 -- 297s later -- because this WHOLE
+   // scan pipeline, including XAU_TimingEngineConfirmsEntry()'s elapsed-time
+   // check, was unreachable until the next M5 bar opened. The delay's own
+   // math was always wall-clock-correct; only the CADENCE that re-evaluates
+   // it was bar-gated. Fix: once a pending confirmation's own configured
+   // delay has elapsed, bypass the M5-bar wait for THIS reason alone (not a
+   // general per-tick rescan) so XAU_TimingEngineConfirmsEntry() gets called
+   // again promptly instead of up to ~5 minutes late. Detection/scoring of
+   // brand-new candidates is still M5-bar-cadenced, unchanged.
+   double pendingRequiredDelay = g_pendingEntryConfirm.active
+                                 ? XAU_EffectiveAdaptiveEntryDelaySeconds(g_pendingEntryConfirm.dir)
+                                 : XAU_EffectiveEntryDelaySeconds();
+   bool pendingConfirmDue = (g_pendingEntryConfirm.active &&
+                             (TimeCurrent() - g_pendingEntryConfirm.firstSeenTime) >= pendingRequiredDelay);
+
+   if(!newM5Bar && !watchdogDue && !timerForced && !pendingConfirmDue)
    {
       g_lastSkipReason = StringFormat("WAITING_FOR_NEW_M5_BAR: cur=%s last=%s sinceScan=%ds",
                                       TimeToString(curBar, TIME_MINUTES),
@@ -13180,6 +14587,10 @@ void OnTick()
       }
       return;
    }
+   if(pendingConfirmDue && !newM5Bar && !watchdogDue && !timerForced)
+      PrintFormat("TIMING_ENGINE: PENDING_CONFIRM_DUE_MIDBAR bypassing M5-bar wait -- %s %s elapsed=%.0fs target=%.0fs (re-checking now instead of waiting for the next bar)",
+                  g_pendingEntryConfirm.dir == 1 ? "BUY" : "SELL", g_pendingEntryConfirm.setup,
+                  (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime), pendingRequiredDelay);
 
    // v6.17.13 FIX: this Print used to fire completely unthrottled -- every
    // single tick while watchdogDue stayed true, which (live-journal-proven)
@@ -13230,9 +14641,20 @@ void OnTick()
    // v6.17.14 FLEET-CONSISTENCY: exactly one recovery attempt per NEW closed
    // M5 bar for whatever A/A+ candidate died to a soft blocker on the prior
    // bar. Deliberately NOT run on watchdog/timer-forced re-scans of the SAME
-   // Candidate discovery remains M5-bar-cadenced. A single wall-clock release
-   // pass is permitted when the PRIMARY lane's 120-180 second delay matures,
-   // so a 150-second setting is not accidentally stretched to five minutes.
+   // bar -- only a genuinely new closed candle gets a recovery check, so
+   // this can never fire more than once per bar no matter how many times
+   // OnTick re-enters this function on that bar.
+   // v6.21.2 audit fix: was `if(newM5Bar) ...` -- a stored opportunity could
+   // wait up to ~5 minutes for a bar boundary before ever being rechecked.
+   // The function itself now gates on its own bounded wall-clock delay, so it
+   // is safe (and required) to call it every tick.
+   XAU_CheckPendingOpportunityRecovery();
+   // v6.20.5 (Change B): deliberately NOT gated to newM5Bar -- a candidate
+   // already registered into the timing engine (by the gauntlet check just
+   // above, on a PRIOR bar) must be re-observed every tick, exactly like a
+   // fresh signal's own pending confirmation is, so its 60-120s wall-clock
+   // window can actually elapse and resolve without waiting for the next bar.
+   XAU_CheckRecoveryAwaitingTiming();
    // v6.17.12: g_lastEntryScanAt used to be stamped HERE -- before ScoreSetups,
    // grade computation, the Personality Gate, SmartGuard, and the
    // XAU_RecordMarketSnapshot() call that actually records market analysis.
@@ -13257,10 +14679,7 @@ void OnTick()
    XAU_UpdateBlockedSignalOutcomes();
    InTradeClassifier_Update(); // v6.0.1: classify open positions every bar (feeds ratchet + exit logic)
 
-   // v6.24.0 NO-LIMIT alignment: daily caps, post-close cooldowns,
-   // streak pauses, drawdown fear and loss-state sizing are telemetry only.
-   // The operational position-cap remains a genuine collision/risk control.
-   Print("NO_LIMIT_ALIGNED: daily locks, streak pauses, drawdown fear and loss sizing are telemetry only");
+   int maxTradesToday = EffectiveMaxTradesPerDay();
    bool entryExecutionBlocked = false;
    string entryExecutionBlockReason = "";
    string entryExecutionBlockGrade = "";
@@ -13269,14 +14688,40 @@ void OnTick()
    {
       entryExecutionBlocked = true;
       entryExecutionBlockGrade = "MAX-OPEN";
-      entryExecutionBlockReason = StringFormat("max open trades reached (%d/%d)",
+      entryExecutionBlockReason = StringFormat("max open trades reached (%d/%d); market analysis continues but fresh entries are blocked",
                                                openNowForScan, InpMaxOpenTrades);
+   }
+   else if(!noLimitMode && todayTradeCount >= maxTradesToday)
+   {
+      entryExecutionBlocked = true;
+      entryExecutionBlockGrade = "MAX-DAY";
+      entryExecutionBlockReason = StringFormat("adaptive daily trade cap reached (%d/%d); market analysis continues but fresh entries are blocked",
+                                               todayTradeCount, maxTradesToday);
+   }
+
+   // Cooldown
+   if(!noLimitMode && !entryExecutionBlocked && lastTradeClose > 0 && TimeCurrent() - lastTradeClose < InpTradeCooldown)
+   {
+      entryExecutionBlocked = true;
+      entryExecutionBlockGrade = "CD";
+      entryExecutionBlockReason = StringFormat("post-close cooldown active (%ds left); market analysis continues",
+                                               (int)(InpTradeCooldown - (TimeCurrent() - lastTradeClose)));
+   }
+
+   // Streak pause (after multiple quick losses)
+   if(!noLimitMode && !entryExecutionBlocked && IsInStreakPause())
+   {
+      entryExecutionBlocked = true;
+      entryExecutionBlockGrade = "PAUSED";
+      entryExecutionBlockReason = "streak pause active until " + TimeToString(streakPauseUntil, TIME_SECONDS) +
+                                  "; market analysis continues but fresh entries are blocked";
    }
 
    // ============ GATE 1: REGIME ============
    double regimeQuality = DetectRegime();
    if(currentRegime == REGIME_DEAD)
-      Print("REGIME_CONTEXT_ONLY: DEAD/quiet classification lowers score but does not independently veto");
+   { Print("GATE1: DEAD market (", DoubleToString(regimeQuality, 2), ") — skip");
+     UpdateDashboard(0, 0, "DEAD"); return; }
 
    // ============ GATE 2: SESSION ============
    double sessionQuality = GetSessionQuality();
@@ -13310,46 +14755,362 @@ void OnTick()
                   g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",
                   transitionNow.oppositeEntryAllowed?"WOULD_ENTER":"WAIT",transitionNow.reason);
    }
-   if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE &&
-      transitionNow.oppositeEntryAllowed && adaptiveReversalDir!=0)
+   if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && transitionNow.oppositeEntryAllowed && adaptiveReversalDir!=0)
    {
-      // A confirmed adaptive reversal creates a normal candidate.  It does
-      // not own a private execution lane and cannot bypass or duplicate the
-      // shared structure, freshness, news, risk, or execution authorities.
       signal=adaptiveReversalDir;
       setupName="ADAPTIVE_REVERSAL_RECLAIM";
       setupScore=6.80;
-      PrintFormat("ADAPTIVE_REVERSAL_CANDIDATE_SHARED_PATH id=%s direction=%s score=%.2f reason=%s",
-                  XAU_ATReversalOpportunityId(),signal==1?"BUY":"SELL",setupScore,transitionNow.reason);
+      PrintFormat("ADAPTIVE_REVERSAL_CANDIDATE_CREATED id=%s direction=%s score=%.2f oldHTF=%s locationQuality=%.0f consumed=%.0f%% reason=%s",
+                  XAU_ATReversalOpportunityId(),signal==1?"BUY":"SELL",setupScore,
+                  g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",transitionNow.entryLocationQuality,transitionNow.moveAlreadyConsumedPct,transitionNow.reason);
+
+      // v6.23.1 centralized ACTIVE reversal lane.  Once the adaptive engine
+      // has proved the compact high-exhaustion package, legacy trend-following
+      // scorers must not veto it later.  Keep only the explicitly authorized
+      // hard protections here: account/cadence controls, spread/news, severe
+      // chase/location, the shared timing revalidation, and every execution-
+      // layer exposure/risk/margin/broker/SL-geometry check in OpenTrade().
+      string adaptiveGrade="A+";
+      const double adaptiveCombined=6.80;
+
+      if(entryExecutionBlocked)
+      {
+         Print("ADAPTIVE REVERSAL BLOCKED (account/cadence safety): ",entryExecutionBlockReason);
+         XAU_RememberBlockedSignal(signal,setupName,adaptiveGrade,setupScore,adaptiveCombined,entryExecutionBlockReason);
+         return;
+      }
+      if(spreadBlocksEntry)
+      {
+         Print("ADAPTIVE REVERSAL BLOCKED (spread/news safety): ",spreadBlockReason);
+         XAU_RememberBlockedSignal(signal,setupName,adaptiveGrade,setupScore,adaptiveCombined,spreadBlockReason);
+         return;
+      }
+      if(InpUseNewsFilter && !IsNewsSafe() && !adaptivePostPhase)
+      {
+         string adaptiveNewsBlock="ADAPTIVE_REVERSAL_NEWS_BLOCK: high-impact event nearby";
+         Print("ADAPTIVE REVERSAL BLOCKED (news safety): ",adaptiveNewsBlock);
+         XAU_RememberBlockedSignal(signal,setupName,adaptiveGrade,setupScore,adaptiveCombined,adaptiveNewsBlock);
+         return;
+      }
+
+      double adaptiveTimingLot=1.0;
+      string adaptiveTimingWhy="";
+      if(!XAUEntryTimingGuard(signal,setupName,setupScore,adaptiveCombined,
+                              adaptiveGrade,adaptiveTimingLot,adaptiveTimingWhy))
+      {
+         Print("ADAPTIVE REVERSAL BLOCKED (anti-chase/location): ",adaptiveTimingWhy);
+         XAU_RememberBlockedSignal(signal,setupName,adaptiveGrade,setupScore,adaptiveCombined,adaptiveTimingWhy);
+         return;
+      }
+      if(adaptiveTimingLot<0.999)
+         PrintFormat("ADAPTIVE REVERSAL TIMING CAUTION: suggested multiplier %.2f recorded only; binary approved risk remains full",adaptiveTimingLot);
+
+      // Populate the same audit context consumed by OpenTrade.  The risk
+      // multiplier is deliberately 1.0: approve at configured full risk or
+      // block; never create a hidden token-size reversal.
+      lastSignalDir=signal;
+      lastSignalRSI=bufRSI[1];
+      lastSignalEMADiff=(bufEMAFast[1]-bufEMASlow[1])/bufEMASlow[1]*10000;
+      lastSignalATR=bufATR[1];
+      lastSignalSetup=setupName;
+      g_pendingBrainGrade=adaptiveGrade;
+      g_pendingBrainSetupScore=setupScore;
+      g_pendingBrainCombinedScore=adaptiveCombined;
+      g_pendingBrainEntryAudit=adaptiveTimingWhy;
+
+      if(!XAU_TimingEngineConfirmsEntry(signal,setupName,adaptiveGrade,1.0,bufATR[1]))
+         return;
+
+      g_pendingTimingProof.active=true;
+      g_pendingTimingProof.candidateId=XAU_ATReversalOpportunityId();
+      g_pendingTimingProof.sourcePath="ADAPTIVE_REVERSAL";
+      g_pendingTimingProof.firstSeenTime=g_lastEntryTimingDecision.originalSignalTime;
+      g_pendingTimingProof.firstSeenPrice=g_lastEntryTimingDecision.originalSignalPrice;
+      g_pendingTimingProof.timingGateRequired=true;
+      g_pendingTimingProof.requiredDelaySeconds=XAU_EffectiveAdaptiveEntryDelaySeconds(signal);
+      g_pendingTimingProof.timingGateStartTime=g_lastEntryTimingDecision.originalSignalTime;
+      g_pendingTimingProof.recoveryWaitSeconds=0.0;
+      g_pendingTimingProof.timingEngineWaitSeconds=g_lastEntryTimingDecision.delaySeconds;
+      g_pendingTimingProof.revalidationTime=g_lastEntryTimingDecision.decisionTime;
+      g_pendingTimingProof.revalidationResult=g_lastEntryTimingDecision.entryReasonText;
+      g_pendingTimingProof.bypassUsed=false;
+      g_pendingTimingProof.bypassReason="";
+      g_pendingTimingProof.openTradeCaller="AdaptiveReversal->OpenTrade";
+
+      XAU_LogBotDecision("ENTER_FULL_RISK_ADAPTIVE_REVERSAL",signal,setupName,adaptiveGrade,
+                         lastAIConfidence,adaptiveCombined,"fast-confirm",
+                         StringFormat("BOS=%+d",g_smc_bos_dir),
+                         StringFormat("HTF=%+d context-only",g_htfConsensusDir),
+                         "ADAPTIVE_AUTHORITY",g_memoryLastInfluence,transitionNow.reason);
+      bool adaptiveOpened=OpenTrade(signal,bufATR[1],setupName+" [A+]",1.0);
+      g_lastEntryTimingDecision.valid=false;
+      if(adaptiveOpened)
+      {
+         g_totalAllowed++;
+         g_lastEntryGrade=adaptiveGrade;
+         g_lastEntryScore=adaptiveCombined;
+         UpdateDashboard(signal,adaptiveCombined,adaptiveGrade);
+         lastDashSignal=signal;
+         lastDashScore=adaptiveCombined;
+         lastDashGrade=adaptiveGrade;
+      }
+      return; // never fall back into the legacy trend-following gauntlet
    }
 
-   // v6.24.0: Active Direction is context, not a global veto. Confirmed
-   // opposite structure is evaluated by the dedicated structure authority.
+   // June 17-18 reconstruction: Active Direction applies to every setup
+   // ScoreSetups can return (TREND_PULLBACK, BREAKOUT, RANGE_REVERSAL,
+   // SQUEEZE_RELEASE, MULTI_EXTREME, LONDON_FIX_PIN, HTF_TREND_FOLLOW, etc.)
+   // in one place, rather than duplicating the same check into each setup's
+   // own scoring block. HTF_TREND_FOLLOW additionally has its own earlier,
+   // more specific gate inside ScoreSetups (so it doesn't even win the
+   // internal scoring race when blocked) — this is deliberately redundant
+   // with it, not a replacement, and is the sole enforcement point for the
+   // other eight setups.
+   //
+   // Documented exceptions (NOT gated here, by design):
+   //   - PYR+TRN (pyramid-with-trend add): never reaches this function at
+   //     all (separate CheckPyramidOpportunity path); it only adds when the
+   //     base position is already moving favorably, which is itself
+   //     direction-validating evidence.
+   //   - PYR+RETEST_RESCUE / PYR+RESCUE / PYR+ADV: gated directly in the
+   //     pyramid function against the same g_activeDirection state.
+   //   - RE_ENTRY: gated directly at its own call site (bypasses ScoreSetups
+   //     entirely, so it needs its own check).
    if(signal != 0 && g_activeDirection != DIRECTION_BOTH_ALLOWED)
-      PrintFormat("ACTIVE_DIRECTION_CONTEXT_ONLY: candidate=%s %s context=%s tier=%s reason=%s",
-                  setupName, signal==1?"BUY":"SELL", EnumToString(g_activeDirection),
-                  g_activeDirectionTier, g_activeDirectionReason);
+   {
+      bool blockThisSignal = false;
+      string ddReason = "";
+      bool adaptiveReversalAuthority = (InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE &&
+                                        transitionNow.oppositeEntryAllowed && signal==adaptiveReversalDir);
+      if(g_activeDirection == DIRECTION_NO_TRADE)
+      {
+         blockThisSignal = true;
+         ddReason = "Active Direction=NO_TRADE (" + g_activeDirectionReason + ")";
+      }
+      else if(g_activeDirection == DIRECTION_BUY_ONLY && signal == -1)
+      {
+         blockThisSignal = true;
+         ddReason = "Active Direction=BUY_ONLY, blocking SELL (" + g_activeDirectionReason + ")";
+      }
+      else if(g_activeDirection == DIRECTION_SELL_ONLY && signal == 1)
+      {
+         blockThisSignal = true;
+         ddReason = "Active Direction=SELL_ONLY, blocking BUY (" + g_activeDirectionReason + ")";
+      }
+      else if(g_activeDirection == DIRECTION_TRANSITION_WAIT && signal == g_htfConsensusDir && g_htfConsensusDir != 0)
+      {
+         // TRANSITION_WAIT only pauses the specific direction that's
+         // weakening (the current HTF-aligned side) — it does not forbid
+         // the opposite direction, which stays subject to its own normal
+         // setup/grading/AI/risk requirements exactly as if Active
+         // Direction were BOTH_ALLOWED.
+         blockThisSignal = true;
+         ddReason = "Active Direction=TRANSITION_WAIT, pausing the weakening " +
+                    (signal == 1 ? "BUY" : "SELL") + " side (" + g_activeDirectionReason + ")";
+      }
+      if(blockThisSignal)
+      {
+         if(adaptiveReversalAuthority)
+         {
+            Print("ADAPTIVE-DIRECTION LEGACY VETO SUPERSEDED: compact high-exhaustion reversal package has centralized ACTIVE authority; slow HTF remains context only.");
+            blockThisSignal=false;
+         }
+      }
+      if(blockThisSignal)
+      {
+         if(InpSMC_Log)
+            Print("ADAPTIVE-DIRECTION BLOCK: ", setupName, " ", signal == 1 ? "BUY" : "SELL",
+                  " withheld — ", ddReason);
+         signal = 0; setupName = ""; setupScore = 0;
+      }
+   }
 
-   // v6.24.0: SMC supplies corroborating evidence only. Conflict labels,
-   // penalties and hard vetoes were duplicate structure authorities.
+   // v6.1.0 — SMC confirmation layer, bonus side (additive only)
+   // v6.7.0 — now paired with SMC_GetConflictPenalty: structure can also cost
+   // points or hard-block when it strongly disagrees (audit item #2). Reset
+   // per candidate so a prior signal's block state never leaks forward.
    g_smcHardBlockActive = false;
-   g_smcConflictReason = "";
+   g_smcConflictReason  = "";
    g_smcConflictPenalty = 0.0;
    if(InpSMC_Enable && signal != 0)
    {
       string smcReason = "";
-      double smcBonus = SMC_GetScoreBonus(signal, smcReason);
-      if(smcBonus > 0.0) setupScore += smcBonus;
-      PrintFormat("SMC_CONTEXT_ONLY: dir=%s bonus=%.2f BOS=%+d %s",
-                  signal>0?"BUY":"SELL", smcBonus, g_smc_bos_dir, smcReason);
+      double smcBonus  = SMC_GetScoreBonus(signal, smcReason);
+      if(smcBonus > 0.0)
+         setupScore = MathMax(0.0, setupScore + smcBonus);
+
+      bool smcHardBlock = false;
+      string smcConflictReason = "";
+      double smcPenalty = SMC_GetConflictPenalty(signal, smcHardBlock, smcConflictReason);
+      if(smcPenalty > 0.0)
+         setupScore = MathMax(0.0, setupScore - smcPenalty);
+      g_smcHardBlockActive = smcHardBlock;
+      g_smcConflictReason  = smcConflictReason;
+      g_smcConflictPenalty = smcPenalty;
+
+      if(InpSMC_Log && (StringLen(smcReason) > 0 || StringLen(smcConflictReason) > 0))
+         Print("SMC v6.1.0 | dir=", signal > 0 ? "BUY" : "SELL",
+               " | bonus=", DoubleToString(smcBonus, 2),
+               " | penalty=", DoubleToString(smcPenalty, 2),
+               " | hardBlock=", smcHardBlock ? "Y" : "n",
+               " | newScore=", DoubleToString(setupScore, 2),
+               " | setup=", setupName,
+               " | ", smcReason, smcConflictReason,
+               " | BOS=", g_smc_bos_dir,
+               " | OB_bull=", g_smc_ob_bull.valid ? "Y" : "n",
+               " | OB_bear=", g_smc_ob_bear.valid ? "Y" : "n",
+               " | FVG_bull=", g_smc_fvg_bull.valid ? "Y" : "n",
+               " | FVG_bear=", g_smc_fvg_bear.valid ? "Y" : "n");
    }
 
-   // v6.24.0: personality classification may explain a candidate but may
-   // never suppress, reverse, delay or resize one.
-   if(signal != 0)
-      PrintFormat("PERSONALITY_CONTEXT_ONLY: setup=%s personality=%s fit=%s",
-                  setupName, MarketPersonalityStr(g_marketPersonality),
-                  StrategyFitsPersonality(setupName,g_marketPersonality)?"Y":"N");
+   // v6.4.0 UPGRADE 1 — Market Personality Gate
+   // Applied after ScoreSetups+SMC, before combinedScore is finalized.
+   // A+ setups: reduce score -1.5 if poor personality fit (never hard-block)
+   // B or lower: increment g_gateBlocks_Trend and return if poor fit
+   if(signal != 0 && StringLen(setupName) > 0)
+   {
+      bool fits = StrategyFitsPersonality(setupName, g_marketPersonality);
+      if(!fits)
+      {
+         string smoPreWhy = "";
+         bool strongMomentumPrecheck = XAU_BasicStrongMomentumPrecheck(signal, setupName, setupScore, "PRE-GRADE", smoPreWhy);
+         bool regimeAlignedPersonality =
+            (signal == 1 && (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP)) ||
+            (signal == -1 && (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN));
+         bool activeDirectionHostile =
+            (signal == 1 && g_activeDirection == DIRECTION_SELL_ONLY) ||
+            (signal == -1 && g_activeDirection == DIRECTION_BUY_ONLY);
+         bool continuationPersonalitySoftPass =
+            IsXAUConfirmedBreakoutContinuation(signal, setupName) &&
+            regimeAlignedPersonality &&
+            !activeDirectionHostile;
+         Print("PERSONALITY GATE: ", setupName, " not ideal for ", MarketPersonalityStr(g_marketPersonality), " — adjusting");
+         // Compute grade preview (pre-combined) from raw setupScore to decide action
+         if(setupScore >= InpGradeAPlus || setupScore >= InpGradeA)
+         {
+            // A / A+: adjust score down -1.5 but proceed
+            setupScore = MathMax(0.0, setupScore - 1.5);
+         }
+         // v6.17.7 FIX (regression E): the branch below used to be a standalone
+         // `if`, not an `else if` -- so an A/A+ candidate got its -1.5 penalty
+         // above AND THEN fell into this separate if/else-if/else chain too.
+         // Unless it also happened to qualify for the breakout-continuation or
+         // momentum-override soft pass, it hit the chain's own final `else` and
+         // was hard-blocked + returned anyway, completely undoing "A+ setups:
+         // reduce score -1.5 if poor personality fit (never hard-block)" (this
+         // function's own doc comment above). Chaining it as `else if` makes the
+         // A/A+ branch and this whole chain mutually exclusive again -- an A/A+
+         // candidate takes its penalty and proceeds, full stop.
+         //
+         // v6.17.3 FIX: STRONG_MOMENTUM_OVERRIDE (strongMomentumPrecheck) is an AI-
+         // opinion-flavored quality override -- keep it gated behind
+         // XAU_StructuralBypassAllowed() (AI_DIRECTOR only), consistent with the
+         // other STRONG_MOMENTUM_OVERRIDE sites fixed this session.
+         //
+         // v6.17.6 FIX (profit-impact audit): continuationPersonalitySoftPass is
+         // NOT an AI opinion -- it's a structural/market-fact read (confirmed
+         // breakout continuation from real price action + regime alignment +
+         // Active Direction NOT hostile). Gating it behind XAU_StructuralBypassAllowed()
+         // meant it only ever applied in AI_DIRECTOR mode, never under the default
+         // AI_FILTER_ONLY -- so under default settings this exemption never fired
+         // at all. Runtime-proven root cause of a real missed trade: 2026-07-07
+         // 19:55:11, a STRONG-tier Active-Direction-confirmed SELL BREAKOUT
+         // (signalPrice=4126.63, g_marketPersonality=RANGE lagging behind the
+         // already-confirmed BREAKOUT_DOWN regime) was hard-blocked by
+         // "PERSONALITY GATE BLOCK ... skipping" -- price then fell to 4092.19
+         // within the hour (~34pts / ~3.4R by this EA's typical SL distance) with
+         // minimal adverse excursion first. Same Category A/B split as
+         // XAU_StructuralBypassAllowed() itself: this override needs Active
+         // Direction + regime + anti-repeat-loss guard, not an AI-authority mode.
+         else if(continuationPersonalitySoftPass && !XAU_AntiRepeatLossActive(signal))
+         {
+            setupScore = MathMax(setupScore, GetEffectiveGradeB());
+            string personalitySoftWhy = StringFormat("BREAKOUT_CONTINUATION personality soft-pass: setup=%s signal=%s regime=%s personality=%s",
+                              setupName, signal == 1 ? "BUY" : "SELL",
+                              RegimeName(), MarketPersonalityStr(g_marketPersonality));
+            Print("PERSONALITY-GATE SOFTENED: confirmed continuation converted personality mismatch to warning | ",
+                  personalitySoftWhy, " | setupScore=", DoubleToString(setupScore, 2));
+            CloudPostReasoning("ALLOW", "PERSONALITY-GATE SOFTENED by confirmed continuation: " + personalitySoftWhy,
+                               RegimeName(), setupName, setupScore, setupScore, "SMO-PERSONALITY", signal);
+         }
+         else if(strongMomentumPrecheck && InpXAU_SMO_AllowBGradeBalanced &&
+                 !XAU_AntiRepeatLossActive(signal) && XAU_StructuralBypassAllowed())
+         {
+            setupScore = MathMax(setupScore, GetEffectiveGradeB());
+            Print("PERSONALITY-GATE SOFTENED: STRONG_MOMENTUM_OVERRIDE converted B/personality mismatch to warning | ",
+                  smoPreWhy, " | setupScore=", DoubleToString(setupScore, 2));
+            CloudPostReasoning("ALLOW", "PERSONALITY-GATE SOFTENED by STRONG_MOMENTUM_OVERRIDE: " + smoPreWhy,
+                               RegimeName(), setupName, setupScore, setupScore, "SMO-PERSONALITY", signal);
+         }
+         else
+         {
+            // v6.17.10 SYMMETRIC OPPORTUNITY RECHECK (Personality Gate site):
+            // runtime-proven from xau_opposite_direction_counterfactual_audit_
+            // 2026-07-06_to_2026-07-08.md -- of every blocker type logged over a
+            // 3-day live window, "Personality mismatch" was BOTH the largest
+            // sample (17 signals) AND the best-performing for a genuine opposite-
+            // direction win (47%), yet this exact gate had no symmetric recheck
+            // at all -- v6.17.9 only added it at SmartGuard, a separate, later
+            // gate this one doesn't even reach on a hard block. This is the one
+            // gap that specific evidence said to close. This swap happens BEFORE
+            // grade computation/SMC-conflict/SmartGuard below, so (unlike the
+            // SmartGuard site) the opposite candidate naturally flows through
+            // all of that existing code once swapped in -- nothing duplicated.
+            int pgOppSignalWanted = -signal;
+            bool pgOppDirForbidden =
+               (g_activeDirection == DIRECTION_NO_TRADE) ||
+               (g_activeDirection == DIRECTION_BUY_ONLY  && pgOppSignalWanted == -1) ||
+               (g_activeDirection == DIRECTION_SELL_ONLY && pgOppSignalWanted ==  1) ||
+               (g_activeDirection == DIRECTION_TRANSITION_WAIT &&
+                pgOppSignalWanted == g_htfConsensusDir && g_htfConsensusDir != 0);
+
+            bool pgSwapped = false;
+            string pgOppSetupName = ""; double pgOppScore = 0.0;
+            if(!pgOppDirForbidden)
+            {
+               int pgOppSignalFound = ScoreSetups(pgOppScore, pgOppSetupName, signal);
+               if(pgOppSignalFound != 0 && pgOppScore > 0.0)
+               {
+                  bool pgOppFits = StrategyFitsPersonality(pgOppSetupName, g_marketPersonality);
+                  // Same standard the original candidate got: fits personality,
+                  // OR would qualify for the A/A+ "penalty but proceed" rule --
+                  // no recursive re-softening beyond that (avoids ping-ponging).
+                  if(pgOppFits || pgOppScore >= InpGradeAPlus || pgOppScore >= InpGradeA)
+                  {
+                     // Match the same -1.5 personality-mismatch penalty an A/A+
+                     // original candidate would have taken above -- consistency,
+                     // not a free pass just because it arrived via the retry path.
+                     if(!pgOppFits)
+                        pgOppScore = MathMax(0.0, pgOppScore - 1.5);
+                     Print("PERSONALITY-GATE SYMMETRIC RECHECK: ", setupName, " ", signal == 1 ? "BUY" : "SELL",
+                           " mismatched ", MarketPersonalityStr(g_marketPersonality), " -- opposite ", pgOppSetupName,
+                           " ", pgOppSignalWanted == 1 ? "BUY" : "SELL", " found (score=", DoubleToString(pgOppScore, 2),
+                           ", fits=", pgOppFits ? "Y" : "N", ") -- swapping in, will still pass through grade/SMC/SmartGuard normally.");
+                     signal = pgOppSignalFound;
+                     setupName = pgOppSetupName;
+                     setupScore = pgOppScore;
+                     pgSwapped = true;
+                  }
+               }
+            }
+
+            if(!pgSwapped)
+            {
+               // B-grade or lower in wrong personality: block
+               g_gateBlocks_Trend++;
+               Print("PERSONALITY GATE BLOCK: ", setupName, " grade not A/A+ in ",
+                     MarketPersonalityStr(g_marketPersonality), " — skipping");
+               XAU_RememberBlockedSignal(signal, setupName, "PERSONALITY", setupScore, setupScore,
+                                         "Personality mismatch: " + MarketPersonalityStr(g_marketPersonality));
+               WriteDecisionScorecard(signal, setupName, "B", setupScore, setupScore,
+                                      lastAIConfidence, g_aiLastVerdict, "none",
+                                      0.0, 0, g_marketPersonality,
+                                      "PERSONALITY-GATE", false);
+               return;
+            }
+         }
+      }
+   }
 
    // Combined quality
    double combinedRaw = setupScore * regimeQuality * sessionQuality;
@@ -13442,8 +15203,61 @@ void OnTick()
                 : combinedScore >= dynGradeB    ? "B"
                 : "SKIP";
 
-   // v6.24.0: grade is final here. SMC and the old TRI re-entry watch are
-   // context-only observations and have no independent execution authority.
+   // v6.7.0 ADAPTIVE ENTRY ARBITER (audit item #2): SMC was bonus-only —
+   // even a strong multi-signal structural conflict (BOS against + price
+   // sitting inside the opposing OB/FVG) could never actually stop a trade,
+   // only shave points off a score that other bonuses could still clear.
+   // A hard structural conflict now downgrades straight to SKIP, same as
+   // every other hard gate in this pipeline — with the same soft-block-
+   // warning respect for growth/dev modes as every other hard gate here.
+   if(signal != 0 && grade != "SKIP" && g_smcHardBlockActive)
+   {
+      if(XAU_StructuralBypassAllowed())
+      {
+         Print("SMC HARD CONFLICT: ", g_smcConflictReason, " — grade=", grade,
+               " kept (soft-block-warning mode), size will be reduced by the SMC penalty already applied");
+      }
+      else
+      {
+         Print("SMC HARD CONFLICT BLOCK: ", g_smcConflictReason, " — grade ", grade, " downgraded to SKIP");
+         g_gateBlocks_AI++; // reuse existing block counter bucket for structural gates
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "SMC_HARD_CONFLICT: " + g_smcConflictReason);
+         XAU_LogBotDecision("BLOCK", signal, setupName, grade, 0, combinedScore,
+                            "n/a", StringFormat("BOS=%+d CONFLICT(%s)", g_smc_bos_dir, g_smcConflictReason),
+                            StringFormat("HTF=%+d", g_htfConsensusDir), "NOT_YET_EVALUATED",
+                            g_memoryLastInfluence, "SMC structural conflict — " + g_smcConflictReason);
+         grade = "SKIP";
+      }
+   }
+
+   // v6.8.0 TRI STEP 4 — SMART RE-ENTRY. A direction TRI recently bailed
+   // out of (weak recovery) doesn't get to re-enter on the same quality of
+   // signal that just failed — it needs a genuinely fresh trigger (new BOS,
+   // sweep, pullback, OB/FVG reaction). This is a HIGHER bar, not a block:
+   // any real trigger still lets the trade through immediately.
+   if(signal != 0 && grade != "SKIP")
+   {
+      string triWatchSetup = "";
+      if(XAU_TRI_InReEntryWatch(signal, triWatchSetup) && !XAU_TRI_FreshTriggerPresent(signal))
+      {
+         if(XAU_StructuralBypassAllowed())
+         {
+            Print("TRI RE-ENTRY WATCH: ", signal == 1 ? "BUY" : "SELL", " direction recently bailed (", triWatchSetup,
+                  ") and no fresh trigger yet — kept (soft-block-warning mode)");
+         }
+         else
+         {
+            string triBlockMsg = StringFormat("TRI_REENTRY_WATCH: %s direction bailed out via weak recovery on %s recently — no fresh trigger (BOS/sweep/pullback/OB/FVG) yet, waiting for a better entry price instead of repeating the same read",
+                                              signal == 1 ? "BUY" : "SELL", triWatchSetup);
+            Print("TRI RE-ENTRY BLOCK: ", triBlockMsg);
+            XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, triBlockMsg);
+            XAU_LogBotDecision("WAIT", signal, setupName, grade, 0, combinedScore,
+                               "n/a", StringFormat("BOS=%+d", g_smc_bos_dir), StringFormat("HTF=%+d", g_htfConsensusDir),
+                               "NOT_YET_EVALUATED", g_memoryLastInfluence, triBlockMsg);
+            grade = "SKIP";
+         }
+      }
+   }
    XAU_RecordMarketSnapshot("SCAN_EVALUATED", signal, setupName, grade, setupScore, combinedScore);
    g_lastEntryScanAt = TimeCurrent(); // v6.17.12: watchdog stamp moved here, see note above CopyEntryBuffer block
    XAU_LogScanState((signal != 0 && grade != "SKIP") ? "SCAN_COMPLETED_CANDIDATE" : "SCAN_COMPLETED_NO_TRADE");
@@ -13515,106 +15329,1522 @@ void OnTick()
    if(signal != 0 && grade != "SKIP")
       XAU_TrackSignalFirstSeen(signal, setupName, grade, setupScore, combinedScore, firstSeenPx, bufATR[1]);
 
-   // v6.24.0 ALIGNED ENTRY ENGINE — exact authority order:
-   // candidate -> score/grade -> confirmed structure -> freshness/extension
-   // -> one 2-3 minute timing owner -> one news owner -> operational risk
-   // -> OpenTrade. The post-delay pass always recomputes freshness first.
-   if(signal == 0 || grade == "SKIP")
+   // v5.6.0 FIX C — In unstable regimes (CHOPPY/LOW_VOL/DEAD), B-grade is too
+   // permissive. Live data showed B-grade trades fired in CHOPPY regime then
+   // got crushed when regime transitioned back to TREND_DN. Now B-grade is
+   // demoted to SKIP in those regimes. A and A+ trades still allowed because
+   // their score is genuinely high. Aggressive mode preserves legacy behavior.
+   //
+   // v6.2.0 EXCEPTION: HTF consensus trades are EXEMPT from LOW_VOL demotion.
+   // When H1+HTF are both confirmed bullish/bearish, a B-grade trend-follow
+   // in LOW_VOL is still valid — that's gold consolidating within a trend,
+   // not random chop. Only CHOPPY and DEAD remain hard-blocked for B-grade.
+   if(grade == "B" && g_modeName != "aggressive" && !XAU_ModeAllowsAggressiveB())
    {
-      if(alignedPrimaryDelayDue) g_alignedCandidates[0].firstCandidateTime = 0;
-      UpdateDashboard(0, combinedScore, grade);
+      bool exemptHTF = htfConsensusTrade; // v6.2.0: HTF consensus trades allowed in LOW_VOL
+      if(currentRegime == REGIME_DEAD || currentRegime == REGIME_CHOPPY)
+      {
+         Print("⚙ FIX-C: B-grade trade demoted to SKIP in regime ", RegimeName(),
+               " (mode=", g_modeName, ") — A/A+ only in dead/choppy market");
+         grade = "SKIP";
+      }
+      else if(currentRegime == REGIME_LOW_VOL && !exemptHTF)
+      {
+         Print("⚙ FIX-C: B-grade trade demoted to SKIP in LOW_VOL (non-HTF consensus). ",
+               "Setup=", setupName, " regime=", RegimeName());
+         grade = "SKIP";
+      }
+   }
+
+   g_adaptiveConfirmLotMulti = 1.0;
+   g_adaptiveConfirmReason = "";
+   bool bQualityReportScout = false;
+
+   string antiBiasReason = "";
+   if(!ApplyAntiBiasCorrection(signal, setupName, setupScore, combinedScore, grade, antiBiasReason))
+   {
+      Print("TRADE BLOCKED BECAUSE: ", antiBiasReason);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, antiBiasReason);
+      CloudPostReasoning("BLOCK", antiBiasReason, RegimeName(), setupName,
+                         setupScore, combinedScore, "ANTI-BIAS", signal);
+      UpdateDashboard(0, combinedScore, "ANTI-BIAS");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "ANTI-BIAS";
       return;
    }
+
+   if(InpTrendPullbackBRequireAntiBias && grade == "B" && IsDamageProneSetupName(setupName))
+   {
+      double bQualityLot = 1.0;
+      string bQualityWhy = "";
+      if(!AdaptiveXAUConfirm(signal, "DAMAGE-B-QUALITY-" + setupName, combinedScore, grade,
+                             bQualityLot, bQualityWhy, true))
+      {
+         string bMsg = StringFormat("B-GRADE QUALITY BLOCK: %s %s failed stricter fast XAU confirmation. %s",
+                                    setupName, signal == 1 ? "BUY" : "SELL", bQualityWhy);
+         string scoutWhy = "";
+         if(XAU_BlockedMemoryRapidScout(setupName, signal, bMsg, scoutWhy))
+         {
+            bQualityReportScout = true;
+            g_adaptiveConfirmLotMulti *= InpBlockedMemoryScoutLotMulti;
+            g_adaptiveConfirmReason = "B-grade report-fit scout: " + scoutWhy + " | original fast-confirm: " + bQualityWhy;
+            Print("REPORT-FIT B-SCOUT: ", setupName, " ", signal == 1 ? "BUY" : "SELL",
+                  " allowed at tiny risk x", DoubleToString(InpBlockedMemoryScoutLotMulti, 2),
+                  " because blocked-memory says this exact pattern is expensive to miss. ", scoutWhy);
+            CloudPostReasoning("ALLOW", "REPORT-FIT B-SCOUT: " + scoutWhy, RegimeName(), setupName,
+                               setupScore, combinedScore, "B-SCOUT", signal);
+         }
+	         else
+	         {
+	         string smoBWhy = "";
+	         bool smoBPrecheck = XAU_BasicStrongMomentumPrecheck(signal, setupName, combinedScore, grade, smoBWhy);
+	         // v6.17.3 FIX: this bypass had NO anti-repeat-loss guard and NO
+	         // XAU_StructuralBypassAllowed() gate, unlike the functionally identical
+	         // SMART-GUARD bypass ~90 lines below (same AdaptiveXAUConfirm() gate,
+	         // same fast-TF logic). That meant a repeated same-direction B-grade
+	         // signal could be softened into a trade through this side door even
+	         // during an active loss streak and outside AI_DIRECTOR mode -- exactly
+	         // the failure mode this session's structural/AI-opinion split exists to
+	         // close, just reached via a different gate name.
+	         bool antiRepeatBlocksSMOB = XAU_AntiRepeatLossActive(signal);
+	         if(antiRepeatBlocksSMOB)
+	            bMsg += StringFormat(" | ANTI_REPEAT_LOSS_GUARD: %d consecutive %s losses this session and price has not recovered since — hard block stands despite %s grade.",
+	                                 g_sameDirLossStreak, signal==1?"BUY":"SELL", grade);
+	         if(smoBPrecheck && InpXAU_SMO_AllowBGradeBalanced && !antiRepeatBlocksSMOB && XAU_StructuralBypassAllowed())
+	         {
+	            XAU_LogSoftBlockDowngrade("B_QUALITY_FAST_CONFIRM", "B-GRADE QUALITY SOFTENED by STRONG_MOMENTUM_OVERRIDE: " + bMsg + " | " + smoBWhy,
+	                                      setupName, grade, combinedScore);
+	            g_adaptiveConfirmLotMulti *= InpXAU_SMO_LotMulti;
+	            g_adaptiveConfirmReason = "B-GRADE QUALITY SOFTENED by STRONG_MOMENTUM_OVERRIDE: " + smoBWhy +
+	                                      " | original fast-confirm warning: " + bQualityWhy;
+	            CloudPostReasoning("ALLOW", g_adaptiveConfirmReason, RegimeName(), setupName,
+	                               setupScore, combinedScore, "SMO-B-QUALITY", signal);
+	         }
+	         else if(XAU_ModeAllowsAggressiveB() && combinedScore >= 4.20)
+	         {
+	            XAU_LogSoftBlockDowngrade("B_QUALITY_FAST_CONFIRM", bMsg, setupName, grade, combinedScore);
+	            g_adaptiveConfirmReason = "Aggressive Growth allowed B-grade after fast-confirm warning: " + bQualityWhy;
+	         }
+         else
+         {
+         Print("TRADE BLOCKED BECAUSE: ", bMsg);
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, bMsg);
+         CloudPostReasoning("BLOCK", bMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "B-QUALITY", signal);
+         UpdateDashboard(0, combinedScore, "B-QUALITY");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "B-QUALITY";
+         return;
+         }
+         }
+      }
+      if(bQualityLot < 0.999)
+      {
+         g_adaptiveConfirmLotMulti *= bQualityLot;
+         g_adaptiveConfirmReason = "B-grade damage setup fast-confirm penalty: " + bQualityWhy;
+      }
+   }
+
+   bool smartDamageSetup = InpSmartGuardEnable && IsSmartGuardDamageSetup(setupName);
+   // v6.4.20: smartGuardExtraLotMulti removed — SmartGuard lot reductions disabled in v6.4.16.
+   if(smartDamageSetup)
+   {
+      if(InpSmartGuardSkipBTrendBreak && grade == "B")
+      {
+         SmartGuardStats sgStats;
+         GetSmartGuardSetupStats(lastSetupType, sgStats);
+
+         bool enoughSamples = (sgStats.samples >= InpSmartGuardMinHardSamples);
+         bool hardBad = enoughSamples &&
+                        sgStats.expectancy <= InpSmartGuardHardExpectancy &&
+                        sgStats.winRate <= InpSmartGuardHardWinRate;
+         bool catastrophic = enoughSamples &&
+                             sgStats.expectancy <= (InpSmartGuardHardExpectancy * 2.0) &&
+                             sgStats.winRate <= MathMax(20.0, InpSmartGuardHardWinRate - 10.0);
+         bool strongRetest = SmartGuardStrongTrendRetest(signal, setupScore, combinedScore);
+         bool inactivityRelaxed = SmartGuardInactivityRelaxed();
+
+         if(catastrophic && !strongRetest && !inactivityRelaxed)
+         {
+            string sgMsg = StringFormat("SMART-GUARD HARD: %s B-grade blocked | combined %.1f | samples=%d W/L=%d/%d | decayed WR=%.0f%% exp=$%.0f | reason=statistically catastrophic. Re-enable: A-grade, HTF+momentum override >= %.1f, or inactivity relax after %d min.",
+                                        setupName, combinedScore, sgStats.samples, sgStats.wins, sgStats.losses,
+                                        sgStats.winRate, sgStats.expectancy, InpSmartGuardOverrideScore,
+                                        InpSmartGuardRelaxAfterMin);
+            Print("TRADE BLOCKED BECAUSE: ", sgMsg);
+            XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, sgMsg);
+            CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
+                               setupScore, combinedScore, "SG-HARD", signal);
+            UpdateDashboard(0, combinedScore, "SG-HARD");
+            lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "SG-HARD";
+            return;
+         }
+
+         if(!enoughSamples || hardBad || !strongRetest)
+         {
+            string mode = !enoughSamples ? "small-sample" : hardBad ? "negative-expectancy" : "B-grade-damage-class";
+            string relax = inactivityRelaxed ? " | inactivity relax active: hard veto downgraded to soft retest" : "";
+            string overrideTxt = strongRetest ? " | strong trend retest: HTF+momentum aligned" : "";
+            Print(StringFormat("SMART-GUARD SOFT: %s allowed at full risk (lot reductions removed v6.4.16) | mode=%s | combined %.1f | samples=%d W/L=%d/%d | decayed WR=%.0f%% exp=$%.0f%s%s",
+                               setupName, mode, combinedScore,
+                               sgStats.samples, sgStats.wins, sgStats.losses,
+                               sgStats.winRate, sgStats.expectancy, relax, overrideTxt));
+         }
+      }
+
+      if(InpSmartGuardRequireHTF && signal != 0 && !bQualityReportScout)
+      {
+         double confirmLot = 1.0;
+         string confirmWhy = "";
+         if(!AdaptiveXAUConfirm(signal, "SMART-GUARD", combinedScore, grade,
+                                confirmLot, confirmWhy, true))
+         {
+            string sgMsg = StringFormat("SMART-GUARD: %s blocked by adaptive fast confirmation for %s. %s",
+                                        setupName, signal == 1 ? "BUY" : "SELL", confirmWhy);
+            bool antiRepeatBlocks = XAU_AntiRepeatLossActive(signal);
+            if(antiRepeatBlocks)
+               sgMsg += StringFormat(" | ANTI_REPEAT_LOSS_GUARD: %d consecutive %s losses this session and price has not recovered since — hard block stands despite %s grade.",
+                                     g_sameDirLossStreak, signal==1?"BUY":"SELL", grade);
+            if(!antiRepeatBlocks && XAU_StructuralBypassAllowed() && XAU_StrongContextForSoftBypass(grade, combinedScore))
+            {
+               XAU_LogSoftBlockDowngrade("SMART_GUARD_FAST_CONFIRM", sgMsg,
+                                         setupName, grade, combinedScore);
+               g_adaptiveConfirmReason = "SMART-GUARD WARNING only: " + confirmWhy;
+            }
+            else
+            {
+            // v6.17.9 SYMMETRIC OPPORTUNITY RECHECK: the original candidate is
+            // dead. Before giving up on this whole cycle, ask whether the
+            // OPPOSITE direction has genuine, independently-scored evidence
+            // right now, using the same functions (ScoreSetups, the grade
+            // formula, StrategyFitsPersonality, AdaptiveXAUConfirm) every
+            // normal candidate goes through -- nothing is fabricated or
+            // bypassed. Runs at most once per cycle (the retry's own failure
+            // falls straight to the hard block below, no further recursion).
+            int oppSignalWanted = -signal;
+            bool oppDirForbidden =
+               (g_activeDirection == DIRECTION_NO_TRADE) ||
+               (g_activeDirection == DIRECTION_BUY_ONLY  && oppSignalWanted == -1) ||
+               (g_activeDirection == DIRECTION_SELL_ONLY && oppSignalWanted ==  1) ||
+               (g_activeDirection == DIRECTION_TRANSITION_WAIT &&
+                oppSignalWanted == g_htfConsensusDir && g_htfConsensusDir != 0);
+
+            string origBlocker = sgMsg;
+            bool oppRecheckTriggered = !oppDirForbidden;
+            bool oppCandidateFound = false;
+            string oppSetupName = ""; double oppScore = 0.0;
+            string oppGrade = ""; double oppCombined = 0.0;
+            string oppFinalDecision = "NONE"; string oppFinalBlocker = "";
+
+            if(oppRecheckTriggered)
+            {
+               int oppSignalFound = ScoreSetups(oppScore, oppSetupName, signal);
+               if(oppSignalFound == 0 || oppScore <= 0.0)
+               {
+                  oppFinalBlocker = "NO_OPPOSITE_SETUP: no setup produced a genuine " +
+                                    string(oppSignalWanted == 1 ? "BUY" : "SELL") +
+                                    " candidate with real evidence this cycle";
+               }
+               else
+               {
+                  oppCandidateFound = true;
+                  // v6.17.9 self-review fix: the SMC bonus/conflict-penalty/hard-block
+                  // check (SMC_GetScoreBonus/SMC_GetConflictPenalty) only ran ONCE for
+                  // the ORIGINAL direction, much earlier in this same scan cycle --
+                  // without this, the retry candidate would silently skip a genuine
+                  // hard structural conflict check entirely. Re-run it for the
+                  // opposite direction, same as the original candidate got.
+                  string oppSmcReason = "";
+                  double oppSmcBonus = SMC_GetScoreBonus(oppSignalFound, oppSmcReason);
+                  if(oppSmcBonus > 0.0) oppScore = MathMax(0.0, oppScore + oppSmcBonus);
+                  bool oppSmcHardBlock = false; string oppSmcConflictReason = "";
+                  double oppSmcPenalty = SMC_GetConflictPenalty(oppSignalFound, oppSmcHardBlock, oppSmcConflictReason);
+                  if(oppSmcPenalty > 0.0) oppScore = MathMax(0.0, oppScore - oppSmcPenalty);
+
+                  oppCombined = XAU_ComputeCombinedGradeForCandidate(oppSignalFound, oppSetupName, oppScore,
+                                                                     regimeQuality, sessionQuality, oppGrade);
+                  if(oppSmcHardBlock && oppGrade != "SKIP" && !XAU_StructuralBypassAllowed())
+                     oppGrade = "SKIP"; // same "hard structural conflict downgrades to SKIP" rule as the original candidate
+                  bool oppFits = StrategyFitsPersonality(oppSetupName, g_marketPersonality);
+                  if(oppSmcHardBlock && oppGrade == "SKIP")
+                     oppFinalBlocker = "OPPOSITE_SMC_HARD_CONFLICT: " + oppSmcConflictReason;
+                  else if(oppGrade == "SKIP")
+                     oppFinalBlocker = "OPPOSITE_GRADE_SKIP: combined score below grade floor (" +
+                                       DoubleToString(oppCombined, 2) + ")";
+                  else if(!oppFits && oppGrade != "A+" && oppGrade != "A")
+                     oppFinalBlocker = "OPPOSITE_PERSONALITY_MISMATCH: " + oppSetupName + " not ideal for " +
+                                       MarketPersonalityStr(g_marketPersonality) + " at grade " + oppGrade;
+                  else
+                  {
+                     double oppLot2 = 1.0; string oppWhy2 = "";
+                     if(!AdaptiveXAUConfirm(oppSignalFound, "SMART-GUARD", oppCombined, oppGrade,
+                                            oppLot2, oppWhy2, true))
+                        oppFinalBlocker = "OPPOSITE_SMART_GUARD: " + oppWhy2;
+                     else
+                     {
+                        // Opposite candidate is genuinely valid -- swap it in and
+                        // fall through to the rest of the pipeline (AI, memory,
+                        // news, risk reconciliation, OpenTrade) exactly as if it
+                        // had won ScoreSetups() originally. Never opens both
+                        // directions -- this REPLACES the dead candidate, it does
+                        // not add a second one.
+                        signal = oppSignalFound;
+                        setupName = oppSetupName;
+                        setupScore = oppScore;
+                        combinedScore = oppCombined;
+                        grade = oppGrade;
+                        confirmLot = oppLot2;      // keep the post-swap SMART-GUARD FAST CONFIRM log honest
+                        confirmWhy = oppWhy2;
+                        oppFinalDecision = "PROCEED";
+                     }
+                  }
+               }
+            }
+
+            string symMsg = StringFormat(
+               "SYMMETRIC_OPPORTUNITY_RECHECK | OriginalCandidateDirection=%s | OriginalBlocker=%s | "
+               "OppositeRecheckTriggered=%s | OppositeCandidateFound=%s | OppositeCandidateStrategy=%s | "
+               "OppositeCandidateScore=%.2f | OppositeFinalDecision=%s | OppositeFinalBlocker=%s",
+               oppSignalWanted == 1 ? "SELL(orig BUY)" : "BUY(orig SELL)", origBlocker,
+               oppRecheckTriggered ? "YES" : "NO", oppCandidateFound ? "YES" : "NO",
+               oppSetupName, oppCombined, oppFinalDecision,
+               StringLen(oppFinalBlocker) > 0 ? oppFinalBlocker : "n/a");
+            Print(symMsg);
+
+            if(oppFinalDecision == "PROCEED")
+            {
+               // Fall through -- do NOT return. The swapped signal/setupName/
+               // setupScore/combinedScore/grade now drive the rest of this
+               // function exactly like any normal candidate.
+            }
+            else
+            {
+               sgMsg += " | " + symMsg;
+               Print("TRADE BLOCKED BECAUSE: ", sgMsg);
+               XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, sgMsg);
+               CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
+                                  setupScore, combinedScore, "SG-FAST", signal);
+               UpdateDashboard(0, combinedScore, "SG-FAST");
+               lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "SG-FAST";
+               return;
+            }
+            }
+         }
+         if(confirmLot < 0.999)
+         {
+            // v6.4.20: lot reduction not applied (disabled v6.4.16). Log context only.
+            Print("SMART-GUARD FAST CONFIRM: allowed at full risk (lot reduction not applied v6.4.16) | ", confirmWhy);
+         }
+      }
+      else if(bQualityReportScout)
+      {
+         Print("SMART-GUARD FAST CONFIRM: bypassed only for REPORT-FIT B-SCOUT; risk remains capped by scout sizing. ",
+               g_adaptiveConfirmReason);
+      }
+
+      if(InpSmartGuardNoDamageStack && CountMyPositions() > 0)
+      {
+         string sgMsg = StringFormat("SMART-GUARD: %s blocked while another position is open. No fresh stacking on damage-prone setup.",
+                                     setupName);
+         Print("TRADE BLOCKED BECAUSE: ", sgMsg);
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, sgMsg);
+         CloudPostReasoning("BLOCK", sgMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "SG-STACK", signal);
+         UpdateDashboard(0, combinedScore, "SG-STACK");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "SG-STACK";
+         return;
+      }
+   }
+
+   // v5.4.0 — A+ NOW REQUIRES H1 TREND ALIGNMENT.
+   // Previously A+ was just "combinedScore >= 5.5" — which counter-trend
+   // mean-reversion setups can easily hit, leading to over-confident bets
+   // against the H1 trend. The user's biggest losses (-$14k, -$6k, -$5k
+   // pyramids) were exactly this pattern. New rule: A+ requires either
+   // (a) the signal direction matches H1 trend, OR
+   // (b) the setup is a trend-following type (TREND_PULLBACK, BREAKOUT,
+   //     SQUEEZE_RELEASE, ASIA_BREAKOUT) where H1 confirmation is already
+   //     baked into the score.
+   if(grade == "A+")
+   {
+      double h1Spread2 = (bufEMASlow_H1[1] > 0)
+                        ? (bufEMAFast_H1[1] - bufEMASlow_H1[1]) / bufEMASlow_H1[1] : 0;
+      int h1Dir = (h1Spread2 > 0.0015) ? 1 : (h1Spread2 < -0.0015 ? -1 : 0);
+      bool isTrendFollowingSetup = (lastSetupType == 1 || lastSetupType == 3
+                                    || lastSetupType == 4 || lastSetupType == 8);
+      bool htfAligned = (h1Dir == signal);
+      if(!htfAligned && !isTrendFollowingSetup)
+      {
+         // Demote to A — still a valid trade but loses the A+ size multiplier
+         // and stops triggering the AI cloud-veto (which is overconfident on
+         // counter-trend setups). Surface this clearly in logs.
+         Print("A+ DEMOTED → A: setup=", setupName,
+               " counter-trend without H1 alignment (h1Spread=",
+               DoubleToString(h1Spread2 * 100, 3), "% signal=",
+               signal == 1 ? "BUY" : "SELL", ")");
+         grade = "A";
+      }
+   }
+
+   if(signal == 0 || combinedScore < dynGradeB)
+   {
+      // v5.1.5: explicit "TRADE BLOCKED BECAUSE" log so user can SEE why
+      string blockReason = (signal == 0)
+         ? "no setup met regime criteria"
+         : StringFormat("combined %.1f < threshold %.1f%s (raw=%.1f rq=%.2f sq=%.2f) [mode=%s]",
+                        combinedScore, dynGradeB,
+                        (dynGradeB > effGradeB) ? " [tightened post-loss]" : "",
+                        combinedRaw, regimeQuality, sessionQuality, g_modeName);
+      Print("TRADE BLOCKED BECAUSE: ", blockReason,
+            " | Regime:", RegimeName(), " | Setup:", setupName,
+            " | Score:", DoubleToString(setupScore, 1));
+      // v5.1.5: push to cloud reasoning feed (throttled — only if reason changed
+      // OR enough time elapsed) so subscribers see why their copy account is idle.
+      if(blockReason != br_lastReason || (TimeCurrent() - br_lastReasonAt) >= br_minIntervalSec)
+      {
+         CloudPostReasoning("BLOCK", blockReason, RegimeName(), setupName,
+                            setupScore, combinedScore, grade, signal);
+         br_lastReason = blockReason; br_lastReasonAt = TimeCurrent();
+      }
+      UpdateDashboard(0, combinedScore, grade);
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = grade;
+      return;
+   }
+
+   double timingLotMult = 1.0;
+   string timingReason = "";
+   if(!XAUEntryTimingGuard(signal, setupName, setupScore, combinedScore,
+                           grade, timingLotMult, timingReason))
+   {
+      Print("TRADE BLOCKED BECAUSE: ", timingReason);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, timingReason);
+      CloudPostReasoning("BLOCK", timingReason, RegimeName(), setupName,
+                         setupScore, combinedScore, "BAD-TIMING", signal);
+      UpdateDashboard(0, combinedScore, "BAD-TIMING");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "BAD-TIMING";
+      return;
+   }
+   if(InpXAU_LogTimingGuard && StringLen(timingReason) > 0)
+      Print(timingReason);
+
+   // v5.8.5 — Global hedge guard.
+   // The old code allowed a fresh SELL while a BUY was still open (and vice versa)
+   // because it only checked total position count. That creates confused master
+   // exposure and can fan out mixed signals to cloud-linked accounts.
+   int openDir = GetOpenExposureDirection();
+   if(InpBlockNewEntriesIfHedged && openDir == 2)
+   {
+      string hedgeMsg = "HEDGE-GUARD: account already has BUY+SELL exposure. Managing existing trades only; no fresh entries.";
+      Print("TRADE BLOCKED BECAUSE: ", hedgeMsg);
+      CloudPostReasoning("BLOCK", hedgeMsg, RegimeName(), setupName,
+                         setupScore, combinedScore, "HEDGE-MIXED", signal);
+      UpdateDashboard(0, combinedScore, "HEDGE");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "HEDGE";
+      return;
+   }
+   if(InpOneDirectionOnly && openDir != 0 && openDir != signal)
+   {
+      string hedgeMsg = StringFormat("HEDGE-GUARD: open %s exists; blocking new %s until current exposure closes.",
+                                     openDir == 1 ? "BUY" : "SELL",
+                                     signal == 1 ? "BUY" : "SELL");
+      Print("TRADE BLOCKED BECAUSE: ", hedgeMsg);
+      CloudPostReasoning("BLOCK", hedgeMsg, RegimeName(), setupName,
+                         setupScore, combinedScore, "NO-HEDGE", signal);
+      UpdateDashboard(0, combinedScore, "NO-HEDGE");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "NO-HEDGE";
+      return;
+   }
+
+   Print("SIGNAL: ", setupName, " ", signal > 0 ? "BUY" : "SELL",
+         " | Regime:", RegimeName(), "(", DoubleToString(regimeQuality, 2), ")",
+         " | Session:", DoubleToString(sessionQuality, 2),
+         " | Score:", DoubleToString(setupScore, 1),
+         " | Combined:", DoubleToString(combinedScore, 1), " [", grade, "]");
 
    if(entryExecutionBlocked)
    {
-      if(alignedPrimaryDelayDue) g_alignedCandidates[0].firstCandidateTime = 0;
-      Print("OPERATIONAL ENTRY BLOCK: ", entryExecutionBlockReason);
-      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore,
-                                entryExecutionBlockReason);
+      string msg = "ANALYSIS-ONLY: " + entryExecutionBlockReason;
+      Print("TRADE BLOCKED BECAUSE: ", msg,
+            " | live signal still evaluated: ", setupName, " ",
+            signal > 0 ? "BUY" : "SELL",
+            " combined=", DoubleToString(combinedScore, 1),
+            " grade=", grade);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, msg);
+      CloudPostReasoning("BLOCK", msg, RegimeName(), setupName,
+                         setupScore, combinedScore, entryExecutionBlockGrade, signal);
+      UpdateDashboard(signal, combinedScore, entryExecutionBlockGrade);
+      lastDashSignal = signal; lastDashScore = combinedScore; lastDashGrade = entryExecutionBlockGrade;
       return;
    }
 
-   string structureWhy = "";
-   if(!XAU_StructureAuthorityAllows(signal, setupName, structureWhy))
+   string adaptiveNewsWhy = "";
+   if(spreadBlocksEntry && StringFind(spreadBlockReason, "NEWS_AFTERMATH") >= 0)
    {
-      if(alignedPrimaryDelayDue) g_alignedCandidates[0].firstCandidateTime = 0;
-      Print("STRUCTURE_AUTHORITY_BLOCK: ", structureWhy);
-      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore,
-                                structureWhy);
-      return;
+      string fastTrackWhy = "";
+      if(XAU_NewsAftermathCanFastTrack(signal, setupName, grade, combinedScore, fastTrackWhy))
+      {
+         spreadBlocksEntry = false;
+         spreadBlockReason = "";
+         g_newsAftermathUntil = TimeCurrent();
+         if(g_postNewsState == PNS_AFTERMATH)
+         {
+            g_postNewsState = PNS_DISCOVERY;
+            g_postNewsStateStart = TimeCurrent();
+         }
+         Print(fastTrackWhy, " | NEWS_AFTERMATH converted to POST_NEWS_CONFIRMATION instead of stale pause.");
+      }
+      else if(XAU_StructuralBypassAllowed() &&
+              StringFind(spreadBlockReason, "[NORMAL]") >= 0 &&
+              XAU_StrongContextForSoftBypass(grade, combinedScore))
+      {
+         double spreadRatioNow = (g_spreadEMA > 0.0) ? spread / g_spreadEMA : 99.0;
+         if(spreadRatioNow <= 1.35)
+         {
+            XAU_LogSoftBlockDowngrade("NEWS_AFTERMATH_NORMAL", spreadBlockReason,
+                                      setupName, grade, combinedScore);
+            spreadBlocksEntry = false;
+            spreadBlockReason = "";
+         }
+      }
    }
 
-   double alignedLotMulti = 1.0;
-   string freshnessWhy = "";
-   if(!XAU_FreshnessExtensionAuthority(signal, setupName, setupScore, combinedScore,
-                                       grade, alignedLotMulti, freshnessWhy))
+   if(!spreadBlocksEntry && !XAU_EvaluateAdaptiveNewsMomentumEntry(signal, setupName, grade, combinedScore, adaptiveNewsWhy))
    {
-      if(alignedPrimaryDelayDue) g_alignedCandidates[0].firstCandidateTime = 0;
-      Print(freshnessWhy);
-      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore,
-                                freshnessWhy);
+      g_gateBlocks_News++;
+      Print("TRADE BLOCKED BECAUSE: ", adaptiveNewsWhy,
+            " | live signal still evaluated: ", setupName, " ",
+            signal > 0 ? "BUY" : "SELL",
+            " combined=", DoubleToString(combinedScore, 1),
+            " grade=", grade);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, adaptiveNewsWhy);
+      CloudPostReasoning("BLOCK", adaptiveNewsWhy, RegimeName(), setupName,
+                         setupScore, combinedScore, "NEWS-MOMENTUM", signal);
+      UpdateDashboard(signal, combinedScore, "NEWS");
+      lastDashSignal = signal; lastDashScore = combinedScore; lastDashGrade = "NEWS";
       return;
    }
-
-   string timingWhy = "";
-   if(!XAU_TimingAuthorityAllows(signal, setupName, bufATR[1], timingWhy))
+   if(StringFind(adaptiveNewsWhy, "NEWS_ENTRY_ALLOWED") >= 0)
    {
-      Print("TIMING_AUTHORITY_WAIT: ",timingWhy);
-      return;
+      Print(adaptiveNewsWhy);
+      CloudPostReasoning("ALLOW", adaptiveNewsWhy, RegimeName(), setupName,
+                         setupScore, combinedScore, "NEWS-ENTRY", signal);
    }
 
-   if(spread > InpMaxSpread)
+   if(spreadBlocksEntry)
    {
-      if(alignedPrimaryDelayDue) g_alignedCandidates[0].firstCandidateTime = 0;
-      string wideSpread = StringFormat("EXTREME_SPREAD_BLOCK: %.0f > %d points",spread,InpMaxSpread);
-      Print(wideSpread);
-      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore,wideSpread);
+      // v6.3.8 Upgrade 6: gate analytics
+      if(StringFind(spreadBlockReason, "SPREAD_TOO_WIDE") >= 0) g_gateBlocks_Spread++;
+      else g_gateBlocks_News++; // NEWS_AFTERMATH and calendar blocks
+      Print("TRADE BLOCKED BECAUSE: ", spreadBlockReason,
+            " | live signal still evaluated: ", setupName, " ",
+            signal > 0 ? "BUY" : "SELL",
+            " combined=", DoubleToString(combinedScore, 1),
+            " grade=", grade);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, spreadBlockReason);
+      CloudPostReasoning("BLOCK", spreadBlockReason, RegimeName(), setupName,
+                         setupScore, combinedScore, "SPREAD", signal);
+      UpdateDashboard(signal, combinedScore, "SPREAD");
+      lastDashSignal = signal; lastDashScore = combinedScore; lastDashGrade = "SPREAD";
       return;
    }
 
-   string newsWhy = "";
-   if(!XAU_NewsAuthorityAllows(newsWhy))
+   // News check
+   if(InpUseNewsFilter && !IsNewsSafe())
    {
-      if(alignedPrimaryDelayDue) g_alignedCandidates[0].firstCandidateTime = 0;
-      Print("NEWS_AUTHORITY_BLOCK: ",newsWhy);
-      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore,newsWhy);
+      if(adaptivePostPhase)
+      {
+         Print("NEWS_OBSERVING: external/news API filter is advisory only during adaptive post-news interpretation; continuation gate decides after confirmation.");
+      }
+      else
+      {
+      g_gateBlocks_News++; // v6.3.8 Upgrade 6
+      Print("TRADE BLOCKED BECAUSE: NEWS FILTER (high-impact event nearby)");
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "NEWS FILTER (high-impact event nearby)");
+      CloudPostReasoning("BLOCK", "NEWS FILTER (high-impact event nearby)",
+                         RegimeName(), setupName, setupScore, combinedScore, "NEWS", signal);
+      UpdateDashboard(0, combinedScore, "NEWS");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "NEWS";
+      return;
+      }
+   }
+
+   // DXY CORRELATION GATE (cached, ~every 15 min)
+   if(InpUseDXYFilter)
+   {
+      int dxyBias = GetDXYBias();
+      if(dxyBias != 0 && dxyBias != signal)
+      {
+         string dxyMsg = StringFormat("DXY VETO — gold_bias=%s vs signal=%s",
+                                       dxyGoldBias, signal>0?"BUY":"SELL");
+         Print("TRADE BLOCKED BECAUSE: ", dxyMsg,
+               " (set InpUseDXYFilter=false to disable)");
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, dxyMsg);
+         CloudPostReasoning("BLOCK", dxyMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "DXY-VETO", signal);
+         UpdateDashboard(0, combinedScore, "DXY-VETO");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "DXY-VETO";
+         return;
+      }
+   }
+
+   // ============ STI GATE (v6.0 — Strategic Trend Intelligence) ============
+   // Runs AFTER all existing quality gates, BEFORE the reversal cooldown.
+   // STI is an additive intelligence layer: hard blocks only extreme cases,
+   // borderline risk = lot reduction. The bot stays aggressive on quality setups.
+   g_stiLotMulti = 1.0;  // reset each scan
+   if(InpSTI_Enable && signal != 0 && grade != "SKIP")
+   {
+      double stiM5ATR = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+      double stiTCP     = STI_ComputeTCP(signal);
+      double stiExhaust = STI_ComputeExhaustion(signal);
+      double stiLate    = STI_ComputeLateEntryRisk(signal, stiM5ATR);
+
+      if(InpSTI_Log)
+         PrintFormat("STI SCAN | %s %s | TCP=%.0f Exhaust=%.0f LateRisk=%.0f | macroDir=%s macro%.0f%%",
+                     signal==1?"BUY":"SELL", setupName,
+                     stiTCP, stiExhaust, stiLate,
+                     g_sti.macroDir==1?"BULL":g_sti.macroDir==-1?"BEAR":"NEUTRAL",
+                     g_sti.macroStrength*100.0);
+
+      // --- 1. LATE ENTRY HARD BLOCK (extreme: move has run without reset) ---
+      if(stiLate >= InpSTI_LateEntryBlockScore)
+      {
+         g_gateBlocks_STI++; // v6.3.8 Upgrade 6
+         string stiMsg = StringFormat("STI_LATE_BLOCK | %s %s | lateRisk=%.0f >= %.0f (tcp=%.0f exhaust=%.0f) | trend moved too far without reset — wait for pullback",
+                                      signal==1?"BUY":"SELL", setupName,
+                                      stiLate, InpSTI_LateEntryBlockScore, stiTCP, stiExhaust);
+         Print("TRADE BLOCKED BECAUSE: ", stiMsg);
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, stiMsg);
+         CloudPostReasoning("BLOCK", stiMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "STI-LATE", signal);
+         UpdateDashboard(0, combinedScore, "STI-LATE");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "STI-LATE";
+         return;
+      }
+
+      // --- 2. EXHAUSTION HARD BLOCK (multiple signals confirm trend nearing end) ---
+      if(stiExhaust >= InpSTI_ExhaustionBlock && stiTCP < 60.0)
+      {
+         g_gateBlocks_STI++; // v6.3.8 Upgrade 6
+         string stiMsg = StringFormat("STI_EXHAUST_BLOCK | %s %s | exhaust=%.0f >= %.0f AND tcp=%.0f < 60 | RSI divergence + ATR contraction confirm trend fatigue",
+                                      signal==1?"BUY":"SELL", setupName,
+                                      stiExhaust, InpSTI_ExhaustionBlock, stiTCP);
+         Print("TRADE BLOCKED BECAUSE: ", stiMsg);
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, stiMsg);
+         CloudPostReasoning("BLOCK", stiMsg, RegimeName(), setupName,
+                            setupScore, combinedScore, "STI-EXHAUST", signal);
+         UpdateDashboard(0, combinedScore, "STI-EXHAUST");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "STI-EXHAUST";
+         return;
+      }
+
+      // --- 3. RE-ENTRY GATE (after TP, require clean pullback before same-dir re-entry) ---
+      if(InpSTI_BlockLateReentry &&
+         g_sti.lastProfitDir == signal && g_sti.lastProfitClose > 0 && !g_sti.pullbackReady)
+      {
+         int waitedMin = (int)((TimeCurrent() - g_sti.lastProfitClose) / 60);
+         bool inWindow = (waitedMin < InpSTI_ReentryMaxWindowMin);
+         if(inWindow && waitedMin >= 0)
+         {
+            g_gateBlocks_STI++; // v6.3.8 Upgrade 6
+            string stiMsg = StringFormat("STI_REENTRY_WAIT | %s %s | last TP at %.2f (%d min ago) | no %.2f ATR pullback yet | chasing same dir before reset is the pattern that lost money",
+                                         signal==1?"BUY":"SELL", setupName,
+                                         g_sti.lastProfitPrice, waitedMin,
+                                         InpSTI_ReentryPullbackATR);
+            bool antiRepeatBlocksSTI = XAU_AntiRepeatLossActive(signal);
+            if(antiRepeatBlocksSTI)
+               stiMsg += StringFormat(" | ANTI_REPEAT_LOSS_GUARD: %d consecutive %s losses this session and price has not recovered since — hard block stands despite %s grade.",
+                                     g_sameDirLossStreak, signal==1?"BUY":"SELL", grade);
+            if(!antiRepeatBlocksSTI && XAU_StructuralBypassAllowed() && XAU_StrongContextForSoftBypass(grade, combinedScore))
+            {
+               XAU_LogSoftBlockDowngrade("STI_REENTRY_WAIT", stiMsg,
+                                         setupName, grade, combinedScore);
+            }
+            else
+            {
+            Print("TRADE BLOCKED BECAUSE: ", stiMsg);
+            XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, stiMsg);
+            CloudPostReasoning("BLOCK", stiMsg, RegimeName(), setupName,
+                               setupScore, combinedScore, "STI-WAIT", signal);
+            UpdateDashboard(0, combinedScore, "STI-WAIT");
+            lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "STI-WAIT";
+            return;
+            }
+         }
+      }
+
+      // --- 4. QUALITY EVIDENCE (never changes approved normal-trade risk) ---
+      if(stiLate >= InpSTI_LateEntryReduceScore)
+      {
+         g_stiLotMulti = 0.65;
+         if(InpSTI_Log)
+            PrintFormat("STI_LATE_QUALITY | %s lateRisk=%.0f | legacyQualityMult=%.2f | approved risk remains binary/full",
+                        setupName, stiLate, g_stiLotMulti);
+      }
+      else if(stiExhaust >= InpSTI_ExhaustionReduce && stiTCP < 75.0)
+      {
+         g_stiLotMulti = 0.75;
+         if(InpSTI_Log)
+            PrintFormat("STI_EXHAUST_QUALITY | %s exhaust=%.0f tcp=%.0f | legacyQualityMult=%.2f | approved risk remains binary/full",
+                        setupName, stiExhaust, stiTCP, g_stiLotMulti);
+      }
+   }
+   // ============ END STI GATE ============
+
+   // Anti-reversal (short cooldown for direction flip)
+   if(!XAU_NoLimitTradingModeActive() && lastTradeDir != 0 && signal != lastTradeDir && lastTradeClose > 0 &&
+      TimeCurrent() - lastTradeClose < InpReversalCooldown)
+   {
+      int rem = (int)(InpReversalCooldown - (TimeCurrent() - lastTradeClose));
+      string revMsg = StringFormat("ANTI-REVERSAL cooldown (%ds left, flipping %s→%s)",
+                                    rem, lastTradeDir>0?"BUY":"SELL", signal>0?"BUY":"SELL");
+      Print("TRADE BLOCKED BECAUSE: ", revMsg);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, revMsg);
+      CloudPostReasoning("BLOCK", revMsg, RegimeName(), setupName,
+                         setupScore, combinedScore, "REV-CD", signal);
+      UpdateDashboard(0, combinedScore, "REV-CD");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "REV-CD";
       return;
    }
 
-   string finalArbiterWhy = "";
-   if(!XAU_FinalEntryArbiter("PRIMARY",true,true,true,true,true,true,finalArbiterWhy))
+   // v6.1.3 — BASKET DIRECTION LOSS BLOCK
+   // If existing same-direction trades are already in a net loss > threshold, do not add more.
+   // Prevents stacking sells into a rising gold market that is already burning the basket.
+   {
+      string bdlReason = "";
+      if(BasketDirectionLossBlock(signal, bdlReason))
+      {
+         g_gateBlocks_Basket++; // v6.3.8 Upgrade 6
+         Print("TRADE BLOCKED BECAUSE: ", bdlReason);
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, bdlReason);
+         CloudPostReasoning("BLOCK", bdlReason, RegimeName(), setupName,
+                            setupScore, combinedScore, "BASKET-DIR-LOSS", signal);
+         UpdateDashboard(0, combinedScore, "BASKET-LOSS");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "BASKET-LOSS";
+         return;
+      }
+   }
+
+   // DIRECTION LOCKOUT — if this side has been losing repeatedly, skip it
+   if(IsDirectionLocked(signal))
+   {
+      datetime until = (signal == 1) ? buyLockoutUntil : sellLockoutUntil;
+      string locMsg = StringFormat("DIR-LOCK — %s side locked until %s due to recent losses",
+                                    signal == 1 ? "BUY" : "SELL",
+                                    TimeToString(until, TIME_SECONDS));
+      Print("TRADE BLOCKED BECAUSE: ", locMsg);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, locMsg);
+      CloudPostReasoning("BLOCK", locMsg, RegimeName(), setupName,
+                         setupScore, combinedScore,
+                         signal == 1 ? "BUY-LOCKED" : "SELL-LOCKED", signal);
+      UpdateDashboard(0, combinedScore, signal == 1 ? "BUY-LOCKED" : "SELL-LOCKED");
+      lastDashSignal = 0; lastDashScore = combinedScore;
+      lastDashGrade = signal == 1 ? "BUY-LOCKED" : "SELL-LOCKED";
       return;
+   }
 
-   // AI, personality, memory, session and regime remain observable context.
-   // Missing/low-confidence AI is neutral and cannot veto or resize a trade.
-   // AI SKIP cannot veto; it is preserved only as telemetry for later review.
-   g_aiLastVerdict = "NEUTRAL";
-   lastAIConfidence = 0;
-   PrintFormat("AI_TELEMETRY_ONLY | AI_MISSING_NEUTRAL: verdict=%s confidence=%d candidate=%s %s",
-               g_aiLastVerdict,lastAIConfidence,setupName,signal==1?"BUY":"SELL");
+   // Build exact signature for ML lookup + hive + journal
+   string signature = BuildSignature(signal, setupName);
 
+   // v6.4.4: ADAPTIVE RECOVERY GATE — only A/A+ allowed after daily loss threshold
+   if(g_adaptiveRecoveryMode && grade != "A+" && grade != "A")
+   {
+      string recMsg = StringFormat("ADAPTIVE_RECOVERY: %s grade blocked — A/A+ only when daily loss threshold active; "
+                                   "resumes after profitable trade or equity recovery", grade);
+      Print("TRADE BLOCKED BECAUSE: ", recMsg);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, recMsg);
+      UpdateDashboard(0, combinedScore, "RECOVERY-GATE");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "RECOVERY-GATE";
+      return;
+   }
+
+   // ============ GATE 4: RISK SIZING ============
+   // v4.9.3 — Bigger lots scale with signal strength
+   double sizeMulti = grade == "A+" ? 1.10 : grade == "A" ? 0.85 : 0.45;
+   // June 17-18 reconstruction: a MEDIUM-tier Active Direction flip (tactical
+   // countertrend trade, opposite of the still-live HTF bias) is a deliberate
+   // structural risk reduction, not a "soft" quality reducer — fold it into
+   // the grade baseline itself so the A+/A enforcement floor below has
+   // nothing to restore against. STRONG-tier and BOTH_ALLOWED leave this at
+   // 1.0 (full grade size, normal trading).
+   sizeMulti *= g_activeDirectionSizeMult;
+
+   // v6.4.16: REMOVED — recovery mode no longer reduces lot size.
+   // The B-grade quality gate above (ADAPTIVE_RECOVERY: blocks B-grade) handles selectivity.
+   // A/A+ trades that pass that gate trade at FULL account-mode size.
+   // if(g_adaptiveRecoveryMode) { sizeMulti *= 0.50; } ← REMOVED
+   int    confidenceBoostPP = 0;   // in percentage points, informational
+
+   // v6.4.18 — TRUE A/A+ FULL SIZE ENFORCEMENT
+   // Any soft reducer (timing, AI, memory, STI, committee) may BLOCK a trade by returning.
+   // But for A+/A they must NOT reduce lot — only skip or allow.
+   // This enforcement floor is applied AFTER all soft modules run, restoring sizeMulti to
+   // the grade baseline if soft code tried to shrink it.
+   bool   highGradeFullSize      = (grade == "A+" || grade == "A");
+   double originalGradeSizeMulti = sizeMulti;  // 1.10 (A+) or 0.85 (A) or 0.45 (B)
+
+   // Audit capture — each soft module records what it attempted
+   double lta_volCap      = 1.0;   // Vol cap (ScanSignals) — already bypassed for A+/A in v6.4.17
+   double lta_timing      = 1.0;   // timingLotMult
+   double lta_confirm     = 1.0;   // g_adaptiveConfirmLotMulti
+   double lta_ai          = 1.0;   // AI Director composite (sizeMulti delta)
+   double lta_brain       = 1.0;   // TradeBrain lot mult
+   double lta_conscious   = 1.0;   // Memory lot mult
+   double lta_sti         = 1.0;   // g_stiLotMulti (captured just before finalSzMult)
+   double lta_committee   = 1.0;   // committeeSzMult (captured just before finalSzMult)
+   string lta_aiVerdict   = "NOT_CALLED";
+
+   // v6.4.6: VOLATILITY LOT CAP — B-grade only from v6.4.17.
+   // A+/A: their SL is already wider during ATR spikes, which naturally reduces rawLots
+   // via the risk formula (riskAmount / slDollarPerLot). Adding a separate lot cap on top
+   // double-penalises high-grade trades and compounds with Asia session cut → micro-lots.
+   bool highGradeForVolCap = (grade == "A+" || grade == "A");
+   if(InpVolLotCapEnable && ArraySize(bufATR) >= 2 && bufATR[1] > 0)
+   {
+      double curATR_vol = bufATR[1];
+      double medATR = GetATR20Median();
+      if(medATR > 0 && curATR_vol > medATR * InpVolLotCapATRRatio)
+      {
+         if(highGradeForVolCap)
+         {
+            // v6.4.17: hard bypass — A+/A lot cap skipped
+            PrintFormat("[LOT_TRACE] VOL_LOT_CAP bypassed | grade=%s | ATR=%.1f (%.1fx median) | A/A+ hard-bypass: SL expansion already limits dollar risk",
+                        grade, curATR_vol, curATR_vol/medATR);
+         }
+         else
+         {
+            double volLotAdj;
+            if(curATR_vol >= medATR * 2.5)      volLotAdj = 0.45;
+            else if(curATR_vol >= medATR * 2.0) volLotAdj = 0.55;
+            else                                 volLotAdj = 0.65;
+            sizeMulti *= volLotAdj;
+            PrintFormat("VOL_QUALITY_SIGNAL: ATR %.1f is %.1fx 20-bar median %.1f | legacyQualityMult=%.2f (grade=%s) | approved risk remains binary/full",
+                        curATR_vol, curATR_vol/medATR, medATR, volLotAdj, grade);
+         }
+      }
+   }
+
+   lta_timing = timingLotMult;   // capture for audit (enforcement floor handles A+/A below)
+   if(timingLotMult < 0.999)
+   {
+      sizeMulti *= timingLotMult;
+      Print("ENTRY-TIMING QUALITY: legacyQualityMult=", DoubleToString(timingLotMult, 2),
+            " | finalGrade=", grade, " | ", timingReason,
+            " | approved risk remains binary/full");
+   }
+
+   lta_confirm = g_adaptiveConfirmLotMulti;   // capture before reset
+   if(g_adaptiveConfirmLotMulti < 0.999)
+   {
+      sizeMulti *= g_adaptiveConfirmLotMulti;
+      Print("ADAPTIVE-CONFIRM QUALITY: legacyQualityMult=",
+            DoubleToString(g_adaptiveConfirmLotMulti, 2), " | ",
+            g_adaptiveConfirmReason,
+            " | approved risk remains binary/full");
+      g_adaptiveConfirmLotMulti = 1.0;
+   }
+
+   // v6.4.16: REMOVED — SmartGuard damage-pattern lot reduction disabled.
+   // smartDamageSetup hard-veto (SMART-GUARD HARD block above) still prevents genuinely
+   // dangerous setups from trading at all. The lot reduction (defensive partial sizing)
+   // is removed: once a setup clears the SmartGuard hard-veto, it trades at full size.
+   // if(smartDamageSetup) { sizeMulti *= InpSmartGuardDamageLotMulti; } ← REMOVED
+
+   // ----- LOCAL ML (hierarchical signature match, mirrors hive) -----
+   if(InpLearnPatterns && patternCount >= 5)
+   {
+      int mlSamples = 0;
+      double mlRaw = GetMLScoreWithSamples(signal, signature, mlSamples);
+      double mlScore = SmoothedMLScore(mlRaw, signature);   // v5.8.6 — smooth only inside the same setup/direction signature
+      bool mlTrusted = (mlSamples >= InpMLMinTrustedSamples);
+      if(!mlTrusted)
+         Print("LOCAL ML: learning mode — ", mlSamples, "/", InpMLMinTrustedSamples,
+               " matching samples, no authority yet");
+      else
+         Print("LOCAL ML AUDIT: samples=", mlSamples,
+               " wr=", DoubleToString(mlRaw * 100.0, 0),
+               "% smoothed=", DoubleToString(mlScore * 100.0, 0), "%");
+      if(mlTrusted && mlScore <= 0.30)
+      {
+         Print("TRADE BLOCKED BECAUSE: LOCAL ML VETO — WR=", DoubleToString(mlScore * 100, 0),
+               "% (", mlSamples, " matching samples)");
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "LOCAL ML VETO");
+         UpdateDashboard(0, combinedScore, "ML-VETO");
+         lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "ML-VETO";
+         return;
+      }
+      if(mlTrusted && mlScore >= 0.60)
+      {
+         Print("LOCAL ML BOOST: WR=", DoubleToString(mlScore * 100, 0), "% samples=", mlSamples);
+         sizeMulti += 0.15; confidenceBoostPP += 8;
+      }
+   }
+
+   // ----- GLOBAL HIVE-MIND (7-day, all users, same signature) -----
+   int hive = GetHiveVerdict(signature);
+   if(hive == -1)
+   {
+      Print("TRADE BLOCKED BECAUSE: HIVE VETO — signature ", signature,
+            " has WR ≤ 30% globally over last 7 days");
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "HIVE VETO");
+      UpdateDashboard(0, combinedScore, "HIVE-VETO");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "HIVE-VETO";
+      return;
+   }
+   if(hive == 1)
+   { Print("HIVE BOOST: signature ", signature, " has WR >= 60% globally (+8pp)");
+     sizeMulti += 0.15; confidenceBoostPP += 8; }
+
+   // ============ GATE 5: AI DIRECTOR (v6.3.0) ============
+   // The AI Director sits above all strategies. Strategies submitted signals.
+   // AI Director reviews full market context and decides: ALLOW/BLOCK/REDUCE/INCREASE.
+   // Hard safety rules (max loss, margin, DD) still sit above AI Director.
+   //
+   // Called for: ALL grades (A+, A, B) when InpAIDirectorAllGrades=true; A+ only otherwise.
+   // Authority: real veto and lot control (not advisory) when InpAIAdvisoryOnly=false.
+   bool callAI = InpUseAI && StringLen(InpServerURL) >= 10 && !InpBacktestMode && InpAIMode != AI_OFF;
+   bool gradeQualifiesForAI = (InpAIDirectorAllGrades)
+                               ? (grade == "A+" || grade == "A" || grade == "B")
+                               : (grade == "A+");
+   double szBeforeAI = sizeMulti;   // checkpoint to compute AI net multiplier
+   if(callAI && gradeQualifiesForAI)
+   {
+      // --- Check AI offline state ---
+      if(g_aiOffline && !InpAIOfflineSafeMode)
+      {
+         // User chose: if AI is offline AND safe mode is off, trade normally (no AI)
+         Print("AI DIRECTOR OFFLINE — trading without AI oversight (safe mode disabled)");
+      }
+      else if(g_aiOffline && InpAIOfflineSafeMode)
+      {
+         // AI is advisory-only. An outage cannot silently de-risk an otherwise
+         // approved normal trade; deterministic gates still decide PASS/BLOCK.
+         Print("AI DIRECTOR OFFLINE — ADVISORY FALLBACK: local deterministic rules continue; approved normal risk unchanged. Fails=", g_aiTransportFails);
+      }
+      else
+      {
+         // AI is online — call AI Director
+         string h1DirStr = (bufEMAFast_H1[1] > bufEMASlow_H1[1]) ? "BULL" : "BEAR";
+         int aiResult = GetAIAnalysis(
+            bufEMAFast[1], bufEMASlow[1], bufRSI[1], bufATR[1],
+            iClose(Symbol(), PERIOD_M5, 1),
+            h1DirStr, spread,
+            setupName, RegimeName(), signature,
+            ArraySize(bufStochK) >= 2 ? bufStochK[1] : 50.0,
+            iClose(Symbol(), PERIOD_M5, 1) - iClose(Symbol(), PERIOD_M5, 5),
+            grade, setupScore, combinedScore);
+
+         // --- AI Director decision log ---
+         string aiVerdictStr = "UNKNOWN";
+         string aiDirStr = (aiResult == 1) ? "BUY" : (aiResult == -1) ? "SELL" : "SKIP";
+         bool aiConfirms    = (aiResult == signal);
+         bool aiDisagrees   = (aiResult != 0 && aiResult != signal);
+         // aiUnavailable: server returned 200 but no parseable action AND no skip_if/confidence
+         // (true no-response). If AI said SKIP with confidence or skip_if text, it's a real SKIP.
+         bool aiUnavailable = (aiResult == 0 && lastAIConfidence == 0 && StringLen(lastAISkipIf) == 0);
+         string aiDisplayVerdict = aiUnavailable ? g_aiLastStatus : aiDirStr;
+
+         Print("══════════════════ AI DIRECTOR ══════════════════");
+         Print("Signal: ", setupName, " ", signal > 0 ? "BUY" : "SELL",
+               " | Grade: ", grade, " | Score: ", DoubleToString(combinedScore, 1));
+         Print("HTF Consensus: ", (g_htfConsensusDir == 1) ? "BULL" :
+                                  (g_htfConsensusDir == -1) ? "BEAR" : "NEUTRAL",
+               " | Regime: ", RegimeName(),
+               " | RSI: ", DoubleToString(bufRSI[1], 1));
+         Print("AI Server: ", (g_aiTransportFails == 0) ? "CONNECTED" : "DEGRADED",
+               " | Provider: Claude+GPT dual | Fails: ", g_aiTransportFails,
+               " (consecutive AI decision failures only)");
+         Print("Claude Vote: ", g_aiClaudeVote, " | GPT Vote: ", g_aiGPTVote);
+         Print("AI Verdict: ", aiDisplayVerdict, " | Confidence: ", lastAIConfidence, "%");
+         Print("AI status: ", g_aiLastStatus,
+               StringLen(g_aiLastFailureReason) > 0 ? " | " + g_aiLastFailureReason : "");
+         if(StringLen(currentTradeThesis) > 0)
+            Print("AI Thesis: ", StringSubstr(currentTradeThesis, 0, 150));
+         if(StringLen(lastAIBearishCase) > 0)
+            Print("AI Risk: ", StringSubstr(lastAIBearishCase, 0, 120));
+
+         // --- Apply AI Director authority ---
+         // v6.17.11: XAU_AIIsAdvisoryOnly() is now unconditionally true (AI can
+         // never have veto authority, see that function's own comment) -- the
+         // generic short-circuit branch that used to sit here has been removed
+         // so the specific branches below run instead. Every one of them has
+         // already been converted to advisory-only (log + at most a mild lot
+         // reduction, never return/block) -- they're richer and more useful
+         // than a blanket "ADVISORY" no-op (they show HTF-override context,
+         // disagreement strength, confidence-based sizing, etc.) while being
+         // exactly as safe: none of them can stop OpenTrade from being reached.
+         if(aiUnavailable)
+         {
+            // No usable AI decision. This is explicit now: budget guard, provider timeout/error,
+            // invalid AI response, cache-only, or provider unavailable. Local rules continue.
+            aiVerdictStr = g_aiLastStatus;
+            Print("AI DIRECTOR: ", g_aiLastStatus, " — local rules continue at standard size");
+            g_aiLastVerdict = g_aiLastStatus; g_aiLastConfidence = 0;
+         }
+         else if(aiDisagrees)
+         {
+            // v6.3.1 FIX: AI disagreement only BLOCKS when it has enough conviction.
+            // A 51% AI should not kill a setup that passed every structural gate.
+            // HTF consensus is a hard rule-based structural signal — weak AI never overrides it.
+            bool htfConsensusTrade = (g_htfConsensusDir == 1 && signal == 1) ||
+                                     (g_htfConsensusDir == -1 && signal == -1);
+            if(htfConsensusTrade)
+            {
+               if(highGradeFullSize)
+               {
+                  // v6.17.11: AI ADVISORY-ONLY ARCHITECTURE. This branch used to hard-
+                  // block (return;) unless XAU_ModeAllowsSoftBlockWarning() was true.
+                  // Per explicit requirement, AI must NEVER have final veto authority,
+                  // in ANY mode -- the warn-only behavior below (already tested, already
+                  // shipped) is now unconditional. The deterministic engine's own gates
+                  // (SmartGuard, structure, risk) remain the only things that can block.
+                  string blockMsg = StringFormat("[A+/A QUALITY GATE] %s grade=%s: AI=HTF-OVERRIDE conf=%d%% — AI disagrees even with HTF support (advisory only, not blocking).",
+                                                 setupName, grade, lastAIConfidence);
+                  aiVerdictStr = "HTF-OVERRIDE-WARN";
+                  XAU_LogSoftBlockDowngrade("AI_HTF_OVERRIDE", blockMsg, setupName, grade, combinedScore);
+                  g_aiLastVerdict = "HTF-OVERRIDE-WARN"; g_aiLastConfidence = lastAIConfidence;
+                  Print("AI DIRECTOR: ADVISORY — HTF consensus confirmed; AI disagreement logged, not blocking.");
+               }
+               else
+               {
+                  // B-grade: HTF consensus overrides weak AI disagreement — reduce lot, never block
+                  aiVerdictStr = "HTF-OVERRIDE";
+                  Print("AI DIRECTOR: HTF-CONSENSUS OVERRIDE — AI disagrees (", lastAIConfidence,
+                        "%) but HTF structure confirmed ", signal > 0 ? "BUY" : "SELL",
+                        " | advisory only; approved normal risk unchanged");
+                  g_aiLastVerdict = "HTF-OVERRIDE"; g_aiLastConfidence = lastAIConfidence;
+               }
+            }
+            else if(CalibratedConfidence(lastAIConfidence) < InpAIDirectorMinConf) // v6.4.0: calibrated
+            {
+               if(highGradeFullSize)
+               {
+                  // v6.4.20: A+/A quality gate — weak disagree reduction would be overridden by floor.
+                  // Block instead: if AI weakly disagrees, this high-grade entry is not firmly confirmed.
+                  // v6.17.11: AI advisory-only, unconditional (see note above).
+                  string blockMsg = StringFormat("[A+/A QUALITY GATE] %s grade=%s: AI=WEAK-DISAGREE conf=%d%% (calibrated=%.1f%% < min %.0f%%) — weak AI opposition logged (advisory only, not blocking).",
+                                                 setupName, grade, lastAIConfidence,
+                                                 CalibratedConfidence(lastAIConfidence), InpAIDirectorMinConf);
+                  aiVerdictStr = "WEAK-DISAGREE-WARN";
+                  XAU_LogSoftBlockDowngrade("AI_WEAK_DISAGREE", blockMsg, setupName, grade, combinedScore);
+                  g_aiLastVerdict = "WEAK-DISAGREE-WARN"; g_aiLastConfidence = lastAIConfidence;
+                  Print("AI DIRECTOR: ADVISORY — weak AI disagreement logged, not blocking.");
+               }
+               else
+               {
+                  // B-grade: AI disagrees but with weak conviction — reduce only in SAFE, warning in growth modes
+                  aiVerdictStr = "WEAK-DISAGREE";
+                  Print("AI DIRECTOR: WEAK-DISAGREE (conf=", lastAIConfidence, "% calibrated=",
+                        DoubleToString(CalibratedConfidence(lastAIConfidence), 1), "% < min ",
+                        InpAIDirectorMinConf, "%) — advisory only; approved normal risk unchanged");
+                  g_aiLastVerdict = "WEAK-DISAGREE"; g_aiLastConfidence = lastAIConfidence;
+               }
+            }
+            else
+            {
+               // v6.17.11: AI disagrees with real conviction. Previously an
+               // unconditional hard veto -- now advisory-only, matching every
+               // other AI path in this gate: log the disagreement, never
+               // reduce or block the deterministic normal decision.
+               aiVerdictStr = "STRONG-DISAGREE-WARN";
+               string blockMsg = StringFormat(
+                  "AI DIRECTOR ADVISORY: AI says %s (conf %d%%), strategy says %s. Confident disagreement logged; approved normal risk unchanged.",
+                  aiDirStr, lastAIConfidence, signal > 0 ? "BUY" : "SELL");
+               Print("AI DIRECTOR: ", blockMsg);
+               XAU_LogSoftBlockDowngrade("AI_STRONG_DISAGREE", blockMsg, setupName, grade, combinedScore);
+               g_aiLastVerdict = "STRONG-DISAGREE-WARN"; g_aiLastConfidence = lastAIConfidence;
+            }
+         }
+         else if(aiResult == 0)
+         {
+            // AI says SKIP — block if calibrated confidence below minimum, else reduce size
+            if(CalibratedConfidence(lastAIConfidence) < InpAIDirectorMinConf && lastAIConfidence > 0) // v6.4.0: calibrated
+            {
+               aiVerdictStr = "BLOCK";
+               string blockMsg = StringFormat(
+                  "AI DIRECTOR BLOCK: AI SKIP with confidence %d%% < min %.0f%%. Trade blocked.",
+                  lastAIConfidence, InpAIDirectorMinConf);
+               // v6.17.11: AI advisory-only, unconditional. The ANTI_REPEAT_LOSS_GUARD
+               // text is preserved for context (it's real, deterministic anti-repeat
+               // loss state, not an AI decision), but nothing here can block anymore --
+               // that guard's own dedicated hard-block check runs independently
+               // elsewhere in this pipeline if it actually needs to stop a trade.
+               bool antiRepeatBlocksAI = XAU_AntiRepeatLossActive(signal);
+               if(antiRepeatBlocksAI)
+                  blockMsg += StringFormat(" | (ANTI_REPEAT_LOSS_GUARD noted: %d consecutive %s losses this session)",
+                                          g_sameDirLossStreak, signal==1?"BUY":"SELL");
+               aiVerdictStr = "LOW-CONF-SKIP-WARN";
+               XAU_LogSoftBlockDowngrade("AI_LOW_CONF_SKIP", blockMsg, setupName, grade, combinedScore);
+               g_aiLastVerdict = "LOW-CONF-SKIP-WARN"; g_aiLastConfidence = lastAIConfidence;
+               Print("AI DIRECTOR: ADVISORY LOW-CONF — local structure continues; no hard block.");
+            }
+            if(highGradeFullSize)
+            {
+               // v6.4.20: A+/A quality gate — AI said SKIP with no parseable confidence.
+               // Cannot trade A+/A without AI direction; block to preserve signal quality.
+               // v6.17.11: AI advisory-only, unconditional.
+               string blockMsg = StringFormat("[A+/A QUALITY GATE] %s grade=%s: AI=REDUCE (SKIP/no-confidence) — AI provides no usable direction for this A+/A entry (advisory only, not blocking).",
+                                              setupName, grade);
+               aiVerdictStr = "NO-CONF-SKIP-WARN";
+               XAU_LogSoftBlockDowngrade("AI_NO_CONF_SKIP", blockMsg, setupName, grade, combinedScore);
+               g_aiLastVerdict = "NO-CONF-SKIP-WARN"; g_aiLastConfidence = lastAIConfidence;
+               Print("AI DIRECTOR: ADVISORY — no-confidence AI skip logged, not blocking.");
+            }
+            // v6.5.0 (audit bug #8): backend now returns confidence=0 specifically
+            // when NO provider actually answered (unavailable/error/budget-skip) —
+            // that's not an AI opinion, it's a missing one, and previously got the
+            // same lot-halving treatment as a genuine (if modest) confidence=50
+            // dual-SKIP verdict. 88 hard vetoes fired in one day off this exact
+            // fallback constant before the backend fix; this is the matching EA
+            // side — don't penalize lot size for an AI that never weighed in.
+            if(lastAIConfidence >= InpAIDirectorMinConf)
+            {
+               // v6.7.0 ADAPTIVE ENTRY ARBITER (audit item #4): B-grade previously
+               // only ever got sized down on an AI SKIP, never blocked, no matter
+               // how confidently the AI disagreed — the weakest-quality tier had
+               // the least real AI authority over it. A confidently-skipped
+               // B-grade (AI's own skip conviction clears the same bar used to
+               // hard-veto A+/A trades) is genuinely poor confluence; block it
+               // like any other confident AI disagreement, respecting the same
+               // soft-block-warning mode every other AI block already respects.
+               // v6.17.11: AI advisory-only, unconditional.
+               string blockMsgB = StringFormat("[AI-CONFIDENT-SKIP] %s grade=B: AI skip confidence=%d%% >= min %.0f%% — AI is confident this setup is weak (advisory only, not blocking).",
+                                                setupName, lastAIConfidence, InpAIDirectorMinConf);
+               aiVerdictStr = "B-CONFIDENT-SKIP-WARN";
+               XAU_LogSoftBlockDowngrade("AI_B_CONFIDENT_SKIP", blockMsgB, setupName, grade, combinedScore);
+               g_aiLastVerdict = "B-CONFIDENT-SKIP-WARN"; g_aiLastConfidence = lastAIConfidence;
+               Print("AI DIRECTOR: ADVISORY — confident B-grade skip logged (sizeMulti informational only, lot size NOT reduced -- v6.21.2 binary risk mode), not blocking.");
+            }
+            else if(lastAIConfidence > 0)
+            {
+               // B-grade: AI evaluated and said SKIP but without strong conviction — reduce size, don't block
+               aiVerdictStr = "REDUCE";
+               Print("AI DIRECTOR: ADVISORY (AI SKIP, real confidence=", lastAIConfidence, "%) — sizeMulti informational only, lot size NOT reduced -- v6.21.2 binary risk mode");
+               g_aiLastVerdict = "REDUCE"; g_aiLastConfidence = lastAIConfidence;
+            }
+            else
+            {
+               aiVerdictStr = "NO-AI-ANSWER";
+               Print("AI DIRECTOR: NO-AI-ANSWER (SKIP with confidence=0 — no provider actually answered) — proceeding at full size, no penalty for a missing opinion");
+               g_aiLastVerdict = "NO-AI-ANSWER"; g_aiLastConfidence = lastAIConfidence;
+            }
+         }
+         else if(aiConfirms)
+         {
+            // AI confirms same direction — apply conviction sizing
+            if(InpConvictionSizing && lastAIConfidence > 0)
+            {
+               // v6.3.2 FIX: when AI CONFIRMS direction with low confidence — NEVER block.
+               // AI agreement at any confidence level means reduce, not veto.
+               // Blocking a structurally sound setup because AI is 52% sure is backwards.
+               if(CalibratedConfidence(lastAIConfidence) < InpAIDirectorMinConf) // v6.4.0: calibrated
+               {
+                  // AI agrees but with sub-threshold conviction. Confidence is
+                  // telemetry only in full-risk binary mode.
+                  aiVerdictStr = "ALLOW_LOW_CONV";
+                  Print("AI DIRECTOR: LOW-CONV CONFIRM — AI agrees at ", lastAIConfidence,
+                        "% < min ", InpAIDirectorMinConf, "% | advisory only; approved normal risk unchanged");
+                  g_aiLastVerdict = "ALLOW_LOW_CONV"; g_aiLastConfidence = lastAIConfidence;
+                  if(StringLen(lastAIBearishCase) > 0) Print("Devil's Advocate: ", lastAIBearishCase);
+               }
+               else
+               {
+               double convMult;
+               if(lastAIConfidence >= InpHighAIConfidence)
+               {
+                  convMult = InpConvictionHighMulti;
+                  aiVerdictStr = "ALLOW_INCREASE";
+               }
+               else if(lastAIConfidence >= InpNormalAIConfidence)
+               {
+                  convMult = 1.0;
+                  aiVerdictStr = "ALLOW";
+               }
+               else
+               {
+                  convMult = InpConvictionLowMulti;
+                  aiVerdictStr = "ALLOW_REDUCE";
+                  // For A+/A: reduction is applied AND enforcement floor does NOT restore.
+                  // AI agrees but at reduce-tier confidence → trade at reduced size, not full-size.
+                  if(highGradeFullSize)
+                     Print("AI DIRECTOR: ALLOW_REDUCE — A+/A: reduced lot kept, floor will NOT restore for weak-agree conf=",
+                           lastAIConfidence, "%");
+               }
+               Print("AI DIRECTOR: ", aiVerdictStr, " — conf=", lastAIConfidence,
+                     "% | legacy conviction multiplier=", DoubleToString(convMult, 2),
+                     " informational only; approved normal risk unchanged");
+               }  // close else block (high/normal/low conviction branch)
+            }  // close if(InpConvictionSizing && lastAIConfidence > 0)
+            else
+            {
+               aiVerdictStr = "ALLOW";
+               Print("AI DIRECTOR: ALLOW — AI confirms ", signal > 0 ? "BUY" : "SELL",
+                     " at ", lastAIConfidence, "% confidence");
+            }
+            g_aiLastVerdict = aiVerdictStr; g_aiLastConfidence = lastAIConfidence;
+            if(StringLen(lastAIBearishCase) > 0)
+               Print("Devil's Advocate: ", lastAIBearishCase);
+         }
+
+         Print("Strategy Votes: ", setupName, "→", signal > 0 ? "BUY" : "SELL",
+               " | Memory Influence: W=", wins, "/L=", losses,
+               " | Final AI Advisory: ", aiVerdictStr, " | normalRiskImpact=NONE");
+         Print("══════════════════════════════════════════════════");
+      }
+   }
+   else if(callAI && !gradeQualifiesForAI)
+   {
+      // Grade is SKIP — shouldn't reach here, but defensive log
+      XAU_AIRecordLocalDecision("Local Decision (Grade Filter)", "grade below AI Director threshold");
+      Print("AI DIRECTOR: grade=", grade, " below threshold — AI not called");
+   }
+   else if(!callAI)
+   {
+      if(!InpUseAI)
+         XAU_AIRecordLocalDecision("Local Decision (AI Disabled)", "InpUseAI=false");
+      else if(InpBacktestMode)
+         XAU_AIRecordLocalDecision("Local Decision (Backtest)", "InpBacktestMode=true");
+      else if(StringLen(InpServerURL) < 10)
+         XAU_AIRecordProviderFailure("Provider Unavailable", "InpServerURL missing/invalid");
+   }
+
+   // Enforce the advisory-only contract at the gate boundary. This prevents
+   // any legacy internal multiplier from leaking into a later scout/block
+   // classification, as well as preventing a lot reduction.
+   sizeMulti = szBeforeAI;
+   lta_ai = 1.0;
+   lta_aiVerdict = g_aiLastVerdict;
+
+   // Store signal context for ML + journal logging
    lastSignalDir = signal;
    lastSignalRSI = bufRSI[1];
-   lastSignalEMADiff = (bufEMAFast[1]-bufEMASlow[1])/bufEMASlow[1]*10000;
+   lastSignalEMADiff = (bufEMAFast[1] - bufEMASlow[1]) / bufEMASlow[1] * 10000;
    lastSignalATR = bufATR[1];
    lastSignalSetup = setupName;
+   lastSignalSignature = signature;
    g_pendingBrainGrade = grade;
    g_pendingBrainSetupScore = setupScore;
    g_pendingBrainCombinedScore = combinedScore;
-   g_pendingBrainEntryAudit = freshnessWhy;
+   g_pendingBrainEntryAudit = timingReason;
 
-   // Binary configured risk: strategic quality systems cannot silently shrink
-   // an approved trade. OpenTrade still enforces aggregate exposure, margin,
-   // broker volume/stop geometry and duplicate/cross-instance collision safety.
-   double originalGradeSizeMulti = 1.0;
-   double finalSzMult = originalGradeSizeMulti;
-   XAU_LogBotDecision("ENTER_ALIGNED_FULL_RISK", signal, setupName, grade,
-                      lastAIConfidence, combinedScore, freshnessWhy,
-                      StringFormat("BOS=%+d",g_smc_bos_dir),
-                      StringFormat("HTF=%+d context-only",g_htfConsensusDir),
-                      "AI_TELEMETRY_ONLY",g_memoryLastInfluence,
-                      "approved by score, structure, freshness and news authorities");
+   // v4.5.0 — Remember the AI's conviction on the trade we're about to open,
+   // so mid-trade audits can reference both the thesis AND the original confidence.
+   currentTradeConfidence = lastAIConfidence;
+
+   // v4.8.0 — CONTEXT GATE (HTF + Swing S/R)
+   //   Last defense before OpenTrade. Blocks entries that:
+   //     (a) fight H4 bias (e.g., BUY signal but H4 EMA50 < EMA200)
+   //     (b) sit within 0.4×ATR of a recent swing high/low without break-retest
+   //   Rule-based, zero LLM cost.
+   if(!ContextGateAllows(signal, bufATR[1], setupName))
+      return;
+
+   // v6.4.5: drawdown watermark — adaptive mode, not a full entry block.
+   // When equity is >8% below watermark, we don't stop — we raise the bar.
+   // B-grade blocked. A/A+ continues at 50% size via g_adaptiveRecoveryMode flag.
+   if(g_drawdownPause)
+   {
+      g_gateBlocks_DailyLoss++;
+      if(grade != "A+" && grade != "A")
+      {
+         Print("ADAPTIVE_DRAWDOWN: grade=", grade, " blocked (equity below watermark) — A/A+ setups still allowed");
+         return;
+      }
+      // A/A+ passes — activate adaptive recovery sizing if not already armed
+      if(!g_adaptiveRecoveryMode)
+      {
+         g_adaptiveRecoveryMode = true;
+         Print("ADAPTIVE_DRAWDOWN: equity below watermark — activating A/A+ only + 50% size mode");
+      }
+   }
+
+   // v5.1.0 — PROFIT GUARDIAN gate: blocks counter-trend stacks, tier-3 halt, post-loss cooldown
+   // v5.1.9 — now also enforces Selective Mode (A/A+ only after giveback brake)
+   string pgBlock = PG_BlockReason(signal, grade, combinedScore, setupName);
+   if(StringLen(pgBlock) > 0)
+   {
+      // Classify gate block type for analytics
+      if(StringFind(pgBlock, "volkill") >= 0 || StringFind(pgBlock, "volatility") >= 0)
+         g_gateBlocks_Volatility++;
+      else if(StringFind(pgBlock, "spread") >= 0)
+         g_gateBlocks_Spread++;
+      else if(StringFind(pgBlock, "ddfloor") >= 0 || StringFind(pgBlock, "daily loss") >= 0 || StringFind(pgBlock, "soft-DD") >= 0)
+         g_gateBlocks_DailyLoss++;
+      else
+         g_gateBlocks_Trend++;
+      Print("PROFIT GUARDIAN VETO: ", pgBlock, " (signal=", signal == 1 ? "BUY" : "SELL", " grade=", grade, ")");
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, pgBlock);
+      UpdateDashboard(0, combinedScore, "PG-VETO");
+      lastDashGrade = "PG-VETO";
+      return;
+   }
+
+   // v5.8.38 — adaptive EPF-T4: elite signals may pass at reduced size unless hard DD is hit.
+   double epfAdaptiveLotMult = 1.0;
+   bool epfT4AdaptivePass = false;
+   string epfBlock = EPF_EntryBlockReason(grade, setupScore, combinedScore, signal,
+                                          epfAdaptiveLotMult, epfT4AdaptivePass);
+   if(StringLen(epfBlock) > 0)
+   {
+      g_gateBlocks_EPF++; // v6.3.8 Upgrade 6
+      Print("EPF VETO: ", epfBlock, " (signal=", signal == 1 ? "BUY" : "SELL",
+            " setupScore=", DoubleToString(setupScore, 1),
+            " combined=", DoubleToString(combinedScore, 1),
+            " grade=", grade, ")");
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, epfBlock);
+      CloudPostReasoning("EPF", epfBlock, RegimeName(), setupName,
+                         setupScore, combinedScore, "EPF-VETO", signal);
+      UpdateDashboard(0, combinedScore, StringFormat("EPF-T%d", epf_tier));
+      lastDashGrade = StringFormat("EPF-T%d", epf_tier);
+      return;
+   }
+   // Cluster protection: reject fresh entries too close in price+time to an
+   // existing same-direction position. Prevents reversal-amplifying stacks.
+   {
+      double curPx = (signal == 1)
+                     ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                     : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      if(EPF_IsClusteredEntry(signal, curPx, bufATR[1]))
+      {
+         g_gateBlocks_EPF++; // v6.3.8 Upgrade 6
+         Print("EPF CLUSTER VETO: entry too close to existing same-direction position");
+         XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, "EPF CLUSTER VETO");
+         UpdateDashboard(0, combinedScore, "EPF-CLUSTER");
+         lastDashGrade = "EPF-CLUSTER";
+         return;
+      }
+   }
+
+   // v6.4.16: pgLotMult = 1.0 — all protection-cage lot reductions removed.
+   // SelectiveMode (pg_selectiveActive), SoftDD (IsSoftDDMode), EPF tiers, and
+   // EPF T4 adaptive lot reduction are all DISABLED as lot modifiers.
+   // Their BLOCK/VETO paths remain active (trade is skipped, not micro-sized).
+   // EPF_LotMultiplier() also returns 1.0 now — this line is now a no-op multiply.
+   double pgLotMult = 1.0;
+   // epfAdaptiveLotMult and EPF_LotMultiplier() both return 1.0 — kept for log/reporting only
+   double epfAdaptiveLotMult_unused = 1.0;
+
+   if(epfT4AdaptivePass)
+   {
+      epf_t4AdaptiveTradesToday++;
+      epf_t4LastAdaptiveTrade = TimeCurrent();
+      Print("EPF-T4 ADAPTIVE PASS: elite ", grade, " ", (signal == 1 ? "BUY" : "SELL"),
+            " allowed at FULL lot (v6.4.16: T4 lot reduction removed) |",
+            " setup=", DoubleToString(setupScore, 1),
+            " combined=", DoubleToString(combinedScore, 1),
+            " used=", epf_t4AdaptiveTradesToday, "/", InpEPF_T4MaxTradesPerDay);
+      CloudPostReasoning("EPF-T4", "Adaptive guarded pass: elite signal allowed at full lot (v6.4.16)",
+                         RegimeName(), setupName, setupScore, combinedScore, "EPF-T4-FULL", signal);
+   }
+
+   double brainLotMult = 1.0;
+   string brainReason = "";
+   if(!XAU_TradeBrainPreEntry(signal, setupName, grade, signature, brainLotMult, brainReason))
+   {
+      g_gateBlocks_TradeBrain++; // v6.3.8 Upgrade 6
+      g_ftReport_TBBlocked++;   // v6.3.9: forward-test tracking
+      Print(brainReason);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, brainReason);
+      CloudPostReasoning("BLOCK", brainReason, RegimeName(), setupName,
+                         setupScore, combinedScore, "TRADE-BRAIN", signal);
+      UpdateDashboard(0, combinedScore, "BRAIN-BLOCK");
+      lastDashSignal = 0; lastDashScore = combinedScore; lastDashGrade = "BRAIN-BLOCK";
+      return;
+   }
+   g_ftReport_TBAllowed++; // v6.3.9: TradeBrain allowed this trade through
+   lta_brain = brainLotMult;   // capture for audit
+   if(brainLotMult < 0.999)
+   {
+      sizeMulti *= brainLotMult;
+      Print(brainReason, highGradeFullSize ? " [will be restored by A+/A enforcement floor]" : "");
+   }
+   else if(StringLen(brainReason) > 0)
+      Print(brainReason);
+
+   double consciousLotMult = 1.0;
+   string consciousReason = "";
+   XAU_MemoryRecommendation(signal, setupName, grade, consciousLotMult, consciousReason);
+   if(StringLen(consciousReason) > 0)
+      Print(consciousReason);
+   lta_conscious = consciousLotMult;   // capture for audit
+   if(consciousLotMult < 0.999 || consciousLotMult > 1.001)
+   {
+      sizeMulti *= consciousLotMult;
+      Print("MEMORY QUALITY SIGNAL: legacyQualityMult=", DoubleToString(consciousLotMult, 2),
+            " | aggregate evidence only; approved risk remains binary/full");
+   }
+
+   // v6.0.1 — AI Trading Committee: synthesise market narrative + human rules + pattern memory
+   g_committee = Committee_Assemble(signal, setupName, grade, combinedScore);
+   g_lastTradePattern  = setupName + "_" + grade;
+   g_lastTradeDirLabel = g_committee.directorLabel;
+   g_lastTradeCommConf = g_committee.confidence;
+   if(InpCommitteeLog)
+      Print(g_committee.thesis);
+   double committeeSzMult = InpCommitteeLotAdj ? g_committee.lotMultiplier : 1.0;
+   lta_sti       = g_stiLotMulti;    // capture for audit
+   lta_committee = committeeSzMult;  // capture for audit
+
+   // Open trade with grade-scaled sizing (g_stiLotMulti = 1.0 unless STI reduced it)
+   if(InpSTI_Enable && g_stiLotMulti < 0.999)
+      Print(StringFormat("QUALITY EVIDENCE | STI=%.2f | committee=%.2f | combined=%.3f | approved risk remains binary/full",
+                         g_stiLotMulti, committeeSzMult, sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult),
+            highGradeFullSize ? " [will be restored by A+/A enforcement floor]" : "");
+
+   // v6.3.1 SIZE GUARD: prevent silent 0-lot order when multiple reduction layers stack.
+   double finalSzMult = sizeMulti * pgLotMult * g_stiLotMulti * committeeSzMult;
+   if(finalSzMult < 0.04)
+   {
+      string zeroQualityReason = StringFormat("FULL_RISK_BINARY_BLOCK: combined quality evidence %.4f is below executable threshold; block instead of clamping to a token-size order", finalSzMult);
+      Print("SIZE GUARD BLOCK: finalSzMult=", DoubleToString(finalSzMult, 4),
+            " (sizeMulti=", DoubleToString(sizeMulti, 3),
+            " × pg=", DoubleToString(pgLotMult, 3),
+            " × sti=", DoubleToString(g_stiLotMulti, 2),
+            " × comm=", DoubleToString(committeeSzMult, 2),
+            ") — ", zeroQualityReason);
+      XAU_RememberBlockedSignal(signal, setupName, grade, setupScore, combinedScore, zeroQualityReason);
+      return;
+   }
+
+   // ======================================================================
+   // v6.4.18 — A+/A FULL SIZE ENFORCEMENT FLOOR
+   // Soft modules may BLOCK (return) a trade — that is allowed and correct.
+   // They must NOT reduce A+/A lot size. If any soft module shrunk sizeMulti
+   // below the grade baseline, restore it here before calling OpenTrade().
+   // Hard caps inside OpenTrade() (margin, broker, basket, prop) still apply.
+   // ======================================================================
+   double finalSzMultSoftReduced = finalSzMult;   // what soft modules produced
+   string lta_enforcementMsg = "";
+   // v6.4.20 patch: enforcement floor does NOT restore if AI gave a weak-agree verdict.
+   // Weak-agree (ALLOW_LOW_CONV / ALLOW_REDUCE) means AI confirms but at low conviction.
+   // Restoring to full size would override a legitimate quality signal.
+   // Only restore when soft modules (non-AI) reduced lot, or when AI strongly agreed.
+   bool aiWeakConfirmReduced = (lta_aiVerdict == "ALLOW_LOW_CONV" || lta_aiVerdict == "ALLOW_REDUCE");
+   // v6.7.0 ADAPTIVE ENTRY ARBITER (audit item #3): the floor also must not
+   // silently restore full size when SMC structure hard-conflicts with the
+   // trade (2+ independent structural signals against it — see
+   // SMC_GetConflictPenalty). A+/A grade doesn't mean structure agrees.
+   bool smcHardConflictReduced = g_smcHardBlockActive;
+   bool timingQualityReduced = (lta_timing < 0.999);
+   if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && !aiWeakConfirmReduced && !smcHardConflictReduced && !timingQualityReduced)
+   {
+      finalSzMult = originalGradeSizeMulti;
+      lta_enforcementMsg = StringFormat(
+         "ENFORCED | grade=%s | softProduced=%.3f → restored=%.3f | "
+         "timing=%.2f confirm=%.2f AI=%.2f(verdict=%s) brain=%.2f conscious=%.2f sti=%.2f committee=%.2f",
+         grade, finalSzMultSoftReduced, finalSzMult,
+         lta_timing, lta_confirm, lta_ai, lta_aiVerdict,
+         lta_brain, lta_conscious, lta_sti, lta_committee);
+      PrintFormat("[LOT_TRACE] A+/A FULL SIZE ENFORCED: %s", lta_enforcementMsg);
+   }
+   else if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && aiWeakConfirmReduced)
+   {
+      lta_enforcementMsg = StringFormat(
+         "FLOOR_SKIPPED | grade=%s | AI=%s reduced to %.3f (grade=%.3f) — weak-agree kept, not restored",
+         grade, lta_aiVerdict, finalSzMult, originalGradeSizeMulti);
+      PrintFormat("[LOT_TRACE] A+/A FLOOR SKIPPED (WEAK-AI-AGREE): %s", lta_enforcementMsg);
+   }
+   else if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && smcHardConflictReduced)
+   {
+      lta_enforcementMsg = StringFormat(
+         "FLOOR_SKIPPED | grade=%s | SMC hard conflict (%s) reduced to %.3f (grade=%.3f) — structure conflict kept, not restored",
+         grade, g_smcConflictReason, finalSzMult, originalGradeSizeMulti);
+      PrintFormat("[LOT_TRACE] A+/A FLOOR SKIPPED (SMC-HARD-CONFLICT): %s", lta_enforcementMsg);
+   }
+   else if(highGradeFullSize && finalSzMult < originalGradeSizeMulti - 0.001 && timingQualityReduced)
+   {
+      lta_enforcementMsg = StringFormat(
+         "FLOOR_SKIPPED | grade=%s | timing-risk reduced to %.3f (grade=%.3f) — entry timing/location risk kept, not restored",
+         grade, finalSzMult, originalGradeSizeMulti);
+      PrintFormat("[LOT_TRACE] A+/A FLOOR SKIPPED (TIMING-RISK): %s", lta_enforcementMsg);
+   }
+   else if(highGradeFullSize)
+   {
+      lta_enforcementMsg = StringFormat(
+         "NO_REDUCTION_NEEDED | grade=%s | finalSzMult=%.3f >= grade=%.3f | soft modules did not reduce",
+         grade, finalSzMult, originalGradeSizeMulti);
+   }
+
+   // ======= PRE-OPENTRADE LOT AUDIT (v6.4.18) =======
+   Print("[LOT_TRACE] ===== SOFT REDUCTION AUDIT =====");
+   PrintFormat("[LOT_TRACE] grade=%s | highGradeFullSize=%s | originalGradeSizeMulti=%.3f",
+               grade, highGradeFullSize ? "YES" : "NO", originalGradeSizeMulti);
+   PrintFormat("[LOT_TRACE] volCapMult      = %.3f | %s",
+               lta_volCap, highGradeFullSize ? "BYPASSED (A+/A hard-bypass in v6.4.17)" : "APPLIED");
+   PrintFormat("[LOT_TRACE] timingLotMult   = %.3f | %s",
+               lta_timing, highGradeFullSize && lta_timing < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
+   PrintFormat("[LOT_TRACE] confirmLotMult  = %.3f | %s",
+               lta_confirm, highGradeFullSize && lta_confirm < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
+   PrintFormat("[LOT_TRACE] AI lotMult      = %.3f | verdict=%s | %s",
+               lta_ai, lta_aiVerdict,
+               (highGradeFullSize && lta_ai < 0.999 && !aiWeakConfirmReduced) ? "attempted reduction — overridden by floor" :
+               (highGradeFullSize && lta_ai < 0.999 && aiWeakConfirmReduced)  ? "weak-agree kept (floor skipped)" :
+               "no reduction / block / allow");
+   PrintFormat("[LOT_TRACE] brainLotMult    = %.3f | %s",
+               lta_brain, highGradeFullSize && lta_brain < 0.999 ? "attempted reduction — overridden by floor" : "block or allow");
+   PrintFormat("[LOT_TRACE] consciousLotMult= %.3f | %s",
+               lta_conscious, highGradeFullSize && lta_conscious < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
+   PrintFormat("[LOT_TRACE] g_stiLotMulti   = %.3f | %s",
+               lta_sti, highGradeFullSize && lta_sti < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
+   PrintFormat("[LOT_TRACE] committeeSzMult = %.3f | %s",
+               lta_committee, highGradeFullSize && lta_committee < 0.999 ? "attempted reduction — overridden by floor" : "no reduction");
+   PrintFormat("[LOT_TRACE] pgLotMult       = 1.000 (disabled v6.4.16)");
+   PrintFormat("[LOT_TRACE] finalSzMult before enforcement = %.3f", finalSzMultSoftReduced);
+   PrintFormat("[LOT_TRACE] finalSzMult after  enforcement = %.3f", finalSzMult);
+   if(g_adaptiveNewsLotMultiActive)
+   {
+      double beforeNewsRisk = finalSzMult;
+      PrintFormat("NEWS_POST_RISK: confirmed post-news continuation | finalSzMult %.3f x %.2f | %s",
+                  beforeNewsRisk, g_adaptiveNewsLotMulti, g_adaptiveNewsLastDecision);
+      finalSzMult *= g_adaptiveNewsLotMulti;
+      PrintFormat("[LOT_TRACE] finalSzMult after NEWS_POST_RISK = %.3f", finalSzMult);
+   }
+   if(StringLen(lta_enforcementMsg) > 0)
+      PrintFormat("[LOT_TRACE] enforcement: %s", lta_enforcementMsg);
+   Print("[LOT_TRACE] ==========================================");
+   // v6.3.8 Upgrade 6: count allowed trade
+   g_totalAllowed++;
+   // v6.3.9: track AI allow for forward-test report
+   if(StringLen(g_aiLastVerdict) > 0 && g_aiLastVerdict != "NEUTRAL" && g_aiLastVerdict != "ADVISORY")
+      g_ftReport_AIAllowed++;
+   // v6.3.8 Upgrade 5: capture AI verdict for feedback loop (used at close)
+   g_lastAIVerdict_ForMemory = g_aiLastVerdict;
+   // v6.3.8 Upgrade 3: AI SL/TP Advisory — log what AI recommends, never auto-apply in ADVISORY mode
+   // (sl_adjust and tp_adjust arrive in the AI response but are not wired to order placement)
+   // They are already parsed in GetAIAnalysis() — we only need to log the advisory here.
+   // The actual SL/TP is set inside OpenTrade() using ATR-based logic (unchanged).
+   if(InpAISLTPMode == AI_SLTP_ADVISORY)
+      Print("AI SLTP ADVISORY: AI suggests slAdj=0 tpAdj=0 (from last AI response) | Using ATR-based SL/TP | Mode=ADVISORY (log only)");
+   XAU_LogBotDecision("ENTER_FULL_RISK_CANDIDATE",
+                      signal, setupName, grade, lastAIConfidence, combinedScore,
+                      StringFormat("timingMult=%.2f", lta_timing),
+                      StringFormat("BOS=%+d%s", g_smc_bos_dir, g_smcHardBlockActive ? " CONFLICT" : g_smcConflictPenalty > 0 ? " penalty" : ""),
+                      StringFormat("HTF=%+d", g_htfConsensusDir),
+                      StringFormat("%s(conf=%d%%)", g_aiLastVerdict, lastAIConfidence),
+                      g_memoryLastInfluence,
+                      StringFormat("%s qualityEvidence=%.2f normalRisk=%.2f%%", setupName, finalSzMult, InpNormalRiskPct));
+   // v6.17.22 TIMING ENGINE: direction/setup/size are all decided above this
+   // line -- this is the one place that asks whether NOW is the right moment
+   // to act on them. See XAU_TimingEngineConfirmsEntry for why.
+   if(!XAU_TimingEngineConfirmsEntry(signal, setupName, grade, finalSzMult, bufATR[1]))
+      return;
+
+   // v6.20.5 (TELEMETRY ONLY -- Change A): full timing-path proof, derived
+   // from the mailbox XAU_TimingEngineConfirmsEntry just wrote above (it
+   // returned true or this line would already have returned). See
+   // XAU_TimingProofRecord for field meanings.
+   g_pendingTimingProof.active                = true;
+   g_pendingTimingProof.candidateId           = StringFormat("%s_%s_%d", setupName, signal == 1 ? "BUY" : "SELL", (int)g_lastEntryTimingDecision.originalSignalTime);
+   g_pendingTimingProof.sourcePath             = "FRESH";
+   g_pendingTimingProof.firstSeenTime         = g_lastEntryTimingDecision.originalSignalTime;
+   g_pendingTimingProof.firstSeenPrice        = g_lastEntryTimingDecision.originalSignalPrice;
+   g_pendingTimingProof.timingGateRequired    = true;
+   g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveAdaptiveEntryDelaySeconds(signal);
+   g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
+   g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
+   g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
+   g_pendingTimingProof.revalidationTime      = g_lastEntryTimingDecision.decisionTime;
+   g_pendingTimingProof.revalidationResult    = g_lastEntryTimingDecision.entryReasonText;
+   g_pendingTimingProof.bypassUsed            = false;
+   g_pendingTimingProof.bypassReason          = "";
+   g_pendingTimingProof.openTradeCaller       = "FreshScan->OpenTrade";
 
    // v6.17.7 FIX (item 4): g_lastEntryGrade/g_lastEntryScore/dashboard state/
    // the "TRADE OPENED" scorecard entry used to be written unconditionally
@@ -13623,7 +16853,6 @@ void OnTick()
    // rejection, or any other early-exit inside OpenTrade still left the EA
    // believing a trade had opened. Only commit this state on a confirmed fill.
    bool tradeOpened = OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", finalSzMult);
-   g_alignedCandidates[0].firstCandidateTime = 0;
    // v6.20.1: unconditionally invalidate the entry-timing mailbox right after
    // this specific OpenTrade attempt, success or fail -- it must never leak
    // into a later, unrelated OpenTrade call (RE_ENTRY/recovery/force-open)
@@ -13963,7 +17192,43 @@ bool XAU_GrowthDailyLockTriggered(string &why)
    return false;
 }
 
-/* v6.24.0: strategic GrowthGuard entry veto deleted; configured risk caps remain operational. */
+string XAU_GrowthGuardEntryBlockReason(int signal, double price, double sl, double tp,
+                                       double atr, string reason)
+{
+   if(!InpGrowthGuardEnable || XAU_NoLimitTradingModeActive()) return "";
+   XAU_GrowthUpdateDailyPeak();
+
+   if(g_growthPauseUntil > TimeCurrent())
+      return "GROWTH_PAUSE_ACTIVE: " + g_growthPauseReason;
+
+   string dayLockWhy = "";
+   if(XAU_GrowthDailyLockTriggered(dayLockWhy))
+      return dayLockWhy;
+
+   if(price > 0.0 && sl > 0.0 && tp > 0.0 && InpGrowthMinEntryRR > 0.0)
+   {
+      double riskUSD = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, sl, 1.0));
+      double rewardUSD = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, tp, 1.0));
+      double rr = (riskUSD > 0.0) ? rewardUSD / riskUSD : 0.0;
+      if(rr > 0.0 && rr < InpGrowthMinEntryRR)
+      {
+         return StringFormat("GROWTH_RR_BLOCK: rr %.2fR < min %.2fR (prefer %.2fR) risk$/lot %.2f reward$/lot %.2f reason=%s",
+                             rr, InpGrowthMinEntryRR, InpGrowthPreferEntryRR,
+                             riskUSD, rewardUSD, reason);
+      }
+   }
+
+   double openLots = 0.0;
+   double openRisk = CurrentAggregateRiskToSL(openLots);
+   double maxBasketRisk = StrategyReferenceBalance() * InpGrowthMaxBasketLossEquityPct / 100.0;
+   if(maxBasketRisk > 0.0 && openRisk >= maxBasketRisk)
+   {
+      return StringFormat("GROWTH_BASKET_RISK_BLOCK: open risk $%.2f on %.2f lots >= max $%.2f",
+                          openRisk, openLots, maxBasketRisk);
+   }
+
+   return "";
+}
 
 double XAU_GrowthGuardCapLots(double lots, double slDollarPerLot, int signal, string reason)
 {
@@ -14429,9 +17694,72 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // later hard gate (margin/risk/broker) rejected the trade with nothing
    // actually opened, needlessly blocking a legitimate retry.
 
-   // v6.24.0: strategic approval is complete before OpenTrade. This
-   // function owns operational collision, exposure, risk, margin, broker
-   // volume and stop-geometry safety only.
+   // v6.23.1 — FINAL adaptive-direction choke point. Every autonomous path
+   // into OpenTrade (PRIMARY, RE_ENTRY, RECOVERY and any future RETRY) is
+   // evaluated here after its final timing revalidation but before risk or
+   // broker execution. SHADOW logs the identical answer; ACTIVE enforces it.
+   {
+      string adaptiveWhy="";
+      if(!XAU_FinalAdaptiveDirectionDecision(signal, "OPEN_TRADE", reason, isManualOverride, adaptiveWhy))
+      {
+         Print("OPEN TRADE BLOCKED (Adaptive Transition Authority): ",adaptiveWhy);
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL","BLOCK","AdaptiveTransitionAuthority",
+                                   signal,funnelSetup,funnelGrade,funnelScore,true,false,
+                                   "BLOCKED","ADAPTIVE_TRANSITION_AUTHORITY",true,false,false,
+                                   0,0,adaptiveWhy,reason,0.0);
+         return false;
+      }
+   }
+
+   // v6.17.21 — Execution-layer Exhaustion/Reversal backstop. Forensic audit
+   // of 2026-07-08's live log (8 primary entries) found the guard at
+   // ContextGateAllows() (called only from the normal fresh-scan path, line
+   // ~13733) never runs for XAU_CheckPendingOpportunityRecovery's or
+   // XAU_TryForceOpenTrade's calls into OpenTrade() -- exactly the paths
+   // behind posId 9477557258 (SELL "RECOVERY of missed signal", entered
+   // -$24 adverse in 1min, -$104 by 10min, closed -$153.18; its OWN original
+   // HARD_BLOCK said "gold already rejected the latest flush low, wait for
+   // fresh pullback" and was right) and posId 9482148224 (a similar
+   // recovery override that happened to win, but only after a -$144.82 paper
+   // drawdown). Same reasoning as the hedge backstop below: a gate that must
+   // hold for every caller belongs here, not duplicated at each call site.
+   {
+      double sellEdge, buyEdge, exhaustionRisk, reversalEvidence, chaseRisk;
+      string oldTrendBias, freshStructureBias, blockReason;
+      bool guardAllows = XAU_ExhaustionReversalGuard(signal, atr, sellEdge, buyEdge, exhaustionRisk,
+                                                      reversalEvidence, chaseRisk, oldTrendBias,
+                                                      freshStructureBias, blockReason);
+      string whyChosen = guardAllows
+         ? StringFormat("%s cleared: opposite side lacks a confirmed reversal majority", signal==1?"BUY":"SELL")
+         : "N/A — blocked, see reason";
+      string whyOppositeRejected = (signal == 1)
+         ? StringFormat("SELL not preferred: SELL_EDGE=%.0f vs BUY_EDGE=%.0f", sellEdge, buyEdge)
+         : StringFormat("BUY not preferred: BUY_EDGE=%.0f vs SELL_EDGE=%.0f", buyEdge, sellEdge);
+      PrintFormat("DIRECTION_QUALITY | dir=%s reason=%s | OldTrendBias=%s FreshStructureBias=%s | SELL_EDGE=%.0f BUY_EDGE=%.0f ExhaustionRisk=%.0f ReversalEvidence=%.0f ChaseRisk=%.0f | WhyChosenDirection=%s | WhyOppositeRejected=%s%s",
+                 signal==1?"BUY":"SELL", reason, oldTrendBias, freshStructureBias, sellEdge, buyEdge,
+                 exhaustionRisk, reversalEvidence, chaseRisk, whyChosen, whyOppositeRejected,
+                 isManualOverride ? " | MANUAL_OVERRIDE: informational only, not enforced" : "");
+      // v6.17.25: a manual override intentionally bypasses this SOFT
+      // direction-quality judgment (see comment on the isManualOverride
+      // parameter above) -- the telemetry above still runs so the operator
+      // can see the classification, but it never blocks an explicit
+      // FORCE_OPEN_TRADE command.
+      bool adaptiveCentralAuthority=(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !isManualOverride);
+      if(!guardAllows && adaptiveCentralAuthority)
+      {
+         PrintFormat("DIRECTION_QUALITY OBSERVATION_ONLY: legacy Exhaustion/Reversal guard disagreed (%s), but ACTIVE centralized adaptive authority already resolved direction; hard execution safety remains enforced",blockReason);
+      }
+      if(!guardAllows && !isManualOverride && !adaptiveCentralAuthority)
+      {
+         PrintFormat("⛔ OPEN TRADE BLOCKED (Exhaustion/Reversal backstop): %s | OldTrendBias=%s FreshStructureBias=%s | reason=%s",
+                     reason, oldTrendBias, freshStructureBias, blockReason);
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "ExhaustionReversalGate",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "EXHAUSTION_REVERSAL",
+                                   true, false, false, 0, 0, blockReason, reason, 0.0);
+         return false;
+      }
+   }
 
    // v5.8.6 — Execution-layer hedge backstop. The main signal path already
    // blocks this, but OpenTrade can also be reached by recovery/re-entry paths.
@@ -14512,8 +17840,120 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
    }
 
-   // Post-winner, post-loss and elapsed-cycle waits were strategic delay
-   // cages and have been removed. Freshness was already decided upstream.
+   // v4.6.5 — POST-WINNER ENTRY GUARD (user-tunable, default cooldown 5 min)
+   // Toggle off via InpPostWinnerGuard=false. Cooldown via InpPostWinnerCoolMin.
+   double bidNow = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double askNow = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double newEntryNow = (signal == 1) ? askNow : bidNow;
+   if(InpPostWinnerGuard && InpPostWinnerCoolMin > 0 &&
+      reason != "RE_ENTRY" && lastClose.valid && !lastClose.wasLoss &&
+      lastClose.dir == signal &&
+      TimeCurrent() - lastClose.closeTime < InpPostWinnerCoolMin * 60)
+   {
+      double newEntry  = newEntryNow;
+      double prevEntry = lastClose.entryPrice;
+      double minAdvanceATR = atr * InpPostWinnerATRBump;
+      bool betterPrice = false;
+      if(signal == 1)  betterPrice = (newEntry <= prevEntry - minAdvanceATR);
+      if(signal == -1) betterPrice = (newEntry >= prevEntry + minAdvanceATR);
+      if(!betterPrice)
+      {
+         string pwMsg = StringFormat("POST-WINNER ENTRY BLOCKED: last %s closed +profit @%.2f. New @%.2f not ≥%.2f×ATR (%.2f) better. Cooldown %dmin.",
+                                     signal==1?"BUY":"SELL", prevEntry, newEntry,
+                                     InpPostWinnerATRBump, minAdvanceATR, InpPostWinnerCoolMin);
+         Print("⏸  ", pwMsg);
+         g_lastSkipReason = pwMsg;
+         UpdateDashboard(0, 0.0, "POST-WIN");
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "PostWinnerGuard",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "POST_WINNER_GUARD",
+                                   true, false, false, 0, 0, pwMsg, reason, newEntryNow);
+         return false;
+      }
+   }
+
+   // v5.8.25 — Trade-cycle guard. The bad pattern in live screenshots was:
+   // bank a profitable SELL, then re-sell lower into exhaustion/bottom because
+   // the direction still looked correct. For XAU, same-direction re-entry after
+   // a winner must wait for a real reset/pullback, not just another signal.
+   if(InpPostWinnerCycleGuard && InpPostWinnerCycleMin > 0 && atr > 0 &&
+      reason != "RE_ENTRY" && lastClose.valid && !lastClose.wasLoss &&
+      lastClose.dir == signal && lastClose.closePrice > 0 &&
+      TimeCurrent() - lastClose.closeTime < InpPostWinnerCycleMin * 60)
+   {
+      double resetDist = atr * InpPostWinnerResetATR;
+      double chaseDist = atr * InpPostWinnerChaseATR;
+      bool resetSeen = false;
+      bool chaseRisk = false;
+
+      if(signal == -1)
+      {
+         // After a profitable SELL close, require price to pull back UP before
+         // another SELL. Selling below the last close is usually late-bottom risk.
+         resetSeen = (newEntryNow >= lastClose.closePrice + resetDist);
+         chaseRisk = (newEntryNow <= lastClose.closePrice - chaseDist);
+      }
+      else
+      {
+         // After a profitable BUY close, require price to pull back DOWN before
+         // another BUY. Buying above the last close is usually late-top risk.
+         resetSeen = (newEntryNow <= lastClose.closePrice - resetDist);
+         chaseRisk = (newEntryNow >= lastClose.closePrice + chaseDist);
+      }
+
+      bool basketBank = (StringFind(lastClose.exitReason, "BASKET") >= 0 ||
+                         StringFind(lastClose.exitReason, "LOCK") >= 0 ||
+                         StringFind(lastClose.exitReason, "peak") >= 0);
+      if(!resetSeen && (chaseRisk || basketBank))
+      {
+         string cycleMsg = StringFormat("POST-WINNER CYCLE BLOCK: %s winner @%.2f +$%.2f. New @%.2f before reset %.2f (%.2f×ATR). Avoiding %s. Exit=%s",
+                                         signal==1?"BUY":"SELL", lastClose.closePrice, lastClose.profit,
+                                         newEntryNow, resetDist, InpPostWinnerResetATR,
+                                         signal==1?"buying top after bank":"selling bottom after bank",
+                                         lastClose.exitReason);
+         Print("⏸  ", cycleMsg);
+         g_lastSkipReason = cycleMsg;
+         UpdateDashboard(0, 0.0, "CYCLE-GUARD");
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "PostWinnerCycleGuard",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "POST_WINNER_CYCLE",
+                                   true, false, false, 0, 0, cycleMsg, reason, newEntryNow);
+         return false;
+      }
+   }
+
+   // v5.8.38 — Post-loss same-side retest guard. This is not a drawdown cap:
+   // it only blocks the specific bad pattern where a BUY loses, then the EA
+   // buys again at a worse/higher price before a real retest; inverse for SELL.
+   if(InpPostLossSameSideGuard && InpPostLossGuardMin > 0 && atr > 0 &&
+      reason != "RE_ENTRY" && lastClose.valid && lastClose.wasLoss &&
+      lastClose.dir == signal && lastClose.entryPrice > 0 &&
+      TimeCurrent() - lastClose.closeTime < InpPostLossGuardMin * 60)
+   {
+      double betterDist = atr * InpPostLossBetterATR;
+      bool betterRetest = false;
+      if(signal == 1)
+         betterRetest = (newEntryNow <= lastClose.entryPrice - betterDist);
+      else
+         betterRetest = (newEntryNow >= lastClose.entryPrice + betterDist);
+
+      if(!betterRetest)
+      {
+         Print("POST-LOSS SAME-SIDE BLOCK: last ", signal == 1 ? "BUY" : "SELL",
+               " lost from entry ", DoubleToString(lastClose.entryPrice, digits),
+               " close ", DoubleToString(lastClose.closePrice, digits),
+               ". New entry ", DoubleToString(newEntryNow, digits),
+               " is not a better retest by ", DoubleToString(InpPostLossBetterATR, 2),
+               "x ATR (", DoubleToString(betterDist, 2),
+               "). Waiting instead of chasing after loss. Last exit=", lastClose.exitReason);
+         g_lastSkipReason = "POST-LOSS SAME-SIDE BLOCK: waiting for better retest after loss";
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "PostLossGuard",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "POST_LOSS_SAME_SIDE",
+                                   true, false, false, 0, 0, g_lastSkipReason, reason, newEntryNow);
+         return false;
+      }
+   }
    double price, sl, tp, slDist;
 
    // Dynamic SL/TP: Low vol = tighter, trending = wider
@@ -14559,8 +17999,40 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       tp = NormalizeDouble(price - slDist * tpM, digits);
    }
 
-   // Reward/room quality was decided by the shared freshness authority;
-   // Growth Guard has no second execution veto inside OpenTrade.
+   double growthRiskPerLotRR = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, sl, 1.0));
+   double growthRewardPerLotRR = MathAbs(XAU_ProjectProfitUSD(signal == 1, price, tp, 1.0));
+   double growthRR = (growthRiskPerLotRR > 0.0) ? growthRewardPerLotRR / growthRiskPerLotRR : 0.0;
+   if(InpGrowthGuardEnable && InpGrowthMinEntryRR > 0.0 &&
+      growthRR > 0.0 && growthRR < InpGrowthMinEntryRR)
+   {
+      Print("GROWTH_RR_BLOCK: ", signal == 1 ? "BUY" : "SELL",
+            " rr=", DoubleToString(growthRR, 2),
+            "R < min ", DoubleToString(InpGrowthMinEntryRR, 2),
+            "R (prefer ", DoubleToString(InpGrowthPreferEntryRR, 2),
+            "R) risk$/lot=", DoubleToString(growthRiskPerLotRR, 2),
+            " reward$/lot=", DoubleToString(growthRewardPerLotRR, 2),
+            " reason=", reason);
+      g_lastSkipReason = "GROWTH_RR_BLOCK";
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "GrowthGuard",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "GROWTH_RR_BLOCK",
+                                true, false, false, 0, 0,
+                                StringFormat("RR %.2fR below minimum %.2fR", growthRR, InpGrowthMinEntryRR),
+                                reason, price);
+      return false;
+   }
+
+   string growthEntryBlock = XAU_GrowthGuardEntryBlockReason(signal, price, sl, tp, atr, reason);
+   if(StringLen(growthEntryBlock) > 0)
+   {
+      Print("TRADE BLOCKED BECAUSE: ", growthEntryBlock);
+      g_lastSkipReason = growthEntryBlock;
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "GrowthGuard",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "GROWTH_ENTRY_BLOCK",
+                                true, false, false, 0, 0, growthEntryBlock, reason, price);
+      return false;
+   }
 
    // Lot sizing — v6.21.2 FULL-RISK BINARY MODE (replaces the v6.18.0 60%-100%
    // quality band). Owner directive 2026-07-13: a trade is either APPROVED, in
@@ -14576,7 +18048,24 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       "[LOT_TRACE] FULL-RISK BINARY MODE | approved setup=%s | grade=%s | sizeMulti=%.3f (informational only, not applied) | "
       "configuredRisk=%.2f%% | effectiveRisk=%.2f%%",
       lastSignalSetup, g_pendingBrainGrade, sizeMulti, InpNormalRiskPct, riskPct);
-   bool entryQualityScout = false; // v6.24.0: reduced-risk/scout classification removed
+   bool entryQualityScout = (sizeMulti <= InpBlockedMemoryScoutLotMulti * 0.75 ||
+                             StringFind(g_pendingBrainEntryAudit, "REPORT-FIT SCOUT") >= 0 ||
+                             StringFind(g_pendingBrainEntryAudit, "BLOCKED-MEMORY SCOUT") >= 0);
+   // Binary mode: a scout/insufficient-evidence classification is no longer a
+   // reason to open a token-size trade. It is a BLOCK, for every grade -- there
+   // is no more "reduced-size normal trade."
+   if(entryQualityScout)
+   {
+      Print("ENTRY BLOCKED: setup classified as scout/insufficient evidence (sizeMulti=",
+            DoubleToString(sizeMulti, 3), "). Binary mode does not permit reduced-size normal trades.");
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "EntryQualityScout",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "SCOUT_CLASSIFICATION_BINARY_BLOCK",
+                                true, false, false, 0, 0,
+                                "Scout/insufficient-evidence setup blocked outright (no reduced-size fallback).",
+                                reason, price);
+      return false;
+   }
    double riskAfterSignal = riskPct;
 
    // v6.18.0: AccountSizeRiskMultiplier() no longer scales riskPct — InpNormalRiskPct is
@@ -14585,8 +18074,24 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double acctSizeMult = 1.0; AccountSizeRiskMultiplier();
    double riskAfterAccount = riskPct;
 
-   // Profit/drawdown state is telemetry only and cannot veto or resize.
-   double pgMult = 1.0;
+   // v6.4.16: Profit Guardian lot reduction removed. PG_RiskMultiplier() returns 1.0 for
+   // tiers 0/1/2 (no risk halving on big-profit days). Tier 3 returns 0.0 which skips
+   // the trade entirely (acceptable — this is a trade skip, not a micro-lot).
+   double pgMult = PG_RiskMultiplier();
+   if(pgMult <= 0.001)
+   {
+      Print("🛡 PG TIER 3: hard block — account up 75%+, trailing only. Skipping new entry.");
+      BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "ProfitGuardian",
+                                signal, funnelSetup, funnelGrade, funnelScore,
+                                true, false, "BLOCKED", "PG_TIER_3",
+                                true, false, false, 0, 0,
+                                "PG tier 3 hard block: account up 75%+, trailing only.",
+                                reason, price);
+      return false;   // hard block (skip trade — acceptable)
+   }
+   // pgMult is 1.0 for all other tiers — no lot reduction applied.
+   // (entryQualityScout already returned false above -- binary mode has no
+   // reduced-size scout path left to cap here.)
    double riskAfterPG = riskPct;
 
    // v6.4.16: REMOVED — drawdown recovery risk cap disabled.
@@ -14654,7 +18159,28 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    }
 
    double equityForSizing = StrategyReferenceBalance();
-   double largeFloor = 0.0; // no performance/fear floor
+   double largeFloor = 0.0;
+   if(g_propFirmMode)
+      Print("PROP-FIRM MODE: large-account risk floor disabled.");
+   else if(InpLargeAccountMinRiskPct > 0 && equityForSizing >= 50000.0 && !drawdownActive && pgMult > 0.40)
+      largeFloor = InpLargeAccountMinRiskPct;
+   else if(InpLargeAccountMinRiskPct > 0 && equityForSizing >= 25000.0 && !drawdownActive && pgMult > 0.40)
+      largeFloor = MathMin(1.25, InpLargeAccountMinRiskPct);
+
+   if(entryQualityScout && largeFloor > 0)
+   {
+      Print("SCOUT-RISK: large-account lot floor bypassed for memory/scout entry. risk=",
+            DoubleToString(riskPct, 2), "% floor=", DoubleToString(largeFloor, 2),
+            "% reason=", reason);
+   }
+   else if(largeFloor > 0 && riskPct < largeFloor)
+   {
+      Print("LOT-FLOOR: large account equity $", DoubleToString(equityForSizing, 2),
+            " raised effective risk ", DoubleToString(riskPct, 2), "% -> ",
+            DoubleToString(largeFloor, 2),
+            "% after small multipliers. Equity cap still limits final lots.");
+      riskPct = largeFloor;
+   }
 
    // v6.21.2 — DEFENSIVE INVARIANT: riskPct must equal InpNormalRiskPct exactly for
    // every normal approved trade (entryQualityScout already blocked the trade above,
@@ -14877,95 +18403,36 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
    }
 
-   // Margin check — v6.24.1: real broker-aware margin verification, not an
-   // arbitrary ceiling. SL-based risk sizing (InpNormalRiskPct=15%, computed
-   // above as balance*riskPct/100 / slDollarPerLot) and margin usage are two
-   // independent things. The old rule blocked any trade whose OrderCalcMargin
-   // result exceeded 50% of free margin, regardless of whether the broker could
-   // actually support it — that rejected valid trades (e.g. lot=0.56 needing
-   // ~$2,262 margin against ~$3,016 free margin: well within what the broker
-   // allows, but >50% of free margin, so it was blocked). The only real
-   // question is whether the broker itself would accept the order.
+   // Margin check
    double freeMargin = accInfo.FreeMargin();
    double marginNeeded = 0;
-   double desiredLots = lots;   // pre-clamp 15%-risk lot, for logging/report
-   if(!OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
+   double desiredLots = lots;   // v4.5.5 — remember pre-clamp lot for WARN log
+   if(OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
    {
-      Print("OrderCalcMargin failed — trade blocked");
+      if(marginNeeded > freeMargin * 0.5)
+      {
+         string marginBlock = StringFormat(
+            "FULL_RISK_BINARY_BLOCK: full-risk lot %.4f requires margin $%.2f, above safe 50%% of free margin $%.2f; blocking instead of silently reducing size",
+            lots, marginNeeded, freeMargin);
+         Print(marginBlock);
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "MarginGate",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "MARGIN_BELOW_FULL_RISK",
+                                   true, false, false, 0, 0, marginBlock, reason, price);
+         return false;
+      }
+   }
+   else
+   {
+      Print("OrderCalcMargin failed — full-risk trade blocked");
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ERROR", "MarginGate",
                                 signal, funnelSetup, funnelGrade, funnelScore,
                                 true, false, "ERROR", "ORDER_CALC_MARGIN_FAILED",
                                 true, false, false, 0, GetLastError(),
-                                "OrderCalcMargin failed for the requested lot; order not sent.", reason, price);
+                                "OrderCalcMargin failed for the full-risk lot; order not sent.", reason, price);
       return false;
    }
-
-   // Small emergency reserve only (InpMarginReservePct, default 10%) — not a
-   // 50% cap. Keeps a sliver of free margin so a single fill can't run the
-   // account to the exact margin-call edge; everything above that reserve is
-   // available to the trade if the broker's own margin math supports it.
-   double marginReserve = freeMargin * (InpMarginReservePct / 100.0);
-   double marginAvailableForTrade = freeMargin - marginReserve;
-
-   if(marginNeeded > marginAvailableForTrade)
-   {
-      // The 15%-risk lot doesn't fit. Do not silently reduce to 0.01 — compute
-      // and report the actual maximum lot the broker's margin supports (margin
-      // scales ~linearly with lot size at a given price/leverage), normalize it
-      // to the broker's lot step, and re-verify with OrderCalcMargin.
-      double marginPerLot = (lots > 0.0) ? (marginNeeded / lots) : 0.0;
-      double maxMarginLots = (marginPerLot > 0.0) ? (marginAvailableForTrade / marginPerLot) : 0.0;
-      maxMarginLots = XAU_NormalizeVolumeForRisk(maxMarginLots, lotStep, minLot, maxLot,
-                                                 slDollarPerLotRaw, riskAmount, riskOvershootPct);
-      maxMarginLots = MathMin(maxMarginLots, lots);
-      double maxMarginLotsMargin = 0.0;
-      if(maxMarginLots >= minLot &&
-         !OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), maxMarginLots, price, maxMarginLotsMargin))
-         maxMarginLots = 0.0;   // broker couldn't even price this lot — treat as unsupported
-      // Rounding/broker geometry can still push the re-verified margin over
-      // budget by a step; walk it down until it genuinely fits.
-      while(maxMarginLots >= minLot && maxMarginLotsMargin > marginAvailableForTrade)
-      {
-         maxMarginLots = NormalizeDouble(maxMarginLots - lotStep, lotDigits);
-         maxMarginLotsMargin = 0.0;
-         if(maxMarginLots >= minLot &&
-            !OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), maxMarginLots, price, maxMarginLotsMargin))
-            maxMarginLots = 0.0;
-      }
-      double actualRiskPctAtMaxLot = (balance > 0.0 && maxMarginLots >= minLot)
-         ? (maxMarginLots * slDollarPerLotRaw / balance * 100.0) : 0.0;
-
-      string marginReport = StringFormat(
-         "INSUFFICIENT_BROKER_MARGIN: requested 15%%-risk lot %.4f needs margin $%.2f, only $%.2f available "
-         "(freeMargin=$%.2f, reserve=$%.2f=%.1f%%). Max broker-margin-supported lot=%.4f (actual risk %.3f%% of balance).",
-         desiredLots, marginNeeded, marginAvailableForTrade, freeMargin, marginReserve, InpMarginReservePct,
-         maxMarginLots, actualRiskPctAtMaxLot);
-      Print(marginReport);
-
-      if(InpMarginFallbackReduceToMax && maxMarginLots >= minLot)
-      {
-         lots = maxMarginLots;
-         marginNeeded = maxMarginLotsMargin;
-         Print("MARGIN_FALLBACK_REDUCE_TO_MAX: InpMarginFallbackReduceToMax=true, reducing to broker-supported lot instead of blocking. ", marginReport);
-      }
-      else
-      {
-         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "MarginGate",
-                                   signal, funnelSetup, funnelGrade, funnelScore,
-                                   true, false, "BLOCKED", "INSUFFICIENT_BROKER_MARGIN",
-                                   true, false, false, 0, 0, marginReport, reason, price);
-         return false;
-      }
-   }
    lots = NormalizeDouble(lots, lotDigits);
-
-   // v6.24.1 — full risk/margin decision trace for every approved trade.
-   PrintFormat("RISK_MARGIN_TRACE | balance=$%.2f equity=$%.2f riskPct=%.3f%% riskUSD=$%.2f slDist=%.2f "
-               "moneyLossPerLotAtSL=$%.2f rawLot=%.4f normalizedLot=%.4f requiredMargin=$%.2f "
-               "freeMargin=$%.2f marginReserve=$%.2f(%.1f%%) finalLot=%.4f decision=APPROVED",
-               balance, accInfo.Equity(), riskPct, riskAmount, slDist,
-               slDollarPerLotRaw, desiredLots, riskMathLots, marginNeeded,
-               freeMargin, marginReserve, InpMarginReservePct, lots);
 
    // v6.18.0: per-mode "capApplied" log removed along with the June/RealRisk branch —
    // LOT_TRACE below already reports every cap stage for the one unified path.
@@ -15215,6 +18682,21 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // GlobalVariableSetOnCondition-based compare-and-swap (see
    // XAU_TryClaimEntryLock), not a plain Get-then-Set, closing the TOCTOU
    // race between the early check above and this point.
+   if(!isManualOverride)
+   {
+      string finalAdaptiveWhy="";
+      bool finalAdaptiveAllowed=XAU_FinalAdaptiveDirectionDecision(signal,"FINAL_PRE_SEND",reason,false,finalAdaptiveWhy);
+      XAU_ProductionActiveFinalEntryAssertion(signal,"PRIMARY",reason,finalAdaptiveAllowed);
+      if(!finalAdaptiveAllowed)
+      {
+         Print("FINAL PRE-SEND BLOCK (Adaptive Transition Authority): ",finalAdaptiveWhy);
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL","BLOCK","AdaptiveTransitionFinalPreSend",
+                                   signal,funnelSetup,funnelGrade,funnelScore,true,false,
+                                   "BLOCKED","ADAPTIVE_TRANSITION_FINAL_PRE_SEND",true,false,false,
+                                   0,0,finalAdaptiveWhy,reason,price);
+         return false;
+      }
+   }
    if(!isManualOverride && !XAU_TryClaimEntryLock(signal))
    {
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "CrossInstanceEntryLock",
@@ -21835,7 +25317,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                                      worstFloatingPnl, secondsNegative,
                                      lastExitReason + " | " + shieldExtra);
       // v6.20.1: delayed-entry outcome telemetry, if this trade's entry went
-      // through REMOVED_ELAPSED_CONFIRMATION_ENGINE's mailbox (see that function).
+      // through XAU_TimingEngineConfirmsEntry's mailbox (see that function).
       XAU_ReportDelayOutcome(posId, brainRec, profit, bestFloatingPnl, worstFloatingPnl);
       XAU_WriteLearningReport();
       Print("TRADE-BRAIN CLOSE: ", outcome,
@@ -24481,8 +27963,8 @@ void XAU_BrainRecordOpen(ulong posId, int signal, double entryPrice, double sl, 
    g_brainOpenTrades[idx].entryReason = entryReason;
    // v6.20.3 adversarial-review fix: only trust g_lastEntryQ_* when it was
    // captured for THIS exact dir+setup within the last few seconds (i.e.
-   // during THIS decision cycle). deleted timed recovery path and
-   // XAU_TryForceOpenTrade never call XAU_FreshnessExtensionAuthority, so without this
+   // during THIS decision cycle). XAU_CheckPendingOpportunityRecovery and
+   // XAU_TryForceOpenTrade never call XAUEntryTimingGuard, so without this
    // check the globals could hold a different signal's numbers (a rejected
    // candidate, the opposite direction, or simply stale from minutes ago) —
    // originally this comment claimed those paths would "correctly" see
@@ -24826,13 +28308,451 @@ double XAU_EffectiveAdaptiveEntryDelaySeconds(int dir)
 
 // v6.18.0 ROLE NOTE: this is authority #2 of 3 for entry timing (see
 // XAU_ClassifySetup's ROLE NOTE above) -- CONFIRMATION / WAIT / REASSESS.
-// Distinct from XAU_FreshnessExtensionAuthority (anti-chase/location quality, a
+// Distinct from XAUEntryTimingGuard (anti-chase/location quality, a
 // separate question asked separately in the pipeline). Confirmed by
 // forensic audit 2026-07-09: not a duplicate, do not merge.
-// v6.24.0: the old multi-module confirmation/recovery timer stack was
-// physically removed. One shared wall-clock authority preserves the required
-// 120-180 second delay and releases only candidates that still pass freshness.
+bool XAU_TimingEngineConfirmsEntry(int dir, string setup, string grade, double sizeMulti, double atr)
+{
+   XAU_SetupClassification tcls;
+   XAU_ClassifySetup(dir, atr, setup, tcls);
+   string typeStr = (tcls.type == XAU_TIMING_TREND_CONTINUATION) ? "TREND_CONTINUATION" :
+                    (tcls.type == XAU_TIMING_PULLBACK_SCALP)     ? "PULLBACK_SCALP" :
+                    (tcls.type == XAU_TIMING_REVERSAL_RECLAIM)   ? "REVERSAL_RECLAIM" :
+                    (tcls.type == XAU_TIMING_BREAKOUT_RETEST)    ? "BREAKOUT_RETEST" : "LATE_CHASE";
+   string dirStr = (dir == 1) ? "BUY" : "SELL";
+   string earlyAuthorityWhy="";
+   if(!XAU_FinalAdaptiveDirectionDecision(dir,"PRIMARY",setup,false,earlyAuthorityWhy))
+   {
+      if(g_pendingEntryConfirm.active && g_pendingEntryConfirm.dir==dir)
+         g_pendingEntryConfirm.active=false; // stale old-direction identity cannot recycle
+      Print("TIMING_ENGINE CANCELLED BY ADAPTIVE TRANSITION AUTHORITY: ",earlyAuthorityWhy);
+      return false;
+   }
+   double adaptiveDelaySec=XAU_EffectiveAdaptiveEntryDelaySeconds(dir);
+   bool fastAdaptiveReversal=(adaptiveDelaySec<XAU_EffectiveEntryDelaySeconds());
+   if(fastAdaptiveReversal)
+      PrintFormat("TIMING_ENGINE: ADAPTIVE_REVERSAL_FAST_CONFIRM direction=%s target=%.0fs exhaustion=%.0f — compact closed-bar package already passed; anti-chase and fresh revalidation remain mandatory",
+                  dirStr,adaptiveDelaySec,g_transitionDecision.exhaustionProbability);
 
+   // v6.20.0 ORIGINAL BEHAVIOR (REMOVED in v6.20.3 Commit C+): this used to
+   // let "clean evidence" (tcls.immediateConfirm) skip the M5 entry delay
+   // entirely for any grade, with InpAllowImmediateAPlusMomentum only adding
+   // an extra restriction for A+ specifically. The 2026-07-09 15:45 live
+   // incident (grade A, immediateConfirm=true, executed in 17s) proved this
+   // reachable for ordinary A-grade trades, not just A+ -- and the owner then
+   // explicitly required the delay to apply to EVERY grade with NO bypass at
+   // all, not merely a narrower one. The entire immediate-return branch that
+   // used to sit here has been removed (not merely disabled) -- every signal
+   // now always falls through to the wait-then-revalidate logic below,
+   // using the FULL XAU_EffectiveM5EntryDelaySec() target regardless of
+   // grade or tcls.immediateConfirm. "Clean evidence" is still computed and
+   // still used elsewhere (e.g. as one input to LATE_CHASE classification
+   // and to the post-wait revalidation), it just no longer shortens or skips
+   // the wait itself. InpAllowImmediateAPlusMomentum and
+   // InpImmediateConfirmRequiresAPlus inputs are left in place, unused by
+   // this function, only so a future explicit decision to reopen an
+   // exemption has a named toggle to wire back in -- neither input does
+   // anything on its own anymore.
+   if(tcls.immediateConfirm)
+      PrintFormat("TIMING_ENGINE: %s clean evidence (%s %s grade=%s) -- still routes through the full M5 entry delay, no exemption for any grade per explicit requirement",
+                  typeStr, setup, dirStr, grade);
+
+   double signalPrice = iClose(Symbol(), PERIOD_M5, 1);
+   datetime nowCandle = iTime(Symbol(), PERIOD_M5, 0);
+   string timingOpportunityId=(g_reversalOpportunity.active && g_reversalOpportunity.direction==dir)
+                              ?XAU_ATReversalOpportunityId():"NONE";
+
+   bool sameSignalPending = (g_pendingEntryConfirm.active &&
+                            g_pendingEntryConfirm.dir == dir &&
+                            ((timingOpportunityId!="NONE" && g_pendingEntryConfirm.opportunityId==timingOpportunityId) ||
+                             (timingOpportunityId=="NONE" && g_pendingEntryConfirm.setup == setup)));
+
+   // v6.21.2 audit fix: the legacy InpUseM5EntryDelay=false "wait for the next
+   // M5 bar" branch has been REMOVED (not merely disabled) -- there is no
+   // reachable code path left that waits for a bar boundary to confirm entry.
+   // false still routes through the exact same bounded 120-180s wall-clock
+   // logic below; only a one-time startup warning differs.
+   if(!InpUseM5EntryDelay)
+   {
+      static bool warnedLegacyRemoved = false;
+      if(!warnedLegacyRemoved)
+      {
+         Print("ENTRY_TIMING_LEGACY_BAR_WAIT_REMOVED — using bounded 2-3-minute wall-clock confirmation");
+         warnedLegacyRemoved = true;
+      }
+   }
+
+   // v6.20.0 M5 ENTRY DELAY: signal detection stays on M5 (unchanged above);
+   // this is a short, wall-clock 120-180s delay INSIDE the same M5 candle.
+   // Same PendingEntryConfirmation struct, same XAU_ClassifySetup evidence
+   // (tcls, already freshly recomputed above on THIS call) -- one authority.
+   if(sameSignalPending)
+   {
+      // v6.20.3 (Commit C, tightened again same day per explicit
+      // instruction): always the FULL target delay, unconditionally --
+      // tcls.immediateConfirm no longer shortens this for any grade.
+      double delaySec = adaptiveDelaySec;
+      double elapsedSec = (double)(TimeCurrent() - g_pendingEntryConfirm.firstSeenTime);
+      if(elapsedSec < delaySec)
+      {
+         // v6.20.5 (TELEMETRY ONLY -- Change A): remaining= added, same
+         // cadence/throttle as before (none -- unchanged from pre-existing
+         // behavior), purely an additional field on an existing line.
+         PrintFormat("TIMING_ENGINE: %s ENTRY_DELAY_WAITING (%s %s) elapsed=%.0fs / target=%.0fs / remaining=%.0fs OriginalSignalPrice=%.2f",
+                     typeStr, setup, dirStr, elapsedSec, delaySec, MathMax(0.0, delaySec - elapsedSec), g_pendingEntryConfirm.signalPrice);
+         return false;
+      }
+
+      // Delay window elapsed -- re-validate everything fresh before executing.
+      // tcls above already re-derived setup type/evidence/freshStructureBias
+      // from CURRENT price/structure this same call (nothing here is stale).
+      PrintFormat("TIMING_ENGINE: %s ENTRY_DELAY_REVALIDATING (%s %s) elapsed=%.0fs / target=%.0fs",
+                  typeStr, setup, dirStr, elapsedSec, delaySec);
+      double curPriceNow = (dir == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK) : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      double movedInFavor = (dir == 1) ? (curPriceNow - g_pendingEntryConfirm.signalPrice)
+                                       : (g_pendingEntryConfirm.signalPrice - curPriceNow);
+      double moveATR = (g_pendingEntryConfirm.atr > 0.0) ? movedInFavor / g_pendingEntryConfirm.atr : 0.0;
+      double spreadPts = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+      string spreadState = XAU_SpreadState(spreadPts);
+      bool structureFlipped = (dir == 1 && tcls.freshStructureBias == "BEARISH") ||
+                              (dir == -1 && tcls.freshStructureBias == "BULLISH");
+      string cancelReason = "";
+
+      if(movedInFavor > g_pendingEntryConfirm.atr * InpCancelIfPriceMovedTooFarATR)
+         cancelReason = StringFormat("PRICE_RAN_TOO_FAR_CHASE moved=%.2f (%.2fATR) > cap %.2fATR -- %s",
+                                     movedInFavor, moveATR, InpCancelIfPriceMovedTooFarATR,
+                                     moveATR >= 2.0 ? "MISSED_TRADE (already well into what would be profit, not chasing it)" : "reassessing from current market");
+      else if(structureFlipped)
+         cancelReason = StringFormat("STRUCTURE_FLIPPED freshStructureBias=%s now opposes %s", tcls.freshStructureBias, dirStr);
+      else if(tcls.type == XAU_TIMING_LATE_CHASE)
+         cancelReason = StringFormat("STILL_LATE_CHASE_AFTER_DELAY (%s)", tcls.why);
+      else if(spreadState == "EXTREME")
+         cancelReason = StringFormat("SPREAD_TOO_WIDE %.0f pts (%s)", spreadPts, spreadState);
+
+      if(StringLen(cancelReason) > 0)
+      {
+         PrintFormat("TIMING_ENGINE: %s ENTRY_DELAY_CANCELLED (%s %s) CancelReason=%s | OriginalSignalTime=%s OriginalSignalPrice=%.2f EntryDelaySeconds=%.0f ThesisStillValid=NO",
+                     typeStr, setup, dirStr, cancelReason,
+                     TimeToString(g_pendingEntryConfirm.firstSeenTime, TIME_DATE | TIME_SECONDS),
+                     g_pendingEntryConfirm.signalPrice, elapsedSec);
+         g_pendingEntryConfirm.active = false;
+         g_m5DelayCancelledCount++;
+         // Do not silently re-arm a fresh window this same tick -- if a
+         // genuinely new candidate exists, the next tick's fresh scoring
+         // (dir/setup re-derived from scratch by ScoreSetups) will find it
+         // and fall through to the "start a brand-new window" block below.
+         return false;
+      }
+
+      double priceImprovement = movedInFavor; // + = better than original signal price, - = worse (still within cap, so acceptable)
+      PrintFormat("TIMING_ENGINE: %s ENTRY_DELAY_CONFIRMED (%s %s) -> ENTRY_ALLOWED | OriginalSignalTime=%s OriginalSignalPrice=%.2f DelayedEntryTime=%s DelayedEntryPrice=%.2f EntryDelaySeconds=%.0f PriceImprovementOrWorsening=%.2f ThesisStillValid=YES",
+                  typeStr, setup, dirStr,
+                  TimeToString(g_pendingEntryConfirm.firstSeenTime, TIME_DATE | TIME_SECONDS),
+                  g_pendingEntryConfirm.signalPrice,
+                  TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+                  curPriceNow, elapsedSec, priceImprovement);
+      // v6.20.1: mailbox for delayed-entry outcome telemetry.
+      g_lastEntryTimingDecision.valid              = true;
+      g_lastEntryTimingDecision.wasDelayed         = true;
+      g_lastEntryTimingDecision.originalSignalTime = g_pendingEntryConfirm.firstSeenTime;
+      g_lastEntryTimingDecision.originalSignalPrice= g_pendingEntryConfirm.signalPrice;
+      g_lastEntryTimingDecision.decisionTime       = TimeCurrent();
+      g_lastEntryTimingDecision.delaySeconds       = elapsedSec;
+      g_lastEntryTimingDecision.priceImprovement   = priceImprovement;
+      g_lastEntryTimingDecision.entryReasonText    = "ENTRY_DELAY_CONFIRMED";
+      g_pendingEntryConfirm.active = false;
+      g_m5DelayConfirmedCount++;
+      g_m5DelaySumPriceImprovement += priceImprovement;
+      return true;
+   }
+   else if(g_pendingEntryConfirm.active)
+   {
+      PrintFormat("TIMING_ENGINE: ENTRY_DELAY_EXPIRED (previous %s %s) -> REASSESS_FROM_CURRENT_MARKET (now %s %s)",
+                  g_pendingEntryConfirm.setup, g_pendingEntryConfirm.dir == 1 ? "BUY" : "SELL", setup, dirStr);
+   }
+
+   // No confirmed pending match (new candidate, thesis changed, or window
+   // aged out/overextended/cancelled) -- open a brand-new confirmation window
+   // from THIS bar's evidence. Never resumes/reuses the old signal's direction.
+   g_pendingEntryConfirm.active          = true;
+   g_pendingEntryConfirm.dir             = dir;
+   g_pendingEntryConfirm.setup           = setup;
+   g_pendingEntryConfirm.grade           = grade;
+   g_pendingEntryConfirm.sizeMulti       = sizeMulti;
+   g_pendingEntryConfirm.signalPrice     = signalPrice;
+   g_pendingEntryConfirm.atr             = atr;
+   g_pendingEntryConfirm.firstSeenCandle = nowCandle;
+   g_pendingEntryConfirm.firstSeenTime   = TimeCurrent();
+   g_pendingEntryConfirm.opportunityId   = timingOpportunityId;
+   PrintFormat("TIMING_ENGINE: %s SIGNAL_DETECTED (%s %s) grade=%s -> ENTRY_DELAY_STARTED for %.0fs (%s%s) OriginalSignalPrice=%.2f",
+               typeStr, setup, dirStr, grade, adaptiveDelaySec,
+               fastAdaptiveReversal?"ADAPTIVE_REVERSAL_FAST_CONFIRM | ":"",
+               tcls.why, signalPrice);
+   return false;
+}
+
+// v6.17.14 FLEET-CONSISTENCY RECOVERY: exactly one re-check of the pending
+// missed opportunity. Reuses the same, already-tested building blocks as the
+// v6.17.9/10 Symmetric Opportunity Recheck and the v6.17.8 stale-HTF fix
+// (TFDirectionByEMA, XAU_ComputeCombinedGradeForCandidate, AdaptiveXAUConfirm)
+// rather than inventing new validity logic -- this is deliberate: every check
+// below is something this file already trusts elsewhere. Clears the pending
+// slot unconditionally once it fires, so this can never fire twice for the
+// same missed signal (no indefinite chasing, per explicit requirement).
+// v6.21.2 audit fix: this used to only be CALLED on a new M5 bar (so the
+// gauntlet re-check itself could be delayed by up to ~5 minutes after the
+// opportunity was stored, BEFORE the actual wall-clock wait even begins). It
+// is now called every tick and runs its gauntlet promptly. The bounded
+// 120-180s wall-clock wait-then-revalidate itself is intentionally NOT
+// duplicated here -- once this gauntlet passes, it hands off to
+// XAU_CheckRecoveryAwaitingTiming(), which calls the SAME shared
+// XAU_TimingEngineConfirmsEntry() every other entry path uses (already fixed
+// to the bounded wall-clock delay above). Adding a second wait here would
+// stack two delays and silently recreate a near-5-minute total wait.
+void XAU_CheckPendingOpportunityRecovery()
+{
+   if(!g_pendingOpportunity.active) return;
+
+   string sid               = g_pendingOpportunity.signalId;
+   int    dir                = g_pendingOpportunity.dir;
+   string setup              = g_pendingOpportunity.setup;
+   double score               = g_pendingOpportunity.score;
+   double signalPrice        = g_pendingOpportunity.signalPrice;
+   double atrOrig            = g_pendingOpportunity.atr;
+   string originalBlocker    = g_pendingOpportunity.originalBlocker;
+   datetime expiry            = g_pendingOpportunity.expiry;
+
+   g_pendingOpportunity.active = false; // single-attempt: clear now regardless of outcome below
+
+   if(TimeCurrent() > expiry)
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=EXPIRED");
+      return;
+   }
+   if(CountMyPositions() >= InpMaxOpenTrades)
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=MAX_OPEN_TRADES");
+      return;
+   }
+   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   if(spread > InpMaxSpread)
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=SPREAD_TOO_WIDE (", DoubleToString(spread, 0),
+            " > ", DoubleToString(InpMaxSpread, 0), ")");
+      return;
+   }
+
+   // v6.20.3 (Commit B, xau_remediation_map_PRE_IMPLEMENTATION_2026-07-09.md
+   // Item 5) — wire the EXISTING XAU_AntiRepeatLossActive() guard into the
+   // recovery path. This guard already runs on the fresh-signal path (7
+   // other call sites) and is proven live (VPS journal 2026-07-08: tracked
+   // a 3-loss SELL streak correctly and blocked a later fresh candidate
+   // with "hard block stands despite A grade"); it was never consulted here,
+   // meaning a stored recovery opportunity could re-fire in the same
+   // direction this account just lost on, with no check that this specific
+   // account's own recent loss history in that direction has been priced
+   // back through. The guard's own exemption (Active Direction independently
+   // reaching STRONG tier) still applies here for free -- a genuinely fresh,
+   // independently-confirmed reversal is not blocked by this change.
+   if(XAU_AntiRepeatLossActive(dir))
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=ANTI_REPEAT_LOSS_ACTIVE (streak=", g_sameDirLossStreak,
+            " lastLossDir=", g_lastLossDir == 1 ? "BUY" : (g_lastLossDir == -1 ? "SELL" : "NONE"),
+            " dir=", dir == 1 ? "BUY" : "SELL", ") -- this account's own recent same-direction loss has not been",
+            " price-recovered and Active Direction has not independently reached STRONG tier in this direction;",
+            " recovering this signal now would be resuming a thesis this account just lost on, not fresh evidence.");
+      return;
+   }
+
+   double atrNow = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   double curPrice = iClose(Symbol(), PERIOD_M5, 1);
+   if(atrNow <= 0.0 || curPrice <= 0.0)
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=NO_FRESH_DATA");
+      return;
+   }
+
+   // Anti-chase: price must not have already run more than 1x the ORIGINAL
+   // ATR further in the signal's favor -- that would mean chasing an
+   // already-extended move instead of catching the original, still-fresh
+   // setup. Matches the explicit "do not blindly chase price" requirement.
+   double movedInFavor = (dir == 1) ? (curPrice - signalPrice) : (signalPrice - curPrice);
+   if(movedInFavor > atrOrig * 1.0)
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=OVEREXTENDED (moved ", DoubleToString(movedInFavor, 2),
+            " > 1.0xATR=", DoubleToString(atrOrig, 2), " since original signal)");
+      return;
+   }
+
+   // Thesis re-check: fresh M15+M30 price-position reads must still support
+   // this exact direction -- if either has flipped, the structural reason
+   // this was ever a candidate no longer holds.
+   string freshWhyM15 = "", freshWhyM30 = "";
+   int freshM15Dir = TFDirectionByEMA(dir, PERIOD_M15, 0.05, freshWhyM15);
+   int freshM30Dir = TFDirectionByEMA(dir, InpContextTF, 0.05, freshWhyM30);
+   if(freshM15Dir == -dir || freshM30Dir == -dir)
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=THESIS_INVALIDATED (M15=", freshWhyM15, " | M30=", freshWhyM30, ")");
+      return;
+   }
+
+   // v6.17.25 FIX: TFDirectionByEMA above covers M15/M30 -- add the same
+   // fresh M5 structure/exhaustion read every other entry path now uses.
+   // A recovered signal must mean "the CURRENT chart independently supports
+   // this direction now," not "the old blocked trade is allowed because
+   // time passed" -- LATE_CHASE here means M5 structure has moved against
+   // dir with no compensating evidence, which M15/M30 alone would miss.
+   XAU_SetupClassification recClass;
+   XAU_ClassifySetup(dir, atrNow, setup, recClass);
+   if(recClass.type == XAU_TIMING_LATE_CHASE)
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=M5_STRUCTURE_NO_LONGER_SUPPORTS (", recClass.why, ")");
+      return;
+   }
+
+   // Re-grade with CURRENT regime/session quality, not the stale original.
+   double regimeQualityNow  = DetectRegime();
+   double sessionQualityNow = GetSessionQuality();
+   string oppGrade = "";
+   double oppCombined = XAU_ComputeCombinedGradeForCandidate(dir, setup, score, regimeQualityNow, sessionQualityNow, oppGrade);
+   if(oppGrade == "SKIP")
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=GRADE_NO_LONGER_QUALIFIES (regrade=", oppGrade,
+            " combined=", DoubleToString(oppCombined, 2), ")");
+      return;
+   }
+   bool fits = StrategyFitsPersonality(setup, g_marketPersonality);
+   if(!fits && oppGrade != "A+" && oppGrade != "A")
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=PERSONALITY_MISMATCH");
+      return;
+   }
+   double oppLot = 1.0; string oppWhy = "";
+   if(!AdaptiveXAUConfirm(dir, "RECOVERY", oppCombined, oppGrade, oppLot, oppWhy, true))
+   {
+      Print("RECOVERY_REJECTED: ", sid, " reason=SMART_GUARD (", oppWhy, ")");
+      return;
+   }
+
+   string recoveryReason = StringFormat("[%s] %s RECOVERY of missed signal %s (original blocker: %s, current M5 structure: %s)",
+                                        oppGrade, setup, sid, originalBlocker, recClass.why);
+
+   // v6.20.5 (Change B) — FIX for the Change-A-documented bypass: the
+   // recovery gauntlet above answers "is this previously blocked idea still
+   // valid?" -- it does NOT answer "is this exact moment/location good
+   // enough to execute?", which is the timing engine's job. Previously this
+   // called OpenTrade() directly here. Now it registers into the SAME
+   // authoritative timing engine every other autonomous path uses
+   // (XAU_TimingEngineConfirmsEntry via g_pendingEntryConfirm) and defers
+   // execution to XAU_CheckRecoveryAwaitingTiming(), called every tick.
+   // Per the explicit decision on whether recovery-wait counts toward the
+   // timing minimum (documented in the v6.20.5 commit message): it does NOT
+   // -- the wait between PENDING_OPPORTUNITY_STORED and this gauntlet pass
+   // had zero continuous timing-engine observation (a separate struct,
+   // simply idle), so the full timing delay begins fresh from here.
+   // v6.21.2: storedAt is now read directly from PendingOpportunity's own
+   // firstSeenTime field (added for this fix) instead of being reconstructed
+   // from `expiry`, since expiry's formula changed (bounded wall-clock delay
+   // + margin, not 2 M5-bar-periods) and reconstructing from it would silently
+   // drift out of sync with the actual storage time.
+   datetime storedAt = g_pendingOpportunity.firstSeenTime;
+   g_recoveryAwaitingTiming.active              = true;
+   g_recoveryAwaitingTiming.signalId            = sid;
+   g_recoveryAwaitingTiming.dir                 = dir;
+   g_recoveryAwaitingTiming.setup               = setup;
+   g_recoveryAwaitingTiming.grade               = oppGrade;
+   g_recoveryAwaitingTiming.atr                 = atrNow;
+   g_recoveryAwaitingTiming.recoveryReason       = recoveryReason;
+   g_recoveryAwaitingTiming.firstSeenTime       = storedAt;
+   g_recoveryAwaitingTiming.firstSeenPrice      = signalPrice;
+   g_recoveryAwaitingTiming.recoveryWaitSeconds = (double)(TimeCurrent() - storedAt);
+   PrintFormat("RECOVERY_GAUNTLET_PASSED: %s | %s %s grade=%s combined=%.2f | %s | recoveryWaitSeconds=%.0f -- now entering the SAME timing engine every fresh signal uses; full delay starts fresh from here",
+               sid, dir == 1 ? "BUY" : "SELL", setup, oppGrade, oppCombined, recClass.why,
+               g_recoveryAwaitingTiming.recoveryWaitSeconds);
+}
+
+// v6.20.5 (Change B) — polls, EVERY TICK (not gated to newM5Bar, unlike the
+// gauntlet check above), whether a recovery candidate that already passed
+// its own gauntlet has now also cleared the shared timing engine. No Sleep,
+// no second timer: this repeatedly calls the exact same
+// XAU_TimingEngineConfirmsEntry() the fresh-signal path calls every tick,
+// which owns all delay/elapsed/cancel state via g_pendingEntryConfirm. This
+// function's only job is to recognize the three possible outcomes of that
+// call for THIS candidate and act once, on whichever tick resolves it.
+void XAU_CheckRecoveryAwaitingTiming()
+{
+   if(!g_recoveryAwaitingTiming.active) return;
+
+   bool confirmed = XAU_TimingEngineConfirmsEntry(g_recoveryAwaitingTiming.dir,
+                                                  g_recoveryAwaitingTiming.setup,
+                                                  g_recoveryAwaitingTiming.grade,
+                                                  1.0, g_recoveryAwaitingTiming.atr);
+   if(confirmed)
+   {
+      // v6.20.5 (Change B): timing engine confirmed -- record the FULL,
+      // honest proof (bypassUsed=false now; the gate genuinely ran) before
+      // calling OpenTrade(), same convergence point every other caller uses.
+      g_pendingTimingProof.active                = true;
+      g_pendingTimingProof.candidateId           = g_recoveryAwaitingTiming.signalId;
+      g_pendingTimingProof.sourcePath             = "RECOVERY";
+      g_pendingTimingProof.firstSeenTime         = g_recoveryAwaitingTiming.firstSeenTime;
+      g_pendingTimingProof.firstSeenPrice        = g_recoveryAwaitingTiming.firstSeenPrice;
+      g_pendingTimingProof.timingGateRequired    = true;
+      g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveAdaptiveEntryDelaySeconds(g_recoveryAwaitingTiming.dir);
+      g_pendingTimingProof.timingGateStartTime   = g_lastEntryTimingDecision.originalSignalTime;
+      g_pendingTimingProof.recoveryWaitSeconds   = g_recoveryAwaitingTiming.recoveryWaitSeconds;
+      g_pendingTimingProof.timingEngineWaitSeconds = g_lastEntryTimingDecision.delaySeconds;
+      g_pendingTimingProof.revalidationTime      = g_lastEntryTimingDecision.decisionTime;
+      g_pendingTimingProof.revalidationResult    = g_lastEntryTimingDecision.entryReasonText;
+      g_pendingTimingProof.bypassUsed            = false;
+      g_pendingTimingProof.bypassReason          = "";
+      g_pendingTimingProof.openTradeCaller       = "XAU_CheckRecoveryAwaitingTiming->OpenTrade";
+
+      Print("RECOVERY_TIMING_CONFIRMED: ", g_recoveryAwaitingTiming.signalId,
+            " -- timing engine passed, executing now");
+      bool opened = OpenTrade(g_recoveryAwaitingTiming.dir, g_recoveryAwaitingTiming.atr,
+                             g_recoveryAwaitingTiming.recoveryReason, 1.0);
+      if(!opened)
+         Print("RECOVERY_OPEN_TRADE_FAILED: ", g_recoveryAwaitingTiming.signalId,
+               " -- OpenTrade() itself declined (final risk/broker gate)");
+      g_recoveryAwaitingTiming.active = false;
+      return;
+   }
+
+   // Not confirmed this tick -- distinguish "still legitimately waiting for
+   // THIS exact candidate" from "the timing engine cancelled it, or a
+   // different candidate reset the shared window" (e.g. structure flipped,
+   // overextended, spread extreme, still late-chase, or an unrelated fresh
+   // signal claimed the shared g_pendingEntryConfirm slot first). Only the
+   // former should be left to try again next tick.
+   bool stillMine = g_pendingEntryConfirm.active &&
+                    g_pendingEntryConfirm.dir == g_recoveryAwaitingTiming.dir &&
+                    g_pendingEntryConfirm.setup == g_recoveryAwaitingTiming.setup;
+   if(!stillMine)
+   {
+      Print("RECOVERY_TIMING_CANCELLED: ", g_recoveryAwaitingTiming.signalId,
+            " -- timing engine cancelled/expired this candidate (or it was superseded) before confirming; recovery dropped, not retried");
+      g_recoveryAwaitingTiming.active = false;
+   }
+}
+
+// v6.17.15 COMMAND CENTER FORCE OPEN: user/manual override of a blocked
+// candidate, requested from the Command Center UI via the existing remote-
+// command queue (BotMonitorPollCommands -> FORCE_OPEN_TRADE action).
+//
+// Deliberately a THIN wrapper, not a parallel execution path: OpenTrade()
+// itself already (a) computes entry/SL/TP fresh from CURRENT bid/ask + ATR
+// at call time -- never from any stale stored price -- and (b) already
+// enforces every HARD safety item on the explicit "must not bypass" list:
+// invalid stops (minDist/stopLevel), broker min/max/step lot
+// (XAU_NormalizeVolumeForRisk), max risk hard cap
+// (XAU_ReconcileFinalRisk), margin/broker rejection (trade.Buy/Sell +
+// BROKER_RETCODE), and exposure/aggregate-risk gates. This function only
+// adds the checks OpenTrade() does NOT already do: staleness, the spread
+// hard cap (OpenTrade has no spread gate of its own -- that normally lives
+// upstream in the scan pipeline), and same-candle duplicate protection.
+// Explicitly does NOT call ScoreSetups/Personality Gate/SmartGuard/AI --
+// skipping that pipeline IS how the soft blockers get bypassed, by design.
 bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalBlocker,
                           datetime candleTime, double originalSignalPrice,
                           double originalScore, string originalSymbol,
@@ -24983,6 +28903,38 @@ bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalB
       return false;
    }
    return true;
+}
+
+// v6.17.14 FLEET-CONSISTENCY: classifies a blocker reason as a genuine,
+// account/market HARD reason (never eligible for recovery -- correctly
+// stopping the trade for everyone in the fleet who sees the same condition,
+// or a real account-specific fact) vs. a SOFT reason (a quality/confidence
+// judgment call that legitimately can differ cycle-to-cycle and is exactly
+// the class of thing that caused one account to miss a signal two other
+// identical accounts took). Only SOFT-blocked A/A+ candidates become a
+// PendingOpportunity.
+bool XAU_BlockerIsHardReason(string reason)
+{
+   string u = reason;
+   StringToUpper(u);
+   string hardMarkers[] = {
+      "SPREAD_TOO_WIDE", "SPREAD SPIKE", "NEWS_AFTERMATH", "NEWS-CALENDAR",
+      "NEWS FILTER", "NEWS_ENTRY_BLOCKED", "SMC_HARD_CONFLICT", "SMC HARD CONFLICT",
+      "INVALID_LOT_OR_SL_DISTANCE", "RISK_PER_LOT_CALC_FAILED", "MIXED_EXPOSURE",
+      "ONE_DIRECTION_ONLY", "AGG_RISK", "AGG-RISK", "TOTAL-LOTS", "MARGIN",
+      "FINAL_RISK_RECONCILE", "PG_TIER_3", "PROP_FIRM_LOSS_LOCK", "GROWTH_DAILY_LOCK",
+      "WEEKEND_CLOSE", "LICENSE_INVALID", "HEDGE", "BROKER", "STRUCTURAL",
+      "STRUCTURE HARD CONTRADICTION", "MAX-OPEN", "MAX-DAY", "DEAD MARKET",
+      // v6.17.16: the EA's own timing/quality engine's internal HARD_BLOCK
+      // self-label (XAUEntryTimingGuard's blockClass) -- runtime-proven a
+      // PendingOpportunity recovery re-admitted a signal originally
+      // FAILED-IMPULSE BLOCKed with blockClass=HARD_BLOCK, and it lost.
+      // That label must never be treated as a soft, recoverable reason.
+      "BLOCKCLASS=HARD_BLOCK", "HARD_BLOCK_SELF_CONSISTENCY"
+   };
+   for(int i = 0; i < ArraySize(hardMarkers); i++)
+      if(StringFind(u, hardMarkers[i]) >= 0) return true;
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -25591,7 +29543,7 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
                   InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF");
       if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !counterLocationAllows)
       {
-         Print("COUNTER_EXCURSION_SKIP: REVERSAL_LOCATION_CONTEXT_ONLY — Counter remains isolated but cannot chase a consumed adaptive reversal opportunity");
+         Print("COUNTER_EXCURSION_SKIP: REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK — Counter remains isolated but cannot chase a consumed adaptive reversal opportunity");
          return;
       }
    }
@@ -25737,8 +29689,8 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
                                   g_reversalOpportunity.impulseConsumedByEntry);
    bool finalCounterAllowed=!finalCounterHighExhaustionBlock && !finalCounterLocationWait;
    string finalCounterDecision=finalCounterAllowed?"ALLOW":finalCounterLocationWait?"WAIT":"BLOCK";
-   string finalCounterReason=finalCounterHighExhaustionBlock?"LEGACY_COUNTER_EXTENSION_REJECT":
-                             finalCounterLocationWait?"REVERSAL_LOCATION_CONTEXT_ONLY":
+   string finalCounterReason=finalCounterHighExhaustionBlock?"OLD_DIRECTION_EXHAUSTION_HARD_BLOCK":
+                             finalCounterLocationWait?"REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK":
                              "COUNTER_ISOLATED_SAFETY_AND_LOCATION_CHECKS_PASSED";
    XAU_ProductionActiveFinalEntryAssertion(counterDir,"COUNTER",setupName,finalCounterAllowed);
    if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !finalCounterAllowed)
@@ -25955,11 +29907,48 @@ void XAU_RememberBlockedSignal(int signal, string setupName, string grade,
                                double setupScore, double combinedScore,
                                string reason)
 {
-   // COUNTER_EXCURSION_CAPTURE remains independent of the normal strategy.
-   // This telemetry hook never schedules, recovers, or later re-enters a
-   // blocked normal candidate. The experiment's own mode gate is the only
-   // control for the isolated counter strategy.
-   // This is the single choke point every block site calls, and
+   // v6.17.14 FLEET-CONSISTENCY: this function is the single choke point
+   // every block site in the file already calls (personality gate,
+   // SmartGuard, AI, ANTI-BIAS, TRI, SMC, news, etc.) -- deliberately kept
+   // INDEPENDENT of InpBlockedTradeMemoryReport below, since missed-signal
+   // recovery must work even if the optional memory-report feature is off.
+   if(signal != 0 && (grade == "A+" || grade == "A") && !XAU_BlockerIsHardReason(reason))
+   {
+      double poAtr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+      double poPx  = (signal > 0) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                                  : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      if(poPx <= 0.0) poPx = iClose(Symbol(), PERIOD_M5, 1);
+      if(poAtr > 0.0 && poPx > 0.0)
+      {
+         g_pendingOpportunity.active        = true;
+         g_pendingOpportunity.signalId      = StringFormat("%s_%s_%d_%I64d", setupName, signal == 1 ? "BUY" : "SELL",
+                                                            (int)iTime(Symbol(), PERIOD_M5, 1), (long)TimeCurrent());
+         g_pendingOpportunity.candleTime    = iTime(Symbol(), PERIOD_M5, 1);
+         g_pendingOpportunity.firstSeenTime = TimeCurrent();
+         g_pendingOpportunity.dir           = signal;
+         g_pendingOpportunity.setup         = setupName;
+         g_pendingOpportunity.grade         = grade;
+         g_pendingOpportunity.score         = setupScore;
+         g_pendingOpportunity.combinedScore = combinedScore;
+         g_pendingOpportunity.signalPrice   = poPx;
+         g_pendingOpportunity.atr           = poAtr;
+         g_pendingOpportunity.originalBlocker = reason;
+         // v6.21.2 audit fix: expiry used to be pegged to 2 M5 bars (up to 10
+         // minutes) because recovery itself only used to run on a new bar.
+         // Recovery now runs on its own bounded 120-180s wall-clock delay
+         // (see XAU_CheckPendingOpportunityRecovery), so expiry only needs to
+         // cover that delay plus a small margin for a late tick.
+         g_pendingOpportunity.expiry        = TimeCurrent() + (datetime)XAU_EffectiveEntryDelaySeconds() + 30;
+         Print("PENDING_OPPORTUNITY_STORED: ", g_pendingOpportunity.signalId,
+               " | ", signal == 1 ? "BUY" : "SELL", " ", setupName, " grade=", grade,
+               " | originalBlocker=", reason,
+               " | wall-clock recheck due in ", XAU_EffectiveEntryDelaySeconds(), " seconds (independent of M5 rollover)");
+      }
+   }
+
+   // COUNTER_EXCURSION_CAPTURE: independent of InpBlockedTradeMemoryReport
+   // for the same fleet-consistency reason as the PendingOpportunity block
+   // above -- this is the single choke point every block site calls, and
    // the experiment's own InpCounterExcursionMode gate (default OFF) is
    // what actually controls whether anything happens.
    XAU_TryCounterExcursionEntry(signal, setupName, grade, setupScore, combinedScore, reason);
@@ -26276,10 +30265,10 @@ bool XAU_BlockedContinuationMissedProfitBias(string setupName, int signal, strin
    }
 
    s = 0; wr = 0.0; fav = 0.0; adv = 0.0;
-   if(XAU_BlockedMemoryStats(setupName, signal, "LEGACY_LOCATION_MEMORY_TAG", s, wr, fav, adv) &&
+   if(XAU_BlockedMemoryStats(setupName, signal, "BAD-LOCATION BLOCK", s, wr, fav, adv) &&
       (bestKey == "" || fav - adv > bestFav - bestAdv))
    {
-      bestSamples = s; bestWR = wr; bestFav = fav; bestAdv = adv; bestKey = "LEGACY_LOCATION_MEMORY_TAG";
+      bestSamples = s; bestWR = wr; bestFav = fav; bestAdv = adv; bestKey = "BAD-LOCATION BLOCK";
    }
 
    if(bestKey == "") return false;
@@ -26419,7 +30408,7 @@ bool XAU_NewsAftermathCanFastTrack(int signal, string setupName, string grade,
    bool regimeAligned =
       (signal == 1 && (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP)) ||
       (signal == -1 && (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN));
-   // v6.17.3 FIX: same Active Direction exemption as deleted post-news veto.
+   // v6.17.3 FIX: same Active Direction exemption as XAU_EvaluateAdaptiveNewsMomentumEntry.
    bool htfAligned = (g_htfConsensusDir == signal ||
                      (signal == 1 && g_activeDirection == DIRECTION_BUY_ONLY) ||
                      (signal == -1 && g_activeDirection == DIRECTION_SELL_ONLY));
@@ -26746,229 +30735,876 @@ bool XAU_StrongMomentumOverrideAllowed(int signal, string setupName, double comb
 // and the v6.17.16 HARD_BLOCK self-consistency fix -- forensic audit
 // (2026-07-06/08) found these the two MOST reliable blockers in the file
 // (~20% would-have-won-if-bypassed). Confirmed 2026-07-09: not a duplicate
-// of XAU_ClassifySetup/REMOVED_ELAPSED_CONFIRMATION_ENGINE, do not merge or
+// of XAU_ClassifySetup/XAU_TimingEngineConfirmsEntry, do not merge or
 // weaken without fresh current-version evidence.
-bool XAU_NewsAuthorityAllows(string &why)
-{
-   why = "";
-   if(!InpUseNewsFilter) return true;
-   if(g_adaptiveNewsPhase == ANP_PRE_NEWS || g_adaptiveNewsPhase == ANP_RELEASE_COOLDOWN)
-   {
-      why = "protected high-impact news release window";
-      return false;
-   }
-   string calendarWhy = "";
-   if(IsScheduledNewsWindow(calendarWhy))
-   {
-      why = "protected scheduled release: " + calendarWhy;
-      return false;
-   }
-   return true; // post-release interpretation/continuation is evaluated once upstream
-}
-
-bool XAU_StructureAuthorityAllows(int signal, string setupName, string &why)
-{
-   why = "";
-   if(signal == 0) return false;
-   // One structure veto requires two independent, current observations:
-   // a confirmed SMC break and HTF consensus both opposite the candidate.
-   bool confirmedOppositeBreak = (g_smc_bos_dir == -signal && g_htfConsensusDir == -signal);
-   if(!confirmedOppositeBreak) return true;
-   why = StringFormat("confirmed opposite structure: BOS=%+d HTF=%+d opposes %s %s",
-                      g_smc_bos_dir,g_htfConsensusDir,setupName,signal==1?"BUY":"SELL");
-   return false;
-}
-
-int XAU_AlignedCandidateLane(string setupName)
-{
-   if(setupName == "RE_ENTRY") return 1;
-   if(setupName == "PYRAMID") return 2;
-   return 0;
-}
-
-bool XAU_TimingAuthorityAllows(int signal, string setupName, double atr, string &why)
-{
-   if(signal == 0 || atr <= 0.0)
-   { why = "timing data invalid"; return false; }
-
-   int lane = XAU_AlignedCandidateLane(setupName);
-   if(g_alignedCandidates[lane].firstCandidateTime <= 0 ||
-      g_alignedCandidates[lane].candidateDirection != signal ||
-      g_alignedCandidates[lane].candidateSetup != setupName)
-   {
-      why = "timing authority has no matching fresh candidate identity";
-      return false;
-   }
-
-   double required = g_alignedCandidates[lane].requiredDelaySeconds > 0.0
-                     ? g_alignedCandidates[lane].requiredDelaySeconds
-                     : XAU_EffectiveEntryDelaySeconds();
-   double elapsed = (double)(TimeCurrent() - g_alignedCandidates[lane].firstCandidateTime);
-
-   g_pendingTimingProof.active = true;
-   g_pendingTimingProof.candidateId = StringFormat("%s_%s_%I64d",
-      setupName,signal==1?"BUY":"SELL",g_alignedCandidates[lane].candidateGeneration);
-   g_pendingTimingProof.sourcePath = lane==0?"FRESH":lane==1?"REENTRY":"PYRAMID";
-   g_pendingTimingProof.firstSeenTime = g_alignedCandidates[lane].firstCandidateTime;
-   g_pendingTimingProof.firstSeenPrice = g_alignedCandidates[lane].firstCandidatePrice;
-   g_pendingTimingProof.timingGateRequired = true;
-   g_pendingTimingProof.requiredDelaySeconds = required;
-   g_pendingTimingProof.timingGateStartTime = g_alignedCandidates[lane].firstCandidateTime;
-   g_pendingTimingProof.revalidationTime = TimeCurrent();
-   g_pendingTimingProof.bypassUsed = false;
-   g_pendingTimingProof.bypassReason = "";
-   g_pendingTimingProof.openTradeCaller = lane==0?"PRIMARY->OpenTrade":lane==1?"RE_ENTRY->OpenTrade":"PYRAMID->broker";
-
-   if(elapsed < required)
-   {
-      g_pendingTimingProof.revalidationResult = "WAITING_FOR_2_TO_3_MINUTE_DELAY";
-      why = StringFormat("TIMING_DELAY_ACTIVE: %s %s elapsed=%.0fs required=%.0fs remaining=%.0fs",
-                         setupName,signal==1?"BUY":"SELL",elapsed,required,required-elapsed);
-      return false;
-   }
-
-   g_pendingTimingProof.revalidationResult = "DELAY_SATISFIED_AND_FRESHNESS_RECHECKED";
-   g_pendingTimingProof.timingEngineWaitSeconds = elapsed;
-   g_lastEntryTimingDecision.valid = true;
-   g_lastEntryTimingDecision.wasDelayed = true;
-   g_lastEntryTimingDecision.originalSignalTime = g_alignedCandidates[lane].firstCandidateTime;
-   g_lastEntryTimingDecision.originalSignalPrice = g_alignedCandidates[lane].firstCandidatePrice;
-   g_lastEntryTimingDecision.decisionTime = TimeCurrent();
-   g_lastEntryTimingDecision.delaySeconds = elapsed;
-   double currentPrice = signal>0?SymbolInfoDouble(Symbol(),SYMBOL_ASK):SymbolInfoDouble(Symbol(),SYMBOL_BID);
-   g_lastEntryTimingDecision.priceImprovement = signal>0
-      ? g_alignedCandidates[lane].firstCandidatePrice-currentPrice
-      : currentPrice-g_alignedCandidates[lane].firstCandidatePrice;
-   g_lastEntryTimingDecision.entryReasonText = "ALIGNED_2_TO_3_MINUTE_DELAY_SATISFIED";
-   why = StringFormat("TIMING_DELAY_SATISFIED: %s %s elapsed=%.0fs required=%.0fs; current freshness passed",
-                      setupName,signal==1?"BUY":"SELL",elapsed,required);
-   return true;
-}
-
-bool XAU_ReentryPyramidAuthority(int signal, string source, string &why)
-{
-   why = "";
-   if(signal == 0) { why = "invalid direction"; return false; }
-   if(CountMyPositions() >= InpMaxOpenTrades)
-   { why = "maximum open-trade collision limit reached"; return false; }
-   if(source == "PYRAMID" && lastPyramidAddTime > 0 &&
-      TimeCurrent()-lastPyramidAddTime < 30)
-   { why = "duplicate pyramid send inside 30-second broker-settlement window"; return false; }
-   return true;
-}
-
-bool XAU_FinalEntryArbiter(string source, bool signalOK, bool structureOK,
-                           bool timingOK, bool freshnessOK, bool newsOK,
-                           bool stateOK, string &why)
-{
-   bool aligned = signalOK && structureOK && timingOK && freshnessOK && newsOK && stateOK;
-   why = aligned ? "FINAL_ENTRY_ARBITER_ALLOW: all aligned authorities passed"
-                 : "FINAL_ENTRY_ARBITER_BLOCK: an upstream named authority failed";
-   PrintFormat("FINAL_ENTRY_ARBITER source=%s signal=%s structure=%s timing=%s freshness=%s news=%s state=%s decision=%s",
-               source,signalOK?"PASS":"FAIL",structureOK?"PASS":"FAIL",
-               timingOK?"PASS":"FAIL",freshnessOK?"PASS":"FAIL",
-               newsOK?"PASS":"FAIL",stateOK?"PASS":"FAIL",aligned?"ALLOW":"BLOCK");
-   return aligned;
-}
-
-bool XAU_FreshnessExtensionAuthority(int signal, string setupName, double setupScore, double combinedScore,
-                                     string &grade, double &lotMulti, string &reason)
+bool XAUEntryTimingGuard(int signal, string setupName, double setupScore, double combinedScore,
+                         string &grade, double &lotMulti, string &reason)
 {
    lotMulti = 1.0;
    reason = "";
-   if(signal == 0 || !IsXAUFastSymbol()) return true;
-   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0.0) return true;
-
-   double atr = bufATR[1];
-   double price = signal > 0 ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
-                             : SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   if(price <= 0.0) price = iClose(Symbol(), PERIOD_M5, 1);
-   if(price <= 0.0) return true;
-
-   int lane = XAU_AlignedCandidateLane(setupName);
-   bool sameCandidate = (g_alignedCandidates[lane].firstCandidateTime > 0 &&
-                         g_alignedCandidates[lane].candidateDirection == signal &&
-                         g_alignedCandidates[lane].candidateSetup == setupName);
-   if(!sameCandidate)
+   if(!InpXAU_TimingGuard || signal == 0) return true;
+   if(!IsXAUFastSymbol()) return true;
+   if(ArraySize(bufATR) < 2 || ArraySize(bufEMAFast) < 2 || bufATR[1] <= 0.0 || bufEMAFast[1] <= 0.0)
    {
-      g_alignedCandidates[lane].firstCandidateTime = TimeCurrent();
-      g_alignedCandidates[lane].firstCandidatePrice = price;
-      g_alignedCandidates[lane].impulseOrigin = price;
-      g_alignedCandidates[lane].candidateDirection = signal;
-      g_alignedCandidates[lane].candidateSetup = setupName;
-      g_alignedCandidates[lane].requiredDelaySeconds = XAU_EffectiveEntryDelaySeconds();
-      g_alignedCandidates[lane].barsElapsed = 0;
-      g_alignedCandidates[lane].atrTravelled = 0.0;
-      g_alignedCandidates[lane].bestAvailableEntry = price;
-      g_alignedCandidates[lane].remainingRewardR = 99.0;
-      g_alignedCandidates[lane].objectiveReached = false;
-      g_alignedCandidates[lane].marketReset = false;
-      g_alignedCandidates[lane].confirmationAfterExtension = false;
-      g_alignedCandidates[lane].candidateGeneration++;
+      reason = "timing data not ready";
+      return true;
    }
 
-   g_alignedCandidates[lane].barsElapsed =
-      (int)MathMax(0.0, (double)(TimeCurrent() - g_alignedCandidates[lane].firstCandidateTime) / 300.0);
-   double favourableTravel = signal > 0
-                             ? price - g_alignedCandidates[lane].firstCandidatePrice
-                             : g_alignedCandidates[lane].firstCandidatePrice - price;
-   g_alignedCandidates[lane].atrTravelled = MathMax(0.0, favourableTravel / atr);
-   if(signal > 0)
-      g_alignedCandidates[lane].bestAvailableEntry = MathMin(g_alignedCandidates[lane].bestAvailableEntry, price);
-   else
-      g_alignedCandidates[lane].bestAvailableEntry = MathMax(g_alignedCandidates[lane].bestAvailableEntry, price);
+   double atr = bufATR[1];
+   double avgAtr = XAU_AvgATR(40);
+   double close1 = iClose(Symbol(), PERIOD_M5, 1);
+   double close2 = iClose(Symbol(), PERIOD_M5, 2);
+   double close4 = iClose(Symbol(), PERIOD_M5, 4);
+   double open1  = iOpen(Symbol(), PERIOD_M5, 1);
+   double high1  = iHigh(Symbol(), PERIOD_M5, 1);
+   double low1   = iLow(Symbol(), PERIOD_M5, 1);
+   double ema50  = bufEMAFast[1];
+   double vwap   = XAU_SessionVWAP(96);
+   if(close1 <= 0 || open1 <= 0 || high1 <= 0 || low1 <= 0 || ema50 <= 0) return true;
 
-   double resetATR = 0.0;
-   double driveATR = XAU_DirectionalExtensionATR(signal, InpXAU_ExtensionLookbackBars, atr, resetATR);
-   g_alignedCandidates[lane].marketReset =
-      (resetATR >= MathMax(InpXAU_MinExtensionResetATR, InpXAU_MinLateRetestATR));
+   double body = MathAbs(close1 - open1);
+   double range = MathMax(high1 - low1, 0.0);
+   double upperWick = high1 - MathMax(open1, close1);
+   double lowerWick = MathMin(open1, close1) - low1;
+   double impulseATR = range / atr;
+   double bodyATR = body / atr;
+   double atrExpansion = (avgAtr > 0.0) ? atr / avgAtr : 1.0;
+   double emaDistATR = MathAbs(close1 - ema50) / atr;
+   double vwapDistATR = (vwap > 0.0) ? MathAbs(close1 - vwap) / atr : 0.0;
+   double threeBarDriveATR = (close4 > 0.0) ? MathAbs(close1 - close4) / atr : 0.0;
+   double extensionResetATR = 0.0;
+   double extensionDriveATR = XAU_DirectionalExtensionATR(signal, InpXAU_ExtensionLookbackBars, atr, extensionResetATR);
 
-   int roomLookback = (int)MathMax(8.0, MathMin((double)InpXAU_BadLocationLookbackBars, 30.0));
-   double roomHigh = price, roomLow = price;
-   for(int i = 1; i <= roomLookback; i++)
+   double hi6 = high1, lo6 = low1;
+   for(int i = 1; i <= 6; i++)
+   {
+      hi6 = MathMax(hi6, iHigh(Symbol(), PERIOD_M5, i));
+      lo6 = MathMin(lo6, iLow(Symbol(), PERIOD_M5, i));
+   }
+   double priorHigh6 = iHigh(Symbol(), PERIOD_M5, 2);
+   double priorLow6  = iLow(Symbol(), PERIOD_M5, 2);
+   for(int i = 3; i <= 7; i++)
    {
       double h = iHigh(Symbol(), PERIOD_M5, i);
       double l = iLow(Symbol(), PERIOD_M5, i);
-      if(h > 0.0) roomHigh = MathMax(roomHigh, h);
-      if(l > 0.0) roomLow = MathMin(roomLow, l);
+      if(h > 0.0) priorHigh6 = MathMax(priorHigh6, h);
+      if(l > 0.0) priorLow6  = MathMin(priorLow6, l);
    }
-   double roomATR = signal > 0 ? MathMax(0.0, roomHigh - price) / atr
-                               : MathMax(0.0, price - roomLow) / atr;
-   g_alignedCandidates[lane].remainingRewardR = roomATR / MathMax(0.50, InpSLMultiplier);
-   g_alignedCandidates[lane].objectiveReached =
-      (g_alignedCandidates[lane].atrTravelled >= MathMax(InpXAU_MaxMissedMoveATR, 1.50) ||
-       driveATR >= MathMax(InpXAU_MaxExtensionDriveATR, 1.50));
-   g_alignedCandidates[lane].confirmationAfterExtension =
-      (g_alignedCandidates[lane].objectiveReached && IsXAUConfirmedBreakoutContinuation(signal, setupName));
 
-   // One and only one strategic veto: the original opportunity is already
-   // consumed, reward has collapsed, the market has not reset, and a separate
-   // exhaustion observation agrees.  Elapsed time or moderate exhaustion alone
-   // can never block a fresh candidate.
-   bool trueConsumedExtension =
-      (g_alignedCandidates[lane].objectiveReached &&
-       g_alignedCandidates[lane].atrTravelled >= MathMax(InpXAU_MaxMissedMoveATR, 1.50) &&
-       g_alignedCandidates[lane].remainingRewardR < 1.00 &&
-       !g_alignedCandidates[lane].marketReset &&
-       HasExhaustionDivergence(signal));
-
-   reason = StringFormat(
-      "ALIGNED_FRESHNESS: generation=%I64d firstTime=%s firstPrice=%.2f current=%.2f bars=%d travelled=%.2fATR drive=%.2fATR reset=%.2fATR remainingReward=%.2fR objectiveReached=%s marketReset=%s confirmationAfterExtension=%s",
-      g_alignedCandidates[lane].candidateGeneration,
-      TimeToString(g_alignedCandidates[lane].firstCandidateTime, TIME_DATE|TIME_MINUTES),
-      g_alignedCandidates[lane].firstCandidatePrice, price, g_alignedCandidates[lane].barsElapsed,
-      g_alignedCandidates[lane].atrTravelled, driveATR, resetATR,
-      g_alignedCandidates[lane].remainingRewardR,
-      g_alignedCandidates[lane].objectiveReached ? "Y" : "N",
-      g_alignedCandidates[lane].marketReset ? "Y" : "N",
-      g_alignedCandidates[lane].confirmationAfterExtension ? "Y" : "N");
-
-   if(trueConsumedExtension)
+   int locLookback = (int)MathMax(6.0, MathMin((double)InpXAU_BadLocationLookbackBars, 30.0));
+   double locHigh = high1, locLow = low1;
+   for(int i = 1; i <= locLookback; i++)
    {
-      reason = "FRESHNESS_EXTENSION_BLOCK: true consumed extension with poor remaining reward, no market reset and independent exhaustion evidence. " + reason;
+      double h = iHigh(Symbol(), PERIOD_M5, i);
+      double l = iLow(Symbol(), PERIOD_M5, i);
+      if(h > 0.0) locHigh = MathMax(locHigh, h);
+      if(l > 0.0) locLow = MathMin(locLow, l);
+   }
+   double locRange = MathMax(locHigh - locLow, atr * 0.10);
+   double locPct = (locRange > 0.0) ? (close1 - locLow) / locRange : 0.50;
+   locPct = MathMax(0.0, MathMin(1.0, locPct));
+   double lowClearanceATR = MathMax((close1 - locLow) / atr, 0.0);
+   double highClearanceATR = MathMax((locHigh - close1) / atr, 0.0);
+   double extremePct = MathMax(5.0, MathMin(InpXAU_ExtremeLocationPct, 45.0)) / 100.0;
+
+   int failLookback = (int)MathMax(4.0, MathMin((double)InpXAU_FailedImpulseLookbackBars, 24.0));
+   double failHigh = high1, failLow = low1;
+   int failHighShift = 1, failLowShift = 1;
+   for(int i = 1; i <= failLookback; i++)
+   {
+      double h = iHigh(Symbol(), PERIOD_M5, i);
+      double l = iLow(Symbol(), PERIOD_M5, i);
+      if(h > 0.0 && h > failHigh) { failHigh = h; failHighShift = i; }
+      if(l > 0.0 && l < failLow)  { failLow = l; failLowShift = i; }
+   }
+   double dropFromFailHighATR = MathMax((failHigh - close1) / atr, 0.0);
+   double bounceFromFailLowATR = MathMax((close1 - failLow) / atr, 0.0);
+   bool postSweepTrap = false;
+   double dayGainPct = (dailyStartEquity > 0.0) ? ((accInfo.Equity() - dailyStartEquity) / dailyStartEquity * 100.0) : 0.0;
+   bool cycleHot = (InpXAU_CycleGivebackArmor && dayGainPct >= InpXAU_CycleArmGainPct);
+   double cycleExtremePct = MathMax(10.0, MathMin(InpXAU_CycleExtremePct, 45.0)) / 100.0;
+   bool cycleExtremeLocation = false;
+   bool failedImpulse = false;
+
+   bool trendSetup = (StringFind(setupName, "TREND_PULLBACK") >= 0 ||
+                      StringFind(setupName, "HTF_TREND_FOLLOW") >= 0 ||
+                      StringFind(setupName, "BREAKOUT") >= 0 ||
+                      StringFind(setupName, "SQUEEZE") >= 0 ||
+                      StringFind(setupName, "ASIA_BREAKOUT") >= 0);
+   bool isA = (grade == "A" || StringFind(grade, "A+") >= 0);
+
+   bool hasPullback = false;
+   bool hasRejection = false;
+   bool chasingAway = false;
+   bool wrongCandle = false;
+   bool betterValue = false;
+   bool badLocation = false;
+   double pullbackATR = 0.0;
+
+   if(signal == -1)
+   {
+      // SELL continuation needs price to have pulled up away from recent lows.
+      // The old logic used distance down from highs, which rewarded selling after
+      // the dump. This uses low clearance/value instead.
+      pullbackATR = lowClearanceATR;
+      bool nearRecentLow = (locPct <= extremePct || lowClearanceATR < InpXAU_MinLowHighClearanceATR);
+      betterValue = (pullbackATR >= InpXAU_MinPullbackValueATR &&
+                     (close1 >= ema50 - atr * InpXAU_ValueAreaEMABufferATR ||
+                      (vwap > 0.0 && close1 >= vwap - atr * InpXAU_ValueAreaVWAPBufferATR) ||
+                      locPct >= 0.35));
+      hasPullback = (pullbackATR >= InpXAU_MinPullbackATR ||
+                     high1 >= ema50 - atr * 0.25 ||
+                     close2 >= ema50 - atr * 0.35);
+      if(trendSetup && InpXAU_RequirePullbackValueForTrend)
+         hasPullback = (hasPullback && betterValue);
+      hasRejection = ((upperWick >= MathMax(body * 0.45, atr * 0.08) && close1 <= open1) ||
+                      (close1 < open1 && close1 < close2));
+      chasingAway = (close1 < ema50 - atr * InpXAU_MaxEMADistanceATR);
+      wrongCandle = (close1 > open1 && lowerWick < body * 0.35);
+      badLocation = (nearRecentLow || (chasingAway && !betterValue));
+      bool bounceAfterFlush = (bounceFromFailLowATR >= InpXAU_FailedImpulseRetraceATR &&
+                               (close1 > open1 || close1 > close2) &&
+                               !hasRejection);
+      failedImpulse = bounceAfterFlush;
+      postSweepTrap = (InpXAU_BlockPostSweepAPlus &&
+                       failLowShift <= InpXAU_PostSweepLookbackBars &&
+                       bounceFromFailLowATR >= InpXAU_PostSweepRetraceATR &&
+                       close1 > failLow + atr * 0.35);
+      cycleExtremeLocation = (locPct <= cycleExtremePct || bounceFromFailLowATR >= InpXAU_FailedImpulseRetraceATR);
+   }
+   else
+   {
+      // BUY continuation needs price to have pulled down away from recent highs.
+      pullbackATR = highClearanceATR;
+      bool nearRecentHigh = (locPct >= (1.0 - extremePct) || highClearanceATR < InpXAU_MinLowHighClearanceATR);
+      betterValue = (pullbackATR >= InpXAU_MinPullbackValueATR &&
+                     (close1 <= ema50 + atr * InpXAU_ValueAreaEMABufferATR ||
+                      (vwap > 0.0 && close1 <= vwap + atr * InpXAU_ValueAreaVWAPBufferATR) ||
+                      locPct <= 0.65));
+      hasPullback = (pullbackATR >= InpXAU_MinPullbackATR ||
+                     low1 <= ema50 + atr * 0.25 ||
+                     close2 <= ema50 + atr * 0.35);
+      if(trendSetup && InpXAU_RequirePullbackValueForTrend)
+         hasPullback = (hasPullback && betterValue);
+      hasRejection = ((lowerWick >= MathMax(body * 0.45, atr * 0.08) && close1 >= open1) ||
+                      (close1 > open1 && close1 > close2));
+      chasingAway = (close1 > ema50 + atr * InpXAU_MaxEMADistanceATR);
+      wrongCandle = (close1 < open1 && upperWick < body * 0.35);
+      badLocation = (nearRecentHigh || (chasingAway && !betterValue));
+      bool dropAfterSpike = (dropFromFailHighATR >= InpXAU_FailedImpulseRetraceATR &&
+                             (close1 < open1 || close1 < close2) &&
+                             !hasRejection);
+      failedImpulse = dropAfterSpike;
+      postSweepTrap = (InpXAU_BlockPostSweepAPlus &&
+                       failHighShift <= InpXAU_PostSweepLookbackBars &&
+                       dropFromFailHighATR >= InpXAU_PostSweepRetraceATR &&
+                       close1 < failHigh - atr * 0.35);
+      cycleExtremeLocation = (locPct >= (1.0 - cycleExtremePct) || dropFromFailHighATR >= InpXAU_FailedImpulseRetraceATR);
+   }
+
+   bool impulseBlock = (impulseATR >= InpXAU_ImpulseATRBlock && bodyATR >= 0.65);
+   bool impulseWarn  = (impulseATR >= InpXAU_ImpulseATRDowngrade || atrExpansion >= 1.45);
+   bool vwapFar = (vwap > 0.0 && vwapDistATR > InpXAU_MaxVWAPDistanceATR);
+   bool driveFar = (threeBarDriveATR > InpXAU_MaxThreeBarDriveATR);
+   bool trueBreakoutContinuation = IsXAUConfirmedBreakoutContinuation(signal, setupName);
+   bool regimeAligned =
+      (signal == 1 && (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP)) ||
+      (signal == -1 && (currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN));
+   bool htfAligned = (g_htfConsensusDir == signal);
+   bool postNewsAligned = (g_postNewsBias == signal &&
+                           (g_postNewsState == PNS_DISCOVERY ||
+                            g_postNewsState == PNS_CONFIRMED ||
+                            g_postNewsState == PNS_ALLOWED ||
+                            g_postNewsState == PNS_AFTERMATH));
+   bool directionalPressure = (signal == -1)
+      ? (close1 < open1 || close1 < close2)
+      : (close1 > open1 || close1 > close2);
+   bool freshStructureBreak = (signal == -1)
+      ? (priorLow6 > 0.0 && (close1 < priorLow6 || low1 <= priorLow6 - atr * 0.05))
+      : (priorHigh6 > 0.0 && (close1 > priorHigh6 || high1 >= priorHigh6 + atr * 0.05));
+   bool structureContinuationCandidate = (trendSetup && !failedImpulse &&
+                                          directionalPressure &&
+                                          (freshStructureBreak ||
+                                           trueBreakoutContinuation ||
+                                           (postSweepTrap && !wrongCandle) ||
+                                           postNewsAligned));
+   bool cleanContinuation = ((hasPullback && hasRejection && !wrongCandle && !badLocation) ||
+                             (structureContinuationCandidate && hasRejection && !wrongCandle));
+   bool locationBlock = (trendSetup && badLocation && !cleanContinuation);
+   bool extensionNoReset = (trendSetup &&
+                            extensionDriveATR >= InpXAU_MaxExtensionDriveATR &&
+                            extensionResetATR < InpXAU_MinExtensionResetATR);
+
+   // v6.23.3 forensic fix: "no rejection wick" was being treated as equivalent
+   // to "impulse has failed," which hard-blocked exactly the strongest, cleanest
+   // trend continuations (clean-bodied candles rarely print a big rejection
+   // wick). Reasoning replaces that single boolean: reuse the same weighted
+   // continuation-quality score/room estimate the Trend-Continuation-Mode path
+   // already trusts (XAU_TrendContinuationScore / XAU_EstimatedContinuationRoomATR)
+   // to classify the setup BEFORE deciding whether failedImpulse should veto it.
+   // Anti-chase stays fully intact: the override still requires real remaining
+   // room, a location that isn't already bad, and no exhaustion divergence --
+   // it only ever widens the "no wick yet" case, never the late-chase case.
+   double localDirectionalRoomATRForImpulseCheck = (signal == -1) ? lowClearanceATR : highClearanceATR;
+   bool hasExhaustionDivForImpulseCheck = HasExhaustionDivergence(signal);
+   string continuationHealthWhy = "";
+   double continuationHealthScore = XAU_TrendContinuationScore(signal, setupName, atr,
+                                                               bodyATR, impulseATR,
+                                                               atrExpansion, threeBarDriveATR,
+                                                               extensionDriveATR,
+                                                               freshStructureBreak,
+                                                               structureContinuationCandidate,
+                                                               trueBreakoutContinuation,
+                                                               postNewsAligned,
+                                                               failedImpulse,
+                                                               wrongCandle,
+                                                               hasRejection,
+                                                               htfAligned,
+                                                               regimeAligned,
+                                                               hasExhaustionDivForImpulseCheck,
+                                                               false,
+                                                               continuationHealthWhy);
+   double continuationHealthRoomATR = XAU_EstimatedContinuationRoomATR(signal, atr,
+                                                                       localDirectionalRoomATRForImpulseCheck,
+                                                                       extensionDriveATR, freshStructureBreak,
+                                                                       htfAligned, postNewsAligned,
+                                                                       trueBreakoutContinuation);
+   string continuationHealthTier = continuationHealthScore <= InpXAU_ContinuationHealthFailedMax ? "FAILED_IMPULSE" :
+                                   continuationHealthScore < InpXAU_TCM_MinTrendScore ? "WEAK_CONTINUATION" :
+                                   continuationHealthScore < InpXAU_ContinuationHealthStrongMin ? "HEALTHY_CONTINUATION" :
+                                   "VERY_STRONG_CONTINUATION";
+   // NEUTRAL only applies when the trend setup didn't even try to align with
+   // regime/HTF/structure (the scorer starts most of its bonuses from those),
+   // i.e. a low-information bar rather than actual damage.
+   if(continuationHealthScore > InpXAU_ContinuationHealthFailedMax && !regimeAligned && !htfAligned &&
+      !freshStructureBreak && !trueBreakoutContinuation && !structureContinuationCandidate)
+      continuationHealthTier = "NEUTRAL";
+   bool continuationHealthOverride = (continuationHealthTier != "FAILED_IMPULSE" &&
+                                      continuationHealthRoomATR >= InpXAU_TCM_MinRemainingRoomATR &&
+                                      !badLocation &&
+                                      !hasExhaustionDivForImpulseCheck);
+   bool failedImpulseBlock = (trendSetup && InpXAU_BlockFailedImpulse && failedImpulse &&
+                             !cleanContinuation && !continuationHealthOverride);
+   bool cycleGivebackBlock = (trendSetup && cycleHot && cycleExtremeLocation && !cleanContinuation);
+   bool cycleLotReduce = (trendSetup && cycleHot);
+   double localDirectionalRoomATR = (signal == -1) ? lowClearanceATR : highClearanceATR;
+   double directionalRoomATR = localDirectionalRoomATR;
+   bool rawNearLiquiditySweep = (localDirectionalRoomATR < InpXAU_MinDirectionalRoomATR);
+   bool sameFirstSignal = (InpXAU_FirstSignalMemory &&
+                           g_signalFirstSeenTime > 0 &&
+                           g_signalFirstSeenDir == signal &&
+                           g_signalFirstSeenSetup == setupName);
+   double missedMoveDistance = 0.0;
+   double missedMoveATRFromFirst = 0.0;
+   int candlesSinceSignal = 0;
+   if(sameFirstSignal)
+   {
+      missedMoveDistance = signal > 0 ? (close1 - g_signalFirstSeenPrice)
+                                      : (g_signalFirstSeenPrice - close1);
+      double anchorAtr = MathMax(atr, g_signalFirstATR);
+      missedMoveATRFromFirst = anchorAtr > 0.0 ? missedMoveDistance / anchorAtr : 0.0;
+      candlesSinceSignal = (int)((TimeCurrent() - g_signalFirstSeenTime) / 300);
+   }
+   bool signalPlayedOut = (trendSetup && sameFirstSignal &&
+                           missedMoveDistance > 0.0 &&
+                           (missedMoveATRFromFirst >= InpXAU_MaxMissedMoveATR ||
+                            missedMoveDistance >= InpXAU_MaxMissedMoveUSD ||
+                            candlesSinceSignal > InpXAU_MaxSignalAgeBars));
+   bool realLateRetest = (cleanContinuation &&
+                          pullbackATR >= InpXAU_MinLateRetestATR &&
+                          !chasingAway &&
+                          emaDistATR <= InpXAU_MaxEMADistanceATR * 1.15 &&
+                          (vwap <= 0.0 || vwapDistATR <= InpXAU_MaxVWAPDistanceATR * 1.10));
+   bool lateChaseEntry = (signalPlayedOut && !realLateRetest);
+   bool spikeCooldown = (trendSetup &&
+                         extensionDriveATR >= MathMax(InpXAU_MaxExtensionDriveATR, InpXAU_MaxMissedMoveATR) &&
+                         extensionResetATR < InpXAU_MinLateRetestATR &&
+                         candlesSinceSignal <= MathMax(2, InpXAU_MaxSignalAgeBars));
+   bool missedMove = (trendSetup &&
+                      extensionDriveATR >= InpXAU_MissedMoveDriveATR &&
+                      extensionResetATR < InpXAU_MinExtensionResetATR &&
+                      !cleanContinuation);
+   int tcmMemSamples = 0;
+   double tcmMemWR = 0.0, tcmMemFav = 0.0, tcmMemAdv = 0.0;
+   string tcmMemoryWhy = "";
+   bool blockedMemoryBias = XAU_BlockedContinuationMissedProfitBias(setupName, signal,
+                                                                    "BAD-RR TIMING BLOCK",
+                                                                    tcmMemSamples, tcmMemWR,
+                                                                    tcmMemFav, tcmMemAdv,
+                                                                    tcmMemoryWhy);
+   bool hasExhaustionDiv = HasExhaustionDivergence(signal);
+   double estimatedContinuationRoomATR = XAU_EstimatedContinuationRoomATR(signal, atr,
+                                                                          localDirectionalRoomATR,
+                                                                          extensionDriveATR,
+                                                                          freshStructureBreak,
+                                                                          htfAligned,
+                                                                          postNewsAligned,
+                                                                          trueBreakoutContinuation);
+   bool continuationCandidate = (trendSetup &&
+                                 (missedMove || extensionNoReset || rawNearLiquiditySweep ||
+                                  freshStructureBreak || trueBreakoutContinuation ||
+                                  postSweepTrap || postNewsAligned || blockedMemoryBias) &&
+                                 !failedImpulse);
+   string trendContinuationWhy = "";
+   double trendContinuationScore = XAU_TrendContinuationScore(signal, setupName, atr,
+                                                              bodyATR, impulseATR,
+                                                              atrExpansion, threeBarDriveATR,
+                                                              extensionDriveATR,
+                                                              freshStructureBreak,
+                                                              structureContinuationCandidate,
+                                                              trueBreakoutContinuation,
+                                                              postNewsAligned,
+                                                              failedImpulse,
+                                                              wrongCandle,
+                                                              hasRejection,
+                                                              htfAligned,
+                                                              regimeAligned,
+                                                              hasExhaustionDiv,
+                                                              blockedMemoryBias,
+                                                              trendContinuationWhy);
+   bool trendContinuationQualified = (InpXAU_TrendContinuationMode &&
+                                      continuationCandidate &&
+                                      trendContinuationScore >= InpXAU_TCM_MinTrendScore &&
+                                      estimatedContinuationRoomATR >= InpXAU_TCM_MinRemainingRoomATR &&
+                                      !hasExhaustionDiv);
+   if(trendContinuationQualified)
+      directionalRoomATR = MathMax(directionalRoomATR, estimatedContinuationRoomATR);
+   bool nearLiquiditySweep = (directionalRoomATR < InpXAU_MinDirectionalRoomATR);
+   bool extendedContinuationSizing = (trendContinuationQualified &&
+                                      (missedMove || extensionNoReset || rawNearLiquiditySweep ||
+                                       postSweepTrap || signalPlayedOut || postNewsAligned));
+   double exhaustionProb = 0.0;
+   if(badLocation) exhaustionProb += 28.0;
+   if(failedImpulse) exhaustionProb += 24.0;
+   if(postSweepTrap) exhaustionProb += trendContinuationQualified ? 8.0 : 30.0;
+   if(extensionNoReset || missedMove) exhaustionProb += trendContinuationQualified ? 5.0 : 18.0;
+   if(impulseWarn) exhaustionProb += 10.0;
+   if(vwapFar) exhaustionProb += 8.0;
+   if(wrongCandle) exhaustionProb += 12.0;
+   if(nearLiquiditySweep) exhaustionProb += 16.0;
+   if(lateChaseEntry) exhaustionProb += trendContinuationQualified ? 6.0 : 32.0;
+   if(spikeCooldown) exhaustionProb += trendContinuationQualified ? 6.0 : 22.0;
+   if(!hasPullback && !trendContinuationQualified) exhaustionProb += 10.0;
+   if(cleanContinuation) exhaustionProb -= 25.0;
+   if(trendContinuationQualified) exhaustionProb -= 22.0;
+   exhaustionProb = MathMax(0.0, MathMin(100.0, exhaustionProb));
+
+   double lateEntryProb = 0.0;
+   if(chasingAway) lateEntryProb += 25.0;
+   if(driveFar) lateEntryProb += 20.0;
+   if(impulseWarn) lateEntryProb += 15.0;
+   if(extensionDriveATR >= InpXAU_MissedMoveDriveATR) lateEntryProb += trendContinuationQualified ? 5.0 : 18.0;
+   if(!betterValue && !trendContinuationQualified) lateEntryProb += 12.0;
+   if(nearLiquiditySweep) lateEntryProb += 15.0;
+   if(postSweepTrap) lateEntryProb += trendContinuationQualified ? 5.0 : 20.0;
+   if(signalPlayedOut) lateEntryProb += trendContinuationQualified ? 8.0 : 30.0;
+   if(spikeCooldown) lateEntryProb += trendContinuationQualified ? 5.0 : 20.0;
+   if(cleanContinuation) lateEntryProb -= 30.0;
+   if(trendContinuationQualified) lateEntryProb -= 18.0;
+   lateEntryProb = MathMax(0.0, MathMin(100.0, lateEntryProb));
+
+   double entryEfficiency = 100.0;
+   entryEfficiency -= lateEntryProb * 0.45;
+   entryEfficiency -= exhaustionProb * 0.35;
+   if(!hasPullback && !trendContinuationQualified) entryEfficiency -= 10.0;
+   if(!hasRejection && !trendContinuationQualified) entryEfficiency -= 8.0;
+   if(betterValue) entryEfficiency += 8.0;
+   if(cleanContinuation) entryEfficiency += 12.0;
+   if(trendContinuationQualified) entryEfficiency += 10.0;
+   entryEfficiency = MathMax(0.0, MathMin(100.0, entryEfficiency));
+
+   double rrQuality = MathMin(100.0, (directionalRoomATR / MathMax(0.10, InpXAU_MinDirectionalRoomATR)) * 45.0);
+   if(cleanContinuation) rrQuality = MathMin(100.0, rrQuality + 20.0);
+   if(trendContinuationQualified) rrQuality = MathMin(100.0, rrQuality + 18.0);
+   if((missedMove || lateChaseEntry) && !trendContinuationQualified) rrQuality = MathMax(0.0, rrQuality - 25.0);
+   if(failedImpulse) rrQuality = MathMax(0.0, rrQuality - 25.0);
+
+   double setupQuality = MathMin(100.0, MathMax(0.0, setupScore * 16.0));
+   double entryTimingQuality = entryEfficiency;
+   if(badLocation) entryTimingQuality -= 25.0;
+   if(trendSetup && !betterValue) entryTimingQuality -= 18.0;
+   if(localDirectionalRoomATR < InpXAU_MinDirectionalRoomATR) entryTimingQuality -= 20.0;
+   if((signal == 1 && locPct >= 0.90) || (signal == -1 && locPct <= 0.10))
+      entryTimingQuality -= 15.0;
+   if(cleanContinuation) entryTimingQuality += 10.0;
+   entryTimingQuality = MathMax(0.0, MathMin(100.0, entryTimingQuality));
+
+   double extensionRisk = 0.0;
+   extensionRisk += MathMin(45.0, MathMax(0.0, extensionDriveATR) * 14.0);
+   if(badLocation) extensionRisk += 22.0;
+   if(!betterValue && trendSetup) extensionRisk += 14.0;
+   if(impulseWarn) extensionRisk += 10.0;
+   if(localDirectionalRoomATR < InpXAU_MinDirectionalRoomATR) extensionRisk += 12.0;
+   if(cleanContinuation) extensionRisk -= 16.0;
+   extensionRisk = MathMax(0.0, MathMin(100.0, extensionRisk));
+
+   double expectedMAERisk = 0.0;
+   expectedMAERisk += exhaustionProb * 0.45;
+   expectedMAERisk += lateEntryProb * 0.30;
+   if(badLocation) expectedMAERisk += 16.0;
+   if(!betterValue && trendSetup) expectedMAERisk += 12.0;
+   if(localDirectionalRoomATR < InpXAU_MinDirectionalRoomATR) expectedMAERisk += 10.0;
+   if(cleanContinuation) expectedMAERisk -= 12.0;
+   expectedMAERisk = MathMax(0.0, MathMin(100.0, expectedMAERisk));
+
+   double effectiveRRQuality = rrQuality;
+   if(localDirectionalRoomATR < InpXAU_MinDirectionalRoomATR)
+      effectiveRRQuality = MathMin(effectiveRRQuality, 55.0);
+   if(badLocation && !betterValue)
+      effectiveRRQuality = MathMin(effectiveRRQuality, 50.0);
+   effectiveRRQuality = MathMax(0.0, MathMin(100.0, effectiveRRQuality));
+
+   double finalCalibratedConfidence =
+      setupQuality * 0.28 +
+      entryTimingQuality * 0.30 +
+      (100.0 - extensionRisk) * 0.16 +
+      (100.0 - expectedMAERisk) * 0.10 +
+      effectiveRRQuality * 0.16;
+   finalCalibratedConfidence = MathMax(0.0, MathMin(100.0, finalCalibratedConfidence));
+
+   // v6.20.3 telemetry-only capture — see g_lastEntryQ_* declaration comment.
+   // Does not affect setupQuality/entryTimingQuality/etc. or any decision below.
+   g_lastEntryQ_SetupQuality       = setupQuality;
+   g_lastEntryQ_TimingQuality      = entryTimingQuality;
+   g_lastEntryQ_ExtensionRisk      = extensionRisk;
+   g_lastEntryQ_MAERisk            = expectedMAERisk;
+   g_lastEntryQ_EffectiveRRQuality = effectiveRRQuality;
+   g_lastEntryQ_FinalConfidence    = finalCalibratedConfidence;
+   g_lastEntryQ_CandlesSinceSignal = candlesSinceSignal;
+   g_lastEntryQ_MissedMoveDistance = missedMoveDistance;
+   g_lastEntryQ_MissedMoveATR      = missedMoveATRFromFirst;
+   g_lastEntryQ_SignalFirstSeenPrice = sameFirstSignal ? g_signalFirstSeenPrice : 0.0;
+
+   bool strongMomentumOverrideQualified = false;
+   string strongMomentumOverrideWhy = "";
+   if(!trendContinuationQualified &&
+      XAU_StrongMomentumOverrideAllowed(signal, setupName, combinedScore,
+                                        bodyATR, impulseATR, threeBarDriveATR, atrExpansion,
+                                        estimatedContinuationRoomATR,
+                                        trendContinuationScore,
+                                        exhaustionProb, rrQuality,
+                                        freshStructureBreak,
+                                        structureContinuationCandidate,
+                                        trueBreakoutContinuation,
+                                        postNewsAligned,
+                                        failedImpulse,
+                                        wrongCandle,
+                                        htfAligned,
+                                        regimeAligned,
+                                        hasExhaustionDiv,
+                                        sameFirstSignal,
+                                        candlesSinceSignal,
+                                        missedMoveATRFromFirst,
+                                        lateChaseEntry,
+                                        spikeCooldown,
+                                        hasRejection,
+                                        directionalPressure,
+                                        strongMomentumOverrideWhy))
+   {
+      strongMomentumOverrideQualified = true;
+      trendContinuationQualified = true;
+      directionalRoomATR = MathMax(directionalRoomATR, estimatedContinuationRoomATR);
+      nearLiquiditySweep = (directionalRoomATR < InpXAU_MinDirectionalRoomATR);
+      extendedContinuationSizing = true;
+      exhaustionProb = MathMax(0.0, exhaustionProb - 14.0);
+      lateEntryProb = MathMax(0.0, lateEntryProb - 10.0);
+      entryEfficiency = MathMin(100.0, entryEfficiency + 8.0);
+      rrQuality = MathMin(100.0, rrQuality + 10.0);
+      reason += strongMomentumOverrideWhy + " ";
+   }
+
+   string timingState = trendContinuationQualified
+                        ? (signal == -1 ? "clean-breakdown-continuation" : "clean-breakout-continuation")
+                        : (locationBlock ? "bad-location" : (cleanContinuation ? "clean-pullback" : "weak-timing"));
+   if(extensionNoReset) timingState = "extended-no-reset";
+   if(failedImpulseBlock) timingState = "failed-impulse";
+   if(cycleGivebackBlock) timingState = "cycle-giveback";
+   if(signalPlayedOut) timingState = realLateRetest ? "missed-move-retest" : "late-chase-entry";
+   if(missedMove && timingState == "weak-timing") timingState = "missed-move";
+   if(trendContinuationQualified)
+      timingState = signal == -1 ? "clean-breakdown-continuation" : "clean-breakout-continuation";
+   bool severeLate = trendSetup && chasingAway && (impulseBlock || driveFar || vwapFar) && !cleanContinuation;
+   bool moderateLate = trendSetup && (chasingAway || impulseWarn || driveFar || vwapFar || !hasPullback || wrongCandle) && !cleanContinuation;
+
+   if(trendContinuationQualified && extendedContinuationSizing)
+   {
+      double continuationLotMulti = strongMomentumOverrideQualified ? InpXAU_SMO_LotMulti : InpXAU_TCM_LotMulti;
+      lotMulti *= continuationLotMulti;
+      reason += StringFormat("%s MODE: CONTINUATION QUALIFIED; extended setup is allowed controlled lot x%.2f because trend strength and remaining room justify continuation. remainingRoom=%.2fATR localLiquidity=%.2fATR tcmScore=%.0f %s. ",
+                             strongMomentumOverrideQualified ? "STRONG_MOMENTUM_OVERRIDE" : "TREND-CONTINUATION",
+                             continuationLotMulti, estimatedContinuationRoomATR,
+                             localDirectionalRoomATR, trendContinuationScore,
+                             trendContinuationWhy);
+      if(blockedMemoryBias)
+         reason += tcmMemoryWhy + " ";
+   }
+   else if(continuationCandidate)
+   {
+      reason += StringFormat("TREND-CONTINUATION MODE: qualification failed; TRUE-EXHAUSTION BLOCK remains possible if score/room/reversal evidence is weak. remainingRoom=%.2fATR minRoom=%.2fATR tcmScore=%.0f minScore=%.0f %s. ",
+                             estimatedContinuationRoomATR, InpXAU_TCM_MinRemainingRoomATR,
+                             trendContinuationScore, InpXAU_TCM_MinTrendScore,
+                             trendContinuationWhy);
+   }
+
+   if(InpXAU_TimingQualityGrades && trendSetup && (grade == "A" || StringFind(grade, "A+") >= 0))
+   {
+      bool wasAPlus = (StringFind(grade, "A+") >= 0);
+      bool aPlusLocationQualified = XAU_APlusEntryLocationQualified(signal, trendSetup,
+                                                                    badLocation, betterValue,
+                                                                    localDirectionalRoomATR,
+                                                                    pullbackATR, locPct,
+                                                                    cleanContinuation,
+                                                                    trueBreakoutContinuation,
+                                                                    trendContinuationQualified) &&
+                                    entryTimingQuality >= InpXAU_APlusMinTimingQuality &&
+                                    effectiveRRQuality >= InpXAU_APlusMinRRQuality &&
+                                    expectedMAERisk <= 55.0;
+      bool aPlusQualified = XAU_APlusPositioningQualified(entryEfficiency, lateEntryProb,
+                                                          exhaustionProb, rrQuality,
+                                                          directionalRoomATR,
+                                                          cleanContinuation,
+                                                          (trueBreakoutContinuation || trendContinuationQualified)) &&
+                             aPlusLocationQualified;
+      bool aPlusBadTiming = (wasAPlus && (!aPlusQualified ||
+		                                      failedImpulse ||
+		                                      ((missedMove || postSweepTrap ||
+	                                        nearLiquiditySweep || lateChaseEntry) &&
+	                                       !trendContinuationQualified)));
+      bool aBadRR = (rrQuality < 35.0 &&
+                     (missedMove || nearLiquiditySweep || failedImpulse || postSweepTrap || lateChaseEntry) &&
+                     !trendContinuationQualified);
+      if(aPlusBadTiming)
+      {
+         string oldGrade = grade;
+         grade = "A";
+         lotMulti *= MathMin(0.80, InpXAU_FairTimingLotMulti);
+         reason = StringFormat("A+ EVIDENCE DEMOTION: %s→A because score strength was not matched by clean positioning. Trade remains eligible at A-size; this is an honest grade correction, not another veto. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f cleanContinuation=%s breakoutContinuation=%s trendContinuation=%s missedMove=%s lateChase=%s failedImpulse=%s postSweep=%s liquidityDist=%.2fATR remainingRoom=%.2fATR. ",
+                               oldGrade, entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
+                               cleanContinuation ? "Y" : "N", trueBreakoutContinuation ? "Y" : "N",
+                               trendContinuationQualified ? "Y" : "N",
+                               missedMove ? "Y" : "N", lateChaseEntry ? "Y" : "N", failedImpulse ? "Y" : "N",
+                               postSweepTrap ? "Y" : "N", localDirectionalRoomATR, estimatedContinuationRoomATR);
+      }
+      if(wasAPlus && postSweepTrap && InpXAU_BlockLateA && !trendContinuationQualified)
+      {
+         reason += StringFormat("POST-SWEEP A+ BLOCK: gold swept local liquidity then snapped back; not allowing A+ continuation chase until a fresh pullback/retest forms. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f liquidityDist=%.2fATR. ",
+                                entryEfficiency, lateEntryProb, exhaustionProb, rrQuality, directionalRoomATR);
+         return false;
+      }
+      if(aBadRR && InpXAU_BlockLateA)
+      {
+         reason += StringFormat("BAD-RR TRUE BLOCK: A/A+ continuation has poor estimated remaining room after the move already travelled; waiting for fresh pullback/retest. timingQ=%.0f late=%.0f%% exhaustion=%.0f%% rrQ=%.0f localLiquidity=%.2fATR remainingRoom=%.2fATR missedMove=%s lateChase=%s failedImpulse=%s postSweep=%s tcmScore=%.0f. ",
+                                entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
+                                localDirectionalRoomATR, estimatedContinuationRoomATR,
+                                missedMove ? "Y" : "N", lateChaseEntry ? "Y" : "N", failedImpulse ? "Y" : "N",
+                                postSweepTrap ? "Y" : "N", trendContinuationScore);
+         return false;
+      }
+   }
+
+   bool timingBadRRForReport = (rrQuality < 35.0 &&
+                                (missedMove || nearLiquiditySweep || failedImpulse || postSweepTrap || lateChaseEntry) &&
+                                !trendContinuationQualified);
+   string blockClass = "NONE";
+   string whatNeedsToChange = "none";
+   if(strongMomentumOverrideQualified)
+   {
+      blockClass = "SOFT_BLOCK_CONVERTED";
+      whatNeedsToChange = "continue M5/M15 structure momentum, keep RR/room valid, avoid late-chase extension";
+   }
+   else if(lateChaseEntry || spikeCooldown || failedImpulseBlock || postSweepTrap || timingBadRRForReport)
+   {
+      blockClass = "HARD_BLOCK";
+      whatNeedsToChange = lateChaseEntry ? "fresh pullback/retest or new BOS after the missed move" :
+                          spikeCooldown ? "volatility reset plus controlled pullback" :
+                          failedImpulseBlock ? "fresh impulse acceptance without rejection" :
+                          postSweepTrap ? "liquidity sweep must reclaim and hold structure" :
+                          "more remaining room and better reward/risk";
+   }
+   else if(locationBlock || extensionNoReset || moderateLate || cycleGivebackBlock)
+   {
+      blockClass = "SOFT_BLOCK";
+      whatNeedsToChange = locationBlock ? "pullback into value area plus rejection" :
+                          extensionNoReset ? "extension reset before same-direction entry" :
+                          moderateLate ? "cleaner pullback, momentum candle, or structure confirmation" :
+                          "fresh continuation with lower cycle-giveback risk";
+   }
+
+   if(failedImpulse && !cleanContinuation)
+   {
+      reason += StringFormat("CONTINUATION_HEALTH: tier=%s score=%.0f room=%.2fATR badLoc=%s divergence=%s override=%s %s. ",
+                             continuationHealthTier, continuationHealthScore, continuationHealthRoomATR,
+                             badLocation ? "Y" : "N", hasExhaustionDivForImpulseCheck ? "Y" : "N",
+                             continuationHealthOverride ? "Y-no-rejection-wick-required" : "N-hard-blocked",
+                             continuationHealthWhy);
+   }
+
+   // v6.20.3 telemetry-only capture — see g_lastEntryQ_* declaration comment.
+   // v6.20.3 adversarial-review fix: this is the LAST point in the function
+   // where every quality field (numeric, set earlier, plus blockClass, just
+   // finalized above) is known-consistent for THIS call -- two return paths
+   // exist between the earlier numeric capture and here, so validity
+   // markers (dir/setup/timestamp) are deliberately set ONLY here, together,
+   // never at the earlier numeric-only capture point. If this line is never
+   // reached (an early return fired first), the markers stay at whatever
+   // the last FULLY-COMPLETED call left them, which XAU_BrainRecordOpen's
+   // freshness check (dir+setup+age all matching) will correctly recognize
+   // as not belonging to the position it is about to record, rather than
+   // silently attributing a stale or unrelated signal's numbers to it.
+   g_lastEntryQ_BlockClass = blockClass;
+   g_lastEntryQ_Dir        = signal;
+   g_lastEntryQ_Setup      = setupName;
+   g_lastEntryQ_CapturedAt = TimeCurrent();
+
+   reason += StringFormat("CALIBRATED_ENTRY_QUALITY: setupQuality=%.0f/100 entryTimingQuality=%.0f/100 extensionRisk=%.0f/100 expectedMAERisk=%.0f/100 effectiveRRQuality=%.0f/100 finalCalibratedConfidence=%.0f/100. ",
+                          setupQuality, entryTimingQuality, extensionRisk,
+                          expectedMAERisk, effectiveRRQuality,
+                          finalCalibratedConfidence);
+
+   reason += StringFormat("XAU-TIMING: setup=%s grade=%s setupScore=%.1f combined=%.1f timing=%s blockClass=%s whatNeedsToChange=%s timingQ=%.0f lateProb=%.0f%% exhaustion=%.0f%% rrQ=%.0f tcmQualified=%s smoQualified=%s tcmScore=%.0f remainingRoom=%.2fATR signalFirstSeenPrice=%.2f entryPrice=%.2f missedMoveDistance=%.2f missedMoveATR=%.2f candlesSinceSignal=%d reasonBlockedAtFirstSignal=%s lateEntryVeto=%s spikeDetected=%s lotReductionReason=%s whyTradeAllowedAfterDelay=%s liquidityDist=%.2fATR expansionOrigin=%.2fATR expectedPullback=%.2fATR emaDist=%.2fATR vwapDist=%.2fATR impulse=%.2fATR body=%.2fATR atrExp=%.2fx drive3=%.2fATR drive%d=%.2fATR reset=%.2fATR pullbackFromExtreme=%.2fATR loc=%.0f%% lowClr=%.2fATR highClr=%.2fATR value=%s badLoc=%s rejection=%s wrongCandle=%s dayGain=%.1f%% cycle=%s failedImpulse=%s postSweep=%s missedMove=%s freshBreak=%s cleanContinuation=%s breakoutContinuation=%s dropHigh=%.2fATR(%d) bounceLow=%.2fATR(%d)",
+                          setupName, grade, setupScore, combinedScore, timingState,
+                         blockClass, whatNeedsToChange,
+                          entryEfficiency, lateEntryProb, exhaustionProb, rrQuality,
+                         trendContinuationQualified ? "Y" : "N",
+                         strongMomentumOverrideQualified ? "Y" : "N",
+                         trendContinuationScore,
+                         estimatedContinuationRoomATR,
+                         sameFirstSignal ? g_signalFirstSeenPrice : 0.0, close1,
+                         missedMoveDistance, missedMoveATRFromFirst, candlesSinceSignal,
+                         StringLen(g_signalFirstBlockReason) > 0 ? XAU_BlockReasonKey(g_signalFirstBlockReason) : "none",
+                         lateChaseEntry ? "Y" : "N",
+                         (spikeCooldown || impulseBlock) ? "Y" : "N",
+                         signalPlayedOut ? (realLateRetest ? "late-retest-small-lot" : (trendContinuationQualified ? "trend-continuation-small-lot" : "missed-move-block")) : "none",
+                         signalPlayedOut ? (realLateRetest ? "real-retest-structure-confirmed" : (trendContinuationQualified ? "continuation-qualified-after-missed-move" : "not-allowed-move-played-out")) : "fresh-signal",
+                         directionalRoomATR, extensionDriveATR, InpXAU_MinExtensionResetATR,
+                         emaDistATR, vwapDistATR, impulseATR, bodyATR, atrExpansion,
+                         threeBarDriveATR, InpXAU_ExtensionLookbackBars, extensionDriveATR, extensionResetATR,
+                         pullbackATR, locPct * 100.0, lowClearanceATR, highClearanceATR,
+                         betterValue ? "yes" : "no",
+                         badLocation ? "yes" : "no",
+                         hasRejection ? "yes" : "no",
+                         wrongCandle ? "yes" : "no",
+                         dayGainPct,
+                         cycleHot ? "armed" : "off",
+                         failedImpulse ? "yes" : "no",
+                         postSweepTrap ? "yes" : "no",
+                         missedMove ? "yes" : "no",
+                         freshStructureBreak ? "yes" : "no",
+                         cleanContinuation ? "yes" : "no",
+                         trueBreakoutContinuation ? "yes" : "no",
+                         dropFromFailHighATR, failHighShift,
+                         bounceFromFailLowATR, failLowShift);
+
+   // v6.17.16 SELF-CONSISTENCY FIX: runtime-proven from a real executed-vs-
+   // blocked expectancy audit (xau_expectancy_inversion_audit_2026-07-06_
+   // to_2026-07-08.md). blockClass="HARD_BLOCK" above is computed from
+   // lateChaseEntry||spikeCooldown||failedImpulseBlock||postSweepTrap||
+   // timingBadRRForReport, and is written into the entry's own reason text
+   // as a diagnostic label -- but until this fix, only the lateChaseEntry
+   // case (via the narrower check just below) actually returned false. The
+   // other four conditions got the "HARD_BLOCK" label in their own log line
+   // and were then allowed through anyway by whatever override path
+   // (STRONG_MOMENTUM_OVERRIDE, TREND-CONTINUATION MODE chase, or a
+   // PendingOpportunity RECOVERY re-entry) happened to apply downstream.
+   // Audit finding: in one 3-day window this exact self-contradiction
+   // (labeled HARD_BLOCK, executed anyway) occurred 3 times, none were
+   // clean wins (1 loss, 1 large loss, 1 narrow survival off a -$348
+   // drawdown); across ~5 weeks of local history it occurred 5 times, net
+   // -$161.52 despite a 60% nominal win rate. This is not a new fear rule --
+   // it makes the system respect the label it already, on its own,
+   // privately concluded was hard-block-quality. No override path may admit
+   // a candidate once this label is set.
+   if(blockClass == "HARD_BLOCK")
+   {
+      Print("HARD_BLOCK_SELF_CONSISTENCY: ", setupName, " ", signal == 1 ? "BUY" : "SELL",
+            " blockClass=HARD_BLOCK (", whatNeedsToChange, ") -- no override path may admit this candidate.");
       return false;
    }
 
+   if(lateChaseEntry && InpXAU_BlockLateA && !trendContinuationQualified)
+   {
+      reason = StringFormat("TRUE-LATE BLOCK: first %s %s was seen at %.2f, current entry %.2f after %.2f (%.2fATR) and %d M5 candles; continuation qualification failed, so no full-size A/A+ chase without real pullback/retest/structure. ",
+                            signal == 1 ? "BUY" : "SELL", setupName,
+                            g_signalFirstSeenPrice, close1, missedMoveDistance,
+                            missedMoveATRFromFirst, candlesSinceSignal) + reason;
+      int memSamples = 0;
+      double memWR = 0.0, memFav = 0.0, memAdv = 0.0;
+      string memWhy = "";
+      bool memorySupportsScout = XAU_BlockedMemoryEdgeSupportsScout(setupName, signal, reason,
+                                                                    memSamples, memWR, memFav, memAdv, memWhy) &&
+                                 !spikeCooldown &&
+                                 entryEfficiency >= 35.0 &&
+                                 exhaustionProb <= 78.0 &&
+                                 directionalRoomATR >= 0.35;
+      if(memorySupportsScout)
+      {
+         string oldGrade = grade;
+         lotMulti *= InpBlockedMemoryScoutLotMulti;
+         grade = DowngradeGradeOneStep(grade);
+         reason = StringFormat("REPORT-FIT SCOUT: LATE-CHASE hard block is expensive in memory (%s); allowing tiny scout only %s→%s lot x%.2f, not full-size chase. ",
+                               memWhy, oldGrade, grade, lotMulti) + reason;
+         return true;
+      }
+      return false;
+   }
+
+   if(signalPlayedOut && realLateRetest)
+   {
+      string oldGrade = grade;
+      lotMulti *= InpXAU_ExtremeLateLotMulti;
+      grade = DowngradeGradeOneStep(grade);
+      reason = StringFormat("MISSED-MOVE RETEST: same idea already travelled %.2f (%.2fATR) from first signal; retest is valid but size forced x%.2f and %s→%s. ",
+                            missedMoveDistance, missedMoveATRFromFirst,
+                            InpXAU_ExtremeLateLotMulti, oldGrade, grade) + reason;
+   }
+
+   if(locationBlock && !trendContinuationQualified)
+   {
+      reason = StringFormat("BAD-LOCATION BLOCK: %s is too close to the recent %s after movement; waiting for pullback into value area + rejection. ",
+                            signal == -1 ? "SELL" : "BUY",
+                            signal == -1 ? "low" : "high") + reason;
+      if(XAU_ModeAllowsAggressiveB() &&
+         combinedScore >= 4.80 &&
+         estimatedContinuationRoomATR >= 2.0 &&
+         !failedImpulse &&
+         !spikeCooldown &&
+         !hasExhaustionDiv)
+      {
+         lotMulti *= 0.85;
+         string oldGrade = grade;
+         if(grade == "B") grade = "B";
+         reason = StringFormat("AGGRESSIVE_GROWTH BAD-LOCATION WARNING: strong context kept trade alive %s→%s lot x%.2f; hard danger checks still passed. ",
+                               oldGrade, grade, lotMulti) + reason;
+         return true;
+      }
+      int memSamples = 0;
+      double memWR = 0.0, memFav = 0.0, memAdv = 0.0;
+      string memWhy = "";
+      bool memorySupportsScout = XAU_BlockedMemoryEdgeSupportsScout(setupName, signal, reason,
+                                                                    memSamples, memWR, memFav, memAdv, memWhy) &&
+                                 entryEfficiency >= 38.0 &&
+                                 exhaustionProb <= 82.0 &&
+                                 !spikeCooldown;
+      if(memorySupportsScout)
+      {
+         string oldGrade = grade;
+         lotMulti *= InpBlockedMemoryScoutLotMulti;
+         grade = DowngradeGradeOneStep(grade);
+         reason = StringFormat("REPORT-FIT SCOUT: BAD-LOCATION block has been too expensive in memory (%s); allowing controlled tiny scout %s→%s lot x%.2f instead of blind hard block. ",
+                               memWhy, oldGrade, grade, lotMulti) + reason;
+         return true;
+      }
+      return false;
+   }
+
+   if(extensionNoReset && !trendContinuationQualified)
+   {
+      reason = "BAD-TIMING BLOCK: extended XAU move has not reset yet; waiting for pullback before another same-direction entry. " + reason;
+      return false;
+   }
+
+   if(failedImpulseBlock)
+   {
+      reason = StringFormat("FAILED-IMPULSE BLOCK: %s is trying to join after gold already rejected the latest %s; waiting for fresh pullback continuation instead. ",
+                            signal == 1 ? "BUY" : "SELL",
+                            signal == 1 ? "spike high" : "flush low") + reason;
+      int memSamples = 0;
+      double memWR = 0.0, memFav = 0.0, memAdv = 0.0;
+      bool memorySupportsScout = XAU_BlockedMemoryStats(setupName, signal, reason,
+                                                        memSamples, memWR, memFav, memAdv) &&
+                                 memWR >= 70.0 && memFav >= 1.80 && memAdv <= 1.00 &&
+                                 !lateChaseEntry && !spikeCooldown;
+      if(memorySupportsScout)
+      {
+         string oldGrade = grade;
+         lotMulti *= InpXAU_ExtremeLateLotMulti;
+         grade = DowngradeGradeOneStep(grade);
+         reason = StringFormat("BLOCKED-MEMORY SCOUT: failed-impulse blocks for this pattern have worked after block (samples=%d WR=%.0f%% avgFav=%.2fATR avgAdv=%.2fATR), so allowing controlled scout %s→%s lot x%.2f. ",
+                               memSamples, memWR, memFav, memAdv,
+                               oldGrade, grade, lotMulti) + reason;
+         return true;
+      }
+      return false;
+   }
+
+   if(cycleGivebackBlock && !trendContinuationQualified)
+   {
+      reason = StringFormat("CYCLE-GIVEBACK BLOCK: day already up %.1f%%; entry is near an exhaustion zone without clean continuation, so protecting session profit. ",
+                            dayGainPct) + reason;
+      return false;
+   }
+
+	   if(severeLate && !trendContinuationQualified && (InpXAU_BlockLateA || !cleanContinuation))
+	   {
+	      reason = "BAD-TIMING BLOCK: late gold chase / overextended entry. " + reason +
+	               " | wait for retracement + rejection before entering.";
+	      return false;
+	   }
+
+	   if(InpXAU_RequireExcellentDamageTiming && trendSetup && !cleanContinuation && !trueBreakoutContinuation && !trendContinuationQualified)
+	   {
+	      reason = "DAMAGE-SETUP QUALITY BLOCK: trend/breakout setup is not a clean pullback and not a confirmed breakout continuation. " +
+	               reason + " | waiting for a cleaner entry instead of taking a fair/late reduced-lot trade.";
+         if(XAU_ModeAllowsAggressiveB() &&
+            combinedScore >= 4.80 &&
+            estimatedContinuationRoomATR >= 2.0 &&
+            htfAligned &&
+            !failedImpulse &&
+            !hasExhaustionDiv)
+         {
+            lotMulti *= 0.85;
+            reason = "AGGRESSIVE_GROWTH DAMAGE-SETUP WARNING: HTF/room context strong enough to allow controlled trade. " + reason;
+            return true;
+         }
+	      return false;
+	   }
+
+	   if(moderateLate && !trendContinuationQualified)
+	   {
+      string oldGrade = grade;
+      lotMulti *= InpXAU_FairTimingLotMulti;
+      if(cycleLotReduce)
+         lotMulti *= InpXAU_CycleLotMulti;
+      grade = DowngradeGradeOneStep(grade);
+      reason = StringFormat("BAD-TIMING SOFT: %s downgraded %s→%s, lot x%.2f. ",
+                            signal == 1 ? "BUY" : "SELL", oldGrade, grade, lotMulti) + reason;
+      if(grade == "SKIP")
+      {
+         reason = "BAD-TIMING BLOCK: B-grade timing was only fair/late, skipped instead of forcing entry. " + reason;
+         if(XAU_ModeAllowsAggressiveB() &&
+            combinedScore >= 4.20 &&
+            estimatedContinuationRoomATR >= 1.75 &&
+            !failedImpulse &&
+            !hasExhaustionDiv)
+         {
+            grade = "B";
+            lotMulti = MathMax(lotMulti, 0.70);
+            reason = "AGGRESSIVE_GROWTH B-TIMING WARNING: fair/late B allowed because context and remaining room are acceptable. " + reason;
+            return true;
+         }
+         return false;
+      }
+      return true;
+   }
+
+   if(cycleLotReduce)
+   {
+      lotMulti *= InpXAU_CycleLotMulti;
+      reason = StringFormat("CYCLE ARMOR SOFT: dayGain %.1f%%, lot x%.2f so one late trade cannot wipe many wins. ",
+                            dayGainPct, InpXAU_CycleLotMulti) + reason;
+      if(grade == "B" && dayGainPct >= InpXAU_CycleBGradeDeepGainPct)
+      {
+         lotMulti *= InpXAU_CycleBGradeLotMulti;
+         reason = StringFormat("REPORT-FIT B-CYCLE CUT: prior report loss was B-grade after a hot winning cycle; dayGain %.1f%% >= %.1f%% so B risk x%.2f extra. ",
+                               dayGainPct, InpXAU_CycleBGradeDeepGainPct,
+                               InpXAU_CycleBGradeLotMulti) + reason;
+      }
+   }
+
+   if(isA && cleanContinuation)
+      reason = "A-grade timing confirmed: pullback continuation entry, not late confirmation chase. " + reason;
+   else
+      reason = "ENTRY TIMING PASS: " + reason;
    return true;
 }
 
@@ -27109,7 +31745,7 @@ bool XAU_StrongContextForSoftBypass(string grade, double combinedScore)
 // v6.13.0 ANTI-REPEAT-LOSS GUARD — true when the session has an active
 // same-direction loss streak for `signal` AND price hasn't genuinely
 // recovered since the last loss. When true, none of the "downgrade hard
-// block to warning" bypass sites (SMART_GUARD_FAST_CONFIRM, REMOVED_STI_REENTRY_DELAY,
+// block to warning" bypass sites (SMART_GUARD_FAST_CONFIRM, STI_REENTRY_WAIT,
 // AI_LOW_CONF_SKIP) may convert their hard block into a mere warning — this
 // closes the loophole that let repeated same-direction entries through
 // during a real adverse move (root cause: g_htfConsensusDir is a slow H1/M30
@@ -29693,7 +34329,7 @@ void CloudPostReasoning(string event_type, string reason, string regime, string 
    // "Blocked by AIDirector" in Command Center purely because its own
    // diagnostic text said "AGAINST". Fixed by checking the specific, real
    // AI-authored labels FIRST (this function's own "AI DIRECTOR"/"AI-" prefixed
-   // block messages, e.g. "REMOVED_LEGACY_AI_VETO", "[AI-CONFIDENT-SKIP]",
+   // block messages, e.g. "AI DIRECTOR BLOCK", "[AI-CONFIDENT-SKIP]",
    // "[A+/A QUALITY GATE]... AI="), and only falling back to substring
    // guessing for the module buckets that were never ambiguous in practice.
    string module = "DecisionEngine";

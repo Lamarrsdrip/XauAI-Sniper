@@ -1,0 +1,49 @@
+id,old_module,old_behavior,action,new_owner,status
+R01,Adaptive reversal timing call,Separate elapsed confirmation after reversal approval,deleted duplicate call,Shared Timing Authority,REMOVED
+R02,Primary timing call,Old multi-stage confirmation state machine,deleted old engine,Shared Timing Authority,REPLACED
+R03,Re-entry timing call,Separate re-entry timer and state,deleted duplicate state,Shared Timing Authority,REPLACED
+R04,Recovery-awaiting-timing,Second wait after recovery gauntlet,deleted,No stale recovery lane,REMOVED
+R05,ContextGate classifier,Countertrend classifier hard-failed inside HTF gate,deleted strategic gate,Structure Authority,REMOVED
+R06,XAUEntryTimingGuard,Five independent anti-chase vetoes,merged evidence,Freshness Extension Authority,MERGED
+R07,Adaptive reversal timing lane,Re-evaluated reversal outside normal pipeline,deleted special lane,Shared normal pipeline,REMOVED
+R08,Reversal pullback wait,Blanket wait despite correct fresh direction,deleted blanket wait,Freshness Extension Authority,REMOVED
+R09,Transition wait veto,Paused valid same-side candidate on ambiguity,telemetry only,Structure Authority,NEUTRALIZED
+R10,Active Direction NO_TRADE,Global direction state zeroed candidate,telemetry only,Signal Direction Authority,NEUTRALIZED
+R11,Active Direction side lock,BUY_ONLY or SELL_ONLY rejected local structure,telemetry only,Structure Authority,NEUTRALIZED
+R12,Personality score penalty,Probabilistic regime reduced score,telemetry only,Signal scoring,NEUTRALIZED
+R13,Personality symmetric recheck,Second personality call hard-blocked,deleted,Signal scoring,REMOVED
+R14,SMC conflict penalty,Mild disagreement reduced grade,context bonus only,Structure Authority,NEUTRALIZED
+R15,SMC hard conflict grade skip,Single SMC flag forced SKIP,deleted,Structure Authority,REMOVED
+R16,TRI re-entry block,Recovery intelligence returned before shared rules,deleted,Re-entry Pyramid Authority,REMOVED
+R17,FIX-C B-grade demotion,Regime label converted B to SKIP,deleted,Single grade threshold,REMOVED
+R18,Adaptive post-news momentum veto,Second post-release news gate,deleted,News Authority,REMOVED
+R19,Post-news continuation approval,Required duplicate post-release approval,deleted,News Authority,REMOVED
+R20,STI late block,Standalone late-risk threshold returned,deleted,Freshness Extension Authority,REMOVED
+R21,STI exhaustion block,RSI divergence plus contraction returned independently,telemetry only,Freshness Extension Authority,NEUTRALIZED
+R22,STI bypass exhaustion branch,Mode-dependent exhaustion return,deleted,Freshness Extension Authority,REMOVED
+R23,Basket direction loss block,Floating loss percentage blocked regardless of projected risk,merged to projected risk,Risk Execution Authority,MERGED
+R24,Direction loss lock,Past losses disabled a side in No-Limit,deleted from normal No-Limit,Current structure,REMOVED
+R25,Recovery gate,Separate recovery state returned,deleted,Re-entry Pyramid Authority,REMOVED
+R26,Hive veto,Second cross-instance signature veto,deleted,One cross-instance collision lock,REMOVED
+R27,AI Director hard block,AI SKIP or low confidence stopped entry,telemetry only,Local authorities,NEUTRALIZED
+R28,Missing AI negative treatment,Timeout budget or no-consensus hurt eligibility,neutralized,Local authorities,NEUTRALIZED
+R29,AI confidence lot multiplier,Advisory AI shrank valid risk,deleted,Risk Execution Authority,REMOVED
+R30,Committee final-size multiplier,Committee output altered final size,deleted,Risk Execution Authority,REMOVED
+R31,Adaptive drawdown grade block,Watermark blocked non-A setups,telemetry only in No-Limit,Risk Execution Authority,NEUTRALIZED
+R32,Adaptive drawdown half-risk mode,Watermark silently halved size,deleted in No-Limit,Risk Execution Authority,REMOVED
+R33,TradeBrain block,Small memory sample independently vetoed,telemetry only,Signal scoring,NEUTRALIZED
+R34,Memory quality lot multiplier,Past outcomes shrank current valid risk,deleted,Risk Execution Authority,REMOVED
+R35,Full-risk quality stack block,Soft multipliers became hard micro-lot block,deleted strategic trigger,Broker minimum safety,REMOVED
+R36,Old-direction exhaustion invariant,Stale broad score blocked all sources,deleted,Per-candidate freshness,REMOVED
+R37,Soft-block conversion,Warnings relabeled as hard block,deleted,Named authorities,REMOVED
+R38,Failed-impulse missing-wick veto,Candle shape became hard class,deleted standalone authority,Freshness Extension Authority,REMOVED
+R39,Post-sweep A+ return,One sweep pattern vetoed fresh setup,deleted,Freshness Extension Authority,REMOVED
+R40,Bad-RR standalone return,RR returned before combined freshness decision,merged,Freshness Extension Authority,MERGED
+R41,GrowthGuard inside OpenTrade,Strategy rechecked after final approval,deleted from OpenTrade,Risk Execution Authority,REMOVED
+R42,Final adaptive direction inside OpenTrade,Direction and location re-vetoed at send time,deleted from normal OpenTrade,Final Entry Arbiter,REMOVED
+R43,Growth daily lock entry gate,Daily PnL stopped No-Limit entries,deleted from No-Limit,Operational safety only,REMOVED
+R44,GrowthGuard pyramid gate,Independent growth state vetoed add,deleted,Re-entry Pyramid Authority,REMOVED
+R45,Equity-tier pyramid add cap,Balance tier overrode configured add count,deleted,Configured add count plus risk,REMOVED
+R46,Recovery expansion basket veto,Recovered-PnL state separately vetoed add,deleted,Projected basket risk,REMOVED
+R47,Pending-opportunity mailbox,Old blocked grade reopened later at stale price,deleted,New candidate identity only,REMOVED
+R48,Separate adaptive reversal OpenTrade lane,Reversal bypassed shared normal authorities,deleted special lane,Shared final pipeline,REMOVED
