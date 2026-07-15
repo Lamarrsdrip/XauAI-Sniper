@@ -1,0 +1,107 @@
+{
+  "audit_metadata": {
+    "audit_branch": "audit/blocker-evolution-forensic-20260715",
+    "worktree_path": "/Users/libertyelectronics/XauAI-Sniper-blocker-audit-worktree",
+    "starting_origin_main_commit": "e13d669857c7589e06af17460d7004794d11279e",
+    "audit_date": "2026-07-15",
+    "no_source_files_modified": true,
+    "no_push_performed": true,
+    "canonical_source_file": "backend/ea_code/XAUUSD_AI_Sniper_EA.mq5",
+    "canonical_source_history_commits_via_follow": 294
+  },
+  "version_selection": {
+    "old_version": {
+      "label": "v5.8.50 \"Evidence Refactor\"",
+      "commit": "de2984cce7039598af559458bfc49334187834e0",
+      "date": "2026-06-11",
+      "file_lines": 12065,
+      "rationale": "Last version before the post-blowup defensive cascade (next touch is 2026-06-18 A+ Profit Shield); inside the required May15-Jun15 window; corroborated by docs/superpowers/specs/2026-06-11-xau-v5850-evidence-refactor-design.md (61 closed trades, 72.1% win rate, +$192,502.77 net, PF 2.16)."
+    },
+    "current_version": {
+      "label": "v6.23.3",
+      "commit": "e13d669857c7589e06af17460d7004794d11279e",
+      "date": "2026-07-15",
+      "file_lines": 34750,
+      "rationale": "HEAD of origin/main; confirmed via #define XAUAI_EA_VERSION \"v6.23.3\" at line 1788 and #property version \"6.233\" at line 1773; byte-identical to frozen snapshot XAUUSD_AI_Sniper_EA_v6.23.3.mq5."
+    }
+  },
+  "investigation_window": {
+    "requested": "2026-05-15 to 2026-06-15",
+    "commits_touching_canonical_file_in_window": 39,
+    "commit_gap": "2026-06-12 to 2026-06-16, no commits",
+    "margin_examined_before": "2026-04-23 to 2026-05-14 (pre-window gate skeleton)",
+    "margin_examined_after": "2026-06-17 to 2026-07-15 (blowup + full hardening cascade)"
+  },
+  "blocker_counts": {
+    "old_version_v5850": {
+      "unique_blocker_tags_grep_verified": 19,
+      "sequential_veto_points_primary_path": 24,
+      "distinct_open_trade_call_sites": 2,
+      "blocker_pattern_function_defs_approx": 40,
+      "return_false_occurrences": 114,
+      "hard_block_or_reject_keyword_occurrences": 71
+    },
+    "current_version_v6233": {
+      "unique_blocker_tags_grep_verified": 61,
+      "unique_blocker_tags_new_vs_old": 42,
+      "unique_blocker_tags_removed_vs_old": 0,
+      "sequential_veto_stages_primary_path": 38,
+      "line_level_veto_exits_primary_path_estimate": 45,
+      "additional_hard_gates_inside_opentrade": 3,
+      "distinct_open_trade_call_sites": 5,
+      "blocker_pattern_function_defs_approx": 85,
+      "return_false_occurrences": 379,
+      "hard_block_or_reject_keyword_occurrences": 221
+    },
+    "master_inventory_rows": 48,
+    "timeline_events": 62
+  },
+  "top_turning_point_commits": [
+    {
+      "commit": "de2984cce7039598af559458bfc49334187834e0",
+      "date": "2026-06-11",
+      "why": "Last stable growth-era architecture; baseline for comparison, not itself a hardening event."
+    },
+    {
+      "commit": "530054fc54eba9eaa6d4391535866dec8ec0c514",
+      "date": "2026-06-23",
+      "why": "v6.0.2 Human Intelligence Upgrade -- first release to add multiple independent hard gates simultaneously, 6 days after the reported blowup."
+    },
+    {
+      "commit": "8101794be949e5287ca0caad0ac8f1d46be5b28e",
+      "date": "2026-06-28",
+      "why": "v6.3.8 -- introduces 11 named gate-block counters and PrintGateReport(); the team started measuring how often the bot blocks trades."
+    },
+    {
+      "commit": "5cb2bb8f2cbf9c47e9d3f8c9393b4845a86674e4",
+      "date": "2026-07-08",
+      "why": "v6.17.16 -- found 106 blocked A/A+ signals vs 19 executed trades in a 3-day window; converted a partially-enforced HARD_BLOCK label into an unconditional veto."
+    },
+    {
+      "commit": "c34d020ead43931056e599a063d427600c43b0a4",
+      "date": "2026-07-14",
+      "why": "v6.23.1 -- OLD_DIRECTION_EXHAUSTION_HARD_BLOCK, one condition simultaneously vetoing PRIMARY/RE_ENTRY/RECOVERY/RETRY/PYRAMID entry sources; broadest blast radius found, 1 day old at HEAD."
+    }
+  ],
+  "top_removal_merge_soften_candidates": [
+    {"blocker_id": "B008/B008b/B008c", "name": "Entry timing (3 functions: XAUEntryTimingGuard, XAU_ClassifySetup, XAU_TimingEngineConfirmsEntry)", "recommendation": "MERGE"},
+    {"blocker_id": "B020/B021/B024/B033", "name": "Account-state lot-reduction stack (Profit Guardian, EPF, Basket, Growth Guard)", "recommendation": "MERGE"},
+    {"blocker_id": "B029", "name": "PERSONALITY GATE mismatch", "recommendation": "SOFTEN", "evidence": "47% would-have-won rate, n=17, prior in-repo counterfactual audit"},
+    {"blocker_id": "B036", "name": "EffectiveMaxPyramidAdds hard equity-tier cutoffs", "recommendation": "SOFTEN"},
+    {"blocker_id": "B027/B028/B043", "name": "STI_LATE_BLOCK / STI_EXHAUST_BLOCK / REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK", "recommendation": "SOFTEN (apply v6.23.3's failedImpulseBlock continuation-health-score treatment)"},
+    {"blocker_id": "B018", "name": "AI DIRECTOR BLOCK (contradicts its own advisory-only claim)", "recommendation": "FIX_BUG"},
+    {"blocker_id": "B044", "name": "SOFT_BLOCK_CONVERTED mechanism", "recommendation": "INVESTIGATE_MORE", "evidence": "Most direct evidence in the codebase of soft-to-hard conversion pattern"},
+    {"blocker_id": "B042", "name": "OLD_DIRECTION_EXHAUSTION_HARD_BLOCK", "recommendation": "INVESTIGATE_MORE", "evidence": "Broadest blast radius, least field-tested (1 day old at HEAD)"}
+  ],
+  "confidence_and_gaps": {
+    "confidence_level": "high for all commit-hash, line-number, and function-existence claims (independently verified via git show/git log -S/grep in this pass); medium for causal P&L attribution (no raw trade CSV survives in this repo)",
+    "unresolved_gaps": [
+      "Raw trade log CSV (XAUAI_ExecutedTradeBrain_XAUUSD.csv) does not exist in this repo/worktree; all P&L figures are carried as corroborating context from audits/xau_growth_engine_forensic_audit_2026-05-15_to_2026-07-08.md, explicitly labeled as such, not independently re-derived.",
+      "User's original screenshots of old trading behavior were not available to this delegated task.",
+      "Exact commit hash not independently pinned for several post-window functions (EffectiveMaxPyramidAdds, ADAPTIVE_DRAWDOWN, RECOVERY-GATE, STI_LATE_BLOCK/STI_EXHAUST_BLOCK) -- narrowed to a commit range (2026-06-28 to 2026-07-14) but not to a single commit; flagged INVESTIGATE_MORE in BLOCKER_MASTER_INVENTORY.csv.",
+      "SOFT_BLOCK_CONVERTED mechanism's full trigger logic was not exhaustively traced across all call sites.",
+      "git fsck --no-reflogs and exhaustive deleted-file sweeps beyond the canonical file's own --follow history were not run given the scope of the request; judged non-essential since the single-file history plus window commit list fully covers the required period.",
+      "Whether the old CONVICTION-VETO AI hard-block code path (B017, pre-window) still exists verbatim alongside the newer AI Director, or was fully removed, was not conclusively determined."
+    ]
+  }
+}

@@ -1,0 +1,112 @@
+XauAI Sniper — Blocker Evolution Forensic Audit
+Reproducibility log: the actual commands run to produce this audit's findings.
+Run from: /Users/libertyelectronics/XauAI-Sniper-blocker-audit-worktree
+Branch: audit/blocker-evolution-forensic-20260715 (from origin/main @ e13d669857c7589e06af17460d7004794d11279e)
+
+=== 1. Orientation ===
+git status
+git branch -a
+git log -1 --date=iso
+ls -la
+find . -maxdepth 2 -iname "*.mq5"
+git rev-list --all --count
+git log --all --date=iso --since="2026-05-14" --until="2026-06-16" --pretty=format:'%H %ad %s' | wc -l
+git log --all --date=iso --reverse --pretty=format:'%H %ad %s' | head -5
+git log --all --date=iso --pretty=format:'%H %ad %s' | head -5
+
+=== 2. Identifying the canonical, continuously-tracked source file ===
+git log --all --pretty=format: --name-only -- '*.mq5' '*.mqh' | sort | uniq -c | sort -rn | head -30
+ls audits/
+head -100 RELEASE_CHECKLIST.md
+grep -n "^## v6\." RELEASE_CHECKLIST.md | head -80
+
+=== 3. Full rename-tracked history of the canonical file ===
+git log --follow --date=iso --pretty=format:'%H|%ad|%s' -- backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+  (294 commits, 2026-04-13 through 2026-07-15)
+git log --follow --date=short --pretty=format:'%h %ad %s' -- "XAUUSD_AI_Sniper_EA_MASTER_v6.0.2_HUMAN_INTELLIGENCE_UPGRADE.mq5"
+git log --follow --date=short --pretty=format:'%h %ad %s' -- "XAUUSD_AI_Sniper_EA_MASTER_v6.0.3_FORENSIC_GROWTH_AUDIT.mq5"
+  (used to confirm git rename-detection stitches every version-named snapshot filename into one history)
+
+=== 4. Version discovery window (May 15 - June 15, 2026 + margins) ===
+git log --all --since="2026-05-14" --until="2026-06-16" --pretty=format:'%H|%ad|%d|%s' -- backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+git branch --all --contains de2984c
+git log --all --since=2026-06-12 --until=2026-06-17 -- backend/ea_code/XAUUSD_AI_Sniper_EA.mq5   (confirms the 5-day commit gap)
+awk -F'|' '{print $2, $1, $3}' backend_ea_full_history.txt | sort | awk '$1 >= "2026-06-15" && $1 <= "2026-07-15"'
+
+=== 5. Reading internal version strings at specific historical commits ===
+git show <rev>:backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 | grep -E "XAUAI_EA_VERSION |#property version|property description"
+  Run for: 0296075 3e797dc fc66312 9088a01 20d8430 bfc1178 0b0882b de2984c 29f15e8 b70fe72
+grep -n "XAUAI_EA_VERSION\|#property version" backend/ea_code/XAUUSD_AI_Sniper_EA.mq5   (current HEAD)
+diff -q backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 XAUUSD_AI_Sniper_EA_v6.23.3.mq5   (confirms HEAD == frozen v6.23.3 snapshot, byte-identical)
+
+=== 6. Selecting the OLD comparison version ===
+git show de2984c:backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 > old_v5850.mq5
+wc -l old_v5850.mq5
+find . -iname "*v5850*" -o -iname "*evidence-refactor*"
+grep -n "72.1%\|192,502\|profit factor\|61 closed" docs/superpowers/specs/2026-06-11-xau-v5850-evidence-refactor-design.md
+find . -iname "*TradeBrain*" -o -iname "*ExecutedTrade*"   (confirms raw trade CSV is NOT present in this repo -- gap, noted explicitly)
+
+=== 7. Quantitative old-vs-current comparison ===
+wc -l old_v5850.mq5 backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+grep -c "return false" old_v5850.mq5 backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+grep -cE "HARD_BLOCK|blockClass|BlockReason|reject|Reject" old_v5850.mq5 backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+grep -nE "^(bool|void|int|double|string)\s+[A-Za-z_0-9]*(Block|Guard|Gate|Veto|Eligib|CanTrade|AllowTrade|ShouldTrade|Confirm|Cooldown|Lock|Filter|Suppress|Demot|Downgrad|Reject)" old_v5850.mq5
+grep -nE "^(bool|void|int|double|string)\s+[A-Za-z_0-9]*(Block|Guard|Gate|Veto|Eligib|CanTrade|AllowTrade|ShouldTrade|Confirm|Cooldown|Lock|Filter|Suppress|Demot|Downgrad|Reject)" backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+grep -noE "\"[A-Z0-9_+/. -]{3,40}(BLOCK|VETO|GATE|GUARD|LOCK|WAIT|COOLDOWN|-CD|TRAP)[A-Z0-9_ -]*\"" old_v5850.mq5 | cut -d: -f2 | sort -u > old_tags.txt
+grep -noE "\"[A-Z0-9_+/. -]{3,40}(BLOCK|VETO|GATE|GUARD|LOCK|WAIT|COOLDOWN|-CD|TRAP)[A-Z0-9_ -]*\"" backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 | cut -d: -f2 | sort -u > current_tags.txt
+wc -l old_tags.txt current_tags.txt
+comm -13 old_tags.txt current_tags.txt   (42 tags new in current, 0 removed from old)
+
+=== 8. Finding earliest-introducing commit for each named blocker function/tag ===
+git log -S"<FunctionNameOrTag>" --oneline --date=short --pretty=format:'%h %ad %s' --follow -- backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 | tail -1
+  Run individually (via scratchpad shell scripts find_origins.sh / find_origins2.sh / find_origins3.sh) for ~55 symbols including:
+  XAU_CrossInstanceEntryLockActive, XAU_TryClaimEntryLock, g_smcHardBlockActive, g_aiHardBlockB,
+  g_gateBlocks_Spread, XAU_GrowthDailyLockTriggered, XAU_GrowthGuardEntryBlockReason, XAU_GrowthGuardCapLots,
+  XAU_GrowthGuardCanPyramid, XAU_GrowthGuardReEntryAllowed, XAU_RecoveryExpansionBasketVeto,
+  XAU_AIRecordBudgetGuard, XAU_TimingEngineConfirmsEntry, XAU_BlockerIsHardReason, XAU_CounterExcursionEligible,
+  XAU_BlockedContinuationMissedProfitBias, XAU_ModeAllowsSoftBlockWarning, XAU_LogSoftBlockDowngrade,
+  BasketDirectionLossBlock, XAU_ExhaustionReversalGuard, SMC_DetectOrderBlocks, XAU_TFConfirmLabel,
+  XAU_IsInverseExperimentGradeEligible, XAU_TryForceOpenTrade, XAU_ClassifySetup, StrategyFitsPersonality,
+  XAU_ComputeActiveDirection, IsSmartGuardDamageSetup, SmartGuardStrongTrendRetest, SmartGuardInactivityRelaxed,
+  ContextGateAllows, EPF_BlockPyramidAdd, EPF_EntryBlockReason, PG_BlockReason, AIBlocksClose, AIVetoCooldownOK,
+  PropFirmLossLockReason, IsDirectionLocked, XAUEntryTimingGuard, AdaptiveXAUConfirm, ExpectancyDayGivebackGuard,
+  XAU_BlockedMemoryRapidScout, DowngradeGradeOneStep, PreTradeBlockReason,
+  SOFT_BLOCK_CONVERTED, HARD_BLOCK_SELF_CONSISTENCY, OLD_DIRECTION_EXHAUSTION_HARD_BLOCK,
+  REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK, GROWTH_ENTRY_BLOCK, "AI DIRECTOR BLOCK",
+  "LATE-CHASE ENTRY BLOCK", "BAD-LOCATION BLOCK", WOULD_BLOCK, PERSONALITY-GATE, SPIKECOOLDOWN,
+  TRANSITION_WAIT, APLUS_PATIENT_LOCK, POST_WINNER_GUARD, RISK_BLOCKED_LOT_BELOW_MIN
+
+=== 9. Tracing the primary entry decision path (OLD, v5.8.50) ===
+grep -n "OpenTrade(" old_v5850.mq5
+grep -n "ContextGateAllows(\|XAUEntryTimingGuard(\|PG_BlockReason(\|AdaptiveXAUConfirm(\|EPF_BlockPyramidAdd(\|IsSmartGuardDamageSetup(\|PreTradeBlockReason(\|IsDirectionLocked(" old_v5850.mq5
+sed -n '4760,5352p' old_v5850.mq5   (full manual line-by-line read of the primary signal path)
+
+=== 10. Tracing the primary entry decision path (CURRENT, v6.23.3) ===
+grep -n "OpenTrade(" backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 | grep -v "^.*://\|OpenTradeC\|void OpenTrade(int"
+awk 'NR==14000,NR==16860' backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 | grep -nE "return;|return false|Print\(\"|TRADE BLOCKED|VETO|BLOCK"
+sed -n '14700,16860p' backend/ea_code/XAUUSD_AI_Sniper_EA.mq5   (full manual line-by-line read)
+grep -n "XAU_TimingEngineConfirmsEntry(\|XAU_GrowthGuardEntryBlockReason(\|XAU_CrossInstanceEntryLockActive(\|XAU_TryClaimEntryLock(\|g_m5DelayConfirmedCount\|XAU_CounterExcursionEligible(\|XAU_ComputeActiveDirection(\|WOULD_BLOCK\|OLD_DIRECTION_EXHAUSTION_HARD_BLOCK" backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 | awk -F: '$1 > 13500 && $1 < 17700'
+sed -n '17646,17720p' backend/ea_code/XAUUSD_AI_Sniper_EA.mq5   (internal gates inside OpenTrade() itself)
+grep -n "XAU_GrowthGuardEntryBlockReason(" backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+
+=== 11. Turning-point commit deep dives ===
+git show 5cb2bb8 --stat
+git log -1 5cb2bb8 --pretty=format:'%B'   (v6.17.16 HARD_BLOCK self-consistency fix -- full commit message, 106-blocked-vs-19-executed statistic)
+git show 530054f -- (v6.0.2 property description block, read via git show <rev>:path | grep)
+git show f079bc3 -- (v6.0.3 property description block)
+
+=== 12. Input default / config spot checks ===
+grep -nE "^input (bool|int|double) Inp(SmartGuard|AI|GrowthGuard|Pyramid|Timing|CrossInstance|Personality|News|Session|Spread|Volatility|Basket|CounterExcursion|EntryDelay|Exhaustion|Reversal|Transition|MinAccountLotFloor|MaxTotalLots|ExitArm|ReEntry)" backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+grep -n "InpSmartGuardEnable\b" backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+grep -n "FAILED_IMPULSE\|CONTINUATION_HEALTH\|failedImpulseBlock" backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+
+=== 13. CSV integrity checks (this audit's own deliverables) ===
+python3 -c "import csv; ..." (validated BLOCKER_MASTER_INVENTORY.csv: 27 cols x 48 rows, no mismatches)
+python3 -c "import csv; ..." (validated BLOCKER_TIMELINE.csv: 6 cols x 62 rows, no mismatches)
+
+=== Notes on scope / what was NOT run ===
+- No `.mq5`/`.mqh` source file was ever modified, staged, or committed by this audit — only new files under audit/blocker-evolution/ were added.
+- No `git push` was run at any point.
+- No compile, build, or release tooling was invoked.
+- Raw trade log CSV (XAUAI_ExecutedTradeBrain_XAUUSD.csv) was searched for but does not exist in this repo/worktree — all P&L figures citing it are carried from audits/xau_growth_engine_forensic_audit_2026-05-15_to_2026-07-08.md as corroborating context, explicitly labeled as such, not re-derived here.
+- `git fsck --no-reflogs` and full `git rev-list --all` deleted/renamed-file sweeps beyond the canonical file's own `--follow` history were not exhaustively run in this pass given the very large scope requested; the single-file `--follow` history combined with the version-window commit list was judged sufficient to cover the required window with verified evidence. Flagged as a residual gap in VERSION_DISCOVERY_REPORT.md.
