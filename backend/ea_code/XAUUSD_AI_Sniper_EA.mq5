@@ -1784,8 +1784,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.241"
-#property description "XAUUSD AI Sniper v6.24.1 - Aligned Entry Engine + 15% Risk Margin Fix"
+#property version   "6.243"
+#property description "XAUUSD AI Sniper v6.24.3 - Smart Pullback Entry Caution"
 #property description "Approved normal entries use full configured risk or fail closed; no"
 #property description "margin, aggregate, broker-limit, or lot-step silent downscaling."
 #property description "Margin gate verifies real broker margin (OrderCalcMargin) with a small"
@@ -1801,9 +1801,9 @@
 #define XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0
 #define XAU_ENTRY_DELAY_SAFE_DEFAULT_SEC     150.0
 
-#define XAUAI_EA_VERSION "v6.24.1"
-#define XAUAI_EA_VERSION_NUM "6.24.1"
-#define XAUAI_BUILD_HASH "v6241-aligned-entry-engine-margin-fix-20260715"
+#define XAUAI_EA_VERSION "v6.24.3"
+#define XAUAI_EA_VERSION_NUM "6.24.3"
+#define XAUAI_BUILD_HASH "v6243-smart-pullback-entry-caution-20260715"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -2411,6 +2411,7 @@ input double InpReEntryFactor  = 1.2;      // Price must move this x SL past ori
 input double InpReEntrySize    = 0.5;      // Re-entry size multiplier (0.5 = half original)
 input int    InpMaxReEntriesPerDay = 1;    // Hard cap on re-entries per trading day
 input bool   InpReEntryBetterPriceOnly = true; // After a loss, do not auto re-enter at a worse price than the failed entry
+input int    InpReEntrySnapshotMaxBars = 3; // v6.24.3: a re-entry approval cannot survive more than this many closed M5 bars
 
 input group "=== SMART FILTERS ==="
 input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
@@ -3681,6 +3682,66 @@ struct XAU_AlignedCandidateState
 // one another's 2-3 minute clocks while still using the same authorities.
 XAU_AlignedCandidateState g_alignedCandidates[3];
 
+// v6.24.3 SMART PULLBACK ENTRY CAUTION.  This is intentionally the only
+// new timing/quality authority.  It does not own a timer, a lot multiplier,
+// or a second candidate lifecycle: it observes the already-preserved aligned
+// candidate after its owner-requested 120-180 second delay has elapsed.
+enum ENUM_XAU_SMART_ENTRY_CAUTION_DECISION
+{
+   XAU_SMART_ENTRY_CAUTION_ALLOW = 0,
+   XAU_SMART_ENTRY_CAUTION_WAIT = 1,
+   XAU_SMART_ENTRY_CAUTION_HARD_BLOCK = 2
+};
+
+struct XAU_SmartEntryCautionResult
+{
+   ENUM_XAU_SMART_ENTRY_CAUTION_DECISION decision;
+   string   primaryReason;
+   string   nextEvidence;
+   string   candidateId;
+   double   currentPrice;
+   double   atr;
+   double   extensionATR;
+   double   candidateAgeSeconds;
+   bool     pullbackActive;
+   bool     continuationConfirmed;
+   int      continuationVotes;
+   int      fastOppositionScore;
+   string   m5Momentum;
+   string   m15Momentum;
+   string   bosDirection;
+   string   chochState;
+   string   htfDirection;
+   int      aiConfidence;
+   string   aiVerdict;
+   int      similarSamples;
+   int      similarWins;
+   int      similarLosses;
+   double   similarityScore;
+   double   repeatedCauseConfidence;
+   string   repeatedFailureCause;
+   bool     failureCauseActive;
+   string   memoryInfluence;
+};
+
+// One-shot entry snapshot for durable TradeBrain learning.  It is copied to
+// the broker-confirmed position record, never used to resize or veto a lot.
+struct XAU_SmartCautionMemorySnapshot
+{
+   bool     valid;
+   int      direction;
+   string   setup;
+   bool     pullbackActive;
+   int      fastOppositionScore;
+   double   extensionATR;
+   string   timingState;
+};
+XAU_SmartCautionMemorySnapshot g_pendingSmartCautionMemory;
+
+ENUM_XAU_SMART_ENTRY_CAUTION_DECISION XAU_SmartEntryCautionGate(
+   int signal, string setupName, string grade, double entryScore,
+   XAU_SmartEntryCautionResult &result);
+
 struct BlockedIdea
 {
    bool     active;
@@ -4119,6 +4180,50 @@ struct LastClose
 };
 LastClose  lastClose;
 
+// v6.24.3: a closed-bar decision is the only object allowed to carry a
+// direction from candidate evaluation to a RE_ENTRY order.  This prevents a
+// close-event direction, a cached dashboard signal and a new market reading
+// from being mixed into one order.
+struct XAU_EntryDecisionSnapshot
+{
+   bool     valid;
+   long     generation;
+   string   symbol;
+   datetime decisionTime;
+   datetime closedM5BarTime;
+   int      signalDirection;
+   int      biasDirection;
+   int      bosDirection;
+   string   structureState;
+   string   setupName;
+   double   setupScore;
+   double   combinedScore;
+   string   grade;
+   string   aiStatus;
+   string   signature;
+};
+XAU_EntryDecisionSnapshot g_latestDecisionSnapshot;
+
+// Context survives a losing close only long enough to let a *new* decision
+// snapshot prove the same direction again.  It is not permission to send an
+// inherited order.  A broker SL invalidates it immediately.
+struct XAU_ReentryState
+{
+   bool     active;
+   bool     invalidated;
+   int      previousDirection;
+   string   previousCloseReason;
+   datetime originCloseTime;
+   datetime originSignalTime;
+   datetime originBarTime;
+   datetime creationTime;
+   datetime expiryBarTime;
+   double   invalidationPrice;
+   string   setupFingerprint;
+   long     sourceSnapshotGeneration;
+};
+XAU_ReentryState g_reentryState;
+
 // ====================================================================
 // v6.0 — STRATEGIC TREND INTELLIGENCE (STI) persistent state.
 // This struct survives trade closes — unlike everything else in the EA,
@@ -4179,6 +4284,12 @@ struct TradeMemRecord
    // AI verdict fields (Upgrade 5)
    string   aiVerdict;     // ALLOW / BLOCK / REDUCE / SKIP
    int      aiConf;        // 0-100
+   // v6.24.3: entry-timing facts, captured at broker-confirmed entry so
+   // memory can distinguish a valid thesis entered early from a bad thesis.
+   string   timingState;   // ENTRY_READY / PULLBACK_ACTIVE / RECLAIM_REQUIRED
+   double   extensionATR;  // extension from original candidate trigger
+   int      fastOppositionScore;
+   bool     pullbackActive;
 };
 
 CommitteeDecision g_committee;           // last assembled committee decision
@@ -4197,7 +4308,19 @@ int    g_posClassState[10];    // auto-init to 0 (= PSTATE_UNKNOWN)
 
 // v6.0.2: per-position committee data — fixes basket race condition where g_lastTradePattern
 // would be overwritten by a pyramid add before the original position closed and recorded.
-struct PosCommitteeRec { ulong posId; string pattern; string dirLabel; int conf; bool valid; };
+struct PosCommitteeRec
+{
+   ulong  posId;
+   string pattern;
+   string dirLabel;
+   int    conf;
+   bool   cautionCaptured;
+   string cautionTimingState;
+   double cautionExtensionATR;
+   int    cautionFastOpposition;
+   bool   cautionPullbackActive;
+   bool   valid;
+};
 PosCommitteeRec g_posCommData[10];
 
 // v6.0.2: news aftermath filter globals
@@ -7724,6 +7847,12 @@ int OnInit()
    lastClose.valid = false; lastClose.reEntered = false; lastClose.wasLoss = false;
    lastClose.dir = 0; lastClose.entryPrice = 0; lastClose.slDist = 0;
    lastClose.lots = 0; lastClose.closeTime = 0; lastClose.signature = ""; lastClose.setup = "";
+   g_latestDecisionSnapshot.valid = false;
+   g_latestDecisionSnapshot.generation = 0;
+   g_reentryState.active = false;
+   g_reentryState.invalidated = false;
+   g_reentryState.previousDirection = 0;
+   g_pendingSmartCautionMemory.valid = false;
    dxyLastFetch = 0; dxyGoldBias = "neutral";
    LoadPatterns();
    // v6.3.8 Upgrade 1: load TradeBrain memory from disk on startup
@@ -8766,60 +8895,285 @@ void UpdateDrawdownState(bool wasLoss)
 }
 
 //+------------------------------------------------------------------+
-//| RE-ENTRY DETECTOR — called every tick (cheap)                    |
-//| Fires ONCE after a loss only if price has reset to a better       |
-//| same-side level. This avoids buying higher/selling lower after    |
-//| a failed trade just because price reclaimed the old entry.        |
+//| v6.24.3 RE-ENTRY SNAPSHOT REPAIR                                 |
+//| A losing close is context only.  A live RE_ENTRY order must be   |
+//| built from the same current closed-M5 snapshot as a fresh trade. |
 //+------------------------------------------------------------------+
-void CheckReEntryOpportunity()
+string XAU_ReentryDirectionText(int dir)
 {
-   if(!InpUseReEntry || !lastClose.valid || !lastClose.wasLoss || lastClose.reEntered) return;
-   if(TimeCurrent() - lastClose.closeTime > InpReEntryWindow) return;
-   if(CountMyPositions() > 0) return;
-   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0.0) return;
+   return dir == 1 ? "BUY" : dir == -1 ? "SELL" : "NONE";
+}
 
-   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-   double curPrice = lastClose.dir == 1 ? ask : bid;
-   if(curPrice <= 0.0) return;
+int XAU_CurrentBiasDirection()
+{
+   if(currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_BREAKOUT_UP) return 1;
+   if(currentRegime == REGIME_TRENDING_DOWN || currentRegime == REGIME_BREAKOUT_DOWN) return -1;
+   return g_htfConsensusDir;
+}
 
-   // A re-entry must be a genuine better-value retest, never a worse-price
-   // recovery chase after a loss.
-   double betterBuffer = bufATR[1] * InpPostLossBetterATR;
-   bool betterPrice = lastClose.dir == 1
-                      ? curPrice <= lastClose.entryPrice - betterBuffer
-                      : curPrice >= lastClose.entryPrice + betterBuffer;
-   if(InpReEntryBetterPriceOnly && !betterPrice) return;
+string XAU_CurrentAIStatus()
+{
+   if(!InpUseAI) return "AI_DISABLED";
+   if(g_aiOffline) return "AI_UNAVAILABLE";
+   string provider = g_aiLastProviderStatus;
+   StringToUpper(provider);
+   if(StringFind(provider,"TIMEOUT") >= 0) return "AI_TIMEOUT";
+   if(StringFind(provider,"BUDGET") >= 0) return "AI_SKIPPED_BUDGET";
+   if(lastAIConfidence <= 0 || g_aiLastStateAt <= 0 ||
+      g_aiLastStateAt < iTime(Symbol(),PERIOD_M5,1)) return "AI_NOT_CALLED";
+   return StringFormat("AI_AVAILABLE_%d",lastAIConfidence);
+}
 
-   string sharedWhy = "";
-   if(!XAU_StructureAuthorityAllows(lastClose.dir, "RE_ENTRY", sharedWhy)) return;
+void XAU_CaptureDecisionSnapshot(int signal, string setupName, string grade,
+                                 double setupScore, double combinedScore)
+{
+   g_latestDecisionSnapshot.generation++;
+   g_latestDecisionSnapshot.valid           = (signal != 0 && grade != "SKIP");
+   g_latestDecisionSnapshot.symbol          = Symbol();
+   g_latestDecisionSnapshot.decisionTime    = TimeCurrent();
+   g_latestDecisionSnapshot.closedM5BarTime = iTime(Symbol(), PERIOD_M5, 1);
+   g_latestDecisionSnapshot.signalDirection = signal;
+   g_latestDecisionSnapshot.biasDirection   = XAU_CurrentBiasDirection();
+   g_latestDecisionSnapshot.bosDirection    = g_smc_bos_dir;
+   g_latestDecisionSnapshot.structureState  = StringFormat("BOS=%+d HTF=%+d regime=%s",
+                                             g_smc_bos_dir,g_htfConsensusDir,RegimeName());
+   g_latestDecisionSnapshot.setupName       = setupName;
+   g_latestDecisionSnapshot.setupScore      = setupScore;
+   g_latestDecisionSnapshot.combinedScore   = combinedScore;
+   g_latestDecisionSnapshot.grade           = grade;
+   g_latestDecisionSnapshot.aiStatus        = XAU_CurrentAIStatus();
+   g_latestDecisionSnapshot.signature       = (signal != 0) ? BuildSignature(signal,setupName) : "";
 
-   string reGrade = "A";
-   double reLot = 1.0;
-   if(!XAU_FreshnessExtensionAuthority(lastClose.dir, "RE_ENTRY", 0.0, 0.0,
-                                       reGrade, reLot, sharedWhy))
+   PrintFormat("DECISION_SNAPSHOT | symbol=%s generation=%I64d bar=%s signal=%s bias=%s structure=%s setup=%s setupScore=%.2f score=%.2f grade=%s aiStatus=%s",
+               g_latestDecisionSnapshot.symbol,g_latestDecisionSnapshot.generation,
+               TimeToString(g_latestDecisionSnapshot.closedM5BarTime,TIME_DATE|TIME_MINUTES),
+               XAU_ReentryDirectionText(signal),XAU_ReentryDirectionText(g_latestDecisionSnapshot.biasDirection),
+               g_latestDecisionSnapshot.structureState,setupName,setupScore,combinedScore,grade,
+               g_latestDecisionSnapshot.aiStatus);
+}
+
+void XAU_ClearDirectionalCandidateState(int direction)
+{
+   for(int lane=0; lane<3; lane++)
    {
-      Print("RE_ENTRY FRESHNESS BLOCK: ",sharedWhy);
-      lastClose.reEntered = true;
+      if(g_alignedCandidates[lane].candidateDirection == direction)
+         g_alignedCandidates[lane].firstCandidateTime = 0;
+   }
+   if(lastSignalDir == direction)
+   {
+      lastSignalDir = 0;
+      lastSignalSetup = "";
+      lastSignalSignature = "";
+   }
+   if(g_signalFirstSeenDir == direction)
+   {
+      g_signalFirstSeenTime = 0;
+      g_signalFirstSeenPrice = 0.0;
+      g_signalFirstSeenDir = 0;
+      g_signalFirstSeenSetup = "";
+   }
+   if(g_pendingSmartCautionMemory.valid && g_pendingSmartCautionMemory.direction == direction)
+      g_pendingSmartCautionMemory.valid = false;
+}
+
+void XAU_LogReentryState(string eventName, int requestedDirection, string reason)
+{
+   PrintFormat("%s | symbol=%s requested=%s previous=%s previousClose=%s currentSignal=%s currentBias=%s structure=%s origin=%s snapshot=%s closedM5=%s score=%.2f grade=%s aiStatus=%s reason=%s",
+               eventName,Symbol(),XAU_ReentryDirectionText(requestedDirection),
+               XAU_ReentryDirectionText(g_reentryState.previousDirection),g_reentryState.previousCloseReason,
+               XAU_ReentryDirectionText(g_latestDecisionSnapshot.signalDirection),
+               XAU_ReentryDirectionText(g_latestDecisionSnapshot.biasDirection),
+               g_latestDecisionSnapshot.structureState,
+               TimeToString(g_reentryState.originCloseTime,TIME_DATE|TIME_MINUTES),
+               TimeToString(g_latestDecisionSnapshot.decisionTime,TIME_DATE|TIME_MINUTES|TIME_SECONDS),
+               TimeToString(g_latestDecisionSnapshot.closedM5BarTime,TIME_DATE|TIME_MINUTES),
+               g_latestDecisionSnapshot.combinedScore,g_latestDecisionSnapshot.grade,
+               g_latestDecisionSnapshot.aiStatus,reason);
+}
+
+void XAU_InvalidateReentryState(string eventName, string reason)
+{
+   int direction = g_reentryState.previousDirection != 0 ? g_reentryState.previousDirection : lastClose.dir;
+   XAU_LogReentryState(eventName,direction,reason);
+   g_reentryState.active = false;
+   g_reentryState.invalidated = true;
+   g_reentryState.sourceSnapshotGeneration = 0;
+   lastClose.reEntered = true;
+   XAU_ClearDirectionalCandidateState(direction);
+   if(g_pendingTimingProof.active && StringFind(g_pendingTimingProof.candidateId,"RE_ENTRY") >= 0)
+      g_pendingTimingProof.active = false;
+}
+
+void XAU_CreateReentryState(bool wasSLHitExact)
+{
+   g_reentryState.active = false;
+   g_reentryState.invalidated = false;
+   g_reentryState.previousDirection = lastClose.dir;
+   g_reentryState.previousCloseReason = lastClose.exitReason;
+   g_reentryState.originCloseTime = lastClose.closeTime;
+   g_reentryState.originSignalTime = (g_signalFirstSeenDir == lastClose.dir) ? g_signalFirstSeenTime : 0;
+   g_reentryState.originBarTime = iTime(Symbol(),PERIOD_M5,1);
+   g_reentryState.creationTime = TimeCurrent();
+   int expiryBars = MathMax(1,InpReEntrySnapshotMaxBars);
+   int expirySeconds = MathMin(InpReEntryWindow,expiryBars * 300);
+   g_reentryState.expiryBarTime = g_reentryState.creationTime + expirySeconds;
+   g_reentryState.invalidationPrice = lastClose.closePrice;
+   g_reentryState.setupFingerprint = lastClose.signature;
+   g_reentryState.sourceSnapshotGeneration = 0;
+
+   if(wasSLHitExact)
+   {
+      XAU_InvalidateReentryState("REENTRY_BLOCKED_AFTER_SL",
+         "broker SL invalidated the previous directional thesis; a later trade must be a newly scored primary candidate");
       return;
    }
-   if(!XAU_TimingAuthorityAllows(lastClose.dir, "RE_ENTRY", bufATR[1], sharedWhy)) return;
-   if(!XAU_NewsAuthorityAllows(sharedWhy)) return;
-   if(!XAU_ReentryPyramidAuthority(lastClose.dir, "RE_ENTRY", sharedWhy)) return;
-   if(!XAU_FinalEntryArbiter("RE_ENTRY",true,true,true,true,true,true,sharedWhy)) return;
+   if(!InpUseReEntry || !lastClose.wasLoss)
+      return;
 
-   PrintFormat("RE_ENTRY SHARED_PATH: %s better retest %.2f | %s",
-               lastClose.dir==1?"BUY":"SELL",curPrice,sharedWhy);
-   lastSignalDir = lastClose.dir;
-   lastSignalSignature = lastClose.signature;
-   lastSignalSetup = "RE_ENTRY";
-   bool opened = OpenTrade(lastClose.dir, bufATR[1], "RE_ENTRY", 1.0);
-   g_alignedCandidates[1].firstCandidateTime = 0;
-   if(opened)
+   g_reentryState.active = true;
+   XAU_LogReentryState("REENTRY_STATE_CREATED",lastClose.dir,
+      "loss context stored; execution requires a matching fresh closed-bar decision snapshot");
+}
+
+bool XAU_ReentrySnapshotStillCurrent(string &why)
+{
+   why = "";
+   if(!g_latestDecisionSnapshot.valid)
+   { why = "no current approved signal snapshot"; return false; }
+   if(g_latestDecisionSnapshot.symbol != Symbol())
+   { why = "snapshot symbol changed"; return false; }
+   if(g_latestDecisionSnapshot.closedM5BarTime != iTime(Symbol(),PERIOD_M5,1))
+   { why = "closed M5 bar advanced after snapshot"; return false; }
+   if(g_reentryState.sourceSnapshotGeneration != g_latestDecisionSnapshot.generation)
+   { why = "approval snapshot generation changed"; return false; }
+   if(g_latestDecisionSnapshot.signalDirection != g_reentryState.previousDirection)
+   { why = "latest confirmed signal no longer matches re-entry direction"; return false; }
+   if(TimeCurrent() - g_latestDecisionSnapshot.decisionTime > 300)
+   { why = "decision snapshot older than one M5 bar"; return false; }
+   return true;
+}
+
+bool CheckReEntryOpportunity()
+{
+   if(!g_reentryState.active) return false;
+   int dir = g_reentryState.previousDirection;
+   if(dir == 0) { XAU_InvalidateReentryState("REENTRY_STATE_INVALIDATED","missing previous direction"); return false; }
+   if(CountMyPositions() > 0) return true;
+   if(TimeCurrent() > g_reentryState.expiryBarTime)
+   { XAU_InvalidateReentryState("REENTRY_STATE_EXPIRED","closed-bar re-entry window expired"); return false; }
+   if(!g_latestDecisionSnapshot.valid)
+   { XAU_LogReentryState("REENTRY_WAITING_CURRENT_SNAPSHOT",dir,"current closed bar has no approved fresh signal"); return true; }
+   if(g_latestDecisionSnapshot.signalDirection != dir)
    {
-      lastClose.reEntered = true;
-      todayReEntryCount++;
+      XAU_InvalidateReentryState("REENTRY_BLOCKED_OPPOSITE_SIGNAL",
+         "latest confirmed closed-bar signal differs from requested re-entry direction");
+      return false;
    }
+   if(ArraySize(bufATR) < 2 || bufATR[1] <= 0.0)
+   { XAU_LogReentryState("REENTRY_WAITING_CURRENT_SNAPSHOT",dir,"ATR buffer is not ready"); return true; }
+
+   bool dedicatedReversal = (StringFind(g_latestDecisionSnapshot.setupName,"REVERSAL") >= 0 &&
+                            g_latestDecisionSnapshot.bosDirection == dir);
+   if(g_latestDecisionSnapshot.biasDirection == -dir && !dedicatedReversal)
+   {
+      XAU_InvalidateReentryState("REENTRY_BLOCKED_BIAS_CONFLICT",
+         "ordinary re-entry cannot oppose the active trend bias without a dedicated closed-bar reversal setup");
+      return false;
+   }
+   if(g_smc_bos_dir == -dir && g_htfConsensusDir == -dir)
+   {
+      XAU_InvalidateReentryState("REENTRY_BLOCKED_STRUCTURE_FLIP",
+         "confirmed BOS and HTF structure now oppose the previous direction");
+      return false;
+   }
+
+   double c1=iClose(Symbol(),PERIOD_M5,1), c2=iClose(Symbol(),PERIOD_M5,2);
+   double m15c1=iClose(Symbol(),PERIOD_M15,1), m15c2=iClose(Symbol(),PERIOD_M15,2);
+   bool m5Continuation=(dir==1 ? c1>c2 : c1<c2);
+   bool m15NonConflict=(dir==1 ? m15c1>=m15c2 : m15c1<=m15c2);
+   if(!m5Continuation || !m15NonConflict)
+   {
+      XAU_LogReentryState("REENTRY_WAITING_CURRENT_SNAPSHOT",dir,
+         "fresh signal exists but closed M5 continuation or M15 non-conflict is missing");
+      return true;
+   }
+
+   double bid=SymbolInfoDouble(Symbol(),SYMBOL_BID), ask=SymbolInfoDouble(Symbol(),SYMBOL_ASK);
+   double curPrice=dir==1?ask:bid;
+   if(curPrice<=0.0) return true;
+   double betterBuffer=bufATR[1]*InpPostLossBetterATR;
+   bool betterPrice=(dir==1 ? curPrice<=lastClose.entryPrice-betterBuffer
+                              : curPrice>=lastClose.entryPrice+betterBuffer);
+   if(InpReEntryBetterPriceOnly && !betterPrice)
+   { XAU_LogReentryState("REENTRY_WAITING_CURRENT_SNAPSHOT",dir,"fresh continuation is not yet at the configured retest price"); return true; }
+
+   string sharedWhy="";
+   if(!XAU_StructureAuthorityAllows(dir,"RE_ENTRY",sharedWhy))
+   { XAU_InvalidateReentryState("REENTRY_BLOCKED_STRUCTURE_FLIP",sharedWhy); return false; }
+   string reGrade=g_latestDecisionSnapshot.grade;
+   double reLot=1.0;
+   if(!XAU_FreshnessExtensionAuthority(dir,"RE_ENTRY",g_latestDecisionSnapshot.setupScore,
+                                       g_latestDecisionSnapshot.combinedScore,reGrade,reLot,sharedWhy))
+   { XAU_InvalidateReentryState("REENTRY_STATE_INVALIDATED",sharedWhy); return false; }
+   if(!XAU_TimingAuthorityAllows(dir,"RE_ENTRY",bufATR[1],sharedWhy))
+   { XAU_LogReentryState("REENTRY_WAITING_CURRENT_SNAPSHOT",dir,sharedWhy); return true; }
+   XAU_SmartEntryCautionResult caution;
+   ENUM_XAU_SMART_ENTRY_CAUTION_DECISION cautionDecision=
+      XAU_SmartEntryCautionGate(dir,"RE_ENTRY",reGrade,g_latestDecisionSnapshot.combinedScore,caution);
+   if(cautionDecision==XAU_SMART_ENTRY_CAUTION_WAIT)
+   {
+      XAU_LogReentryState("REENTRY_WAITING_CURRENT_SNAPSHOT",dir,
+                          caution.primaryReason+" | next="+caution.nextEvidence);
+      return true;
+   }
+   if(cautionDecision==XAU_SMART_ENTRY_CAUTION_HARD_BLOCK)
+   {
+      XAU_InvalidateReentryState("REENTRY_STATE_INVALIDATED",caution.primaryReason);
+      return false;
+   }
+   // Final freshness check occurs after caution; it observes the same candidate
+   // identity and therefore cannot restart the existing timing clock.
+   if(!XAU_FreshnessExtensionAuthority(dir,"RE_ENTRY",g_latestDecisionSnapshot.setupScore,
+                                       g_latestDecisionSnapshot.combinedScore,reGrade,reLot,sharedWhy))
+   { XAU_InvalidateReentryState("REENTRY_STATE_INVALIDATED",sharedWhy); return false; }
+   if(!XAU_NewsAuthorityAllows(sharedWhy))
+   { XAU_LogReentryState("REENTRY_WAITING_CURRENT_SNAPSHOT",dir,sharedWhy); return true; }
+   if(!XAU_ReentryPyramidAuthority(dir,"RE_ENTRY",sharedWhy))
+   { XAU_InvalidateReentryState("REENTRY_STATE_INVALIDATED",sharedWhy); return false; }
+
+   g_reentryState.sourceSnapshotGeneration=g_latestDecisionSnapshot.generation;
+   if(!XAU_ReentrySnapshotStillCurrent(sharedWhy))
+   { XAU_InvalidateReentryState("REENTRY_BLOCKED_STALE_SNAPSHOT",sharedWhy); return false; }
+   if(!XAU_FinalEntryArbiter("RE_ENTRY",true,true,true,true,true,true,sharedWhy)) return true;
+
+   lastSignalDir=dir;
+   lastSignalSignature=g_latestDecisionSnapshot.signature;
+   lastSignalSetup=g_latestDecisionSnapshot.setupName;
+   g_pendingBrainGrade=g_latestDecisionSnapshot.grade;
+   g_pendingBrainSetupScore=g_latestDecisionSnapshot.setupScore;
+   g_pendingBrainCombinedScore=g_latestDecisionSnapshot.combinedScore;
+   g_pendingBrainEntryAudit="REENTRY_REBUILT_AS_FRESH_SETUP | " + g_latestDecisionSnapshot.structureState;
+   g_pendingSmartCautionMemory.valid=true;
+   g_pendingSmartCautionMemory.direction=dir;
+   g_pendingSmartCautionMemory.setup=g_latestDecisionSnapshot.setupName;
+   g_pendingSmartCautionMemory.pullbackActive=caution.pullbackActive;
+   g_pendingSmartCautionMemory.fastOppositionScore=caution.fastOppositionScore;
+   g_pendingSmartCautionMemory.extensionATR=caution.extensionATR;
+   g_pendingSmartCautionMemory.timingState=caution.continuationConfirmed?"ENTRY_READY":"PULLBACK_ACTIVE";
+   XAU_LogReentryState("REENTRY_APPROVED_FRESH_CONFIRMATION",dir,
+      "same direction independently rebuilt by the current closed-bar snapshot");
+   XAU_LogBotDecision("REENTRY_APPROVED_FRESH_CONFIRMATION",dir,g_latestDecisionSnapshot.setupName,
+                      g_latestDecisionSnapshot.grade,lastAIConfidence,g_latestDecisionSnapshot.combinedScore,
+                      "CLOSED_BAR_FRESH_CONFIRMATION",g_latestDecisionSnapshot.structureState,
+                      XAU_ReentryDirectionText(g_latestDecisionSnapshot.biasDirection),
+                      g_latestDecisionSnapshot.aiStatus,"CONTEXT_ONLY",
+                      "re-entry uses the immutable current decision snapshot");
+   bool opened=OpenTrade(dir,bufATR[1],"RE_ENTRY_FRESH_SETUP: "+g_latestDecisionSnapshot.setupName+
+                         " ["+g_latestDecisionSnapshot.grade+"]",1.0);
+   g_alignedCandidates[1].firstCandidateTime=0;
+   if(opened) { lastClose.reEntered=true; g_reentryState.active=false; todayReEntryCount++; }
+   else g_pendingSmartCautionMemory.valid=false;
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -12792,10 +13146,10 @@ void OnTick()
    // pre-existing noLimitMode gate.
    if(!noLimitMode && !XAU_RExitOwnsNormalPositions()) EPF_ManagePartials();
 
-   // === RE-ENTRY WATCHER (every tick, cheap) ===
-   // If we just closed a loser and price has reversed back past our entry,
-   // re-enter at reduced size once. Pure MQL5 — no AI call needed.
-   CheckReEntryOpportunity();
+   // v6.24.3: RE_ENTRY is deliberately NOT evaluated here.  This point is
+   // before the current M5 indicator/score scan, which was the stale-state
+   // defect behind an inherited SELL being sent while the fresh engine
+   // preferred BUY.  It is evaluated only after XAU_CaptureDecisionSnapshot.
 
    // === PYRAMID WATCHER (every tick) ===
    // If we have an open position and price has moved a meaningful distance
@@ -13445,6 +13799,7 @@ void OnTick()
    // v6.24.0: grade is final here. SMC and the old TRI re-entry watch are
    // context-only observations and have no independent execution authority.
    XAU_RecordMarketSnapshot("SCAN_EVALUATED", signal, setupName, grade, setupScore, combinedScore);
+   XAU_CaptureDecisionSnapshot(signal,setupName,grade,setupScore,combinedScore);
    g_lastEntryScanAt = TimeCurrent(); // v6.17.12: watchdog stamp moved here, see note above CopyEntryBuffer block
    XAU_LogScanState((signal != 0 && grade != "SKIP") ? "SCAN_COMPLETED_CANDIDATE" : "SCAN_COMPLETED_NO_TRADE");
    // v6.17.14 FLEET-CONSISTENCY: DecisionFingerprint -- one line per completed
@@ -13515,6 +13870,13 @@ void OnTick()
    if(signal != 0 && grade != "SKIP")
       XAU_TrackSignalFirstSeen(signal, setupName, grade, setupScore, combinedScore, firstSeenPx, bufATR[1]);
 
+   // A valid loss-context re-entry gets first use of this *same* immutable
+   // fresh snapshot.  While it waits for its existing 2-3 minute timer it
+   // owns the candidate, preventing a duplicate primary candidate.  If it
+   // invalidates (including opposite signal/SL/bias flip), the current fresh
+   // primary signal continues normally below.
+   if(CheckReEntryOpportunity()) return;
+
    // v6.24.0 ALIGNED ENTRY ENGINE — exact authority order:
    // candidate -> score/grade -> confirmed structure -> freshness/extension
    // -> one 2-3 minute timing owner -> one news owner -> operational risk
@@ -13564,6 +13926,40 @@ void OnTick()
       return;
    }
 
+   XAU_SmartEntryCautionResult primaryCaution;
+   ENUM_XAU_SMART_ENTRY_CAUTION_DECISION primaryCautionDecision=
+      XAU_SmartEntryCautionGate(signal,setupName,grade,combinedScore,primaryCaution);
+   if(primaryCautionDecision==XAU_SMART_ENTRY_CAUTION_WAIT)
+   {
+      g_lastSkipReason="WAITING | "+primaryCaution.primaryReason+" | next="+primaryCaution.nextEvidence;
+      XAU_LogBotDecision("WAITING",signal,setupName,grade,lastAIConfidence,combinedScore,
+                         primaryCaution.primaryReason,primaryCaution.chochState,primaryCaution.htfDirection,
+                         primaryCaution.aiVerdict,primaryCaution.memoryInfluence,
+                         "candidate preserved; "+primaryCaution.nextEvidence);
+      return;
+   }
+   if(primaryCautionDecision==XAU_SMART_ENTRY_CAUTION_HARD_BLOCK)
+   {
+      g_alignedCandidates[0].firstCandidateTime=0;
+      g_pendingSmartCautionMemory.valid=false;
+      g_lastSkipReason="HARD_BLOCK | "+primaryCaution.primaryReason;
+      XAU_LogBotDecision("HARD_BLOCK",signal,setupName,grade,lastAIConfidence,combinedScore,
+                         primaryCaution.primaryReason,primaryCaution.chochState,primaryCaution.htfDirection,
+                         primaryCaution.aiVerdict,primaryCaution.memoryInfluence,
+                         "candidate cleared only for genuine invalidation/consumption");
+      return;
+   }
+
+   // The delay is already satisfied.  This is a final freshness observation,
+   // not a new timing authority and it retains the same candidate generation.
+   if(!XAU_FreshnessExtensionAuthority(signal, setupName, setupScore, combinedScore,
+                                       grade, alignedLotMulti, freshnessWhy))
+   {
+      g_alignedCandidates[0].firstCandidateTime=0;
+      Print(freshnessWhy);
+      return;
+   }
+
    if(spread > InpMaxSpread)
    {
       if(alignedPrimaryDelayDue) g_alignedCandidates[0].firstCandidateTime = 0;
@@ -13586,13 +13982,12 @@ void OnTick()
    if(!XAU_FinalEntryArbiter("PRIMARY",true,true,true,true,true,true,finalArbiterWhy))
       return;
 
-   // AI, personality, memory, session and regime remain observable context.
-   // Missing/low-confidence AI is neutral and cannot veto or resize a trade.
-   // AI SKIP cannot veto; it is preserved only as telemetry for later review.
-   g_aiLastVerdict = "NEUTRAL";
-   lastAIConfidence = 0;
-   PrintFormat("AI_TELEMETRY_ONLY | AI_MISSING_NEUTRAL: verdict=%s confidence=%d candidate=%s %s",
-               g_aiLastVerdict,lastAIConfidence,setupName,signal==1?"BUY":"SELL");
+   // AI is advisory evidence only.  A zero confidence means precisely the
+   // explicit status captured in the snapshot (for example NOT_CALLED or
+   // UNAVAILABLE); it is never displayed as an approving AI vote.
+   string entryAIStatus=g_latestDecisionSnapshot.aiStatus;
+   PrintFormat("AI_TELEMETRY_ONLY | status=%s verdict=%s confidence=%d candidate=%s %s",
+               entryAIStatus,g_aiLastVerdict,lastAIConfidence,setupName,signal==1?"BUY":"SELL");
 
    lastSignalDir = signal;
    lastSignalRSI = bufRSI[1];
@@ -13603,6 +13998,13 @@ void OnTick()
    g_pendingBrainSetupScore = setupScore;
    g_pendingBrainCombinedScore = combinedScore;
    g_pendingBrainEntryAudit = freshnessWhy;
+   g_pendingSmartCautionMemory.valid=true;
+   g_pendingSmartCautionMemory.direction=signal;
+   g_pendingSmartCautionMemory.setup=setupName;
+   g_pendingSmartCautionMemory.pullbackActive=primaryCaution.pullbackActive;
+   g_pendingSmartCautionMemory.fastOppositionScore=primaryCaution.fastOppositionScore;
+   g_pendingSmartCautionMemory.extensionATR=primaryCaution.extensionATR;
+   g_pendingSmartCautionMemory.timingState=primaryCaution.continuationConfirmed?"ENTRY_READY":"PULLBACK_ACTIVE";
 
    // Binary configured risk: strategic quality systems cannot silently shrink
    // an approved trade. OpenTrade still enforces aggregate exposure, margin,
@@ -13613,8 +14015,8 @@ void OnTick()
                       lastAIConfidence, combinedScore, freshnessWhy,
                       StringFormat("BOS=%+d",g_smc_bos_dir),
                       StringFormat("HTF=%+d context-only",g_htfConsensusDir),
-                      "AI_TELEMETRY_ONLY",g_memoryLastInfluence,
-                      "approved by score, structure, freshness and news authorities");
+                      entryAIStatus,g_memoryLastInfluence,
+                      "approved by score, structure, smart caution, freshness and news authorities");
 
    // v6.17.7 FIX (item 4): g_lastEntryGrade/g_lastEntryScore/dashboard state/
    // the "TRADE OPENED" scorecard entry used to be written unconditionally
@@ -13624,6 +14026,7 @@ void OnTick()
    // believing a trade had opened. Only commit this state on a confirmed fill.
    bool tradeOpened = OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", finalSzMult);
    g_alignedCandidates[0].firstCandidateTime = 0;
+   if(!tradeOpened) g_pendingSmartCautionMemory.valid=false;
    // v6.20.1: unconditionally invalidate the entry-timing mailbox right after
    // this specific OpenTrade attempt, success or fail -- it must never leak
    // into a later, unrelated OpenTrade call (RE_ENTRY/recovery/force-open)
@@ -21475,6 +21878,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    {
       lastExitReason = "";
       ulong openPosId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      int openDirection=((ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket,DEAL_TYPE)==DEAL_TYPE_BUY)?1:-1;
       if(openPosId > 0 && StringLen(g_lastTradePattern) > 0)
       {
          for(int s = 0; s < 10; s++)
@@ -21485,11 +21889,23 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                g_posCommData[s].pattern  = g_lastTradePattern;
                g_posCommData[s].dirLabel = g_lastTradeDirLabel;
                g_posCommData[s].conf     = g_lastTradeCommConf;
+               g_posCommData[s].cautionCaptured = (g_pendingSmartCautionMemory.valid &&
+                                                   g_pendingSmartCautionMemory.direction==openDirection);
+               g_posCommData[s].cautionTimingState = g_posCommData[s].cautionCaptured
+                                                      ? g_pendingSmartCautionMemory.timingState : "";
+               g_posCommData[s].cautionExtensionATR = g_posCommData[s].cautionCaptured
+                                                       ? g_pendingSmartCautionMemory.extensionATR : 0.0;
+               g_posCommData[s].cautionFastOpposition = g_posCommData[s].cautionCaptured
+                                                         ? g_pendingSmartCautionMemory.fastOppositionScore : 0;
+               g_posCommData[s].cautionPullbackActive = g_posCommData[s].cautionCaptured &&
+                                                         g_pendingSmartCautionMemory.pullbackActive;
                g_posCommData[s].valid    = true;
                break;
             }
          }
       }
+      if(g_pendingSmartCautionMemory.valid && g_pendingSmartCautionMemory.direction==openDirection)
+         g_pendingSmartCautionMemory.valid=false;
       return;
    }
    // v6.21.2 audit fix (Fix 18): DEAL_ENTRY_OUT_BY (position closed by an
@@ -21684,6 +22100,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       string memPattern  = g_lastTradePattern;   // fallback to global if no per-pos record found
       string memDirLabel = g_lastTradeDirLabel;
       int    memConf     = g_lastTradeCommConf;
+      string memTimingState = "";
+      double memExtensionATR = 0.0;
+      int    memFastOpposition = 0;
+      bool   memPullbackActive = false;
       for(int s = 0; s < 10; s++)
       {
          if(g_posCommData[s].valid && g_posCommData[s].posId == posId)
@@ -21691,6 +22111,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
             memPattern  = g_posCommData[s].pattern;
             memDirLabel = g_posCommData[s].dirLabel;
             memConf     = g_posCommData[s].conf;
+            memTimingState = g_posCommData[s].cautionTimingState;
+            memExtensionATR = g_posCommData[s].cautionExtensionATR;
+            memFastOpposition = g_posCommData[s].cautionFastOpposition;
+            memPullbackActive = g_posCommData[s].cautionPullbackActive;
             g_posCommData[s].valid = false; // free the slot
             break;
          }
@@ -21710,7 +22134,8 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          TradeMemory_Record(memPattern, memDirLabel, memConf, rMult,
                             memDir, memSession, memATR, memHTF,
                             memMaxDD, memMaxFav,
-                            g_lastAIVerdict_ForMemory, currentTradeConfidence);
+                            g_lastAIVerdict_ForMemory, currentTradeConfidence,
+                            memTimingState, memExtensionATR, memFastOpposition, memPullbackActive);
          if(InpCommitteeLog)
             Print(StringFormat("COMMITTEE-MEMORY: stored pattern=%s dir=%s conf=%d%% rMult=%.2f P/L=$%.2f aiVerdict=%s",
                                memPattern, memDirLabel, memConf, rMult, profit, g_lastAIVerdict_ForMemory));
@@ -21881,6 +22306,11 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          }
       }
    }
+
+   // A broker SL destroys the old directional permission immediately.  The
+   // next same-side trade, if any, must be rebuilt by the ordinary current
+   // closed-bar signal engine; it cannot inherit this loss context.
+   XAU_CreateReentryState(wasSLHitExact);
 
    // Streak + drawdown bookkeeping
    RecordCloseForStreak(wasLoss);
@@ -26972,6 +27402,259 @@ bool XAU_FreshnessExtensionAuthority(int signal, string setupName, double setupS
    return true;
 }
 
+// v6.24.3 — the one new caution authority.  It owns neither position sizing
+// nor time: it evaluates the already-preserved candidate only after the
+// existing 2-3 minute timer.  All uncertain timing evidence resolves to WAIT.
+ENUM_XAU_SMART_ENTRY_CAUTION_DECISION XAU_SmartEntryCautionGate(
+   int signal, string setupName, string grade, double entryScore,
+   XAU_SmartEntryCautionResult &result)
+{
+   result.decision = XAU_SMART_ENTRY_CAUTION_WAIT;
+   result.primaryReason = "PULLBACK_NOT_COMPLETE";
+   result.nextEvidence = "current closed-bar evidence";
+   result.candidateId = "";
+   result.currentPrice = 0.0;
+   result.atr = 0.0;
+   result.extensionATR = 0.0;
+   result.candidateAgeSeconds = 0.0;
+   result.pullbackActive = false;
+   result.continuationConfirmed = false;
+   result.continuationVotes = 0;
+   result.fastOppositionScore = 0;
+   result.m5Momentum = "DATA_PENDING";
+   result.m15Momentum = "DATA_PENDING";
+   result.bosDirection = StringFormat("%+d",g_smc_bos_dir);
+   result.chochState = "NO_OPPOSITE_CHOCH";
+   result.htfDirection = StringFormat("%+d",g_htfConsensusDir);
+   result.aiConfidence = lastAIConfidence;
+   result.aiVerdict = XAU_CurrentAIStatus();
+   result.similarSamples = 0;
+   result.similarWins = 0;
+   result.similarLosses = 0;
+   result.similarityScore = 0.0;
+   result.repeatedCauseConfidence = 0.0;
+   result.repeatedFailureCause = "NONE";
+   result.failureCauseActive = false;
+   result.memoryInfluence = "NONE";
+
+   int lane = XAU_AlignedCandidateLane(setupName);
+   if(signal == 0 || lane < 0 || lane >= 3)
+   {
+      result.primaryReason = "NO_DIRECTIONAL_CANDIDATE";
+      return result.decision;
+   }
+   if(g_alignedCandidates[lane].firstCandidateTime <= 0 ||
+      g_alignedCandidates[lane].candidateDirection != signal ||
+      g_alignedCandidates[lane].candidateSetup != setupName)
+   {
+      result.primaryReason = "CANDIDATE_ID_PENDING";
+      result.nextEvidence = "preserved candidate identity";
+      return result.decision;
+   }
+
+   double atr = (ArraySize(bufATR) > 1) ? bufATR[1] : 0.0;
+   double bid = SymbolInfoDouble(Symbol(),SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(),SYMBOL_ASK);
+   double price = signal == 1 ? ask : bid;
+   if(price <= 0.0) price = iClose(Symbol(),PERIOD_M5,1);
+   result.atr = atr;
+   result.currentPrice = price;
+   result.candidateAgeSeconds = (double)(TimeCurrent()-g_alignedCandidates[lane].firstCandidateTime);
+   result.extensionATR = g_alignedCandidates[lane].atrTravelled;
+   result.candidateId = StringFormat("%s_%s_%I64d",setupName,signal==1?"BUY":"SELL",
+                                      g_alignedCandidates[lane].candidateGeneration);
+   if(atr <= 0.0 || price <= 0.0)
+   {
+      result.primaryReason = "INDICATOR_DATA_PENDING";
+      result.nextEvidence = "ATR and current market price";
+      return result.decision;
+   }
+
+   double c1=iClose(Symbol(),PERIOD_M5,1), c2=iClose(Symbol(),PERIOD_M5,2), c3=iClose(Symbol(),PERIOD_M5,3);
+   double o1=iOpen(Symbol(),PERIOD_M5,1);
+   double h1=iHigh(Symbol(),PERIOD_M5,1), l1=iLow(Symbol(),PERIOD_M5,1);
+   double h2=iHigh(Symbol(),PERIOD_M5,2), l2=iLow(Symbol(),PERIOD_M5,2);
+   double m15c1=iClose(Symbol(),PERIOD_M15,1), m15c2=iClose(Symbol(),PERIOD_M15,2);
+   if(c1<=0.0 || c2<=0.0 || c3<=0.0 || o1<=0.0 || m15c1<=0.0 || m15c2<=0.0)
+   {
+      result.primaryReason = "CLOSED_BAR_DATA_PENDING";
+      result.nextEvidence = "M5 and M15 closed bars";
+      return result.decision;
+   }
+
+   bool candleAgainst=(signal==1 ? c1<o1 : c1>o1);
+   bool emaAgainst=(signal==1 ? bufEMAFast[1]<=bufEMASlow[1] : bufEMAFast[1]>=bufEMASlow[1]);
+   bool rsiAgainst=(signal==1 ? bufRSI[1]<48.0 : bufRSI[1]>52.0);
+   bool m5MoveAgainst=(signal==1 ? c1<c2 : c1>c2);
+   int m5AgainstFactors=(candleAgainst?1:0)+(emaAgainst?1:0)+(rsiAgainst?1:0)+(m5MoveAgainst?1:0);
+   bool m5Against=(m5AgainstFactors>=2);
+   bool m5Support=(signal==1 ? c1>o1 && c1>=c2 && bufEMAFast[1]>bufEMASlow[1] && bufRSI[1]>=50.0
+                               : c1<o1 && c1<=c2 && bufEMAFast[1]<bufEMASlow[1] && bufRSI[1]<=50.0);
+   result.m5Momentum=m5Against?"AGAINST":m5Support?"SUPPORTIVE":"MIXED";
+
+   bool m15MoveAgainst=(signal==1 ? m15c1<m15c2 : m15c1>m15c2);
+   bool m15RsiAgainst=(signal==1 ? bufRSI_M15[1]<48.0 : bufRSI_M15[1]>52.0);
+   bool m15Against=(m15MoveAgainst && m15RsiAgainst);
+   bool m15Support=(signal==1 ? m15c1>=m15c2 && bufRSI_M15[1]>=50.0
+                               : m15c1<=m15c2 && bufRSI_M15[1]<=50.0);
+   result.m15Momentum=m15Against?"AGAINST":m15Support?"SUPPORTIVE":"MIXED";
+
+   int fastOpposition=(m5Against?1:0)+(m15Against?1:0)+(emaAgainst?1:0)+(candleAgainst?1:0);
+   result.fastOppositionScore=fastOpposition;
+
+   double swingHigh=h2, swingLow=l2;
+   for(int i=3;i<=6;i++)
+   {
+      double hi=iHigh(Symbol(),PERIOD_M5,i), lo=iLow(Symbol(),PERIOD_M5,i);
+      if(hi>0.0) swingHigh=MathMax(swingHigh,hi);
+      if(lo>0.0) swingLow=MathMin(swingLow,lo);
+   }
+   bool reclaim=(signal==1 ? c1>swingHigh : c1<swingLow);
+   bool directionalBody=(signal==1 ? c1>o1 : c1<o1);
+   bool displacement=directionalBody && MathAbs(c1-o1)>=atr*0.45;
+   bool higherLow=(signal==1 ? l1>l2 && l2<=iLow(Symbol(),PERIOD_M5,3)
+                              : h1<h2 && h2>=iHigh(Symbol(),PERIOD_M5,3));
+   bool failedCountermove=(signal==1 ? c1>c2 && l1>=l2 : c1<c2 && h1<=h2);
+   bool belowOriginalTrigger=(signal==1 ? c1<g_alignedCandidates[lane].firstCandidatePrice-atr*0.15
+                                         : c1>g_alignedCandidates[lane].firstCandidatePrice+atr*0.15);
+   int continuationVotes=(directionalBody?1:0)+(reclaim?1:0)+(displacement?1:0)+
+                         (higherLow?1:0)+(failedCountermove?1:0)+(m5Support?1:0)+
+                         (!m15Against?1:0)+(IsXAUConfirmedBreakoutContinuation(signal,setupName)?1:0);
+   result.continuationVotes=continuationVotes;
+   result.continuationConfirmed=(continuationVotes>=3 && fastOpposition<=1);
+
+   int pullbackVotes=(m5Against?1:0)+(m15Against?1:0)+(belowOriginalTrigger?1:0)+
+                     (candleAgainst?1:0)+(!displacement?1:0)+(!higherLow?1:0)+
+                     (!reclaim?1:0)+(m5MoveAgainst?1:0)+(emaAgainst?1:0);
+   result.pullbackActive=(pullbackVotes>=3 && !result.continuationConfirmed);
+   bool confirmedOppositeStructure=(g_smc_bos_dir == -signal && g_htfConsensusDir == -signal);
+   result.chochState=confirmedOppositeStructure?"OPPOSITE_BOS_HTF_CONFIRMED":
+                     (g_smc_bos_dir==-signal?"OPPOSITE_BOS_WARNING":"NO_OPPOSITE_CHOCH");
+
+   // Memory only gains authority from new records that explicitly captured
+   // pullback/timing facts.  Legacy outcome-only rows remain informational.
+   int currentAtrBucket=(atr*10.0<10.0)?0:(atr*10.0<18.0)?1:2;
+   int exactTimingLosses=0;
+   double totalSimilarity=0.0;
+   for(int k=0;k<500;k++)
+   {
+      int idx=(g_tradeMemHead+k)%500;
+      if(!g_tradeMemory[idx].valid || g_tradeMemory[idx].dir!=signal) continue;
+      bool setupMatch=(StringFind(g_tradeMemory[idx].pattern,setupName)>=0 ||
+                       StringFind(setupName,g_tradeMemory[idx].pattern)>=0);
+      if(!setupMatch) continue;
+      double similarity=55.0; // direction + exact setup
+      if(g_tradeMemory[idx].session==SessionTag()) similarity+=15.0;
+      if(g_tradeMemory[idx].htfTrend==g_htfConsensusDir) similarity+=10.0;
+      if(g_tradeMemory[idx].atrRegime==currentAtrBucket) similarity+=10.0;
+      bool timingTagged=(g_tradeMemory[idx].pullbackActive ||
+                         StringFind(g_tradeMemory[idx].timingState,"PULLBACK")>=0 ||
+                         StringFind(g_tradeMemory[idx].timingState,"RECLAIM")>=0);
+      if(timingTagged) similarity+=10.0;
+      if(MathAbs(g_tradeMemory[idx].extensionATR-result.extensionATR)<=0.50) similarity+=5.0;
+      if(similarity<70.0) continue;
+      result.similarSamples++;
+      totalSimilarity+=similarity;
+      if(g_tradeMemory[idx].rMultiple>0.0) result.similarWins++; else result.similarLosses++;
+      if(timingTagged && g_tradeMemory[idx].rMultiple<=0.0) exactTimingLosses++;
+   }
+   if(result.similarSamples>0) result.similarityScore=totalSimilarity/result.similarSamples;
+   if(result.similarSamples>0) result.repeatedCauseConfidence=(double)exactTimingLosses/result.similarSamples;
+   if(exactTimingLosses>0) result.repeatedFailureCause="EARLY_ENTRY_DURING_ACTIVE_PULLBACK";
+   result.failureCauseActive=(result.pullbackActive && exactTimingLosses>=3 &&
+                               result.repeatedCauseConfidence>=0.70);
+   if(result.similarSamples>0 && !result.failureCauseActive) result.memoryInfluence="INFO";
+   if(result.failureCauseActive) result.memoryInfluence="WAIT";
+
+   string aiText=g_aiLastVerdict+" "+g_aiClaudeVote+" "+g_aiGPTVote;
+   StringToUpper(aiText);
+   bool aiDisagrees=(lastAIConfidence>=55 &&
+      ((signal==1 && (StringFind(aiText,"SELL")>=0 || StringFind(aiText,"BEAR")>=0 || StringFind(aiText,"SKIP")>=0)) ||
+       (signal==-1 && (StringFind(aiText,"BUY")>=0 || StringFind(aiText,"BULL")>=0 || StringFind(aiText,"SKIP")>=0))));
+
+   bool consumed=(g_alignedCandidates[lane].objectiveReached &&
+                  result.extensionATR>=MathMax(InpXAU_MaxMissedMoveATR,1.50) &&
+                  g_alignedCandidates[lane].remainingRewardR<1.0 &&
+                  !g_alignedCandidates[lane].marketReset && HasExhaustionDivergence(signal));
+   bool exactRepeatedFailure=(result.failureCauseActive && exactTimingLosses>=5 &&
+                              result.repeatedCauseConfidence>=0.80 && !g_alignedCandidates[lane].marketReset &&
+                              !result.continuationConfirmed);
+
+   if(confirmedOppositeStructure)
+   {
+      result.decision=XAU_SMART_ENTRY_CAUTION_HARD_BLOCK;
+      result.primaryReason="STRUCTURE_INVALIDATED";
+      result.nextEvidence="new opposite-direction thesis";
+   }
+   else if(consumed)
+   {
+      result.decision=XAU_SMART_ENTRY_CAUTION_HARD_BLOCK;
+      result.primaryReason="OPPORTUNITY_CONSUMED";
+      result.nextEvidence="new reset before another candidate";
+   }
+   else if(exactRepeatedFailure)
+   {
+      result.decision=XAU_SMART_ENTRY_CAUTION_HARD_BLOCK;
+      result.primaryReason="EXACT_REPEATED_FAILED_STRUCTURE";
+      result.memoryInfluence="HARD_BLOCK";
+      result.nextEvidence="market reset and a newly rebuilt setup";
+   }
+   else if(result.pullbackActive)
+   {
+      result.decision=XAU_SMART_ENTRY_CAUTION_WAIT;
+      result.primaryReason="PULLBACK_NOT_COMPLETE";
+      result.nextEvidence=signal==1?"bullish M5 reclaim above pullback swing":"bearish M5 reclaim below pullback swing";
+   }
+   else if(fastOpposition>=3)
+   {
+      result.decision=XAU_SMART_ENTRY_CAUTION_WAIT;
+      result.primaryReason="FAST_TIMEFRAME_OPPOSITION";
+      result.nextEvidence="M5 and M15 momentum stop opposing";
+   }
+   else if(!result.continuationConfirmed)
+   {
+      result.decision=XAU_SMART_ENTRY_CAUTION_WAIT;
+      result.primaryReason="CONTINUATION_CONFIRMATION_REQUIRED";
+      result.nextEvidence=signal==1?"bullish close, reclaim or higher low":"bearish close, reclaim or lower high";
+   }
+   else
+   {
+      result.decision=XAU_SMART_ENTRY_CAUTION_ALLOW;
+      result.primaryReason="FRESH_CONTINUATION_CONFIRMED";
+      result.nextEvidence="none";
+      if(aiDisagrees) result.primaryReason="FRESH_CONTINUATION_OVERRIDES_AI_DISAGREEMENT";
+   }
+   if(aiDisagrees && result.decision==XAU_SMART_ENTRY_CAUTION_WAIT && result.pullbackActive)
+      result.primaryReason+="_AI_DISAGREEMENT_SUPPORTS_WAIT";
+
+   string finalState=result.decision==XAU_SMART_ENTRY_CAUTION_ALLOW?"ALLOW":
+                     result.decision==XAU_SMART_ENTRY_CAUTION_WAIT?"WAIT":"HARD_BLOCK";
+   static string lastTraceKey="";
+   static datetime lastTraceAt=0;
+   string traceKey=result.candidateId+"|"+finalState+"|"+result.primaryReason;
+   if(traceKey!=lastTraceKey || TimeCurrent()-lastTraceAt>=60)
+   {
+      PrintFormat("SMART_ENTRY_CAUTION_TRACE | symbol=%s direction=%s setup=%s grade=%s score=%.2f candidateId=%s age=%.0fs original=%.2f current=%.2f ATR=%.2f extension=%.2fATR pullback=%s continuation=%s votes=%d BOS=%s CHoCH=%s HTF=%s M5=%s M15=%s fastOpp=%d AI=%s/%d memory=n%d w%d l%d sim=%.0f cause=%s active=%s influence=%s final=%s reason=%s next=%s",
+                  Symbol(),signal==1?"BUY":"SELL",setupName,grade,entryScore,result.candidateId,
+                  result.candidateAgeSeconds,g_alignedCandidates[lane].firstCandidatePrice,result.currentPrice,result.atr,
+                  result.extensionATR,result.pullbackActive?"Y":"N",result.continuationConfirmed?"Y":"N",
+                  result.continuationVotes,result.bosDirection,result.chochState,result.htfDirection,
+                  result.m5Momentum,result.m15Momentum,result.fastOppositionScore,result.aiVerdict,result.aiConfidence,
+                  result.similarSamples,result.similarWins,result.similarLosses,result.similarityScore,
+                  result.repeatedFailureCause,result.failureCauseActive?"Y":"N",result.memoryInfluence,
+                  finalState,result.primaryReason,result.nextEvidence);
+      PrintFormat("LEARNED_ENTRY_QUALITY_TRACE | direction=%s setup=%s grade=%s score=%.2f trendHealth=%s pullbackCompletion=%d continuation=%d trapRisk=%d liquiditySweep=UNKNOWN breakoutAcceptance=%s expectedAdverse=LEARNING historicalGoodSimilarity=%.0f historicalBadTiming=%d preferredAction=%s next=%s",
+                  signal==1?"BUY":"SELL",setupName,grade,entryScore,
+                  g_htfConsensusDir==signal?"ALIGNED":g_htfConsensusDir==-signal?"OPPOSED":"NEUTRAL",
+                  result.pullbackActive?25:result.continuationConfirmed?80:50,result.continuationVotes*15,
+                  fastOpposition*20,result.continuationConfirmed?"ACCEPTED":"UNCONFIRMED",
+                  result.similarityScore,exactTimingLosses,finalState,result.nextEvidence);
+      lastTraceKey=traceKey;
+      lastTraceAt=TimeCurrent();
+   }
+   return result.decision;
+}
+
 // v5.3.0 — master pre-trade gate aggregator. Anything returned non-empty
 // blocks new entries (but lets EXISTING positions trail/manage).
 string PreTradeBlockReason(int signal, string setupName = "")
@@ -27844,7 +28527,9 @@ double TradeMemory_LotAdjust(string pattern)
 void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
                         int dir=0, string session="", double atrAtEntry=0.0,
                         int htfTrend=0, double maxDD=0.0, double maxFav=0.0,
-                        string aiVerdict="", int aiConf=0)
+                        string aiVerdict="", int aiConf=0,
+                        string timingState="", double extensionATR=0.0,
+                        int fastOppositionScore=0, bool pullbackActive=false)
 {
    // Classify ATR bucket (pip-equivalent: 1 pip = 10 points for XAU with 2-decimal quotes)
    double atrPips = atrAtEntry * 10.0;
@@ -27865,6 +28550,10 @@ void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
    g_tradeMemory[g_tradeMemHead].maxFav        = maxFav;
    g_tradeMemory[g_tradeMemHead].aiVerdict     = aiVerdict;
    g_tradeMemory[g_tradeMemHead].aiConf        = aiConf;
+   g_tradeMemory[g_tradeMemHead].timingState   = timingState;
+   g_tradeMemory[g_tradeMemHead].extensionATR  = extensionATR;
+   g_tradeMemory[g_tradeMemHead].fastOppositionScore = fastOppositionScore;
+   g_tradeMemory[g_tradeMemHead].pullbackActive = pullbackActive;
    g_tradeMemHead = (g_tradeMemHead + 1) % 500;
    if(g_tradeMemCount < 500) g_tradeMemCount++;
    // Upgrade 1: persist to disk every time a new entry is added
@@ -27914,7 +28603,8 @@ void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
 // v6.3.8 UPGRADE 1 — TradeBrain disk persistence
 // File: MQL5/Files/XAUAI_TradeBrain_v1.csv (common files folder)
 // ============================================================
-#define TRADEBBRAIN_HEADER "#XAUAI_TradeBrain_v1"
+#define TRADEBBRAIN_HEADER "#XAUAI_TradeBrain_v2"
+#define TRADEBBRAIN_HEADER_V1 "#XAUAI_TradeBrain_v1"
 string XAU_LegacyTradeBrainFile() { return "XAUAI_TradeBrain_v1_" + XAU_ProductionStateScope() + ".csv"; }
 
 void SaveTradeBrainMemory()
@@ -27931,7 +28621,8 @@ void SaveTradeBrainMemory()
    // Write header row
    FileWrite(h, "closedAt","pattern","directorLabel","committeeConf","rMultiple",
                "dir","session","atrAtEntry","htfTrend","atrRegime",
-               "maxDD","maxFav","aiVerdict","aiConf");
+               "maxDD","maxFav","aiVerdict","aiConf","timingState",
+               "extensionATR","fastOppositionScore","pullbackActive");
    int count = 0;
    // Iterate in chronological order: oldest first (head is the NEXT write slot)
    for(int k = 0; k < 500; k++)
@@ -27952,7 +28643,11 @@ void SaveTradeBrainMemory()
          DoubleToString(g_tradeMemory[idx].maxDD, 4),
          DoubleToString(g_tradeMemory[idx].maxFav, 4),
          g_tradeMemory[idx].aiVerdict,
-         IntegerToString(g_tradeMemory[idx].aiConf)
+         IntegerToString(g_tradeMemory[idx].aiConf),
+         g_tradeMemory[idx].timingState,
+         DoubleToString(g_tradeMemory[idx].extensionATR, 4),
+         IntegerToString(g_tradeMemory[idx].fastOppositionScore),
+         g_tradeMemory[idx].pullbackActive ? "1" : "0"
       );
       count++;
    }
@@ -27970,7 +28665,8 @@ void LoadTradeBrainMemory()
 
    // First line must be the version header
    string hdr = FileReadString(h);
-   if(hdr != TRADEBBRAIN_HEADER)
+   bool legacyV1=(hdr == TRADEBBRAIN_HEADER_V1);
+   if(hdr != TRADEBBRAIN_HEADER && !legacyV1)
    {
       Print("TRADEBRAIN LOAD: header mismatch ('", hdr, "') — skipping file (version mismatch)");
       FileClose(h); return;
@@ -27978,7 +28674,7 @@ void LoadTradeBrainMemory()
    // Skip column name row
    if(!FileIsEnding(h))
    {
-      for(int col = 0; col < 14; col++) FileReadString(h);
+      for(int col = 0; col < (legacyV1 ? 14 : 18); col++) FileReadString(h);
    }
 
    // Reset memory
@@ -28003,6 +28699,10 @@ void LoadTradeBrainMemory()
       string maxFavStr     = FileReadString(h);
       string aiVerdict     = FileReadString(h);
       string aiConfStr     = FileReadString(h);
+      string timingState   = legacyV1 ? "" : FileReadString(h);
+      string extensionStr  = legacyV1 ? "0" : FileReadString(h);
+      string fastOppStr    = legacyV1 ? "0" : FileReadString(h);
+      string pullbackStr   = legacyV1 ? "0" : FileReadString(h);
 
       // Basic validation
       if(StringLen(closedAtStr) < 5 || StringLen(pattern) == 0)
@@ -28029,6 +28729,10 @@ void LoadTradeBrainMemory()
       g_tradeMemory[idx].maxFav        = StringToDouble(maxFavStr);
       g_tradeMemory[idx].aiVerdict     = aiVerdict;
       g_tradeMemory[idx].aiConf        = (int)StringToInteger(aiConfStr);
+      g_tradeMemory[idx].timingState   = timingState;
+      g_tradeMemory[idx].extensionATR  = StringToDouble(extensionStr);
+      g_tradeMemory[idx].fastOppositionScore = (int)StringToInteger(fastOppStr);
+      g_tradeMemory[idx].pullbackActive = (StringToInteger(pullbackStr) != 0);
       g_tradeMemory[idx].valid         = true;
 
       g_tradeMemHead = (g_tradeMemHead + 1) % 500;

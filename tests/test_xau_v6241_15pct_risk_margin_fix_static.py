@@ -144,8 +144,8 @@ def test_compile_log_reports_zero_errors_and_warnings():
     assert re.search(r"Result:\s+0 errors,\s+0 warnings", log), log[-1000:]
 
 
-def test_version_identity_bumped_to_v6241():
+def test_version_identity_bumped_to_v6243_without_losing_margin_fix():
     ea = read(BACKEND_EA)
-    assert '#define XAUAI_EA_VERSION "v6.24.1"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.24.1"' in ea
-    assert '#property version   "6.241"' in ea
+    assert '#define XAUAI_EA_VERSION "v6.24.3"' in ea
+    assert '#define XAUAI_EA_VERSION_NUM "6.24.3"' in ea
+    assert '#property version   "6.243"' in ea

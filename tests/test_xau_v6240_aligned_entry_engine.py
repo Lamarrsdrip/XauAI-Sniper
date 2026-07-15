@@ -71,14 +71,13 @@ def freshness(c: Candidate) -> str:
     return "ALLOW_FRESH"
 
 
-def test_release_identity_is_v6241():
-    # v6.24.1 layers the 15%-risk margin fix on top of this v6.24.0 aligned
-    # entry architecture; the architecture itself (asserted by every other
-    # test in this file) is unchanged, only the version identity moved.
+def test_release_identity_is_v6243():
+    # v6.24.3 retains the aligned v6.24.0 architecture and the v6.24.1
+    # broker-margin repair while adding one timing caution authority.
     s = source()
-    assert '#property version   "6.241"' in s
-    assert '#define XAUAI_EA_VERSION "v6.24.1"' in s
-    assert '#define XAUAI_EA_VERSION_NUM "6.24.1"' in s
+    assert '#property version   "6.243"' in s
+    assert '#define XAUAI_EA_VERSION "v6.24.3"' in s
+    assert '#define XAUAI_EA_VERSION_NUM "6.24.3"' in s
     assert "ALIGNED ENTRY ENGINE" in s
 
 
@@ -158,12 +157,13 @@ def test_one_freshness_authority_and_one_bounded_delay_owner():
     assert "ENTRY_DELAY_STARTED" not in s
 
 
-def test_ai_is_telemetry_only_and_missing_ai_is_neutral():
+def test_ai_is_telemetry_only_and_zero_is_truthfully_labeled():
     s = source()
     assert "AI_TELEMETRY_ONLY" in s
-    assert "AI_MISSING_NEUTRAL" in s
+    assert "AI_NOT_CALLED" in s
+    assert "AI_UNAVAILABLE" in s
     assert "AI DIRECTOR BLOCK" not in s
-    assert "AI SKIP cannot veto" in s
+    assert "AI is advisory evidence only" in s
 
 
 def test_personality_and_smc_cannot_independently_veto():
@@ -255,9 +255,11 @@ def test_opentrade_is_operational_safety_only():
 
 def test_reentry_and_pyramid_use_shared_authorities():
     s = source()
-    assert 'XAU_FreshnessExtensionAuthority(lastClose.dir, "RE_ENTRY"' in s
+    assert 'XAU_FreshnessExtensionAuthority(dir,"RE_ENTRY"' in s
+    assert "XAU_CaptureDecisionSnapshot" in s
+    assert "REENTRY_APPROVED_FRESH_CONFIRMATION" in s
     assert 'XAU_ReentryPyramidAuthority(dir, "PYRAMID"' in s
-    assert 'XAU_ReentryPyramidAuthority(lastClose.dir, "RE_ENTRY"' in s
+    assert 'XAU_ReentryPyramidAuthority(dir,"RE_ENTRY"' in s
 
 
 def test_news_has_one_hard_owner():
