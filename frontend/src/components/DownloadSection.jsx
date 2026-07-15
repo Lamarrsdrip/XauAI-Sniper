@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.23.2";
+  const version  = info?.version  || "v6.23.3";
   const edition  = info?.edition  || "ADAPTIVE TRANSITION AUTHORITY";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.23.2.mq5";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.23.3.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.23.2.</span> ACTIVE authority accumulates bounded reversal evidence across closed bars, keeps direction separate from entry location, and releases a fresh value reset without chasing—while preserving full-risk-or-block sizing.
+              <span className="font-semibold text-amber-200">Gold-only v6.23.3.</span> ACTIVE authority accumulates bounded reversal evidence across closed bars, keeps direction separate from entry location, and releases a fresh value reset without chasing—while preserving full-risk-or-block sizing.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">

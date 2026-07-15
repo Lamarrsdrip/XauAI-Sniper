@@ -14,6 +14,28 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.23.3 — 2026-07-15 — Trend Continuation Health Reasoning
+
+### Proven production gap repaired
+- [x] Forensic audit of the live VPS session (v6.23.2, 18:48 7/14 → 06:07 7/15, spanning the 4000→4100→4030 move) found 42 grade-A/A+/B trend candidates, 0 primary trend trades, 100% of executed trades were Counter-Excursion consolation trades
+- [x] Root cause traced to exact code: `failedImpulseBlock` treated "no rejection wick" as equivalent to "impulse failed" — a HARD_BLOCK with no override path, responsible for 14 of 42 blocked candidates (33%)
+- [x] `failedImpulseBlock` replaced with a 5-tier continuation-health score (`FAILED_IMPULSE`/`WEAK_CONTINUATION`/`NEUTRAL`/`HEALTHY_CONTINUATION`/`VERY_STRONG_CONTINUATION`), reusing the already-proven `XAU_TrendContinuationScore`/`XAU_EstimatedContinuationRoomATR` weighting instead of new unvalidated logic
+- [x] Only `FAILED_IMPULSE` tier can still hard-block, and only when room/location/divergence anti-chase gates also hold — every other pre-existing anti-chase/exhaustion/late-chase gate is untouched
+- [x] Diagnostic line added (`CONTINUATION_HEALTH: tier=... score=... override=...`) for every future audit
+
+### Identity and validation
+- [x] Canonical source: `XAUUSD_AI_Sniper_EA_v6.23.3.mq5`
+- [x] Build marker: `v6233-continuation-health-reasoning-20260715`
+- [x] Production ACTIVE preset: `config/XAUUSD_AI_Sniper_EA_v6.23.3_ACTIVE.set`
+- [x] MetaEditor compile: **0 errors, 0 warnings**
+- [x] Focused suite: 91/91 (5 new tests for this fix)
+- [x] Full-suite regression check: identical 208 pre-existing failures, zero new regressions
+- [x] Replay validation against the real 14 blocked log lines (4 distinct candidates) before deploying: 1 genuine missed winner (price +1.00 ATR in its favor) correctly rescued; 3 re-checks of a regime-misaligned signal (price moved −0.15 to −2.52 against it) correctly still blocked
+- [x] Exact EX5 installed on VPS, ACTIVE startup assertion verified (`build=v6233-continuation-health-reasoning-20260715`)
+- [x] Commit pushed to the production audit branch
+
+---
+
 ## v6.23.2 — 2026-07-14 — Production ACTIVE Intelligence Hardening
 
 ### Proven production gaps repaired

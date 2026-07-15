@@ -1,4 +1,4 @@
-"""Executable release gates for production v6.23.2 ACTIVE intelligence.
+"""Executable release gates for production v6.23.3 ACTIVE intelligence.
 
 These are deterministic decision/state regressions, not profit forecasts or a
 substitute for broker-tick Strategy Tester data.
@@ -11,8 +11,8 @@ from typing import Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.23.2.mq5"
-PRESET = ROOT / "config/XAUUSD_AI_Sniper_EA_v6.23.2_ACTIVE.set"
+EA = ROOT / "XAUUSD_AI_Sniper_EA_v6.23.3.mq5"
+PRESET = ROOT / "config/XAUUSD_AI_Sniper_EA_v6.23.3_ACTIVE.set"
 
 
 @dataclass
@@ -86,7 +86,7 @@ def test_01_active_is_loaded_by_production_preset():
 
 def test_02_shadow_cannot_silently_return():
     assert "InpAdaptiveTransitionMode=1" not in PRESET.read_text()
-    assert 'InpAdaptiveTransitionPresetId       = "XAUUSD_AI_Sniper_EA_v6.23.2_ACTIVE.set"' in source()
+    assert 'InpAdaptiveTransitionPresetId       = "XAUUSD_AI_Sniper_EA_v6.23.3_ACTIVE.set"' in source()
 
 
 def test_03_healthy_early_trend_trades():
@@ -259,8 +259,8 @@ def test_30_no_silent_point_zero_one_fallback():
 
 def test_release_identity_and_final_assertion_are_exact():
     s = source()
-    assert '#define XAUAI_EA_VERSION "v6.23.2"' in s
-    assert 'XAUAI_BUILD_HASH "v6232-production-active-intelligence-20260714"' in s
+    assert '#define XAUAI_EA_VERSION "v6.23.3"' in s
+    assert 'XAUAI_BUILD_HASH "v6233-continuation-health-reasoning-20260715"' in s
     assert "[PRODUCTION_ACTIVE_FINAL_ENTRY_ASSERTION]" in s
     assert not re.search(r"\[ACTIVE_FINAL_ENTRY_ASSERTION\]", s)
 
@@ -325,4 +325,110 @@ def test_32_recovery_elapsed_fields_are_log_only_not_a_trade_gate():
         assert not is_conditional, f"g_recoveryStartedAt must not gate unrelated control flow: {stripped}"
         assert is_comment or is_declaration or is_print_arg or is_assignment, (
             f"unexpected g_recoveryStartedAt read outside logging/assignment/comment: {stripped}"
+        )
+
+
+# --- v6.23.3: continuation-health reasoning replaces the single
+# failedImpulse && !hasRejection boolean. A production forensic audit (VPS
+# session spanning the 4000->4100->4030 move) found 14 of 42 grade-A/A+
+# candidates over 11.5 hours hard-blocked by exactly that boolean, and 0 of 3
+# executed trades were the primary trend engine (100% were Counter-Excursion
+# consolation trades at reduced risk). Replay of the real blocked candidates
+# confirmed one genuine missed winner (BUY, regime-aligned, price +1.00 ATR
+# in its favor) alongside three correctly-still-blocked re-checks of a
+# regime-misaligned BUY during a confirmed BRKT_DN market (price moved -0.15
+# to -2.52 against it) -- proving the new tier reasoning discriminates rather
+# than just loosening.
+
+
+def test_33_continuation_health_tiers_are_defined():
+    s = source()
+    assert '"FAILED_IMPULSE"' in s
+    assert '"WEAK_CONTINUATION"' in s
+    assert '"HEALTHY_CONTINUATION"' in s
+    assert '"VERY_STRONG_CONTINUATION"' in s
+    assert '"NEUTRAL"' in s
+
+
+def test_34_only_failed_impulse_tier_can_still_hard_block():
+    s = source()
+    assert 'continuationHealthTier != "FAILED_IMPULSE"' in s
+    assert "bool failedImpulseBlock = (trendSetup && InpXAU_BlockFailedImpulse && failedImpulse &&" in s
+    assert "!cleanContinuation && !continuationHealthOverride);" in s
+
+
+def test_35_override_still_requires_room_location_and_no_divergence():
+    # Anti-chase must survive: a healthy tier alone is not enough to admit a
+    # candidate whose reward is consumed, location is already bad, or that
+    # shows a genuine exhaustion divergence.
+    s = source()
+    assert "continuationHealthRoomATR >= InpXAU_TCM_MinRemainingRoomATR" in s
+    assert "!badLocation &&" in s
+    assert "!hasExhaustionDivForImpulseCheck)" in s
+
+
+def test_36_health_scoring_reuses_the_proven_tcm_scorer():
+    # Deliberately reuses XAU_TrendContinuationScore/XAU_EstimatedContinuationRoomATR
+    # (already relied on elsewhere for Trend-Continuation-Mode sizing) instead
+    # of inventing new unvalidated weights.
+    s = source()
+    idx = s.index("bool failedImpulseBlock = (trendSetup && InpXAU_BlockFailedImpulse")
+    window = s[max(0, idx - 3500):idx]
+    assert "XAU_TrendContinuationScore(signal, setupName, atr," in window
+    assert "XAU_EstimatedContinuationRoomATR(signal, atr," in window
+
+
+def test_37_replay_confirms_discrimination_not_blanket_loosening():
+    # Reimplements the exact weight formula (kept in lockstep with
+    # XAU_TrendContinuationScore) against the real field values logged for
+    # the 14 forensic-audit blocked lines (which collapse to 4 distinct
+    # candidates, since MT5 re-evaluates a persisting signal every tick).
+    def score(regimeAligned, htfAligned, freshBreak, breakoutCont, structureCont, postNews,
+              body, impulse, drive3, atrExp, extDrive, extThresh, rejection, memory, failedImp, wrongCandle, div):
+        s = (20.0 if regimeAligned else -12.0)
+        if htfAligned: s += 18.0
+        if freshBreak: s += 18.0
+        if breakoutCont: s += 12.0
+        if structureCont: s += 12.0
+        if postNews: s += 10.0
+        if body >= 0.30: s += 8.0
+        if impulse >= 0.70: s += 6.0
+        if drive3 >= 0.75: s += 7.0
+        if atrExp >= 1.05: s += 5.0
+        if extDrive >= extThresh: s += 4.0
+        if rejection: s += 5.0
+        if memory: s += 6.0
+        if failedImp: s -= 35.0
+        if wrongCandle: s -= 16.0
+        if div: s -= 24.0
+        return max(0.0, min(100.0, s))
+
+    FAILED_MAX, HEALTHY_MIN = 30.0, 72.0
+
+    def tier(sc, regimeAligned, htfAligned, freshBreak, breakoutCont, structureCont):
+        if sc <= FAILED_MAX:
+            return "FAILED_IMPULSE"
+        if sc < HEALTHY_MIN:
+            return "WEAK_CONTINUATION"
+        if not regimeAligned and not htfAligned and not freshBreak and not breakoutCont and not structureCont:
+            return "NEUTRAL"
+        return "HEALTHY_CONTINUATION"
+
+    # Candidate A: genuine missed winner -- regime/HTF aligned BUY, price
+    # moved +1.00 in its favor over the next 2 candles (signalFirstSeenPrice
+    # 4052.69 -> entryPrice 4053.69).
+    a = score(True, True, True, False, False, False, 0.37, 1.36, 1.62, 1.0, 0.0, 2.5,
+              False, False, True, False, False)
+    assert tier(a, True, True, True, False, False) != "FAILED_IMPULSE"
+    assert a >= 30.0
+
+    # Candidates B/C/D: same underlying BUY signal (signalFirstSeenPrice
+    # 4058.17) re-evaluated 3 times as the market kept falling during a
+    # confirmed BRKT_DN regime -- price moved -0.15, -1.70, then -2.52
+    # against the signal. Must remain FAILED_IMPULSE at every re-check.
+    for body, impulse, drive3, freshBreak in ((0.28, 1.73, 0.73, True), (0.36, 1.55, 0.28, False), (0.02, 0.89, 0.57, False)):
+        bad = score(False, False, freshBreak, False, False, False, body, impulse, drive3, 1.0, 0.0, 2.5,
+                    False, False, True, False, False)
+        assert tier(bad, False, False, freshBreak, False, False) == "FAILED_IMPULSE", (
+            f"regime-misaligned re-check scored {bad}, should stay FAILED_IMPULSE"
         )

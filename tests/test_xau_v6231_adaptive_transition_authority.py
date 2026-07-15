@@ -417,7 +417,7 @@ def test_active_central_authority_cannot_be_overruled_by_legacy_direction_guard(
 
 def test_backend_distribution_mirror_is_exact():
     backend = ROOT / "backend/ea_code/XAUUSD_AI_Sniper_EA.mq5"
-    current = ROOT / "XAUUSD_AI_Sniper_EA_v6.23.2.mq5"
+    current = ROOT / "XAUUSD_AI_Sniper_EA_v6.23.3.mq5"
     assert backend.read_bytes() == current.read_bytes()
 
 
