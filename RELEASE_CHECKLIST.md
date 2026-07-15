@@ -14,6 +14,26 @@ Keep the edition description on a single physical line — the regex does not ma
 
 ---
 
+## v6.24.1 — 2026-07-15 — 15% Risk Margin Fix
+
+### Proven production gap repaired
+- [x] Owner report: every valid trade reached `OpenTrade()` and was then blocked at the margin gate (`FULL_RISK_BINARY_BLOCK`/`MARGIN_BELOW_FULL_RISK`) — example: BUY candidate, full-risk lot 0.56, required margin ~$2,262, free margin ~$3,016 (well within broker capacity), blocked anyway because required margin exceeded an arbitrary "50% of free margin" ceiling
+- [x] Root cause traced to exact code: `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`, the margin-check block inside `OpenTrade()` (previously ~line 18406) — `if(marginNeeded > freeMargin * 0.5)` had no relationship to actual broker margin capacity, real risk (`InpNormalRiskPct`=15%), or SL distance
+- [x] `InpNormalRiskPct`=15% stop-risk sizing itself (`riskAmount = balance * riskPct / 100`, `rawLots = riskAmount / slDollarPerLotRaw`) was already correct and untouched — only the downstream margin veto was wrong
+- [x] 50%-of-free-margin ceiling removed. Margin gate now verifies real broker margin via `OrderCalcMargin()` against free margin minus a small `InpMarginReservePct` buffer (default 10%, not 50%)
+- [x] If the 15%-risk lot doesn't fit, the EA computes and logs the true maximum broker-margin-supported lot (requested lot, max lot, actual risk% at that max lot) and blocks transparently with `INSUFFICIENT_BROKER_MARGIN` — never a silent reduction to 0.01 — unless the new `InpMarginFallbackReduceToMax` input (default `false`) is explicitly enabled
+- [x] Genuine protections preserved untouched: `OrderCalcMargin` failure, broker max/min lot, lot step, InpMaxLots, equity-% cap, aggregate-risk cap, invalid SL/TP, prop-firm cap
+- [x] New `RISK_MARGIN_TRACE` log line on every approved trade: balance, equity, risk%, risk USD, SL distance, money-loss-per-lot-at-SL, raw lot, normalized lot, required margin, free margin, margin reserve, final lot, decision
+
+### Identity and validation
+- [x] Canonical source: `XAUUSD_AI_Sniper_EA_v6.24.1.mq5`
+- [x] Build marker: `v6241-15-percent-risk-margin-fix-20260715`
+- [x] MetaEditor compile: **0 errors, 0 warnings**
+- [x] New regression tests: `tests/test_xau_v6241_15pct_risk_margin_fix_static.py`
+- [x] Full-suite regression check: 217 pre-existing failures before and after (baseline captured pre-change), zero new regressions from this change
+
+---
+
 ## v6.23.3 — 2026-07-15 — Trend Continuation Health Reasoning
 
 ### Proven production gap repaired
