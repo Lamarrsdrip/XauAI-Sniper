@@ -133,3 +133,10 @@ credentials.json
 *.key
 .credentials
 backend/.jwt_secret
+
+# Local MetaTrader tester sandbox (vendor platform install + binaries, not project source)
+tester_sandbox/
+
+# Raw log/CSV dumps (not established repo convention, high churn/size)
+audits/raw/
+audits/timeframe_comparison/
