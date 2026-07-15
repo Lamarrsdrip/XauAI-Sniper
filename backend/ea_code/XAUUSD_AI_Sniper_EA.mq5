@@ -1,6 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
+//|   v6.24.11 - Command Center Market Thesis Display                |
+//|   On-chart + web dashboard now show real campaign state (thesis, |
+//|   confidence, exhaustion, transition/reversal signal) instead of  |
+//|   raw logs. Persistent campaign-state object carries real decision|
+//|   authority across bars; immutable decision snapshot expanded with|
+//|   remaining schema fields for full post-trade forensic replay.    |
+//+------------------------------------------------------------------+
 //|   v6.24.1 - 15% Risk Margin Fix (on Aligned Entry Engine)         |
 //|   Removed the arbitrary "required margin must be <=50% of free    |
 //|   margin" ceiling (FULL_RISK_BINARY_BLOCK/MARGIN_BELOW_FULL_RISK) |
