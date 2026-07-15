@@ -1,0 +1,63 @@
+date,commit,version,event_type,description,evidence
+2026-04-23,2291e67,pre-v5.8,introduction,IsDirectionLocked() introduced (directional lockout after repeated losses),git log -S IsDirectionLocked
+2026-04-27,6a8becd,pre-v5.8,introduction,AIBlocksClose() and AIVetoCooldownOK() introduced (AI can veto a position close),git log -S AIBlocksClose
+2026-04-30,d10d65e,pre-v5.8,introduction,ContextGateAllows() introduced (HTF H4 bias + swing S/R proximity hard gate),git log -S ContextGateAllows
+2026-05-04,4650259,pre-v5.8,introduction,PG_BlockReason() introduced (Profit Guardian veto: counter-trend stacks/tier-3 halt/post-loss cooldown),git log -S PG_BlockReason
+2026-05-12,1301b07,pre-v5.8,introduction,EPF_BlockPyramidAdd() introduced (Entry Price Floor pyramid block),git log -S EPF_BlockPyramidAdd
+2026-05-14,da00863,v5.8.x,introduction,SmartGuard family introduced (IsSmartGuardDamageSetup/SmartGuardStrongTrendRetest/SmartGuardInactivityRelaxed),git log -S IsSmartGuardDamageSetup
+2026-05-15,959a7b6,v5.8.8,introduction,ExpectancyDayGivebackGuard() introduced,git log -S ExpectancyDayGivebackGuard
+2026-05-16,3af8ac6,v5.8.x,introduction,Basket runner soft lock added (first named "lock" mechanism in window),commit message
+2026-05-18,c6c2040,v5.8.x,introduction,AdaptiveXAUConfirm() gate framework added (shared confirmation gate used by ANTI-BIAS/SMART-GUARD/PYRAMID),commit message + git log -S AdaptiveXAUConfirm
+2026-05-19,3e797dc,v5.8.18,version_label,Internal version string reaches v5.8.18 ANTI-BIAS STRATEGY FIX -- owner-remembered start-of-growth date,git show 3e797dc -- version string
+2026-05-19,1ff7f09,v5.8.x,introduction,XAUEntryTimingGuard() introduced (BAD-TIMING gate; also introduces DowngradeGradeOneStep()),commit message + git log -S XAUEntryTimingGuard
+2026-05-19,e40f958,v5.8.x,introduction,Smart pyramid engine added,commit message
+2026-05-20,659c7f1,v5.8.x,introduction,"BAD-LOCATION BLOCK tag introduced (pullback entry timing fix)",git log -S "BAD-LOCATION BLOCK"
+2026-05-25,f6aa406,v5.8.x,architecture_pass,"Refactor XAU EA decision authority and audit reporting -- first explicit ""decision authority"" consolidation attempt",commit message
+2026-05-26,20d8430,v5.8.37,introduction,Block post-sweep XAU A+ continuation traps (POST-SWEEP A PLUS GUARD),commit message
+2026-05-31,471ef98,v5.8.38,introduction,"XAU entry timing memory guard added; LATE-CHASE ENTRY BLOCK tag introduced",git log -S "LATE-CHASE ENTRY BLOCK"
+2026-06-01,0b0882b,v5.8.39,data,Trade brain memory added -- first real per-trade log in the repo's history,commit message
+2026-06-05,43faa41,v5.8.49 (inferred),introduction,"Command Center prop firm mode added (owner-recalled ""v5.8.49 Prop Firm Mode"")",commit message + docs cross-ref
+2026-06-11,de2984c,v5.8.50,baseline,"OLD comparison version selected -- EVIDENCE REFACTOR, last version before the post-blowup defensive cascade begins. 12065 lines, 19 unique blocker tags, 24 sequential veto points in primary path.",git show de2984c + this audit's own line trace
+2026-06-12..06-16,none,v5.8.50,gap,No commits touch the canonical EA file for 5 days -- EA traded unmodified,git log --since --until returns empty
+2026-06-17,none,v5.8.50,incident,"Owner-reported account-ending trading day; largest same-direction basket in dataset (~112 lots) near the EA's own 3%-equity worst-case InpMaxTotalLots ceiling, per prior in-repo audit's trade-log analysis (not independently re-verified in this pass -- raw CSV absent from repo)","audits/xau_growth_engine_forensic_audit... SS2.3 (context only, not primary evidence)"
+2026-06-18,5291d2e,v5.8.51,introduction,"A+ Profit Shield added -- FIRST defensive patch, one day after the reported blowup",commit message + date proximity
+2026-06-18,ae8213c,v5.8.52,strengthening,A+ Profit Shield extended onto Live Readiness base,commit message
+2026-06-18,746cfd2,v5.8.53,strengthening,Smart two-tier shield; stops early exits on pullbacks,commit message
+2026-06-19,29f15e8,v5.8.54,introduction,"Patient profit shield; APLUS_PATIENT_LOCK tag introduced",commit message + git log -S APLUS_PATIENT_LOCK
+2026-06-19,b70fe72,v5.8.55,strengthening,Runner Restore Shield (still the live shield design as of v6.23.3 per prior audit SS5 -- re-verified: tier logic present in current ManageCleanExitsForPosition),commit message
+2026-06-21,63937bd,v5.9.0-ish,tuning,Refine XAU EA precision without feature creep,commit message
+2026-06-22,1c3067b,v5.9.1,version_label,Balanced Precision release,commit message
+2026-06-23,530054f,v6.0.2,turning_point,"HUMAN INTELLIGENCE UPGRADE -- 12-rule Human Reasoning Engine, per-position committee memory, news aftermath filter, triple-TF alignment, loss-streak caution, Asian-session gate, spread-spike 10-min entry pause -- multiple new hard gates added simultaneously, 6 days after the reported blowup",git show 530054f -- property description block
+2026-06-24,f079bc3,v6.0.3,self_audit,"FORENSIC GROWTH AUDIT -- team's own prior self-diagnosis of exactly this problem, one day after v6.0.2; description states ""original aggressive growth behavior preserved while evidence improves""",git show f079bc3 -- property description block
+2026-06-28,79024ac,v6.3.6,introduction,"Dynamic EA versioning pipeline; AI DIRECTOR BLOCK tag and BasketDirectionLossBlock() / SMC_DetectOrderBlocks() introduced",git log -S "AI DIRECTOR BLOCK" / BasketDirectionLossBlock / SMC_DetectOrderBlocks
+2026-06-28,8101794,v6.3.8,introduction,"Persistent TradeBrain, gate analytics -- g_gateBlocks_Spread/News/Trend/AI/TradeBrain/Basket/DailyLoss/Volatility/Committee/STI/EPF counters introduced (11 categories) -- first evidence the team began measuring how much the bot blocks",git log -S g_gateBlocks_Spread
+2026-06-28,0683572,v6.4.0,introduction,"Market Personality Engine -- StrategyFitsPersonality()/PERSONALITY-GATE introduced",git log -S StrategyFitsPersonality
+2026-06-29,66b8e5a,v6.4.x,introduction,XAU_AIRecordBudgetGuard() introduced (AI budget/cache gate),git log -S XAU_AIRecordBudgetGuard
+2026-06-29,0a3df4a,v6.4.x,introduction,"Adaptive XAU trend continuation; XAU_BlockedContinuationMissedProfitBias() introduced",git log -S XAU_BlockedContinuationMissedProfitBias
+2026-06-30,9727bc0,v6.4.12,introduction,"Growth Guard family introduced -- XAU_GrowthDailyLockTriggered/XAU_GrowthGuardEntryBlockReason/XAU_GrowthGuardCapLots/XAU_GrowthGuardCanPyramid/XAU_GrowthGuardReEntryAllowed -- all in one commit",git log -S XAU_GrowthGuardEntryBlockReason
+2026-07-01,528c080,v6.4.21,introduction,"XAU_ModeAllowsSoftBlockWarning()/XAU_LogSoftBlockDowngrade() introduced -- formalizes soft-vs-hard block conversion as a named mechanism",git log -S XAU_LogSoftBlockDowngrade
+2026-07-01,c22afc80,v6.4.20-patch,softening,Fix over-aggressive AI-agree blocks (rare softening commit amid mostly-hardening period),commit message
+2026-07-01,e8d68e9,v6.4.19,introduction,Trade Thesis Monitor -- structure-aware exit intelligence,commit message
+2026-07-02,d72d206,v6.7.0,introduction,"Adaptive Entry/Exit Arbiter -- g_smcHardBlockActive / g_aiHardBlockB globals introduced",git log -S g_smcHardBlockActive
+2026-07-03,d11acf8,v6.11-ish,introduction,"Strong momentum override; SOFT_BLOCK_CONVERTED tag introduced -- names the exact soft-to-hard conversion pattern",git log -S SOFT_BLOCK_CONVERTED
+2026-07-03,67f80f0,v6.13.0,introduction,Anti-Repeat-Loss Guard added,commit message
+2026-07-07,cb3b186,v6.15.0,architecture_pass,"June 17-18 reconstruction: strategy-led architecture; XAU_ComputeActiveDirection() and TRANSITION_WAIT introduced",git log -S XAU_ComputeActiveDirection / TRANSITION_WAIT
+2026-07-07,b8937d9,v6.16.1,self_audit,"Self-audit fix: split structural vs AI-opinion bypass gates -- explicit acknowledgment of duplicate-authority pattern",commit message
+2026-07-07,5f43f91,v6.17.2,removal,Fix: legacy global anti-trend veto that was undoing v6.17.0 (one of very few outright removals found),commit message
+2026-07-08,cacc1c4,v6.17.14,introduction,"Risk cap raise + spread loosening (rare loosening pass); XAU_BlockerIsHardReason() introduced same release",commit message + git log -S XAU_BlockerIsHardReason
+2026-07-08,bb96579,v6.17.15,introduction,XAU_TryForceOpenTrade() introduced (Command Center manual override path -- still subject to OpenTrade()'s internal hard safety checks),commit message
+2026-07-08,5cb2bb8,v6.17.16,turning_point,"HARD_BLOCK self-consistency fix -- audit found 106 blocked A/A+ signals vs 19 executed trades in a 3-day window; made blockClass==HARD_BLOCK an unconditional return false with no override path, based on 3 bad trades out of 19",commit message body (full text in DUPLICATED_AND_CONTRADICTORY_BLOCKERS.md SS5)
+2026-07-08,4b38067,v6.17.21,introduction,XAU_ExhaustionReversalGuard() introduced,git log -S XAU_ExhaustionReversalGuard
+2026-07-08,1436aab,v6.17.23,duplication,"XAU_ClassifySetup() countertrend classifier introduced -- second independent ""is entry timing acceptable"" authority",git log -S XAU_ClassifySetup
+2026-07-08,0f823ab,v6.17.22,duplication,"XAU_TimingEngineConfirmsEntry() introduced (fixed same day as a mis-captured rename commit) -- third independent ""is entry timing acceptable"" authority, called twice in the current primary path",git log -S XAU_TimingEngineConfirmsEntry
+2026-07-09,dacf77b,v6.18.0,introduction,Growth Engine unified account-relative sizing,commit message
+2026-07-09,5ccae6d,v6.20.0,introduction,"M5 Entry Delay, Phase B -- explicit entry delay mechanism",commit message
+2026-07-09,8eedfad,v6.20.3,introduction,"XAU_CrossInstanceEntryLockActive()/XAU_TryClaimEntryLock() introduced -- now lives inside OpenTrade() itself",git log -S XAU_CrossInstanceEntryLockActive
+2026-07-10,50ba04e,v6.20.6,introduction,"Counter-Excursion Capture; XAU_CounterExcursionEligible()/SPIKECOOLDOWN introduced",git log -S XAU_CounterExcursionEligible
+2026-07-10,25c59ed,v6.20.5,introduction,XAU_RecoveryExpansionBasketVeto() introduced,git log -S XAU_RecoveryExpansionBasketVeto
+2026-07-13,027c9f0,v6.21.2,turning_point,"Full-risk binary mode -- removes quality-band risk scaling, converts what used to be a 0.01-lot fallback into an outright block (FULL_RISK_BINARY_BLOCK / RISK_BLOCKED_LOT_BELOW_MIN) -- soft-degrade explicitly replaced with hard block",commit message
+2026-07-14,b894d17,v6.23.0,hardening,release: harden XAUUSD production EA,commit message
+2026-07-14,5340de1,v6.23.1,introduction,"Adaptive transition authority added -- WOULD_BLOCK tag introduced",git log -S WOULD_BLOCK
+2026-07-14,c34d020,v6.23.1,turning_point,"Activate v6.23.1 transition authority -- OLD_DIRECTION_EXHAUSTION_HARD_BLOCK introduced: hard invariant blocks PRIMARY/RE_ENTRY/RECOVERY/RETRY/PYRAMID in the exhausted direction once exhaustion >=70%",git log -S OLD_DIRECTION_EXHAUSTION_HARD_BLOCK + RELEASE_CHECKLIST.md v6.23.1 entry
+2026-07-14,d17ed78,v6.23.1-repair,introduction,"REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK tag introduced -- explicit ""correct direction, still must wait"" mechanism",git log -S REVERSAL_DIRECTION_VALID_BUT_WAIT_FOR_PULLBACK
+2026-07-15,e13d669,v6.23.3,current_baseline,"CURRENT production version selected -- trend continuation health reasoning. Root-caused and partially fixed: failedImpulseBlock had hard-blocked 14 of 42 grade-A/A+/B trend candidates (33%) in one audited VPS session, forcing 100% of executed trades through a Counter-Excursion consolation path instead of the primary trend strategy.",commit message (full text) + this audit's grep of FAILED_IMPULSE/CONTINUATION_HEALTH tags at lines 30972-31506
