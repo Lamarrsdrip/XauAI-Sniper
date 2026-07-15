@@ -13,8 +13,10 @@ Evidence was read from the Mac MT5 terminal journal:
 
 `/Users/libertyelectronics/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Logs/20260715.log`.
 
-Times below are the terminal/server-time values printed by that journal (its
-human-readable date is 2026-07-15 20:xx):
+The journal prefix is local terminal time (18:xx); its decision-bar and
+timing-proof fields identify the corresponding broker/server M5 context as
+2026-07-15 20:xx.  Both are retained below so the records can be matched
+without guessing a timezone conversion.
 
 | Time | Recorded event | Finding |
 |---|---|---|
@@ -102,4 +104,3 @@ to avoid accidentally replacing the user-selected v6.24.1 release artifact.
 | BUY has active pullback / no fresh reclaim | may be skipped or conflict with stale re-entry | `WAIT / PULLBACK_NOT_COMPLETE`, timer is not restarted |
 | BUY later has continuation confirmation | unrelated stale re-entry can compete | `ALLOW BUY` through the normal fresh path |
 | SELL is later independently rebuilt with bearish structure | stale permission is all that existed | allowed only from a fresh matching snapshot |
-
