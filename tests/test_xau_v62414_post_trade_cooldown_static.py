@@ -97,8 +97,9 @@ def test_post_close_state_struct_exists_with_required_fields():
 
 
 def test_cooldown_start_hook_uses_broker_deal_time_not_timecurrent():
+    # v6.24.16 audit fix made g_postClose a per-direction array
     ea = read(BACKEND_EA)
-    idx = ea.index("g_postClose.closeTime")
+    idx = ea.index("g_postClose[closeSlot].closeTime")
     line = ea[idx:idx + 120]
     assert "HistoryDealGetInteger(dealTicket, DEAL_TIME)" in line
     assert "TimeCurrent()" not in line
@@ -114,21 +115,25 @@ def test_cooldown_start_hook_fires_only_on_active_to_inactive_transition():
 
 
 def test_cooldown_start_is_logged_once_with_snapshot_fields():
+    # v6.24.16 audit fix made g_postClose a per-direction array
     ea = read(BACKEND_EA)
-    block = ea[ea.index("if(campaignWasActiveBeforeClose && !g_campaign[closeSlot].active)"):][:2200]
+    block = ea[ea.index("if(campaignWasActiveBeforeClose && !g_campaign[closeSlot].active)"):][:2500]
     assert "POST_TRADE_COOLDOWN_STARTED" in block
-    assert "g_postClose.exhaustionAtClose" in block
-    assert "g_postClose.movementConsumedAtClose" in block
-    assert "g_postClose.wasInvalidated" in block
+    assert "g_postClose[closeSlot].exhaustionAtClose" in block
+    assert "g_postClose[closeSlot].movementConsumedAtClose" in block
+    assert "g_postClose[closeSlot].wasInvalidated" in block
 
 
 def test_cooldown_tick_logs_active_heartbeat_and_complete_transition_only():
+    # v6.24.16 audit fix: iterates both slots independently (see
+    # test_xau_v62416_readiness_audit_fixes.py's own
+    # test_cooldown_tick_iterates_both_slots_independently)
     ea = read(BACKEND_EA)
-    fn = ea[ea.index("void XAU_PostTradeCooldownTick()"):][:1200]
+    fn = ea[ea.index("void XAU_PostTradeCooldownTick()"):][:1400]
     assert "POST_TRADE_COOLDOWN_ACTIVE" in fn
     assert "POST_TRADE_COOLDOWN_COMPLETE" in fn
     # heartbeat is throttled to >=60s, not every tick
-    assert "TimeCurrent() - g_postClose.lastStateLogTime >= 60" in fn
+    assert "TimeCurrent() - g_postClose[s].lastStateLogTime >= 60" in fn
     # STARTED is never logged from this function -- only from the
     # OnTradeTransaction close hook, exactly once per close
     assert "POST_TRADE_COOLDOWN_STARTED" not in fn
@@ -200,9 +205,15 @@ def test_reset_confirmed_requires_both_prior_exhaustion_and_live_fresh_allowed()
 
 
 def test_reentry_gate_is_scoped_to_the_direction_that_actually_closed():
+    # v6.24.16 audit fix: reads g_postClose[XAU_CampaignSlot(direction)] --
+    # this direction's OWN slot -- not a shared single global (see
+    # test_xau_v62416_readiness_audit_fixes.py's own
+    # test_no_bare_g_postclose_dot_references_remain for the bug this fixed:
+    # a close of the OPPOSITE direction could silently overwrite this
+    # direction's own exhaustion memory when g_postClose was a single struct).
     ea = read(BACKEND_EA)
     fn = ea[ea.index("bool XAU_SameDirectionReentryBlockedByExhaustion("):][:500]
-    assert "g_postClose.direction != direction) return false;" in fn
+    assert "if(!g_postClose[slot].valid) return false;" in fn
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +262,7 @@ def test_counter_excursion_is_explicitly_reviewed_and_not_wired_to_cooldown():
     early_body = ea[fn_start:fn_start + 400]
     assert "if(magic != InpMagicNumber) return;" in early_body
     magic_check_idx = ea.index("if(magic != InpMagicNumber) return;")
-    postclose_write_idx = ea.index("g_postClose.valid                         = true;")
+    postclose_write_idx = ea.index("g_postClose[closeSlot].valid                         = true;")
     assert magic_check_idx < postclose_write_idx
 
 

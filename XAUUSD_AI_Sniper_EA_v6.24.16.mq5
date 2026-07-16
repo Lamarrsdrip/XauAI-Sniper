@@ -1,6 +1,18 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
+//|   v6.24.16 - Readiness Engine Audit Fixes (CRITICAL)               |
+//|   Multi-model audit found v6.24.15 was misreading the opposite     |
+//|   direction's own trading-validity state as "old side still        |
+//|   active," blocking most healthy with-trend continuations, plus a  |
+//|   wait-state flag that could never satisfy for a candidate that    |
+//|   confirmed on its first evaluation. Also fixed: the post-trade    |
+//|   cooldown/exhaustion memory was a single global that a close of   |
+//|   the OTHER direction could silently overwrite, and g_campaign[]   |
+//|   had no restart reconciliation, so a live redeploy with an open   |
+//|   position produced zero cooldown/exhaustion tracking on its real  |
+//|   eventual close. See audit findings for full detail.              |
+//+------------------------------------------------------------------+
 //|   v6.24.15 - Entry Readiness Engine                               |
 //|   Elevates the market-thesis readiness read (location/exhaustion/ |
 //|   timing/structure/pressure) from an advisory HARD_BLOCK-only     |
@@ -1813,7 +1825,7 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.255"
+#property version   "6.256"
 #property description "XAUUSD AI Sniper v6.24.13 - Campaign Registration Coverage Fix"
 #property description "Campaign tracking now covers re-entry/force-open, not just fresh entry."
 #property description "Approved normal entries use full configured risk or fail closed; no"
@@ -1828,9 +1840,9 @@
 #define XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0
 #define XAU_ENTRY_DELAY_SAFE_DEFAULT_SEC     150.0
 
-#define XAUAI_EA_VERSION "v6.24.15"
-#define XAUAI_EA_VERSION_NUM "6.24.15"
-#define XAUAI_BUILD_HASH "v62415-entry-readiness-engine-20260716"
+#define XAUAI_EA_VERSION "v6.24.16"
+#define XAUAI_EA_VERSION_NUM "6.24.16"
+#define XAUAI_BUILD_HASH "v62416-readiness-engine-audit-fixes-20260716"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -4637,9 +4649,35 @@ struct XAU_PostCloseState
    datetime lastStateLogTime;               // heartbeat throttle, <=1/60s
    bool     lastLoggedActive;                // state-change-only logging
 };
-XAU_PostCloseState g_postClose;
+// v6.24.16 audit fix — MUST be per-direction (indexed like g_campaign[2]),
+// not a single global. A single struct meant a close of EITHER direction
+// unconditionally overwrote the other direction's exhaustion-ban memory:
+// BUY closes 90% exhausted -> SELL closes cleanly 30s later (a hedge, a
+// force-open, or a broker DEAL_ENTRY_OUT_BY netting close, all of which
+// route through the exact same full-close handler) -> BUY's own
+// exhaustionAtClose/wasInvalidated is silently wiped, so
+// XAU_SameDirectionReentryBlockedByExhaustion(1,...) sees g_postClose[BUY
+// slot] as if BUY had never closed at all, and a fresh BUY signal can
+// re-enter a thesis the EA itself had just invalidated. The universal
+// 5-minute execution cooldown (XAU_PostTradeCooldownActive) is correctly
+// symbol-level/direction-agnostic by original design -- it now checks
+// BOTH slots and is active if EITHER direction closed within the last 300
+// seconds -- only the SAME-DIRECTION exhaustion memory needed to become
+// per-slot.
+XAU_PostCloseState g_postClose[2];
 
 int XAU_CampaignSlot(int direction) { return direction == 1 ? 0 : 1; }
+
+// v6.24.16 — for display purposes only: which slot holds the MOST RECENT
+// full close, across either direction. Returns -1 if neither slot has ever
+// recorded a close this run.
+int XAU_MostRecentPostCloseSlot()
+{
+   if(!g_postClose[0].valid && !g_postClose[1].valid) return -1;
+   if(!g_postClose[0].valid) return 1;
+   if(!g_postClose[1].valid) return 0;
+   return (g_postClose[0].closeTime >= g_postClose[1].closeTime) ? 0 : 1;
+}
 
 string XAU_CampaignIdText(long id) { return id > 0 ? ("CAMP-" + (string)id) : "NONE"; }
 
@@ -4818,19 +4856,76 @@ bool XAU_CampaignAllowsNewCore(int direction)
    return true;
 }
 
+// v6.24.16 audit fix — same restart-reconciliation pattern already used by
+// XAU_ReconcileTradeBrainOnInit/XAU_ReconcileRExitOnInit/
+// XAU_ReconcileCounterExcursionOnInit, applied to g_campaign[]. Before this
+// fix, g_campaign[] was a plain global with NO persistence and NO OnInit
+// reconciliation -- an EA/terminal restart (or a live redeploy, like this
+// one) with a position already open reset g_campaign[slot].active to false
+// while a real broker position was still live. Two compounding
+// consequences: (1) XAU_CampaignAllowsNewCore would incorrectly permit a
+// SECOND same-direction core to open alongside the untracked one; (2) when
+// the untracked position eventually closed for real,
+// XAU_CampaignRegisterClose's own `if(!g_campaign[slot].active) return;`
+// guard would silently no-op -- no cooldown would start, no exhaustion
+// memory would be recorded, for a real, broker-confirmed full close.
+// Historical campaign evidence (exhaustion%, movement consumed, lifecycle)
+// cannot be recovered after a restart -- this reconciliation restores
+// `.active`/`.activePositionCount`/`.direction` (the fields that actually
+// gate new-core/close-tracking correctness) with honest, conservative
+// defaults for everything else, same spirit as
+// XAU_ReconcileRExitOnInit's own "peak initialized from current profit,
+// historical peak unknown" comment.
+void XAU_ReconcileCampaignOnInit()
+{
+   int buyCount = 0, sellCount = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      if(posInfo.PositionType() == POSITION_TYPE_BUY) buyCount++; else sellCount++;
+   }
+   int counts[2]; counts[0] = buyCount; counts[1] = sellCount;
+   for(int slot = 0; slot < 2; slot++)
+   {
+      if(counts[slot] <= 0) continue;
+      if(g_campaign[slot].active) continue; // already tracked (e.g. same-session re-init) -- do not clobber
+      int direction = (slot == 0) ? 1 : -1;
+      g_campaign[slot].active                    = true;
+      g_campaign[slot].campaignId                = g_nextCampaignId++;
+      g_campaign[slot].symbol                    = Symbol();
+      g_campaign[slot].direction                 = direction;
+      g_campaign[slot].startTime                 = TimeCurrent();
+      g_campaign[slot].originSetup               = "RESTART_RECONCILE";
+      g_campaign[slot].lifecycle                 = TREND_HEALTHY; // conservative default, not TREND_EARLY -- unknown history
+      g_campaign[slot].activePositionCount       = counts[slot];
+      g_campaign[slot].additionCount             = MathMax(0, counts[slot] - 1);
+      g_campaign[slot].invalidated               = false;
+      PrintFormat("CAMPAIGN_RESTART_RECONCILE | dir=%s activePositions=%d | reconstructed after EA/terminal restart -- historical exhaustion/movement-consumed/lifecycle evidence lost, tracking resumes from current broker state",
+                  direction == 1 ? "BUY" : "SELL", counts[slot]);
+   }
+}
+
 // ===========================================================================
 // v6.24.14 — universal post-trade cooldown + exhausted-direction re-entry ban
 // ===========================================================================
 
+// Symbol-level, direction-agnostic by design: active if EITHER direction's
+// slot closed within the last POST_TRADE_COOLDOWN_SECONDS.
 bool XAU_PostTradeCooldownActive()
 {
-   return g_postClose.valid && TimeCurrent() < g_postClose.cooldownExpiresAt;
+   for(int s = 0; s < 2; s++)
+      if(g_postClose[s].valid && TimeCurrent() < g_postClose[s].cooldownExpiresAt) return true;
+   return false;
 }
 
 int XAU_PostTradeCooldownRemainingSeconds()
 {
-   if(!XAU_PostTradeCooldownActive()) return 0;
-   return (int)(g_postClose.cooldownExpiresAt - TimeCurrent());
+   int remaining = 0;
+   for(int s = 0; s < 2; s++)
+      if(g_postClose[s].valid)
+         remaining = MathMax(remaining, (int)(g_postClose[s].cooldownExpiresAt - TimeCurrent()));
+   return MathMax(0, remaining);
 }
 
 // Pure classification, no new signal math -- reads the SAME live fields
@@ -4841,14 +4936,26 @@ int XAU_PostTradeCooldownRemainingSeconds()
 // be produced when freshAllowed flips back to true on genuinely fresh
 // structural evidence (continuationEntryAllowed / pullback reset inside
 // XAU_AdaptiveMarketTransitionEngine), combined with a recorded prior
-// exhaustion at the moment this direction last closed. Time passing alone
-// changes nothing here.
+// exhaustion at the moment THIS direction itself last closed. Time passing
+// alone changes nothing here.
+//
+// v6.24.16 audit fix: reads g_postClose[XAU_CampaignSlot(direction)] --
+// this direction's OWN close history -- not a shared single global. A
+// close of the OPPOSITE direction can no longer silently overwrite this
+// direction's own exhaustion memory (see g_postClose[2]'s own comment).
+//
+// Scope note: this function answers "can THIS direction re-enter after ITS
+// OWN recent close" -- it is NOT a general-purpose "is the opposite side
+// still fighting me" check. XAU_OppositeSideStatus (below) answers that
+// separate question for the Entry Readiness Engine; conflating the two was
+// a real bug fixed in v6.24.16 (see that function's own comment).
 ENUM_XAU_OLD_DIRECTION_STATE XAU_ClassifyOldDirectionState(int direction, const XAU_AdaptiveTransitionDecision &td)
 {
+   int slot = XAU_CampaignSlot(direction);
    ENUM_XAU_TRANSITION_POSITION_ACTION existingAction = (direction == 1) ? td.existingBuyAction : td.existingSellAction;
    bool freshAllowed = (direction == 1) ? td.freshBuyAllowed : td.freshSellAllowed;
-   bool priorExhaustion = (g_postClose.valid && g_postClose.direction == direction &&
-                           (g_postClose.exhaustionAtClose >= 65.0 || g_postClose.wasInvalidated));
+   bool priorExhaustion = (g_postClose[slot].valid &&
+                           (g_postClose[slot].exhaustionAtClose >= 65.0 || g_postClose[slot].wasInvalidated));
 
    if(existingAction == TRANSITION_EXIT_CONTROLLED ||
       (td.lifecycle == OPPOSITE_DIRECTION_CONFIRMED && td.dominantDirection != 0 && td.dominantDirection != direction))
@@ -4867,40 +4974,91 @@ ENUM_XAU_OLD_DIRECTION_STATE XAU_ClassifyOldDirectionState(int direction, const 
 }
 
 // The actual gate: only relevant when `direction` is the SAME direction
-// that g_postClose recorded as just having closed -- a direction with no
-// recent-close history has nothing to be "exhausted" from, so this returns
-// false (not blocked) for it by construction.
+// that g_postClose[slot] recorded as just having closed -- a direction with
+// no recent-close history has nothing to be "exhausted" from, so this
+// returns false (not blocked) for it by construction.
 bool XAU_SameDirectionReentryBlockedByExhaustion(int direction, ENUM_XAU_OLD_DIRECTION_STATE &stateOut)
 {
    stateOut = OLD_DIRECTION_HEALTHY;
-   if(!g_postClose.valid || g_postClose.direction != direction) return false;
+   int slot = XAU_CampaignSlot(direction);
+   if(!g_postClose[slot].valid) return false;
    XAU_AdaptiveTransitionDecision liveTd = XAU_AdaptiveMarketTransitionEngine();
    stateOut = XAU_ClassifyOldDirectionState(direction, liveTd);
    return (stateOut == OLD_DIRECTION_EXHAUSTED || stateOut == OLD_DIRECTION_INVALIDATED);
 }
 
-// Per-tick heartbeat: emits POST_TRADE_COOLDOWN_ACTIVE at most once/60s
-// while active, and exactly one POST_TRADE_COOLDOWN_COMPLETE on the active
-// -> expired transition. POST_TRADE_COOLDOWN_STARTED is logged once, at the
-// moment of close, from OnTradeTransaction directly (this function never
-// logs STARTED so a fast OnTick before the next transaction can't double it).
+// v6.24.16 — answers a DIFFERENT question than XAU_ClassifyOldDirectionState:
+// "is there a real, currently-open, non-invalidated campaign in the
+// OPPOSITE direction actively fighting this candidate" -- for the Entry
+// Readiness Engine's "old side must finish first" check. Audit fix: the
+// original v6.24.15 code reused XAU_ClassifyOldDirectionState(-direction,
+// td) for this, which is WRONG -- that function's HEALTHY/MATURE verdicts
+// mean "this direction's OWN fresh entry is/isn't currently valid," not
+// "the opposite side is actively opposing me." In a clean uptrend,
+// freshSellAllowed is correctly false (no fresh SELL setup exists), which
+// made XAU_ClassifyOldDirectionState(-1,...) return MATURE -- misread by
+// the old code as "sellers still active," permanently blocking ordinary
+// with-trend BUY continuations. Fixed by checking the OPPOSITE direction's
+// actual open campaign state directly (g_campaign[]), which is the real,
+// correctly-scoped signal for "is anything genuinely fighting me right now."
+ENUM_XAU_OLD_DIRECTION_STATE XAU_OppositeSideStatus(int candidateDirection, const XAU_AdaptiveTransitionDecision &td)
+{
+   int oppositeDir = -candidateDirection;
+   int oppositeSlot = XAU_CampaignSlot(oppositeDir);
+   bool oppositeCampaignActive = g_campaign[oppositeSlot].active && !g_campaign[oppositeSlot].invalidated;
+
+   if(!oppositeCampaignActive)
+   {
+      // No live opposing position -- nothing is structurally fighting the
+      // candidate direction right now. If the opposite side recently
+      // closed itself exhausted/invalidated, report the richer
+      // RESET_CONFIRMED state (display/logging only, same "finished"
+      // outcome as INVALIDATED for gating purposes).
+      if(g_postClose[oppositeSlot].valid &&
+         (g_postClose[oppositeSlot].exhaustionAtClose >= 65.0 || g_postClose[oppositeSlot].wasInvalidated))
+         return OLD_DIRECTION_RESET_CONFIRMED;
+      return OLD_DIRECTION_INVALIDATED; // old side finished / never a factor -- a pure with-trend case
+   }
+
+   // A real opposite campaign IS open and not yet invalidated -- check
+   // whether ITS OWN exhaustion gate has already flagged it winding down.
+   ENUM_XAU_TRANSITION_POSITION_ACTION oppositeAction = (oppositeDir == 1) ? td.existingBuyAction : td.existingSellAction;
+   if(oppositeAction == TRANSITION_STOP_ADDS || oppositeAction == TRANSITION_TIGHTEN_PROTECTION ||
+      oppositeAction == TRANSITION_EXIT_PROFITABLE || oppositeAction == TRANSITION_EXIT_CONTROLLED)
+      return OLD_DIRECTION_EXHAUSTED;
+
+   return OLD_DIRECTION_HEALTHY; // opposite campaign open, healthy, genuinely fighting
+}
+
+// Per-tick heartbeat: emits POST_TRADE_COOLDOWN_ACTIVE at most once/60s per
+// slot while active, and exactly one POST_TRADE_COOLDOWN_COMPLETE per slot
+// on that slot's active -> expired transition. POST_TRADE_COOLDOWN_STARTED
+// is logged once, at the moment of close, from OnTradeTransaction directly
+// (this function never logs STARTED so a fast OnTick before the next
+// transaction can't double it). v6.24.16: iterates both slots independently
+// so a close of one direction can no longer suppress the other's COMPLETE.
 void XAU_PostTradeCooldownTick()
 {
-   if(!g_postClose.valid) return;
-   if(XAU_PostTradeCooldownActive())
+   for(int s = 0; s < 2; s++)
    {
-      g_postClose.lastLoggedActive = true;
-      if(TimeCurrent() - g_postClose.lastStateLogTime >= 60)
+      if(!g_postClose[s].valid) continue;
+      bool slotActive = TimeCurrent() < g_postClose[s].cooldownExpiresAt;
+      if(slotActive)
       {
-         PrintFormat("POST_TRADE_COOLDOWN_ACTIVE | dir=%s remaining=%ds",
-                     g_postClose.direction == 1 ? "BUY" : "SELL", XAU_PostTradeCooldownRemainingSeconds());
-         g_postClose.lastStateLogTime = TimeCurrent();
+         g_postClose[s].lastLoggedActive = true;
+         if(TimeCurrent() - g_postClose[s].lastStateLogTime >= 60)
+         {
+            PrintFormat("POST_TRADE_COOLDOWN_ACTIVE | dir=%s remaining=%ds",
+                        g_postClose[s].direction == 1 ? "BUY" : "SELL",
+                        (int)(g_postClose[s].cooldownExpiresAt - TimeCurrent()));
+            g_postClose[s].lastStateLogTime = TimeCurrent();
+         }
       }
-   }
-   else if(g_postClose.lastLoggedActive)
-   {
-      PrintFormat("POST_TRADE_COOLDOWN_COMPLETE | dir=%s", g_postClose.direction == 1 ? "BUY" : "SELL");
-      g_postClose.lastLoggedActive = false;
+      else if(g_postClose[s].lastLoggedActive)
+      {
+         PrintFormat("POST_TRADE_COOLDOWN_COMPLETE | dir=%s", g_postClose[s].direction == 1 ? "BUY" : "SELL");
+         g_postClose[s].lastLoggedActive = false;
+      }
    }
 }
 
@@ -5066,16 +5224,48 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
 {
    int slot = XAU_CampaignSlot(direction);
    XAU_MarketThesis thesis = XAU_ComputeMarketThesis(direction, false, false, td);
-   ENUM_XAU_OLD_DIRECTION_STATE oldSide = XAU_ClassifyOldDirectionState(-direction, td);
+   // v6.24.16 audit fix: was XAU_ClassifyOldDirectionState(-direction, td),
+   // which answers "is THIS [opposite] direction's own fresh entry
+   // currently valid" -- not "is the opposite side actively fighting me."
+   // In a clean uptrend, SELL's freshAllowed is correctly false (no fresh
+   // SELL setup), which made the old call return MATURE, misread below as
+   // "old side still active" and permanently blocking ordinary with-trend
+   // BUY continuations. XAU_OppositeSideStatus checks the opposite
+   // direction's actual open g_campaign[] state instead -- the real signal
+   // for "is anything genuinely fighting me right now."
+   ENUM_XAU_OLD_DIRECTION_STATE oldSide = XAU_OppositeSideStatus(direction, td);
    ENUM_XAU_READINESS_STATE mapped = XAU_MapToReadinessState(oldSide, thesis, td);
 
-   // Candidate identity reuses the existing immutable decision snapshot's
-   // own signature -- the same fingerprint XAU_SmartEntryCautionGate already
-   // treats as "this is still the same idea" for freshness purposes.
-   string fingerprint = g_latestDecisionSnapshot.valid ? g_latestDecisionSnapshot.signature : "";
+   // v6.24.16 audit fix: candidate identity now uses a DELIBERATELY coarse
+   // fingerprint (regime|setup|direction) computed locally, not
+   // g_latestDecisionSnapshot's fine-grained signature (which buckets fast
+   // RSI/Stoch/momentum specifically so it can shift -- correctly, for its
+   // OWN pattern-matching purpose -- exactly when momentum/stoch cross a
+   // threshold, i.e. exactly at the wait-to-confirm transition this engine
+   // needs to persist across). A flip there was silently discarding real
+   // wait-state progress at the worst possible moment.
+   string fingerprint = StringFormat("%s|%s|%d", RegimeName(),
+                                     g_latestDecisionSnapshot.valid ? g_latestDecisionSnapshot.setupName : "NONE",
+                                     direction);
    bool freshOrigin = (!g_readiness[slot].active) ||
                        (g_readiness[slot].direction != direction) ||
-                       (StringLen(fingerprint) > 0 && g_readiness[slot].candidateId != fingerprint);
+                       (g_readiness[slot].candidateId != fingerprint) ||
+                       (TimeCurrent() - g_readiness[slot].originTime > 3600); // v6.24.16: 1h safety-valve age expiry
+   // v6.24.16 audit fix: entryReady used to require "any non-CONFIRMED
+   // state observed at some point" (passedThroughWaitState) -- but
+   // XAU_UpdateEntryReadiness only ever runs from inside OpenTrade(),
+   // itself only reached after score/grade + every other authority gate
+   // ALREADY approved the candidate. That means the FIRST time a genuinely
+   // good setup is ever evaluated here, it can already compute straight to
+   // CONFIRMED -- and if it stays CONFIRMED on every later evaluation too
+   // (nothing ever degrades it to a wait state), passedThroughWaitState
+   // could never become true and entryReady could never fire, permanently.
+   // Fixed: the real requirement from the spec is "do not authorize on the
+   // very first look at this idea," not "must have specifically seen a
+   // WAIT state" -- captured directly as candidateAlreadyExisted, using
+   // the SAME freshOrigin this call already computed, before any of the
+   // state below gets (re)initialized for a new candidate.
+   bool candidateAlreadyExisted = g_readiness[slot].active && !freshOrigin;
 
    double roomR = (direction == td.dominantDirection) ? td.remainingRewardR : td.oppositeRemainingRewardR;
    bool roomCollapsed = (roomR < 0.3);
@@ -5088,6 +5278,13 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
                      direction == 1 ? "BUY" : "SELL",
                      roomCollapsed ? "remaining room collapsed" : thesis.hardBlockReason);
       g_readiness[slot].active = false;
+      // v6.24.16 audit fix: also clear .state/.candidateId on invalidation,
+      // not just .active -- otherwise the Command Center display (which
+      // reads g_readiness[slot].state directly) kept showing the dead
+      // candidate's last live state (e.g. "Timing: CONFIRMED") alongside
+      // finalAction=NO_VALID_TRADE, a self-contradictory display.
+      g_readiness[slot].state = roomCollapsed ? READINESS_EXPIRED : READINESS_INVALIDATED;
+      g_readiness[slot].candidateId = "";
    }
    else
    {
@@ -5103,12 +5300,9 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
       }
       if(mapped != g_readiness[slot].state)
          g_readiness[slot].lastStateChangeTime = TimeCurrent();
-      // A brand-new candidate that evaluates straight to CONFIRMED on its
-      // very first evaluation is NOT marked as having passed through a wait
-      // state -- it must be re-observed as still CONFIRMED on a LATER
-      // evaluation before entryReady can become true (spec: "do not jump
-      // directly from BIAS to ENTRY_READY"). Any non-CONFIRMED read, at any
-      // point, satisfies this permanently for the candidate's lifetime.
+      // Diagnostic/display only now (see candidateAlreadyExisted above for
+      // the real entryReady gate) -- still useful to show on Command
+      // Center whether this idea has ever shown genuine wait evidence.
       if(mapped != READINESS_CONFIRMED)
          g_readiness[slot].passedThroughWaitState = true;
       g_readiness[slot].state = mapped;
@@ -5144,7 +5338,7 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
 
    bool candidateReady = g_readiness[slot].active &&
                          (g_readiness[slot].state == READINESS_CONFIRMED) &&
-                         g_readiness[slot].passedThroughWaitState &&
+                         candidateAlreadyExisted &&
                          d.snapshotFresh;
    d.entryReady = candidateReady;
 
@@ -9082,6 +9276,7 @@ int OnInit()
                XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC, XAU_EffectiveEntryDelaySeconds(), XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC);
    XAU_ReconcileTradeBrainOnInit();
    XAU_ReconcileCounterExcursionOnInit();
+   XAU_ReconcileCampaignOnInit();
    XAU_ValidateRExitConfig();
    if(InpRExitEnable && !g_rExitConfigValid)
    {
@@ -16229,10 +16424,16 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    {
       if(XAU_PostTradeCooldownActive())
       {
+         // v6.24.16: cooldown is now tracked per-slot (g_postClose[2]) --
+         // report whichever slot is the one actually still active (or, if
+         // both are, whichever expires later) so the log names the real
+         // close that's blocking this attempt.
+         int cdSlot = (g_postClose[0].valid && TimeCurrent() < g_postClose[0].cooldownExpiresAt &&
+                      (!g_postClose[1].valid || g_postClose[0].cooldownExpiresAt >= g_postClose[1].cooldownExpiresAt)) ? 0 : 1;
          string cdMsg = StringFormat("POST_TRADE_COOLDOWN_BLOCK: %ds remaining since %s %s closed (%s)",
                                      XAU_PostTradeCooldownRemainingSeconds(),
-                                     g_postClose.direction == 1 ? "BUY" : "SELL",
-                                     XAU_CampaignIdText(g_postClose.campaignId), g_postClose.closeReason);
+                                     g_postClose[cdSlot].direction == 1 ? "BUY" : "SELL",
+                                     XAU_CampaignIdText(g_postClose[cdSlot].campaignId), g_postClose[cdSlot].closeReason);
          Print(cdMsg);
          BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "PostTradeCooldown",
                                    signal, funnelSetup, funnelGrade, funnelScore,
@@ -23772,25 +23973,29 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // bring activePositionCount to 0 is the one that starts the timer).
    if(campaignWasActiveBeforeClose && !g_campaign[closeSlot].active)
    {
-      g_postClose.valid                         = true;
-      g_postClose.closeTime                     = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
-      g_postClose.direction                     = closedDirection;
-      g_postClose.closeReason                   = resolvedExitReason;
-      g_postClose.campaignId                    = closingCampaignId;
-      g_postClose.lifecycleAtClose              = g_campaign[closeSlot].lifecycle;
-      g_postClose.exhaustionAtClose             = g_campaign[closeSlot].exhaustionPct;
-      g_postClose.movementConsumedAtClose       = g_campaign[closeSlot].movementConsumedPct;
-      g_postClose.wasInvalidated                = g_campaign[closeSlot].invalidated;
-      g_postClose.oppositeTransitionWasDeveloping = (g_campaign[closeSlot].reversalConfirmationState == TRANSITION_WATCH ||
+      // v6.24.16 audit fix: writes to g_postClose[closeSlot] (this
+      // direction's own slot), not a shared single global -- see g_postClose[2]'s
+      // own comment for the bug this closes (a close of the OTHER direction
+      // could previously wipe this direction's exhaustion memory).
+      g_postClose[closeSlot].valid                         = true;
+      g_postClose[closeSlot].closeTime                     = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+      g_postClose[closeSlot].direction                     = closedDirection;
+      g_postClose[closeSlot].closeReason                   = resolvedExitReason;
+      g_postClose[closeSlot].campaignId                    = closingCampaignId;
+      g_postClose[closeSlot].lifecycleAtClose              = g_campaign[closeSlot].lifecycle;
+      g_postClose[closeSlot].exhaustionAtClose             = g_campaign[closeSlot].exhaustionPct;
+      g_postClose[closeSlot].movementConsumedAtClose       = g_campaign[closeSlot].movementConsumedPct;
+      g_postClose[closeSlot].wasInvalidated                = g_campaign[closeSlot].invalidated;
+      g_postClose[closeSlot].oppositeTransitionWasDeveloping = (g_campaign[closeSlot].reversalConfirmationState == TRANSITION_WATCH ||
                                                       g_campaign[closeSlot].reversalConfirmationState == OPPOSITE_DISCOVERY);
-      g_postClose.cooldownExpiresAt             = g_postClose.closeTime + POST_TRADE_COOLDOWN_SECONDS;
-      g_postClose.lastStateLogTime              = 0;
-      g_postClose.lastLoggedActive              = false;
+      g_postClose[closeSlot].cooldownExpiresAt             = g_postClose[closeSlot].closeTime + POST_TRADE_COOLDOWN_SECONDS;
+      g_postClose[closeSlot].lastStateLogTime              = 0;
+      g_postClose[closeSlot].lastLoggedActive              = false;
       PrintFormat("POST_TRADE_COOLDOWN_STARTED | dir=%s reason=%s campaign=%s lifecycle=%s exhaustion=%.0f%% movementConsumed=%.0f%% invalidated=%s expiresAt=%s",
                   closedDirection == 1 ? "BUY" : "SELL", resolvedExitReason, XAU_CampaignIdText(closingCampaignId),
-                  EnumToString(g_postClose.lifecycleAtClose), g_postClose.exhaustionAtClose,
-                  g_postClose.movementConsumedAtClose, g_postClose.wasInvalidated ? "true" : "false",
-                  TimeToString(g_postClose.cooldownExpiresAt, TIME_DATE | TIME_SECONDS));
+                  EnumToString(g_postClose[closeSlot].lifecycleAtClose), g_postClose[closeSlot].exhaustionAtClose,
+                  g_postClose[closeSlot].movementConsumedAtClose, g_postClose[closeSlot].wasInvalidated ? "true" : "false",
+                  TimeToString(g_postClose[closeSlot].cooldownExpiresAt, TIME_DATE | TIME_SECONDS));
    }
    // On exit, the closing deal is opposite side of the position
    string dirStr = (dType == DEAL_TYPE_SELL) ? "BUY" : "SELL";
@@ -31566,30 +31771,31 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
    // a second decision authority -- the real gate is XAU_ClassifyOldDirectionState
    // + XAU_PostTradeCooldownActive() inside OpenTrade(), not this string.
    string postTradeJson = "{}";
-   if(g_postClose.valid)
+   int pcSlot = XAU_MostRecentPostCloseSlot();
+   if(pcSlot >= 0)
    {
       bool cooldownActive = XAU_PostTradeCooldownActive();
       XAU_AdaptiveTransitionDecision postTd = XAU_AdaptiveMarketTransitionEngine();
-      ENUM_XAU_OLD_DIRECTION_STATE oldState = XAU_ClassifyOldDirectionState(g_postClose.direction, postTd);
+      ENUM_XAU_OLD_DIRECTION_STATE oldState = XAU_ClassifyOldDirectionState(g_postClose[pcSlot].direction, postTd);
       bool oldEligible = !(oldState == OLD_DIRECTION_EXHAUSTED || oldState == OLD_DIRECTION_INVALIDATED);
-      int oppositeDir = -g_postClose.direction;
+      int oppositeDir = -g_postClose[pcSlot].direction;
       bool oppositeFreshAllowed = (oppositeDir == 1) ? postTd.freshBuyAllowed : postTd.freshSellAllowed;
       string freshBuyText  = postTd.freshBuyAllowed  ? "READY" : (postTd.buyConfidence  >= 60.0 ? "DEVELOPING" : "NOT_READY");
       string freshSellText = postTd.freshSellAllowed ? "READY" : (postTd.sellConfidence >= 60.0 ? "DEVELOPING" : "NOT_READY");
       string currentActionText = cooldownActive ? "ANALYZE_ONLY_COOLDOWN"
                                 : !oldEligible    ? (oppositeFreshAllowed ? StringFormat("PREPARE_%s", oppositeDir == 1 ? "BUY" : "SELL")
                                                                           : "TRANSITION_WATCH")
-                                                  : StringFormat("READY_%s", g_postClose.direction == 1 ? "BUY" : "SELL");
+                                                  : StringFormat("READY_%s", g_postClose[pcSlot].direction == 1 ? "BUY" : "SELL");
       postTradeJson = StringFormat(
          "{\"last_direction\":\"%s\",\"close_reason\":\"%s\",\"last_campaign\":\"%s\","
          "\"close_time\":\"%s\",\"cooldown_status\":\"%s\",\"cooldown_remaining_sec\":%d,"
          "\"old_direction_exhaustion_pct\":%.1f,\"old_direction_state\":\"%s\","
          "\"old_direction_eligible\":%s,\"transition_state\":\"%s\",\"opposite_evidence\":\"%s\","
          "\"fresh_buy_thesis\":\"%s\",\"fresh_sell_thesis\":\"%s\",\"current_action\":\"%s\"}",
-         g_postClose.direction == 1 ? "BUY" : "SELL", BotMonitorJsonSafe(g_postClose.closeReason, 80),
-         XAU_CampaignIdText(g_postClose.campaignId), TimeToString(g_postClose.closeTime, TIME_DATE | TIME_SECONDS),
+         g_postClose[pcSlot].direction == 1 ? "BUY" : "SELL", BotMonitorJsonSafe(g_postClose[pcSlot].closeReason, 80),
+         XAU_CampaignIdText(g_postClose[pcSlot].campaignId), TimeToString(g_postClose[pcSlot].closeTime, TIME_DATE | TIME_SECONDS),
          cooldownActive ? "ACTIVE" : "COMPLETE", XAU_PostTradeCooldownRemainingSeconds(),
-         g_postClose.exhaustionAtClose, EnumToString(oldState), BotMonitorBool(oldEligible),
+         g_postClose[pcSlot].exhaustionAtClose, EnumToString(oldState), BotMonitorBool(oldEligible),
          EnumToString(postTd.lifecycle),
          BotMonitorJsonSafe(StringFormat("reclaim=%s retest=%s displacement=%s reversalProb=%.0f%%",
                                          postTd.oppositeReclaim ? "Y" : "N", postTd.oppositeRetestHeld ? "Y" : "N",
@@ -32723,27 +32929,28 @@ string XAU_MarketThesisDisplayBlock(int direction)
 // source, two presentations, matching the existing market-thesis pattern.
 string XAU_PostTradeStateDisplayBlock()
 {
-   if(!g_postClose.valid) return "";
+   int pcSlot = XAU_MostRecentPostCloseSlot();
+   if(pcSlot < 0) return "";
    bool cooldownActive = XAU_PostTradeCooldownActive();
    XAU_AdaptiveTransitionDecision postTd = XAU_AdaptiveMarketTransitionEngine();
-   ENUM_XAU_OLD_DIRECTION_STATE oldState = XAU_ClassifyOldDirectionState(g_postClose.direction, postTd);
+   ENUM_XAU_OLD_DIRECTION_STATE oldState = XAU_ClassifyOldDirectionState(g_postClose[pcSlot].direction, postTd);
    bool oldEligible = !(oldState == OLD_DIRECTION_EXHAUSTED || oldState == OLD_DIRECTION_INVALIDATED);
-   int oppositeDir = -g_postClose.direction;
+   int oppositeDir = -g_postClose[pcSlot].direction;
    bool oppositeFreshAllowed = (oppositeDir == 1) ? postTd.freshBuyAllowed : postTd.freshSellAllowed;
    string currentActionText = cooldownActive ? "ANALYZE ONLY (COOLDOWN)"
                              : !oldEligible    ? (oppositeFreshAllowed ? StringFormat("PREPARE %s", oppositeDir == 1 ? "BUY" : "SELL")
                                                                        : "TRANSITION WATCH")
-                                               : StringFormat("READY %s", g_postClose.direction == 1 ? "BUY" : "SELL");
+                                               : StringFormat("READY %s", g_postClose[pcSlot].direction == 1 ? "BUY" : "SELL");
    string d = "----------- POST-TRADE STATE -----------\n";
    d += StringFormat("Last direction: %s | Close reason: %s\n",
-                     g_postClose.direction == 1 ? "BUY" : "SELL", g_postClose.closeReason);
+                     g_postClose[pcSlot].direction == 1 ? "BUY" : "SELL", g_postClose[pcSlot].closeReason);
    d += StringFormat("Last campaign: %s | Close time: %s\n",
-                     XAU_CampaignIdText(g_postClose.campaignId), TimeToString(g_postClose.closeTime, TIME_DATE | TIME_SECONDS));
+                     XAU_CampaignIdText(g_postClose[pcSlot].campaignId), TimeToString(g_postClose[pcSlot].closeTime, TIME_DATE | TIME_SECONDS));
    d += StringFormat("Cooldown: %s%s\n", cooldownActive ? "ACTIVE" : "COMPLETE",
                      cooldownActive ? StringFormat(" | Remaining: %02d:%02d", XAU_PostTradeCooldownRemainingSeconds() / 60,
                                                    XAU_PostTradeCooldownRemainingSeconds() % 60) : "");
    d += StringFormat("%s exhaustion: %.0f%% | Re-entry: %s\n",
-                     g_postClose.direction == 1 ? "BUY" : "SELL", g_postClose.exhaustionAtClose,
+                     g_postClose[pcSlot].direction == 1 ? "BUY" : "SELL", g_postClose[pcSlot].exhaustionAtClose,
                      oldEligible ? EnumToString(oldState) : "DISABLED UNTIL STRUCTURAL RESET (" + EnumToString(oldState) + ")");
    d += StringFormat("Transition: %s\n", EnumToString(postTd.lifecycle));
    d += StringFormat("%s evidence: %s\n", oppositeDir == 1 ? "BUY" : "SELL", oppositeFreshAllowed ? "CONFIRMED" : "DEVELOPING");

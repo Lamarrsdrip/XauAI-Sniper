@@ -98,9 +98,19 @@ def test_final_action_enum_values_match_spec():
 
 
 def test_candidate_persists_via_snapshot_signature_not_recomputed_every_tick():
+    # v6.24.16 audit fix changed the fingerprint SOURCE (see
+    # test_xau_v62416_readiness_audit_fixes.py's own
+    # test_candidate_fingerprint_no_longer_uses_decision_snapshot_signature
+    # for why: the old g_latestDecisionSnapshot.signature-based fingerprint
+    # buckets fast RSI/Stoch/momentum and could flip exactly at the
+    # wait-to-confirm transition, discarding real progress). The PERSISTENCE
+    # behavior this test actually cares about -- freshOrigin only resets on
+    # a genuinely new idea, not unconditionally every call -- is unchanged;
+    # only the fingerprint's ingredients moved to a coarser, locally-computed
+    # one (regime|setup|direction).
     ea = read(BACKEND_EA)
     fn = ea[ea.index("XAU_EntryReadinessDecision XAU_UpdateEntryReadiness("):][:2200]
-    assert "g_latestDecisionSnapshot.signature" in fn
+    assert 'StringFormat("%s|%s|%d", RegimeName()' in fn
     assert "freshOrigin" in fn
     # only resets on direction change or a genuinely different fingerprint --
     # not unconditionally every call
@@ -110,14 +120,20 @@ def test_candidate_persists_via_snapshot_signature_not_recomputed_every_tick():
 def test_entryready_requires_passed_through_wait_state_not_instant_confirm():
     # regression guard for "do not jump directly from BIAS to ENTRY_READY":
     # a brand-new candidate that computes straight to CONFIRMED on its very
-    # first evaluation must NOT be marked as having passed through a wait
-    # state on that same evaluation.
+    # first evaluation must NOT be marked as ready on that same evaluation.
+    # v6.24.16 audit fix changed WHICH flag gates entryReady (see
+    # test_xau_v62416_readiness_audit_fixes.py's own
+    # test_entryready_gate_uses_candidate_already_existed_not_wait_flag for
+    # why: passedThroughWaitState could never become true for a candidate
+    # that stayed CONFIRMED on every observation, permanently blocking
+    # entryReady). passedThroughWaitState itself is kept as a diagnostic/
+    # display-only field -- window widened for the extra v6.24.16 comments.
     ea = read(BACKEND_EA)
-    fn = ea[ea.index("XAU_EntryReadinessDecision XAU_UpdateEntryReadiness("):][:4600]
+    fn = ea[ea.index("XAU_EntryReadinessDecision XAU_UpdateEntryReadiness("):][:7500]
     assert "if(mapped != READINESS_CONFIRMED)" in fn
     assert "g_readiness[slot].passedThroughWaitState = true;" in fn
     assert "candidateReady = g_readiness[slot].active &&" in fn
-    assert "g_readiness[slot].passedThroughWaitState" in fn
+    assert "candidateAlreadyExisted" in fn
 
 
 def test_gate_lives_inside_opentrade_skipped_only_for_manual_override():

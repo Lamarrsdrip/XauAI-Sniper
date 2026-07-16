@@ -55,7 +55,9 @@ def test_two_losses_trigger_five_hour_cooldown_without_profit_guardian_dependenc
     # call further from the function start (~12.4k chars in), not a
     # behavior change -- the call itself is unmoved relative to the rest of
     # the close-handling logic around it.
-    tx_body = EA[tx_start : tx_start + 14000]
+    # v6.24.16 widened again: the g_postClose[2] audit-fix comment block
+    # pushed this call further from the function start, not a behavior change.
+    tx_body = EA[tx_start : tx_start + 14500]
     assert "RegisterClosedTradeCooldown(wasWin, wasLoss, profit);" in tx_body
 
     block_start = EA.index("string PG_BlockReason")
