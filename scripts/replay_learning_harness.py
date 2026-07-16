@@ -78,6 +78,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from unified_thesis_mirror import (
     TransitionDecision, compute_thesis,
     TREND_EARLY, TREND_HEALTHY, TREND_EXHAUSTING, TRANSITION_NEUTRAL,
+    old_side_state_from_row_evidence, map_to_readiness_state,
 )
 
 # Fields a decision function is allowed to see. Anything not in this set
@@ -250,7 +251,7 @@ def map_row_to_transition_decision(decision_row: dict) -> tuple:
         smcBosDir=0,       # no SMC-equivalent field in the old schema -- documented gap
         smcBonus=0.0,
     )
-    return signal, False, td
+    return signal, False, td, htf_dir, entry_phase, late_chase
 
 
 def decide(decision_row: dict) -> dict:
@@ -259,10 +260,20 @@ def decide(decision_row: dict) -> dict:
     assert not (set(decision_row.keys()) & OUTCOME_ONLY_FIELDS), (
         "no-lookahead violation: an outcome field reached decide()"
     )
-    signal, is_pyramid_add, td = map_row_to_transition_decision(decision_row)
+    signal, is_pyramid_add, td, htf_dir, entry_phase, late_chase = map_row_to_transition_decision(decision_row)
     if signal == 0:
-        return {"direction": 0, "action": "NO_VALID_TRADE", "reason": "no direction in source row"}
+        return {"direction": 0, "action": "NO_VALID_TRADE", "reason": "no direction in source row",
+                "readiness_state": "READINESS_INVALIDATED", "old_side_state": "OLD_DIRECTION_INVALIDATED"}
     thesis = compute_thesis(signal, is_pyramid_add, td)
+    # v6.24.15 addition: same no-lookahead decision-time fields, now also
+    # classified through the Entry Readiness Engine's mirror (see
+    # unified_thesis_mirror.map_to_readiness_state's own docstring for the
+    # documented limitation: this is the market-evidence layer only, not
+    # the persistent multi-bar promotion gate, since these CSV rows are
+    # independent decision points, not a continuous per-bar stream).
+    old_side = old_side_state_from_row_evidence(signal, htf_dir, entry_phase, late_chase)
+    thesis["old_side_state"] = old_side
+    thesis["readiness_state"] = map_to_readiness_state(old_side, thesis)
     return thesis
 
 
@@ -285,18 +296,34 @@ def score(full_row: dict, thesis: dict) -> dict:
     missed_trap = (late_chase == "Y" and would_have_allowed and outcome == "LOSS")
     unnecessarily_cautious = (late_chase == "N" and outcome == "WIN" and would_have_waited)
 
+    # v6.24.15 addition: readiness-engine grading, using the REAL time-based
+    # MAE columns this CSV already has (mae_1m/3m/5m/10m) -- these are the
+    # actual historical early-drawdown values, not simulated.
+    readiness_state = thesis.get("readiness_state", "READINESS_FORMING")
+    readiness_would_allow = (readiness_state == "READINESS_CONFIRMED")
+    mae_1m = _to_float(full_row.get("mae_1m"), default=None)
+    mae_3m = _to_float(full_row.get("mae_3m"), default=None)
+    mae_5m = _to_float(full_row.get("mae_5m"), default=None)
+    mae_10m = _to_float(full_row.get("mae_10m"), default=None)
+
     return {
         "opportunity_id": full_row.get("opportunity_id"),
         "real_outcome": outcome,
         "real_simulated_R": simulated_r,
         "real_max_mfe": max_mfe,
         "real_max_mae": max_mae,
+        "real_mae_1m": mae_1m,
+        "real_mae_3m": mae_3m,
+        "real_mae_5m": mae_5m,
+        "real_mae_10m": mae_10m,
         "thesis_action": action,
         "would_have_allowed": would_have_allowed,
         "would_have_waited": would_have_waited,
         "correctly_flagged_trap": correctly_flagged_trap,
         "missed_trap": missed_trap,
         "unnecessarily_cautious": unnecessarily_cautious,
+        "readiness_state": readiness_state,
+        "readiness_would_allow": readiness_would_allow,
     }
 
 
@@ -345,6 +372,59 @@ def build_report(results: list) -> dict:
     }
 
 
+def _avg(values):
+    vals = [v for v in values if v is not None]
+    return (sum(vals) / len(vals)) if vals else None
+
+
+def build_early_mae_comparison(results: list) -> dict:
+    """Before/after comparison the spec's Part 13 explicitly asks for,
+    using REAL historical mae_1m/3m/5m/10m columns (not simulated) --
+    "before" = the OLD system's classification (thesis action alone,
+    matching what actually gated entries pre-v6.24.15); "after" = the
+    NEW readiness engine's classification (readiness_state == CONFIRMED,
+    a stricter subset). Only rows with a real recorded outcome are
+    counted, so an empty group here is honest (no matching historical
+    rows), not silently treated as zero drawdown."""
+    graded = [r["graded"] for r in results if r["graded"]["real_outcome"] in ("WIN", "LOSS", "BREAKEVEN")]
+    before = [g for g in graded if g["would_have_allowed"]]
+    after = [g for g in graded if g["readiness_would_allow"]]
+
+    def group_stats(group):
+        return {
+            "trade_count": len(group),
+            "avg_mae_1m": _avg([g["real_mae_1m"] for g in group]),
+            "avg_mae_3m": _avg([g["real_mae_3m"] for g in group]),
+            "avg_mae_5m": _avg([g["real_mae_5m"] for g in group]),
+            "avg_mae_10m": _avg([g["real_mae_10m"] for g in group]),
+            "pct_immediately_negative_1m": (
+                sum(1 for g in group if g["real_mae_1m"] is not None and g["real_mae_1m"] < 0) / len(group)
+                if group else None
+            ),
+            "win_rate": (
+                sum(1 for g in group if g["real_outcome"] == "WIN") / len(group) if group else None
+            ),
+        }
+
+    return {"before_old_system": group_stats(before), "after_readiness_engine": group_stats(after)}
+
+
+def split_train_validation_holdout(rows: list) -> dict:
+    """Chronological 60/20/20 split (spec Part 12) -- oldest 60% = training,
+    next 20% = validation, newest 20% = holdout. No shuffling: preserving
+    chronological order is the entire point (prevents any future-leak into
+    training)."""
+    ordered = sorted(rows, key=lambda r: r.get("timestamp", ""))
+    n = len(ordered)
+    train_end = int(n * 0.60)
+    val_end = int(n * 0.80)
+    return {
+        "training": ordered[:train_end],
+        "validation": ordered[train_end:val_end],
+        "holdout": ordered[val_end:],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data", type=Path, required=True,
@@ -352,6 +432,8 @@ def main():
     parser.add_argument("--from-date", default=None, help="YYYY.MM.DD inclusive filter on timestamp")
     parser.add_argument("--to-date", default=None, help="YYYY.MM.DD inclusive filter on timestamp")
     parser.add_argument("--out", type=Path, required=True, help="output JSON report path")
+    parser.add_argument("--train-val-holdout", action="store_true",
+                        help="also run the chronological 60/20/20 train/validation/holdout study (spec Part 12)")
     args = parser.parse_args()
 
     rows = read_csv(args.data)
@@ -365,6 +447,21 @@ def main():
     report["source_file"] = str(args.data)
     report["from_date"] = args.from_date
     report["to_date"] = args.to_date
+    report["early_mae_comparison"] = build_early_mae_comparison(results)
+
+    if args.train_val_holdout:
+        splits = split_train_validation_holdout(rows)
+        report["train_validation_holdout"] = {}
+        for split_name, split_rows in splits.items():
+            split_results = run_replay(split_rows)
+            split_report = build_report(split_results)
+            split_report["early_mae_comparison"] = build_early_mae_comparison(split_results)
+            split_report["date_range"] = {
+                "from": min((r.get("timestamp", "") for r in split_rows), default=None),
+                "to": max((r.get("timestamp", "") for r in split_rows), default=None),
+            }
+            report["train_validation_holdout"][split_name] = split_report
+
     report["decision_rows"] = [
         {"opportunity_id": r["row"].get("opportunity_id"), "timestamp": r["row"].get("timestamp"),
          "thesis": r["thesis"], "graded": r["graded"]}
@@ -374,7 +471,16 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     print(f"Replayed {len(results)} decisions -> {args.out}")
-    print(json.dumps({k: v for k, v in report.items() if k != "decision_rows"}, indent=2))
+    print(json.dumps({k: v for k, v in report.items() if k not in ("decision_rows", "train_validation_holdout")}, indent=2))
+    if args.train_val_holdout:
+        for split_name in ("training", "validation", "holdout"):
+            sr = report["train_validation_holdout"][split_name]
+            print(f"\n--- {split_name.upper()} ({sr['date_range']['from']} to {sr['date_range']['to']}, n={sr['total_decisions']}) ---")
+            print(json.dumps({
+                "action_distribution": sr["action_distribution"],
+                "allowed_trade_outcomes": sr["allowed_trade_outcomes"],
+                "early_mae_comparison": sr["early_mae_comparison"],
+            }, indent=2))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,16 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
+//|   v6.24.15 - Entry Readiness Engine                               |
+//|   Elevates the market-thesis readiness read (location/exhaustion/ |
+//|   timing/structure/pressure) from an advisory HARD_BLOCK-only     |
+//|   recheck into the real, persistent entry gate: old side must     |
+//|   finish, location/pressure/structure must confirm, and the same  |
+//|   candidate idea must be observed ready on more than its very     |
+//|   first evaluation before OpenTrade may fire. Reuses 100% of the  |
+//|   existing evidence buckets -- no new signal math, no risk/SL/TP  |
+//|   change, layered on top of every existing gate, not instead of.  |
+//+------------------------------------------------------------------+
 //|   v6.24.14 - Post-Trade Cooldown + Exhausted-Direction Ban        |
 //|   Universal 5-minute execution cooldown after any full close, plus|
 //|   an exhausted-old-direction re-entry ban that requires a genuine |
@@ -1803,7 +1813,7 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.254"
+#property version   "6.255"
 #property description "XAUUSD AI Sniper v6.24.13 - Campaign Registration Coverage Fix"
 #property description "Campaign tracking now covers re-entry/force-open, not just fresh entry."
 #property description "Approved normal entries use full configured risk or fail closed; no"
@@ -1818,9 +1828,9 @@
 #define XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0
 #define XAU_ENTRY_DELAY_SAFE_DEFAULT_SEC     150.0
 
-#define XAUAI_EA_VERSION "v6.24.14"
-#define XAUAI_EA_VERSION_NUM "6.24.14"
-#define XAUAI_BUILD_HASH "v62414-post-trade-cooldown-exhaustion-reentry-ban-20260716"
+#define XAUAI_EA_VERSION "v6.24.15"
+#define XAUAI_EA_VERSION_NUM "6.24.15"
+#define XAUAI_BUILD_HASH "v62415-entry-readiness-engine-20260716"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -4892,6 +4902,280 @@ void XAU_PostTradeCooldownTick()
       PrintFormat("POST_TRADE_COOLDOWN_COMPLETE | dir=%s", g_postClose.direction == 1 ? "BUY" : "SELL");
       g_postClose.lastLoggedActive = false;
    }
+}
+
+// ===========================================================================
+// v6.24.15 — Entry Readiness Engine.
+//
+// Root cause this repairs: XAU_ComputeMarketThesis/XAU_MarketThesisAction
+// already compute a full, priority-ordered readiness read every time they're
+// called (ALLOW_CORE vs WAIT_FOR_PULLBACK vs WAIT_FOR_RECLAIM vs
+// WAIT_FOR_CONFIRMATION vs TRANSITION_WATCH vs OPPOSITE_DISCOVERY vs
+// HARD_BLOCK) -- but the ONLY place that result was ever checked pre-entry
+// was `preOrderThesis.action == HARD_BLOCK`. Every WAIT_* value the function
+// could return was silently discarded; the actual entry authorization came
+// entirely from the older score/grade + independent authority-function
+// pipeline (XAU_StructureAuthorityAllows, XAU_FreshnessExtensionAuthority,
+// XAU_TimingAuthorityAllows, XAU_FinalEntryArbiter), none of which carry a
+// persistent "the old side must finish first" concept. That gap is exactly
+// "identifies the eventual direction correctly, but enters before the
+// market is actually ready."
+//
+// The fix below does NOT duplicate any evidence computation -- it is a
+// persistence + gate-elevation layer entirely on top of what already
+// exists: XAU_ComputeMarketThesis's 6 buckets (location/exhaustion/timing/
+// htf/structure/pressure), XAU_ClassifyOldDirectionState (v6.24.14), and
+// g_latestDecisionSnapshot's own signature/generation identity (reused as
+// the candidate fingerprint rather than inventing a new one). It is added
+// as one MORE required condition inside OpenTrade() alongside everything
+// that already gates entries (score/grade, structure/freshness/timing/news
+// authorities, the existing 120-180s smart-entry timer, the v6.24.14
+// cooldown) -- never a replacement for any of them, and it changes only
+// WHEN a trade is allowed to fire, never risk/lot-sizing/SL/TP/exit logic.
+// ===========================================================================
+
+enum ENUM_XAU_READINESS_STATE
+{
+   READINESS_BIAS_ONLY=0, READINESS_OLD_SIDE_ACTIVE=1, READINESS_WAIT_FOR_EXHAUSTION=2,
+   READINESS_WAIT_FOR_LOCATION=3, READINESS_WAIT_FOR_PRESSURE=4, READINESS_WAIT_FOR_STRUCTURE=5,
+   READINESS_WAIT_FOR_RECLAIM=6, READINESS_WAIT_FOR_RETEST=7, READINESS_FORMING=8,
+   READINESS_CONFIRMED=9, READINESS_ENTRY_READY=10, READINESS_INVALIDATED=11, READINESS_EXPIRED=12
+};
+
+string XAU_ReadinessStateName(ENUM_XAU_READINESS_STATE s)
+{
+   switch(s)
+   {
+      case READINESS_BIAS_ONLY:          return "BIAS_ONLY";
+      case READINESS_OLD_SIDE_ACTIVE:    return "OLD_SIDE_ACTIVE";
+      case READINESS_WAIT_FOR_EXHAUSTION:return "WAIT_FOR_EXHAUSTION";
+      case READINESS_WAIT_FOR_LOCATION:  return "WAIT_FOR_LOCATION";
+      case READINESS_WAIT_FOR_PRESSURE:  return "WAIT_FOR_PRESSURE";
+      case READINESS_WAIT_FOR_STRUCTURE: return "WAIT_FOR_STRUCTURE";
+      case READINESS_WAIT_FOR_RECLAIM:   return "WAIT_FOR_RECLAIM";
+      case READINESS_WAIT_FOR_RETEST:    return "WAIT_FOR_RETEST";
+      case READINESS_FORMING:            return "FORMING";
+      case READINESS_CONFIRMED:          return "CONFIRMED";
+      case READINESS_ENTRY_READY:        return "ENTRY_READY";
+      case READINESS_INVALIDATED:        return "INVALIDATED";
+      case READINESS_EXPIRED:            return "EXPIRED";
+   }
+   return "UNKNOWN";
+}
+
+// Persistent per-direction candidate. Survives across bars for the SAME
+// underlying idea (identified by g_latestDecisionSnapshot's own signature +
+// closedM5BarTime) so the readiness process is never restarted from scratch
+// every tick -- it only resets on the explicit conditions listed in
+// XAU_UpdateEntryReadiness below.
+struct XAU_ReadinessCandidate
+{
+   bool     active;
+   string   candidateId;              // reuses g_latestDecisionSnapshot.signature
+   int      direction;
+   datetime originTime;
+   datetime originBar;
+   ENUM_XAU_READINESS_STATE state;           // last computed market-evidence state
+   bool     passedThroughWaitState;          // true once any non-CONFIRMED state was recorded for this candidate
+   datetime lastStateChangeTime;
+   ENUM_XAU_READINESS_STATE lastLoggedState;
+   datetime lastHeartbeatLog;
+};
+XAU_ReadinessCandidate g_readiness[2]; // [0]=BUY candidate, [1]=SELL candidate
+
+// Final decision object -- spec-required schema. Only this object's
+// entryReady+finalAction may authorize OpenTrade (wired in v6.24.15's
+// OpenTrade() gate, alongside -- not instead of -- every existing check).
+struct XAU_EntryReadinessDecision
+{
+   string   candidateId;
+   long     campaignId;
+   int      direction;
+   string   biasState;
+   string   oldSideState;
+   string   locationState;
+   string   pressureState;
+   string   structureState;
+   string   timingState;
+   string   exhaustionState;
+   double   buyPressure;
+   double   sellPressure;
+   double   movementConsumed;
+   double   remainingRoomR;
+   bool     pullbackComplete;
+   bool     reclaimConfirmed;
+   bool     retestHeld;
+   bool     snapshotFresh;
+   bool     entryReady;
+   string   finalAction;
+   string   reason;
+};
+XAU_EntryReadinessDecision g_lastEntryReadiness;  // most recent decision, for Command Center display
+
+// Pure classification, zero new evidence math: reads td/thesis fields that
+// XAU_ComputeMarketThesis and XAU_AdaptiveMarketTransitionEngine already
+// compute every call. This is a RENAMING/RE-SEQUENCING of already-existing
+// evidence into the spec's requested state names, not a new signal.
+ENUM_XAU_READINESS_STATE XAU_MapToReadinessState(ENUM_XAU_OLD_DIRECTION_STATE oldSide,
+                                                  const XAU_MarketThesis &thesis,
+                                                  const XAU_AdaptiveTransitionDecision &td)
+{
+   if(thesis.action == HARD_BLOCK) return READINESS_INVALIDATED;
+
+   // The old side must finish before a fresh candidate may progress --
+   // this is the literal "sellers still active" rule the spec requires.
+   if(oldSide == OLD_DIRECTION_HEALTHY || oldSide == OLD_DIRECTION_MATURE)
+      return READINESS_OLD_SIDE_ACTIVE;
+   if(oldSide == OLD_DIRECTION_EXHAUSTED && thesis.action != ALLOW_CORE)
+      return READINESS_WAIT_FOR_EXHAUSTION;
+
+   // Old side finished (INVALIDATED/RESET_CONFIRMED) or was never a factor
+   // (a pure with-trend continuation) -- proceed through the remaining
+   // evidence layers in the order the spec lists them.
+   if(thesis.location == LOCATION_LATE || thesis.location == LOCATION_EXTREME)
+      return READINESS_WAIT_FOR_LOCATION;
+
+   bool pressureAgainstUs =
+      (thesis.direction == 1  && (thesis.pressure == SELL_PRESSURE_MODERATE || thesis.pressure == SELL_PRESSURE_STRONG)) ||
+      (thesis.direction == -1 && (thesis.pressure == BUY_PRESSURE_MODERATE  || thesis.pressure == BUY_PRESSURE_STRONG));
+   if(thesis.pressure == PRESSURE_BALANCED || pressureAgainstUs)
+      return READINESS_WAIT_FOR_PRESSURE;
+
+   if(thesis.structure == STRUCTURE_OPPOSES)
+      return READINESS_WAIT_FOR_STRUCTURE;
+
+   if(thesis.timing == TIMING_WAIT_RECLAIM)  return READINESS_WAIT_FOR_RECLAIM;
+   if(thesis.timing == TIMING_WAIT_PULLBACK) return READINESS_WAIT_FOR_RETEST;
+   if(thesis.timing == TIMING_WAIT_CONFIRMATION || thesis.timing == TIMING_STALE)
+      return READINESS_FORMING;
+   if(thesis.timing == TIMING_LATE || thesis.timing == TIMING_FAILED)
+      return READINESS_WAIT_FOR_LOCATION;
+
+   if(thesis.action == ALLOW_CORE && thesis.timing == TIMING_READY)
+      return READINESS_CONFIRMED;
+
+   return READINESS_FORMING;
+}
+
+// Updates (or creates/resets) the persistent candidate for `direction` and
+// returns the final decision object. Called once per closed-bar evaluation
+// per direction from the same call sites that already recompute
+// XAU_AdaptiveMarketTransitionEngine/XAU_ComputeMarketThesis fresh (no new
+// recomputation added here beyond what those call sites already do).
+XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_AdaptiveTransitionDecision &td)
+{
+   int slot = XAU_CampaignSlot(direction);
+   XAU_MarketThesis thesis = XAU_ComputeMarketThesis(direction, false, false, td);
+   ENUM_XAU_OLD_DIRECTION_STATE oldSide = XAU_ClassifyOldDirectionState(-direction, td);
+   ENUM_XAU_READINESS_STATE mapped = XAU_MapToReadinessState(oldSide, thesis, td);
+
+   // Candidate identity reuses the existing immutable decision snapshot's
+   // own signature -- the same fingerprint XAU_SmartEntryCautionGate already
+   // treats as "this is still the same idea" for freshness purposes.
+   string fingerprint = g_latestDecisionSnapshot.valid ? g_latestDecisionSnapshot.signature : "";
+   bool freshOrigin = (!g_readiness[slot].active) ||
+                       (g_readiness[slot].direction != direction) ||
+                       (StringLen(fingerprint) > 0 && g_readiness[slot].candidateId != fingerprint);
+
+   double roomR = (direction == td.dominantDirection) ? td.remainingRewardR : td.oppositeRemainingRewardR;
+   bool roomCollapsed = (roomR < 0.3);
+
+   if(mapped == READINESS_INVALIDATED || roomCollapsed)
+   {
+      if(g_readiness[slot].active)
+         PrintFormat("ENTRY_READINESS_%s | dir=%s reason=%s",
+                     roomCollapsed ? "EXPIRED" : "INVALIDATED",
+                     direction == 1 ? "BUY" : "SELL",
+                     roomCollapsed ? "remaining room collapsed" : thesis.hardBlockReason);
+      g_readiness[slot].active = false;
+   }
+   else
+   {
+      if(freshOrigin)
+      {
+         g_readiness[slot].active = true;
+         g_readiness[slot].candidateId = fingerprint;
+         g_readiness[slot].direction = direction;
+         g_readiness[slot].originTime = TimeCurrent();
+         g_readiness[slot].originBar = g_latestDecisionSnapshot.valid ? g_latestDecisionSnapshot.closedM5BarTime : iTime(Symbol(), PERIOD_M5, 0);
+         g_readiness[slot].passedThroughWaitState = false;
+         g_readiness[slot].lastLoggedState = READINESS_BIAS_ONLY;
+      }
+      if(mapped != g_readiness[slot].state)
+         g_readiness[slot].lastStateChangeTime = TimeCurrent();
+      // A brand-new candidate that evaluates straight to CONFIRMED on its
+      // very first evaluation is NOT marked as having passed through a wait
+      // state -- it must be re-observed as still CONFIRMED on a LATER
+      // evaluation before entryReady can become true (spec: "do not jump
+      // directly from BIAS to ENTRY_READY"). Any non-CONFIRMED read, at any
+      // point, satisfies this permanently for the candidate's lifetime.
+      if(mapped != READINESS_CONFIRMED)
+         g_readiness[slot].passedThroughWaitState = true;
+      g_readiness[slot].state = mapped;
+   }
+
+   XAU_EntryReadinessDecision d;
+   d.candidateId       = g_readiness[slot].candidateId;
+   d.campaignId        = g_campaign[slot].campaignId;
+   d.direction          = direction;
+   // Spec section 1's exact enum: BUY_BIAS / SELL_BIAS / NEUTRAL / TRANSITION.
+   // Non-executable by construction -- this field is never read by the
+   // entryReady/finalAction computation below, only reported for display.
+   if(thesis.action == TRANSITION_WATCH || thesis.action == OPPOSITE_DISCOVERY)
+      d.biasState = "TRANSITION";
+   else if(td.dominantDirection == direction)
+      d.biasState = (direction == 1) ? "BUY_BIAS" : "SELL_BIAS";
+   else
+      d.biasState = "NEUTRAL";
+   d.oldSideState       = EnumToString(oldSide);
+   d.locationState      = XAU_LocationQualityName(thesis.location);
+   d.pressureState      = XAU_PressureStateName(thesis.pressure);
+   d.structureState     = XAU_StructureStateName(thesis.structure);
+   d.timingState        = XAU_TimingStateName(thesis.timing);
+   d.exhaustionState     = XAU_ExhaustionStateName(thesis.exhaustion);
+   d.buyPressure        = td.buyConfidence;
+   d.sellPressure        = td.sellConfidence;
+   d.movementConsumed    = td.moveAlreadyConsumedPct;
+   d.remainingRoomR      = roomR;
+   d.pullbackComplete    = !td.reversalWaitForPullback;
+   d.reclaimConfirmed    = td.oppositeReclaim;
+   d.retestHeld          = td.oppositeRetestHeld;
+   d.snapshotFresh        = g_latestDecisionSnapshot.valid;
+
+   bool candidateReady = g_readiness[slot].active &&
+                         (g_readiness[slot].state == READINESS_CONFIRMED) &&
+                         g_readiness[slot].passedThroughWaitState &&
+                         d.snapshotFresh;
+   d.entryReady = candidateReady;
+
+   if(!g_readiness[slot].active)
+      d.finalAction = (thesis.action == HARD_BLOCK) ? "HARD_BLOCK" : "NO_VALID_TRADE";
+   else if(d.entryReady)
+      d.finalAction = (direction == 1) ? "ALLOW_BUY" : "ALLOW_SELL";
+   else if(g_readiness[slot].state == READINESS_OLD_SIDE_ACTIVE)
+      d.finalAction = (direction == 1) ? "WAIT_FOR_BUY" : "WAIT_FOR_SELL";
+   else
+      d.finalAction = (direction == 1) ? "WAIT_FOR_BUY" : "WAIT_FOR_SELL";
+   d.reason = thesis.reason;
+
+   // State-change-only + 60s-heartbeat-capped logging (spec section 16).
+   if(g_readiness[slot].active && g_readiness[slot].state != g_readiness[slot].lastLoggedState)
+   {
+      PrintFormat("ENTRY_READINESS_STATE_CHANGE | dir=%s %s -> %s | oldSide=%s loc=%s pressure=%s structure=%s timing=%s",
+                  direction == 1 ? "BUY" : "SELL", XAU_ReadinessStateName(g_readiness[slot].lastLoggedState),
+                  XAU_ReadinessStateName(g_readiness[slot].state), d.oldSideState, d.locationState,
+                  d.pressureState, d.structureState, d.timingState);
+      g_readiness[slot].lastLoggedState = g_readiness[slot].state;
+      g_readiness[slot].lastHeartbeatLog = TimeCurrent();
+   }
+   else if(g_readiness[slot].active && TimeCurrent() - g_readiness[slot].lastHeartbeatLog >= 60)
+   {
+      PrintFormat("ENTRY_READINESS_HEARTBEAT | dir=%s state=%s finalAction=%s",
+                  direction == 1 ? "BUY" : "SELL", XAU_ReadinessStateName(g_readiness[slot].state), d.finalAction);
+      g_readiness[slot].lastHeartbeatLog = TimeCurrent();
+   }
+
+   return d;
 }
 
 // Context survives a losing close only long enough to let a *new* decision
@@ -13202,6 +13486,18 @@ void CheckPyramidOpportunity()
       return;
    }
 
+   // v6.24.15 review: pyramid is deliberately NOT routed through
+   // XAU_EntryReadinessDecision. The readiness engine answers "has the OLD
+   // side finished and the NEW side proven itself" for a FRESH direction --
+   // a pyramid add has no old side; it is adding to a direction that
+   // already passed that exact check when its core opened. Its own
+   // campaign-exhaustion gate a few lines below (existingBuyAction/
+   // existingSellAction == TRANSITION_STOP_ADDS etc., unchanged since
+   // v6.24.6) already IS the correct readiness authority for a continuation
+   // add, and per this task's own non-negotiable list, campaign-management
+   // logic must not change. Routing adds through the fresh-direction engine
+   // would misapply "wait for old side to finish" logic to a direction that
+   // was never the old side.
    int openCount = 0;
    int totalBuys = 0, totalSells = 0;
    ulong origTicket = 0;
@@ -15954,6 +16250,28 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                    signal, funnelSetup, funnelGrade, funnelScore,
                                    true, false, "BLOCKED", "OLD_DIRECTION_EXHAUSTED",
                                    true, false, false, 0, 0, exMsg, reason, 0.0);
+         return false;
+      }
+
+      // v6.24.15 — Entry Readiness Engine: the actual gate this feature
+      // exists to add. Reuses g_transitionDecision (already recomputed this
+      // bar by the caller's own scan pipeline, same convention every other
+      // call site in this file follows) rather than recomputing it here.
+      // Every non-manual-override caller of OpenTrade() -- primary path and
+      // CheckReEntryOpportunity, the only two -- is covered by construction.
+      g_lastEntryReadiness = XAU_UpdateEntryReadiness(signal, g_transitionDecision);
+      if(!g_lastEntryReadiness.entryReady)
+      {
+         string rdMsg = StringFormat("ENTRY_READINESS_BLOCK: %s not ready -- state=%s finalAction=%s oldSide=%s location=%s pressure=%s structure=%s timing=%s",
+                                     signal == 1 ? "BUY" : "SELL", XAU_ReadinessStateName(g_readiness[XAU_CampaignSlot(signal)].state),
+                                     g_lastEntryReadiness.finalAction, g_lastEntryReadiness.oldSideState,
+                                     g_lastEntryReadiness.locationState, g_lastEntryReadiness.pressureState,
+                                     g_lastEntryReadiness.structureState, g_lastEntryReadiness.timingState);
+         Print(rdMsg);
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "EntryReadiness",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "ENTRY_NOT_READY",
+                                   true, false, false, 0, 0, rdMsg, reason, 0.0);
          return false;
       }
    }
@@ -19840,6 +20158,149 @@ double g_rCheckpointLevels[6] = {0.20, 0.30, 0.40, 0.50, 0.75, 1.00};
 bool   g_rExitConfigValid = true;
 bool   g_rExitStateDirty  = false;    // v6.21.2 (Fix 16): set true on any meaningful state change; save only when dirty or on the periodic floor
 
+// ===========================================================================
+// v6.24.15 — Entry-quality telemetry (spec section 10). Deliberately a
+// SEPARATE array from g_rExit/XAU_RExitState, not new fields bolted onto it
+// -- g_rExit is the live, persisted, exit-DECISION-making state for the
+// non-negotiable "exit behaviour must not change" system; this array only
+// ever READS g_rExit's already-computed profit/currentR values at the one
+// safe point in XAU_RExitCoreLoop (before any close-decision branch runs)
+// and never writes back to it, never calls XAU_RExit_RequestClose, and is
+// never read by any exit-decision code. Pure observation, for learning and
+// replay analysis only -- exactly as the spec requires ("do not close
+// trades solely from this classification").
+//
+// Records MAE/MFE at fixed WALL-CLOCK offsets after entry (30s/1m/3m/5m/
+// 10m) -- distinct from g_rExit's own R-based checkpoints (which fire on R
+// crossing, not elapsed time), because the question this telemetry answers
+// ("how much immediate drawdown happens right after entry, before the move
+// even develops") is a time-based question, not an R-based one.
+#define XAU_EQ_CHECKPOINTS 5
+struct XAU_EntryQualityRecord
+{
+   bool     active;
+   ulong    positionId;
+   int      direction;
+   datetime entryTime;
+   double   entryPrice;
+   double   entryATR;
+   double   riskUSD;
+   double   runningWorstUSD;      // running MAE (most negative profit observed so far)
+   double   runningBestUSD;       // running MFE (most positive profit observed so far)
+   double   maeUSD[XAU_EQ_CHECKPOINTS];
+   double   maeR[XAU_EQ_CHECKPOINTS];
+   double   mfeUSD[XAU_EQ_CHECKPOINTS];
+   double   mfeR[XAU_EQ_CHECKPOINTS];
+   bool     checkpointRecorded[XAU_EQ_CHECKPOINTS];
+   datetime timeToFirstProfit;    // 0 until profit first crosses > 0
+   datetime timeTo025R;
+   datetime timeTo05R;
+   bool     seenNegative;
+   bool     seenPositive;
+   bool     wentPositiveBeforeNegative;
+   double   maxAdverseATR;        // worst adverse price move, in ATR terms
+   string   locationAtEntry;      // g_lastEntryReadiness.locationState, captured at creation
+   bool     finalized;
+   string   classification;
+};
+XAU_EntryQualityRecord g_entryQuality[];
+int g_entryQualityCheckpointSeconds[XAU_EQ_CHECKPOINTS] = {30, 60, 180, 300, 600};
+
+int XAU_EntryQuality_FindIdx(ulong positionId)
+{
+   for(int i = 0; i < ArraySize(g_entryQuality); i++)
+      if(g_entryQuality[i].active && g_entryQuality[i].positionId == positionId) return i;
+   return -1;
+}
+
+// Called once per tick per open position from the one safe point in
+// XAU_RExitCoreLoop (after profit/currentR are computed, before any
+// close-decision branch). Pure recorder: no return value read by any
+// caller, no influence on control flow.
+void XAU_RecordEntryQualityTelemetry(ulong positionId, int direction, datetime entryTime,
+                                     double entryPrice, double entryATR, double profit,
+                                     double riskUSD, double curPrice)
+{
+   int idx = XAU_EntryQuality_FindIdx(positionId);
+   if(idx < 0)
+   {
+      int n = ArraySize(g_entryQuality);
+      ArrayResize(g_entryQuality, n + 1);
+      ZeroMemory(g_entryQuality[n]);
+      idx = n;
+      g_entryQuality[idx].active = true;
+      g_entryQuality[idx].positionId = positionId;
+      g_entryQuality[idx].direction = direction;
+      g_entryQuality[idx].entryTime = entryTime;
+      g_entryQuality[idx].entryPrice = entryPrice;
+      g_entryQuality[idx].entryATR = entryATR;
+      g_entryQuality[idx].riskUSD = riskUSD;
+      g_entryQuality[idx].locationAtEntry = (g_lastEntryReadiness.direction == direction) ? g_lastEntryReadiness.locationState : "";
+   }
+
+   if(profit < g_entryQuality[idx].runningWorstUSD) g_entryQuality[idx].runningWorstUSD = profit;
+   if(profit > g_entryQuality[idx].runningBestUSD)  g_entryQuality[idx].runningBestUSD = profit;
+   if(profit < 0.0) g_entryQuality[idx].seenNegative = true;
+   if(profit > 0.0)
+   {
+      if(g_entryQuality[idx].timeToFirstProfit == 0)
+      {
+         g_entryQuality[idx].timeToFirstProfit = TimeCurrent();
+         g_entryQuality[idx].wentPositiveBeforeNegative = !g_entryQuality[idx].seenNegative;
+      }
+      g_entryQuality[idx].seenPositive = true;
+   }
+   double curR = riskUSD > 0.0 ? profit / riskUSD : 0.0;
+   if(curR >= 0.25 && g_entryQuality[idx].timeTo025R == 0) g_entryQuality[idx].timeTo025R = TimeCurrent();
+   if(curR >= 0.50 && g_entryQuality[idx].timeTo05R  == 0) g_entryQuality[idx].timeTo05R  = TimeCurrent();
+
+   if(entryATR > 0.0)
+   {
+      double adverseDist = (direction == 1) ? MathMax(0.0, entryPrice - curPrice) : MathMax(0.0, curPrice - entryPrice);
+      double adverseATR = adverseDist / entryATR;
+      if(adverseATR > g_entryQuality[idx].maxAdverseATR) g_entryQuality[idx].maxAdverseATR = adverseATR;
+   }
+
+   int elapsed = (int)(TimeCurrent() - g_entryQuality[idx].entryTime);
+   for(int c = 0; c < XAU_EQ_CHECKPOINTS; c++)
+   {
+      if(!g_entryQuality[idx].checkpointRecorded[c] && elapsed >= g_entryQualityCheckpointSeconds[c])
+      {
+         g_entryQuality[idx].maeUSD[c] = g_entryQuality[idx].runningWorstUSD;
+         g_entryQuality[idx].mfeUSD[c] = g_entryQuality[idx].runningBestUSD;
+         g_entryQuality[idx].maeR[c]   = riskUSD > 0.0 ? g_entryQuality[idx].runningWorstUSD / riskUSD : 0.0;
+         g_entryQuality[idx].mfeR[c]   = riskUSD > 0.0 ? g_entryQuality[idx].runningBestUSD  / riskUSD : 0.0;
+         g_entryQuality[idx].checkpointRecorded[c] = true;
+      }
+   }
+}
+
+// Heuristic classification for learning/replay only -- never used to close
+// a trade (spec: "do not close trades solely from this classification").
+// Called once at position close (from OnTradeTransaction, alongside the
+// existing XAU_CampaignRegisterClose call) with the FINAL profit.
+string XAU_ClassifyEntryQuality(int idx, double finalProfit)
+{
+   if(idx < 0 || idx >= ArraySize(g_entryQuality)) return "ENTRY_UNKNOWN";
+   double riskUSD = g_entryQuality[idx].riskUSD;
+   double worstR = riskUSD > 0.0 ? g_entryQuality[idx].runningWorstUSD / riskUSD : 0.0; // negative
+   bool won = finalProfit >= 0.01;
+
+   if(g_entryQuality[idx].locationAtEntry == "LOCATION_LATE" || g_entryQuality[idx].locationAtEntry == "LOCATION_EXTREME")
+      return "ENTRY_LATE";
+   if(!g_entryQuality[idx].seenPositive && !won)
+      return "ENTRY_DIRECTION_WRONG";  // never once showed favor and lost
+   if(!g_entryQuality[idx].seenPositive && won)
+      return "ENTRY_NO_FOLLOW_THROUGH"; // won without ever showing clean favor first (e.g. straight to BE/TP via other mgmt)
+   if(worstR <= -0.70)
+      return won ? "ENTRY_TOO_EARLY" : "ENTRY_WRONG_LOCATION";
+   if(worstR <= -0.40)
+      return won ? "ENTRY_ACCEPTABLE" : "ENTRY_FALSE_CONFIRMATION";
+   if(worstR > -0.15)
+      return "ENTRY_CLEAN";
+   return "ENTRY_ACCEPTABLE";
+}
+
 // v6.21.3 — PROFIT GUARANTEE re-entry tracking (owner rule 2026-07-13, point 6).
 // Small in-memory ring buffer of recent guarantee-protected exits, so a fresh
 // normal-pipeline signal in the same direction can be recognized and audited
@@ -20575,6 +21036,16 @@ void XAU_RExitCoreLoop()
       for(int c = 0; c < 6; c++)
          if(!g_rExit[idx].rCheckpointHit[c] && currentR >= g_rCheckpointLevels[c])
          { g_rExit[idx].rCheckpointHit[c] = true; g_rExit[idx].rCheckpointProfitUSD[c] = profit; }
+
+      // v6.24.15 — entry-quality telemetry (pure recorder, see
+      // XAU_RecordEntryQualityTelemetry's own header comment: reads
+      // already-computed profit/riskUSD, writes only to the separate
+      // g_entryQuality[] array, never touches g_rExit or influences any
+      // close decision below this line). entryATR uses the CURRENT bufATR
+      // as a close approximation of ATR-at-entry (entry was necessarily
+      // recent for the 30s-10min windows this telemetry covers).
+      XAU_RecordEntryQualityTelemetry(positionId, isBuy ? 1 : -1, posInfo.Time(), openPx,
+                                      ArraySize(bufATR) >= 2 ? bufATR[1] : 0.0, profit, riskUSD, curPrice);
 
       double peakR = g_rExit[idx].peakR;
 
@@ -23265,6 +23736,22 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    long closingCampaignId = g_campaign[closeSlot].campaignId;
    bool campaignWasActiveBeforeClose = g_campaign[closeSlot].active;
    XAU_CampaignRegisterClose(closedDirection, profit);
+   // v6.24.15 — entry-quality classification, computed once at the same
+   // full-close point every other per-position cleanup already uses.
+   // Learning/telemetry only (see XAU_ClassifyEntryQuality's own header
+   // comment) -- never influences this close, which has already happened.
+   {
+      int eqIdx = XAU_EntryQuality_FindIdx(posId);
+      if(eqIdx >= 0 && !g_entryQuality[eqIdx].finalized)
+      {
+         g_entryQuality[eqIdx].classification = XAU_ClassifyEntryQuality(eqIdx, profit);
+         g_entryQuality[eqIdx].finalized = true;
+         PrintFormat("ENTRY_QUALITY | posId=%I64u dir=%s classification=%s finalProfit=%.2f maxAdverseATR=%.2f maeR_5m=%.2f mfeR_5m=%.2f timeToFirstProfit=%s",
+                     posId, closedDirection == 1 ? "BUY" : "SELL", g_entryQuality[eqIdx].classification,
+                     profit, g_entryQuality[eqIdx].maxAdverseATR, g_entryQuality[eqIdx].maeR[3], g_entryQuality[eqIdx].mfeR[3],
+                     g_entryQuality[eqIdx].timeToFirstProfit > 0 ? TimeToString(g_entryQuality[eqIdx].timeToFirstProfit, TIME_SECONDS) : "NEVER");
+      }
+   }
    ENUM_DEAL_REASON dealReason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
    string resolvedExitReason = XAU_ResolveExitReason(posId, dealReason, profit);
    string closeReasonExact = XAU_CloseReasonExactField(true, XAU_BlockReasonKey(resolvedExitReason), resolvedExitReason);
@@ -27496,6 +27983,16 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    // any time the unrelated normal campaign happened to have just closed --
    // exactly the "two systems fighting" failure mode this audit exists to
    // prevent, not fix. Documented here rather than silently skipped.
+   //
+   // v6.24.15 review: same conclusion, same reasoning, for the new Entry
+   // Readiness Engine. This module already runs its own location/exhaustion
+   // read immediately above (finalCounterHighExhaustionBlock,
+   // finalCounterLocationWait, reversalLocationGood) scoped to ITS OWN
+   // opposite-direction hedge thesis (g_reversalOpportunity), not the
+   // primary campaign's direction. XAU_EntryReadinessDecision's old-side/
+   // location/pressure/structure states are keyed to g_readiness[slot] for
+   // the PRIMARY direction and would answer a different question than the
+   // one Counter-Excursion is actually asking here.
    trade.SetExpertMagicNumber(InpCounterExcursionMagicNumber);
    bool ok = (counterDir == 1) ? trade.Buy(lots, Symbol(), 0, slPrice, tpPrice, comment)
                                 : trade.Sell(lots, Symbol(), 0, slPrice, tpPrice, comment);
@@ -31099,6 +31596,30 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
                                          postTd.oppositeDisplacement ? "Y" : "N", postTd.reversalProbability), 120),
          freshBuyText, freshSellText, currentActionText);
    }
+   // v6.24.15 — ENTRY READINESS block for the web Command Center. Same
+   // g_lastEntryReadiness source the OpenTrade() gate itself just acted on
+   // (not recomputed here), so the dashboard can never show a state that
+   // disagrees with what actually gated the last decision.
+   string readinessJson = "{}";
+   if(StringLen(g_lastEntryReadiness.candidateId) > 0)
+   {
+      XAU_EntryReadinessDecision r = g_lastEntryReadiness;
+      int rSlot = XAU_CampaignSlot(r.direction);
+      readinessJson = StringFormat(
+         "{\"candidate_id\":\"%s\",\"direction\":\"%s\",\"bias\":\"%s\",\"old_side_state\":\"%s\","
+         "\"buy_pressure\":%.1f,\"sell_pressure\":%.1f,\"location\":\"%s\",\"exhaustion\":\"%s\","
+         "\"structure\":\"%s\",\"pullback_complete\":%s,\"reclaim_confirmed\":%s,\"retest_held\":%s,"
+         "\"remaining_room_r\":%.2f,\"timing_state\":\"%s\",\"snapshot_fresh\":%s,"
+         "\"entry_ready\":%s,\"final_action\":\"%s\",\"reason\":\"%s\"}",
+         BotMonitorJsonSafe(r.candidateId, 60), r.direction == 1 ? "BUY" : "SELL",
+         BotMonitorJsonSafe(r.biasState, 20), BotMonitorJsonSafe(r.oldSideState, 30),
+         r.buyPressure, r.sellPressure, BotMonitorJsonSafe(r.locationState, 30),
+         BotMonitorJsonSafe(r.exhaustionState, 30), BotMonitorJsonSafe(r.structureState, 30),
+         BotMonitorBool(r.pullbackComplete), BotMonitorBool(r.reclaimConfirmed), BotMonitorBool(r.retestHeld),
+         r.remainingRoomR, BotMonitorJsonSafe(XAU_ReadinessStateName(g_readiness[rSlot].state), 30),
+         BotMonitorBool(r.snapshotFresh), BotMonitorBool(r.entryReady),
+         BotMonitorJsonSafe(r.finalAction, 20), BotMonitorJsonSafe(r.reason, 160));
+   }
    string body = StringFormat(
       "{\"pin\":\"%s\",\"license_key\":\"%s\",\"event_type\":\"%s\",\"severity\":\"%s\","
       "\"account\":\"%I64d\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"mode\":\"%s\","
@@ -31116,7 +31637,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       "\"session\":\"%s\",\"last_skip\":\"%s\",\"no_limit_mode\":%s,"
       "\"open_positions\":%d,\"close_reason_exact\":\"%s\",\"closed_by_module\":\"%s\","
       "\"position_direction\":\"%s\",\"risk_lot_decision\":\"%s\",\"exit_decision\":\"%s\"%s},"
-      "\"market_thesis\":%s,\"post_trade_state\":%s}",
+      "\"market_thesis\":%s,\"post_trade_state\":%s,\"entry_readiness\":%s}",
       BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
       ev, sev, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(),
       BotMonitorJsonSafe(modeText, 80), BotMonitorJsonSafe(RegimeName(), 32),
@@ -31134,7 +31655,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       BotMonitorBool(XAU_NoLimitTradingModeActive()), CountMyPositions(),
       BotMonitorJsonSafe(closeReasonExact, 180), BotMonitorJsonSafe(closedByModule, 80),
       BotMonitorJsonSafe(positionDirection, 12), BotMonitorJsonSafe(riskLotDecision, 220),
-      BotMonitorJsonSafe(exitDecision, 220), funnelNested, thesisJson, postTradeJson);
+      BotMonitorJsonSafe(exitDecision, 220), funnelNested, thesisJson, postTradeJson, readinessJson);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
@@ -32230,6 +32751,34 @@ string XAU_PostTradeStateDisplayBlock()
    return d;
 }
 
+// v6.24.15 — on-chart ENTRY READINESS block (spec section 16). Reads the
+// SAME g_lastEntryReadiness object the OpenTrade() gate itself acted on
+// most recently -- one data source, two presentations, same pattern as the
+// v6.24.11 market-thesis block and the v6.24.14 post-trade-state block.
+string XAU_EntryReadinessDisplayBlock()
+{
+   if(StringLen(g_lastEntryReadiness.candidateId) == 0) return "";
+   XAU_EntryReadinessDecision r = g_lastEntryReadiness;
+   int slot = XAU_CampaignSlot(r.direction);
+   string d = "----------- ENTRY READINESS -----------\n";
+   d += StringFormat("Candidate: %s | Preferred direction: %s\n", r.candidateId, r.direction == 1 ? "BUY" : "SELL");
+   d += StringFormat("Bias: %s\n", r.biasState);
+   d += StringFormat("Old-side state: %s\n", r.oldSideState);
+   d += StringFormat("BUY pressure: %.0f | SELL pressure: %.0f\n", r.buyPressure, r.sellPressure);
+   d += StringFormat("Location: %s | Exhaustion: %s\n", r.locationState, r.exhaustionState);
+   d += StringFormat("Structure: %s\n", r.structureState);
+   d += StringFormat("Pullback: %s | Reclaim: %s | Retest: %s\n",
+                     r.pullbackComplete ? "COMPLETE" : "PENDING",
+                     r.reclaimConfirmed ? "CONFIRMED" : "PENDING",
+                     r.retestHeld ? "HELD" : "PENDING");
+   d += StringFormat("Remaining room: %.2fR\n", r.remainingRoomR);
+   d += StringFormat("Timing: %s\n", XAU_ReadinessStateName(g_readiness[slot].state));
+   d += StringFormat("Snapshot: %s\n", r.snapshotFresh ? "FRESH" : "STALE");
+   d += StringFormat("Final action: %s\n", r.finalAction);
+   d += StringFormat("Reason: %s\n", r.reason);
+   return d;
+}
+
 void UpdateDashboard(int signal, double score, string grade)
 {
    double eq = accInfo.Equity(), bal = accInfo.Balance();
@@ -32293,6 +32842,7 @@ void UpdateDashboard(int signal, double score, string grade)
    d += XAU_MarketThesisDisplayBlock(1);
    d += XAU_MarketThesisDisplayBlock(-1);
    d += XAU_PostTradeStateDisplayBlock();
+   d += XAU_EntryReadinessDisplayBlock();
    d += XAUAI_DiagnosticsText();
    d += "==========================================\n";
    if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT — RESTING <<\n";

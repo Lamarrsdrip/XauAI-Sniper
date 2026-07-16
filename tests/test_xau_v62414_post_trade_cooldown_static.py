@@ -268,7 +268,10 @@ def test_reentry_and_force_open_reach_the_same_gated_opentrade_function():
 def test_web_json_gains_post_trade_state_field():
     ea = read(BACKEND_EA)
     # raw source has the escaped-quote form (this is an MQL5 string literal)
-    assert '\\"post_trade_state\\":%s}' in ea
+    # v6.24.15 appended "entry_readiness" after "post_trade_state" (same
+    # pattern this field itself was added with) -- the object's final key
+    # moved, "post_trade_state" itself is still present and well-formed.
+    assert '\\"post_trade_state\\":%s' in ea
     assert "postTradeJson" in ea
 
 

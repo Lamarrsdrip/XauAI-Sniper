@@ -171,6 +171,92 @@ def thesis_action(signal: int, is_pyramid_add: bool, loc: str, exh: str, tim: st
     return "ALLOW_CORE", "healthy campaign, acceptable-or-better location, timing ready"
 
 
+# v6.24.14/v6.24.15 additions -- OLD_DIRECTION_STATE + readiness state map.
+
+def classify_old_direction_state(direction: int, td: TransitionDecision,
+                                 prior_exhaustion: bool = False) -> str:
+    """Mirrors XAU_ClassifyOldDirectionState, .mq5 (v6.24.14). `prior_exhaustion`
+    defaults False here because this harness has no g_postClose equivalent
+    (no persistent "did this direction just close very exhausted" memory
+    across independent CSV rows) -- RESET_CONFIRMED can therefore never be
+    produced by this mirror, which is the correct, conservative behavior
+    given the data available (matches the real function's own "time alone
+    cannot reset exhaustion" rule: without genuine prior-close evidence,
+    there is nothing to reset FROM)."""
+    existing_action = td.existingBuyAction if direction == 1 else td.existingSellAction
+    fresh_allowed = True if direction == td.dominantDirection else False
+    if existing_action == TRANSITION_EXIT_CONTROLLED or (
+        td.lifecycle == OPPOSITE_DIRECTION_CONFIRMED and td.dominantDirection not in (0, direction)
+    ):
+        return "OLD_DIRECTION_INVALIDATED"
+    if existing_action in (TRANSITION_STOP_ADDS, TRANSITION_TIGHTEN_PROTECTION, TRANSITION_EXIT_PROFITABLE) \
+       or not fresh_allowed:
+        if prior_exhaustion:
+            return "OLD_DIRECTION_EXHAUSTED"
+        return "OLD_DIRECTION_RESETTING" if td.lifecycle == TRANSITION_NEUTRAL else "OLD_DIRECTION_MATURE"
+    if prior_exhaustion:
+        return "OLD_DIRECTION_RESET_CONFIRMED"
+    return "OLD_DIRECTION_MATURE" if td.lifecycle == 3 else "OLD_DIRECTION_HEALTHY"  # 3 == TREND_MATURE
+
+
+def old_side_state_from_row_evidence(signal: int, htf_dir: int, entry_phase: str, late_chase: str) -> str:
+    """Documented APPROXIMATION, not a mirror of any single .mq5 function:
+    the CSV's per-row telemetry only ever describes evidence for the
+    CANDIDATE's own direction, not a simultaneous read of the opposite
+    side's campaign state (no dual-sided snapshot exists in this schema).
+    htf_dir opposing the candidate's direction is used as the closest real
+    proxy for "the opposite side still has structural support" -- the same
+    real field (m15/m30 AGAINST) already used elsewhere in this file for
+    htf_dir itself, not a new invented signal."""
+    opposing = (htf_dir == -signal and signal != 0)
+    if not opposing:
+        return "OLD_DIRECTION_INVALIDATED"  # no real opposition detected -- old side not blocking
+    if entry_phase == "LATE_OR_WEAK" or late_chase == "Y":
+        return "OLD_DIRECTION_EXHAUSTED"
+    return "OLD_DIRECTION_HEALTHY"
+
+
+def map_to_readiness_state(old_side: str, thesis: dict) -> str:
+    """Mirrors XAU_MapToReadinessState, .mq5 (v6.24.15). Produces the
+    MARKET-EVIDENCE state only (the layer before the persistent "must be
+    re-observed on a later bar" promotion to ENTRY_READY) -- this harness's
+    rows are independent decision points, not a continuous per-bar stream,
+    so the multi-bar persistence gate cannot be honestly replayed here.
+    READINESS_CONFIRMED in this mirror means "the real EA's persistent
+    engine would consider promoting this to ENTRY_READY on its NEXT
+    observation of the same idea," not "already fired."""
+    action = thesis["action"]
+    loc = thesis["location"]
+    pressure = thesis["pressure"]
+    structure = thesis["structure"]
+    timing = thesis["timing"]
+    direction = thesis["direction"]
+
+    if action == "HARD_BLOCK":
+        return "READINESS_INVALIDATED"
+    if old_side in ("OLD_DIRECTION_HEALTHY", "OLD_DIRECTION_MATURE"):
+        return "READINESS_OLD_SIDE_ACTIVE"
+    if old_side == "OLD_DIRECTION_EXHAUSTED" and action != "ALLOW_CORE":
+        return "READINESS_WAIT_FOR_EXHAUSTION"
+    if loc in ("LOCATION_LATE", "LOCATION_EXTREME"):
+        return "READINESS_WAIT_FOR_LOCATION"
+    pressure_against = (
+        (direction == 1 and pressure in ("SELL_PRESSURE_MODERATE", "SELL_PRESSURE_STRONG")) or
+        (direction == -1 and pressure in ("BUY_PRESSURE_MODERATE", "BUY_PRESSURE_STRONG"))
+    )
+    if pressure == "PRESSURE_BALANCED" or pressure_against:
+        return "READINESS_WAIT_FOR_PRESSURE"
+    if structure == "STRUCTURE_OPPOSES":
+        return "READINESS_WAIT_FOR_STRUCTURE"
+    if timing == "TIMING_WAIT_RECLAIM": return "READINESS_WAIT_FOR_RECLAIM"
+    if timing == "TIMING_WAIT_PULLBACK": return "READINESS_WAIT_FOR_RETEST"
+    if timing in ("TIMING_WAIT_CONFIRMATION", "TIMING_STALE"): return "READINESS_FORMING"
+    if timing in ("TIMING_LATE", "TIMING_FAILED"): return "READINESS_WAIT_FOR_LOCATION"
+    if action == "ALLOW_CORE" and timing == "TIMING_READY":
+        return "READINESS_CONFIRMED"
+    return "READINESS_FORMING"
+
+
 def compute_thesis(signal: int, is_pyramid_add: bool, td: TransitionDecision) -> dict:
     """Mirrors XAU_ComputeMarketThesis, .mq5 line ~10981 -- the one entry
     point that computes all six buckets and the final action together."""
