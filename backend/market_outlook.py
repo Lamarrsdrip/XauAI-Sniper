@@ -30,14 +30,13 @@ never a fabricated one.
 
 from __future__ import annotations
 
-import time
 import uuid
 import json
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 logger = logging.getLogger("market_outlook")
 
@@ -532,9 +531,27 @@ async def track_outlook_lifecycle_tick() -> int:
         return 0
 
     now = datetime.now(timezone.utc)
+    # Audit fix: "TP1_HIT"/"TP2_HIT" are used as BOTH an interim status
+    # ("still open, chasing the next TP") and, via _finalize_outlook, a
+    # TERMINAL status (an outlook that hit TP1 and later got stopped out
+    # before TP2 is finalized with status=f"TP{highest_tp}_HIT" -- the same
+    # string). Filtering on status alone therefore kept re-selecting
+    # already-resolved "partial TP then stopped" outlooks on every tick
+    # forever, and _finalize_outlook has no idempotency guard of its own
+    # (unconditional insert_one into outcomes/revisions), so this silently
+    # inserted a duplicate outcome+revision row every minute, indefinitely,
+    # for that entire class of trade. The authoritative "is this actually
+    # still open" signal is resolved_at (set exactly once, inside
+    # _finalize_outlook, and never cleared) -- excluding anything with it
+    # already set closes the gap regardless of what status string an
+    # outlook happens to share with an interim state.
     open_statuses = ["PUBLISHED", "WAITING_FOR_ENTRY_ZONE", "ENTRY_ZONE_ACTIVE",
                      "CONFIRMATION_PENDING", "ACTIVE", "TP1_HIT", "TP2_HIT"]
-    cursor = db.cloud_market_outlooks.find({"status": {"$in": open_statuses}, "primary_direction": {"$in": ["BUY", "SELL"]}})
+    cursor = db.cloud_market_outlooks.find({
+        "status": {"$in": open_statuses},
+        "primary_direction": {"$in": ["BUY", "SELL"]},
+        "resolved_at": {"$in": [None, ""]},
+    })
     updated = 0
     async for doc in cursor:
         changed = await _advance_outlook_state(doc, price, now)
@@ -591,10 +608,17 @@ async def _advance_outlook_state(doc: Dict, price: float, now: datetime) -> bool
         if entry_zone_reached and not doc.get("_entry_zone_reached"):
             await _record_revision(outlook_id, "status", doc.get("status"), "ENTRY_ZONE_ACTIVE", "price entered preferred zone")
             new_status = "ENTRY_ZONE_ACTIVE"
-            await db.cloud_market_outlooks.update_one({"id": outlook_id}, {"$set": {"_entry_zone_reached": True}})
             if "ENTRY_ZONE_REACHED" not in milestones:
                 milestones.append("ENTRY_ZONE_REACHED")
-                await _dispatch_milestone_notification(doc, "ENTRY_ZONE_REACHED")
+            # Audit fix: milestones_hit was never actually persisted here
+            # (only _entry_zone_reached was) -- the stored document
+            # permanently lacked this entry even though the milestone was
+            # correctly dispatched once. This whole branch is guarded by
+            # `not doc.get("_entry_zone_reached")` above, i.e. it can only
+            # run once per outlook, so the dispatch below is unconditional.
+            await db.cloud_market_outlooks.update_one(
+                {"id": outlook_id}, {"$set": {"_entry_zone_reached": True, "milestones_hit": milestones}})
+            await _dispatch_milestone_notification(doc, "ENTRY_ZONE_REACHED")
         sl_invalidated = (direction == 1 and price <= sl) if sl else False
         sl_invalidated = sl_invalidated or ((direction == -1 and price >= sl) if sl else False)
         if entry_zone_reached and sl_invalidated:
@@ -621,13 +645,22 @@ async def _advance_outlook_state(doc: Dict, price: float, now: datetime) -> bool
             favorable_confirm = (price >= zone_low + (zone_high - zone_low) * 0.15) if direction == 1 else \
                                 (price <= zone_high - (zone_high - zone_low) * 0.15)
             if favorable_confirm:
+                # Audit fix: milestones_hit never actually gained
+                # "OUTLOOK_ACTIVATED" here (neither appended to the local
+                # list nor persisted) even though the notification WAS
+                # correctly dispatched once -- a data-completeness gap for
+                # anything reading milestones_hit later. This branch is
+                # only reachable while `not activated` (function-top guard),
+                # so it can only run once per outlook -- dispatch below is
+                # unconditional, matching the entry-zone branch above.
+                if "OUTLOOK_ACTIVATED" not in milestones:
+                    milestones.append("OUTLOOK_ACTIVATED")
                 await db.cloud_market_outlooks.update_one(
                     {"id": outlook_id},
                     {"$set": {"activation": {"activated": True, "activated_at": now.isoformat(), "activated_price": price},
-                             "status": "ACTIVE"}})
+                             "status": "ACTIVE", "milestones_hit": milestones}})
                 await _record_revision(outlook_id, "activation", activation, {"activated": True, "activated_price": price}, "confirmed activation")
-                if "OUTLOOK_ACTIVATED" not in milestones:
-                    await _dispatch_milestone_notification(doc, "OUTLOOK_ACTIVATED")
+                await _dispatch_milestone_notification(doc, "OUTLOOK_ACTIVATED")
                 return True
         return False
 
@@ -679,6 +712,14 @@ async def _advance_outlook_state(doc: Dict, price: float, now: datetime) -> bool
 
 async def _finalize_outlook(doc: Dict, status: str, final_result: str, highest_tp: Optional[int],
                             mfe: float, mae: float, now: datetime) -> None:
+    # Defense in depth: track_outlook_lifecycle_tick's query already
+    # excludes anything with resolved_at set, so this should never be
+    # reached for an already-finalized doc -- but a caller passing a stale
+    # `doc` snapshot (fetched before another finalize path completed)
+    # shouldn't be able to insert a second outcomes/revisions row either.
+    if doc.get("resolved_at"):
+        logger.warning(f"OUTLOOK_FINALIZE_SKIPPED_ALREADY_RESOLVED id={doc.get('id')}")
+        return
     db = _db()
     outlook_id = doc["id"]
     r_field = {1: "tp1_r", 2: "tp2_r", 3: "tp3_r"}.get(highest_tp)

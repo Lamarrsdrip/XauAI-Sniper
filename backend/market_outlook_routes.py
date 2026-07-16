@@ -45,7 +45,8 @@ def build_router() -> APIRouter:
     @r.get("/outlook/history")
     async def get_outlook_history(
         direction: Optional[str] = Query(None), color: Optional[str] = Query(None),
-        tp: Optional[str] = Query(None), min_confidence: Optional[int] = Query(None),
+        tp: Optional[str] = Query(None), result: Optional[str] = Query(None),
+        min_confidence: Optional[int] = Query(None),
         max_confidence: Optional[int] = Query(None), from_date: Optional[str] = Query(None),
         to_date: Optional[str] = Query(None), limit: int = Query(50),
         user: dict = Depends(srv.get_cloud_user),
@@ -64,7 +65,27 @@ def build_router() -> APIRouter:
         if color and color != "All":
             conditions.append({"color_state": color})
         if tp:
-            conditions.append({"highest_tp_reached": int(tp.replace("TP", ""))} if tp.startswith("TP") else {"status": tp})
+            # Audit fix: was an exact match on highest_tp_reached, which
+            # disagreed with the "at least N" semantics the stats block
+            # right above the filter uses for tp1_hit_rate/tp2_hit_rate
+            # (see get_outlook_history's own stats computation below) --
+            # clicking "TP2" used to show a strict subset of what "TP2
+            # rate" counted (excluded outlooks that continued on to TP3).
+            # Now $gte, matching the displayed rate's own definition.
+            conditions.append({"highest_tp_reached": {"$gte": int(tp.replace("TP", ""))}} if tp.startswith("TP") else {"status": tp})
+        if result:
+            # Audit fix: "Stopped" used to be sent as tp="INVALIDATED",
+            # which the branch above turned into {"status": "INVALIDATED"} --
+            # but that literal status string is shared by TWO unrelated
+            # outcomes (see market_outlook.py's _advance_outlook_state):
+            # a setup invalidating BEFORE any entry was ever taken
+            # (GRAY_INVALIDATED_BEFORE_ENTRY, a "no entry" result) and a
+            # real trade that activated and then hit SL with no TP reached
+            # (RED_STOPPED). "Stopped" was silently including never-entered
+            # setups. This new `result` param filters on the precise,
+            # unambiguous final_result field instead of the lifecycle
+            # status string.
+            conditions.append({"final_result": result})
         if min_confidence is not None:
             conditions.append({"confidence_pct": {"$gte": min_confidence}})
         if max_confidence is not None:
@@ -97,8 +118,24 @@ def build_router() -> APIRouter:
 
     @r.get("/outlook/{outlook_id}")
     async def get_outlook_by_id(outlook_id: str, user: dict = Depends(srv.get_cloud_user)):
+        # Audit fix: this endpoint required AUTHENTICATION (any signed-up
+        # user) but never checked AUTHORIZATION (whether this outlook
+        # belongs to the caller) -- any logged-in user could fetch any
+        # other user's outlook (confidence components, thesis evidence,
+        # entry/SL/TP, account regime/session) just by knowing/guessing an
+        # outlook_id, which isn't secret (it appears in push-notification
+        # deep links and log lines). Every other data-returning endpoint in
+        # this file already scopes by the caller's own account/license_key
+        # -- this one is now brought in line with that same pattern.
         db = srv.db
-        doc = await db.cloud_market_outlooks.find_one({"id": outlook_id}, {"_id": 0})
+        lic = await srv._get_user_license(user)
+        account = str((lic or {}).get("mt5_account") or "").strip()
+        license_key = srv._normalize_license_key((lic or {}).get("pin", "")) if lic else ""
+        if not account and not license_key:
+            raise HTTPException(status_code=404, detail="outlook not found")
+        scope = {"$or": [{"account": account}, {"license_key": license_key}]} if account and license_key \
+            else ({"account": account} if account else {"license_key": license_key})
+        doc = await db.cloud_market_outlooks.find_one({"$and": [{"id": outlook_id}, scope]}, {"_id": 0})
         if not doc:
             raise HTTPException(status_code=404, detail="outlook not found")
         revisions = await db.cloud_market_outlook_revisions.find({"outlook_id": outlook_id}, {"_id": 0}).sort("revision_time", 1).to_list(200)

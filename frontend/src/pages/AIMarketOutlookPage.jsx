@@ -64,10 +64,18 @@ function OutlookHero({ outlook, advanced, setAdvanced }) {
       {isDirectional && (
         <>
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Metric label="Preferred zone" value={`${outlook.preferred_entry_zone_low}–${outlook.preferred_entry_zone_high}`} />
+            {/* Audit fix: these used to be plain template literals, e.g.
+                `${a}–${b}` -- if either field were ever missing, JS coerces
+                it to the literal string "undefined" INSIDE the combined
+                string, which is truthy and so bypasses Metric's own
+                `value ?? "—"` fallback entirely (the fallback only catches
+                a wholly-null/undefined value, not "undefined" baked into
+                part of a longer string). safeJoin renders "—" for any
+                missing piece before the pieces are ever combined. */}
+            <Metric label="Preferred zone" value={safeJoin([outlook.preferred_entry_zone_low, outlook.preferred_entry_zone_high], "–")} />
             <Metric label="SL" value={outlook.suggested_sl} />
-            <Metric label="TP1" value={`${outlook.tp1_price} (${outlook.tp1_r}R)`} />
-            <Metric label="TP2 / TP3" value={`${outlook.tp2_price} / ${outlook.tp3_price}`} />
+            <Metric label="TP1" value={outlook.tp1_price != null ? `${outlook.tp1_price} (${outlook.tp1_r ?? "—"}R)` : "—"} />
+            <Metric label="TP2 / TP3" value={safeJoin([outlook.tp2_price, outlook.tp3_price], " / ")} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Metric label="Expected path" value={(outlook.expected_path || "").replace(/_/g, " ")} />
@@ -145,10 +153,25 @@ function NotificationSettings({ prefs, setPrefs }) {
   const setTier = useCallback(async (tier) => {
     setSaving(true);
     try {
-      if (tier !== "OFF" && typeof Notification !== "undefined" && Notification.permission === "default") {
-        const perm = await Notification.requestPermission();
-        setPermissionState(perm);
-        if (perm === "granted") await subscribeDevice();
+      // Audit fix: this used to call subscribeDevice() only inside the
+      // `permission === "default"` branch (i.e. only on the very first
+      // prompt). A user whose browser permission was already "granted"
+      // before ever opening this settings panel -- a plausible first-
+      // contact state, not an edge case -- would skip subscribeDevice()
+      // entirely: the tier still saves and the bell lights up "ON", but no
+      // push subscription is ever created or verified with the backend, so
+      // no notification would ever actually arrive, with no error shown
+      // anywhere. Now subscribeDevice() runs whenever the user is turning
+      // notifications ON and permission is already granted, in addition to
+      // the request-then-subscribe path for a fresh "default" state.
+      if (tier !== "OFF" && typeof Notification !== "undefined") {
+        if (Notification.permission === "default") {
+          const perm = await Notification.requestPermission();
+          setPermissionState(perm);
+          if (perm === "granted") await subscribeDevice();
+        } else if (Notification.permission === "granted") {
+          await subscribeDevice();
+        }
       }
       const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier, notify_all_devices: prefs?.notify_all_devices !== false });
       setPrefs(data?.prefs || { tier });
@@ -185,6 +208,13 @@ function NotificationSettings({ prefs, setPrefs }) {
       </div>
     </div>
   );
+}
+
+// Joins possibly-missing values with a separator, rendering "—" for any
+// null/undefined piece instead of letting it coerce to the literal text
+// "undefined" inside the combined string.
+function safeJoin(values, separator) {
+  return values.map((v) => (v == null ? "—" : v)).join(separator);
 }
 
 function urlBase64ToUint8Array(base64String) {
@@ -248,7 +278,12 @@ export default function AIMarketOutlookPage() {
         if (["BUY", "SELL"].includes(filter)) params.direction = filter;
         else if (["Green", "Red", "Gray", "Amber"].includes(filter)) params.color = filter.toUpperCase();
         else if (filter.startsWith("TP")) params.tp = filter;
-        else if (filter === "Stopped") params.tp = "INVALIDATED";
+        // Audit fix: was tp="INVALIDATED", which the backend mapped to a
+        // literal status match that ALSO covers setups invalidated before
+        // any entry was ever taken (a "no entry" outcome, not a stop-out).
+        // Uses the precise final_result field instead -- see
+        // market_outlook_routes.py's own comment on the `result` param.
+        else if (filter === "Stopped") params.result = "RED_STOPPED";
         else if (filter === "No Entry") params.color = "GRAY";
       }
       const { data } = await outlookAxios.get("/outlook/history", { params });

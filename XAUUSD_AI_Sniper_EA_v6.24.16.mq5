@@ -5140,7 +5140,6 @@ struct XAU_ReadinessCandidate
    datetime originTime;
    datetime originBar;
    ENUM_XAU_READINESS_STATE state;           // last computed market-evidence state
-   bool     passedThroughWaitState;          // true once any non-CONFIRMED state was recorded for this candidate
    datetime lastStateChangeTime;
    ENUM_XAU_READINESS_STATE lastLoggedState;
    datetime lastHeartbeatLog;
@@ -5350,7 +5349,6 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
          g_readiness[slot].direction = direction;
          g_readiness[slot].originTime = alignedOrigin;
          g_readiness[slot].originBar = g_latestDecisionSnapshot.valid ? g_latestDecisionSnapshot.closedM5BarTime : iTime(Symbol(), PERIOD_M5, 0);
-         g_readiness[slot].passedThroughWaitState = false;
          g_readiness[slot].lastLoggedState = READINESS_BIAS_ONLY;
          g_readiness[slot].entryReadyLogged = false;
          g_readiness[slot].lastBlocker = "";
@@ -5366,11 +5364,6 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
       ENUM_XAU_READINESS_STATE previousState = g_readiness[slot].state;
       if(mapped != previousState)
          g_readiness[slot].lastStateChangeTime = TimeCurrent();
-      // Diagnostic/display only now (see candidateAlreadyExisted above for
-      // the real entryReady gate) -- still useful to show on Command
-      // Center whether this idea has ever shown genuine wait evidence.
-      if(mapped != READINESS_CONFIRMED)
-         g_readiness[slot].passedThroughWaitState = true;
       g_readiness[slot].state = mapped;
       if(!freshOrigin && mapped != previousState)
       {

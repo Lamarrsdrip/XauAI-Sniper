@@ -1791,6 +1791,18 @@ async def startup():
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
         logger.info("Admin password updated")
     await db.users.create_index("email", unique=True)
+    # Audit fix: cloud_notification_log's idempotency check was check-then-
+    # insert with no DB-level guard -- safe today only because a single
+    # backend process drives the outlook notification loops sequentially
+    # (never concurrently). A unique index makes the guarantee real
+    # regardless of process count: a duplicate insert now raises inside
+    # send_outlook_notification's existing blanket try/except (notifications.py),
+    # which already logs and returns 0 rather than propagating -- so this
+    # closes the race without needing new error-handling code.
+    try:
+        await db.cloud_notification_log.create_index("idempotency_key", unique=True)
+    except Exception as e:
+        logger.warning(f"[outlook-notifications] could not create idempotency_key index: {e}")
     # v1.4.7 — one-time backfill: copy closed_at from cloud_shadow_trades back
     # into cloud_signals. Fixes legacy signals where master_close updated
     # shadow trades but not the parent signal record. Idempotent.
@@ -1842,9 +1854,17 @@ async def startup():
     # guarantee. Both loops are entirely independent of every other
     # background task here; a failure in either never touches trading state.
     async def _outlook_hourly_loop():
-        import market_outlook as _mo
+        # Audit fix: the import used to sit OUTSIDE the try/except below --
+        # harmless today (market_outlook.py has no execution-time risk at
+        # import), but a future edit that broke it at import time would have
+        # killed this task permanently on its very first run (asyncio never
+        # retries a task that raises before its first await), with no signal
+        # beyond a buried "Task exception was never retrieved" warning.
+        # Moved inside the loop's own try/except so an import failure is
+        # logged and retried every hour like any other tick failure.
         while True:
             try:
+                import market_outlook as _mo
                 published = await _mo.hourly_generation_tick()
                 if published:
                     logger.info(f"[outlook-hourly] published {published} outlook(s)")
@@ -1853,9 +1873,9 @@ async def startup():
             await asyncio.sleep(3600)
 
     async def _outlook_lifecycle_loop():
-        import market_outlook as _mo
         while True:
             try:
+                import market_outlook as _mo
                 await _mo.track_outlook_lifecycle_tick()
             except Exception as e:
                 logger.warning(f"[outlook-lifecycle] {e}")

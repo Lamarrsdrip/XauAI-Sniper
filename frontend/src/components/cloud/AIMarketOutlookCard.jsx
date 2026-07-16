@@ -93,7 +93,14 @@ export default function AIMarketOutlookCard({ linked = true }) {
               <span className="font-mono text-[11px] text-white/40">{outlook.confidence_pct}% confidence</span>
             )}
           </div>
-          {dir !== "NO_VALID_OUTLOOK" && dir !== "NEUTRAL" && dir !== "RANGE" && (
+          {/* Audit fix: was excluding NO_VALID_OUTLOOK/NEUTRAL/RANGE only,
+              which INCLUDED TRANSITION -- inconsistent with the full page's
+              `isDirectional = dir === "BUY" || dir === "SELL"` guard. The
+              backend never actually emits TRANSITION today (dormant), but
+              if it ever did, zone/SL/TP would all be null for it and this
+              card -- unlike the page -- would have rendered a visibly
+              broken "Entry: – SL:" block. Aligned to the page's check. */}
+          {(dir === "BUY" || dir === "SELL") && (
             <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-white/45">
               <div>Entry: <span className="text-white/70">{outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</span></div>
               <div>SL: <span className="text-white/70">{outlook.suggested_sl}</span></div>
