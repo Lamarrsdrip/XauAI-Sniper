@@ -133,5 +133,9 @@ def test_outer_json_body_still_well_formed_with_market_thesis_appended():
     literal_pieces = re.findall(r'"((?:[^"\\]|\\.)*)"', body_block)
     fmt = "".join(literal_pieces).replace('\\"', '"')
     assert fmt.count("{") == fmt.count("}")
-    assert fmt.rstrip().endswith('"market_thesis":%s}')
+    # v6.24.14 appended "post_trade_state" after "market_thesis" (same
+    # pattern this field itself was added with) -- the object's final key
+    # moved, the object itself is still well-formed (brace-balance already
+    # asserted above).
+    assert fmt.rstrip().endswith('"market_thesis":%s,"post_trade_state":%s}')
     assert '"details":{' in fmt

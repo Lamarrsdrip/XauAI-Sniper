@@ -64,7 +64,10 @@ def test_campaign_close_wired_into_real_deal_out_handler_after_dtype_declared():
     # dType must be declared before XAU_CampaignRegisterClose references it
     ea = read(BACKEND_EA)
     dtype_decl = ea.index("ENUM_DEAL_TYPE dType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);")
-    register_close_call = ea.index("XAU_CampaignRegisterClose((dType == DEAL_TYPE_SELL) ? 1 : -1, profit);")
+    # v6.24.14 named the inline ternary as `closedDirection` (so the
+    # post-trade cooldown snapshot block right after can reuse the same
+    # value) -- the call site itself is otherwise unchanged.
+    register_close_call = ea.index("XAU_CampaignRegisterClose(closedDirection, profit);")
     assert dtype_decl < register_close_call
 
 
@@ -75,7 +78,10 @@ def test_close_registration_only_reached_after_partial_close_early_return():
     ea = read(BACKEND_EA)
     fn_start = ea.index("void OnTradeTransaction(")
     partial_guard = ea.index("if(stillOpen)", fn_start)
-    register_close_call = ea.index("XAU_CampaignRegisterClose((dType == DEAL_TYPE_SELL) ? 1 : -1, profit);")
+    # v6.24.14 named the inline ternary as `closedDirection` (so the
+    # post-trade cooldown snapshot block right after can reuse the same
+    # value) -- the call site itself is otherwise unchanged.
+    register_close_call = ea.index("XAU_CampaignRegisterClose(closedDirection, profit);")
     assert fn_start < partial_guard < register_close_call
 
 
@@ -98,8 +104,14 @@ def test_new_core_gated_by_campaign_already_active_check():
                 break
     assert end is not None, "unbalanced braces while scanning for function end"
     section = ea[start:end]
-    assert "XAU_CampaignRegisterAdd(signal, setupName);" in section
-    assert "XAU_CampaignOpenCore(signal, setupName" in section
+    # v6.24.13 moved this block from the primary-path call site into
+    # OpenTrade()'s own if(ok) block (see
+    # test_xau_v62413_campaign_registration_coverage_static.py) so every
+    # OpenTrade() caller -- not just the primary path -- registers
+    # correctly. The local variable at this new location is OpenTrade()'s
+    # own `funnelSetup`, not the caller's `setupName`.
+    assert "XAU_CampaignRegisterAdd(signal, funnelSetup);" in section
+    assert "XAU_CampaignOpenCore(signal, funnelSetup" in section
 
 
 def test_pyramid_add_registers_to_existing_campaign_not_a_new_one():
