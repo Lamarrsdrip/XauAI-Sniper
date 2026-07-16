@@ -1,6 +1,20 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
+//|   v6.24.17 - Indicator Recovery Patience Fix (CRITICAL)            |
+//|   24h Mac+VPS watchdog audit (2026-07-16) found EMA_FAST_HTF/H1    |
+//|   (InpContextTF) burning through the 30-attempt transient-4807     |
+//|   ceiling in under 2 seconds during fast-tick bursts, then falling |
+//|   through to a full 11-handle rebuild + 90s backoff + 12s warmup   |
+//|   cycle -- 246 times in one day on Mac alone (~7+ hours of zero    |
+//|   scanning). barsCalc was -1 on every failure, and every rebuild   |
+//|   eventually recovered anyway (1:1 with INDICATOR_RECOVERED),      |
+//|   proving the data was always reachable with a few more real       |
+//|   seconds, not a rebuild. Ceiling now also requires >=30 real      |
+//|   elapsed seconds since this label's failure streak began before   |
+//|   ever leaving the no-rebuild transient bucket, so a burst of fast |
+//|   ticks alone can no longer trigger a destructive rebuild cycle.   |
+//+------------------------------------------------------------------+
 //|   v6.24.16 - Readiness Engine Audit Fixes (CRITICAL)               |
 //|   Multi-model audit found v6.24.15 was misreading the opposite     |
 //|   direction's own trading-validity state as "old side still        |
@@ -1825,8 +1839,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.256"
-#property description "XAUUSD AI Sniper v6.24.13 - Campaign Registration Coverage Fix"
+#property version   "6.257"
+#property description "XAUUSD AI Sniper v6.24.17 - Indicator Recovery Patience Fix (CRITICAL)"
 #property description "Campaign tracking now covers re-entry/force-open, not just fresh entry."
 #property description "Approved normal entries use full configured risk or fail closed; no"
 #property description "margin/aggregate/broker-limit/lot-step silent downscaling. Real broker"
@@ -1840,9 +1854,9 @@
 #define XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0
 #define XAU_ENTRY_DELAY_SAFE_DEFAULT_SEC     150.0
 
-#define XAUAI_EA_VERSION "v6.24.16"
-#define XAUAI_EA_VERSION_NUM "6.24.16"
-#define XAUAI_BUILD_HASH "v62416-readiness-engine-audit-fixes-20260716"
+#define XAUAI_EA_VERSION "v6.24.17"
+#define XAUAI_EA_VERSION_NUM "6.24.17"
+#define XAUAI_BUILD_HASH "v62417-indicator-recovery-patience-fix-20260716"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -5893,6 +5907,22 @@ datetime   g_recoveryLastStatusAt = 0;   // throttle for the "still recovering" 
 string     g_indFailLabels[20];
 int        g_indFailCounts[20];
 datetime   g_indFailAtTimes[20];
+// v6.24.17: when THIS streak of consecutive failures (for this label) began --
+// separate from g_indFailAtTimes, which is the MOST RECENT failure. Needed to
+// enforce a real-world-seconds patience floor (see transientCeilingFails use
+// below): live evidence from 2026-07-16 (both Mac and VPS) showed EMA_FAST_HTF
+// (the InpContextTF/H1 indicators) bursting through the 30-attempt count
+// ceiling in well under 2 seconds during fast-tick periods, then falling
+// through to a full 11-handle IndicatorRelease+recreate + 90s backoff + 12s
+// warmup cycle -- 246 times in one day on Mac alone, costing an estimated 7+
+// hours of zero scanning. barsCalc was -1 on every single failure (never
+// partial), and every one of those 246 rebuilds DID eventually recover
+// (INDICATOR_RECOVERED count == rebuild count, 1:1) -- proving the data was
+// always obtainable given a few more real seconds, and that the rebuild
+// itself wasn't what fixed it (a count ceiling exhausted by tick-burst speed
+// alone, unrelated to actual elapsed recalculation time, was firing before
+// the indicator recalculation thread had a realistic chance to catch up).
+datetime   g_indFailStreakStart[20];
 int        g_indFailLabelCount = 0;
 
 int XAU_IndicatorFailStreakIndex(string label, bool createIfMissing)
@@ -5904,18 +5934,19 @@ int XAU_IndicatorFailStreakIndex(string label, bool createIfMissing)
    g_indFailLabels[idx] = label;
    g_indFailCounts[idx] = 0;
    g_indFailAtTimes[idx] = 0;
+   g_indFailStreakStart[idx] = 0;
    return idx;
 }
 
 void XAU_ResetIndicatorFailStreak(string label)
 {
    int idx = XAU_IndicatorFailStreakIndex(label, false);
-   if(idx >= 0) g_indFailCounts[idx] = 0;
+   if(idx >= 0) { g_indFailCounts[idx] = 0; g_indFailStreakStart[idx] = 0; }
 }
 
 void XAU_ResetAllIndicatorFailStreaks()
 {
-   for(int i = 0; i < g_indFailLabelCount; i++) g_indFailCounts[i] = 0;
+   for(int i = 0; i < g_indFailLabelCount; i++) { g_indFailCounts[i] = 0; g_indFailStreakStart[i] = 0; }
 }
 
 // v6.4.6 audit: pending exit attribution for broker-side SL/TP fills.
@@ -9644,7 +9675,11 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
    if(failIdx >= 0)
    {
       if(g_indFailAtTimes[failIdx] > 0 && (TimeCurrent() - g_indFailAtTimes[failIdx]) > indicatorFailDecaySec)
+      {
          g_indFailCounts[failIdx] = 0;
+         g_indFailStreakStart[failIdx] = 0;
+      }
+      if(g_indFailCounts[failIdx] == 0) g_indFailStreakStart[failIdx] = TimeCurrent();
       g_indFailCounts[failIdx]++;
       g_indFailAtTimes[failIdx] = TimeCurrent();
    }
@@ -9687,11 +9722,30 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
    // fall through to the normal rebuild path instead -- bounds the worst case
    // if a real, non-transient problem ever happens to also present as 4807.
    int transientCeilingFails = MathMax(20, InpIndicatorReloadFails * 10);
-   bool transientRetryOnly = (!staleHandle && err == 4807 && labelFailCount < transientCeilingFails);
+   // v6.24.17 FIX: runtime-proven from the live 2026-07-16 journal on BOTH the
+   // Mac and VPS terminals -- during bursty tick periods this attempt-COUNT
+   // ceiling was exhausted in well under 2 seconds of real time (dozens of
+   // ticks arriving sub-second), long before the indicator recalculation
+   // thread had a realistic chance to catch up on a non-chart timeframe
+   // (H1/InpContextTF). That falls through to a full 11-handle
+   // IndicatorRelease+recreate + 90s backoff + 12s warmup cycle -- which
+   // itself does not address a timing race, and fired 246 times in one day on
+   // Mac alone (~7+ hours of zero scanning). Every one of those 246 rebuilds
+   // DID eventually recover (INDICATOR_RECOVERED count == rebuild count,
+   // 1:1), proving the data was always obtainable with a little more real
+   // wall-clock patience -- the count ceiling alone was firing on tick-burst
+   // speed, not on genuine elapsed recalculation time. Require BOTH the
+   // attempt count AND a real minimum elapsed-seconds floor since this
+   // streak began before ever leaving the transient/no-rebuild bucket.
+   int minTransientPatienceSec = 30;
+   int streakSecs = (failIdx >= 0 && g_indFailStreakStart[failIdx] > 0)
+                    ? (int)(TimeCurrent() - g_indFailStreakStart[failIdx]) : 0;
+   bool transientRetryOnly = (!staleHandle && err == 4807 &&
+                              (labelFailCount < transientCeilingFails || streakSecs < minTransientPatienceSec));
    if(transientRetryOnly)
    {
-      g_lastSkipReason = StringFormat("INDICATOR_TRANSIENT_4807: %s got %d/%d (known MT5 new-bar-boundary quirk, retrying next tick, no rebuild, %d/%d before ceiling)",
-                                      label, got, count, labelFailCount, transientCeilingFails);
+      g_lastSkipReason = StringFormat("INDICATOR_TRANSIENT_4807: %s got %d/%d (known MT5 new-bar-boundary quirk, retrying next tick, no rebuild, %d/%d before ceiling, %ds/%ds streak age)",
+                                      label, got, count, labelFailCount, transientCeilingFails, streakSecs, minTransientPatienceSec);
       return false;
    }
    if(staleHandle || (InpIndicatorReloadFails > 0 && labelFailCount >= InpIndicatorReloadFails))

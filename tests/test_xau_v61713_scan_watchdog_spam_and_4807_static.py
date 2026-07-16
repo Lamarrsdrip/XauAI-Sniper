@@ -62,7 +62,17 @@ def test_header_banner_matches_property_version_for_website_display():
 def test_err_4807_no_longer_triggers_a_rebuild():
     ea = read(BACKEND_EA)
     fn = body(ea, "bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &target[], string label)")
-    assert "bool transientRetryOnly = (!staleHandle && err == 4807 && labelFailCount < transientCeilingFails);" in fn
+    # v6.24.17: the count-only condition this test used to pin down was itself
+    # the bug -- a fixed attempt-count ceiling exhausted in <2s during bursty
+    # ticks, long before the indicator recalculation thread could catch up.
+    # The transient bucket now also requires a real minimum elapsed-seconds
+    # floor (see test_xau_v62417_indicator_recovery_patience_static.py), but
+    # the property this test cares about -- err==4807 alone does not fall
+    # through to a rebuild -- still holds.
+    assert (
+        "bool transientRetryOnly = (!staleHandle && err == 4807 &&\n"
+        "                              (labelFailCount < transientCeilingFails || streakSecs < minTransientPatienceSec));"
+    ) in fn
     assert "INDICATOR_TRANSIENT_4807" in fn
     # The transient path must return false (retry next tick) WITHOUT reaching
     # the rebuild block.
