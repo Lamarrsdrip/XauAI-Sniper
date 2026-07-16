@@ -85,8 +85,16 @@ def test_transient_4807_path_has_a_safety_ceiling():
     # Must not unconditionally trust "it's always transient" forever -- if a
     # genuinely broken handle happens to also present as 4807, this must
     # eventually escalate to the normal rebuild path.
+    #
+    # v6.24.19: the count ceiling was raised to a pure runaway-loop backstop
+    # (500) and demoted from a release-gating condition to a secondary `&&`
+    # clause -- see test_xau_v62417_indicator_recovery_patience_static.py::
+    # test_transient_bucket_requires_real_elapsed_seconds_not_just_attempt_count
+    # for why using it as a release gate (via `||`) was itself the bug. The
+    # safety-ceiling property this test checks still holds: some finite count
+    # still bounds the bucket.
     ea = read(BACKEND_EA)
-    assert "int transientCeilingFails = MathMax(20, InpIndicatorReloadFails * 10);" in ea
+    assert "int transientCeilingFails = 500;" in ea
     assert "labelFailCount < transientCeilingFails" in ea
 
 

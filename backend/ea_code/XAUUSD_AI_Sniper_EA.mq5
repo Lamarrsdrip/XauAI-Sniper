@@ -1,6 +1,26 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
+//|   v6.24.18 - Exhaustion Counter, Pyramid Basket Exit, EMA_FAST_H1  |
+//|   Root-Cause Fix (2026-07-16)                                      |
+//|   Live Mac+VPS journal evidence (post v6.24.17 deploy) proved      |
+//|   >99% of scan aborts were EMA_FAST_H1 specifically -- the H1 EMA  |
+//|   pair never had the SERIES_SYNCHRONIZED pre-check the H4/         |
+//|   InpContextTF pair got in v6.24.17. Mirrored that exact fix onto  |
+//|   H1 (own bounded last-known-good state, own log tags). Also adds |
+//|   the real TRADE_FAMILY_EXHAUSTION_COUNTER (temporary opposite-    |
+//|   direction trade on 80-100% exhaustion, gated through a canonical |
+//|   two-sided decision function so a strong continuing trend can    |
+//|   never be mistaken for exhaustion), the canonical Pyramid Basket  |
+//|   Exit (campaigns with >=2 positions use one combined-P/L floor,   |
+//|   armed at 0.50R, ratchet-only, restart-persisted -- with a fixed  |
+//|   basket-to-single-conversion bug that used to clear an armed      |
+//|   floor even when conversion failed), a database-persisted        |
+//|   self-initializing VAPID keypair for push notifications (no      |
+//|   manual environment-variable setup required), and the hourly      |
+//|   Outlook slot-skipping fix (explicit account+symbol+UTC-hour slot |
+//|   key, wall-clock-aligned scheduler loop).                         |
+//+------------------------------------------------------------------+
 //|   v6.24.17 - Indicator Recovery Patience Fix (CRITICAL)            |
 //|   24h Mac+VPS watchdog audit (2026-07-16) found EMA_FAST_HTF/H1    |
 //|   (InpContextTF) burning through the 30-attempt transient-4807     |
@@ -1839,8 +1859,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.257"
-#property description "XAUUSD AI Sniper v6.24.17 - Indicator Recovery Patience Fix (CRITICAL)"
+#property version   "6.258"
+#property description "XAUUSD AI Sniper v6.24.18 - Exhaustion Counter, Pyramid Basket Exit, EMA_FAST_H1 Root-Cause Fix"
 #property description "Campaign tracking now covers re-entry/force-open, not just fresh entry."
 #property description "Approved normal entries use full configured risk or fail closed; no"
 #property description "margin/aggregate/broker-limit/lot-step silent downscaling. Real broker"
@@ -1897,9 +1917,9 @@
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.24.17"
-#define XAUAI_EA_VERSION_NUM "6.24.17"
-#define XAUAI_BUILD_HASH "v62418-exhaustion-counter-basket-exit-h1-syncfix-20260716"
+#define XAUAI_EA_VERSION "v6.24.19"
+#define XAUAI_EA_VERSION_NUM "6.24.19"
+#define XAUAI_BUILD_HASH "v62419-transient-4807-time-authority-fix-20260716"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -4735,6 +4755,14 @@ struct XAU_CampaignState
 
 XAU_CampaignState g_campaign[2];   // [0]=BUY campaign, [1]=SELL campaign
 long              g_nextCampaignId = 1;
+// v6.24.18 owner directive -- dedicated (not shared with unrelated indicator
+// logging) rate-limit state for basket-to-single pending-conversion
+// journaling, indexed by campaign slot. Prevents a per-tick retry loop from
+// flooding the journal while a conversion or a floor-breach close remains
+// unresolved across many ticks.
+datetime g_basketPendingFirstLoggedAt[2] = {0, 0};
+datetime g_basketPendingSummaryLoggedAt[2] = {0, 0};
+datetime g_basketFloorBreachLoggedAt[2] = {0, 0};
 
 // v6.24.14 — universal five-minute post-trade execution cooldown +
 // exhausted-old-direction re-entry ban. Snapshots the state of whichever
@@ -4911,6 +4939,13 @@ string XAU_TryConvertBasketToSingleFloor(int direction, int slot, ulong &survivi
    if(svIdx < 0)
       svIdx = XAU_RExit_EnsureIdx(survivingPosId, survivingTicketOut, direction == 1,
                                   posInfo.PriceOpen(), posInfo.StopLoss(), posInfo.Volume(), false);
+   // v6.24.18 owner directive -- do not assume XAU_RExit_EnsureIdx() always
+   // returns a valid, in-bounds index. Guard explicitly before the first
+   // g_rExit[svIdx] access; a failure here must behave exactly like any
+   // other unresolved conversion (floor stays armed, pending, retried),
+   // never an out-of-bounds array access.
+   if(svIdx < 0 || svIdx >= ArraySize(g_rExit))
+      return "SURVIVING_TICKET_STATE_ALLOCATION_FAILED";
    if(g_rExit[svIdx].cumulativeOriginalRiskUSD <= 0.0)
       return "SURVIVING_TICKET_RISK_UNKNOWN";
 
@@ -10095,27 +10130,34 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
    // bucket for an unreasonably long time, stop trusting that assumption and
    // fall through to the normal rebuild path instead -- bounds the worst case
    // if a real, non-transient problem ever happens to also present as 4807.
-   int transientCeilingFails = MathMax(20, InpIndicatorReloadFails * 10);
-   // v6.24.17 FIX: runtime-proven from the live 2026-07-16 journal on BOTH the
-   // Mac and VPS terminals -- during bursty tick periods this attempt-COUNT
-   // ceiling was exhausted in well under 2 seconds of real time (dozens of
-   // ticks arriving sub-second), long before the indicator recalculation
-   // thread had a realistic chance to catch up on a non-chart timeframe
-   // (H1/InpContextTF). That falls through to a full 11-handle
-   // IndicatorRelease+recreate + 90s backoff + 12s warmup cycle -- which
-   // itself does not address a timing race, and fired 246 times in one day on
-   // Mac alone (~7+ hours of zero scanning). Every one of those 246 rebuilds
-   // DID eventually recover (INDICATOR_RECOVERED count == rebuild count,
-   // 1:1), proving the data was always obtainable with a little more real
-   // wall-clock patience -- the count ceiling alone was firing on tick-burst
-   // speed, not on genuine elapsed recalculation time. Require BOTH the
-   // attempt count AND a real minimum elapsed-seconds floor since this
-   // streak began before ever leaving the transient/no-rebuild bucket.
+   //
+   // v6.24.19 FIX: live evidence 2026-07-16 (Mac local terminal, EMA_FAST_HTF)
+   // proved the v6.24.17 "require BOTH count AND time" condition below --
+   // implemented as (count < ceiling OR streakSecs < patience), i.e. stay in
+   // the no-rebuild bucket until BOTH are exceeded -- has the opposite bug
+   // from the one it fixed. Requiring BOTH to leave means whichever measure
+   // is SLOWER to satisfy gates every exit. That's fine when failures are
+   // bursty (v6.24.17's original case: count blows past its ceiling in under
+   // a second, so real elapsed time is always the slower/gating measure, and
+   // the wait is still bounded by minTransientPatienceSec). It is NOT fine
+   // when failures are sparse: EMA_FAST_HTF failed roughly once per ~15s, so
+   // streakSecs blew past minTransientPatienceSec (30s) almost immediately,
+   // but labelFailCount only reached 23-26 after 375+ real seconds (12.5x
+   // over patience) because a slow trickle takes proportionally long to
+   // accumulate transientCeilingFails attempts -- with no upper bound, since
+   // the count clause alone kept satisfying the OR indefinitely. Elapsed
+   // time since the streak began is the only measure that reflects "how long
+   // has this genuinely been broken" independent of tick/failure rate, so it
+   // alone is now the gate. labelFailCount is kept only as an extreme
+   // backstop against a runaway loop where TimeCurrent() itself somehow
+   // never advances -- not as a normal-path release condition.
+   int transientCeilingFails = 500;
    int minTransientPatienceSec = 30;
    int streakSecs = (failIdx >= 0 && g_indFailStreakStart[failIdx] > 0)
                     ? (int)(TimeCurrent() - g_indFailStreakStart[failIdx]) : 0;
    bool transientRetryOnly = (!staleHandle && err == 4807 &&
-                              (labelFailCount < transientCeilingFails || streakSecs < minTransientPatienceSec));
+                              streakSecs < minTransientPatienceSec &&
+                              labelFailCount < transientCeilingFails);
    if(transientRetryOnly)
    {
       g_lastSkipReason = StringFormat("INDICATOR_TRANSIENT_4807: %s got %d/%d (known MT5 new-bar-boundary quirk, retrying next tick, no rebuild, %d/%d before ceiling, %ds/%ds streak age)",
@@ -22528,23 +22570,53 @@ void XAU_UpdateCampaignBasketState(int direction)
          // position's own combined P/L (a single ticket here, so this IS
          // the campaign's whole floating P/L) so protection never lapses
          // while conversion remains unresolved.
+         //
+         // v6.24.18 owner directive -- rate-limited journaling, not a
+         // per-tick flood: first failure logged immediately (state-change
+         // visibility), then only a periodic health summary every 60s
+         // afterward, using throttle state DEDICATED to this path (never
+         // shared with unrelated indicator-failure logging, which would
+         // otherwise suppress or be suppressed by it).
+         bool firstPendingLog = (g_basketPendingFirstLoggedAt[slot] == 0);
+         if(firstPendingLog)
+            g_basketPendingFirstLoggedAt[slot] = TimeCurrent();
+
          if(survivingTicket != 0 && posInfo.SelectByTicket(survivingTicket))
          {
             double survivorPL = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
             if(survivorPL <= g_campaign[slot].basketProtectedFloorMoney)
             {
-               PrintFormat("BASKET_TO_SINGLE_PENDING_FLOOR_BREACH | %s ticket=%I64u survivorPL=%.2f protectedFloorMoney=%.2f retryCount=%d action=CLOSE_SURVIVOR",
-                           XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
-                           survivorPL, g_campaign[slot].basketProtectedFloorMoney, g_campaign[slot].basketConversionRetryCount);
+               if(TimeCurrent() - g_basketFloorBreachLoggedAt[slot] >= 30)
+               {
+                  g_basketFloorBreachLoggedAt[slot] = TimeCurrent();
+                  PrintFormat("BASKET_TO_SINGLE_PENDING_FLOOR_BREACH | %s ticket=%I64u survivorPL=%.2f protectedFloorMoney=%.2f retryCount=%d action=CLOSE_SURVIVOR",
+                              XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
+                              survivorPL, g_campaign[slot].basketProtectedFloorMoney, g_campaign[slot].basketConversionRetryCount);
+               }
+               // The close request itself is idempotent per-ticket (see
+               // XAU_CloseCampaignBasketAtProtectedFloor/XAU_RExit_RequestClose's
+               // own closeState guard) -- safe to call every tick without
+               // sending duplicate broker requests; only the LOG above is throttled.
                XAU_CloseCampaignBasketAtProtectedFloor(direction, "BASKET_TO_SINGLE_PENDING_FLOOR_BREACH");
             }
          }
-         if(TimeCurrent() - g_lastIndicatorFailLog >= 60)
-            PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f retryCount=%d action=BASKET_FLOOR_KEPT_ARMED_PENDING_RETRY",
+         if(firstPendingLog || TimeCurrent() - g_basketPendingSummaryLoggedAt[slot] >= 60)
+         {
+            g_basketPendingSummaryLoggedAt[slot] = TimeCurrent();
+            PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f retryCount=%d pendingSec=%d action=BASKET_FLOOR_KEPT_ARMED_PENDING_RETRY",
                         conversionStatus, XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
-                        g_campaign[slot].basketProtectedFloorMoney, g_campaign[slot].basketConversionRetryCount);
+                        g_campaign[slot].basketProtectedFloorMoney, g_campaign[slot].basketConversionRetryCount,
+                        (int)(TimeCurrent() - g_basketPendingFirstLoggedAt[slot]));
+         }
       }
       return;
+   }
+   else
+   {
+      // Conversion resolved (or was never pending) -- reset this slot's
+      // throttle state so a FUTURE pending episode logs its own first-seen
+      // line immediately rather than inheriting a stale timestamp.
+      g_basketPendingFirstLoggedAt[slot] = 0;
    }
 
    if(!g_campaign[slot].active || g_campaign[slot].activePositionCount < 2)

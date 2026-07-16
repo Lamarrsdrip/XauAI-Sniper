@@ -57,11 +57,24 @@ def test_streak_start_stamped_on_first_failure_of_a_new_streak():
 
 
 def test_transient_bucket_requires_real_elapsed_seconds_not_just_attempt_count():
+    # v6.24.19 SUPERSEDES the v6.24.17 "require both to leave" (OR-to-stay)
+    # condition this test originally asserted. Live evidence 2026-07-16 (Mac,
+    # EMA_FAST_HTF) proved that condition has the opposite bug from the one
+    # it fixed: requiring BOTH count>=ceiling AND streakSecs>=patience before
+    # leaving the bucket means whichever measure is slower to satisfy gates
+    # every exit -- unbounded when failures are sparse (count crawls, so it
+    # may never reach the ceiling no matter how much real time passes: 375s+
+    # observed live, 12.5x over the 30s patience floor, with no rebuild ever
+    # triggered). Elapsed time alone is now the release gate; count is kept
+    # only as a runaway-loop backstop (500), not a release condition -- see
+    # test_xau_v61713_scan_watchdog_spam_and_4807_static.py::
+    # test_transient_4807_path_has_a_safety_ceiling.
     ea = read(BACKEND_EA)
     assert "int minTransientPatienceSec = 30;" in ea
     assert (
         "bool transientRetryOnly = (!staleHandle && err == 4807 &&\n"
-        "                              (labelFailCount < transientCeilingFails || streakSecs < minTransientPatienceSec));"
+        "                              streakSecs < minTransientPatienceSec &&\n"
+        "                              labelFailCount < transientCeilingFails);"
     ) in ea
 
 
