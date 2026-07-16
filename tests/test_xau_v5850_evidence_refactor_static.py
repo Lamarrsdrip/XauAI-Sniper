@@ -50,7 +50,12 @@ def test_two_losses_trigger_five_hour_cooldown_without_profit_guardian_dependenc
     assert re.search(r"InpTwoLossCooldownMin\s*=\s*300", EA)
     assert "RegisterClosedTradeCooldown(" in EA
     tx_start = EA.index("void OnTradeTransaction")
-    tx_body = EA[tx_start : tx_start + 10000]
+    # v6.24.14 widened this window: the new post-trade cooldown snapshot
+    # block (~30 lines) sits earlier in OnTradeTransaction and pushed this
+    # call further from the function start (~12.4k chars in), not a
+    # behavior change -- the call itself is unmoved relative to the rest of
+    # the close-handling logic around it.
+    tx_body = EA[tx_start : tx_start + 14000]
     assert "RegisterClosedTradeCooldown(wasWin, wasLoss, profit);" in tx_body
 
     block_start = EA.index("string PG_BlockReason")
