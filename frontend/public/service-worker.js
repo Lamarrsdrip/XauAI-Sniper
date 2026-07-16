@@ -86,3 +86,50 @@ self.addEventListener('message', (event) => {
     caches.keys().then(names => names.forEach(n => caches.delete(n)));
   }
 });
+
+/**
+ * AI Market Outlook — Web Push notifications.
+ * ------------------------------------------------------------
+ * Standard Web Push (RFC 8030) with self-generated VAPID keys on the
+ * backend (backend/notifications.py) -- no Firebase/APNs/external account.
+ * This listener only DISPLAYS a notification and handles the tap-to-open
+ * deep link; it never touches trading state (there is no trading state
+ * reachable from a service worker at all -- this is presentation only).
+ * ------------------------------------------------------------
+ */
+self.addEventListener('push', (event) => {
+  let payload = { title: 'XAU AI Sniper', body: 'New outlook update', deep_link: '/ai-market-outlook' };
+  try {
+    if (event.data) payload = { ...payload, ...event.data.json() };
+  } catch (_) {
+    if (event.data) payload.body = event.data.text();
+  }
+  const options = {
+    body: payload.body,
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    tag: payload.outlook_id ? `outlook-${payload.outlook_id}` : undefined,
+    data: { deep_link: payload.deep_link || '/ai-market-outlook', outlook_id: payload.outlook_id },
+    renotify: !!payload.outlook_id,
+  };
+  event.waitUntil(self.registration.showNotification(payload.title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const deepLink = (event.notification.data && event.notification.data.deep_link) || '/ai-market-outlook';
+  event.waitUntil(
+    (async () => {
+      const clientsList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clientsList) {
+        if ('focus' in client) {
+          client.postMessage({ type: 'OUTLOOK_NOTIFICATION_TAPPED', deep_link: deepLink });
+          await client.focus();
+          if ('navigate' in client) client.navigate(deepLink).catch(() => {});
+          return;
+        }
+      }
+      await self.clients.openWindow(deepLink);
+    })()
+  );
+});

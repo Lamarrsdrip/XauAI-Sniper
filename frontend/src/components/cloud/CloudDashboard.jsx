@@ -10,6 +10,7 @@ import {
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import AIThoughtFeed from "./AIThoughtFeed";
+import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import { API } from "@/lib/api";
 
 // ─── Axios ───────────────────────────────────────────────────────────────────
@@ -792,7 +793,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         <Empty title="Connect your license" body="Link your ASE license key once and live data from your MT5 account will stream here automatically." icon={KeyRound} />
       )}
 
-      <AIThoughtFeed linked={Boolean(licenseInfo.activation_key)} compact onOpenFull={()=>setActive("trading")} />
+      <AIMarketOutlookCard linked={Boolean(licenseInfo.activation_key)} />
 
       {/* Quick nav — 3 cards */}
       <div className="grid grid-cols-3 gap-3">

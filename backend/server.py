@@ -1837,6 +1837,33 @@ async def startup():
             await asyncio.sleep(60)
     asyncio.create_task(_decay_stale_workers())
 
+    # AI Market Outlook background loops -- advisory-only, see
+    # market_outlook.py's own module docstring for the strict-separation
+    # guarantee. Both loops are entirely independent of every other
+    # background task here; a failure in either never touches trading state.
+    async def _outlook_hourly_loop():
+        import market_outlook as _mo
+        while True:
+            try:
+                published = await _mo.hourly_generation_tick()
+                if published:
+                    logger.info(f"[outlook-hourly] published {published} outlook(s)")
+            except Exception as e:
+                logger.warning(f"[outlook-hourly] {e}")
+            await asyncio.sleep(3600)
+
+    async def _outlook_lifecycle_loop():
+        import market_outlook as _mo
+        while True:
+            try:
+                await _mo.track_outlook_lifecycle_tick()
+            except Exception as e:
+                logger.warning(f"[outlook-lifecycle] {e}")
+            await asyncio.sleep(60)
+
+    asyncio.create_task(_outlook_hourly_loop())
+    asyncio.create_task(_outlook_lifecycle_loop())
+
 ########################################
 # CLAUDE AI POSITION MANAGER (Active Trade Reasoning)
 ########################################
@@ -5023,6 +5050,15 @@ class BotActivityReq(BaseModel):
     broker_retcode: Optional[int] = None
     broker_error: Optional[int] = None
     pipeline_stage: Optional[str] = ""
+    # v6.24.17 (AI Market Outlook) — the EA has posted these three JSON
+    # objects since v6.24.11-15 (market_thesis, post_trade_state,
+    # entry_readiness) but this model had no fields to receive them, so
+    # Pydantic silently dropped them on every request. Adding them here is
+    # what actually unlocks real evidence for the outlook feature; nothing
+    # about the existing decision-feed/bot-status behavior changes.
+    market_thesis: Optional[Dict[str, Any]] = None
+    post_trade_state: Optional[Dict[str, Any]] = None
+    entry_readiness: Optional[Dict[str, Any]] = None
 
 # v6.9.0 — purpose-built payload for XAU_LogTradeThesisStatus's cloud post.
 # Kept separate from BotActivityReq's generic event schema since this is a
@@ -5615,6 +5651,7 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
         "position_direction", "candidate_allowed", "final_execution_allowed",
         "final_decision", "final_blocker", "open_trade_called", "trade_buy_called",
         "trade_sell_called", "broker_retcode", "broker_error", "pipeline_stage",
+        "market_thesis", "post_trade_state", "entry_readiness",
     ):
         value = getattr(req, field, None)
         if value is not None and value != "":
@@ -6890,6 +6927,16 @@ async def cloud_agent_heartbeat(req: WorkerHeartbeatReq, request: Request):
 # ===================================================================
 # END XauAi CLOUD
 # ===================================================================
+
+# ===================================================================
+# AI MARKET OUTLOOK — advisory-only, strictly separate from live trading.
+# Wired here (not at top-of-file) so market_outlook_routes.build_router()
+# can bind to this module's own get_cloud_user/db/LLM_KEY/etc. without any
+# circular import — by this point in the file every symbol it needs
+# already exists.
+# ===================================================================
+import market_outlook_routes as _mo_routes
+api_router.include_router(_mo_routes.build_router())
 
 app.include_router(api_router)
 

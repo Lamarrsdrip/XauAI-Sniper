@@ -17,6 +17,7 @@ import Footer from "@/components/Footer";
 import CloudLanding from "@/components/cloud/CloudLanding";
 import { CloudSignup, CloudLogin } from "@/components/cloud/CloudAuth";
 import CloudDashboard from "@/components/cloud/CloudDashboard";
+import AIMarketOutlookPage from "@/pages/AIMarketOutlookPage";
 import { API } from "@/lib/api";
 
 function MainDashboard() {
@@ -86,6 +87,7 @@ function App() {
         <Route path="/command/signup" element={<CloudSignup />} />
         <Route path="/command/login" element={<CloudLogin />} />
         <Route path="/command/dashboard" element={<CloudDashboard />} />
+        <Route path="/ai-market-outlook" element={<AIMarketOutlookPage />} />
         <Route path="/cloud" element={<Navigate to="/command" replace />} />
         <Route path="/cloud/signup" element={<Navigate to="/command/signup" replace />} />
         <Route path="/cloud/login" element={<Navigate to="/command/login" replace />} />
