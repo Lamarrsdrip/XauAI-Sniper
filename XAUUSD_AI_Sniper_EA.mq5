@@ -1854,6 +1854,49 @@
 #define XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC 180.0
 #define XAU_ENTRY_DELAY_SAFE_DEFAULT_SEC     150.0
 
+// v6.24.17 owner directive 2026-07-16: the original structural SL DISTANCE
+// (never the price, never account risk %) is widened by exactly this factor,
+// applied exactly once, in OpenTrade() right after the raw structural SL is
+// finalized. 1R for every downstream R-based system (TP staging, breakeven,
+// trailing, profit floor, missed-entry 0.30R measurement, Outlook R values,
+// replay stats) is this widened distance, not the raw one. Declared this
+// early so every call site (OpenTrade, the transition engine's remainingRewardR,
+// the missed-entry measurement, the Outlook thesis snapshot) references the
+// same single constant instead of each hardcoding 1.20 separately.
+#define XAU_SL_WIDENING_FACTOR 1.20
+
+// ====================================================================
+// v6.24.17 PER-TRADE-FAMILY RISK POLICY MATRIX (owner directive 2026-07-16)
+// ====================================================================
+// PRIMARY NORMAL ENTRY (CheckForEntry -> OpenTrade, isManualOverride=false):
+//   target risk = InpNormalRiskPct (10%); SL = raw structural distance x
+//   XAU_SL_WIDENING_FACTOR (1.20). Full policy, no exceptions.
+// NORMAL RE-ENTRY (CheckReEntryOpportunity -> OpenTrade):
+//   same OpenTrade() call, same policy as PRIMARY -- 10% + widened SL.
+// POST-NEWS NORMAL ENTRY (after the 5-minute blanket gate expires):
+//   not a separate code path -- resumes through the same PRIMARY/RE_ENTRY
+//   OpenTrade() call, so it is the same 10% + widened SL policy, no
+//   separate news risk reduction of any kind.
+// MANUAL_OPEN_NOW (XAU_TryManualOpenNow -> OpenTrade, isManualOverride=true):
+//   same OpenTrade() call -- 10% + widened SL, computed fresh from current
+//   broker bid/ask/ATR at the moment the owner's command is processed.
+// FORCE_OPEN_BLOCKED_CANDIDATE (XAU_TryForceOpenTrade -> OpenTrade,
+//   isManualOverride=true): same OpenTrade() call -- 10% + widened SL.
+// COUNTER-EXCURSION (XAU_TryCounterExcursionEntry): DOES NOT call
+//   OpenTrade() and is DELIBERATELY excluded from this policy -- it has its
+//   own distinct, owner-approved risk architecture (InpCounterRiskFractionOfNormal,
+//   a configured FRACTION of the normal bot's dollar risk, and its own ATR-
+//   based SL via InpCounterExcursionSLATRMult, unrelated to InpSLMultiplier).
+//   Not widened by XAU_SL_WIDENING_FACTOR. Its own R values are self-
+//   consistent (computed from its own real final SL distance throughout).
+// PYRAMID ADDS (CheckPyramidOpportunity): DOES NOT call OpenTrade() and
+//   uses its own existing addition-sizing/total-exposure architecture,
+//   unchanged and unaffected by this policy -- an add is never treated as
+//   an unrestricted second 10%-of-equity position.
+// MISSED-SIGNAL RECOVERY: routes through RE_ENTRY (OpenTrade()) -- same
+//   10% + widened-SL policy as PRIMARY, no hidden multiplier.
+// ====================================================================
+
 #define XAUAI_EA_VERSION "v6.24.17"
 #define XAUAI_EA_VERSION_NUM "6.24.17"
 #define XAUAI_BUILD_HASH "v62417-indicator-recovery-patience-fix-20260716"
@@ -2340,7 +2383,11 @@ input double InpMaxLots        = 50.0;     // Hard max lots; final equity/margin
 // forensic audit of real trade data showed the account-size lot floor (below) was
 // already silently producing ~12.5-30% risk per trade while this cap claimed 5% --
 // two systems disagreeing about the true limit. 15% is now the single, honest ceiling.
-input double InpMaxRiskPctEquity = 15.0;
+// v6.24.17 owner directive 2026-07-16: normal approved-trade risk target
+// changed from 15% to 10%. This is the hard equity-% backstop and must stay
+// equal to InpNormalRiskPct/InpReducedRiskFloorPct below (see the
+// CONFIG-AGREEMENT ASSERTION at OnInit, which refuses to start otherwise).
+input double InpMaxRiskPctEquity = 10.0;
 input double InpMinAccountLotFloor  = 0.10;   // v6.17.17-v6.18.0: legacy input, no longer used to override sizing (see InpNormalRiskPct). Retained for back-compat/telemetry only.
 input double InpAccountLotFloorPer1000 = 0.08333; // v6.17.17-v6.18.0: legacy input, no longer used to override sizing -- the unified risk-%% system (InpNormalRiskPct/InpReducedRiskFloorPct) now produces equivalent nominal lots at realistic SL distances without an unconditional post-hoc override. Retained for back-compat/telemetry only.
 input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
@@ -2350,8 +2397,8 @@ input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN 
 // pyramid add is still margin-projection-checked (see EffectiveMaxPyramidAdds).
 input double InpMaxAggregateRiskPct = 35.0;
 input group "=== ACCOUNT-RELATIVE GROWTH SIZING (v6.18.0 — one risk-%% authority for every account size) ==="
-input double InpNormalRiskPct       = 15.0; // Uniform target risk-per-trade, ALL account sizes, for a fully-qualified (A/A+, clean evidence) trade. Evidence: real growth-era trades averaged ~15.5% risk/trade; owner explicit direction 2026-07-09: "cap all acc to start from 15%".
-input double InpReducedRiskFloorPct = 15.0;  // v6.21.2 FULL-RISK BINARY MODE: set equal to InpNormalRiskPct on purpose -- there is no more quality-band reduction, so floor==ceiling collapses the band clamp to a no-op. A trade is either approved at the full 15% or blocked; nothing sizes in between.
+input double InpNormalRiskPct       = 10.0; // v6.24.17 owner directive 2026-07-16: normal approved-trade risk target changed 15%->10% (supersedes the 2026-07-09 "cap all acc to start from 15%" directive). Uniform target risk-per-trade, ALL account sizes, for a fully-qualified (A/A+, clean evidence) trade. No opinion-based subsystem (grade/AI confidence/losses/drawdown fear/session/news/recovery mode/personality/memory/committee) may reduce a valid trade below this -- only hard broker/account reality (margin, volume step, stops, symbol/market state) may prevent full execution, and must do so with an explicit FULL_10_PERCENT_RISK_UNAVAILABLE reason, never a silent downscale.
+input double InpReducedRiskFloorPct = 10.0;  // v6.21.2 FULL-RISK BINARY MODE: set equal to InpNormalRiskPct on purpose -- there is no more quality-band reduction, so floor==ceiling collapses the band clamp to a no-op. A trade is either approved at the full 10% (v6.24.17: was 15%) or blocked; nothing sizes in between.
 input double InpDailyLossLimit = 3.0;      // v6.4.4: Adaptive Recovery Mode trigger — when daily loss >= this %, EA switches to A/A+ only + 50% size. Set 0 to disable. EA never pauses.
 input group "=== MARGIN VERIFICATION (v6.24.1 — real broker margin, not an arbitrary ceiling) ==="
 input double InpMarginReservePct         = 10.0;  // v6.24.1: small emergency buffer kept out of the margin check, as a % of current free margin. NOT a risk-sizing rule — SL-based risk (InpNormalRiskPct) and margin usage are independent. Replaces the old flat "must be <=50% of free margin" block, which rejected valid 15%-risk trades the broker could actually support.
@@ -3177,6 +3224,21 @@ double bufBBUpper[], bufBBLower[], bufBBMid[];
 double bufEMAFast_H1[], bufEMASlow_H1[], bufRSI_M15[];
 double bufEMAFast_H4[], bufEMASlow_H4[];  // v4.8.0
 double bufStochK[], bufStochD[];
+
+// v6.24.17 -- bounded last-known-good cache + liveness state specifically for
+// the HTF EMA pair (InpContextTF, default M30), the one indicator pair
+// runtime-proven to fail far more often than the generic "transient 4807"
+// patience logic assumes. See the CheckForEntry call sites for how this is
+// used: HEALTHY (fresh copy succeeded) / DEGRADED_USING_LAST_GOOD (bounded
+// reuse) / TEMPORARY_NOT_READY (no last-good yet, or series not synchronized)
+// / STALE_UNUSABLE (last-good exists but exceeded the bound -- scan aborts
+// rather than trade on it) / REBUILDING (handled by the existing shared
+// recovery path, unchanged).
+#define XAU_HTF_EMA_MAX_STALE_SEC 120
+datetime g_htfEmaLastGoodAt = 0;
+double   g_htfEmaFastLastGood = 0.0;
+double   g_htfEmaSlowLastGood = 0.0;
+string   g_htfIndicatorState = "HEALTHY";
 
 double initialBalance, dailyStartEquity, weeklyStartEquity;
 bool   g_propFirmMode = false;
@@ -9551,8 +9613,17 @@ string XAU_ScanStateKey(string s)
    return key;
 }
 
+// v6.24.17 -- Command Center scan-health metrics (owner-requested). Counts
+// every SCAN_COMPLETED_*/SCAN_ABORTED state transition (not log lines, which
+// XAU_LogScanState already dedups/resurfaces) so a real completion rate is
+// computable and visible, distinct from the raw per-tick 4807 spam volume.
+int g_scanCompletedCount = 0;
+int g_scanAbortedCount = 0;
+
 void XAU_LogScanState(string state)
 {
+   if(StringFind(state, "SCAN_COMPLETED") == 0) g_scanCompletedCount++;
+   else if(StringFind(state, "SCAN_ABORTED") == 0) g_scanAbortedCount++;
    static datetime lastResurfaceAt = 0;
    static string lastScanStateKey = "";
    string key = XAU_ScanStateKey(state);
@@ -10516,7 +10587,7 @@ bool CheckReEntryOpportunity()
    g_reentryState.sourceSnapshotGeneration=g_latestDecisionSnapshot.generation;
    if(!XAU_ReentrySnapshotStillCurrent(sharedWhy))
    { XAU_InvalidateReentryState("REENTRY_BLOCKED_STALE_SNAPSHOT",sharedWhy); return false; }
-   if(!XAU_FinalEntryArbiter("RE_ENTRY",true,true,true,true,true,true,sharedWhy)) return true;
+   if(!XAU_FinalEntryArbiter("RE_ENTRY",dir,true,true,true,true,true,true,sharedWhy)) return true;
 
    lastSignalDir=dir;
    lastSignalSignature=g_latestDecisionSnapshot.signature;
@@ -13929,7 +14000,7 @@ void CheckPyramidOpportunity()
    if(!XAU_TimingAuthorityAllows(dir,"PYRAMID",atr,authorityWhy)) return;
    if(!XAU_NewsAuthorityAllows(authorityWhy)) return;
    if(!XAU_ReentryPyramidAuthority(dir, "PYRAMID", authorityWhy)) return;
-   if(!XAU_FinalEntryArbiter("PYRAMID",true,true,true,true,true,true,authorityWhy)) return;
+   if(!XAU_FinalEntryArbiter("PYRAMID",dir,true,true,true,true,true,true,authorityWhy)) return;
 
    double minLot=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MIN);
    double maxLot=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MAX);
@@ -15311,8 +15382,81 @@ void OnTick()
    if(!CopyEntryBuffer(hBBUpper, 0, 0, 12, bufBBMid, "BB_MID")) { XAU_LogScanAborted(g_lastSkipReason); return; }
    if(!CopyEntryBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1, "EMA_FAST_H1")) { XAU_LogScanAborted(g_lastSkipReason); return; }
    if(!CopyEntryBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1, "EMA_SLOW_H1")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hEMAFast_H4, 0, 0, 3, bufEMAFast_H4, "EMA_FAST_HTF")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hEMASlow_H4, 0, 0, 3, bufEMASlow_H4, "EMA_SLOW_HTF")) { XAU_LogScanAborted(g_lastSkipReason); return; }
+   // v6.24.17 root-cause investigation: EMA_FAST_HTF/EMA_SLOW_HTF (InpContextTF,
+   // default M30) accounted for ~40-46% of all log lines on live Mac/VPS
+   // journals, with a ~2% scan completion rate -- far more often than a
+   // genuine "new-bar-boundary quirk" should ever fire on a 30-minute
+   // timeframe. This file NEVER checked SeriesInfoInteger(...,SERIES_SYNCHRONIZED)
+   // before relying on this handle -- a real, distinct MT5 condition ("the
+   // terminal's local history for this symbol+timeframe is not yet fully
+   // synced with the broker") that presents identically (err=4807,
+   // BarsCalculated()==-1) to a transient recalculation lag, but CANNOT be
+   // fixed by rebuilding the indicator handle (the calculation has nothing
+   // to calculate from yet) -- only by waiting for history sync to finish.
+   // A less-frequently-charted timeframe like M30 (no reason for the
+   // terminal to keep it hot unless a chart/EA reads it) is exactly the
+   // case most exposed to this. Distinguishing it here means: (a) it is
+   // never miscounted toward the transient-4807 failure streak that
+   // eventually triggers a pointless full handle rebuild, and (b) the
+   // Command Center gets an honest, distinct reason instead of a repeat of
+   // the same generic 4807 text.
+   if(!SeriesInfoInteger(Symbol(), InpContextTF, SERIES_SYNCHRONIZED))
+   {
+      g_lastSkipReason = StringFormat("INDICATOR_HTF_SERIES_NOT_SYNCHRONIZED: %s history not yet synced with broker (bars=%d) -- waiting for sync, not a handle problem",
+                                      EnumToString(InpContextTF), Bars(Symbol(), InpContextTF));
+      if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
+      {
+         Print("SCAN BUFFER WAIT: ", g_lastSkipReason);
+         g_lastIndicatorFailLog = TimeCurrent();
+      }
+      XAU_LogScanAborted(g_lastSkipReason);
+      return;
+   }
+   // v6.24.17: bounded last-known-good fallback for the HTF EMA pair
+   // specifically -- the one indicator confirmed by live evidence to fail far
+   // more often than the "brief bar-boundary quirk" the generic recovery
+   // logic assumes. A 30-minute-timeframe EMA moves slowly; using a value up
+   // to XAU_HTF_EMA_MAX_STALE_SEC old (well under one M30 bar) to let THIS
+   // tick's scan complete is safer than aborting the entire scan (wasting
+   // the other 12 already-successfully-read indicators) or, worse, treating
+   // every such failure as grounds for a destructive handle rebuild. Staleness
+   // is strictly bounded and always logged/visible -- never silently reused
+   // past the limit, never blocks a genuine rebuild for an actually-stale handle.
+   bool htfEmaOk = CopyEntryBuffer(hEMAFast_H4, 0, 0, 3, bufEMAFast_H4, "EMA_FAST_HTF") &&
+                   CopyEntryBuffer(hEMASlow_H4, 0, 0, 3, bufEMASlow_H4, "EMA_SLOW_HTF");
+   if(htfEmaOk)
+   {
+      g_htfEmaFastLastGood = bufEMAFast_H4[1];
+      g_htfEmaSlowLastGood = bufEMASlow_H4[1];
+      g_htfEmaLastGoodAt = TimeCurrent();
+      g_htfIndicatorState = "HEALTHY";
+   }
+   else
+   {
+      string htfFailReason = g_lastSkipReason;
+      int htfStaleSec = (g_htfEmaLastGoodAt > 0) ? (int)(TimeCurrent() - g_htfEmaLastGoodAt) : -1;
+      bool haveBoundedLastGood = (g_htfEmaLastGoodAt > 0 && htfStaleSec <= XAU_HTF_EMA_MAX_STALE_SEC);
+      if(haveBoundedLastGood)
+      {
+         ArrayResize(bufEMAFast_H4, 3);
+         ArrayResize(bufEMASlow_H4, 3);
+         bufEMAFast_H4[0] = g_htfEmaFastLastGood; bufEMAFast_H4[1] = g_htfEmaFastLastGood; bufEMAFast_H4[2] = g_htfEmaFastLastGood;
+         bufEMASlow_H4[0] = g_htfEmaSlowLastGood; bufEMASlow_H4[1] = g_htfEmaSlowLastGood; bufEMASlow_H4[2] = g_htfEmaSlowLastGood;
+         g_htfIndicatorState = "DEGRADED_USING_LAST_GOOD";
+         if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
+         {
+            PrintFormat("INDICATOR_HTF_DEGRADED_USING_LAST_GOOD | reason=%s ageSec=%d maxAllowedSec=%d",
+                        htfFailReason, htfStaleSec, XAU_HTF_EMA_MAX_STALE_SEC);
+            g_lastIndicatorFailLog = TimeCurrent();
+         }
+      }
+      else
+      {
+         g_htfIndicatorState = (htfStaleSec > XAU_HTF_EMA_MAX_STALE_SEC) ? "STALE_UNUSABLE" : "TEMPORARY_NOT_READY";
+         XAU_LogScanAborted(htfFailReason);
+         return;
+      }
+   }
    if(!CopyEntryBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15, "RSI_M15")) { XAU_LogScanAborted(g_lastSkipReason); return; }
    if(!CopyEntryBuffer(hStoch, 0, 0, 3, bufStochK, "STOCH_K")) { XAU_LogScanAborted(g_lastSkipReason); return; }
    if(!CopyEntryBuffer(hStoch, 1, 0, 3, bufStochD, "STOCH_D")) { XAU_LogScanAborted(g_lastSkipReason); return; }
@@ -15716,7 +15860,7 @@ void OnTick()
    }
 
    string finalArbiterWhy = "";
-   if(!XAU_FinalEntryArbiter("PRIMARY",true,true,true,true,true,true,finalArbiterWhy))
+   if(!XAU_FinalEntryArbiter("PRIMARY",signal,true,true,true,true,true,true,finalArbiterWhy))
       return;
 
    // AI is advisory evidence only.  A zero confidence means precisely the
@@ -16875,6 +17019,27 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                   (InpUseStructuralSL && slSrc == SL_M5_SWING_INVALIDATION) ? "Y" : "N");
    }
 
+   // v6.24.17 owner directive 2026-07-16: widen the ORIGINAL structural SL
+   // DISTANCE (not the account risk %, not the SL price multiplied
+   // directly) by exactly XAU_SL_WIDENING_FACTOR (1.20x), applied exactly
+   // once, here -- before lot sizing and before OpenTrade's own R-exit
+   // capture (XAU_RExit_EnsureIdx reads the ACTUAL broker-confirmed SL after
+   // fill, never a cached ATR distance -- see its own comment -- so every
+   // downstream R-based system (TP staging, breakeven, trailing, profit
+   // floor, MFE/MAE, Counter-Excursion display of the ORIGINAL thesis, replay
+   // stats) automatically inherits 1R = finalSLDistance by construction,
+   // with no separate recalibration needed anywhere else). Lot sizing below
+   // already derives from `slDist` via RiskPerLotForDistance(slDist), so
+   // widening it here is also what makes "recalculate lot after widening"
+   // true by construction rather than a second, separately-maintained step.
+   double rawStructuralSL = sl;
+   double rawSLDistance = slDist;
+   slDist = rawSLDistance * XAU_SL_WIDENING_FACTOR;
+   sl = NormalizeDouble(signal == 1 ? price - slDist : price + slDist, digits);
+   tp = NormalizeDouble(signal == 1 ? price + slDist * tpM : price - slDist * tpM, digits);
+   PrintFormat("SL_WIDENING_APPLIED | signal=%s rawStructuralSL=%.2f rawSLDistance=%.2f wideningFactor=%.2f finalSL=%.2f finalSLDistance=%.2f",
+               signal==1?"BUY":"SELL", rawStructuralSL, rawSLDistance, XAU_SL_WIDENING_FACTOR, sl, slDist);
+
    // Reward/room quality was decided by the shared freshness authority;
    // Growth Guard has no second execution veto inside OpenTrade.
 
@@ -17253,10 +17418,14 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       double actualRiskPctAtMaxLot = (balance > 0.0 && maxMarginLots >= minLot)
          ? (maxMarginLots * slDollarPerLotRaw / balance * 100.0) : 0.0;
 
+      // v6.24.17: was a hardcoded "15%%" literal -- silently wrong the moment
+      // InpNormalRiskPct changed (here: 15->10), always claiming the OLD
+      // percentage regardless of actual configured risk. Now reads the real
+      // configured target so this reason text can never drift from reality.
       string marginReport = StringFormat(
-         "INSUFFICIENT_BROKER_MARGIN: requested 15%%-risk lot %.4f needs margin $%.2f, only $%.2f available "
+         "FULL_%.0f_PERCENT_RISK_UNAVAILABLE: requested %.2f%%-risk lot %.4f needs margin $%.2f, only $%.2f available "
          "(freeMargin=$%.2f, reserve=$%.2f=%.1f%%). Max broker-margin-supported lot=%.4f (actual risk %.3f%% of balance).",
-         desiredLots, marginNeeded, marginAvailableForTrade, freeMargin, marginReserve, InpMarginReservePct,
+         InpNormalRiskPct, InpNormalRiskPct, desiredLots, marginNeeded, marginAvailableForTrade, freeMargin, marginReserve, InpMarginReservePct,
          maxMarginLots, actualRiskPctAtMaxLot);
       Print(marginReport);
 
@@ -17566,6 +17735,19 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       price, sl, slDist, slDollarPerLotRaw, rawLots,
       minLot, maxLot, lotStep, marginNeeded, freeMargin,
       lots, lotTrace_reductionSummary);
+
+   // v6.24.17 owner-requested RISK_GEOMETRY line -- reuses the exact same
+   // variables NORMAL_ENTRY_AUDIT just printed (never a second, independently
+   // recomputed lot/risk figure -- that would risk the two lines disagreeing,
+   // exactly the "two brains" failure mode this file's audits keep finding
+   // and fixing elsewhere).
+   PrintFormat(
+      "RISK_GEOMETRY | targetRiskPct=%.2f | rawSLDistance=%.2f | finalSLDistance=%.2f | "
+      "wideningFactor=%.2f | rawLot=%.4f | normalizedLot=%.4f | targetMoneyRisk=%.2f | "
+      "actualMoneyRisk=%.2f | actualRiskPct=%.3f | requiredMargin=%.2f",
+      InpNormalRiskPct, rawSLDistance, slDist, XAU_SL_WIDENING_FACTOR,
+      rawLots, lots, riskAmount, actualRiskUSD,
+      (balance > 0.0 ? actualRiskUSD / balance * 100.0 : 0.0), marginNeeded);
 
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
          " Price=", DoubleToString(price, digits),
@@ -20816,6 +20998,129 @@ bool XAU_FindRecentProtectedExit(int direction, double &outOriginalEntry, double
    return found;
 }
 
+// ===========================================================================
+// v6.24.17 URGENT FIX -- order #2970912954 forensic root cause:
+// XAU_ApplyTransitionPositionAuthority() (below) independently tightened this
+// primary SELL's SL FIVE times (17:56:47-17:57:25) using its own ad-hoc
+// `floorR = peakR * 0.35` formula, gated only on `d.exhaustionProbability >=
+// 70.0` (a MACRO/campaign-level exhaustion reading, already >=70 from the
+// very first tick post-entry per the live journal, unrelated to THIS trade's
+// own P&L journey) and `peakR >= 0.10` -- a threshold ten times more
+// aggressive than this file's OWN, already-correct, already-persisted
+// R_EXIT_MANAGER profit-guarantee system three sections below (which
+// correctly arms at InpRProtectTrigger=0.30R). Two independently-tightening
+// authorities on the same position, racing each other, with the more
+// aggressive/wrong one winning by firing first -- exactly the "two brains"
+// failure mode this file's own audits keep finding elsewhere. The position
+// was stopped out at 4007.516 (~0.71 price move, ~0.04R) while gold
+// continued toward ~3996 afterward.
+//
+// Owner's new canonical policy for PRIMARY/RE_ENTRY/pyramid-merged trades
+// (Counter-Excursion is explicitly excluded -- separate magic number, never
+// reaches this loop, its own distinct 0.3R-1R target design untouched):
+//   MAIN policy (TRADE_HEALTHY / TRADE_PAUSING_NORMALLY):
+//     peakR < 0.50  -> NO floor at all; the original (already 1.20x-widened,
+//                      see XAU_SL_WIDENING_FACTOR) structural SL is preserved
+//                      untouched. The trade must have room to develop.
+//     peakR >= 0.50 -> floorR = max(0.35, peakR * 0.70), permanent, ratchet-
+//                      only from here on.
+//   STRUGGLING fallback (TRADE_STRUGGLING only -- requires real, multi-
+//   factor evidence the move is objectively failing, never one weak candle
+//   or mere elapsed time):
+//     peakR < 0.30        -> NO floor (same as healthy).
+//     0.30 <= peakR < 0.35 -> arm at the existing flat InpRGuaranteedFloor (0.10R).
+//     0.35 <= peakR < 0.50 -> floorR = max(existingFloorR, peakR - InpRAdaptiveTrailOffset)
+//                              (0.35R->0.20R, 0.40R->0.25R, 0.45R->0.30R, per owner's own examples).
+//     peakR >= 0.50        -> converges onto the SAME MAIN 0.50R/70% formula.
+// This reuses (never duplicates) the existing, already-correct, already-
+// persisted/restart-safe/ratchet-only g_rExit[idx].guaranteedFloorR/
+// guaranteedFloorDesiredSL/guaranteedFloorGeometryBlocked machinery below --
+// only WHEN it arms and WHAT floor value it computes changes; the broker-
+// facing modify/breach-protection mechanics are untouched.
+// ===========================================================================
+enum ENUM_XAU_TRADE_HEALTH { TRADE_HEALTHY, TRADE_PAUSING_NORMALLY, TRADE_STRUGGLING, TRADE_INVALIDATED };
+
+string XAU_TradeHealthName(ENUM_XAU_TRADE_HEALTH h)
+{
+   switch(h)
+   {
+      case TRADE_HEALTHY:          return "HEALTHY";
+      case TRADE_PAUSING_NORMALLY: return "PAUSING_NORMALLY";
+      case TRADE_STRUGGLING:       return "STRUGGLING";
+      case TRADE_INVALIDATED:      return "INVALIDATED";
+   }
+   return "UNKNOWN";
+}
+
+// Objective, multi-factor struggling classifier. Never fires from one weak
+// candle, elapsed time, a single retracement, or a solo exhaustion reading --
+// requires the peakR precondition PLUS a real combination of opposing
+// evidence, matching the owner's explicit "must be evidence, not fear" rule.
+ENUM_XAU_TRADE_HEALTH XAU_ClassifyTradeHealth(int direction, double currentR, double peakR,
+                                             const XAU_AdaptiveTransitionDecision &td, string &why)
+{
+   bool structureInvalidated = (td.lifecycle == OPPOSITE_DIRECTION_CONFIRMED && direction != td.dominantDirection);
+   if(structureInvalidated)
+   {
+      why = "structure objectively invalidated (opposite direction confirmed)";
+      return TRADE_INVALIDATED;
+   }
+
+   // Preconditions before "struggling" can even be considered: the trade must
+   // have reached at least 0.30R (owner's explicit floor for the fallback
+   // path) AND have since given back a meaningful share of that peak.
+   bool reachedMeaningfulProfit = (peakR >= 0.30);
+   bool retracedSignificantly   = (peakR - currentR) >= 0.20 * MathMax(peakR, 0.30);
+
+   int strugglingVotes = 0;
+   if(td.exhaustionProbability >= 70.0) strugglingVotes++;          // momentum collapse / repeated failure to extend
+   if(td.reversalProbability   >= 55.0) strugglingVotes++;          // adverse/opposite pressure building
+   if(td.oppositeDisplacement)          strugglingVotes++;          // real opposite displacement observed
+   if(td.remainingRewardR < 1.0)        strugglingVotes++;          // remaining reward room collapsing
+   if(retracedSignificantly)            strugglingVotes++;          // price returning deeply toward entry after profit
+
+   if(reachedMeaningfulProfit && strugglingVotes >= 3)
+   {
+      why = StringFormat("peakR=%.2f>=0.30 with %d/5 objective struggling factors (exhaustion=%.0f reversal=%.0f oppositeDisp=%s remainingRoomR=%.2f retraced=%s)",
+                         peakR, strugglingVotes, td.exhaustionProbability, td.reversalProbability,
+                         td.oppositeDisplacement?"Y":"N", td.remainingRewardR, retracedSignificantly?"Y":"N");
+      return TRADE_STRUGGLING;
+   }
+
+   if(retracedSignificantly || td.exhaustionProbability >= 60.0)
+   {
+      why = "short consolidation/normal retracement, structure intact, no confirmed opposite displacement";
+      return TRADE_PAUSING_NORMALLY;
+   }
+
+   why = "direction structure intact, no material opposing evidence";
+   return TRADE_HEALTHY;
+}
+
+// The one canonical primary-trade profit-protection floor. Returns the
+// desired floor in R (0.0 = no floor / preserve structural SL) and a named
+// reason. Never called for Counter-Excursion (separate magic/family, never
+// reaches XAU_RExitCoreLoop) or pyramid-only sizing decisions (those keep
+// their own existing exposure architecture; this only governs the SHARED
+// position's SL floor once it exists in g_rExit).
+double XAU_ComputePrimaryExitFloor(double peakR, double existingFloorR, ENUM_XAU_TRADE_HEALTH health, string &reason)
+{
+   if(peakR >= 0.50)
+   {
+      reason = "MAIN_050_70PCT";
+      return MathMax(0.35, peakR * 0.70);
+   }
+   if(health == TRADE_STRUGGLING)
+   {
+      if(peakR < 0.30) { reason = "STRUGGLING_BELOW_030_NO_FLOOR"; return 0.0; }
+      if(peakR < 0.35) { reason = "STRUGGLING_FALLBACK_ARMED"; return MathMax(existingFloorR, InpRGuaranteedFloor); }
+      reason = "STRUGGLING_FALLBACK";
+      return MathMax(existingFloorR, peakR - InpRAdaptiveTrailOffset);
+   }
+   reason = "MAIN_BELOW_050_NO_FLOOR";
+   return 0.0; // TRADE_HEALTHY or TRADE_PAUSING_NORMALLY below 0.50R -- let the trade breathe
+}
+
 //+------------------------------------------------------------------+
 //| Single ownership authority. Every legacy/competing system that    |
 //| must defer to the R-based exit manager checks THIS, and only      |
@@ -21399,25 +21704,39 @@ bool XAU_ApplyTransitionPositionAuthority(int idx, ulong ticket, bool isBuy,
    if(InpAdaptiveTransitionMode!=ADAPTIVE_TRANSITION_ACTIVE || !InpTransitionActiveExitAuthority || !oldDirection)
       return false;
 
-   if(action==TRANSITION_EXIT_PROFITABLE)
-      return XAU_RExit_RequestClose(idx,ticket,"TRANSITION_EXIT_PROFITABLE");
-   if(action==TRANSITION_EXIT_CONTROLLED)
-      return XAU_RExit_RequestClose(idx,ticket,"TRANSITION_EXIT_CONTROLLED");
+   // v6.24.17 URGENT FIX -- root cause of order #2970912954's premature exit
+   // (5 SL tightenings, 17:56:47-17:57:25, closed at ~0.04R while gold kept
+   // moving in the trade's favor toward ~3996 afterward). This branch used to
+   // call SafeModifySL directly with its own ad-hoc `peakR*0.35` floor at
+   // peakR>=0.10 -- a second, uncoordinated SL-tightening authority racing
+   // XAU_RExitCoreLoop's own (correct, already-persisted) profit-guarantee
+   // system a few hundred lines below, and winning by firing first, every
+   // tick, before that system's own Stage-0/arm logic ever runs (this
+   // function is called at the very top of XAU_RExitCoreLoop's per-position
+   // loop). Per owner directive: "No legacy subsystem may move the stop
+   // closer than the canonical R floor permits" -- XAU_ComputePrimaryExitFloor()
+   // (called from XAU_RExitCoreLoop) is now the ONLY authority that may
+   // tighten a primary trade's SL. This function still computes and logs its
+   // exhaustion/opposing-evidence read (it remains one of the INPUTS
+   // XAU_ClassifyTradeHealth() reads via g_transitionDecision), it just no
+   // longer acts on it independently.
+   if(action==TRANSITION_TIGHTEN_PROTECTION && TimeCurrent()-g_rExit[idx].lastTelemetryLog>=30)
+      PrintFormat("PRIMARY_EXIT_LEGACY_TRAIL_SUPPRESSED ticket=%I64u reason=TRANSITION_TIGHTEN_PROTECTION_now_evidence_only exhaustion=%.0f peakR=%.3f (see XAU_ComputePrimaryExitFloor for the actual floor)",
+                  ticket, d.exhaustionProbability, peakR);
 
-   if(action==TRANSITION_TIGHTEN_PROTECTION && profit>0.0 && peakR>=0.10)
+   // EXIT_PROFITABLE/EXIT_CONTROLLED are full-close actions, not tightening --
+   // kept, but now gated on the SAME objective trade-health classifier
+   // XAU_RExitCoreLoop uses, so a healthy, merely-early trade cannot be
+   // closed out from under the main 0.50R/70% policy by this secondary path.
+   if(action==TRANSITION_EXIT_PROFITABLE || action==TRANSITION_EXIT_CONTROLLED)
    {
-      double floorR=MathMax(0.02,peakR*0.35);
-      double dist=floorR*g_rExit[idx].originalStopDistance;
-      double targetSL=isBuy?NormalizeDouble(g_rExit[idx].originalEntryPrice+dist,digits):
-                            NormalizeDouble(g_rExit[idx].originalEntryPrice-dist,digits);
-      bool sane=isBuy?(targetSL<curPrice-buffer):(targetSL>curPrice+buffer);
-      bool improves=isBuy?(targetSL>curSL):(targetSL<curSL || curSL==0.0);
-      if(sane && improves && SafeModifySL(ticket,targetSL,curTP,isBuy,curPrice,"TRANSITION_TIGHTEN_PROTECTION"))
-      {
-         g_rExit[idx].lastProtectedSL=targetSL;
-         PrintFormat("TRANSITION_POSITION_ACTION ticket=%I64u action=TIGHTEN_PROTECTION exhaustion=%.0f peakR=%.3f protectedFloorR=%.3f newSL=%s",
-                     ticket,d.exhaustionProbability,peakR,floorR,DoubleToString(targetSL,digits));
-      }
+      string healthWhy="";
+      ENUM_XAU_TRADE_HEALTH health=XAU_ClassifyTradeHealth(posDir,currentR,peakR,d,healthWhy);
+      if(health!=TRADE_STRUGGLING && health!=TRADE_INVALIDATED)
+         return false;
+      if(action==TRANSITION_EXIT_PROFITABLE)
+         return XAU_RExit_RequestClose(idx,ticket,"TRANSITION_EXIT_PROFITABLE");
+      return XAU_RExit_RequestClose(idx,ticket,"TRANSITION_EXIT_CONTROLLED");
    }
    return false;
 }
@@ -21538,41 +21857,56 @@ void XAU_RExitCoreLoop()
          }
       }
 
-      // ---- Stage 0: below protect trigger -- let the trade work. ----
-      if(peakR < InpRProtectTrigger && currentR < InpRProtectTrigger)
+      // v6.24.17 owner directive -- ONE canonical primary-exit floor authority.
+      // Replaces the old flat InpRProtectTrigger(0.30R)-for-everyone arming
+      // with a trade-health-aware policy: healthy/pausing trades get NO floor
+      // at all before 0.50R (let the trade breathe); only an objectively
+      // STRUGGLING trade uses the old 0.30/0.35R staged fallback early. Both
+      // converge on max(0.35, peakR*0.70) from 0.50R onward. See
+      // XAU_ComputePrimaryExitFloor's own header comment for the full policy
+      // and the #2970912954 incident it was written to fix.
+      int primaryDir = isBuy ? 1 : -1;
+      XAU_AdaptiveTransitionDecision healthTd = XAU_AdaptiveMarketTransitionEngine();
+      string healthWhy = "";
+      ENUM_XAU_TRADE_HEALTH tradeHealth = XAU_ClassifyTradeHealth(primaryDir, currentR, peakR, healthTd, healthWhy);
+      string floorReason = "";
+      double desiredFloorR = XAU_ComputePrimaryExitFloor(peakR, g_rExit[idx].guaranteedFloorR, tradeHealth, floorReason);
+      string activePolicy = (peakR >= 0.50) ? "MAIN_050_70PCT" : (tradeHealth == TRADE_STRUGGLING ? "STRUGGLING_FALLBACK" : "MAIN_LETTING_BREATHE");
+
+      if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 60)
       {
-         if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 60)
-         {
-            g_rExit[idx].lastTelemetryLog = TimeCurrent();
-            PrintFormat("R_EXIT_MANAGER R_EXIT_CORE_MANAGEMENT_ACTIVE ticket=%I64u direction=%s riskUSD=%.2f currentR=%.3f stage=HOLD",
-                        ticket, dirStr, riskUSD, currentR);
-         }
+         g_rExit[idx].lastTelemetryLog = TimeCurrent();
+         PrintFormat("PRIMARY_EXIT_STATE | ticket=%I64u family=PRIMARY currentR=%.3f peakR=%.3f tradeHealth=%s structuralSL=%.5f protectedFloorR=%.3f activePolicy=%s finalAction=%s",
+                     ticket, currentR, peakR, XAU_TradeHealthName(tradeHealth), g_rExit[idx].originalStopLoss,
+                     desiredFloorR, activePolicy, desiredFloorR <= 0.0 ? "LETTING_TRADE_BREATHE" : "PROFIT_FLOOR_RATCHETING");
+      }
+
+      // ---- Stage 0: no floor computed yet -- preserve the original
+      //      (already 1.20x-widened) structural SL untouched. ----
+      if(desiredFloorR <= 0.0)
+      {
+         PrintFormat("PRIMARY_EXIT_STRUCTURAL_SL_PRESERVED ticket=%I64u peakR=%.3f tradeHealth=%s reason=%s",
+                     ticket, peakR, XAU_TradeHealthName(tradeHealth), floorReason);
          continue;
       }
 
-      // ---- PROFIT GUARANTEE (owner rule 2026-07-13): once peakR or currentR
-      //      reaches InpRProtectTrigger (0.30R), permanently arm. From this
-      //      point on the trade can never legitimately finish at the original
-      //      SL -- the floor only ever moves up. Flat InpRGuaranteedFloor
-      //      (0.10R) until InpRAdaptiveTrailStart (0.35R), then the adaptive
-      //      formula max(floor, currentR-InpRAdaptiveTrailOffset, floor) takes
-      //      over, ratchet-only. Replaces the old fixed 0.3R lock and the old
-      //      one-shot 0.5R bank-or-run decision with one continuous mechanism. ----
-      if(!g_rExit[idx].profitGuaranteeArmed)
+      bool justArmed = !g_rExit[idx].profitGuaranteeArmed;
+      if(justArmed)
       {
          g_rExit[idx].profitGuaranteeArmed = true;
-         g_rExit[idx].guaranteedFloorR = InpRGuaranteedFloor;
          g_rExit[idx].stageReached = R_STAGE_RUNNING; // keeps the RUN_TO_1R structure/momentum health check active from here on
-         PrintFormat("R_PROFIT_GUARANTEE_ARMED ticket=%I64u peakR=%.3f currentR=%.3f guaranteedFloorR=%.2f desiredSL=pending brokerSL=%s geometryBlocked=false",
-                     ticket, peakR, currentR, g_rExit[idx].guaranteedFloorR, DoubleToString(curSL, digits));
       }
+      double priorFloorR = g_rExit[idx].guaranteedFloorR;
+      g_rExit[idx].guaranteedFloorR = MathMax(g_rExit[idx].guaranteedFloorR, desiredFloorR); // ratchet-only, never decreases
+      if(justArmed)
+         PrintFormat("PRIMARY_EXIT_FLOOR_ARMED ticket=%I64u peakR=%.3f currentR=%.3f protectedFloorR=%.3f tradeHealth=%s reason=%s",
+                     ticket, peakR, currentR, g_rExit[idx].guaranteedFloorR, XAU_TradeHealthName(tradeHealth), floorReason);
+      else if(g_rExit[idx].guaranteedFloorR > priorFloorR)
+         PrintFormat("PRIMARY_EXIT_FLOOR_RATCHETED ticket=%I64u peakR=%.3f currentR=%.3f priorFloorR=%.3f newFloorR=%.3f tradeHealth=%s reason=%s",
+                     ticket, peakR, currentR, priorFloorR, g_rExit[idx].guaranteedFloorR, XAU_TradeHealthName(tradeHealth), floorReason);
+
       if(g_rExit[idx].stageReached < R_STAGE_PROTECTED)
          g_rExit[idx].stageReached = R_STAGE_PROTECTED;
-
-      if(currentR >= InpRAdaptiveTrailStart)
-         g_rExit[idx].guaranteedFloorR = MathMax(g_rExit[idx].guaranteedFloorR, currentR - InpRAdaptiveTrailOffset);
-      // else: stays at whatever it already is (InpRGuaranteedFloor flat, or a
-      // higher value already ratcheted in on an earlier tick) -- never recomputed downward.
 
       double guaranteedLockDist = g_rExit[idx].guaranteedFloorR * g_rExit[idx].originalStopDistance;
       double guaranteedSL = isBuy ? NormalizeDouble(g_rExit[idx].originalEntryPrice + guaranteedLockDist, digits)
@@ -21581,14 +21915,29 @@ void XAU_RExitCoreLoop()
       bool floorSane = isBuy ? (guaranteedSL > g_rExit[idx].originalEntryPrice && guaranteedSL < curPrice - buffer)
                              : (guaranteedSL < g_rExit[idx].originalEntryPrice && guaranteedSL > curPrice + buffer);
       bool floorRatchet = isBuy ? (guaranteedSL > curSL) : (guaranteedSL < curSL || curSL == 0);
+      // v6.24.17 owner directive: do not spam PositionModify for a tiny
+      // improvement -- require at least 0.01R (in price terms) or the
+      // broker's own minimum meaningful tick distance, whichever is larger.
+      double minMeaningfulImprovement = MathMax(point * 50.0, g_rExit[idx].originalStopDistance * 0.01);
+      bool improvementMeaningful = (curSL == 0.0) || (MathAbs(guaranteedSL - curSL) >= minMeaningfulImprovement);
 
-      if(floorSane && floorRatchet && SafeModifySL(ticket, guaranteedSL, curTP, isBuy, curPrice, "R_PROFIT_GUARANTEE_TRAIL"))
+      if(floorSane && floorRatchet && !improvementMeaningful)
+      {
+         PrintFormat("R_EXIT_NO_CHANGE ticket=%I64u reason=improvement_below_threshold desiredSL=%s currentSL=%s minImprovement=%.5f",
+                     ticket, DoubleToString(guaranteedSL, digits), DoubleToString(curSL, digits), minMeaningfulImprovement);
+      }
+      else if(floorSane && floorRatchet && SafeModifySL(ticket, guaranteedSL, curTP, isBuy, curPrice, "PRIMARY_EXIT_FLOOR"))
       {
          g_rExit[idx].lastProtectedSL = guaranteedSL;
          g_rExit[idx].guaranteedFloorGeometryBlocked = false;
          curSL = guaranteedSL;
-         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentR=%.3f peakR=%.3f guaranteedFloorR=%.2f action=MOVE_SL newSL=%s",
+         PrintFormat("PRIMARY_EXIT_MODIFY_SENT ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentR=%.3f peakR=%.3f guaranteedFloorR=%.2f action=MOVE_SL newSL=%s",
                      ticket, dirStr, riskUSD, profit, currentR, peakR, g_rExit[idx].guaranteedFloorR, DoubleToString(guaranteedSL, digits));
+      }
+      else if(floorSane && floorRatchet)
+      {
+         PrintFormat("PRIMARY_EXIT_MODIFY_REJECTED ticket=%I64u desiredSL=%s currentSL=%s",
+                     ticket, DoubleToString(guaranteedSL, digits), DoubleToString(curSL, digits));
       }
       else if(!floorSane)
       {
@@ -21596,7 +21945,7 @@ void XAU_RExitCoreLoop()
          // SL yet -- do NOT abandon the guarantee. Keep the internal floor,
          // keep retrying next tick, and rely on the breach check below.
          g_rExit[idx].guaranteedFloorGeometryBlocked = true;
-         PrintFormat("R_PROFIT_GUARANTEE_ARMED ticket=%I64u peakR=%.3f currentR=%.3f guaranteedFloorR=%.2f desiredSL=%s brokerSL=%s geometryBlocked=true",
+         PrintFormat("PRIMARY_EXIT_MODIFY_REJECTED ticket=%I64u peakR=%.3f currentR=%.3f guaranteedFloorR=%.2f desiredSL=%s brokerSL=%s geometryBlocked=true",
                      ticket, peakR, currentR, g_rExit[idx].guaranteedFloorR, DoubleToString(guaranteedSL, digits), DoubleToString(curSL, digits));
       }
 
@@ -21606,7 +21955,7 @@ void XAU_RExitCoreLoop()
       // never silently let it ride down to the unprotected original SL.
       if(g_rExit[idx].guaranteedFloorGeometryBlocked && currentR < g_rExit[idx].guaranteedFloorR)
       {
-         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f guaranteedFloorR=%.2f action=CLOSE reason=R_PROFIT_GUARANTEE_FLOOR_BREACH (broker SL could not be placed before price crossed the internal floor)",
+         PrintFormat("PRIMARY_EXIT_CLOSED_BY_PROTECTED_SL ticket=%I64u direction=%s currentR=%.3f guaranteedFloorR=%.2f action=CLOSE reason=R_PROFIT_GUARANTEE_FLOOR_BREACH (broker SL could not be placed before price crossed the internal floor)",
                      ticket, dirStr, currentR, g_rExit[idx].guaranteedFloorR);
          XAU_RExit_RequestClose(idx, ticket, "R_PROFIT_GUARANTEE_FLOOR_BREACH");
          continue;
@@ -29704,17 +30053,67 @@ bool XAU_ReentryPyramidAuthority(int signal, string source, string &why)
    return true;
 }
 
-bool XAU_FinalEntryArbiter(string source, bool signalOK, bool structureOK,
+// v6.24.17 CRITICAL FIX -- runtime-proven: all three call sites of this
+// function (PRIMARY, RE_ENTRY, PYRAMID) passed hardcoded `true` literals for
+// every one of signalOK/structureOK/timingOK/freshnessOK/newsOK/stateOK, so
+// `aligned` could never be anything but true -- this "final authority" was a
+// vacuous rubber stamp with zero actual gating power, exactly the owner's
+// suspected failure mode ("arbiter allows without location/pressure
+// intelligence"). The real per-check gating already happens correctly
+// upstream (XAU_StructureAuthorityAllows, XAU_TimingAuthorityAllows,
+// XAU_FreshnessExtensionAuthority, XAU_NewsAuthorityAllows, XAU_SmartEntryCautionGate
+// all `return`/`return false` on failure before this line is ever reached) --
+// but the function meant to BE the final, provable convergence point of that
+// intelligence never actually looked at it. Now it does: it reads the same
+// live g_transitionDecision every other authority in this file reads, checks
+// one genuinely distinct fact upstream callers do NOT already check
+// (objective reward-room collapse, the same threshold Entry Readiness uses
+// for READINESS_EXPIRED) and a hard operational-state fact (remote stop),
+// and logs the full evidence picture (direction, structure, location,
+// pressure, exhaustion, opposite pressure, reward room, news, operational
+// state) so "why did the final authority allow this" is answerable from one
+// log line instead of inferred from the absence of an earlier block.
+bool XAU_FinalEntryArbiter(string source, int signal, bool signalOK, bool structureOK,
                            bool timingOK, bool freshnessOK, bool newsOK,
                            bool stateOK, string &why)
 {
-   bool aligned = signalOK && structureOK && timingOK && freshnessOK && newsOK && stateOK;
-   why = aligned ? "FINAL_ENTRY_ARBITER_ALLOW: all aligned authorities passed"
-                 : "FINAL_ENTRY_ARBITER_BLOCK: an upstream named authority failed";
-   PrintFormat("FINAL_ENTRY_ARBITER source=%s signal=%s structure=%s timing=%s freshness=%s news=%s state=%s decision=%s",
+   XAU_AdaptiveTransitionDecision td = g_transitionDecision;
+   double roomR = (signal == td.dominantDirection) ? td.remainingRewardR : td.oppositeRemainingRewardR;
+   bool rewardRoomCollapsed = (signal != 0 && roomR < 0.30);
+   bool operationalHalted = (!XAU_NoLimitTradingModeActive() && g_remoteStopTrading);
+
+   bool aligned = signalOK && structureOK && timingOK && freshnessOK && newsOK && stateOK &&
+                  !rewardRoomCollapsed && !operationalHalted;
+
+   string locationName  = XAU_LocationQualityName(XAU_BucketLocation(td));
+   string pressureName  = XAU_PressureStateName(XAU_BucketPressure(td));
+   string oppositeDirName = (signal == 1) ? "SELL" : (signal == -1) ? "BUY" : "NONE";
+   double oppositePressure = (signal == 1) ? td.sellConfidence : (signal == -1) ? td.buyConfidence : 0.0;
+
+   if(!aligned)
+   {
+      if(rewardRoomCollapsed)
+         why = StringFormat("FINAL_ENTRY_ARBITER_BLOCK: reward room objectively collapsed (roomR=%.2f < 0.30)", roomR);
+      else if(operationalHalted)
+         why = "FINAL_ENTRY_ARBITER_BLOCK: remote STOP_TRADING active";
+      else
+         why = "FINAL_ENTRY_ARBITER_BLOCK: an upstream named authority failed";
+   }
+   else
+      why = StringFormat("FINAL_ENTRY_ARBITER_ALLOW: direction=%s structure=PASS location=%s pressure=%s exhaustion=%.0f%% oppositePressure(%s)=%.0f%% rewardRoomR=%.2f news=PASS operational=PASS",
+                         signal==1?"BUY":signal==-1?"SELL":"NONE", locationName, pressureName,
+                         td.exhaustionProbability, oppositeDirName, oppositePressure, roomR);
+
+   PrintFormat("FINAL_ENTRY_ARBITER source=%s signal=%s structure=%s timing=%s freshness=%s news=%s state=%s "
+               "direction=%s location=%s pressure=%s exhaustion=%.0f%% oppositePressure(%s)=%.0f%% rewardRoomR=%.2f "
+               "rewardRoomCollapsed=%s operationalHalted=%s decision=%s",
                source,signalOK?"PASS":"FAIL",structureOK?"PASS":"FAIL",
                timingOK?"PASS":"FAIL",freshnessOK?"PASS":"FAIL",
-               newsOK?"PASS":"FAIL",stateOK?"PASS":"FAIL",aligned?"ALLOW":"BLOCK");
+               newsOK?"PASS":"FAIL",stateOK?"PASS":"FAIL",
+               signal==1?"BUY":signal==-1?"SELL":"NONE", locationName, pressureName,
+               td.exhaustionProbability, oppositeDirName, oppositePressure, roomR,
+               rewardRoomCollapsed?"Y":"N", operationalHalted?"Y":"N",
+               aligned?"ALLOW":"BLOCK");
    return aligned;
 }
 
@@ -29797,7 +30196,9 @@ bool XAU_FreshnessExtensionAuthority(int signal, string setupName, double setupS
    }
    double roomATR = signal > 0 ? MathMax(0.0, roomHigh - price) / atr
                                : MathMax(0.0, price - roomLow) / atr;
-   g_alignedCandidates[lane].remainingRewardR = roomATR / MathMax(0.50, InpSLMultiplier);
+   // v6.24.17: 1R = final widened SL distance (InpSLMultiplier * XAU_SL_WIDENING_FACTOR),
+   // matching the real distance OpenTrade() now sends -- not the raw pre-widening ATR multiple.
+   g_alignedCandidates[lane].remainingRewardR = roomATR / MathMax(0.50, InpSLMultiplier * XAU_SL_WIDENING_FACTOR);
    g_alignedCandidates[lane].objectiveReached =
       (g_alignedCandidates[lane].atrTravelled >= MathMax(InpXAU_MaxMissedMoveATR, 1.50) ||
        driveATR >= MathMax(InpXAU_MaxExtensionDriveATR, 1.50));
@@ -30056,9 +30457,10 @@ ENUM_XAU_SMART_ENTRY_CAUTION_DECISION XAU_SmartEntryCautionGate(
    // still-valid candidate is now ENTER_NOW. moveFromIntendedEntryR reuses
    // the same R convention already used everywhere else in this file
    // (remainingRewardR, XAU_AdaptiveTransitionDecision): risk unit = atr *
-   // InpSLMultiplier, i.e. the actual live SL distance (InpUseStructuralSL
-   // defaults off, so this IS the real risk distance OpenTrade() sends).
-   double moveFromIntendedEntryR = g_alignedCandidates[lane].atrTravelled / MathMax(0.50, InpSLMultiplier);
+   // InpSLMultiplier * XAU_SL_WIDENING_FACTOR (v6.24.17: the 20% structural
+   // widening applied in OpenTrade() -- InpUseStructuralSL defaults off, so
+   // this IS the real final risk distance OpenTrade() sends).
+   double moveFromIntendedEntryR = g_alignedCandidates[lane].atrTravelled / MathMax(0.50, InpSLMultiplier * XAU_SL_WIDENING_FACTOR);
    bool priceGenuinelyMissed = (moveFromIntendedEntryR >= 0.30);
    string finalActionName = "";
 
@@ -30105,7 +30507,7 @@ ENUM_XAU_SMART_ENTRY_CAUTION_DECISION XAU_SmartEntryCautionGate(
       PrintFormat("ENTRY_DELAY_COMPLETED | candidateId=%s direction=%s elapsedSeconds=%.0f intendedEntry=%.5f currentPrice=%.5f riskDistance=%.5f moveFromIntendedEntryR=%.3f structureValid=%s finalAction=%s",
                   result.candidateId, signal==1?"BUY":"SELL", result.candidateAgeSeconds,
                   g_alignedCandidates[lane].firstCandidatePrice, result.currentPrice,
-                  atr*MathMax(0.50,InpSLMultiplier), moveFromIntendedEntryR,
+                  atr*MathMax(0.50,InpSLMultiplier*XAU_SL_WIDENING_FACTOR), moveFromIntendedEntryR,
                   confirmedOppositeStructure?"false":"true", finalActionName);
       g_alignedCandidates[lane].postWaitDecisionLogged = true;
       XAU_LogDirectionTransitionState(signal);
@@ -32239,11 +32641,18 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
    double liveAsk = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double liveMid = (liveBid > 0.0 && liveAsk > 0.0) ? (liveBid + liveAsk) * 0.5 : 0.0;
    double thesisAtr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
-   double structSlDist = thesisAtr * MathMax(0.50, InpSLMultiplier);
+   // v6.24.17: expose BOTH the raw (pre-widening) and final (post-1.20x-
+   // widening) structural distance/SL, same policy OpenTrade() itself now
+   // applies -- so Outlook's TP1/TP2/TP3/R values are computed from the
+   // SAME final distance a real trade would actually use, and the backend
+   // never has to (and must not) widen a second time.
+   double rawStructSlDist = thesisAtr * MathMax(0.50, InpSLMultiplier);
+   double structSlDist = rawStructSlDist * XAU_SL_WIDENING_FACTOR;
    double structEntry = thesisDir == 1 ? liveAsk : liveBid;
-   double structSl = 0.0, structTp1 = 0.0, structTp2 = 0.0, structTp3 = 0.0;
+   double rawStructSl = 0.0, structSl = 0.0, structTp1 = 0.0, structTp2 = 0.0, structTp3 = 0.0;
    if(structEntry > 0.0 && structSlDist > 0.0)
    {
+      rawStructSl = thesisDir == 1 ? structEntry - rawStructSlDist : structEntry + rawStructSlDist;
       structSl  = thesisDir == 1 ? structEntry - structSlDist          : structEntry + structSlDist;
       structTp1 = thesisDir == 1 ? structEntry + structSlDist * 1.0    : structEntry - structSlDist * 1.0;
       structTp2 = thesisDir == 1 ? structEntry + structSlDist * 2.0    : structEntry - structSlDist * 2.0;
@@ -32263,6 +32672,10 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       "\"direction\":\"%s\",\"live_bid\":%.5f,\"live_ask\":%.5f,\"live_mid\":%.5f,"
       "\"atr_m5\":%.5f,\"structural_sl_dist\":%.5f,\"structural_entry\":%.5f,"
       "\"structural_sl\":%.5f,\"tp1_price\":%.5f,\"tp2_price\":%.5f,\"tp3_price\":%.5f,"
+      "\"raw_structural_sl\":%.5f,\"raw_sl_distance\":%.5f,\"sl_widening_factor\":%.2f,"
+      "\"final_structural_sl\":%.5f,\"final_sl_distance\":%.5f,\"configured_risk_pct\":%.2f,"
+      "\"htf_indicator_state\":\"%s\",\"htf_last_good_age_sec\":%d,"
+      "\"scan_completed_count\":%d,\"scan_aborted_count\":%d,\"scan_completion_rate_pct\":%.1f,"
       "\"digits\":%d,\"evidence_time_utc\":\"%s\"}",
       campaignIdStr,
       campaignActive ? BotMonitorJsonSafe(XAU_CampaignLifecycleName(g_campaign[tSlot].lifecycle, g_campaign[tSlot].invalidated), 40)
@@ -32290,6 +32703,11 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       thesisDirStr, liveBid, liveAsk, liveMid,
       thesisAtr, structSlDist, structEntry,
       structSl, structTp1, structTp2, structTp3,
+      rawStructSl, rawStructSlDist, XAU_SL_WIDENING_FACTOR,
+      structSl, structSlDist, InpNormalRiskPct,
+      g_htfIndicatorState, (g_htfEmaLastGoodAt > 0 ? (int)(TimeCurrent() - g_htfEmaLastGoodAt) : -1),
+      g_scanCompletedCount, g_scanAbortedCount,
+      (g_scanCompletedCount + g_scanAbortedCount) > 0 ? (100.0 * g_scanCompletedCount / (g_scanCompletedCount + g_scanAbortedCount)) : 0.0,
       (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
       TimeToString(TimeGMT(), TIME_DATE|TIME_SECONDS));
    // v6.24.14 — POST-TRADE STATE block for the web Command Center (spec

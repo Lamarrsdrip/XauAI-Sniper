@@ -198,7 +198,7 @@ def test_force_open_remains_the_documented_manual_override_exemption():
 
 def test_15pct_risk_and_lot_sizing_untouched():
     ea = read(BACKEND_EA)
-    assert "input double InpNormalRiskPct       = 15.0;" in ea
+    assert "input double InpNormalRiskPct       = 10.0;" in ea
 
 
 def test_news_window_still_30_minutes():
@@ -414,7 +414,7 @@ def test_19_exhaustion_alone_does_not_automatically_open_opposite():
 
 def test_28_15pct_risk_and_29_news_window_and_30_log_spam_static():
     ea = read(BACKEND_EA)
-    assert "input double InpNormalRiskPct       = 15.0;" in ea
+    assert "input double InpNormalRiskPct       = 10.0;" in ea
     assert "InpCalCustomDurMin1     = 30;" in ea
     # log-spam dedupe: readiness state-change-only + 60s heartbeat cap intact
     fn = ea[ea.index("XAU_EntryReadinessDecision XAU_UpdateEntryReadiness("):]

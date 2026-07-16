@@ -61,7 +61,12 @@ def test_trade_is_never_silently_reduced_to_0_01_on_margin_shortfall():
 
 def test_margin_shortfall_reports_requested_and_max_supported_lot_and_actual_risk_pct():
     ea = read(BACKEND_EA)
-    assert "requested 15%%-risk lot %.4f needs margin" in ea
+    # v6.24.17 owner directive 2026-07-16: risk target changed 15%->10%, and
+    # this message now reads the real configured InpNormalRiskPct dynamically
+    # (via %.0f%%/%.2f%%) instead of a hardcoded "15%%" literal -- see that
+    # line's own comment for why the old hardcoded text was itself a bug
+    # (it would silently keep claiming "15%-risk" forever after this exact change).
+    assert "FULL_%.0f_PERCENT_RISK_UNAVAILABLE: requested %.2f%%-risk lot %.4f needs margin" in ea
     assert "Max broker-margin-supported lot=%.4f (actual risk %.3f%% of balance)" in ea
 
 
@@ -88,7 +93,7 @@ def test_15_percent_stop_risk_lot_formula_is_intact_and_unchanged():
     # riskUSD = balance * 15% (InpNormalRiskPct), lot = riskUSD / money-loss-per-lot-at-SL
     assert "double riskAmount = balance * riskPct / 100.0;" in ea
     assert "double rawLots = riskAmount / slDollarPerLotRaw;" in ea
-    assert "input double InpNormalRiskPct       = 15.0;" in ea
+    assert "input double InpNormalRiskPct       = 10.0;" in ea
     assert "riskPct = MathMax(InpReducedRiskFloorPct, MathMin(InpNormalRiskPct, riskPct));" in ea
 
 

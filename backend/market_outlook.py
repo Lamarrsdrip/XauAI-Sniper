@@ -553,6 +553,16 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "tp1_price": zone.get("tp1_price"), "tp1_r": zone.get("tp1_r"),
         "tp2_price": zone.get("tp2_price"), "tp2_r": zone.get("tp2_r"),
         "tp3_price": zone.get("tp3_price"), "tp3_r": zone.get("tp3_r"),
+        # v6.24.17 owner directive: expose the EA's own raw-vs-final SL
+        # geometry so the Outlook is transparent about the 20% structural
+        # widening policy -- never recomputed/re-widened here, only passed
+        # through from the EA's own thesis snapshot (source of truth).
+        "raw_structural_sl": thesis.get("raw_structural_sl"),
+        "raw_sl_distance": thesis.get("raw_sl_distance"),
+        "sl_widening_factor": thesis.get("sl_widening_factor"),
+        "final_structural_sl": thesis.get("final_structural_sl"),
+        "final_sl_distance": thesis.get("final_sl_distance"),
+        "configured_risk_pct": thesis.get("configured_risk_pct"),
         "buy_pressure": thesis.get("buy_pressure"),
         "sell_pressure": thesis.get("sell_pressure"),
         "exhaustion_pct": thesis.get("exhaustion_pct"),

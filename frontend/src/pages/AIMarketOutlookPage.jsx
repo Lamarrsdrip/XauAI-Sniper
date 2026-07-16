@@ -96,6 +96,13 @@ function OutlookHero({ outlook, advanced, setAdvanced }) {
             <Metric label="Status" value={(outlook.status || "").replace(/_/g, " ")} />
             <Metric label="Chase limit" value={outlook.chase_limit} />
           </div>
+          {outlook.final_structural_sl != null && (
+            <div className="mt-3 rounded-lg border border-white/[0.05] bg-white/[0.015] p-2.5 text-[10px] text-white/40">
+              Risk policy: raw structural SL {outlook.raw_structural_sl} (dist {outlook.raw_sl_distance}) ×{" "}
+              {outlook.sl_widening_factor} widening → final SL {outlook.final_structural_sl} (dist {outlook.final_sl_distance}) ·
+              target risk {outlook.configured_risk_pct}%
+            </div>
+          )}
         </>
       )}
 

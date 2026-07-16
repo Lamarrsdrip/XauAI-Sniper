@@ -135,7 +135,14 @@ def test_all_14_indicator_buffers_log_scan_aborted_with_exact_reason():
     start = ea.index('XAU_LogScanState("SCAN_STARTED");')
     end = ea.index("g_indicatorBufferFailCount = 0;", start)
     window = ea[start:end]
-    assert window.count("XAU_LogScanAborted(g_lastSkipReason)") == 14
+    # v6.24.17: added a 15th abort point -- a SeriesInfoInteger(...,
+    # SERIES_SYNCHRONIZED) pre-check specifically for the HTF EMA pair (the
+    # root cause of the ~2% scan-completion investigation), which uses its
+    # own htfFailReason variable (not the shared g_lastSkipReason the other
+    # 14 CopyEntryBuffer-based aborts use) since it's a distinct condition
+    # ("series not yet synced" is not a handle/copy failure at all).
+    assert window.count("XAU_LogScanAborted(g_lastSkipReason)") == 13
+    assert window.count("XAU_LogScanAborted(htfFailReason)") == 1
 
 
 def test_scan_completed_logged_with_candidate_vs_no_trade_distinction():
