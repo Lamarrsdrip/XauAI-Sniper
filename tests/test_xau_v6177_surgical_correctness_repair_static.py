@@ -182,7 +182,11 @@ def test_main_entry_call_site_only_commits_state_on_confirmed_open():
     ea = read(BACKEND_EA)
     marker = 'bool tradeOpened = OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", finalSzMult);'
     idx = ea.index(marker)
-    window = ea[idx: idx + 1400]
+    # widened: the v6.24.16 entry-readiness-liveness fix added diagnostic
+    # logging between the OpenTrade() call and if(tradeOpened), pushing the
+    # real distance to ~2117 chars -- not a behavior change, confirmed by
+    # tracing the actual source.
+    window = ea[idx: idx + 3300]
     assert "if(tradeOpened)" in window
     assert "g_lastEntryGrade = grade;" in window
     assert "g_lastEntryScore = combinedScore;" in window
