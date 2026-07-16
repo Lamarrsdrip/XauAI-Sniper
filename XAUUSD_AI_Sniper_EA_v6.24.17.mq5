@@ -1899,7 +1899,7 @@
 
 #define XAUAI_EA_VERSION "v6.24.17"
 #define XAUAI_EA_VERSION_NUM "6.24.17"
-#define XAUAI_BUILD_HASH "v62417-indicator-recovery-patience-fix-20260716"
+#define XAUAI_BUILD_HASH "v62418-exhaustion-counter-basket-exit-h1-syncfix-20260716"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 #include <Trade\Trade.mqh>
@@ -3239,6 +3239,18 @@ datetime g_htfEmaLastGoodAt = 0;
 double   g_htfEmaFastLastGood = 0.0;
 double   g_htfEmaSlowLastGood = 0.0;
 string   g_htfIndicatorState = "HEALTHY";
+// v6.24.18 owner directive 2026-07-16 -- root-cause repair. Real live
+// evidence (Mac + VPS journals, 2026-07-16) proved the scan-completion
+// failure is concentrated almost entirely (>99% of aborts) in EMA_FAST_H1,
+// NOT the InpContextTF/H4 pair the v6.24.17 fix above protected. Same root
+// cause, same fix, different timeframe: PERIOD_H1 is exactly the kind of
+// "no reason for the terminal to keep it hot" timeframe the H4 fix's own
+// comment already predicted would be exposed to this. Mirrors the H4
+// pattern exactly (SERIES_SYNCHRONIZED pre-check + bounded last-known-good).
+datetime g_h1EmaLastGoodAt = 0;
+double   g_h1EmaFastLastGood = 0.0;
+double   g_h1EmaSlowLastGood = 0.0;
+string   g_h1IndicatorState = "HEALTHY";
 
 double initialBalance, dailyStartEquity, weeklyStartEquity;
 bool   g_propFirmMode = false;
@@ -4712,6 +4724,13 @@ struct XAU_CampaignState
    double   basketProtectedFloorR;
    bool     basketProtectionArmed;
    bool     basketCloseInProgress;
+   // v6.24.18 owner directive 2026-07-16 -- basket-to-single conversion can
+   // fail transiently (surviving ticket not yet visible this tick, or its
+   // R-exit risk state not yet indexed). The basket floor must NEVER be
+   // cleared on a failed conversion -- it stays armed and is retried until
+   // it succeeds or the survivor closes.
+   bool     basketConversionPending;
+   int      basketConversionRetryCount;
 };
 
 XAU_CampaignState g_campaign[2];   // [0]=BUY campaign, [1]=SELL campaign
@@ -4837,6 +4856,8 @@ void XAU_CampaignOpenCore(int direction, string setupName, ENUM_XAU_TRADE_HORIZO
    g_campaign[slot].basketProtectedFloorR     = 0.0;
    g_campaign[slot].basketProtectionArmed     = false;
    g_campaign[slot].basketCloseInProgress     = false;
+   g_campaign[slot].basketConversionPending    = false;
+   g_campaign[slot].basketConversionRetryCount = 0;
 
    PrintFormat("CAMPAIGN_OPENED | %s dir=%s setup=%s horizon=%s invalidation=%.2f dest1=%.2f destPrimary=%.2f destRunner=%.2f coreTicket=%I64u basketOneRMoney=%.2f",
                XAU_CampaignIdText(g_campaign[slot].campaignId), direction==1?"BUY":"SELL", setupName,
@@ -4861,6 +4882,54 @@ void XAU_CampaignRegisterAdd(int direction, string setupName)
                g_campaign[slot].additionCount, g_campaign[slot].activePositionCount);
 }
 
+// v6.24.18 owner directive 2026-07-16 -- extracted so both the transition
+// event (XAU_CampaignRegisterClose, below) and a per-tick retry path
+// (XAU_UpdateCampaignBasketState) can attempt this exact same conversion.
+// Returns the conversion status string; NEVER clears any basket field
+// itself -- the caller decides what to do with a failed attempt, per the
+// owner's explicit rule that a failed conversion must never erase the
+// armed basket floor.
+string XAU_TryConvertBasketToSingleFloor(int direction, int slot, ulong &survivingTicketOut, double &convertedFloorROut)
+{
+   survivingTicketOut = 0;
+   convertedFloorROut = 0.0;
+   ulong survivingPosId = 0;
+   for(int svi = 0; svi < PositionsTotal(); svi++)
+   {
+      ulong svTk = PositionGetTicket(svi);
+      if(!posInfo.SelectByTicket(svTk)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      if((posInfo.PositionType() == POSITION_TYPE_BUY ? 1 : -1) != direction) continue;
+      survivingTicketOut = svTk;
+      survivingPosId = posInfo.Identifier();
+      break;
+   }
+   if(survivingTicketOut == 0)
+      return "NO_SURVIVING_TICKET_FOUND";
+
+   int svIdx = XAU_RExit_FindIdx(survivingPosId);
+   if(svIdx < 0)
+      svIdx = XAU_RExit_EnsureIdx(survivingPosId, survivingTicketOut, direction == 1,
+                                  posInfo.PriceOpen(), posInfo.StopLoss(), posInfo.Volume(), false);
+   if(g_rExit[svIdx].cumulativeOriginalRiskUSD <= 0.0)
+      return "SURVIVING_TICKET_RISK_UNKNOWN";
+
+   convertedFloorROut = g_campaign[slot].basketProtectedFloorMoney / g_rExit[svIdx].cumulativeOriginalRiskUSD;
+   if(convertedFloorROut > g_rExit[svIdx].guaranteedFloorR)
+   {
+      g_rExit[svIdx].guaranteedFloorR = convertedFloorROut;
+      g_rExit[svIdx].profitGuaranteeArmed = true;
+      // R_STAGE_PROTECTED is #defined later in this file (value 1); #define
+      // is a preprocessor construct and must be textually declared before
+      // use, unlike function/enum symbols which MQL5 resolves file-wide --
+      // literal used here for that reason, matching XAU_RExitCoreLoop's own
+      // later use of the same macro/value.
+      if(g_rExit[svIdx].stageReached < 1) g_rExit[svIdx].stageReached = 1;
+      return "APPLIED";
+   }
+   return "EXISTING_INDIVIDUAL_FLOOR_ALREADY_HIGHER";
+}
+
 // Called on every position close belonging to this direction's campaign
 // (broker SL, TP, manual, or EA-forced) -- realized P/L accumulates, the
 // position count decrements, and the campaign auto-closes (active=false,
@@ -4882,59 +4951,45 @@ void XAU_CampaignRegisterClose(int direction, double closedProfit)
    // money floor into an equivalent individual-ticket R floor on the
    // surviving position so XAU_RExitCoreLoop's own per-ticket floor
    // authority keeps protecting at least that level going forward.
+   //
+   // BUG FIX (owner-reported 2026-07-16): the basket state used to be
+   // cleared UNCONDITIONALLY here, even when the conversion attempt failed
+   // (surviving ticket not yet visible this tick, or its risk state not yet
+   // indexed) -- silently erasing real, already-earned protection. Now the
+   // basket floor is ONLY cleared on APPLIED/EXISTING_INDIVIDUAL_FLOOR_
+   // ALREADY_HIGHER (both mean the individual floor is now protecting at
+   // least the basket-guaranteed level); any other outcome marks the
+   // conversion PENDING and keeps every basket field exactly as armed, to
+   // be retried every tick by XAU_UpdateCampaignBasketState until it
+   // succeeds or the survivor closes.
    if(g_campaign[slot].activePositionCount == 1 && g_campaign[slot].basketProtectionArmed)
    {
-      ulong survivingTicket = 0, survivingPosId = 0;
-      for(int svi = 0; svi < PositionsTotal(); svi++)
-      {
-         ulong svTk = PositionGetTicket(svi);
-         if(!posInfo.SelectByTicket(svTk)) continue;
-         if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
-         if((posInfo.PositionType() == POSITION_TYPE_BUY ? 1 : -1) != direction) continue;
-         survivingTicket = svTk;
-         survivingPosId = posInfo.Identifier();
-         break;
-      }
-      string conversionStatus = "NO_SURVIVING_TICKET_FOUND";
+      ulong survivingTicket = 0;
       double convertedFloorR = 0.0;
-      if(survivingTicket != 0)
-      {
-         int svIdx = XAU_RExit_FindIdx(survivingPosId);
-         if(svIdx < 0)
-            svIdx = XAU_RExit_EnsureIdx(survivingPosId, survivingTicket, direction == 1,
-                                        posInfo.PriceOpen(), posInfo.StopLoss(), posInfo.Volume(), false);
-         if(g_rExit[svIdx].cumulativeOriginalRiskUSD > 0.0)
-         {
-            convertedFloorR = g_campaign[slot].basketProtectedFloorMoney / g_rExit[svIdx].cumulativeOriginalRiskUSD;
-            if(convertedFloorR > g_rExit[svIdx].guaranteedFloorR)
-            {
-               g_rExit[svIdx].guaranteedFloorR = convertedFloorR;
-               g_rExit[svIdx].profitGuaranteeArmed = true;
-               // R_STAGE_PROTECTED is #defined later in this file (value 1);
-               // #define is a preprocessor construct and must be textually
-               // declared before use, unlike function/enum symbols which
-               // MQL5 resolves file-wide -- literal used here for that
-               // reason, matching XAU_RExitCoreLoop's own later use of the
-               // same macro/value.
-               if(g_rExit[svIdx].stageReached < 1) g_rExit[svIdx].stageReached = 1;
-               conversionStatus = "APPLIED";
-            }
-            else
-               conversionStatus = "EXISTING_INDIVIDUAL_FLOOR_ALREADY_HIGHER";
-         }
-         else
-            conversionStatus = "SURVIVING_TICKET_RISK_UNKNOWN";
-      }
-      PrintFormat("BASKET_TO_SINGLE_TRANSITION | %s remainingTicket=%I64u basketFloorMoney=%.2f convertedIndividualFloorR=%.3f conversionStatus=%s",
-                  XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
-                  g_campaign[slot].basketProtectedFloorMoney, convertedFloorR, conversionStatus);
+      string conversionStatus = XAU_TryConvertBasketToSingleFloor(direction, slot, survivingTicket, convertedFloorR);
+      PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f convertedFloorR=%.3f retryCount=%d action=%s",
+                  conversionStatus, XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
+                  g_campaign[slot].basketProtectedFloorMoney, convertedFloorR, g_campaign[slot].basketConversionRetryCount,
+                  (conversionStatus == "APPLIED" || conversionStatus == "EXISTING_INDIVIDUAL_FLOOR_ALREADY_HIGHER") ? "BASKET_STATE_CLEARED" : "BASKET_FLOOR_KEPT_ARMED_PENDING_RETRY");
 
-      g_campaign[slot].basketProtectionArmed     = false;
-      g_campaign[slot].basketPeakProfitMoney     = 0.0;
-      g_campaign[slot].basketPeakR               = 0.0;
-      g_campaign[slot].basketProtectedFloorMoney = 0.0;
-      g_campaign[slot].basketProtectedFloorR     = 0.0;
-      g_campaignBasketStateDirty = true;
+      if(conversionStatus == "APPLIED" || conversionStatus == "EXISTING_INDIVIDUAL_FLOOR_ALREADY_HIGHER")
+      {
+         g_campaign[slot].basketProtectionArmed     = false;
+         g_campaign[slot].basketPeakProfitMoney     = 0.0;
+         g_campaign[slot].basketPeakR               = 0.0;
+         g_campaign[slot].basketProtectedFloorMoney = 0.0;
+         g_campaign[slot].basketProtectedFloorR     = 0.0;
+         g_campaign[slot].basketConversionPending    = false;
+         g_campaign[slot].basketConversionRetryCount = 0;
+         g_campaignBasketStateDirty = true;
+      }
+      else
+      {
+         // Conversion not yet possible -- keep the basket floor exactly as
+         // armed (nothing cleared) and mark it pending so
+         // XAU_UpdateCampaignBasketState retries it every tick.
+         g_campaign[slot].basketConversionPending = true;
+      }
    }
 
    if(g_campaign[slot].activePositionCount <= 0)
@@ -5090,7 +5145,11 @@ void XAU_ReconcileCampaignOnInit()
 // restart exactly as armed, never reset to unarmed. File-keyed by
 // login/server/symbol/magic (same convention as XAU_RExit_StateFilePath),
 // atomic temp-file-then-rename write, one row per campaign slot.
-#define XAU_BASKET_STATE_SCHEMA_VERSION 1
+// v6.24.18: bumped 1->2 to add basketConversionPending/basketConversionRetryCount
+// (a restart mid-pending-basket-to-single-conversion must not silently lose
+// the armed floor -- see XAU_CampaignBasketState_Load's relaxed activePositionCount
+// gate below).
+#define XAU_BASKET_STATE_SCHEMA_VERSION 2
 bool g_campaignBasketStateDirty = false;
 
 string XAU_CampaignBasketStateFilePath()
@@ -5126,7 +5185,9 @@ void XAU_CampaignBasketState_Save(bool force = false)
                 DoubleToString(g_campaign[slot].basketPeakR, 4),
                 DoubleToString(g_campaign[slot].basketProtectedFloorMoney, 2),
                 DoubleToString(g_campaign[slot].basketProtectedFloorR, 4),
-                g_campaign[slot].basketProtectionArmed ? 1 : 0);
+                g_campaign[slot].basketProtectionArmed ? 1 : 0,
+                g_campaign[slot].basketConversionPending ? 1 : 0,
+                g_campaign[slot].basketConversionRetryCount);
    }
    FileClose(h);
    if(!FileMove(tmpPath, FILE_COMMON, path, FILE_COMMON | FILE_REWRITE))
@@ -5183,13 +5244,23 @@ void XAU_CampaignBasketState_Load()
       double floorMoney = FileReadNumber(h);
       double floorR = FileReadNumber(h);
       bool armed = FileReadNumber(h) != 0;
+      bool conversionPending = FileReadNumber(h) != 0;
+      int conversionRetryCount = (int)FileReadNumber(h);
 
       if(slot < 0 || slot > 1) { discarded++; continue; }
       if(login != myLogin || server != myServer || symbol != Symbol() || magic != InpMagicNumber)
       { discarded++; continue; } // foreign/stale record
 
       int expectedDirection = (slot == 0) ? 1 : -1;
-      if(!g_campaign[slot].active || g_campaign[slot].direction != expectedDirection || g_campaign[slot].activePositionCount < 2)
+      // v6.24.18: relaxed from a strict >=2 requirement -- a restart landing
+      // exactly mid-pending-basket-to-single-conversion has activePositionCount
+      // == 1 by the time OnInit's live-position reconciliation runs, but an
+      // armed floor from a saved file describing that exact pending state
+      // must still be restored (never silently dropped) rather than treated
+      // as "not currently a live basket".
+      bool countPlausible = g_campaign[slot].activePositionCount >= 2 ||
+                            (g_campaign[slot].activePositionCount == 1 && armed);
+      if(!g_campaign[slot].active || g_campaign[slot].direction != expectedDirection || !countPlausible)
       {
          PrintFormat("BASKET_STATE_MISMATCH slot=%d reason=NOT_CURRENTLY_A_LIVE_BASKET (saved state discarded)", slot);
          discarded++;
@@ -5204,6 +5275,11 @@ void XAU_CampaignBasketState_Load()
       g_campaign[slot].basketProtectedFloorMoney = floorMoney;
       g_campaign[slot].basketProtectedFloorR     = floorR;
       g_campaign[slot].basketProtectionArmed     = armed;
+      // Restart landed with only 1 live position but an armed floor from the
+      // saved file -- re-enter pending-conversion retry mode rather than
+      // assume the (unpersisted, RAM-only) conversion already happened.
+      g_campaign[slot].basketConversionPending    = (g_campaign[slot].activePositionCount == 1) ? true : conversionPending;
+      g_campaign[slot].basketConversionRetryCount = conversionRetryCount;
       restored++;
       PrintFormat("BASKET_STATE_RESTORED slot=%d dir=%s basketOneRMoney=%.2f peakR=%.3f protectionArmed=%s protectedFloorR=%.3f",
                   slot, expectedDirection == 1 ? "BUY" : "SELL", oneRMoney, peakR, armed ? "true" : "false", floorR);
@@ -15887,8 +15963,67 @@ void OnTick()
    if(!CopyEntryBuffer(hBBUpper, 1, 0, 12, bufBBUpper, "BB_UPPER")) { XAU_LogScanAborted(g_lastSkipReason); return; }
    if(!CopyEntryBuffer(hBBUpper, 2, 0, 12, bufBBLower, "BB_LOWER")) { XAU_LogScanAborted(g_lastSkipReason); return; }
    if(!CopyEntryBuffer(hBBUpper, 0, 0, 12, bufBBMid, "BB_MID")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1, "EMA_FAST_H1")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1, "EMA_SLOW_H1")) { XAU_LogScanAborted(g_lastSkipReason); return; }
+   // v6.24.18 owner directive 2026-07-16 -- root-cause repair, live-evidence-
+   // proven: EMA_FAST_H1 accounted for >99% of ALL scan aborts on both Mac
+   // and VPS journals on 2026-07-16, every single one classified
+   // "INDICATOR_TRANSIENT_4807" and left to retry forever -- because, exactly
+   // like the InpContextTF/H4 case fixed in v6.24.17, this file never checked
+   // SeriesInfoInteger(...,PERIOD_H1,SERIES_SYNCHRONIZED) before relying on
+   // this handle. PERIOD_H1 has no reason to stay "hot" in the terminal
+   // unless a chart or EA actually reads it -- exactly the exposure the
+   // H4 fix's own comment predicted. This is the same real MT5 condition
+   // (local history not yet synced with the broker for this symbol+
+   // timeframe), which presents identically to a transient recalculation
+   // lag (err=4807, BarsCalculated()==-1) but cannot be fixed by rebuilding
+   // the handle -- only by waiting for sync. Mirrors the H4 fix exactly:
+   // SERIES_SYNCHRONIZED pre-check, then a bounded last-known-good fallback.
+   if(!SeriesInfoInteger(Symbol(), PERIOD_H1, SERIES_SYNCHRONIZED))
+   {
+      g_lastSkipReason = StringFormat("INDICATOR_H1_SERIES_NOT_SYNCHRONIZED: H1 history not yet synced with broker (bars=%d) -- waiting for sync, not a handle problem",
+                                      Bars(Symbol(), PERIOD_H1));
+      if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
+      {
+         Print("SCAN BUFFER WAIT: ", g_lastSkipReason);
+         g_lastIndicatorFailLog = TimeCurrent();
+      }
+      XAU_LogScanAborted(g_lastSkipReason);
+      return;
+   }
+   bool h1EmaOk = CopyEntryBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1, "EMA_FAST_H1") &&
+                  CopyEntryBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1, "EMA_SLOW_H1");
+   if(h1EmaOk)
+   {
+      g_h1EmaFastLastGood = bufEMAFast_H1[1];
+      g_h1EmaSlowLastGood = bufEMASlow_H1[1];
+      g_h1EmaLastGoodAt = TimeCurrent();
+      g_h1IndicatorState = "HEALTHY";
+   }
+   else
+   {
+      string h1FailReason = g_lastSkipReason;
+      int h1StaleSec = (g_h1EmaLastGoodAt > 0) ? (int)(TimeCurrent() - g_h1EmaLastGoodAt) : -1;
+      bool haveH1BoundedLastGood = (g_h1EmaLastGoodAt > 0 && h1StaleSec <= XAU_HTF_EMA_MAX_STALE_SEC);
+      if(haveH1BoundedLastGood)
+      {
+         ArrayResize(bufEMAFast_H1, 3);
+         ArrayResize(bufEMASlow_H1, 3);
+         bufEMAFast_H1[0] = g_h1EmaFastLastGood; bufEMAFast_H1[1] = g_h1EmaFastLastGood; bufEMAFast_H1[2] = g_h1EmaFastLastGood;
+         bufEMASlow_H1[0] = g_h1EmaSlowLastGood; bufEMASlow_H1[1] = g_h1EmaSlowLastGood; bufEMASlow_H1[2] = g_h1EmaSlowLastGood;
+         g_h1IndicatorState = "DEGRADED_USING_LAST_GOOD";
+         if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
+         {
+            PrintFormat("INDICATOR_H1_DEGRADED_USING_LAST_GOOD | reason=%s ageSec=%d maxAllowedSec=%d",
+                        h1FailReason, h1StaleSec, XAU_HTF_EMA_MAX_STALE_SEC);
+            g_lastIndicatorFailLog = TimeCurrent();
+         }
+      }
+      else
+      {
+         g_h1IndicatorState = (h1StaleSec > XAU_HTF_EMA_MAX_STALE_SEC) ? "STALE_UNUSABLE" : "TEMPORARY_NOT_READY";
+         XAU_LogScanAborted(h1FailReason);
+         return;
+      }
+   }
    // v6.24.17 root-cause investigation: EMA_FAST_HTF/EMA_SLOW_HTF (InpContextTF,
    // default M30) accounted for ~40-46% of all log lines on live Mac/VPS
    // journals, with a ~2% scan completion rate -- far more often than a
@@ -22356,6 +22491,62 @@ void XAU_CloseCampaignBasketAtProtectedFloor(int direction, string reason)
 void XAU_UpdateCampaignBasketState(int direction)
 {
    int slot = XAU_CampaignSlot(direction);
+
+   // v6.24.18 owner directive -- retry path for a basket-to-single
+   // conversion that failed at the transition event (see
+   // XAU_CampaignRegisterClose's own comment). Runs every tick while
+   // pending, unconditionally, so a transient "ticket not visible yet"
+   // failure resolves within the next tick or two rather than staying
+   // unprotected. Also enforces the still-armed basket floor directly on
+   // the surviving single position while conversion remains unresolved --
+   // the floor must keep working even though XAU_ComputePrimaryExitFloor's
+   // own individual authority hasn't taken over yet.
+   if(g_campaign[slot].active && g_campaign[slot].activePositionCount == 1 && g_campaign[slot].basketConversionPending)
+   {
+      ulong survivingTicket = 0;
+      double convertedFloorR = 0.0;
+      string conversionStatus = XAU_TryConvertBasketToSingleFloor(direction, slot, survivingTicket, convertedFloorR);
+      g_campaign[slot].basketConversionRetryCount++;
+      if(conversionStatus == "APPLIED" || conversionStatus == "EXISTING_INDIVIDUAL_FLOOR_ALREADY_HIGHER")
+      {
+         PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f convertedFloorR=%.3f retryCount=%d action=BASKET_STATE_CLEARED_ON_RETRY",
+                     conversionStatus, XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
+                     g_campaign[slot].basketProtectedFloorMoney, convertedFloorR, g_campaign[slot].basketConversionRetryCount);
+         g_campaign[slot].basketProtectionArmed     = false;
+         g_campaign[slot].basketPeakProfitMoney     = 0.0;
+         g_campaign[slot].basketPeakR               = 0.0;
+         g_campaign[slot].basketProtectedFloorMoney = 0.0;
+         g_campaign[slot].basketProtectedFloorR     = 0.0;
+         g_campaign[slot].basketConversionPending    = false;
+         g_campaign[slot].basketConversionRetryCount = 0;
+         g_campaignBasketStateDirty = true;
+      }
+      else
+      {
+         // Still pending -- the basket floor stays armed exactly as-is
+         // (nothing cleared). Directly enforce it against the surviving
+         // position's own combined P/L (a single ticket here, so this IS
+         // the campaign's whole floating P/L) so protection never lapses
+         // while conversion remains unresolved.
+         if(survivingTicket != 0 && posInfo.SelectByTicket(survivingTicket))
+         {
+            double survivorPL = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+            if(survivorPL <= g_campaign[slot].basketProtectedFloorMoney)
+            {
+               PrintFormat("BASKET_TO_SINGLE_PENDING_FLOOR_BREACH | %s ticket=%I64u survivorPL=%.2f protectedFloorMoney=%.2f retryCount=%d action=CLOSE_SURVIVOR",
+                           XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
+                           survivorPL, g_campaign[slot].basketProtectedFloorMoney, g_campaign[slot].basketConversionRetryCount);
+               XAU_CloseCampaignBasketAtProtectedFloor(direction, "BASKET_TO_SINGLE_PENDING_FLOOR_BREACH");
+            }
+         }
+         if(TimeCurrent() - g_lastIndicatorFailLog >= 60)
+            PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f retryCount=%d action=BASKET_FLOOR_KEPT_ARMED_PENDING_RETRY",
+                        conversionStatus, XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
+                        g_campaign[slot].basketProtectedFloorMoney, g_campaign[slot].basketConversionRetryCount);
+      }
+      return;
+   }
+
    if(!g_campaign[slot].active || g_campaign[slot].activePositionCount < 2)
       return; // single-position campaigns use the individual exit floor, untouched
 

@@ -141,8 +141,18 @@ def test_all_14_indicator_buffers_log_scan_aborted_with_exact_reason():
     # own htfFailReason variable (not the shared g_lastSkipReason the other
     # 14 CopyEntryBuffer-based aborts use) since it's a distinct condition
     # ("series not yet synced" is not a handle/copy failure at all).
-    assert window.count("XAU_LogScanAborted(g_lastSkipReason)") == 13
+    #
+    # v6.24.18: live Mac/VPS evidence (2026-07-16) proved the SAME condition
+    # affects EMA_FAST_H1/EMA_SLOW_H1 (>99% of all scan aborts), which had no
+    # such check. The two naive `CopyEntryBuffer(hEMAFast_H1/hEMASlow_H1...)`
+    # g_lastSkipReason aborts were replaced with: one new g_lastSkipReason
+    # abort for the H1 SERIES_SYNCHRONIZED pre-check itself, plus one new
+    # h1FailReason abort for the H1 bounded-last-known-good-exhausted branch
+    # (mirroring htfFailReason's own pattern) -- net g_lastSkipReason count
+    # 13 -> 12 (removed 2, added 1), plus a new distinct h1FailReason count.
+    assert window.count("XAU_LogScanAborted(g_lastSkipReason)") == 12
     assert window.count("XAU_LogScanAborted(htfFailReason)") == 1
+    assert window.count("XAU_LogScanAborted(h1FailReason)") == 1
 
 
 def test_scan_completed_logged_with_candidate_vs_no_trade_distinction():

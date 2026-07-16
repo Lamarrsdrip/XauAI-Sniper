@@ -20,7 +20,7 @@ def test_all_three_source_copies_synced():
 
 
 def test_compile_reports_zero_errors_and_warnings():
-    log = (ROOT / "tester_sandbox" / "MT5_Isolated" / "compile_basket_v3.log").read_bytes()
+    log = (ROOT / "tester_sandbox" / "MT5_Isolated" / "compile_buildhash.log").read_bytes()
     text = log.decode("utf-16-le", errors="ignore")
     assert "0 errors, 0 warnings" in text
 
@@ -92,14 +92,14 @@ def test_floor_formula_matches_every_owner_example():
 
 def test_ea_source_uses_the_exact_max_035_070_formula():
     ea = read(BACKEND_EA)
-    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 6000)
+    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 9000)
     assert "double desiredFloorR = MathMax(0.35, g_campaign[slot].basketPeakR * 0.70);" in fn
     assert "if(g_campaign[slot].basketPeakR >= 0.50)" in fn
 
 
 def test_floor_never_decreases_ratchet_only():
     ea = read(BACKEND_EA)
-    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 6000)
+    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 9000)
     assert "desiredFloorR > g_campaign[slot].basketProtectedFloorR + 0.0000001" in fn
     # no assignment path exists that could ever lower basketProtectedFloorR
     assert "basketProtectedFloorR -=" not in ea
@@ -109,7 +109,12 @@ def test_floor_never_decreases_ratchet_only():
 def test_new_pyramid_does_not_reset_peak_or_floor():
     ea = read(BACKEND_EA)
     add_idx = ea.index("void XAU_CampaignRegisterAdd(int direction, string setupName)")
-    add_end = ea.index("void XAU_CampaignRegisterClose", add_idx)
+    # v6.24.18: bound the window to RegisterAdd's own body only (a closing
+    # brace at column 0), not "everything up to the next campaign function" --
+    # XAU_TryConvertBasketToSingleFloor is now defined between RegisterAdd and
+    # RegisterClose and legitimately READS basketProtectedFloorMoney, which
+    # would otherwise be a false positive for this specific check.
+    add_end = ea.index("\n}\n", add_idx)
     add_fn = ea[add_idx:add_end]
     assert "basketPeakProfitMoney" not in add_fn
     assert "basketProtectedFloorMoney" not in add_fn
@@ -200,20 +205,20 @@ def test_duplicate_ticks_cannot_send_duplicate_basket_closes():
 def test_different_campaigns_not_combined_slot_is_per_direction():
     ea = read(BACKEND_EA)
     assert "XAU_CampaignState g_campaign[2];" in ea
-    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 2000)
+    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 5500)
     assert "if(posDir != direction) continue;" in fn
 
 
 def test_counter_excursion_excluded_from_basket_by_construction():
     ea = read(BACKEND_EA)
-    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 2000)
+    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 5500)
     assert "InpMagicNumber" in fn
     assert "InpCounterExcursionMagicNumber" not in fn
 
 
 def test_exhaustion_counter_excluded_from_basket_by_construction():
     ea = read(BACKEND_EA)
-    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 2000)
+    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 5500)
     assert "InpExhaustionCounterMagicNumber" not in fn
 
 
@@ -246,14 +251,21 @@ def test_basket_state_load_rejects_foreign_or_mismatched_records():
 
 
 def test_falling_back_to_one_position_preserves_protection_via_conversion():
+    # v6.24.18: the actual conversion math was extracted into its own
+    # function (XAU_TryConvertBasketToSingleFloor), called from
+    # XAU_CampaignRegisterClose -- check both.
     ea = read(BACKEND_EA)
     close_idx = ea.index("void XAU_CampaignRegisterClose(int direction, double closedProfit)")
     close_end = ea.index("void XAU_CampaignInvalidate", close_idx)
     fn = ea[close_idx:close_end]
     assert "BASKET_TO_SINGLE_TRANSITION" in fn
     assert "g_campaign[slot].activePositionCount == 1 && g_campaign[slot].basketProtectionArmed" in fn
-    assert "g_rExit[svIdx].guaranteedFloorR = convertedFloorR;" in fn
-    assert "g_rExit[svIdx].profitGuaranteeArmed = true;" in fn
+    assert "XAU_TryConvertBasketToSingleFloor(direction, slot, survivingTicket, convertedFloorR);" in fn
+
+    convert_idx = ea.index("string XAU_TryConvertBasketToSingleFloor(")
+    convert_fn = ea[convert_idx: convert_idx + 2500]
+    assert "g_rExit[svIdx].guaranteedFloorR = convertedFloorROut;" in convert_fn
+    assert "g_rExit[svIdx].profitGuaranteeArmed = true;" in convert_fn
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +273,7 @@ def test_falling_back_to_one_position_preserves_protection_via_conversion():
 # ---------------------------------------------------------------------------
 def test_basket_pl_convention_includes_swap_and_commission():
     ea = read(BACKEND_EA)
-    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 2000)
+    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 5500)
     assert "posInfo.Profit() + posInfo.Swap() + posInfo.Commission()" in fn
     close_fn = fn_body(ea, "void XAU_CloseCampaignBasketAtProtectedFloor(", 2000)
     # the close function itself doesn't need to recompute P/L (it only
