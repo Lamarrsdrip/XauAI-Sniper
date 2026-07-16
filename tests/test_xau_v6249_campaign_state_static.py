@@ -98,8 +98,14 @@ def test_new_core_gated_by_campaign_already_active_check():
                 break
     assert end is not None, "unbalanced braces while scanning for function end"
     section = ea[start:end]
-    assert "XAU_CampaignRegisterAdd(signal, setupName);" in section
-    assert "XAU_CampaignOpenCore(signal, setupName" in section
+    # v6.24.13 moved this block from the primary-path call site into
+    # OpenTrade()'s own if(ok) block (see
+    # test_xau_v62413_campaign_registration_coverage_static.py) so every
+    # OpenTrade() caller -- not just the primary path -- registers
+    # correctly. The local variable at this new location is OpenTrade()'s
+    # own `funnelSetup`, not the caller's `setupName`.
+    assert "XAU_CampaignRegisterAdd(signal, funnelSetup);" in section
+    assert "XAU_CampaignOpenCore(signal, funnelSetup" in section
 
 
 def test_pyramid_add_registers_to_existing_campaign_not_a_new_one():
