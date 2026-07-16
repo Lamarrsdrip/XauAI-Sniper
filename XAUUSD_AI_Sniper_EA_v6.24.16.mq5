@@ -3722,11 +3722,6 @@ struct XAU_AlignedCandidateState
    bool     marketReset;
    bool     confirmationAfterExtension;
    long     candidateGeneration;
-   // Readiness may need a second stable observation after the existing
-   // 120-180s timer completes.  This is a poll cadence, never a new timer:
-   // it prevents a due candidate from forcing the full scan on every tick.
-   datetime readinessRecheckAt;
-   bool     entryTimerCompletedLogged;
 };
 // Separate state slots prevent PRIMARY, RE_ENTRY and PYRAMID from resetting
 // one another's 2-3 minute clocks while still using the same authorities.
@@ -5134,8 +5129,7 @@ string XAU_ReadinessStateName(ENUM_XAU_READINESS_STATE s)
 struct XAU_ReadinessCandidate
 {
    bool     active;
-   string   candidateId;              // fingerprint + stable aligned origin/generation
-   string   fingerprint;              // regime|setup|direction (stable thesis identity)
+   string   candidateId;              // reuses g_latestDecisionSnapshot.signature
    int      direction;
    datetime originTime;
    datetime originBar;
@@ -5144,52 +5138,8 @@ struct XAU_ReadinessCandidate
    datetime lastStateChangeTime;
    ENUM_XAU_READINESS_STATE lastLoggedState;
    datetime lastHeartbeatLog;
-   bool     entryReadyLogged;
-   int      resetCount;
-   int      entryReadyConflictCount;
-   string   lastBlocker;
-   datetime firstBlockedAt;
-   datetime lastBlockedAt;
 };
 XAU_ReadinessCandidate g_readiness[2]; // [0]=BUY candidate, [1]=SELL candidate
-
-// Debug-only chronological lifecycle trace.  It never changes an entry
-// decision and is intentionally off by default on a live account.
-input bool InpEntryReadinessShadowTrace = false;
-
-void XAU_ReadinessShadowTrace(string eventName, const XAU_ReadinessCandidate &c, string detail)
-{
-   if(!InpEntryReadinessShadowTrace) return;
-   PrintFormat("READINESS_SHADOW | %s | candidate=%s dir=%s origin=%s age=%ds detail=%s",
-               eventName, c.candidateId, c.direction == 1 ? "BUY" : "SELL",
-               TimeToString(c.originTime, TIME_DATE|TIME_SECONDS),
-               c.originTime > 0 ? (int)(TimeCurrent() - c.originTime) : 0, detail);
-}
-
-// Centralized execution-conflict reporting: every post-readiness execution
-// funnel BLOCK passes through BotMonitorExecutionFunnel, so this cannot miss
-// a later margin/risk/duplicate/broker safety return just because it was
-// added after this audit.
-void XAU_LogEntryReadyBlocked(int direction, string blocker, string reason)
-{
-   int slot = XAU_CampaignSlot(direction);
-   if(!g_lastEntryReadiness.entryReady || g_lastEntryReadiness.direction != direction ||
-      !g_readiness[slot].active) return;
-   datetime now = TimeCurrent();
-   if(g_readiness[slot].lastBlocker != blocker)
-   {
-      g_readiness[slot].lastBlocker = blocker;
-      g_readiness[slot].firstBlockedAt = now;
-      g_readiness[slot].entryReadyConflictCount++;
-   }
-   g_readiness[slot].lastBlockedAt = now;
-   PrintFormat("ENTRY_READY_BLOCKED | candidate=%s | direction=%s | blocker=%s | reason=%s | repeatCount=%d | firstBlockedAt=%s | lastBlockedAt=%s",
-               g_readiness[slot].candidateId, direction == 1 ? "BUY" : "SELL", blocker, reason,
-               g_readiness[slot].entryReadyConflictCount,
-               TimeToString(g_readiness[slot].firstBlockedAt, TIME_DATE|TIME_SECONDS),
-               TimeToString(g_readiness[slot].lastBlockedAt, TIME_DATE|TIME_SECONDS));
-   XAU_ReadinessShadowTrace("ENTRY_READY_BLOCKED", g_readiness[slot], blocker + ": " + reason);
-}
 
 // Final decision object -- spec-required schema. Only this object's
 // entryReady+finalAction may authorize OpenTrade (wired in v6.24.15's
@@ -5265,30 +5215,6 @@ ENUM_XAU_READINESS_STATE XAU_MapToReadinessState(ENUM_XAU_OLD_DIRECTION_STATE ol
    return READINESS_FORMING;
 }
 
-void XAU_LogReadinessLifecycle(string eventName, const XAU_ReadinessCandidate &c,
-                               string setup, ENUM_XAU_READINESS_STATE previousState,
-                               ENUM_XAU_READINESS_STATE newState, string resetReason)
-{
-   PrintFormat("%s | candidate=%s dir=%s setup=%s fingerprint=%s origin=%s age=%ds previousState=%s newState=%s resetReason=%s",
-               eventName, c.candidateId, c.direction == 1 ? "BUY" : "SELL", setup,
-               c.fingerprint, TimeToString(c.originTime, TIME_DATE|TIME_SECONDS),
-               c.originTime > 0 ? (int)(TimeCurrent()-c.originTime) : 0,
-               XAU_ReadinessStateName(previousState), XAU_ReadinessStateName(newState), resetReason);
-   XAU_ReadinessShadowTrace(eventName, c, resetReason);
-}
-
-string XAU_ReadinessCandidateIdentity(int direction, string fingerprint, datetime &originOut)
-{
-   int lane = XAU_AlignedCandidateLane(g_latestDecisionSnapshot.setupName);
-   originOut = (lane >= 0 && lane < 3 && g_alignedCandidates[lane].firstCandidateTime > 0 &&
-                g_alignedCandidates[lane].candidateDirection == direction)
-               ? g_alignedCandidates[lane].firstCandidateTime
-               : (g_latestDecisionSnapshot.valid ? g_latestDecisionSnapshot.closedM5BarTime : TimeCurrent());
-   long generation = (lane >= 0 && lane < 3 && g_alignedCandidates[lane].candidateDirection == direction)
-                     ? g_alignedCandidates[lane].candidateGeneration : 0;
-   return StringFormat("%s|O=%I64d|G=%I64d", fingerprint, (long)originOut, generation);
-}
-
 // Updates (or creates/resets) the persistent candidate for `direction` and
 // returns the final decision object. Called once per closed-bar evaluation
 // per direction from the same call sites that already recompute
@@ -5298,23 +5224,47 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
 {
    int slot = XAU_CampaignSlot(direction);
    XAU_MarketThesis thesis = XAU_ComputeMarketThesis(direction, false, false, td);
-   // Actual opposing campaign status, not opposite-direction entry eligibility.
+   // v6.24.16 audit fix: was XAU_ClassifyOldDirectionState(-direction, td),
+   // which answers "is THIS [opposite] direction's own fresh entry
+   // currently valid" -- not "is the opposite side actively fighting me."
+   // In a clean uptrend, SELL's freshAllowed is correctly false (no fresh
+   // SELL setup), which made the old call return MATURE, misread below as
+   // "old side still active" and permanently blocking ordinary with-trend
+   // BUY continuations. XAU_OppositeSideStatus checks the opposite
+   // direction's actual open g_campaign[] state instead -- the real signal
+   // for "is anything genuinely fighting me right now."
    ENUM_XAU_OLD_DIRECTION_STATE oldSide = XAU_OppositeSideStatus(direction, td);
    ENUM_XAU_READINESS_STATE mapped = XAU_MapToReadinessState(oldSide, thesis, td);
 
-   // Coarse fingerprint rejects indicator-bucket noise.
+   // v6.24.16 audit fix: candidate identity now uses a DELIBERATELY coarse
+   // fingerprint (regime|setup|direction) computed locally, not
+   // g_latestDecisionSnapshot's fine-grained signature (which buckets fast
+   // RSI/Stoch/momentum specifically so it can shift -- correctly, for its
+   // OWN pattern-matching purpose -- exactly when momentum/stoch cross a
+   // threshold, i.e. exactly at the wait-to-confirm transition this engine
+   // needs to persist across). A flip there was silently discarding real
+   // wait-state progress at the worst possible moment.
    string fingerprint = StringFormat("%s|%s|%d", RegimeName(),
                                      g_latestDecisionSnapshot.valid ? g_latestDecisionSnapshot.setupName : "NONE",
                                      direction);
-   // Coarse thesis fingerprint plus aligned origin/generation: bucket noise
-   // cannot reset progress, while a genuine later setup cannot be merged.
-   datetime alignedOrigin = 0;
-   string candidateIdentity = XAU_ReadinessCandidateIdentity(direction, fingerprint, alignedOrigin);
    bool freshOrigin = (!g_readiness[slot].active) ||
                        (g_readiness[slot].direction != direction) ||
-                       (g_readiness[slot].candidateId != candidateIdentity) ||
+                       (g_readiness[slot].candidateId != fingerprint) ||
                        (TimeCurrent() - g_readiness[slot].originTime > 3600); // v6.24.16: 1h safety-valve age expiry
-   // First observation never trades; later stable confirmation may trade.
+   // v6.24.16 audit fix: entryReady used to require "any non-CONFIRMED
+   // state observed at some point" (passedThroughWaitState) -- but
+   // XAU_UpdateEntryReadiness only ever runs from inside OpenTrade(),
+   // itself only reached after score/grade + every other authority gate
+   // ALREADY approved the candidate. That means the FIRST time a genuinely
+   // good setup is ever evaluated here, it can already compute straight to
+   // CONFIRMED -- and if it stays CONFIRMED on every later evaluation too
+   // (nothing ever degrades it to a wait state), passedThroughWaitState
+   // could never become true and entryReady could never fire, permanently.
+   // Fixed: the real requirement from the spec is "do not authorize on the
+   // very first look at this idea," not "must have specifically seen a
+   // WAIT state" -- captured directly as candidateAlreadyExisted, using
+   // the SAME freshOrigin this call already computed, before any of the
+   // state below gets (re)initialized for a new candidate.
    bool candidateAlreadyExisted = g_readiness[slot].active && !freshOrigin;
 
    double roomR = (direction == td.dominantDirection) ? td.remainingRewardR : td.oppositeRemainingRewardR;
@@ -5323,48 +5273,32 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
    if(mapped == READINESS_INVALIDATED || roomCollapsed)
    {
       if(g_readiness[slot].active)
-      {
          PrintFormat("ENTRY_READINESS_%s | dir=%s reason=%s",
                      roomCollapsed ? "EXPIRED" : "INVALIDATED",
                      direction == 1 ? "BUY" : "SELL",
                      roomCollapsed ? "remaining room collapsed" : thesis.hardBlockReason);
-         XAU_LogReadinessLifecycle(roomCollapsed ? "CANDIDATE_EXPIRED" : "CANDIDATE_INVALIDATED",
-                                   g_readiness[slot], g_latestDecisionSnapshot.setupName,
-                                   g_readiness[slot].state,
-                                   roomCollapsed ? READINESS_EXPIRED : READINESS_INVALIDATED,
-                                   roomCollapsed ? "REMAINING_ROOM_COLLAPSED" : thesis.hardBlockReason);
-      }
       g_readiness[slot].active = false;
-      // Clear display-visible identity with terminal state.
+      // v6.24.16 audit fix: also clear .state/.candidateId on invalidation,
+      // not just .active -- otherwise the Command Center display (which
+      // reads g_readiness[slot].state directly) kept showing the dead
+      // candidate's last live state (e.g. "Timing: CONFIRMED") alongside
+      // finalAction=NO_VALID_TRADE, a self-contradictory display.
       g_readiness[slot].state = roomCollapsed ? READINESS_EXPIRED : READINESS_INVALIDATED;
       g_readiness[slot].candidateId = "";
    }
    else
    {
-      bool replacing = StringLen(g_readiness[slot].candidateId) > 0;
       if(freshOrigin)
       {
          g_readiness[slot].active = true;
-         g_readiness[slot].candidateId = candidateIdentity;
-         g_readiness[slot].fingerprint = fingerprint;
+         g_readiness[slot].candidateId = fingerprint;
          g_readiness[slot].direction = direction;
-         g_readiness[slot].originTime = alignedOrigin;
+         g_readiness[slot].originTime = TimeCurrent();
          g_readiness[slot].originBar = g_latestDecisionSnapshot.valid ? g_latestDecisionSnapshot.closedM5BarTime : iTime(Symbol(), PERIOD_M5, 0);
          g_readiness[slot].passedThroughWaitState = false;
          g_readiness[slot].lastLoggedState = READINESS_BIAS_ONLY;
-         g_readiness[slot].entryReadyLogged = false;
-         g_readiness[slot].lastBlocker = "";
-         g_readiness[slot].entryReadyConflictCount = 0;
-         g_readiness[slot].firstBlockedAt = 0;
-         g_readiness[slot].lastBlockedAt = 0;
-         if(replacing) g_readiness[slot].resetCount++;
-         XAU_LogReadinessLifecycle(replacing ? "CANDIDATE_REPLACED" : "CANDIDATE_CREATED",
-                                   g_readiness[slot], g_latestDecisionSnapshot.setupName,
-                                   READINESS_BIAS_ONLY, mapped,
-                                   replacing ? "NEW_ALIGNED_ORIGIN_OR_GENERATION" : "FIRST_OBSERVATION");
       }
-      ENUM_XAU_READINESS_STATE previousState = g_readiness[slot].state;
-      if(mapped != previousState)
+      if(mapped != g_readiness[slot].state)
          g_readiness[slot].lastStateChangeTime = TimeCurrent();
       // Diagnostic/display only now (see candidateAlreadyExisted above for
       // the real entryReady gate) -- still useful to show on Command
@@ -5372,13 +5306,6 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
       if(mapped != READINESS_CONFIRMED)
          g_readiness[slot].passedThroughWaitState = true;
       g_readiness[slot].state = mapped;
-      if(!freshOrigin && mapped != previousState)
-      {
-         XAU_LogReadinessLifecycle("CANDIDATE_STATE_CHANGED", g_readiness[slot],
-                                   g_latestDecisionSnapshot.setupName, previousState, mapped, "NONE");
-      }
-      else if(!freshOrigin && InpEntryReadinessShadowTrace)
-         XAU_ReadinessShadowTrace("CANDIDATE_REOBSERVED", g_readiness[slot], XAU_ReadinessStateName(mapped));
    }
 
    XAU_EntryReadinessDecision d;
@@ -5414,13 +5341,6 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
                          candidateAlreadyExisted &&
                          d.snapshotFresh;
    d.entryReady = candidateReady;
-   if(d.entryReady && !g_readiness[slot].entryReadyLogged)
-   {
-      XAU_LogReadinessLifecycle("CANDIDATE_ENTRY_READY", g_readiness[slot],
-                                g_latestDecisionSnapshot.setupName, g_readiness[slot].state,
-                                READINESS_ENTRY_READY, "NONE");
-      g_readiness[slot].entryReadyLogged = true;
-   }
 
    if(!g_readiness[slot].active)
       d.finalAction = (thesis.action == HARD_BLOCK) ? "HARD_BLOCK" : "NO_VALID_TRADE";
@@ -5450,36 +5370,6 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
    }
 
    return d;
-}
-
-// Diagnostic only: never promotes a candidate or bypasses a safety gate.
-// A stable candidate is allowed to wait; this makes an unusual wait visible
-// with the evidence and reset/conflict history needed to diagnose a deadlock.
-void XAU_ReadinessStuckWatchdog()
-{
-   static datetime lastDiagnostic[2];
-   for(int slot=0; slot<2;slot++)
-   {
-      if(!g_readiness[slot].active) continue;
-      int stateAge = g_readiness[slot].lastStateChangeTime > 0
-         ? (int)(TimeCurrent()-g_readiness[slot].lastStateChangeTime) : 0;
-      bool unusualConfirmed = (g_readiness[slot].state == READINESS_CONFIRMED && stateAge > 30);
-      bool repeatedConflict = (g_readiness[slot].entryReadyConflictCount >= 3);
-      if((unusualConfirmed || repeatedConflict) && TimeCurrent()-lastDiagnostic[slot] >= 60)
-      {
-         PrintFormat("READINESS_STUCK_DIAGNOSTIC | candidate=%s dir=%s state=%s stateDuration=%ds candidateAge=%ds blocker=%s conflictCount=%d resetCount=%d timerOrigin=%s timerNextCheck=%s evidence=oldSide:%s loc:%s pressure:%s structure:%s timing:%s",
-                     g_readiness[slot].candidateId, g_readiness[slot].direction == 1 ? "BUY" : "SELL",
-                     XAU_ReadinessStateName(g_readiness[slot].state), stateAge,
-                     (int)(TimeCurrent()-g_readiness[slot].originTime), g_readiness[slot].lastBlocker,
-                     g_readiness[slot].entryReadyConflictCount, g_readiness[slot].resetCount,
-                     TimeToString(g_alignedCandidates[0].firstCandidateTime,TIME_DATE|TIME_SECONDS),
-                     TimeToString(g_alignedCandidates[0].readinessRecheckAt,TIME_DATE|TIME_SECONDS),
-                     g_lastEntryReadiness.oldSideState, g_lastEntryReadiness.locationState,
-                     g_lastEntryReadiness.pressureState, g_lastEntryReadiness.structureState,
-                     g_lastEntryReadiness.timingState);
-         lastDiagnostic[slot]=TimeCurrent();
-      }
-   }
 }
 
 // Context survives a losing close only long enough to let a *new* decision
@@ -14470,7 +14360,6 @@ void OnTick()
    // so market analysis/thesis/pressure/transition computation elsewhere in
    // this function is never affected by it.
    XAU_PostTradeCooldownTick();
-   XAU_ReadinessStuckWatchdog();
 
    // v4.9.6 — DIAGNOSTIC HEARTBEAT (prints every 60s telling user WHY bot is idle)
    if(TimeCurrent() - g_lastHeartbeat >= 60)
@@ -15143,9 +15032,7 @@ void OnTick()
                                  : XAU_EffectiveEntryDelaySeconds();
    bool alignedPrimaryDelayDue =
       (g_alignedCandidates[0].firstCandidateTime > 0 &&
-       TimeCurrent() - g_alignedCandidates[0].firstCandidateTime >= primaryDelayRequired &&
-       (g_alignedCandidates[0].readinessRecheckAt == 0 ||
-        TimeCurrent() >= g_alignedCandidates[0].readinessRecheckAt));
+       TimeCurrent() - g_alignedCandidates[0].firstCandidateTime >= primaryDelayRequired);
    // v6.0 STI: refresh macro trend state on every new M5 bar (cheap, bar-cached)
    if(newM5Bar) STI_Update();
    // v6.4.0 UPGRADE 1: update market personality on every new M5 bar
@@ -15715,32 +15602,7 @@ void OnTick()
    }
 
    bool tradeOpened = OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", finalSzMult);
-   // The first Entry Readiness observation is deliberately non-executable.
-   // v6.24.16 previously cleared the aligned timer here on that expected
-   // false return, so the next stable observation became a brand-new
-   // 120-180s candidate forever.  Preserve only a live readiness candidate;
-   // terminal invalidation, successful fill and later execution failures
-   // keep the existing clear-on-attempt behavior and cannot order-spam.
-   int readinessSlot = XAU_CampaignSlot(signal);
-   bool readinessAwaitingStableObservation = !tradeOpened &&
-      g_readiness[readinessSlot].active &&
-      g_readiness[readinessSlot].direction == signal &&
-      !g_lastEntryReadiness.entryReady;
-   if(readinessAwaitingStableObservation)
-   {
-      g_alignedCandidates[0].readinessRecheckAt = TimeCurrent() + 5;
-      PrintFormat("ENTRY_TIMER_REUSED | candidate=%s dir=%s elapsed=%ds nextReadinessCheck=%s reason=ENTRY_READINESS_%s",
-                  g_readiness[readinessSlot].candidateId, signal == 1 ? "BUY" : "SELL",
-                  (int)(TimeCurrent()-g_alignedCandidates[0].firstCandidateTime),
-                  TimeToString(g_alignedCandidates[0].readinessRecheckAt, TIME_DATE|TIME_SECONDS),
-                  XAU_ReadinessStateName(g_readiness[readinessSlot].state));
-      XAU_ReadinessShadowTrace("ENTRY_TIMER_REUSED", g_readiness[readinessSlot], "awaiting stable readiness observation");
-   }
-   else
-   {
-      g_alignedCandidates[0].firstCandidateTime = 0;
-      g_alignedCandidates[0].readinessRecheckAt = 0;
-   }
+   g_alignedCandidates[0].firstCandidateTime = 0;
    if(!tradeOpened) g_pendingSmartCautionMemory.valid=false;
    // v6.20.1: unconditionally invalidate the entry-timing mailbox right after
    // this specific OpenTrade attempt, success or fail -- it must never leak
@@ -17495,25 +17357,6 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
 
    if(ok)
    {
-      // A fill is a terminal readiness event.  Do not leave the pre-entry
-      // candidate rendered as SCANNING/ENTRY_READY while the campaign is now
-      // live and being managed.
-      int readinessSlot = XAU_CampaignSlot(signal);
-      if(g_readiness[readinessSlot].active &&
-         g_readiness[readinessSlot].direction == signal)
-      {
-         PrintFormat("CANDIDATE_TRADED | candidate=%s dir=%s setup=%s fingerprint=%s origin=%s age=%ds previousState=%s newState=TRADED resetReason=BROKER_FILL",
-                     g_readiness[readinessSlot].candidateId, signal == 1 ? "BUY" : "SELL",
-                     g_latestDecisionSnapshot.setupName, g_readiness[readinessSlot].fingerprint,
-                     TimeToString(g_readiness[readinessSlot].originTime, TIME_DATE|TIME_SECONDS),
-                     (int)(TimeCurrent()-g_readiness[readinessSlot].originTime),
-                     XAU_ReadinessStateName(g_readiness[readinessSlot].state));
-         XAU_ReadinessShadowTrace("CANDIDATE_TRADED", g_readiness[readinessSlot], "broker fill");
-         g_readiness[readinessSlot].active = false;
-         g_lastEntryReadiness.entryReady = false;
-         g_lastEntryReadiness.finalAction = "POSITION_ACTIVE";
-         g_lastEntryReadiness.reason = "Broker order filled; managing active position";
-      }
       // v6.24.13 — campaign registration lives HERE, not at any individual
       // caller's call site, precisely so every path that reaches a
       // confirmed fill through OpenTrade() (fresh entry, re-entry,
@@ -29430,14 +29273,6 @@ bool XAU_TimingAuthorityAllows(int signal, string setupName, double atr, string 
       return false;
    }
 
-   if(!g_alignedCandidates[lane].entryTimerCompletedLogged)
-   {
-      PrintFormat("ENTRY_TIMER_COMPLETED | candidate=%s_%s_%I64d dir=%s elapsed=%.0fs required=%.0fs",
-                  setupName, signal == 1 ? "BUY" : "SELL",
-                  g_alignedCandidates[lane].candidateGeneration, signal == 1 ? "BUY" : "SELL",
-                  elapsed, required);
-      g_alignedCandidates[lane].entryTimerCompletedLogged = true;
-   }
    g_pendingTimingProof.revalidationResult = "DELAY_SATISFIED_AND_FRESHNESS_RECHECKED";
    g_pendingTimingProof.timingEngineWaitSeconds = elapsed;
    g_lastEntryTimingDecision.valid = true;
@@ -29502,15 +29337,6 @@ bool XAU_FreshnessExtensionAuthority(int signal, string setupName, double setupS
                          g_alignedCandidates[lane].candidateSetup == setupName);
    if(!sameCandidate)
    {
-      bool replacingTimer = (g_alignedCandidates[lane].firstCandidateTime > 0);
-      if(replacingTimer)
-         PrintFormat("ENTRY_TIMER_RESTARTED | priorCandidate=%s_%s_%I64d reason=GENUINE_IDENTITY_CHANGE oldDir=%s oldSetup=%s newDir=%s newSetup=%s",
-                     g_alignedCandidates[lane].candidateSetup,
-                     g_alignedCandidates[lane].candidateDirection == 1 ? "BUY" : "SELL",
-                     g_alignedCandidates[lane].candidateGeneration,
-                     g_alignedCandidates[lane].candidateDirection == 1 ? "BUY" : "SELL",
-                     g_alignedCandidates[lane].candidateSetup,
-                     signal == 1 ? "BUY" : "SELL", setupName);
       g_alignedCandidates[lane].firstCandidateTime = TimeCurrent();
       g_alignedCandidates[lane].firstCandidatePrice = price;
       g_alignedCandidates[lane].impulseOrigin = price;
@@ -29525,12 +29351,6 @@ bool XAU_FreshnessExtensionAuthority(int signal, string setupName, double setupS
       g_alignedCandidates[lane].marketReset = false;
       g_alignedCandidates[lane].confirmationAfterExtension = false;
       g_alignedCandidates[lane].candidateGeneration++;
-      g_alignedCandidates[lane].readinessRecheckAt = 0;
-      g_alignedCandidates[lane].entryTimerCompletedLogged = false;
-      PrintFormat("ENTRY_TIMER_STARTED | candidate=%s_%s_%I64d dir=%s required=%.0fs origin=%s",
-                  setupName, signal == 1 ? "BUY" : "SELL", g_alignedCandidates[lane].candidateGeneration,
-                  signal == 1 ? "BUY" : "SELL", g_alignedCandidates[lane].requiredDelaySeconds,
-                  TimeToString(g_alignedCandidates[lane].firstCandidateTime, TIME_DATE|TIME_SECONDS));
    }
 
    g_alignedCandidates[lane].barsElapsed =
@@ -31860,12 +31680,6 @@ void BotMonitorExecutionFunnel(string eventType, string severity, string module,
                                string reasonText, string riskLotDecision,
                                double price)
 {
-   // This is the one shared sink for every named execution gate in
-   // OpenTrade().  Once readiness has allowed an entry, expose every later
-   // block explicitly instead of letting Command Center fall back to a
-   // misleading generic "scanning" message.
-   if(finalDecision == "BLOCKED" || finalDecision == "ERROR")
-      XAU_LogEntryReadyBlocked(signalDir, finalBlocker, reasonText);
    string funnelDetails = BotMonitorFunnelDetails(candidateAllowed, finalExecutionAllowed,
                                                  finalDecision, finalBlocker,
                                                  openTradeCalled, buyCalled, sellCalled,
@@ -33154,13 +32968,6 @@ string XAU_EntryReadinessDisplayBlock()
    XAU_EntryReadinessDecision r = g_lastEntryReadiness;
    int slot = XAU_CampaignSlot(r.direction);
    string d = "----------- ENTRY READINESS -----------\n";
-   if(r.finalAction == "POSITION_ACTIVE" || g_campaign[slot].active)
-   {
-      d += StringFormat("Candidate: %s | Direction: %s\n", r.candidateId, r.direction == 1 ? "BUY" : "SELL");
-      d += "State: POSITION_ACTIVE\n";
-      d += StringFormat("Execution: %s\n", r.reason);
-      return d;
-   }
    d += StringFormat("Candidate: %s | Preferred direction: %s\n", r.candidateId, r.direction == 1 ? "BUY" : "SELL");
    d += StringFormat("Bias: %s\n", r.biasState);
    d += StringFormat("Old-side state: %s\n", r.oldSideState);
@@ -33173,15 +32980,6 @@ string XAU_EntryReadinessDisplayBlock()
                      r.retestHeld ? "HELD" : "PENDING");
    d += StringFormat("Remaining room: %.2fR\n", r.remainingRoomR);
    d += StringFormat("Timing: %s\n", XAU_ReadinessStateName(g_readiness[slot].state));
-   d += StringFormat("Candidate age: %ds | Stable for: %ds\n",
-                     g_readiness[slot].originTime > 0 ? (int)(TimeCurrent()-g_readiness[slot].originTime) : 0,
-                     g_readiness[slot].lastStateChangeTime > 0 ? (int)(TimeCurrent()-g_readiness[slot].lastStateChangeTime) : 0);
-   d += StringFormat("Entry timer: %s\n", g_alignedCandidates[0].firstCandidateTime > 0
-                     ? StringFormat("%d/%.0f sec", (int)(TimeCurrent()-g_alignedCandidates[0].firstCandidateTime),
-                                    g_alignedCandidates[0].requiredDelaySeconds) : "complete");
-   if(StringLen(g_readiness[slot].lastBlocker) > 0)
-      d += StringFormat("Current blocker: %s (conflicts=%d)\n", g_readiness[slot].lastBlocker,
-                        g_readiness[slot].entryReadyConflictCount);
    d += StringFormat("Snapshot: %s\n", r.snapshotFresh ? "FRESH" : "STALE");
    d += StringFormat("Final action: %s\n", r.finalAction);
    d += StringFormat("Reason: %s\n", r.reason);
