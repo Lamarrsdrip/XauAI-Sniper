@@ -353,7 +353,8 @@ def _new_outlook_id(direction_label: str) -> str:
     return f"OUTLOOK-{OUTLOOK_SYMBOL}-{ts}-{direction_label}-{uuid.uuid4().hex[:6]}"
 
 
-async def generate_outlook_for_account(license_key: str, account: str, account_id: str = "") -> Optional[Dict]:
+async def generate_outlook_for_account(license_key: str, account: str, account_id: str = "",
+                                        is_late_catchup: bool = False) -> Optional[Dict]:
     """Generates and persists ONE new immutable outlook document for this
     account, using only real, already-transmitted EA evidence + the live
     price feed. Returns the stored document, or None if there is genuinely
@@ -391,6 +392,14 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
 
     outlook_id = _new_outlook_id("PENDING")
     now = datetime.now(timezone.utc)
+    # v6.24.18 owner directive 2026-07-16 -- explicit hourly slot key
+    # (account + symbol + UTC hour), NOT "however many minutes ago the last
+    # one happened to publish". A publication at 18:51 belongs to the 18:00
+    # slot; this field is what lets hourly_generation_tick check "does the
+    # 19:00 slot exist yet" instead of "was anything published recently",
+    # which is the exact distinction that prevented the 19:00 slot from
+    # being skipped by a late 18:51 publication.
+    hourly_slot = now.strftime("%Y-%m-%dT%H:00")
 
     if not evidence or current_price <= 0:
         no_valid_reason = evidence_reason if not evidence else "INTERNAL_GENERATION_ERROR"
@@ -405,6 +414,8 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "symbol": OUTLOOK_SYMBOL,
             "account": account, "license_key": license_key,
             "generated_at": now.isoformat(),
+            "hourly_slot": hourly_slot,
+            "late_catchup": is_late_catchup,
             "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
             "current_price": current_price,
             "primary_direction": "NO_VALID_OUTLOOK",
@@ -511,6 +522,8 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "symbol": OUTLOOK_SYMBOL,
             "account": account, "license_key": license_key,
             "generated_at": now.isoformat(),
+            "hourly_slot": hourly_slot,
+            "late_catchup": is_late_catchup,
             "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
             "current_price": current_price,
             "primary_direction": "NO_VALID_OUTLOOK",
@@ -534,6 +547,8 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "symbol": OUTLOOK_SYMBOL,
         "account": account, "license_key": license_key,
         "generated_at": now.isoformat(),
+        "hourly_slot": hourly_slot,
+        "late_catchup": is_late_catchup,
         "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
         "current_price": current_price,
         "price_source": price_source,
@@ -590,32 +605,64 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
 
 
 async def hourly_generation_tick() -> int:
-    """Called once per hour by the background loop. Generates at most one
-    NEW outlook per account that has posted EA evidence recently, so this
-    never publishes duplicate hourly signals even if the loop is delayed or
-    re-run (idempotent on the natural hour boundary via the accounts-seen
-    set, not a fixed clock assumption)."""
+    """Generates at most one NEW outlook per (account, symbol, UTC hourly
+    slot) that has posted EA evidence recently.
+
+    v6.24.18 owner directive 2026-07-16 -- root-cause fix for the "6:51 PM
+    publication skipped the 7:00 PM slot" incident. The OLD check asked "was
+    anything published in the last 55 minutes?" -- a publication at 18:51
+    answers that question "yes" all the way past 19:00, silently skipping
+    the 19:00 slot entirely. The fix asks the only question that actually
+    matters: "does THIS EXACT hourly slot (account+symbol+UTC hour) already
+    have an outlook?" A late 18:51 publication belongs to the 18:00 slot and
+    has zero bearing on whether the 19:00 slot exists.
+
+    Also performs bounded missed-slot catch-up: if the current slot doesn't
+    exist yet and the account's most recent outlook is itself more than one
+    slot old (i.e. a genuine gap, not just "this is the first tick after the
+    top of the hour"), the generated doc is marked late_catchup=True. Exactly
+    one outlook is still produced for the CURRENT slot only -- this does not
+    backfill every missed hour, and the next scheduled slot remains the next
+    real wall-clock hour boundary regardless of how late this one ran."""
     db = _db()
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    now = datetime.now(timezone.utc)
+    current_slot = now.strftime("%Y-%m-%dT%H:00")
+    cutoff = (now - timedelta(hours=2)).isoformat()
     accounts = await db.cloud_bot_activity.distinct("account", {"ts": {"$gte": cutoff}})
     published = 0
     for account in accounts:
         if not account:
             continue
-        recent = await db.cloud_market_outlooks.find_one(
-            {"account": account, "generated_at": {"$gte": (datetime.now(timezone.utc) - timedelta(minutes=55)).isoformat()}},
+        existing_slot = await db.cloud_market_outlooks.find_one(
+            {"account": account, "symbol": OUTLOOK_SYMBOL, "hourly_slot": current_slot},
             {"_id": 0, "id": 1},
         )
-        if recent:
-            continue  # already published this hour for this account
+        if existing_slot:
+            continue  # this exact hourly slot already has an outlook for this account -- never duplicate it
+
+        last_doc = await db.cloud_market_outlooks.find_one(
+            {"account": account, "symbol": OUTLOOK_SYMBOL},
+            {"_id": 0, "hourly_slot": 1}, sort=[("generated_at", -1)],
+        )
+        is_late_catchup = False
+        if last_doc and last_doc.get("hourly_slot") and last_doc["hourly_slot"] != current_slot:
+            try:
+                last_slot_dt = datetime.strptime(last_doc["hourly_slot"], "%Y-%m-%dT%H:00").replace(tzinfo=timezone.utc)
+                current_slot_dt = datetime.strptime(current_slot, "%Y-%m-%dT%H:00").replace(tzinfo=timezone.utc)
+                is_late_catchup = (current_slot_dt - last_slot_dt) > timedelta(hours=1, minutes=5)
+            except ValueError:
+                is_late_catchup = False
+
         lic_key = ""
         row = await db.cloud_bot_activity.find_one({"account": account}, {"_id": 0, "details": 1}, sort=[("ts", -1)])
         if row:
             lic_key = (row.get("details") or {}).get("license_key", "")
         try:
-            doc = await generate_outlook_for_account(lic_key, account, account_id=account)
+            doc = await generate_outlook_for_account(lic_key, account, account_id=account, is_late_catchup=is_late_catchup)
             if doc:
                 published += 1
+                if is_late_catchup:
+                    logger.warning(f"OUTLOOK_SLOT_LATE_CATCHUP account={account} slot={current_slot} previousSlot={last_doc.get('hourly_slot') if last_doc else None}")
                 await _dispatch_hourly_notification(doc)
         except Exception as e:
             logger.error(f"OUTLOOK_GENERATION_FAILED account={account}: {e}")

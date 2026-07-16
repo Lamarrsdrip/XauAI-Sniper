@@ -148,12 +148,32 @@ function NotificationSettings({ prefs, setPrefs }) {
   const [permissionState, setPermissionState] = useState(
     typeof Notification !== "undefined" ? Notification.permission : "unsupported"
   );
+  const [verifiedStatus, setVerifiedStatus] = useState(null);
+  const [testResult, setTestResult] = useState(null);
+  const [testSending, setTestSending] = useState(false);
 
+  const refreshStatus = useCallback(async () => {
+    try {
+      const { data } = await outlookAxios.get("/outlook/notifications/status");
+      setVerifiedStatus(data);
+    } catch (_) {
+      setVerifiedStatus({ final_status: "UNKNOWN" });
+    }
+  }, []);
+
+  // v6.24.18 owner directive -- subscribeDevice() must return a structured
+  // result, never silently swallow. Real errors are reported through
+  // verifiedStatus (backed by the authenticated /outlook/notifications/status
+  // endpoint) rather than an empty catch block hiding the failure entirely.
   const subscribeDevice = useCallback(async () => {
-    if (typeof navigator === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      return { ok: false, code: "PUSH_UNSUPPORTED", message: "This browser does not support push notifications." };
+    }
     try {
       const { data } = await outlookAxios.get("/outlook/notifications/vapid-public-key");
-      if (!data?.configured || !data?.public_key) return;
+      if (!data?.configured || !data?.public_key) {
+        return { ok: false, code: "SERVER_NOT_CONFIGURED", message: "Push server is not configured yet." };
+      }
       const reg = await navigator.serviceWorker.ready;
       let sub = await reg.pushManager.getSubscription();
       if (!sub) {
@@ -163,11 +183,14 @@ function NotificationSettings({ prefs, setPrefs }) {
         });
       }
       const json = sub.toJSON();
-      await outlookAxios.post("/outlook/notifications/subscribe", {
+      const subResp = await outlookAxios.post("/outlook/notifications/subscribe", {
         endpoint: json.endpoint, keys: json.keys, device_label: navigator.userAgent.slice(0, 60),
         timezone_offset_minutes: -new Date().getTimezoneOffset(),
       });
-    } catch (e) { /* subscription failure must not break settings UI */ }
+      return { ok: true, device_id: subResp.data?.device_id, endpoint_registered: true, server_ready: true };
+    } catch (e) {
+      return { ok: false, code: "REGISTRATION_FAILED", message: e?.message || "Device registration failed." };
+    }
   }, []);
 
   const setTier = useCallback(async (tier) => {
@@ -196,8 +219,9 @@ function NotificationSettings({ prefs, setPrefs }) {
       const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier, notify_all_devices: prefs?.notify_all_devices !== false });
       setPrefs(data?.prefs || { tier });
     } catch (_) { /* leave prefs unchanged on failure, user can retry */ }
+    await refreshStatus();
     setSaving(false);
-  }, [prefs, setPrefs, subscribeDevice]);
+  }, [prefs, setPrefs, subscribeDevice, refreshStatus]);
 
   const tier = prefs?.tier || "OFF";
 
@@ -209,26 +233,44 @@ function NotificationSettings({ prefs, setPrefs }) {
   // with a stale default tier before the real saved tier is known.
   useEffect(() => {
     if (!prefs) return;
+    refreshStatus();
     if (tier === "OFF") return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-    subscribeDevice();
+    subscribeDevice().then(refreshStatus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefs]);
 
   const allowNotifications = useCallback(async () => {
     setSaving(true);
+    let regResult = { ok: false };
     try {
       if (typeof Notification !== "undefined" && Notification.permission === "default") {
         const perm = await Notification.requestPermission();
         setPermissionState(perm);
         if (perm !== "granted") { setSaving(false); return; }
       }
-      await subscribeDevice();
-      const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier: "ALL_UPDATES", notify_all_devices: true });
-      setPrefs(data?.prefs || { tier: "ALL_UPDATES" });
+      regResult = await subscribeDevice();
+      if (regResult.ok) {
+        const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier: "ALL_UPDATES", notify_all_devices: true });
+        setPrefs(data?.prefs || { tier: "ALL_UPDATES" });
+      }
     } catch (_) { /* leave prefs unchanged on failure, user can retry */ }
+    await refreshStatus();
     setSaving(false);
-  }, [subscribeDevice, setPrefs]);
+  }, [subscribeDevice, setPrefs, refreshStatus]);
+
+  const sendTestNotification = useCallback(async () => {
+    setTestSending(true);
+    setTestResult(null);
+    try {
+      const { data } = await outlookAxios.post("/outlook/notifications/test");
+      setTestResult(data);
+    } catch (e) {
+      setTestResult({ status: "FAILED", message: e?.message || "Request failed." });
+    }
+    await refreshStatus();
+    setTestSending(false);
+  }, [refreshStatus]);
 
   // Prominent onboarding card: shown only to a user who has never enabled
   // Outlook notifications (tier still OFF) and hasn't explicitly denied
@@ -239,12 +281,41 @@ function NotificationSettings({ prefs, setPrefs }) {
   // list below instead, which already explains how to re-enable manually).
   const showOnboarding = prefs && tier === "OFF" && permissionState !== "denied";
 
+  // v6.24.18 owner directive -- ON must mean ON_VERIFIED, never "the
+  // preference tier happens to not be OFF". The bell only lights up amber
+  // once the backend has confirmed a real device registration + a working
+  // push server; every other state (still checking, setup incomplete,
+  // permission denied, server not ready) gets its own honest label.
+  const finalStatus = verifiedStatus?.final_status;
+  const isVerified = finalStatus === "ON_VERIFIED";
+  const statusLabel = {
+    ON_VERIFIED: "Phone alerts active",
+    OFF: "Notifications off",
+    SERVER_NOT_CONFIGURED: "Push server not ready",
+    SUBSCRIPTION_MISSING: "Setup required — device not registered",
+    DELIVERY_FAILED: "Last delivery failed",
+  }[finalStatus] || (finalStatus ? finalStatus : "Checking status…");
+
   return (
     <div className={`${CARD} p-5`}>
       <div className="flex items-center justify-between">
         <span className={MONO_LABEL}>Notifications</span>
-        {tier !== "OFF" ? <Bell className="h-4 w-4 text-amber-300" /> : <BellOff className="h-4 w-4 text-white/30" />}
+        {isVerified ? <Bell className="h-4 w-4 text-amber-300" /> : <BellOff className="h-4 w-4 text-white/30" />}
       </div>
+      {tier !== "OFF" && (
+        <div className="mt-1 flex items-center justify-between text-[10px]">
+          <span className={isVerified ? "text-amber-300/80" : "text-white/40"}>{statusLabel}</span>
+          <button onClick={sendTestNotification} disabled={testSending}
+                  className="text-white/40 underline decoration-dotted hover:text-white/70 disabled:opacity-50">
+            {testSending ? "Sending…" : "Send test notification"}
+          </button>
+        </div>
+      )}
+      {testResult && (
+        <p className={`mt-1 text-[10px] ${testResult.status === "SENT" ? "text-emerald-300/80" : "text-rose-300/80"}`}>
+          {testResult.status}: {testResult.message}
+        </p>
+      )}
       {showOnboarding && (
         <div className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] p-4">
           <div className="flex items-start gap-3">
@@ -437,14 +508,16 @@ export default function AIMarketOutlookPage() {
               </div>
             )}
 
+            {/* v6.24.18 owner directive -- genuine win rate: wins/(wins+losses),
+                never wins/total. "—" (not "0%") when nothing has resolved yet. */}
             <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Metric label="Total" value={stats.total_outlooks} />
-              <Metric label="Green" value={stats.green_results} />
-              <Metric label="Red" value={stats.red_results} />
-              <Metric label="No entry" value={stats.no_entry_results} />
-              <Metric label="TP1 rate" value={stats.tp1_hit_rate != null ? `${Math.round(stats.tp1_hit_rate * 100)}%` : "—"} />
-              <Metric label="TP2 rate" value={stats.tp2_hit_rate != null ? `${Math.round(stats.tp2_hit_rate * 100)}%` : "—"} />
-              <Metric label="Avg R" value={stats.average_r} />
+              <Metric label="Win rate" value={stats.win_rate != null ? `${Math.round(stats.win_rate * 100)}%` : "—"} />
+              <Metric label="Wins / Losses" value={`${stats.wins ?? 0} / ${stats.losses ?? 0}`} />
+              <Metric label="Total R" value={stats.total_r != null ? `${stats.total_r > 0 ? "+" : ""}${stats.total_r}R` : "—"} />
+              <Metric label="Avg R" value={stats.average_r != null ? `${stats.average_r > 0 ? "+" : ""}${stats.average_r}R` : "—"} />
+              <Metric label="TP1 / TP2 / TP3" value={`${stats.tp1_hit_rate != null ? Math.round(stats.tp1_hit_rate * 100) : 0}% / ${stats.tp2_hit_rate != null ? Math.round(stats.tp2_hit_rate * 100) : 0}% / ${stats.tp3_hit_rate != null ? Math.round(stats.tp3_hit_rate * 100) : 0}%`} />
+              <Metric label="No entry" value={stats.no_entry_count ?? stats.no_entry_results} />
+              <Metric label="Active" value={stats.active_unresolved_count ?? "—"} />
               <Metric label="Avg MFE/MAE" value={stats.average_mfe != null ? `${stats.average_mfe}/${stats.average_mae}` : "—"} />
             </div>
 

@@ -1892,6 +1892,21 @@ async def startup():
         # beyond a buried "Task exception was never retrieved" warning.
         # Moved inside the loop's own try/except so an import failure is
         # logged and retried every hour like any other tick failure.
+        #
+        # v6.24.18 owner directive 2026-07-16 -- root-cause fix. The OLD loop
+        # slept a flat 3600s from whenever it last ran, which is anchored to
+        # SERVER START TIME, not the wall clock: a server that started at
+        # :51 past the hour ticks forever at :51, never at :00. Combined with
+        # hourly_generation_tick's OLD 55-minute rolling-window dedup check,
+        # this is exactly what produced "Last Outlook: 6:51 PM, Next Outlook
+        # skipped 7:00 PM". The loop now sleeps only until the next real
+        # UTC hour boundary (plus a small buffer so the boundary has fully
+        # elapsed), so under normal operation it fires at :00 every hour
+        # regardless of when the server started. hourly_generation_tick's
+        # own exact-slot-key check (see its docstring) is the second,
+        # independent layer that also tolerates a delayed/retried tick
+        # without skipping or duplicating a slot.
+        from datetime import datetime, timezone, timedelta as _timedelta
         while True:
             try:
                 import market_outlook as _mo
@@ -1900,7 +1915,10 @@ async def startup():
                     logger.info(f"[outlook-hourly] published {published} outlook(s)")
             except Exception as e:
                 logger.warning(f"[outlook-hourly] {e}")
-            await asyncio.sleep(3600)
+            now = datetime.now(timezone.utc)
+            next_hour = (now.replace(minute=0, second=0, microsecond=0) + _timedelta(hours=1))
+            sleep_seconds = max(30.0, (next_hour - now).total_seconds() + 15.0)
+            await asyncio.sleep(sleep_seconds)
 
     async def _outlook_lifecycle_loop():
         while True:

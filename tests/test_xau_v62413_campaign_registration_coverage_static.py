@@ -72,7 +72,9 @@ def test_campaign_registration_lives_inside_opentrade_not_at_any_caller():
     fn_start = ea.index("bool OpenTrade(int signal")
     fn_body = ea[fn_start:fn_start + 90000]  # OpenTrade() is an unusually long function (~57k chars to this point)
     assert "XAU_CampaignRegisterAdd(signal, funnelSetup);" in fn_body
-    assert "XAU_CampaignOpenCore(signal, funnelSetup, g_latestDecisionSnapshot.horizon, sl, tp, tp, tp);" in fn_body
+    # v6.24.18: call now also passes the broker-confirmed core position id
+    # and real money risk for the pyramid basket-exit's fixed 1R denominator
+    assert "XAU_CampaignOpenCore(signal, funnelSetup, g_latestDecisionSnapshot.horizon, sl, tp, tp, tp,\n                              openedPosId, coreMoneyRiskUSD);" in fn_body
 
     # the three individual callers must NOT have their own separate
     # registration calls anymore -- exactly one call to each registration

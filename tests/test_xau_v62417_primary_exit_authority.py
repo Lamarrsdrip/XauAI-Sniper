@@ -210,11 +210,11 @@ def test_canonical_floor_function_exists_and_is_called_from_core_loop():
     assert "double XAU_ComputePrimaryExitFloor(" in EA_SRC
     assert "ENUM_XAU_TRADE_HEALTH XAU_ClassifyTradeHealth(" in EA_SRC
     core_loop = EA_SRC[EA_SRC.index("void XAU_RExitCoreLoop()"):]
-    assert "XAU_ComputePrimaryExitFloor(peakR, g_rExit[idx].guaranteedFloorR, tradeHealth, floorReason)" in core_loop[:8000]
+    assert "XAU_ComputePrimaryExitFloor(peakR, g_rExit[idx].guaranteedFloorR, tradeHealth, floorReason)" in core_loop[:11000]
 
 
 def test_floor_ratchet_uses_mathmax_never_recomputed_downward():
-    core_loop = EA_SRC[EA_SRC.index("void XAU_RExitCoreLoop()"):][:9000]
+    core_loop = EA_SRC[EA_SRC.index("void XAU_RExitCoreLoop()"):][:11000]
     assert "g_rExit[idx].guaranteedFloorR = MathMax(g_rExit[idx].guaranteedFloorR, desiredFloorR)" in core_loop
 
 

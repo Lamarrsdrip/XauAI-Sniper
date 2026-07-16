@@ -228,7 +228,9 @@ def test_exactly_three_trade_buy_sell_call_sites_exist():
     ea = read(BACKEND_EA)
     import re
     sites = re.findall(r'trade\.(?:Buy|Sell)\(', ea)
-    assert len(sites) == 6, f"expected 3 real placement sites (Buy+Sell literal each) = 6 matches, found {len(sites)}"
+    # v6.24.18: added a 4th real placement site (Exhaustion Counter, its own
+    # isolated magic/risk/exit family) -- 4 sites x Buy+Sell literal = 8.
+    assert len(sites) == 8, f"expected 4 real placement sites (Buy+Sell literal each) = 8 matches, found {len(sites)}"
 
 
 def test_opentrade_gates_cooldown_and_exhaustion_skipping_manual_override():

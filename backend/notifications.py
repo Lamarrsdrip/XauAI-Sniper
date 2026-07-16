@@ -61,7 +61,7 @@ def _build_payload(doc: Dict, event: str) -> Dict:
     deep_link = f"/ai-market-outlook?outlook_id={doc.get('id')}"
 
     if event == "OUTLOOK_PUBLISHED":
-        if direction in ("NO_VALID_OUTLOOK", "NEUTRAL", "RANGE"):
+        if direction in ("NO_VALID_OUTLOOK", "NEUTRAL", "RANGE", "TRANSITION"):
             title = "XAU AI Sniper — Hourly Outlook"
             body = f"No valid directional outlook this hour. Market state: {direction}. Confidence: {confidence}%"
         else:
@@ -128,14 +128,28 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> int
                 await db.cloud_notification_log.insert_one(log_entry)
                 continue
             delivered_any = False
+            last_failure_class = None
             for device in target_devices:
-                ok = await _send_webpush(device, payload)
+                ok, failure_class = await _send_webpush(device, payload)
                 if ok:
                     delivered_any = True
                 else:
-                    await db.cloud_push_subscriptions.delete_one({"id": device.get("id")})
+                    last_failure_class = failure_class
+                    # v6.24.18 owner directive 2026-07-16 -- only a CONFIRMED
+                    # permanent endpoint failure (browser/OS told us this
+                    # subscription is gone/expired -- HTTP 404/410) may delete
+                    # the device record. Every other failure class (server not
+                    # configured, dependency missing, temporary network error,
+                    # timeout, unexpected exception) must NOT delete a real
+                    # device just because one push attempt failed -- that was
+                    # silently unregistering working devices on ordinary
+                    # transient errors.
+                    if failure_class == "PERMANENT_SUBSCRIPTION_GONE":
+                        await db.cloud_push_subscriptions.delete_one({"id": device.get("id")})
             log_entry["sent_time"] = datetime.now(timezone.utc).isoformat()
             log_entry["delivery_status"] = "SENT" if delivered_any else "FAILED"
+            if not delivered_any:
+                log_entry["failure_reason"] = last_failure_class or "UNKNOWN_FAILURE"
             await db.cloud_notification_log.insert_one(log_entry)
             if delivered_any:
                 sent += 1
@@ -145,15 +159,29 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> int
         return 0
 
 
-async def _send_webpush(device: Dict, payload: Dict) -> bool:
+# v6.24.18 owner directive 2026-07-16 -- explicit failure taxonomy. A push
+# failure is not one undifferentiated "false" -- only PERMANENT_SUBSCRIPTION_GONE
+# may ever cause a device record to be deleted; every other class is a
+# temporary/environmental condition that must be retried, not treated as
+# proof the device is gone.
+PERMANENT_SUBSCRIPTION_GONE = "PERMANENT_SUBSCRIPTION_GONE"
+TEMPORARY_DELIVERY_FAILURE = "TEMPORARY_DELIVERY_FAILURE"
+SERVER_NOT_CONFIGURED = "SERVER_NOT_CONFIGURED"
+DEPENDENCY_MISSING = "DEPENDENCY_MISSING"
+INVALID_PAYLOAD = "INVALID_PAYLOAD"
+UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
+
+
+async def _send_webpush(device: Dict, payload: Dict) -> tuple:
+    """Returns (ok: bool, failure_class: Optional[str])."""
     if not vapid_configured():
         logger.info(f"NOTIFICATION_SKIPPED_NO_VAPID device={device.get('id')} payload={payload.get('title')}")
-        return False
+        return False, SERVER_NOT_CONFIGURED
     try:
         from pywebpush import webpush, WebPushException
     except ImportError:
         logger.warning("pywebpush not installed -- notification not sent. `pip install pywebpush` on the backend.")
-        return False
+        return False, DEPENDENCY_MISSING
     try:
         webpush(
             subscription_info={
@@ -164,10 +192,111 @@ async def _send_webpush(device: Dict, payload: Dict) -> bool:
             vapid_private_key=VAPID_PRIVATE_KEY,
             vapid_claims={"sub": VAPID_CLAIMS_SUB},
         )
-        return True
+        return True, None
     except WebPushException as e:
-        logger.warning(f"WEBPUSH_FAILED device={device.get('id')}: {e}")
-        return False
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        if status_code in (404, 410):
+            # Browser/OS push service confirmed this exact endpoint no
+            # longer exists -- the only case that may delete the device.
+            logger.warning(f"WEBPUSH_SUBSCRIPTION_GONE device={device.get('id')} status={status_code}: {e}")
+            return False, PERMANENT_SUBSCRIPTION_GONE
+        logger.warning(f"WEBPUSH_TEMPORARY_FAILURE device={device.get('id')} status={status_code}: {e}")
+        return False, TEMPORARY_DELIVERY_FAILURE
     except Exception as e:
         logger.warning(f"WEBPUSH_UNEXPECTED_ERROR device={device.get('id')}: {e}")
-        return False
+        return False, UNKNOWN_FAILURE
+
+
+async def send_test_notification(user_id: str) -> Dict:
+    """Real production dispatcher, not a second fake path. Uses the same
+    _send_webpush() every real event uses. Returns a structured status the
+    frontend can render without guessing (SENT/FAILED/NO_DEVICE/
+    SERVER_NOT_CONFIGURED/DEPENDENCY_MISSING/SUBSCRIPTION_EXPIRED). Never
+    creates an Outlook and never touches trading state."""
+    db = _db()
+    if not vapid_configured():
+        return {"status": "SERVER_NOT_CONFIGURED", "message": "Push server VAPID keys are not configured."}
+    try:
+        from pywebpush import webpush  # noqa: F401 -- import-availability probe
+    except ImportError:
+        return {"status": "DEPENDENCY_MISSING", "message": "pywebpush is not installed on the backend."}
+
+    devices = await db.cloud_push_subscriptions.find({"user_id": user_id}).to_list(10)
+    if not devices:
+        return {"status": "NO_DEVICE", "message": "No registered device subscription for this user."}
+
+    payload = {"title": "XAU AI Sniper Test", "body": "Phone alerts are working.",
+               "deep_link": "/ai-market-outlook", "outlook_id": None, "event": "TEST_NOTIFICATION"}
+    sent_any = False
+    last_failure = None
+    for device in devices:
+        ok, failure_class = await _send_webpush(device, payload)
+        if ok:
+            sent_any = True
+        else:
+            last_failure = failure_class
+            if failure_class == PERMANENT_SUBSCRIPTION_GONE:
+                await db.cloud_push_subscriptions.delete_one({"id": device.get("id")})
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.cloud_notification_log.insert_one({
+        "id": str(uuid.uuid4()), "idempotency_key": f"TEST:{user_id}:{now_iso}",
+        "user_id": user_id, "outlook_id": None, "notification_type": "TEST_NOTIFICATION",
+        "scheduled_time": now_iso, "sent_time": now_iso,
+        "delivery_status": "SENT" if sent_any else "FAILED",
+        "device_count": len(devices), "retry_count": 0,
+        "failure_reason": None if sent_any else (last_failure or UNKNOWN_FAILURE),
+    })
+    if sent_any:
+        return {"status": "SENT", "message": "Test notification sent."}
+    if last_failure == PERMANENT_SUBSCRIPTION_GONE:
+        return {"status": "SUBSCRIPTION_EXPIRED", "message": "The stored subscription is no longer valid; please re-enable notifications."}
+    return {"status": "FAILED", "message": f"Delivery failed ({last_failure or UNKNOWN_FAILURE})."}
+
+
+async def get_notification_status(user_id: str, account: str = "") -> Dict:
+    """Real, authenticated registration-status snapshot -- the frontend must
+    render THIS, never infer ON from the saved preference tier alone."""
+    db = _db()
+    prefs = await db.cloud_notification_prefs.find_one({"user_id": user_id}, {"_id": 0})
+    saved_tier = (prefs or {}).get("tier", "OFF")
+    devices = await db.cloud_push_subscriptions.find({"user_id": user_id}).to_list(10)
+    last_reg = None
+    for d in devices:
+        ts = d.get("created_at")
+        if ts and (last_reg is None or ts > last_reg):
+            last_reg = ts
+    last_log = await db.cloud_notification_log.find_one(
+        {"user_id": user_id}, {"_id": 0}, sort=[("scheduled_time", -1)],
+    )
+    server_ready = vapid_configured()
+    try:
+        import pywebpush  # noqa: F401
+        dependency_available = True
+    except ImportError:
+        dependency_available = False
+
+    if saved_tier == "OFF":
+        final_status = "OFF"
+    elif not server_ready:
+        final_status = "SERVER_NOT_CONFIGURED"
+    elif not dependency_available:
+        final_status = "SERVER_NOT_CONFIGURED"
+    elif not devices:
+        final_status = "SUBSCRIPTION_MISSING"
+    elif last_log and last_log.get("delivery_status") == "FAILED" and last_log.get("notification_type") in ("TEST_NOTIFICATION",):
+        final_status = "DELIVERY_FAILED"
+    else:
+        final_status = "ON_VERIFIED"
+
+    return {
+        "saved_tier": saved_tier,
+        "active_device_count": len(devices),
+        "most_recent_registration": last_reg,
+        "push_server_configured": server_ready,
+        "delivery_library_available": dependency_available,
+        "latest_notification_status": (last_log or {}).get("delivery_status"),
+        "latest_failure_reason": (last_log or {}).get("failure_reason"),
+        "latest_sent_time": (last_log or {}).get("sent_time"),
+        "latest_opened_time": (last_log or {}).get("opened_time"),
+        "final_status": final_status,
+    }

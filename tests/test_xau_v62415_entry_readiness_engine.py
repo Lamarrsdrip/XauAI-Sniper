@@ -162,7 +162,8 @@ def test_exactly_three_trade_buy_sell_call_sites_still_exist():
     ea = read(BACKEND_EA)
     import re
     sites = re.findall(r'trade\.(?:Buy|Sell)\(', ea)
-    assert len(sites) == 6, f"expected 6 (3 sites x Buy+Sell literal), found {len(sites)}"
+    # v6.24.18: added a 4th real placement site (Exhaustion Counter)
+    assert len(sites) == 8, f"expected 8 (4 sites x Buy+Sell literal), found {len(sites)}"
 
 
 def test_pyramid_reviewed_and_explicitly_not_routed_through_readiness():
@@ -214,7 +215,9 @@ def test_post_trade_cooldown_still_300_seconds():
 def test_campaign_registration_still_inside_opentrade_ok_block():
     ea = read(BACKEND_EA)
     assert "XAU_CampaignRegisterAdd(signal, funnelSetup);" in ea
-    assert "XAU_CampaignOpenCore(signal, funnelSetup, g_latestDecisionSnapshot.horizon, sl, tp, tp, tp);" in ea
+    # v6.24.18: call now also passes the broker-confirmed core position id
+    # and real money risk for the pyramid basket-exit's fixed 1R denominator
+    assert "XAU_CampaignOpenCore(signal, funnelSetup, g_latestDecisionSnapshot.horizon, sl, tp, tp, tp,\n                              openedPosId, coreMoneyRiskUSD);" in ea
 
 
 def test_readiness_gate_never_touches_sl_tp_or_lot_computation():

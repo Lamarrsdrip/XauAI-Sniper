@@ -132,6 +132,30 @@ def build_router() -> APIRouter:
         tp2_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 2)
         tp3_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 3)
         resolved_rs = [o.get("final_r") for o in stats_rows if o.get("final_r") is not None]
+
+        # v6.24.18 owner directive 2026-07-16 -- genuine win-rate system.
+        # "Resolved" = activated AND has a final_r (a real, closed outcome).
+        # No-entry/invalidated-before-entry/still-active/invalid-data rows
+        # never appear in this set, so they cannot dilute or fabricate a
+        # win rate. wins/losses/breakeven are mutually exclusive partitions
+        # of resolved_rows by the SIGN of the real final_r, not by the
+        # color_state label (color_state can legitimately diverge from the
+        # raw sign once a protected-floor exit policy is defined -- see the
+        # win_rate computation below, which is deliberately sign-of-final_r
+        # based, the one definition that can never be gamed by a display
+        # color).
+        resolved_rows = [o for o in stats_rows if (o.get("activation") or {}).get("activated") and o.get("final_r") is not None]
+        wins = [o for o in resolved_rows if o["final_r"] > 0]
+        losses = [o for o in resolved_rows if o["final_r"] < 0]
+        breakeven = [o for o in resolved_rows if o["final_r"] == 0]
+        no_entry = [o for o in stats_rows if (o.get("final_result") or "").startswith("GRAY")]
+        active_unresolved = [o for o in stats_rows if o.get("final_result") is None and not (o.get("final_result") or "").startswith("GRAY")]
+        win_rate = round(len(wins) / len(wins + losses), 3) if (wins or losses) else None
+        win_rs = [o["final_r"] for o in wins]
+        loss_rs = [o["final_r"] for o in losses]
+        gross_win = sum(win_rs) if win_rs else 0.0
+        gross_loss = abs(sum(loss_rs)) if loss_rs else 0.0
+
         stats = {
             "total_outlooks": len(stats_rows), "activated_outlooks": len(activated),
             "green_results": len(greens), "red_results": len(reds), "no_entry_results": len(grays),
@@ -141,6 +165,17 @@ def build_router() -> APIRouter:
             "average_r": round(sum(resolved_rs) / len(resolved_rs), 3) if resolved_rs else None,
             "average_mfe": round(sum(o.get("mfe", 0) for o in stats_rows) / len(stats_rows), 3) if stats_rows else None,
             "average_mae": round(sum(o.get("mae", 0) for o in stats_rows) / len(stats_rows), 3) if stats_rows else None,
+            # Genuine win-rate block -- wins/(wins+losses), never wins/total.
+            "resolved_count": len(resolved_rows),
+            "wins": len(wins), "losses": len(losses), "breakeven": len(breakeven),
+            "no_entry_count": len(no_entry), "active_unresolved_count": len(active_unresolved),
+            "win_rate": win_rate,  # None (display "—") when no resolved signals exist yet
+            "total_r": round(sum(resolved_rs), 3) if resolved_rs else 0.0,
+            "average_win_r": round(sum(win_rs) / len(win_rs), 3) if win_rs else None,
+            "average_loss_r": round(sum(loss_rs) / len(loss_rs), 3) if loss_rs else None,
+            "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else (None if gross_win == 0 else float("inf")),
+            "best_result_r": max(resolved_rs) if resolved_rs else None,
+            "worst_result_r": min(resolved_rs) if resolved_rs else None,
         }
         return {"outlooks": rows, "stats": stats}
 
@@ -220,5 +255,22 @@ def build_router() -> APIRouter:
         db = srv.db
         rows = await db.cloud_notification_log.find({"user_id": user["id"]}, {"_id": 0}).sort("scheduled_time", -1).to_list(min(limit, 100))
         return {"log": rows}
+
+    # v6.24.18 owner directive 2026-07-16 -- the frontend must never show ON
+    # from the saved preference tier alone. This is the real, authenticated
+    # source of truth: browser permission is a client-side fact the frontend
+    # already knows: everything else (device registration, push-server
+    # readiness, most recent delivery) is server-authoritative and can only
+    # come from here.
+    @r.get("/outlook/notifications/status")
+    async def get_notification_status(user: dict = Depends(srv.get_cloud_user)):
+        return await notif.get_notification_status(user["id"])
+
+    # Real production dispatcher -- uses the exact same _send_webpush() every
+    # hourly/milestone event uses. Never creates an Outlook, never touches
+    # trading state.
+    @r.post("/outlook/notifications/test")
+    async def send_test_notification_route(user: dict = Depends(srv.get_cloud_user)):
+        return await notif.send_test_notification(user["id"])
 
     return r
