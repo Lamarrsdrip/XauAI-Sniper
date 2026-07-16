@@ -1,0 +1,2325 @@
+{
+  "total_decisions": 82,
+  "decisions_with_real_outcome": 71,
+  "action_distribution": {
+    "WAIT_FOR_CONFIRMATION": 61,
+    "ALLOW_CORE": 15,
+    "TRANSITION_WATCH": 6
+  },
+  "trap_avoidance": {
+    "real_late_chase_flags": 12,
+    "correctly_flagged_as_not_allow": 12,
+    "missed_traps_would_have_allowed_and_lost": 0,
+    "missed_trap_ids": []
+  },
+  "over_caution_check": {
+    "unnecessarily_cautious_count": 0,
+    "unnecessarily_cautious_ids": []
+  },
+  "allowed_trade_outcomes": {
+    "allowed_and_won": 9,
+    "allowed_and_lost": 4,
+    "win_rate_of_allowed": 0.6923076923076923
+  },
+  "source_file": "/Users/libertyelectronics/XauAI-Sniper/audits/timeframe_comparison/pure_m5_results.csv",
+  "from_date": "2026.07.03",
+  "to_date": "2026.07.10",
+  "decision_rows": [
+    {
+      "opportunity_id": "MAC_EXEC_9414253613_PURE_M5",
+      "timestamp": "2026.07.03 10:25:19",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9414253613_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.269,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9415265274_PURE_M5",
+      "timestamp": "2026.07.03 11:35:31",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9415265274_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.001,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9416318221_PURE_M5",
+      "timestamp": "2026.07.03 12:50:33",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9416318221_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.18,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9417197106_PURE_M5",
+      "timestamp": "2026.07.03 13:55:34",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_GOOD",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_READY",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_MODERATE",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9417197106_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.558,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9418175254_PURE_M5",
+      "timestamp": "2026.07.03 15:05:27",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_GOOD",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_READY",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_MODERATE",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9418175254_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.346,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9419095260_PURE_M5",
+      "timestamp": "2026.07.03 16:00:41",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9419095260_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.001,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9419745661_PURE_M5",
+      "timestamp": "2026.07.03 16:30:31",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9419745661_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -0.996,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9422710914_PURE_M5",
+      "timestamp": "2026.07.03 19:35:27",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9422710914_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.308,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9423998434_PURE_M5",
+      "timestamp": "2026.07.06 01:15:41",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9423998434_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.307,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9424627518_PURE_M5",
+      "timestamp": "2026.07.06 02:20:37",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9424627518_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.657,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9425014345_PURE_M5",
+      "timestamp": "2026.07.06 02:50:29",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_GOOD",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_READY",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_MODERATE",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9425014345_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.113,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9425768089_PURE_M5",
+      "timestamp": "2026.07.06 03:55:16",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9425768089_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.253,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9427595868_PURE_M5",
+      "timestamp": "2026.07.06 06:20:30",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9427595868_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.173,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9427887983_PURE_M5",
+      "timestamp": "2026.07.06 06:45:28",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9427887983_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.164,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9436532321_PURE_M5",
+      "timestamp": "2026.07.06 15:30:31",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_EXCELLENT",
+        "exhaustion": "EXHAUSTION_LOW",
+        "timing": "TIMING_READY",
+        "htf": "HTF_STRONGLY_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9436532321_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -0.999,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9437145896_PURE_M5",
+      "timestamp": "2026.07.06 15:50:47",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9437145896_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.373,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9438767673_PURE_M5",
+      "timestamp": "2026.07.06 16:55:21",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_EXCELLENT",
+        "exhaustion": "EXHAUSTION_LOW",
+        "timing": "TIMING_READY",
+        "htf": "HTF_STRONGLY_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9438767673_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9445581393_PURE_M5",
+      "timestamp": "2026.07.07 02:15:37",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9445581393_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9447162361_PURE_M5",
+      "timestamp": "2026.07.07 04:45:26",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9447162361_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.019,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9448484106_PURE_M5",
+      "timestamp": "2026.07.07 06:55:28",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9448484106_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.279,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9450028588_PURE_M5",
+      "timestamp": "2026.07.07 08:45:32",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_EXCELLENT",
+        "exhaustion": "EXHAUSTION_LOW",
+        "timing": "TIMING_READY",
+        "htf": "HTF_STRONGLY_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9450028588_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.308,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9451565630_PURE_M5",
+      "timestamp": "2026.07.07 10:45:37",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9451565630_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.724,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9453717930_PURE_M5",
+      "timestamp": "2026.07.07 12:55:18",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9453717930_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.698,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9470826628_PURE_M5",
+      "timestamp": "2026.07.08 09:25:38",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9470826628_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -0.992,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9471378302_PURE_M5",
+      "timestamp": "2026.07.08 10:06:42",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9471378302_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.4,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2937038429_PURE_M5",
+      "timestamp": "2026.07.08 13:10:35",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_EXCELLENT",
+        "exhaustion": "EXHAUSTION_LOW",
+        "timing": "TIMING_READY",
+        "htf": "HTF_STRONGLY_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_STRONG",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2937038429_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.13,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2937288250_PURE_M5",
+      "timestamp": "2026.07.08 13:50:14",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2937288250_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.16,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9476175128_PURE_M5",
+      "timestamp": "2026.07.08 13:50:44",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9476175128_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.4,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2937419464_PURE_M5",
+      "timestamp": "2026.07.08 14:11:15",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2937419464_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.023,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9477557258_PURE_M5",
+      "timestamp": "2026.07.08 15:00:47",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9477557258_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -0.999,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2937815083_PURE_M5",
+      "timestamp": "2026.07.08 15:05:18",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2937815083_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.039,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9479200065_PURE_M5",
+      "timestamp": "2026.07.08 16:10:37",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9479200065_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.062,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2938423303_PURE_M5",
+      "timestamp": "2026.07.08 17:05:45",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2938423303_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -0.999,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2938693754_PURE_M5",
+      "timestamp": "2026.07.08 18:00:09",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2938693754_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.04,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9482148224_PURE_M5",
+      "timestamp": "2026.07.08 18:05:15",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9482148224_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.219,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9483784022_PURE_M5",
+      "timestamp": "2026.07.08 19:16:29",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_GOOD",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_READY",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_MODERATE",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9483784022_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -0.997,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9484811840_PURE_M5",
+      "timestamp": "2026.07.08 20:06:38",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9484811840_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.005,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": true,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_24_PURE_M5",
+      "timestamp": "2026.07.09 00:05:00",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_GOOD",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_READY",
+        "htf": "HTF_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "VPS_24_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 2.0,
+        "real_max_mfe": 1.236,
+        "real_max_mae": 1.608,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_26_PURE_M5",
+      "timestamp": "2026.07.09 00:15:00",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_GOOD",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_READY",
+        "htf": "HTF_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "VPS_26_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": null,
+        "real_max_mae": null,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2939915775_PURE_M5",
+      "timestamp": "2026.07.09 01:35:11",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2939915775_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.003,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_13_PURE_M5",
+      "timestamp": "2026.07.09 03:15:00",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_GOOD",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_READY",
+        "htf": "HTF_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_13_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": 0.0,
+        "real_max_mae": 2.44,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2940111245_PURE_M5",
+      "timestamp": "2026.07.09 03:35:14",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2940111245_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.07,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2940184690_PURE_M5",
+      "timestamp": "2026.07.09 04:30:14",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2940184690_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.024,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9489284047_PURE_M5",
+      "timestamp": "2026.07.09 04:35:04",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9489284047_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.151,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2940264213_PURE_M5",
+      "timestamp": "2026.07.09 05:10:16",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2940264213_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.071,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9490606893_PURE_M5",
+      "timestamp": "2026.07.09 06:50:11",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9490606893_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.098,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2940617882_PURE_M5",
+      "timestamp": "2026.07.09 06:50:13",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2940617882_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.045,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2940944581_PURE_M5",
+      "timestamp": "2026.07.09 08:15:13",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2940944581_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.121,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_20_PURE_M5",
+      "timestamp": "2026.07.09 08:30:00",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_TRANSITIONING",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_TRANSITIONING",
+        "action": "TRANSITION_WATCH",
+        "reason": "opposite evidence developing, not yet confirmed"
+      },
+      "graded": {
+        "opportunity_id": "MAC_20_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": null,
+        "real_max_mae": null,
+        "thesis_action": "TRANSITION_WATCH",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_21_PURE_M5",
+      "timestamp": "2026.07.09 08:35:00",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_TRANSITIONING",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_TRANSITIONING",
+        "action": "TRANSITION_WATCH",
+        "reason": "opposite evidence developing, not yet confirmed"
+      },
+      "graded": {
+        "opportunity_id": "MAC_21_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 2.0,
+        "real_max_mfe": 1.188,
+        "real_max_mae": 0.088,
+        "thesis_action": "TRANSITION_WATCH",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_22_PURE_M5",
+      "timestamp": "2026.07.09 08:40:00",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_TRANSITIONING",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_TRANSITIONING",
+        "action": "TRANSITION_WATCH",
+        "reason": "opposite evidence developing, not yet confirmed"
+      },
+      "graded": {
+        "opportunity_id": "MAC_22_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 2.0,
+        "real_max_mfe": 1.188,
+        "real_max_mae": 0.088,
+        "thesis_action": "TRANSITION_WATCH",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2941282863_PURE_M5",
+      "timestamp": "2026.07.09 09:35:09",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2941282863_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.003,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_36_PURE_M5",
+      "timestamp": "2026.07.09 10:55:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_36_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": 0.0,
+        "real_max_mae": 1.08,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_37_PURE_M5",
+      "timestamp": "2026.07.09 11:00:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_37_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": 0.0,
+        "real_max_mae": 0.76,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2941818488_PURE_M5",
+      "timestamp": "2026.07.09 11:45:15",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2941818488_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.023,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_23_PURE_M5",
+      "timestamp": "2026.07.09 13:55:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_23_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": 0.0,
+        "real_max_mae": 1.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_24_PURE_M5",
+      "timestamp": "2026.07.09 14:00:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_24_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": 0.0,
+        "real_max_mae": 0.656,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2942964927_PURE_M5",
+      "timestamp": "2026.07.09 14:45:31",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_EXCELLENT",
+        "exhaustion": "EXHAUSTION_LOW",
+        "timing": "TIMING_READY",
+        "htf": "HTF_STRONGLY_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2942964927_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.008,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9497876386_PURE_M5",
+      "timestamp": "2026.07.09 15:11:32",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9497876386_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.076,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2943186916_PURE_M5",
+      "timestamp": "2026.07.09 15:35:09",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2943186916_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.039,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_EXEC_2943396166_PURE_M5",
+      "timestamp": "2026.07.09 16:30:09",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_EXEC_2943396166_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.094,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9500674206_PURE_M5",
+      "timestamp": "2026.07.09 17:05:04",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9500674206_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.06,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9500674709_PURE_M5",
+      "timestamp": "2026.07.09 17:05:05",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9500674709_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.036,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9501604201_PURE_M5",
+      "timestamp": "2026.07.09 17:45:21",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_GOOD",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_READY",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_MODERATE",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9501604201_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.062,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9501604530_PURE_M5",
+      "timestamp": "2026.07.09 17:45:22",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_EXCELLENT",
+        "exhaustion": "EXHAUSTION_LOW",
+        "timing": "TIMING_READY",
+        "htf": "HTF_STRONGLY_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9501604530_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.062,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_40_PURE_M5",
+      "timestamp": "2026.07.09 18:30:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_40_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": 0.004,
+        "real_max_mae": 0.212,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_41_PURE_M5",
+      "timestamp": "2026.07.09 18:35:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_41_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": 0.004,
+        "real_max_mae": 0.212,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_42_PURE_M5",
+      "timestamp": "2026.07.09 18:40:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_42_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": null,
+        "real_max_mae": null,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_EXEC_9502739852_PURE_M5",
+      "timestamp": "2026.07.09 18:50:04",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_ACCEPTABLE",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_ALIGNED",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_BALANCED",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_EXEC_9502739852_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 0.103,
+        "real_max_mfe": null,
+        "real_max_mae": 0.0,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_29_PURE_M5",
+      "timestamp": "2026.07.09 21:30:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_29_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": 0.372,
+        "real_max_mae": 0.144,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_30_PURE_M5",
+      "timestamp": "2026.07.09 21:35:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_30_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": 0.376,
+        "real_max_mae": 0.144,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_31_PURE_M5",
+      "timestamp": "2026.07.09 21:40:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_31_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": 0.376,
+        "real_max_mae": 0.144,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_63_PURE_M5",
+      "timestamp": "2026.07.10 00:25:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "VPS_63_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": 0.332,
+        "real_max_mae": 1.212,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_64_PURE_M5",
+      "timestamp": "2026.07.10 00:35:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_TRANSITIONING",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_TRANSITIONING",
+        "action": "TRANSITION_WATCH",
+        "reason": "opposite evidence developing, not yet confirmed"
+      },
+      "graded": {
+        "opportunity_id": "VPS_64_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": null,
+        "real_max_mae": null,
+        "thesis_action": "TRANSITION_WATCH",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_61_PURE_M5",
+      "timestamp": "2026.07.10 03:25:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_61_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": 0.448,
+        "real_max_mae": 1.2,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_62_PURE_M5",
+      "timestamp": "2026.07.10 03:35:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_62_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": null,
+        "real_max_mae": null,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_63_PURE_M5",
+      "timestamp": "2026.07.10 04:05:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_63_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 2.0,
+        "real_max_mfe": 0.904,
+        "real_max_mae": 0.292,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "VPS_79_PURE_M5",
+      "timestamp": "2026.07.10 04:25:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_TRANSITIONING",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_TRANSITIONING",
+        "action": "TRANSITION_WATCH",
+        "reason": "opposite evidence developing, not yet confirmed"
+      },
+      "graded": {
+        "opportunity_id": "VPS_79_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": 0.0,
+        "real_max_mae": 0.624,
+        "thesis_action": "TRANSITION_WATCH",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_67_PURE_M5",
+      "timestamp": "2026.07.10 04:40:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_67_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": 0.016,
+        "real_max_mae": 0.988,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_68_PURE_M5",
+      "timestamp": "2026.07.10 05:10:00",
+      "thesis": {
+        "direction": 1,
+        "location": "LOCATION_GOOD",
+        "exhaustion": "EXHAUSTION_MODERATE",
+        "timing": "TIMING_READY",
+        "htf": "HTF_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "SELL_PRESSURE_MODERATE",
+        "action": "ALLOW_CORE",
+        "reason": "healthy campaign, acceptable-or-better location, timing ready"
+      },
+      "graded": {
+        "opportunity_id": "MAC_68_PURE_M5",
+        "real_outcome": "NO_TRADE",
+        "real_simulated_R": null,
+        "real_max_mfe": 0.476,
+        "real_max_mae": 0.072,
+        "thesis_action": "ALLOW_CORE",
+        "would_have_allowed": true,
+        "would_have_waited": false,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_69_PURE_M5",
+      "timestamp": "2026.07.10 06:25:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_STRONG_CONFLICT",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "BUY_PRESSURE_STRONG",
+        "action": "WAIT_FOR_CONFIRMATION",
+        "reason": "awaiting fresh confirmation"
+      },
+      "graded": {
+        "opportunity_id": "MAC_69_PURE_M5",
+        "real_outcome": "WIN",
+        "real_simulated_R": 2.0,
+        "real_max_mfe": 0.888,
+        "real_max_mae": 0.476,
+        "thesis_action": "WAIT_FOR_CONFIRMATION",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    },
+    {
+      "opportunity_id": "MAC_74_PURE_M5",
+      "timestamp": "2026.07.10 07:25:00",
+      "thesis": {
+        "direction": -1,
+        "location": "LOCATION_LATE",
+        "exhaustion": "EXHAUSTION_HIGH",
+        "timing": "TIMING_WAIT_CONFIRMATION",
+        "htf": "HTF_TRANSITIONING",
+        "structure": "STRUCTURE_MIXED",
+        "pressure": "PRESSURE_TRANSITIONING",
+        "action": "TRANSITION_WATCH",
+        "reason": "opposite evidence developing, not yet confirmed"
+      },
+      "graded": {
+        "opportunity_id": "MAC_74_PURE_M5",
+        "real_outcome": "LOSS",
+        "real_simulated_R": -1.0,
+        "real_max_mfe": 0.0,
+        "real_max_mae": 0.64,
+        "thesis_action": "TRANSITION_WATCH",
+        "would_have_allowed": false,
+        "would_have_waited": true,
+        "correctly_flagged_trap": false,
+        "missed_trap": false,
+        "unnecessarily_cautious": false
+      }
+    }
+  ]
+}
