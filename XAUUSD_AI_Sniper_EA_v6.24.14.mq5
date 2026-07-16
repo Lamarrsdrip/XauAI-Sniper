@@ -1,6 +1,22 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M5 Gold Edition|
+//|   v6.24.14 - Post-Trade Cooldown + Exhausted-Direction Ban        |
+//|   Universal 5-minute execution cooldown after any full close, plus|
+//|   an exhausted-old-direction re-entry ban that requires a genuine |
+//|   structural reset (never time alone) before the same direction   |
+//|   can trade again -- opposite-direction analysis keeps running    |
+//|   live through the cooldown so a fresh setup can fire immediately |
+//|   once it expires. See v6.24.12/13 below for the pressure model   |
+//|   and campaign-registration coverage fix that preceded this.      |
+//+------------------------------------------------------------------+
+//|   v6.24.11 - Command Center Market Thesis Display                |
+//|   On-chart + web dashboard now show real campaign state (thesis, |
+//|   confidence, exhaustion, transition/reversal signal) instead of  |
+//|   raw logs. Persistent campaign-state object carries real decision|
+//|   authority across bars; immutable decision snapshot expanded with|
+//|   remaining schema fields for full post-trade forensic replay.    |
+//+------------------------------------------------------------------+
 //|   v6.24.1 - 15% Risk Margin Fix (on Aligned Entry Engine)         |
 //|   Removed the arbitrary "required margin must be <=50% of free    |
 //|   margin" ceiling (FULL_RISK_BINARY_BLOCK/MARGIN_BELOW_FULL_RISK) |

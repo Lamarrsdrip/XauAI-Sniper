@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.24.11";
-  const edition  = info?.edition  || "COMMAND CENTER MARKET THESIS DISPLAY";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.24.11.mq5";
+  const version  = info?.version  || "v6.24.14";
+  const edition  = info?.edition  || "POST-TRADE COOLDOWN + EXHAUSTED-DIRECTION BAN";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.24.14.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
