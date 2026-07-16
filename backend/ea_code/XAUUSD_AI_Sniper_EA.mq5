@@ -2063,14 +2063,14 @@ input bool   InpNewsAftermathEnable  = true;  // Pause new entries after true ne
 input double InpNewsSpreadMulti      = 2.5;   // Broker-noise classifier threshold; no aftermath timer by itself
 input double InpNewsAftermathArmMulti= 3.5;   // v6.4.7: only this ratio (or scheduled news/extreme spread) arms NEWS_AFTERMATH
 input bool   InpNewsAftermathIgnoreBrokerNoise = true; // v6.4.7: spread noise logs, but does not create a fake news pause
-input int    InpNewsAftermathMins    = 10;    // Minutes to block new entries after spike (timer NOT reset on every tick — fixed v6.4.6)
-input int    InpPostNewsConfirmBars  = 3;     // Bars of directional closes to confirm post-news direction (1-5 recommended)
+input int    InpNewsAftermathMins    = 5;     // v6.24.17: owner rule -- blanket post-news execution gate is bounded to exactly 5 minutes from the actual spike (timer NOT reset on every tick — fixed v6.4.6). Was 10.
+input int    InpPostNewsConfirmBars  = 3;     // Bars of directional closes to confirm post-news direction (1-5 recommended) -- informational bias tracking only, never itself blocks entries
 input double InpPostNewsSpreadReturnX = 2.5;  // v6.17.14: raised from 1.5 -- loosened alongside InpMaxSpread, same user choice. Spread must return to <= N× EMA baseline before post-news entries allowed
-input int    InpPostNewsAvoidMins    = 20;    // Max minutes to stay in PNS_AVOID before reverting to normal
+input int    InpPostNewsAvoidMins    = 5;     // v6.24.17: owner rule -- no extra 20/30/60/90-minute blanket block once the 5-minute gate has passed. Was 20.
 input bool   InpAdaptiveNewsMomentumEnable = true; // v6.10.0: staged news engine; blocks release chaos, then trades confirmed continuation
 input int    InpAdaptiveNewsPreBlockMin    = 15;   // minutes before scheduled US data release to block fresh entries
-input int    InpAdaptiveNewsReleaseCooldownMin = 5; // minutes after release to observe first impulse, no entries
-input int    InpAdaptiveNewsPostWindowMin  = 60;   // minutes after release to evaluate post-news continuation/retest entries
+input int    InpAdaptiveNewsReleaseCooldownMin = 5; // minutes after release to observe first impulse, no entries -- this IS the owner's bounded five-minute safety gate for scheduled/calendar releases
+input int    InpAdaptiveNewsPostWindowMin  = 5;    // v6.24.17: owner rule -- post-release OBSERVING/telemetry window bounded to 5 minutes past the cooldown, not an hour. This phase was already non-blocking at the authority level (XAU_NewsAuthorityAllows), but a long window kept NEWS_OBSERVING displayed as if it were still an active blocker. Was 60.
 input int    InpAdaptiveNewsImpulseBars    = 2;    // v6.14.0: fewer closed M5 bars; still waits out release chaos but reacts before the move is gone
 input double InpAdaptiveNewsMinImpulseBodyATR = 0.45; // v6.14.0: aggregate impulse body needed to call continuation real
 input double InpAdaptiveNewsMidpointBufferATR = 0.12; // price must hold impulse midpoint with this ATR tolerance
@@ -3741,6 +3741,7 @@ struct XAU_AlignedCandidateState
    // it prevents a due candidate from forcing the full scan on every tick.
    datetime readinessRecheckAt;
    bool     entryTimerCompletedLogged;
+   bool     postWaitDecisionLogged;   // v6.24.17: one-shot ENTRY_DELAY_COMPLETED log per candidate generation
 };
 // Separate state slots prevent PRIMARY, RE_ENTRY and PYRAMID from resetting
 // one another's 2-3 minute clocks while still using the same authorities.
@@ -15028,6 +15029,9 @@ void OnTick()
                      spreadEventType, spread, g_spreadEMA, spreadRatio, InpNewsAftermathArmMulti,
                      scheduledNewsNow ? "Y" : "N",
                      InpNewsAftermathMins, TimeToString(g_newsAftermathUntil, TIME_MINUTES));
+         PrintFormat("NEWS_GATE_STARTED | event=%s eventTime=%s gateSeconds=%d gateEndsAt=%s",
+                     spreadEventType, TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
+                     InpNewsAftermathMins * 60, TimeToString(g_newsAftermathUntil, TIME_DATE|TIME_SECONDS));
       }
       // else: still inside the same window — do NOT extend. Timer counts down cleanly.
    }
@@ -15054,6 +15058,17 @@ void OnTick()
       PrintFormat("POST_NEWS_DISCOVERY: aftermath window expired | price moved %.1f pts from pre-news %.5f | initial bias=%s",
                   priceDelta, g_preNewsPrice,
                   g_postNewsBias > 0 ? "BULLISH" : g_postNewsBias < 0 ? "BEARISH" : "UNCLEAR");
+      // Owner rule: the blanket gate is bounded to InpNewsAftermathMins (5min
+      // default) -- once it expires, normal signal/readiness/execution logic
+      // resumes IMMEDIATELY. This state machine (DISCOVERY/CONFIRMED/ALLOWED)
+      // is informational bias-tracking for one optional setup trigger (see
+      // postNewsTrendAccepted in the HTF trend-follow setup); it is NOT a
+      // second blocking timer, and a trade may still be rejected only for a
+      // current named reason (spread/structure/no-signal/readiness), never
+      // simply "news" again.
+      Print("NEWS_GATE_COMPLETED | blanket execution gate expired, normal evaluation resumes now");
+      Print("POST_NEWS_NORMAL_TRADING_RESUMED");
+      Print("POST_NEWS_ENTRY_EVALUATED | reason=blanket gate expired, no forced additional wait");
    }
    if(g_postNewsState == PNS_DISCOVERY || g_postNewsState == PNS_CONFIRMED)
    {
@@ -16639,17 +16654,48 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          return false;
       }
 
-      // v6.24.15 — Entry Readiness Engine: the actual gate this feature
-      // exists to add. Reuses g_transitionDecision (already recomputed this
-      // bar by the caller's own scan pipeline, same convention every other
-      // call site in this file follows) rather than recomputing it here.
-      // Every non-manual-override caller of OpenTrade() -- primary path and
-      // CheckReEntryOpportunity, the only two -- is covered by construction.
+      // v6.24.15 — Entry Readiness Engine, computed for telemetry/Command
+      // Center display on every call (unchanged).
+      //
+      // v6.24.17 CRITICAL FIX -- runtime-proven from the live 2026-07-16
+      // journal: this gate used to hard-block on ANY non-ready state,
+      // including its own soft/duplicate observational buckets (FORMING,
+      // WAIT_FOR_LOCATION, WAIT_FOR_PRESSURE, WAIT_FOR_STRUCTURE,
+      // WAIT_FOR_RECLAIM, WAIT_FOR_RETEST, WAIT_FOR_EXHAUSTION, BIAS_ONLY,
+      // or CONFIRMED-but-not-yet-observed-twice via candidateAlreadyExisted).
+      // Those buckets are XAU_MapToReadinessState's OWN independent re-
+      // derivation of location/pressure/structure/timing from XAU_ComputeMarketThesis
+      // -- a SEPARATE evidence reader from XAU_SmartEntryCautionGate and
+      // XAU_FinalEntryArbiter (both already fixed/simplified this release).
+      // Live evidence: 172 candidates today reached
+      // "FINAL_ENTRY_ARBITER decision=ALLOW" / "BOT_DECISION action=ENTER_ALIGNED_FULL_RISK"
+      // (i.e. every upstream authority already agreed), then were vetoed
+      // HERE half a second later with state=FORMING -- zero of the 172
+      // reached OrderSend all day. This is exactly the "two brains
+      // computing the same decision from different thresholds" failure
+      // mode this file's own CheckPyramidOpportunity comment already warns
+      // against, just for primary entries instead of pyramid adds.
+      // Per owner spec ("one final market-readiness authority... after
+      // ENTRY_READY, only execution/account safety should remain"): once
+      // XAU_FinalEntryArbiter has already said ALLOW (the only way primary/
+      // RE_ENTRY code reaches this line at all), a SECOND, independently-
+      // computed non-ready opinion must not veto it. Only the two states
+      // that represent a genuinely DISTINCT fact -- not a duplicate opinion
+      // -- remain a hard block: an actually still-active opposite-side
+      // campaign (OLD_SIDE_ACTIVE) and objective invalidation/room-collapse
+      // (INVALIDATED/EXPIRED, both sourced from real structure/room facts).
+      // Every other state is now informational only: still computed, still
+      // logged, still shown on Command Center, never re-delaying an
+      // already-approved entry.
       g_lastEntryReadiness = XAU_UpdateEntryReadiness(signal, g_transitionDecision);
-      if(!g_lastEntryReadiness.entryReady)
+      ENUM_XAU_READINESS_STATE readinessNow = g_readiness[XAU_CampaignSlot(signal)].state;
+      bool readinessHardBlock = (readinessNow == READINESS_OLD_SIDE_ACTIVE ||
+                                 readinessNow == READINESS_INVALIDATED ||
+                                 readinessNow == READINESS_EXPIRED);
+      if(readinessHardBlock)
       {
          string rdMsg = StringFormat("ENTRY_READINESS_BLOCK: %s not ready -- state=%s finalAction=%s oldSide=%s location=%s pressure=%s structure=%s timing=%s",
-                                     signal == 1 ? "BUY" : "SELL", XAU_ReadinessStateName(g_readiness[XAU_CampaignSlot(signal)].state),
+                                     signal == 1 ? "BUY" : "SELL", XAU_ReadinessStateName(readinessNow),
                                      g_lastEntryReadiness.finalAction, g_lastEntryReadiness.oldSideState,
                                      g_lastEntryReadiness.locationState, g_lastEntryReadiness.pressureState,
                                      g_lastEntryReadiness.structureState, g_lastEntryReadiness.timingState);
@@ -16659,6 +16705,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                    true, false, "BLOCKED", "ENTRY_NOT_READY",
                                    true, false, false, 0, 0, rdMsg, reason, 0.0);
          return false;
+      }
+      else if(!g_lastEntryReadiness.entryReady)
+      {
+         PrintFormat("ENTRY_READINESS_INFORMATIONAL_ONLY: %s state=%s did not reach CONFIRMED/ENTRY_READY, but FinalEntryArbiter already approved this entry -- proceeding (state is telemetry only, not a second execution gate)",
+                     signal == 1 ? "BUY" : "SELL", XAU_ReadinessStateName(readinessNow));
       }
    }
 
@@ -27609,6 +27660,131 @@ bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalB
    return true;
 }
 
+// v6.24.17 MANUAL_OPEN_NOW -- owner-authorized immediate execution.
+// XAU_TryForceOpenTrade (above) intentionally reuses one SPECIFIC blocked
+// candidate: it requires that candidate's own candleTime to still be recent
+// (<=3 closed M5 bars), which is correct for "re-fire this exact idea I saw
+// on the chart" but is the wrong tool for "I am telling you to buy/sell
+// right now" -- an explicit command should never be rejected because some
+// earlier, unrelated blocked candidate has gone stale
+// (FORCE_OPEN_REJECTED_STALE_CANDIDATE_N_BARS_OLD_MAX_3). This function has
+// no candidate dependency at all: it builds its execution snapshot entirely
+// from current market data at the moment the command is processed, then
+// reaches the exact same OpenTrade(..., isManualOverride=true) funnel --
+// so it bypasses the identical soft/strategy gates XAU_TryForceOpenTrade
+// bypasses (timing, Entry Readiness, post-trade cooldown, exhausted-
+// direction ban -- see the isManualOverride checks inside OpenTrade), while
+// every hard broker/account safety check inside OpenTrade still applies.
+datetime g_lastManualOpenNowAt = 0;
+string   g_lastManualOpenNowCommandId = "";
+
+bool XAU_TryManualOpenNow(int dir, string commandId, string &rejectReason,
+                          ulong &resultTicket, double &resultPrice,
+                          double &resultSL, double &resultTP, double &resultLots)
+{
+   resultTicket = 0; resultPrice = 0.0; resultSL = 0.0; resultTP = 0.0; resultLots = 0.0;
+
+   if(dir != 1 && dir != -1)
+   {
+      rejectReason = "INVALID_DIRECTION";
+      return false;
+   }
+
+   // Idempotency: one execution per unique command id, regardless of how
+   // many times the command poller re-delivers/re-polls it before the
+   // backend records the acknowledgement (owner spec: "one tap cannot open
+   // multiple duplicate trades").
+   if(StringLen(commandId) > 0 && commandId == g_lastManualOpenNowCommandId)
+   {
+      rejectReason = "DUPLICATE_COMMAND";
+      return false;
+   }
+
+   if(SymbolInfoInteger(Symbol(), SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED)
+   {
+      rejectReason = "MARKET_CLOSED_OR_TRADING_DISABLED";
+      return false;
+   }
+   if(CountMyPositions() >= InpMaxOpenTrades)
+   {
+      rejectReason = "MAX_OPEN_TRADES";
+      return false;
+   }
+
+   double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   if(spread > InpMaxSpread)
+   {
+      rejectReason = StringFormat("SPREAD_%.0f_ABOVE_HARD_CEILING_%d", spread, InpMaxSpread);
+      return false;
+   }
+
+   double atrNow = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   if(atrNow <= 0.0)
+   {
+      rejectReason = "NO_FRESH_INDICATOR_DATA";
+      return false;
+   }
+
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   if(bid <= 0.0 || ask <= 0.0)
+   {
+      rejectReason = "INVALID_BID_ASK";
+      return false;
+   }
+
+   // Commit the idempotency key only once every hard pre-check above has
+   // passed, so a rejected attempt does not consume the owner's one shot at
+   // retrying the same command id after fixing e.g. a transient spread spike.
+   g_lastManualOpenNowCommandId = commandId;
+   g_lastManualOpenNowAt = TimeCurrent();
+
+   string reason = StringFormat("MANUAL_OPEN_NOW (owner-authorized immediate %s, command=%s, no candidate dependency)",
+                                dir == 1 ? "BUY" : "SELL", commandId);
+   Print("MANUAL_OPEN_NOW_EXECUTING: ", dir == 1 ? "BUY" : "SELL",
+         " commandId=", commandId, " spread=", spread, " atr=", atrNow,
+         " bid=", bid, " ask=", ask);
+
+   g_pendingTimingProof.active                = true;
+   g_pendingTimingProof.candidateId           = "MANUAL_OPEN_NOW_" + commandId;
+   g_pendingTimingProof.sourcePath             = "OTHER";
+   g_pendingTimingProof.firstSeenTime         = TimeCurrent();
+   g_pendingTimingProof.firstSeenPrice        = dir == 1 ? ask : bid;
+   g_pendingTimingProof.timingGateRequired    = false; // explicit, named, human-triggered exemption
+   g_pendingTimingProof.requiredDelaySeconds  = XAU_EffectiveEntryDelaySeconds();
+   g_pendingTimingProof.timingGateStartTime   = 0;
+   g_pendingTimingProof.recoveryWaitSeconds   = 0.0;
+   g_pendingTimingProof.timingEngineWaitSeconds = 0.0;
+   g_pendingTimingProof.revalidationTime      = TimeCurrent();
+   g_pendingTimingProof.revalidationResult    = "MANUAL_OVERRIDE_NOT_APPLICABLE";
+   g_pendingTimingProof.bypassUsed            = true;
+   g_pendingTimingProof.bypassReason          = "MANUAL_OPEN_NOW_EXEMPT";
+   g_pendingTimingProof.openTradeCaller       = "XAU_TryManualOpenNow->OpenTrade";
+
+   bool opened = OpenTrade(dir, atrNow, reason, 1.0, true);
+   if(!opened)
+   {
+      uint rc = trade.ResultRetcode();
+      rejectReason = StringFormat("EXECUTION_FAILED_RETCODE_%u_%s", rc, trade.ResultRetcodeDescription());
+      return false;
+   }
+
+   ulong dealTicket = trade.ResultDeal();
+   ulong posId = 0;
+   if(dealTicket > 0 && HistoryDealSelect(dealTicket))
+      posId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+   if(posId == 0) posId = trade.ResultOrder();
+   resultTicket = posId;
+   resultPrice = trade.ResultPrice();
+   resultLots = trade.ResultVolume();
+   if(posId > 0 && PositionSelectByTicket(posId))
+   {
+      resultSL = PositionGetDouble(POSITION_SL);
+      resultTP = PositionGetDouble(POSITION_TP);
+   }
+   return true;
+}
+
 //+------------------------------------------------------------------+
 //| COUNTER_EXCURSION_CAPTURE -- independent experimental strategy    |
 //| Self-contained: separate magic number, separate state, separate   |
@@ -27878,34 +28054,47 @@ bool XAU_CounterExcursionEligible(int signal, string reason, string &category)
 
    string excludeMarkers[] = {
       "SPREAD_TOO_WIDE", "SPREAD SPIKE", "SPREAD_SPIKE", "NEWS_AFTERMATH", "NEWS-CALENDAR",
-      "NEWS FILTER", "NEWS_ENTRY_BLOCKED", "NEWS_OBSERVING",
+      "NEWS FILTER", "NEWS_ENTRY_BLOCKED", "NEWS_OBSERVING", "PROTECTED HIGH-IMPACT NEWS",
+      "PROTECTED SCHEDULED RELEASE", "NEWS_RELEASE_COOLDOWN", "NEWS_PROTECTION",
       "INVALID_LOT_OR_SL_DISTANCE", "RISK_PER_LOT_CALC_FAILED", "MIXED_EXPOSURE",
       "ONE_DIRECTION_ONLY", "AGG_RISK", "AGG-RISK", "TOTAL-LOTS", "MARGIN",
       "FINAL_RISK_RECONCILE", "PG_TIER_3", "PROP_FIRM_LOSS_LOCK", "GROWTH_DAILY_LOCK",
       "WEEKEND_CLOSE", "LICENSE_INVALID", "HEDGE", "BROKER", "MAX-OPEN", "MAX-DAY",
       "DEAD MARKET", "CROSS_INSTANCE_DUPLICATE", "EXHAUSTION_REVERSAL",
       "MISSING", "NO INDICATOR", "INSUFFICIENT", "NOT ENOUGH DATA", "BUFFER NOT READY",
-      "CORRUPT", "STALE", "NO_VALID_SETUP", "NO VALID SETUP", "TRANSITION_WAIT",
+      "CORRUPT", "STALE", "NO_VALID_SETUP", "NO VALID SETUP",
       "BOTH_ALLOWED", "UNDECIDED", "OVERSTAY RELEASE", "SPIKECOOLDOWN", "SPIKE_COOLDOWN"
    };
    for(int i = 0; i < ArraySize(excludeMarkers); i++)
       if(StringFind(u, excludeMarkers[i]) >= 0) { category = "EXCLUDED_" + excludeMarkers[i]; return false; }
 
-   string positiveMarkers[] = {
-      "M5:AGAINST", "STRUCTURE ALIGNED BEARISH", "STRUCTURE ALIGNED BULLISH",
-      "STRONG BEARISH FLIP", "STRONG BULLISH FLIP",
-      "EMAS BOTH OPPOSE", "TEMPORARILY AGAINST H1 TREND",
-      "ANTI-BIAS FLIP", "FAILEDIMPULSE=Y", "MISSEDMOVE=Y"
-   };
-   for(int i = 0; i < ArraySize(positiveMarkers); i++)
-   {
-      if(StringFind(u, positiveMarkers[i]) >= 0)
-      {
-         category = "OPPOSITE_PRESSURE_" + positiveMarkers[i];
-         return true;
-      }
-   }
-   return false;
+   // v6.24.17 ROOT-CAUSE FIX: runtime-proven from the live 2026-07-16 VPS
+   // journal -- this function used to REQUIRE an exact match against a
+   // small allowlist of ~10 hardcoded phrases ("M5:AGAINST", "STRUCTURE
+   // ALIGNED BEARISH", "STRONG BEARISH FLIP", "FAILEDIMPULSE=Y", etc.)
+   // before a candidate could even reach XAU_CounterExcursionOpportunityScore().
+   // Cross-checked against every reason-string-producing authority in this
+   // file (XAU_SmartEntryCautionGate, XAU_TimingAuthorityAllows,
+   // XAU_StructureAuthorityAllows, XAU_NewsAuthorityAllows, Entry Readiness):
+   // 7 of the 10 allowlisted phrases are generated NOWHERE in the current
+   // codebase (dead strings from an earlier reason-string vocabulary), and
+   // the other 3 are narrow/rare (one AI-committee-vote reasoning line, one
+   // anti-repeat-loss flip message). Live evidence: 11 real candidates
+   // blocked today by ordinary current-vocabulary reasons ("protected
+   // scheduled release...", "confirmed opposite structure...") were ALL
+   // rejected NOT_ELIGIBLE despite not matching any exclude marker either --
+   // they simply had no way to ever become eligible. This is exactly the
+   // "mandatory condition rejected candidates because its measurement was
+   // faulty" case (owner spec): the fix is to repair the measurement, not
+   // lower any score. Eligibility is now "not excluded" -- the exclude list
+   // above already captures every genuine hard-safety/data/risk/duplicate
+   // reason a counter-trade must never fire against; everything else is a
+   // legitimate opposite-direction candidate for
+   // XAU_CounterExcursionOpportunityScore()'s own (unchanged, already
+   // well-calibrated) mandatory checks and positive/negative scoring to
+   // evaluate on its merits.
+   category = "ELIGIBLE_NOT_EXCLUDED";
+   return true;
 }
 
 // COUNTER_EXCURSION_FAST_ENTRY_EXEMPT: this strategy's own, isolated,
@@ -29574,6 +29763,7 @@ bool XAU_FreshnessExtensionAuthority(int signal, string setupName, double setupS
       g_alignedCandidates[lane].candidateGeneration++;
       g_alignedCandidates[lane].readinessRecheckAt = 0;
       g_alignedCandidates[lane].entryTimerCompletedLogged = false;
+      g_alignedCandidates[lane].postWaitDecisionLogged = false;
       PrintFormat("ENTRY_TIMER_STARTED | candidate=%s_%s_%I64d dir=%s required=%.0fs origin=%s",
                   setupName, signal == 1 ? "BUY" : "SELL", g_alignedCandidates[lane].candidateGeneration,
                   signal == 1 ? "BUY" : "SELL", g_alignedCandidates[lane].requiredDelaySeconds,
@@ -29643,6 +29833,42 @@ bool XAU_FreshnessExtensionAuthority(int signal, string setupName, double setupS
    }
 
    return true;
+}
+
+// v6.24.17 — owner's exhaustion-to-opposite-pressure transparency. Reuses
+// the already-existing XAU_AdaptiveMarketTransitionEngine()/g_transitionDecision
+// (13+ existing call sites: pyramid, counter-excursion, management, entry
+// readiness) rather than building a second, duplicate exhaustion engine.
+// Exhaustion is a transition EVENT, not a blanket block: this function only
+// reports state for Command Center/logs, it never itself blocks or delays
+// an entry -- freshBuyAllowed/freshSellAllowed already gate whether the
+// opposite direction's own signal can be traded through the normal pipeline.
+string XAU_DirectionTransitionStateName(int signal, const XAU_AdaptiveTransitionDecision &td)
+{
+   if(td.lifecycle == OPPOSITE_DIRECTION_CONFIRMED) return "OPPOSITE_DIRECTION_CONFIRMED";
+   if(td.lifecycle == OPPOSITE_DIRECTION_FORMING)   return "OPPOSITE_PRESSURE_BUILDING";
+   if(td.lifecycle == TRANSITION_NEUTRAL)           return "TRANSITION_NEUTRAL";
+   if(td.lifecycle == TREND_EXHAUSTING || td.lifecycle == TREND_LATE) return "DIRECTION_EXHAUSTED";
+   if(td.lifecycle == TREND_MATURE)                 return "DIRECTION_MATURE";
+   return "DIRECTION_HEALTHY";
+}
+
+void XAU_LogDirectionTransitionState(int signal)
+{
+   XAU_AdaptiveTransitionDecision td = g_transitionDecision;
+   string state = XAU_DirectionTransitionStateName(signal, td);
+   int oppositeDir = -signal;
+   bool oppositeConfirmedNow = (td.lifecycle == OPPOSITE_DIRECTION_CONFIRMED);
+   bool freshOppositeAllowed = (oppositeDir == 1) ? td.freshBuyAllowed : td.freshSellAllowed;
+   string action = "CONTINUE_CURRENT_DIRECTION";
+   if(state == "DIRECTION_EXHAUSTED")
+      action = freshOppositeAllowed ? "CALCULATING_OPPOSITE_ENTRY_ALLOWED" : "REMAIN_NEUTRAL_WATCH_BOTH";
+   else if(state == "OPPOSITE_DIRECTION_CONFIRMED")
+      action = "OPPOSITE_CANDIDATE_ELIGIBLE";
+   PrintFormat("DIRECTION_TRANSITION_STATE | signal=%s state=%s dominant=%s exhaustion=%.2f transitionProb=%.2f buyConf=%.0f sellConf=%.0f oppositeEntryAllowed=%s oppositeConfirmedNow=%s freshOppositeAllowed=%s action=%s",
+               signal==1?"BUY":"SELL", state, td.dominantDirection==1?"BUY":td.dominantDirection==-1?"SELL":"NONE",
+               td.exhaustionProbability, td.transitionProbability, td.buyConfidence, td.sellConfidence,
+               td.oppositeEntryAllowed?"Y":"N", oppositeConfirmedNow?"Y":"N", freshOppositeAllowed?"Y":"N", action);
 }
 
 // v6.24.3 — the one new caution authority.  It owns neither position sizing
@@ -29815,60 +30041,75 @@ ENUM_XAU_SMART_ENTRY_CAUTION_DECISION XAU_SmartEntryCautionGate(
       ((signal==1 && (StringFind(aiText,"SELL")>=0 || StringFind(aiText,"BEAR")>=0 || StringFind(aiText,"SKIP")>=0)) ||
        (signal==-1 && (StringFind(aiText,"BUY")>=0 || StringFind(aiText,"BULL")>=0 || StringFind(aiText,"SKIP")>=0))));
 
-   bool consumed=(g_alignedCandidates[lane].objectiveReached &&
-                  result.extensionATR>=MathMax(InpXAU_MaxMissedMoveATR,1.50) &&
-                  g_alignedCandidates[lane].remainingRewardR<1.0 &&
-                  !g_alignedCandidates[lane].marketReset && HasExhaustionDivergence(signal));
    bool exactRepeatedFailure=(result.failureCauseActive && exactTimingLosses>=5 &&
                               result.repeatedCauseConfidence>=0.80 && !g_alignedCandidates[lane].marketReset &&
                               !result.continuationConfirmed);
+
+   // OWNER'S POST-WAIT DECISION MATRIX (entry-timing/exhaustion rule).
+   // The 120-180s wall-clock delay (XAU_TimingAuthorityAllows) is the ONLY
+   // intentional entry-timing gate in the file. This function used to add a
+   // second, unbounded confirmation gate here (PULLBACK_NOT_COMPLETE /
+   // CONTINUATION_CONFIRMATION_REQUIRED / FAST_TIMEFRAME_OPPOSITION), which
+   // could WAIT indefinitely on momentum-vote evidence with no bound tied to
+   // the original candidate -- exactly the duplicate "second timing opinion"
+   // the owner's rule forbids. Removed. The default post-wait action for a
+   // still-valid candidate is now ENTER_NOW. moveFromIntendedEntryR reuses
+   // the same R convention already used everywhere else in this file
+   // (remainingRewardR, XAU_AdaptiveTransitionDecision): risk unit = atr *
+   // InpSLMultiplier, i.e. the actual live SL distance (InpUseStructuralSL
+   // defaults off, so this IS the real risk distance OpenTrade() sends).
+   double moveFromIntendedEntryR = g_alignedCandidates[lane].atrTravelled / MathMax(0.50, InpSLMultiplier);
+   bool priceGenuinelyMissed = (moveFromIntendedEntryR >= 0.30);
+   string finalActionName = "";
 
    if(confirmedOppositeStructure)
    {
       result.decision=XAU_SMART_ENTRY_CAUTION_HARD_BLOCK;
       result.primaryReason="STRUCTURE_INVALIDATED";
       result.nextEvidence="new opposite-direction thesis";
-   }
-   else if(consumed)
-   {
-      result.decision=XAU_SMART_ENTRY_CAUTION_HARD_BLOCK;
-      result.primaryReason="OPPORTUNITY_CONSUMED";
-      result.nextEvidence="new reset before another candidate";
+      finalActionName="STRUCTURE_INVALIDATED";
    }
    else if(exactRepeatedFailure)
    {
+      // Not a timing opinion: a data-validated repeated-failure pattern
+      // (5+ same-tagged losses at >=80% confidence, no market reset since).
+      // Kept per Phase-12 guidance to preserve genuine structural safety
+      // nets while removing soft/duplicate timing gates.
       result.decision=XAU_SMART_ENTRY_CAUTION_HARD_BLOCK;
       result.primaryReason="EXACT_REPEATED_FAILED_STRUCTURE";
       result.memoryInfluence="HARD_BLOCK";
       result.nextEvidence="market reset and a newly rebuilt setup";
+      finalActionName="STRUCTURE_INVALIDATED";
    }
-   else if(result.pullbackActive)
+   else if(priceGenuinelyMissed)
    {
+      // Owner rule: >=0.30R of favourable movement beyond the intended
+      // entry -- reassess for a pullback/re-entry. Candidate is preserved
+      // (never cleared here), the direction is never permanently discarded.
       result.decision=XAU_SMART_ENTRY_CAUTION_WAIT;
-      result.primaryReason="PULLBACK_NOT_COMPLETE";
-      result.nextEvidence=signal==1?"bullish M5 reclaim above pullback swing":"bearish M5 reclaim below pullback swing";
-   }
-   else if(fastOpposition>=3)
-   {
-      result.decision=XAU_SMART_ENTRY_CAUTION_WAIT;
-      result.primaryReason="FAST_TIMEFRAME_OPPOSITION";
-      result.nextEvidence="M5 and M15 momentum stop opposing";
-   }
-   else if(!result.continuationConfirmed)
-   {
-      result.decision=XAU_SMART_ENTRY_CAUTION_WAIT;
-      result.primaryReason="CONTINUATION_CONFIRMATION_REQUIRED";
-      result.nextEvidence=signal==1?"bullish close, reclaim or higher low":"bearish close, reclaim or lower high";
+      result.primaryReason="PRICE_GENUINELY_MISSED";
+      result.nextEvidence="pullback toward original entry or a fresh candidate";
+      finalActionName="MISSED_WAIT_FOR_PULLBACK";
    }
    else
    {
       result.decision=XAU_SMART_ENTRY_CAUTION_ALLOW;
-      result.primaryReason="FRESH_CONTINUATION_CONFIRMED";
+      result.primaryReason="ENTER_NOW";
       result.nextEvidence="none";
-      if(aiDisagrees) result.primaryReason="FRESH_CONTINUATION_OVERRIDES_AI_DISAGREEMENT";
+      finalActionName="ENTER_NOW";
+      if(aiDisagrees) result.primaryReason="ENTER_NOW_OVERRIDES_AI_DISAGREEMENT";
    }
-   if(aiDisagrees && result.decision==XAU_SMART_ENTRY_CAUTION_WAIT && result.pullbackActive)
-      result.primaryReason+="_AI_DISAGREEMENT_SUPPORTS_WAIT";
+
+   if(g_alignedCandidates[lane].entryTimerCompletedLogged && !g_alignedCandidates[lane].postWaitDecisionLogged)
+   {
+      PrintFormat("ENTRY_DELAY_COMPLETED | candidateId=%s direction=%s elapsedSeconds=%.0f intendedEntry=%.5f currentPrice=%.5f riskDistance=%.5f moveFromIntendedEntryR=%.3f structureValid=%s finalAction=%s",
+                  result.candidateId, signal==1?"BUY":"SELL", result.candidateAgeSeconds,
+                  g_alignedCandidates[lane].firstCandidatePrice, result.currentPrice,
+                  atr*MathMax(0.50,InpSLMultiplier), moveFromIntendedEntryR,
+                  confirmedOppositeStructure?"false":"true", finalActionName);
+      g_alignedCandidates[lane].postWaitDecisionLogged = true;
+      XAU_LogDirectionTransitionState(signal);
+   }
 
    string finalState=result.decision==XAU_SMART_ENTRY_CAUTION_ALLOW?"ALLOW":
                      result.decision==XAU_SMART_ENTRY_CAUTION_WAIT?"WAIT":"HARD_BLOCK";
@@ -31962,38 +32203,95 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
    // v6.24.11 — real campaign-state market-thesis block for the web
    // Command Center, same g_campaign[]/g_transitionDecision state the
    // on-chart XAU_MarketThesisDisplayBlock() renders -- one data source,
-   // two presentations. Empty object when signalDir has no active campaign
-   // (0, or a direction with no campaign yet) so the frontend can render
-   // "no campaign" rather than stale zeros.
-   string thesisJson = "{}";
-   if(signalDir == 1 || signalDir == -1)
+   // two presentations.
+   // v6.24.17 FIX (AI Market Outlook evidence gap): this used to stay "{}"
+   // whenever g_campaign[tSlot].active was false -- i.e. every tick with no
+   // OPEN POSITION, which is most of the bot's life while merely scanning.
+   // AI Market Outlook's _latest_ea_evidence() treats an empty market_thesis
+   // (and no entry_readiness, itself gated on reaching OpenTrade()'s
+   // readiness check) as "no evidence", producing the exact reported bug: a
+   // live, connected, actively-scanning EA with NO_VALID_OUTLOOK / "No recent
+   // EA evidence". A campaign tracks an OPEN POSITION; market thesis is the
+   // EA's CURRENT MARKET READ -- they are not the same fact, and gating one
+   // on the other was the bug. XAU_AdaptiveMarketTransitionEngine() already
+   // computes a fresh market read every relevant tick regardless of position
+   // state (13+ existing call sites), so it is now always the source here;
+   // only the campaign-specific fields (id/adds/P&L/destinations) fall back
+   // to neutral/zero when no campaign is active, rather than the whole block
+   // going empty.
+   XAU_AdaptiveTransitionDecision pressureTd = XAU_AdaptiveMarketTransitionEngine();
+   int thesisDir = (signalDir == 1 || signalDir == -1) ? signalDir
+                  : (pressureTd.dominantDirection == 1 || pressureTd.dominantDirection == -1)
+                    ? pressureTd.dominantDirection : 1;
+   int tSlot = XAU_CampaignSlot(thesisDir);
+   bool campaignActive = g_campaign[tSlot].active;
+   double roomR = (thesisDir == pressureTd.dominantDirection) ? pressureTd.remainingRewardR : pressureTd.oppositeRemainingRewardR;
+   // v6.24.17 CRITICAL FIX: AI Market Outlook was computing its entry/SL/TP
+   // from a THIRD-PARTY scraped gold price (backend fetch_live_gold_price(),
+   // Google Finance GCW00:COMEX futures quote) with a hardcoded stale-price
+   // fallback (4957.0) whenever the scrape failed -- a real production
+   // incident published an entry zone ~$960 away from the live broker price.
+   // The EA's own broker bid/ask is the only authoritative price for this
+   // symbol/account; send it explicitly so the backend can use it instead of
+   // (or to sanity-check against) any external feed, and so a bad external
+   // quote can never again be mistaken for this account's real market.
+   double liveBid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double liveAsk = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double liveMid = (liveBid > 0.0 && liveAsk > 0.0) ? (liveBid + liveAsk) * 0.5 : 0.0;
+   double thesisAtr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   double structSlDist = thesisAtr * MathMax(0.50, InpSLMultiplier);
+   double structEntry = thesisDir == 1 ? liveAsk : liveBid;
+   double structSl = 0.0, structTp1 = 0.0, structTp2 = 0.0, structTp3 = 0.0;
+   if(structEntry > 0.0 && structSlDist > 0.0)
    {
-      int tSlot = XAU_CampaignSlot(signalDir);
-      if(g_campaign[tSlot].active)
-      {
-         XAU_AdaptiveTransitionDecision pressureTd = XAU_AdaptiveMarketTransitionEngine();
-         thesisJson = StringFormat(
-            "{\"campaign_id\":\"%s\",\"lifecycle\":\"%s\",\"direction_stage\":\"%s\","
-            "\"invalidated\":%s,\"exhaustion_pct\":%.1f,\"move_consumed_pct\":%.1f,"
-            "\"remaining_room_r\":%.2f,\"trend_health\":%.1f,\"location_quality\":%.1f,"
-            "\"buy_pressure\":%.1f,\"sell_pressure\":%.1f,\"pressure_state\":\"%s\","
-            "\"action\":\"%s\",\"addition_count\":%d,\"active_positions\":%d,"
-            "\"open_pl\":%.2f,\"peak_floating\":%.2f,\"given_back\":%.2f,"
-            "\"first_destination\":%.2f,\"primary_destination\":%.2f,\"runner_destination\":%.2f}",
-            XAU_CampaignIdText(g_campaign[tSlot].campaignId),
-            BotMonitorJsonSafe(XAU_CampaignLifecycleName(g_campaign[tSlot].lifecycle, g_campaign[tSlot].invalidated), 40),
-            BotMonitorJsonSafe(XAU_DirectionTransitionStageName(g_campaign[tSlot].lifecycle, false), 40),
-            BotMonitorBool(g_campaign[tSlot].invalidated),
-            g_campaign[tSlot].exhaustionPct, g_campaign[tSlot].movementConsumedPct,
-            g_campaign[tSlot].remainingRoomR, g_campaign[tSlot].trendHealth, g_campaign[tSlot].locationQuality,
-            pressureTd.buyConfidence, pressureTd.sellConfidence,
-            BotMonitorJsonSafe(XAU_PressureStateName(XAU_BucketPressure(pressureTd)), 30),
-            BotMonitorJsonSafe(XAU_MarketThesisActionName(g_campaign[tSlot].reversalConfirmationState), 30),
-            g_campaign[tSlot].additionCount, g_campaign[tSlot].activePositionCount,
-            g_campaign[tSlot].openPL, g_campaign[tSlot].peakFloatingProfit, g_campaign[tSlot].profitGivenBack,
-            g_campaign[tSlot].firstDestination, g_campaign[tSlot].primaryDestination, g_campaign[tSlot].runnerDestination);
-      }
+      structSl  = thesisDir == 1 ? structEntry - structSlDist          : structEntry + structSlDist;
+      structTp1 = thesisDir == 1 ? structEntry + structSlDist * 1.0    : structEntry - structSlDist * 1.0;
+      structTp2 = thesisDir == 1 ? structEntry + structSlDist * 2.0    : structEntry - structSlDist * 2.0;
+      structTp3 = thesisDir == 1 ? structEntry + structSlDist * MathMax(1.0, roomR) : structEntry - structSlDist * MathMax(1.0, roomR);
    }
+   string campaignIdStr = campaignActive ? XAU_CampaignIdText(g_campaign[tSlot].campaignId) : "NONE";
+   string thesisDirStr = thesisDir == 1 ? "BUY" : "SELL";
+   string thesisJson = StringFormat(
+      "{\"campaign_id\":\"%s\",\"lifecycle\":\"%s\",\"direction_stage\":\"%s\","
+      "\"invalidated\":%s,\"exhaustion_pct\":%.1f,\"move_consumed_pct\":%.1f,"
+      "\"remaining_room_r\":%.2f,\"trend_health\":%.1f,\"location_quality\":%.1f,"
+      "\"buy_pressure\":%.1f,\"sell_pressure\":%.1f,\"pressure_state\":\"%s\","
+      "\"action\":\"%s\",\"addition_count\":%d,\"active_positions\":%d,"
+      "\"open_pl\":%.2f,\"peak_floating\":%.2f,\"given_back\":%.2f,"
+      "\"first_destination\":%.2f,\"primary_destination\":%.2f,\"runner_destination\":%.2f,"
+      "\"has_active_campaign\":%s,"
+      "\"direction\":\"%s\",\"live_bid\":%.5f,\"live_ask\":%.5f,\"live_mid\":%.5f,"
+      "\"atr_m5\":%.5f,\"structural_sl_dist\":%.5f,\"structural_entry\":%.5f,"
+      "\"structural_sl\":%.5f,\"tp1_price\":%.5f,\"tp2_price\":%.5f,\"tp3_price\":%.5f,"
+      "\"digits\":%d,\"evidence_time_utc\":\"%s\"}",
+      campaignIdStr,
+      campaignActive ? BotMonitorJsonSafe(XAU_CampaignLifecycleName(g_campaign[tSlot].lifecycle, g_campaign[tSlot].invalidated), 40)
+                     : BotMonitorJsonSafe(EnumToString(pressureTd.lifecycle), 40),
+      BotMonitorJsonSafe(XAU_DirectionTransitionStageName(pressureTd.lifecycle, false), 40),
+      BotMonitorBool(campaignActive ? g_campaign[tSlot].invalidated : false),
+      campaignActive ? g_campaign[tSlot].exhaustionPct : pressureTd.exhaustionProbability,
+      campaignActive ? g_campaign[tSlot].movementConsumedPct : pressureTd.moveAlreadyConsumedPct,
+      campaignActive ? g_campaign[tSlot].remainingRoomR : roomR,
+      campaignActive ? g_campaign[tSlot].trendHealth : pressureTd.trendHealth,
+      campaignActive ? g_campaign[tSlot].locationQuality : pressureTd.entryLocationQuality,
+      pressureTd.buyConfidence, pressureTd.sellConfidence,
+      BotMonitorJsonSafe(XAU_PressureStateName(XAU_BucketPressure(pressureTd)), 30),
+      campaignActive ? BotMonitorJsonSafe(XAU_MarketThesisActionName(g_campaign[tSlot].reversalConfirmationState), 30)
+                     : BotMonitorJsonSafe(pressureTd.entryDecision, 40),
+      campaignActive ? g_campaign[tSlot].additionCount : 0,
+      campaignActive ? g_campaign[tSlot].activePositionCount : 0,
+      campaignActive ? g_campaign[tSlot].openPL : 0.0,
+      campaignActive ? g_campaign[tSlot].peakFloatingProfit : 0.0,
+      campaignActive ? g_campaign[tSlot].profitGivenBack : 0.0,
+      campaignActive ? g_campaign[tSlot].firstDestination : 0.0,
+      campaignActive ? g_campaign[tSlot].primaryDestination : 0.0,
+      campaignActive ? g_campaign[tSlot].runnerDestination : 0.0,
+      BotMonitorBool(campaignActive),
+      thesisDirStr, liveBid, liveAsk, liveMid,
+      thesisAtr, structSlDist, structEntry,
+      structSl, structTp1, structTp2, structTp3,
+      (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
+      TimeToString(TimeGMT(), TIME_DATE|TIME_SECONDS));
    // v6.24.14 — POST-TRADE STATE block for the web Command Center (spec
    // section 10). Reads g_postClose (set once, at the moment of the last
    // full close, in OnTradeTransaction) plus a fresh
@@ -32427,6 +32725,26 @@ void BotMonitorPollCommands()
              ? StringFormat("Manual force-open executed: %s %s grade=%s signalPx=%.5f score=%.2f (was blocked by: %s)",
                             fDirRaw, fSetup, fGrade, fSignalPx, fScore, fBlocker)
              : ("FORCE_OPEN_REJECTED_" + rejectReason);
+   }
+   else if(action == "MANUAL_OPEN_NOW")
+   {
+      // v6.24.17: owner-authorized immediate market order. Deliberately
+      // independent of any blocked-candidate snapshot -- see
+      // XAU_TryManualOpenNow()'s own comment for exactly why
+      // FORCE_OPEN_TRADE's staleness check does not apply here.
+      string mDirRaw = JsonStringField(body, "direction");
+      StringToUpper(mDirRaw);
+      int mDir = (StringFind(mDirRaw, "BUY") >= 0) ? 1 : (StringFind(mDirRaw, "SELL") >= 0) ? -1 : 0;
+
+      string mReject = "";
+      ulong  mTicket = 0;
+      double mPrice = 0.0, mSL = 0.0, mTP = 0.0, mLots = 0.0;
+      bool mOpened = XAU_TryManualOpenNow(mDir, commandId, mReject, mTicket, mPrice, mSL, mTP, mLots);
+      status = mOpened ? "EXECUTED" : "FAILED";
+      result = mOpened
+             ? StringFormat("MANUAL_OPEN_NOW filled: %s ticket=%I64u price=%.5f sl=%.5f tp=%.5f lots=%.2f",
+                            mDirRaw, mTicket, mPrice, mSL, mTP, mLots)
+             : ("MANUAL_OPEN_NOW_REJECTED_" + mReject);
    }
 
    g_lastRemoteCommandState = action + ": " + result;

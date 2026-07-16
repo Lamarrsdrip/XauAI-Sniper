@@ -140,7 +140,11 @@ def test_entryready_requires_candidate_already_existed_not_instant_confirm():
 def test_gate_lives_inside_opentrade_skipped_only_for_manual_override():
     ea = read(BACKEND_EA)
     fn_start = ea.index("bool OpenTrade(int signal")
-    fn_body = ea[fn_start:fn_start + 8000]
+    # v6.24.17: window widened 8000->10000 -- the readiness gate itself grew a
+    # substantial explanatory comment (see its own "CRITICAL FIX" note on the
+    # 172-approved/0-executed live incident) that pushed the actual code
+    # lines past the old window before this line was ever reached.
+    fn_body = ea[fn_start:fn_start + 10000]
     assert "g_lastEntryReadiness = XAU_UpdateEntryReadiness(signal, g_transitionDecision);" in fn_body
     assert "if(!g_lastEntryReadiness.entryReady)" in fn_body
     # the readiness block, like the cooldown/exhaustion blocks before it,

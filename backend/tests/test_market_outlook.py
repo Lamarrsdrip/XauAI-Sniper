@@ -354,3 +354,76 @@ def test_activity_endpoint_copies_thesis_fields_into_details():
 def test_pywebpush_in_requirements():
     req = read(BACKEND_DIR / "requirements.txt")
     assert "pywebpush==" in req
+
+
+# ---------------------------------------------------------------------------
+# v6.24.17 price-integrity incident (entry zone ~$960 from live market):
+# EA-authoritative price, price-sanity gate, directional-consistency gate,
+# stale-fallback refusal, and the audit-preserving repair function.
+# ---------------------------------------------------------------------------
+
+SERVER_SRC = read(BACKEND_DIR / "server.py")
+
+
+def test_gold_price_fallback_is_never_mislabeled_as_live():
+    fn = SERVER_SRC[SERVER_SRC.index("async def fetch_live_gold_price"):]
+    fn_body = fn[:fn.index("\n\ndef generate_unique_pin")]
+    assert 'source = "fallback_stale_constant"' in fn_body
+    # the hardcoded numeric fallback must not be returned tagged as "live"
+    assert '"source":"live"' not in fn_body.replace(" ", "")
+
+
+def _outlook_gen_body() -> str:
+    fn = MO_SRC[MO_SRC.index("async def generate_outlook_for_account"):]
+    return fn[:fn.index("\n\nasync def hourly_generation_tick")]
+
+
+def test_outlook_prefers_ea_reported_price_over_external_feed():
+    body = _outlook_gen_body()
+    ea_price_idx = body.index("ea_mid = float(thesis_preview.get")
+    fallback_idx = body.index("await srv.fetch_live_gold_price()")
+    assert ea_price_idx < fallback_idx, "EA-reported price must be checked before the external fallback feed is ever called"
+
+
+def test_outlook_refuses_stale_fallback_constant_as_a_usable_price():
+    body = _outlook_gen_body()
+    assert 'price_info.get("source") == "live"' in body
+    assert "fallback_stale_constant" in MO_SRC or "fallback_stale_constant" in SERVER_SRC
+
+
+def test_outlook_has_price_sanity_gate_bounded_by_atr_not_fixed_dollars():
+    body = _outlook_gen_body()
+    assert "price_sanity_failed" in body
+    assert "max_allowed_distance" in body
+    assert "atr_for_check * 5.0" in body or "atr_for_check *5.0" in body.replace(" ", "")
+    assert "INTERNAL_DATA_INCONSISTENCY" in body
+    assert "OUTLOOK_PRICE_SANITY_FAILED" in body
+
+
+def test_outlook_has_directional_consistency_gate():
+    body = _outlook_gen_body()
+    assert "directional_conflict" in body
+    assert "TRANSITION" in body
+    # both directions must be checked, not just one
+    assert 'direction_label == "SELL"' in body
+    assert 'direction_label == "BUY"' in body
+
+
+def test_repair_function_never_overwrites_original_price_or_zone_fields():
+    fn = MO_SRC[MO_SRC.index("async def repair_price_integrity_incidents"):]
+    fn_body = fn[:fn.index("\n\n# ---")]
+    assert "$set" in fn_body
+    for forbidden_field in ("current_price", "preferred_entry_zone_low", "preferred_entry_zone_high", "suggested_sl"):
+        assert f'"{forbidden_field}":' not in fn_body, f"repair function must not rewrite original field {forbidden_field}"
+    assert '"data_integrity_status": "INVALID_DATA"' in fn_body
+    assert '"excluded_from_stats": True' in fn_body
+
+
+def test_repair_function_is_not_wired_into_any_automatic_tick():
+    assert "repair_price_integrity_incidents()" not in MO_SRC.replace(
+        "async def repair_price_integrity_incidents(max_reasonable_price", "")
+
+
+def test_history_stats_exclude_flagged_records_but_keep_them_visible():
+    assert "excluded_from_stats" in ROUTES_SRC
+    assert 'return {"outlooks": rows, "stats": stats}' in ROUTES_SRC

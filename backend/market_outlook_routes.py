@@ -13,7 +13,7 @@ cloud_push_subscriptions, cloud_notification_log).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -40,7 +40,29 @@ def build_router() -> APIRouter:
         scope = {"$or": [{"account": account}, {"license_key": license_key}]} if account and license_key \
             else ({"account": account} if account else {"license_key": license_key})
         doc = await db.cloud_market_outlooks.find_one(scope, {"_id": 0}, sort=[("generated_at", -1)])
-        return {"outlook": doc}
+        # Phase 9 diagnostics: lets the frontend show real evidence/generation
+        # state instead of guessing from the outlook doc alone -- in
+        # particular so it never renders "connect your EA" while recent
+        # canonical evidence actually exists (evidence_status == "OK").
+        evidence, evidence_reason = await mo._latest_ea_evidence(license_key, account)
+        now = datetime.now(timezone.utc)
+        evidence_age_seconds = None
+        if evidence and evidence.get("ts"):
+            try:
+                evidence_age_seconds = (now - datetime.fromisoformat(str(evidence["ts"]).replace("Z", "+00:00"))).total_seconds()
+            except Exception:
+                evidence_age_seconds = None
+        next_slot = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        diagnostics = {
+            "last_ea_evidence_at": evidence.get("ts") if evidence else None,
+            "evidence_age_seconds": evidence_age_seconds,
+            "evidence_symbol": evidence.get("symbol") if evidence else None,
+            "evidence_status": evidence_reason,
+            "last_outlook_generated_at": doc.get("generated_at") if doc else None,
+            "next_outlook_at": next_slot.isoformat(),
+            "generation_status": "OK" if evidence else evidence_reason,
+        }
+        return {"outlook": doc, "diagnostics": diagnostics}
 
     @r.get("/outlook/history")
     async def get_outlook_history(
@@ -96,23 +118,29 @@ def build_router() -> APIRouter:
             conditions.append({"generated_at": {"$lte": to_date}})
         rows = await db.cloud_market_outlooks.find({"$and": conditions}, {"_id": 0}).sort("generated_at", -1).to_list(min(limit, 200))
 
-        activated = [o for o in rows if (o.get("activation") or {}).get("activated")]
-        greens = [o for o in rows if o.get("color_state") == "GREEN"]
-        reds = [o for o in rows if o.get("color_state") == "RED"]
-        grays = [o for o in rows if o.get("color_state") == "GRAY"]
-        tp1_count = sum(1 for o in rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 1)
-        tp2_count = sum(1 for o in rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 2)
-        tp3_count = sum(1 for o in rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 3)
-        resolved_rs = [o.get("final_r") for o in rows if o.get("final_r") is not None]
+        # v6.24.17 price-integrity repair: a record marked excluded_from_stats
+        # (see market_outlook.repair_price_integrity_incidents) stays visible
+        # in the returned `outlooks` list for audit, but must never count
+        # toward win/loss/no-entry/TP-rate/confidence stats.
+        stats_rows = [o for o in rows if not o.get("excluded_from_stats")]
+
+        activated = [o for o in stats_rows if (o.get("activation") or {}).get("activated")]
+        greens = [o for o in stats_rows if o.get("color_state") == "GREEN"]
+        reds = [o for o in stats_rows if o.get("color_state") == "RED"]
+        grays = [o for o in stats_rows if o.get("color_state") == "GRAY"]
+        tp1_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 1)
+        tp2_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 2)
+        tp3_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 3)
+        resolved_rs = [o.get("final_r") for o in stats_rows if o.get("final_r") is not None]
         stats = {
-            "total_outlooks": len(rows), "activated_outlooks": len(activated),
+            "total_outlooks": len(stats_rows), "activated_outlooks": len(activated),
             "green_results": len(greens), "red_results": len(reds), "no_entry_results": len(grays),
             "tp1_hit_rate": round(tp1_count / max(1, len(activated)), 3) if activated else 0,
             "tp2_hit_rate": round(tp2_count / max(1, len(activated)), 3) if activated else 0,
             "tp3_hit_rate": round(tp3_count / max(1, len(activated)), 3) if activated else 0,
             "average_r": round(sum(resolved_rs) / len(resolved_rs), 3) if resolved_rs else None,
-            "average_mfe": round(sum(o.get("mfe", 0) for o in rows) / len(rows), 3) if rows else None,
-            "average_mae": round(sum(o.get("mae", 0) for o in rows) / len(rows), 3) if rows else None,
+            "average_mfe": round(sum(o.get("mfe", 0) for o in stats_rows) / len(stats_rows), 3) if stats_rows else None,
+            "average_mae": round(sum(o.get("mae", 0) for o in stats_rows) / len(stats_rows), 3) if stats_rows else None,
         }
         return {"outlooks": rows, "stats": stats}
 

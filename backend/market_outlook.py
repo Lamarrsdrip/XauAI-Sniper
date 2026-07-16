@@ -118,21 +118,31 @@ class PushSubscriptionIn(BaseModel):
 # Evidence gathering — reads the EA's own already-transmitted state only
 # ---------------------------------------------------------------------------
 
-async def _latest_ea_evidence(license_key: str, account: str) -> Optional[Dict]:
+async def _latest_ea_evidence(license_key: str, account: str) -> tuple:
     """Reads the most recent cloud_bot_activity event for this account/license
     that carries usable thesis evidence (market_thesis and/or
     entry_readiness populated). Read-only, same scoping pattern
-    cloud_monitor_decision_feed already uses. Returns None (not a fabricated
-    fallback) if nothing usable exists yet."""
+    cloud_monitor_decision_feed already uses. Returns (evidence_or_None,
+    reason_code) -- never a fabricated evidence fallback -- so the caller can
+    tell a never-connected EA apart from one that connected once and went
+    silent, apart from one that is live but hasn't produced usable thesis
+    fields yet (this last case should be rare after the v6.24.17 fix that
+    stopped gating market_thesis on an ACTIVE CAMPAIGN/open position -- see
+    BotMonitorDecisionEvent's thesisJson block on the EA side)."""
     db = _db()
     if not account and not license_key:
-        return None
+        return None, "NO_CONNECTED_EA"
     scope = {"$or": [{"account": account}, {"license_key": license_key}]} if account and license_key \
         else ({"account": account} if account else {"license_key": license_key})
+    ever = await db.cloud_bot_activity.find_one(scope, {"_id": 0, "id": 1})
+    if not ever:
+        return None, "NO_CONNECTED_EA"
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
     rows = await db.cloud_bot_activity.find(
         {"$and": [scope, {"ts": {"$gte": cutoff}}]}, {"_id": 0}
     ).sort("ts", -1).to_list(50)
+    if not rows:
+        return None, "STALE_EVIDENCE"
     for row in rows:
         details = row.get("details") or {}
         thesis = details.get("market_thesis") or {}
@@ -146,8 +156,8 @@ async def _latest_ea_evidence(license_key: str, account: str) -> Optional[Dict]:
                 "entry_readiness": readiness,
                 "regime": details.get("regime") or "",
                 "session": details.get("session") or "",
-            }
-    return None
+            }, "OK"
+    return None, "INSUFFICIENT_MARKET_EVIDENCE"
 
 
 # ---------------------------------------------------------------------------
@@ -351,14 +361,45 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     srv = _server()
     db = _db()
 
-    evidence = await _latest_ea_evidence(license_key, account)
-    price_info = await srv.fetch_live_gold_price()
-    current_price = float(price_info.get("bid", 0.0) or 0.0)
+    evidence, evidence_reason = await _latest_ea_evidence(license_key, account)
+
+    # v6.24.17 CRITICAL FIX: a real production incident published an entry
+    # zone ~$960 away from the live broker price because this function used
+    # to ALWAYS call fetch_live_gold_price() -- a scraped third-party COMEX
+    # futures quote with a hardcoded stale-price fallback -- as the "current
+    # price" for zone/SL/TP math, even for an account with its own connected,
+    # live EA reporting its actual broker bid/ask every decision. The EA's
+    # own reported price (now always sent -- see the EA's thesisJson
+    # live_bid/live_ask/live_mid fields, v6.24.17) is the only authoritative
+    # price for THIS account's THIS symbol; the external feed is now used
+    # only as a last-resort fallback when no EA price is available at all,
+    # and is refused outright if it is itself the hardcoded stale constant.
+    thesis_preview = (evidence.get("market_thesis") or {}) if evidence else {}
+    ea_mid = float(thesis_preview.get("live_mid", 0.0) or 0.0)
+    current_price = 0.0
+    price_source = "NONE"
+    if ea_mid > 0.0:
+        current_price = ea_mid
+        price_source = "EA_LIVE_BROKER_PRICE"
+    else:
+        price_info = await srv.fetch_live_gold_price()
+        if price_info.get("source") == "live" and float(price_info.get("bid", 0.0) or 0.0) > 0.0:
+            current_price = float(price_info.get("bid", 0.0) or 0.0)
+            price_source = "EXTERNAL_FALLBACK_FEED"
+        # else: stays 0.0 / "NONE" -- the stale hardcoded constant (source ==
+        # "fallback_stale_constant") is never treated as a usable price here.
 
     outlook_id = _new_outlook_id("PENDING")
     now = datetime.now(timezone.utc)
 
     if not evidence or current_price <= 0:
+        no_valid_reason = evidence_reason if not evidence else "INTERNAL_GENERATION_ERROR"
+        reason_text = {
+            "NO_CONNECTED_EA": "No EA has ever reported activity for this account -- connect and run your EA to begin receiving hourly outlooks.",
+            "STALE_EVIDENCE": "This account's EA has connected before, but has not reported any activity in the last 6 hours -- check that it is still running.",
+            "INSUFFICIENT_MARKET_EVIDENCE": "The EA is connected and reporting, but its recent events do not yet carry usable market-thesis or entry-readiness data.",
+            "INTERNAL_GENERATION_ERROR": "No usable live price is available from the EA or the fallback feed right now, so no outlook could be generated this cycle.",
+        }.get(no_valid_reason, "No recent EA evidence available for this account yet -- nothing to analyze.")
         doc = {
             "id": outlook_id.replace("PENDING", "NO_VALID_OUTLOOK"),
             "symbol": OUTLOOK_SYMBOL,
@@ -367,11 +408,12 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
             "current_price": current_price,
             "primary_direction": "NO_VALID_OUTLOOK",
+            "no_valid_outlook_reason": no_valid_reason,
             "confidence_pct": 0,
             "confidence_components": ConfidenceComponents().model_dump(),
             "status": "PUBLISHED",
-            "reasoning": "No recent EA evidence available for this account yet -- nothing to analyze.",
-            "uncertainty": "Connect and run your EA to begin receiving hourly outlooks.",
+            "reasoning": reason_text,
+            "uncertainty": "Connect and run your EA to begin receiving hourly outlooks." if no_valid_reason in ("NO_CONNECTED_EA", "STALE_EVIDENCE") else "Retry next hourly cycle.",
             "expected_path": "NO_CLEAR_PATH",
             "setup_type": "NONE",
         }
@@ -388,8 +430,31 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     else:
         direction_label = "BUY" if direction == 1 else "SELL"
 
+    # v6.24.17 directional-consistency validator: a direction must never
+    # publish against a materially dominant opposite pressure reading unless
+    # structure documents a real override. Prevents the observed incident
+    # (published SELL while reasoning/evidence said "buy pressure
+    # significantly outweighs sell pressure").
+    buy_p = float(thesis.get("buy_pressure", 50.0) or 50.0)
+    sell_p = float(thesis.get("sell_pressure", 50.0) or 50.0)
+    pressure_gap = buy_p - sell_p  # positive = bullish pressure dominant
+    structure_state = str(thesis.get("structure", "") or "")
+    structural_override_bearish = structure_state in ("STRUCTURE_STRONGLY_SUPPORTS", "STRUCTURE_SUPPORTS") and direction == -1
+    structural_override_bullish = structure_state in ("STRUCTURE_STRONGLY_SUPPORTS", "STRUCTURE_SUPPORTS") and direction == 1
+    directional_conflict = None
+    if direction_label == "SELL" and pressure_gap >= 15.0 and not structural_override_bearish:
+        directional_conflict = f"buy pressure ({buy_p:.0f}) outweighs sell pressure ({sell_p:.0f}) with no documented bearish structural override"
+    elif direction_label == "BUY" and pressure_gap <= -15.0 and not structural_override_bullish:
+        directional_conflict = f"sell pressure ({sell_p:.0f}) outweighs buy pressure ({buy_p:.0f}) with no documented bullish structural override"
+    if directional_conflict:
+        logger.warning(f"OUTLOOK_DIRECTIONAL_CONFLICT | account={account} was={direction_label} buy_pressure={buy_p} sell_pressure={sell_p} structure={structure_state} -> downgraded to TRANSITION")
+        direction_label = "TRANSITION"
+        direction = 0
+
     components = _compute_confidence(direction if direction != 0 else 1, thesis, evidence["entry_readiness"])
     confidence = _confidence_pct(components)
+    if directional_conflict:
+        confidence = min(confidence, 35)
     path = _expected_path(direction, thesis)
     setup_type = ("WITH_TREND_PULLBACK" if path.startswith(("PULLBACK", "RALLY"))
                  else "TREND_CONTINUATION" if path == "DIRECT_CONTINUATION"
@@ -397,9 +462,69 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
                  else "NONE")
 
     zone = {}
+    price_sanity_failed = False
     if direction != 0 and direction_label in ("BUY", "SELL"):
-        atr_estimate = current_price * 0.0035  # conservative ATR proxy when EA doesn't post raw ATR on this event
-        zone = _compute_zone_and_targets(direction, current_price, thesis, atr_estimate)
+        ea_struct_entry = float(thesis.get("structural_entry", 0.0) or 0.0)
+        ea_struct_sl = float(thesis.get("structural_sl", 0.0) or 0.0)
+        ea_atr = float(thesis.get("atr_m5", 0.0) or 0.0)
+        if ea_struct_entry > 0.0 and ea_struct_sl > 0.0 and ea_atr > 0.0:
+            # Prefer the EA's own structural entry/SL/TP -- computed from its
+            # own live bid/ask at the SAME evidence timestamp as everything
+            # else in `thesis`, using the exact same risk-distance convention
+            # the EA's live order-execution funnel uses (atr * InpSLMultiplier).
+            # This is the "one atomic evidence snapshot" the whole zone must
+            # come from.
+            zone = {
+                "preferred_entry_zone_low": round(min(ea_struct_entry, ea_struct_entry - ea_atr * 0.15), 2),
+                "preferred_entry_zone_high": round(max(ea_struct_entry, ea_struct_entry + ea_atr * 0.15), 2),
+                "chase_limit": round(ea_struct_entry + (ea_atr * 0.5 if direction == 1 else -ea_atr * 0.5), 2),
+                "invalidation_price": round(ea_struct_sl, 2),
+                "suggested_sl": round(ea_struct_sl, 2),
+                "tp1_price": round(float(thesis.get("tp1_price", 0.0) or 0.0), 2), "tp1_r": 1.0,
+                "tp2_price": round(float(thesis.get("tp2_price", 0.0) or 0.0), 2), "tp2_r": 2.0,
+                "tp3_price": round(float(thesis.get("tp3_price", 0.0) or 0.0), 2),
+                "tp3_r": round(max(1.0, float(thesis.get("remaining_room_r", 2.0) or 2.0)), 2),
+            }
+        else:
+            # Older EA build without the v6.24.17 structural fields yet --
+            # fall back to the ATR-proxy geometry, still anchored to the
+            # EA's own current_price (never the external feed) when possible.
+            atr_estimate = ea_atr if ea_atr > 0.0 else current_price * 0.0035
+            zone = _compute_zone_and_targets(direction, current_price, thesis, atr_estimate)
+
+        # Hard price-sanity gate: an entry zone must be geometrically near
+        # the account's own current price. Bounded by ATR (not an arbitrary
+        # dollar figure) with a generous multiple, plus a percentage floor
+        # for when ATR itself is missing/zero. This is what would have
+        # caught the $960 divergence outright, regardless of root cause.
+        entry_mid = (zone.get("preferred_entry_zone_low", current_price) + zone.get("preferred_entry_zone_high", current_price)) / 2.0
+        atr_for_check = ea_atr if ea_atr > 0.0 else max(1.0, current_price * 0.005)
+        max_allowed_distance = max(atr_for_check * 5.0, current_price * 0.02)
+        distance = abs(entry_mid - current_price)
+        if distance > max_allowed_distance:
+            price_sanity_failed = True
+            logger.error(f"OUTLOOK_PRICE_SANITY_FAILED | account={account} market={current_price} entryMid={entry_mid} distance={distance} maxAllowed={max_allowed_distance} atr={atr_for_check} priceSource={price_source} action=NO_PUBLISH")
+
+    if price_sanity_failed:
+        doc = {
+            "id": outlook_id.replace("PENDING", "NO_VALID_OUTLOOK"),
+            "symbol": OUTLOOK_SYMBOL,
+            "account": account, "license_key": license_key,
+            "generated_at": now.isoformat(),
+            "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
+            "current_price": current_price,
+            "primary_direction": "NO_VALID_OUTLOOK",
+            "no_valid_outlook_reason": "INTERNAL_DATA_INCONSISTENCY",
+            "confidence_pct": 0,
+            "confidence_components": ConfidenceComponents().model_dump(),
+            "status": "PUBLISHED",
+            "reasoning": "Computed entry geometry did not pass price-sanity validation against the account's live market price this cycle.",
+            "uncertainty": "Retry next hourly cycle.",
+            "expected_path": "NO_CLEAR_PATH",
+            "setup_type": "NONE",
+        }
+        await db.cloud_market_outlooks.insert_one(dict(doc))
+        return doc
 
     narrative = await _synthesize_narrative(direction_label, confidence, thesis, path, zone, account_id)
 
@@ -411,8 +536,10 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "generated_at": now.isoformat(),
         "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
         "current_price": current_price,
+        "price_source": price_source,
         "primary_direction": direction_label,
         "direction": direction,
+        "directional_conflict": directional_conflict,
         "market_regime": evidence.get("regime", ""),
         "setup_type": setup_type,
         "confidence_pct": confidence,
@@ -483,6 +610,60 @@ async def hourly_generation_tick() -> int:
         except Exception as e:
             logger.error(f"OUTLOOK_GENERATION_FAILED account={account}: {e}")
     return published
+
+
+async def repair_price_integrity_incidents(max_reasonable_price: float = 6000.0, min_reasonable_price: float = 500.0) -> int:
+    """One-time (idempotent) repair for the v6.24.17 price-integrity incident:
+    outlooks published with an entry zone geometrically impossible for the
+    account's own current_price at publication time (root cause: the old
+    fetch_live_gold_price()-only price source, including its hardcoded
+    stale-price fallback -- see that function's own comment and
+    generate_outlook_for_account's price_source logic above).
+
+    Does NOT rewrite the record's original fields (owner directive: preserve
+    for audit). Only adds a marker so it is excluded from stats/performance
+    and visibly flagged. Safe to run repeatedly -- already-marked docs are
+    skipped via the query filter.
+
+    Call this once, manually, against the real production database
+    (e.g. from a one-off admin script or shell) as part of this release's
+    deployment -- it is not wired into any automatic startup/tick path."""
+    db = _db()
+    cursor = db.cloud_market_outlooks.find({
+        "primary_direction": {"$in": ["BUY", "SELL"]},
+        "data_integrity_status": {"$exists": False},
+    }, {"_id": 0})
+    flagged = 0
+    async for doc in cursor:
+        current_price = float(doc.get("current_price", 0.0) or 0.0)
+        entry_low = doc.get("preferred_entry_zone_low")
+        entry_high = doc.get("preferred_entry_zone_high")
+        if current_price <= 0 or entry_low is None or entry_high is None:
+            continue
+        entry_mid = (float(entry_low) + float(entry_high)) / 2.0
+        implausible_price = not (min_reasonable_price <= current_price <= max_reasonable_price)
+        distance = abs(entry_mid - current_price)
+        geometrically_broken = distance > max(current_price * 0.05, 50.0)
+        if implausible_price or geometrically_broken:
+            await db.cloud_market_outlooks.update_one(
+                {"id": doc["id"]},
+                {"$set": {
+                    "data_integrity_status": "INVALID_DATA",
+                    "data_integrity_reason": "DATA_INTEGRITY_FAILURE",
+                    "data_integrity_note": (
+                        f"Rejected because published price geometry (entry_mid={entry_mid}) "
+                        f"did not match the live EA market snapshot (current_price={current_price}) "
+                        f"at publication time. Excluded from win/loss/no-entry counts, TP rate, "
+                        f"and confidence calibration. Repaired {datetime.now(timezone.utc).isoformat()}."
+                    ),
+                    "excluded_from_stats": True,
+                }},
+            )
+            await _record_revision(doc["id"], "data_integrity_status", None, "INVALID_DATA",
+                                   "v6.24.17 price-integrity repair: entry geometry did not match live market snapshot")
+            flagged += 1
+            logger.warning(f"OUTLOOK_DATA_INTEGRITY_REPAIRED id={doc['id']} current_price={current_price} entry_mid={entry_mid}")
+    return flagged
 
 
 # ---------------------------------------------------------------------------

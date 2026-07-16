@@ -465,13 +465,26 @@ async def fetch_live_gold_price() -> Dict:
                             except: pass
                         break
     except Exception as e: logger.warning(f"Gold scrape: {e}")
+    source = "live"
     if price is None:
         if _gold_cache and _gold_cache.get('bid'): return _gold_cache
+        # v6.24.17 audit fix: this hardcoded constant (originally accurate the
+        # day it was written) silently masqueraded as source="live" whenever
+        # the Google Finance scrape failed and no cache existed yet -- e.g.
+        # after a page-structure change breaks the CSS selectors above. A
+        # caller (AI Market Outlook) using this as ground truth for an actual
+        # gold price produced a real production incident: an entry zone ~$960
+        # away from the live broker price. This third-party scrape is NOT an
+        # authoritative price source for anything trade-relevant -- see
+        # market_outlook.py's generate_outlook_for_account, which must use
+        # the EA's own reported broker bid/ask instead and only falls back to
+        # this function, if at all, with source honestly marked as such.
         price, change, change_pct = 4957.0, 0.0, 0.0
+        source = "fallback_stale_constant"
     if change is None: change = 0.0
     if change_pct is None: change_pct = round(change/price*100, 3) if price else 0.0
     sp = round(secrets.randbelow(500) / 1000 + 0.3, 2)
-    result = {"symbol":"XAUUSD","bid":round(price,2),"ask":round(price+sp,2),"spread":sp,"change":round(change,2),"change_pct":round(change_pct,3),"timestamp":datetime.now(timezone.utc).isoformat(),"source":"live"}
+    result = {"symbol":"XAUUSD","bid":round(price,2),"ask":round(price+sp,2),"spread":sp,"change":round(change,2),"change_pct":round(change_pct,3),"timestamp":datetime.now(timezone.utc).isoformat(),"source":source}
     _gold_cache, _gold_cache_time = result, now
     return result
 
@@ -1165,6 +1178,23 @@ async def admin_create_config(data: EAConfigCreate):
 @api_router.get("/admin/configs", dependencies=[Depends(get_current_admin)])
 async def admin_list_configs():
     return await db.ea_configs.find({}, {"_id": 0}).to_list(100)
+
+@api_router.post("/configs")
+async def public_submit_config(data: EAConfigCreate):
+    """Public (unauthenticated) config submission from the marketing-site
+    Configurator (frontend/src/components/ConfiguratorSection.jsx). Audit
+    fix: the frontend has always POSTed here, but no such route existed --
+    every visitor submission silently 404'd while the UI still showed
+    "Saved!" (caught, dev-only console.error). Reuses the same
+    EAConfig/EAConfigCreate models as /admin/configs (same field vocabulary,
+    same collection) so an admin can review submitted preferences; ea_configs
+    already tolerates unknown/extra fields (model_config extra="ignore")."""
+    c = EAConfig(**data.model_dump())
+    doc = c.model_dump()
+    doc["source"] = "public_configurator"
+    doc["submitted_at"] = datetime.now(timezone.utc).isoformat()
+    await db.ea_configs.insert_one(doc)
+    return {"ok": True, "id": c.id}
 
 @api_router.get("/admin/transactions", dependencies=[Depends(get_current_admin)])
 async def admin_list_transactions():
@@ -3327,6 +3357,7 @@ SAFE_REMOTE_COMMANDS = {
     "FORCE_REPORT_UPLOAD": "Force report upload marker",
     "UPDATE_PROP_FIRM_CONFIG": "Update prop firm protection",
     "FORCE_OPEN_TRADE": "Manually force-open a blocked candidate",
+    "MANUAL_OPEN_NOW": "Manually open a fresh trade immediately (owner override, no candidate required)",
 }
 
 REMOTE_COMMAND_EXPIRY_MINUTES = {
@@ -3339,6 +3370,11 @@ REMOTE_COMMAND_EXPIRY_MINUTES = {
     "FORCE_SYNC": 30,
     "FORCE_REPORT_UPLOAD": 30,
     "UPDATE_PROP_FIRM_CONFIG": 60,
+    # Short expiry on purpose: this command carries no candidate/price
+    # snapshot of its own (that is the entire point -- it is never rejected
+    # for being "stale"), so the EA must pick it up while the owner's intent
+    # is still fresh, or not execute it as a surprise minutes later.
+    "MANUAL_OPEN_NOW": 3,
 }
 
 async def _expire_stale_pending_commands(now: Optional[datetime] = None) -> int:
@@ -3413,6 +3449,17 @@ def _normalize_force_open_payload(payload: Optional[Dict]) -> dict:
         "event_time": str(raw.get("event_time", "")).strip()[:40],
         "signal_id": str(raw.get("signal_id", "")).strip(),
     }
+
+def _normalize_manual_open_now_payload(payload: Optional[Dict]) -> dict:
+    """MANUAL_OPEN_NOW deliberately has almost no fields, unlike
+    _normalize_force_open_payload: no candle_time/signal_price/setup/grade,
+    because it must never be rejectable for reusing a stale blocked
+    candidate. It only needs an explicit direction from the owner."""
+    raw = payload or {}
+    direction = str(raw.get("direction", "")).strip().upper()
+    if direction not in {"BUY", "SELL"}:
+        raise HTTPException(status_code=400, detail="Manual open requires an explicit BUY or SELL direction.")
+    return {"direction": direction}
 
 def _normalize_force_close_payload(payload: Optional[Dict]) -> dict:
     raw = payload or {}
@@ -5721,6 +5768,8 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
         payload = _normalize_prop_firm_config(payload)
     elif action == "FORCE_OPEN_TRADE":
         payload = _normalize_force_open_payload(payload)
+    elif action == "MANUAL_OPEN_NOW":
+        payload = _normalize_manual_open_now_payload(payload)
     elif action == "FORCE_CLOSE_TRADE":
         payload = _normalize_force_close_payload(payload)
     doc = {

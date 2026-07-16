@@ -5,7 +5,7 @@ import {
   Activity, AreaChart, BarChart3, Bot, Brain, CheckCircle2, CircleDollarSign,
   Clock3, Copy, Flame, Gauge, History, Home, KeyRound, LineChart, Loader2,
   Lock, LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
-  SlidersHorizontal, Square, TerminalSquare, TrendingUp, Wifi, XCircle, AlertTriangle, Search, Zap,
+  SlidersHorizontal, Square, TerminalSquare, TrendingUp, TrendingDown, Wifi, XCircle, AlertTriangle, Search, Zap,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
@@ -45,6 +45,8 @@ const COMMANDS = [
   { action:"CLOSE_ALL_TRADES",   label:"Close all",      detail:"Ask the EA to close all EA-managed positions.",        icon:XCircle,  tone:"red",   dangerous:true  },
   { action:"FORCE_SYNC",         label:"Force sync",     detail:"Rebuild startup intelligence and position state.",     icon:RefreshCw,tone:"amber", dangerous:false },
   { action:"FORCE_REPORT_UPLOAD",label:"Upload reports", detail:"Mark local intelligence reports for upload.",          icon:AreaChart, tone:"amber", dangerous:false },
+  { action:"MANUAL_OPEN_NOW", label:"Manual Buy Now",  detail:"Open a BUY immediately at current market price. This bypasses candidate age, Entry Readiness, timing wait, grade/score and AI opinion — it does NOT bypass spread/margin/stops/market-open broker safety checks. Builds a fresh execution snapshot at the moment the EA receives this command; no prior blocked signal is required or reused.", icon:TrendingUp, tone:"green", dangerous:true, payload:{direction:"BUY"} },
+  { action:"MANUAL_OPEN_NOW", label:"Manual Sell Now",  detail:"Open a SELL immediately at current market price. This bypasses candidate age, Entry Readiness, timing wait, grade/score and AI opinion — it does NOT bypass spread/margin/stops/market-open broker safety checks. Builds a fresh execution snapshot at the moment the EA receives this command; no prior blocked signal is required or reused.", icon:TrendingDown, tone:"red", dangerous:true, payload:{direction:"SELL"} },
 ];
 const DEFAULT_PROP = {
   enabled:false, starting_balance:0, daily_loss_pct:4, max_loss_pct:8,
@@ -1108,7 +1110,7 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
           {COMMANDS.map(cmd=>{
             const Icon=cmd.icon;
             return (
-              <button key={cmd.action} onClick={()=>openCommand(cmd)} disabled={!linked}
+              <button key={cmd.label} onClick={()=>openCommand(cmd)} disabled={!linked}
                 className={`rounded-2xl border p-4 text-left transition disabled:opacity-35 disabled:cursor-not-allowed ${cardTone(cmd.tone)}`}>
                 <Icon className="mb-3 h-5 w-5 opacity-70" />
                 <div className="text-[14px] font-semibold">{cmd.label}</div>

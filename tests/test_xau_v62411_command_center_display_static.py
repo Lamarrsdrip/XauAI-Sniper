@@ -95,9 +95,11 @@ def test_web_feed_market_thesis_json_is_syntactically_valid():
     # string literal -- i.e. the actual JSON quote character) back to ".
     literal_pieces = re.findall(r'"((?:[^"\\]|\\.)*)"', template_block)
     fmt = "".join(literal_pieces).replace('\\"', '"')
-    # "invalidated" is a raw JSON boolean (BotMonitorBool() output: true/
-    # false, unquoted), not a quoted string value like the other %s slots.
+    # "invalidated" and "has_active_campaign" are raw JSON booleans
+    # (BotMonitorBool() output: true/false, unquoted), not quoted string
+    # values like the other %s slots.
     fmt = fmt.replace('"invalidated":%s,', '"invalidated":true,')
+    fmt = fmt.replace('"has_active_campaign":%s,', '"has_active_campaign":true,')
     # replace MQL5's %s/%.1f/%.2f/%d with placeholder values matching each
     # spec, in order, so json.loads can parse the result
     specs = re.findall(r'%(?:\.\d+)?[sdf]', fmt)

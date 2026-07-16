@@ -49,16 +49,22 @@ def test_compile_clean():
     assert "Result: 0 errors, 0 warnings" in log
 
 
-def test_exactly_three_opentrade_call_sites_exist():
-    # regression guard: if a 4th caller is ever added, this test forces a
+def test_exactly_four_opentrade_call_sites_exist():
+    # regression guard: if a 5th caller is ever added, this test forces a
     # human to notice and confirm it goes through the same OpenTrade()
-    # convergence point (not add its own separate registration call)
+    # convergence point (not add its own separate registration call).
+    # v6.24.17: bumped 3->4 -- XAU_TryManualOpenNow() (the new MANUAL_OPEN_NOW
+    # owner command, independent of any blocked-candidate snapshot) is a
+    # confirmed-intentional 4th caller, and it reaches this exact same
+    # OpenTrade(dir, atrNow, reason, 1.0, true) convergence point (same
+    # isManualOverride=true pattern XAU_TryForceOpenTrade already uses), not
+    # a separate execution/registration path of its own.
     ea = read(BACKEND_EA)
     import re
     call_sites = re.findall(r'=\s*OpenTrade\(', ea)
     # the function's own definition ("bool OpenTrade(int signal...") does
     # not match this pattern (no leading "="), so this only counts callers
-    assert len(call_sites) == 3, f"expected exactly 3 OpenTrade() callers, found {len(call_sites)}"
+    assert len(call_sites) == 4, f"expected exactly 4 OpenTrade() callers, found {len(call_sites)}"
 
 
 def test_campaign_registration_lives_inside_opentrade_not_at_any_caller():

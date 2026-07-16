@@ -60,6 +60,19 @@ function OutlookHero({ outlook, advanced, setAdvanced }) {
 
       <p className="mt-3 text-[13px] leading-5 text-white/70">{outlook.reasoning}</p>
       {outlook.uncertainty && <p className="mt-1 text-[11px] text-white/35">What would invalidate this: {outlook.uncertainty}</p>}
+      {outlook.directional_conflict && (
+        <p className="mt-2 rounded-lg border border-amber-300/25 bg-amber-300/[0.06] px-2.5 py-1.5 text-[11px] text-amber-200">
+          Downgraded to TRANSITION: {outlook.directional_conflict}
+        </p>
+      )}
+      {outlook.price_source === "EXTERNAL_FALLBACK_FEED" && (
+        <p className="mt-2 text-[10px] text-white/30">Price source: fallback feed (no live EA price available this cycle)</p>
+      )}
+      {outlook.data_integrity_status === "INVALID_DATA" && (
+        <p className="mt-2 rounded-lg border border-rose-400/25 bg-rose-400/[0.06] px-2.5 py-1.5 text-[11px] text-rose-300">
+          Flagged INVALID_DATA — excluded from performance stats: {outlook.data_integrity_note}
+        </p>
+      )}
 
       {isDirectional && (
         <>
@@ -181,12 +194,67 @@ function NotificationSettings({ prefs, setPrefs }) {
 
   const tier = prefs?.tier || "OFF";
 
+  // Owner spec (Phase 4/10): a returning user whose browser permission is
+  // already granted must be re-registered automatically -- no second
+  // permission prompt, no silent "looks ON but nothing ever arrives" gap if
+  // the push subscription expired or this is a fresh device/reinstalled PWA.
+  // Runs once prefs have actually loaded (prefs !== null) so it never fires
+  // with a stale default tier before the real saved tier is known.
+  useEffect(() => {
+    if (!prefs) return;
+    if (tier === "OFF") return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    subscribeDevice();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefs]);
+
+  const allowNotifications = useCallback(async () => {
+    setSaving(true);
+    try {
+      if (typeof Notification !== "undefined" && Notification.permission === "default") {
+        const perm = await Notification.requestPermission();
+        setPermissionState(perm);
+        if (perm !== "granted") { setSaving(false); return; }
+      }
+      await subscribeDevice();
+      const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier: "ALL_UPDATES", notify_all_devices: true });
+      setPrefs(data?.prefs || { tier: "ALL_UPDATES" });
+    } catch (_) { /* leave prefs unchanged on failure, user can retry */ }
+    setSaving(false);
+  }, [subscribeDevice, setPrefs]);
+
+  // Prominent onboarding card: shown only to a user who has never enabled
+  // Outlook notifications (tier still OFF) and hasn't explicitly denied
+  // browser permission. Owner spec: one clear "Allow notifications" button;
+  // tapping it uses the real browser permission path, then auto-selects
+  // ALL_UPDATES -- it must never repeatedly nag a user who explicitly
+  // declined (permissionState === "denied" falls through to the settings
+  // list below instead, which already explains how to re-enable manually).
+  const showOnboarding = prefs && tier === "OFF" && permissionState !== "denied";
+
   return (
     <div className={`${CARD} p-5`}>
       <div className="flex items-center justify-between">
         <span className={MONO_LABEL}>Notifications</span>
         {tier !== "OFF" ? <Bell className="h-4 w-4 text-amber-300" /> : <BellOff className="h-4 w-4 text-white/30" />}
       </div>
+      {showOnboarding && (
+        <div className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] p-4">
+          <div className="flex items-start gap-3">
+            <Bell className="h-6 w-6 flex-none text-amber-300" />
+            <div>
+              <div className="text-[13px] font-semibold text-amber-100">Get hourly Outlook updates</div>
+              <p className="mt-1 text-[11px] leading-4 text-white/55">
+                Enable notifications to get the AI Market Outlook every hour, plus TP/SL results, right on this device.
+              </p>
+            </div>
+          </div>
+          <button disabled={saving} onClick={allowNotifications}
+                  className="mt-3 w-full rounded-lg bg-amber-300 py-2.5 text-[12px] font-bold text-black disabled:opacity-50">
+            {saving ? "Enabling…" : "Allow Outlook notifications"}
+          </button>
+        </div>
+      )}
       {permissionState === "denied" && (
         <p className="mt-2 text-[11px] text-rose-300/80">Notifications are blocked in your browser settings. Re-enable them for this site, then try again here.</p>
       )}
@@ -244,12 +312,36 @@ function HistoryCard({ outlook }) {
   );
 }
 
+function ageText(seconds) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "—";
+  if (seconds < 60) return `${Math.floor(seconds)}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return `${Math.floor(seconds / 3600)}h ago`;
+}
+
+function EvidenceDiagnostics({ diagnostics }) {
+  if (!diagnostics) return null;
+  return (
+    <div className={`${CARD} p-4`}>
+      <div className={MONO_LABEL}>Evidence pipeline</div>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-white/50 sm:grid-cols-3">
+        <div>Last EA evidence: <span className="text-white/75">{ageText(diagnostics.evidence_age_seconds)}</span></div>
+        <div>Status: <span className="text-white/75">{diagnostics.evidence_status || diagnostics.generation_status}</span></div>
+        <div>Symbol: <span className="text-white/75">{diagnostics.evidence_symbol || "—"}</span></div>
+        <div>Last outlook: <span className="text-white/75">{diagnostics.last_outlook_generated_at ? new Date(diagnostics.last_outlook_generated_at).toLocaleTimeString() : "—"}</span></div>
+        <div>Next outlook: <span className="text-white/75">{diagnostics.next_outlook_at ? new Date(diagnostics.next_outlook_at).toLocaleTimeString() : "—"}</span></div>
+      </div>
+    </div>
+  );
+}
+
 export default function AIMarketOutlookPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const highlightId = searchParams.get("outlook_id");
 
   const [current, setCurrent] = useState(null);
+  const [diagnostics, setDiagnostics] = useState(null);
   const [prefs, setPrefs] = useState(null);
   const [advanced, setAdvanced] = useState(false);
   const [history, setHistory] = useState([]);
@@ -261,6 +353,7 @@ export default function AIMarketOutlookPage() {
     try {
       const { data } = await outlookAxios.get("/outlook/current");
       setCurrent(data?.outlook || null);
+      setDiagnostics(data?.diagnostics || null);
     } catch (_) { /* advisory only */ }
   }, []);
 
@@ -316,6 +409,7 @@ export default function AIMarketOutlookPage() {
 
         <div className="flex flex-col gap-4">
           <OutlookHero outlook={current} advanced={advanced} setAdvanced={setAdvanced} />
+          <EvidenceDiagnostics diagnostics={diagnostics} />
           <NotificationSettings prefs={prefs} setPrefs={setPrefs} />
 
           <div className={`${CARD} p-5`}>
