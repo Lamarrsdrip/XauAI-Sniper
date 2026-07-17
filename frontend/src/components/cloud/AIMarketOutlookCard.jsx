@@ -36,44 +36,68 @@ function directionStyle(dir) {
 export default function AIMarketOutlookCard({ linked = true }) {
   const [outlook, setOutlook] = useState(null);
   const [prefs, setPrefs] = useState(null);
+  const [verifiedStatus, setVerifiedStatus] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     if (!linked) { setLoading(false); return; }
     try {
-      const [{ data: cur }, { data: pr }] = await Promise.all([
+      const [{ data: cur }, { data: pr }, statusResult] = await Promise.all([
         outlookAxios.get("/outlook/current"),
         outlookAxios.get("/outlook/notifications/prefs"),
+        outlookAxios.get("/outlook/notifications/status").catch(() => ({ data: { final_status: "UNKNOWN" } })),
       ]);
       setOutlook(cur?.outlook || null);
       setPrefs(pr?.prefs || null);
+      setVerifiedStatus(statusResult?.data || null);
     } catch (_) { /* silent — advisory feature, must never disrupt the dashboard */ }
     setLoading(false);
   }, [linked]);
 
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
 
-  const toggleNotifications = useCallback(async (e) => {
+  // v6.25.2 owner directive 2026-07-17 -- this compact card reproduced the
+  // previously-fixed "false-ON" bug: it lit the bell gold on any successful
+  // tier-preference save, with no permission request, no device subscription,
+  // and no check against real delivery status. A user could see "notifications
+  // on" while push delivery was structurally impossible (e.g. production
+  // reporting DEPENDENCY_MISSING). The full Outlook page's fix for this
+  // exact bug only shows ON after final_status === "ON_VERIFIED" (see
+  // AIMarketOutlookPage.jsx) -- mirror that here instead of trusting the
+  // tier preference alone.
+  const notifOn = verifiedStatus?.final_status === "ON_VERIFIED";
+
+  const turnOffNotifications = useCallback(async (e) => {
     e.preventDefault(); e.stopPropagation();
-    const nextTier = prefs?.tier && prefs.tier !== "OFF" ? "OFF" : "HOURLY_PLUS_RESULTS";
     try {
-      const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier: nextTier, notify_all_devices: true });
-      setPrefs(data?.prefs || { tier: nextTier });
+      const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier: "OFF", notify_all_devices: true });
+      setPrefs(data?.prefs || { tier: "OFF" });
+      const statusResult = await outlookAxios.get("/outlook/notifications/status").catch(() => null);
+      if (statusResult) setVerifiedStatus(statusResult.data);
     } catch (_) { /* ignore — user can retry from the full page settings */ }
-  }, [prefs]);
+  }, []);
 
   const dir = outlook?.primary_direction || "NO_VALID_OUTLOOK";
   const style = directionStyle(dir);
-  const notifOn = prefs?.tier && prefs.tier !== "OFF";
 
   return (
     <Link to="/ai-market-outlook" className={`${CARD} block p-4 hover:border-amber-300/20 transition`} data-testid="ai-market-outlook-card">
       <div className="flex items-center justify-between">
         <span className={MONO_LABEL}>AI Market Outlook</span>
-        <button onClick={toggleNotifications} title={notifOn ? "Notifications on" : "Enable hourly outlook alerts"}
-                className="rounded-full p-1.5 hover:bg-white/[0.06] transition" data-testid="outlook-bell">
-          {notifOn ? <Bell className="h-3.5 w-3.5 text-amber-300" /> : <BellOff className="h-3.5 w-3.5 text-white/30" />}
-        </button>
+        {notifOn ? (
+          <button onClick={turnOffNotifications} title="Phone alerts verified active — click to turn off"
+                  className="rounded-full p-1.5 hover:bg-white/[0.06] transition" data-testid="outlook-bell">
+            <Bell className="h-3.5 w-3.5 text-amber-300" />
+          </button>
+        ) : (
+          // Turning ON requires a real browser permission grant + device
+          // subscription, which this compact card can't safely do inline --
+          // let the click fall through to the card's own Link and land on
+          // the full settings page where that real flow runs.
+          <span title="Not verified — open full settings to enable" className="rounded-full p-1.5" data-testid="outlook-bell">
+            <BellOff className="h-3.5 w-3.5 text-white/30" />
+          </span>
+        )}
       </div>
 
       {!linked ? (

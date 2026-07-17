@@ -118,6 +118,23 @@ const eventMatchesSearch = (event, term) => {
   ].filter(Boolean).some(v => String(v).toLowerCase().includes(q));
 };
 const latestDecisionEvent = (events=[]) => events.find(e => /entries|blocks|exits|risk|ai|errors|overrides/.test(eventCategory(e))) || events[0];
+// v6.25.2 owner directive 2026-07-17 -- AI confidence/market bias/verdict are
+// posted by the EA on /cloud/monitor/activity (BotActivityReq.ai_confidence /
+// .market_bias), never on the heartbeat payload (BotHeartbeatReq has no such
+// fields, and the EA's heartbeat WebRequest body never sends them either) --
+// heartbeat.ai_confidence was therefore always undefined and every "AI" tile
+// permanently showed 0/"Neutral"/"Waiting" with nothing telling the operator
+// this was a wiring gap rather than the AI still warming up. Find the newest
+// activity event that actually carries a real ai_confidence value instead.
+// 30 min: generous vs. the EA's ~10 min M10 decision cadence, but bounded --
+// an ai_confidence value from hours/days ago must never display as current.
+const AI_FIELDS_STALE_MIN = 30;
+const latestAiFieldsEvent = (events=[]) => events.find(e => {
+  const v = getEventField(e, "ai_confidence", null);
+  if (v === null || v === undefined || v === "") return false;
+  const ageMin = e.ts ? (Date.now() - new Date(e.ts).getTime()) / 60000 : Infinity;
+  return ageMin <= AI_FIELDS_STALE_MIN;
+}) || null;
 const weightedEventCount = (events=[]) => events.reduce((sum,e)=>sum + Number(e.repeat_count||1), 0);
 
 // ─── Design tokens ───────────────────────────────────────────────────────────
@@ -697,8 +714,12 @@ function getSession() {
   return                         { label:"After Hours",  tone:"neutral" };
 }
 
-function getMarketBias(hb) {
-  const s = (hb.htf_consensus||hb.market_bias||hb.bot_state||"").toUpperCase();
+// v6.25.2 -- reads market_bias from the EA's own latest AI-confidence-bearing
+// activity event (see latestAiFieldsEvent below), not from the heartbeat
+// object, which never carries this field. Falls back to the raw bot_state
+// only as a last resort so this never regresses to a hard crash on no data.
+function getMarketBias(aiEvent, hb) {
+  const s = String(getEventField(aiEvent, "market_bias", "") || hb?.bot_state || "").toUpperCase();
   if (s.includes("BULL") || s.includes("LONG"))  return { label:"Bullish", tone:"green" };
   if (s.includes("BEAR") || s.includes("SHORT")) return { label:"Bearish", tone:"red"   };
   return                                                 { label:"Neutral", tone:"neutral"};
@@ -827,9 +848,10 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
   const riskTone   = ddNum>5?"red":ddNum>2?"amber":"green";
   const pnlNum     = Number(heartbeat.daily_pnl||0);
   const pnlPos     = pnlNum >= 0;
-  const conf       = Number(heartbeat.ai_confidence||heartbeat.last_ai_confidence||0);
+  const aiEvent    = latestAiFieldsEvent(events);
+  const conf       = Number(getEventField(aiEvent, "ai_confidence", 0)) || 0;
   const session    = getSession();
-  const bias       = getMarketBias(heartbeat);
+  const bias       = getMarketBias(aiEvent, heartbeat);
   const botState   = humanBotState(heartbeat.bot_state, openTrades, tradingOk, online);
   const stateTone  = openTrades>0?"amber":tradingOk?"green":"neutral";
 
@@ -863,6 +885,15 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
           <Sparkline points={equityPoints} tone={online?(openTrades>0?"#fbbf24":"#34d399"):"#d4af37"} height="h-[72px]" />
         </div>
       </div>
+
+      {/* v6.25.2 owner directive 2026-07-17 -- SetupHealth was fully built
+          but never rendered anywhere visible; the only surviving surface for
+          status.setup_checks was a bare "X/Y passing" count buried in the
+          hidden Developer diagnostics panel, so a user could never see WHICH
+          check (license/heartbeat/mt5_account/ea_version/algo) was actually
+          failing. Only shown when something needs attention, so a fully
+          healthy dashboard stays uncluttered. */}
+      {!online && <SetupHealth checks={status?.setup_checks} />}
 
       {/* 4 core account metrics */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -1019,10 +1050,21 @@ function IntelligencePage({ heartbeat, events, status }) {
   const aiEvents  = events.filter(e=>/AI|DIRECTOR|CLAUDE|GPT|CONFIDENCE/i.test(`${e.event_type} ${e.message}`));
   const mlEvents  = events.filter(e=>/ML|HIVE|PATTERN|LEARNING|WARM/i.test(`${e.event_type} ${e.message}`));
   const latest    = events.find(e=>/BLOCK|VETO|SIGNAL|AI|ML|EXIT|SYNC/i.test(`${e.event_type} ${e.message}`));
-  const conf      = heartbeat.ai_confidence||heartbeat.last_ai_confidence||0;
-  const verdict   = heartbeat.ai_verdict||heartbeat.last_action||"";
-  const mlSamples = heartbeat.ml_samples||heartbeat.pattern_count||0;
-  const mlTrusted = heartbeat.ml_trusted||(mlSamples>=10);
+  // v6.25.2 owner directive 2026-07-17 -- ai_confidence/market_bias are real
+  // EA-posted fields on activity events (BotActivityReq), never on the
+  // heartbeat object; heartbeat.ai_confidence was always undefined. See
+  // latestAiFieldsEvent above.
+  const aiEvent   = latestAiFieldsEvent(events);
+  const conf      = Number(getEventField(aiEvent, "ai_confidence", 0)) || 0;
+  const verdict   = aiEvent ? (getEventField(aiEvent, "decision", "") || aiEvent.message || "") : "";
+  // v6.25.2 -- ml_samples/pattern_count/ml_trusted/hive_verdict have never
+  // existed on ANY backend model or EA payload (verified: not in
+  // BotHeartbeatReq, not in BotActivityReq, not sent anywhere in the EA's
+  // WebRequest bodies) -- there is no real ML/Hive subsystem wired to this
+  // dashboard yet. Showing 0/"Learning"/"Neutral" here previously looked
+  // like real (if unremarkable) data; that was misleading. Disclose the gap
+  // honestly instead of fabricating a value.
+  const mlWired   = false;
 
   return (
     <div className="space-y-4">
@@ -1052,9 +1094,9 @@ function IntelligencePage({ heartbeat, events, status }) {
         </div>
         <div className="grid grid-cols-3 gap-4">
           {[
-            ["Patterns", mlSamples||"—", "text-white"],
-            ["Authority", mlTrusted?"Active":"Learning", mlTrusted?"text-emerald-300":"text-amber-300"],
-            ["Hive",     heartbeat.hive_verdict||"Neutral", "text-sky-200"],
+            ["Patterns", mlWired?"—":"Not wired yet", "text-white/35"],
+            ["Authority", mlWired?"Learning":"Not wired yet", "text-white/35"],
+            ["Hive",     mlWired?"Neutral":"Not wired yet", "text-white/35"],
           ].map(([l,v,c])=>(
             <div key={l}>
               <div className={MONO_LABEL}>{l}</div>
@@ -1170,7 +1212,7 @@ function TradingUniverseCard({ linked, setActive }) {
             <div className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
               <div>
                 <div className="text-[14px] font-semibold">Gold trading</div>
-                <div className="mt-0.5 text-[12px] text-white/40">Live — full entry + exit strategy.</div>
+                <div className="mt-0.5 text-[12px] text-white/40">Gold Mode strategy is live today.</div>
               </div>
               <Toggle value={settings.enable_gold} onChange={v => upd("enable_gold", v)} />
             </div>
@@ -1183,9 +1225,22 @@ function TradingUniverseCard({ linked, setActive }) {
             </div>
           </div>
 
+          {/* v6.25.2 owner directive 2026-07-17 -- audit found these controls
+              were stored (POST /cloud/trading-universe) but never read back by
+              anything, including /cloud/master/config (the only config the EA
+              actually polls) -- they looked identical in weight to genuinely
+              enforced controls elsewhere on this page (e.g. Prop Firm Mode)
+              but did nothing. Disclosing honestly, matching the Index card's
+              existing "Detection-only" convention, rather than implying real
+              enforcement that doesn't exist yet. Do not remove this note when
+              real EA-side enforcement ships -- replace it. */}
+          <div className="mt-3 rounded-xl border border-amber-300/15 bg-amber-300/[0.04] p-3 text-[11px] leading-4 text-amber-200/80">
+            Not yet enforced by the live EA — these values are saved here but the bot does not read them back yet. Use the EA's own MT5 inputs to actually cap open trades until this ships.
+          </div>
+
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <NumField label="Max open trades — Gold" value={settings.max_open_trades_gold} onChange={v => upd("max_open_trades_gold", v)} suffix="trades" min={0} max={20} step="1" note="0 = use EA input default" />
-            <NumField label="Max open trades — Index" value={settings.max_open_trades_index} onChange={v => upd("max_open_trades_index", v)} suffix="trades" min={0} max={20} step="1" note="0 = use EA input default" />
+            <NumField label="Max open trades — Gold" value={settings.max_open_trades_gold} onChange={v => upd("max_open_trades_gold", v)} suffix="trades" min={0} max={20} step="1" note="Not yet enforced — see note above" />
+            <NumField label="Max open trades — Index" value={settings.max_open_trades_index} onChange={v => upd("max_open_trades_index", v)} suffix="trades" min={0} max={20} step="1" note="Not yet enforced — see note above" />
           </div>
 
           {msg && <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] p-3 text-[12px] text-amber-200">{msg}</div>}
