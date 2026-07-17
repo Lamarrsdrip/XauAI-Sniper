@@ -155,10 +155,11 @@ def test_m30_branch_uses_the_slot_cached_consensus_object():
     end = ea.index("} // end InpDecisionMode == XAU_DECISION_M30_THREE_M10_CONSENSUS")
     m30_block = ea[start:end]
     assert "XAU_M30ConsensusDecision m30 = XAU_BuildM30ConsensusDecision();" in m30_block
-    assert "M30_CANDIDATE_REJECTED |" in m30_block
-    assert "M30_CANDIDATE_ENDORSED |" in m30_block
     assert "M30_CANDIDATE_SHARED_PATH |" in m30_block
-    assert 'setupName = "M30_CONSENSUS_CANDIDATE";' in m30_block
+    assert 'setupName = "M30_CONSENSUS_CORE_" + IntegerToString((int)m30.slotCloseTime);' in m30_block
+    assert "XAU_EnsureEntryTimerStarted(signal, setupName, m30OriginPrice);" in m30_block
+    assert "M30_CANDIDATE_REJECTED |" not in m30_block
+    assert "M30_CANDIDATE_ENDORSED |" not in m30_block
 
 
 def test_m30_branch_mirrors_legacy_endorse_reject_origination_structure():
@@ -168,8 +169,12 @@ def test_m30_branch_mirrors_legacy_endorse_reject_origination_structure():
     m30_block = ea[start:end]
     assert "m30.decisionType == M30_DECISION_BUY_CANDIDATE" in m30_block
     assert "m30.decisionType == M30_DECISION_SELL_CANDIDATE" in m30_block
-    assert "m30.decisionType == M30_DECISION_WAIT_FOR_BUY_RETRACE" in m30_block
-    assert "m30.decisionType == M30_DECISION_WAIT_FOR_SELL_RETRACE" in m30_block
+    # Retrace-wait is a non-executable state and cannot endorse a ScoreSetups
+    # candidate. Those enum names may appear in comments, but not executable
+    # code in this gate.
+    executable = strip_line_comments(m30_block)
+    assert "m30.decisionType == M30_DECISION_WAIT_FOR_BUY_RETRACE" not in executable
+    assert "m30.decisionType == M30_DECISION_WAIT_FOR_SELL_RETRACE" not in executable
     # rejection clears signal/setupName/setupScore exactly like legacy does
     assert "signal = 0;" in m30_block
     assert 'setupName = "";' in m30_block
@@ -343,10 +348,29 @@ def test_consensus_cached_for_the_current_slot_not_recomputed_every_tick():
     assert "return g_m30Decision;" in fn
 
 
-def test_candidate_key_includes_slot_and_direction():
+def test_candidate_key_includes_slot_direction_type_and_all_evidence_ids():
     ea = read(EA)
-    fn = find_function(ea, "string XAU_M30CandidateKey(string slotId, int direction)")
-    assert "slotId + \"|\" +" in fn
+    fn = find_function(ea, "string XAU_M30CandidateKey(string slotId, int direction,")
+    assert '"%s|CORE|%s|EVIDENCE=%I64d,%I64d,%I64d"' in fn
+    assert "oldestEvidenceId" in fn
+    assert "middleEvidenceId" in fn
+    assert "newestEvidenceId" in fn
+
+
+def test_candidate_slot_is_persisted_only_after_confirmed_live_position():
+    ea = read(EA)
+    builder = find_function(ea, "XAU_M30ConsensusDecision XAU_BuildM30ConsensusDecision()")
+    persist_idx = builder.rindex("XAU_M30PersistProcessedSlot(slotCloseTime);")
+    assert "if(!d.candidateCreated)" in builder[max(0, persist_idx - 250):persist_idx]
+    open_trade = find_function(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
+    assert "XAU_BrokerOpenRetcodeAccepted(brokerRetcode) && liveConfirmed" in open_trade
+    assert "XAU_M30PersistProcessedSlot(g_m30Decision.slotCloseTime);" in open_trade
+
+
+def test_final_arbiter_m10_veto_is_legacy_only():
+    ea = read(EA)
+    fn = find_function(ea, "bool XAU_FinalEntryArbiter(string source, int signal, bool signalOK,")
+    assert "bool m10Contradicts = (InpDecisionMode == XAU_DECISION_M10_LEGACY)" in fn
 
 
 def test_slot_id_includes_account_symbol_magic_and_close_time():
@@ -388,13 +412,13 @@ def test_consensus_newest_observation_can_veto_older_majority():
     assert "newest evidence is never overridden by older evidence" in fn
 
 
-def test_consensus_location_and_room_kept_separate_from_direction():
+def test_consensus_location_and_room_are_evidence_inside_the_only_timer():
     ea = read(EA)
     fn = find_function(ea, "XAU_M30ConsensusDecision XAU_BuildM30ConsensusDecision()")
-    assert "M30_DECISION_WAIT_FOR_BUY_RETRACE" in fn
-    assert "M30_DECISION_WAIT_FOR_SELL_RETRACE" in fn
-    assert "newestLocationPoor || remainingRoom < 0.30" in fn
-    assert "thesis preserved" in fn
+    assert "d.retracementRequired = newestLocationPoor || remainingRoom < 0.30;" in fn
+    assert "d.decisionType = (dominant==1) ? M30_DECISION_WAIT_FOR_BUY_RETRACE" not in fn
+    assert "d.decisionType = (dominant==1) ? M30_DECISION_BUY_CANDIDATE" in fn
+    assert "single 120-180s revalidation window" in fn
 
 
 def test_consensus_never_invents_a_new_scoring_source():
@@ -628,24 +652,25 @@ def python_mirror_m30_consensus(oldest: Evidence, middle: Evidence, newest: Evid
 
     remaining_room = newest.buy_room_r if dominant == 1 else newest.sell_room_r
     location_poor = newest.location_state in ("LOCATION_LATE", "LOCATION_EXTREME")
-    if location_poor or remaining_room < 0.30:
-        return {"decision": "WAIT_FOR_BUY_RETRACE" if dominant == 1 else "WAIT_FOR_SELL_RETRACE", "direction": dominant}
-
-    return {"decision": "BUY_CANDIDATE" if dominant == 1 else "SELL_CANDIDATE", "direction": dominant}
+    return {
+        "decision": "BUY_CANDIDATE" if dominant == 1 else "SELL_CANDIDATE",
+        "direction": dominant,
+        "retracement_evidence": location_poor or remaining_room < 0.30,
+    }
 
 
 def test_sim_three_strong_agreeing_buy_observations_produce_buy_candidate():
     result = python_mirror_m30_consensus(
         Evidence(70, 20), Evidence(72, 18), Evidence(75, 15),
     )
-    assert result == {"decision": "BUY_CANDIDATE", "direction": 1}
+    assert result == {"decision": "BUY_CANDIDATE", "direction": 1, "retracement_evidence": False}
 
 
 def test_sim_three_strong_agreeing_sell_observations_produce_sell_candidate():
     result = python_mirror_m30_consensus(
         Evidence(20, 70), Evidence(18, 72), Evidence(15, 75),
     )
-    assert result == {"decision": "SELL_CANDIDATE", "direction": -1}
+    assert result == {"decision": "SELL_CANDIDATE", "direction": -1, "retracement_evidence": False}
 
 
 def test_sim_close_scores_produce_transition_watch_not_a_forced_pick():
@@ -684,19 +709,21 @@ def test_sim_below_55_qualification_bar_rejected_even_with_majority():
     assert result["decision"] == "NO_VALID_SIGNAL"
 
 
-def test_sim_poor_location_produces_wait_for_retrace_not_rejection():
+def test_sim_poor_location_is_evidence_but_candidate_starts_immediately():
     result = python_mirror_m30_consensus(
         Evidence(70, 20), Evidence(72, 18), Evidence(75, 15, location="LOCATION_EXTREME"),
     )
-    assert result["decision"] == "WAIT_FOR_BUY_RETRACE"
-    assert result["direction"] == 1  # thesis preserved, not discarded
+    assert result["decision"] == "BUY_CANDIDATE"
+    assert result["direction"] == 1
+    assert result["retracement_evidence"] is True
 
 
-def test_sim_insufficient_remaining_room_produces_wait_for_retrace():
+def test_sim_insufficient_remaining_room_is_revalidated_inside_single_timer():
     result = python_mirror_m30_consensus(
         Evidence(70, 20), Evidence(72, 18), Evidence(75, 15, buy_room=0.10),
     )
-    assert result["decision"] == "WAIT_FOR_BUY_RETRACE"
+    assert result["decision"] == "BUY_CANDIDATE"
+    assert result["retracement_evidence"] is True
 
 
 def test_sim_range_no_trade_on_newest_observation():
