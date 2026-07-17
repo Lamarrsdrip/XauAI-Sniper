@@ -19906,6 +19906,24 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                    true, false, false, 0, 0, cdMsg, reason, 0.0);
          return false;
       }
+      // v6.25.6 owner-forensic-audit fix 2026-07-17 -- this same-direction
+      // exhaustion ban is a leftover of the OLD M10-legacy re-entry flow
+      // (repeated M10 bars re-proposing a same-direction trade after a
+      // close), the identical class of problem the sibling
+      // XAU_PostTradeCooldownActive() check immediately above was already
+      // correctly exempted from M30 mode for. This check was missed --
+      // real 7-trading-day replay evidence (2026.07.08-2026.07.17,
+      // InpDecisionMode=M30, e483dd0 build) showed 56 of 65 M30 candidates
+      // that had already passed FinalEntryArbiter/timing/freshness/news
+      // (decision=ALLOW, action=ENTER_ALIGNED_FULL_RISK) were discarded
+      // here with resurrectionAllowed=false, this being by far the
+      // dominant blocker (86% of the executed-verdict-to-no-trade gap).
+      // M30's own three-snapshot consensus + one candidate + one 120-180s
+      // timer per slot is the sole intended authority for whether a fresh
+      // same-direction entry is warranted in this mode; this legacy gate
+      // must not silently re-veto what M30 already approved.
+      if(InpDecisionMode != XAU_DECISION_M30_THREE_M10_CONSENSUS)
+      {
       ENUM_XAU_OLD_DIRECTION_STATE oldDirState = OLD_DIRECTION_HEALTHY;
       if(XAU_SameDirectionReentryBlockedByExhaustion(signal, oldDirState))
       {
@@ -19917,6 +19935,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                    true, false, "BLOCKED", "OLD_DIRECTION_EXHAUSTED",
                                    true, false, false, 0, 0, exMsg, reason, 0.0);
          return false;
+      }
       }
 
       // v6.24.15 — Entry Readiness Engine, computed for telemetry/Command

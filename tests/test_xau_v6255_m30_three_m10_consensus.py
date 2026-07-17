@@ -192,6 +192,49 @@ def test_m30_origination_reuses_same_confidence_normalization_as_legacy():
 
 
 # ---------------------------------------------------------------------------
+# v6.25.6 forensic-audit fix -- EXHAUSTED_SAME_DIRECTION_REENTRY_BLOCK must be
+# scoped to legacy mode, exactly like its sibling XAU_PostTradeCooldownActive()
+# check immediately above it. Real 7-trading-day M30-mode replay evidence
+# (2026.07.08-2026.07.17, MetaQuotes-Demo, 100% real ticks) showed 56 of 65
+# M30 candidates that had already passed FinalEntryArbiter/timing/freshness/
+# news (decision=ALLOW, action=ENTER_ALIGNED_FULL_RISK) were discarded one
+# line later by this unscoped legacy gate, logged as
+# M30_CANDIDATE_FINALIZED_NO_TRADE ... result=CANCEL_EXECUTION_NOT_CONFIRMED
+# resurrectionAllowed=false -- a hidden cooldown the owner's spec explicitly
+# forbids in M30 mode ("There must be no hidden cooldown").
+# ---------------------------------------------------------------------------
+def test_exhausted_direction_reentry_block_scoped_to_legacy_mode():
+    ea = read(EA)
+    fn = find_function(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
+    assert "InpDecisionMode != XAU_DECISION_M30_THREE_M10_CONSENSUS" in fn
+    idx = fn.index("if(InpDecisionMode != XAU_DECISION_M30_THREE_M10_CONSENSUS)")
+    window = fn[idx: idx + 900]
+    assert "XAU_SameDirectionReentryBlockedByExhaustion(signal, oldDirState)" in window
+    assert "EXHAUSTED_SAME_DIRECTION_REENTRY_BLOCK" in window
+
+
+def test_exhausted_direction_reentry_block_and_post_trade_cooldown_share_the_same_m30_exemption_pattern():
+    ea = read(EA)
+    fn = find_function(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
+    # both sibling legacy-only gates use the identical guard condition --
+    # proves the fix mirrors the pre-existing, already-approved pattern
+    # rather than inventing a new one
+    assert fn.count("InpDecisionMode != XAU_DECISION_M30_THREE_M10_CONSENSUS") == 2
+    post_trade_idx = fn.index("XAU_PostTradeCooldownActive()")
+    exhaustion_idx = fn.index("XAU_SameDirectionReentryBlockedByExhaustion")
+    assert post_trade_idx < exhaustion_idx  # cooldown gate (already scoped) precedes the fixed gate
+
+
+def test_exhausted_direction_reentry_block_still_active_in_legacy_mode():
+    # the fix must not remove the protection for legacy mode -- only exempt
+    # M30 mode from it
+    ea = read(EA)
+    fn = find_function(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
+    assert "ENUM_XAU_OLD_DIRECTION_STATE oldDirState = OLD_DIRECTION_HEALTHY;" in fn
+    assert "return false;" in fn.split("EXHAUSTED_SAME_DIRECTION_REENTRY_BLOCK")[1][:700]
+
+
+# ---------------------------------------------------------------------------
 # Section 4: immutable per-bar evidence history, M10 keeps scanning in BOTH
 # modes
 # ---------------------------------------------------------------------------
