@@ -1,34 +1,41 @@
-"""Web Push notification dispatch for the AI Market Outlook feature.
+"""Push notification dispatch for the AI Market Outlook feature, via OneSignal.
 
-Uses standard Web Push (RFC 8030) with VAPID keys -- no external account, no
-Firebase/APNs project, no service-account key. v6.25.2 owner directive
-2026-07-17: the keypair is now self-initializing and self-healing, not a
-manual one-time `npx web-push generate-vapid-keys` + environment-variable
-step that silently breaks every deployment that forgot to set it. See
-initialize_vapid_keys() below for the canonical load-or-create flow.
+v6.25.3 owner directive 2026-07-17: switched from self-hosted Web Push
+(pywebpush + VAPID) to OneSignal's REST API. The self-hosted implementation
+required a Python package (pywebpush, plus its own transitive dependencies
+py_vapid/http_ece) that was declared in backend/requirements.txt but never
+actually installed in the production environment -- restarting a deployment
+does not reinstall dependencies, so this was permanently DEPENDENCY_MISSING
+until a full backend rebuild, which required Emergent-dashboard access the
+operator did not want to depend on. OneSignal's REST API needs nothing but
+a plain HTTPS POST (via `httpx`, already installed and used elsewhere in
+this codebase), so it cannot fail the same way -- the only "not configured"
+state now is the admin not having entered real OneSignal credentials yet,
+which is a genuine, actionable input (Settings -> OneSignal App ID / REST
+API Key), unlike a missing native package.
 
-STRICT SEPARATION: this module only reads cloud_notification_prefs and
-cloud_push_subscriptions (both owned by this feature) and writes to
-cloud_notification_log. It never touches any EA/trade collection and never
-calls any trading-control endpoint.
+The previous self-hosted VAPID implementation (initialize_vapid_keys,
+get_vapid_status, _send_webpush, etc.) has been removed entirely, not kept
+as a dead fallback -- see git history if it's ever needed again.
+
+STRICT SEPARATION: unchanged from before -- this module only reads
+cloud_notification_prefs and cloud_push_subscriptions (both owned by this
+feature) and writes to cloud_notification_log. It never touches any EA/
+trade collection and never calls any trading-control endpoint.
 """
 
 from __future__ import annotations
 
-import os
-import json
 import uuid
-import hashlib
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
-from pymongo.errors import DuplicateKeyError
+import httpx
 
 logger = logging.getLogger("notifications")
 
-VAPID_CLAIMS_SUB = os.environ.get("VAPID_CONTACT_EMAIL", "mailto:support@xauaisniper.com")
+ONESIGNAL_API_URL = "https://onesignal.com/api/v1/notifications"
 
 
 def _db():
@@ -36,217 +43,38 @@ def _db():
     return _srv.db
 
 
-# ---------------------------------------------------------------------------
-# v6.25.2 owner directive 2026-07-17 -- canonical, self-initializing,
-# restart-safe VAPID key state. Never cache an empty environment value at
-# import time (the bug that produced the permanent SERVER_NOT_CONFIGURED
-# failure this fixes) -- everything below is a runtime accessor over
-# _VAPID_STATE, populated once by initialize_vapid_keys() at backend
-# startup, before any notification route may report readiness.
-# ---------------------------------------------------------------------------
-VAPID_STATE_INITIALIZING = "INITIALIZING"
-VAPID_STATE_READY_ENV = "READY_ENV"
-VAPID_STATE_READY_DATABASE = "READY_DATABASE"
-VAPID_STATE_GENERATION_FAILED = "GENERATION_FAILED"
-VAPID_STATE_INVALID_KEYPAIR = "INVALID_KEYPAIR"
-VAPID_STATE_DEPENDENCY_MISSING = "DEPENDENCY_MISSING"
-_VAPID_READY_STATES = (VAPID_STATE_READY_ENV, VAPID_STATE_READY_DATABASE)
-
-_VAPID_STATE: Dict = {
-    "state": VAPID_STATE_INITIALIZING,
-    "public_key": "",
-    "private_key": "",
-    "fingerprint": "",
-}
-_vapid_init_lock = asyncio.Lock()
-_vapid_init_event = asyncio.Event()
-
-
-def _vapid_fingerprint(public_key: str) -> str:
-    """Safe-to-log/return identifier for a public key -- never the key
-    itself in a context where a rotation needs to be detected without
-    exposing the raw material redundantly."""
-    return hashlib.sha256(public_key.encode("utf-8")).hexdigest()[:16]
-
-
-def _validate_vapid_keypair(public_key: str, private_key: str) -> bool:
-    """Real cryptographic validation, not a non-empty-string assumption:
-    the two keys must form a matching P-256 pair, the public key must be in
-    the exact URL-safe base64 uncompressed-point format the browser's
-    PushManager.subscribe(applicationServerKey=...) and pywebpush both
-    require, and the private key must actually work for VAPID JWT signing
-    (a real dry-run sign, no network call). Never logs the private key."""
-    try:
-        if not public_key or not private_key:
-            return False
-        public_key = public_key.strip()
-        private_key = private_key.strip()
-        if "\n" in public_key or "\n" in private_key or "'" in public_key or "'" in private_key \
-           or '"' in public_key or '"' in private_key:
-            return False
-        from py_vapid import Vapid01
-        from py_vapid.utils import b64urlencode
-        from cryptography.hazmat.primitives import serialization
-        vapid = Vapid01.from_string(private_key)
-        derived_pub_bytes = vapid.public_key.public_bytes(
-            serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint,
-        )
-        if len(derived_pub_bytes) != 65 or derived_pub_bytes[0] != 0x04:
-            return False  # not an uncompressed P-256 point
-        if b64urlencode(derived_pub_bytes) != public_key:
-            return False  # public key does not match this private key
-        # Dry-run signing test -- proves pywebpush's exact code path (which
-        # calls Vapid.sign() internally) works with this private key.
-        vapid.sign({"sub": VAPID_CLAIMS_SUB, "aud": "https://validation.local"})
-        return True
-    except Exception as e:
-        logger.warning(f"VAPID_KEYPAIR_VALIDATION_FAILED reason={type(e).__name__}")
-        return False
-
-
-def _generate_vapid_keypair() -> tuple:
-    """Generates one fresh, valid, browser/pywebpush-compatible VAPID P-256
-    keypair. Returns (public_key_urlsafe_b64, private_key_urlsafe_b64)."""
-    from py_vapid import Vapid01
-    from py_vapid.utils import b64urlencode
-    from cryptography.hazmat.primitives import serialization
-    vapid = Vapid01()
-    vapid.generate_keys()
-    priv_raw = vapid.private_key.private_numbers().private_value.to_bytes(32, "big")
-    private_key_str = b64urlencode(priv_raw)
-    pub_bytes = vapid.public_key.public_bytes(
-        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint,
-    )
-    public_key_str = b64urlencode(pub_bytes)
-    return public_key_str, private_key_str
-
-
-async def initialize_vapid_keys() -> None:
-    """Canonical asynchronous VAPID initialization. Must be awaited once
-    from the backend's startup event, before any request is served. Priority:
-    1) valid VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY environment variables;
-    2) the existing persisted keypair in db.system_settings/_id=web_push_vapid_primary;
-    3) generate a new keypair and atomically persist it -- if two workers
-       race this at once, MongoDB's unique _id constraint on that document
-       lets exactly one insert win; the loser rereads and uses the winner's
-       persisted pair, so both workers converge on the SAME keypair. Never
-       regenerates on an ordinary restart -- a changed public key silently
-       invalidates every existing browser subscription."""
-    if _vapid_init_event.is_set():
-        return  # already initialized this process
-    async with _vapid_init_lock:
-        if _vapid_init_event.is_set():
-            return
-        try:
-            import pywebpush  # noqa: F401 -- dependency probe
-        except ImportError:
-            _VAPID_STATE["state"] = VAPID_STATE_DEPENDENCY_MISSING
-            logger.error("WEBPUSH_DEPENDENCY available=false -- `pip install pywebpush` on the backend")
-            _vapid_init_event.set()
-            return
-
-        env_pub = os.environ.get("VAPID_PUBLIC_KEY", "").strip()
-        env_priv = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
-        if env_pub and env_priv and _validate_vapid_keypair(env_pub, env_priv):
-            _VAPID_STATE.update(state=VAPID_STATE_READY_ENV, public_key=env_pub, private_key=env_priv,
-                                 fingerprint=_vapid_fingerprint(env_pub))
-            logger.info(f"VAPID_INIT state=READY_ENV fingerprint={_VAPID_STATE['fingerprint']}")
-            logger.info("WEBPUSH_DEPENDENCY available=true")
-            logger.info(f"PUSH_SERVER_READY configured=true fingerprint={_VAPID_STATE['fingerprint']}")
-            _vapid_init_event.set()
-            return
-        if env_pub or env_priv:
-            logger.warning("VAPID env vars present but failed cryptographic validation -- falling back to database keypair")
-
-        db = _db()
-        doc = await db.system_settings.find_one({"_id": "web_push_vapid_primary"})
-        if doc and _validate_vapid_keypair(doc.get("public_key", ""), doc.get("private_key", "")):
-            _VAPID_STATE.update(state=VAPID_STATE_READY_DATABASE, public_key=doc["public_key"],
-                                 private_key=doc["private_key"], fingerprint=_vapid_fingerprint(doc["public_key"]))
-            logger.info(f"VAPID_INIT state=READY_DATABASE fingerprint={_VAPID_STATE['fingerprint']}")
-            logger.info("WEBPUSH_DEPENDENCY available=true")
-            logger.info(f"PUSH_SERVER_READY configured=true fingerprint={_VAPID_STATE['fingerprint']}")
-            _vapid_init_event.set()
-            return
-        if doc:
-            logger.warning("Persisted VAPID keypair failed cryptographic validation -- will not silently regenerate; reporting INVALID_KEYPAIR")
-            _VAPID_STATE["state"] = VAPID_STATE_INVALID_KEYPAIR
-            _vapid_init_event.set()
-            return
-
-        # No env pair, no persisted pair -- generate once and atomically
-        # claim the single canonical document.
-        pub, priv = _generate_vapid_keypair()
-        if not _validate_vapid_keypair(pub, priv):
-            _VAPID_STATE["state"] = VAPID_STATE_GENERATION_FAILED
-            logger.error("VAPID_INIT state=GENERATION_FAILED -- self-generated keypair failed its own validation")
-            _vapid_init_event.set()
-            return
-        try:
-            await db.system_settings.insert_one({
-                "_id": "web_push_vapid_primary",
-                "public_key": pub,
-                "private_key": priv,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
-            winning_pub, winning_priv = pub, priv
-            logger.info("VAPID_KEYPAIR_GENERATED_AND_PERSISTED (this worker won the creation race)")
-        except DuplicateKeyError:
-            # Another worker started simultaneously and already persisted a
-            # pair -- reread it so every worker converges on the SAME keys.
-            reread = await db.system_settings.find_one({"_id": "web_push_vapid_primary"})
-            winning_pub, winning_priv = reread.get("public_key", ""), reread.get("private_key", "")
-            logger.info("VAPID_KEYPAIR_CREATION_RACE_LOST -- reread the winning persisted pair from another worker")
-
-        if not _validate_vapid_keypair(winning_pub, winning_priv):
-            _VAPID_STATE["state"] = VAPID_STATE_INVALID_KEYPAIR
-            logger.error("VAPID_INIT state=INVALID_KEYPAIR -- persisted winner failed re-validation after re-read")
-            _vapid_init_event.set()
-            return
-
-        _VAPID_STATE.update(state=VAPID_STATE_READY_DATABASE, public_key=winning_pub, private_key=winning_priv,
-                             fingerprint=_vapid_fingerprint(winning_pub))
-        logger.info(f"VAPID_INIT state=READY_DATABASE fingerprint={_VAPID_STATE['fingerprint']} (newly generated)")
-        logger.info("WEBPUSH_DEPENDENCY available=true")
-        logger.info(f"PUSH_SERVER_READY configured=true fingerprint={_VAPID_STATE['fingerprint']}")
-        _vapid_init_event.set()
-
-
-async def _await_vapid_init() -> None:
-    """Every accessor below calls this first -- a request that arrives
-    before startup's initialize_vapid_keys() call finishes must wait for it
-    rather than racing ahead and observing an empty/INITIALIZING state."""
-    if not _vapid_init_event.is_set():
-        await _vapid_init_event.wait()
-
-
-async def get_vapid_status() -> Dict:
-    """Safe-to-return-to-the-frontend status snapshot. Never includes the
-    private key."""
-    await _await_vapid_init()
-    state = _VAPID_STATE["state"]
+async def _onesignal_config() -> Dict[str, str]:
+    """Reads OneSignal App ID + REST API Key live from admin settings on
+    every call -- never cached at import time, so the admin can paste in
+    credentials and have them take effect immediately with no backend
+    restart, unlike the retired VAPID system's startup-only initialization."""
+    import server as _srv
+    s = await _srv.get_settings()
     return {
-        "configured": state in _VAPID_READY_STATES,
-        "initialization_state": state,
-        "public_key": _VAPID_STATE["public_key"] if state in _VAPID_READY_STATES else "",
-        "key_fingerprint": _VAPID_STATE["fingerprint"],
-        "dependency_available": state != VAPID_STATE_DEPENDENCY_MISSING,
+        "app_id": (s.get("onesignal_app_id") or "").strip(),
+        "api_key": (s.get("onesignal_api_key") or "").strip(),
     }
 
 
-async def get_vapid_public_key() -> str:
-    await _await_vapid_init()
-    return _VAPID_STATE["public_key"]
+async def get_onesignal_status() -> Dict:
+    """Safe-to-return-to-the-frontend status snapshot. Never includes the
+    REST API key. app_id is not secret -- the browser SDK needs it directly
+    to initialize, same as the old VAPID public key was safe to expose."""
+    cfg = await _onesignal_config()
+    configured = bool(cfg["app_id"] and cfg["api_key"])
+    return {
+        "configured": configured,
+        "app_id": cfg["app_id"] if configured else "",
+        "initialization_state": "READY" if configured else "NOT_CONFIGURED",
+    }
 
 
-async def get_vapid_private_key() -> str:
-    await _await_vapid_init()
-    return _VAPID_STATE["private_key"]
+async def get_onesignal_app_id() -> str:
+    """Public, safe to expose without auth -- the frontend SDK's init() call
+    needs this before the user is necessarily logged in."""
+    cfg = await _onesignal_config()
+    return cfg["app_id"]
 
-
-async def vapid_configured() -> bool:
-    await _await_vapid_init()
-    return _VAPID_STATE["state"] in _VAPID_READY_STATES
 
 # Notification tier ordering -- an event's min_tier must be <= the user's
 # configured tier for it to actually be sent.
@@ -305,6 +133,81 @@ def _build_payload(doc: Dict, event: str) -> Dict:
     return {"title": title, "body": body, "deep_link": deep_link, "outlook_id": doc.get("id"), "event": event}
 
 
+# v6.25.3 -- failure taxonomy for the OneSignal REST API. Only
+# NO_DEVICE_REGISTERED reflects "OneSignal itself confirmed nothing is
+# subscribed" (its own recipients=0 response) -- every other class is a
+# configuration or transient-network condition, not proof the user opted
+# out, so nothing here ever deletes a subscription record the way the old
+# PERMANENT_SUBSCRIPTION_GONE class did (OneSignal manages device lifecycle
+# itself; we no longer store per-device push endpoints at all).
+SERVER_NOT_CONFIGURED = "SERVER_NOT_CONFIGURED"
+NO_DEVICE_REGISTERED = "NO_DEVICE_REGISTERED"
+AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED"
+INVALID_PAYLOAD = "INVALID_PAYLOAD"
+TEMPORARY_DELIVERY_FAILURE = "TEMPORARY_DELIVERY_FAILURE"
+UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
+
+
+async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
+    """Returns (ok: bool, failure_class: Optional[str]). The one production
+    dispatcher every caller (hourly outlook events, TP/SL results, the Send
+    Test Notification button) funnels through -- there is no second path.
+
+    Sends by OneSignal external_user_id (== our own user_id). The client
+    SDK tags every device the user grants permission on with
+    OneSignal.login(user_id) (see frontend), so OneSignal itself fans this
+    single call out to every device for this user -- unlike the old
+    self-hosted Web Push code, this module never loops over per-device
+    subscription records or stores raw push endpoints."""
+    cfg = await _onesignal_config()
+    if not (cfg["app_id"] and cfg["api_key"]):
+        logger.info(f"NOTIFICATION_SKIPPED_NOT_CONFIGURED user={user_id} payload={payload.get('title')}")
+        return False, SERVER_NOT_CONFIGURED
+
+    body = {
+        "app_id": cfg["app_id"],
+        "include_external_user_ids": [user_id],
+        "channel_for_external_user_ids": "push",
+        "headings": {"en": payload.get("title", "XAU AI Sniper")},
+        "contents": {"en": payload.get("body", "")},
+        "data": {"deep_link": payload.get("deep_link", ""), "outlook_id": payload.get("outlook_id"), "event": payload.get("event", "")},
+        "url": payload.get("deep_link") or "/ai-market-outlook",
+    }
+    headers = {"Authorization": f"Basic {cfg['api_key']}", "Content-Type": "application/json; charset=utf-8"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(ONESIGNAL_API_URL, json=body, headers=headers)
+    except httpx.TimeoutException:
+        logger.warning(f"ONESIGNAL_TIMEOUT user={user_id}")
+        return False, TEMPORARY_DELIVERY_FAILURE
+    except httpx.HTTPError as e:
+        logger.warning(f"ONESIGNAL_NETWORK_ERROR user={user_id}: {e}")
+        return False, TEMPORARY_DELIVERY_FAILURE
+    except Exception as e:
+        logger.warning(f"ONESIGNAL_UNEXPECTED_ERROR user={user_id}: {e}")
+        return False, UNKNOWN_FAILURE
+
+    if resp.status_code in (401, 403):
+        logger.warning(f"ONESIGNAL_AUTH_FAILED user={user_id} status={resp.status_code}: {resp.text[:200]}")
+        return False, AUTHENTICATION_FAILED
+    if resp.status_code >= 500:
+        logger.warning(f"ONESIGNAL_SERVER_ERROR user={user_id} status={resp.status_code}")
+        return False, TEMPORARY_DELIVERY_FAILURE
+    if resp.status_code >= 400:
+        logger.warning(f"ONESIGNAL_INVALID_REQUEST user={user_id} status={resp.status_code}: {resp.text[:200]}")
+        return False, INVALID_PAYLOAD
+
+    try:
+        data = resp.json()
+    except Exception:
+        return False, UNKNOWN_FAILURE
+    recipients = data.get("recipients", 0) or 0
+    if recipients > 0:
+        return True, None
+    logger.info(f"ONESIGNAL_NO_RECIPIENTS user={user_id} response={data}")
+    return False, NO_DEVICE_REGISTERED
+
+
 async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> int:
     """Sends (or logs-as-skipped) a notification for `event` to every user
     subscribed to this outlook's account, respecting per-user tier and
@@ -327,44 +230,25 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> int
             if already:
                 continue
             payload = _build_payload(doc, event)
-            devices = await db.cloud_push_subscriptions.find({"user_id": user_id}).to_list(10)
-            target_devices = devices if prefs.get("notify_all_devices", True) else devices[:1]
+            subscription = await db.cloud_push_subscriptions.find_one({"user_id": user_id, "opted_in": True})
             log_entry = {
                 "id": str(uuid.uuid4()), "idempotency_key": idem_key, "user_id": user_id,
                 "outlook_id": outlook_id, "notification_type": event,
                 "scheduled_time": datetime.now(timezone.utc).isoformat(),
                 "sent_time": None, "delivery_status": "PENDING", "opened_time": None,
-                "device_count": len(target_devices), "retry_count": 0, "failure_reason": None,
+                "device_count": 1 if subscription else 0, "retry_count": 0, "failure_reason": None,
             }
-            if not target_devices:
+            if not subscription:
                 log_entry["delivery_status"] = "NO_DEVICE"
                 await db.cloud_notification_log.insert_one(log_entry)
                 continue
-            delivered_any = False
-            last_failure_class = None
-            for device in target_devices:
-                ok, failure_class = await _send_webpush(device, payload)
-                if ok:
-                    delivered_any = True
-                else:
-                    last_failure_class = failure_class
-                    # v6.24.18 owner directive 2026-07-16 -- only a CONFIRMED
-                    # permanent endpoint failure (browser/OS told us this
-                    # subscription is gone/expired -- HTTP 404/410) may delete
-                    # the device record. Every other failure class (server not
-                    # configured, dependency missing, temporary network error,
-                    # timeout, unexpected exception) must NOT delete a real
-                    # device just because one push attempt failed -- that was
-                    # silently unregistering working devices on ordinary
-                    # transient errors.
-                    if failure_class == "PERMANENT_SUBSCRIPTION_GONE":
-                        await db.cloud_push_subscriptions.delete_one({"id": device.get("id")})
+            ok, failure_class = await _send_onesignal(user_id, payload)
             log_entry["sent_time"] = datetime.now(timezone.utc).isoformat()
-            log_entry["delivery_status"] = "SENT" if delivered_any else "FAILED"
-            if not delivered_any:
-                log_entry["failure_reason"] = last_failure_class or "UNKNOWN_FAILURE"
+            log_entry["delivery_status"] = "SENT" if ok else "FAILED"
+            if not ok:
+                log_entry["failure_reason"] = failure_class or UNKNOWN_FAILURE
             await db.cloud_notification_log.insert_one(log_entry)
-            if delivered_any:
+            if ok:
                 sent += 1
         return sent
     except Exception as e:
@@ -372,132 +256,43 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> int
         return 0
 
 
-# v6.24.18 owner directive 2026-07-16 -- explicit failure taxonomy. A push
-# failure is not one undifferentiated "false" -- only PERMANENT_SUBSCRIPTION_GONE
-# may ever cause a device record to be deleted; every other class is a
-# temporary/environmental condition that must be retried, not treated as
-# proof the device is gone. v6.25.2: added KEY_MISMATCH (device subscribed
-# under a VAPID public key that is no longer the active one) and
-# AUTHENTICATION_FAILED (push service rejected our VAPID auth itself, not
-# the subscription) per the owner's expanded taxonomy.
-PERMANENT_SUBSCRIPTION_GONE = "PERMANENT_SUBSCRIPTION_GONE"
-TEMPORARY_DELIVERY_FAILURE = "TEMPORARY_DELIVERY_FAILURE"
-SERVER_NOT_CONFIGURED = "SERVER_NOT_CONFIGURED"
-DEPENDENCY_MISSING = "DEPENDENCY_MISSING"
-INVALID_PAYLOAD = "INVALID_PAYLOAD"
-AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED"
-KEY_MISMATCH = "KEY_MISMATCH"
-UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
-
-
-async def _send_webpush(device: Dict, payload: Dict) -> tuple:
-    """Returns (ok: bool, failure_class: Optional[str]). The one production
-    dispatcher every caller (hourly outlook events, TP/SL results, the Send
-    Test Notification button) funnels through -- there is no second path."""
-    status = await get_vapid_status()
-    if not status["configured"]:
-        logger.info(f"NOTIFICATION_SKIPPED_NO_VAPID device={device.get('id')} payload={payload.get('title')} "
-                    f"initialization_state={status['initialization_state']}")
-        return False, SERVER_NOT_CONFIGURED
-    if not status["dependency_available"]:
-        return False, DEPENDENCY_MISSING
-    try:
-        from pywebpush import webpush, WebPushException
-    except ImportError:
-        logger.warning("pywebpush not installed -- notification not sent. `pip install pywebpush` on the backend.")
-        return False, DEPENDENCY_MISSING
-
-    # v6.25.2 owner directive -- if this device subscribed under a VAPID
-    # public key that is no longer the active one (a real admin key
-    # rotation, not the ordinary restart-retains-same-fingerprint case),
-    # the push will fail with a browser-side error the caller cannot fix by
-    # retrying. Detect it up front from the stored fingerprint so the
-    # caller can prompt a resubscribe instead of endlessly retrying.
-    device_fingerprint = device.get("vapid_key_fingerprint")
-    if device_fingerprint and device_fingerprint != status["key_fingerprint"]:
-        logger.warning(f"WEBPUSH_KEY_MISMATCH device={device.get('id')} "
-                        f"deviceFingerprint={device_fingerprint} activeFingerprint={status['key_fingerprint']}")
-        return False, KEY_MISMATCH
-
-    private_key = await get_vapid_private_key()
-    try:
-        webpush(
-            subscription_info={
-                "endpoint": device.get("endpoint"),
-                "keys": device.get("keys", {}),
-            },
-            data=json.dumps(payload),
-            vapid_private_key=private_key,
-            vapid_claims={"sub": VAPID_CLAIMS_SUB},
-        )
-        return True, None
-    except WebPushException as e:
-        status_code = getattr(getattr(e, "response", None), "status_code", None)
-        if status_code in (404, 410):
-            # Browser/OS push service confirmed this exact endpoint no
-            # longer exists -- the only case that may delete the device.
-            logger.warning(f"WEBPUSH_SUBSCRIPTION_GONE device={device.get('id')} status={status_code}: {e}")
-            return False, PERMANENT_SUBSCRIPTION_GONE
-        if status_code in (401, 403):
-            logger.warning(f"WEBPUSH_AUTHENTICATION_FAILED device={device.get('id')} status={status_code}: {e}")
-            return False, AUTHENTICATION_FAILED
-        logger.warning(f"WEBPUSH_TEMPORARY_FAILURE device={device.get('id')} status={status_code}: {e}")
-        return False, TEMPORARY_DELIVERY_FAILURE
-    except Exception as e:
-        logger.warning(f"WEBPUSH_UNEXPECTED_ERROR device={device.get('id')}: {e}")
-        return False, UNKNOWN_FAILURE
-
-
 async def send_test_notification(user_id: str) -> Dict:
     """Real production dispatcher, not a second fake path. Uses the same
-    _send_webpush() every real event uses -- required flow per the owner:
-    confirm VAPID READY, confirm pywebpush import, confirm authenticated
-    caller (already enforced by the route's Depends(get_cloud_user) before
-    this is ever called), confirm >=1 device, send, capture the real
-    HTTP/provider outcome, log it, return a truthful status. Never returns
-    SENT solely because no Python exception occurred -- SENT here means
-    _send_webpush's own (ok=True) branch, which only fires after a real
-    webpush() call raised nothing."""
+    _send_onesignal() every real event uses -- required flow per the owner:
+    confirm OneSignal is configured, confirm this user has actually opted
+    in, send, capture the real HTTP/provider outcome, log it, return a
+    truthful status. Never returns SENT solely because no Python exception
+    occurred -- SENT here means _send_onesignal's own (ok=True) branch,
+    which only fires after OneSignal's response confirmed recipients > 0."""
     db = _db()
-    status = await get_vapid_status()
+    status = await get_onesignal_status()
     if not status["configured"]:
-        return {"status": "SERVER_NOT_CONFIGURED", "message": "Push server VAPID keys are not configured.",
-                "initialization_state": status["initialization_state"]}
-    if not status["dependency_available"]:
-        return {"status": "DEPENDENCY_MISSING", "message": "pywebpush is not installed on the backend."}
+        return {"status": "SERVER_NOT_CONFIGURED",
+                "message": "OneSignal is not configured. Enter your App ID and REST API Key in Admin -> Settings."}
 
-    devices = await db.cloud_push_subscriptions.find({"user_id": user_id}).to_list(10)
-    if not devices:
+    subscription = await db.cloud_push_subscriptions.find_one({"user_id": user_id, "opted_in": True})
+    if not subscription:
         return {"status": "NO_DEVICE", "message": "No registered device subscription for this user."}
 
     payload = {"title": "XAU AI Sniper Test", "body": "Phone alerts are working.",
                "deep_link": "/ai-market-outlook", "outlook_id": None, "event": "TEST_NOTIFICATION"}
-    sent_any = False
-    last_failure = None
-    for device in devices:
-        ok, failure_class = await _send_webpush(device, payload)
-        if ok:
-            sent_any = True
-        else:
-            last_failure = failure_class
-            if failure_class == PERMANENT_SUBSCRIPTION_GONE:
-                await db.cloud_push_subscriptions.delete_one({"id": device.get("id")})
+    ok, failure_class = await _send_onesignal(user_id, payload)
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.cloud_notification_log.insert_one({
         "id": str(uuid.uuid4()), "idempotency_key": f"TEST:{user_id}:{now_iso}",
         "user_id": user_id, "outlook_id": None, "notification_type": "TEST_NOTIFICATION",
         "scheduled_time": now_iso, "sent_time": now_iso,
-        "delivery_status": "SENT" if sent_any else "FAILED",
-        "device_count": len(devices), "retry_count": 0,
-        "failure_reason": None if sent_any else (last_failure or UNKNOWN_FAILURE),
+        "delivery_status": "SENT" if ok else "FAILED",
+        "device_count": 1, "retry_count": 0,
+        "failure_reason": None if ok else (failure_class or UNKNOWN_FAILURE),
     })
-    if sent_any:
+    if ok:
         return {"status": "SENT", "message": "Test notification sent."}
-    if last_failure == PERMANENT_SUBSCRIPTION_GONE:
-        return {"status": "SUBSCRIPTION_EXPIRED", "message": "The stored subscription is no longer valid; please re-enable notifications."}
-    if last_failure == KEY_MISMATCH:
-        return {"status": "KEY_MISMATCH", "message": "This device subscribed under an old push key; please re-enable notifications to resubscribe."}
-    return {"status": "FAILED", "message": f"Delivery failed ({last_failure or UNKNOWN_FAILURE})."}
+    if failure_class == NO_DEVICE_REGISTERED:
+        return {"status": "NO_DEVICE", "message": "OneSignal reports no active device for this account -- re-enable notifications to resubscribe."}
+    if failure_class == AUTHENTICATION_FAILED:
+        return {"status": "FAILED", "message": "OneSignal rejected the REST API Key -- check Admin -> Settings."}
+    return {"status": "FAILED", "message": f"Delivery failed ({failure_class or UNKNOWN_FAILURE})."}
 
 
 async def get_notification_status(user_id: str, account: str = "") -> Dict:
@@ -509,29 +304,21 @@ async def get_notification_status(user_id: str, account: str = "") -> Dict:
     db = _db()
     prefs = await db.cloud_notification_prefs.find_one({"user_id": user_id}, {"_id": 0})
     saved_tier = (prefs or {}).get("tier", "OFF")
-    devices = await db.cloud_push_subscriptions.find({"user_id": user_id}).to_list(10)
-    last_reg = None
-    for d in devices:
-        ts = d.get("created_at")
-        if ts and (last_reg is None or ts > last_reg):
-            last_reg = ts
+    subscription = await db.cloud_push_subscriptions.find_one({"user_id": user_id, "opted_in": True}, {"_id": 0})
     last_log = await db.cloud_notification_log.find_one(
         {"user_id": user_id}, {"_id": 0}, sort=[("scheduled_time", -1)],
     )
     last_sent_ok = await db.cloud_notification_log.find_one(
         {"user_id": user_id, "delivery_status": "SENT"}, {"_id": 0}, sort=[("scheduled_time", -1)],
     )
-    vapid_status = await get_vapid_status()
-    server_ready = vapid_status["configured"]
-    dependency_available = vapid_status["dependency_available"]
+    onesignal_status = await get_onesignal_status()
+    server_ready = onesignal_status["configured"]
 
     if saved_tier == "OFF":
         final_status = "OFF"
     elif not server_ready:
         final_status = "SERVER_NOT_CONFIGURED"
-    elif not dependency_available:
-        final_status = "DEPENDENCY_MISSING"
-    elif not devices:
+    elif not subscription:
         final_status = "SUBSCRIPTION_MISSING"
     elif last_log and last_log.get("delivery_status") == "FAILED":
         final_status = "DELIVERY_FAILED"
@@ -542,12 +329,10 @@ async def get_notification_status(user_id: str, account: str = "") -> Dict:
 
     return {
         "saved_tier": saved_tier,
-        "active_device_count": len(devices),
-        "most_recent_registration": last_reg,
+        "active_device_count": 1 if subscription else 0,
+        "most_recent_registration": (subscription or {}).get("created_at"),
         "push_server_configured": server_ready,
-        "push_server_initialization_state": vapid_status["initialization_state"],
-        "push_server_key_fingerprint": vapid_status["key_fingerprint"],
-        "delivery_library_available": dependency_available,
+        "push_server_initialization_state": onesignal_status["initialization_state"],
         "latest_notification_status": (last_log or {}).get("delivery_status"),
         "latest_failure_reason": (last_log or {}).get("failure_reason"),
         "latest_sent_time": (last_log or {}).get("sent_time"),

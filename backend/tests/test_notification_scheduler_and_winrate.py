@@ -94,13 +94,12 @@ def test_dedup_key_scoped_by_account_symbol_and_slot():
 # ---------------------------------------------------------------------------
 # Notification: real state, not preference-tier alone
 # ---------------------------------------------------------------------------
-def test_subscription_deletion_only_on_confirmed_permanent_failure():
-    fn_idx = NOTIF_SRC.index("async def send_outlook_notification")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 3500]
-    assert 'if failure_class == "PERMANENT_SUBSCRIPTION_GONE":' in fn
-    idx = fn.index('if failure_class == "PERMANENT_SUBSCRIPTION_GONE":')
-    window = fn[idx: idx + 200]
-    assert "await db.cloud_push_subscriptions.delete_one" in window
+def test_subscription_never_deleted_on_delivery_failure():
+    # v6.25.3 owner directive 2026-07-17 -- OneSignal owns device/subscription
+    # lifecycle entirely (unlike the retired self-hosted Web Push code, which
+    # deleted a subscription on a confirmed 404/410). This module must never
+    # delete a cloud_push_subscriptions record for any reason.
+    assert "cloud_push_subscriptions.delete_one" not in NOTIF_SRC
 
 
 def test_temporary_failures_do_not_delete_subscription():
@@ -109,18 +108,19 @@ def test_temporary_failures_do_not_delete_subscription():
     assert "if not ok:\n                    await db.cloud_push_subscriptions.delete_one" not in NOTIF_SRC
 
 
-def test_webpush_returns_classified_failure_not_bare_bool():
-    fn_idx = NOTIF_SRC.index("async def _send_webpush(device: Dict, payload: Dict) -> tuple:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
-    for status_class in ["SERVER_NOT_CONFIGURED", "DEPENDENCY_MISSING", "PERMANENT_SUBSCRIPTION_GONE",
-                          "TEMPORARY_DELIVERY_FAILURE", "UNKNOWN_FAILURE"]:
+def test_onesignal_returns_classified_failure_not_bare_bool():
+    fn_idx = NOTIF_SRC.index("async def _send_onesignal(user_id: str, payload: Dict) -> tuple:")
+    fn = NOTIF_SRC[fn_idx: fn_idx + 3200]
+    for status_class in ["SERVER_NOT_CONFIGURED", "AUTHENTICATION_FAILED",
+                          "TEMPORARY_DELIVERY_FAILURE", "NO_DEVICE_REGISTERED", "UNKNOWN_FAILURE"]:
         assert status_class in fn
 
 
-def test_permanent_gone_only_on_404_or_410_status():
-    fn_idx = NOTIF_SRC.index("async def _send_webpush(device: Dict, payload: Dict) -> tuple:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
-    assert "status_code in (404, 410)" in fn
+def test_zero_recipients_classified_as_no_device_registered():
+    fn_idx = NOTIF_SRC.index("async def _send_onesignal(user_id: str, payload: Dict) -> tuple:")
+    fn = NOTIF_SRC[fn_idx: fn_idx + 3200]
+    assert "recipients > 0" in fn
+    assert "NO_DEVICE_REGISTERED" in fn
 
 
 def test_notification_status_endpoint_exists_and_derives_final_status():
@@ -144,13 +144,13 @@ def test_status_is_off_regardless_of_device_state_when_tier_is_off():
 def test_on_verified_requires_devices_and_server_ready():
     fn_idx = NOTIF_SRC.index('async def get_notification_status(user_id: str, account: str = "") -> Dict:')
     fn = NOTIF_SRC[fn_idx: fn_idx + 2500]
-    assert 'elif not devices:\n        final_status = "SUBSCRIPTION_MISSING"' in fn
+    assert 'elif not subscription:\n        final_status = "SUBSCRIPTION_MISSING"' in fn
 
 
 def test_test_notification_uses_real_production_dispatcher():
     fn_idx = NOTIF_SRC.index("async def send_test_notification(user_id: str) -> Dict:")
     fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
-    assert "await _send_webpush(device, payload)" in fn
+    assert "await _send_onesignal(user_id, payload)" in fn
     assert '@r.post("/outlook/notifications/test")' in ROUTES_SRC
 
 
@@ -164,7 +164,7 @@ def test_test_notification_never_creates_an_outlook():
 def test_test_notification_returns_named_status_not_bare_bool():
     fn_idx = NOTIF_SRC.index("async def send_test_notification(user_id: str) -> Dict:")
     fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
-    for status in ["SERVER_NOT_CONFIGURED", "DEPENDENCY_MISSING", "NO_DEVICE", "SENT", "SUBSCRIPTION_EXPIRED", "FAILED"]:
+    for status in ["SERVER_NOT_CONFIGURED", "NO_DEVICE", "SENT", "FAILED"]:
         assert status in fn
 
 

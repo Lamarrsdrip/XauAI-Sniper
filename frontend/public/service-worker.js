@@ -11,6 +11,15 @@
  *     requiring the user to close & reopen the app
  * ------------------------------------------------------------
  */
+// v6.25.3 owner directive 2026-07-17 -- OneSignal push handling now runs
+// inside THIS existing service worker (rather than letting the SDK
+// register a second, competing worker at the same '/' scope), per
+// OneSignal's documented "existing service worker" integration pattern.
+// This importScripts() call is what actually installs OneSignal's push/
+// notificationclick listeners; our own custom listeners for those events
+// were removed below (see bottom of file) so there's no double-handling.
+importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDKWorker.js');
+
 const CACHE_NAME = 'xauai-cloud-v' + Date.now();
 
 self.addEventListener('install', (event) => {
@@ -90,46 +99,12 @@ self.addEventListener('message', (event) => {
 /**
  * AI Market Outlook — Web Push notifications.
  * ------------------------------------------------------------
- * Standard Web Push (RFC 8030) with self-generated VAPID keys on the
- * backend (backend/notifications.py) -- no Firebase/APNs/external account.
- * This listener only DISPLAYS a notification and handles the tap-to-open
- * deep link; it never touches trading state (there is no trading state
- * reachable from a service worker at all -- this is presentation only).
+ * v6.25.3: push/notificationclick handling is now owned entirely by
+ * OneSignal's imported worker code (see importScripts() at the top of this
+ * file) -- our own custom listeners for those two events were removed here
+ * to avoid double-handling the same event on this shared service worker.
+ * OneSignal renders the notification and opens/focuses the `url` we send
+ * in the REST API payload (see backend/notifications.py's
+ * _send_onesignal()) -- no app-specific code needed here anymore.
  * ------------------------------------------------------------
  */
-self.addEventListener('push', (event) => {
-  let payload = { title: 'XAU AI Sniper', body: 'New outlook update', deep_link: '/ai-market-outlook' };
-  try {
-    if (event.data) payload = { ...payload, ...event.data.json() };
-  } catch (_) {
-    if (event.data) payload.body = event.data.text();
-  }
-  const options = {
-    body: payload.body,
-    icon: '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
-    tag: payload.outlook_id ? `outlook-${payload.outlook_id}` : undefined,
-    data: { deep_link: payload.deep_link || '/ai-market-outlook', outlook_id: payload.outlook_id },
-    renotify: !!payload.outlook_id,
-  };
-  event.waitUntil(self.registration.showNotification(payload.title, options));
-});
-
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  const deepLink = (event.notification.data && event.notification.data.deep_link) || '/ai-market-outlook';
-  event.waitUntil(
-    (async () => {
-      const clientsList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      for (const client of clientsList) {
-        if ('focus' in client) {
-          client.postMessage({ type: 'OUTLOOK_NOTIFICATION_TAPPED', deep_link: deepLink });
-          await client.focus();
-          if ('navigate' in client) client.navigate(deepLink).catch(() => {});
-          return;
-        }
-      }
-      await self.clients.openWindow(deepLink);
-    })()
-  );
-});

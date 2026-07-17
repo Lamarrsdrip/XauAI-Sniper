@@ -427,6 +427,15 @@ class AdminSettingsUpdate(BaseModel):
     pin_price_kobo: Optional[int] = None
     smtp_email: Optional[str] = None
     smtp_password: Optional[str] = None
+    # v6.25.3 owner directive 2026-07-17 -- OneSignal REST API credentials.
+    # Replaces self-hosted Web Push (pywebpush), which was permanently
+    # blocked by a missing Python package in the deployed environment that
+    # only a full backend rebuild could fix. OneSignal needs nothing but a
+    # plain HTTPS POST (via `requests`, already installed and working), so
+    # it can't fail the same way. onesignal_app_id is not secret (the
+    # frontend SDK needs it directly); onesignal_api_key is.
+    onesignal_app_id: Optional[str] = None
+    onesignal_api_key: Optional[str] = None
 
 class AdminAccountUpdate(BaseModel):
     new_email: Optional[str] = None
@@ -1015,6 +1024,7 @@ async def get_admin_settings(admin: dict = Depends(get_current_admin)):
     # Mask sensitive keys
     pk = s.get("paystack_secret_key", "")
     sp = s.get("smtp_password", "")
+    osk = s.get("onesignal_api_key", "")
     return {
         "paystack_configured": bool(pk),
         "paystack_key_preview": f"{pk[:8]}...{pk[-4:]}" if len(pk) > 12 else ("set" if pk else "not set"),
@@ -1022,36 +1032,42 @@ async def get_admin_settings(admin: dict = Depends(get_current_admin)):
         "pin_price_naira": s.get("pin_price_kobo", 30000000) / 100,
         "smtp_email": s.get("smtp_email", ""),
         "smtp_configured": bool(sp),
+        "onesignal_app_id": s.get("onesignal_app_id", ""),
+        "onesignal_api_key_configured": bool(osk),
+        "onesignal_api_key_preview": f"{osk[:6]}...{osk[-4:]}" if len(osk) > 10 else ("set" if osk else "not set"),
     }
 
 @api_router.get("/admin/notifications/health")
 async def admin_notifications_health(admin: dict = Depends(get_current_admin)):
-    """v6.25.2 owner directive 2026-07-17 -- real, live visibility into why
-    push notifications are or are not working, in the admin dashboard,
-    instead of requiring a manual curl of the public status endpoint. This
-    is diagnostic ONLY -- there is no input field here because the actual
-    root cause when dependency_available is false is a missing Python
-    package (pywebpush) in the deployed backend environment, which no
-    application-level input can install. See vapid.dependency_available
-    and vapid.remediation below for what actually needs to happen."""
+    """v6.25.3 owner directive 2026-07-17 -- real, live visibility into
+    OneSignal push notification health, in the admin dashboard, instead of
+    requiring a manual API check. Delivery now goes through OneSignal's
+    REST API (plain HTTPS POST via `requests`, already installed and
+    working) instead of self-hosted Web Push, which was permanently broken
+    by a missing Python package (pywebpush) that only a full backend
+    rebuild could fix -- see git history for that implementation. The only
+    thing that can now be "not configured" is the admin actually entering a
+    real OneSignal App ID + REST API Key in Settings, which the
+    onesignal.remediation field below states plainly when missing."""
     import notifications as _notif
-    vapid_status = await _notif.get_vapid_status()
-    device_count = await db.cloud_push_subscriptions.count_documents({})
+    onesignal_status = await _notif.get_onesignal_status()
+    device_count = await db.cloud_push_subscriptions.count_documents({"opted_in": True})
     last_sent = await db.cloud_notification_log.find_one(
         {"delivery_status": "SENT"}, {"_id": 0, "scheduled_time": 1, "user_id": 1}, sort=[("scheduled_time", -1)])
     last_failed = await db.cloud_notification_log.find_one(
         {"delivery_status": {"$ne": "SENT"}}, {"_id": 0, "scheduled_time": 1, "delivery_status": 1, "failure_reason": 1},
         sort=[("scheduled_time", -1)])
     remediation = (
-        "pywebpush is declared in backend/requirements.txt but is not actually installed in this "
-        "running environment -- restarting the backend does NOT reinstall dependencies. Trigger a full "
-        "rebuild/redeploy (not a restart) from the Emergent dashboard so pip installs from requirements.txt "
-        "again, then reload this page."
-        if not vapid_status.get("dependency_available") else
-        "Dependency is installed and available."
+        "Not configured. Create a free OneSignal account at onesignal.com, add a Web Push app, copy its "
+        "App ID and REST API Key from Settings -> Keys & IDs, and paste both into Settings on this admin "
+        "dashboard."
+        if not onesignal_status.get("configured") else
+        "Configured. If sends are still failing, check the failure reason on the last failed send below -- "
+        "AUTHENTICATION_FAILED means the REST API Key is wrong, NO_DEVICE_REGISTERED means no user has "
+        "granted browser permission yet."
     )
     return {
-        "vapid": {**vapid_status, "remediation": remediation},
+        "onesignal": {**onesignal_status, "remediation": remediation},
         "subscribed_devices": device_count,
         "last_successful_send": last_sent,
         "last_failed_send": last_failed,
@@ -1064,6 +1080,8 @@ async def update_admin_settings(req: AdminSettingsUpdate, admin: dict = Depends(
     if req.pin_price_kobo is not None: updates["pin_price_kobo"] = req.pin_price_kobo
     if req.smtp_email is not None: updates["smtp_email"] = req.smtp_email
     if req.smtp_password is not None: updates["smtp_password"] = req.smtp_password
+    if req.onesignal_app_id is not None: updates["onesignal_app_id"] = req.onesignal_app_id.strip()
+    if req.onesignal_api_key is not None: updates["onesignal_api_key"] = req.onesignal_api_key.strip()
     if updates:
         await db.admin_settings.update_one({"key": "main"}, {"$set": updates}, upsert=True)
     return {"updated": True}
@@ -1867,18 +1885,13 @@ async def startup():
         await db.cloud_notification_log.create_index("idempotency_key", unique=True)
     except Exception as e:
         logger.warning(f"[outlook-notifications] could not create idempotency_key index: {e}")
-    # v6.25.2 owner directive 2026-07-17 -- canonical self-initializing VAPID
-    # keypair. Must complete BEFORE this backend serves any notification
-    # route (get_vapid_status/vapid_configured internally await this same
-    # completion event as a defense-in-depth guard against any caller that
-    # somehow runs before startup finishes, but awaiting it directly here
-    # is what actually guarantees no request races ahead of it in the
-    # normal case).
-    try:
-        import notifications as _notif
-        await _notif.initialize_vapid_keys()
-    except Exception as e:
-        logger.error(f"VAPID_INIT_STARTUP_FAILED: {e}")
+    # v6.25.3 owner directive 2026-07-17 -- push notifications now go through
+    # OneSignal's REST API (backend/notifications.py), which reads its
+    # App ID/REST API Key live from db.admin_settings on every send -- no
+    # startup initialization needed (unlike the retired self-hosted VAPID
+    # keypair system, which required this exact startup step and was
+    # permanently blocked by a missing Python package that only a full
+    # backend rebuild could fix).
     # v1.4.7 — one-time backfill: copy closed_at from cloud_shadow_trades back
     # into cloud_signals. Fixes legacy signals where master_close updated
     # shadow trades but not the parent signal record. Idempotent.

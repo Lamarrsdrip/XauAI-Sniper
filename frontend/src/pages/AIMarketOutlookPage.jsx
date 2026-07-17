@@ -6,6 +6,7 @@ import {
   ChevronDown, ChevronUp, Filter, TrendingUp, TrendingDown,
 } from "lucide-react";
 import { API } from "@/lib/api";
+import { ensureOneSignalInitialized } from "@/lib/onesignal";
 
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
 outlookAxios.interceptors.request.use((cfg) => {
@@ -211,51 +212,45 @@ function NotificationSettings({ prefs, setPrefs }) {
     }
   }, []);
 
-  // v6.24.18 owner directive -- subscribeDevice() must return a structured
-  // result, never silently swallow. Real errors are reported through
-  // verifiedStatus (backed by the authenticated /outlook/notifications/status
-  // endpoint) rather than an empty catch block hiding the failure entirely.
+  // v6.25.3 owner directive 2026-07-17 -- rewritten for OneSignal (replaces
+  // the retired self-hosted VAPID/pywebpush implementation, which was
+  // permanently blocked by a missing Python package in production that
+  // only a full backend rebuild could fix). OneSignal's SDK now owns the
+  // actual push subscription lifecycle entirely; this function's job is
+  // just: init the SDK with the live App ID, request permission, tag this
+  // browser with OneSignal.login(our user id) so sends via
+  // include_external_user_ids reach it, and confirm opt-in with our own
+  // backend for status/UI purposes. subscribeDevice() must still return a
+  // structured result, never silently swallow -- real errors are reported
+  // through verifiedStatus (backed by the authenticated
+  // /outlook/notifications/status endpoint) rather than an empty catch
+  // block hiding the failure entirely.
   const subscribeDevice = useCallback(async () => {
-    if (typeof navigator === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    if (typeof window === "undefined") {
       return { ok: false, code: "PUSH_UNSUPPORTED", message: "This browser does not support push notifications." };
     }
     try {
-      const { data } = await outlookAxios.get("/outlook/notifications/vapid-public-key");
-      if (!data?.configured || !data?.public_key) {
+      const { data: appData } = await outlookAxios.get("/outlook/notifications/onesignal-app-id");
+      if (!appData?.configured || !appData?.app_id) {
         return { ok: false, code: "SERVER_NOT_CONFIGURED", message: "Push server is not configured yet." };
       }
-      const reg = await navigator.serviceWorker.ready;
-      const swVersion = reg.active?.scriptURL || "";
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(data.public_key),
-        });
+      const ready = await ensureOneSignalInitialized(appData.app_id);
+      if (!ready || !window.OneSignal) {
+        return { ok: false, code: "PUSH_UNSUPPORTED", message: "Notification SDK failed to load." };
       }
-      let json = sub.toJSON();
-      let subResp = await outlookAxios.post("/outlook/notifications/subscribe", {
-        endpoint: json.endpoint, keys: json.keys, device_label: navigator.userAgent.slice(0, 60),
-        timezone_offset_minutes: -new Date().getTimezoneOffset(), sw_version: swVersion,
+      await window.OneSignal.Notifications.requestPermission();
+      const optedIn = window.OneSignal.User?.PushSubscription?.optedIn;
+      if (!optedIn) {
+        return { ok: false, code: "PERMISSION_DENIED", message: "Notification permission was not granted." };
+      }
+      const { data: idData } = await outlookAxios.get("/outlook/notifications/my-user-id");
+      if (idData?.user_id) {
+        await window.OneSignal.login(idData.user_id);
+      }
+      const subResp = await outlookAxios.post("/outlook/notifications/subscribe", {
+        device_label: navigator.userAgent.slice(0, 60),
+        timezone_offset_minutes: -new Date().getTimezoneOffset(),
       });
-      // v6.25.2 owner directive -- if the backend's active VAPID key
-      // rotated since this browser last subscribed (an explicit admin
-      // rotation, not the ordinary restart-retains-same-fingerprint case),
-      // the old PushManager subscription was created under a key the
-      // backend can no longer sign for. Drop it and create a fresh one
-      // under the current public key, then re-register.
-      if (subResp.data?.key_rotated_or_mismatched) {
-        await sub.unsubscribe().catch(() => {});
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(data.public_key),
-        });
-        json = sub.toJSON();
-        subResp = await outlookAxios.post("/outlook/notifications/subscribe", {
-          endpoint: json.endpoint, keys: json.keys, device_label: navigator.userAgent.slice(0, 60),
-          timezone_offset_minutes: -new Date().getTimezoneOffset(), sw_version: swVersion,
-        });
-      }
       return { ok: true, device_id: subResp.data?.device_id, endpoint_registered: true, server_ready: true };
     } catch (e) {
       return { ok: false, code: "REGISTRATION_FAILED", message: e?.message || "Device registration failed." };
@@ -361,7 +356,6 @@ function NotificationSettings({ prefs, setPrefs }) {
     ON_VERIFIED: "Phone alerts active",
     OFF: "Notifications off",
     SERVER_NOT_CONFIGURED: "Push server not ready",
-    DEPENDENCY_MISSING: "Push server not ready",
     SUBSCRIPTION_MISSING: "Setup required — device not registered",
     READY_NOT_TESTED: "Registered — send a test to verify",
     DELIVERY_FAILED: "Last delivery failed",
@@ -432,13 +426,6 @@ function NotificationSettings({ prefs, setPrefs }) {
 // "undefined" inside the combined string.
 function safeJoin(values, separator) {
   return values.map((v) => (v == null ? "—" : v)).join(separator);
-}
-
-function urlBase64ToUint8Array(base64String) {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = window.atob(base64);
-  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
 }
 
 function HistoryCard({ outlook }) {

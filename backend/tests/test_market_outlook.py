@@ -57,14 +57,14 @@ def test_outlook_module_only_writes_its_own_collections():
 
 
 def test_notifications_module_only_writes_its_own_collections():
-    # v6.25.2 owner directive 2026-07-17 -- the self-initializing VAPID
-    # keypair is persisted in its own canonical single-document collection
-    # (system_settings/_id=web_push_vapid_primary), a deliberate scope
-    # addition, not a violation: it is still owned exclusively by this
-    # feature (no other module reads or writes web_push_vapid_primary).
+    # v6.25.3 owner directive 2026-07-17 -- switched to OneSignal; the
+    # retired self-hosted VAPID keypair (system_settings/_id=
+    # web_push_vapid_primary) is gone. This module now only writes delivery
+    # log entries -- device opt-in records are written by
+    # market_outlook_routes.py's subscribe endpoint, not here.
     import re
     writes = re.findall(r'db\.(\w+)\.(?:insert_one|update_one|delete_one|update_many)', NOTIF_SRC)
-    own_collections = {"cloud_notification_log", "cloud_push_subscriptions", "system_settings"}
+    own_collections = {"cloud_notification_log"}
     for coll in writes:
         assert coll in own_collections, f"notifications.py writes to unexpected collection: {coll}"
 
@@ -289,7 +289,7 @@ def test_idempotency_key_includes_event_outlook_and_user():
 
 def test_send_outlook_notification_checks_idempotency_before_sending():
     fn = NOTIF_SRC[NOTIF_SRC.index("async def send_outlook_notification"):]
-    fn_body = fn[:fn.index("\n\nasync def _send_webpush")]
+    fn_body = fn[:fn.index("\n\nasync def send_test_notification")]
     idem_check_idx = fn_body.index("cloud_notification_log.find_one")
     payload_build_idx = fn_body.index("_build_payload(doc, event)")
     assert idem_check_idx < payload_build_idx  # checked BEFORE building/sending anything
@@ -314,18 +314,25 @@ def test_off_tier_never_satisfies_any_event_requirement():
         assert notif._TIER_RANK["OFF"] < notif._TIER_RANK[min_tier]
 
 
-def test_expired_or_failed_device_is_removed_on_send_failure():
+def test_send_outlook_notification_never_deletes_subscriptions_itself():
+    # v6.25.3 owner directive 2026-07-17 -- OneSignal owns device/subscription
+    # lifecycle entirely; this module must never delete a
+    # cloud_push_subscriptions record on a delivery failure (unlike the
+    # retired self-hosted Web Push code, which deleted on a confirmed
+    # 404/410 -- OneSignal's failure modes are all config/auth/transient,
+    # never "the browser confirmed this endpoint is gone").
     fn = NOTIF_SRC[NOTIF_SRC.index("async def send_outlook_notification"):]
-    fn_body = fn[:fn.index("\n\nasync def _send_webpush")]
-    assert "cloud_push_subscriptions.delete_one" in fn_body
+    fn_body = fn[:fn.index("\n\nasync def send_test_notification")]
+    assert "cloud_push_subscriptions.delete_one" not in fn_body
+    assert "cloud_push_subscriptions.update_one" not in fn_body
 
 
-def test_vapid_keys_read_from_env_not_hardcoded():
-    assert 'os.environ.get("VAPID_PUBLIC_KEY"' in NOTIF_SRC
-    assert 'os.environ.get("VAPID_PRIVATE_KEY"' in NOTIF_SRC
+def test_onesignal_credentials_read_from_settings_not_hardcoded():
+    assert "onesignal_app_id" in NOTIF_SRC
+    assert "onesignal_api_key" in NOTIF_SRC
     # confirm no literal key material is hardcoded as a fallback default
     import re
-    assert not re.search(r'VAPID_(PUBLIC|PRIVATE)_KEY["\']?\s*,\s*["\'][A-Za-z0-9+/=_-]{20,}["\']', NOTIF_SRC)
+    assert not re.search(r'onesignal_api_key["\']?\s*[,:]\s*["\'][A-Za-z0-9+/=_-]{20,}["\']', NOTIF_SRC)
 
 
 # ---------------------------------------------------------------------------
@@ -336,8 +343,8 @@ def test_all_new_endpoints_require_cloud_user_auth():
     import re
     handlers = re.findall(r'async def \w+\([^)]*\):', ROUTES_SRC)
     for h in handlers:
-        if "get_vapid_public_key" in h:
-            continue  # public key is not secret, no auth needed to fetch it
+        if "get_onesignal_app_id" in h:
+            continue  # OneSignal App ID is not secret, no auth needed to fetch it
         assert "Depends(srv.get_cloud_user)" in h, f"endpoint missing auth dependency: {h}"
 
 
@@ -368,9 +375,13 @@ def test_activity_endpoint_copies_thesis_fields_into_details():
 # requirements.txt has the new dependency, no credential leakage
 # ---------------------------------------------------------------------------
 
-def test_pywebpush_in_requirements():
+def test_no_pywebpush_dependency():
+    # v6.25.3 owner directive 2026-07-17 -- pywebpush is retired along with
+    # self-hosted Web Push; OneSignal delivery only needs httpx, already a
+    # dependency for other reasons. Its absence here is deliberate, not an
+    # oversight -- this locks in that nothing reintroduces it.
     req = read(BACKEND_DIR / "requirements.txt")
-    assert "pywebpush==" in req
+    assert "pywebpush" not in req
 
 
 # ---------------------------------------------------------------------------

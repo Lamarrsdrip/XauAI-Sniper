@@ -108,12 +108,15 @@ class NotificationPrefsUpdate(BaseModel):
     notify_all_devices: bool = True
 
 
+# v6.25.3 owner directive 2026-07-17 -- no raw Web Push endpoint/keys
+# anymore. OneSignal's client SDK manages the actual device registration
+# and push subscription lifecycle entirely on its own; this call just
+# confirms the browser granted permission and the device was tagged with
+# OneSignal.login(user_id), so this backend knows "opted_in" without ever
+# handling a push endpoint/key blob itself.
 class PushSubscriptionIn(BaseModel):
-    endpoint: str
-    keys: Dict[str, str]  # {"p256dh": ..., "auth": ...}
     device_label: Optional[str] = ""
     timezone_offset_minutes: Optional[int] = 0
-    sw_version: Optional[str] = ""
 
 
 # ---------------------------------------------------------------------------

@@ -236,50 +236,52 @@ def build_router() -> APIRouter:
         await db.cloud_notification_prefs.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
         return {"ok": True, "prefs": doc}
 
-    # v6.25.2 owner directive 2026-07-17 -- returns the initialized canonical
-    # key state, never the module-import-time (possibly-empty) globals.
-    # Never includes the private key.
-    @r.get("/outlook/notifications/vapid-public-key")
-    async def get_vapid_public_key():
-        return await notif.get_vapid_status()
+    # v6.25.3 owner directive 2026-07-17 -- OneSignal App ID is not secret;
+    # the frontend SDK needs it directly to call OneSignal.init(). Replaces
+    # the retired VAPID public-key endpoint.
+    @r.get("/outlook/notifications/onesignal-app-id")
+    async def get_onesignal_app_id():
+        return await notif.get_onesignal_status()
 
-    # v6.25.2 owner directive -- an existing endpoint record must REFRESH
-    # (keys/device_label/timezone/vapid key fingerprint/updated_at/sw
-    # version), not early-return stale data. If the stored subscription's
-    # VAPID key fingerprint no longer matches the currently active key (a
-    # real admin rotation happened since this device last subscribed), it
-    # is marked KEY_ROTATED_OR_MISMATCHED so the frontend knows to drop the
-    # old browser-side PushManager subscription and create a fresh one.
+    # v6.25.3 -- the frontend needs the authenticated caller's own user id to
+    # pass to OneSignal.login(userId) client-side, tagging that browser's
+    # OneSignal device registration with our internal identity so later
+    # sends via include_external_user_ids reach it.
+    @r.get("/outlook/notifications/my-user-id")
+    async def get_my_user_id(user: dict = Depends(srv.get_cloud_user)):
+        return {"user_id": user["id"]}
+
+    # v6.25.3 owner directive -- no more raw Web Push endpoint/keys stored
+    # here. OneSignal's SDK manages actual device registration; this just
+    # confirms the browser granted permission and was tagged via
+    # OneSignal.login(), so this backend knows "opted_in" for status/dispatch
+    # purposes. One record per user (not per device) since OneSignal fans a
+    # single external_user_id out to every device tagged under it.
     @r.post("/outlook/notifications/subscribe")
     async def subscribe_push(body: mo.PushSubscriptionIn, user: dict = Depends(srv.get_cloud_user)):
         db = srv.db
-        vapid_status = await notif.get_vapid_status()
         now_iso = datetime.now(timezone.utc).isoformat()
+        existing = await db.cloud_push_subscriptions.find_one({"user_id": user["id"]})
         record = {
-            "user_id": user["id"], "endpoint": body.endpoint, "keys": body.keys,
+            "user_id": user["id"], "opted_in": True,
             "device_label": body.device_label or "", "timezone_offset_minutes": body.timezone_offset_minutes or 0,
-            "sw_version": body.sw_version or "",
-            "vapid_key_fingerprint": vapid_status["key_fingerprint"],
             "updated_at": now_iso,
         }
-        existing = await db.cloud_push_subscriptions.find_one({"user_id": user["id"], "endpoint": body.endpoint})
         if existing:
             await db.cloud_push_subscriptions.update_one({"id": existing["id"]}, {"$set": record})
-            key_rotated = bool(existing.get("vapid_key_fingerprint")) and existing.get("vapid_key_fingerprint") != vapid_status["key_fingerprint"]
-            return {"ok": True, "device_id": existing["id"], "already_subscribed": True,
-                    "refreshed": True, "key_rotated_or_mismatched": key_rotated}
+            return {"ok": True, "device_id": existing["id"], "already_subscribed": True, "refreshed": True}
         device_id = str(uuid.uuid4())
         record["id"] = device_id
         record["created_at"] = now_iso
         await db.cloud_push_subscriptions.insert_one(record)
-        return {"ok": True, "device_id": device_id, "already_subscribed": False,
-                "refreshed": False, "key_rotated_or_mismatched": False}
+        return {"ok": True, "device_id": device_id, "already_subscribed": False, "refreshed": False}
 
     @r.delete("/outlook/notifications/subscribe/{device_id}")
     async def unsubscribe_push(device_id: str, user: dict = Depends(srv.get_cloud_user)):
         db = srv.db
-        result = await db.cloud_push_subscriptions.delete_one({"id": device_id, "user_id": user["id"]})
-        return {"ok": True, "deleted": result.deleted_count > 0}
+        result = await db.cloud_push_subscriptions.update_one(
+            {"id": device_id, "user_id": user["id"]}, {"$set": {"opted_in": False}})
+        return {"ok": True, "deleted": result.modified_count > 0}
 
     @r.get("/outlook/notifications/history")
     async def get_notification_history(limit: int = Query(30), user: dict = Depends(srv.get_cloud_user)):

@@ -297,13 +297,13 @@ function DashboardTab({ api, token }) {
 }
 
 // ─── Notifications ────────────────────────────────────────────────────────────
-// v6.25.2 owner directive 2026-07-17 -- real, live visibility into push
-// notification health, backed by GET /admin/notifications/health. There is
-// deliberately no input field to "fix" a missing dependency here -- when
-// dependency_available is false, the root cause is that pywebpush is not
-// installed in the running backend, and no application-level input can
-// install a Python package. The remediation text tells the admin exactly
-// what real action is needed (a full rebuild/redeploy, not a restart).
+// v6.25.3 owner directive 2026-07-17 -- switched from self-hosted Web Push
+// (pywebpush + VAPID, permanently blocked by a missing Python package that
+// only a full backend rebuild could fix) to OneSignal's REST API (plain
+// HTTPS POST via `httpx`, already installed and working). Real, live
+// visibility into push health, backed by GET /admin/notifications/health.
+// The only "not configured" state now is the admin not having entered a
+// real OneSignal App ID + REST API Key yet -- see the Settings tab.
 function NotificationsTab({ api, token }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -322,14 +322,13 @@ function NotificationsTab({ api, token }) {
 
   if (loading && !data) return <div className="py-12 text-center text-white/40 text-sm">Loading notification health…</div>;
 
-  const vapid = data?.vapid || {};
-  const depOk = vapid.dependency_available === true;
-  const configured = vapid.configured === true;
+  const onesignal = data?.onesignal || {};
+  const configured = onesignal.configured === true;
 
   return (
     <div className="space-y-5" data-testid="admin-notifications-tab">
       <CardSection
-        title="Push notification system health"
+        title="Push notification system health (OneSignal)"
         action={
           <button onClick={load} className="flex items-center gap-1.5 text-[11px] text-white/40 hover:text-white/75 transition">
             <ArrowClockwise size={13} /> Refresh
@@ -338,38 +337,29 @@ function NotificationsTab({ api, token }) {
       >
         {error && <p className="mb-3 text-[12px] text-red-300">{error}</p>}
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <StatCard label="Dependency" value={depOk ? "Installed" : "Missing"} tone={depOk ? "green" : "red"} testId="stat-dep-available" />
-          <StatCard label="VAPID keys" value={configured ? "Configured" : "Not configured"} tone={configured ? "green" : "amber"} testId="stat-vapid-configured" />
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <StatCard label="OneSignal" value={configured ? "Configured" : "Not configured"} tone={configured ? "green" : "amber"} testId="stat-onesignal-configured" />
           <StatCard label="Subscribed devices" value={data?.subscribed_devices ?? "—"} testId="stat-device-count" />
-          <StatCard label="Init state" value={vapid.initialization_state || "—"} tone="neutral" testId="stat-init-state" />
+          <StatCard label="State" value={onesignal.initialization_state || "—"} tone="neutral" testId="stat-init-state" />
         </div>
 
-        {!depOk && (
-          <div className="mt-4 flex items-start gap-3 rounded-xl border border-red-400/25 bg-red-500/[0.07] p-4">
-            <WarningCircle size={18} className="mt-0.5 flex-none text-red-300" />
+        {!configured && (
+          <div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] p-4">
+            <WarningCircle size={18} className="mt-0.5 flex-none text-amber-300" />
             <div>
-              <div className="text-[13px] font-semibold text-red-200">No notification can be delivered right now</div>
-              <p className="mt-1 text-[12px] leading-5 text-red-100/80">{vapid.remediation}</p>
+              <div className="text-[13px] font-semibold text-amber-200">No notification can be delivered yet</div>
+              <p className="mt-1 text-[12px] leading-5 text-amber-100/80">{onesignal.remediation}</p>
               <p className="mt-2 text-[11px] leading-5 text-white/40">
-                This is not a settings problem -- there is nothing to type in here that fixes it. The `pywebpush`
-                Python package is declared in backend/requirements.txt but isn't actually installed in the running
-                backend. Only a real rebuild/redeploy (not a restart) reinstalls it.
+                Go to the Settings tab and enter your OneSignal App ID + REST API Key. Unlike the retired VAPID
+                system, this takes effect immediately -- no backend restart needed.
               </p>
             </div>
           </div>
         )}
 
-        {depOk && !configured && (
-          <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-4 text-[12px] text-amber-200">
-            Dependency is installed, but VAPID keys haven't initialized yet. They self-generate on the next backend
-            restart -- give it a minute and refresh.
-          </div>
-        )}
-
-        {depOk && configured && (
+        {configured && (
           <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-300/[0.06] p-4 text-[12px] text-emerald-200">
-            System is healthy. Key fingerprint: <span className="font-mono">{vapid.key_fingerprint || "—"}</span>
+            {onesignal.remediation}
           </div>
         )}
 
@@ -517,6 +507,8 @@ function SettingsTab({ api, token }) {
   const [priceNaira, setPriceNaira] = useState(300000);
   const [smtpEmail, setSmtpEmail] = useState("");
   const [smtpPw, setSmtpPw] = useState("");
+  const [onesignalAppId, setOnesignalAppId] = useState("");
+  const [onesignalApiKey, setOnesignalApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const h = useMemo(() => auth(token), [token]);
@@ -550,6 +542,7 @@ function SettingsTab({ api, token }) {
   useEffect(() => {
     ax.get(`${api}/admin/settings`, h).then(r => {
       setSettings(r.data); setPriceNaira(r.data.pin_price_naira || 300000); setSmtpEmail(r.data.smtp_email || "");
+      setOnesignalAppId(r.data.onesignal_app_id || "");
     }).catch(() => {});
   }, [api, h]);
 
@@ -560,9 +553,11 @@ function SettingsTab({ api, token }) {
     updates.pin_price_kobo = Math.round(priceNaira * 100);
     if (smtpEmail) updates.smtp_email = smtpEmail;
     if (smtpPw) updates.smtp_password = smtpPw;
+    if (onesignalAppId) updates.onesignal_app_id = onesignalAppId;
+    if (onesignalApiKey) updates.onesignal_api_key = onesignalApiKey;
     try {
       await ax.put(`${api}/admin/settings`, updates, h);
-      setSaved(true); setPk(""); setSmtpPw(""); setTimeout(() => setSaved(false), 3000);
+      setSaved(true); setPk(""); setSmtpPw(""); setOnesignalApiKey(""); setTimeout(() => setSaved(false), 3000);
       const r = await ax.get(`${api}/admin/settings`, h); setSettings(r.data);
     } catch {} finally { setSaving(false); }
   };
@@ -602,6 +597,32 @@ function SettingsTab({ api, token }) {
             <Input data-testid="settings-smtp-password" type="password" value={smtpPw} onChange={e => setSmtpPw(e.target.value)}
               placeholder={settings?.smtp_configured ? "Configured — enter new to change" : "xxxx xxxx xxxx xxxx"} className="font-mono" />
             <p className="mt-1 text-[11px] text-white/35">Status: <span className={settings?.smtp_configured ? "text-emerald-400" : "text-red-400"}>{settings?.smtp_configured ? "Configured" : "Not set"}</span></p>
+          </Field>
+        </div>
+      </CardSection>
+
+      {/* v6.25.3 owner directive 2026-07-17 -- OneSignal replaces the retired
+          self-hosted VAPID/pywebpush push system, which was permanently
+          blocked by a missing Python package in production. App ID is not
+          secret (the frontend SDK needs it directly); REST API Key is. Get
+          both from onesignal.com -> your app -> Settings -> Keys & IDs. */}
+      <CardSection title="Push notifications (OneSignal)">
+        <p className="text-[12px] text-white/40 mb-4 leading-5">
+          Free account at <span className="text-white/60">onesignal.com</span> — create a Web Push app, then paste
+          its App ID and REST API Key here. Takes effect immediately, no backend restart needed.
+        </p>
+        <div className="space-y-4">
+          <Field label="OneSignal App ID">
+            <Input data-testid="settings-onesignal-app-id" value={onesignalAppId} onChange={e => setOnesignalAppId(e.target.value)}
+              placeholder="e.g. 8f4d2a1c-..." className="font-mono" />
+          </Field>
+          <Field label="OneSignal REST API Key">
+            <Input data-testid="settings-onesignal-api-key" type="password" value={onesignalApiKey} onChange={e => setOnesignalApiKey(e.target.value)}
+              placeholder={settings?.onesignal_api_key_configured ? "Configured — enter new key to change" : "os_v2_app_xxxxxx"} className="font-mono" />
+            <p className="mt-1 text-[11px] text-white/35">
+              Status: <span className={settings?.onesignal_api_key_configured ? "text-emerald-400" : "text-red-400"}>{settings?.onesignal_api_key_configured ? "Configured" : "Not set"}</span>
+              {settings?.onesignal_api_key_preview && settings.onesignal_api_key_configured && <span className="ml-1 font-mono">({settings.onesignal_api_key_preview})</span>}
+            </p>
           </Field>
         </div>
       </CardSection>
