@@ -18,9 +18,9 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
-  const version  = info?.version  || "v6.25.1";
-  const edition  = info?.edition  || "M10 CANONICAL SIGNAL AUTHORITY, CROSS-INSTANCE DIRECTION RESERVATION";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.25.1.mq5";
+  const version  = info?.version  || "v6.25.2";
+  const edition  = info?.edition  || "M10 ORIGINATION FALLBACK, FRESHNESS BAR-IDENTITY FIX";
+  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.25.2.mq5";
   const sizeKb   = info?.size_kb;
   const checksum = info?.checksum_sha256_12;
 
@@ -43,7 +43,7 @@ export default function DownloadSection({ api }) {
               Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.25.1.</span> M10 is the canonical signal authority, with cross-instance direction reservation and confirmed profit-floor protection.
+              <span className="font-semibold text-amber-200">Gold-only v6.25.2.</span> M10 is the canonical signal authority and can now originate its own qualifying candidates, with cross-instance direction reservation and confirmed profit-floor protection.
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">

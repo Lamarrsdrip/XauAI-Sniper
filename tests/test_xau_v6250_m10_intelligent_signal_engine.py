@@ -426,6 +426,93 @@ def test_backend_model_accepts_m10_signal_field():
     assert '"market_thesis", "post_trade_state", "entry_readiness", "m10_signal",' in server_py
 
 
+# ---------------------------------------------------------------------------
+# v6.25.2 owner directive -- M10 ORIGINATION FALLBACK. Live evidence
+# 2026-07-17 10:10:00 showed a genuine M10 BUY_CANDIDATE (confidence=57.3,
+# acceptable-or-better location) discarded outright because ScoreSetups had
+# been stuck proposing a stale, mismatched SELL for 40+ minutes -- M10 was
+# "the canonical candidate authority" in name (it could veto) but could
+# never actually originate a trade of its own. These tests lock in the
+# bounded, additive fallback that lets M10's own qualifying candidate flow
+# through the exact same shared downstream pipeline ScoreSetups uses,
+# without touching ScoreSetups internals or granting M10 a private
+# execution lane.
+# ---------------------------------------------------------------------------
+def test_origination_fallback_exists_exactly_once():
+    ea = read(EA)
+    assert ea.count("M10_ORIGINATED_CANDIDATE_SHARED_PATH") == 1
+    assert ea.count('setupName = "M10_ORIGINATED_CANDIDATE"') == 1
+
+
+def test_origination_only_fires_when_scoresetups_proposed_nothing():
+    ea = read(EA)
+    idx = ea.index("M10_ORIGINATED_CANDIDATE_SHARED_PATH")
+    window = ea[idx - 900: idx]
+    assert "if(signal == 0 &&" in window
+
+
+def test_origination_requires_genuine_buy_or_sell_candidate_not_retrace_or_watch():
+    ea = read(EA)
+    idx = ea.index("M10_ORIGINATED_CANDIDATE_SHARED_PATH")
+    window = ea[idx - 900: idx]
+    assert "M10_DECISION_BUY_CANDIDATE" in window
+    assert "M10_DECISION_SELL_CANDIDATE" in window
+    # WAIT_FOR_*_RETRACE means a poor entry price right now, not "originate a
+    # fresh entry immediately" -- must not be included in this gate.
+    assert "M10_DECISION_WAIT_FOR_BUY_RETRACE" not in window
+    assert "M10_DECISION_WAIT_FOR_SELL_RETRACE" not in window
+
+
+def test_origination_reuses_m10_confidence_not_a_reinvented_score():
+    ea = read(EA)
+    idx = ea.index("M10_ORIGINATED_CANDIDATE_SHARED_PATH")
+    window = ea[idx - 900: idx + 200]
+    assert "g_m10Decision.confidence" in window
+    assert "g_m10Decision.preferredDirection" in window
+
+
+def test_origination_score_scale_matches_existing_shared_path_convention():
+    ea = read(EA)
+    idx = ea.index("M10_ORIGINATED_CANDIDATE_SHARED_PATH")
+    window = ea[idx - 900: idx]
+    # Maps the 55-100 confidence scale onto the same small setupScore range
+    # ADAPTIVE_REVERSAL_RECLAIM (score=6.80) and ScoreSetups use -- not a
+    # freshly invented scale.
+    assert "setupScore = 5.0 + m10ConfidenceNorm * 3.0" in window
+    assert "(g_m10Decision.confidence - 55.0) / 45.0" in window
+
+
+def test_origination_has_no_private_execution_lane():
+    ea = read(EA)
+    idx = ea.index("M10_ORIGINATED_CANDIDATE_SHARED_PATH")
+    window = ea[idx: idx + 600]
+    assert "OpenTrade(" not in window
+    assert "trade.Buy(" not in window and "trade.Sell(" not in window
+
+
+def test_origination_falls_through_before_combined_score_and_grade():
+    ea = read(EA)
+    origin_idx = ea.index("M10_ORIGINATED_CANDIDATE_SHARED_PATH")
+    # "combinedRaw = setupScore * ..." also appears once inside ScoreSetups()
+    # itself (unrelated, earlier in the file) -- find the OnTick occurrence
+    # that comes after the origination block, not the first match overall.
+    combined_idx = ea.index("double combinedRaw = setupScore * regimeQuality * sessionQuality;", origin_idx)
+    grade_idx = ea.index('string grade = combinedScore >= InpGradeAPlus ? "A+"')
+    assert origin_idx < combined_idx < grade_idx
+
+
+def test_origination_fallback_placed_after_existing_endorsement_veto_gate():
+    ea = read(EA)
+    veto_idx = ea.index("M10_CANDIDATE_REJECTED")
+    origin_idx = ea.index("M10_ORIGINATED_CANDIDATE_SHARED_PATH")
+    assert veto_idx < origin_idx
+
+
+def test_build_hash_reflects_origination_fallback():
+    ea = read(EA)
+    assert 'XAUAI_BUILD_HASH "v6252-m10-origination-fallback' in ea
+
+
 if __name__ == "__main__":
     import sys
     import pytest

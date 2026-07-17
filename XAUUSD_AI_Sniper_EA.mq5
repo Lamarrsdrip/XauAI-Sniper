@@ -1,6 +1,20 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M10 Gold Edition|
+//|   v6.25.2 - M10 Origination Fallback, Freshness Bar-Identity Fix   |
+//|   (2026-07-17). M10's own qualifying BUY_CANDIDATE/SELL_CANDIDATE  |
+//|   can now originate a trade candidate directly (mirroring the      |
+//|   ADAPTIVE_REVERSAL_RECLAIM shared-path pattern) when ScoreSetups   |
+//|   proposes nothing or a stale/mismatched direction -- fixes a real  |
+//|   live gap where a genuine M10 candidate (score 57.3, acceptable    |
+//|   location) was discarded because ScoreSetups had been stuck        |
+//|   proposing a stale opposite setup for 40+ minutes. M10 gets no     |
+//|   private execution lane -- same downstream pipeline as always.     |
+//|   Also fixes M10 freshness classification: was comparing raw        |
+//|   elapsed seconds against the evaluated bar's OPEN time (iTime()    |
+//|   semantics), which could mark a bar STALE within seconds of it     |
+//|   closing; now classified by bar identity (evaluatedBar vs the      |
+//|   latest/previous CLOSED bar), not a threshold.                     |
 //|   v6.25.1 - Full Repair: M10 Canonical Signal Authority,           |
 //|   Cross-Instance Direction Reservation, Confirmed Profit-Floor,    |
 //|   R-Exit Never-Purge-Unconfirmed (2026-07-17)                      |
@@ -1964,9 +1978,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.1"
-#define XAUAI_EA_VERSION_NUM "6.25.1"
-#define XAUAI_BUILD_HASH "v6251-m10-canonical-authority-cross-instance-reservation-confirmed-floor-20260717"
+#define XAUAI_EA_VERSION "v6.25.2"
+#define XAUAI_EA_VERSION_NUM "6.25.2"
+#define XAUAI_BUILD_HASH "v6252-m10-origination-fallback-freshness-bar-identity-20260717"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
@@ -17476,6 +17490,47 @@ void OnTick()
          PrintFormat("M10_CANDIDATE_ENDORSED | direction=%s setup=%s m10Decision=%s m10Confidence=%.1f evidenceId=%d",
                      signal==1?"BUY":"SELL", setupName, XAU_M10DecisionName(g_m10Decision.decisionType), g_m10Decision.confidence, (int)g_m10Decision.evidenceId);
       }
+   }
+
+   // v6.25.2 owner directive 2026-07-17 -- M10 ORIGINATION FALLBACK.
+   // The endorsement gate above only lets M10 VETO a ScoreSetups/reversal-path
+   // proposal; it never ran at all when ScoreSetups proposed nothing
+   // (signal==0), and it discarded the candidate outright when ScoreSetups'
+   // proposal didn't match M10's direction -- even when M10 itself already
+   // had a genuine, currently-qualifying BUY_CANDIDATE/SELL_CANDIDATE (score
+   // >=55.0, acceptable-or-better location; see XAU_EvaluateM10SignalDecision).
+   // Live evidence 2026-07-17 10:10:00: M10 BUY_CANDIDATE confidence=57.3
+   // (LOCATION_RESET_CONFIRMED) was thrown away purely because ScoreSetups
+   // had been stuck proposing a stale SELL/TREND_PULLBACK for 40+ minutes --
+   // M10 was "the canonical candidate authority" in name but could never
+   // actually originate a trade of its own. This mirrors the existing
+   // ADAPTIVE_REVERSAL_RECLAIM shared-path precedent immediately above:
+   // inject signal/setupName/setupScore directly from the alternate source's
+   // OWN already-computed evidence, then fall through UNCHANGED into every
+   // downstream shared gate (SMC context, personality, regime/session
+   // multipliers, grade thresholds, FinalEntryArbiter, risk sizing,
+   // execution). M10 gets no private execution lane -- same pipeline
+   // ScoreSetups candidates go through. WAIT_FOR_BUY_RETRACE/WAIT_FOR_SELL_
+   // RETRACE are deliberately excluded here (those mean poor entry price
+   // right now, not "no entry ever" -- they still surface via the
+   // endorsement gate above once ScoreSetups/entry-timer machinery catches
+   // up, not via a fresh forced origination).
+   if(signal == 0 &&
+      (g_m10Decision.decisionType == M10_DECISION_BUY_CANDIDATE ||
+       g_m10Decision.decisionType == M10_DECISION_SELL_CANDIDATE) &&
+      g_m10Decision.preferredDirection != 0)
+   {
+      signal = g_m10Decision.preferredDirection;
+      setupName = "M10_ORIGINATED_CANDIDATE";
+      // Map M10's 55-100 confidence scale onto the same small setupScore
+      // scale ScoreSetups/ADAPTIVE_REVERSAL_RECLAIM use (a "perfect" setup
+      // is ~4.5-6.8 on this scale) -- 55.0 (the minimum qualifying bar) maps
+      // to 5.0, 100.0 (max) maps to 8.0, clamped either side.
+      double m10ConfidenceNorm = MathMax(0.0, MathMin(1.0, (g_m10Decision.confidence - 55.0) / 45.0));
+      setupScore = 5.0 + m10ConfidenceNorm * 3.0;
+      PrintFormat("M10_ORIGINATED_CANDIDATE_SHARED_PATH | direction=%s setupScore=%.2f m10Confidence=%.1f m10Decision=%s evidenceId=%d reason=%s",
+                  signal==1?"BUY":"SELL", setupScore, g_m10Decision.confidence,
+                  XAU_M10DecisionName(g_m10Decision.decisionType), (int)g_m10Decision.evidenceId, g_m10Decision.exactReason);
    }
 
    // v6.24.0: Active Direction is context, not a global veto. Confirmed
