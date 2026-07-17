@@ -12828,7 +12828,21 @@ struct XAU_M10EvidenceSnapshot
    // v6.25.1 owner directive 2026-07-17 -- explicit freshness state
    // (FRESH/DEGRADED/STALE), replacing the old generous binary dataFresh.
    string   freshnessState;
-   int      ageSeconds;
+   // v6.25.2 owner directive 2026-07-17 -- URGENT FORENSIC FIX. ageSeconds
+   // now means CLOSE age (seconds since the evaluated bar actually closed),
+   // never OPEN age -- see openAgeSeconds/closeAgeSeconds below and the
+   // long comment on XAU_BuildM10EvidenceSnapshot() for the full root-cause
+   // trace. iTime()/evaluatedBar is the bar's OPEN timestamp; a newly
+   // closed M10 bar is ~600s "old" by open-time the INSTANT it becomes
+   // available, which is not staleness at all.
+   int      ageSeconds;         // == closeAgeSeconds, kept for compatibility with existing display code
+   int      openAgeSeconds;     // seconds since evaluatedBar OPENED -- diagnostic only, never used for freshness classification
+   int      closeAgeSeconds;    // seconds since evaluatedBar CLOSED -- the real "how old is this data" answer
+   datetime evaluatedBarOpen;   // == closedBarTime, duplicated here for log clarity
+   datetime evaluatedBarClose;  // evaluatedBarOpen + one primary-decision-TF period
+   datetime latestClosedBarOpen;   // iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 1) at evaluation time
+   datetime previousClosedBarOpen; // iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 2) at evaluation time
+   int      evaluatedShift;     // 1 if evaluatedBar==latestClosedBarOpen, 2 if ==previousClosedBarOpen, -1 otherwise
 };
 
 struct XAU_M10SignalDecision
@@ -12898,14 +12912,25 @@ double XAU_ScoreStructureBucket(ENUM_XAU_STRUCTURE_STATE s)
 // this snapshot, so one decision always traces to one evidenceId.
 // v6.25.1 owner directive 2026-07-17 -- explicit M10 data-freshness states,
 // replacing the generous ~3-bar (1800s) staleness window with real states
-// tied to ONE M10 bar duration:
-// FRESH:    latest fully closed M10 bar, within one bar + a small
-//           processing grace (<=660s).
-// DEGRADED: one completed bar behind -- may still be displayed, but must
-//           never be used to create a new high-confidence trade.
-// STALE:    older than one completed bar + grace (>1200s) -- DATA_UNAVAILABLE,
-//           no new primary entry, old evidence never disguised as fresh.
-#define XAU_M10_FRESHNESS_GRACE_SECONDS 60
+// tied to bar IDENTITY, not raw elapsed seconds (see v6.25.2 note below):
+// FRESH:    evaluatedBar IS the current latest fully closed M10 bar.
+// DEGRADED: evaluatedBar is exactly one completed bar behind -- may still
+//           be displayed, but must never be used to create a new
+//           high-confidence trade.
+// STALE:    no bar, indicator data incomplete on this bar, or more than
+//           one completed bar behind -- DATA_UNAVAILABLE, no new primary
+//           entry, old evidence never disguised as fresh.
+// v6.25.2 owner directive 2026-07-17 -- URGENT FORENSIC FIX: the original
+// v6.25.1 implementation classified freshness by comparing raw elapsed
+// seconds (TimeCurrent()-evaluatedBar) against thresholds -- but
+// evaluatedBar/iTime() is the bar's OPEN time, not its close time, so a
+// newly closed bar is ALWAYS ~600s "old" by that measure the instant it
+// becomes available. That made the old 660s FRESH window cover only the
+// first 60 seconds after each bar closed, live-evidence-proven to falsely
+// mark a genuinely current, just-closed bar as STALE. Fixed by comparing
+// evaluatedBar's IDENTITY against iTime(...,1)/iTime(...,2) directly (see
+// XAU_BuildM10EvidenceSnapshot) -- the old XAU_M10_FRESHNESS_GRACE_SECONDS
+// open-time grace window no longer applies to anything and was removed.
 enum ENUM_XAU_M10_FRESHNESS { M10_FRESHNESS_FRESH = 0, M10_FRESHNESS_DEGRADED = 1, M10_FRESHNESS_STALE = 2 };
 string XAU_M10FreshnessName(ENUM_XAU_M10_FRESHNESS f)
 {
@@ -12922,19 +12947,55 @@ XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()
    s.symbol        = Symbol();
    s.primaryTf     = XAU_PRIMARY_DECISION_TF;
 
-   int ageSeconds = (td.evaluatedBar > 0) ? (int)(TimeCurrent() - td.evaluatedBar) : -1;
+   // v6.25.2 owner directive 2026-07-17 -- URGENT FORENSIC FIX. Root cause:
+   // iTime()/evaluatedBar is the bar's OPEN timestamp, not its close
+   // timestamp. The OLD logic compared TimeCurrent()-evaluatedBar (open
+   // age) against thresholds sized as if it were close age -- a newly
+   // closed M10 bar is ALWAYS ~600s "old" by open-time the instant it
+   // becomes available (600s is the bar's own width), so the old
+   // "ageSeconds <= 660 -> FRESH" window covered only the first 60 seconds
+   // after each bar closed, then wrongly downgraded to DEGRADED for the
+   // remaining ~540 seconds of that SAME still-current bar, and to STALE
+   // once a second bar-width had passed -- exactly the live-evidence bug
+   // (freshnessState=STALE ageSeconds=600 at 09:30:01, the moment the
+   // 09:20 bar had JUST closed and was still the correct, current evidence).
+   //
+   // Fixed the only way that is actually correct: classify freshness by BAR
+   // IDENTITY, not raw elapsed seconds. FRESH iff evaluatedBar IS the
+   // current latest closed bar (shift 1); DEGRADED iff it is exactly one
+   // bar behind (shift 2, e.g. a brief M10-boundary series-sync lag);
+   // everything else (no bar, indicator data incomplete on this bar, or
+   // more than one bar behind) is STALE. openAgeSeconds/closeAgeSeconds are
+   // now diagnostic-only fields, never inputs to the classification.
+   int tfSeconds = PeriodSeconds(XAU_PRIMARY_DECISION_TF);
+   datetime latestClosedBarOpen   = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 1);
+   datetime previousClosedBarOpen = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 2);
+   datetime evaluatedBarClose = (td.evaluatedBar > 0) ? td.evaluatedBar + tfSeconds : 0;
+   int openAgeSeconds  = (td.evaluatedBar > 0)   ? (int)MathMax(0, TimeCurrent() - td.evaluatedBar)   : -1;
+   int closeAgeSeconds = (evaluatedBarClose > 0) ? (int)MathMax(0, TimeCurrent() - evaluatedBarClose) : -1;
+   int evaluatedShift = -1;
+   if(td.evaluatedBar > 0 && td.evaluatedBar == latestClosedBarOpen) evaluatedShift = 1;
+   else if(td.evaluatedBar > 0 && td.evaluatedBar == previousClosedBarOpen) evaluatedShift = 2;
+
    ENUM_XAU_M10_FRESHNESS freshnessState;
    if(td.evaluatedBar <= 0 || td.continuationEntryPaused)
-      freshnessState = M10_FRESHNESS_STALE;
-   else if(ageSeconds <= XAU_PRIMARY_DECISION_TF_SECONDS + XAU_M10_FRESHNESS_GRACE_SECONDS)
-      freshnessState = M10_FRESHNESS_FRESH;
-   else if(ageSeconds <= XAU_PRIMARY_DECISION_TF_SECONDS * 2)
-      freshnessState = M10_FRESHNESS_DEGRADED;
+      freshnessState = M10_FRESHNESS_STALE;      // no bar at all, or this bar's own indicator data is genuinely incomplete
+   else if(evaluatedShift == 1)
+      freshnessState = M10_FRESHNESS_FRESH;      // evaluatedBar IS the current latest closed M10 bar
+   else if(evaluatedShift == 2)
+      freshnessState = M10_FRESHNESS_DEGRADED;   // exactly one bar behind -- e.g. a brief boundary series-sync lag
    else
-      freshnessState = M10_FRESHNESS_STALE;
+      freshnessState = M10_FRESHNESS_STALE;      // more than one bar behind, or bar identity cannot be confirmed
 
    s.freshnessState = XAU_M10FreshnessName(freshnessState);
-   s.ageSeconds      = ageSeconds;
+   s.ageSeconds             = closeAgeSeconds;   // compatibility alias -- see struct comment
+   s.openAgeSeconds         = openAgeSeconds;
+   s.closeAgeSeconds        = closeAgeSeconds;
+   s.evaluatedBarOpen       = td.evaluatedBar;
+   s.evaluatedBarClose      = evaluatedBarClose;
+   s.latestClosedBarOpen    = latestClosedBarOpen;
+   s.previousClosedBarOpen  = previousClosedBarOpen;
+   s.evaluatedShift         = evaluatedShift;
    s.dataFresh     = (freshnessState == M10_FRESHNESS_FRESH);
    s.complete      = (freshnessState != M10_FRESHNESS_STALE);
 
@@ -12949,9 +13010,14 @@ XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()
    {
       lastLoggedFreshnessBar = td.evaluatedBar;
       lastLoggedFreshnessState = freshnessState;
-      PrintFormat("M10_DATA_FRESHNESS | evaluatedBar=%s latestClosedM10Bar=%s ageSeconds=%d freshnessState=%s",
-                  TimeToString(td.evaluatedBar, TIME_DATE | TIME_MINUTES), TimeToString(td.evaluatedBar, TIME_DATE | TIME_MINUTES),
-                  ageSeconds, s.freshnessState);
+      // v6.25.2 -- explicit open/close age and evaluated-shift fields so
+      // bar-open age can never again be misread as data staleness.
+      PrintFormat("M10_FRESHNESS | currentTime=%s evaluatedBarOpen=%s evaluatedBarClose=%s latestClosedBarOpen=%s evaluatedShift=%d openAgeSeconds=%d closeAgeSeconds=%d freshnessState=%s",
+                  TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+                  TimeToString(td.evaluatedBar, TIME_DATE | TIME_SECONDS),
+                  TimeToString(evaluatedBarClose, TIME_DATE | TIME_SECONDS),
+                  TimeToString(latestClosedBarOpen, TIME_DATE | TIME_SECONDS),
+                  evaluatedShift, openAgeSeconds, closeAgeSeconds, s.freshnessState);
    }
 
    if(freshnessState == M10_FRESHNESS_STALE)

@@ -238,7 +238,64 @@ def test_freshness_state_is_explicit_fresh_degraded_stale_not_a_generous_binary_
     assert "M10_FRESHNESS_FRESH" in fn
     assert "M10_FRESHNESS_DEGRADED" in fn
     assert "M10_FRESHNESS_STALE" in fn
-    assert "XAU_M10_FRESHNESS_GRACE_SECONDS" in fn
+
+
+# v6.25.2 owner directive 2026-07-17 -- URGENT FORENSIC FIX. Live evidence
+# proved the v6.25.1 age-threshold classification (TimeCurrent()-evaluatedBar
+# compared against 660s/1200s) falsely marked a just-closed, genuinely
+# current M10 bar as STALE: evaluatedBar/iTime() is bar OPEN time, so a
+# newly closed bar is always ~600s "old" by that measure the instant it
+# becomes available. Freshness must be classified by BAR IDENTITY
+# (evaluatedBar vs iTime(...,1)/iTime(...,2)), never by raw elapsed seconds.
+def test_freshness_classified_by_bar_identity_not_raw_elapsed_seconds():
+    ea = read(EA)
+    fn = find_function(ea, "XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()")
+    assert "datetime latestClosedBarOpen   = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 1);" in fn
+    assert "datetime previousClosedBarOpen = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 2);" in fn
+    assert "else if(evaluatedShift == 1)" in fn
+    assert "freshnessState = M10_FRESHNESS_FRESH;" in fn
+    assert "else if(evaluatedShift == 2)" in fn
+    assert "freshnessState = M10_FRESHNESS_DEGRADED;" in fn
+    # the old open-time-age comparison must be fully gone from this function
+    assert "ageSeconds <= XAU_PRIMARY_DECISION_TF_SECONDS + XAU_M10_FRESHNESS_GRACE_SECONDS" not in fn
+    assert "ageSeconds <= XAU_PRIMARY_DECISION_TF_SECONDS * 2" not in fn
+
+
+def test_evaluated_shift_matches_latest_bar_is_fresh_even_at_exactly_600_seconds_open_age():
+    """Direct regression test for the exact live-evidence timestamp: a bar
+    that opened 600-601 seconds ago (i.e. JUST closed) must be FRESH, not
+    STALE, because it IS the current latest closed bar. The classification
+    if/elif chain must key off evaluatedShift (bar identity) -- neither
+    openAgeSeconds nor closeAgeSeconds may appear inside the condition of
+    any `if`/`else if` that assigns freshnessState."""
+    ea = read(EA)
+    fn = find_function(ea, "XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()")
+    chain_start = fn.index("if(td.evaluatedBar <= 0 || td.continuationEntryPaused)")
+    chain_end = fn.index("freshnessState = M10_FRESHNESS_STALE;      // more than one bar behind")
+    chain = fn[chain_start: chain_end]
+    assert "evaluatedShift == 1" in chain
+    assert "evaluatedShift == 2" in chain
+    assert "openAgeSeconds" not in chain
+    assert "closeAgeSeconds" not in chain
+
+
+def test_close_age_seconds_used_for_display_not_open_age():
+    ea = read(EA)
+    fn = find_function(ea, "XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()")
+    assert "s.ageSeconds             = closeAgeSeconds;" in fn
+    assert "s.openAgeSeconds         = openAgeSeconds;" in fn
+    assert "s.closeAgeSeconds        = closeAgeSeconds;" in fn
+
+
+def test_freshness_log_reports_evaluated_shift_and_both_age_fields():
+    ea = read(EA)
+    fn = find_function(ea, "XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()")
+    log_idx = fn.index('PrintFormat("M10_FRESHNESS |')
+    window = fn[log_idx: log_idx + 700]
+    assert "evaluatedShift=%d" in window
+    assert "openAgeSeconds=%d" in window
+    assert "closeAgeSeconds=%d" in window
+    assert "latestClosedBarOpen=%s" in window
 
 
 # ---------------------------------------------------------------------------

@@ -5808,6 +5808,8 @@ class DirectionReservationReleaseReq(BaseModel):
 def _reservation_key(broker_server: str, account: str, symbol: str) -> str:
     return f"{(broker_server or '').strip()}:{(account or '').strip()}:{(symbol or '').strip()}"
 
+_RESERVATION_VALID_SYMBOLS = {"XAUUSD", "XAUUSDm", "XAUUSD.", "GOLD"}
+
 @api_router.post("/cloud/reservation/claim")
 async def cloud_reservation_claim(req: DirectionReservationClaimReq, request: Request):
     """Atomically claim the requested direction for this broker_server+account+
@@ -5815,12 +5817,30 @@ async def cloud_reservation_claim(req: DirectionReservationClaimReq, request: Re
     the existing one is already the SAME direction (renewal). Fails (claimed=false)
     if an unexpired OPPOSITE-direction reservation is currently held -- by
     another terminal, another family on this same terminal, or this same call
-    racing itself. Never a process-local boolean only."""
+    racing itself. Never a process-local boolean only.
+
+    v6.25.2 owner directive 2026-07-17 -- SECURITY FIX. This endpoint used to
+    accept pin/license_key/broker_server/account/symbol WITHOUT ever
+    validating them: any unauthenticated caller who could guess or observe a
+    real broker_server+account+symbol combination (not secret -- it appears
+    in Command Center URLs and log lines) could claim a direction and block
+    the real bot from trading, indefinitely, just by renewing before TTL
+    expiry. Now authenticated the exact same way every other EA-facing
+    endpoint in this file is (_resolve_monitor_license -- the existing
+    canonical helper, no second auth system): the PIN must resolve to an
+    active license, and if that license is already bound to an MT5 account,
+    the requested account must match it. An outsider without a valid,
+    active, correctly-bound license PIN can no longer claim or block
+    anything here."""
     if req.direction not in (1, -1):
         raise HTTPException(status_code=400, detail="direction must be 1 or -1")
     key = _reservation_key(req.broker_server, req.account, req.symbol)
     if not req.broker_server or not req.account or not req.symbol:
         raise HTTPException(status_code=400, detail="broker_server, account, and symbol are required")
+    if req.symbol.upper() not in {s.upper() for s in _RESERVATION_VALID_SYMBOLS}:
+        logger.warning("[reservation-claim] reject invalid symbol=%s account=%s", req.symbol, req.account)
+        raise HTTPException(status_code=400, detail={"ok": False, "reason": "INVALID_SYMBOL", "symbol": req.symbol})
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
     now = datetime.now(timezone.utc)
     ttl = max(5, min(int(req.ttl_seconds or 30), 120))
     expires_at = now + timedelta(seconds=ttl)
@@ -5841,6 +5861,10 @@ async def cloud_reservation_claim(req: DirectionReservationClaimReq, request: Re
                 "brokerServer": req.broker_server,
                 "account": req.account,
                 "symbol": req.symbol,
+                # v6.25.2 owner directive -- ownership identity, so release
+                # can verify the releasing caller's license genuinely owns
+                # this reservation, not just knows the right reservationId.
+                "licenseId": lic.get("id", ""),
             }},
             upsert=True,
         )
@@ -5863,11 +5887,32 @@ async def cloud_reservation_claim(req: DirectionReservationClaimReq, request: Re
 async def cloud_reservation_release(req: DirectionReservationReleaseReq, request: Request):
     """Release (or let expire) a reservation this exact call claimed. Only
     releases if reservation_id matches -- a stale/foreign release request can
-    never clear another instance's active claim."""
+    never clear another instance's active claim.
+
+    v6.25.2 owner directive 2026-07-17 -- SECURITY FIX, same as claim: an
+    unauthenticated caller who merely observed a reservationId (not secret
+    -- it is returned in the claim response and appears in logs) could
+    previously release someone else's active reservation outright, clearing
+    the real bot's direction lock. Now requires the same authenticated,
+    account-bound license as claim, AND the resolved license must be the
+    SAME one (licenseId) that originally claimed this reservation -- a
+    correctly-authenticated but foreign license cannot clear another
+    license's reservation just by knowing its reservationId."""
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
     key = _reservation_key(req.broker_server, req.account, req.symbol)
-    result = await db.cloud_direction_reservations.delete_one({"_id": key, "reservationId": req.reservation_id})
+    result = await db.cloud_direction_reservations.delete_one(
+        {"_id": key, "reservationId": req.reservation_id, "licenseId": lic.get("id", "")})
     released = result.deleted_count > 0
-    logger.info("[reservation-release] key=%s reservationId=%s released=%s", key, req.reservation_id, released)
+    if not released:
+        # Distinguish "nothing to release" (already expired/never existed)
+        # from "a real reservation exists here but this caller doesn't own
+        # it" -- the latter must never silently succeed.
+        foreign = await db.cloud_direction_reservations.find_one(
+            {"_id": key, "reservationId": req.reservation_id}, {"_id": 0, "licenseId": 1})
+        if foreign is not None:
+            logger.warning("[reservation-release] key=%s reservationId=%s REJECTED foreign release attempt by licenseId=%s (owner=%s)",
+                            key, req.reservation_id, lic.get("id", ""), foreign.get("licenseId", ""))
+    logger.info("[reservation-release] key=%s reservationId=%s licenseId=%s released=%s", key, req.reservation_id, lic.get("id", ""), released)
     return {"released": released}
 
 @api_router.post("/cloud/monitor/thesis-status")
