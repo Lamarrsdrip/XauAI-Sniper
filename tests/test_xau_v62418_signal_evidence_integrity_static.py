@@ -51,7 +51,11 @@ def test_one_indicator_alone_cannot_produce_100pct_exhaustion():
 def test_stale_bar_data_fails_closed_before_computing_exhaustion():
     ea = engine_body(read(BACKEND_EA))
     assert "int barAgeSec = (int)(TimeCurrent() - bar);" in ea
-    stale_idx = ea.index("if(barAgeSec > 900)")
+    # v6.25.0: threshold recalibrated from a hardcoded 900s (2x M5 + grace)
+    # to XAU_PRIMARY_DECISION_TF_SECONDS * 3 (= 1800s for M10) so staleness
+    # detection keeps the same real-world tolerance now that each primary
+    # bar is 10 minutes instead of 5.
+    stale_idx = ea.index("if(barAgeSec > XAU_PRIMARY_DECISION_TF_SECONDS * 3)")
     exhaustion_idx = ea.index("double rawExhaustion")
     assert stale_idx < exhaustion_idx, "staleness gate must run before the exhaustion formula, not after"
     window = ea[stale_idx: stale_idx + 700]
@@ -116,24 +120,27 @@ def test_pressure_calc_structured_log_exposes_every_component():
         assert field in window, f"PRESSURE_CALC missing field {field}"
 
 
-def test_weak_opposite_pressure_does_not_satisfy_exhaustion_counter_reaction_gate():
+# v6.25.0 owner directive 2026-07-17 superseded these two tests: the
+# exhaustion-counter reaction-score/eligibility gate they checked was the
+# ENTRY path itself -- the exact mechanism that let the EA open an opposite
+# trade while the original direction was still active. That path is now
+# deleted outright (RETIRED_NO_NEW_ENTRIES), not merely gated more strictly,
+# so no reaction-score/eligibility function exists to test any more. The
+# stronger, current guarantee (exhaustion can never open a trade, full stop)
+# is covered by tests/test_xau_v6250_exhaustion_evidence_only.py.
+def test_exhaustion_counter_reaction_gate_functions_no_longer_exist():
     ea = read(BACKEND_EA)
-    fn_idx = ea.index("int XAU_ExhaustionCounterReactionScore(")
-    window = ea[fn_idx: fn_idx + 1600]
-    # mandatory minimum-2-of-5 gate must exist and be enforced at the call site
-    call_idx = ea.index("if(reactionScore < 2)")
-    assert call_idx > fn_idx
-    reject_window = ea[call_idx: call_idx + 700]
-    assert "INSUFFICIENT_REACTION_EVIDENCE" in reject_window
-    assert "return;" in reject_window
+    assert "int XAU_ExhaustionCounterReactionScore(" not in ea
+    assert "bool XAU_ExhaustionCounterEligible(" not in ea
 
 
-def test_exhaustion_counter_requires_the_engines_own_real_exhaustion_reading():
+def test_exhaustion_counter_cannot_open_a_trade_at_any_pressure_reading():
     ea = read(BACKEND_EA)
-    fn_idx = ea.index("bool XAU_ExhaustionCounterEligible(")
-    window = ea[fn_idx: fn_idx + 900]
-    assert "td.exhaustionProbability < InpExhaustionCounterMinExhaustionPct" in window
-    assert "td.exhaustionProbability > InpExhaustionCounterMaxExhaustionPct" in window
+    assert "void XAU_TryExhaustionCounterEntry()" not in ea
+    fn_idx = ea.index("void XAU_UpdateExhaustionEvidence()")
+    close_idx = ea.index("\n}", fn_idx)
+    fn = ea[fn_idx: close_idx + 2]
+    assert "trade.Buy(" not in fn and "trade.Sell(" not in fn
 
 
 def test_every_signal_source_call_is_closed_bar_or_explicitly_live_tick():

@@ -144,7 +144,7 @@ def test_gate_lives_inside_opentrade_skipped_only_for_manual_override():
     # substantial explanatory comment (see its own "CRITICAL FIX" note on the
     # 172-approved/0-executed live incident) that pushed the actual code
     # lines past the old window before this line was ever reached.
-    fn_body = ea[fn_start:fn_start + 10000]
+    fn_body = ea[fn_start:fn_start + 12000]  # v6.25.0: widened for the new direction-exclusivity + post-profit-entry guards
     assert "g_lastEntryReadiness = XAU_UpdateEntryReadiness(signal, g_transitionDecision);" in fn_body
     assert "if(!g_lastEntryReadiness.entryReady)" in fn_body
     # the readiness block, like the cooldown/exhaustion blocks before it,
@@ -163,7 +163,9 @@ def test_exactly_three_trade_buy_sell_call_sites_still_exist():
     import re
     sites = re.findall(r'trade\.(?:Buy|Sell)\(', ea)
     # v6.24.18: added a 4th real placement site (Exhaustion Counter)
-    assert len(sites) == 8, f"expected 8 (4 sites x Buy+Sell literal), found {len(sites)}"
+    # v6.25.0: that 4th site is deleted outright (RETIRED_NO_NEW_ENTRIES,
+    # exhaustion is evidence-only) -- back to 3 sites x Buy+Sell literal = 6.
+    assert len(sites) == 6, f"expected 6 (3 sites x Buy+Sell literal), found {len(sites)}"
 
 
 def test_pyramid_reviewed_and_explicitly_not_routed_through_readiness():
@@ -288,7 +290,11 @@ def test_on_chart_entry_readiness_block_exists_and_wired_in():
 
 def test_web_json_gains_entry_readiness_field():
     ea = read(BACKEND_EA)
-    assert '\\"entry_readiness\\":%s}' in ea
+    # v6.25.0 appended "m10_signal" after "entry_readiness" (same pattern
+    # used for every prior field addition here) -- entry_readiness is no
+    # longer the literal final key, but it is still present and followed by
+    # the field.
+    assert '\\"entry_readiness\\":%s,\\"m10_signal\\":%s}' in ea
     assert "readinessJson" in ea
 
 

@@ -141,5 +141,7 @@ def test_outer_json_body_still_well_formed_with_market_thesis_appended():
     # asserted above).
     # v6.24.15 appended "entry_readiness" after "post_trade_state" (same
     # pattern used for every prior field addition here).
-    assert fmt.rstrip().endswith('"market_thesis":%s,"post_trade_state":%s,"entry_readiness":%s}')
+    # v6.25.0 appended "m10_signal" after "entry_readiness" (same pattern
+    # used for every prior field addition here).
+    assert fmt.rstrip().endswith('"market_thesis":%s,"post_trade_state":%s,"entry_readiness":%s,"m10_signal":%s}')
     assert '"details":{' in fmt

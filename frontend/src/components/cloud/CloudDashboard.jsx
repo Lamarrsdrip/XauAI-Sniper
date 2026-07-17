@@ -715,6 +715,76 @@ function humanBotState(raw, openTrades, tradingOk, online) {
 }
 
 // ─── Home ─────────────────────────────────────────────────────────────────────
+// v6.25.0 — M10 Intelligent Signal Engine + exhaustion-evidence-only +
+// smart re-entry transparency. Every value here comes straight from the
+// EA's own m10_signal JSON block (backend/server.py BotActivityReq.m10_signal
+// -> details.m10_signal on the latest /cloud/monitor/activity event) --
+// nothing is recomputed client-side, so this can never show a value the EA
+// itself did not actually compute.
+function M10SignalCard({ events }) {
+  const latest = (events || []).find(e => e?.details?.m10_signal)?.details?.m10_signal;
+  if (!latest) return null;
+
+  const decision = latest.decision || "DATA_UNAVAILABLE";
+  const preferredDir = latest.preferred_direction || "NONE";
+  const decisionTone = decision === "BUY_CANDIDATE" ? "green"
+    : decision === "SELL_CANDIDATE" ? "red"
+    : decision.startsWith("WAIT_FOR") ? "amber"
+    : decision === "TRANSITION_WATCH" ? "blue"
+    : "neutral";
+
+  const buyScore = Number(latest.buy_case_score || 0);
+  const sellScore = Number(latest.sell_case_score || 0);
+  const maxScore = Math.max(buyScore, sellScore, 1);
+
+  return (
+    <div className={`${CARD} p-5`} data-testid="m10-signal-card">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className={MONO_LABEL}>M10 Signal Engine · Evidence #{latest.evidence_id ?? "—"}</div>
+        <span className={pill(decisionTone)}>{decision.replace(/_/g, " ")}</span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <div>
+          <div className="flex items-center justify-between text-[11px] text-white/50">
+            <span>Buy case</span><span className="font-mono">{buyScore.toFixed(0)}</span>
+          </div>
+          <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+            <div className="h-full bg-emerald-400/70" style={{ width: `${(buyScore / maxScore) * 100}%` }} />
+          </div>
+        </div>
+        <div>
+          <div className="flex items-center justify-between text-[11px] text-white/50">
+            <span>Sell case</span><span className="font-mono">{sellScore.toFixed(0)}</span>
+          </div>
+          <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+            <div className="h-full bg-red-400/70" style={{ width: `${(sellScore / maxScore) * 100}%` }} />
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 text-[11px]">
+        <div><div className="text-white/35">Trend</div><div className="mt-0.5 font-mono text-white/80">{latest.trend_state || "—"}</div></div>
+        <div><div className="text-white/35">Structure</div><div className="mt-0.5 font-mono text-white/80">{latest.structure_state || "—"}</div></div>
+        <div><div className="text-white/35">Location</div><div className="mt-0.5 font-mono text-white/80">{latest.location_state || "—"}</div></div>
+        <div><div className="text-white/35">Confidence</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
+      </div>
+
+      <p className="mt-3 text-[11px] leading-4 text-white/45">
+        Preferred direction: <span className="text-white/70 font-semibold">{preferredDir}</span>
+        {latest.retracement_required ? " · waiting for a better entry price, not a new signal" : ""}
+        {" — "}{latest.reason || ""}
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
+        <span className={pill("neutral")}>Exhaustion evidence-only: {(latest.exhaustion_decision || "—").replace(/_/g, " ")}</span>
+        {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy: waiting for retrace after profit</span>}
+        {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell: waiting for retrace after profit</span>}
+      </div>
+    </div>
+  );
+}
+
 function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, events, setActive, refresh }) {
   const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
   const ddNum      = Number(heartbeat.drawdown||0);
@@ -739,7 +809,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
           <div className="min-w-0">
             <div className={`mb-2 flex items-center gap-2 ${MONO_LABEL}`}>
               {online
-                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {heartbeat.timeframe||"M5"} · {heartbeat.market_mode==="INDEX_MODE"?`Index Mode (${heartbeat.index_profile||"GENERIC_INDEX"})`:"Gold Mode"} · Live</>
+                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {heartbeat.timeframe||"M10"} · {heartbeat.market_mode==="INDEX_MODE"?`Index Mode (${heartbeat.index_profile||"GENERIC_INDEX"})`:"Gold Mode"} · Live</>
                 : <><Wifi className="h-3 w-3" />No connection</>}
             </div>
             <h1 className="text-[2rem] font-black tracking-tight leading-none">{botState}</h1>
@@ -794,6 +864,8 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
       {!licenseInfo.activation_key && (
         <Empty title="Connect your license" body="Link your ASE license key once and live data from your MT5 account will stream here automatically." icon={KeyRound} />
       )}
+
+      {online && <M10SignalCard events={events} />}
 
       <AIMarketOutlookCard linked={Boolean(licenseInfo.activation_key)} />
 

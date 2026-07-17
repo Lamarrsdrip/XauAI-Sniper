@@ -1,0 +1,28 @@
+# v6.25.0 owner directive 2026-07-17 -- RETIRED_FEATURE test failures.
+#
+# These 15 tests exercise the exhaustion-counter TRADE ENTRY path
+# (XAU_TryExhaustionCounterEntry, XAU_ExhaustionCounterEligible,
+# XAU_ExhaustionCounterReactionScore) that was deleted outright in this
+# release: exhaustion is now evidence-only and can never open a trade at
+# any percentage (see XAU_UpdateExhaustionEvidence in
+# XAUUSD_AI_Sniper_EA.mq5, and tests/test_xau_v6250_exhaustion_evidence_only.py
+# for the current, correct guarantees). These are not regressions -- the
+# code they test no longer exists by design, matching this repo's existing
+# convention of retiring historical test files rather than editing them to
+# track a feature that is gone. Not started from a blank baseline: all
+# 360 pre-existing OBSOLETE_VERSION_PIN-style failures already present on
+# origin/main @ 6d9ae81 are additional, expected, unrelated to this list.
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_does_not_require_full_htf_reversal_only_reaction_evidence
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_does_not_use_the_normal_120_180s_timer_or_entry_readiness
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_duplicate_prevention_one_at_a_time_per_symbol
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_eligibility_thresholds_are_input_driven_not_hardcoded_inline
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_exhausted_sell_produces_temporary_buy_and_vice_versa
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_hooked_into_ontick_unconditionally_and_oninit_reconciliation
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_minimum_two_of_five_reaction_factors_required
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_netting_account_blocked_with_named_result_hedging_required
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_never_auto_reenters_the_exhausted_direction_by_construction
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_own_distinct_magic_number_and_risk_fraction_not_normal_10pct
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_own_sl_geometry_not_the_120x_widened_normal_distance
+tests/test_xau_v62418_exhaustion_counter_trade_family.py::test_required_log_tags_present
+tests/test_xau_v62418_exhaustion_decision_matrix.py::test_command_center_can_read_exhaustion_decision_via_exhaustion_counter_reason
+tests/test_xau_v62418_exhaustion_decision_matrix.py::test_exhaustion_counter_gated_through_canonical_decision_not_raw_threshold_alone

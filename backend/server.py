@@ -5144,6 +5144,11 @@ class BotActivityReq(BaseModel):
     market_thesis: Optional[Dict[str, Any]] = None
     post_trade_state: Optional[Dict[str, Any]] = None
     entry_readiness: Optional[Dict[str, Any]] = None
+    # v6.25.0 — M10 Intelligent Signal Engine evidence/decision block. Same
+    # "add the field or Pydantic silently drops it" lesson as the three
+    # above — this is what lets the Command Center show the EA's own real
+    # M10 buy/sell case scores instead of nothing.
+    m10_signal: Optional[Dict[str, Any]] = None
 
 # v6.9.0 — purpose-built payload for XAU_LogTradeThesisStatus's cloud post.
 # Kept separate from BotActivityReq's generic event schema since this is a
@@ -5736,7 +5741,7 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
         "position_direction", "candidate_allowed", "final_execution_allowed",
         "final_decision", "final_blocker", "open_trade_called", "trade_buy_called",
         "trade_sell_called", "broker_retcode", "broker_error", "pipeline_stage",
-        "market_thesis", "post_trade_state", "entry_readiness",
+        "market_thesis", "post_trade_state", "entry_readiness", "m10_signal",
     ):
         value = getattr(req, field, None)
         if value is not None and value != "":
