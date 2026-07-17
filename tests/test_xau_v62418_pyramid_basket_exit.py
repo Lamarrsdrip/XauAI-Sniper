@@ -30,7 +30,7 @@ def test_compile_reports_zero_errors_and_warnings():
 # ---------------------------------------------------------------------------
 def test_basket_mode_requires_at_least_two_positions():
     ea = read(BACKEND_EA)
-    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)")
+    fn = fn_body(ea, "void XAU_UpdateCampaignBasketState(int direction)", 6000)
     assert "if(!g_campaign[slot].active || g_campaign[slot].activePositionCount < 2)" in fn
     assert "return; // single-position campaigns use the individual exit floor, untouched" in fn
 

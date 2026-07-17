@@ -230,13 +230,18 @@ def test_exactly_three_trade_buy_sell_call_sites_exist():
     sites = re.findall(r'trade\.(?:Buy|Sell)\(', ea)
     # v6.24.18: added a 4th real placement site (Exhaustion Counter, its own
     # isolated magic/risk/exit family) -- 4 sites x Buy+Sell literal = 8.
-    assert len(sites) == 8, f"expected 4 real placement sites (Buy+Sell literal each) = 8 matches, found {len(sites)}"
+    # v6.25.0 owner directive 2026-07-17: that 4th site (Exhaustion Counter's
+    # own order-send) is deleted outright -- RETIRED_NO_NEW_ENTRIES, exhaustion
+    # is evidence-only and can never open a trade. Back to 3 real sites
+    # (OpenTrade/PRIMARY+RE_ENTRY+MANUAL+FORCE, Pyramid, Counter-Excursion) x
+    # Buy+Sell literal each = 6.
+    assert len(sites) == 6, f"expected 3 real placement sites (Buy+Sell literal each) = 6 matches, found {len(sites)}"
 
 
 def test_opentrade_gates_cooldown_and_exhaustion_skipping_manual_override():
     ea = read(BACKEND_EA)
     fn_start = ea.index("bool OpenTrade(int signal")
-    fn_body = ea[fn_start:fn_start + 5000]
+    fn_body = ea[fn_start:fn_start + 7000]  # v6.25.0: widened for the new direction-exclusivity + post-profit-entry guards
     assert "if(!isManualOverride)" in fn_body
     assert "XAU_PostTradeCooldownActive()" in fn_body
     assert "XAU_SameDirectionReentryBlockedByExhaustion(signal, oldDirState)" in fn_body
