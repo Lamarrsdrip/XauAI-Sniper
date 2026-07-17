@@ -301,7 +301,7 @@ def test_client_supplied_malicious_callback_origin_ignored():
         with patch("httpx.AsyncClient") as MockClient:
             instance = MockClient.return_value.__aenter__.return_value
             instance.post = _capture_post
-            await srv.initialize_purchase(req)
+            await srv.initialize_purchase(req, _FakeRequest(b"", ip="9.9.9.9"))
         callback_url = captured["json"]["callback_url"]
         assert "evil-phishing-site.example" not in callback_url
         assert callback_url.startswith(srv.PUBLIC_SITE_URL)

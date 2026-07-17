@@ -28,18 +28,40 @@ db = client[os.environ['DB_NAME']]
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+# v6.25.3 owner directive 2026-07-17 (Phase 6 P0, final pre-launch hardening)
+# -- unknown/unset ENVIRONMENT is treated as production (the strict,
+# fail-closed default), not development -- a misconfigured deployment must
+# never silently fall back to the permissive local-dev behavior below.
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "production").strip().lower()
+IS_PRODUCTION = ENVIRONMENT not in ("development", "dev", "local", "test", "testing")
+
+
 def _load_or_create_jwt_secret() -> str:
-    """v6.5.0 (audit bug #9): a fresh secrets.token_hex(32) on every process
-    start invalidates every session on restart and, on a multi-worker
-    deployment, makes tokens minted by one worker invalid on another — and
-    the Fernet key derived from this secret makes any data encrypted with it
-    unrecoverable after a restart if the env var was never set. Persist a
-    generated secret to a local file so restarts/workers on the same machine
-    share it, while still preferring the JWT_SECRET env var when set (the
-    only option that also works across separate machines)."""
+    """v6.5.0 (audit bug #9), hardened v6.25.3 (Phase 6 P0) -- a fresh
+    secrets.token_hex(32) on every process start invalidates every session
+    on restart and, on a multi-worker deployment, makes tokens minted by one
+    worker invalid on another. The old fix persisted a generated secret to a
+    local file (.jwt_secret) so restarts on the SAME machine shared it -- but
+    that is itself a real security gap in production: the secret ends up
+    sitting in a container filesystem instead of the deployment's secret
+    manager, and a second instance/redeploy on a different filesystem still
+    gets a DIFFERENT secret, silently invalidating every session and any
+    Fernet-encrypted data. In production, refuse to start rather than paper
+    over a missing JWT_SECRET with an auto-generated one -- this is a fail
+    startup, not fail open, by design. Only local development (ENVIRONMENT=
+    development) gets the old persist-to-disk fallback."""
     env_secret = os.environ.get('JWT_SECRET')
     if env_secret:
         return env_secret
+    if IS_PRODUCTION:
+        raise RuntimeError(
+            "JWT_SECRET environment variable is not set. Refusing to start in production with "
+            "an auto-generated secret -- this invalidates every session on every restart across "
+            "a multi-instance deployment and risks a real secret sitting in a container "
+            "filesystem instead of the deployment's secret manager. Set JWT_SECRET explicitly "
+            "(a long random value, e.g. `python3 -c \"import secrets; print(secrets.token_hex(32))\"`), "
+            "or set ENVIRONMENT=development for local work only."
+        )
     secret_file = ROOT_DIR / '.jwt_secret'
     try:
         if secret_file.exists():
@@ -47,8 +69,8 @@ def _load_or_create_jwt_secret() -> str:
         new_secret = secrets.token_hex(32)
         secret_file.write_text(new_secret, encoding='utf-8')
         logging.getLogger(__name__).warning(
-            f"JWT_SECRET env var not set — generated and persisted a secret to {secret_file}. "
-            "Set JWT_SECRET explicitly for multi-machine deployments."
+            f"JWT_SECRET env var not set — generated and persisted a secret to {secret_file} "
+            "(development mode only). Set JWT_SECRET explicitly for anything beyond local work."
         )
         return new_secret
     except OSError:
@@ -58,6 +80,49 @@ def _load_or_create_jwt_secret() -> str:
 
 JWT_SECRET = _load_or_create_jwt_secret()
 JWT_ALGORITHM = "HS256"
+
+# v6.25.3 owner directive 2026-07-17 (Phase 6 P0, final pre-launch hardening)
+# -- simple, dependency-free rate limiting. Deliberately NOT a new pip
+# package (slowapi/limits/etc.) -- this session already hit a real
+# production outage (push notifications) caused by a new dependency that
+# was declared in requirements.txt but never actually installed in the
+# deployed environment; a hand-rolled stdlib limiter cannot fail that way.
+# Per-process, in-memory, not shared across worker processes -- acceptable
+# for this deployment's scale; the goal is to blunt casual brute-force/
+# credential-stuffing/spam, not provide distributed-systems-grade limiting.
+_rate_limit_buckets: Dict[str, list] = {}
+
+
+def _rate_limit(key: str, max_requests: int, window_seconds: int) -> None:
+    """Raises HTTPException(429) if `key` has already been called
+    max_requests-or-more times in the last window_seconds; otherwise
+    records this call. Call at the top of any endpoint that needs
+    throttling, keyed by something like f"login:{client_ip}"."""
+    now = time.time()
+    cutoff = now - window_seconds
+    bucket = _rate_limit_buckets.setdefault(key, [])
+    while bucket and bucket[0] < cutoff:
+        bucket.pop(0)
+    if len(bucket) >= max_requests:
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait before trying again.")
+    bucket.append(now)
+    # Bound memory -- occasionally prune buckets that have gone fully quiet,
+    # instead of running a dedicated background task for it.
+    if len(_rate_limit_buckets) > 5000 and random.random() < 0.01:
+        for k in [k for k, v in _rate_limit_buckets.items() if not v]:
+            _rate_limit_buckets.pop(k, None)
+
+
+def _client_ip(request: Request) -> str:
+    # X-Forwarded-For is set by the reverse proxy in front of this backend;
+    # request.client.host alone would be the proxy's own address, not the
+    # real caller, behind Emergent's ingress.
+    fwd = request.headers.get("X-Forwarded-For", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 PAYSTACK_BASE_URL = "https://api.paystack.co"
 # v6.25.3 owner directive 2026-07-17 (final pre-launch hardening, Phase 2) --
 # the Paystack callback_url used to be built directly from a client-supplied
@@ -568,10 +633,25 @@ async def get_gold_price():
 
 # --- Auth ---
 @api_router.post("/auth/login")
-async def login(req: LoginRequest):
+async def login(req: LoginRequest, request: Request):
+    # v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- rate-limited by both
+    # IP and the targeted email, so an attacker can't dodge the IP limit by
+    # spraying many emails from one address, nor dodge the email limit by
+    # rotating IPs against one known admin account.
+    ip = _client_ip(request)
+    _rate_limit(f"admin_login_ip:{ip}", max_requests=10, window_seconds=300)
+    _rate_limit(f"admin_login_email:{req.email.lower()}", max_requests=5, window_seconds=300)
     user = await db.users.find_one({"email": req.email.lower()})
     if not user or not verify_password(req.password, user["password_hash"]):
+        await db.login_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "email": req.email.lower(), "ip": ip, "ok": False,
+            "role": "admin", "ts": datetime.now(timezone.utc).isoformat(),
+        })
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    await db.login_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": True,
+        "role": "admin", "ts": datetime.now(timezone.utc).isoformat(),
+    })
     token = create_access_token(str(user["_id"]), user["email"])
     response = JSONResponse(content={"email": user["email"], "name": user.get("name","Admin"), "role": user.get("role","admin"), "token": token})
     # v6.5.0 (audit bug #9): secure=False meant the admin session cookie could
@@ -623,7 +703,8 @@ async def get_pin_price():
     return {"price_kobo": kobo, "price_naira": naira, "currency": "NGN", "payment_method": "paystack", "formatted": f"\u20a6{naira:,.0f}"}
 
 @api_router.post("/purchase/initialize")
-async def initialize_purchase(req: PurchaseInitRequest):
+async def initialize_purchase(req: PurchaseInitRequest, request: Request):
+    _rate_limit(f"purchase_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
     s = await get_settings()
     pk = s.get("paystack_secret_key", "")
     if not pk: raise HTTPException(status_code=503, detail="Payment system not configured yet.")
@@ -774,7 +855,10 @@ async def _fulfill_payment(reference: str, source: str) -> dict:
 
 
 @api_router.get("/purchase/verify/{reference}")
-async def verify_purchase(reference: str):
+async def verify_purchase(reference: str, request: Request):
+    # Generous window -- the frontend legitimately polls this every few
+    # seconds while a real customer waits for their payment to confirm.
+    _rate_limit(f"purchase_verify_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
     result = await _fulfill_payment(reference, source="poll")
     if result["status"] == "success":
         return {"status": "success", "payment_status": "success", "pin": result["pin"], "buyer_name": result.get("buyer_name", "")}
@@ -3897,31 +3981,55 @@ def _utc_now_iso() -> str:
 
 # -------- Signup / Login / Me --------
 @api_router.post("/cloud/auth/signup")
-async def cloud_signup(req: CloudSignupReq, response: Response):
+async def cloud_signup(req: CloudSignupReq, response: Response, request: Request):
+    _rate_limit(f"cloud_signup_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
     req.email = req.email.lower().strip()
     # basic email format check (no regex lib dependency — simple sanity)
     if "@" not in req.email or "." not in req.email.split("@")[-1] or len(req.email) < 5:
         raise HTTPException(status_code=400, detail="Invalid email format")
     if await db.cloud_users.find_one({"email": req.email}):
         raise HTTPException(status_code=400, detail="Email already registered")
+    # v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- require stronger
+    # passwords: length alone (the old 8-char-minimum) doesn't stop
+    # "password1"/"12345678". Require at least one letter AND one digit,
+    # in addition to the length floor.
     if len(req.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be 8+ characters")
+    if not any(c.isalpha() for c in req.password) or not any(c.isdigit() for c in req.password):
+        raise HTTPException(status_code=400, detail="Password must include at least one letter and one number")
     uid = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     doc = {"id": uid, "email": req.email, "password_hash": hash_password(req.password),
            "full_name": (req.full_name or "").strip(), "country": (req.country or "").strip(),
            "created_at": now.isoformat(), "last_login_at": now.isoformat()}
-    await db.cloud_users.insert_one(doc.copy())
+    try:
+        await db.cloud_users.insert_one(doc.copy())
+    except DuplicateKeyError:
+        # The unique index (created at startup) caught a genuine race
+        # between two concurrent signups for the same email that the
+        # find_one check above couldn't see yet.
+        raise HTTPException(status_code=400, detail="Email already registered")
     token = _cloud_token(uid, req.email)
     response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="lax", max_age=60*60*24*30)
     return {"ok": True, "token": token, "user": {k: v for k, v in doc.items() if k != "password_hash"}}
 
 @api_router.post("/cloud/auth/login")
-async def cloud_login(req: CloudLoginReq, response: Response):
+async def cloud_login(req: CloudLoginReq, response: Response, request: Request):
+    ip = _client_ip(request)
     req.email = req.email.lower().strip()
+    _rate_limit(f"cloud_login_ip:{ip}", max_requests=10, window_seconds=300)
+    _rate_limit(f"cloud_login_email:{req.email}", max_requests=5, window_seconds=300)
     u = await db.cloud_users.find_one({"email": req.email})
     if not u or not verify_password(req.password, u.get("password_hash", "")):
+        await db.login_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "email": req.email, "ip": ip, "ok": False,
+            "role": "cloud_user", "ts": datetime.now(timezone.utc).isoformat(),
+        })
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    await db.login_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "email": u["email"], "ip": ip, "ok": True,
+        "role": "cloud_user", "ts": datetime.now(timezone.utc).isoformat(),
+    })
     await db.cloud_users.update_one({"id": u["id"]}, {"$set": {"last_login_at": datetime.now(timezone.utc).isoformat()}})
     token = _cloud_token(u["id"], u["email"])
     response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="lax", max_age=60*60*24*30)
@@ -3951,6 +4059,9 @@ async def cloud_me(user: dict = Depends(get_cloud_user)):
 
 @api_router.post("/cloud/license/link")
 async def cloud_license_link(req: CloudLicenseLinkReq, user: dict = Depends(get_cloud_user)):
+    # Rate-limited by the authenticated user id -- prevents a compromised/
+    # malicious Command Center session from brute-forcing license keys.
+    _rate_limit(f"license_link_user:{user['id']}", max_requests=10, window_seconds=300)
     lic = await _verify_command_license(user, req.license_key)
     return {"ok": True, "license": {
         "license_id": lic.get("id", ""),
@@ -4883,6 +4994,10 @@ async def cloud_monitor_thesis_status(req: TradeThesisStatusReq, request: Reques
 
 @api_router.post("/cloud/command/request")
 async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_cloud_user)):
+    # Rate-limited per user -- a compromised/malicious Command Center session
+    # should not be able to flood the EA's command queue (e.g. FORCE_CLOSE_TRADE
+    # spam) or brute-force the license PIN check inside _verify_command_license.
+    _rate_limit(f"command_request_user:{user['id']}", max_requests=20, window_seconds=300)
     action = str(req.action or "").upper().strip()
     if action not in SAFE_REMOTE_COMMANDS:
         raise HTTPException(status_code=400, detail="Unsupported Command Center action.")

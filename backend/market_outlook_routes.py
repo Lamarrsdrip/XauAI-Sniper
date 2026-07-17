@@ -304,6 +304,10 @@ def build_router() -> APIRouter:
     # trading state.
     @r.post("/outlook/notifications/test")
     async def send_test_notification_route(user: dict = Depends(srv.get_cloud_user)):
+        # Rate-limited per user -- prevents a compromised/scripted Command
+        # Center session from hammering the OneSignal REST API (which is
+        # billed/rate-limited by OneSignal itself) via repeated test sends.
+        srv._rate_limit(f"notification_test_user:{user['id']}", max_requests=5, window_seconds=300)
         return await notif.send_test_notification(user["id"])
 
     return r
