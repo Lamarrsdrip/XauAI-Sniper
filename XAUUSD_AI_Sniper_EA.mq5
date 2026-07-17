@@ -12938,9 +12938,21 @@ XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()
    s.dataFresh     = (freshnessState == M10_FRESHNESS_FRESH);
    s.complete      = (freshnessState != M10_FRESHNESS_STALE);
 
-   PrintFormat("M10_DATA_FRESHNESS | evaluatedBar=%s latestClosedM10Bar=%s ageSeconds=%d freshnessState=%s",
-               TimeToString(td.evaluatedBar, TIME_DATE | TIME_MINUTES), TimeToString(td.evaluatedBar, TIME_DATE | TIME_MINUTES),
-               ageSeconds, s.freshnessState);
+   // v6.25.1 owner directive 2026-07-17 -- log-spam fix. This function is
+   // called every tick, but the underlying evidence only changes once per
+   // closed M10 bar (or when freshness degrades with the clock, not price).
+   // Log only when the bar or the freshness state actually changed since
+   // the last log, not on every tick with identical evidence.
+   static datetime lastLoggedFreshnessBar = 0;
+   static ENUM_XAU_M10_FRESHNESS lastLoggedFreshnessState = (ENUM_XAU_M10_FRESHNESS)-1;
+   if(td.evaluatedBar != lastLoggedFreshnessBar || freshnessState != lastLoggedFreshnessState)
+   {
+      lastLoggedFreshnessBar = td.evaluatedBar;
+      lastLoggedFreshnessState = freshnessState;
+      PrintFormat("M10_DATA_FRESHNESS | evaluatedBar=%s latestClosedM10Bar=%s ageSeconds=%d freshnessState=%s",
+                  TimeToString(td.evaluatedBar, TIME_DATE | TIME_MINUTES), TimeToString(td.evaluatedBar, TIME_DATE | TIME_MINUTES),
+                  ageSeconds, s.freshnessState);
+   }
 
    if(freshnessState == M10_FRESHNESS_STALE)
    {
@@ -13174,6 +13186,18 @@ XAU_M10SignalDecision XAU_EvaluateM10SignalDecision()
 
 void LogM10SignalAnalysis(const XAU_M10SignalDecision &d)
 {
+   // v6.25.1 owner directive 2026-07-17 -- log-spam fix. Called every tick
+   // via XAU_EvaluateM10SignalDecision(), but d.evidenceId only advances
+   // once per genuinely new closed M10 bar -- log once per evidenceId (plus
+   // on a decisionType change, which covers the STALE case where
+   // evidenceId stays 0 across ticks).
+   static long lastLoggedEvidenceId = -1;
+   static ENUM_XAU_M10_DECISION lastLoggedDecisionType = (ENUM_XAU_M10_DECISION)-1;
+   if(d.evidenceId == lastLoggedEvidenceId && d.decisionType == lastLoggedDecisionType)
+      return;
+   lastLoggedEvidenceId = d.evidenceId;
+   lastLoggedDecisionType = d.decisionType;
+
    PrintFormat("M10_SIGNAL_ANALYSIS | evidenceId=%d barTime=%s trendState=%s buyPressure=%.1f buySlope=%.1f "
                "sellPressure=%.1f sellSlope=%.1f buyCaseScore=%.1f sellCaseScore=%.1f continuationScore=%.1f "
                "exhaustionScore=%.1f exhaustionPct=%.1f structure=%s location=%s buyRoomR=%.2f sellRoomR=%.2f "
@@ -14525,14 +14549,23 @@ XAU_ExhaustionDecisionResult XAU_EvaluateExhaustionDecision(const XAU_AdaptiveTr
       r.reason = "extreme exhaustion, chasing the current direction is not justified, no confirmed opposite reaction yet";
    }
 
-   PrintFormat("EXHAUSTION_DECISION | exhaustedDirection=%s preferredDirection=%s decisionType=%s continuationScore=%.2f exhaustionScore=%.2f "
-               "oppositePressureNow=%.2f oppositePressureSlope=%.2f temporaryCounterEligible=%s fullTransitionConfirmed=%s currentDirectionStillAllowed=%s reason=%s",
-               r.exhaustedDirection == 1 ? "BUY" : (r.exhaustedDirection == -1 ? "SELL" : "NONE"),
-               r.preferredDirection == 1 ? "BUY" : (r.preferredDirection == -1 ? "SELL" : "NONE"),
-               XAU_ExhaustionDecisionName(r.decisionType), r.continuationScore, r.exhaustionScore,
-               r.oppositePressureNow, r.oppositePressureSlope,
-               r.temporaryCounterEligible ? "true" : "false", r.fullTransitionConfirmed ? "true" : "false",
-               r.currentDirectionStillAllowed ? "true" : "false", r.reason);
+   // v6.25.1 owner directive 2026-07-17 -- log-spam fix. Called every tick
+   // via XAU_UpdateExhaustionEvidence(), but the underlying evidence only
+   // changes once per closed M10 bar -- log once per evaluatedBar, not on
+   // every tick with identical evidence.
+   static datetime lastLoggedExhaustionDecisionBar = 0;
+   if(td.evaluatedBar != lastLoggedExhaustionDecisionBar)
+   {
+      lastLoggedExhaustionDecisionBar = td.evaluatedBar;
+      PrintFormat("EXHAUSTION_DECISION | exhaustedDirection=%s preferredDirection=%s decisionType=%s continuationScore=%.2f exhaustionScore=%.2f "
+                  "oppositePressureNow=%.2f oppositePressureSlope=%.2f temporaryCounterEligible=%s fullTransitionConfirmed=%s currentDirectionStillAllowed=%s reason=%s",
+                  r.exhaustedDirection == 1 ? "BUY" : (r.exhaustedDirection == -1 ? "SELL" : "NONE"),
+                  r.preferredDirection == 1 ? "BUY" : (r.preferredDirection == -1 ? "SELL" : "NONE"),
+                  XAU_ExhaustionDecisionName(r.decisionType), r.continuationScore, r.exhaustionScore,
+                  r.oppositePressureNow, r.oppositePressureSlope,
+                  r.temporaryCounterEligible ? "true" : "false", r.fullTransitionConfirmed ? "true" : "false",
+                  r.currentDirectionStillAllowed ? "true" : "false", r.reason);
+   }
    return r;
 }
 
@@ -31738,11 +31771,20 @@ void XAU_UpdateExhaustionEvidence()
    g_exhaustionPreferredDirection  = g_latestExhaustionDecision.preferredDirection;
    g_lastExhaustionEvidenceBar     = td.evaluatedBar;
 
-   PrintFormat("EXHAUSTION_CALC | primaryTf=EVIDENCE_ONLY | exhaustedDirection=%s preferredDirection=%s decisionType=%s continuationScore=%.2f exhaustionScore=%.2f decisionUse=EVIDENCE_ONLY",
-               g_latestExhaustionDecision.exhaustedDirection == 1 ? "BUY" : (g_latestExhaustionDecision.exhaustedDirection == -1 ? "SELL" : "NONE"),
-               g_exhaustionPreferredDirection == 1 ? "BUY" : (g_exhaustionPreferredDirection == -1 ? "SELL" : "NONE"),
-               XAU_ExhaustionDecisionName(g_latestExhaustionDecision.decisionType),
-               g_latestExhaustionDecision.continuationScore, g_latestExhaustionDecision.exhaustionScore);
+   // v6.25.1 owner directive 2026-07-17 -- log-spam fix. This function's
+   // COMPUTATION still runs every tick unconditionally (per the header
+   // comment above -- never gated), but this line was printing the
+   // identical evidence on every tick too. Log once per evaluatedBar.
+   static datetime lastLoggedExhaustionCalcBar = 0;
+   if(td.evaluatedBar != lastLoggedExhaustionCalcBar)
+   {
+      lastLoggedExhaustionCalcBar = td.evaluatedBar;
+      PrintFormat("EXHAUSTION_CALC | primaryTf=EVIDENCE_ONLY | exhaustedDirection=%s preferredDirection=%s decisionType=%s continuationScore=%.2f exhaustionScore=%.2f decisionUse=EVIDENCE_ONLY",
+                  g_latestExhaustionDecision.exhaustedDirection == 1 ? "BUY" : (g_latestExhaustionDecision.exhaustedDirection == -1 ? "SELL" : "NONE"),
+                  g_exhaustionPreferredDirection == 1 ? "BUY" : (g_exhaustionPreferredDirection == -1 ? "SELL" : "NONE"),
+                  XAU_ExhaustionDecisionName(g_latestExhaustionDecision.decisionType),
+                  g_latestExhaustionDecision.continuationScore, g_latestExhaustionDecision.exhaustionScore);
+   }
 }
 
 ulong XAU_FindLiveExhaustionCounterTicket()
