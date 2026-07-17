@@ -596,12 +596,23 @@ async def logout():
 # --- PIN Validate (public - EA calls this) ---
 @api_router.post("/pins/validate")
 async def validate_pin(req: PinValidateRequest):
-    pin_doc = await db.pin_licenses.find_one({"pin": req.pin}, {"_id": 0})
-    if not pin_doc: return {"valid": False, "reason": "PIN not found"}
-    if not pin_doc.get("is_active"): return {"valid": False, "reason": "PIN revoked"}
-    if not pin_doc.get("is_used"):
-        await db.pin_licenses.update_one({"pin": req.pin}, {"$set": {"is_used": True, "activated_at": datetime.now(timezone.utc).isoformat(), "mt5_account": req.mt5_account or ""}})
-    return {"valid": True, "pin": req.pin, "message": "License verified"}
+    """v6.25.3 owner directive 2026-07-17 (Phase 4 P0) -- was its own
+    separate, incomplete implementation: it bound mt5_account ONLY on the
+    very first call (is_used was still false) and then, on every
+    subsequent call for that same PIN, returned {"valid": true} with NO
+    account check at all -- meaning a PIN could be validated successfully
+    on an unlimited number of different MT5 accounts after its first
+    activation, not just the one it was actually sold for. Now routes
+    through _resolve_monitor_license(), the same canonical, atomic-
+    first-claim, fail-closed-on-mismatch license authority every other
+    EA-facing endpoint (heartbeat, activity, thesis status, direction
+    reservation, command polling, download authorization) already uses."""
+    try:
+        lic = await _resolve_monitor_license(req.pin, req.mt5_account or "")
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        return {"valid": False, "reason": detail.get("message") or detail.get("reason") or "License check failed"}
+    return {"valid": True, "pin": lic.get("pin", req.pin), "message": "License verified"}
 
 # --- Purchase (public) ---
 @api_router.get("/purchase/price")
@@ -1381,6 +1392,49 @@ async def admin_delete(pin: str):
     r = await db.pin_licenses.delete_one({"pin": pin})
     if r.deleted_count == 0: raise HTTPException(404, "Not found")
     return {"deleted": True}
+
+
+class AdminLicenseResetRequest(BaseModel):
+    admin_password: str
+    reason: str
+
+
+@api_router.post("/admin/pins/{pin}/reset-account", dependencies=[Depends(get_current_admin)])
+async def admin_reset_license_account(pin: str, req: AdminLicenseResetRequest, admin: dict = Depends(get_current_admin)):
+    """v6.25.3 owner directive 2026-07-17 (Phase 4 P0) -- the only sanctioned
+    way to move a license from one MT5 account to another (e.g. a customer's
+    genuine broker/account change), since _resolve_monitor_license() fails
+    closed on any account mismatch otherwise. Requires re-entering the
+    CURRENT admin password (not just an already-valid session -- a
+    destructive/security-sensitive action, same bar as changing the admin's
+    own account) and a reason, and records a full audit entry (previous
+    account, new account, admin, reason, timestamp) rather than just
+    silently clearing the field."""
+    user = await db.users.find_one({"email": admin["email"]})
+    if not user or not verify_password(req.admin_password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Admin password is incorrect")
+    if not req.reason or not req.reason.strip():
+        raise HTTPException(status_code=400, detail="A reason is required for a license account reset.")
+    lic = await db.pin_licenses.find_one({"pin": pin}, {"_id": 0})
+    if not lic:
+        raise HTTPException(status_code=404, detail="License not found")
+    previous_account = lic.get("mt5_account") or ""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.pin_licenses.update_one(
+        {"pin": pin},
+        {"$set": {"mt5_account": None, "is_used": False, "activated_at": None}})
+    audit_entry = {
+        "id": str(uuid.uuid4()), "pin": pin, "previous_account": previous_account, "new_account": None,
+        "reason": req.reason.strip(), "admin_email": admin["email"], "reset_at": now_iso,
+    }
+    await db.license_reset_audit_log.insert_one(audit_entry)
+    # A reset account also invalidates any in-flight direction reservation
+    # tied to the old binding -- a stale reservation under the old account
+    # must not silently keep blocking/claiming after a reset.
+    if previous_account:
+        await db.cloud_direction_reservations.delete_many({"account": previous_account, "licenseId": lic.get("id", "")})
+    logger.warning(f"LICENSE_ACCOUNT_RESET pin={pin} previous_account={previous_account} admin={admin['email']} reason={req.reason.strip()}")
+    return {"reset": True, "pin": pin, "previous_account": previous_account}
 
 @api_router.post("/admin/configs", response_model=EAConfig, dependencies=[Depends(get_current_admin)])
 async def admin_create_config(data: EAConfigCreate):
@@ -3827,7 +3881,25 @@ async def _verify_command_license(user: dict, key: str) -> dict:
     return lic
 
 async def _resolve_monitor_license(pin: str = "", account: str = "", request: Optional[Request] = None) -> dict:
-    """Authenticate EA monitor traffic by license PIN first; agent token remains only a fallback."""
+    """THE canonical license authentication + binding service -- every EA-
+    facing or license-gated endpoint must call this, not roll its own check
+    (v6.25.3 owner directive 2026-07-17, Phase 4 P0: unifies
+    /pins/validate, heartbeat, activity, thesis status, direction
+    reservation, command polling, Outlook evidence, and download
+    authorization onto one implementation, closing a real gap where
+    /pins/validate had its own separate, incomplete logic that only bound
+    on first use and never re-checked the account on every later call --
+    meaning a PIN could be replayed on an unlimited number of MT5 accounts
+    after its first activation).
+
+    Rules: unbound license -> the first valid MT5 account to present it
+    claims it ATOMICALLY (the update's filter re-checks mt5_account is
+    still empty at write time, so two different accounts racing to
+    first-claim the same never-used PIN cannot both win -- exactly one
+    does, the other gets a real mismatch rejection against the winner's
+    account, not a silent overwrite). Bound license -> every future request
+    must match the bound account exactly, or fails closed with
+    LICENSE_BOUND_TO_DIFFERENT_MT5_ACCOUNT."""
     raw = _normalize_license_key(pin)
     account = str(account or "").strip()
     if raw:
@@ -3842,6 +3914,29 @@ async def _resolve_monitor_license(pin: str = "", account: str = "", request: Op
                 "account": account,
             })
         bound = str(lic.get("mt5_account") or "").strip()
+        if not bound and account:
+            # Atomic first-claim: the filter requires mt5_account to STILL
+            # be empty/missing at the moment of this write -- if another
+            # request already won the race (even microseconds earlier),
+            # this update matches zero documents and we fall through to
+            # reread + re-validate against whatever actually got bound.
+            now_iso = datetime.now(timezone.utc).isoformat()
+            claim_result = await db.pin_licenses.update_one(
+                {"pin": raw, "is_active": True, "mt5_account": {"$in": [None, ""]}},
+                {"$set": {"mt5_account": account, "is_used": True, "activated_at": now_iso}},
+            )
+            if claim_result.modified_count == 1:
+                lic["mt5_account"] = account
+                lic["is_used"] = True
+                lic["activated_at"] = now_iso
+                bound = account
+                logger.info("[monitor-auth] FIRST_CLAIM pin=%s account=%s", raw, account)
+            else:
+                reread = await db.pin_licenses.find_one({"pin": raw, "is_active": True}, {"_id": 0})
+                lic = reread or lic
+                bound = str(lic.get("mt5_account") or "").strip()
+                logger.warning("[monitor-auth] FIRST_CLAIM_RACE_LOST pin=%s our_account=%s winner_account=%s",
+                               raw, account, bound)
         if bound and account and bound != account:
             logger.warning("[monitor-auth] reject account mismatch pin=%s bound=%s account=%s", raw, bound, account)
             raise HTTPException(status_code=403, detail={
