@@ -290,7 +290,11 @@ def test_on_chart_entry_readiness_block_exists_and_wired_in():
 
 def test_web_json_gains_entry_readiness_field():
     ea = read(BACKEND_EA)
-    assert '\\"entry_readiness\\":%s}' in ea
+    # v6.25.0 appended "m10_signal" after "entry_readiness" (same pattern
+    # used for every prior field addition here) -- entry_readiness is no
+    # longer the literal final key, but it is still present and followed by
+    # the field.
+    assert '\\"entry_readiness\\":%s,\\"m10_signal\\":%s}' in ea
     assert "readinessJson" in ea
 
 

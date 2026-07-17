@@ -12463,6 +12463,409 @@ XAU_MarketThesis XAU_ComputeMarketThesis(int signal, bool isPyramidAdd, bool isC
    return t;
 }
 
+// ===========================================================================
+// v6.25.0 owner directive 2026-07-17 -- M10 INTELLIGENT SIGNAL ENGINE.
+//
+// The Hourly Outlook (backend/market_outlook.py, Python) does NOT compute
+// independent market evidence of its own -- it reads THIS EA's own
+// market_thesis fields (buy_pressure/sell_pressure/location/structure/
+// exhaustion_pct/remaining_room_r, from XAU_ComputeMarketThesis below) and
+// applies a transparent WEIGHTED, ANCHOR-BASED confidence model on top
+// (_compute_confidence/_confidence_pct: trend/structure/pressure/location/
+// exhaustion/room, each mapped through named anchors, then weighted-summed
+// -- never a single field alone, never 100-minus-the-other). That weighting
+// approach, not better raw evidence, is the real reason it reads as more
+// "complete" than the scattered threshold-chain logic elsewhere in this
+// file. Ported faithfully below (same anchor values, same weighting
+// philosophy) as XAU_ScoreLocationBucket/XAU_ScoreStructureBucket/
+// XAU_AnchorScore, applied fresh every M10 bar to BOTH the buy case and the
+// sell case independently -- not shared code across the Python/MQL5
+// language boundary (impossible), but the same analytical principle,
+// reimplemented in this file's own idiom, reusing this file's own already-
+// canonical evidence (g_transitionDecision, XAU_BucketLocation/
+// XAU_BucketStructure/XAU_BucketTiming/XAU_BucketExhaustion -- the exact
+// same bucket functions XAU_ComputeMarketThesis already uses, never a
+// second parallel set of pressure/exhaustion/structure/location math).
+//
+// This produces ADVISORY evidence only. XAU_EvaluateM10SignalDecision()
+// does not call OpenTrade, does not bypass ScoreSetups, and is not a second
+// FinalEntryArbiter -- its output becomes one more named boolean input to
+// the EXISTING XAU_FinalEntryArbiter(), exactly like signalOK/structureOK/
+// timingOK/freshnessOK/newsOK/stateOK already are.
+// ===========================================================================
+
+enum ENUM_XAU_M10_DECISION
+{
+   M10_DECISION_BUY_CANDIDATE               = 0,
+   M10_DECISION_SELL_CANDIDATE              = 1,
+   M10_DECISION_WAIT_FOR_BUY_RETRACE        = 2,
+   M10_DECISION_WAIT_FOR_SELL_RETRACE       = 3,
+   M10_DECISION_TREND_CONTINUATION_NO_ENTRY_YET = 4,
+   M10_DECISION_TRANSITION_WATCH            = 5,
+   M10_DECISION_RANGE_NO_TRADE              = 6,
+   M10_DECISION_NO_VALID_SIGNAL             = 7,
+   M10_DECISION_DATA_UNAVAILABLE            = 8
+};
+
+string XAU_M10DecisionName(ENUM_XAU_M10_DECISION d)
+{
+   switch(d)
+   {
+      case M10_DECISION_BUY_CANDIDATE:                return "BUY_CANDIDATE";
+      case M10_DECISION_SELL_CANDIDATE:                return "SELL_CANDIDATE";
+      case M10_DECISION_WAIT_FOR_BUY_RETRACE:          return "WAIT_FOR_BUY_RETRACE";
+      case M10_DECISION_WAIT_FOR_SELL_RETRACE:         return "WAIT_FOR_SELL_RETRACE";
+      case M10_DECISION_TREND_CONTINUATION_NO_ENTRY_YET: return "TREND_CONTINUATION_NO_ENTRY_YET";
+      case M10_DECISION_TRANSITION_WATCH:              return "TRANSITION_WATCH";
+      case M10_DECISION_RANGE_NO_TRADE:                return "RANGE_NO_TRADE";
+      case M10_DECISION_NO_VALID_SIGNAL:                return "NO_VALID_SIGNAL";
+      default:                                          return "DATA_UNAVAILABLE";
+   }
+}
+
+struct XAU_M10EvidenceSnapshot
+{
+   long     evidenceId;
+   datetime capturedAt;
+   datetime closedBarTime;
+   string   symbol;
+   ENUM_TIMEFRAMES primaryTf;
+
+   int      trendDirection;
+   double   trendStrength;
+   string   trendState;
+
+   double   buyPressure;
+   double   sellPressure;
+   double   buyPressureSlope;
+   double   sellPressureSlope;
+
+   double   continuationScore;
+   double   exhaustionScore;
+   double   exhaustionPct;
+   int      exhaustedDirection;
+
+   string   structureState;
+   bool     bullishBos;
+   bool     bearishBos;
+   bool     bullishReclaim;
+   bool     bearishReclaim;
+   bool     bullishDisplacement;
+   bool     bearishDisplacement;
+
+   string   pullbackState;
+   string   locationState;
+   double   buyRoomR;
+   double   sellRoomR;
+
+   string   volatilityState;
+   string   newsState;
+   bool     dataFresh;
+   bool     complete;
+};
+
+struct XAU_M10SignalDecision
+{
+   long     evidenceId;
+   int      preferredDirection;
+   ENUM_XAU_M10_DECISION decisionType;
+   double   buyCaseScore;
+   double   sellCaseScore;
+   double   confidence;
+   string   timingState;
+   bool     retracementRequired;
+   string   exactReason;
+};
+
+XAU_M10EvidenceSnapshot g_m10Snapshot;
+XAU_M10SignalDecision   g_m10Decision;
+long     g_m10EvidenceSeq = 0;
+datetime g_m10LastEvidenceBar = 0;
+
+// Same anchor-interpolation methodology as backend/market_outlook.py's
+// _score_component: linear 0-100 between a "good" and "bad" real evidence
+// anchor, clamped -- not a made-up default.
+double XAU_AnchorScore(double value, double goodAt, double badAt)
+{
+   if(goodAt == badAt) return 50.0;
+   double t = (value - badAt) / (goodAt - badAt);
+   return MathMax(0.0, MathMin(100.0, t * 100.0));
+}
+
+// Same lookup-table philosophy as backend/market_outlook.py's
+// _compute_confidence location_score map, ported value-for-value.
+double XAU_ScoreLocationBucket(ENUM_XAU_LOCATION_QUALITY loc)
+{
+   switch(loc)
+   {
+      case LOCATION_EXCELLENT:       return 95.0;
+      case LOCATION_GOOD:            return 78.0;
+      case LOCATION_ACCEPTABLE:      return 55.0;
+      case LOCATION_LATE:            return 30.0;
+      case LOCATION_EXTREME:         return 10.0;
+      case LOCATION_RESET_PENDING:   return 40.0;
+      case LOCATION_RESET_CONFIRMED: return 70.0;
+      default:                       return 50.0;
+   }
+}
+
+// Same lookup-table philosophy as backend/market_outlook.py's
+// _compute_confidence structure_score map, ported value-for-value.
+double XAU_ScoreStructureBucket(ENUM_XAU_STRUCTURE_STATE s)
+{
+   switch(s)
+   {
+      case STRUCTURE_STRONGLY_SUPPORTS: return 95.0;
+      case STRUCTURE_SUPPORTS:          return 75.0;
+      case STRUCTURE_MIXED:             return 50.0;
+      case STRUCTURE_OPPOSES:           return 20.0;
+      default:                          return 0.0; // STRUCTURE_INVALIDATED
+   }
+}
+
+// Builds the ONE canonical evidence snapshot every module in this decision
+// must share -- no field here is independently recomputed by
+// XAU_EvaluateM10SignalDecision() below; every value is read straight from
+// this snapshot, so one decision always traces to one evidenceId.
+XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()
+{
+   XAU_M10EvidenceSnapshot s;
+   ZeroMemory(s);
+   XAU_AdaptiveTransitionDecision td = XAU_AdaptiveMarketTransitionEngine();
+
+   s.closedBarTime = td.evaluatedBar;
+   s.symbol        = Symbol();
+   s.primaryTf     = XAU_PRIMARY_DECISION_TF;
+   s.dataFresh     = (td.evaluatedBar > 0 && !td.continuationEntryPaused);
+   s.complete      = s.dataFresh;
+
+   if(!s.dataFresh)
+   {
+      s.capturedAt = TimeCurrent();
+      return s; // fail closed -- caller must treat as DATA_UNAVAILABLE, no fabricated fields
+   }
+
+   // Reuse this bar's evidence exactly once per bar (idempotent across
+   // multiple callers on the same tick group), incrementing the traceable
+   // sequence id only on a genuinely new bar.
+   if(td.evaluatedBar != g_m10LastEvidenceBar)
+   {
+      g_m10EvidenceSeq++;
+      g_m10LastEvidenceBar = td.evaluatedBar;
+   }
+   s.evidenceId = g_m10EvidenceSeq;
+   s.capturedAt = TimeCurrent();
+
+   s.trendDirection    = td.dominantDirection;
+   s.trendStrength      = td.trendMaturity;
+   s.buyPressure        = td.buyConfidence;
+   s.sellPressure        = td.sellConfidence;
+   s.buyPressureSlope   = td.buyConfidence  - g_prevBuyConfidenceForSlope;
+   s.sellPressureSlope  = td.sellConfidence - g_prevSellConfidenceForSlope;
+   s.continuationScore  = td.continuationConfidence;
+   s.exhaustionScore    = td.exhaustionProbability;
+   s.exhaustionPct       = td.exhaustionProbability;
+   s.exhaustedDirection  = (td.exhaustionProbability >= 70.0) ? td.dominantDirection : 0;
+
+   int dir = td.dominantDirection;
+   s.bullishBos          = (dir != 0 && g_smc_bos_dir == 1);
+   s.bearishBos          = (dir != 0 && g_smc_bos_dir == -1);
+   s.bullishReclaim       = (dir == -1) ? td.oppositeReclaim      : false;
+   s.bearishReclaim       = (dir ==  1) ? td.oppositeReclaim      : false;
+   s.bullishDisplacement  = (dir == -1) ? td.oppositeDisplacement : false;
+   s.bearishDisplacement  = (dir ==  1) ? td.oppositeDisplacement : false;
+
+   string smcReasonUnused = "";
+   ENUM_XAU_STRUCTURE_STATE structBucket = (dir != 0) ? XAU_BucketStructure(dir, smcReasonUnused) : STRUCTURE_MIXED;
+   s.structureState = EnumToString(structBucket);
+   s.pullbackState  = EnumToString(XAU_BucketTiming(td));
+   s.locationState  = EnumToString(XAU_BucketLocation(td));
+   s.buyRoomR   = (dir == 1) ? td.remainingRewardR : (dir == -1 ? td.oppositeRemainingRewardR : 0.0);
+   s.sellRoomR  = (dir == -1) ? td.remainingRewardR : (dir == 1 ? td.oppositeRemainingRewardR : 0.0);
+
+   double curAtr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   double avgAtr = XAU_AvgATR(40);
+   s.volatilityState = (avgAtr <= 0.0) ? "UNKNOWN" : (curAtr >= avgAtr * 1.4 ? "HIGH" : (curAtr <= avgAtr * 0.6 ? "LOW" : "NORMAL"));
+   s.newsState = XAUAI_NewsState();
+
+   if(td.trendMaturity < 15.0 && td.continuationConfidence < 55.0 && td.exhaustionProbability < 35.0)
+      s.trendState = "RANGE";
+   else if(dir == 0)
+      s.trendState = "UNCLEAR";
+   else if(td.exhaustionProbability >= 85.0 && td.continuationConfidence < 45.0)
+      s.trendState = "TREND_EXHAUSTED";
+   else if(td.reversalProbability >= 55.0)
+      s.trendState = "DIRECTION_TRANSITION";
+   else if(td.exhaustionProbability >= 60.0 && td.continuationConfidence >= 55.0)
+      s.trendState = "TREND_MATURE_WITH_ROOM";
+   else if(td.exhaustionProbability >= 60.0)
+      s.trendState = "TREND_STALLING";
+   else if(td.distanceTravelledATR < 1.0)
+      s.trendState = "TREND_FRESH";
+   else
+      s.trendState = "TREND_CONTINUING";
+
+   return s;
+}
+
+// Genuine, independently-derived per-side score (never side-B = 100 -
+// side-A). isDominantSide selects which real evidence fields feed the
+// formula: the currently-dominant direction reads its OWN continuation/
+// pressure/room evidence; the opposite direction reads its OWN reversal-
+// specific evidence (reversalProbability, reclaim/retest/displacement,
+// extension-implies-reversal-room). Weights: trend 25%, pressure 20%,
+// structure 15%, location 15%, exhaustion 10%, room 15% -- same weighting
+// philosophy as backend/market_outlook.py's _confidence_pct (not identical
+// weights -- that model has 2 fields, liquidity/news-stability, this file
+// does not yet compute per-direction; their 10% combined weight is folded
+// into trend+pressure here rather than faked).
+double XAU_ScoreDirectionCase(const XAU_AdaptiveTransitionDecision &td, int caseDirection)
+{
+   bool isDominantSide = (caseDirection == td.dominantDirection);
+   string smcReasonUnused = "";
+   ENUM_XAU_STRUCTURE_STATE structBucket = XAU_BucketStructure(caseDirection, smcReasonUnused);
+   double structureComponent = XAU_ScoreStructureBucket(structBucket);
+   double locationComponent  = XAU_ScoreLocationBucket(XAU_BucketLocation(td));
+
+   double trendComponent, pressureComponent, exhaustionComponent, roomComponent;
+   if(isDominantSide)
+   {
+      trendComponent       = td.continuationConfidence;
+      pressureComponent    = (caseDirection == 1) ? td.buyConfidence : td.sellConfidence;
+      exhaustionComponent  = XAU_AnchorScore(td.exhaustionProbability, 0.0, 100.0); // high exhaustion hurts the continuing side
+      roomComponent        = XAU_AnchorScore(td.remainingRewardR, 3.0, 0.0);
+   }
+   else
+   {
+      trendComponent       = td.reversalProbability;
+      pressureComponent    = (caseDirection == 1) ? td.buyConfidence : td.sellConfidence;
+      // extension of the dominant move is genuine (if partial) evidence a
+      // reversal location is developing -- combined with real reclaim/
+      // retest/displacement, never used alone.
+      double extensionSupport = XAU_AnchorScore(td.moveAlreadyConsumedPct, 90.0, 30.0);
+      double reactionBonus = (td.oppositeReclaim ? 15.0 : 0.0) + (td.oppositeRetestHeld ? 10.0 : 0.0) + (td.oppositeDisplacement ? 10.0 : 0.0);
+      locationComponent    = MathMax(0.0, MathMin(100.0, extensionSupport * 0.65 + reactionBonus));
+      exhaustionComponent  = XAU_AnchorScore(td.exhaustionProbability, 100.0, 0.0); // high dominant-side exhaustion genuinely supports the reversal case
+      roomComponent        = XAU_AnchorScore(td.oppositeRemainingRewardR, 3.0, 0.0);
+   }
+
+   return trendComponent * 0.25 + pressureComponent * 0.20 + structureComponent * 0.15 +
+          locationComponent * 0.15 + exhaustionComponent * 0.10 + roomComponent * 0.15;
+}
+
+// ===========================================================================
+// XAU_EvaluateM10SignalDecision() -- the ONE canonical M10 decision
+// authority. Selects the market idea only; the existing normal path
+// (entry timer, 0.30R missed-move check, direction exclusivity,
+// FinalEntryArbiter, risk, SL, broker send) is completely unmodified and
+// still owns everything downstream of this. This function opens no orders
+// and calls no broker-send path.
+// ===========================================================================
+XAU_M10SignalDecision XAU_EvaluateM10SignalDecision()
+{
+   XAU_M10SignalDecision d;
+   ZeroMemory(d);
+   g_m10Snapshot = XAU_BuildM10EvidenceSnapshot();
+   d.evidenceId = g_m10Snapshot.evidenceId;
+
+   if(!g_m10Snapshot.complete)
+   {
+      d.decisionType = M10_DECISION_DATA_UNAVAILABLE;
+      d.exactReason = "primary evidence not fresh -- fail closed rather than guess";
+      g_m10Decision = d;
+      return d;
+   }
+
+   XAU_AdaptiveTransitionDecision td = g_transitionDecision; // same bar already computed above
+
+   if(g_m10Snapshot.trendState == "RANGE")
+   {
+      d.decisionType = M10_DECISION_RANGE_NO_TRADE;
+      d.exactReason = "trendState=RANGE -- low maturity, low continuation, low exhaustion: no directional case to build";
+      g_m10Decision = d;
+      LogM10SignalAnalysis(d);
+      return d;
+   }
+
+   if(td.dominantDirection == 0)
+   {
+      d.decisionType = M10_DECISION_NO_VALID_SIGNAL;
+      d.exactReason = "no dominant direction resolved this bar";
+      g_m10Decision = d;
+      LogM10SignalAnalysis(d);
+      return d;
+   }
+
+   d.buyCaseScore  = XAU_ScoreDirectionCase(td, 1);
+   d.sellCaseScore = XAU_ScoreDirectionCase(td, -1);
+
+   int dominant = td.dominantDirection;
+   double dominantScore = (dominant == 1) ? d.buyCaseScore : d.sellCaseScore;
+   double oppositeScore  = (dominant == 1) ? d.sellCaseScore : d.buyCaseScore;
+   double scoreGap = MathAbs(dominantScore - oppositeScore);
+
+   ENUM_XAU_LOCATION_QUALITY loc = XAU_BucketLocation(td);
+   bool dominantLocationPoor = (loc == LOCATION_LATE || loc == LOCATION_EXTREME);
+
+   if(scoreGap < 10.0)
+   {
+      d.decisionType = M10_DECISION_TRANSITION_WATCH;
+      d.preferredDirection = 0;
+      d.confidence = 50.0 - scoreGap; // deliberately capped low -- conflicting evidence
+      d.exactReason = StringFormat("buyCaseScore=%.1f sellCaseScore=%.1f -- too close to call, evidence conflicted", d.buyCaseScore, d.sellCaseScore);
+   }
+   else if(dominantScore > oppositeScore && dominantScore >= 55.0)
+   {
+      d.preferredDirection = dominant;
+      d.confidence = dominantScore;
+      if(dominantLocationPoor)
+      {
+         d.decisionType = (dominant == 1) ? M10_DECISION_WAIT_FOR_BUY_RETRACE : M10_DECISION_WAIT_FOR_SELL_RETRACE;
+         d.retracementRequired = true;
+         d.exactReason = StringFormat("dominant case wins (score=%.1f) but location=%s -- valid direction, poor entry price, wait for retrace", dominantScore, g_m10Snapshot.locationState);
+      }
+      else
+      {
+         d.decisionType = (dominant == 1) ? M10_DECISION_BUY_CANDIDATE : M10_DECISION_SELL_CANDIDATE;
+         d.exactReason = StringFormat("dominant case wins (score=%.1f vs opposite=%.1f), location=%s acceptable-or-better", dominantScore, oppositeScore, g_m10Snapshot.locationState);
+      }
+   }
+   else if(oppositeScore > dominantScore && oppositeScore >= 55.0 &&
+           (td.oppositeReclaim || td.oppositeRetestHeld || td.oppositeDisplacement))
+   {
+      int oppositeDir = -dominant;
+      d.preferredDirection = oppositeDir;
+      d.confidence = oppositeScore;
+      d.decisionType = M10_DECISION_TRANSITION_WATCH; // real reversal evidence, but the normal signal/FinalEntryArbiter path -- not this function -- decides when to actually open it
+      d.exactReason = StringFormat("opposite case building (score=%.1f vs dominant=%.1f) with real reaction evidence -- preferred direction changing, normal entry path must still confirm", oppositeScore, dominantScore);
+   }
+   else
+   {
+      d.decisionType = (dominantScore >= oppositeScore) ? M10_DECISION_TREND_CONTINUATION_NO_ENTRY_YET : M10_DECISION_NO_VALID_SIGNAL;
+      d.preferredDirection = (d.decisionType == M10_DECISION_TREND_CONTINUATION_NO_ENTRY_YET) ? dominant : 0;
+      d.confidence = MathMax(dominantScore, oppositeScore);
+      d.exactReason = StringFormat("neither case cleared the 55.0 bar (buy=%.1f sell=%.1f)", d.buyCaseScore, d.sellCaseScore);
+   }
+
+   g_m10Decision = d;
+   LogM10SignalAnalysis(d);
+   return d;
+}
+
+void LogM10SignalAnalysis(const XAU_M10SignalDecision &d)
+{
+   PrintFormat("M10_SIGNAL_ANALYSIS | evidenceId=%d barTime=%s trendState=%s buyPressure=%.1f buySlope=%.1f "
+               "sellPressure=%.1f sellSlope=%.1f buyCaseScore=%.1f sellCaseScore=%.1f continuationScore=%.1f "
+               "exhaustionScore=%.1f exhaustionPct=%.1f structure=%s location=%s buyRoomR=%.2f sellRoomR=%.2f "
+               "preferredDirection=%s decision=%s confidence=%.1f reason=%s",
+               (int)d.evidenceId, TimeToString(g_m10Snapshot.closedBarTime, TIME_DATE | TIME_MINUTES), g_m10Snapshot.trendState,
+               g_m10Snapshot.buyPressure, g_m10Snapshot.buyPressureSlope, g_m10Snapshot.sellPressure, g_m10Snapshot.sellPressureSlope,
+               d.buyCaseScore, d.sellCaseScore, g_m10Snapshot.continuationScore, g_m10Snapshot.exhaustionScore, g_m10Snapshot.exhaustionPct,
+               g_m10Snapshot.structureState, g_m10Snapshot.locationState, g_m10Snapshot.buyRoomR, g_m10Snapshot.sellRoomR,
+               d.preferredDirection == 1 ? "BUY" : (d.preferredDirection == -1 ? "SELL" : "NONE"),
+               XAU_M10DecisionName(d.decisionType), d.confidence, d.exactReason);
+}
+
 // --- Failed-continuation / sweep-rejection, direction-agnostic. Reuses the
 // same "fresh extreme then retrace by InpXAU_FailedImpulseRetraceATR" concept
 // already validated elsewhere in the file, and the same wick-vs-body
@@ -15841,6 +16244,13 @@ void OnTick()
    // for logging and Command Center display. No function reachable from this
    // call may send an order.
    XAU_UpdateExhaustionEvidence();
+   // v6.25.0 owner directive 2026-07-17 -- M10 Intelligent Signal Engine.
+   // Advisory only: builds g_m10Snapshot/g_m10Decision from real evidence
+   // every tick (cheap -- XAU_AdaptiveMarketTransitionEngine() itself is
+   // bar-cached). Never calls OpenTrade or any broker-send path; feeds
+   // XAU_FinalEntryArbiter() as one more named evidence input, same as
+   // signalOK/structureOK/timingOK/freshnessOK/newsOK/stateOK already are.
+   XAU_EvaluateM10SignalDecision();
 
    // === v5.5.0 EPF — update tier each tick + run partial-close manager ===
    // Cheap to run; tier transitions logged when they change.
@@ -31979,8 +32389,23 @@ bool XAU_FinalEntryArbiter(string source, int signal, bool signalOK, bool struct
    bool rewardRoomCollapsed = (signal != 0 && roomR < 0.30);
    bool operationalHalted = (!XAU_NoLimitTradingModeActive() && g_remoteStopTrading);
 
+   // v6.25.0 owner directive 2026-07-17 -- M10 Intelligent Signal Engine
+   // feeds in here as one more named authority, exactly like signalOK/
+   // structureOK/etc already are -- not a second arbiter. Deliberately
+   // scoped conservative per the owner's own "do not add new blockers"
+   // rule: this only blocks on a DIRECT CONTRADICTION (the independent M10
+   // evidence clearly favors the opposite direction), never on mere non-
+   // confirmation (TRANSITION_WATCH/RANGE_NO_TRADE/DATA_UNAVAILABLE/
+   // TREND_CONTINUATION_NO_ENTRY_YET all fail OPEN here) -- so a candidate
+   // ScoreSetups already approved is never blocked just because the M10
+   // engine hasn't independently confirmed it, only when it actively
+   // disagrees.
+   bool m10Contradicts = (signal != 0) &&
+      (((g_m10Decision.decisionType == M10_DECISION_BUY_CANDIDATE || g_m10Decision.decisionType == M10_DECISION_WAIT_FOR_BUY_RETRACE) && g_m10Decision.preferredDirection == 1 && signal == -1) ||
+       ((g_m10Decision.decisionType == M10_DECISION_SELL_CANDIDATE || g_m10Decision.decisionType == M10_DECISION_WAIT_FOR_SELL_RETRACE) && g_m10Decision.preferredDirection == -1 && signal == 1));
+
    bool aligned = signalOK && structureOK && timingOK && freshnessOK && newsOK && stateOK &&
-                  !rewardRoomCollapsed && !operationalHalted;
+                  !rewardRoomCollapsed && !operationalHalted && !m10Contradicts;
 
    string locationName  = XAU_LocationQualityName(XAU_BucketLocation(td));
    string pressureName  = XAU_PressureStateName(XAU_BucketPressure(td));
@@ -31993,23 +32418,28 @@ bool XAU_FinalEntryArbiter(string source, int signal, bool signalOK, bool struct
          why = StringFormat("FINAL_ENTRY_ARBITER_BLOCK: reward room objectively collapsed (roomR=%.2f < 0.30)", roomR);
       else if(operationalHalted)
          why = "FINAL_ENTRY_ARBITER_BLOCK: remote STOP_TRADING active";
+      else if(m10Contradicts)
+         why = StringFormat("FINAL_ENTRY_ARBITER_BLOCK: M10 evidence contradicts -- decision=%s preferredDirection=%s (evidenceId=%d, reason=%s)",
+                            XAU_M10DecisionName(g_m10Decision.decisionType), g_m10Decision.preferredDirection==1?"BUY":"SELL",
+                            (int)g_m10Decision.evidenceId, g_m10Decision.exactReason);
       else
          why = "FINAL_ENTRY_ARBITER_BLOCK: an upstream named authority failed";
    }
    else
-      why = StringFormat("FINAL_ENTRY_ARBITER_ALLOW: direction=%s structure=PASS location=%s pressure=%s exhaustion=%.0f%% oppositePressure(%s)=%.0f%% rewardRoomR=%.2f news=PASS operational=PASS",
+      why = StringFormat("FINAL_ENTRY_ARBITER_ALLOW: direction=%s structure=PASS location=%s pressure=%s exhaustion=%.0f%% oppositePressure(%s)=%.0f%% rewardRoomR=%.2f news=PASS operational=PASS m10Decision=%s",
                          signal==1?"BUY":signal==-1?"SELL":"NONE", locationName, pressureName,
-                         td.exhaustionProbability, oppositeDirName, oppositePressure, roomR);
+                         td.exhaustionProbability, oppositeDirName, oppositePressure, roomR, XAU_M10DecisionName(g_m10Decision.decisionType));
 
    PrintFormat("FINAL_ENTRY_ARBITER source=%s signal=%s structure=%s timing=%s freshness=%s news=%s state=%s "
                "direction=%s location=%s pressure=%s exhaustion=%.0f%% oppositePressure(%s)=%.0f%% rewardRoomR=%.2f "
-               "rewardRoomCollapsed=%s operationalHalted=%s decision=%s",
+               "rewardRoomCollapsed=%s operationalHalted=%s m10Decision=%s m10Contradicts=%s decision=%s",
                source,signalOK?"PASS":"FAIL",structureOK?"PASS":"FAIL",
                timingOK?"PASS":"FAIL",freshnessOK?"PASS":"FAIL",
                newsOK?"PASS":"FAIL",stateOK?"PASS":"FAIL",
                signal==1?"BUY":signal==-1?"SELL":"NONE", locationName, pressureName,
                td.exhaustionProbability, oppositeDirName, oppositePressure, roomR,
                rewardRoomCollapsed?"Y":"N", operationalHalted?"Y":"N",
+               XAU_M10DecisionName(g_m10Decision.decisionType), m10Contradicts?"Y":"N",
                aligned?"ALLOW":"BLOCK");
    return aligned;
 }
@@ -34673,9 +35103,38 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
          BotMonitorBool(r.snapshotFresh), BotMonitorBool(r.entryReady),
          BotMonitorJsonSafe(r.finalAction, 20), BotMonitorJsonSafe(r.reason, 160));
    }
+   // v6.25.0 owner directive 2026-07-17 -- M10 INTELLIGENT SIGNAL ENGINE +
+   // EXHAUSTION EVIDENCE-ONLY + SMART RE-ENTRY Command Center transparency.
+   // Every field here is read straight from g_m10Snapshot/g_m10Decision/
+   // g_latestExhaustionDecision/g_postClose -- the exact same globals the
+   // EA's own trading decisions already use, never a second recomputation
+   // for display purposes only.
+   string m10SignalJson = StringFormat(
+      "{\"primary_timeframe\":\"M10\",\"evidence_id\":%d,\"bar_time\":\"%s\",\"trend_state\":\"%s\","
+      "\"buy_pressure\":%.1f,\"buy_pressure_slope\":%.1f,\"sell_pressure\":%.1f,\"sell_pressure_slope\":%.1f,"
+      "\"buy_case_score\":%.1f,\"sell_case_score\":%.1f,\"continuation_score\":%.1f,"
+      "\"exhaustion_score\":%.1f,\"structure_state\":\"%s\",\"location_state\":\"%s\","
+      "\"buy_room_r\":%.2f,\"sell_room_r\":%.2f,\"preferred_direction\":\"%s\","
+      "\"decision\":\"%s\",\"confidence\":%.1f,\"retracement_required\":%s,\"reason\":\"%s\","
+      "\"exhaustion_evidence_only\":true,\"exhaustion_decision\":\"%s\",\"exhaustion_preferred_direction\":\"%s\","
+      "\"post_profit_buy_pending\":%s,\"post_profit_sell_pending\":%s}",
+      (int)g_m10Decision.evidenceId, TimeToString(g_m10Snapshot.closedBarTime, TIME_DATE | TIME_MINUTES),
+      BotMonitorJsonSafe(g_m10Snapshot.trendState, 30),
+      g_m10Snapshot.buyPressure, g_m10Snapshot.buyPressureSlope, g_m10Snapshot.sellPressure, g_m10Snapshot.sellPressureSlope,
+      g_m10Decision.buyCaseScore, g_m10Decision.sellCaseScore, g_m10Snapshot.continuationScore, g_m10Snapshot.exhaustionScore,
+      BotMonitorJsonSafe(g_m10Snapshot.structureState, 30), BotMonitorJsonSafe(g_m10Snapshot.locationState, 30),
+      g_m10Snapshot.buyRoomR, g_m10Snapshot.sellRoomR,
+      g_m10Decision.preferredDirection == 1 ? "BUY" : (g_m10Decision.preferredDirection == -1 ? "SELL" : "NONE"),
+      BotMonitorJsonSafe(XAU_M10DecisionName(g_m10Decision.decisionType), 40), g_m10Decision.confidence,
+      BotMonitorBool(g_m10Decision.retracementRequired), BotMonitorJsonSafe(g_m10Decision.exactReason, 220),
+      BotMonitorJsonSafe(XAU_ExhaustionDecisionName(g_latestExhaustionDecision.decisionType), 40),
+      g_exhaustionPreferredDirection == 1 ? "BUY" : (g_exhaustionPreferredDirection == -1 ? "SELL" : "NONE"),
+      BotMonitorBool(g_postClose[0].valid && g_postClose[0].wasProfitable && g_postClose[0].direction == 1),
+      BotMonitorBool(g_postClose[1].valid && g_postClose[1].wasProfitable && g_postClose[1].direction == -1));
+
    string body = StringFormat(
       "{\"pin\":\"%s\",\"license_key\":\"%s\",\"event_type\":\"%s\",\"severity\":\"%s\","
-      "\"account\":\"%I64d\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"mode\":\"%s\","
+      "\"account\":\"%I64d\",\"symbol\":\"%s\",\"timeframe\":\"M10\",\"mode\":\"%s\","
       "\"market_bias\":\"%s\",\"signal_direction\":\"%s\",\"ai_confidence\":%.2f,"
       "\"ai_status\":\"%s\","
       "\"score\":%.2f,\"trade_allowed\":%s,\"allowed\":%s,\"decision\":\"%s\","
@@ -34690,7 +35149,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       "\"session\":\"%s\",\"last_skip\":\"%s\",\"no_limit_mode\":%s,"
       "\"open_positions\":%d,\"close_reason_exact\":\"%s\",\"closed_by_module\":\"%s\","
       "\"position_direction\":\"%s\",\"risk_lot_decision\":\"%s\",\"exit_decision\":\"%s\"%s},"
-      "\"market_thesis\":%s,\"post_trade_state\":%s,\"entry_readiness\":%s}",
+      "\"market_thesis\":%s,\"post_trade_state\":%s,\"entry_readiness\":%s,\"m10_signal\":%s}",
       BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
       ev, sev, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(),
       BotMonitorJsonSafe(modeText, 80), BotMonitorJsonSafe(RegimeName(), 32),
@@ -34708,7 +35167,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       BotMonitorBool(XAU_NoLimitTradingModeActive()), CountMyPositions(),
       BotMonitorJsonSafe(closeReasonExact, 180), BotMonitorJsonSafe(closedByModule, 80),
       BotMonitorJsonSafe(positionDirection, 12), BotMonitorJsonSafe(riskLotDecision, 220),
-      BotMonitorJsonSafe(exitDecision, 220), funnelNested, thesisJson, postTradeJson, readinessJson);
+      BotMonitorJsonSafe(exitDecision, 220), funnelNested, thesisJson, postTradeJson, readinessJson, m10SignalJson);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
