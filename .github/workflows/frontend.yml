@@ -1,0 +1,66 @@
+name: Frontend
+
+on:
+  push:
+    branches: [main, "release/**"]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    branches: [main, "release/**"]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      # v6.25.4 -- this repo had no committed package-lock.json before this
+      # workflow was written (added alongside it, see the commit that adds
+      # this file). Using npm install rather than npm ci for the first few
+      # runs, since ci's strict lockfile-must-exactly-match-package.json
+      # check hasn't been exercised in CI yet; can switch to npm ci once
+      # that's proven stable.
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Production build
+        working-directory: frontend
+        run: CI=true npm run build
+
+      # Real route-reachability smoke test: catches a broken build that
+      # nonetheless produced a bundle (e.g. a runtime-only error that
+      # webpack doesn't fail on). Not a full Playwright E2E suite -- see
+      # the workflow-level comment below for why that's not included yet.
+      - name: Static-serve smoke test (root route responds)
+        working-directory: frontend
+        run: |
+          npx serve -s build -l 4173 &
+          SERVER_PID=$!
+          sleep 3
+          curl -sf http://localhost:4173/ > /dev/null && echo "root route OK"
+          kill $SERVER_PID
+
+# ---------------------------------------------------------------------
+# NOT YET IN THIS WORKFLOW (disclosed honestly rather than faked):
+# - Unit tests: this project has no frontend unit test suite yet
+#   (frontend/src has no *.test.js files at the time this workflow was
+#   written) -- `npm test` would pass trivially with zero tests, which is
+#   worse than not claiming test coverage that doesn't exist.
+# - Accessibility smoke test / Playwright E2E: not set up. Both require
+#   either a live backend + MongoDB to exercise real login/purchase/
+#   license flows, or extensive mocking that risks testing the mocks
+#   instead of the product. A real E2E suite is a dedicated follow-up,
+#   not something to bolt on superficially here.
+# ---------------------------------------------------------------------

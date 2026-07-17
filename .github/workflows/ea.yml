@@ -1,0 +1,87 @@
+name: EA (MQL5 source)
+
+on:
+  push:
+    branches: [main, "release/**"]
+    paths:
+      - "**.mq5"
+      - "**.mqh"
+      - "tests/test_xau_*.py"
+      - ".github/workflows/ea.yml"
+  pull_request:
+    branches: [main, "release/**"]
+    paths:
+      - "**.mq5"
+      - "**.mqh"
+      - "tests/test_xau_*.py"
+      - ".github/workflows/ea.yml"
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest
+
+      # This is the real, honest scope of what this job can do. See the
+      # NOT COVERED block below for what it deliberately does not claim.
+      - name: Root/backend source-copy identity check
+        run: |
+          diff XAUUSD_AI_Sniper_EA.mq5 backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 \
+            && echo "root and backend/ea_code copies are byte-identical"
+
+      - name: Source-string regression suite (invariants, per-release fixes)
+        run: |
+          python -m pytest tests/test_xau_v6250_m10_intelligent_signal_engine.py -v --tb=short
+
+      - name: EX5 release artifact checksum verification
+        run: |
+          python3 - <<'PY'
+          import json, hashlib, sys
+          manifest = json.load(open("backend/ea_releases/manifest.json"))
+          current = manifest["current_version"]
+          release = manifest["releases"][current]
+          ex5_path = f"backend/ea_releases/{current}/{release['ex5_filename']}"
+          actual = hashlib.sha256(open(ex5_path, "rb").read()).hexdigest()
+          expected = release["ex5_sha256"]
+          print(f"manifest current_version={current}")
+          print(f"expected sha256={expected}")
+          print(f"actual   sha256={actual}")
+          if actual != expected:
+              print("MISMATCH -- the committed EX5 artifact does not match its own manifest entry")
+              sys.exit(1)
+          print("EX5 artifact checksum matches manifest -- OK")
+          PY
+
+# ---------------------------------------------------------------------
+# NOT COVERED BY THIS WORKFLOW (disclosed honestly rather than faked):
+#
+# - Real MetaEditor compilation ("0 errors, 0 warnings"). MetaEditor64.exe
+#   is Windows-only, requires a real MetaTrader 5 terminal install, and
+#   this project has no self-hosted Windows/MT5 runner registered against
+#   this repository. GitHub-hosted runners cannot run it. Every EA change
+#   in this project has instead been compiled manually in a local wine+
+#   MetaEditor sandbox and the result (errors/warnings count + EX5 SHA-256)
+#   recorded in backend/ea_releases/manifest.json and the commit message
+#   for that change -- this workflow verifies that recorded artifact's
+#   checksum stays consistent with what's actually committed, but it does
+#   NOT re-run the compiler itself.
+# - Mac live install / VPS deployment verification. Both are real physical/
+#   remote machines outside any CI runner's reach.
+# - "no exhaustion order path" / "approved 10%/1.20x/r-exit invariants" as
+#   a generic catch-all: the specific invariants that exist today are
+#   covered by name inside test_xau_v6250_m10_intelligent_signal_engine.py
+#   and the many other tests/test_xau_v*_static.py files (not all wired
+#   into this workflow yet -- see the historical-version test-suite decay
+#   noted during the v6.25.4 session: many of those files pin exact
+#   version strings from their own original release and will need a
+#   dedicated pass to either update or intentionally retire before they
+#   can be added to CI without immediately going red).
+# ---------------------------------------------------------------------
