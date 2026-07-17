@@ -7,7 +7,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depend
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio, re, hashlib, json as _json
+import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio, re, hashlib, hmac, json as _json
 from pymongo.errors import DuplicateKeyError
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -59,6 +59,13 @@ def _load_or_create_jwt_secret() -> str:
 JWT_SECRET = _load_or_create_jwt_secret()
 JWT_ALGORITHM = "HS256"
 PAYSTACK_BASE_URL = "https://api.paystack.co"
+# v6.25.3 owner directive 2026-07-17 (final pre-launch hardening, Phase 2) --
+# the Paystack callback_url used to be built directly from a client-supplied
+# origin_url with no allowlist, so any caller of /purchase/initialize could
+# redirect the post-payment browser flow to an arbitrary attacker-controlled
+# domain. PUBLIC_SITE_URL is the one canonical, operator-controlled origin
+# every payment callback is built from -- client input is never used for it.
+PUBLIC_SITE_URL = os.environ.get("PUBLIC_SITE_URL", "https://xauaisniper.com").rstrip("/")
 LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 AI_COST_DAILY_CALL_LIMIT = int(os.environ.get("AI_COST_DAILY_CALL_LIMIT", "120"))
 AI_COST_MIN_SECONDS = int(os.environ.get("AI_COST_MIN_SECONDS", "45"))
@@ -611,8 +618,16 @@ async def initialize_purchase(req: PurchaseInitRequest):
     if not pk: raise HTTPException(status_code=503, detail="Payment system not configured yet.")
     kobo = s.get("pin_price_kobo", 30000000)
     ref = f"ASE-{uuid.uuid4().hex[:12].upper()}"
-    callback_url = f"{req.origin_url}/purchase/success?reference={ref}"
-    tx = {"id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN", "buyer_name": req.buyer_name, "buyer_email": req.buyer_email, "payment_status": "pending", "pin_generated": None, "created_at": datetime.now(timezone.utc).isoformat()}
+    # v6.25.3 owner directive 2026-07-17 (Phase 2) -- callback_url is built
+    # ONLY from the operator-controlled PUBLIC_SITE_URL, never from
+    # req.origin_url. The old code trusted client-supplied origin_url
+    # directly, so any caller of this endpoint could redirect the post-
+    # payment browser flow to an arbitrary attacker-controlled domain.
+    callback_url = f"{PUBLIC_SITE_URL}/purchase/success?reference={ref}"
+    tx = {"id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN",
+          "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
+          "payment_status": "PENDING", "pin_generated": None,
+          "created_at": datetime.now(timezone.utc).isoformat(), "state_transitions": {}}
     await db.payment_transactions.insert_one(tx)
     async with httpx.AsyncClient(timeout=15.0) as http:
         resp = await http.post(f"{PAYSTACK_BASE_URL}/transaction/initialize", headers={"Authorization": f"Bearer {pk}", "Content-Type": "application/json"}, json={"email": req.buyer_email, "amount": kobo, "reference": ref, "callback_url": callback_url, "metadata": {"buyer_name": req.buyer_name}, "currency": "NGN"})
@@ -621,45 +636,172 @@ async def initialize_purchase(req: PurchaseInitRequest):
     if not data.get("status"): raise HTTPException(status_code=502, detail=data.get("message", "Failed"))
     return {"authorization_url": data["data"]["authorization_url"], "reference": ref}
 
-@api_router.get("/purchase/verify/{reference}")
-async def verify_purchase(reference: str):
+
+def _verify_paystack_signature(raw_body: bytes, signature: str, secret: str) -> bool:
+    """HMAC-SHA512 over the raw (unparsed) request body, exactly as Paystack
+    signs it -- must be computed before the body is JSON-decoded, since any
+    re-serialization can change byte-for-byte formatting and silently break
+    the comparison. Constant-time compare so timing cannot leak a partial
+    match."""
+    if not signature or not secret:
+        return False
+    computed = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha512).hexdigest()
+    return hmac.compare_digest(computed, signature)
+
+
+async def _transition_payment_state(reference: str, from_states: list, to_state: str) -> bool:
+    """Atomic state transition, single source of truth for the payment state
+    machine (PENDING -> VERIFYING -> PAID -> FULFILLING -> FULFILLED). The
+    MongoDB filter (reference + current state IN from_states) IS the
+    concurrency control: only the one caller whose update actually matches
+    a document performs the transition -- every other concurrent caller
+    (e.g. the webhook and the browser's polling verify racing each other)
+    gets modified_count == 0 and must not proceed as if it won."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    result = await db.payment_transactions.update_one(
+        {"reference": reference, "payment_status": {"$in": from_states}},
+        {"$set": {"payment_status": to_state, f"state_transitions.{to_state}": now_iso}},
+    )
+    won = result.modified_count == 1
+    logger.info(f"PAYMENT_STATE_TRANSITION ref={reference} to={to_state} won={won}")
+    return won
+
+
+async def _fulfill_payment(reference: str, source: str) -> dict:
+    """Single canonical fulfillment path -- used by BOTH the webhook and the
+    browser's /purchase/verify polling, so there is exactly one place that
+    can ever generate a PIN for a payment reference. Verifies the real
+    transaction status, amount, and currency against Paystack's own
+    transaction/verify API before ever creating a license -- never trusts
+    the webhook body's claims alone, even after signature verification.
+    Never creates a license when verification is unavailable (missing
+    secret key, network failure, non-200 response) -- returns "pending"
+    instead of silently defaulting to success."""
     tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
-    if not tx: raise HTTPException(status_code=404, detail="Not found")
-    if tx.get("pin_generated") and tx.get("payment_status") == "success":
-        return {"status": "success", "payment_status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+    if not tx:
+        logger.warning(f"PAYSTACK_FULFILL_UNKNOWN_REFERENCE ref={reference} source={source}")
+        return {"status": "not_found"}
+    if tx.get("pin_generated") and tx.get("payment_status") == "FULFILLED":
+        return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+
+    won_verifying = await _transition_payment_state(reference, ["PENDING"], "VERIFYING")
+    if not won_verifying:
+        # Someone else already claimed verification for this reference (or
+        # it's further along already) -- reread current truth, never
+        # double-process.
+        tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        if tx and tx.get("pin_generated"):
+            return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+        return {"status": "pending"}
+
     s = await get_settings()
     pk = s.get("paystack_secret_key", "")
-    if pk:
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as http:
-                resp = await http.get(f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}", headers={"Authorization": f"Bearer {pk}"})
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("status") and data["data"].get("status") == "success" and not tx.get("pin_generated"):
-                    pin = generate_unique_pin()
-                    while await db.pin_licenses.find_one({"pin": pin}): pin = generate_unique_pin()
-                    doc = PinLicense(pin=pin, buyer_name=tx.get("buyer_name",""), buyer_email=tx.get("buyer_email",""), notes=f"Paystack - {reference}", payment_ref=reference).model_dump()
-                    await db.pin_licenses.insert_one(doc)
-                    await db.payment_transactions.update_one({"reference": reference}, {"$set": {"pin_generated": pin, "payment_status": "success"}})
-                    await send_pin_email(tx.get("buyer_email",""), tx.get("buyer_name",""), pin)
-                    return {"status": "success", "payment_status": "success", "pin": pin, "buyer_name": tx.get("buyer_name","")}
-                if data.get("status") and data["data"].get("status") == "success" and tx.get("pin_generated"):
-                    return {"status": "success", "payment_status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name","")}
-        except Exception as e: logger.error(f"Verify err: {e}")
+    if not pk:
+        logger.error(f"PAYSTACK_FULFILL_NO_SECRET_KEY ref={reference}")
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            resp = await http.get(f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}", headers={"Authorization": f"Bearer {pk}"})
+    except Exception as e:
+        logger.error(f"PAYSTACK_VERIFY_CALL_FAILED ref={reference}: {e}")
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    if resp.status_code != 200:
+        logger.warning(f"PAYSTACK_VERIFY_NON_200 ref={reference} status={resp.status_code}")
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    data = resp.json()
+    vdata = data.get("data", {}) if data.get("status") else {}
+    if vdata.get("status") != "success":
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    # Cross-check the REAL paid amount/currency against what WE expect for
+    # this specific transaction -- refuses an under-paid, over-refunded, or
+    # wrong-currency transaction even though Paystack itself reports
+    # status=success (e.g. a partial/split payment scenario).
+    expected_amount = tx.get("amount_kobo", 0)
+    expected_currency = tx.get("currency", "NGN")
+    paid_amount = vdata.get("amount", 0)
+    paid_currency = vdata.get("currency", "")
+    if paid_amount < expected_amount or paid_currency != expected_currency:
+        logger.error(f"PAYSTACK_AMOUNT_MISMATCH ref={reference} expected={expected_amount}{expected_currency} paid={paid_amount}{paid_currency}")
+        await _transition_payment_state(reference, ["VERIFYING"], "REJECTED_AMOUNT_MISMATCH")
+        return {"status": "failed", "reason": "amount_mismatch"}
+
+    await _transition_payment_state(reference, ["VERIFYING"], "PAID")
+    won_fulfilling = await _transition_payment_state(reference, ["PAID"], "FULFILLING")
+    if not won_fulfilling:
+        tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        if tx and tx.get("pin_generated"):
+            return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+        return {"status": "pending"}
+
+    pin = generate_unique_pin()
+    while await db.pin_licenses.find_one({"pin": pin}):
+        pin = generate_unique_pin()
+    doc = PinLicense(pin=pin, buyer_name=tx.get("buyer_name", ""), buyer_email=tx.get("buyer_email", ""),
+                      notes=f"{source} - {reference}", payment_ref=reference).model_dump()
+    try:
+        await db.pin_licenses.insert_one(doc)
+    except DuplicateKeyError:
+        # The unique index on pin_licenses.payment_ref caught a genuine
+        # double-fulfillment attempt that the state-machine transition
+        # somehow still let through (defense-in-depth, not the primary
+        # guard) -- reread the actual winner's PIN instead of erroring.
+        existing = await db.pin_licenses.find_one({"payment_ref": reference})
+        pin = existing["pin"] if existing else pin
+    await db.payment_transactions.update_one(
+        {"reference": reference}, {"$set": {"pin_generated": pin, "payment_status": "FULFILLED"}})
+    await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    logger.info(f"PAYSTACK_FULFILLED ref={reference} source={source}")
+    return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
+
+
+@api_router.get("/purchase/verify/{reference}")
+async def verify_purchase(reference: str):
+    result = await _fulfill_payment(reference, source="poll")
+    if result["status"] == "success":
+        return {"status": "success", "payment_status": "success", "pin": result["pin"], "buyer_name": result.get("buyer_name", "")}
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail="Not found")
     return {"status": "pending", "payment_status": "pending", "pin": None}
+
 
 @api_router.post("/webhook/paystack")
 async def paystack_webhook(request: Request):
-    body = await request.json()
-    if body.get("event") == "charge.success":
-        ref = body.get("data",{}).get("reference","")
-        tx = await db.payment_transactions.find_one({"reference": ref}, {"_id": 0})
-        if tx and not tx.get("pin_generated"):
-            pin = generate_unique_pin()
-            doc = PinLicense(pin=pin, buyer_name=tx.get("buyer_name",""), buyer_email=tx.get("buyer_email",""), notes=f"Webhook - {ref}", payment_ref=ref).model_dump()
-            await db.pin_licenses.insert_one(doc)
-            await db.payment_transactions.update_one({"reference": ref}, {"$set": {"pin_generated": pin, "payment_status": "success"}})
-            await send_pin_email(tx.get("buyer_email",""), tx.get("buyer_name",""), pin)
+    # v6.25.3 owner directive 2026-07-17 (Phase 2 P0) -- this endpoint used
+    # to trust an unsigned charge.success POST body outright: any caller who
+    # knew (or brute-forced/observed) a real reference could POST a forged
+    # webhook here and get a real license generated for free, with no
+    # signature check and no amount/currency cross-check. Now: (1) verify
+    # the raw body's HMAC-SHA512 against Paystack's own secret before
+    # touching the body at all, reject with 401 otherwise; (2) never trust
+    # the webhook body's claims directly -- _fulfill_payment() re-verifies
+    # the real transaction status/amount/currency against Paystack's own
+    # transaction/verify API before ever creating a license.
+    raw_body = await request.body()
+    signature = request.headers.get("x-paystack-signature", "")
+    s = await get_settings()
+    secret = s.get("paystack_secret_key", "")
+    if not _verify_paystack_signature(raw_body, signature, secret):
+        client_host = request.client.host if request.client else "unknown"
+        logger.warning(f"PAYSTACK_WEBHOOK_SIGNATURE_INVALID ip={client_host}")
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    try:
+        body = _json.loads(raw_body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    if body.get("event") != "charge.success":
+        return {"status": "ignored"}
+    ref = body.get("data", {}).get("reference", "")
+    if not ref:
+        raise HTTPException(status_code=400, detail="Missing reference")
+    await _fulfill_payment(ref, source="webhook")
     return {"status": "ok"}
 
 # --- Public Docs ---
@@ -1873,6 +2015,23 @@ async def startup():
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
         logger.info("Admin password updated")
     await db.users.create_index("email", unique=True)
+    # v6.25.3 owner directive 2026-07-17 (Phase 2 P0) -- exactly one PIN may
+    # ever exist per payment reference, enforced at the database level (not
+    # just by application logic, which the new atomic state machine in
+    # _fulfill_payment() already makes the primary guard -- this is
+    # defense-in-depth against any future code path that bypasses it).
+    # reference is already unique per initialize_purchase (uuid4-derived),
+    # but a unique index makes that guarantee real rather than assumed.
+    try:
+        await db.payment_transactions.create_index("reference", unique=True)
+    except Exception as e:
+        logger.warning(f"[payments] could not create payment_transactions.reference index: {e}")
+    try:
+        await db.pin_licenses.create_index(
+            "payment_ref", unique=True,
+            partialFilterExpression={"payment_ref": {"$type": "string"}})
+    except Exception as e:
+        logger.warning(f"[payments] could not create pin_licenses.payment_ref index: {e}")
     # Audit fix: cloud_notification_log's idempotency check was check-then-
     # insert with no DB-level guard -- safe today only because a single
     # backend process drives the outlook notification loops sequentially
