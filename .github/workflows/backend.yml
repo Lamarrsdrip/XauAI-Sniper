@@ -75,7 +75,20 @@ jobs:
           python -m flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
         continue-on-error: false
 
-      - name: Run pytest (security + business-logic suite)
+      # Each test file creates its own isolated MongoDB and binds motor's
+      # AsyncIOMotorClient to whichever event loop first touches it. Running
+      # them together in ONE pytest process makes every file after the
+      # first fail with "attached to a different loop" -- a known,
+      # pre-existing limitation of this test suite's architecture (every
+      # file passes 100% on its own). This mirrors exactly how the suite
+      # has always actually been run and verified throughout this
+      # project's development, not a CI-specific workaround.
+      - name: Run pytest (one process per test file)
         working-directory: backend
         run: |
-          python -m pytest tests/ -v --tb=short
+          set -e
+          for f in tests/test_*.py; do
+            echo "::group::$f"
+            python -m pytest "$f" -v --tb=short
+            echo "::endgroup::"
+          done
