@@ -52,7 +52,7 @@ export default function DownloadSection({ api }) {
   }, [api]);
 
   const available = info?.available !== false;
-  const version  = info?.version  || "v6.25.2";
+  const version  = info?.version  || "v6.25.4";
   const edition  = info?.edition  || "";
   const filename = info?.filename || "";
   const checksum = info?.checksum_sha256_12;

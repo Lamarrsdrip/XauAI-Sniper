@@ -1894,8 +1894,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.259"
-#property description "XAUUSD AI Sniper v6.25.1 - M10 Canonical Signal Authority, Cross-Instance Direction Reservation, Confirmed Profit-Floor, R-Exit Never-Purge-Unconfirmed"
+#property version   "6.254"
+#property description "XAUUSD AI Sniper v6.25.4 - M10 Canonical Signal Authority, Cross-Instance Direction Reservation, Confirmed Profit-Floor, R-Exit Never-Purge-Unconfirmed"
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary decision timeframe is M10. Approved normal entries use full"
 #property description "configured risk or fail closed; no margin/aggregate/broker-limit/lot-step"

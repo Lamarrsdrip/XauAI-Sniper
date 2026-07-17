@@ -44,7 +44,7 @@ const CARDS = [
     tone: "text-emerald-300",
     border: "border-emerald-300/20",
     glow: "bg-emerald-300/[0.07]",
-    badge: "CURRENT v6.25.1",
+    badge: "CURRENT v6.25.4",
   },
   {
     icon: Shuffle,
@@ -147,7 +147,7 @@ export default function FeaturesSection() {
         <div className="mb-10 flex items-end justify-between">
           <div>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
-              Features · v6.25.1
+              Features · v6.25.4
             </span>
             <h2 className="mt-4 max-w-lg font-heading text-3xl font-semibold tracking-tight text-white sm:text-4xl">
               Built for every market condition.

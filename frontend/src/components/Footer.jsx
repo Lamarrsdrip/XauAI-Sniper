@@ -11,7 +11,7 @@ export default function Footer() {
             </div>
             <div>
               <span className="text-[13px] font-semibold text-white/70">XauAI Sniper</span>
-              <span className="ml-2 font-mono text-[10px] text-white/28">v6.25.1 · M10 Canonical Signal Authority</span>
+              <span className="ml-2 font-mono text-[10px] text-white/28">v6.25.4 · M10 Canonical Signal Authority</span>
             </div>
           </div>
 
