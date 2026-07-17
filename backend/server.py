@@ -338,7 +338,7 @@ def _record_ai_cost(provider: str, model: str, prompt: str, response_text: str,
     account_bucket["calls"] += 1
     account_bucket["last_call_at"] = time.time()
     entry = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(timezone.utc),
         "purpose": purpose,
         "provider": provider,
         "model": model,
@@ -582,19 +582,33 @@ async def get_settings():
         s.pop('_id', None)
     return s
 
-async def send_pin_email(to_email: str, buyer_name: str, pin: str):
+async def _send_email(to_email: str, subject: str, html: str) -> bool:
+    """v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- shared SMTP sender,
+    extracted from send_pin_email's own inline logic so the new password-
+    reset flow doesn't duplicate the same Gmail SMTP_SSL boilerplate."""
     settings = await get_settings()
     smtp_email = settings.get("smtp_email", "")
     smtp_password = settings.get("smtp_password", "")
     if not smtp_email or not smtp_password:
-        logger.info(f"Email not configured. PIN {pin} for {to_email} not sent.")
+        logger.info(f"Email not configured. Message to {to_email} ({subject}) not sent.")
         return False
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "Your XauAI Sniper EA License PIN"
+        msg["Subject"] = subject
         msg["From"] = smtp_email
         msg["To"] = to_email
-        html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+        msg.attach(MIMEText(html, "html"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(smtp_email, smtp_password)
+            server.sendmail(smtp_email, to_email, msg.as_string())
+        logger.info(f"Email sent to {to_email}: {subject}")
+        return True
+    except Exception as e:
+        logger.error(f"Email send failed: {e}")
+        return False
+
+async def send_pin_email(to_email: str, buyer_name: str, pin: str):
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
 <h2 style="color:#B8860B;">XauAI Sniper EA - License PIN</h2>
 <p>Hello {buyer_name or 'Trader'},</p>
 <p>Thank you for your purchase! Here is your unique license PIN:</p>
@@ -605,15 +619,7 @@ async def send_pin_email(to_email: str, buyer_name: str, pin: str):
 <ol><li>Download the EA from our website</li><li>Install on MetaTrader 5 (follow our Setup Guide)</li><li>Enter this PIN in the EA settings</li><li>Enable Auto Trading and start!</li></ol>
 <p style="color:#888;font-size:12px;">Keep this PIN private. Each PIN works on one MT5 account.</p>
 </div>"""
-        msg.attach(MIMEText(html, "html"))
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(smtp_email, smtp_password)
-            server.sendmail(smtp_email, to_email, msg.as_string())
-        logger.info(f"PIN email sent to {to_email}")
-        return True
-    except Exception as e:
-        logger.error(f"Email send failed: {e}")
-        return False
+    return await _send_email(to_email, "Your XauAI Sniper EA License PIN", html)
 
 # -------------------------------------------------------------------
 # PUBLIC ROUTES
@@ -645,12 +651,12 @@ async def login(req: LoginRequest, request: Request):
     if not user or not verify_password(req.password, user["password_hash"]):
         await db.login_audit_log.insert_one({
             "id": str(uuid.uuid4()), "email": req.email.lower(), "ip": ip, "ok": False,
-            "role": "admin", "ts": datetime.now(timezone.utc).isoformat(),
+            "role": "admin", "ts": datetime.now(timezone.utc),
         })
         raise HTTPException(status_code=401, detail="Invalid email or password")
     await db.login_audit_log.insert_one({
         "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": True,
-        "role": "admin", "ts": datetime.now(timezone.utc).isoformat(),
+        "role": "admin", "ts": datetime.now(timezone.utc),
     })
     token = create_access_token(str(user["_id"]), user["email"])
     response = JSONResponse(content={"email": user["email"], "name": user.get("name","Admin"), "role": user.get("role","admin"), "token": token})
@@ -658,9 +664,16 @@ async def login(req: LoginRequest, request: Request):
     # be sent over plain HTTP, exposing it to network interception. Default to
     # secure=True (safe for the production HTTPS deployment); COOKIE_SECURE=false
     # is available for local HTTP-only development.
+    # v6.25.3 owner directive 2026-07-17 (Phase 6 P0 -- CSRF hardening) --
+    # strict rather than lax: the admin portal has no legitimate top-level
+    # cross-site navigation into an authenticated action, so there's no
+    # workflow this can break, and it closes the (already narrow, since
+    # every mutating admin route is POST/PUT/DELETE which lax already
+    # blocks cross-site) remaining edge case around lax's top-level-GET
+    # allowance.
     response.set_cookie(key="access_token", value=token, httponly=True,
                         secure=os.environ.get('COOKIE_SECURE', 'true').lower() != 'false',
-                        samesite="lax", max_age=86400, path="/")
+                        samesite="strict", max_age=86400, path="/")
     return response
 
 @api_router.get("/auth/me")
@@ -2182,6 +2195,48 @@ async def startup():
         await db.cloud_notification_log.create_index("idempotency_key", unique=True)
     except Exception as e:
         logger.warning(f"[outlook-notifications] could not create idempotency_key index: {e}")
+
+    # v6.25.3 owner directive 2026-07-17 (Phase 6 P0 -- DB index audit) --
+    # these two were real gaps, not just missing hardening:
+    #   - cloud_signup() already catches DuplicateKeyError to close a
+    #     concurrent-signup race, but with no unique index on
+    #     cloud_users.email that exception could never actually be raised --
+    #     the race this code claims to close was still open.
+    #   - pin_licenses.pin is the license key itself; nothing in the
+    #     codebase previously enforced at the DB level that two documents
+    #     couldn't exist for the same PIN.
+    # Startup migration/index report: logged once per boot so an operator
+    # can see index state without querying MongoDB directly.
+    _index_report = []
+    try:
+        await db.cloud_users.create_index("email", unique=True)
+        _index_report.append("cloud_users.email: unique OK")
+    except Exception as e:
+        _index_report.append(f"cloud_users.email: FAILED ({e})")
+    try:
+        await db.pin_licenses.create_index("pin", unique=True)
+        _index_report.append("pin_licenses.pin: unique OK")
+    except Exception as e:
+        _index_report.append(f"pin_licenses.pin: FAILED ({e})")
+    try:
+        # login_audit_log grows unbounded otherwise -- 180-day retention is
+        # long enough for real abuse investigation, short enough not to
+        # become an unbounded collection.
+        await db.login_audit_log.create_index("ts", expireAfterSeconds=180 * 86400)
+        _index_report.append("login_audit_log.ts: TTL(180d) OK")
+    except Exception as e:
+        _index_report.append(f"login_audit_log.ts: FAILED ({e})")
+    try:
+        # Backs the password-reset single-use enforcement in
+        # cloud_reset_password(); TTL matches the token's own 30-minute
+        # expiry plus a safety buffer, so this collection never grows
+        # unbounded either.
+        await db.used_password_reset_tokens.create_index("jti", unique=True)
+        await db.used_password_reset_tokens.create_index("used_at", expireAfterSeconds=3600)
+        _index_report.append("used_password_reset_tokens: unique+TTL OK")
+    except Exception as e:
+        _index_report.append(f"used_password_reset_tokens: FAILED ({e})")
+    logger.info("[startup] index report: " + " | ".join(_index_report))
     # v6.25.3 owner directive 2026-07-17 -- push notifications now go through
     # OneSignal's REST API (backend/notifications.py), which reads its
     # App ID/REST API Key live from db.admin_settings on every send -- no
@@ -4146,7 +4201,7 @@ async def cloud_signup(req: CloudSignupReq, response: Response, request: Request
         # find_one check above couldn't see yet.
         raise HTTPException(status_code=400, detail="Email already registered")
     token = _cloud_token(uid, req.email)
-    response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="lax", max_age=60*60*24*30)
+    response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="strict", max_age=60*60*24*30)
     return {"ok": True, "token": token, "user": {k: v for k, v in doc.items() if k != "password_hash"}}
 
 @api_router.post("/cloud/auth/login")
@@ -4159,16 +4214,16 @@ async def cloud_login(req: CloudLoginReq, response: Response, request: Request):
     if not u or not verify_password(req.password, u.get("password_hash", "")):
         await db.login_audit_log.insert_one({
             "id": str(uuid.uuid4()), "email": req.email, "ip": ip, "ok": False,
-            "role": "cloud_user", "ts": datetime.now(timezone.utc).isoformat(),
+            "role": "cloud_user", "ts": datetime.now(timezone.utc),
         })
         raise HTTPException(status_code=401, detail="Invalid email or password")
     await db.login_audit_log.insert_one({
         "id": str(uuid.uuid4()), "email": u["email"], "ip": ip, "ok": True,
-        "role": "cloud_user", "ts": datetime.now(timezone.utc).isoformat(),
+        "role": "cloud_user", "ts": datetime.now(timezone.utc),
     })
     await db.cloud_users.update_one({"id": u["id"]}, {"$set": {"last_login_at": datetime.now(timezone.utc).isoformat()}})
     token = _cloud_token(u["id"], u["email"])
-    response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="lax", max_age=60*60*24*30)
+    response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="strict", max_age=60*60*24*30)
     u.pop("_id", None); u.pop("password_hash", None)
     return {"ok": True, "token": token, "user": u}
 
@@ -4192,6 +4247,122 @@ async def cloud_me(user: dict = Depends(get_cloud_user)):
         except Exception:
             u["days_remaining"] = 0; u["subscription_active"] = False
     return u
+
+# ---------------------------------------------------------------------
+# v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- Cloud user password
+# reset, account deletion, and data export.
+# ---------------------------------------------------------------------
+
+class CloudForgotPasswordReq(BaseModel):
+    email: str
+
+class CloudResetPasswordReq(BaseModel):
+    token: str
+    new_password: str
+
+class CloudDeleteAccountReq(BaseModel):
+    password: str
+    confirm: bool = False
+
+def _password_reset_token(user_id: str, jti: str) -> str:
+    return jwt.encode(
+        {"sub": user_id, "type": "password_reset", "jti": jti,
+         "exp": datetime.now(timezone.utc) + timedelta(minutes=30)},
+        JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+@api_router.post("/cloud/auth/forgot-password")
+async def cloud_forgot_password(req: CloudForgotPasswordReq, request: Request):
+    ip = _client_ip(request)
+    email = req.email.lower().strip()
+    _rate_limit(f"forgot_password_ip:{ip}", max_requests=5, window_seconds=600)
+    _rate_limit(f"forgot_password_email:{email}", max_requests=3, window_seconds=600)
+    user = await db.cloud_users.find_one({"email": email})
+    # Always return the same generic response whether or not the account
+    # exists -- a different response here would let an attacker enumerate
+    # registered emails.
+    if user:
+        jti = str(uuid.uuid4())
+        token = _password_reset_token(user["id"], jti)
+        reset_url = f"{PUBLIC_SITE_URL}/command/reset-password?token={token}"
+        html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+<h2 style="color:#B8860B;">Reset your XauAI Sniper Command Center password</h2>
+<p>Click the link below to set a new password. This link expires in 30 minutes and can only be used once.</p>
+<p><a href="{reset_url}" style="display:inline-block;background:#B8860B;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;">Reset password</a></p>
+<p style="color:#888;font-size:12px;">If you didn't request this, you can safely ignore this email -- your password will not be changed.</p>
+</div>"""
+        await _send_email(email, "Reset your XauAI Sniper password", html)
+    return {"ok": True, "message": "If an account exists for that email, a reset link has been sent."}
+
+@api_router.post("/cloud/auth/reset-password")
+async def cloud_reset_password(req: CloudResetPasswordReq, request: Request):
+    ip = _client_ip(request)
+    _rate_limit(f"reset_password_ip:{ip}", max_requests=10, window_seconds=600)
+    try:
+        payload = jwt.decode(req.token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=400, detail="Reset link has expired. Request a new one.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=400, detail="Invalid reset link.")
+    if payload.get("type") != "password_reset":
+        raise HTTPException(status_code=400, detail="Invalid reset link.")
+    jti = payload.get("jti", "")
+    # Single-use enforcement: a JWT alone stays valid until it expires even
+    # after use, so a leaked/logged link could be replayed. A unique index
+    # on jti (created at startup) makes the second insert_one for the same
+    # token raise DuplicateKeyError, closing that window.
+    try:
+        await db.used_password_reset_tokens.insert_one({"jti": jti, "used_at": datetime.now(timezone.utc)})
+    except DuplicateKeyError:
+        raise HTTPException(status_code=400, detail="This reset link has already been used.")
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be 8+ characters")
+    if not any(c.isalpha() for c in req.new_password) or not any(c.isdigit() for c in req.new_password):
+        raise HTTPException(status_code=400, detail="Password must include at least one letter and one number")
+    result = await db.cloud_users.update_one(
+        {"id": payload["sub"]}, {"$set": {"password_hash": hash_password(req.new_password)}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Account no longer exists.")
+    return {"ok": True, "message": "Password updated. You can now log in with your new password."}
+
+@api_router.get("/cloud/account/export")
+async def cloud_account_export(user: dict = Depends(get_cloud_user)):
+    """Real, non-fabricated data-export: everything this account's identity
+    actually touches, as it exists right now -- not a synthetic sample."""
+    u = dict(user); u.pop("_id", None); u.pop("password_hash", None)
+    lic = await _get_user_license(user)
+    if lic: lic.pop("_id", None)
+    login_history = await db.login_audit_log.find(
+        {"email": user["email"], "role": "cloud_user"}, {"_id": 0}
+    ).sort("ts", -1).limit(200).to_list(length=200)
+    for entry in login_history:
+        if isinstance(entry.get("ts"), datetime):
+            entry["ts"] = entry["ts"].isoformat()
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "account": u,
+        "linked_license": lic,
+        "login_history": login_history,
+    }
+
+@api_router.post("/cloud/account/delete")
+async def cloud_account_delete(req: CloudDeleteAccountReq, response: Response, user: dict = Depends(get_cloud_user)):
+    if not req.confirm:
+        raise HTTPException(status_code=400, detail="Confirmation is required to delete your account.")
+    if not verify_password(req.password, user.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    # Hard-deletes the Command Center account identity only -- the
+    # underlying purchased PIN license and its trade history are NOT
+    # deleted (they're the product the owner sold and real financial/
+    # trading records, not this account's personal data), matching the
+    # scope of every other real "delete my account" flow: your login stops
+    # working, your purchase/trade history doesn't get destroyed.
+    await db.account_deletion_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "user_id": user["id"], "email": user["email"],
+        "deleted_at": datetime.now(timezone.utc),
+    })
+    await db.cloud_users.delete_one({"id": user["id"]})
+    response.delete_cookie("cloud_token")
+    return {"ok": True, "message": "Account deleted."}
 
 @api_router.post("/cloud/license/link")
 async def cloud_license_link(req: CloudLicenseLinkReq, user: dict = Depends(get_cloud_user)):
