@@ -164,7 +164,9 @@ def test_download_release_with_valid_token_succeeds_and_logs():
         assert response is not None  # FileResponse, not an exception
         log = await srv.db.ea_download_log.find_one({"user_id": user["id"]})
         assert log is not None
-        assert log["version"] == "v6.25.2"
+        # Compare against the manifest's actual current_version rather than a
+        # hardcoded string -- this test shouldn't need editing every release.
+        assert log["version"] == srv._current_ea_release()["version"]
         await _clear()
     _run(go())
 

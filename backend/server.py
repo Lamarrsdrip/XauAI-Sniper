@@ -1093,6 +1093,14 @@ async def download_xauindex_package_retired():
 
 @api_router.get("/performance/summary")
 async def get_performance_summary():
+    # v6.25.3 owner directive 2026-07-17 (Phase 7 truthfulness cleanup) --
+    # this endpoint used to also return an "ai_features" block
+    # (market_classification_accuracy, learning_rate_current, etc.) that was
+    # either a hardcoded 0 or a trivial reshuffle of wins/losses/total
+    # already reported elsewhere in this same response, mislabeled as
+    # measured AI performance. Nothing in this codebase actually measures
+    # those things. It had no frontend consumer (grepped before removal) --
+    # removed rather than leaving fabricated numbers reachable.
     try:
         trades = await db.trade_journal.find({}, {"_id": 0}).sort("created_ts", 1).to_list(length=5000)
     except Exception as e:
@@ -1141,16 +1149,6 @@ async def get_performance_summary():
         "strategy_breakdown": [],
         "weekly_data": [],
         "equity_curve": [],
-        "ai_features": {
-            "market_classification_accuracy": 0,
-            "avg_confidence_on_wins": 0,
-            "avg_confidence_on_losses": 0,
-            "pattern_memory_size": total,
-            "adaptation_cycles": total,
-            "learning_rate_current": 0,
-            "win_rate_after_learning": round(wins / total * 100, 1) if total else 0,
-            "loss_avoidance_rate": round((total - losses) / total * 100, 1) if total else 0,
-        },
     }
     if not total:
         return summary
@@ -3353,6 +3351,30 @@ class TradeJournalEntry(BaseModel):
     signature: str = ""
     setup: str = ""
     regime: str = ""
+    # v6.25.3 owner directive 2026-07-17 (Phase 7A) -- rich, verified trade-
+    # ledger fields. All Optional/defaulted so EA installs older than
+    # v6.25.3 (which only ever send the fields above) keep working
+    # unchanged against this same endpoint -- this is an additive schema
+    # change, not a breaking one. A record with ticket==0 is from a
+    # pre-v6.25.3 EA and is excluded from ledger-derived analytics (real
+    # risk/R/MFE/MAE data was never sent for it, so computing those fields
+    # would mean inventing numbers -- exactly what this phase forbids).
+    ticket: int = 0
+    entry_price: float = 0
+    opened_at: int = 0          # unix seconds, broker deal time
+    closed_at: int = 0          # unix seconds, broker deal time
+    commission: float = 0
+    swap: float = 0
+    original_risk_usd: float = 0
+    final_r: float = 0
+    mae_r: float = 0
+    mfe_r: float = 0
+    campaign_id: str = ""
+    ea_version: str = ""
+    account_login: str = ""
+    exit_reason: str = ""
+    exit_owner: str = ""
+    family: str = ""            # NORMAL / COUNTER_EXCURSION / LEGACY_EXHAUSTION_COUNTER
 
 @api_router.post("/journal/log")
 async def log_trade_journal(entry: TradeJournalEntry):
@@ -3361,6 +3383,7 @@ async def log_trade_journal(entry: TradeJournalEntry):
         doc["created_at"] = datetime.now(timezone.utc).isoformat()
         doc["created_ts"] = time.time()
         doc["win_rate"] = round(entry.wins / entry.total_trades * 100, 1) if entry.total_trades > 0 else 0
+        doc["has_rich_ledger_data"] = entry.ticket > 0  # true only for v6.25.3+ EA reports
         await db.trade_journal.insert_one(doc)
         # Also index into hive_signatures for fast aggregate lookup
         if entry.signature:
@@ -3848,6 +3871,119 @@ async def _get_user_license(user: dict) -> Optional[dict]:
     if not query:
         return None
     return await db.pin_licenses.find_one(query, {"_id": 0})
+
+# v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- Command Center
+# Analytics page truthfulness. Replaces the frontend's synthetic 5-point
+# "equity curve" (literally `[base-d*1.4, base-d, base-d*0.55, base-d*0.2,
+# equity]` -- a made-up interpolation, not real history) with real
+# aggregates computed from actual closed-trade records reported by the EA
+# at close (see TradeJournalEntry's rich fields, v6.25.3+ EA only).
+# MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS: below this count, the numbers are
+# too noisy/sparse to present as real analytics -- return sufficient_data
+# = false and let the frontend show "Not enough verified data" rather than
+# a misleadingly precise win-rate/profit-factor off of 1-2 trades.
+MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS = 5
+
+@api_router.get("/cloud/performance/analytics")
+async def cloud_performance_analytics(user: dict = Depends(get_cloud_user)):
+    lic = await _get_user_license(user)
+    if not lic or not lic.get("pin"):
+        raise HTTPException(status_code=404, detail="No active license linked to this account.")
+    pin = lic["pin"]
+
+    # Only records with real per-trade data (ticket>0, sent by v6.25.3+ EA)
+    # feed analytics -- older thin records (result/profit/price only) have
+    # no risk/R/MFE/MAE/campaign data and would force fabricating it.
+    query = {"pin": pin, "has_rich_ledger_data": True}
+    trades = await db.trade_journal.find(query, {"_id": 0}).sort("closed_at", 1).to_list(length=5000)
+    total = len(trades)
+
+    if total < MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS:
+        return {
+            "sufficient_data": False,
+            "verified_trade_count": total,
+            "minimum_required": MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS,
+            "message": "NOT ENOUGH VERIFIED DATA",
+        }
+
+    closed_wins = [t for t in trades if t.get("result") == "WIN"]
+    closed_losses = [t for t in trades if t.get("result") == "LOSS"]
+    profits = [float(t.get("profit") or 0) for t in trades]
+    gross_profit = sum(p for p in profits if p > 0)
+    gross_loss = abs(sum(p for p in profits if p < 0))
+
+    # Real equity curve: running cumulative realized profit ordered by the
+    # actual broker close time of each trade -- not an interpolation.
+    equity_curve = []
+    running = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+    for t in trades:
+        running += float(t.get("profit") or 0)
+        peak = max(peak, running)
+        max_drawdown = max(max_drawdown, peak - running)
+        equity_curve.append({
+            "closed_at": t.get("closed_at", 0),
+            "ticket": t.get("ticket", 0),
+            "cumulative_profit": round(running, 2),
+        })
+
+    r_values = [float(t.get("final_r") or 0) for t in trades if float(t.get("original_risk_usd") or 0) > 0]
+    mae_values = [float(t.get("mae_r") or 0) for t in trades if t.get("mae_r")]
+    mfe_values = [float(t.get("mfe_r") or 0) for t in trades if t.get("mfe_r")]
+
+    def _breakdown(key: str) -> dict:
+        buckets: Dict[str, Dict[str, float]] = {}
+        for t in trades:
+            k = str(t.get(key) or "UNKNOWN")
+            b = buckets.setdefault(k, {"trades": 0, "wins": 0, "profit": 0.0})
+            b["trades"] += 1
+            if t.get("result") == "WIN": b["wins"] += 1
+            b["profit"] += float(t.get("profit") or 0)
+        for b in buckets.values():
+            b["profit"] = round(b["profit"], 2)
+            b["win_rate"] = round(b["wins"] / b["trades"] * 100, 1) if b["trades"] else 0
+        return buckets
+
+    def _session_tag(hour: int) -> str:
+        if 0 <= hour < 8: return "ASIAN"
+        if 8 <= hour < 13: return "LONDON"
+        if 13 <= hour < 17: return "LONDON_NY_OVERLAP"
+        if 17 <= hour < 21: return "NEW_YORK"
+        return "LATE_NY"
+
+    session_buckets: Dict[str, Dict[str, float]] = {}
+    for t in trades:
+        tag = _session_tag(int(t.get("hour") or 0))
+        b = session_buckets.setdefault(tag, {"trades": 0, "wins": 0, "profit": 0.0})
+        b["trades"] += 1
+        if t.get("result") == "WIN": b["wins"] += 1
+        b["profit"] += float(t.get("profit") or 0)
+    for b in session_buckets.values():
+        b["profit"] = round(b["profit"], 2)
+        b["win_rate"] = round(b["wins"] / b["trades"] * 100, 1) if b["trades"] else 0
+
+    winning_profits = [p for p in profits if p > 0]
+    losing_profits = [p for p in profits if p < 0]
+
+    return {
+        "sufficient_data": True,
+        "verified_trade_count": total,
+        "realized_pnl": round(sum(profits), 2),
+        "win_rate": round(len(closed_wins) / total * 100, 1),
+        "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else (round(gross_profit, 2) if gross_profit > 0 else 0),
+        "avg_r": round(sum(r_values) / len(r_values), 3) if r_values else None,
+        "avg_mae_r": round(sum(mae_values) / len(mae_values), 3) if mae_values else None,
+        "avg_mfe_r": round(sum(mfe_values) / len(mfe_values), 3) if mfe_values else None,
+        "max_drawdown": round(max_drawdown, 2),
+        "avg_win": round(sum(winning_profits) / len(winning_profits), 2) if winning_profits else 0,
+        "avg_loss": round(sum(losing_profits) / len(losing_profits), 2) if losing_profits else 0,
+        "equity_curve": equity_curve,
+        "setup_breakdown": _breakdown("setup"),
+        "family_breakdown": _breakdown("family"),
+        "machine_breakdown": _breakdown("account_login"),
+        "session_breakdown": session_buckets,
+    }
 
 
 @api_router.post("/download/request-token")

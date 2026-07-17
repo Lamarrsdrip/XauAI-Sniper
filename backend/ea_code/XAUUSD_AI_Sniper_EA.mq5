@@ -1978,9 +1978,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.2"
-#define XAUAI_EA_VERSION_NUM "6.25.2"
-#define XAUAI_BUILD_HASH "v6252-m10-origination-fallback-freshness-bar-identity-20260717"
+#define XAUAI_EA_VERSION "v6.25.3"
+#define XAUAI_EA_VERSION_NUM "6.25.3"
+#define XAUAI_BUILD_HASH "v6253-rich-trade-ledger-telemetry-20260717"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
@@ -27473,6 +27473,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // Fetch it by looking at the position's first deal (entry) with same position ID.
    lastClose.entryPrice = dPrice;   // fallback
    lastClose.slDist     = lastSignalATR > 0 ? lastSignalATR * InpSLMultiplier : 3.0;
+   // v6.25.3 — same entry-deal scan as above, also captures the real
+   // opened_at broker time for rich trade-ledger telemetry (Command Center
+   // Phase 7A real equity curve/analytics) -- never a locally-estimated time.
+   datetime openedAtTime = 0;
    if(posId > 0 && HistorySelectByPosition(posId))
    {
       int nDeals = HistoryDealsTotal();
@@ -27483,6 +27487,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(t, DEAL_ENTRY) == DEAL_ENTRY_IN)
          {
             lastClose.entryPrice = HistoryDealGetDouble(t, DEAL_PRICE);
+            openedAtTime = (datetime)HistoryDealGetInteger(t, DEAL_TIME);
             break;
          }
       }
@@ -27522,7 +27527,31 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          CloudPostSignalClose(sigId, dPrice, reason);
       }
    }
-   LogTradeToServer(wasWin ? "WIN" : wasLoss ? "LOSS" : "BE", dPrice, profit, dVolume, dirStr);
+   // v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- rich trade-ledger
+   // telemetry. Every value here already exists in this function's own
+   // scope or is a fresh, cheap, read-only lookup of state this same
+   // OnTradeTransaction close path already computed a few lines above
+   // (eqIdx/g_entryQuality for riskUSD+MAE/MFE, closingCampaignId,
+   // resolvedExitReason, closedBy, dCommission/dSwap/dealTicket) -- nothing
+   // here is a new tracking structure or an invented number.
+   {
+      double riskUSDForLog = 0.0, maeRForLog = 0.0, mfeRForLog = 0.0;
+      int eqIdxForLog = XAU_EntryQuality_FindIdx(posId);
+      if(eqIdxForLog >= 0)
+      {
+         riskUSDForLog = g_entryQuality[eqIdxForLog].riskUSD;
+         maeRForLog    = g_entryQuality[eqIdxForLog].maeR[3];
+         mfeRForLog    = g_entryQuality[eqIdxForLog].mfeR[3];
+      }
+      long dealMagicForLog = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+      string familyForLog = (dealMagicForLog == InpCounterExcursionMagicNumber) ? "COUNTER_EXCURSION" :
+                             (dealMagicForLog == InpExhaustionCounterMagicNumber) ? "LEGACY_EXHAUSTION_COUNTER" :
+                             "NORMAL";
+      LogTradeToServer(wasWin ? "WIN" : wasLoss ? "LOSS" : "BE", dPrice, profit, dVolume, dirStr,
+                        posId, lastClose.entryPrice, openedAtTime, dCommission, dSwap,
+                        riskUSDForLog, maeRForLog, mfeRForLog, closingCampaignId,
+                        resolvedExitReason, closedBy, familyForLog);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -36592,14 +36621,40 @@ string CloudExtractGrade(string reason)
    return StringSubstr(reason, a + 1, b - a - 1);
 }
 
-void LogTradeToServer(string result2, double price, double profit, double lots, string dir)
+// v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- extended with rich,
+// verified trade-ledger fields (ticket/entry/opened_at/commission/swap/
+// original_risk_usd/final_r/mae_r/mfe_r/campaign_id/ea_version/
+// account_login/exit_reason/exit_owner/family) so the Command Center's
+// Analytics page can compute a REAL equity curve/win-rate/profit-factor/
+// average-R/drawdown instead of the old thin result+price+profit report
+// (which is all /api/cloud/performance/analytics on the backend can no
+// longer build real numbers from -- see server.py TradeJournalEntry).
+// All new params are additive on the backend (Optional/defaulted), so
+// this is safe to roll out gradually across Mac/VPS without a synchronized
+// cutover.
+void LogTradeToServer(string result2, double price, double profit, double lots, string dir,
+                       ulong ticket, double entryPrice, datetime openedAt, double commission, double swap,
+                       double riskUSD, double maeR, double mfeR, long campaignId,
+                       string exitReason, string exitOwner, string family)
 {
    if(InpBacktestMode) return;                    // Tester: no network
    if(StringLen(InpServerURL) < 10) return;
    MqlDateTime dt; TimeCurrent(dt);
-   string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f,\"signature\":\"%s\",\"setup\":\"%s\",\"regime\":\"%s\"}",
+   double finalR = (riskUSD > 0.0) ? (profit / riskUSD) : 0.0;
+   string body = StringFormat(
+      "{\"pin\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,"
+      "\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f,"
+      "\"signature\":\"%s\",\"setup\":\"%s\",\"regime\":\"%s\","
+      "\"ticket\":%I64u,\"entry_price\":%.2f,\"opened_at\":%I64d,\"closed_at\":%I64d,"
+      "\"commission\":%.2f,\"swap\":%.2f,\"original_risk_usd\":%.2f,\"final_r\":%.4f,\"mae_r\":%.4f,\"mfe_r\":%.4f,"
+      "\"campaign_id\":\"%I64d\",\"ea_version\":\"%s\",\"account_login\":\"%I64d\","
+      "\"exit_reason\":\"%s\",\"exit_owner\":\"%s\",\"family\":\"%s\"}",
       InpLicensePIN, Symbol(), dir, result2, price, profit, lots, dt.hour, dt.day_of_week, totalTrades, wins, losses, accInfo.Balance(),
-      lastSignalSignature, lastSignalSetup, RegimeName());
+      lastSignalSignature, lastSignalSetup, RegimeName(),
+      ticket, entryPrice, (long)openedAt, (long)TimeCurrent(),
+      commission, swap, riskUSD, finalR, maeR, mfeR,
+      campaignId, XAUAI_EA_VERSION, AccountInfoInteger(ACCOUNT_LOGIN),
+      BotMonitorJsonSafe(exitReason, 220), BotMonitorJsonSafe(exitOwner, 40), family);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    WebRequest("POST", InpServerURL + "/api/journal/log", "Content-Type: application/json\r\n", 5000, pd, res, rh);

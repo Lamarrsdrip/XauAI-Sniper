@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.25.2",
+  "current_version": "v6.25.3",
   "releases": {
     "v6.25.2": {
       "version": "v6.25.2",
@@ -11,6 +11,18 @@
       "ex5_sha256": "98586d59bd39190a43d8a2d12057a882caba4c9b88e1361982908afc28676f5a",
       "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.2.ex5",
       "release_notes": "M10 can now originate its own qualifying trade candidate when ScoreSetups proposes nothing or a stale/mismatched direction, instead of only vetoing. Fixed M10 freshness classification (bar-identity based, not raw elapsed seconds).",
+      "stable_status": false
+    },
+    "v6.25.3": {
+      "version": "v6.25.3",
+      "edition": "Rich trade-ledger telemetry (Phase 7A)",
+      "source_commit": "70ce33e3046ca5225a075e90ca391d62e280d486",
+      "build_timestamp": "2026-07-17T16:13:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe, isolated sandbox only -- NOT YET verified on the owner's Mac live install or VPS; do not treat as hash-confirmed across all three until that verification happens)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.3.ex5",
+      "ex5_sha256": "336f38848ef88cd83b3a5dfb1eaa255f3059abcc43a3eca3d4a2985faf2020ec",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.3.ex5",
+      "release_notes": "LogTradeToServer() now reports rich per-trade data at close (broker ticket, entry/exit price and time, commission, swap, original risk USD, final R, MAE/MFE in R, campaign ID, EA version, account login, exit reason, exit owner, trade family) to a new additive /api/journal/log schema. Backend GET /api/cloud/performance/analytics computes real win rate, profit factor, average R, drawdown, and a real cumulative equity curve from this data, replacing the Command Center's synthetic 5-point interpolated equity curve. Older EA installs posting the pre-v6.25.3 thin payload continue to work unchanged; their trades are excluded from analytics (no fabricated risk/R data) rather than breaking ingestion.",
       "stable_status": false
     }
   }

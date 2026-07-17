@@ -608,20 +608,23 @@ export default function CloudDashboard() {
   const [propFirmConfirmed, setPropFirmConfirmed] = useState(false);
   const [propFirmBusy, setPropFirmBusy] = useState(false);
   const propFirmDirty = useRef(false);
+  const [analytics, setAnalytics] = useState(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [meR, stR, actR, cmdR, licR, pfR] = await Promise.all([
+      const [meR, stR, actR, cmdR, licR, pfR, anR] = await Promise.all([
         commandAxios.get("/cloud/auth/me"),
         commandAxios.get("/cloud/monitor/status"),
         commandAxios.get("/cloud/monitor/activity", { params:{ kind:filter, limit:100 } }),
         commandAxios.get("/cloud/command/recent",   { params:{ limit:20 } }),
         commandAxios.get("/cloud/license/status"),
         commandAxios.get("/cloud/prop-firm/config"),
+        commandAxios.get("/cloud/performance/analytics").catch(()=>({ data:null })),
       ]);
       setMe(meR.data); setStatus(stR.data);
       setEvents(actR.data.events||[]); setCommands(cmdR.data.commands||[]);
       setLicense(licR.data); setPropFirm(pfR.data);
+      setAnalytics(anR.data);
       if (!propFirmDirty.current && pfR.data?.requested)
         setPropFirmForm({ ...DEFAULT_PROP, ...pfR.data.requested });
       if (licR.data?.license?.activation_key) setLicenseInput(licR.data.license.activation_key);
@@ -673,12 +676,19 @@ export default function CloudDashboard() {
   const tradingOk   = Boolean(heartbeat.algo_trading && heartbeat.trading_allowed && heartbeat.mt5_connected);
   const statusText  = online ? heartbeat.bot_state||"ONLINE" : "NO HEARTBEAT";
   const eaVersion   = heartbeat.ea_version || licenseInfo.ea_version || status?.license?.ea_version || "Waiting";
-  const equityPoints = useMemo(()=>{
-    const base = Number(heartbeat.balance||heartbeat.equity||0);
-    if (!base) return [];
-    const d = Number(heartbeat.daily_pnl||0);
-    return [base-d*1.4, base-d, base-d*0.55, base-d*0.2, Number(heartbeat.equity||base)];
-  },[heartbeat.balance,heartbeat.daily_pnl,heartbeat.equity]);
+  // v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- this used to be
+  // `[base-d*1.4, base-d, base-d*0.55, base-d*0.2, equity]`, a made-up
+  // 5-point interpolation from the CURRENT balance/equity/daily_pnl, not
+  // real trade history. Now sourced from GET /cloud/performance/analytics'
+  // real cumulative equity curve (built from actual EA-reported closed
+  // trades). Empty until enough verified trades exist -- Sparkline renders
+  // a flat line rather than a fabricated shape, and hasSufficientAnalytics
+  // below lets pages show "Not enough verified data" explicitly.
+  const equityPoints = useMemo(() => {
+    if (!analytics?.sufficient_data || !Array.isArray(analytics.equity_curve)) return [];
+    return analytics.equity_curve.map((p) => Number(p.cumulative_profit || 0));
+  }, [analytics]);
+  const hasSufficientAnalytics = Boolean(analytics?.sufficient_data);
 
   if (loading||!me) return (
     <div className="flex min-h-screen items-center justify-center bg-[#050507] text-white">
@@ -691,9 +701,9 @@ export default function CloudDashboard() {
 
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion}>
-      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} events={events} setActive={setActive} refresh={fetchAll} />}
+      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} />}
       {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} />}
-      {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} />}
+      {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
       {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} />}
       {active==="control"      && <ControlPage commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
@@ -842,7 +852,7 @@ function M10SignalCard({ events, heartbeat }) {
   );
 }
 
-function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, events, setActive, refresh }) {
+function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh }) {
   const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
   const ddNum      = Number(heartbeat.drawdown||0);
   const riskTone   = ddNum>5?"red":ddNum>2?"amber":"green";
@@ -883,6 +893,9 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         </div>
         <div className="mt-4">
           <Sparkline points={equityPoints} tone={online?(openTrades>0?"#fbbf24":"#34d399"):"#d4af37"} height="h-[72px]" />
+          {online && !hasSufficientAnalytics && (
+            <p className="mt-1.5 text-[10px] text-white/30">Equity curve fills in once the EA reports enough real closed trades — see Analytics.</p>
+          )}
         </div>
       </div>
 
@@ -1000,22 +1013,40 @@ function TradingPage({ heartbeat, events, online, linked, openCommand }) {
 }
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
-function AnalyticsPage({ heartbeat, events, equityPoints }) {
+function AnalyticsPage({ heartbeat, events, equityPoints, analytics }) {
   const trades = weightedEventCount(events.filter(e=>eventCategory(e)==="entries"));
   const blocks = weightedEventCount(events.filter(e=>eventCategory(e)==="blocks"));
   const errors = weightedEventCount(events.filter(e=>eventCategory(e)==="errors"));
+  const sufficient = Boolean(analytics?.sufficient_data);
   return (
     <div className="space-y-4">
+      {/* v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- this curve and
+          the metrics below it are now built from real closed-trade records
+          the EA reports at close (GET /cloud/performance/analytics), not a
+          made-up interpolation of the current balance/equity/daily_pnl. */}
       <Card title="Equity curve">
         <div className="mb-2 flex items-center justify-between">
-          <span className={MONO_LABEL}>Session estimate</span>
-          <span className="font-mono text-[13px] font-bold text-amber-200">{money(heartbeat.equity)}</span>
+          <span className={MONO_LABEL}>Realized P&L (verified trades)</span>
+          <span className="font-mono text-[13px] font-bold text-amber-200">
+            {sufficient ? money(analytics.realized_pnl) : "—"}
+          </span>
         </div>
         <Sparkline points={equityPoints} tone="#d4af37" height="h-28" />
+        {!sufficient && (
+          <p className="mt-2 text-[11px] leading-4 text-white/40">
+            Not enough verified data yet ({analytics?.verified_trade_count ?? 0} of {analytics?.minimum_required ?? 5} closed trades reported by the EA). This fills in automatically as your EA reports real trade closes.
+          </p>
+        )}
       </Card>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Daily P&L"     value={money(heartbeat.daily_pnl)} detail="EA heartbeat"       icon={CircleDollarSign} tone={Number(heartbeat.daily_pnl||0)>=0?"green":"red"} />
-        <Metric label="Drawdown"      value={pct(heartbeat.drawdown)}    detail="Current"             icon={Gauge}            tone={Number(heartbeat.drawdown||0)>5?"red":"amber"} />
+        <Metric label="Win rate"      value={sufficient?pct(analytics.win_rate):"—"}         detail={sufficient?`${analytics.verified_trade_count} verified trades`:"Not enough data"} icon={TrendingUp}       tone={sufficient&&analytics.win_rate>=50?"green":"amber"} />
+        <Metric label="Profit factor" value={sufficient?analytics.profit_factor.toFixed(2):"—"} detail="Gross profit / gross loss"                                                       icon={CircleDollarSign} tone={sufficient&&analytics.profit_factor>=1?"green":"red"} />
+        <Metric label="Avg R"         value={sufficient&&analytics.avg_r!=null?`${analytics.avg_r.toFixed(2)}R`:"—"} detail="Average realized R-multiple"                                icon={Gauge}            tone="neutral" />
+        <Metric label="Max drawdown"  value={sufficient?money(analytics.max_drawdown):"—"}    detail="Peak-to-trough, verified history"                                                icon={Shield}           tone={sufficient&&analytics.max_drawdown>0?"amber":"neutral"} />
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Metric label="Live P&L"      value={money(heartbeat.daily_pnl)} detail="EA heartbeat (today, unverified)" icon={CircleDollarSign} tone={Number(heartbeat.daily_pnl||0)>=0?"green":"red"} />
+        <Metric label="Floating DD"   value={pct(heartbeat.drawdown)}    detail="Current live floating"            icon={Gauge}            tone={Number(heartbeat.drawdown||0)>5?"red":"amber"} />
         <Metric label="Trade events"  value={trades}                     detail="Recent feed"         icon={TrendingUp}       tone="green" />
         <Metric label="Blocks/errors" value={`${blocks}/${errors}`}      detail="Protection vs faults" icon={Shield}          tone={errors?"red":"amber"} />
       </div>
