@@ -592,14 +592,14 @@ def test_origination_fallback_placed_after_existing_endorsement_veto_gate():
 
 
 def test_build_hash_reflects_current_release():
-    # v6.25.4 owner directive 2026-07-17 -- updated alongside the
-    # freshness/continuationEntryPaused decoupling fix; the origination-
-    # fallback CODE itself is unchanged and still covered by
-    # test_origination_fallback_placed_after_existing_endorsement_veto_gate
-    # above, so this only needs to track the current build identity, not
+    # v6.25.5 owner directive 2026-07-17 -- updated alongside the M30
+    # three-M10-consensus mode addition; the M10-legacy decision logic this
+    # file otherwise tests is unchanged (see
+    # tests/test_xau_v6255_m30_three_m10_consensus.py for the M30-specific
+    # coverage), so this only needs to track the current build identity, not
     # pin a specific historical release's hash text forever.
     ea = read(EA)
-    assert 'XAUAI_BUILD_HASH "v6254-m10-freshness-continuation-pause-decouple' in ea
+    assert 'XAUAI_BUILD_HASH "v6255-m30-three-m10-consensus' in ea
 
 
 if __name__ == "__main__":

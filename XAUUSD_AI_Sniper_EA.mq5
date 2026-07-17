@@ -1894,8 +1894,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.254"
-#property description "XAUUSD AI Sniper v6.25.4 - M10 Canonical Signal Authority, Cross-Instance Direction Reservation, Confirmed Profit-Floor, R-Exit Never-Purge-Unconfirmed"
+#property version   "6.255"
+#property description "XAUUSD AI Sniper v6.25.5 - Optional M30 Three-M10-Evidence Consensus Mode (default OFF), M10 Canonical Signal Authority, Cross-Instance Direction Reservation, Confirmed Profit-Floor, R-Exit Never-Purge-Unconfirmed"
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary decision timeframe is M10. Approved normal entries use full"
 #property description "configured risk or fail closed; no margin/aggregate/broker-limit/lot-step"
@@ -1978,9 +1978,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.4"
-#define XAUAI_EA_VERSION_NUM "6.25.4"
-#define XAUAI_BUILD_HASH "v6254-m10-freshness-continuation-pause-decouple-20260717"
+#define XAUAI_EA_VERSION "v6.25.5"
+#define XAUAI_EA_VERSION_NUM "6.25.5"
+#define XAUAI_BUILD_HASH "v6255-m30-three-m10-consensus-mode-20260717"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
@@ -2047,6 +2047,20 @@ input double InpTransitionMaxConsumedPct        = 70.0;  // percentage of origin
 input double InpTransitionPullbackResetATR       = 0.75;  // evidence-based pullback from impulse peak required before same-opportunity re-entry
 input int    InpTransitionEvidenceWindowBars     = 12;    // bounded closed-M5 sequence: reclaim/retest/displacement may arrive on separate bars
 input int    InpTransitionOpportunityMaxBars     = 36;    // stale reversal watches expire; exhaustion authority remains until market reset
+
+// v6.25.5 owner directive 2026-07-17 (URGENT ARCHITECTURE CHANGE) -- M30
+// three-M10-evidence consensus decision mode. Selectable, defaults to the
+// existing (unmodified) M10 legacy behavior. See the M30 consensus engine
+// block below (search "XAU_M30ConsensusDecision") for the full
+// implementation and its extensive header comment explaining exactly what
+// this does and does not change.
+input group "=== M30 THREE-M10-EVIDENCE CONSENSUS MODE (v6.25.5) ==="
+enum ENUM_XAU_DECISION_MODE
+{
+   XAU_DECISION_M10_LEGACY = 0,               // unchanged current behavior: every closed M10 bar can independently gate/originate a candidate
+   XAU_DECISION_M30_THREE_M10_CONSENSUS = 1   // normal candidate origination requires three consecutive closed M10 evidence snapshots to agree at each 30-minute wall-clock boundary
+};
+input ENUM_XAU_DECISION_MODE InpDecisionMode = XAU_DECISION_M10_LEGACY; // OFF by default -- must be explicitly switched on; M10 continues scanning/storing evidence every 10 minutes either way
 
 input group "=== AI AUTHORITY MODE (June 17-18 reconstruction) ==="
 // Restores the pre-v6.3.0 hierarchy: strategy + structure decide, AI advises/filters.
@@ -12910,6 +12924,589 @@ XAU_M10SignalDecision   g_m10Decision;
 long     g_m10EvidenceSeq = 0;
 datetime g_m10LastEvidenceBar = 0;
 
+// ===========================================================================
+// v6.25.5 owner directive 2026-07-17 (URGENT ARCHITECTURE CHANGE) -- M30
+// THREE-M10-EVIDENCE CONSENSUS ENGINE.
+//
+// WHAT THIS IS: an additive, selectable (InpDecisionMode) alternative to
+// the M10-legacy candidate-gating/origination logic above. M10 continues
+// scanning and building evidence every 10 minutes exactly as before in
+// BOTH modes -- nothing here changes XAU_BuildM10EvidenceSnapshot() or
+// XAU_EvaluateM10SignalDecision(). What changes, ONLY when
+// InpDecisionMode==XAU_DECISION_M30_THREE_M10_CONSENSUS, is which
+// authority is allowed to gate/originate a fresh NORMAL candidate: instead
+// of the single latest M10 decision (g_m10Decision), it's a weighted
+// consensus of the three most recent CONSECUTIVE, COMPLETE, closed M10
+// evidence snapshots, recomputed once per 30-minute wall-clock boundary
+// (:00 and :30, broker server time).
+//
+// WHAT THIS DOES NOT TOUCH: risk sizing, SL/1.20x widening, the 120-180s
+// entry timer, the 0.30R missed-move rule, FinalEntryArbiter, direction
+// exclusivity, the cross-machine backend reservation, pyramid additions,
+// Counter-Excursion (separate magic number, never gated by M10 or M30),
+// or any tick-based exit/position management. All of those are REUSED
+// unmodified -- see the M30 gate/origination block inside OnTick() (search
+// "M30 GATE") for exactly how the SAME shared downstream pipeline every
+// M10-legacy/ADAPTIVE_REVERSAL_RECLAIM candidate already uses is reused
+// for M30-originated candidates too, with no second execution lane.
+//
+// IMMUTABLE EVIDENCE HISTORY: every genuinely new, COMPLETE, FRESH-at-
+// capture-time M10 evidence snapshot is copied (never referenced by
+// pointer, never later mutated) into a small ring buffer keyed by the
+// bar's own open time, via XAU_RecordM10EvidenceIfNew() -- called once per
+// tick, immediately after XAU_EvaluateM10SignalDecision(), from the SAME
+// single call site that already exists (see "XAU_EvaluateM10SignalDecision();"
+// in OnTick()). A record is written at most once per bar; the dedupe key
+// is the bar's own open time, so no amount of repeated ticks, OnTimer
+// firings, or restarts can duplicate or mutate an already-stored record
+// (restarts simply start the buffer empty again -- see the M30 slot
+// function's own comment on restart behavior).
+// ===========================================================================
+
+// M30 consensus decision taxonomy (Section 8) -- mirrors ENUM_XAU_M10_DECISION's
+// own naming exactly, plus DATA_PENDING (a real "retry same slot" state
+// M10's own decision type never needed, since M10 recomputes every tick
+// rather than waiting on a 3-snapshot combination).
+enum ENUM_XAU_M30_DECISION
+{
+   M30_DECISION_BUY_CANDIDATE,
+   M30_DECISION_SELL_CANDIDATE,
+
+   M30_DECISION_WAIT_FOR_BUY_RETRACE,
+   M30_DECISION_WAIT_FOR_SELL_RETRACE,
+
+   M30_DECISION_TRANSITION_WATCH,
+   M30_DECISION_RANGE_NO_TRADE,
+   M30_DECISION_NO_VALID_SIGNAL,
+
+   M30_DECISION_DATA_PENDING,
+   M30_DECISION_DATA_UNAVAILABLE
+};
+
+// One canonical M30 consensus object per slot (Section 8) -- there is
+// exactly one function that produces this (XAU_BuildM30ConsensusDecision(),
+// defined below), and every M30-mode gate/origination call site reads the
+// SAME cached g_m30Decision for the current slot rather than each
+// independently recomputing its own direction.
+struct XAU_M30ConsensusDecision
+{
+   string   slotId;
+   datetime slotCloseTime;
+
+   long     oldestEvidenceId;
+   long     middleEvidenceId;
+   long     newestEvidenceId;
+
+   datetime oldestBarOpen;
+   datetime middleBarOpen;
+   datetime newestBarOpen;
+
+   double   weightedBuyCaseScore;
+   double   weightedSellCaseScore;
+
+   int      buyObservationWins;
+   int      sellObservationWins;
+
+   double   directionalPersistence;
+   double   confidence;
+
+   int      preferredDirection;
+   ENUM_XAU_M30_DECISION decisionType;
+
+   bool     newestSupportsDirection;
+   bool     retracementRequired;
+   bool     dataComplete;
+   bool     candidateCreated;
+
+   string   exactReason;
+};
+
+// Immutable per-bar evidence+decision record (Section 4 of the owner spec).
+// Combines the fields XAU_M10EvidenceSnapshot and XAU_M10SignalDecision
+// already compute -- no new scoring/strategy logic, purely a frozen copy.
+struct XAU_M10EvidenceRecord
+{
+   string   symbol;
+   long     evidenceId;
+   datetime barOpenTime;
+   datetime barCloseTime;
+   datetime capturedAt;
+
+   int      evaluatedShift;
+   string   freshnessState;
+   string   dataState;
+   bool     complete;
+
+   int      trendDirection;
+   double   trendStrength;
+   string   trendState;
+
+   double   buyPressure;
+   double   sellPressure;
+   double   buyPressureSlope;
+   double   sellPressureSlope;
+
+   double   continuationScore;
+   double   exhaustionScore;
+   double   exhaustionPct;
+   int      exhaustedDirection;
+
+   string   structureState;
+   bool     bullishBos;
+   bool     bearishBos;
+   bool     bullishReclaim;
+   bool     bearishReclaim;
+   bool     bullishDisplacement;
+   bool     bearishDisplacement;
+
+   string   pullbackState;
+   string   locationState;
+
+   double   buyRoomR;
+   double   sellRoomR;
+
+   string   volatilityState;
+   string   newsState;
+
+   double   buyCaseScore;
+   double   sellCaseScore;
+
+   int      preferredDirection;
+   string   m10DecisionType;
+   string   exactReason;
+};
+
+#define XAU_M10_HISTORY_SIZE 8
+XAU_M10EvidenceRecord g_m10History[XAU_M10_HISTORY_SIZE];
+int      g_m10HistoryCount = 0;             // how many slots are actually populated (caps at XAU_M10_HISTORY_SIZE)
+datetime g_m10HistoryLastRecordedBar = 0;    // dedupe key -- the barOpenTime of the most recently recorded record
+
+// Records the CURRENT g_m10Snapshot/g_m10Decision as a new immutable
+// history entry, but ONLY if: it is for a genuinely new bar (not already
+// recorded), it is the FRESH/latest bar at capture time (never backfills
+// a DEGRADED read as if it were a first-class observation -- Section 4:
+// "the same M10 bar must always produce the same stored evidence ID and
+// snapshot identity"), and it is dataState==COMPLETE (Section 19: pending/
+// incomplete data must never be stored as if it were a real observation).
+// Called once per tick from the single existing XAU_EvaluateM10SignalDecision()
+// call site -- no new scan cadence, no second evidence-collection loop.
+void XAU_RecordM10EvidenceIfNew()
+{
+   if(g_m10Snapshot.closedBarTime <= 0) return;
+   if(g_m10Snapshot.closedBarTime == g_m10HistoryLastRecordedBar) return; // already recorded this bar
+   if(!g_m10Snapshot.complete) return;               // freshness==STALE or dataState==UNAVAILABLE -- not a real observation
+   if(g_m10Snapshot.freshnessState != "FRESH") return; // only record a bar while it IS the latest closed bar, never a DEGRADED (one-behind) read
+
+   for(int i = XAU_M10_HISTORY_SIZE - 1; i > 0; i--)
+      g_m10History[i] = g_m10History[i - 1];
+
+   XAU_M10EvidenceRecord rec;
+   ZeroMemory(rec);
+   rec.symbol             = Symbol();
+   rec.evidenceId         = g_m10Snapshot.evidenceId;
+   rec.barOpenTime        = g_m10Snapshot.evaluatedBarOpen;
+   rec.barCloseTime       = g_m10Snapshot.evaluatedBarClose;
+   rec.capturedAt         = g_m10Snapshot.capturedAt;
+   rec.evaluatedShift     = g_m10Snapshot.evaluatedShift;
+   rec.freshnessState     = g_m10Snapshot.freshnessState;
+   rec.dataState          = g_m10Snapshot.dataState;
+   rec.complete           = g_m10Snapshot.complete;
+   rec.trendDirection     = g_m10Snapshot.trendDirection;
+   rec.trendStrength      = g_m10Snapshot.trendStrength;
+   rec.trendState         = g_m10Snapshot.trendState;
+   rec.buyPressure        = g_m10Snapshot.buyPressure;
+   rec.sellPressure       = g_m10Snapshot.sellPressure;
+   rec.buyPressureSlope   = g_m10Snapshot.buyPressureSlope;
+   rec.sellPressureSlope  = g_m10Snapshot.sellPressureSlope;
+   rec.continuationScore  = g_m10Snapshot.continuationScore;
+   rec.exhaustionScore    = g_m10Snapshot.exhaustionScore;
+   rec.exhaustionPct      = g_m10Snapshot.exhaustionPct;
+   rec.exhaustedDirection = g_m10Snapshot.exhaustedDirection;
+   rec.structureState     = g_m10Snapshot.structureState;
+   rec.bullishBos         = g_m10Snapshot.bullishBos;
+   rec.bearishBos         = g_m10Snapshot.bearishBos;
+   rec.bullishReclaim     = g_m10Snapshot.bullishReclaim;
+   rec.bearishReclaim     = g_m10Snapshot.bearishReclaim;
+   rec.bullishDisplacement= g_m10Snapshot.bullishDisplacement;
+   rec.bearishDisplacement= g_m10Snapshot.bearishDisplacement;
+   rec.pullbackState      = g_m10Snapshot.pullbackState;
+   rec.locationState      = g_m10Snapshot.locationState;
+   rec.buyRoomR           = g_m10Snapshot.buyRoomR;
+   rec.sellRoomR          = g_m10Snapshot.sellRoomR;
+   rec.volatilityState    = g_m10Snapshot.volatilityState;
+   rec.newsState           = g_m10Snapshot.newsState;
+   rec.buyCaseScore        = g_m10Decision.buyCaseScore;
+   rec.sellCaseScore       = g_m10Decision.sellCaseScore;
+   rec.preferredDirection  = g_m10Decision.preferredDirection;
+   rec.m10DecisionType     = XAU_M10DecisionName(g_m10Decision.decisionType);
+   rec.exactReason         = g_m10Decision.exactReason;
+
+   g_m10History[0] = rec;
+   if(g_m10HistoryCount < XAU_M10_HISTORY_SIZE) g_m10HistoryCount++;
+   g_m10HistoryLastRecordedBar = rec.barOpenTime;
+
+   PrintFormat("M10_EVIDENCE_STORED | barOpen=%s barClose=%s evidenceId=%d buyCaseScore=%.2f sellCaseScore=%.2f preferredDirection=%s decision=%s location=%s structure=%s freshness=%s dataState=%s",
+               TimeToString(rec.barOpenTime, TIME_DATE|TIME_SECONDS), TimeToString(rec.barCloseTime, TIME_DATE|TIME_SECONDS),
+               (int)rec.evidenceId, rec.buyCaseScore, rec.sellCaseScore,
+               rec.preferredDirection==1?"BUY":(rec.preferredDirection==-1?"SELL":"NONE"),
+               rec.m10DecisionType, rec.locationState, rec.structureState, rec.freshnessState, rec.dataState);
+}
+
+// Finds the exact three consecutive M10 records required for the M30 slot
+// closing at slotCloseTime (Section 6/7): bars opened at
+// slotCloseTime-1800/-1200/-600, i.e. closed at slotCloseTime-1200/-600/
+// slotCloseTime. Validates chronological consecutiveness, completeness,
+// distinct identity and same-symbol -- returns false (caller must treat as
+// DATA_PENDING) if any condition fails. Never substitutes an older bar,
+// never fabricates a default, never uses the still-forming current bar
+// (that bar's barOpenTime would be slotCloseTime itself, which this
+// function never searches for).
+bool XAU_FindM10TripleForSlot(datetime slotCloseTime, XAU_M10EvidenceRecord &oldest, XAU_M10EvidenceRecord &middle, XAU_M10EvidenceRecord &newest)
+{
+   datetime newestBarOpen = slotCloseTime - 600;
+   datetime middleBarOpen = slotCloseTime - 1200;
+   datetime oldestBarOpen = slotCloseTime - 1800;
+
+   bool foundNewest=false, foundMiddle=false, foundOldest=false;
+   for(int i = 0; i < g_m10HistoryCount; i++)
+   {
+      if(g_m10History[i].symbol != Symbol()) continue;
+      if(!foundNewest && g_m10History[i].barOpenTime == newestBarOpen) { newest = g_m10History[i]; foundNewest = true; }
+      else if(!foundMiddle && g_m10History[i].barOpenTime == middleBarOpen) { middle = g_m10History[i]; foundMiddle = true; }
+      else if(!foundOldest && g_m10History[i].barOpenTime == oldestBarOpen) { oldest = g_m10History[i]; foundOldest = true; }
+   }
+   if(!foundNewest || !foundMiddle || !foundOldest) return false;
+   if(!newest.complete || !middle.complete || !oldest.complete) return false;
+   if(middle.barOpenTime != oldest.barOpenTime + 600) return false;
+   if(newest.barOpenTime != middle.barOpenTime + 600) return false;
+   if(newest.evidenceId == middle.evidenceId || middle.evidenceId == oldest.evidenceId || newest.evidenceId == oldest.evidenceId) return false;
+   return true;
+}
+
+// M30 slot boundaries are pure broker-server wall-clock arithmetic on the
+// epoch (Section 7) -- deliberately NOT built from MqlDateTime struct
+// field mutation (hour==24 rollover across a day boundary is not reliably
+// normalized that way). Returns the most recent :00/:30 boundary at or
+// before TimeCurrent(); this is the slot that has just closed and is due
+// for a decision. Chart timeframe/local Mac-VPS timezone never enter this
+// calculation (Section 3/A.5/A.6/A.7) -- TimeCurrent() is always broker
+// server time regardless of what period the EA's chart is attached to.
+datetime XAU_M30LastCompletedSlotCloseTime()
+{
+   long epoch = (long)TimeCurrent();
+   long remainder = epoch % 1800;
+   return (datetime)(epoch - remainder);
+}
+
+string XAU_M30SlotId(datetime slotCloseTime)
+{
+   return StringFormat("%I64d|%s|%d|M30_THREE_M10|%s",
+                        AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), InpMagicNumber,
+                        TimeToString(slotCloseTime, TIME_DATE|TIME_SECONDS));
+}
+
+string XAU_M30CandidateKey(string slotId, int direction)
+{
+   return slotId + "|" + (direction==1 ? "BUY" : (direction==-1 ? "SELL" : "NONE"));
+}
+
+string XAU_M30DecisionName(ENUM_XAU_M30_DECISION d)
+{
+   switch(d)
+   {
+      case M30_DECISION_BUY_CANDIDATE:          return "BUY_CANDIDATE";
+      case M30_DECISION_SELL_CANDIDATE:         return "SELL_CANDIDATE";
+      case M30_DECISION_WAIT_FOR_BUY_RETRACE:   return "WAIT_FOR_BUY_RETRACE";
+      case M30_DECISION_WAIT_FOR_SELL_RETRACE:  return "WAIT_FOR_SELL_RETRACE";
+      case M30_DECISION_TRANSITION_WATCH:       return "TRANSITION_WATCH";
+      case M30_DECISION_RANGE_NO_TRADE:         return "RANGE_NO_TRADE";
+      case M30_DECISION_NO_VALID_SIGNAL:        return "NO_VALID_SIGNAL";
+      case M30_DECISION_DATA_PENDING:           return "DATA_PENDING";
+      case M30_DECISION_DATA_UNAVAILABLE:       return "DATA_UNAVAILABLE";
+   }
+   return "UNKNOWN";
+}
+
+// Restart/crash-recovery persistence (Section 20/21) -- the ONE thing that
+// genuinely must survive a restart to guarantee "never execute a slot
+// twice": which M30 slot was last definitively resolved (candidate or
+// no-trade). Uses the SAME MT5 terminal-scoped GlobalVariable mechanism
+// XAU_ATSavePersistentState() already uses (see XAU_ATGVPrefix()), scoped
+// additionally by build version so a version change can never trust a
+// prior build's persisted slot (Section 21: "Do not trust stale state
+// from another account or old EA version"). Deliberately does NOT persist
+// the full evidence history buffer -- MQL5 GlobalVariables are scalar-only
+// (no structs/arrays), and persisting ~30 fields x 3 slots through dozens
+// of individual GlobalVariableSet calls would be a second, parallel,
+// much-more-failure-prone persistence system for a buffer that safely
+// rebuilds itself from live closed-bar data within at most 30 minutes of
+// any restart anyway. A restart therefore means the EA is DATA_PENDING/
+// NO_VALID_SIGNAL for a short catch-up window rather than instantly having
+// three fresh snapshots -- a real, disclosed limitation, not a silent gap:
+// see XAU_BuildM30ConsensusDecision()'s own restart-safety comment.
+string XAU_M30GVPrefix()
+{
+   return "XAUAI_M30_" + XAU_ProductionStateScope() + "_" + XAUAI_EA_VERSION + "_";
+}
+
+void XAU_M30PersistProcessedSlot(datetime slotCloseTime)
+{
+   if(InpBacktestMode) return;
+   GlobalVariableSet(XAU_M30GVPrefix() + "lastProcessedSlot", (double)slotCloseTime);
+}
+
+datetime XAU_M30LoadProcessedSlot()
+{
+   string name = XAU_M30GVPrefix() + "lastProcessedSlot";
+   if(!GlobalVariableCheck(name)) return 0;
+   return (datetime)GlobalVariableGet(name);
+}
+
+XAU_M30ConsensusDecision g_m30Decision;
+datetime g_m30LastProcessedSlotLoaded = 0;
+bool     g_m30ProcessedSlotLoadedFromDisk = false;
+datetime g_m30LastPendingSlotLogged = 0; // dedupe key so M30_CONSENSUS_PENDING_DATA doesn't spam every tick
+
+// THE canonical M30 decision authority (Section 8/9) -- combines the
+// EXISTING M10 engine's own already-computed buyCaseScore/sellCaseScore/
+// location/structure/room/decision-type outputs via recency-weighted
+// consensus (Section 10: 20%/30%/50%, reusing M10's own 55.0 qualification
+// bar and 10.0 directional-gap concept unchanged -- no new independent
+// scoring strategy, no threshold invented or tuned without replay
+// evidence). Called every tick when InpDecisionMode==M30 mode; cheap to
+// call repeatedly because it only recomputes when the slot boundary has
+// actually changed or the current slot has not yet resolved (Section 19:
+// "retry the same slot"). Never mutates an already-stored
+// XAU_M10EvidenceRecord -- only reads copies from g_m10History.
+XAU_M30ConsensusDecision XAU_BuildM30ConsensusDecision()
+{
+   if(!g_m30ProcessedSlotLoadedFromDisk)
+   {
+      g_m30LastProcessedSlotLoaded = XAU_M30LoadProcessedSlot();
+      g_m30ProcessedSlotLoadedFromDisk = true;
+   }
+
+   datetime slotCloseTime = XAU_M30LastCompletedSlotCloseTime();
+
+   // Already have a DEFINITIVE (non-pending) decision cached for this exact
+   // slot -- reuse it. This is what keeps signal/setupName stable for the
+   // entire slot duration so the EXISTING entry-timer candidate-identity
+   // system (unchanged) does not restart its 120-180s clock every tick.
+   if(slotCloseTime == g_m30Decision.slotCloseTime && g_m30Decision.slotCloseTime > 0 && g_m30Decision.dataComplete)
+      return g_m30Decision;
+
+   // Restart-safety guard: this exact slot was already definitively
+   // resolved before a restart -- never re-derive or re-execute it.
+   if(slotCloseTime == g_m30LastProcessedSlotLoaded && g_m30LastProcessedSlotLoaded > 0)
+   {
+      XAU_M30ConsensusDecision alreadyDone;
+      ZeroMemory(alreadyDone);
+      alreadyDone.slotId = XAU_M30SlotId(slotCloseTime);
+      alreadyDone.slotCloseTime = slotCloseTime;
+      alreadyDone.decisionType = M30_DECISION_NO_VALID_SIGNAL;
+      alreadyDone.dataComplete = true;
+      alreadyDone.exactReason = "SLOT_ALREADY_PROCESSED_BEFORE_RESTART";
+      g_m30Decision = alreadyDone;
+      return alreadyDone;
+   }
+
+   XAU_M10EvidenceRecord oldest, middle, newest;
+   if(!XAU_FindM10TripleForSlot(slotCloseTime, oldest, middle, newest))
+   {
+      XAU_M30ConsensusDecision pending;
+      ZeroMemory(pending);
+      pending.slotId = XAU_M30SlotId(slotCloseTime);
+      pending.slotCloseTime = slotCloseTime;
+      pending.decisionType = M30_DECISION_DATA_PENDING;
+      pending.dataComplete = false;
+      pending.exactReason = "waiting for three consecutive complete M10 snapshots for this slot";
+      if(g_m30LastPendingSlotLogged != slotCloseTime)
+      {
+         g_m30LastPendingSlotLogged = slotCloseTime;
+         PrintFormat("M30_CONSENSUS_PENDING_DATA | slot=%s missingBar=one_or_more missingComponent=evidence_triple retrySameSlot=true slotMarkedProcessed=false",
+                     TimeToString(slotCloseTime, TIME_DATE|TIME_SECONDS));
+      }
+      g_m30Decision = pending; // cached for display/logging, but dataComplete=false so the cache check above will retry next tick
+      return pending;
+   }
+
+   double weightedBuy  = oldest.buyCaseScore*0.20 + middle.buyCaseScore*0.30 + newest.buyCaseScore*0.50;
+   double weightedSell = oldest.sellCaseScore*0.20 + middle.sellCaseScore*0.30 + newest.sellCaseScore*0.50;
+
+   int buyWins=0, sellWins=0;
+   if(oldest.buyCaseScore > oldest.sellCaseScore) buyWins++; else if(oldest.sellCaseScore > oldest.buyCaseScore) sellWins++;
+   if(middle.buyCaseScore > middle.sellCaseScore) buyWins++; else if(middle.sellCaseScore > middle.buyCaseScore) sellWins++;
+   if(newest.buyCaseScore > newest.sellCaseScore) buyWins++; else if(newest.sellCaseScore > newest.buyCaseScore) sellWins++;
+
+   XAU_M30ConsensusDecision d;
+   ZeroMemory(d);
+   d.slotId = XAU_M30SlotId(slotCloseTime);
+   d.slotCloseTime = slotCloseTime;
+   d.oldestEvidenceId = oldest.evidenceId; d.middleEvidenceId = middle.evidenceId; d.newestEvidenceId = newest.evidenceId;
+   d.oldestBarOpen = oldest.barOpenTime; d.middleBarOpen = middle.barOpenTime; d.newestBarOpen = newest.barOpenTime;
+   d.weightedBuyCaseScore = weightedBuy;
+   d.weightedSellCaseScore = weightedSell;
+   d.buyObservationWins = buyWins;
+   d.sellObservationWins = sellWins;
+   d.dataComplete = true;
+
+   double scoreGap = MathAbs(weightedBuy - weightedSell);
+   int dominant = (weightedBuy > weightedSell) ? 1 : (weightedSell > weightedBuy ? -1 : 0);
+   double dominantScore = (dominant==1) ? weightedBuy : weightedSell;
+
+   bool majorityAgrees = (dominant==1 && buyWins>=2) || (dominant==-1 && sellWins>=2);
+   bool newestAgrees = (dominant==1 && newest.buyCaseScore >= newest.sellCaseScore) ||
+                        (dominant==-1 && newest.sellCaseScore >= newest.buyCaseScore);
+   bool newestStronglyOpposes = (dominant==1 && newest.sellCaseScore>=55.0 && newest.sellCaseScore > newest.buyCaseScore) ||
+                                 (dominant==-1 && newest.buyCaseScore>=55.0 && newest.buyCaseScore > newest.sellCaseScore);
+   bool newestUnavailable = (newest.m10DecisionType == "DATA_UNAVAILABLE");
+   bool newestRange = (newest.m10DecisionType == "RANGE_NO_TRADE");
+
+   d.newestSupportsDirection = newestAgrees && !newestStronglyOpposes;
+   d.directionalPersistence = (double)MathMax(buyWins, sellWins) / 3.0 * 100.0;
+   d.confidence = dominantScore;
+   d.preferredDirection = dominant;
+
+   string reason = "";
+   if(scoreGap < 10.0 || dominant==0)
+   {
+      d.decisionType = M30_DECISION_TRANSITION_WATCH;
+      d.preferredDirection = 0;
+      reason = StringFormat("weightedBuy=%.1f weightedSell=%.1f -- too close to call, evidence conflicted", weightedBuy, weightedSell);
+   }
+   else if(newestUnavailable)
+   {
+      d.decisionType = M30_DECISION_DATA_UNAVAILABLE;
+      reason = "newest M10 observation was DATA_UNAVAILABLE -- cannot trust consensus without the current bar";
+   }
+   else if(!majorityAgrees)
+   {
+      d.decisionType = M30_DECISION_NO_VALID_SIGNAL;
+      reason = StringFormat("dominant=%s but only %d/3 observations favored it -- no directional persistence",
+                             dominant==1?"BUY":"SELL", dominant==1?buyWins:sellWins);
+   }
+   else if(newestStronglyOpposes)
+   {
+      d.decisionType = M30_DECISION_NO_VALID_SIGNAL;
+      d.preferredDirection = 0;
+      reason = StringFormat("two-of-three favored %s but newest observation strongly opposes (opposing score=%.1f) -- newest evidence is never overridden by older evidence",
+                             dominant==1?"BUY":"SELL", dominant==1?newest.sellCaseScore:newest.buyCaseScore);
+   }
+   else if(dominantScore < 55.0)
+   {
+      d.decisionType = M30_DECISION_NO_VALID_SIGNAL;
+      reason = StringFormat("weighted dominant score %.1f below the 55.0 qualification bar", dominantScore);
+   }
+   else if(newestRange)
+   {
+      d.decisionType = M30_DECISION_RANGE_NO_TRADE;
+      reason = "newest M10 observation classified the market as RANGE -- no directional case";
+   }
+   else
+   {
+      bool newestLocationPoor = (newest.locationState == "LOCATION_LATE" || newest.locationState == "LOCATION_EXTREME");
+      double remainingRoom = (dominant==1) ? newest.buyRoomR : newest.sellRoomR;
+      bool structureInvalidatesDirection =
+         (dominant==1 && newest.bearishBos && !newest.bullishReclaim) ||
+         (dominant==-1 && newest.bullishBos && !newest.bearishReclaim);
+
+      if(structureInvalidatesDirection)
+      {
+         d.decisionType = M30_DECISION_NO_VALID_SIGNAL;
+         d.preferredDirection = 0;
+         reason = StringFormat("newest structure invalidates %s (opposing confirmed BOS with no reclaim)", dominant==1?"BUY":"SELL");
+      }
+      else if(newestLocationPoor || remainingRoom < 0.30)
+      {
+         d.decisionType = (dominant==1) ? M30_DECISION_WAIT_FOR_BUY_RETRACE : M30_DECISION_WAIT_FOR_SELL_RETRACE;
+         d.retracementRequired = true;
+         reason = StringFormat("direction %s confirmed (weighted score=%.1f) but newest location=%s / remainingRoom=%.2fR -- wait for a better entry price, thesis preserved",
+                                dominant==1?"BUY":"SELL", dominantScore, newest.locationState, remainingRoom);
+      }
+      else
+      {
+         d.decisionType = (dominant==1) ? M30_DECISION_BUY_CANDIDATE : M30_DECISION_SELL_CANDIDATE;
+         reason = StringFormat("weighted%s=%.1f beats weighted%s=%.1f by %.1f (>=10.0), %d/3 observations agree, newest confirms, location acceptable",
+                                dominant==1?"Buy":"Sell", dominantScore, dominant==1?"Sell":"Buy", (dominant==1?weightedSell:weightedBuy),
+                                scoreGap, dominant==1?buyWins:sellWins);
+      }
+   }
+
+   d.exactReason = reason;
+   d.candidateCreated = (d.decisionType == M30_DECISION_BUY_CANDIDATE || d.decisionType == M30_DECISION_SELL_CANDIDATE);
+   g_m30Decision = d;
+
+   PrintFormat("M30_CONSENSUS_INPUT | slot=%s oldestEvidenceId=%d middleEvidenceId=%d newestEvidenceId=%d oldestBarOpen=%s middleBarOpen=%s newestBarOpen=%s sequenceValid=true dataComplete=true",
+               TimeToString(slotCloseTime,TIME_DATE|TIME_SECONDS), (int)oldest.evidenceId, (int)middle.evidenceId, (int)newest.evidenceId,
+               TimeToString(oldest.barOpenTime,TIME_DATE|TIME_SECONDS), TimeToString(middle.barOpenTime,TIME_DATE|TIME_SECONDS), TimeToString(newest.barOpenTime,TIME_DATE|TIME_SECONDS));
+   PrintFormat("M30_CONSENSUS_DECISION | slot=%s weightedBuy=%.2f weightedSell=%.2f buyWins=%d sellWins=%d newestDecision=%s newestDirection=%s newestSupportsFinal=%s preferredDirection=%s decisionType=%s confidence=%.1f reason=%s",
+               TimeToString(slotCloseTime,TIME_DATE|TIME_SECONDS), weightedBuy, weightedSell, buyWins, sellWins,
+               newest.m10DecisionType, newest.preferredDirection==1?"BUY":(newest.preferredDirection==-1?"SELL":"NONE"),
+               d.newestSupportsDirection?"true":"false",
+               d.preferredDirection==1?"BUY":(d.preferredDirection==-1?"SELL":"NONE"), XAU_M30DecisionName(d.decisionType), d.confidence, reason);
+
+   // Mark every DEFINITIVE resolution (not just candidates) as processed --
+   // conservative choice, prevents any possibility of the same slot being
+   // re-derived with different data after a restart even for a no-trade
+   // outcome (Section 20/21).
+   XAU_M30PersistProcessedSlot(slotCloseTime);
+   g_m30LastProcessedSlotLoaded = slotCloseTime;
+
+   if(!d.candidateCreated)
+      PrintFormat("M30_CONSENSUS_NO_TRADE | slot=%s reason=%s", TimeToString(slotCloseTime,TIME_DATE|TIME_SECONDS), reason);
+
+   return d;
+}
+
+// v6.25.5 Command Center transparency (owner spec Section 27) -- "M10
+// Evidence 1/2/3" (the three most recent stored history records, newest
+// first) plus the current M30 consensus object. Every field is read
+// straight from g_m10History/g_m30Decision -- the exact same data the
+// gate itself already used, never a second recomputation for display.
+// When InpDecisionMode is legacy, mode_active=false and consensus is an
+// empty object rather than a stale/zero-valued decisionType (MQL5 enums
+// default to their first member, which would otherwise misleadingly read
+// as "BUY_CANDIDATE" while the M30 engine has never actually run).
+string XAU_M30DisplayJson()
+{
+   bool modeActive = (InpDecisionMode == XAU_DECISION_M30_THREE_M10_CONSENSUS);
+
+   string m10Ev[3];
+   for(int i = 0; i < 3; i++)
+   {
+      if(i < g_m10HistoryCount)
+      {
+         XAU_M10EvidenceRecord r = g_m10History[i];
+         m10Ev[i] = StringFormat(
+            "{\"evidence_id\":%d,\"bar_open\":\"%s\",\"buy_case_score\":%.1f,\"sell_case_score\":%.1f,"
+            "\"preferred_direction\":\"%s\",\"decision\":\"%s\",\"location\":\"%s\",\"structure\":\"%s\"}",
+            (int)r.evidenceId, TimeToString(r.barOpenTime, TIME_DATE | TIME_MINUTES), r.buyCaseScore, r.sellCaseScore,
+            r.preferredDirection == 1 ? "BUY" : (r.preferredDirection == -1 ? "SELL" : "NONE"),
+            BotMonitorJsonSafe(r.m10DecisionType, 40), BotMonitorJsonSafe(r.locationState, 30), BotMonitorJsonSafe(r.structureState, 30));
+      }
+      else
+      {
+         m10Ev[i] = "{}";
+      }
+   }
+
+   XAU_M30ConsensusDecision d = g_m30Decision;
+   string consensusJson = !modeActive ? "{}" : StringFormat(
+      "{\"slot_id\":\"%s\",\"slot_close_time\":\"%s\",\"data_complete\":%s,\"decision\":\"%s\",\"preferred_direction\":\"%s\","
+      "\"confidence\":%.1f,\"weighted_buy_score\":%.2f,\"weighted_sell_score\":%.2f,\"buy_observation_wins\":%d,\"sell_observation_wins\":%d,"
+      "\"directional_persistence_pct\":%.1f,\"newest_supports_direction\":%s,\"retracement_required\":%s,\"candidate_created\":%s,\"reason\":\"%s\"}",
+      BotMonitorJsonSafe(d.slotId, 80), TimeToString(d.slotCloseTime, TIME_DATE | TIME_SECONDS), BotMonitorBool(d.dataComplete),
+      BotMonitorJsonSafe(XAU_M30DecisionName(d.decisionType), 40), d.preferredDirection == 1 ? "BUY" : (d.preferredDirection == -1 ? "SELL" : "NONE"),
+      d.confidence, d.weightedBuyCaseScore, d.weightedSellCaseScore, d.buyObservationWins, d.sellObservationWins,
+      d.directionalPersistence, BotMonitorBool(d.newestSupportsDirection), BotMonitorBool(d.retracementRequired), BotMonitorBool(d.candidateCreated),
+      BotMonitorJsonSafe(d.exactReason, 220));
+
+   return StringFormat(
+      "{\"mode_active\":%s,\"decision_mode\":\"%s\",\"m10_evidence_newest\":%s,\"m10_evidence_middle\":%s,\"m10_evidence_oldest\":%s,\"consensus\":%s}",
+      BotMonitorBool(modeActive), modeActive ? "M30_THREE_M10_CONSENSUS" : "M10_LEGACY",
+      m10Ev[0], m10Ev[1], m10Ev[2], consensusJson);
+}
+
 // Same anchor-interpolation methodology as backend/market_outlook.py's
 // _score_component: linear 0-100 between a "good" and "bad" real evidence
 // anchor, clamped -- not a made-up default.
@@ -16807,6 +17404,15 @@ void OnTick()
    // XAU_FinalEntryArbiter() as one more named evidence input, same as
    // signalOK/structureOK/timingOK/freshnessOK/newsOK/stateOK already are.
    XAU_EvaluateM10SignalDecision();
+   // v6.25.5 -- records an immutable copy of this bar's evidence into the
+   // M30 consensus history buffer, but only once per genuinely new,
+   // complete, FRESH-at-capture bar (see XAU_RecordM10EvidenceIfNew()'s own
+   // header comment). Runs in BOTH decision modes -- M10 continues
+   // building this history regardless of InpDecisionMode, exactly as the
+   // owner spec requires ("the bot must continue scanning and
+   // understanding the market every 10 minutes" independent of which mode
+   // gates trade origination).
+   XAU_RecordM10EvidenceIfNew();
 
    // === v5.5.0 EPF — update tier each tick + run partial-close manager ===
    // Cheap to run; tier transitions logged when they change.
@@ -17546,6 +18152,14 @@ void OnTick()
                   XAU_ATReversalOpportunityId(),signal==1?"BUY":"SELL",setupScore,transitionNow.reason);
    }
 
+   // v6.25.5 owner directive 2026-07-17 (URGENT ARCHITECTURE CHANGE) -- mode
+   // switch between the M10-legacy gate/origination (UNCHANGED below, exact
+   // same code as before this change) and the new M30 three-M10-consensus
+   // gate/origination. Only one of these two branches ever runs per tick;
+   // InpDecisionMode defaults to legacy, so a bot that never touches this
+   // input sees byte-for-byte identical behavior to before this change.
+   if(InpDecisionMode == XAU_DECISION_M10_LEGACY)
+   {
    // v6.25.1 owner directive 2026-07-17 -- M10 IS THE CANONICAL CANDIDATE
    // AUTHORITY. Whatever direction ScoreSetups (or the ADAPTIVE_REVERSAL_
    // RECLAIM shared path immediately above) proposed, it may only become a
@@ -17626,6 +18240,58 @@ void OnTick()
                   signal==1?"BUY":"SELL", setupScore, g_m10Decision.confidence,
                   XAU_M10DecisionName(g_m10Decision.decisionType), (int)g_m10Decision.evidenceId, g_m10Decision.exactReason);
    }
+   } // end InpDecisionMode == XAU_DECISION_M10_LEGACY
+   else // InpDecisionMode == XAU_DECISION_M30_THREE_M10_CONSENSUS
+   {
+      // v6.25.5 -- M30 GATE. Exact same structure as the M10-legacy gate
+      // immediately above (endorsement + origination fallback), except the
+      // authority consulted is the three-M10-snapshot weighted consensus
+      // (XAU_BuildM30ConsensusDecision(), cached per 30-minute slot) instead
+      // of the single latest M10 decision. Individual M10 scans cannot
+      // originate or veto a normal candidate in this mode -- g_m10Decision
+      // is never consulted here at all. WAIT_FOR_BUY_RETRACE/WAIT_FOR_SELL_
+      // RETRACE are included in the endorsement OR-list for the identical
+      // reason M10-legacy includes them: the existing, unchanged, tick-based
+      // freshness/entry-timer machinery downstream is what actually decides
+      // whether THIS tick's price is a good entry, not this gate.
+      XAU_M30ConsensusDecision m30 = XAU_BuildM30ConsensusDecision();
+      if(signal != 0)
+      {
+         bool m30Endorses =
+            (m30.preferredDirection == signal) &&
+            (m30.decisionType == M30_DECISION_BUY_CANDIDATE ||
+             m30.decisionType == M30_DECISION_SELL_CANDIDATE ||
+             m30.decisionType == M30_DECISION_WAIT_FOR_BUY_RETRACE ||
+             m30.decisionType == M30_DECISION_WAIT_FOR_SELL_RETRACE);
+         if(!m30Endorses)
+         {
+            PrintFormat("M30_CANDIDATE_REJECTED | proposedDirection=%s proposedSetup=%s m30Decision=%s m30PreferredDirection=%s m30Reason=%s -- ScoreSetups/reversal-path direction not endorsed by the M30 three-M10 consensus authority",
+                        signal==1?"BUY":"SELL", setupName, XAU_M30DecisionName(m30.decisionType),
+                        m30.preferredDirection==1?"BUY":(m30.preferredDirection==-1?"SELL":"NONE"), m30.exactReason);
+            signal = 0;
+            setupName = "";
+            setupScore = 0;
+         }
+         else
+         {
+            PrintFormat("M30_CANDIDATE_ENDORSED | direction=%s setup=%s m30Decision=%s m30Confidence=%.1f slot=%s",
+                        signal==1?"BUY":"SELL", setupName, XAU_M30DecisionName(m30.decisionType), m30.confidence, m30.slotId);
+         }
+      }
+
+      if(signal == 0 &&
+         (m30.decisionType == M30_DECISION_BUY_CANDIDATE || m30.decisionType == M30_DECISION_SELL_CANDIDATE) &&
+         m30.preferredDirection != 0)
+      {
+         signal = m30.preferredDirection;
+         setupName = "M30_CONSENSUS_CANDIDATE";
+         double m30ConfidenceNorm = MathMax(0.0, MathMin(1.0, (m30.confidence - 55.0) / 45.0));
+         setupScore = 5.0 + m30ConfidenceNorm * 3.0;
+         string m30CandidateKey = XAU_M30CandidateKey(m30.slotId, signal);
+         PrintFormat("M30_CANDIDATE_SHARED_PATH | slot=%s candidateKey=%s direction=%s existingFinalArbiter=true existingEntryTimer=true existingRiskEngine=true existingDirectionLock=true",
+                     m30.slotId, m30CandidateKey, signal==1?"BUY":"SELL");
+      }
+   } // end InpDecisionMode == XAU_DECISION_M30_THREE_M10_CONSENSUS
 
    // v6.24.0: Active Direction is context, not a global veto. Confirmed
    // opposite structure is evaluated by the dedicated structure authority.
@@ -35931,7 +36597,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       "\"session\":\"%s\",\"last_skip\":\"%s\",\"no_limit_mode\":%s,"
       "\"open_positions\":%d,\"close_reason_exact\":\"%s\",\"closed_by_module\":\"%s\","
       "\"position_direction\":\"%s\",\"risk_lot_decision\":\"%s\",\"exit_decision\":\"%s\"%s},"
-      "\"market_thesis\":%s,\"post_trade_state\":%s,\"entry_readiness\":%s,\"m10_signal\":%s}",
+      "\"market_thesis\":%s,\"post_trade_state\":%s,\"entry_readiness\":%s,\"m10_signal\":%s,\"m30_consensus\":%s}",
       BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
       ev, sev, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(),
       BotMonitorJsonSafe(modeText, 80), BotMonitorJsonSafe(RegimeName(), 32),
@@ -35949,7 +36615,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       BotMonitorBool(XAU_NoLimitTradingModeActive()), CountMyPositions(),
       BotMonitorJsonSafe(closeReasonExact, 180), BotMonitorJsonSafe(closedByModule, 80),
       BotMonitorJsonSafe(positionDirection, 12), BotMonitorJsonSafe(riskLotDecision, 220),
-      BotMonitorJsonSafe(exitDecision, 220), funnelNested, thesisJson, postTradeJson, readinessJson, m10SignalJson);
+      BotMonitorJsonSafe(exitDecision, 220), funnelNested, thesisJson, postTradeJson, readinessJson, m10SignalJson, XAU_M30DisplayJson());
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";

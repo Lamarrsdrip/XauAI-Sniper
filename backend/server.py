@@ -4572,6 +4572,11 @@ class BotActivityReq(BaseModel):
     # above — this is what lets the Command Center show the EA's own real
     # M10 buy/sell case scores instead of nothing.
     m10_signal: Optional[Dict[str, Any]] = None
+    # v6.25.5 — M30 three-M10-evidence consensus mode transparency (mode_active,
+    # decision_mode, the three most recent stored M10 evidence records, and the
+    # current slot's consensus decision). Same "add the field or Pydantic
+    # silently drops it" lesson as m10_signal/market_thesis above.
+    m30_consensus: Optional[Dict[str, Any]] = None
 
 # v6.9.0 — purpose-built payload for XAU_LogTradeThesisStatus's cloud post.
 # Kept separate from BotActivityReq's generic event schema since this is a
@@ -5151,6 +5156,7 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
         "final_decision", "final_blocker", "open_trade_called", "trade_buy_called",
         "trade_sell_called", "broker_retcode", "broker_error", "pipeline_stage",
         "market_thesis", "post_trade_state", "entry_readiness", "m10_signal",
+        "m30_consensus",
     ):
         value = getattr(req, field, None)
         if value is not None and value != "":

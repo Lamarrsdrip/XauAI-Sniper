@@ -852,6 +852,73 @@ function M10SignalCard({ events, heartbeat }) {
   );
 }
 
+// v6.25.5 — M30 three-M10-evidence consensus mode transparency. Same
+// convention as M10SignalCard directly above: every value comes straight
+// from the EA's own m30_consensus JSON block (backend/server.py
+// BotActivityReq.m30_consensus -> details.m30_consensus), nothing
+// recomputed client-side. Renders nothing at all when the EA is running in
+// M10-legacy mode (mode_active=false) or has never posted the field --
+// this card only ever appears for an account actually running M30 mode.
+function M30ConsensusCard({ events, heartbeat }) {
+  const candidates = (events || []).filter(e => e?.details?.m30_consensus?.mode_active);
+  const newest = candidates.reduce((best, e) => {
+    const ts = new Date(e.ts || e.timestamp || 0).getTime();
+    if (!best || ts > best._ts) return { ...e, _ts: ts };
+    return best;
+  }, null);
+  const latest = newest?.details?.m30_consensus;
+  if (!latest || !latest.mode_active) return null;
+
+  const c = latest.consensus || {};
+  const decision = c.decision || "DATA_PENDING";
+  const preferredDir = c.preferred_direction || "NONE";
+  const decisionTone = decision === "BUY_CANDIDATE" ? "green"
+    : decision === "SELL_CANDIDATE" ? "red"
+    : decision.startsWith("WAIT_FOR") ? "amber"
+    : decision === "DATA_PENDING" ? "blue"
+    : "neutral";
+
+  const evidenceRows = [
+    ["Newest", latest.m10_evidence_newest],
+    ["Middle", latest.m10_evidence_middle],
+    ["Oldest", latest.m10_evidence_oldest],
+  ].filter(([, ev]) => ev && ev.evidence_id != null);
+
+  return (
+    <div className={`${CARD} p-5`} data-testid="m30-consensus-card">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className={MONO_LABEL}>M30 Consensus Mode · {latest.decision_mode || "—"}</div>
+        <span className={pill(decisionTone)}>{decision.replace(/_/g, " ")}</span>
+      </div>
+
+      <p className="mt-3 text-[11px] leading-4 text-white/45">
+        Slot {c.slot_close_time || "—"} · preferred direction <span className="text-white/70 font-semibold">{preferredDir}</span>
+        {" — "}{c.reason || "waiting for three consecutive complete M10 snapshots"}
+      </p>
+
+      {c.data_complete && (
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 text-[11px]">
+          <div><div className="text-white/35">Weighted buy</div><div className="mt-0.5 font-mono text-white/80">{Number(c.weighted_buy_score || 0).toFixed(1)}</div></div>
+          <div><div className="text-white/35">Weighted sell</div><div className="mt-0.5 font-mono text-white/80">{Number(c.weighted_sell_score || 0).toFixed(1)}</div></div>
+          <div><div className="text-white/35">Observation wins</div><div className="mt-0.5 font-mono text-white/80">{c.buy_observation_wins ?? 0} buy / {c.sell_observation_wins ?? 0} sell</div></div>
+          <div><div className="text-white/35">Persistence</div><div className="mt-0.5 font-mono text-white/80">{Number(c.directional_persistence_pct || 0).toFixed(0)}%</div></div>
+        </div>
+      )}
+
+      {evidenceRows.length > 0 && (
+        <div className="mt-4 space-y-1.5 text-[11px]">
+          {evidenceRows.map(([label, ev]) => (
+            <div key={label} className="flex items-center justify-between gap-2 text-white/45">
+              <span className="text-white/35 w-14 shrink-0">{label}</span>
+              <span className="font-mono text-white/70 truncate">#{ev.evidence_id} · buy {Number(ev.buy_case_score || 0).toFixed(0)} / sell {Number(ev.sell_case_score || 0).toFixed(0)} · {ev.decision || "—"}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh }) {
   const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
   const ddNum      = Number(heartbeat.drawdown||0);
@@ -946,6 +1013,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
       )}
 
       {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
+      {online && <M30ConsensusCard events={events} heartbeat={heartbeat} />}
 
       <AIMarketOutlookCard linked={Boolean(licenseInfo.activation_key)} />
 
