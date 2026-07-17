@@ -1978,9 +1978,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.2"
-#define XAUAI_EA_VERSION_NUM "6.25.2"
-#define XAUAI_BUILD_HASH "v6252-m10-origination-fallback-freshness-bar-identity-20260717"
+#define XAUAI_EA_VERSION "v6.25.4"
+#define XAUAI_EA_VERSION_NUM "6.25.4"
+#define XAUAI_BUILD_HASH "v6254-m10-freshness-continuation-pause-decouple-20260717"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
@@ -3609,6 +3609,26 @@ struct XAU_AdaptiveTransitionDecision
    bool oppositeDisplacement;
    bool continuationEntryAllowed;
    bool continuationEntryPaused;
+   // v6.25.3 owner directive 2026-07-17 -- URGENT root-cause fix (live
+   // incident 16:50:30, fresh M10 bar at closeAgeSeconds=30 reported
+   // STALE). continuationEntryPaused is a REAL market-state signal (true
+   // whenever exhaustion/transition conditions currently disfavor a
+   // continuation-direction entry -- see its assignment below:
+   // `continuationEntryPaused = !continuationEntryAllowed`, driven by
+   // exhaustionProbability/lifecycle, nothing to do with data
+   // availability). XAU_BuildM10EvidenceSnapshot() was incorrectly using
+   // it as a proxy for "this bar's indicator data is incomplete," so any
+   // ordinary exhaustion/transition reading forced the ENTIRE M10 evidence
+   // snapshot to freshnessState=STALE regardless of how fresh the bar
+   // actually was -- exactly the reported bug. evidenceDataUnavailable is
+   // the real signal for genuine data unavailability: true ONLY in the two
+   // early fail-closed branches of XAU_AdaptiveMarketTransitionEngine()
+   // (closed-bar/ATR/close-price missing, or the evaluated bar itself is
+   // more than 2x the primary period old) -- false (via ZeroMemory) on the
+   // normal computed path, including every case where continuation entries
+   // are merely disfavored by market conditions.
+   bool evidenceDataUnavailable;
+   string dataUnavailableReason;
    bool oppositeEntryPreparing;
    bool oppositeEntryAllowed;
    bool reversalLocationGood;
@@ -12857,6 +12877,17 @@ struct XAU_M10EvidenceSnapshot
    datetime latestClosedBarOpen;   // iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 1) at evaluation time
    datetime previousClosedBarOpen; // iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 2) at evaluation time
    int      evaluatedShift;     // 1 if evaluatedBar==latestClosedBarOpen, 2 if ==previousClosedBarOpen, -1 otherwise
+   // v6.25.3 owner directive 2026-07-17 -- URGENT root-cause fix. STALE
+   // freshness must never be reported without an explicit cause -- see
+   // staleCause values in XAU_BuildM10EvidenceSnapshot()'s header comment.
+   // dataState is now a SEPARATE axis from freshnessState: freshnessState
+   // answers "is this the latest closed bar?" (identity only); dataState
+   // answers "was full evidence actually computed for it?" (previously
+   // conflated via continuationEntryPaused, which is a real market-state
+   // signal, not a data-availability one -- see
+   // XAU_AdaptiveTransitionDecision's own comment).
+   string   dataState;          // COMPLETE / UNAVAILABLE
+   string   staleCause;         // "" when freshnessState != STALE
 };
 
 struct XAU_M10SignalDecision
@@ -12978,9 +13009,27 @@ XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()
    // IDENTITY, not raw elapsed seconds. FRESH iff evaluatedBar IS the
    // current latest closed bar (shift 1); DEGRADED iff it is exactly one
    // bar behind (shift 2, e.g. a brief M10-boundary series-sync lag);
-   // everything else (no bar, indicator data incomplete on this bar, or
-   // more than one bar behind) is STALE. openAgeSeconds/closeAgeSeconds are
-   // now diagnostic-only fields, never inputs to the classification.
+   // everything else (no bar, or more than one bar behind) is STALE.
+   // openAgeSeconds/closeAgeSeconds are diagnostic-only, never inputs to
+   // the classification.
+   //
+   // v6.25.3 owner directive 2026-07-17 -- URGENT root-cause fix (live
+   // incident: a genuinely fresh M10 bar, closeAgeSeconds=30, evaluatedShift
+   // would have been 1, was reported freshnessState=STALE). The OLD
+   // condition `td.evaluatedBar <= 0 || td.continuationEntryPaused` treated
+   // continuationEntryPaused as a data-availability signal, but it is
+   // actually `!continuationEntryAllowed`, itself
+   // `!(exhaustionProbability>=threshold) && !(lifecycle>=TRANSITION_NEUTRAL)`
+   // inverted -- a real, and completely ordinary, market-condition reading
+   // (the market is exhausted or transitioning, so a NEW continuation-
+   // direction entry isn't currently favored). That is not "the bar's
+   // indicator data is incomplete" and must never force STALE. Freshness is
+   // now bar-identity ONLY; genuine data unavailability is tracked
+   // separately via td.evidenceDataUnavailable (set only in
+   // XAU_AdaptiveMarketTransitionEngine()'s two real fail-closed branches:
+   // no closed bar/ATR/close price, or the bar is more than 2x the primary
+   // period old) and reported as dataState, never folded into
+   // freshnessState.
    int tfSeconds = PeriodSeconds(XAU_PRIMARY_DECISION_TF);
    datetime latestClosedBarOpen   = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 1);
    datetime previousClosedBarOpen = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 2);
@@ -12992,16 +13041,38 @@ XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()
    else if(td.evaluatedBar > 0 && td.evaluatedBar == previousClosedBarOpen) evaluatedShift = 2;
 
    ENUM_XAU_M10_FRESHNESS freshnessState;
-   if(td.evaluatedBar <= 0 || td.continuationEntryPaused)
-      freshnessState = M10_FRESHNESS_STALE;      // no bar at all, or this bar's own indicator data is genuinely incomplete
+   string staleCause = "";
+   if(td.evaluatedBar <= 0)
+   {
+      freshnessState = M10_FRESHNESS_STALE;
+      staleCause = "NO_EVALUATED_BAR";
+   }
    else if(evaluatedShift == 1)
       freshnessState = M10_FRESHNESS_FRESH;      // evaluatedBar IS the current latest closed M10 bar
    else if(evaluatedShift == 2)
       freshnessState = M10_FRESHNESS_DEGRADED;   // exactly one bar behind -- e.g. a brief boundary series-sync lag
+   else if(td.evaluatedBar < previousClosedBarOpen)
+   {
+      // Older than shift-2 -- genuinely more than one completed M10 bar
+      // behind, not just an unrecognized/misaligned timestamp.
+      freshnessState = M10_FRESHNESS_STALE;
+      staleCause = "BAR_MORE_THAN_ONE_CLOSED_M10_BEHIND";
+   }
    else
-      freshnessState = M10_FRESHNESS_STALE;      // more than one bar behind, or bar identity cannot be confirmed
+   {
+      // Doesn't match shift 1 or 2, and isn't older than shift 2 either --
+      // the timestamp doesn't align with any confirmed M10 bar boundary
+      // (e.g. a series-sync gap).
+      freshnessState = M10_FRESHNESS_STALE;
+      staleCause = "BAR_IDENTITY_MISMATCH";
+   }
+
+   // Data readiness is a SEPARATE axis -- see header comment above.
+   string dataState = td.evidenceDataUnavailable ? "UNAVAILABLE" : "COMPLETE";
 
    s.freshnessState = XAU_M10FreshnessName(freshnessState);
+   s.dataState              = dataState;
+   s.staleCause             = staleCause;
    s.ageSeconds             = closeAgeSeconds;   // compatibility alias -- see struct comment
    s.openAgeSeconds         = openAgeSeconds;
    s.closeAgeSeconds        = closeAgeSeconds;
@@ -13011,7 +13082,11 @@ XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()
    s.previousClosedBarOpen  = previousClosedBarOpen;
    s.evaluatedShift         = evaluatedShift;
    s.dataFresh     = (freshnessState == M10_FRESHNESS_FRESH);
-   s.complete      = (freshnessState != M10_FRESHNESS_STALE);
+   // v6.25.3 -- usable evidence now requires BOTH a non-stale bar AND
+   // genuinely available data -- previously "complete" was freshness-only,
+   // which is exactly what let a market-condition reading (via the old
+   // continuationEntryPaused misuse) masquerade as a data problem.
+   s.complete      = (freshnessState != M10_FRESHNESS_STALE) && !td.evidenceDataUnavailable;
 
    // v6.25.1 owner directive 2026-07-17 -- log-spam fix. This function is
    // called every tick, but the underlying evidence only changes once per
@@ -13026,12 +13101,18 @@ XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()
       lastLoggedFreshnessState = freshnessState;
       // v6.25.2 -- explicit open/close age and evaluated-shift fields so
       // bar-open age can never again be misread as data staleness.
-      PrintFormat("M10_FRESHNESS | currentTime=%s evaluatedBarOpen=%s evaluatedBarClose=%s latestClosedBarOpen=%s evaluatedShift=%d openAgeSeconds=%d closeAgeSeconds=%d freshnessState=%s",
+      // v6.25.3 -- added dataState/staleCause/continuationEntryPaused so a
+      // STALE reading is never opaque again (see the 16:50:30 incident:
+      // "freshnessState=STALE ageSeconds=30" gave no way to tell this was
+      // continuationEntryPaused, not a real data problem).
+      PrintFormat("M10_FRESHNESS | currentTime=%s evaluatedBarOpen=%s evaluatedBarClose=%s latestClosedBarOpen=%s previousClosedBarOpen=%s evaluatedShift=%d openAgeSeconds=%d closeAgeSeconds=%d freshnessState=%s dataState=%s staleCause=%s continuationEntryPaused=%s",
                   TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
                   TimeToString(td.evaluatedBar, TIME_DATE | TIME_SECONDS),
                   TimeToString(evaluatedBarClose, TIME_DATE | TIME_SECONDS),
                   TimeToString(latestClosedBarOpen, TIME_DATE | TIME_SECONDS),
-                  evaluatedShift, openAgeSeconds, closeAgeSeconds, s.freshnessState);
+                  TimeToString(previousClosedBarOpen, TIME_DATE | TIME_SECONDS),
+                  evaluatedShift, openAgeSeconds, closeAgeSeconds, s.freshnessState,
+                  dataState, staleCause, td.continuationEntryPaused ? "true" : "false");
    }
 
    if(freshnessState == M10_FRESHNESS_STALE)
@@ -13169,7 +13250,12 @@ XAU_M10SignalDecision XAU_EvaluateM10SignalDecision()
    if(!g_m10Snapshot.complete)
    {
       d.decisionType = M10_DECISION_DATA_UNAVAILABLE;
-      d.exactReason = StringFormat("primary evidence freshnessState=%s ageSeconds=%d -- fail closed rather than guess", g_m10Snapshot.freshnessState, g_m10Snapshot.ageSeconds);
+      // v6.25.3 -- exposes staleCause/dataState so a rejection can always
+      // be traced to an explicit cause (never a bare "STALE ageSeconds=N"
+      // that leaves the actual reason a guess -- see the 16:50:30 incident).
+      d.exactReason = StringFormat("primary evidence freshnessState=%s staleCause=%s dataState=%s closeAgeSeconds=%d evaluatedShift=%d -- fail closed rather than guess",
+                                    g_m10Snapshot.freshnessState, g_m10Snapshot.staleCause, g_m10Snapshot.dataState,
+                                    g_m10Snapshot.closeAgeSeconds, g_m10Snapshot.evaluatedShift);
       g_m10Decision = d;
       return d;
    }
@@ -13988,6 +14074,12 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    {
       d.reason = "closed-bar/ATR evidence unavailable — fail closed in ACTIVE";
       d.continuationEntryPaused = true;
+      // v6.25.3 -- genuine data-unavailability signal, kept separate from
+      // continuationEntryPaused (see struct comment). This is the only
+      // correct trigger for M10 freshnessState=STALE/dataState=UNAVAILABLE
+      // due to missing evidence, not the exhaustion/transition gate above.
+      d.evidenceDataUnavailable = true;
+      d.dataUnavailableReason = "NO_CLOSED_BAR_OR_ATR_OR_CLOSE_PRICE";
       g_transitionDecision = d;
       return d;
    }
@@ -14009,6 +14101,8 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    {
       d.reason = StringFormat("EVIDENCE_STALE: last closed primary (M10) bar is %ds old (>%ds) -- fail closed rather than compute exhaustion/pressure off stale data", barAgeSec, XAU_PRIMARY_DECISION_TF_SECONDS * 3);
       d.continuationEntryPaused = true;
+      d.evidenceDataUnavailable = true;
+      d.dataUnavailableReason = StringFormat("PRIMARY_BAR_TOO_OLD_%ds", barAgeSec);
       g_transitionDecision = d;
       PrintFormat("TRANSITION_ENGINE_STALE_DATA barAgeSec=%d barTime=%s now=%s -- exhaustion/pressure NOT computed this call, prior cached decision NOT trusted for extreme readings",
                   barAgeSec, TimeToString(bar, TIME_DATE|TIME_SECONDS), TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
@@ -27473,6 +27567,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // Fetch it by looking at the position's first deal (entry) with same position ID.
    lastClose.entryPrice = dPrice;   // fallback
    lastClose.slDist     = lastSignalATR > 0 ? lastSignalATR * InpSLMultiplier : 3.0;
+   // v6.25.3 — same entry-deal scan as above, also captures the real
+   // opened_at broker time for rich trade-ledger telemetry (Command Center
+   // Phase 7A real equity curve/analytics) -- never a locally-estimated time.
+   datetime openedAtTime = 0;
    if(posId > 0 && HistorySelectByPosition(posId))
    {
       int nDeals = HistoryDealsTotal();
@@ -27483,6 +27581,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(t, DEAL_ENTRY) == DEAL_ENTRY_IN)
          {
             lastClose.entryPrice = HistoryDealGetDouble(t, DEAL_PRICE);
+            openedAtTime = (datetime)HistoryDealGetInteger(t, DEAL_TIME);
             break;
          }
       }
@@ -27522,7 +27621,31 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          CloudPostSignalClose(sigId, dPrice, reason);
       }
    }
-   LogTradeToServer(wasWin ? "WIN" : wasLoss ? "LOSS" : "BE", dPrice, profit, dVolume, dirStr);
+   // v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- rich trade-ledger
+   // telemetry. Every value here already exists in this function's own
+   // scope or is a fresh, cheap, read-only lookup of state this same
+   // OnTradeTransaction close path already computed a few lines above
+   // (eqIdx/g_entryQuality for riskUSD+MAE/MFE, closingCampaignId,
+   // resolvedExitReason, closedBy, dCommission/dSwap/dealTicket) -- nothing
+   // here is a new tracking structure or an invented number.
+   {
+      double riskUSDForLog = 0.0, maeRForLog = 0.0, mfeRForLog = 0.0;
+      int eqIdxForLog = XAU_EntryQuality_FindIdx(posId);
+      if(eqIdxForLog >= 0)
+      {
+         riskUSDForLog = g_entryQuality[eqIdxForLog].riskUSD;
+         maeRForLog    = g_entryQuality[eqIdxForLog].maeR[3];
+         mfeRForLog    = g_entryQuality[eqIdxForLog].mfeR[3];
+      }
+      long dealMagicForLog = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+      string familyForLog = (dealMagicForLog == InpCounterExcursionMagicNumber) ? "COUNTER_EXCURSION" :
+                             (dealMagicForLog == InpExhaustionCounterMagicNumber) ? "LEGACY_EXHAUSTION_COUNTER" :
+                             "NORMAL";
+      LogTradeToServer(wasWin ? "WIN" : wasLoss ? "LOSS" : "BE", dPrice, profit, dVolume, dirStr,
+                        posId, lastClose.entryPrice, openedAtTime, dCommission, dSwap,
+                        riskUSDForLog, maeRForLog, mfeRForLog, closingCampaignId,
+                        resolvedExitReason, closedBy, familyForLog);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -36592,14 +36715,40 @@ string CloudExtractGrade(string reason)
    return StringSubstr(reason, a + 1, b - a - 1);
 }
 
-void LogTradeToServer(string result2, double price, double profit, double lots, string dir)
+// v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- extended with rich,
+// verified trade-ledger fields (ticket/entry/opened_at/commission/swap/
+// original_risk_usd/final_r/mae_r/mfe_r/campaign_id/ea_version/
+// account_login/exit_reason/exit_owner/family) so the Command Center's
+// Analytics page can compute a REAL equity curve/win-rate/profit-factor/
+// average-R/drawdown instead of the old thin result+price+profit report
+// (which is all /api/cloud/performance/analytics on the backend can no
+// longer build real numbers from -- see server.py TradeJournalEntry).
+// All new params are additive on the backend (Optional/defaulted), so
+// this is safe to roll out gradually across Mac/VPS without a synchronized
+// cutover.
+void LogTradeToServer(string result2, double price, double profit, double lots, string dir,
+                       ulong ticket, double entryPrice, datetime openedAt, double commission, double swap,
+                       double riskUSD, double maeR, double mfeR, long campaignId,
+                       string exitReason, string exitOwner, string family)
 {
    if(InpBacktestMode) return;                    // Tester: no network
    if(StringLen(InpServerURL) < 10) return;
    MqlDateTime dt; TimeCurrent(dt);
-   string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f,\"signature\":\"%s\",\"setup\":\"%s\",\"regime\":\"%s\"}",
+   double finalR = (riskUSD > 0.0) ? (profit / riskUSD) : 0.0;
+   string body = StringFormat(
+      "{\"pin\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,"
+      "\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f,"
+      "\"signature\":\"%s\",\"setup\":\"%s\",\"regime\":\"%s\","
+      "\"ticket\":%I64u,\"entry_price\":%.2f,\"opened_at\":%I64d,\"closed_at\":%I64d,"
+      "\"commission\":%.2f,\"swap\":%.2f,\"original_risk_usd\":%.2f,\"final_r\":%.4f,\"mae_r\":%.4f,\"mfe_r\":%.4f,"
+      "\"campaign_id\":\"%I64d\",\"ea_version\":\"%s\",\"account_login\":\"%I64d\","
+      "\"exit_reason\":\"%s\",\"exit_owner\":\"%s\",\"family\":\"%s\"}",
       InpLicensePIN, Symbol(), dir, result2, price, profit, lots, dt.hour, dt.day_of_week, totalTrades, wins, losses, accInfo.Balance(),
-      lastSignalSignature, lastSignalSetup, RegimeName());
+      lastSignalSignature, lastSignalSetup, RegimeName(),
+      ticket, entryPrice, (long)openedAt, (long)TimeCurrent(),
+      commission, swap, riskUSD, finalR, maeR, mfeR,
+      campaignId, XAUAI_EA_VERSION, AccountInfoInteger(ACCOUNT_LOGIN),
+      BotMonitorJsonSafe(exitReason, 220), BotMonitorJsonSafe(exitOwner, 40), family);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    WebRequest("POST", InpServerURL + "/api/journal/log", "Content-Type: application/json\r\n", 5000, pd, res, rh);

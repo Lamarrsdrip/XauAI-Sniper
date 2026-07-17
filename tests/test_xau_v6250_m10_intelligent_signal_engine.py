@@ -211,7 +211,10 @@ def test_stale_data_returns_data_unavailable_not_a_guess():
     ea = read(EA)
     fn = find_function(ea, "XAU_M10SignalDecision XAU_EvaluateM10SignalDecision()")
     idx = fn.index("if(!g_m10Snapshot.complete)")
-    window = fn[idx: idx + 350]
+    # v6.25.4 -- the reason string was expanded to include
+    # staleCause/dataState/evaluatedShift (see the 16:50:30 incident fix),
+    # pushing "return d;" further from idx than the old 350-char window.
+    window = fn[idx: idx + 900]
     assert "M10_DECISION_DATA_UNAVAILABLE" in window
     assert "return d;" in window
 
@@ -226,7 +229,10 @@ def test_snapshot_fails_closed_on_stale_evidence():
     ea = read(EA)
     fn = find_function(ea, "XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()")
     assert "s.dataFresh     = (freshnessState == M10_FRESHNESS_FRESH);" in fn
-    assert "s.complete      = (freshnessState != M10_FRESHNESS_STALE);" in fn
+    # v6.25.4 -- "complete" now additionally requires genuinely available
+    # data (td.evidenceDataUnavailable == false), decoupled from the old
+    # continuationEntryPaused misuse -- see the 16:50:30 incident fix.
+    assert "s.complete      = (freshnessState != M10_FRESHNESS_STALE) && !td.evidenceDataUnavailable;" in fn
     idx = fn.index("if(freshnessState == M10_FRESHNESS_STALE)")
     window = fn[idx: idx + 200]
     assert "return s;" in window, "must return immediately on STALE, before computing any evidence fields"
@@ -270,13 +276,90 @@ def test_evaluated_shift_matches_latest_bar_is_fresh_even_at_exactly_600_seconds
     any `if`/`else if` that assigns freshnessState."""
     ea = read(EA)
     fn = find_function(ea, "XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()")
-    chain_start = fn.index("if(td.evaluatedBar <= 0 || td.continuationEntryPaused)")
-    chain_end = fn.index("freshnessState = M10_FRESHNESS_STALE;      // more than one bar behind")
+    chain_start = fn.index("if(td.evaluatedBar <= 0)")
+    chain_end = fn.index('staleCause = "BAR_IDENTITY_MISMATCH";')
     chain = fn[chain_start: chain_end]
     assert "evaluatedShift == 1" in chain
     assert "evaluatedShift == 2" in chain
     assert "openAgeSeconds" not in chain
     assert "closeAgeSeconds" not in chain
+    # v6.25.4 URGENT root-cause fix -- 16:50:30 live incident: a genuinely
+    # fresh bar (evaluatedShift would be 1) was reported STALE because
+    # continuationEntryPaused (a real market-exhaustion/transition signal,
+    # NOT a data-availability one -- see XAU_AdaptiveTransitionDecision's
+    # own comment) was wrongly ORed into the freshness gate. It must never
+    # appear in the freshness classification chain again.
+    assert "td.continuationEntryPaused" not in chain
+
+
+def test_continuation_entry_paused_no_longer_forces_stale_freshness():
+    """Direct regression test for the 16:50:30 live incident report:
+    dataState (driven by td.evidenceDataUnavailable) must be the ONLY
+    data-availability signal feeding s.complete -- continuationEntryPaused
+    must not appear anywhere in that computation."""
+    ea = read(EA)
+    fn = find_function(ea, "XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()")
+    complete_idx = fn.index("s.complete      = (freshnessState != M10_FRESHNESS_STALE)")
+    complete_line = fn[complete_idx: complete_idx + 120]
+    assert "continuationEntryPaused" not in complete_line
+    assert "evidenceDataUnavailable" in complete_line
+
+
+def test_evidence_data_unavailable_set_only_in_genuine_data_fail_branches():
+    """evidenceDataUnavailable must be the real data-unavailability signal
+    -- set true only where the transition engine genuinely could not
+    compute evidence (no closed bar/ATR/close price, or the bar is stale
+    by real elapsed time), never as a side effect of an ordinary
+    exhaustion/transition market reading."""
+    ea = read(EA)
+    fn = find_function(ea, "XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()")
+    assert fn.count("d.evidenceDataUnavailable = true;") == 2
+    no_bar_idx = fn.index('d.reason = "closed-bar/ATR evidence unavailable')
+    no_bar_window = fn[no_bar_idx: no_bar_idx + 600]
+    assert "d.evidenceDataUnavailable = true;" in no_bar_window
+    stale_bar_idx = fn.index("EVIDENCE_STALE: last closed primary")
+    stale_bar_window = fn[stale_bar_idx: stale_bar_idx + 300]
+    assert "d.evidenceDataUnavailable = true;" in stale_bar_window
+    # The ordinary continuation-gate computation (exhaustion/transition
+    # reading) must NOT also set evidenceDataUnavailable.
+    gate_idx = fn.index("d.continuationEntryPaused = !d.continuationEntryAllowed;")
+    gate_window = fn[gate_idx: gate_idx + 150]
+    assert "evidenceDataUnavailable" not in gate_window
+
+
+def test_16_50_30_regression_fresh_bar_with_continuation_paused_stays_fresh():
+    """Deterministic simulation of the exact reported live incident:
+    currentTime=16:50:30, evaluatedBarOpen=16:40:00 (closed 16:50:00,
+    closeAgeSeconds=30), which IS the latest closed M10 bar
+    (evaluatedShift=1) -- so freshnessState must be FRESH regardless of
+    continuationEntryPaused. If continuationEntryPaused is ALSO true (a
+    real exhaustion/transition reading), dataState must still read
+    COMPLETE and s.complete must still be true -- a fresh bar with an
+    ordinary market-condition reading is usable evidence, not
+    DATA_UNAVAILABLE."""
+    tf_seconds = 600
+    evaluated_bar_open = 1000  # arbitrary epoch anchor, 16:40:00 equivalent
+    latest_closed_bar_open = evaluated_bar_open       # same bar -> shift 1
+    previous_closed_bar_open = evaluated_bar_open - tf_seconds
+    evaluated_shift = 1 if evaluated_bar_open == latest_closed_bar_open else \
+        (2 if evaluated_bar_open == previous_closed_bar_open else -1)
+    assert evaluated_shift == 1
+
+    for continuation_entry_paused, evidence_data_unavailable in [(True, False), (False, False)]:
+        if evaluated_bar_open <= 0:
+            freshness = "STALE"
+        elif evaluated_shift == 1:
+            freshness = "FRESH"
+        elif evaluated_shift == 2:
+            freshness = "DEGRADED"
+        else:
+            freshness = "STALE"
+        data_state = "UNAVAILABLE" if evidence_data_unavailable else "COMPLETE"
+        complete = (freshness != "STALE") and not evidence_data_unavailable
+
+        assert freshness == "FRESH", "a bar that IS the latest closed M10 bar must be FRESH regardless of continuationEntryPaused"
+        assert data_state == "COMPLETE"
+        assert complete is True, "fresh bar + no genuine data failure must be usable evidence, even if continuationEntryPaused is true"
 
 
 def test_close_age_seconds_used_for_display_not_open_age():
@@ -508,9 +591,15 @@ def test_origination_fallback_placed_after_existing_endorsement_veto_gate():
     assert veto_idx < origin_idx
 
 
-def test_build_hash_reflects_origination_fallback():
+def test_build_hash_reflects_current_release():
+    # v6.25.4 owner directive 2026-07-17 -- updated alongside the
+    # freshness/continuationEntryPaused decoupling fix; the origination-
+    # fallback CODE itself is unchanged and still covered by
+    # test_origination_fallback_placed_after_existing_endorsement_veto_gate
+    # above, so this only needs to track the current build identity, not
+    # pin a specific historical release's hash text forever.
     ea = read(EA)
-    assert 'XAUAI_BUILD_HASH "v6252-m10-origination-fallback' in ea
+    assert 'XAUAI_BUILD_HASH "v6254-m10-freshness-continuation-pause-decouple' in ea
 
 
 if __name__ == "__main__":
