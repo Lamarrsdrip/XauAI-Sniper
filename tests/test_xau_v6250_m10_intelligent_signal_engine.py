@@ -84,12 +84,39 @@ def test_decision_calls_score_direction_case_for_both_directions_separately():
 
 # ---------------------------------------------------------------------------
 # 3/4: pressure level alone is not enough -- slope and structure matter too
+#
+# v6.25.1 owner directive 2026-07-17 -- the old g_prevBuyConfidenceForSlope /
+# g_prevSellConfidenceForSlope globals mutated on the FIRST call of a new
+# bar, so a second call within the same bar computed slope against a value
+# it had just overwritten to itself (repeated calls did not return the same
+# slope). Replaced with a canonical, bar-keyed two-slot pressure history
+# (XAU_UpdateM10PressureHistory / XAU_M10BuySlope / XAU_M10SellSlope) that
+# shifts exactly once per genuinely new closed bar.
 # ---------------------------------------------------------------------------
 def test_case_score_uses_pressure_slope_via_snapshot_not_level_alone():
     ea = read(EA)
     fn = find_function(ea, "XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()")
-    assert "s.buyPressureSlope   = td.buyConfidence  - g_prevBuyConfidenceForSlope;" in fn
-    assert "s.sellPressureSlope  = td.sellConfidence - g_prevSellConfidenceForSlope;" in fn
+    assert "XAU_UpdateM10PressureHistory(td.evaluatedBar, td.buyConfidence, td.sellConfidence);" in fn
+    assert "s.buyPressureSlope   = XAU_M10BuySlope(td.buyConfidence);" in fn
+    assert "s.sellPressureSlope  = XAU_M10SellSlope(td.sellConfidence);" in fn
+
+
+def test_pressure_slope_history_shifts_exactly_once_per_new_bar():
+    ea = read(EA)
+    fn = find_function(ea, "void XAU_UpdateM10PressureHistory(datetime evaluatedBar, double buyConfidence, double sellConfidence)")
+    # a repeated call for the same bar must be a no-op (guard-and-return),
+    # never re-shifting prev<-current on every call within the same bar
+    assert "if(evaluatedBar <= 0 || evaluatedBar == g_m10PressureHistoryCurrentBar)" in fn
+    assert "return;" in fn
+    assert "g_m10PressureHistoryPrevBar     = g_m10PressureHistoryCurrentBar;" in fn
+
+
+def test_slope_functions_read_the_two_slot_history_not_a_single_mutable_global():
+    ea = read(EA)
+    buy_fn = find_function(ea, "double XAU_M10BuySlope(double liveBuyConfidence)")
+    sell_fn = find_function(ea, "double XAU_M10SellSlope(double liveSellConfidence)")
+    assert "g_m10PressureHistoryPrevBuy" in buy_fn
+    assert "g_m10PressureHistoryPrevSell" in sell_fn
 
 
 def test_structure_bucket_reused_not_reinvented():
@@ -184,16 +211,34 @@ def test_stale_data_returns_data_unavailable_not_a_guess():
     ea = read(EA)
     fn = find_function(ea, "XAU_M10SignalDecision XAU_EvaluateM10SignalDecision()")
     idx = fn.index("if(!g_m10Snapshot.complete)")
-    window = fn[idx: idx + 250]
+    window = fn[idx: idx + 350]
     assert "M10_DECISION_DATA_UNAVAILABLE" in window
     assert "return d;" in window
 
 
+# v6.25.1 owner directive 2026-07-17 -- explicit FRESH/DEGRADED/STALE states
+# replaced the old generous ~3-bar binary dataFresh check. The snapshot now
+# fails closed at the TOP of the builder (before any evidence fields are
+# computed) the moment the bar is STALE, and only ever reports itself
+# .complete for FRESH or DEGRADED (a DEGRADED bar is displayable but the
+# M10 decision layer above still downgrades any high-confidence candidate).
 def test_snapshot_fails_closed_on_stale_evidence():
     ea = read(EA)
     fn = find_function(ea, "XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()")
-    assert 's.dataFresh     = (td.evaluatedBar > 0 && !td.continuationEntryPaused);' in fn
-    assert "if(!s.dataFresh)" in fn
+    assert "s.dataFresh     = (freshnessState == M10_FRESHNESS_FRESH);" in fn
+    assert "s.complete      = (freshnessState != M10_FRESHNESS_STALE);" in fn
+    idx = fn.index("if(freshnessState == M10_FRESHNESS_STALE)")
+    window = fn[idx: idx + 200]
+    assert "return s;" in window, "must return immediately on STALE, before computing any evidence fields"
+
+
+def test_freshness_state_is_explicit_fresh_degraded_stale_not_a_generous_binary_flag():
+    ea = read(EA)
+    fn = find_function(ea, "XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()")
+    assert "M10_FRESHNESS_FRESH" in fn
+    assert "M10_FRESHNESS_DEGRADED" in fn
+    assert "M10_FRESHNESS_STALE" in fn
+    assert "XAU_M10_FRESHNESS_GRACE_SECONDS" in fn
 
 
 # ---------------------------------------------------------------------------

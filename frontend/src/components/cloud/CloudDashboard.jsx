@@ -721,65 +721,101 @@ function humanBotState(raw, openTrades, tradingOk, online) {
 // -> details.m10_signal on the latest /cloud/monitor/activity event) --
 // nothing is recomputed client-side, so this can never show a value the EA
 // itself did not actually compute.
-function M10SignalCard({ events }) {
-  const latest = (events || []).find(e => e?.details?.m10_signal)?.details?.m10_signal;
+function M10SignalCard({ events, heartbeat }) {
+  // v6.25.1 owner directive 2026-07-17 -- explicit newest-by-timestamp
+  // selection (not "first match in whatever order events arrived"), and
+  // verify the event actually belongs to the currently-connected
+  // account+symbol before trusting it -- a stale event from a previous
+  // session/build must never be silently displayed as current.
+  const candidates = (events || []).filter(e => e?.details?.m10_signal);
+  const newest = candidates.reduce((best, e) => {
+    const ts = new Date(e.ts || e.timestamp || 0).getTime();
+    if (!best || ts > best._ts) return { ...e, _ts: ts };
+    return best;
+  }, null);
+  const latest = newest?.details?.m10_signal;
   if (!latest) return null;
+
+  const accountMatches = !heartbeat?.account_number || !latest.account || String(heartbeat.account_number) === String(latest.account);
+  const symbolMatches = !heartbeat?.symbol || !latest.symbol || heartbeat.symbol === latest.symbol;
+  if (!accountMatches || !symbolMatches) return null; // do not show evidence from a different account/symbol as if it were current
 
   const decision = latest.decision || "DATA_UNAVAILABLE";
   const preferredDir = latest.preferred_direction || "NONE";
-  const decisionTone = decision === "BUY_CANDIDATE" ? "green"
+  const freshnessState = latest.freshness_state || "UNKNOWN";
+  const isStaleOrUnknown = freshnessState === "STALE" || freshnessState === "UNKNOWN";
+  const decisionTone = isStaleOrUnknown ? "neutral"
+    : decision === "BUY_CANDIDATE" ? "green"
     : decision === "SELL_CANDIDATE" ? "red"
     : decision.startsWith("WAIT_FOR") ? "amber"
     : decision === "TRANSITION_WATCH" ? "blue"
     : "neutral";
+  const freshnessTone = freshnessState === "FRESH" ? "green" : freshnessState === "DEGRADED" ? "amber" : "red";
 
+  // Scores are already 0-100 -- show the RAW percentage for each side, not
+  // one normalized to the larger of the two (that used to make a 30-vs-20
+  // score render as a full bar vs a 2/3 bar instead of the true 30%/20%).
   const buyScore = Number(latest.buy_case_score || 0);
   const sellScore = Number(latest.sell_case_score || 0);
-  const maxScore = Math.max(buyScore, sellScore, 1);
 
   return (
     <div className={`${CARD} p-5`} data-testid="m10-signal-card">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className={MONO_LABEL}>M10 Signal Engine · Evidence #{latest.evidence_id ?? "—"}</div>
-        <span className={pill(decisionTone)}>{decision.replace(/_/g, " ")}</span>
-      </div>
-
-      <div className="mt-3 grid grid-cols-2 gap-3">
-        <div>
-          <div className="flex items-center justify-between text-[11px] text-white/50">
-            <span>Buy case</span><span className="font-mono">{buyScore.toFixed(0)}</span>
-          </div>
-          <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-            <div className="h-full bg-emerald-400/70" style={{ width: `${(buyScore / maxScore) * 100}%` }} />
-          </div>
-        </div>
-        <div>
-          <div className="flex items-center justify-between text-[11px] text-white/50">
-            <span>Sell case</span><span className="font-mono">{sellScore.toFixed(0)}</span>
-          </div>
-          <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-            <div className="h-full bg-red-400/70" style={{ width: `${(sellScore / maxScore) * 100}%` }} />
-          </div>
+        <div className="flex items-center gap-2">
+          <span className={pill(freshnessTone)}>{freshnessState}{latest.age_seconds != null ? ` · ${latest.age_seconds}s old` : ""}</span>
+          <span className={pill(decisionTone)}>{isStaleOrUnknown ? "DATA STALE" : decision.replace(/_/g, " ")}</span>
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 text-[11px]">
-        <div><div className="text-white/35">Trend</div><div className="mt-0.5 font-mono text-white/80">{latest.trend_state || "—"}</div></div>
-        <div><div className="text-white/35">Structure</div><div className="mt-0.5 font-mono text-white/80">{latest.structure_state || "—"}</div></div>
-        <div><div className="text-white/35">Location</div><div className="mt-0.5 font-mono text-white/80">{latest.location_state || "—"}</div></div>
-        <div><div className="text-white/35">Confidence</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
-      </div>
+      {isStaleOrUnknown ? (
+        <p className="mt-3 text-[11px] leading-4 text-white/45">
+          This evidence is {freshnessState.toLowerCase()} ({latest.age_seconds != null ? `${latest.age_seconds}s old` : "age unknown"}) -- not shown as a live signal.
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <div className="flex items-center justify-between text-[11px] text-white/50">
+                <span>Buy case</span><span className="font-mono">{buyScore.toFixed(0)}%</span>
+              </div>
+              <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                <div className="h-full bg-emerald-400/70" style={{ width: `${Math.max(0, Math.min(100, buyScore))}%` }} />
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between text-[11px] text-white/50">
+                <span>Sell case</span><span className="font-mono">{sellScore.toFixed(0)}%</span>
+              </div>
+              <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                <div className="h-full bg-red-400/70" style={{ width: `${Math.max(0, Math.min(100, sellScore))}%` }} />
+              </div>
+            </div>
+          </div>
 
-      <p className="mt-3 text-[11px] leading-4 text-white/45">
-        Preferred direction: <span className="text-white/70 font-semibold">{preferredDir}</span>
-        {latest.retracement_required ? " · waiting for a better entry price, not a new signal" : ""}
-        {" — "}{latest.reason || ""}
-      </p>
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 text-[11px]">
+            <div><div className="text-white/35">Trend</div><div className="mt-0.5 font-mono text-white/80">{latest.trend_state || "—"}</div></div>
+            <div><div className="text-white/35">Structure</div><div className="mt-0.5 font-mono text-white/80">{latest.structure_state || "—"}</div></div>
+            <div><div className="text-white/35">Location</div><div className="mt-0.5 font-mono text-white/80">{latest.location_state || "—"}</div></div>
+            <div><div className="text-white/35">Confidence</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
+          </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
-        <span className={pill("neutral")}>Exhaustion evidence-only: {(latest.exhaustion_decision || "—").replace(/_/g, " ")}</span>
-        {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy: waiting for retrace after profit</span>}
-        {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell: waiting for retrace after profit</span>}
+          <p className="mt-3 text-[11px] leading-4 text-white/45">
+            Preferred direction: <span className="text-white/70 font-semibold">{preferredDir}</span>
+            {latest.retracement_required ? " · waiting for a better entry price, not a new signal" : ""}
+            {" — "}{latest.reason || ""}
+          </p>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
+            <span className={pill("neutral")}>Exhaustion evidence-only: {(latest.exhaustion_decision || "—").replace(/_/g, " ")}</span>
+            {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy: waiting for retrace after profit</span>}
+            {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell: waiting for retrace after profit</span>}
+          </div>
+        </>
+      )}
+
+      <div className="mt-3 text-[10px] text-white/25 font-mono">
+        M10 bar {latest.bar_time || "—"} · {latest.ea_version || ""} · {latest.build_hash || ""}
       </div>
     </div>
   );
@@ -809,7 +845,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
           <div className="min-w-0">
             <div className={`mb-2 flex items-center gap-2 ${MONO_LABEL}`}>
               {online
-                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {heartbeat.timeframe||"M10"} · {heartbeat.market_mode==="INDEX_MODE"?`Index Mode (${heartbeat.index_profile||"GENERIC_INDEX"})`:"Gold Mode"} · Live</>
+                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {heartbeat.timeframe||"UNKNOWN"} · {heartbeat.market_mode==="INDEX_MODE"?`Index Mode (${heartbeat.index_profile||"GENERIC_INDEX"})`:"Gold Mode"} · Live</>
                 : <><Wifi className="h-3 w-3" />No connection</>}
             </div>
             <h1 className="text-[2rem] font-black tracking-tight leading-none">{botState}</h1>
@@ -865,7 +901,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         <Empty title="Connect your license" body="Link your ASE license key once and live data from your MT5 account will stream here automatically." icon={KeyRound} />
       )}
 
-      {online && <M10SignalCard events={events} />}
+      {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
 
       <AIMarketOutlookCard linked={Boolean(licenseInfo.activation_key)} />
 
@@ -920,7 +956,7 @@ function TradingPage({ heartbeat, events, online, linked, openCommand }) {
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="Open trades" value={online?heartbeat.open_positions||0:0} detail="EA-reported" icon={History} tone="amber" />
-        <Metric label="Symbol"      value={online?heartbeat.symbol||"XAUUSD":"—"} detail={heartbeat.timeframe||"M5"} icon={TerminalSquare} tone="blue" />
+        <Metric label="Symbol"      value={online?heartbeat.symbol||"XAUUSD":"—"} detail={heartbeat.timeframe||"UNKNOWN"} icon={TerminalSquare} tone="blue" />
         <Metric label="Spread"      value={online?`${heartbeat.spread??"-"}pts`:"—"} detail="Current quote" icon={Activity} tone="amber" />
         <Metric label="Bot state"   value={heartbeat.bot_state||"Waiting"} detail={heartbeat.last_action||"No action yet"} icon={Bot} tone={online?"green":"neutral"} />
       </div>

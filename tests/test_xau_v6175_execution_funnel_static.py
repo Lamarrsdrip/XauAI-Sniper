@@ -36,14 +36,28 @@ def test_version_bumped_to_v6175():
     assert "v6175-execution-funnel-telemetry-20260707" in ea
 
 
+# v6.25.1 owner directive 2026-07-17 -- event_type "M5_DECISION" renamed to
+# "PRIMARY_DECISION" with a primary_timeframe=M10 field (owner item 11):
+# timeframe identity no longer lives inside the event name itself. The
+# backend classifier accepts both names for backward compatibility with
+# already-queued/cached old events (see _ai_classify_card_type in
+# backend/server.py), but the EA itself only ever emits PRIMARY_DECISION now.
 def test_m5_candidate_is_not_reported_as_final_execution_allowed():
     ea = read(BACKEND_EA)
     fn = body(ea, "void XAU_RecordMarketSnapshot(string phase, int signal, string setupName, string grade,")
     assert "BotMonitorFunnelDetails(candidate, false" in fn
     assert 'candidate ? "WAITING" : "BLOCKED"' in fn
-    assert 'BotMonitorDecisionEvent("M5_DECISION", "INFO"' in fn
+    assert 'BotMonitorDecisionEvent("PRIMARY_DECISION", "INFO"' in fn
     assert '"DecisionCycle", scanDecision, false' in fn
     assert "scanFunnel" in fn
+
+
+def test_m5_decision_event_name_fully_retired_from_ea_source():
+    ea = read(BACKEND_EA)
+    # "M5_DECISION" may still appear in explanatory comments documenting the
+    # rename (for readers encountering the old name in cached/queued
+    # events), but must never appear as a live BotMonitorDecisionEvent string
+    assert 'BotMonitorDecisionEvent("M5_DECISION"' not in ea
 
 
 def test_blocked_candidates_publish_final_blocker_without_open_trade_called():

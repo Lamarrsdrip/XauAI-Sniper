@@ -72,9 +72,14 @@ def test_single_miss_does_not_purge_state():
 def test_found_position_resets_debounce_streak():
     ea = read(EA)
     fn = find_function(ea, "void XAU_RExit_ReconcileOrphans()")
-    found_branch = fn[fn.index("if(XAU_FindLivePositionByIdentifier("): fn.index("if(XAU_FindLivePositionByIdentifier(") + 300]
+    found_branch = fn[fn.index("if(XAU_FindLivePositionByIdentifier("): fn.index("if(XAU_FindLivePositionByIdentifier(") + 550]
     assert "g_rExit[i].notFoundStreak  = 0;" in found_branch
     assert "g_rExit[i].firstNotFoundAt = 0;" in found_branch
+    # v6.25.1: a live-position re-find must also clear the never-purge
+    # quarantine state added this release, logging it distinctly from an
+    # ordinary (never-quarantined) debounce reset.
+    assert "g_rExit[i].orphanUnconfirmedQuarantine = false;" in found_branch
+    assert "R_EXIT_ORPHAN_UNCONFIRMED_RESOLVED" in found_branch
 
 
 def test_history_confirmation_function_exists_and_checks_position_id():
@@ -93,12 +98,22 @@ def test_orphan_cleanup_calls_history_confirmation_before_purge():
     assert idx < purge_idx
 
 
+# v6.25.1 owner directive 2026-07-17 -- the old "SUSPICIOUS: no matching
+# close deal" branch logged a warning and then STILL PURGED the tracking
+# state -- exactly the defect the owner ordered removed ("remove any branch
+# that logs 'suspicious' and then still purges"). No-history-match now
+# enters a distinct quarantine state (R_EXIT_ORPHAN_UNCONFIRMED) that KEEPS
+# protection active and retries, and is never silently purged.
 def test_suspicious_no_history_match_is_distinctly_logged():
     ea = read(EA)
     fn = find_function(ea, "void XAU_RExit_ReconcileOrphans()")
-    assert "ORPHAN_CLEANUP_NO_HISTORY_MATCH_SUSPICIOUS" in fn
     assert "ORPHAN_CLEANUP_HISTORY_CONFIRMED_CLOSE" in fn
-    assert "SUSPICIOUS: no matching close deal" in fn
+    assert "R_EXIT_ORPHAN_UNCONFIRMED" in fn
+    assert "ORPHAN_CLEANUP_NO_HISTORY_MATCH_SUSPICIOUS" not in fn, "the old suspicious-then-purge branch must be fully removed"
+    idx = fn.index("g_rExit[i].orphanUnconfirmedQuarantine = true;")
+    window = fn[idx: idx + 400]
+    assert "NOT purged" in window
+    assert "ArrayResize(g_rExit," not in window, "the no-history-match branch must never purge tracking state"
 
 
 # ---------------------------------------------------------------------------

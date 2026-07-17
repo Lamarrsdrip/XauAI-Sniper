@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio, re, hashlib, json as _json
+from pymongo.errors import DuplicateKeyError
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
@@ -2146,7 +2147,7 @@ class TradeMemoryRecord(BaseModel):
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.24.1"
+    ea_version: str = "v6.25.1"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"
@@ -5398,7 +5399,11 @@ def _ai_classify_card_type(ev: dict) -> str:
     final_allowed = ev.get("final_execution_allowed")
     allowed = ev.get("allowed")
     ticket = str(ev.get("ticket") or "").strip()
-    if event_type == "M5_DECISION":
+    # v6.25.1 owner directive 2026-07-17 -- renamed from "M5_DECISION" on the
+    # EA side (timeframe identity must not live inside the event name;
+    # primary_timeframe is a separate field now). Both names are accepted
+    # here so already-queued/cached legacy events still classify correctly.
+    if event_type in ("PRIMARY_DECISION", "M5_DECISION"):
         if final_decision in {"EXECUTED", "FILLED"} or final_allowed is True:
             return "TRADE_EXECUTED"
         if final_decision == "BLOCKED" or final_allowed is False and str(ev.get("candidate_allowed") or "").lower() != "true":
@@ -5757,6 +5762,101 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
         "monitor_last_activity": doc,
     }}, upsert=True)
     return {"ok": True, "event_id": doc["id"]}
+
+# v6.25.1 owner directive 2026-07-17 -- CROSS-INSTANCE ATOMIC DIRECTION
+# RESERVATION. The EA's own GlobalVariableSetOnCondition-based lock
+# (XAU_TryClaimEntryLock) only protects two chart instances WITHIN THE SAME
+# terminal -- MT5 global variables are per-terminal, not shared across
+# machines. Mac and VPS are two entirely separate terminal installations
+# with no shared memory, so that lock cannot prevent them from racing each
+# other. This is the real shared coordination point: both terminals already
+# call this backend for heartbeat/activity, so it is the only place true
+# cross-machine atomicity is possible. Atomicity is enforced by MongoDB's
+# unique _id constraint on the reservation key (broker_server:account:symbol)
+# -- see the DuplicateKeyError handling below, not a read-then-write race.
+class DirectionReservationClaimReq(BaseModel):
+    pin: Optional[str] = ""
+    license_key: Optional[str] = ""
+    broker_server: str = ""
+    account: str = ""
+    symbol: str = ""
+    direction: int = 0  # 1=BUY, -1=SELL
+    requesting_family: str = ""
+    terminal_identity: str = ""
+    ttl_seconds: Optional[int] = 30
+
+class DirectionReservationReleaseReq(BaseModel):
+    pin: Optional[str] = ""
+    license_key: Optional[str] = ""
+    broker_server: str = ""
+    account: str = ""
+    symbol: str = ""
+    reservation_id: str = ""
+
+def _reservation_key(broker_server: str, account: str, symbol: str) -> str:
+    return f"{(broker_server or '').strip()}:{(account or '').strip()}:{(symbol or '').strip()}"
+
+@api_router.post("/cloud/reservation/claim")
+async def cloud_reservation_claim(req: DirectionReservationClaimReq, request: Request):
+    """Atomically claim the requested direction for this broker_server+account+
+    symbol. Succeeds if no reservation exists, the existing one has expired, or
+    the existing one is already the SAME direction (renewal). Fails (claimed=false)
+    if an unexpired OPPOSITE-direction reservation is currently held -- by
+    another terminal, another family on this same terminal, or this same call
+    racing itself. Never a process-local boolean only."""
+    if req.direction not in (1, -1):
+        raise HTTPException(status_code=400, detail="direction must be 1 or -1")
+    key = _reservation_key(req.broker_server, req.account, req.symbol)
+    if not req.broker_server or not req.account or not req.symbol:
+        raise HTTPException(status_code=400, detail="broker_server, account, and symbol are required")
+    now = datetime.now(timezone.utc)
+    ttl = max(5, min(int(req.ttl_seconds or 30), 120))
+    expires_at = now + timedelta(seconds=ttl)
+    reservation_id = str(uuid.uuid4())
+    try:
+        await db.cloud_direction_reservations.find_one_and_update(
+            {"_id": key, "$or": [
+                {"expiresAt": {"$lt": now.isoformat()}},
+                {"direction": req.direction},
+            ]},
+            {"$set": {
+                "direction": req.direction,
+                "requestingFamily": req.requesting_family,
+                "reservationId": reservation_id,
+                "createdAt": now.isoformat(),
+                "expiresAt": expires_at.isoformat(),
+                "terminalIdentity": req.terminal_identity,
+                "brokerServer": req.broker_server,
+                "account": req.account,
+                "symbol": req.symbol,
+            }},
+            upsert=True,
+        )
+        logger.info("[reservation-claim] key=%s direction=%s family=%s reservationId=%s CLAIMED",
+                    key, req.direction, req.requesting_family, reservation_id)
+        return {"claimed": True, "reservationId": reservation_id, "expiresAt": expires_at.isoformat()}
+    except DuplicateKeyError:
+        existing = await db.cloud_direction_reservations.find_one({"_id": key}, {"_id": 0})
+        logger.info("[reservation-claim] key=%s direction=%s family=%s BLOCKED existing=%s",
+                    key, req.direction, req.requesting_family, existing)
+        return {
+            "claimed": False,
+            "reason": "OPPOSITE_DIRECTION_RESERVED",
+            "existingDirection": existing.get("direction") if existing else None,
+            "existingFamily": existing.get("requestingFamily") if existing else None,
+            "existingTerminal": existing.get("terminalIdentity") if existing else None,
+        }
+
+@api_router.post("/cloud/reservation/release")
+async def cloud_reservation_release(req: DirectionReservationReleaseReq, request: Request):
+    """Release (or let expire) a reservation this exact call claimed. Only
+    releases if reservation_id matches -- a stale/foreign release request can
+    never clear another instance's active claim."""
+    key = _reservation_key(req.broker_server, req.account, req.symbol)
+    result = await db.cloud_direction_reservations.delete_one({"_id": key, "reservationId": req.reservation_id})
+    released = result.deleted_count > 0
+    logger.info("[reservation-release] key=%s reservationId=%s released=%s", key, req.reservation_id, released)
+    return {"released": released}
 
 @api_router.post("/cloud/monitor/thesis-status")
 async def cloud_monitor_thesis_status(req: TradeThesisStatusReq, request: Request):

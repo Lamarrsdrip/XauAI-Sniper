@@ -63,12 +63,40 @@ def test_move_already_missed_uses_owner_030R_threshold():
     assert "return POST_PROFIT_MOVE_ALREADY_MISSED;" in window
 
 
-def test_price_at_or_better_than_exit_is_retrace_confirmed():
+# v6.25.1 owner directive 2026-07-17 -- price-at-or-better-than-exit ALONE
+# must NOT mean RETRACE_CONFIRMED (owner item 2, the exact bug this test
+# used to assert as correct behavior). Real structure/pressure/reaction/room
+# evidence (retraceEvidenceConfirmed) is now required in addition to price;
+# price improvement without that evidence yields WAIT_FOR_RETRACE, and the
+# candidate is preserved (never deleted) while waiting.
+def test_price_at_or_better_than_exit_alone_is_not_sufficient_for_retrace_confirmed():
     ea = read(EA)
     fn = find_function(ea, FN_SIG)
+    assert "bool retraceEvidenceConfirmed = structureValid && pressureRestoring && reactionConfirmed && roomValid;" in fn
     idx = fn.index("if(!worsePriceThanExit)")
-    window = fn[idx: idx + 250]
+    window = fn[idx: idx + 900]
+    assert "if(retraceEvidenceConfirmed)" in window
     assert "return POST_PROFIT_RETRACE_CONFIRMED;" in window
+    assert "return POST_PROFIT_WAIT_FOR_RETRACE;" in window
+    # RETRACE_CONFIRMED must be nested inside the evidence check, not a
+    # bare consequence of price alone
+    confirmed_idx = window.index("return POST_PROFIT_RETRACE_CONFIRMED;")
+    evidence_idx = window.index("if(retraceEvidenceConfirmed)")
+    assert evidence_idx < confirmed_idx
+
+
+def test_retrace_evidence_requires_all_four_components_for_both_buy_and_sell():
+    ea = read(EA)
+    fn = find_function(ea, FN_SIG)
+    assert "bool structureValid" in fn
+    assert "bool pressureRestoring" in fn
+    assert "bool reactionConfirmed = sameSideStillDominant ? (td.continuationConfidence >= 50.0)" in fn
+    assert "(td.oppositeReclaim || td.oppositeRetestHeld || td.oppositeDisplacement);" in fn
+    assert "bool roomValid = roomForRequestedDir >= 0.30;" in fn
+    # symmetric: reactionConfirmed's opposite-side branch (used when the
+    # market's dominant direction genuinely flipped) reads the same reclaim/
+    # retest/displacement evidence regardless of BUY or SELL direction
+    assert "sameSideStillDominant ?" in fn
 
 
 def test_worse_price_recognized_before_deciding_wait_or_continue():
@@ -119,12 +147,20 @@ def test_stale_profitable_close_treated_as_fresh_not_indefinite_wait():
 # integration: wired into OpenTrade(), manual-exempt (quality heuristic, not
 # a safety invariant), does not touch risk/SL/exit/timer
 # ---------------------------------------------------------------------------
+# v6.25.1 owner directive 2026-07-17 -- REORDERED. The post-profit gate used
+# to run BEFORE the SL-widening block, so its 0.30R missed-move check was
+# silently using the RAW pre-widening structural distance as its "1R" unit
+# instead of the final, actually-risked distance -- a real bug (owner item
+# 3), not just documentation drift. The widening step (which now calls the
+# canonical XAU_ComputeFinalRiskGeometry) was moved to run FIRST, so the
+# gate reads slDist only after it has been reassigned to
+# finalGeometry.finalOriginalRiskDistance.
 def test_opentrade_calls_post_profit_gate_after_final_sl_distance_known():
     ea = read(EA)
     fn = find_function(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
+    widening_idx = fn.index("slDist = finalGeometry.finalOriginalRiskDistance;")
     gate_idx = fn.index("XAU_EvaluatePostProfitEntry(signal, price, slDist, postProfitReason)")
-    widening_idx = fn.index("XAU_SL_WIDENING_FACTOR (1.20x), applied exactly")
-    assert gate_idx < widening_idx, "post-profit gate must run before SL widening/lot sizing, not after"
+    assert widening_idx < gate_idx, "SL widening must be applied before the post-profit gate reads slDist as its 1R unit"
 
 
 def test_post_profit_gate_is_manual_override_exempt():
