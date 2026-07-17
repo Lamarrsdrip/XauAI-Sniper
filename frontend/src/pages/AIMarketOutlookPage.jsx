@@ -29,6 +29,13 @@ const DIRECTION_ICON = { BUY: ArrowUpRight, SELL: ArrowDownRight, NEUTRAL: Minus
 const HISTORY_FILTERS = ["All", "BUY", "SELL", "Green", "Red", "Gray", "Amber", "TP1", "TP2", "TP3", "Stopped", "No Entry"];
 
 function resultLabel(o) {
+  // v6.25.2 owner directive 2026-07-17 -- a TRANSITION/NEUTRAL/RANGE update
+  // is informational only, never an active or resolved directional signal
+  // -- must not be labeled with generic PUBLISHED/PENDING status text that
+  // reads like a trade outcome.
+  if (o.primary_direction && !["BUY", "SELL"].includes(o.primary_direction)) {
+    return "INFORMATIONAL UPDATE";
+  }
   if (!o.final_result) return o.status?.replace(/_/g, " ") || "PENDING";
   if (o.final_result.startsWith("GREEN") && o.highest_tp_reached) {
     return `TP${o.highest_tp_reached} HIT · +${o.final_r ?? "?"}R`;
@@ -443,12 +450,21 @@ function HistoryCard({ outlook }) {
         <span className="font-mono text-[12px] font-bold">{time} {outlook.primary_direction} · {outlook.confidence_pct}%</span>
         <span className={`font-mono text-[11px] font-bold ${color.text}`}>{resultLabel(outlook)}</span>
       </div>
-      {outlook.primary_direction !== "NO_VALID_OUTLOOK" && (
+      {["BUY", "SELL"].includes(outlook.primary_direction) ? (
         <div className="mt-1 text-[11px] text-white/40">
           Entry {outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high} · SL {outlook.suggested_sl} ·
           TP1 {outlook.tp1_price} · TP2 {outlook.tp2_price} · TP3 {outlook.tp3_price}
         </div>
-      )}
+      ) : outlook.primary_direction !== "NO_VALID_OUTLOOK" ? (
+        // v6.25.2 owner directive 2026-07-17 -- a non-directional hourly
+        // update (TRANSITION/NEUTRAL/RANGE) is informational only and must
+        // never show empty "Entry — · SL — · TP1 —" fields, which reads
+        // like a failed/incomplete trade signal instead of what it actually
+        // is: no new directional replacement was confirmed this hour.
+        <div className="mt-1 text-[11px] text-white/40">
+          No new direction confirmed this hour.
+        </div>
+      ) : null}
       <div className="mt-1 text-[10px] text-white/30">MFE {outlook.mfe?.toFixed?.(2) ?? outlook.mfe} · MAE {outlook.mae?.toFixed?.(2) ?? outlook.mae}</div>
     </div>
   );

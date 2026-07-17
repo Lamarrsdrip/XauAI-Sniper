@@ -149,7 +149,17 @@ def build_router() -> APIRouter:
         losses = [o for o in resolved_rows if o["final_r"] < 0]
         breakeven = [o for o in resolved_rows if o["final_r"] == 0]
         no_entry = [o for o in stats_rows if (o.get("final_result") or "").startswith("GRAY")]
-        active_unresolved = [o for o in stats_rows if o.get("final_result") is None and not (o.get("final_result") or "").startswith("GRAY")]
+        # v6.25.2 owner directive 2026-07-17 -- "Active" must count only
+        # genuinely unresolved DIRECTIONAL (BUY/SELL) campaigns. It used to
+        # count any non-GRAY row with no final_result, which silently
+        # included every non-directional hourly update (TRANSITION/NEUTRAL/
+        # RANGE/NO_VALID_OUTLOOK) as if it were its own active signal -- the
+        # exact live-evidence bug (one real BUY + two TRANSITION updates
+        # showing "Active=3" instead of the true directional count of 1). A
+        # TRANSITION is informational only and must never appear here.
+        active_unresolved = [o for o in stats_rows
+                              if o.get("primary_direction") in ("BUY", "SELL")
+                              and o.get("final_result") is None]
         win_rate = round(len(wins) / len(wins + losses), 3) if (wins or losses) else None
         win_rs = [o["final_r"] for o in wins]
         loss_rs = [o["final_r"] for o in losses]

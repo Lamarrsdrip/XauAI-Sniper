@@ -37,6 +37,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
+from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger("market_outlook")
 
@@ -354,6 +355,45 @@ def _new_outlook_id(direction_label: str) -> str:
     return f"OUTLOOK-{OUTLOOK_SYMBOL}-{ts}-{direction_label}-{uuid.uuid4().hex[:6]}"
 
 
+def _outlook_slot_id(account: str, symbol: str, hourly_slot: str) -> str:
+    return f"outlook-slot:{account}:{symbol}:{hourly_slot}"
+
+
+async def _insert_outlook_atomically(db, doc: Dict, account: str, symbol: str, hourly_slot: str) -> Dict:
+    """v6.25.2 owner directive 2026-07-17 -- URGENT duplicate-publication
+    repair. hourly_generation_tick()'s existing-slot check and this
+    function's own insert are two separate operations with no atomicity
+    between them (a genuine read-then-write race) -- two concurrent
+    generation passes can both see "no record for this slot" and both
+    insert, producing the exact live-evidence duplicate 09:00 TRANSITION
+    published twice. Fixed the only way that is actually atomic: give every
+    outlook document for a given (account, symbol, hourly_slot) the SAME
+    deterministic MongoDB _id (which is uniquely indexed by MongoDB itself,
+    no separate index to create or forget). The first insert for a slot
+    always wins; a second concurrent attempt raises DuplicateKeyError,
+    which is caught here and resolved by returning the ALREADY-PERSISTED
+    winning document instead of creating a second one -- so at most one
+    outlook, and at most one notification (the caller only dispatches a
+    notification when this returns the document IT inserted), can ever
+    exist per slot, regardless of how many workers race to generate it."""
+    doc = dict(doc)
+    doc["_id"] = _outlook_slot_id(account, symbol, hourly_slot)
+    try:
+        await db.cloud_market_outlooks.insert_one(doc)
+        doc["_newly_inserted"] = True
+        return doc
+    except DuplicateKeyError:
+        existing = await db.cloud_market_outlooks.find_one({"_id": doc["_id"]})
+        logger.info(f"OUTLOOK_SLOT_DUPLICATE_PREVENTED account={account} symbol={symbol} hourly_slot={hourly_slot} -- returning existing winning record, not inserting a second one")
+        if existing is None:
+            # Extremely unlikely (would mean the winning insert was deleted
+            # between the DuplicateKeyError and this read) -- fail closed
+            # rather than silently double-inserting.
+            raise
+        existing["_newly_inserted"] = False
+        return existing
+
+
 async def generate_outlook_for_account(license_key: str, account: str, account_id: str = "",
                                         is_late_catchup: bool = False) -> Optional[Dict]:
     """Generates and persists ONE new immutable outlook document for this
@@ -429,8 +469,7 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "expected_path": "NO_CLEAR_PATH",
             "setup_type": "NONE",
         }
-        await db.cloud_market_outlooks.insert_one(dict(doc))
-        return doc
+        return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
 
     thesis = evidence["market_thesis"] or evidence["entry_readiness"]
     raw_dir = str(thesis.get("direction", "") or thesis.get("action", "")).upper()
@@ -537,8 +576,7 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "expected_path": "NO_CLEAR_PATH",
             "setup_type": "NONE",
         }
-        await db.cloud_market_outlooks.insert_one(dict(doc))
-        return doc
+        return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
 
     narrative = await _synthesize_narrative(direction_label, confidence, thesis, path, zone, account_id)
 
@@ -600,9 +638,10 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "mfe": 0.0, "mae": 0.0,
         "color_state": "AMBER",
     }
-    await db.cloud_market_outlooks.insert_one(dict(doc))
-    logger.info(f"OUTLOOK_PUBLISHED id={outlook_id} dir={direction_label} conf={confidence}% account={account}")
-    return doc
+    stored = await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
+    if stored.get("_newly_inserted"):
+        logger.info(f"OUTLOOK_PUBLISHED id={outlook_id} dir={direction_label} conf={confidence}% account={account}")
+    return stored
 
 
 async def hourly_generation_tick() -> int:
@@ -661,10 +700,22 @@ async def hourly_generation_tick() -> int:
         try:
             doc = await generate_outlook_for_account(lic_key, account, account_id=account, is_late_catchup=is_late_catchup)
             if doc:
-                published += 1
-                if is_late_catchup:
-                    logger.warning(f"OUTLOOK_SLOT_LATE_CATCHUP account={account} slot={current_slot} previousSlot={last_doc.get('hourly_slot') if last_doc else None}")
-                await _dispatch_hourly_notification(doc)
+                # v6.25.2 owner directive 2026-07-17 -- idempotency: only the
+                # call that genuinely won the atomic insert (see
+                # _insert_outlook_atomically) may count as a publication or
+                # dispatch a notification. A concurrent racing call that got
+                # back the OTHER worker's already-persisted document must be
+                # a complete no-op here, or the exact live-evidence bug
+                # (duplicate 09:00 TRANSITION, and a duplicate notification
+                # with it) reproduces even with the insert itself fixed.
+                newly_inserted = doc.pop("_newly_inserted", True)
+                if newly_inserted:
+                    published += 1
+                    if is_late_catchup:
+                        logger.warning(f"OUTLOOK_SLOT_LATE_CATCHUP account={account} slot={current_slot} previousSlot={last_doc.get('hourly_slot') if last_doc else None}")
+                    await _dispatch_hourly_notification(doc)
+                else:
+                    logger.info(f"OUTLOOK_SLOT_ALREADY_PUBLISHED_BY_ANOTHER_WORKER account={account} slot={current_slot} -- no duplicate publish, no duplicate notification")
         except Exception as e:
             logger.error(f"OUTLOOK_GENERATION_FAILED account={account}: {e}")
     return published

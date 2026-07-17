@@ -191,10 +191,22 @@ def test_revisions_are_a_separate_collection_from_the_outlook_itself():
 
 
 def test_generation_only_ever_inserts_never_updates_the_original_outlook_doc():
+    # v6.25.2 owner directive 2026-07-17 -- generation's own insert_one calls
+    # moved into the shared _insert_outlook_atomically() helper (the
+    # duplicate-hourly-publication fix: a deterministic per-slot _id so a
+    # racing second insert raises DuplicateKeyError instead of creating a
+    # second record). The immutability guarantee this test protects --
+    # generation never UPDATES a prior outlook document -- still holds; it
+    # now goes through that one shared insert path instead of three direct
+    # insert_one calls.
     fn = MO_SRC[MO_SRC.index("async def generate_outlook_for_account"):]
     fn_body = fn[:fn.index("\n\nasync def hourly_generation_tick")]
-    assert "insert_one" in fn_body
+    assert "_insert_outlook_atomically" in fn_body
     assert "update_one" not in fn_body  # generation never mutates a prior outlook
+    helper_fn = MO_SRC[MO_SRC.index("async def _insert_outlook_atomically"):]
+    helper_fn_body = helper_fn[:helper_fn.index("\n\nasync def generate_outlook_for_account")]
+    assert "insert_one" in helper_fn_body
+    assert "update_one" not in helper_fn_body
 
 
 # ---------------------------------------------------------------------------
