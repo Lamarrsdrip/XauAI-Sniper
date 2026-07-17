@@ -1834,6 +1834,18 @@ async def startup():
         await db.cloud_notification_log.create_index("idempotency_key", unique=True)
     except Exception as e:
         logger.warning(f"[outlook-notifications] could not create idempotency_key index: {e}")
+    # v6.25.2 owner directive 2026-07-17 -- canonical self-initializing VAPID
+    # keypair. Must complete BEFORE this backend serves any notification
+    # route (get_vapid_status/vapid_configured internally await this same
+    # completion event as a defense-in-depth guard against any caller that
+    # somehow runs before startup finishes, but awaiting it directly here
+    # is what actually guarantees no request races ahead of it in the
+    # normal case).
+    try:
+        import notifications as _notif
+        await _notif.initialize_vapid_keys()
+    except Exception as e:
+        logger.error(f"VAPID_INIT_STARTUP_FAILED: {e}")
     # v1.4.7 — one-time backfill: copy closed_at from cloud_shadow_trades back
     # into cloud_signals. Fixes legacy signals where master_close updated
     # shadow trades but not the parent signal record. Idempotent.

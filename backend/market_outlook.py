@@ -112,6 +112,7 @@ class PushSubscriptionIn(BaseModel):
     keys: Dict[str, str]  # {"p256dh": ..., "auth": ...}
     device_label: Optional[str] = ""
     timezone_offset_minutes: Optional[int] = 0
+    sw_version: Optional[str] = ""
 
 
 # ---------------------------------------------------------------------------

@@ -17253,6 +17253,29 @@ void OnTick()
    if(!CopyEntryBuffer(hStoch, 1, 0, 3, bufStochD, "STOCH_D")) { XAU_LogScanAborted(g_lastSkipReason); return; }
    g_indicatorBufferFailCount = 0;
    if(curBar > 0) g_lastEntryBarSeen = curBar;
+   // v6.25.2 owner directive 2026-07-17 -- URGENT FORENSIC FIX. Live-evidence-
+   // proven: g_lastEntryBarSeen was already correctly gated behind a fully
+   // successful (or bounded-last-good-fallback) buffer load -- it is NEVER
+   // advanced by any of the XAU_LogScanAborted(...); return; paths above, so
+   // an aborted scan genuinely does retry the SAME bar on the next tick, not
+   // wait for the next M10 candle. The REAL defect was g_lastSkipReason: it
+   // is a single shared, tick-spanning global, and nothing cleared it once
+   // the buffer-load phase (this line) actually succeeded. A transient
+   // EMA_FAST_H1/EMA_FAST_HTF 4807 hiccup earlier in THIS SAME tick -- one
+   // the bounded last-known-good fallback already recovered from, letting
+   // the scan reach this exact line -- left its "INDICATOR_TRANSIENT_4807 ...
+   // retrying next tick" text sitting in g_lastSkipReason. XAU_RecordMarketSnapshot()
+   // then read that stale text as if it were the reason THIS completed
+   // decision cycle produced no candidate, making a genuine (or
+   // successfully-recovered) market decision look like a live indicator
+   // failure blocked it. Clearing here means every reason surfaced from this
+   // point forward for this bar is either a fresh, real block gate (license/
+   // spread/news/risk/etc, all of which set their own g_lastSkipReason at
+   // the point they fire) or ScoreSetups' own genuine "no qualifying setup"
+   // outcome (XAU_RecordMarketSnapshot's own fallback text when
+   // g_lastSkipReason is empty) -- never leftover indicator noise from
+   // earlier in the same tick.
+   g_lastSkipReason = "";
    // v6.17.14 FLEET-CONSISTENCY: exactly one recovery attempt per NEW closed
    // M5 bar for whatever A/A+ candidate died to a soft blocker on the prior
    // bar. Deliberately NOT run on watchdog/timer-forced re-scans of the SAME
@@ -29034,7 +29057,7 @@ void XAU_RecordMarketSnapshot(string phase, int signal, string setupName, string
       double midFeed = (bidFeed > 0.0 && askFeed > 0.0) ? (bidFeed + askFeed) * 0.5 : iClose(Symbol(), XAU_PRIMARY_DECISION_TF, 0);
       string scanDecision = candidate
                             ? StringFormat("Entry candidate: %s %s setup", BotMonitorSignalName(signal), grade)
-                            : "No entry allowed on this M5 decision cycle";
+                            : "No entry was created from this M10 primary decision cycle";
       string scanReason = candidate
                           ? StringFormat("%s score=%.2f setupScore=%.2f", setupName, combinedScore, setupScore)
                           : (StringLen(g_lastSkipReason) > 0 ? g_lastSkipReason : "No qualified M10 setup");

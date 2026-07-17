@@ -57,9 +57,14 @@ def test_outlook_module_only_writes_its_own_collections():
 
 
 def test_notifications_module_only_writes_its_own_collections():
+    # v6.25.2 owner directive 2026-07-17 -- the self-initializing VAPID
+    # keypair is persisted in its own canonical single-document collection
+    # (system_settings/_id=web_push_vapid_primary), a deliberate scope
+    # addition, not a violation: it is still owned exclusively by this
+    # feature (no other module reads or writes web_push_vapid_primary).
     import re
     writes = re.findall(r'db\.(\w+)\.(?:insert_one|update_one|delete_one|update_many)', NOTIF_SRC)
-    own_collections = {"cloud_notification_log", "cloud_push_subscriptions"}
+    own_collections = {"cloud_notification_log", "cloud_push_subscriptions", "system_settings"}
     for coll in writes:
         assert coll in own_collections, f"notifications.py writes to unexpected collection: {coll}"
 

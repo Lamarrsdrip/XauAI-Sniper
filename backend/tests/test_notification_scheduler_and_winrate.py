@@ -111,7 +111,7 @@ def test_temporary_failures_do_not_delete_subscription():
 
 def test_webpush_returns_classified_failure_not_bare_bool():
     fn_idx = NOTIF_SRC.index("async def _send_webpush(device: Dict, payload: Dict) -> tuple:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 2000]
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
     for status_class in ["SERVER_NOT_CONFIGURED", "DEPENDENCY_MISSING", "PERMANENT_SUBSCRIPTION_GONE",
                           "TEMPORARY_DELIVERY_FAILURE", "UNKNOWN_FAILURE"]:
         assert status_class in fn
@@ -119,7 +119,7 @@ def test_webpush_returns_classified_failure_not_bare_bool():
 
 def test_permanent_gone_only_on_404_or_410_status():
     fn_idx = NOTIF_SRC.index("async def _send_webpush(device: Dict, payload: Dict) -> tuple:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 2000]
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
     assert "status_code in (404, 410)" in fn
 
 
@@ -149,21 +149,21 @@ def test_on_verified_requires_devices_and_server_ready():
 
 def test_test_notification_uses_real_production_dispatcher():
     fn_idx = NOTIF_SRC.index("async def send_test_notification(user_id: str) -> Dict:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 2000]
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
     assert "await _send_webpush(device, payload)" in fn
     assert '@r.post("/outlook/notifications/test")' in ROUTES_SRC
 
 
 def test_test_notification_never_creates_an_outlook():
     fn_idx = NOTIF_SRC.index("async def send_test_notification(user_id: str) -> Dict:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 2000]
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
     assert "cloud_market_outlooks" not in fn
     assert "generate_outlook_for_account" not in fn
 
 
 def test_test_notification_returns_named_status_not_bare_bool():
     fn_idx = NOTIF_SRC.index("async def send_test_notification(user_id: str) -> Dict:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 2500]
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
     for status in ["SERVER_NOT_CONFIGURED", "DEPENDENCY_MISSING", "NO_DEVICE", "SENT", "SUBSCRIPTION_EXPIRED", "FAILED"]:
         assert status in fn
 

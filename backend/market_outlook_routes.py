@@ -226,23 +226,44 @@ def build_router() -> APIRouter:
         await db.cloud_notification_prefs.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
         return {"ok": True, "prefs": doc}
 
+    # v6.25.2 owner directive 2026-07-17 -- returns the initialized canonical
+    # key state, never the module-import-time (possibly-empty) globals.
+    # Never includes the private key.
     @r.get("/outlook/notifications/vapid-public-key")
     async def get_vapid_public_key():
-        return {"public_key": notif.VAPID_PUBLIC_KEY, "configured": notif.vapid_configured()}
+        return await notif.get_vapid_status()
 
+    # v6.25.2 owner directive -- an existing endpoint record must REFRESH
+    # (keys/device_label/timezone/vapid key fingerprint/updated_at/sw
+    # version), not early-return stale data. If the stored subscription's
+    # VAPID key fingerprint no longer matches the currently active key (a
+    # real admin rotation happened since this device last subscribed), it
+    # is marked KEY_ROTATED_OR_MISMATCHED so the frontend knows to drop the
+    # old browser-side PushManager subscription and create a fresh one.
     @r.post("/outlook/notifications/subscribe")
     async def subscribe_push(body: mo.PushSubscriptionIn, user: dict = Depends(srv.get_cloud_user)):
         db = srv.db
+        vapid_status = await notif.get_vapid_status()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        record = {
+            "user_id": user["id"], "endpoint": body.endpoint, "keys": body.keys,
+            "device_label": body.device_label or "", "timezone_offset_minutes": body.timezone_offset_minutes or 0,
+            "sw_version": body.sw_version or "",
+            "vapid_key_fingerprint": vapid_status["key_fingerprint"],
+            "updated_at": now_iso,
+        }
         existing = await db.cloud_push_subscriptions.find_one({"user_id": user["id"], "endpoint": body.endpoint})
         if existing:
-            return {"ok": True, "device_id": existing["id"], "already_subscribed": True}
+            await db.cloud_push_subscriptions.update_one({"id": existing["id"]}, {"$set": record})
+            key_rotated = bool(existing.get("vapid_key_fingerprint")) and existing.get("vapid_key_fingerprint") != vapid_status["key_fingerprint"]
+            return {"ok": True, "device_id": existing["id"], "already_subscribed": True,
+                    "refreshed": True, "key_rotated_or_mismatched": key_rotated}
         device_id = str(uuid.uuid4())
-        await db.cloud_push_subscriptions.insert_one({
-            "id": device_id, "user_id": user["id"], "endpoint": body.endpoint, "keys": body.keys,
-            "device_label": body.device_label or "", "timezone_offset_minutes": body.timezone_offset_minutes or 0,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        return {"ok": True, "device_id": device_id, "already_subscribed": False}
+        record["id"] = device_id
+        record["created_at"] = now_iso
+        await db.cloud_push_subscriptions.insert_one(record)
+        return {"ok": True, "device_id": device_id, "already_subscribed": False,
+                "refreshed": False, "key_rotated_or_mismatched": False}
 
     @r.delete("/outlook/notifications/subscribe/{device_id}")
     async def unsubscribe_push(device_id: str, user: dict = Depends(srv.get_cloud_user)):

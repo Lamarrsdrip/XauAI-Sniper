@@ -1,9 +1,11 @@
 """Web Push notification dispatch for the AI Market Outlook feature.
 
-Uses standard Web Push (RFC 8030) with self-generated VAPID keys -- no
-external account, no Firebase/APNs project, no service-account key. The
-VAPID keypair is generated once, locally (`npx web-push generate-vapid-keys`),
-and stored as two environment variables (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY).
+Uses standard Web Push (RFC 8030) with VAPID keys -- no external account, no
+Firebase/APNs project, no service-account key. v6.25.2 owner directive
+2026-07-17: the keypair is now self-initializing and self-healing, not a
+manual one-time `npx web-push generate-vapid-keys` + environment-variable
+step that silently breaks every deployment that forgot to set it. See
+initialize_vapid_keys() below for the canonical load-or-create flow.
 
 STRICT SEPARATION: this module only reads cloud_notification_prefs and
 cloud_push_subscriptions (both owned by this feature) and writes to
@@ -16,15 +18,235 @@ from __future__ import annotations
 import os
 import json
 import uuid
+import hashlib
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
+from pymongo.errors import DuplicateKeyError
+
 logger = logging.getLogger("notifications")
 
-VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
-VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 VAPID_CLAIMS_SUB = os.environ.get("VAPID_CONTACT_EMAIL", "mailto:support@xauaisniper.com")
+
+
+def _db():
+    import server as _srv
+    return _srv.db
+
+
+# ---------------------------------------------------------------------------
+# v6.25.2 owner directive 2026-07-17 -- canonical, self-initializing,
+# restart-safe VAPID key state. Never cache an empty environment value at
+# import time (the bug that produced the permanent SERVER_NOT_CONFIGURED
+# failure this fixes) -- everything below is a runtime accessor over
+# _VAPID_STATE, populated once by initialize_vapid_keys() at backend
+# startup, before any notification route may report readiness.
+# ---------------------------------------------------------------------------
+VAPID_STATE_INITIALIZING = "INITIALIZING"
+VAPID_STATE_READY_ENV = "READY_ENV"
+VAPID_STATE_READY_DATABASE = "READY_DATABASE"
+VAPID_STATE_GENERATION_FAILED = "GENERATION_FAILED"
+VAPID_STATE_INVALID_KEYPAIR = "INVALID_KEYPAIR"
+VAPID_STATE_DEPENDENCY_MISSING = "DEPENDENCY_MISSING"
+_VAPID_READY_STATES = (VAPID_STATE_READY_ENV, VAPID_STATE_READY_DATABASE)
+
+_VAPID_STATE: Dict = {
+    "state": VAPID_STATE_INITIALIZING,
+    "public_key": "",
+    "private_key": "",
+    "fingerprint": "",
+}
+_vapid_init_lock = asyncio.Lock()
+_vapid_init_event = asyncio.Event()
+
+
+def _vapid_fingerprint(public_key: str) -> str:
+    """Safe-to-log/return identifier for a public key -- never the key
+    itself in a context where a rotation needs to be detected without
+    exposing the raw material redundantly."""
+    return hashlib.sha256(public_key.encode("utf-8")).hexdigest()[:16]
+
+
+def _validate_vapid_keypair(public_key: str, private_key: str) -> bool:
+    """Real cryptographic validation, not a non-empty-string assumption:
+    the two keys must form a matching P-256 pair, the public key must be in
+    the exact URL-safe base64 uncompressed-point format the browser's
+    PushManager.subscribe(applicationServerKey=...) and pywebpush both
+    require, and the private key must actually work for VAPID JWT signing
+    (a real dry-run sign, no network call). Never logs the private key."""
+    try:
+        if not public_key or not private_key:
+            return False
+        public_key = public_key.strip()
+        private_key = private_key.strip()
+        if "\n" in public_key or "\n" in private_key or "'" in public_key or "'" in private_key \
+           or '"' in public_key or '"' in private_key:
+            return False
+        from py_vapid import Vapid01
+        from py_vapid.utils import b64urlencode
+        from cryptography.hazmat.primitives import serialization
+        vapid = Vapid01.from_string(private_key)
+        derived_pub_bytes = vapid.public_key.public_bytes(
+            serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint,
+        )
+        if len(derived_pub_bytes) != 65 or derived_pub_bytes[0] != 0x04:
+            return False  # not an uncompressed P-256 point
+        if b64urlencode(derived_pub_bytes) != public_key:
+            return False  # public key does not match this private key
+        # Dry-run signing test -- proves pywebpush's exact code path (which
+        # calls Vapid.sign() internally) works with this private key.
+        vapid.sign({"sub": VAPID_CLAIMS_SUB, "aud": "https://validation.local"})
+        return True
+    except Exception as e:
+        logger.warning(f"VAPID_KEYPAIR_VALIDATION_FAILED reason={type(e).__name__}")
+        return False
+
+
+def _generate_vapid_keypair() -> tuple:
+    """Generates one fresh, valid, browser/pywebpush-compatible VAPID P-256
+    keypair. Returns (public_key_urlsafe_b64, private_key_urlsafe_b64)."""
+    from py_vapid import Vapid01
+    from py_vapid.utils import b64urlencode
+    from cryptography.hazmat.primitives import serialization
+    vapid = Vapid01()
+    vapid.generate_keys()
+    priv_raw = vapid.private_key.private_numbers().private_value.to_bytes(32, "big")
+    private_key_str = b64urlencode(priv_raw)
+    pub_bytes = vapid.public_key.public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint,
+    )
+    public_key_str = b64urlencode(pub_bytes)
+    return public_key_str, private_key_str
+
+
+async def initialize_vapid_keys() -> None:
+    """Canonical asynchronous VAPID initialization. Must be awaited once
+    from the backend's startup event, before any request is served. Priority:
+    1) valid VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY environment variables;
+    2) the existing persisted keypair in db.system_settings/_id=web_push_vapid_primary;
+    3) generate a new keypair and atomically persist it -- if two workers
+       race this at once, MongoDB's unique _id constraint on that document
+       lets exactly one insert win; the loser rereads and uses the winner's
+       persisted pair, so both workers converge on the SAME keypair. Never
+       regenerates on an ordinary restart -- a changed public key silently
+       invalidates every existing browser subscription."""
+    if _vapid_init_event.is_set():
+        return  # already initialized this process
+    async with _vapid_init_lock:
+        if _vapid_init_event.is_set():
+            return
+        try:
+            import pywebpush  # noqa: F401 -- dependency probe
+        except ImportError:
+            _VAPID_STATE["state"] = VAPID_STATE_DEPENDENCY_MISSING
+            logger.error("WEBPUSH_DEPENDENCY available=false -- `pip install pywebpush` on the backend")
+            _vapid_init_event.set()
+            return
+
+        env_pub = os.environ.get("VAPID_PUBLIC_KEY", "").strip()
+        env_priv = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
+        if env_pub and env_priv and _validate_vapid_keypair(env_pub, env_priv):
+            _VAPID_STATE.update(state=VAPID_STATE_READY_ENV, public_key=env_pub, private_key=env_priv,
+                                 fingerprint=_vapid_fingerprint(env_pub))
+            logger.info(f"VAPID_INIT state=READY_ENV fingerprint={_VAPID_STATE['fingerprint']}")
+            logger.info("WEBPUSH_DEPENDENCY available=true")
+            logger.info(f"PUSH_SERVER_READY configured=true fingerprint={_VAPID_STATE['fingerprint']}")
+            _vapid_init_event.set()
+            return
+        if env_pub or env_priv:
+            logger.warning("VAPID env vars present but failed cryptographic validation -- falling back to database keypair")
+
+        db = _db()
+        doc = await db.system_settings.find_one({"_id": "web_push_vapid_primary"})
+        if doc and _validate_vapid_keypair(doc.get("public_key", ""), doc.get("private_key", "")):
+            _VAPID_STATE.update(state=VAPID_STATE_READY_DATABASE, public_key=doc["public_key"],
+                                 private_key=doc["private_key"], fingerprint=_vapid_fingerprint(doc["public_key"]))
+            logger.info(f"VAPID_INIT state=READY_DATABASE fingerprint={_VAPID_STATE['fingerprint']}")
+            logger.info("WEBPUSH_DEPENDENCY available=true")
+            logger.info(f"PUSH_SERVER_READY configured=true fingerprint={_VAPID_STATE['fingerprint']}")
+            _vapid_init_event.set()
+            return
+        if doc:
+            logger.warning("Persisted VAPID keypair failed cryptographic validation -- will not silently regenerate; reporting INVALID_KEYPAIR")
+            _VAPID_STATE["state"] = VAPID_STATE_INVALID_KEYPAIR
+            _vapid_init_event.set()
+            return
+
+        # No env pair, no persisted pair -- generate once and atomically
+        # claim the single canonical document.
+        pub, priv = _generate_vapid_keypair()
+        if not _validate_vapid_keypair(pub, priv):
+            _VAPID_STATE["state"] = VAPID_STATE_GENERATION_FAILED
+            logger.error("VAPID_INIT state=GENERATION_FAILED -- self-generated keypair failed its own validation")
+            _vapid_init_event.set()
+            return
+        try:
+            await db.system_settings.insert_one({
+                "_id": "web_push_vapid_primary",
+                "public_key": pub,
+                "private_key": priv,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            winning_pub, winning_priv = pub, priv
+            logger.info("VAPID_KEYPAIR_GENERATED_AND_PERSISTED (this worker won the creation race)")
+        except DuplicateKeyError:
+            # Another worker started simultaneously and already persisted a
+            # pair -- reread it so every worker converges on the SAME keys.
+            reread = await db.system_settings.find_one({"_id": "web_push_vapid_primary"})
+            winning_pub, winning_priv = reread.get("public_key", ""), reread.get("private_key", "")
+            logger.info("VAPID_KEYPAIR_CREATION_RACE_LOST -- reread the winning persisted pair from another worker")
+
+        if not _validate_vapid_keypair(winning_pub, winning_priv):
+            _VAPID_STATE["state"] = VAPID_STATE_INVALID_KEYPAIR
+            logger.error("VAPID_INIT state=INVALID_KEYPAIR -- persisted winner failed re-validation after re-read")
+            _vapid_init_event.set()
+            return
+
+        _VAPID_STATE.update(state=VAPID_STATE_READY_DATABASE, public_key=winning_pub, private_key=winning_priv,
+                             fingerprint=_vapid_fingerprint(winning_pub))
+        logger.info(f"VAPID_INIT state=READY_DATABASE fingerprint={_VAPID_STATE['fingerprint']} (newly generated)")
+        logger.info("WEBPUSH_DEPENDENCY available=true")
+        logger.info(f"PUSH_SERVER_READY configured=true fingerprint={_VAPID_STATE['fingerprint']}")
+        _vapid_init_event.set()
+
+
+async def _await_vapid_init() -> None:
+    """Every accessor below calls this first -- a request that arrives
+    before startup's initialize_vapid_keys() call finishes must wait for it
+    rather than racing ahead and observing an empty/INITIALIZING state."""
+    if not _vapid_init_event.is_set():
+        await _vapid_init_event.wait()
+
+
+async def get_vapid_status() -> Dict:
+    """Safe-to-return-to-the-frontend status snapshot. Never includes the
+    private key."""
+    await _await_vapid_init()
+    state = _VAPID_STATE["state"]
+    return {
+        "configured": state in _VAPID_READY_STATES,
+        "initialization_state": state,
+        "public_key": _VAPID_STATE["public_key"] if state in _VAPID_READY_STATES else "",
+        "key_fingerprint": _VAPID_STATE["fingerprint"],
+        "dependency_available": state != VAPID_STATE_DEPENDENCY_MISSING,
+    }
+
+
+async def get_vapid_public_key() -> str:
+    await _await_vapid_init()
+    return _VAPID_STATE["public_key"]
+
+
+async def get_vapid_private_key() -> str:
+    await _await_vapid_init()
+    return _VAPID_STATE["private_key"]
+
+
+async def vapid_configured() -> bool:
+    await _await_vapid_init()
+    return _VAPID_STATE["state"] in _VAPID_READY_STATES
 
 # Notification tier ordering -- an event's min_tier must be <= the user's
 # configured tier for it to actually be sent.
@@ -40,15 +262,6 @@ _EVENT_MIN_TIER = {
     "INVALIDATED": "ALL_UPDATES",
     "EXPIRED_NO_ENTRY": "ALL_UPDATES",
 }
-
-
-def _db():
-    import server as _srv
-    return _srv.db
-
-
-def vapid_configured() -> bool:
-    return bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
 
 
 def _idempotency_key(outlook_id: str, event: str, user_id: str) -> str:
@@ -163,25 +376,50 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> int
 # failure is not one undifferentiated "false" -- only PERMANENT_SUBSCRIPTION_GONE
 # may ever cause a device record to be deleted; every other class is a
 # temporary/environmental condition that must be retried, not treated as
-# proof the device is gone.
+# proof the device is gone. v6.25.2: added KEY_MISMATCH (device subscribed
+# under a VAPID public key that is no longer the active one) and
+# AUTHENTICATION_FAILED (push service rejected our VAPID auth itself, not
+# the subscription) per the owner's expanded taxonomy.
 PERMANENT_SUBSCRIPTION_GONE = "PERMANENT_SUBSCRIPTION_GONE"
 TEMPORARY_DELIVERY_FAILURE = "TEMPORARY_DELIVERY_FAILURE"
 SERVER_NOT_CONFIGURED = "SERVER_NOT_CONFIGURED"
 DEPENDENCY_MISSING = "DEPENDENCY_MISSING"
 INVALID_PAYLOAD = "INVALID_PAYLOAD"
+AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED"
+KEY_MISMATCH = "KEY_MISMATCH"
 UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
 
 
 async def _send_webpush(device: Dict, payload: Dict) -> tuple:
-    """Returns (ok: bool, failure_class: Optional[str])."""
-    if not vapid_configured():
-        logger.info(f"NOTIFICATION_SKIPPED_NO_VAPID device={device.get('id')} payload={payload.get('title')}")
+    """Returns (ok: bool, failure_class: Optional[str]). The one production
+    dispatcher every caller (hourly outlook events, TP/SL results, the Send
+    Test Notification button) funnels through -- there is no second path."""
+    status = await get_vapid_status()
+    if not status["configured"]:
+        logger.info(f"NOTIFICATION_SKIPPED_NO_VAPID device={device.get('id')} payload={payload.get('title')} "
+                    f"initialization_state={status['initialization_state']}")
         return False, SERVER_NOT_CONFIGURED
+    if not status["dependency_available"]:
+        return False, DEPENDENCY_MISSING
     try:
         from pywebpush import webpush, WebPushException
     except ImportError:
         logger.warning("pywebpush not installed -- notification not sent. `pip install pywebpush` on the backend.")
         return False, DEPENDENCY_MISSING
+
+    # v6.25.2 owner directive -- if this device subscribed under a VAPID
+    # public key that is no longer the active one (a real admin key
+    # rotation, not the ordinary restart-retains-same-fingerprint case),
+    # the push will fail with a browser-side error the caller cannot fix by
+    # retrying. Detect it up front from the stored fingerprint so the
+    # caller can prompt a resubscribe instead of endlessly retrying.
+    device_fingerprint = device.get("vapid_key_fingerprint")
+    if device_fingerprint and device_fingerprint != status["key_fingerprint"]:
+        logger.warning(f"WEBPUSH_KEY_MISMATCH device={device.get('id')} "
+                        f"deviceFingerprint={device_fingerprint} activeFingerprint={status['key_fingerprint']}")
+        return False, KEY_MISMATCH
+
+    private_key = await get_vapid_private_key()
     try:
         webpush(
             subscription_info={
@@ -189,7 +427,7 @@ async def _send_webpush(device: Dict, payload: Dict) -> tuple:
                 "keys": device.get("keys", {}),
             },
             data=json.dumps(payload),
-            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_private_key=private_key,
             vapid_claims={"sub": VAPID_CLAIMS_SUB},
         )
         return True, None
@@ -200,6 +438,9 @@ async def _send_webpush(device: Dict, payload: Dict) -> tuple:
             # longer exists -- the only case that may delete the device.
             logger.warning(f"WEBPUSH_SUBSCRIPTION_GONE device={device.get('id')} status={status_code}: {e}")
             return False, PERMANENT_SUBSCRIPTION_GONE
+        if status_code in (401, 403):
+            logger.warning(f"WEBPUSH_AUTHENTICATION_FAILED device={device.get('id')} status={status_code}: {e}")
+            return False, AUTHENTICATION_FAILED
         logger.warning(f"WEBPUSH_TEMPORARY_FAILURE device={device.get('id')} status={status_code}: {e}")
         return False, TEMPORARY_DELIVERY_FAILURE
     except Exception as e:
@@ -209,16 +450,20 @@ async def _send_webpush(device: Dict, payload: Dict) -> tuple:
 
 async def send_test_notification(user_id: str) -> Dict:
     """Real production dispatcher, not a second fake path. Uses the same
-    _send_webpush() every real event uses. Returns a structured status the
-    frontend can render without guessing (SENT/FAILED/NO_DEVICE/
-    SERVER_NOT_CONFIGURED/DEPENDENCY_MISSING/SUBSCRIPTION_EXPIRED). Never
-    creates an Outlook and never touches trading state."""
+    _send_webpush() every real event uses -- required flow per the owner:
+    confirm VAPID READY, confirm pywebpush import, confirm authenticated
+    caller (already enforced by the route's Depends(get_cloud_user) before
+    this is ever called), confirm >=1 device, send, capture the real
+    HTTP/provider outcome, log it, return a truthful status. Never returns
+    SENT solely because no Python exception occurred -- SENT here means
+    _send_webpush's own (ok=True) branch, which only fires after a real
+    webpush() call raised nothing."""
     db = _db()
-    if not vapid_configured():
-        return {"status": "SERVER_NOT_CONFIGURED", "message": "Push server VAPID keys are not configured."}
-    try:
-        from pywebpush import webpush  # noqa: F401 -- import-availability probe
-    except ImportError:
+    status = await get_vapid_status()
+    if not status["configured"]:
+        return {"status": "SERVER_NOT_CONFIGURED", "message": "Push server VAPID keys are not configured.",
+                "initialization_state": status["initialization_state"]}
+    if not status["dependency_available"]:
         return {"status": "DEPENDENCY_MISSING", "message": "pywebpush is not installed on the backend."}
 
     devices = await db.cloud_push_subscriptions.find({"user_id": user_id}).to_list(10)
@@ -250,12 +495,17 @@ async def send_test_notification(user_id: str) -> Dict:
         return {"status": "SENT", "message": "Test notification sent."}
     if last_failure == PERMANENT_SUBSCRIPTION_GONE:
         return {"status": "SUBSCRIPTION_EXPIRED", "message": "The stored subscription is no longer valid; please re-enable notifications."}
+    if last_failure == KEY_MISMATCH:
+        return {"status": "KEY_MISMATCH", "message": "This device subscribed under an old push key; please re-enable notifications to resubscribe."}
     return {"status": "FAILED", "message": f"Delivery failed ({last_failure or UNKNOWN_FAILURE})."}
 
 
 async def get_notification_status(user_id: str, account: str = "") -> Dict:
     """Real, authenticated registration-status snapshot -- the frontend must
-    render THIS, never infer ON from the saved preference tier alone."""
+    render THIS, never infer ON from the saved preference tier alone. Only
+    ON_VERIFIED once a real send has actually succeeded at least once;
+    configured-and-registered-but-never-successfully-tested is
+    READY_NOT_TESTED, a distinct, honest state."""
     db = _db()
     prefs = await db.cloud_notification_prefs.find_one({"user_id": user_id}, {"_id": 0})
     saved_tier = (prefs or {}).get("tier", "OFF")
@@ -268,23 +518,25 @@ async def get_notification_status(user_id: str, account: str = "") -> Dict:
     last_log = await db.cloud_notification_log.find_one(
         {"user_id": user_id}, {"_id": 0}, sort=[("scheduled_time", -1)],
     )
-    server_ready = vapid_configured()
-    try:
-        import pywebpush  # noqa: F401
-        dependency_available = True
-    except ImportError:
-        dependency_available = False
+    last_sent_ok = await db.cloud_notification_log.find_one(
+        {"user_id": user_id, "delivery_status": "SENT"}, {"_id": 0}, sort=[("scheduled_time", -1)],
+    )
+    vapid_status = await get_vapid_status()
+    server_ready = vapid_status["configured"]
+    dependency_available = vapid_status["dependency_available"]
 
     if saved_tier == "OFF":
         final_status = "OFF"
     elif not server_ready:
         final_status = "SERVER_NOT_CONFIGURED"
     elif not dependency_available:
-        final_status = "SERVER_NOT_CONFIGURED"
+        final_status = "DEPENDENCY_MISSING"
     elif not devices:
         final_status = "SUBSCRIPTION_MISSING"
-    elif last_log and last_log.get("delivery_status") == "FAILED" and last_log.get("notification_type") in ("TEST_NOTIFICATION",):
+    elif last_log and last_log.get("delivery_status") == "FAILED":
         final_status = "DELIVERY_FAILED"
+    elif not last_sent_ok:
+        final_status = "READY_NOT_TESTED"
     else:
         final_status = "ON_VERIFIED"
 
@@ -293,6 +545,8 @@ async def get_notification_status(user_id: str, account: str = "") -> Dict:
         "active_device_count": len(devices),
         "most_recent_registration": last_reg,
         "push_server_configured": server_ready,
+        "push_server_initialization_state": vapid_status["initialization_state"],
+        "push_server_key_fingerprint": vapid_status["key_fingerprint"],
         "delivery_library_available": dependency_available,
         "latest_notification_status": (last_log or {}).get("delivery_status"),
         "latest_failure_reason": (last_log or {}).get("failure_reason"),

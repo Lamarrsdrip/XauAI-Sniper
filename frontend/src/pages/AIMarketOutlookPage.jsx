@@ -218,6 +218,7 @@ function NotificationSettings({ prefs, setPrefs }) {
         return { ok: false, code: "SERVER_NOT_CONFIGURED", message: "Push server is not configured yet." };
       }
       const reg = await navigator.serviceWorker.ready;
+      const swVersion = reg.active?.scriptURL || "";
       let sub = await reg.pushManager.getSubscription();
       if (!sub) {
         sub = await reg.pushManager.subscribe({
@@ -225,11 +226,29 @@ function NotificationSettings({ prefs, setPrefs }) {
           applicationServerKey: urlBase64ToUint8Array(data.public_key),
         });
       }
-      const json = sub.toJSON();
-      const subResp = await outlookAxios.post("/outlook/notifications/subscribe", {
+      let json = sub.toJSON();
+      let subResp = await outlookAxios.post("/outlook/notifications/subscribe", {
         endpoint: json.endpoint, keys: json.keys, device_label: navigator.userAgent.slice(0, 60),
-        timezone_offset_minutes: -new Date().getTimezoneOffset(),
+        timezone_offset_minutes: -new Date().getTimezoneOffset(), sw_version: swVersion,
       });
+      // v6.25.2 owner directive -- if the backend's active VAPID key
+      // rotated since this browser last subscribed (an explicit admin
+      // rotation, not the ordinary restart-retains-same-fingerprint case),
+      // the old PushManager subscription was created under a key the
+      // backend can no longer sign for. Drop it and create a fresh one
+      // under the current public key, then re-register.
+      if (subResp.data?.key_rotated_or_mismatched) {
+        await sub.unsubscribe().catch(() => {});
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(data.public_key),
+        });
+        json = sub.toJSON();
+        subResp = await outlookAxios.post("/outlook/notifications/subscribe", {
+          endpoint: json.endpoint, keys: json.keys, device_label: navigator.userAgent.slice(0, 60),
+          timezone_offset_minutes: -new Date().getTimezoneOffset(), sw_version: swVersion,
+        });
+      }
       return { ok: true, device_id: subResp.data?.device_id, endpoint_registered: true, server_ready: true };
     } catch (e) {
       return { ok: false, code: "REGISTRATION_FAILED", message: e?.message || "Device registration failed." };
@@ -335,7 +354,9 @@ function NotificationSettings({ prefs, setPrefs }) {
     ON_VERIFIED: "Phone alerts active",
     OFF: "Notifications off",
     SERVER_NOT_CONFIGURED: "Push server not ready",
+    DEPENDENCY_MISSING: "Push server not ready",
     SUBSCRIPTION_MISSING: "Setup required — device not registered",
+    READY_NOT_TESTED: "Registered — send a test to verify",
     DELIVERY_FAILED: "Last delivery failed",
   }[finalStatus] || (finalStatus ? finalStatus : "Checking status…");
 
