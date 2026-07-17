@@ -15,11 +15,6 @@ import { API } from "@/lib/api";
 
 // ─── Axios ───────────────────────────────────────────────────────────────────
 const commandAxios = axios.create({ baseURL: API, withCredentials: true });
-commandAxios.interceptors.request.use((cfg) => {
-  const token = localStorage.getItem("cloud_token");
-  if (token) cfg.headers.Authorization = `Bearer ${token}`;
-  return cfg;
-});
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const NAV = [
@@ -329,7 +324,7 @@ function DecisionSummaryCard({ events=[], heartbeat={}, setActive, title="Latest
   return (
     <Card
       title={title}
-      subtitle="Clean M5 decision feed from the EA, deduplicated before it reaches this screen."
+      subtitle="Clean M10 decision feed from the EA, deduplicated before it reaches this screen."
       action={setActive && <button onClick={()=>setActive("activity")} className="rounded-full border border-white/[0.08] px-3 py-1.5 text-[11px] font-semibold text-white/55 hover:text-white">Open feed</button>}
     >
       {event ? (
@@ -351,7 +346,7 @@ function DecisionSummaryCard({ events=[], heartbeat={}, setActive, title="Latest
           {eventRepeatText(event) && <div className="rounded-xl border border-violet-300/15 bg-violet-300/[0.05] p-3 text-[12px] text-violet-100">{eventRepeatText(event)}</div>}
         </div>
       ) : (
-        <Empty title="Waiting for decision feed" body="The EA will publish one clean M5 decision event once the next scan cycle runs." icon={Activity} />
+        <Empty title="Waiting for decision feed" body="The EA will publish one clean M10 decision event after the next completed M10 scan." icon={Activity} />
       )}
     </Card>
   );
@@ -496,8 +491,8 @@ function CommandModal({ command, onCancel, onSubmit, busy, message, licenseKey }
 
 // ─── App shell ────────────────────────────────────────────────────────────────
 function useAuthGuard() {
-  const navigate = useNavigate();
-  useEffect(()=>{ if(!localStorage.getItem("cloud_token")) navigate("/command/login"); },[navigate]);
+  // Authentication is checked by the HttpOnly-cookie-backed /auth/me call
+  // in fetchAll. No script-readable bearer token is used.
 }
 
 function AppShell({ active, setActive, children, logout, statusText, online, eaVersion }) {
@@ -629,7 +624,7 @@ export default function CloudDashboard() {
         setPropFirmForm({ ...DEFAULT_PROP, ...pfR.data.requested });
       if (licR.data?.license?.activation_key) setLicenseInput(licR.data.license.activation_key);
     } catch (err) {
-      if (err.response?.status===401) { localStorage.removeItem("cloud_token"); navigate("/command/login"); }
+      if (err.response?.status===401) navigate("/command/login");
     } finally { setLoading(false); }
   }, [filter, navigate]);
 
@@ -667,7 +662,7 @@ export default function CloudDashboard() {
 
   const logout = async () => {
     try { await commandAxios.post("/cloud/auth/logout"); } catch {}
-    localStorage.removeItem("cloud_token"); navigate("/command");
+    navigate("/command");
   };
 
   const heartbeat   = status?.heartbeat || {};
@@ -833,14 +828,14 @@ function M10SignalCard({ events, heartbeat }) {
 
           <p className="mt-3 text-[11px] leading-4 text-white/45">
             Preferred direction: <span className="text-white/70 font-semibold">{preferredDir}</span>
-            {latest.retracement_required ? " · waiting for a better entry price, not a new signal" : ""}
+            {latest.retracement_required ? " · location evidence noted inside the single entry timer" : ""}
             {" — "}{latest.reason || ""}
           </p>
 
           <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
             <span className={pill("neutral")}>Exhaustion evidence-only: {(latest.exhaustion_decision || "—").replace(/_/g, " ")}</span>
-            {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy: waiting for retrace after profit</span>}
-            {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell: waiting for retrace after profit</span>}
+            {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy location evidence: extended</span>}
+            {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell location evidence: extended</span>}
           </div>
         </>
       )}
@@ -1255,7 +1250,7 @@ function ActivityPage({ events, filter, setFilter, onForceOpen }) {
         </label>
       </div>
       <DecisionStats events={visibleEvents} />
-      <Card title="Bot Decision Feed" subtitle="Clean M5 decision timeline: entries, blocks, exits, risk, AI, errors, and overrides. Repeated noise is compressed.">
+      <Card title="Bot Decision Feed" subtitle="Clean M10/M30 decision timeline: evidence, candidates, entries, cancellations, exits, risk, AI telemetry, errors, and overrides. Repeated noise is compressed.">
         {visibleEvents.length
           ? <div className="space-y-2">{visibleEvents.map((e,i)=><EventRow key={e.id||i} event={e} onForceOpen={onForceOpen} />)}</div>
           : <Empty title="No matching activity yet" body="Only meaningful decisions from your linked license and MT5 account will appear here. Old cloud records are hidden." icon={Activity} />}

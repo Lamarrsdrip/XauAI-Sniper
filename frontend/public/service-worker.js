@@ -18,7 +18,13 @@
 // This importScripts() call is what actually installs OneSignal's push/
 // notificationclick listeners; our own custom listeners for those events
 // were removed below (see bottom of file) so there's no double-handling.
-importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDKWorker.js');
+try {
+  importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDKWorker.js');
+} catch (error) {
+  // Push is optional. A blocked/unavailable provider must not prevent the
+  // base PWA worker from installing, updating, or providing offline fallback.
+  console.warn('[XauAI] OneSignal worker unavailable; push remains disabled.');
+}
 
 const CACHE_NAME = 'xauai-cloud-v' + Date.now();
 

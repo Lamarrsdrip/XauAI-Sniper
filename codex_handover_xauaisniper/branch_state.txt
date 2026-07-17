@@ -1,0 +1,11 @@
+* audit/codex-complete-xauaisniper-forensic-repair    bf82b8c [origin/audit/codex-complete-xauaisniper-forensic-repair] chore(release): publish audited v6.25.5 test candidate
+  feature/m30-three-m10-consensus                     f6c59b4 [origin/feature/m30-three-m10-consensus] feat(ea): v6.25.5 -- M30 three-M10-evidence consensus mode (optional, default OFF)
+  fix/v62417-complete-product-finalization            2763f20 [origin/fix/v62417-complete-product-finalization] feat(ea+backend+frontend): exhaustion-counter, pyramid basket exit, canonical exhaustion decision, notification/scheduler fixes
+  fix/v62417-live-trade-command-outlook-stabilization 4d596f6 [origin/fix/v62417-live-trade-command-outlook-stabilization] fix(ea+backend+frontend): v6.24.17 live-trade stabilization pass
+  fix/v62417-risk-sl-outlook-ema-finalization         effaba5 [origin/fix/v62417-risk-sl-outlook-ema-finalization] chore(ea): refresh final compiled EX5 after full-suite verification
++ fix/v62418-hardening-and-versioning                 6d9ae81 (/Users/libertyelectronics/XauAI-Sniper) fix(ea): root-cause CopyEntryBuffer transient-4807 ceiling never releasing (v6.24.19)
++ fix/v6243-smart-pullback-caution                    815bbc2 (/Users/libertyelectronics/XauAI-Sniper-aligned-entry-repair) [origin/fix/v6243-smart-pullback-caution] v6.24.14: universal 5-min post-trade cooldown + exhausted-direction re-entry ban
++ fix/v625-exhaustion-m10-direction-reentry           f6e159b (/Users/libertyelectronics/XauAI-v625-exhaustion-m10-direction-reentry) [origin/fix/v625-exhaustion-m10-direction-reentry] feat(ea+backend+frontend): M10 Intelligent Signal Engine + Command Center transparency
+  fix/v6251-full-repair                               d5f6ecc [origin/main: behind 21] feat(admin): live notification system health panel -- no fake "fix it" input
+  main                                                9e4181f [origin/main: behind 2] fix(ci): v6.25.5 manifest release_notes tripped the source-leak guard test
+  release/final-platform-hardening                    894a8a0 [origin/release/final-platform-hardening] fix(ci): run backend tests one file per process, not one combined pytest run

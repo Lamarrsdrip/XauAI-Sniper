@@ -4,11 +4,11 @@ import { CaretDown, CaretUp } from "@phosphor-icons/react";
 const FAQ = [
   {
     q: "Which broker is supported?",
-    a: "Trade.com is our official partner and recommended broker. The EA works on any MT5 broker that supports XAUUSD with a 5-digit quote.",
+    a: "Use an MT5 broker whose exact XAUUSD symbol, contract size, tick economics, volume step, stops, margin, spread, and execution behavior you have verified on demo. Compatibility is broker-specific.",
   },
   {
     q: "Does it work on funded accounts?",
-    a: "Yes. The risk engine respects prop firm rules — drawdown limits, daily loss limits, and consistency targets are all configurable.",
+    a: "Only if the specific firm's written rules allow EAs and the configured risk, holding, news, drawdown, and consistency behavior complies. Obtain approval and prove the exact setup on demo first.",
   },
   {
     q: "Can I use my own VPS?",
@@ -20,7 +20,7 @@ const FAQ = [
   },
   {
     q: "When will I receive my license?",
-    a: "Your unique PIN is generated and emailed instantly after payment is confirmed — usually within 60 seconds.",
+    a: "A unique PIN is issued after Paystack confirms payment. Email delivery requires the configured mail provider; if delivery is delayed, support can verify the transaction and resend it.",
   },
 ];
 

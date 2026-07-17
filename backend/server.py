@@ -18,8 +18,7 @@ from datetime import datetime, timezone, timedelta
 try:
     from emergentintegrations.llm.chat import LlmChat, UserMessage
 except ImportError:
-    LlmChat = None
-    UserMessage = None
+    from llm_adapter import LlmChat, UserMessage
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -549,24 +548,21 @@ async def fetch_live_gold_price() -> Dict:
     except Exception as e: logger.warning(f"Gold scrape: {e}")
     source = "live"
     if price is None:
-        if _gold_cache and _gold_cache.get('bid'): return _gold_cache
-        # v6.24.17 audit fix: this hardcoded constant (originally accurate the
-        # day it was written) silently masqueraded as source="live" whenever
-        # the Google Finance scrape failed and no cache existed yet -- e.g.
-        # after a page-structure change breaks the CSS selectors above. A
-        # caller (AI Market Outlook) using this as ground truth for an actual
-        # gold price produced a real production incident: an entry zone ~$960
-        # away from the live broker price. This third-party scrape is NOT an
-        # authoritative price source for anything trade-relevant -- see
-        # market_outlook.py's generate_outlook_for_account, which must use
-        # the EA's own reported broker bid/ask instead and only falls back to
-        # this function, if at all, with source honestly marked as such.
-        price, change, change_pct = 4957.0, 0.0, 0.0
-        source = "fallback_stale_constant"
+        if _gold_cache and _gold_cache.get('available') and _gold_cache.get('bid'):
+            return {**_gold_cache, "source": "cached_live", "stale": True}
+        # Forensic repair: a failed quote provider is unavailable, not a
+        # licence to invent a market price or spread. This endpoint is display
+        # only; broker-reported prices remain the only execution authority.
+        return {
+            "symbol": "XAUUSD", "available": False, "bid": None, "ask": None,
+            "spread": None, "change": None, "change_pct": None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source": "unavailable", "stale": False,
+        }
     if change is None: change = 0.0
     if change_pct is None: change_pct = round(change/price*100, 3) if price else 0.0
-    sp = round(secrets.randbelow(500) / 1000 + 0.3, 2)
-    result = {"symbol":"XAUUSD","bid":round(price,2),"ask":round(price+sp,2),"spread":sp,"change":round(change,2),"change_pct":round(change_pct,3),"timestamp":datetime.now(timezone.utc).isoformat(),"source":source}
+    # The scraped source has no broker spread. Do not fabricate one.
+    result = {"symbol":"XAUUSD","available":True,"bid":round(price,2),"ask":None,"spread":None,"change":round(change,2),"change_pct":round(change_pct,3),"timestamp":datetime.now(timezone.utc).isoformat(),"source":source,"stale":False}
     _gold_cache, _gold_cache_time = result, now
     return result
 
@@ -680,7 +676,7 @@ def _admin_mfa_pending_token(email: str) -> str:
 
 def _issue_admin_session(user: dict) -> JSONResponse:
     token = create_access_token(str(user["_id"]), user["email"])
-    response = JSONResponse(content={"email": user["email"], "name": user.get("name","Admin"), "role": user.get("role","admin"), "token": token})
+    response = JSONResponse(content={"email": user["email"], "name": user.get("name","Admin"), "role": user.get("role","admin")})
     # v6.5.0 (audit bug #9): secure=False meant the admin session cookie could
     # be sent over plain HTTP, exposing it to network interception. Default to
     # secure=True (safe for the production HTTPS deployment); COOKIE_SECURE=false
@@ -1273,7 +1269,10 @@ async def get_performance_summary():
 
     summary = {
         "source": "live_journal",
-        "sample": False,
+        "verification": "first_party_ea_journal",
+        "independently_verified": False,
+        "sufficient_data": total >= 20,
+        "minimum_sample": 20,
         "total_trades": total,
         "win_rate": round(wins / total * 100, 1) if total else 0,
         "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else (round(gross_profit, 2) if gross_profit > 0 else 0),
@@ -1382,23 +1381,23 @@ async def get_performance_summary():
 
 @api_router.get("/architecture")
 async def get_architecture():
-    return {"modules":[{"name":"Market Analysis Engine","description":"Multi-layered analysis using EMA, RSI, ATR, BB across M5, H1, H4","components":["Trend Detection (EMA 50/200)","Market Structure (HH/LL)","Volatility Analysis (ATR)","Multi-Timeframe Confirmation"]},{"name":"AI Adaptive Decision Engine","description":"ML classifier targeting high-probability setups with self-improving confidence","components":["Market Classifier","Confidence Scoring (0-100)","Deep Pattern Memory","Self-Improving Engine"]},{"name":"Strategy Engine","description":"Three strategies with dynamic switching","components":["Trend Mode","Range Mode","Breakout Mode","Pattern Recognition"]},{"name":"Risk Management","description":"Institutional controls with account-aware exposure limits","components":["Dynamic Position Sizing","ATR-based SL/TP","Daily/Weekly Limits","Equity Protection"]},{"name":"Execution Engine","description":"Precision execution with PIN validation and cloud-safe synchronized exits","components":["Market/Limit Orders","Spread Filter","Structure Exit Logic","Trailing Stop"]},{"name":"Performance Tracking","description":"Logging + ML feedback loop","components":["Trade Journal","Win Rate Tracking","Drawdown Monitor","Pattern Learning"]}],"filters":[{"name":"Session Filter","description":"London & NY only"},{"name":"Spread Filter","description":"Avoids high spread"},{"name":"News Filter","description":"Avoids events"},{"name":"Volatility Filter","description":"Adapts to volatility"}]}
+    return {"modules":[{"name":"M10 Evidence Engine","description":"Builds immutable evidence from completed M10 bars and multi-timeframe context.","components":["Completed-bar trend and pressure","Market structure","Volatility","M10 evidence identity"]},{"name":"Selectable Decision Authority","description":"Legacy M10 remains the source default; optional M30 mode combines three consecutive M10 snapshots at 20% / 30% / 50%.","components":["M10 legacy mode","M30 three-snapshot consensus","Immutable candidate identity","No forming-candle evidence"]},{"name":"Entry Lifecycle","description":"A qualifying candidate gets one 120–180 second observation window, followed by execute or cancel.","components":["Single timer","Final revalidation","0.30R missed-move cancellation","No retracement carry-forward"]},{"name":"Risk and Execution","description":"Core orders require a structural invalidation, one 1.20 widening, 10% configured risk sizing, direction exclusivity, and confirmed broker truth.","components":["Structural stop loss","Margin and spread checks","Cross-terminal reservation","Broker reconciliation"]},{"name":"Position Management","description":"Open-position and R-based exit management continues on every tick.","components":["R-based protection","Broker-confirmed close retries","Restart state","Exit audit"]},{"name":"Command Center","description":"Licensed users can inspect heartbeat, evidence, candidates, positions, events, and acknowledged controls.","components":["Tenant isolation","Decision-mode visibility","Audit trail","Admin separation"]}],"filters":[{"name":"Spread","description":"Current execution-risk check"},{"name":"News","description":"Current local evidence plus honest provider status"},{"name":"Structure","description":"Required core invalidation"},{"name":"Margin","description":"Broker/account execution reality"}]}
 
 @api_router.get("/docs/installation")
 async def get_installation_guide():
-    return {"steps":[{"step":1,"title":"Download EA","description":"Download .mq5 from Download section."},{"step":2,"title":"Open MT5","description":"Launch MetaTrader 5."},{"step":3,"title":"Copy to Folder","description":"File > Open Data Folder > MQL5 > Experts. Paste file."},{"step":4,"title":"Compile","description":"Press F4 (MetaEditor), open file, press F7."},{"step":5,"title":"Open Chart","description":"Open XAUUSD M5 chart."},{"step":6,"title":"Attach EA","description":"Drag EA from Navigator onto chart."},{"step":7,"title":"Enter PIN","description":"Input your license PIN. Configure settings."},{"step":8,"title":"Enable","description":"Click Algo Trading (green). Bot starts!"}],"requirements":["MetaTrader 5","XAUUSD symbol","Valid PIN","Internet","$1000+ balance","Low-spread broker"],"warnings":["Start with demo","No guaranteed profits","Don't risk what you can't lose","Keep PIN private"]}
+    return {"steps":[{"step":1,"title":"Download EA","description":"Sign in to Command Center and download the verified compiled .ex5 release."},{"step":2,"title":"Open MT5","description":"Launch MetaTrader 5."},{"step":3,"title":"Copy to Folder","description":"File > Open Data Folder > MQL5 > Experts. Paste the compiled file."},{"step":4,"title":"Refresh Navigator","description":"In Navigator, refresh Expert Advisors. Customer-side source compilation is not required."},{"step":5,"title":"Open Chart","description":"Open an XAUUSD M10 chart (including your broker's XAUUSD suffix)."},{"step":6,"title":"Attach EA","description":"Drag the verified EA from Navigator onto the chart."},{"step":7,"title":"Enter PIN","description":"Enter your license PIN and review Decision Mode. M30 three-snapshot mode must be selected explicitly until an approved release changes the default."},{"step":8,"title":"Enable","description":"Enable Algo Trading only after demo verification and broker checks."}],"requirements":["MetaTrader 5","Supported XAUUSD symbol","Valid PIN","Stable internet/VPS","Adequate broker margin","Broker-compatible spread and stops"],"warnings":["Start with demo","No guaranteed profits","Risk only capital you can afford to lose","Keep PIN private","Confirm the active EA version and Decision Mode in the MT5 journal"]}
 
 @api_router.get("/docs/how-it-works")
 async def get_how_it_works():
-    return {"sections":[{"title":"How XauAI Sniper Works","subtitle":"Your intelligent XAUUSD trading assistant","steps":[{"id":1,"title":"Market Scanning","description":"Scans XAUUSD across M5, H1, H4 every 5 minutes using EMA, RSI, ATR, Bollinger Bands.","detail":"Multi-timeframe filters false signals."},{"id":2,"title":"AI Classification","description":"Classifies market as TRENDING, RANGING, or BREAKOUT using weighted scoring.","detail":"Different strategy for each condition."},{"id":3,"title":"Confidence Scoring","description":"Scores each setup using market structure, momentum, volatility, session quality, and live journal memory.","detail":"Sniper approach = fewer, higher-quality trades."},{"id":4,"title":"Smart Execution","description":"ATR-based stop loss, wider structure-runner targets, synchronized SL/TP, and trailing logic.","detail":"Protects the account while giving valid gold moves room to breathe."},{"id":5,"title":"Risk Protection","description":"Per-trade risk limits, account exposure caps, drawdown checks, and cooldown after weak conditions.","detail":"Controls damage without blocking every pullback."},{"id":6,"title":"Global Learning","description":"Verified trade logs feed the global AI memory so repeated weak patterns can be avoided over time.","detail":"Cloud ML improves only from real outcomes, not fake sample stats."}]}],"faq":[{"q":"Do I need to keep my computer on?","a":"Yes. Use a VPS ($5-10/mo) for 24/7 trading."},{"q":"What account size?","a":"Min $500, recommended $1,000+. Bot auto-calculates lot sizes."},{"q":"Which broker?","a":"Any reliable MT5 broker with a low-spread XAUUSD symbol can work."},{"q":"Can I close trades manually?","a":"Yes, anytime. The bot won't interfere."},{"q":"What if I lose internet?","a":"Your SL/TP protect you. Bot resumes when reconnected."}]}
+    return {"sections":[{"title":"How XauAI Sniper v6.25.5 Works","subtitle":"Completed M10 evidence with a selectable execution authority","steps":[{"id":1,"title":"M10 Evidence","description":"The EA records one immutable snapshot for each completed M10 candle.","detail":"The forming candle is never one of the three M30 inputs."},{"id":2,"title":"Decision Mode","description":"Legacy M10 is the source default. Optional M30 mode combines three consecutive snapshots using 20% / 30% / 50% recency weights.","detail":"The journal and Command Center must show which mode is actually active."},{"id":3,"title":"One Entry Timer","description":"A qualifying BUY or SELL immediately starts one 120–180 second timer.","detail":"There is no second retracement, candle, slot, or AI wait."},{"id":4,"title":"Execute or Cancel","description":"At final revalidation the EA executes if valid and below 0.30R movement, otherwise it cancels.","detail":"A cancelled candidate cannot be carried or resurrected."},{"id":5,"title":"Risk and Broker Truth","description":"A core order requires structural SL, one 1.20 widening, configured 10% risk sizing, margin, direction exclusivity, and broker confirmation.","detail":"Ambiguous sends are reconciled and never immediately resent."},{"id":6,"title":"Tick-Based Management","description":"Once open, positions and exits continue to be managed on ticks.","detail":"Entry cadence does not slow exit management."}]}],"faq":[{"q":"Is M30 mode active automatically?","a":"Not in the v6.25.5 source default. Verify the compiled input and each terminal's actual Decision Mode before relying on it."},{"q":"Do I need to keep MT5 running?","a":"Yes. A properly monitored VPS can provide continuous terminal operation."},{"q":"Does the EA guarantee profit?","a":"No. Trading can lose money; demo and broker-specific verification are required."},{"q":"Which broker?","a":"Use an MT5 broker whose XAUUSD symbol, stops, volume steps, margin, spread, and execution behavior you have verified."},{"q":"What if connectivity fails?","a":"Broker-held SL/TP remain important, but cloud features and EA-side management may be unavailable until connectivity returns."}]}
 
 @api_router.get("/docs/setup-guide")
 async def get_setup_guide():
-    return {"title":"Setup Guide (Even a 10-Year-Old Can Follow This)","intro":"Follow these steps one by one. Each has exactly what to click.","steps":[{"step":1,"title":"Download MetaTrader 5","instructions":["Go to metatrader5.com/en/download","Click 'Download MetaTrader 5'","Install (click Next until done)","Open MT5"],"tip":"Like installing any app!"},{"step":2,"title":"Create Demo Account","instructions":["Click 'Open a demo account'","Pick MetaQuotes-Demo","Fill any name/email","Choose Forex, 1:100 leverage","Click Finish"],"tip":"Demo = fake money. Can't lose real money."},{"step":3,"title":"Download EA File","instructions":["On our site, go to Download section","Click 'DOWNLOAD .MQ5 FILE'","File saves to Downloads folder"],"tip":"One file = the bot's brain."},{"step":4,"title":"Put File in Right Folder","instructions":["MT5: File > Open Data Folder","Open MQL5 > Experts","Paste the .mq5 file here"],"tip":"Like putting a game in the right folder."},{"step":5,"title":"Compile the EA","instructions":["Press F4 (MetaEditor opens)","Find file on left, double-click","Press F7 to compile","Check: 0 errors","Close MetaEditor"],"tip":"Turns code into a working bot."},{"step":6,"title":"Open Gold Chart","instructions":["Left panel: Market Watch","Right-click > Show All","Find XAUUSD","Right-click > Chart Window","Set to M5 timeframe"],"tip":"XAUUSD = Gold in USD."},{"step":7,"title":"Attach Bot to Chart","instructions":["Press Ctrl+N (Navigator)","Expand Expert Advisors","Drag XAUUSD_AI_Sniper_EA onto chart","Settings popup appears"],"tip":"You're telling the bot to watch gold."},{"step":8,"title":"Enter PIN & Configure","instructions":["Inputs tab > License PIN > enter your PIN","Set Profit Mode: 1=20%, 2=35%, 3=50%","Common tab > check Allow Algo Trading","Click OK"],"tip":"PIN = car key. No PIN = no trading."},{"step":9,"title":"Enable Auto Trading","instructions":["Find Algo Trading button in toolbar","Click until GREEN","Green = ON, Red = OFF"],"tip":"The master ON/OFF switch."},{"step":10,"title":"You're Done!","instructions":["Dashboard appears on chart","Bot scans every 5 minutes","Trades appear in Trade tab","Let it run!"],"tip":"Leave it alone = better performance."}],"important_notes":["START WITH DEMO! Practice 1-2 weeks first.","Keep MT5 running 24/7. Use VPS if needed.","Some losses are normal. Don't panic.","If bot stops: check Algo Trading is green, check session hours."]}
+    return {"title":"XauAI Sniper v6.25.5 Setup Guide","intro":"Install only the verified compiled EX5 and confirm the running inputs before enabling trading.","steps":[{"step":1,"title":"Prepare MT5 Demo","instructions":["Install your broker's MT5 terminal","Sign in to a demo account","Confirm the broker's exact XAUUSD symbol and trading specification"],"tip":"Do not begin with a real-money account."},{"step":2,"title":"Download Verified EX5","instructions":["Sign in to Command Center","Link the active license","Download v6.25.5 compiled EX5","Compare the displayed checksum with the release manifest"],"tip":"Customers do not need MQ5 source or MetaEditor compilation."},{"step":3,"title":"Install the EA","instructions":["MT5: File > Open Data Folder","Open MQL5 > Experts","Copy the verified EX5","Refresh Expert Advisors in Navigator"],"tip":"Keep older builds clearly separated."},{"step":4,"title":"Open Gold Chart","instructions":["Open your broker's XAUUSD chart","Set the chart to M10","Confirm live prices and normal broker spread"],"tip":"M10 is the primary evidence timeframe."},{"step":5,"title":"Attach and Review Inputs","instructions":["Drag XAUUSD_AI_Sniper_EA onto the chart","Enter the license PIN","Review Decision Mode","Confirm risk, magic number, server URL, and structural SL settings"],"tip":"v6.25.5 source defaults to legacy M10; M30 must be explicitly selected unless the approved compiled default says otherwise."},{"step":6,"title":"Verify Journal","instructions":["Confirm the exact EA version and build hash","Confirm the active Decision Mode","Confirm license and indicator readiness","Confirm there is no older EA attached to another XAUUSD chart"],"tip":"The file name alone does not prove the running version."},{"step":7,"title":"Enable on Demo","instructions":["Enable Allow Algo Trading","Turn the MT5 Algo Trading button on","Watch heartbeat and Command Center status","Verify broker send/modify/close behavior on demo"],"tip":"Move to live only after owner approval and broker-specific evidence."}],"important_notes":["No profit is guaranteed.","The configured 10% risk is high and can produce large losses.","Keep MT5 and connectivity monitored.","Never share your PIN.","Mac and VPS must use the same approved artifact and intentional Decision Mode."]}
 
 @api_router.get("/docs/video-guide")
 async def get_video_guide():
-    return {"title":"Complete Visual Walkthrough","subtitle":"Screen-by-screen guide at your own pace","scenes":[{"scene":1,"title":"GETTING STARTED","duration":"2 min","frames":[{"action":"OPEN BROWSER","detail":"Go to metatrader5.com/en/download","visual":"Blue website with download button"},{"action":"CLICK DOWNLOAD","detail":"Click 'Download MetaTrader 5 for Windows'","visual":"mt5setup.exe starts downloading"},{"action":"INSTALL","detail":"Double-click file. Next > Next > Finish","visual":"Standard Windows installer"},{"action":"OPEN MT5","detail":"Click MetaTrader 5 on desktop","visual":"Trading terminal with charts"}]},{"scene":2,"title":"CREATING ACCOUNT","duration":"1 min","frames":[{"action":"DEMO","detail":"Click 'Open a demo account'","visual":"Account dialog"},{"action":"BROKER","detail":"Pick MetaQuotes-Demo, click Next","visual":"Broker list"},{"action":"DETAILS","detail":"Enter name, select Forex 1:100","visual":"Simple form"},{"action":"DONE","detail":"Click Finish. $10,000 demo money!","visual":"Balance shows $10,000"}]},{"scene":3,"title":"INSTALLING EA","duration":"3 min","frames":[{"action":"DOWNLOAD EA","detail":"Click gold DOWNLOAD button on site","visual":"Gold button"},{"action":"DATA FOLDER","detail":"MT5: File > Open Data Folder","visual":"Windows Explorer opens"},{"action":"NAVIGATE","detail":"MQL5 > Experts folder","visual":"Experts folder"},{"action":"PASTE","detail":"Copy .mq5 file here","visual":"File in folder"},{"action":"COMPILE","detail":"F4, find file, F7. 0 errors","visual":"MetaEditor success"},{"action":"BACK","detail":"Close MetaEditor","visual":"MT5 main window"}]},{"scene":4,"title":"CHART SETUP","duration":"1 min","frames":[{"action":"FIND GOLD","detail":"Market Watch > Show All > XAUUSD","visual":"Symbol list"},{"action":"OPEN CHART","detail":"Right-click > Chart Window","visual":"Candlestick chart"},{"action":"TIMEFRAME","detail":"Click M5 in toolbar","visual":"5-min candles"}]},{"scene":5,"title":"ACTIVATING BOT","duration":"2 min","frames":[{"action":"NAVIGATOR","detail":"Ctrl+N > Expert Advisors","visual":"EA list"},{"action":"DRAG","detail":"Drag EA onto XAUUSD chart","visual":"Settings popup"},{"action":"PIN","detail":"Inputs > License PIN > enter PIN","visual":"PIN input field"},{"action":"MODE","detail":"Set Profit Mode 1/2/3","visual":"Number input"},{"action":"ALGO","detail":"Common > Allow Algo Trading checked","visual":"Checkbox"},{"action":"GO","detail":"Click OK. Click Algo Trading GREEN","visual":"Green button = LIVE!"}]},{"scene":6,"title":"VPS SETUP","duration":"5 min","frames":[{"action":"WHAT IS VPS?","detail":"Cloud computer that runs 24/7","visual":"Computer that never sleeps"},{"action":"GET VPS","detail":"ForexVPS.net or Contabo ($5-10/mo)","visual":"VPS pricing pages"},{"action":"CONNECT","detail":"Remote Desktop > enter IP/password","visual":"RDP connection"},{"action":"INSTALL MT5","detail":"Same install process on VPS","visual":"MT5 on VPS"},{"action":"SETUP EA","detail":"Copy EA, attach, enter PIN, enable","visual":"Same setup, on VPS"},{"action":"DONE","detail":"Close RDP. Bot runs forever!","visual":"24/7 trading"}]}]}
+    return {"title":"Verified EX5 Installation Walkthrough","subtitle":"Screen-by-screen v6.25.5 deployment checks","scenes":[{"scene":1,"title":"DOWNLOAD","duration":"2 min","frames":[{"action":"SIGN IN","detail":"Open Command Center and link the active license","visual":"Licensed download panel"},{"action":"DOWNLOAD EX5","detail":"Download the compiled v6.25.5 artifact","visual":"Version and checksum shown together"},{"action":"VERIFY","detail":"Compare the artifact checksum with the release manifest","visual":"Matching SHA-256 values"}]},{"scene":2,"title":"INSTALL","duration":"2 min","frames":[{"action":"DATA FOLDER","detail":"MT5: File > Open Data Folder","visual":"Terminal data directory"},{"action":"COPY","detail":"Place the EX5 in MQL5 > Experts","visual":"Compiled artifact in Experts"},{"action":"REFRESH","detail":"Refresh Expert Advisors in Navigator","visual":"EA appears without customer-side compilation"}]},{"scene":3,"title":"CHART AND INPUTS","duration":"3 min","frames":[{"action":"OPEN GOLD","detail":"Open the broker's XAUUSD symbol on M10","visual":"Completed M10 candles"},{"action":"ATTACH","detail":"Attach XAUUSD AI Sniper","visual":"EA input dialog"},{"action":"LICENSE","detail":"Enter PIN and verify account binding","visual":"License input"},{"action":"MODE","detail":"Review Decision Mode; legacy M10 is the v6.25.5 source default","visual":"Explicit M10 or M30 selection"}]},{"scene":4,"title":"PROVE THE RUNTIME","duration":"2 min","frames":[{"action":"JOURNAL","detail":"Confirm v6.25.5, build hash, source/input hashes, and active Decision Mode","visual":"MT5 journal startup evidence"},{"action":"COMMAND CENTER","detail":"Confirm fresh heartbeat and matching mode/evidence","visual":"Online monitored instance"},{"action":"DEMO FIRST","detail":"Verify signal, broker execution, SL/TP, and exits on demo before live approval","visual":"Audited demo lifecycle"}]}]}
 
 # -------------------------------------------------------------------
 # ADMIN ROUTES (Protected)
@@ -1793,7 +1792,7 @@ async def admin_dashboard():
     }
 
 @api_router.put("/admin/account")
-async def update_admin_account(req: AdminAccountUpdate, admin: dict = Depends(get_current_admin)):
+async def update_admin_account(req: AdminAccountUpdate, response: Response, admin: dict = Depends(get_current_admin)):
     """Change admin email and/or password"""
     user = await db.users.find_one({"email": admin["email"]})
     if not user:
@@ -1817,7 +1816,10 @@ async def update_admin_account(req: AdminAccountUpdate, admin: dict = Depends(ge
     await db.users.update_one({"email": admin["email"]}, {"$set": updates})
     new_email = updates.get("email", admin["email"])
     new_token = create_access_token(str(user["_id"]), new_email)
-    return {"updated": True, "email": new_email, "token": new_token, "message": "Account updated successfully"}
+    response.set_cookie(key="access_token", value=new_token, httponly=True,
+                        secure=os.environ.get('COOKIE_SECURE', 'true').lower() != 'false',
+                        samesite="strict", max_age=86400, path="/")
+    return {"updated": True, "email": new_email, "message": "Account updated successfully"}
 
 # -------------------------------------------------------------------
 # CENTRALIZED ML ENGINE - Global Pattern Learning
@@ -2330,6 +2332,7 @@ async def startup():
 # CLAUDE AI POSITION MANAGER (Active Trade Reasoning)
 ########################################
 class PositionCheckRequest(BaseModel):
+    pin: str = ""
     account_id: str = ""  # multi-instance fix: per-account AI budget/throttle (falls back to a shared bucket when omitted by older EA builds)
     symbol: str = "XAUUSD"
     direction: str = ""
@@ -2361,12 +2364,15 @@ class PositionCheckRequest(BaseModel):
     open_positions: int = 1     # total open positions in basket
 
 @api_router.post("/ai/manage-position")
-async def ai_manage_position(req: PositionCheckRequest):
+async def ai_manage_position(req: PositionCheckRequest, request: Request):
+    if not req.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    await _resolve_monitor_license(req.pin, req.account_id, request)
     try:
         if not LLM_KEY:
             return {"action": "HOLD", "reason": "AI not configured", "consensus_source": "local_only_cost_guard"}
 
-        payload = req.dict()
+        payload = req.model_dump(exclude={"pin"})
         cache_key = _ai_cost_state_hash("exit", payload)
         cached = _ai_cache_get(cache_key)
         if cached:
@@ -2389,7 +2395,7 @@ async def ai_manage_position(req: PositionCheckRequest):
         has_thesis = bool(req.thesis and len(req.thesis) > 20)
 
         if is_veto:
-            system_msg = f"""You are a XAUUSD M5 trade auditor. The bot's rule-based logic wants to CLOSE this position because of: {req.pending_exit_reason}.
+            system_msg = f"""You are a XAUUSD M10 trade auditor. The bot's rule-based logic wants to CLOSE this position because of: {req.pending_exit_reason}.
 
 Your job: VETO the close if the original thesis is still intact, OR confirm if the rule is right.
 
@@ -2403,7 +2409,7 @@ Rules:
 - BIAS toward HOLD/LOCK over CLOSE — give winners room. Only CLOSE if the original thesis is invalidated or trend has clearly flipped against position.
 - LOCK is your friend: if the trade is up but momentum is uncertain, LOCK $X (a fraction of current profit) to bank the win without giving up the runner."""
         else:
-            system_msg = """You are a XAUUSD M5 trade auditor for an open position. Decide HOLD, CLOSE, or LOCK.
+            system_msg = """You are a XAUUSD M10 trade auditor for an open position. Decide HOLD, CLOSE, or LOCK.
 
 RESPOND IN EXACTLY THIS JSON (no markdown fences):
 {"action":"HOLD","reason":"short reason"}
@@ -2437,7 +2443,7 @@ ORIGINAL CONFIDENCE: {req.confidence}/100
         # v6.3.5: richer structured exit prompt
         htf_line = f"HTF Consensus: {req.htf_consensus} | Regime: {req.regime or 'unknown'} | Session: {req.session or 'unknown'}"
         perf_line = f"R-Multiple: {req.r_mult:.1f}R | Giveback from peak: ${giveback:.0f} | Daily P/L: {req.daily_pct:+.1f}% | Positions: {req.open_positions}"
-        prompt = f"""OPEN {req.direction} POSITION — XAUUSD M5
+        prompt = f"""OPEN {req.direction} POSITION — XAUUSD M10
 
 POSITION STATE
 - Entry: {req.entry_price} | Now: {req.current_price} | Lots: {req.lots}
@@ -2505,6 +2511,7 @@ Decision (HOLD / CLOSE / LOCK)? JSON only."""
 # AI MARKET ANALYSIS (GPT-5.2)
 ########################################
 class AIAnalysisRequest(BaseModel):
+    pin: str = ""
     account_id: str = ""  # multi-instance fix: per-account AI budget/throttle (falls back to a shared bucket when omitted by older EA builds)
     symbol: str = "XAUUSD"
     ema_fast: float = 0
@@ -2537,14 +2544,15 @@ class AIAnalysisRequest(BaseModel):
 class TradeMemoryRecord(BaseModel):
     model_config = ConfigDict(extra="ignore")
     event: str = "CLOSE"
+    pin: str = ""
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.25.4"
+    ea_version: str = "v6.25.5"
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"
-    timeframe: str = "M5"
+    timeframe: str = "M10"
     magic_number: int = 0
     session: str = ""
     strategy: str = ""
@@ -2715,7 +2723,7 @@ def _build_memory_recommendation(query: dict, matches: list[dict]) -> dict:
 
 # ------- shared helpers -------
 # v6.4.21: AI Director persona — advisor/score input; local EA Trade Mode owns veto strictness
-_ENTRY_SYSTEM_PROMPT = """You are the AI Director for an institutional XAUUSD M5 scalping system. You are an expert advisor and probability scorer. The local EA rule engine and Trade Mode own final execution authority. You review full market context and recommend ALLOW, BLOCK, or ADJUST, but only true danger should be treated as a hard veto.
+_ENTRY_SYSTEM_PROMPT = """You are the AI Director for an XAUUSD M10 evidence system with an optional three-snapshot M30 execution authority. You are an advisory probability scorer. The local EA rule engine and selected Decision Mode own final execution authority. You review full market context and recommend ALLOW, BLOCK, or ADJUST, but only true danger should be treated as a hard veto.
 
 You receive complete context: price, indicators, H1/HTF trend, session, open positions, basket P/L, account state, recent win/loss streak, trade grade, and setup scores. Use ALL of it.
 
@@ -2736,7 +2744,7 @@ Rules:
 - bearish_case: 30-60 words — genuine counter-argument. What would make this fail? What are you ignoring? MANDATORY even for 90%+ confidence.
 - skip_if: 15-25 words — specific pre-entry cancellation condition
 - invalidation: 15-25 words — post-entry thesis failure signal
-- target: realistic M5 target price or level
+- target: realistic target price or level grounded in the supplied completed M10 evidence
 - claude: your own vote as Claude (action + confidence)
 - gpt: simulate a GPT-style second opinion (action + confidence) — independent, can disagree
 - sl_adjust: -1 to 1 (negative=tighter, positive=wider, 0=default)
@@ -2778,8 +2786,8 @@ def _build_entry_prompt(req: AIAnalysisRequest) -> str:
                 label = "most recent closed" if bar_offset == 1 else f"{bar_offset} bars ago"
                 labeled.append(f"  [{label}]: O={o} H={h} L={l} C={cl} ({direction})")
         if labeled:
-            candles_section = "\nRECENT PRICE ACTION (M5, oldest→newest)\n" + "\n".join(labeled)
-    return f"""XAUUSD M5 — AI DIRECTOR REVIEW
+            candles_section = "\nRECENT PRICE ACTION (completed M10 bars, oldest→newest)\n" + "\n".join(labeled)
+    return f"""XAUUSD M10 — AI DIRECTOR REVIEW
 
 PRICE & INDICATORS
 - Price: {req.price} | ATR(14): {req.atr} | Spread: {req.spread:.0f} pts
@@ -2846,7 +2854,7 @@ async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> di
             system_message=_ENTRY_SYSTEM_PROMPT,
         ).with_model(provider, model)
         msg = UserMessage(text=_build_entry_prompt(req))
-        # 8s hard timeout — M5 signals are time-sensitive
+        # 8s hard timeout — advisory calls must not add an entry timing layer
         response = await asyncio.wait_for(chat.send_message(msg), timeout=8.0)
         latency = time.time() - t0
         result = _parse_entry_json(response)
@@ -2933,7 +2941,9 @@ def _combined_entry_ai_status(claude: dict, gpt: dict, action: str, consensus_so
     return "AI Decision"
 
 @api_router.post("/ai/analyze")
-async def ai_analyze_market(req: AIAnalysisRequest):
+async def ai_analyze_market(req: AIAnalysisRequest, request: Request):
+    if not req.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
     """Dual-AI entry analysis: Claude 4.5 + GPT-4o vote in parallel.
 
     Consensus rules (revised to NOT punish availability):
@@ -2943,8 +2953,9 @@ async def ai_analyze_market(req: AIAnalysisRequest):
       - One agrees, other UNAVAILABLE (error)    -> that side at 1.00x (no penalty)
       - Both SKIP or both unavailable            -> SKIP
     """
+    await _resolve_monitor_license(req.pin, req.account_id, request)
     try:
-        payload = req.dict()
+        payload = req.model_dump(exclude={"pin"})
         cache_key = _ai_cost_state_hash("entry", payload)
         cached = _ai_cache_get(cache_key)
         if cached:
@@ -3109,7 +3120,8 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             _ai_cache_put(cache_key, result, "entry", sum(int(x.get("tokens", 0) or 0) for x in cost_entries))
         try:
             await db.ai_analyses.insert_one({
-                "symbol": req.symbol, "request": req.dict(), "response": result,
+                "symbol": req.symbol, "account": req.account_id,
+                "request": req.model_dump(exclude={"pin"}), "response": result,
                 "signature": req.signature, "created_at": datetime.now(timezone.utc).isoformat()
             })
         except Exception:
@@ -3131,9 +3143,14 @@ async def ai_cost_stats():
     return _ai_cost_snapshot()
 
 @api_router.post("/ai/memory/record")
-async def ai_memory_record(record: TradeMemoryRecord):
+async def ai_memory_record(record: TradeMemoryRecord, request: Request):
+    if not record.account:
+        raise HTTPException(status_code=400, detail="account is required")
+    lic = await _resolve_monitor_license(record.pin, record.account, request)
     try:
-        data = record.dict()
+        data = record.model_dump()
+        data.pop("pin", None)
+        data["license_id"] = lic.get("id", "")
         data["recorded_at"] = datetime.now(timezone.utc).isoformat()
         data["memory_hash"] = _trade_memory_state_hash(data)
         data["bad_data_ignored"] = False
@@ -3157,21 +3174,18 @@ async def ai_memory_query_retired():
     retired. No EA caller (grepped backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
     -- only ai/memory/record is ever called, never this). Also
     unauthenticated with no per-account scoping -- would have blended
-    every account's trade memory into one global similarity match. Kept
-    ai_memory_record() writing (still called by the EA) since this closes
-    the only read path that ever turned recorded memories into a live
-    recommendation -- the write side is now functionally inert rather than
-    a live cross-account data-bleed risk. Adding real per-license auth to
-    the write side is a disclosed follow-up, not done here, since it
-    requires an EA source change (InpLicensePIN isn't currently sent in
-    that payload) and this session already has one EA recompile+redeploy
-    in flight today for the higher-severity M10 freshness fix."""
+    every account's trade memory into one global similarity match. The
+    active write and report routes now authenticate the EA license and
+    store/query by the resolved non-secret license ID."""
     raise HTTPException(status_code=410, detail="This endpoint is retired.")
 
 @api_router.get("/ai/memory/report")
-async def ai_memory_report(limit: int = 2000):
+async def ai_memory_report(request: Request, pin: str = "", account: str = "", limit: int = 2000):
+    lic = await _resolve_monitor_license(pin, account, request)
     try:
         rows = _load_trade_memory(limit=max(100, min(limit, 10000)))
+        rows = [row for row in rows if row.get("license_id") == lic.get("id", "") or
+                _normalize_license_key(row.get("pin", "")) == _normalize_license_key(pin)]
         buckets: dict[str, list[dict]] = {}
         for row in rows:
             key = "|".join([
@@ -3217,11 +3231,18 @@ async def ai_memory_report(limit: int = 2000):
 ########################################
 
 @api_router.post("/ai/feedback")
-async def ai_feedback(data: dict):
+async def ai_feedback(data: dict, request: Request):
     """Record AI verdict outcome after every trade closes."""
+    pin = str(data.get("pin") or "")
+    account = str(data.get("account_id") or data.get("account") or "")
+    if not account:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    lic = await _resolve_monitor_license(pin, account, request)
     try:
         feedback_path = ROOT_DIR / "ai_feedback_log.jsonl"
-        record = {**data, "recorded_at": datetime.now(timezone.utc).isoformat()}
+        record = {**data, "license_id": lic.get("id", ""), "account_id": account,
+                  "recorded_at": datetime.now(timezone.utc).isoformat()}
+        record.pop("pin", None)
         with open(feedback_path, "a") as f:
             f.write(_json.dumps(record) + "\n")
         # Also persist to MongoDB for dashboard queries
@@ -3236,8 +3257,9 @@ async def ai_feedback(data: dict):
         return {"status": "error", "detail": str(e)}
 
 @api_router.get("/ai/feedback/stats")
-async def ai_feedback_stats():
+async def ai_feedback_stats(request: Request, pin: str = "", account: str = ""):
     """Compute accuracy by confidence band, strategy, session, direction from feedback log."""
+    lic = await _resolve_monitor_license(pin, account, request)
     try:
         feedback_path = ROOT_DIR / "ai_feedback_log.jsonl"
         if not feedback_path.exists():
@@ -3251,6 +3273,8 @@ async def ai_feedback_stats():
                     try: records.append(_json.loads(line))
                     except Exception: pass
 
+        records = [r for r in records if r.get("license_id") == lic.get("id", "") or
+                   _normalize_license_key(r.get("pin", "")) == _normalize_license_key(pin)]
         total = len(records)
         if total == 0:
             return {"total": 0, "message": "no feedback recorded yet"}
@@ -3376,7 +3400,13 @@ async def check_news_events():
         async with httpx.AsyncClient(timeout=5) as c:
             r = await c.get("https://nfs.faireconomy.media/ff_calendar_thisweek.json")
             if r.status_code != 200:
-                return {"safe_to_trade": True, "reason": "Calendar unavailable"}
+                return {
+                    "safe_to_trade": None,
+                    "reason": "Calendar provider unavailable; state is unknown, not safe",
+                    "status": "DEGRADED_UNKNOWN",
+                    "retryable": True,
+                    "global_block": False,
+                }
             events = r.json()
             now = datetime.now(timezone.utc)
             high_impact_soon = []
@@ -3389,11 +3419,17 @@ async def check_news_events():
                         high_impact_soon.append({"title": ev.get("title", "Unknown"), "impact": ev.get("impact", ""), "currency": ev.get("country", ""), "minutes": int(diff_mins)})
                 except: continue
             if high_impact_soon:
-                return {"safe_to_trade": False, "reason": f"High impact: {high_impact_soon[0]['title']} in {high_impact_soon[0]['minutes']}min", "events": high_impact_soon}
-            return {"safe_to_trade": True, "reason": "No high-impact events nearby"}
+                return {"safe_to_trade": False, "reason": f"High impact: {high_impact_soon[0]['title']} in {high_impact_soon[0]['minutes']}min", "status": "CURRENT_RISK", "events": high_impact_soon}
+            return {"safe_to_trade": True, "reason": "No high-impact events nearby", "status": "AVAILABLE"}
     except Exception as e:
         logger.error(f"News check error: {e}")
-        return {"safe_to_trade": True, "reason": "Calendar check failed"}
+        return {
+            "safe_to_trade": None,
+            "reason": "Calendar check failed; state is unknown, not safe",
+            "status": "DEGRADED_UNKNOWN",
+            "retryable": True,
+            "global_block": False,
+        }
 
 ########################################
 # TRADE JOURNAL
@@ -3454,13 +3490,14 @@ async def log_trade_journal(entry: TradeJournalEntry, request: Request):
     # canonical, atomic, fail-closed check every other EA-facing endpoint
     # already uses) before anything is written. Rate-limited per pin to
     # bound abuse even from a genuinely licensed but compromised install.
-    try:
-        await _resolve_monitor_license(entry.pin, "", request)
-    except HTTPException:
-        return {"status": "error", "detail": "Invalid or inactive license."}
+    if not entry.account_login:
+        raise HTTPException(status_code=400, detail="account_login is required")
+    lic = await _resolve_monitor_license(entry.pin, entry.account_login, request)
     _rate_limit(f"journal_log_pin:{entry.pin}", max_requests=60, window_seconds=300)
     try:
         doc = entry.dict()
+        doc.pop("pin", None)
+        doc["license_id"] = lic.get("id", "")
         doc["created_at"] = datetime.now(timezone.utc).isoformat()
         doc["created_ts"] = time.time()
         doc["win_rate"] = round(entry.wins / entry.total_trades * 100, 1) if entry.total_trades > 0 else 0
@@ -3471,7 +3508,7 @@ async def log_trade_journal(entry: TradeJournalEntry, request: Request):
             try:
                 await db.hive_signatures.insert_one({
                     "signature": entry.signature,
-                    "pin": entry.pin,
+                    "license_id": lic.get("id", ""),
                     "symbol": entry.symbol,
                     "result": entry.result,   # WIN / LOSS
                     "profit": entry.profit,
@@ -3567,9 +3604,10 @@ async def ml_hive_score(req: HiveScoreRequest):
                 "verdict": "NONE", "level": -1, "matched_signature": ""}
 
 @api_router.get("/journal/trades")
-async def get_trade_journal(pin: str = "", limit: int = 50):
+async def get_trade_journal(request: Request, pin: str = "", limit: int = 50):
+    lic = await _resolve_monitor_license(pin, "", request)
     try:
-        query = {"pin": pin} if pin else {}
+        query = {"$or": [{"license_id": lic.get("id", "")}, {"pin": _normalize_license_key(pin)}]}
         cursor = db.trade_journal.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
         trades = await cursor.to_list(length=limit)
         total = await db.trade_journal.count_documents(query)
@@ -3607,6 +3645,7 @@ async def get_trade_journal(pin: str = "", limit: int = 50):
 
 class WeeklyReportEntry(BaseModel):
     pin: str = ""
+    account_id: str = ""
     symbol: str = "XAUUSD"
     trades: int = 0
     wins: int = 0
@@ -3622,9 +3661,14 @@ class WeeklyReportEntry(BaseModel):
     worst_hour_profit: float = 0
 
 @api_router.post("/journal/weekly-report")
-async def save_weekly_report(entry: WeeklyReportEntry):
+async def save_weekly_report(entry: WeeklyReportEntry, request: Request):
+    if not entry.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    lic = await _resolve_monitor_license(entry.pin, entry.account_id, request)
     try:
         doc = entry.dict()
+        doc.pop("pin", None)
+        doc["license_id"] = lic.get("id", "")
         doc["created_at"] = datetime.now(timezone.utc).isoformat()
         doc["week"] = datetime.now(timezone.utc).strftime("%Y-W%W")
         await db.weekly_reports.insert_one(doc)
@@ -3634,9 +3678,10 @@ async def save_weekly_report(entry: WeeklyReportEntry):
         return {"status": "error"}
 
 @api_router.get("/journal/weekly-reports")
-async def get_weekly_reports(pin: str = "", limit: int = 12):
+async def get_weekly_reports(request: Request, pin: str = "", limit: int = 12):
+    lic = await _resolve_monitor_license(pin, "", request)
     try:
-        query = {"pin": pin} if pin else {}
+        query = {"$or": [{"license_id": lic.get("id", "")}, {"pin": _normalize_license_key(pin)}]}
         cursor = db.weekly_reports.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
         reports = await cursor.to_list(length=limit)
         return {"reports": reports}
@@ -3649,16 +3694,21 @@ async def get_weekly_reports(pin: str = "", limit: int = 12):
 ########################################
 class PatternData(BaseModel):
     pin: str = ""
+    account_id: str = ""
     symbol: str = "XAUUSD"
     patterns: list = []
 
 @api_router.post("/ml/patterns/save")
-async def save_patterns_cloud(req: PatternData):
+async def save_patterns_cloud(req: PatternData, request: Request):
+    if not req.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    lic = await _resolve_monitor_license(req.pin, req.account_id, request)
     try:
-        key = f"{req.pin}_{req.symbol}" if req.pin else req.symbol
+        owner_id = lic.get("id", "")
+        key = f"{owner_id}_{req.symbol}"
         await db.ml_cloud_patterns.update_one(
             {"key": key},
-            {"$set": {"key": key, "pin": req.pin, "symbol": req.symbol, "patterns": req.patterns, "count": len(req.patterns), "updated_at": datetime.now(timezone.utc).isoformat()}},
+            {"$set": {"key": key, "license_id": owner_id, "symbol": req.symbol, "patterns": req.patterns, "count": len(req.patterns), "updated_at": datetime.now(timezone.utc).isoformat()}},
             upsert=True
         )
         return {"status": "ok", "saved": len(req.patterns)}
@@ -3667,9 +3717,12 @@ async def save_patterns_cloud(req: PatternData):
         return {"status": "error", "saved": 0}
 
 @api_router.post("/ml/patterns/load")
-async def load_patterns_cloud(req: PatternData):
+async def load_patterns_cloud(req: PatternData, request: Request):
+    if not req.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    lic = await _resolve_monitor_license(req.pin, req.account_id, request)
     try:
-        key = f"{req.pin}_{req.symbol}" if req.pin else req.symbol
+        key = f"{lic.get('id', '')}_{req.symbol}"
         doc = await db.ml_cloud_patterns.find_one({"key": key}, {"_id": 0})
         if doc and doc.get("patterns"):
             return {"status": "ok", "patterns": doc["patterns"], "count": len(doc["patterns"])}
@@ -4227,8 +4280,10 @@ async def cloud_signup(req: CloudSignupReq, response: Response, request: Request
         # find_one check above couldn't see yet.
         raise HTTPException(status_code=400, detail="Email already registered")
     token = _cloud_token(uid, req.email)
-    response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="strict", max_age=60*60*24*30)
-    return {"ok": True, "token": token, "user": {k: v for k, v in doc.items() if k != "password_hash"}}
+    response.set_cookie("cloud_token", token, httponly=True,
+                        secure=os.environ.get('COOKIE_SECURE', 'true').lower() != 'false',
+                        samesite="strict", max_age=60*60*24*30, path="/")
+    return {"ok": True, "user": {k: v for k, v in doc.items() if k != "password_hash"}}
 
 @api_router.post("/cloud/auth/login")
 async def cloud_login(req: CloudLoginReq, response: Response, request: Request):
@@ -4249,13 +4304,15 @@ async def cloud_login(req: CloudLoginReq, response: Response, request: Request):
     })
     await db.cloud_users.update_one({"id": u["id"]}, {"$set": {"last_login_at": datetime.now(timezone.utc).isoformat()}})
     token = _cloud_token(u["id"], u["email"])
-    response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="strict", max_age=60*60*24*30)
+    response.set_cookie("cloud_token", token, httponly=True,
+                        secure=os.environ.get('COOKIE_SECURE', 'true').lower() != 'false',
+                        samesite="strict", max_age=60*60*24*30, path="/")
     u.pop("_id", None); u.pop("password_hash", None)
-    return {"ok": True, "token": token, "user": u}
+    return {"ok": True, "user": u}
 
 @api_router.post("/cloud/auth/logout")
 async def cloud_logout(response: Response):
-    response.delete_cookie("cloud_token")
+    response.delete_cookie("cloud_token", path="/")
     return {"ok": True}
 
 @api_router.get("/cloud/auth/me")
@@ -5192,6 +5249,10 @@ class DirectionReservationClaimReq(BaseModel):
     symbol: str = ""
     direction: int = 0  # 1=BUY, -1=SELL
     requesting_family: str = ""
+    # Immutable identity of the exact execution opportunity. Even a repeat
+    # request for the same key is blocked while the first claim is live:
+    # otherwise two terminals evaluating one candidate can both send it.
+    execution_key: str = ""
     terminal_identity: str = ""
     ttl_seconds: Optional[int] = 30
 
@@ -5211,11 +5272,11 @@ _RESERVATION_VALID_SYMBOLS = {"XAUUSD", "XAUUSDm", "XAUUSD.", "GOLD"}
 @api_router.post("/cloud/reservation/claim")
 async def cloud_reservation_claim(req: DirectionReservationClaimReq, request: Request):
     """Atomically claim the requested direction for this broker_server+account+
-    symbol. Succeeds if no reservation exists, the existing one has expired, or
-    the existing one is already the SAME direction (renewal). Fails (claimed=false)
-    if an unexpired OPPOSITE-direction reservation is currently held -- by
-    another terminal, another family on this same terminal, or this same call
-    racing itself. Never a process-local boolean only.
+    symbol. Succeeds only if no reservation exists or the prior reservation
+    has expired. Every unexpired claim blocks every subsequent claimant,
+    including the same direction and the same execution key. There is no
+    claim renewal operation: a second success could authorize a second
+    terminal to send the same real-money order.
 
     v6.25.2 owner directive 2026-07-17 -- SECURITY FIX. This endpoint used to
     accept pin/license_key/broker_server/account/symbol WITHOUT ever
@@ -5239,19 +5300,20 @@ async def cloud_reservation_claim(req: DirectionReservationClaimReq, request: Re
         logger.warning("[reservation-claim] reject invalid symbol=%s account=%s", req.symbol, req.account)
         raise HTTPException(status_code=400, detail={"ok": False, "reason": "INVALID_SYMBOL", "symbol": req.symbol})
     lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    execution_key = (req.execution_key or "").strip()
+    if not execution_key or len(execution_key) > 240:
+        raise HTTPException(status_code=400, detail="execution_key is required and must be at most 240 characters")
     now = datetime.now(timezone.utc)
     ttl = max(5, min(int(req.ttl_seconds or 30), 120))
     expires_at = now + timedelta(seconds=ttl)
     reservation_id = str(uuid.uuid4())
     try:
         await db.cloud_direction_reservations.find_one_and_update(
-            {"_id": key, "$or": [
-                {"expiresAt": {"$lt": now.isoformat()}},
-                {"direction": req.direction},
-            ]},
+            {"_id": key, "expiresAt": {"$lte": now.isoformat()}},
             {"$set": {
                 "direction": req.direction,
                 "requestingFamily": req.requesting_family,
+                "executionKey": execution_key,
                 "reservationId": reservation_id,
                 "createdAt": now.isoformat(),
                 "expiresAt": expires_at.isoformat(),
@@ -5275,10 +5337,11 @@ async def cloud_reservation_claim(req: DirectionReservationClaimReq, request: Re
                     key, req.direction, req.requesting_family, existing)
         return {
             "claimed": False,
-            "reason": "OPPOSITE_DIRECTION_RESERVED",
+            "reason": "ACTIVE_EXECUTION_RESERVED",
             "existingDirection": existing.get("direction") if existing else None,
             "existingFamily": existing.get("requestingFamily") if existing else None,
             "existingTerminal": existing.get("terminalIdentity") if existing else None,
+            "sameExecution": bool(existing and existing.get("executionKey") == execution_key),
         }
 
 @api_router.post("/cloud/reservation/release")
@@ -5722,7 +5785,7 @@ async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = "",
     how to word it); the periodic status heartbeat lives in its own
     /cloud/monitor/bot-status endpoint instead of spamming this feed."""
     n = max(1, min(int(limit), 20))
-    empty_message = "No fresh AI decision yet. Waiting for next M5 evaluation."
+    empty_message = "No fresh AI decision yet. Waiting for the next completed M10 evaluation."
     fresh_cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     lic = await _get_user_license(user)
     license_key = _normalize_license_key((lic or {}).get("pin", ""))
@@ -5751,7 +5814,7 @@ async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = "",
         "max_age_hours": 24,
         "source_priority": [
             "latest EA heartbeat/live decision JSON",
-            "latest M5 decision cycle",
+            "latest M10 decision cycle",
             "latest open trade thinking",
             "recent decision history fallback",
         ],
@@ -5881,7 +5944,7 @@ async def cloud_monitor_current_opinion(ticket: str = "", user: dict = Depends(g
     entry_reason = (thesis or {}).get("entry_reason") or ". ".join(entry_card.get("reason_bullets") or []) or entry_card.get("decision_text")
     current_bot_decision = (thesis or {}).get("next_action") or latest.get("decision_text") or "WAIT"
     what_would_close = (thesis or {}).get("exit_reason") or "Broker SL/TP, manual close, emergency margin protection, or confirmed thesis invalidation."
-    current_reason = (thesis or {}).get("hold_reason") or (thesis or {}).get("protect_reason") or latest.get("decision_text") or "Waiting for the next M5 management cycle."
+    current_reason = (thesis or {}).get("hold_reason") or (thesis or {}).get("protect_reason") or latest.get("decision_text") or "Waiting for the next M10 decision cycle."
 
     return {
         "open": True,

@@ -6,11 +6,6 @@ import { API } from "@/lib/api";
 
 // Mirrors AIThoughtFeed's local axios convention -- self-contained, droppable panel.
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
-outlookAxios.interceptors.request.use((cfg) => {
-  const token = localStorage.getItem("cloud_token");
-  if (token) cfg.headers.Authorization = `Bearer ${token}`;
-  return cfg;
-});
 
 const CARD = "rounded-2xl border border-white/[0.07] bg-[#0d0e13]";
 const MONO_LABEL = "font-mono text-[10px] uppercase tracking-[0.2em] text-white/35";

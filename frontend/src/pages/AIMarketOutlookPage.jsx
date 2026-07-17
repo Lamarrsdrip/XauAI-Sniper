@@ -9,11 +9,6 @@ import { API } from "@/lib/api";
 import { ensureOneSignalInitialized } from "@/lib/onesignal";
 
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
-outlookAxios.interceptors.request.use((cfg) => {
-  const token = localStorage.getItem("cloud_token");
-  if (token) cfg.headers.Authorization = `Bearer ${token}`;
-  return cfg;
-});
 
 const CARD = "rounded-2xl border border-white/[0.07] bg-[#0d0e13]";
 const MONO_LABEL = "font-mono text-[10px] uppercase tracking-[0.2em] text-white/35";
@@ -82,8 +77,8 @@ function M10VsOutlookCard({ m10, outlook }) {
       {!bothDirectional && <p className="mt-3 text-[11px] text-white/35">One or both systems have no directional idea right now.</p>}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
         <span>Exhaustion: evidence-only ({(m10.exhaustion_decision || "—").replace(/_/g, " ")})</span>
-        {m10.post_profit_buy_pending && <span className="text-amber-300">· Buy waiting for retrace</span>}
-        {m10.post_profit_sell_pending && <span className="text-amber-300">· Sell waiting for retrace</span>}
+        {m10.post_profit_buy_pending && <span className="text-amber-300">· Buy location extended</span>}
+        {m10.post_profit_sell_pending && <span className="text-amber-300">· Sell location extended</span>}
         <span>· M10 bar {m10.bar_time || "—"}</span>
       </div>
     </div>

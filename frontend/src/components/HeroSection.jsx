@@ -2,18 +2,19 @@ import React from "react";
 import { ChartLineUp, ShieldCheck, Lightning, Brain, Crosshair, Shuffle } from "@phosphor-icons/react";
 
 const HIGHLIGHTS = [
-  { icon: Crosshair,  label: "Finds High-Probability Setups"      },
+  { icon: Crosshair,  label: "Finds Rule-Qualified Setups"        },
   { icon: ShieldCheck, label: "Smart Risk Management"              },
   { icon: Lightning,   label: "Fully Automated Trading"            },
   { icon: Shuffle,     label: "Adapts to Changing Market Conditions" },
 ];
 
 export default function HeroSection({ performance }) {
+  const sufficient = performance?.sufficient_data === true;
   const stats = [
-    { label: "Win Rate",      value: performance?.win_rate     ? `${performance.win_rate}%`     : "--", icon: ChartLineUp, tone: "text-emerald-300" },
-    { label: "Profit Factor", value: performance?.profit_factor ? `${performance.profit_factor}` : "--", icon: Lightning,   tone: "text-amber-200"  },
-    { label: "Max Drawdown",  value: "5%", icon: ShieldCheck,  tone: "text-sky-300"    },
-    { label: "AI Rating",     value: "90 / 100",                                                         icon: Brain,        tone: "text-violet-300" },
+    { label: "Journal Trades", value: performance?.total_trades ?? "--", icon: ChartLineUp, tone: "text-emerald-300" },
+    { label: "Win Rate", value: sufficient ? `${performance.win_rate}%` : "Insufficient", icon: Lightning, tone: "text-amber-200" },
+    { label: "Profit Factor", value: sufficient ? `${performance.profit_factor}` : "Insufficient", icon: ShieldCheck, tone: "text-sky-300" },
+    { label: "Data Source", value: "EA Journal", icon: Brain, tone: "text-violet-300" },
   ];
 
   return (
@@ -26,7 +27,7 @@ export default function HeroSection({ performance }) {
 
         <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3.5 py-1.5">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">XAUUSD · M5 · MT5</span>
+          <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">XAUUSD · M10 Evidence · Optional M30 · MT5</span>
         </div>
 
         <h1 className="font-heading text-5xl font-semibold leading-[1.04] tracking-tight sm:text-6xl lg:text-7xl" data-testid="hero-title">
@@ -36,7 +37,7 @@ export default function HeroSection({ performance }) {
         <p className="mx-auto mt-6 max-w-2xl text-[15px] leading-7 text-white/50">
           XAU AI Sniper is an advanced AI trading bot built exclusively for Gold (XAUUSD).<br className="hidden sm:block" />
           It analyzes market structure, trend strength, volatility, and momentum —<br className="hidden sm:block" />
-          then automatically executes high-probability trades while protecting your capital.
+          then executes only rule-qualified candidates through explicit risk, structure, margin, spread, and broker checks. Trading losses remain possible.
         </p>
 
         {/* Highlight badges */}
@@ -62,7 +63,7 @@ export default function HeroSection({ performance }) {
         </div>
 
         <p className="mt-5 text-[11px] text-white/20">
-          Start on demo. Trading involves risk of loss.
+          Start on demo. Trading involves risk of loss. Performance is first-party EA journal data, not independently verified.
         </p>
 
         <div className="mt-14 grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="hero-stats">
@@ -76,7 +77,7 @@ export default function HeroSection({ performance }) {
                   <Icon size={12} weight="duotone" className={s.tone} />
                   <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-white/30">{s.label}</span>
                 </div>
-                <div className="font-mono text-xl font-black">{s.value}</div>
+                <div className="break-words font-mono text-base font-black sm:text-xl">{s.value}</div>
               </div>
             );
           })}

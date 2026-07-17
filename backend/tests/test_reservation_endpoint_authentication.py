@@ -72,7 +72,7 @@ def test_valid_license_and_account_can_claim():
         await _seed_license("VALID-PIN-1", "1000001")
         req = srv.DirectionReservationClaimReq(
             pin="VALID-PIN-1", broker_server="Exness-MT5Trial9", account="1000001",
-            symbol="XAUUSD", direction=1, requesting_family="NORMAL", terminal_identity="mac")
+            symbol="XAUUSD", direction=1, requesting_family="NORMAL", execution_key="core-1000001-buy-1", terminal_identity="mac")
         result = await srv.cloud_reservation_claim(req, None)
         assert result["claimed"] is True
         assert result["reservationId"]
@@ -85,7 +85,7 @@ def test_invalid_pin_rejected():
         await _cleanup()
         req = srv.DirectionReservationClaimReq(
             pin="NO-SUCH-PIN", broker_server="Exness-MT5Trial9", account="1000001",
-            symbol="XAUUSD", direction=1, requesting_family="NORMAL", terminal_identity="mac")
+            symbol="XAUUSD", direction=1, requesting_family="NORMAL", execution_key="invalid-pin-candidate", terminal_identity="mac")
         with pytest.raises(HTTPException) as exc:
             await srv.cloud_reservation_claim(req, None)
         assert exc.value.status_code == 403
@@ -100,7 +100,7 @@ def test_inactive_license_rejected():
         await _seed_license("INACTIVE-PIN", "1000001", active=False)
         req = srv.DirectionReservationClaimReq(
             pin="INACTIVE-PIN", broker_server="Exness-MT5Trial9", account="1000001",
-            symbol="XAUUSD", direction=1, requesting_family="NORMAL", terminal_identity="mac")
+            symbol="XAUUSD", direction=1, requesting_family="NORMAL", execution_key="inactive-pin-candidate", terminal_identity="mac")
         with pytest.raises(HTTPException) as exc:
             await srv.cloud_reservation_claim(req, None)
         assert exc.value.status_code == 403
@@ -115,7 +115,7 @@ def test_account_mismatch_rejected():
         await _seed_license("BOUND-PIN", "1000001")
         req = srv.DirectionReservationClaimReq(
             pin="BOUND-PIN", broker_server="Exness-MT5Trial9", account="9999999",
-            symbol="XAUUSD", direction=1, requesting_family="NORMAL", terminal_identity="mac")
+            symbol="XAUUSD", direction=1, requesting_family="NORMAL", execution_key="account-mismatch-candidate", terminal_identity="mac")
         with pytest.raises(HTTPException) as exc:
             await srv.cloud_reservation_claim(req, None)
         assert exc.value.status_code == 403
@@ -129,7 +129,7 @@ def test_missing_credentials_rejected():
         await _cleanup()
         req = srv.DirectionReservationClaimReq(
             pin="", broker_server="Exness-MT5Trial9", account="1000001",
-            symbol="XAUUSD", direction=1, requesting_family="NORMAL", terminal_identity="mac")
+            symbol="XAUUSD", direction=1, requesting_family="NORMAL", execution_key="missing-credential-candidate", terminal_identity="mac")
         with pytest.raises(HTTPException) as exc:
             await srv.cloud_reservation_claim(req, None)
         assert exc.value.status_code == 403
@@ -143,7 +143,7 @@ def test_invalid_symbol_rejected():
         await _seed_license("VALID-PIN-SYM", "1000001")
         req = srv.DirectionReservationClaimReq(
             pin="VALID-PIN-SYM", broker_server="Exness-MT5Trial9", account="1000001",
-            symbol="NOTGOLD", direction=1, requesting_family="NORMAL", terminal_identity="mac")
+            symbol="NOTGOLD", direction=1, requesting_family="NORMAL", execution_key="invalid-symbol-candidate", terminal_identity="mac")
         with pytest.raises(HTTPException) as exc:
             await srv.cloud_reservation_claim(req, None)
         assert exc.value.status_code == 400
@@ -157,7 +157,7 @@ def test_owner_can_release_own_reservation():
         await _seed_license("OWNER-PIN", "1000002")
         claim_req = srv.DirectionReservationClaimReq(
             pin="OWNER-PIN", broker_server="Exness-MT5Trial9", account="1000002",
-            symbol="XAUUSD", direction=1, requesting_family="NORMAL", terminal_identity="mac")
+            symbol="XAUUSD", direction=1, requesting_family="NORMAL", execution_key="owner-release-candidate", terminal_identity="mac")
         claimed = await srv.cloud_reservation_claim(claim_req, None)
         assert claimed["claimed"] is True
         release_req = srv.DirectionReservationReleaseReq(
@@ -178,7 +178,7 @@ def test_foreign_license_cannot_release_another_licenses_reservation():
         await _seed_license("ATTACKER-PIN", "1000004")
         claim_req = srv.DirectionReservationClaimReq(
             pin="OWNER-PIN-2", broker_server="Exness-MT5Trial9", account="1000003",
-            symbol="XAUUSD", direction=1, requesting_family="NORMAL", terminal_identity="mac")
+            symbol="XAUUSD", direction=1, requesting_family="NORMAL", execution_key="foreign-release-candidate", terminal_identity="mac")
         claimed = await srv.cloud_reservation_claim(claim_req, None)
         assert claimed["claimed"] is True
 
@@ -213,7 +213,7 @@ def test_foreign_license_with_own_matching_account_still_cannot_release_someone_
         await _seed_license("OWNER-PIN-3", "1000005")
         claim_req = srv.DirectionReservationClaimReq(
             pin="OWNER-PIN-3", broker_server="Exness-MT5Trial9", account="1000005",
-            symbol="XAUUSD", direction=1, requesting_family="NORMAL", terminal_identity="mac")
+            symbol="XAUUSD", direction=1, requesting_family="NORMAL", execution_key="same-account-release-candidate", terminal_identity="mac")
         claimed = await srv.cloud_reservation_claim(claim_req, None)
         assert claimed["claimed"] is True
 
@@ -234,6 +234,66 @@ def test_foreign_license_with_own_matching_account_still_cannot_release_someone_
     _run(go())
 
 
+def test_unexpired_same_execution_key_is_blocked_for_second_terminal():
+    async def go():
+        await _cleanup()
+        await _seed_license("RACE-PIN-1", "1000007")
+        common = dict(pin="RACE-PIN-1", broker_server="Exness-MT5Trial9", account="1000007",
+                      symbol="XAUUSD", direction=1, requesting_family="NORMAL_CORE",
+                      execution_key="1000007|XAUUSD|CORE|BUY|slot-1")
+        first = await srv.cloud_reservation_claim(
+            srv.DirectionReservationClaimReq(**common, terminal_identity="mac"), None)
+        second = await srv.cloud_reservation_claim(
+            srv.DirectionReservationClaimReq(**common, terminal_identity="vps"), None)
+        assert first["claimed"] is True
+        assert second == {
+            "claimed": False,
+            "reason": "ACTIVE_EXECUTION_RESERVED",
+            "existingDirection": 1,
+            "existingFamily": "NORMAL_CORE",
+            "existingTerminal": "mac",
+            "sameExecution": True,
+        }
+        await _cleanup()
+    _run(go())
+
+
+def test_unexpired_different_same_direction_candidate_is_also_blocked():
+    async def go():
+        await _cleanup()
+        await _seed_license("RACE-PIN-2", "1000008")
+        first = srv.DirectionReservationClaimReq(
+            pin="RACE-PIN-2", broker_server="Exness-MT5Trial9", account="1000008",
+            symbol="XAUUSD", direction=-1, requesting_family="NORMAL_CORE",
+            execution_key="1000008|XAUUSD|CORE|SELL|slot-1", terminal_identity="mac")
+        second = first.model_copy(update={
+            "execution_key": "1000008|XAUUSD|CORE|SELL|slot-2",
+            "terminal_identity": "vps",
+        })
+        assert (await srv.cloud_reservation_claim(first, None))["claimed"] is True
+        blocked = await srv.cloud_reservation_claim(second, None)
+        assert blocked["claimed"] is False
+        assert blocked["reason"] == "ACTIVE_EXECUTION_RESERVED"
+        assert blocked["sameExecution"] is False
+        await _cleanup()
+    _run(go())
+
+
+def test_missing_execution_key_fails_closed_after_authentication():
+    async def go():
+        await _cleanup()
+        await _seed_license("NO-KEY-PIN", "1000009")
+        req = srv.DirectionReservationClaimReq(
+            pin="NO-KEY-PIN", broker_server="Exness-MT5Trial9", account="1000009",
+            symbol="XAUUSD", direction=1, requesting_family="NORMAL_CORE",
+            execution_key="", terminal_identity="mac")
+        with pytest.raises(HTTPException) as exc:
+            await srv.cloud_reservation_claim(req, None)
+        assert exc.value.status_code == 400
+        await _cleanup()
+    _run(go())
+
+
 def test_expired_reservation_can_be_reclaimed_by_a_different_valid_license():
     async def go():
         await _cleanup()
@@ -247,7 +307,7 @@ def test_expired_reservation_can_be_reclaimed_by_a_different_valid_license():
         await _seed_license("NEW-PIN", "1000006")
         claim_req = srv.DirectionReservationClaimReq(
             pin="NEW-PIN", broker_server="Exness-MT5Trial9", account="1000006",
-            symbol="XAUUSD", direction=-1, requesting_family="NORMAL", terminal_identity="vps")
+            symbol="XAUUSD", direction=-1, requesting_family="NORMAL", execution_key="expired-takeover-candidate", terminal_identity="vps")
         result = await srv.cloud_reservation_claim(claim_req, None)
         assert result["claimed"] is True
         await _cleanup()

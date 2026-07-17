@@ -11,7 +11,8 @@ const NAV = [
 
 export default function Header({ activeSection, onNavigate, goldPrice }) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const up = goldPrice?.change >= 0;
+  const quoteAvailable = goldPrice?.available === true && Number.isFinite(goldPrice?.bid);
+  const up = quoteAvailable && goldPrice?.change >= 0;
 
   return (
     <>
@@ -37,7 +38,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
           </nav>
 
           <div className="flex items-center gap-2">
-            {goldPrice && (
+            {quoteAvailable && (
               <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-black/30 px-3 py-1.5 md:flex" data-testid="gold-ticker">
                 <Crosshair size={11} className="text-amber-300" weight="bold" />
                 <span className="font-mono text-[12px] font-bold" data-testid="gold-bid-price">{goldPrice.bid?.toFixed(2)}</span>

@@ -14,7 +14,6 @@ export default function DownloadSection({ api }) {
   const [xiLoading, setXiLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState("");
-  const isLoggedIn = typeof window !== "undefined" && !!localStorage.getItem("cloud_token");
 
   useEffect(() => {
     fetch(`${api}/download/info`)
@@ -30,14 +29,15 @@ export default function DownloadSection({ api }) {
   const requestDownload = useCallback(async () => {
     setDownloading(true); setDownloadError("");
     try {
-      const token = localStorage.getItem("cloud_token");
       const resp = await fetch(`${api}/download/request-token`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
       });
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
-        setDownloadError(resp.status === 403
+        setDownloadError(resp.status === 401
+          ? "Sign in to Command Center before downloading."
+          : resp.status === 403
           ? "No active license linked to your account yet. Link your license in Command Center first."
           : (body.detail || "Could not start download."));
         setDownloading(false);
@@ -52,7 +52,7 @@ export default function DownloadSection({ api }) {
   }, [api]);
 
   const available = info?.available !== false;
-  const version  = info?.version  || "v6.25.4";
+  const version  = info?.version  || "v6.25.5";
   const edition  = info?.edition  || "";
   const filename = info?.filename || "";
   const checksum = info?.checksum_sha256_12;
@@ -134,18 +134,11 @@ export default function DownloadSection({ api }) {
 
             {/* Download buttons */}
             <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-              {isLoggedIn ? (
-                <button onClick={requestDownload} disabled={downloading || !available} data-testid="download-ea-button"
-                  className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-50">
-                  <DownloadSimple size={17} weight="bold" />
-                  {downloading ? "Preparing download…" : available ? `Download ${version} .EX5` : "No release available"}
-                </button>
-              ) : (
-                <a href="/command" data-testid="download-ea-button"
-                  className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
-                  <LockSimple size={17} weight="bold" /> Sign in to download
-                </a>
-              )}
+              <button onClick={requestDownload} disabled={downloading || !available} data-testid="download-ea-button"
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-50">
+                <DownloadSimple size={17} weight="bold" />
+                {downloading ? "Preparing download…" : available ? `Licensed download ${version} .EX5` : "No release available"}
+              </button>
               <a href="/command"
                 className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
                 Command setup
@@ -211,14 +204,11 @@ export default function DownloadSection({ api }) {
                 XauIndex — Gold + Index, one EA.
               </h2>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
-                Not the same bot as above. XauAI Sniper (Gold-only, {version}) stays pure gold, maintained
-                on its own. XauIndex is a separate product built on the same proven exit engine, with
-                Gold + Index market auto-detection added in. Attach it to XAUUSD and it trades gold exactly
-                the same way. Attach it to an index chart and it now runs a real entry engine — market
-                structure, liquidity, trend continuation, pullback and breakout setups, volatility-regime
-                filtering, momentum — but ships log-only by default: it evaluates and shows its reasoning
-                live, and won't place a real index trade until you explicitly enable it after validating on
-                your own demo/index feed.
+                XauIndex is a separate experimental product, not the audited Gold-only {version} release.
+                No current compiled XauIndex release has completed this audit or been approved for customer
+                download, so it is unavailable here. Its source and any historical binary must not be treated
+                as equivalent to XauAI Sniper or as production-ready until it receives its own compile,
+                broker, risk, replay, and deployment verification.
               </p>
             </div>
           </div>
@@ -232,7 +222,7 @@ export default function DownloadSection({ api }) {
                 <div>
                   <h3 className="font-heading text-2xl font-semibold">XauIndex Expert Advisor</h3>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                    Same dual-AI quality gate and Trade Thesis Monitor as XauAI Sniper, plus automatic Gold/Index detection and a real index entry engine (structure, liquidity, trend, breakout, volatility, momentum). Log-only by default until you enable live index trading.
+                    Separate unaudited codebase. No customer EX5 is currently published.
                   </p>
                 </div>
               </div>

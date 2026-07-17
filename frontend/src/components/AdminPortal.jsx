@@ -8,7 +8,7 @@ import {
 } from "@phosphor-icons/react";
 
 const ax = axios.create({ withCredentials: true });
-const auth = (token) => ({ headers: { Authorization: `Bearer ${token}` } });
+const auth = () => ({});
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const BG   = "bg-[#060609]";
@@ -80,25 +80,23 @@ function Btn({ children, variant = "primary", className = "", ...props }) {
 
 // ─── Main portal ──────────────────────────────────────────────────────────────
 export default function AdminPortal({ api }) {
-  const [token, setToken] = useState(localStorage.getItem("admin_token") || "");
   const [admin, setAdmin] = useState(null);
   const [tab, setTab] = useState("dashboard");
 
   const checkAuth = useCallback(async () => {
-    if (!token) return;
     try {
-      const res = await ax.get(`${api}/auth/me`, auth(token));
+      const res = await ax.get(`${api}/auth/me`);
       setAdmin(res.data);
     } catch {
-      setToken(""); localStorage.removeItem("admin_token");
+      setAdmin(null);
     }
-  }, [api, token]);
+  }, [api]);
 
   useEffect(() => { checkAuth(); }, [checkAuth]);
 
-  const handleLogin  = (t) => { setToken(t); localStorage.setItem("admin_token", t); };
+  const handleLogin  = (user) => { setAdmin(user); };
   const handleLogout = () => {
-    setToken(""); setAdmin(null); localStorage.removeItem("admin_token");
+    setAdmin(null);
     ax.post(`${api}/auth/logout`).catch(() => {});
   };
 
@@ -125,7 +123,7 @@ export default function AdminPortal({ api }) {
               <span className="font-mono text-[10px] font-black text-black">XA</span>
             </div>
             <span className="text-[14px] font-semibold">XauAI Sniper</span>
-            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.25.4</span>
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.25.5</span>
           </div>
           <div className="flex items-center gap-4">
             <span className="hidden text-[11px] text-white/35 sm:block">{admin.email}</span>
@@ -158,14 +156,14 @@ export default function AdminPortal({ api }) {
 
       {/* Content */}
       <div className="mx-auto max-w-7xl px-5 md:px-8 py-7">
-        {tab === "dashboard"     && <DashboardTab     api={api} token={token} />}
-        {tab === "pins"          && <PinsTab          api={api} token={token} />}
-        {tab === "command"       && <CommandOpsTab    api={api} token={token} />}
-        {tab === "notifications" && <NotificationsTab api={api} token={token} />}
-        {tab === "settings"      && <SettingsTab      api={api} token={token} />}
-        {tab === "configurator"  && <ConfigTab        api={api} token={token} />}
-        {tab === "transactions"  && <TransactionsTab  api={api} token={token} />}
-        {tab === "account"       && <AccountTab api={api} token={token} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
+        {tab === "dashboard"     && <DashboardTab     api={api} />}
+        {tab === "pins"          && <PinsTab          api={api} />}
+        {tab === "command"       && <CommandOpsTab    api={api} />}
+        {tab === "notifications" && <NotificationsTab api={api} />}
+        {tab === "settings"      && <SettingsTab      api={api} />}
+        {tab === "configurator"  && <ConfigTab        api={api} />}
+        {tab === "transactions"  && <TransactionsTab  api={api} />}
+        {tab === "account"       && <AccountTab api={api} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
       </div>
     </div>
   );
@@ -183,7 +181,7 @@ function LoginPage({ api, onLogin }) {
     e.preventDefault(); setError(""); setLoading(true);
     try {
       const res = await ax.post(`${api}/auth/login`, { email, password });
-      onLogin(res.data.token);
+      onLogin(res.data);
     } catch (err) {
       const d = err.response?.data?.detail;
       setError(typeof d === "string" ? d : "Login failed");
@@ -198,7 +196,7 @@ function LoginPage({ api, onLogin }) {
             <span className="font-mono text-base font-black text-black">XA</span>
           </div>
           <h1 className="text-2xl font-semibold text-white">XauAI Admin</h1>
-          <p className="mt-1 text-[13px] text-white/38">v6.25.4 management portal</p>
+          <p className="mt-1 text-[13px] text-white/38">v6.25.5 management portal</p>
         </div>
 
         <form onSubmit={handleSubmit} className={`${CARD} p-6 space-y-4`}>
@@ -235,10 +233,10 @@ function LoginPage({ api, onLogin }) {
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function DashboardTab({ api, token }) {
+function DashboardTab({ api }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
 
   useEffect(() => {
     ax.get(`${api}/admin/dashboard`, h).then(r => setData(r.data)).catch(() => {}).finally(() => setLoading(false));
@@ -304,11 +302,11 @@ function DashboardTab({ api, token }) {
 // visibility into push health, backed by GET /admin/notifications/health.
 // The only "not configured" state now is the admin not having entered a
 // real OneSignal App ID + REST API Key yet -- see the Settings tab.
-function NotificationsTab({ api, token }) {
+function NotificationsTab({ api }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
 
   const load = useCallback(() => {
     setLoading(true); setError("");
@@ -390,7 +388,7 @@ function NotificationsTab({ api, token }) {
 }
 
 // ─── Pins / Licenses ──────────────────────────────────────────────────────────
-function PinsTab({ api, token }) {
+function PinsTab({ api }) {
   const [pins, setPins] = useState([]);
   const [stats, setStats] = useState(null);
   const [genCount, setGenCount] = useState(1);
@@ -399,7 +397,7 @@ function PinsTab({ api, token }) {
   const [notes, setNotes] = useState("");
   const [copiedPin, setCopiedPin] = useState(null);
   const [generating, setGenerating] = useState(false);
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
 
   const fetchPins = useCallback(async () => {
     try {
@@ -501,7 +499,7 @@ function PinsTab({ api, token }) {
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
-function SettingsTab({ api, token }) {
+function SettingsTab({ api }) {
   const [settings, setSettings] = useState(null);
   const [pk, setPk] = useState("");
   const [priceNaira, setPriceNaira] = useState(300000);
@@ -511,7 +509,7 @@ function SettingsTab({ api, token }) {
   const [onesignalApiKey, setOnesignalApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
 
   // v6.9.0 — global Gold/Index Mode platform switches (architecture phase)
   const [marketSettings, setMarketSettings] = useState(null);
@@ -637,7 +635,7 @@ function SettingsTab({ api, token }) {
           trades until a real, tested index strategy exists. */}
       <CardSection title="Market modes">
         <p className="mb-4 text-[12px] leading-5 text-white/40">
-          Controls what the public site and Command Center offer. Gold Mode is the live, fully tested strategy.
+          Controls what the public site and Command Center offer. Gold Mode is the primary published product, but live M30 behavior and each broker deployment still require explicit runtime proof.
           Index Mode is currently detection + diagnostics only — no index entry strategy has shipped yet, so
           enabling it here only affects what customers see, not what the EA trades.
         </p>
@@ -648,7 +646,7 @@ function SettingsTab({ api, token }) {
             <label className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.03] p-3.5 cursor-pointer">
               <span>
                 <span className="block text-[13px] font-semibold">Gold Mode enabled on platform</span>
-                <span className="mt-0.5 block text-[11px] text-white/38">Live and fully tested for XAUUSD.</span>
+                <span className="mt-0.5 block text-[11px] text-white/38">Primary XAUUSD product; broker and terminal proof required.</span>
               </span>
               <input type="checkbox" checked={!!marketSettings.platform_gold_mode_enabled}
                 onChange={e => setMarketSettings(s => ({ ...s, platform_gold_mode_enabled: e.target.checked }))}
@@ -689,87 +687,38 @@ function SettingsTab({ api, token }) {
 }
 
 // ─── EA Config ────────────────────────────────────────────────────────────────
-function ConfigTab({ api, token }) {
-  const PRESETS = [
-    { id: "conservative", label: "Conservative", icon: ShieldCheck, wt: 20, risk: 0.5,  trades: 2, conf: 85, tone: "green"  },
-    { id: "moderate",     label: "Moderate",     icon: Lightning,   wt: 35, risk: 1.0,  trades: 3, conf: 75, tone: "amber"  },
-    { id: "aggressive",   label: "Aggressive",   icon: Flame,       wt: 50, risk: 1.5,  trades: 5, conf: 65, tone: "red"    },
+function ConfigTab() {
+  const contract = [
+    ["Decision authority", "Source default: legacy M10. Intended normal mode after proof: three completed M10 snapshots feeding M30."],
+    ["Evidence weights", "Oldest 20% · middle 30% · newest 50%. Never use the forming candle."],
+    ["Entry timing", "Exactly one fresh 120–180 second timer per immutable candidate."],
+    ["Final outcome", "Execute if still valid and below 0.30R; otherwise cancel. Never wait another candle or slot."],
+    ["Structural stop", "Mandatory invalidation, widened exactly once by 1.20. Missing structure at expiry cancels."],
+    ["Risk and broker truth", "Configured core sizing remains 10%; broker acceptance plus matching truth is required."],
   ];
-  const [config, setConfig] = useState({ name: "Default", risk_percent: 1, daily_loss_limit: 3, weekly_drawdown_limit: 5, weekly_profit_target: 35, max_open_trades: 2, max_trades_per_day: 3, enable_trend_mode: true, enable_range_mode: true, enable_breakout_mode: true, confidence_threshold: 75, ema_fast: 50, ema_slow: 200, min_rr_ratio: 1.5, partial_close_percent: 50, trailing_atr_multi: 1.5, sl_atr_multiplier: 2, trade_london: true, trade_new_york: true, equity_protection: 70, profit_mode: "moderate" });
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const h = { headers: { Authorization: `Bearer ${token}` } };
-
-  const u = (k, v) => { setConfig(p => ({ ...p, [k]: v })); setSaved(false); };
-  const applyPreset = (p) => setConfig(prev => ({ ...prev, weekly_profit_target: p.wt, risk_percent: p.risk, max_trades_per_day: p.trades, confidence_threshold: p.conf, profit_mode: p.id }));
-  const save = async () => {
-    setSaving(true);
-    try { await ax.post(`${api}/admin/configs`, config, h); setSaved(true); setTimeout(() => setSaved(false), 3000); } catch {} finally { setSaving(false); }
-  };
-
   return (
     <div className="space-y-5" data-testid="admin-config-tab">
-      {/* v6.25.4 owner directive 2026-07-17 (Phase 9 control-wiring audit)
-          -- this tab writes to the same db.ea_configs collection as the
-          public marketing-site lead-capture Configurator, which no EA
-          version reads back. It has no effect on any live bot -- the
-          previous "Saved!" confirmation implied otherwise. Kept as a
-          reference/preset-planning tool (not deleted, since the values
-          are still useful for manually setting the matching EA inputs in
-          MT5), but now says so honestly instead of implying live control. */}
       <div className="rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-4 py-3 text-[12px] leading-5 text-amber-200/90">
-        Reference tool only -- these values are <strong>not</strong> read by any live EA. Saving here does not change your running bot's behavior; set matching inputs directly in MT5's Expert Advisor properties.
+        Read-only release contract. This admin page does <strong>not</strong> write trading parameters and cannot change a running EA. Runtime inputs must be set intentionally in MT5 and proven in the terminal journal.
       </div>
-      <div className="grid grid-cols-3 gap-3">
-        {PRESETS.map((p) => {
-          const Icon = p.icon;
-          const sel = config.profit_mode === p.id;
-          const toneClasses = { green: "border-emerald-400/30 bg-emerald-400/10 text-emerald-300", amber: "border-amber-300/30 bg-amber-300/10 text-amber-200", red: "border-red-400/30 bg-red-500/10 text-red-300" };
-          return (
-            <button key={p.id} onClick={() => applyPreset(p)} data-testid={`admin-preset-${p.id}`}
-              className={`rounded-2xl border p-4 text-left transition ${sel ? toneClasses[p.tone] : "border-white/[0.08] bg-white/[0.03] text-white/55 hover:border-white/[0.14]"}`}>
-              <div className="flex items-center gap-2 mb-2">
-                <Icon size={14} weight={sel ? "fill" : "regular"} />
-                <span className="text-[11px] font-bold uppercase tracking-[0.1em]">{p.label}</span>
-              </div>
-              <div className="font-mono text-xl font-black">{p.wt}%<span className="text-[11px] font-medium text-white/40 ml-1">/wk</span></div>
-              <div className="mt-1 text-[11px] text-white/38">Risk {p.risk}% · {p.trades}/day max</div>
-            </button>
-          );
-        })}
-      </div>
-
-      <CardSection title="Parameters">
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
-          {[["Risk %","risk_percent",0.1,3,0.1],["Daily loss","daily_loss_limit",1,10,0.5],["Weekly DD","weekly_drawdown_limit",5,20,1],["Weekly target","weekly_profit_target",10,100,5],["Confidence","confidence_threshold",50,95,5],["Min R:R","min_rr_ratio",1,5,0.1]].map(([l, k, mn, mx, st]) => {
-            const v = config[k];
-            const pct = ((v - mn) / (mx - mn)) * 100;
-            return (
-              <div key={k}>
-                <div className="flex justify-between mb-1.5">
-                  <span className="text-[12px] text-white/55">{l}</span>
-                  <span className="font-mono text-[12px] font-bold">{Number.isInteger(v) ? v : v.toFixed(1)}</span>
-                </div>
-                <input type="range" min={mn} max={mx} step={st} value={v} onChange={e => u(k, parseFloat(e.target.value))}
-                  className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-amber-300"
-                  style={{ background: `linear-gradient(to right, #d4af37 ${pct}%, rgba(255,255,255,0.1) ${pct}%)` }} />
-              </div>
-            );
-          })}
+      <CardSection title="v6.25.5 owner-approved release contract">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {contract.map(([title, body]) => (
+            <div key={title} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-4">
+              <div className="text-[12px] font-semibold text-white/80">{title}</div>
+              <p className="mt-2 text-[11px] leading-5 text-white/42">{body}</p>
+            </div>
+          ))}
         </div>
       </CardSection>
-
-      <Btn onClick={save} disabled={saving} data-testid="admin-config-save">
-        <FloppyDisk size={14} weight="bold" /> {saving ? "Saving…" : saved ? "Saved (reference only -- not applied to the live EA)" : "Save reference preset"}
-      </Btn>
     </div>
   );
 }
 
 // ─── Transactions ─────────────────────────────────────────────────────────────
-function TransactionsTab({ api, token }) {
+function TransactionsTab({ api }) {
   const [txs, setTxs] = useState([]);
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
   useEffect(() => { ax.get(`${api}/admin/transactions`, h).then(r => setTxs(r.data.transactions || [])).catch(() => {}); }, [api, h]);
 
   return (
@@ -810,10 +759,10 @@ function TransactionsTab({ api, token }) {
 }
 
 // ─── Bot Ops ──────────────────────────────────────────────────────────────────
-function CommandOpsTab({ api, token }) {
+function CommandOpsTab({ api }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
 
   const fetchOps = useCallback(async () => {
     setLoading(true);
@@ -907,7 +856,7 @@ function CommandOpsTab({ api, token }) {
 }
 
 // ─── Account ──────────────────────────────────────────────────────────────────
-function AccountTab({ api, token, admin, onLogin, onLogout }) {
+function AccountTab({ api, admin, onLogin, onLogout }) {
   const [newEmail, setNewEmail] = useState(admin?.email || "");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -917,7 +866,7 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const h = { headers: { Authorization: `Bearer ${token}` } };
+  const h = {};
 
   const handleSave = async () => {
     setError(""); setMessage("");
@@ -933,7 +882,7 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
       const res = await ax.put(`${api}/admin/account`, body, h);
       if (res.data.updated) {
         setMessage("Account updated.");
-        if (res.data.token) onLogin(res.data.token);
+        onLogin({ ...admin, email: res.data.email || newEmail });
         setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
       } else {
         setMessage("No changes to save.");
@@ -953,7 +902,7 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
             <div>
               <div className="text-[14px] font-semibold">{admin?.name || "Admin"}</div>
               <div className="text-[12px] text-white/40">{admin?.email}</div>
-              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.25.4</div>
+              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.25.5</div>
             </div>
           </div>
 

@@ -44,12 +44,12 @@ const CARDS = [
     tone: "text-emerald-300",
     border: "border-emerald-300/20",
     glow: "bg-emerald-300/[0.07]",
-    badge: "CURRENT v6.25.4",
+    badge: "CURRENT v6.25.5",
   },
   {
     icon: Shuffle,
     title: "Gold + Index Market Detection (XauIndex)",
-    body: "A separate product, XauIndex, built on the same exit engine as XauAI Sniper. Attach it to XAUUSD or an index chart — it auto-detects which market it's on and adapts. Gold Mode is the full, live-tested strategy. Index Mode currently runs detection and diagnostics only, honestly, until a real index strategy has been tested and shipped. See the download section below.",
+    body: "XauIndex is a separate experimental build, not the audited Gold-only release. Index Mode is detection and diagnostics only; no customer binary is approved until its own replay, broker, risk, and deployment verification is complete.",
     tone: "text-emerald-300",
     border: "border-emerald-300/20",
     glow: "bg-emerald-300/[0.07]",
@@ -58,7 +58,7 @@ const CARDS = [
   {
     icon: Shuffle,
     title: "Adaptive Strategy Engine",
-    body: "Nine strategies compete on every bar. Only the highest-probability one fires.",
+    body: "Rule engines evaluate completed evidence and expose the selected setup and block reason. Only a qualifying candidate may enter the single observation lifecycle.",
     tone: "text-emerald-300",
     border: "border-emerald-300/20",
     glow: "bg-emerald-300/[0.07]",
@@ -66,7 +66,7 @@ const CARDS = [
   {
     icon: Newspaper,
     title: "News Protection",
-    body: "Automatically pauses before NFP, CPI, and FOMC events without any setup.",
+    body: "News-provider status is reported honestly and combined with local market evidence. Provider downtime cannot be called safe or create an indefinite extra wait.",
     tone: "text-amber-200",
     border: "border-amber-300/20",
     glow: "bg-amber-300/[0.07]",
@@ -74,7 +74,7 @@ const CARDS = [
   {
     icon: Lightning,
     title: "Auto Trade Execution",
-    body: "Fully automated from signal to exit. No charts to watch, no manual trades.",
+    body: "A qualifying candidate receives one 120–180 second observation window, then executes or cancels. Open-position and exit management remains tick-based.",
     tone: "text-rose-300",
     border: "border-rose-300/20",
     glow: "bg-rose-300/[0.07]",
@@ -141,13 +141,13 @@ export default function FeaturesSection() {
   };
 
   return (
-    <div className="bg-[#060609] border-t border-white/[0.06]" data-testid="features-section">
+    <div className="overflow-x-hidden bg-[#060609] border-t border-white/[0.06]" data-testid="features-section">
       <div className="mx-auto max-w-7xl px-4 py-20 md:px-8 md:py-28">
 
         <div className="mb-10 flex items-end justify-between">
           <div>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
-              Features · v6.25.4
+              Features · v6.25.5
             </span>
             <h2 className="mt-4 max-w-lg font-heading text-3xl font-semibold tracking-tight text-white sm:text-4xl">
               Built for every market condition.

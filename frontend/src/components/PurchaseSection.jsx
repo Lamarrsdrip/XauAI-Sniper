@@ -4,7 +4,7 @@ import { ShoppingCart, ShieldCheck, Lightning, Check } from "@phosphor-icons/rea
 
 const PERKS = [
   "Lifetime license — free updates forever",
-  "Instant PIN delivery after payment",
+  "PIN issued after confirmed payment",
   "Free VPS activation included",
 ];
 

@@ -28025,7 +28025,7 @@ void SavePatterns()
             patterns[i].wasWinner ? 1 : 0, patterns[i].profit, patterns[i].signature);
       }
       jp += "]";
-      string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"patterns\":%s}", InpLicensePIN, Symbol(), jp);
+      string body = StringFormat("{\"pin\":\"%s\",\"account_id\":\"%I64d\",\"symbol\":\"%s\",\"patterns\":%s}", InpLicensePIN, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), jp);
       char pd[], res[]; string rh;
       StringToCharArray(body, pd, 0, StringLen(body));
       WebRequest("POST", url, headers, 10000, pd, res, rh);
@@ -28054,7 +28054,7 @@ void LoadPatterns()
    {
       string url = InpServerURL + "/api/ml/patterns/load";
       string headers = "Content-Type: application/json\r\n";
-      string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\"}", InpLicensePIN, Symbol());
+      string body = StringFormat("{\"pin\":\"%s\",\"account_id\":\"%I64d\",\"symbol\":\"%s\"}", InpLicensePIN, AccountInfoInteger(ACCOUNT_LOGIN), Symbol());
       char pd[], result[]; string rh;
       StringToCharArray(body, pd, 0, StringLen(body));
       int res = WebRequest("POST", url, headers, 15000, pd, result, rh);
@@ -37891,8 +37891,8 @@ void SendWeeklyReport()
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    double wPnL = accInfo.Equity() - weeklyStartEquity;
    double wPct = weeklyStartEquity > 0 ? wPnL / weeklyStartEquity * 100 : 0.0;
-   string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"trades\":%d,\"wins\":%d,\"losses\":%d,\"win_rate\":%.1f,\"weekly_pnl\":%.2f,\"weekly_pct\":%.1f,\"balance\":%.2f,\"patterns\":%d,\"best_hour\":0,\"worst_hour\":0}",
-      InpLicensePIN, Symbol(), totalTrades, wins, losses, wr, wPnL, wPct, accInfo.Equity(), patternCount);
+   string body = StringFormat("{\"pin\":\"%s\",\"account_id\":\"%I64d\",\"symbol\":\"%s\",\"trades\":%d,\"wins\":%d,\"losses\":%d,\"win_rate\":%.1f,\"weekly_pnl\":%.2f,\"weekly_pct\":%.1f,\"balance\":%.2f,\"patterns\":%d,\"best_hour\":0,\"worst_hour\":0}",
+      InpLicensePIN, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), totalTrades, wins, losses, wr, wPnL, wPct, accInfo.Equity(), patternCount);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    WebRequest("POST", InpServerURL + "/api/journal/weekly-report", "Content-Type: application/json\r\n", 10000, pd, res, rh);

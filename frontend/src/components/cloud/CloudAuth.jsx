@@ -8,11 +8,6 @@ import { API } from "@/lib/api";
 // Scoped axios instance for Command Center auth — avoids polluting global axios defaults
 // that could leak into the admin portal if the same browser session uses both.
 const cloudAxios = axios.create({ baseURL: API, withCredentials: true });
-cloudAxios.interceptors.request.use((cfg) => {
-  const t = localStorage.getItem("cloud_token");
-  if (t) cfg.headers.Authorization = `Bearer ${t}`;
-  return cfg;
-});
 
 function AuthShell({ title, subtitle, children }) {
   return (
@@ -46,8 +41,7 @@ export function CloudSignup() {
   const submit = async (e) => {
     e.preventDefault(); setErr(""); setLoading(true);
     try {
-      const res = await cloudAxios.post(`/cloud/auth/signup`, form);
-      localStorage.setItem("cloud_token", res.data.token);
+      await cloudAxios.post(`/cloud/auth/signup`, form);
       nav("/command/dashboard");
     } catch (e) { setErr(e.response?.data?.detail || "Signup failed"); }
     finally { setLoading(false); }
@@ -57,24 +51,24 @@ export function CloudSignup() {
     <AuthShell title="Create Command Center account" subtitle="Access your license, setup flow, heartbeat monitor, and PIN-safe controls.">
       <form onSubmit={submit} className="space-y-4" data-testid="signup-form">
         <div>
-          <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">FULL NAME</label>
-          <input type="text" required value={form.full_name} onChange={e=>setForm({...form, full_name: e.target.value})}
+          <label htmlFor="cloud-signup-name" className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">FULL NAME</label>
+          <input id="cloud-signup-name" name="name" autoComplete="name" type="text" required value={form.full_name} onChange={e=>setForm({...form, full_name: e.target.value})}
                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" data-testid="signup-name" />
         </div>
         <div>
-          <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">EMAIL</label>
-          <input type="email" required value={form.email} onChange={e=>setForm({...form, email: e.target.value})}
+          <label htmlFor="cloud-signup-email" className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">EMAIL</label>
+          <input id="cloud-signup-email" name="email" autoComplete="email" type="email" required value={form.email} onChange={e=>setForm({...form, email: e.target.value})}
                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" data-testid="signup-email" />
         </div>
         <div>
-          <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">PASSWORD</label>
-          <input type="password" required minLength={8} value={form.password} onChange={e=>setForm({...form, password: e.target.value})}
+          <label htmlFor="cloud-signup-password" className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">PASSWORD</label>
+          <input id="cloud-signup-password" name="password" autoComplete="new-password" type="password" required minLength={8} value={form.password} onChange={e=>setForm({...form, password: e.target.value})}
                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" data-testid="signup-password" />
           <div className="text-xs text-white/30 mt-1">At least 8 characters</div>
         </div>
         <div>
-          <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">COUNTRY</label>
-          <input type="text" value={form.country} onChange={e=>setForm({...form, country: e.target.value})} placeholder="e.g. Nigeria"
+          <label htmlFor="cloud-signup-country" className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">COUNTRY</label>
+          <input id="cloud-signup-country" name="country" autoComplete="country-name" type="text" value={form.country} onChange={e=>setForm({...form, country: e.target.value})} placeholder="e.g. Nigeria"
                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" data-testid="signup-country" />
         </div>
         {err && <div className="text-red-400 text-sm" data-testid="signup-error">{err}</div>}
@@ -99,8 +93,7 @@ export function CloudLogin() {
   const submit = async (e) => {
     e.preventDefault(); setErr(""); setLoading(true);
     try {
-      const res = await cloudAxios.post(`/cloud/auth/login`, form);
-      localStorage.setItem("cloud_token", res.data.token);
+      await cloudAxios.post(`/cloud/auth/login`, form);
       nav("/command/dashboard");
     } catch (e) { setErr(e.response?.data?.detail || "Login failed"); }
     finally { setLoading(false); }
@@ -110,13 +103,13 @@ export function CloudLogin() {
     <AuthShell title="Welcome back" subtitle="Log in to your XAU AI Sniper Command Center">
       <form onSubmit={submit} className="space-y-4" data-testid="login-form">
         <div>
-          <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">EMAIL</label>
-          <input type="email" required value={form.email} onChange={e=>setForm({...form, email: e.target.value})}
+          <label htmlFor="cloud-login-email" className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">EMAIL</label>
+          <input id="cloud-login-email" name="email" autoComplete="email" type="email" required value={form.email} onChange={e=>setForm({...form, email: e.target.value})}
                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" data-testid="login-email" />
         </div>
         <div>
-          <label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">PASSWORD</label>
-          <input type="password" required value={form.password} onChange={e=>setForm({...form, password: e.target.value})}
+          <label htmlFor="cloud-login-password" className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">PASSWORD</label>
+          <input id="cloud-login-password" name="password" autoComplete="current-password" type="password" required value={form.password} onChange={e=>setForm({...form, password: e.target.value})}
                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" data-testid="login-password" />
         </div>
         {err && <div className="text-red-400 text-sm" data-testid="login-error">{err}</div>}
