@@ -27,6 +27,7 @@ jobs:
           --health-retries 10
     env:
       MONGO_URL: mongodb://localhost:27017
+      DB_NAME: ci_test_db
       JWT_SECRET: ci-test-secret-not-for-production
       ADMIN_EMAIL: ci-admin@test.com
       ENVIRONMENT: test
