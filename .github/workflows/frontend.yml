@@ -31,9 +31,18 @@ jobs:
       # runs, since ci's strict lockfile-must-exactly-match-package.json
       # check hasn't been exercised in CI yet; can switch to npm ci once
       # that's proven stable.
+      # --legacy-peer-deps: a real, pre-existing peer conflict in
+      # package.json (react-day-picker@8.10.1 wants date-fns ^2||^3, the
+      # project pins date-fns ^4.1.0) makes npm's default strict ERESOLVE
+      # fail the install entirely. This project has built and run
+      # successfully throughout this session despite that mismatch --
+      # npm's strict peer resolution is stricter than what actually
+      # breaks at runtime here. Disclosed as a real, separate dependency-
+      # hygiene item to fix properly (bump/replace react-day-picker or
+      # pin a compatible date-fns), not silently swept under this flag.
       - name: Install dependencies
         working-directory: frontend
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Production build
         working-directory: frontend

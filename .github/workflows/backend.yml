@@ -38,11 +38,24 @@ jobs:
         with:
           python-version: "3.11"
 
+      # emergentintegrations==0.1.0 is a private package from this
+      # project's original Emergent-platform dev environment -- not
+      # published to public PyPI, so pip install -r requirements.txt fails
+      # atomically on a public GitHub-hosted runner (confirmed the first
+      # time this workflow ran: "No matching distribution found for
+      # emergentintegrations==0.1.0"). server.py already imports it inside
+      # a try/except ImportError (LlmChat/UserMessage fall back to None),
+      # so the app genuinely runs without it -- excluding just this one
+      # line from the CI install is honest, not a workaround that hides a
+      # real gap. If AI-chat features that depend on it ever need real CI
+      # coverage, that requires a private-index credential as a repo
+      # secret, not something this workflow can add on its own.
       - name: Install backend dependencies
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          grep -v '^emergentintegrations==' requirements.txt > requirements-ci.txt
+          pip install -r requirements-ci.txt
 
       # Real import/startup test: proves the app object actually
       # constructs (module-level code runs, all routes register) rather
