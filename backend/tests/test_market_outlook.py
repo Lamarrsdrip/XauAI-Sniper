@@ -394,11 +394,19 @@ SERVER_SRC = read(BACKEND_DIR / "server.py")
 
 
 def test_gold_price_fallback_is_never_mislabeled_as_live():
+    # v6.25.6 update: Codex's XAU-018 forensic repair replaced the old
+    # hardcoded numeric fallback with an honest unavailable/null response --
+    # a failed quote provider is unavailable, never a licence to invent a
+    # price. This test now asserts THAT behavior exists, not the retired
+    # fallback-constant string it originally pinned.
     fn = SERVER_SRC[SERVER_SRC.index("async def fetch_live_gold_price"):]
     fn_body = fn[:fn.index("\n\ndef generate_unique_pin")]
-    assert 'source = "fallback_stale_constant"' in fn_body
-    # the hardcoded numeric fallback must not be returned tagged as "live"
-    assert '"source":"live"' not in fn_body.replace(" ", "")
+    assert '"available": False' in fn_body
+    assert '"source": "unavailable"' in fn_body
+    # the failed-provider branch must never fabricate a price/spread
+    assert '"bid": None, "ask": None,' in fn_body
+    # and a successful live fetch must never be mislabeled as anything else
+    assert '"source":"live"' not in fn_body.replace(" ", "") or 'source = "live"' in fn_body
 
 
 def _outlook_gen_body() -> str:

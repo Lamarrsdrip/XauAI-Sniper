@@ -597,6 +597,97 @@ def test_m30_display_json_hides_stale_decision_type_when_mode_inactive():
     assert '!modeActive ? "{}"' in fn
 
 
+# ---------------------------------------------------------------------------
+# v6.25.6 XAU-026 (Codex handover) -- real M30 candidate/timer lifecycle
+# visibility. Every asserted field must come from durable, already-existing
+# state (g_alignedCandidates[0], XAU_M30CandidateKey/XAU_CoreExecutionKey,
+# the two genuine finalize call sites) -- never a fabricated default, and
+# never a second execution authority.
+# ---------------------------------------------------------------------------
+def test_m30_lifecycle_last_outcome_globals_are_readonly_telemetry():
+    ea = read(EA)
+    # declared once, at global scope, never as a local/parameter shadow
+    assert ea.count("string   g_m30LastOutcomeCandidateId = \"\";") == 1
+    assert ea.count("string   g_m30LastOutcomeResult = \"\";") == 1
+    assert ea.count("datetime g_m30LastOutcomeAt = 0;") == 1
+    # written at exactly the two genuine finalize sites -- no third writer
+    assert ea.count("g_m30LastOutcomeResult = reason;") == 1
+    assert ea.count('g_m30LastOutcomeResult = "EXECUTED";') == 1
+
+
+def test_m30_lifecycle_outcome_recorded_at_no_trade_finalize():
+    ea = read(EA)
+    fn = find_function(ea, "void XAU_M30FinalizeCandidateWithoutTrade(string reason)")
+    assert "g_m30LastOutcomeCandidateId = candidateId;" in fn
+    assert "g_m30LastOutcomeResult = reason;" in fn
+    assert "g_m30LastOutcomeAt = TimeCurrent();" in fn
+
+
+def test_m30_lifecycle_outcome_recorded_at_execution_confirmed():
+    ea = read(EA)
+    idx = ea.index("PrintFormat(\"M30_EXECUTION_CONFIRMED")
+    window = ea[max(0, idx - 400):idx]
+    assert 'g_m30LastOutcomeResult = "EXECUTED";' in window
+    assert "g_m30LastOutcomeCandidateId = confirmedExecutionKey;" in window
+
+
+def test_m30_display_json_gates_candidate_fields_on_has_active_candidate_not_truthiness():
+    ea = read(EA)
+    fn = find_function(ea, "string XAU_M30DisplayJson()")
+    # explicit boolean gate exists -- fields are never inferred from a
+    # zero-looking-like-absent value (owner rule: never let missing data
+    # look like a real value)
+    assert "bool hasActiveCandidate = modeActive && d.candidateCreated;" in fn
+    assert "if(hasActiveCandidate)" in fn
+    assert '\\"has_active_candidate\\":%s' in fn
+
+
+def test_m30_display_json_never_fabricates_structural_sl_or_reservation():
+    ea = read(EA)
+    fn = find_function(ea, "string XAU_M30DisplayJson()")
+    # explicit unavailable-status strings, not a synthesized/default number
+    assert 'string structuralSlStatus = "NOT_COMPUTED_UNTIL_EXECUTION";' in fn
+    assert 'string reservationKeyStatus = "NOT_CLAIMED_UNTIL_EXECUTION_ATTEMPT";' in fn
+    assert '\\"structural_sl_status\\":\\"%s\\"' in fn
+    assert '\\"reservation_key_status\\":\\"%s\\"' in fn
+
+
+def test_m30_display_json_candidate_id_reuses_existing_key_functions_not_reinvented():
+    ea = read(EA)
+    fn = find_function(ea, "string XAU_M30DisplayJson()")
+    assert "candidateId = XAU_M30CandidateKey(d.slotId, d.preferredDirection, d.oldestEvidenceId, d.middleEvidenceId, d.newestEvidenceId);" in fn
+    assert "executionKey = XAU_CoreExecutionKey(d.preferredDirection);" in fn
+
+
+def test_m30_display_json_timer_fields_read_lane_zero_the_primary_core_lane():
+    ea = read(EA)
+    fn = find_function(ea, "string XAU_M30DisplayJson()")
+    assert "g_alignedCandidates[0].firstCandidateTime" in fn
+    assert "g_alignedCandidates[0].requiredDelaySeconds" in fn
+    assert "g_alignedCandidates[0].firstCandidatePrice" in fn
+
+
+def test_m30_display_json_move_r_reuses_existing_timing_authority_formula():
+    ea = read(EA)
+    fn = find_function(ea, "string XAU_M30DisplayJson()")
+    # identical divisor formula used elsewhere to normalize ATR-travel into
+    # an R-multiple against the configured (pre-1.20x) SL distance -- not an
+    # independently invented threshold for display purposes
+    assert "atrTravelled / MathMax(0.50, InpSLMultiplier * XAU_SL_WIDENING_FACTOR)" in fn
+    assert "g_alignedCandidates[lane].atrTravelled = MathMax(0.0, favourableTravel / atr);" in ea
+
+
+def test_m30_lifecycle_state_never_claims_transient_execution_substates():
+    ea = read(EA)
+    fn = find_function(ea, "string XAU_M30DisplayJson()")
+    # only durable, honestly-computable states are ever assigned -- no
+    # RESERVATION_PENDING/ORDER_SEND_STARTED/BROKER_RECONCILING, which are
+    # transient in-flight facts this telemetry function cannot truthfully
+    # observe (it runs on the activity-post schedule, not inside OpenTrade)
+    for forbidden in ("RESERVATION_PENDING", "ORDER_SEND_STARTED", "BROKER_RECONCILING", "RESERVATION_CLAIMED"):
+        assert forbidden not in fn
+
+
 def test_backend_model_accepts_m30_consensus_field():
     server_py = read(ROOT / "backend" / "server.py")
     assert "m30_consensus: Optional[Dict[str, Any]] = None" in server_py
@@ -613,17 +704,23 @@ def test_frontend_card_gates_on_mode_active_before_rendering():
 # ---------------------------------------------------------------------------
 # Version identity
 # ---------------------------------------------------------------------------
-def test_version_bumped_to_v6_25_5():
+def test_version_bumped_to_v6_25_6():
+    # v6.25.6 -- the EXHAUSTED_SAME_DIRECTION_REENTRY_BLOCK M30-scope fix
+    # and the real candidate/timer lifecycle telemetry (XAU-026) both bumped
+    # the release identity, same as every prior genuine functional change
+    # this session (the whole point of the Phase 17 release-identity-
+    # alignment fix earlier: source, manifest, and #property strings must
+    # never silently drift apart).
     ea = read(EA)
-    assert '#define XAUAI_EA_VERSION "v6.25.5"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.25.5"' in ea
-    assert '#property version   "6.255"' in ea
-    assert "v6.25.5" in ea.split("#property description")[1][:400]
+    assert '#define XAUAI_EA_VERSION "v6.25.6"' in ea
+    assert '#define XAUAI_EA_VERSION_NUM "6.25.6"' in ea
+    assert '#property version   "6.256"' in ea
+    assert "v6.25.6" in ea.split("#property description")[1][:400]
 
 
 def test_build_hash_reflects_m30_release():
     ea = read(EA)
-    assert "m30-three-m10-consensus" in ea
+    assert "m30-exhaustion-scope-fix-lifecycle-telemetry" in ea
 
 
 # ===========================================================================

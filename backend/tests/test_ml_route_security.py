@@ -75,12 +75,13 @@ def setup_function(_fn):
     _run(_clear())
 
 
-def _make_entry(pin, signature="sig-target"):
+def _make_entry(pin, signature="sig-target", account_login="12345"):
     return srv.TradeJournalEntry(
         pin=pin, symbol="XAUUSD", direction="BUY", result="LOSS",
         price=2000.0, profit=-50.0, lots=0.1, hour=10, day_of_week=2,
         total_trades=1, wins=0, losses=1, balance=10000.0,
         signature=signature, setup="A_PLUS", regime="TREND",
+        account_login=account_login,
     )
 
 

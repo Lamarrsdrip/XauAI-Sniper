@@ -1894,12 +1894,11 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.255"
-#property description "XAUUSD AI Sniper v6.25.5 - Optional M30 Three-M10-Evidence Consensus Mode (default OFF), M10 Canonical Signal Authority, Cross-Instance Direction Reservation, Confirmed Profit-Floor, R-Exit Never-Purge-Unconfirmed"
+#property version   "6.256"
+#property description "XAUUSD AI Sniper v6.25.6 - M30 exhaustion gate scoped to legacy mode."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
-#property description "Primary decision timeframe is M10. Approved normal entries use full"
-#property description "configured risk or fail closed; no margin/aggregate/broker-limit/lot-step"
-#property description "silent downscaling. Real broker margin verification (OrderCalcMargin)."
+#property description "Primary timeframe M10. Approved entries use full configured risk"
+#property description "or fail closed; no silent downscaling. Real broker margin check."
 #property strict
 
 // v6.21.2: entry-delay bounds, declared this early so every call site
@@ -1978,9 +1977,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.5"
-#define XAUAI_EA_VERSION_NUM "6.25.5"
-#define XAUAI_BUILD_HASH "v6255-m30-three-m10-consensus-mode-20260717"
+#define XAUAI_EA_VERSION "v6.25.6"
+#define XAUAI_EA_VERSION_NUM "6.25.6"
+#define XAUAI_BUILD_HASH "v6256-m30-exhaustion-scope-fix-lifecycle-telemetry-20260718"
 #define XAU_COUNTER_EXCURSION_BUILD true
 
 // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
@@ -13455,6 +13454,17 @@ bool     g_m30ProcessedSlotLoadedFromDisk = false;
 datetime g_m30LastPendingSlotLogged = 0;
 bool     g_m30ActiveCandidateRestoreChecked = false;
 
+// v6.25.6 XAU-026 (Codex handover, Command Center M30 lifecycle visibility)
+// -- durable record of the most recently finalized M30 candidate's real
+// outcome, set ONLY at the two genuine finalize call sites
+// (XAU_M30FinalizeCandidateWithoutTrade and the M30_EXECUTION_CONFIRMED
+// block in OpenTrade()). Read-only telemetry: nothing in this file may set
+// these except those two sites, and nothing outside XAU_M30DisplayJson()
+// may read them -- this must never become a second execution authority.
+string   g_m30LastOutcomeCandidateId = "";
+string   g_m30LastOutcomeResult = "";
+datetime g_m30LastOutcomeAt = 0;
+
 // Crash-safe candidate lifecycle. MT5 terminal Global Variables store only
 // doubles, so the immutable candidate ID is persisted losslessly as the
 // exact numeric components from which XAU_M30CandidateKey reconstructs it:
@@ -13564,6 +13574,9 @@ void XAU_M30FinalizeCandidateWithoutTrade(string reason)
    g_m30LastProcessedSlotLoaded = g_m30Decision.slotCloseTime;
    XAU_M30PersistCandidateTerminal();
    g_m30Decision.candidateCreated = false;
+   g_m30LastOutcomeCandidateId = candidateId;
+   g_m30LastOutcomeResult = reason;
+   g_m30LastOutcomeAt = TimeCurrent();
    PrintFormat("M30_CANDIDATE_FINALIZED_NO_TRADE | candidateId=%s slot=%s result=%s resurrectionAllowed=false",
                candidateId, g_m30Decision.slotId, reason);
 }
@@ -13814,15 +13827,80 @@ string XAU_M30DisplayJson()
    }
 
    XAU_M30ConsensusDecision d = g_m30Decision;
+
+   // v6.25.6 XAU-026 (Codex handover) -- real candidate/timer lifecycle
+   // fields, sourced ONLY from durable state already maintained by the
+   // unchanged candidate/timer machinery (g_alignedCandidates[0],
+   // XAU_M30CandidateKey/XAU_CoreExecutionKey) plus the two genuine
+   // finalize call sites recorded above. This function is read-only
+   // telemetry: it must never gate, delay, size, or cancel a trade -- it
+   // only describes what the existing authorities already decided.
+   //
+   // hasActiveCandidate distinguishes "no candidate" from "candidate with
+   // zero-valued fields" -- 0 is a real possible price/second value, so the
+   // frontend must gate on this flag rather than infer absence from zero
+   // (owner rule: never let a missing field look like a real value).
+   bool hasActiveCandidate = modeActive && d.candidateCreated;
+   string candidateId = "";
+   string executionKey = "";
+   string timerStart = "";
+   double timerDurationSeconds = 0.0;
+   double timerElapsedSeconds = 0.0;
+   double timerRemainingSeconds = 0.0;
+   string timerExpiry = "";
+   double originPrice = 0.0;
+   double moveRSinceOrigin = 0.0;
+   // Structural SL and the reservation key are both computed transiently,
+   // only at the exact instant OpenTrade() runs -- neither is stored in a
+   // durable global while a candidate is merely waiting out its timer, so
+   // there is nothing truthful to report for them before execution. Shown
+   // explicitly as unavailable rather than fabricated or defaulted to 0.
+   string structuralSlStatus = "NOT_COMPUTED_UNTIL_EXECUTION";
+   string reservationKeyStatus = "NOT_CLAIMED_UNTIL_EXECUTION_ATTEMPT";
+
+   if(hasActiveCandidate)
+   {
+      candidateId = XAU_M30CandidateKey(d.slotId, d.preferredDirection, d.oldestEvidenceId, d.middleEvidenceId, d.newestEvidenceId);
+      executionKey = XAU_CoreExecutionKey(d.preferredDirection);
+      timerStart = TimeToString(g_alignedCandidates[0].firstCandidateTime, TIME_DATE | TIME_SECONDS);
+      timerDurationSeconds = g_alignedCandidates[0].requiredDelaySeconds;
+      timerElapsedSeconds = (double)(TimeCurrent() - g_alignedCandidates[0].firstCandidateTime);
+      timerRemainingSeconds = MathMax(0.0, timerDurationSeconds - timerElapsedSeconds);
+      timerExpiry = TimeToString(g_alignedCandidates[0].firstCandidateTime + (int)timerDurationSeconds, TIME_DATE | TIME_SECONDS);
+      originPrice = g_alignedCandidates[0].firstCandidatePrice;
+      // Same formula XAU_TimingAuthorityAllows() itself uses to decide
+      // CANCEL_MISSED_MOVE (atrTravelled / (InpSLMultiplier * widening)) --
+      // reused for display, not reinvented; this value only refreshes when
+      // that authority itself last ran the check, so it can lag between
+      // ticks the same way the real decision does.
+      moveRSinceOrigin = g_alignedCandidates[0].atrTravelled / MathMax(0.50, InpSLMultiplier * XAU_SL_WIDENING_FACTOR);
+   }
+
+   string lifecycleState;
+   if(!modeActive) lifecycleState = "MODE_INACTIVE";
+   else if(hasActiveCandidate && timerElapsedSeconds < timerDurationSeconds) lifecycleState = "ENTRY_TIMER_ACTIVE";
+   else if(hasActiveCandidate) lifecycleState = "TIMER_ELAPSED_AWAITING_REVALIDATION";
+   else if(d.dataComplete && !d.candidateCreated) lifecycleState = "NO_ACTIVE_CANDIDATE";
+   else lifecycleState = "AWAITING_SLOT_DATA";
+
    string consensusJson = !modeActive ? "{}" : StringFormat(
       "{\"slot_id\":\"%s\",\"slot_close_time\":\"%s\",\"data_complete\":%s,\"decision\":\"%s\",\"preferred_direction\":\"%s\","
       "\"confidence\":%.1f,\"weighted_buy_score\":%.2f,\"weighted_sell_score\":%.2f,\"buy_observation_wins\":%d,\"sell_observation_wins\":%d,"
-      "\"directional_persistence_pct\":%.1f,\"newest_supports_direction\":%s,\"retracement_required\":%s,\"candidate_created\":%s,\"reason\":\"%s\"}",
+      "\"directional_persistence_pct\":%.1f,\"newest_supports_direction\":%s,\"retracement_required\":%s,\"candidate_created\":%s,\"reason\":\"%s\","
+      "\"lifecycle_state\":\"%s\",\"has_active_candidate\":%s,\"candidate_id\":\"%s\",\"execution_key\":\"%s\","
+      "\"timer_start\":\"%s\",\"timer_duration_seconds\":%.0f,\"timer_elapsed_seconds\":%.0f,\"timer_remaining_seconds\":%.0f,\"timer_expiry\":\"%s\","
+      "\"origin_price\":%.5f,\"move_r_since_origin\":%.3f,\"structural_sl_status\":\"%s\",\"reservation_key_status\":\"%s\","
+      "\"last_outcome_candidate_id\":\"%s\",\"last_outcome_result\":\"%s\",\"last_outcome_at\":\"%s\"}",
       BotMonitorJsonSafe(d.slotId, 80), TimeToString(d.slotCloseTime, TIME_DATE | TIME_SECONDS), BotMonitorBool(d.dataComplete),
       BotMonitorJsonSafe(XAU_M30DecisionName(d.decisionType), 40), d.preferredDirection == 1 ? "BUY" : (d.preferredDirection == -1 ? "SELL" : "NONE"),
       d.confidence, d.weightedBuyCaseScore, d.weightedSellCaseScore, d.buyObservationWins, d.sellObservationWins,
       d.directionalPersistence, BotMonitorBool(d.newestSupportsDirection), BotMonitorBool(d.retracementRequired), BotMonitorBool(d.candidateCreated),
-      BotMonitorJsonSafe(d.exactReason, 220));
+      BotMonitorJsonSafe(d.exactReason, 220),
+      lifecycleState, BotMonitorBool(hasActiveCandidate), BotMonitorJsonSafe(candidateId, 160), BotMonitorJsonSafe(executionKey, 160),
+      timerStart, timerDurationSeconds, timerElapsedSeconds, timerRemainingSeconds, timerExpiry,
+      originPrice, moveRSinceOrigin, structuralSlStatus, reservationKeyStatus,
+      BotMonitorJsonSafe(g_m30LastOutcomeCandidateId, 160), BotMonitorJsonSafe(g_m30LastOutcomeResult, 60),
+      g_m30LastOutcomeAt > 0 ? TimeToString(g_m30LastOutcomeAt, TIME_DATE | TIME_SECONDS) : "");
 
    return StringFormat(
       "{\"mode_active\":%s,\"decision_mode\":\"%s\",\"m10_evidence_newest\":%s,\"m10_evidence_middle\":%s,\"m10_evidence_oldest\":%s,\"consensus\":%s}",
@@ -21047,6 +21125,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          g_m30LastProcessedSlotLoaded = g_m30Decision.slotCloseTime;
          XAU_M30PersistCandidateTerminal();
          g_m30Decision.candidateCreated = false;
+         g_m30LastOutcomeCandidateId = confirmedExecutionKey;
+         g_m30LastOutcomeResult = "EXECUTED";
+         g_m30LastOutcomeAt = TimeCurrent();
          PrintFormat("M30_EXECUTION_CONFIRMED | slot=%s executionKey=%s positionId=%I64u",
                      g_m30Decision.slotId, confirmedExecutionKey, openedPosId);
       }

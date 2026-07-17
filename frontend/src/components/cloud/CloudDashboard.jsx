@@ -604,6 +604,16 @@ export default function CloudDashboard() {
   const [propFirmBusy, setPropFirmBusy] = useState(false);
   const propFirmDirty = useRef(false);
   const [analytics, setAnalytics] = useState(null);
+  // v6.25.6 XAU-027 (Codex handover) -- stable idempotency key per confirm-
+  // dialog instance. Regenerates only when modalCommand itself changes
+  // (a genuinely new action/dialog open), so a double-click on the same
+  // open confirmation reuses the same key and the backend dedupes it into
+  // one queued command instead of two.
+  const modalIdempotencyKey = useMemo(
+    () => (modalCommand ? (window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random()}`) : null),
+    [modalCommand]
+  );
+  const propFirmIdempotencyKey = useRef(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -640,10 +650,12 @@ export default function CloudDashboard() {
     if (!modalCommand) return;
     setCommandBusy(true); setCommandMsg("");
     try {
-      const body = { action:modalCommand.action, pin:licenseKey, confirm:true };
+      const body = { action:modalCommand.action, pin:licenseKey, confirm:true, idempotency_key: modalIdempotencyKey };
       if (modalCommand.payload) body.payload = modalCommand.payload;
       const r = await commandAxios.post("/cloud/command/request", body);
-      setCommandMsg(`Queued ${modalCommand.label}: ${r.data.command_id}`);
+      setCommandMsg(r.data.duplicate
+        ? `Already queued ${modalCommand.label}: ${r.data.command_id}`
+        : `Queued ${modalCommand.label}: ${r.data.command_id}`);
       setModalCommand(null); fetchAll();
     } catch (e) { setCommandMsg(e.response?.data?.detail||"Command failed"); }
     finally { setCommandBusy(false); }
@@ -652,10 +664,17 @@ export default function CloudDashboard() {
   const applyPropFirm = async () => {
     if (!propFirmConfirmed) { setCommandMsg("Confirm you've checked these values against your prop firm's rules."); return; }
     setPropFirmBusy(true); setCommandMsg("");
+    // Stable across a double-click of this exact confirmed submission; a
+    // fresh key is only minted once this attempt actually completes (or
+    // the form is marked dirty again below), so a genuinely new edit gets
+    // its own dedupe identity rather than colliding with a stale one.
+    if (!propFirmIdempotencyKey.current) {
+      propFirmIdempotencyKey.current = window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    }
     try {
-      const r = await commandAxios.post("/cloud/command/request",{ action:"UPDATE_PROP_FIRM_CONFIG", pin:licenseInfo.activation_key, confirm:true, payload:propFirmForm });
-      setCommandMsg(`Prop Firm Mode queued: ${r.data.command_id}`);
-      setPropFirmConfirmed(false); propFirmDirty.current=false; fetchAll();
+      const r = await commandAxios.post("/cloud/command/request",{ action:"UPDATE_PROP_FIRM_CONFIG", pin:licenseInfo.activation_key, confirm:true, payload:propFirmForm, idempotency_key: propFirmIdempotencyKey.current });
+      setCommandMsg(r.data.duplicate ? `Prop Firm Mode already queued: ${r.data.command_id}` : `Prop Firm Mode queued: ${r.data.command_id}`);
+      setPropFirmConfirmed(false); propFirmDirty.current=false; propFirmIdempotencyKey.current=null; fetchAll();
     } catch (e) { setCommandMsg(e.response?.data?.detail||"Update failed"); }
     finally { setPropFirmBusy(false); }
   };
@@ -701,7 +720,7 @@ export default function CloudDashboard() {
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
       {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} />}
-      {active==="control"      && <ControlPage commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
+      {active==="control"      && <ControlPage commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
       {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} />}
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
       <CommandModal command={modalCommand} onCancel={()=>setModalCommand(null)} onSubmit={queueCommand} busy={commandBusy} message={commandMsg} licenseKey={licenseInfo.activation_key} />
@@ -910,6 +929,44 @@ function M30ConsensusCard({ events, heartbeat }) {
           ))}
         </div>
       )}
+
+      {/* v6.25.6 XAU-026 (Codex handover) -- real candidate/timer lifecycle.
+          Every value below comes straight from the EA's own m30_consensus.consensus
+          block; has_active_candidate is the authoritative gate (0-valued
+          timer/price fields are real possible values, not "no candidate"). */}
+      <div className="mt-4 pt-4 border-t border-white/[0.06]">
+        <div className={MONO_LABEL}>Candidate Lifecycle</div>
+        {c.has_active_candidate ? (
+          <>
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
+              <span className={pill(c.lifecycle_state === "ENTRY_TIMER_ACTIVE" ? "amber" : "blue")}>
+                {(c.lifecycle_state || "UNKNOWN").replace(/_/g, " ")}
+              </span>
+              <span className="text-[10px] text-white/35 font-mono truncate">{c.candidate_id || "—"}</span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 text-[11px]">
+              <div><div className="text-white/35">Timer</div><div className="mt-0.5 font-mono text-white/80">{Math.round(c.timer_elapsed_seconds ?? 0)}s / {Math.round(c.timer_duration_seconds ?? 0)}s</div></div>
+              <div><div className="text-white/35">Remaining</div><div className="mt-0.5 font-mono text-white/80">{Math.round(c.timer_remaining_seconds ?? 0)}s</div></div>
+              <div><div className="text-white/35">Origin price</div><div className="mt-0.5 font-mono text-white/80">{c.origin_price != null ? Number(c.origin_price).toFixed(2) : "—"}</div></div>
+              <div><div className="text-white/35">Move since origin</div><div className="mt-0.5 font-mono text-white/80">{c.move_r_since_origin != null ? `${Number(c.move_r_since_origin).toFixed(2)}R` : "—"}</div></div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-white/35">
+              <span className={pill("neutral")}>Structural SL: {(c.structural_sl_status || "").replace(/_/g, " ").toLowerCase() || "unavailable"}</span>
+              <span className={pill("neutral")}>Reservation: {(c.reservation_key_status || "").replace(/_/g, " ").toLowerCase() || "unavailable"}</span>
+            </div>
+          </>
+        ) : (
+          <p className="mt-2 text-[11px] leading-4 text-white/45">
+            No active candidate{c.lifecycle_state ? ` — ${c.lifecycle_state.replace(/_/g, " ").toLowerCase()}` : ""}.
+          </p>
+        )}
+        {c.last_outcome_result && (
+          <p className="mt-2 text-[10px] text-white/35">
+            Last resolved: <span className="text-white/60 font-mono">{c.last_outcome_result}</span>
+            {c.last_outcome_at ? ` at ${c.last_outcome_at}` : ""}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

@@ -9,6 +9,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio, re, hashlib, hmac, json as _json
 from pymongo.errors import DuplicateKeyError
+from pymongo import ReturnDocument
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
@@ -2213,6 +2214,19 @@ async def startup():
     except Exception as e:
         logger.warning(f"[outlook-notifications] could not create idempotency_key index: {e}")
 
+    # v6.25.6 XAU-027 (Codex handover) -- tenant-scoped remote-command
+    # idempotency. dedupe_key is "{user_id}:{action}:{client_key}"; the
+    # unique index is what makes cloud_command_request's DuplicateKeyError
+    # handling a real guarantee rather than a best-effort race. Sparse
+    # because every command queued before this release has no dedupe_key
+    # field at all -- a plain unique index would treat all of those missing
+    # values as a single duplicate "null" and fail to build against real
+    # existing production data.
+    try:
+        await db.cloud_bot_commands.create_index("dedupe_key", unique=True, sparse=True)
+    except Exception as e:
+        logger.warning(f"[remote-command] could not create dedupe_key index: {e}")
+
     # v6.25.3 owner directive 2026-07-17 (Phase 6 P0 -- DB index audit) --
     # these two were real gaps, not just missing hardening:
     #   - cloud_signup() already catches DuplicateKeyError to close a
@@ -3490,9 +3504,18 @@ async def log_trade_journal(entry: TradeJournalEntry, request: Request):
     # canonical, atomic, fail-closed check every other EA-facing endpoint
     # already uses) before anything is written. Rate-limited per pin to
     # bound abuse even from a genuinely licensed but compromised install.
+    # v6.25.6 fix -- restore the graceful {"status": "error"} response
+    # contract this endpoint has always used for a rejected caller (see the
+    # v6.25.4 comment above): the account_login requirement added on top of
+    # that must not bypass it with a raw, uncaught HTTPException, or every
+    # existing caller expecting a JSON error body instead of a bare 400/403
+    # regresses silently.
     if not entry.account_login:
-        raise HTTPException(status_code=400, detail="account_login is required")
-    lic = await _resolve_monitor_license(entry.pin, entry.account_login, request)
+        return {"status": "error", "detail": "account_login is required"}
+    try:
+        lic = await _resolve_monitor_license(entry.pin, entry.account_login, request)
+    except HTTPException:
+        return {"status": "error", "detail": "Invalid or inactive license."}
     _rate_limit(f"journal_log_pin:{entry.pin}", max_requests=60, window_seconds=300)
     try:
         doc = entry.dict()
@@ -3813,6 +3836,14 @@ class CloudCommandReq(BaseModel):
     pin: str
     confirm: bool = False
     payload: Optional[Dict] = None
+    # v6.25.6 XAU-027 (Codex handover) -- client-generated, stable across
+    # retries of the SAME user action (e.g. one confirm-dialog click), so a
+    # network retry or double-click returns the already-queued command
+    # instead of creating a duplicate. Optional for backward compatibility
+    # with older frontend builds; when omitted, this request gets its own
+    # unique dedupe key and therefore no real duplicate protection -- a
+    # disclosed limitation for un-updated clients, not a silent gap.
+    idempotency_key: Optional[str] = None
 
 class CloudLicenseLinkReq(BaseModel):
     license_key: str
@@ -3825,6 +3856,24 @@ class CloudCommandAckReq(BaseModel):
     license_key: Optional[str] = ""
     account: Optional[str] = ""
     details: Optional[Dict] = None
+
+# v6.25.6 XAU-027 (Codex handover) -- explicit command state machine.
+# Terminal statuses are immutable: once a command reaches one of these, no
+# further acknowledgement may change it, regardless of what a late/replayed/
+# cross-terminal EA request claims. The allowed-source map is the single
+# source of truth for which transitions may ever be attempted; anything not
+# listed here is rejected by cloud_command_ack's atomic conditional update.
+_COMMAND_TERMINAL_STATUSES = {"EXECUTED", "FAILED", "SKIPPED", "EXPIRED"}
+_COMMAND_ALLOWED_SOURCE_STATUSES = {
+    "ACKED": {"PENDING"},
+    # A direct PENDING -> terminal transition is permitted (the EA may
+    # legitimately report a terminal result in one request, e.g. an
+    # immediate FAILED for an invalid force-open) alongside the normal
+    # ACKED -> terminal path.
+    "EXECUTED": {"PENDING", "ACKED"},
+    "FAILED": {"PENDING", "ACKED"},
+    "SKIPPED": {"PENDING", "ACKED"},
+}
 
 SAFE_REMOTE_COMMANDS = {
     "PAUSE_NEW_TRADES": "Pause new trades",
@@ -4023,12 +4072,21 @@ async def cloud_performance_analytics(user: dict = Depends(get_cloud_user)):
     lic = await _get_user_license(user)
     if not lic or not lic.get("pin"):
         raise HTTPException(status_code=404, detail="No active license linked to this account.")
-    pin = lic["pin"]
+    license_id = lic.get("id", "")
 
     # Only records with real per-trade data (ticket>0, sent by v6.25.3+ EA)
     # feed analytics -- older thin records (result/profit/price only) have
     # no risk/R/MFE/MAE/campaign data and would force fabricating it.
-    query = {"pin": pin, "has_rich_ledger_data": True}
+    #
+    # v6.25.6 fix -- this was querying by "pin", a field log_trade_journal()
+    # has deliberately never stored since the v6.25.4 P0 security fix (the
+    # raw PIN is popped before storage; only the resolved license_id is
+    # kept). That mismatch meant this endpoint had returned
+    # sufficient_data=false for every account since that fix landed,
+    # regardless of real trade volume -- a real, silent production
+    # regression, not a display nuance. Query by license_id, matching what
+    # is actually persisted.
+    query = {"license_id": license_id, "has_rich_ledger_data": True}
     trades = await db.trade_journal.find(query, {"_id": 0}).sort("closed_at", 1).to_list(length=5000)
     total = len(trades)
 
@@ -5417,6 +5475,17 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
         payload = _normalize_manual_open_now_payload(payload)
     elif action == "FORCE_CLOSE_TRADE":
         payload = _normalize_force_close_payload(payload)
+
+    # v6.25.6 XAU-027 -- tenant-scoped idempotency. dedupe_key is unique per
+    # (user, action, client-supplied key); a client retry of the exact same
+    # confirm-click reuses the same idempotency_key and therefore hits the
+    # DuplicateKeyError branch below instead of queuing a second command.
+    # When the client omits idempotency_key (older build), command_id itself
+    # is used so the key is still always unique -- this preserves current
+    # behavior (no dedup) for un-updated clients rather than erroring them
+    # out, a disclosed limitation rather than a silent one.
+    client_key = (req.idempotency_key or "").strip()[:120] or command_id
+    dedupe_key = f"{user['id']}:{action}:{client_key}"
     doc = {
         "id": command_id,
         "user_id": user["id"],
@@ -5432,8 +5501,22 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
         "ack_status": "",
         "ack_message": "",
         "ack_details": {},
+        "dedupe_key": dedupe_key,
     }
-    await db.cloud_bot_commands.insert_one(doc.copy())
+    try:
+        await db.cloud_bot_commands.insert_one(doc.copy())
+    except DuplicateKeyError:
+        existing = await db.cloud_bot_commands.find_one({"dedupe_key": dedupe_key}, {"_id": 0})
+        if existing:
+            logger.info("[command-request] dedupe_key=%s DUPLICATE existing_command_id=%s",
+                        dedupe_key, existing.get("id"))
+            return {"ok": True, "command_id": existing.get("id"), "status": existing.get("status"),
+                    "action": existing.get("action"), "duplicate": True}
+        # Genuinely impossible under normal operation (the unique index
+        # guarantees a matching doc exists), but fail closed rather than
+        # silently swallow an inconsistent state.
+        raise HTTPException(status_code=409, detail="Duplicate command request could not be reconciled.")
+
     if action == "UPDATE_PROP_FIRM_CONFIG":
         await db.pin_licenses.update_one(
             {"pin": lic.get("pin", ""), "is_active": True},
@@ -5449,7 +5532,7 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
                               f"{SAFE_REMOTE_COMMANDS[action]} queued for EA acknowledgement",
                               account=lic.get("mt5_account", ""),
                               details={"command_id": command_id, "action": action, "user": user.get("email", ""), "license_key": lic.get("pin", "")})
-    return {"ok": True, "command_id": command_id, "status": "PENDING", "action": action}
+    return {"ok": True, "command_id": command_id, "status": "PENDING", "action": action, "duplicate": False}
 
 @api_router.get("/cloud/command/pending")
 async def cloud_command_pending(request: Request, limit: int = 5,
@@ -5485,13 +5568,47 @@ async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
             "message": "This command belongs to a different license.",
             "command_id": req.command_id,
         })
-    await db.cloud_bot_commands.update_one({"id": req.command_id}, {"$set": {
-        "status": status,
-        "ack_at": now.isoformat(),
-        "ack_status": status,
-        "ack_message": str(req.message or "")[:400],
-        "ack_details": req.details or {},
-    }})
+
+    # v6.25.6 XAU-027 -- atomic conditional transition. The filter requires
+    # the command's CURRENT status (at the moment MongoDB applies this exact
+    # operation) to be in the allowed-source set for the requested target
+    # status; terminal statuses (EXECUTED/FAILED/SKIPPED/EXPIRED) are never
+    # in any allowed-source set, so they can never be overwritten -- by a
+    # late/replayed ack, a second EA instance racing the first, or an
+    # already-expired command's owner finally responding. Two concurrent
+    # requests attempting the same transition can both reach this line, but
+    # MongoDB applies find_one_and_update atomically per-document: only the
+    # first to actually commit sees its filter still match; the loser's
+    # filter no longer matches (status already changed) and it correctly
+    # falls into the "not applied" branch below instead of double-applying.
+    allowed_from = _COMMAND_ALLOWED_SOURCE_STATUSES.get(status, set())
+    updated = await db.cloud_bot_commands.find_one_and_update(
+        {"id": req.command_id, "status": {"$in": list(allowed_from)}},
+        {"$set": {
+            "status": status,
+            "ack_at": now.isoformat(),
+            "ack_status": status,
+            "ack_message": str(req.message or "")[:400],
+            "ack_details": req.details or {},
+        }},
+        return_document=ReturnDocument.AFTER,
+        projection={"_id": 0},
+    )
+    if updated is None:
+        # Either the status transition is disallowed from wherever the
+        # command currently sits (most commonly: already terminal), or a
+        # concurrent request already won this exact transition. Report the
+        # real current status honestly rather than pretending this request
+        # applied -- the owner's explicit rule: an ack must never silently
+        # overwrite a terminal truth.
+        current = await db.cloud_bot_commands.find_one({"id": req.command_id}, {"_id": 0})
+        current_status = current.get("status") if current else "UNKNOWN"
+        reason = "TERMINAL_STATE_IMMUTABLE" if current_status in _COMMAND_TERMINAL_STATUSES else "INVALID_TRANSITION"
+        logger.info("[command-ack] command_id=%s requested_status=%s REJECTED reason=%s current_status=%s",
+                    req.command_id, status, reason, current_status)
+        return {"ok": True, "command_id": req.command_id, "status": current_status,
+                "applied": False, "reason": reason}
+
     if command.get("action") == "UPDATE_PROP_FIRM_CONFIG":
         prop_update = {
             "prop_firm_apply_status": status,
@@ -5511,7 +5628,7 @@ async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
                               f"{label}: {req.message or status}",
                               account=command.get("mt5_account", "") or req.account or "",
                               details={"command_id": req.command_id, "action": command.get("action"), "status": status, "license_key": command.get("license_key", "")})
-    return {"ok": True, "command_id": req.command_id, "status": status}
+    return {"ok": True, "command_id": req.command_id, "status": status, "applied": True}
 
 @api_router.get("/cloud/command/recent")
 async def cloud_command_recent(limit: int = 20, user: dict = Depends(get_cloud_user)):

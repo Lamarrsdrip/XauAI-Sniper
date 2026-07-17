@@ -76,8 +76,14 @@ async def _make_user_with_license(pin="ASE-ANALYTICS1"):
         "id": uid, "email": email, "password_hash": "x",
         "license_key": pin, "created_at": "2026-07-17T00:00:00Z",
     })
+    # A real license doc always has its own distinct "id" (every production
+    # license-creation path sets one) -- log_trade_journal() stores this,
+    # not the raw pin, as the tenant-isolation key on each trade_journal
+    # doc. Omitting it here made every license in this file collide on an
+    # implicit empty-string id, which only surfaced as a real bug in the
+    # cross-tenant scoping test.
     await srv.db.pin_licenses.insert_one({
-        "pin": pin, "is_active": True, "mt5_account": "12345",
+        "id": str(uuid.uuid4()), "pin": pin, "is_active": True, "mt5_account": "1001",
         "buyer_email": email,
     })
     return {"id": uid, "email": email, "license_key": pin}
@@ -95,7 +101,7 @@ class _FakeRequest:
 
 async def _ensure_active_license(pin):
     await srv.db.pin_licenses.update_one(
-        {"pin": pin}, {"$setOnInsert": {"pin": pin, "is_active": True, "mt5_account": "12345"}},
+        {"pin": pin}, {"$setOnInsert": {"pin": pin, "is_active": True, "mt5_account": "1001"}},
         upsert=True)
 
 
@@ -118,13 +124,17 @@ def _log_rich_trade(pin, result, profit, ticket, closed_at, risk_usd=100.0,
 
 
 def _log_thin_trade(pin, result, profit):
-    """Simulates a pre-v6.25.3 EA install -- only the original fields."""
+    """Simulates a pre-v6.25.3 EA install -- only the original fields (plus
+    account_login, which even the oldest still-supported install must send
+    since the v6.25.4 P0 auth fix -- this predates the "thin vs rich ledger"
+    distinction and is not itself a legacy-optional field)."""
     _run(_ensure_active_license(pin))
     entry = srv.TradeJournalEntry(
         pin=pin, symbol="XAUUSD", direction="BUY", result=result,
         price=2000.0, profit=profit, lots=0.1, hour=10, day_of_week=2,
         total_trades=1, wins=1 if result == "WIN" else 0, losses=1 if result == "LOSS" else 0,
         balance=10000.0, signature="sig", setup="LEGACY", regime="TREND",
+        account_login="1001",
     )
     return _run(srv.log_trade_journal(entry, _FakeRequest()))
 
@@ -133,10 +143,15 @@ def test_thin_legacy_payload_still_accepted_and_stored():
     result = _log_thin_trade("ASE-LEGACY1", "WIN", 50.0)
     assert result["status"] == "ok"
 
+    # log_trade_journal() deliberately pops "pin" before storage (v6.25.4 P0
+    # fix -- the raw PIN is never persisted, only the resolved license_id),
+    # so a stored doc can never be found by "pin". signature/setup/profit
+    # together are unique enough for this isolated test's own seeded data.
     async def find():
-        return await srv.db.trade_journal.find_one({"pin": "ASE-LEGACY1"})
+        return await srv.db.trade_journal.find_one({"signature": "sig", "setup": "LEGACY", "profit": 50.0})
     doc = _run(find())
     assert doc is not None
+    assert "pin" not in doc
     assert doc["has_rich_ledger_data"] is False
     assert doc["ticket"] == 0
 
@@ -144,8 +159,10 @@ def test_thin_legacy_payload_still_accepted_and_stored():
 def test_rich_payload_marked_has_rich_ledger_data():
     _log_rich_trade("ASE-RICH1", "WIN", 120.0, ticket=555001, closed_at=1_800_000_000)
 
+    # See test_thin_legacy_payload_still_accepted_and_stored's comment --
+    # "pin" is never persisted, so query by the real stored ticket instead.
     async def find():
-        return await srv.db.trade_journal.find_one({"pin": "ASE-RICH1"})
+        return await srv.db.trade_journal.find_one({"ticket": 555001})
     doc = _run(find())
     assert doc is not None
     assert doc["has_rich_ledger_data"] is True
