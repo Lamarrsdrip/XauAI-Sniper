@@ -50,6 +50,7 @@ os.environ.setdefault("ADMIN_EMAIL", "admin@test.com")
 
 import server as srv  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
 
 _LOOP = asyncio.new_event_loop()
 
@@ -82,9 +83,26 @@ async def _make_user_with_license(pin="ASE-ANALYTICS1"):
     return {"id": uid, "email": email, "license_key": pin}
 
 
+class _FakeRequest:
+    """v6.25.4 -- log_trade_journal() now requires an active, resolvable
+    license (see the URGENT P0 fix closing the unauthenticated
+    hive_signatures write hole); only headers/client are used by
+    _client_ip()/_resolve_monitor_license()'s rate limiting."""
+    def __init__(self, ip="9.9.9.9"):
+        self.headers = {}
+        self.client = MagicMock(host=ip)
+
+
+async def _ensure_active_license(pin):
+    await srv.db.pin_licenses.update_one(
+        {"pin": pin}, {"$setOnInsert": {"pin": pin, "is_active": True, "mt5_account": "12345"}},
+        upsert=True)
+
+
 def _log_rich_trade(pin, result, profit, ticket, closed_at, risk_usd=100.0,
                      final_r=None, mae_r=-0.3, mfe_r=1.2, setup="A_PLUS",
                      family="NORMAL", account_login="1001", hour=10):
+    _run(_ensure_active_license(pin))
     entry = srv.TradeJournalEntry(
         pin=pin, symbol="XAUUSD", direction="BUY", result=result,
         price=2000.0, profit=profit, lots=0.1, hour=hour, day_of_week=2,
@@ -96,18 +114,19 @@ def _log_rich_trade(pin, result, profit, ticket, closed_at, risk_usd=100.0,
         mae_r=mae_r, mfe_r=mfe_r, campaign_id="7", ea_version="v6.25.3",
         account_login=account_login, exit_reason="R_EXIT_MANAGER | test", exit_owner="EA", family=family,
     )
-    return _run(srv.log_trade_journal(entry))
+    return _run(srv.log_trade_journal(entry, _FakeRequest()))
 
 
 def _log_thin_trade(pin, result, profit):
     """Simulates a pre-v6.25.3 EA install -- only the original fields."""
+    _run(_ensure_active_license(pin))
     entry = srv.TradeJournalEntry(
         pin=pin, symbol="XAUUSD", direction="BUY", result=result,
         price=2000.0, profit=profit, lots=0.1, hour=10, day_of_week=2,
         total_trades=1, wins=1 if result == "WIN" else 0, losses=1 if result == "LOSS" else 0,
         balance=10000.0, signature="sig", setup="LEGACY", regime="TREND",
     )
-    return _run(srv.log_trade_journal(entry))
+    return _run(srv.log_trade_journal(entry, _FakeRequest()))
 
 
 def test_thin_legacy_payload_still_accepted_and_stored():

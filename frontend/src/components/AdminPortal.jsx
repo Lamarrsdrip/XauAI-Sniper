@@ -709,6 +709,17 @@ function ConfigTab({ api, token }) {
 
   return (
     <div className="space-y-5" data-testid="admin-config-tab">
+      {/* v6.25.4 owner directive 2026-07-17 (Phase 9 control-wiring audit)
+          -- this tab writes to the same db.ea_configs collection as the
+          public marketing-site lead-capture Configurator, which no EA
+          version reads back. It has no effect on any live bot -- the
+          previous "Saved!" confirmation implied otherwise. Kept as a
+          reference/preset-planning tool (not deleted, since the values
+          are still useful for manually setting the matching EA inputs in
+          MT5), but now says so honestly instead of implying live control. */}
+      <div className="rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-4 py-3 text-[12px] leading-5 text-amber-200/90">
+        Reference tool only -- these values are <strong>not</strong> read by any live EA. Saving here does not change your running bot's behavior; set matching inputs directly in MT5's Expert Advisor properties.
+      </div>
       <div className="grid grid-cols-3 gap-3">
         {PRESETS.map((p) => {
           const Icon = p.icon;
@@ -749,7 +760,7 @@ function ConfigTab({ api, token }) {
       </CardSection>
 
       <Btn onClick={save} disabled={saving} data-testid="admin-config-save">
-        <FloppyDisk size={14} weight="bold" /> {saving ? "Saving…" : saved ? "Saved!" : "Save config"}
+        <FloppyDisk size={14} weight="bold" /> {saving ? "Saving…" : saved ? "Saved (reference only -- not applied to the live EA)" : "Save reference preset"}
       </Btn>
     </div>
   );

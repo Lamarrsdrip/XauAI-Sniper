@@ -1850,110 +1850,33 @@ class MLConfidenceRequest(BaseModel):
     day_of_week: int
 
 @api_router.post("/ml/submit-pattern")
-async def ml_submit_pattern(req: MLPatternSubmit):
-    """EA submits trade outcome for global learning"""
-    # Verify PIN is valid
-    pin_doc = await db.pin_licenses.find_one({"pin": req.pin, "is_active": True})
-    if not pin_doc:
-        raise HTTPException(status_code=403, detail="Invalid PIN")
-
-    pattern = {
-        "pin": req.pin,
-        "market_state": req.market_state,
-        "strategy": req.strategy,
-        "ema_diff": req.ema_diff,
-        "rsi_value": req.rsi_value,
-        "atr_value": req.atr_value,
-        "bb_width": req.bb_width,
-        "hour_of_day": req.hour_of_day,
-        "day_of_week": req.day_of_week,
-        "candle_body_ratio": req.candle_body_ratio,
-        "was_winner": req.was_winner,
-        "profit_pips": req.profit_pips,
-        "confidence": req.confidence,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.ml_patterns.insert_one(pattern)
-
-    # Update global stats cache
-    await _update_ml_stats()
-
-    return {"received": True, "total_patterns": await db.ml_patterns.count_documents({})}
+async def ml_submit_pattern_retired():
+    """v6.25.4 owner directive 2026-07-17 (URGENT P0 -- Phase 10 audit
+    finding) -- retired. Not called by any EA version since at least
+    v6.25.0 (grepped backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 -- no caller),
+    a dead active endpoint reachable over HTTP with no real product behind
+    it. It also only ever required an active PIN (not the current caller's
+    OWN bound account/ticket), so it was writable by any customer's PIN
+    into a fully global, unsegmented db.ml_patterns collection -- the same
+    class of issue closed on /journal/log and /ml/hive/score above."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired.")
 
 @api_router.post("/ml/get-confidence")
-async def ml_get_confidence(req: MLConfidenceRequest):
-    """EA asks for ML confidence adjustment before trading"""
-    # Verify PIN
-    pin_doc = await db.pin_licenses.find_one({"pin": req.pin, "is_active": True})
-    if not pin_doc:
-        raise HTTPException(status_code=403, detail="Invalid PIN")
-
-    total_patterns = await db.ml_patterns.count_documents({})
-    if total_patterns < 20:
-        return {"adjustment": 0, "total_patterns": total_patterns, "reason": "Not enough data yet"}
-
-    # 1. Find similar patterns globally (same market + strategy)
-    match_filter = {"market_state": req.market_state, "strategy": req.strategy}
-    similar = await db.ml_patterns.find(match_filter, {"_id": 0, "was_winner": 1, "hour_of_day": 1, "day_of_week": 1, "rsi_value": 1, "profit_pips": 1}).limit(1000).to_list(1000)
-
-    if len(similar) < 5:
-        return {"adjustment": 0, "total_patterns": total_patterns, "reason": "Few similar patterns"}
-
-    wins = sum(1 for p in similar if p["was_winner"])
-    base_win_rate = wins / len(similar)
-
-    # 2. Narrow down: same hour range (+/-1) and day of week
-    time_matches = [p for p in similar if abs(p["hour_of_day"] - req.hour_of_day) <= 1 and p["day_of_week"] == req.day_of_week]
-    time_win_rate = None
-    if len(time_matches) >= 5:
-        time_wins = sum(1 for p in time_matches if p["was_winner"])
-        time_win_rate = time_wins / len(time_matches)
-
-    # 3. RSI similarity check
-    rsi_matches = [p for p in similar if abs(p["rsi_value"] - req.rsi_value) < 10]
-    rsi_win_rate = None
-    if len(rsi_matches) >= 5:
-        rsi_wins = sum(1 for p in rsi_matches if p["was_winner"])
-        rsi_win_rate = rsi_wins / len(rsi_matches)
-
-    # 4. Calculate weighted confidence adjustment
-    # Base: strategy+market win rate (weight 40%)
-    # Time: hour+day win rate (weight 35%)
-    # RSI: indicator similarity (weight 25%)
-    weighted_wr = base_win_rate * 0.4
-    if time_win_rate is not None:
-        weighted_wr += time_win_rate * 0.35
-    else:
-        weighted_wr += base_win_rate * 0.35
-    if rsi_win_rate is not None:
-        weighted_wr += rsi_win_rate * 0.25
-    else:
-        weighted_wr += base_win_rate * 0.25
-
-    # Convert to adjustment: 50% WR = 0, 80% = +24, 30% = -16
-    adjustment = int((weighted_wr - 0.5) * 80)
-    adjustment = max(-25, min(25, adjustment))
-
-    # 5. Loss time slot check
-    skip_trade = False
-    if time_win_rate is not None and time_win_rate < 0.30 and len(time_matches) >= 8:
-        skip_trade = True
-        adjustment = -30  # Strong penalty
-
-    return {
-        "adjustment": adjustment,
-        "skip_trade": skip_trade,
-        "total_patterns": total_patterns,
-        "similar_count": len(similar),
-        "base_win_rate": round(base_win_rate * 100, 1),
-        "time_win_rate": round(time_win_rate * 100, 1) if time_win_rate else None,
-        "rsi_win_rate": round(rsi_win_rate * 100, 1) if rsi_win_rate else None,
-        "weighted_win_rate": round(weighted_wr * 100, 1),
-    }
+async def ml_get_confidence_retired():
+    """v6.25.4 -- retired, see ml_submit_pattern_retired(). No EA caller;
+    formerly reachable by anyone holding any single active PIN."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired.")
 
 @api_router.get("/ml/stats")
-async def ml_global_stats():
-    """Global ML statistics (public)"""
+async def ml_stats_retired():
+    """v6.25.4 -- retired, see ml_submit_pattern_retired() above. No EA
+    caller; a dead active endpoint publicly exposing aggregate stats over
+    the same unauthenticated global db.ml_patterns collection. The
+    underlying computation is kept as _compute_ml_global_stats() for the
+    still-live, admin-only /admin/ml/stats."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired.")
+
+async def _compute_ml_global_stats():
     total = await db.ml_patterns.count_documents({})
     if total == 0:
         return {"total_patterns": 0, "global_win_rate": 0, "contributors": 0, "strategies": {}, "hourly_performance": [], "message": "No patterns yet. As users trade, the AI gets smarter."}
@@ -2004,7 +1927,7 @@ async def ml_global_stats():
 @api_router.get("/admin/ml/stats", dependencies=[Depends(get_current_admin)])
 async def admin_ml_stats():
     """Detailed ML stats for admin"""
-    stats = await ml_global_stats()
+    stats = await _compute_ml_global_stats()
     # Add recent patterns
     recent = await db.ml_patterns.find({}, {"_id": 0, "market_state": 1, "strategy": 1, "was_winner": 1, "created_at": 1, "confidence": 1}).sort("created_at", -1).limit(20).to_list(20)
     stats["recent_patterns"] = recent
@@ -2160,58 +2083,14 @@ async def get_session_config():
     }
 
 @api_router.post("/smart/check-trade")
-async def smart_check_trade(req: MLConfidenceRequest):
-    """All-in-one smart trade check: ML + News + DXY + Session + Recovery"""
-    result = {
-        "allow_trade": True,
-        "adjustments": [],
-        "final_adjustment": 0,
-        "warnings": [],
-    }
-
-    # 1. ML confidence (reuse existing logic)
-    ml_data = await ml_get_confidence(req)
-    ml_adj = ml_data.get("adjustment", 0)
-    if ml_data.get("skip_trade"):
-        result["allow_trade"] = False
-        result["warnings"].append("BLOCKED: Global ML says this setup historically loses")
-        return result
-    result["adjustments"].append({"source": "global_ml", "value": ml_adj})
-
-    # 2. DXY correlation
-    try:
-        dxy = await get_dxy_direction()
-        gold_bias = dxy.get("gold_bias", "neutral")
-        is_buy = req.market_state in [0, 3]  # trending up or breakout up
-
-        if (is_buy and gold_bias == "bearish") or (not is_buy and gold_bias == "bullish"):
-            result["adjustments"].append({"source": "dxy_conflict", "value": -10})
-            result["warnings"].append(f"DXY conflict: Gold bias is {gold_bias} but trade is {'BUY' if is_buy else 'SELL'}")
-        elif (is_buy and gold_bias == "bullish") or (not is_buy and gold_bias == "bearish"):
-            result["adjustments"].append({"source": "dxy_confirm", "value": 5})
-    except:
-        pass
-
-    # 3. Session tuning
-    hour = req.hour_of_day
-    if 13 <= hour < 16:  # overlap
-        result["adjustments"].append({"source": "session_overlap_boost", "value": 3})
-    elif 0 <= hour < 8:  # asian - be more selective
-        result["adjustments"].append({"source": "session_asian_penalty", "value": -8})
-        result["warnings"].append("Asian session: low liquidity, higher risk")
-
-    # 4. Weekend protection (Friday after 20:00)
-    dow = req.day_of_week
-    if dow == 5 and hour >= 20:
-        result["allow_trade"] = False
-        result["warnings"].append("BLOCKED: Weekend gap protection - no new trades after Friday 20:00")
-        return result
-
-    # Calculate final
-    total_adj = sum(a["value"] for a in result["adjustments"])
-    result["final_adjustment"] = max(-30, min(30, total_adj))
-
-    return result
+async def smart_check_trade_retired():
+    """v6.25.4 -- retired, see ml_submit_pattern_retired() above. No EA
+    caller; internally called the also-retired ml_get_confidence and the
+    live /smart/dxy and weekend-gap checks, none of which are exercised
+    by any current EA path (news/DXY/weekend gating is done independently
+    in EA-local logic -- see NEWS_GATE_STARTED/COMPLETED in the EA
+    source)."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired.")
 
 @api_router.get("/admin/monthly-report", dependencies=[Depends(get_current_admin)])
 async def admin_monthly_report():
@@ -3273,27 +3152,21 @@ async def ai_memory_record(record: TradeMemoryRecord):
         return {"status": "error", "detail": str(e)}
 
 @api_router.post("/ai/memory/query")
-async def ai_memory_query(query: TradeMemoryQuery):
-    try:
-        q = query.dict()
-        rows = _load_trade_memory(limit=max(100, min(query.limit, 5000)))
-        scored = []
-        for row in rows:
-            score = _score_memory_similarity(q, row)
-            if score >= 5.0:
-                scored.append((score, row))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        matches = [row for _, row in scored[:250]]
-        rec = _build_memory_recommendation(q, matches)
-        return {
-            "status": "ok",
-            "query_hash": _trade_memory_state_hash(q),
-            **rec,
-            "matches": matches[:25],
-        }
-    except Exception as e:
-        logger.error("AI memory query error: %s", e)
-        return {"status": "error", "detail": str(e), "similar_memories": 0}
+async def ai_memory_query_retired():
+    """v6.25.4 owner directive 2026-07-17 (Phase 10 audit finding) --
+    retired. No EA caller (grepped backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+    -- only ai/memory/record is ever called, never this). Also
+    unauthenticated with no per-account scoping -- would have blended
+    every account's trade memory into one global similarity match. Kept
+    ai_memory_record() writing (still called by the EA) since this closes
+    the only read path that ever turned recorded memories into a live
+    recommendation -- the write side is now functionally inert rather than
+    a live cross-account data-bleed risk. Adding real per-license auth to
+    the write side is a disclosed follow-up, not done here, since it
+    requires an EA source change (InpLicensePIN isn't currently sent in
+    that payload) and this session already has one EA recompile+redeploy
+    in flight today for the higher-severity M10 freshness fix."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired.")
 
 @api_router.get("/ai/memory/report")
 async def ai_memory_report(limit: int = 2000):
@@ -3568,7 +3441,24 @@ class TradeJournalEntry(BaseModel):
     family: str = ""            # NORMAL / COUNTER_EXCURSION / LEGACY_EXHAUSTION_COUNTER
 
 @api_router.post("/journal/log")
-async def log_trade_journal(entry: TradeJournalEntry):
+async def log_trade_journal(entry: TradeJournalEntry, request: Request):
+    # v6.25.4 owner directive 2026-07-17 (URGENT P0 -- Phase 10 audit
+    # finding) -- this endpoint previously accepted ANY caller's win/loss
+    # report with no authentication at all, and fed it straight into
+    # db.hive_signatures, which /ml/hive/score's verdict (BOOST/VETO) uses
+    # to hard-block or favor trades for EVERY user sharing that setup
+    # signature -- a real, exploitable "anyone with no license at all can
+    # fabricate losses to VETO other customers' live trades, or fabricate
+    # wins to force BOOST and induce over-trading" vulnerability. Now
+    # requires the pin to resolve to a real active license (the same
+    # canonical, atomic, fail-closed check every other EA-facing endpoint
+    # already uses) before anything is written. Rate-limited per pin to
+    # bound abuse even from a genuinely licensed but compromised install.
+    try:
+        await _resolve_monitor_license(entry.pin, "", request)
+    except HTTPException:
+        return {"status": "error", "detail": "Invalid or inactive license."}
+    _rate_limit(f"journal_log_pin:{entry.pin}", max_requests=60, window_seconds=300)
     try:
         doc = entry.dict()
         doc["created_at"] = datetime.now(timezone.utc).isoformat()
