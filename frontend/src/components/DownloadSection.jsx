@@ -1,11 +1,20 @@
-import React, { useEffect, useState } from "react";
-import { DownloadSimple, FileCode, Package, Warning, ShieldCheck, CloudArrowUp, Spinner, CheckCircle, ChartLineUp } from "@phosphor-icons/react";
+import React, { useEffect, useState, useCallback } from "react";
+import { DownloadSimple, FileCode, Package, Warning, ShieldCheck, CloudArrowUp, Spinner, CheckCircle, ChartLineUp, LockSimple } from "@phosphor-icons/react";
 
+// v6.25.3 owner directive 2026-07-17 (Phase 3 P0) -- public MQ5 source
+// distribution is retired. This page now shows version/checksum/notes to
+// anyone, but the actual compiled-EX5 download requires signing in to
+// Command Center with an active license (POST /api/download/request-token
+// -> short-lived signed URL -> GET /api/download/ea-release). No direct
+// public download link exists anymore.
 export default function DownloadSection({ api }) {
   const [info, setInfo]     = useState(null);
   const [loading, setLoading] = useState(true);
   const [xiInfo, setXiInfo]     = useState(null);
   const [xiLoading, setXiLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
+  const isLoggedIn = typeof window !== "undefined" && !!localStorage.getItem("cloud_token");
 
   useEffect(() => {
     fetch(`${api}/download/info`)
@@ -18,10 +27,34 @@ export default function DownloadSection({ api }) {
       .catch(() => setXiLoading(false));
   }, [api]);
 
+  const requestDownload = useCallback(async () => {
+    setDownloading(true); setDownloadError("");
+    try {
+      const token = localStorage.getItem("cloud_token");
+      const resp = await fetch(`${api}/download/request-token`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        setDownloadError(resp.status === 403
+          ? "No active license linked to your account yet. Link your license in Command Center first."
+          : (body.detail || "Could not start download."));
+        setDownloading(false);
+        return;
+      }
+      const data = await resp.json();
+      window.location.href = `${api}${data.download_url}`;
+    } catch (_) {
+      setDownloadError("Could not start download. Please try again.");
+    }
+    setDownloading(false);
+  }, [api]);
+
+  const available = info?.available !== false;
   const version  = info?.version  || "v6.25.2";
-  const edition  = info?.edition  || "M10 ORIGINATION FALLBACK, FRESHNESS BAR-IDENTITY FIX";
-  const filename = info?.filename || "XAUUSD_AI_Sniper_EA_v6.25.2.mq5";
-  const sizeKb   = info?.size_kb;
+  const edition  = info?.edition  || "";
+  const filename = info?.filename || "";
   const checksum = info?.checksum_sha256_12;
 
   return (
@@ -37,13 +70,13 @@ export default function DownloadSection({ api }) {
             <h2 className="mt-5 max-w-3xl font-heading text-3xl font-semibold tracking-tight sm:text-5xl" data-testid="download-title">
               {loading
                 ? "Loading latest build…"
-                : `Latest release: ${version} — ${edition}.`}
+                : edition ? `Latest release: ${version} — ${edition}.` : `Latest release: ${version}.`}
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
-              Customer downloads are automatically sanitized — cloud fanout and operator tokens are stripped. The file you download runs fully standalone on your MT5.
+              Downloads are signed and license-gated through Command Center — cloud fanout and operator tokens are stripped from every build. The file you receive runs fully standalone on your MT5.
             </p>
             <p className="mt-3 max-w-2xl rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[12px] leading-5 text-white/45">
-              <span className="font-semibold text-amber-200">Gold-only v6.25.2.</span> M10 is the canonical signal authority and can now originate its own qualifying candidates, with cross-instance direction reservation and confirmed profit-floor protection.
+              <span className="font-semibold text-amber-200">Gold-only {version}.</span> {info?.release_notes || "M10 is the canonical signal authority."}
             </p>
           </div>
           <a href="/command" className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-5 py-3 text-sm font-bold text-emerald-200 transition hover:bg-emerald-300/15">
@@ -61,24 +94,23 @@ export default function DownloadSection({ api }) {
                   <FileCode size={25} weight="duotone" className="text-amber-200" />
                 </div>
                 <div>
-                  <h3 className="font-heading text-2xl font-semibold">Expert Advisor (.mq5)</h3>
+                  <h3 className="font-heading text-2xl font-semibold">Expert Advisor (compiled .ex5)</h3>
                   {loading
                     ? <p className="mt-2 flex items-center gap-2 text-sm text-white/40"><Spinner size={13} className="animate-spin" /> Fetching release info…</p>
                     : <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                        {version} · {edition}. Dual AI (Claude + GPT) is advisory. Deterministic production gates decide whether a candidate may proceed; approved normal entries use the configured full risk, while the centralized R-based manager owns ordinary position protection and exits.
+                        {version}{edition ? ` · ${edition}` : ""}. Dual AI (Claude + GPT) is advisory. Deterministic production gates decide whether a candidate may proceed; approved normal entries use the configured full risk, while the centralized R-based manager owns ordinary position protection and exits.
                       </p>}
                 </div>
               </div>
-              <span className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-300 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#06110c]">
-                <CheckCircle size={10} weight="fill" /> Stable
+              <span className={`inline-flex w-fit items-center gap-1 rounded-full px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest ${info?.stable ? "bg-emerald-300 text-[#06110c]" : "bg-amber-300/80 text-[#1a1400]"}`}>
+                <CheckCircle size={10} weight="fill" /> {info?.stable ? "Stable" : "Release candidate"}
               </span>
             </div>
 
             {/* Release metadata */}
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
               {[
                 ["Version", loading ? "—" : version],
-                ["Size",    loading ? "—" : sizeKb ? `${sizeKb} KB` : "MQ5 source"],
                 ["SHA-256", loading ? "—" : checksum ? checksum : "—"],
               ].map(([k, v]) => (
                 <div key={k} className="rounded-2xl border border-white/10 bg-black/[0.24] p-4">
@@ -88,21 +120,32 @@ export default function DownloadSection({ api }) {
               ))}
             </div>
 
-            {/* Filename display */}
-            {!loading && filename && (
-              <div className="mt-3 rounded-xl border border-white/[0.07] bg-black/20 px-4 py-2.5">
-                <span className="font-mono text-[10px] uppercase tracking-widest text-white/30">Filename · </span>
-                <span className="font-mono text-[11px] text-white/55 break-all">{filename}</span>
-              </div>
+            {/* v6.25.3 -- source distribution is retired; only a signed,
+                authenticated, license-gated download of the compiled EX5
+                is available now (see request-token flow below). */}
+            <div className="mt-3 flex items-start gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-4 py-2.5 text-[11px] leading-5 text-white/45">
+              <LockSimple size={13} className="mt-0.5 flex-none text-white/30" />
+              Source is no longer distributed publicly. Sign in to Command Center with an active license to download the compiled build.
+            </div>
+
+            {downloadError && (
+              <p className="mt-3 text-[12px] text-rose-300">{downloadError}</p>
             )}
 
             {/* Download buttons */}
             <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-              <a href={`${api}/download/ea`} data-testid="download-ea-button"
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
-                <DownloadSimple size={17} weight="bold" />
-                {loading ? "Download .MQ5" : `Download ${version} .MQ5`}
-              </a>
+              {isLoggedIn ? (
+                <button onClick={requestDownload} disabled={downloading || !available} data-testid="download-ea-button"
+                  className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-50">
+                  <DownloadSimple size={17} weight="bold" />
+                  {downloading ? "Preparing download…" : available ? `Download ${version} .EX5` : "No release available"}
+                </button>
+              ) : (
+                <a href="/command" data-testid="download-ea-button"
+                  className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-amber-200">
+                  <LockSimple size={17} weight="bold" /> Sign in to download
+                </a>
+              )}
               <a href="/command"
                 className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
                 Command setup
@@ -117,15 +160,15 @@ export default function DownloadSection({ api }) {
                 <Package size={24} weight="duotone" className="text-sky-200" />
               </div>
               <div>
-                <h3 className="font-heading text-xl font-semibold">Complete package</h3>
+                <h3 className="font-heading text-xl font-semibold">Complete setup</h3>
                 <p className="mt-2 text-sm leading-6 text-white/55">
-                  {loading ? "Loading…" : `${version} EA bundle as a ZIP. Includes the .mq5 and supporting files.`}
+                  {loading ? "Loading…" : `Everything you need to install ${version} lives inside Command Center now -- the compiled EA, setup guide, and license link.`}
                 </p>
               </div>
             </div>
-            <a href={`${api}/download/package`} data-testid="download-package-button"
+            <a href="/command" data-testid="download-package-button"
               className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
-              <DownloadSimple size={17} weight="bold" /> Download ZIP
+              <CloudArrowUp size={17} weight="bold" /> Open Command Center
             </a>
 
             <div className="mt-6 rounded-2xl border border-emerald-300/20 bg-emerald-300/[0.08] p-4">
@@ -141,7 +184,7 @@ export default function DownloadSection({ api }) {
             <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
               <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/25">Release pipeline</div>
               <p className="mt-1 text-[12px] leading-5 text-white/38">
-                Version info is read live from the EA file. Upgrading the production build automatically updates the download button, filename, version badge, and checksum — no manual edits needed.
+                Version, checksum, and release notes are read live from the published release manifest. The compiled build itself only ever leaves this server through the signed, license-gated Command Center download.
               </p>
             </div>
           </div>
@@ -165,7 +208,7 @@ export default function DownloadSection({ api }) {
                 <ChartLineUp size={12} weight="bold" /> A different bot
               </span>
               <h2 className="mt-4 max-w-2xl font-heading text-2xl font-semibold tracking-tight sm:text-4xl">
-                XauIndex {xiLoading ? "" : (xiInfo?.version || "v3.1.0")} — Gold + Index, one EA.
+                XauIndex — Gold + Index, one EA.
               </h2>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">
                 Not the same bot as above. XauAI Sniper (Gold-only, {version}) stays pure gold, maintained
@@ -187,49 +230,26 @@ export default function DownloadSection({ api }) {
                   <ChartLineUp size={25} weight="duotone" className="text-emerald-200" />
                 </div>
                 <div>
-                  <h3 className="font-heading text-2xl font-semibold">XauIndex Expert Advisor (.mq5)</h3>
-                  {xiLoading
-                    ? <p className="mt-2 flex items-center gap-2 text-sm text-white/40"><Spinner size={13} className="animate-spin" /> Fetching release info…</p>
-                    : <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
-                        {xiInfo?.version || "v3.1.0"} · Same dual-AI quality gate and Trade Thesis Monitor as XauAI Sniper, plus automatic Gold/Index detection and a real index entry engine (structure, liquidity, trend, breakout, volatility, momentum). Log-only by default until you enable live index trading.
-                      </p>}
+                  <h3 className="font-heading text-2xl font-semibold">XauIndex Expert Advisor</h3>
+                  <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
+                    Same dual-AI quality gate and Trade Thesis Monitor as XauAI Sniper, plus automatic Gold/Index detection and a real index entry engine (structure, liquidity, trend, breakout, volatility, momentum). Log-only by default until you enable live index trading.
+                  </p>
                 </div>
               </div>
-              <span className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-300 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#06110c]">
-                <CheckCircle size={10} weight="fill" /> New
+              <span className="inline-flex w-fit items-center gap-1 rounded-full bg-amber-300/80 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#1a1400]">
+                <CheckCircle size={10} weight="fill" /> Not yet available
               </span>
             </div>
 
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              {[
-                ["Version", xiLoading ? "—" : (xiInfo?.version || "v3.1.0")],
-                ["Size",    xiLoading ? "—" : xiInfo?.size_kb ? `${xiInfo.size_kb} KB` : "MQ5 source"],
-                ["SHA-256", xiLoading ? "—" : (xiInfo?.checksum_sha256_12 || "—")],
-              ].map(([k, v]) => (
-                <div key={k} className="rounded-2xl border border-white/10 bg-black/[0.24] p-4">
-                  <div className="font-mono text-[10px] uppercase tracking-widest text-white/35">{k}</div>
-                  <div className="mt-1 truncate font-mono text-sm font-bold" title={v}>{v}</div>
-                </div>
-              ))}
+            <div className="mt-6 rounded-2xl border border-white/[0.07] bg-black/20 p-4 text-[12px] leading-5 text-white/45">
+              {xiLoading ? "Checking release status…" : (xiInfo?.message || "No compiled release has been published for this product yet.")}
             </div>
 
-            {!xiLoading && xiInfo?.filename && (
-              <div className="mt-3 rounded-xl border border-white/[0.07] bg-black/20 px-4 py-2.5">
-                <span className="font-mono text-[10px] uppercase tracking-widest text-white/30">Filename · </span>
-                <span className="font-mono text-[11px] text-white/55 break-all">{xiInfo.filename}</span>
-              </div>
-            )}
-
             <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-              <a href={`${api}/download/xauindex/ea`} data-testid="download-xauindex-button"
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-300 px-6 py-3.5 text-sm font-extrabold text-black transition hover:bg-emerald-200">
-                <DownloadSimple size={17} weight="bold" />
-                {xiLoading ? "Download .MQ5" : `Download XauIndex ${xiInfo?.version || "v3.1.0"} .MQ5`}
-              </a>
-              <a href={`${api}/download/xauindex/package`} data-testid="download-xauindex-package-button"
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.06] px-6 py-3.5 text-sm font-bold text-white transition hover:bg-white/[0.1]">
-                <Package size={17} weight="bold" /> Download ZIP
-              </a>
+              <button disabled data-testid="download-xauindex-button"
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-white/[0.06] px-6 py-3.5 text-sm font-extrabold text-white/30 cursor-not-allowed">
+                <DownloadSimple size={17} weight="bold" /> Not yet available
+              </button>
             </div>
 
             <p className="mt-5 text-[11px] leading-5 text-white/35">

@@ -843,47 +843,126 @@ def _sanitize_ea_for_customer(src: str) -> str:
               "// =====================================================================\n")
     return banner + out
 
+# ---------------------------------------------------------------------------
+# v6.25.3 owner directive 2026-07-17 (Phase 3 P0, final pre-launch hardening)
+# -- STOP PUBLIC MQ5 SOURCE DISTRIBUTION. /download/ea and /download/package
+# used to serve the full (sanitized-of-secrets-only) MQ5 SOURCE CODE to any
+# anonymous visitor -- no auth, no license check, the entire strategy's IP
+# was one click away for anyone who found the URL. Required flow now:
+# authenticated Command Center user -> active paid license belonging to
+# that user -> short-lived one-time signed download token -> compiled EX5
+# release artifact. MQ5 source and the admin master EX5 remain admin-only
+# (unchanged, see admin_download_ea_master below).
+#
+# The compiled EX5 is a checked-in release artifact (backend/ea_releases/),
+# not something this backend compiles on demand -- there is no MetaEditor/
+# Wine available in the deployed backend environment. Each release's EX5 is
+# compiled during development (0 errors/0 warnings, hash-verified against
+# the exact source commit) and committed alongside a manifest entry; this
+# mirrors how every EA version this project has shipped was actually built.
+# ---------------------------------------------------------------------------
+EA_RELEASES_DIR = ROOT_DIR / "ea_releases"
+DOWNLOAD_TOKEN_TTL_SECONDS = 300  # short-lived, single-purpose, not a session token
+
+
+def _load_ea_release_manifest() -> dict:
+    p = EA_RELEASES_DIR / "manifest.json"
+    if not p.exists():
+        return {}
+    try:
+        return _json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.error(f"EA_RELEASE_MANIFEST_PARSE_FAILED: {e}")
+        return {}
+
+
+def _current_ea_release() -> Optional[dict]:
+    manifest = _load_ea_release_manifest()
+    current = manifest.get("current_version")
+    if not current:
+        return None
+    return manifest.get("releases", {}).get(current)
+
+
 @api_router.get("/download/info")
 async def download_info():
-    """Return current EA release metadata — version, filename, size, checksum.
-    Frontend uses this to display live version info without hardcoding anything."""
-    import hashlib
-    p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="EA file not found")
-    src = p.read_text(encoding="utf-8", errors="ignore")
-    meta = _get_ea_meta(src)
-    stat = p.stat()
+    """PUBLIC metadata only -- version, checksum, release notes, whether a
+    download is currently available. Never reads or exposes source code;
+    reads only the release manifest (backend/ea_releases/manifest.json)."""
+    release = _current_ea_release()
+    if not release:
+        return {"available": False, "reason": "NO_RELEASE_PUBLISHED"}
     return {
-        "version":      meta["version"],
-        "edition":      meta["edition"],
-        "filename":     meta["filename"],
-        "size_bytes":   stat.st_size,
-        "size_kb":      round(stat.st_size / 1024, 1),
-        "checksum_sha256_12": meta["checksum"],
-        "last_modified": stat.st_mtime,
-        "download_url": "/api/download/ea",
-        "stable":       True,
+        "available": True,
+        "version": release["version"],
+        "edition": release["edition"],
+        "filename": release["customer_filename"],
+        "checksum_sha256_12": release["ex5_sha256"][:12],
+        "checksum_sha256": release["ex5_sha256"],
+        "release_notes": release.get("release_notes", ""),
+        "stable": bool(release.get("stable_status", False)),
+        "requires_login": True,
+        "download_url": "/command",  # customer flow now goes through Command Center, not a direct link
     }
+# NOTE: POST /download/request-token is defined further down in this file,
+# right after _get_user_license() and get_cloud_user() both exist -- it
+# depends on get_cloud_user via FastAPI's Depends(), which is resolved at
+# decoration time, so it cannot be defined lexically before that name
+# exists in the module.
 
-@api_router.get("/download/ea")
-async def download_ea():
-    """PUBLIC customer download — sanitized (no master token, fanout OFF).
-    Filename and version are derived dynamically from the EA file header."""
-    p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
-    if not p.exists(): raise HTTPException(status_code=404)
-    src = p.read_text(encoding="utf-8", errors="ignore")
-    meta = _get_ea_meta(src)
-    sanitized = _sanitize_ea_for_customer(src)
-    return Response(
-        content=sanitized.encode("utf-8"),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{meta["filename"]}"'},
-    )
+
+@api_router.get("/download/ea-release")
+async def download_ea_release(token: str):
+    """Serves the compiled EX5 release artifact -- never MQ5 source -- only
+    to a caller presenting a valid, unexpired, single-purpose token minted
+    by request_ea_download_token() above for a currently-active license.
+    Logs every real download (license id, never the raw PIN; see the
+    "without exposing the PIN" requirement) for audit."""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Download link expired -- request a new one from Command Center.")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid download token.")
+    if payload.get("sub") != "ea_download":
+        raise HTTPException(status_code=401, detail="Invalid download token.")
+    license_id = payload.get("license_id", "")
+    lic = await db.pin_licenses.find_one({"id": license_id, "is_active": True}, {"_id": 0})
+    if not lic:
+        raise HTTPException(status_code=403, detail="License is no longer active.")
+    release = _load_ea_release_manifest().get("releases", {}).get(payload.get("version", ""))
+    if not release:
+        raise HTTPException(status_code=404, detail="Release no longer available.")
+    p = EA_RELEASES_DIR / payload["version"] / release["ex5_filename"]
+    if not p.exists():
+        logger.error(f"EA_RELEASE_ARTIFACT_MISSING version={payload.get('version')} path={p}")
+        raise HTTPException(status_code=404, detail="Release artifact missing.")
+    await db.ea_download_log.insert_one({
+        "id": str(uuid.uuid4()), "user_id": payload.get("user_id", ""), "license_id": license_id,
+        "version": payload.get("version", ""), "downloaded_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return FileResponse(path=str(p), filename=release["customer_filename"], media_type="application/octet-stream")
+
+
+@api_router.get("/download/ea", deprecated=True)
+async def download_ea_retired():
+    """Retired 2026-07-17 -- public unauthenticated MQ5 source distribution.
+    Returns 410 Gone rather than 404 so anything still pointed at the old
+    URL gets an explicit, permanent signal, not a transient-looking miss."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired. Sign in to Command Center to download your compiled EA build.")
+
+
+@api_router.get("/download/package", deprecated=True)
+async def download_package_retired():
+    """Retired 2026-07-17 -- see download_ea_retired() above."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired. Sign in to Command Center to download your compiled EA build.")
+
 
 @api_router.get("/admin/download/ea-master", dependencies=[Depends(get_current_admin)])
 async def admin_download_ea_master():
-    """Admin-only: serves the FULL master EA with agent token intact. Never expose publicly."""
+    """Admin-only: serves the FULL master MQ5 SOURCE with agent token intact.
+    Never expose publicly -- this is the only place the raw source is ever
+    served, and only to an authenticated admin."""
     p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
     if not p.exists(): raise HTTPException(status_code=404)
     src = p.read_text(encoding="utf-8", errors="ignore")
@@ -894,69 +973,30 @@ async def admin_download_ea_master():
         media_type="application/octet-stream",
     )
 
-@api_router.get("/download/package")
-async def download_package():
-    """PUBLIC customer package — uses sanitized EA. Zip filename includes version."""
-    p_ea = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
-    if p_ea.exists():
-        src = p_ea.read_text(encoding="utf-8", errors="ignore")
-        meta = _get_ea_meta(src)
-        zip_name = f"XauAI_Sniper_{meta['version']}_Package.zip"
-    else:
-        zip_name = "XauAI_Sniper_Package.zip"
-    d = ROOT_DIR / "ea_code"
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
-        for f in d.rglob("*"):
-            if not f.is_file(): continue
-            rel = f.relative_to(d)
-            if f.name == "XAUUSD_AI_Sniper_EA.mq5":
-                z.writestr(str(rel), _sanitize_ea_for_customer(
-                    f.read_text(encoding="utf-8", errors="ignore")))
-            else:
-                z.write(f, rel)
-    buf.seek(0)
-    return StreamingResponse(buf, media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'})
-
 # -------- XauIndex (separate product, separate download) --------
 # A DIFFERENT product from XauAI Sniper (gold-only, maintained separately).
 # XauIndex has Gold+Index market detection built in and is versioned
 # independently (1.0.0+) so the two are never confused with one another.
 # Mirrors the XauAI Sniper download endpoints exactly, pointed at its own
 # ea_code_xauindex/ directory instead.
+# v6.25.3 owner directive 2026-07-17 (Phase 3 P0) -- XauIndex had the exact
+# same public MQ5 source exposure as the main EA. It has no compiled EX5
+# release artifact yet (this session never compiled a XauIndex build, unlike
+# XAUUSD_AI_Sniper_EA's v6.25.2) -- rather than fabricate one, this reports
+# honestly as unavailable rather than serving the raw source publicly.
 @api_router.get("/download/xauindex/info")
 async def download_xauindex_info():
-    p = ROOT_DIR / "ea_code_xauindex" / "XauIndex_EA.mq5"
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="XauIndex EA file not found")
-    src = p.read_text(encoding="utf-8", errors="ignore")
-    meta = _get_ea_meta(src, filename_prefix="XauIndex_EA")
-    stat = p.stat()
-    return {
-        "version":      meta["version"],
-        "edition":      meta["edition"],
-        "filename":     meta["filename"],
-        "size_bytes":   stat.st_size,
-        "size_kb":      round(stat.st_size / 1024, 1),
-        "checksum_sha256_12": meta["checksum"],
-        "last_modified": stat.st_mtime,
-        "download_url": "/api/download/xauindex/ea",
-        "stable":       True,
-    }
+    return {"available": False, "reason": "NO_COMPILED_RELEASE_ARTIFACT_YET",
+            "message": "XauIndex download is not yet available through this channel -- no compiled EX5 release has been built."}
 
-@api_router.get("/download/xauindex/ea")
-async def download_xauindex_ea():
-    p = ROOT_DIR / "ea_code_xauindex" / "XauIndex_EA.mq5"
-    if not p.exists(): raise HTTPException(status_code=404)
-    src = p.read_text(encoding="utf-8", errors="ignore")
-    meta = _get_ea_meta(src, filename_prefix="XauIndex_EA")
-    sanitized = _sanitize_ea_for_customer(src)
-    return Response(
-        content=sanitized.encode("utf-8"),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{meta["filename"]}"'},
-    )
+
+@api_router.get("/download/xauindex/ea", deprecated=True)
+async def download_xauindex_ea_retired():
+    """Retired 2026-07-17 -- see download_ea_retired() above; same public
+    MQ5 source exposure issue, same fix. XauIndex has no signed-token/EX5
+    flow yet since no compiled release artifact exists for it."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired. XauIndex download is not yet available.")
+
 
 @api_router.get("/admin/download/xauindex-master", dependencies=[Depends(get_current_admin)])
 async def admin_download_xauindex_master():
@@ -970,29 +1010,10 @@ async def admin_download_xauindex_master():
         media_type="application/octet-stream",
     )
 
-@api_router.get("/download/xauindex/package")
-async def download_xauindex_package():
-    p_ea = ROOT_DIR / "ea_code_xauindex" / "XauIndex_EA.mq5"
-    if p_ea.exists():
-        src = p_ea.read_text(encoding="utf-8", errors="ignore")
-        meta = _get_ea_meta(src, filename_prefix="XauIndex_EA")
-        zip_name = f"XauIndex_{meta['version']}_Package.zip"
-    else:
-        zip_name = "XauIndex_Package.zip"
-    d = ROOT_DIR / "ea_code_xauindex"
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
-        for f in d.rglob("*"):
-            if not f.is_file(): continue
-            rel = f.relative_to(d)
-            if f.name == "XauIndex_EA.mq5":
-                z.writestr(str(rel), _sanitize_ea_for_customer(
-                    f.read_text(encoding="utf-8", errors="ignore")))
-            else:
-                z.write(f, rel)
-    buf.seek(0)
-    return StreamingResponse(buf, media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'})
+@api_router.get("/download/xauindex/package", deprecated=True)
+async def download_xauindex_package_retired():
+    """Retired 2026-07-17 -- see download_ea_retired() above."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired. XauIndex download is not yet available.")
 
 @api_router.get("/performance/summary")
 async def get_performance_summary():
@@ -3762,6 +3783,27 @@ async def _get_user_license(user: dict) -> Optional[dict]:
     if not query:
         return None
     return await db.pin_licenses.find_one(query, {"_id": 0})
+
+
+@api_router.post("/download/request-token")
+async def request_ea_download_token(user: dict = Depends(get_cloud_user)):
+    """Authenticated Command Center user + an active license belonging to
+    them -> a short-lived, single-purpose signed token for the compiled
+    EX5. Revoked/inactive/unowned licenses cannot obtain a token at all."""
+    lic = await _get_user_license(user)
+    if not lic:
+        raise HTTPException(status_code=403, detail="No active license linked to this account.")
+    release = _current_ea_release()
+    if not release:
+        raise HTTPException(status_code=503, detail="No release currently published.")
+    token = jwt.encode({
+        "sub": "ea_download", "user_id": user["id"], "license_id": lic.get("id", ""),
+        "version": release["version"],
+        "exp": datetime.now(timezone.utc) + timedelta(seconds=DOWNLOAD_TOKEN_TTL_SECONDS),
+    }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return {"download_token": token, "expires_in": DOWNLOAD_TOKEN_TTL_SECONDS,
+            "download_url": f"/api/download/ea-release?token={token}"}
+
 
 async def _verify_command_license(user: dict, key: str) -> dict:
     raw = _normalize_license_key(key)
