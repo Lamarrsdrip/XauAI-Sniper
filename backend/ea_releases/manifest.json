@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.25.5",
+  "current_version": "v6.25.6",
   "releases": {
     "v6.25.2": {
       "version": "v6.25.2",
@@ -47,6 +47,18 @@
       "ex5_sha256": "95dfa7fda4bab287d9fb46dcef1a557374933b154c8c3f489ec1429e9ea694ea",
       "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.5.ex5",
       "release_notes": "Codex forensic test candidate repairing the v6.25.5 M30 implementation: three completed M10 snapshots retain 20%/30%/50% weighting; a qualifying M30 BUY/SELL immediately creates one immutable slot-and-evidence candidate and starts exactly one 120-180 second timer; retrace/location remains evidence only; final movement at or above 0.30R cancels; invalid or missed candidates cannot carry, restart, or resurrect. Original candidate timing and evidence identity persist across restart, completed M10 evidence is restored only when validated against closed broker history, structural SL is mandatory with one 1.20 widening, and ambiguous broker outcomes reconcile without an immediate resend. Source default remains legacy M10; M30 must be explicitly selected and proven in the actual terminal journal. This artifact is available for owner testing while the remaining backend, browser, Mac, and VPS forensic verification continues; it is not yet a final production recommendation.",
+      "stable_status": false
+    },
+    "v6.25.6": {
+      "version": "v6.25.6",
+      "edition": "Trade-frequency fix (M30 exhaustion-gate scope) + real M30 candidate/timer lifecycle telemetry + tenant-scoped remote-command idempotency",
+      "source_commit": "f30c03f322c96bb63c0284643504cf5f239303c5",
+      "build_timestamp": "2026-07-18T00:24:00Z",
+      "compiler_result": "0 errors, 0 warnings, 32513 ms elapsed (MetaEditor64.exe, isolated sandbox; source SHA-256 f0e7058cb2347bbcb6a9cda552cf52be2a14ff73fc3f076ad35bdeca0eae6575; full test suite: 127/127 EA-source tests + 16/16 backend test files, 0 failures, against real local MongoDB; NOT YET verified on the owner's Mac live install or VPS)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.6.ex5",
+      "ex5_sha256": "9a034fc26174bef55e07e274d6421285d653faf48bc17715ac39f065ad2174bb",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.6.ex5",
+      "release_notes": "Forensic trade-frequency audit (triggered by a real 8-campaigns-in-30-days owner concern) root-caused and fixed EXHAUSTED_SAME_DIRECTION_REENTRY_BLOCK in OpenTrade(): a legacy-M10 re-entry gate that lacked the same M30-mode exemption its sibling gate (XAU_PostTradeCooldownActive) already had, silently discarding roughly 86% of already-approved M30 candidates. Verified via a real 7-trading-day MetaQuotes-Demo Strategy Tester replay (100% real ticks): 65 M30 candidates reached FinalEntryArbiter decision=ALLOW, but the pre-fix build opened only ~4 core trades before this gate discarded the rest as CANCEL_EXECUTION_NOT_CONFIRMED. Also adds a MQL_TESTER-scoped bypass for XAU_ClaimDirectionReservation()'s cross-instance reservation WebRequest so Strategy Tester can exercise the M30 path at all (tester-only; does not alter live/demo behavior). Implements the Codex handover's next task (checkpoint e483dd0): XAU-026 real M30 candidate/timer lifecycle visibility (XAU_M30DisplayJson now reports has_active_candidate, candidate_id, execution_key, timer timing, origin price, move-R since origin, and last-outcome fields sourced only from durable state -- no fabricated structural-SL/reservation status; surfaced in the Command Center's new Candidate Lifecycle section) and XAU-027 tenant-scoped remote-command idempotency with immutable terminal states (client-generated idempotency_key + server dedupe_key on /cloud/command/request; atomic conditional state-machine transition on /cloud/command/ack so EXECUTED/FAILED/SKIPPED/EXPIRED can never be overwritten by a late, replayed, or racing acknowledgement), covered by 16 new Mongo-backed concurrency/duplicate/expiry/cross-tenant tests. Also fixes two real production bugs found while repairing the surrounding test suite (not introduced by this change): /journal/log's account_login check was bypassing this endpoint's established graceful error-response contract with a raw HTTPException, and cloud_performance_analytics() was querying trade_journal by a \"pin\" field that log_trade_journal() has deliberately never stored since the v6.25.4 P0 fix (it stores license_id instead), silently returning empty analytics for every real user since that fix shipped. Not yet deployed to the owner's Mac live install or VPS; not yet merged to main.",
       "stable_status": false
     }
   }
