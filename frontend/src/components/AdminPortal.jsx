@@ -4,7 +4,7 @@ import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
   UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
   FloppyDisk, ChartBar, Lightning, Flame,
-  House, Pulse, TrendUp,
+  House, Pulse, TrendUp, Bell, ArrowClockwise, WarningCircle,
 } from "@phosphor-icons/react";
 
 const ax = axios.create({ withCredentials: true });
@@ -105,13 +105,14 @@ export default function AdminPortal({ api }) {
   if (!admin) return <LoginPage api={api} onLogin={handleLogin} />;
 
   const TABS = [
-    { id: "dashboard",    label: "Dashboard",  icon: House          },
-    { id: "pins",         label: "Licenses",   icon: Key            },
-    { id: "command",      label: "Bot Ops",    icon: Pulse          },
-    { id: "settings",     label: "Settings",   icon: GearSix        },
-    { id: "configurator", label: "EA Config",  icon: ChartBar       },
-    { id: "transactions", label: "Payments",   icon: CurrencyNgn    },
-    { id: "account",      label: "Account",    icon: UserCircle     },
+    { id: "dashboard",     label: "Dashboard",     icon: House          },
+    { id: "pins",          label: "Licenses",      icon: Key            },
+    { id: "command",       label: "Bot Ops",       icon: Pulse          },
+    { id: "notifications", label: "Notifications", icon: Bell           },
+    { id: "settings",      label: "Settings",      icon: GearSix        },
+    { id: "configurator",  label: "EA Config",     icon: ChartBar       },
+    { id: "transactions",  label: "Payments",      icon: CurrencyNgn    },
+    { id: "account",       label: "Account",       icon: UserCircle     },
   ];
 
   return (
@@ -157,13 +158,14 @@ export default function AdminPortal({ api }) {
 
       {/* Content */}
       <div className="mx-auto max-w-7xl px-5 md:px-8 py-7">
-        {tab === "dashboard"    && <DashboardTab    api={api} token={token} />}
-        {tab === "pins"         && <PinsTab         api={api} token={token} />}
-        {tab === "command"      && <CommandOpsTab   api={api} token={token} />}
-        {tab === "settings"     && <SettingsTab     api={api} token={token} />}
-        {tab === "configurator" && <ConfigTab       api={api} token={token} />}
-        {tab === "transactions" && <TransactionsTab api={api} token={token} />}
-        {tab === "account"      && <AccountTab api={api} token={token} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
+        {tab === "dashboard"     && <DashboardTab     api={api} token={token} />}
+        {tab === "pins"          && <PinsTab          api={api} token={token} />}
+        {tab === "command"       && <CommandOpsTab    api={api} token={token} />}
+        {tab === "notifications" && <NotificationsTab api={api} token={token} />}
+        {tab === "settings"      && <SettingsTab      api={api} token={token} />}
+        {tab === "configurator"  && <ConfigTab        api={api} token={token} />}
+        {tab === "transactions"  && <TransactionsTab  api={api} token={token} />}
+        {tab === "account"       && <AccountTab api={api} token={token} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
       </div>
     </div>
   );
@@ -290,6 +292,109 @@ function DashboardTab({ api, token }) {
           </div>
         </CardSection>
       </div>
+    </div>
+  );
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+// v6.25.2 owner directive 2026-07-17 -- real, live visibility into push
+// notification health, backed by GET /admin/notifications/health. There is
+// deliberately no input field to "fix" a missing dependency here -- when
+// dependency_available is false, the root cause is that pywebpush is not
+// installed in the running backend, and no application-level input can
+// install a Python package. The remediation text tells the admin exactly
+// what real action is needed (a full rebuild/redeploy, not a restart).
+function NotificationsTab({ api, token }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const h = useMemo(() => auth(token), [token]);
+
+  const load = useCallback(() => {
+    setLoading(true); setError("");
+    ax.get(`${api}/admin/notifications/health`, h)
+      .then(r => setData(r.data))
+      .catch(e => setError(e.response?.data?.detail || "Failed to load notification health"))
+      .finally(() => setLoading(false));
+  }, [api, h]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading && !data) return <div className="py-12 text-center text-white/40 text-sm">Loading notification health…</div>;
+
+  const vapid = data?.vapid || {};
+  const depOk = vapid.dependency_available === true;
+  const configured = vapid.configured === true;
+
+  return (
+    <div className="space-y-5" data-testid="admin-notifications-tab">
+      <CardSection
+        title="Push notification system health"
+        action={
+          <button onClick={load} className="flex items-center gap-1.5 text-[11px] text-white/40 hover:text-white/75 transition">
+            <ArrowClockwise size={13} /> Refresh
+          </button>
+        }
+      >
+        {error && <p className="mb-3 text-[12px] text-red-300">{error}</p>}
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard label="Dependency" value={depOk ? "Installed" : "Missing"} tone={depOk ? "green" : "red"} testId="stat-dep-available" />
+          <StatCard label="VAPID keys" value={configured ? "Configured" : "Not configured"} tone={configured ? "green" : "amber"} testId="stat-vapid-configured" />
+          <StatCard label="Subscribed devices" value={data?.subscribed_devices ?? "—"} testId="stat-device-count" />
+          <StatCard label="Init state" value={vapid.initialization_state || "—"} tone="neutral" testId="stat-init-state" />
+        </div>
+
+        {!depOk && (
+          <div className="mt-4 flex items-start gap-3 rounded-xl border border-red-400/25 bg-red-500/[0.07] p-4">
+            <WarningCircle size={18} className="mt-0.5 flex-none text-red-300" />
+            <div>
+              <div className="text-[13px] font-semibold text-red-200">No notification can be delivered right now</div>
+              <p className="mt-1 text-[12px] leading-5 text-red-100/80">{vapid.remediation}</p>
+              <p className="mt-2 text-[11px] leading-5 text-white/40">
+                This is not a settings problem -- there is nothing to type in here that fixes it. The `pywebpush`
+                Python package is declared in backend/requirements.txt but isn't actually installed in the running
+                backend. Only a real rebuild/redeploy (not a restart) reinstalls it.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {depOk && !configured && (
+          <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-4 text-[12px] text-amber-200">
+            Dependency is installed, but VAPID keys haven't initialized yet. They self-generate on the next backend
+            restart -- give it a minute and refresh.
+          </div>
+        )}
+
+        {depOk && configured && (
+          <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-300/[0.06] p-4 text-[12px] text-emerald-200">
+            System is healthy. Key fingerprint: <span className="font-mono">{vapid.key_fingerprint || "—"}</span>
+          </div>
+        )}
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <div className={`${CARD} p-4`}>
+            <div className={LABEL}>Last successful send</div>
+            {data?.last_successful_send ? (
+              <div className="mt-2 text-[12px] text-white/70">{data.last_successful_send.scheduled_time}</div>
+            ) : (
+              <div className="mt-2 text-[12px] text-white/35">None recorded yet</div>
+            )}
+          </div>
+          <div className={`${CARD} p-4`}>
+            <div className={LABEL}>Last failed send</div>
+            {data?.last_failed_send ? (
+              <div className="mt-2 text-[12px] text-red-200">
+                {data.last_failed_send.scheduled_time} — {data.last_failed_send.delivery_status}
+                {data.last_failed_send.failure_reason ? ` (${data.last_failed_send.failure_reason})` : ""}
+              </div>
+            ) : (
+              <div className="mt-2 text-[12px] text-white/35">None recorded yet</div>
+            )}
+          </div>
+        </div>
+      </CardSection>
     </div>
   );
 }

@@ -1024,6 +1024,39 @@ async def get_admin_settings(admin: dict = Depends(get_current_admin)):
         "smtp_configured": bool(sp),
     }
 
+@api_router.get("/admin/notifications/health")
+async def admin_notifications_health(admin: dict = Depends(get_current_admin)):
+    """v6.25.2 owner directive 2026-07-17 -- real, live visibility into why
+    push notifications are or are not working, in the admin dashboard,
+    instead of requiring a manual curl of the public status endpoint. This
+    is diagnostic ONLY -- there is no input field here because the actual
+    root cause when dependency_available is false is a missing Python
+    package (pywebpush) in the deployed backend environment, which no
+    application-level input can install. See vapid.dependency_available
+    and vapid.remediation below for what actually needs to happen."""
+    import notifications as _notif
+    vapid_status = await _notif.get_vapid_status()
+    device_count = await db.cloud_push_subscriptions.count_documents({})
+    last_sent = await db.cloud_notification_log.find_one(
+        {"delivery_status": "SENT"}, {"_id": 0, "scheduled_time": 1, "user_id": 1}, sort=[("scheduled_time", -1)])
+    last_failed = await db.cloud_notification_log.find_one(
+        {"delivery_status": {"$ne": "SENT"}}, {"_id": 0, "scheduled_time": 1, "delivery_status": 1, "failure_reason": 1},
+        sort=[("scheduled_time", -1)])
+    remediation = (
+        "pywebpush is declared in backend/requirements.txt but is not actually installed in this "
+        "running environment -- restarting the backend does NOT reinstall dependencies. Trigger a full "
+        "rebuild/redeploy (not a restart) from the Emergent dashboard so pip installs from requirements.txt "
+        "again, then reload this page."
+        if not vapid_status.get("dependency_available") else
+        "Dependency is installed and available."
+    )
+    return {
+        "vapid": {**vapid_status, "remediation": remediation},
+        "subscribed_devices": device_count,
+        "last_successful_send": last_sent,
+        "last_failed_send": last_failed,
+    }
+
 @api_router.put("/admin/settings")
 async def update_admin_settings(req: AdminSettingsUpdate, admin: dict = Depends(get_current_admin)):
     updates = {}
