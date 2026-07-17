@@ -637,27 +637,48 @@ async def health():
 async def get_gold_price():
     return await fetch_live_gold_price()
 
-# --- Auth ---
-@api_router.post("/auth/login")
-async def login(req: LoginRequest, request: Request):
-    # v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- rate-limited by both
-    # IP and the targeted email, so an attacker can't dodge the IP limit by
-    # spraying many emails from one address, nor dodge the email limit by
-    # rotating IPs against one known admin account.
-    ip = _client_ip(request)
-    _rate_limit(f"admin_login_ip:{ip}", max_requests=10, window_seconds=300)
-    _rate_limit(f"admin_login_email:{req.email.lower()}", max_requests=5, window_seconds=300)
-    user = await db.users.find_one({"email": req.email.lower()})
-    if not user or not verify_password(req.password, user["password_hash"]):
-        await db.login_audit_log.insert_one({
-            "id": str(uuid.uuid4()), "email": req.email.lower(), "ip": ip, "ok": False,
-            "role": "admin", "ts": datetime.now(timezone.utc),
-        })
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    await db.login_audit_log.insert_one({
-        "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": True,
-        "role": "admin", "ts": datetime.now(timezone.utc),
-    })
+# --- Admin MFA/TOTP (v6.25.3 owner directive 2026-07-17, Phase 6 P0) ------
+# RFC 6238 TOTP, implemented with stdlib hmac/hashlib/base64/struct only --
+# deliberately NOT a new pip dependency (pyotp etc.), for the same reason
+# OneSignal replaced the self-hosted push system earlier this phase: a new
+# package declared in requirements.txt but never actually installed in the
+# deployed environment is exactly what caused a real production outage
+# earlier in this project. This is ~20 lines of well-specified, easily
+# tested math -- not worth that risk.
+def _generate_totp_secret() -> str:
+    import base64 as _b64
+    return _b64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+def _totp_code(secret_b32: str, for_time: float, period: int = 30, digits: int = 6) -> str:
+    import base64 as _b64, struct as _struct
+    key = _b64.b32decode(secret_b32 + "=" * ((8 - len(secret_b32) % 8) % 8), casefold=True)
+    counter = int(for_time // period)
+    msg = _struct.pack(">Q", counter)
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    truncated = _struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
+    return str(truncated % (10 ** digits)).zfill(digits)
+
+def _verify_totp(secret_b32: str, code: str, window: int = 1, period: int = 30) -> bool:
+    code = (code or "").strip()
+    if not code.isdigit():
+        return False
+    now = time.time()
+    return any(
+        hmac.compare_digest(_totp_code(secret_b32, now + offset * period, period), code)
+        for offset in range(-window, window + 1)
+    )
+
+def _admin_mfa_pending_token(email: str) -> str:
+    # Keyed by email, not _id -- matches get_current_admin's own lookup
+    # (db.users.find_one({"email": ...})), and avoids needing to parse a
+    # stringified ObjectId back out of the JWT.
+    return jwt.encode(
+        {"email": email, "type": "admin_mfa_pending",
+         "exp": datetime.now(timezone.utc) + timedelta(minutes=5)},
+        JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def _issue_admin_session(user: dict) -> JSONResponse:
     token = create_access_token(str(user["_id"]), user["email"])
     response = JSONResponse(content={"email": user["email"], "name": user.get("name","Admin"), "role": user.get("role","admin"), "token": token})
     # v6.5.0 (audit bug #9): secure=False meant the admin session cookie could
@@ -675,6 +696,121 @@ async def login(req: LoginRequest, request: Request):
                         secure=os.environ.get('COOKIE_SECURE', 'true').lower() != 'false',
                         samesite="strict", max_age=86400, path="/")
     return response
+
+# --- Auth ---
+@api_router.post("/auth/login")
+async def login(req: LoginRequest, request: Request):
+    # v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- rate-limited by both
+    # IP and the targeted email, so an attacker can't dodge the IP limit by
+    # spraying many emails from one address, nor dodge the email limit by
+    # rotating IPs against one known admin account.
+    ip = _client_ip(request)
+    _rate_limit(f"admin_login_ip:{ip}", max_requests=10, window_seconds=300)
+    _rate_limit(f"admin_login_email:{req.email.lower()}", max_requests=5, window_seconds=300)
+    user = await db.users.find_one({"email": req.email.lower()})
+    if not user or not verify_password(req.password, user["password_hash"]):
+        await db.login_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "email": req.email.lower(), "ip": ip, "ok": False,
+            "role": "admin", "ts": datetime.now(timezone.utc),
+        })
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if user.get("mfa_enabled"):
+        # Password correct, but the session isn't issued until the TOTP
+        # code is also verified via /auth/login/mfa -- audit-logged as a
+        # distinct "password_ok_awaiting_mfa" entry, not a full success.
+        await db.login_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": False,
+            "role": "admin", "ts": datetime.now(timezone.utc), "stage": "password_ok_awaiting_mfa",
+        })
+        return {"mfa_required": True, "mfa_token": _admin_mfa_pending_token(user["email"])}
+    await db.login_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": True,
+        "role": "admin", "ts": datetime.now(timezone.utc),
+    })
+    return _issue_admin_session(user)
+
+class AdminMfaLoginReq(BaseModel):
+    mfa_token: str
+    code: str
+
+@api_router.post("/auth/login/mfa")
+async def login_mfa(req: AdminMfaLoginReq, request: Request):
+    ip = _client_ip(request)
+    _rate_limit(f"admin_mfa_ip:{ip}", max_requests=10, window_seconds=300)
+    try:
+        payload = jwt.decode(req.mfa_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="MFA session expired. Log in again.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid MFA session.")
+    if payload.get("type") != "admin_mfa_pending":
+        raise HTTPException(status_code=401, detail="Invalid MFA session.")
+    user = await db.users.find_one({"email": payload.get("email")})
+    if not user or not user.get("mfa_enabled") or not user.get("mfa_secret_enc"):
+        raise HTTPException(status_code=401, detail="MFA is not active on this account.")
+    _rate_limit(f"admin_mfa_email:{user['email']}", max_requests=8, window_seconds=300)
+    secret = _cloud_decrypt(user["mfa_secret_enc"])
+    if not secret or not _verify_totp(secret, req.code):
+        await db.login_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": False,
+            "role": "admin", "ts": datetime.now(timezone.utc), "stage": "mfa_code_rejected",
+        })
+        raise HTTPException(status_code=401, detail="Incorrect code.")
+    await db.login_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": True,
+        "role": "admin", "ts": datetime.now(timezone.utc), "stage": "mfa_verified",
+    })
+    return _issue_admin_session(user)
+
+class AdminMfaEnableReq(BaseModel):
+    code: str
+
+class AdminMfaDisableReq(BaseModel):
+    password: str
+    code: str
+
+@api_router.post("/auth/mfa/setup")
+async def admin_mfa_setup(admin: dict = Depends(get_current_admin)):
+    """Generates a NEW pending secret every call (not yet enabled) -- lets
+    the admin re-scan if a previous setup attempt was abandoned, without
+    ever activating a secret the admin never confirmed possession of."""
+    secret = _generate_totp_secret()
+    await db.users.update_one({"email": admin["email"]},
+                               {"$set": {"mfa_pending_secret_enc": _cloud_encrypt(secret)}})
+    issuer = "XauAISniperAdmin"
+    label = admin.get("email", "admin")
+    otpauth_uri = f"otpauth://totp/{issuer}:{label}?secret={secret}&issuer={issuer}&algorithm=SHA1&digits=6&period=30"
+    return {"secret": secret, "otpauth_uri": otpauth_uri}
+
+@api_router.post("/auth/mfa/enable")
+async def admin_mfa_enable(req: AdminMfaEnableReq, admin: dict = Depends(get_current_admin)):
+    # get_current_admin projects _id/password_hash out but not other
+    # fields -- mfa_pending_secret_enc is present on `admin` if set.
+    pending = admin.get("mfa_pending_secret_enc")
+    if not pending:
+        raise HTTPException(status_code=400, detail="No MFA setup in progress. Call /auth/mfa/setup first.")
+    secret = _cloud_decrypt(pending)
+    if not secret or not _verify_totp(secret, req.code):
+        raise HTTPException(status_code=400, detail="Incorrect code. Scan the QR code again and try the current 6-digit code.")
+    await db.users.update_one(
+        {"email": admin["email"]},
+        {"$set": {"mfa_enabled": True, "mfa_secret_enc": pending}, "$unset": {"mfa_pending_secret_enc": ""}})
+    return {"ok": True, "message": "MFA enabled."}
+
+@api_router.post("/auth/mfa/disable")
+async def admin_mfa_disable(req: AdminMfaDisableReq, admin: dict = Depends(get_current_admin)):
+    # get_current_admin strips password_hash from its projection, so
+    # re-fetch the full document here rather than trusting a stripped copy.
+    full = await db.users.find_one({"email": admin["email"]})
+    if not full or not verify_password(req.password, full.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    secret = _cloud_decrypt(full.get("mfa_secret_enc", ""))
+    if not full.get("mfa_enabled") or not secret or not _verify_totp(secret, req.code):
+        raise HTTPException(status_code=400, detail="Incorrect code.")
+    await db.users.update_one(
+        {"email": admin["email"]},
+        {"$set": {"mfa_enabled": False}, "$unset": {"mfa_secret_enc": "", "mfa_pending_secret_enc": ""}})
+    return {"ok": True, "message": "MFA disabled."}
 
 @api_router.get("/auth/me")
 async def auth_me(admin: dict = Depends(get_current_admin)):
