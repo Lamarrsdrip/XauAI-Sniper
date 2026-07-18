@@ -34,6 +34,7 @@ REGIMES = {
 RUN_START = datetime(2026, 4, 19)
 RECENT_START = datetime(2026, 6, 18)
 RUN_END = datetime(2026, 7, 18)
+ACTIVE_WINDOW_DAYS = 90
 TS_RE = re.compile(r"(?P<ts>2026\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})\s+(?P<body>.*)$")
 ENTRY_RE = re.compile(r"R_EXIT_ENTRY_CAPTURE_CONFIRMED .*?positionId=(\d+)")
 TIMING_RE = re.compile(r"TIMING_PROOF: .*?thesisId=(\d+) .*?sourcePath=([A-Z_]+)")
@@ -102,7 +103,10 @@ def scan_journal(path: Path) -> tuple[dict[str, dict], dict[str, dict[int, dict]
             elif "R_EXIT_ENTRY_CAPTURE_CONFIRMED" in body:
                 m = ENTRY_RE.search(body)
                 if m and m.group(1) not in entry_times:
-                    entry_times[m.group(1)] = log_ts
+                    position_id = m.group(1)
+                    entry_times[position_id] = log_ts
+                    details = dict(re.findall(r"([A-Za-z][A-Za-z0-9_]*)=([^\s]+)", body))
+                    source_paths[f"__lots__{position_id}"] = details.get("lots", "")
             elif "TIMING_PROOF:" in body:
                 m = TIMING_RE.search(body)
                 if m:
@@ -111,12 +115,20 @@ def scan_journal(path: Path) -> tuple[dict[str, dict], dict[str, dict[int, dict]
 
 
 def period_names(close_dt: datetime) -> list[str]:
+    if ACTIVE_WINDOW_DAYS == 30:
+        return ["FULL_30_DAYS"] if RECENT_START <= close_dt < RUN_END else []
     names = ["FULL_90_DAYS"]
     if RUN_START <= close_dt < RECENT_START:
         names.append("FIRST_60_DAYS")
     elif RECENT_START <= close_dt < RUN_END:
         names.append("LATEST_30_DAYS")
     return names
+
+
+def report_periods() -> tuple[str, ...]:
+    if ACTIVE_WINDOW_DAYS == 30:
+        return ("FULL_30_DAYS",)
+    return ("FIRST_60_DAYS", "LATEST_30_DAYS", "FULL_90_DAYS")
 
 
 def build_rows(starts: dict[str, dict], checkpoints: dict[str, dict[int, dict]],
@@ -129,6 +141,8 @@ def build_rows(starts: dict[str, dict], checkpoints: dict[str, dict[int, dict]],
         if source_path == "REENTRY" and leg_role == "CORE":
             leg_role = "RE_ENTRY"
         regime_value = int(start.get("entryRegime", "-1"))
+        trade_label = start.get("trade", "")
+        grade_match = re.search(r"\[([A-Z]+\+?)\]", trade_label)
         row: dict = {
             "position_id": position_id,
             "campaign_id": start.get("campaignId", ""),
@@ -138,13 +152,21 @@ def build_rows(starts: dict[str, dict], checkpoints: dict[str, dict[int, dict]],
             "entry_time": entry_times.get(position_id, ""),
             "entry_regime": REGIMES.get(regime_value, f"UNKNOWN_{regime_value}"),
             "frozen_owner_exit_profile": start.get("ownerExitProfile", ""),
+            "trade_grade": grade_match.group(1) if grade_match else "DATA_UNAVAILABLE",
+            "trade_grade_source": "EXIT_TRADE_LABEL" if grade_match else "PENDING_CAMPAIGN_INHERITANCE",
+            "trade_label": trade_label,
+            "volume_lots": as_float(source_paths.get(f"__lots__{position_id}")),
             "entry_price": as_float(start.get("entryPrice")),
+            "broker_tp_at_entry": "NOT_CAPTURED_IN_FORENSIC_ROW",
+            "analytical_tp_price": "NOT_CAPTURED_IN_FORENSIC_ROW",
             "original_sl": as_float(start.get("originalSL")),
             "risk_distance": as_float(start.get("riskDistance")),
             "risk_usd": as_float(start.get("riskUSD")),
             "exit_time": start.get("closeTime", ""),
             "exit_price": as_float(start.get("exitPrice")),
             "exit_authority": start.get("exitAuthority", ""),
+            "broker_sl_at_exit": as_float(start.get("sl")),
+            "exit_spread_points": as_float((start.get("spread", "") or "").split(" ", 1)[0]),
             "realized_profit_usd": as_float(start.get("realizedProfitUSD")),
             "realized_r_at_exit": as_float(start.get("realizedR")),
             "peak_r_while_open": as_float(start.get("peakRWhileOpen")),
@@ -162,6 +184,17 @@ def build_rows(starts: dict[str, dict], checkpoints: dict[str, dict[int, dict]],
             row[f"observed_through{suffix}"] = cp.get("observedThrough", "")
         row["clean_continuation_or_immediate_reversal"] = row["path_classification_60m"]
         rows.append(row)
+
+    campaign_grades: dict[str, str] = {}
+    for row in rows:
+        if row["trade_grade"] != "DATA_UNAVAILABLE":
+            campaign_grades.setdefault(row["campaign_id"], row["trade_grade"])
+    for row in rows:
+        if row["trade_grade"] == "DATA_UNAVAILABLE" and row["campaign_id"] in campaign_grades:
+            row["trade_grade"] = campaign_grades[row["campaign_id"]]
+            row["trade_grade_source"] = "INHERITED_FROM_CAMPAIGN_EXECUTION_LABEL"
+        elif row["trade_grade"] == "DATA_UNAVAILABLE":
+            row["trade_grade_source"] = "DATA_UNAVAILABLE"
     rows.sort(key=lambda r: (r["exit_time"], int(r["position_id"])))
     return rows
 
@@ -208,7 +241,7 @@ def summarize_group(rows: list[dict], period: str, dimension: str, value: str) -
 def dimension_summaries(rows: list[dict], dimension: str) -> list[dict]:
     values = sorted({str(r.get(dimension, "")) for r in rows})
     return [summarize_group(rows, period, dimension, value)
-            for period in ("FIRST_60_DAYS", "LATEST_30_DAYS", "FULL_90_DAYS")
+            for period in report_periods()
             for value in values]
 
 
@@ -216,7 +249,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
         raise RuntimeError(f"refusing to write empty report: {path}")
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -230,14 +263,24 @@ def markdown_table(rows: list[dict], columns: list[str]) -> list[str]:
 
 def write_summary(path: Path, rows: list[dict]) -> None:
     overall = [summarize_group(rows, p, "all", "ALL")
-               for p in ("FIRST_60_DAYS", "LATEST_30_DAYS", "FULL_90_DAYS")]
+               for p in report_periods()]
+    if ACTIVE_WINDOW_DAYS == 30:
+        title = "# 30-Day Post-Exit 5/10/15/20/30/60-Minute Summary"
+        window_lines = [
+            "- Exact replay window: 2026-06-18 00:00 through 2026-07-18 00:00 (30 days).",
+        ]
+    else:
+        title = "# 90-Day Post-Exit 5/10/15/20/30/60-Minute Summary"
+        window_lines = [
+            "- Exact replay window: 2026-04-19 00:00 through 2026-07-18 00:00 (90 days).",
+            "- First 60 days: 2026-04-19 through 2026-06-18; latest 30 days: 2026-06-18 through 2026-07-18.",
+        ]
     lines = [
-        "# 90-Day Post-Exit 5/10/15/20/30/60-Minute Summary",
+        title,
         "",
         "## Method",
         "",
-        "- Exact replay window: 2026-04-19 00:00 through 2026-07-18 00:00 (90 days).",
-        "- First 60 days: 2026-04-19 through 2026-06-18; latest 30 days: 2026-06-18 through 2026-07-18.",
+        *window_lines,
         "- Every broker-confirmed full close is anchored to its immutable original entry/SL/R state.",
         "- BUY post-exit chronology uses executable Bid; SELL uses executable Ask.",
         "- `missed_r` is the maximum additional favorable price movement after the actual exit divided by original risk distance.",
@@ -276,11 +319,14 @@ def write_summary(path: Path, rows: list[dict]) -> None:
 
 
 def main() -> None:
+    global ACTIVE_WINDOW_DAYS
     parser = argparse.ArgumentParser()
     parser.add_argument("--journal", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--prefix", default="90DAY")
+    parser.add_argument("--window-days", choices=(30, 90), default=90, type=int)
     args = parser.parse_args()
+    ACTIVE_WINDOW_DAYS = args.window_days
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     starts, checkpoints, entry_times, source_paths = scan_journal(args.journal)
