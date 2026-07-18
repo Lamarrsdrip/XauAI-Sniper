@@ -8,7 +8,7 @@ BACKEND = (ROOT / "backend/ea_code/XAUUSD_AI_Sniper_EA.mq5").read_text(encoding=
 
 
 def owner_floor(profile: str, peak: float, previous: float = 0.0) -> float:
-    if profile == "TREND_UP":
+    if profile == "BREAKOUT":
         required = 0.0 if peak < 0.50 else (0.40 if peak < 0.70 else max(0.40, peak * 0.70))
     else:
         required = 0.0 if peak < 0.40 else (0.30 if peak < 0.50 else max(0.30, peak * 0.70))
@@ -28,19 +28,21 @@ def test_canonical_and_backend_sources_match():
     assert EA == BACKEND
 
 
-def test_release_identity_is_v62511():
-    assert '#define XAUAI_EA_VERSION "v6.25.11"' in EA
-    assert '#define XAUAI_EA_VERSION_NUM "6.25.11"' in EA
-    assert '#property version   "6.261"' in EA
+def test_release_identity_is_v62512():
+    assert '#define XAUAI_EA_VERSION "v6.25.12"' in EA
+    assert '#define XAUAI_EA_VERSION_NUM "6.25.12"' in EA
+    assert '#property version   "6.262"' in EA
 
 
-def test_profile_assignment_is_trend_up_only_and_truthfully_named():
+def test_profile_assignment_is_breakout_only_and_truthfully_named():
     fn = ea_section(
         "ENUM_XAU_OWNER_EXIT_PROFILE XAU_OwnerExitProfileForEntryRegime",
         "XAU_CampaignState g_campaign",
     )
-    assert "entryRegime == REGIME_TRENDING_UP ? OWNER_EXIT_TREND_UP : OWNER_EXIT_GENERAL" in fn
-    assert 'return profile == OWNER_EXIT_TREND_UP ? "TREND_UP" : "GENERAL";' in EA
+    assert "entryRegime == REGIME_BREAKOUT_UP || entryRegime == REGIME_BREAKOUT_DOWN" in fn
+    assert "? OWNER_EXIT_BREAKOUT : OWNER_EXIT_GENERAL" in fn
+    assert 'return profile == OWNER_EXIT_BREAKOUT ? "BREAKOUT" : "GENERAL";' in EA
+    assert "OWNER_EXIT_TREND_UP" not in EA
     assert "TREND_DN_SPECIAL" not in EA
     assert "TREND_UP_SPECIAL" not in EA
 
@@ -65,13 +67,20 @@ def test_general_floor_boundaries_and_monotonic_ratchet():
     assert owner_floor("GENERAL", 0.45, previous=0.56) == 0.56
 
 
-def test_trend_up_floor_boundaries_and_monotonic_ratchet():
-    assert owner_floor("TREND_UP", 0.49) == 0.0
-    assert owner_floor("TREND_UP", 0.50) == 0.40
-    assert owner_floor("TREND_UP", 0.69) == 0.40
-    assert abs(owner_floor("TREND_UP", 0.70) - 0.49) < 1e-12
-    assert abs(owner_floor("TREND_UP", 1.00) - 0.70) < 1e-12
-    assert owner_floor("TREND_UP", 0.60, previous=0.70) == 0.70
+def test_trend_up_and_trend_dn_use_general_floor_boundaries():
+    for profile in ("TREND_UP", "TREND_DN"):
+        assert owner_floor(profile, 0.39) == 0.0
+        assert owner_floor(profile, 0.40) == 0.30
+        assert abs(owner_floor(profile, 0.50) - 0.35) < 1e-12
+
+
+def test_breakout_floor_boundaries_and_monotonic_ratchet():
+    assert owner_floor("BREAKOUT", 0.49) == 0.0
+    assert owner_floor("BREAKOUT", 0.50) == 0.40
+    assert owner_floor("BREAKOUT", 0.69) == 0.40
+    assert abs(owner_floor("BREAKOUT", 0.70) - 0.49) < 1e-12
+    assert abs(owner_floor("BREAKOUT", 1.00) - 0.70) < 1e-12
+    assert owner_floor("BREAKOUT", 0.60, previous=0.70) == 0.70
 
 
 def test_one_owner_floor_calculation_is_shared_by_individual_and_basket():
@@ -108,8 +117,8 @@ def test_full_structural_one_r_replaces_universal_point_75_cap():
 def test_restart_schema_fallbacks_preserve_full_original_risk():
     assert "ownerEffectiveRiskUSD = schema >= 3 ? FileReadNumber(h) : coreMoneyRisk;" in EA
     assert "effectiveInitialRisk = schema >= 3 ? FileReadNumber(h) : origRisk;" in EA
-    assert "#define XAU_BASKET_STATE_SCHEMA_VERSION 5" in EA
-    assert "#define R_EXIT_STATE_SCHEMA_VERSION 4" in EA
+    assert "#define XAU_BASKET_STATE_SCHEMA_VERSION 6" in EA
+    assert "#define R_EXIT_STATE_SCHEMA_VERSION 5" in EA
     assert "OWNER_EXIT_PROFILE_LEGACY_MIGRATED" in EA
 
 
@@ -166,7 +175,7 @@ def test_risk_reconciliation_is_binary_for_core_reentry_and_pyramid():
 
 def test_required_policy_logs_are_present_and_state_change_scoped():
     assert "OWNER_EXIT_PROFILE | profile=GENERAL | first_trigger_r=0.40 | first_floor_r=0.30 | adaptive_trigger_r=0.50 | adaptive_lock_pct=70" in EA
-    assert "OWNER_EXIT_PROFILE | profile=TREND_UP | first_trigger_r=0.50 | first_floor_r=0.40 | adaptive_trigger_r=0.70 | adaptive_lock_pct=70" in EA
+    assert "OWNER_EXIT_PROFILE | profile=BREAKOUT | first_trigger_r=0.50 | first_floor_r=0.40 | adaptive_trigger_r=0.70 | adaptive_lock_pct=70" in EA
     assert "OWNER_FLOOR_UPDATE | profile=%s | peak_r=%.3f | previous_floor_r=%.3f | new_floor_r=%.3f | reason=%s" in EA
     assert "OWNER_BREAKOUT_EXECUTION_POLICY | mode=%s | regime=%s" in EA
     assert "OWNER_RISK_POLICY | structural_sl_r=1.00" in EA

@@ -57,11 +57,11 @@ def test_pyramid_leg_still_inherits_only_frozen_profile():
     pyramid = body_between(ea, "void CheckPyramidOpportunity()", "//+------------------------------------------------------------------+\n//| TICK")
     assert "int inheritedProfile=g_campaign[XAU_CampaignSlot(dir)].ownerExitProfile;" in pyramid
     assert "OWNER_R_EXIT_FLOOR_INHERITED" not in pyramid
-    assert ".guaranteedFloorR" not in pyramid
+    assert ".guaranteedFloorR =" not in pyramid
 
 
 def test_basket_schema_remains_backward_readable_for_migration():
     ea = read(EA)
-    assert "#define XAU_BASKET_STATE_SCHEMA_VERSION 5" in ea
+    assert "#define XAU_BASKET_STATE_SCHEMA_VERSION 6" in ea
     assert "bool     basketConversionPending;" in ea
     assert "int      basketConversionRetryCount;" in ea

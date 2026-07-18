@@ -5,15 +5,17 @@ from scripts.owner_r_exit_policy_harness import (
     BREAKOUT_BLOCK,
     BREAKOUT_INVERSE,
     BREAKOUT_NORMAL,
+    BREAKOUT,
     GENERAL,
     OWNER_CLOSE,
     OWNER_GIVEBACK_45,
     OWNER_RUNNER_FAILED,
     OWNER_TP_1R,
-    TREND_UP,
     OwnerState,
+    exit_profile_for_regime,
     execution_direction,
     required_floor,
+    strict_pyramid_gate,
 )
 
 
@@ -42,14 +44,18 @@ def test_general_adaptive_floor_and_monotonic_pullback():
     assert not state.close_allowed(0.559, OWNER_CLOSE)
 
 
-def test_trend_up_pretrigger_and_legacy_close_are_rejected():
-    state = OwnerState(TREND_UP)
-    assert state.observe(0.49) == 0.0
-    assert not state.close_allowed(0.30, "SMART_EXIT")
+def test_trend_up_and_trend_dn_use_general_profile():
+    for regime in ("TREND_UP", "TREND_DN"):
+        profile = exit_profile_for_regime(regime)
+        state = OwnerState(profile)
+        assert profile == GENERAL
+        assert state.observe(0.39) == 0.0
+        assert state.observe(0.40) == 0.30
+        assert abs(state.observe(0.50) - 0.35) < 1e-12
 
 
-def test_trend_up_first_floor_and_adaptive_floor():
-    state = OwnerState(TREND_UP)
+def test_breakout_first_floor_and_adaptive_floor():
+    state = OwnerState(BREAKOUT)
     assert state.observe(0.50) == 0.40
     assert not state.close_allowed(0.399, OWNER_CLOSE)
     assert abs(state.observe(1.00) - 0.70) < 1e-12
@@ -66,11 +72,11 @@ def test_restart_round_trip_preserves_peak_floor_and_profile():
 
 
 def test_pyramid_and_reentry_inherit_profile_without_foreign_leg_geometry():
-    core = OwnerState(TREND_UP)
+    core = OwnerState(BREAKOUT)
     core.observe(1.00)
     pyramid = core.inherited_leg()
     reentry = core.inherited_leg()
-    assert pyramid.profile == reentry.profile == TREND_UP
+    assert pyramid.profile == reentry.profile == BREAKOUT
     assert pyramid.peak_r == reentry.peak_r == 0.0
     assert pyramid.floor_r == reentry.floor_r == 0.0
 
@@ -96,11 +102,11 @@ def test_floor_boundary_examples_match_owner_policy():
     assert required_floor(0.49, GENERAL) == 0.30
     assert required_floor(0.50, GENERAL) == 0.35
     assert abs(required_floor(0.80, GENERAL) - 0.56) < 1e-12
-    assert required_floor(0.49, TREND_UP) == 0.0
-    assert required_floor(0.50, TREND_UP) == 0.40
-    assert required_floor(0.69, TREND_UP) == 0.40
-    assert abs(required_floor(0.70, TREND_UP) - 0.49) < 1e-12
-    assert required_floor(1.00, TREND_UP) == 0.70
+    assert required_floor(0.49, BREAKOUT) == 0.0
+    assert required_floor(0.50, BREAKOUT) == 0.40
+    assert required_floor(0.69, BREAKOUT) == 0.40
+    assert abs(required_floor(0.70, BREAKOUT) - 0.49) < 1e-12
+    assert required_floor(1.00, BREAKOUT) == 0.70
 
 
 def test_only_one_raw_market_close_and_no_raw_partial_close():
@@ -148,6 +154,8 @@ def test_full_1r_core_has_no_broker_tp_pyramid_tp_restored_and_margin_buffer_pre
     assert 'trade.Sell(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)' in EA
     assert "FreeMargin()*0.50" in EA.replace(" ", "")
     assert "marginNeeded>accInfo.FreeMargin()" in EA.replace(" ", "")
+    assert "PYRAMID_GATE_REJECT | reason=" in EA
+    assert "PYRAMID_GATE_APPROVED | core_floor_confirmed=true | direction_ok=true | timing_ok=true | structure_ok=true | pressure_ok=true | margin_ok=true" in EA
 
 
 def test_strategy_tester_executes_embedded_owner_policy_self_tests():
@@ -195,6 +203,42 @@ def test_breakout_inversion_precedes_price_sl_risk_margin_and_order_geometry():
         assert mapping < open_trade.index(marker), marker
 
 
+def test_breakout_profile_is_only_for_breakout_regimes():
+    assert exit_profile_for_regime("BRKT_UP") == BREAKOUT
+    assert exit_profile_for_regime("BRKT_DN") == BREAKOUT
+    for regime in ("TREND_UP", "TREND_DN", "CHOPPY", "RANGING"):
+        assert exit_profile_for_regime(regime) == GENERAL
+
+
+def test_strict_pyramid_gate_rejects_each_required_condition_and_approves_all_pass():
+    base = dict(
+        core_floor_confirmed=True,
+        direction_ok=True,
+        opposite_direction_present=False,
+        structure_ok=True,
+        pressure_ok=True,
+        timing_ok=True,
+        exhaustion_ok=True,
+        margin_ok=True,
+    )
+    assert strict_pyramid_gate(**base) == (True, "PYRAMID_GATE_APPROVED")
+    for field, expected_reason, value in (
+        ("core_floor_confirmed", "CORE_FLOOR_NOT_CONFIRMED", False),
+        ("direction_ok", "DIRECTION_NOT_CURRENTLY_APPROVED", False),
+        ("opposite_direction_present", "OPPOSITE_DIRECTION_FORMING_OR_CONFIRMED", True),
+        ("structure_ok", "STRUCTURE_OPPOSES", False),
+        ("pressure_ok", "PRESSURE_OPPOSES", False),
+        ("timing_ok", "TIMING_OR_LOCATION_LATE_CHASE", False),
+        ("exhaustion_ok", "EXHAUSTION_HIGH_OR_EXTREME", False),
+        ("margin_ok", "MARGIN_50_PERCENT_BUFFER", False),
+    ):
+        case = dict(base)
+        case[field] = value
+        approved, reason = strict_pyramid_gate(**case)
+        assert not approved
+        assert reason == expected_reason
+
+
 def test_inverse_geometry_uses_execution_side_not_original_signal_side():
     original_buy = 1
     execution_sell = execution_direction(original_buy, "BRKT_UP", BREAKOUT_INVERSE)
@@ -212,7 +256,7 @@ def test_breakout_campaign_persists_original_and_execution_direction():
     assert "OWNER_EXIT_PROFILE_INHERITED" in EA
     assert "OWNER_R_EXIT_FLOOR_INHERITED" not in EA
     assert "INHERITED_FROM_CAMPAIGN" not in EA
-    assert "#define XAU_BASKET_STATE_SCHEMA_VERSION 5" in EA
+    assert "#define XAU_BASKET_STATE_SCHEMA_VERSION 6" in EA
 
 
 def test_basket_telemetry_cannot_contaminate_surviving_leg_floor():

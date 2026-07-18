@@ -1,4 +1,4 @@
-"""Executable deterministic mirror of the v6.25.9 owner R-exit policy.
+"""Executable deterministic mirror of the v6.25.12 owner R-exit policy.
 
 This harness is deliberately small: it models persisted peak/floor/profile
 state, restart round-trips, profile-only campaign inheritance, and the
@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 
 
 GENERAL = "GENERAL"
-TREND_UP = "TREND_UP"
+BREAKOUT = "BREAKOUT"
 OWNER_CLOSE = "OWNER_R_EXIT_FLOOR_BREACH"
 OWNER_TP_1R = "OWNER_R_EXIT_TP_1R"
 OWNER_GIVEBACK_45 = "OWNER_R_EXIT_GIVEBACK_45"
@@ -31,8 +31,12 @@ def execution_direction(approved_signal: int, regime: str, mode: str) -> int | N
     return approved_signal
 
 
+def exit_profile_for_regime(regime: str) -> str:
+    return BREAKOUT if regime in BREAKOUT_REGIMES else GENERAL
+
+
 def required_floor(peak_r: float, profile: str) -> float:
-    if profile == TREND_UP:
+    if profile == BREAKOUT:
         if peak_r < 0.50:
             return 0.0
         if peak_r < 0.70:
@@ -43,6 +47,33 @@ def required_floor(peak_r: float, profile: str) -> float:
     if peak_r < 0.50:
         return 0.30
     return max(0.30, peak_r * 0.70)
+
+
+def strict_pyramid_gate(
+    *,
+    core_floor_confirmed: bool,
+    direction_ok: bool,
+    opposite_direction_present: bool,
+    structure_ok: bool,
+    pressure_ok: bool,
+    timing_ok: bool,
+    exhaustion_ok: bool,
+    margin_ok: bool,
+) -> tuple[bool, str]:
+    checks = (
+        (core_floor_confirmed, "CORE_FLOOR_NOT_CONFIRMED"),
+        (direction_ok, "DIRECTION_NOT_CURRENTLY_APPROVED"),
+        (not opposite_direction_present, "OPPOSITE_DIRECTION_FORMING_OR_CONFIRMED"),
+        (structure_ok, "STRUCTURE_OPPOSES"),
+        (pressure_ok, "PRESSURE_OPPOSES"),
+        (timing_ok, "TIMING_OR_LOCATION_LATE_CHASE"),
+        (exhaustion_ok, "EXHAUSTION_HIGH_OR_EXTREME"),
+        (margin_ok, "MARGIN_50_PERCENT_BUFFER"),
+    )
+    for passed, reason in checks:
+        if not passed:
+            return False, reason
+    return True, "PYRAMID_GATE_APPROVED"
 
 
 @dataclass
