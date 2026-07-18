@@ -156,6 +156,35 @@ def test_inverse_is_one_final_normal_execution_mapping_not_counter_path():
     assert "trade.SetExpertMagicNumber(InpCounterExcursionMagicNumber)" not in open_trade
 
 
+def test_breakout_inversion_precedes_price_sl_risk_margin_and_order_geometry():
+    open_trade = EA[EA.index("bool OpenTrade("):EA.index("void LogExit(")]
+    mapping = open_trade.index("signal=executionDirection;")
+    ordered_geometry_markers = (
+        "double price, sl, tp, slDist;",
+        "price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);",
+        "price = SymbolInfoDouble(Symbol(), SYMBOL_BID);",
+        "XAU_ComputeStructuralSL(signal",
+        "XAU_ComputeFinalRiskGeometry(rawSLDistance)",
+        "RiskPerLotForDistance(slDist)",
+        "OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL",
+        "trade.Buy(lots, Symbol(), 0, sl, 0.0",
+        "trade.Sell(lots, Symbol(), 0, sl, 0.0",
+    )
+    for marker in ordered_geometry_markers:
+        assert mapping < open_trade.index(marker), marker
+
+
+def test_inverse_geometry_uses_execution_side_not_original_signal_side():
+    original_buy = 1
+    execution_sell = execution_direction(original_buy, "BRKT_UP", BREAKOUT_INVERSE)
+    assert execution_sell == -1
+    bid, ask, structural_distance = 4000.0, 4000.2, 20.0
+    execution_entry = ask if execution_sell == 1 else bid
+    structural_sl = execution_entry - structural_distance if execution_sell == 1 else execution_entry + structural_distance
+    assert execution_entry == bid
+    assert structural_sl == 4020.0
+
+
 def test_breakout_campaign_persists_original_and_execution_direction():
     assert "ownerOriginalSignalDirection" in EA
     assert "ownerBreakoutInversionApplied" in EA
