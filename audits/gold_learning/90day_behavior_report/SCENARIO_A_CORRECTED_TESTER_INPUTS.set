@@ -1,0 +1,6 @@
+; Mandatory explicit overrides for the next clean Scenario A replay.
+; All omitted inputs remain at the compiled v6.25.8 defaults.
+InpDecisionMode=1
+InpForensicPostExitTelemetry=true
+InpCounterExcursionMode=0
+InpBotMonitorEnable=false

@@ -2432,6 +2432,7 @@ input double InpTradeBrainMinPF            = 0.75;  // Below this profit factor,
 input double InpTradeBrainBadDDProfitRatio = 2.50;  // Avg worst DD worse than this × avg profit = poor entry quality
 input double InpTradeBrainWeakLotMulti     = 0.45;  // Lot multiplier for weak-but-not-blocked repeated patterns
 input bool   InpTradeBrainMonitorAfterExit = true;  // After close, keep watching to learn whether exit was early, late, or correct
+input bool   InpForensicPostExitTelemetry  = false; // Research-only: exact executable-tick 5/10/15/20/30/60m post-exit evidence; never read by trading decisions
 input double InpMemoryAPlusHTFMinLotMulti  = 0.85;  // Broad aggregate memory cannot crush A/A+ HTF-consensus setups below this
 input int    InpMemoryExactEvidenceMinSamples = 12; // Need exact TradeBrain evidence before broad memory can fully reduce A/A+
 input double InpLotStepMaxRiskOvershootPct = 0.0;   // RETIRED: production volume normalization is floor-only; upward rounding may never exceed configured risk
@@ -4575,6 +4576,56 @@ struct TradeBrainClosedWatch
    TradeBrainOpen rec;
 };
 TradeBrainClosedWatch g_brainClosedWatch[];
+
+// v6.25.8 90-day owner forensic replay -- passive, tester-selectable
+// executable-tick telemetry. This state is deliberately separate from
+// g_brainClosedWatch because that production learning pipeline uses midpoint
+// prices and mutates exit-learning bias at its checkpoints. Nothing in the
+// entry, sizing, risk, or exit paths reads this array.
+struct XAU_ForensicPostExitWatch
+{
+   ulong    positionId;
+   datetime closeTime;
+   int      direction;
+   long     campaignId;
+   string   legRole;
+   int      entryRegime;
+   int      ownerExitProfile;
+   double   entryPrice;
+   double   originalSL;
+   double   riskDistance;
+   double   riskUSD;
+   double   exitPrice;
+   double   realizedProfitUSD;
+   double   realizedR;
+   double   peakRWhileOpen;
+   string   exitAuthority;
+   double   maxFavorableMove;
+   double   maxAdverseMove;
+   bool     returnedToEntry;
+   bool     crossedOriginalSL;
+   datetime firstFavorable010RAt;
+   datetime firstAdverse010RAt;
+   datetime lastObservedAt;
+   int      nextCheckpointIndex;
+};
+XAU_ForensicPostExitWatch g_forensicPostExitWatch[];
+int g_forensicPostExitMinutes[] = {5, 10, 15, 20, 30, 60};
+
+// Stable passive copy of the authoritative R geometry. A synchronous close
+// can delete g_rExit before OnTradeTransaction runs, so the close hook reads
+// this recorder instead of depending on callback ordering.
+struct XAU_ForensicOpenSnapshot
+{
+   ulong  positionId;
+   double entryPrice;
+   double originalSL;
+   double riskDistance;
+   double riskUSD;
+   double peakR;
+   int    ownerExitProfile;
+};
+XAU_ForensicOpenSnapshot g_forensicOpenSnapshot[];
 
 // ======================================================================
 // v6.4.19 — TRADE THESIS MONITOR (TTM)
@@ -18033,6 +18084,7 @@ void OnTick()
    // smaller position in the same direction while signal holds.
    XAU_UpdateOpenTradeQuality();
    XAU_UpdateClosedTradeOutcomes();
+   XAU_UpdateForensicPostExitTelemetry();
    CheckPyramidOpportunity();
 
    // === THROTTLED DASHBOARD REFRESH (every 2s, keeps UI live between bars) ===
@@ -25008,6 +25060,7 @@ int XAU_RExit_EnsureIdx(ulong positionId, ulong currentTicket, bool isBuy, doubl
                   g_rExit[n].effectiveInitialRiskUSD,
                   XAU_OwnerExitProfileName((ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[n].ownerExitProfile), lots);
 
+   XAU_ForensicCaptureOpenRState(n);
    return n;
 }
 
@@ -26024,6 +26077,8 @@ void XAU_RExitCoreLoop()
       if(profit < g_rExit[idx].troughProfitUSD)
       { g_rExit[idx].troughProfitUSD = profit; g_rExit[idx].troughR = currentR; }
 
+      XAU_ForensicCaptureOpenRState(idx);
+
       for(int c = 0; c < 6; c++)
          if(!g_rExit[idx].rCheckpointHit[c] && currentR >= g_rCheckpointLevels[c])
          { g_rExit[idx].rCheckpointHit[c] = true; g_rExit[idx].rCheckpointProfitUSD[c] = profit; }
@@ -26087,7 +26142,14 @@ void XAU_RExitCoreLoop()
          {
             PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f peakR=%.3f givebackPct=%.1f action=CLOSE reason=R_EXIT_GIVEBACK_45",
                         ticket, dirStr, currentR, peakR, givebackPct);
-            XAU_RExit_RequestClose(idx, ticket, "R_EXIT_GIVEBACK_45");
+            bool givebackCloseConfirmed = XAU_RExit_RequestClose(idx, ticket, "R_EXIT_GIVEBACK_45");
+            // A synchronous broker-confirmed close removes this position's
+            // R-state inside XAU_RExit_RequestClose. Never dereference the
+            // now-stale array index; re-find by the stable position ID.
+            int givebackStateIdx = XAU_RExit_FindIdx(positionId);
+            if(givebackCloseConfirmed || givebackStateIdx < 0)
+               continue;
+            idx = givebackStateIdx;
             if(g_rExit[idx].closeState == R_CLOSE_REQUESTED || g_rExit[idx].closeState == R_CLOSE_PENDING_RETRY)
                continue;
          }
@@ -28755,6 +28817,16 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // If we treat partials as full closes, we double-count wins/losses, corrupt
    // streak/drawdown tracking, and PartialAlreadyTaken gets cleared → repeat fires.
    ulong posId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+   // Snapshot the authoritative persisted R state before the normal close
+   // cleanup removes it. These locals are consumed only by the passive
+   // forensic watcher after the broker-confirmed close is fully classified.
+   bool   forensicRiskSnapshotValid = false;
+   double forensicEntryPrice = 0.0;
+   double forensicOriginalSL = 0.0;
+   double forensicRiskDistance = 0.0;
+   double forensicRiskUSD = 0.0;
+   double forensicPeakR = 0.0;
+   int    forensicOwnerProfile = (int)OWNER_EXIT_GENERAL;
    bool stillOpen = false;
    if(posId > 0)
    {
@@ -28782,6 +28854,13 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       int rIdx = XAU_RExit_FindIdx(posId);
       if(rIdx >= 0)
       {
+         forensicRiskSnapshotValid = true;
+         forensicEntryPrice = g_rExit[rIdx].originalEntryPrice;
+         forensicOriginalSL = g_rExit[rIdx].originalStopLoss;
+         forensicRiskDistance = g_rExit[rIdx].originalStopDistance;
+         forensicRiskUSD = g_rExit[rIdx].cumulativeOriginalRiskUSD;
+         forensicPeakR = g_rExit[rIdx].peakR;
+         forensicOwnerProfile = g_rExit[rIdx].ownerExitProfile;
          if(!g_rExit[rIdx].finalTelemetryLogged)
          {
             ENUM_DEAL_REASON dReason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
@@ -28791,6 +28870,20 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          }
          XAU_RExit_Clear(posId);
          XAU_RExit_SaveState(true); // critical transition -- force immediate flush
+      }
+      else if(InpForensicPostExitTelemetry)
+      {
+         int forensicOpenIdx = XAU_ForensicOpenSnapshotFind(posId);
+         if(forensicOpenIdx >= 0)
+         {
+            forensicRiskSnapshotValid = true;
+            forensicEntryPrice = g_forensicOpenSnapshot[forensicOpenIdx].entryPrice;
+            forensicOriginalSL = g_forensicOpenSnapshot[forensicOpenIdx].originalSL;
+            forensicRiskDistance = g_forensicOpenSnapshot[forensicOpenIdx].riskDistance;
+            forensicRiskUSD = g_forensicOpenSnapshot[forensicOpenIdx].riskUSD;
+            forensicPeakR = g_forensicOpenSnapshot[forensicOpenIdx].peakR;
+            forensicOwnerProfile = g_forensicOpenSnapshot[forensicOpenIdx].ownerExitProfile;
+         }
       }
    }
 
@@ -28842,6 +28935,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    int closedDirection = (dType == DEAL_TYPE_SELL) ? 1 : -1;
    int closeSlot = XAU_CampaignSlot(closedDirection);
    long closingCampaignId = g_campaign[closeSlot].campaignId;
+   int forensicEntryRegime = g_campaign[closeSlot].ownerEntryRegime;
+   ulong forensicInitialCoreTicket = g_campaign[closeSlot].initialCoreTicket;
+   string forensicLegRole = (forensicInitialCoreTicket > 0 && posId != forensicInitialCoreTicket)
+                            ? "PYRAMID" : "CORE";
    bool campaignWasActiveBeforeClose = g_campaign[closeSlot].active;
    XAU_CampaignRegisterClose(closedDirection, profit);
    // v6.24.15 — entry-quality classification, computed once at the same
@@ -28867,6 +28964,26 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    bool wasSLHitExact = XAU_WasSLHitField(true, closeReasonExact);
    bool wasEAForcedClose = XAU_WasEAForcedCloseField(true, closeReasonExact, closedBy);
    lastExitReason = resolvedExitReason;
+   if(InpForensicPostExitTelemetry)
+   {
+      if(forensicRiskSnapshotValid)
+      {
+         datetime forensicCloseTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+         XAU_ForensicPostExitStart(posId, forensicCloseTime, closedDirection,
+                                  closingCampaignId, forensicLegRole,
+                                  forensicEntryRegime, forensicOwnerProfile,
+                                  forensicEntryPrice, forensicOriginalSL,
+                                  forensicRiskDistance, forensicRiskUSD,
+                                  dPrice, profit, forensicPeakR,
+                                  resolvedExitReason);
+         XAU_ForensicOpenSnapshotRemove(posId);
+      }
+      else
+      {
+         PrintFormat("FORENSIC_POST_EXIT_SKIPPED | positionId=%I64u | reason=MISSING_AUTHORITATIVE_R_STATE",
+                     posId);
+      }
+   }
    // v6.24.14 — universal five-minute post-trade cooldown starts exactly
    // once, at the moment the LAST position in a direction's campaign fully
    // closes (activePositionCount reaching 0 inside XAU_CampaignRegisterClose
@@ -31442,6 +31559,208 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
                    eventName == "POST_CLOSE" ? secondsNegative : 0,
                    0.0, 0.0, r.entryReason, exitReason,
                    CloudMapGet(r.posId), 0, true, outcome);
+}
+
+int XAU_ForensicOpenSnapshotFind(ulong positionId)
+{
+   for(int i = 0; i < ArraySize(g_forensicOpenSnapshot); i++)
+      if(g_forensicOpenSnapshot[i].positionId == positionId) return i;
+   return -1;
+}
+
+void XAU_ForensicCaptureOpenRState(int rExitIdx)
+{
+   if(!InpForensicPostExitTelemetry || rExitIdx < 0 || rExitIdx >= ArraySize(g_rExit)) return;
+   ulong positionId = g_rExit[rExitIdx].positionId;
+   if(positionId == 0) return;
+   int idx = XAU_ForensicOpenSnapshotFind(positionId);
+   if(idx < 0)
+   {
+      idx = ArraySize(g_forensicOpenSnapshot);
+      ArrayResize(g_forensicOpenSnapshot, idx + 1);
+      ZeroMemory(g_forensicOpenSnapshot[idx]);
+      g_forensicOpenSnapshot[idx].positionId = positionId;
+   }
+   g_forensicOpenSnapshot[idx].entryPrice = g_rExit[rExitIdx].originalEntryPrice;
+   g_forensicOpenSnapshot[idx].originalSL = g_rExit[rExitIdx].originalStopLoss;
+   g_forensicOpenSnapshot[idx].riskDistance = g_rExit[rExitIdx].originalStopDistance;
+   g_forensicOpenSnapshot[idx].riskUSD = g_rExit[rExitIdx].cumulativeOriginalRiskUSD;
+   g_forensicOpenSnapshot[idx].peakR = g_rExit[rExitIdx].peakR;
+   g_forensicOpenSnapshot[idx].ownerExitProfile = g_rExit[rExitIdx].ownerExitProfile;
+}
+
+void XAU_ForensicOpenSnapshotRemove(ulong positionId)
+{
+   int idx = XAU_ForensicOpenSnapshotFind(positionId);
+   int n = ArraySize(g_forensicOpenSnapshot);
+   if(idx < 0 || idx >= n) return;
+   for(int i = idx; i < n - 1; i++)
+      g_forensicOpenSnapshot[i] = g_forensicOpenSnapshot[i + 1];
+   ArrayResize(g_forensicOpenSnapshot, n - 1);
+}
+
+string XAU_ForensicPostExitClassification(XAU_ForensicPostExitWatch &w)
+{
+   if(w.firstFavorable010RAt > 0 &&
+      (w.firstAdverse010RAt == 0 || w.firstFavorable010RAt <= w.firstAdverse010RAt))
+      return "CLEAN_CONTINUATION";
+   if(w.firstAdverse010RAt > 0)
+      return "IMMEDIATE_REVERSAL";
+   return "NO_DECISIVE_0.10R_MOVE";
+}
+
+void XAU_ForensicPostExitEmitCheckpoint(int idx, int checkpointMin, datetime cutoffTime)
+{
+   if(idx < 0 || idx >= ArraySize(g_forensicPostExitWatch)) return;
+   XAU_ForensicPostExitWatch w = g_forensicPostExitWatch[idx];
+   double missedR = w.riskDistance > 0.0 ? w.maxFavorableMove / w.riskDistance : 0.0;
+   double adverseR = w.riskDistance > 0.0 ? w.maxAdverseMove / w.riskDistance : 0.0;
+   double totalFavorableR = w.realizedR + missedR;
+   string observedThrough = w.lastObservedAt > 0
+                            ? TimeToString(w.lastObservedAt, TIME_DATE | TIME_SECONDS)
+                            : "NO_POST_EXIT_TICK";
+   string firstFav = w.firstFavorable010RAt > 0
+                     ? TimeToString(w.firstFavorable010RAt, TIME_DATE | TIME_SECONDS) : "NONE";
+   string firstAdv = w.firstAdverse010RAt > 0
+                     ? TimeToString(w.firstAdverse010RAt, TIME_DATE | TIME_SECONDS) : "NONE";
+   PrintFormat("FORENSIC_POST_EXIT_CHECKPOINT | positionId=%I64u | checkpointMin=%d | cutoffTime=%s | observedThrough=%s | totalFavorableR=%.6f | missedR=%.6f | maximumAdverseRAfterExit=%.6f | returnedToEntry=%s | crossedOriginalSL=%s | firstFavorable010RAt=%s | firstAdverse010RAt=%s | classification=%s",
+               w.positionId, checkpointMin,
+               TimeToString(cutoffTime, TIME_DATE | TIME_SECONDS), observedThrough,
+               totalFavorableR, missedR, adverseR,
+               w.returnedToEntry ? "true" : "false",
+               w.crossedOriginalSL ? "true" : "false",
+               firstFav, firstAdv, XAU_ForensicPostExitClassification(w));
+}
+
+void XAU_ForensicPostExitRemove(int idx)
+{
+   int n = ArraySize(g_forensicPostExitWatch);
+   if(idx < 0 || idx >= n) return;
+   for(int i = idx; i < n - 1; i++)
+      g_forensicPostExitWatch[i] = g_forensicPostExitWatch[i + 1];
+   ArrayResize(g_forensicPostExitWatch, n - 1);
+}
+
+void XAU_ForensicPostExitStart(ulong positionId, datetime closeTime, int direction,
+                               long campaignId, string legRole,
+                               int entryRegime, int ownerExitProfile,
+                               double entryPrice, double originalSL,
+                               double riskDistance, double riskUSD,
+                               double exitPrice, double realizedProfitUSD,
+                               double peakRWhileOpen, string exitAuthority)
+{
+   if(!InpForensicPostExitTelemetry || positionId == 0 || direction == 0 ||
+      closeTime <= 0 || entryPrice <= 0.0 || exitPrice <= 0.0 ||
+      riskDistance <= 0.0 || riskUSD <= 0.0)
+      return;
+
+   int n = ArraySize(g_forensicPostExitWatch);
+   ArrayResize(g_forensicPostExitWatch, n + 1);
+   ZeroMemory(g_forensicPostExitWatch[n]);
+   g_forensicPostExitWatch[n].positionId = positionId;
+   g_forensicPostExitWatch[n].closeTime = closeTime;
+   g_forensicPostExitWatch[n].direction = direction;
+   g_forensicPostExitWatch[n].campaignId = campaignId;
+   g_forensicPostExitWatch[n].legRole = legRole;
+   g_forensicPostExitWatch[n].entryRegime = entryRegime;
+   g_forensicPostExitWatch[n].ownerExitProfile = ownerExitProfile;
+   g_forensicPostExitWatch[n].entryPrice = entryPrice;
+   g_forensicPostExitWatch[n].originalSL = originalSL;
+   g_forensicPostExitWatch[n].riskDistance = riskDistance;
+   g_forensicPostExitWatch[n].riskUSD = riskUSD;
+   g_forensicPostExitWatch[n].exitPrice = exitPrice;
+   g_forensicPostExitWatch[n].realizedProfitUSD = realizedProfitUSD;
+   g_forensicPostExitWatch[n].realizedR = realizedProfitUSD / riskUSD;
+   g_forensicPostExitWatch[n].peakRWhileOpen = peakRWhileOpen;
+   g_forensicPostExitWatch[n].exitAuthority = exitAuthority;
+   g_forensicPostExitWatch[n].nextCheckpointIndex = 0;
+
+   PrintFormat("FORENSIC_POST_EXIT_START | positionId=%I64u | closeTime=%s | direction=%s | campaignId=CAMP-%I64d | legRole=%s | entryRegime=%d | ownerExitProfile=%s | entryPrice=%.5f | originalSL=%.5f | riskDistance=%.5f | riskUSD=%.2f | exitPrice=%.5f | realizedProfitUSD=%.2f | realizedR=%.6f | peakRWhileOpen=%.6f | exitAuthority=%s",
+               positionId, TimeToString(closeTime, TIME_DATE | TIME_SECONDS),
+               direction > 0 ? "BUY" : "SELL", campaignId, legRole, entryRegime,
+               XAU_OwnerExitProfileName((ENUM_XAU_OWNER_EXIT_PROFILE)ownerExitProfile),
+               entryPrice, originalSL, riskDistance, riskUSD, exitPrice,
+               realizedProfitUSD, realizedProfitUSD / riskUSD, peakRWhileOpen,
+               exitAuthority);
+}
+
+void XAU_UpdateForensicPostExitTelemetry()
+{
+   if(!InpForensicPostExitTelemetry || !IsXAUFastSymbol()) return;
+   int n = ArraySize(g_forensicPostExitWatch);
+   if(n <= 0) return;
+
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   if(bid <= 0.0 || ask <= 0.0) return;
+   datetime now = TimeCurrent();
+
+   for(int i = n - 1; i >= 0; i--)
+   {
+      // If this is the first tick after one or more deadlines, emit from
+      // the last tick that was genuinely inside each window BEFORE adding
+      // the current tick. This prevents a Monday-open tick from contaminating
+      // a Friday-close 5/10/15/20/30/60-minute window.
+      while(g_forensicPostExitWatch[i].nextCheckpointIndex < ArraySize(g_forensicPostExitMinutes))
+      {
+         int cp = g_forensicPostExitMinutes[g_forensicPostExitWatch[i].nextCheckpointIndex];
+         datetime cutoff = g_forensicPostExitWatch[i].closeTime + cp * 60;
+         if(now <= cutoff) break;
+         XAU_ForensicPostExitEmitCheckpoint(i, cp, cutoff);
+         g_forensicPostExitWatch[i].nextCheckpointIndex++;
+      }
+      if(g_forensicPostExitWatch[i].nextCheckpointIndex >= ArraySize(g_forensicPostExitMinutes))
+      {
+         XAU_ForensicPostExitRemove(i);
+         n--;
+         continue;
+      }
+
+      double execPrice = g_forensicPostExitWatch[i].direction > 0 ? bid : ask;
+      double moveAfterExit = g_forensicPostExitWatch[i].direction > 0
+                             ? execPrice - g_forensicPostExitWatch[i].exitPrice
+                             : g_forensicPostExitWatch[i].exitPrice - execPrice;
+      g_forensicPostExitWatch[i].maxFavorableMove =
+         MathMax(g_forensicPostExitWatch[i].maxFavorableMove, moveAfterExit);
+      g_forensicPostExitWatch[i].maxAdverseMove =
+         MathMax(g_forensicPostExitWatch[i].maxAdverseMove, -moveAfterExit);
+      g_forensicPostExitWatch[i].lastObservedAt = now;
+
+      if(g_forensicPostExitWatch[i].direction > 0)
+      {
+         if(execPrice <= g_forensicPostExitWatch[i].entryPrice)
+            g_forensicPostExitWatch[i].returnedToEntry = true;
+         if(execPrice <= g_forensicPostExitWatch[i].originalSL)
+            g_forensicPostExitWatch[i].crossedOriginalSL = true;
+      }
+      else
+      {
+         if(execPrice >= g_forensicPostExitWatch[i].entryPrice)
+            g_forensicPostExitWatch[i].returnedToEntry = true;
+         if(execPrice >= g_forensicPostExitWatch[i].originalSL)
+            g_forensicPostExitWatch[i].crossedOriginalSL = true;
+      }
+
+      double threshold010R = g_forensicPostExitWatch[i].riskDistance * 0.10;
+      if(g_forensicPostExitWatch[i].firstFavorable010RAt == 0 && moveAfterExit >= threshold010R)
+         g_forensicPostExitWatch[i].firstFavorable010RAt = now;
+      if(g_forensicPostExitWatch[i].firstAdverse010RAt == 0 && -moveAfterExit >= threshold010R)
+         g_forensicPostExitWatch[i].firstAdverse010RAt = now;
+
+      while(g_forensicPostExitWatch[i].nextCheckpointIndex < ArraySize(g_forensicPostExitMinutes))
+      {
+         int cp = g_forensicPostExitMinutes[g_forensicPostExitWatch[i].nextCheckpointIndex];
+         datetime cutoff = g_forensicPostExitWatch[i].closeTime + cp * 60;
+         if(now != cutoff) break;
+         XAU_ForensicPostExitEmitCheckpoint(i, cp, cutoff);
+         g_forensicPostExitWatch[i].nextCheckpointIndex++;
+      }
+      if(g_forensicPostExitWatch[i].nextCheckpointIndex >= ArraySize(g_forensicPostExitMinutes))
+      {
+         XAU_ForensicPostExitRemove(i);
+         n--;
+      }
+   }
 }
 
 void XAU_BrainWatchClosedTrade(TradeBrainOpen &r, double closePrice, double closeProfit)
