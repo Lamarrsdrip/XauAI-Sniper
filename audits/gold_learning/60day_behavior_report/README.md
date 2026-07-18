@@ -64,6 +64,37 @@ per the tester's own summary).
 - `60DAY_TIMER_CHECKPOINT_COMPARISON.png` — 150s vs 180s entry-timer
   checkpoint performance comparison.
 
+## Post-exit missed-R report (10 and 20 minutes)
+
+- **`60DAY_POST_EXIT_10_20_SUMMARY.md`** — start here for this section:
+  for every profitable CORE trade (and separately, all profitable
+  positions including pyramids), how many R the bot secured at exit vs.
+  the best price reached in the following 10 minutes (real, from the
+  EA's own existing post-close tracker) and 20 minutes (**not obtained —
+  see status note in that file and in
+  `60DAY_POST_EXIT_METHOD_AND_LIMITATIONS.md`**), classification of each
+  exit (A–H), and breakdowns by exit authority and market condition.
+- **`60DAY_POST_EXIT_10_20_REPORT.html`** — sortable trade tables, charts,
+  same content as the summary in browsable form.
+- **`60DAY_POST_EXIT_10_20_CORE_TRADES.csv`**, **`..._ALL_WINNERS.csv`** —
+  full per-trade data (never combined — always reported separately).
+- **`60DAY_POST_EXIT_BY_EXIT_AUTHORITY.csv`**, **`..._BY_MARKET_REGIME.csv`**,
+  **`..._CLASSIFICATION.csv`** — aggregated breakdowns.
+- **`60DAY_POST_EXIT_10M_MISSED_R.png`**, **`..._20M_MISSED_R.png`** — missed-R
+  histograms (the 20-minute chart will read "pending" until that data is
+  obtained — see below).
+- **`60DAY_POST_EXIT_METHOD_AND_LIMITATIONS.md`** — R-conversion method,
+  why the 20-minute checkpoint required new telemetry rather than the
+  existing 5/10/15/30/60m pipeline, and the exact sequence of blockers
+  that prevented the rerun from completing in this environment (with
+  verified-correct manual steps to complete it later).
+- **`60DAY_POST_EXIT_RUN_METADATA.json`** — identity of both the primary
+  run and the (uncompleted) 20-minute research rerun attempt.
+- **`research_patches/20min_post_close_telemetry_only.patch`** — the
+  exact, isolated EA source patch used to compile the research build
+  (never merged into the committed production source, which still
+  matches the released v6.25.6 exactly).
+
 ## Reproducing this report
 
 ```

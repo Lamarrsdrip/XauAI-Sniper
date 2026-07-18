@@ -1,0 +1,28 @@
+{
+  "phase": "Post-exit missed-R analysis (10 and 20 minutes)",
+  "continues_audit_commit": "f0f7246999b8a137a5d076e5b260dd7a79a89152",
+  "branch": "audit/codex-complete-xauaisniper-forensic-repair",
+  "primary_source_run": {
+    "description": "The original, UNMODIFIED 60-day M30-postfix replay used for all prior report sections (5/10/15/30/60-minute checkpoint data comes from this run's own real post-close learning telemetry, InpTradeBrainMemory=true and InpTradeBrainMonitorAfterExit=true, both confirmed active).",
+    "ex5_sha256": "430f8d11478d2d0a80df89f0baf0daa7a8a94534fad3c3d4b96e7a1bffc80bc9",
+    "from_date": "2026-05-18",
+    "to_date": "2026-07-17",
+    "symbol": "XAUUSD",
+    "model": "4 (real ticks), 24,649,026 ticks, 100% history quality",
+    "deposit_usd": 10000,
+    "totals": {"positions": 191, "profitable": 151, "losses": 39, "breakeven": 1, "core_positions": 152}
+  },
+  "secondary_research_run": {
+    "description": "A separate, isolated telemetry-only build compiled to capture the one real checkpoint the original run's pipeline does not have: 20 minutes after close. Does NOT replace the primary run for anything except the 20-minute column.",
+    "ea_source_change": "backend/ea_code/XAUUSD_AI_Sniper_EA.mq5: two new functions (XAU_BrainWatchClosedTrade20MinOnly, XAU_UpdateClosedTradeOutcomes20MinOnly) and one new array (g_brainClosedWatch20m[]), called from the same two real call sites as the existing 5/10/15/30/60m pipeline (XAU_BrainWatchClosedTrade's seeding call, and OnTick's per-tick update call). Verified NOT to call XAU_EVPostCloseReview, NOT to touch g_evExitLearningBias or g_exitBiasKeys (both read back live by XAU_EvaluateExitEV on later trades), and NOT to call XAU_AppendTradeBrain/XAU_AppendConsciousMemory (read back by lot-sizing). Uses the exact Bid-for-BUY/Ask-for-SELL executable-price convention requested for this analysis, not the existing pipeline's bid/ask midpoint.",
+    "build_hash": "v6256-plus-20min-post-close-research-telemetry-only-20260718",
+    "ex5_sha256": "2fba1da0f6bebf599cd5c763822ca26feac71ab1ca1b5562eeafe76ea94368d5",
+    "compiler_result": "0 errors, 0 warnings, 29220 ms elapsed",
+    "tester_config": "Identical to the primary run (same Login/Server/Symbol/Period/Model/FromDate/ToDate/Deposit/Leverage/ExpertParameters=v6255_m30.set) except Expert= points to this research build and Report= writes to a separate file so the original report is never overwritten.",
+    "reproduction_verification_status": "NOT_OBTAINED -- the rerun itself never completed in this environment after multiple attempts (headless /config: launch did not reliably auto-start the Strategy Tester; see 60DAY_POST_EXIT_METHOD_AND_LIMITATIONS.md for the exact sequence of blockers encountered and the manual steps to complete it). 20-minute columns in the CSVs/HTML report are genuinely empty, not estimated.",
+    "ea_source_reverted": "backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 and the root-copy XAUUSD_AI_Sniper_EA.mq5 were reverted to the clean pre-patch production state (SHA-256 f0e7058cb2347bbcb6a9cda552cf52be2a14ff73fc3f076ad35bdeca0eae6575, matching the committed v6.25.6 release) after the rerun attempts were abandoned, so the committed production source carries no research-only code. The exact patch used for the compiled research EX5 above is preserved at audits/gold_learning/60day_behavior_report/research_patches/20min_post_close_telemetry_only.patch for full reproducibility.",
+    "not_merged_to_main": true,
+    "not_deployed": true
+  },
+  "r_conversion_method": "Each position's own risk_usd (from 60DAY_ALL_POSITIONS.csv, the EA's own structural risk in dollars, computed once at entry) is used as the 1R denominator. The EA's post-close checkpoint tracker already reports maxMore/maxReverse as dollar amounts for the same position (missedMoney/avoidedMoney), so MISSED_R = missedMoney / risk_usd directly -- no ATR-to-price-to-R chained conversion, no candle-OHLC estimation."
+}
