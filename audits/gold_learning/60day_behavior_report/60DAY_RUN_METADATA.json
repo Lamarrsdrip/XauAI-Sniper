@@ -1,0 +1,32 @@
+{
+  "branch": "audit/codex-complete-xauaisniper-forensic-repair",
+  "commit_note": "EA source at time of run corresponds to the trade-frequency fix commit (pre-lifecycle-telemetry); exact commit SHA not separately tagged at run time -- see 60DAY_METHOD_AND_LIMITATIONS.md",
+  "expert": "XAUUSD_AI_Sniper_EA_v6.25.5 (internal build string at run time; contains the M30 same-direction-exhaustion trade-frequency fix, later formally released as v6.25.6)",
+  "mq5_sha256_at_run": "43628e1a040a6811be8bf4e3980f4368425df8e83f09c006f0ba3be49ddf5c44 (baseline e483dd0) with the EXHAUSTED_SAME_DIRECTION_REENTRY_BLOCK M30-scope fix applied on top -- see audits/backtest_results/v6.25.5_minimum_20_positions_report.md",
+  "ex5_sha256": "430f8d11478d2d0a80df89f0baf0daa7a8a94534fad3c3d4b96e7a1bffc80bc9",
+  "compiler_result": "0 errors, 0 warnings",
+  "symbol": "XAUUSD",
+  "period": "M10",
+  "model": "4 (real ticks), History Quality 100% real ticks, 24,649,026 ticks, 5,766 M10 bars",
+  "from_date": "2026-05-18",
+  "to_date": "2026-07-17",
+  "decision_mode": "InpDecisionMode=1 (M30 three-M10-evidence consensus)",
+  "server": "MetaQuotes-Demo (Build 5984), account 109812316",
+  "deposit": "10,000.00 USD",
+  "leverage": "1:100",
+  "preserved_journal": "tester_sandbox/MT5_Isolated/Tester/Agent-127.0.0.1-3000/logs/20260717_M30_POSTFIX_extended_20260518-20260717_PRESERVED.log (15.1GB, UTF-16LE, 30,415,084 lines)",
+  "tester_report_html": "tester_sandbox/MT5_Isolated/v6255_backtest_m30_extended_postfix.html",
+  "tester_reported_totals": {
+    "total_trades": 191,
+    "short_trades_won_pct": "99 (79.80%)",
+    "long_trades_won_pct": "92 (79.35%)",
+    "total_deals": 382,
+    "profit_trades_pct": "152 (79.58%)",
+    "loss_trades_pct": "39 (20.42%)",
+    "net_profit_usd": 3478.69,
+    "profit_factor": 1.09,
+    "max_balance_drawdown_pct": 35.79,
+    "max_equity_drawdown_pct": 38.26
+  },
+  "extraction_cross_check": "191/191 positions independently reconstructed from the Deals table; 191/191 matched to their own real EA journal entry (R_EXIT_ENTRY_CAPTURE_CONFIRMED) and exit (R_EXIT_COUNTERFACTUAL) log lines; 0 unmatched campaign IDs."
+}
