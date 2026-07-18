@@ -52,10 +52,15 @@ def test_restart_migration_discards_stale_single_leg_basket_floor():
     assert "g_rExit[" not in migration
 
 
-def test_pyramid_leg_still_inherits_only_frozen_profile():
+def test_pyramid_leg_gets_its_own_dedicated_profile_not_inherited():
+    # v6.25.13 owner-approved pyramid protection policy: a pyramid leg no
+    # longer inherits the core campaign's frozen GENERAL/BREAKOUT profile --
+    # it gets its own dedicated OWNER_EXIT_PYRAMID profile instead, still
+    # with fresh per-leg peak/floor state (no floor transplant).
     ea = read(EA)
     pyramid = body_between(ea, "void CheckPyramidOpportunity()", "//+------------------------------------------------------------------+\n//| TICK")
-    assert "int inheritedProfile=g_campaign[XAU_CampaignSlot(dir)].ownerExitProfile;" in pyramid
+    assert "(int)OWNER_EXIT_PYRAMID" in pyramid
+    assert "int inheritedProfile=g_campaign[XAU_CampaignSlot(dir)].ownerExitProfile;" not in pyramid
     assert "OWNER_R_EXIT_FLOOR_INHERITED" not in pyramid
     assert ".guaranteedFloorR =" not in pyramid
 

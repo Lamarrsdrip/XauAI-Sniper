@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 
 GENERAL = "GENERAL"
 BREAKOUT = "BREAKOUT"
+PYRAMID = "PYRAMID"
 OWNER_CLOSE = "OWNER_R_EXIT_FLOOR_BREACH"
 OWNER_TP_1R = "OWNER_R_EXIT_TP_1R"
 OWNER_GIVEBACK_45 = "OWNER_R_EXIT_GIVEBACK_45"
@@ -36,6 +37,13 @@ def exit_profile_for_regime(regime: str) -> str:
 
 
 def required_floor(peak_r: float, profile: str) -> float:
+    if profile == PYRAMID:
+        # v6.25.13 owner-approved PYRAMID_0.25R_70PCT_POLICY: independent of
+        # CORE's GENERAL/BREAKOUT bands, measured from the pyramid leg's own
+        # peak, minimum floor 0.20R once armed.
+        if peak_r < 0.25:
+            return 0.0
+        return max(0.20, peak_r * 0.70)
     if profile == BREAKOUT:
         if peak_r < 0.50:
             return 0.0
@@ -51,7 +59,7 @@ def required_floor(peak_r: float, profile: str) -> float:
 
 def strict_pyramid_gate(
     *,
-    core_floor_confirmed: bool,
+    core_position_live: bool,
     direction_ok: bool,
     opposite_direction_present: bool,
     structure_ok: bool,
@@ -60,8 +68,11 @@ def strict_pyramid_gate(
     exhaustion_ok: bool,
     margin_ok: bool,
 ) -> tuple[bool, str]:
+    # v6.25.13: the core no longer has to already have an armed/broker-
+    # confirmed owner floor (v6.25.12's CORE_FLOOR_NOT_CONFIRMED gate is
+    # removed). It only has to still be a genuinely live position.
     checks = (
-        (core_floor_confirmed, "CORE_FLOOR_NOT_CONFIRMED"),
+        (core_position_live, "CORE_POSITION_NOT_LIVE"),
         (direction_ok, "DIRECTION_NOT_CURRENTLY_APPROVED"),
         (not opposite_direction_present, "OPPOSITE_DIRECTION_FORMING_OR_CONFIRMED"),
         (structure_ok, "STRUCTURE_OPPOSES"),
@@ -103,6 +114,13 @@ class OwnerState:
         return OwnerState(**asdict(self))
 
     def inherited_leg(self) -> "OwnerState":
-        # New legs inherit the frozen profile, not another entry geometry's
-        # peak/floor. A legacy basket-money floor cannot be transplanted.
+        # RE_ENTRY legs inherit the frozen campaign profile, not another
+        # entry geometry's peak/floor. A legacy basket-money floor cannot be
+        # transplanted.
         return OwnerState(profile=self.profile)
+
+    def pyramid_leg(self) -> "OwnerState":
+        # v6.25.13: a PYRAMID leg gets its own dedicated PYRAMID profile
+        # (never the core's GENERAL/BREAKOUT profile) and fresh peak/floor
+        # state -- independent per-leg R geometry, not campaign-inherited.
+        return OwnerState(profile=PYRAMID)

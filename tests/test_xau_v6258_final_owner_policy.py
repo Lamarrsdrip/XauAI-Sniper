@@ -41,21 +41,33 @@ def test_profile_assignment_is_breakout_only_and_truthfully_named():
     )
     assert "entryRegime == REGIME_BREAKOUT_UP || entryRegime == REGIME_BREAKOUT_DOWN" in fn
     assert "? OWNER_EXIT_BREAKOUT : OWNER_EXIT_GENERAL" in fn
-    assert 'return profile == OWNER_EXIT_BREAKOUT ? "BREAKOUT" : "GENERAL";' in EA
+    # v6.25.13: XAU_OwnerExitProfileName gained a third PYRAMID branch, but
+    # campaign-level profile ASSIGNMENT (this function) is still breakout-
+    # regime-only, unchanged -- only individual pyramid legs ever get the
+    # new profile, via their own dedicated registration call, not this one.
+    assert 'if(profile == OWNER_EXIT_PYRAMID) return "PYRAMID";' in EA
     assert "OWNER_EXIT_TREND_UP" not in EA
     assert "TREND_DN_SPECIAL" not in EA
     assert "TREND_UP_SPECIAL" not in EA
 
 
-def test_profile_is_frozen_at_core_and_pyramids_inherit_without_mixing():
+def test_profile_is_frozen_at_core_and_reentry_inherits_without_mixing():
     core = ea_section("void XAU_CampaignOpenCore(", "void XAU_CampaignRegisterAdd(")
     add = ea_section("void XAU_CampaignRegisterAdd(", "string XAU_TryConvertBasketToSingleFloor")
-    pyramid = ea_section("void CheckPyramidOpportunity()", "//+------------------------------------------------------------------+\n//| TICK")
     assert "XAU_OwnerExitProfileForEntryRegime(frozenEntryRegime)" in core
     assert "OWNER_EXIT_PROFILE_FROZEN" in core
     assert "OWNER_EXIT_PROFILE_INHERITED" in add
     assert "mixedProfiles=false" in add
-    assert "inheritedProfile=g_campaign[XAU_CampaignSlot(dir)].ownerExitProfile" in pyramid
+
+
+def test_pyramid_gets_dedicated_profile_not_campaign_inheritance():
+    # v6.25.13: unlike RE_ENTRY (still campaign-profile-inherited, tested
+    # above), a PYRAMID leg gets its own dedicated OWNER_EXIT_PYRAMID
+    # profile -- it never reads or mixes in the campaign's GENERAL/BREAKOUT
+    # profile or floor.
+    pyramid = ea_section("void CheckPyramidOpportunity()", "//+------------------------------------------------------------------+\n//| TICK")
+    assert "(int)OWNER_EXIT_PYRAMID" in pyramid
+    assert "inheritedProfile=g_campaign[XAU_CampaignSlot(dir)].ownerExitProfile" not in pyramid
 
 
 def test_general_floor_boundaries_and_monotonic_ratchet():

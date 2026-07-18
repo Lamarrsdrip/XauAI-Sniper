@@ -7,6 +7,7 @@ from scripts.owner_r_exit_policy_harness import (
     BREAKOUT_NORMAL,
     BREAKOUT,
     GENERAL,
+    PYRAMID,
     OWNER_CLOSE,
     OWNER_GIVEBACK_45,
     OWNER_RUNNER_FAILED,
@@ -71,14 +72,27 @@ def test_restart_round_trip_preserves_peak_floor_and_profile():
     assert abs(after.observe(0.50) - 0.56) < 1e-12
 
 
-def test_pyramid_and_reentry_inherit_profile_without_foreign_leg_geometry():
+def test_reentry_inherits_profile_without_foreign_leg_geometry():
     core = OwnerState(BREAKOUT)
     core.observe(1.00)
-    pyramid = core.inherited_leg()
     reentry = core.inherited_leg()
-    assert pyramid.profile == reentry.profile == BREAKOUT
-    assert pyramid.peak_r == reentry.peak_r == 0.0
-    assert pyramid.floor_r == reentry.floor_r == 0.0
+    assert reentry.profile == BREAKOUT
+    assert reentry.peak_r == 0.0
+    assert reentry.floor_r == 0.0
+
+
+def test_pyramid_gets_its_own_dedicated_profile_not_the_cores():
+    # v6.25.13: a pyramid leg no longer inherits the core campaign's
+    # GENERAL/BREAKOUT profile -- it always gets its own PYRAMID profile,
+    # with fresh peak/floor state, regardless of what the core's profile is.
+    for core_profile in (GENERAL, BREAKOUT):
+        core = OwnerState(core_profile)
+        core.observe(1.00)
+        pyramid = core.pyramid_leg()
+        assert pyramid.profile == PYRAMID
+        assert pyramid.profile != core_profile
+        assert pyramid.peak_r == 0.0
+        assert pyramid.floor_r == 0.0
 
 
 def test_restored_r_manager_rules_are_guarded_by_any_active_owner_floor():
@@ -154,8 +168,10 @@ def test_full_1r_core_has_no_broker_tp_pyramid_tp_restored_and_margin_buffer_pre
     assert 'trade.Sell(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)' in EA
     assert "FreeMargin()*0.50" in EA.replace(" ", "")
     assert "marginNeeded>accInfo.FreeMargin()" in EA.replace(" ", "")
-    assert "PYRAMID_GATE_REJECT | reason=" in EA
-    assert "PYRAMID_GATE_APPROVED | core_floor_confirmed=true | direction_ok=true | timing_ok=true | structure_ok=true | pressure_ok=true | margin_ok=true" in EA
+    assert "PYRAMID_GATE_REJECT | campaign_id=" in EA
+    assert "PYRAMID_GATE_APPROVED | campaign_id=" in EA
+    assert "core_position_id=" in EA
+    assert "direction_ok=true | structure_ok=true | pressure_ok=true | timing_ok=true | location_ok=true | exhaustion_ok=true | margin_ok=true" in EA
 
 
 def test_strategy_tester_executes_embedded_owner_policy_self_tests():
@@ -211,8 +227,11 @@ def test_breakout_profile_is_only_for_breakout_regimes():
 
 
 def test_strict_pyramid_gate_rejects_each_required_condition_and_approves_all_pass():
+    # v6.25.13: core_floor_confirmed is gone -- a pyramid no longer requires
+    # the core's owner floor to already be armed. Only core_position_live
+    # (the core must still be genuinely open) remains as that first check.
     base = dict(
-        core_floor_confirmed=True,
+        core_position_live=True,
         direction_ok=True,
         opposite_direction_present=False,
         structure_ok=True,
@@ -223,7 +242,7 @@ def test_strict_pyramid_gate_rejects_each_required_condition_and_approves_all_pa
     )
     assert strict_pyramid_gate(**base) == (True, "PYRAMID_GATE_APPROVED")
     for field, expected_reason, value in (
-        ("core_floor_confirmed", "CORE_FLOOR_NOT_CONFIRMED", False),
+        ("core_position_live", "CORE_POSITION_NOT_LIVE", False),
         ("direction_ok", "DIRECTION_NOT_CURRENTLY_APPROVED", False),
         ("opposite_direction_present", "OPPOSITE_DIRECTION_FORMING_OR_CONFIRMED", True),
         ("structure_ok", "STRUCTURE_OPPOSES", False),
@@ -237,6 +256,27 @@ def test_strict_pyramid_gate_rejects_each_required_condition_and_approves_all_pa
         approved, reason = strict_pyramid_gate(**case)
         assert not approved
         assert reason == expected_reason
+
+
+def test_pyramid_no_longer_requires_armed_core_floor_before_evaluation():
+    # Direct proof of the v6.25.12 -> v6.25.13 change: a pyramid opportunity
+    # whose core has NOT yet armed its owner floor (the exact condition that
+    # rejected ~94% of all evaluations in the 30/50-day replays) must now be
+    # approvable as long as the core position is still live and every other
+    # gate passes.
+    case = dict(
+        core_position_live=True,
+        direction_ok=True,
+        opposite_direction_present=False,
+        structure_ok=True,
+        pressure_ok=True,
+        timing_ok=True,
+        exhaustion_ok=True,
+        margin_ok=True,
+    )
+    approved, reason = strict_pyramid_gate(**case)
+    assert approved
+    assert reason == "PYRAMID_GATE_APPROVED"
 
 
 def test_inverse_geometry_uses_execution_side_not_original_signal_side():
@@ -272,3 +312,134 @@ def test_below_floor_retry_evidence_is_rate_limited_without_disabling_retry():
     assert "lastBelowFloorRejectLog" in EA
     assert "TimeCurrent()-g_rExit[idx].lastBelowFloorRejectLog>=30" in EA
     assert "action=RETRY_BROKER_FLOOR" in EA
+
+
+# ==========================================================================
+# v6.25.13: default breakouts off, pyramid protection instead of armed-core
+# floor requirement. See fix(ea): default breakouts off and protect pyramid
+# profit.
+# ==========================================================================
+
+
+def test_breakout_input_defaults_to_block():
+    assert re.search(
+        r"input ENUM_XAU_OWNER_BREAKOUT_EXECUTION_MODE InpOwnerBreakoutExecutionMode\s*=\s*OWNER_BREAKOUT_BLOCK\s*;",
+        EA,
+    )
+
+
+def test_brkt_up_and_brkt_dn_blocked_by_default_at_candidate_and_final_stage():
+    for regime in ("BRKT_UP", "BRKT_DN"):
+        assert execution_direction(1, regime, BREAKOUT_BLOCK) is None
+        assert execution_direction(-1, regime, BREAKOUT_BLOCK) is None
+    # Both real call-site stages exist and share the single owner authority.
+    assert 'XAU_OwnerEntryPermission("CANDIDATE_ACCEPTANCE"' in EA
+    assert 'XAU_OwnerEntryPermission("FINAL_EXECUTION"' in EA
+    body = EA[EA.index("bool XAU_OwnerEntryPermission("):]
+    body = body[: body.index("\n}\n", body.index("bool XAU_OwnerEntryPermission("))]
+    assert "InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_BLOCK" in body
+    assert "OWNER_BREAKOUT_BLOCKED | regime=%s | mode=BLOCK | default_off=true | stage=%s | reason=OWNER_BREAKOUT_DISABLED" in body
+
+
+def test_no_bypass_path_reopens_breakout_block():
+    # PRIMARY/RE_ENTRY, PYRAMID, and COUNTER_EXCURSION each call the exact
+    # same single owner authority at both stages -- no path evaluates
+    # currentRegime==BREAKOUT_UP/DOWN and opens a trade without going through
+    # XAU_OwnerEntryPermission first.
+    call_sites = re.findall(r'XAU_OwnerEntryPermission\("(CANDIDATE_ACCEPTANCE|FINAL_EXECUTION)"[^)]*"([A-Z_]+)"', EA)
+    sources = {source for _, source in call_sites}
+    assert {"PYRAMID", "COUNTER_EXCURSION"}.issubset(sources)
+    stages = {stage for stage, _ in call_sites}
+    assert stages == {"CANDIDATE_ACCEPTANCE", "FINAL_EXECUTION"}
+
+
+def test_non_breakout_regimes_unaffected_by_breakout_block():
+    for regime, signal in (("TREND_UP", 1), ("TREND_DN", -1), ("CHOPPY", 1), ("RANGING", -1)):
+        assert execution_direction(signal, regime, BREAKOUT_BLOCK) == signal
+        assert execution_direction(signal, regime, BREAKOUT_INVERSE) == signal
+        assert execution_direction(signal, regime, BREAKOUT_NORMAL) == signal
+
+
+def test_pyramid_gate_no_longer_references_armed_core_floor_strings():
+    gate_body = EA[EA.index("void CheckPyramidOpportunity()"):]
+    gate_body = gate_body[: gate_body.index("PYRAMID_GATE_APPROVED")]
+    assert "profitGuaranteeArmed" not in gate_body
+    assert "CORE_FLOOR_NOT_CONFIRMED" not in gate_body
+    assert "CORE_POSITION_NOT_LIVE" in gate_body
+
+
+def test_pyramid_leg_never_reads_campaign_profile_or_floor():
+    registration = EA[EA.index("XAU_CampaignRegisterAdd(dir, \"PYRAMID\")"):]
+    registration = registration[: registration.index("BotMonitorActivity(\"PYRAMID_ADD\"")]
+    assert "(int)OWNER_EXIT_PYRAMID" in registration
+    assert "g_campaign[XAU_CampaignSlot(dir)].ownerExitProfile" not in registration
+    assert "g_rExit[idx].guaranteedFloorR =" not in registration
+    assert "basketProtectedFloorMoney" not in registration
+
+
+def test_pyramid_protection_floor_boundary_examples_match_owner_policy():
+    assert required_floor(0.24, PYRAMID) == 0.0
+    assert abs(required_floor(0.25, PYRAMID) - 0.20) < 1e-12
+    assert abs(required_floor(0.30, PYRAMID) - 0.21) < 1e-12
+    assert abs(required_floor(0.50, PYRAMID) - 0.35) < 1e-12
+    assert abs(required_floor(0.70, PYRAMID) - 0.49) < 1e-12
+    assert abs(required_floor(1.00, PYRAMID) - 0.70) < 1e-12
+
+
+def test_pyramid_floor_is_monotonic_and_never_moves_backward():
+    state = OwnerState(PYRAMID)
+    assert state.observe(0.24) == 0.0
+    assert abs(state.observe(0.30) - 0.21) < 1e-12
+    # Price pulls back after the peak: peak_r and floor_r must not regress.
+    floor_before = state.floor_r
+    peak_before = state.peak_r
+    state.observe(0.10)
+    assert state.peak_r == peak_before
+    assert state.floor_r == floor_before
+    # A new higher peak ratchets forward again.
+    assert abs(state.observe(1.00) - 0.70) < 1e-12
+
+
+def test_pyramid_leg_uses_its_own_independent_r_geometry_not_the_cores():
+    core = OwnerState(GENERAL)
+    core.observe(1.00)
+    pyramid = core.pyramid_leg()
+    assert pyramid.peak_r == 0.0
+    assert pyramid.floor_r == 0.0
+    assert pyramid.profile == PYRAMID
+    # The pyramid leg's own peak drives its own floor, independent of the
+    # core's already-advanced peak/floor.
+    assert abs(pyramid.observe(0.50) - 0.35) < 1e-12
+    assert core.floor_r != pyramid.floor_r or core.profile != pyramid.profile
+
+
+def test_pyramid_restart_round_trip_preserves_its_own_peak_and_floor():
+    before = OwnerState(PYRAMID)
+    before.observe(0.50)
+    after = before.restart()
+    assert after == before
+    assert abs(after.observe(0.70) - 0.49) < 1e-12
+
+
+def test_pyramid_protection_armed_and_confirmed_logs_are_broker_confirmation_gated():
+    assert 'PYRAMID_PROTECTION_ARMED | position_id=' in EA
+    assert 'source=PYRAMID_0.25R_70PCT_POLICY' in EA
+    confirmed_line = EA.index("PYRAMID_FLOOR_CONFIRMED | position_id=")
+    # Must sit inside the broker-confirmed branch, after the actual reread
+    # comparison, never before it.
+    preceding = EA[:confirmed_line]
+    assert preceding.rindex("confirmed = MathAbs(actualSLAfterModify - guaranteedSL) <= tickTol;") < confirmed_line
+    assert preceding.rindex("if(confirmed)") < confirmed_line
+
+
+def test_canonical_and_backend_ea_sources_remain_byte_identical():
+    backend = (ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5").read_text(encoding="utf-8")
+    assert backend == EA
+
+
+def test_no_duplicate_pyramid_or_exit_authority_introduced():
+    assert EA.count("void CheckPyramidOpportunity()") == 1
+    assert EA.count("void XAU_RExitCoreLoop(") == 1
+    assert EA.count("double XAU_ComputeOwnerRequiredFloorR(") == 1
+    assert EA.count("bool XAU_OwnerEntryPermission(") == 1
+    assert EA.count("trade.PositionClose(ticket)") == 1

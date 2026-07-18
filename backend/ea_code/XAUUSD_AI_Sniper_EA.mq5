@@ -3056,7 +3056,7 @@ enum ENUM_XAU_OWNER_BREAKOUT_EXECUTION_MODE
    OWNER_BREAKOUT_NORMAL=1,  // Scenario B comparison
    OWNER_BREAKOUT_INVERSE=2  // Scenario C production experiment (default)
 };
-input ENUM_XAU_OWNER_BREAKOUT_EXECUTION_MODE InpOwnerBreakoutExecutionMode=OWNER_BREAKOUT_INVERSE;
+input ENUM_XAU_OWNER_BREAKOUT_EXECUTION_MODE InpOwnerBreakoutExecutionMode=OWNER_BREAKOUT_BLOCK; // v6.25.13 owner directive: breakout regimes OFF by default. Set to OWNER_BREAKOUT_INVERSE from EA inputs to re-enable the existing inverse-execution behavior.
 // CORRECTED (owner directive): the prior baseline set counterRiskPct =
 // InpNormalRiskPct directly -- InpNormalRiskPct is the MAIN bot's own flat
 // 15%-of-EQUITY target for a fully-qualified A/A+ trade (see its definition:
@@ -4943,12 +4943,15 @@ struct XAU_CampaignState
 enum ENUM_XAU_OWNER_EXIT_PROFILE
 {
    OWNER_EXIT_GENERAL=0,
-   OWNER_EXIT_BREAKOUT=1
+   OWNER_EXIT_BREAKOUT=1,
+   OWNER_EXIT_PYRAMID=2  // v6.25.13: pyramid-leg-only protection profile, never assigned to CORE/RE_ENTRY
 };
 
 string XAU_OwnerExitProfileName(ENUM_XAU_OWNER_EXIT_PROFILE profile)
 {
-   return profile == OWNER_EXIT_BREAKOUT ? "BREAKOUT" : "GENERAL";
+   if(profile == OWNER_EXIT_BREAKOUT) return "BREAKOUT";
+   if(profile == OWNER_EXIT_PYRAMID) return "PYRAMID";
+   return "GENERAL";
 }
 
 ENUM_XAU_OWNER_EXIT_PROFILE XAU_OwnerExitProfileForEntryRegime(ENUM_REGIME entryRegime)
@@ -10219,7 +10222,13 @@ bool XAU_RunOwnerRExitSelfTests()
    double b049=XAU_ComputeOwnerRequiredFloorR(0.49,OWNER_EXIT_BREAKOUT);
    double b050=XAU_ComputeOwnerRequiredFloorR(0.50,OWNER_EXIT_BREAKOUT);
    double b100=XAU_ComputeOwnerRequiredFloorR(1.00,OWNER_EXIT_BREAKOUT);
-   bool checks[20];
+   double p024=XAU_ComputeOwnerRequiredFloorR(0.24,OWNER_EXIT_PYRAMID);
+   double p025=XAU_ComputeOwnerRequiredFloorR(0.25,OWNER_EXIT_PYRAMID);
+   double p030=XAU_ComputeOwnerRequiredFloorR(0.30,OWNER_EXIT_PYRAMID);
+   double p050=XAU_ComputeOwnerRequiredFloorR(0.50,OWNER_EXIT_PYRAMID);
+   double p070=XAU_ComputeOwnerRequiredFloorR(0.70,OWNER_EXIT_PYRAMID);
+   double p100=XAU_ComputeOwnerRequiredFloorR(1.00,OWNER_EXIT_PYRAMID);
+   bool checks[26];
    checks[0]=MathAbs(g039)<0.000001;
    checks[1]=MathAbs(g040-0.30)<0.000001;
    checks[2]=MathAbs(g080-0.56)<0.000001;
@@ -10240,7 +10249,15 @@ bool XAU_RunOwnerRExitSelfTests()
    checks[17]=XAU_OwnerRExitDecisionAllowsClose(1.00,1.00,0.70,OWNER_EXIT_BREAKOUT,"OWNER_R_EXIT_TP_1R");
    checks[18]=!XAU_OwnerRExitDecisionAllowsClose(0.39,0.20,0.0,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED");
    checks[19]=XAU_OwnerRExitDecisionAllowsClose(0.50,0.35,0.35,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED");
-   for(int i=0;i<20;i++)
+   // v6.25.13 PYRAMID_0.25R_70PCT_POLICY boundary proof -- owner-specified examples:
+   // peak 0.24 -> 0.00, 0.25 -> 0.20, 0.30 -> 0.21, 0.50 -> 0.35, 0.70 -> 0.49, 1.00 -> 0.70.
+   checks[20]=MathAbs(p024)<0.000001;
+   checks[21]=MathAbs(p025-0.20)<0.000001;
+   checks[22]=MathAbs(p030-0.21)<0.000001;
+   checks[23]=MathAbs(p050-0.35)<0.000001;
+   checks[24]=MathAbs(p070-0.49)<0.000001;
+   checks[25]=MathAbs(p100-0.70)<0.000001;
+   for(int i=0;i<26;i++)
    {
       if(checks[i]) passed++;
       else { failed++; PrintFormat("OWNER_R_EXIT_SELF_TEST_FAIL | case=%d",i+1); }
@@ -16920,9 +16937,11 @@ int AdaptivePyramidMaxAdds(int dir, double moved, double atr, double quality,
 
 // v6.25.12: logging only. The strict gate uses existing live broker state
 // and existing entry authorities; it does not create another strategy path.
-void XAU_PyramidGateReject(string reason)
+// v6.25.13: now also carries campaign_id per the owner-approved log format.
+void XAU_PyramidGateReject(int dir, string reason)
 {
-   Print("PYRAMID_GATE_REJECT | reason=", reason);
+   PrintFormat("PYRAMID_GATE_REJECT | campaign_id=%s | reason=%s",
+               XAU_CampaignIdText(g_campaign[XAU_CampaignSlot(dir)].campaignId), reason);
 }
 
 void CheckPyramidOpportunity()
@@ -16991,34 +17010,23 @@ void CheckPyramidOpportunity()
    double entryPx=isBuy?SymbolInfoDouble(Symbol(),SYMBOL_ASK):SymbolInfoDouble(Symbol(),SYMBOL_BID);
    if(entryPx<=0.0) return;
 
-   // v6.25.12 strict gate A: an in-memory campaign flag alone is never
-   // enough. Confirm the core's armed owner floor from the live broker SL.
-   int coreRExitIdx=XAU_RExit_FindIdx(origPositionId);
-   if(coreRExitIdx<0 || !g_rExit[coreRExitIdx].profitGuaranteeArmed)
+   // v6.25.13 owner-approved pyramid protection policy: the v6.25.12 strict
+   // gate A (core owner floor must already be armed and broker-confirmed
+   // before any pyramid could even be evaluated) is removed. Replay evidence
+   // showed it rejected effectively 100% of opportunities across 8M+
+   // evaluations because most of a campaign's open life happens before its
+   // core reaches the GENERAL/BREAKOUT arm threshold. A pyramid add no
+   // longer requires the core's own floor to be armed first; it only
+   // requires the core position to still be genuinely open right now. Every
+   // other gate below (campaign exhaustion, direction, opposite-direction,
+   // pressure, timing/location/spacing, structure, exhaustion, owner entry
+   // permission, timing authority, news, pyramid authority, final entry
+   // arbiter, margin, basket floor) is unchanged and remains the real
+   // selectivity engine -- this is a smaller, less prohibitive version of
+   // the same gate, not a removal of pyramid protection.
+   if(!PositionSelectByTicket(origTicket))
    {
-      XAU_PyramidGateReject("CORE_FLOOR_NOT_CONFIRMED_R_EXIT_STATE_MISSING_OR_UNARMED");
-      return;
-   }
-   ENUM_XAU_OWNER_EXIT_PROFILE coreProfile=(ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[coreRExitIdx].ownerExitProfile;
-   double coreRequiredFloorR=MathMax(g_rExit[coreRExitIdx].guaranteedFloorR,
-                                     XAU_ComputeOwnerRequiredFloorR(g_rExit[coreRExitIdx].peakR,coreProfile));
-   if(coreRequiredFloorR<=0.0 || !PositionSelectByTicket(origTicket))
-   {
-      XAU_PyramidGateReject("CORE_FLOOR_NOT_CONFIRMED_NO_LIVE_OWNER_FLOOR");
-      return;
-   }
-   double liveCoreSL=PositionGetDouble(POSITION_SL);
-   int coreDigits=(int)SymbolInfoInteger(Symbol(),SYMBOL_DIGITS);
-   double coreFloorSL=NormalizeDouble(isBuy
-      ? g_rExit[coreRExitIdx].originalEntryPrice+coreRequiredFloorR*g_rExit[coreRExitIdx].originalStopDistance
-      : g_rExit[coreRExitIdx].originalEntryPrice-coreRequiredFloorR*g_rExit[coreRExitIdx].originalStopDistance,coreDigits);
-   double coreFloorTolerance=MathMax(SymbolInfoDouble(Symbol(),SYMBOL_POINT)*2.0,0.00001);
-   bool coreFloorConfirmed=isBuy ? liveCoreSL+coreFloorTolerance>=coreFloorSL
-                                  : liveCoreSL-coreFloorTolerance<=coreFloorSL;
-   if(!coreFloorConfirmed)
-   {
-      XAU_PyramidGateReject(StringFormat("CORE_FLOOR_NOT_CONFIRMED_BROKER_SL liveSL=%.5f requiredSL=%.5f floorR=%.3f",
-                                         liveCoreSL,coreFloorSL,coreRequiredFloorR));
+      XAU_PyramidGateReject(dir, "CORE_POSITION_NOT_LIVE");
       return;
    }
 
@@ -17038,7 +17046,7 @@ void CheckPyramidOpportunity()
    if(campaignAction == TRANSITION_STOP_ADDS || campaignAction == TRANSITION_TIGHTEN_PROTECTION ||
       campaignAction == TRANSITION_EXIT_PROFITABLE || campaignAction == TRANSITION_EXIT_CONTROLLED)
    {
-      XAU_PyramidGateReject(StringFormat("CAMPAIGN_EXHAUSTION action=%s exhaustion=%.0f%%",
+      XAU_PyramidGateReject(dir, StringFormat("CAMPAIGN_EXHAUSTION action=%s exhaustion=%.0f%%",
                                          EnumToString(campaignAction),pyramidTransition.exhaustionProbability));
       PrintFormat("PYRAMID_BLOCKED_CAMPAIGN_EXHAUSTION: dir=%s lifecycle=%s action=%s exhaustion=%.0f%% remainingRewardR=%.2f oppositeRemainingRewardR=%.2f",
                   isBuy?"BUY":"SELL", EnumToString(pyramidTransition.lifecycle),
@@ -17059,7 +17067,7 @@ void CheckPyramidOpportunity()
    double favourableMove=dir>0?entryPx-spacingAnchor:spacingAnchor-entryPx;
    if(!InpPyramidOnTrend || favourableMove<atr*InpPyramidMinATR)
    {
-      XAU_PyramidGateReject(StringFormat("TIMING_OR_LOCATION_NOT_CLEAN_CONTINUATION moveATR=%.2f requiredATR=%.2f",
+      XAU_PyramidGateReject(dir, StringFormat("TIMING_OR_LOCATION_NOT_CLEAN_CONTINUATION moveATR=%.2f requiredATR=%.2f",
                                          atr>0.0?favourableMove/atr:0.0,InpPyramidMinATR));
       return;
    }
@@ -17073,7 +17081,7 @@ void CheckPyramidOpportunity()
                      pyramidTransition.dominantDirection==dir);
    if(!directionOk)
    {
-      XAU_PyramidGateReject(StringFormat("DIRECTION_NOT_CURRENTLY_APPROVED core=%s candidate=%s dominant=%s",
+      XAU_PyramidGateReject(dir, StringFormat("DIRECTION_NOT_CURRENTLY_APPROVED core=%s candidate=%s dominant=%s",
                                          dir==1?"BUY":"SELL",
                                          g_alignedCandidates[pyramidLane].candidateDirection==1?"BUY":"SELL",
                                          pyramidTransition.dominantDirection==1?"BUY":"SELL"));
@@ -17083,25 +17091,25 @@ void CheckPyramidOpportunity()
                                     pyramidTransition.lifecycle==OPPOSITE_DIRECTION_CONFIRMED);
    if(oppositeFormingOrConfirmed)
    {
-      XAU_PyramidGateReject("OPPOSITE_DIRECTION_FORMING_OR_CONFIRMED");
+      XAU_PyramidGateReject(dir, "OPPOSITE_DIRECTION_FORMING_OR_CONFIRMED");
       return;
    }
    double directionPressure=dir==1?pyramidTransition.buyConfidence:pyramidTransition.sellConfidence;
    double oppositePressure=dir==1?pyramidTransition.sellConfidence:pyramidTransition.buyConfidence;
    if(oppositePressure>directionPressure)
    {
-      XAU_PyramidGateReject(StringFormat("PRESSURE_OPPOSES direction=%.1f opposite=%.1f",directionPressure,oppositePressure));
+      XAU_PyramidGateReject(dir, StringFormat("PRESSURE_OPPOSES direction=%.1f opposite=%.1f",directionPressure,oppositePressure));
       return;
    }
    if(pyramidTransition.exhaustionProbability>=InpTransitionExhaustThreshold)
    {
-      XAU_PyramidGateReject(StringFormat("EXHAUSTION_HIGH_OR_EXTREME value=%.1f threshold=%.1f",
+      XAU_PyramidGateReject(dir, StringFormat("EXHAUSTION_HIGH_OR_EXTREME value=%.1f threshold=%.1f",
                                          pyramidTransition.exhaustionProbability,InpTransitionExhaustThreshold));
       return;
    }
    if(pyramidTransition.remainingRewardR<0.30 || pyramidTransition.reversalWaitForPullback)
    {
-      XAU_PyramidGateReject(StringFormat("TIMING_OR_LOCATION_LATE_CHASE roomR=%.2f waitForPullback=%s",
+      XAU_PyramidGateReject(dir, StringFormat("TIMING_OR_LOCATION_LATE_CHASE roomR=%.2f waitForPullback=%s",
                                          pyramidTransition.remainingRewardR,
                                          pyramidTransition.reversalWaitForPullback?"true":"false"));
       return;
@@ -17110,24 +17118,24 @@ void CheckPyramidOpportunity()
    string authorityWhy="";
    if(!XAU_StructureAuthorityAllows(dir,"PYRAMID",authorityWhy))
    {
-      XAU_PyramidGateReject("STRUCTURE_OPPOSES " + authorityWhy);
+      XAU_PyramidGateReject(dir, "STRUCTURE_OPPOSES " + authorityWhy);
       return;
    }
    string pyramidGrade="A";
    double ignoredLotMulti=1.0;
    if(!XAU_FreshnessExtensionAuthority(dir,"PYRAMID",g_lastEntryScore,g_lastEntryScore,
                                        pyramidGrade,ignoredLotMulti,authorityWhy))
-   { XAU_PyramidGateReject("DIRECTION_QUALITY " + authorityWhy); return; }
+   { XAU_PyramidGateReject(dir, "DIRECTION_QUALITY " + authorityWhy); return; }
    if(!XAU_OwnerEntryPermission("CANDIDATE_ACCEPTANCE", "PYRAMID", pyramidGrade, authorityWhy))
-   { XAU_PyramidGateReject("OWNER_ENTRY_PERMISSION " + authorityWhy); return; }
+   { XAU_PyramidGateReject(dir, "OWNER_ENTRY_PERMISSION " + authorityWhy); return; }
    if(!XAU_TimingAuthorityAllows(dir,"PYRAMID",atr,authorityWhy))
-   { XAU_PyramidGateReject("TIMING_LATE_OR_NOT_READY " + authorityWhy); return; }
+   { XAU_PyramidGateReject(dir, "TIMING_LATE_OR_NOT_READY " + authorityWhy); return; }
    if(!XAU_NewsAuthorityAllows(authorityWhy))
-   { XAU_PyramidGateReject("NEWS_AUTHORITY " + authorityWhy); return; }
+   { XAU_PyramidGateReject(dir, "NEWS_AUTHORITY " + authorityWhy); return; }
    if(!XAU_ReentryPyramidAuthority(dir, "PYRAMID", authorityWhy))
-   { XAU_PyramidGateReject("PYRAMID_AUTHORITY " + authorityWhy); return; }
+   { XAU_PyramidGateReject(dir, "PYRAMID_AUTHORITY " + authorityWhy); return; }
    if(!XAU_FinalEntryArbiter("PYRAMID",dir,true,true,true,true,true,true,authorityWhy))
-   { XAU_PyramidGateReject("FINAL_ENTRY_ARBITER " + authorityWhy); return; }
+   { XAU_PyramidGateReject(dir, "FINAL_ENTRY_ARBITER " + authorityWhy); return; }
 
    double minLot=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MIN);
    double maxLot=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MAX);
@@ -17210,7 +17218,7 @@ void CheckPyramidOpportunity()
    // the newer full-risk real-broker-margin authority unchanged.
    if(marginNeeded>accInfo.FreeMargin()*0.50)
    {
-      XAU_PyramidGateReject(StringFormat("MARGIN_50_PERCENT_BUFFER required=%.2f free=%.2f limit=%.2f",
+      XAU_PyramidGateReject(dir, StringFormat("MARGIN_50_PERCENT_BUFFER required=%.2f free=%.2f limit=%.2f",
                                          marginNeeded,accInfo.FreeMargin(),accInfo.FreeMargin()*0.50));
       return;
    }
@@ -17280,12 +17288,13 @@ void CheckPyramidOpportunity()
                                pyramidReservationId, pyramidExecutionKey))
       {
          PrintFormat("DIRECTION_EXCLUSIVITY_FINAL_SEND_BLOCK signal=%s reason=%s", isBuy ? "BUY" : "SELL", pyramidGuardReason);
-         XAU_PyramidGateReject("DIRECTION_EXCLUSIVITY " + pyramidGuardReason);
+         XAU_PyramidGateReject(dir, "DIRECTION_EXCLUSIVITY " + pyramidGuardReason);
          return;
       }
    }
 
-   Print("PYRAMID_GATE_APPROVED | core_floor_confirmed=true | direction_ok=true | timing_ok=true | structure_ok=true | pressure_ok=true | margin_ok=true");
+   PrintFormat("PYRAMID_GATE_APPROVED | campaign_id=%s | core_position_id=%I64u | direction_ok=true | structure_ok=true | pressure_ok=true | timing_ok=true | location_ok=true | exhaustion_ok=true | margin_ok=true",
+               XAU_CampaignIdText(g_campaign[XAU_CampaignSlot(dir)].campaignId), origPositionId);
 
    // v6.25.11 owner directive -- restore the pre-v6.25.9 pyramid broker TP.
    // This is the existing pyramid target calculated above (campaign TP when
@@ -17360,20 +17369,26 @@ void CheckPyramidOpportunity()
       if(XAU_FindLivePositionByIdentifier(posId,liveTicket,liveSymbol,liveMagic,
                                           liveDir,liveOpen,liveVol,liveSL,liveTP))
       {
-         int inheritedProfile=g_campaign[XAU_CampaignSlot(dir)].ownerExitProfile;
+         // v6.25.13 owner-approved pyramid protection policy: a pyramid leg
+         // gets its OWN dedicated OWNER_EXIT_PYRAMID profile (0.25R arm,
+         // 0.20R minimum floor, 70%-of-own-peak ratchet), never the core
+         // campaign's inherited GENERAL/BREAKOUT profile or floor. This is
+         // independent per-leg R geometry, computed from this leg's own
+         // entry/original stop distance/peak -- the campaign's profile and
+         // floor are never read here.
          int idx=XAU_RExit_EnsureIdx(posId,liveTicket,liveDir==1,liveOpen,liveSL,liveVol,false,
                                      pyramidGeometry.finalOriginalRiskDistance,
                                      addLot*RiskPerLotForDistance(pyramidGeometry.finalOriginalRiskDistance),
                                      addLot*RiskPerLotForDistance(pyramidGeometry.effectiveHardStopDistance),
-                                     inheritedProfile);
+                                     (int)OWNER_EXIT_PYRAMID);
          XAU_RExit_SyncNettingState(idx,liveDir==1,liveOpen,liveSL,liveVol,
                                     pyramidGeometry.finalOriginalRiskDistance);
-         // v6.25.10 owner-directed restoration: preserve the frozen campaign
-         // PROFILE, but do not transplant a pre-existing campaign floor R onto
-         // a newly priced add. v6.25.9 did that after registration, creating an
+         // Do not transplant a pre-existing campaign floor R onto a newly
+         // priced add. v6.25.9 did that after registration, creating an
          // immediately unreachable per-leg floor and a fail-open retry storm.
-         // The add now starts with the same per-leg R state used by 74d5901;
-         // its unchanged owner R-exit arms from its own chronological peak.
+         // The add starts with fresh per-leg R state (peakR=0,
+         // profitGuaranteeArmed=false); its owner R-exit arms independently
+         // from this leg's own chronological peak, never the core's.
          XAU_RExit_SaveState(true);
       }
    }
@@ -25132,6 +25147,14 @@ ENUM_XAU_TRADE_HEALTH XAU_ClassifyTradeHealth(int direction, double currentR, do
 // callers consolidate it with their existing valid floor via MathMax.
 double XAU_ComputeOwnerRequiredFloorR(double peakR, ENUM_XAU_OWNER_EXIT_PROFILE profile)
 {
+   if(profile == OWNER_EXIT_PYRAMID)
+   {
+      // v6.25.13 owner-approved pyramid-leg protection policy: PYRAMID_0.25R_70PCT_POLICY.
+      // Independent of CORE's GENERAL/BREAKOUT bands -- measured from this leg's own
+      // entry/peak, never the campaign's.
+      if(peakR < 0.25) return 0.0;
+      return MathMax(0.20, peakR * 0.70);
+   }
    if(profile == OWNER_EXIT_BREAKOUT)
    {
       if(peakR < 0.50) return 0.0;
@@ -25171,6 +25194,8 @@ bool XAU_OwnerRExitDecisionAllowsClose(double peakR, double currentR,
 
 string XAU_OwnerFloorUpdateReason(double peakR, ENUM_XAU_OWNER_EXIT_PROFILE profile)
 {
+   if(profile == OWNER_EXIT_PYRAMID)
+      return "PYRAMID_0.25R_70PCT_POLICY";
    if(profile == OWNER_EXIT_BREAKOUT)
       return peakR >= 0.70 ? "ADAPTIVE_70_PERCENT" : "FIRST_LOCK";
    return peakR >= 0.50 ? "ADAPTIVE_70_PERCENT" : "FIRST_LOCK";
@@ -26353,10 +26378,13 @@ void XAU_RExitCoreLoop()
       if(g_rExit[idx].closeState==R_CLOSE_REQUESTED || g_rExit[idx].closeState==R_CLOSE_PENDING_RETRY)
          continue;
 
-      // v6.25.9 -- basket state is telemetry/persistence only. Pyramid and
-      // re-entry legs continue through the same per-position owner R-floor
-      // authority and inherit the frozen campaign profile/floor. No basket
-      // manager is allowed to suppress or replace this owner calculation.
+      // v6.25.9 -- basket state is telemetry/persistence only. Re-entry legs
+      // continue through the same per-position owner R-floor authority and
+      // inherit the frozen campaign profile/floor. v6.25.13: pyramid legs
+      // also go through this same per-position authority, but carry their
+      // own independent OWNER_EXIT_PYRAMID profile/floor, never the
+      // campaign's -- see the pyramid registration site. No basket manager
+      // is allowed to suppress or replace this owner calculation.
       if(basketModeActive)
       {
          if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
@@ -26457,6 +26485,9 @@ void XAU_RExitCoreLoop()
                      ticket, peakR, currentR, g_rExit[idx].guaranteedFloorR, XAU_TradeHealthName(tradeHealth), floorReason);
          PrintFormat("OWNER_R_EXIT_FLOOR_ARMED | ticket=%I64u | profile=%s | peak_r=%.3f | floor_r=%.3f",
                      ticket, XAU_OwnerExitProfileName(ownerProfile), peakR, g_rExit[idx].guaranteedFloorR);
+         if(ownerProfile == OWNER_EXIT_PYRAMID)
+            PrintFormat("PYRAMID_PROTECTION_ARMED | position_id=%I64u | peak_r=%.3f | minimum_floor_r=0.20 | required_floor_r=%.3f | source=PYRAMID_0.25R_70PCT_POLICY",
+                        positionId, peakR, g_rExit[idx].guaranteedFloorR);
       }
       else if(g_rExit[idx].guaranteedFloorR > priorFloorR)
       {
@@ -26525,6 +26556,10 @@ void XAU_RExitCoreLoop()
                         ticket, dirStr, riskUSD, profit, currentR, peakR, g_rExit[idx].guaranteedFloorR, DoubleToString(guaranteedSL, digits), DoubleToString(actualSLAfterModify, digits));
             PrintFormat("OWNER_EXIT_BROKER_CONFIRMED | ticket=%I64u profile=%s actualBrokerSL=%s finalLockR=%.3f",
                         ticket, XAU_OwnerExitProfileName(ownerProfile), DoubleToString(actualSLAfterModify, digits), g_rExit[idx].guaranteedFloorR);
+            if(ownerProfile == OWNER_EXIT_PYRAMID)
+               PrintFormat("PYRAMID_FLOOR_CONFIRMED | position_id=%I64u | peak_r=%.3f | previous_floor_r=%.3f | requested_floor_r=%.3f | broker_sl=%s | confirmed_floor_r=%.3f",
+                           positionId, peakR, priorFloorR, g_rExit[idx].guaranteedFloorR,
+                           DoubleToString(actualSLAfterModify, digits), g_rExit[idx].guaranteedFloorR);
          }
          else
          {
@@ -35449,6 +35484,8 @@ bool XAU_OwnerEntryPermission(string phase, string source, string grade,
          PrintFormat("OWNER_ENTRY_PERMISSION | phase=%s source=%s decision=BLOCK reason=%s regime=%s grade=%s brokerServerTime=%s",
                      phase, source, reason, RegimeName(), canonicalGrade,
                      TimeToString(brokerNow, TIME_DATE|TIME_SECONDS));
+         PrintFormat("OWNER_BREAKOUT_BLOCKED | regime=%s | mode=BLOCK | default_off=true | stage=%s | reason=OWNER_BREAKOUT_DISABLED",
+                     regimeText, phase);
          return false;
       }
       PrintFormat("OWNER_BREAKOUT_EXECUTION_POLICY | mode=%s | regime=%s | phase=%s | source=%s | decision=ALLOW_NORMAL_PIPELINE",
