@@ -28,10 +28,10 @@ def test_canonical_and_backend_sources_match():
     assert EA == BACKEND
 
 
-def test_release_identity_is_v6259():
-    assert '#define XAUAI_EA_VERSION "v6.25.9"' in EA
-    assert '#define XAUAI_EA_VERSION_NUM "6.25.9"' in EA
-    assert '#property version   "6.259"' in EA
+def test_release_identity_is_v62510():
+    assert '#define XAUAI_EA_VERSION "v6.25.10"' in EA
+    assert '#define XAUAI_EA_VERSION_NUM "6.25.10"' in EA
+    assert '#property version   "6.260"' in EA
 
 
 def test_profile_assignment_is_trend_up_only_and_truthfully_named():

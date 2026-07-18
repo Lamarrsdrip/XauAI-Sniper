@@ -704,19 +704,19 @@ def test_frontend_card_gates_on_mode_active_before_rendering():
 # ---------------------------------------------------------------------------
 # Version identity
 # ---------------------------------------------------------------------------
-def test_version_bumped_to_v6_25_8():
+def test_version_bumped_to_v6_25_10():
     # The final owner breakout/risk/exit release must remain aligned
     # across source, property metadata, and release description.
     ea = read(EA)
-    assert '#define XAUAI_EA_VERSION "v6.25.9"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.25.9"' in ea
-    assert '#property version   "6.259"' in ea
-    assert "v6.25.9" in ea.split("#property description")[1][:400]
+    assert '#define XAUAI_EA_VERSION "v6.25.10"' in ea
+    assert '#define XAUAI_EA_VERSION_NUM "6.25.10"' in ea
+    assert '#property version   "6.260"' in ea
+    assert "v6.25.10" in ea.split("#property description")[1][:400]
 
 
 def test_build_hash_reflects_m30_release():
     ea = read(EA)
-    assert "v6259-owner-r-exit-inverse-breakout" in ea
+    assert "v62510-restored-pyramid-owner-exit-inverse-breakout" in ea
 
 
 # ===========================================================================

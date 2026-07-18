@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M10 Gold Edition|
-//|   v6.25.9 - Owner R-Exit Single-Authority Cleanup                |
-//|   BRKT_UP and BRKT_DN are hard-blocked at the canonical pre-order |
+//|   v6.25.10 - Restore Pre-v6.25.9 Pyramid Behavior                |
+//|   BRKT_UP and BRKT_DN invert only after canonical entry approval. |
 //|   authority. No owner time-window blackout exists. Every approved |
 //|   normal/re-entry/pyramid trade uses full configured risk against |
 //|   the original full 1.00R structural SL. The frozen TREND_UP      |
@@ -1902,8 +1902,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.259"
-#property description "XAUUSD AI Sniper v6.25.9 owner R-exit single-authority production cleanup."
+#property version   "6.260"
+#property description "XAUUSD AI Sniper v6.25.10 restored pyramid behavior with owner-only R-exit."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -1987,9 +1987,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.9"
-#define XAUAI_EA_VERSION_NUM "6.25.9"
-#define XAUAI_BUILD_HASH "v6259-owner-r-exit-inverse-breakout-20260718"
+#define XAUAI_EA_VERSION "v6.25.10"
+#define XAUAI_EA_VERSION_NUM "6.25.10"
+#define XAUAI_BUILD_HASH "v62510-restored-pyramid-owner-exit-inverse-breakout-20260718"
 #define XAU_COUNTER_EXCURSION_BUILD false
 
 // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
@@ -17155,12 +17155,10 @@ void CheckPyramidOpportunity()
    double marginNeeded=0.0;
    if(!OrderCalcMargin(isBuy?ORDER_TYPE_BUY:ORDER_TYPE_SELL,Symbol(),addLot,entryPx,marginNeeded))
       return;
-   if(marginNeeded>accInfo.FreeMargin())
-   {
-      PrintFormat("PYRAMID_BROKER_MARGIN_BLOCK | required=%.2f | free=%.2f | authority=REAL_BROKER_MARGIN | arbitrary_50pct_buffer=false",
-                  marginNeeded, accInfo.FreeMargin());
-      return;
-   }
+   // v6.25.10 owner-directed restoration: match the pre-v6.25.9 pyramid
+   // margin behavior from 74d5901 exactly. This is pyramid-only; CORE keeps
+   // the newer full-risk real-broker-margin authority unchanged.
+   if(marginNeeded>accInfo.FreeMargin()*0.50) return;
 
    double pyramidEffectiveRiskUSD=addLot*RiskPerLotForDistance(pyramidGeometry.effectiveHardStopDistance);
    PrintFormat("OWNER_RISK_POLICY | structural_sl_r=1.00 | configured_risk_pct=%.2f | stop_distance=%.5f | lots=%.4f | expected_risk_usd=%.2f | path=PYRAMID",
@@ -17309,20 +17307,12 @@ void CheckPyramidOpportunity()
                                      inheritedProfile);
          XAU_RExit_SyncNettingState(idx,liveDir==1,liveOpen,liveSL,liveVol,
                                     pyramidGeometry.finalOriginalRiskDistance);
-         int inheritedSlot=XAU_CampaignSlot(dir);
-         if(g_campaign[inheritedSlot].basketProtectionArmed &&
-            g_campaign[inheritedSlot].basketProtectedFloorR>0.0)
-         {
-            double priorInheritedFloor=g_rExit[idx].guaranteedFloorR;
-            g_rExit[idx].profitGuaranteeArmed=true;
-            g_rExit[idx].guaranteedFloorR=MathMax(g_rExit[idx].guaranteedFloorR,
-                                                  g_campaign[inheritedSlot].basketProtectedFloorR);
-            PrintFormat("OWNER_R_EXIT_FLOOR_INHERITED | ticket=%I64u | campaignId=%s | profile=%s | previous_floor_r=%.3f | inherited_floor_r=%.3f | final_floor_r=%.3f",
-                        liveTicket,XAU_CampaignIdText(g_campaign[inheritedSlot].campaignId),
-                        XAU_OwnerExitProfileName((ENUM_XAU_OWNER_EXIT_PROFILE)inheritedProfile),
-                        priorInheritedFloor,g_campaign[inheritedSlot].basketProtectedFloorR,
-                        g_rExit[idx].guaranteedFloorR);
-         }
+         // v6.25.10 owner-directed restoration: preserve the frozen campaign
+         // PROFILE, but do not transplant a pre-existing campaign floor R onto
+         // a newly priced add. v6.25.9 did that after registration, creating an
+         // immediately unreachable per-leg floor and a fail-open retry storm.
+         // The add now starts with the same per-leg R state used by 74d5901;
+         // its unchanged owner R-exit arms from its own chronological peak.
          XAU_RExit_SaveState(true);
       }
    }

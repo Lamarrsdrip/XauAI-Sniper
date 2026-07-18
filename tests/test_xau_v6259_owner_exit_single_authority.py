@@ -121,11 +121,11 @@ def test_breakouts_use_canonical_owner_mode_and_no_owner_time_blackout():
     assert "OWNER_ENTRY_TIME_BLACKOUT" not in EA
 
 
-def test_full_1r_no_broker_tp_and_no_pyramid_50pct_margin_buffer():
+def test_full_1r_no_broker_tp_and_restored_pyramid_50pct_margin_buffer():
     assert "g.effectiveHardStopDistance=g.finalOriginalRiskDistance" in EA.replace(" ", "")
     assert "trade.Buy(lots, Symbol(), 0, sl, 0.0" in EA
     assert "trade.Sell(lots, Symbol(), 0, sl, 0.0" in EA
-    assert "FreeMargin()*0.50" not in EA.replace(" ", "")
+    assert "FreeMargin()*0.50" in EA.replace(" ", "")
     assert "marginNeeded>accInfo.FreeMargin()" in EA.replace(" ", "")
 
 
@@ -160,5 +160,6 @@ def test_breakout_campaign_persists_original_and_execution_direction():
     assert "ownerOriginalSignalDirection" in EA
     assert "ownerBreakoutInversionApplied" in EA
     assert "OWNER_EXIT_PROFILE_INHERITED" in EA
-    assert "OWNER_R_EXIT_FLOOR_INHERITED" in EA
+    assert "OWNER_R_EXIT_FLOOR_INHERITED" not in EA
+    assert "INHERITED_FROM_CAMPAIGN" not in EA
     assert "#define XAU_BASKET_STATE_SCHEMA_VERSION 5" in EA
