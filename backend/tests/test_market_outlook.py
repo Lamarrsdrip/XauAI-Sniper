@@ -177,7 +177,9 @@ def test_actionable_signal_activates_at_publication_not_zone_touch():
 
 def test_publication_anchor_uses_buy_ask_and_sell_bid_never_zone_midpoint():
     src = _outlook_gen_body()
-    assert 'tracking_entry = published_ask if direction_label == "BUY" else published_bid if direction_label == "SELL" else None' in src
+    assert "_build_tracking_anchor(direction_label, published_bid, published_ask, original_sl)" in src
+    helper = MO_SRC[MO_SRC.index("def _build_tracking_anchor"):MO_SRC.index("async def _insert_outlook_atomically")]
+    assert 'entry = ask if direction == "BUY" else bid' in helper
     anchor_section = src[src.index("# Signal-performance tracking is anchored"):src.index("narrative = await")]
     assert "entry_mid" not in anchor_section
     assert "preferred_entry_zone" not in anchor_section
@@ -185,10 +187,39 @@ def test_publication_anchor_uses_buy_ask_and_sell_bid_never_zone_midpoint():
 
 def test_original_risk_uses_exact_anchor_and_original_published_sl():
     src = _outlook_gen_body()
-    assert "risk_distance = abs(float(tracking_entry) - float(original_sl))" in src
+    helper = MO_SRC[MO_SRC.index("def _build_tracking_anchor"):MO_SRC.index("async def _insert_outlook_atomically")]
+    assert "risk = abs(entry - sl)" in helper
+    assert 'geometry_valid = sl < entry if direction == "BUY" else sl > entry' in helper
     assert '"original_sl": original_sl if actionable else None' in src
     assert '"published_bid": published_bid if published_bid > 0 else None' in src
     assert '"published_ask": published_ask if published_ask > 0 else None' in src
+
+
+def test_actionable_publication_rejects_stale_quote_and_initializes_spread_excursion():
+    src = _outlook_gen_body()
+    assert "MAX_PUBLICATION_QUOTE_AGE_SECONDS" in src
+    assert "quote_fresh" in src
+    assert "OUTLOOK_AWAITING_FRESH_PUBLICATION_QUOTE" in src
+    assert src.index("OUTLOOK_AWAITING_FRESH_PUBLICATION_QUOTE") < src.index("quote_valid =")
+    assert '"current_r": tracking_anchor["current_r"] if actionable else None' in src
+    assert '"mae_r": tracking_anchor["mae_r"] if actionable else None' in src
+
+
+def test_fresh_ea_quote_reenters_the_canonical_slot_idempotent_publisher():
+    server_src = SERVER_SRC
+    activity = server_src[server_src.index("async def cloud_monitor_activity"):]
+    activity = activity[:activity.index("# v6.25.1 owner directive", 1)]
+    assert 'await _mo.hourly_generation_tick(account=req.account or "")' in activity
+    assert "MAX_PUBLICATION_QUOTE_AGE_SECONDS = 30" in MO_SRC
+
+
+def test_background_monitor_and_pending_dispatch_are_not_capped_at_500_records():
+    monitor = MO_SRC[MO_SRC.index("async def track_outlook_lifecycle_tick"):MO_SRC.index("async def _record_revision")]
+    pending = MO_SRC[MO_SRC.index("async def dispatch_pending_signal_notifications"):MO_SRC.index("def _quote_from_activity")]
+    assert ".to_list(500)" not in monitor
+    assert ".to_list(500)" not in pending
+    assert "pending_event_conditions" in pending
+    assert 'notification_flags.TIMEOUT_60M' in pending
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +261,8 @@ def test_generation_only_ever_inserts_never_updates_the_original_outlook_doc():
 def test_sl_classification_precedes_timeout_and_win():
     fn = MO_SRC[MO_SRC.index("def advance_persisted_signal"):]
     classify = fn[fn.index("if outcome is None:"):]
-    assert classify.index("if sl_hit:") < classify.index("elif deadline") < classify.index("elif tp1_hit")
+    assert classify.index("if sl_on_time:") < classify.index("elif tp1_on_time")
+    assert classify.index("elif tp1_on_time") < classify.index("elif half_on_time") < classify.index("elif deadline")
 
 
 def test_actionable_state_machine_has_persisted_win_states():
@@ -472,3 +504,21 @@ def test_repair_function_is_not_wired_into_any_automatic_tick():
 def test_history_stats_exclude_flagged_records_but_keep_them_visible():
     assert "excluded_from_stats" in ROUTES_SRC
     assert 'return {"outlooks": rows, "stats": stats}' in ROUTES_SRC
+
+
+def test_history_analytics_are_not_limited_to_visible_card_page():
+    body = ROUTES_SRC[ROUTES_SRC.index('    @r.get("/outlook/history")'):]
+    body = body[:body.index('    @r.get("/outlook/{outlook_id}")')]
+    assert ".to_list(limit)" in body
+    assert "stats_rows = await" in body
+    assert ".to_list(None)" in body
+    assert "compute_outlook_stats(stats_rows)" in body
+
+
+def test_signal_outlook_hot_path_indexes_are_declared_at_startup():
+    for index_fragment in (
+        'cloud_market_outlooks.create_index([("account", 1), ("generated_at", -1)])',
+        'cloud_market_outlook_outcomes.create_index("outlook_id", unique=True)',
+        'cloud_bot_activity.create_index([("account", 1), ("ts", 1)])',
+    ):
+        assert index_fragment in SERVER_SRC

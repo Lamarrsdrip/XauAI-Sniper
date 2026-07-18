@@ -102,20 +102,23 @@ def _build_payload(doc: Dict, event: str) -> Dict:
 
     signal_time = doc.get("published_at") or doc.get("generated_at")
     entry = doc.get("tracking_entry_price")
-    event_at = {
+    event_snapshot = ((doc.get("event_snapshots") or {}).get(event) or {})
+    event_at = event_snapshot.get("event_at") or {
         "HALF_R_REACHED": doc.get("first_half_r_at"), "TP1_HIT": doc.get("tp1_hit_at"),
         "TP2_HIT": doc.get("tp2_hit_at"), "TP3_HIT": doc.get("tp3_hit_at"),
         "SL_HIT": doc.get("sl_hit_at"), "TIMEOUT_60M": doc.get("evaluation_deadline"),
     }.get(event) or signal_time
-    hit_price = doc.get("last_tracked_price")
-    achieved_r = doc.get("current_r")
+    hit_price = event_snapshot.get("hit_price") if "hit_price" in event_snapshot else doc.get("last_tracked_price")
+    achieved_r = event_snapshot.get("achieved_r") if "achieved_r" in event_snapshot else doc.get("current_r")
+    timed_out = doc.get("analytics_outcome") == "LOSS" and doc.get("signal_state") == "LOSS_RED_TIMEOUT"
 
     if event == "TRACKING_STARTED":
         title = f"{direction} outlook tracking started"
         body = f"Signal {signal_time} · entry {entry} · Bid {doc.get('published_bid')} · Ask {doc.get('published_ask')}"
     elif event == "HALF_R_REACHED":
-        title = f"{direction} outlook reached +0.50R"
-        body = f"Signal {signal_time} reached +0.50R at {event_at} · entry {entry} · hit {hit_price} · R {achieved_r}"
+        title = f"{direction} outlook reached late +0.50R" if timed_out else f"{direction} outlook reached +0.50R"
+        late_text = " after its 60-minute deadline" if timed_out else ""
+        body = f"Signal {signal_time} reached +0.50R{late_text} at {event_at} · entry {entry} · hit {hit_price} · R {achieved_r}"
     elif event == "TIMEOUT_60M":
         title = f"{direction} outlook missed the 60-minute target"
         body = f"Signal {signal_time} failed to reach +0.50R within 60 minutes · entry {entry} · last {hit_price} · R {achieved_r}"
@@ -130,12 +133,14 @@ def _build_payload(doc: Dict, event: str) -> Dict:
                    f"SL: {doc.get('suggested_sl')} | TP1: {doc.get('tp1_price')} TP2: {doc.get('tp2_price')} TP3: {doc.get('tp3_price')}")
     elif event in ("TP1_HIT", "TP2_HIT", "TP3_HIT"):
         r_field = {"TP1_HIT": "tp1_r", "TP2_HIT": "tp2_r", "TP3_HIT": "tp3_r"}[event]
-        title = "XAU Outlook Result"
-        body = (f"Signal {signal_time} hit {event.replace('_HIT', '')} at {event_at} · "
+        title = "XAU Outlook Late Path Event" if timed_out else "XAU Outlook Result"
+        late_text = " after its 60-minute deadline" if timed_out else ""
+        body = (f"Signal {signal_time} hit {event.replace('_HIT', '')}{late_text} at {event_at} · "
                 f"entry {entry} · hit {hit_price} · R {achieved_r if achieved_r is not None else doc.get(r_field)}")
     elif event == "SL_HIT":
-        title = "XAU Outlook Result"
-        body = f"Signal {signal_time} hit SL at {event_at} · entry {entry} · hit {hit_price} · R {achieved_r}"
+        title = "XAU Outlook Late Path Event" if timed_out else "XAU Outlook Result"
+        late_text = " after its 60-minute deadline" if timed_out else ""
+        body = f"Signal {signal_time} hit SL{late_text} at {event_at} · entry {entry} · hit {hit_price} · R {achieved_r}"
     else:
         title = "XAU AI Sniper"
         body = event
@@ -229,10 +234,11 @@ async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
     return False, NO_DEVICE_REGISTERED
 
 
-async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> int:
+async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> Optional[int]:
     """Sends (or logs-as-skipped) a notification for `event` to every user
     subscribed to this outlook's account, respecting per-user tier and
-    idempotency. Returns count of pushes actually sent. Never raises --
+    idempotency. Returns the sent count when every eligible recipient has a
+    terminal result, or None when recovery must retry. Never raises --
     notification failures must never affect outlook generation/tracking."""
     try:
         db = _db()
@@ -282,7 +288,10 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> int
         return sent
     except Exception as e:
         logger.error(f"NOTIFICATION_DISPATCH_FAILED event={event} outlook={doc.get('id')}: {e}")
-        return 0
+        # None means the dispatch attempt itself did not complete far enough
+        # to establish terminal per-recipient logs. The persisted event must
+        # remain unflagged so restart recovery can retry it.
+        return None
 
 
 async def send_test_notification(user_id: str) -> Dict:

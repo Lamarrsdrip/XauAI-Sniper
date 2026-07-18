@@ -61,7 +61,10 @@ def compute_outlook_stats(rows: list) -> dict:
         "total_r": round(sum(resolved_rs), 3) if resolved_rs else 0.0,
         "average_win_r": round(sum(win_rs) / len(win_rs), 3) if win_rs else None,
         "average_loss_r": round(sum(loss_rs) / len(loss_rs), 3) if loss_rs else None,
-        "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else (None if gross_win == 0 else float("inf")),
+        # JSON has no portable Infinity value. An all-win filtered subset
+        # has an undefined/unbounded profit factor, so return null rather
+        # than crashing the entire History endpoint during serialization.
+        "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else None,
         "best_result_r": max(resolved_rs) if resolved_rs else None,
         "worst_result_r": min(resolved_rs) if resolved_rs else None,
     }
@@ -115,7 +118,7 @@ def build_router() -> APIRouter:
         tp: Optional[str] = Query(None), result: Optional[str] = Query(None),
         min_confidence: Optional[int] = Query(None),
         max_confidence: Optional[int] = Query(None), from_date: Optional[str] = Query(None),
-        to_date: Optional[str] = Query(None), limit: int = Query(50),
+        to_date: Optional[str] = Query(None), limit: int = Query(50, ge=1, le=200),
         user: dict = Depends(srv.get_cloud_user),
     ):
         db = srv.db
@@ -152,11 +155,20 @@ def build_router() -> APIRouter:
             conditions.append({"generated_at": {"$gte": from_date}})
         if to_date:
             conditions.append({"generated_at": {"$lte": to_date}})
-        rows = await db.cloud_market_outlooks.find({"$and": conditions}, {"_id": 0}).sort("generated_at", -1).to_list(min(limit, 200))
+        query = {"$and": conditions}
+        rows = await db.cloud_market_outlooks.find(query, {"_id": 0}).sort("generated_at", -1).to_list(limit)
 
-        # Excluded/corrupt rows stay visible for audit, but the summary is
-        # computed only from persisted authoritative signal outcomes.
-        stats = compute_outlook_stats(rows)
+        # Cards are paged, but analytics must cover the full tenant-scoped
+        # filtered history. Computing stats from only the newest 50/200 rows
+        # silently changed win rate as older records fell off the page.
+        stats_projection = {
+            "_id": 0, "excluded_from_stats": 1, "historical_repair_status": 1,
+            "analytics_outcome": 1, "primary_direction": 1,
+            "excluded_from_signal_analytics": 1, "highest_tp_reached": 1,
+            "analytics_r": 1, "mfe_r": 1, "mae_r": 1,
+        }
+        stats_rows = await db.cloud_market_outlooks.find(query, stats_projection).to_list(None)
+        stats = compute_outlook_stats(stats_rows)
         return {"outlooks": rows, "stats": stats}
 
     @r.get("/outlook/{outlook_id}")
@@ -216,7 +228,7 @@ def build_router() -> APIRouter:
     # v6.25.3 -- the frontend needs the authenticated caller's own user id to
     # pass to OneSignal.login(userId) client-side, tagging that browser's
     # OneSignal device registration with our internal identity so later
-    # sends via include_external_user_ids reach it.
+    # sends via include_aliases.external_id reach it.
     @r.get("/outlook/notifications/my-user-id")
     async def get_my_user_id(user: dict = Depends(srv.get_cloud_user)):
         return {"user_id": user["id"]}

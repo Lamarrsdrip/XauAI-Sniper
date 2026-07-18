@@ -65,6 +65,10 @@ OUTLOOK_SYMBOL = "XAUUSD"
 OUTLOOK_HORIZON_HOURS = 4  # how long a published outlook's window stays valid before EXPIRED
 OUTLOOK_EVALUATION_MINUTES = 60
 HALF_R_WIN_THRESHOLD = 0.50
+MAX_PUBLICATION_QUOTE_AGE_SECONDS = 30
+MAX_PUBLICATION_QUOTE_FUTURE_SKEW_SECONDS = 30
+MAX_HISTORICAL_ANCHOR_AGE_SECONDS = 90
+MAX_HISTORICAL_QUOTE_GAP_SECONDS = 10
 ROOM_COLLAPSE_R = 0.3      # same threshold the EA's readiness engine uses -- invalidates a candidate
 
 PRIMARY_DIRECTIONS = ("BUY", "SELL", "NEUTRAL", "RANGE", "TRANSITION", "NO_VALID_OUTLOOK")
@@ -372,6 +376,65 @@ def _outlook_slot_id(account: str, symbol: str, hourly_slot: str) -> str:
     return f"outlook-slot:{account}:{symbol}:{hourly_slot}"
 
 
+def _build_tracking_anchor(direction: str, bid: Any, ask: Any, original_sl: Any) -> Optional[Dict]:
+    """Build the immutable executable-price anchor and initial spread state.
+
+    BUY opens at Ask and is immediately valued at Bid. SELL opens at Bid and
+    is immediately valued at Ask. Directionally invalid SL geometry is
+    rejected rather than hidden behind ``abs()``.
+    """
+    try:
+        direction = str(direction or "").upper()
+        bid = float(bid or 0.0)
+        ask = float(ask or 0.0)
+        sl = float(original_sl or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if direction not in ("BUY", "SELL") or bid <= 0.0 or ask < bid or sl <= 0.0:
+        return None
+    entry = ask if direction == "BUY" else bid
+    geometry_valid = sl < entry if direction == "BUY" else sl > entry
+    if not geometry_valid:
+        return None
+    risk = abs(entry - sl)
+    if risk <= 0.0:
+        return None
+    close_price = bid if direction == "BUY" else ask
+    current_r = ((close_price - entry) / risk) if direction == "BUY" else ((entry - close_price) / risk)
+    return {
+        "tracking_entry_price": entry,
+        "original_sl": sl,
+        "risk_distance": risk,
+        "current_r": round(current_r, 6),
+        "mfe_r": round(max(0.0, current_r), 6),
+        "mae_r": round(min(0.0, current_r), 6),
+        "highest_tracked_price": max(entry, close_price),
+        "lowest_tracked_price": min(entry, close_price),
+        "last_bid": bid,
+        "last_ask": ask,
+        "last_tracked_price": close_price,
+    }
+
+
+def _targets_have_valid_geometry(direction: str, entry: Any, tp1: Any, tp2: Any, tp3: Any) -> bool:
+    """Fail closed when the published TP ladder cannot describe profit.
+
+    Missing, reversed, or out-of-order targets must never become instant TP
+    hits merely because a zero/behind-entry number satisfies a comparison.
+    """
+    try:
+        direction = str(direction or "").upper()
+        entry = float(entry or 0.0)
+        targets = [float(tp1 or 0.0), float(tp2 or 0.0), float(tp3 or 0.0)]
+    except (TypeError, ValueError):
+        return False
+    if direction == "BUY":
+        return entry > 0.0 and entry < targets[0] <= targets[1] <= targets[2]
+    if direction == "SELL":
+        return entry > 0.0 and entry > targets[0] >= targets[1] >= targets[2] > 0.0
+    return False
+
+
 async def _insert_outlook_atomically(db, doc: Dict, account: str, symbol: str, hourly_slot: str) -> Dict:
     """v6.25.2 owner directive 2026-07-17 -- URGENT duplicate-publication
     repair. hourly_generation_tick()'s existing-slot check and this
@@ -597,16 +660,41 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     # gate and never becomes the performance entry.
     published_bid = float(thesis.get("live_bid", 0.0) or 0.0)
     published_ask = float(thesis.get("live_ask", 0.0) or 0.0)
-    published_quote_at = thesis.get("evidence_time_utc") or evidence.get("ts") or now.isoformat()
+    raw_published_quote_at = thesis.get("evidence_time_utc") or evidence.get("ts")
+    published_quote_dt = _as_utc(raw_published_quote_at)
+    published_quote_at = published_quote_dt.isoformat() if published_quote_dt else None
     actionable = direction_label in ("BUY", "SELL")
-    tracking_entry = published_ask if direction_label == "BUY" else published_bid if direction_label == "SELL" else None
     original_sl = zone.get("suggested_sl")
-    risk_distance = abs(float(tracking_entry) - float(original_sl)) if actionable and tracking_entry and original_sl else 0.0
-    quote_valid = published_bid > 0.0 and published_ask >= published_bid and risk_distance > 0.0
+    tracking_anchor = _build_tracking_anchor(direction_label, published_bid, published_ask, original_sl) if actionable else None
+    quote_age_seconds = (now - published_quote_dt).total_seconds() if published_quote_dt else None
+    quote_fresh = (quote_age_seconds is not None
+                   and -MAX_PUBLICATION_QUOTE_FUTURE_SKEW_SECONDS <= quote_age_seconds <= MAX_PUBLICATION_QUOTE_AGE_SECONDS)
+    target_geometry_valid = bool(
+        tracking_anchor
+        and _targets_have_valid_geometry(
+            direction_label,
+            tracking_anchor["tracking_entry_price"],
+            zone.get("tp1_price"), zone.get("tp2_price"), zone.get("tp3_price"),
+        )
+    ) if actionable else True
+    if actionable and tracking_anchor and not quote_fresh:
+        # Do not consume the deterministic hourly slot with an actionable
+        # signal anchored to an old quote. The activity endpoint invokes the
+        # same canonical hourly publisher on the next fresh EA Bid/Ask event.
+        logger.info(
+            "OUTLOOK_AWAITING_FRESH_PUBLICATION_QUOTE account=%s direction=%s quoteAt=%s ageSeconds=%s",
+            account, direction_label, published_quote_at, quote_age_seconds,
+        )
+        return None
+
+    quote_valid = bool(tracking_anchor and target_geometry_valid)
     if actionable and not quote_valid:
+        invalid_reason = ("PUBLISHED_TARGET_GEOMETRY_INVALID" if tracking_anchor and not target_geometry_valid
+                          else "EXECUTABLE_PUBLICATION_QUOTE_OR_SL_INVALID")
         logger.error(
-            "OUTLOOK_PUBLICATION_QUOTE_INVALID | account=%s direction=%s bid=%s ask=%s sl=%s action=NO_VALID_OUTLOOK",
+            "OUTLOOK_PUBLICATION_QUOTE_INVALID | account=%s direction=%s bid=%s ask=%s sl=%s quoteAt=%s ageSeconds=%s reason=%s action=NO_VALID_OUTLOOK",
             account, direction_label, published_bid, published_ask, original_sl,
+            published_quote_at, quote_age_seconds, invalid_reason,
         )
         doc = {
             "id": outlook_id.replace("PENDING", "NO_VALID_OUTLOOK"),
@@ -615,7 +703,7 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "hourly_slot": hourly_slot, "late_catchup": is_late_catchup,
             "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
             "current_price": current_price, "primary_direction": "NO_VALID_OUTLOOK",
-            "no_valid_outlook_reason": "EXECUTABLE_PUBLICATION_QUOTE_UNAVAILABLE",
+            "no_valid_outlook_reason": invalid_reason,
             "confidence_pct": 0, "confidence_components": ConfidenceComponents().model_dump(),
             "status": "INFORMATIONAL", "signal_state": SIGNAL_INFORMATIONAL,
             "reasoning": "No complete broker Bid/Ask snapshot was available, so no actionable signal or performance record was created.",
@@ -623,6 +711,9 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "analytics_outcome": None, "excluded_from_signal_analytics": True,
         }
         return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
+
+    tracking_entry = tracking_anchor["tracking_entry_price"] if tracking_anchor else None
+    risk_distance = tracking_anchor["risk_distance"] if tracking_anchor else None
 
     narrative = await _synthesize_narrative(direction_label, confidence, thesis, path, zone, account_id)
 
@@ -695,18 +786,29 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "final_r": None,
         "analytics_outcome": None,
         "analytics_r": None,
-        "current_r": 0.0 if actionable else None,
-        "mfe_r": 0.0 if actionable else None,
-        "mae_r": 0.0 if actionable else None,
-        "highest_tracked_price": tracking_entry if actionable else None,
-        "lowest_tracked_price": tracking_entry if actionable else None,
+        "current_r": tracking_anchor["current_r"] if actionable else None,
+        "mfe_r": tracking_anchor["mfe_r"] if actionable else None,
+        "mae_r": tracking_anchor["mae_r"] if actionable else None,
+        "highest_tracked_price": tracking_anchor["highest_tracked_price"] if actionable else None,
+        "lowest_tracked_price": tracking_anchor["lowest_tracked_price"] if actionable else None,
+        "last_bid": tracking_anchor["last_bid"] if actionable else None,
+        "last_ask": tracking_anchor["last_ask"] if actionable else None,
+        "last_tracked_price": tracking_anchor["last_tracked_price"] if actionable else None,
         "first_half_r_at": None,
         "tp1_hit_at": None, "tp2_hit_at": None, "tp3_hit_at": None, "sl_hit_at": None,
         "classification_at": None, "latest_path_event": "TRACKING_STARTED" if actionable else "INFORMATIONAL_UPDATE",
-        "notification_flags": {}, "last_monitored_at": None,
+        "notification_flags": {}, "last_monitored_at": published_quote_at if actionable else None,
+        "event_snapshots": ({
+            "TRACKING_STARTED": {
+                "event_at": published_at,
+                "hit_price": tracking_entry,
+                "achieved_r": tracking_anchor["current_r"],
+            }
+        } if actionable else {}),
         "excluded_from_signal_analytics": not actionable,
         "highest_tp_reached": None,
-        "mfe": 0.0, "mae": 0.0,
+        "mfe": tracking_anchor["mfe_r"] if actionable else 0.0,
+        "mae": tracking_anchor["mae_r"] if actionable else 0.0,
         "color_state": "AMBER",
     }
     stored = await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
@@ -715,7 +817,7 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     return stored
 
 
-async def hourly_generation_tick() -> int:
+async def hourly_generation_tick(account: str = "") -> int:
     """Generates at most one NEW outlook per (account, symbol, UTC hourly
     slot) that has posted EA evidence recently.
 
@@ -739,7 +841,7 @@ async def hourly_generation_tick() -> int:
     now = datetime.now(timezone.utc)
     current_slot = now.strftime("%Y-%m-%dT%H:00")
     cutoff = (now - timedelta(hours=2)).isoformat()
-    accounts = await db.cloud_bot_activity.distinct("account", {"ts": {"$gte": cutoff}})
+    accounts = [account] if account else await db.cloud_bot_activity.distinct("account", {"ts": {"$gte": cutoff}})
     published = 0
     for account in accounts:
         if not account:
@@ -898,6 +1000,8 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
     updates: Dict[str, Any] = {"last_monitored_at": observed_iso}
     events = []
     milestones = list(doc.get("milestones_hit") or [])
+    event_snapshots = dict(doc.get("event_snapshots") or {})
+    snapshots_changed = False
 
     close_price = None
     if direction == "BUY" and bid is not None and float(bid) > 0.0:
@@ -906,6 +1010,7 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
         close_price = float(ask)
 
     current_r = float(doc.get("current_r", 0.0) or 0.0)
+    prior_current_r = current_r
     mfe_r = float(doc.get("mfe_r", doc.get("mfe", 0.0)) or 0.0)
     mae_r = float(doc.get("mae_r", doc.get("mae", 0.0)) or 0.0)
     tp1_hit = bool(doc.get("tp1_hit_at"))
@@ -913,6 +1018,16 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
     tp3_hit = bool(doc.get("tp3_hit_at"))
     sl_hit = bool(doc.get("sl_hit_at"))
     half_hit = bool(doc.get("first_half_r_at"))
+
+    def record_event(event: str, event_at: str, hit_price: Optional[float], achieved_r: Optional[float]) -> None:
+        nonlocal snapshots_changed
+        events.append(event)
+        event_snapshots[event] = {
+            "event_at": event_at,
+            "hit_price": round(float(hit_price), 6) if hit_price is not None else None,
+            "achieved_r": round(float(achieved_r), 6) if achieved_r is not None else None,
+        }
+        snapshots_changed = True
 
     if close_price is not None:
         current_r = ((close_price - entry) / risk) if direction == "BUY" else ((entry - close_price) / risk)
@@ -932,22 +1047,23 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
         tp2 = float(doc.get("tp2_price", 0.0) or 0.0)
         tp3 = float(doc.get("tp3_price", 0.0) or 0.0)
         sl = float(doc.get("original_sl", doc.get("suggested_sl", 0.0)) or 0.0)
+        targets_valid = _targets_have_valid_geometry(direction, entry, tp1, tp2, tp3)
         reached = (lambda target: close_price >= target) if direction == "BUY" else (lambda target: close_price <= target)
         hit_sl_now = sl > 0.0 and ((direction == "BUY" and close_price <= sl) or (direction == "SELL" and close_price >= sl))
 
         if current_r >= HALF_R_WIN_THRESHOLD and not half_hit:
             half_hit = True
             updates["first_half_r_at"] = observed_iso
-            events.append("HALF_R_REACHED")
+            record_event("HALF_R_REACHED", observed_iso, close_price, current_r)
             if "HALF_R_REACHED" not in milestones:
                 milestones.append("HALF_R_REACHED")
         for target, field, event, number in ((tp1, "tp1_hit_at", "TP1_HIT", 1),
                                               (tp2, "tp2_hit_at", "TP2_HIT", 2),
                                               (tp3, "tp3_hit_at", "TP3_HIT", 3)):
             already = bool(doc.get(field)) or bool(updates.get(field))
-            if target > 0.0 and reached(target) and not already:
+            if targets_valid and reached(target) and not already:
                 updates[field] = observed_iso
-                events.append(event)
+                record_event(event, observed_iso, close_price, current_r)
                 if event not in milestones:
                     milestones.append(event)
                 updates["highest_tp_reached"] = max(int(doc.get("highest_tp_reached") or 0), number)
@@ -957,37 +1073,61 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
         if hit_sl_now and not sl_hit:
             sl_hit = True
             updates["sl_hit_at"] = observed_iso
-            events.append("SL_HIT")
+            record_event("SL_HIT", observed_iso, close_price, current_r)
             if "SL_HIT" not in milestones:
                 milestones.append("SL_HIT")
 
-    # Classification is immutable. At/after the exact deadline, a signal
-    # that had not already qualified is a timeout even if the first observed
-    # favourable quote arrives late. SL remains an immediate terminal loss.
+    # Classification is immutable. A target observed exactly at the deadline
+    # is still within the 60-minute window. A price event strictly after the
+    # deadline cannot replace the timeout classification.
     new_state = doc.get("signal_state") or SIGNAL_TRACKING
     latest_path = doc.get("latest_path_event") or "TRACKING_STARTED"
     classification_at = doc.get("classification_at")
     analytics_r = doc.get("analytics_r")
+    half_at = _as_utc(updates.get("first_half_r_at") or doc.get("first_half_r_at"))
+    tp1_at = _as_utc(updates.get("tp1_hit_at") or doc.get("tp1_hit_at"))
+    sl_at = _as_utc(updates.get("sl_hit_at") or doc.get("sl_hit_at"))
+    half_on_time = bool(half_at and (not deadline or half_at <= deadline))
+    tp1_on_time = bool(tp1_at and (not deadline or tp1_at <= deadline))
+    sl_on_time = bool(sl_at and (not deadline or sl_at <= deadline))
+    timeout_classified_now = False
     if outcome is None:
-        if sl_hit:
+        if sl_on_time:
             outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_SL, "SL_HIT_BEFORE_WIN"
             classification_at, analytics_r = updates.get("sl_hit_at") or doc.get("sl_hit_at") or observed_iso, -1.0
-        elif deadline and observed_at >= deadline:
-            outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_TIMEOUT, "FAILED_HALF_R_60M"
-            classification_at, analytics_r = deadline.isoformat(), round(current_r, 6)
-            if "TIMEOUT_60M" not in milestones:
-                milestones.append("TIMEOUT_60M")
-            events.append("TIMEOUT_60M")
-        elif tp1_hit:
+        elif tp1_on_time:
             outcome, new_state, latest_path = ANALYTICS_WIN, SIGNAL_WIN_TP1, "TP1_HIT"
             classification_at = updates.get("tp1_hit_at") or doc.get("tp1_hit_at") or observed_iso
-            analytics_r = float(doc.get("tp1_r", 1.0) or 1.0)
-        elif half_hit:
+            # TP1 may sit closer than +0.50R. Its analytics value must still
+            # use the executable tracking anchor, never the suggested-zone R.
+            analytics_r = round(current_r, 6)
+        elif half_on_time:
             outcome, new_state, latest_path = ANALYTICS_WIN, SIGNAL_WIN_HALF_R, "HALF_R_REACHED"
             classification_at = updates.get("first_half_r_at") or doc.get("first_half_r_at") or observed_iso
             analytics_r = HALF_R_WIN_THRESHOLD
+        elif deadline and observed_at >= deadline:
+            outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_TIMEOUT, "FAILED_HALF_R_60M"
+            classification_at = deadline.isoformat()
+            analytics_r = round(current_r if observed_at <= deadline else prior_current_r, 6)
+            timeout_classified_now = True
+            if "TIMEOUT_60M" not in milestones:
+                milestones.append("TIMEOUT_60M")
+            timeout_price = (
+                updates.get("last_tracked_price", doc.get("last_tracked_price"))
+                if observed_at <= deadline else doc.get("last_tracked_price")
+            )
+            record_event(
+                "TIMEOUT_60M", deadline.isoformat(), timeout_price, analytics_r,
+            )
+        elif sl_hit:
+            # Only reachable for records without a deadline.
+            outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_SL, "SL_HIT_BEFORE_WIN"
+            classification_at, analytics_r = updates.get("sl_hit_at") or doc.get("sl_hit_at") or observed_iso, -1.0
     elif outcome == ANALYTICS_WIN:
-        if sl_hit and not doc.get("sl_hit_at"):
+        # A later SL is the terminal path event for a signal that already
+        # qualified as a win. Keep that truthful metadata stable on repeated
+        # quotes instead of allowing an earlier TP milestone to overwrite it.
+        if sl_hit:
             latest_path = "LATER_SL_AFTER_WIN"
         elif tp3_hit:
             latest_path = "TP3_HIT"
@@ -1005,6 +1145,18 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
         elif half_hit and not doc.get("first_half_r_at"):
             latest_path = "LATE_HALF_R_AFTER_60M"
 
+    if timeout_classified_now:
+        if sl_hit and not sl_on_time:
+            latest_path = "LATE_SL_AFTER_60M"
+        elif tp3_hit and not doc.get("tp3_hit_at"):
+            latest_path = "LATE_TP3_AFTER_60M"
+        elif tp2_hit and not doc.get("tp2_hit_at"):
+            latest_path = "LATE_TP2_AFTER_60M"
+        elif tp1_hit and not tp1_on_time:
+            latest_path = "LATE_TP1_AFTER_60M"
+        elif half_hit and not half_on_time:
+            latest_path = "LATE_HALF_R_AFTER_60M"
+
     updates.update({
         "signal_state": new_state,
         "analytics_outcome": outcome,
@@ -1018,8 +1170,10 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
         "color_state": "GREEN" if outcome == ANALYTICS_WIN else "RED" if outcome == ANALYTICS_LOSS else "AMBER",
         "milestones_hit": milestones,
     })
+    if snapshots_changed:
+        updates["event_snapshots"] = event_snapshots
     monitoring_closed = bool(doc.get("monitoring_closed"))
-    if new_state == SIGNAL_LOSS_SL or sl_hit or tp3_hit or (expiry and observed_at >= expiry):
+    if new_state == SIGNAL_LOSS_SL or sl_hit or (expiry and observed_at >= expiry):
         monitoring_closed = True
     updates["monitoring_closed"] = monitoring_closed
     return updates, list(dict.fromkeys(events))
@@ -1066,9 +1220,9 @@ async def track_outlook_lifecycle_tick(account: str = "", bid: Optional[float] =
     }
     if account:
         query["account"] = account
-    docs = await db.cloud_market_outlooks.find(query, {"_id": 0}).to_list(500)
+    docs = db.cloud_market_outlooks.find(query, {"_id": 0})
     updated_count = 0
-    for initial_doc in docs:
+    async for initial_doc in docs:
         doc = initial_doc
         committed = None
         # Optimistic compare-and-set prevents two simultaneous EA activity
@@ -1093,13 +1247,19 @@ async def track_outlook_lifecycle_tick(account: str = "", bid: Optional[float] =
             events = []
             merged = dict(doc)
             for doc_bid, doc_ask, observed in quote_journey:
+                deadline = _as_utc(merged.get("evaluation_deadline"))
+                if deadline and observed > deadline and merged.get("analytics_outcome") is None:
+                    timeout_updates, timeout_events = advance_persisted_signal(merged, None, None, deadline)
+                    price_updates.update(timeout_updates)
+                    events.extend(timeout_events)
+                    merged.update(timeout_updates)
                 quote_updates, quote_events = advance_persisted_signal(merged, doc_bid, doc_ask, observed)
                 price_updates.update(quote_updates)
                 events.extend(quote_events)
                 merged.update(quote_updates)
-            deadline = _as_utc(doc.get("evaluation_deadline"))
+            deadline = _as_utc(merged.get("evaluation_deadline"))
             if deadline and wall_now >= deadline and merged.get("analytics_outcome") is None:
-                timeout_updates, timeout_events = advance_persisted_signal(merged, None, None, wall_now)
+                timeout_updates, timeout_events = advance_persisted_signal(merged, None, None, deadline)
                 price_updates.update(timeout_updates)
                 events.extend(timeout_events)
                 merged.update(timeout_updates)
@@ -1118,6 +1278,7 @@ async def track_outlook_lifecycle_tick(account: str = "", bid: Optional[float] =
                         doc["id"], "analytics_outcome", doc.get("analytics_outcome"),
                         merged.get("analytics_outcome"), merged.get("latest_path_event", "signal classified"),
                     )
+                if merged.get("analytics_outcome") in (ANALYTICS_WIN, ANALYTICS_LOSS):
                     await _persist_signal_outcome(merged)
                 updated_count += 1
                 committed = (merged, list(dict.fromkeys(events)))
@@ -1165,6 +1326,11 @@ async def _persist_signal_outcome(doc: Dict) -> None:
         "highest_tp_reached": doc.get("highest_tp_reached"), "confidence_pct": doc.get("confidence_pct"),
         "primary_direction": doc.get("primary_direction"), "setup_type": doc.get("setup_type"),
         "expected_path": doc.get("expected_path"), "session": doc.get("session"),
+        "current_r": doc.get("current_r"), "latest_path_event": doc.get("latest_path_event"),
+        "first_half_r_at": doc.get("first_half_r_at"), "tp1_hit_at": doc.get("tp1_hit_at"),
+        "tp2_hit_at": doc.get("tp2_hit_at"), "tp3_hit_at": doc.get("tp3_hit_at"),
+        "sl_hit_at": doc.get("sl_hit_at"),
+        "event_snapshots": doc.get("event_snapshots") or {},
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await _db().cloud_market_outlook_outcomes.update_one(
@@ -1176,7 +1342,9 @@ async def _dispatch_signal_event(doc: Dict, event: str) -> None:
     if flag:
         return
     from notifications import RETRYABLE_FAILURES, send_outlook_notification
-    await send_outlook_notification(doc, event=event, min_tier="HOURLY_PLUS_RESULTS")
+    dispatch_result = await send_outlook_notification(doc, event=event, min_tier="HOURLY_PLUS_RESULTS")
+    if dispatch_result is None:
+        return
     # Do not close the persisted retry gap while any eligible recipient has
     # a transient/configuration failure. Sent/no-device results are terminal;
     # credentials or payload errors remain pending so a settings correction
@@ -1202,10 +1370,23 @@ async def dispatch_pending_signal_notifications() -> int:
     safe to retry any persisted event whose document flag was not committed.
     """
     db = _db()
-    rows = await db.cloud_market_outlooks.find(
-        {"tracking_entry_price": {"$gt": 0}}, {"_id": 0}).sort("published_at", -1).to_list(500)
+    # Query only records that actually have at least one persisted event
+    # without its completion flag. Scanning the entire lifetime history on
+    # every one-minute recovery pass would grow linearly forever.
+    pending_event_conditions = [
+        {"notification_flags.TRACKING_STARTED": {"$exists": False}},
+        {"first_half_r_at": {"$ne": None}, "notification_flags.HALF_R_REACHED": {"$exists": False}},
+        {"tp1_hit_at": {"$ne": None}, "notification_flags.TP1_HIT": {"$exists": False}},
+        {"tp2_hit_at": {"$ne": None}, "notification_flags.TP2_HIT": {"$exists": False}},
+        {"tp3_hit_at": {"$ne": None}, "notification_flags.TP3_HIT": {"$exists": False}},
+        {"sl_hit_at": {"$ne": None}, "notification_flags.SL_HIT": {"$exists": False}},
+        {"signal_state": SIGNAL_LOSS_TIMEOUT, "notification_flags.TIMEOUT_60M": {"$exists": False}},
+    ]
+    rows = db.cloud_market_outlooks.find({
+        "tracking_entry_price": {"$gt": 0}, "$or": pending_event_conditions,
+    }, {"_id": 0}).sort("published_at", -1)
     dispatched = 0
-    for doc in rows:
+    async for doc in rows:
         for event in _signal_events_present(doc):
             if not (doc.get("notification_flags") or {}).get(event):
                 await _dispatch_signal_event(doc, event)
@@ -1224,8 +1405,9 @@ async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
     """Idempotently reconstruct legacy BUY/SELL history from stored EA quotes.
 
     A timeout is only reconstructed when quote coverage spans the complete
-    60-minute window with no gap over three minutes. Sparse or missing data
-    is marked unavailable and excluded; it is never converted into a loss.
+    60-minute window at near-tick density. Sparse or missing data is marked
+    unavailable and excluded; absence of a sampled target is never invented
+    into a loss.
     """
     db = _db()
     now = datetime.now(timezone.utc)
@@ -1252,26 +1434,39 @@ async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
             "details.market_thesis.live_bid": {"$gt": 0},
             "details.market_thesis.live_ask": {"$gt": 0},
         }, {"_id": 0, "ts": 1, "details.market_thesis.live_bid": 1,
-            "details.market_thesis.live_ask": 1}).sort("ts", 1).to_list(1000)
+            "details.market_thesis.live_ask": 1}).sort("ts", 1).to_list(5000)
         usable = [(row, _as_utc(row.get("ts"))) for row in rows]
         usable = [(row, ts) for row, ts in usable if ts and all(v is not None for v in _quote_from_activity(row))]
         if not usable:
             await _mark_history_unavailable(old, "no stored broker Bid/Ask history")
             report["unavailable"] += 1
             continue
-        anchor_row, anchor_at = min(usable, key=lambda item: abs((item[1] - published).total_seconds()))
-        if abs((anchor_at - published).total_seconds()) > 90:
-            await _mark_history_unavailable(old, "no reliable publication quote within 90 seconds")
+        anchor_candidates = [(row, ts) for row, ts in usable if ts <= published]
+        if not anchor_candidates:
+            await _mark_history_unavailable(old, "no stored executable quote at or before publication")
+            report["unavailable"] += 1
+            continue
+        anchor_row, anchor_at = max(anchor_candidates, key=lambda item: item[1])
+        if (published - anchor_at).total_seconds() > MAX_HISTORICAL_ANCHOR_AGE_SECONDS:
+            await _mark_history_unavailable(old, "no reliable publication quote within 90 seconds before publication")
             report["unavailable"] += 1
             continue
         anchor_bid, anchor_ask = _quote_from_activity(anchor_row)
         direction = old["primary_direction"]
-        entry = anchor_ask if direction == "BUY" else anchor_bid
-        risk = abs(float(entry) - sl)
-        if risk <= 0.0:
-            await _mark_history_unavailable(old, "publication entry and SL produce zero risk distance")
+        tracking_anchor = _build_tracking_anchor(direction, anchor_bid, anchor_ask, sl)
+        if not tracking_anchor:
+            await _mark_history_unavailable(old, "publication quote and original SL have invalid directional geometry")
             report["unavailable"] += 1
             continue
+        if not _targets_have_valid_geometry(
+            direction, tracking_anchor["tracking_entry_price"],
+            old.get("tp1_price"), old.get("tp2_price"), old.get("tp3_price"),
+        ):
+            await _mark_history_unavailable(old, "published TP ladder has invalid directional geometry")
+            report["unavailable"] += 1
+            continue
+        entry = tracking_anchor["tracking_entry_price"]
+        risk = tracking_anchor["risk_distance"]
 
         working = {**old,
             "published_at": published.isoformat(), "published_bid": anchor_bid, "published_ask": anchor_ask,
@@ -1279,12 +1474,22 @@ async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
             "tracking_entry_price": entry, "original_sl": sl, "risk_distance": risk,
             "evaluation_deadline": deadline.isoformat(), "signal_tracking_version": 2,
             "signal_state": SIGNAL_TRACKING, "analytics_outcome": None, "analytics_r": None,
-            "current_r": 0.0, "mfe_r": 0.0, "mae_r": 0.0,
-            "highest_tracked_price": entry, "lowest_tracked_price": entry,
+            "current_r": tracking_anchor["current_r"],
+            "mfe_r": tracking_anchor["mfe_r"], "mae_r": tracking_anchor["mae_r"],
+            "mfe": tracking_anchor["mfe_r"], "mae": tracking_anchor["mae_r"],
+            "highest_tracked_price": tracking_anchor["highest_tracked_price"],
+            "lowest_tracked_price": tracking_anchor["lowest_tracked_price"],
+            "last_bid": tracking_anchor["last_bid"], "last_ask": tracking_anchor["last_ask"],
+            "last_tracked_price": tracking_anchor["last_tracked_price"],
+            "last_monitored_at": anchor_at.isoformat(),
             "first_half_r_at": None, "tp1_hit_at": None, "tp2_hit_at": None,
             "tp3_hit_at": None, "sl_hit_at": None, "classification_at": None,
             "latest_path_event": "TRACKING_STARTED", "monitoring_closed": False,
             "color_state": "AMBER", "status": "TRACKING", "milestones_hit": [],
+            "event_snapshots": {"TRACKING_STARTED": {
+                "event_at": published.isoformat(), "hit_price": entry,
+                "achieved_r": tracking_anchor["current_r"],
+            }},
             "final_result": None, "final_r": None, "resolved_at": None,
             "legacy_result_before_repair": old.get("final_result"),
             "activation": {"activated": True, "activated_at": published.isoformat(), "activated_price": entry},
@@ -1295,33 +1500,43 @@ async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
         if in_window and deadline <= now:
             times = [ts for _, ts in in_window]
             max_gap = max(((b - a).total_seconds() for a, b in zip(times, times[1:])), default=0.0)
-            coverage_reliable = (times[0] <= published + timedelta(seconds=90)
-                                 and times[-1] >= deadline - timedelta(seconds=90)
-                                 and max_gap <= 180.0)
+            coverage_reliable = (times[0] <= published + timedelta(seconds=MAX_HISTORICAL_QUOTE_GAP_SECONDS)
+                                 and times[-1] >= deadline - timedelta(seconds=MAX_HISTORICAL_QUOTE_GAP_SECONDS)
+                                 and max_gap <= MAX_HISTORICAL_QUOTE_GAP_SECONDS)
 
-        # First process observed quotes strictly before the deadline so a
-        # late quote cannot accidentally become an on-time win.
+        repair_unavailable = False
+        # Replay the complete path in order. If the first post-deadline quote
+        # arrives before a classification, commit the timeout at the exact
+        # deadline first; later events remain path metadata only.
         for row, ts in usable:
-            if ts >= deadline or working.get("analytics_outcome") is not None:
-                break
+            if ts < published or ts > end:
+                continue
+            if ts > deadline and working.get("analytics_outcome") is None:
+                if not coverage_reliable:
+                    await _mark_history_unavailable(old, "stored quotes do not reliably cover the full 60-minute window")
+                    report["unavailable"] += 1
+                    repair_unavailable = True
+                    break
+                update, _ = advance_persisted_signal(working, None, None, deadline)
+                working.update(update)
             q_bid, q_ask = _quote_from_activity(row)
             update, _ = advance_persisted_signal(working, q_bid, q_ask, ts)
             working.update(update)
+            if working.get("signal_state") == SIGNAL_LOSS_TIMEOUT and not coverage_reliable:
+                await _mark_history_unavailable(old, "stored quotes do not reliably cover the full 60-minute window")
+                report["unavailable"] += 1
+                repair_unavailable = True
+                break
+            if working.get("monitoring_closed"):
+                break
+        if repair_unavailable:
+            continue
         if deadline <= now and working.get("analytics_outcome") is None:
             if not coverage_reliable:
                 await _mark_history_unavailable(old, "stored quotes do not reliably cover the full 60-minute window")
                 report["unavailable"] += 1
                 continue
             update, _ = advance_persisted_signal(working, None, None, deadline)
-            working.update(update)
-
-        # Preserve later TP/SL path evidence without rewriting the immutable
-        # one-hour analytics outcome.
-        for row, ts in usable:
-            if ts < deadline or ts > end:
-                continue
-            q_bid, q_ask = _quote_from_activity(row)
-            update, _ = advance_persisted_signal(working, q_bid, q_ask, ts)
             working.update(update)
 
         historical_flags = {event: "BACKFILL_SUPPRESSED" for event in _signal_events_present(working)}

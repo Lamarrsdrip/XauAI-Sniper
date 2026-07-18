@@ -351,6 +351,41 @@ def test_transient_event_failure_retries_once_then_persists_dispatch_flag():
     _run(go())
 
 
+def test_dispatch_exception_does_not_mark_persisted_event_complete():
+    import market_outlook as mo
+
+    async def go():
+        await _clear()
+        doc = {
+            "id": "outlook-dispatch-exception", "account": "acct-exception",
+            "primary_direction": "BUY", "tracking_entry_price": 100.1,
+            "notification_flags": {},
+        }
+        await srv.db.cloud_market_outlooks.insert_one(doc)
+        with patch("notifications.send_outlook_notification", new=AsyncMock(return_value=None)), \
+             patch.object(mo, "_db", return_value=srv.db):
+            await mo._dispatch_signal_event(doc, "TP1_HIT")
+        saved = await srv.db.cloud_market_outlooks.find_one({"id": doc["id"]}, {"_id": 0})
+        assert not (saved.get("notification_flags") or {}).get("TP1_HIT")
+        await srv.db.cloud_market_outlooks.delete_many({"id": doc["id"]})
+        await _clear()
+
+    _run(go())
+
+
+def test_late_target_notification_is_truthful_about_timeout_classification():
+    doc = {
+        "id": "late-target", "primary_direction": "SELL",
+        "published_at": "2026-07-18T12:00:00+00:00",
+        "tracking_entry_price": 100.0, "last_tracked_price": 99.0,
+        "current_r": 1.0, "tp1_hit_at": "2026-07-18T13:01:00+00:00",
+        "analytics_outcome": "LOSS", "signal_state": "LOSS_RED_TIMEOUT",
+    }
+    payload = notif._build_payload(doc, "TP1_HIT")
+    assert "Late Path Event" in payload["title"]
+    assert "after its 60-minute deadline" in payload["body"]
+
+
 if __name__ == "__main__":
     import sys
     import pytest

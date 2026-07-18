@@ -2207,12 +2207,26 @@ async def startup():
     # (never concurrently). A unique index makes the guarantee real
     # regardless of process count: a duplicate insert now raises inside
     # send_outlook_notification's existing blanket try/except (notifications.py),
-    # which already logs and returns 0 rather than propagating -- so this
+    # which logs and leaves the persisted event retryable rather than
+    # propagating -- so this
     # closes the race without needing new error-handling code.
     try:
         await db.cloud_notification_log.create_index("idempotency_key", unique=True)
     except Exception as e:
         logger.warning(f"[outlook-notifications] could not create idempotency_key index: {e}")
+    try:
+        # Signal Outlook hot paths: tenant history/current lookups, the open
+        # lifecycle scan, restart quote replay, and one authoritative outcome
+        # row per outlook. These indexes affect monitoring latency only; they
+        # do not alter any trading or classification rule.
+        await db.cloud_market_outlooks.create_index([("account", 1), ("generated_at", -1)])
+        await db.cloud_market_outlooks.create_index([("monitoring_closed", 1), ("primary_direction", 1), ("account", 1)])
+        await db.cloud_market_outlook_outcomes.create_index("outlook_id", unique=True)
+        await db.cloud_bot_activity.create_index([("account", 1), ("ts", 1)])
+        await db.cloud_notification_prefs.create_index("user_id", unique=True)
+        await db.cloud_push_subscriptions.create_index([("user_id", 1), ("opted_in", 1)])
+    except Exception as e:
+        logger.warning(f"[signal-outlook] could not create lifecycle indexes: {e}")
 
     # v6.25.6 XAU-027 (Codex handover) -- tenant-scoped remote-command
     # idempotency. dedupe_key is "{user_id}:{action}:{client_key}"; the
@@ -5311,6 +5325,12 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
                 import market_outlook as _mo
                 await _mo.track_outlook_lifecycle_tick(
                     account=req.account or "", bid=quote_bid, ask=quote_ask, quote_at=doc["ts"])
+                # The scheduled hourly pass may deliberately defer an
+                # actionable publication when its latest broker quote is
+                # older than 30 seconds. Re-enter the same canonical,
+                # slot-idempotent publisher on this fresh EA quote so the
+                # signal anchor is contemporaneous rather than stale.
+                await _mo.hourly_generation_tick(account=req.account or "")
             except Exception as exc:
                 logger.warning(f"[outlook-event-monitor] account={req.account} error={exc}")
         asyncio.create_task(_monitor_outlook_quote_event())

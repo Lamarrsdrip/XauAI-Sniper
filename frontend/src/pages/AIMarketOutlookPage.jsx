@@ -208,7 +208,7 @@ function NotificationSettings({ prefs, setPrefs }) {
   // actual push subscription lifecycle entirely; this function's job is
   // just: init the SDK with the live App ID, request permission, tag this
   // browser with OneSignal.login(our user id) so sends via
-  // include_external_user_ids reach it, and confirm opt-in with our own
+  // include_aliases.external_id reach it, and confirm opt-in with our own
   // backend for status/UI purposes. subscribeDevice() must still return a
   // structured result, never silently swallow -- real errors are reported
   // through verifiedStatus (backed by the authenticated

@@ -175,7 +175,7 @@ def test_routes_active_unresolved_uses_primary_direction_filter():
 
 def test_hourly_generation_tick_only_dispatches_notification_on_real_win():
     mo_src = open(os.path.join(BACKEND_DIR, "market_outlook.py")).read()
-    idx = mo_src.index("async def hourly_generation_tick()")
+    idx = mo_src.index("async def hourly_generation_tick(")
     fn = mo_src[idx: idx + 4500]
     assert 'newly_inserted = doc.pop("_newly_inserted", True)' in fn
     assert "if newly_inserted:" in fn

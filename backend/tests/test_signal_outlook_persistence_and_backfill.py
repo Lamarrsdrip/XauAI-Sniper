@@ -116,6 +116,10 @@ def test_restart_replays_intermediate_persisted_quote_and_does_not_miss_tp_rever
         assert saved["tp1_hit_at"] == (published + timedelta(minutes=5)).isoformat()
         assert saved["mfe_r"] == 1.0
         assert saved["current_r"] == -0.1
+        outcome = await h.db.cloud_market_outlook_outcomes.find_one({"outlook_id": doc["id"]}, {"_id": 0})
+        assert outcome["mfe_r"] == 1.0
+        assert outcome["current_r"] == -0.1
+        assert outcome["latest_path_event"] == "TP1_HIT"
         assert {call.args[1] for call in dispatcher.await_args_list} >= {"HALF_R_REACHED", "TP1_HIT"}
         await h.drop()
 
@@ -183,19 +187,24 @@ def test_eight_legacy_records_reconstruct_four_and_exclude_four_without_data():
         await h.db.cloud_market_outlooks.insert_many(legacy)
 
         activity = []
-        for i in range(4):
-            direction = legacy[i]["primary_direction"]
+        for i in range(3):
             for minute in range(61):
                 bid, ask = 100.0, 100.1
-                if i == 0 and minute >= 17:       # BUY +0.50R
+                if i == 0 and minute >= 40:       # later SL after a recorded win
+                    bid, ask = 99.1, 99.2
+                elif i == 0 and minute >= 30:     # TP1 + TP2 after the +0.50R win
+                    bid, ask = 102.1, 102.2
+                elif i == 0 and minute >= 17:     # BUY +0.50R
                     bid, ask = 100.6, 100.7
                 elif i == 1 and minute >= 17:     # SELL +0.50R, checked on Ask
                     bid, ask = 99.4, 99.5
                 elif i == 2 and minute >= 12:     # BUY SL before qualifying
                     bid, ask = 99.1, 99.2
-                elif i == 3:                      # full coverage, no target => timeout
-                    bid, ask = 100.2, 100.3
                 activity.append(_activity(f"BACKFILL-{i}", published + timedelta(minutes=minute), bid, ask))
+        # Timeout reconstruction requires near-tick coverage; minute samples
+        # cannot prove that price did not cross between observations.
+        for seconds in range(0, 60 * 60 + 1, 5):
+            activity.append(_activity("BACKFILL-3", published + timedelta(seconds=seconds), 100.2, 100.3))
         await h.db.cloud_bot_activity.insert_many(activity)
 
         with patch.object(mo, "_db", return_value=h.db):
@@ -211,6 +220,13 @@ def test_eight_legacy_records_reconstruct_four_and_exclude_four_without_data():
         assert all(row["excluded_from_signal_analytics"] for row in unavailable)
         assert all(row["final_result"] != "GRAY_EXPIRED_NO_ENTRY" for row in rows)
         assert all(row.get("tracking_entry_price") for row in reconstructed)
+        repaired_win = next(row for row in reconstructed if row["id"] == "legacy-0")
+        assert repaired_win["analytics_outcome"] == mo.ANALYTICS_WIN
+        assert repaired_win["highest_tp_reached"] == 2
+        assert repaired_win["sl_hit_at"] is not None
+        assert repaired_win["latest_path_event"] == "LATER_SL_AFTER_WIN"
+        assert repaired_win["event_snapshots"]["HALF_R_REACHED"]["achieved_r"] >= 0.5
+        assert repaired_win["event_snapshots"]["SL_HIT"]["event_at"] == repaired_win["sl_hit_at"]
         audit = await h.db.cloud_market_outlook_repair_runs.find_one({"tracking_version": 2}, {"_id": 0})
         assert audit["report"] == report
         await h.drop()

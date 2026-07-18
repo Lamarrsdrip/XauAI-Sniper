@@ -1,6 +1,7 @@
 """Focused v2 Signal Outlook lifecycle regression tests."""
 
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import sys
 
@@ -57,10 +58,11 @@ def test_sell_uses_executable_ask_for_half_r():
 
 
 def test_tp1_can_classify_win_before_half_r_threshold():
-    doc = signal(tp1_price=100.40)
+    doc = signal(tp1_price=100.40, tp1_r=1.75)
     won, events = advance(doc, 100.40, 100.45, 9)
     assert won["signal_state"] == mo.SIGNAL_WIN_TP1
     assert won["analytics_outcome"] == mo.ANALYTICS_WIN
+    assert won["analytics_r"] == 0.4  # executable anchor R, not stale suggested-zone tp1_r
     assert "TP1_HIT" in events
 
 
@@ -79,6 +81,24 @@ def test_exact_60_minute_deadline_is_red_timeout():
     assert "TIMEOUT_60M" in events
 
 
+def test_half_r_reached_exactly_at_deadline_is_still_a_win():
+    won, events = advance(signal(), 100.50, 100.55, 60)
+    assert won["analytics_outcome"] == mo.ANALYTICS_WIN
+    assert won["signal_state"] == mo.SIGNAL_WIN_HALF_R
+    assert "TIMEOUT_60M" not in events
+
+
+def test_sl_first_observed_after_deadline_is_timeout_not_sl_loss():
+    lost, events = advance(signal(current_r=0.2, last_tracked_price=100.2), 99.0, 99.05, 61)
+    assert lost["analytics_outcome"] == mo.ANALYTICS_LOSS
+    assert lost["signal_state"] == mo.SIGNAL_LOSS_TIMEOUT
+    assert lost["analytics_r"] == 0.2
+    assert lost["latest_path_event"] == "LATE_SL_AFTER_60M"
+    assert {"TIMEOUT_60M", "SL_HIT"}.issubset(events)
+    assert lost["event_snapshots"]["TIMEOUT_60M"]["hit_price"] == 100.2
+    assert lost["event_snapshots"]["SL_HIT"]["hit_price"] == 99.0
+
+
 def test_half_r_after_deadline_remains_timeout_loss():
     timed_out, _ = advance(signal(), 100.20, 100.25, 60)
     late, _ = advance(timed_out, 100.60, 100.65, 61)
@@ -94,6 +114,17 @@ def test_half_r_then_later_sl_remains_win_with_path_metadata():
     assert later["signal_state"] == mo.SIGNAL_WIN_HALF_R
     assert later["latest_path_event"] == "LATER_SL_AFTER_WIN"
     assert "SL_HIT" in events
+
+
+def test_tp3_win_keeps_monitoring_until_later_sl_is_recorded():
+    won, _ = advance(signal(), 103.0, 103.05, 20)
+    assert won["analytics_outcome"] == mo.ANALYTICS_WIN
+    assert won["highest_tp_reached"] == 3
+    assert won["monitoring_closed"] is False
+    later, _ = advance(won, 99.0, 99.05, 40)
+    assert later["analytics_outcome"] == mo.ANALYTICS_WIN
+    assert later["latest_path_event"] == "LATER_SL_AFTER_WIN"
+    assert later["monitoring_closed"] is True
 
 
 def test_transition_is_informational_and_not_advanced():
@@ -124,6 +155,34 @@ def test_buy_uses_bid_not_ask():
     assert doc["analytics_outcome"] is None
 
 
+def test_publication_anchor_includes_initial_spread_in_mae():
+    buy = mo._build_tracking_anchor("BUY", 100.0, 100.1, 99.1)
+    sell = mo._build_tracking_anchor("SELL", 100.0, 100.1, 101.0)
+    assert buy["tracking_entry_price"] == 100.1
+    assert sell["tracking_entry_price"] == 100.0
+    assert buy["current_r"] == -0.1 and buy["mae_r"] == -0.1
+    assert sell["current_r"] == -0.1 and sell["mae_r"] == -0.1
+    assert mo._build_tracking_anchor("BUY", 100.0, 100.1, 101.0) is None
+    assert mo._build_tracking_anchor("SELL", 100.0, 100.1, 99.0) is None
+
+
+def test_target_ladder_must_be_directionally_profitable_and_ordered():
+    assert mo._targets_have_valid_geometry("BUY", 100.0, 100.4, 101.0, 102.0)
+    assert mo._targets_have_valid_geometry("SELL", 100.0, 99.6, 99.0, 98.0)
+    assert not mo._targets_have_valid_geometry("BUY", 100.0, 0, 101.0, 102.0)
+    assert not mo._targets_have_valid_geometry("BUY", 100.0, 99.9, 101.0, 102.0)
+    assert not mo._targets_have_valid_geometry("SELL", 100.0, 100.1, 99.0, 98.0)
+    assert not mo._targets_have_valid_geometry("SELL", 100.0, 99.0, 99.5, 98.0)
+
+
+def test_corrupt_target_ladder_never_creates_false_tp_win():
+    corrupt = signal(tp1_price=0.0, tp2_price=99.0, tp3_price=98.0)
+    pending, events = advance(corrupt, 100.10, 100.15, 10)
+    assert pending["analytics_outcome"] is None
+    assert pending.get("tp1_hit_at") is None
+    assert not any(event.startswith("TP") for event in events)
+
+
 def test_actionable_state_machine_never_emits_no_entry():
     lost, _ = advance(signal(), 100.1, 100.2, 60)
     assert "NO_ENTRY" not in str(lost)
@@ -141,6 +200,25 @@ def test_event_payload_contains_anchor_hit_r_and_timestamps():
     assert "entry 100.0" in payload["body"]
     assert "R 0.5" in payload["body"]
     assert won["first_half_r_at"] in payload["body"]
+
+
+def test_delayed_notification_uses_immutable_event_quote_not_later_market_price():
+    won, _ = advance(signal(), 100.5, 100.55, 17)
+    later, _ = advance(won, 100.9, 100.95, 25)
+    import notifications
+    payload = notifications._build_payload(later, "HALF_R_REACHED")
+    assert "hit 100.5" in payload["body"]
+    assert "R 0.5" in payload["body"]
+    assert "100.9" not in payload["body"]
+
+
+def test_timeout_event_snapshot_preserves_deadline_checkpoint():
+    timed_out, events = advance(signal(current_r=0.2, last_tracked_price=100.2), None, None, 60)
+    assert "TIMEOUT_60M" in events
+    snapshot = timed_out["event_snapshots"]["TIMEOUT_60M"]
+    assert snapshot["event_at"] == (T0 + timedelta(minutes=60)).isoformat()
+    assert snapshot["hit_price"] == 100.2
+    assert snapshot["achieved_r"] == 0.2
 
 
 def test_analytics_denominator_excludes_pending_transition_and_unavailable():
@@ -166,3 +244,12 @@ def test_analytics_denominator_excludes_pending_transition_and_unavailable():
     assert stats["unavailable_historical_count"] == 1
     assert stats["total_r"] == 0.3
     assert stats["tp1_hit_rate"] == 0.5
+
+
+def test_all_win_filtered_stats_are_json_serializable():
+    stats = compute_outlook_stats([{
+        "primary_direction": "BUY", "analytics_outcome": mo.ANALYTICS_WIN,
+        "analytics_r": 0.5, "highest_tp_reached": 1, "mfe_r": 0.8, "mae_r": -0.1,
+    }])
+    assert stats["profit_factor"] is None
+    json.dumps(stats, allow_nan=False)

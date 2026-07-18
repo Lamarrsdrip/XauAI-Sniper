@@ -40,7 +40,7 @@ def test_hourly_slot_field_is_computed_and_stored():
 
 
 def test_hourly_tick_checks_exact_slot_not_rolling_lookback():
-    fn_idx = MO_SRC.index("async def hourly_generation_tick()")
+    fn_idx = MO_SRC.index("async def hourly_generation_tick(")
     fn = MO_SRC[fn_idx: fn_idx + 4000]
     assert '"hourly_slot": current_slot' in fn
     # the old bug: a rolling-window lookback that a late publication could
@@ -61,7 +61,7 @@ def test_late_publication_does_not_skip_next_slot():
 
 
 def test_missed_slot_catchup_marks_late_catchup_once():
-    fn_idx = MO_SRC.index("async def hourly_generation_tick()")
+    fn_idx = MO_SRC.index("async def hourly_generation_tick(")
     fn = MO_SRC[fn_idx: fn_idx + 4000]
     assert "is_late_catchup = (current_slot_dt - last_slot_dt) > timedelta(hours=1, minutes=5)" in fn
     assert "generate_outlook_for_account(lic_key, account, account_id=account, is_late_catchup=is_late_catchup)" in fn
@@ -72,7 +72,7 @@ def test_next_scheduled_slot_remains_the_next_real_hour_not_shifted():
     # it never computes or stores any kind of "next slot" override -- the
     # very next tick simply computes current_slot fresh from wall-clock `now`
     # again, so a late catch-up cannot push future slots later.
-    fn_idx = MO_SRC.index("async def hourly_generation_tick()")
+    fn_idx = MO_SRC.index("async def hourly_generation_tick(")
     fn = MO_SRC[fn_idx: fn_idx + 4000]
     assert "next_slot" not in fn
     assert "current_slot = now.strftime" in fn
@@ -86,7 +86,7 @@ def test_hourly_loop_sleeps_until_next_wall_clock_hour_not_flat_3600s():
 
 
 def test_dedup_key_scoped_by_account_symbol_and_slot():
-    fn_idx = MO_SRC.index("async def hourly_generation_tick()")
+    fn_idx = MO_SRC.index("async def hourly_generation_tick(")
     fn = MO_SRC[fn_idx: fn_idx + 2000]
     assert '"account": account, "symbol": OUTLOOK_SYMBOL, "hourly_slot": current_slot' in fn
 
