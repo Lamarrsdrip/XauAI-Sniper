@@ -61,7 +61,7 @@ def test_exactly_one_transition_orchestrator_defined():
 def test_can_open_direction_delegates_to_four_arg_overload_with_reservation():
     ea = read(EA)
     fn = find_function(ea, "bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, string &blockReason)")
-    assert "XAU_CanOpenDirection(requestedDirection, requestingFamily, blockReason, unusedReservationId)" in fn
+    assert "XAU_CanOpenDirection(requestedDirection, requestingFamily, blockReason, unusedReservationId, fallbackKey)" in fn
 
 
 def test_can_open_direction_scans_all_three_managed_magic_numbers():
@@ -96,12 +96,13 @@ def test_can_open_direction_allows_same_direction_and_no_exposure():
     assert fn.rstrip().endswith("return true;\n}")
 
 
-def test_four_arg_overload_claims_reservation_and_rechecks_after_claim():
+def test_five_arg_overload_claims_reservation_and_rechecks_after_claim():
     ea = read(EA)
-    fn = find_function(ea, "bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, string &blockReason, string &reservationIdOut)")
+    fn = find_function(ea, "bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, string &blockReason,\n                          string &reservationIdOut, string executionKey)")
     assert "XAU_CanOpenDirectionLocalScanOnly(requestedDirection, requestingFamily, blockReason)" in fn
     assert fn.count("XAU_CanOpenDirectionLocalScanOnly(") == 2, "must scan before AND after the atomic claim (owner item 4)"
-    assert "XAU_ClaimDirectionReservation(requestedDirection, requestingFamily, reservationIdOut, reservationFailReason)" in fn
+    assert "XAU_ClaimDirectionReservation(requestedDirection, requestingFamily, executionKey," in fn
+    assert "reservationIdOut, reservationFailReason)" in fn
     assert "XAU_ReleaseDirectionReservation(reservationIdOut)" in fn, "must release the reservation if the post-claim recheck fails"
 
 
@@ -188,8 +189,8 @@ def test_opentrade_calls_transition_orchestrator_before_sizing_and_is_not_manual
 def test_opentrade_has_final_hard_guard_immediately_before_broker_send():
     ea = read(EA)
     fn = find_function(ea, "bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)")
-    guard_idx = fn.index('XAU_CanOpenDirection(signal, isManualOverride ? "MANUAL_FORCE" : reason, sendGuardReason, directionReservationId)')
-    send_idx = fn.index("if(signal == 1) ok = trade.Buy(lots, Symbol(), 0, sl, tp,")
+    guard_idx = fn.index('XAU_CanOpenDirection(signal, isManualOverride ? "MANUAL_FORCE" : "NORMAL_CORE",')
+    send_idx = fn.index("if(signal == 1) requestOk = trade.Buy(lots, Symbol(), 0, sl, 0.0,")
     assert guard_idx < send_idx
     # nothing that sends an order may sit between the guard and the send
     between = fn[guard_idx:send_idx]
@@ -198,16 +199,18 @@ def test_opentrade_has_final_hard_guard_immediately_before_broker_send():
 
 def test_pyramid_add_calls_hard_guard_before_send():
     ea = read(EA)
-    idx = ea.index('bool ok=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)')
-    preceding = ea[max(0, idx - 600):idx]
-    assert 'XAU_CanOpenDirection(isBuy ? 1 : -1, "PYRAMID", pyramidGuardReason, pyramidReservationId)' in preceding
+    idx = ea.index('bool requestOk=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)')
+    preceding = ea[max(0, idx - 1200):idx]
+    assert 'XAU_CanOpenDirection(isBuy ? 1 : -1, "PYRAMID", pyramidGuardReason,' in preceding
+    assert "pyramidReservationId, pyramidExecutionKey" in preceding
 
 
 def test_counter_excursion_calls_hard_guard_before_send():
     ea = read(EA)
-    idx = ea.index("trade.SetExpertMagicNumber(InpCounterExcursionMagicNumber);\n   bool ok = (counterDir == 1) ? trade.Buy(lots")
-    preceding = ea[max(0, idx - 600):idx]
-    assert 'XAU_CanOpenDirection(counterDir, "COUNTER_EXCURSION", counterGuardReason, counterReservationId)' in preceding
+    idx = ea.index("trade.SetExpertMagicNumber(InpCounterExcursionMagicNumber);\n   bool requestOk = (counterDir == 1) ? trade.Buy(lots")
+    preceding = ea[max(0, idx - 1200):idx]
+    assert 'XAU_CanOpenDirection(counterDir, "COUNTER_EXCURSION", counterGuardReason,' in preceding
+    assert "counterReservationId, counterExecutionKey" in preceding
 
 
 def test_all_three_send_paths_capture_and_can_release_reservation_on_failure():

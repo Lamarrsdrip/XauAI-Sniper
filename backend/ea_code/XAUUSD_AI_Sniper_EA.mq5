@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M10 Gold Edition|
-//|   v6.25.10 - Restore Pre-v6.25.9 Pyramid Behavior                |
+//|   v6.25.11 - Restore Pyramid TP and Guard R-Exit State           |
 //|   BRKT_UP and BRKT_DN invert only after canonical entry approval. |
 //|   authority. No owner time-window blackout exists. Every approved |
 //|   normal/re-entry/pyramid trade uses full configured risk against |
@@ -1902,8 +1902,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.260"
-#property description "XAUUSD AI Sniper v6.25.10 restored pyramid behavior with owner-only R-exit."
+#property version   "6.261"
+#property description "XAUUSD AI Sniper v6.25.11 pyramid TP plus guarded R-exit protection."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -1987,9 +1987,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.10"
-#define XAUAI_EA_VERSION_NUM "6.25.10"
-#define XAUAI_BUILD_HASH "v62510-restored-pyramid-owner-exit-inverse-breakout-20260718"
+#define XAUAI_EA_VERSION "v6.25.11"
+#define XAUAI_EA_VERSION_NUM "6.25.11"
+#define XAUAI_BUILD_HASH "v62511-pyramid-tp-r-exit-state-guard-20260718"
 #define XAU_COUNTER_EXCURSION_BUILD false
 
 // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
@@ -4958,14 +4958,6 @@ ENUM_XAU_OWNER_EXIT_PROFILE XAU_OwnerExitProfileForEntryRegime(ENUM_REGIME entry
 
 XAU_CampaignState g_campaign[2];   // [0]=BUY campaign, [1]=SELL campaign
 long              g_nextCampaignId = 1;
-// v6.24.18 owner directive -- dedicated (not shared with unrelated indicator
-// logging) rate-limit state for basket-to-single pending-conversion
-// journaling, indexed by campaign slot. Prevents a per-tick retry loop from
-// flooding the journal while a conversion or a floor-breach close remains
-// unresolved across many ticks.
-datetime g_basketPendingFirstLoggedAt[2] = {0, 0};
-datetime g_basketPendingSummaryLoggedAt[2] = {0, 0};
-datetime g_basketFloorBreachLoggedAt[2] = {0, 0};
 
 // v6.24.14 — universal five-minute post-trade execution cooldown +
 // exhausted-old-direction re-entry ban. Snapshots the state of whichever
@@ -5720,13 +5712,13 @@ void XAU_CampaignRegisterAdd(int direction, string setupName)
                XAU_OwnerExitProfileName((ENUM_XAU_OWNER_EXIT_PROFILE)g_campaign[slot].ownerExitProfile));
 }
 
-// v6.24.18 owner directive 2026-07-16 -- extracted so both the transition
-// event (XAU_CampaignRegisterClose, below) and a per-tick retry path
-// (XAU_UpdateCampaignBasketState) can attempt this exact same conversion.
-// Returns the conversion status string; NEVER clears any basket field
-// itself -- the caller decides what to do with a failed attempt, per the
-// owner's explicit rule that a failed conversion must never erase the
-// armed basket floor.
+// v6.25.11 -- basket state is telemetry-only under the owner R-exit policy.
+// A campaign money floor belongs to the old basket authority and must never
+// be converted into a newly-priced surviving leg's R floor. That conversion
+// produced impossible floors (for example 0.683R on a leg whose own peak was
+// only 0.444R), prevented the leg's real 0.30R floor from arming and caused a
+// retry storm. This helper now returns diagnostic geometry only; it never
+// allocates or mutates per-position R-exit state.
 string XAU_TryConvertBasketToSingleFloor(int direction, int slot, ulong &survivingTicketOut, double &convertedFloorROut)
 {
    survivingTicketOut = 0;
@@ -5744,35 +5736,10 @@ string XAU_TryConvertBasketToSingleFloor(int direction, int slot, ulong &survivi
    }
    if(survivingTicketOut == 0)
       return "NO_SURVIVING_TICKET_FOUND";
-
    int svIdx = XAU_RExit_FindIdx(survivingPosId);
-   if(svIdx < 0)
-      svIdx = XAU_RExit_EnsureIdx(survivingPosId, survivingTicketOut, direction == 1,
-                                  posInfo.PriceOpen(), posInfo.StopLoss(), posInfo.Volume(), false);
-   // v6.24.18 owner directive -- do not assume XAU_RExit_EnsureIdx() always
-   // returns a valid, in-bounds index. Guard explicitly before the first
-   // g_rExit[svIdx] access; a failure here must behave exactly like any
-   // other unresolved conversion (floor stays armed, pending, retried),
-   // never an out-of-bounds array access.
-   if(svIdx < 0 || svIdx >= ArraySize(g_rExit))
-      return "SURVIVING_TICKET_STATE_ALLOCATION_FAILED";
-   if(g_rExit[svIdx].cumulativeOriginalRiskUSD <= 0.0)
-      return "SURVIVING_TICKET_RISK_UNKNOWN";
-
-   convertedFloorROut = g_campaign[slot].basketProtectedFloorMoney / g_rExit[svIdx].cumulativeOriginalRiskUSD;
-   if(convertedFloorROut > g_rExit[svIdx].guaranteedFloorR)
-   {
-      g_rExit[svIdx].guaranteedFloorR = convertedFloorROut;
-      g_rExit[svIdx].profitGuaranteeArmed = true;
-      // R_STAGE_PROTECTED is #defined later in this file (value 1); #define
-      // is a preprocessor construct and must be textually declared before
-      // use, unlike function/enum symbols which MQL5 resolves file-wide --
-      // literal used here for that reason, matching XAU_RExitCoreLoop's own
-      // later use of the same macro/value.
-      if(g_rExit[svIdx].stageReached < 1) g_rExit[svIdx].stageReached = 1;
-      return "APPLIED";
-   }
-   return "EXISTING_INDIVIDUAL_FLOOR_ALREADY_HIGHER";
+   if(svIdx >= 0 && svIdx < ArraySize(g_rExit) && g_rExit[svIdx].cumulativeOriginalRiskUSD > 0.0)
+      convertedFloorROut = g_campaign[slot].basketProtectedFloorMoney / g_rExit[svIdx].cumulativeOriginalRiskUSD;
+   return "TELEMETRY_ONLY_NO_FLOOR_TRANSFER";
 }
 
 // Called on every position close belonging to this direction's campaign
@@ -5790,51 +5757,27 @@ void XAU_CampaignRegisterClose(int direction, double closedProfit)
                XAU_CampaignIdText(g_campaign[slot].campaignId), direction==1?"BUY":"SELL",
                closedProfit, g_campaign[slot].realizedPL, g_campaign[slot].activePositionCount);
 
-   // v6.24.18 owner directive -- falling from basket (>=2) back to exactly
-   // ONE position must not silently reset to an unarmed individual state
-   // and give back protected campaign profit. Convert the armed basket
-   // money floor into an equivalent individual-ticket R floor on the
-   // surviving position so XAU_RExitCoreLoop's own per-ticket floor
-   // authority keeps protecting at least that level going forward.
-   //
-   // BUG FIX (owner-reported 2026-07-16): the basket state used to be
-   // cleared UNCONDITIONALLY here, even when the conversion attempt failed
-   // (surviving ticket not yet visible this tick, or its risk state not yet
-   // indexed) -- silently erasing real, already-earned protection. Now the
-   // basket floor is ONLY cleared on APPLIED/EXISTING_INDIVIDUAL_FLOOR_
-   // ALREADY_HIGHER (both mean the individual floor is now protecting at
-   // least the basket-guaranteed level); any other outcome marks the
-   // conversion PENDING and keeps every basket field exactly as armed, to
-   // be retried every tick by XAU_UpdateCampaignBasketState until it
-   // succeeds or the survivor closes.
-   if(g_campaign[slot].activePositionCount == 1 && g_campaign[slot].basketProtectionArmed)
+   // v6.25.11 -- the legacy basket floor is telemetry only. When a campaign
+   // returns to one leg, discard the basket snapshot and let the survivor's
+   // own immutable entry/peak/profile state continue. Never transplant a
+   // campaign-money floor into a different per-leg R geometry.
+   if(g_campaign[slot].activePositionCount == 1 &&
+      (g_campaign[slot].basketProtectionArmed || g_campaign[slot].basketConversionPending))
    {
       ulong survivingTicket = 0;
       double convertedFloorR = 0.0;
       string conversionStatus = XAU_TryConvertBasketToSingleFloor(direction, slot, survivingTicket, convertedFloorR);
-      PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f convertedFloorR=%.3f retryCount=%d action=%s",
+      PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f diagnosticConvertedFloorR=%.3f retryCount=%d action=KEEP_SURVIVOR_PER_LEG_OWNER_FLOOR",
                   conversionStatus, XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
-                  g_campaign[slot].basketProtectedFloorMoney, convertedFloorR, g_campaign[slot].basketConversionRetryCount,
-                  (conversionStatus == "APPLIED" || conversionStatus == "EXISTING_INDIVIDUAL_FLOOR_ALREADY_HIGHER") ? "BASKET_STATE_CLEARED" : "BASKET_FLOOR_KEPT_ARMED_PENDING_RETRY");
-
-      if(conversionStatus == "APPLIED" || conversionStatus == "EXISTING_INDIVIDUAL_FLOOR_ALREADY_HIGHER")
-      {
-         g_campaign[slot].basketProtectionArmed     = false;
-         g_campaign[slot].basketPeakProfitMoney     = 0.0;
-         g_campaign[slot].basketPeakR               = 0.0;
-         g_campaign[slot].basketProtectedFloorMoney = 0.0;
-         g_campaign[slot].basketProtectedFloorR     = 0.0;
-         g_campaign[slot].basketConversionPending    = false;
-         g_campaign[slot].basketConversionRetryCount = 0;
-         g_campaignBasketStateDirty = true;
-      }
-      else
-      {
-         // Conversion not yet possible -- keep the basket floor exactly as
-         // armed (nothing cleared) and mark it pending so
-         // XAU_UpdateCampaignBasketState retries it every tick.
-         g_campaign[slot].basketConversionPending = true;
-      }
+                  g_campaign[slot].basketProtectedFloorMoney, convertedFloorR, g_campaign[slot].basketConversionRetryCount);
+      g_campaign[slot].basketProtectionArmed     = false;
+      g_campaign[slot].basketPeakProfitMoney     = 0.0;
+      g_campaign[slot].basketPeakR               = 0.0;
+      g_campaign[slot].basketProtectedFloorMoney = 0.0;
+      g_campaign[slot].basketProtectedFloorR     = 0.0;
+      g_campaign[slot].basketConversionPending    = false;
+      g_campaign[slot].basketConversionRetryCount = 0;
+      g_campaignBasketStateDirty = true;
    }
 
    if(g_campaign[slot].activePositionCount <= 0)
@@ -10276,7 +10219,7 @@ bool XAU_RunOwnerRExitSelfTests()
    double t049=XAU_ComputeOwnerRequiredFloorR(0.49,OWNER_EXIT_TREND_UP);
    double t050=XAU_ComputeOwnerRequiredFloorR(0.50,OWNER_EXIT_TREND_UP);
    double t100=XAU_ComputeOwnerRequiredFloorR(1.00,OWNER_EXIT_TREND_UP);
-   bool checks[14];
+   bool checks[20];
    checks[0]=MathAbs(g039)<0.000001;
    checks[1]=MathAbs(g040-0.30)<0.000001;
    checks[2]=MathAbs(g080-0.56)<0.000001;
@@ -10291,7 +10234,13 @@ bool XAU_RunOwnerRExitSelfTests()
    checks[11]=XAU_OwnerRExitDecisionAllowsClose(1.00,0.70,0.70,OWNER_EXIT_TREND_UP,"OWNER_R_EXIT_FLOOR_BREACH");
    checks[12]=MathMax(0.56,XAU_ComputeOwnerRequiredFloorR(0.60,OWNER_EXIT_GENERAL))>=0.56;
    checks[13]=!XAU_COUNTER_EXCURSION_BUILD;
-   for(int i=0;i<14;i++)
+   checks[14]=!XAU_OwnerRExitDecisionAllowsClose(0.29,0.16,0.0,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_GIVEBACK_45");
+   checks[15]=XAU_OwnerRExitDecisionAllowsClose(0.30,0.16,0.0,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_GIVEBACK_45");
+   checks[16]=!XAU_OwnerRExitDecisionAllowsClose(0.45,0.26,0.30,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_GIVEBACK_45");
+   checks[17]=XAU_OwnerRExitDecisionAllowsClose(1.00,1.00,0.70,OWNER_EXIT_TREND_UP,"OWNER_R_EXIT_TP_1R");
+   checks[18]=!XAU_OwnerRExitDecisionAllowsClose(0.39,0.20,0.0,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED");
+   checks[19]=XAU_OwnerRExitDecisionAllowsClose(0.50,0.35,0.35,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED");
+   for(int i=0;i<20;i++)
    {
       if(checks[i]) passed++;
       else { failed++; PrintFormat("OWNER_R_EXIT_SELF_TEST_FAIL | case=%d",i+1); }
@@ -10332,7 +10281,7 @@ int OnInit()
    PrintFormat("RISK_CONFIG_ASSERTION_PASSED | ConfiguredRisk=%.2f%% | SingleTradeCap=%.2f%% | AggregateRiskCap=%.2f%% | mode=FULL_RISK_BINARY",
                InpNormalRiskPct, InpMaxRiskPctEquity, InpMaxAggregateRiskPct);
    Print("OWNER_ENTRY_TIME_POLICY | blackout=NONE | 06:10-07:30=ELIGIBLE_IF_NORMAL_LOGIC_APPROVES | 14:10-15:30=ELIGIBLE_IF_NORMAL_LOGIC_APPROVES");
-   PrintFormat("OWNER_BREAKOUT_EXECUTION_STARTUP | mode=%s | BRKT_UP=%s | BRKT_DN=%s | non_breakout=NORMAL_DIRECTION | counter=OFF | structural_sl_r=1.00 | exit_authority=OWNER_R_EXIT_ONLY | legacy_exits=TELEMETRY_ONLY",
+   PrintFormat("OWNER_BREAKOUT_EXECUTION_STARTUP | mode=%s | BRKT_UP=%s | BRKT_DN=%s | non_breakout=NORMAL_DIRECTION | counter=OFF | structural_sl_r=1.00 | exit_authority=OWNER_R_EXIT_CANONICAL | independent_legacy_exits=DISABLED",
                XAU_OwnerBreakoutModeName(),
                InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_BLOCK?"BLOCK":InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_NORMAL?"NORMAL":"INVERSE",
                InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_BLOCK?"BLOCK":InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_NORMAL?"NORMAL":"INVERSE");
@@ -10529,6 +10478,7 @@ int OnInit()
                AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), Symbol(), InpMagicNumber);
    Print("OWNER_EXIT_PROFILE | profile=GENERAL | first_trigger_r=0.40 | first_floor_r=0.30 | adaptive_trigger_r=0.50 | adaptive_lock_pct=70");
    Print("OWNER_EXIT_PROFILE | profile=TREND_UP | first_trigger_r=0.50 | first_floor_r=0.40 | adaptive_trigger_r=0.70 | adaptive_lock_pct=70");
+   Print("OWNER_R_EXIT_RESTORED_RULES | TP_1R=ON | GIVEBACK_45_AFTER_0.30R=ON | RUNNER_CONTINUATION_FAILED=ON | PYRAMID_BROKER_TP=ON | independent_smart_ai_be_time_ema_ttm_partial=OFF");
    PrintFormat("OWNER_RISK_POLICY | structural_sl_r=1.00 | configured_risk_pct=%.4f | policy=FULL_CONFIGURED_RISK | owner_time_block=NONE | breakout_regimes=BRKT_UP,BRKT_DN",
                InpNormalRiskPct);
    XAU_LogTradingIntelStartupHealth();
@@ -17229,10 +17179,13 @@ void CheckPyramidOpportunity()
       }
    }
 
-   // Owner R-exit is the only managed profit exit. Keep the calculated
-   // pyramid target for analysis/cloud display, but do not place a broker TP.
-   bool requestOk=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,0.0,"XAU-SNIPER|"+why)
-                       :trade.Sell(addLot,Symbol(),0,pyramidSL,0.0,"XAU-SNIPER|"+why);
+   // v6.25.11 owner directive -- restore the pre-v6.25.9 pyramid broker TP.
+   // This is the existing pyramid target calculated above (campaign TP when
+   // present, otherwise the normal R target), not a new exit system. The
+   // owner R-floor may still improve the SL while the broker TP remains the
+   // fixed favorable-side destination.
+   bool requestOk=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)
+                       :trade.Sell(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why);
    uint pyramidRetcode=trade.ResultRetcode();
    ulong dealTicket=trade.ResultDeal();
    ulong posId=0;
@@ -24596,15 +24549,15 @@ bool XAU_OwnerProtectedFloorAllowsModify(ulong ticket, double proposedSL, string
    return false;
 }
 
-// v6.25.9 -- THE ONLY broker-facing market-close authority for normal
-// production positions. All legacy callers converge through SafePositionClose
-// below and are rejected. The only automated approval is an owner-floor close
-// while executable profit is still at/above the protected floor. An explicit
-// Command Center manual request is reported as EXTERNAL_MANUAL, never as an EA
-// strategy authority.
+// The only broker-facing market-close authority for normal production
+// positions. Independent legacy callers still converge here and are rejected;
+// only named rules originating inside the canonical owner R manager pass.
 bool XAU_IsOwnerRExitApprovedCloseReason(string ctx)
 {
    return StringFind(ctx, "OWNER_R_EXIT_FLOOR_BREACH") == 0 ||
+          StringFind(ctx, "OWNER_R_EXIT_TP_1R") == 0 ||
+          StringFind(ctx, "OWNER_R_EXIT_GIVEBACK_45") == 0 ||
+          StringFind(ctx, "OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED") == 0 ||
           StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0;
 }
 
@@ -24648,7 +24601,7 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
       return false;
    }
    PrintFormat("OWNER_R_EXIT_CLOSE_APPROVED | ticket=%I64u | authority=%s | external_manual=%s | ret=%u",
-               ticket, externalManual ? "MANUAL_EXTERNAL" : "OWNER_R_EXIT", externalManual ? "true" : "false",
+               ticket, externalManual ? "MANUAL_EXTERNAL" : ctx, externalManual ? "true" : "false",
                trade.ResultRetcode());
    return true;
 }
@@ -24738,6 +24691,7 @@ struct XAU_RExitState
    double   guaranteedFloorR;              // internal ratchet-only floor, in R
    double   guaranteedFloorDesiredSL;      // last-computed broker SL price for guaranteedFloorR
    bool     guaranteedFloorGeometryBlocked;// true when stops/freeze level prevented placing guaranteedFloorDesiredSL
+   datetime lastBelowFloorRejectLog;       // rate limit retry evidence; never changes the retry decision
    // v6.25.0 owner directive 2026-07-17 -- URGENT LIVE EXIT FORENSIC fix.
    // Debounce state for XAU_RExit_ReconcileOrphans(): a live position must
    // fail XAU_FindLivePositionByIdentifier() for several consecutive ticks
@@ -25082,18 +25036,29 @@ double XAU_ComputeOwnerRequiredFloorR(double peakR, ENUM_XAU_OWNER_EXIT_PROFILE 
 }
 
 // Pure deterministic decision used by the live close chokepoint and by the
-// Strategy Tester self-test. A legacy reason is never approvable; a floor
-// close is never approvable before trigger or below the monotonic floor.
+// Strategy Tester self-test. v6.25.11 restores three proven R-manager rules
+// inside this same authority: 1R target, profitable 45% giveback after 0.30R,
+// and closed-bar runner failure after an owner floor is armed. Independent
+// legacy exit modules remain blocked. Every restored rule still defers to an
+// active owner floor and can never intentionally close below it.
 bool XAU_OwnerRExitDecisionAllowsClose(double peakR, double currentR,
                                        double previousFloorR,
                                        ENUM_XAU_OWNER_EXIT_PROFILE profile,
                                        string reason)
 {
-   if(StringFind(reason,"OWNER_R_EXIT_FLOOR_BREACH") != 0) return false;
    double requiredFloorR=MathMax(previousFloorR,
                                  XAU_ComputeOwnerRequiredFloorR(peakR,profile));
-   if(requiredFloorR<=0.0) return false;
-   return currentR+0.000001>=requiredFloorR;
+   bool approvedRule=false;
+   if(StringFind(reason,"OWNER_R_EXIT_FLOOR_BREACH") == 0)
+      approvedRule=requiredFloorR>0.0;
+   else if(StringFind(reason,"OWNER_R_EXIT_TP_1R") == 0)
+      approvedRule=currentR+0.000001>=InpRFinalTarget;
+   else if(StringFind(reason,"OWNER_R_EXIT_GIVEBACK_45") == 0)
+      approvedRule=peakR+0.000001>=InpRProtectTrigger && currentR>0.0;
+   else if(StringFind(reason,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED") == 0)
+      approvedRule=requiredFloorR>0.0;
+   if(!approvedRule) return false;
+   return requiredFloorR<=0.0 || currentR+0.000001>=requiredFloorR;
 }
 
 string XAU_OwnerFloorUpdateReason(double peakR, ENUM_XAU_OWNER_EXIT_PROFILE profile)
@@ -26018,92 +25983,28 @@ void XAU_UpdateCampaignBasketState(int direction)
 {
    int slot = XAU_CampaignSlot(direction);
 
-   // v6.24.18 owner directive -- retry path for a basket-to-single
-   // conversion that failed at the transition event (see
-   // XAU_CampaignRegisterClose's own comment). Runs every tick while
-   // pending, unconditionally, so a transient "ticket not visible yet"
-   // failure resolves within the next tick or two rather than staying
-   // unprotected. Also enforces the still-armed basket floor directly on
-   // the surviving single position while conversion remains unresolved --
-   // the floor must keep working even though XAU_ComputePrimaryExitFloor's
-   // own individual authority hasn't taken over yet.
-   if(g_campaign[slot].active && g_campaign[slot].activePositionCount == 1 && g_campaign[slot].basketConversionPending)
+   // v6.25.11 migration guard: an older persisted basket snapshot may load
+   // with one surviving position. Clear that telemetry state without ever
+   // transferring its money floor into the survivor's per-leg R geometry.
+   if(g_campaign[slot].active && g_campaign[slot].activePositionCount == 1 &&
+      (g_campaign[slot].basketConversionPending || g_campaign[slot].basketProtectionArmed))
    {
       ulong survivingTicket = 0;
       double convertedFloorR = 0.0;
       string conversionStatus = XAU_TryConvertBasketToSingleFloor(direction, slot, survivingTicket, convertedFloorR);
-      g_campaign[slot].basketConversionRetryCount++;
-      if(conversionStatus == "APPLIED" || conversionStatus == "EXISTING_INDIVIDUAL_FLOOR_ALREADY_HIGHER")
-      {
-         PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f convertedFloorR=%.3f retryCount=%d action=BASKET_STATE_CLEARED_ON_RETRY",
-                     conversionStatus, XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
-                     g_campaign[slot].basketProtectedFloorMoney, convertedFloorR, g_campaign[slot].basketConversionRetryCount);
-         g_campaign[slot].basketProtectionArmed     = false;
-         g_campaign[slot].basketPeakProfitMoney     = 0.0;
-         g_campaign[slot].basketPeakR               = 0.0;
-         g_campaign[slot].basketProtectedFloorMoney = 0.0;
-         g_campaign[slot].basketProtectedFloorR     = 0.0;
-         g_campaign[slot].basketConversionPending    = false;
-         g_campaign[slot].basketConversionRetryCount = 0;
-         g_campaignBasketStateDirty = true;
-      }
-      else
-      {
-         // Still pending -- the basket floor stays armed exactly as-is
-         // (nothing cleared). Directly enforce it against the surviving
-         // position's own combined P/L (a single ticket here, so this IS
-         // the campaign's whole floating P/L) so protection never lapses
-         // while conversion remains unresolved.
-         //
-         // v6.24.18 owner directive -- rate-limited journaling, not a
-         // per-tick flood: first failure logged immediately (state-change
-         // visibility), then only a periodic health summary every 60s
-         // afterward, using throttle state DEDICATED to this path (never
-         // shared with unrelated indicator-failure logging, which would
-         // otherwise suppress or be suppressed by it).
-         bool firstPendingLog = (g_basketPendingFirstLoggedAt[slot] == 0);
-         if(firstPendingLog)
-            g_basketPendingFirstLoggedAt[slot] = TimeCurrent();
-
-         if(survivingTicket != 0 && posInfo.SelectByTicket(survivingTicket))
-         {
-            double survivorPL = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
-            if(survivorPL <= g_campaign[slot].basketProtectedFloorMoney)
-            {
-               if(TimeCurrent() - g_basketFloorBreachLoggedAt[slot] >= 30)
-               {
-                  g_basketFloorBreachLoggedAt[slot] = TimeCurrent();
-                  PrintFormat("BASKET_TO_SINGLE_PENDING_FLOOR_BREACH | %s ticket=%I64u survivorPL=%.2f protectedFloorMoney=%.2f retryCount=%d action=CLOSE_SURVIVOR",
-                              XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
-                              survivorPL, g_campaign[slot].basketProtectedFloorMoney, g_campaign[slot].basketConversionRetryCount);
-               }
-               // The close request itself is idempotent per-ticket (see
-               // XAU_CloseCampaignBasketAtProtectedFloor/XAU_RExit_RequestClose's
-               // own closeState guard) -- safe to call every tick without
-               // sending duplicate broker requests; only the LOG above is throttled.
-               PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | legacy_authority=BASKET_TO_SINGLE_PENDING_FLOOR | ticket=%I64u | action=NO_BASKET_CLOSE",
-                           survivingTicket);
-            }
-         }
-         if(firstPendingLog || TimeCurrent() - g_basketPendingSummaryLoggedAt[slot] >= 60)
-         {
-            g_basketPendingSummaryLoggedAt[slot] = TimeCurrent();
-            PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f retryCount=%d pendingSec=%d action=BASKET_FLOOR_KEPT_ARMED_PENDING_RETRY",
-                        conversionStatus, XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
-                        g_campaign[slot].basketProtectedFloorMoney, g_campaign[slot].basketConversionRetryCount,
-                        (int)(TimeCurrent() - g_basketPendingFirstLoggedAt[slot]));
-         }
-      }
+      PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f diagnosticConvertedFloorR=%.3f action=CLEAR_LEGACY_BASKET_TELEMETRY_KEEP_PER_LEG_OWNER_FLOOR",
+                  conversionStatus, XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
+                  g_campaign[slot].basketProtectedFloorMoney, convertedFloorR);
+      g_campaign[slot].basketProtectionArmed     = false;
+      g_campaign[slot].basketPeakProfitMoney     = 0.0;
+      g_campaign[slot].basketPeakR               = 0.0;
+      g_campaign[slot].basketProtectedFloorMoney = 0.0;
+      g_campaign[slot].basketProtectedFloorR     = 0.0;
+      g_campaign[slot].basketConversionPending    = false;
+      g_campaign[slot].basketConversionRetryCount = 0;
+      g_campaignBasketStateDirty = true;
       return;
    }
-   else
-   {
-      // Conversion resolved (or was never pending) -- reset this slot's
-      // throttle state so a FUTURE pending episode logs its own first-seen
-      // line immediately rather than inheriting a stale timestamp.
-      g_basketPendingFirstLoggedAt[slot] = 0;
-   }
-
    if(!g_campaign[slot].active || g_campaign[slot].activePositionCount < 2)
       return; // single-position campaigns use the individual exit floor, untouched
 
@@ -26358,24 +26259,40 @@ void XAU_RExitCoreLoop()
          }
       }
 
-      // Legacy 1R target is telemetry only. The broker order carries no TP;
-      // owner protection continues ratcheting from the highest achieved R.
+      // v6.25.11 restored canonical R-manager target. This request still
+      // passes through OWNER_R_EXIT_CLOSE_ONLY and cannot violate a higher
+      // already-ratcheted owner floor.
       if(currentR >= InpRFinalTarget)
       {
-         if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
-            PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | ticket=%I64u | legacy_authority=R_EXIT_TP_1R | direction=%s | currentR=%.3f | peakR=%.3f | action=NO_CLOSE",
-                        ticket, dirStr, currentR, peakR);
+         PrintFormat("OWNER_R_EXIT_RESTORED_RULE | ticket=%I64u | rule=TP_1R | direction=%s | currentR=%.3f | peakR=%.3f | action=REQUEST_GUARDED_CLOSE",
+                     ticket, dirStr, currentR, peakR);
+         bool targetClosed=XAU_RExit_RequestClose(idx,ticket,"OWNER_R_EXIT_TP_1R");
+         int targetStateIdx=XAU_RExit_FindIdx(positionId);
+         if(targetClosed || targetStateIdx<0)
+            continue;
+         idx=targetStateIdx;
+         if(g_rExit[idx].closeState==R_CLOSE_REQUESTED || g_rExit[idx].closeState==R_CLOSE_PENDING_RETRY)
+            continue;
       }
 
-      // Legacy 45% giveback is telemetry only. It cannot request a close.
+      // Restored profitable giveback rule. This is intentionally useful
+      // before the GENERAL/TREND_UP owner-floor thresholds: once a trade has
+      // reached 0.30R, bank the remaining positive profit after a 45%
+      // giveback instead of allowing every sub-trigger move to reach -1R.
       if(peakR >= InpRProtectTrigger && g_rExit[idx].peakProfitUSD > 0.0)
       {
          double givebackPct = (g_rExit[idx].peakProfitUSD - profit) / g_rExit[idx].peakProfitUSD * 100.0;
          if(givebackPct >= InpRMaxGivebackPct && profit > 0.0)
          {
-            if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
-               PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | ticket=%I64u | legacy_authority=R_EXIT_GIVEBACK_45 | direction=%s | currentR=%.3f | peakR=%.3f | givebackPct=%.1f | action=NO_CLOSE",
-                           ticket, dirStr, currentR, peakR, givebackPct);
+            PrintFormat("OWNER_R_EXIT_RESTORED_RULE | ticket=%I64u | rule=GIVEBACK_45 | direction=%s | currentR=%.3f | peakR=%.3f | givebackPct=%.1f | action=REQUEST_GUARDED_CLOSE",
+                        ticket, dirStr, currentR, peakR, givebackPct);
+            bool givebackClosed=XAU_RExit_RequestClose(idx,ticket,"OWNER_R_EXIT_GIVEBACK_45");
+            int refreshedIdx=XAU_RExit_FindIdx(positionId);
+            if(givebackClosed || refreshedIdx<0)
+               continue;
+            idx=refreshedIdx;
+            if(g_rExit[idx].closeState==R_CLOSE_REQUESTED || g_rExit[idx].closeState==R_CLOSE_PENDING_RETRY)
+               continue;
          }
       }
 
@@ -26537,9 +26454,13 @@ void XAU_RExitCoreLoop()
          XAU_RExit_RequestClose(idx, ticket, "OWNER_R_EXIT_FLOOR_BREACH");
          continue;
       }
-      if(g_rExit[idx].guaranteedFloorGeometryBlocked && currentR < g_rExit[idx].guaranteedFloorR)
+      if(g_rExit[idx].guaranteedFloorGeometryBlocked && currentR < g_rExit[idx].guaranteedFloorR &&
+         TimeCurrent()-g_rExit[idx].lastBelowFloorRejectLog>=30)
+      {
+         g_rExit[idx].lastBelowFloorRejectLog=TimeCurrent();
          PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_BELOW_FLOOR | ticket=%I64u | attempted_authority=OWNER_R_EXIT_FLOOR_BREACH | attempted_exit_r=%.3f | protected_floor_r=%.3f | action=RETRY_BROKER_FLOOR",
                      ticket, currentR, g_rExit[idx].guaranteedFloorR);
+      }
 
       // ---- RUN_TO_1R continuation-failure recheck: closed-bar granularity
       //      only (never a single noisy tick), and only when indicators are
@@ -26578,8 +26499,10 @@ void XAU_RExitCoreLoop()
 
             if(structureBrokenAgainst || hostileFactors >= InpRRunnerFailureMinHostile)
             {
-               PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | ticket=%I64u | legacy_authority=R_EXIT_RUNNER_CONTINUATION_FAILED | direction=%s | currentR=%.3f | structureBroken=%s | hostileFactors=%d/5 | action=NO_CLOSE",
+               PrintFormat("OWNER_R_EXIT_RESTORED_RULE | ticket=%I64u | rule=RUNNER_CONTINUATION_FAILED | direction=%s | currentR=%.3f | structureBroken=%s | hostileFactors=%d/5 | action=REQUEST_GUARDED_CLOSE",
                            ticket, dirStr, currentR, structureBrokenAgainst ? "true" : "false", hostileFactors);
+               if(XAU_RExit_RequestClose(idx,ticket,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED"))
+                  continue;
             }
          }
       }

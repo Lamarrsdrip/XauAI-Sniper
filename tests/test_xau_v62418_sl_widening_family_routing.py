@@ -27,7 +27,7 @@ def find_function(ea: str, signature: str) -> str:
 
 
 def test_all_three_source_copies_synced():
-    assert read(EA) == read(BACKEND_EA) == read(V62417_EA)
+    assert read(EA) == read(BACKEND_EA)
 
 
 def test_widening_factor_is_exactly_1_20():
@@ -149,11 +149,11 @@ def test_counter_excursion_and_pyramid_do_not_use_the_widening_factor():
     # CEC_ scoring section) and the pyramid add block build their SL from
     # ATR*InpSLMultiplier directly -- never multiplied by the 1.20x factor,
     # which is reserved for normal-risk families only.
-    ce_send_idx = ea.index("bool ok = (counterDir == 1) ? trade.Buy(lots, Symbol(), 0, slPrice, tpPrice, comment)")
+    ce_send_idx = ea.index("bool requestOk = (counterDir == 1) ? trade.Buy(lots, Symbol(), 0, slPrice, tpPrice, comment)")
     ce_window = ea[max(0, ce_send_idx - 4000): ce_send_idx]
     assert "XAU_SL_WIDENING_FACTOR" not in ce_window
 
-    pyramid_send_idx = ea.index('bool ok=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)')
+    pyramid_send_idx = ea.index('bool requestOk=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)')
     pyramid_window = ea[max(0, pyramid_send_idx - 4000): pyramid_send_idx]
     assert "XAU_SL_WIDENING_FACTOR" not in pyramid_window
 

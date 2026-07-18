@@ -56,11 +56,12 @@ def test_period_boundaries_are_exact_60_plus_30_days():
     assert (MOD.RUN_END - MOD.RUN_START).days == 90
 
 
-def test_forensic_telemetry_is_default_off_and_giveback_is_telemetry_only():
+def test_forensic_telemetry_is_default_off_and_giveback_is_canonical_guarded_rule():
     source = (ROOT / "XAUUSD_AI_Sniper_EA.mq5").read_text(encoding="utf-8")
     backend = (ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5").read_text(encoding="utf-8")
     assert source == backend
     assert "InpForensicPostExitTelemetry  = false" in source
-    assert "legacy_authority=R_EXIT_GIVEBACK_45" in source
-    assert "givebackCloseConfirmed = XAU_RExit_RequestClose" not in source
-    assert "action=NO_CLOSE" in source
+    assert "rule=GIVEBACK_45" in source
+    assert 'XAU_RExit_RequestClose(idx,ticket,"OWNER_R_EXIT_GIVEBACK_45")' in source
+    assert 'StringFind(ctx, "OWNER_R_EXIT_GIVEBACK_45") == 0' in source
+    assert "independent_smart_ai_be_time_ema_ttm_partial=OFF" in source

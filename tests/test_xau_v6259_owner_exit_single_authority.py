@@ -7,6 +7,9 @@ from scripts.owner_r_exit_policy_harness import (
     BREAKOUT_NORMAL,
     GENERAL,
     OWNER_CLOSE,
+    OWNER_GIVEBACK_45,
+    OWNER_RUNNER_FAILED,
+    OWNER_TP_1R,
     TREND_UP,
     OwnerState,
     execution_direction,
@@ -62,13 +65,29 @@ def test_restart_round_trip_preserves_peak_floor_and_profile():
     assert abs(after.observe(0.50) - 0.56) < 1e-12
 
 
-def test_pyramid_and_reentry_inherit_profile_and_active_floor():
+def test_pyramid_and_reentry_inherit_profile_without_foreign_leg_geometry():
     core = OwnerState(TREND_UP)
     core.observe(1.00)
     pyramid = core.inherited_leg()
     reentry = core.inherited_leg()
     assert pyramid.profile == reentry.profile == TREND_UP
-    assert pyramid.floor_r == reentry.floor_r == 0.70
+    assert pyramid.peak_r == reentry.peak_r == 0.0
+    assert pyramid.floor_r == reentry.floor_r == 0.0
+
+
+def test_restored_r_manager_rules_are_guarded_by_any_active_owner_floor():
+    pretrigger = OwnerState(GENERAL)
+    pretrigger.observe(0.30)
+    assert pretrigger.close_allowed(0.16, OWNER_GIVEBACK_45)
+    assert not pretrigger.close_allowed(-0.01, OWNER_GIVEBACK_45)
+
+    armed = OwnerState(GENERAL)
+    armed.observe(0.50)
+    assert not armed.close_allowed(0.34, OWNER_GIVEBACK_45)
+    assert armed.close_allowed(0.35, OWNER_GIVEBACK_45)
+    assert armed.close_allowed(1.00, OWNER_TP_1R)
+    assert armed.close_allowed(0.35, OWNER_RUNNER_FAILED)
+    assert not armed.close_allowed(0.34, OWNER_RUNNER_FAILED)
 
 
 def test_floor_boundary_examples_match_owner_policy():
@@ -121,10 +140,12 @@ def test_breakouts_use_canonical_owner_mode_and_no_owner_time_blackout():
     assert "OWNER_ENTRY_TIME_BLACKOUT" not in EA
 
 
-def test_full_1r_no_broker_tp_and_restored_pyramid_50pct_margin_buffer():
+def test_full_1r_core_has_no_broker_tp_pyramid_tp_restored_and_margin_buffer_preserved():
     assert "g.effectiveHardStopDistance=g.finalOriginalRiskDistance" in EA.replace(" ", "")
     assert "trade.Buy(lots, Symbol(), 0, sl, 0.0" in EA
     assert "trade.Sell(lots, Symbol(), 0, sl, 0.0" in EA
+    assert 'trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)' in EA
+    assert 'trade.Sell(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)' in EA
     assert "FreeMargin()*0.50" in EA.replace(" ", "")
     assert "marginNeeded>accInfo.FreeMargin()" in EA.replace(" ", "")
 
@@ -192,3 +213,18 @@ def test_breakout_campaign_persists_original_and_execution_direction():
     assert "OWNER_R_EXIT_FLOOR_INHERITED" not in EA
     assert "INHERITED_FROM_CAMPAIGN" not in EA
     assert "#define XAU_BASKET_STATE_SCHEMA_VERSION 5" in EA
+
+
+def test_basket_telemetry_cannot_contaminate_surviving_leg_floor():
+    conversion = EA[EA.index("string XAU_TryConvertBasketToSingleFloor("):]
+    conversion = conversion[:conversion.index("void XAU_CampaignRegisterClose(")]
+    assert 'return "TELEMETRY_ONLY_NO_FLOOR_TRANSFER";' in conversion
+    assert ".guaranteedFloorR = convertedFloorROut" not in conversion
+    assert ".profitGuaranteeArmed = true" not in conversion
+    assert "KEEP_SURVIVOR_PER_LEG_OWNER_FLOOR" in EA
+
+
+def test_below_floor_retry_evidence_is_rate_limited_without_disabling_retry():
+    assert "lastBelowFloorRejectLog" in EA
+    assert "TimeCurrent()-g_rExit[idx].lastBelowFloorRejectLog>=30" in EA
+    assert "action=RETRY_BROKER_FLOOR" in EA
