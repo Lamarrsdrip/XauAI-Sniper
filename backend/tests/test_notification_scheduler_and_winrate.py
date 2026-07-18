@@ -36,7 +36,7 @@ SERVER_SRC = read(BACKEND_DIR / "server.py")
 # ---------------------------------------------------------------------------
 def test_hourly_slot_field_is_computed_and_stored():
     assert 'hourly_slot = now.strftime("%Y-%m-%dT%H:00")' in MO_SRC
-    assert MO_SRC.count('"hourly_slot": hourly_slot,') == 3  # both early-return docs + main doc
+    assert MO_SRC.count('"hourly_slot": hourly_slot,') == 4  # early returns, invalid-quote guard, main doc
 
 
 def test_hourly_tick_checks_exact_slot_not_rolling_lookback():
@@ -110,16 +110,16 @@ def test_temporary_failures_do_not_delete_subscription():
 
 def test_onesignal_returns_classified_failure_not_bare_bool():
     fn_idx = NOTIF_SRC.index("async def _send_onesignal(user_id: str, payload: Dict) -> tuple:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 3200]
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4300]
     for status_class in ["SERVER_NOT_CONFIGURED", "AUTHENTICATION_FAILED",
                           "TEMPORARY_DELIVERY_FAILURE", "NO_DEVICE_REGISTERED", "UNKNOWN_FAILURE"]:
         assert status_class in fn
 
 
-def test_zero_recipients_classified_as_no_device_registered():
+def test_empty_message_id_classified_as_no_device_registered():
     fn_idx = NOTIF_SRC.index("async def _send_onesignal(user_id: str, payload: Dict) -> tuple:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 3200]
-    assert "recipients > 0" in fn
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4300]
+    assert 'if data.get("id")' in fn
     assert "NO_DEVICE_REGISTERED" in fn
 
 
@@ -185,12 +185,11 @@ def test_win_rate_formula_is_wins_over_wins_plus_losses():
     assert "len(activated)" not in win_rate_line
 
 
-def test_no_entry_and_invalidated_never_count_as_win_or_loss():
-    idx = ROUTES_SRC.index("resolved_rows = [o for o in stats_rows if")
-    window = ROUTES_SRC[idx: idx + 300]
-    assert "activation" in window and "final_r" in window
-    # resolved_rows requires BOTH activation and a real final_r -- a
-    # no-entry/invalidated-before-entry row has final_r None and is excluded
+def test_only_authoritative_completed_outcomes_count_as_win_or_loss():
+    idx = ROUTES_SRC.index("completed = [o for o in actionable")
+    window = ROUTES_SRC[idx: idx + 250]
+    assert "ANALYTICS_WIN" in window and "ANALYTICS_LOSS" in window
+    assert "HISTORICAL_DATA_UNAVAILABLE" not in window
 
 
 def test_zero_resolved_signals_yields_none_not_zero_percent():

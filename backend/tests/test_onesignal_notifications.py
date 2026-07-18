@@ -167,28 +167,44 @@ def test_send_test_notification_success_path_hits_onesignal_and_logs_sent():
         await _set_config("app-123", "key-abc")
         await srv.db.cloud_push_subscriptions.insert_one(
             {"id": "dev-1", "user_id": "user-2", "opted_in": True, "created_at": "2026-07-17T00:00:00Z"})
-        fake_client = _FakeAsyncClient(response=_fake_response(200, {"id": "notif-1", "recipients": 1}))
+        fake_client = _FakeAsyncClient(response=_fake_response(200, {"id": "notif-1"}))
         with patch("notifications.httpx.AsyncClient", fake_client):
             result = await notif.send_test_notification("user-2")
         assert result["status"] == "SENT"
-        assert fake_client.last_call["json"]["include_external_user_ids"] == ["user-2"]
+        assert fake_client.last_call["json"]["include_aliases"] == {"external_id": ["user-2"]}
+        assert fake_client.last_call["json"]["target_channel"] == "push"
         assert fake_client.last_call["json"]["app_id"] == "app-123"
-        assert fake_client.last_call["headers"]["Authorization"] == "Basic key-abc"
+        assert fake_client.last_call["headers"]["Authorization"] == "Key key-abc"
         log = await srv.db.cloud_notification_log.find_one({"user_id": "user-2"})
         assert log["delivery_status"] == "SENT"
         await _clear()
     _run(go())
 
 
-def test_send_test_notification_never_reports_sent_on_zero_recipients():
-    # OneSignal's own recipients=0 means nothing was actually delivered --
-    # must not be reported as SENT just because the HTTP call didn't raise.
+def test_provider_idempotency_key_is_stable_for_same_user_outlook_event():
+    async def go():
+        await _clear()
+        await _set_config("app-123", "key-abc")
+        payload = {"title": "half R", "body": "hit", "outlook_id": "outlook-stable", "event": "HALF_R_REACHED"}
+        first = _FakeAsyncClient(response=_fake_response(200, {"id": "n-first"}))
+        second = _FakeAsyncClient(response=_fake_response(200, {"id": "n-second"}))
+        with patch("notifications.httpx.AsyncClient", first):
+            await notif._send_onesignal("same-user", payload)
+        with patch("notifications.httpx.AsyncClient", second):
+            await notif._send_onesignal("same-user", payload)
+        assert first.last_call["json"]["idempotency_key"] == second.last_call["json"]["idempotency_key"]
+        await _clear()
+    _run(go())
+
+
+def test_send_test_notification_never_reports_sent_on_empty_message_id():
+    # Current OneSignal API returns an empty id when no subscription matched.
     async def go():
         await _clear()
         await _set_config("app-123", "key-abc")
         await srv.db.cloud_push_subscriptions.insert_one(
             {"id": "dev-1", "user_id": "user-3", "opted_in": True, "created_at": "2026-07-17T00:00:00Z"})
-        fake_client = _FakeAsyncClient(response=_fake_response(200, {"id": "notif-2", "recipients": 0}))
+        fake_client = _FakeAsyncClient(response=_fake_response(200, {"id": "", "errors": {"invalid_aliases": ["user-3"]}}))
         with patch("notifications.httpx.AsyncClient", fake_client):
             result = await notif.send_test_notification("user-3")
         assert result["status"] == "NO_DEVICE"
@@ -257,10 +273,10 @@ def test_outlook_notification_respects_tier_gating():
         await _set_config("app-123", "key-abc")
         await srv.db.cloud_notification_prefs.insert_one(
             {"user_id": "user-7", "account": "acct-1", "tier": "HOURLY_ONLY"})
-        # ENTRY_ZONE_REACHED requires ALL_UPDATES -- HOURLY_ONLY must not receive it
+        # TP2 is a result event -- HOURLY_ONLY must not receive it.
         sent = await notif.send_outlook_notification(
             {"id": "outlook-1", "account": "acct-1", "primary_direction": "BUY"},
-            event="ENTRY_ZONE_REACHED", min_tier="ALL_UPDATES")
+            event="TP2_HIT", min_tier="HOURLY_PLUS_RESULTS")
         assert sent == 0
         log = await srv.db.cloud_notification_log.find_one({"user_id": "user-7"})
         assert log is None
@@ -286,6 +302,52 @@ def test_outlook_notification_idempotent_on_duplicate_event():
         count = await srv.db.cloud_notification_log.count_documents({"user_id": "user-8"})
         assert count == 1
         await _clear()
+    _run(go())
+
+
+def test_transient_event_failure_retries_once_then_persists_dispatch_flag():
+    """A process/provider interruption must not lose an alert, and a
+    successful retry must make every later replay a no-op."""
+    import market_outlook as mo
+
+    async def go():
+        await _clear()
+        await _set_config("app-123", "key-abc")
+        await srv.db.cloud_notification_prefs.insert_one(
+            {"user_id": "user-retry", "account": "acct-retry", "tier": "HOURLY_PLUS_RESULTS"})
+        await srv.db.cloud_push_subscriptions.insert_one(
+            {"id": "dev-retry", "user_id": "user-retry", "opted_in": True})
+        doc = {
+            "id": "outlook-retry", "account": "acct-retry", "primary_direction": "BUY",
+            "tracking_entry_price": 100.1, "first_half_r_at": "2026-07-18T12:17:00+00:00",
+            "published_at": "2026-07-18T12:00:00+00:00", "last_tracked_price": 100.6,
+            "current_r": 0.5, "notification_flags": {},
+        }
+        await srv.db.cloud_market_outlooks.insert_one(doc)
+        sender = AsyncMock(side_effect=[
+            (False, notif.TEMPORARY_DELIVERY_FAILURE),
+            (True, None),
+        ])
+        with patch("notifications._send_onesignal", sender), patch.object(mo, "_db", return_value=srv.db):
+            await mo._dispatch_signal_event(doc, "HALF_R_REACHED")
+            after_failure = await srv.db.cloud_market_outlooks.find_one({"id": doc["id"]})
+            assert not (after_failure.get("notification_flags") or {}).get("HALF_R_REACHED")
+
+            await mo._dispatch_signal_event(doc, "HALF_R_REACHED")
+            after_success = await srv.db.cloud_market_outlooks.find_one({"id": doc["id"]})
+            assert (after_success.get("notification_flags") or {}).get("HALF_R_REACHED")
+
+            replay_doc = {**doc, "notification_flags": after_success["notification_flags"]}
+            await mo._dispatch_signal_event(replay_doc, "HALF_R_REACHED")
+
+        assert sender.await_count == 2
+        logs = await srv.db.cloud_notification_log.find({"outlook_id": doc["id"]}).to_list(10)
+        assert len(logs) == 1
+        assert logs[0]["delivery_status"] == "SENT"
+        assert logs[0]["retry_count"] == 1
+        await _clear()
+        await srv.db.cloud_market_outlooks.delete_many({"id": doc["id"]})
+
     _run(go())
 
 

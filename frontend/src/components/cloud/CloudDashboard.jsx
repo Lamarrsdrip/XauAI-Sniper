@@ -13,6 +13,7 @@ import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import M10VsOutlookCard from "./M10VsOutlookCard";
 import { API } from "@/lib/api";
+import { logoutOneSignalUser } from "@/lib/onesignal";
 
 // ─── Axios ───────────────────────────────────────────────────────────────────
 const commandAxios = axios.create({ baseURL: API, withCredentials: true });
@@ -681,6 +682,7 @@ export default function CloudDashboard() {
   };
 
   const logout = async () => {
+    try { await logoutOneSignalUser(); } catch {}
     try { await commandAxios.post("/cloud/auth/logout"); } catch {}
     navigate("/command");
   };

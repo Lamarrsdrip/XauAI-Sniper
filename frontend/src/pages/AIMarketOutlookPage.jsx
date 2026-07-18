@@ -23,7 +23,7 @@ const COLOR_STYLE = {
 
 const DIRECTION_ICON = { BUY: ArrowUpRight, SELL: ArrowDownRight, NEUTRAL: Minus, RANGE: Minus, TRANSITION: Compass, NO_VALID_OUTLOOK: Minus };
 
-const HISTORY_FILTERS = ["All", "BUY", "SELL", "Green", "Red", "Gray", "Amber", "TP1", "TP2", "TP3", "Stopped", "No Entry"];
+const HISTORY_FILTERS = ["All", "BUY", "SELL", "Green", "Red", "Gray", "Amber", "TP1", "TP2", "TP3", "Stopped", "Unavailable"];
 
 function resultLabel(o) {
   // v6.25.2 owner directive 2026-07-17 -- a TRANSITION/NEUTRAL/RANGE update
@@ -33,14 +33,35 @@ function resultLabel(o) {
   if (o.primary_direction && !["BUY", "SELL"].includes(o.primary_direction)) {
     return "INFORMATIONAL UPDATE";
   }
-  if (!o.final_result) return o.status?.replace(/_/g, " ") || "PENDING";
-  if (o.final_result.startsWith("GREEN") && o.highest_tp_reached) {
-    return `TP${o.highest_tp_reached} HIT · +${o.final_r ?? "?"}R`;
-  }
-  if (o.final_result === "RED_STOPPED") return `STOPPED · ${o.final_r ?? -1}R`;
-  if (o.final_result.startsWith("GRAY_EXPIRED")) return "NO ENTRY";
-  if (o.final_result.startsWith("GRAY_INVALIDATED")) return "INVALIDATED";
+  if (o.signal_state === "TRACKING_AMBER") return "TRACKING · AWAITING +0.50R";
+  if (o.signal_state === "WIN_GREEN_0_5R") return "WIN · +0.50R HIT";
+  if (o.signal_state === "WIN_GREEN_TP1") return `WIN · TP${o.highest_tp_reached || 1} HIT`;
+  if (o.signal_state === "LOSS_RED_SL") return "LOSS · SL HIT";
+  if (o.signal_state === "LOSS_RED_TIMEOUT") return "LOSS · BELOW +0.50R AFTER 60 MIN";
+  if (o.signal_state === "HISTORICAL_DATA_UNAVAILABLE") return "HISTORICAL DATA UNAVAILABLE";
+  if (!o.final_result) return o.status?.replace(/_/g, " ") || "TRACKING";
   return o.final_result.replace(/_/g, " ");
+}
+
+function rText(value) {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  const n = Number(value);
+  return `${n >= 0 ? "+" : ""}${n.toFixed(2)}R`;
+}
+
+function timeText(value) {
+  return value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+}
+
+function elapsedText(start, end) {
+  if (!start) return "—";
+  const startMs = new Date(start).getTime();
+  const endMs = end ? new Date(end).getTime() : Date.now();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return "—";
+  const totalSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
 }
 
 function OutlookHero({ outlook, advanced, setAdvanced }) {
@@ -48,18 +69,22 @@ function OutlookHero({ outlook, advanced, setAdvanced }) {
   const dir = outlook.primary_direction || "NO_VALID_OUTLOOK";
   const Icon = DIRECTION_ICON[dir] || Minus;
   const isDirectional = dir === "BUY" || dir === "SELL";
+  const lifecycleColor = COLOR_STYLE[outlook.color_state] || COLOR_STYLE.AMBER;
 
   return (
-    <div className={`${CARD} p-5`}>
+    <div className={`${CARD} ${isDirectional ? `border-l-4 ${lifecycleColor.border} ${lifecycleColor.bg}` : ""} p-5`}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Icon className={`h-5 w-5 ${dir === "BUY" ? "text-emerald-300" : dir === "SELL" ? "text-rose-300" : "text-white/50"}`} />
           <span className="font-mono text-2xl font-black">{dir.replace(/_/g, " ")}</span>
           {isDirectional && <span className="font-mono text-sm text-white/40">{outlook.confidence_pct}%</span>}
         </div>
-        <button onClick={() => setAdvanced((a) => !a)} className="flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/50 hover:border-white/25">
-          {advanced ? "Simple" : "Advanced"} {advanced ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-        </button>
+        <div className="flex flex-col items-end gap-1.5">
+          {isDirectional && <span className={`max-w-[12rem] text-right font-mono text-[10px] font-bold ${lifecycleColor.text}`}>{resultLabel(outlook)}</span>}
+          <button onClick={() => setAdvanced((a) => !a)} className="flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/50 hover:border-white/25">
+            {advanced ? "Simple" : "Advanced"} {advanced ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
+        </div>
       </div>
 
       <p className="mt-3 text-[13px] leading-5 text-white/70">{outlook.reasoning}</p>
@@ -95,11 +120,22 @@ function OutlookHero({ outlook, advanced, setAdvanced }) {
             <Metric label="TP2 / TP3" value={safeJoin([outlook.tp2_price, outlook.tp3_price], " / ")} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Metric label="Signal entry" value={outlook.tracking_entry_price} />
+            <Metric label="Current R" value={rText(outlook.current_r)} />
+            <Metric label="MFE / MAE" value={`${rText(outlook.mfe_r)} / ${rText(outlook.mae_r)}`} />
+            <Metric label="Elapsed / deadline" value={`${elapsedText(outlook.published_at, outlook.classification_at)} / ${timeText(outlook.evaluation_deadline)}`} />
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Metric label="Expected path" value={(outlook.expected_path || "").replace(/_/g, " ")} />
             <Metric label="Setup type" value={(outlook.setup_type || "").replace(/_/g, " ")} />
             <Metric label="Status" value={(outlook.status || "").replace(/_/g, " ")} />
             <Metric label="Chase limit" value={outlook.chase_limit} />
           </div>
+          {(outlook.first_half_r_at || outlook.tp1_hit_at || outlook.tp2_hit_at || outlook.tp3_hit_at || outlook.sl_hit_at) && (
+            <div className="mt-3 rounded-lg border border-white/[0.05] bg-black/15 p-2.5 font-mono text-[10px] text-white/40">
+              +0.50R {timeText(outlook.first_half_r_at)} · TP1 {timeText(outlook.tp1_hit_at)} · TP2 {timeText(outlook.tp2_hit_at)} · TP3 {timeText(outlook.tp3_hit_at)} · SL {timeText(outlook.sl_hit_at)}
+            </div>
+          )}
           {outlook.final_structural_sl != null && (
             <div className="mt-3 rounded-lg border border-white/[0.05] bg-white/[0.015] p-2.5 text-[10px] text-white/40">
               Risk policy: raw structural SL {outlook.raw_structural_sl} (dist {outlook.raw_sl_distance}) ×{" "}
@@ -187,18 +223,18 @@ function NotificationSettings({ prefs, setPrefs }) {
       if (!appData?.configured || !appData?.app_id) {
         return { ok: false, code: "SERVER_NOT_CONFIGURED", message: "Push server is not configured yet." };
       }
-      const ready = await ensureOneSignalInitialized(appData.app_id);
-      if (!ready || !window.OneSignal) {
+      const oneSignal = await ensureOneSignalInitialized(appData.app_id);
+      if (!oneSignal) {
         return { ok: false, code: "PUSH_UNSUPPORTED", message: "Notification SDK failed to load." };
-      }
-      await window.OneSignal.Notifications.requestPermission();
-      const optedIn = window.OneSignal.User?.PushSubscription?.optedIn;
-      if (!optedIn) {
-        return { ok: false, code: "PERMISSION_DENIED", message: "Notification permission was not granted." };
       }
       const { data: idData } = await outlookAxios.get("/outlook/notifications/my-user-id");
       if (idData?.user_id) {
-        await window.OneSignal.login(idData.user_id);
+        await oneSignal.login(idData.user_id);
+      }
+      await oneSignal.Notifications.requestPermission();
+      const optedIn = oneSignal.User?.PushSubscription?.optedIn;
+      if (!optedIn) {
+        return { ok: false, code: "PERMISSION_DENIED", message: "Notification permission was not granted." };
       }
       const subResp = await outlookAxios.post("/outlook/notifications/subscribe", {
         device_label: navigator.userAgent.slice(0, 60),
@@ -383,7 +419,8 @@ function safeJoin(values, separator) {
 
 function HistoryCard({ outlook }) {
   const color = COLOR_STYLE[outlook.color_state] || COLOR_STYLE.AMBER;
-  const time = outlook.generated_at ? new Date(outlook.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  const signalTime = outlook.published_at || outlook.generated_at;
+  const time = signalTime ? new Date(signalTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
   return (
     <div className={`rounded-xl border border-white/[0.06] border-l-4 ${color.border} ${color.bg} p-3`}>
       <div className="flex items-center justify-between">
@@ -391,9 +428,18 @@ function HistoryCard({ outlook }) {
         <span className={`font-mono text-[11px] font-bold ${color.text}`}>{resultLabel(outlook)}</span>
       </div>
       {["BUY", "SELL"].includes(outlook.primary_direction) ? (
-        <div className="mt-1 text-[11px] text-white/40">
-          Entry {outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high} · SL {outlook.suggested_sl} ·
-          TP1 {outlook.tp1_price} · TP2 {outlook.tp2_price} · TP3 {outlook.tp3_price}
+        <div className="mt-2 space-y-1 text-[11px] text-white/45">
+          <div>Signal entry <span className="font-mono text-white/75">{outlook.tracking_entry_price ?? "—"}</span> · Suggested zone {outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</div>
+          <div>SL {outlook.original_sl ?? outlook.suggested_sl} · TP1 {outlook.tp1_price} · TP2 {outlook.tp2_price} · TP3 {outlook.tp3_price}</div>
+          <div>Current {rText(outlook.current_r)} · MFE {rText(outlook.mfe_r)} · MAE {rText(outlook.mae_r)}</div>
+          <div>Elapsed {elapsedText(signalTime, outlook.classification_at)} · Deadline {timeText(outlook.evaluation_deadline)} · Last monitored {timeText(outlook.last_monitored_at)}</div>
+          {(outlook.first_half_r_at || outlook.tp1_hit_at || outlook.tp2_hit_at || outlook.tp3_hit_at || outlook.sl_hit_at) && (
+            <div className="text-[10px] text-white/35">
+              +0.50R {timeText(outlook.first_half_r_at)} · TP1 {timeText(outlook.tp1_hit_at)} · TP2 {timeText(outlook.tp2_hit_at)} · TP3 {timeText(outlook.tp3_hit_at)} · SL {timeText(outlook.sl_hit_at)}
+            </div>
+          )}
+          {outlook.latest_path_event && <div className={`text-[10px] ${color.text}`}>Path: {outlook.latest_path_event.replace(/_/g, " ")}</div>}
+          {outlook.historical_data_unavailable_reason && <div className="text-[10px] text-white/35">{outlook.historical_data_unavailable_reason}</div>}
         </div>
       ) : outlook.primary_direction !== "NO_VALID_OUTLOOK" ? (
         // v6.25.2 owner directive 2026-07-17 -- a non-directional hourly
@@ -405,7 +451,9 @@ function HistoryCard({ outlook }) {
           No new direction confirmed this hour.
         </div>
       ) : null}
-      <div className="mt-1 text-[10px] text-white/30">MFE {outlook.mfe?.toFixed?.(2) ?? outlook.mfe} · MAE {outlook.mae?.toFixed?.(2) ?? outlook.mae}</div>
+      {!["BUY", "SELL"].includes(outlook.primary_direction) && (
+        <div className="mt-1 text-[10px] text-white/30">Informational updates are excluded from signal analytics.</div>
+      )}
     </div>
   );
 }
@@ -490,8 +538,8 @@ export default function AIMarketOutlookPage() {
         // any entry was ever taken (a "no entry" outcome, not a stop-out).
         // Uses the precise final_result field instead -- see
         // market_outlook_routes.py's own comment on the `result` param.
-        else if (filter === "Stopped") params.result = "RED_STOPPED";
-        else if (filter === "No Entry") params.color = "GRAY";
+        else if (filter === "Stopped") params.result = "LOSS_RED_SL";
+        else if (filter === "Unavailable") params.result = "HISTORICAL_DATA_UNAVAILABLE";
       }
       const { data } = await outlookAxios.get("/outlook/history", { params });
       setHistory(data?.outlooks || []);
@@ -508,7 +556,10 @@ export default function AIMarketOutlookPage() {
     loadPrefs();
     loadHistory();
     loadM10Signal();
-    const t = setInterval(() => { loadCurrent(); loadHistory(); loadM10Signal(); }, 60000);
+    // The backend owns classification; this lightweight refresh only makes
+    // its persisted event-driven state visible promptly when the page is
+    // open. It does not calculate or monitor prices in the browser.
+    const t = setInterval(() => { loadCurrent(); loadHistory(); loadM10Signal(); }, 15000);
     return () => clearInterval(t);
   }, [highlightId, loadCurrent, loadPrefs, loadHistory, loadM10Signal]);
 
@@ -554,7 +605,7 @@ export default function AIMarketOutlookPage() {
               <Metric label="Total R" value={stats.total_r != null ? `${stats.total_r > 0 ? "+" : ""}${stats.total_r}R` : "—"} />
               <Metric label="Avg R" value={stats.average_r != null ? `${stats.average_r > 0 ? "+" : ""}${stats.average_r}R` : "—"} />
               <Metric label="TP1 / TP2 / TP3" value={`${stats.tp1_hit_rate != null ? Math.round(stats.tp1_hit_rate * 100) : 0}% / ${stats.tp2_hit_rate != null ? Math.round(stats.tp2_hit_rate * 100) : 0}% / ${stats.tp3_hit_rate != null ? Math.round(stats.tp3_hit_rate * 100) : 0}%`} />
-              <Metric label="No entry" value={stats.no_entry_count ?? stats.no_entry_results} />
+              <Metric label="Unavailable history" value={stats.unavailable_historical_count ?? 0} />
               <Metric label="Active" value={stats.active_unresolved_count ?? "—"} />
               <Metric label="Avg MFE/MAE" value={stats.average_mfe != null ? `${stats.average_mfe}/${stats.average_mae}` : "—"} />
             </div>

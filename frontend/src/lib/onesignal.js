@@ -8,9 +8,10 @@
 // worker code) instead of letting it register a second, competing service
 // worker at the same scope.
 let initPromise = null;
+let sdkInstance = null;
 
 export function ensureOneSignalInitialized(appId) {
-  if (typeof window === "undefined" || !appId) return Promise.resolve(false);
+  if (typeof window === "undefined" || !appId) return Promise.resolve(null);
   if (initPromise) return initPromise;
   initPromise = new Promise((resolve) => {
     window.OneSignalDeferred = window.OneSignalDeferred || [];
@@ -21,13 +22,18 @@ export function ensureOneSignalInitialized(appId) {
           serviceWorkerParam: { scope: "/" },
           serviceWorkerPath: "service-worker.js",
         });
-        resolve(true);
+        sdkInstance = OneSignal;
+        resolve(OneSignal);
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn("[XauAi] OneSignal init failed", e);
-        resolve(false);
+        resolve(null);
       }
     });
   });
   return initPromise;
+}
+
+export async function logoutOneSignalUser() {
+  if (sdkInstance?.logout) await sdkInstance.logout();
 }

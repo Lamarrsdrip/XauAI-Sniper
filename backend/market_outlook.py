@@ -63,20 +63,30 @@ def _db():
 
 OUTLOOK_SYMBOL = "XAUUSD"
 OUTLOOK_HORIZON_HOURS = 4  # how long a published outlook's window stays valid before EXPIRED
+OUTLOOK_EVALUATION_MINUTES = 60
+HALF_R_WIN_THRESHOLD = 0.50
 ROOM_COLLAPSE_R = 0.3      # same threshold the EA's readiness engine uses -- invalidates a candidate
 
 PRIMARY_DIRECTIONS = ("BUY", "SELL", "NEUTRAL", "RANGE", "TRANSITION", "NO_VALID_OUTLOOK")
 EXPECTED_PATHS = ("PULLBACK_FIRST_THEN_BUY", "RALLY_FIRST_THEN_SELL", "DIRECT_CONTINUATION",
                   "RANGE_ROTATION", "REVERSAL_FORMING", "NO_CLEAR_PATH")
-LIFECYCLE_STATES = ("ANALYZING", "PUBLISHED", "WAITING_FOR_ENTRY_ZONE", "ENTRY_ZONE_ACTIVE",
-                    "CONFIRMATION_PENDING", "ACTIVE", "TP1_HIT", "TP2_HIT", "TP3_HIT",
-                    "INVALIDATED", "EXPIRED", "MISSED_WITHOUT_ENTRY", "CANCELLED_BY_NEW_STRUCTURE")
-FINAL_RESULTS = ("GREEN_TP1", "GREEN_TP2", "GREEN_TP3", "GREEN_PARTIAL_PROFIT",
-                 "RED_STOPPED", "RED_NO_PROFIT", "GRAY_EXPIRED_NO_ENTRY",
-                 "GRAY_INVALIDATED_BEFORE_ENTRY", "AMBER_ACTIVE", "AMBER_UNRESOLVED")
+LIFECYCLE_STATES = ("INFORMATIONAL", "TRACKING_AMBER", "WIN_GREEN_0_5R",
+                    "WIN_GREEN_TP1", "LOSS_RED_SL", "LOSS_RED_TIMEOUT")
+FINAL_RESULTS = ("WIN_GREEN_0_5R", "WIN_GREEN_TP1", "LOSS_RED_SL",
+                 "LOSS_RED_TIMEOUT", "HISTORICAL_DATA_UNAVAILABLE")
 NOTIFICATION_TIERS = ("OFF", "HOURLY_ONLY", "HOURLY_PLUS_RESULTS", "ALL_UPDATES")
-MILESTONES = ("ENTRY_ZONE_REACHED", "OUTLOOK_ACTIVATED", "TP1_HIT", "TP2_HIT", "TP3_HIT",
-             "SL_HIT", "INVALIDATED", "EXPIRED_NO_ENTRY")
+MILESTONES = ("TRACKING_STARTED", "HALF_R_REACHED", "TP1_HIT", "TP2_HIT",
+              "TP3_HIT", "SL_HIT", "TIMEOUT_60M")
+
+SIGNAL_INFORMATIONAL = "INFORMATIONAL"
+SIGNAL_TRACKING = "TRACKING_AMBER"
+SIGNAL_WIN_HALF_R = "WIN_GREEN_0_5R"
+SIGNAL_WIN_TP1 = "WIN_GREEN_TP1"
+SIGNAL_LOSS_SL = "LOSS_RED_SL"
+SIGNAL_LOSS_TIMEOUT = "LOSS_RED_TIMEOUT"
+ANALYTICS_WIN = "WIN"
+ANALYTICS_LOSS = "LOSS"
+ANALYTICS_UNAVAILABLE = "HISTORICAL_DATA_UNAVAILABLE"
 
 
 # ---------------------------------------------------------------------------
@@ -581,14 +591,49 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         }
         return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
 
+    # Signal-performance tracking is anchored to the broker-executable quote
+    # in the same immutable EA evidence snapshot used to publish the outlook.
+    # The suggested zone remains analysis-only; it is never an activation
+    # gate and never becomes the performance entry.
+    published_bid = float(thesis.get("live_bid", 0.0) or 0.0)
+    published_ask = float(thesis.get("live_ask", 0.0) or 0.0)
+    published_quote_at = thesis.get("evidence_time_utc") or evidence.get("ts") or now.isoformat()
+    actionable = direction_label in ("BUY", "SELL")
+    tracking_entry = published_ask if direction_label == "BUY" else published_bid if direction_label == "SELL" else None
+    original_sl = zone.get("suggested_sl")
+    risk_distance = abs(float(tracking_entry) - float(original_sl)) if actionable and tracking_entry and original_sl else 0.0
+    quote_valid = published_bid > 0.0 and published_ask >= published_bid and risk_distance > 0.0
+    if actionable and not quote_valid:
+        logger.error(
+            "OUTLOOK_PUBLICATION_QUOTE_INVALID | account=%s direction=%s bid=%s ask=%s sl=%s action=NO_VALID_OUTLOOK",
+            account, direction_label, published_bid, published_ask, original_sl,
+        )
+        doc = {
+            "id": outlook_id.replace("PENDING", "NO_VALID_OUTLOOK"),
+            "symbol": OUTLOOK_SYMBOL, "account": account, "license_key": license_key,
+            "generated_at": now.isoformat(), "published_at": now.isoformat(),
+            "hourly_slot": hourly_slot, "late_catchup": is_late_catchup,
+            "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
+            "current_price": current_price, "primary_direction": "NO_VALID_OUTLOOK",
+            "no_valid_outlook_reason": "EXECUTABLE_PUBLICATION_QUOTE_UNAVAILABLE",
+            "confidence_pct": 0, "confidence_components": ConfidenceComponents().model_dump(),
+            "status": "INFORMATIONAL", "signal_state": SIGNAL_INFORMATIONAL,
+            "reasoning": "No complete broker Bid/Ask snapshot was available, so no actionable signal or performance record was created.",
+            "uncertainty": "Wait for a fresh EA quote.", "expected_path": "NO_CLEAR_PATH", "setup_type": "NONE",
+            "analytics_outcome": None, "excluded_from_signal_analytics": True,
+        }
+        return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
+
     narrative = await _synthesize_narrative(direction_label, confidence, thesis, path, zone, account_id)
 
     outlook_id = _new_outlook_id(direction_label)
+    published_at = now.isoformat()
     doc = {
         "id": outlook_id,
         "symbol": OUTLOOK_SYMBOL,
         "account": account, "license_key": license_key,
-        "generated_at": now.isoformat(),
+        "generated_at": published_at,
+        "published_at": published_at,
         "hourly_slot": hourly_slot,
         "late_catchup": is_late_catchup,
         "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
@@ -632,11 +677,34 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "expected_holding_horizon": "hours" if setup_type != "NONE" else "n/a",
         "reasoning": narrative["reasoning"],
         "uncertainty": narrative["uncertainty"],
-        "status": "PUBLISHED",
-        "activation": {"activated": False, "activated_at": None, "activated_price": None},
+        "status": "TRACKING" if actionable else "INFORMATIONAL",
+        "signal_state": SIGNAL_TRACKING if actionable else SIGNAL_INFORMATIONAL,
+        "signal_tracking_version": 2,
+        "published_bid": published_bid if published_bid > 0 else None,
+        "published_ask": published_ask if published_ask > 0 else None,
+        "published_spread": (published_ask - published_bid) if published_bid > 0 and published_ask >= published_bid else None,
+        "published_quote_at": published_quote_at,
+        "tracking_entry_price": tracking_entry if actionable else None,
+        "original_sl": original_sl if actionable else None,
+        "risk_distance": risk_distance if actionable else None,
+        "evaluation_deadline": (now + timedelta(minutes=OUTLOOK_EVALUATION_MINUTES)).isoformat() if actionable else None,
+        "activation": {"activated": actionable, "activated_at": published_at if actionable else None,
+                       "activated_price": tracking_entry if actionable else None},
         "milestones_hit": [],
         "final_result": None,
         "final_r": None,
+        "analytics_outcome": None,
+        "analytics_r": None,
+        "current_r": 0.0 if actionable else None,
+        "mfe_r": 0.0 if actionable else None,
+        "mae_r": 0.0 if actionable else None,
+        "highest_tracked_price": tracking_entry if actionable else None,
+        "lowest_tracked_price": tracking_entry if actionable else None,
+        "first_half_r_at": None,
+        "tp1_hit_at": None, "tp2_hit_at": None, "tp3_hit_at": None, "sl_hit_at": None,
+        "classification_at": None, "latest_path_event": "TRACKING_STARTED" if actionable else "INFORMATIONAL_UPDATE",
+        "notification_flags": {}, "last_monitored_at": None,
+        "excluded_from_signal_analytics": not actionable,
         "highest_tp_reached": None,
         "mfe": 0.0, "mae": 0.0,
         "color_state": "AMBER",
@@ -782,75 +850,294 @@ async def repair_price_integrity_incidents(max_reasonable_price: float = 6000.0,
 # Lifecycle / outcome tracking
 # ---------------------------------------------------------------------------
 
-def _classify_final_result(highest_tp: Optional[int], sl_hit: bool, activated: bool, entry_zone_reached: bool) -> str:
-    if not entry_zone_reached:
-        return "GRAY_EXPIRED_NO_ENTRY"
-    if not activated:
-        return "GRAY_INVALIDATED_BEFORE_ENTRY"
-    if highest_tp == 3:
-        return "GREEN_TP3"
-    if highest_tp == 2:
-        return "GREEN_TP2"
-    if highest_tp == 1:
-        return "GREEN_TP1"
-    if sl_hit:
-        return "RED_STOPPED"
-    return "RED_NO_PROFIT"
+def _as_utc(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
 
 
-def _color_for_result(result: Optional[str], status: str) -> str:
-    if result is None:
-        return "AMBER"
-    if result.startswith("GREEN"):
-        return "GREEN"
-    if result.startswith("RED"):
-        return "RED"
-    if result.startswith("GRAY"):
-        return "GRAY"
-    return "AMBER"
+def _signal_events_present(doc: Dict) -> list:
+    events = ["TRACKING_STARTED"] if doc.get("tracking_entry_price") else []
+    for field, event in (("first_half_r_at", "HALF_R_REACHED"), ("tp1_hit_at", "TP1_HIT"),
+                         ("tp2_hit_at", "TP2_HIT"), ("tp3_hit_at", "TP3_HIT"),
+                         ("sl_hit_at", "SL_HIT")):
+        if doc.get(field):
+            events.append(event)
+    if doc.get("signal_state") == SIGNAL_LOSS_TIMEOUT:
+        events.append("TIMEOUT_60M")
+    return events
 
 
-async def track_outlook_lifecycle_tick() -> int:
-    """Called every minute. Checks each still-open outlook's status against
-    the live price feed, in strict event order (SL vs TP1/2/3 vs entry-zone
-    touch), and freezes a final result exactly once. This function ONLY
-    reads price and writes to cloud_market_outlooks/cloud_market_outlook_revisions
-    -- it never touches any EA/trade collection."""
-    srv = _server()
-    db = _db()
-    price_info = await srv.fetch_live_gold_price()
-    price = float(price_info.get("bid", 0.0) or 0.0)
-    if price <= 0:
-        return 0
+def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[float],
+                             observed_at: datetime) -> tuple:
+    """Pure state-machine transition used by live monitoring and backfill.
 
-    now = datetime.now(timezone.utc)
-    # Audit fix: "TP1_HIT"/"TP2_HIT" are used as BOTH an interim status
-    # ("still open, chasing the next TP") and, via _finalize_outlook, a
-    # TERMINAL status (an outlook that hit TP1 and later got stopped out
-    # before TP2 is finalized with status=f"TP{highest_tp}_HIT" -- the same
-    # string). Filtering on status alone therefore kept re-selecting
-    # already-resolved "partial TP then stopped" outlooks on every tick
-    # forever, and _finalize_outlook has no idempotency guard of its own
-    # (unconditional insert_one into outcomes/revisions), so this silently
-    # inserted a duplicate outcome+revision row every minute, indefinitely,
-    # for that entire class of trade. The authoritative "is this actually
-    # still open" signal is resolved_at (set exactly once, inside
-    # _finalize_outlook, and never cleared) -- excluding anything with it
-    # already set closes the gap regardless of what status string an
-    # outlook happens to share with an interim state.
-    open_statuses = ["PUBLISHED", "WAITING_FOR_ENTRY_ZONE", "ENTRY_ZONE_ACTIVE",
-                     "CONFIRMATION_PENDING", "ACTIVE", "TP1_HIT", "TP2_HIT"]
-    cursor = db.cloud_market_outlooks.find({
-        "status": {"$in": open_statuses},
-        "primary_direction": {"$in": ["BUY", "SELL"]},
-        "resolved_at": {"$in": [None, ""]},
+    BUY is valued on executable Bid and SELL on executable Ask. The immutable
+    tracking entry and original SL are never changed here. Returns
+    (field_updates, newly_observed_events).
+    """
+    direction = str(doc.get("primary_direction") or "").upper()
+    if direction not in ("BUY", "SELL"):
+        return {}, []
+    entry = float(doc.get("tracking_entry_price", 0.0) or 0.0)
+    risk = float(doc.get("risk_distance", 0.0) or 0.0)
+    if entry <= 0.0 or risk <= 0.0:
+        return {}, []
+
+    observed_at = _as_utc(observed_at) or datetime.now(timezone.utc)
+    observed_iso = observed_at.isoformat()
+    deadline = _as_utc(doc.get("evaluation_deadline"))
+    expiry = _as_utc(doc.get("expiry_at"))
+    outcome = doc.get("analytics_outcome")
+    updates: Dict[str, Any] = {"last_monitored_at": observed_iso}
+    events = []
+    milestones = list(doc.get("milestones_hit") or [])
+
+    close_price = None
+    if direction == "BUY" and bid is not None and float(bid) > 0.0:
+        close_price = float(bid)
+    elif direction == "SELL" and ask is not None and float(ask) > 0.0:
+        close_price = float(ask)
+
+    current_r = float(doc.get("current_r", 0.0) or 0.0)
+    mfe_r = float(doc.get("mfe_r", doc.get("mfe", 0.0)) or 0.0)
+    mae_r = float(doc.get("mae_r", doc.get("mae", 0.0)) or 0.0)
+    tp1_hit = bool(doc.get("tp1_hit_at"))
+    tp2_hit = bool(doc.get("tp2_hit_at"))
+    tp3_hit = bool(doc.get("tp3_hit_at"))
+    sl_hit = bool(doc.get("sl_hit_at"))
+    half_hit = bool(doc.get("first_half_r_at"))
+
+    if close_price is not None:
+        current_r = ((close_price - entry) / risk) if direction == "BUY" else ((entry - close_price) / risk)
+        mfe_r = max(mfe_r, current_r)
+        mae_r = min(mae_r, current_r, 0.0)
+        updates.update({
+            "current_r": round(current_r, 6), "mfe_r": round(mfe_r, 6), "mae_r": round(mae_r, 6),
+            "mfe": round(mfe_r, 6), "mae": round(mae_r, 6),
+            "highest_tracked_price": max(float(doc.get("highest_tracked_price", entry) or entry), close_price),
+            "lowest_tracked_price": min(float(doc.get("lowest_tracked_price", entry) or entry), close_price),
+            "last_bid": float(bid) if bid is not None else None,
+            "last_ask": float(ask) if ask is not None else None,
+            "last_tracked_price": close_price,
+        })
+
+        tp1 = float(doc.get("tp1_price", 0.0) or 0.0)
+        tp2 = float(doc.get("tp2_price", 0.0) or 0.0)
+        tp3 = float(doc.get("tp3_price", 0.0) or 0.0)
+        sl = float(doc.get("original_sl", doc.get("suggested_sl", 0.0)) or 0.0)
+        reached = (lambda target: close_price >= target) if direction == "BUY" else (lambda target: close_price <= target)
+        hit_sl_now = sl > 0.0 and ((direction == "BUY" and close_price <= sl) or (direction == "SELL" and close_price >= sl))
+
+        if current_r >= HALF_R_WIN_THRESHOLD and not half_hit:
+            half_hit = True
+            updates["first_half_r_at"] = observed_iso
+            events.append("HALF_R_REACHED")
+            if "HALF_R_REACHED" not in milestones:
+                milestones.append("HALF_R_REACHED")
+        for target, field, event, number in ((tp1, "tp1_hit_at", "TP1_HIT", 1),
+                                              (tp2, "tp2_hit_at", "TP2_HIT", 2),
+                                              (tp3, "tp3_hit_at", "TP3_HIT", 3)):
+            already = bool(doc.get(field)) or bool(updates.get(field))
+            if target > 0.0 and reached(target) and not already:
+                updates[field] = observed_iso
+                events.append(event)
+                if event not in milestones:
+                    milestones.append(event)
+                updates["highest_tp_reached"] = max(int(doc.get("highest_tp_reached") or 0), number)
+                if number == 1: tp1_hit = True
+                elif number == 2: tp2_hit = True
+                else: tp3_hit = True
+        if hit_sl_now and not sl_hit:
+            sl_hit = True
+            updates["sl_hit_at"] = observed_iso
+            events.append("SL_HIT")
+            if "SL_HIT" not in milestones:
+                milestones.append("SL_HIT")
+
+    # Classification is immutable. At/after the exact deadline, a signal
+    # that had not already qualified is a timeout even if the first observed
+    # favourable quote arrives late. SL remains an immediate terminal loss.
+    new_state = doc.get("signal_state") or SIGNAL_TRACKING
+    latest_path = doc.get("latest_path_event") or "TRACKING_STARTED"
+    classification_at = doc.get("classification_at")
+    analytics_r = doc.get("analytics_r")
+    if outcome is None:
+        if sl_hit:
+            outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_SL, "SL_HIT_BEFORE_WIN"
+            classification_at, analytics_r = updates.get("sl_hit_at") or doc.get("sl_hit_at") or observed_iso, -1.0
+        elif deadline and observed_at >= deadline:
+            outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_TIMEOUT, "FAILED_HALF_R_60M"
+            classification_at, analytics_r = deadline.isoformat(), round(current_r, 6)
+            if "TIMEOUT_60M" not in milestones:
+                milestones.append("TIMEOUT_60M")
+            events.append("TIMEOUT_60M")
+        elif tp1_hit:
+            outcome, new_state, latest_path = ANALYTICS_WIN, SIGNAL_WIN_TP1, "TP1_HIT"
+            classification_at = updates.get("tp1_hit_at") or doc.get("tp1_hit_at") or observed_iso
+            analytics_r = float(doc.get("tp1_r", 1.0) or 1.0)
+        elif half_hit:
+            outcome, new_state, latest_path = ANALYTICS_WIN, SIGNAL_WIN_HALF_R, "HALF_R_REACHED"
+            classification_at = updates.get("first_half_r_at") or doc.get("first_half_r_at") or observed_iso
+            analytics_r = HALF_R_WIN_THRESHOLD
+    elif outcome == ANALYTICS_WIN:
+        if sl_hit and not doc.get("sl_hit_at"):
+            latest_path = "LATER_SL_AFTER_WIN"
+        elif tp3_hit:
+            latest_path = "TP3_HIT"
+        elif tp2_hit:
+            latest_path = "TP2_HIT"
+        elif tp1_hit:
+            latest_path = "TP1_HIT"
+    elif outcome == ANALYTICS_LOSS and doc.get("signal_state") == SIGNAL_LOSS_TIMEOUT:
+        if tp3_hit and not doc.get("tp3_hit_at"):
+            latest_path = "LATE_TP3_AFTER_60M"
+        elif tp2_hit and not doc.get("tp2_hit_at"):
+            latest_path = "LATE_TP2_AFTER_60M"
+        elif tp1_hit and not doc.get("tp1_hit_at"):
+            latest_path = "LATE_TP1_AFTER_60M"
+        elif half_hit and not doc.get("first_half_r_at"):
+            latest_path = "LATE_HALF_R_AFTER_60M"
+
+    updates.update({
+        "signal_state": new_state,
+        "analytics_outcome": outcome,
+        "analytics_r": analytics_r,
+        "final_result": new_state if outcome else None,
+        "final_r": analytics_r if outcome else None,
+        "classification_at": classification_at,
+        "resolved_at": classification_at,
+        "latest_path_event": latest_path,
+        "status": "TRACKING" if outcome is None else latest_path,
+        "color_state": "GREEN" if outcome == ANALYTICS_WIN else "RED" if outcome == ANALYTICS_LOSS else "AMBER",
+        "milestones_hit": milestones,
     })
-    updated = 0
-    async for doc in cursor:
-        changed = await _advance_outlook_state(doc, price, now)
-        if changed:
-            updated += 1
-    return updated
+    monitoring_closed = bool(doc.get("monitoring_closed"))
+    if new_state == SIGNAL_LOSS_SL or sl_hit or tp3_hit or (expiry and observed_at >= expiry):
+        monitoring_closed = True
+    updates["monitoring_closed"] = monitoring_closed
+    return updates, list(dict.fromkeys(events))
+
+
+async def _account_quotes_since(account: str, since: datetime, until: datetime) -> list:
+    """Returns persisted account quotes in event order for restart replay."""
+    if not account:
+        return []
+    rows = await _db().cloud_bot_activity.find({
+        "account": account,
+        "ts": {"$gt": since.isoformat(), "$lte": until.isoformat()},
+        "details.market_thesis.live_bid": {"$gt": 0},
+        "details.market_thesis.live_ask": {"$gt": 0},
+    }, {"_id": 0, "ts": 1, "details.market_thesis.live_bid": 1, "details.market_thesis.live_ask": 1},
+    ).sort("ts", 1).to_list(5000)
+    quotes = []
+    for row in rows:
+        thesis = ((row or {}).get("details") or {}).get("market_thesis") or {}
+        quote_time = _as_utc(row.get("ts"))
+        quote_bid = thesis.get("live_bid")
+        quote_ask = thesis.get("live_ask")
+        if quote_time and quote_bid and quote_ask and float(quote_ask) >= float(quote_bid):
+            quotes.append((float(quote_bid), float(quote_ask), quote_time))
+    return quotes
+
+
+async def track_outlook_lifecycle_tick(account: str = "", bid: Optional[float] = None,
+                                       ask: Optional[float] = None, quote_at: Any = None,
+                                       now: Optional[datetime] = None) -> int:
+    """Restart-safe persisted signal monitor.
+
+    The activity endpoint can pass a fresh account-specific broker quote for
+    event-driven updates. The background loop calls this without arguments
+    and resumes every open persisted signal, including deadline processing
+    when no fresh quote is temporarily available.
+    """
+    db = _db()
+    wall_now = _as_utc(now) or datetime.now(timezone.utc)
+    query: Dict[str, Any] = {
+        "primary_direction": {"$in": ["BUY", "SELL"]},
+        "tracking_entry_price": {"$gt": 0},
+        "monitoring_closed": {"$ne": True},
+    }
+    if account:
+        query["account"] = account
+    docs = await db.cloud_market_outlooks.find(query, {"_id": 0}).to_list(500)
+    updated_count = 0
+    for initial_doc in docs:
+        doc = initial_doc
+        committed = None
+        # Optimistic compare-and-set prevents two simultaneous EA activity
+        # requests from allowing an older quote to overwrite a newer state.
+        # On contention, recompute from the newly persisted checkpoint.
+        for _attempt in range(3):
+            doc_account = str(doc.get("account") or "")
+            last_monitored = (_as_utc(doc.get("last_monitored_at"))
+                              or _as_utc(doc.get("published_quote_at"))
+                              or _as_utc(doc.get("published_at"))
+                              or wall_now)
+            if account:
+                observed = _as_utc(quote_at) or wall_now
+                quote_journey = [(bid, ask, observed)] if observed > last_monitored else []
+            else:
+                # Replay every safely persisted quote after a restart/deployment.
+                # Looking at only the newest quote could erase an earlier TP/MFE
+                # excursion when price had already reversed by the next poll.
+                quote_journey = await _account_quotes_since(doc_account, last_monitored, wall_now)
+
+            price_updates: Dict[str, Any] = {}
+            events = []
+            merged = dict(doc)
+            for doc_bid, doc_ask, observed in quote_journey:
+                quote_updates, quote_events = advance_persisted_signal(merged, doc_bid, doc_ask, observed)
+                price_updates.update(quote_updates)
+                events.extend(quote_events)
+                merged.update(quote_updates)
+            deadline = _as_utc(doc.get("evaluation_deadline"))
+            if deadline and wall_now >= deadline and merged.get("analytics_outcome") is None:
+                timeout_updates, timeout_events = advance_persisted_signal(merged, None, None, wall_now)
+                price_updates.update(timeout_updates)
+                events.extend(timeout_events)
+                merged.update(timeout_updates)
+            changed = any(doc.get(key) != value for key, value in price_updates.items())
+            if not changed:
+                committed = (merged, [])
+                break
+
+            result = await db.cloud_market_outlooks.update_one(
+                {"id": doc["id"], "last_monitored_at": doc.get("last_monitored_at")},
+                {"$set": price_updates},
+            )
+            if result.modified_count:
+                if doc.get("analytics_outcome") != merged.get("analytics_outcome"):
+                    await _record_revision(
+                        doc["id"], "analytics_outcome", doc.get("analytics_outcome"),
+                        merged.get("analytics_outcome"), merged.get("latest_path_event", "signal classified"),
+                    )
+                    await _persist_signal_outcome(merged)
+                updated_count += 1
+                committed = (merged, list(dict.fromkeys(events)))
+                break
+            fresh = await db.cloud_market_outlooks.find_one({"id": doc["id"]}, {"_id": 0})
+            if not fresh or fresh.get("monitoring_closed"):
+                break
+            doc = fresh
+
+        if committed:
+            merged, committed_events = committed
+            for event in committed_events:
+                await _dispatch_signal_event(merged, event)
+    # The account-specific path already dispatches every newly persisted
+    # event above.  Only the background/restart pass needs to scan for the
+    # narrow state-write/send crash gap; doing that scan on every EA quote
+    # would add unnecessary database work to the live telemetry endpoint.
+    if not account:
+        await dispatch_pending_signal_notifications()
+    return updated_count
 
 
 async def _record_revision(outlook_id: str, field: str, previous_value: Any, new_value: Any, reason: str) -> None:
@@ -866,174 +1153,217 @@ async def _record_revision(outlook_id: str, field: str, previous_value: Any, new
     })
 
 
-async def _advance_outlook_state(doc: Dict, price: float, now: datetime) -> bool:
-    db = _db()
-    outlook_id = doc["id"]
-    direction = int(doc.get("direction") or 0)
-    if direction == 0:
-        return False
-
-    expiry = doc.get("expiry_at")
-    expired = expiry and now.isoformat() > expiry
-    zone_low = doc.get("preferred_entry_zone_low")
-    zone_high = doc.get("preferred_entry_zone_high")
-    sl = doc.get("suggested_sl")
-    tp1, tp2, tp3 = doc.get("tp1_price"), doc.get("tp2_price"), doc.get("tp3_price")
-    activation = doc.get("activation") or {"activated": False}
-    activated = bool(activation.get("activated"))
-
-    mfe = float(doc.get("mfe", 0.0) or 0.0)
-    mae = float(doc.get("mae", 0.0) or 0.0)
-    if activated:
-        entry_price = float(activation.get("activated_price") or price)
-        favorable = (price - entry_price) if direction == 1 else (entry_price - price)
-        mfe = max(mfe, favorable)
-        mae = max(mae, -favorable) if favorable < 0 else mae
-
-    entry_zone_reached = bool(doc.get("_entry_zone_reached")) or (
-        zone_low is not None and zone_high is not None and zone_low <= price <= zone_high
-    )
-
-    new_status = doc.get("status")
-    milestones = list(doc.get("milestones_hit") or [])
-
-    if not activated:
-        if entry_zone_reached and not doc.get("_entry_zone_reached"):
-            await _record_revision(outlook_id, "status", doc.get("status"), "ENTRY_ZONE_ACTIVE", "price entered preferred zone")
-            new_status = "ENTRY_ZONE_ACTIVE"
-            if "ENTRY_ZONE_REACHED" not in milestones:
-                milestones.append("ENTRY_ZONE_REACHED")
-            # Audit fix: milestones_hit was never actually persisted here
-            # (only _entry_zone_reached was) -- the stored document
-            # permanently lacked this entry even though the milestone was
-            # correctly dispatched once. This whole branch is guarded by
-            # `not doc.get("_entry_zone_reached")` above, i.e. it can only
-            # run once per outlook, so the dispatch below is unconditional.
-            await db.cloud_market_outlooks.update_one(
-                {"id": outlook_id}, {"$set": {"_entry_zone_reached": True, "milestones_hit": milestones}})
-            await _dispatch_milestone_notification(doc, "ENTRY_ZONE_REACHED")
-        sl_invalidated = (direction == 1 and price <= sl) if sl else False
-        sl_invalidated = sl_invalidated or ((direction == -1 and price >= sl) if sl else False)
-        if entry_zone_reached and sl_invalidated:
-            new_status = "INVALIDATED"
-        elif expired and not entry_zone_reached:
-            new_status = "EXPIRED"
-        elif expired and entry_zone_reached:
-            new_status = "MISSED_WITHOUT_ENTRY"
-
-        if new_status in ("INVALIDATED", "EXPIRED", "MISSED_WITHOUT_ENTRY") and new_status != doc.get("status"):
-            final_result = _classify_final_result(None, False, False, entry_zone_reached)
-            await _finalize_outlook(doc, new_status, final_result, None, mfe, mae, now)
-            if new_status == "INVALIDATED":
-                await _dispatch_milestone_notification(doc, "INVALIDATED")
-            elif new_status in ("EXPIRED", "MISSED_WITHOUT_ENTRY"):
-                await _dispatch_milestone_notification(doc, "EXPIRED_NO_ENTRY")
-            return True
-        elif new_status != doc.get("status"):
-            await db.cloud_market_outlooks.update_one({"id": outlook_id}, {"$set": {"status": new_status, "mfe": mfe, "mae": mae}})
-            return True
-        # activation check: confirmation = price actually reached zone AND then
-        # moved favorably by a small margin (avoids "touched the edge" false starts)
-        if entry_zone_reached:
-            favorable_confirm = (price >= zone_low + (zone_high - zone_low) * 0.15) if direction == 1 else \
-                                (price <= zone_high - (zone_high - zone_low) * 0.15)
-            if favorable_confirm:
-                # Audit fix: milestones_hit never actually gained
-                # "OUTLOOK_ACTIVATED" here (neither appended to the local
-                # list nor persisted) even though the notification WAS
-                # correctly dispatched once -- a data-completeness gap for
-                # anything reading milestones_hit later. This branch is
-                # only reachable while `not activated` (function-top guard),
-                # so it can only run once per outlook -- dispatch below is
-                # unconditional, matching the entry-zone branch above.
-                if "OUTLOOK_ACTIVATED" not in milestones:
-                    milestones.append("OUTLOOK_ACTIVATED")
-                await db.cloud_market_outlooks.update_one(
-                    {"id": outlook_id},
-                    {"$set": {"activation": {"activated": True, "activated_at": now.isoformat(), "activated_price": price},
-                             "status": "ACTIVE", "milestones_hit": milestones}})
-                await _record_revision(outlook_id, "activation", activation, {"activated": True, "activated_price": price}, "confirmed activation")
-                await _dispatch_milestone_notification(doc, "OUTLOOK_ACTIVATED")
-                return True
-        return False
-
-    # Activated: check SL vs TP1/2/3 in real event order (whichever the
-    # live price crosses first this tick -- SL checked first since a single
-    # tick crossing both would mean SL is what actually happened first in a
-    # fast move, the conservative assumption).
-    sl_hit = (direction == 1 and price <= sl) if sl else False
-    sl_hit = sl_hit or ((direction == -1 and price >= sl) if sl else False)
-    if sl_hit:
-        highest_tp = 3 if "TP3_HIT" in milestones else 2 if "TP2_HIT" in milestones else 1 if "TP1_HIT" in milestones else None
-        final_result = _classify_final_result(highest_tp, True, True, True)
-        await _finalize_outlook(doc, "INVALIDATED" if highest_tp is None else f"TP{highest_tp}_HIT", final_result, highest_tp, mfe, mae, now)
-        await _dispatch_milestone_notification(doc, "SL_HIT")
-        return True
-
-    hit_now = None
-    if direction == 1:
-        if tp3 and price >= tp3: hit_now = 3
-        elif tp2 and price >= tp2: hit_now = 2
-        elif tp1 and price >= tp1: hit_now = 1
-    else:
-        if tp3 and price <= tp3: hit_now = 3
-        elif tp2 and price <= tp2: hit_now = 2
-        elif tp1 and price <= tp1: hit_now = 1
-
-    if hit_now and f"TP{hit_now}_HIT" not in milestones:
-        milestones.append(f"TP{hit_now}_HIT")
-        await db.cloud_market_outlooks.update_one(
-            {"id": outlook_id}, {"$set": {"status": f"TP{hit_now}_HIT", "milestones_hit": milestones, "mfe": mfe, "mae": mae}})
-        await _record_revision(outlook_id, "status", doc.get("status"), f"TP{hit_now}_HIT", f"price reached TP{hit_now}")
-        await _dispatch_milestone_notification(doc, f"TP{hit_now}_HIT")
-        if hit_now == 3:
-            final_result = _classify_final_result(3, False, True, True)
-            await _finalize_outlook(doc, "TP3_HIT", final_result, 3, mfe, mae, now)
-        return True
-
-    if expired:
-        highest_tp = 3 if "TP3_HIT" in milestones else 2 if "TP2_HIT" in milestones else 1 if "TP1_HIT" in milestones else None
-        final_result = _classify_final_result(highest_tp, False, True, True) if highest_tp else "AMBER_UNRESOLVED"
-        await _finalize_outlook(doc, "EXPIRED", final_result, highest_tp, mfe, mae, now)
-        return True
-
-    if mfe != float(doc.get("mfe", 0.0) or 0.0) or mae != float(doc.get("mae", 0.0) or 0.0):
-        await db.cloud_market_outlooks.update_one({"id": outlook_id}, {"$set": {"mfe": mfe, "mae": mae}})
-        return True
-    return False
-
-
-async def _finalize_outlook(doc: Dict, status: str, final_result: str, highest_tp: Optional[int],
-                            mfe: float, mae: float, now: datetime) -> None:
-    # Defense in depth: track_outlook_lifecycle_tick's query already
-    # excludes anything with resolved_at set, so this should never be
-    # reached for an already-finalized doc -- but a caller passing a stale
-    # `doc` snapshot (fetched before another finalize path completed)
-    # shouldn't be able to insert a second outcomes/revisions row either.
-    if doc.get("resolved_at"):
-        logger.warning(f"OUTLOOK_FINALIZE_SKIPPED_ALREADY_RESOLVED id={doc.get('id')}")
+async def _persist_signal_outcome(doc: Dict) -> None:
+    if doc.get("analytics_outcome") not in (ANALYTICS_WIN, ANALYTICS_LOSS):
         return
-    db = _db()
-    outlook_id = doc["id"]
-    r_field = {1: "tp1_r", 2: "tp2_r", 3: "tp3_r"}.get(highest_tp)
-    final_r = doc.get(r_field) if r_field else (-1.0 if final_result == "RED_STOPPED" else None)
-    color = _color_for_result(final_result, status)
-    update = {
-        "status": status, "final_result": final_result, "final_r": final_r,
-        "highest_tp_reached": highest_tp, "mfe": mfe, "mae": mae,
-        "color_state": color, "resolved_at": now.isoformat(),
-    }
-    await db.cloud_market_outlooks.update_one({"id": outlook_id}, {"$set": update})
-    await _record_revision(outlook_id, "final_result", doc.get("final_result"), final_result, f"outlook resolved: {status}")
-    await db.cloud_market_outlook_outcomes.insert_one({
-        "id": str(uuid.uuid4()), "outlook_id": outlook_id, "account": doc.get("account"),
-        "final_result": final_result, "final_r": final_r, "highest_tp_reached": highest_tp,
-        "mfe": mfe, "mae": mae, "confidence_pct": doc.get("confidence_pct"),
+    outcome_doc = {
+        "outlook_id": doc["id"], "account": doc.get("account"),
+        "analytics_outcome": doc.get("analytics_outcome"), "analytics_r": doc.get("analytics_r"),
+        "signal_state": doc.get("signal_state"), "classification_at": doc.get("classification_at"),
+        "tracking_entry_price": doc.get("tracking_entry_price"), "original_sl": doc.get("original_sl"),
+        "risk_distance": doc.get("risk_distance"), "mfe_r": doc.get("mfe_r"), "mae_r": doc.get("mae_r"),
+        "highest_tp_reached": doc.get("highest_tp_reached"), "confidence_pct": doc.get("confidence_pct"),
         "primary_direction": doc.get("primary_direction"), "setup_type": doc.get("setup_type"),
         "expected_path": doc.get("expected_path"), "session": doc.get("session"),
-        "resolved_at": now.isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await _db().cloud_market_outlook_outcomes.update_one(
+        {"outlook_id": doc["id"]}, {"$set": outcome_doc, "$setOnInsert": {"id": str(uuid.uuid4())}}, upsert=True)
+
+
+async def _dispatch_signal_event(doc: Dict, event: str) -> None:
+    flag = (doc.get("notification_flags") or {}).get(event)
+    if flag:
+        return
+    from notifications import RETRYABLE_FAILURES, send_outlook_notification
+    await send_outlook_notification(doc, event=event, min_tier="HOURLY_PLUS_RESULTS")
+    # Do not close the persisted retry gap while any eligible recipient has
+    # a transient/configuration failure. Sent/no-device results are terminal;
+    # credentials or payload errors remain pending so a settings correction
+    # or later deployment can recover them. The OneSignal provider
+    # idempotency key protects a recipient that succeeded while another
+    # recipient still needs a retry.
+    retryable = await _db().cloud_notification_log.find_one({
+        "outlook_id": doc["id"],
+        "notification_type": event,
+        "failure_reason": {"$in": list(RETRYABLE_FAILURES)},
     })
-    logger.info(f"OUTLOOK_RESOLVED id={outlook_id} result={final_result} r={final_r}")
+    if not retryable:
+        await _db().cloud_market_outlooks.update_one(
+            {"id": doc["id"]},
+            {"$set": {f"notification_flags.{event}": datetime.now(timezone.utc).isoformat()}},
+        )
+
+
+async def dispatch_pending_signal_notifications() -> int:
+    """Closes the state-write/send crash gap after restarts.
+
+    Provider calls are themselves idempotent by outlook+event+user, so it is
+    safe to retry any persisted event whose document flag was not committed.
+    """
+    db = _db()
+    rows = await db.cloud_market_outlooks.find(
+        {"tracking_entry_price": {"$gt": 0}}, {"_id": 0}).sort("published_at", -1).to_list(500)
+    dispatched = 0
+    for doc in rows:
+        for event in _signal_events_present(doc):
+            if not (doc.get("notification_flags") or {}).get(event):
+                await _dispatch_signal_event(doc, event)
+                dispatched += 1
+    return dispatched
+
+
+def _quote_from_activity(row: Dict) -> tuple:
+    thesis = ((row.get("details") or {}).get("market_thesis") or {})
+    bid = float(thesis.get("live_bid", 0.0) or 0.0)
+    ask = float(thesis.get("live_ask", 0.0) or 0.0)
+    return (bid, ask) if bid > 0.0 and ask >= bid else (None, None)
+
+
+async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
+    """Idempotently reconstruct legacy BUY/SELL history from stored EA quotes.
+
+    A timeout is only reconstructed when quote coverage spans the complete
+    60-minute window with no gap over three minutes. Sparse or missing data
+    is marked unavailable and excluded; it is never converted into a loss.
+    """
+    db = _db()
+    now = datetime.now(timezone.utc)
+    repair_run_id = str(uuid.uuid4())
+    legacy = await db.cloud_market_outlooks.find({
+        "primary_direction": {"$in": ["BUY", "SELL"]},
+        "signal_tracking_version": {"$ne": 2},
+    }, {"_id": 0}).sort("generated_at", 1).to_list(limit)
+    report = {"examined": len(legacy), "reconstructed": 0, "wins": 0, "losses": 0,
+              "active": 0, "unavailable": 0}
+    for old in legacy:
+        published = _as_utc(old.get("published_at") or old.get("generated_at"))
+        sl = float(old.get("original_sl", old.get("suggested_sl", 0.0)) or 0.0)
+        account = str(old.get("account") or "")
+        if not published or not account or sl <= 0.0:
+            await _mark_history_unavailable(old, "missing publication timestamp, account, or original SL")
+            report["unavailable"] += 1
+            continue
+        deadline = published + timedelta(minutes=OUTLOOK_EVALUATION_MINUTES)
+        end = min(now, published + timedelta(hours=OUTLOOK_HORIZON_HOURS))
+        rows = await db.cloud_bot_activity.find({
+            "account": account,
+            "ts": {"$gte": (published - timedelta(minutes=2)).isoformat(), "$lte": end.isoformat()},
+            "details.market_thesis.live_bid": {"$gt": 0},
+            "details.market_thesis.live_ask": {"$gt": 0},
+        }, {"_id": 0, "ts": 1, "details.market_thesis.live_bid": 1,
+            "details.market_thesis.live_ask": 1}).sort("ts", 1).to_list(1000)
+        usable = [(row, _as_utc(row.get("ts"))) for row in rows]
+        usable = [(row, ts) for row, ts in usable if ts and all(v is not None for v in _quote_from_activity(row))]
+        if not usable:
+            await _mark_history_unavailable(old, "no stored broker Bid/Ask history")
+            report["unavailable"] += 1
+            continue
+        anchor_row, anchor_at = min(usable, key=lambda item: abs((item[1] - published).total_seconds()))
+        if abs((anchor_at - published).total_seconds()) > 90:
+            await _mark_history_unavailable(old, "no reliable publication quote within 90 seconds")
+            report["unavailable"] += 1
+            continue
+        anchor_bid, anchor_ask = _quote_from_activity(anchor_row)
+        direction = old["primary_direction"]
+        entry = anchor_ask if direction == "BUY" else anchor_bid
+        risk = abs(float(entry) - sl)
+        if risk <= 0.0:
+            await _mark_history_unavailable(old, "publication entry and SL produce zero risk distance")
+            report["unavailable"] += 1
+            continue
+
+        working = {**old,
+            "published_at": published.isoformat(), "published_bid": anchor_bid, "published_ask": anchor_ask,
+            "published_spread": anchor_ask - anchor_bid, "published_quote_at": anchor_at.isoformat(),
+            "tracking_entry_price": entry, "original_sl": sl, "risk_distance": risk,
+            "evaluation_deadline": deadline.isoformat(), "signal_tracking_version": 2,
+            "signal_state": SIGNAL_TRACKING, "analytics_outcome": None, "analytics_r": None,
+            "current_r": 0.0, "mfe_r": 0.0, "mae_r": 0.0,
+            "highest_tracked_price": entry, "lowest_tracked_price": entry,
+            "first_half_r_at": None, "tp1_hit_at": None, "tp2_hit_at": None,
+            "tp3_hit_at": None, "sl_hit_at": None, "classification_at": None,
+            "latest_path_event": "TRACKING_STARTED", "monitoring_closed": False,
+            "color_state": "AMBER", "status": "TRACKING", "milestones_hit": [],
+            "final_result": None, "final_r": None, "resolved_at": None,
+            "legacy_result_before_repair": old.get("final_result"),
+            "activation": {"activated": True, "activated_at": published.isoformat(), "activated_price": entry},
+            "excluded_from_signal_analytics": False,
+        }
+        in_window = [(row, ts) for row, ts in usable if published <= ts <= deadline]
+        coverage_reliable = False
+        if in_window and deadline <= now:
+            times = [ts for _, ts in in_window]
+            max_gap = max(((b - a).total_seconds() for a, b in zip(times, times[1:])), default=0.0)
+            coverage_reliable = (times[0] <= published + timedelta(seconds=90)
+                                 and times[-1] >= deadline - timedelta(seconds=90)
+                                 and max_gap <= 180.0)
+
+        # First process observed quotes strictly before the deadline so a
+        # late quote cannot accidentally become an on-time win.
+        for row, ts in usable:
+            if ts >= deadline or working.get("analytics_outcome") is not None:
+                break
+            q_bid, q_ask = _quote_from_activity(row)
+            update, _ = advance_persisted_signal(working, q_bid, q_ask, ts)
+            working.update(update)
+        if deadline <= now and working.get("analytics_outcome") is None:
+            if not coverage_reliable:
+                await _mark_history_unavailable(old, "stored quotes do not reliably cover the full 60-minute window")
+                report["unavailable"] += 1
+                continue
+            update, _ = advance_persisted_signal(working, None, None, deadline)
+            working.update(update)
+
+        # Preserve later TP/SL path evidence without rewriting the immutable
+        # one-hour analytics outcome.
+        for row, ts in usable:
+            if ts < deadline or ts > end:
+                continue
+            q_bid, q_ask = _quote_from_activity(row)
+            update, _ = advance_persisted_signal(working, q_bid, q_ask, ts)
+            working.update(update)
+
+        historical_flags = {event: "BACKFILL_SUPPRESSED" for event in _signal_events_present(working)}
+        working.update({"historical_repair_status": "RECONSTRUCTED", "historical_repaired_at": now.isoformat(),
+                        "notification_flags": historical_flags})
+        persist = {k: v for k, v in working.items() if k != "_id"}
+        await db.cloud_market_outlooks.update_one({"id": old["id"]}, {"$set": persist})
+        await _record_revision(old["id"], "final_result", old.get("final_result"), working.get("final_result"),
+                               "v2 signal lifecycle reconstructed from persisted broker quotes")
+        await _persist_signal_outcome(working)
+        report["reconstructed"] += 1
+        if working.get("analytics_outcome") == ANALYTICS_WIN: report["wins"] += 1
+        elif working.get("analytics_outcome") == ANALYTICS_LOSS: report["losses"] += 1
+        else: report["active"] += 1
+    await db.cloud_market_outlook_repair_runs.insert_one({
+        "id": repair_run_id,
+        "started_at": now.isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "tracking_version": 2,
+        "report": report,
+    })
+    return report
+
+
+async def _mark_history_unavailable(doc: Dict, reason: str) -> None:
+    update = {
+        "signal_tracking_version": 2,
+        "signal_state": ANALYTICS_UNAVAILABLE,
+        "historical_repair_status": ANALYTICS_UNAVAILABLE,
+        "historical_data_unavailable_reason": reason,
+        "analytics_outcome": ANALYTICS_UNAVAILABLE,
+        "analytics_r": None, "final_r": None,
+        "final_result": ANALYTICS_UNAVAILABLE,
+        "color_state": "GRAY", "status": ANALYTICS_UNAVAILABLE,
+        "excluded_from_signal_analytics": True,
+        "legacy_result_before_repair": doc.get("final_result"),
+        "historical_repaired_at": datetime.now(timezone.utc).isoformat(),
+        "monitoring_closed": True,
+    }
+    await _db().cloud_market_outlooks.update_one({"id": doc["id"]}, {"$set": update})
+    await _record_revision(doc["id"], "final_result", doc.get("final_result"), ANALYTICS_UNAVAILABLE,
+                           f"historical signal excluded: {reason}")
 
 
 # ---------------------------------------------------------------------------
@@ -1041,10 +1371,8 @@ async def _finalize_outlook(doc: Dict, status: str, final_result: str, highest_t
 # ---------------------------------------------------------------------------
 
 async def _dispatch_hourly_notification(doc: Dict) -> None:
-    from notifications import send_outlook_notification
-    await send_outlook_notification(doc, event="OUTLOOK_PUBLISHED", min_tier="HOURLY_ONLY")
-
-
-async def _dispatch_milestone_notification(doc: Dict, milestone: str) -> None:
-    from notifications import send_outlook_notification
-    await send_outlook_notification(doc, event=milestone, min_tier="HOURLY_PLUS_RESULTS")
+    if doc.get("primary_direction") in ("BUY", "SELL") and doc.get("tracking_entry_price"):
+        await _dispatch_signal_event(doc, "TRACKING_STARTED")
+    else:
+        from notifications import send_outlook_notification
+        await send_outlook_notification(doc, event="OUTLOOK_PUBLISHED", min_tier="HOURLY_ONLY")

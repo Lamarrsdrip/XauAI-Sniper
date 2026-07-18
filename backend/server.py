@@ -2339,8 +2339,20 @@ async def startup():
                 logger.warning(f"[outlook-lifecycle] {e}")
             await asyncio.sleep(60)
 
+    async def _outlook_history_repair_once():
+        # Idempotent v2 migration: actionable legacy records are rebuilt only
+        # from persisted broker quotes. Missing/sparse history is explicitly
+        # excluded rather than fabricated as a timeout loss.
+        try:
+            import market_outlook as _mo
+            report = await _mo.backfill_signal_outlook_history()
+            logger.info(f"[outlook-history-repair] {report}")
+        except Exception as e:
+            logger.warning(f"[outlook-history-repair] {e}")
+
     asyncio.create_task(_outlook_hourly_loop())
     asyncio.create_task(_outlook_lifecycle_loop())
+    asyncio.create_task(_outlook_history_repair_once())
 
 ########################################
 # CLAUDE AI POSITION MANAGER (Active Trade Reasoning)
@@ -5286,6 +5298,22 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
         "monitor_last_activity_at": doc["ts"],
         "monitor_last_activity": doc,
     }}, upsert=True)
+    # Signal Outlook monitoring consumes the same immutable broker Bid/Ask
+    # snapshot already posted by the EA. Queue it immediately instead of
+    # waiting for the next hourly publication or for a browser page to be
+    # open. This is telemetry-only and cannot affect EA trading decisions.
+    thesis_quote = (details.get("market_thesis") or {}) if isinstance(details, dict) else {}
+    quote_bid = float(thesis_quote.get("live_bid", 0.0) or 0.0)
+    quote_ask = float(thesis_quote.get("live_ask", 0.0) or 0.0)
+    if quote_bid > 0.0 and quote_ask >= quote_bid and (req.account or ""):
+        async def _monitor_outlook_quote_event():
+            try:
+                import market_outlook as _mo
+                await _mo.track_outlook_lifecycle_tick(
+                    account=req.account or "", bid=quote_bid, ask=quote_ask, quote_at=doc["ts"])
+            except Exception as exc:
+                logger.warning(f"[outlook-event-monitor] account={req.account} error={exc}")
+        asyncio.create_task(_monitor_outlook_quote_event())
     return {"ok": True, "event_id": doc["id"]}
 
 # v6.25.1 owner directive 2026-07-17 -- CROSS-INSTANCE ATOMIC DIRECTION

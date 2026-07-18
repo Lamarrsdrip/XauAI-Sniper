@@ -51,7 +51,8 @@ def test_no_trade_execution_calls_anywhere_in_outlook_module():
 def test_outlook_module_only_writes_its_own_collections():
     import re
     writes = re.findall(r'db\.(\w+)\.(?:insert_one|update_one|delete_one|update_many)', MO_SRC)
-    own_collections = {"cloud_market_outlooks", "cloud_market_outlook_revisions", "cloud_market_outlook_outcomes"}
+    own_collections = {"cloud_market_outlooks", "cloud_market_outlook_revisions", "cloud_market_outlook_outcomes",
+                       "cloud_market_outlook_repair_runs"}
     for coll in writes:
         assert coll in own_collections, f"market_outlook.py writes to unexpected collection: {coll}"
 
@@ -99,9 +100,8 @@ def test_all_required_primary_directions_supported():
 
 
 def test_all_required_lifecycle_states_defined():
-    required = {"ANALYZING", "PUBLISHED", "WAITING_FOR_ENTRY_ZONE", "ENTRY_ZONE_ACTIVE",
-               "CONFIRMATION_PENDING", "ACTIVE", "TP1_HIT", "TP2_HIT", "TP3_HIT",
-               "INVALIDATED", "EXPIRED", "MISSED_WITHOUT_ENTRY", "CANCELLED_BY_NEW_STRUCTURE"}
+    required = {"INFORMATIONAL", "TRACKING_AMBER", "WIN_GREEN_0_5R",
+                "WIN_GREEN_TP1", "LOSS_RED_SL", "LOSS_RED_TIMEOUT"}
     assert required.issubset(set(mo.LIFECYCLE_STATES))
 
 
@@ -168,13 +168,27 @@ def test_sell_direction_zone_sits_above_current_price():
 # 10: entering zone alone does not always activate
 # ---------------------------------------------------------------------------
 
-def test_advance_outlook_state_requires_favorable_confirmation_not_just_zone_touch():
-    src = MO_SRC[MO_SRC.index("async def _advance_outlook_state"):]
-    assert "favorable_confirm" in src[:4000]
-    # confirms activation is gated on a confirmation margin, not the raw
-    # entry_zone_reached boolean alone
-    assert "if entry_zone_reached:" in src[:4000]
-    assert "favorable_confirm = " in src[:4000]
+def test_actionable_signal_activates_at_publication_not_zone_touch():
+    src = MO_SRC[MO_SRC.index("async def generate_outlook_for_account"):]
+    assert '"tracking_entry_price": tracking_entry if actionable else None' in src
+    assert '"activated": actionable' in src
+    assert "entry_zone_reached" not in MO_SRC[MO_SRC.index("def advance_persisted_signal"):]
+
+
+def test_publication_anchor_uses_buy_ask_and_sell_bid_never_zone_midpoint():
+    src = _outlook_gen_body()
+    assert 'tracking_entry = published_ask if direction_label == "BUY" else published_bid if direction_label == "SELL" else None' in src
+    anchor_section = src[src.index("# Signal-performance tracking is anchored"):src.index("narrative = await")]
+    assert "entry_mid" not in anchor_section
+    assert "preferred_entry_zone" not in anchor_section
+
+
+def test_original_risk_uses_exact_anchor_and_original_published_sl():
+    src = _outlook_gen_body()
+    assert "risk_distance = abs(float(tracking_entry) - float(original_sl))" in src
+    assert '"original_sl": original_sl if actionable else None' in src
+    assert '"published_bid": published_bid if published_bid > 0 else None' in src
+    assert '"published_ask": published_ask if published_ask > 0 else None' in src
 
 
 # ---------------------------------------------------------------------------
@@ -213,49 +227,44 @@ def test_generation_only_ever_inserts_never_updates_the_original_outlook_doc():
 # 13-16: SL/TP event ordering
 # ---------------------------------------------------------------------------
 
-def test_sl_checked_before_tp_in_activated_branch():
-    fn = MO_SRC[MO_SRC.index("# Activated: check SL vs TP1/2/3"):]
-    sl_idx = fn.index("sl_hit = ")
-    tp_idx = fn.index("hit_now = None")
-    assert sl_idx < tp_idx
+def test_sl_classification_precedes_timeout_and_win():
+    fn = MO_SRC[MO_SRC.index("def advance_persisted_signal"):]
+    classify = fn[fn.index("if outcome is None:"):]
+    assert classify.index("if sl_hit:") < classify.index("elif deadline") < classify.index("elif tp1_hit")
 
 
-def test_classify_final_result_tp_before_sl_is_green():
-    assert mo._classify_final_result(highest_tp=1, sl_hit=False, activated=True, entry_zone_reached=True) == "GREEN_TP1"
-    assert mo._classify_final_result(highest_tp=2, sl_hit=False, activated=True, entry_zone_reached=True) == "GREEN_TP2"
-    assert mo._classify_final_result(highest_tp=3, sl_hit=False, activated=True, entry_zone_reached=True) == "GREEN_TP3"
+def test_actionable_state_machine_has_persisted_win_states():
+    assert mo.SIGNAL_WIN_HALF_R == "WIN_GREEN_0_5R"
+    assert mo.SIGNAL_WIN_TP1 == "WIN_GREEN_TP1"
 
 
-def test_classify_final_result_sl_before_any_tp_is_red():
-    assert mo._classify_final_result(highest_tp=None, sl_hit=True, activated=True, entry_zone_reached=True) == "RED_STOPPED"
+def test_actionable_state_machine_has_persisted_loss_states():
+    assert mo.SIGNAL_LOSS_SL == "LOSS_RED_SL"
+    assert mo.SIGNAL_LOSS_TIMEOUT == "LOSS_RED_TIMEOUT"
 
 
-def test_classify_final_result_no_entry_is_gray_not_red():
-    assert mo._classify_final_result(highest_tp=None, sl_hit=False, activated=False, entry_zone_reached=False) == "GRAY_EXPIRED_NO_ENTRY"
-    result = mo._classify_final_result(highest_tp=None, sl_hit=False, activated=False, entry_zone_reached=False)
-    assert not result.startswith("RED")
+def test_actionable_lifecycle_never_emits_no_entry():
+    fn = MO_SRC[MO_SRC.index("def advance_persisted_signal"):MO_SRC.index("async def _account_quotes_since")]
+    assert "NO_ENTRY" not in fn
 
 
-def test_classify_final_result_invalidated_before_entry_is_gray():
-    result = mo._classify_final_result(highest_tp=None, sl_hit=False, activated=False, entry_zone_reached=True)
-    assert result == "GRAY_INVALIDATED_BEFORE_ENTRY"
+def test_historical_unavailable_is_explicit_and_excluded():
+    assert mo.ANALYTICS_UNAVAILABLE == "HISTORICAL_DATA_UNAVAILABLE"
 
 
-def test_time_expiry_alone_does_not_mark_red_when_never_activated():
-    # an outlook that simply expires without ever reaching its entry zone
-    # must be GRAY, never RED -- time passing is not a loss
-    result = mo._classify_final_result(highest_tp=None, sl_hit=False, activated=False, entry_zone_reached=False)
-    assert not result.startswith("RED")
-    assert result.startswith("GRAY")
+def test_exact_60_minute_timeout_is_a_loss_for_actionable_signal():
+    fn = MO_SRC[MO_SRC.index("def advance_persisted_signal"):]
+    assert "observed_at >= deadline" in fn
+    assert "SIGNAL_LOSS_TIMEOUT" in fn
 
 
 # ---------------------------------------------------------------------------
 # 17: MFE/MAE recorded
 # ---------------------------------------------------------------------------
 
-def test_advance_outlook_state_tracks_mfe_and_mae():
-    assert "mfe = max(mfe, favorable)" in MO_SRC
-    assert "mae = max(mae, -favorable)" in MO_SRC
+def test_persisted_signal_state_tracks_mfe_and_mae():
+    assert "mfe_r = max(mfe_r, current_r)" in MO_SRC
+    assert "mae_r = min(mae_r, current_r, 0.0)" in MO_SRC
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +272,7 @@ def test_advance_outlook_state_tracks_mfe_and_mae():
 # ---------------------------------------------------------------------------
 
 def test_outcome_record_stores_confidence_for_calibration_analysis():
-    fn = MO_SRC[MO_SRC.index("async def _finalize_outlook"):]
+    fn = MO_SRC[MO_SRC.index("async def _persist_signal_outcome"):]
     fn_body = fn[:fn.index("\n\n\n")]
     assert '"confidence_pct": doc.get("confidence_pct")' in fn_body
 

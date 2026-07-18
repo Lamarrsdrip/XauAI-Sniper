@@ -22,6 +22,51 @@ import market_outlook as mo
 import notifications as notif
 
 
+def compute_outlook_stats(rows: list) -> dict:
+    """Derive performance only from persisted authoritative outcomes."""
+    stats_rows = [o for o in rows if not o.get("excluded_from_stats")]
+    unavailable = [o for o in stats_rows if o.get("historical_repair_status") == mo.ANALYTICS_UNAVAILABLE
+                   or o.get("analytics_outcome") == mo.ANALYTICS_UNAVAILABLE]
+    actionable = [o for o in stats_rows
+                  if o.get("primary_direction") in ("BUY", "SELL")
+                  and not o.get("excluded_from_signal_analytics")
+                  and o not in unavailable]
+    completed = [o for o in actionable if o.get("analytics_outcome") in (mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS)]
+    wins = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_WIN]
+    losses = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_LOSS]
+    active_unresolved = [o for o in actionable if o.get("analytics_outcome") is None]
+    informational = [o for o in stats_rows if o.get("primary_direction") not in ("BUY", "SELL")]
+    tp1_count = sum(1 for o in completed if int(o.get("highest_tp_reached") or 0) >= 1)
+    tp2_count = sum(1 for o in completed if int(o.get("highest_tp_reached") or 0) >= 2)
+    tp3_count = sum(1 for o in completed if int(o.get("highest_tp_reached") or 0) >= 3)
+    resolved_rs = [float(o["analytics_r"]) for o in completed if o.get("analytics_r") is not None]
+    win_rate = round(len(wins) / len(wins + losses), 3) if (wins or losses) else None
+    win_rs = [float(o["analytics_r"]) for o in wins if o.get("analytics_r") is not None]
+    loss_rs = [float(o["analytics_r"]) for o in losses if o.get("analytics_r") is not None]
+    gross_win = sum(win_rs) if win_rs else 0.0
+    gross_loss = abs(sum(loss_rs)) if loss_rs else 0.0
+    return {
+        "total_outlooks": len(stats_rows), "actionable_outlooks": len(actionable),
+        "activated_outlooks": len(actionable), "informational_outlooks": len(informational),
+        "green_results": len(wins), "red_results": len(losses), "no_entry_results": 0,
+        "tp1_hit_rate": round(tp1_count / len(completed), 3) if completed else 0,
+        "tp2_hit_rate": round(tp2_count / len(completed), 3) if completed else 0,
+        "tp3_hit_rate": round(tp3_count / len(completed), 3) if completed else 0,
+        "average_r": round(sum(resolved_rs) / len(resolved_rs), 3) if resolved_rs else None,
+        "average_mfe": round(sum(float(o.get("mfe_r", 0) or 0) for o in actionable) / len(actionable), 3) if actionable else None,
+        "average_mae": round(sum(float(o.get("mae_r", 0) or 0) for o in actionable) / len(actionable), 3) if actionable else None,
+        "resolved_count": len(completed), "wins": len(wins), "losses": len(losses), "breakeven": 0,
+        "no_entry_count": 0, "active_unresolved_count": len(active_unresolved),
+        "unavailable_historical_count": len(unavailable), "win_rate": win_rate,
+        "total_r": round(sum(resolved_rs), 3) if resolved_rs else 0.0,
+        "average_win_r": round(sum(win_rs) / len(win_rs), 3) if win_rs else None,
+        "average_loss_r": round(sum(loss_rs) / len(loss_rs), 3) if loss_rs else None,
+        "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else (None if gross_win == 0 else float("inf")),
+        "best_result_r": max(resolved_rs) if resolved_rs else None,
+        "worst_result_r": min(resolved_rs) if resolved_rs else None,
+    }
+
+
 def build_router() -> APIRouter:
     """Called from server.py AFTER server.py's own globals exist, so the
     real get_cloud_user dependency can be bound here without circularity."""
@@ -96,17 +141,8 @@ def build_router() -> APIRouter:
             # Now $gte, matching the displayed rate's own definition.
             conditions.append({"highest_tp_reached": {"$gte": int(tp.replace("TP", ""))}} if tp.startswith("TP") else {"status": tp})
         if result:
-            # Audit fix: "Stopped" used to be sent as tp="INVALIDATED",
-            # which the branch above turned into {"status": "INVALIDATED"} --
-            # but that literal status string is shared by TWO unrelated
-            # outcomes (see market_outlook.py's _advance_outlook_state):
-            # a setup invalidating BEFORE any entry was ever taken
-            # (GRAY_INVALIDATED_BEFORE_ENTRY, a "no entry" result) and a
-            # real trade that activated and then hit SL with no TP reached
-            # (RED_STOPPED). "Stopped" was silently including never-entered
-            # setups. This new `result` param filters on the precise,
-            # unambiguous final_result field instead of the lifecycle
-            # status string.
+            # Filter the authoritative state-machine result, never display
+            # text or a generic lifecycle label.
             conditions.append({"final_result": result})
         if min_confidence is not None:
             conditions.append({"confidence_pct": {"$gte": min_confidence}})
@@ -118,75 +154,9 @@ def build_router() -> APIRouter:
             conditions.append({"generated_at": {"$lte": to_date}})
         rows = await db.cloud_market_outlooks.find({"$and": conditions}, {"_id": 0}).sort("generated_at", -1).to_list(min(limit, 200))
 
-        # v6.24.17 price-integrity repair: a record marked excluded_from_stats
-        # (see market_outlook.repair_price_integrity_incidents) stays visible
-        # in the returned `outlooks` list for audit, but must never count
-        # toward win/loss/no-entry/TP-rate/confidence stats.
-        stats_rows = [o for o in rows if not o.get("excluded_from_stats")]
-
-        activated = [o for o in stats_rows if (o.get("activation") or {}).get("activated")]
-        greens = [o for o in stats_rows if o.get("color_state") == "GREEN"]
-        reds = [o for o in stats_rows if o.get("color_state") == "RED"]
-        grays = [o for o in stats_rows if o.get("color_state") == "GRAY"]
-        tp1_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 1)
-        tp2_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 2)
-        tp3_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 3)
-        resolved_rs = [o.get("final_r") for o in stats_rows if o.get("final_r") is not None]
-
-        # v6.24.18 owner directive 2026-07-16 -- genuine win-rate system.
-        # "Resolved" = activated AND has a final_r (a real, closed outcome).
-        # No-entry/invalidated-before-entry/still-active/invalid-data rows
-        # never appear in this set, so they cannot dilute or fabricate a
-        # win rate. wins/losses/breakeven are mutually exclusive partitions
-        # of resolved_rows by the SIGN of the real final_r, not by the
-        # color_state label (color_state can legitimately diverge from the
-        # raw sign once a protected-floor exit policy is defined -- see the
-        # win_rate computation below, which is deliberately sign-of-final_r
-        # based, the one definition that can never be gamed by a display
-        # color).
-        resolved_rows = [o for o in stats_rows if (o.get("activation") or {}).get("activated") and o.get("final_r") is not None]
-        wins = [o for o in resolved_rows if o["final_r"] > 0]
-        losses = [o for o in resolved_rows if o["final_r"] < 0]
-        breakeven = [o for o in resolved_rows if o["final_r"] == 0]
-        no_entry = [o for o in stats_rows if (o.get("final_result") or "").startswith("GRAY")]
-        # v6.25.2 owner directive 2026-07-17 -- "Active" must count only
-        # genuinely unresolved DIRECTIONAL (BUY/SELL) campaigns. It used to
-        # count any non-GRAY row with no final_result, which silently
-        # included every non-directional hourly update (TRANSITION/NEUTRAL/
-        # RANGE/NO_VALID_OUTLOOK) as if it were its own active signal -- the
-        # exact live-evidence bug (one real BUY + two TRANSITION updates
-        # showing "Active=3" instead of the true directional count of 1). A
-        # TRANSITION is informational only and must never appear here.
-        active_unresolved = [o for o in stats_rows
-                              if o.get("primary_direction") in ("BUY", "SELL")
-                              and o.get("final_result") is None]
-        win_rate = round(len(wins) / len(wins + losses), 3) if (wins or losses) else None
-        win_rs = [o["final_r"] for o in wins]
-        loss_rs = [o["final_r"] for o in losses]
-        gross_win = sum(win_rs) if win_rs else 0.0
-        gross_loss = abs(sum(loss_rs)) if loss_rs else 0.0
-
-        stats = {
-            "total_outlooks": len(stats_rows), "activated_outlooks": len(activated),
-            "green_results": len(greens), "red_results": len(reds), "no_entry_results": len(grays),
-            "tp1_hit_rate": round(tp1_count / max(1, len(activated)), 3) if activated else 0,
-            "tp2_hit_rate": round(tp2_count / max(1, len(activated)), 3) if activated else 0,
-            "tp3_hit_rate": round(tp3_count / max(1, len(activated)), 3) if activated else 0,
-            "average_r": round(sum(resolved_rs) / len(resolved_rs), 3) if resolved_rs else None,
-            "average_mfe": round(sum(o.get("mfe", 0) for o in stats_rows) / len(stats_rows), 3) if stats_rows else None,
-            "average_mae": round(sum(o.get("mae", 0) for o in stats_rows) / len(stats_rows), 3) if stats_rows else None,
-            # Genuine win-rate block -- wins/(wins+losses), never wins/total.
-            "resolved_count": len(resolved_rows),
-            "wins": len(wins), "losses": len(losses), "breakeven": len(breakeven),
-            "no_entry_count": len(no_entry), "active_unresolved_count": len(active_unresolved),
-            "win_rate": win_rate,  # None (display "—") when no resolved signals exist yet
-            "total_r": round(sum(resolved_rs), 3) if resolved_rs else 0.0,
-            "average_win_r": round(sum(win_rs) / len(win_rs), 3) if win_rs else None,
-            "average_loss_r": round(sum(loss_rs) / len(loss_rs), 3) if loss_rs else None,
-            "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else (None if gross_win == 0 else float("inf")),
-            "best_result_r": max(resolved_rs) if resolved_rs else None,
-            "worst_result_r": min(resolved_rs) if resolved_rs else None,
-        }
+        # Excluded/corrupt rows stay visible for audit, but the summary is
+        # computed only from persisted authoritative signal outcomes.
+        stats = compute_outlook_stats(rows)
         return {"outlooks": rows, "stats": stats}
 
     @r.get("/outlook/{outlook_id}")

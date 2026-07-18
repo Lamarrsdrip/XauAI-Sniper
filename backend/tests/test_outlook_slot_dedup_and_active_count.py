@@ -165,10 +165,12 @@ def test_routes_active_unresolved_uses_primary_direction_filter():
     # static confirmation that the actual endpoint code (not just this
     # test's reimplementation of the logic) was changed to the same rule
     routes_src = open(os.path.join(BACKEND_DIR, "market_outlook_routes.py")).read()
-    idx = routes_src.index("active_unresolved = [o for o in stats_rows")
+    idx = routes_src.index("active_unresolved = [o for o in actionable")
     window = routes_src[idx: idx + 250]
-    assert 'o.get("primary_direction") in ("BUY", "SELL")' in window
-    assert 'o.get("final_result") is None' in window
+    assert 'o.get("analytics_outcome") is None' in window
+    actionable_idx = routes_src.index("actionable = [o for o in stats_rows")
+    actionable_window = routes_src[actionable_idx: actionable_idx + 300]
+    assert 'o.get("primary_direction") in ("BUY", "SELL")' in actionable_window
 
 
 def test_hourly_generation_tick_only_dispatches_notification_on_real_win():

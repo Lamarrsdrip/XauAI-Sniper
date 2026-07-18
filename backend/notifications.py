@@ -35,7 +35,7 @@ import httpx
 
 logger = logging.getLogger("notifications")
 
-ONESIGNAL_API_URL = "https://onesignal.com/api/v1/notifications"
+ONESIGNAL_API_URL = "https://api.onesignal.com/notifications"
 
 
 def _db():
@@ -80,15 +80,14 @@ async def get_onesignal_app_id() -> str:
 # configured tier for it to actually be sent.
 _TIER_RANK = {"OFF": 0, "HOURLY_ONLY": 1, "HOURLY_PLUS_RESULTS": 2, "ALL_UPDATES": 3}
 _EVENT_MIN_TIER = {
+    "TRACKING_STARTED": "HOURLY_ONLY",
+    "HALF_R_REACHED": "HOURLY_PLUS_RESULTS",
+    "TIMEOUT_60M": "HOURLY_PLUS_RESULTS",
     "OUTLOOK_PUBLISHED": "HOURLY_ONLY",
-    "ENTRY_ZONE_REACHED": "ALL_UPDATES",
-    "OUTLOOK_ACTIVATED": "HOURLY_PLUS_RESULTS",
     "TP1_HIT": "HOURLY_PLUS_RESULTS",
     "TP2_HIT": "HOURLY_PLUS_RESULTS",
     "TP3_HIT": "HOURLY_PLUS_RESULTS",
     "SL_HIT": "HOURLY_PLUS_RESULTS",
-    "INVALIDATED": "ALL_UPDATES",
-    "EXPIRED_NO_ENTRY": "ALL_UPDATES",
 }
 
 
@@ -101,7 +100,26 @@ def _build_payload(doc: Dict, event: str) -> Dict:
     confidence = doc.get("confidence_pct", 0)
     deep_link = f"/ai-market-outlook?outlook_id={doc.get('id')}"
 
-    if event == "OUTLOOK_PUBLISHED":
+    signal_time = doc.get("published_at") or doc.get("generated_at")
+    entry = doc.get("tracking_entry_price")
+    event_at = {
+        "HALF_R_REACHED": doc.get("first_half_r_at"), "TP1_HIT": doc.get("tp1_hit_at"),
+        "TP2_HIT": doc.get("tp2_hit_at"), "TP3_HIT": doc.get("tp3_hit_at"),
+        "SL_HIT": doc.get("sl_hit_at"), "TIMEOUT_60M": doc.get("evaluation_deadline"),
+    }.get(event) or signal_time
+    hit_price = doc.get("last_tracked_price")
+    achieved_r = doc.get("current_r")
+
+    if event == "TRACKING_STARTED":
+        title = f"{direction} outlook tracking started"
+        body = f"Signal {signal_time} · entry {entry} · Bid {doc.get('published_bid')} · Ask {doc.get('published_ask')}"
+    elif event == "HALF_R_REACHED":
+        title = f"{direction} outlook reached +0.50R"
+        body = f"Signal {signal_time} reached +0.50R at {event_at} · entry {entry} · hit {hit_price} · R {achieved_r}"
+    elif event == "TIMEOUT_60M":
+        title = f"{direction} outlook missed the 60-minute target"
+        body = f"Signal {signal_time} failed to reach +0.50R within 60 minutes · entry {entry} · last {hit_price} · R {achieved_r}"
+    elif event == "OUTLOOK_PUBLISHED":
         if direction in ("NO_VALID_OUTLOOK", "NEUTRAL", "RANGE", "TRANSITION"):
             title = "XAU AI Sniper — Hourly Outlook"
             body = f"No valid directional outlook this hour. Market state: {direction}. Confidence: {confidence}%"
@@ -110,22 +128,14 @@ def _build_payload(doc: Dict, event: str) -> Dict:
             body = (f"{direction} outlook · {confidence}% confidence\n"
                    f"Entry: {doc.get('preferred_entry_zone_low')}–{doc.get('preferred_entry_zone_high')}\n"
                    f"SL: {doc.get('suggested_sl')} | TP1: {doc.get('tp1_price')} TP2: {doc.get('tp2_price')} TP3: {doc.get('tp3_price')}")
-    elif event == "OUTLOOK_ACTIVATED":
-        title = "XAU Outlook Update"
-        body = f"{direction} outlook activated at {(doc.get('activation') or {}).get('activated_price')}\nTP1 target: {doc.get('tp1_price')}"
     elif event in ("TP1_HIT", "TP2_HIT", "TP3_HIT"):
         r_field = {"TP1_HIT": "tp1_r", "TP2_HIT": "tp2_r", "TP3_HIT": "tp3_r"}[event]
         title = "XAU Outlook Result"
-        body = f"{event.replace('_HIT',' hit').replace('TP','TP')}\nResult: +{doc.get(r_field)}R\nOutlook: {direction} · {confidence}%"
+        body = (f"Signal {signal_time} hit {event.replace('_HIT', '')} at {event_at} · "
+                f"entry {entry} · hit {hit_price} · R {achieved_r if achieved_r is not None else doc.get(r_field)}")
     elif event == "SL_HIT":
         title = "XAU Outlook Result"
-        body = f"Stopped\nResult: -1R\nOutlook: {direction} · {confidence}%"
-    elif event == "INVALIDATED":
-        title = "XAU Outlook Update"
-        body = f"{direction} outlook invalidated before entry."
-    elif event == "EXPIRED_NO_ENTRY":
-        title = "XAU Outlook Update"
-        body = f"{direction} outlook expired — entry zone never reached."
+        body = f"Signal {signal_time} hit SL at {event_at} · entry {entry} · hit {hit_price} · R {achieved_r}"
     else:
         title = "XAU AI Sniper"
         body = event
@@ -146,6 +156,10 @@ AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED"
 INVALID_PAYLOAD = "INVALID_PAYLOAD"
 TEMPORARY_DELIVERY_FAILURE = "TEMPORARY_DELIVERY_FAILURE"
 UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
+RETRYABLE_FAILURES = {
+    SERVER_NOT_CONFIGURED, AUTHENTICATION_FAILED, INVALID_PAYLOAD,
+    TEMPORARY_DELIVERY_FAILURE, UNKNOWN_FAILURE,
+}
 
 
 async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
@@ -153,7 +167,7 @@ async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
     dispatcher every caller (hourly outlook events, TP/SL results, the Send
     Test Notification button) funnels through -- there is no second path.
 
-    Sends by OneSignal external_user_id (== our own user_id). The client
+    Sends by OneSignal external_id (== our own user_id). The client
     SDK tags every device the user grants permission on with
     OneSignal.login(user_id) (see frontend), so OneSignal itself fans this
     single call out to every device for this user -- unlike the old
@@ -164,16 +178,24 @@ async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
         logger.info(f"NOTIFICATION_SKIPPED_NOT_CONFIGURED user={user_id} payload={payload.get('title')}")
         return False, SERVER_NOT_CONFIGURED
 
+    import server as _srv
+    deep_link = payload.get("deep_link") or "/ai-market-outlook"
+    web_url = f"{_srv.PUBLIC_SITE_URL}{deep_link if str(deep_link).startswith('/') else '/' + str(deep_link)}"
+    provider_idempotency = str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"xau-outlook:{payload.get('outlook_id') or 'none'}:{payload.get('event') or 'unknown'}:{user_id}",
+    ))
     body = {
         "app_id": cfg["app_id"],
-        "include_external_user_ids": [user_id],
-        "channel_for_external_user_ids": "push",
+        "include_aliases": {"external_id": [user_id]},
+        "target_channel": "push",
         "headings": {"en": payload.get("title", "XAU AI Sniper")},
         "contents": {"en": payload.get("body", "")},
         "data": {"deep_link": payload.get("deep_link", ""), "outlook_id": payload.get("outlook_id"), "event": payload.get("event", "")},
-        "url": payload.get("deep_link") or "/ai-market-outlook",
+        "web_url": web_url,
+        "idempotency_key": provider_idempotency,
     }
-    headers = {"Authorization": f"Basic {cfg['api_key']}", "Content-Type": "application/json; charset=utf-8"}
+    headers = {"Authorization": f"Key {cfg['api_key']}", "Content-Type": "application/json; charset=utf-8"}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(ONESIGNAL_API_URL, json=body, headers=headers)
@@ -201,8 +223,7 @@ async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
         data = resp.json()
     except Exception:
         return False, UNKNOWN_FAILURE
-    recipients = data.get("recipients", 0) or 0
-    if recipients > 0:
+    if data.get("id"):
         return True, None
     logger.info(f"ONESIGNAL_NO_RECIPIENTS user={user_id} response={data}")
     return False, NO_DEVICE_REGISTERED
@@ -227,27 +248,35 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> int
                 continue
             idem_key = _idempotency_key(outlook_id, event, user_id)
             already = await db.cloud_notification_log.find_one({"idempotency_key": idem_key})
-            if already:
+            if already and (already.get("delivery_status") == "SENT"
+                            or already.get("failure_reason") not in RETRYABLE_FAILURES):
                 continue
             payload = _build_payload(doc, event)
             subscription = await db.cloud_push_subscriptions.find_one({"user_id": user_id, "opted_in": True})
             log_entry = {
-                "id": str(uuid.uuid4()), "idempotency_key": idem_key, "user_id": user_id,
+                "id": (already or {}).get("id") or str(uuid.uuid4()), "idempotency_key": idem_key, "user_id": user_id,
                 "outlook_id": outlook_id, "notification_type": event,
-                "scheduled_time": datetime.now(timezone.utc).isoformat(),
+                "scheduled_time": (already or {}).get("scheduled_time") or datetime.now(timezone.utc).isoformat(),
                 "sent_time": None, "delivery_status": "PENDING", "opened_time": None,
                 "device_count": 1 if subscription else 0, "retry_count": 0, "failure_reason": None,
             }
             if not subscription:
                 log_entry["delivery_status"] = "NO_DEVICE"
-                await db.cloud_notification_log.insert_one(log_entry)
+                if already:
+                    await db.cloud_notification_log.update_one({"idempotency_key": idem_key}, {"$set": log_entry})
+                else:
+                    await db.cloud_notification_log.insert_one(log_entry)
                 continue
             ok, failure_class = await _send_onesignal(user_id, payload)
             log_entry["sent_time"] = datetime.now(timezone.utc).isoformat()
             log_entry["delivery_status"] = "SENT" if ok else "FAILED"
             if not ok:
                 log_entry["failure_reason"] = failure_class or UNKNOWN_FAILURE
-            await db.cloud_notification_log.insert_one(log_entry)
+            if already:
+                log_entry["retry_count"] = int(already.get("retry_count", 0) or 0) + 1
+                await db.cloud_notification_log.update_one({"idempotency_key": idem_key}, {"$set": log_entry})
+            else:
+                await db.cloud_notification_log.insert_one(log_entry)
             if ok:
                 sent += 1
         return sent

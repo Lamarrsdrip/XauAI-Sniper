@@ -19,7 +19,7 @@
 // notificationclick listeners; our own custom listeners for those events
 // were removed below (see bottom of file) so there's no double-handling.
 try {
-  importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDKWorker.js');
+  importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');
 } catch (error) {
   // Push is optional. A blocked/unavailable provider must not prevent the
   // base PWA worker from installing, updating, or providing offline fallback.
