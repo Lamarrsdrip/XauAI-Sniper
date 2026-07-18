@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { API } from "@/lib/api";
 import { ensureOneSignalInitialized } from "@/lib/onesignal";
+import M10VsOutlookCard from "@/components/cloud/M10VsOutlookCard";
 
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
 
@@ -40,49 +41,6 @@ function resultLabel(o) {
   if (o.final_result.startsWith("GRAY_EXPIRED")) return "NO ENTRY";
   if (o.final_result.startsWith("GRAY_INVALIDATED")) return "INVALIDATED";
   return o.final_result.replace(/_/g, " ");
-}
-
-// v6.25.1 owner directive 2026-07-17 -- the dedicated Outlook page must show
-// or link to the latest M10 signal decision, not just the hourly outlook.
-// Reuses /cloud/monitor/activity (the same endpoint the Command Center
-// dashboard reads) rather than a new backend route -- the EA already posts
-// m10_signal there every tick. Explicitly compares the two independent
-// systems' current direction so agreement/conflict is visible, not hidden.
-function M10VsOutlookCard({ m10, outlook }) {
-  if (!m10) return null;
-  const m10Dir = m10.preferred_direction || "NONE";
-  const outlookDir = outlook?.primary_direction || "NONE";
-  const bothDirectional = ["BUY", "SELL"].includes(m10Dir) && ["BUY", "SELL"].includes(outlookDir);
-  const agree = bothDirectional && m10Dir === outlookDir;
-  const conflict = bothDirectional && m10Dir !== outlookDir;
-  const freshnessState = m10.freshness_state || "UNKNOWN";
-
-  return (
-    <div className={`${CARD} p-5`} data-testid="m10-vs-outlook-card">
-      <div className={MONO_LABEL}>M10 Signal vs Hourly Outlook</div>
-      <div className="mt-3 grid grid-cols-2 gap-3 text-[12px]">
-        <div className="rounded-xl border border-white/10 p-3">
-          <div className="text-white/35 text-[10px] uppercase tracking-wide">M10 (near-term)</div>
-          <div className="mt-1 font-mono text-lg font-black">{m10Dir}</div>
-          <div className="mt-1 text-white/45">{(m10.decision || "").replace(/_/g, " ")} · {freshnessState}</div>
-        </div>
-        <div className="rounded-xl border border-white/10 p-3">
-          <div className="text-white/35 text-[10px] uppercase tracking-wide">Hourly Outlook</div>
-          <div className="mt-1 font-mono text-lg font-black">{outlookDir}</div>
-          <div className="mt-1 text-white/45">{outlook?.confidence_pct != null ? `${outlook.confidence_pct}% confidence` : "—"}</div>
-        </div>
-      </div>
-      {agree && <p className="mt-3 text-[11px] text-emerald-300">Agree: both currently favor {m10Dir}.</p>}
-      {conflict && <p className="mt-3 text-[11px] text-amber-300">Conflict: M10 favors {m10Dir}, hourly outlook favors {outlookDir} -- different decision horizons (near-term entry quality vs broader hourly interpretation), not a bug.</p>}
-      {!bothDirectional && <p className="mt-3 text-[11px] text-white/35">One or both systems have no directional idea right now.</p>}
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
-        <span>Exhaustion: evidence-only ({(m10.exhaustion_decision || "—").replace(/_/g, " ")})</span>
-        {m10.post_profit_buy_pending && <span className="text-amber-300">· Buy location extended</span>}
-        {m10.post_profit_sell_pending && <span className="text-amber-300">· Sell location extended</span>}
-        <span>· M10 bar {m10.bar_time || "—"}</span>
-      </div>
-    </div>
-  );
 }
 
 function OutlookHero({ outlook, advanced, setAdvanced }) {

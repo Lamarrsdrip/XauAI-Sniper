@@ -28,26 +28,41 @@ function directionStyle(dir) {
  * separate data source from the trading engine (see backend/market_outlook.py
  * docstring for the strict-separation guarantee this card's data ultimately
  * relies on). */
-export default function AIMarketOutlookCard({ linked = true }) {
+export default function AIMarketOutlookCard({ linked = true, online = true, onOutlookChange, onStatusChange }) {
   const [outlook, setOutlook] = useState(null);
   const [prefs, setPrefs] = useState(null);
   const [verifiedStatus, setVerifiedStatus] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [requestFailed, setRequestFailed] = useState(false);
 
   const load = useCallback(async () => {
-    if (!linked) { setLoading(false); return; }
+    if (!linked) {
+      setOutlook(null);
+      setLoading(false);
+      setRequestFailed(false);
+      onOutlookChange?.(null);
+      onStatusChange?.({ loading:false, requestFailed:false });
+      return;
+    }
     try {
       const [{ data: cur }, { data: pr }, statusResult] = await Promise.all([
         outlookAxios.get("/outlook/current"),
         outlookAxios.get("/outlook/notifications/prefs"),
         outlookAxios.get("/outlook/notifications/status").catch(() => ({ data: { final_status: "UNKNOWN" } })),
       ]);
-      setOutlook(cur?.outlook || null);
+      const nextOutlook = cur?.outlook || null;
+      setOutlook(nextOutlook);
       setPrefs(pr?.prefs || null);
       setVerifiedStatus(statusResult?.data || null);
-    } catch (_) { /* silent — advisory feature, must never disrupt the dashboard */ }
+      setRequestFailed(false);
+      onOutlookChange?.(nextOutlook);
+      onStatusChange?.({ loading:false, requestFailed:false });
+    } catch (_) {
+      setRequestFailed(true);
+      onStatusChange?.({ loading:false, requestFailed:true });
+    }
     setLoading(false);
-  }, [linked]);
+  }, [linked, onOutlookChange, onStatusChange]);
 
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
 
@@ -95,10 +110,18 @@ export default function AIMarketOutlookCard({ linked = true }) {
         )}
       </div>
 
+      {!online && (
+        <p className="mt-3 rounded-lg border border-amber-300/15 bg-amber-300/[0.04] px-3 py-2 text-[11px] text-amber-200">
+          EA offline — verify the freshness shown below before using this outlook.
+        </p>
+      )}
+
       {!linked ? (
         <p className="mt-3 text-[12px] text-white/40">Connect your license to receive hourly outlooks.</p>
       ) : loading ? (
         <p className="mt-3 text-[12px] text-white/40">Loading outlook…</p>
+      ) : requestFailed && !outlook ? (
+        <p className="mt-3 text-[12px] text-rose-300">Outlook request failed — no current outlook is being claimed.</p>
       ) : !outlook ? (
         <p className="mt-3 text-[12px] text-white/40">No outlook published yet — first hourly analysis is generating.</p>
       ) : (
@@ -128,6 +151,10 @@ export default function AIMarketOutlookCard({ linked = true }) {
             </div>
           )}
           <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-white/35">{outlook.reasoning}</p>
+          <p className="mt-2 text-[10px] text-white/25">
+            Updated {outlook.generated_at || outlook.published_at || outlook.created_at || outlook.ts || "time unavailable"}
+            {requestFailed ? " · refresh failed; showing last known data" : ""}
+          </p>
         </div>
       )}
     </Link>

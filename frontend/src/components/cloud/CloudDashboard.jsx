@@ -11,6 +11,7 @@ import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
+import M10VsOutlookCard from "./M10VsOutlookCard";
 import { API } from "@/lib/api";
 
 // ─── Axios ───────────────────────────────────────────────────────────────────
@@ -766,12 +767,7 @@ function humanBotState(raw, openTrades, tradingOk, online) {
 // -> details.m10_signal on the latest /cloud/monitor/activity event) --
 // nothing is recomputed client-side, so this can never show a value the EA
 // itself did not actually compute.
-function M10SignalCard({ events, heartbeat }) {
-  // v6.25.1 owner directive 2026-07-17 -- explicit newest-by-timestamp
-  // selection (not "first match in whatever order events arrived"), and
-  // verify the event actually belongs to the currently-connected
-  // account+symbol before trusting it -- a stale event from a previous
-  // session/build must never be silently displayed as current.
+function latestM10Signal(events, heartbeat) {
   const candidates = (events || []).filter(e => e?.details?.m10_signal);
   const newest = candidates.reduce((best, e) => {
     const ts = new Date(e.ts || e.timestamp || 0).getTime();
@@ -783,7 +779,17 @@ function M10SignalCard({ events, heartbeat }) {
 
   const accountMatches = !heartbeat?.account_number || !latest.account || String(heartbeat.account_number) === String(latest.account);
   const symbolMatches = !heartbeat?.symbol || !latest.symbol || heartbeat.symbol === latest.symbol;
-  if (!accountMatches || !symbolMatches) return null; // do not show evidence from a different account/symbol as if it were current
+  return accountMatches && symbolMatches ? latest : null;
+}
+
+function M10SignalCard({ events, heartbeat }) {
+  // v6.25.1 owner directive 2026-07-17 -- explicit newest-by-timestamp
+  // selection (not "first match in whatever order events arrived"), and
+  // verify the event actually belongs to the currently-connected
+  // account+symbol before trusting it -- a stale event from a previous
+  // session/build must never be silently displayed as current.
+  const latest = latestM10Signal(events, heartbeat);
+  if (!latest) return null;
 
   const decision = latest.decision || "DATA_UNAVAILABLE";
   const preferredDir = latest.preferred_direction || "NONE";
@@ -972,6 +978,8 @@ function M30ConsensusCard({ events, heartbeat }) {
 }
 
 function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh }) {
+  const [homeOutlook, setHomeOutlook] = useState(null);
+  const [outlookStatus, setOutlookStatus] = useState({ loading:true, requestFailed:false });
   const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
   const ddNum      = Number(heartbeat.drawdown||0);
   const riskTone   = ddNum>5?"red":ddNum>2?"amber":"green";
@@ -983,6 +991,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
   const bias       = getMarketBias(aiEvent, heartbeat);
   const botState   = humanBotState(heartbeat.bot_state, openTrades, tradingOk, online);
   const stateTone  = openTrades>0?"amber":tradingOk?"green":"neutral";
+  const m10Signal  = latestM10Signal(events, heartbeat);
 
   const offlineCopy = licenseInfo?.activation_key
     ? "License linked. Waiting for EA heartbeat from your MT5 terminal."
@@ -1018,46 +1027,54 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         </div>
       </div>
 
-      {/* v6.25.2 owner directive 2026-07-17 -- SetupHealth was fully built
-          but never rendered anywhere visible; the only surviving surface for
-          status.setup_checks was a bare "X/Y passing" count buried in the
-          hidden Developer diagnostics panel, so a user could never see WHICH
-          check (license/heartbeat/mt5_account/ea_version/algo) was actually
-          failing. Only shown when something needs attention, so a fully
-          healthy dashboard stays uncluttered. */}
-      {!online && <SetupHealth checks={status?.setup_checks} />}
+      <AIMarketOutlookCard
+        linked={Boolean(licenseInfo.activation_key)}
+        online={online}
+        onOutlookChange={setHomeOutlook}
+        onStatusChange={setOutlookStatus}
+      />
 
-      {/* 4 core account metrics */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Equity"      value={online?money(heartbeat.equity):"—"}       detail={online?`Balance ${money(heartbeat.balance)}`:"Not live"}     icon={CircleDollarSign} tone={online?"green":"neutral"} />
-        <Metric label="Today's P&L" value={online?money(pnlNum):"—"}                 detail={pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"} icon={TrendingUp} tone={pnlPos?"green":"red"} />
-        <Metric label="Open trades" value={online?openTrades:"—"}                    detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"}        icon={History}          tone={openTrades>0?"amber":"neutral"} />
-        <Metric label="Open risk"   value={online?pct(heartbeat.drawdown):"—"}       detail="Current drawdown"                                              icon={Gauge}            tone={riskTone} />
+      <div className="space-y-3" data-testid="home-summary-grid">
+        {/* 4 core account metrics */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Metric label="Equity"      value={online?money(heartbeat.equity):"—"}       detail={online?`Balance ${money(heartbeat.balance)}`:"Not live"}     icon={CircleDollarSign} tone={online?"green":"neutral"} />
+          <Metric label="Today's P&L" value={online?money(pnlNum):"—"}                 detail={pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"} icon={TrendingUp} tone={pnlPos?"green":"red"} />
+          <Metric label="Open trades" value={online?openTrades:"—"}                    detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"}        icon={History}          tone={openTrades>0?"amber":"neutral"} />
+          <Metric label="Open risk"   value={online?pct(heartbeat.drawdown):"—"}       detail="Current drawdown"                                              icon={Gauge}            tone={riskTone} />
+        </div>
+
+        {/* 4 market intelligence cards — trader-facing, no internal strings */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className={`${cardTone(bias.tone)} p-4 rounded-2xl min-w-0`}>
+            <div className={MONO_LABEL}>Market bias</div>
+            <div className="mt-2 font-mono text-xl font-black leading-none">{online?bias.label:"—"}</div>
+            <div className="mt-1.5 text-[11px] text-white/40">HTF consensus</div>
+          </div>
+          <div className={`${cardTone(conf>=70?"green":conf>0?"amber":"neutral")} p-4 rounded-2xl min-w-0`}>
+            <div className={MONO_LABEL}>AI confidence</div>
+            <div className="mt-2 font-mono text-xl font-black leading-none">{online&&conf>0?`${conf}%`:"—"}</div>
+            <div className="mt-1.5 text-[11px] text-white/40">{conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"}</div>
+          </div>
+          <div className={`${cardTone(session.tone)} p-4 rounded-2xl min-w-0`}>
+            <div className={MONO_LABEL}>Session</div>
+            <div className="mt-2 font-mono text-xl font-black leading-none">{session.label}</div>
+            <div className="mt-1.5 text-[11px] text-white/40">UTC {new Date().getUTCHours().toString().padStart(2,"0")}:00</div>
+          </div>
+          <div className={`${cardTone(stateTone)} p-4 rounded-2xl min-w-0`}>
+            <div className={MONO_LABEL}>Trading status</div>
+            <div className="mt-2 font-mono text-xl font-black leading-none">{botState}</div>
+            <div className="mt-1.5 text-[11px] text-white/40">{online?"EA connected":"No heartbeat"}</div>
+          </div>
+        </div>
       </div>
 
-      {/* 4 market intelligence cards — trader-facing, no internal strings */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className={`${cardTone(bias.tone)} p-4 rounded-2xl min-w-0`}>
-          <div className={MONO_LABEL}>Market bias</div>
-          <div className="mt-2 font-mono text-xl font-black leading-none">{online?bias.label:"—"}</div>
-          <div className="mt-1.5 text-[11px] text-white/40">HTF consensus</div>
-        </div>
-        <div className={`${cardTone(conf>=70?"green":conf>0?"amber":"neutral")} p-4 rounded-2xl min-w-0`}>
-          <div className={MONO_LABEL}>AI confidence</div>
-          <div className="mt-2 font-mono text-xl font-black leading-none">{online&&conf>0?`${conf}%`:"—"}</div>
-          <div className="mt-1.5 text-[11px] text-white/40">{conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"}</div>
-        </div>
-        <div className={`${cardTone(session.tone)} p-4 rounded-2xl min-w-0`}>
-          <div className={MONO_LABEL}>Session</div>
-          <div className="mt-2 font-mono text-xl font-black leading-none">{session.label}</div>
-          <div className="mt-1.5 text-[11px] text-white/40">UTC {new Date().getUTCHours().toString().padStart(2,"0")}:00</div>
-        </div>
-        <div className={`${cardTone(stateTone)} p-4 rounded-2xl min-w-0`}>
-          <div className={MONO_LABEL}>Trading status</div>
-          <div className="mt-2 font-mono text-xl font-black leading-none">{botState}</div>
-          <div className="mt-1.5 text-[11px] text-white/40">{online?"EA connected":"No heartbeat"}</div>
-        </div>
-      </div>
+      <M10VsOutlookCard
+        m10={m10Signal}
+        outlook={homeOutlook}
+        online={online}
+        loading={outlookStatus.loading}
+        requestFailed={outlookStatus.requestFailed}
+      />
 
       {/* No license CTA */}
       {!licenseInfo.activation_key && (
@@ -1066,8 +1083,6 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
 
       {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
       {online && <M30ConsensusCard events={events} heartbeat={heartbeat} />}
-
-      <AIMarketOutlookCard linked={Boolean(licenseInfo.activation_key)} />
 
       {/* Quick nav — 3 cards */}
       <div className="grid grid-cols-3 gap-3">
@@ -1092,25 +1107,39 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
 }
 
 function SetupHealth({ checks=[] }) {
-  if (!checks.length) return null;
   const ok = checks.filter(c=>c.ok).length;
   return (
-    <Card title="Setup health" subtitle={`${ok}/${checks.length} checks passing`}>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {checks.map(c=>{
-          const Icon = c.ok ? CheckCircle2 : XCircle;
-          return (
-            <div key={c.key||c.label} className={`flex items-start gap-3 rounded-xl border p-3 ${c.ok?"border-emerald-400/15 bg-emerald-300/[0.04]":"border-amber-300/15 bg-amber-300/[0.04]"}`}>
-              <Icon className={`mt-0.5 h-4 w-4 flex-none ${c.ok?"text-emerald-400":"text-amber-400"}`} />
-              <div className="min-w-0">
-                <div className="text-[13px] font-semibold">{c.label}</div>
-                <div className="mt-0.5 text-[11px] leading-4 text-white/40">{c.detail}</div>
-              </div>
-            </div>
-          );
-        })}
+    <div data-testid="setup-health">
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <div>
+          <h3 className="text-[14px] font-semibold">Setup Health</h3>
+          <p className="mt-0.5 text-[11px] text-white/40">
+            {checks.length ? `${ok}/${checks.length} checks passing` : "Waiting for setup status"}
+          </p>
+        </div>
+        {checks.length > 0 && <span className={pill(ok===checks.length?"green":"amber")}>{ok}/{checks.length}</span>}
       </div>
-    </Card>
+      {checks.length ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {checks.map(c=>{
+            const Icon = c.ok ? CheckCircle2 : XCircle;
+            return (
+              <div key={c.key||c.label} className={`flex items-start gap-3 rounded-xl border p-3 ${c.ok?"border-emerald-400/15 bg-emerald-300/[0.04]":"border-amber-300/15 bg-amber-300/[0.04]"}`}>
+                <Icon className={`mt-0.5 h-4 w-4 flex-none ${c.ok?"text-emerald-400":"text-amber-400"}`} />
+                <div className="min-w-0">
+                  <div className="text-[13px] font-semibold">{c.label}</div>
+                  <div className="mt-0.5 break-words text-[11px] leading-4 text-white/40">{c.detail}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 text-[11px] text-white/40">
+          Setup checks will appear after the authenticated status request completes.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1567,8 +1596,26 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
 // ─── Settings ─────────────────────────────────────────────────────────────────
 function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
   const [diagOpen, setDiagOpen] = useState(false);
+  const settingsOnline = Boolean(status && !status.offline && heartbeat.account_number);
   return (
     <div className="space-y-4">
+      <Card title="EA Setup & Connection" subtitle="Live setup details for this licensed Command Center account." className="scroll-mt-20">
+        <div data-testid="ea-setup-connection">
+          <div className={`mb-4 flex items-start gap-3 rounded-xl border p-3 ${settingsOnline?"border-emerald-400/15 bg-emerald-300/[0.04]":"border-amber-300/15 bg-amber-300/[0.04]"}`}>
+            {settingsOnline ? <CheckCircle2 className="mt-0.5 h-4 w-4 flex-none text-emerald-400" /> : <Wifi className="mt-0.5 h-4 w-4 flex-none text-amber-300" />}
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold">{settingsOnline?"EA connected":"EA offline"}</div>
+              <div className="mt-0.5 break-words text-[11px] leading-4 text-white/40">
+                Heartbeat {relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}
+                {heartbeat.account_number ? ` · MT5 account ${heartbeat.account_number}` : " · waiting for MT5 account"}
+                {heartbeat.ea_version ? ` · ${heartbeat.ea_version}` : " · version waiting"}
+              </div>
+            </div>
+          </div>
+          <SetupHealth checks={status?.setup_checks||[]} />
+        </div>
+      </Card>
+
       <Card title="Account">
         <div className="space-y-3">
           <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
