@@ -1,0 +1,3 @@
+checkpoint,positions,wins,avg_realized_r,avg_move_from_intended_entry_r,win_rate_pct
+150s (target checkpoint),48,38,0.025020833333333336,0.0274375,79.2
+180s (maximum checkpoint),104,85,0.05532692307692308,0.04949038461538462,81.7

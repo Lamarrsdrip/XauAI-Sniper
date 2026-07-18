@@ -158,6 +158,84 @@ All 39 losing positions, in time order. **MFE_R** is the real peak favorable exc
 
 ![60DAY_HOURLY_NET_R.png](60DAY_HOURLY_NET_R.png)
 
+
+## Market Regime and Entry-Timing Evidence (owner-requested follow-up)
+
+This section joins every one of the 152 CORE positions (pyramids excluded -- they attach to an already-open campaign rather than running their own signal/entry-timer cycle) to the EA's own real-time classification, logged during the same backtest. Nothing here is an independently-built technical-analysis engine; every label is what the bot itself computed and printed at the time.
+
+### Market regime at signal time (`ENUM_REGIME`, `DECISION_SNAPSHOT.regime=`)
+
+| Regime | Positions | Wins | Losses | Win rate | Avg realized R | Avg MFE R | Avg MAE R |
+|---|---|---|---|---|---|---|---|
+| TREND_DN | 87 | 70 | 17 | 80.5% | 0.053 | 0.386 | -0.417 |
+| TREND_UP | 48 | 42 | 6 | 87.5% | 0.115 | 0.401 | -0.376 |
+| BRKT_DN | 8 | 6 | 2 | 75.0% | -0.088 | 0.301 | -0.476 |
+| BRKT_UP | 8 | 4 | 4 | 50.0% | -0.347 | 0.263 | -0.815 |
+| CHOPPY | 1 | 1 | 0 | 100.0% | 0.343 | 0.459 | -0.355 |
+
+TREND_UP and TREND_DN (the two states that account for 89% of all 152 core entries) both have a positive average realized R. **BRKT_UP (breakout-up regime) is a real, quantified problem area: 8 positions, 4 wins/4 losses, average realized R of -0.347** -- net losing on average. BRKT_DN is also net-negative on average. RANGING never appears as the regime at the exact moment any of these 152 core signals fired (the M30 evidence engine's own upstream gates apparently filter it out before a candidate reaches execution) and CHOPPY appears only once -- both too small a sample to draw a conclusion from.
+
+### Regime stability during the 150-180 second entry timer
+
+**Regime at signal time and regime at entry time were IDENTICAL in all 152 of 152 core positions** (0 changed). This is an honest, real finding, not a data gap: the M30 entry timer window (150-180 seconds) is short relative to the M10 bar it's evaluated against, so the EA's own regime read essentially never flips inside that window in this 60-day sample. Signal-to-entry regime *transition* is not a meaningful risk factor at this specific timescale -- if regime instability matters, it would show up between signal *creation* and the M30 slot boundary before it, not inside the timer.
+
+### Market lifecycle state at entry (`ENUM_XAU_MARKET_LIFECYCLE`)
+
+Coverage: 128 of 152 positions have this field logged at the exact entry timestamp (the remaining 24 are a real logging-density gap, not fabricated as 'no lifecycle state' -- MARKET_THESIS/[MARKET_LIFECYCLE] lines are not printed on every single tick).
+
+| Lifecycle state at entry | Positions | Wins | Win rate | Avg realized R |
+|---|---|---|---|---|
+| OPPOSITE_DIRECTION_FORMING | 62 | 47 | 75.8% | -0.035 |
+| OPPOSITE_DIRECTION_CONFIRMED | 6 | 5 | 83.3% | 0.114 |
+| TREND_MATURE | 26 | 22 | 84.6% | 0.129 |
+| TRANSITION_NEUTRAL | 29 | 26 | 89.7% | 0.135 |
+| TREND_HEALTHY | 2 | 2 | 100.0% | 0.140 |
+| TREND_EXHAUSTING | 3 | 3 | 100.0% | 0.261 |
+
+**The single clearest signal in this whole regime/lifecycle dataset**: entering while the EA's own lifecycle engine reads `OPPOSITE_DIRECTION_FORMING` (i.e. evidence of a reversal against the trade's own direction was already building at the moment of entry) accounts for **62 of 152 core entries (that's 40.8% of everything the bot took)**, has the **worst win rate (75.8%) and the only net-negative average realized R (-0.035R) of any lifecycle state**. Every other lifecycle state at entry (TREND_MATURE, TRANSITION_NEUTRAL, TREND_HEALTHY, TREND_EXHAUSTING, OPPOSITE_DIRECTION_CONFIRMED) is net-positive. This is real, EA-computed, measurable evidence that a large share of this bot's trades are being taken at exactly the moment its own opposite-direction-pressure evidence is already building -- not a hypothesis, a direct readout of its own lifecycle engine at the moment of every entry.
+
+### Entry timer: does waiting to 150s or 180s produce a better entry?
+
+The EA's own `moveFromIntendedEntryR` field measures exactly how much price moved (in R) between the moment a candidate was first accepted and the moment its timer resolved -- a direct, EA-computed answer to "did the wait help or hurt," not a reconstruction.
+
+**The timer only ever resolved at two real checkpoints in this entire 60-day run: 150 seconds (48 positions) or 180 seconds (104 positions)** -- the 120-second minimum never independently produced a final resolution in this sample (every candidate that could have qualified at 120s apparently still needed at least one more revalidation cycle). So this is a genuine two-way comparison, not the three-way 120/150/180 split originally asked for -- disclosed rather than forced.
+
+| Checkpoint | Positions | Wins | Win rate | Avg realized R | Avg price drift during wait (R) |
+|---|---|---|---|---|---|
+| 150s (target checkpoint) | 48 | 38 | 79.2% | 0.025 | 0.027 |
+| 180s (maximum checkpoint) | 104 | 85 | 81.7% | 0.055 | 0.049 |
+
+Positions that ran the full 180 seconds had a **higher** average realized R (0.055R vs 0.025R) and a similar win rate to the ones that resolved at 150s. This does not support tightening the timer window in this sample -- if anything, the extra wait correlates with slightly better outcomes, though the sample is not large enough (48 vs 104) to be a confident recommendation on its own.
+
+### Entry-timing classification (price drift during the timer wait)
+
+Deterministic rule (documented, not fitted to the outcome): `moveFromIntendedEntryR >= 0.15` = chased price during the wait; `<= -0.10` = price improved during the wait; `< 0.05` in absolute value = executed near the original signal price; anything else = moderate drift.
+
+| Classification | Positions | Wins | Win rate | Avg realized R |
+|---|---|---|---|---|
+| GOOD_TIMING_NEAR_SIGNAL_PRICE | 102 | 81 | 79.4% | 0.026 |
+| MODERATE_DRIFT_DURING_TIMER | 36 | 30 | 83.3% | 0.100 |
+| LATE_ENTRY_CHASED_DURING_TIMER | 14 | 12 | 85.7% | 0.048 |
+
+No position in this dataset ever showed price improving by 0.10R or more during the wait (the "EARLY_ENTRY_PRICE_IMPROVED" bucket has zero members) -- in this 60-day sample, waiting inside the timer window never produced a materially better price, only a similar or modestly worse (chased) one. This argues against "the bot enters too early and a pullback would have helped" as the primary issue -- the evidence points the other way, toward mild late-chasing, not early entry.
+
+### What this section could NOT establish (disclosed, not silently dropped)
+
+- **Liquidity sweep detection**: the EA's own `liquiditySweep` field in `LEARNED_ENTRY_QUALITY_TRACE` reads `UNKNOWN` in all 152 of 152 occurrences -- this is a real, verified finding that this specific classifier is not populated in the current build, not a gap in this extraction. No liquidity-sweep classification is reported because the bot itself does not compute one yet.
+- **False-breakout reclassification**: BRKT_UP/BRKT_DN regime reads were captured (and shown above to be the worst-performing regimes), but confirming whether a specific breakout later failed and reverted (a "false breakout") would require tracking price after that signal independently of the trade itself, which was not attempted here.
+- **Post-exit price movement (5/15/30/60 minutes after each exit)**: no per-bar M10 close-price series is logged anywhere in this journal (only event-triggered snapshots at signal/entry/exit moments) -- reconstructing one would require either a separate bar-history export or new telemetry and a re-run, per this project's own instrumentation-then-rerun policy. Not attempted this pass.
+- **Strategy type beyond the raw setup tag**: verified directly against `60DAY_ALL_CAMPAIGNS.csv` -- every one of the 152 core campaigns in this run uses the single setup tag `M30_CONSENSUS_CORE_<slot>`. In M30 consensus mode there is only one active strategy/setup path (the three-M10-evidence consensus itself); the pullback/reversal/breakout/momentum-entry/HTF-trend-follow labels from the original request are M10-legacy-mode setup names that this run never uses, so a strategy-type breakdown beyond the setup tag would be reporting the same 152 rows under a different heading, not real additional variety.
+- **Market-type transition matrix (signal regime -> entry regime -> result)**: not built as a separate table because regime never changed between signal and entry in this dataset (see above) -- the matrix would have exactly one non-empty diagonal cell per regime, which is already fully shown in the regime table above.
+
+### New charts
+
+![60DAY_MARKET_REGIME_EXPECTANCY.png](60DAY_MARKET_REGIME_EXPECTANCY.png)
+
+![60DAY_LIFECYCLE_STATE_EXPECTANCY.png](60DAY_LIFECYCLE_STATE_EXPECTANCY.png)
+
+![60DAY_TIMER_CHECKPOINT_COMPARISON.png](60DAY_TIMER_CHECKPOINT_COMPARISON.png)
+
+
 ## What this data does and does not prove
 
 - All entry/exit prices, times, SL distances, risk, MFE, MAE, R-multiples and exit reasons above come from the EA's own real-time journal logging (`R_EXIT_ENTRY_CAPTURE_CONFIRMED` / `R_EXIT_COUNTERFACTUAL` / `CAMPAIGN_*`) or the MT5 Strategy Tester's own broker-confirmed Deals table -- cross-checked against each other (191/191 positions matched cleanly, 0 unmatched). Nothing here is estimated from candle OHLC or fabricated.

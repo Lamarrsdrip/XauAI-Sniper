@@ -14,7 +14,8 @@ per the tester's own summary).
   numbers, average SL/risk, exit-authority breakdown, every single losing
   trade individually (entry time, hold time, MFE before the loss, whether
   it ever reached +0.20R), winner summary statistics, pyramid contribution,
-  session/hour/day-of-week performance, and 5 embedded charts.
+  session/hour/day-of-week performance, market-regime and entry-timing
+  evidence (see below), and 8 embedded charts.
 - **`60DAY_RUN_METADATA.json`** — exact identity of the run: branch, EA
   build string, EX5/MQ5 hashes, symbol/period/model, date range, deposit,
   leverage, and the tester's own reported totals (for cross-checking).
@@ -35,6 +36,18 @@ per the tester's own summary).
   time, core-only vs pyramid-only vs combined realized profit, campaign
   result, campaign-level peak floating/MFE/MAE/given-back, whether any leg
   hit a broker SL.
+- **`60DAY_ENTRY_TIMING_AND_REGIME.csv`** — all 152 CORE positions joined to
+  the EA's own real-time market classification: regime (`ENUM_REGIME`) and
+  market-lifecycle state (`ENUM_XAU_MARKET_LIFECYCLE`) at both signal time
+  and entry time, entry-timer checkpoint (150s/180s) and exact price drift
+  during the wait, plus location/exhaustion/timing/HTF/structure/pressure
+  state labels and the EA's own learned-entry-quality trace fields
+  (trend health, pullback completion %, trap risk %, liquidity-sweep flag,
+  breakout acceptance).
+- **`60DAY_MARKET_REGIME_RESULTS.csv`**, **`60DAY_ENTRY_LIFECYCLE_RESULTS.csv`**,
+  **`60DAY_TIMER_CHECKPOINT_RESULTS.csv`**, **`60DAY_ENTRY_TIMING_CLASSIFICATION_RESULTS.csv`**
+  — aggregated win-rate/realized-R/MFE/MAE performance grouped by each of
+  those real classifications.
 
 ## Charts (also embedded in the executive report)
 
@@ -44,6 +57,12 @@ per the tester's own summary).
 - `60DAY_RISK_USD_DISTRIBUTION.png` — risk-per-position ($) histogram.
 - `60DAY_SESSION_PERFORMANCE.png` — net R by broker-server-time session.
 - `60DAY_HOURLY_NET_R.png` — net R by entry hour.
+- `60DAY_MARKET_REGIME_EXPECTANCY.png` — average realized R by market regime
+  at signal time.
+- `60DAY_LIFECYCLE_STATE_EXPECTANCY.png` — average realized R by market
+  lifecycle state at entry (the `OPPOSITE_DIRECTION_FORMING` finding).
+- `60DAY_TIMER_CHECKPOINT_COMPARISON.png` — 150s vs 180s entry-timer
+  checkpoint performance comparison.
 
 ## Reproducing this report
 
@@ -54,6 +73,13 @@ python3 scripts/gold_learning/extract_60day_postfix_trades.py \
     --out-dir audits/gold_learning/60day_behavior_report
 
 python3 scripts/gold_learning/build_60day_report.py \
+    --out-dir audits/gold_learning/60day_behavior_report
+
+python3 scripts/gold_learning/extract_60day_regime_and_timing.py \
+    --journal <UTF-8-decoded preserved journal> \
+    --out-dir audits/gold_learning/60day_behavior_report
+
+python3 scripts/gold_learning/build_regime_and_timing_report.py \
     --out-dir audits/gold_learning/60day_behavior_report
 ```
 

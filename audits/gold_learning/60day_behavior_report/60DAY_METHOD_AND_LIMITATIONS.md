@@ -112,39 +112,85 @@ journal, not from a retroactive time-gap heuristic:
   still valid (they use the same clock throughout); only the literal
   session *names* carry this caveat.
 
-## What was explicitly NOT attempted in this pass (owner narrowed scope mid-session to "extract the taken trades and info about them")
+## Follow-up pass: market regime and entry-timing evidence
 
-An earlier, much larger 12-part protocol (deterministic market-regime/
-market-type classification with swing/BOS/ATR/EMA-slope rules, entry-
-timing early/late/wrong-signal classification, market-condition and
-strategy-pattern performance tables, a signal→entry market-type
-transition matrix, and ~15 additional chart/CSV files) was requested and
-partially investigated, but the owner explicitly redirected mid-session to
-a focused extraction of the real taken trades and their real data instead.
-The following from that larger protocol were NOT built in this pass and
-are disclosed here rather than silently dropped:
+The first version of this report (owner-narrowed scope: "extract the taken
+trades and info about them") deferred an earlier, much larger protocol's
+market-regime and entry-timing requests. The owner then explicitly asked
+for those specific items to be completed. This follow-up pass joined all
+152 CORE positions to the EA's own real-time classification (see the
+"Market Regime and Entry-Timing Evidence" section of
+`60DAY_EXECUTIVE_REPORT.md` and `60DAY_ENTRY_TIMING_AND_REGIME.csv`) and
+delivered, with real numbers:
 
-- Independent deterministic market-regime/market-type classification
-  (trend/range/compression/breakout/false-breakout/liquidity-sweep/etc.)
-  built from swing structure, BOS, ATR expansion, EMA slope, etc. The
-  EA's own `regime=` field (visible in its per-M10-bar `DECISION_SNAPSHOT`
-  journal lines, e.g. `regime=TREND_DN`) IS available in the same journal
-  and was not yet joined into the per-position/per-campaign tables here.
-- Entry-timing classification (early/late/wrong-signal/good-timing per
-  campaign) comparing candidate-creation price, price at each timer
-  checkpoint (120/150/180s), and actual execution price.
-- Market-type transition analysis (signal-time regime → entry-time regime
-  → trade result).
-- Strategy-pattern (setup-type) performance breakdown beyond the raw
-  `setup` tag already present in `60DAY_ALL_CAMPAIGNS.csv`.
-- The master trade-journey funnel diagram (candidate → timer → entry →
-  drawdown → first profit → MFE → protection → exit → post-exit) as a
-  standalone PNG/SVG.
-- Post-exit price movement (what price did in the 5/15/30/60 minutes after
-  each exit) — this DOES require price-path data beyond what the EA
-  itself logged about the closed position, since the EA naturally stops
-  tracking a position's price once it is closed.
+- Market regime at signal time (`ENUM_REGIME`: TREND_UP/TREND_DN/RANGING/
+  BRKT_UP/BRKT_DN/LOW_VOL/CHOPPY/DEAD) and its win-rate/realized-R
+  breakdown per regime.
+- Market lifecycle state at entry (`ENUM_XAU_MARKET_LIFECYCLE`:
+  TREND_EARLY/DEVELOPING/HEALTHY/MATURE/LATE/EXHAUSTING/
+  TRANSITION_NEUTRAL/OPPOSITE_DIRECTION_FORMING/CONFIRMED) and its
+  win-rate/realized-R breakdown — this surfaced the single strongest
+  finding in the whole dataset (`OPPOSITE_DIRECTION_FORMING` at entry:
+  40.8% of all core entries, worst win rate, only net-negative lifecycle
+  state).
+- Signal-time-vs-entry-time regime comparison (real finding: regime never
+  changed within the 150-180s timer window in this dataset — 0 of 152).
+- Entry-timer checkpoint comparison: the timer only ever resolved at 150s
+  or 180s in this run (120s never independently resolved a candidate), so
+  a genuine two-way — not three-way — checkpoint comparison was reported.
+- A deterministic entry-timing classification (chased / near-signal-price
+  / moderate-drift / price-improved) built from the EA's own
+  `moveFromIntendedEntryR` field, with performance broken out per bucket.
+
+**Two real parsing bugs were found and fixed while building this pass,
+disclosed here since they affected earlier intermediate output (never
+committed):** (1) `candidateId`/`executionKey`/`origin`/`slot` fields
+contain an embedded MQL5 `TimeToString` value ("2026.05.18 07:00:30",
+with a literal space between date and time) that a naive
+"key=value-until-next-whitespace" tokenizer truncates mid-value, silently
+corrupting the join key. Fixed by joining the date/time halves before
+tokenizing. (2) `ENTRY_TIMER_STARTED`/`ENTRY_DELAY_COMPLETED` both
+re-fire on every re-validation tick while a candidate's timer is running,
+not once — keying a dict by `candidateId` alone silently keeps whichever
+occurrence is read last, not necessarily the one that actually triggered
+execution. Fixed by anchoring the join on `M30_EXECUTION_CONFIRMED`'s own
+`positionId` field, which **is** genuinely 1:1 with a real ticket (152 of
+152 CORE positions matched cleanly after the fix, 100% coverage).
+
+## What remains explicitly NOT attempted (real, disclosed gaps — not fabricated)
+
+- **Liquidity-sweep classification**: verified directly against the
+  journal — the EA's own `liquiditySweep` field reads `UNKNOWN` in every
+  one of 152 occurrences in this run. This is not a missing extraction;
+  the bot's own classifier for this is not populated in the build that
+  produced this replay. No sweep label is reported anywhere in this
+  report as a result.
+- **False-breakout reclassification**: BRKT_UP/BRKT_DN regime reads are
+  captured and reported, but confirming whether a specific breakout later
+  reverted (making it a "false" breakout after the fact) would require
+  tracking price independently of the trade's own outcome — not
+  attempted.
+- **Post-exit price movement** (5/15/30/60 minutes after each exit): no
+  per-bar M10 close-price series is logged anywhere in this journal (only
+  event-triggered snapshots at signal/entry/exit moments). Reconstructing
+  one would require either a separate bar-history export or new
+  telemetry and a re-run, per this project's own instrumentation-then-
+  rerun policy — not attempted this pass.
+- **Strategy-pattern breakdown beyond the raw setup tag**: verified —
+  every one of the 152 core campaigns in this run uses the single setup
+  tag `M30_CONSENSUS_CORE_<slot>`. M30 consensus mode has only one active
+  strategy/setup path; the pullback/reversal/breakout/HTF-trend-follow
+  labels from the original request are M10-legacy-mode setup names this
+  run never uses. A breakdown beyond the setup tag would report the same
+  152 rows under a different heading, not real additional variety.
+- **Market-type transition matrix** (signal regime → entry regime →
+  result): not built as a separate table because regime never changed
+  between signal and entry in this dataset — the matrix would have
+  exactly one non-empty diagonal cell per regime, already shown in the
+  regime table.
+- **The master trade-journey funnel diagram** (candidate → timer → entry
+  → drawdown → first profit → MFE → protection → exit → post-exit) as a
+  standalone PNG/SVG — not built this pass.
 
 These are legitimate, real follow-on work if the owner wants to go deeper
-after reviewing this Phase 1 extraction — none of them were faked or
-approximated here in their absence.
+— none of them were faked or approximated here in their absence.
