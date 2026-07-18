@@ -28,10 +28,10 @@ def test_canonical_and_backend_sources_match():
     assert EA == BACKEND
 
 
-def test_release_identity_is_v6258():
-    assert '#define XAUAI_EA_VERSION "v6.25.8"' in EA
-    assert '#define XAUAI_EA_VERSION_NUM "6.25.8"' in EA
-    assert '#property version   "6.258"' in EA
+def test_release_identity_is_v6259():
+    assert '#define XAUAI_EA_VERSION "v6.25.9"' in EA
+    assert '#define XAUAI_EA_VERSION_NUM "6.25.9"' in EA
+    assert '#property version   "6.259"' in EA
 
 
 def test_profile_assignment_is_trend_up_only_and_truthfully_named():
@@ -49,7 +49,7 @@ def test_profile_is_frozen_at_core_and_pyramids_inherit_without_mixing():
     core = ea_section("void XAU_CampaignOpenCore(", "void XAU_CampaignRegisterAdd(")
     add = ea_section("void XAU_CampaignRegisterAdd(", "string XAU_TryConvertBasketToSingleFloor")
     pyramid = ea_section("void CheckPyramidOpportunity()", "//+------------------------------------------------------------------+\n//| TICK")
-    assert "XAU_OwnerExitProfileForEntryRegime(currentRegime)" in core
+    assert "XAU_OwnerExitProfileForEntryRegime(frozenEntryRegime)" in core
     assert "OWNER_EXIT_PROFILE_FROZEN" in core
     assert "OWNER_EXIT_PROFILE_INHERITED" in add
     assert "mixedProfiles=false" in add
@@ -85,11 +85,12 @@ def test_one_owner_floor_calculation_is_shared_by_individual_and_basket():
 
 
 def test_every_broker_close_and_modify_obeys_owner_floor():
-    assert 'if(!XAU_OwnerProtectedFloorAllowsClose(ticket, ctx)) return false;' in EA
+    assert 'bool OWNER_R_EXIT_CLOSE_ONLY(' in EA
+    assert 'if(!externalManual && !initialStopIntegrity && !XAU_OwnerProtectedFloorAllowsClose(ticket, ctx))' in EA
     assert 'if(!XAU_OwnerProtectedFloorAllowsModify(ticket, newSL, logTag))' in EA
     assert EA.count("OWNER_FLOOR_OVERRIDE | attempted_exit_authority=%s") >= 3
     assert "action=REJECT_LOWER_EXIT" in EA
-    assert "R_PROFIT_GUARANTEE_FLOOR_BREACH" in EA
+    assert "OWNER_R_EXIT_FLOOR_BREACH" in EA
 
 
 def test_full_structural_one_r_replaces_universal_point_75_cap():
@@ -107,16 +108,17 @@ def test_full_structural_one_r_replaces_universal_point_75_cap():
 def test_restart_schema_fallbacks_preserve_full_original_risk():
     assert "ownerEffectiveRiskUSD = schema >= 3 ? FileReadNumber(h) : coreMoneyRisk;" in EA
     assert "effectiveInitialRisk = schema >= 3 ? FileReadNumber(h) : origRisk;" in EA
-    assert "#define XAU_BASKET_STATE_SCHEMA_VERSION 4" in EA
+    assert "#define XAU_BASKET_STATE_SCHEMA_VERSION 5" in EA
     assert "#define R_EXIT_STATE_SCHEMA_VERSION 4" in EA
     assert "OWNER_EXIT_PROFILE_LEGACY_MIGRATED" in EA
 
 
-def test_breakout_up_and_down_are_hard_blocked_without_bypass():
+def test_breakout_up_and_down_use_single_owner_scenario_authority():
     fn = ea_section("bool XAU_OwnerEntryPermission(", "bool XAU_FinalEntryArbiter(")
     assert "currentRegime == REGIME_BREAKOUT_UP || currentRegime == REGIME_BREAKOUT_DOWN" in fn
-    assert "BREAKOUT_REGIME_HARD_BLOCK" in fn
-    assert "OWNER_BRKT_UP_ENTRY_BLOCK" in fn and "OWNER_BRKT_DN_ENTRY_BLOCK" in fn
+    assert "OWNER_BREAKOUT_EXECUTION_POLICY" in fn
+    assert "OWNER_BREAKOUT_INVERSE" in EA
+    assert "BREAKOUT_REGIME_HARD_BLOCK" not in fn
     assert "canonicalGrade !=" not in fn
     assert "OWNER_BRKT_UP_REQUIRES_A_OR_A_PLUS" not in EA
     assert EA.count('XAU_OwnerEntryPermission("CANDIDATE_ACCEPTANCE"') >= 3
@@ -166,5 +168,5 @@ def test_required_policy_logs_are_present_and_state_change_scoped():
     assert "OWNER_EXIT_PROFILE | profile=GENERAL | first_trigger_r=0.40 | first_floor_r=0.30 | adaptive_trigger_r=0.50 | adaptive_lock_pct=70" in EA
     assert "OWNER_EXIT_PROFILE | profile=TREND_UP | first_trigger_r=0.50 | first_floor_r=0.40 | adaptive_trigger_r=0.70 | adaptive_lock_pct=70" in EA
     assert "OWNER_FLOOR_UPDATE | profile=%s | peak_r=%.3f | previous_floor_r=%.3f | new_floor_r=%.3f | reason=%s" in EA
-    assert "BREAKOUT_REGIME_HARD_BLOCK | regime=%s | action=SKIP_SIGNAL | reason=OWNER_POLICY | trade_opened=false" in EA
+    assert "OWNER_BREAKOUT_EXECUTION_POLICY | mode=%s | regime=%s" in EA
     assert "OWNER_RISK_POLICY | structural_sl_r=1.00" in EA

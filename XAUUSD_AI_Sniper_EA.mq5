@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M10 Gold Edition|
-//|   v6.25.8 - Final Owner Breakout, Risk and Exit Policy           |
+//|   v6.25.9 - Owner R-Exit Single-Authority Cleanup                |
 //|   BRKT_UP and BRKT_DN are hard-blocked at the canonical pre-order |
 //|   authority. No owner time-window blackout exists. Every approved |
 //|   normal/re-entry/pyramid trade uses full configured risk against |
@@ -1902,8 +1902,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.258"
-#property description "XAUUSD AI Sniper v6.25.8 final owner breakout, risk and exit policy."
+#property version   "6.259"
+#property description "XAUUSD AI Sniper v6.25.9 owner R-exit single-authority production cleanup."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -1987,10 +1987,10 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.8"
-#define XAUAI_EA_VERSION_NUM "6.25.8"
-#define XAUAI_BUILD_HASH "v6258-final-owner-breakout-risk-exit-policy-20260718"
-#define XAU_COUNTER_EXCURSION_BUILD true
+#define XAUAI_EA_VERSION "v6.25.9"
+#define XAUAI_EA_VERSION_NUM "6.25.9"
+#define XAUAI_BUILD_HASH "v6259-owner-r-exit-inverse-breakout-20260718"
+#define XAU_COUNTER_EXCURSION_BUILD false
 
 // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
 // Every primary-signal module (pressure, exhaustion, structure, reward-room,
@@ -3048,7 +3048,15 @@ enum ENUM_COUNTER_MODE
    COUNTER_SHADOW        = 1,  // detects + simulates + logs; sends no order
    COUNTER_EXECUTE  = 2   // sends real orders -- demo AND live accounts, same as the normal strategy
 };
-input ENUM_COUNTER_MODE InpCounterExcursionMode        = COUNTER_EXECUTE; // v6.21.2 owner directive 2026-07-13: this feature was built to be active and used -- ON by default. Fully isolated from the normal path (own magic InpCounterExcursionMagicNumber, own comment prefix, own cooldown, own risk model -- see XAU_TryCounterExcursionEntry). Does not consume InpMaxOpenTrades slots or todayTradeCount (those only count InpMagicNumber positions/opens) and never claims the normal cross-instance lock.
+input ENUM_COUNTER_MODE InpCounterExcursionMode        = COUNTER_OFF; // v6.25.9 owner directive: production Counter Excursion is compiled OFF. Non-OFF saved chart/tester inputs are ignored by the hard build gate.
+
+enum ENUM_XAU_OWNER_BREAKOUT_EXECUTION_MODE
+{
+   OWNER_BREAKOUT_BLOCK=0,   // Scenario A baseline
+   OWNER_BREAKOUT_NORMAL=1,  // Scenario B comparison
+   OWNER_BREAKOUT_INVERSE=2  // Scenario C production experiment (default)
+};
+input ENUM_XAU_OWNER_BREAKOUT_EXECUTION_MODE InpOwnerBreakoutExecutionMode=OWNER_BREAKOUT_INVERSE;
 // CORRECTED (owner directive): the prior baseline set counterRiskPct =
 // InpNormalRiskPct directly -- InpNormalRiskPct is the MAIN bot's own flat
 // 15%-of-EQUITY target for a fully-qualified A/A+ trade (see its definition:
@@ -4814,6 +4822,7 @@ struct XAU_EntryDecisionSnapshot
    datetime decisionTime;
    datetime closedPrimaryBarTime;
    int      signalDirection;
+   int      entryRegime;       // immutable canonical regime captured with the approved candidate
    int      biasDirection;
    int      bosDirection;
    string   structureState;
@@ -4901,6 +4910,8 @@ struct XAU_CampaignState
    // no live regime fluctuation may switch it later.
    int      ownerEntryRegime;
    int      ownerExitProfile;
+   int      ownerOriginalSignalDirection;
+   bool     ownerBreakoutInversionApplied;
    double   ownerOriginalStructuralOneRDistance;
    double   ownerEffectiveHardStopDistance;
    double   ownerOriginalRiskUSD;
@@ -5595,9 +5606,19 @@ void XAU_CampaignOpenCore(int direction, string setupName, ENUM_XAU_TRADE_HORIZO
                           ulong coreTicket = 0, double coreMoneyRiskUSD = 0.0,
                           double originalOneRDistance = 0.0,
                           double effectiveHardStopDistance = 0.0,
-                          double effectiveRiskUSD = 0.0)
+                          double effectiveRiskUSD = 0.0,
+                          ENUM_REGIME frozenEntryRegime = REGIME_RANGING,
+                          int originalSignalDirection = 0,
+                          bool breakoutInversionApplied = false)
 {
    int slot = XAU_CampaignSlot(direction);
+   string setupUpper = setupName;
+   StringToUpper(setupUpper);
+   bool ownerProfileReentryInheritance =
+      (StringFind(setupUpper,"RE_ENTRY") >= 0 || StringFind(setupUpper,"RE-ENTRY") >= 0) &&
+      g_campaign[slot].campaignId > 0;
+   int priorOwnerEntryRegime = g_campaign[slot].ownerEntryRegime;
+   int priorOwnerExitProfile = g_campaign[slot].ownerExitProfile;
    g_campaign[slot].active                    = true;
    g_campaign[slot].campaignId                = g_nextCampaignId++;
    g_campaign[slot].symbol                    = Symbol();
@@ -5634,9 +5655,15 @@ void XAU_CampaignOpenCore(int direction, string setupName, ENUM_XAU_TRADE_HORIZO
    g_campaign[slot].invalidationReason        = "";
    g_campaign[slot].reversalConfirmationState = ALLOW_CORE;
 
-   ENUM_XAU_OWNER_EXIT_PROFILE frozenProfile = XAU_OwnerExitProfileForEntryRegime(currentRegime);
-   g_campaign[slot].ownerEntryRegime                     = (int)currentRegime;
+   ENUM_XAU_OWNER_EXIT_PROFILE frozenProfile = ownerProfileReentryInheritance
+      ? (ENUM_XAU_OWNER_EXIT_PROFILE)priorOwnerExitProfile
+      : XAU_OwnerExitProfileForEntryRegime(frozenEntryRegime);
+   g_campaign[slot].ownerEntryRegime                     = ownerProfileReentryInheritance
+                                                          ? priorOwnerEntryRegime
+                                                          : (int)frozenEntryRegime;
    g_campaign[slot].ownerExitProfile                     = (int)frozenProfile;
+   g_campaign[slot].ownerOriginalSignalDirection         = originalSignalDirection==0?direction:originalSignalDirection;
+   g_campaign[slot].ownerBreakoutInversionApplied        = breakoutInversionApplied;
    g_campaign[slot].ownerOriginalStructuralOneRDistance  = originalOneRDistance;
    g_campaign[slot].ownerEffectiveHardStopDistance       = effectiveHardStopDistance;
    g_campaign[slot].ownerOriginalRiskUSD                 = coreMoneyRiskUSD;
@@ -5656,16 +5683,21 @@ void XAU_CampaignOpenCore(int direction, string setupName, ENUM_XAU_TRADE_HORIZO
    g_campaign[slot].basketCloseInProgress     = false;
    g_campaign[slot].basketConversionPending    = false;
    g_campaign[slot].basketConversionRetryCount = 0;
+   g_campaignBasketStateDirty                  = true;
 
    PrintFormat("CAMPAIGN_OPENED | %s dir=%s setup=%s horizon=%s invalidation=%.2f dest1=%.2f destPrimary=%.2f destRunner=%.2f coreTicket=%I64u basketOneRMoney=%.2f",
                XAU_CampaignIdText(g_campaign[slot].campaignId), direction==1?"BUY":"SELL", setupName,
                XAU_TradeHorizonName(horizon), structuralInvalidation, firstDestination,
                primaryDestination, runnerDestination, coreTicket, g_campaign[slot].basketOneRMoney);
    PrintFormat("OWNER_EXIT_PROFILE_FROZEN | campaignId=%s entryRegime=%s profile=%s coreTicket=%I64u originalOneRDistance=%.5f effectiveHardStopDistance=%.5f originalRiskUSD=%.2f effectiveRiskUSD=%.2f",
-               XAU_CampaignIdText(g_campaign[slot].campaignId), RegimeName(),
+               XAU_CampaignIdText(g_campaign[slot].campaignId),
+               ownerProfileReentryInheritance ? EnumToString((ENUM_REGIME)priorOwnerEntryRegime) : EnumToString(frozenEntryRegime),
                XAU_OwnerExitProfileName(frozenProfile), coreTicket,
                originalOneRDistance, effectiveHardStopDistance,
                coreMoneyRiskUSD, effectiveRiskUSD);
+   if(ownerProfileReentryInheritance)
+      PrintFormat("OWNER_EXIT_PROFILE_INHERITED | campaignId=%s | leg=REENTRY | profile=%s | source_previous_campaign=true | mixedProfiles=false",
+                  XAU_CampaignIdText(g_campaign[slot].campaignId), XAU_OwnerExitProfileName(frozenProfile));
 }
 
 // A pyramid add belongs to the existing campaign in that direction -- it
@@ -5945,6 +5977,8 @@ void XAU_ReconcileCampaignOnInit()
       g_campaign[slot].invalidated               = false;
       g_campaign[slot].ownerEntryRegime          = (int)currentRegime;
       g_campaign[slot].ownerExitProfile          = (int)XAU_OwnerExitProfileForEntryRegime(currentRegime);
+      g_campaign[slot].ownerOriginalSignalDirection = direction;
+      g_campaign[slot].ownerBreakoutInversionApplied = false;
       PrintFormat("CAMPAIGN_RESTART_RECONCILE | dir=%s activePositions=%d | reconstructed after EA/terminal restart -- historical exhaustion/movement-consumed/lifecycle evidence lost, tracking resumes from current broker state",
                   direction == 1 ? "BUY" : "SELL", counts[slot]);
    }
@@ -5964,7 +5998,7 @@ void XAU_ReconcileCampaignOnInit()
 // (a restart mid-pending-basket-to-single-conversion must not silently lose
 // the armed floor -- see XAU_CampaignBasketState_Load's relaxed activePositionCount
 // gate below).
-#define XAU_BASKET_STATE_SCHEMA_VERSION 4
+#define XAU_BASKET_STATE_SCHEMA_VERSION 5
 bool g_campaignBasketStateDirty = false;
 
 string XAU_CampaignBasketStateFilePath()
@@ -6004,6 +6038,8 @@ void XAU_CampaignBasketState_Save(bool force = false)
                 g_campaign[slot].basketConversionPending ? 1 : 0,
                 g_campaign[slot].basketConversionRetryCount,
                 g_campaign[slot].ownerEntryRegime, g_campaign[slot].ownerExitProfile,
+                g_campaign[slot].ownerOriginalSignalDirection,
+                g_campaign[slot].ownerBreakoutInversionApplied ? 1 : 0,
                 DoubleToString(g_campaign[slot].ownerOriginalStructuralOneRDistance, 5),
                 DoubleToString(g_campaign[slot].ownerEffectiveHardStopDistance, 5),
                 DoubleToString(g_campaign[slot].ownerOriginalRiskUSD, 2),
@@ -6044,7 +6080,7 @@ void XAU_CampaignBasketState_Load()
    while(!FileIsEnding(h))
    {
       int schema = (int)FileReadNumber(h);
-      if(schema != 2 && schema != 3 && schema != XAU_BASKET_STATE_SCHEMA_VERSION)
+      if(schema != 2 && schema != 3 && schema != 4 && schema != XAU_BASKET_STATE_SCHEMA_VERSION)
       {
          PrintFormat("BASKET_STATE_RESTORED path=%s result=SCHEMA_MISMATCH found=%d expected=%d -- aborting restore of remaining rows",
                      path, schema, XAU_BASKET_STATE_SCHEMA_VERSION);
@@ -6068,6 +6104,8 @@ void XAU_CampaignBasketState_Load()
       int conversionRetryCount = (int)FileReadNumber(h);
       int ownerEntryRegime = schema >= 3 ? (int)FileReadNumber(h) : (int)REGIME_RANGING;
       int ownerExitProfile = schema >= 3 ? (int)FileReadNumber(h) : (int)OWNER_EXIT_GENERAL;
+      int ownerOriginalSignalDirection = schema >= 5 ? (int)FileReadNumber(h) : 0;
+      bool ownerBreakoutInversionApplied = schema >= 5 ? FileReadNumber(h) != 0 : false;
       double ownerOriginalOneRDistance = schema >= 3 ? FileReadNumber(h) : 0.0;
       double ownerEffectiveHardStopDistance = schema >= 3 ? FileReadNumber(h) : 0.0;
       double ownerOriginalRiskUSD = schema >= 3 ? FileReadNumber(h) : coreMoneyRisk;
@@ -6091,7 +6129,8 @@ void XAU_CampaignBasketState_Load()
       // armed floor from a saved file describing that exact pending state
       // must still be restored (never silently dropped) rather than treated
       // as "not currently a live basket".
-      bool countPlausible = g_campaign[slot].activePositionCount >= 2 ||
+      bool countPlausible = (schema >= 5 && g_campaign[slot].activePositionCount >= 1) ||
+                            g_campaign[slot].activePositionCount >= 2 ||
                             (g_campaign[slot].activePositionCount == 1 && armed);
       if(!g_campaign[slot].active || g_campaign[slot].direction != expectedDirection || !countPlausible)
       {
@@ -6115,6 +6154,10 @@ void XAU_CampaignBasketState_Load()
       g_campaign[slot].basketConversionRetryCount = conversionRetryCount;
       g_campaign[slot].ownerEntryRegime = ownerEntryRegime;
       g_campaign[slot].ownerExitProfile = ownerExitProfile;
+      g_campaign[slot].ownerOriginalSignalDirection = ownerOriginalSignalDirection==0
+                                                       ? expectedDirection
+                                                       : ownerOriginalSignalDirection;
+      g_campaign[slot].ownerBreakoutInversionApplied = ownerBreakoutInversionApplied;
       g_campaign[slot].ownerOriginalStructuralOneRDistance = ownerOriginalOneRDistance;
       g_campaign[slot].ownerEffectiveHardStopDistance = ownerEffectiveHardStopDistance;
       g_campaign[slot].ownerOriginalRiskUSD = ownerOriginalRiskUSD;
@@ -9327,6 +9370,33 @@ void XAU_SetPendingSLReason(ulong ticket, double newSL, string logTag)
 //+------------------------------------------------------------------+
 bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curPrice, string logTag)
 {
+   // v6.25.9 owner directive -- broker SL writes are deny-by-default. The
+   // original 1.00R hard stop and the owner R-floor are the only production
+   // authorities allowed to modify a normal position. Every legacy BE,
+   // trail, AI, TTM, EMA, basket, recovery and smart-exit caller remains
+   // observable but cannot reach the broker.
+   bool ownerModifyAuthority =
+      (StringFind(logTag, "OWNER_INITIAL_1R_HARD_STOP") == 0) ||
+      (StringFind(logTag, "OWNER_PYRAMID_1R_HARD_STOP") == 0) ||
+      (StringFind(logTag, "OWNER_R_EXIT_FLOOR") == 0) ||
+      (StringFind(logTag, "PRIMARY_EXIT_FLOOR") == 0);
+   if(!ownerModifyAuthority)
+   {
+      static ulong lastLegacyModifyTicket = 0;
+      static string lastLegacyModifyTag = "";
+      static datetime lastLegacyModifyLogAt = 0;
+      if(lastLegacyModifyTicket != ticket || lastLegacyModifyTag != logTag ||
+         TimeCurrent() - lastLegacyModifyLogAt >= 60)
+      {
+         lastLegacyModifyTicket = ticket;
+         lastLegacyModifyTag = logTag;
+         lastLegacyModifyLogAt = TimeCurrent();
+         PrintFormat("OWNER_R_EXIT_MODIFY_REJECTED_LEGACY_AUTHORITY | ticket=%I64u | attempted_authority=%s | action=TELEMETRY_ONLY",
+                     ticket, logTag);
+      }
+      return false;
+   }
+
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    int    digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    long   stopsLvl  = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
@@ -10197,12 +10267,49 @@ string PropFirmLossLockReason()
 //+------------------------------------------------------------------+
 //| INIT                                                             |
 //+------------------------------------------------------------------+
+bool XAU_RunOwnerRExitSelfTests()
+{
+   int passed=0,failed=0;
+   double g039=XAU_ComputeOwnerRequiredFloorR(0.39,OWNER_EXIT_GENERAL);
+   double g040=XAU_ComputeOwnerRequiredFloorR(0.40,OWNER_EXIT_GENERAL);
+   double g080=XAU_ComputeOwnerRequiredFloorR(0.80,OWNER_EXIT_GENERAL);
+   double t049=XAU_ComputeOwnerRequiredFloorR(0.49,OWNER_EXIT_TREND_UP);
+   double t050=XAU_ComputeOwnerRequiredFloorR(0.50,OWNER_EXIT_TREND_UP);
+   double t100=XAU_ComputeOwnerRequiredFloorR(1.00,OWNER_EXIT_TREND_UP);
+   bool checks[14];
+   checks[0]=MathAbs(g039)<0.000001;
+   checks[1]=MathAbs(g040-0.30)<0.000001;
+   checks[2]=MathAbs(g080-0.56)<0.000001;
+   checks[3]=MathAbs(t049)<0.000001;
+   checks[4]=MathAbs(t050-0.40)<0.000001;
+   checks[5]=MathAbs(t100-0.70)<0.000001;
+   checks[6]=!XAU_OwnerRExitDecisionAllowsClose(0.45,0.26,0.30,OWNER_EXIT_GENERAL,"PROFIT_CLOSE");
+   checks[7]=!XAU_OwnerRExitDecisionAllowsClose(0.39,0.20,0.0,OWNER_EXIT_GENERAL,"R_EXIT_GIVEBACK_45");
+   checks[8]=!XAU_OwnerRExitDecisionAllowsClose(0.45,0.29,0.30,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_FLOOR_BREACH");
+   checks[9]=XAU_OwnerRExitDecisionAllowsClose(0.45,0.30,0.30,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_FLOOR_BREACH");
+   checks[10]=!XAU_OwnerRExitDecisionAllowsClose(1.00,0.69,0.70,OWNER_EXIT_TREND_UP,"OWNER_R_EXIT_FLOOR_BREACH");
+   checks[11]=XAU_OwnerRExitDecisionAllowsClose(1.00,0.70,0.70,OWNER_EXIT_TREND_UP,"OWNER_R_EXIT_FLOOR_BREACH");
+   checks[12]=MathMax(0.56,XAU_ComputeOwnerRequiredFloorR(0.60,OWNER_EXIT_GENERAL))>=0.56;
+   checks[13]=!XAU_COUNTER_EXCURSION_BUILD;
+   for(int i=0;i<14;i++)
+   {
+      if(checks[i]) passed++;
+      else { failed++; PrintFormat("OWNER_R_EXIT_SELF_TEST_FAIL | case=%d",i+1); }
+   }
+   PrintFormat("OWNER_R_EXIT_SELF_TEST_SUMMARY | passed=%d | failed=%d | counter_build_enabled=%s",
+               passed,failed,XAU_COUNTER_EXCURSION_BUILD?"true":"false");
+   return failed==0;
+}
+
 int OnInit()
 {
    if(StringLen(InpLicensePIN) == 0) { Alert("Enter PIN in Inputs tab."); return INIT_FAILED; }
    licenseValid = ValidatePIN(InpLicensePIN);
    if(!licenseValid) { Alert("Invalid PIN: " + InpLicensePIN); return INIT_FAILED; }
    Print("LICENSE OK: ", InpLicensePIN);
+
+   if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunOwnerRExitSelfTests())
+      return INIT_FAILED;
 
    // v6.21.2 Part 3 — CONFIG-AGREEMENT ASSERTION: InpNormalRiskPct (the sole normal-
    // entry risk authority) and InpMaxRiskPctEquity (the hard equity-% backstop) must
@@ -10224,23 +10331,28 @@ int OnInit()
    }
    PrintFormat("RISK_CONFIG_ASSERTION_PASSED | ConfiguredRisk=%.2f%% | SingleTradeCap=%.2f%% | AggregateRiskCap=%.2f%% | mode=FULL_RISK_BINARY",
                InpNormalRiskPct, InpMaxRiskPctEquity, InpMaxAggregateRiskPct);
+   Print("OWNER_ENTRY_TIME_POLICY | blackout=NONE | 06:10-07:30=ELIGIBLE_IF_NORMAL_LOGIC_APPROVES | 14:10-15:30=ELIGIBLE_IF_NORMAL_LOGIC_APPROVES");
+   PrintFormat("OWNER_BREAKOUT_EXECUTION_STARTUP | mode=%s | BRKT_UP=%s | BRKT_DN=%s | non_breakout=NORMAL_DIRECTION | counter=OFF | structural_sl_r=1.00 | exit_authority=OWNER_R_EXIT_ONLY | legacy_exits=TELEMETRY_ONLY",
+               XAU_OwnerBreakoutModeName(),
+               InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_BLOCK?"BLOCK":InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_NORMAL?"NORMAL":"INVERSE",
+               InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_BLOCK?"BLOCK":InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_NORMAL?"NORMAL":"INVERSE");
    if(!XAU_ValidateAdaptiveTransitionConfig())
    {
       Print("ADAPTIVE_TRANSITION_CONFIG ERROR: refusing initialization rather than running with contradictory direction/location authority.");
       return INIT_PARAMETERS_INCORRECT;
    }
 
-   // v6.21.2 Part 10 (owner directive 2026-07-13) — COUNTER_EXCURSION runtime proof.
-   // enabled=true by default; isolation flags below are structural facts about this
-   // build (CountMyPositions()/todayTradeCount/XAU_TryClaimEntryLock all key off
-   // InpMagicNumber only -- the counter path never touches any of them), not aspirational.
+   // v6.25.9 owner directive -- Counter Excursion is production-disabled at
+   // both source-default and immutable build-gate level. Saved chart/tester
+   // inputs cannot reactivate order sending.
    PrintFormat(
-      "COUNTER_EXCURSION: enabled=%s | mode=%s | magic=%d | normalMagic=%d | riskFraction=%.3f | "
+      "COUNTER_EXCURSION: enabled=false | mode=COUNTER_OFF | magic=%d | normalMagic=%d | riskFraction=%.3f | "
       "normalSlotIsolation=true | normalCooldownIsolation=true | normalLockIsolation=true | "
       "normalDailyCountIsolation=true | commentPrefix=XAU-COUNTER-EXC| normalCommentPrefix=XAU-SNIPER|",
-      InpCounterExcursionMode != COUNTER_OFF ? "true" : "false",
-      InpCounterExcursionMode == COUNTER_OFF ? "COUNTER_OFF" : (InpCounterExcursionMode == COUNTER_SHADOW ? "COUNTER_SHADOW" : "COUNTER_EXECUTE"),
       InpCounterExcursionMagicNumber, InpMagicNumber, InpCounterRiskFractionOfNormal);
+   if(InpCounterExcursionMode != COUNTER_OFF)
+      PrintFormat("COUNTER_EXCURSION_INPUT_OVERRIDDEN | requested_mode=%d | effective_mode=COUNTER_OFF | build_gate=false",
+                  (int)InpCounterExcursionMode);
 
    bool noLimit = XAU_NoLimitTradingModeActive();
    PrintFormat("NO_LIMIT_RESOLVED: NoLimitTradingMode=%s | DisableAllDailyLocks=%s | NoDailyLimitMode=%s | DailyGrowthLockEnabled=%s | DailyPauseEnabled=%s | DailyGrowthLock=%s | DailyProfitLock=%s | DailyPause=%s | Cooldown=%s | StopForDay=%s | ForceCloseByDailyLock=%s",
@@ -11488,6 +11600,7 @@ void XAU_CaptureDecisionSnapshot(int signal, string setupName, string grade,
    g_latestDecisionSnapshot.decisionTime    = TimeCurrent();
    g_latestDecisionSnapshot.closedPrimaryBarTime = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 1);
    g_latestDecisionSnapshot.signalDirection = signal;
+   g_latestDecisionSnapshot.entryRegime      = (int)currentRegime;
    g_latestDecisionSnapshot.biasDirection   = XAU_CurrentBiasDirection();
    g_latestDecisionSnapshot.bosDirection    = g_smc_bos_dir;
    g_latestDecisionSnapshot.structureState  = StringFormat("BOS=%+d HTF=%+d regime=%s",
@@ -17042,7 +17155,12 @@ void CheckPyramidOpportunity()
    double marginNeeded=0.0;
    if(!OrderCalcMargin(isBuy?ORDER_TYPE_BUY:ORDER_TYPE_SELL,Symbol(),addLot,entryPx,marginNeeded))
       return;
-   if(marginNeeded>accInfo.FreeMargin()*0.50) return;
+   if(marginNeeded>accInfo.FreeMargin())
+   {
+      PrintFormat("PYRAMID_BROKER_MARGIN_BLOCK | required=%.2f | free=%.2f | authority=REAL_BROKER_MARGIN | arbitrary_50pct_buffer=false",
+                  marginNeeded, accInfo.FreeMargin());
+      return;
+   }
 
    double pyramidEffectiveRiskUSD=addLot*RiskPerLotForDistance(pyramidGeometry.effectiveHardStopDistance);
    PrintFormat("OWNER_RISK_POLICY | structural_sl_r=1.00 | configured_risk_pct=%.2f | stop_distance=%.5f | lots=%.4f | expected_risk_usd=%.2f | path=PYRAMID",
@@ -17113,8 +17231,10 @@ void CheckPyramidOpportunity()
       }
    }
 
-   bool requestOk=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)
-                       :trade.Sell(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why);
+   // Owner R-exit is the only managed profit exit. Keep the calculated
+   // pyramid target for analysis/cloud display, but do not place a broker TP.
+   bool requestOk=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,0.0,"XAU-SNIPER|"+why)
+                       :trade.Sell(addLot,Symbol(),0,pyramidSL,0.0,"XAU-SNIPER|"+why);
    uint pyramidRetcode=trade.ResultRetcode();
    ulong dealTicket=trade.ResultDeal();
    ulong posId=0;
@@ -17150,7 +17270,7 @@ void CheckPyramidOpportunity()
       {
          PrintFormat("OWNER_SL_BROKER_CONFIRMATION_FAILED | path=PYRAMID ticket=%I64u requiredSL=%.5f actualSL=%.5f action=EMERGENCY_CLOSE",
                      pyLiveTicket,expectedPyramidSL,pyLiveSL);
-         SafePositionClose(pyLiveTicket,"OWNER_SL_BROKER_CONFIRMATION_FAILED");
+         OWNER_R_EXIT_CLOSE_ONLY(pyLiveTicket,"OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED",false);
       }
    }
    bool ok=XAU_BrokerOpenRetcodeAccepted(pyramidRetcode) && pyLiveConfirmed && pyramidOwnerSLConfirmed;
@@ -17189,6 +17309,20 @@ void CheckPyramidOpportunity()
                                      inheritedProfile);
          XAU_RExit_SyncNettingState(idx,liveDir==1,liveOpen,liveSL,liveVol,
                                     pyramidGeometry.finalOriginalRiskDistance);
+         int inheritedSlot=XAU_CampaignSlot(dir);
+         if(g_campaign[inheritedSlot].basketProtectionArmed &&
+            g_campaign[inheritedSlot].basketProtectedFloorR>0.0)
+         {
+            double priorInheritedFloor=g_rExit[idx].guaranteedFloorR;
+            g_rExit[idx].profitGuaranteeArmed=true;
+            g_rExit[idx].guaranteedFloorR=MathMax(g_rExit[idx].guaranteedFloorR,
+                                                  g_campaign[inheritedSlot].basketProtectedFloorR);
+            PrintFormat("OWNER_R_EXIT_FLOOR_INHERITED | ticket=%I64u | campaignId=%s | profile=%s | previous_floor_r=%.3f | inherited_floor_r=%.3f | final_floor_r=%.3f",
+                        liveTicket,XAU_CampaignIdText(g_campaign[inheritedSlot].campaignId),
+                        XAU_OwnerExitProfileName((ENUM_XAU_OWNER_EXIT_PROFILE)inheritedProfile),
+                        priorInheritedFloor,g_campaign[inheritedSlot].basketProtectedFloorR,
+                        g_rExit[idx].guaranteedFloorR);
+         }
          XAU_RExit_SaveState(true);
       }
    }
@@ -20112,6 +20246,44 @@ void PrintBacktestAuditReport()
 // caller, manual override included.
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
 {
+   // The analysis/timer/final-arbiter pipeline has already approved `signal`
+   // before OpenTrade is called. This is the one final execution mapping:
+   // fresh BRKT_UP/BRKT_DN candidates invert only in Scenario C; all other
+   // regimes retain their approved direction. A re-entry belonging to an
+   // already-inverted campaign inherits that campaign's actual direction and
+   // must not be inverted a second time.
+   int approvedSignalDirection=signal;
+   ENUM_REGIME frozenEntryRegime=currentRegime;
+   if(g_latestDecisionSnapshot.valid &&
+      g_latestDecisionSnapshot.signalDirection==approvedSignalDirection)
+      frozenEntryRegime=(ENUM_REGIME)g_latestDecisionSnapshot.entryRegime;
+   string reasonUpper=reason;
+   StringToUpper(reasonUpper);
+   bool reentrySource=StringFind(reasonUpper,"RE_ENTRY")>=0 || StringFind(reasonUpper,"RE-ENTRY")>=0;
+   int priorCampaignSlot=XAU_CampaignSlot(approvedSignalDirection);
+   bool inheritsInvertedCampaign=reentrySource &&
+      g_campaign[priorCampaignSlot].campaignId>0 &&
+      g_campaign[priorCampaignSlot].ownerBreakoutInversionApplied;
+   bool breakoutInversionApplied=false;
+   int executionDirection=approvedSignalDirection;
+   int ownerOriginalSignalDirection=approvedSignalDirection;
+   if(inheritsInvertedCampaign)
+   {
+      frozenEntryRegime=(ENUM_REGIME)g_campaign[priorCampaignSlot].ownerEntryRegime;
+      executionDirection=g_campaign[priorCampaignSlot].direction;
+      ownerOriginalSignalDirection=g_campaign[priorCampaignSlot].ownerOriginalSignalDirection;
+      breakoutInversionApplied=true;
+   }
+   else
+      executionDirection=XAU_ResolveOwnerBreakoutExecutionDirection(approvedSignalDirection,
+                                                                     frozenEntryRegime,
+                                                                     breakoutInversionApplied);
+   PrintFormat("OWNER_BREAKOUT_INVERSE_EXECUTION | mode=%s | regime=%s | original_signal=%s | execution=%s | inversion_applied=%s | inherited_campaign=%s | reason=OWNER_BREAKOUT_OPPOSITE_DIRECTION_POLICY",
+               XAU_OwnerBreakoutModeName(),XAU_OwnerRegimeLabel(frozenEntryRegime),
+               ownerOriginalSignalDirection==1?"BUY":"SELL",executionDirection==1?"BUY":"SELL",
+               breakoutInversionApplied?"true":"false",inheritsInvertedCampaign?"true":"false");
+   signal=executionDirection;
+
    // v6.23.0: Counter-Excursion is subordinate to the normal strategy. On a
    // hedging account its separate-magic position may coexist and must never
    // block/delay/cancel an approved normal entry. Counter execution itself is
@@ -21306,8 +21478,13 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    }
 
    bool requestOk;
-   if(signal == 1) requestOk = trade.Buy(lots, Symbol(), 0, sl, tp, "XAU-SNIPER|" + reason);
-   else requestOk = trade.Sell(lots, Symbol(), 0, sl, tp, "XAU-SNIPER|" + reason);
+   // Keep `tp` as analytical destination data, but send no broker TP: the
+   // owner R-exit floor is the sole managed profit-exit authority.
+   string ownerDirectionComment=StringFormat("XAU-SNIPER|ORIG=%s|EXEC=%s|REG=%s|INV=%s|%s",
+      ownerOriginalSignalDirection==1?"BUY":"SELL",signal==1?"BUY":"SELL",
+      XAU_OwnerRegimeLabel(frozenEntryRegime),breakoutInversionApplied?"Y":"N",reason);
+   if(signal == 1) requestOk = trade.Buy(lots, Symbol(), 0, sl, 0.0, ownerDirectionComment);
+   else requestOk = trade.Sell(lots, Symbol(), 0, sl, 0.0, ownerDirectionComment);
 
    uint brokerRetcode = trade.ResultRetcode();
    ulong openedDealTicket = trade.ResultDeal();
@@ -21343,7 +21520,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       {
          PrintFormat("OWNER_SL_BROKER_CONFIRMATION_FAILED | ticket=%I64u requiredSL=%.5f actualSL=%.5f action=EMERGENCY_CLOSE",
                      confirmedTicket, confirmedOwnerSL, confirmedSL);
-         SafePositionClose(confirmedTicket, "OWNER_SL_BROKER_CONFIRMATION_FAILED");
+         OWNER_R_EXIT_CLOSE_ONLY(confirmedTicket, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED", false);
       }
    }
    bool ok = XAU_BrokerOpenRetcodeAccepted(brokerRetcode) && liveConfirmed && ownerSLConfirmed;
@@ -21414,12 +21591,13 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                            coreOriginalStructuralSL, confirmedTP, confirmedTP, confirmedTP,
                            openedPosId, coreMoneyRiskUSD,
                            ownerOriginalOneRDistance, ownerEffectiveSLDistance,
-                           coreEffectiveRiskUSD);
+                           coreEffectiveRiskUSD,frozenEntryRegime,
+                           ownerOriginalSignalDirection,breakoutInversionApplied);
 
       if(InpDecisionMode == XAU_DECISION_M30_THREE_M10_CONSENSUS &&
-         g_m30Decision.candidateCreated && g_m30Decision.preferredDirection == signal)
+         g_m30Decision.candidateCreated && g_m30Decision.preferredDirection == approvedSignalDirection)
       {
-         string confirmedExecutionKey = XAU_CoreExecutionKey(signal);
+         string confirmedExecutionKey = XAU_CoreExecutionKey(approvedSignalDirection);
          XAU_M30PersistProcessedSlot(g_m30Decision.slotCloseTime);
          g_m30LastProcessedSlotLoaded = g_m30Decision.slotCloseTime;
          XAU_M30PersistCandidateTerminal();
@@ -24339,13 +24517,17 @@ bool XAU_OwnerProtectedFloorAllowsClose(ulong ticket, string ctx)
 
    ulong positionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
    int idx = XAU_RExit_FindIdx(positionId);
-   if(idx < 0) return true;
+   if(idx < 0)
+   {
+      PrintFormat("OWNER_R_EXIT_STATE_MISSING_FAIL_CLOSED | ticket=%I64u | attempted_authority=%s | action=REJECT_CLOSE",
+                  ticket, ctx);
+      return false;
+   }
 
    ENUM_XAU_OWNER_EXIT_PROFILE profile = (ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile;
    double ownerRequiredFloorR = XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile);
    double protectedFloorR = MathMax(g_rExit[idx].guaranteedFloorR, ownerRequiredFloorR);
    if(protectedFloorR <= 0.0) return true;
-   if(XAU_IsOwnerFloorEmergencyClose(ctx)) return true;
 
    double riskUSD = g_rExit[idx].cumulativeOriginalRiskUSD;
    if(riskUSD <= 0.0) return true;
@@ -24364,6 +24546,8 @@ bool XAU_OwnerProtectedFloorAllowsClose(ulong ticket, string ctx)
       lastOverrideLogAt = TimeCurrent();
       PrintFormat("OWNER_FLOOR_OVERRIDE | attempted_exit_authority=%s | attempted_exit_r=%.3f | protected_floor_r=%.3f | action=REJECT_LOWER_EXIT",
                   ctx, attemptedExitR, protectedFloorR);
+      PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_BELOW_FLOOR | ticket=%I64u | attempted_authority=%s | attempted_exit_r=%.3f | protected_floor_r=%.3f",
+                  ticket, ctx, attemptedExitR, protectedFloorR);
    }
    return false;
 }
@@ -24376,7 +24560,18 @@ bool XAU_OwnerProtectedFloorAllowsModify(ulong ticket, double proposedSL, string
 
    ulong positionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
    int idx = XAU_RExit_FindIdx(positionId);
-   if(idx < 0 || g_rExit[idx].originalStopDistance <= 0.0) return true;
+   if(idx < 0 || g_rExit[idx].originalStopDistance <= 0.0)
+   {
+      // Initial 1R placement happens before R-state registration. Every
+      // later owner-floor write must fail closed if its persisted basis is
+      // unavailable.
+      if(StringFind(ctx,"OWNER_INITIAL_1R_HARD_STOP") == 0 ||
+         StringFind(ctx,"OWNER_PYRAMID_1R_HARD_STOP") == 0)
+         return true;
+      PrintFormat("OWNER_R_EXIT_STATE_MISSING_FAIL_CLOSED | ticket=%I64u | attempted_authority=%s | action=REJECT_MODIFY",
+                  ticket, ctx);
+      return false;
+   }
 
    ENUM_XAU_OWNER_EXIT_PROFILE profile = (ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile;
    double protectedFloorR = MathMax(g_rExit[idx].guaranteedFloorR,
@@ -24411,30 +24606,75 @@ bool XAU_OwnerProtectedFloorAllowsModify(ulong ticket, double proposedSL, string
    return false;
 }
 
-// v6.4.20/v6.6.1: Wrapper for every position close. Logs server retcode + GetLastError() on failure.
-// Returns true if MT5 accepted the close request, false if rejected or blocked by owner/loss floor.
-bool SafePositionClose(ulong ticket, string ctx = "")
+// v6.25.9 -- THE ONLY broker-facing market-close authority for normal
+// production positions. All legacy callers converge through SafePositionClose
+// below and are rejected. The only automated approval is an owner-floor close
+// while executable profit is still at/above the protected floor. An explicit
+// Command Center manual request is reported as EXTERNAL_MANUAL, never as an EA
+// strategy authority.
+bool XAU_IsOwnerRExitApprovedCloseReason(string ctx)
 {
-   if(!XAU_OwnerProtectedFloorAllowsClose(ticket, ctx)) return false;
-   if(!XAU_LossCloseFirewallAllows(ticket, ctx, 0.0)) return false;
+   return StringFind(ctx, "OWNER_R_EXIT_FLOOR_BREACH") == 0 ||
+          StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0;
+}
+
+bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = false)
+{
+   if(!PositionSelectByTicket(ticket)) return true;
+   if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber ||
+      PositionGetString(POSITION_SYMBOL) != Symbol())
+      return false;
+
+   if(!externalManual && !XAU_IsOwnerRExitApprovedCloseReason(ctx))
+   {
+      ulong positionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      int idx = XAU_RExit_FindIdx(positionId);
+      if(idx >= 0)
+      {
+         ENUM_XAU_OWNER_EXIT_PROFILE profile = (ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile;
+         if(XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile) <= 0.0)
+            PrintFormat("OWNER_R_EXIT_BROKER_SL_ONLY_BEFORE_TRIGGER | ticket=%I64u | profile=%s | peak_r=%.3f | rejected_authority=%s",
+                        ticket, XAU_OwnerExitProfileName(profile), g_rExit[idx].peakR, ctx);
+      }
+      PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_LEGACY_AUTHORITY | ticket=%I64u | attempted_authority=%s | action=TELEMETRY_ONLY",
+                  ticket, ctx);
+      return false;
+   }
+
+   // Initial-stop integrity is an owner risk-policy exception during the
+   // broker-open reconciliation window, before campaign/R state exists. It
+   // prevents a newly accepted order being left completely naked.
+   bool initialStopIntegrity = StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0;
+   if(!externalManual && !initialStopIntegrity && !XAU_OwnerProtectedFloorAllowsClose(ticket, ctx))
+      return false;
+
+   PrintFormat("OWNER_R_EXIT_DECISION | ticket=%I64u | authority=%s | decision=APPROVE | external_manual=%s",
+               ticket, ctx, externalManual ? "true" : "false");
    bool ok = trade.PositionClose(ticket);
    if(!ok)
-      PrintFormat("⚠  CLOSE FAILED #%I64u ctx=%s ret=%u (%s) err=%d",
-                  ticket, ctx, trade.ResultRetcode(),
-                  trade.ResultRetcodeDescription(), GetLastError());
-   return ok;
+   {
+      PrintFormat("OWNER_R_EXIT_CLOSE_FAILED | ticket=%I64u | authority=%s | ret=%u | ret_text=%s | err=%d",
+                  ticket, ctx, trade.ResultRetcode(), trade.ResultRetcodeDescription(), GetLastError());
+      return false;
+   }
+   PrintFormat("OWNER_R_EXIT_CLOSE_APPROVED | ticket=%I64u | authority=%s | external_manual=%s | ret=%u",
+               ticket, externalManual ? "MANUAL_EXTERNAL" : "OWNER_R_EXIT", externalManual ? "true" : "false",
+               trade.ResultRetcode());
+   return true;
+}
+
+bool SafePositionClose(ulong ticket, string ctx = "")
+{
+   bool externalManual = StringFind(ctx, "REMOTE_FORCE_CLOSE") == 0 ||
+                         StringFind(ctx, "REMOTE_COMMAND_CLOSE") == 0;
+   return OWNER_R_EXIT_CLOSE_ONLY(ticket, ctx, externalManual);
 }
 
 bool SafePositionClosePartial(ulong ticket, double lots, string ctx = "")
 {
-   if(!XAU_OwnerProtectedFloorAllowsClose(ticket, ctx)) return false;
-   if(!XAU_LossCloseFirewallAllows(ticket, ctx, lots)) return false;
-   bool ok = trade.PositionClosePartial(ticket, lots);
-   if(!ok)
-      PrintFormat("⚠  PARTIAL CLOSE FAILED #%I64u ctx=%s lots=%.2f ret=%u (%s) err=%d",
-                  ticket, ctx, lots, trade.ResultRetcode(),
-                  trade.ResultRetcodeDescription(), GetLastError());
-   return ok;
+   PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_LEGACY_AUTHORITY | ticket=%I64u | attempted_authority=%s | attempted_partial_lots=%.2f | action=TELEMETRY_ONLY_NO_PARTIALS",
+               ticket, ctx, lots);
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -24849,6 +25089,21 @@ double XAU_ComputeOwnerRequiredFloorR(double peakR, ENUM_XAU_OWNER_EXIT_PROFILE 
    if(peakR < 0.40) return 0.0;
    if(peakR < 0.50) return 0.30;
    return MathMax(0.30, peakR * 0.70);
+}
+
+// Pure deterministic decision used by the live close chokepoint and by the
+// Strategy Tester self-test. A legacy reason is never approvable; a floor
+// close is never approvable before trigger or below the monotonic floor.
+bool XAU_OwnerRExitDecisionAllowsClose(double peakR, double currentR,
+                                       double previousFloorR,
+                                       ENUM_XAU_OWNER_EXIT_PROFILE profile,
+                                       string reason)
+{
+   if(StringFind(reason,"OWNER_R_EXIT_FLOOR_BREACH") != 0) return false;
+   double requiredFloorR=MathMax(previousFloorR,
+                                 XAU_ComputeOwnerRequiredFloorR(peakR,profile));
+   if(requiredFloorR<=0.0) return false;
+   return currentR+0.000001>=requiredFloorR;
 }
 
 string XAU_OwnerFloorUpdateReason(double peakR, ENUM_XAU_OWNER_EXIT_PROFILE profile)
@@ -25565,15 +25820,29 @@ void XAU_RExit_LogCounterfactual(int idx, string exitReason)
 bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
 {
    datetime now = TimeCurrent();
+   if(!XAU_IsOwnerRExitApprovedCloseReason(reason))
+   {
+      PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_LEGACY_AUTHORITY | ticket=%I64u | attempted_authority=%s | action=TELEMETRY_ONLY",
+                  currentTicket, reason);
+      // A legacy close intent persisted by an older build must not retry
+      // forever after upgrade. Clear only the obsolete close request; keep
+      // peak/floor/profile state intact and persist the cleanup immediately.
+      g_rExit[idx].closeState = R_CLOSE_NONE;
+      g_rExit[idx].pendingCloseReason = "";
+      g_rExit[idx].closeAttemptCount = 0;
+      g_rExitStateDirty = true;
+      XAU_RExit_SaveState(true);
+      return false;
+   }
    ENUM_XAU_OWNER_EXIT_PROFILE profile = (ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile;
    double ownerFloorNow = XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile);
-   bool floorEmergency = StringFind(reason, "R_PROFIT_GUARANTEE_FLOOR_BREACH") >= 0 ||
-                         StringFind(reason, "BASKET_") == 0;
-   if(ownerFloorNow > 0.0 && g_rExit[idx].currentR < ownerFloorNow && !floorEmergency &&
-      g_rExit[idx].closeState != R_CLOSE_REQUESTED && g_rExit[idx].closeState != R_CLOSE_PENDING_RETRY)
+   if(!XAU_OwnerRExitDecisionAllowsClose(g_rExit[idx].peakR,g_rExit[idx].currentR,
+                                         g_rExit[idx].guaranteedFloorR,profile,reason))
    {
       PrintFormat("OWNER_FLOOR_OVERRIDE | attempted_exit_authority=%s | attempted_exit_r=%.3f | protected_floor_r=%.3f | action=REJECT_LOWER_EXIT",
-                  reason, g_rExit[idx].currentR, ownerFloorNow);
+                  reason, g_rExit[idx].currentR, MathMax(ownerFloorNow,g_rExit[idx].guaranteedFloorR));
+      PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_BELOW_FLOOR | ticket=%I64u | attempted_authority=%s | attempted_exit_r=%.3f | protected_floor_r=%.3f",
+                  currentTicket, reason, g_rExit[idx].currentR, MathMax(ownerFloorNow,g_rExit[idx].guaranteedFloorR));
       return false;
    }
    if(g_rExit[idx].closeState == R_CLOSE_PENDING_RETRY && now - g_rExit[idx].lastCloseAttemptTime < 3)
@@ -25590,7 +25859,7 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
    g_rExit[idx].closeAttemptCount++;
    g_rExitStateDirty = true;
 
-   bool sendOk = SafePositionClose(currentTicket, g_rExit[idx].pendingCloseReason);
+   bool sendOk = OWNER_R_EXIT_CLOSE_ONLY(currentTicket, g_rExit[idx].pendingCloseReason, false);
    bool stillOpen = PositionSelectByTicket(currentTicket);
    if(sendOk && !stillOpen)
    {
@@ -25663,35 +25932,16 @@ bool XAU_ApplyTransitionPositionAuthority(int idx, ulong ticket, bool isBuy,
       PrintFormat("PRIMARY_EXIT_LEGACY_TRAIL_SUPPRESSED ticket=%I64u reason=TRANSITION_TIGHTEN_PROTECTION_now_evidence_only exhaustion=%.0f peakR=%.3f (see XAU_ComputePrimaryExitFloor for the actual floor)",
                   ticket, d.exhaustionProbability, peakR);
 
-   // EXIT_PROFITABLE/EXIT_CONTROLLED are full-close actions, not tightening --
-   // kept, but now gated on the SAME objective trade-health classifier
-   // XAU_RExitCoreLoop uses, so a healthy, merely-early trade cannot be
-   // closed out from under the main 0.50R/70% policy by this secondary path.
+   // v6.25.9: transition actions are evidence only. They may describe a
+   // deteriorating thesis but cannot close, partially close or modify a
+   // production position. The owner R floor remains the only managed exit.
    if(action==TRANSITION_EXIT_PROFITABLE || action==TRANSITION_EXIT_CONTROLLED)
    {
       string healthWhy="";
       ENUM_XAU_TRADE_HEALTH health=XAU_ClassifyTradeHealth(posDir,currentR,peakR,d,healthWhy);
-      if(health!=TRADE_STRUGGLING && health!=TRADE_INVALIDATED)
-         return false;
-      // v6.24.18 owner directive -- during BASKET mode (campaign has >=2
-      // active positions), only an OBJECTIVELY INVALIDATED trade (a real
-      // catastrophic/structural thesis failure) may still be closed
-      // independently here. TRADE_STRUGGLING alone is "ordinary profit
-      // protection" in spirit (not catastrophic) and must defer to the
-      // basket exit authority instead -- otherwise one pyramid member could
-      // be closed early while the combined campaign is still healthy,
-      // exactly the bug the owner's basket spec exists to prevent.
-      int campSlot = XAU_CampaignSlot(posDir);
-      bool basketModeActive = g_campaign[campSlot].active && g_campaign[campSlot].activePositionCount >= 2;
-      if(basketModeActive && health != TRADE_INVALIDATED)
-      {
-         PrintFormat("INDIVIDUAL_TRAIL_SUPPRESSED_BY_BASKET ticket=%I64u source=TRANSITION_POSITION_AUTHORITY action=%s health=%s -- basket exit authority owns this decision instead",
-                     ticket, XAU_ATActionName(action), XAU_TradeHealthName(health));
-         return false;
-      }
-      if(action==TRANSITION_EXIT_PROFITABLE)
-         return XAU_RExit_RequestClose(idx,ticket,"TRANSITION_EXIT_PROFITABLE");
-      return XAU_RExit_RequestClose(idx,ticket,"TRANSITION_EXIT_CONTROLLED");
+      if(TimeCurrent()-g_rExit[idx].lastTelemetryLog>=30)
+         PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | ticket=%I64u | legacy_authority=TRANSITION_INVALIDATION | recommendation=%s | health=%s | currentR=%.3f | peakR=%.3f | action=NO_CLOSE",
+                     ticket, XAU_ATActionName(action), XAU_TradeHealthName(health), currentR, peakR);
    }
    return false;
 }
@@ -25841,7 +26091,8 @@ void XAU_UpdateCampaignBasketState(int direction)
                // XAU_CloseCampaignBasketAtProtectedFloor/XAU_RExit_RequestClose's
                // own closeState guard) -- safe to call every tick without
                // sending duplicate broker requests; only the LOG above is throttled.
-               XAU_CloseCampaignBasketAtProtectedFloor(direction, "BASKET_TO_SINGLE_PENDING_FLOOR_BREACH");
+               PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | legacy_authority=BASKET_TO_SINGLE_PENDING_FLOOR | ticket=%I64u | action=NO_BASKET_CLOSE",
+                           survivingTicket);
             }
          }
          if(firstPendingLog || TimeCurrent() - g_basketPendingSummaryLoggedAt[slot] >= 60)
@@ -25953,11 +26204,9 @@ void XAU_UpdateCampaignBasketState(int direction)
 
    if(triggerClose)
    {
-      if(!g_campaign[slot].basketCloseInProgress)
-         PrintFormat("BASKET_FLOOR_TRIGGERED slot=%d dir=%s campaignId=%s basketProfitMoney=%.2f protectedFloorMoney=%.2f",
-                     slot, direction == 1 ? "BUY" : "SELL", XAU_CampaignIdText(g_campaign[slot].campaignId),
-                     basketProfitMoney, g_campaign[slot].basketProtectedFloorMoney);
-      XAU_CloseCampaignBasketAtProtectedFloor(direction, "BASKET_FLOOR_TRIGGERED");
+      PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | legacy_authority=BASKET_FLOOR | slot=%d | dir=%s | campaignId=%s | basketProfitMoney=%.2f | protectedFloorMoney=%.2f | action=NO_BASKET_CLOSE",
+                  slot, direction == 1 ? "BUY" : "SELL", XAU_CampaignIdText(g_campaign[slot].campaignId),
+                  basketProfitMoney, g_campaign[slot].basketProtectedFloorMoney);
    }
 }
 
@@ -26104,54 +26353,39 @@ void XAU_RExitCoreLoop()
       if(g_rExit[idx].closeState==R_CLOSE_REQUESTED || g_rExit[idx].closeState==R_CLOSE_PENDING_RETRY)
          continue;
 
-      // v6.24.18 owner directive -- BASKET MODE (this ticket's campaign has
-      // >=2 active positions) suppresses every individual ordinary-profit-
-      // protection authority below (1R hard close, 45% giveback, the
-      // 0.50R/70% floor) in favor of XAU_UpdateCampaignBasketState's own
-      // combined-P/L floor, computed once per direction at the top of this
-      // function. Peak/MFE bookkeeping above still runs (information, not
-      // action) -- only the close/tighten DECISION is suppressed here. Hard
-      // broker SL and the pending-close-retry path above are unaffected.
+      // v6.25.9 -- basket state is telemetry/persistence only. Pyramid and
+      // re-entry legs continue through the same per-position owner R-floor
+      // authority and inherit the frozen campaign profile/floor. No basket
+      // manager is allowed to suppress or replace this owner calculation.
       if(basketModeActive)
       {
          if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
          {
             g_rExit[idx].lastTelemetryLog = TimeCurrent();
-            PrintFormat("INDIVIDUAL_TRAIL_SUPPRESSED_BY_BASKET ticket=%I64u direction=%s currentR=%.3f peakR=%.3f campaignId=%s -- basket exit authority owns this position's profit-exit decision",
-                        ticket, dirStr, currentR, peakR, XAU_CampaignIdText(g_campaign[campSlot].campaignId));
+            PrintFormat("OWNER_R_EXIT_CAMPAIGN_INHERITANCE | ticket=%I64u direction=%s currentR=%.3f peakR=%.3f campaignId=%s profile=%s basket_telemetry_only=true",
+                        ticket, dirStr, currentR, peakR, XAU_CampaignIdText(g_campaign[campSlot].campaignId),
+                        XAU_OwnerExitProfileName((ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile));
          }
-         continue;
       }
 
-      // ---- Priority 2: 1R hard close. Indicator-independent, always evaluated,
-      //      always wins over the 0.5R decision/holding state. ----
+      // Legacy 1R target is telemetry only. The broker order carries no TP;
+      // owner protection continues ratcheting from the highest achieved R.
       if(currentR >= InpRFinalTarget)
       {
-         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f peakR=%.3f action=CLOSE reason=R_EXIT_TP_1R",
-                     ticket, dirStr, currentR, peakR);
-         XAU_RExit_RequestClose(idx, ticket, "R_EXIT_TP_1R");
-         continue;
+         if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
+            PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | ticket=%I64u | legacy_authority=R_EXIT_TP_1R | direction=%s | currentR=%.3f | peakR=%.3f | action=NO_CLOSE",
+                        ticket, dirStr, currentR, peakR);
       }
 
-      // ---- Priority 3: 45% giveback close, only once 0.3R has been armed,
-      //      only while still profitable. Indicator-independent. ----
+      // Legacy 45% giveback is telemetry only. It cannot request a close.
       if(peakR >= InpRProtectTrigger && g_rExit[idx].peakProfitUSD > 0.0)
       {
          double givebackPct = (g_rExit[idx].peakProfitUSD - profit) / g_rExit[idx].peakProfitUSD * 100.0;
          if(givebackPct >= InpRMaxGivebackPct && profit > 0.0)
          {
-            PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f peakR=%.3f givebackPct=%.1f action=CLOSE reason=R_EXIT_GIVEBACK_45",
-                        ticket, dirStr, currentR, peakR, givebackPct);
-            bool givebackCloseConfirmed = XAU_RExit_RequestClose(idx, ticket, "R_EXIT_GIVEBACK_45");
-            // A synchronous broker-confirmed close removes this position's
-            // R-state inside XAU_RExit_RequestClose. Never dereference the
-            // now-stale array index; re-find by the stable position ID.
-            int givebackStateIdx = XAU_RExit_FindIdx(positionId);
-            if(givebackCloseConfirmed || givebackStateIdx < 0)
-               continue;
-            idx = givebackStateIdx;
-            if(g_rExit[idx].closeState == R_CLOSE_REQUESTED || g_rExit[idx].closeState == R_CLOSE_PENDING_RETRY)
-               continue;
+            if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
+               PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | ticket=%I64u | legacy_authority=R_EXIT_GIVEBACK_45 | direction=%s | currentR=%.3f | peakR=%.3f | givebackPct=%.1f | action=NO_CLOSE",
+                           ticket, dirStr, currentR, peakR, givebackPct);
          }
       }
 
@@ -26202,11 +26436,19 @@ void XAU_RExitCoreLoop()
       double priorFloorR = g_rExit[idx].guaranteedFloorR;
       g_rExit[idx].guaranteedFloorR = MathMax(g_rExit[idx].guaranteedFloorR, desiredFloorR); // ratchet-only, never decreases
       if(justArmed)
+      {
          PrintFormat("PRIMARY_EXIT_FLOOR_ARMED ticket=%I64u peakR=%.3f currentR=%.3f protectedFloorR=%.3f tradeHealth=%s reason=%s",
                      ticket, peakR, currentR, g_rExit[idx].guaranteedFloorR, XAU_TradeHealthName(tradeHealth), floorReason);
+         PrintFormat("OWNER_R_EXIT_FLOOR_ARMED | ticket=%I64u | profile=%s | peak_r=%.3f | floor_r=%.3f",
+                     ticket, XAU_OwnerExitProfileName(ownerProfile), peakR, g_rExit[idx].guaranteedFloorR);
+      }
       else if(g_rExit[idx].guaranteedFloorR > priorFloorR)
+      {
          PrintFormat("PRIMARY_EXIT_FLOOR_RATCHETED ticket=%I64u peakR=%.3f currentR=%.3f priorFloorR=%.3f newFloorR=%.3f tradeHealth=%s reason=%s",
                      ticket, peakR, currentR, priorFloorR, g_rExit[idx].guaranteedFloorR, XAU_TradeHealthName(tradeHealth), floorReason);
+         PrintFormat("OWNER_R_EXIT_FLOOR_RATCHET | ticket=%I64u | profile=%s | peak_r=%.3f | previous_floor_r=%.3f | new_floor_r=%.3f",
+                     ticket, XAU_OwnerExitProfileName(ownerProfile), peakR, priorFloorR, g_rExit[idx].guaranteedFloorR);
+      }
 
       if(justArmed || g_rExit[idx].guaranteedFloorR > priorFloorR)
       {
@@ -26243,7 +26485,7 @@ void XAU_RExitCoreLoop()
       {
          PrintFormat("OWNER_EXIT_BROKER_MODIFY_SENT | ticket=%I64u profile=%s requestedSL=%s finalLockR=%.3f",
                      ticket, XAU_OwnerExitProfileName(ownerProfile), DoubleToString(guaranteedSL, digits), g_rExit[idx].guaranteedFloorR);
-         bool ownerModifyAccepted = SafeModifySL(ticket, guaranteedSL, curTP, isBuy, curPrice, "PRIMARY_EXIT_FLOOR");
+         bool ownerModifyAccepted = SafeModifySL(ticket, guaranteedSL, curTP, isBuy, curPrice, "OWNER_R_EXIT_FLOOR");
          // v6.25.1 owner directive 2026-07-17 -- SafeModifySL()==true only
          // means the broker ACCEPTED the request; it does not itself
          // confirm the resulting live SL. Reread the real position here and
@@ -26292,17 +26534,22 @@ void XAU_RExitCoreLoop()
                      ticket, peakR, currentR, g_rExit[idx].guaranteedFloorR, DoubleToString(guaranteedSL, digits), DoubleToString(curSL, digits));
       }
 
-      // Internal-floor breach: if price has fallen through the guaranteed R
-      // before the broker SL could be placed there (geometry-blocked this
-      // tick, or a prior modify was rejected), force a market close now --
-      // never silently let it ride down to the unprotected original SL.
-      if(g_rExit[idx].guaranteedFloorGeometryBlocked && currentR < g_rExit[idx].guaranteedFloorR)
+      // If broker geometry prevents a modify, the owner chokepoint may close
+      // only while the executable quote is still at/above the required floor.
+      // Once already below, keep retrying protection and fail closed rather
+      // than deliberately request a below-floor market exit.
+      if(g_rExit[idx].guaranteedFloorGeometryBlocked &&
+         currentR >= g_rExit[idx].guaranteedFloorR &&
+         currentR <= g_rExit[idx].guaranteedFloorR + 0.03)
       {
-         PrintFormat("PRIMARY_EXIT_CLOSED_BY_PROTECTED_SL ticket=%I64u direction=%s currentR=%.3f guaranteedFloorR=%.2f action=CLOSE reason=R_PROFIT_GUARANTEE_FLOOR_BREACH (broker SL could not be placed before price crossed the internal floor)",
+         PrintFormat("OWNER_R_EXIT_DECISION | ticket=%I64u | direction=%s | currentR=%.3f | guaranteedFloorR=%.2f | action=CLOSE_AT_OR_ABOVE_FLOOR | reason=OWNER_R_EXIT_FLOOR_BREACH",
                      ticket, dirStr, currentR, g_rExit[idx].guaranteedFloorR);
-         XAU_RExit_RequestClose(idx, ticket, "R_PROFIT_GUARANTEE_FLOOR_BREACH");
+         XAU_RExit_RequestClose(idx, ticket, "OWNER_R_EXIT_FLOOR_BREACH");
          continue;
       }
+      if(g_rExit[idx].guaranteedFloorGeometryBlocked && currentR < g_rExit[idx].guaranteedFloorR)
+         PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_BELOW_FLOOR | ticket=%I64u | attempted_authority=OWNER_R_EXIT_FLOOR_BREACH | attempted_exit_r=%.3f | protected_floor_r=%.3f | action=RETRY_BROKER_FLOOR",
+                     ticket, currentR, g_rExit[idx].guaranteedFloorR);
 
       // ---- RUN_TO_1R continuation-failure recheck: closed-bar granularity
       //      only (never a single noisy tick), and only when indicators are
@@ -26341,10 +26588,8 @@ void XAU_RExitCoreLoop()
 
             if(structureBrokenAgainst || hostileFactors >= InpRRunnerFailureMinHostile)
             {
-               PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s currentR=%.3f structureBroken=%s hostileFactors=%d/5 action=CLOSE reason=R_EXIT_RUNNER_CONTINUATION_FAILED",
+               PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | ticket=%I64u | legacy_authority=R_EXIT_RUNNER_CONTINUATION_FAILED | direction=%s | currentR=%.3f | structureBroken=%s | hostileFactors=%d/5 | action=NO_CLOSE",
                            ticket, dirStr, currentR, structureBrokenAgainst ? "true" : "false", hostileFactors);
-               XAU_RExit_RequestClose(idx, ticket, "R_EXIT_RUNNER_CONTINUATION_FAILED");
-               continue;
             }
          }
       }
@@ -33278,7 +33523,7 @@ void XAU_ReconcileCounterExcursionOnInit()
 void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string grade,
                                    double setupScore, double combinedScore, string blockReason)
 {
-   if(InpCounterExcursionMode == COUNTER_OFF) return;
+   if(!XAU_COUNTER_EXCURSION_BUILD || InpCounterExcursionMode == COUNTER_OFF) return;
    if(originalSignal == 0) return;
    if(!IsXAUFastSymbol()) return;
    if(TimeCurrent() < g_counterExCooldownUntil) return;
@@ -35124,9 +35369,42 @@ bool XAU_ReentryPyramidAuthority(int signal, string source, string &why)
    return true;
 }
 
-// v6.25.8 final owner directive -- the single canonical owner new-entry verdict.
-// It reads the existing canonical regime and broker-server TimeCurrent; it
-// does not classify markets or create a second general session/timer system.
+string XAU_OwnerBreakoutModeName()
+{
+   if(InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_BLOCK) return "BLOCK";
+   if(InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_NORMAL) return "NORMAL";
+   return "INVERSE";
+}
+
+string XAU_OwnerRegimeLabel(ENUM_REGIME regime)
+{
+   if(regime==REGIME_BREAKOUT_UP) return "BRKT_UP";
+   if(regime==REGIME_BREAKOUT_DOWN) return "BRKT_DN";
+   if(regime==REGIME_TRENDING_UP) return "TREND_UP";
+   if(regime==REGIME_TRENDING_DOWN) return "TREND_DN";
+   if(regime==REGIME_CHOPPY) return "CHOPPY";
+   if(regime==REGIME_RANGING) return "RANGING";
+   if(regime==REGIME_LOW_VOL) return "LOW_VOL";
+   return "DEAD";
+}
+
+bool XAU_ShouldInvertBreakoutExecution(ENUM_REGIME regime)
+{
+   return InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_INVERSE &&
+          (regime==REGIME_BREAKOUT_UP || regime==REGIME_BREAKOUT_DOWN);
+}
+
+int XAU_ResolveOwnerBreakoutExecutionDirection(int approvedSignalDirection,
+                                               ENUM_REGIME frozenEntryRegime,
+                                               bool &inversionApplied)
+{
+   inversionApplied=XAU_ShouldInvertBreakoutExecution(frozenEntryRegime);
+   return inversionApplied ? -approvedSignalDirection : approvedSignalDirection;
+}
+
+// v6.25.9 -- one configurable owner breakout authority supports the three
+// real-tick experiment modes without introducing another strategy path.
+// The normal candidate pipeline still owns whether a signal is approved.
 bool XAU_OwnerEntryPermission(string phase, string source, string grade,
                               string &reason, datetime brokerNow = 0)
 {
@@ -35141,13 +35419,18 @@ bool XAU_OwnerEntryPermission(string phase, string source, string grade,
    if(currentRegime == REGIME_BREAKOUT_UP || currentRegime == REGIME_BREAKOUT_DOWN)
    {
       string regimeText = currentRegime == REGIME_BREAKOUT_UP ? "BRKT_UP" : "BRKT_DN";
-      reason = currentRegime == REGIME_BREAKOUT_UP ? "OWNER_BRKT_UP_ENTRY_BLOCK" : "OWNER_BRKT_DN_ENTRY_BLOCK";
-      PrintFormat("BREAKOUT_REGIME_HARD_BLOCK | regime=%s | action=SKIP_SIGNAL | reason=OWNER_POLICY | trade_opened=false",
-                  regimeText);
-      PrintFormat("OWNER_ENTRY_PERMISSION | phase=%s source=%s decision=BLOCK reason=%s regime=%s grade=%s brokerServerTime=%s",
-                  phase, source, reason, RegimeName(), canonicalGrade,
-                  TimeToString(brokerNow, TIME_DATE|TIME_SECONDS));
-      return false;
+      if(InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_BLOCK)
+      {
+         reason = currentRegime == REGIME_BREAKOUT_UP ? "OWNER_BRKT_UP_SCENARIO_A_BLOCK" : "OWNER_BRKT_DN_SCENARIO_A_BLOCK";
+         PrintFormat("OWNER_BREAKOUT_EXECUTION_POLICY | mode=BLOCK | regime=%s | action=SKIP_APPROVED_SIGNAL | trade_opened=false",
+                     regimeText);
+         PrintFormat("OWNER_ENTRY_PERMISSION | phase=%s source=%s decision=BLOCK reason=%s regime=%s grade=%s brokerServerTime=%s",
+                     phase, source, reason, RegimeName(), canonicalGrade,
+                     TimeToString(brokerNow, TIME_DATE|TIME_SECONDS));
+         return false;
+      }
+      PrintFormat("OWNER_BREAKOUT_EXECUTION_POLICY | mode=%s | regime=%s | phase=%s | source=%s | decision=ALLOW_NORMAL_PIPELINE",
+                  XAU_OwnerBreakoutModeName(),regimeText,phase,source);
    }
    if(StringLen(reason) > 0)
    {
