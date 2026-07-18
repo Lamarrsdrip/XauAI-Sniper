@@ -704,23 +704,19 @@ def test_frontend_card_gates_on_mode_active_before_rendering():
 # ---------------------------------------------------------------------------
 # Version identity
 # ---------------------------------------------------------------------------
-def test_version_bumped_to_v6_25_6():
-    # v6.25.6 -- the EXHAUSTED_SAME_DIRECTION_REENTRY_BLOCK M30-scope fix
-    # and the real candidate/timer lifecycle telemetry (XAU-026) both bumped
-    # the release identity, same as every prior genuine functional change
-    # this session (the whole point of the Phase 17 release-identity-
-    # alignment fix earlier: source, manifest, and #property strings must
-    # never silently drift apart).
+def test_version_bumped_to_v6_25_7():
+    # The owner-directed exit/risk/regime/time release must remain aligned
+    # across source, property metadata, and release description.
     ea = read(EA)
-    assert '#define XAUAI_EA_VERSION "v6.25.6"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.25.6"' in ea
-    assert '#property version   "6.256"' in ea
-    assert "v6.25.6" in ea.split("#property description")[1][:400]
+    assert '#define XAUAI_EA_VERSION "v6.25.7"' in ea
+    assert '#define XAUAI_EA_VERSION_NUM "6.25.7"' in ea
+    assert '#property version   "6.257"' in ea
+    assert "v6.25.7" in ea.split("#property description")[1][:400]
 
 
 def test_build_hash_reflects_m30_release():
     ea = read(EA)
-    assert "m30-exhaustion-scope-fix-lifecycle-telemetry" in ea
+    assert "v6257-owner-exit-loss-cap-regime-time" in ea
 
 
 # ===========================================================================
