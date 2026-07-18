@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.25.6",
+  "current_version": "v6.25.7",
   "releases": {
     "v6.25.2": {
       "version": "v6.25.2",
@@ -60,6 +60,18 @@
       "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.6.ex5",
       "release_notes": "Forensic trade-frequency audit (triggered by a real 8-campaigns-in-30-days owner concern) root-caused and fixed EXHAUSTED_SAME_DIRECTION_REENTRY_BLOCK in OpenTrade(): a legacy-M10 re-entry gate that lacked the same M30-mode exemption its sibling gate (XAU_PostTradeCooldownActive) already had, silently discarding roughly 86% of already-approved M30 candidates. Verified via a real 7-trading-day MetaQuotes-Demo Strategy Tester replay (100% real ticks): 65 M30 candidates reached FinalEntryArbiter decision=ALLOW, but the pre-fix build opened only ~4 core trades before this gate discarded the rest as CANCEL_EXECUTION_NOT_CONFIRMED. Also adds a MQL_TESTER-scoped bypass for XAU_ClaimDirectionReservation()'s cross-instance reservation WebRequest so Strategy Tester can exercise the M30 path at all (tester-only; does not alter live/demo behavior). Implements the Codex handover's next task (checkpoint e483dd0): XAU-026 real M30 candidate/timer lifecycle visibility (XAU_M30DisplayJson now reports has_active_candidate, candidate_id, execution_key, timer timing, origin price, move-R since origin, and last-outcome fields sourced only from durable state -- no fabricated structural-SL/reservation status; surfaced in the Command Center's new Candidate Lifecycle section) and XAU-027 tenant-scoped remote-command idempotency with immutable terminal states (client-generated idempotency_key + server dedupe_key on /cloud/command/request; atomic conditional state-machine transition on /cloud/command/ack so EXECUTED/FAILED/SKIPPED/EXPIRED can never be overwritten by a late, replayed, or racing acknowledgement), covered by 16 new Mongo-backed concurrency/duplicate/expiry/cross-tenant tests. Also fixes two real production bugs found while repairing the surrounding test suite (not introduced by this change): /journal/log's account_login check was bypassing this endpoint's established graceful error-response contract with a raw HTTPException, and cloud_performance_analytics() was querying trade_journal by a \"pin\" field that log_trade_journal() has deliberately never stored since the v6.25.4 P0 fix (it stores license_id instead), silently returning empty analytics for every real user since that fix shipped. Not yet deployed to the owner's Mac live install or VPS; not yet merged to main.",
       "stable_status": false
+    },
+    "v6.25.7": {
+      "version": "v6.25.7",
+      "edition": "Owner regime-aware profit locks, -0.75R hard loss cap, breakout permissions, and broker-time blackouts",
+      "source_commit": "c2ffda723b99c681a59a4b185f9ed8ebe246574d",
+      "build_timestamp": "2026-07-18T06:57:00Z",
+      "compiler_result": "0 errors, 0 warnings, 556782 ms elapsed (MetaEditor64.exe, isolated MT5 sandbox; source SHA-256 da55aa8b13d59e13480ff56caa388d371025e38a99da3093d2eb40e9642eff6d)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.7.ex5",
+      "ex5_sha256": "59967dd6c3e111e70657856bec1aee7353231be528b485e57c31593f8d55060e",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.7.ex5",
+      "release_notes": "Owner-directed v6.25.7 only: GENERAL exits arm +0.30R at a +0.40R peak and ratchet at 70% from +0.50R; the frozen TREND_DN_SPECIAL campaign profile arms +0.40R at +0.50R and ratchets at 70% from +0.70R. Lot sizing remains based on the original once-widened structural 1R, then the same lot receives a broker-confirmed -0.75 original-R hard stop. BRKT_DN blocks all new exposure; BRKT_UP permits only canonical A/A+; broker-server-time windows 06:10:00-07:30:59 and 14:10:00-15:30:59 cancel/deny entries while open-position management remains active. Existing M30 three-M10 consensus, 120-180 second timer, 0.30R missed-move cancellation, signal/grade math, news, direction exclusivity, and M30 re-entry exemption remain unchanged.",
+      "stable_status": true
     }
   }
 }
