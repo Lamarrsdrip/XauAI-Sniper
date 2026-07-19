@@ -13,6 +13,7 @@ import sys
 import os
 import asyncio
 import uuid
+import builtins
 from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
@@ -42,7 +43,9 @@ os.environ.setdefault("ADMIN_EMAIL", "admin@test.com")
 import server as srv  # noqa: E402
 import notifications as notif  # noqa: E402
 
-_LOOP = asyncio.new_event_loop()
+if not hasattr(builtins, "_xau_onesignal_test_loop"):
+    builtins._xau_onesignal_test_loop = asyncio.new_event_loop()
+_LOOP = builtins._xau_onesignal_test_loop
 
 
 def _run(coro):
@@ -67,6 +70,25 @@ def _fake_response(status_code=200, json_data=None):
     resp.text = str(json_data or {})
     resp.json = MagicMock(return_value=json_data or {})
     return resp
+
+
+def _complete_device(user_id: str, device_id: str):
+    return {
+        "id": device_id,
+        "user_id": user_id,
+        "onesignal_subscription_id": f"sub-{device_id}",
+        "onesignal_id": f"os-{user_id}",
+        "external_id": user_id,
+        "device_instance_id": f"instance-{device_id}",
+        "opted_in": True,
+        "token_present": True,
+        "permission_state": "granted",
+        "active": True,
+        "registration_state": "COMPLETE",
+        "created_at": "2026-07-17T00:00:00Z",
+        "updated_at": "2026-07-17T00:00:00Z",
+        "last_seen_at": "2026-07-17T00:00:00Z",
+    }
 
 
 class _FakeAsyncClient:
@@ -165,8 +187,7 @@ def test_send_test_notification_success_path_hits_onesignal_and_logs_sent():
     async def go():
         await _clear()
         await _set_config("app-123", "key-abc")
-        await srv.db.cloud_push_subscriptions.insert_one(
-            {"id": "dev-1", "user_id": "user-2", "opted_in": True, "created_at": "2026-07-17T00:00:00Z"})
+        await srv.db.cloud_push_subscriptions.insert_one(_complete_device("user-2", "dev-1"))
         fake_client = _FakeAsyncClient(response=_fake_response(200, {"id": "notif-1"}))
         with patch("notifications.httpx.AsyncClient", fake_client):
             result = await notif.send_test_notification("user-2")
@@ -202,8 +223,7 @@ def test_send_test_notification_never_reports_sent_on_empty_message_id():
     async def go():
         await _clear()
         await _set_config("app-123", "key-abc")
-        await srv.db.cloud_push_subscriptions.insert_one(
-            {"id": "dev-1", "user_id": "user-3", "opted_in": True, "created_at": "2026-07-17T00:00:00Z"})
+        await srv.db.cloud_push_subscriptions.insert_one(_complete_device("user-3", "dev-1"))
         fake_client = _FakeAsyncClient(response=_fake_response(200, {"id": "", "errors": {"invalid_aliases": ["user-3"]}}))
         with patch("notifications.httpx.AsyncClient", fake_client):
             result = await notif.send_test_notification("user-3")
@@ -219,8 +239,7 @@ def test_send_test_notification_classifies_auth_failure():
     async def go():
         await _clear()
         await _set_config("app-123", "wrong-key")
-        await srv.db.cloud_push_subscriptions.insert_one(
-            {"id": "dev-1", "user_id": "user-4", "opted_in": True, "created_at": "2026-07-17T00:00:00Z"})
+        await srv.db.cloud_push_subscriptions.insert_one(_complete_device("user-4", "dev-1"))
         fake_client = _FakeAsyncClient(response=_fake_response(401, {"errors": ["Invalid app_id/key"]}))
         with patch("notifications.httpx.AsyncClient", fake_client):
             result = await notif.send_test_notification("user-4")
@@ -237,11 +256,10 @@ def test_send_test_notification_classifies_network_timeout_as_temporary():
     async def go():
         await _clear()
         await _set_config("app-123", "key-abc")
-        await srv.db.cloud_push_subscriptions.insert_one(
-            {"id": "dev-1", "user_id": "user-5", "opted_in": True, "created_at": "2026-07-17T00:00:00Z"})
+        await srv.db.cloud_push_subscriptions.insert_one(_complete_device("user-5", "dev-1"))
         fake_client = _FakeAsyncClient(raise_exc=httpx.TimeoutException("timed out"))
         with patch("notifications.httpx.AsyncClient", fake_client):
-            ok, failure_class = await notif._send_onesignal("user-5", {"title": "t", "body": "b"})
+            ok, failure_class, _provider = await notif._send_onesignal("user-5", {"title": "t", "body": "b"})
         assert ok is False
         assert failure_class == notif.TEMPORARY_DELIVERY_FAILURE
         await _clear()
@@ -255,8 +273,7 @@ def test_subscription_deleted_by_onesignal_failure_never_happens():
     async def go():
         await _clear()
         await _set_config("app-123", "wrong-key")
-        await srv.db.cloud_push_subscriptions.insert_one(
-            {"id": "dev-1", "user_id": "user-6", "opted_in": True, "created_at": "2026-07-17T00:00:00Z"})
+        await srv.db.cloud_push_subscriptions.insert_one(_complete_device("user-6", "dev-1"))
         fake_client = _FakeAsyncClient(response=_fake_response(401, {}))
         with patch("notifications.httpx.AsyncClient", fake_client):
             await notif.send_test_notification("user-6")
@@ -290,8 +307,7 @@ def test_outlook_notification_idempotent_on_duplicate_event():
         await _set_config("app-123", "key-abc")
         await srv.db.cloud_notification_prefs.insert_one(
             {"user_id": "user-8", "account": "acct-2", "tier": "HOURLY_ONLY"})
-        await srv.db.cloud_push_subscriptions.insert_one(
-            {"id": "dev-8", "user_id": "user-8", "opted_in": True, "created_at": "2026-07-17T00:00:00Z"})
+        await srv.db.cloud_push_subscriptions.insert_one(_complete_device("user-8", "dev-8"))
         doc = {"id": "outlook-2", "account": "acct-2", "primary_direction": "BUY", "confidence_pct": 70}
         fake_client = _FakeAsyncClient(response=_fake_response(200, {"id": "n1", "recipients": 1}))
         with patch("notifications.httpx.AsyncClient", fake_client):
@@ -315,8 +331,7 @@ def test_transient_event_failure_retries_once_then_persists_dispatch_flag():
         await _set_config("app-123", "key-abc")
         await srv.db.cloud_notification_prefs.insert_one(
             {"user_id": "user-retry", "account": "acct-retry", "tier": "HOURLY_PLUS_RESULTS"})
-        await srv.db.cloud_push_subscriptions.insert_one(
-            {"id": "dev-retry", "user_id": "user-retry", "opted_in": True})
+        await srv.db.cloud_push_subscriptions.insert_one(_complete_device("user-retry", "dev-retry"))
         doc = {
             "id": "outlook-retry", "account": "acct-retry", "primary_direction": "BUY",
             "tracking_entry_price": 100.1, "first_half_r_at": "2026-07-18T12:17:00+00:00",

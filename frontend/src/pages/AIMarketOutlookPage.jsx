@@ -6,7 +6,7 @@ import {
   ChevronDown, ChevronUp, Filter, TrendingUp, TrendingDown,
 } from "lucide-react";
 import { API } from "@/lib/api";
-import { ensureOneSignalInitialized } from "@/lib/onesignal";
+import { ensureOneSignalDeviceRegistered } from "@/lib/onesignal";
 import M10VsOutlookCard from "@/components/cloud/M10VsOutlookCard";
 
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
@@ -186,169 +186,134 @@ function Metric({ label, value }) {
 function NotificationSettings({ prefs, setPrefs }) {
   const [saving, setSaving] = useState(false);
   const [permissionState, setPermissionState] = useState(
-    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
+    typeof Notification !== "undefined" ? Notification.permission : "unsupported",
   );
   const [verifiedStatus, setVerifiedStatus] = useState(null);
+  const [registrationResult, setRegistrationResult] = useState(null);
   const [testResult, setTestResult] = useState(null);
   const [testSending, setTestSending] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
 
   const refreshStatus = useCallback(async () => {
     try {
       const { data } = await outlookAxios.get("/outlook/notifications/status");
       setVerifiedStatus(data);
+      return data;
     } catch (_) {
-      setVerifiedStatus({ final_status: "UNKNOWN" });
+      const fallback = { final_status: "UNKNOWN", remediation_code: "STATUS_UNAVAILABLE" };
+      setVerifiedStatus(fallback);
+      return fallback;
     }
   }, []);
 
-  // v6.25.3 owner directive 2026-07-17 -- rewritten for OneSignal (replaces
-  // the retired self-hosted VAPID/pywebpush implementation, which was
-  // permanently blocked by a missing Python package in production that
-  // only a full backend rebuild could fix). OneSignal's SDK now owns the
-  // actual push subscription lifecycle entirely; this function's job is
-  // just: init the SDK with the live App ID, request permission, tag this
-  // browser with OneSignal.login(our user id) so sends via
-  // include_aliases.external_id reach it, and confirm opt-in with our own
-  // backend for status/UI purposes. subscribeDevice() must still return a
-  // structured result, never silently swallow -- real errors are reported
-  // through verifiedStatus (backed by the authenticated
-  // /outlook/notifications/status endpoint) rather than an empty catch
-  // block hiding the failure entirely.
-  const subscribeDevice = useCallback(async () => {
-    if (typeof window === "undefined") {
-      return { ok: false, code: "PUSH_UNSUPPORTED", message: "This browser does not support push notifications." };
-    }
-    try {
-      const { data: appData } = await outlookAxios.get("/outlook/notifications/onesignal-app-id");
-      if (!appData?.configured || !appData?.app_id) {
-        return { ok: false, code: "SERVER_NOT_CONFIGURED", message: "Push server is not configured yet." };
-      }
-      const oneSignal = await ensureOneSignalInitialized(appData.app_id);
-      if (!oneSignal) {
-        return { ok: false, code: "PUSH_UNSUPPORTED", message: "Notification SDK failed to load." };
-      }
-      const { data: idData } = await outlookAxios.get("/outlook/notifications/my-user-id");
-      if (idData?.user_id) {
-        await oneSignal.login(idData.user_id);
-      }
-      await oneSignal.Notifications.requestPermission();
-      const optedIn = oneSignal.User?.PushSubscription?.optedIn;
-      if (!optedIn) {
-        return { ok: false, code: "PERMISSION_DENIED", message: "Notification permission was not granted." };
-      }
-      const subResp = await outlookAxios.post("/outlook/notifications/subscribe", {
-        device_label: navigator.userAgent.slice(0, 60),
-        timezone_offset_minutes: -new Date().getTimezoneOffset(),
-      });
-      return { ok: true, device_id: subResp.data?.device_id, endpoint_registered: true, server_ready: true };
-    } catch (e) {
-      return { ok: false, code: "REGISTRATION_FAILED", message: e?.message || "Device registration failed." };
-    }
-  }, []);
+  const registerDevice = useCallback(async ({ requestPermission }) => {
+    setRegistrationResult({ ok: false, code: "REGISTERING", message: "Registering this device…" });
+    const result = await ensureOneSignalDeviceRegistered({
+      apiClient: outlookAxios,
+      requestPermission,
+      timeoutMs: 20000,
+    });
+    setRegistrationResult(result);
+    setPermissionState(result.permission || (typeof Notification !== "undefined" ? Notification.permission : "unsupported"));
+    await refreshStatus();
+    return result;
+  }, [refreshStatus]);
 
   const setTier = useCallback(async (tier) => {
     setSaving(true);
+    setTestResult(null);
     try {
-      // Audit fix: this used to call subscribeDevice() only inside the
-      // `permission === "default"` branch (i.e. only on the very first
-      // prompt). A user whose browser permission was already "granted"
-      // before ever opening this settings panel -- a plausible first-
-      // contact state, not an edge case -- would skip subscribeDevice()
-      // entirely: the tier still saves and the bell lights up "ON", but no
-      // push subscription is ever created or verified with the backend, so
-      // no notification would ever actually arrive, with no error shown
-      // anywhere. Now subscribeDevice() runs whenever the user is turning
-      // notifications ON and permission is already granted, in addition to
-      // the request-then-subscribe path for a fresh "default" state.
-      if (tier !== "OFF" && typeof Notification !== "undefined") {
-        if (Notification.permission === "default") {
-          const perm = await Notification.requestPermission();
-          setPermissionState(perm);
-          if (perm === "granted") await subscribeDevice();
-        } else if (Notification.permission === "granted") {
-          await subscribeDevice();
-        }
+      if (tier !== "OFF") {
+        const registration = await registerDevice({ requestPermission: true });
+        if (!registration.ok) return;
       }
-      const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier, notify_all_devices: prefs?.notify_all_devices !== false });
+
+      const { data } = await outlookAxios.post("/outlook/notifications/prefs", {
+        tier,
+        notify_all_devices: prefs?.notify_all_devices !== false,
+      });
       setPrefs(data?.prefs || { tier });
-    } catch (_) { /* leave prefs unchanged on failure, user can retry */ }
-    await refreshStatus();
-    setSaving(false);
-  }, [prefs, setPrefs, subscribeDevice, refreshStatus]);
+      if (tier === "OFF") {
+        setRegistrationResult({
+          ok: true,
+          code: "PREFERENCES_OFF",
+          message: "Notification delivery is off. This device can be re-enabled later without a new account link.",
+        });
+      }
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      setRegistrationResult({
+        ok: false,
+        code: detail?.code || "PREFERENCE_SAVE_FAILED",
+        message: detail?.message || error?.message || "Notification preference could not be saved.",
+      });
+    } finally {
+      await refreshStatus();
+      setSaving(false);
+    }
+  }, [prefs, registerDevice, refreshStatus, setPrefs]);
 
   const tier = prefs?.tier || "OFF";
 
-  // Owner spec (Phase 4/10): a returning user whose browser permission is
-  // already granted must be re-registered automatically -- no second
-  // permission prompt, no silent "looks ON but nothing ever arrives" gap if
-  // the push subscription expired or this is a fresh device/reinstalled PWA.
-  // Runs once prefs have actually loaded (prefs !== null) so it never fires
-  // with a stale default tier before the real saved tier is known.
+  // Returning-session repair. It never opens a permission prompt. When the
+  // browser already has permission, it relinks the OneSignal external ID and
+  // refreshes the real per-device backend record.
   useEffect(() => {
     if (!prefs) return;
     refreshStatus();
     if (tier === "OFF") return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-    subscribeDevice().then(refreshStatus);
+    registerDevice({ requestPermission: false });
+    // prefs/tier are the intentional session trigger; callbacks are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefs]);
 
   const allowNotifications = useCallback(async () => {
-    setSaving(true);
-    let regResult = { ok: false };
-    try {
-      if (typeof Notification !== "undefined" && Notification.permission === "default") {
-        const perm = await Notification.requestPermission();
-        setPermissionState(perm);
-        if (perm !== "granted") { setSaving(false); return; }
-      }
-      regResult = await subscribeDevice();
-      if (regResult.ok) {
-        const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier: "ALL_UPDATES", notify_all_devices: true });
-        setPrefs(data?.prefs || { tier: "ALL_UPDATES" });
-      }
-    } catch (_) { /* leave prefs unchanged on failure, user can retry */ }
-    await refreshStatus();
-    setSaving(false);
-  }, [subscribeDevice, setPrefs, refreshStatus]);
+    await setTier("ALL_UPDATES");
+  }, [setTier]);
 
   const sendTestNotification = useCallback(async () => {
     setTestSending(true);
     setTestResult(null);
     try {
+      // A valid local OneSignal subscription with a missing/stale backend row
+      // repairs itself here before the provider send is attempted.
+      const registration = await registerDevice({ requestPermission: true });
+      if (!registration.ok) {
+        setTestResult({ status: registration.code, message: registration.message });
+        return;
+      }
       const { data } = await outlookAxios.post("/outlook/notifications/test");
       setTestResult(data);
-    } catch (e) {
-      setTestResult({ status: "FAILED", message: e?.message || "Request failed." });
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      setTestResult({
+        status: detail?.code || "FAILED",
+        message: detail?.message || error?.message || "Test notification request failed.",
+      });
+    } finally {
+      await refreshStatus();
+      setTestSending(false);
     }
-    await refreshStatus();
-    setTestSending(false);
-  }, [refreshStatus]);
+  }, [refreshStatus, registerDevice]);
 
-  // Prominent onboarding card: shown only to a user who has never enabled
-  // Outlook notifications (tier still OFF) and hasn't explicitly denied
-  // browser permission. Owner spec: one clear "Allow notifications" button;
-  // tapping it uses the real browser permission path, then auto-selects
-  // ALL_UPDATES -- it must never repeatedly nag a user who explicitly
-  // declined (permissionState === "denied" falls through to the settings
-  // list below instead, which already explains how to re-enable manually).
-  const showOnboarding = prefs && tier === "OFF" && permissionState !== "denied";
-
-  // v6.24.18 owner directive -- ON must mean ON_VERIFIED, never "the
-  // preference tier happens to not be OFF". The bell only lights up amber
-  // once the backend has confirmed a real device registration + a working
-  // push server; every other state (still checking, setup incomplete,
-  // permission denied, server not ready) gets its own honest label.
   const finalStatus = verifiedStatus?.final_status;
+  const registrationReady = ["READY_NOT_TESTED", "ON_VERIFIED"].includes(finalStatus);
   const isVerified = finalStatus === "ON_VERIFIED";
   const statusLabel = {
     ON_VERIFIED: "Phone alerts active",
     OFF: "Notifications off",
     SERVER_NOT_CONFIGURED: "Push server not ready",
     SUBSCRIPTION_MISSING: "Setup required — device not registered",
+    REGISTRATION_INCOMPLETE: "Device registration is incomplete",
     READY_NOT_TESTED: "Registered — send a test to verify",
     DELIVERY_FAILED: "Last delivery failed",
-  }[finalStatus] || (finalStatus ? finalStatus : "Checking status…");
+    NO_ACTIVE_ONESIGNAL_RECIPIENT: "No active OneSignal recipient",
+  }[finalStatus] || (finalStatus ? finalStatus.replace(/_/g, " ") : "Checking status…");
+
+  const showOnboarding = prefs && tier === "OFF" && permissionState !== "denied";
+  const diagnostic = registrationResult || {};
+  const activeDevices = Number(verifiedStatus?.active_device_count || 0);
 
   return (
     <div className={`${CARD} p-5`}>
@@ -356,20 +321,29 @@ function NotificationSettings({ prefs, setPrefs }) {
         <span className={MONO_LABEL}>Notifications</span>
         {isVerified ? <Bell className="h-4 w-4 text-amber-300" /> : <BellOff className="h-4 w-4 text-white/30" />}
       </div>
+
       {tier !== "OFF" && (
-        <div className="mt-1 flex items-center justify-between text-[10px]">
-          <span className={isVerified ? "text-amber-300/80" : "text-white/40"}>{statusLabel}</span>
-          <button onClick={sendTestNotification} disabled={testSending}
-                  className="text-white/40 underline decoration-dotted hover:text-white/70 disabled:opacity-50">
-            {testSending ? "Sending…" : "Send test notification"}
+        <div className="mt-1 flex items-center justify-between gap-3 text-[10px]">
+          <span className={isVerified ? "text-amber-300/80" : "text-white/45"}>{statusLabel}</span>
+          <button onClick={sendTestNotification} disabled={testSending || saving}
+                  className="shrink-0 text-white/45 underline decoration-dotted hover:text-white/75 disabled:opacity-50">
+            {testSending ? "Registering / sending…" : "Send test notification"}
           </button>
         </div>
       )}
+
+      {registrationResult?.message && (
+        <p className={`mt-2 rounded-lg border px-3 py-2 text-[10px] leading-4 ${registrationResult.ok ? "border-emerald-400/15 bg-emerald-300/[0.04] text-emerald-200/80" : "border-amber-300/15 bg-amber-300/[0.04] text-amber-100/80"}`}>
+          {registrationResult.code}: {registrationResult.message}
+        </p>
+      )}
+
       {testResult && (
-        <p className={`mt-1 text-[10px] ${testResult.status === "SENT" ? "text-emerald-300/80" : "text-rose-300/80"}`}>
+        <p className={`mt-2 text-[10px] ${testResult.status === "SENT" ? "text-emerald-300/80" : "text-rose-300/80"}`}>
           {testResult.status}: {testResult.message}
         </p>
       )}
+
       {showOnboarding && (
         <div className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] p-4">
           <div className="flex items-start gap-3">
@@ -377,34 +351,71 @@ function NotificationSettings({ prefs, setPrefs }) {
             <div>
               <div className="text-[13px] font-semibold text-amber-100">Get hourly Outlook updates</div>
               <p className="mt-1 text-[11px] leading-4 text-white/55">
-                Enable notifications to get the AI Market Outlook every hour, plus TP/SL results, right on this device.
+                Permission alone is not treated as success. The app will wait for OneSignal to create and link this phone before enabling alerts.
               </p>
             </div>
           </div>
           <button disabled={saving} onClick={allowNotifications}
                   className="mt-3 w-full rounded-lg bg-amber-300 py-2.5 text-[12px] font-bold text-black disabled:opacity-50">
-            {saving ? "Enabling…" : "Allow Outlook notifications"}
+            {saving ? "Registering device…" : "Allow Outlook notifications"}
           </button>
         </div>
       )}
+
       {permissionState === "denied" && (
-        <p className="mt-2 text-[11px] text-rose-300/80">Notifications are blocked in your browser settings. Re-enable them for this site, then try again here.</p>
+        <p className="mt-2 text-[11px] text-rose-300/80">Notifications are blocked in browser or iPhone settings. Re-enable them for this app, then tap Retry registration.</p>
       )}
+      {registrationResult?.code === "IOS_PWA_INSTALL_REQUIRED" && (
+        <p className="mt-2 text-[11px] text-amber-200">On iPhone, use Share → Add to Home Screen, then open XAU AI Sniper from that Home Screen icon.</p>
+      )}
+
+      {tier !== "OFF" && !registrationReady && (
+        <button disabled={saving} onClick={() => registerDevice({ requestPermission: true })}
+                className="mt-3 w-full rounded-lg border border-amber-300/25 bg-amber-300/[0.05] py-2.5 text-[11px] font-semibold text-amber-100 disabled:opacity-50">
+          {saving ? "Registering…" : "Retry registration"}
+        </button>
+      )}
+
       <div className="mt-3 flex flex-col gap-2">
         {[
           { v: "OFF", l: "Off" },
           { v: "HOURLY_ONLY", l: "Hourly signals only" },
           { v: "HOURLY_PLUS_RESULTS", l: "Hourly signals + TP/SL results" },
           { v: "ALL_UPDATES", l: "All outlook updates" },
-        ].map((opt) => (
-          <button key={opt.v} disabled={saving} onClick={() => setTier(opt.v)}
-                  className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-[12px] transition ${
-                    tier === opt.v ? "border-amber-300/40 bg-amber-300/[0.06] text-amber-100" : "border-white/[0.06] text-white/60 hover:border-white/15"
-                  }`}>
-            {opt.l}
-            {tier === opt.v && <span className="text-[10px]">ON</span>}
-          </button>
-        ))}
+        ].map((opt) => {
+          const selected = tier === opt.v;
+          const active = selected && (opt.v === "OFF" || registrationReady);
+          return (
+            <button key={opt.v} disabled={saving} onClick={() => setTier(opt.v)}
+                    className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-[12px] transition ${selected ? "border-amber-300/40 bg-amber-300/[0.06] text-amber-100" : "border-white/[0.06] text-white/60 hover:border-white/15"}`}>
+              {opt.l}
+              {selected && <span className="text-[9px]">{active ? (opt.v === "OFF" ? "OFF" : "ACTIVE") : "SAVED · NOT ACTIVE"}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 rounded-lg border border-white/[0.05] bg-black/15">
+        <button onClick={() => setDiagnosticsOpen((open) => !open)} className="flex w-full items-center justify-between px-3 py-2 text-left text-[10px] text-white/40">
+          <span>Registration diagnostics</span>
+          <span>{diagnosticsOpen ? "Hide" : "Show"}</span>
+        </button>
+        {diagnosticsOpen && (
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-white/[0.05] px-3 py-3 text-[9px] text-white/40">
+            <div>Permission <span className="text-white/70">{diagnostic.permission || permissionState}</span></div>
+            <div>Standalone <span className="text-white/70">{diagnostic.standalone_mode == null ? "—" : diagnostic.standalone_mode ? "yes" : "no"}</span></div>
+            <div>SW active <span className="text-white/70">{diagnostic.service_worker_active == null ? "—" : diagnostic.service_worker_active ? "yes" : "no"}</span></div>
+            <div>SW scope <span className="text-white/70">{diagnostic.service_worker_scope || "—"}</span></div>
+            <div>SDK initialized <span className="text-white/70">{diagnostic.one_signal_initialized == null ? "—" : diagnostic.one_signal_initialized ? "yes" : "no"}</span></div>
+            <div>Opted in <span className="text-white/70">{diagnostic.opted_in == null ? "—" : diagnostic.opted_in ? "yes" : "no"}</span></div>
+            <div>Subscription ID <span className="text-white/70">{diagnostic.subscription_id_masked || "missing"}</span></div>
+            <div>Token <span className="text-white/70">{diagnostic.token_present == null ? "—" : diagnostic.token_present ? "present" : "missing"}</span></div>
+            <div>OneSignal ID <span className="text-white/70">{diagnostic.onesignal_id_masked || "missing"}</span></div>
+            <div>External ID <span className="text-white/70">{diagnostic.external_id_linked == null ? "—" : diagnostic.external_id_linked ? "linked" : "not linked"}</span></div>
+            <div>Backend devices <span className="text-white/70">{activeDevices}</span></div>
+            <div>Latest test <span className="text-white/70">{verifiedStatus?.latest_notification_status || "—"}</span></div>
+          </div>
+        )}
       </div>
     </div>
   );

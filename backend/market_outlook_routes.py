@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import market_outlook as mo
 import notifications as notif
@@ -207,6 +207,11 @@ def build_router() -> APIRouter:
         db = srv.db
         if body.tier not in mo.NOTIFICATION_TIERS:
             raise HTTPException(status_code=400, detail=f"tier must be one of {mo.NOTIFICATION_TIERS}")
+        if body.tier != "OFF" and await notif.count_complete_active_devices(user["id"]) < 1:
+            raise HTTPException(status_code=409, detail={
+                "code": "SUBSCRIPTION_MISSING",
+                "message": "Register and verify this device before enabling notification delivery.",
+            })
         lic = await srv._get_user_license(user)
         account = str((lic or {}).get("mt5_account") or "").strip()
         doc = {
@@ -233,36 +238,35 @@ def build_router() -> APIRouter:
     async def get_my_user_id(user: dict = Depends(srv.get_cloud_user)):
         return {"user_id": user["id"]}
 
-    # v6.25.3 owner directive -- no more raw Web Push endpoint/keys stored
-    # here. OneSignal's SDK manages actual device registration; this just
-    # confirms the browser granted permission and was tagged via
-    # OneSignal.login(), so this backend knows "opted_in" for status/dispatch
-    # purposes. One record per user (not per device) since OneSignal fans a
-    # single external_user_id out to every device tagged under it.
+    # Genuine OneSignal per-device registration. Browser permission is
+    # insufficient: the Subscription ID, token presence, OneSignal ID,
+    # and authenticated external ID must all be verified first.
     @r.post("/outlook/notifications/subscribe")
-    async def subscribe_push(body: mo.PushSubscriptionIn, user: dict = Depends(srv.get_cloud_user)):
-        db = srv.db
-        now_iso = datetime.now(timezone.utc).isoformat()
-        existing = await db.cloud_push_subscriptions.find_one({"user_id": user["id"]})
-        record = {
-            "user_id": user["id"], "opted_in": True,
-            "device_label": body.device_label or "", "timezone_offset_minutes": body.timezone_offset_minutes or 0,
-            "updated_at": now_iso,
-        }
-        if existing:
-            await db.cloud_push_subscriptions.update_one({"id": existing["id"]}, {"$set": record})
-            return {"ok": True, "device_id": existing["id"], "already_subscribed": True, "refreshed": True}
-        device_id = str(uuid.uuid4())
-        record["id"] = device_id
-        record["created_at"] = now_iso
-        await db.cloud_push_subscriptions.insert_one(record)
-        return {"ok": True, "device_id": device_id, "already_subscribed": False, "refreshed": False}
+    async def subscribe_push(body: mo.PushSubscriptionIn, request: Request, user: dict = Depends(srv.get_cloud_user)):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        result = await notif.upsert_device_registration(
+            user["id"], payload, request.headers.get("user-agent", ""),
+        )
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail={"code": result.get("code"), "message": result.get("message")})
+        return result
+
+    @r.post("/outlook/notifications/unsubscribe")
+    async def unsubscribe_current_push(body: mo.PushUnsubscribeIn, user: dict = Depends(srv.get_cloud_user)):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        supplied_external = str(payload.get("external_id") or "").strip()
+        if supplied_external and supplied_external != user["id"]:
+            raise HTTPException(status_code=400, detail={"code": "EXTERNAL_ID_MISMATCH", "message": "External ID does not match authenticated user."})
+        return await notif.deactivate_device_registration(user["id"], payload)
 
     @r.delete("/outlook/notifications/subscribe/{device_id}")
     async def unsubscribe_push(device_id: str, user: dict = Depends(srv.get_cloud_user)):
         db = srv.db
+        now_iso = datetime.now(timezone.utc).isoformat()
         result = await db.cloud_push_subscriptions.update_one(
-            {"id": device_id, "user_id": user["id"]}, {"$set": {"opted_in": False}})
+            {"id": device_id, "user_id": user["id"]},
+            {"$set": {"active": False, "opted_in": False, "updated_at": now_iso, "deactivated_reason": "USER_REQUEST"}},
+        )
         return {"ok": True, "deleted": result.modified_count > 0}
 
     @r.get("/outlook/notifications/history")

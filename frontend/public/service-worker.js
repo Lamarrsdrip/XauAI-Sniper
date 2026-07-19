@@ -1,116 +1,99 @@
 /**
  * XAU AI Sniper Command Center — Service Worker
  * ------------------------------------------------------------
- * Goal: installed PWA must auto-update the moment new code ships.
- *
- * Strategy:
- *   - Network-first for ALL HTML / JS / CSS → always fetches fresh from server
- *   - If network is down → fall back to last cached version (offline safety)
- *   - On activate: PURGES every old cache → no stale JS chunks ever
- *   - skipWaiting + clients.claim → new SW takes over instantly without
- *     requiring the user to close & reopen the app
- * ------------------------------------------------------------
+ * Network-first PWA worker with OneSignal Web Push v16 imported into the
+ * same root-scope worker. The page can query the worker to distinguish a
+ * healthy PWA worker from a PWA worker whose OneSignal import failed.
  */
-// v6.25.3 owner directive 2026-07-17 -- OneSignal push handling now runs
-// inside THIS existing service worker (rather than letting the SDK
-// register a second, competing worker at the same '/' scope), per
-// OneSignal's documented "existing service worker" integration pattern.
-// This importScripts() call is what actually installs OneSignal's push/
-// notificationclick listeners; our own custom listeners for those events
-// were removed below (see bottom of file) so there's no double-handling.
+let oneSignalWorkerImported = false;
+let oneSignalWorkerError = "";
+
 try {
-  importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');
+  importScripts("https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js");
+  oneSignalWorkerImported = true;
 } catch (error) {
-  // Push is optional. A blocked/unavailable provider must not prevent the
-  // base PWA worker from installing, updating, or providing offline fallback.
-  console.warn('[XauAI] OneSignal worker unavailable; push remains disabled.');
+  oneSignalWorkerError = String(error?.message || error || "OneSignal worker import failed");
+  // Push remains optional for the rest of the PWA, but registration UI must
+  // report this state rather than claiming that notifications are available.
+  console.warn("[XauAI] OneSignal worker unavailable; push remains disabled.", error);
 }
 
-const CACHE_NAME = 'xauai-cloud-v' + Date.now();
+const WORKER_VERSION = "xau-pwa-onesignal-device-v1";
+const CACHE_NAME = "xauai-cloud-v" + Date.now();
 
-self.addEventListener('install', (event) => {
-  // Skip the "waiting" phase — new SW activates immediately
+self.addEventListener("install", () => {
   self.skipWaiting();
 });
 
-self.addEventListener('activate', (event) => {
+self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      // Delete ALL old caches from previous deploys
       const names = await caches.keys();
-      await Promise.all(names.filter(n => n !== CACHE_NAME).map(n => caches.delete(n)));
-      // Take control of all open clients (tabs) right now
+      await Promise.all(names.filter((name) => name !== CACHE_NAME).map((name) => caches.delete(name)));
       await self.clients.claim();
-      // Notify clients so they can hard-reload
-      const clients = await self.clients.matchAll({ type: 'window' });
-      clients.forEach(client => client.postMessage({ type: 'SW_UPDATED' }));
-    })()
+      const clients = await self.clients.matchAll({ type: "window" });
+      clients.forEach((client) => client.postMessage({ type: "SW_UPDATED" }));
+    })(),
   );
 });
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener("fetch", (event) => {
   const req = event.request;
-  if (req.method !== 'GET') return;
+  if (req.method !== "GET") return;
   const url = new URL(req.url);
 
-  // Never cache API calls — they must always be fresh
-  if (url.pathname.startsWith('/api/')) return;
+  if (url.pathname.startsWith("/api/")) return;
 
-  // Network-first for HTML/JS/CSS (the stuff that updates on each deploy)
-  const isCritical = /\.(?:html|js|css|json)$/.test(url.pathname) || req.mode === 'navigate';
-
+  const isCritical = /\.(?:html|js|css|json)$/.test(url.pathname) || req.mode === "navigate";
   if (isCritical) {
     event.respondWith(
       (async () => {
         try {
-          const fresh = await fetch(req, { cache: 'no-store' });
-          // Cache the fresh copy for offline fallback
+          const fresh = await fetch(req, { cache: "no-store" });
           if (fresh && fresh.ok && url.origin === self.location.origin) {
             const cache = await caches.open(CACHE_NAME);
             cache.put(req, fresh.clone()).catch(() => {});
           }
           return fresh;
-        } catch (_) {
-          // Network failed → serve last cached if we have it
+        } catch (error) {
           const cached = await caches.match(req);
           if (cached) return cached;
-          // Navigation fallback — return the root index
-          if (req.mode === 'navigate') return caches.match('/');
-          throw _;
+          if (req.mode === "navigate") return caches.match("/");
+          throw error;
         }
-      })()
+      })(),
     );
     return;
   }
 
-  // For images/fonts/icons — cache-first (these rarely change, fine to serve cached)
   event.respondWith(
-    caches.match(req).then(cached => cached || fetch(req).then(res => {
-      if (res && res.ok && url.origin === self.location.origin) {
-        caches.open(CACHE_NAME).then(c => c.put(req, res.clone()).catch(() => {}));
+    caches.match(req).then((cached) => cached || fetch(req).then((response) => {
+      if (response && response.ok && url.origin === self.location.origin) {
+        caches.open(CACHE_NAME).then((cache) => cache.put(req, response.clone()).catch(() => {}));
       }
-      return res;
-    }))
+      return response;
+    })),
   );
 });
 
-// Let the page force an SW update / cache flush on demand (for manual "Check for updates" buttons)
-self.addEventListener('message', (event) => {
-  if (event.data === 'SKIP_WAITING') self.skipWaiting();
-  if (event.data === 'CLEAR_CACHES') {
-    caches.keys().then(names => names.forEach(n => caches.delete(n)));
+self.addEventListener("message", (event) => {
+  const data = event.data;
+  if (data === "SKIP_WAITING") self.skipWaiting();
+  if (data === "CLEAR_CACHES") {
+    caches.keys().then((names) => names.forEach((name) => caches.delete(name)));
+  }
+
+  if (data?.type === "XAU_PUSH_DIAGNOSTICS") {
+    const response = {
+      type: "XAU_PUSH_DIAGNOSTICS_RESULT",
+      worker_version: WORKER_VERSION,
+      onesignal_worker_imported: oneSignalWorkerImported,
+      onesignal_worker_error: oneSignalWorkerError ? oneSignalWorkerError.slice(0, 180) : "",
+      scope: self.registration?.scope || "",
+    };
+    if (event.ports?.[0]) event.ports[0].postMessage(response);
+    else event.source?.postMessage?.(response);
   }
 });
 
-/**
- * AI Market Outlook — Web Push notifications.
- * ------------------------------------------------------------
- * v6.25.3: push/notificationclick handling is now owned entirely by
- * OneSignal's imported worker code (see importScripts() at the top of this
- * file) -- our own custom listeners for those two events were removed here
- * to avoid double-handling the same event on this shared service worker.
- * OneSignal renders the notification and opens/focuses the `url` we send
- * in the REST API payload (see backend/notifications.py's
- * _send_onesignal()) -- no app-specific code needed here anymore.
- * ------------------------------------------------------------
- */
+// Push and notificationclick events are owned by OneSignal's imported worker.

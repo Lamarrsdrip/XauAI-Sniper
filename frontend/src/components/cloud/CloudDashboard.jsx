@@ -682,7 +682,7 @@ export default function CloudDashboard() {
   };
 
   const logout = async () => {
-    try { await logoutOneSignalUser(); } catch {}
+    try { await logoutOneSignalUser(commandAxios); } catch {}
     try { await commandAxios.post("/cloud/auth/logout"); } catch {}
     navigate("/command");
   };

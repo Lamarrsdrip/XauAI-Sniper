@@ -122,16 +122,29 @@ class NotificationPrefsUpdate(BaseModel):
     notify_all_devices: bool = True
 
 
-# v6.25.3 owner directive 2026-07-17 -- no raw Web Push endpoint/keys
-# anymore. OneSignal's client SDK manages the actual device registration
-# and push subscription lifecycle entirely on its own; this call just
-# confirms the browser granted permission and the device was tagged with
-# OneSignal.login(user_id), so this backend knows "opted_in" without ever
-# handling a push endpoint/key blob itself.
+# OneSignal v16 genuine per-device registration. The raw push token is
+# never sent or persisted; token_present proves that OneSignal finished
+# creating the browser subscription.
 class PushSubscriptionIn(BaseModel):
+    onesignal_subscription_id: str
+    onesignal_id: str
+    external_id: str
+    device_instance_id: Optional[str] = ""
     device_label: Optional[str] = ""
+    platform: Optional[str] = ""
+    browser: Optional[str] = ""
     timezone_offset_minutes: Optional[int] = 0
+    permission_state: str
+    opted_in: bool
+    token_present: bool
+    service_worker_scope: Optional[str] = "/"
+    registration_version: Optional[str] = "onesignal-web-v16-device-v1"
 
+
+class PushUnsubscribeIn(BaseModel):
+    onesignal_subscription_id: Optional[str] = None
+    device_instance_id: Optional[str] = None
+    external_id: Optional[str] = None
 
 # ---------------------------------------------------------------------------
 # Evidence gathering — reads the EA's own already-transmitted state only

@@ -156,7 +156,10 @@ def _build_payload(doc: Dict, event: str) -> Dict:
 # PERMANENT_SUBSCRIPTION_GONE class did (OneSignal manages device lifecycle
 # itself; we no longer store per-device push endpoints at all).
 SERVER_NOT_CONFIGURED = "SERVER_NOT_CONFIGURED"
-NO_DEVICE_REGISTERED = "NO_DEVICE_REGISTERED"
+# Backward-compatible symbol; provider no-recipient is now reported with
+# the precise production state name.
+NO_DEVICE_REGISTERED = "NO_ACTIVE_ONESIGNAL_RECIPIENT"
+NO_ACTIVE_ONESIGNAL_RECIPIENT = NO_DEVICE_REGISTERED
 AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED"
 INVALID_PAYLOAD = "INVALID_PAYLOAD"
 TEMPORARY_DELIVERY_FAILURE = "TEMPORARY_DELIVERY_FAILURE"
@@ -167,21 +170,191 @@ RETRYABLE_FAILURES = {
 }
 
 
-async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
-    """Returns (ok: bool, failure_class: Optional[str]). The one production
-    dispatcher every caller (hourly outlook events, TP/SL results, the Send
-    Test Notification button) funnels through -- there is no second path.
+# ---------------------------------------------------------------------------
+# Genuine per-device OneSignal registration
+# ---------------------------------------------------------------------------
+REGISTRATION_VERSION = "onesignal-web-v16-device-v1"
+NO_ACTIVE_ONESIGNAL_RECIPIENT = "NO_ACTIVE_ONESIGNAL_RECIPIENT"
 
-    Sends by OneSignal external_id (== our own user_id). The client
-    SDK tags every device the user grants permission on with
-    OneSignal.login(user_id) (see frontend), so OneSignal itself fans this
-    single call out to every device for this user -- unlike the old
-    self-hosted Web Push code, this module never loops over per-device
-    subscription records or stores raw push endpoints."""
+
+def _clean_text(value, limit=240):
+    return str(value or "").strip()[:limit]
+
+
+def _device_is_complete(doc: Optional[Dict]) -> bool:
+    doc = doc or {}
+    return bool(
+        doc.get("active", True)
+        and doc.get("opted_in") is True
+        and doc.get("token_present") is True
+        and _clean_text(doc.get("permission_state"), 24) == "granted"
+        and _clean_text(doc.get("onesignal_subscription_id"))
+        and _clean_text(doc.get("onesignal_id"))
+        and _clean_text(doc.get("external_id"))
+    )
+
+
+def _masked_id(value: str) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    if len(text) <= 10:
+        return f"{text[:3]}…{text[-2:]}"
+    return f"{text[:6]}…{text[-4:]}"
+
+
+async def _ensure_device_index() -> None:
+    """Best-effort uniqueness for real subscription IDs only.
+
+    Old v6.25.3 rows have no subscription ID. The partial index deliberately
+    ignores those legacy rows so deployment does not fail while status reports
+    them as REGISTRATION_INCOMPLETE.
+    """
+    db = _db()
+    try:
+        await db.cloud_push_subscriptions.create_index(
+            [("user_id", 1), ("onesignal_subscription_id", 1)],
+            unique=True,
+            name="uniq_user_onesignal_subscription",
+            partialFilterExpression={"onesignal_subscription_id": {"$type": "string"}},
+        )
+    except Exception as exc:
+        logger.warning("ONESIGNAL_DEVICE_INDEX_WARNING: %s", exc)
+
+
+def validate_device_registration(payload: Dict, authenticated_user_id: str) -> tuple:
+    subscription_id = _clean_text(payload.get("onesignal_subscription_id"))
+    onesignal_id = _clean_text(payload.get("onesignal_id"))
+    external_id = _clean_text(payload.get("external_id"))
+    permission = _clean_text(payload.get("permission_state"), 24)
+    opted_in = payload.get("opted_in") is True
+    token_present = payload.get("token_present") is True
+
+    if external_id != str(authenticated_user_id):
+        return False, "EXTERNAL_ID_MISMATCH", "OneSignal External ID does not match the authenticated user."
+    if not subscription_id:
+        return False, "SUBSCRIPTION_ID_MISSING", "OneSignal did not provide a device Subscription ID."
+    if not onesignal_id:
+        return False, "ONESIGNAL_ID_MISSING", "OneSignal did not provide a user ID."
+    if permission != "granted":
+        return False, "PERMISSION_NOT_GRANTED", "Browser notification permission is not granted."
+    if not opted_in:
+        return False, "SUBSCRIPTION_NOT_OPTED_IN", "OneSignal reports that this device is not opted in."
+    if not token_present:
+        return False, "PUSH_TOKEN_MISSING", "OneSignal has not created a push token for this device."
+    return True, "DEVICE_VALID", "Device registration is complete."
+
+
+async def upsert_device_registration(authenticated_user_id: str, payload: Dict, user_agent: str = "") -> Dict:
+    valid, code, message = validate_device_registration(payload, authenticated_user_id)
+    if not valid:
+        return {"ok": False, "code": code, "message": message}
+
+    await _ensure_device_index()
+    db = _db()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    subscription_id = _clean_text(payload.get("onesignal_subscription_id"))
+    device_instance_id = _clean_text(payload.get("device_instance_id"))
+
+    # A browser may receive a new OneSignal Subscription ID after clearing site
+    # data or provider re-registration. The stable local device instance lets us
+    # deactivate the old backend row without overwriting other phones/browsers.
+    if device_instance_id:
+        await db.cloud_push_subscriptions.update_many(
+            {
+                "user_id": authenticated_user_id,
+                "device_instance_id": device_instance_id,
+                "onesignal_subscription_id": {"$ne": subscription_id},
+                "active": True,
+            },
+            {"$set": {"active": False, "opted_in": False, "updated_at": now_iso, "deactivated_reason": "SUBSCRIPTION_REPLACED"}},
+        )
+
+    query = {"user_id": authenticated_user_id, "onesignal_subscription_id": subscription_id}
+    existing = await db.cloud_push_subscriptions.find_one(query)
+    record = {
+        "user_id": authenticated_user_id,
+        "onesignal_subscription_id": subscription_id,
+        "onesignal_id": _clean_text(payload.get("onesignal_id")),
+        "external_id": authenticated_user_id,
+        "device_instance_id": device_instance_id,
+        "opted_in": True,
+        "token_present": True,
+        "permission_state": "granted",
+        "active": True,
+        "device_label": _clean_text(payload.get("device_label"), 160),
+        "user_agent": _clean_text(user_agent or payload.get("user_agent"), 300),
+        "platform": _clean_text(payload.get("platform"), 80),
+        "browser": _clean_text(payload.get("browser"), 80),
+        "timezone_offset_minutes": int(payload.get("timezone_offset_minutes") or 0),
+        "service_worker_scope": _clean_text(payload.get("service_worker_scope"), 160),
+        "registration_version": _clean_text(payload.get("registration_version"), 80) or REGISTRATION_VERSION,
+        "registration_state": "COMPLETE",
+        "updated_at": now_iso,
+        "last_seen_at": now_iso,
+    }
+    if existing:
+        device_id = existing.get("id") or str(uuid.uuid4())
+        record["id"] = device_id
+        await db.cloud_push_subscriptions.update_one(query, {"$set": record})
+        created = False
+    else:
+        device_id = str(uuid.uuid4())
+        record.update({"id": device_id, "created_at": now_iso, "last_test_status": None, "last_test_at": None})
+        await db.cloud_push_subscriptions.insert_one(record)
+        created = True
+
+    return {
+        "ok": True,
+        "code": "DEVICE_REGISTERED",
+        "message": "OneSignal device registration stored.",
+        "device_id": device_id,
+        "created": created,
+        "active_device_count": await count_complete_active_devices(authenticated_user_id),
+    }
+
+
+async def deactivate_device_registration(authenticated_user_id: str, payload: Dict) -> Dict:
+    db = _db()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    clauses = []
+    subscription_id = _clean_text(payload.get("onesignal_subscription_id"))
+    device_instance_id = _clean_text(payload.get("device_instance_id"))
+    if subscription_id:
+        clauses.append({"onesignal_subscription_id": subscription_id})
+    if device_instance_id:
+        clauses.append({"device_instance_id": device_instance_id})
+    query = {"user_id": authenticated_user_id}
+    if clauses:
+        query["$or"] = clauses
+    result = await db.cloud_push_subscriptions.update_many(
+        query,
+        {"$set": {"active": False, "opted_in": False, "updated_at": now_iso, "deactivated_reason": "USER_LOGOUT"}},
+    )
+    return {"ok": True, "deactivated": result.modified_count}
+
+
+async def complete_active_devices(user_id: str) -> list:
+    rows = await _db().cloud_push_subscriptions.find(
+        {"user_id": user_id, "active": True, "opted_in": True}, {"_id": 0},
+    ).sort("last_seen_at", -1).to_list(100)
+    return [row for row in rows if _device_is_complete(row)]
+
+
+async def count_complete_active_devices(user_id: str) -> int:
+    return len(await complete_active_devices(user_id))
+
+
+async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
+    """Single production OneSignal dispatcher.
+
+    Returns (ok, failure_class, provider_result). A HTTP 200 response is not
+    success unless OneSignal returns a non-empty notification message id.
+    """
     cfg = await _onesignal_config()
     if not (cfg["app_id"] and cfg["api_key"]):
-        logger.info(f"NOTIFICATION_SKIPPED_NOT_CONFIGURED user={user_id} payload={payload.get('title')}")
-        return False, SERVER_NOT_CONFIGURED
+        logger.info("NOTIFICATION_SKIPPED_NOT_CONFIGURED user=%s", user_id)
+        return False, SERVER_NOT_CONFIGURED, {"http_status": None, "message_id": None}
 
     import server as _srv
     deep_link = payload.get("deep_link") or "/ai-market-outlook"
@@ -196,7 +369,11 @@ async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
         "target_channel": "push",
         "headings": {"en": payload.get("title", "XAU AI Sniper")},
         "contents": {"en": payload.get("body", "")},
-        "data": {"deep_link": payload.get("deep_link", ""), "outlook_id": payload.get("outlook_id"), "event": payload.get("event", "")},
+        "data": {
+            "deep_link": payload.get("deep_link", ""),
+            "outlook_id": payload.get("outlook_id"),
+            "event": payload.get("event", ""),
+        },
         "web_url": web_url,
         "idempotency_key": provider_idempotency,
     }
@@ -205,41 +382,50 @@ async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(ONESIGNAL_API_URL, json=body, headers=headers)
     except httpx.TimeoutException:
-        logger.warning(f"ONESIGNAL_TIMEOUT user={user_id}")
-        return False, TEMPORARY_DELIVERY_FAILURE
-    except httpx.HTTPError as e:
-        logger.warning(f"ONESIGNAL_NETWORK_ERROR user={user_id}: {e}")
-        return False, TEMPORARY_DELIVERY_FAILURE
-    except Exception as e:
-        logger.warning(f"ONESIGNAL_UNEXPECTED_ERROR user={user_id}: {e}")
-        return False, UNKNOWN_FAILURE
+        logger.warning("ONESIGNAL_TIMEOUT user=%s", user_id)
+        return False, TEMPORARY_DELIVERY_FAILURE, {"http_status": None, "message_id": None, "error": "timeout"}
+    except httpx.HTTPError as exc:
+        logger.warning("ONESIGNAL_NETWORK_ERROR user=%s: %s", user_id, exc)
+        return False, TEMPORARY_DELIVERY_FAILURE, {"http_status": None, "message_id": None, "error": "network"}
+    except Exception as exc:
+        logger.warning("ONESIGNAL_UNEXPECTED_ERROR user=%s: %s", user_id, exc)
+        return False, UNKNOWN_FAILURE, {"http_status": None, "message_id": None, "error": "unexpected"}
 
-    if resp.status_code in (401, 403):
-        logger.warning(f"ONESIGNAL_AUTH_FAILED user={user_id} status={resp.status_code}: {resp.text[:200]}")
-        return False, AUTHENTICATION_FAILED
-    if resp.status_code >= 500:
-        logger.warning(f"ONESIGNAL_SERVER_ERROR user={user_id} status={resp.status_code}")
-        return False, TEMPORARY_DELIVERY_FAILURE
-    if resp.status_code >= 400:
-        logger.warning(f"ONESIGNAL_INVALID_REQUEST user={user_id} status={resp.status_code}: {resp.text[:200]}")
-        return False, INVALID_PAYLOAD
-
+    provider = {"http_status": resp.status_code, "message_id": None, "errors": None, "warnings": None}
     try:
         data = resp.json()
     except Exception:
-        return False, UNKNOWN_FAILURE
-    if data.get("id"):
-        return True, None
-    logger.info(f"ONESIGNAL_NO_RECIPIENTS user={user_id} response={data}")
-    return False, NO_DEVICE_REGISTERED
+        data = {}
+    provider["message_id"] = _clean_text(data.get("id")) or None
+    provider["errors"] = data.get("errors")
+    provider["warnings"] = data.get("warnings")
+
+    if resp.status_code in (401, 403):
+        logger.warning("ONESIGNAL_AUTH_FAILED user=%s status=%s", user_id, resp.status_code)
+        return False, AUTHENTICATION_FAILED, provider
+    if resp.status_code >= 500:
+        logger.warning("ONESIGNAL_SERVER_ERROR user=%s status=%s", user_id, resp.status_code)
+        return False, TEMPORARY_DELIVERY_FAILURE, provider
+    if resp.status_code >= 400:
+        logger.warning("ONESIGNAL_INVALID_REQUEST user=%s status=%s", user_id, resp.status_code)
+        return False, INVALID_PAYLOAD, provider
+    if provider["message_id"]:
+        return True, None, provider
+
+    logger.info("ONESIGNAL_NO_ACTIVE_RECIPIENT user=%s errors=%s warnings=%s", user_id, provider["errors"], provider["warnings"])
+    return False, NO_ACTIVE_ONESIGNAL_RECIPIENT, provider
+
+
+def _coerce_send_result(result: tuple) -> tuple:
+    """Temporary compatibility for older tests/mocks that return two values."""
+    if len(result) == 3:
+        return result
+    ok, failure_class = result
+    return ok, failure_class, {"http_status": None, "message_id": None, "errors": None, "warnings": None}
 
 
 async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> Optional[int]:
-    """Sends (or logs-as-skipped) a notification for `event` to every user
-    subscribed to this outlook's account, respecting per-user tier and
-    idempotency. Returns the sent count when every eligible recipient has a
-    terminal result, or None when recovery must retry. Never raises --
-    notification failures must never affect outlook generation/tracking."""
+    """Send an Outlook event without allowing push failure to affect trading or Outlook generation."""
     try:
         db = _db()
         account = doc.get("account", "")
@@ -257,123 +443,164 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> Opt
             if already and (already.get("delivery_status") == "SENT"
                             or already.get("failure_reason") not in RETRYABLE_FAILURES):
                 continue
+
             payload = _build_payload(doc, event)
-            subscription = await db.cloud_push_subscriptions.find_one({"user_id": user_id, "opted_in": True})
+            devices = await complete_active_devices(user_id)
             log_entry = {
-                "id": (already or {}).get("id") or str(uuid.uuid4()), "idempotency_key": idem_key, "user_id": user_id,
-                "outlook_id": outlook_id, "notification_type": event,
+                "id": (already or {}).get("id") or str(uuid.uuid4()),
+                "idempotency_key": idem_key,
+                "user_id": user_id,
+                "outlook_id": outlook_id,
+                "notification_type": event,
                 "scheduled_time": (already or {}).get("scheduled_time") or datetime.now(timezone.utc).isoformat(),
-                "sent_time": None, "delivery_status": "PENDING", "opened_time": None,
-                "device_count": 1 if subscription else 0, "retry_count": 0, "failure_reason": None,
+                "sent_time": None,
+                "delivery_status": "PENDING",
+                "opened_time": None,
+                "device_count": len(devices),
+                "retry_count": int((already or {}).get("retry_count", 0) or 0),
+                "failure_reason": None,
             }
-            if not subscription:
-                log_entry["delivery_status"] = "NO_DEVICE"
-                if already:
-                    await db.cloud_notification_log.update_one({"idempotency_key": idem_key}, {"$set": log_entry})
-                else:
-                    await db.cloud_notification_log.insert_one(log_entry)
-                continue
-            ok, failure_class = await _send_onesignal(user_id, payload)
-            log_entry["sent_time"] = datetime.now(timezone.utc).isoformat()
-            log_entry["delivery_status"] = "SENT" if ok else "FAILED"
-            if not ok:
-                log_entry["failure_reason"] = failure_class or UNKNOWN_FAILURE
+            if not devices:
+                log_entry.update({"delivery_status": "NO_DEVICE", "failure_reason": "SUBSCRIPTION_MISSING"})
+            else:
+                ok, failure_class, provider = _coerce_send_result(await _send_onesignal(user_id, payload))
+                log_entry.update({
+                    "sent_time": datetime.now(timezone.utc).isoformat(),
+                    "delivery_status": "SENT" if ok else "FAILED",
+                    "failure_reason": None if ok else (failure_class or UNKNOWN_FAILURE),
+                    "provider_http_status": provider.get("http_status"),
+                    "provider_message_id": provider.get("message_id"),
+                    "provider_errors": provider.get("errors"),
+                    "provider_warnings": provider.get("warnings"),
+                })
+                if ok:
+                    sent += 1
             if already:
                 log_entry["retry_count"] = int(already.get("retry_count", 0) or 0) + 1
                 await db.cloud_notification_log.update_one({"idempotency_key": idem_key}, {"$set": log_entry})
             else:
                 await db.cloud_notification_log.insert_one(log_entry)
-            if ok:
-                sent += 1
         return sent
-    except Exception as e:
-        logger.error(f"NOTIFICATION_DISPATCH_FAILED event={event} outlook={doc.get('id')}: {e}")
-        # None means the dispatch attempt itself did not complete far enough
-        # to establish terminal per-recipient logs. The persisted event must
-        # remain unflagged so restart recovery can retry it.
+    except Exception as exc:
+        logger.error("NOTIFICATION_DISPATCH_FAILED event=%s outlook=%s: %s", event, doc.get("id"), exc)
         return None
 
 
 async def send_test_notification(user_id: str) -> Dict:
-    """Real production dispatcher, not a second fake path. Uses the same
-    _send_onesignal() every real event uses -- required flow per the owner:
-    confirm OneSignal is configured, confirm this user has actually opted
-    in, send, capture the real HTTP/provider outcome, log it, return a
-    truthful status. Never returns SENT solely because no Python exception
-    occurred -- SENT here means _send_onesignal's own (ok=True) branch,
-    which only fires after OneSignal's response confirmed recipients > 0."""
     db = _db()
     status = await get_onesignal_status()
     if not status["configured"]:
-        return {"status": "SERVER_NOT_CONFIGURED",
-                "message": "OneSignal is not configured. Enter your App ID and REST API Key in Admin -> Settings."}
+        return {"status": "SERVER_NOT_CONFIGURED", "message": "OneSignal is not configured. Enter the App ID and REST API Key in Admin settings."}
 
-    subscription = await db.cloud_push_subscriptions.find_one({"user_id": user_id, "opted_in": True})
-    if not subscription:
-        return {"status": "NO_DEVICE", "message": "No registered device subscription for this user."}
+    devices = await complete_active_devices(user_id)
+    if not devices:
+        return {"status": "NO_DEVICE", "message": "No complete registered device subscription exists for this user."}
 
-    payload = {"title": "XAU AI Sniper Test", "body": "Phone alerts are working.",
-               "deep_link": "/ai-market-outlook", "outlook_id": None, "event": "TEST_NOTIFICATION"}
-    ok, failure_class = await _send_onesignal(user_id, payload)
+    payload = {
+        "title": "XAU AI Sniper Test",
+        "body": "Phone alerts are working.",
+        "deep_link": "/ai-market-outlook",
+        "outlook_id": None,
+        "event": "TEST_NOTIFICATION",
+    }
+    ok, failure_class, provider = _coerce_send_result(await _send_onesignal(user_id, payload))
     now_iso = datetime.now(timezone.utc).isoformat()
+    delivery_status = "SENT" if ok else "FAILED"
     await db.cloud_notification_log.insert_one({
-        "id": str(uuid.uuid4()), "idempotency_key": f"TEST:{user_id}:{now_iso}",
-        "user_id": user_id, "outlook_id": None, "notification_type": "TEST_NOTIFICATION",
-        "scheduled_time": now_iso, "sent_time": now_iso,
-        "delivery_status": "SENT" if ok else "FAILED",
-        "device_count": 1, "retry_count": 0,
+        "id": str(uuid.uuid4()),
+        "idempotency_key": f"TEST:{user_id}:{now_iso}",
+        "user_id": user_id,
+        "outlook_id": None,
+        "notification_type": "TEST_NOTIFICATION",
+        "scheduled_time": now_iso,
+        "sent_time": now_iso,
+        "delivery_status": delivery_status,
+        "device_count": len(devices),
+        "retry_count": 0,
         "failure_reason": None if ok else (failure_class or UNKNOWN_FAILURE),
+        "provider_http_status": provider.get("http_status"),
+        "provider_message_id": provider.get("message_id"),
+        "provider_errors": provider.get("errors"),
+        "provider_warnings": provider.get("warnings"),
     })
+    await db.cloud_push_subscriptions.update_many(
+        {"user_id": user_id, "active": True, "opted_in": True},
+        {"$set": {"last_test_status": delivery_status, "last_test_at": now_iso, "last_seen_at": now_iso}},
+    )
     if ok:
-        return {"status": "SENT", "message": "Test notification sent."}
-    if failure_class == NO_DEVICE_REGISTERED:
-        return {"status": "NO_DEVICE", "message": "OneSignal reports no active device for this account -- re-enable notifications to resubscribe."}
+        return {"status": "SENT", "message": "Test notification sent.", "provider_message_id": provider.get("message_id")}
+    if failure_class in (NO_ACTIVE_ONESIGNAL_RECIPIENT, NO_DEVICE_REGISTERED):
+        return {"status": "NO_DEVICE", "code": "NO_ACTIVE_ONESIGNAL_RECIPIENT", "message": "OneSignal found no active subscribed recipient for this account. Retry device registration."}
     if failure_class == AUTHENTICATION_FAILED:
-        return {"status": "FAILED", "message": "OneSignal rejected the REST API Key -- check Admin -> Settings."}
+        return {"status": "FAILED", "message": "OneSignal rejected the REST API Key. Check Admin settings."}
     return {"status": "FAILED", "message": f"Delivery failed ({failure_class or UNKNOWN_FAILURE})."}
 
 
 async def get_notification_status(user_id: str, account: str = "") -> Dict:
-    """Real, authenticated registration-status snapshot -- the frontend must
-    render THIS, never infer ON from the saved preference tier alone. Only
-    ON_VERIFIED once a real send has actually succeeded at least once;
-    configured-and-registered-but-never-successfully-tested is
-    READY_NOT_TESTED, a distinct, honest state."""
     db = _db()
     prefs = await db.cloud_notification_prefs.find_one({"user_id": user_id}, {"_id": 0})
     saved_tier = (prefs or {}).get("tier", "OFF")
-    subscription = await db.cloud_push_subscriptions.find_one({"user_id": user_id, "opted_in": True}, {"_id": 0})
+    all_active = await db.cloud_push_subscriptions.find(
+        {"user_id": user_id, "active": {"$ne": False}, "opted_in": True}, {"_id": 0},
+    ).sort("last_seen_at", -1).to_list(100)
+    complete = [row for row in all_active if _device_is_complete(row)]
+    incomplete = [row for row in all_active if not _device_is_complete(row)]
+    most_recent = (complete or incomplete or [None])[0]
+
     last_log = await db.cloud_notification_log.find_one(
         {"user_id": user_id}, {"_id": 0}, sort=[("scheduled_time", -1)],
     )
-    last_sent_ok = await db.cloud_notification_log.find_one(
-        {"user_id": user_id, "delivery_status": "SENT"}, {"_id": 0}, sort=[("scheduled_time", -1)],
-    )
+    registration_at = (most_recent or {}).get("updated_at") or (most_recent or {}).get("created_at") or ""
+    sent_query = {"user_id": user_id, "delivery_status": "SENT"}
+    if registration_at:
+        sent_query["scheduled_time"] = {"$gte": registration_at}
+    last_sent_ok = await db.cloud_notification_log.find_one(sent_query, {"_id": 0}, sort=[("scheduled_time", -1)])
     onesignal_status = await get_onesignal_status()
     server_ready = onesignal_status["configured"]
 
     if saved_tier == "OFF":
-        final_status = "OFF"
+        final_status, remediation = "OFF", "NONE"
     elif not server_ready:
-        final_status = "SERVER_NOT_CONFIGURED"
-    elif not subscription:
-        final_status = "SUBSCRIPTION_MISSING"
+        final_status, remediation = "SERVER_NOT_CONFIGURED", "CONFIGURE_ONESIGNAL"
+    elif not complete and incomplete:
+        final_status, remediation = "REGISTRATION_INCOMPLETE", "RETRY_DEVICE_REGISTRATION"
+    elif not complete:
+        final_status, remediation = "SUBSCRIPTION_MISSING", "REGISTER_DEVICE"
+    elif last_log and last_log.get("failure_reason") in (NO_ACTIVE_ONESIGNAL_RECIPIENT, NO_DEVICE_REGISTERED):
+        final_status, remediation = "NO_ACTIVE_ONESIGNAL_RECIPIENT", "RETRY_DEVICE_REGISTRATION"
     elif last_log and last_log.get("delivery_status") == "FAILED":
-        final_status = "DELIVERY_FAILED"
+        final_status, remediation = "DELIVERY_FAILED", "RETRY_TEST"
     elif not last_sent_ok:
-        final_status = "READY_NOT_TESTED"
+        final_status, remediation = "READY_NOT_TESTED", "SEND_TEST"
     else:
-        final_status = "ON_VERIFIED"
+        final_status, remediation = "ON_VERIFIED", "NONE"
+
+    device_summaries = [{
+        "device_id": row.get("id"),
+        "subscription_id_masked": _masked_id(row.get("onesignal_subscription_id")),
+        "onesignal_id_masked": _masked_id(row.get("onesignal_id")),
+        "device_label": row.get("device_label", ""),
+        "platform": row.get("platform", ""),
+        "browser": row.get("browser", ""),
+        "registration_state": "COMPLETE" if _device_is_complete(row) else "INCOMPLETE",
+        "last_seen_at": row.get("last_seen_at"),
+        "last_test_status": row.get("last_test_status"),
+        "last_test_at": row.get("last_test_at"),
+    } for row in (complete + incomplete)[:10]]
 
     return {
         "saved_tier": saved_tier,
-        "active_device_count": 1 if subscription else 0,
-        "most_recent_registration": (subscription or {}).get("created_at"),
+        "active_device_count": len(complete),
+        "incomplete_device_count": len(incomplete),
+        "registered_devices": device_summaries,
+        "most_recent_registration": registration_at or None,
         "push_server_configured": server_ready,
         "push_server_initialization_state": onesignal_status["initialization_state"],
         "latest_notification_status": (last_log or {}).get("delivery_status"),
         "latest_failure_reason": (last_log or {}).get("failure_reason"),
+        "latest_provider_message_id": (last_log or {}).get("provider_message_id"),
         "latest_sent_time": (last_log or {}).get("sent_time"),
         "latest_opened_time": (last_log or {}).get("opened_time"),
         "final_status": final_status,
+        "remediation_code": remediation,
     }
