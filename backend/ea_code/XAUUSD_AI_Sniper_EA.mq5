@@ -1,14 +1,18 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M10 Gold Edition|
-//|   v6.25.12 - Owner profiles and strict pyramid gate              |
-//|   BRKT_UP and BRKT_DN invert only after canonical entry approval. |
-//|   authority. No owner time-window blackout exists. Every approved |
-//|   normal/re-entry/pyramid trade uses full configured risk against |
-//|   the original full 1.00R structural SL. The frozen TREND_UP      |
-//|   campaign profile locks 0.40R at 0.50R and 70% from 0.70R; all   |
-//|   other allowed regimes use GENERAL (0.30R at 0.40R, 70% from     |
-//|   0.50R). The existing 120-180s entry lifecycle is unchanged.     |
+//|   v6.25.14 - Exact GENERAL 10-minute extension + two-gate pyramid|
+//|   The first fully-approved profitable GENERAL R close is delayed   |
+//|   exactly 600 seconds; the original structural SL is restored and  |
+//|   remains the only normal early exit. Pyramid adds use only genuine|
+//|   TIMING + EXHAUSTION as strategy gates after mechanical checks.   |
+//|   v6.25.13 - Breakouts default OFF + pyramid-leg protection      |
+//|   BRKT_UP/BRKT_DN are blocked by default; inverse mode remains an |
+//|   explicit input. The impossible core-floor-first pyramid gate was|
+//|   removed, and each hedging pyramid leg uses its own +0.25R arm,  |
+//|   +0.20R minimum floor and 70%-of-own-peak ratchet. Normal CORE/  |
+//|   RE_ENTRY signals, risk and owner GENERAL exit policy remained   |
+//|   unchanged. The existing 120-180s entry lifecycle is unchanged. |
 //|   v6.25.2 - M10 Origination Fallback, Freshness Bar-Identity Fix   |
 //|   (2026-07-17). M10's own qualifying BUY_CANDIDATE/SELL_CANDIDATE  |
 //|   can now originate a trade candidate directly (mirroring the      |
@@ -1902,8 +1906,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.262"
-#property description "XAUUSD AI Sniper v6.25.12 owner profiles plus strict pyramid gate."
+#property version   "6.264"
+#property description "XAUUSD AI Sniper v6.25.14 exact 10-minute GENERAL extension and two-gate pyramid policy."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -1987,9 +1991,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.12"
-#define XAUAI_EA_VERSION_NUM "6.25.12"
-#define XAUAI_BUILD_HASH "v62512-general-trends-breakout-profile-strict-pyramid-20260718"
+#define XAUAI_EA_VERSION "v6.25.14"
+#define XAUAI_EA_VERSION_NUM "6.25.14"
+#define XAUAI_BUILD_HASH "v62514-general-first-profit-plus-600s-pyramid-timing-exhaustion-20260719"
 #define XAU_COUNTER_EXCURSION_BUILD false
 
 // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
@@ -9324,6 +9328,7 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
    bool ownerModifyAuthority =
       (StringFind(logTag, "OWNER_INITIAL_1R_HARD_STOP") == 0) ||
       (StringFind(logTag, "OWNER_PYRAMID_1R_HARD_STOP") == 0) ||
+      (StringFind(logTag, "GENERAL_10M_EXTENSION_RESTORE_ORIGINAL_SL") == 0) ||
       (StringFind(logTag, "OWNER_R_EXIT_FLOOR") == 0) ||
       (StringFind(logTag, "PRIMARY_EXIT_FLOOR") == 0);
    if(!ownerModifyAuthority)
@@ -16940,47 +16945,42 @@ int AdaptivePyramidMaxAdds(int dir, double moved, double atr, double quality,
 // v6.25.13: now also carries campaign_id per the owner-approved log format.
 void XAU_PyramidGateReject(int dir, string reason)
 {
+   int slot = XAU_CampaignSlot(dir);
+   static string lastKey[2] = {"", ""};
+   static datetime lastAt[2] = {0, 0};
+   string key = XAU_CampaignIdText(g_campaign[slot].campaignId) + "|" + reason;
+   if(key == lastKey[slot] && TimeCurrent() - lastAt[slot] < 30) return;
+   lastKey[slot] = key;
+   lastAt[slot] = TimeCurrent();
    PrintFormat("PYRAMID_GATE_REJECT | campaign_id=%s | reason=%s",
-               XAU_CampaignIdText(g_campaign[XAU_CampaignSlot(dir)].campaignId), reason);
+               XAU_CampaignIdText(g_campaign[slot].campaignId), reason);
 }
 
 void CheckPyramidOpportunity()
 {
    if(!InpAllowPyramid) return;
-   // v6.24.14 — pyramid additions are one of the paths the universal
-   // post-trade cooldown explicitly names. In practice a pyramid add can
-   // only fire while a position is already open (the openCount==0 early
-   // return below), and no fresh position can open during an active
-   // cooldown either (OpenTrade's own gate) -- so this mainly guards a
-   // basket-close edge case (one direction's campaign fully closes while
-   // this function is mid-evaluation) rather than the common case. Kept as
-   // an explicit, directly testable gate rather than relying on that
-   // indirect guarantee.
+
+   // v6.25.14: post-trade cooldown remains authoritative for normal fresh
+   // entries, but is advisory-only inside this pyramid-add scope.
    if(XAU_PostTradeCooldownActive())
    {
-      PrintFormat("PYRAMID_BLOCKED_POST_TRADE_COOLDOWN: %ds remaining", XAU_PostTradeCooldownRemainingSeconds());
-      return;
+      static datetime lastPyramidCooldownAdvisory = 0;
+      if(TimeCurrent() - lastPyramidCooldownAdvisory >= 60)
+      {
+         lastPyramidCooldownAdvisory = TimeCurrent();
+         PrintFormat("PYRAMID_ADVISORY_IGNORED | source=POST_TRADE_COOLDOWN | remaining_seconds=%d | authority=TIMING_PLUS_EXHAUSTION_ONLY",
+                     XAU_PostTradeCooldownRemainingSeconds());
+      }
    }
 
-   // v6.24.15 review: pyramid is deliberately NOT routed through
-   // XAU_EntryReadinessDecision. The readiness engine answers "has the OLD
-   // side finished and the NEW side proven itself" for a FRESH direction --
-   // a pyramid add has no old side; it is adding to a direction that
-   // already passed that exact check when its core opened. Its own
-   // campaign-exhaustion gate a few lines below (existingBuyAction/
-   // existingSellAction == TRANSITION_STOP_ADDS etc., unchanged since
-   // v6.24.6) already IS the correct readiness authority for a continuation
-   // add, and per this task's own non-negotiable list, campaign-management
-   // logic must not change. Routing adds through the fresh-direction engine
-   // would misapply "wait for old side to finish" logic to a direction that
-   // was never the old side.
+   // Mechanical campaign identity/integrity prerequisites.
    int openCount = 0;
    int totalBuys = 0, totalSells = 0;
    ulong origTicket = 0;
    ulong origPositionId = 0;
    datetime origTime = 0;
    long origType = -1;
-   double origPx = 0.0, origSL = 0.0, origTP = 0.0, origLot = 0.0;
+   double origPx = 0.0, origTP = 0.0;
    for(int i=0; i<PositionsTotal(); i++)
    {
       ulong tk=PositionGetTicket(i);
@@ -16993,8 +16993,8 @@ void CheckPyramidOpportunity()
       {
          origTime=pt; origTicket=tk; origType=posInfo.PositionType();
          origPositionId=posInfo.Identifier();
-         origPx=posInfo.PriceOpen(); origSL=posInfo.StopLoss();
-         origTP=posInfo.TakeProfit(); origLot=posInfo.Volume();
+         origPx=posInfo.PriceOpen();
+         origTP=posInfo.TakeProfit();
       }
    }
    if(origTicket==0 || openCount==0 || (totalBuys>0 && totalSells>0)) return;
@@ -17005,138 +17005,85 @@ void CheckPyramidOpportunity()
 
    bool isBuy=(origType==POSITION_TYPE_BUY);
    int dir=isBuy?1:-1;
-   double atr=(ArraySize(bufATR)>=2)?bufATR[1]:0.0;
-   if(atr<=0.0) return;
-   double entryPx=isBuy?SymbolInfoDouble(Symbol(),SYMBOL_ASK):SymbolInfoDouble(Symbol(),SYMBOL_BID);
-   if(entryPx<=0.0) return;
-
-   // v6.25.13 owner-approved pyramid protection policy: the v6.25.12 strict
-   // gate A (core owner floor must already be armed and broker-confirmed
-   // before any pyramid could even be evaluated) is removed. Replay evidence
-   // showed it rejected effectively 100% of opportunities across 8M+
-   // evaluations because most of a campaign's open life happens before its
-   // core reaches the GENERAL/BREAKOUT arm threshold. A pyramid add no
-   // longer requires the core's own floor to be armed first; it only
-   // requires the core position to still be genuinely open right now. Every
-   // other gate below (campaign exhaustion, direction, opposite-direction,
-   // pressure, timing/location/spacing, structure, exhaustion, owner entry
-   // permission, timing authority, news, pyramid authority, final entry
-   // arbiter, margin, basket floor) is unchanged and remains the real
-   // selectivity engine -- this is a smaller, less prohibitive version of
-   // the same gate, not a removal of pyramid protection.
    if(!PositionSelectByTicket(origTicket))
    {
-      XAU_PyramidGateReject(dir, "CORE_POSITION_NOT_LIVE");
+      XAU_PyramidGateReject(dir, "MECHANICAL_FAILURE CORE_POSITION_NOT_LIVE");
       return;
    }
 
-   // v6.24.6: this campaign's own exhaustion/transition read now gates
-   // additions -- previously ONLY existing-position management (SL
-   // tightening at line ~19509) consumed this signal; adds were unaware of
-   // it entirely. Matches the requested behaviour: stop adding near
-   // exhaustion, protect the runner, do not automatically reverse. Calls
-   // the engine fresh (same convention as every other call site -- see
-   // lines ~13847/19509/25483/26243/26388) rather than trusting
-   // g_transitionDecision was already refreshed this bar by someone else.
-   // Does NOT touch freshBuyAllowed/freshSellAllowed (the opposite
-   // direction's fresh-entry path), which is already gated separately.
-   XAU_AdaptiveTransitionDecision pyramidTransition = XAU_AdaptiveMarketTransitionEngine();
-   ENUM_XAU_TRANSITION_POSITION_ACTION campaignAction =
-      isBuy ? pyramidTransition.existingBuyAction : pyramidTransition.existingSellAction;
-   if(campaignAction == TRANSITION_STOP_ADDS || campaignAction == TRANSITION_TIGHTEN_PROTECTION ||
-      campaignAction == TRANSITION_EXIT_PROFITABLE || campaignAction == TRANSITION_EXIT_CONTROLLED)
+   double atr=(ArraySize(bufATR)>=2)?bufATR[1]:0.0;
+   double entryPx=isBuy?SymbolInfoDouble(Symbol(),SYMBOL_ASK):SymbolInfoDouble(Symbol(),SYMBOL_BID);
+   if(atr<=0.0 || entryPx<=0.0)
    {
-      XAU_PyramidGateReject(dir, StringFormat("CAMPAIGN_EXHAUSTION action=%s exhaustion=%.0f%%",
-                                         EnumToString(campaignAction),pyramidTransition.exhaustionProbability));
-      PrintFormat("PYRAMID_BLOCKED_CAMPAIGN_EXHAUSTION: dir=%s lifecycle=%s action=%s exhaustion=%.0f%% remainingRewardR=%.2f oppositeRemainingRewardR=%.2f",
-                  isBuy?"BUY":"SELL", EnumToString(pyramidTransition.lifecycle),
-                  EnumToString(campaignAction), pyramidTransition.exhaustionProbability,
-                  pyramidTransition.remainingRewardR, pyramidTransition.oppositeRemainingRewardR);
+      XAU_PyramidGateReject(dir, "DATA_UNAVAILABLE ATR_OR_EXECUTABLE_PRICE");
       return;
    }
-   // v6.24.8 — cross-check log only (this gate above remains the sole
-   // enforcement authority for pyramid adds, per the "defers to
-   // existingBuyAction/existingSellAction" design in XAU_MarketThesisAction).
-   XAU_MarketThesis pyramidThesis = XAU_ComputeMarketThesis(dir, true, false, pyramidTransition);
-   PrintFormat("MARKET_THESIS_PYRAMID_CHECK | dir=%s action=%s reason=%s",
-               isBuy?"BUY":"SELL", XAU_MarketThesisActionName(pyramidThesis.action), pyramidThesis.reason);
 
-   // Controlled campaign adds only after favourable spacing. Rescue averaging,
-   // equity tiers, loss locks and strategy-specific add cages are removed.
+   // Exactly one fresh transition snapshot supplies both owner-approved
+   // strategy gates. It is not reused from another campaign/direction and no
+   // second timing/exhaustion engine runs later.
+   XAU_AdaptiveTransitionDecision pyramidTransition = XAU_AdaptiveMarketTransitionEngine();
+   datetime timingSourceBar = pyramidTransition.evaluatedBar;
+   datetime latestClosedBar = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 1);
+   datetime previousClosedBar = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 2);
+   bool evidenceFresh = !pyramidTransition.evidenceDataUnavailable && timingSourceBar > 0 &&
+                        (timingSourceBar == latestClosedBar || timingSourceBar == previousClosedBar);
+
    double spacingAnchor=lastPyramidPx>0.0?lastPyramidPx:origPx;
    double favourableMove=dir>0?entryPx-spacingAnchor:spacingAnchor-entryPx;
-   if(!InpPyramidOnTrend || favourableMove<atr*InpPyramidMinATR)
+   double moveATR=favourableMove/atr;
+   ENUM_XAU_TIMING_STATE pyramidTimingState = XAU_BucketTiming(pyramidTransition);
+   bool timingDirectionReady = pyramidTransition.dominantDirection == dir;
+   bool cleanClosedBarTiming = timingDirectionReady && pyramidTimingState == TIMING_READY &&
+                               !pyramidTransition.reversalWaitForPullback &&
+                               pyramidTransition.moveAlreadyConsumedPct < 90.0;
+   bool favourableSpacingReady = timingDirectionReady && InpPyramidOnTrend &&
+                                 favourableMove >= atr*InpPyramidMinATR;
+   // 0.65 ATR is no longer a standalone automatic blocker: a genuine fresh
+   // closed-bar TIMING_READY continuation/retest can pass before that fixed
+   // distance, while a favourable spaced continuation also remains valid.
+   bool timingPass = evidenceFresh && (cleanClosedBarTiming || favourableSpacingReady);
+
+   string candidateEpisodeId = StringFormat("%s|%s|ADD%d|BAR%I64d",
+      XAU_CampaignIdText(g_campaign[XAU_CampaignSlot(dir)].campaignId),
+      isBuy?"BUY":"SELL", addsAlready+1, (long)timingSourceBar);
+
+   if(!evidenceFresh)
    {
-      XAU_PyramidGateReject(dir, StringFormat("TIMING_OR_LOCATION_NOT_CLEAN_CONTINUATION moveATR=%.2f requiredATR=%.2f",
-                                         atr>0.0?favourableMove/atr:0.0,InpPyramidMinATR));
+      XAU_PyramidGateReject(dir, StringFormat("DATA_UNAVAILABLE episode=%s source_bar=%s reason=%s",
+         candidateEpisodeId, TimeToString(timingSourceBar, TIME_DATE|TIME_MINUTES),
+         pyramidTransition.dataUnavailableReason));
+      return;
+   }
+   if(!timingPass)
+   {
+      XAU_PyramidGateReject(dir, StringFormat("TIMING_FAILED episode=%s timing_state=%s moveATR=%.3f requiredATR=%.3f dominant=%s source_bar=%s",
+         candidateEpisodeId, XAU_TimingStateName(pyramidTimingState), moveATR, InpPyramidMinATR,
+         pyramidTransition.dominantDirection==1?"BUY":pyramidTransition.dominantDirection==-1?"SELL":"NONE",
+         TimeToString(timingSourceBar, TIME_DATE|TIME_MINUTES)));
       return;
    }
 
-   // Gate B/C/D: use the already computed direction, lifecycle, pressure,
-   // exhaustion, and reward-room evidence. These conditions cannot open a
-   // trade; they only veto an otherwise eligible continuation add.
-   int pyramidLane=XAU_AlignedCandidateLane("PYRAMID");
-   bool directionOk=(g_alignedCandidates[pyramidLane].candidateDirection==dir &&
-                     g_alignedCandidates[pyramidLane].candidateSetup=="PYRAMID" &&
-                     pyramidTransition.dominantDirection==dir);
-   if(!directionOk)
+   // The sole exhaustion gate: genuine numeric, direction-current, closed-bar
+   // evidence. Broad STOP_ADDS/TIGHTEN/pressure/room/AI/memory/grade labels are
+   // advisory only and cannot veto after this passes.
+   bool exhaustionPass = pyramidTransition.exhaustionProbability < InpTransitionExhaustThreshold;
+   if(!exhaustionPass)
    {
-      XAU_PyramidGateReject(dir, StringFormat("DIRECTION_NOT_CURRENTLY_APPROVED core=%s candidate=%s dominant=%s",
-                                         dir==1?"BUY":"SELL",
-                                         g_alignedCandidates[pyramidLane].candidateDirection==1?"BUY":"SELL",
-                                         pyramidTransition.dominantDirection==1?"BUY":"SELL"));
-      return;
-   }
-   bool oppositeFormingOrConfirmed=(pyramidTransition.lifecycle==OPPOSITE_DIRECTION_FORMING ||
-                                    pyramidTransition.lifecycle==OPPOSITE_DIRECTION_CONFIRMED);
-   if(oppositeFormingOrConfirmed)
-   {
-      XAU_PyramidGateReject(dir, "OPPOSITE_DIRECTION_FORMING_OR_CONFIRMED");
-      return;
-   }
-   double directionPressure=dir==1?pyramidTransition.buyConfidence:pyramidTransition.sellConfidence;
-   double oppositePressure=dir==1?pyramidTransition.sellConfidence:pyramidTransition.buyConfidence;
-   if(oppositePressure>directionPressure)
-   {
-      XAU_PyramidGateReject(dir, StringFormat("PRESSURE_OPPOSES direction=%.1f opposite=%.1f",directionPressure,oppositePressure));
-      return;
-   }
-   if(pyramidTransition.exhaustionProbability>=InpTransitionExhaustThreshold)
-   {
-      XAU_PyramidGateReject(dir, StringFormat("EXHAUSTION_HIGH_OR_EXTREME value=%.1f threshold=%.1f",
-                                         pyramidTransition.exhaustionProbability,InpTransitionExhaustThreshold));
-      return;
-   }
-   if(pyramidTransition.remainingRewardR<0.30 || pyramidTransition.reversalWaitForPullback)
-   {
-      XAU_PyramidGateReject(dir, StringFormat("TIMING_OR_LOCATION_LATE_CHASE roomR=%.2f waitForPullback=%s",
-                                         pyramidTransition.remainingRewardR,
-                                         pyramidTransition.reversalWaitForPullback?"true":"false"));
+      XAU_PyramidGateReject(dir, StringFormat("EXHAUSTION_FAILED episode=%s exhaustion=%.1f threshold=%.1f source_bar=%s",
+         candidateEpisodeId, pyramidTransition.exhaustionProbability, InpTransitionExhaustThreshold,
+         TimeToString(timingSourceBar, TIME_DATE|TIME_MINUTES)));
       return;
    }
 
-   string authorityWhy="";
-   if(!XAU_StructureAuthorityAllows(dir,"PYRAMID",authorityWhy))
-   {
-      XAU_PyramidGateReject(dir, "STRUCTURE_OPPOSES " + authorityWhy);
-      return;
-   }
+   PrintFormat("PYRAMID_ADVISORY_SNAPSHOT | episode=%s campaign_action=%s pressure_dir=%.1f pressure_opposite=%.1f room_r=%.2f structure_and_ai_and_memory=ADVISORY_ONLY",
+               candidateEpisodeId,
+               EnumToString(isBuy ? pyramidTransition.existingBuyAction : pyramidTransition.existingSellAction),
+               dir==1?pyramidTransition.buyConfidence:pyramidTransition.sellConfidence,
+               dir==1?pyramidTransition.sellConfidence:pyramidTransition.buyConfidence,
+               pyramidTransition.remainingRewardR);
+
    string pyramidGrade="A";
-   double ignoredLotMulti=1.0;
-   if(!XAU_FreshnessExtensionAuthority(dir,"PYRAMID",g_lastEntryScore,g_lastEntryScore,
-                                       pyramidGrade,ignoredLotMulti,authorityWhy))
-   { XAU_PyramidGateReject(dir, "DIRECTION_QUALITY " + authorityWhy); return; }
-   if(!XAU_OwnerEntryPermission("CANDIDATE_ACCEPTANCE", "PYRAMID", pyramidGrade, authorityWhy))
-   { XAU_PyramidGateReject(dir, "OWNER_ENTRY_PERMISSION " + authorityWhy); return; }
-   if(!XAU_TimingAuthorityAllows(dir,"PYRAMID",atr,authorityWhy))
-   { XAU_PyramidGateReject(dir, "TIMING_LATE_OR_NOT_READY " + authorityWhy); return; }
-   if(!XAU_NewsAuthorityAllows(authorityWhy))
-   { XAU_PyramidGateReject(dir, "NEWS_AUTHORITY " + authorityWhy); return; }
-   if(!XAU_ReentryPyramidAuthority(dir, "PYRAMID", authorityWhy))
-   { XAU_PyramidGateReject(dir, "PYRAMID_AUTHORITY " + authorityWhy); return; }
-   if(!XAU_FinalEntryArbiter("PYRAMID",dir,true,true,true,true,true,true,authorityWhy))
-   { XAU_PyramidGateReject(dir, "FINAL_ENTRY_ARBITER " + authorityWhy); return; }
-
    double minLot=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MIN);
    double maxLot=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MAX);
    double lotStep=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_STEP);
@@ -17227,37 +17174,11 @@ void CheckPyramidOpportunity()
    PrintFormat("OWNER_RISK_POLICY | structural_sl_r=1.00 | configured_risk_pct=%.2f | stop_distance=%.5f | lots=%.4f | expected_risk_usd=%.2f | path=PYRAMID",
                InpNormalRiskPct,pyramidGeometry.effectiveHardStopDistance,addLot,pyramidEffectiveRiskUSD);
 
-   // v6.24.18 owner directive -- do not weaken or reset an already-armed
-   // basket floor to accommodate a new add. Reject instead if opening this
-   // position would immediately put combined basket profit at or below the
-   // protected floor once the entry spread cost is paid (a new position
-   // opens near break-even, but crossing the spread is a real, immediate
-   // cost against the combined campaign P/L the floor is measured on).
+   // v6.25.14: legacy basket-profit-floor state is not a pyramid market-quality
+   // veto. Only an in-progress coordinated broker close remains a mechanical
+   // race-prevention check; timing+exhaustion own the strategy decision.
    {
       int pyBasketSlot = XAU_CampaignSlot(dir);
-      if(g_campaign[pyBasketSlot].active && g_campaign[pyBasketSlot].basketProtectionArmed)
-      {
-         double pyCombinedPL = 0.0;
-         for(int pci = 0; pci < PositionsTotal(); pci++)
-         {
-            ulong pcTk = PositionGetTicket(pci);
-            if(!posInfo.SelectByTicket(pcTk)) continue;
-            if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
-            if((posInfo.PositionType() == POSITION_TYPE_BUY ? 1 : -1) != dir) continue;
-            pyCombinedPL += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
-         }
-         double spreadPts = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-         double estimatedEntryCost = spreadPts * SymbolInfoDouble(Symbol(), SYMBOL_POINT) *
-                                     (riskPerLot > 0.0 ? (addLot * riskPerLot / MathMax(slDist, SymbolInfoDouble(Symbol(), SYMBOL_POINT))) : 0.0);
-         double projectedPL = pyCombinedPL - estimatedEntryCost;
-         if(projectedPL <= g_campaign[pyBasketSlot].basketProtectedFloorMoney)
-         {
-            PrintFormat("PYRAMID_ADD_REJECTED_BASKET_FLOOR_AT_RISK dir=%s currentBasketPL=%.2f estimatedEntryCost=%.2f projectedPL=%.2f protectedFloorMoney=%.2f",
-                        isBuy ? "BUY" : "SELL", pyCombinedPL, estimatedEntryCost, projectedPL, g_campaign[pyBasketSlot].basketProtectedFloorMoney);
-            return;
-         }
-      }
-      // A basket close in progress must never race a new add opening mid-close.
       if(g_campaign[pyBasketSlot].basketCloseInProgress)
       {
          Print("PYRAMID_ADD_REJECTED_BASKET_CLOSE_IN_PROGRESS dir=", isBuy ? "BUY" : "SELL");
@@ -17265,9 +17186,13 @@ void CheckPyramidOpportunity()
       }
    }
 
-   string why=StringFormat("PYRAMID_SHARED_AUTHORITY add=%d/%d spacing=%.2fATR",
-                           addsAlready+1,configuredAdds,favourableMove/atr);
+   string why=StringFormat("PYRAMID_TWO_GATE add=%d/%d timing=%s move=%.2fATR exhaustion=%.1f%%",
+                           addsAlready+1, configuredAdds, XAU_TimingStateName(pyramidTimingState),
+                           moveATR, pyramidTransition.exhaustionProbability);
 
+   // OwnerEntryPermission remains here only for the owner breakout BLOCK/OFF
+   // policy. It contains no grade/AI/pressure/structure/timing opinion.
+   // The direction reservation below is broker/cross-instance integrity.
    // v6.25.0 owner directive 2026-07-17 -- same canonical direction-
    // exclusivity guard as every other broker-send path. A pyramid add is
    // always same-direction as its own campaign by construction, so this is
@@ -17293,8 +17218,11 @@ void CheckPyramidOpportunity()
       }
    }
 
-   PrintFormat("PYRAMID_GATE_APPROVED | campaign_id=%s | core_position_id=%I64u | direction_ok=true | structure_ok=true | pressure_ok=true | timing_ok=true | location_ok=true | exhaustion_ok=true | margin_ok=true",
-               XAU_CampaignIdText(g_campaign[XAU_CampaignSlot(dir)].campaignId), origPositionId);
+   PrintFormat("PYRAMID_GATE_APPROVED | campaign_id=%s | core_position_id=%I64u | candidate_episode_id=%s | direction=%s | timing_pass=true | timing_source_bar=%s | timing_state=%s | move_atr=%.3f | exhaustion_pass=true | exhaustion_source_bar=%s | exhaustion_probability=%.1f | max_adds_ok=true | margin_ok=true",
+               XAU_CampaignIdText(g_campaign[XAU_CampaignSlot(dir)].campaignId), origPositionId,
+               candidateEpisodeId, isBuy ? "BUY" : "SELL",
+               TimeToString(timingSourceBar, TIME_DATE|TIME_MINUTES), XAU_TimingStateName(pyramidTimingState), moveATR,
+               TimeToString(timingSourceBar, TIME_DATE|TIME_MINUTES), pyramidTransition.exhaustionProbability);
 
    // v6.25.11 owner directive -- restore the pre-v6.25.9 pyramid broker TP.
    // This is the existing pyramid target calculated above (campaign TP when
@@ -24583,6 +24511,9 @@ bool XAU_OwnerProtectedFloorAllowsClose(ulong ticket, string ctx)
 
    ulong positionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
    int idx = XAU_RExit_FindIdx(positionId);
+   if(StringFind(ctx, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0)
+      return idx >= 0 && g_rExit[idx].ownerExitProfile == (int)OWNER_EXIT_GENERAL &&
+             g_rExit[idx].extensionFullyConfirmed;
    if(idx < 0)
    {
       PrintFormat("OWNER_R_EXIT_STATE_MISSING_FAIL_CLOSED | ticket=%I64u | attempted_authority=%s | action=REJECT_CLOSE",
@@ -24640,6 +24571,23 @@ bool XAU_OwnerProtectedFloorAllowsModify(ulong ticket, double proposedSL, string
    }
 
    ENUM_XAU_OWNER_EXIT_PROFILE profile = (ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile;
+
+   // v6.25.14 owner experiment: only the exact GENERAL-extension arming path
+   // may deliberately move an already-ratcheted profit SL back to the frozen
+   // original structural SL. It must be exact, GENERAL-only, and can never
+   // widen beyond the immutable original stop.
+   if(StringFind(ctx, "GENERAL_10M_EXTENSION_RESTORE_ORIGINAL_SL") == 0)
+   {
+      double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+      double tolerance = MathMax(point * 2.0, 0.00001);
+      bool exactOriginal = MathAbs(proposedSL - g_rExit[idx].originalStopLoss) <= tolerance;
+      if(profile == OWNER_EXIT_GENERAL && exactOriginal)
+         return true;
+      PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=SL_RESTORE_PERMISSION | reason=NOT_GENERAL_OR_NOT_EXACT_ORIGINAL_SL proposed=%.5f original=%.5f profile=%s",
+                  positionId, proposedSL, g_rExit[idx].originalStopLoss, XAU_OwnerExitProfileName(profile));
+      return false;
+   }
+
    double protectedFloorR = MathMax(g_rExit[idx].guaranteedFloorR,
                                     XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile));
    if(protectedFloorR <= 0.0) return true;
@@ -24681,6 +24629,7 @@ bool XAU_IsOwnerRExitApprovedCloseReason(string ctx)
           StringFind(ctx, "OWNER_R_EXIT_TP_1R") == 0 ||
           StringFind(ctx, "OWNER_R_EXIT_GIVEBACK_45") == 0 ||
           StringFind(ctx, "OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED") == 0 ||
+          StringFind(ctx, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0 ||
           StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0;
 }
 
@@ -24690,6 +24639,17 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
    if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber ||
       PositionGetString(POSITION_SYMBOL) != Symbol())
       return false;
+
+   ulong ownerPositionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+   int ownerIdx = XAU_RExit_FindIdx(ownerPositionId);
+   bool deadlineClose = StringFind(ctx, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0;
+   bool initialStopIntegrity = StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0;
+   if(!externalManual && !deadlineClose && !initialStopIntegrity && ownerIdx >= 0 &&
+      XAU_General10MExtensionActive(ownerIdx))
+   {
+      XAU_General10MLogSuppressed(ownerIdx, ctx);
+      return false;
+   }
 
    if(!externalManual && !XAU_IsOwnerRExitApprovedCloseReason(ctx))
    {
@@ -24710,7 +24670,6 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
    // Initial-stop integrity is an owner risk-policy exception during the
    // broker-open reconciliation window, before campaign/R state exists. It
    // prevents a newly accepted order being left completely naked.
-   bool initialStopIntegrity = StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0;
    if(!externalManual && !initialStopIntegrity && !XAU_OwnerProtectedFloorAllowsClose(ticket, ctx))
       return false;
 
@@ -24767,7 +24726,7 @@ bool SafePositionClosePartial(ulong ticket, double lots, string ctx = "")
 #define R_CLOSE_REQUESTED     2
 #define R_CLOSE_PENDING_RETRY 3
 #define R_CLOSE_CONFIRMED     4
-#define R_EXIT_STATE_SCHEMA_VERSION 5
+#define R_EXIT_STATE_SCHEMA_VERSION 6
 // v6.25.0 owner directive 2026-07-17 -- orphan-cleanup debounce thresholds.
 // Both must be satisfied before a "not found this tick" observation is
 // trusted as a genuine close -- see XAU_RExit_ReconcileOrphans().
@@ -24815,6 +24774,27 @@ struct XAU_RExitState
    double   guaranteedFloorDesiredSL;      // last-computed broker SL price for guaranteedFloorR
    bool     guaranteedFloorGeometryBlocked;// true when stops/freeze level prevented placing guaranteedFloorDesiredSL
    datetime lastBelowFloorRejectLog;       // rate limit retry evidence; never changes the retry decision
+
+   // v6.25.14 owner experiment -- persisted inside the authoritative R-exit
+   // state, not a parallel timer/manager. The deadline is latched once from
+   // the first fully-approved profitable GENERAL close and never reset.
+   bool     extensionArmed;
+   bool     extensionFullyConfirmed;
+   bool     extensionCompleted;
+   datetime extensionStartTime;
+   datetime extensionDeadline;
+   double   extensionTriggerR;
+   double   extensionTriggerPrice;
+   double   extensionTriggerProfitUSD;
+   string   extensionTriggerAuthority;
+   bool     extensionStructuralSLRestored;
+   bool     extensionDeadlineCloseSent;
+   bool     extensionDeadlineCloseConfirmed;
+   datetime extensionDeadlineRequestTime;
+   double   extensionDeadlineR;
+   double   extensionDeadlineProfitUSD;
+   datetime extensionLastSuppressionLog;
+
    // v6.25.0 owner directive 2026-07-17 -- URGENT LIVE EXIT FORENSIC fix.
    // Debounce state for XAU_RExit_ReconcileOrphans(): a live position must
    // fail XAU_FindLivePositionByIdentifier() for several consecutive ticks
@@ -25188,6 +25168,8 @@ bool XAU_OwnerRExitDecisionAllowsClose(double peakR, double currentR,
       approvedRule=peakR+0.000001>=InpRProtectTrigger && currentR>0.0;
    else if(StringFind(reason,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED") == 0)
       approvedRule=requiredFloorR>0.0;
+   else if(StringFind(reason,"OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0)
+      return profile == OWNER_EXIT_GENERAL;
    if(!approvedRule) return false;
    return requiredFloorR<=0.0 || currentR+0.000001>=requiredFloorR;
 }
@@ -25233,6 +25215,163 @@ int XAU_RExit_FindIdx(ulong positionId)
    for(int i = 0; i < ArraySize(g_rExit); i++)
       if(g_rExit[i].positionId == positionId) return i;
    return -1;
+}
+
+bool XAU_General10MExtensionActive(int idx)
+{
+   return idx >= 0 && idx < ArraySize(g_rExit) &&
+          g_rExit[idx].ownerExitProfile == (int)OWNER_EXIT_GENERAL &&
+          g_rExit[idx].extensionArmed && g_rExit[idx].extensionFullyConfirmed &&
+          !g_rExit[idx].extensionCompleted;
+}
+
+string XAU_General10MExtensionRole(int idx)
+{
+   if(idx < 0 || idx >= ArraySize(g_rExit)) return "UNKNOWN";
+   if(g_rExit[idx].ownerExitProfile == (int)OWNER_EXIT_PYRAMID) return "PYRAMID";
+   int slot = XAU_CampaignSlot(g_rExit[idx].positionDirection);
+   if(g_campaign[slot].initialCoreTicket > 0 &&
+      g_rExit[idx].currentTicket != g_campaign[slot].initialCoreTicket)
+      return "RE_ENTRY";
+   return "CORE";
+}
+
+void XAU_General10MLogSuppressed(int idx, string authority)
+{
+   if(idx < 0 || idx >= ArraySize(g_rExit)) return;
+   datetime now = TimeCurrent();
+   if(now - g_rExit[idx].extensionLastSuppressionLog < 30) return;
+   g_rExit[idx].extensionLastSuppressionLog = now;
+   int remaining = (int)(g_rExit[idx].extensionDeadline - now);
+   if(remaining < 0) remaining = 0;
+   PrintFormat("GENERAL_10M_EXTENSION_CLOSE_SUPPRESSED | position_id=%I64u | suppressed_authority=%s | remaining_seconds=%d",
+               g_rExit[idx].positionId, authority, remaining);
+}
+
+bool XAU_General10MRestoreOriginalProtection(int idx, ulong ticket, string &failureReason)
+{
+   failureReason = "";
+   if(idx < 0 || idx >= ArraySize(g_rExit)) { failureReason="INVALID_R_EXIT_INDEX"; return false; }
+   if(g_rExit[idx].ownerExitProfile != (int)OWNER_EXIT_GENERAL) { failureReason="NOT_GENERAL_PROFILE"; return false; }
+   if(!PositionSelectByTicket(ticket)) { failureReason="POSITION_NOT_LIVE"; return false; }
+
+   bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   double tolerance = MathMax(point * 2.0, 0.00001);
+   double originalSL = NormalizeDouble(g_rExit[idx].originalStopLoss, digits);
+   double currentSL = PositionGetDouble(POSITION_SL);
+   double currentTP = PositionGetDouble(POSITION_TP);
+   double currentPrice = isBuy ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   bool structuralGeometryValid = isBuy ? (originalSL < g_rExit[idx].originalEntryPrice)
+                                        : (originalSL > g_rExit[idx].originalEntryPrice);
+   if(!structuralGeometryValid || originalSL <= 0.0)
+   {
+      failureReason = "INVALID_FROZEN_ORIGINAL_STRUCTURAL_SL";
+      return false;
+   }
+
+   bool alreadyAtOriginal = MathAbs(currentSL - originalSL) <= tolerance;
+   bool tpAlreadyRemoved = currentTP <= tolerance;
+   if(alreadyAtOriginal && tpAlreadyRemoved) return true;
+
+   PrintFormat("GENERAL_10M_EXTENSION_SL_RESTORE_REQUEST | position_id=%I64u | current_sl=%.5f | original_structural_sl=%.5f | current_tp=%.5f",
+               g_rExit[idx].positionId, currentSL, originalSL, currentTP);
+   bool accepted = SafeModifySL(ticket, originalSL, 0.0, isBuy, currentPrice,
+                                "GENERAL_10M_EXTENSION_RESTORE_ORIGINAL_SL");
+   if(!accepted)
+   {
+      failureReason = StringFormat("BROKER_MODIFY_REJECTED ret=%u err=%d", trade.ResultRetcode(), GetLastError());
+      return false;
+   }
+   if(!PositionSelectByTicket(ticket)) { failureReason="POSITION_VANISHED_AFTER_RESTORE"; return false; }
+   double actualSL = PositionGetDouble(POSITION_SL);
+   double actualTP = PositionGetDouble(POSITION_TP);
+   bool confirmed = MathAbs(actualSL - originalSL) <= tolerance && actualTP <= tolerance;
+   if(!confirmed)
+   {
+      failureReason = StringFormat("BROKER_REREAD_NOT_CONFIRMED actualSL=%.5f actualTP=%.5f", actualSL, actualTP);
+      return false;
+   }
+   return true;
+}
+
+bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
+{
+   if(idx < 0 || idx >= ArraySize(g_rExit)) return false;
+   if(g_rExit[idx].ownerExitProfile != (int)OWNER_EXIT_GENERAL) return false;
+   if(g_rExit[idx].currentR <= 0.0 || g_rExit[idx].currentProfitUSD <= 0.0) return false;
+   // A netting position with addCount>1 contains pyramid exposure. The owner's
+   // GENERAL extension is CORE/RE_ENTRY-only and must never govern merged
+   // pyramid volume; hedging pyramid legs are already excluded by profile.
+   if(g_rExit[idx].addCount > 1) return false;
+   if(g_rExit[idx].extensionCompleted) return false;
+   if(XAU_General10MExtensionActive(idx)) return true;
+
+   datetime triggerTime = TimeCurrent();
+   bool isBuy = g_rExit[idx].positionDirection == 1;
+   double triggerPrice = SymbolInfoDouble(Symbol(), isBuy ? SYMBOL_BID : SYMBOL_ASK);
+   int slot = XAU_CampaignSlot(g_rExit[idx].positionDirection);
+   string role = XAU_General10MExtensionRole(idx);
+   PrintFormat("GENERAL_10M_EXTENSION_ELIGIBLE | position_id=%I64u | campaign_id=%s | role=%s | authority=%s | trigger_time=%s | trigger_r=%.3f | trigger_price=%.5f",
+               g_rExit[idx].positionId, XAU_CampaignIdText(g_campaign[slot].campaignId), role, authority,
+               TimeToString(triggerTime, TIME_DATE|TIME_SECONDS), g_rExit[idx].currentR, triggerPrice);
+
+   g_rExit[idx].extensionStartTime = triggerTime;
+   g_rExit[idx].extensionDeadline = triggerTime + 600;
+   g_rExit[idx].extensionTriggerR = g_rExit[idx].currentR;
+   g_rExit[idx].extensionTriggerPrice = triggerPrice;
+   g_rExit[idx].extensionTriggerProfitUSD = g_rExit[idx].currentProfitUSD;
+   g_rExit[idx].extensionTriggerAuthority = authority;
+   g_rExitStateDirty = true;
+
+   string restoreFailure = "";
+   if(!XAU_General10MRestoreOriginalProtection(idx, ticket, restoreFailure))
+   {
+      PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=SL_RESTORE | reason=%s | action=EXECUTE_ORIGINAL_APPROVED_CLOSE",
+                  g_rExit[idx].positionId, restoreFailure);
+      g_rExit[idx].extensionStartTime = 0;
+      g_rExit[idx].extensionDeadline = 0;
+      g_rExit[idx].extensionTriggerR = 0.0;
+      g_rExit[idx].extensionTriggerPrice = 0.0;
+      g_rExit[idx].extensionTriggerProfitUSD = 0.0;
+      g_rExit[idx].extensionTriggerAuthority = "";
+      g_rExitStateDirty = true;
+      XAU_RExit_SaveState(true);
+      return false;
+   }
+
+   g_rExit[idx].extensionArmed = true;
+   g_rExit[idx].extensionFullyConfirmed = true;
+   g_rExit[idx].extensionCompleted = false;
+   g_rExit[idx].extensionStructuralSLRestored = true;
+   g_rExit[idx].extensionDeadlineCloseSent = false;
+   g_rExit[idx].extensionDeadlineCloseConfirmed = false;
+   g_rExit[idx].extensionDeadlineRequestTime = 0;
+   g_rExit[idx].extensionDeadlineR = 0.0;
+   g_rExit[idx].extensionDeadlineProfitUSD = 0.0;
+   g_rExit[idx].extensionLastSuppressionLog = 0;
+
+   // The active extension deliberately suspends the old profitable floor.
+   // The broker now carries only the frozen original structural SL; the loop
+   // short-circuits before any new floor can arm or ratchet.
+   g_rExit[idx].profitGuaranteeArmed = false;
+   g_rExit[idx].guaranteedFloorR = 0.0;
+   g_rExit[idx].guaranteedFloorDesiredSL = g_rExit[idx].originalStopLoss;
+   g_rExit[idx].guaranteedFloorGeometryBlocked = false;
+   g_rExit[idx].lastProtectedSL = g_rExit[idx].originalStopLoss;
+   g_rExit[idx].closeState = R_CLOSE_NONE;
+   g_rExit[idx].pendingCloseReason = "";
+   g_rExit[idx].closeAttemptCount = 0;
+   g_rExitStateDirty = true;
+   XAU_RExit_SaveState(true);
+
+   PrintFormat("GENERAL_10M_EXTENSION_ARMED | position_id=%I64u | start_time=%s | deadline=%s | trigger_r=%.3f | original_structural_sl=%.5f",
+               g_rExit[idx].positionId,
+               TimeToString(g_rExit[idx].extensionStartTime, TIME_DATE|TIME_SECONDS),
+               TimeToString(g_rExit[idx].extensionDeadline, TIME_DATE|TIME_SECONDS),
+               g_rExit[idx].extensionTriggerR, g_rExit[idx].originalStopLoss);
+   return true;
 }
 
 void XAU_RExit_Clear(ulong positionId)
@@ -25571,7 +25710,19 @@ void XAU_RExit_SaveState(bool force = false)
                  g_rExit[i].reconciledFromRestart ? 1 : 0,
                  g_rExit[i].profitGuaranteeArmed ? 1 : 0, DoubleToString(g_rExit[i].guaranteedFloorR, 4),
                  DoubleToString(g_rExit[i].guaranteedFloorDesiredSL, 5), g_rExit[i].guaranteedFloorGeometryBlocked ? 1 : 0,
-                 DoubleToString(g_rExit[i].effectiveInitialRiskUSD, 2), g_rExit[i].ownerExitProfile);
+                 DoubleToString(g_rExit[i].effectiveInitialRiskUSD, 2), g_rExit[i].ownerExitProfile,
+                 g_rExit[i].extensionArmed ? 1 : 0, g_rExit[i].extensionFullyConfirmed ? 1 : 0,
+                 g_rExit[i].extensionCompleted ? 1 : 0,
+                 (long)g_rExit[i].extensionStartTime, (long)g_rExit[i].extensionDeadline,
+                 DoubleToString(g_rExit[i].extensionTriggerR, 6), DoubleToString(g_rExit[i].extensionTriggerPrice, 5),
+                 DoubleToString(g_rExit[i].extensionTriggerProfitUSD, 2), g_rExit[i].extensionTriggerAuthority,
+                 g_rExit[i].extensionStructuralSLRestored ? 1 : 0,
+                 g_rExit[i].extensionDeadlineCloseSent ? 1 : 0,
+                 g_rExit[i].extensionDeadlineCloseConfirmed ? 1 : 0,
+                 (long)g_rExit[i].extensionDeadlineRequestTime,
+                 DoubleToString(g_rExit[i].extensionDeadlineR, 6),
+                 DoubleToString(g_rExit[i].extensionDeadlineProfitUSD, 2),
+                 (long)g_rExit[i].extensionLastSuppressionLog);
    }
    FileClose(h);
    if(!FileMove(tmpPath, FILE_COMMON, path, FILE_COMMON | FILE_REWRITE))
@@ -25620,7 +25771,7 @@ void XAU_RExit_LoadPersistedState()
    while(!FileIsEnding(h))
    {
       int schema     = (int)FileReadNumber(h);
-      if(schema != 2 && schema != 3 && schema != 4 && schema != R_EXIT_STATE_SCHEMA_VERSION)
+      if(schema != 2 && schema != 3 && schema != 4 && schema != 5 && schema != R_EXIT_STATE_SCHEMA_VERSION)
       {
          // v6.21.2: a foreign/older schema row has a different field layout --
          // do not keep reading fields from it as if they lined up. Skip the
@@ -25666,6 +25817,22 @@ void XAU_RExit_LoadPersistedState()
       bool guaranteeGeomBlocked = FileReadNumber(h) != 0;
       double effectiveInitialRisk = schema >= 3 ? FileReadNumber(h) : origRisk;
       int ownerExitProfile = schema >= 3 ? (int)FileReadNumber(h) : (int)OWNER_EXIT_GENERAL;
+      bool extensionArmed = schema >= 6 ? FileReadNumber(h) != 0 : false;
+      bool extensionFullyConfirmed = schema >= 6 ? FileReadNumber(h) != 0 : false;
+      bool extensionCompleted = schema >= 6 ? FileReadNumber(h) != 0 : false;
+      datetime extensionStartTime = schema >= 6 ? (datetime)FileReadNumber(h) : 0;
+      datetime extensionDeadline = schema >= 6 ? (datetime)FileReadNumber(h) : 0;
+      double extensionTriggerR = schema >= 6 ? FileReadNumber(h) : 0.0;
+      double extensionTriggerPrice = schema >= 6 ? FileReadNumber(h) : 0.0;
+      double extensionTriggerProfitUSD = schema >= 6 ? FileReadNumber(h) : 0.0;
+      string extensionTriggerAuthority = schema >= 6 ? FileReadString(h) : "";
+      bool extensionStructuralSLRestored = schema >= 6 ? FileReadNumber(h) != 0 : false;
+      bool extensionDeadlineCloseSent = schema >= 6 ? FileReadNumber(h) != 0 : false;
+      bool extensionDeadlineCloseConfirmed = schema >= 6 ? FileReadNumber(h) != 0 : false;
+      datetime extensionDeadlineRequestTime = schema >= 6 ? (datetime)FileReadNumber(h) : 0;
+      double extensionDeadlineR = schema >= 6 ? FileReadNumber(h) : 0.0;
+      double extensionDeadlineProfitUSD = schema >= 6 ? FileReadNumber(h) : 0.0;
+      datetime extensionLastSuppressionLog = schema >= 6 ? (datetime)FileReadNumber(h) : 0;
       int legacyOwnerExitProfile = ownerExitProfile;
       if(schema <= 4)
       {
@@ -25742,6 +25909,22 @@ void XAU_RExit_LoadPersistedState()
       g_rExit[idx].guaranteedFloorR = guaranteedFloorR;
       g_rExit[idx].guaranteedFloorDesiredSL = guaranteedFloorSL;
       g_rExit[idx].guaranteedFloorGeometryBlocked = guaranteeGeomBlocked;
+      g_rExit[idx].extensionArmed = extensionArmed;
+      g_rExit[idx].extensionFullyConfirmed = extensionFullyConfirmed;
+      g_rExit[idx].extensionCompleted = extensionCompleted;
+      g_rExit[idx].extensionStartTime = extensionStartTime;
+      g_rExit[idx].extensionDeadline = extensionDeadline;
+      g_rExit[idx].extensionTriggerR = extensionTriggerR;
+      g_rExit[idx].extensionTriggerPrice = extensionTriggerPrice;
+      g_rExit[idx].extensionTriggerProfitUSD = extensionTriggerProfitUSD;
+      g_rExit[idx].extensionTriggerAuthority = extensionTriggerAuthority;
+      g_rExit[idx].extensionStructuralSLRestored = extensionStructuralSLRestored;
+      g_rExit[idx].extensionDeadlineCloseSent = extensionDeadlineCloseSent;
+      g_rExit[idx].extensionDeadlineCloseConfirmed = extensionDeadlineCloseConfirmed;
+      g_rExit[idx].extensionDeadlineRequestTime = extensionDeadlineRequestTime;
+      g_rExit[idx].extensionDeadlineR = extensionDeadlineR;
+      g_rExit[idx].extensionDeadlineProfitUSD = extensionDeadlineProfitUSD;
+      g_rExit[idx].extensionLastSuppressionLog = extensionLastSuppressionLog;
       int restoredCampaignSlot = XAU_CampaignSlot(direction);
       if(g_campaign[restoredCampaignSlot].active)
          g_campaign[restoredCampaignSlot].ownerExitProfile = ownerExitProfile;
@@ -25750,6 +25933,11 @@ void XAU_RExit_LoadPersistedState()
                   positionId, liveTicket, direction == 1 ? "BUY" : "SELL", stage, cumRisk, peakR,
                   StringLen(pendingReason) > 0 ? pendingReason : "NONE",
                   guaranteeArmed ? "true" : "false", guaranteedFloorR);
+      if(extensionArmed && extensionFullyConfirmed && !extensionCompleted)
+         PrintFormat("GENERAL_10M_EXTENSION_RESTORED | position_id=%I64u | start_time=%s | deadline=%s | overdue=%s",
+                     positionId, TimeToString(extensionStartTime, TIME_DATE|TIME_SECONDS),
+                     TimeToString(extensionDeadline, TIME_DATE|TIME_SECONDS),
+                     TimeCurrent() >= extensionDeadline ? "true" : "false");
       if(closeState == R_CLOSE_REQUESTED || closeState == R_CLOSE_PENDING_RETRY)
          PrintFormat("R_EXIT_PENDING_CLOSE_RESTORED positionId=%I64u ticket=%I64u reason=%s", positionId, liveTicket, pendingReason);
    }
@@ -25909,13 +26097,12 @@ void XAU_RExit_LogCounterfactual(int idx, string exitReason)
 bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
 {
    datetime now = TimeCurrent();
+   if(idx < 0 || idx >= ArraySize(g_rExit)) return false;
+   bool deadlineClose = StringFind(reason, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0;
    if(!XAU_IsOwnerRExitApprovedCloseReason(reason))
    {
       PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_LEGACY_AUTHORITY | ticket=%I64u | attempted_authority=%s | action=TELEMETRY_ONLY",
                   currentTicket, reason);
-      // A legacy close intent persisted by an older build must not retry
-      // forever after upgrade. Clear only the obsolete close request; keep
-      // peak/floor/profile state intact and persist the cleanup immediately.
       g_rExit[idx].closeState = R_CLOSE_NONE;
       g_rExit[idx].pendingCloseReason = "";
       g_rExit[idx].closeAttemptCount = 0;
@@ -25923,7 +26110,17 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
       XAU_RExit_SaveState(true);
       return false;
    }
+
    ENUM_XAU_OWNER_EXIT_PROFILE profile = (ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile;
+
+   // Once armed, no later managed/discretionary profitable-close request may
+   // shorten or restart the extension. Only the fixed deadline reason is sent.
+   if(XAU_General10MExtensionActive(idx) && !deadlineClose)
+   {
+      XAU_General10MLogSuppressed(idx, reason);
+      return false;
+   }
+
    double ownerFloorNow = XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile);
    if(!XAU_OwnerRExitDecisionAllowsClose(g_rExit[idx].peakR,g_rExit[idx].currentR,
                                          g_rExit[idx].guaranteedFloorR,profile,reason))
@@ -25934,8 +26131,45 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
                   currentTicket, reason, g_rExit[idx].currentR, MathMax(ownerFloorNow,g_rExit[idx].guaranteedFloorR));
       return false;
    }
+
+   // First fully-approved profitable GENERAL close: latch T and T+600,
+   // restore the original structural SL/remove broker TP, then suppress this
+   // original close. Failure to confirm restoration falls through and sends
+   // the original already-approved close exactly as before.
+   if(!deadlineClose && profile == OWNER_EXIT_GENERAL && g_rExit[idx].currentR > 0.0 &&
+      g_rExit[idx].currentProfitUSD > 0.0 && !g_rExit[idx].extensionArmed &&
+      !g_rExit[idx].extensionCompleted)
+   {
+      if(XAU_General10MTryArm(idx, currentTicket, reason))
+         return false;
+   }
+
+   if(deadlineClose)
+   {
+      if(!XAU_General10MExtensionActive(idx) || now < g_rExit[idx].extensionDeadline)
+      {
+         PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=DEADLINE_AUTHORITY | reason=NOT_ACTIVE_OR_EARLY now=%s deadline=%s",
+                     g_rExit[idx].positionId, TimeToString(now, TIME_DATE|TIME_SECONDS),
+                     TimeToString(g_rExit[idx].extensionDeadline, TIME_DATE|TIME_SECONDS));
+         return false;
+      }
+      if(!g_rExit[idx].extensionDeadlineCloseSent)
+      {
+         g_rExit[idx].extensionDeadlineCloseSent = true;
+         g_rExit[idx].extensionDeadlineRequestTime = now;
+         g_rExit[idx].extensionDeadlineR = g_rExit[idx].currentR;
+         g_rExit[idx].extensionDeadlineProfitUSD = g_rExit[idx].currentProfitUSD;
+         g_rExitStateDirty = true;
+         PrintFormat("GENERAL_10M_EXTENSION_DEADLINE | position_id=%I64u | deadline=%s | request_time=%s | current_r=%.3f | current_profit_usd=%.2f",
+                     g_rExit[idx].positionId,
+                     TimeToString(g_rExit[idx].extensionDeadline, TIME_DATE|TIME_SECONDS),
+                     TimeToString(now, TIME_DATE|TIME_SECONDS),
+                     g_rExit[idx].currentR, g_rExit[idx].currentProfitUSD);
+      }
+   }
+
    if(g_rExit[idx].closeState == R_CLOSE_PENDING_RETRY && now - g_rExit[idx].lastCloseAttemptTime < 3)
-      return false; // throttled -- no duplicate request this tick
+      return false;
 
    if(g_rExit[idx].closeState != R_CLOSE_REQUESTED && g_rExit[idx].closeState != R_CLOSE_PENDING_RETRY)
    {
@@ -25953,23 +26187,44 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
    if(sendOk && !stillOpen)
    {
       g_rExit[idx].closeState = R_CLOSE_CONFIRMED;
+      if(deadlineClose)
+      {
+         g_rExit[idx].extensionDeadlineCloseConfirmed = true;
+         g_rExit[idx].extensionCompleted = true;
+         double realizedProfit = g_rExit[idx].currentProfitUSD;
+         double confirmedPrice = trade.ResultPrice();
+         ulong closeDeal = trade.ResultDeal();
+         if(closeDeal > 0 && HistoryDealSelect(closeDeal))
+            realizedProfit = HistoryDealGetDouble(closeDeal, DEAL_PROFIT) +
+                             HistoryDealGetDouble(closeDeal, DEAL_SWAP) +
+                             HistoryDealGetDouble(closeDeal, DEAL_COMMISSION);
+         double realizedR = g_rExit[idx].cumulativeOriginalRiskUSD > 0.0
+                            ? realizedProfit / g_rExit[idx].cumulativeOriginalRiskUSD
+                            : g_rExit[idx].currentR;
+         int delaySec = (int)(now - g_rExit[idx].extensionDeadline);
+         if(delaySec < 0) delaySec = 0;
+         PrintFormat("GENERAL_10M_EXTENSION_CLOSE_CONFIRMED | position_id=%I64u | trigger_r=%.3f | deadline_r=%.3f | realized_r=%.3f | delta_r=%.3f | trigger_profit_usd=%.2f | realized_profit_usd=%.2f | execution_delay_seconds=%d | close_price=%.5f",
+                     g_rExit[idx].positionId, g_rExit[idx].extensionTriggerR,
+                     g_rExit[idx].extensionDeadlineR, realizedR,
+                     realizedR - g_rExit[idx].extensionTriggerR,
+                     g_rExit[idx].extensionTriggerProfitUSD, realizedProfit,
+                     delaySec, confirmedPrice);
+      }
       if(!g_rExit[idx].finalTelemetryLogged)
       {
          XAU_RExit_LogCounterfactual(idx, g_rExit[idx].pendingCloseReason);
          g_rExit[idx].finalTelemetryLogged = true;
       }
       XAU_RExit_Clear(g_rExit[idx].positionId);
-      XAU_RExit_SaveState(true); // critical transition -- force immediate flush
+      XAU_RExit_SaveState(true);
       return true;
    }
 
-   // Broker rejected the request, or the position is still selectable this
-   // tick (fill not yet reflected) -- stay pending, never revert to HOLD.
    g_rExit[idx].closeState = R_CLOSE_PENDING_RETRY;
    PrintFormat("R_EXIT_MANAGER ticket=%I64u action=CLOSE_PENDING_RETRY reason=%s attempt=%d sendOk=%s stillOpen=%s",
                currentTicket, g_rExit[idx].pendingCloseReason, g_rExit[idx].closeAttemptCount,
                sendOk ? "true" : "false", stillOpen ? "true" : "false");
-   XAU_RExit_SaveState(true); // critical transition -- force immediate flush
+   XAU_RExit_SaveState(true);
    return false;
 }
 
@@ -26369,6 +26624,19 @@ void XAU_RExitCoreLoop()
 
       double peakR = g_rExit[idx].peakR;
 
+      // v6.25.14 Priority 1.5: an armed GENERAL extension owns this
+      // position until its immutable deadline. No floor/runner/giveback/
+      // transition/basket managed profit action below may run meanwhile.
+      if(XAU_General10MExtensionActive(idx))
+      {
+         datetime extensionNow = TimeCurrent();
+         if(extensionNow >= g_rExit[idx].extensionDeadline)
+            XAU_RExit_RequestClose(idx, ticket, "OWNER_R_EXIT_GENERAL_10M_DEADLINE");
+         else
+            XAU_General10MLogSuppressed(idx, "ACTIVE_EXTENSION_HOLD");
+         continue;
+      }
+
       // v6.23.1 transition consumer runs inside the single R-exit owner.
       // A broker-close request returns true only after confirmed absence; a
       // pending request remains sticky and will be retried at Priority 1.
@@ -26408,6 +26676,8 @@ void XAU_RExitCoreLoop()
          if(targetClosed || targetStateIdx<0)
             continue;
          idx=targetStateIdx;
+         if(XAU_General10MExtensionActive(idx))
+            continue;
          if(g_rExit[idx].closeState==R_CLOSE_REQUESTED || g_rExit[idx].closeState==R_CLOSE_PENDING_RETRY)
             continue;
       }
@@ -26428,6 +26698,8 @@ void XAU_RExitCoreLoop()
             if(givebackClosed || refreshedIdx<0)
                continue;
             idx=refreshedIdx;
+            if(XAU_General10MExtensionActive(idx))
+               continue;
             if(g_rExit[idx].closeState==R_CLOSE_REQUESTED || g_rExit[idx].closeState==R_CLOSE_PENDING_RETRY)
                continue;
          }
@@ -26646,6 +26918,8 @@ void XAU_RExitCoreLoop()
                PrintFormat("OWNER_R_EXIT_RESTORED_RULE | ticket=%I64u | rule=RUNNER_CONTINUATION_FAILED | direction=%s | currentR=%.3f | structureBroken=%s | hostileFactors=%d/5 | action=REQUEST_GUARDED_CLOSE",
                            ticket, dirStr, currentR, structureBrokenAgainst ? "true" : "false", hostileFactors);
                if(XAU_RExit_RequestClose(idx,ticket,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED"))
+                  continue;
+               if(idx < ArraySize(g_rExit) && XAU_General10MExtensionActive(idx))
                   continue;
             }
          }
@@ -29163,9 +29437,28 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          forensicRiskUSD = g_rExit[rIdx].cumulativeOriginalRiskUSD;
          forensicPeakR = g_rExit[rIdx].peakR;
          forensicOwnerProfile = g_rExit[rIdx].ownerExitProfile;
+         ENUM_DEAL_REASON dReason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
+         if(XAU_General10MExtensionActive(rIdx))
+         {
+            double extensionCloseProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT) +
+                                          HistoryDealGetDouble(dealTicket, DEAL_SWAP) +
+                                          HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+            double extensionCloseR = g_rExit[rIdx].cumulativeOriginalRiskUSD > 0.0
+                                     ? extensionCloseProfit / g_rExit[rIdx].cumulativeOriginalRiskUSD : 0.0;
+            datetime extensionCloseTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+            if(dReason == DEAL_REASON_SL)
+               PrintFormat("GENERAL_10M_EXTENSION_ORIGINAL_SL_HIT | position_id=%I64u | deadline=%s | close_time=%s | realized_r=%.3f",
+                           posId, TimeToString(g_rExit[rIdx].extensionDeadline, TIME_DATE|TIME_SECONDS),
+                           TimeToString(extensionCloseTime, TIME_DATE|TIME_SECONDS), extensionCloseR);
+            else if(extensionCloseTime < g_rExit[rIdx].extensionDeadline &&
+                    dReason != DEAL_REASON_CLIENT && dReason != DEAL_REASON_MOBILE && dReason != DEAL_REASON_WEB)
+               PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=UNINTENDED_EARLY_CLOSE | reason=%s | close_time=%s | deadline=%s | realized_r=%.3f",
+                           posId, XAU_DealReasonName(dReason),
+                           TimeToString(extensionCloseTime, TIME_DATE|TIME_SECONDS),
+                           TimeToString(g_rExit[rIdx].extensionDeadline, TIME_DATE|TIME_SECONDS), extensionCloseR);
+         }
          if(!g_rExit[rIdx].finalTelemetryLogged)
          {
-            ENUM_DEAL_REASON dReason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
             string closeCause = "EXTERNAL_CLOSE_" + XAU_DealReasonName(dReason);
             XAU_RExit_LogCounterfactual(rIdx, closeCause);
             g_rExit[rIdx].finalTelemetryLogged = true;
