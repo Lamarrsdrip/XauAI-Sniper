@@ -18,20 +18,22 @@ The previous self-hosted VAPID implementation (initialize_vapid_keys,
 get_vapid_status, _send_webpush, etc.) has been removed entirely, not kept
 as a dead fallback -- see git history if it's ever needed again.
 
-STRICT SEPARATION: unchanged from before -- this module only reads
-cloud_notification_prefs and cloud_push_subscriptions (both owned by this
-feature) and writes to cloud_notification_log. It never touches any EA/
-trade collection and never calls any trading-control endpoint.
+STRICT SEPARATION: this module reads notification preferences/device
+registrations and, for crash-safe notification retry only, reads already-
+persisted broker-confirmed cloud_bot_activity events. It writes only to
+cloud_notification_log. It never writes an EA/trade collection and never calls
+any trading-control endpoint.
 """
 
 from __future__ import annotations
 
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional
 
 import httpx
+from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger("notifications")
 
@@ -359,10 +361,10 @@ async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
     import server as _srv
     deep_link = payload.get("deep_link") or "/ai-market-outlook"
     web_url = f"{_srv.PUBLIC_SITE_URL}{deep_link if str(deep_link).startswith('/') else '/' + str(deep_link)}"
-    provider_idempotency = str(uuid.uuid5(
-        uuid.NAMESPACE_URL,
-        f"xau-outlook:{payload.get('outlook_id') or 'none'}:{payload.get('event') or 'unknown'}:{user_id}",
-    ))
+    provider_identity = payload.get("notification_key") or (
+        f"xau-outlook:{payload.get('outlook_id') or 'none'}:{payload.get('event') or 'unknown'}:{user_id}"
+    )
+    provider_idempotency = str(uuid.uuid5(uuid.NAMESPACE_URL, str(provider_identity)))
     body = {
         "app_id": cfg["app_id"],
         "include_aliases": {"external_id": [user_id]},
@@ -484,6 +486,236 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> Opt
     except Exception as exc:
         logger.error("NOTIFICATION_DISPATCH_FAILED event=%s outlook=%s: %s", event, doc.get("id"), exc)
         return None
+
+
+BROKER_SUCCESS_RETCODES = {10008, 10009, 10010}
+
+
+def _activity_value(activity: Dict, *names, default=None):
+    details = activity.get("details") or {}
+    for name in names:
+        value = activity.get(name)
+        if value is None or value == "":
+            value = details.get(name)
+        if value is not None and value != "":
+            return value
+    return default
+
+
+def classify_trade_activity(activity: Dict) -> Optional[str]:
+    """Return TRADE_OPENED/TRADE_CLOSED only for broker-confirmed events."""
+    event_type = str(activity.get("event_type") or "").upper()
+    category = str(activity.get("event_category") or "").lower()
+    ticket = _clean_text(_activity_value(activity, "ticket", "position_id", "position_ticket"), 80)
+    if not ticket:
+        return None
+
+    retcode = _activity_value(activity, "broker_retcode")
+    if retcode not in (None, ""):
+        try:
+            if int(retcode) not in BROKER_SUCCESS_RETCODES:
+                return None
+        except (TypeError, ValueError):
+            return None
+
+    final_decision = str(_activity_value(activity, "final_decision", default="") or "").upper()
+    open_confirmed = (
+        final_decision in {"EXECUTED", "FILLED", "BROKER_CONFIRMED"}
+        or any(token in event_type for token in ("TRADE_EXECUTED", "POSITION_OPENED", "TRADE_OPENED", "EXECUTION_CONFIRMED"))
+    )
+    if open_confirmed:
+        return "TRADE_OPENED"
+
+    profit = _activity_value(activity, "profit", "net_profit", "realized_profit")
+    close_confirmed = (
+        any(token in event_type for token in ("TRADE_CLOSED", "POSITION_CLOSED", "CLOSE_CONFIRMED", "DEAL_CLOSED"))
+        or (category == "exits" and bool(_activity_value(activity, "close_reason_exact", "close_reason")))
+    )
+    if close_confirmed:
+        try:
+            float(profit)
+        except (TypeError, ValueError):
+            return None
+        return "TRADE_CLOSED"
+    return None
+
+
+def _fmt_number(value, digits=2) -> Optional[str]:
+    try:
+        return f"{float(value):,.{digits}f}"
+    except (TypeError, ValueError):
+        return None
+
+
+def build_trade_notification_payload(activity: Dict, event: str) -> Dict:
+    symbol = _clean_text(activity.get("symbol") or _activity_value(activity, "symbol") or "XAUUSD", 32)
+    direction = _clean_text(_activity_value(activity, "position_direction", "direction", "signal_direction"), 12).upper()
+    ticket = _clean_text(_activity_value(activity, "ticket", "position_id", "position_ticket"), 80)
+    price = _fmt_number(_activity_value(activity, "price", "entry_price", "open_price"))
+    close_price = _fmt_number(_activity_value(activity, "close_price", "price"))
+    lots = _fmt_number(_activity_value(activity, "lots", "volume", "lot_size"))
+    sl = _fmt_number(_activity_value(activity, "sl", "stop_loss"))
+    tp = _fmt_number(_activity_value(activity, "tp", "take_profit"))
+    setup = _clean_text(_activity_value(activity, "setup", "setup_type", "family"), 80)
+    campaign = _clean_text(_activity_value(activity, "campaign_id", "campaign"), 80)
+    reason = _clean_text(_activity_value(activity, "close_reason_exact", "close_reason", "reason"), 140)
+    final_r = _fmt_number(_activity_value(activity, "final_r", "r_multiple"))
+    duration = _clean_text(_activity_value(activity, "duration", "duration_text", "trade_duration"), 60)
+    balance = _fmt_number(_activity_value(activity, "balance", "account_balance"))
+    profit_raw = _activity_value(activity, "profit", "net_profit", "realized_profit")
+    profit = _fmt_number(profit_raw)
+
+    if event == "TRADE_OPENED":
+        side = direction or "TRADE"
+        title = f"{'🟢' if side == 'BUY' else '🔴' if side == 'SELL' else '📈'} {side} {symbol} opened"
+        parts = []
+        if price: parts.append(f"Entry {price}")
+        if lots: parts.append(f"Lots {lots}")
+        if sl: parts.append(f"SL {sl}")
+        if tp: parts.append(f"TP {tp}")
+        if setup: parts.append(setup)
+        if campaign: parts.append(f"Campaign {campaign}")
+        parts.append(f"Ticket {ticket}")
+    else:
+        numeric_profit = float(profit_raw)
+        icon = "✅" if numeric_profit > 0 else "❌" if numeric_profit < 0 else "➖"
+        outcome = "profit" if numeric_profit > 0 else "loss" if numeric_profit < 0 else "break-even"
+        title = f"{icon} {symbol} trade closed — {outcome}"
+        signed_amount = f"+${profit}" if numeric_profit > 0 else f"-${abs(numeric_profit):,.2f}" if numeric_profit < 0 else "$0.00"
+        parts = [f"P/L {signed_amount}"]
+        if direction: parts.append(direction)
+        if close_price: parts.append(f"Close {close_price}")
+        if final_r: parts.append(f"{final_r}R")
+        if duration: parts.append(duration)
+        if reason: parts.append(reason)
+        if balance: parts.append(f"Balance ${balance}")
+        parts.append(f"Ticket {ticket}")
+
+    activity_id = _clean_text(activity.get("id"), 120)
+    notification_key = f"{event}:{activity.get('account','')}:{symbol}:{ticket}"
+    return {
+        "title": title,
+        "body": " · ".join(parts),
+        "deep_link": f"/activity?ticket={ticket}",
+        "outlook_id": None,
+        "activity_id": activity_id,
+        "ticket": ticket,
+        "event": event,
+        "notification_key": notification_key,
+    }
+
+
+async def send_trade_activity_notification(activity: Dict) -> Optional[int]:
+    """Send confirmed trade lifecycle alerts without affecting the EA endpoint."""
+    try:
+        event = classify_trade_activity(activity)
+        if not event:
+            return 0
+        db = _db()
+        account = str(activity.get("account") or "")
+        symbol = str(activity.get("symbol") or _activity_value(activity, "symbol") or "XAUUSD")
+        ticket = str(_activity_value(activity, "ticket", "position_id", "position_ticket") or "")
+        prefs_cursor = db.cloud_notification_prefs.find({"account": account})
+        sent = 0
+        async for prefs in prefs_cursor:
+            user_id = str(prefs.get("user_id") or "")
+            if not user_id or _TIER_RANK.get(prefs.get("tier", "OFF"), 0) < _TIER_RANK["ALL_UPDATES"]:
+                continue
+
+            idem_key = f"{event}:{account}:{symbol}:{ticket}:{user_id}"
+            already = await db.cloud_notification_log.find_one({"idempotency_key": idem_key})
+            if already:
+                status = str(already.get("delivery_status") or "")
+                failure = already.get("failure_reason")
+                if status == "SENT" or status == "NO_DEVICE":
+                    continue
+                if status == "FAILED" and failure not in RETRYABLE_FAILURES:
+                    continue
+                if status == "PENDING":
+                    try:
+                        scheduled = datetime.fromisoformat(str(already.get("scheduled_time") or "").replace("Z", "+00:00"))
+                        if datetime.now(timezone.utc) - scheduled < timedelta(minutes=2):
+                            continue  # another worker still owns the live claim
+                    except (TypeError, ValueError):
+                        continue
+
+            devices = await complete_active_devices(user_id)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            log_entry = {
+                "id": (already or {}).get("id") or str(uuid.uuid4()),
+                "idempotency_key": idem_key,
+                "user_id": user_id,
+                "outlook_id": None,
+                "activity_id": activity.get("id"),
+                "account": account,
+                "symbol": symbol,
+                "ticket": ticket,
+                "notification_type": event,
+                "scheduled_time": (already or {}).get("scheduled_time") or now_iso,
+                "sent_time": None,
+                "delivery_status": "PENDING",
+                "opened_time": None,
+                "device_count": len(devices),
+                "retry_count": int((already or {}).get("retry_count", 0) or 0),
+                "failure_reason": None,
+            }
+
+            if not already:
+                try:
+                    await db.cloud_notification_log.insert_one(dict(log_entry))
+                except DuplicateKeyError:
+                    continue  # another worker owns this exact trade event
+
+            if not devices:
+                log_entry.update({"delivery_status": "NO_DEVICE", "failure_reason": "SUBSCRIPTION_MISSING"})
+            else:
+                payload = build_trade_notification_payload(activity, event)
+                payload["notification_key"] = f"{idem_key}:provider"
+                ok, failure_class, provider = _coerce_send_result(await _send_onesignal(user_id, payload))
+                log_entry.update({
+                    "sent_time": datetime.now(timezone.utc).isoformat(),
+                    "delivery_status": "SENT" if ok else "FAILED",
+                    "failure_reason": None if ok else (failure_class or UNKNOWN_FAILURE),
+                    "provider_http_status": provider.get("http_status"),
+                    "provider_message_id": provider.get("message_id"),
+                    "provider_errors": provider.get("errors"),
+                    "provider_warnings": provider.get("warnings"),
+                })
+                if ok:
+                    sent += 1
+            if already:
+                log_entry["retry_count"] = int(already.get("retry_count", 0) or 0) + 1
+            await db.cloud_notification_log.update_one({"idempotency_key": idem_key}, {"$set": log_entry})
+        return sent
+    except Exception as exc:
+        logger.error("TRADE_NOTIFICATION_DISPATCH_FAILED activity=%s: %s", activity.get("id"), exc)
+        return None
+
+
+async def dispatch_pending_trade_notifications(limit: int = 100) -> int:
+    """Retry persisted transient trade alerts after a worker restart/crash."""
+    db = _db()
+    rows = await db.cloud_notification_log.find({
+        "notification_type": {"$in": ["TRADE_OPENED", "TRADE_CLOSED"]},
+        "$or": [
+            {"delivery_status": "PENDING"},
+            {"delivery_status": "FAILED", "failure_reason": {"$in": list(RETRYABLE_FAILURES)}},
+        ],
+        "activity_id": {"$ne": None},
+    }, {"_id": 0, "activity_id": 1}).sort("scheduled_time", 1).to_list(limit)
+    dispatched = 0
+    seen = set()
+    for row in rows:
+        activity_id = str(row.get("activity_id") or "")
+        if not activity_id or activity_id in seen:
+            continue
+        seen.add(activity_id)
+        activity = await db.cloud_bot_activity.find_one({"id": activity_id}, {"_id": 0})
+        if activity:
+            result = await send_trade_activity_notification(activity)
+            if result:
+                dispatched += int(result)
+    return dispatched
 
 
 async def send_test_notification(user_id: str) -> Dict:

@@ -381,7 +381,7 @@ function NotificationSettings({ prefs, setPrefs }) {
           { v: "OFF", l: "Off" },
           { v: "HOURLY_ONLY", l: "Hourly signals only" },
           { v: "HOURLY_PLUS_RESULTS", l: "Hourly signals + TP/SL results" },
-          { v: "ALL_UPDATES", l: "All outlook updates" },
+          { v: "ALL_UPDATES", l: "All Outlook + confirmed trade alerts" },
         ].map((opt) => {
           const selected = tier === opt.v;
           const active = selected && (opt.v === "OFF" || registrationReady);

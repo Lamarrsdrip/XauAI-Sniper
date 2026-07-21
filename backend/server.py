@@ -5312,10 +5312,20 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
         "monitor_last_activity_at": doc["ts"],
         "monitor_last_activity": doc,
     }}, upsert=True)
+    # Push dispatch is observational and isolated from the EA response. Only
+    # broker-confirmed trade lifecycle events pass the notification classifier.
+    async def _dispatch_activity_push_event():
+        try:
+            from notifications import send_trade_activity_notification
+            await send_trade_activity_notification(doc)
+        except Exception as exc:
+            logger.warning(f"[activity-push] account={req.account} event={req.event_type} error={exc}")
+    asyncio.create_task(_dispatch_activity_push_event())
+
     # Signal Outlook monitoring consumes the same immutable broker Bid/Ask
-    # snapshot already posted by the EA. Queue it immediately instead of
-    # waiting for the next hourly publication or for a browser page to be
-    # open. This is telemetry-only and cannot affect EA trading decisions.
+    # snapshot already posted by the EA. A fresh explicit M10 candidate is
+    # published immediately with a deterministic bar-level key; the ordinary
+    # hourly informational publisher remains as the fallback cadence.
     thesis_quote = (details.get("market_thesis") or {}) if isinstance(details, dict) else {}
     quote_bid = float(thesis_quote.get("live_bid", 0.0) or 0.0)
     quote_ask = float(thesis_quote.get("live_ask", 0.0) or 0.0)
@@ -5325,11 +5335,14 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
                 import market_outlook as _mo
                 await _mo.track_outlook_lifecycle_tick(
                     account=req.account or "", bid=quote_bid, ask=quote_ask, quote_at=doc["ts"])
-                # The scheduled hourly pass may deliberately defer an
-                # actionable publication when its latest broker quote is
-                # older than 30 seconds. Re-enter the same canonical,
-                # slot-idempotent publisher on this fresh EA quote so the
-                # signal anchor is contemporaneous rather than stale.
+                m10_signal = details.get("m10_signal") or {}
+                m10_decision = str(m10_signal.get("decision") or m10_signal.get("final_decision") or "").upper()
+                if m10_decision in {"BUY_CANDIDATE", "SELL_CANDIDATE", "ALLOW_CORE"}:
+                    await _mo.publish_m10_signal_from_activity(
+                        license_key=license_key,
+                        account=req.account or "",
+                        source_event_id=doc["id"],
+                    )
                 await _mo.hourly_generation_tick(account=req.account or "")
             except Exception as exc:
                 logger.warning(f"[outlook-event-monitor] account={req.account} error={exc}")

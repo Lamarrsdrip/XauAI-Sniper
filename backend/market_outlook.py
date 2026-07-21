@@ -150,7 +150,7 @@ class PushUnsubscribeIn(BaseModel):
 # Evidence gathering — reads the EA's own already-transmitted state only
 # ---------------------------------------------------------------------------
 
-async def _latest_ea_evidence(license_key: str, account: str) -> tuple:
+async def _latest_ea_evidence(license_key: str, account: str, source_event_id: str = "") -> tuple:
     """Reads the most recent cloud_bot_activity event for this account/license
     that carries usable thesis evidence (market_thesis and/or
     entry_readiness populated). Read-only, same scoping pattern
@@ -169,27 +169,107 @@ async def _latest_ea_evidence(license_key: str, account: str) -> tuple:
     ever = await db.cloud_bot_activity.find_one(scope, {"_id": 0, "id": 1})
     if not ever:
         return None, "NO_CONNECTED_EA"
+    if source_event_id:
+        exact = await db.cloud_bot_activity.find_one(
+            {"$and": [scope, {"id": source_event_id}]}, {"_id": 0}
+        )
+        if exact:
+            rows = [exact]
+        else:
+            return None, "SOURCE_EVENT_NOT_FOUND"
+    else:
+        rows = None
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
-    rows = await db.cloud_bot_activity.find(
-        {"$and": [scope, {"ts": {"$gte": cutoff}}]}, {"_id": 0}
-    ).sort("ts", -1).to_list(50)
+    if rows is None:
+        rows = await db.cloud_bot_activity.find(
+            {"$and": [scope, {"ts": {"$gte": cutoff}}]}, {"_id": 0}
+        ).sort("ts", -1).to_list(50)
     if not rows:
         return None, "STALE_EVIDENCE"
     for row in rows:
         details = row.get("details") or {}
         thesis = details.get("market_thesis") or {}
         readiness = details.get("entry_readiness") or {}
-        if thesis or readiness:
+        m10_signal = details.get("m10_signal") or {}
+        if thesis or readiness or m10_signal:
             return {
                 "ts": row.get("ts"),
+                "source_event_id": row.get("id") or source_event_id,
                 "symbol": row.get("symbol") or OUTLOOK_SYMBOL,
                 "market_thesis": thesis,
                 "post_trade_state": details.get("post_trade_state") or {},
                 "entry_readiness": readiness,
-                "regime": details.get("regime") or "",
+                "m10_signal": m10_signal,
+                "regime": details.get("regime") or row.get("mode") or "",
                 "session": details.get("session") or "",
             }, "OK"
     return None, "INSUFFICIENT_MARKET_EVIDENCE"
+
+
+def _canonical_m10_signal(evidence: Dict) -> Dict:
+    """Resolve only an explicit, fresh EA M10 candidate.
+
+    The M10 engine is the canonical near-term signal source already displayed
+    by the Command Center. Advisory fields such as exhaustion_decision may say
+    TRANSITION_WATCH for context, but they cannot erase an explicit
+    BUY_CANDIDATE/SELL_CANDIDATE emitted by the same immutable EA event.
+    Pressure alone is never promoted into a signal.
+    """
+    evidence = evidence or {}
+    m10 = evidence.get("m10_signal") or {}
+    readiness = evidence.get("entry_readiness") or {}
+    thesis = evidence.get("market_thesis") or {}
+    decision = str(
+        m10.get("decision")
+        or m10.get("final_decision")
+        or readiness.get("final_action")
+        or readiness.get("action")
+        or thesis.get("final_action")
+        or thesis.get("action")
+        or ""
+    ).upper().strip()
+    preferred = str(
+        m10.get("preferred_direction")
+        or m10.get("direction")
+        or readiness.get("preferred_direction")
+        or readiness.get("direction")
+        or thesis.get("preferred_direction")
+        or thesis.get("direction")
+        or ""
+    ).upper().strip()
+    freshness = str(m10.get("freshness_state") or "FRESH").upper().strip()
+
+    direction = ""
+    if decision == "BUY_CANDIDATE":
+        direction = "BUY"
+    elif decision == "SELL_CANDIDATE":
+        direction = "SELL"
+    elif decision == "ALLOW_CORE" and preferred in ("BUY", "SELL"):
+        direction = preferred
+
+    # An explicit candidate must not contradict a separately supplied preferred
+    # direction. Fail closed on malformed telemetry rather than guessing.
+    if direction and preferred in ("BUY", "SELL") and preferred != direction:
+        direction = ""
+    if freshness not in ("", "FRESH"):
+        direction = ""
+
+    try:
+        confidence = float(m10.get("confidence")) if m10.get("confidence") is not None else None
+    except (TypeError, ValueError):
+        confidence = None
+    if confidence is not None:
+        confidence = max(0.0, min(100.0, confidence))
+
+    return {
+        "actionable": direction in ("BUY", "SELL"),
+        "direction": direction,
+        "decision": decision,
+        "confidence": confidence,
+        "freshness_state": freshness,
+        "bar_time": str(m10.get("bar_time") or m10.get("candle_time") or evidence.get("ts") or ""),
+        "source": "M10_SIGNAL" if m10 else "READINESS_FALLBACK",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +528,7 @@ def _targets_have_valid_geometry(direction: str, entry: Any, tp1: Any, tp2: Any,
     return False
 
 
-async def _insert_outlook_atomically(db, doc: Dict, account: str, symbol: str, hourly_slot: str) -> Dict:
+async def _insert_outlook_atomically(db, doc: Dict, account: str, symbol: str, hourly_slot: str, publication_key: str = "") -> Dict:
     """v6.25.2 owner directive 2026-07-17 -- URGENT duplicate-publication
     repair. hourly_generation_tick()'s existing-slot check and this
     function's own insert are two separate operations with no atomicity
@@ -466,7 +546,9 @@ async def _insert_outlook_atomically(db, doc: Dict, account: str, symbol: str, h
     notification when this returns the document IT inserted), can ever
     exist per slot, regardless of how many workers race to generate it."""
     doc = dict(doc)
-    doc["_id"] = _outlook_slot_id(account, symbol, hourly_slot)
+    publication_key = publication_key or hourly_slot
+    doc["publication_key"] = publication_key
+    doc["_id"] = _outlook_slot_id(account, symbol, publication_key)
     try:
         await db.cloud_market_outlooks.insert_one(doc)
         doc["_newly_inserted"] = True
@@ -484,7 +566,8 @@ async def _insert_outlook_atomically(db, doc: Dict, account: str, symbol: str, h
 
 
 async def generate_outlook_for_account(license_key: str, account: str, account_id: str = "",
-                                        is_late_catchup: bool = False) -> Optional[Dict]:
+                                        is_late_catchup: bool = False, publication_key: str = "",
+                                        publication_mode: str = "HOURLY", source_event_id: str = "") -> Optional[Dict]:
     """Generates and persists ONE new immutable outlook document for this
     account, using only real, already-transmitted EA evidence + the live
     price feed. Returns the stored document, or None if there is genuinely
@@ -492,7 +575,7 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     srv = _server()
     db = _db()
 
-    evidence, evidence_reason = await _latest_ea_evidence(license_key, account)
+    evidence, evidence_reason = await _latest_ea_evidence(license_key, account, source_event_id=source_event_id)
 
     # v6.24.17 CRITICAL FIX: a real production incident published an entry
     # zone ~$960 away from the live broker price because this function used
@@ -530,6 +613,7 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     # which is the exact distinction that prevented the 19:00 slot from
     # being skipped by a late 18:51 publication.
     hourly_slot = now.strftime("%Y-%m-%dT%H:00")
+    publication_key = publication_key or hourly_slot
 
     if not evidence or current_price <= 0:
         no_valid_reason = evidence_reason if not evidence else "INTERNAL_GENERATION_ERROR"
@@ -545,6 +629,9 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "account": account, "license_key": license_key,
             "generated_at": now.isoformat(),
             "hourly_slot": hourly_slot,
+        "publication_key": publication_key,
+            "publication_mode": publication_mode,
+            "source_event_id": source_event_id or None,
             "late_catchup": is_late_catchup,
             "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
             "current_price": current_price,
@@ -558,26 +645,15 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "expected_path": "NO_CLEAR_PATH",
             "setup_type": "NONE",
         }
-        return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
+        return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot, publication_key=publication_key)
 
-    thesis = evidence["market_thesis"] or evidence["entry_readiness"]
+    thesis = evidence["market_thesis"] or evidence["entry_readiness"] or evidence.get("m10_signal") or {}
     readiness = evidence.get("entry_readiness") or {}
-    action = str(
-        readiness.get("final_action")
-        or readiness.get("action")
-        or thesis.get("final_action")
-        or thesis.get("action")
-        or ""
-    ).upper()
-    raw_dir = str(
-        readiness.get("preferred_direction")
-        or readiness.get("direction")
-        or thesis.get("preferred_direction")
-        or thesis.get("direction")
-        or ""
-    ).upper()
-    actionable = action in ("ALLOW_CORE", "BUY_CANDIDATE", "SELL_CANDIDATE")
-    direction = 1 if actionable and "BUY" in raw_dir else (-1 if actionable and "SELL" in raw_dir else 0)
+    canonical_m10 = _canonical_m10_signal(evidence)
+    action = canonical_m10["decision"]
+    raw_dir = canonical_m10["direction"]
+    actionable = canonical_m10["actionable"]
+    direction = 1 if actionable and raw_dir == "BUY" else (-1 if actionable and raw_dir == "SELL" else 0)
     direction_label = "BUY" if direction == 1 else "SELL" if direction == -1 else "NEUTRAL"
     market_regime = str(
         thesis.get("market_regime")
@@ -612,7 +688,8 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
 
     components = _compute_confidence(direction if direction != 0 else 1, thesis, evidence["entry_readiness"])
     evidence_strength = _confidence_pct(components)
-    confidence = evidence_strength if direction_label in ("BUY", "SELL") else 0
+    canonical_confidence = canonical_m10.get("confidence")
+    confidence = (round(canonical_confidence) if canonical_confidence is not None else evidence_strength) if direction_label in ("BUY", "SELL") else 0
     path = _expected_path(direction, thesis)
     setup_type = ("WITH_TREND_PULLBACK" if path.startswith(("PULLBACK", "RALLY"))
                  else "TREND_CONTINUATION" if path == "DIRECT_CONTINUATION"
@@ -670,6 +747,9 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "account": account, "license_key": license_key,
             "generated_at": now.isoformat(),
             "hourly_slot": hourly_slot,
+        "publication_key": publication_key,
+            "publication_mode": publication_mode,
+            "source_event_id": source_event_id or None,
             "late_catchup": is_late_catchup,
             "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
             "current_price": current_price,
@@ -683,7 +763,7 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "expected_path": "NO_CLEAR_PATH",
             "setup_type": "NONE",
         }
-        return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
+        return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot, publication_key=publication_key)
 
     # Signal-performance tracking is anchored to the broker-executable quote
     # in the same immutable EA evidence snapshot used to publish the outlook.
@@ -741,7 +821,7 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "uncertainty": "Wait for a fresh EA quote.", "expected_path": "NO_CLEAR_PATH", "setup_type": "NONE",
             "analytics_outcome": None, "excluded_from_signal_analytics": True,
         }
-        return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
+        return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot, publication_key=publication_key)
 
     tracking_entry = tracking_anchor["tracking_entry_price"] if tracking_anchor else None
     risk_distance = tracking_anchor["risk_distance"] if tracking_anchor else None
@@ -757,6 +837,9 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "generated_at": published_at,
         "published_at": published_at,
         "hourly_slot": hourly_slot,
+        "publication_key": publication_key,
+        "publication_mode": publication_mode,
+        "source_event_id": source_event_id or None,
         "late_catchup": is_late_catchup,
         "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
         "current_price": current_price,
@@ -769,6 +852,9 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "direction": direction,
         "directional_conflict": directional_conflict,
         "source_regime": evidence.get("regime", ""),
+        "signal_source": canonical_m10.get("source"),
+        "source_m10_decision": canonical_m10.get("decision"),
+        "source_m10_bar_time": canonical_m10.get("bar_time"),
         "setup_type": setup_type,
         "confidence_pct": confidence,
         "confidence_components": components.model_dump(),
@@ -846,10 +932,52 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "mae": tracking_anchor["mae_r"] if actionable else 0.0,
         "color_state": "AMBER",
     }
-    stored = await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
+    stored = await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot, publication_key=publication_key)
     if stored.get("_newly_inserted"):
         logger.info(f"OUTLOOK_PUBLISHED id={outlook_id} dir={direction_label} conf={confidence}% account={account}")
     return stored
+
+
+async def publish_m10_signal_from_activity(license_key: str, account: str,
+                                           source_event_id: str = "") -> int:
+    """Publish a fresh explicit M10 candidate immediately, not next hour.
+
+    The normal hourly slot remains the informational cadence. A deterministic
+    M10 publication key lets a candidate arriving after an earlier neutral
+    hourly outlook become visible immediately while repeated telemetry for the
+    same M10 bar remains idempotent.
+    """
+    evidence, reason = await _latest_ea_evidence(
+        license_key, account, source_event_id=source_event_id
+    )
+    if not evidence:
+        logger.info("M10_OUTLOOK_NOT_PUBLISHED account=%s reason=%s", account, reason)
+        return 0
+    canonical = _canonical_m10_signal(evidence)
+    if not canonical.get("actionable"):
+        return 0
+
+    identity = f"{account}|{OUTLOOK_SYMBOL}|{canonical.get('bar_time')}|{canonical.get('direction')}"
+    publication_key = f"m10-signal:{uuid.uuid5(uuid.NAMESPACE_URL, identity).hex}"
+    doc = await generate_outlook_for_account(
+        license_key,
+        account,
+        account_id=account,
+        publication_key=publication_key,
+        publication_mode="M10_SIGNAL",
+        source_event_id=source_event_id,
+    )
+    if not doc:
+        return 0
+    newly_inserted = doc.pop("_newly_inserted", True)
+    if newly_inserted and doc.get("primary_direction") in ("BUY", "SELL"):
+        await _dispatch_signal_event(doc, "TRACKING_STARTED")
+        logger.info(
+            "M10_OUTLOOK_PUBLISHED id=%s account=%s direction=%s bar=%s",
+            doc.get("id"), account, doc.get("primary_direction"), canonical.get("bar_time"),
+        )
+        return 1
+    return 0
 
 
 async def hourly_generation_tick(account: str = "") -> int:
@@ -1333,6 +1461,11 @@ async def track_outlook_lifecycle_tick(account: str = "", bid: Optional[float] =
     # would add unnecessary database work to the live telemetry endpoint.
     if not account:
         await dispatch_pending_signal_notifications()
+        try:
+            from notifications import dispatch_pending_trade_notifications
+            await dispatch_pending_trade_notifications()
+        except Exception as exc:
+            logger.warning("PENDING_TRADE_NOTIFICATION_RETRY_FAILED: %s", exc)
     return updated_count
 
 

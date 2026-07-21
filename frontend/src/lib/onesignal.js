@@ -1,3 +1,5 @@
+import { ensureServiceWorkerRegistered } from "../registerSW";
+
 // OneSignal Web Push v16 registration authority.
 //
 // Browser permission, OneSignal user identity, and the browser's push
@@ -8,9 +10,28 @@ const REGISTRATION_VERSION = "onesignal-web-v16-device-v1";
 const DEVICE_INSTANCE_STORAGE_KEY = "xauai.onesignal.device_instance_id.v1";
 const DEFAULT_TIMEOUT_MS = 20000;
 
+const INIT_PROMISE_KEY = "__XAU_ONESIGNAL_INIT_PROMISE__";
+const INSTANCE_KEY = "__XAU_ONESIGNAL_INSTANCE__";
+const APP_ID_KEY = "__XAU_ONESIGNAL_APP_ID__";
+const DEVICE_PROMISES_KEY = "__XAU_ONESIGNAL_DEVICE_PROMISES__";
+
+// Local mirrors preserve compatibility with existing helpers; window globals
+// are the actual authority across React remounts and duplicated bundles.
 let initPromise = null;
 let sdkInstance = null;
 let initializedAppId = null;
+
+function globalWindow() {
+  return typeof window === "undefined" ? null : window;
+}
+
+function syncOneSignalGlobals() {
+  const w = globalWindow();
+  if (!w) return;
+  if (w[INIT_PROMISE_KEY]) initPromise = w[INIT_PROMISE_KEY];
+  if (w[INSTANCE_KEY]) sdkInstance = w[INSTANCE_KEY];
+  if (w[APP_ID_KEY]) initializedAppId = w[APP_ID_KEY];
+}
 
 function makeId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
@@ -133,7 +154,9 @@ async function ensureRootServiceWorker() {
     };
   }
   try {
-    const registration = await navigator.serviceWorker.register("/service-worker.js", { scope: "/" });
+    // Reuse the PWA bootstrap's one canonical registration authority. Calling
+    // navigator.serviceWorker.register independently here was a second owner.
+    const registration = await ensureServiceWorkerRegistered();
     const ready = await Promise.race([
       navigator.serviceWorker.ready,
       new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
@@ -176,17 +199,41 @@ async function ensureRootServiceWorker() {
 
 export function ensureOneSignalInitialized(appId) {
   if (typeof window === "undefined" || !appId) return Promise.resolve(null);
-  if (sdkInstance && initializedAppId === appId) return Promise.resolve(sdkInstance);
-  if (initializedAppId && initializedAppId !== appId) {
+  syncOneSignalGlobals();
+  const w = globalWindow();
+
+  if (w[INSTANCE_KEY] && w[APP_ID_KEY] === appId) {
+    sdkInstance = w[INSTANCE_KEY];
+    initializedAppId = appId;
+    return Promise.resolve(sdkInstance);
+  }
+  if (w[APP_ID_KEY] && w[APP_ID_KEY] !== appId) {
     return Promise.reject(new Error("OneSignal App ID changed during this browser session. Reload the app."));
   }
-  if (initPromise) return initPromise;
+  if (w[INIT_PROMISE_KEY]) return w[INIT_PROMISE_KEY];
 
+  w[APP_ID_KEY] = appId;
   initializedAppId = appId;
-  initPromise = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("OneSignal SDK initialization timed out.")), 15000);
+
+  let createdPromise;
+  createdPromise = new Promise((resolve, reject) => {
+    const fail = (error) => {
+      if (w[INIT_PROMISE_KEY] === createdPromise) delete w[INIT_PROMISE_KEY];
+      if (!w[INSTANCE_KEY]) delete w[APP_ID_KEY];
+      initPromise = null;
+      if (!w[INSTANCE_KEY]) initializedAppId = null;
+      reject(error);
+    };
+    const timeout = setTimeout(() => fail(new Error("OneSignal SDK initialization timed out.")), 15000);
+
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     window.OneSignalDeferred.push(async (OneSignal) => {
+      if (w[INSTANCE_KEY]) {
+        clearTimeout(timeout);
+        sdkInstance = w[INSTANCE_KEY];
+        resolve(sdkInstance);
+        return;
+      }
       try {
         await OneSignal.init({
           appId,
@@ -194,20 +241,34 @@ export function ensureOneSignalInitialized(appId) {
           serviceWorkerPath: "/service-worker.js",
           autoResubscribe: true,
         });
-        sdkInstance = OneSignal;
-        clearTimeout(timeout);
-        resolve(OneSignal);
       } catch (error) {
-        clearTimeout(timeout);
-        initPromise = null;
-        initializedAppId = null;
-        // eslint-disable-next-line no-console
-        console.warn("[XauAi] OneSignal init failed", error);
-        reject(error);
+        // Cached/older application code may have initialized the same SDK
+        // before this build loaded. Reuse that real SDK state instead of
+        // failing forever with "SDK already initialized". Other errors remain
+        // genuine failures and are never hidden.
+        const duplicateInit = /already initialized/i.test(String(error?.message || error));
+        const usableExistingSdk = Boolean(OneSignal?.User && OneSignal?.Notifications);
+        if (!(duplicateInit && usableExistingSdk)) {
+          clearTimeout(timeout);
+          // eslint-disable-next-line no-console
+          console.warn("[XauAi] OneSignal init failed", error);
+          fail(error);
+          return;
+        }
       }
+
+      clearTimeout(timeout);
+      w[INSTANCE_KEY] = OneSignal;
+      w[APP_ID_KEY] = appId;
+      sdkInstance = OneSignal;
+      initializedAppId = appId;
+      resolve(OneSignal);
     });
   });
-  return initPromise;
+
+  w[INIT_PROMISE_KEY] = createdPromise;
+  initPromise = createdPromise;
+  return createdPromise;
 }
 
 export function getOneSignalRegistrationSnapshot(oneSignal = sdkInstance, expectedExternalId = "", serviceWorker = {}) {
@@ -342,7 +403,7 @@ function browserName() {
   return "Web";
 }
 
-export async function ensureOneSignalDeviceRegistered({
+async function _ensureOneSignalDeviceRegisteredImpl({
   apiClient,
   requestPermission = false,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -473,8 +534,23 @@ export async function ensureOneSignalDeviceRegistered({
   }
 }
 
+export function ensureOneSignalDeviceRegistered(options = {}) {
+  const w = globalWindow();
+  if (!w) return _ensureOneSignalDeviceRegisteredImpl(options);
+  const mode = options?.requestPermission ? "prompt" : "silent";
+  w[DEVICE_PROMISES_KEY] = w[DEVICE_PROMISES_KEY] || {};
+  if (w[DEVICE_PROMISES_KEY][mode]) return w[DEVICE_PROMISES_KEY][mode];
+
+  const promise = _ensureOneSignalDeviceRegisteredImpl(options).finally(() => {
+    if (w[DEVICE_PROMISES_KEY]?.[mode] === promise) delete w[DEVICE_PROMISES_KEY][mode];
+  });
+  w[DEVICE_PROMISES_KEY][mode] = promise;
+  return promise;
+}
+
 export async function logoutOneSignalUser(apiClient = null) {
   try {
+    syncOneSignalGlobals();
     if (!sdkInstance && apiClient?.get) {
       const { data } = await apiClient.get("/outlook/notifications/onesignal-app-id");
       if (data?.configured && data?.app_id) await ensureOneSignalInitialized(data.app_id);
@@ -502,6 +578,14 @@ export async function logoutOneSignalUser(apiClient = null) {
 
 // Test-only reset. Not called by production code.
 export function __resetOneSignalForTests() {
+  const w = globalWindow();
+  if (w) {
+    delete w[INIT_PROMISE_KEY];
+    delete w[INSTANCE_KEY];
+    delete w[APP_ID_KEY];
+    delete w[DEVICE_PROMISES_KEY];
+    w.OneSignalDeferred = [];
+  }
   initPromise = null;
   sdkInstance = null;
   initializedAppId = null;
