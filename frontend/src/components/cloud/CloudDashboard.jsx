@@ -810,6 +810,16 @@ function M10SignalCard({ events, heartbeat }) {
   // score render as a full bar vs a 2/3 bar instead of the true 30%/20%).
   const buyScore = Number(latest.buy_case_score || 0);
   const sellScore = Number(latest.sell_case_score || 0);
+  const leadingScore = Math.max(buyScore, sellScore);
+  const leadingSide = buyScore >= sellScore ? "BUY" : "SELL";
+  const isActionable = ["BUY_CANDIDATE", "SELL_CANDIDATE"].includes(decision);
+  const confidenceLabel = isActionable ? "Signal confidence" : "Evidence strength";
+  const rawReason = String(latest.reason || "");
+  const reasonLooksContradictory =
+    /neither case cleared/i.test(rawReason) && leadingScore >= 55;
+  const displayReason = reasonLooksContradictory
+    ? `${leadingSide} evidence reached ${leadingScore.toFixed(1)}, but no actionable candidate was authorized because direction, structure, location and confirmation did not all pass.`
+    : rawReason;
 
   return (
     <div className={`${CARD} p-5`} data-testid="m10-signal-card">
@@ -830,7 +840,7 @@ function M10SignalCard({ events, heartbeat }) {
           <div className="mt-3 grid grid-cols-2 gap-3">
             <div>
               <div className="flex items-center justify-between text-[11px] text-white/50">
-                <span>Buy case</span><span className="font-mono">{buyScore.toFixed(0)}%</span>
+                <span>Buy evidence</span><span className="font-mono">{buyScore.toFixed(0)}</span>
               </div>
               <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
                 <div className="h-full bg-emerald-400/70" style={{ width: `${Math.max(0, Math.min(100, buyScore))}%` }} />
@@ -838,7 +848,7 @@ function M10SignalCard({ events, heartbeat }) {
             </div>
             <div>
               <div className="flex items-center justify-between text-[11px] text-white/50">
-                <span>Sell case</span><span className="font-mono">{sellScore.toFixed(0)}%</span>
+                <span>Sell evidence</span><span className="font-mono">{sellScore.toFixed(0)}</span>
               </div>
               <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
                 <div className="h-full bg-red-400/70" style={{ width: `${Math.max(0, Math.min(100, sellScore))}%` }} />
@@ -850,15 +860,18 @@ function M10SignalCard({ events, heartbeat }) {
             <div><div className="text-white/35">Trend</div><div className="mt-0.5 font-mono text-white/80">{latest.trend_state || "—"}</div></div>
             <div><div className="text-white/35">Structure</div><div className="mt-0.5 font-mono text-white/80">{latest.structure_state || "—"}</div></div>
             <div><div className="text-white/35">Location</div><div className="mt-0.5 font-mono text-white/80">{latest.location_state || "—"}</div></div>
-            <div><div className="text-white/35">Confidence</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
+            <div><div className="text-white/35">{confidenceLabel}</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
           </div>
 
           <p className="mt-3 text-[11px] leading-4 text-white/45">
             Preferred direction: <span className="text-white/70 font-semibold">{preferredDir}</span>
             {latest.retracement_required ? " · location evidence noted inside the single entry timer" : ""}
-            {" — "}{latest.reason || ""}
+            {" — "}{displayReason}
           </p>
 
+          <p className="mt-3 rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] leading-4 text-white/40">
+            Evidence scores describe the current setup; they are not next-candle probabilities. High evidence at a late or exhausted location can describe a move that is already mature.
+          </p>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
             <span className={pill("neutral")}>Exhaustion evidence-only: {(latest.exhaustion_decision || "—").replace(/_/g, " ")}</span>
             {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy location evidence: extended</span>}
@@ -1029,6 +1042,13 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         </div>
       </div>
 
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="home-summary-grid">
+        <Metric label="Equity" value={online?money(heartbeat.equity):"—"} detail={online?`Balance ${money(heartbeat.balance)}`:"Not live"} icon={CircleDollarSign} tone={online?"green":"neutral"} />
+        <Metric label="Today's P&L" value={online?money(pnlNum):"—"} detail={pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"} icon={TrendingUp} tone={pnlPos?"green":"red"} />
+        <Metric label="AI confidence" value={online&&conf>0?`${conf}%`:"—"} detail={conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"} icon={Brain} tone={conf>=70?"green":conf>0?"amber":"neutral"} />
+        <Metric label="Open trades" value={online?openTrades:"—"} detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"} icon={History} tone={openTrades>0?"amber":"neutral"} />
+      </div>
+
       <AIMarketOutlookCard
         linked={Boolean(licenseInfo.activation_key)}
         online={online}
@@ -1036,39 +1056,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         onStatusChange={setOutlookStatus}
       />
 
-      <div className="space-y-3" data-testid="home-summary-grid">
-        {/* 4 core account metrics */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Metric label="Equity"      value={online?money(heartbeat.equity):"—"}       detail={online?`Balance ${money(heartbeat.balance)}`:"Not live"}     icon={CircleDollarSign} tone={online?"green":"neutral"} />
-          <Metric label="Today's P&L" value={online?money(pnlNum):"—"}                 detail={pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"} icon={TrendingUp} tone={pnlPos?"green":"red"} />
-          <Metric label="Open trades" value={online?openTrades:"—"}                    detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"}        icon={History}          tone={openTrades>0?"amber":"neutral"} />
-          <Metric label="Open risk"   value={online?pct(heartbeat.drawdown):"—"}       detail="Current drawdown"                                              icon={Gauge}            tone={riskTone} />
-        </div>
-
-        {/* 4 market intelligence cards — trader-facing, no internal strings */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className={`${cardTone(bias.tone)} p-4 rounded-2xl min-w-0`}>
-            <div className={MONO_LABEL}>Market bias</div>
-            <div className="mt-2 font-mono text-xl font-black leading-none">{online?bias.label:"—"}</div>
-            <div className="mt-1.5 text-[11px] text-white/40">HTF consensus</div>
-          </div>
-          <div className={`${cardTone(conf>=70?"green":conf>0?"amber":"neutral")} p-4 rounded-2xl min-w-0`}>
-            <div className={MONO_LABEL}>AI confidence</div>
-            <div className="mt-2 font-mono text-xl font-black leading-none">{online&&conf>0?`${conf}%`:"—"}</div>
-            <div className="mt-1.5 text-[11px] text-white/40">{conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"}</div>
-          </div>
-          <div className={`${cardTone(session.tone)} p-4 rounded-2xl min-w-0`}>
-            <div className={MONO_LABEL}>Session</div>
-            <div className="mt-2 font-mono text-xl font-black leading-none">{session.label}</div>
-            <div className="mt-1.5 text-[11px] text-white/40">UTC {new Date().getUTCHours().toString().padStart(2,"0")}:00</div>
-          </div>
-          <div className={`${cardTone(stateTone)} p-4 rounded-2xl min-w-0`}>
-            <div className={MONO_LABEL}>Trading status</div>
-            <div className="mt-2 font-mono text-xl font-black leading-none">{botState}</div>
-            <div className="mt-1.5 text-[11px] text-white/40">{online?"EA connected":"No heartbeat"}</div>
-          </div>
-        </div>
-      </div>
+      {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
 
       <M10VsOutlookCard
         m10={m10Signal}
@@ -1083,7 +1071,6 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         <Empty title="Connect your license" body="Link your ASE license key once and live data from your MT5 account will stream here automatically." icon={KeyRound} />
       )}
 
-      {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
       {online && <M30ConsensusCard events={events} heartbeat={heartbeat} />}
 
       {/* Quick nav — 3 cards */}

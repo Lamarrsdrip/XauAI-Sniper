@@ -89,6 +89,9 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
 
   const dir = outlook?.primary_direction || "NO_VALID_OUTLOOK";
   const style = directionStyle(dir);
+  const generatedAt = outlook?.generated_at || outlook?.published_at || outlook?.created_at || outlook?.ts;
+  const ageMinutes = generatedAt ? (Date.now() - new Date(generatedAt).getTime()) / 60000 : Infinity;
+  const stale = !Number.isFinite(ageMinutes) || ageMinutes > 75;
 
   return (
     <Link to="/ai-market-outlook" className={`${CARD} block p-4 hover:border-amber-300/20 transition`} data-testid="ai-market-outlook-card">
@@ -110,9 +113,9 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
         )}
       </div>
 
-      {!online && (
-        <p className="mt-3 rounded-lg border border-amber-300/15 bg-amber-300/[0.04] px-3 py-2 text-[11px] text-amber-200">
-          EA offline — verify the freshness shown below before using this outlook.
+      {(!online || stale) && (
+        <p className="mt-3 rounded-lg border border-rose-400/25 bg-rose-400/[0.06] px-3 py-2 text-[11px] font-semibold text-rose-300">
+          DATA STALE — do not rely on this outlook until fresh EA evidence arrives.
         </p>
       )}
 

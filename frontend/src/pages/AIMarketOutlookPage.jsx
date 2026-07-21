@@ -76,7 +76,7 @@ function OutlookHero({ outlook, advanced, setAdvanced }) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Icon className={`h-5 w-5 ${dir === "BUY" ? "text-emerald-300" : dir === "SELL" ? "text-rose-300" : "text-white/50"}`} />
-          <span className="font-mono text-2xl font-black">{dir.replace(/_/g, " ")}</span>
+          <span className="font-mono text-2xl font-black">{dir === "NEUTRAL" ? "NO TRADE RIGHT NOW" : dir.replace(/_/g, " ")}</span>
           {isDirectional && <span className="font-mono text-sm text-white/40">{outlook.confidence_pct}%</span>}
         </div>
         <div className="flex flex-col items-end gap-1.5">

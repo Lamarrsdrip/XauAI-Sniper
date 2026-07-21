@@ -169,7 +169,7 @@ async def _latest_ea_evidence(license_key: str, account: str) -> tuple:
     ever = await db.cloud_bot_activity.find_one(scope, {"_id": 0, "id": 1})
     if not ever:
         return None, "NO_CONNECTED_EA"
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
     rows = await db.cloud_bot_activity.find(
         {"$and": [scope, {"ts": {"$gte": cutoff}}]}, {"_id": 0}
     ).sort("ts", -1).to_list(50)
@@ -561,14 +561,32 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot)
 
     thesis = evidence["market_thesis"] or evidence["entry_readiness"]
-    raw_dir = str(thesis.get("direction", "") or thesis.get("action", "")).upper()
-    direction = 1 if "BUY" in raw_dir else (-1 if "SELL" in raw_dir else 0)
-    action = str(thesis.get("action", "") or thesis.get("final_action", "") or "")
-
-    if action in ("HARD_BLOCK", "NO_VALID_TRADE") or direction == 0:
-        direction_label = "NEUTRAL" if action not in ("HARD_BLOCK",) else "RANGE"
-    else:
-        direction_label = "BUY" if direction == 1 else "SELL"
+    readiness = evidence.get("entry_readiness") or {}
+    action = str(
+        readiness.get("final_action")
+        or readiness.get("action")
+        or thesis.get("final_action")
+        or thesis.get("action")
+        or ""
+    ).upper()
+    raw_dir = str(
+        readiness.get("preferred_direction")
+        or readiness.get("direction")
+        or thesis.get("preferred_direction")
+        or thesis.get("direction")
+        or ""
+    ).upper()
+    actionable = action in ("ALLOW_CORE", "BUY_CANDIDATE", "SELL_CANDIDATE")
+    direction = 1 if actionable and "BUY" in raw_dir else (-1 if actionable and "SELL" in raw_dir else 0)
+    direction_label = "BUY" if direction == 1 else "SELL" if direction == -1 else "NEUTRAL"
+    market_regime = str(
+        thesis.get("market_regime")
+        or thesis.get("regime")
+        or thesis.get("direction_stage")
+        or thesis.get("lifecycle")
+        or "WAITING"
+    ).upper()
+    data_status = "LIVE"
 
     # v6.24.17 directional-consistency validator: a direction must never
     # publish against a materially dominant opposite pressure reading unless
@@ -587,14 +605,14 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     elif direction_label == "BUY" and pressure_gap <= -15.0 and not structural_override_bullish:
         directional_conflict = f"sell pressure ({sell_p:.0f}) outweighs buy pressure ({buy_p:.0f}) with no documented bullish structural override"
     if directional_conflict:
-        logger.warning(f"OUTLOOK_DIRECTIONAL_CONFLICT | account={account} was={direction_label} buy_pressure={buy_p} sell_pressure={sell_p} structure={structure_state} -> downgraded to TRANSITION")
-        direction_label = "TRANSITION"
+        logger.warning(f"OUTLOOK_DIRECTIONAL_CONFLICT | account={account} was={direction_label} buy_pressure={buy_p} sell_pressure={sell_p} structure={structure_state} -> no actionable signal")
+        direction_label = "NEUTRAL"
         direction = 0
+        market_regime = "TRANSITION"
 
     components = _compute_confidence(direction if direction != 0 else 1, thesis, evidence["entry_readiness"])
-    confidence = _confidence_pct(components)
-    if directional_conflict:
-        confidence = min(confidence, 35)
+    evidence_strength = _confidence_pct(components)
+    confidence = evidence_strength if direction_label in ("BUY", "SELL") else 0
     path = _expected_path(direction, thesis)
     setup_type = ("WITH_TREND_PULLBACK" if path.startswith(("PULLBACK", "RALLY"))
                  else "TREND_CONTINUATION" if path == "DIRECT_CONTINUATION"
@@ -744,9 +762,13 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "current_price": current_price,
         "price_source": price_source,
         "primary_direction": direction_label,
+        "actionable_signal": direction_label if direction_label in ("BUY", "SELL") else "NO_TRADE_RIGHT_NOW",
+        "market_regime": market_regime,
+        "data_status": data_status,
+        "evidence_strength_pct": evidence_strength,
         "direction": direction,
         "directional_conflict": directional_conflict,
-        "market_regime": evidence.get("regime", ""),
+        "source_regime": evidence.get("regime", ""),
         "setup_type": setup_type,
         "confidence_pct": confidence,
         "confidence_components": components.model_dump(),

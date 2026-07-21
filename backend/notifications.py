@@ -125,7 +125,7 @@ def _build_payload(doc: Dict, event: str) -> Dict:
     elif event == "OUTLOOK_PUBLISHED":
         if direction in ("NO_VALID_OUTLOOK", "NEUTRAL", "RANGE", "TRANSITION"):
             title = "XAU AI Sniper — Hourly Outlook"
-            body = f"No valid directional outlook this hour. Market state: {direction}. Confidence: {confidence}%"
+            body = f"No trade right now. Market regime: {doc.get('market_regime', direction)}. Evidence strength: {doc.get('evidence_strength_pct', 0)}%"
         else:
             title = "XAU AI Sniper — Hourly Outlook"
             body = (f"{direction} outlook · {confidence}% confidence\n"

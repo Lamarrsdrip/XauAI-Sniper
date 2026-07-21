@@ -32,7 +32,7 @@ export default function M10VsOutlookCard({
 
   return (
     <div className={`${CARD} p-5`} data-testid="m10-vs-outlook-card">
-      <div className={MONO_LABEL}>10-Minute Signal vs Hourly Outlook</div>
+      <div className={MONO_LABEL}>M10 Execution Signal vs Hourly Advisory Outlook</div>
 
       {loading && !outlook ? (
         <p className="mt-3 text-[12px] text-white/40">Loading the latest canonical outlook…</p>
@@ -46,7 +46,7 @@ export default function M10VsOutlookCard({
                 {m10 ? `${String(m10.decision || "WAITING").replace(/_/g, " ")} · ${m10Freshness}` : "No signal data yet"}
               </div>
               <div className="mt-1 text-[10px] text-white/30">
-                {m10?.confidence != null ? `${Number(m10.confidence).toFixed(0)}% confidence` : "Confidence —"}
+                {m10?.confidence != null ? `${Number(m10.confidence).toFixed(0)}% ${["BUY","SELL"].includes(m10Dir) ? "signal confidence" : "evidence strength"}` : "Evidence —"}
               </div>
             </div>
             <div className="min-w-0 rounded-xl border border-white/10 p-3">
@@ -84,8 +84,8 @@ export default function M10VsOutlookCard({
           )}
 
           <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
-            <span>M10 bar {m10?.bar_time || "—"}</span>
-            <span>· Hourly update {timestampLabel(outlook?.generated_at || outlook?.published_at || outlook?.created_at || outlook?.ts)}</span>
+            <span>M10 broker bar {m10?.bar_time || "—"}</span>
+            <span>· Hourly update (device time) {timestampLabel(outlook?.generated_at || outlook?.published_at || outlook?.created_at || outlook?.ts)}</span>
           </div>
         </>
       )}
