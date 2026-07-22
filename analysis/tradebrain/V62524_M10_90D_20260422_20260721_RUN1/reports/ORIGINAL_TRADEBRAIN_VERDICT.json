@@ -1,0 +1,164 @@
+{
+  "run_id": "V62524_M10_90D_20260422_20260721_RUN1",
+  "source_version": "v6.25.24",
+  "source_build": "v62524-replay-consolidated-root-repair-20260722",
+  "source_sha256": "e3309d9faafba868c3b94e405fd6f31f819e970156c374c6c2a57d360232314d",
+  "recommended_live_tradebrain_mode": "GLOBAL_TRADEBRAIN_ADVISOR",
+  "active_hard_blocks": [],
+  "hard_block_verdict": "NONE. No exact entry-time fingerprint has the required 20 training samples; the most frequent exact fingerprint appears 5 times overall and 4 times in training.",
+  "quarantined_trades": [
+    {
+      "position_id": 130,
+      "reason": "Execution-gap/slippage anomaly: SELL closed at -5.576R, far beyond the structural SL. Exclude from entry-pattern learning pending execution audit."
+    }
+  ],
+  "required_targeted_reviews": [
+    {
+      "position_id": 212,
+      "reason": "Recorded peak was 0.435R and final result was -1.011R. A complete June 19 log is required to verify the GENERAL 0.40R owner-floor path."
+    },
+    {
+      "area": "4807 lifecycle",
+      "reason": "The scan completed every eligible bar with zero failed-final snapshots, but recorded 12,435 wrong-handle recoveries and 37,307 transient waits. Reduce churn only after a controlled readiness/persistence test; preserve zero bar loss."
+    },
+    {
+      "area": "feature construction",
+      "reason": "Build training rows by joining OPEN entry-time features to CLOSE outcomes by position ID. Do not use CLOSE-row hour/session-like fields as entry features."
+    }
+  ],
+  "warning_cohorts_advisory_only": [
+    {
+      "label": "Entry hour 12\u201314 + reset pending + wait confirmation",
+      "predicate": "entry_hour in [12,14] AND thesisLocation=LOCATION_RESET_PENDING AND thesisTiming=TIMING_WAIT_CONFIRMATION",
+      "samples": 13,
+      "wins": 5,
+      "sl_losses": 8,
+      "sl_rate_pct": 61.53846153846154,
+      "net_usd": -5226.3099999999995,
+      "wilson_95_lower_pct": 35.52248097226855,
+      "train_samples": 10,
+      "train_sl_losses": 5,
+      "holdout_samples": 3,
+      "holdout_sl_losses": 3,
+      "historical_winners_affected": 5,
+      "position_ids": [
+        50,
+        70,
+        102,
+        124,
+        132,
+        134,
+        136,
+        142,
+        200,
+        210,
+        224,
+        260,
+        278
+      ]
+    },
+    {
+      "label": "Entry hour 12\u201314 + structure opposes",
+      "predicate": "entry_hour in [12,14] AND thesisStructure=STRUCTURE_OPPOSES",
+      "samples": 15,
+      "wins": 7,
+      "sl_losses": 8,
+      "sl_rate_pct": 53.333333333333336,
+      "net_usd": -4465.16,
+      "wilson_95_lower_pct": 30.11663015105079,
+      "train_samples": 10,
+      "train_sl_losses": 5,
+      "holdout_samples": 5,
+      "holdout_sl_losses": 3,
+      "historical_winners_affected": 7,
+      "position_ids": [
+        50,
+        70,
+        102,
+        124,
+        132,
+        134,
+        136,
+        142,
+        154,
+        210,
+        224,
+        260,
+        268,
+        270,
+        278
+      ]
+    },
+    {
+      "label": "BUY + ASIA + BOS opposed",
+      "predicate": "direction=BUY AND session=ASIA AND bosDirection=-1",
+      "samples": 8,
+      "wins": 3,
+      "sl_losses": 5,
+      "sl_rate_pct": 62.5,
+      "net_usd": -3020.77,
+      "wilson_95_lower_pct": 30.573785458380186,
+      "train_samples": 5,
+      "train_sl_losses": 3,
+      "holdout_samples": 3,
+      "holdout_sl_losses": 2,
+      "historical_winners_affected": 3,
+      "position_ids": [
+        44,
+        60,
+        104,
+        202,
+        204,
+        264,
+        272,
+        300
+      ]
+    },
+    {
+      "label": "BUY Trend Pullback + structure opposes",
+      "predicate": "direction=BUY AND setup=TREND_PULLBACK AND thesisStructure=STRUCTURE_OPPOSES",
+      "samples": 10,
+      "wins": 5,
+      "sl_losses": 5,
+      "sl_rate_pct": 50.0,
+      "net_usd": -2252.1,
+      "wilson_95_lower_pct": 23.65895936154873,
+      "train_samples": 6,
+      "train_sl_losses": 3,
+      "holdout_samples": 4,
+      "holdout_sl_losses": 2,
+      "historical_winners_affected": 5,
+      "position_ids": [
+        8,
+        24,
+        28,
+        64,
+        104,
+        204,
+        246,
+        264,
+        282,
+        288
+      ]
+    }
+  ],
+  "timing_proof": {
+    "rows": 144,
+    "all_required": true,
+    "all_delay_150": true,
+    "mean_wait_seconds": 150.04861111111111,
+    "max_wait_seconds": 152.0,
+    "all_revalidated": true,
+    "any_bypass": false
+  },
+  "scanner_evidence": {
+    "scan_line": "2026.07.20 23:59:45     Scan health: started=8206 completed=8206 deferredBars=6212 aborted=0 snapshotReuses=8378 m10Bars=8207 prepAttempts=26858 ready=8206 failedFinal=0 superseded=1 wrongHandleRecoveries=12435 transient4807Waits=37307 dataWaits=37307",
+    "test_line": "XAUUSD,M10: 35233540 ticks, 8406 bars generated. Environment synchronized in 0:00:00.094. Test passed in 0:26:36.981 (including ticks preprocessing 0:00:04.732)."
+  },
+  "package_limitations": [
+    "No full Strategy Tester HTML report was included.",
+    "Only the final 5,000 tester-log lines were included, so the June 19 owner-floor sequence is not proven.",
+    "The collected KEY_EVENTS file is empty because the source tester log is UTF-16.",
+    "Exact floating-equity drawdown cannot be reconstructed from this package alone."
+  ]
+}

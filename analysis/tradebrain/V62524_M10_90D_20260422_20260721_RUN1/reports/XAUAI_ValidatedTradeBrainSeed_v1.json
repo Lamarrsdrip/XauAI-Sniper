@@ -1,0 +1,85 @@
+{
+  "active_hard_blocks": [],
+  "policy": {
+    "direction_changes": false,
+    "exit_changes": false,
+    "fail_open": true,
+    "local_rows_have_authority": false,
+    "lot_multiplier": 1.0,
+    "recommended_mode": "GLOBAL_TRADEBRAIN_ADVISOR",
+    "risk_changes": false
+  },
+  "quarantined_position_ids": [
+    130
+  ],
+  "schema": "XAUAI_TRADEBRAIN_SEED_V1",
+  "seed_id": "V62524_M10_90D_20260422_20260721_RUN1_SEED_V1",
+  "source": {
+    "build": "v62524-replay-consolidated-root-repair-20260722",
+    "run_id": "V62524_M10_90D_20260422_20260721_RUN1",
+    "source_sha256": "e3309d9faafba868c3b94e405fd6f31f819e970156c374c6c2a57d360232314d",
+    "version": "v6.25.24"
+  },
+  "warning_cohorts": [
+    {
+      "authority": "WARNING_ONLY",
+      "holdout_losses": 3,
+      "holdout_samples": 3,
+      "id": "WARN_H12_14_LOCATION_RESET_PENDING_TIMING_WAIT_CONFIRMATION",
+      "loss_rate_pct": 61.53846153846154,
+      "losses": 8,
+      "net_usd": -5226.31,
+      "predicate": "entry_hour in [12,14] AND thesis_location=LOCATION_RESET_PENDING AND thesis_timing=TIMING_WAIT_CONFIRMATION",
+      "samples": 13,
+      "train_losses": 5,
+      "train_samples": 10,
+      "wilson_95_lower_pct": 35.52289151266569,
+      "wins": 5
+    },
+    {
+      "authority": "WARNING_ONLY",
+      "holdout_losses": 3,
+      "holdout_samples": 5,
+      "id": "WARN_H12_14_STRUCTURE_OPPOSES",
+      "loss_rate_pct": 53.333333333333336,
+      "losses": 8,
+      "net_usd": -4465.16,
+      "predicate": "entry_hour in [12,14] AND thesis_structure=STRUCTURE_OPPOSES",
+      "samples": 15,
+      "train_losses": 5,
+      "train_samples": 10,
+      "wilson_95_lower_pct": 30.116980025498396,
+      "wins": 7
+    },
+    {
+      "authority": "WARNING_ONLY",
+      "holdout_losses": 2,
+      "holdout_samples": 3,
+      "id": "WARN_BUY_ASIA_BOS_NEGATIVE",
+      "loss_rate_pct": 62.5,
+      "losses": 5,
+      "net_usd": -3020.77,
+      "predicate": "direction=BUY AND session=ASIA AND bos_direction=-1",
+      "samples": 8,
+      "train_losses": 3,
+      "train_samples": 5,
+      "wilson_95_lower_pct": 30.57423946026273,
+      "wins": 3
+    },
+    {
+      "authority": "WARNING_ONLY",
+      "holdout_losses": 2,
+      "holdout_samples": 4,
+      "id": "WARN_BUY_TREND_PULLBACK_STRUCTURE_OPPOSES",
+      "loss_rate_pct": 50.0,
+      "losses": 5,
+      "net_usd": -2252.1,
+      "predicate": "direction=BUY AND setup=TREND_PULLBACK AND thesis_structure=STRUCTURE_OPPOSES",
+      "samples": 10,
+      "train_losses": 3,
+      "train_samples": 6,
+      "wilson_95_lower_pct": 23.6593090512564,
+      "wins": 5
+    }
+  ]
+}

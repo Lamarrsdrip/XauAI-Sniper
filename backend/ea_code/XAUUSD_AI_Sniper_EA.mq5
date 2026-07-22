@@ -1,7 +1,47 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
 //|                                     XauAI Sniper — M10 Gold Edition|
-//|   v6.25.14 - Exact GENERAL 10-minute extension + two-gate pyramid|
+//|   v6.25.24 - 30-day replay consolidated root repair              |
+//|   Replay-proven fixes: 4807 requires persistence before targeted  |
+//|   rebuild (no per-bar handle churn); explicit WAIT thesis actions |
+//|   remain bounded inside the existing 120-180s timer instead of    |
+//|   executing at 150s; context-duplicate EMA handles are soft; one  |
+//|   pyramid spacing input is authoritative and evidence-bar reuse   |
+//|   survives restart reconciliation; exact candidate final-outcome  |
+//|   telemetry replaces subtraction-based "Unclassified" guessing.  |
+//|   v6.25.23 - Tester startup self-test contract repair            |
+//|   Fixes the sole v6.25.22 OnInit failure: snapshot retry runtime  |
+//|   intentionally uses 1s for attempts 1-3, 2s for 4-10, then 5s, |
+//|   while a stale self-test expected 1/2/4. The test now verifies  |
+//|   the real bounded-by-bar retry contract without changing live   |
+//|   scanner, risk, entry, exit, or breakout behavior.              |
+//|   v6.25.22 - TRUE 4807 root repair + execution-path cleanup       |
+//|   Error 4807 is treated as a wrong indicator handle and triggers   |
+//|   targeted recreation. Data-not-ready remains deferred until a new |
+//|   tick makes the immutable closed-M10 snapshot ready; no four-try   |
+//|   terminal abandonment. Direct adaptive reversal execution is OFF  |
+//|   by default, loss closes pass the central firewall, excellent      |
+//|   locations are eligible, and pyramid adds require later-bar proof. |
+//|   v6.25.21 - Canonical M10 scoring + terminal watchdog root fix   |
+//|   One closed M10 bar now yields one snapshot, one canonical score, |
+//|   one terminal result and one primary-decision event. Transient    |
+//|   readiness no longer permits watchdog rescans of terminal bars;   |
+//|   non-breakout SQUEEZE_RELEASE remains eligible.                    |
+//|   v6.25.20 - Global no-breakout + bounded M10 snapshot lifecycle  |
+//|   Every breakout regime/setup/source/campaign is blocked at the   |
+//|   owner authority with BREAKOUT_MARKET_NOT_ALLOWED. Asia itself   |
+//|   remains enabled for normal non-breakout setups. M10 indicators  |
+//|   publish one immutable closed-bar snapshot through a bounded     |
+//|   per-bar retry state machine; no bar-0 substitution or retry flood.|
+//|   v6.25.19 TRUE-M10 LIVE SCANNER + AUTHORITY FIX + BASKET +0.50R        |
+//|   M10 closed-bar snapshots own entry evidence. Breakouts blocked. |
+//|   H1 is soft/non-blocking. Every candidate EXCELLENT is blocked.  |
+//|   Any CORE campaign with >=1 pyramid/add-on is managed as one     |
+//|   basket. At combined net +0.50R of the INITIAL CORE risk, every  |
+//|   campaign leg closes immediately in one coordinated close cycle. |
+//|   Individual managed profit exits/10m extension are suppressed    |
+//|   while basket mode is active; original structural SLs remain.    |
+//|   v6.25.15 - Re-audited 180-day TradeBrain collection foundation |
 //|   The first fully-approved profitable GENERAL R close is delayed   |
 //|   exactly 600 seconds; the original structural SL is restored and  |
 //|   remains the only normal early exit. Pyramid adds use only genuine|
@@ -1906,8 +1946,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.264"
-#property description "XAUUSD AI Sniper v6.25.14 exact 10-minute GENERAL extension and two-gate pyramid policy."
+#property version   "6.273"
+#property description "XAUUSD AI Sniper v6.25.24; replay-consolidated 4807 patience, bounded readiness, pyramid integrity and exact outcome telemetry."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -1991,10 +2031,20 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.14"
-#define XAUAI_EA_VERSION_NUM "6.25.14"
-#define XAUAI_BUILD_HASH "v62514-general-first-profit-plus-600s-pyramid-timing-exhaustion-20260719"
+#define XAUAI_EA_VERSION "v6.25.24"
+#define XAUAI_EA_VERSION_NUM "6.25.24"
+#define XAUAI_BUILD_HASH "v62524-final-production-audit-20260722"
+#define XAU_PYRAMID_BASKET_HARD_CLOSE_R 0.50
 #define XAU_COUNTER_EXCURSION_BUILD false
+#define XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE true
+#define XAU_TRADEBRAIN_SEED_SCHEMA "XAUAI_TRADEBRAIN_SEED_V1"
+#define XAU_TRADEBRAIN_SEED_ID "V62524_M10_90D_20260422_20260721_RUN1_SEED_V1"
+// SHA-256 of the canonical seed JSON committed with this release. The seed
+// contains four WARNING cohorts and deliberately contains zero ACTIVE blocks.
+#define XAU_TRADEBRAIN_SEED_SHA256 "5b7791dccdac89d007723dc38c91b3ba773e76acbdf9922e3d9020992f991b6c"
+#define XAU_TRADEBRAIN_SEED_WARNING_COUNT 4
+#define XAU_TRADEBRAIN_SEED_ACTIVE_BLOCK_COUNT 0
+#define XAU_TRADEBRAIN_LOCAL_ROWS_HAVE_AUTHORITY false
 
 // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
 // Every primary-signal module (pressure, exhaustion, structure, reward-room,
@@ -2041,7 +2091,8 @@ enum ENUM_ADAPTIVE_TRANSITION_MODE
    ADAPTIVE_TRANSITION_SHADOW = 1,
    ADAPTIVE_TRANSITION_ACTIVE = 2
 };
-input ENUM_ADAPTIVE_TRANSITION_MODE InpAdaptiveTransitionMode = ADAPTIVE_TRANSITION_ACTIVE; // owner-directed production authority: direction AND location decisions control execution
+input ENUM_ADAPTIVE_TRANSITION_MODE InpAdaptiveTransitionMode = ADAPTIVE_TRANSITION_ACTIVE; // transition context/management remains active
+input bool   InpAllowAdaptiveReversalDirectEntry = false; // v6.25.22: OFF by default after 30-day evidence; canonical M10 may still originate the direction
 input string InpAdaptiveTransitionPresetId       = "XAUUSD_AI_Sniper_EA_v6.24.1_ACTIVE.set"; // deployment identity; chart/preset must preserve this exact production marker
 input int    InpTransitionPersistenceBars       = 3;     // closed M5 bars required before a directional lifecycle transition becomes authoritative
 input double InpTransitionMatureThreshold       = 60.0;
@@ -2061,19 +2112,18 @@ input double InpTransitionPullbackResetATR       = 0.75;  // evidence-based pull
 input int    InpTransitionEvidenceWindowBars     = 12;    // bounded closed-M5 sequence: reclaim/retest/displacement may arrive on separate bars
 input int    InpTransitionOpportunityMaxBars     = 36;    // stale reversal watches expire; exhaustion authority remains until market reset
 
-// v6.25.5 owner directive 2026-07-17 (URGENT ARCHITECTURE CHANGE) -- M30
-// three-M10-evidence consensus decision mode. Selectable, defaults to the
-// existing (unmodified) M10 legacy behavior. See the M30 consensus engine
-// block below (search "XAU_M30ConsensusDecision") for the full
-// implementation and its extensive header comment explaining exactly what
-// this does and does not change.
-input group "=== M30 THREE-M10-EVIDENCE CONSENSUS MODE (v6.25.5) ==="
+// Owner-requested M10-only build (2026-07-21).
+// Every completed M10 bar independently evaluates, endorses and may originate
+// one candidate through the existing shared timer/arbiter/risk/execution path.
+// The old three-M10/M30 mode remains only as compile-time compatibility for
+// dormant helper/telemetry code; it is not an input, cannot be selected and
+// is never called by the candidate-origination path in this build.
 enum ENUM_XAU_DECISION_MODE
 {
-   XAU_DECISION_M10_LEGACY = 0,               // unchanged current behavior: every closed M10 bar can independently gate/originate a candidate
-   XAU_DECISION_M30_THREE_M10_CONSENSUS = 1   // normal candidate origination requires three consecutive closed M10 evidence snapshots to agree at each 30-minute wall-clock boundary
+   XAU_DECISION_M10_LEGACY = 0,
+   XAU_DECISION_M30_THREE_M10_CONSENSUS = 1
 };
-input ENUM_XAU_DECISION_MODE InpDecisionMode = XAU_DECISION_M10_LEGACY; // OFF by default -- must be explicitly switched on; M10 continues scanning/storing evidence every 10 minutes either way
+const ENUM_XAU_DECISION_MODE InpDecisionMode = XAU_DECISION_M10_LEGACY;
 
 input group "=== AI AUTHORITY MODE (June 17-18 reconstruction) ==="
 // Restores the pre-v6.3.0 hierarchy: strategy + structure decide, AI advises/filters.
@@ -2154,7 +2204,7 @@ input double InpPG_GivebackAt30Pct  = 20.0;  // max giveback% when day gain ≥ 
 input double InpPG_GivebackAt50Pct  = 15.0;  // max giveback% when day gain ≥ 50%
 input double InpPG_GivebackAt75Pct  = 10.0;  // max giveback% when day gain ≥ 75% (lock big runs hard)
 input bool   InpPG_HTFTrendLock     = false; // v5.1.3: DEFAULT OFF — was blocking 7+ hours of valid trades
-input ENUM_TIMEFRAMES InpPG_HTFTrendTF = PERIOD_M30;
+const ENUM_TIMEFRAMES InpPG_HTFTrendTF = PERIOD_M10; // v6.25.16: locked to M10; M30 removed from entry-side PG trend authority
 input double InpPG_HTFTrendATR      = 1.0;
 input bool   InpPG_ConsolidationCarveout = true;
 input double InpPG_ConsolidationATR = 0.8;
@@ -2190,7 +2240,7 @@ input double InpSoftDDLotMulti    = 0.7;    // lot multiplier while in soft DD m
 // v6.3.8 UPGRADE 7 — Smart profit-growth / equity protection
 input double InpDailyProfitLockPct   = 3.0;  // Daily profit lock %: tighten trailing stops when day gain >= this
 input double InpDrawdownFromHighPct  = 8.0;  // Max % drop from equity watermark before new entries pause
-input double InpPyramidMinSpaceATR = 1.0;   // Pyramid adds must be ≥ this × ATR away from PREVIOUS add (anti-clustering)
+input double InpPyramidMinSpaceATR = 1.0;   // AUTHORITATIVE pyramid spacing: ≥ this × ATR from previous live leg/add
 input double InpAdvPyrMinScore    = 4.0;    // v5.3.1: combined score required for ADVERSE pyramids (≥ here OR no add). Trend-side adds skip this gate.
 
 // v5.3.1 — HIGH-GRADE BREATHING ROOM (let A/A+ winners run instead of trailing them out)
@@ -2304,7 +2354,7 @@ input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selectiv
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
 input group "=== XAU FAST CONFIRMATION (v5.8.40 — breakout + pyramid adaptive confirmation) ==="
-input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M15/M30 first; H1 only soft context
+input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M10/M15; H1 only soft context; M30 has no entry authority
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
 input double InpXAU_H1PenaltyLotMulti     = 0.75;  // If H1 disagrees but fast TFs pass, reduce lot instead of veto
@@ -2428,14 +2478,28 @@ input int    InpAccelLearningMinObs         = 50;    // Minimum qualified observ
 input double InpAccelLearningMinWR          = 55.0;  // Positive pattern floor before boosting score
 input double InpAccelLearningMinPF          = 1.10;  // Profit factor floor before boosting score
 input double InpAccelLearningMaxScoreAdj    = 0.25;  // Score-only cap; does not change lot, SL, TP, max risk, drawdown, or emergency locks
-input bool   InpTradeBrainMemory           = true;  // Persist EVERY executed trade with entry reason, exit reason, drawdown, and outcome
-input int    InpTradeBrainMinSamples       = 12;    // Minimum matching closed trades before brain can affect new entries
-input double InpTradeBrainReduceWR         = 42.0;  // If similar pattern WR is below this, reduce lot instead of repeating full risk
-input double InpTradeBrainBlockWR          = 28.0;  // If similar pattern WR is below this with poor PF, block until pattern improves
-input double InpTradeBrainMinPF            = 0.75;  // Below this profit factor, similar pattern is treated as weak
-input double InpTradeBrainBadDDProfitRatio = 2.50;  // Avg worst DD worse than this × avg profit = poor entry quality
-input double InpTradeBrainWeakLotMulti     = 0.45;  // Lot multiplier for weak-but-not-blocked repeated patterns
-input bool   InpTradeBrainMonitorAfterExit = true;  // After close, keep watching to learn whether exit was early, late, or correct
+enum ENUM_GLOBAL_TRADEBRAIN_MODE
+{
+   GLOBAL_TRADEBRAIN_OFF=0,
+   GLOBAL_TRADEBRAIN_COLLECT_ONLY=1,
+   GLOBAL_TRADEBRAIN_ADVISOR=2,
+   GLOBAL_TRADEBRAIN_HARD_BLOCK_70=3
+};
+input bool   InpTradeBrainMemory           = true;  // Persist every executed trade and its verified completed outcome
+input ENUM_GLOBAL_TRADEBRAIN_MODE InpGlobalTradeBrainMode = GLOBAL_TRADEBRAIN_ADVISOR; // Audited seed is warning-only; ADVISOR can never block, resize, redirect, or modify exits
+input string InpTradeBrainCollectionRunId  = "V62524_PRODUCTION_ADVISOR"; // Live collection remains isolated from the immutable 90-day validation run
+input bool   InpTradeBrainResetCollectionOnTesterStart = false; // Set true only for the first launch of a brand-new tester run; false preserves restart recovery
+input int    InpTradeBrainMinSamples       = 20;    // Reserved for the later validated global-seed filter
+input double InpTradeBrainBlockLossPct     = 70.0;  // Reserved owner threshold for the later validated global-seed filter
+input int    InpTradeBrainMinDistinctDays  = 5;     // Reserved trust requirement for imported/global seed validation
+input int    InpTradeBrainMinDistinctWeeks = 3;     // Reserved trust requirement for imported/global seed validation
+input bool   InpTradeBrainMonitorAfterExit = true;  // After close, keep watching for research telemetry only
+// Deprecated compatibility inputs. v6.25.15 never changes lot size from TradeBrain evidence.
+input double InpTradeBrainReduceWR         = 42.0;
+input double InpTradeBrainBlockWR          = 28.0;
+input double InpTradeBrainMinPF            = 0.75;
+input double InpTradeBrainBadDDProfitRatio = 2.50;
+input double InpTradeBrainWeakLotMulti     = 0.45;
 input bool   InpForensicPostExitTelemetry  = false; // Research-only: exact executable-tick 5/10/15/20/30/60m post-exit evidence; never read by trading decisions
 input double InpMemoryAPlusHTFMinLotMulti  = 0.85;  // Broad aggregate memory cannot crush A/A+ HTF-consensus setups below this
 input int    InpMemoryExactEvidenceMinSamples = 12; // Need exact TradeBrain evidence before broad memory can fully reduce A/A+
@@ -2568,7 +2632,7 @@ input int    InpEMASlow        = 200;      // Slow EMA
 
 input group "=== CONTEXT ENGINE (v4.8.0/v4.8.1 — HTF + Swing-S/R, smarter entries) ==="
 input bool   InpUseH4Bias        = true;   // Require HTF EMA align with trade direction (strong bias filter)
-input ENUM_TIMEFRAMES InpContextTF = PERIOD_M30;  // v5.1.7: HTF for context-gate bias check (was H4 — too slow for gold; M30 default)
+const ENUM_TIMEFRAMES InpContextTF = PERIOD_M10;  // v6.25.16: locked to the primary M10 decision timeframe; M30 context veto removed
 input double InpH4NeutralPct     = 0.25;   // v4.8.1 — If H4 EMAs within this % apart → treat as neutral (allow trade)
 input bool   InpUseSRFilter      = true;   // Block entries too close to recent swing highs/lows
 input int    InpSRLookback       = 40;     // v4.8.1 — Bars back (was 60 = 5hr; now 40 = 3.3hr, less cluttered)
@@ -3060,7 +3124,10 @@ enum ENUM_XAU_OWNER_BREAKOUT_EXECUTION_MODE
    OWNER_BREAKOUT_NORMAL=1,  // Scenario B comparison
    OWNER_BREAKOUT_INVERSE=2  // Scenario C production experiment (default)
 };
-input ENUM_XAU_OWNER_BREAKOUT_EXECUTION_MODE InpOwnerBreakoutExecutionMode=OWNER_BREAKOUT_BLOCK; // v6.25.13 owner directive: breakout regimes OFF by default. Set to OWNER_BREAKOUT_INVERSE from EA inputs to re-enable the existing inverse-execution behavior.
+// v6.25.18 owner confirmation: breakout regimes remain hard-blocked because
+// the owner does not approve breakout entries. Compile-locked so an old chart
+// or .set file cannot silently enable NORMAL or INVERSE breakout execution.
+const ENUM_XAU_OWNER_BREAKOUT_EXECUTION_MODE InpOwnerBreakoutExecutionMode=OWNER_BREAKOUT_BLOCK;
 // CORRECTED (owner directive): the prior baseline set counterRiskPct =
 // InpNormalRiskPct directly -- InpNormalRiskPct is the MAIN bot's own flat
 // 15%-of-EQUITY target for a fully-qualified A/A+ trade (see its definition:
@@ -3139,7 +3206,7 @@ input bool   InpPyramidRequireGradeA      = false; // v5.8.38: B can pyramid onl
 input bool   InpPyramidRequireHTF         = true;  // Only pyramid when adaptive fast confirmation still supports direction
 
 input int    InpMaxPyramidAdds  = 3;       // v5.8.38: controlled compounding in clean trends/rescue cycles
-input double InpPyramidMinATR   = 0.65;    // Price must move at least this × ATR before adding
+input double InpPyramidMinATR   = 0.65;    // Legacy lower bound; effective spacing is max(this, InpPyramidMinSpaceATR)
 input double InpPyramidSizeMulti= 0.58;    // Each add is this × previous size (prevents stack blow-up)
 input int    InpPyramidMinGapSec= 180;     // Min seconds between pyramid adds
 input bool   InpPyramidOnAdverse= false;   // v5.8.0: DISABLED by default — live data showed -$21k from 37 adverse-pyramid trades (PF 0.28). Adds risk to losing positions.
@@ -3344,17 +3411,109 @@ CPositionInfo posInfo;
 CAccountInfo  accInfo;
 
 bool   licenseValid = false;
-int    hEMAFast, hEMASlow, hRSI, hATR, hBBUpper, hBBLower, hBBMid;
-int    hEMAFast_H1, hEMASlow_H1, hRSI_M15, hStoch;
-int    hEMAFast_H4, hEMASlow_H4;   // v4.8.0 — H4 HTF context
+int    hEMAFast=INVALID_HANDLE, hEMASlow=INVALID_HANDLE, hRSI=INVALID_HANDLE, hATR=INVALID_HANDLE;
+int    hBBUpper=INVALID_HANDLE, hBBLower=INVALID_HANDLE, hBBMid=INVALID_HANDLE;
+int    hEMAFast_H1=INVALID_HANDLE, hEMASlow_H1=INVALID_HANDLE, hRSI_M15=INVALID_HANDLE, hStoch=INVALID_HANDLE;
+int    hEMAFast_H4=INVALID_HANDLE, hEMASlow_H4=INVALID_HANDLE;   // v4.8.0 — H4 HTF context
 double bufEMAFast[], bufEMASlow[], bufRSI[], bufATR[];
 double bufBBUpper[], bufBBLower[], bufBBMid[];
 double bufEMAFast_H1[], bufEMASlow_H1[], bufRSI_M15[];
 double bufEMAFast_H4[], bufEMASlow_H4[];  // v4.8.0
 double bufStochK[], bufStochD[];
 
+// v6.25.24 -- one authoritative immutable snapshot per fully closed M10
+// bar. A literal INVALID_HANDLE is repaired immediately. Error 4807 observed
+// on a non-invalid numeric handle must persist across distinct ticks and real
+// elapsed time before targeted recreation; the 30-day replay proved that
+// immediate rebuild-on-first-4807 caused 4,245 rebuilds across 2,701 bars even
+// though every bar ultimately became readable. Error 4806 / incomplete
+// calculation remains readiness, not corruption. The same closed bar stays
+// DEFERRED and retries at most once per genuine market tick, and a temporary
+// readiness failure can never become a terminal no-trade.
+#define XAU_M10_CLOSED_SHIFT 1
+#define XAU_M10_SNAPSHOT_MAX_ATTEMPTS 0 // 0 = no attempt ceiling; bounded by the immutable bar identity
+#define XAU_M10_MAX_WRONG_HANDLE_REBUILDS_PER_BAR 2
+#define XAU_M10_4807_PERSIST_TICKS 3
+#define XAU_M10_4807_PERSIST_SECONDS 2
+enum ENUM_XAU_M10_SNAPSHOT_STATE
+{
+   M10_SNAPSHOT_IDLE=0,
+   M10_SNAPSHOT_WAITING=1,
+   M10_SNAPSHOT_READY=2,
+   M10_SNAPSHOT_FAILED_FINAL=3 // compatibility-only; transient readiness never sets this
+};
+bool     g_entrySnapshotValid = false;
+datetime g_entrySnapshotClosedBar = 0;
+datetime g_entrySnapshotLoadedAt = 0;
+datetime g_entrySnapshotRetryAt = 0;
+int      g_entrySnapshotCacheReuses = 0;
+ENUM_XAU_M10_SNAPSHOT_STATE g_entrySnapshotState = M10_SNAPSHOT_IDLE;
+datetime g_entrySnapshotStateBar = 0;
+int      g_entrySnapshotAttempt = 0;
+datetime g_entrySnapshotNextRetryAt = 0;
+long     g_entrySnapshotLastAttemptTickMsc = 0;
+datetime g_entrySnapshotFirstWaitAt = 0;
+bool     g_entrySnapshotDeferredCounted = false;
+bool     g_entrySnapshotHandleRebuilt[7];
+int      g_entrySnapshotHandleRebuildCount[7];
+int      g_entrySnapshotHandleGeneration[7];
+// v6.25.24: patient 4807 episode state. Rebuild only after the same numeric
+// handle returns 4807 on >=3 distinct ticks spanning >=2 real seconds.
+int      g_entrySnapshot4807Streak[7];
+datetime g_entrySnapshot4807FirstAt[7];
+long     g_entrySnapshot4807LastTickMsc[7];
+int      g_entrySnapshot4807ObservedHandle[7];
+string   g_entrySnapshotLastIndicator = "";
+int      g_entrySnapshotLastHandle = INVALID_HANDLE;
+int      g_entrySnapshotLastBarsCalculated = -1;
+int      g_entrySnapshotLastRequested = 0;
+int      g_entrySnapshotLastReturned = 0;
+int      g_entrySnapshotLastError = 0;
+int      g_entrySnapshotLogicalBars = 0;
+int      g_entrySnapshotPreparationAttempts = 0;
+int      g_entrySnapshotDeferredBars = 0;
+int      g_entrySnapshotReadyBars = 0;
+int      g_entrySnapshotFailedBars = 0;      // reserved for genuine non-transient integrity failures
+int      g_entrySnapshotSupersededBars = 0;  // old closed bar replaced before readiness
+int      g_entrySnapshotWrongHandleRecoveries = 0;
+int      g_entrySnapshotTransient4807Waits = 0;
+int      g_entrySnapshotDataWaits = 0;
+int      g_entrySnapshotPersistent4807Recoveries = 0;
+datetime g_scanLogicalStartedBar = 0;
+datetime g_scanLogicalCompletedBar = 0;
+
+// Execution-only observability. These timestamps are never read by an entry,
+// sizing, stop, target or exit decision. They let close telemetry distinguish
+// normal stop execution from the first quote after a material market/session gap.
+datetime g_executionLastObservedTickTime = 0;
+datetime g_executionPreviousObservedTickTime = 0;
+datetime g_executionFirstTickAfterGapTime = 0;
+int      g_executionLatestGapSeconds = 0;
+
+// v6.25.21 -- one terminal market-decision state per fully closed M10 bar.
+// The watchdog may recover only a bar that never reached one of these states;
+// it cannot re-run scoring/telemetry for a bar already decided.
+enum ENUM_XAU_M10_TERMINAL_DECISION_STATE
+{
+   M10_TERMINAL_NONE=0,
+   M10_TERMINAL_READY_NO_CANDIDATE=1,
+   M10_TERMINAL_READY_CANDIDATE=2,
+   M10_TERMINAL_FAILED_FINAL=3
+};
+datetime g_m10TerminalDecisionBar = 0;
+ENUM_XAU_M10_TERMINAL_DECISION_STATE g_m10TerminalDecisionState = M10_TERMINAL_NONE;
+string   g_m10TerminalDecisionReason = "";
+datetime g_lastWatchdogTerminalSkipLog = 0;
+datetime g_primaryDecisionEventBar = 0;
+
+// Compatibility diagnostics retained for report continuity. v6.25.22 no
+// longer counts transient failed bars or waits for two dead bars before repair.
+#define XAU_M10_PERSISTENT_FAILURE_BARS_BEFORE_REBUILD 1
+int      g_entrySnapshotFinalFailureBars[7];
+datetime g_entrySnapshotLastFinalFailureBar[7];
+
 // v6.24.17 -- bounded last-known-good cache + liveness state specifically for
-// the HTF EMA pair (InpContextTF, default M30), the one indicator pair
+// the context EMA pair (InpContextTF, locked M10), the one indicator pair
 // runtime-proven to fail far more often than the generic "transient 4807"
 // patience logic assumes. See the CheckForEntry call sites for how this is
 // used: HEALTHY (fresh copy succeeded) / DEGRADED_USING_LAST_GOOD (bounded
@@ -3964,6 +4123,15 @@ struct XAU_AlignedCandidateState
    datetime readinessRecheckAt;
    bool     entryTimerCompletedLogged;
    bool     postWaitDecisionLogged;   // v6.24.17: one-shot ENTRY_DELAY_COMPLETED log per candidate generation
+   // v6.25.17: owner-location policy is frozen on this same canonical
+   // candidate identity. int is used because the location enum is declared
+   // later in the file. No new lifecycle or timer is introduced.
+   bool     ownerLocationFrozen;
+   int      ownerLocationAtCreation;
+   bool     ownerRegimeFrozen;
+   int      ownerRegimeAtCreation;
+   string   ownerSessionAtCreation;
+   datetime ownerPolicyFrozenAt;
 };
 // Separate state slots prevent PRIMARY, RE_ENTRY and PYRAMID from resetting
 // one another's 2-3 minute clocks while still using the same authorities.
@@ -4443,6 +4611,15 @@ string XAU_MarketThesisActionName(ENUM_XAU_MARKET_THESIS_ACTION a)
    return "UNKNOWN";
 }
 
+bool XAU_ThesisActionNeedsBoundedWait(ENUM_XAU_MARKET_THESIS_ACTION action)
+{
+   return action==WAIT_FOR_PULLBACK ||
+          action==WAIT_FOR_RECLAIM ||
+          action==WAIT_FOR_CONFIRMATION ||
+          action==MANAGE_EXISTING_ONLY ||
+          action==PROTECT_RUNNER;
+}
+
 // v6.24.8 — spec Part 6/the owner's follow-up asked for a named progressive
 // direction-transition sequence (CURRENT_DIRECTION_HEALTHY -> ... ->
 // NEW_CAMPAIGN_ACTIVE). Per that same request's own instruction ("do not
@@ -4510,9 +4687,42 @@ struct TradeBrainOpen
    int      aiConfidence;
    string   setup;
    string   grade;
-   string   signature;
+   string   signature;                 // TB2 stable exact categorical fingerprint (pre-entry fields only)
+   string   legacySignature;           // Existing signal signature retained for audit; never used as the TB2 cohort key
    string   session;
    string   entryReason;
+   string   schemaVersion;
+   string   collectionRunId;
+   string   dataStatus;                // ENTRY_DATA_PRESENT / CAPTURE_FAILED / NOT_APPLICABLE_MANUAL_OVERRIDE / LEGACY_RECORD_NOT_CAPTURED
+   string   tradeRole;                 // CORE / RE_ENTRY / BREAKOUT / PYRAMID / MANUAL_OVERRIDE
+   string   candidateId;
+   long     campaignId;
+   datetime signalBarTime;
+   datetime brokerEntryTime;
+   int      originalSignalDirection;     // owner/original direction before breakout inversion
+   int      decisionSignalDirection;     // direction approved by the existing strategy before owner execution mapping
+   bool     inversionApplied;
+   double   originalStructuralSL;
+   double   originalOneRDistance;
+   double   effectiveSLDistance;
+   double   riskUSD;
+   double   spreadPoints;
+   double   spreadATR;
+   double   marginRequired;
+   double   freeMarginAtEntry;
+   long     stopLevelPoints;
+   double   slippagePoints;
+   string   accountMarginMode;
+   string   newsPhase;
+   int      biasDirection;
+   int      bosDirection;
+   string   thesisLocation;
+   string   thesisExhaustion;
+   string   thesisTiming;
+   string   thesisHTF;
+   string   thesisStructure;
+   string   thesisPressure;
+   string   thesisAction;
    // v6.20.3 — structured entry-quality fields captured directly from the
    // numeric variables XAU_FreshnessExtensionAuthority() already computes, independent
    // of the free-text `entryReason` narrative. Added because the audit
@@ -4905,6 +5115,10 @@ struct XAU_CampaignState
    double                     profitGivenBack;          // peakFloatingProfit - current openPL, floored at 0
    datetime                   lastConfirmedContinuation;
    datetime                   lastValidPullbackReset;
+   // v6.25.24: last closed M10 evidence bar already consumed by a pyramid
+   // add. On restart reconciliation this is initialized to the latest closed
+   // bar, preventing the same pre-restart evidence from being reused.
+   datetime                   lastApprovedPyramidEvidenceBar;
    bool                       invalidated;
    string                     invalidationReason;
    ENUM_XAU_MARKET_THESIS_ACTION reversalConfirmationState; // OPPOSITE_DISCOVERY / TRANSITION_WATCH / HARD_BLOCK(invalidated) mirrored here for quick display
@@ -4935,6 +5149,10 @@ struct XAU_CampaignState
    double   basketProtectedFloorR;
    bool     basketProtectionArmed;
    bool     basketCloseInProgress;
+   // FINAL_BASKET_050R audit repair: once an add has ever been confirmed,
+   // basket ownership survives partial closes, netting merge and restart.
+   bool     basketModeEverActivated;
+   int      basketLogicalAdditionCount;
    // v6.24.18 owner directive 2026-07-16 -- basket-to-single conversion can
    // fail transiently (surviving ticket not yet visible this tick, or its
    // R-exit risk state not yet indexed). The basket floor must NEVER be
@@ -5651,6 +5869,7 @@ void XAU_CampaignOpenCore(int direction, string setupName, ENUM_XAU_TRADE_HORIZO
    g_campaign[slot].profitGivenBack           = 0.0;
    g_campaign[slot].lastConfirmedContinuation = TimeCurrent();
    g_campaign[slot].lastValidPullbackReset    = 0;
+   g_campaign[slot].lastApprovedPyramidEvidenceBar = 0;
    g_campaign[slot].invalidated               = false;
    g_campaign[slot].invalidationReason        = "";
    g_campaign[slot].reversalConfirmationState = ALLOW_CORE;
@@ -5681,6 +5900,8 @@ void XAU_CampaignOpenCore(int direction, string setupName, ENUM_XAU_TRADE_HORIZO
    g_campaign[slot].basketProtectedFloorR     = 0.0;
    g_campaign[slot].basketProtectionArmed     = false;
    g_campaign[slot].basketCloseInProgress     = false;
+   g_campaign[slot].basketModeEverActivated   = false;
+   g_campaign[slot].basketLogicalAdditionCount= 0;
    g_campaign[slot].basketConversionPending    = false;
    g_campaign[slot].basketConversionRetryCount = 0;
    g_campaignBasketStateDirty                  = true;
@@ -5711,13 +5932,18 @@ void XAU_CampaignRegisterAdd(int direction, string setupName)
       XAU_CampaignOpenCore(direction, setupName, XAU_HORIZON_PYRAMID_ADD, 0.0, 0.0, 0.0, 0.0);
    g_campaign[slot].additionCount++;
    g_campaign[slot].activePositionCount++;
+   g_campaign[slot].basketModeEverActivated = true;
+   g_campaign[slot].basketLogicalAdditionCount = MathMax(g_campaign[slot].basketLogicalAdditionCount,
+                                                          g_campaign[slot].additionCount);
    g_campaign[slot].lastConfirmedContinuation = TimeCurrent();
+   g_campaignBasketStateDirty = true;
    PrintFormat("CAMPAIGN_ADD_REGISTERED | %s dir=%s additionCount=%d activePositions=%d",
                XAU_CampaignIdText(g_campaign[slot].campaignId), direction==1?"BUY":"SELL",
                g_campaign[slot].additionCount, g_campaign[slot].activePositionCount);
    PrintFormat("OWNER_EXIT_PROFILE_INHERITED | campaignId=%s add=%d profile=%s mixedProfiles=false",
                XAU_CampaignIdText(g_campaign[slot].campaignId), g_campaign[slot].additionCount,
                XAU_OwnerExitProfileName((ENUM_XAU_OWNER_EXIT_PROFILE)g_campaign[slot].ownerExitProfile));
+   XAU_CampaignBasketState_Save(true);
 }
 
 // v6.25.11 -- basket state is telemetry-only under the owner R-exit policy.
@@ -5761,6 +5987,7 @@ void XAU_CampaignRegisterClose(int direction, double closedProfit)
    if(!g_campaign[slot].active) return;
    g_campaign[slot].realizedPL += closedProfit;
    g_campaign[slot].activePositionCount = MathMax(0, g_campaign[slot].activePositionCount - 1);
+   g_campaignBasketStateDirty = true;
    PrintFormat("CAMPAIGN_POSITION_CLOSED | %s dir=%s closedProfit=%.2f realizedPL=%.2f remainingPositions=%d",
                XAU_CampaignIdText(g_campaign[slot].campaignId), direction==1?"BUY":"SELL",
                closedProfit, g_campaign[slot].realizedPL, g_campaign[slot].activePositionCount);
@@ -5770,6 +5997,8 @@ void XAU_CampaignRegisterClose(int direction, double closedProfit)
    // own immutable entry/peak/profile state continue. Never transplant a
    // campaign-money floor into a different per-leg R geometry.
    if(g_campaign[slot].activePositionCount == 1 &&
+      !g_campaign[slot].basketModeEverActivated &&
+      !g_campaign[slot].basketCloseInProgress &&
       (g_campaign[slot].basketProtectionArmed || g_campaign[slot].basketConversionPending))
    {
       ulong survivingTicket = 0;
@@ -5925,6 +6154,10 @@ void XAU_ReconcileCampaignOnInit()
       g_campaign[slot].lifecycle                 = TREND_HEALTHY; // conservative default, not TREND_EARLY -- unknown history
       g_campaign[slot].activePositionCount       = counts[slot];
       g_campaign[slot].additionCount             = MathMax(0, counts[slot] - 1);
+      // Fail-safe restart contract: any evidence bar that existed before the
+      // restart is treated as already consumed. A pyramid must wait for a
+      // genuinely later closed M10 bar.
+      g_campaign[slot].lastApprovedPyramidEvidenceBar = iTime(Symbol(),XAU_PRIMARY_DECISION_TF,1);
       g_campaign[slot].invalidated               = false;
       g_campaign[slot].ownerEntryRegime          = (int)currentRegime;
       g_campaign[slot].ownerExitProfile          = (int)XAU_OwnerExitProfileForEntryRegime(currentRegime);
@@ -5949,7 +6182,7 @@ void XAU_ReconcileCampaignOnInit()
 // (a restart mid-pending-basket-to-single-conversion must not silently lose
 // the armed floor -- see XAU_CampaignBasketState_Load's relaxed activePositionCount
 // gate below).
-#define XAU_BASKET_STATE_SCHEMA_VERSION 6
+#define XAU_BASKET_STATE_SCHEMA_VERSION 7
 bool g_campaignBasketStateDirty = false;
 
 string XAU_CampaignBasketStateFilePath()
@@ -5988,6 +6221,10 @@ void XAU_CampaignBasketState_Save(bool force = false)
                 g_campaign[slot].basketProtectionArmed ? 1 : 0,
                 g_campaign[slot].basketConversionPending ? 1 : 0,
                 g_campaign[slot].basketConversionRetryCount,
+                g_campaign[slot].basketModeEverActivated ? 1 : 0,
+                g_campaign[slot].basketLogicalAdditionCount,
+                DoubleToString(g_campaign[slot].realizedPL, 2),
+                g_campaign[slot].basketCloseInProgress ? 1 : 0,
                 g_campaign[slot].ownerEntryRegime, g_campaign[slot].ownerExitProfile,
                 g_campaign[slot].ownerOriginalSignalDirection,
                 g_campaign[slot].ownerBreakoutInversionApplied ? 1 : 0,
@@ -6031,7 +6268,7 @@ void XAU_CampaignBasketState_Load()
    while(!FileIsEnding(h))
    {
       int schema = (int)FileReadNumber(h);
-      if(schema != 2 && schema != 3 && schema != 4 && schema != 5 && schema != XAU_BASKET_STATE_SCHEMA_VERSION)
+      if(schema != 2 && schema != 3 && schema != 4 && schema != 5 && schema != 6 && schema != XAU_BASKET_STATE_SCHEMA_VERSION)
       {
          PrintFormat("BASKET_STATE_RESTORED path=%s result=SCHEMA_MISMATCH found=%d expected=%d -- aborting restore of remaining rows",
                      path, schema, XAU_BASKET_STATE_SCHEMA_VERSION);
@@ -6053,6 +6290,10 @@ void XAU_CampaignBasketState_Load()
       bool armed = FileReadNumber(h) != 0;
       bool conversionPending = FileReadNumber(h) != 0;
       int conversionRetryCount = (int)FileReadNumber(h);
+      bool basketModeEverActivated = schema >= 7 ? FileReadNumber(h) != 0 : false;
+      int basketLogicalAdditionCount = schema >= 7 ? (int)FileReadNumber(h) : 0;
+      double persistedRealizedPL = schema >= 7 ? FileReadNumber(h) : 0.0;
+      bool persistedCloseInProgress = schema >= 7 ? FileReadNumber(h) != 0 : false;
       int ownerEntryRegime = schema >= 3 ? (int)FileReadNumber(h) : (int)REGIME_RANGING;
       int ownerExitProfile = schema >= 3 ? (int)FileReadNumber(h) : (int)OWNER_EXIT_GENERAL;
       int ownerOriginalSignalDirection = schema >= 5 ? (int)FileReadNumber(h) : 0;
@@ -6079,7 +6320,8 @@ void XAU_CampaignBasketState_Load()
       // armed floor from a saved file describing that exact pending state
       // must still be restored (never silently dropped) rather than treated
       // as "not currently a live basket".
-      bool countPlausible = (schema >= 5 && g_campaign[slot].activePositionCount >= 1) ||
+      bool countPlausible = (schema >= 7 && basketModeEverActivated && g_campaign[slot].activePositionCount >= 1) ||
+                            (schema >= 5 && g_campaign[slot].activePositionCount >= 1) ||
                             g_campaign[slot].activePositionCount >= 2 ||
                             (g_campaign[slot].activePositionCount == 1 && armed);
       if(!g_campaign[slot].active || g_campaign[slot].direction != expectedDirection || !countPlausible)
@@ -6097,6 +6339,13 @@ void XAU_CampaignBasketState_Load()
       g_campaign[slot].basketProtectedFloorMoney = floorMoney;
       g_campaign[slot].basketProtectedFloorR     = floorR;
       g_campaign[slot].basketProtectionArmed     = armed;
+      g_campaign[slot].basketModeEverActivated   = schema >= 7 ? basketModeEverActivated
+                                                               : (g_campaign[slot].activePositionCount >= 2 || armed);
+      g_campaign[slot].basketLogicalAdditionCount= schema >= 7 ? basketLogicalAdditionCount
+                                                               : MathMax(0, g_campaign[slot].activePositionCount - 1);
+      if(schema >= 7)
+         g_campaign[slot].realizedPL = persistedRealizedPL;
+      g_campaign[slot].basketCloseInProgress = schema >= 7 ? persistedCloseInProgress : false;
       // Restart landed with only 1 live position but an armed floor from the
       // saved file -- re-enter pending-conversion retry mode rather than
       // assume the (unpersisted, RAM-only) conversion already happened.
@@ -6876,8 +7125,33 @@ int g_gateBlocks_Volatility = 0;
 int g_gateBlocks_Committee  = 0;
 int g_gateBlocks_STI        = 0;
 int g_gateBlocks_EPF        = 0;
+int g_gateBlocks_OwnerExcellent = 0;
+int g_gateBlocks_OwnerBreakout  = 0;
+int g_gateBlocks_OwnerLate      = 0;
 int g_totalSignals          = 0;
 int g_totalAllowed          = 0;
+
+// v6.25.24: exact one-candidate/one-terminal-outcome ledger. The old
+// "Unclassified" value subtracted unrelated phase counters from candidate
+// totals and therefore guessed. These counters are written only when a
+// canonical primary candidate reaches its final executed/cancelled outcome.
+int g_exactOutcomeFinalized       = 0;
+int g_exactOutcomeExecuted        = 0;
+int g_exactOutcomeOwnerBreakout   = 0;
+int g_exactOutcomeOwnerLate       = 0;
+int g_exactOutcomeOwnerLocation   = 0;
+int g_exactOutcomeTimerExpired    = 0;
+int g_exactOutcomeReadiness       = 0;
+int g_exactOutcomeStructure       = 0;
+int g_exactOutcomeFreshness       = 0;
+int g_exactOutcomeOperational     = 0;
+int g_exactOutcomeSpread          = 0;
+int g_exactOutcomeNews            = 0;
+int g_exactOutcomeFinalAuthority  = 0;
+int g_exactOutcomeExecutionFailed = 0;
+int g_exactOutcomeOther           = 0;
+string g_exactOutcomeLastCandidateId = "";
+string g_exactOutcomeLastReason      = "";
 datetime g_gateReportLast   = 0;  // last time 24h report was printed
 datetime g_localReportHeartbeatLast = 0;  // last live refresh of local report files
 
@@ -7118,6 +7392,7 @@ datetime   g_indFailAtTimes[20];
 // alone, unrelated to actual elapsed recalculation time, was firing before
 // the indicator recalculation thread had a realistic chance to catch up).
 datetime   g_indFailStreakStart[20];
+datetime   g_indStableRetryAt[20]; // v6.25.19: max one stable closed-bar copy attempt per label/second
 int        g_indFailLabelCount = 0;
 
 int XAU_IndicatorFailStreakIndex(string label, bool createIfMissing)
@@ -7130,18 +7405,29 @@ int XAU_IndicatorFailStreakIndex(string label, bool createIfMissing)
    g_indFailCounts[idx] = 0;
    g_indFailAtTimes[idx] = 0;
    g_indFailStreakStart[idx] = 0;
+   g_indStableRetryAt[idx] = 0;
    return idx;
 }
 
 void XAU_ResetIndicatorFailStreak(string label)
 {
    int idx = XAU_IndicatorFailStreakIndex(label, false);
-   if(idx >= 0) { g_indFailCounts[idx] = 0; g_indFailStreakStart[idx] = 0; }
+   if(idx >= 0)
+   {
+      g_indFailCounts[idx] = 0;
+      g_indFailStreakStart[idx] = 0;
+      g_indStableRetryAt[idx] = 0;
+   }
 }
 
 void XAU_ResetAllIndicatorFailStreaks()
 {
-   for(int i = 0; i < g_indFailLabelCount; i++) { g_indFailCounts[i] = 0; g_indFailStreakStart[i] = 0; }
+   for(int i = 0; i < g_indFailLabelCount; i++)
+   {
+      g_indFailCounts[i] = 0;
+      g_indFailStreakStart[i] = 0;
+      g_indStableRetryAt[i] = 0;
+   }
 }
 
 // v6.4.6 audit: pending exit attribution for broker-side SL/TP fills.
@@ -7192,7 +7478,8 @@ void STI_Init()
 }
 
 // Returns 0-100: how strongly the multi-TF stack supports the given direction.
-// Weights: D1=22, H4=22, H1=18, M30=15, M15=13, M5=10 → 100 total.
+// v6.25.16 TRUE-M10: the former M30 component is replaced by M10.
+// Weights: D1=22, H4=22, H1=18, M10=15, M15=13, M5=10 → 100 total.
 // Cached per signal (buy/sell) per 30 s to avoid redundant handle creation.
 double STI_ComputeTCP(int signal)
 {
@@ -7206,7 +7493,7 @@ double STI_ComputeTCP(int signal)
    int d1  = TFDirectionByEMA(signal, PERIOD_D1,  0.18, w);
    int h4  = TFDirectionByEMA(signal, PERIOD_H4,  0.20, w);
    int h1  = TFDirectionByEMA(signal, PERIOD_H1,  0.22, w);
-   int m30 = TFDirectionByEMA(signal, PERIOD_M30, 0.25, w);
+   int m10 = TFDirectionByEMA(signal, XAU_PRIMARY_DECISION_TF, 0.25, w);
    int m15 = TFDirectionByEMA(signal, PERIOD_M15, 0.25, w);
    int m5  = TFDirectionByEMA(signal, PERIOD_M5,  0.25, w);
 
@@ -7214,7 +7501,7 @@ double STI_ComputeTCP(int signal)
    if(d1  == signal) tcp += 22.0;
    if(h4  == signal) tcp += 22.0;
    if(h1  == signal) tcp += 18.0;
-   if(m30 == signal) tcp += 15.0;
+   if(m10 == signal) tcp += 15.0;
    if(m15 == signal) tcp += 13.0;
    if(m5  == signal) tcp += 10.0;
    cacheVal[idx] = tcp;
@@ -9329,6 +9616,7 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       (StringFind(logTag, "OWNER_INITIAL_1R_HARD_STOP") == 0) ||
       (StringFind(logTag, "OWNER_PYRAMID_1R_HARD_STOP") == 0) ||
       (StringFind(logTag, "GENERAL_10M_EXTENSION_RESTORE_ORIGINAL_SL") == 0) ||
+      (StringFind(logTag, "BASKET_050R_RESTORE_ORIGINAL_SL") == 0) ||
       (StringFind(logTag, "OWNER_R_EXIT_FLOOR") == 0) ||
       (StringFind(logTag, "PRIMARY_EXIT_FLOOR") == 0);
    if(!ownerModifyAuthority)
@@ -10272,6 +10560,8 @@ bool XAU_RunOwnerRExitSelfTests()
    return failed==0;
 }
 
+bool XAU_RunNoBreakoutAndSnapshotSelfTests();
+
 int OnInit()
 {
    if(StringLen(InpLicensePIN) == 0) { Alert("Enter PIN in Inputs tab."); return INIT_FAILED; }
@@ -10280,6 +10570,8 @@ int OnInit()
    Print("LICENSE OK: ", InpLicensePIN);
 
    if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunOwnerRExitSelfTests())
+      return INIT_FAILED;
+   if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunNoBreakoutAndSnapshotSelfTests())
       return INIT_FAILED;
 
    // v6.21.2 Part 3 — CONFIG-AGREEMENT ASSERTION: InpNormalRiskPct (the sole normal-
@@ -10303,10 +10595,7 @@ int OnInit()
    PrintFormat("RISK_CONFIG_ASSERTION_PASSED | ConfiguredRisk=%.2f%% | SingleTradeCap=%.2f%% | AggregateRiskCap=%.2f%% | mode=FULL_RISK_BINARY",
                InpNormalRiskPct, InpMaxRiskPctEquity, InpMaxAggregateRiskPct);
    Print("OWNER_ENTRY_TIME_POLICY | blackout=NONE | 06:10-07:30=ELIGIBLE_IF_NORMAL_LOGIC_APPROVES | 14:10-15:30=ELIGIBLE_IF_NORMAL_LOGIC_APPROVES");
-   PrintFormat("OWNER_BREAKOUT_EXECUTION_STARTUP | mode=%s | BRKT_UP=%s | BRKT_DN=%s | non_breakout=NORMAL_DIRECTION | counter=OFF | structural_sl_r=1.00 | exit_authority=OWNER_R_EXIT_CANONICAL | independent_legacy_exits=DISABLED",
-               XAU_OwnerBreakoutModeName(),
-               InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_BLOCK?"BLOCK":InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_NORMAL?"NORMAL":"INVERSE",
-               InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_BLOCK?"BLOCK":InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_NORMAL?"NORMAL":"INVERSE");
+   Print("OWNER_NO_BREAKOUT_POLICY | mode=HARD_BLOCK_GLOBAL | finalReason=BREAKOUT_MARKET_NOT_ALLOWED | regimes=BRKT_UP,BRKT_DN | setupSourceCampaignBreakout=BLOCK | AsiaSessionAllowed=true | normalNonBreakoutAsiaAllowed=true | noTimeCooldown=true | closedBarAuthority=M10");
    if(!XAU_ValidateAdaptiveTransitionConfig())
    {
       Print("ADAPTIVE_TRANSITION_CONFIG ERROR: refusing initialization rather than running with contradictory direction/location authority.");
@@ -10384,11 +10673,20 @@ int OnInit()
    hRSI_M15  = iRSI(Symbol(), PERIOD_M15, InpRSIPeriod, PRICE_CLOSE);
    hStoch    = iStochastic(Symbol(), XAU_PRIMARY_DECISION_TF, 14, 3, 3, MODE_SMA, STO_LOWHIGH);
 
+   // v6.25.24: only handles actually consumed by the immutable M10 snapshot
+   // are mandatory. H1 is soft context. The legacy-named H4/context handles
+   // are also soft because this build's stable snapshot intentionally fills
+   // bufEMAFast_H4/bufEMASlow_H4 from the canonical M10 EMA arrays below;
+   // duplicate handles may never kill OnInit when the authoritative data is
+   // already available.
    if(hEMAFast==INVALID_HANDLE || hEMASlow==INVALID_HANDLE || hRSI==INVALID_HANDLE ||
-      hATR==INVALID_HANDLE || hBBUpper==INVALID_HANDLE || hEMAFast_H1==INVALID_HANDLE ||
-      hEMASlow_H1==INVALID_HANDLE || hRSI_M15==INVALID_HANDLE || hStoch==INVALID_HANDLE ||
-      hEMAFast_H4==INVALID_HANDLE || hEMASlow_H4==INVALID_HANDLE)
-   { Print("ERROR: Indicators failed"); return INIT_FAILED; }
+      hATR==INVALID_HANDLE || hBBUpper==INVALID_HANDLE || hRSI_M15==INVALID_HANDLE ||
+      hStoch==INVALID_HANDLE)
+   { Print("ERROR: Mandatory entry indicators failed"); return INIT_FAILED; }
+   if(hEMAFast_H1==INVALID_HANDLE || hEMASlow_H1==INVALID_HANDLE)
+      Print("INDICATOR_H1_SOFT_CONTEXT_UNAVAILABLE_AT_INIT: M10 engine remains active with neutral H1 context");
+   if(hEMAFast_H4==INVALID_HANDLE || hEMASlow_H4==INVALID_HANDLE)
+      Print("INDICATOR_CONTEXT_DUPLICATE_SOFT_UNAVAILABLE_AT_INIT: canonical M10 EMA snapshot remains authoritative");
 
    ArraySetAsSeries(bufEMAFast, true); ArraySetAsSeries(bufEMASlow, true);
    ArraySetAsSeries(bufRSI, true);     ArraySetAsSeries(bufATR, true);
@@ -10441,6 +10739,52 @@ int OnInit()
    lastClose.lots = 0; lastClose.closeTime = 0; lastClose.signature = ""; lastClose.setup = "";
    g_latestDecisionSnapshot.valid = false;
    g_latestDecisionSnapshot.generation = 0;
+   g_entrySnapshotValid=false;
+   g_entrySnapshotClosedBar=0;
+   g_entrySnapshotLoadedAt=0;
+   g_entrySnapshotRetryAt=0;
+   g_entrySnapshotCacheReuses=0;
+   g_entrySnapshotState=M10_SNAPSHOT_IDLE;
+   g_entrySnapshotStateBar=0;
+   g_entrySnapshotAttempt=0;
+   g_entrySnapshotNextRetryAt=0;
+   g_entrySnapshotDeferredCounted=false;
+   for(int snapshotHandleIdx=0;snapshotHandleIdx<7;snapshotHandleIdx++)
+   {
+      g_entrySnapshotHandleRebuilt[snapshotHandleIdx]=false;
+      g_entrySnapshotHandleRebuildCount[snapshotHandleIdx]=0;
+      g_entrySnapshotHandleGeneration[snapshotHandleIdx]=0;
+      g_entrySnapshot4807Streak[snapshotHandleIdx]=0;
+      g_entrySnapshot4807FirstAt[snapshotHandleIdx]=0;
+      g_entrySnapshot4807LastTickMsc[snapshotHandleIdx]=0;
+      g_entrySnapshot4807ObservedHandle[snapshotHandleIdx]=INVALID_HANDLE;
+      g_entrySnapshotFinalFailureBars[snapshotHandleIdx]=0;
+      g_entrySnapshotLastFinalFailureBar[snapshotHandleIdx]=0;
+   }
+   g_entrySnapshotLastAttemptTickMsc=0;
+   g_entrySnapshotFirstWaitAt=0;
+   g_entrySnapshotSupersededBars=0;
+   g_entrySnapshotWrongHandleRecoveries=0;
+   g_entrySnapshotTransient4807Waits=0;
+   g_entrySnapshotDataWaits=0;
+   g_m10TerminalDecisionBar=0;
+   g_m10TerminalDecisionState=M10_TERMINAL_NONE;
+   g_m10TerminalDecisionReason="";
+   g_lastWatchdogTerminalSkipLog=0;
+   g_primaryDecisionEventBar=0;
+   g_entrySnapshotLastIndicator="";
+   g_entrySnapshotLastHandle=INVALID_HANDLE;
+   g_entrySnapshotLastBarsCalculated=-1;
+   g_entrySnapshotLastRequested=0;
+   g_entrySnapshotLastReturned=0;
+   g_entrySnapshotLastError=0;
+   g_entrySnapshotLogicalBars=0;
+   g_entrySnapshotPreparationAttempts=0;
+   g_entrySnapshotDeferredBars=0;
+   g_entrySnapshotReadyBars=0;
+   g_entrySnapshotFailedBars=0;
+   g_scanLogicalStartedBar=0;
+   g_scanLogicalCompletedBar=0;
    g_reentryState.active = false;
    g_reentryState.invalidated = false;
    g_reentryState.previousDirection = 0;
@@ -10495,6 +10839,8 @@ int OnInit()
    }
 
    Print("=== XAUAI SNIPER ", XAUAI_EA_VERSION, " (NEWS INTELLIGENCE + EXPECTANCY ENGINE) READY ===");
+   Print("LIVE_SCANNER_POLICY | primary=M10 closed-bar atomic snapshot | bar0=never-used-for-entry | same-bar cache=ON | transient4807=DEFER_KEEP_HANDLE | invalidHandle=TARGETED_RECREATE | terminalBarWatchdogRescan=BLOCKED | candidateDelay=FROZEN_REVALIDATION");
+   Print("AUTHORITY_POLICY | adaptive oppositeEntryAllowed is endorsed by canonical M10 and still passes all shared gates");
    PrintFormat("VERSION-DIAG | property=%s runtime=%s build=%s inputHash=%s account=%I64d broker=%s symbol=%s magic=%d",
                XAUAI_EA_VERSION_NUM, XAUAI_EA_VERSION, XAUAI_BUILD_HASH, XAUAI_InputHash(),
                AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), Symbol(), InpMagicNumber);
@@ -10703,6 +11049,7 @@ int OnInit()
    // next-M5-bar or five-minute entry wait is active.
    PrintFormat("ENTRY_TIMING_MODE=WALL_CLOCK_ONLY ENTRY_DELAY_MIN=%.0f ENTRY_DELAY_TARGET=%.0f ENTRY_DELAY_MAX=%.0f NEXT_M5_BAR_WAIT=DISABLED FIVE_MINUTE_ENTRY_WAIT=DISABLED",
                XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC, XAU_EffectiveEntryDelaySeconds(), XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC);
+   XAU_TradeBrainPrepareCollectionRun();
    XAU_ReconcileTradeBrainOnInit();
    XAU_ReconcileCounterExcursionOnInit();
    XAU_ReconcileExhaustionCounterOnInit();
@@ -10772,6 +11119,12 @@ bool RebuildEntryIndicatorHandles(string why)
    if(hRSI_M15     != INVALID_HANDLE) IndicatorRelease(hRSI_M15);
    if(hStoch       != INVALID_HANDLE) IndicatorRelease(hStoch);
 
+   hEMAFast=INVALID_HANDLE; hEMASlow=INVALID_HANDLE; hRSI=INVALID_HANDLE; hATR=INVALID_HANDLE;
+   hBBUpper=INVALID_HANDLE; hBBLower=INVALID_HANDLE; hBBMid=INVALID_HANDLE;
+   hEMAFast_H1=INVALID_HANDLE; hEMASlow_H1=INVALID_HANDLE;
+   hEMAFast_H4=INVALID_HANDLE; hEMASlow_H4=INVALID_HANDLE;
+   hRSI_M15=INVALID_HANDLE; hStoch=INVALID_HANDLE;
+
    hEMAFast  = iMA(Symbol(), XAU_PRIMARY_DECISION_TF, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
    hEMASlow  = iMA(Symbol(), XAU_PRIMARY_DECISION_TF, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
    hRSI      = iRSI(Symbol(), XAU_PRIMARY_DECISION_TF, InpRSIPeriod, PRICE_CLOSE);
@@ -10786,11 +11139,12 @@ bool RebuildEntryIndicatorHandles(string why)
    hRSI_M15  = iRSI(Symbol(), PERIOD_M15, InpRSIPeriod, PRICE_CLOSE);
    hStoch    = iStochastic(Symbol(), XAU_PRIMARY_DECISION_TF, 14, 3, 3, MODE_SMA, STO_LOWHIGH);
 
+   // H1 and legacy context-duplicate handles are deliberately excluded from
+   // the mandatory rebuild verdict. The immutable M10 snapshot owns entry
+   // data and directly mirrors its EMA values into the context arrays.
    bool ok = (hEMAFast     != INVALID_HANDLE && hEMASlow    != INVALID_HANDLE &&
               hRSI         != INVALID_HANDLE && hATR        != INVALID_HANDLE &&
-              hBBUpper     != INVALID_HANDLE && hEMAFast_H1 != INVALID_HANDLE &&
-              hEMASlow_H1  != INVALID_HANDLE && hEMAFast_H4 != INVALID_HANDLE &&
-              hEMASlow_H4  != INVALID_HANDLE && hRSI_M15    != INVALID_HANDLE &&
+              hBBUpper     != INVALID_HANDLE && hRSI_M15    != INVALID_HANDLE &&
               hStoch       != INVALID_HANDLE);
    if(ok)
    {
@@ -10800,7 +11154,7 @@ bool RebuildEntryIndicatorHandles(string why)
       int warmupSec = InpIndicatorWarmupSec;
       if(warmupSec < 3) warmupSec = 3;
       g_indicatorWarmupUntil = TimeCurrent() + warmupSec;
-      Print("INDICATOR_HANDLE_CREATED: all entry indicator handles rebuilt OK; warming buffers for ",
+      Print("INDICATOR_HANDLE_CREATED: mandatory entry handles rebuilt OK; H1 remains optional soft context; warming buffers for ",
             warmupSec, "s before retrying scan.");
    }
    else
@@ -10851,13 +11205,13 @@ string XAU_ScanStateKey(string s)
 // every SCAN_COMPLETED_*/SCAN_ABORTED state transition (not log lines, which
 // XAU_LogScanState already dedups/resurfaces) so a real completion rate is
 // computable and visible, distinct from the raw per-tick 4807 spam volume.
+int g_scanStartedCount = 0;
 int g_scanCompletedCount = 0;
+int g_scanDeferredCount = 0;
 int g_scanAbortedCount = 0;
 
 void XAU_LogScanState(string state)
 {
-   if(StringFind(state, "SCAN_COMPLETED") == 0) g_scanCompletedCount++;
-   else if(StringFind(state, "SCAN_ABORTED") == 0) g_scanAbortedCount++;
    static datetime lastResurfaceAt = 0;
    static string lastScanStateKey = "";
    string key = XAU_ScanStateKey(state);
@@ -10877,6 +11231,10 @@ void XAU_LogScanState(string state)
       }
       return;
    }
+   if(StringFind(state, "SCAN_STARTED") == 0) g_scanStartedCount++;
+   else if(StringFind(state, "SCAN_COMPLETED") == 0) g_scanCompletedCount++;
+   else if(StringFind(state, "SCAN_DEFERRED") == 0) g_scanDeferredCount++;
+   else if(StringFind(state, "SCAN_ABORTED") == 0) g_scanAbortedCount++;
    Print(state);
    g_lastScanStateLogged = state;
    lastScanStateKey = key;
@@ -10886,6 +11244,54 @@ void XAU_LogScanState(string state)
 void XAU_LogScanAborted(string reason)
 {
    XAU_LogScanState("SCAN_ABORTED reason=" + reason);
+}
+
+void XAU_LogScanUnavailable(string reason)
+{
+   if(StringFind(reason,"INDICATOR_DEFERRED")==0)
+      XAU_LogScanState("SCAN_DEFERRED reason="+reason);
+   else
+      XAU_LogScanAborted(reason);
+}
+
+void XAU_LogLogicalScanStarted(datetime closedBar)
+{
+   if(closedBar<=0 || g_scanLogicalStartedBar==closedBar) return;
+   g_scanLogicalStartedBar=closedBar;
+   XAU_LogScanState("SCAN_STARTED");
+}
+
+void XAU_LogLogicalScanCompleted(datetime closedBar,string outcome)
+{
+   if(closedBar<=0 || g_scanLogicalCompletedBar==closedBar) return;
+   g_scanLogicalCompletedBar=closedBar;
+   XAU_LogScanState(outcome);
+}
+
+void XAU_MarkM10TerminalDecision(datetime closedBar,
+                                 ENUM_XAU_M10_TERMINAL_DECISION_STATE state,
+                                 string reason)
+{
+   if(closedBar<=0) return;
+   g_m10TerminalDecisionBar=closedBar;
+   g_m10TerminalDecisionState=state;
+   g_m10TerminalDecisionReason=reason;
+}
+
+bool XAU_M10BarHasTerminalDecision(datetime closedBar)
+{
+   return closedBar>0 &&
+          g_m10TerminalDecisionBar==closedBar &&
+          g_m10TerminalDecisionState!=M10_TERMINAL_NONE;
+}
+
+double XAU_CanonicalM10SetupScore(double confidence)
+{
+   // The M10 engine qualifies candidates from 55..100 confidence. Preserve
+   // the existing score scale used by the shared grade engine: 55 -> 5.0,
+   // 100 -> 8.0. This is a score authority, not a new strategy or bypass.
+   double norm=MathMax(0.0,MathMin(1.0,(confidence-55.0)/45.0));
+   return 5.0+norm*3.0;
 }
 
 // v6.17.21: single exit point for the recovery state machine -- called from
@@ -10902,6 +11308,539 @@ void XAU_RecoverySucceededIfMatch(string label)
    g_recoveryLabel     = "";
    g_recoveryStartedAt = 0;
    g_recoveryRetryAt   = 0;
+}
+
+// v6.25.20 -- bounded TRUE-M10 closed-bar snapshot authority.
+// CopyBuffer is called only with shift=1. target[0] mirrors target[1] solely
+// to preserve the legacy array contract; no forming-bar data is requested.
+void XAU_CopySeriesArray(double &dst[], double &src[])
+{
+   int n=ArraySize(src);
+   ArrayResize(dst,n);
+   ArraySetAsSeries(dst,true);
+   for(int i=0;i<n;i++) dst[i]=src[i];
+}
+
+bool XAU_RebuildSpecificStableIndicator(string label)
+{
+   int group=XAU_StableIndicatorGroup(label);
+   int oldHandle=INVALID_HANDLE;
+   int createError=0;
+   bool ok=false;
+   g_lastIndicatorRebuildAt=TimeCurrent();
+
+   ResetLastError();
+   if(label=="EMA_FAST_M10")
+   {
+      oldHandle=hEMAFast;
+      if(hEMAFast!=INVALID_HANDLE) IndicatorRelease(hEMAFast);
+      hEMAFast=INVALID_HANDLE;
+      hEMAFast=iMA(Symbol(),XAU_PRIMARY_DECISION_TF,InpEMAFast,0,MODE_EMA,PRICE_CLOSE);
+      ok=(hEMAFast!=INVALID_HANDLE);
+   }
+   else if(label=="EMA_SLOW_M10")
+   {
+      oldHandle=hEMASlow;
+      if(hEMASlow!=INVALID_HANDLE) IndicatorRelease(hEMASlow);
+      hEMASlow=INVALID_HANDLE;
+      hEMASlow=iMA(Symbol(),XAU_PRIMARY_DECISION_TF,InpEMASlow,0,MODE_EMA,PRICE_CLOSE);
+      ok=(hEMASlow!=INVALID_HANDLE);
+   }
+   else if(label=="RSI_M10")
+   {
+      oldHandle=hRSI;
+      if(hRSI!=INVALID_HANDLE) IndicatorRelease(hRSI);
+      hRSI=INVALID_HANDLE;
+      hRSI=iRSI(Symbol(),XAU_PRIMARY_DECISION_TF,InpRSIPeriod,PRICE_CLOSE);
+      ok=(hRSI!=INVALID_HANDLE);
+   }
+   else if(label=="ATR_M10")
+   {
+      oldHandle=hATR;
+      if(hATR!=INVALID_HANDLE) IndicatorRelease(hATR);
+      hATR=INVALID_HANDLE;
+      hATR=iATR(Symbol(),XAU_PRIMARY_DECISION_TF,InpATRPeriod);
+      ok=(hATR!=INVALID_HANDLE);
+   }
+   else if(StringFind(label,"BB_")==0)
+   {
+      oldHandle=hBBUpper;
+      if(hBBUpper!=INVALID_HANDLE) IndicatorRelease(hBBUpper);
+      hBBUpper=INVALID_HANDLE; hBBLower=INVALID_HANDLE; hBBMid=INVALID_HANDLE;
+      hBBUpper=iBands(Symbol(),XAU_PRIMARY_DECISION_TF,20,0,2.0,PRICE_CLOSE);
+      hBBLower=hBBUpper; hBBMid=hBBUpper;
+      ok=(hBBUpper!=INVALID_HANDLE);
+   }
+   else if(label=="RSI_M15")
+   {
+      oldHandle=hRSI_M15;
+      if(hRSI_M15!=INVALID_HANDLE) IndicatorRelease(hRSI_M15);
+      hRSI_M15=INVALID_HANDLE;
+      hRSI_M15=iRSI(Symbol(),PERIOD_M15,InpRSIPeriod,PRICE_CLOSE);
+      ok=(hRSI_M15!=INVALID_HANDLE);
+   }
+   else if(label=="STOCH_K_M10" || label=="STOCH_D_M10")
+   {
+      oldHandle=hStoch;
+      if(hStoch!=INVALID_HANDLE) IndicatorRelease(hStoch);
+      hStoch=INVALID_HANDLE;
+      hStoch=iStochastic(Symbol(),XAU_PRIMARY_DECISION_TF,14,3,3,MODE_SMA,STO_LOWHIGH);
+      ok=(hStoch!=INVALID_HANDLE);
+   }
+   createError=GetLastError();
+   if(ok && group>=0) g_entrySnapshotHandleGeneration[group]++;
+   PrintFormat("M10_SNAPSHOT_HANDLE_RECREATE | bar=%s | indicator=%s | oldHandle=%d | result=%s | generation=%d | createError=%d",
+               TimeToString(g_entrySnapshotStateBar,TIME_DATE|TIME_MINUTES),label,oldHandle,
+               ok?"OK":"FAILED",group>=0?g_entrySnapshotHandleGeneration[group]:0,createError);
+   return ok;
+}
+
+int XAU_StableIndicatorGroup(string label)
+{
+   if(label=="EMA_FAST_M10") return 0;
+   if(label=="EMA_SLOW_M10") return 1;
+   if(label=="RSI_M10") return 2;
+   if(label=="ATR_M10") return 3;
+   if(StringFind(label,"BB_")==0) return 4;
+   if(label=="RSI_M15") return 5;
+   if(label=="STOCH_K_M10" || label=="STOCH_D_M10") return 6;
+   return -1;
+}
+
+long XAU_CurrentMarketTickMsc()
+{
+   MqlTick tick;
+   if(SymbolInfoTick(Symbol(),tick) && tick.time_msc>0) return (long)tick.time_msc;
+   return (long)TimeCurrent()*1000;
+}
+
+bool XAU_StableSnapshotValueValid(double value)
+{
+   return MathIsValidNumber(value) && value!=EMPTY_VALUE;
+}
+
+bool XAU_CopyResultComplete(int returnedCount,int requestedCount)
+{
+   return requestedCount>0 && returnedCount==requestedCount;
+}
+
+bool XAU_SnapshotAttemptMayRetry(int attempt)
+{
+   // Retry remains bounded by closed-bar identity and one attempt per genuine
+   // market tick, not by an arbitrary four-attempt wall-clock counter.
+   return attempt>=0;
+}
+
+bool XAU_SnapshotTimestampMatches(datetime snapshotBar,datetime consumerBar)
+{
+   return snapshotBar>0 && snapshotBar==consumerBar;
+}
+
+int XAU_SnapshotRetryDelaySeconds(int attempt)
+{
+   if(attempt<=3) return 1;
+   if(attempt<=10) return 2;
+   return 5;
+}
+
+void XAU_ResetM10SnapshotState(datetime closedPrimaryBar)
+{
+   if(closedPrimaryBar==g_entrySnapshotStateBar) return;
+   if(g_entrySnapshotStateBar>0 && g_entrySnapshotState==M10_SNAPSHOT_WAITING &&
+      !g_entrySnapshotValid)
+   {
+      g_entrySnapshotSupersededBars++;
+      PrintFormat("M10_SNAPSHOT_SUPERSEDED | oldBar=%s | newBar=%s | attempts=%d | lastIndicator=%s | lastError=%d | action=ADVANCE_TO_NEW_CLOSED_BAR",
+                  TimeToString(g_entrySnapshotStateBar,TIME_DATE|TIME_MINUTES),
+                  TimeToString(closedPrimaryBar,TIME_DATE|TIME_MINUTES),g_entrySnapshotAttempt,
+                  g_entrySnapshotLastIndicator,g_entrySnapshotLastError);
+   }
+   g_entrySnapshotStateBar=closedPrimaryBar;
+   g_entrySnapshotState=M10_SNAPSHOT_IDLE;
+   g_entrySnapshotAttempt=0;
+   g_entrySnapshotNextRetryAt=0;
+   g_entrySnapshotRetryAt=0;
+   g_entrySnapshotLastAttemptTickMsc=0;
+   g_entrySnapshotFirstWaitAt=0;
+   g_entrySnapshotDeferredCounted=false;
+   g_entrySnapshotValid=false;
+   g_entrySnapshotClosedBar=0;
+   g_entrySnapshotLoadedAt=0;
+   g_entrySnapshotLastIndicator="";
+   g_entrySnapshotLastHandle=INVALID_HANDLE;
+   g_entrySnapshotLastBarsCalculated=-1;
+   g_entrySnapshotLastRequested=0;
+   g_entrySnapshotLastReturned=0;
+   g_entrySnapshotLastError=0;
+   for(int i=0;i<7;i++)
+   {
+      g_entrySnapshotHandleRebuilt[i]=false;
+      g_entrySnapshotHandleRebuildCount[i]=0;
+      g_entrySnapshot4807Streak[i]=0;
+      g_entrySnapshot4807FirstAt[i]=0;
+      g_entrySnapshot4807LastTickMsc[i]=0;
+      g_entrySnapshot4807ObservedHandle[i]=INVALID_HANDLE;
+   }
+   if(closedPrimaryBar>0) g_entrySnapshotLogicalBars++;
+}
+
+void XAU_RecordM10SnapshotFailure(string label,int handle,int barsCalculated,
+                                  int requested,int returnedCount,int errorCode)
+{
+   if(StringLen(g_entrySnapshotLastIndicator)>0) return;
+   g_entrySnapshotLastIndicator=label;
+   g_entrySnapshotLastHandle=handle;
+   g_entrySnapshotLastBarsCalculated=barsCalculated;
+   g_entrySnapshotLastRequested=requested;
+   g_entrySnapshotLastReturned=returnedCount;
+   g_entrySnapshotLastError=errorCode;
+}
+
+void XAU_ClearM10SnapshotAttemptDiagnostic()
+{
+   g_entrySnapshotLastIndicator="";
+   g_entrySnapshotLastHandle=INVALID_HANDLE;
+   g_entrySnapshotLastBarsCalculated=-1;
+   g_entrySnapshotLastRequested=0;
+   g_entrySnapshotLastReturned=0;
+   g_entrySnapshotLastError=0;
+}
+
+void XAU_ResetStable4807Episode(string label)
+{
+   int group=XAU_StableIndicatorGroup(label);
+   if(group<0) return;
+   g_entrySnapshot4807Streak[group]=0;
+   g_entrySnapshot4807FirstAt[group]=0;
+   g_entrySnapshot4807LastTickMsc[group]=0;
+   g_entrySnapshot4807ObservedHandle[group]=INVALID_HANDLE;
+}
+
+bool XAU_TryRepairWrongStableHandle(string label,int observedHandle,string phase)
+{
+   int group=XAU_StableIndicatorGroup(label);
+   if(group<0) return false;
+   if(g_entrySnapshotHandleRebuildCount[group]>=XAU_M10_MAX_WRONG_HANDLE_REBUILDS_PER_BAR)
+   {
+      PrintFormat("M10_SNAPSHOT_WRONG_HANDLE_REBUILD_LIMIT | bar=%s | indicator=%s | observedHandle=%d | phase=%s | rebuilds=%d | action=DEFER_SAME_BAR",
+                  TimeToString(g_entrySnapshotStateBar,TIME_DATE|TIME_MINUTES),label,observedHandle,
+                  phase,g_entrySnapshotHandleRebuildCount[group]);
+      return false;
+   }
+   g_entrySnapshotHandleRebuildCount[group]++;
+   g_entrySnapshotHandleRebuilt[group]=true;
+   bool rebuilt=XAU_RebuildSpecificStableIndicator(label);
+   if(rebuilt) g_entrySnapshotWrongHandleRecoveries++;
+   PrintFormat("M10_SNAPSHOT_WRONG_HANDLE_RECOVERY | bar=%s | indicator=%s | observedHandle=%d | phase=%s | rebuild=%s | rebuildAttempt=%d/%d",
+               TimeToString(g_entrySnapshotStateBar,TIME_DATE|TIME_MINUTES),label,observedHandle,
+               phase,rebuilt?"OK":"FAILED",g_entrySnapshotHandleRebuildCount[group],
+               XAU_M10_MAX_WRONG_HANDLE_REBUILDS_PER_BAR);
+   return rebuilt;
+}
+
+// v6.25.24: MT5/Wine can surface 4807 transiently while a newly closed bar's
+// indicator calculation is catching up even though the numeric handle remains
+// reusable. Do not destroy it on the first observation. Count only distinct
+// market ticks, require real elapsed time, then rebuild the one affected group
+// if the same handle still fails.
+bool XAU_HandlePersistentStable4807(string label,int observedHandle,string phase)
+{
+   int group=XAU_StableIndicatorGroup(label);
+   if(group<0) return false;
+
+   MqlTick tick;
+   long tickMsc=0;
+   if(SymbolInfoTick(Symbol(),tick)) tickMsc=tick.time_msc;
+   if(tickMsc<=0) tickMsc=(long)TimeCurrent()*1000;
+
+   if(g_entrySnapshot4807ObservedHandle[group]!=observedHandle ||
+      g_entrySnapshot4807FirstAt[group]<=0)
+   {
+      g_entrySnapshot4807ObservedHandle[group]=observedHandle;
+      g_entrySnapshot4807Streak[group]=0;
+      g_entrySnapshot4807FirstAt[group]=TimeCurrent();
+      g_entrySnapshot4807LastTickMsc[group]=0;
+   }
+
+   if(g_entrySnapshot4807LastTickMsc[group]!=tickMsc)
+   {
+      g_entrySnapshot4807LastTickMsc[group]=tickMsc;
+      g_entrySnapshot4807Streak[group]++;
+   }
+
+   int elapsed=(int)MathMax(0.0,(double)(TimeCurrent()-g_entrySnapshot4807FirstAt[group]));
+   g_entrySnapshotTransient4807Waits++;
+
+   if(g_entrySnapshot4807Streak[group]<XAU_M10_4807_PERSIST_TICKS || elapsed<XAU_M10_4807_PERSIST_SECONDS)
+   {
+      PrintFormat("M10_SNAPSHOT_4807_PATIENT_WAIT | bar=%s | indicator=%s | handle=%d | phase=%s | distinctTicks=%d | elapsedSec=%d | action=KEEP_HANDLE_DEFER_SAME_BAR",
+                  TimeToString(g_entrySnapshotStateBar,TIME_DATE|TIME_MINUTES),label,observedHandle,
+                  phase,g_entrySnapshot4807Streak[group],elapsed);
+      return false;
+   }
+
+   bool rebuilt=XAU_TryRepairWrongStableHandle(label,observedHandle,phase+"_PERSISTED");
+   if(rebuilt) g_entrySnapshotPersistent4807Recoveries++;
+   XAU_ResetStable4807Episode(label);
+   return rebuilt;
+}
+
+bool XAU_PreflightStableIndicator(int handle,int count,string label,ENUM_TIMEFRAMES tf)
+{
+   int requested=count-1;
+   if(count<2)
+   {
+      XAU_RecordM10SnapshotFailure(label,handle,-1,requested,-1,0);
+      return false;
+   }
+
+   if(handle==INVALID_HANDLE)
+   {
+      XAU_RecordM10SnapshotFailure(label,handle,-1,requested,-1,4807);
+      XAU_TryRepairWrongStableHandle(label,handle,"PREFLIGHT_INVALID_HANDLE");
+      return false;
+   }
+
+   bool seriesSynced=(bool)SeriesInfoInteger(Symbol(),tf,SERIES_SYNCHRONIZED);
+   int seriesBars=Bars(Symbol(),tf);
+   int minimumSeriesBars=(int)MathMax(100.0,(double)(count+InpEMASlow+10));
+   if(!seriesSynced || seriesBars<minimumSeriesBars)
+   {
+      MqlRates prime[];
+      ArraySetAsSeries(prime,true);
+      ResetLastError();
+      CopyRates(Symbol(),tf,0,minimumSeriesBars,prime);
+      int primeError=GetLastError();
+      XAU_RecordM10SnapshotFailure(label,handle,-1,requested,-1,primeError);
+      g_entrySnapshotDataWaits++;
+      return false;
+   }
+
+   ResetLastError();
+   int barsCalculated=BarsCalculated(handle);
+   int barsError=GetLastError();
+   if(barsCalculated<requested+XAU_M10_CLOSED_SHIFT)
+   {
+      XAU_RecordM10SnapshotFailure(label,handle,barsCalculated,requested,-1,barsError);
+      if(barsError==4807)
+         XAU_HandlePersistentStable4807(label,handle,"BARSCALCULATED_4807");
+      else
+         g_entrySnapshotDataWaits++;
+      return false;
+   }
+   return true;
+}
+
+bool XAU_CopyStableClosedBuffer(int handle,int buffer,int count,double &target[],
+                                string label,ENUM_TIMEFRAMES tf)
+{
+   if(count<2)
+   {
+      XAU_RecordM10SnapshotFailure(label,handle,-1,count-1,-1,0);
+      return false;
+   }
+
+   int requested=count-1;
+   if(handle==INVALID_HANDLE)
+   {
+      XAU_RecordM10SnapshotFailure(label,handle,-1,requested,-1,4807);
+      XAU_TryRepairWrongStableHandle(label,handle,"COPY_INVALID_HANDLE");
+      return false;
+   }
+
+   bool seriesSynced=(bool)SeriesInfoInteger(Symbol(),tf,SERIES_SYNCHRONIZED);
+   int seriesBars=Bars(Symbol(),tf);
+   int minimumSeriesBars=(int)MathMax(100.0,(double)(count+InpEMASlow+10));
+   if(!seriesSynced || seriesBars<minimumSeriesBars)
+   {
+      MqlRates prime[];
+      ArraySetAsSeries(prime,true);
+      ResetLastError();
+      CopyRates(Symbol(),tf,0,minimumSeriesBars,prime);
+      int primeError=GetLastError();
+      XAU_RecordM10SnapshotFailure(label,handle,-1,requested,-1,primeError);
+      g_entrySnapshotDataWaits++;
+      return false;
+   }
+
+   ResetLastError();
+   int barsCalculated=BarsCalculated(handle);
+   int barsError=GetLastError();
+   if(barsCalculated<requested+XAU_M10_CLOSED_SHIFT)
+   {
+      XAU_RecordM10SnapshotFailure(label,handle,barsCalculated,requested,-1,barsError);
+      if(barsError==4807)
+         XAU_HandlePersistentStable4807(label,handle,"COPY_PREFLIGHT_4807");
+      else
+         g_entrySnapshotDataWaits++;
+      return false;
+   }
+
+   double closed[];
+   ArrayResize(closed,requested);
+   ArraySetAsSeries(closed,true);
+   ResetLastError();
+   int returnedCount=CopyBuffer(handle,buffer,XAU_M10_CLOSED_SHIFT,requested,closed);
+   int copyError=GetLastError();
+   if(!XAU_CopyResultComplete(returnedCount,requested))
+   {
+      XAU_RecordM10SnapshotFailure(label,handle,barsCalculated,requested,returnedCount,copyError);
+      if(copyError==4807)
+         XAU_HandlePersistentStable4807(label,handle,"COPYBUFFER_4807");
+      else
+         g_entrySnapshotDataWaits++;
+      return false;
+   }
+
+   for(int i=0;i<requested;i++)
+   {
+      if(!XAU_StableSnapshotValueValid(closed[i]))
+      {
+         XAU_RecordM10SnapshotFailure(label,handle,barsCalculated,requested,returnedCount,0);
+         g_entrySnapshotDataWaits++;
+         return false;
+      }
+   }
+
+   ArrayResize(target,count);
+   ArraySetAsSeries(target,true);
+   for(int j=1;j<count;j++) target[j]=closed[j-1];
+   target[0]=target[1];
+   XAU_ResetStable4807Episode(label);
+   XAU_ResetIndicatorFailStreak(label);
+   XAU_RecoverySucceededIfMatch(label);
+   return true;
+}
+
+bool XAU_LoadStableEntrySnapshot(datetime closedPrimaryBar)
+{
+   if(closedPrimaryBar<=0)
+   {
+      g_lastSkipReason="M10_SNAPSHOT_WAIT: no fully closed M10 bar is available";
+      return false;
+   }
+
+   XAU_ResetM10SnapshotState(closedPrimaryBar);
+   if(g_entrySnapshotValid && g_entrySnapshotClosedBar==closedPrimaryBar &&
+      g_entrySnapshotState==M10_SNAPSHOT_READY)
+   {
+      g_entrySnapshotCacheReuses++;
+      return true;
+   }
+
+   // Compatibility recovery: no transient path in v6.25.22 sets FAILED_FINAL.
+   if(g_entrySnapshotState==M10_SNAPSHOT_FAILED_FINAL)
+      g_entrySnapshotState=M10_SNAPSHOT_WAITING;
+   if(g_entrySnapshotNextRetryAt>TimeCurrent()) return false;
+
+   // Strategy Tester indicators calculate on market ticks, not repeated timer
+   // calls within the same tick. This guard prevents retry inflation without
+   // new calculation opportunity in both tester and live terminals.
+   long tickMsc=XAU_CurrentMarketTickMsc();
+   if(g_entrySnapshotState==M10_SNAPSHOT_WAITING &&
+      g_entrySnapshotLastAttemptTickMsc>0 &&
+      tickMsc==g_entrySnapshotLastAttemptTickMsc)
+      return false;
+   g_entrySnapshotLastAttemptTickMsc=tickMsc;
+
+   g_entrySnapshotAttempt++;
+   g_entrySnapshotPreparationAttempts++;
+   g_entrySnapshotState=M10_SNAPSHOT_WAITING;
+   if(g_entrySnapshotFirstWaitAt<=0) g_entrySnapshotFirstWaitAt=TimeCurrent();
+   XAU_ClearM10SnapshotAttemptDiagnostic();
+
+   bool preflightReady=true;
+   if(!XAU_PreflightStableIndicator(hEMAFast,12,"EMA_FAST_M10",XAU_PRIMARY_DECISION_TF)) preflightReady=false;
+   if(!XAU_PreflightStableIndicator(hEMASlow,12,"EMA_SLOW_M10",XAU_PRIMARY_DECISION_TF)) preflightReady=false;
+   if(!XAU_PreflightStableIndicator(hRSI,5,"RSI_M10",XAU_PRIMARY_DECISION_TF)) preflightReady=false;
+   if(!XAU_PreflightStableIndicator(hATR,5,"ATR_M10",XAU_PRIMARY_DECISION_TF)) preflightReady=false;
+   if(!XAU_PreflightStableIndicator(hBBUpper,12,"BB_UPPER_M10",XAU_PRIMARY_DECISION_TF)) preflightReady=false;
+   if(!XAU_PreflightStableIndicator(hRSI_M15,3,"RSI_M15",PERIOD_M15)) preflightReady=false;
+   if(!XAU_PreflightStableIndicator(hStoch,3,"STOCH_K_M10",XAU_PRIMARY_DECISION_TF)) preflightReady=false;
+
+   double tFast[],tSlow[],tRsi[],tAtr[],tBbU[],tBbL[],tBbM[];
+   double tRsi15[],tStochK[],tStochD[];
+   bool complete=preflightReady;
+   if(complete && !XAU_CopyStableClosedBuffer(hEMAFast,0,12,tFast,"EMA_FAST_M10",XAU_PRIMARY_DECISION_TF)) complete=false;
+   if(complete && !XAU_CopyStableClosedBuffer(hEMASlow,0,12,tSlow,"EMA_SLOW_M10",XAU_PRIMARY_DECISION_TF)) complete=false;
+   if(complete && !XAU_CopyStableClosedBuffer(hRSI,0,5,tRsi,"RSI_M10",XAU_PRIMARY_DECISION_TF)) complete=false;
+   if(complete && !XAU_CopyStableClosedBuffer(hATR,0,5,tAtr,"ATR_M10",XAU_PRIMARY_DECISION_TF)) complete=false;
+   if(complete && !XAU_CopyStableClosedBuffer(hBBUpper,1,12,tBbU,"BB_UPPER_M10",XAU_PRIMARY_DECISION_TF)) complete=false;
+   if(complete && !XAU_CopyStableClosedBuffer(hBBUpper,2,12,tBbL,"BB_LOWER_M10",XAU_PRIMARY_DECISION_TF)) complete=false;
+   if(complete && !XAU_CopyStableClosedBuffer(hBBUpper,0,12,tBbM,"BB_MID_M10",XAU_PRIMARY_DECISION_TF)) complete=false;
+   if(complete && !XAU_CopyStableClosedBuffer(hRSI_M15,0,3,tRsi15,"RSI_M15",PERIOD_M15)) complete=false;
+   if(complete && !XAU_CopyStableClosedBuffer(hStoch,0,3,tStochK,"STOCH_K_M10",XAU_PRIMARY_DECISION_TF)) complete=false;
+   if(complete && !XAU_CopyStableClosedBuffer(hStoch,1,3,tStochD,"STOCH_D_M10",XAU_PRIMARY_DECISION_TF)) complete=false;
+
+   if(!complete)
+   {
+      if(!g_entrySnapshotDeferredCounted)
+      {
+         g_entrySnapshotDeferredCounted=true;
+         g_entrySnapshotDeferredBars++;
+         g_scanDeferredCount++;
+      }
+      int retryDelay=XAU_SnapshotRetryDelaySeconds(g_entrySnapshotAttempt);
+      g_entrySnapshotNextRetryAt=TimeCurrent()+retryDelay;
+      g_entrySnapshotRetryAt=g_entrySnapshotNextRetryAt;
+      string failureClass=(g_entrySnapshotLastError==4807)?"WRONG_HANDLE_REPAIR_PENDING":"DATA_CALCULATION_PENDING";
+      g_lastSkipReason=StringFormat("M10_SNAPSHOT_DEFERRED: bar=%s indicator=%s class=%s error=%d attempt=%d",
+                                    TimeToString(closedPrimaryBar,TIME_DATE|TIME_MINUTES),
+                                    g_entrySnapshotLastIndicator,failureClass,
+                                    g_entrySnapshotLastError,g_entrySnapshotAttempt);
+      bool diagnosticLog=(g_entrySnapshotAttempt<=4 || g_entrySnapshotAttempt%10==0 || g_entrySnapshotLastError==4807);
+      if(diagnosticLog)
+      {
+         PrintFormat("M10_SNAPSHOT_DEFERRED | bar=%s | indicator=%s | class=%s | handle=%d | BarsCalculated=%d | requested=%d | returned=%d | GetLastError=%d | attempt=%d | waitedSec=%d | nextRetry=%s | terminal=false",
+                     TimeToString(closedPrimaryBar,TIME_DATE|TIME_MINUTES),g_entrySnapshotLastIndicator,
+                     failureClass,g_entrySnapshotLastHandle,g_entrySnapshotLastBarsCalculated,
+                     g_entrySnapshotLastRequested,g_entrySnapshotLastReturned,g_entrySnapshotLastError,
+                     g_entrySnapshotAttempt,(int)(TimeCurrent()-g_entrySnapshotFirstWaitAt),
+                     TimeToString(g_entrySnapshotNextRetryAt,TIME_SECONDS));
+      }
+      return false;
+   }
+
+   XAU_CopySeriesArray(bufEMAFast,tFast);
+   XAU_CopySeriesArray(bufEMASlow,tSlow);
+   XAU_CopySeriesArray(bufRSI,tRsi);
+   XAU_CopySeriesArray(bufATR,tAtr);
+   XAU_CopySeriesArray(bufBBUpper,tBbU);
+   XAU_CopySeriesArray(bufBBLower,tBbL);
+   XAU_CopySeriesArray(bufBBMid,tBbM);
+   XAU_CopySeriesArray(bufRSI_M15,tRsi15);
+   XAU_CopySeriesArray(bufStochK,tStochK);
+   XAU_CopySeriesArray(bufStochD,tStochD);
+
+   ArrayResize(bufEMAFast_H4,3); ArraySetAsSeries(bufEMAFast_H4,true);
+   ArrayResize(bufEMASlow_H4,3); ArraySetAsSeries(bufEMASlow_H4,true);
+   for(int k=0;k<3;k++)
+   {
+      bufEMAFast_H4[k]=bufEMAFast[k];
+      bufEMASlow_H4[k]=bufEMASlow[k];
+   }
+   g_htfEmaFastLastGood=bufEMAFast_H4[1];
+   g_htfEmaSlowLastGood=bufEMASlow_H4[1];
+   g_htfEmaLastGoodAt=TimeCurrent();
+   g_htfIndicatorState="HEALTHY_SHARED_PRIMARY_M10";
+
+   g_entrySnapshotValid=true;
+   g_entrySnapshotClosedBar=closedPrimaryBar;
+   g_entrySnapshotLoadedAt=TimeCurrent();
+   g_entrySnapshotRetryAt=0;
+   g_entrySnapshotNextRetryAt=0;
+   g_entrySnapshotState=M10_SNAPSHOT_READY;
+   g_entrySnapshotReadyBars++;
+   for(int readyGroup=0;readyGroup<7;readyGroup++)
+   {
+      g_entrySnapshotFinalFailureBars[readyGroup]=0;
+      g_entrySnapshotLastFinalFailureBar[readyGroup]=0;
+   }
+   PrintFormat("M10_SNAPSHOT_READY | bar=%s | attempts=%d | waitedSec=%d | wrongHandleRecoveries=%d | transient4807Waits=%d | allRequiredIndicators=COMPLETE | closedShift=%d | immutable=true",
+               TimeToString(closedPrimaryBar,TIME_DATE|TIME_MINUTES),g_entrySnapshotAttempt,
+               (int)(TimeCurrent()-g_entrySnapshotFirstWaitAt),g_entrySnapshotWrongHandleRecoveries,
+               g_entrySnapshotTransient4807Waits,XAU_M10_CLOSED_SHIFT);
+   return true;
 }
 
 bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &target[], string label)
@@ -10975,7 +11914,7 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
    // blip and a transient, unrelated RSI_M15 blip no longer combine toward the
    // same reload threshold and rebuild every handle over what was, at most,
    // ever a single indicator's problem.
-   bool staleHandle = (handle == INVALID_HANDLE);
+   bool staleHandle = (handle == INVALID_HANDLE || err == 4807);
    int indicatorFailDecaySec = 45;
    int failIdx = XAU_IndicatorFailStreakIndex(label, true);
    if(failIdx >= 0)
@@ -11052,12 +11991,12 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
    int minTransientPatienceSec = 30;
    int streakSecs = (failIdx >= 0 && g_indFailStreakStart[failIdx] > 0)
                     ? (int)(TimeCurrent() - g_indFailStreakStart[failIdx]) : 0;
-   bool transientRetryOnly = (!staleHandle && err == 4807 &&
+   bool transientRetryOnly = (!staleHandle && err == 4806 &&
                               streakSecs < minTransientPatienceSec &&
                               labelFailCount < transientCeilingFails);
    if(transientRetryOnly)
    {
-      g_lastSkipReason = StringFormat("INDICATOR_TRANSIENT_4807: %s got %d/%d (known MT5 new-bar-boundary quirk, retrying next tick, no rebuild, %d/%d before ceiling, %ds/%ds streak age)",
+      g_lastSkipReason = StringFormat("INDICATOR_DATA_PENDING_4806: %s got %d/%d (indicator calculation pending; retrying next tick, no rebuild, %d/%d before ceiling, %ds/%ds streak age)",
                                       label, got, count, labelFailCount, transientCeilingFails, streakSecs, minTransientPatienceSec);
       return false;
    }
@@ -14471,6 +15410,19 @@ XAU_M10SignalDecision XAU_EvaluateM10SignalDecision()
    d.closedBarTime = g_m10Snapshot.closedBarTime;
    d.dataFreshnessState = g_m10Snapshot.freshnessState;
 
+   if(!g_entrySnapshotValid ||
+      !XAU_SnapshotTimestampMatches(g_entrySnapshotClosedBar,g_m10Snapshot.closedBarTime))
+   {
+      d.decisionType=M10_DECISION_DATA_UNAVAILABLE;
+      d.closedBarTime=g_entrySnapshotClosedBar;
+      d.dataFreshnessState="UNAVAILABLE";
+      d.exactReason=StringFormat("authoritative M10 snapshot unavailable or timestamp mismatch snapshot=%s evidence=%s",
+                                  TimeToString(g_entrySnapshotClosedBar,TIME_DATE|TIME_MINUTES),
+                                  TimeToString(g_m10Snapshot.closedBarTime,TIME_DATE|TIME_MINUTES));
+      g_m10Decision=d;
+      return d;
+   }
+
    if(!g_m10Snapshot.complete)
    {
       d.decisionType = M10_DECISION_DATA_UNAVAILABLE;
@@ -14539,20 +15491,34 @@ XAU_M10SignalDecision XAU_EvaluateM10SignalDecision()
       }
    }
    else if(oppositeScore > dominantScore && oppositeScore >= 55.0 &&
-           (td.oppositeReclaim || td.oppositeRetestHeld || td.oppositeDisplacement))
+           td.oppositeEntryAllowed)
    {
-      int oppositeDir = -dominant;
-      d.preferredDirection = oppositeDir;
-      d.confidence = oppositeScore;
-      d.decisionType = M10_DECISION_TRANSITION_WATCH; // real reversal evidence, but the normal signal/FinalEntryArbiter path -- not this function -- decides when to actually open it
-      d.exactReason = StringFormat("opposite case building (score=%.1f vs dominant=%.1f) with real reaction evidence -- preferred direction changing, normal entry path must still confirm", oppositeScore, dominantScore);
+      // v6.25.19 AUTHORITY UNIFICATION: the existing Adaptive Transition
+      // Engine already completed its persistence/value/reset checks and
+      // declared the opposite entry allowed. The old code then labelled the
+      // same idea TRANSITION_WATCH, so the canonical M10 endorsement gate
+      // always vetoed ADAPTIVE_REVERSAL_RECLAIM -- a dead execution path.
+      // Make the two existing authorities agree; the candidate still passes
+      // every ordinary structure/timing/freshness/news/owner/final gate.
+      int oppositeDir=-dominant;
+      d.preferredDirection=oppositeDir;
+      d.confidence=oppositeScore;
+      d.decisionType=(oppositeDir==1)?M10_DECISION_BUY_CANDIDATE:M10_DECISION_SELL_CANDIDATE;
+      d.exactReason=StringFormat("confirmed opposite case wins (score=%.1f vs dominant=%.1f); Adaptive Transition already marked oppositeEntryAllowed=true",oppositeScore,dominantScore);
+   }
+   else if(oppositeScore > dominantScore && oppositeScore >= 55.0)
+   {
+      d.decisionType=M10_DECISION_TRANSITION_WATCH;
+      d.preferredDirection=-dominant;
+      d.confidence=oppositeScore;
+      d.exactReason=StringFormat("opposite score cleared 55 (buy=%.1f sell=%.1f) but Adaptive Transition has not yet allowed entry; keep watching",d.buyCaseScore,d.sellCaseScore);
    }
    else
    {
       d.decisionType = (dominantScore >= oppositeScore) ? M10_DECISION_TREND_CONTINUATION_NO_ENTRY_YET : M10_DECISION_NO_VALID_SIGNAL;
       d.preferredDirection = (d.decisionType == M10_DECISION_TREND_CONTINUATION_NO_ENTRY_YET) ? dominant : 0;
       d.confidence = MathMax(dominantScore, oppositeScore);
-      d.exactReason = StringFormat("neither case cleared the 55.0 bar (buy=%.1f sell=%.1f)", d.buyCaseScore, d.sellCaseScore);
+      d.exactReason = StringFormat("no executable directional case yet (buy=%.1f sell=%.1f threshold=55.0)", d.buyCaseScore, d.sellCaseScore);
    }
 
    // v6.25.1 owner directive 2026-07-17 -- DEGRADED evidence (one completed
@@ -16110,7 +17076,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
    bool   h1Stretched = h1Distance > 1.5;
 
    // v6.1.3 — HTF (context-TF / M30) trend direction for anti-trend veto
-   // bufEMAFast_H4 / bufEMASlow_H4 are loaded from InpContextTF (default M30).
+   // bufEMAFast_H4 / bufEMASlow_H4 are loaded from InpContextTF (locked M10 in this build).
    double htfF = (ArraySize(bufEMAFast_H4) >= 2) ? bufEMAFast_H4[1] : 0.0;
    double htfS = (ArraySize(bufEMASlow_H4) >= 2) ? bufEMASlow_H4[1] : 0.0;
    double htfSpread = (htfS > 0) ? (htfF - htfS) / htfS : 0;
@@ -16179,7 +17145,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
       // blocks it, repeat forever" deadlock. htfBullConsensus/htfBearConsensus is
       // an EMA-vs-EMA CROSS measure (h1TrendDir/htfTrendDir) -- slow, lagging.
       // SmartGuard's own downstream confirmation (TFDirectionByEMA, used by
-      // AdaptiveXAUConfirm for M5/M15/M30/H1) is a PRICE-vs-single-EMA measure --
+      // AdaptiveXAUConfirm for M5/M10/M15/H1) is a PRICE-vs-single-EMA measure --
       // fast, current. These two measures of "trend direction" can disagree for
       // hours after a real reversal (price crosses the EMA well before the two
       // EMAs themselves cross). When Active Direction is neutral (BOTH_ALLOWED --
@@ -16189,7 +17155,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
       // `dir`, this candidate is virtually guaranteed to die at SmartGuard, and
       // will keep dying the SAME way every cycle since htfBullConsensus won't
       // move for hours. Defer to the fresher, decisive read instead --
-      // consistent with this codebase's own stated design ("M5/M15/M30 carry the
+      // consistent with this build's TRUE-M10 design ("M5/M10/M15 carry the
       // hard decision; H1 is soft context", see TFDirectionByEMA's own comment).
       // v6.17.9 (Case C): also apply during TRANSITION_WAIT, not just BOTH_ALLOWED.
       // TRANSITION_WAIT only pauses the specific HTF-aligned/"weakening" side at
@@ -16198,14 +17164,14 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
       // and it must actively search both directions rather than freeze.
       if(g_activeDirection == DIRECTION_BOTH_ALLOWED || g_activeDirection == DIRECTION_TRANSITION_WAIT)
       {
-         string freshWhyM15 = "", freshWhyM30 = "";
+         string freshWhyM15 = "", freshWhyM10 = "";
          int freshM15Dir = TFDirectionByEMA(dir, PERIOD_M15, 0.05, freshWhyM15);
-         int freshM30Dir = TFDirectionByEMA(dir, InpContextTF, 0.05, freshWhyM30);
-         if(freshM15Dir == -dir && freshM30Dir == -dir)
+         int freshM10Dir = TFDirectionByEMA(dir, InpContextTF, 0.05, freshWhyM10);
+         if(freshM15Dir == -dir && freshM10Dir == -dir)
          {
             Print("TREND_PULLBACK DIRECTION OVERRIDE: htfBullConsensus/htfBearConsensus picked ",
-                  dir == 1 ? "BUY" : "SELL", " but fresh M15+M30 price-position reads both disagree (",
-                  freshWhyM15, " | ", freshWhyM30, ") -- deferring to the faster, current reads to avoid a repeat SmartGuard block loop.");
+                  dir == 1 ? "BUY" : "SELL", " but fresh M15+M10 price-position reads both disagree (",
+                  freshWhyM15, " | ", freshWhyM10, ") -- deferring to the faster, current reads to avoid a repeat SmartGuard block loop.");
             dir = -dir;
          }
       }
@@ -16233,16 +17199,16 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
       // BUY at lower BB -- same Active-Direction exception as the SELL branch below.
       double s = 0; int dir = 0;
       bool rangeRevBuyDirConfirmed = (g_activeDirection == DIRECTION_BUY_ONLY);
-      // v6.17.9: same stale-htfTrendDir-vs-fresh-M15/M30 gap fixed in
-      // TREND_PULLBACK -- when Active Direction is neutral, a fresh M15+M30
+      // v6.17.9: same stale-htfTrendDir-vs-fresh-M15/M10 gap fixed in
+      // TREND_PULLBACK -- when Active Direction is neutral, a fresh M15+M10
       // bullish read can unlock this even if the slow h1TrendDir hasn't
       // turned yet.
       bool rangeRevBuyFreshOverride = false;
       if(g_activeDirection == DIRECTION_BOTH_ALLOWED && h1TrendDir < 0)
       {
-         string rrWhy15 = "", rrWhy30 = "";
+         string rrWhy15 = "", rrWhy10 = "";
          if(TFDirectionByEMA(1, PERIOD_M15, 0.05, rrWhy15) == 1 &&
-            TFDirectionByEMA(1, InpContextTF, 0.05, rrWhy30) == 1)
+            TFDirectionByEMA(1, InpContextTF, 0.05, rrWhy10) == 1)
             rangeRevBuyFreshOverride = true;
       }
       if(close1 <= bbL + (bbU - bbL) * 0.2 && !h1Stretched &&
@@ -16270,9 +17236,9 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
       bool rangeRevSellFreshOverride = false;
       if(g_activeDirection == DIRECTION_BOTH_ALLOWED && (h1TrendDir > 0 || htfBullConsensus))
       {
-         string rrWhy15b = "", rrWhy30b = "";
+         string rrWhy15b = "", rrWhy10b = "";
          if(TFDirectionByEMA(-1, PERIOD_M15, 0.05, rrWhy15b) == -1 &&
-            TFDirectionByEMA(-1, InpContextTF, 0.05, rrWhy30b) == -1)
+            TFDirectionByEMA(-1, InpContextTF, 0.05, rrWhy10b) == -1)
             rangeRevSellFreshOverride = true;
       }
       if(close1 >= bbU - (bbU - bbL) * 0.2 && !h1Stretched &&
@@ -16628,7 +17594,14 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
 //| Sizes DECREASE by InpPyramidSizeMulti each add (no martingale).  |
 //+------------------------------------------------------------------+
 datetime lastPyramidAddTime = 0;
-double   lastPyramidPx     = 0.0;        // v5.3.0 — tracks last add price for ATR-spacing check
+double   lastPyramidPx     = 0.0;        // campaign-scoped last add price for netting/hedging timing anchor
+long     lastPyramidCampaignId = 0;       // prevents a closed campaign's add price leaking into the next campaign
+
+double XAU_EffectivePyramidSpacingATR()
+{
+   return MathMax(InpPyramidMinATR,InpPyramidMinSpaceATR);
+}
+
 // v5.3.1 — last entry's grade + score (used by adverse-pyramid signal-strength gate
 // and by per-position high-grade ratchet looseness).
 string   g_lastEntryGrade  = "B";
@@ -16979,8 +17952,9 @@ void CheckPyramidOpportunity()
    ulong origTicket = 0;
    ulong origPositionId = 0;
    datetime origTime = 0;
+   datetime newestTime = 0;
    long origType = -1;
-   double origPx = 0.0, origTP = 0.0;
+   double origPx = 0.0, origTP = 0.0, newestPx = 0.0;
    for(int i=0; i<PositionsTotal(); i++)
    {
       ulong tk=PositionGetTicket(i);
@@ -16989,6 +17963,7 @@ void CheckPyramidOpportunity()
       openCount++;
       if(posInfo.PositionType()==POSITION_TYPE_BUY) totalBuys++; else totalSells++;
       datetime pt=(datetime)PositionGetInteger(POSITION_TIME);
+      if(newestTime==0 || pt>=newestTime) { newestTime=pt; newestPx=posInfo.PriceOpen(); }
       if(origTime==0 || pt<origTime)
       {
          origTime=pt; origTicket=tk; origType=posInfo.PositionType();
@@ -16999,12 +17974,25 @@ void CheckPyramidOpportunity()
    }
    if(origTicket==0 || openCount==0 || (totalBuys>0 && totalSells>0)) return;
 
-   int configuredAdds=MathMax(0,MathMin(InpMaxPyramidAdds,InpMaxOpenTrades-1));
-   int addsAlready=MathMax(0,openCount-1);
-   if(addsAlready>=configuredAdds || openCount>=InpMaxOpenTrades) return;
-
    bool isBuy=(origType==POSITION_TYPE_BUY);
    int dir=isBuy?1:-1;
+   int campaignSlot=XAU_CampaignSlot(dir);
+   if(!g_campaign[campaignSlot].active || g_campaign[campaignSlot].invalidated ||
+      g_campaign[campaignSlot].direction!=dir || g_campaign[campaignSlot].activePositionCount<=0 ||
+      g_campaign[campaignSlot].initialCoreTicket==0)
+   {
+      XAU_PyramidGateReject(dir,"MECHANICAL_FAILURE ACTIVE_CORE_CAMPAIGN_IDENTITY_INVALID");
+      return;
+   }
+   if(g_campaign[campaignSlot].initialCoreTicket!=origPositionId)
+   {
+      XAU_PyramidGateReject(dir,StringFormat("MECHANICAL_FAILURE CORE_ID_MISMATCH campaign_core=%I64u live_core=%I64u",
+                                             g_campaign[campaignSlot].initialCoreTicket,origPositionId));
+      return;
+   }
+   int configuredAdds=MathMax(0,MathMin(InpMaxPyramidAdds,InpMaxOpenTrades-1));
+   int addsAlready=MathMax(0,g_campaign[campaignSlot].additionCount);
+   if(addsAlready>=configuredAdds || g_campaign[campaignSlot].activePositionCount>=InpMaxOpenTrades) return;
    if(!PositionSelectByTicket(origTicket))
    {
       XAU_PyramidGateReject(dir, "MECHANICAL_FAILURE CORE_POSITION_NOT_LIVE");
@@ -17029,20 +18017,56 @@ void CheckPyramidOpportunity()
    bool evidenceFresh = !pyramidTransition.evidenceDataUnavailable && timingSourceBar > 0 &&
                         (timingSourceBar == latestClosedBar || timingSourceBar == previousClosedBar);
 
-   double spacingAnchor=lastPyramidPx>0.0?lastPyramidPx:origPx;
+   // Campaign-scoped timing anchor. In hedging mode newestPx is the latest
+   // live leg; in netting mode lastPyramidPx preserves the actual prior add
+   // price. The campaign ID prevents an old closed campaign from leaking.
+   double spacingAnchor=(lastPyramidCampaignId==g_campaign[campaignSlot].campaignId && lastPyramidPx>0.0)
+                        ? lastPyramidPx : (newestPx>0.0?newestPx:origPx);
    double favourableMove=dir>0?entryPx-spacingAnchor:spacingAnchor-entryPx;
    double moveATR=favourableMove/atr;
+   // One canonical anti-clustering input. InpPyramidMinSpaceATR is the visible
+   // campaign-spacing contract; the older InpPyramidMinATR remains a legacy
+   // lower bound only so no hidden setting can silently weaken the visible one.
+   double requiredPyramidSpacingATR=XAU_EffectivePyramidSpacingATR();
    ENUM_XAU_TIMING_STATE pyramidTimingState = XAU_BucketTiming(pyramidTransition);
    bool timingDirectionReady = pyramidTransition.dominantDirection == dir;
    bool cleanClosedBarTiming = timingDirectionReady && pyramidTimingState == TIMING_READY &&
                                !pyramidTransition.reversalWaitForPullback &&
                                pyramidTransition.moveAlreadyConsumedPct < 90.0;
    bool favourableSpacingReady = timingDirectionReady && InpPyramidOnTrend &&
-                                 favourableMove >= atr*InpPyramidMinATR;
-   // 0.65 ATR is no longer a standalone automatic blocker: a genuine fresh
-   // closed-bar TIMING_READY continuation/retest can pass before that fixed
-   // distance, while a favourable spaced continuation also remains valid.
-   bool timingPass = evidenceFresh && (cleanClosedBarTiming || favourableSpacingReady);
+                                 favourableMove >= atr*requiredPyramidSpacingATR;
+   // v6.25.22: an add needs BOTH a later closed-bar continuation decision and
+   // favourable spacing. The old OR allowed adds 0-4 seconds after the core.
+   bool timingPass = evidenceFresh && cleanClosedBarTiming && favourableSpacingReady;
+
+   datetime pyramidGapAnchor=(lastPyramidCampaignId==g_campaign[campaignSlot].campaignId && lastPyramidAddTime>0)
+                              ? lastPyramidAddTime : origTime;
+   int pyramidGapElapsed=(int)(TimeCurrent()-pyramidGapAnchor);
+   if(pyramidGapElapsed<InpPyramidMinGapSec)
+   {
+      XAU_PyramidGateReject(dir,StringFormat("MIN_GAP_NOT_MET elapsed=%d required=%d anchor=%s",
+                                             pyramidGapElapsed,InpPyramidMinGapSec,
+                                             TimeToString(pyramidGapAnchor,TIME_DATE|TIME_SECONDS)));
+      return;
+   }
+   datetime evidenceCloseAt=timingSourceBar+PeriodSeconds(XAU_PRIMARY_DECISION_TF);
+   if(evidenceCloseAt<=pyramidGapAnchor)
+   {
+      XAU_PyramidGateReject(dir,StringFormat("NO_POST_ENTRY_CLOSED_BAR evidenceBar=%s evidenceClose=%s anchor=%s",
+                                             TimeToString(timingSourceBar,TIME_DATE|TIME_MINUTES),
+                                             TimeToString(evidenceCloseAt,TIME_DATE|TIME_SECONDS),
+                                             TimeToString(pyramidGapAnchor,TIME_DATE|TIME_SECONDS)));
+      return;
+   }
+   if(g_campaign[campaignSlot].lastApprovedPyramidEvidenceBar>0 &&
+      timingSourceBar<=g_campaign[campaignSlot].lastApprovedPyramidEvidenceBar)
+   {
+      XAU_PyramidGateReject(dir,StringFormat("EVIDENCE_BAR_ALREADY_USED source_bar=%s last_used=%s restart_safe=true",
+                                             TimeToString(timingSourceBar,TIME_DATE|TIME_MINUTES),
+                                             TimeToString(g_campaign[campaignSlot].lastApprovedPyramidEvidenceBar,
+                                                          TIME_DATE|TIME_MINUTES)));
+      return;
+   }
 
    string candidateEpisodeId = StringFormat("%s|%s|ADD%d|BAR%I64d",
       XAU_CampaignIdText(g_campaign[XAU_CampaignSlot(dir)].campaignId),
@@ -17058,7 +18082,7 @@ void CheckPyramidOpportunity()
    if(!timingPass)
    {
       XAU_PyramidGateReject(dir, StringFormat("TIMING_FAILED episode=%s timing_state=%s moveATR=%.3f requiredATR=%.3f dominant=%s source_bar=%s",
-         candidateEpisodeId, XAU_TimingStateName(pyramidTimingState), moveATR, InpPyramidMinATR,
+         candidateEpisodeId, XAU_TimingStateName(pyramidTimingState), moveATR, requiredPyramidSpacingATR,
          pyramidTransition.dominantDirection==1?"BUY":pyramidTransition.dominantDirection==-1?"SELL":"NONE",
          TimeToString(timingSourceBar, TIME_DATE|TIME_MINUTES)));
       return;
@@ -17190,8 +18214,8 @@ void CheckPyramidOpportunity()
                            addsAlready+1, configuredAdds, XAU_TimingStateName(pyramidTimingState),
                            moveATR, pyramidTransition.exhaustionProbability);
 
-   // OwnerEntryPermission remains here only for the owner breakout BLOCK/OFF
-   // policy. It contains no grade/AI/pressure/structure/timing opinion.
+   // OwnerEntryPermission enforces only the owner session/location policy and
+   // normal breakout routing. It contains no grade/AI/pressure/structure/timing opinion.
    // The direction reservation below is broker/cross-instance integrity.
    // v6.25.0 owner directive 2026-07-17 -- same canonical direction-
    // exclusivity guard as every other broker-send path. A pyramid add is
@@ -17199,7 +18223,7 @@ void CheckPyramidOpportunity()
    // defense-in-depth (should never actually trigger), not a new
    // restriction on pyramiding itself.
    string ownerPyramidFinalBlock = "";
-   if(!XAU_OwnerEntryPermission("FINAL_EXECUTION", "PYRAMID", pyramidGrade, ownerPyramidFinalBlock))
+   if(!XAU_OwnerEntryPermission("FINAL_EXECUTION", "PYRAMID", pyramidGrade, ownerPyramidFinalBlock, dir, "PYRAMID"))
       return;
 
    string pyramidReservationId = "";
@@ -17284,7 +18308,32 @@ void CheckPyramidOpportunity()
 
    g_alignedCandidates[2].firstCandidateTime = 0;
    lastPyramidAddTime=TimeCurrent();
-   lastPyramidPx=entryPx;
+   lastPyramidPx=pyLiveOpen>0.0?pyLiveOpen:entryPx;
+   lastPyramidCampaignId=g_campaign[campaignSlot].campaignId;
+   g_campaign[campaignSlot].lastApprovedPyramidEvidenceBar=timingSourceBar;
+   g_campaignBasketStateDirty=true;
+   datetime pyramidBrokerEntryTime=TimeCurrent();
+   if(pyLiveTicket>0 && PositionSelectByTicket(pyLiveTicket))
+      pyramidBrokerEntryTime=(datetime)PositionGetInteger(POSITION_TIME);
+   double pyramidPoint=SymbolInfoDouble(Symbol(),SYMBOL_POINT);
+   double pyramidSpreadPoints=(double)SymbolInfoInteger(Symbol(),SYMBOL_SPREAD);
+   double pyramidSpreadATR=(atr>0.0 && pyramidPoint>0.0)?(pyramidSpreadPoints*pyramidPoint/atr):0.0;
+   double pyramidSlippagePoints=(pyramidPoint>0.0)?MathAbs(pyLiveOpen-entryPx)/pyramidPoint:0.0;
+   long pyramidStopsLevel=SymbolInfoInteger(Symbol(),SYMBOL_TRADE_STOPS_LEVEL);
+   long pyramidFreezeLevel=SymbolInfoInteger(Symbol(),SYMBOL_TRADE_FREEZE_LEVEL);
+   long pyramidStopLevelPoints=pyramidStopsLevel>pyramidFreezeLevel?pyramidStopsLevel:pyramidFreezeLevel;
+   string pyramidAccountMarginMode=EnumToString((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE));
+   string pyramidNewsPhase=XAU_AdaptiveNewsPhaseName(g_adaptiveNewsPhase);
+   XAU_BrainRecordPyramidOpen(posId,dir,pyLiveOpen,pyLiveSL,pyLiveTP,pyLiveVol,atr,
+                              g_campaign[campaignSlot].campaignId,addsAlready+1,candidateEpisodeId,
+                              timingSourceBar,pyramidTimingState,moveATR,pyramidTransition.exhaustionProbability,
+                              pyramidTransition,pyramidGeometry.finalOriginalRiskDistance,
+                              pyramidGeometry.effectiveHardStopDistance,
+                              addLot*RiskPerLotForDistance(pyramidGeometry.finalOriginalRiskDistance),
+                              pyramidSpreadPoints,pyramidSpreadATR,marginNeeded,accInfo.FreeMargin(),
+                              pyramidStopLevelPoints,pyramidSlippagePoints,
+                              pyramidAccountMarginMode,pyramidNewsPhase,
+                              pyramidBrokerEntryTime);
    todayTradeCount++;
    PrintFormat("PYRAMID OK: %s %.2f lots @ %.2f | %s",
                isBuy?"BUY":"SELL",addLot,entryPx,why);
@@ -17320,6 +18369,10 @@ void CheckPyramidOpportunity()
          XAU_RExit_SaveState(true);
       }
    }
+
+   // Same-cycle basket conversion: do not leave a broker-side TP or moved
+   // per-leg profit SL alive until the next tick.
+   XAU_ActivateBasketModeImmediately(dir);
 
    BotMonitorActivity("PYRAMID_ADD","TRADE",
                       StringFormat("%s %.2f lot @%.2f - %s",isBuy?"BUY":"SELL",addLot,entryPx,why));
@@ -17821,8 +18874,55 @@ double XAU_AdaptiveNewsRoomATR(int signal, double price, double atr)
 
 /* v6.24.0: the separate post-news momentum entry veto was deleted; XAU_NewsAuthorityAllows is the sole news owner. */
 
+void XAU_ObserveExecutionTick()
+{
+   MqlTick tick;
+   if(!SymbolInfoTick(Symbol(),tick) || tick.time<=0) return;
+   if(g_executionLastObservedTickTime>0 && tick.time>g_executionLastObservedTickTime)
+   {
+      int gap=(int)(tick.time-g_executionLastObservedTickTime);
+      g_executionPreviousObservedTickTime=g_executionLastObservedTickTime;
+      if(gap>=300)
+      {
+         g_executionLatestGapSeconds=gap;
+         g_executionFirstTickAfterGapTime=tick.time;
+         PrintFormat("EXECUTION_MARKET_GAP_OBSERVED | previous_tick=%s | first_available_tick=%s | gap_seconds=%d | authority=TELEMETRY_ONLY",
+                     TimeToString(g_executionLastObservedTickTime,TIME_DATE|TIME_SECONDS),
+                     TimeToString(tick.time,TIME_DATE|TIME_SECONDS),gap);
+      }
+   }
+   g_executionLastObservedTickTime=tick.time;
+}
+
+int XAU_ExecutionGapAtClose(datetime closeTime,datetime &firstAvailableTick)
+{
+   firstAvailableTick=0;
+   if(closeTime<=0) return 0;
+   if(g_executionLastObservedTickTime>0 && closeTime>g_executionLastObservedTickTime)
+   {
+      int directGap=(int)(closeTime-g_executionLastObservedTickTime);
+      if(directGap>0)
+      {
+         firstAvailableTick=closeTime;
+         return directGap;
+      }
+   }
+   if(closeTime==g_executionLastObservedTickTime && g_executionPreviousObservedTickTime>0)
+   {
+      firstAvailableTick=closeTime;
+      return (int)(closeTime-g_executionPreviousObservedTickTime);
+   }
+   if(g_executionFirstTickAfterGapTime==closeTime && g_executionLatestGapSeconds>=300)
+   {
+      firstAvailableTick=g_executionFirstTickAfterGapTime;
+      return g_executionLatestGapSeconds;
+   }
+   return 0;
+}
+
 void OnTick()
 {
+   XAU_ObserveExecutionTick();
    if(!licenseValid) { g_lastSkipReason = "LICENSE_INVALID (enter correct PIN in inputs)"; return; }
    UpdateAuditDrawdown();
    XAU_UpdateForwardFloatingStats();
@@ -17926,7 +19026,8 @@ void OnTick()
       pg_selectiveLowEq = 0;
       pg_selectiveLowAt = 0;
       pg_selectiveSkippedCnt = 0;
-      lastPyramidPx = 0.0;          // v5.3.0 — reset spacing tracker each session
+      lastPyramidPx = 0.0;
+      lastPyramidCampaignId = 0;
       // v5.5.0 — reset EPF state at day boundary
       epf_tier = 0;
       epf_lastLoggedTier = -1;
@@ -18163,22 +19264,16 @@ void OnTick()
    // for logging and Command Center display. No function reachable from this
    // call may send an order.
    XAU_UpdateExhaustionEvidence();
-   // v6.25.0 owner directive 2026-07-17 -- M10 Intelligent Signal Engine.
-   // Advisory only: builds g_m10Snapshot/g_m10Decision from real evidence
-   // every tick (cheap -- XAU_AdaptiveMarketTransitionEngine() itself is
-   // bar-cached). Never calls OpenTrade or any broker-send path; feeds
-   // XAU_FinalEntryArbiter() as one more named evidence input, same as
-   // signalOK/structureOK/timingOK/freshnessOK/newsOK/stateOK already are.
-   XAU_EvaluateM10SignalDecision();
-   // v6.25.5 -- records an immutable copy of this bar's evidence into the
-   // M30 consensus history buffer, but only once per genuinely new,
-   // complete, FRESH-at-capture bar (see XAU_RecordM10EvidenceIfNew()'s own
-   // header comment). Runs in BOTH decision modes -- M10 continues
-   // building this history regardless of InpDecisionMode, exactly as the
-   // owner spec requires ("the bot must continue scanning and
-   // understanding the market every 10 minutes" independent of which mode
-   // gates trade origination).
-   XAU_RecordM10EvidenceIfNew();
+   // v6.25.20: M10 evidence may be evaluated only from the one immutable
+   // snapshot already published for the latest fully closed M10 bar. At a
+   // new bar boundary the entry scanner below prepares that snapshot first;
+   // until then the previous bar is never silently reused as current data.
+   datetime advisoryClosedM10=iTime(Symbol(),XAU_PRIMARY_DECISION_TF,1);
+   if(g_entrySnapshotValid && XAU_SnapshotTimestampMatches(g_entrySnapshotClosedBar,advisoryClosedM10))
+   {
+      XAU_EvaluateM10SignalDecision();
+      XAU_RecordM10EvidenceIfNew();
+   }
 
    // === v5.5.0 EPF — update tier each tick + run partial-close manager ===
    // Cheap to run; tier transitions logged when they change.
@@ -18550,6 +19645,7 @@ void OnTick()
    if(curBar <= 0)  curBar = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 0);
 
    bool newPrimaryBar = (curBar > 0 && curBar != g_lastEntryBarSeen);
+   datetime closedPrimaryBar=iTime(Symbol(),XAU_PRIMARY_DECISION_TF,1);
    double primaryDelayRequired = g_alignedCandidates[0].requiredDelaySeconds > 0.0
                                  ? g_alignedCandidates[0].requiredDelaySeconds
                                  : XAU_EffectiveEntryDelaySeconds();
@@ -18558,6 +19654,12 @@ void OnTick()
        TimeCurrent() - g_alignedCandidates[0].firstCandidateTime >= primaryDelayRequired &&
        (g_alignedCandidates[0].readinessRecheckAt == 0 ||
         TimeCurrent() >= g_alignedCandidates[0].readinessRecheckAt));
+   bool resumeFrozenPrimaryCandidate =
+      (!newPrimaryBar && alignedPrimaryDelayDue &&
+       g_latestDecisionSnapshot.valid &&
+       g_latestDecisionSnapshot.closedPrimaryBarTime==closedPrimaryBar &&
+       g_alignedCandidates[0].candidateDirection==g_latestDecisionSnapshot.signalDirection &&
+       g_alignedCandidates[0].candidateSetup==g_latestDecisionSnapshot.setupName);
    // v6.0 STI: refresh macro trend state on every new M5 bar (cheap, bar-cached)
    if(newPrimaryBar) STI_Update();
    // v6.4.0 UPGRADE 1: update market personality on every new M5 bar
@@ -18569,6 +19671,45 @@ void OnTick()
    bool watchdogDue = (InpScanWatchdogMin > 0 && secondsSinceScan >= InpScanWatchdogMin * 60);
    bool timerForced = g_timerForceScan;
    g_timerForceScan = false;
+
+   if(!newPrimaryBar && alignedPrimaryDelayDue && !resumeFrozenPrimaryCandidate)
+   {
+      string staleCandidateId=XAU_EntryCandidateId(g_alignedCandidates[0].candidateDirection,
+                                                   g_alignedCandidates[0].candidateSetup,
+                                                   g_alignedCandidates[0].candidateGeneration);
+      PrintFormat("ENTRY_REVALIDATION_CANCELLED | candidateId=%s | reason=FROZEN_DECISION_IDENTITY_MISMATCH | closedM10Bar=%s",
+                  staleCandidateId,TimeToString(closedPrimaryBar,TIME_DATE|TIME_MINUTES));
+      XAU_RecordExactPrimaryOutcome(g_alignedCandidates[0].candidateDirection,
+                                    g_alignedCandidates[0].candidateSetup,
+                                    "CANCEL_FROZEN_DECISION_IDENTITY_MISMATCH",false);
+      g_alignedCandidates[0].firstCandidateTime=0;
+      g_alignedCandidates[0].readinessRecheckAt=0;
+      XAU_M30FinalizeCandidateWithoutTrade("CANCEL_FROZEN_DECISION_IDENTITY_MISMATCH");
+      alignedPrimaryDelayDue=false;
+   }
+
+   // v6.25.21 root repair: elapsed time cannot reopen a bar that already
+   // produced a terminal market decision. Watchdog recovery is reserved for
+   // genuinely unfinished bars. Candidate-delay maturity is handled below
+   // from the frozen decision snapshot and is not treated as a new scan.
+   if(!newPrimaryBar && !resumeFrozenPrimaryCandidate &&
+      (watchdogDue || timerForced) &&
+      XAU_M10BarHasTerminalDecision(closedPrimaryBar))
+   {
+      g_lastEntryScanAt=TimeCurrent();
+      g_lastSkipReason=StringFormat("WAITING_FOR_NEW_PRIMARY_BAR: terminal M10 bar=%s state=%d reason=%s",
+                                    TimeToString(closedPrimaryBar,TIME_DATE|TIME_MINUTES),
+                                    (int)g_m10TerminalDecisionState,
+                                    g_m10TerminalDecisionReason);
+      if(TimeCurrent()-g_lastWatchdogTerminalSkipLog>=60)
+      {
+         PrintFormat("SCAN_WATCHDOG_TERMINAL_BAR_SKIP | closedM10Bar=%s | terminalState=%d | reason=%s | action=WAIT_NEXT_M10_BAR",
+                     TimeToString(closedPrimaryBar,TIME_DATE|TIME_MINUTES),
+                     (int)g_m10TerminalDecisionState,g_m10TerminalDecisionReason);
+         g_lastWatchdogTerminalSkipLog=TimeCurrent();
+      }
+      return;
+   }
 
    // v6.17.21 ROOT-CAUSE FIX: runtime-proven from the live journal --
    // SCAN_STARTED/SCAN_ABORTED reason=INDICATOR_RECOVERY_BACKOFF alternated
@@ -18599,6 +19740,9 @@ void OnTick()
                      XAU_EntryCandidateId(g_alignedCandidates[0].candidateDirection,
                                           g_alignedCandidates[0].candidateSetup,
                                           g_alignedCandidates[0].candidateGeneration));
+         XAU_RecordExactPrimaryOutcome(g_alignedCandidates[0].candidateDirection,
+                                       g_alignedCandidates[0].candidateSetup,
+                                       "CANCEL_INDICATOR_UNAVAILABLE",false);
          g_alignedCandidates[0].firstCandidateTime = 0;
          g_alignedCandidates[0].readinessRecheckAt = 0;
          XAU_M30FinalizeCandidateWithoutTrade("CANCEL_INDICATOR_UNAVAILABLE");
@@ -18653,50 +19797,105 @@ void OnTick()
    // Update Asia-range tracker on every new M5 bar
    if(InpAsiaRangeBreakout) UpdateAsiaRange();
 
-   // v6.17.13: explicit scan-attempt bookend logging (runtime-proven need --
-   // live journal showed EMA_FAST_M5 failing this exact block repeatedly for
-   // 20+ minutes straight while the watchdog spammed with no visibility into
-   // WHICH indicator was the cause). XAU_LogScanAborted deduplicates identical
-   // consecutive reasons so a genuine, ongoing failure logs once + a
-   // resurfacing summary, not a line per tick.
-   XAU_LogScanState("SCAN_STARTED");
-
-   // Load indicators
-   if(!CopyEntryBuffer(hEMAFast, 0, 0, 12, bufEMAFast, "EMA_FAST_M5")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hEMASlow, 0, 0, 12, bufEMASlow, "EMA_SLOW_M5")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hRSI, 0, 0, 5, bufRSI, "RSI_M5")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hATR, 0, 0, 5, bufATR, "ATR_M5")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hBBUpper, 1, 0, 12, bufBBUpper, "BB_UPPER")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hBBUpper, 2, 0, 12, bufBBLower, "BB_LOWER")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hBBUpper, 0, 0, 12, bufBBMid, "BB_MID")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   // v6.24.18 owner directive 2026-07-16 -- root-cause repair, live-evidence-
-   // proven: EMA_FAST_H1 accounted for >99% of ALL scan aborts on both Mac
-   // and VPS journals on 2026-07-16, every single one classified
-   // "INDICATOR_TRANSIENT_4807" and left to retry forever -- because, exactly
-   // like the InpContextTF/H4 case fixed in v6.24.17, this file never checked
-   // SeriesInfoInteger(...,PERIOD_H1,SERIES_SYNCHRONIZED) before relying on
-   // this handle. PERIOD_H1 has no reason to stay "hot" in the terminal
-   // unless a chart or EA actually reads it -- exactly the exposure the
-   // H4 fix's own comment predicted. This is the same real MT5 condition
-   // (local history not yet synced with the broker for this symbol+
-   // timeframe), which presents identically to a transient recalculation
-   // lag (err=4807, BarsCalculated()==-1) but cannot be fixed by rebuilding
-   // the handle -- only by waiting for sync. Mirrors the H4 fix exactly:
-   // SERIES_SYNCHRONIZED pre-check, then a bounded last-known-good fallback.
-   if(!SeriesInfoInteger(Symbol(), PERIOD_H1, SERIES_SYNCHRONIZED))
+   // v6.25.20: encountering a closed M10 bar and preparing its indicator
+   // snapshot are separate from a logical market scan. Retries do not emit
+   // SCAN_STARTED and do not increment logical scan counters.
+   if(!XAU_LoadStableEntrySnapshot(closedPrimaryBar))
    {
-      g_lastSkipReason = StringFormat("INDICATOR_H1_SERIES_NOT_SYNCHRONIZED: H1 history not yet synced with broker (bars=%d) -- waiting for sync, not a handle problem",
-                                      Bars(Symbol(), PERIOD_H1));
-      if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
+      if(g_entrySnapshotState==M10_SNAPSHOT_FAILED_FINAL)
       {
-         Print("SCAN BUFFER WAIT: ", g_lastSkipReason);
-         g_lastIndicatorFailLog = TimeCurrent();
+         // One terminal no-trade outcome for this bar. Advance the handled
+         // bar identity so watchdog/timer ticks cannot restart the failed
+         // snapshot forever; the next closed M10 bar resets the state.
+         XAU_MarkM10TerminalDecision(closedPrimaryBar,M10_TERMINAL_FAILED_FINAL,
+                                     g_lastSkipReason);
+         if(curBar>0) g_lastEntryBarSeen=curBar;
+         g_lastEntryScanAt=TimeCurrent();
+         if(g_alignedCandidates[0].firstCandidateTime>0)
+            XAU_RecordExactPrimaryOutcome(g_alignedCandidates[0].candidateDirection,
+                                          g_alignedCandidates[0].candidateSetup,
+                                          "CANCEL_SNAPSHOT_FAILED_FINAL",false);
+         g_alignedCandidates[0].firstCandidateTime=0;
+         g_alignedCandidates[0].readinessRecheckAt=0;
+         g_pendingTimingProof.active=false;
       }
-      XAU_LogScanAborted(g_lastSkipReason);
       return;
    }
-   bool h1EmaOk = CopyEntryBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1, "EMA_FAST_H1") &&
-                  CopyEntryBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1, "EMA_SLOW_H1");
+
+   if(!resumeFrozenPrimaryCandidate)
+   {
+      XAU_LogLogicalScanStarted(closedPrimaryBar);
+      XAU_EvaluateM10SignalDecision();
+      if(!g_entrySnapshotValid ||
+         !XAU_SnapshotTimestampMatches(g_entrySnapshotClosedBar,g_m10Snapshot.closedBarTime) ||
+         !XAU_SnapshotTimestampMatches(g_entrySnapshotClosedBar,g_m10Decision.closedBarTime))
+      {
+         g_lastSkipReason=StringFormat("M10_SNAPSHOT_CONSUMER_TIMESTAMP_MISMATCH snapshot=%s evidence=%s decision=%s",
+                                       TimeToString(g_entrySnapshotClosedBar,TIME_DATE|TIME_MINUTES),
+                                       TimeToString(g_m10Snapshot.closedBarTime,TIME_DATE|TIME_MINUTES),
+                                       TimeToString(g_m10Decision.closedBarTime,TIME_DATE|TIME_MINUTES));
+         XAU_LogLogicalScanCompleted(closedPrimaryBar,"SCAN_COMPLETED_NO_TRADE");
+         XAU_MarkM10TerminalDecision(closedPrimaryBar,M10_TERMINAL_FAILED_FINAL,g_lastSkipReason);
+         if(curBar>0) g_lastEntryBarSeen=curBar;
+         g_lastEntryScanAt=TimeCurrent();
+         Print("M10_SNAPSHOT_FAILED_FINAL | ",g_lastSkipReason," | finalAction=NO_TRADE");
+         return;
+      }
+      XAU_RecordM10EvidenceIfNew();
+   }
+   else
+   {
+      if(!g_entrySnapshotValid ||
+         !XAU_SnapshotTimestampMatches(g_entrySnapshotClosedBar,g_latestDecisionSnapshot.closedPrimaryBarTime))
+      {
+         g_lastSkipReason="ENTRY_REVALIDATION_CANCELLED: frozen candidate snapshot no longer matches the authoritative closed M10 bar";
+         XAU_RecordExactPrimaryOutcome(g_alignedCandidates[0].candidateDirection,
+                                       g_alignedCandidates[0].candidateSetup,
+                                       "CANCEL_FROZEN_SNAPSHOT_MISMATCH",false);
+         g_alignedCandidates[0].firstCandidateTime=0;
+         g_alignedCandidates[0].readinessRecheckAt=0;
+         XAU_M30FinalizeCandidateWithoutTrade("CANCEL_FROZEN_SNAPSHOT_MISMATCH");
+         return;
+      }
+      PrintFormat("ENTRY_REVALIDATION_FROZEN_SNAPSHOT | candidateId=%s | closedM10Bar=%s | generation=%I64d | action=REUSE_CANONICAL_DECISION_NO_RESCAN",
+                  XAU_EntryCandidateId(g_latestDecisionSnapshot.signalDirection,
+                                       g_latestDecisionSnapshot.setupName,
+                                       g_latestDecisionSnapshot.generation),
+                  TimeToString(closedPrimaryBar,TIME_DATE|TIME_MINUTES),
+                  g_latestDecisionSnapshot.generation);
+   }
+   // v6.25.17 ROOT FIX -- H1 is explicitly soft context. The previous
+   // implementation aborted the entire M10 scan whenever H1 history was not
+   // synchronized, an H1 handle was unavailable, or both H1 EMA buffers had no
+   // bounded last-good value. That made optional context a global kill switch.
+   // H1 now follows this order: fresh H1 -> bounded last-good H1 -> neutral H1.
+   // Neutral means fast==slow at the latest closed M10 price: no H1 alignment
+   // bonus, no H1 opposition veto, and no artificial stretched-distance flag.
+   // No H1 condition below can abort the M10 scan or trigger global indicator
+   // recovery. Mandatory M10/M15/context buffers above remain fail-closed.
+   bool h1SeriesSynced = (bool)SeriesInfoInteger(Symbol(), PERIOD_H1, SERIES_SYNCHRONIZED);
+   bool h1HandlesReady = (hEMAFast_H1 != INVALID_HANDLE && hEMASlow_H1 != INVALID_HANDLE);
+   bool h1EmaOk = false;
+   string h1FailReason = "";
+
+   if(h1SeriesSynced && h1HandlesReady)
+   {
+      ResetLastError();
+      int h1FastCopied = CopyBuffer(hEMAFast_H1, 0, 0, 3, bufEMAFast_H1);
+      int h1FastErr = GetLastError();
+      ResetLastError();
+      int h1SlowCopied = CopyBuffer(hEMASlow_H1, 0, 0, 3, bufEMASlow_H1);
+      int h1SlowErr = GetLastError();
+      h1EmaOk = (h1FastCopied >= 3 && h1SlowCopied >= 3);
+      if(!h1EmaOk)
+         h1FailReason = StringFormat("H1 soft buffers unavailable fastCopied=%d fastErr=%d slowCopied=%d slowErr=%d",
+                                     h1FastCopied, h1FastErr, h1SlowCopied, h1SlowErr);
+   }
+   else if(!h1SeriesSynced)
+      h1FailReason = StringFormat("H1 history not synchronized (bars=%d)", Bars(Symbol(), PERIOD_H1));
+   else
+      h1FailReason = "H1 soft EMA handle unavailable";
+
    if(h1EmaOk)
    {
       g_h1EmaFastLastGood = bufEMAFast_H1[1];
@@ -18706,108 +19905,37 @@ void OnTick()
    }
    else
    {
-      string h1FailReason = g_lastSkipReason;
       int h1StaleSec = (g_h1EmaLastGoodAt > 0) ? (int)(TimeCurrent() - g_h1EmaLastGoodAt) : -1;
       bool haveH1BoundedLastGood = (g_h1EmaLastGoodAt > 0 && h1StaleSec <= XAU_HTF_EMA_MAX_STALE_SEC);
+      ArrayResize(bufEMAFast_H1, 3);
+      ArrayResize(bufEMASlow_H1, 3);
       if(haveH1BoundedLastGood)
       {
-         ArrayResize(bufEMAFast_H1, 3);
-         ArrayResize(bufEMASlow_H1, 3);
          bufEMAFast_H1[0] = g_h1EmaFastLastGood; bufEMAFast_H1[1] = g_h1EmaFastLastGood; bufEMAFast_H1[2] = g_h1EmaFastLastGood;
          bufEMASlow_H1[0] = g_h1EmaSlowLastGood; bufEMASlow_H1[1] = g_h1EmaSlowLastGood; bufEMASlow_H1[2] = g_h1EmaSlowLastGood;
-         g_h1IndicatorState = "DEGRADED_USING_LAST_GOOD";
-         if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
-         {
-            PrintFormat("INDICATOR_H1_DEGRADED_USING_LAST_GOOD | reason=%s ageSec=%d maxAllowedSec=%d",
-                        h1FailReason, h1StaleSec, XAU_HTF_EMA_MAX_STALE_SEC);
-            g_lastIndicatorFailLog = TimeCurrent();
-         }
+         g_h1IndicatorState = "DEGRADED_USING_LAST_GOOD_SOFT";
       }
       else
       {
-         g_h1IndicatorState = (h1StaleSec > XAU_HTF_EMA_MAX_STALE_SEC) ? "STALE_UNUSABLE" : "TEMPORARY_NOT_READY";
-         XAU_LogScanAborted(h1FailReason);
-         return;
+         double neutralH1 = iClose(Symbol(), XAU_PRIMARY_DECISION_TF, 1);
+         if(neutralH1 <= 0.0 && ArraySize(bufEMAFast) > 1 && ArraySize(bufEMASlow) > 1)
+            neutralH1 = (bufEMAFast[1] + bufEMASlow[1]) * 0.5;
+         if(neutralH1 <= 0.0) neutralH1 = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+         bufEMAFast_H1[0] = neutralH1; bufEMAFast_H1[1] = neutralH1; bufEMAFast_H1[2] = neutralH1;
+         bufEMASlow_H1[0] = neutralH1; bufEMASlow_H1[1] = neutralH1; bufEMASlow_H1[2] = neutralH1;
+         g_h1IndicatorState = "SOFT_NEUTRAL_UNAVAILABLE";
       }
-   }
-   // v6.24.17 root-cause investigation: EMA_FAST_HTF/EMA_SLOW_HTF (InpContextTF,
-   // default M30) accounted for ~40-46% of all log lines on live Mac/VPS
-   // journals, with a ~2% scan completion rate -- far more often than a
-   // genuine "new-bar-boundary quirk" should ever fire on a 30-minute
-   // timeframe. This file NEVER checked SeriesInfoInteger(...,SERIES_SYNCHRONIZED)
-   // before relying on this handle -- a real, distinct MT5 condition ("the
-   // terminal's local history for this symbol+timeframe is not yet fully
-   // synced with the broker") that presents identically (err=4807,
-   // BarsCalculated()==-1) to a transient recalculation lag, but CANNOT be
-   // fixed by rebuilding the indicator handle (the calculation has nothing
-   // to calculate from yet) -- only by waiting for history sync to finish.
-   // A less-frequently-charted timeframe like M30 (no reason for the
-   // terminal to keep it hot unless a chart/EA reads it) is exactly the
-   // case most exposed to this. Distinguishing it here means: (a) it is
-   // never miscounted toward the transient-4807 failure streak that
-   // eventually triggers a pointless full handle rebuild, and (b) the
-   // Command Center gets an honest, distinct reason instead of a repeat of
-   // the same generic 4807 text.
-   if(!SeriesInfoInteger(Symbol(), InpContextTF, SERIES_SYNCHRONIZED))
-   {
-      g_lastSkipReason = StringFormat("INDICATOR_HTF_SERIES_NOT_SYNCHRONIZED: %s history not yet synced with broker (bars=%d) -- waiting for sync, not a handle problem",
-                                      EnumToString(InpContextTF), Bars(Symbol(), InpContextTF));
       if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
       {
-         Print("SCAN BUFFER WAIT: ", g_lastSkipReason);
+         PrintFormat("INDICATOR_H1_SOFT_CONTEXT_CONTINUE | state=%s reason=%s lastGoodAgeSec=%d m10ScanAborted=false",
+                     g_h1IndicatorState, h1FailReason, h1StaleSec);
          g_lastIndicatorFailLog = TimeCurrent();
       }
-      XAU_LogScanAborted(g_lastSkipReason);
-      return;
    }
-   // v6.24.17: bounded last-known-good fallback for the HTF EMA pair
-   // specifically -- the one indicator confirmed by live evidence to fail far
-   // more often than the "brief bar-boundary quirk" the generic recovery
-   // logic assumes. A 30-minute-timeframe EMA moves slowly; using a value up
-   // to XAU_HTF_EMA_MAX_STALE_SEC old (well under one M30 bar) to let THIS
-   // tick's scan complete is safer than aborting the entire scan (wasting
-   // the other 12 already-successfully-read indicators) or, worse, treating
-   // every such failure as grounds for a destructive handle rebuild. Staleness
-   // is strictly bounded and always logged/visible -- never silently reused
-   // past the limit, never blocks a genuine rebuild for an actually-stale handle.
-   bool htfEmaOk = CopyEntryBuffer(hEMAFast_H4, 0, 0, 3, bufEMAFast_H4, "EMA_FAST_HTF") &&
-                   CopyEntryBuffer(hEMASlow_H4, 0, 0, 3, bufEMASlow_H4, "EMA_SLOW_HTF");
-   if(htfEmaOk)
-   {
-      g_htfEmaFastLastGood = bufEMAFast_H4[1];
-      g_htfEmaSlowLastGood = bufEMASlow_H4[1];
-      g_htfEmaLastGoodAt = TimeCurrent();
-      g_htfIndicatorState = "HEALTHY";
-   }
-   else
-   {
-      string htfFailReason = g_lastSkipReason;
-      int htfStaleSec = (g_htfEmaLastGoodAt > 0) ? (int)(TimeCurrent() - g_htfEmaLastGoodAt) : -1;
-      bool haveBoundedLastGood = (g_htfEmaLastGoodAt > 0 && htfStaleSec <= XAU_HTF_EMA_MAX_STALE_SEC);
-      if(haveBoundedLastGood)
-      {
-         ArrayResize(bufEMAFast_H4, 3);
-         ArrayResize(bufEMASlow_H4, 3);
-         bufEMAFast_H4[0] = g_htfEmaFastLastGood; bufEMAFast_H4[1] = g_htfEmaFastLastGood; bufEMAFast_H4[2] = g_htfEmaFastLastGood;
-         bufEMASlow_H4[0] = g_htfEmaSlowLastGood; bufEMASlow_H4[1] = g_htfEmaSlowLastGood; bufEMASlow_H4[2] = g_htfEmaSlowLastGood;
-         g_htfIndicatorState = "DEGRADED_USING_LAST_GOOD";
-         if(TimeCurrent() - g_lastIndicatorFailLog >= 30)
-         {
-            PrintFormat("INDICATOR_HTF_DEGRADED_USING_LAST_GOOD | reason=%s ageSec=%d maxAllowedSec=%d",
-                        htfFailReason, htfStaleSec, XAU_HTF_EMA_MAX_STALE_SEC);
-            g_lastIndicatorFailLog = TimeCurrent();
-         }
-      }
-      else
-      {
-         g_htfIndicatorState = (htfStaleSec > XAU_HTF_EMA_MAX_STALE_SEC) ? "STALE_UNUSABLE" : "TEMPORARY_NOT_READY";
-         XAU_LogScanAborted(htfFailReason);
-         return;
-      }
-   }
-   if(!CopyEntryBuffer(hRSI_M15, 0, 0, 3, bufRSI_M15, "RSI_M15")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hStoch, 0, 0, 3, bufStochK, "STOCH_K")) { XAU_LogScanAborted(g_lastSkipReason); return; }
-   if(!CopyEntryBuffer(hStoch, 1, 0, 3, bufStochD, "STOCH_D")) { XAU_LogScanAborted(g_lastSkipReason); return; }
+   // v6.25.19: context is compile-locked M10 and was copied atomically
+   // from the primary snapshot above. RSI_M15 and Stochastic were also part
+   // of that same all-or-nothing load. No duplicate current-bar handle can
+   // abort this scan here.
    g_indicatorBufferFailCount = 0;
    if(curBar > 0) g_lastEntryBarSeen = curBar;
    // v6.25.2 owner directive 2026-07-17 -- URGENT FORENSIC FIX. Live-evidence-
@@ -18888,9 +20016,14 @@ void OnTick()
    double sessionQuality = GetSessionQuality();
 
    // ============ GATE 3: SETUP SCORING ============
-   double setupScore = 0;
-   string setupName = "";
-   int signal = ScoreSetups(setupScore, setupName);
+   // A matured candidate on the same closed bar reuses the immutable score
+   // already captured for its candidate generation. It does not rerun
+   // ScoreSetups or the M10 decision engine.
+   double setupScore = resumeFrozenPrimaryCandidate ? g_latestDecisionSnapshot.setupScore : 0.0;
+   string setupName = resumeFrozenPrimaryCandidate ? g_latestDecisionSnapshot.setupName : "";
+   int signal = resumeFrozenPrimaryCandidate
+                ? g_latestDecisionSnapshot.signalDirection
+                : ScoreSetups(setupScore, setupName);
 
    // v6.23.1 dedicated early-reversal candidate. At >=70% the engine is
    // already searching; at >=80% a compact, persistent closed-bar package
@@ -18899,7 +20032,7 @@ void OnTick()
    // spread/news/risk/geometry/anti-chase gates still apply downstream.
    XAU_AdaptiveTransitionDecision transitionNow=XAU_AdaptiveMarketTransitionEngine();
    int adaptiveReversalDir=-transitionNow.dominantDirection;
-   if(transitionNow.oppositeEntryPreparing)
+   if(!resumeFrozenPrimaryCandidate && transitionNow.oppositeEntryPreparing)
    {
       double reversalAuditATR=(ArraySize(bufATR)>1 && bufATR[1]>0.0)?bufATR[1]:0.0;
       double travelSinceFirstATR=(reversalAuditATR>0.0 && g_reversalOpportunity.firstDetectionPrice>0.0)?
@@ -18916,27 +20049,35 @@ void OnTick()
                   g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",
                   transitionNow.oppositeEntryAllowed?"WOULD_ENTER":"WAIT",transitionNow.reason);
    }
-   if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE &&
+   if(!resumeFrozenPrimaryCandidate &&
+      InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE &&
       transitionNow.oppositeEntryAllowed && adaptiveReversalDir!=0)
    {
-      // A confirmed adaptive reversal creates a normal candidate.  It does
-      // not own a private execution lane and cannot bypass or duplicate the
-      // shared structure, freshness, news, risk, or execution authorities.
-      signal=adaptiveReversalDir;
-      setupName="ADAPTIVE_REVERSAL_RECLAIM";
-      setupScore=6.80;
-      PrintFormat("ADAPTIVE_REVERSAL_CANDIDATE_SHARED_PATH id=%s direction=%s score=%.2f reason=%s",
-                  XAU_ATReversalOpportunityId(),signal==1?"BUY":"SELL",setupScore,transitionNow.reason);
+      bool fullReversalPackage=transitionNow.oppositeReclaim &&
+                               transitionNow.oppositeRetestHeld &&
+                               transitionNow.oppositeDisplacement;
+      if(InpAllowAdaptiveReversalDirectEntry && fullReversalPackage)
+      {
+         // Explicit opt-in only. The candidate still uses the shared canonical
+         // M10 endorsement, timer, owner policy, risk and execution paths.
+         signal=adaptiveReversalDir;
+         setupName="ADAPTIVE_REVERSAL_RECLAIM";
+         setupScore=6.80;
+         PrintFormat("ADAPTIVE_REVERSAL_CANDIDATE_SHARED_PATH id=%s direction=%s score=%.2f reason=%s",
+                     XAU_ATReversalOpportunityId(),signal==1?"BUY":"SELL",setupScore,transitionNow.reason);
+      }
+      else
+      {
+         PrintFormat("ADAPTIVE_REVERSAL_OBSERVATION_ONLY | id=%s | direction=%s | directEntryEnabled=%s | fullPackage=%s | canonicalM10MayOriginate=true | reason=%s",
+                     XAU_ATReversalOpportunityId(),adaptiveReversalDir==1?"BUY":"SELL",
+                     InpAllowAdaptiveReversalDirectEntry?"true":"false",fullReversalPackage?"true":"false",
+                     transitionNow.reason);
+      }
    }
 
-   // v6.25.5 owner directive 2026-07-17 (URGENT ARCHITECTURE CHANGE) -- mode
-   // switch between the M10-legacy gate/origination (UNCHANGED below, exact
-   // same code as before this change) and the new M30 three-M10-consensus
-   // gate/origination. Only one of these two branches ever runs per tick;
-   // InpDecisionMode defaults to legacy, so a bot that never touches this
-   // input sees byte-for-byte identical behavior to before this change.
-   if(InpDecisionMode == XAU_DECISION_M10_LEGACY)
-   {
+   // Owner-requested M10-only candidate authority. Every completed M10 bar
+   // independently uses the existing M10 endorsement/origination logic below.
+   // There is no selectable or executable M30 consensus branch in this build.
    // v6.25.1 owner directive 2026-07-17 -- M10 IS THE CANONICAL CANDIDATE
    // AUTHORITY. Whatever direction ScoreSetups (or the ADAPTIVE_REVERSAL_
    // RECLAIM shared path immediately above) proposed, it may only become a
@@ -18953,7 +20094,7 @@ void OnTick()
    // is setup EVIDENCE now (pattern/EMA/RSI/structure quality feeding
    // setupScore/setupName), not an independent competing direction
    // authority -- this is the one place that enforces that.
-   if(signal != 0)
+   if(!resumeFrozenPrimaryCandidate && signal != 0)
    {
       bool m10Endorses =
          (g_m10Decision.preferredDirection == signal) &&
@@ -19000,7 +20141,7 @@ void OnTick()
    // right now, not "no entry ever" -- they still surface via the
    // endorsement gate above once ScoreSetups/entry-timer machinery catches
    // up, not via a fresh forced origination).
-   if(signal == 0 &&
+   if(!resumeFrozenPrimaryCandidate && signal == 0 &&
       (g_m10Decision.decisionType == M10_DECISION_BUY_CANDIDATE ||
        g_m10Decision.decisionType == M10_DECISION_SELL_CANDIDATE) &&
       g_m10Decision.preferredDirection != 0)
@@ -19011,58 +20152,34 @@ void OnTick()
       // scale ScoreSetups/ADAPTIVE_REVERSAL_RECLAIM use (a "perfect" setup
       // is ~4.5-6.8 on this scale) -- 55.0 (the minimum qualifying bar) maps
       // to 5.0, 100.0 (max) maps to 8.0, clamped either side.
-      double m10ConfidenceNorm = MathMax(0.0, MathMin(1.0, (g_m10Decision.confidence - 55.0) / 45.0));
-      setupScore = 5.0 + m10ConfidenceNorm * 3.0;
+      setupScore = XAU_CanonicalM10SetupScore(g_m10Decision.confidence);
       PrintFormat("M10_ORIGINATED_CANDIDATE_SHARED_PATH | direction=%s setupScore=%.2f m10Confidence=%.1f m10Decision=%s evidenceId=%d reason=%s",
                   signal==1?"BUY":"SELL", setupScore, g_m10Decision.confidence,
                   XAU_M10DecisionName(g_m10Decision.decisionType), (int)g_m10Decision.evidenceId, g_m10Decision.exactReason);
    }
-   } // end InpDecisionMode == XAU_DECISION_M10_LEGACY
-   else // InpDecisionMode == XAU_DECISION_M30_THREE_M10_CONSENSUS
-   {
-      // v6.25.5 -- M30 GATE. Exact same structure as the M10-legacy gate
-      // immediately above (endorsement + origination fallback), except the
-      // authority consulted is the three-M10-snapshot weighted consensus
-      // (XAU_BuildM30ConsensusDecision(), cached per 30-minute slot) instead
-      // of the single latest M10 decision. Individual M10 scans cannot
-      // originate or veto a normal candidate in this mode -- g_m10Decision
-      // is never consulted here at all. WAIT_FOR_BUY_RETRACE/WAIT_FOR_SELL_
-      // RETRACE remain non-executable states. The consensus authority must
-      // first emit an explicit candidate before any downstream timer can run.
-      XAU_M30ConsensusDecision m30 = XAU_BuildM30ConsensusDecision();
-      if(m30.candidateCreated &&
-         (m30.decisionType == M30_DECISION_BUY_CANDIDATE || m30.decisionType == M30_DECISION_SELL_CANDIDATE) &&
-         m30.preferredDirection != 0)
-      {
-         // The M30 slot/evidence tuple is the sole candidate identity in
-         // this mode. Never retain a legacy ScoreSetups name here: that name
-         // can change on a later scan and would incorrectly restart the one
-         // allowed timer for the same immutable M30 opportunity.
-         signal = m30.preferredDirection;
-         setupName = "M30_CONSENSUS_CORE_" + IntegerToString((int)m30.slotCloseTime);
-         double m30ConfidenceNorm = MathMax(0.0, MathMin(1.0, (m30.confidence - 55.0) / 45.0));
-         setupScore = 5.0 + m30ConfidenceNorm * 3.0;
-         string m30CandidateKey = XAU_M30CandidateKey(m30.slotId, signal,
-                                                      m30.oldestEvidenceId, m30.middleEvidenceId,
-                                                      m30.newestEvidenceId);
-         PrintFormat("M30_CANDIDATE_SHARED_PATH | slot=%s candidateKey=%s direction=%s existingFinalArbiter=true existingEntryTimer=true existingRiskEngine=true existingDirectionLock=true",
-                     m30.slotId, m30CandidateKey, signal==1?"BUY":"SELL");
 
-         // Owner correction: start the one fresh 120-180 second lifecycle
-         // in this exact M30 decision cycle. All later authorities observe
-         // or cancel this timer; none may create or restart another one.
-         double m30OriginPrice = signal > 0 ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
-                                            : SymbolInfoDouble(Symbol(), SYMBOL_BID);
-         if(m30OriginPrice <= 0.0) m30OriginPrice = iClose(Symbol(), XAU_PRIMARY_DECISION_TF, 1);
-         XAU_EnsureEntryTimerStarted(signal, setupName, m30OriginPrice);
-      }
-      else
-      {
-         signal = 0;
-         setupName = "";
-         setupScore = 0;
-      }
-   } // end InpDecisionMode == XAU_DECISION_M30_THREE_M10_CONSENSUS
+   // v6.25.21 root repair: an explicit M10 BUY/SELL candidate owns the
+   // canonical setup-score floor whether legacy ScoreSetups returned no
+   // direction, the same direction, or a stale opposite direction. Legacy
+   // pattern evidence may remain as the setup label and may be stronger, but
+   // it can no longer leave a valid M10 candidate below the shared grade
+   // scale. No downstream authority is bypassed.
+   bool explicitM10Candidate =
+      !resumeFrozenPrimaryCandidate &&
+      (g_m10Decision.decisionType==M10_DECISION_BUY_CANDIDATE ||
+       g_m10Decision.decisionType==M10_DECISION_SELL_CANDIDATE) &&
+      g_m10Decision.preferredDirection!=0 &&
+      signal==g_m10Decision.preferredDirection;
+   if(explicitM10Candidate)
+   {
+      double legacySetupScore=setupScore;
+      double canonicalM10Score=XAU_CanonicalM10SetupScore(g_m10Decision.confidence);
+      setupScore=MathMax(setupScore,canonicalM10Score);
+      if(StringLen(setupName)<=0) setupName="M10_ORIGINATED_CANDIDATE";
+      PrintFormat("M10_CANONICAL_SCORE_APPLIED | direction=%s | setup=%s | legacySetupScore=%.2f | canonicalM10Score=%.2f | finalSetupScore=%.2f | m10Confidence=%.1f | evidenceId=%d",
+                  signal==1?"BUY":"SELL",setupName,legacySetupScore,canonicalM10Score,
+                  setupScore,g_m10Decision.confidence,(int)g_m10Decision.evidenceId);
+   }
 
    // v6.24.0: Active Direction is context, not a global veto. Confirmed
    // opposite structure is evaluated by the dedicated structure authority.
@@ -19076,7 +20193,7 @@ void OnTick()
    g_smcHardBlockActive = false;
    g_smcConflictReason = "";
    g_smcConflictPenalty = 0.0;
-   if(InpSMC_Enable && signal != 0)
+   if(!resumeFrozenPrimaryCandidate && InpSMC_Enable && signal != 0)
    {
       string smcReason = "";
       double smcBonus = SMC_GetScoreBonus(signal, smcReason);
@@ -19087,13 +20204,25 @@ void OnTick()
 
    // v6.24.0: personality classification may explain a candidate but may
    // never suppress, reverse, delay or resize one.
-   if(signal != 0)
+   if(!resumeFrozenPrimaryCandidate && signal != 0)
       PrintFormat("PERSONALITY_CONTEXT_ONLY: setup=%s personality=%s fit=%s",
                   setupName, MarketPersonalityStr(g_marketPersonality),
                   StrategyFitsPersonality(setupName,g_marketPersonality)?"Y":"N");
 
    // Combined quality
-   double combinedRaw = setupScore * regimeQuality * sessionQuality;
+   double combinedScore=0.0;
+   string grade="SKIP";
+   if(resumeFrozenPrimaryCandidate)
+   {
+      combinedScore=g_latestDecisionSnapshot.combinedScore;
+      grade=g_latestDecisionSnapshot.grade;
+      PrintFormat("ENTRY_REVALIDATION_SCORE_REUSED | candidateId=%s | setupScore=%.2f | combinedScore=%.2f | grade=%s | action=NO_RESCORING",
+                  XAU_EntryCandidateId(signal,setupName,g_latestDecisionSnapshot.generation),
+                  setupScore,combinedScore,grade);
+   }
+   else
+   {
+      double combinedRaw = setupScore * regimeQuality * sessionQuality;
    // v5.1.5: floor the multiplicative drag — without this, fair-quality regimes
    // (regimeQuality ~ 0.5) drop a Score:4.5 setup to Combined:2.0 which falls
    // below gradeB (esp. after loss-streak tightening). Floor keeps the combined
@@ -19120,7 +20249,7 @@ void OnTick()
       }
    }
    double combinedFloor = setupScore * effFloor * regimeFloorScale;
-   double combinedScore = MathMax(combinedRaw, combinedFloor);
+      combinedScore = MathMax(combinedRaw, combinedFloor);
 
    // v5.6.0 FIX B — REGIME-DIRECTION BONUS. With-trend setups get a score bump,
    // counter-trend setups get a small penalty. Previously the bot scored buy
@@ -19178,19 +20307,46 @@ void OnTick()
    // v5.1.5: rename worst label "PASS" → "SKIP". The literal text "PASS" was
    // misleading — it appeared next to "— PASS" in logs making users think the
    // signal was accepted when it was actually rejected.
-   string grade = combinedScore >= InpGradeAPlus ? "A+"
-                : combinedScore >= InpGradeA    ? "A"
-                : combinedScore >= dynGradeB    ? "B"
-                : "SKIP";
+      grade = combinedScore >= InpGradeAPlus ? "A+"
+              : combinedScore >= InpGradeA    ? "A"
+              : combinedScore >= dynGradeB    ? "B"
+              : "SKIP";
+   }
+
+   // v6.25.21: only a genuine new closed-bar decision publishes/captures a
+   // decision snapshot. The matured-delay revalidation path reuses that
+   // immutable snapshot and emits no second PRIMARY_DECISION event.
+   if(!resumeFrozenPrimaryCandidate)
+   {
+      XAU_CaptureDecisionSnapshot(signal,setupName,grade,setupScore,combinedScore);
+      XAU_RecordMarketSnapshot("SCAN_EVALUATED", signal, setupName, grade, setupScore, combinedScore);
+      g_lastEntryScanAt=TimeCurrent();
+      bool terminalCandidate=(signal!=0 && grade!="SKIP");
+      XAU_LogLogicalScanCompleted(closedPrimaryBar,
+                                 terminalCandidate ? "SCAN_COMPLETED_CANDIDATE" : "SCAN_COMPLETED_NO_TRADE");
+      XAU_MarkM10TerminalDecision(closedPrimaryBar,
+                                 terminalCandidate ? M10_TERMINAL_READY_CANDIDATE
+                                                   : M10_TERMINAL_READY_NO_CANDIDATE,
+                                 terminalCandidate ? "CANONICAL_CANDIDATE_CREATED"
+                                                   : (StringLen(g_lastSkipReason)>0
+                                                      ? g_lastSkipReason
+                                                      : XAU_M10DecisionName(g_m10Decision.decisionType)));
+      if(terminalCandidate) { g_totalSignals++; g_ftReport_Signals++; }
+   }
+   else
+   {
+      g_lastEntryScanAt=TimeCurrent();
+   }
 
    // First enforcement point: a scored signal may not remain an executable
    // candidate when the owner regime/time verdict blocks it. M30 candidates
    // are finalized terminally, never paused for later resurrection.
-   if(signal != 0 && grade != "SKIP")
+   if(!resumeFrozenPrimaryCandidate && signal != 0 && grade != "SKIP")
    {
       string ownerCandidateBlock = "";
-      if(!XAU_OwnerEntryPermission("CANDIDATE_ACCEPTANCE", setupName, grade, ownerCandidateBlock))
+      if(!XAU_OwnerEntryPermission("CANDIDATE_ACCEPTANCE", setupName, grade, ownerCandidateBlock, signal, setupName))
       {
+         XAU_RecordExactPrimaryOutcome(signal,setupName,ownerCandidateBlock,false);
          g_alignedCandidates[0].firstCandidateTime = 0;
          g_alignedCandidates[0].readinessRecheckAt = 0;
          XAU_M30FinalizeCandidateWithoutTrade(ownerCandidateBlock);
@@ -19201,12 +20357,6 @@ void OnTick()
       }
    }
 
-   // v6.24.0: grade is final here. SMC and the old TRI re-entry watch are
-   // context-only observations and have no independent execution authority.
-   XAU_RecordMarketSnapshot("SCAN_EVALUATED", signal, setupName, grade, setupScore, combinedScore);
-   XAU_CaptureDecisionSnapshot(signal,setupName,grade,setupScore,combinedScore);
-   g_lastEntryScanAt = TimeCurrent(); // v6.17.12: watchdog stamp moved here, see note above CopyEntryBuffer block
-   XAU_LogScanState((signal != 0 && grade != "SKIP") ? "SCAN_COMPLETED_CANDIDATE" : "SCAN_COMPLETED_NO_TRADE");
    // v6.17.14 FLEET-CONSISTENCY: DecisionFingerprint -- one line per completed
    // M5 decision cycle, keyed to the CLOSED bar (not tick-arrival timing), so
    // the same evidence across any number of equivalent instances can be
@@ -19214,7 +20364,8 @@ void OnTick()
    // generation is proven account-state-independent; see
    // XAU_ComputeCombinedGradeForCandidate and ScoreSetups, neither reads
    // AccountInfo*) -- only lot sizing and execution are account-specific.
-   PrintFormat("DECISION_FINGERPRINT | build=%s | symbol=%s | candle=%s | setup=%s | dir=%s | grade=%s | "
+   if(!resumeFrozenPrimaryCandidate)
+      PrintFormat("DECISION_FINGERPRINT | build=%s | symbol=%s | candle=%s | setup=%s | dir=%s | grade=%s | "
                "rawScore=%.2f | combined=%.2f | regime=%s | htfBias=%+d | activeDir=%d(%s) | spread=%.0f | "
                "final=%s",
                XAUAI_BUILD_HASH, Symbol(), TimeToString(curBar, TIME_DATE | TIME_MINUTES | TIME_SECONDS),
@@ -19222,8 +20373,6 @@ void OnTick()
                setupScore, combinedScore, RegimeName(), g_htfConsensusDir,
                (int)g_activeDirection, g_activeDirectionTier, spread,
                (signal != 0 && grade != "SKIP") ? "CANDIDATE" : "NO_TRADE");
-   // v6.3.8 Upgrade 6: count every real (non-SKIP) signal through the pipeline
-   if(signal != 0 && grade != "SKIP") { g_totalSignals++; g_ftReport_Signals++; }
    // v6.3.8 Upgrade 7 / v6.3.9: 24h gate analytics report + equity watermark update + FT report tracking
    {
       double curEq = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -19272,7 +20421,7 @@ void OnTick()
    double firstSeenPx = signal > 0 ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
                                    : SymbolInfoDouble(Symbol(), SYMBOL_BID);
    if(firstSeenPx <= 0.0) firstSeenPx = iClose(Symbol(), XAU_PRIMARY_DECISION_TF, 1);
-   if(signal != 0 && grade != "SKIP")
+   if(!resumeFrozenPrimaryCandidate && signal != 0 && grade != "SKIP")
       XAU_TrackSignalFirstSeen(signal, setupName, grade, setupScore, combinedScore, firstSeenPx, bufATR[1]);
 
    // A valid loss-context re-entry gets first use of this *same* immutable
@@ -19286,7 +20435,7 @@ void OnTick()
          XAU_InvalidateReentryState("REENTRY_DISABLED_IN_M30_CONSENSUS_MODE",
                                     "M30 candidate is the sole normal-core origination source and owns the single timer");
    }
-   else if(CheckReEntryOpportunity()) return;
+   else if(!resumeFrozenPrimaryCandidate && CheckReEntryOpportunity()) return;
 
    // v6.24.0 ALIGNED ENTRY ENGINE — exact authority order:
    // candidate -> score/grade -> confirmed structure -> freshness/extension
@@ -19296,6 +20445,9 @@ void OnTick()
    {
       if(g_alignedCandidates[0].firstCandidateTime > 0)
       {
+         XAU_RecordExactPrimaryOutcome(g_alignedCandidates[0].candidateDirection,
+                                       g_alignedCandidates[0].candidateSetup,
+                                       "CANCEL_SIGNAL_INVALIDATED",false);
          g_alignedCandidates[0].firstCandidateTime = 0;
          XAU_M30FinalizeCandidateWithoutTrade("CANCEL_SIGNAL_INVALIDATED");
       }
@@ -19305,6 +20457,7 @@ void OnTick()
 
    if(entryExecutionBlocked)
    {
+      XAU_RecordExactPrimaryOutcome(signal,setupName,"CANCEL_OPERATIONAL_BLOCK: "+entryExecutionBlockReason,false);
       g_alignedCandidates[0].firstCandidateTime = 0;
       XAU_M30FinalizeCandidateWithoutTrade("CANCEL_OPERATIONAL_BLOCK");
       Print("OPERATIONAL ENTRY BLOCK: ", entryExecutionBlockReason);
@@ -19316,6 +20469,7 @@ void OnTick()
    string structureWhy = "";
    if(!XAU_StructureAuthorityAllows(signal, setupName, structureWhy))
    {
+      XAU_RecordExactPrimaryOutcome(signal,setupName,"CANCEL_STRUCTURE_INVALIDATED: "+structureWhy,false);
       g_alignedCandidates[0].firstCandidateTime = 0;
       XAU_M30FinalizeCandidateWithoutTrade("CANCEL_STRUCTURE_INVALIDATED");
       Print("STRUCTURE_AUTHORITY_BLOCK: ", structureWhy);
@@ -19329,6 +20483,7 @@ void OnTick()
    if(!XAU_FreshnessExtensionAuthority(signal, setupName, setupScore, combinedScore,
                                        grade, alignedLotMulti, freshnessWhy))
    {
+      XAU_RecordExactPrimaryOutcome(signal,setupName,"CANCEL_FRESHNESS_INVALIDATED: "+freshnessWhy,false);
       g_alignedCandidates[0].firstCandidateTime = 0;
       XAU_M30FinalizeCandidateWithoutTrade("CANCEL_FRESHNESS_INVALIDATED");
       Print(freshnessWhy);
@@ -19349,17 +20504,20 @@ void OnTick()
       XAU_SmartEntryCautionGate(signal,setupName,grade,combinedScore,primaryCaution);
    if(primaryCautionDecision==XAU_SMART_ENTRY_CAUTION_WAIT)
    {
-      g_alignedCandidates[0].firstCandidateTime=0;
-      XAU_M30FinalizeCandidateWithoutTrade("CANCEL_UNBOUNDED_WAIT_STATE");
-      g_lastSkipReason="CANCELLED | "+primaryCaution.primaryReason;
-      XAU_LogBotDecision("CANCELLED",signal,setupName,grade,lastAIConfidence,combinedScore,
+      // Keep the immutable candidate and original timer. Recheck on the next
+      // genuine tick; XAU_TimingAuthorityAllows will terminally expire it once
+      // the same timer exceeds 180 seconds. No timer restart, no second system.
+      g_alignedCandidates[0].readinessRecheckAt=TimeCurrent()+1;
+      g_lastSkipReason="WAIT_BOUNDED | "+primaryCaution.primaryReason;
+      XAU_LogBotDecision("WAIT_BOUNDED",signal,setupName,grade,lastAIConfidence,combinedScore,
                          primaryCaution.primaryReason,primaryCaution.chochState,primaryCaution.htfDirection,
                          primaryCaution.aiVerdict,primaryCaution.memoryInfluence,
-                         "candidate finalized; a new opportunity requires a new M30 slot");
+                         "same immutable candidate; original timer retained; expires at 180s");
       return;
    }
    if(primaryCautionDecision==XAU_SMART_ENTRY_CAUTION_HARD_BLOCK)
    {
+      XAU_RecordExactPrimaryOutcome(signal,setupName,primaryCaution.primaryReason,false);
       g_alignedCandidates[0].firstCandidateTime=0;
       XAU_M30FinalizeCandidateWithoutTrade(primaryCaution.primaryReason=="PRICE_GENUINELY_MISSED" ? "CANCEL_MISSED_MOVE" : "CANCEL_INVALIDATED");
       g_pendingSmartCautionMemory.valid=false;
@@ -19376,6 +20534,7 @@ void OnTick()
    if(!XAU_FreshnessExtensionAuthority(signal, setupName, setupScore, combinedScore,
                                        grade, alignedLotMulti, freshnessWhy))
    {
+      XAU_RecordExactPrimaryOutcome(signal,setupName,"CANCEL_FRESHNESS_INVALIDATED: "+freshnessWhy,false);
       g_alignedCandidates[0].firstCandidateTime=0;
       XAU_M30FinalizeCandidateWithoutTrade("CANCEL_FRESHNESS_INVALIDATED");
       Print(freshnessWhy);
@@ -19384,6 +20543,7 @@ void OnTick()
 
    if(spread > InpMaxSpread)
    {
+      XAU_RecordExactPrimaryOutcome(signal,setupName,"CANCEL_SPREAD_INVALID",false);
       g_alignedCandidates[0].firstCandidateTime = 0;
       XAU_M30FinalizeCandidateWithoutTrade("CANCEL_SPREAD_INVALID");
       string wideSpread = StringFormat("EXTREME_SPREAD_BLOCK: %.0f > %d points",spread,InpMaxSpread);
@@ -19395,6 +20555,7 @@ void OnTick()
    string newsWhy = "";
    if(!XAU_NewsAuthorityAllows(newsWhy))
    {
+      XAU_RecordExactPrimaryOutcome(signal,setupName,"CANCEL_NEWS_INVALID: "+newsWhy,false);
       g_alignedCandidates[0].firstCandidateTime = 0;
       XAU_M30FinalizeCandidateWithoutTrade("CANCEL_NEWS_INVALID");
       Print("NEWS_AUTHORITY_BLOCK: ",newsWhy);
@@ -19405,6 +20566,7 @@ void OnTick()
    string finalArbiterWhy = "";
    if(!XAU_FinalEntryArbiter("PRIMARY",signal,true,true,true,true,true,true,finalArbiterWhy))
    {
+      XAU_RecordExactPrimaryOutcome(signal,setupName,"CANCEL_FINAL_ARBITER_INVALIDATED: "+finalArbiterWhy,false);
       g_alignedCandidates[0].firstCandidateTime = 0;
       XAU_M30FinalizeCandidateWithoutTrade("CANCEL_FINAL_ARBITER_INVALIDATED");
       return;
@@ -19463,14 +20625,18 @@ void OnTick()
    {
       PrintFormat("MARKET_THESIS_HARD_BLOCK_PRE_ORDERSEND | direction=%s reason=%s",
                   signal==1?"BUY":"SELL", preOrderThesis.hardBlockReason);
+      XAU_RecordExactPrimaryOutcome(signal,setupName,"CANCEL_MARKET_THESIS_INVALIDATED: "+preOrderThesis.hardBlockReason,false);
       g_alignedCandidates[0].firstCandidateTime = 0;
       XAU_M30FinalizeCandidateWithoutTrade("CANCEL_MARKET_THESIS_INVALIDATED");
       return;
    }
 
    bool tradeOpened = OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", finalSzMult);
-   // One terminal attempt per immutable M30 candidate. Success or failure
-   // ends this timing lifecycle; no readiness recheck can resurrect it.
+   XAU_RecordExactPrimaryOutcome(signal,setupName,
+                                 tradeOpened?"EXECUTED_BROKER_CONFIRMED":"CANCEL_EXECUTION_NOT_CONFIRMED",
+                                 tradeOpened);
+   // One terminal attempt per immutable candidate. Success or failure ends
+   // this timing lifecycle; no readiness recheck can resurrect it.
    g_alignedCandidates[0].firstCandidateTime = 0;
    g_alignedCandidates[0].readinessRecheckAt = 0;
    if(!tradeOpened)
@@ -20392,36 +21558,17 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                    true, false, false, 0, 0, cdMsg, reason, 0.0);
          return false;
       }
-      // v6.25.6 owner-forensic-audit fix 2026-07-17 -- this same-direction
-      // exhaustion ban is a leftover of the OLD M10-legacy re-entry flow
-      // (repeated M10 bars re-proposing a same-direction trade after a
-      // close), the identical class of problem the sibling
-      // XAU_PostTradeCooldownActive() check immediately above was already
-      // correctly exempted from M30 mode for. This check was missed --
-      // real 7-trading-day replay evidence (2026.07.08-2026.07.17,
-      // InpDecisionMode=M30, e483dd0 build) showed 56 of 65 M30 candidates
-      // that had already passed FinalEntryArbiter/timing/freshness/news
-      // (decision=ALLOW, action=ENTER_ALIGNED_FULL_RISK) were discarded
-      // here with resurrectionAllowed=false, this being by far the
-      // dominant blocker (86% of the executed-verdict-to-no-trade gap).
-      // M30's own three-snapshot consensus + one candidate + one 120-180s
-      // timer per slot is the sole intended authority for whether a fresh
-      // same-direction entry is warranted in this mode; this legacy gate
-      // must not silently re-veto what M30 already approved.
-      if(InpDecisionMode != XAU_DECISION_M30_THREE_M10_CONSENSUS)
-      {
+      // v6.25.16 TRUE-M10 frequency repair. A fresh M10 candidate that has
+      // already passed the canonical M10 decision, structure, freshness,
+      // timing and final arbiter must not be re-vetoed by the older
+      // post-close exhaustion memory. Keep that state visible for forensic
+      // telemetry only; it has no execution authority here. The universal
+      // five-minute post-trade cooldown immediately above remains unchanged.
       ENUM_XAU_OLD_DIRECTION_STATE oldDirState = OLD_DIRECTION_HEALTHY;
       if(XAU_SameDirectionReentryBlockedByExhaustion(signal, oldDirState))
       {
-         string exMsg = StringFormat("EXHAUSTED_SAME_DIRECTION_REENTRY_BLOCK: %s state=%s -- structural reset required before this direction is tradeable again",
-                                     signal == 1 ? "BUY" : "SELL", EnumToString(oldDirState));
-         Print(exMsg);
-         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "ExhaustedDirectionBan",
-                                   signal, funnelSetup, funnelGrade, funnelScore,
-                                   true, false, "BLOCKED", "OLD_DIRECTION_EXHAUSTED",
-                                   true, false, false, 0, 0, exMsg, reason, 0.0);
-         return false;
-      }
+         PrintFormat("OLD_DIRECTION_EXHAUSTION_INFORMATIONAL_ONLY: %s state=%s -- fresh M10 candidate remains governed by the existing canonical arbiter",
+                     signal == 1 ? "BUY" : "SELL", EnumToString(oldDirState));
       }
 
       // v6.24.15 — Entry Readiness Engine, computed for telemetry/Command
@@ -21381,11 +22528,42 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // broker-server time changed during its immutable 120-180s lifecycle.
    string ownerFinalEntryBlock = "";
    if(!XAU_OwnerEntryPermission("FINAL_EXECUTION", isManualOverride ? "MANUAL_FORCE" : reason,
-                                funnelGrade, ownerFinalEntryBlock))
+                                funnelGrade, ownerFinalEntryBlock, signal, funnelSetup))
    {
       g_lastSkipReason = ownerFinalEntryBlock;
       XAU_M30FinalizeCandidateWithoutTrade(ownerFinalEntryBlock);
       return false;
+   }
+
+   // v6.25.15 — one final TradeBrain filter point for normal CORE/RE_ENTRY
+   // execution. During the mandatory 180-day replay the default mode is
+   // COLLECT_ONLY, so this call can only log/collect and cannot alter the
+   // already-approved signal, direction, risk, lot, SL, TP, or exit policy.
+   // Manual owner-forced entries remain explicit overrides. Pyramid adds use
+   // their separate authoritative path and are not routed through this gate.
+   if(!isManualOverride)
+   {
+      double tradeBrainLotMulti = 1.0;
+      string tradeBrainReason = "";
+      string tradeBrainRole=XAU_TradeBrainRole(reason,isManualOverride,frozenEntryRegime,breakoutInversionApplied);
+      string tradeBrainSignature=XAU_TradeBrainExactFingerprint(signal,approvedSignalDirection,ownerOriginalSignalDirection,
+                                                                 breakoutInversionApplied,tradeBrainRole,
+                                                                 funnelSetup,funnelGrade,frozenEntryRegime);
+      bool tradeBrainAllow = XAU_TradeBrainPreEntry(signal, funnelSetup, funnelGrade,
+                                                    tradeBrainSignature,
+                                                    tradeBrainLotMulti, tradeBrainReason);
+      Print(tradeBrainReason);
+      if(!tradeBrainAllow)
+      {
+         g_lastSkipReason = "TRADEBRAIN_HIGH_LOSS_PATTERN";
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "TradeBrain",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "TRADEBRAIN_HIGH_LOSS_PATTERN",
+                                   true, false, false, 0, 0,
+                                   tradeBrainReason, reason, 0.0);
+         XAU_M30FinalizeCandidateWithoutTrade(g_lastSkipReason);
+         return false;
+      }
    }
 
    // v6.20.3 (Commit C, adversarial-review fix) — the real, atomic
@@ -21626,6 +22804,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          }
       }
       todayTradeCount++;
+      g_totalAllowed++; // v6.25.19: only broker-confirmed normal/re-entry fills count as allowed
       lastTradeDir = signal;
 
       // v6.21.3 — owner rule 2026-07-13 point 6: audit-log when a fresh,
@@ -21651,10 +22830,34 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          }
       }
 
-      XAU_BrainRecordOpen(openedPosId, signal, price, sl, tp, lots, atr,
-                          lastSignalSetup, g_pendingBrainGrade, lastSignalSignature,
+      datetime brainBrokerEntryTime=TimeCurrent();
+      if(confirmedTicket>0 && PositionSelectByTicket(confirmedTicket))
+         brainBrokerEntryTime=(datetime)PositionGetInteger(POSITION_TIME);
+      string brainRole=XAU_TradeBrainRole(reason,isManualOverride,frozenEntryRegime,breakoutInversionApplied);
+      string brainExactFingerprint=XAU_TradeBrainExactFingerprint(signal,approvedSignalDirection,ownerOriginalSignalDirection,
+                                                                   breakoutInversionApplied,brainRole,
+                                                                   funnelSetup,funnelGrade,frozenEntryRegime);
+      double brainSpreadPoints=(double)SymbolInfoInteger(Symbol(),SYMBOL_SPREAD);
+      double brainSpreadATR=(atr>0.0 && point>0.0)?(brainSpreadPoints*point/atr):0.0;
+      double brainConfirmedOpen=confirmedOpen>0.0?confirmedOpen:coreFillPx;
+      double brainSlippagePoints=(point>0.0)?MathAbs(brainConfirmedOpen-price)/point:0.0;
+      string brainAccountMarginMode=EnumToString((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE));
+      string brainNewsPhase=XAU_AdaptiveNewsPhaseName(g_adaptiveNewsPhase);
+      XAU_BrainRecordOpen(openedPosId, signal,
+                          brainConfirmedOpen,
+                          confirmedSL, confirmedTP,
+                          confirmedVolume>0.0?confirmedVolume:lots, atr,
+                          lastSignalSetup, g_pendingBrainGrade,
+                          brainExactFingerprint, lastSignalSignature,
                           g_pendingBrainSetupScore, g_pendingBrainCombinedScore,
-                          reason + " | " + g_pendingBrainEntryAudit);
+                          reason + " | " + g_pendingBrainEntryAudit,
+                          brainRole,approvedSignalDirection,ownerOriginalSignalDirection,breakoutInversionApplied,
+                          frozenEntryRegime,coreOriginalStructuralSL,
+                          ownerOriginalOneRDistance,ownerEffectiveSLDistance,
+                          coreEffectiveRiskUSD,brainSpreadPoints,brainSpreadATR,
+                          marginNeeded,freeMargin,stopLevel,brainSlippagePoints,
+                          brainAccountMarginMode,brainNewsPhase,
+                          brainBrokerEntryTime,isManualOverride);
       // v6.20.1: consume the entry-timing mailbox (if this specific attempt set
       // one) into the posId-keyed outcome record read back at close time.
       if(g_lastEntryTimingDecision.valid)
@@ -21672,9 +22875,10 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       // it. This is the one place every caller converges, so it is the one
       // place this can be guaranteed to run. Zero effect on whether the trade
       // opened -- purely observational.
-      if(g_pendingTimingProof.active)
+      if(g_pendingTimingProof.active && openedPosId>0 && confirmedTicket>0 && PositionSelectByTicket(confirmedTicket))
       {
-         XAU_AppendTimingProof(g_pendingTimingProof, openedPosId, TimeCurrent(), price,
+         double timingConfirmedPrice=confirmedOpen>0.0?confirmedOpen:(trade.ResultPrice()>0.0?trade.ResultPrice():price);
+         XAU_AppendTimingProof(g_pendingTimingProof, openedPosId, TimeCurrent(), timingConfirmedPrice,
                                signal == 1 ? "OpenTrade->trade.Buy" : "OpenTrade->trade.Sell");
          string timingProofSummary = StringFormat(
             "candidateId=%s sourcePath=%s recoveryWaitSec=%.0f timingEngineWaitSec=%.0f requiredDelaySec=%.0f timingGateRan=%s revalidation=%s bypassUsed=%s bypassReason=%s",
@@ -24432,6 +25636,7 @@ bool XAU_EmergencyLossCloseAllowed(string ctx)
    if(StringFind(c, "STOP_OUT") >= 0) return true;
    if(StringFind(c, "MARGIN") >= 0) return true;
    if(StringFind(c, "EMERGENCY") >= 0) return true;
+   if(StringFind(c, "INITIAL_SL_UNCONFIRMED") >= 0) return true; // naked accepted order is a genuine emergency
    if(StringFind(c, "MANUAL") >= 0) return true;
    if(StringFind(c, "REMOTE_FORCE_CLOSE") >= 0) return true;
    if(StringFind(c, "REMOTE_COMMAND_CLOSE_ALL") >= 0) return true;
@@ -24511,6 +25716,8 @@ bool XAU_OwnerProtectedFloorAllowsClose(ulong ticket, string ctx)
 
    ulong positionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
    int idx = XAU_RExit_FindIdx(positionId);
+   if(StringFind(ctx, "BASKET_050R_") == 0)
+      return true;
    if(StringFind(ctx, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0)
       return idx >= 0 && g_rExit[idx].ownerExitProfile == (int)OWNER_EXIT_GENERAL &&
              g_rExit[idx].extensionFullyConfirmed;
@@ -24588,6 +25795,21 @@ bool XAU_OwnerProtectedFloorAllowsModify(ulong ticket, double proposedSL, string
       return false;
    }
 
+   // The hard +0.50R basket authority must remove any per-leg profit floor
+   // that existed before the pyramid/add was opened. It may move SL only to
+   // the exact immutable original structural SL; it can never widen past it.
+   if(StringFind(ctx, "BASKET_050R_RESTORE_ORIGINAL_SL") == 0)
+   {
+      double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+      double tolerance = MathMax(point * 2.0, 0.00001);
+      bool exactOriginal = MathAbs(proposedSL - g_rExit[idx].originalStopLoss) <= tolerance;
+      if(exactOriginal)
+         return true;
+      PrintFormat("BASKET_050R_SL_RESTORE_FAILED | position_id=%I64u | stage=SL_RESTORE_PERMISSION | reason=NOT_EXACT_ORIGINAL_SL proposed=%.5f original=%.5f profile=%s",
+                  positionId, proposedSL, g_rExit[idx].originalStopLoss, XAU_OwnerExitProfileName(profile));
+      return false;
+   }
+
    double protectedFloorR = MathMax(g_rExit[idx].guaranteedFloorR,
                                     XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile));
    if(protectedFloorR <= 0.0) return true;
@@ -24630,7 +25852,22 @@ bool XAU_IsOwnerRExitApprovedCloseReason(string ctx)
           StringFind(ctx, "OWNER_R_EXIT_GIVEBACK_45") == 0 ||
           StringFind(ctx, "OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED") == 0 ||
           StringFind(ctx, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0 ||
-          StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0;
+          StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0 ||
+          StringFind(ctx, "BASKET_050R_") == 0;
+}
+
+bool XAU_ConfirmedGeneralDeadlineClose(ulong ticket,string ctx)
+{
+   if(StringFind(ctx,"OWNER_R_EXIT_GENERAL_10M_DEADLINE")!=0) return false;
+   if(!PositionSelectByTicket(ticket)) return false;
+   ulong positionId=(ulong)PositionGetInteger(POSITION_IDENTIFIER);
+   int idx=XAU_RExit_FindIdx(positionId);
+   if(idx<0) return false;
+   return g_rExit[idx].ownerExitProfile==(int)OWNER_EXIT_GENERAL &&
+          g_rExit[idx].extensionArmed &&
+          g_rExit[idx].extensionFullyConfirmed &&
+          g_rExit[idx].extensionDeadline>0 &&
+          TimeCurrent()>=g_rExit[idx].extensionDeadline;
 }
 
 bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = false)
@@ -24643,8 +25880,10 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
    ulong ownerPositionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
    int ownerIdx = XAU_RExit_FindIdx(ownerPositionId);
    bool deadlineClose = StringFind(ctx, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0;
+   bool confirmedDeadlineClose=XAU_ConfirmedGeneralDeadlineClose(ticket,ctx);
+   bool hardBasketClose = StringFind(ctx, "BASKET_050R_") == 0;
    bool initialStopIntegrity = StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0;
-   if(!externalManual && !deadlineClose && !initialStopIntegrity && ownerIdx >= 0 &&
+   if(!externalManual && !deadlineClose && !hardBasketClose && !initialStopIntegrity && ownerIdx >= 0 &&
       XAU_General10MExtensionActive(ownerIdx))
    {
       XAU_General10MLogSuppressed(ownerIdx, ctx);
@@ -24666,6 +25905,18 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
                   ticket, ctx);
       return false;
    }
+
+   // The fully-confirmed GENERAL deadline is not a discretionary panic close:
+   // the owner manager deliberately restored the original structural SL and
+   // promised a market close at T+600. The 90-day audit proved the generic
+   // loss firewall otherwise retries forever if price crosses negative during
+   // the extension. Bypass only for this exact persisted state and deadline;
+   // every other losing close still passes the unchanged firewall.
+   if(!externalManual && !confirmedDeadlineClose && !XAU_LossCloseFirewallAllows(ticket,ctx))
+      return false;
+   if(confirmedDeadlineClose)
+      PrintFormat("GENERAL_10M_EXTENSION_DEADLINE_FIREWALL_BYPASS | ticket=%I64u | authority=%s | state=FULLY_CONFIRMED | deadline=%s",
+                  ticket,ctx,TimeToString(g_rExit[ownerIdx].extensionDeadline,TIME_DATE|TIME_SECONDS));
 
    // Initial-stop integrity is an owner risk-policy exception during the
    // broker-open reconciliation window, before campaign/R state exists. It
@@ -26099,6 +27350,7 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
    datetime now = TimeCurrent();
    if(idx < 0 || idx >= ArraySize(g_rExit)) return false;
    bool deadlineClose = StringFind(reason, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0;
+   bool hardBasketClose = StringFind(reason, "BASKET_050R_") == 0;
    if(!XAU_IsOwnerRExitApprovedCloseReason(reason))
    {
       PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_LEGACY_AUTHORITY | ticket=%I64u | attempted_authority=%s | action=TELEMETRY_ONLY",
@@ -26115,14 +27367,15 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
 
    // Once armed, no later managed/discretionary profitable-close request may
    // shorten or restart the extension. Only the fixed deadline reason is sent.
-   if(XAU_General10MExtensionActive(idx) && !deadlineClose)
+   if(XAU_General10MExtensionActive(idx) && !deadlineClose && !hardBasketClose)
    {
       XAU_General10MLogSuppressed(idx, reason);
       return false;
    }
 
    double ownerFloorNow = XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile);
-   if(!XAU_OwnerRExitDecisionAllowsClose(g_rExit[idx].peakR,g_rExit[idx].currentR,
+   if(!hardBasketClose &&
+      !XAU_OwnerRExitDecisionAllowsClose(g_rExit[idx].peakR,g_rExit[idx].currentR,
                                          g_rExit[idx].guaranteedFloorR,profile,reason))
    {
       PrintFormat("OWNER_FLOOR_OVERRIDE | attempted_exit_authority=%s | attempted_exit_r=%.3f | protected_floor_r=%.3f | action=REJECT_LOWER_EXIT",
@@ -26136,7 +27389,7 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
    // restore the original structural SL/remove broker TP, then suppress this
    // original close. Failure to confirm restoration falls through and sends
    // the original already-approved close exactly as before.
-   if(!deadlineClose && profile == OWNER_EXIT_GENERAL && g_rExit[idx].currentR > 0.0 &&
+   if(!deadlineClose && !hardBasketClose && profile == OWNER_EXIT_GENERAL && g_rExit[idx].currentR > 0.0 &&
       g_rExit[idx].currentProfitUSD > 0.0 && !g_rExit[idx].extensionArmed &&
       !g_rExit[idx].extensionCompleted)
    {
@@ -26193,11 +27446,20 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
          g_rExit[idx].extensionCompleted = true;
          double realizedProfit = g_rExit[idx].currentProfitUSD;
          double confirmedPrice = trade.ResultPrice();
-         ulong closeDeal = trade.ResultDeal();
-         if(closeDeal > 0 && HistoryDealSelect(closeDeal))
-            realizedProfit = HistoryDealGetDouble(closeDeal, DEAL_PROFIT) +
-                             HistoryDealGetDouble(closeDeal, DEAL_SWAP) +
-                             HistoryDealGetDouble(closeDeal, DEAL_COMMISSION);
+         datetime confirmedCloseTime=0;
+         bool cumulativeVerified=XAU_TradeBrainPositionNetResult(g_rExit[idx].positionId,
+                                                                 realizedProfit,
+                                                                 confirmedPrice,
+                                                                 confirmedCloseTime);
+         if(!cumulativeVerified)
+         {
+            ulong closeDeal = trade.ResultDeal();
+            if(closeDeal > 0 && HistoryDealSelect(closeDeal))
+               realizedProfit = HistoryDealGetDouble(closeDeal, DEAL_PROFIT) +
+                                HistoryDealGetDouble(closeDeal, DEAL_SWAP) +
+                                HistoryDealGetDouble(closeDeal, DEAL_COMMISSION) +
+                                HistoryDealGetDouble(closeDeal, DEAL_FEE);
+         }
          double realizedR = g_rExit[idx].cumulativeOriginalRiskUSD > 0.0
                             ? realizedProfit / g_rExit[idx].cumulativeOriginalRiskUSD
                             : g_rExit[idx].currentR;
@@ -26363,53 +27625,177 @@ void XAU_CloseCampaignBasketAtProtectedFloor(int direction, string reason)
 }
 
 // Computes combined campaign P/L directly from live broker positions (no
-// indicator dependency whatsoever -- this must work even during indicator
-// warm-up/failure, exactly like the rest of XAU_RExitCoreLoop), arms/ratchets
-// the basket floor per the owner's exact formula, and triggers the
-// coordinated close when breached. Called once per direction, per tick,
-// unconditionally, from XAU_RExitCoreLoop -- never from ManagePositions().
+// indicator dependency whatsoever). The initial CORE money-risk remains the
+// immutable basket 1R denominator. Any campaign with pyramid/add exposure
+// closes every leg immediately when combined net open P/L reaches +0.50R.
+// Called once per direction, per tick, unconditionally from XAU_RExitCoreLoop.
+bool XAU_RestoreBasketLegOriginalProtection(ulong ticket, int idx, string &failureReason)
+{
+   failureReason = "";
+   if(idx < 0 || idx >= ArraySize(g_rExit)) { failureReason="INVALID_R_EXIT_INDEX"; return false; }
+   if(!PositionSelectByTicket(ticket)) { failureReason="POSITION_NOT_LIVE"; return false; }
+
+   bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   double tolerance = MathMax(point * 2.0, 0.00001);
+   double originalSL = NormalizeDouble(g_rExit[idx].originalStopLoss, digits);
+   double currentSL = PositionGetDouble(POSITION_SL);
+   double currentTP = PositionGetDouble(POSITION_TP);
+   double currentPrice = isBuy ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   bool structuralGeometryValid = isBuy ? (originalSL < g_rExit[idx].originalEntryPrice)
+                                        : (originalSL > g_rExit[idx].originalEntryPrice);
+   if(!structuralGeometryValid || originalSL <= 0.0)
+   {
+      failureReason = "INVALID_FROZEN_ORIGINAL_STRUCTURAL_SL";
+      return false;
+   }
+
+   bool alreadyAtOriginal = MathAbs(currentSL - originalSL) <= tolerance;
+   bool tpAlreadyRemoved = currentTP <= tolerance;
+   if(!alreadyAtOriginal || !tpAlreadyRemoved)
+   {
+      PrintFormat("BASKET_050R_SL_RESTORE_REQUEST | position_id=%I64u | ticket=%I64u | current_sl=%.5f | original_structural_sl=%.5f | current_tp=%.5f",
+                  g_rExit[idx].positionId, ticket, currentSL, originalSL, currentTP);
+      bool accepted = SafeModifySL(ticket, originalSL, 0.0, isBuy, currentPrice,
+                                   "BASKET_050R_RESTORE_ORIGINAL_SL");
+      if(!accepted)
+      {
+         failureReason = StringFormat("BROKER_MODIFY_REJECTED ret=%u err=%d", trade.ResultRetcode(), GetLastError());
+         return false;
+      }
+      if(!PositionSelectByTicket(ticket)) { failureReason="POSITION_VANISHED_AFTER_RESTORE"; return false; }
+      double actualSL = PositionGetDouble(POSITION_SL);
+      double actualTP = PositionGetDouble(POSITION_TP);
+      if(MathAbs(actualSL - originalSL) > tolerance || actualTP > tolerance)
+      {
+         failureReason = StringFormat("BROKER_REREAD_NOT_CONFIRMED actualSL=%.5f actualTP=%.5f", actualSL, actualTP);
+         return false;
+      }
+      PrintFormat("BASKET_050R_SL_RESTORE_CONFIRMED | position_id=%I64u | ticket=%I64u | original_structural_sl=%.5f | tp_removed=true",
+                  g_rExit[idx].positionId, ticket, originalSL);
+   }
+
+   // Basket mode owns every managed profit decision. Cancel any per-leg
+   // extension/floor state so it cannot resume and close one leg separately.
+   bool ownerStateChanged = g_rExit[idx].extensionArmed || g_rExit[idx].extensionFullyConfirmed ||
+                            g_rExit[idx].extensionStructuralSLRestored || g_rExit[idx].extensionDeadlineCloseSent ||
+                            g_rExit[idx].extensionDeadlineCloseConfirmed || g_rExit[idx].profitGuaranteeArmed ||
+                            MathAbs(g_rExit[idx].guaranteedFloorR) > 0.0000001 ||
+                            MathAbs(g_rExit[idx].guaranteedFloorDesiredSL - originalSL) > tolerance ||
+                            g_rExit[idx].guaranteedFloorGeometryBlocked ||
+                            MathAbs(g_rExit[idx].lastProtectedSL - originalSL) > tolerance;
+   if(ownerStateChanged)
+   {
+      g_rExit[idx].extensionArmed = false;
+      g_rExit[idx].extensionFullyConfirmed = false;
+      g_rExit[idx].extensionStructuralSLRestored = false;
+      g_rExit[idx].extensionDeadlineCloseSent = false;
+      g_rExit[idx].extensionDeadlineCloseConfirmed = false;
+      g_rExit[idx].profitGuaranteeArmed = false;
+      g_rExit[idx].guaranteedFloorR = 0.0;
+      g_rExit[idx].guaranteedFloorDesiredSL = originalSL;
+      g_rExit[idx].guaranteedFloorGeometryBlocked = false;
+      g_rExit[idx].lastProtectedSL = originalSL;
+      g_rExitStateDirty = true;
+   }
+   return true;
+}
+
+// Owner-approved FINAL basket policy:
+// - The first CORE's immutable initial money risk is the only 1R denominator.
+// - As soon as the campaign has any pyramid/add exposure, combined net open
+//   P/L owns the exit decision.
+// - At >= +0.50R, close every live campaign leg immediately and latch/retry
+//   until none remain.
+// - Before target, no individual managed profit close, TP, floor, giveback,
+//   transition close, or GENERAL 10-minute extension may close one leg alone.
+//   Every leg keeps only its immutable original structural SL.
+void XAU_ActivateBasketModeImmediately(int direction)
+{
+   int slot = XAU_CampaignSlot(direction);
+   if(!g_campaign[slot].active) return;
+   g_campaign[slot].basketModeEverActivated = true;
+   g_campaign[slot].basketLogicalAdditionCount = MathMax(1, MathMax(g_campaign[slot].basketLogicalAdditionCount,
+                                                                    g_campaign[slot].additionCount));
+   g_campaignBasketStateDirty = true;
+
+   int restored = 0, pending = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber || PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      int liveDir = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? 1 : -1;
+      if(liveDir != direction) continue;
+      ulong posId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      int idx = XAU_RExit_FindIdx(posId);
+      if(idx < 0)
+      {
+         bool isBuy = liveDir == 1;
+         idx = XAU_RExit_EnsureIdx(posId, tk, isBuy, PositionGetDouble(POSITION_PRICE_OPEN),
+                                   PositionGetDouble(POSITION_SL), PositionGetDouble(POSITION_VOLUME), true);
+      }
+      string failure = "";
+      if(XAU_RestoreBasketLegOriginalProtection(tk, idx, failure)) restored++;
+      else
+      {
+         pending++;
+         PrintFormat("BASKET_050R_IMMEDIATE_ACTIVATION_RESTORE_PENDING | ticket=%I64u | reason=%s", tk, failure);
+      }
+   }
+   XAU_CampaignBasketState_Save(true);
+   XAU_RExit_SaveState(true);
+   PrintFormat("BASKET_050R_MODE_ACTIVATED | campaignId=%s | direction=%s | restored=%d | pending=%d | action=NO_INDIVIDUAL_TP_OR_MANAGED_PROFIT_CLOSE",
+               XAU_CampaignIdText(g_campaign[slot].campaignId), direction==1?"BUY":"SELL", restored, pending);
+}
+
 void XAU_UpdateCampaignBasketState(int direction)
 {
    int slot = XAU_CampaignSlot(direction);
+   bool campaignHasAdds = g_campaign[slot].active &&
+                          (g_campaign[slot].basketModeEverActivated ||
+                           g_campaign[slot].basketLogicalAdditionCount > 0 ||
+                           g_campaign[slot].additionCount > 0 || g_campaign[slot].activePositionCount >= 2 ||
+                           g_campaign[slot].basketCloseInProgress || g_campaign[slot].basketProtectionArmed);
+   if(!campaignHasAdds)
+      return;
 
-   // v6.25.11 migration guard: an older persisted basket snapshot may load
-   // with one surviving position. Clear that telemetry state without ever
-   // transferring its money floor into the survivor's per-leg R geometry.
-   if(g_campaign[slot].active && g_campaign[slot].activePositionCount == 1 &&
-      (g_campaign[slot].basketConversionPending || g_campaign[slot].basketProtectionArmed))
+   // The persisted 0.50R armed state is the restart-safe close latch. Resume
+   // closing even if current P/L moved after restart or only one leg remains.
+   bool persistedHardCloseLatch = g_campaign[slot].basketProtectionArmed &&
+                                  g_campaign[slot].basketProtectedFloorR + 0.0000001 >= XAU_PYRAMID_BASKET_HARD_CLOSE_R;
+   if(g_campaign[slot].basketCloseInProgress || persistedHardCloseLatch)
    {
-      ulong survivingTicket = 0;
-      double convertedFloorR = 0.0;
-      string conversionStatus = XAU_TryConvertBasketToSingleFloor(direction, slot, survivingTicket, convertedFloorR);
-      PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f diagnosticConvertedFloorR=%.3f action=CLEAR_LEGACY_BASKET_TELEMETRY_KEEP_PER_LEG_OWNER_FLOOR",
-                  conversionStatus, XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
-                  g_campaign[slot].basketProtectedFloorMoney, convertedFloorR);
-      g_campaign[slot].basketProtectionArmed     = false;
-      g_campaign[slot].basketPeakProfitMoney     = 0.0;
-      g_campaign[slot].basketPeakR               = 0.0;
-      g_campaign[slot].basketProtectedFloorMoney = 0.0;
-      g_campaign[slot].basketProtectedFloorR     = 0.0;
-      g_campaign[slot].basketConversionPending    = false;
-      g_campaign[slot].basketConversionRetryCount = 0;
-      g_campaignBasketStateDirty = true;
+      g_campaign[slot].basketCloseInProgress = true;
+      XAU_CloseCampaignBasketAtProtectedFloor(direction, "BASKET_050R_CLOSE_ALL_RETRY");
       return;
    }
-   if(!g_campaign[slot].active || g_campaign[slot].activePositionCount < 2)
-      return; // single-position campaigns use the individual exit floor, untouched
 
-   double basketProfitMoney = 0.0;
+   // PASS 1: measure the combined live net P/L first. The target close must
+   // never wait behind synchronous SL/TP restore requests.
+   // Campaign target is based on total campaign P/L, not merely currently
+   // floating legs. A leg that already closed cannot be forgotten, otherwise
+   // a prior loss could make a false +0.50R trigger.
+   double basketOpenProfitMoney = 0.0;
    int found = 0;
-   for(int i = 0; i < PositionsTotal(); i++)
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong tk = PositionGetTicket(i);
       if(!posInfo.SelectByTicket(tk)) continue;
       if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
       int posDir = posInfo.PositionType() == POSITION_TYPE_BUY ? 1 : -1;
       if(posDir != direction) continue;
-      basketProfitMoney += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+      basketOpenProfitMoney += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
       found++;
    }
-   if(found < 2) return; // broker disagrees with cached activePositionCount this instant -- OnTradeTransaction/RegisterClose will reconcile the count; skip this tick rather than act on a stale count
+
+   // Hedging accounts normally have >=2 broker positions. Netting accounts
+   // may have one merged position while additionCount proves pyramid volume.
+   if(found < 1)
+      return;
+
+   double basketProfitMoney = g_campaign[slot].realizedPL + basketOpenProfitMoney;
 
    if(g_campaign[slot].basketOneRMoney <= 0.0)
    {
@@ -26417,76 +27803,86 @@ void XAU_UpdateCampaignBasketState(int direction)
       if(TimeCurrent() - lastNoRLog[slot] >= 60)
       {
          lastNoRLog[slot] = TimeCurrent();
-         PrintFormat("BASKET_EXIT_SKIPPED_NO_VALID_1R slot=%d dir=%s reason=basketOneRMoney<=0 (core money-risk unknown -- e.g. restart lazy-adopt with no persisted state)",
-                     slot, direction == 1 ? "BUY" : "SELL");
+         PrintFormat("BASKET_050R_EXIT_SKIPPED_NO_VALID_1R | slot=%d | dir=%s | campaignId=%s | reason=INITIAL_CORE_RISK_UNKNOWN",
+                     slot, direction == 1 ? "BUY" : "SELL", XAU_CampaignIdText(g_campaign[slot].campaignId));
       }
       return;
    }
 
    double basketCurrentR = basketProfitMoney / g_campaign[slot].basketOneRMoney;
+   double basketTargetMoney = XAU_PYRAMID_BASKET_HARD_CLOSE_R * g_campaign[slot].basketOneRMoney;
 
    if(basketProfitMoney > g_campaign[slot].basketPeakProfitMoney)
    {
       g_campaign[slot].basketPeakProfitMoney = basketProfitMoney;
       g_campaign[slot].basketPeakR = basketCurrentR;
       g_campaignBasketStateDirty = true;
-      PrintFormat("BASKET_PEAK_UPDATED slot=%d dir=%s campaignId=%s peakProfitMoney=%.2f peakR=%.3f",
+      PrintFormat("BASKET_050R_PEAK_UPDATED | slot=%d | dir=%s | campaignId=%s | peakProfitMoney=%.2f | peakR=%.3f",
                   slot, direction == 1 ? "BUY" : "SELL", XAU_CampaignIdText(g_campaign[slot].campaignId),
                   g_campaign[slot].basketPeakProfitMoney, g_campaign[slot].basketPeakR);
    }
 
-   // Consolidate the existing basket floor with the same single canonical
-   // owner-floor function used by individual positions. The campaign's
-   // profile was frozen at core entry and every add inherits it.
-   ENUM_XAU_OWNER_EXIT_PROFILE basketOwnerProfile = (ENUM_XAU_OWNER_EXIT_PROFILE)g_campaign[slot].ownerExitProfile;
-   double basketOwnerRequiredFloorR = XAU_ComputeOwnerRequiredFloorR(g_campaign[slot].basketPeakR, basketOwnerProfile);
-   double basketExistingValidFloorR = g_campaign[slot].basketProtectedFloorR;
-   double desiredFloorR = MathMax(basketExistingValidFloorR, basketOwnerRequiredFloorR);
-   if(desiredFloorR > 0.0)
+   // Hard target owns priority. Persist the latch, then send close requests
+   // immediately; no indicator, confirmation, candle-close or 10-minute wait.
+   if(basketCurrentR + 0.0000001 >= XAU_PYRAMID_BASKET_HARD_CLOSE_R)
    {
-      if(!g_campaign[slot].basketProtectionArmed || desiredFloorR > g_campaign[slot].basketProtectedFloorR + 0.0000001)
-      {
-         bool justArmed = !g_campaign[slot].basketProtectionArmed;
-         g_campaign[slot].basketProtectionArmed     = true;
-         g_campaign[slot].basketProtectedFloorR     = desiredFloorR;
-         g_campaign[slot].basketProtectedFloorMoney = desiredFloorR * g_campaign[slot].basketOneRMoney;
-         g_campaignBasketStateDirty = true;
-         PrintFormat("%s slot=%d dir=%s campaignId=%s peakR=%.3f floorR=%.3f floorMoney=%.2f",
-                     justArmed ? "BASKET_PROTECTION_ARMED" : "BASKET_FLOOR_RATCHETED",
-                     slot, direction == 1 ? "BUY" : "SELL", XAU_CampaignIdText(g_campaign[slot].campaignId),
-                     g_campaign[slot].basketPeakR, g_campaign[slot].basketProtectedFloorR, g_campaign[slot].basketProtectedFloorMoney);
-         PrintFormat("OWNER_EXIT_PROFILE=%s | OWNER_EXIT_ARMED=%s | OWNER_EXIT_PEAK_R=%.3f | OWNER_EXIT_REQUIRED_LOCK_R=%.3f | OWNER_EXIT_EXISTING_LOCK_R=%.3f | OWNER_EXIT_FINAL_LOCK_R=%.3f | campaignId=%s",
-                     XAU_OwnerExitProfileName(basketOwnerProfile), basketOwnerRequiredFloorR > 0.0 ? "true" : "false",
-                     g_campaign[slot].basketPeakR, basketOwnerRequiredFloorR, basketExistingValidFloorR,
-                     g_campaign[slot].basketProtectedFloorR, XAU_CampaignIdText(g_campaign[slot].campaignId));
-         PrintFormat("OWNER_FLOOR_UPDATE | profile=%s | peak_r=%.3f | previous_floor_r=%.3f | new_floor_r=%.3f | reason=%s",
-                     XAU_OwnerExitProfileName(basketOwnerProfile), g_campaign[slot].basketPeakR,
-                     basketExistingValidFloorR, g_campaign[slot].basketProtectedFloorR,
-                     XAU_OwnerFloorUpdateReason(g_campaign[slot].basketPeakR, basketOwnerProfile));
-         XAU_CampaignBasketState_Save(true); // arm/ratchet is a critical transition -- flush immediately, same convention as R_EXIT's own critical-transition force-saves
-      }
+      g_campaign[slot].basketProtectionArmed = true;
+      g_campaign[slot].basketProtectedFloorR = XAU_PYRAMID_BASKET_HARD_CLOSE_R;
+      g_campaign[slot].basketProtectedFloorMoney = basketTargetMoney;
+      g_campaign[slot].basketCloseInProgress = true;
+      g_campaignBasketStateDirty = true;
+      XAU_CampaignBasketState_Save(true);
+
+      PrintFormat("BASKET_050R_TARGET_REACHED | campaignId=%s | dir=%s | brokerPositions=%d | additions=%d | basketProfitMoney=%.2f | realizedPL=%.2f | openPL=%.2f | initialCoreOneRMoney=%.2f | basketR=%.3f | targetR=%.2f | action=IMMEDIATE_CLOSE_ALL",
+                  XAU_CampaignIdText(g_campaign[slot].campaignId), direction == 1 ? "BUY" : "SELL",
+                  found, g_campaign[slot].additionCount, basketProfitMoney, g_campaign[slot].realizedPL,
+                  basketOpenProfitMoney, g_campaign[slot].basketOneRMoney, basketCurrentR, XAU_PYRAMID_BASKET_HARD_CLOSE_R);
+      PrintFormat("BASKET_050R_CLOSE_ALL | campaignId=%s | originalCoreTicket=%I64u | targetMoney=%.2f | currentMoney=%.2f | noIndividualClose=true | noDelay=true",
+                  XAU_CampaignIdText(g_campaign[slot].campaignId), g_campaign[slot].initialCoreTicket,
+                  basketTargetMoney, basketProfitMoney);
+      XAU_CloseCampaignBasketAtProtectedFloor(direction, "BASKET_050R_HARD_TARGET");
+      return;
    }
 
-   bool triggerClose = g_campaign[slot].basketProtectionArmed && basketProfitMoney <= g_campaign[slot].basketProtectedFloorMoney;
+   // PASS 2: below target, remove old per-leg TP/profit floors and preserve
+   // only each leg's immutable original structural SL. This is retried until
+   // broker reread confirms every leg.
+   bool allOriginalProtectionConfirmed = true;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(!posInfo.SelectByTicket(tk)) continue;
+      if(posInfo.Magic() != InpMagicNumber || posInfo.Symbol() != Symbol()) continue;
+      int posDir = posInfo.PositionType() == POSITION_TYPE_BUY ? 1 : -1;
+      if(posDir != direction) continue;
+
+      ulong positionId = posInfo.Identifier();
+      int idx = XAU_RExit_FindIdx(positionId);
+      if(idx < 0)
+         idx = XAU_RExit_EnsureIdx(positionId, tk, posDir == 1, posInfo.PriceOpen(), posInfo.StopLoss(), posInfo.Volume(), false);
+
+      string restoreFailure = "";
+      if(!XAU_RestoreBasketLegOriginalProtection(tk, idx, restoreFailure))
+      {
+         allOriginalProtectionConfirmed = false;
+         if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
+         {
+            g_rExit[idx].lastTelemetryLog = TimeCurrent();
+            PrintFormat("BASKET_050R_SL_RESTORE_PENDING | campaignId=%s | ticket=%I64u | reason=%s | action=RETRY_NEXT_TICK",
+                        XAU_CampaignIdText(g_campaign[slot].campaignId), tk, restoreFailure);
+         }
+      }
+   }
 
    static datetime lastStateLog[2] = {0, 0};
    if(TimeCurrent() - lastStateLog[slot] >= 30)
    {
       lastStateLog[slot] = TimeCurrent();
-      PrintFormat("BASKET_EXIT_STATE | campaignId=%s positionCount=%d basketProfitMoney=%.2f basketOneRMoney=%.2f currentR=%.3f peakProfitMoney=%.2f peakR=%.3f protectionArmed=%s protectedFloorMoney=%.2f protectedFloorR=%.3f action=%s",
-                  XAU_CampaignIdText(g_campaign[slot].campaignId), g_campaign[slot].activePositionCount,
-                  basketProfitMoney, g_campaign[slot].basketOneRMoney, basketCurrentR,
-                  g_campaign[slot].basketPeakProfitMoney, g_campaign[slot].basketPeakR,
-                  g_campaign[slot].basketProtectionArmed ? "true" : "false",
-                  g_campaign[slot].basketProtectedFloorMoney, g_campaign[slot].basketProtectedFloorR,
-                  triggerClose ? "CLOSING_BASKET" : (g_campaign[slot].basketProtectionArmed ? "FLOOR_ARMED" : "LET_BASKET_RUN"));
-   }
-
-   if(triggerClose)
-   {
-      PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | legacy_authority=BASKET_FLOOR | slot=%d | dir=%s | campaignId=%s | basketProfitMoney=%.2f | protectedFloorMoney=%.2f | action=NO_BASKET_CLOSE",
-                  slot, direction == 1 ? "BUY" : "SELL", XAU_CampaignIdText(g_campaign[slot].campaignId),
-                  basketProfitMoney, g_campaign[slot].basketProtectedFloorMoney);
+      PrintFormat("BASKET_050R_STATE | campaignId=%s | brokerPositions=%d | cachedCampaignPositions=%d | additions=%d | basketProfitMoney=%.2f | initialCoreOneRMoney=%.2f | currentR=%.3f | hardTargetR=%.2f | hardTargetMoney=%.2f | originalProtectionConfirmed=%s | action=HOLD_AS_ONE_BASKET",
+                  XAU_CampaignIdText(g_campaign[slot].campaignId), found, g_campaign[slot].activePositionCount,
+                  g_campaign[slot].additionCount, basketProfitMoney, g_campaign[slot].basketOneRMoney,
+                  basketCurrentR, XAU_PYRAMID_BASKET_HARD_CLOSE_R, basketTargetMoney,
+                  allOriginalProtectionConfirmed ? "true" : "false");
    }
 }
 
@@ -26499,7 +27895,10 @@ string XAU_CampaignBasketDisplayJson(int direction)
    int slot = XAU_CampaignSlot(direction);
    if(!g_campaign[slot].active)
       return "{\"exit_mode\":\"NONE\"}";
-   if(g_campaign[slot].activePositionCount < 2)
+   bool displayBasketMode = g_campaign[slot].basketModeEverActivated || g_campaign[slot].basketLogicalAdditionCount > 0 ||
+                            g_campaign[slot].additionCount > 0 || g_campaign[slot].activePositionCount >= 2 ||
+                            g_campaign[slot].basketCloseInProgress || g_campaign[slot].basketProtectionArmed;
+   if(!displayBasketMode)
       return StringFormat("{\"exit_mode\":\"INDIVIDUAL_PRIMARY\",\"campaign_id\":\"%s\",\"position_count\":%d}",
                            XAU_CampaignIdText(g_campaign[slot].campaignId), g_campaign[slot].activePositionCount);
 
@@ -26513,20 +27912,21 @@ string XAU_CampaignBasketDisplayJson(int direction)
       basketProfitMoney += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
    }
    double basketCurrentR = g_campaign[slot].basketOneRMoney > 0.0 ? basketProfitMoney / g_campaign[slot].basketOneRMoney : 0.0;
-   string nextAction = (g_campaign[slot].basketProtectionArmed && basketProfitMoney <= g_campaign[slot].basketProtectedFloorMoney)
-                       ? "CLOSING_BASKET" : (g_campaign[slot].basketProtectionArmed ? "FLOOR_ARMED" : "LET_BASKET_RUN");
+   double hardTargetMoney = g_campaign[slot].basketOneRMoney * XAU_PYRAMID_BASKET_HARD_CLOSE_R;
+   string nextAction = g_campaign[slot].basketCloseInProgress
+                       ? "CLOSING_ALL"
+                       : (basketCurrentR >= XAU_PYRAMID_BASKET_HARD_CLOSE_R ? "TRIGGER_CLOSE_ALL" : "HOLD_AS_ONE_BASKET");
 
    return StringFormat(
-      "{\"exit_mode\":\"BASKET\",\"campaign_id\":\"%s\",\"core_ticket\":%I64u,\"position_count\":%d,"
+      "{\"exit_mode\":\"HARD_BASKET_050R\",\"campaign_id\":\"%s\",\"core_ticket\":%I64u,\"position_count\":%d,"
       "\"basket_one_r_money\":%.2f,\"basket_current_pl\":%.2f,\"basket_current_r\":%.3f,"
-      "\"basket_peak_pl\":%.2f,\"basket_peak_r\":%.3f,\"protection_trigger_r\":%.2f,"
-      "\"protection_armed\":%s,\"protected_floor_money\":%.2f,\"protected_floor_r\":%.3f,\"next_action\":\"%s\"}",
+      "\"basket_peak_pl\":%.2f,\"basket_peak_r\":%.3f,\"hard_close_target_r\":%.2f,"
+      "\"hard_close_target_money\":%.2f,\"close_latched\":%s,\"individual_profit_exits_suppressed\":true,\"next_action\":\"%s\"}",
       XAU_CampaignIdText(g_campaign[slot].campaignId), g_campaign[slot].initialCoreTicket, g_campaign[slot].activePositionCount,
       g_campaign[slot].basketOneRMoney, basketProfitMoney, basketCurrentR,
       g_campaign[slot].basketPeakProfitMoney, g_campaign[slot].basketPeakR,
-      ((ENUM_XAU_OWNER_EXIT_PROFILE)g_campaign[slot].ownerExitProfile == OWNER_EXIT_BREAKOUT ? 0.50 : 0.40),
-      g_campaign[slot].basketProtectionArmed ? "true" : "false",
-      g_campaign[slot].basketProtectedFloorMoney, g_campaign[slot].basketProtectedFloorR, nextAction);
+      XAU_PYRAMID_BASKET_HARD_CLOSE_R, hardTargetMoney,
+      g_campaign[slot].basketCloseInProgress ? "true" : "false", nextAction);
 }
 
 //+------------------------------------------------------------------+
@@ -26583,10 +27983,52 @@ void XAU_RExitCoreLoop()
       string dirStr  = isBuy ? "BUY" : "SELL";
       int    posDir  = isBuy ? 1 : -1;
       int    campSlot = XAU_CampaignSlot(posDir);
-      bool   basketModeActive = g_campaign[campSlot].active && g_campaign[campSlot].activePositionCount >= 2;
+      bool   basketModeActive = g_campaign[campSlot].active &&
+                                (g_campaign[campSlot].basketModeEverActivated ||
+                                 g_campaign[campSlot].basketLogicalAdditionCount > 0 ||
+                                 g_campaign[campSlot].additionCount > 0 ||
+                                 g_campaign[campSlot].activePositionCount >= 2);
 
       int idx = XAU_RExit_EnsureIdx(positionId, ticket, isBuy, openPx, curSL, lots, false);
       XAU_RExit_SyncNettingState(idx, isBuy, openPx, curSL, lots); // Fix 12: netting pyramid adds
+
+      // FINAL_BASKET_050R audit repair: basket ownership is checked BEFORE
+      // any old per-leg close retry. Cancel stale managed-profit close state
+      // and extension state so a pre-existing request cannot close only CORE.
+      if(basketModeActive)
+      {
+         string pendingUpper = g_rExit[idx].pendingCloseReason;
+         StringToUpper(pendingUpper);
+         bool staleManagedClose = (g_rExit[idx].closeState == R_CLOSE_REQUESTED ||
+                                   g_rExit[idx].closeState == R_CLOSE_PENDING_RETRY) &&
+                                  StringFind(pendingUpper, "BASKET_050R_") != 0 &&
+                                  (StringFind(pendingUpper, "OWNER_R_EXIT_") == 0 ||
+                                   StringFind(pendingUpper, "R_EXIT_") == 0 ||
+                                   StringFind(pendingUpper, "TRANSITION_") == 0);
+         if(staleManagedClose)
+         {
+            PrintFormat("BASKET_050R_CANCEL_STALE_INDIVIDUAL_CLOSE | ticket=%I64u | oldReason=%s | action=BASKET_OWNS_CAMPAIGN",
+                        ticket, g_rExit[idx].pendingCloseReason);
+            g_rExit[idx].closeState = R_CLOSE_NONE;
+            g_rExit[idx].pendingCloseReason = "";
+            g_rExit[idx].lastCloseAttemptTime = 0;
+            g_rExit[idx].closeAttemptCount = 0;
+            g_rExitStateDirty = true;
+         }
+
+         string basketRestoreFailure = "";
+         if(!XAU_RestoreBasketLegOriginalProtection(ticket, idx, basketRestoreFailure))
+            PrintFormat("BASKET_050R_PROTECTION_RESTORE_RETRY | ticket=%I64u | reason=%s", ticket, basketRestoreFailure);
+
+         if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
+         {
+            g_rExit[idx].lastTelemetryLog = TimeCurrent();
+            PrintFormat("OWNER_R_EXIT_BASKET_050R_OWNS_CAMPAIGN | ticket=%I64u | direction=%s | campaignId=%s | additions=%d | individual_managed_exit=SUPPRESSED",
+                        ticket, dirStr, XAU_CampaignIdText(g_campaign[campSlot].campaignId),
+                        g_campaign[campSlot].additionCount);
+         }
+         continue;
+      }
 
       // ---- Priority 1: a close already in flight always wins -- no other
       //      discretionary action runs for this ticket this tick. ----
@@ -26645,24 +28087,6 @@ void XAU_RExitCoreLoop()
          continue;
       if(g_rExit[idx].closeState==R_CLOSE_REQUESTED || g_rExit[idx].closeState==R_CLOSE_PENDING_RETRY)
          continue;
-
-      // v6.25.9 -- basket state is telemetry/persistence only. Re-entry legs
-      // continue through the same per-position owner R-floor authority and
-      // inherit the frozen campaign profile/floor. v6.25.13: pyramid legs
-      // also go through this same per-position authority, but carry their
-      // own independent OWNER_EXIT_PYRAMID profile/floor, never the
-      // campaign's -- see the pyramid registration site. No basket manager
-      // is allowed to suppress or replace this owner calculation.
-      if(basketModeActive)
-      {
-         if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
-         {
-            g_rExit[idx].lastTelemetryLog = TimeCurrent();
-            PrintFormat("OWNER_R_EXIT_CAMPAIGN_INHERITANCE | ticket=%I64u direction=%s currentR=%.3f peakR=%.3f campaignId=%s profile=%s basket_telemetry_only=true",
-                        ticket, dirStr, currentR, peakR, XAU_CampaignIdText(g_campaign[campSlot].campaignId),
-                        XAU_OwnerExitProfileName((ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile));
-         }
-      }
 
       // v6.25.11 restored canonical R-manager target. This request still
       // passes through OWNER_R_EXIT_CLOSE_ONLY and cannot violate a higher
@@ -29333,12 +30757,71 @@ void LoadPatterns()
 //+------------------------------------------------------------------+
 //| TRADE RESULT TRACKING                                            |
 //+------------------------------------------------------------------+
+bool XAU_TradeBrainPositionNetResult(ulong positionId, double &netProfit,
+                                     double &lastExitPrice, datetime &lastExitTime)
+{
+   netProfit=0.0;
+   lastExitPrice=0.0;
+   lastExitTime=0;
+   if(positionId==0 || !HistorySelectByPosition(positionId)) return false;
+   bool found=false;
+   int deals=HistoryDealsTotal();
+   for(int i=0;i<deals;i++)
+   {
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0 || (ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID)!=positionId) continue;
+      netProfit += HistoryDealGetDouble(deal,DEAL_PROFIT)
+                 + HistoryDealGetDouble(deal,DEAL_SWAP)
+                 + HistoryDealGetDouble(deal,DEAL_COMMISSION)
+                 + HistoryDealGetDouble(deal,DEAL_FEE);
+      ENUM_DEAL_ENTRY de=(ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal,DEAL_ENTRY);
+      datetime dealTime=(datetime)HistoryDealGetInteger(deal,DEAL_TIME);
+      if((de==DEAL_ENTRY_OUT || de==DEAL_ENTRY_OUT_BY || de==DEAL_ENTRY_INOUT) && dealTime>=lastExitTime)
+      {
+         lastExitTime=dealTime;
+         lastExitPrice=HistoryDealGetDouble(deal,DEAL_PRICE);
+         found=true;
+      }
+   }
+   return found;
+}
+
+int XAU_TradeBrainPositionEntryOrderCount(ulong positionId)
+{
+   if(positionId==0 || !HistorySelectByPosition(positionId)) return 0;
+   ulong seenOrders[];
+   int deals=HistoryDealsTotal();
+   for(int i=0;i<deals;i++)
+   {
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0 || (ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID)!=positionId) continue;
+      ENUM_DEAL_ENTRY de=(ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal,DEAL_ENTRY);
+      if(de!=DEAL_ENTRY_IN && de!=DEAL_ENTRY_INOUT) continue;
+      ulong orderId=(ulong)HistoryDealGetInteger(deal,DEAL_ORDER);
+      if(orderId==0) orderId=deal; // deterministic fallback; never merges unrelated fills
+      bool already=false;
+      for(int j=0;j<ArraySize(seenOrders);j++)
+         if(seenOrders[j]==orderId) { already=true; break; }
+      if(already) continue;
+      int n=ArraySize(seenOrders);
+      ArrayResize(seenOrders,n+1);
+      seenOrders[n]=orderId;
+   }
+   return ArraySize(seenOrders);
+}
+
 void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest& request, const MqlTradeResult& result)
 {
    if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
    ulong dealTicket = trans.deal;
    if(dealTicket == 0) return;
    if(!HistoryDealSelect(dealTicket)) return;
+
+   // A transaction generated by the first quote after a gap can arrive before
+   // OnTick. Preserve the pre-gap timestamp until close telemetry is computed.
+   datetime executionDealTime=(datetime)HistoryDealGetInteger(dealTicket,DEAL_TIME);
+   datetime executionFirstAvailableTick=0;
+   int executionSessionGapSeconds=XAU_ExecutionGapAtClose(executionDealTime,executionFirstAvailableTick);
 
    long magic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
    if(magic != InpMagicNumber) return;
@@ -29442,10 +30925,13 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          {
             double extensionCloseProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT) +
                                           HistoryDealGetDouble(dealTicket, DEAL_SWAP) +
-                                          HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+                                          HistoryDealGetDouble(dealTicket, DEAL_COMMISSION) +
+                                          HistoryDealGetDouble(dealTicket, DEAL_FEE);
+            double extensionClosePrice=HistoryDealGetDouble(dealTicket,DEAL_PRICE);
+            datetime extensionCloseTime=(datetime)HistoryDealGetInteger(dealTicket,DEAL_TIME);
+            XAU_TradeBrainPositionNetResult(posId,extensionCloseProfit,extensionClosePrice,extensionCloseTime);
             double extensionCloseR = g_rExit[rIdx].cumulativeOriginalRiskUSD > 0.0
                                      ? extensionCloseProfit / g_rExit[rIdx].cumulativeOriginalRiskUSD : 0.0;
-            datetime extensionCloseTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
             if(dReason == DEAL_REASON_SL)
                PrintFormat("GENERAL_10M_EXTENSION_ORIGINAL_SL_HIT | position_id=%I64u | deadline=%s | close_time=%s | realized_r=%.3f",
                            posId, TimeToString(g_rExit[rIdx].extensionDeadline, TIME_DATE|TIME_SECONDS),
@@ -29812,8 +31298,16 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    }
    if(InpTradeBrainMemory && IsXAUFastSymbol())
    {
+      double tradeBrainNetProfit=profit;
+      double tradeBrainExitPrice=dPrice;
+      datetime tradeBrainExitTime=0;
+      bool tradeBrainNetVerified=XAU_TradeBrainPositionNetResult(posId,tradeBrainNetProfit,
+                                                                 tradeBrainExitPrice,tradeBrainExitTime);
+      if(!tradeBrainNetVerified)
+         PrintFormat("GLOBAL_TRADEBRAIN_OUTCOME_FALLBACK | posId=%I64u | reason=FULL_POSITION_HISTORY_UNAVAILABLE | fallback_last_deal_net=%.2f",posId,profit);
       int brainIdx = XAU_FindBrainOpen(posId);
       TradeBrainOpen brainRec;
+      ZeroMemory(brainRec);
       if(brainIdx >= 0)
          brainRec = g_brainOpenTrades[brainIdx];
       else
@@ -29835,6 +31329,16 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          brainRec.signature = lastSignalSignature;
          brainRec.session = SessionTag();
          brainRec.entryReason = "fallback: open record not found";
+         brainRec.schemaVersion="TRADEBRAIN_COLLECTION_V2"; brainRec.collectionRunId=InpTradeBrainCollectionRunId;
+         brainRec.dataStatus="LEGACY_RECORD_NOT_CAPTURED"; brainRec.tradeRole="UNKNOWN"; brainRec.candidateId="";
+         brainRec.campaignId=0; brainRec.signalBarTime=0; brainRec.brokerEntryTime=0;
+         brainRec.originalSignalDirection=0; brainRec.decisionSignalDirection=0; brainRec.inversionApplied=false;
+         brainRec.originalStructuralSL=0.0; brainRec.originalOneRDistance=0.0; brainRec.effectiveSLDistance=0.0; brainRec.riskUSD=0.0;
+         brainRec.spreadPoints=0.0; brainRec.spreadATR=0.0; brainRec.marginRequired=0.0; brainRec.freeMarginAtEntry=0.0;
+         brainRec.stopLevelPoints=0; brainRec.slippagePoints=0.0; brainRec.accountMarginMode=""; brainRec.newsPhase="";
+         brainRec.biasDirection=0; brainRec.bosDirection=0; brainRec.thesisLocation=""; brainRec.thesisExhaustion="";
+         brainRec.thesisTiming=""; brainRec.thesisHTF=""; brainRec.thesisStructure=""; brainRec.thesisPressure=""; brainRec.thesisAction="";
+         brainRec.legacySignature=lastSignalSignature; brainRec.signature="";
          // v6.20.3 adversarial-review fix: this fallback branch previously
          // left the 12 quality/checkpoint fields to MQL5's implicit
          // zero-initialization. Every other TradeBrainOpen construction site
@@ -29848,10 +31352,21 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          brainRec.qualityMissedMoveDistance = 0.0; brainRec.qualityMissedMoveATR = 0.0;
          brainRec.qualitySignalFirstSeenPrice = 0.0; brainRec.checkpointNextIdx = 0;
       }
-      string outcome = wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK_EVEN";
-      if(wasWin && worstFloatingPnl <= -10000.0)
+      int tradeBrainEntryOrders=XAU_TradeBrainPositionEntryOrderCount(posId);
+      if(tradeBrainEntryOrders>1)
+      {
+         brainRec.dataStatus="MIXED_NETTING_POSITION_NOT_TRAINABLE";
+         brainRec.tradeRole="MIXED_NETTING_CAMPAIGN";
+         brainRec.signature="";
+         PrintFormat("GLOBAL_TRADEBRAIN_MIXED_NETTING_OUTCOME | posId=%I64u | entry_orders=%d | net=%.2f | training_eligible=false",
+                     posId,tradeBrainEntryOrders,tradeBrainNetProfit);
+      }
+      bool tradeBrainWasWin=tradeBrainNetProfit>=0.01;
+      bool tradeBrainWasLoss=tradeBrainNetProfit<=-0.01;
+      string outcome = tradeBrainWasWin ? "WIN" : tradeBrainWasLoss ? "LOSS" : "BREAK_EVEN";
+      if(tradeBrainWasWin && worstFloatingPnl <= -10000.0)
          outcome = "WIN_AFTER_DEEP_DD";
-      else if(wasWin && worstFloatingPnl < 0.0 && profit > 0.0 && profit / MathAbs(worstFloatingPnl) < 0.60)
+      else if(tradeBrainWasWin && worstFloatingPnl < 0.0 && tradeBrainNetProfit > 0.0 && tradeBrainNetProfit / MathAbs(worstFloatingPnl) < 0.60)
          outcome = "WEAK_RECOVERY_WIN";
 
       // v5.8.52: retrieve best floating profit and refine outcome classification.
@@ -29865,21 +31380,22 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       string shieldExtra = StringFormat("bestFloating=%.2f shieldArmed=%s",
                                         bestFloatingPnl, APlusShieldArmed(posId) ? "Y" : "N");
 
-      XAU_AppendTradeBrain("CLOSE", brainRec, dPrice, profit, worstFloatingPnl,
-                           secondsNegative, outcome, lastExitReason + " | " + shieldExtra);
-      XAU_BrainWatchClosedTrade(brainRec, dPrice, profit);
-      XAU_PostTradeConsciousAnalysis(brainRec, dPrice, profit, bestFloatingPnl,
+      XAU_AppendTradeBrain("CLOSE", brainRec, tradeBrainExitPrice, tradeBrainNetProfit, worstFloatingPnl,
+                           secondsNegative, outcome, lastExitReason + " | " + shieldExtra,
+                           dealTicket,executionSessionGapSeconds,executionFirstAvailableTick);
+      XAU_BrainWatchClosedTrade(brainRec, tradeBrainExitPrice, tradeBrainNetProfit);
+      XAU_PostTradeConsciousAnalysis(brainRec, tradeBrainExitPrice, tradeBrainNetProfit, bestFloatingPnl,
                                      worstFloatingPnl, secondsNegative,
                                      lastExitReason + " | " + shieldExtra);
       // v6.20.1: delayed-entry outcome telemetry, if this trade's entry went
       // through REMOVED_ELAPSED_CONFIRMATION_ENGINE's mailbox (see that function).
-      XAU_ReportDelayOutcome(posId, brainRec, profit, bestFloatingPnl, worstFloatingPnl);
+      XAU_ReportDelayOutcome(posId, brainRec, tradeBrainNetProfit, bestFloatingPnl, worstFloatingPnl);
       XAU_WriteLearningReport();
       Print("TRADE-BRAIN CLOSE: ", outcome,
             " posId=", posId,
             " setup=", brainRec.setup,
             " grade=", XAU_GradeBucket(brainRec.grade),
-            " profit=$", DoubleToString(profit, 2),
+            " netProfit=$", DoubleToString(tradeBrainNetProfit, 2),
             " bestFloating=$", DoubleToString(bestFloatingPnl, 2),
             " worstFloating=$", DoubleToString(worstFloatingPnl, 2),
             " shieldArmed=", APlusShieldArmed(posId)?"Y":"N",
@@ -30802,6 +32318,14 @@ string XAU_CsvSafe(string s)
    return s;
 }
 
+// v6.25.15 compile fix: the 73-field TradeBrain row exceeds FileWrite's
+// variadic parameter limit. Build one CSV-safe line and write it directly.
+void XAU_CsvAppendField(string &line, string value)
+{
+   if(StringLen(line) > 0) line += ",";
+   line += XAU_CsvSafe(value);
+}
+
 string XAU_BlockReasonKey(string reason)
 {
    string r = reason;
@@ -31383,14 +32907,124 @@ void XAU_WriteLearningReport()
    FileClose(h);
 }
 
+string XAU_TradeBrainSafeToken(string value, int maxLen=48)
+{
+   string out=value;
+   StringToUpper(out);
+   StringReplace(out," ","_");
+   StringReplace(out,"/","_");
+   StringReplace(out,"\\","_");
+   StringReplace(out,"|","_");
+   StringReplace(out,":","_");
+   StringReplace(out,";","_");
+   StringReplace(out,",","_");
+   while(StringFind(out,"__")>=0) StringReplace(out,"__","_");
+   if(StringLen(out)==0) out="UNSPECIFIED";
+   if(maxLen>0 && StringLen(out)>maxLen) out=StringSubstr(out,0,maxLen);
+   return out;
+}
+
+string XAU_TradeBrainRole(string reason, bool isManualOverride,
+                              ENUM_REGIME frozenEntryRegime,
+                              bool inversionApplied)
+{
+   if(isManualOverride) return "MANUAL_OVERRIDE";
+   string upper=reason;
+   StringToUpper(upper);
+   if(StringFind(upper,"RE_ENTRY")>=0 || StringFind(upper,"RE-ENTRY")>=0)
+      return "RE_ENTRY";
+   if(frozenEntryRegime==REGIME_BREAKOUT_UP ||
+      frozenEntryRegime==REGIME_BREAKOUT_DOWN ||
+      inversionApplied)
+      return "BREAKOUT";
+   return "CORE";
+}
+
+bool XAU_TradeBrainSnapshotComplete(int decisionSignalDirection)
+{
+   if(!g_latestDecisionSnapshot.valid) return false;
+   if(g_latestDecisionSnapshot.symbol!=Symbol()) return false;
+   if(g_latestDecisionSnapshot.closedPrimaryBarTime<=0) return false;
+   if(decisionSignalDirection!=0 && g_latestDecisionSnapshot.signalDirection!=decisionSignalDirection) return false;
+   return true;
+}
+
+string XAU_TradeBrainExactFingerprint(int executionDirection,
+                                      int decisionSignalDirection,
+                                      int originalSignalDirection,
+                                      bool inversionApplied,
+                                      string tradeRole,
+                                      string setupName,
+                                      string grade,
+                                      ENUM_REGIME entryRegime)
+{
+   if(!XAU_TradeBrainSnapshotComplete(decisionSignalDirection)) return "";
+   string biasRelation=(g_latestDecisionSnapshot.biasDirection==executionDirection)?"ALIGNED":
+                       (g_latestDecisionSnapshot.biasDirection==-executionDirection)?"OPPOSED":"NEUTRAL";
+   string bosRelation=(g_latestDecisionSnapshot.bosDirection==executionDirection)?"ALIGNED":
+                      (g_latestDecisionSnapshot.bosDirection==-executionDirection)?"OPPOSED":"NEUTRAL";
+   return StringFormat("TB2|ROLE=%s|EXEC=%s|DECISION=%s|ORIG=%s|INV=%s|REGIME=%s|SETUP=%s|GRADE=%s|SESSION=%s|BIAS=%s|BOS=%s|LOC=%s|EXH=%s|TIM=%s|HTF=%s|STRUCT=%s|PRESS=%s|ACTION=%s",
+      XAU_TradeBrainSafeToken(tradeRole), executionDirection>0?"BUY":"SELL",
+      decisionSignalDirection>0?"BUY":decisionSignalDirection<0?"SELL":"NONE",
+      originalSignalDirection>0?"BUY":originalSignalDirection<0?"SELL":"NONE",
+      inversionApplied?"Y":"N", XAU_TradeBrainSafeToken(EnumToString(entryRegime)),
+      XAU_TradeBrainSafeToken(setupName), XAU_TradeBrainSafeToken(XAU_GradeBucket(grade)),
+      XAU_TradeBrainSafeToken(SessionTag()), biasRelation, bosRelation,
+      XAU_TradeBrainSafeToken(XAU_LocationQualityName(g_latestDecisionSnapshot.thesis.location)),
+      XAU_TradeBrainSafeToken(XAU_ExhaustionStateName(g_latestDecisionSnapshot.thesis.exhaustion)),
+      XAU_TradeBrainSafeToken(XAU_TimingStateName(g_latestDecisionSnapshot.thesis.timing)),
+      XAU_TradeBrainSafeToken(XAU_HTFAlignmentName(g_latestDecisionSnapshot.thesis.htf)),
+      XAU_TradeBrainSafeToken(XAU_StructureStateName(g_latestDecisionSnapshot.thesis.structure)),
+      XAU_TradeBrainSafeToken(XAU_PressureStateName(g_latestDecisionSnapshot.thesis.pressure)),
+      XAU_TradeBrainSafeToken(XAU_MarketThesisActionName(g_latestDecisionSnapshot.thesis.action)));
+}
+
 string XAU_BlockedMemoryFile()
 {
+   if(InpBacktestMode)
+      return "XAUAI_BlockedTradeMemory_"+XAU_TradeBrainSafeToken(InpTradeBrainCollectionRunId,40)+"_"+XAU_ProductionStateScope()+".csv";
    return "XAUAI_BlockedTradeMemory_" + XAU_ProductionStateScope() + ".csv";
 }
 
 string XAU_TradeBrainFile()
 {
-   return "XAUAI_ExecutedTradeBrain_" + XAU_ProductionStateScope() + ".csv";
+   string runId=XAU_TradeBrainSafeToken(InpTradeBrainCollectionRunId,40);
+   return "XAUAI_TradeBrainCollect_v2_" + runId + "_" + XAU_ProductionStateScope() + ".csv";
+}
+
+string XAU_TimingProofFile();
+
+void XAU_TradeBrainPrepareCollectionRun()
+{
+   if(!InpTradeBrainMemory) return;
+   string fn=XAU_TradeBrainFile();
+   string timingFn=XAU_TimingProofFile();
+   string blockedFn=XAU_BlockedMemoryFile();
+   PrintFormat("GLOBAL_TRADEBRAIN_STARTUP | mode=%d | run_id=%s | file=%s | validated_global_seed=%s | reset_requested=%s",
+               (int)InpGlobalTradeBrainMode,InpTradeBrainCollectionRunId,fn,
+               XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE?"true":"false",
+               InpTradeBrainResetCollectionOnTesterStart?"true":"false");
+   PrintFormat("GLOBAL_TRADEBRAIN_SEED | schema=%s | seed_id=%s | sha256=%s | warnings=%d | active_blocks=%d | local_rows_authority=false | fail_open=true",
+               XAU_TRADEBRAIN_SEED_SCHEMA,XAU_TRADEBRAIN_SEED_ID,
+               XAU_TRADEBRAIN_SEED_SHA256,XAU_TRADEBRAIN_SEED_WARNING_COUNT,
+               XAU_TRADEBRAIN_SEED_ACTIVE_BLOCK_COUNT);
+   if(!InpBacktestMode ||
+      InpGlobalTradeBrainMode!=GLOBAL_TRADEBRAIN_COLLECT_ONLY ||
+      !InpTradeBrainResetCollectionOnTesterStart)
+      return;
+   if(FileIsExist(fn,FILE_COMMON))
+   {
+      ResetLastError();
+      bool deleted=FileDelete(fn,FILE_COMMON);
+      PrintFormat("GLOBAL_TRADEBRAIN_COLLECTION_RESET | run_id=%s | file=%s | deleted=%s | error=%d",
+                  InpTradeBrainCollectionRunId,fn,deleted?"true":"false",GetLastError());
+   }
+   else
+      PrintFormat("GLOBAL_TRADEBRAIN_COLLECTION_FRESH | run_id=%s | file=%s",InpTradeBrainCollectionRunId,fn);
+
+   if(FileIsExist(timingFn,FILE_COMMON)) FileDelete(timingFn,FILE_COMMON);
+   if(FileIsExist(blockedFn,FILE_COMMON)) FileDelete(blockedFn,FILE_COMMON);
+   PrintFormat("GLOBAL_FORENSIC_RUN_RESET | timing=%s blocked=%s",timingFn,blockedFn);
 }
 
 // v6.20.5 (TELEMETRY ONLY -- Change A) — durable, structured record of the
@@ -31403,6 +33037,8 @@ string XAU_TradeBrainFile()
 // that produced this change.
 string XAU_TimingProofFile()
 {
+   if(InpBacktestMode)
+      return "XAUAI_TimingProof_"+XAU_TradeBrainSafeToken(InpTradeBrainCollectionRunId,40)+"_"+XAU_ProductionStateScope()+".csv";
    return "XAUAI_TimingProof_" + XAU_ProductionStateScope() + ".csv";
 }
 
@@ -31632,29 +33268,56 @@ void XAU_RecordMarketSnapshot(string phase, int signal, string setupName, string
                               double setupScore, double combinedScore)
 {
    {
+      datetime decisionBar=iTime(Symbol(),XAU_PRIMARY_DECISION_TF,1);
+      if(decisionBar>0 && g_primaryDecisionEventBar==decisionBar)
+         return; // one PRIMARY_DECISION per closed M10 bar per terminal
+      if(decisionBar>0) g_primaryDecisionEventBar=decisionBar;
+
       bool candidate = (signal != 0 && grade != "SKIP");
+      string m10DecisionName=XAU_M10DecisionName(g_m10Decision.decisionType);
       double bidFeed = SymbolInfoDouble(Symbol(), SYMBOL_BID);
       double askFeed = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
       double midFeed = (bidFeed > 0.0 && askFeed > 0.0) ? (bidFeed + askFeed) * 0.5 : iClose(Symbol(), XAU_PRIMARY_DECISION_TF, 0);
       string scanDecision = candidate
                             ? StringFormat("Entry candidate: %s %s setup", BotMonitorSignalName(signal), grade)
                             : "No entry was created from this M10 primary decision cycle";
-      string scanReason = candidate
-                          ? StringFormat("%s score=%.2f setupScore=%.2f", setupName, combinedScore, setupScore)
-                          : (StringLen(g_lastSkipReason) > 0 ? g_lastSkipReason : "No qualified M10 setup");
-      string blockedBy = candidate ? "" : (StringLen(g_lastSkipReason) > 0 ? XAU_BlockReasonKey(g_lastSkipReason) : "SCAN_FILTERS");
+      string scanReason="";
+      string blockedBy="";
+      if(candidate)
+      {
+         scanReason=StringFormat("%s canonicalSetupScore=%.2f combinedScore=%.2f grade=%s m10Decision=%s m10Confidence=%.1f",
+                                 setupName,setupScore,combinedScore,grade,
+                                 m10DecisionName,g_m10Decision.confidence);
+      }
+      else if(signal!=0 && grade=="SKIP")
+      {
+         blockedBy="GRADE_BELOW_B";
+         scanReason=StringFormat("M10 candidate graded SKIP | direction=%s | setup=%s | canonicalSetupScore=%.2f | combinedScore=%.2f | requiredGradeB=%.2f | m10Decision=%s | m10Confidence=%.1f | m10Reason=%s",
+                                 signal==1?"BUY":"SELL",setupName,setupScore,
+                                 combinedScore,GetEffectiveGradeB(),m10DecisionName,
+                                 g_m10Decision.confidence,g_m10Decision.exactReason);
+      }
+      else if(StringLen(g_lastSkipReason)>0)
+      {
+         scanReason=g_lastSkipReason;
+         blockedBy=XAU_BlockReasonKey(g_lastSkipReason);
+      }
+      else
+      {
+         blockedBy="M10_"+m10DecisionName;
+         scanReason=StringFormat("%s | preferredDirection=%s | confidence=%.1f | reason=%s",
+                                 m10DecisionName,
+                                 g_m10Decision.preferredDirection==1?"BUY":
+                                 g_m10Decision.preferredDirection==-1?"SELL":"NONE",
+                                 g_m10Decision.confidence,g_m10Decision.exactReason);
+      }
+      if(!candidate) g_lastSkipReason=scanReason;
+
       string scanFunnel = BotMonitorFunnelDetails(candidate, false,
                                                 candidate ? "WAITING" : "BLOCKED",
                                                 blockedBy,
                                                 false, false, false, 0, 0,
                                                 "RAW_SIGNAL");
-      // v6.25.1 owner directive 2026-07-17 -- renamed from "M5_DECISION":
-      // timeframe identity must not live inside the event NAME. Canonical
-      // event type is now PRIMARY_DECISION; primary_timeframe=M10 is
-      // carried as its own field (BotMonitorDecisionEvent already reports
-      // XAUAI_EA_VERSION/build/etc -- the backend's event classifier
-      // (_ai_classify_card_type) supports both this and the legacy
-      // "M5_DECISION" name for any already-queued/cached old events).
       BotMonitorDecisionEvent("PRIMARY_DECISION", "INFO",
                               "DecisionCycle", scanDecision, false,
                               scanReason, blockedBy, "", 0.0, midFeed,
@@ -31941,6 +33604,8 @@ double XAU_AcceleratedLearningAdjust(int signal, string setupName,
 {
    reason = "";
    if(!InpAcceleratedLearningMode || !InpTradeBrainMemory || !IsXAUFastSymbol()) return 0.0;
+   if(!XAU_TRADEBRAIN_LOCAL_ROWS_HAVE_AUTHORITY) return 0.0; // audited seed is cohort-only; local collection can never change score
+   if(InpGlobalTradeBrainMode==GLOBAL_TRADEBRAIN_COLLECT_ONLY) return 0.0; // untouched 180-day baseline: collected rows cannot alter later signals
    if(signal == 0 || StringLen(setupName) == 0) return 0.0;
    string fn = XAU_TradeBrainFile();
    if(!FileIsExist(fn, FILE_COMMON)) return 0.0;
@@ -32068,14 +33733,16 @@ double XAU_MoveToMoney(double move, double lots)
 void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
                           double exitPrice, double profit,
                           double worstFloatingPnl, int secondsNegative,
-                          string outcome, string exitReason)
+                          string outcome, string exitReason,
+                          ulong closeDeal=0,int executionSessionGapSeconds=0,
+                          datetime executionFirstAvailableTick=0)
 {
    if(!InpTradeBrainMemory || !IsXAUFastSymbol()) return;
    string fn = XAU_TradeBrainFile();
    bool exists = FileIsExist(fn, FILE_COMMON);
    int h = exists
-           ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',')
-           : FileOpen(fn, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+           ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_TXT | FILE_COMMON)
+           : FileOpen(fn, FILE_WRITE | FILE_TXT | FILE_COMMON);
    if(h == INVALID_HANDLE)
    {
       Print("TRADE-BRAIN: FileOpen failed err=", GetLastError());
@@ -32084,60 +33751,209 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
    if(exists) FileSeek(h, 0, SEEK_END);
    if(!exists || FileTell(h) == 0)
    {
-      FileWrite(h, "event", "time", "posId", "symbol", "dir", "setup", "grade", "signature",
-                "regime", "session", "hour", "entryPrice", "exitPrice", "lots", "sl", "tp",
-                "profit", "worstFloating", "secondsNegative", "outcome", "exitReason",
-                "entryReason", "setupScore", "combined", "atr", "aiConfidence",
-                // v6.20.3 telemetry-completeness columns (additive; readers using
-                // csv.DictReader-style column-name lookup are unaffected):
-                "eaVersion", "buildHash", "magicNumber",
-                "setupQuality", "entryTimingQuality", "extensionRisk", "expectedMAERisk",
-                "effectiveRRQuality", "finalCalibratedConfidence", "blockClass",
-                "candlesSinceSignal", "missedMoveDistance", "missedMoveATR", "signalFirstSeenPrice");
+      string header = "";
+      XAU_CsvAppendField(header, "event");
+      XAU_CsvAppendField(header, "time");
+      XAU_CsvAppendField(header, "posId");
+      XAU_CsvAppendField(header, "symbol");
+      XAU_CsvAppendField(header, "dir");
+      XAU_CsvAppendField(header, "setup");
+      XAU_CsvAppendField(header, "grade");
+      XAU_CsvAppendField(header, "signature");
+      XAU_CsvAppendField(header, "regime");
+      XAU_CsvAppendField(header, "session");
+      XAU_CsvAppendField(header, "hour");
+      XAU_CsvAppendField(header, "entryPrice");
+      XAU_CsvAppendField(header, "exitPrice");
+      XAU_CsvAppendField(header, "lots");
+      XAU_CsvAppendField(header, "sl");
+      XAU_CsvAppendField(header, "tp");
+      XAU_CsvAppendField(header, "profit");
+      XAU_CsvAppendField(header, "worstFloating");
+      XAU_CsvAppendField(header, "secondsNegative");
+      XAU_CsvAppendField(header, "outcome");
+      XAU_CsvAppendField(header, "exitReason");
+      XAU_CsvAppendField(header, "entryReason");
+      XAU_CsvAppendField(header, "setupScore");
+      XAU_CsvAppendField(header, "combined");
+      XAU_CsvAppendField(header, "atr");
+      XAU_CsvAppendField(header, "aiConfidence");
+      XAU_CsvAppendField(header, "eaVersion");
+      XAU_CsvAppendField(header, "buildHash");
+      XAU_CsvAppendField(header, "magicNumber");
+      XAU_CsvAppendField(header, "setupQuality");
+      XAU_CsvAppendField(header, "entryTimingQuality");
+      XAU_CsvAppendField(header, "extensionRisk");
+      XAU_CsvAppendField(header, "expectedMAERisk");
+      XAU_CsvAppendField(header, "effectiveRRQuality");
+      XAU_CsvAppendField(header, "finalCalibratedConfidence");
+      XAU_CsvAppendField(header, "blockClass");
+      XAU_CsvAppendField(header, "candlesSinceSignal");
+      XAU_CsvAppendField(header, "missedMoveDistance");
+      XAU_CsvAppendField(header, "missedMoveATR");
+      XAU_CsvAppendField(header, "signalFirstSeenPrice");
+      XAU_CsvAppendField(header, "schemaVersion");
+      XAU_CsvAppendField(header, "collectionRunId");
+      XAU_CsvAppendField(header, "dataStatus");
+      XAU_CsvAppendField(header, "tradeRole");
+      XAU_CsvAppendField(header, "candidateId");
+      XAU_CsvAppendField(header, "campaignId");
+      XAU_CsvAppendField(header, "signalBarTime");
+      XAU_CsvAppendField(header, "brokerEntryTime");
+      XAU_CsvAppendField(header, "originalSignalDirection");
+      XAU_CsvAppendField(header, "decisionSignalDirection");
+      XAU_CsvAppendField(header, "inversionApplied");
+      XAU_CsvAppendField(header, "originalStructuralSL");
+      XAU_CsvAppendField(header, "originalOneRDistance");
+      XAU_CsvAppendField(header, "effectiveSLDistance");
+      XAU_CsvAppendField(header, "riskUSD");
+      XAU_CsvAppendField(header, "spreadPoints");
+      XAU_CsvAppendField(header, "spreadATR");
+      XAU_CsvAppendField(header, "marginRequired");
+      XAU_CsvAppendField(header, "freeMarginAtEntry");
+      XAU_CsvAppendField(header, "stopLevelPoints");
+      XAU_CsvAppendField(header, "slippagePoints");
+      XAU_CsvAppendField(header, "accountMarginMode");
+      XAU_CsvAppendField(header, "newsPhase");
+      XAU_CsvAppendField(header, "biasDirection");
+      XAU_CsvAppendField(header, "bosDirection");
+      XAU_CsvAppendField(header, "thesisLocation");
+      XAU_CsvAppendField(header, "thesisExhaustion");
+      XAU_CsvAppendField(header, "thesisTiming");
+      XAU_CsvAppendField(header, "thesisHTF");
+      XAU_CsvAppendField(header, "thesisStructure");
+      XAU_CsvAppendField(header, "thesisPressure");
+      XAU_CsvAppendField(header, "thesisAction");
+      XAU_CsvAppendField(header, "legacySignature");
+      XAU_CsvAppendField(header, "brokerDealReason");
+      XAU_CsvAppendField(header, "requestedSL");
+      XAU_CsvAppendField(header, "actualClosePrice");
+      XAU_CsvAppendField(header, "slippageBeyondSLPoints");
+      XAU_CsvAppendField(header, "slippageBeyondSLR");
+      XAU_CsvAppendField(header, "sessionGapSeconds");
+      XAU_CsvAppendField(header, "firstAvailableTickTime");
+      XAU_CsvAppendField(header, "closeDealFee");
+      XAU_CsvAppendField(header, "netProfitIncludingFees");
+      XAU_CsvAppendField(header, "executionAnomalyQuarantine");
+      FileWriteString(h, header + "\r\n");
    }
+
    MqlDateTime dt; TimeCurrent(dt);
-   FileWrite(h, eventName,
-             TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
-             (string)r.posId,
-             Symbol(),
-             r.dir > 0 ? "BUY" : "SELL",
-             XAU_CsvSafe(r.setup),
-             XAU_CsvSafe(XAU_GradeBucket(r.grade)),
-             XAU_CsvSafe(r.signature),
-             r.regime,
-             XAU_CsvSafe(r.session),
-             dt.hour,
-             DoubleToString(r.entryPrice, 2),
-             DoubleToString(exitPrice, 2),
-             DoubleToString(r.lots, VolumeDigitsForSymbol()),
-             DoubleToString(r.sl, 2),
-             DoubleToString(r.tp, 2),
-             DoubleToString(profit, 2),
-             DoubleToString(worstFloatingPnl, 2),
-             secondsNegative,
-             XAU_CsvSafe(outcome),
-             XAU_CsvSafe(exitReason),
-             XAU_CsvSafe(r.entryReason),
-             DoubleToString(r.setupScore, 2),
-             DoubleToString(r.combinedScore, 2),
-             DoubleToString(r.atr, 2),
-             r.aiConfidence,
-             XAUAI_EA_VERSION,
-             XAUAI_BUILD_HASH,
-             InpMagicNumber,
-             DoubleToString(r.qualitySetup, 1),
-             DoubleToString(r.qualityTiming, 1),
-             DoubleToString(r.qualityExtensionRisk, 1),
-             DoubleToString(r.qualityMAERisk, 1),
-             DoubleToString(r.qualityEffectiveRR, 1),
-             DoubleToString(r.qualityFinalConfidence, 1),
-             XAU_CsvSafe(r.qualityBlockClass),
-             r.qualityCandlesSinceSignal,
-             DoubleToString(r.qualityMissedMoveDistance, 2),
-             DoubleToString(r.qualityMissedMoveATR, 2),
-             DoubleToString(r.qualitySignalFirstSeenPrice, 2));
+   string row = "";
+   XAU_CsvAppendField(row, eventName);
+   XAU_CsvAppendField(row, TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS));
+   XAU_CsvAppendField(row, (string)r.posId);
+   XAU_CsvAppendField(row, Symbol());
+   XAU_CsvAppendField(row, r.dir > 0 ? "BUY" : "SELL");
+   XAU_CsvAppendField(row, r.setup);
+   XAU_CsvAppendField(row, XAU_GradeBucket(r.grade));
+   XAU_CsvAppendField(row, r.signature);
+   XAU_CsvAppendField(row, IntegerToString(r.regime));
+   XAU_CsvAppendField(row, r.session);
+   XAU_CsvAppendField(row, (string)dt.hour);
+   XAU_CsvAppendField(row, DoubleToString(r.entryPrice, 5));
+   XAU_CsvAppendField(row, DoubleToString(exitPrice, 5));
+   XAU_CsvAppendField(row, DoubleToString(r.lots, VolumeDigitsForSymbol()));
+   XAU_CsvAppendField(row, DoubleToString(r.sl, 5));
+   XAU_CsvAppendField(row, DoubleToString(r.tp, 5));
+   XAU_CsvAppendField(row, DoubleToString(profit, 2));
+   XAU_CsvAppendField(row, DoubleToString(worstFloatingPnl, 2));
+   XAU_CsvAppendField(row, (string)secondsNegative);
+   XAU_CsvAppendField(row, outcome);
+   XAU_CsvAppendField(row, exitReason);
+   XAU_CsvAppendField(row, r.entryReason);
+   XAU_CsvAppendField(row, DoubleToString(r.setupScore, 2));
+   XAU_CsvAppendField(row, DoubleToString(r.combinedScore, 2));
+   XAU_CsvAppendField(row, DoubleToString(r.atr, 5));
+   XAU_CsvAppendField(row, (string)r.aiConfidence);
+   XAU_CsvAppendField(row, XAUAI_EA_VERSION);
+   XAU_CsvAppendField(row, XAUAI_BUILD_HASH);
+   XAU_CsvAppendField(row, (string)InpMagicNumber);
+   XAU_CsvAppendField(row, DoubleToString(r.qualitySetup, 1));
+   XAU_CsvAppendField(row, DoubleToString(r.qualityTiming, 1));
+   XAU_CsvAppendField(row, DoubleToString(r.qualityExtensionRisk, 1));
+   XAU_CsvAppendField(row, DoubleToString(r.qualityMAERisk, 1));
+   XAU_CsvAppendField(row, DoubleToString(r.qualityEffectiveRR, 1));
+   XAU_CsvAppendField(row, DoubleToString(r.qualityFinalConfidence, 1));
+   XAU_CsvAppendField(row, r.qualityBlockClass);
+   XAU_CsvAppendField(row, (string)r.qualityCandlesSinceSignal);
+   XAU_CsvAppendField(row, DoubleToString(r.qualityMissedMoveDistance, 5));
+   XAU_CsvAppendField(row, DoubleToString(r.qualityMissedMoveATR, 5));
+   XAU_CsvAppendField(row, DoubleToString(r.qualitySignalFirstSeenPrice, 5));
+   XAU_CsvAppendField(row, r.schemaVersion);
+   XAU_CsvAppendField(row, r.collectionRunId);
+   XAU_CsvAppendField(row, r.dataStatus);
+   XAU_CsvAppendField(row, r.tradeRole);
+   XAU_CsvAppendField(row, r.candidateId);
+   XAU_CsvAppendField(row, (string)r.campaignId);
+   XAU_CsvAppendField(row, r.signalBarTime > 0 ? TimeToString(r.signalBarTime, TIME_DATE | TIME_SECONDS) : "");
+   XAU_CsvAppendField(row, r.brokerEntryTime > 0 ? TimeToString(r.brokerEntryTime, TIME_DATE | TIME_SECONDS) : "");
+   XAU_CsvAppendField(row, r.originalSignalDirection > 0 ? "BUY" : r.originalSignalDirection < 0 ? "SELL" : "NONE");
+   XAU_CsvAppendField(row, r.decisionSignalDirection > 0 ? "BUY" : r.decisionSignalDirection < 0 ? "SELL" : "NONE");
+   XAU_CsvAppendField(row, r.inversionApplied ? "Y" : "N");
+   XAU_CsvAppendField(row, DoubleToString(r.originalStructuralSL, 5));
+   XAU_CsvAppendField(row, DoubleToString(r.originalOneRDistance, 5));
+   XAU_CsvAppendField(row, DoubleToString(r.effectiveSLDistance, 5));
+   XAU_CsvAppendField(row, DoubleToString(r.riskUSD, 2));
+   XAU_CsvAppendField(row, DoubleToString(r.spreadPoints, 1));
+   XAU_CsvAppendField(row, DoubleToString(r.spreadATR, 5));
+   XAU_CsvAppendField(row, DoubleToString(r.marginRequired, 2));
+   XAU_CsvAppendField(row, DoubleToString(r.freeMarginAtEntry, 2));
+   XAU_CsvAppendField(row, (string)r.stopLevelPoints);
+   XAU_CsvAppendField(row, DoubleToString(r.slippagePoints, 2));
+   XAU_CsvAppendField(row, r.accountMarginMode);
+   XAU_CsvAppendField(row, r.newsPhase);
+   XAU_CsvAppendField(row, (string)r.biasDirection);
+   XAU_CsvAppendField(row, (string)r.bosDirection);
+   XAU_CsvAppendField(row, r.thesisLocation);
+   XAU_CsvAppendField(row, r.thesisExhaustion);
+   XAU_CsvAppendField(row, r.thesisTiming);
+   XAU_CsvAppendField(row, r.thesisHTF);
+   XAU_CsvAppendField(row, r.thesisStructure);
+   XAU_CsvAppendField(row, r.thesisPressure);
+   XAU_CsvAppendField(row, r.thesisAction);
+   XAU_CsvAppendField(row, r.legacySignature);
+
+   string brokerDealReason="";
+   double closeDealFee=0.0;
+   if(eventName=="CLOSE" && closeDeal>0 && HistoryDealSelect(closeDeal))
+   {
+      brokerDealReason=EnumToString((ENUM_DEAL_REASON)HistoryDealGetInteger(closeDeal,DEAL_REASON));
+      closeDealFee=HistoryDealGetDouble(closeDeal,DEAL_FEE);
+   }
+   double requestedSL=r.originalStructuralSL>0.0?r.originalStructuralSL:r.sl;
+   double slippageBeyondSL=0.0;
+   if(eventName=="CLOSE" && requestedSL>0.0 && exitPrice>0.0)
+      slippageBeyondSL=r.dir>0?MathMax(0.0,requestedSL-exitPrice):MathMax(0.0,exitPrice-requestedSL);
+   double point=SymbolInfoDouble(Symbol(),SYMBOL_POINT);
+   double slippageBeyondSLPoints=point>0.0?slippageBeyondSL/point:0.0;
+   double slippageBeyondSLR=r.originalOneRDistance>0.0?slippageBeyondSL/r.originalOneRDistance:0.0;
+   bool brokerSL=(StringFind(brokerDealReason,"DEAL_REASON_SL")>=0 || StringFind(exitReason,"BROKER_SL")>=0);
+   bool executionAnomaly=(eventName=="CLOSE" && brokerSL &&
+                          (slippageBeyondSLR>=0.25 || executionSessionGapSeconds>=300));
+   XAU_CsvAppendField(row, brokerDealReason);
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(requestedSL,5):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(exitPrice,5):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(slippageBeyondSLPoints,1):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(slippageBeyondSLR,3):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?(string)executionSessionGapSeconds:"");
+   XAU_CsvAppendField(row, eventName=="CLOSE" && executionFirstAvailableTick>0
+                           ?TimeToString(executionFirstAvailableTick,TIME_DATE|TIME_SECONDS):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(closeDealFee,2):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(profit,2):"");
+   XAU_CsvAppendField(row, executionAnomaly?"Y":"N");
+   FileWriteString(h, row + "\r\n");
    FileClose(h);
 
+   if(executionAnomaly)
+      PrintFormat("EXECUTION_ANOMALY_QUARANTINE | posId=%I64u | deal=%I64u | reason=%s | requested_sl=%.5f | actual_close=%.5f | slippage_beyond_sl_points=%.1f | slippage_beyond_sl_r=%.3f | session_gap_seconds=%d | first_available_tick=%s | net_profit_including_fees=%.2f | authority=TELEMETRY_ONLY",
+                  r.posId,closeDeal,brokerDealReason,requestedSL,exitPrice,
+                  slippageBeyondSLPoints,slippageBeyondSLR,executionSessionGapSeconds,
+                  executionFirstAvailableTick>0?TimeToString(executionFirstAvailableTick,TIME_DATE|TIME_SECONDS):"",
+                  profit);
+
+   // Preserve the existing intelligence/Command Center telemetry path.
+   // This is reporting only; it never changes an entry, lot, stop or exit.
    string owner = "TRADE";
    string action = eventName;
    string reasonKey = eventName == "OPEN" ? "TRADE_OPEN" : XAU_BlockReasonKey(exitReason);
@@ -32515,6 +34331,119 @@ void XAU_UpdateClosedTradeOutcomes()
    }
 }
 
+
+// v6.25.15 — restart-safe recovery of the immutable OPEN snapshot from the
+// run-scoped v2 collection file. This prevents an EA/terminal reload while a
+// trade is open from downgrading a complete entry to guessed live-position
+// fields. The function is read-only to trading decisions.
+bool XAU_TradeBrainRestoreOpenFromCsv(ulong positionId, TradeBrainOpen &restored)
+{
+   if(positionId==0) return false;
+   string fn=XAU_TradeBrainFile();
+   if(!FileIsExist(fn,FILE_COMMON)) return false;
+   int h=FileOpen(fn,FILE_READ|FILE_CSV|FILE_COMMON,',');
+   if(h==INVALID_HANDLE) return false;
+
+   bool found=false;
+   string wantPosId=(string)positionId;
+   const int FIELD_COUNT=73;
+   while(!FileIsEnding(h))
+   {
+      string f[];
+      ArrayResize(f,FIELD_COUNT);
+      bool malformed=false;
+      for(int c=0;c<FIELD_COUNT;c++)
+      {
+         if(FileIsEnding(h) && c==0) { malformed=true; break; }
+         f[c]=FileReadString(h);
+         if(c<FIELD_COUNT-1 && FileIsLineEnding(h))
+         {
+            malformed=true;
+            break;
+         }
+      }
+      while(!FileIsLineEnding(h) && !FileIsEnding(h)) FileReadString(h);
+      if(malformed) continue;
+      if(f[0]=="event") continue;
+      if(f[2]!=wantPosId || f[3]!=Symbol()) continue;
+
+      if(f[0]=="CLOSE")
+      {
+         found=false;
+         continue;
+      }
+      if(f[0]!="OPEN") continue;
+      if(f[40]!="TRADEBRAIN_COLLECTION_V2" || f[41]!=InpTradeBrainCollectionRunId)
+         continue;
+
+      restored.posId=positionId;
+      restored.entryTime=StringLen(f[47])>0?StringToTime(f[47]):StringToTime(f[1]);
+      restored.dir=(f[4]=="BUY")?1:(f[4]=="SELL")?-1:0;
+      restored.entryPrice=StringToDouble(f[11]);
+      restored.sl=StringToDouble(f[14]);
+      restored.tp=StringToDouble(f[15]);
+      restored.lots=StringToDouble(f[13]);
+      restored.atr=StringToDouble(f[24]);
+      restored.setupScore=StringToDouble(f[22]);
+      restored.combinedScore=StringToDouble(f[23]);
+      restored.regime=(int)StringToInteger(f[8]);
+      restored.aiConfidence=(int)StringToInteger(f[25]);
+      restored.setup=f[5];
+      restored.grade=f[6];
+      restored.signature=f[7];
+      restored.session=f[9];
+      restored.entryReason=f[21];
+      restored.qualitySetup=StringToDouble(f[29]);
+      restored.qualityTiming=StringToDouble(f[30]);
+      restored.qualityExtensionRisk=StringToDouble(f[31]);
+      restored.qualityMAERisk=StringToDouble(f[32]);
+      restored.qualityEffectiveRR=StringToDouble(f[33]);
+      restored.qualityFinalConfidence=StringToDouble(f[34]);
+      restored.qualityBlockClass=f[35];
+      restored.qualityCandlesSinceSignal=(int)StringToInteger(f[36]);
+      restored.qualityMissedMoveDistance=StringToDouble(f[37]);
+      restored.qualityMissedMoveATR=StringToDouble(f[38]);
+      restored.qualitySignalFirstSeenPrice=StringToDouble(f[39]);
+      restored.schemaVersion=f[40];
+      restored.collectionRunId=f[41];
+      restored.dataStatus=f[42];
+      restored.tradeRole=f[43];
+      restored.candidateId=f[44];
+      restored.campaignId=(long)StringToInteger(f[45]);
+      restored.signalBarTime=StringLen(f[46])>0?StringToTime(f[46]):0;
+      restored.brokerEntryTime=StringLen(f[47])>0?StringToTime(f[47]):restored.entryTime;
+      restored.originalSignalDirection=(f[48]=="BUY")?1:(f[48]=="SELL")?-1:0;
+      restored.decisionSignalDirection=(f[49]=="BUY")?1:(f[49]=="SELL")?-1:0;
+      restored.inversionApplied=(f[50]=="Y");
+      restored.originalStructuralSL=StringToDouble(f[51]);
+      restored.originalOneRDistance=StringToDouble(f[52]);
+      restored.effectiveSLDistance=StringToDouble(f[53]);
+      restored.riskUSD=StringToDouble(f[54]);
+      restored.spreadPoints=StringToDouble(f[55]);
+      restored.spreadATR=StringToDouble(f[56]);
+      restored.marginRequired=StringToDouble(f[57]);
+      restored.freeMarginAtEntry=StringToDouble(f[58]);
+      restored.stopLevelPoints=(long)StringToInteger(f[59]);
+      restored.slippagePoints=StringToDouble(f[60]);
+      restored.accountMarginMode=f[61];
+      restored.newsPhase=f[62];
+      restored.biasDirection=(int)StringToInteger(f[63]);
+      restored.bosDirection=(int)StringToInteger(f[64]);
+      restored.thesisLocation=f[65];
+      restored.thesisExhaustion=f[66];
+      restored.thesisTiming=f[67];
+      restored.thesisHTF=f[68];
+      restored.thesisStructure=f[69];
+      restored.thesisPressure=f[70];
+      restored.thesisAction=f[71];
+      restored.legacySignature=f[72];
+      restored.checkpointNextIdx=0;
+      found=true;
+   }
+   FileClose(h);
+   return found;
+}
+
 // v6.20.3 — TELEMETRY-ONLY reconciliation, called once from OnInit().
 //
 // Root cause this addresses (xau_lifecycle_forensic_audit_FINAL_2026-07-09.md
@@ -32534,12 +34463,10 @@ void XAU_UpdateClosedTradeOutcomes()
 //
 // This function does two READ-ONLY-to-trading-decisions things:
 //   (A) For every currently-open position under this EA's magic number that
-//       has no in-memory brain record (true on every fresh OnInit, since
-//       g_brainOpenTrades[] always starts empty), reconstruct a minimal
-//       record from the LIVE position's own broker-side fields so a future
-//       close can be recorded instead of falling back to blank. The
-//       reconstructed entryReason is explicitly labelled as reconstructed —
-//       it is never presented as if it were the original decision text.
+//       has no in-memory brain record, first restore its immutable v2 OPEN
+//       snapshot from the run-scoped CSV. Only when no valid persisted OPEN
+//       exists does it reconstruct a minimal non-trainable record from live
+//       broker fields. No guessed record is presented as original evidence.
 //   (B) For deals in the recent broker history (bounded lookback) that show
 //       a position already fully closed with our magic number, but for
 //       which no CLOSE row exists yet in the brain CSV at all, write one
@@ -32564,6 +34491,23 @@ void XAU_ReconcileTradeBrainOnInit()
       ulong posId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
       if(posId == 0 || XAU_FindBrainOpen(posId) >= 0) continue; // already tracked
 
+      TradeBrainOpen persistedOpen;
+      if(XAU_TradeBrainRestoreOpenFromCsv(posId,persistedOpen))
+      {
+         int nPersisted=ArraySize(g_brainOpenTrades);
+         ArrayResize(g_brainOpenTrades,nPersisted+1);
+         int elapsedMin=(int)((TimeCurrent()-persistedOpen.entryTime)/60);
+         int ci=0;
+         while(ci<ArraySize(g_checkpointMinutes) && g_checkpointMinutes[ci]<=elapsedMin) ci++;
+         persistedOpen.checkpointNextIdx=ci;
+         g_brainOpenTrades[nPersisted]=persistedOpen;
+         restored++;
+         PrintFormat("GLOBAL_TRADEBRAIN_OPEN_RESTORED | posId=%I64u | run_id=%s | role=%s | data_status=%s | fingerprint=%s",
+                     posId,persistedOpen.collectionRunId,persistedOpen.tradeRole,
+                     persistedOpen.dataStatus,persistedOpen.signature);
+         continue;
+      }
+
       int n = ArraySize(g_brainOpenTrades);
       ArrayResize(g_brainOpenTrades, n + 1);
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
@@ -32582,7 +34526,40 @@ void XAU_ReconcileTradeBrainOnInit()
       g_brainOpenTrades[n].setup          = "";
       g_brainOpenTrades[n].grade          = "";
       g_brainOpenTrades[n].signature      = "";
+      g_brainOpenTrades[n].legacySignature= "";
       g_brainOpenTrades[n].session        = SessionTag();
+      g_brainOpenTrades[n].schemaVersion  = "TRADEBRAIN_COLLECTION_V2";
+      g_brainOpenTrades[n].collectionRunId= InpTradeBrainCollectionRunId;
+      g_brainOpenTrades[n].dataStatus     = "LEGACY_RECORD_NOT_CAPTURED";
+      g_brainOpenTrades[n].tradeRole      = "UNKNOWN";
+      g_brainOpenTrades[n].candidateId    = "";
+      g_brainOpenTrades[n].campaignId     = 0;
+      g_brainOpenTrades[n].signalBarTime  = 0;
+      g_brainOpenTrades[n].brokerEntryTime= g_brainOpenTrades[n].entryTime;
+      g_brainOpenTrades[n].originalSignalDirection=0;
+      g_brainOpenTrades[n].decisionSignalDirection=0;
+      g_brainOpenTrades[n].inversionApplied=false;
+      g_brainOpenTrades[n].originalStructuralSL=0.0;
+      g_brainOpenTrades[n].originalOneRDistance=0.0;
+      g_brainOpenTrades[n].effectiveSLDistance=0.0;
+      g_brainOpenTrades[n].riskUSD=0.0;
+      g_brainOpenTrades[n].spreadPoints=0.0;
+      g_brainOpenTrades[n].spreadATR=0.0;
+      g_brainOpenTrades[n].marginRequired=0.0;
+      g_brainOpenTrades[n].freeMarginAtEntry=0.0;
+      g_brainOpenTrades[n].stopLevelPoints=0;
+      g_brainOpenTrades[n].slippagePoints=0.0;
+      g_brainOpenTrades[n].accountMarginMode="";
+      g_brainOpenTrades[n].newsPhase="";
+      g_brainOpenTrades[n].biasDirection=0;
+      g_brainOpenTrades[n].bosDirection=0;
+      g_brainOpenTrades[n].thesisLocation="";
+      g_brainOpenTrades[n].thesisExhaustion="";
+      g_brainOpenTrades[n].thesisTiming="";
+      g_brainOpenTrades[n].thesisHTF="";
+      g_brainOpenTrades[n].thesisStructure="";
+      g_brainOpenTrades[n].thesisPressure="";
+      g_brainOpenTrades[n].thesisAction="";
       g_brainOpenTrades[n].entryReason    = StringFormat(
          "RECONCILED_AFTER_RESTART: original entry reasoning lost to an EA reload while this position (posId=%I64u) was open; fields reconstructed from live broker position state at reload time, not from the original decision.",
          posId);
@@ -32617,7 +34594,8 @@ void XAU_ReconcileTradeBrainOnInit()
    }
 
    // --- Part B: backfill CLOSE rows for deals the EA never got to record ---
-   datetime lookbackFrom = TimeCurrent() - 3 * 24 * 60 * 60; // bounded 72h window, cheap and sufficient for reload gaps
+   int reconcileLookbackDays=(InpBacktestMode && InpGlobalTradeBrainMode==GLOBAL_TRADEBRAIN_COLLECT_ONLY)?190:30;
+   datetime lookbackFrom = TimeCurrent() - reconcileLookbackDays * 24 * 60 * 60; // complete collection recovery in tester; bounded live recovery
    if(!HistorySelect(lookbackFrom, TimeCurrent())) return;
    int deals = HistoryDealsTotal();
    int backfilled = 0;
@@ -32628,7 +34606,8 @@ void XAU_ReconcileTradeBrainOnInit()
       if(dealTicket == 0) continue;
       if((long)HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber) continue;
       if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != Symbol()) continue;
-      if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+      ENUM_DEAL_ENTRY reconcileEntry=(ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket,DEAL_ENTRY);
+      if(reconcileEntry!=DEAL_ENTRY_OUT && reconcileEntry!=DEAL_ENTRY_OUT_BY) continue;
 
       ulong posId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
       if(posId == 0) continue;
@@ -32654,6 +34633,7 @@ void XAU_ReconcileTradeBrainOnInit()
 
       int idx = XAU_FindBrainOpen(posId);
       TradeBrainOpen r;
+      ZeroMemory(r);
       if(idx >= 0)
       {
          r = g_brainOpenTrades[idx];
@@ -32672,6 +34652,14 @@ void XAU_ReconcileTradeBrainOnInit()
          r.regime = (int)currentRegime; r.aiConfidence = 0;
          r.setup = ""; r.grade = ""; r.signature = ""; r.session = SessionTag();
          r.entryReason = "RECONCILED_POST_RESTART: no OPEN telemetry existed for this position either; only the closing deal's own broker record is available.";
+         r.schemaVersion="TRADEBRAIN_COLLECTION_V2"; r.collectionRunId=InpTradeBrainCollectionRunId;
+         r.dataStatus="LEGACY_RECORD_NOT_CAPTURED"; r.tradeRole="UNKNOWN"; r.candidateId=""; r.campaignId=0;
+         r.signalBarTime=0; r.brokerEntryTime=0; r.originalSignalDirection=0; r.decisionSignalDirection=0; r.inversionApplied=false;
+         r.originalStructuralSL=0.0; r.originalOneRDistance=0.0; r.effectiveSLDistance=0.0; r.riskUSD=0.0;
+         r.spreadPoints=0.0; r.spreadATR=0.0; r.marginRequired=0.0; r.freeMarginAtEntry=0.0;
+         r.stopLevelPoints=0; r.slippagePoints=0.0; r.accountMarginMode=""; r.newsPhase="";
+         r.biasDirection=0; r.bosDirection=0; r.thesisLocation=""; r.thesisExhaustion=""; r.thesisTiming="";
+         r.thesisHTF=""; r.thesisStructure=""; r.thesisPressure=""; r.thesisAction=""; r.legacySignature=""; r.signature="";
          r.qualitySetup = 0.0; r.qualityTiming = 0.0; r.qualityExtensionRisk = 0.0;
          r.qualityMAERisk = 0.0; r.qualityEffectiveRR = 0.0; r.qualityFinalConfidence = 0.0;
          r.qualityBlockClass = ""; r.qualityCandlesSinceSignal = 0;
@@ -32680,11 +34668,15 @@ void XAU_ReconcileTradeBrainOnInit()
       }
       double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
                     + HistoryDealGetDouble(dealTicket, DEAL_SWAP)
-                    + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+                    + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION)
+                    + HistoryDealGetDouble(dealTicket, DEAL_FEE);
       double exitPrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+      datetime reconciledExitTime=0;
+      XAU_TradeBrainPositionNetResult(posId,profit,exitPrice,reconciledExitTime);
       XAU_AppendTradeBrain("CLOSE", r, exitPrice, profit, 0.0, 0,
                            profit >= 0.01 ? "WIN" : (profit <= -0.01 ? "LOSS" : "BE"),
-                           "RECONCILED_POST_RESTART: close deal found in broker history but no CLOSE telemetry existed for it; backfilled by OnInit reconciliation. worstFloating/secondsNegative are unavailable (not observed live) and are reported as 0.");
+                           "RECONCILED_POST_RESTART: close deal found in broker history but no CLOSE telemetry existed for it; backfilled by OnInit reconciliation. worstFloating/secondsNegative are unavailable (not observed live) and are reported as 0.",
+                           dealTicket,0,0);
       if(idx >= 0) XAU_RemoveBrainOpen(idx);
       backfilled++;
       Print("RECONCILIATION: backfilled missing CLOSE row for posId=", posId,
@@ -32731,8 +34723,17 @@ bool XAU_TradeBrainHasCloseRow(ulong posId)
 
 void XAU_BrainRecordOpen(ulong posId, int signal, double entryPrice, double sl, double tp,
                          double lots, double atr, string setupName, string grade,
-                         string signature, double setupScore, double combinedScore,
-                         string entryReason)
+                         string exactFingerprint, string legacySignature,
+                         double setupScore, double combinedScore, string entryReason,
+                         string tradeRole, int decisionSignalDirection,
+                         int originalSignalDirection, bool inversionApplied,
+                         ENUM_REGIME frozenEntryRegime, double originalStructuralSL,
+                         double originalOneRDistance, double effectiveSLDistance,
+                         double riskUSD, double spreadPoints, double spreadATR,
+                         double marginRequired, double freeMarginAtEntry,
+                         long stopLevelPoints, double slippagePoints,
+                         string accountMarginMode, string newsPhase,
+                         datetime brokerEntryTime, bool isManualOverride)
 {
    if(!InpTradeBrainMemory || posId == 0 || signal == 0 || !IsXAUFastSymbol()) return;
    int idx = XAU_FindBrainOpen(posId);
@@ -32742,8 +34743,10 @@ void XAU_BrainRecordOpen(ulong posId, int signal, double entryPrice, double sl, 
       ArrayResize(g_brainOpenTrades, n + 1);
       idx = n;
    }
+   bool snapshotComplete=!isManualOverride && XAU_TradeBrainSnapshotComplete(decisionSignalDirection) && StringLen(exactFingerprint)>0;
+   int cSlot=XAU_CampaignSlot(signal);
    g_brainOpenTrades[idx].posId = posId;
-   g_brainOpenTrades[idx].entryTime = TimeCurrent();
+   g_brainOpenTrades[idx].entryTime = brokerEntryTime>0?brokerEntryTime:TimeCurrent();
    g_brainOpenTrades[idx].dir = signal;
    g_brainOpenTrades[idx].entryPrice = entryPrice;
    g_brainOpenTrades[idx].sl = sl;
@@ -32752,23 +34755,50 @@ void XAU_BrainRecordOpen(ulong posId, int signal, double entryPrice, double sl, 
    g_brainOpenTrades[idx].atr = atr;
    g_brainOpenTrades[idx].setupScore = setupScore;
    g_brainOpenTrades[idx].combinedScore = combinedScore;
-   g_brainOpenTrades[idx].regime = (int)currentRegime;
+   g_brainOpenTrades[idx].regime = (int)frozenEntryRegime;
    g_brainOpenTrades[idx].aiConfidence = currentTradeConfidence;
    g_brainOpenTrades[idx].setup = setupName;
    g_brainOpenTrades[idx].grade = grade;
-   g_brainOpenTrades[idx].signature = signature;
+   g_brainOpenTrades[idx].signature = snapshotComplete?exactFingerprint:"";
+   g_brainOpenTrades[idx].legacySignature = legacySignature;
    g_brainOpenTrades[idx].session = SessionTag();
    g_brainOpenTrades[idx].entryReason = entryReason;
-   // v6.20.3 adversarial-review fix: only trust g_lastEntryQ_* when it was
-   // captured for THIS exact dir+setup within the last few seconds (i.e.
-   // during THIS decision cycle). deleted timed recovery path and
-   // XAU_TryForceOpenTrade never call XAU_FreshnessExtensionAuthority, so without this
-   // check the globals could hold a different signal's numbers (a rejected
-   // candidate, the opposite direction, or simply stale from minutes ago) —
-   // originally this comment claimed those paths would "correctly" see
-   // 0.0/"", but MQL5 globals persist across calls, so that was only true on
-   // a fresh terminal start. Explicitly checking freshness+identity here is
-   // the actual fix, not an assumption about initial state.
+   g_brainOpenTrades[idx].schemaVersion="TRADEBRAIN_COLLECTION_V2";
+   g_brainOpenTrades[idx].collectionRunId=InpTradeBrainCollectionRunId;
+   g_brainOpenTrades[idx].dataStatus=isManualOverride?"NOT_APPLICABLE_MANUAL_OVERRIDE":
+                                         snapshotComplete?"ENTRY_DATA_PRESENT":"CAPTURE_FAILED";
+   g_brainOpenTrades[idx].tradeRole=tradeRole;
+   g_brainOpenTrades[idx].candidateId=snapshotComplete
+      ? StringFormat("%s|BAR=%I64d|GEN=%I64d",tradeRole,(long)g_latestDecisionSnapshot.closedPrimaryBarTime,g_latestDecisionSnapshot.generation)
+      : "";
+   g_brainOpenTrades[idx].campaignId=(g_campaign[cSlot].active && !g_campaign[cSlot].invalidated)?g_campaign[cSlot].campaignId:0;
+   g_brainOpenTrades[idx].signalBarTime=snapshotComplete?g_latestDecisionSnapshot.closedPrimaryBarTime:0;
+   g_brainOpenTrades[idx].brokerEntryTime=brokerEntryTime>0?brokerEntryTime:TimeCurrent();
+   g_brainOpenTrades[idx].originalSignalDirection=originalSignalDirection;
+   g_brainOpenTrades[idx].decisionSignalDirection=decisionSignalDirection;
+   g_brainOpenTrades[idx].inversionApplied=inversionApplied;
+   g_brainOpenTrades[idx].originalStructuralSL=originalStructuralSL;
+   g_brainOpenTrades[idx].originalOneRDistance=originalOneRDistance;
+   g_brainOpenTrades[idx].effectiveSLDistance=effectiveSLDistance;
+   g_brainOpenTrades[idx].riskUSD=riskUSD;
+   g_brainOpenTrades[idx].spreadPoints=spreadPoints;
+   g_brainOpenTrades[idx].spreadATR=spreadATR;
+   g_brainOpenTrades[idx].marginRequired=marginRequired;
+   g_brainOpenTrades[idx].freeMarginAtEntry=freeMarginAtEntry;
+   g_brainOpenTrades[idx].stopLevelPoints=stopLevelPoints;
+   g_brainOpenTrades[idx].slippagePoints=slippagePoints;
+   g_brainOpenTrades[idx].accountMarginMode=accountMarginMode;
+   g_brainOpenTrades[idx].newsPhase=newsPhase;
+   g_brainOpenTrades[idx].biasDirection=snapshotComplete?g_latestDecisionSnapshot.biasDirection:0;
+   g_brainOpenTrades[idx].bosDirection=snapshotComplete?g_latestDecisionSnapshot.bosDirection:0;
+   g_brainOpenTrades[idx].thesisLocation=snapshotComplete?XAU_LocationQualityName(g_latestDecisionSnapshot.thesis.location):"";
+   g_brainOpenTrades[idx].thesisExhaustion=snapshotComplete?XAU_ExhaustionStateName(g_latestDecisionSnapshot.thesis.exhaustion):"";
+   g_brainOpenTrades[idx].thesisTiming=snapshotComplete?XAU_TimingStateName(g_latestDecisionSnapshot.thesis.timing):"";
+   g_brainOpenTrades[idx].thesisHTF=snapshotComplete?XAU_HTFAlignmentName(g_latestDecisionSnapshot.thesis.htf):"";
+   g_brainOpenTrades[idx].thesisStructure=snapshotComplete?XAU_StructureStateName(g_latestDecisionSnapshot.thesis.structure):"";
+   g_brainOpenTrades[idx].thesisPressure=snapshotComplete?XAU_PressureStateName(g_latestDecisionSnapshot.thesis.pressure):"";
+   g_brainOpenTrades[idx].thesisAction=snapshotComplete?XAU_MarketThesisActionName(g_latestDecisionSnapshot.thesis.action):"";
+
    bool entryQFresh = (g_lastEntryQ_Dir == signal &&
                        g_lastEntryQ_Setup == setupName &&
                        g_lastEntryQ_CapturedAt > 0 &&
@@ -32786,12 +34816,100 @@ void XAU_BrainRecordOpen(ulong posId, int signal, double entryPrice, double sl, 
    g_brainOpenTrades[idx].qualitySignalFirstSeenPrice = entryQFresh ? g_lastEntryQ_SignalFirstSeenPrice : 0.0;
    g_brainOpenTrades[idx].checkpointNextIdx = 0;
    XAU_AppendTradeBrain("OPEN", g_brainOpenTrades[idx], 0.0, 0.0, 0.0, 0, "OPEN", "");
-   Print("TRADE-BRAIN OPEN: posId=", posId,
-         " ", signal > 0 ? "BUY" : "SELL",
-         " setup=", setupName,
-         " grade=", XAU_GradeBucket(grade),
-         " signature=", signature,
-         " file=", XAU_TradeBrainFile());
+   PrintFormat("GLOBAL_TRADEBRAIN_OPEN | run_id=%s | posId=%I64u | role=%s | data_status=%s | exact_fingerprint=%s | broker_entry=%.5f | broker_sl=%.5f | broker_lots=%.4f",
+               InpTradeBrainCollectionRunId,posId,tradeRole,g_brainOpenTrades[idx].dataStatus,
+               g_brainOpenTrades[idx].signature,entryPrice,sl,lots);
+}
+
+string XAU_TradeBrainMoveATRBucket(double moveATR)
+{
+   if(moveATR<0.40) return "MOVE_LT_040";
+   if(moveATR<0.65) return "MOVE_040_064";
+   if(moveATR<1.10) return "MOVE_065_109";
+   if(moveATR<1.60) return "MOVE_110_159";
+   return "MOVE_160_PLUS";
+}
+
+string XAU_TradeBrainExhaustionBucket(double exhaustionPct)
+{
+   if(exhaustionPct<35.0) return "EXH_LOW";
+   if(exhaustionPct<60.0) return "EXH_MODERATE";
+   if(exhaustionPct<80.0) return "EXH_HIGH";
+   return "EXH_EXTREME";
+}
+
+void XAU_BrainRecordPyramidOpen(ulong posId, int signal,
+                                double entryPrice, double sl, double tp, double lots, double atr,
+                                long campaignId, int addSequence, string candidateEpisodeId,
+                                datetime sourceBar, ENUM_XAU_TIMING_STATE timingState,
+                                double moveATR, double exhaustionPct,
+                                XAU_AdaptiveTransitionDecision &transition,
+                                double originalOneRDistance, double effectiveSLDistance,
+                                double riskUSD, double spreadPoints, double spreadATR,
+                                double marginRequired, double freeMarginAtEntry,
+                                long stopLevelPoints, double slippagePoints,
+                                string accountMarginMode, string newsPhase,
+                                datetime brokerEntryTime)
+{
+   if(!InpTradeBrainMemory || posId==0 || signal==0 || !IsXAUFastSymbol()) return;
+   TradeBrainOpen r;
+   ZeroMemory(r);
+   r.posId=posId; r.entryTime=brokerEntryTime>0?brokerEntryTime:TimeCurrent(); r.dir=signal;
+   r.entryPrice=entryPrice; r.sl=sl; r.tp=tp; r.lots=lots; r.atr=atr;
+   r.setupScore=0.0; r.combinedScore=0.0; r.regime=(int)currentRegime; r.aiConfidence=currentTradeConfidence;
+   r.setup="PYRAMID_TWO_GATE"; r.grade="PYRAMID"; r.legacySignature=candidateEpisodeId; r.session=SessionTag();
+   r.schemaVersion="TRADEBRAIN_COLLECTION_V2"; r.collectionRunId=InpTradeBrainCollectionRunId;
+   r.tradeRole="PYRAMID"; r.candidateId=candidateEpisodeId; r.campaignId=campaignId;
+   r.signalBarTime=sourceBar; r.brokerEntryTime=brokerEntryTime>0?brokerEntryTime:TimeCurrent();
+   r.originalSignalDirection=signal; r.decisionSignalDirection=signal; r.inversionApplied=false;
+   r.originalStructuralSL=NormalizeDouble(signal>0?entryPrice-originalOneRDistance:entryPrice+originalOneRDistance,
+                                           (int)SymbolInfoInteger(Symbol(),SYMBOL_DIGITS));
+   r.originalOneRDistance=originalOneRDistance; r.effectiveSLDistance=effectiveSLDistance; r.riskUSD=riskUSD;
+   r.spreadPoints=spreadPoints; r.spreadATR=spreadATR; r.marginRequired=marginRequired;
+   r.freeMarginAtEntry=freeMarginAtEntry; r.stopLevelPoints=stopLevelPoints; r.slippagePoints=slippagePoints;
+   r.accountMarginMode=accountMarginMode; r.newsPhase=newsPhase;
+   r.biasDirection=0; r.bosDirection=g_smc_bos_dir;
+   r.thesisLocation=XAU_LocationQualityName(XAU_BucketLocation(transition));
+   r.thesisExhaustion=XAU_TradeBrainExhaustionBucket(exhaustionPct);
+   r.thesisTiming=XAU_TimingStateName(timingState);
+   r.thesisHTF=XAU_HTFAlignmentName(XAU_BucketHTF(signal,transition));
+   string smcReason="";
+   r.thesisStructure=XAU_StructureStateName(XAU_BucketStructure(signal,smcReason));
+   r.thesisPressure=XAU_PressureStateName(XAU_BucketPressure(transition));
+   r.thesisAction="PYRAMID_TIMING_PLUS_EXHAUSTION_APPROVED";
+   r.entryReason=StringFormat("PYRAMID_TWO_GATE add=%d timing=%s moveATR=%.3f exhaustion=%.1f",
+                              addSequence,XAU_TimingStateName(timingState),moveATR,exhaustionPct);
+   r.qualitySetup=0.0; r.qualityTiming=0.0; r.qualityExtensionRisk=0.0; r.qualityMAERisk=0.0;
+   r.qualityEffectiveRR=0.0; r.qualityFinalConfidence=0.0; r.qualityBlockClass="";
+   r.qualityCandlesSinceSignal=0; r.qualityMissedMoveDistance=0.0; r.qualityMissedMoveATR=0.0;
+   r.qualitySignalFirstSeenPrice=0.0; r.checkpointNextIdx=0;
+
+   int existingIdx=XAU_FindBrainOpen(posId);
+   if(existingIdx>=0)
+   {
+      // Netting account: the add shares the core position identifier, so a
+      // leg-specific final outcome cannot be reconstructed honestly. Keep the
+      // add telemetry but make it ineligible for cohort training.
+      r.dataStatus="MIXED_NETTING_ADD_NOT_SEPARATELY_SETTLED";
+      r.signature="";
+      XAU_AppendTradeBrain("PYRAMID_ADD_NETTING",r,0.0,0.0,0.0,0,"OPEN","");
+      PrintFormat("GLOBAL_TRADEBRAIN_PYRAMID_NETTING | posId=%I64u | campaign=%s | add=%d | status=%s",
+                  posId,XAU_CampaignIdText(campaignId),addSequence,r.dataStatus);
+      return;
+   }
+
+   r.dataStatus="ENTRY_DATA_PRESENT";
+   r.signature=StringFormat("TB2|ROLE=PYRAMID|DIR=%s|REGIME=%s|SESSION=%s|ADD=%d|TIM=%s|MOVE=%s|EXH=%s|HTF=%s|STRUCT=%s|PRESS=%s",
+      signal>0?"BUY":"SELL",XAU_TradeBrainSafeToken(RegimeName()),XAU_TradeBrainSafeToken(SessionTag()),
+      (addSequence>3?3:addSequence),XAU_TradeBrainSafeToken(XAU_TimingStateName(timingState)),
+      XAU_TradeBrainMoveATRBucket(moveATR),XAU_TradeBrainExhaustionBucket(exhaustionPct),
+      XAU_TradeBrainSafeToken(r.thesisHTF),XAU_TradeBrainSafeToken(r.thesisStructure),XAU_TradeBrainSafeToken(r.thesisPressure));
+   int n=ArraySize(g_brainOpenTrades);
+   ArrayResize(g_brainOpenTrades,n+1);
+   g_brainOpenTrades[n]=r;
+   XAU_AppendTradeBrain("OPEN",g_brainOpenTrades[n],0.0,0.0,0.0,0,"OPEN","");
+   PrintFormat("GLOBAL_TRADEBRAIN_PYRAMID_OPEN | posId=%I64u | campaign=%s | add=%d | fingerprint=%s",
+               posId,XAU_CampaignIdText(campaignId),addSequence,r.signature);
 }
 
 bool XAU_TradeBrainStats(string setupName, int signal, string grade, string signature,
@@ -32804,22 +34922,20 @@ bool XAU_TradeBrainStats(string setupName, int signal, string grade, string sign
    avgProfit = 0.0;
    avgWorstDD = 0.0;
    badRecoveryRate = 0.0;
-   if(!InpTradeBrainMemory || !IsXAUFastSymbol()) return false;
+   if(!XAU_TRADEBRAIN_LOCAL_ROWS_HAVE_AUTHORITY) return false; // local replay rows are evidence only, never live authority
+   if(!InpTradeBrainMemory || !IsXAUFastSymbol() || StringLen(signature)==0) return false;
    string fn = XAU_TradeBrainFile();
    if(!FileIsExist(fn, FILE_COMMON)) return false;
    int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE) return false;
 
    string wantDir = signal > 0 ? "BUY" : "SELL";
-   string wantGrade = XAU_GradeBucket(grade);
    int winsMem = 0;
    int badRecovery = 0;
    double grossWin = 0.0;
    double grossLoss = 0.0;
    double totalWorst = 0.0;
    double totalProfit = 0.0;
-   int exactSigSamples = 0;
-   int exactSigWins = 0;
 
    while(!FileIsEnding(h))
    {
@@ -32849,26 +34965,21 @@ bool XAU_TradeBrainStats(string setupName, int signal, string grade, string sign
       string combinedTxt = FileReadString(h);
       string atrTxt = FileReadString(h);
       string aiTxt = FileReadString(h);
+      while(!FileIsLineEnding(h) && !FileIsEnding(h)) FileReadString(h);
 
-      if(ev != "CLOSE" || sym != Symbol() || dir != wantDir || setup != setupName)
-         continue;
-      bool gradeCompatible = (gr == wantGrade || sig == signature);
-      if(!gradeCompatible) continue;
-
+      if(ev == "event") continue;
+      if(ev != "CLOSE" || sym != Symbol() || dir != wantDir || sig != signature) continue;
       double p = StringToDouble(profitTxt);
+      bool isWin = (p >= 0.01);
+      bool isLoss = (p <= -0.01);
+      if(!isWin && !isLoss) continue;
       double worst = StringToDouble(worstTxt);
       samples++;
       totalProfit += p;
       totalWorst += worst;
-      if(p >= 0.01) { winsMem++; grossWin += p; }
-      else if(p <= -0.01) grossLoss += MathAbs(p);
-      if(sig == signature)
-      {
-         exactSigSamples++;
-         if(p >= 0.01) exactSigWins++;
-      }
-      if(p > 0.0 && worst < -1.0 && p / MathAbs(worst) < 0.60)
-         badRecovery++;
+      if(isWin) { winsMem++; grossWin += p; }
+      else grossLoss += MathAbs(p);
+      if(isWin && worst < -1.0 && p / MathAbs(worst) < 0.60) badRecovery++;
    }
    FileClose(h);
    if(samples <= 0) return false;
@@ -32877,10 +34988,6 @@ bool XAU_TradeBrainStats(string setupName, int signal, string grade, string sign
    avgProfit = totalProfit / samples;
    avgWorstDD = totalWorst / samples;
    badRecoveryRate = (double)badRecovery / samples * 100.0;
-   if(exactSigSamples >= InpTradeBrainMinSamples)
-      Print("TRADE-BRAIN EXACT-SIGNATURE: ", signature,
-            " samples=", exactSigSamples,
-            " WR=", DoubleToString((double)exactSigWins / exactSigSamples * 100.0, 0), "%");
    return (samples >= InpTradeBrainMinSamples);
 }
 
@@ -32889,35 +34996,53 @@ bool XAU_TradeBrainPreEntry(int signal, string setupName, string grade, string s
 {
    lotMulti = 1.0;
    brainReason = "";
-   if(!InpTradeBrainMemory || signal == 0 || !IsXAUFastSymbol()) return true;
-   int samples = 0;
-   double wr = 0.0, pf = 0.0, avgP = 0.0, avgDD = 0.0, badRec = 0.0;
-   bool trusted = XAU_TradeBrainStats(setupName, signal, grade, signature,
-                                      samples, wr, pf, avgP, avgDD, badRec);
-   if(!trusted)
+   if(!InpTradeBrainMemory || signal == 0 || !IsXAUFastSymbol() ||
+      InpGlobalTradeBrainMode == GLOBAL_TRADEBRAIN_OFF)
+      return true;
+
+   if(InpGlobalTradeBrainMode == GLOBAL_TRADEBRAIN_COLLECT_ONLY)
    {
-      brainReason = StringFormat("TRADE-BRAIN AUDIT: pattern has %d/%d samples; recording only, no behavior change.",
-                                 samples, InpTradeBrainMinSamples);
+      brainReason = StringFormat("GLOBAL_TRADEBRAIN_DECISION | mode=COLLECT_ONLY | run_id=%s | signature=%s | decision=ALLOW | authority=ZERO_EXECUTION_AUTHORITY",
+                                 InpTradeBrainCollectionRunId,signature);
       return true;
    }
 
-   bool poorEntryQuality = (avgP > 0.0 && avgDD < 0.0 &&
-                            MathAbs(avgDD) > avgP * InpTradeBrainBadDDProfitRatio);
-   brainReason = StringFormat("TRADE-BRAIN AUDIT: samples=%d WR=%.0f%% PF=%.2f avgP=$%.0f avgWorstDD=$%.0f badRecovery=%.0f%% poorEntry=%s",
-                              samples, wr, pf, avgP, avgDD, badRec,
-                              poorEntryQuality ? "Y" : "N");
+   bool seedIntegrity=StringLen(XAU_TRADEBRAIN_SEED_SHA256)==64 &&
+                      StringFind(XAU_TRADEBRAIN_SEED_SHA256,"PENDING")<0 &&
+                      XAU_TRADEBRAIN_SEED_WARNING_COUNT==4 &&
+                      XAU_TRADEBRAIN_SEED_ACTIVE_BLOCK_COUNT==0;
+   if(!XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE || !seedIntegrity)
+   {
+      brainReason = StringFormat("GLOBAL_TRADEBRAIN_DECISION | mode=%d | signature=%s | decision=ALLOW | reason=VALIDATED_GLOBAL_SEED_NOT_IMPORTED | fail_open=true",
+                                 (int)InpGlobalTradeBrainMode,signature);
+      return true;
+   }
 
-   if(wr <= InpTradeBrainBlockWR && pf < InpTradeBrainMinPF)
-   {
-      brainReason = "TRADE-BRAIN BLOCK: similar executed trades have poor proven expectancy. " + brainReason;
-      return false;
-   }
-   if(wr <= InpTradeBrainReduceWR || pf < InpTradeBrainMinPF || poorEntryQuality || badRec >= 45.0)
-   {
-      lotMulti = InpTradeBrainWeakLotMulti;
-      brainReason = StringFormat("TRADE-BRAIN REDUCE: similar pattern is weak, lot x%.2f. ",
-                                 lotMulti) + brainReason;
-   }
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   string session=SessionTag();
+   string location=XAU_LocationQualityName(g_latestDecisionSnapshot.thesis.location);
+   string timing=XAU_TimingStateName(g_latestDecisionSnapshot.thesis.timing);
+   string structure=XAU_StructureStateName(g_latestDecisionSnapshot.thesis.structure);
+   string warnings="";
+   bool hour12to14=(dt.hour>=12 && dt.hour<=14);
+   if(hour12to14 && location=="LOCATION_RESET_PENDING" && timing=="TIMING_WAIT_CONFIRMATION")
+      warnings="WARN_H12_14_LOCATION_RESET_PENDING_TIMING_WAIT_CONFIRMATION";
+   if(hour12to14 && structure=="STRUCTURE_OPPOSES")
+      warnings+=(StringLen(warnings)>0?";":"")+"WARN_H12_14_STRUCTURE_OPPOSES";
+   if(signal>0 && session=="ASIA" && g_smc_bos_dir<0)
+      warnings+=(StringLen(warnings)>0?";":"")+"WARN_BUY_ASIA_BOS_NEGATIVE";
+   if(signal>0 && setupName=="TREND_PULLBACK" && structure=="STRUCTURE_OPPOSES")
+      warnings+=(StringLen(warnings)>0?";":"")+"WARN_BUY_TREND_PULLBACK_STRUCTURE_OPPOSES";
+
+   // This validated seed deliberately has no ACTIVE cohort. ADVISOR and the
+   // optional HARD_BLOCK_70 mode therefore both allow identically; HARD mode
+   // cannot block unless a future separately audited seed has ACTIVE rows.
+   brainReason=StringFormat("GLOBAL_TRADEBRAIN_DECISION | mode=%d | seed_id=%s | seed_sha256=%s | signature=%s | warning_cohorts=%s | active_blocks=0 | decision=ALLOW | lot_multiplier=1.00 | direction_unchanged=true | risk_unchanged=true | exits_unchanged=true",
+                            (int)InpGlobalTradeBrainMode,XAU_TRADEBRAIN_SEED_ID,
+                            XAU_TRADEBRAIN_SEED_SHA256,signature,
+                            StringLen(warnings)>0?warnings:"NONE");
+
    return true;
 }
 
@@ -33880,8 +36005,9 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    if(g_counterEx.active) return; // one countertrade max per symbol
 
    string ownerCounterCandidateBlock = "";
-   if(!XAU_OwnerEntryPermission("CANDIDATE_ACCEPTANCE", "COUNTER_EXCURSION", grade,
-                                ownerCounterCandidateBlock))
+   string counterOwnerSetup="COUNTER_EXCURSION_FROM_"+setupName;
+   if(!XAU_OwnerEntryPermission("CANDIDATE_ACCEPTANCE", counterOwnerSetup, grade,
+                                ownerCounterCandidateBlock, -originalSignal, counterOwnerSetup))
       return;
 
    // Independent normal/counter ownership requires separate tickets. A
@@ -34212,8 +36338,8 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    // IMMEDIATELY BEFORE BROKER SEND." No other Counter-Excursion behaviour
    // (its own eligibility/location/reaction checks above) is touched.
    string ownerCounterFinalBlock = "";
-   if(!XAU_OwnerEntryPermission("FINAL_EXECUTION", "COUNTER_EXCURSION", originalFinalGrade,
-                                ownerCounterFinalBlock))
+   if(!XAU_OwnerEntryPermission("FINAL_EXECUTION", counterOwnerSetup, originalFinalGrade,
+                                ownerCounterFinalBlock, counterDir, counterOwnerSetup))
       return;
    string counterReservationId = "";
    {
@@ -35626,6 +37752,61 @@ string XAU_EntryCandidateId(int signal, string setupName, long generation)
    return StringFormat("%s_%s_%I64d", setupName, signal==1?"BUY":"SELL", generation);
 }
 
+// v6.25.24: exact primary-candidate terminal ledger. This is telemetry only;
+// it never decides or modifies an entry. One immutable candidate ID can be
+// recorded once, either EXECUTED or one final cancellation reason.
+void XAU_RecordExactPrimaryOutcome(int signal,string setupName,string reason,bool executed)
+{
+   if(signal==0 || XAU_AlignedCandidateLane(setupName)!=0) return;
+   long generation=g_alignedCandidates[0].candidateGeneration;
+   if(generation<=0 && g_latestDecisionSnapshot.valid)
+      generation=g_latestDecisionSnapshot.generation;
+   string candidateId=XAU_EntryCandidateId(signal,setupName,generation);
+   if(StringLen(candidateId)==0 || candidateId==g_exactOutcomeLastCandidateId) return;
+
+   g_exactOutcomeLastCandidateId=candidateId;
+   g_exactOutcomeLastReason=reason;
+   g_exactOutcomeFinalized++;
+
+   string upper=reason;
+   StringToUpper(upper);
+   if(executed || StringFind(upper,"EXECUTED")>=0)
+      g_exactOutcomeExecuted++;
+   else if(StringFind(upper,"OWNER_BREAKOUT")>=0 || StringFind(upper,"BREAKOUT_MARKET")>=0)
+      g_exactOutcomeOwnerBreakout++;
+   else if(StringFind(upper,"OWNER_LATE")>=0 || StringFind(upper,"LATE_SESSION")>=0)
+      g_exactOutcomeOwnerLate++;
+   else if(StringFind(upper,"OWNER_LOCATION")>=0 || StringFind(upper,"OWNER_EXCELLENT")>=0)
+      g_exactOutcomeOwnerLocation++;
+   else if(StringFind(upper,"TIMER_EXPIRED")>=0)
+      g_exactOutcomeTimerExpired++;
+   else if(StringFind(upper,"READINESS")>=0 || StringFind(upper,"WAIT_FOR_")>=0 ||
+           StringFind(upper,"PULLBACK_NOT_COMPLETE")>=0)
+      g_exactOutcomeReadiness++;
+   else if(StringFind(upper,"STRUCTURE")>=0 || StringFind(upper,"THESIS_INVALIDATED")>=0)
+      g_exactOutcomeStructure++;
+   else if(StringFind(upper,"FRESHNESS")>=0 || StringFind(upper,"MISSED_MOVE")>=0 ||
+           StringFind(upper,"IDENTITY_MISMATCH")>=0 || StringFind(upper,"SNAPSHOT_MISMATCH")>=0)
+      g_exactOutcomeFreshness++;
+   else if(StringFind(upper,"OPERATIONAL")>=0 || StringFind(upper,"INDICATOR_UNAVAILABLE")>=0)
+      g_exactOutcomeOperational++;
+   else if(StringFind(upper,"SPREAD")>=0)
+      g_exactOutcomeSpread++;
+   else if(StringFind(upper,"NEWS")>=0 || StringFind(upper,"CALENDAR")>=0 ||
+           StringFind(upper,"RELEASE")>=0)
+      g_exactOutcomeNews++;
+   else if(StringFind(upper,"ARBITER")>=0 || StringFind(upper,"MARKET_THESIS")>=0)
+      g_exactOutcomeFinalAuthority++;
+   else if(StringFind(upper,"EXECUTION")>=0 || StringFind(upper,"ORDER")>=0 ||
+           StringFind(upper,"BROKER")>=0 || StringFind(upper,"MARGIN")>=0)
+      g_exactOutcomeExecutionFailed++;
+   else
+      g_exactOutcomeOther++;
+
+   PrintFormat("EXACT_CANDIDATE_FINAL_OUTCOME | candidateId=%s | result=%s | executed=%s | finalized=%d",
+               candidateId,reason,executed?"true":"false",g_exactOutcomeFinalized);
+}
+
 bool XAU_TimingAuthorityAllows(int signal, string setupName, double atr, string &why)
 {
    if(signal == 0 || atr <= 0.0)
@@ -35652,6 +37833,8 @@ bool XAU_TimingAuthorityAllows(int signal, string setupName, double atr, string 
                          expiredId, elapsed, XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC);
       PrintFormat("ENTRY_REVALIDATED | candidateId=%s signalValid=false moveR=NA result=CANCEL_TIMER_EXPIRED elapsedSeconds=%.0f maximumSeconds=%.0f",
                   expiredId, elapsed, XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC);
+      if(lane==0)
+         XAU_RecordExactPrimaryOutcome(signal,setupName,"CANCEL_TIMER_EXPIRED",false);
       g_alignedCandidates[lane].firstCandidateTime = 0;
       g_alignedCandidates[lane].readinessRecheckAt = 0;
       g_pendingTimingProof.active = false;
@@ -35755,8 +37938,203 @@ int XAU_ResolveOwnerBreakoutExecutionDirection(int approvedSignalDirection,
 // v6.25.9 -- one configurable owner breakout authority supports the three
 // real-tick experiment modes without introducing another strategy path.
 // The normal candidate pipeline still owns whether a signal is approved.
+// v6.25.17: candidate-direction-specific owner location. The dominant side
+// reuses the existing canonical location bucket exactly. The opposite side
+// reuses the already-existing reversal-location evidence formula from
+// XAU_ScoreDirectionCase (extension + reclaim/retest/displacement), then maps
+// it through the same 80/60/40 location thresholds. This prevents a global
+// dominant-side LOCATION_EXCELLENT label from blocking an unrelated opposite
+// candidate. It adds no new market evidence.
+ENUM_XAU_LOCATION_QUALITY XAU_OwnerDirectionalLocation(int candidateDirection,
+                                                        const XAU_AdaptiveTransitionDecision &td)
+{
+   if(candidateDirection == 0 || td.dominantDirection == 0 ||
+      candidateDirection == td.dominantDirection)
+      return XAU_BucketLocation(td);
+
+   if(td.oppositeEntryPreparing && !td.oppositeEntryAllowed)
+      return LOCATION_RESET_PENDING;
+
+   double extensionSupport = XAU_AnchorScore(td.moveAlreadyConsumedPct, 90.0, 30.0);
+   double reactionBonus = (td.oppositeReclaim ? 15.0 : 0.0) +
+                          (td.oppositeRetestHeld ? 10.0 : 0.0) +
+                          (td.oppositeDisplacement ? 10.0 : 0.0);
+   double directionalQuality = MathMax(0.0, MathMin(100.0,
+                                      extensionSupport * 0.65 + reactionBonus));
+   if(directionalQuality >= 80.0) return LOCATION_EXCELLENT;
+   if(directionalQuality >= 60.0) return LOCATION_GOOD;
+   if(directionalQuality >= 40.0) return LOCATION_ACCEPTABLE;
+   return td.oppositeEntryAllowed ? LOCATION_RESET_CONFIRMED : LOCATION_RESET_PENDING;
+}
+
+bool XAU_IsBreakoutRegime(ENUM_REGIME regime)
+{
+   return regime==REGIME_BREAKOUT_UP || regime==REGIME_BREAKOUT_DOWN;
+}
+
+bool XAU_TextDeclaresBreakout(string value)
+{
+   string upper=value;
+   StringToUpper(upper);
+   return StringFind(upper,"BREAKOUT")>=0 ||
+          StringFind(upper,"BRKT_UP")>=0 ||
+          StringFind(upper,"BRKT_DN")>=0 ||
+          StringFind(upper,"BRKT_")>=0;
+}
+
+bool XAU_NoBreakoutFactsBlock(string session,ENUM_REGIME liveRegime,
+                              ENUM_REGIME frozenRegime,string source,
+                              string candidateSetup,bool inheritedBreakout)
+{
+   // Session is deliberately observed but never used as a prohibition. This
+   // makes the Asia/London/New-York cases directly self-testable while the
+   // result remains dependent only on current/frozen breakout authority.
+   string observedSession=session;
+   StringToUpper(observedSession);
+   bool sessionDoesNotBlock=(StringLen(observedSession)>=0);
+   return sessionDoesNotBlock &&
+          (XAU_IsBreakoutRegime(liveRegime) ||
+           XAU_IsBreakoutRegime(frozenRegime) ||
+           XAU_TextDeclaresBreakout(source) ||
+           XAU_TextDeclaresBreakout(candidateSetup) ||
+           inheritedBreakout);
+}
+
+bool XAU_CampaignCarriesBreakoutThesis(int candidateDirection,string &classification)
+{
+   classification="";
+   if(candidateDirection==0) return false;
+   int slot=XAU_CampaignSlot(candidateDirection);
+   if(slot<0 || slot>1 || !g_campaign[slot].active ||
+      g_campaign[slot].direction!=candidateDirection)
+      return false;
+   if(XAU_IsBreakoutRegime((ENUM_REGIME)g_campaign[slot].ownerEntryRegime))
+      classification="CAMPAIGN_OWNER_ENTRY_REGIME";
+   else if(XAU_TextDeclaresBreakout(g_campaign[slot].originSetup))
+      classification="CAMPAIGN_ORIGIN_SETUP";
+   else if(g_campaign[slot].ownerExitProfile==(int)OWNER_EXIT_BREAKOUT)
+      classification="CAMPAIGN_OWNER_EXIT_PROFILE";
+   else if(g_campaign[slot].ownerBreakoutInversionApplied)
+      classification="CAMPAIGN_BREAKOUT_INVERSION_ORIGIN";
+   return StringLen(classification)>0;
+}
+
+string XAU_NoBreakoutCandidateId(int candidateDirection,string candidateSetup)
+{
+   int lane=XAU_AlignedCandidateLane(candidateSetup);
+   if(lane>=0 && lane<3 && g_alignedCandidates[lane].candidateGeneration>0)
+      return XAU_EntryCandidateId(candidateDirection,candidateSetup,
+                                  g_alignedCandidates[lane].candidateGeneration);
+   int slot=XAU_CampaignSlot(candidateDirection);
+   if(candidateSetup=="PYRAMID" && slot>=0 && slot<2 && g_campaign[slot].campaignId>0)
+      return StringFormat("PYRAMID_%I64d_ADD_%d",g_campaign[slot].campaignId,
+                          g_campaign[slot].additionCount+1);
+   if(g_latestDecisionSnapshot.valid &&
+      g_latestDecisionSnapshot.signalDirection==candidateDirection)
+      return XAU_EntryCandidateId(candidateDirection,candidateSetup,
+                                  g_latestDecisionSnapshot.generation);
+   return XAU_EntryCandidateId(candidateDirection,candidateSetup,(long)TimeCurrent());
+}
+
+bool XAU_GlobalNoBreakoutAuthority(string phase,string source,int candidateDirection,
+                                   string candidateSetup,ENUM_REGIME frozenRegime,
+                                   string session,string &classification)
+{
+   classification="";
+   string campaignClassification="";
+   bool inheritedBreakout=XAU_CampaignCarriesBreakoutThesis(candidateDirection,
+                                                             campaignClassification);
+   bool liveRegimeBreakout=XAU_IsBreakoutRegime(currentRegime);
+   bool frozenRegimeBreakout=XAU_IsBreakoutRegime(frozenRegime);
+   bool sourceBreakout=XAU_TextDeclaresBreakout(source);
+   bool setupBreakout=XAU_TextDeclaresBreakout(candidateSetup);
+   bool snapshotBreakout=(g_latestDecisionSnapshot.valid &&
+                          g_latestDecisionSnapshot.signalDirection==candidateDirection &&
+                          XAU_SnapshotTimestampMatches(g_latestDecisionSnapshot.closedPrimaryBarTime,
+                                                       g_entrySnapshotClosedBar) &&
+                          XAU_TextDeclaresBreakout(g_latestDecisionSnapshot.setupName));
+   string effectiveSetup=candidateSetup;
+   if(snapshotBreakout && !setupBreakout)
+      effectiveSetup=g_latestDecisionSnapshot.setupName;
+   if(!XAU_NoBreakoutFactsBlock(session,currentRegime,frozenRegime,source,
+                                effectiveSetup,inheritedBreakout))
+      return true;
+
+   if(frozenRegimeBreakout) classification="FROZEN_CLOSED_M10_REGIME="+XAU_OwnerRegimeLabel(frozenRegime);
+   else if(liveRegimeBreakout) classification="CURRENT_CLOSED_M10_REGIME="+XAU_OwnerRegimeLabel(currentRegime);
+   else if(snapshotBreakout) classification="IMMUTABLE_CANDIDATE_SETUP="+g_latestDecisionSnapshot.setupName;
+   else if(setupBreakout) classification="SETUP_FAMILY="+candidateSetup;
+   else if(sourceBreakout) classification="SOURCE="+source;
+   else classification=campaignClassification;
+   return false;
+}
+
+bool XAU_RunNoBreakoutAndSnapshotSelfTests()
+{
+   bool checks[28];
+   checks[0]=XAU_NoBreakoutFactsBlock("ASIA",REGIME_TRENDING_UP,REGIME_TRENDING_UP,"PRIMARY","ASIA_BREAKOUT",false);
+   checks[1]=XAU_NoBreakoutFactsBlock("LDN",REGIME_BREAKOUT_UP,REGIME_BREAKOUT_UP,"PRIMARY","TREND_PULLBACK",false);
+   checks[2]=XAU_NoBreakoutFactsBlock("NY",REGIME_BREAKOUT_DOWN,REGIME_BREAKOUT_DOWN,"PRIMARY","TREND_PULLBACK",false);
+   checks[3]=!XAU_NoBreakoutFactsBlock("ASIA",REGIME_TRENDING_UP,REGIME_TRENDING_UP,"PRIMARY_A_PLUS_EXCELLENT","SQUEEZE_RELEASE",false);
+   checks[4]=XAU_NoBreakoutFactsBlock("LDN",REGIME_TRENDING_UP,REGIME_TRENDING_UP,"AI_APPROVED_BREAKOUT","TREND_PULLBACK",false);
+   checks[5]=XAU_NoBreakoutFactsBlock("NY",REGIME_TRENDING_UP,REGIME_TRENDING_UP,"RE_ENTRY","TREND_PULLBACK",true);
+   checks[6]=XAU_NoBreakoutFactsBlock("ASIA",REGIME_TRENDING_UP,REGIME_TRENDING_UP,"PYRAMID","PYRAMID",true);
+   checks[7]=!XAU_NoBreakoutFactsBlock("ASIA",REGIME_TRENDING_UP,REGIME_TRENDING_UP,"PRIMARY","TREND_PULLBACK",false);
+   checks[8]=!XAU_NoBreakoutFactsBlock("ASIA",REGIME_RANGING,REGIME_RANGING,"PRIMARY","RANGE",false);
+   checks[9]=!XAU_NoBreakoutFactsBlock("ASIA",REGIME_TRENDING_UP,REGIME_TRENDING_UP,"PRIMARY","TREND_PULLBACK",false);
+   checks[10]=(XAU_M10_CLOSED_SHIFT==1);
+   checks[11]=!XAU_CopyResultComplete(-1,11);
+   checks[12]=!XAU_CopyResultComplete(10,11);
+   checks[13]=XAU_CopyResultComplete(11,11);
+   checks[14]=XAU_SnapshotAttemptMayRetry(1) && XAU_SnapshotAttemptMayRetry(1000);
+   checks[15]=(XAU_M10_SNAPSHOT_MAX_ATTEMPTS==0);
+   checks[16]=XAU_SnapshotTimestampMatches((datetime)1000,(datetime)1000);
+   checks[17]=!XAU_SnapshotTimestampMatches((datetime)1000,(datetime)1600);
+   // v6.25.23: verify the actual production retry contract. v6.25.22's
+   // runtime intentionally retries quickly (1s for attempts 1-3, 2s for
+   // attempts 4-10, then 5s) so temporary indicator readiness cannot erase
+   // the useful part of an M10 decision window. The old 1/2/4 assertion was
+   // stale test code and caused OnInit to return INIT_FAILED even though the
+   // production function was behaving as designed.
+   int retry1=XAU_SnapshotRetryDelaySeconds(1);
+   int retry2=XAU_SnapshotRetryDelaySeconds(2);
+   int retry3=XAU_SnapshotRetryDelaySeconds(3);
+   int retry4=XAU_SnapshotRetryDelaySeconds(4);
+   int retry10=XAU_SnapshotRetryDelaySeconds(10);
+   int retry11=XAU_SnapshotRetryDelaySeconds(11);
+   checks[18]=(retry1==1 && retry2==1 && retry3==1 &&
+               retry4==2 && retry10==2 && retry11==5);
+   checks[19]=(XAU_M10_MAX_WRONG_HANDLE_REBUILDS_PER_BAR>=1 && XAU_M10_MAX_WRONG_HANDLE_REBUILDS_PER_BAR<=3);
+   checks[20]=MathAbs(XAU_CanonicalM10SetupScore(55.0)-5.0)<0.000001;
+   checks[21]=MathAbs(XAU_CanonicalM10SetupScore(100.0)-8.0)<0.000001;
+   checks[22]=!XAU_TextDeclaresBreakout("SQUEEZE_RELEASE") && XAU_TextDeclaresBreakout("ASIA_BREAKOUT");
+   checks[23]=(XAU_M10_PERSISTENT_FAILURE_BARS_BEFORE_REBUILD==1);
+   checks[24]=(XAU_M10_4807_PERSIST_TICKS>=2 && XAU_M10_4807_PERSIST_SECONDS>=1);
+   checks[25]=XAU_ThesisActionNeedsBoundedWait(WAIT_FOR_PULLBACK) &&
+              XAU_ThesisActionNeedsBoundedWait(WAIT_FOR_RECLAIM) &&
+              XAU_ThesisActionNeedsBoundedWait(WAIT_FOR_CONFIRMATION);
+   checks[26]=!XAU_ThesisActionNeedsBoundedWait(ALLOW_CORE) &&
+              !XAU_ThesisActionNeedsBoundedWait(TRANSITION_WATCH) &&
+              !XAU_ThesisActionNeedsBoundedWait(OPPOSITE_DISCOVERY);
+   checks[27]=MathAbs(XAU_EffectivePyramidSpacingATR()-
+                      MathMax(InpPyramidMinATR,InpPyramidMinSpaceATR))<0.000001;
+   if(!checks[18])
+      PrintFormat("NO_BREAKOUT_M10_SNAPSHOT_RETRY_CONTRACT_FAIL | actual=%d/%d/%d/%d/%d/%d | expected=1/1/1/2/2/5",
+                  retry1,retry2,retry3,retry4,retry10,retry11);
+   int passed=0,failed=0;
+   for(int i=0;i<28;i++)
+   {
+      if(checks[i]) passed++;
+      else { failed++; PrintFormat("NO_BREAKOUT_M10_SNAPSHOT_SELF_TEST_FAIL | case=%d",i+1); }
+   }
+   PrintFormat("NO_BREAKOUT_M10_SNAPSHOT_SELF_TEST | passed=%d failed=%d | AsiaNormalAllowed=true | retryMode=UNTIL_BAR_SUPERSEDED | wrongHandleRebuildCap=%d | closedShift=%d",
+               passed,failed,XAU_M10_MAX_WRONG_HANDLE_REBUILDS_PER_BAR,XAU_M10_CLOSED_SHIFT);
+   return failed==0;
+}
+
 bool XAU_OwnerEntryPermission(string phase, string source, string grade,
-                              string &reason, datetime brokerNow = 0)
+                              string &reason, int candidateDirection = 0,
+                              string candidateSetup = "", datetime brokerNow = 0)
 {
    reason = "";
    if(brokerNow <= 0) brokerNow = TimeCurrent();
@@ -35766,29 +38144,100 @@ bool XAU_OwnerEntryPermission(string phase, string source, string grade,
    StringTrimRight(canonicalGrade);
    StringToUpper(canonicalGrade);
 
-   if(currentRegime == REGIME_BREAKOUT_UP || currentRegime == REGIME_BREAKOUT_DOWN)
+   // LATE remains a live broker-server-time prohibition exactly as requested.
+   // Location, however, belongs to the immutable candidate. Candidate
+   // acceptance uses the candidate's directional location now; final send
+   // reuses the location frozen by XAU_EnsureEntryTimerStarted so a later
+   // global transition reading cannot re-label and kill a different idea.
+   string ownerSession = SessionTag();
+   ENUM_XAU_LOCATION_QUALITY liveOwnerLocation = XAU_OwnerDirectionalLocation(candidateDirection,
+                                                                               g_transitionDecision);
+   ENUM_XAU_LOCATION_QUALITY frozenOwnerLocation = liveOwnerLocation;
+   ENUM_REGIME frozenOwnerRegime = currentRegime;
+   bool usedFrozenLocation = false;
+   if(phase == "FINAL_EXECUTION" && candidateDirection != 0 && StringLen(candidateSetup) > 0)
    {
-      string regimeText = currentRegime == REGIME_BREAKOUT_UP ? "BRKT_UP" : "BRKT_DN";
-      if(InpOwnerBreakoutExecutionMode==OWNER_BREAKOUT_BLOCK)
+      int lane = XAU_AlignedCandidateLane(candidateSetup);
+      if(lane >= 0 && lane < 3 &&
+         g_alignedCandidates[lane].firstCandidateTime > 0 &&
+         g_alignedCandidates[lane].candidateDirection == candidateDirection &&
+         g_alignedCandidates[lane].candidateSetup == candidateSetup)
       {
-         reason = currentRegime == REGIME_BREAKOUT_UP ? "OWNER_BRKT_UP_SCENARIO_A_BLOCK" : "OWNER_BRKT_DN_SCENARIO_A_BLOCK";
-         PrintFormat("OWNER_BREAKOUT_EXECUTION_POLICY | mode=BLOCK | regime=%s | action=SKIP_APPROVED_SIGNAL | trade_opened=false",
-                     regimeText);
-         PrintFormat("OWNER_ENTRY_PERMISSION | phase=%s source=%s decision=BLOCK reason=%s regime=%s grade=%s brokerServerTime=%s",
-                     phase, source, reason, RegimeName(), canonicalGrade,
+         if(g_alignedCandidates[lane].ownerLocationFrozen)
+         {
+            frozenOwnerLocation = (ENUM_XAU_LOCATION_QUALITY)g_alignedCandidates[lane].ownerLocationAtCreation;
+            usedFrozenLocation = true;
+         }
+         if(g_alignedCandidates[lane].ownerRegimeFrozen)
+         {
+            frozenOwnerRegime = (ENUM_REGIME)g_alignedCandidates[lane].ownerRegimeAtCreation;
+         }
+      }
+   }
+   string liveOwnerLocationName = XAU_LocationQualityName(liveOwnerLocation);
+   string frozenOwnerLocationName = XAU_LocationQualityName(frozenOwnerLocation);
+
+   // v6.25.22: the previous blanket LATE-session prohibition removed
+   // otherwise valid New-York/late-server-hour trades. Preserve anti-chase by
+   // allowing only A/A+ non-extreme locations; lower grades and late/extreme
+   // price locations remain blocked. Breakout authority is still checked below.
+   if(ownerSession == "LATE")
+   {
+      bool lateGradeStrong=(canonicalGrade=="A" || canonicalGrade=="A+");
+      bool frozenLateLocationClean=(frozenOwnerLocation==LOCATION_EXCELLENT ||
+                                    frozenOwnerLocation==LOCATION_GOOD ||
+                                    frozenOwnerLocation==LOCATION_ACCEPTABLE ||
+                                    frozenOwnerLocation==LOCATION_RESET_CONFIRMED);
+      bool liveLateLocationClean=(liveOwnerLocation!=LOCATION_LATE &&
+                                  liveOwnerLocation!=LOCATION_EXTREME &&
+                                  liveOwnerLocation!=LOCATION_RESET_PENDING);
+      if(!lateGradeStrong || !frozenLateLocationClean || !liveLateLocationClean)
+      {
+         reason = "OWNER_LATE_SESSION_QUALITY_BLOCK";
+         if(phase=="CANDIDATE_ACCEPTANCE") g_gateBlocks_OwnerLate++;
+         PrintFormat("OWNER_ENTRY_PERMISSION | phase=%s source=%s decision=BLOCK reason=%s session=%s liveLocation=%s frozenLocation=%s direction=%s liveRegime=%s frozenRegime=%s grade=%s brokerServerTime=%s",
+                     phase, source, reason, ownerSession, liveOwnerLocationName, frozenOwnerLocationName,
+                     candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN",
+                     RegimeName(), XAU_OwnerRegimeLabel(frozenOwnerRegime), canonicalGrade,
                      TimeToString(brokerNow, TIME_DATE|TIME_SECONDS));
-         PrintFormat("OWNER_BREAKOUT_BLOCKED | regime=%s | mode=BLOCK | default_off=true | stage=%s | reason=OWNER_BREAKOUT_DISABLED",
-                     regimeText, phase);
          return false;
       }
-      PrintFormat("OWNER_BREAKOUT_EXECUTION_POLICY | mode=%s | regime=%s | phase=%s | source=%s | decision=ALLOW_NORMAL_PIPELINE",
-                  XAU_OwnerBreakoutModeName(),regimeText,phase,source);
+      PrintFormat("OWNER_LATE_SESSION_HIGH_QUALITY_ALLOWED | phase=%s | source=%s | grade=%s | liveLocation=%s | frozenLocation=%s | direction=%s",
+                  phase,source,canonicalGrade,liveOwnerLocationName,frozenOwnerLocationName,
+                  candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN");
    }
-   if(StringLen(reason) > 0)
+
+   // LOCATION_EXCELLENT is the strongest directional entry location. The old
+   // hard block contradicted the location engine and discarded nine candidates
+   // in the supplied replay. It is now eligible and continues through every
+   // normal breakout, timing, risk and broker authority below.
+   if(frozenOwnerLocation == LOCATION_EXCELLENT || liveOwnerLocation == LOCATION_EXCELLENT)
    {
-      PrintFormat("OWNER_ENTRY_PERMISSION | phase=%s source=%s decision=BLOCK reason=%s regime=%s grade=%s brokerServerTime=%s",
-                  phase, source, reason, RegimeName(), canonicalGrade,
-                  TimeToString(brokerNow, TIME_DATE|TIME_SECONDS));
+      PrintFormat("OWNER_LOCATION_EXCELLENT_ALLOWED | phase=%s | source=%s | frozenUsed=%s | direction=%s | grade=%s",
+                  phase,source,usedFrozenLocation?"Y":"N",
+                  candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN",canonicalGrade);
+   }
+
+   // v6.25.20 owner hard policy: no breakout regime, setup family, source
+   // or inherited campaign thesis may reach any broker-send route. Session is
+   // deliberately not part of the block: normal Asia pullback/range/trend
+   // candidates remain eligible once the current closed-M10 authority is no
+   // longer breakout and the new candidate is independently non-breakout.
+   string breakoutClassification="";
+   if(!XAU_GlobalNoBreakoutAuthority(phase,source,candidateDirection,candidateSetup,
+                                     frozenOwnerRegime,ownerSession,breakoutClassification))
+   {
+      reason="BREAKOUT_MARKET_NOT_ALLOWED";
+      if(phase=="CANDIDATE_ACCEPTANCE") g_gateBlocks_OwnerBreakout++;
+      datetime authorityBar=g_entrySnapshotValid ? g_entrySnapshotClosedBar
+                              : iTime(Symbol(),XAU_PRIMARY_DECISION_TF,1);
+      string candidateId=XAU_NoBreakoutCandidateId(candidateDirection,candidateSetup);
+      PrintFormat("OWNER_NO_BREAKOUT_BLOCK | symbol=%s | session=%s | candidateId=%s | proposedDirection=%s | proposedSetup=%s | authoritativeMarketRegime=%s | frozenRegime=%s | breakoutSource=%s | phase=%s | source=%s | finalAction=BLOCK | finalReason=BREAKOUT_MARKET_NOT_ALLOWED | closedM10Bar=%s",
+                  Symbol(),ownerSession,candidateId,
+                  candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN",
+                  candidateSetup,XAU_OwnerRegimeLabel(currentRegime),
+                  XAU_OwnerRegimeLabel(frozenOwnerRegime),breakoutClassification,
+                  phase,source,TimeToString(authorityBar,TIME_DATE|TIME_MINUTES));
       return false;
    }
    return true;
@@ -35917,6 +38366,18 @@ void XAU_EnsureEntryTimerStarted(int signal, string setupName, double originPric
    g_alignedCandidates[lane].readinessRecheckAt = 0;
    g_alignedCandidates[lane].entryTimerCompletedLogged = false;
    g_alignedCandidates[lane].postWaitDecisionLogged = false;
+   ENUM_XAU_LOCATION_QUALITY ownerFrozenLocation = XAU_OwnerDirectionalLocation(signal, g_transitionDecision);
+   g_alignedCandidates[lane].ownerLocationFrozen = true;
+   g_alignedCandidates[lane].ownerLocationAtCreation = (int)ownerFrozenLocation;
+   g_alignedCandidates[lane].ownerRegimeFrozen = true;
+   g_alignedCandidates[lane].ownerRegimeAtCreation = (int)currentRegime;
+   g_alignedCandidates[lane].ownerSessionAtCreation = SessionTag();
+   g_alignedCandidates[lane].ownerPolicyFrozenAt = TimeCurrent();
+   PrintFormat("OWNER_CANDIDATE_POLICY_FROZEN | candidateId=%s direction=%s location=%s regime=%s session=%s frozenAt=%s",
+               XAU_EntryCandidateId(signal, setupName, g_alignedCandidates[lane].candidateGeneration),
+               signal == 1 ? "BUY" : "SELL", XAU_LocationQualityName(ownerFrozenLocation),
+               XAU_OwnerRegimeLabel(currentRegime), g_alignedCandidates[lane].ownerSessionAtCreation,
+               TimeToString(g_alignedCandidates[lane].ownerPolicyFrozenAt, TIME_DATE|TIME_SECONDS));
    PrintFormat("ENTRY_TIMER_STARTED | candidateId=%s direction=%s minimumSeconds=%.0f targetSeconds=%.0f maximumSeconds=%.0f origin=%s",
                XAU_EntryCandidateId(signal, setupName, g_alignedCandidates[lane].candidateGeneration),
                signal == 1 ? "BUY" : "SELL", XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC,
@@ -36220,37 +38681,35 @@ ENUM_XAU_SMART_ENTRY_CAUTION_DECISION XAU_SmartEntryCautionGate(
                               result.repeatedCauseConfidence>=0.80 && !g_alignedCandidates[lane].marketReset &&
                               !result.continuationConfirmed);
 
-   // OWNER'S POST-WAIT DECISION MATRIX (entry-timing/exhaustion rule).
-   // The 120-180s wall-clock delay (XAU_TimingAuthorityAllows) is the ONLY
-   // intentional entry-timing gate in the file. This function used to add a
-   // second, unbounded confirmation gate here (PULLBACK_NOT_COMPLETE /
-   // CONTINUATION_CONFIRMATION_REQUIRED / FAST_TIMEFRAME_OPPOSITION), which
-   // could WAIT indefinitely on momentum-vote evidence with no bound tied to
-   // the original candidate -- exactly the duplicate "second timing opinion"
-   // the owner's rule forbids. Removed. The default post-wait action for a
-   // still-valid candidate is now ENTER_NOW. moveFromIntendedEntryR reuses
-   // the same R convention already used everywhere else in this file
-   // (remainingRewardR, XAU_AdaptiveTransitionDecision): risk unit = atr *
-   // InpSLMultiplier * XAU_SL_WIDENING_FACTOR (v6.24.17: the 20% structural
-   // widening applied in OpenTrade() -- InpUseStructuralSL defaults off, so
-   // this IS the real final risk distance OpenTrade() sends).
+   // v6.25.24 replay root: reconnect the already-existing market-thesis action
+   // to the single bounded 120-180 second candidate lifecycle. The 30-day
+   // dataset proved that candidates were being executed while their own
+   // immutable thesis said WAIT_FOR_PULLBACK / WAIT_FOR_RECLAIM /
+   // WAIT_FOR_CONFIRMATION; those explicit WAIT trades lost materially while
+   // execution-permissive actions were profitable as a group. This is NOT a
+   // second timer and cannot wait indefinitely: the original candidate timer
+   // still expires at 180 seconds in XAU_TimingAuthorityAllows.
+   XAU_MarketThesis currentThesis=XAU_ComputeMarketThesis(signal,false,false,g_transitionDecision);
+   bool thesisExplicitWait=XAU_ThesisActionNeedsBoundedWait(currentThesis.action);
+   string thesisActionName=XAU_MarketThesisActionName(currentThesis.action);
+
+   // OWNER'S POST-WAIT DECISION MATRIX. moveFromIntendedEntryR reuses the
+   // same R convention already used everywhere else in this file.
    double moveFromIntendedEntryR = g_alignedCandidates[lane].atrTravelled / MathMax(0.50, InpSLMultiplier * XAU_SL_WIDENING_FACTOR);
    bool priceGenuinelyMissed = (moveFromIntendedEntryR >= 0.30);
    string finalActionName = "";
 
-   if(confirmedOppositeStructure)
+   if(confirmedOppositeStructure || currentThesis.action==HARD_BLOCK)
    {
       result.decision=XAU_SMART_ENTRY_CAUTION_HARD_BLOCK;
-      result.primaryReason="STRUCTURE_INVALIDATED";
-      result.nextEvidence="new opposite-direction thesis";
+      result.primaryReason=currentThesis.action==HARD_BLOCK
+                           ? "MARKET_THESIS_HARD_BLOCK_"+currentThesis.hardBlockReason
+                           : "STRUCTURE_INVALIDATED";
+      result.nextEvidence="new structurally valid thesis";
       finalActionName="STRUCTURE_INVALIDATED";
    }
    else if(exactRepeatedFailure)
    {
-      // Not a timing opinion: a data-validated repeated-failure pattern
-      // (5+ same-tagged losses at >=80% confidence, no market reset since).
-      // Kept per Phase-12 guidance to preserve genuine structural safety
-      // nets while removing soft/duplicate timing gates.
       result.decision=XAU_SMART_ENTRY_CAUTION_HARD_BLOCK;
       result.primaryReason="EXACT_REPEATED_FAILED_STRUCTURE";
       result.memoryInfluence="HARD_BLOCK";
@@ -36259,24 +38718,29 @@ ENUM_XAU_SMART_ENTRY_CAUTION_DECISION XAU_SmartEntryCautionGate(
    }
    else if(priceGenuinelyMissed)
    {
-      // Owner rule: >=0.30R of favourable movement beyond the intended
-      // entry cancels this immutable candidate. There is no pullback wait;
-      // only a future M30 slot may originate a different candidate.
       result.decision=XAU_SMART_ENTRY_CAUTION_HARD_BLOCK;
       result.primaryReason="PRICE_GENUINELY_MISSED";
-      result.nextEvidence="a new M30 slot and new immutable candidate";
+      result.nextEvidence="a new immutable M10 candidate";
       finalActionName="CANCEL_MISSED_MOVE";
+   }
+   else if(thesisExplicitWait)
+   {
+      result.decision=XAU_SMART_ENTRY_CAUTION_WAIT;
+      result.primaryReason="BOUNDED_"+thesisActionName;
+      result.nextEvidence=currentThesis.reason;
+      finalActionName="WAIT_INSIDE_EXISTING_180S_TIMER";
    }
    else
    {
       result.decision=XAU_SMART_ENTRY_CAUTION_ALLOW;
-      result.primaryReason="ENTER_NOW";
+      result.primaryReason="ENTER_NOW_"+thesisActionName;
       result.nextEvidence="none";
       finalActionName="ENTER_NOW";
-      if(aiDisagrees) result.primaryReason="ENTER_NOW_OVERRIDES_AI_DISAGREEMENT";
+      if(aiDisagrees) result.primaryReason="ENTER_NOW_OVERRIDES_AI_DISAGREEMENT_"+thesisActionName;
    }
 
    string revalidationResult = result.decision==XAU_SMART_ENTRY_CAUTION_ALLOW ? "EXECUTE" :
+                               result.decision==XAU_SMART_ENTRY_CAUTION_WAIT ? "WAIT_BOUNDED_READINESS" :
                                priceGenuinelyMissed ? "CANCEL_MISSED_MOVE" : "CANCEL_INVALIDATED";
    PrintFormat("ENTRY_REVALIDATED | candidateId=%s signalValid=%s moveR=%.3f result=%s",
                result.candidateId,
@@ -36574,7 +39038,8 @@ int TFDirectionByEMA(int signal, ENUM_TIMEFRAMES tf, double atrThreshold, string
 }
 
 // v5.8.16 — shared adaptive confirmation engine.
-// On XAU/GOLD, M5/M15/M30 carry the hard decision; H1 is soft context.
+// v6.25.16 TRUE-M10: M5/M10/M15 carry the hard decision; H1 is soft context.
+// M30 is not read by this entry-confirmation authority.
 // Non-gold symbols retain the older strict M15+H1 behavior.
 bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, string grade,
                         double &lotMulti, string &reason, bool logDecision)
@@ -36595,10 +39060,10 @@ bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, strin
    if(fastRegime) tfThreshold = 0.20;
    if(choppyRegime) tfThreshold = 0.40;
 
-   string m5Why, m15Why, m30Why, h1Why;
-   int m5  = TFDirectionByEMA(signal, XAU_PRIMARY_DECISION_TF,  tfThreshold, m5Why);
+   string m5Why, m10Why, m15Why, h1Why;
+   int m5  = TFDirectionByEMA(signal, PERIOD_M5,  tfThreshold, m5Why);
+   int m10 = TFDirectionByEMA(signal, XAU_PRIMARY_DECISION_TF, tfThreshold, m10Why);
    int m15 = TFDirectionByEMA(signal, PERIOD_M15, tfThreshold, m15Why);
-   int m30 = TFDirectionByEMA(signal, PERIOD_M30, tfThreshold, m30Why);
    int h1  = TFDirectionByEMA(signal, PERIOD_H1,  tfThreshold, h1Why);
 
    if(!xauFast)
@@ -36610,11 +39075,13 @@ bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, strin
       return okLegacy;
    }
 
+   // Preserve the existing 85-point scale and thresholds. The old M30
+   // 30-point component is replaced by the canonical M10 decision bar.
    double fastScore = 0.0;
    int fastAgainst = 0;
    if(m5 == signal) fastScore += 20.0; else if(m5 == -signal) fastAgainst++;
    if(m15 == signal) fastScore += 35.0; else if(m15 == -signal) fastAgainst++;
-   if(m30 == signal) fastScore += 30.0; else if(m30 == -signal) fastAgainst++;
+   if(m10 == signal) fastScore += 30.0; else if(m10 == -signal) fastAgainst++;
 
    double h1Soft = 0.0;
    bool h1Against = (h1 == -signal);
@@ -36660,7 +39127,7 @@ bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, strin
                    : (h1Aligned ? "H1 aligned bonus" : "H1 neutral soft context");
    reason = StringFormat("Fast gold mode enabled | gate=%s | fastScore=%.0f/85 required=%.0f total=%.0f | %s | lotPenalty=%.2f | %s | %s | %s | %s",
                          gateName, fastScore, requiredFast, totalScore, h1Text, lotMulti,
-                         m5Why, m15Why, m30Why, h1Why);
+                         m5Why, m10Why, m15Why, h1Why);
 
    if(!allow)
    {
@@ -36676,9 +39143,9 @@ bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, strin
    else if(momentumSoftMode)
       reason = "Trade allowed at x0.80 size: strong fast-TF consensus (all aligned, score " + DoubleToString(fastScore,0) + "/85) overrides momentum-slowdown (soft mode); lot reduced to protect against local bounce | " + reason;
    else if(h1Against)
-      reason = "Trade allowed due to strong M5/M15/M30 momentum; H1 not aligned but ignored as soft context for XAU fast mode | " + reason;
+      reason = "Trade allowed due to strong M5/M10/M15 momentum; H1 not aligned but ignored as soft context for XAU fast mode | " + reason;
    else
-      reason = "Trade allowed because M5/M15/M30 momentum align | " + reason;
+      reason = "Trade allowed because M5/M10/M15 momentum align | " + reason;
 
    if(logDecision && InpXAU_LogAdaptiveConfirm && TimeCurrent() - g_lastAdaptiveConfirmLog >= 45)
    {
@@ -37542,7 +40009,7 @@ void WriteLocalHeartbeatReport()
    FileWrite(fh, "EA version: " + XAUAI_EA_VERSION);
    FileWrite(fh, "Build hash: " + XAUAI_BUILD_HASH);
    FileWrite(fh, "Account: " + (string)AccountInfoInteger(ACCOUNT_LOGIN) + " / " + AccountInfoString(ACCOUNT_SERVER));
-   FileWrite(fh, "Symbol: " + Symbol() + " M5");
+   FileWrite(fh, "Symbol: " + Symbol() + " M10");
    FileWrite(fh, "Status: " + XAU_LocalReportStatus());
    FileWrite(fh, "Reason: " + XAU_LocalReportReason());
    FileWrite(fh, "Last scan: " + TimeToString(g_lastEntryScanAt > 0 ? g_lastEntryScanAt : TimeCurrent(), TIME_DATE | TIME_SECONDS));
@@ -37552,9 +40019,17 @@ void WriteLocalHeartbeatReport()
    FileWrite(fh, "Equity: $" + DoubleToString(equity, 2) +
                  " | Balance: $" + DoubleToString(balance, 2) +
                  " | Daily PnL: $" + DoubleToString(dailyPnl, 2));
-   FileWrite(fh, "Gate totals: signals=" + IntegerToString(g_totalSignals) +
-                 " allowed=" + IntegerToString(g_totalAllowed) +
-                 " blocked=" + IntegerToString(g_totalSignals - g_totalAllowed));
+   FileWrite(fh, "Gate totals: qualifiedCandidates=" + IntegerToString(g_totalSignals) +
+                 " confirmedEntries=" + IntegerToString(g_totalAllowed) +
+                 " notExecuted=" + IntegerToString((int)MathMax(0.0,(double)(g_totalSignals-g_totalAllowed))));
+   FileWrite(fh, StringFormat("Scan health: started=%d completed=%d deferredBars=%d aborted=%d snapshotReuses=%d completion=%.1f%% | M10 bars=%d prepAttempts=%d ready=%d failedFinal=%d superseded=%d wrongHandleRecoveries=%d transient4807Waits=%d dataWaits=%d",
+                 g_scanStartedCount,g_scanCompletedCount,g_scanDeferredCount,g_scanAbortedCount,
+                 g_entrySnapshotCacheReuses,
+                 g_scanStartedCount>0?100.0*g_scanCompletedCount/g_scanStartedCount:0.0,
+                 g_entrySnapshotLogicalBars,g_entrySnapshotPreparationAttempts,
+                 g_entrySnapshotReadyBars,g_entrySnapshotFailedBars,g_entrySnapshotSupersededBars,
+                 g_entrySnapshotWrongHandleRecoveries,g_entrySnapshotTransient4807Waits,
+                 g_entrySnapshotDataWaits));
    FileWrite(fh, "Biggest live block: " + XAU_ReportTextSafe(XAU_BiggestGateBlockName(), 80));
    FileWrite(fh, "News state: " + XAU_ReportTextSafe(XAUAI_NewsState(), 160));
    FileWrite(fh, "Trade state: " + XAU_ReportTextSafe(XAUAI_TradeState(), 160));
@@ -37564,12 +40039,29 @@ void WriteLocalHeartbeatReport()
    FileClose(fh);
 }
 
+
+int XAU_KnownGateBlockTotal()
+{
+   return g_gateBlocks_Spread+g_gateBlocks_News+g_gateBlocks_Trend+
+          g_gateBlocks_Committee+g_gateBlocks_AI+g_gateBlocks_TradeBrain+
+          g_gateBlocks_STI+g_gateBlocks_Basket+g_gateBlocks_DailyLoss+
+          g_gateBlocks_Volatility+g_gateBlocks_EPF+g_gateBlocks_OwnerExcellent+
+          g_gateBlocks_OwnerBreakout+g_gateBlocks_OwnerLate;
+}
+
+int XAU_UnclassifiedGateBlockTotal()
+{
+   // v6.25.24: exact terminal OTHER bucket, never subtraction of counters
+   // recorded at different phases.
+   return g_exactOutcomeOther;
+}
+
 string XAU_BiggestGateBlockName()
 {
    int maxBlockVal = 0;
    string maxBlockName = "None";
-   int blockVals[11];
-   string blockNames[11];
+   int blockVals[14];
+   string blockNames[14];
    blockVals[0]=g_gateBlocks_Spread;     blockNames[0]="Spread";
    blockVals[1]=g_gateBlocks_News;       blockNames[1]="News";
    blockVals[2]=g_gateBlocks_Trend;      blockNames[2]="Trend/PG";
@@ -37581,7 +40073,10 @@ string XAU_BiggestGateBlockName()
    blockVals[8]=g_gateBlocks_DailyLoss;  blockNames[8]="Daily Loss";
    blockVals[9]=g_gateBlocks_Volatility; blockNames[9]="Volatility";
    blockVals[10]=g_gateBlocks_EPF;       blockNames[10]="EPF";
-   for(int bi = 0; bi < 11; bi++)
+   blockVals[11]=g_gateBlocks_OwnerExcellent; blockNames[11]="Owner Excellent";
+   blockVals[12]=g_gateBlocks_OwnerBreakout;  blockNames[12]="Owner Breakout";
+   blockVals[13]=g_gateBlocks_OwnerLate;      blockNames[13]="Owner Late";
+   for(int bi = 0; bi < 14; bi++)
       if(blockVals[bi] > maxBlockVal) { maxBlockVal = blockVals[bi]; maxBlockName = blockNames[bi]; }
    return maxBlockName + " (" + IntegerToString(maxBlockVal) + " blocks)";
 }
@@ -37607,9 +40102,9 @@ void PrintGateReport()
    double allowPct = (g_totalSignals > 0) ? (double)g_totalAllowed / g_totalSignals * 100.0 : 0.0;
    double blockPct = 100.0 - allowPct;
    Print("=== GATE ANALYTICS REPORT ===");
-   Print("Total signals:   ", g_totalSignals);
-   Print("Allowed trades:  ", g_totalAllowed, " (", StringFormat("%.1f", allowPct), "%)");
-   Print("Blocked trades:  ", blocked, " (", StringFormat("%.1f", blockPct), "%)");
+   Print("Qualified candidates: ", g_totalSignals);
+   Print("Confirmed entries:    ", g_totalAllowed, " (", StringFormat("%.1f", allowPct), "%)");
+   Print("Not executed:         ", (int)MathMax(0.0,(double)blocked), " (", StringFormat("%.1f", blockPct), "%)");
    Print("  Spread:        ", g_gateBlocks_Spread);
    Print("  News:          ", g_gateBlocks_News);
    Print("  Trend/PG:      ", g_gateBlocks_Trend);
@@ -37621,6 +40116,37 @@ void PrintGateReport()
    Print("  Daily Loss/HWM:", g_gateBlocks_DailyLoss);
    Print("  Volatility:    ", g_gateBlocks_Volatility);
    Print("  EPF:           ", g_gateBlocks_EPF);
+   Print("  Owner Excellent:", g_gateBlocks_OwnerExcellent);
+   Print("  Owner Breakout: ", g_gateBlocks_OwnerBreakout);
+   Print("  Owner Late:     ", g_gateBlocks_OwnerLate);
+   Print("  Exact final outcomes: finalized=",g_exactOutcomeFinalized,
+         " executed=",g_exactOutcomeExecuted,
+         " pending=",(int)MathMax(0.0,(double)(g_totalSignals-g_exactOutcomeFinalized)));
+   Print("    ownerBreakout=",g_exactOutcomeOwnerBreakout,
+         " ownerLate=",g_exactOutcomeOwnerLate,
+         " ownerLocation=",g_exactOutcomeOwnerLocation,
+         " timerExpired=",g_exactOutcomeTimerExpired,
+         " readiness=",g_exactOutcomeReadiness,
+         " structure=",g_exactOutcomeStructure,
+         " freshness=",g_exactOutcomeFreshness,
+         " operational=",g_exactOutcomeOperational,
+         " spread=",g_exactOutcomeSpread,
+         " news=",g_exactOutcomeNews,
+         " finalAuthority=",g_exactOutcomeFinalAuthority,
+         " executionFailed=",g_exactOutcomeExecutionFailed,
+         " other=",g_exactOutcomeOther,
+         " | last=",g_exactOutcomeLastReason);
+   Print("  Scan health: started=",g_scanStartedCount," completed=",g_scanCompletedCount,
+         " deferredBars=",g_scanDeferredCount," aborted=",g_scanAbortedCount,
+         " snapshotReuses=",g_entrySnapshotCacheReuses,
+         " m10Bars=",g_entrySnapshotLogicalBars,
+         " prepAttempts=",g_entrySnapshotPreparationAttempts,
+         " ready=",g_entrySnapshotReadyBars,
+         " failedFinal=",g_entrySnapshotFailedBars,
+         " superseded=",g_entrySnapshotSupersededBars,
+         " wrongHandleRecoveries=",g_entrySnapshotWrongHandleRecoveries,
+         " transient4807Waits=",g_entrySnapshotTransient4807Waits,
+         " dataWaits=",g_entrySnapshotDataWaits);
    Print("=============================");
 }
 
@@ -37644,10 +40170,10 @@ void WriteGateReportToFile()
    FileWrite(fh, "Open positions: " + IntegerToString(CountMyPositions()));
    FileWrite(fh, "Spread: " + DoubleToString((double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD), 0) +
                  " pts | Avg spread: " + DoubleToString(g_spreadEMA, 1));
-   FileWrite(fh, "Total signals:   " + IntegerToString(g_totalSignals));
-   FileWrite(fh, "Allowed trades:  " + IntegerToString(g_totalAllowed) + " (" +
+   FileWrite(fh, "Qualified candidates: " + IntegerToString(g_totalSignals));
+   FileWrite(fh, "Confirmed entries:    " + IntegerToString(g_totalAllowed) + " (" +
              DoubleToString(allowPct, 1) + "%)");
-   FileWrite(fh, "Blocked trades:  " + IntegerToString(blocked));
+   FileWrite(fh, "Not executed:         " + IntegerToString((int)MathMax(0.0,(double)blocked)));
    FileWrite(fh, "  Spread:        " + IntegerToString(g_gateBlocks_Spread));
    FileWrite(fh, "  News:          " + IntegerToString(g_gateBlocks_News));
    FileWrite(fh, "  Trend/PG:      " + IntegerToString(g_gateBlocks_Trend));
@@ -37659,6 +40185,27 @@ void WriteGateReportToFile()
    FileWrite(fh, "  Daily Loss:    " + IntegerToString(g_gateBlocks_DailyLoss));
    FileWrite(fh, "  Volatility:    " + IntegerToString(g_gateBlocks_Volatility));
    FileWrite(fh, "  EPF:           " + IntegerToString(g_gateBlocks_EPF));
+   FileWrite(fh, "  Owner Excellent:" + IntegerToString(g_gateBlocks_OwnerExcellent));
+   FileWrite(fh, "  Owner Breakout: " + IntegerToString(g_gateBlocks_OwnerBreakout));
+   FileWrite(fh, "  Owner Late:     " + IntegerToString(g_gateBlocks_OwnerLate));
+   FileWrite(fh, StringFormat("Exact final outcomes: finalized=%d executed=%d pending=%d",
+                             g_exactOutcomeFinalized,g_exactOutcomeExecuted,
+                             (int)MathMax(0.0,(double)(g_totalSignals-g_exactOutcomeFinalized))));
+   FileWrite(fh, StringFormat("  ownerBreakout=%d ownerLate=%d ownerLocation=%d timerExpired=%d readiness=%d structure=%d freshness=%d operational=%d spread=%d news=%d finalAuthority=%d executionFailed=%d other=%d",
+                             g_exactOutcomeOwnerBreakout,g_exactOutcomeOwnerLate,g_exactOutcomeOwnerLocation,
+                             g_exactOutcomeTimerExpired,g_exactOutcomeReadiness,g_exactOutcomeStructure,
+                             g_exactOutcomeFreshness,g_exactOutcomeOperational,g_exactOutcomeSpread,
+                             g_exactOutcomeNews,g_exactOutcomeFinalAuthority,g_exactOutcomeExecutionFailed,
+                             g_exactOutcomeOther));
+   FileWrite(fh, "Last exact final reason: " + XAU_ReportTextSafe(g_exactOutcomeLastReason,220));
+   FileWrite(fh, StringFormat("Scan health: started=%d completed=%d deferredBars=%d aborted=%d snapshotReuses=%d completion=%.1f%% | M10 bars=%d prepAttempts=%d ready=%d failedFinal=%d superseded=%d wrongHandleRecoveries=%d transient4807Waits=%d dataWaits=%d",
+             g_scanStartedCount,g_scanCompletedCount,g_scanDeferredCount,g_scanAbortedCount,
+             g_entrySnapshotCacheReuses,
+             g_scanStartedCount>0?100.0*g_scanCompletedCount/g_scanStartedCount:0.0,
+             g_entrySnapshotLogicalBars,g_entrySnapshotPreparationAttempts,
+             g_entrySnapshotReadyBars,g_entrySnapshotFailedBars,g_entrySnapshotSupersededBars,
+             g_entrySnapshotWrongHandleRecoveries,g_entrySnapshotTransient4807Waits,
+             g_entrySnapshotDataWaits));
    FileWrite(fh, "Biggest gate block: " + XAU_BiggestGateBlockName());
    FileWrite(fh, "News state: " + XAU_ReportTextSafe(XAUAI_NewsState(), 160));
    FileWrite(fh, "Trade state: " + XAU_ReportTextSafe(XAUAI_TradeState(), 160));
@@ -37793,8 +40340,8 @@ void WriteForwardTestReport()
    FileWrite(fh, "---");
    // Biggest gate block
    int maxBlockVal = 0; string maxBlockName = "None";
-   int blockVals[11];
-   string blockNames[11];
+   int blockVals[14];
+   string blockNames[14];
    blockVals[0]=g_gateBlocks_Spread;    blockNames[0]="Spread";
    blockVals[1]=g_gateBlocks_News;      blockNames[1]="News";
    blockVals[2]=g_gateBlocks_Trend;     blockNames[2]="Trend/PG";
@@ -37806,7 +40353,10 @@ void WriteForwardTestReport()
    blockVals[8]=g_gateBlocks_DailyLoss; blockNames[8]="Daily Loss";
    blockVals[9]=g_gateBlocks_Volatility;blockNames[9]="Volatility";
    blockVals[10]=g_gateBlocks_EPF;      blockNames[10]="EPF";
-   for(int bi = 0; bi < 11; bi++)
+   blockVals[11]=g_gateBlocks_OwnerExcellent; blockNames[11]="Owner Excellent";
+   blockVals[12]=g_gateBlocks_OwnerBreakout;  blockNames[12]="Owner Breakout";
+   blockVals[13]=g_gateBlocks_OwnerLate;      blockNames[13]="Owner Late";
+   for(int bi = 0; bi < 14; bi++)
       if(blockVals[bi] > maxBlockVal) { maxBlockVal = blockVals[bi]; maxBlockName = blockNames[bi]; }
    FileWrite(fh, "Biggest gate block: " + maxBlockName + " (" + IntegerToString(maxBlockVal) + " blocks)");
    FileWrite(fh, "---");
@@ -38457,7 +41007,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       "\"raw_structural_sl\":%.5f,\"raw_sl_distance\":%.5f,\"sl_widening_factor\":%.2f,"
       "\"final_structural_sl\":%.5f,\"final_sl_distance\":%.5f,\"configured_risk_pct\":%.2f,"
       "\"htf_indicator_state\":\"%s\",\"htf_last_good_age_sec\":%d,"
-      "\"scan_completed_count\":%d,\"scan_aborted_count\":%d,\"scan_completion_rate_pct\":%.1f,"
+      "\"scan_started_count\":%d,\"scan_completed_count\":%d,\"scan_deferred_count\":%d,\"scan_aborted_count\":%d,\"scan_snapshot_reuse_count\":%d,\"scan_completion_rate_pct\":%.1f,"
       "\"digits\":%d,\"evidence_time_utc\":\"%s\"}",
       campaignIdStr,
       campaignActive ? BotMonitorJsonSafe(XAU_CampaignLifecycleName(g_campaign[tSlot].lifecycle, g_campaign[tSlot].invalidated), 40)
@@ -38488,8 +41038,8 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       rawStructSl, rawStructSlDist, XAU_SL_WIDENING_FACTOR,
       structSl, structSlDist, InpNormalRiskPct,
       g_htfIndicatorState, (g_htfEmaLastGoodAt > 0 ? (int)(TimeCurrent() - g_htfEmaLastGoodAt) : -1),
-      g_scanCompletedCount, g_scanAbortedCount,
-      (g_scanCompletedCount + g_scanAbortedCount) > 0 ? (100.0 * g_scanCompletedCount / (g_scanCompletedCount + g_scanAbortedCount)) : 0.0,
+      g_scanStartedCount, g_scanCompletedCount, g_scanDeferredCount, g_scanAbortedCount, g_entrySnapshotCacheReuses,
+      g_scanStartedCount > 0 ? (100.0 * g_scanCompletedCount / g_scanStartedCount) : 0.0,
       (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
       TimeToString(TimeGMT(), TIME_DATE|TIME_SECONDS));
    // v6.24.14 — POST-TRADE STATE block for the web Command Center (spec

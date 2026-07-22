@@ -37,9 +37,12 @@ jobs:
           diff XAUUSD_AI_Sniper_EA.mq5 backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 \
             && echo "root and backend/ea_code copies are byte-identical"
 
-      - name: Source-string regression suite (invariants, per-release fixes)
+      - name: Current production-audit regression suite
         run: |
-          python -m pytest tests/test_xau_v6250_m10_intelligent_signal_engine.py -v --tb=short
+          python -m pytest \
+            tests/test_xau_v62524_final_production_audit.py \
+            tests/test_utf16_tester_event_extractor.py \
+            -v --tb=short
 
       - name: EX5 release artifact checksum verification
         run: |
@@ -75,13 +78,9 @@ jobs:
 #   NOT re-run the compiler itself.
 # - Mac live install / VPS deployment verification. Both are real physical/
 #   remote machines outside any CI runner's reach.
-# - "no exhaustion order path" / "approved 10%/1.20x/r-exit invariants" as
-#   a generic catch-all: the specific invariants that exist today are
-#   covered by name inside test_xau_v6250_m10_intelligent_signal_engine.py
-#   and the many other tests/test_xau_v*_static.py files (not all wired
-#   into this workflow yet -- see the historical-version test-suite decay
-#   noted during the v6.25.4 session: many of those files pin exact
-#   version strings from their own original release and will need a
-#   dedicated pass to either update or intentionally retire before they
-#   can be added to CI without immediately going red).
+# - Historical release-pin suites. Many old tests intentionally assert the
+#   exact version/build text and behavior of their original release. The
+#   v6.25.24 workflow runs the current production-audit invariants instead;
+#   the historical suite remains available as evidence but is not a valid
+#   current-release gate until it is explicitly retired or version-scoped.
 # ---------------------------------------------------------------------
