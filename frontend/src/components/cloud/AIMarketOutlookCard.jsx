@@ -115,7 +115,9 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
 
       {(!online || stale) && (
         <p className="mt-3 rounded-lg border border-rose-400/25 bg-rose-400/[0.06] px-3 py-2 text-[11px] font-semibold text-rose-300">
-          DATA STALE — do not rely on this outlook until fresh EA evidence arrives.
+          {!online
+            ? "EA offline — showing no live outlook until a fresh heartbeat arrives."
+            : "DATA STALE — do not rely on this outlook until fresh EA evidence arrives."}
         </p>
       )}
 

@@ -1042,19 +1042,23 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="home-summary-grid">
-        <Metric label="Equity" value={online?money(heartbeat.equity):"—"} detail={online?`Balance ${money(heartbeat.balance)}`:"Not live"} icon={CircleDollarSign} tone={online?"green":"neutral"} />
-        <Metric label="Today's P&L" value={online?money(pnlNum):"—"} detail={pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"} icon={TrendingUp} tone={pnlPos?"green":"red"} />
-        <Metric label="AI confidence" value={online&&conf>0?`${conf}%`:"—"} detail={conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"} icon={Brain} tone={conf>=70?"green":conf>0?"amber":"neutral"} />
-        <Metric label="Open trades" value={online?openTrades:"—"} detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"} icon={History} tone={openTrades>0?"amber":"neutral"} />
-      </div>
-
       <AIMarketOutlookCard
         linked={Boolean(licenseInfo.activation_key)}
         online={online}
         onOutlookChange={setHomeOutlook}
         onStatusChange={setOutlookStatus}
       />
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="home-summary-grid">
+        <Metric label="Equity" value={online?money(heartbeat.equity):"—"} detail={online?`Balance ${money(heartbeat.balance)}`:"Not live"} icon={CircleDollarSign} tone={online?"green":"neutral"} />
+        <Metric label="Today's P&L" value={online?money(pnlNum):"—"} detail={pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"} icon={TrendingUp} tone={pnlPos?"green":"red"} />
+        <Metric label="Open trades" value={online?openTrades:"—"} detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"} icon={History} tone={openTrades>0?"amber":"neutral"} />
+        <Metric label="Open risk" value={online?pct(ddNum):"—"} detail="Current floating drawdown" icon={Shield} tone={online?riskTone:"neutral"} />
+        <Metric label="Market bias" value={online?bias.label:"—"} detail="Latest fresh EA evidence" icon={Activity} tone={online?bias.tone:"neutral"} />
+        <Metric label="AI confidence" value={online&&conf>0?`${conf}%`:"—"} detail={conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"} icon={Brain} tone={conf>=70?"green":conf>0?"amber":"neutral"} />
+        <Metric label="Session" value={online?session.label:"—"} detail="Device UTC session" icon={Clock3} tone={online?session.tone:"neutral"} />
+        <Metric label="Trading status" value={online?botState:"Offline"} detail={tradingOk?"Broker trading enabled":"No new-trade authority"} icon={Bot} tone={online?stateTone:"neutral"} />
+      </div>
 
       {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
 

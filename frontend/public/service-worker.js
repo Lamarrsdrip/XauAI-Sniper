@@ -9,7 +9,7 @@ let oneSignalWorkerImported = false;
 let oneSignalWorkerError = "";
 
 try {
-  importScripts("https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js");
+  importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');
   oneSignalWorkerImported = true;
 } catch (error) {
   oneSignalWorkerError = String(error?.message || error || "OneSignal worker import failed");

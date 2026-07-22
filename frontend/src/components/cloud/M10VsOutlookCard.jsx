@@ -77,7 +77,9 @@ export default function M10VsOutlookCard({
           {agree && <p className="mt-3 text-[11px] text-emerald-300">Agree: both currently favor {m10Dir}.</p>}
           {conflict && <p className="mt-3 text-[11px] text-amber-300">Conflict: M10 favors {m10Dir}; hourly outlook favors {outlookDir}.</p>}
           {online && !requestFailed && m10Freshness === "FRESH" && !bothDirectional && (
-            <p className="mt-3 text-[11px] text-white/35">One or both canonical sources are neutral or waiting.</p>
+            <p className="mt-3 text-[11px] text-white/35">
+              M10 remains authoritative. The hourly advisory is neutral or waiting and does not erase the M10 state.
+            </p>
           )}
           {!loading && !m10 && !outlook && (
             <p className="mt-3 text-[11px] text-white/35">No comparison data yet. Waiting for the EA and hourly outlook.</p>

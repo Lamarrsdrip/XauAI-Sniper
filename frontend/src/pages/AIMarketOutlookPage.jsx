@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { API } from "@/lib/api";
 import { ensureOneSignalDeviceRegistered } from "@/lib/onesignal";
+import M10VsOutlookCard from "@/components/cloud/M10VsOutlookCard";
 
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
 
@@ -620,12 +621,15 @@ function HourlyContextCard({ context }) {
 
 function WaitingCard({ contract }) {
   const Icon = contract?.state === "DATA_UNAVAILABLE" ? AlertTriangle : Radio;
+  const actionable = contract?.state === "ACTIONABLE_SIGNAL";
   return (
     <section className={`${CARD} flex gap-4 p-5`}>
       <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-3"><Icon className="h-5 w-5 text-amber-200/75" /></div>
       <div>
-        <div className={MONO_LABEL}>What the bot is waiting for</div>
-        <p className="mt-2 text-[13px] leading-5 text-white/70">{contract?.nextRequiredCondition || "Fresh EA evidence."}</p>
+        <div className={MONO_LABEL}>{actionable ? "Current execution state" : "What the bot is waiting for"}</div>
+        <p className="mt-2 text-[13px] leading-5 text-white/70">
+          {actionable ? "No additional confirmation is pending; the M10 signal is execution-ready." : contract?.nextRequiredCondition || "Fresh EA evidence."}
+        </p>
         {contract?.blockerLabel && <p className="mt-1 text-[11px] text-rose-200/65">Blocker: {contract.blockerLabel}</p>}
       </div>
     </section>
@@ -703,7 +707,11 @@ export default function AIMarketOutlookPage() {
   const loadHistory = useCallback(async () => {
     if (previewMode) {
       setSignalEvents([{ id: "preview-event", event_type: "ACTIONABLE_SIGNAL", direction: "SELL", confidence: 72, event_time: new Date().toISOString(), notification_reason: "ELIGIBLE" }]);
-      setHistory([]); setStats({ wins: 8, losses: 3, win_rate: 8 / 11, total_r: 4.7, average_r: 0.43 });
+      setHistory([]); setStats({
+        wins: 8, losses: 3, win_rate: 8 / 11, total_r: 4.7, average_r: 0.43,
+        average_mfe: 0.81, average_mae: -0.24, active_unresolved_count: 1,
+        unavailable_historical_count: 0,
+      });
       return;
     }
     try {
@@ -730,6 +738,18 @@ export default function AIMarketOutlookPage() {
   }, [highlightId, loadCurrent, loadPrefs, loadHistory]);
 
   const notificationSummary = prefs?.tier === "OFF" ? "Preference off" : contract?.notificationSent ? "Delivered" : "Standing by";
+  const comparisonM10 = contract?.m10 ? {
+    ...contract.m10,
+    preferred_direction: contract.direction || contract.m10.direction || "NONE",
+    confidence: contract.confidence,
+    bar_time: contract.signalBarTime,
+  } : null;
+  const comparisonHourly = contract?.hourlyContext ? {
+    primary_direction: contract.hourlyContext.direction || contract.hourlyContext.state || "NONE",
+    confidence_pct: contract.hourlyContext.confidence,
+    status: contract.hourlyContext.state,
+    generated_at: contract.eventTime,
+  } : null;
 
   return (
     <div className="min-h-screen bg-[#07090d] text-white">
@@ -748,6 +768,12 @@ export default function AIMarketOutlookPage() {
             <M10ExecutionCard contract={contract} />
             <div className="grid gap-4"><HourlyContextCard context={contract?.hourlyContext} /><WaitingCard contract={contract} /></div>
           </div>
+          <M10VsOutlookCard
+            m10={comparisonM10}
+            outlook={comparisonHourly}
+            online={contract?.dataHealth === "HEALTHY"}
+            loading={!contract}
+          />
           <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
             <section className={`${CARD} p-5 sm:p-6`}>
               <div className="flex items-center justify-between"><span className={MONO_LABEL}>Meaningful signal history</span><span className="text-[10px] text-white/30">Informational repeats grouped</span></div>
@@ -756,6 +782,9 @@ export default function AIMarketOutlookPage() {
               <Metric label="Wins / Losses" value={`${stats.wins ?? 0} / ${stats.losses ?? 0}`} />
               <Metric label="Total R" value={stats.total_r != null ? `${stats.total_r > 0 ? "+" : ""}${stats.total_r}R` : "—"} />
               <Metric label="Avg R" value={stats.average_r != null ? `${stats.average_r > 0 ? "+" : ""}${stats.average_r}R` : "—"} />
+              <Metric label="Avg MFE / MAE" value={stats.average_mfe != null ? `${rText(stats.average_mfe)} / ${rText(stats.average_mae)}` : "—"} />
+              <Metric label="Active" value={stats.active_unresolved_count ?? 0} />
+              <Metric label="Unavailable history" value={stats.unavailable_historical_count ?? 0} />
               </div>
               <div className="mt-5 space-y-2">
                 {signalEvents.slice(0, 12).map((event) => <SignalEventCard key={event.id || `${event.candidate_id}-${event.event_type}`} event={event} />)}
