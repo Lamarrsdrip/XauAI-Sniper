@@ -123,7 +123,7 @@ export default function AdminPortal({ api }) {
               <span className="font-mono text-[10px] font-black text-black">XA</span>
             </div>
             <span className="text-[14px] font-semibold">XauAI Sniper</span>
-            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.25.24</span>
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · PUBLISHED RELEASE</span>
           </div>
           <div className="flex items-center gap-4">
             <span className="hidden text-[11px] text-white/35 sm:block">{admin.email}</span>
@@ -196,7 +196,7 @@ function LoginPage({ api, onLogin }) {
             <span className="font-mono text-base font-black text-black">XA</span>
           </div>
           <h1 className="text-2xl font-semibold text-white">XauAI Admin</h1>
-          <p className="mt-1 text-[13px] text-white/38">v6.25.24 management portal</p>
+          <p className="mt-1 text-[13px] text-white/38">Published-release management portal</p>
         </div>
 
         <form onSubmit={handleSubmit} className={`${CARD} p-6 space-y-4`}>
@@ -701,7 +701,7 @@ function ConfigTab() {
       <div className="rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-4 py-3 text-[12px] leading-5 text-amber-200/90">
         Read-only release contract. This admin page does <strong>not</strong> write trading parameters and cannot change a running EA. Runtime inputs must be set intentionally in MT5 and proven in the terminal journal.
       </div>
-      <CardSection title="v6.25.24 owner-approved release contract">
+      <CardSection title="Owner-approved release contract">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {contract.map(([title, body]) => (
             <div key={title} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-4">
@@ -902,7 +902,7 @@ function AccountTab({ api, admin, onLogin, onLogout }) {
             <div>
               <div className="text-[14px] font-semibold">{admin?.name || "Admin"}</div>
               <div className="text-[12px] text-white/40">{admin?.email}</div>
-              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.25.24</div>
+              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · RELEASE CONTROL</div>
             </div>
           </div>
 

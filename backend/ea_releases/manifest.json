@@ -84,6 +84,18 @@
       "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.8.ex5",
       "release_notes": "Final owner policy: BRKT_UP and BRKT_DN are hard-blocked through the canonical pre-order authority, including core, re-entry, pyramid and isolated direct-send paths. No owner time-window blackout exists; 06:10-07:30 and 14:10-15:30 remain eligible whenever normal EA session logic approves. Approved normal, re-entry and pyramid trades use full configured risk against the original full 1.00R structural stop, with no universal 0.75R cap. The frozen TREND_UP campaign profile locks +0.40R at a +0.50R peak and ratchets at 70% from +0.70R; every other allowed regime uses GENERAL, locking +0.30R at +0.40R and ratcheting at 70% from +0.50R. All broker-facing close and SL-modify paths reject attempts below an active owner floor. Existing 120-180-second entry timing and unrelated signal, AI, memory, news, session, lifecycle and re-entry behavior remain unchanged.",
       "stable_status": true
+    },
+    "v6.25.24": {
+      "version": "v6.25.24",
+      "edition": "90-day replay consolidated root repair and TradeBrain advisory seed (release candidate)",
+      "source_commit": "1b5be107d98903ff9d3d66f1a1bd860316c29970",
+      "build_timestamp": "2026-07-22T08:56:48Z",
+      "compiler_result": "0 errors, 0 warnings, 41257 ms elapsed (MetaEditor64.exe via Wine; exact source SHA-256 56c91c3db8de4d1d119b7df646a8ef81d210c8286b3d2728ff7a0f9d1ff700a9; focused v6.25.24 audit and UTF-16 extractor tests: 12 passed, 0 failed; post-repair 90-day real-tick replay, Mac runtime, and VPS verification pending)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.24.ex5",
+      "ex5_sha256": "346bd2ccff573cde2e273eb356ea454887c7e33a3fe092501753d547545b1e26",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.24.ex5",
+      "release_notes": "AUDITED RELEASE CANDIDATE ONLY; not the published download and not approved for uncontrolled real-money trading. Repairs the GENERAL profitable-giveback deadline authority conflict proven by position 212, makes TradeBrain a deterministic warning-only advisor seeded from the reconciled 90-day run, separates 4807 wait counters, and adds execution-anomaly telemetry/quarantine. The original replay reconciles to 155 trades, but the exact repaired EX5 still requires an isolated post-repair 90-day real-tick replay plus Mac/VPS hash and runtime proof before current_version or stable_status may be promoted.",
+      "stable_status": false
     }
   }
 }

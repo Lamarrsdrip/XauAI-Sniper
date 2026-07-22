@@ -29,6 +29,24 @@ class FinalProductionAuditTests(unittest.TestCase):
         release_ex5 = ROOT / "backend" / "ea_releases" / "v6.25.24" / "XAUUSD_AI_Sniper_EA_v6.25.24.ex5"
         self.assertEqual(root_ex5.read_bytes(), release_ex5.read_bytes())
 
+    def test_candidate_manifest_is_hash_bound_but_not_published(self):
+        manifest = json.loads((ROOT / "backend" / "ea_releases" / "manifest.json").read_text())
+        candidate = manifest["releases"]["v6.25.24"]
+        release_ex5 = ROOT / "backend" / "ea_releases" / "v6.25.24" / candidate["ex5_filename"]
+        self.assertEqual(manifest["current_version"], "v6.25.8")
+        self.assertFalse(candidate["stable_status"])
+        self.assertEqual(hashlib.sha256(release_ex5.read_bytes()).hexdigest(), candidate["ex5_sha256"])
+
+    def test_customer_ui_does_not_hard_code_candidate_as_current(self):
+        frontend = ROOT / "frontend" / "src"
+        hard_coded = []
+        for path in frontend.rglob("*.jsx"):
+            if "v6.25.24" in path.read_text(encoding="utf-8"):
+                hard_coded.append(str(path.relative_to(ROOT)))
+        self.assertEqual(hard_coded, [])
+        server = (ROOT / "backend" / "server.py").read_text(encoding="utf-8")
+        self.assertNotIn("v6.25.24", server)
+
     def test_advisor_seed_is_warning_only_and_integrity_bound(self):
         text = source()
         seed_bytes = SEED.read_bytes()

@@ -26,12 +26,12 @@ This report does not claim that the repaired binary has already completed the sa
 3. TradeBrain: deterministic SHA-bound seed, four advisory warnings, zero active hard blocks, fail-open integrity behavior, local rows have no execution authority.
 4. 4807: transient waits and general data waits are no longer the same counter; persistent recoveries have their own counter. Proven 3-tick/2-second policy is preserved.
 5. Evidence tooling: BOM-less UTF-16LE/BE extraction works and empty key-event output fails validation.
-6. Release surfaces: root/backend MQ5 mirrors, compiled EX5, release artifact, download metadata and customer-facing version labels are synchronized for v6.25.24.
+6. Release surfaces: root/backend MQ5 mirrors and the compiled candidate EX5 are byte-identical. The manifest records v6.25.24 as non-stable while retaining v6.25.8 as the published download; customer UI copy no longer hard-codes the candidate as current.
 
 ## Validation
 
 - MetaEditor: 0 errors, 0 warnings, 41,257 ms.
-- Current forensic regression suite: 11/11 passed.
+- Current forensic regression suite: 14/14 passed.
 - Evidence reconstruction and checksums: PASS.
 - Python syntax compilation: PASS.
 - Frontend production build: PASS.
