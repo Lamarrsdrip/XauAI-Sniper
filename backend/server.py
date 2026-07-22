@@ -2228,6 +2228,13 @@ async def startup():
         await db.cloud_bot_activity.create_index([("account", 1), ("ts", 1)])
         await db.cloud_notification_prefs.create_index("user_id", unique=True)
         await db.cloud_push_subscriptions.create_index([("user_id", 1), ("opted_in", 1)])
+        await db.cloud_outlook_signal_events.create_index(
+            [("account", 1), ("candidate_id", 1), ("event_type", 1), ("event_version", 1)],
+            unique=True,
+        )
+        await db.cloud_outlook_signal_events.create_index(
+            [("account", 1), ("symbol", 1), ("signal_bar_time", -1), ("event_time", -1)]
+        )
     except Exception as e:
         logger.warning(f"[signal-outlook] could not create lifecycle indexes: {e}")
 
@@ -5329,9 +5336,10 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
     # snapshot already posted by the EA. A fresh explicit M10 candidate is
     # published immediately with a deterministic bar-level key; the ordinary
     # hourly informational publisher remains as the fallback cadence.
-    thesis_quote = (details.get("market_thesis") or {}) if isinstance(details, dict) else {}
-    quote_bid = float(thesis_quote.get("live_bid", 0.0) or 0.0)
-    quote_ask = float(thesis_quote.get("live_ask", 0.0) or 0.0)
+    import market_outlook as _outlook_quote_mapper
+    normalized_quote = _outlook_quote_mapper.extract_evidence_quote_from_details(details, doc["ts"])
+    quote_bid = float(normalized_quote.get("bid") or 0.0)
+    quote_ask = float(normalized_quote.get("ask") or 0.0)
     if quote_bid > 0.0 and quote_ask >= quote_bid and (req.account or ""):
         async def _monitor_outlook_quote_event():
             try:

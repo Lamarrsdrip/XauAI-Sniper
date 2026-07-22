@@ -3,11 +3,11 @@ import axios from "axios";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, Bell, BellOff, ArrowUpRight, ArrowDownRight, Minus, Compass,
-  ChevronDown, ChevronUp, Filter, TrendingUp, TrendingDown,
+  ChevronDown, ChevronUp, Filter, TrendingUp, TrendingDown, Activity,
+  AlertTriangle, CheckCircle2, Clock3, Database, Radio, ShieldCheck,
 } from "lucide-react";
 import { API } from "@/lib/api";
 import { ensureOneSignalDeviceRegistered } from "@/lib/onesignal";
-import M10VsOutlookCard from "@/components/cloud/M10VsOutlookCard";
 
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
 
@@ -24,6 +24,18 @@ const COLOR_STYLE = {
 const DIRECTION_ICON = { BUY: ArrowUpRight, SELL: ArrowDownRight, NEUTRAL: Minus, RANGE: Minus, TRANSITION: Compass, NO_VALID_OUTLOOK: Minus };
 
 const HISTORY_FILTERS = ["All", "BUY", "SELL", "Green", "Red", "Gray", "Amber", "TP1", "TP2", "TP3", "Stopped", "Unavailable"];
+
+const DEVELOPMENT_PREVIEW_CONTRACT = {
+  state: "ACTIONABLE_SIGNAL", stateReason: "M10_EXECUTION_READY", canonicalSource: "M10",
+  symbol: "XAUUSD", direction: "SELL", confidence: 72, confidenceSource: "EA_M10",
+  executionStatus: "READY", executionReady: true, candidateId: "preview-sell-20260722",
+  signalBarTime: "2026-07-22T08:50:00+00:00", eventTime: new Date().toISOString(),
+  freshnessSeconds: 8, dataHealth: "HEALTHY", missingFields: [], blockerCode: null,
+  nextRequiredCondition: "Signal is confirmed by the EA.",
+  m10: { decision: "SELL_CANDIDATE", direction: "SELL", confidence: 72, freshness_state: "FRESH", execution_status: "READY" },
+  hourlyContext: { state: "NEUTRAL", direction: null, confidence: null, reason: "Broader hourly context remains neutral.", advisoryOnly: true },
+  notificationEligibility: { eligible: true, reason: "ELIGIBLE" }, notificationSent: false,
+};
 
 function resultLabel(o) {
   // v6.25.2 owner directive 2026-07-17 -- a TRANSITION/NEUTRAL/RANGE update
@@ -349,7 +361,7 @@ function NotificationSettings({ prefs, setPrefs }) {
           <div className="flex items-start gap-3">
             <Bell className="h-6 w-6 flex-none text-amber-300" />
             <div>
-              <div className="text-[13px] font-semibold text-amber-100">Get hourly Outlook updates</div>
+              <div className="text-[13px] font-semibold text-amber-100">Get confirmed signal updates</div>
               <p className="mt-1 text-[11px] leading-4 text-white/55">
                 Permission alone is not treated as success. The app will wait for OneSignal to create and link this phone before enabling alerts.
               </p>
@@ -357,7 +369,7 @@ function NotificationSettings({ prefs, setPrefs }) {
           </div>
           <button disabled={saving} onClick={allowNotifications}
                   className="mt-3 w-full rounded-lg bg-amber-300 py-2.5 text-[12px] font-bold text-black disabled:opacity-50">
-            {saving ? "Registering device…" : "Allow Outlook notifications"}
+            {saving ? "Registering device…" : "Allow signal notifications"}
           </button>
         </div>
       )}
@@ -379,9 +391,9 @@ function NotificationSettings({ prefs, setPrefs }) {
       <div className="mt-3 flex flex-col gap-2">
         {[
           { v: "OFF", l: "Off" },
-          { v: "HOURLY_ONLY", l: "Hourly signals only" },
-          { v: "HOURLY_PLUS_RESULTS", l: "Hourly signals + TP/SL results" },
-          { v: "ALL_UPDATES", l: "All Outlook + confirmed trade alerts" },
+          { v: "HOURLY_ONLY", l: "Confirmed M10 signals" },
+          { v: "HOURLY_PLUS_RESULTS", l: "Signals + TP/SL results" },
+          { v: "ALL_UPDATES", l: "Signals, results + confirmed trades" },
         ].map((opt) => {
           const selected = tier === opt.v;
           const active = selected && (opt.v === "OFF" || registrationReady);
@@ -492,139 +504,266 @@ function EvidenceDiagnostics({ diagnostics }) {
   );
 }
 
+const STATE_COPY = {
+  ACTIONABLE_SIGNAL: { eyebrow: "Execution-ready", title: "signal", tone: "emerald", description: "Fresh M10 setup confirmed by the EA." },
+  WATCHING: { eyebrow: "Candidate forming", title: "Watching", tone: "amber", description: "Structure is present, but execution confirmation is still pending." },
+  NO_SIGNAL: { eyebrow: "Market scan healthy", title: "No signal right now", tone: "slate", description: "Current evidence is complete, but no setup meets execution requirements." },
+  DATA_UNAVAILABLE: { eyebrow: "Data recovery", title: "Live outlook temporarily unavailable", tone: "rose", description: "The platform is waiting for complete, fresh broker evidence." },
+  BLOCKED: { eyebrow: "Protected", title: "setup blocked", tone: "rose", description: "The EA reported an owner-approved execution blocker." },
+  EXPIRED: { eyebrow: "Lifecycle ended", title: "Previous setup expired", tone: "slate", description: "The candidate did not become ready within its permitted lifecycle." },
+};
+
+const TONES = {
+  emerald: "border-emerald-300/25 bg-emerald-300/[0.055] text-emerald-200",
+  amber: "border-amber-300/25 bg-amber-300/[0.055] text-amber-100",
+  rose: "border-rose-300/20 bg-rose-300/[0.045] text-rose-100",
+  slate: "border-white/10 bg-white/[0.025] text-white/85",
+};
+
+function humanEnum(value) {
+  if (!value) return "—";
+  return String(value).replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function ageFromTimestamp(value) {
+  if (!value) return "—";
+  const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
+  return ageText(seconds);
+}
+
+function PrimaryStateCard({ contract }) {
+  const state = contract?.state || "DATA_UNAVAILABLE";
+  const meta = STATE_COPY[state] || STATE_COPY.DATA_UNAVAILABLE;
+  const direction = contract?.direction;
+  const title = state === "ACTIONABLE_SIGNAL"
+    ? `${direction || "Confirmed"} ${meta.title}`
+    : state === "WATCHING" && direction ? `${meta.title} for ${direction}`
+    : state === "BLOCKED" && direction ? `${direction} ${meta.title}`
+    : meta.title;
+  const confidence = contract?.confidence;
+  return (
+    <section className={`relative overflow-hidden rounded-[28px] border p-6 sm:p-8 ${TONES[meta.tone]}`} aria-live="polite">
+      <div className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-current opacity-[0.035] blur-2xl" />
+      <div className="relative">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="font-mono text-[10px] uppercase tracking-[0.24em] opacity-65">{meta.eyebrow}</span>
+          <span className="rounded-full border border-current/15 px-3 py-1 font-mono text-[10px] uppercase tracking-wider opacity-70">M10 canonical</span>
+        </div>
+        <div className="mt-7 flex flex-wrap items-end justify-between gap-5">
+          <div>
+            <h2 className="max-w-xl text-3xl font-black tracking-[-0.04em] sm:text-5xl">{title}</h2>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-white/58">{meta.description}</p>
+          </div>
+          {confidence != null && (
+            <div className="min-w-[130px] rounded-2xl border border-current/15 bg-black/15 px-5 py-4 text-right">
+              <div className="text-3xl font-black">{Math.round(confidence)}%</div>
+              <div className="mt-1 font-mono text-[9px] uppercase tracking-widest opacity-60">EA confidence</div>
+            </div>
+          )}
+        </div>
+        <div className="mt-7 grid gap-3 border-t border-current/10 pt-5 sm:grid-cols-3">
+          <Metric label="Execution" value={humanEnum(contract?.executionStatus)} />
+          <Metric label="M10 bar" value={timeText(contract?.signalBarTime)} />
+          <Metric label="Evidence age" value={contract?.freshnessSeconds != null ? ageText(contract.freshnessSeconds) : "—"} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function M10ExecutionCard({ contract }) {
+  const m10 = contract?.m10 || {};
+  const ready = Boolean(contract?.executionReady);
+  return (
+    <section className={`${CARD} p-5 sm:p-6`}>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className={MONO_LABEL}>M10 execution signal</div>
+          <div className="mt-2 text-xl font-bold">{contract?.direction || (contract?.state === "NO_SIGNAL" ? "No signal" : "Waiting")}</div>
+        </div>
+        <span className={`rounded-full border px-3 py-1 text-[10px] font-bold ${ready ? "border-emerald-300/25 text-emerald-200" : "border-amber-300/20 text-amber-100"}`}>
+          {ready ? "READY" : humanEnum(contract?.state)}
+        </span>
+      </div>
+      <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <Metric label="Freshness" value={humanEnum(m10.freshness_state)} />
+        <Metric label="Confidence" value={contract?.confidence != null ? `${Math.round(contract.confidence)}%` : "—"} />
+        <Metric label="Closed bar" value={timeText(contract?.signalBarTime)} />
+        <Metric label="Signal age" value={ageFromTimestamp(contract?.eventTime)} />
+      </div>
+      <div className="mt-5 rounded-xl border border-white/[0.06] bg-black/20 px-4 py-3 text-[12px] leading-5 text-white/55">
+        <span className="text-white/80">Next:</span> {contract?.nextRequiredCondition || "Waiting for current EA evidence."}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[10px] text-white/35">
+        <span>Notification: {contract?.notificationSent ? "sent" : humanEnum(contract?.notificationEligibility?.reason)}</span>
+        <span>Executed: {["EXECUTED", "FILLED", "BROKER_CONFIRMED"].includes(m10.execution_status) ? "yes" : "no"}</span>
+      </div>
+    </section>
+  );
+}
+
+function HourlyContextCard({ context }) {
+  return (
+    <section className={`${CARD} p-5`}>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <div className={MONO_LABEL}>Hourly market context</div>
+          <div className="mt-2 text-lg font-semibold">{humanEnum(context?.state || "UNAVAILABLE")} context</div>
+        </div>
+        <Clock3 className="h-5 w-5 text-white/25" />
+      </div>
+      <p className="mt-3 text-[12px] leading-5 text-white/45">{context?.reason || "Waiting for the next hourly evaluation."}</p>
+      <p className="mt-4 border-t border-white/[0.06] pt-3 text-[10px] leading-4 text-white/30">Hourly context is advisory and does not replace the M10 execution signal.</p>
+    </section>
+  );
+}
+
+function WaitingCard({ contract }) {
+  const Icon = contract?.state === "DATA_UNAVAILABLE" ? AlertTriangle : Radio;
+  return (
+    <section className={`${CARD} flex gap-4 p-5`}>
+      <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-3"><Icon className="h-5 w-5 text-amber-200/75" /></div>
+      <div>
+        <div className={MONO_LABEL}>What the bot is waiting for</div>
+        <p className="mt-2 text-[13px] leading-5 text-white/70">{contract?.nextRequiredCondition || "Fresh EA evidence."}</p>
+        {contract?.blockerLabel && <p className="mt-1 text-[11px] text-rose-200/65">Blocker: {contract.blockerLabel}</p>}
+      </div>
+    </section>
+  );
+}
+
+function DataHealthStrip({ contract, diagnostics, notificationStatus }) {
+  const healthy = contract?.dataHealth === "HEALTHY";
+  const items = [
+    [Activity, "EA", diagnostics?.evidence_status === "OK" ? "Connected" : "Unavailable"],
+    [Database, "Broker data", healthy ? "Fresh" : "Unavailable"],
+    [Clock3, "Last M10 bar", timeText(contract?.signalBarTime)],
+    [Radio, "Last update", ageFromTimestamp(contract?.eventTime)],
+    [ShieldCheck, "Notifications", notificationStatus || (contract?.notificationSent ? "Delivered" : "Not sent")],
+  ];
+  return (
+    <section className={`${CARD} grid grid-cols-2 gap-px overflow-hidden p-px sm:grid-cols-5`} aria-label="Data health">
+      {items.map(([Icon, label, value]) => (
+        <div key={label} className="min-w-0 bg-[#0d0e13] p-4">
+          <div className="flex items-center gap-2 text-white/30"><Icon className="h-3.5 w-3.5" /><span className="font-mono text-[9px] uppercase tracking-widest">{label}</span></div>
+          <div className="mt-2 truncate text-[11px] font-semibold text-white/70">{value}</div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function SignalEventCard({ event }) {
+  const state = event.event_type || event.state;
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-black/15 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[12px] font-semibold text-white/75">{event.direction ? `${event.direction} · ` : ""}{humanEnum(state)}</div>
+        <time className="font-mono text-[9px] text-white/30">{event.event_time ? new Date(event.event_time).toLocaleString() : "—"}</time>
+      </div>
+      <div className="mt-1 text-[10px] text-white/35">{event.confidence != null ? `${Math.round(event.confidence)}% · ` : ""}{humanEnum(event.notification_reason || event.blocker_code)}</div>
+    </div>
+  );
+}
+
 export default function AIMarketOutlookPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const highlightId = searchParams.get("outlook_id");
+  const previewMode = process.env.NODE_ENV !== "production" && searchParams.get("preview") === "actionable";
 
-  const [current, setCurrent] = useState(null);
+  const [contract, setContract] = useState(null);
   const [diagnostics, setDiagnostics] = useState(null);
   const [prefs, setPrefs] = useState(null);
-  const [advanced, setAdvanced] = useState(false);
   const [history, setHistory] = useState([]);
+  const [signalEvents, setSignalEvents] = useState([]);
   const [stats, setStats] = useState({});
-  const [filter, setFilter] = useState("All");
-  const [showFilters, setShowFilters] = useState(false);
-  const [m10Signal, setM10Signal] = useState(null);
 
   const loadCurrent = useCallback(async () => {
+    if (previewMode) {
+      setContract({ ...DEVELOPMENT_PREVIEW_CONTRACT, eventTime: new Date().toISOString() });
+      setDiagnostics({ evidence_status: "OK", evidence_age_seconds: 8, evidence_symbol: "XAUUSD" });
+      return;
+    }
     try {
       const { data } = await outlookAxios.get("/outlook/current");
-      setCurrent(data?.outlook || null);
+      setContract(data?.contract || null);
       setDiagnostics(data?.diagnostics || null);
     } catch (_) { /* advisory only */ }
-  }, []);
-
-  // v6.25.1 -- same endpoint the Command Center dashboard reads; picks the
-  // newest event carrying an m10_signal block, explicitly by timestamp.
-  const loadM10Signal = useCallback(async () => {
-    try {
-      const { data } = await outlookAxios.get("/cloud/monitor/activity", { params: { limit: 50 } });
-      const candidates = (data?.events || []).filter((e) => e?.details?.m10_signal);
-      const newest = candidates.reduce((best, e) => {
-        const ts = new Date(e.ts || e.timestamp || 0).getTime();
-        if (!best || ts > best._ts) return { ...e, _ts: ts };
-        return best;
-      }, null);
-      setM10Signal(newest?.details?.m10_signal || null);
-    } catch (_) { /* advisory only -- Outlook page must still work without it */ }
-  }, []);
+  }, [previewMode]);
 
   const loadPrefs = useCallback(async () => {
+    if (previewMode) { setPrefs({ tier: "HOURLY_PLUS_RESULTS", notify_all_devices: true }); return; }
     try {
       const { data } = await outlookAxios.get("/outlook/notifications/prefs");
       setPrefs(data?.prefs || null);
     } catch (_) { /* advisory only */ }
-  }, []);
+  }, [previewMode]);
 
   const loadHistory = useCallback(async () => {
+    if (previewMode) {
+      setSignalEvents([{ id: "preview-event", event_type: "ACTIONABLE_SIGNAL", direction: "SELL", confidence: 72, event_time: new Date().toISOString(), notification_reason: "ELIGIBLE" }]);
+      setHistory([]); setStats({ wins: 8, losses: 3, win_rate: 8 / 11, total_r: 4.7, average_r: 0.43 });
+      return;
+    }
     try {
-      const params = {};
-      if (filter !== "All") {
-        if (["BUY", "SELL"].includes(filter)) params.direction = filter;
-        else if (["Green", "Red", "Gray", "Amber"].includes(filter)) params.color = filter.toUpperCase();
-        else if (filter.startsWith("TP")) params.tp = filter;
-        // Audit fix: was tp="INVALIDATED", which the backend mapped to a
-        // literal status match that ALSO covers setups invalidated before
-        // any entry was ever taken (a "no entry" outcome, not a stop-out).
-        // Uses the precise final_result field instead -- see
-        // market_outlook_routes.py's own comment on the `result` param.
-        else if (filter === "Stopped") params.result = "LOSS_RED_SL";
-        else if (filter === "Unavailable") params.result = "HISTORICAL_DATA_UNAVAILABLE";
-      }
-      const { data } = await outlookAxios.get("/outlook/history", { params });
-      setHistory(data?.outlooks || []);
+      const { data } = await outlookAxios.get("/outlook/history");
+      setHistory(data?.timeline || data?.outlooks || []);
+      setSignalEvents(data?.signal_events || []);
       setStats(data?.stats || {});
     } catch (_) { /* advisory only */ }
-  }, [filter]);
+  }, [previewMode]);
 
   useEffect(() => {
     if (highlightId) {
-      outlookAxios.get(`/outlook/${highlightId}`).then(({ data }) => setCurrent(data?.outlook || null)).catch(() => {});
+      loadCurrent();
     } else {
       loadCurrent();
     }
     loadPrefs();
     loadHistory();
-    loadM10Signal();
     // The backend owns classification; this lightweight refresh only makes
     // its persisted event-driven state visible promptly when the page is
     // open. It does not calculate or monitor prices in the browser.
-    const t = setInterval(() => { loadCurrent(); loadHistory(); loadM10Signal(); }, 15000);
+    const t = setInterval(() => { loadCurrent(); loadHistory(); }, 15000);
     return () => clearInterval(t);
-  }, [highlightId, loadCurrent, loadPrefs, loadHistory, loadM10Signal]);
+  }, [highlightId, loadCurrent, loadPrefs, loadHistory]);
+
+  const notificationSummary = prefs?.tier === "OFF" ? "Preference off" : contract?.notificationSent ? "Delivered" : "Standing by";
 
   return (
     <div className="min-h-screen bg-[#07090d] text-white">
-      <div className="mx-auto max-w-2xl px-4 py-6">
-        <div className="mb-4 flex items-center gap-3">
+      <div className="mx-auto max-w-6xl px-4 pb-16 pt-[max(1.5rem,env(safe-area-inset-top))] sm:px-6">
+        <div className="mb-6 flex items-center gap-3">
           <button onClick={() => navigate(-1)} className="rounded-full border border-white/10 p-2 hover:border-white/25">
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <h1 className="font-mono text-lg font-black uppercase tracking-tight">AI Market Outlook</h1>
+          <div><h1 className="text-lg font-black tracking-tight">AI Market Outlook</h1><p className="mt-0.5 text-[10px] text-white/35">M10 execution truth with hourly advisory context</p></div>
         </div>
 
-        <div className="flex flex-col gap-4">
-          <OutlookHero outlook={current} advanced={advanced} setAdvanced={setAdvanced} />
-          <M10VsOutlookCard m10={m10Signal} outlook={current} />
-          <EvidenceDiagnostics diagnostics={diagnostics} />
-          <NotificationSettings prefs={prefs} setPrefs={setPrefs} />
-
-          <div className={`${CARD} p-5`}>
-            <div className="flex items-center justify-between">
-              <span className={MONO_LABEL}>History</span>
-              <button onClick={() => setShowFilters((s) => !s)} className="flex items-center gap-1 text-[11px] text-white/50">
-                <Filter className="h-3 w-3" /> {filter}
-              </button>
-            </div>
-            {showFilters && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {HISTORY_FILTERS.map((f) => (
-                  <button key={f} onClick={() => { setFilter(f); setShowFilters(false); }}
-                          className={`rounded-full border px-2.5 py-1 text-[10px] ${filter === f ? "border-amber-300/40 text-amber-200" : "border-white/10 text-white/45"}`}>
-                    {f}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* v6.24.18 owner directive -- genuine win rate: wins/(wins+losses),
-                never wins/total. "—" (not "0%") when nothing has resolved yet. */}
-            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="space-y-4">
+          <PrimaryStateCard contract={contract} />
+          <DataHealthStrip contract={contract} diagnostics={diagnostics} notificationStatus={notificationSummary} />
+          <div className="grid gap-4 lg:grid-cols-[1.35fr_0.65fr]">
+            <M10ExecutionCard contract={contract} />
+            <div className="grid gap-4"><HourlyContextCard context={contract?.hourlyContext} /><WaitingCard contract={contract} /></div>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+            <section className={`${CARD} p-5 sm:p-6`}>
+              <div className="flex items-center justify-between"><span className={MONO_LABEL}>Meaningful signal history</span><span className="text-[10px] text-white/30">Informational repeats grouped</span></div>
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Metric label="Win rate" value={stats.win_rate != null ? `${Math.round(stats.win_rate * 100)}%` : "—"} />
               <Metric label="Wins / Losses" value={`${stats.wins ?? 0} / ${stats.losses ?? 0}`} />
               <Metric label="Total R" value={stats.total_r != null ? `${stats.total_r > 0 ? "+" : ""}${stats.total_r}R` : "—"} />
               <Metric label="Avg R" value={stats.average_r != null ? `${stats.average_r > 0 ? "+" : ""}${stats.average_r}R` : "—"} />
-              <Metric label="TP1 / TP2 / TP3" value={`${stats.tp1_hit_rate != null ? Math.round(stats.tp1_hit_rate * 100) : 0}% / ${stats.tp2_hit_rate != null ? Math.round(stats.tp2_hit_rate * 100) : 0}% / ${stats.tp3_hit_rate != null ? Math.round(stats.tp3_hit_rate * 100) : 0}%`} />
-              <Metric label="Unavailable history" value={stats.unavailable_historical_count ?? 0} />
-              <Metric label="Active" value={stats.active_unresolved_count ?? "—"} />
-              <Metric label="Avg MFE/MAE" value={stats.average_mfe != null ? `${stats.average_mfe}/${stats.average_mae}` : "—"} />
-            </div>
-
-            <div className="mt-4 flex flex-col gap-2">
-              {history.length === 0 && <p className="text-[12px] text-white/35">No outlooks match this filter yet.</p>}
-              {history.map((o) => <HistoryCard key={o.id} outlook={o} />)}
-            </div>
+              </div>
+              <div className="mt-5 space-y-2">
+                {signalEvents.slice(0, 12).map((event) => <SignalEventCard key={event.id || `${event.candidate_id}-${event.event_type}`} event={event} />)}
+                {signalEvents.length === 0 && history.slice(0, 12).map((o) => <HistoryCard key={o.id} outlook={o} />)}
+                {signalEvents.length === 0 && history.length === 0 && <p className="py-6 text-center text-[12px] text-white/35">No completed or active signals yet. Informational heartbeats are not counted as trades.</p>}
+              </div>
+            </section>
+            <NotificationSettings prefs={prefs} setPrefs={setPrefs} />
           </div>
         </div>
       </div>

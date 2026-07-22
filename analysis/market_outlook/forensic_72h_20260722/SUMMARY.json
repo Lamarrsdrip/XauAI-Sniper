@@ -1,0 +1,63 @@
+{
+  "scope": "MT5 local logs 2026-07-20 through 2026-07-22",
+  "analysis_event_count": 406,
+  "decision_counts": {
+    "BUY_CANDIDATE": 3,
+    "NO_VALID_SIGNAL": 123,
+    "SELL_CANDIDATE": 51,
+    "TRANSITION_WATCH": 219,
+    "TREND_CONTINUATION_NO_ENTRY_YET": 6,
+    "WAIT_FOR_BUY_RETRACE": 1,
+    "WAIT_FOR_SELL_RETRACE": 3
+  },
+  "candidate_count": 54,
+  "relevant_event_counts": {
+    "BOT-DECISION": 27,
+    "ENTRY_DELAY_COMPLETED": 21,
+    "ENTRY_REVALIDATED": 34,
+    "ENTRY_TIMER_COMPLETED": 21,
+    "ENTRY_TIMER_STARTED": 40,
+    "EXACT_CANDIDATE_FINAL_OUTCOME": 11,
+    "FINAL_ENTRY_ARBITER": 19,
+    "M10_CANDIDATE_ENDORSED": 35,
+    "M10_CANDIDATE_REJECTED": 534,
+    "M10_CANONICAL_SCORE_APPLIED": 13,
+    "M10_EVIDENCE_STORED": 404,
+    "M10_FRESHNESS": 407,
+    "M10_HISTORY_REBUILT": 4,
+    "M10_ORIGINATED_CANDIDATE_SHARED_PATH": 31,
+    "M10_SIGNAL_ANALYSIS": 406,
+    "M10_SNAPSHOT_4807_PATIENT_WAIT": 80,
+    "M10_SNAPSHOT_DEFERRED": 90,
+    "M10_SNAPSHOT_FAILED_FINAL": 3,
+    "M10_SNAPSHOT_HANDLE_RECREATE": 143,
+    "M10_SNAPSHOT_PERSISTENT_HANDLE_RECOVERY": 1,
+    "M10_SNAPSHOT_READY": 101,
+    "M10_SNAPSHOT_WAIT": 53,
+    "M10_SNAPSHOT_WRONG_HANDLE_RECOVERY": 98
+  },
+  "monitor_post_result_count": 27,
+  "monitor_post_failure_count": 27,
+  "sources": [
+    {
+      "path": "/Users/libertyelectronics/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Logs/20260720.log",
+      "bytes": 108774962,
+      "sha256": "8102889154c77409c335144f76715e77ae01c192abea6f2cfdd6398be722c96a"
+    },
+    {
+      "path": "/Users/libertyelectronics/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Logs/20260721.log",
+      "bytes": 38262992,
+      "sha256": "ce0018276d23b17bb7799aa71922255d30fa7bf9ad57fd641d71264f5c72b92e"
+    },
+    {
+      "path": "/Users/libertyelectronics/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Logs/20260722.log",
+      "bytes": 13712952,
+      "sha256": "c5c924d30abacea11ed4bf7ce1f08f1c16e3cc6d37090d43ddba6df87f16d614"
+    }
+  ],
+  "limitations": [
+    "Local MT5 logs do not prove production MongoDB persistence or notification delivery.",
+    "The reviewed M10_SIGNAL_ANALYSIS lines do not include Bid/Ask or explicit execution-ready truth.",
+    "Multiple EA builds/chart instances appear in the same interval, so repeated bar evidence is retained rather than deduplicated."
+  ]
+}

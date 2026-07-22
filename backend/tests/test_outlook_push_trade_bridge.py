@@ -8,7 +8,7 @@ from market_outlook import _canonical_m10_signal  # noqa: E402
 from notifications import build_trade_notification_payload, classify_trade_activity  # noqa: E402
 
 
-def test_explicit_m10_candidate_wins_over_transition_watch_context():
+def test_explicit_m10_candidate_wins_over_advisory_context_but_stays_watching_until_ready():
     evidence = {
         "ts": "2026-07-21T12:50:00+00:00",
         "m10_signal": {
@@ -22,9 +22,34 @@ def test_explicit_m10_candidate_wins_over_transition_watch_context():
         "market_thesis": {"action": "WAIT", "exhaustion_decision": "TRANSITION_WATCH"},
     }
     resolved = _canonical_m10_signal(evidence)
-    assert resolved["actionable"] is True
+    assert resolved["candidate"] is True
+    assert resolved["actionable"] is False
+    assert resolved["execution_ready"] is False
     assert resolved["direction"] == "SELL"
     assert resolved["confidence"] == 64
+
+
+def test_explicit_execution_ready_m10_candidate_is_actionable():
+    evidence = {
+        "m10_signal": {
+            "decision": "SELL_CANDIDATE", "preferred_direction": "SELL",
+            "confidence": 64, "freshness_state": "FRESH",
+        },
+        "execution": {"final_execution_allowed": True, "final_decision": "READY"},
+    }
+    resolved = _canonical_m10_signal(evidence)
+    assert resolved["actionable"] is True
+    assert resolved["execution_ready"] is True
+
+
+def test_cancelled_execution_candidate_is_expired_and_never_actionable():
+    evidence = {
+        "m10_signal": {"decision": "SELL_CANDIDATE", "preferred_direction": "SELL", "freshness_state": "FRESH"},
+        "execution": {"final_decision": "CANCEL_EXECUTION_NOT_CONFIRMED"},
+    }
+    resolved = _canonical_m10_signal(evidence)
+    assert resolved["expired"] is True
+    assert resolved["actionable"] is False
 
 
 def test_pressure_without_explicit_candidate_is_not_fabricated_into_signal():

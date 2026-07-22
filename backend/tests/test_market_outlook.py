@@ -17,6 +17,7 @@ environment doesn't have.)
 """
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -245,7 +246,7 @@ def test_generation_only_ever_inserts_never_updates_the_original_outlook_doc():
     # now goes through that one shared insert path instead of three direct
     # insert_one calls.
     fn = MO_SRC[MO_SRC.index("async def generate_outlook_for_account"):]
-    fn_body = fn[:fn.index("\n\nasync def hourly_generation_tick")]
+    fn_body = fn[:fn.index("\n\nasync def publish_m10_signal_from_activity")]
     assert "_insert_outlook_atomically" in fn_body
     assert "update_one" not in fn_body  # generation never mutates a prior outlook
     helper_fn = MO_SRC[MO_SRC.index("async def _insert_outlook_atomically"):]
@@ -452,12 +453,12 @@ def test_gold_price_fallback_is_never_mislabeled_as_live():
 
 def _outlook_gen_body() -> str:
     fn = MO_SRC[MO_SRC.index("async def generate_outlook_for_account"):]
-    return fn[:fn.index("\n\nasync def hourly_generation_tick")]
+    return fn[:fn.index("\n\nasync def publish_m10_signal_from_activity")]
 
 
 def test_outlook_prefers_ea_reported_price_over_external_feed():
     body = _outlook_gen_body()
-    ea_price_idx = body.index("ea_mid = float(thesis_preview.get")
+    ea_price_idx = body.index("evidence_quote = extract_evidence_quote")
     fallback_idx = body.index("await srv.fetch_live_gold_price()")
     assert ea_price_idx < fallback_idx, "EA-reported price must be checked before the external fallback feed is ever called"
 
@@ -503,7 +504,8 @@ def test_repair_function_is_not_wired_into_any_automatic_tick():
 
 def test_history_stats_exclude_flagged_records_but_keep_them_visible():
     assert "excluded_from_stats" in ROUTES_SRC
-    assert 'return {"outlooks": rows, "stats": stats}' in ROUTES_SRC
+    assert '"outlooks": rows' in ROUTES_SRC
+    assert '"timeline": group_meaningful_history(rows)' in ROUTES_SRC
 
 
 def test_history_analytics_are_not_limited_to_visible_card_page():
@@ -522,3 +524,66 @@ def test_signal_outlook_hot_path_indexes_are_declared_at_startup():
         'cloud_bot_activity.create_index([("account", 1), ("ts", 1)])',
     ):
         assert index_fragment in SERVER_SRC
+
+
+def _m10_evidence(*, ready=None, decision="SELL_CANDIDATE", ask=4052.6, freshness="FRESH"):
+    return {
+        "ts": "2026-07-22T09:00:00+00:00",
+        "event_time": "2026-07-22T09:00:00+00:00",
+        "symbol": "XAUUSD",
+        "m10_signal": {
+            "decision": decision, "preferred_direction": "SELL", "confidence": 72,
+            "freshness_state": freshness, "bar_time": "2026-07-22T08:50:00+00:00",
+            "live_bid": 4052.4, "live_ask": ask,
+        },
+        "execution": {"final_execution_allowed": ready, "final_decision": "READY" if ready else "WAITING"},
+    }
+
+
+def test_contract_fresh_ready_m10_survives_missing_hourly_context():
+    contract = mo.build_authoritative_outlook_contract(
+        _m10_evidence(ready=True), "OK", hourly_doc=None,
+        now=datetime(2026, 7, 22, 9, 0, 5, tzinfo=timezone.utc),
+    )
+    assert contract["state"] == mo.OUTLOOK_ACTIONABLE
+    assert contract["direction"] == "SELL"
+    assert contract["hourlyContext"]["state"] == "UNAVAILABLE"
+    assert contract["notificationEligibility"]["eligible"] is True
+
+
+def test_contract_candidate_not_ready_is_watching_and_not_notifiable():
+    contract = mo.build_authoritative_outlook_contract(
+        _m10_evidence(ready=False), "OK", now=datetime(2026, 7, 22, 9, 0, 5, tzinfo=timezone.utc),
+    )
+    assert contract["state"] == mo.OUTLOOK_WATCHING
+    assert contract["executionReady"] is False
+    assert contract["notificationEligibility"] == {
+        "eligible": False, "reason": "CANDIDATE_NOT_EXECUTION_READY",
+    }
+
+
+def test_contract_healthy_no_candidate_is_not_data_unavailable():
+    evidence = _m10_evidence(ready=False, decision="NO_VALID_SIGNAL")
+    evidence["m10_signal"]["preferred_direction"] = ""
+    contract = mo.build_authoritative_outlook_contract(
+        evidence, "OK", now=datetime(2026, 7, 22, 9, 0, 5, tzinfo=timezone.utc),
+    )
+    assert contract["state"] == mo.OUTLOOK_NO_SIGNAL
+    assert contract["confidence"] is None
+
+
+def test_contract_missing_ask_is_data_unavailable_not_zero_confidence_neutral():
+    contract = mo.build_authoritative_outlook_contract(
+        _m10_evidence(ready=True, ask=None), "OK",
+        now=datetime(2026, 7, 22, 9, 0, 5, tzinfo=timezone.utc),
+    )
+    assert contract["state"] == mo.OUTLOOK_DATA_UNAVAILABLE
+    assert "BROKER_ASK" in contract["missingFields"]
+    assert contract["confidence"] != 0
+
+
+def test_m10_quote_mapper_accepts_quote_outside_market_thesis():
+    quote = mo.extract_evidence_quote(_m10_evidence(ready=True))
+    assert quote["valid"] is True
+    assert quote["bid"] == 4052.4
+    assert quote["ask"] == 4052.6

@@ -92,6 +92,20 @@ ANALYTICS_WIN = "WIN"
 ANALYTICS_LOSS = "LOSS"
 ANALYTICS_UNAVAILABLE = "HISTORICAL_DATA_UNAVAILABLE"
 
+OUTLOOK_ACTIONABLE = "ACTIONABLE_SIGNAL"
+OUTLOOK_WATCHING = "WATCHING"
+OUTLOOK_NO_SIGNAL = "NO_SIGNAL"
+OUTLOOK_DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
+OUTLOOK_BLOCKED = "BLOCKED"
+OUTLOOK_EXPIRED = "EXPIRED"
+
+EXECUTION_READY_DECISIONS = {
+    "ALLOW", "ALLOW_CORE", "ALLOWED", "READY", "EXECUTION_READY", "EXECUTED",
+    "FILLED", "BROKER_CONFIRMED",
+}
+BLOCKED_DECISIONS = {"BLOCKED", "REJECTED", "DENIED", "ERROR"}
+EXPIRED_DECISIONS = {"EXPIRED", "CANCELLED", "CANCELED", "TIMED_OUT", "TIMEOUT"}
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models (API-facing)
@@ -202,12 +216,24 @@ async def _latest_ea_evidence(license_key: str, account: str, source_event_id: s
                 "m10_signal": m10_signal,
                 "regime": details.get("regime") or row.get("mode") or "",
                 "session": details.get("session") or "",
+                "event_time": row.get("ts"),
+                "broker_time": details.get("broker_time") or details.get("server_time"),
+                "device_time": details.get("device_time") or details.get("local_time"),
+                "execution": {
+                    "candidate_allowed": details.get("candidate_allowed"),
+                    "final_execution_allowed": details.get("final_execution_allowed"),
+                    "final_decision": details.get("final_decision"),
+                    "final_blocker": details.get("final_blocker") or details.get("blocked_by"),
+                    "pipeline_stage": details.get("pipeline_stage"),
+                    "open_trade_called": details.get("open_trade_called"),
+                    "broker_retcode": details.get("broker_retcode"),
+                },
             }, "OK"
     return None, "INSUFFICIENT_MARKET_EVIDENCE"
 
 
 def _canonical_m10_signal(evidence: Dict) -> Dict:
-    """Resolve only an explicit, fresh EA M10 candidate.
+    """Resolve an explicit M10 candidate without inventing readiness.
 
     The M10 engine is the canonical near-term signal source already displayed
     by the Command Center. Advisory fields such as exhaustion_decision may say
@@ -238,6 +264,22 @@ def _canonical_m10_signal(evidence: Dict) -> Dict:
         or ""
     ).upper().strip()
     freshness = str(m10.get("freshness_state") or "FRESH").upper().strip()
+    execution = evidence.get("execution") or {}
+    final_decision = str(
+        execution.get("final_decision")
+        or m10.get("execution_status")
+        or m10.get("execution_decision")
+        or readiness.get("final_decision")
+        or ""
+    ).upper().strip()
+    blocker = str(
+        execution.get("final_blocker")
+        or m10.get("blocker_code")
+        or m10.get("blocked_by")
+        or readiness.get("final_blocker")
+        or readiness.get("blocked_by")
+        or ""
+    ).upper().strip()
 
     direction = ""
     if decision == "BUY_CANDIDATE":
@@ -251,8 +293,20 @@ def _canonical_m10_signal(evidence: Dict) -> Dict:
     # direction. Fail closed on malformed telemetry rather than guessing.
     if direction and preferred in ("BUY", "SELL") and preferred != direction:
         direction = ""
-    if freshness not in ("", "FRESH"):
-        direction = ""
+    candidate = direction in ("BUY", "SELL")
+    stale = freshness not in ("", "FRESH", "CURRENT")
+    explicit_allowed = execution.get("final_execution_allowed") is True
+    explicit_blocked = (
+        execution.get("final_execution_allowed") is False
+        and (bool(blocker) or final_decision in BLOCKED_DECISIONS)
+    ) or final_decision in BLOCKED_DECISIONS
+    expired = (stale or final_decision in EXPIRED_DECISIONS
+               or final_decision.startswith(("CANCEL", "EXPIRE", "TIMEOUT")))
+    execution_ready = bool(candidate and not expired and not explicit_blocked and (
+        explicit_allowed
+        or final_decision in EXECUTION_READY_DECISIONS
+        or decision == "ALLOW_CORE"
+    ))
 
     try:
         confidence = float(m10.get("confidence")) if m10.get("confidence") is not None else None
@@ -262,13 +316,186 @@ def _canonical_m10_signal(evidence: Dict) -> Dict:
         confidence = max(0.0, min(100.0, confidence))
 
     return {
-        "actionable": direction in ("BUY", "SELL"),
+        "candidate": candidate,
+        "actionable": execution_ready,
+        "execution_ready": execution_ready,
+        "blocked": bool(candidate and explicit_blocked),
+        "expired": bool(candidate and expired),
         "direction": direction,
         "decision": decision,
+        "execution_status": final_decision or ("READY" if execution_ready else "PENDING" if candidate else "NO_CANDIDATE"),
+        "blocker_code": blocker or None,
         "confidence": confidence,
         "freshness_state": freshness,
         "bar_time": str(m10.get("bar_time") or m10.get("candle_time") or evidence.get("ts") or ""),
         "source": "M10_SIGNAL" if m10 else "READINESS_FALLBACK",
+        "candidate_id": str(
+            m10.get("candidate_id")
+            or m10.get("signal_id")
+            or readiness.get("candidate_id")
+            or ""
+        ),
+    }
+
+
+def _first_positive_number(*values: Any) -> float:
+    for value in values:
+        try:
+            number = float(value or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if number > 0.0:
+            return number
+    return 0.0
+
+
+def extract_evidence_quote(evidence: Dict) -> Dict[str, Any]:
+    """Return the EA broker quote regardless of which accepted evidence block carried it."""
+    evidence = evidence or {}
+    thesis = evidence.get("market_thesis") or {}
+    readiness = evidence.get("entry_readiness") or {}
+    m10 = evidence.get("m10_signal") or {}
+    bid = _first_positive_number(thesis.get("live_bid"), m10.get("live_bid"), m10.get("bid"),
+                                 readiness.get("live_bid"), readiness.get("bid"))
+    ask = _first_positive_number(thesis.get("live_ask"), m10.get("live_ask"), m10.get("ask"),
+                                 readiness.get("live_ask"), readiness.get("ask"))
+    mid = _first_positive_number(thesis.get("live_mid"), m10.get("live_mid"), readiness.get("live_mid"))
+    if not mid and bid > 0.0 and ask >= bid:
+        mid = (bid + ask) / 2.0
+    quote_at = (
+        thesis.get("evidence_time_utc") or m10.get("quote_time") or m10.get("evidence_time_utc")
+        or readiness.get("evidence_time_utc") or evidence.get("event_time") or evidence.get("ts")
+    )
+    valid = bid > 0.0 and ask >= bid
+    return {"bid": bid or None, "ask": ask or None, "mid": mid or None,
+            "quote_at": quote_at, "valid": valid, "spread": (ask - bid) if valid else None}
+
+
+def extract_evidence_quote_from_details(details: Dict, event_time: Any = None) -> Dict[str, Any]:
+    """Adapter for the activity route before a database read is necessary."""
+    details = details or {}
+    return extract_evidence_quote({
+        "market_thesis": details.get("market_thesis") or {},
+        "entry_readiness": details.get("entry_readiness") or {},
+        "m10_signal": details.get("m10_signal") or {},
+        "event_time": event_time,
+    })
+
+
+def _as_iso(value: Any) -> Optional[str]:
+    parsed = _as_utc(value)
+    return parsed.isoformat() if parsed else None
+
+
+def build_authoritative_outlook_contract(evidence: Optional[Dict], evidence_reason: str,
+                                         hourly_doc: Optional[Dict] = None,
+                                         signal_doc: Optional[Dict] = None,
+                                         notification: Optional[Dict] = None,
+                                         now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Single deterministic M10-first API contract consumed by the Outlook UI."""
+    wall_now = _as_utc(now) or datetime.now(timezone.utc)
+    evidence = evidence or {}
+    canonical = _canonical_m10_signal(evidence)
+    quote = extract_evidence_quote(evidence)
+    event_at = _as_utc(evidence.get("event_time") or evidence.get("ts"))
+    freshness_seconds = max(0, int((wall_now - event_at).total_seconds())) if event_at else None
+    missing_fields = []
+    if not evidence:
+        missing_fields.append("EA_EVIDENCE")
+    if evidence and not quote.get("bid"):
+        missing_fields.append("BROKER_BID")
+    if evidence and not quote.get("ask"):
+        missing_fields.append("BROKER_ASK")
+
+    stored_expiry = _as_utc((signal_doc or {}).get("expiry_at"))
+    stored_active = bool(
+        signal_doc
+        and (signal_doc or {}).get("primary_direction") in ("BUY", "SELL")
+        and not (signal_doc or {}).get("monitoring_closed")
+        and (not stored_expiry or stored_expiry > wall_now)
+    )
+    direction = canonical.get("direction") or ((signal_doc or {}).get("primary_direction") if stored_active else None)
+    confidence = (canonical.get("confidence") if canonical.get("candidate")
+                  else (signal_doc or {}).get("confidence_pct") if stored_active else None)
+    blocker = canonical.get("blocker_code")
+    if not evidence or evidence_reason != "OK" or missing_fields:
+        state = OUTLOOK_DATA_UNAVAILABLE
+        state_reason = evidence_reason if evidence_reason != "OK" else "MISSING_BROKER_QUOTE"
+    elif stored_active and not canonical.get("candidate"):
+        state, state_reason = OUTLOOK_ACTIONABLE, "ACTIVE_M10_SIGNAL_PRESERVED"
+    elif canonical.get("expired"):
+        state, state_reason = OUTLOOK_EXPIRED, "CANDIDATE_EXPIRED"
+    elif canonical.get("blocked"):
+        state, state_reason = OUTLOOK_BLOCKED, blocker or "EXECUTION_BLOCKED"
+    elif canonical.get("actionable"):
+        state, state_reason = OUTLOOK_ACTIONABLE, "M10_EXECUTION_READY"
+    elif canonical.get("candidate"):
+        state, state_reason = OUTLOOK_WATCHING, "AWAITING_EXECUTION_CONFIRMATION"
+    else:
+        state, state_reason = OUTLOOK_NO_SIGNAL, "NO_QUALIFYING_M10_SETUP"
+
+    notification = notification or {}
+    eligible = state == OUTLOOK_ACTIONABLE and not bool(notification.get("delivery_status") == "SENT")
+    notification_reason = ("ALREADY_SENT" if state == OUTLOOK_ACTIONABLE and not eligible else "ELIGIBLE") if state == OUTLOOK_ACTIONABLE else {
+        OUTLOOK_WATCHING: "CANDIDATE_NOT_EXECUTION_READY",
+        OUTLOOK_BLOCKED: "EXECUTION_BLOCKED",
+        OUTLOOK_EXPIRED: "STALE_OR_EXPIRED_CANDIDATE",
+        OUTLOOK_DATA_UNAVAILABLE: "DATA_UNAVAILABLE",
+    }.get(state, "NO_CONFIRMED_SIGNAL")
+    hourly_direction = (hourly_doc or {}).get("primary_direction")
+    hourly_state = (
+        "BULLISH" if hourly_direction == "BUY" else "BEARISH" if hourly_direction == "SELL"
+        else "UNAVAILABLE" if hourly_direction == "NO_VALID_OUTLOOK" or not hourly_doc else "NEUTRAL"
+    )
+    candidate_id = canonical.get("candidate_id") or (
+        f"{canonical.get('bar_time')}:{direction}" if canonical.get("candidate") else None
+    )
+    source_doc = signal_doc or {}
+    return {
+        "contractVersion": "outlook-current-v3",
+        "state": state,
+        "stateReason": state_reason,
+        "canonicalSource": "M10" if evidence else "NONE",
+        "symbol": evidence.get("symbol") or (hourly_doc or {}).get("symbol") or OUTLOOK_SYMBOL,
+        "direction": direction,
+        "confidence": confidence,
+        "confidenceSource": "EA_M10" if confidence is not None else None,
+        "executionStatus": canonical.get("execution_status") if canonical.get("candidate") else ("TRACKING" if stored_active else canonical.get("execution_status")),
+        "executionReady": bool(canonical.get("execution_ready") or stored_active),
+        "candidateId": candidate_id,
+        "signalBarTime": _as_iso(canonical.get("bar_time")) or canonical.get("bar_time") or None,
+        "eventTime": _as_iso(evidence.get("event_time") or evidence.get("ts")),
+        "brokerTime": _as_iso(evidence.get("broker_time")),
+        "freshnessSeconds": freshness_seconds,
+        "dataHealth": "HEALTHY" if state != OUTLOOK_DATA_UNAVAILABLE else "UNAVAILABLE",
+        "missingFields": missing_fields,
+        "blockerCode": blocker,
+        "blockerLabel": blocker.replace("_", " ").title() if blocker else None,
+        "nextRequiredCondition": {
+            OUTLOOK_WATCHING: "Wait for the EA's final execution revalidation.",
+            OUTLOOK_BLOCKED: "Wait for the reported blocker to clear.",
+            OUTLOOK_EXPIRED: "Scanning the next completed M10 bar.",
+            OUTLOOK_DATA_UNAVAILABLE: "Wait for a fresh broker Bid/Ask snapshot.",
+            OUTLOOK_NO_SIGNAL: "Scanning for the next qualifying M10 setup.",
+        }.get(state, "Signal is confirmed by the EA."),
+        "m10": {
+            **canonical,
+            "bid": quote.get("bid"), "ask": quote.get("ask"), "spread": quote.get("spread"),
+            "quoteTime": _as_iso(quote.get("quote_at")),
+        },
+        "hourlyContext": {
+            "state": hourly_state,
+            "direction": hourly_direction if hourly_direction in ("BUY", "SELL") else None,
+            "confidence": (hourly_doc or {}).get("confidence_pct"),
+            "reason": (hourly_doc or {}).get("reasoning") or (hourly_doc or {}).get("no_valid_outlook_reason"),
+            "generatedAt": (hourly_doc or {}).get("generated_at"),
+            "advisoryOnly": True,
+        },
+        "notificationEligibility": {"eligible": eligible, "reason": notification_reason},
+        "notificationSent": bool(notification.get("delivery_status") == "SENT"),
+        "notificationEventId": notification.get("id"),
+        "lastValidOutlook": source_doc or None,
+        "nextEvaluationTime": (wall_now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)).isoformat(),
     }
 
 
@@ -589,7 +816,8 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     # only as a last-resort fallback when no EA price is available at all,
     # and is refused outright if it is itself the hardcoded stale constant.
     thesis_preview = (evidence.get("market_thesis") or {}) if evidence else {}
-    ea_mid = float(thesis_preview.get("live_mid", 0.0) or 0.0)
+    evidence_quote = extract_evidence_quote(evidence or {})
+    ea_mid = float(evidence_quote.get("mid") or 0.0)
     current_price = 0.0
     price_source = "NONE"
     if ea_mid > 0.0:
@@ -647,7 +875,12 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         }
         return await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot, publication_key=publication_key)
 
-    thesis = evidence["market_thesis"] or evidence["entry_readiness"] or evidence.get("m10_signal") or {}
+    # Analysis fields remain thesis-first, but accepted quote/time fields are
+    # normalized independently so an M10 payload cannot be rejected merely
+    # because its broker snapshot was nested under m10_signal/readiness.
+    thesis = dict(evidence.get("m10_signal") or {})
+    thesis.update(evidence.get("entry_readiness") or {})
+    thesis.update(evidence.get("market_thesis") or {})
     readiness = evidence.get("entry_readiness") or {}
     canonical_m10 = _canonical_m10_signal(evidence)
     action = canonical_m10["decision"]
@@ -769,9 +1002,9 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     # in the same immutable EA evidence snapshot used to publish the outlook.
     # The suggested zone remains analysis-only; it is never an activation
     # gate and never becomes the performance entry.
-    published_bid = float(thesis.get("live_bid", 0.0) or 0.0)
-    published_ask = float(thesis.get("live_ask", 0.0) or 0.0)
-    raw_published_quote_at = thesis.get("evidence_time_utc") or evidence.get("ts")
+    published_bid = float(evidence_quote.get("bid") or 0.0)
+    published_ask = float(evidence_quote.get("ask") or 0.0)
+    raw_published_quote_at = evidence_quote.get("quote_at")
     published_quote_dt = _as_utc(raw_published_quote_at)
     published_quote_at = published_quote_dt.isoformat() if published_quote_dt else None
     actionable = direction_label in ("BUY", "SELL")
@@ -940,7 +1173,7 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
 
 async def publish_m10_signal_from_activity(license_key: str, account: str,
                                            source_event_id: str = "") -> int:
-    """Publish a fresh explicit M10 candidate immediately, not next hour.
+    """Persist M10 lifecycle truth and publish only an execution-ready signal.
 
     The normal hourly slot remains the informational cadence. A deterministic
     M10 publication key lets a candidate arriving after an earlier neutral
@@ -954,10 +1187,55 @@ async def publish_m10_signal_from_activity(license_key: str, account: str,
         logger.info("M10_OUTLOOK_NOT_PUBLISHED account=%s reason=%s", account, reason)
         return 0
     canonical = _canonical_m10_signal(evidence)
-    if not canonical.get("actionable"):
+    if not canonical.get("candidate"):
         return 0
 
-    identity = f"{account}|{OUTLOOK_SYMBOL}|{canonical.get('bar_time')}|{canonical.get('direction')}"
+    identity = canonical.get("candidate_id") or f"{account}|{OUTLOOK_SYMBOL}|{canonical.get('bar_time')}|{canonical.get('direction')}"
+    candidate_id = canonical.get("candidate_id") or uuid.uuid5(uuid.NAMESPACE_URL, identity).hex
+    event_state = (
+        OUTLOOK_EXPIRED if canonical.get("expired") else
+        OUTLOOK_BLOCKED if canonical.get("blocked") else
+        OUTLOOK_ACTIONABLE if canonical.get("actionable") else OUTLOOK_WATCHING
+    )
+    notification_reason = (
+        "ELIGIBLE" if canonical.get("actionable") else
+        "STALE_OR_EXPIRED_CANDIDATE" if canonical.get("expired") else
+        "EXECUTION_BLOCKED" if canonical.get("blocked") else
+        "CANDIDATE_NOT_EXECUTION_READY"
+    )
+    now_iso = datetime.now(timezone.utc).isoformat()
+    event_doc = {
+        "candidate_id": candidate_id,
+        "account": account,
+        "license_key": license_key,
+        "symbol": OUTLOOK_SYMBOL,
+        "signal_bar_time": canonical.get("bar_time"),
+        "event_type": event_state,
+        "event_version": 1,
+        "event_time": evidence.get("event_time") or evidence.get("ts") or now_iso,
+        "source_event_id": source_event_id or evidence.get("source_event_id"),
+        "direction": canonical.get("direction"),
+        "confidence": canonical.get("confidence"),
+        "freshness_state": canonical.get("freshness_state"),
+        "execution_status": canonical.get("execution_status"),
+        "execution_ready": bool(canonical.get("execution_ready")),
+        "blocker_code": canonical.get("blocker_code"),
+        "notification_eligibility": bool(canonical.get("actionable")),
+        "notification_reason": notification_reason,
+        "updated_at": now_iso,
+    }
+    await _db().cloud_outlook_signal_events.update_one(
+        {"account": account, "candidate_id": candidate_id, "event_type": event_state, "event_version": 1},
+        {"$set": event_doc, "$setOnInsert": {"id": str(uuid.uuid4()), "created_at": now_iso}},
+        upsert=True,
+    )
+    if not canonical.get("actionable"):
+        logger.info(
+            "M10_SIGNAL_SUPPRESSED account=%s candidate=%s state=%s reason=%s",
+            account, candidate_id, event_state, notification_reason,
+        )
+        return 0
+
     publication_key = f"m10-signal:{uuid.uuid5(uuid.NAMESPACE_URL, identity).hex}"
     doc = await generate_outlook_for_account(
         license_key,
@@ -968,15 +1246,31 @@ async def publish_m10_signal_from_activity(license_key: str, account: str,
         source_event_id=source_event_id,
     )
     if not doc:
+        await _db().cloud_outlook_signal_events.update_one(
+            {"account": account, "candidate_id": candidate_id, "event_type": OUTLOOK_ACTIONABLE, "event_version": 1},
+            {"$set": {"notification_eligibility": False,
+                      "notification_reason": "AWAITING_FRESH_PUBLICATION_QUOTE"}},
+        )
         return 0
     newly_inserted = doc.pop("_newly_inserted", True)
     if newly_inserted and doc.get("primary_direction") in ("BUY", "SELL"):
         await _dispatch_signal_event(doc, "TRACKING_STARTED")
+        await _db().cloud_outlook_signal_events.update_one(
+            {"account": account, "candidate_id": candidate_id, "event_type": OUTLOOK_ACTIONABLE, "event_version": 1},
+            {"$set": {"outlook_id": doc.get("id"), "notification_dispatched_at": datetime.now(timezone.utc).isoformat()}},
+        )
         logger.info(
             "M10_OUTLOOK_PUBLISHED id=%s account=%s direction=%s bar=%s",
             doc.get("id"), account, doc.get("primary_direction"), canonical.get("bar_time"),
         )
         return 1
+    if doc.get("primary_direction") not in ("BUY", "SELL"):
+        await _db().cloud_outlook_signal_events.update_one(
+            {"account": account, "candidate_id": candidate_id, "event_type": OUTLOOK_ACTIONABLE, "event_version": 1},
+            {"$set": {"notification_eligibility": False,
+                      "notification_reason": "PUBLICATION_VALIDATION_FAILED",
+                      "outlook_id": doc.get("id")}},
+        )
     return 0
 
 
@@ -1124,6 +1418,11 @@ def _as_utc(value: Any) -> Optional[datetime]:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except (TypeError, ValueError):
+        for pattern in ("%Y.%m.%d %H:%M:%S", "%Y.%m.%d %H:%M"):
+            try:
+                return datetime.strptime(str(value), pattern).replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
         return None
 
 
@@ -1757,5 +2056,7 @@ async def _dispatch_hourly_notification(doc: Dict) -> None:
     if doc.get("primary_direction") in ("BUY", "SELL") and doc.get("tracking_entry_price"):
         await _dispatch_signal_event(doc, "TRACKING_STARTED")
     else:
-        from notifications import send_outlook_notification
-        await send_outlook_notification(doc, event="OUTLOOK_PUBLISHED", min_tier="HOURLY_ONLY")
+        # Hourly context is advisory. Neutral/missing-data heartbeats are
+        # intentionally visible in the API but can never masquerade as a
+        # confirmed signal notification.
+        logger.info("OUTLOOK_NOTIFICATION_SUPPRESSED id=%s reason=ADVISORY_ONLY", doc.get("id"))

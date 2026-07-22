@@ -22,6 +22,30 @@ import market_outlook as mo
 import notifications as notif
 
 
+def group_meaningful_history(rows: list) -> list:
+    """Keep signal lifecycle rows; collapse repetitive informational noise."""
+    grouped = []
+    buckets = {}
+    for row in rows:
+        directional = row.get("primary_direction") in ("BUY", "SELL")
+        if directional or row.get("analytics_outcome") in (mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS):
+            grouped.append(row)
+            continue
+        stamp = str(row.get("generated_at") or row.get("published_at") or "")
+        day = stamp[:10]
+        reason = row.get("no_valid_outlook_reason") or row.get("primary_direction") or "INFORMATIONAL"
+        key = (day, reason)
+        if key not in buckets:
+            collapsed = dict(row)
+            collapsed["collapsed_count"] = 1
+            collapsed["history_kind"] = "INFORMATIONAL_GROUP"
+            buckets[key] = collapsed
+            grouped.append(collapsed)
+        else:
+            buckets[key]["collapsed_count"] += 1
+    return grouped
+
+
 def compute_outlook_stats(rows: list) -> dict:
     """Derive performance only from persisted authoritative outcomes."""
     stats_rows = [o for o in rows if not o.get("excluded_from_stats")]
@@ -88,6 +112,14 @@ def build_router() -> APIRouter:
         scope = {"$or": [{"account": account}, {"license_key": license_key}]} if account and license_key \
             else ({"account": account} if account else {"license_key": license_key})
         doc = await db.cloud_market_outlooks.find_one(scope, {"_id": 0}, sort=[("generated_at", -1)])
+        hourly_doc = await db.cloud_market_outlooks.find_one(
+            {"$and": [scope, {"$or": [{"publication_mode": "HOURLY"}, {"publication_mode": {"$exists": False}}]}]},
+            {"_id": 0}, sort=[("generated_at", -1)],
+        )
+        signal_doc = await db.cloud_market_outlooks.find_one(
+            {"$and": [scope, {"primary_direction": {"$in": ["BUY", "SELL"]}}]},
+            {"_id": 0}, sort=[("generated_at", -1)],
+        )
         # Phase 9 diagnostics: lets the frontend show real evidence/generation
         # state instead of guessing from the outlook doc alone -- in
         # particular so it never renders "connect your EA" while recent
@@ -101,6 +133,15 @@ def build_router() -> APIRouter:
             except Exception:
                 evidence_age_seconds = None
         next_slot = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        latest_notification = None
+        if signal_doc:
+            latest_notification = await db.cloud_notification_log.find_one(
+                {"outlook_id": signal_doc.get("id")}, {"_id": 0}, sort=[("scheduled_time", -1)]
+            )
+        contract = mo.build_authoritative_outlook_contract(
+            evidence, evidence_reason, hourly_doc=hourly_doc, signal_doc=signal_doc,
+            notification=latest_notification, now=now,
+        )
         diagnostics = {
             "last_ea_evidence_at": evidence.get("ts") if evidence else None,
             "evidence_age_seconds": evidence_age_seconds,
@@ -110,7 +151,12 @@ def build_router() -> APIRouter:
             "next_outlook_at": next_slot.isoformat(),
             "generation_status": "OK" if evidence else evidence_reason,
         }
-        return {"outlook": doc, "diagnostics": diagnostics}
+        return {
+            "contract": contract,
+            "outlook": signal_doc or doc,
+            "hourly_context": hourly_doc,
+            "diagnostics": diagnostics,
+        }
 
     @r.get("/outlook/history")
     async def get_outlook_history(
@@ -126,7 +172,7 @@ def build_router() -> APIRouter:
         account = str((lic or {}).get("mt5_account") or "").strip()
         license_key = srv._normalize_license_key((lic or {}).get("pin", "")) if lic else ""
         if not account and not license_key:
-            return {"outlooks": [], "stats": {}, "reason": "license_not_linked"}
+            return {"outlooks": [], "timeline": [], "signal_events": [], "stats": {}, "reason": "license_not_linked"}
         scope = {"$or": [{"account": account}, {"license_key": license_key}]} if account and license_key \
             else ({"account": account} if account else {"license_key": license_key})
         conditions = [scope]
@@ -169,7 +215,15 @@ def build_router() -> APIRouter:
         }
         stats_rows = await db.cloud_market_outlooks.find(query, stats_projection).to_list(None)
         stats = compute_outlook_stats(stats_rows)
-        return {"outlooks": rows, "stats": stats}
+        signal_events = await db.cloud_outlook_signal_events.find(
+            scope, {"_id": 0}
+        ).sort("event_time", -1).to_list(limit)
+        return {
+            "outlooks": rows,
+            "timeline": group_meaningful_history(rows),
+            "signal_events": signal_events,
+            "stats": stats,
+        }
 
     @r.get("/outlook/{outlook_id}")
     async def get_outlook_by_id(outlook_id: str, user: dict = Depends(srv.get_cloud_user)):

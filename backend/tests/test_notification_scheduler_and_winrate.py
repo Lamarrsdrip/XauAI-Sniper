@@ -112,15 +112,15 @@ def test_onesignal_returns_classified_failure_not_bare_bool():
     fn_idx = NOTIF_SRC.index("async def _send_onesignal(user_id: str, payload: Dict) -> tuple:")
     fn = NOTIF_SRC[fn_idx: fn_idx + 4300]
     for status_class in ["SERVER_NOT_CONFIGURED", "AUTHENTICATION_FAILED",
-                          "TEMPORARY_DELIVERY_FAILURE", "NO_DEVICE_REGISTERED", "UNKNOWN_FAILURE"]:
+                          "TEMPORARY_DELIVERY_FAILURE", "NO_ACTIVE_ONESIGNAL_RECIPIENT", "UNKNOWN_FAILURE"]:
         assert status_class in fn
 
 
 def test_empty_message_id_classified_as_no_device_registered():
     fn_idx = NOTIF_SRC.index("async def _send_onesignal(user_id: str, payload: Dict) -> tuple:")
     fn = NOTIF_SRC[fn_idx: fn_idx + 4300]
-    assert 'if data.get("id")' in fn
-    assert "NO_DEVICE_REGISTERED" in fn
+    assert 'if provider["message_id"]' in fn
+    assert "return False, NO_ACTIVE_ONESIGNAL_RECIPIENT, provider" in fn
 
 
 def test_notification_status_endpoint_exists_and_derives_final_status():
@@ -136,15 +136,18 @@ def test_status_is_off_regardless_of_device_state_when_tier_is_off():
     fn_idx = NOTIF_SRC.index('async def get_notification_status(user_id: str, account: str = "") -> Dict:')
     fn = NOTIF_SRC[fn_idx: fn_idx + 2500]
     idx = fn.index('if saved_tier == "OFF":')
-    window = fn[idx: idx + 80]
-    assert 'final_status = "OFF"' in window
-    assert window.index('final_status = "OFF"') < window.index("elif")
+    window = fn[idx: idx + 120]
+    assert 'final_status, remediation = "OFF", "NONE"' in window
+    assert window.index('final_status, remediation = "OFF", "NONE"') < window.index("elif")
 
 
 def test_on_verified_requires_devices_and_server_ready():
     fn_idx = NOTIF_SRC.index('async def get_notification_status(user_id: str, account: str = "") -> Dict:')
     fn = NOTIF_SRC[fn_idx: fn_idx + 2500]
-    assert 'elif not subscription:\n        final_status = "SUBSCRIPTION_MISSING"' in fn
+    assert 'elif not complete:' in fn
+    assert 'final_status, remediation = "SUBSCRIPTION_MISSING", "REGISTER_DEVICE"' in fn
+    assert 'elif not server_ready:' in fn
+    assert 'final_status, remediation = "ON_VERIFIED", "NONE"' in fn
 
 
 def test_test_notification_uses_real_production_dispatcher():
