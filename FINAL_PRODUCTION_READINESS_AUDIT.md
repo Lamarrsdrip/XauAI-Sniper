@@ -32,6 +32,7 @@ This report does not claim that the repaired binary has already completed the sa
 
 - MetaEditor: 0 errors, 0 warnings, 41,257 ms.
 - Current forensic regression suite: 14/14 passed.
+- Backend market-outlook/OneSignal ownership suite: 54/54 passed; the stale collection-ownership contract now reflects that the notification module owns both device registrations and delivery logs, while still forbidding EA/trade collection writes.
 - Evidence reconstruction and checksums: PASS.
 - Python syntax compilation: PASS.
 - Frontend production build: PASS.

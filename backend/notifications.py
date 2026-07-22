@@ -18,11 +18,11 @@ The previous self-hosted VAPID implementation (initialize_vapid_keys,
 get_vapid_status, _send_webpush, etc.) has been removed entirely, not kept
 as a dead fallback -- see git history if it's ever needed again.
 
-STRICT SEPARATION: this module reads notification preferences/device
-registrations and, for crash-safe notification retry only, reads already-
-persisted broker-confirmed cloud_bot_activity events. It writes only to
-cloud_notification_log. It never writes an EA/trade collection and never calls
-any trading-control endpoint.
+STRICT SEPARATION: this module owns OneSignal device registrations and delivery
+logs. It reads notification preferences and, for crash-safe notification retry
+only, already-persisted broker-confirmed cloud_bot_activity events. It writes
+only to cloud_push_subscriptions and cloud_notification_log. It never writes an
+EA/trade collection and never calls any trading-control endpoint.
 """
 
 from __future__ import annotations
