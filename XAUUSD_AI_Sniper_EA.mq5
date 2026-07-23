@@ -1946,8 +1946,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.273"
-#property description "XAUUSD AI Sniper v6.25.24; replay-consolidated 4807 patience, bounded readiness, pyramid integrity and exact outcome telemetry."
+#property version   "6.255"
+#property description "XAUUSD AI Sniper v6.25.24 M10 FIXED-$10-SL EXPERIMENT (isolated comparison branch, otherwise byte-identical to v6.25.24 production baseline; replay-consolidated 4807 patience, bounded readiness, pyramid integrity and exact outcome telemetry)."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -2031,7 +2031,7 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.24"
+#define XAUAI_EA_VERSION "v6.25.24_M10_FIXED10SL_EXPERIMENT"
 #define XAUAI_EA_VERSION_NUM "6.25.24"
 #define XAUAI_BUILD_HASH "v62524-final-production-audit-20260722"
 #define XAU_PYRAMID_BASKET_HARD_CLOSE_R 0.50
@@ -2643,6 +2643,31 @@ input int    InpATRPeriod      = 14;       // ATR Period
 input double InpSLMultiplier   = 2.5;      // v4.9.5 — wider SL (was 2.0) to survive M5 noise
 input bool   InpUseStructuralSL = true;    // Real-money safety authority: a valid closed-M10 swing invalidation is mandatory. If an old .set file explicitly disables this, entry fails closed rather than silently using an ATR-only stop.
 input double InpTPMultiplier   = 4.0;      // v4.9.5 — wider TP (was 2.0) so runners can reach +4R
+
+// v6.25.24 OWNER-APPROVED SL POLICY (owner directive, ported to this
+// isolated M10 comparison branch experiment/v62524-m10-fixed-sl -- the
+// "10-minute bot with fixed $10 SL" -- from experiment/v62525-full-m5-scan
+// where it was originally implemented and tested. Ported: ONLY the fixed
+// Gold-move SL mechanism. NOT ported: the M5 primary-timeframe conversion,
+// the missed-move veto contradiction fix, or any other M5-branch-specific
+// change. This branch is otherwise byte-identical to origin/main
+// e2bca802411f02c6813d9f2ae18a88a56f90aa49 (v6.25.24), including its
+// original M10 primary scan timeframe.
+//
+// The INITIAL broker Stop Loss is no longer R-based, structural, ATR-based,
+// or candle-based. It is now a fixed absolute XAUUSD price movement,
+// configurable by the user. InpStopLossGoldMove=10.0 means the initial SL
+// sits exactly $10.00 of Gold price away from the actual open price --
+// NOT points, NOT account-dollar risk, NOT an R multiple. BUY: SL =
+// entryPrice - InpStopLossGoldMove. SELL: SL = entryPrice +
+// InpStopLossGoldMove. This does NOT change lot sizing (which keeps using
+// the pre-existing structural/1R distance as its reference, exactly as
+// before -- see XAU_FixedGoldMoveSLPrice/OWNER_FIXED_SL_POLICY below) and
+// does NOT change any later exit/trailing/profit-management system (those
+// keep using the pre-existing internal R reference too). See
+// analysis/m5_experiment/FINAL_REPORT.md "SL Policy Change" section for
+// the original implementation record and test evidence.
+input double InpStopLossGoldMove = 10.0;   // Fixed initial-SL distance in absolute XAUUSD price (e.g. 10.0 = $10.00 Gold move). Must be > 0.
 
 input group "=== AI DIRECTOR (v6.3.0 — real authority, not just advisory) ==="
 // v6.3.0: The AI Director is the final authority above all strategies.
@@ -5241,6 +5266,19 @@ struct XAU_PostCloseState
 XAU_PostCloseState g_postClose[2];
 
 int XAU_CampaignSlot(int direction) { return direction == 1 ? 0 : 1; }
+
+// v6.25.24 OWNER-APPROVED SL POLICY helper (ported): the internal R
+// distance frozen at CORE entry (independent of the now-fixed broker SL),
+// or 0.0 if no active campaign record exists for this direction yet. Used
+// by the R-exit restart-reconciliation fallback paths so a post-restart
+// position recovery does not accidentally derive 1R from the fixed broker
+// SL instead of the real structural distance.
+double XAU_CampaignInternalRDistanceOrZero(int direction)
+{
+   int slot = XAU_CampaignSlot(direction);
+   if(!g_campaign[slot].active) return 0.0;
+   return g_campaign[slot].ownerEffectiveHardStopDistance;
+}
 
 // ===========================================================================
 // v6.25.0 owner directive 2026-07-17 — CANONICAL DIRECTION-EXCLUSIVITY
@@ -10591,6 +10629,22 @@ int OnInit()
             DoubleToString(InpReducedRiskFloorPct, 4), "% InpNormalRiskPct=", DoubleToString(InpNormalRiskPct, 4),
             "% -- a mismatch would silently reopen the retired quality-band reduction.");
       return INIT_PARAMETERS_INCORRECT;
+   }
+
+   // v6.25.24 OWNER-APPROVED SL POLICY (ported): InpStopLossGoldMove must
+   // be a valid positive absolute Gold price movement. Reject
+   // initialization outright rather than silently falling back to the old
+   // R-based/structural SL -- the owner's spec is explicit that an invalid
+   // value must never produce a silent fallback.
+   {
+      string slInputWhy = "";
+      if(!XAU_ValidateStopLossGoldMoveInput(slInputWhy))
+      {
+         Print("CONFIG ERROR: ", slInputWhy, " -- EA will NOT initialize. Set InpStopLossGoldMove to a positive value (e.g. 10.0, 15.0, 20.0) and reload.");
+         return INIT_PARAMETERS_INCORRECT;
+      }
+      PrintFormat("OWNER_FIXED_SL_POLICY_CONFIRMED | slPolicy=FIXED_GOLD_MOVE | configuredGoldMove=%.2f | note=lot_sizing_and_exit_management_unchanged",
+                  InpStopLossGoldMove);
    }
    PrintFormat("RISK_CONFIG_ASSERTION_PASSED | ConfiguredRisk=%.2f%% | SingleTradeCap=%.2f%% | AggregateRiskCap=%.2f%% | mode=FULL_RISK_BINARY",
                InpNormalRiskPct, InpMaxRiskPctEquity, InpMaxAggregateRiskPct);
@@ -18132,8 +18186,14 @@ void CheckPyramidOpportunity()
    }
    XAU_FinalRiskGeometry pyramidGeometry=XAU_ComputeFinalRiskGeometry(pyramidStructuralDistance);
    double slDist=pyramidGeometry.finalOriginalRiskDistance;
-   double pyramidSL=NormalizeDouble(dir>0?entryPx-pyramidGeometry.effectiveHardStopDistance:
-                                          entryPx+pyramidGeometry.effectiveHardStopDistance,digits);
+   // v6.25.24 OWNER-APPROVED SL POLICY (ported): pyramidGeometry/slDist
+   // above are UNCHANGED and continue to drive lot sizing (addLot below),
+   // TP, and the R-exit registration (already passes
+   // pyramidGeometry.finalOriginalRiskDistance explicitly -- see
+   // XAU_RExit_EnsureIdx call below). Only the actual broker-sent
+   // pyramidSL now comes from the fixed Gold-move policy, using this
+   // individual pyramid add's OWN actual entry reference price (entryPx).
+   double pyramidSL=XAU_FixedGoldMoveSLPrice(entryPx,dir,digits);
    double pyramidTP=origTP>0.0?origTP:NormalizeDouble(dir>0?entryPx+slDist*EffTPMultiplier():
                                                        entryPx-slDist*EffTPMultiplier(),digits);
 
@@ -18197,6 +18257,8 @@ void CheckPyramidOpportunity()
    double pyramidEffectiveRiskUSD=addLot*RiskPerLotForDistance(pyramidGeometry.effectiveHardStopDistance);
    PrintFormat("OWNER_RISK_POLICY | structural_sl_r=1.00 | configured_risk_pct=%.2f | stop_distance=%.5f | lots=%.4f | expected_risk_usd=%.2f | path=PYRAMID",
                InpNormalRiskPct,pyramidGeometry.effectiveHardStopDistance,addLot,pyramidEffectiveRiskUSD);
+   PrintFormat("FIXED_SL_APPLIED | side=%s | entry=%.2f | configuredMove=%.2f | brokerSL=%.2f | lot=%.4f | slSource=FIXED_GOLD_PRICE_MOVE | lotSizingPolicy=PRESERVED_EXISTING | internalRDistance=%.5f | sizingUnchanged=true | path=PYRAMID",
+               dir>0?"BUY":"SELL", entryPx, InpStopLossGoldMove, pyramidSL, addLot, pyramidGeometry.effectiveHardStopDistance);
 
    // v6.25.14: legacy basket-profit-floor state is not a pyramid market-quality
    // veto. Only an in-progress coordinated broker close remains a mechanical
@@ -18266,8 +18328,11 @@ void CheckPyramidOpportunity()
    bool pyramidOwnerSLConfirmed=false;
    if(XAU_BrokerOpenRetcodeAccepted(pyramidRetcode) && pyLiveConfirmed)
    {
-      double expectedPyramidSL=NormalizeDouble(isBuy?pyLiveOpen-pyramidGeometry.effectiveHardStopDistance:
-                                                     pyLiveOpen+pyramidGeometry.effectiveHardStopDistance,digits);
+      // v6.25.24 OWNER-APPROVED SL POLICY (ported): reconcile against the
+      // fixed Gold-move policy using the CONFIRMED actual open price, not
+      // the pre-fill entryPx estimate -- same pattern as the CORE entry
+      // reconciliation block.
+      double expectedPyramidSL=XAU_FixedGoldMoveSLPrice(pyLiveOpen,isBuy?1:-1,digits);
       double pyPoint=SymbolInfoDouble(Symbol(),SYMBOL_POINT);
       double pyTol=MathMax(pyPoint*2.0,0.00001);
       if(MathAbs(pyLiveSL-expectedPyramidSL)>pyTol)
@@ -20780,6 +20845,61 @@ double RiskPerLotForDistance(double dist)
 }
 
 // ============================================================
+// v6.25.24 OWNER-APPROVED FIXED-GOLD-MOVE INITIAL SL POLICY
+// (ported to this isolated M10 comparison branch)
+// ============================================================
+// This block is intentionally the ONLY place that computes the actual
+// broker-sent initial SL price. It never reads slDist / ownerEffectiveSLDistance
+// / pyramidGeometry / any structural, ATR, candle, or R-based distance --
+// those continue to exist and continue to drive lot sizing and every later
+// exit/trailing/profit-management system completely unchanged. This
+// function is deliberately the single narrow decoupling point the owner's
+// spec requires: "(A) existing internal sizing/management reference,
+// (B) actual broker SL price based on fixed Gold movement."
+bool XAU_ValidateStopLossGoldMoveInput(string &why)
+{
+   if(!MathIsValidNumber(InpStopLossGoldMove) || InpStopLossGoldMove <= 0.0)
+   {
+      why = StringFormat("InpStopLossGoldMove is invalid (%.5f) -- must be a positive absolute XAUUSD price movement (e.g. 10.0)",
+                          InpStopLossGoldMove);
+      return false;
+   }
+   return true;
+}
+
+// Returns the fixed initial SL price for a given reference (entry or
+// confirmed-open) price and direction, normalized to the symbol's digits.
+// direction: 1=BUY, -1=SELL.
+double XAU_FixedGoldMoveSLPrice(double referencePrice, int direction, int digits)
+{
+   double dist = InpStopLossGoldMove;
+   double slPrice = (direction == 1) ? referencePrice - dist : referencePrice + dist;
+   return NormalizeDouble(slPrice, digits);
+}
+
+// Broker-constraint awareness only (never silently widens/alters the
+// owner's configured value) -- logs a clear, explicit warning if the
+// configured Gold move is tighter than the broker's minimum stop distance,
+// so a rejected order is diagnosable rather than silently mysterious.
+// Does not block the trade itself; XAU_ReconcileBrokerOpenTruth + the
+// existing OWNER_SL_BROKER_CONFIRMATION_FAILED emergency-close safety net
+// already handle a broker-side rejection/mismatch after the fact.
+void XAU_WarnIfGoldMoveBelowBrokerMinimum(int direction, double referencePrice, double point)
+{
+   long stopsLevelPoints = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+   long freezeLevelPoints = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
+   double minDistPrice = MathMax((double)stopsLevelPoints, (double)freezeLevelPoints) * point;
+   if(minDistPrice > 0.0 && InpStopLossGoldMove < minDistPrice)
+   {
+      PrintFormat("OWNER_FIXED_SL_BELOW_BROKER_MINIMUM | configuredGoldMove=%.5f | brokerMinDistance=%.5f | "
+                  "stopsLevelPoints=%d | freezeLevelPoints=%d | referencePrice=%.5f | direction=%s | "
+                  "action=SENDING_AS_CONFIGURED_BROKER_MAY_REJECT",
+                  InpStopLossGoldMove, minDistPrice, (int)stopsLevelPoints, (int)freezeLevelPoints,
+                  referencePrice, direction == 1 ? "BUY" : "SELL");
+   }
+}
+
+// ============================================================
 // FINAL PRE-EXECUTION RISK RECONCILIATION (risk-mismatch fix)
 // ============================================================
 // Root cause of the live-log MISMATCH (Displayed=0.40% | ConfigBase=1.20% |
@@ -22508,7 +22628,17 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double ownerEffectiveSLDistance = finalGeometry.effectiveHardStopDistance;
    double ownerEffectiveRiskPerLot = RiskPerLotForDistance(ownerEffectiveSLDistance);
    double ownerEffectiveRiskUSD = lots * ownerEffectiveRiskPerLot;
-   sl = NormalizeDouble(signal == 1 ? price - ownerEffectiveSLDistance : price + ownerEffectiveSLDistance, digits);
+   // v6.25.24 OWNER-APPROVED SL POLICY (ported): ownerEffectiveSLDistance/
+   // ownerOriginalOneRDistance above are UNCHANGED and continue to drive
+   // lots (already computed above this point) and every downstream
+   // R-based exit/campaign reference (slDist is still passed to those
+   // functions elsewhere in this file exactly as before). Only the actual
+   // broker-sent `sl` price now comes from the fixed Gold-move policy
+   // instead of that distance.
+   XAU_WarnIfGoldMoveBelowBrokerMinimum(signal, price, SymbolInfoDouble(Symbol(), SYMBOL_POINT));
+   sl = XAU_FixedGoldMoveSLPrice(price, signal, digits);
+   PrintFormat("FIXED_SL_APPLIED | side=%s | entry=%.2f | configuredMove=%.2f | brokerSL=%.2f | lot=%.4f | slSource=FIXED_GOLD_PRICE_MOVE | lotSizingPolicy=PRESERVED_EXISTING | internalRDistance=%.5f | sizingUnchanged=true",
+               signal == 1 ? "BUY" : "SELL", price, InpStopLossGoldMove, sl, lots, ownerEffectiveSLDistance);
    PrintFormat("OWNER_RISK_POLICY | structural_sl_r=1.00 | configured_risk_pct=%.2f | stop_distance=%.5f | lots=%.4f | expected_risk_usd=%.2f",
                riskPct, ownerEffectiveSLDistance, lots, ownerEffectiveRiskUSD);
 
@@ -22669,8 +22799,13 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    bool ownerSLConfirmed = false;
    if(XAU_BrokerOpenRetcodeAccepted(brokerRetcode) && liveConfirmed)
    {
-      double confirmedOwnerSL = NormalizeDouble(signal == 1 ? confirmedOpen - ownerEffectiveSLDistance
-                                                             : confirmedOpen + ownerEffectiveSLDistance, digits);
+      // v6.25.24 OWNER-APPROVED SL POLICY (ported): reconcile against the
+      // fixed Gold-move policy using the CONFIRMED actual open price, not
+      // the internal R distance (ownerEffectiveSLDistance is intentionally
+      // NOT read here anymore -- using it would have made this exact
+      // reconciliation block silently overwrite the correct fixed SL back
+      // to the old structural distance via SafeModifySL below).
+      double confirmedOwnerSL = XAU_FixedGoldMoveSLPrice(confirmedOpen, signal, digits);
       double brokerCurPrice = signal == 1 ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
                                           : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
       double tickTolerance = MathMax(point * 2.0, 0.00001);
@@ -26889,7 +27024,14 @@ void XAU_ReconcileRExitOnInit()
       double lots = posInfo.Volume();
       double profit = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
       bool alreadyRestoredFromFile = (XAU_RExit_FindIdx(positionId) >= 0);
-      int idx = XAU_RExit_EnsureIdx(positionId, ticket, isBuy, openPx, curSL, lots, true);
+      // v6.25.24 OWNER-APPROVED SL POLICY (ported): 5th restart-
+      // reconciliation call site found during the M10-fixed-SL port that
+      // the original M5-branch fix (checkpoint 6) missed -- OnInit's own
+      // reconciliation path. Same fix as the other 4 sites: pass the
+      // campaign-frozen internal R distance so a fresh EA restart cannot
+      // silently derive 1R from the now-fixed broker SL.
+      int idx = XAU_RExit_EnsureIdx(positionId, ticket, isBuy, openPx, curSL, lots, true,
+                                    XAU_CampaignInternalRDistanceOrZero(isBuy ? 1 : -1));
       if(alreadyRestoredFromFile)
       {
          // XAU_RExit_LoadPersistedState() already validated and restored this
@@ -27591,7 +27733,8 @@ void XAU_CloseCampaignBasketAtProtectedFloor(int direction, string reason)
       ulong positionId = posInfo.Identifier();
       int idx = XAU_RExit_FindIdx(positionId);
       if(idx < 0)
-         idx = XAU_RExit_EnsureIdx(positionId, tk, posDir == 1, posInfo.PriceOpen(), posInfo.StopLoss(), posInfo.Volume(), false);
+         idx = XAU_RExit_EnsureIdx(positionId, tk, posDir == 1, posInfo.PriceOpen(), posInfo.StopLoss(), posInfo.Volume(), false,
+                                   XAU_CampaignInternalRDistanceOrZero(posDir));
 
       if(g_rExit[idx].closeState == R_CLOSE_CONFIRMED) { closed++; continue; }
 
@@ -27734,7 +27877,8 @@ void XAU_ActivateBasketModeImmediately(int direction)
       {
          bool isBuy = liveDir == 1;
          idx = XAU_RExit_EnsureIdx(posId, tk, isBuy, PositionGetDouble(POSITION_PRICE_OPEN),
-                                   PositionGetDouble(POSITION_SL), PositionGetDouble(POSITION_VOLUME), true);
+                                   PositionGetDouble(POSITION_SL), PositionGetDouble(POSITION_VOLUME), true,
+                                   XAU_CampaignInternalRDistanceOrZero(isBuy ? 1 : -1));
       }
       string failure = "";
       if(XAU_RestoreBasketLegOriginalProtection(tk, idx, failure)) restored++;
@@ -27859,7 +28003,8 @@ void XAU_UpdateCampaignBasketState(int direction)
       ulong positionId = posInfo.Identifier();
       int idx = XAU_RExit_FindIdx(positionId);
       if(idx < 0)
-         idx = XAU_RExit_EnsureIdx(positionId, tk, posDir == 1, posInfo.PriceOpen(), posInfo.StopLoss(), posInfo.Volume(), false);
+         idx = XAU_RExit_EnsureIdx(positionId, tk, posDir == 1, posInfo.PriceOpen(), posInfo.StopLoss(), posInfo.Volume(), false,
+                                   XAU_CampaignInternalRDistanceOrZero(posDir));
 
       string restoreFailure = "";
       if(!XAU_RestoreBasketLegOriginalProtection(tk, idx, restoreFailure))
@@ -27989,7 +28134,8 @@ void XAU_RExitCoreLoop()
                                  g_campaign[campSlot].additionCount > 0 ||
                                  g_campaign[campSlot].activePositionCount >= 2);
 
-      int idx = XAU_RExit_EnsureIdx(positionId, ticket, isBuy, openPx, curSL, lots, false);
+      int idx = XAU_RExit_EnsureIdx(positionId, ticket, isBuy, openPx, curSL, lots, false,
+                            XAU_CampaignInternalRDistanceOrZero(isBuy ? 1 : -1));
       XAU_RExit_SyncNettingState(idx, isBuy, openPx, curSL, lots); // Fix 12: netting pyramid adds
 
       // FINAL_BASKET_050R audit repair: basket ownership is checked BEFORE
@@ -28457,8 +28603,34 @@ void ManagePositions()
       double profit = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
       int minsOpen = (int)((TimeCurrent() - posInfo.Time()) / 60);
       bool isBuy = posInfo.PositionType() == POSITION_TYPE_BUY;
-      double slDist = isBuy ? (openPx - curSL) : (curSL - openPx);
-      if(slDist <= 0) slDist = atr * InpSLMultiplier;
+      // v6.25.24 OWNER-APPROVED SL POLICY (ported): the actual broker SL
+      // (curSL) is now a fixed $InpStopLossGoldMove distance from entry and
+      // MUST NOT be used to derive R/exit-management math -- doing so would
+      // silently redefine 1R to whatever the fixed SL happens to be. The
+      // internal R distance frozen at CORE entry
+      // (g_campaign[slot].ownerEffectiveHardStopDistance -- unchanged
+      // calculation, shared by CORE and every pyramid add per the existing
+      // "one immutable exit profile is frozen from the canonical regime at
+      // CORE entry... adds inherit this campaign field" policy) is the
+      // correct, INDEPENDENT reference and is used here instead of
+      // recomputing from the live broker SL.
+      int mgmtCampaignSlot = XAU_CampaignSlot(isBuy ? 1 : -1);
+      double internalRDistance = g_campaign[mgmtCampaignSlot].ownerEffectiveHardStopDistance;
+      double slDist;
+      if(g_campaign[mgmtCampaignSlot].active && internalRDistance > 0.0)
+      {
+         slDist = internalRDistance;
+      }
+      else
+      {
+         // Defensive fallback only (no active campaign record found for this
+         // ticket's direction -- should not normally happen for any position
+         // opened by this EA's own campaign-tracked entry paths). Preserves
+         // the exact pre-existing behavior for that edge case rather than
+         // silently trusting the now-fixed broker SL as an R reference.
+         slDist = isBuy ? (openPx - curSL) : (curSL - openPx);
+         if(slDist <= 0) slDist = atr * InpSLMultiplier;
+      }
 
       // Convert 1R into ACCOUNT CURRENCY using MT5's profit calculator so XAU
       // loss/profit decisions match actual broker-account P/L.
