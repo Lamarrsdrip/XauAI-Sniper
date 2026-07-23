@@ -1,0 +1,23 @@
+{
+  "TRUE_INVALIDATION": {
+    "count": 18,
+    "avg_mae_r": 0.5717,
+    "avg_mfe_r": 0.1378,
+    "avg_seconds_negative_total": 2588.9,
+    "total_profit_usd": -10240.9
+  },
+  "CLEAN_WIN": {
+    "count": 25,
+    "avg_mae_r": 0.1007,
+    "avg_mfe_r": 0.5077,
+    "avg_seconds_negative_total": 783.2,
+    "total_profit_usd": 9157.35
+  },
+  "GOOD_SETUP_BAD_TIMING": {
+    "count": 14,
+    "avg_mae_r": 0.4045,
+    "avg_mfe_r": 0.7328,
+    "avg_seconds_negative_total": 2982.9,
+    "total_profit_usd": 7487.68
+  }
+}

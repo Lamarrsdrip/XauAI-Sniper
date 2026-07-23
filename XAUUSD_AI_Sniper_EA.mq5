@@ -2487,13 +2487,32 @@ enum ENUM_GLOBAL_TRADEBRAIN_MODE
 };
 input bool   InpTradeBrainMemory           = true;  // Persist every executed trade and its verified completed outcome
 input ENUM_GLOBAL_TRADEBRAIN_MODE InpGlobalTradeBrainMode = GLOBAL_TRADEBRAIN_ADVISOR; // Audited seed is warning-only; ADVISOR can never block, resize, redirect, or modify exits
-input string InpTradeBrainCollectionRunId  = "V62524_PRODUCTION_ADVISOR"; // Live collection remains isolated from the immutable 90-day validation run
+input string InpTradeBrainCollectionRunId  = "V62524_M10_FIXEDSL_EXPERIMENT"; // Isolated collection-run ID for this branch's OWN M10+fixed-SL TradeBrain model -- deliberately distinct from V62525_M5_EXPERIMENT (the M5 branch's own model) and V62524_PRODUCTION_ADVISOR (unrelated live-collection ID) so the two bots' fingerprints/models can never be cross-contaminated or pooled by accident.
 input bool   InpTradeBrainResetCollectionOnTesterStart = false; // Set true only for the first launch of a brand-new tester run; false preserves restart recovery
 input int    InpTradeBrainMinSamples       = 20;    // Reserved for the later validated global-seed filter
 input double InpTradeBrainBlockLossPct     = 70.0;  // Reserved owner threshold for the later validated global-seed filter
 input int    InpTradeBrainMinDistinctDays  = 5;     // Reserved trust requirement for imported/global seed validation
 input int    InpTradeBrainMinDistinctWeeks = 3;     // Reserved trust requirement for imported/global seed validation
 input bool   InpTradeBrainMonitorAfterExit = true;  // After close, keep watching for research telemetry only
+
+// v6.25.25 TradeBrain LEARNING SYSTEM (owner directive) -- new, explicitly-
+// named evidence-validity thresholds for the loss-rate-based authority
+// design described in analysis/m5_experiment/TRADEBRAIN_LEARNING_REPORT.md.
+// NOT wired to any live execution/lot/block decision in this build -- this
+// whole system stays in Phase 1-6 (collect, model, walk-forward-validate)
+// per the owner's explicit "design target, not something to activate live
+// yet" instruction. Distinct from the older InpTradeBrainMinSamples/
+// InpTradeBrainBlockLossPct "Reserved for the later validated global-seed
+// filter" inputs above, which use a different (70%) threshold inconsistent
+// with the owner's new spec (50% hard-block) -- left untouched, not reused,
+// to avoid silently redefining an existing input's meaning. Ported onto this
+// M10+fixed-SL branch verbatim from experiment/v62525-m5-tradebrain-learning
+// (checkpoint 6 there) -- this branch's OWN separate TradeBrain model uses
+// this same collect-only telemetry, pointed at its own trade history only.
+input int    InpTradeBrainMinDecisiveMatches = 10;   // Evidence floor: minimum decisive (WIN or LOSS, not breakeven) historical matches before ANY loss-rate action (allow-with-reduction or hard-block) may fire. Below this, TradeBrain fails open. Not yet production-selected -- see the 5/10/15/20 sensitivity comparison in the learning report.
+input double InpTradeBrainMinimumSimilarity  = 0.75; // Minimum similarity score (0.0-1.0) for a historical trade to count as a genuine fingerprint match at all (exact/strong match tiers only -- weak matches never receive block/reduce authority regardless of count).
+input double InpTradeBrainHardBlockLossRatePct = 50.0; // Owner rule: historicalLossRate in [50,100] -> hard block. This is the ONLY hard-block threshold.
+input double InpTradeBrainLotReductionPct    = 30.0;  // Owner rule: historicalLossRate in [1,49.99] -> warn + reduce lot BY this percent (finalLot = originalLot * (1 - this/100) = originalLot * 0.70 at the default).
 // Deprecated compatibility inputs. v6.25.15 never changes lot size from TradeBrain evidence.
 input double InpTradeBrainReduceWR         = 42.0;
 input double InpTradeBrainBlockWR          = 28.0;
@@ -7313,6 +7332,141 @@ datetime    g_smc_last_bar  = 0;  // gate: only run SMC_Update() once per M5 bar
 // Per-position peak-profit tracking (for retrace exit)
 ulong      peakTickets[];
 double     peakProfits[];
+
+// v6.25.25 TradeBrain learning system (owner directive) -- Phase 1 baseline
+// telemetry, COLLECT-ONLY, zero execution authority. Per-position drawdown/
+// timing-milestone tracking, GOLD-PRICE-DISTANCE based (not dollars, not
+// lot-dependent), so R-multiples are computed the same way everywhere else
+// in this file already computes R: distance / internalRDistance. Never
+// derived from the fixed broker SL (g_campaign[slot].ownerEffectiveHardStopDistance
+// is the only R reference, exactly as the existing SL-independence fix
+// already established). Ported verbatim from
+// experiment/v62525-m5-tradebrain-learning (checkpoint 6, including the
+// execution-anomaly-classifier bugfix already folded in from the start --
+// this branch's own model is built on the CORRECT logic from day one, not
+// the pre-fix version).
+struct XAU_TradeBrainDrawdownTrack
+{
+   ulong    ticket;
+   double   maeGoldPrice;      // worst adverse excursion, Gold price distance (always >= 0)
+   double   mfeGoldPrice;      // best favorable excursion, Gold price distance (always >= 0)
+   datetime timeOfMAE;         // when the worst adverse excursion was recorded
+   datetime entryTime;
+   bool     hit01R, hit02R, hit04R, hit05R;
+   datetime time01R, time02R, time04R, time05R;
+   double   internalRDistanceAtEntry; // frozen once, at first observation -- never re-derived from a moving target
+   bool     everNegative;
+   datetime firstNegativeAt;
+   datetime lastNegativeAt;    // last tick observed still negative -- used to derive total seconds negative without a per-tick counter
+   double   lastKnownBrokerSL; // most recent LIVE broker SL observed via posInfo.StopLoss() while the
+                                // position was open. Updated every tick, so it correctly reflects legitimate
+                                // SafeModifySL trailing/breakeven/profit-floor locks. Read-only telemetry:
+                                // never written back to any order/position.
+};
+XAU_TradeBrainDrawdownTrack g_brainDrawdown[];
+
+// v6.25.25 TradeBrain learning system: pending-value side channel for the
+// CLOSE-time drawdown/timing-milestone data, read once by
+// XAU_AppendTradeBrain immediately after being set (same pattern as this
+// file's existing g_lastEntryQ_* globals). -1 for a *Seconds field means
+// "that R-multiple/milestone was never reached this trade" (a real,
+// meaningful value -- e.g. a clean winner may never touch a negative R at
+// all), NOT missing data. g_pendingBrainDD_Found=false means no tracking
+// record existed at all (should not normally happen for any CORE-tracked
+// position) and downstream consumers must treat the row as DATA_INCOMPLETE
+// for these fields specifically, never substitute a 0/-1 that looks like a
+// real "never happened" observation.
+bool     g_pendingBrainDD_Found = false;
+double   g_pendingBrainDD_MaeGold = 0.0;
+double   g_pendingBrainDD_MfeGold = 0.0;
+double   g_pendingBrainDD_InternalR = 0.0;
+int      g_pendingBrainDD_SecondsToMAE = -1;
+int      g_pendingBrainDD_SecondsNegativeTotal = -1;
+int      g_pendingBrainDD_Time01R = -1;
+int      g_pendingBrainDD_Time02R = -1;
+int      g_pendingBrainDD_Time04R = -1;
+int      g_pendingBrainDD_Time05R = -1;
+bool     g_pendingBrainDD_RecoveredAfterDrawdown = false;
+double   g_pendingBrainDD_LastKnownBrokerSL = 0.0;
+
+int XAU_BrainDrawdownFindIdx(ulong ticket)
+{
+   for(int i = 0; i < ArraySize(g_brainDrawdown); i++)
+      if(g_brainDrawdown[i].ticket == ticket) return i;
+   return -1;
+}
+
+// Called once per tick per open position (ManagePositions), immediately
+// after slDist/internalRDistance is resolved. isBuy/openPx/curPrice/slDist
+// are the same values ManagePositions already computed for its own R-exit
+// math -- nothing here is a second, independently-computed R. currentBrokerSL:
+// the SAME posInfo.StopLoss() read ManagePositions' own loop already
+// performs for its own (unrelated) R-reference fallback logic -- passed
+// straight through, no new position/order query added. Pure read, recorded
+// into lastKnownBrokerSL every tick so it always reflects the most recent
+// LIVE broker SL, including any legitimate SafeModifySL trail/breakeven/
+// profit-floor lock -- never written back anywhere.
+void XAU_UpdateBrainDrawdownTracking(ulong ticket, bool isBuy, double openPx, double curPrice, double internalRDistance, double currentBrokerSL)
+{
+   if(!InpTradeBrainMemory) return;
+   int idx = XAU_BrainDrawdownFindIdx(ticket);
+   double goldDistance = isBuy ? (curPrice - openPx) : (openPx - curPrice); // + favorable, - adverse
+   if(idx < 0)
+   {
+      int n = ArraySize(g_brainDrawdown);
+      ArrayResize(g_brainDrawdown, n + 1);
+      ZeroMemory(g_brainDrawdown[n]);
+      g_brainDrawdown[n].ticket = ticket;
+      g_brainDrawdown[n].entryTime = TimeCurrent();
+      g_brainDrawdown[n].internalRDistanceAtEntry = internalRDistance;
+      idx = n;
+   }
+   if(currentBrokerSL > 0.0) g_brainDrawdown[idx].lastKnownBrokerSL = currentBrokerSL;
+   if(goldDistance < 0.0)
+   {
+      double adverse = -goldDistance;
+      if(adverse > g_brainDrawdown[idx].maeGoldPrice)
+      {
+         g_brainDrawdown[idx].maeGoldPrice = adverse;
+         g_brainDrawdown[idx].timeOfMAE = TimeCurrent();
+      }
+      if(!g_brainDrawdown[idx].everNegative)
+      {
+         g_brainDrawdown[idx].everNegative = true;
+         g_brainDrawdown[idx].firstNegativeAt = TimeCurrent();
+      }
+      g_brainDrawdown[idx].lastNegativeAt = TimeCurrent();
+   }
+   else if(goldDistance > g_brainDrawdown[idx].mfeGoldPrice)
+   {
+      g_brainDrawdown[idx].mfeGoldPrice = goldDistance;
+   }
+
+   double r = g_brainDrawdown[idx].internalRDistanceAtEntry;
+   if(r > 0.0 && goldDistance > 0.0)
+   {
+      double rMultiple = goldDistance / r;
+      if(!g_brainDrawdown[idx].hit01R && rMultiple >= 0.1) { g_brainDrawdown[idx].hit01R = true; g_brainDrawdown[idx].time01R = TimeCurrent(); }
+      if(!g_brainDrawdown[idx].hit02R && rMultiple >= 0.2) { g_brainDrawdown[idx].hit02R = true; g_brainDrawdown[idx].time02R = TimeCurrent(); }
+      if(!g_brainDrawdown[idx].hit04R && rMultiple >= 0.4) { g_brainDrawdown[idx].hit04R = true; g_brainDrawdown[idx].time04R = TimeCurrent(); }
+      if(!g_brainDrawdown[idx].hit05R && rMultiple >= 0.5) { g_brainDrawdown[idx].hit05R = true; g_brainDrawdown[idx].time05R = TimeCurrent(); }
+   }
+}
+
+// Retrieves and clears (call exactly once, at CLOSE). Returns false (all
+// output params zeroed) if no tracking record exists -- callers must treat
+// that as DATA_INCOMPLETE, never silently substitute a zero/default value
+// that looks like real evidence.
+bool XAU_PopBrainDrawdownTracking(ulong ticket, XAU_TradeBrainDrawdownTrack &out)
+{
+   int idx = XAU_BrainDrawdownFindIdx(ticket);
+   if(idx < 0) { ZeroMemory(out); return false; }
+   out = g_brainDrawdown[idx];
+   int n = ArraySize(g_brainDrawdown);
+   for(int i = idx; i < n - 1; i++) g_brainDrawdown[i] = g_brainDrawdown[i + 1];
+   ArrayResize(g_brainDrawdown, n - 1);
+   return true;
+}
 
 // v6.4.8 — Per-position protected peak floor state
 ulong      g_profitFloorTickets[];
@@ -28642,6 +28796,13 @@ void ManagePositions()
       double peak = UpdatePeakProfit(ticket, profit);
       double retracePct = (peak > 0 && profit < peak) ? ((peak - profit) / peak) * 100.0 : 0.0;
 
+      // v6.25.25 TradeBrain learning system (Phase 1, collect-only telemetry
+      // -- reads the same slDist this loop already resolved as the internal
+      // R reference; changes nothing about any exit/management decision).
+      // curSL: same posInfo.StopLoss() read this loop already performed
+      // above -- passed through purely for read-only telemetry.
+      XAU_UpdateBrainDrawdownTracking(ticket, isBuy, openPx, curPrice, slDist, curSL);
+
       // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — one clean status line per position,
       // logged BEFORE any close decision runs so it always reflects the state
       // that decision was made from (not "healthy" logged after a close).
@@ -31456,6 +31617,44 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    double worstFloatingPnl = 0.0;
    int secondsNegative = 0;
    XAU_PopTradeQuality(posId, worstFloatingPnl, secondsNegative);
+
+   // v6.25.25 TradeBrain learning system (Phase 1, collect-only): pop this
+   // position's drawdown/timing-milestone tracking into the pending
+   // globals XAU_AppendTradeBrain reads for its CLOSE row -- same
+   // side-channel pattern this file already uses for g_lastEntryQ_* (see
+   // that struct's own comment for why: avoids touching
+   // XAU_AppendTradeBrain's widely-used by-reference-heavy signature).
+   {
+      XAU_TradeBrainDrawdownTrack ddTrack;
+      bool ddFound = XAU_PopBrainDrawdownTracking(posId, ddTrack);
+      g_pendingBrainDD_Found = ddFound;
+      if(ddFound)
+      {
+         g_pendingBrainDD_MaeGold = ddTrack.maeGoldPrice;
+         g_pendingBrainDD_MfeGold = ddTrack.mfeGoldPrice;
+         g_pendingBrainDD_InternalR = ddTrack.internalRDistanceAtEntry;
+         g_pendingBrainDD_SecondsToMAE = ddTrack.timeOfMAE > 0 ? (int)(ddTrack.timeOfMAE - ddTrack.entryTime) : -1;
+         g_pendingBrainDD_SecondsNegativeTotal = ddTrack.everNegative ? (int)(ddTrack.lastNegativeAt - ddTrack.firstNegativeAt) : 0;
+         g_pendingBrainDD_Time01R = ddTrack.hit01R ? (int)(ddTrack.time01R - ddTrack.entryTime) : -1;
+         g_pendingBrainDD_Time02R = ddTrack.hit02R ? (int)(ddTrack.time02R - ddTrack.entryTime) : -1;
+         g_pendingBrainDD_Time04R = ddTrack.hit04R ? (int)(ddTrack.time04R - ddTrack.entryTime) : -1;
+         g_pendingBrainDD_Time05R = ddTrack.hit05R ? (int)(ddTrack.time05R - ddTrack.entryTime) : -1;
+         // "Recovered after meaningful drawdown": went negative by at least
+         // 0.2R at some point, but closed net positive.
+         bool wentMeaningfullyNegative = ddTrack.internalRDistanceAtEntry > 0.0 &&
+                                          (ddTrack.maeGoldPrice / ddTrack.internalRDistanceAtEntry) >= 0.2;
+         g_pendingBrainDD_RecoveredAfterDrawdown = (wentMeaningfullyNegative && profit > 0.0);
+         g_pendingBrainDD_LastKnownBrokerSL = ddTrack.lastKnownBrokerSL;
+      }
+      else
+      {
+         g_pendingBrainDD_MaeGold = 0.0; g_pendingBrainDD_MfeGold = 0.0; g_pendingBrainDD_InternalR = 0.0;
+         g_pendingBrainDD_SecondsToMAE = -1; g_pendingBrainDD_SecondsNegativeTotal = -1;
+         g_pendingBrainDD_Time01R = -1; g_pendingBrainDD_Time02R = -1; g_pendingBrainDD_Time04R = -1; g_pendingBrainDD_Time05R = -1;
+         g_pendingBrainDD_RecoveredAfterDrawdown = false;
+         g_pendingBrainDD_LastKnownBrokerSL = 0.0;
+      }
+   }
    if(worstFloatingPnl < -1.0 || secondsNegative > 0)
    {
       double recoveryQuality = profit > 0.0 && worstFloatingPnl < 0.0 ? profit / MathAbs(worstFloatingPnl) : 0.0;
@@ -34007,6 +34206,31 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
       XAU_CsvAppendField(header, "closeDealFee");
       XAU_CsvAppendField(header, "netProfitIncludingFees");
       XAU_CsvAppendField(header, "executionAnomalyQuarantine");
+      // v6.25.25 TradeBrain learning system (Phase 1 baseline telemetry).
+      // maeR/mfeR are Gold-price-distance / internalRDistanceAtEntry --
+      // internalRDistanceAtEntry is frozen from the SAME
+      // g_campaign[slot].ownerEffectiveHardStopDistance reference the SL-
+      // independence fix already established elsewhere in this file; NEVER
+      // the fixed broker SL distance (InpStopLossGoldMove). outcomeLabel is
+      // the trustworthy-for-learning classification (NORMAL_STRATEGY_WIN/
+      // LOSS/BREAKEVEN vs EXECUTION_OUTLIER/GAP_SLIPPAGE_OUTLIER/
+      // DATA_INCOMPLETE), computed from the existing executionAnomaly
+      // detection above -- no new anomaly-detection logic, just a label on
+      // top of what this function already computes.
+      XAU_CsvAppendField(header, "maeGoldPrice");
+      XAU_CsvAppendField(header, "mfeGoldPrice");
+      XAU_CsvAppendField(header, "internalRDistanceAtEntry");
+      XAU_CsvAppendField(header, "maeR");
+      XAU_CsvAppendField(header, "mfeR");
+      XAU_CsvAppendField(header, "secondsToMAE");
+      XAU_CsvAppendField(header, "secondsNegativeTotal");
+      XAU_CsvAppendField(header, "secondsTo01R");
+      XAU_CsvAppendField(header, "secondsTo02R");
+      XAU_CsvAppendField(header, "secondsTo04R");
+      XAU_CsvAppendField(header, "secondsTo05R");
+      XAU_CsvAppendField(header, "recoveredAfterDrawdown");
+      XAU_CsvAppendField(header, "drawdownTrackingFound");
+      XAU_CsvAppendField(header, "outcomeLabel");
       FileWriteString(h, header + "\r\n");
    }
 
@@ -34093,7 +34317,21 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
       brokerDealReason=EnumToString((ENUM_DEAL_REASON)HistoryDealGetInteger(closeDeal,DEAL_REASON));
       closeDealFee=HistoryDealGetDouble(closeDeal,DEAL_FEE);
    }
-   double requestedSL=r.originalStructuralSL>0.0?r.originalStructuralSL:r.sl;
+   // v6.25.25 TradeBrain execution-anomaly classifier: use the correctly
+   // LIVE-tracked broker SL (g_pendingBrainDD_LastKnownBrokerSL, populated
+   // every tick from posInfo.StopLoss() in the SAME read ManagePositions'
+   // own loop already performs) as the reference, not the vestigial
+   // r.originalStructuralSL legacy field (which predates the fixed-Gold-
+   // move-SL policy this branch already uses and would falsely flag every
+   // ordinary fixed-SL stop-out as an "anomaly" -- see
+   // EXECUTION_OUTLIER_INVESTIGATION.md on experiment/v62525-m5-tradebrain-learning
+   // for the full real-data investigation this fix is based on). This
+   // branch's OWN TradeBrain model is built on the corrected logic from day
+   // one -- r.sl (entry-time fixed SL) is kept only as a defensive fallback
+   // for the near-impossible case where no drawdown-tracking tick was ever
+   // recorded before close.
+   double requestedSL = (eventName=="CLOSE" && g_pendingBrainDD_Found && g_pendingBrainDD_LastKnownBrokerSL>0.0)
+                         ? g_pendingBrainDD_LastKnownBrokerSL : r.sl;
    double slippageBeyondSL=0.0;
    if(eventName=="CLOSE" && requestedSL>0.0 && exitPrice>0.0)
       slippageBeyondSL=r.dir>0?MathMax(0.0,requestedSL-exitPrice):MathMax(0.0,exitPrice-requestedSL);
@@ -34114,6 +34352,59 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
    XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(closeDealFee,2):"");
    XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(profit,2):"");
    XAU_CsvAppendField(row, executionAnomaly?"Y":"N");
+
+   // v6.25.25 TradeBrain learning system: only meaningful on a CLOSE row
+   // (the pending globals are set immediately before XAU_AppendTradeBrain
+   // is called with eventName=="CLOSE" -- see the call site). Blank on
+   // every other event type so a partially-populated OPEN/CHECKPOINT row
+   // can never be mistaken for real close-time evidence.
+   double maeR = (eventName=="CLOSE" && g_pendingBrainDD_Found && g_pendingBrainDD_InternalR > 0.0)
+                 ? g_pendingBrainDD_MaeGold / g_pendingBrainDD_InternalR : 0.0;
+   double mfeR = (eventName=="CLOSE" && g_pendingBrainDD_Found && g_pendingBrainDD_InternalR > 0.0)
+                 ? g_pendingBrainDD_MfeGold / g_pendingBrainDD_InternalR : 0.0;
+   string outcomeLabel = "";
+   if(eventName=="CLOSE")
+   {
+      if(!g_pendingBrainDD_Found)
+         outcomeLabel = "DATA_INCOMPLETE";
+      else if(executionAnomaly && slippageBeyondSLR >= 0.25)
+         outcomeLabel = "EXECUTION_OUTLIER";
+      else if(executionAnomaly && executionSessionGapSeconds >= 300)
+         outcomeLabel = "GAP_SLIPPAGE_OUTLIER";
+      // Substring-containment outcome classification (ported already-
+      // corrected from experiment/v62525-m5-tradebrain-learning checkpoint
+      // 3): `outcome` is not always the bare "WIN"/"LOSS"/"BREAK_EVEN"
+      // string -- this file's own outcome classifier (see the
+      // "outcome = ..." assignments above) refines it into
+      // WIN_AFTER_DEEP_DD, WEAK_RECOVERY_WIN, APLUS_PROTECTED_BE,
+      // APLUS_GIVEBACK_LOSS, and a SEPARATE post-restart-reconciliation
+      // call site uses "BE" instead of "BREAK_EVEN". This branch's own
+      // model is built on the corrected substring-containment logic from
+      // day one, not the exact-match version that was found buggy on the
+      // M5 branch's first real replay.
+      else if(StringFind(outcome, "WIN") >= 0)
+         outcomeLabel = "NORMAL_STRATEGY_WIN";
+      else if(StringFind(outcome, "LOSS") >= 0)
+         outcomeLabel = "NORMAL_STRATEGY_LOSS";
+      else if(outcome == "BREAK_EVEN" || outcome == "BE" || StringFind(outcome, "_BE") >= 0)
+         outcomeLabel = "NORMAL_STRATEGY_BREAKEVEN";
+      else
+         outcomeLabel = "DATA_INCOMPLETE"; // genuinely unrecognized outcome string -- fail toward "don't trust this row" per the owner's evidence-validity rule
+   }
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(g_pendingBrainDD_MaeGold,5):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(g_pendingBrainDD_MfeGold,5):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(g_pendingBrainDD_InternalR,5):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(maeR,3):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(mfeR,3):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?(string)g_pendingBrainDD_SecondsToMAE:"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?(string)g_pendingBrainDD_SecondsNegativeTotal:"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?(string)g_pendingBrainDD_Time01R:"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?(string)g_pendingBrainDD_Time02R:"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?(string)g_pendingBrainDD_Time04R:"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?(string)g_pendingBrainDD_Time05R:"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?(g_pendingBrainDD_RecoveredAfterDrawdown?"Y":"N"):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?(g_pendingBrainDD_Found?"Y":"N"):"");
+   XAU_CsvAppendField(row, outcomeLabel);
    FileWriteString(h, row + "\r\n");
    FileClose(h);
 
