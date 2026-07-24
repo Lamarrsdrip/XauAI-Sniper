@@ -97,5 +97,8 @@ def test_command_center_routing_replaces_cloud_public_route():
     assert "path=\"/command/dashboard\"" in app
     assert "to=\"/command\"" in app
     assert "copy trading hub" not in landing
-    assert "Buy the licensed XAU AI Sniper EA" in landing
-    assert "XAU AI Sniper Command Center" in auth
+    # XauCloud rebrand (audits/xaucloud/03_rebrand_ledger.md): these were
+    # renamed from "XAU AI Sniper" -- updated here to match, not a
+    # functional regression.
+    assert "Buy the licensed XauCloud EA" in landing
+    assert "XauCloud Command Center" in auth
