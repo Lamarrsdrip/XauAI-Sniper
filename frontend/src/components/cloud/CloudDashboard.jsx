@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
-import AIThoughtFeed, { CurrentTradePanel } from "./AIThoughtFeed";
+import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import M10VsOutlookCard from "./M10VsOutlookCard";
 import { API } from "@/lib/api";
@@ -692,7 +692,14 @@ export default function CloudDashboard() {
   const online      = Boolean(status && !status.offline && heartbeat.account_number);
   const tradingOk   = Boolean(heartbeat.algo_trading && heartbeat.trading_allowed && heartbeat.mt5_connected);
   const statusText  = online ? heartbeat.bot_state||"ONLINE" : "NO HEARTBEAT";
-  const eaVersion   = heartbeat.ea_version || licenseInfo.ea_version || status?.license?.ea_version || "Waiting";
+  // Customer-facing product identity -- ALWAYS from the authoritative
+  // release manifest via status.release, never the raw heartbeat.ea_version
+  // (an internal EA build/experiment string, e.g.
+  // "V6.25.24_M10_FIXED10SL_EXPERIMENT"). The raw value remains available
+  // as internalBuildName for Support Diagnostics only (SettingsPage).
+  const eaVersion         = status?.release?.public_display_name || "XauCloud";
+  const internalBuildName = heartbeat.ea_version || licenseInfo.ea_version || status?.license?.ea_version || "";
+  const productionStatus  = status?.production_status || null;
   // v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- this used to be
   // `[base-d*1.4, base-d, base-d*0.55, base-d*0.2, equity]`, a made-up
   // 5-point interpolation from the CURRENT balance/equity/daily_pnl, not
@@ -718,7 +725,7 @@ export default function CloudDashboard() {
 
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion}>
-      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} openCommand={setModalCommand} />}
+      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} />}
       {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} />}
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
@@ -992,32 +999,86 @@ function M30ConsensusCard({ events, heartbeat }) {
   );
 }
 
-// Mobile "open-trade summary" (owner spec: home screen must answer "is there
-// an open trade" without the user leaving Home). Reuses the exact same
-// already-audited CurrentTradePanel component and the exact same
-// /cloud/monitor/current-opinion endpoint AIThoughtFeed's full view uses on
-// the Trading tab -- no new data source, no invented fields, just an
-// additional mount point for genuine EA-reported trade-thesis data.
-function HomeOpenTradeSummary({ linked, online, onForceClose }) {
+// Compact Home "open-position summary" -- owner spec removed the full "Open
+// Trade Thinking" dashboard (ticket/entry/SL/TP/peak-profit/hold-probability
+// grid + Force Close) from Home entirely. Full detail + Force Close now live
+// only under Trading -> Open Trades -> Trade Details (AIThoughtFeed's
+// CurrentTradePanel, still mounted there unchanged). This reuses the same
+// genuine /cloud/monitor/current-opinion evidence -- no new data source --
+// but renders only symbol/direction/P&L/protected status, never the removed
+// fields, and never a Force Close control.
+function HomeOpenPositionSummary({ linked, online, setActive }) {
   const [opinion, setOpinion] = useState(null);
-  const [loading, setLoading] = useState(true);
 
   const fetchOpinion = useCallback(async () => {
-    if (!linked || !online) { setLoading(false); return; }
+    if (!linked || !online) return;
     try {
       const r = await commandAxios.get("/cloud/monitor/current-opinion", { params: { _t: Date.now() } });
       setOpinion(r.data);
     } catch { /* keep last-known state on transient failure */ }
-    finally { setLoading(false); }
   }, [linked, online]);
 
   useEffect(() => { fetchOpinion(); const id = setInterval(fetchOpinion, 8000); return () => clearInterval(id); }, [fetchOpinion]);
 
-  if (!linked || !online || loading || !opinion?.open) return null;
-  return <CurrentTradePanel opinion={opinion} onForceClose={onForceClose} />;
+  if (!linked || !online || !opinion?.open) return null;
+  const direction = String(opinion.direction || "").toUpperCase();
+  const pnl = Number(opinion.floating_pl || 0);
+  const isProtected = Number(opinion.protected_profit || 0) > 0;
+
+  return (
+    <div className={`${CARD} p-4`} data-testid="home-open-position-summary">
+      <div className="flex items-center justify-between">
+        <span className={MONO_LABEL}>Open Position</span>
+        {isProtected && (
+          <span className="rounded-full border border-emerald-400/25 bg-emerald-300/[0.08] px-2 py-0.5 text-[10px] font-bold text-emerald-300">Protected</span>
+        )}
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`font-mono text-[13px] font-bold ${direction === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{direction || "—"}</span>
+          <span className="truncate text-[13px] text-white/70">{opinion.symbol || "XAUUSD"}</span>
+        </div>
+        <span className={`flex-none font-mono text-[13px] font-bold ${pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{money(pnl)}</span>
+      </div>
+      <button onClick={() => setActive("trading")} className="mt-3 w-full rounded-xl border border-white/[0.08] bg-white/[0.03] py-2 text-[11px] font-semibold text-white/70 transition hover:border-amber-300/25 hover:text-amber-200">
+        View Trade
+      </button>
+    </div>
+  );
 }
 
-function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh, openCommand }) {
+// Compact Home "recent activity" -- owner spec: Home must show genuine
+// recent activity without the removed raw AI-reasoning/blocker feed. Reuses
+// the same `events` data HomePage already receives (no new API call),
+// filtered to plain-language trade lifecycle events only.
+function HomeRecentActivity({ events = [], onOpenFull }) {
+  const meaningful = (events || [])
+    .filter((e) => ["entries", "exits"].includes(eventCategory(e)))
+    .slice(0, 3);
+  if (!meaningful.length) return null;
+  return (
+    <div className={`${CARD} p-4`} data-testid="home-recent-activity">
+      <div className="flex items-center justify-between">
+        <span className={MONO_LABEL}>Recent Activity</span>
+        <button onClick={onOpenFull} className="text-[10px] font-semibold text-amber-300/70 transition hover:text-amber-300">View all</button>
+      </div>
+      <div className="mt-3 space-y-2">
+        {meaningful.map((e, i) => {
+          const cat = eventCategory(e);
+          const label = cat === "entries" ? "Trade opened" : "Trade closed";
+          return (
+            <div key={e.id || i} className="flex items-center justify-between gap-3 text-[12px]">
+              <span className="truncate text-white/70">{label} · {e.symbol || getEventField(e, "symbol", "XAUUSD")}</span>
+              <span className="flex-none font-mono text-[10px] text-white/30">{relativeTime(e.ts)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh }) {
   const [homeOutlook, setHomeOutlook] = useState(null);
   const [outlookStatus, setOutlookStatus] = useState({ loading:true, requestFailed:false });
   const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
@@ -1045,7 +1106,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
           <div className="min-w-0">
             <div className={`mb-2 flex items-center gap-2 ${MONO_LABEL}`}>
               {online
-                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {heartbeat.timeframe||"UNKNOWN"} · {heartbeat.market_mode==="INDEX_MODE"?`Index Mode (${heartbeat.index_profile||"GENERIC_INDEX"})`:"Gold Mode"} · Live</>
+                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {status?.production_status?.display_timeframe||"M10"} · {heartbeat.market_mode==="INDEX_MODE"?`Index Mode (${heartbeat.index_profile||"GENERIC_INDEX"})`:"Gold Mode"} · Live</>
                 : <><Wifi className="h-3 w-3" />No connection</>}
             </div>
             <h1 className="text-[2rem] font-black tracking-tight leading-none">{botState}</h1>
@@ -1083,10 +1144,6 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         </div>
       </div>
 
-      {/* Open-trade summary: only appears when a trade is genuinely open --
-          reuses the same audited component/endpoint as the Trading tab. */}
-      <HomeOpenTradeSummary linked={Boolean(licenseInfo.activation_key)} online={online} onForceClose={openCommand} />
-
       <AIMarketOutlookCard
         linked={Boolean(licenseInfo.activation_key)}
         online={online}
@@ -1104,13 +1161,16 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         requestFailed={outlookStatus.requestFailed}
       />
 
-      {/* Recent activity: condensed, plain-language -- reuses the same
-          compact AIThoughtFeed view already built for this purpose (skips
-          the heavier current-opinion/bot-status fetches compact mode
-          already omits). "Open full feed" hands off to the Activity tab. */}
-      {Boolean(licenseInfo.activation_key) && (
-        <AIThoughtFeed linked={Boolean(licenseInfo.activation_key)} compact onOpenFull={() => setActive("activity")} />
-      )}
+      {/* Compact open-position summary: only appears when a trade is
+          genuinely open. Full detail + Force Close now live only under
+          Trading -> Open Trades -> Trade Details -- this never recreates
+          the removed Open Trade Thinking dashboard. */}
+      <HomeOpenPositionSummary linked={Boolean(licenseInfo.activation_key)} online={online} setActive={setActive} />
+
+      {/* Recent activity: genuine trade-lifecycle events only, plain
+          language -- the removed raw AI-reasoning/blocker feed lives on
+          under Trading (full AIThoughtFeed), not on Home. */}
+      <HomeRecentActivity events={events} onOpenFull={() => setActive("activity")} />
 
       {/* No license CTA */}
       {!licenseInfo.activation_key && (
@@ -1640,7 +1700,7 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
         </div>
         <Metric label="MT5 binding"    value={info?.account_binding||heartbeat.account_number||"Not bound"} detail={heartbeat.broker_server||"Waiting for EA"} icon={TerminalSquare} tone={heartbeat.account_number?"green":"amber"} />
         <Metric label="VPS binding"    value={info?.vps_binding||"Not bound"} detail="Optional" icon={Wifi} tone="blue" />
-        <Metric label="EA version"     value={heartbeat.ea_version||info?.ea_version||"Waiting"} detail={`Heartbeat ${relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}`} icon={Bot} tone={heartbeat.ea_version?"green":"neutral"} />
+        <Metric label="XauCloud version" value={status?.release?.public_display_name||"Waiting"} detail={`Heartbeat ${relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}`} icon={Bot} tone={heartbeat.ea_version?"green":"neutral"} />
       </div>
     </div>
   );
@@ -1706,7 +1766,10 @@ function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
               ["ML trusted",       String(heartbeat.ml_trusted||"false")],
               ["Hive verdict",     heartbeat.hive_verdict||"—"],
               ["EPF state",        heartbeat.epf_state||"—"],
-              ["EA version",       heartbeat.ea_version||"—"],
+              ["EA build (internal)", heartbeat.ea_version||"—"],
+              ["Build recognized",    String(status?.release?.reported_build_recognized ?? "—")],
+              ["Reported timeframe",  status?.production_status?.reported_timeframe||"—"],
+              ["Timeframe mismatch",  String(status?.production_status?.timeframe_mismatch ?? "—")],
               ["Account",          heartbeat.account_number||"—"],
               ["License status",   licenseInfo?.status||"—"],
               ["License key",      licenseInfo?.activation_key||"—"],

@@ -137,9 +137,18 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
               <span className={`font-mono text-[12px] font-bold ${style.text}`}>{dir.replace(/_/g, " ")}</span>
             </div>
             {dir !== "NO_VALID_OUTLOOK" && (
-              <span className="font-mono text-[11px] text-white/40">{outlook.confidence_pct}% confidence</span>
+              <span className="font-mono text-[11px] text-white/40">
+                {(outlook.confidence_category || "").replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase()) || `${outlook.confidence_pct}%`} confidence
+              </span>
             )}
           </div>
+          {(dir === "BUY" || dir === "SELL") && (
+            <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+              Manual advisory · not an automated XauCloud entry
+              {outlook.automated_entry_approved === false && " · Automated entry: not approved"}
+              {outlook.automated_entry_approved === true && " · Automated entry: approved"}
+            </p>
+          )}
           {/* Audit fix: was excluding NO_VALID_OUTLOOK/NEUTRAL/RANGE only,
               which INCLUDED TRANSITION -- inconsistent with the full page's
               `isDirectional = dir === "BUY" || dir === "SELL"` guard. The

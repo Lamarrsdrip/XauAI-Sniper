@@ -556,6 +556,20 @@ def _confidence_pct(c: ConfidenceComponents) -> int:
     return int(round(max(0.0, min(100.0, total))))
 
 
+# Customer-friendly confidence category, calibrated off this module's own
+# weighted composite (see _confidence_pct above), not an arbitrary 0-100
+# quartile split -- most components default to a 50-70 midpoint when the EA
+# hasn't supplied strong readings, so "Moderate" starts above that band.
+def _confidence_category(pct: int) -> str:
+    if pct < 35:
+        return "VERY_LOW"
+    if pct < 55:
+        return "LOW"
+    if pct < 75:
+        return "MODERATE"
+    return "HIGH"
+
+
 # ---------------------------------------------------------------------------
 # Entry zone / SL / targets — derived from real structure fields, not a
 # blind current-price or fixed-R-multiple guess.
@@ -792,6 +806,120 @@ async def _insert_outlook_atomically(db, doc: Dict, account: str, symbol: str, h
         return existing
 
 
+def _resolve_hourly_bias(canonical_m10: Dict, thesis: Dict) -> Dict:
+    """Pure directional-bias resolver for the Hourly Manual Outlook.
+
+    Answers "which side does the evidence favor this hour", independently of
+    whether the strict M10 automated engine approved an executable entry --
+    `canonical_m10["actionable"]` is automated execution readiness, not
+    "a direction exists". A healthy hour with real buy/sell pressure
+    evidence must always resolve to BUY or SELL here; only the caller's
+    upstream evidence/price checks (missing EA evidence, stale data, failed
+    price sanity) are allowed to withhold a direction entirely, via the
+    separate NO_VALID_OUTLOOK paths in generate_outlook_for_account.
+
+    Returns direction_label/direction, confidence (0-100) and its customer
+    category, and the automated-execution-status fields the Command Center
+    needs to explain "why didn't XauCloud enter" separately from the
+    manual bias itself.
+    """
+    raw_dir = canonical_m10.get("direction") or ""  # "" | "BUY" | "SELL" -- explicit EA candidate
+    actionable = bool(canonical_m10.get("actionable"))  # automated M10 execution-ready
+    automated_entry_approved = actionable
+    automated_block_reason = None if actionable else (canonical_m10.get("blocker_code") or canonical_m10.get("execution_status") or None)
+
+    buy_p = float(thesis.get("buy_pressure", 50.0) or 50.0)
+    sell_p = float(thesis.get("sell_pressure", 50.0) or 50.0)
+    pressure_gap = buy_p - sell_p  # positive = bullish pressure dominant
+    structure_state = str(thesis.get("structure", "") or "")
+
+    # v6.25.x owner directive -- the Hourly Manual Outlook is a directional
+    # ADVISORY, answered independently of whether the strict M10 automated
+    # engine approved an executable entry this hour. Gating direction on
+    # `actionable` conflates "no automated entry" with "no directional
+    # evidence", which is exactly why a healthy hour with real buy/sell
+    # pressure evidence used to be able to publish NEUTRAL. Direction now
+    # answers "which side does the evidence favor": an explicit EA
+    # candidate first (whether or not it was execution-approved), else the
+    # raw buy/sell pressure reading itself.
+    directional_conflict = None
+    directional_transformation_applied = False
+    if raw_dir in ("BUY", "SELL"):
+        direction_label = raw_dir
+    elif buy_p != sell_p:
+        direction_label = "BUY" if buy_p > sell_p else "SELL"
+    else:
+        # Genuine exact tie in the underlying evidence -- policy still
+        # requires a side (never NEUTRAL on healthy data); deterministic
+        # tiebreak, always capped to Very Low confidence below.
+        direction_label = "BUY"
+    direction = 1 if direction_label == "BUY" else -1
+
+    # v6.24.17 directional-consistency validator: a direction must never
+    # publish against a materially dominant opposite pressure reading unless
+    # structure documents a real override. Prevents the observed incident
+    # (published SELL while reasoning/evidence said "buy pressure
+    # significantly outweighs sell pressure"). Previously this collapsed the
+    # outlook to NEUTRAL/0% confidence, which contradicted its own
+    # reasoning text; now it flips to the pressure-dominant side instead --
+    # still never publishing the contradicted direction, but never erasing
+    # the bias either -- and confidence is reduced, not zeroed.
+    structural_override_bearish = structure_state in ("STRUCTURE_STRONGLY_SUPPORTS", "STRUCTURE_SUPPORTS") and direction == -1
+    structural_override_bullish = structure_state in ("STRUCTURE_STRONGLY_SUPPORTS", "STRUCTURE_SUPPORTS") and direction == 1
+    if direction_label == "SELL" and pressure_gap >= 15.0 and not structural_override_bearish:
+        directional_conflict = f"buy pressure ({buy_p:.0f}) outweighs sell pressure ({sell_p:.0f}) with no documented bearish structural override"
+    elif direction_label == "BUY" and pressure_gap <= -15.0 and not structural_override_bullish:
+        directional_conflict = f"sell pressure ({sell_p:.0f}) outweighs buy pressure ({buy_p:.0f}) with no documented bullish structural override"
+    if directional_conflict:
+        direction_label = "BUY" if pressure_gap > 0 else "SELL"
+        direction = 1 if direction_label == "BUY" else -1
+        directional_transformation_applied = True
+
+    market_regime = "TRANSITION" if directional_transformation_applied else str(
+        thesis.get("market_regime")
+        or thesis.get("regime")
+        or thesis.get("direction_stage")
+        or thesis.get("lifecycle")
+        or "WAITING"
+    ).upper()
+
+    components = _compute_confidence(direction, thesis, {})
+    evidence_strength = _confidence_pct(components)
+    canonical_confidence = canonical_m10.get("confidence") if (raw_dir == direction_label and not directional_transformation_applied) else None
+    confidence = round(canonical_confidence) if canonical_confidence is not None else evidence_strength
+    # Small evidence advantages must read as low confidence and large ones
+    # can read as high confidence, regardless of how strong the rest of the
+    # multi-factor composite looks -- the primary directional evidence gap
+    # is the ceiling, not just one 20%-weighted component among many.
+    pressure_gap_abs = abs(pressure_gap)
+    if pressure_gap_abs < 4.0:
+        confidence = min(confidence, 25)
+    elif pressure_gap_abs < 12.0:
+        confidence = min(confidence, 45)
+    elif pressure_gap_abs < 25.0:
+        confidence = min(confidence, 70)
+    if directional_transformation_applied:
+        # A resolved candidate-vs-pressure conflict is itself a
+        # confidence-reducing signal -- never publish it as High.
+        confidence = min(confidence, 65)
+    confidence = max(0, min(100, int(confidence)))
+    confidence_category = _confidence_category(confidence)
+
+    return {
+        "direction_label": direction_label,
+        "direction": direction,
+        "market_regime": market_regime,
+        "components": components,
+        "evidence_strength": evidence_strength,
+        "confidence": confidence,
+        "confidence_category": confidence_category,
+        "directional_conflict": directional_conflict,
+        "directional_transformation_applied": directional_transformation_applied,
+        "automated_entry_approved": automated_entry_approved,
+        "automated_block_reason": automated_block_reason,
+    }
+
+
 async def generate_outlook_for_account(license_key: str, account: str, account_id: str = "",
                                         is_late_catchup: bool = False, publication_key: str = "",
                                         publication_mode: str = "HOURLY", source_event_id: str = "") -> Optional[Dict]:
@@ -864,6 +992,8 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
             "current_price": current_price,
             "primary_direction": "NO_VALID_OUTLOOK",
+            "outlook_type": "HOURLY_MANUAL_BIAS",
+            "execution_authority": False,
             "no_valid_outlook_reason": no_valid_reason,
             "confidence_pct": 0,
             "confidence_components": ConfidenceComponents().model_dump(),
@@ -884,45 +1014,24 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     readiness = evidence.get("entry_readiness") or {}
     canonical_m10 = _canonical_m10_signal(evidence)
     action = canonical_m10["decision"]
-    raw_dir = canonical_m10["direction"]
-    actionable = canonical_m10["actionable"]
-    direction = 1 if actionable and raw_dir == "BUY" else (-1 if actionable and raw_dir == "SELL" else 0)
-    direction_label = "BUY" if direction == 1 else "SELL" if direction == -1 else "NEUTRAL"
-    market_regime = str(
-        thesis.get("market_regime")
-        or thesis.get("regime")
-        or thesis.get("direction_stage")
-        or thesis.get("lifecycle")
-        or "WAITING"
-    ).upper()
-    data_status = "LIVE"
 
-    # v6.24.17 directional-consistency validator: a direction must never
-    # publish against a materially dominant opposite pressure reading unless
-    # structure documents a real override. Prevents the observed incident
-    # (published SELL while reasoning/evidence said "buy pressure
-    # significantly outweighs sell pressure").
-    buy_p = float(thesis.get("buy_pressure", 50.0) or 50.0)
-    sell_p = float(thesis.get("sell_pressure", 50.0) or 50.0)
-    pressure_gap = buy_p - sell_p  # positive = bullish pressure dominant
-    structure_state = str(thesis.get("structure", "") or "")
-    structural_override_bearish = structure_state in ("STRUCTURE_STRONGLY_SUPPORTS", "STRUCTURE_SUPPORTS") and direction == -1
-    structural_override_bullish = structure_state in ("STRUCTURE_STRONGLY_SUPPORTS", "STRUCTURE_SUPPORTS") and direction == 1
-    directional_conflict = None
-    if direction_label == "SELL" and pressure_gap >= 15.0 and not structural_override_bearish:
-        directional_conflict = f"buy pressure ({buy_p:.0f}) outweighs sell pressure ({sell_p:.0f}) with no documented bearish structural override"
-    elif direction_label == "BUY" and pressure_gap <= -15.0 and not structural_override_bullish:
-        directional_conflict = f"sell pressure ({sell_p:.0f}) outweighs buy pressure ({buy_p:.0f}) with no documented bullish structural override"
+    bias = _resolve_hourly_bias(canonical_m10, thesis)
+    direction_label = bias["direction_label"]
+    direction = bias["direction"]
+    market_regime = bias["market_regime"]
+    components = bias["components"]
+    evidence_strength = bias["evidence_strength"]
+    confidence = bias["confidence"]
+    confidence_category = bias["confidence_category"]
+    directional_conflict = bias["directional_conflict"]
+    directional_transformation_applied = bias["directional_transformation_applied"]
+    automated_entry_approved = bias["automated_entry_approved"]
+    automated_block_reason = bias["automated_block_reason"]
     if directional_conflict:
-        logger.warning(f"OUTLOOK_DIRECTIONAL_CONFLICT | account={account} was={direction_label} buy_pressure={buy_p} sell_pressure={sell_p} structure={structure_state} -> no actionable signal")
-        direction_label = "NEUTRAL"
-        direction = 0
-        market_regime = "TRANSITION"
-
-    components = _compute_confidence(direction if direction != 0 else 1, thesis, evidence["entry_readiness"])
-    evidence_strength = _confidence_pct(components)
-    canonical_confidence = canonical_m10.get("confidence")
-    confidence = (round(canonical_confidence) if canonical_confidence is not None else evidence_strength) if direction_label in ("BUY", "SELL") else 0
+        buy_p = float(thesis.get("buy_pressure", 50.0) or 50.0)
+        sell_p = float(thesis.get("sell_pressure", 50.0) or 50.0)
+        logger.warning(f"OUTLOOK_DIRECTIONAL_CONFLICT | account={account} buy_pressure={buy_p} sell_pressure={sell_p} -> flipped to pressure-dominant side {direction_label}")
+    data_status = "LIVE"
     path = _expected_path(direction, thesis)
     setup_type = ("WITH_TREND_PULLBACK" if path.startswith(("PULLBACK", "RALLY"))
                  else "TREND_CONTINUATION" if path == "DIRECT_CONTINUATION"
@@ -987,6 +1096,8 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
             "current_price": current_price,
             "primary_direction": "NO_VALID_OUTLOOK",
+            "outlook_type": "HOURLY_MANUAL_BIAS",
+            "execution_authority": False,
             "no_valid_outlook_reason": "INTERNAL_DATA_INCONSISTENCY",
             "confidence_pct": 0,
             "confidence_components": ConfidenceComponents().model_dump(),
@@ -1047,6 +1158,7 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
             "hourly_slot": hourly_slot, "late_catchup": is_late_catchup,
             "expiry_at": (now + timedelta(hours=OUTLOOK_HORIZON_HOURS)).isoformat(),
             "current_price": current_price, "primary_direction": "NO_VALID_OUTLOOK",
+            "outlook_type": "HOURLY_MANUAL_BIAS", "execution_authority": False,
             "no_valid_outlook_reason": invalid_reason,
             "confidence_pct": 0, "confidence_components": ConfidenceComponents().model_dump(),
             "status": "INFORMATIONAL", "signal_state": SIGNAL_INFORMATIONAL,
@@ -1084,13 +1196,24 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "evidence_strength_pct": evidence_strength,
         "direction": direction,
         "directional_conflict": directional_conflict,
+        "directional_transformation_applied": directional_transformation_applied,
         "source_regime": evidence.get("regime", ""),
         "signal_source": canonical_m10.get("source"),
         "source_m10_decision": canonical_m10.get("decision"),
         "source_m10_bar_time": canonical_m10.get("bar_time"),
         "setup_type": setup_type,
         "confidence_pct": confidence,
+        "confidence_category": confidence_category,
         "confidence_components": components.model_dump(),
+        # Manual-advisory identity: this document is a directional opinion
+        # only. It carries zero automated execution authority and must
+        # never be interpreted as "XauCloud opened/approved a trade" -- see
+        # automated_entry_approved/automated_block_reason for the separate,
+        # real M10 automated-execution status this hour.
+        "outlook_type": "HOURLY_MANUAL_BIAS",
+        "execution_authority": False,
+        "automated_entry_approved": automated_entry_approved,
+        "automated_block_reason": automated_block_reason,
         "expected_path": path,
         "preferred_entry_zone_low": zone.get("preferred_entry_zone_low"),
         "preferred_entry_zone_high": zone.get("preferred_entry_zone_high"),

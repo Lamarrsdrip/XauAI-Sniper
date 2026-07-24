@@ -478,13 +478,25 @@ def test_outlook_has_price_sanity_gate_bounded_by_atr_not_fixed_dollars():
     assert "OUTLOOK_PRICE_SANITY_FAILED" in body
 
 
+def _resolve_hourly_bias_body() -> str:
+    fn = MO_SRC[MO_SRC.index("def _resolve_hourly_bias"):]
+    return fn[:fn.index("\n\nasync def generate_outlook_for_account")]
+
+
 def test_outlook_has_directional_consistency_gate():
-    body = _outlook_gen_body()
+    # v6.25.x refactor: the directional-consistency gate moved into the pure,
+    # independently-testable _resolve_hourly_bias() helper (called from
+    # generate_outlook_for_account, still asserted below), so this must look
+    # for it there. generate_outlook_for_account's own body still consumes
+    # its output via `directional_conflict = bias["directional_conflict"]`.
+    body = _resolve_hourly_bias_body()
     assert "directional_conflict" in body
     assert "TRANSITION" in body
     # both directions must be checked, not just one
     assert 'direction_label == "SELL"' in body
     assert 'direction_label == "BUY"' in body
+    assert "directional_conflict" in _outlook_gen_body()
+    assert "_resolve_hourly_bias(canonical_m10, thesis)" in _outlook_gen_body()
 
 
 def test_repair_function_never_overwrites_original_price_or_zone_fields():
@@ -587,3 +599,151 @@ def test_m10_quote_mapper_accepts_quote_outside_market_thesis():
     assert quote["valid"] is True
     assert quote["bid"] == 4052.4
     assert quote["ask"] == 4052.6
+
+
+# ---------------------------------------------------------------------------
+# Owner directive: the Hourly Manual Outlook must publish BUY or SELL for
+# every healthy evaluation window, independent of whether the strict M10
+# automated engine approved an executable entry. NEUTRAL/0%-confidence must
+# never appear merely because automated execution wasn't approved.
+# ---------------------------------------------------------------------------
+
+def _no_candidate_m10(actionable=False):
+    return {"direction": "", "actionable": actionable, "confidence": None,
+            "blocker_code": None, "execution_status": "NO_CANDIDATE"}
+
+
+def _candidate_m10(direction, actionable, blocker_code=None, confidence=72):
+    return {"direction": direction, "actionable": actionable, "confidence": confidence,
+            "blocker_code": blocker_code, "execution_status": "READY" if actionable else "BLOCKED"}
+
+
+def test_hourly_bias_never_returns_neutral_with_healthy_pressure_evidence():
+    for buy_p, sell_p in [(51, 49), (49, 51), (32, 68), (68, 32), (50, 50), (85, 15), (15, 85)]:
+        bias = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": buy_p, "sell_pressure": sell_p})
+        assert bias["direction_label"] in ("BUY", "SELL"), f"got {bias['direction_label']} for {buy_p}/{sell_p}"
+        assert bias["direction_label"] != "NEUTRAL"
+
+
+def test_hourly_bias_no_automated_candidate_still_produces_direction():
+    # This is the exact regression this fix targets: automated EA found no
+    # executable M10 candidate this hour, but real buy/sell pressure
+    # evidence exists -- must not collapse to NEUTRAL/0%.
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(actionable=False), {"buy_pressure": 68, "sell_pressure": 32})
+    assert bias["direction_label"] == "BUY"  # buy pressure dominant
+    assert bias["automated_entry_approved"] is False
+    assert bias["confidence"] > 0
+
+
+def test_hourly_bias_stronger_buy_evidence_cannot_display_sell():
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 68, "sell_pressure": 32})
+    assert bias["direction_label"] == "BUY"
+
+
+def test_hourly_bias_stronger_sell_evidence_cannot_display_buy():
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 32, "sell_pressure": 68})
+    assert bias["direction_label"] == "SELL"
+
+
+def test_hourly_bias_small_evidence_gap_is_very_low_confidence():
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 51, "sell_pressure": 49})
+    assert bias["direction_label"] == "BUY"
+    assert bias["confidence"] <= 25
+    assert bias["confidence_category"] == "VERY_LOW"
+
+
+def test_hourly_bias_exact_tie_is_deterministic_not_neutral():
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 50, "sell_pressure": 50})
+    assert bias["direction_label"] == "BUY"
+    assert bias["confidence_category"] == "VERY_LOW"
+
+
+def test_hourly_bias_larger_gap_yields_higher_confidence_than_small_gap():
+    small_gap = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 51, "sell_pressure": 49})
+    large_gap = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 20, "sell_pressure": 80})
+    assert large_gap["confidence"] > small_gap["confidence"]
+
+
+def test_hourly_bias_prefers_explicit_ea_candidate_over_pressure_when_not_conflicting():
+    # Automated EA has an explicit BUY candidate but it's not execution-ready
+    # (e.g. blocked by a LATE location gate) -- pressure is mildly against
+    # but under the 15-point conflict threshold. The candidate direction
+    # must still win, with automated status reported separately.
+    m10 = _candidate_m10("BUY", actionable=False, blocker_code="OWNER_LOCATION_LATE_BLOCK")
+    bias = mo._resolve_hourly_bias(m10, {"buy_pressure": 45, "sell_pressure": 55})
+    assert bias["direction_label"] == "BUY"
+    assert bias["automated_entry_approved"] is False
+    assert bias["automated_block_reason"] == "OWNER_LOCATION_LATE_BLOCK"
+    assert bias["directional_transformation_applied"] is False
+
+
+def test_hourly_bias_flips_to_pressure_side_on_real_conflict_never_neutral():
+    # EA candidate says SELL, but pressure overwhelmingly favors BUY (gap
+    # well past the 15-point conflict threshold, no structural override).
+    # Must flip to the pressure-dominant side, not collapse to NEUTRAL/0%.
+    m10 = _candidate_m10("SELL", actionable=True, confidence=80)
+    bias = mo._resolve_hourly_bias(m10, {"buy_pressure": 75, "sell_pressure": 25, "structure": ""})
+    assert bias["direction_label"] == "BUY"
+    assert bias["direction_label"] != "NEUTRAL"
+    assert bias["directional_transformation_applied"] is True
+    assert bias["directional_conflict"] is not None
+    assert bias["confidence"] <= 65  # conflict caps confidence, never zeroes it
+    assert bias["confidence"] > 0
+
+
+def test_hourly_bias_structural_override_prevents_conflict_flip():
+    m10 = _candidate_m10("SELL", actionable=True, confidence=80)
+    bias = mo._resolve_hourly_bias(m10, {"buy_pressure": 75, "sell_pressure": 25, "structure": "STRUCTURE_STRONGLY_SUPPORTS"})
+    assert bias["direction_label"] == "SELL"
+    assert bias["directional_transformation_applied"] is False
+
+
+def test_hourly_bias_automated_approval_surfaced_independently_of_direction():
+    m10 = _candidate_m10("SELL", actionable=True, confidence=80)
+    bias = mo._resolve_hourly_bias(m10, {"buy_pressure": 30, "sell_pressure": 70})
+    assert bias["direction_label"] == "SELL"
+    assert bias["automated_entry_approved"] is True
+    assert bias["automated_block_reason"] is None
+
+
+def test_hourly_outlook_docs_carry_manual_advisory_identity_fields():
+    # Every hourly outlook document (success and all NO_VALID_OUTLOOK
+    # branches) must self-identify as a zero-execution-authority manual
+    # advisory, distinct from the M10 automated execution signal.
+    assert MO_SRC.count('"outlook_type": "HOURLY_MANUAL_BIAS"') >= 3
+    assert MO_SRC.count('"execution_authority": False') >= 4
+    assert '"automated_entry_approved": automated_entry_approved' in MO_SRC
+    assert '"automated_block_reason": automated_block_reason' in MO_SRC
+
+
+def test_confidence_category_thresholds_are_monotonic_and_cover_0_to_100():
+    labels = [mo._confidence_category(p) for p in (0, 10, 34, 35, 54, 55, 74, 75, 100)]
+    assert labels == ["VERY_LOW", "VERY_LOW", "VERY_LOW", "LOW", "LOW", "MODERATE", "MODERATE", "HIGH", "HIGH"]
+
+
+# ---------------------------------------------------------------------------
+# Notification-volume root cause: _dispatch_hourly_notification only ever
+# sends when primary_direction is BUY/SELL. Before the _resolve_hourly_bias
+# fix above, generate_outlook_for_account collapsed to NEUTRAL every time
+# the automated M10 engine had no actionable candidate (the common case),
+# which silently suppressed the hourly notification too -- not a push/
+# OneSignal delivery failure, a direction-calculation bug upstream of it.
+# This test locks in that the notification gate itself is unchanged (still
+# correctly advisory-only for genuinely non-directional data) while the
+# bias resolver above now reliably supplies BUY/SELL for healthy evidence,
+# so the gate is actually reached far more often than before.
+# ---------------------------------------------------------------------------
+
+def test_hourly_notification_gate_fires_on_any_healthy_directional_bias():
+    start = MO_SRC.index("async def _dispatch_hourly_notification")
+    fn_body = MO_SRC[start:start + 600]
+    assert 'doc.get("primary_direction") in ("BUY", "SELL")' in fn_body
+    assert "ADVISORY_ONLY" in fn_body
+
+
+def test_resolved_bias_for_healthy_no_candidate_evidence_satisfies_notification_gate():
+    # Direct proof of the fix: a healthy hour with no automated candidate but
+    # real pressure evidence now produces a primary_direction the
+    # notification gate actually accepts, closing the suppression gap.
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(actionable=False), {"buy_pressure": 62, "sell_pressure": 38})
+    assert bias["direction_label"] in ("BUY", "SELL")

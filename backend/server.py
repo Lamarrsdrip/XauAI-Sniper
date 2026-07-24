@@ -1106,6 +1106,64 @@ def _current_ea_release() -> Optional[dict]:
     return manifest.get("releases", {}).get(current)
 
 
+# ---------------------------------------------------------------------------
+# Public (customer-facing) release identity -- the Command Center header must
+# never render whatever internal build/experiment string the currently
+# attached EA happens to self-report in its heartbeat (e.g.
+# "V6.25.24_M10_FIXED10SL_EXPERIMENT"). It must show a short, stable
+# "XauCloud-<version>" derived from the one authoritative release manifest
+# (backend/ea_releases/manifest.json), independent of live EA telemetry.
+# Raw EA-reported build details remain available separately for Support
+# Diagnostics/admin use -- never hidden, just not the customer headline.
+# ---------------------------------------------------------------------------
+
+PRODUCTION_TIMEFRAME = "M10"  # the only authoritative production decision mode; see manifest release notes
+
+
+def _normalize_release_version(v: str) -> str:
+    return str(v or "").strip().lstrip("vV")
+
+
+def _known_release_versions() -> set:
+    manifest = _load_ea_release_manifest()
+    return {_normalize_release_version(v) for v in (manifest.get("releases") or {}).keys()}
+
+
+def build_public_release_display(ea_version: str) -> dict:
+    """Authoritative publicProductName/publicVersion/publicDisplayName. Adding
+    a new release to manifest.json is the only thing that changes what this
+    renders -- no frontend component hardcodes a version string."""
+    release = _current_ea_release()
+    public_version = _normalize_release_version((release or {}).get("version") or "")
+    reported = _normalize_release_version(ea_version)
+    recognized = bool(reported) and reported in _known_release_versions()
+    return {
+        "public_product_name": "XauCloud",
+        "public_version": public_version or None,
+        "public_display_name": f"XauCloud-{public_version}" if public_version else "XauCloud",
+        "reported_build_recognized": recognized,
+    }
+
+
+def reconcile_production_timeframe(reported_timeframe: str, build_recognized: bool) -> dict:
+    """Prevents an unrecognized/experimental attached EA build from
+    overwriting the customer-facing production timeframe status. The product
+    is M10-only; a mismatch is real diagnostic signal (worth surfacing to
+    Support Diagnostics, never silently discarded) but must never be
+    displayed to a customer as if it were the legitimate live status --
+    so the customer-facing value always falls back to the authoritative
+    PRODUCTION_TIMEFRAME whenever the reported value can't be trusted."""
+    reported = str(reported_timeframe or "").strip().upper()
+    mismatch = bool(reported) and reported != PRODUCTION_TIMEFRAME
+    trust_reported = build_recognized and not mismatch
+    return {
+        "display_timeframe": reported if trust_reported else PRODUCTION_TIMEFRAME,
+        "reported_timeframe": reported or None,
+        "timeframe_mismatch": mismatch,
+        "build_recognized": build_recognized,
+    }
+
+
 @api_router.get("/download/info")
 async def download_info():
     """PUBLIC metadata only -- version, checksum, release notes, whether a
@@ -5855,11 +5913,19 @@ async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
         {"_id": 0}, sort=[("ts", -1)]) if activity_scope else None
     last_error = await db.cloud_bot_activity.find_one(
         {**activity_scope, "severity": {"$in": ["ERROR", "CRITICAL"]}}, {"_id": 0}, sort=[("ts", -1)]) if activity_scope else None
+    release_display = build_public_release_display((hb or {}).get("ea_version", ""))
+    production_status = reconcile_production_timeframe(
+        (hb or {}).get("timeframe", ""), release_display["reported_build_recognized"],
+    )
     return {
         "status": status_label,
         "offline": offline,
         "heartbeat_age_sec": age_sec,
         "heartbeat": hb or {},
+        # Customer-facing identity -- always use these, never heartbeat.ea_version
+        # /heartbeat.timeframe directly, which are raw unvalidated EA telemetry.
+        "release": release_display,
+        "production_status": production_status,
         "license": {
             "linked": bool(lic),
             "activation_key": (lic or {}).get("pin", ""),
