@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.25.8",
+  "current_version": "v6.25.25",
   "releases": {
     "v6.25.2": {
       "version": "v6.25.2",
@@ -96,6 +96,18 @@
       "customer_filename": "XauCloud.ex5",
       "release_notes": "XauCloud production foundation: M10 decision authority (M30 confirmed dead/unreachable in this build), fixed configurable Gold-move broker SL (InpStopLossGoldMove) kept independent of internal R, own TradeBrain model. This session's audit fixed XC-002 (InpMaxReEntriesPerDay hard cap was declared but never enforced -- now enforced, adversarially reviewed, independently re-reviewed) and XC-001 (customer docs described a selectable M30 mode that is dead code -- corrected). Rebrand to XauCloud applied to all confirmed-safe user-facing surfaces; domain and internal compatibility identifiers unchanged (see audits/xaucloud/03_rebrand_ledger.md). Real isolated 60-day M10 tick replay (2026-05-22 to 2026-07-21, MetaQuotes-Demo, History Quality 100%, 219957 ticks): +$10,839.11 net, 116 trades, 68.10% win rate, PF 1.43, max drawdown 43.97%/44.98% (higher than the previously recorded 30-day fixed-SL run -- flagged, not explained away, see audits/xaucloud/08_60day_replay_results.md). Mac/VPS runtime attach-and-verify and a longer/out-of-sample replay window remain required before live promotion. CORRECTION 2026-07-24: the 60-day replay numbers cited above were later found to be from a synthetic-tick (Model=1) Tester run, not genuine real ticks. A same-binary real-tick (Model=4) rerun shows a materially worse result (-$3,406.54 net vs the +$10,839.11 originally reported). See audits/xaucloud/13_CORRECTION_synthetic_vs_real_tick_data.md.",
       "stable_status": false
+    },
+    "v6.25.25": {
+      "version": "v6.25.25",
+      "edition": "Permanent LOCATION_EXCELLENT / LOCATION_LATE automated-entry hard block (XauCloud production)",
+      "source_commit": "94c315be1da718e26e54225677a9068ac2bbf1a8",
+      "build_timestamp": "2026-07-24T16:31:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe build 6037, isolated MT5_Isolated sandbox; deployed to owner's Mac live Experts folder and VPS Experts folder, both hash-verified 11dba1cf9746c7852fe57ad0aedde264a83174cf7969e1ab70dba12dfa53c58a -- not yet attached to any chart, owner will attach manually)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.25.ex5",
+      "ex5_sha256": "11dba1cf9746c7852fe57ad0aedde264a83174cf7969e1ab70dba12dfa53c58a",
+      "customer_filename": "XauCloud.ex5",
+      "release_notes": "Owner permanent policy (2026-07-24): LOCATION_EXCELLENT and LOCATION_LATE are now an absolute, unconditional automated-entry hard block, reversing the v6.25.22 removal. Implemented inside the single existing XAU_OwnerEntryPermission choke point (the sole gate for CORE/RE_ENTRY/PYRAMID/COUNTER_EXCURSION at both CANDIDATE_ACCEPTANCE and FINAL_EXECUTION), plus an independent XAU_OwnerLocationFinalAssertion post-fill check at all three trade.Buy/trade.Sell execution points. Real-tick (Model=4, 23,648,730 ticks) 60-day replay, identical window/settings before and after: baseline net -$3,406.54 / PF 0.84 / 122 trades / 66.10%-66.92% drawdown -> blocked net +$12,287.43 / PF 1.39 / 108 trades / 29.77%-33.54% drawdown. Zero OWNER_LOCATION_HARD_BLOCK_ASSERTION_FAILURE across the full run log -- excellentExecuted=0 and lateExecuted=0 held for the entire replay. 29 new regression tests, zero new failures in the existing suite. See audits/xaucloud/15_owner_location_permanent_hardblock_m10.md for full detail. No other strategy change in this release: M10 signal generation, fixed Gold SL, internal R, lot sizing, GENERAL exits, the 600s extension, and session/news/breakout logic are byte-for-byte unchanged from v6.25.24.",
+      "stable_status": true
     }
   }
 }
