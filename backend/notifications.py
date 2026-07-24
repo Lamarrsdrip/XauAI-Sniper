@@ -426,12 +426,69 @@ def _coerce_send_result(result: tuple) -> tuple:
     return ok, failure_class, {"http_status": None, "message_id": None, "errors": None, "warnings": None}
 
 
+HEARTBEAT_STALE_SECONDS = 90  # same convention as server.py cloud_monitor_status's own "EA heartbeat" tile
+
+
+async def _market_open_and_bot_connected(account: str, now: Optional[datetime] = None) -> tuple:
+    """v6.25.29 owner directive 2026-07-24: an Outlook push must only ever
+    fire while (a) the gold market is genuinely open and (b) this account's
+    own EA has a fresh heartbeat -- the owner's exact complaint was
+    notifications firing while the bot was offline during a market-closed
+    weekend. Returns (allowed, reason) so the caller can log exactly why a
+    send was suppressed rather than silently doing nothing.
+
+    Market-open check: XAUUSD/forex is closed roughly Friday 21:00 UTC ->
+    Sunday 21:00 UTC. Broker-exact open/close can vary by up to an hour
+    depending on server timezone/DST; that tolerance is acceptable here
+    because this only ever suppresses a notification, never a trading
+    decision (the EA's own broker-side session/weekend gating is untouched
+    and independent of this check).
+
+    Bot-connected check reuses the exact same 90-second heartbeat-staleness
+    convention already used for the Command Center's own "EA heartbeat"
+    status tile (server.py cloud_monitor_status), queried against the same
+    cloud_bot_heartbeats collection, so "bot online" means the same thing
+    here as it does on the dashboard the owner is looking at.
+    """
+    now = now or datetime.now(timezone.utc)
+    weekday = now.weekday()  # Monday=0 ... Sunday=6
+    market_closed = (
+        weekday == 5
+        or (weekday == 4 and now.hour >= 21)
+        or (weekday == 6 and now.hour < 21)
+    )
+    if market_closed:
+        return False, "MARKET_CLOSED_WEEKEND"
+
+    if not account:
+        return False, "NO_ACCOUNT_CONTEXT"
+
+    import server as _srv
+    db = _db()
+    hb = await db.cloud_bot_heartbeats.find_one(
+        {"account_number": account}, {"_id": 0, "ts": 1}, sort=[("ts", -1)],
+    )
+    hb_time = _srv._dt_or_none((hb or {}).get("ts"))
+    if hb_time and hb_time.tzinfo is None:
+        hb_time = hb_time.replace(tzinfo=timezone.utc)
+    age_sec = (now - hb_time).total_seconds() if hb_time else None
+    if age_sec is None or age_sec > HEARTBEAT_STALE_SECONDS:
+        return False, "BOT_OFFLINE_NO_HEARTBEAT"
+    return True, ""
+
+
 async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> Optional[int]:
     """Send an Outlook event without allowing push failure to affect trading or Outlook generation."""
     try:
         db = _db()
         account = doc.get("account", "")
         outlook_id = doc.get("id", "")
+
+        allowed, suppress_reason = await _market_open_and_bot_connected(account)
+        if not allowed:
+            logger.info("OUTLOOK_NOTIFICATION_SUPPRESSED id=%s event=%s reason=%s account=%s",
+                        outlook_id, event, suppress_reason, account)
+            return None
         prefs_cursor = db.cloud_notification_prefs.find({"account": account})
         sent = 0
         async for prefs in prefs_cursor:
