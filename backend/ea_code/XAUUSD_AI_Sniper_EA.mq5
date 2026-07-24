@@ -7185,8 +7185,20 @@ int g_gateBlocks_EPF        = 0;
 int g_gateBlocks_OwnerExcellent = 0;
 int g_gateBlocks_OwnerBreakout  = 0;
 int g_gateBlocks_OwnerLate      = 0;
+int g_gateBlocks_OwnerLocationLate = 0;
 int g_totalSignals          = 0;
 int g_totalAllowed          = 0;
+
+// v6.25.25 OWNER PERMANENT POLICY: LOCATION_EXCELLENT and LOCATION_LATE are
+// hard-blocked from every automated entry root (see XAU_OwnerEntryPermission
+// below). These counters are the required invariant proof: Executed must
+// stay 0 for the life of the terminal, or the gate has a bypass.
+int g_ownerLocationExcellentCandidates = 0;
+int g_ownerLocationExcellentBlocked    = 0;
+int g_ownerLocationExcellentExecuted   = 0;
+int g_ownerLocationLateCandidates      = 0;
+int g_ownerLocationLateBlocked         = 0;
+int g_ownerLocationLateExecuted        = 0;
 
 // v6.25.24: exact one-candidate/one-terminal-outcome ledger. The old
 // "Unclassified" value subtracted unrelated phase counters from candidate
@@ -18494,6 +18506,7 @@ void CheckPyramidOpportunity()
    // fixed favorable-side destination.
    bool requestOk=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)
                        :trade.Sell(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why);
+   if(requestOk) XAU_OwnerLocationFinalAssertion(dir,"PYRAMID");
    uint pyramidRetcode=trade.ResultRetcode();
    ulong dealTicket=trade.ResultDeal();
    ulong posId=0;
@@ -22964,6 +22977,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       XAU_OwnerRegimeLabel(frozenEntryRegime),breakoutInversionApplied?"Y":"N",reason);
    if(signal == 1) requestOk = trade.Buy(lots, Symbol(), 0, sl, 0.0, ownerDirectionComment);
    else requestOk = trade.Sell(lots, Symbol(), 0, sl, 0.0, ownerDirectionComment);
+   if(requestOk) XAU_OwnerLocationFinalAssertion(signal, isManualOverride ? "MANUAL_FORCE" : reason);
 
    uint brokerRetcode = trade.ResultRetcode();
    ulong openedDealTicket = trade.ResultDeal();
@@ -36845,6 +36859,7 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    trade.SetExpertMagicNumber(InpCounterExcursionMagicNumber);
    bool requestOk = (counterDir == 1) ? trade.Buy(lots, Symbol(), 0, slPrice, tpPrice, comment)
                                        : trade.Sell(lots, Symbol(), 0, slPrice, tpPrice, comment);
+   if(requestOk) XAU_OwnerLocationFinalAssertion(counterDir, "COUNTER_EXCURSION");
    uint counterRetcode = trade.ResultRetcode();
    ulong dealTicket = trade.ResultDeal();
    ulong ticket = 0;
@@ -38693,15 +38708,37 @@ bool XAU_OwnerEntryPermission(string phase, string source, string grade,
                   candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN");
    }
 
-   // LOCATION_EXCELLENT is the strongest directional entry location. The old
-   // hard block contradicted the location engine and discarded nine candidates
-   // in the supplied replay. It is now eligible and continues through every
-   // normal breakout, timing, risk and broker authority below.
-   if(frozenOwnerLocation == LOCATION_EXCELLENT || liveOwnerLocation == LOCATION_EXCELLENT)
+   // v6.25.25 OWNER PERMANENT POLICY (2026-07-24): LOCATION_EXCELLENT and
+   // LOCATION_LATE are an absolute, unconditional automated-entry hard block,
+   // superseding the v6.25.22 removal below. This is not a score penalty, a
+   // grade override, or an advisory -- no AI/TradeBrain/StrongContext/grade
+   // authority downstream of this point may reopen it. The decisive location
+   // is whichever of frozen (immutable, captured at candidate creation --
+   // see XAU_EnsureEntryTimerStarted) or live (current bar, used only while
+   // no frozen value exists yet, i.e. CANDIDATE_ACCEPTANCE) is more current
+   // for this phase; checking both is deliberately conservative so neither a
+   // stale frozen read nor a live-only read can let a blocked location slip
+   // through at either enforcement layer.
+   bool ownerLocationIsExcellent = (frozenOwnerLocation == LOCATION_EXCELLENT || liveOwnerLocation == LOCATION_EXCELLENT);
+   bool ownerLocationIsLate      = (frozenOwnerLocation == LOCATION_LATE || liveOwnerLocation == LOCATION_LATE);
+   if(phase == "CANDIDATE_ACCEPTANCE")
    {
-      PrintFormat("OWNER_LOCATION_EXCELLENT_ALLOWED | phase=%s | source=%s | frozenUsed=%s | direction=%s | grade=%s",
-                  phase,source,usedFrozenLocation?"Y":"N",
-                  candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN",canonicalGrade);
+      if(ownerLocationIsExcellent) g_ownerLocationExcellentCandidates++;
+      if(ownerLocationIsLate)      g_ownerLocationLateCandidates++;
+   }
+   if(ownerLocationIsExcellent || ownerLocationIsLate)
+   {
+      reason = ownerLocationIsExcellent ? "OWNER_LOCATION_EXCELLENT_BLOCK" : "OWNER_LOCATION_LATE_BLOCK";
+      if(ownerLocationIsExcellent) { g_gateBlocks_OwnerExcellent++;     g_ownerLocationExcellentBlocked++; }
+      if(ownerLocationIsLate)      { g_gateBlocks_OwnerLocationLate++; g_ownerLocationLateBlocked++; }
+      PrintFormat("OWNER_LOCATION_HARD_BLOCK | phase=%s | source=%s | reason=%s | locationAtDecision=%s | frozenLocation=%s | liveLocation=%s | frozenUsed=%s | direction=%s | setup=%s | grade=%s | session=%s | regime=%s | reservationReleased=%s | orderSendReached=false",
+                  phase, source, reason,
+                  ownerLocationIsExcellent?"LOCATION_EXCELLENT":"LOCATION_LATE",
+                  frozenOwnerLocationName, liveOwnerLocationName, usedFrozenLocation?"Y":"N",
+                  candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN",
+                  candidateSetup, canonicalGrade, ownerSession, XAU_OwnerRegimeLabel(frozenOwnerRegime),
+                  "true");
+      return false;
    }
 
    // v6.25.20 owner hard policy: no breakout regime, setup family, source
@@ -38727,6 +38764,31 @@ bool XAU_OwnerEntryPermission(string phase, string source, string grade,
       return false;
    }
    return true;
+}
+
+// v6.25.25 OWNER PERMANENT POLICY -- independent second check, deliberately
+// NOT reusing XAU_OwnerEntryPermission's own internal state. Called from
+// every one of the three trade.Buy/trade.Sell execution points (PYRAMID,
+// CORE/RE_ENTRY, COUNTER_EXCURSION) immediately after a fill, so a future
+// edit that broke or skipped the upstream FINAL_EXECUTION gate would still
+// be caught here rather than silently shipping a blocked-location trade.
+// Under correct operation this never fires: g_ownerLocationExcellentExecuted
+// and g_ownerLocationLateExecuted must remain 0 for the life of the terminal.
+void XAU_OwnerLocationFinalAssertion(int direction, string source)
+{
+   ENUM_XAU_LOCATION_QUALITY loc = XAU_OwnerDirectionalLocation(direction, g_transitionDecision);
+   if(loc == LOCATION_EXCELLENT)
+   {
+      g_ownerLocationExcellentExecuted++;
+      PrintFormat("OWNER_LOCATION_HARD_BLOCK_ASSERTION_FAILURE | CRITICAL | source=%s | location=LOCATION_EXCELLENT | direction=%s | executedCount=%d | this must never be nonzero -- the FINAL_EXECUTION gate was bypassed",
+                  source, direction==1?"BUY":direction==-1?"SELL":"UNKNOWN", g_ownerLocationExcellentExecuted);
+   }
+   else if(loc == LOCATION_LATE)
+   {
+      g_ownerLocationLateExecuted++;
+      PrintFormat("OWNER_LOCATION_HARD_BLOCK_ASSERTION_FAILURE | CRITICAL | source=%s | location=LOCATION_LATE | direction=%s | executedCount=%d | this must never be nonzero -- the FINAL_EXECUTION gate was bypassed",
+                  source, direction==1?"BUY":direction==-1?"SELL":"UNKNOWN", g_ownerLocationLateExecuted);
+   }
 }
 
 // v6.24.17 CRITICAL FIX -- runtime-proven: all three call sites of this
