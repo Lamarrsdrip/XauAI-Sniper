@@ -290,10 +290,14 @@ def test_outlook_notification_respects_tier_gating():
         await _set_config("app-123", "key-abc")
         await srv.db.cloud_notification_prefs.insert_one(
             {"user_id": "user-7", "account": "acct-1", "tier": "HOURLY_ONLY"})
-        # TP2 is a result event -- HOURLY_ONLY must not receive it.
-        sent = await notif.send_outlook_notification(
-            {"id": "outlook-1", "account": "acct-1", "primary_direction": "BUY"},
-            event="TP2_HIT", min_tier="HOURLY_PLUS_RESULTS")
+        # v6.25.29: this test is about tier gating, not the market/bot-online
+        # gate added on top of it -- bypass that gate here so the two
+        # concerns stay independently testable.
+        with patch("notifications._market_open_and_bot_connected", new=AsyncMock(return_value=(True, ""))):
+            # TP2 is a result event -- HOURLY_ONLY must not receive it.
+            sent = await notif.send_outlook_notification(
+                {"id": "outlook-1", "account": "acct-1", "primary_direction": "BUY"},
+                event="TP2_HIT", min_tier="HOURLY_PLUS_RESULTS")
         assert sent == 0
         log = await srv.db.cloud_notification_log.find_one({"user_id": "user-7"})
         assert log is None
@@ -310,7 +314,10 @@ def test_outlook_notification_idempotent_on_duplicate_event():
         await srv.db.cloud_push_subscriptions.insert_one(_complete_device("user-8", "dev-8"))
         doc = {"id": "outlook-2", "account": "acct-2", "primary_direction": "BUY", "confidence_pct": 70}
         fake_client = _FakeAsyncClient(response=_fake_response(200, {"id": "n1", "recipients": 1}))
-        with patch("notifications.httpx.AsyncClient", fake_client):
+        # v6.25.29: bypass the market/bot-online gate -- this test is about
+        # idempotency, covered separately below.
+        with patch("notifications.httpx.AsyncClient", fake_client), \
+             patch("notifications._market_open_and_bot_connected", new=AsyncMock(return_value=(True, ""))):
             first = await notif.send_outlook_notification(doc, event="OUTLOOK_PUBLISHED", min_tier="HOURLY_ONLY")
             second = await notif.send_outlook_notification(doc, event="OUTLOOK_PUBLISHED", min_tier="HOURLY_ONLY")
         assert first == 1
@@ -318,6 +325,89 @@ def test_outlook_notification_idempotent_on_duplicate_event():
         count = await srv.db.cloud_notification_log.count_documents({"user_id": "user-8"})
         assert count == 1
         await _clear()
+    _run(go())
+
+
+def test_no_notification_when_market_closed_weekend_even_with_fresh_heartbeat():
+    async def go():
+        await _clear()
+        await srv.db.cloud_bot_heartbeats.delete_many({})
+        await _set_config("app-123", "key-abc")
+        await srv.db.cloud_notification_prefs.insert_one(
+            {"user_id": "user-9", "account": "acct-3", "tier": "HOURLY_ONLY"})
+        await srv.db.cloud_push_subscriptions.insert_one(_complete_device("user-9", "dev-9"))
+        # Fresh heartbeat (well within the 90s staleness window) -- proves
+        # the market-closed check alone is enough to suppress, independent
+        # of bot connectivity.
+        from datetime import datetime as _dt, timezone as _tz
+        saturday_noon_utc = _dt(2026, 7, 25, 12, 0, 0, tzinfo=_tz.utc)  # a real Saturday
+        await srv.db.cloud_bot_heartbeats.insert_one({
+            "account_number": "acct-3", "ts": (saturday_noon_utc).isoformat(),
+        })
+        doc = {"id": "outlook-3", "account": "acct-3", "primary_direction": "BUY"}
+        fake_client = _FakeAsyncClient(response=_fake_response(200, {"id": "n1", "recipients": 1}))
+        with patch("notifications.httpx.AsyncClient", fake_client):
+            sent = await notif.send_outlook_notification(
+                doc, event="OUTLOOK_PUBLISHED", min_tier="HOURLY_ONLY")
+        assert sent is None
+        count = await srv.db.cloud_notification_log.count_documents({"outlook_id": "outlook-3"})
+        assert count == 0
+        await _clear()
+        await srv.db.cloud_bot_heartbeats.delete_many({})
+    _run(go())
+
+
+def test_market_open_check_uses_injected_clock_deterministically():
+    async def go():
+        from datetime import datetime as _dt, timezone as _tz
+        # 2026-07-24 is a Friday. 20:00 UTC is before the 21:00 close.
+        friday_before_close = _dt(2026, 7, 24, 20, 0, 0, tzinfo=_tz.utc)
+        friday_after_close = _dt(2026, 7, 24, 22, 0, 0, tzinfo=_tz.utc)
+        saturday = _dt(2026, 7, 25, 12, 0, 0, tzinfo=_tz.utc)
+        sunday_before_open = _dt(2026, 7, 26, 12, 0, 0, tzinfo=_tz.utc)
+        sunday_after_open = _dt(2026, 7, 26, 22, 0, 0, tzinfo=_tz.utc)
+        monday = _dt(2026, 7, 27, 12, 0, 0, tzinfo=_tz.utc)
+
+        allowed, reason = await notif._market_open_and_bot_connected("", now=friday_after_close)
+        assert not allowed and reason == "MARKET_CLOSED_WEEKEND"
+        allowed, reason = await notif._market_open_and_bot_connected("", now=saturday)
+        assert not allowed and reason == "MARKET_CLOSED_WEEKEND"
+        allowed, reason = await notif._market_open_and_bot_connected("", now=sunday_before_open)
+        assert not allowed and reason == "MARKET_CLOSED_WEEKEND"
+        # These three should get PAST the market check (and then fail on the
+        # separate "no account"/"no heartbeat" check instead, proving the
+        # market gate itself correctly considers the market open here).
+        for open_time in (friday_before_close, sunday_after_open, monday):
+            allowed, reason = await notif._market_open_and_bot_connected("", now=open_time)
+            assert not allowed and reason == "NO_ACCOUNT_CONTEXT"
+    _run(go())
+
+
+def test_no_notification_when_bot_offline_even_though_market_open():
+    async def go():
+        await _clear()
+        await srv.db.cloud_bot_heartbeats.delete_many({})
+        await _set_config("app-123", "key-abc")
+        await srv.db.cloud_notification_prefs.insert_one(
+            {"user_id": "user-10", "account": "acct-4", "tier": "HOURLY_ONLY"})
+        await srv.db.cloud_push_subscriptions.insert_one(_complete_device("user-10", "dev-10"))
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        monday_noon = _dt(2026, 7, 27, 12, 0, 0, tzinfo=_tz.utc)
+        # Stale heartbeat: last seen 5 minutes ago, well past the 90s window.
+        stale_ts = (monday_noon - _td(minutes=5)).isoformat()
+        await srv.db.cloud_bot_heartbeats.insert_one({"account_number": "acct-4", "ts": stale_ts})
+        allowed, reason = await notif._market_open_and_bot_connected("acct-4", now=monday_noon)
+        assert not allowed and reason == "BOT_OFFLINE_NO_HEARTBEAT"
+
+        # Fresh heartbeat (30s old) with market open -- must be allowed.
+        fresh_ts = (monday_noon - _td(seconds=30)).isoformat()
+        await srv.db.cloud_bot_heartbeats.update_one(
+            {"account_number": "acct-4"}, {"$set": {"ts": fresh_ts}})
+        allowed, reason = await notif._market_open_and_bot_connected("acct-4", now=monday_noon)
+        assert allowed and reason == ""
+
+        await _clear()
+        await srv.db.cloud_bot_heartbeats.delete_many({})
     _run(go())
 
 
@@ -343,7 +433,10 @@ def test_transient_event_failure_retries_once_then_persists_dispatch_flag():
             (False, notif.TEMPORARY_DELIVERY_FAILURE),
             (True, None),
         ])
-        with patch("notifications._send_onesignal", sender), patch.object(mo, "_db", return_value=srv.db):
+        # v6.25.29: bypass the market/bot-online gate -- this test is about
+        # transient-failure retry semantics, covered separately above.
+        with patch("notifications._send_onesignal", sender), patch.object(mo, "_db", return_value=srv.db), \
+             patch("notifications._market_open_and_bot_connected", new=AsyncMock(return_value=(True, ""))):
             await mo._dispatch_signal_event(doc, "HALF_R_REACHED")
             after_failure = await srv.db.cloud_market_outlooks.find_one({"id": doc["id"]})
             assert not (after_failure.get("notification_flags") or {}).get("HALF_R_REACHED")
