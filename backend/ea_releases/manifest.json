@@ -87,14 +87,14 @@
     },
     "v6.25.24": {
       "version": "v6.25.24",
-      "edition": "90-day replay consolidated root repair and TradeBrain advisory seed (release candidate)",
-      "source_commit": "1b5be107d98903ff9d3d66f1a1bd860316c29970",
-      "build_timestamp": "2026-07-22T08:56:48Z",
-      "compiler_result": "0 errors, 0 warnings, 41257 ms elapsed (MetaEditor64.exe via Wine; exact source SHA-256 56c91c3db8de4d1d119b7df646a8ef81d210c8286b3d2728ff7a0f9d1ff700a9; focused v6.25.24 audit and UTF-16 extractor tests: 12 passed, 0 failed; post-repair 90-day real-tick replay, Mac runtime, and VPS verification pending)",
+      "edition": "M10 decision authority + fixed configurable Gold-move broker SL (XauCloud production foundation)",
+      "source_commit": "61ec3814527c0c57815b7e4cbd39745b2c19d40d",
+      "build_timestamp": "2026-07-24T09:48:00Z",
+      "compiler_result": "0 errors, 0 warnings, 42327 ms elapsed (MetaEditor64.exe build 6037, isolated MT5_Isolated sandbox -- NOT the live/attached terminal; Mac/VPS runtime verification still required, see audits/xaucloud/05_live_step_packages.md)",
       "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.24.ex5",
-      "ex5_sha256": "346bd2ccff573cde2e273eb356ea454887c7e33a3fe092501753d547545b1e26",
-      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.24.ex5",
-      "release_notes": "AUDITED RELEASE CANDIDATE ONLY; not the published download and not approved for uncontrolled real-money trading. Repairs the GENERAL profitable-giveback deadline authority conflict proven by position 212, makes TradeBrain a deterministic warning-only advisor seeded from the reconciled 90-day run, separates 4807 wait counters, and adds execution-anomaly telemetry/quarantine. The original replay reconciles to 155 trades, but the exact repaired EX5 still requires an isolated post-repair 90-day real-tick replay plus Mac/VPS hash and runtime proof before current_version or stable_status may be promoted.",
+      "ex5_sha256": "948aeee5d792df440c13bf455e2f876725a832eda154fc1de9e9eb86c711a06b",
+      "customer_filename": "XauCloud.ex5",
+      "release_notes": "XauCloud production foundation: M10 decision authority (M30 confirmed dead/unreachable in this build), fixed configurable Gold-move broker SL (InpStopLossGoldMove) kept independent of internal R, own TradeBrain model. This session's audit fixed XC-002 (InpMaxReEntriesPerDay hard cap was declared but never enforced -- now enforced, adversarially reviewed, independently re-reviewed) and XC-001 (customer docs described a selectable M30 mode that is dead code -- corrected). Rebrand to XauCloud applied to all confirmed-safe user-facing surfaces; domain and internal compatibility identifiers unchanged (see audits/xaucloud/03_rebrand_ledger.md). Real isolated 60-day M10 tick replay (2026-05-22 to 2026-07-21, MetaQuotes-Demo, History Quality 100%, 219957 ticks): +$10,839.11 net, 116 trades, 68.10% win rate, PF 1.43, max drawdown 43.97%/44.98% (higher than the previously recorded 30-day fixed-SL run -- flagged, not explained away, see audits/xaucloud/08_60day_replay_results.md). Mac/VPS runtime attach-and-verify and a longer/out-of-sample replay window remain required before live promotion.",
       "stable_status": false
     }
   }
