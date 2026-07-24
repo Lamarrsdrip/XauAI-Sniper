@@ -276,7 +276,7 @@ const ageText = (minutes) => {
 };
 
 // ─── Current Trade panel — "Open Trade Thinking" ───────────────────────────
-function CurrentTradePanel({ opinion, onForceClose }) {
+export function CurrentTradePanel({ opinion, onForceClose }) {
   if (!opinion || !opinion.open) {
     return (
       <div className="rounded-3xl border border-white/[0.07] bg-[#0d0e13] p-5" data-testid="current-trade-panel">

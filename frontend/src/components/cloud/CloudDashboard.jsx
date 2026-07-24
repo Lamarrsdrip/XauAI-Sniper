@@ -2,14 +2,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import {
-  Activity, AreaChart, BarChart3, Bot, Brain, CheckCircle2, CircleDollarSign,
+  Activity, AreaChart, BarChart3, Bot, Brain, CheckCircle2, ChevronDown, CircleDollarSign,
   Clock3, Copy, Flame, Gauge, History, Home, KeyRound, LineChart, Loader2,
   Lock, LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
   SlidersHorizontal, Square, TerminalSquare, TrendingUp, TrendingDown, Wifi, XCircle, AlertTriangle, Search, Zap,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
-import AIThoughtFeed from "./AIThoughtFeed";
+import AIThoughtFeed, { CurrentTradePanel } from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import M10VsOutlookCard from "./M10VsOutlookCard";
 import { API } from "@/lib/api";
@@ -718,7 +718,7 @@ export default function CloudDashboard() {
 
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion}>
-      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} />}
+      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} openCommand={setModalCommand} />}
       {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} />}
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
@@ -992,7 +992,32 @@ function M30ConsensusCard({ events, heartbeat }) {
   );
 }
 
-function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh }) {
+// Mobile "open-trade summary" (owner spec: home screen must answer "is there
+// an open trade" without the user leaving Home). Reuses the exact same
+// already-audited CurrentTradePanel component and the exact same
+// /cloud/monitor/current-opinion endpoint AIThoughtFeed's full view uses on
+// the Trading tab -- no new data source, no invented fields, just an
+// additional mount point for genuine EA-reported trade-thesis data.
+function HomeOpenTradeSummary({ linked, online, onForceClose }) {
+  const [opinion, setOpinion] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchOpinion = useCallback(async () => {
+    if (!linked || !online) { setLoading(false); return; }
+    try {
+      const r = await commandAxios.get("/cloud/monitor/current-opinion", { params: { _t: Date.now() } });
+      setOpinion(r.data);
+    } catch { /* keep last-known state on transient failure */ }
+    finally { setLoading(false); }
+  }, [linked, online]);
+
+  useEffect(() => { fetchOpinion(); const id = setInterval(fetchOpinion, 8000); return () => clearInterval(id); }, [fetchOpinion]);
+
+  if (!linked || !online || loading || !opinion?.open) return null;
+  return <CurrentTradePanel opinion={opinion} onForceClose={onForceClose} />;
+}
+
+function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh, openCommand }) {
   const [homeOutlook, setHomeOutlook] = useState(null);
   const [outlookStatus, setOutlookStatus] = useState({ loading:true, requestFailed:false });
   const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
@@ -1042,23 +1067,32 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         </div>
       </div>
 
+      {/* Mobile hierarchy (owner spec): equity/P&L get top billing right
+          under status, ahead of every other metric -- they answer "how am I
+          doing" before anything else does. */}
+      <div className="grid grid-cols-2 gap-3" data-testid="home-equity-pnl-row">
+        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-4">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.15em] text-white/35"><CircleDollarSign className="h-3 w-3" />Equity</div>
+          <div className="mt-1.5 text-[1.35rem] font-bold tracking-tight">{online?money(heartbeat.equity):"—"}</div>
+          <div className="mt-0.5 text-[11px] text-white/40">{online?`Balance ${money(heartbeat.balance)}`:"Not live"}</div>
+        </div>
+        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-4">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.15em] text-white/35"><TrendingUp className="h-3 w-3" />Today's P&L</div>
+          <div className={`mt-1.5 text-[1.35rem] font-bold tracking-tight ${online?(pnlPos?"text-emerald-300":"text-rose-300"):""}`}>{online?money(pnlNum):"—"}</div>
+          <div className="mt-0.5 text-[11px] text-white/40">{online&&pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"}</div>
+        </div>
+      </div>
+
+      {/* Open-trade summary: only appears when a trade is genuinely open --
+          reuses the same audited component/endpoint as the Trading tab. */}
+      <HomeOpenTradeSummary linked={Boolean(licenseInfo.activation_key)} online={online} onForceClose={openCommand} />
+
       <AIMarketOutlookCard
         linked={Boolean(licenseInfo.activation_key)}
         online={online}
         onOutlookChange={setHomeOutlook}
         onStatusChange={setOutlookStatus}
       />
-
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="home-summary-grid">
-        <Metric label="Equity" value={online?money(heartbeat.equity):"—"} detail={online?`Balance ${money(heartbeat.balance)}`:"Not live"} icon={CircleDollarSign} tone={online?"green":"neutral"} />
-        <Metric label="Today's P&L" value={online?money(pnlNum):"—"} detail={pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"} icon={TrendingUp} tone={pnlPos?"green":"red"} />
-        <Metric label="Open trades" value={online?openTrades:"—"} detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"} icon={History} tone={openTrades>0?"amber":"neutral"} />
-        <Metric label="Open risk" value={online?pct(ddNum):"—"} detail="Current floating drawdown" icon={Shield} tone={online?riskTone:"neutral"} />
-        <Metric label="Market bias" value={online?bias.label:"—"} detail="Latest fresh EA evidence" icon={Activity} tone={online?bias.tone:"neutral"} />
-        <Metric label="AI confidence" value={online&&conf>0?`${conf}%`:"—"} detail={conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"} icon={Brain} tone={conf>=70?"green":conf>0?"amber":"neutral"} />
-        <Metric label="Session" value={online?session.label:"—"} detail="Device UTC session" icon={Clock3} tone={online?session.tone:"neutral"} />
-        <Metric label="Trading status" value={online?botState:"Offline"} detail={tradingOk?"Broker trading enabled":"No new-trade authority"} icon={Bot} tone={online?stateTone:"neutral"} />
-      </div>
 
       {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
 
@@ -1070,12 +1104,38 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         requestFailed={outlookStatus.requestFailed}
       />
 
+      {/* Recent activity: condensed, plain-language -- reuses the same
+          compact AIThoughtFeed view already built for this purpose (skips
+          the heavier current-opinion/bot-status fetches compact mode
+          already omits). "Open full feed" hands off to the Activity tab. */}
+      {Boolean(licenseInfo.activation_key) && (
+        <AIThoughtFeed linked={Boolean(licenseInfo.activation_key)} compact onOpenFull={() => setActive("activity")} />
+      )}
+
       {/* No license CTA */}
       {!licenseInfo.activation_key && (
         <Empty title="Connect your license" body="Link your ASE license key once and live data from your MT5 account will stream here automatically." icon={KeyRound} />
       )}
 
       {online && <M30ConsensusCard events={events} heartbeat={heartbeat} />}
+
+      {/* Advanced details: secondary technical metrics kept out of the
+          primary above-the-fold hierarchy, available on demand rather than
+          competing for attention with equity/P&L/open-trade/outlook. */}
+      <details className="group rounded-2xl border border-white/[0.07] bg-white/[0.02] open:bg-white/[0.03]">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-[12px] font-semibold text-white/60 select-none">
+          Advanced details
+          <ChevronDown className="h-4 w-4 text-white/35 transition group-open:rotate-180" />
+        </summary>
+        <div className="grid grid-cols-2 gap-2 px-4 pb-4 sm:grid-cols-4" data-testid="home-summary-grid">
+          <Metric label="Open trades" value={online?openTrades:"—"} detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"} icon={History} tone={openTrades>0?"amber":"neutral"} />
+          <Metric label="Open risk" value={online?pct(ddNum):"—"} detail="Current floating drawdown" icon={Shield} tone={online?riskTone:"neutral"} />
+          <Metric label="Market bias" value={online?bias.label:"—"} detail="Latest fresh EA evidence" icon={Activity} tone={online?bias.tone:"neutral"} />
+          <Metric label="AI confidence" value={online&&conf>0?`${conf}%`:"—"} detail={conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"} icon={Brain} tone={conf>=70?"green":conf>0?"amber":"neutral"} />
+          <Metric label="Session" value={online?session.label:"—"} detail="Device UTC session" icon={Clock3} tone={online?session.tone:"neutral"} />
+          <Metric label="Trading status" value={online?botState:"Offline"} detail={tradingOk?"Broker trading enabled":"No new-trade authority"} icon={Bot} tone={online?stateTone:"neutral"} />
+        </div>
+      </details>
 
       {/* Quick nav — 3 cards */}
       <div className="grid grid-cols-3 gap-3">
