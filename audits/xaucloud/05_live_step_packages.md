@@ -1,18 +1,21 @@
 # XauCloud Live-Step Packages (Phase 8)
 
-These are the items this session genuinely cannot execute or verify (no live MT5 terminal,
-no MetaEditor/Wine toolchain, no production credentials, no real inbox, no load-testing
-infrastructure). Each package below states the exact command/config, the expected result,
-and the failure conditions to watch for. **I will inspect whatever evidence you return
-(logs, screenshots, hashes, HTML reports) before marking the corresponding release gate
-passed in Phase 9 — nothing here is assumed done until you confirm it.**
+**Update**: §1 (compile) and §2 (real-tick replay) were completed for real later in this
+session, once an isolated MetaEditor/MT5 install (separate from the live/attached
+terminal) was found at `tester_sandbox/MT5_Isolated/`. Real results are in
+`08_60day_replay_results.md`. §3-§6 below (Mac/VPS runtime, email, deploy, load test)
+still require live infrastructure/production credentials this session does not have and
+remain exactly as originally packaged. Each package states the exact command/config, the
+expected result, and the failure conditions to watch for — evidence returned will be
+inspected against those before any gate is marked passed.
 
 ---
 
-## 1. EA compile (MetaEditor)
+## 1. EA compile (MetaEditor) — ✅ DONE, see `08_60day_replay_results.md`
 
-No MetaEditor/Wine install was found in this session's search paths, so the two source
-edits made this session (XC-002 re-entry-cap fix, cosmetic rebrand strings) have **not**
+Originally: no MetaEditor/Wine install was found in this session's first (too-shallow)
+search, so the source edits made this session (XC-002 re-entry-cap fix, cosmetic rebrand
+strings) had **not**
 been recompiled — the `.ex5` binaries currently checked into the repo root and
 `backend/ea_code/` are now stale relative to `.mq5` source.
 
@@ -66,7 +69,11 @@ runtime verification both pass — not merely because it compiled.
 
 ---
 
-## 2. Real-tick MT5 Strategy Tester replay
+## 2. Real-tick MT5 Strategy Tester replay — ✅ DONE (60-day, see `08_60day_replay_results.md`)
+
+Originally packaged below as a live step; completed for real later in this session. A
+60-day window was run instead of 30 (see that doc for exact numbers, honest caveats, and
+why an out-of-sample holdout is still worth running).
 
 Prior sessions already built and used exactly this pattern (see
 `analysis/m10_fixed_sl_experiment/M10_FIXEDSL_ISOLATION_REPLAY.md` — a real 30-day

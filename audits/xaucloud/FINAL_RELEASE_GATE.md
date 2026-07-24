@@ -1,20 +1,23 @@
 # XauCloud Final Release Gate
 
 Branch: `release/xaucloud-final-production-audit`, base tag `pre-xaucloud-audit-20260724`
-(= `210f0e8`, `experiment/v62524-m10-fixed-sl`). Commits: `4313b1c`..`170ca32` (9 commits).
+(= `210f0e8`, `experiment/v62524-m10-fixed-sl`). Commits: `4313b1c`..`faae85e` (11 commits).
 
 ## Decision
 
-**RELEASE HOLD.**
+**RELEASE HOLD — updated after real compile + real 60-day replay (see `08_60day_replay_results.md`).**
 
 Every check performable from source code, static analysis, and a local (non-production,
 non-live-terminal) browser/backend session has passed, with all findings disclosed —
-none hidden, none downgraded to make this verdict look better. But the items that decide
-whether real money should move through this build — a real compile, a real MT5 tick
-replay, real Mac/VPS runtime verification, and a real production deployment — have not
-happened, because they require a live MT5 terminal, MetaEditor/Wine toolchain, and
-production credentials this session does not have. Declaring PASS without them would be
-exactly the "unverified claim" this project's own rules forbid.
+none hidden, none downgraded to make this verdict look better. This session additionally
+found a genuinely available isolated MetaEditor/MT5 toolchain (separate from your live/
+attached terminal) and used it: **the current source now has a real 0-errors/0-warnings
+compile (SHA-256 `948aeee5...`) and a real 60-day M10 tick replay (+$10,839.11 net, 116
+trades, PF 1.43, but drawdown notably higher than a prior comparable run — flagged, not
+explained away).** That closes two of the seven original gaps. Still open: Mac/VPS
+runtime verification, live email test, production deploy, and load test — none of which
+this session has access to. Declaring full PASS without them would still be exactly the
+"unverified claim" this project's own rules forbid.
 
 ## What is proven (evidence in `audits/xaucloud/00`-`07`)
 
@@ -34,50 +37,50 @@ exactly the "unverified claim" this project's own rules forbid.
 | XauCloud rebrand | Applied to every confirmed-safe surface; every retained legacy identifier documented with reason; domain unchanged | `03_rebrand_ledger.md` |
 | Regression suite | Zero new failures introduced anywhere (diffed against baseline, not assumed); one rebrand-caused test failure found and fixed | `06_regression_test_results.md` |
 | Independent review | Fresh reviewer, no implementer context, independently re-derived every major claim — verdict PASS as a code-review matter, two minor disclosed nuances (day-of-month boundary granularity, static-only EA tests) | `07_independent_review.md` |
+| **EA compile** | **Real MetaEditor64.exe compile of the exact, unmodified audited source. 0 errors, 0 warnings. SHA-256 `948aeee5d792df440c13bf455e2f876725a832eda154fc1de9e9eb86c711a06b`, now checked into `XAUUSD_AI_Sniper_EA.ex5` and the `backend/ea_code/` mirror (byte-identical).** | `08_60day_replay_results.md` |
+| **Real-tick MT5 replay** | **Real 60-day M10 replay, isolated sandbox, never the live terminal (confirmed via `ps aux` before/after). History Quality 100%, 219,957 real ticks. +$10,839.11 net, 116 trades, 68.10% win rate, PF 1.43. Drawdown (43.97%/44.98%) is materially higher than a prior comparable 30-day run — flagged as an open question, not resolved or spun.** | `08_60day_replay_results.md`, raw MT5 report + charts in `60d_replay_evidence/` |
 
 ## What is NOT proven (blocks PASS — see `05_live_step_packages.md` for exact steps)
 
-1. **The EA has not been recompiled since this session's source edits.** The checked-in
-   `.ex5` binaries are stale relative to `.mq5` source. No MetaEditor/Wine toolchain was
-   available in this session.
-2. **No real-tick MT5 Strategy Tester replay has been run on the current source.** The
-   existing 30-day fixed-SL vs. structural-SL comparison in
-   `analysis/m10_fixed_sl_experiment/` predates this session's re-entry-cap fix.
-3. **No Mac/VPS runtime verification.** No confirmation the recompiled build (once it
-   exists) is what's actually attached and running on either terminal.
-4. **No live email deliverability test** of the renamed PIN/password-reset templates.
-5. **No production deployment topology confirmed** — needed to know whether XC-007's
+1. **No Mac/VPS runtime verification.** No confirmation the newly compiled build (SHA-256
+   `948aeee5...`) is what's actually attached and running on either terminal — this
+   session has no remote access to either.
+2. **No live email deliverability test** of the renamed PIN/password-reset templates.
+3. **No production deployment topology confirmed** — needed to know whether XC-007's
    rate-limiter gap is a release blocker at your actual scale, and needed before any
    staged deploy.
-6. **No load test** at 10,000+-user concurrency.
-7. **`backend/ea_releases/manifest.json` has no entry for this branch's work** —
-   `current_version` is still `v6.25.8`. Adding one with a fabricated hash would itself be
-   a release-gate violation; the real entry (template provided) can only be added once §1
-   produces a real compile.
+4. **No load test** at 10,000+-user concurrency.
+5. **The 60-day replay is a single in-sample window, no holdout split.** Doesn't prove
+   forward performance; the drawdown increase versus the prior 30-day run hasn't been
+   root-caused.
+6. **`backend/ea_releases/manifest.json` has a real `v6.25.24` entry now, but
+   `current_version` is deliberately still `v6.25.8`** — promotion needs item 1 first.
 
 ## Explicit non-actions this session, and why
 
 - **Not merged to `main`.** This branch exists specifically so `main` stays at its last
-  known-good state (`210f0e8`) until a PASS verdict is reached. Merging now would put the
-  stale-binary state described in §1 above onto the branch your CI treats as
-  production-track.
-- **Not pushed to `origin/main`,** for the same reason.
+  known-good state (`210f0e8`) until a PASS verdict is reached.
+- **Not pushed to `origin/main`,** for the same reason. (The audit branch itself was
+  pushed to `origin` — that's low-risk and reversible, unlike touching `main`.)
 - **Not deployed to any MT5 terminal or VPS.** This session has no remote access to your
   VPS (`173.212.249.202` per prior handover notes) or to your local Mac's actual running
-  MT5 Experts folder — those are outside this git repository and this session's reach
-  entirely. Even with access, there is currently no freshly-compiled artifact to deploy
-  (§1) — attempting to "deploy" right now would either push a stale/mismatched binary or
-  do nothing.
-- **Not fabricated any hash, tick-replay number, or manifest entry** to make this section
-  look more finished than it is.
+  (live/attached) MT5 Experts folder — confirmed via `ps aux` that a separate, long-running
+  live terminal process exists and was never touched. A real compiled artifact now exists
+  (unlike when this was first written), but "deploying" it still requires either your own
+  hands or explicit access this session doesn't have.
+- **Not fabricated any hash, tick-replay number, or manifest entry.** Where a first
+  attempt at real evidence failed (three failed Tester runs before the cache-eviction
+  root cause was found), that failure is documented in `08_60day_replay_results.md`
+  rather than silently retried until a report happened to look right.
 
 ## Path to PASS
 
-Work through `audits/xaucloud/05_live_step_packages.md` in order (§1 compile → §2 replay
-→ §3 runtime verification → §4 email → §5 deploy → §6 load test), returning the evidence
-each step asks for. Each will be inspected against its stated pass/fail criteria before
-this document is updated. Once all seven items above are closed with real evidence, this
-verdict updates to **PRODUCTION PASS** and only then is a merge/push/deploy appropriate.
+Two of six live-step items are now closed with real evidence (compile, replay). Work
+through `audits/xaucloud/05_live_step_packages.md` §3-§6 (Mac/VPS runtime verification →
+email → deploy → load test), returning the evidence each step asks for. Each will be
+inspected against its stated pass/fail criteria before this document is updated. Once
+those are closed, this verdict updates to **PRODUCTION PASS** and only then is a
+merge/push/deploy appropriate.
 
 ## Remaining known limitations (carried forward, not hidden)
 
