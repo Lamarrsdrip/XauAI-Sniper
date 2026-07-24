@@ -12862,6 +12862,29 @@ void XAU_CreateReentryState(bool wasSLHitExact)
    if(!InpUseReEntry || !lastClose.wasLoss)
       return;
 
+   // Re-derive the day boundary here rather than trusting todayReEntryCount's
+   // authoritative reset in UpdateDrawdownState(), which runs AFTER this
+   // function on the same close event (see position-close handler). Without
+   // this, the first close of a new day would read yesterday's stale count
+   // and wrongly block a legitimate re-entry before UpdateDrawdownState ever
+   // gets a chance to zero it. This only pre-empties the local counter for
+   // this comparison; UpdateDrawdownState remains the sole owner of
+   // todayLossResetDay and still performs its own full daily reset moments
+   // later (idempotent -- it will find the counter already at 0).
+   MqlDateTime dtNowReentry, dtLastReentry;
+   TimeCurrent(dtNowReentry);
+   TimeToStruct(todayLossResetDay, dtLastReentry);
+   if(dtNowReentry.day != dtLastReentry.day)
+      todayReEntryCount = 0;
+
+   if(todayReEntryCount >= InpMaxReEntriesPerDay)
+   {
+      XAU_LogReentryState("REENTRY_BLOCKED_DAILY_CAP",lastClose.dir,
+         "todayReEntryCount "+IntegerToString(todayReEntryCount)+
+         " already at InpMaxReEntriesPerDay "+IntegerToString(InpMaxReEntriesPerDay));
+      return;
+   }
+
    g_reentryState.active = true;
    XAU_LogReentryState("REENTRY_STATE_CREATED",lastClose.dir,
       "loss context stored; execution requires a matching fresh closed-bar decision snapshot");
