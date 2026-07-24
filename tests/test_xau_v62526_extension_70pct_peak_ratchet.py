@@ -216,20 +216,53 @@ def test_20_extension_floor_and_ratchet_never_overwritten_with_raw_original_sl()
     assert "g_rExit[idx].guaranteedFloorDesiredSL = g_rExit[idx].originalStopLoss;" not in post_arm_call
 
 
-def test_21_ratchet_is_disabled_v62527_owner_directive():
-    # v6.25.27 (2026-07-24): the 70%-of-peak ratchet was disabled after real-
-    # tick evidence showed it reduced net profit ($12,287.43 -> $6,970.16,
-    # 60-day Model=4 replay) despite raising win rate -- it cut short more
-    # large winners than it saved in prevented losses. The extension-start
-    # +0.15R floor stays active; only the ratchet's two call sites were
-    # removed. The function itself remains defined (dormant, historical
-    # evidence), matching the codebase's established convention.
+def test_21_both_protections_are_independently_input_toggleable():
+    # v6.25.28 (2026-07-24): after real-tick evidence showed the floor and
+    # ratchet each have a distinct, sometimes opposite effect (floor alone:
+    # M10 $6,918.78; floor+ratchet: M10 $6,970.16 -- nearly identical,
+    # meaning the floor was masking the ratchet's own isolated effect), both
+    # became independently input-toggleable instead of hardcoded per-build,
+    # so any of the four combinations (neither/floor-only/ratchet-only/both)
+    # can be run from one compiled build without a recompile.
+    ea = read(EA)
+    assert "input bool   InpExtensionFloor015REnabled     = false;" in ea
+    assert "input bool   InpExtension70PctRatchetEnabled  = false;" in ea
+    fn = find_function(ea, TRYARM_SIG)
+    assert "InpExtensionFloor015REnabled" in fn
+    assert "InpExtension70PctRatchetEnabled" in fn
+    assert "XAU_General10MArmExtensionFloor(idx, ticket, restoreFailure)" in fn
+    assert "XAU_General10MRestoreOriginalProtection(idx, ticket, restoreFailure)" in fn
+
+
+def test_22_default_is_no_extension_protection_at_all():
+    # both toggles default false -- matches the pre-v6.25.26 behavior
+    # (only the wide original structural SL protects the extension) as the
+    # safe out-of-the-box default; the owner switches either on explicitly.
+    ea = read(EA)
+    assert "InpExtensionFloor015REnabled     = false;" in ea
+    assert "InpExtension70PctRatchetEnabled  = false;" in ea
+
+
+def test_23_floor_state_not_overwritten_when_floor_toggle_is_on():
+    # when the floor IS enabled, the values XAU_General10MArmExtensionFloor
+    # already set (guaranteedFloorDesiredSL/lastProtectedSL/extensionProtectedFloorR)
+    # must not be clobbered by the "no floor" R-equivalent initialization
+    # block further down -- that block is now gated behind
+    # !InpExtensionFloor015REnabled specifically to prevent this.
     ea = read(EA)
     fn = find_function(ea, TRYARM_SIG)
-    assert "XAU_General10MUpdateExtensionRatchet(idx, ticket);" not in fn
-    assert "XAU_General10MArmExtensionFloor(idx, ticket, restoreFailure)" in fn  # the floor stays active
-    assert ea.count("XAU_General10MUpdateExtensionRatchet(idx, ticket);") == 0
-    assert "void XAU_General10MUpdateExtensionRatchet(int idx, ulong ticket)" in ea  # kept, just unused
+    assert "if(!InpExtensionFloor015REnabled)" in fn
+    guard_idx = fn.index("if(!InpExtensionFloor015REnabled)")
+    guarded_block = fn[guard_idx:fn.index("g_rExitStateDirty = true;\n   XAU_RExit_SaveState(true);\n\n   PrintFormat(\"GENERAL_10M_EXTENSION_ARMED", guard_idx)]
+    assert "extensionProtectedFloorR = rDist > 0.0" in guarded_block
+    assert "extensionHighestPeakR = g_rExit[idx].extensionTriggerR;" in guarded_block
+
+
+def test_24_ratchet_call_sites_both_gated_on_its_own_toggle():
+    ea = read(EA)
+    fn = find_function(ea, TRYARM_SIG)
+    assert "if(InpExtension70PctRatchetEnabled)\n      XAU_General10MUpdateExtensionRatchet(idx, ticket);" in fn
+    assert "if(InpExtension70PctRatchetEnabled)\n               XAU_General10MUpdateExtensionRatchet(idx, ticket);" in ea
 
 
 def test_ea_and_backend_mirror_byte_identical():

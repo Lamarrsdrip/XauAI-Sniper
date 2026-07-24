@@ -3061,6 +3061,10 @@ input double InpRMaxSpreadPoints          = 400;    // R_EXIT: spread ceiling (p
 input bool   InpRUseClosedBarMomentum     = true;   // R_EXIT: reserved for future use -- the momentum/trend inputs consumed today are already closed-bar based
 input int    InpRRunnerFailureMinHostile  = 3;      // R_EXIT: of 5 hostile factors (trend/EMA/RSI/momentum/spread), minimum to confirm RUN_TO_1R continuation failure on a closed bar
 
+input group "=== GENERAL 10M EXTENSION PROTECTION (v6.25.28 owner exit rule, independently toggleable) ==="
+input bool   InpExtensionFloor015REnabled     = false; // At extension start, immediately protect at least +0.15R (never weaker than whatever SL is already on the broker). Default OFF: the extension starts with only the wide original structural SL, exactly like the pre-v6.25.26 behavior. Owner-switchable.
+input bool   InpExtension70PctRatchetEnabled  = false; // While the extension is active, once peak R reaches +0.70R, ratchet the floor to 70% of peak (monotonic). Default OFF. Independent of the floor toggle above -- either, both, or neither can be on. Owner-switchable.
+
 input group "=== SMART EXIT 3-LAYER SYSTEM (v6.4.11) ==="
 input bool   InpSmartExitEnable               = true;  // Master toggle: profit floor + partial runner + adaptive giveback
 input double InpSmartExitStrongProfitUSD      = 75.0;  // Absolute strong-profit floor for a $3k-style XAU account
@@ -27116,11 +27120,19 @@ bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
    g_rExit[idx].extensionTriggerAuthority = authority;
    g_rExitStateDirty = true;
 
+   // v6.25.28 owner directive (2026-07-24): both extension protections are
+   // now independently input-toggleable (InpExtensionFloor015REnabled,
+   // InpExtension70PctRatchetEnabled) instead of hardcoded per-build. This
+   // is the SAME single code path for all four combinations -- no separate
+   // compiled variant is needed to test/run any combination anymore.
    string restoreFailure = "";
-   if(!XAU_General10MArmExtensionFloor(idx, ticket, restoreFailure))
+   bool armProtectionOk = InpExtensionFloor015REnabled
+      ? XAU_General10MArmExtensionFloor(idx, ticket, restoreFailure)
+      : XAU_General10MRestoreOriginalProtection(idx, ticket, restoreFailure);
+   if(!armProtectionOk)
    {
-      PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=SL_015R_FLOOR_PROTECT | reason=%s | action=EXECUTE_ORIGINAL_APPROVED_CLOSE",
-                  g_rExit[idx].positionId, restoreFailure);
+      PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=%s | reason=%s | action=EXECUTE_ORIGINAL_APPROVED_CLOSE",
+                  g_rExit[idx].positionId, InpExtensionFloor015REnabled ? "SL_015R_FLOOR_PROTECT" : "SL_RESTORE", restoreFailure);
       g_rExit[idx].extensionStartTime = 0;
       g_rExit[idx].extensionDeadline = 0;
       g_rExit[idx].extensionTriggerR = 0.0;
@@ -27147,18 +27159,36 @@ bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
    g_rExit[idx].extensionLastSuppressionLog = 0;
 
    // The active extension deliberately suspends the old profitable floor.
-   // v6.25.26: unlike the pre-extension floor, the broker now carries the
-   // owner's extension-start +0.15R-or-better protection -- already set,
-   // confirmed, and recorded into guaranteedFloorDesiredSL/lastProtectedSL/
-   // extensionProtectedFloorR by XAU_General10MArmExtensionFloor() above.
-   // Do NOT overwrite those with the raw original structural SL here; that
-   // would silently discard the floor this rule just placed on the broker.
+   // v6.25.28: when InpExtensionFloor015REnabled is true, the broker
+   // already carries the confirmed +0.15R-or-better protection --
+   // guaranteedFloorDesiredSL/lastProtectedSL/extensionProtectedFloorR were
+   // already set correctly by XAU_General10MArmExtensionFloor() above and
+   // must NOT be overwritten here. When it's false (the default), the
+   // broker carries only the wide original structural SL (set by
+   // XAU_General10MRestoreOriginalProtection() above) -- extensionProtectedFloorR
+   // is then initialized to that stop's R-equivalent (a negative number)
+   // purely so the ratchet's MathMax() comparison behaves correctly the
+   // first time it activates; no SL is ever placed from this starting
+   // value alone, only from a genuine ratchet update.
    g_rExit[idx].profitGuaranteeArmed = false;
    g_rExit[idx].guaranteedFloorR = 0.0;
    g_rExit[idx].guaranteedFloorGeometryBlocked = false;
    g_rExit[idx].closeState = R_CLOSE_NONE;
    g_rExit[idx].pendingCloseReason = "";
    g_rExit[idx].closeAttemptCount = 0;
+   if(!InpExtensionFloor015REnabled)
+   {
+      int rSlot = XAU_CampaignSlot(g_rExit[idx].positionDirection);
+      double rDist = g_campaign[rSlot].active ? g_campaign[rSlot].ownerEffectiveHardStopDistance : 0.0;
+      if(rDist <= 0.0) rDist = g_rExit[idx].originalStopDistance;
+      bool armIsBuy = g_rExit[idx].positionDirection == 1;
+      g_rExit[idx].extensionProtectedFloorR = rDist > 0.0
+         ? (armIsBuy ? (g_rExit[idx].originalStopLoss - g_rExit[idx].originalEntryPrice)
+                     : (g_rExit[idx].originalEntryPrice - g_rExit[idx].originalStopLoss)) / rDist
+         : -1.0;
+      g_rExit[idx].extensionHighestPeakR = g_rExit[idx].extensionTriggerR;
+      g_rExit[idx].extensionRatchetActivated = false;
+   }
    g_rExitStateDirty = true;
    XAU_RExit_SaveState(true);
 
@@ -27168,17 +27198,11 @@ bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
                TimeToString(g_rExit[idx].extensionDeadline, TIME_DATE|TIME_SECONDS),
                g_rExit[idx].extensionTriggerR, g_rExit[idx].originalStopLoss, g_rExit[idx].extensionProtectedFloorR);
 
-   // v6.25.27 owner directive (2026-07-24): the 70%-of-peak ratchet is
-   // DISABLED after real-tick evidence -- 60-day Model=4 replay showed it
-   // reduced net profit ($12,287.43 -> $6,970.16) despite raising win rate
-   // (65.7% -> 73.2%): the 30%-giveback-from-peak trigger cut short more
-   // large winners (avg win $617.67 -> $429.28, gross profit -$9,941) than
-   // it saved in prevented losses (gross loss -$4,624). The extension-start
-   // +0.15R minimum floor (XAU_General10MArmExtensionFloor above) is kept --
-   // only the ratchet call is removed. XAU_General10MUpdateExtensionRatchet
-   // itself is left defined, unused, as historical evidence per the
-   // existing codebase convention, in case real evidence ever supports
-   // re-enabling a looser retention percentage.
+   // Covers the edge case where the trigger R that qualified this extension
+   // is already >= 0.70 -- the ratchet must not wait for the next tick to
+   // notice a peak that was already reached at the instant of arming.
+   if(InpExtension70PctRatchetEnabled)
+      XAU_General10MUpdateExtensionRatchet(idx, ticket);
    return true;
 }
 
@@ -28659,12 +28683,12 @@ void XAU_RExitCoreLoop()
          }
          else
          {
-            // v6.25.27: the 70%-of-peak ratchet call is removed here (see the
-            // v6.25.27 note in XAU_General10MTryArm for the real-tick evidence
-            // that motivated this) -- the extension now runs with only the
-            // extension-start +0.15R floor protecting it until the deadline,
-            // exactly like the earlier (already-abandoned) 015R-only
-            // experiment this rule was built on top of.
+            // v6.25.28: both extension protections are independently input-
+            // toggleable now (InpExtensionFloor015REnabled,
+            // InpExtension70PctRatchetEnabled) -- this is the only call site
+            // for the per-tick ratchet update, gated purely on the input.
+            if(InpExtension70PctRatchetEnabled)
+               XAU_General10MUpdateExtensionRatchet(idx, ticket);
             XAU_General10MLogSuppressed(idx, "ACTIVE_EXTENSION_HOLD");
          }
          continue;
