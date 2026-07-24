@@ -5,19 +5,18 @@ Branch: `release/xaucloud-final-production-audit`, base tag `pre-xaucloud-audit-
 
 ## Decision
 
-**RELEASE HOLD — updated after real compile + real 60-day replay (see `08_60day_replay_results.md`).**
+**RELEASE HOLD — the real-tick replay gate is reopened; see
+`13_CORRECTION_synthetic_vs_real_tick_data.md`.**
 
-Every check performable from source code, static analysis, and a local (non-production,
-non-live-terminal) browser/backend session has passed, with all findings disclosed —
-none hidden, none downgraded to make this verdict look better. This session additionally
-found a genuinely available isolated MetaEditor/MT5 toolchain (separate from your live/
-attached terminal) and used it: **the current source now has a real 0-errors/0-warnings
-compile (SHA-256 `948aeee5...`) and a real 60-day M10 tick replay (+$10,839.11 net, 116
-trades, PF 1.43, but drawdown notably higher than a prior comparable run — flagged, not
-explained away).** That closes two of the seven original gaps. Still open: Mac/VPS
-runtime verification, live email test, production deploy, and load test — none of which
-this session has access to. Declaring full PASS without them would still be exactly the
-"unverified claim" this project's own rules forbid.
+The compile gate is still genuinely closed (SHA-256 `948aeee5...`, 0 errors/0 warnings).
+The replay gate is not: the "60-day M10 tick replay" previously reported here as closing
+that gap was run under `Model=1` (synthetic 1-minute-bar ticks), misidentified at the time
+as genuine real-tick data. A same-binary rerun under confirmed `Model=4` (23,648,730 real
+ticks) shows a materially worse, actually-lossmaking result (-$3,406.54 net, PF 0.84,
+66.10%/66.92% drawdown) for the same 60-day window. This is disclosed immediately, not
+smoothed over, and a corrected real-tick replay is in progress. Still open beyond that:
+Mac/VPS runtime verification (largely done, see `09_deployment_staging.md`), live email
+test, production deploy, and load test.
 
 ## What is proven (evidence in `audits/xaucloud/00`-`07`)
 
@@ -38,7 +37,7 @@ this session has access to. Declaring full PASS without them would still be exac
 | Regression suite | Zero new failures introduced anywhere (diffed against baseline, not assumed); one rebrand-caused test failure found and fixed | `06_regression_test_results.md` |
 | Independent review | Fresh reviewer, no implementer context, independently re-derived every major claim — verdict PASS as a code-review matter, two minor disclosed nuances (day-of-month boundary granularity, static-only EA tests) | `07_independent_review.md` |
 | **EA compile** | **Real MetaEditor64.exe compile of the exact, unmodified audited source. 0 errors, 0 warnings. SHA-256 `948aeee5d792df440c13bf455e2f876725a832eda154fc1de9e9eb86c711a06b`, now checked into `XAUUSD_AI_Sniper_EA.ex5` and the `backend/ea_code/` mirror (byte-identical).** | `08_60day_replay_results.md` |
-| **Real-tick MT5 replay** | **Real 60-day M10 replay, isolated sandbox, never the live terminal (confirmed via `ps aux` before/after). History Quality 100%, 219,957 real ticks. +$10,839.11 net, 116 trades, 68.10% win rate, PF 1.43. Drawdown (43.97%/44.98%) is materially higher than a prior comparable 30-day run — flagged as an open question, not resolved or spun.** | `08_60day_replay_results.md`, raw MT5 report + charts in `60d_replay_evidence/` |
+| **Real-tick MT5 replay** | **RETRACTED — see `13_CORRECTION_synthetic_vs_real_tick_data.md`. The "219,957 real ticks" run was actually `Model=1` (synthetic 1-minute OHLC), not genuine real ticks. A same-binary, same-window rerun under confirmed `Model=4` (23,648,730 real ticks) shows -$3,406.54 net, PF 0.84, 66.10%/66.92% drawdown — a qualitative reversal from the retracted result. This gate is reopened.** | `13_CORRECTION_synthetic_vs_real_tick_data.md` |
 
 ## What is NOT proven (blocks PASS — see `05_live_step_packages.md` for exact steps)
 
