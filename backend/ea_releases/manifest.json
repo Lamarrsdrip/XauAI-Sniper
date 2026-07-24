@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.25.25",
+  "current_version": "v6.25.28",
   "releases": {
     "v6.25.2": {
       "version": "v6.25.2",
@@ -107,6 +107,18 @@
       "ex5_sha256": "11dba1cf9746c7852fe57ad0aedde264a83174cf7969e1ab70dba12dfa53c58a",
       "customer_filename": "XauCloud.ex5",
       "release_notes": "Owner permanent policy (2026-07-24): LOCATION_EXCELLENT and LOCATION_LATE are now an absolute, unconditional automated-entry hard block, reversing the v6.25.22 removal. Implemented inside the single existing XAU_OwnerEntryPermission choke point (the sole gate for CORE/RE_ENTRY/PYRAMID/COUNTER_EXCURSION at both CANDIDATE_ACCEPTANCE and FINAL_EXECUTION), plus an independent XAU_OwnerLocationFinalAssertion post-fill check at all three trade.Buy/trade.Sell execution points. Real-tick (Model=4, 23,648,730 ticks) 60-day replay, identical window/settings before and after: baseline net -$3,406.54 / PF 0.84 / 122 trades / 66.10%-66.92% drawdown -> blocked net +$12,287.43 / PF 1.39 / 108 trades / 29.77%-33.54% drawdown. Zero OWNER_LOCATION_HARD_BLOCK_ASSERTION_FAILURE across the full run log -- excellentExecuted=0 and lateExecuted=0 held for the entire replay. 29 new regression tests, zero new failures in the existing suite. See audits/xaucloud/15_owner_location_permanent_hardblock_m10.md for full detail. No other strategy change in this release: M10 signal generation, fixed Gold SL, internal R, lot sizing, GENERAL exits, the 600s extension, and session/news/breakout logic are byte-for-byte unchanged from v6.25.24.",
+      "stable_status": true
+    },
+    "v6.25.28": {
+      "version": "v6.25.28",
+      "edition": "Extension-only +0.15R floor / 70%-of-peak ratchet, both independently input-toggleable (default OFF)",
+      "source_commit": "dca5f1e86f81cd1583a99f9eb8c047adac562066",
+      "build_timestamp": "2026-07-24T20:11:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe build 6037, isolated MT5_Isolated sandbox); deployed to owner's Mac and VPS Experts folders, both hash-verified 68a710374868da4b8b1ff6f41d124bc3ef56b1ff575b3a90d239b7ac107600dc -- not attached to any chart",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.28.ex5",
+      "ex5_sha256": "68a710374868da4b8b1ff6f41d124bc3ef56b1ff575b3a90d239b7ac107600dc",
+      "customer_filename": "XauCloud.ex5",
+      "release_notes": "Adds an extension-only exit rule on top of v6.25.25's permanent LOCATION_EXCELLENT/LOCATION_LATE hard block, scoped strictly to the active 600s GENERAL profitable-exit extension: an extension-start +0.15R minimum floor and a 70%-of-peak ratchet (activates once peak reaches +0.70R during the extension), each independently controlled by new inputs InpExtensionFloor015REnabled and InpExtension70PctRatchetEnabled -- BOTH DEFAULT FALSE, so out of the box this release trades identically to v6.25.25 (only the wide original structural SL protects the extension, exactly like pre-v6.25.26 behavior). Real-tick (Model=4, 23,648,730 ticks, 60-day window) evidence across all four toggle combinations: baseline (both off) $12,287.43 net/PF 1.39; ratchet-only $10,429.01/PF 1.36 (identical win count to baseline -- the ratchet never converts a loser to a winner on its own, it only trims already-profitable trades); floor-only $6,918.78/PF 1.26; both $6,970.16/PF 1.26. The floor does essentially all of the protective work (win count 71->79) at a real profit cost on this instrument/window; the ratchet's incremental effect on top of the floor is negligible ($51). Shipped with both off by default so the owner can switch either on live via Inputs without a recompile, informed by this evidence. No other change from v6.25.25: M10 signal generation, fixed Gold SL, internal R, lot sizing, location hard-block, and pre-extension GENERAL exit behavior are all unchanged.",
       "stable_status": true
     }
   }
