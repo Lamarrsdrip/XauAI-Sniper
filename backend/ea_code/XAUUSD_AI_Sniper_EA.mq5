@@ -27168,10 +27168,17 @@ bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
                TimeToString(g_rExit[idx].extensionDeadline, TIME_DATE|TIME_SECONDS),
                g_rExit[idx].extensionTriggerR, g_rExit[idx].originalStopLoss, g_rExit[idx].extensionProtectedFloorR);
 
-   // Covers the edge case where the trigger R that qualified this extension
-   // is already >= 0.70 -- the ratchet must not wait for the next tick to
-   // notice a peak that was already reached at the instant of arming.
-   XAU_General10MUpdateExtensionRatchet(idx, ticket);
+   // v6.25.27 owner directive (2026-07-24): the 70%-of-peak ratchet is
+   // DISABLED after real-tick evidence -- 60-day Model=4 replay showed it
+   // reduced net profit ($12,287.43 -> $6,970.16) despite raising win rate
+   // (65.7% -> 73.2%): the 30%-giveback-from-peak trigger cut short more
+   // large winners (avg win $617.67 -> $429.28, gross profit -$9,941) than
+   // it saved in prevented losses (gross loss -$4,624). The extension-start
+   // +0.15R minimum floor (XAU_General10MArmExtensionFloor above) is kept --
+   // only the ratchet call is removed. XAU_General10MUpdateExtensionRatchet
+   // itself is left defined, unused, as historical evidence per the
+   // existing codebase convention, in case real evidence ever supports
+   // re-enabling a looser retention percentage.
    return true;
 }
 
@@ -28652,12 +28659,12 @@ void XAU_RExitCoreLoop()
          }
          else
          {
-            // v6.25.26: the extension-specific 70%-of-peak ratchet runs every
-            // tick the extension is active and before the deadline -- this is
-            // the ONLY place it is called from the main loop (plus once at
-            // arm time, for the trigger-R->=0.70 edge case). It never runs
-            // for a position outside an active extension.
-            XAU_General10MUpdateExtensionRatchet(idx, ticket);
+            // v6.25.27: the 70%-of-peak ratchet call is removed here (see the
+            // v6.25.27 note in XAU_General10MTryArm for the real-tick evidence
+            // that motivated this) -- the extension now runs with only the
+            // extension-start +0.15R floor protecting it until the deadline,
+            // exactly like the earlier (already-abandoned) 015R-only
+            // experiment this rule was built on top of.
             XAU_General10MLogSuppressed(idx, "ACTIVE_EXTENSION_HOLD");
          }
          continue;

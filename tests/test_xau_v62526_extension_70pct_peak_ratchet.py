@@ -216,10 +216,20 @@ def test_20_extension_floor_and_ratchet_never_overwritten_with_raw_original_sl()
     assert "g_rExit[idx].guaranteedFloorDesiredSL = g_rExit[idx].originalStopLoss;" not in post_arm_call
 
 
-def test_21_ratchet_called_immediately_at_arm_time_for_high_trigger_r_edge_case():
+def test_21_ratchet_is_disabled_v62527_owner_directive():
+    # v6.25.27 (2026-07-24): the 70%-of-peak ratchet was disabled after real-
+    # tick evidence showed it reduced net profit ($12,287.43 -> $6,970.16,
+    # 60-day Model=4 replay) despite raising win rate -- it cut short more
+    # large winners than it saved in prevented losses. The extension-start
+    # +0.15R floor stays active; only the ratchet's two call sites were
+    # removed. The function itself remains defined (dormant, historical
+    # evidence), matching the codebase's established convention.
     ea = read(EA)
     fn = find_function(ea, TRYARM_SIG)
-    assert "XAU_General10MUpdateExtensionRatchet(idx, ticket);" in fn
+    assert "XAU_General10MUpdateExtensionRatchet(idx, ticket);" not in fn
+    assert "XAU_General10MArmExtensionFloor(idx, ticket, restoreFailure)" in fn  # the floor stays active
+    assert ea.count("XAU_General10MUpdateExtensionRatchet(idx, ticket);") == 0
+    assert "void XAU_General10MUpdateExtensionRatchet(int idx, ulong ticket)" in ea  # kept, just unused
 
 
 def test_ea_and_backend_mirror_byte_identical():
