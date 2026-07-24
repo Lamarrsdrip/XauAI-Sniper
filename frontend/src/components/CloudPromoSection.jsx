@@ -17,7 +17,7 @@ export default function CloudPromoSection() {
             </div>
 
             <h2 className="mb-4 text-3xl font-bold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">
-              Run XAU AI Sniper on your MT5. <span className="text-[#D4AF37]">Watch it from your phone.</span>
+              Run XauCloud on your MT5. <span className="text-[#D4AF37]">Watch it from your phone.</span>
             </h2>
 
             <p className="mb-3 max-w-xl text-base leading-relaxed text-white/70 sm:text-lg">

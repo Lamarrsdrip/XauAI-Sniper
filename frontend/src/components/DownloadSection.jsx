@@ -207,7 +207,7 @@ export default function DownloadSection({ api }) {
                 XauIndex is a separate experimental product, not the audited Gold-only {version} release.
                 No current compiled XauIndex release has completed this audit or been approved for customer
                 download, so it is unavailable here. Its source and any historical binary must not be treated
-                as equivalent to XauAI Sniper or as production-ready until it receives its own compile,
+                as equivalent to XauCloud or as production-ready until it receives its own compile,
                 broker, risk, replay, and deployment verification.
               </p>
             </div>
@@ -244,7 +244,7 @@ export default function DownloadSection({ api }) {
 
             <p className="mt-5 text-[11px] leading-5 text-white/35">
               Index Mode is monitoring-only in this release — it detects and logs, it never places an index
-              trade. Gold trading on this build behaves the same as XauAI Sniper's exit/risk engine.
+              trade. Gold trading on this build behaves the same as XauCloud's exit/risk engine.
             </p>
           </div>
         </div>

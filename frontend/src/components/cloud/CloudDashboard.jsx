@@ -515,7 +515,7 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
           <Link to="/command" className="flex min-w-0 items-center gap-2.5">
             <XauAiLogo size={30} className="flex-none" />
             <div className="min-w-0">
-              <div className="truncate text-[14px] font-bold leading-none">XAU AI Sniper</div>
+              <div className="truncate text-[14px] font-bold leading-none">XauCloud</div>
               <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · {eaVersion || "Waiting"}</div>
             </div>
           </Link>

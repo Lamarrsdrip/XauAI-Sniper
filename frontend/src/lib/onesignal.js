@@ -426,7 +426,7 @@ async function _ensureOneSignalDeviceRegisteredImpl({
     return {
       ...base,
       code: "IOS_PWA_INSTALL_REQUIRED",
-      message: "On iPhone, add XAU AI Sniper to your Home Screen and open it from the Home Screen icon before enabling notifications.",
+      message: "On iPhone, add XauCloud to your Home Screen and open it from the Home Screen icon before enabling notifications.",
       standalone_mode: false,
       ios_device: true,
     };

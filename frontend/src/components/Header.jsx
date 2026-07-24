@@ -22,7 +22,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
           <button type="button" onClick={() => { onNavigate("overview"); setMobileOpen(false); }}
             className="flex min-w-0 items-center gap-2.5" data-testid="header-brand">
             <XauAiLogo size={30} className="flex-none" />
-            <span className="font-heading text-[15px] font-semibold tracking-tight">XauAI Sniper</span>
+            <span className="font-heading text-[15px] font-semibold tracking-tight">XauCloud</span>
           </button>
 
           <nav className="hidden items-center gap-0.5 rounded-full border border-white/[0.08] bg-white/[0.03] p-1 lg:flex">

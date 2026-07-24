@@ -1939,7 +1939,7 @@
 //     g_lastEntryGrade, which is a global that changes on every new trade open (race condition).
 //   IMPACT: A/A+ trades with proven profit and confirmed trend continuation now hold through normal
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
-#property copyright "XauAI Sniper by emriz.eth"
+#property copyright "XauCloud by emriz.eth"
 #property link      "https://xauaisniper.com"
 // v6.17.10: MQL5's #property version requires a strict "xxx.yyy" numeric
 // format (patch 10 as "1710" is 4 digits and fails compile as warning 68) --
@@ -1947,7 +1947,7 @@
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
 #property version   "6.255"
-#property description "XAUUSD AI Sniper v6.25.24 M10 FIXED-$10-SL EXPERIMENT (isolated comparison branch, otherwise byte-identical to v6.25.24 production baseline; replay-consolidated 4807 patience, bounded readiness, pyramid integrity and exact outcome telemetry)."
+#property description "XauCloud v6.25.24 M10 FIXED-$10-SL EXPERIMENT (isolated comparison branch, otherwise byte-identical to v6.25.24 production baseline; replay-consolidated 4807 patience, bounded readiness, pyramid integrity and exact outcome telemetry)."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -11046,7 +11046,7 @@ int OnInit()
             "s; forced scan after ", InpScanWatchdogMin, " min without a completed scan.");
    }
 
-   Print("=== XAUAI SNIPER ", XAUAI_EA_VERSION, " (NEWS INTELLIGENCE + EXPECTANCY ENGINE) READY ===");
+   Print("=== XAUCLOUD ", XAUAI_EA_VERSION, " (NEWS INTELLIGENCE + EXPECTANCY ENGINE) READY ===");
    Print("LIVE_SCANNER_POLICY | primary=M10 closed-bar atomic snapshot | bar0=never-used-for-entry | same-bar cache=ON | transient4807=DEFER_KEEP_HANDLE | invalidHandle=TARGETED_RECREATE | terminalBarWatchdogRescan=BLOCKED | candidateDelay=FROZEN_REVALIDATION");
    Print("AUTHORITY_POLICY | adaptive oppositeEntryAllowed is endorsed by canonical M10 and still passes all shared gates");
    PrintFormat("VERSION-DIAG | property=%s runtime=%s build=%s inputHash=%s account=%I64d broker=%s symbol=%s magic=%d",
@@ -33206,7 +33206,7 @@ void XAU_WriteLearningReport()
    string fn = XAU_LearningReportFile();
    int h = FileOpen(fn, FILE_WRITE | FILE_TXT | FILE_COMMON);
    if(h == INVALID_HANDLE) return;
-   FileWrite(h, "# XAU AI Sniper Learning Report");
+   FileWrite(h, "# XauCloud Learning Report");
    FileWrite(h, "Generated: " + TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS));
    FileWrite(h, "Memory file: " + XAU_ConsciousMemoryFile());
    FileWrite(h, "");
@@ -40763,7 +40763,7 @@ void WriteForwardTestReport()
    double aiPassR = (g_ftReport_AIAllowed + g_ftReport_AIBlocked > 0)
                   ? (100.0 * g_ftReport_AIAllowed / (g_ftReport_AIAllowed + g_ftReport_AIBlocked)) : 0.0;
 
-   FileWrite(fh, "=== XAUAI SNIPER " + XAUAI_EA_VERSION + " - 24H FORWARD TEST REPORT ===");
+   FileWrite(fh, "=== XAUCLOUD " + XAUAI_EA_VERSION + " - 24H FORWARD TEST REPORT ===");
    FileWrite(fh, "Date:              " + dateStr);
    FileWrite(fh, "EA version:        " + XAUAI_EA_VERSION);
    FileWrite(fh, "Build hash:        " + XAUAI_BUILD_HASH);
@@ -42871,7 +42871,7 @@ void UpdateDashboard(int signal, double score, string grade)
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    string d = "\n";
    d += "==========================================\n";
-   d += " XAUAI SNIPER " + XAUAI_EA_VERSION + " | MODE:" + g_modeName + " | ";
+   d += " XAUCLOUD " + XAUAI_EA_VERSION + " | MODE:" + g_modeName + " | ";
    d += InpBacktestMode ? "BACKTEST MODE\n" : "LIVE\n";
    d += "==========================================\n";
    // v6.4.15: show actual base risk (account-mode preset), not InpRiskPercent which is always overridden

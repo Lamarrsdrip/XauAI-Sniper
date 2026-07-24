@@ -1,9 +1,11 @@
 import React from "react";
 
 /**
- * Official XAU AI Sniper logo asset.
- * Uses the brand PNG shipped at /xauai-logo.png so the rendered mark
- * always matches the design source — no SVG re-creation drift.
+ * Official XauCloud logo asset.
+ * Uses the brand PNG shipped at /xauai-logo.png (asset filename kept for
+ * download-cache/path compatibility -- see audits/xaucloud/03_rebrand_ledger.md)
+ * so the rendered mark always matches the design source -- no SVG
+ * re-creation drift.
  *
  * Props:
  *   size       → pixel size (default 32)
@@ -15,7 +17,7 @@ export default function XauAiLogo({ size = 32, className = "", rounded = "lg" })
   return (
     <img
       src="/xauai-logo.png"
-      alt="XAU AI Sniper"
+      alt="XauCloud"
       width={size}
       height={size}
       loading="eager"

@@ -379,7 +379,7 @@ function NotificationSettings({ prefs, setPrefs }) {
         <p className="mt-2 text-[11px] text-rose-300/80">Notifications are blocked in browser or iPhone settings. Re-enable them for this app, then tap Retry registration.</p>
       )}
       {registrationResult?.code === "IOS_PWA_INSTALL_REQUIRED" && (
-        <p className="mt-2 text-[11px] text-amber-200">On iPhone, use Share → Add to Home Screen, then open XAU AI Sniper from that Home Screen icon.</p>
+        <p className="mt-2 text-[11px] text-amber-200">On iPhone, use Share → Add to Home Screen, then open XauCloud from that Home Screen icon.</p>
       )}
 
       {tier !== "OFF" && !registrationReady && (

@@ -150,7 +150,7 @@ export default function InstallAppPrompt() {
                 <span className="w-6 h-6 rounded-full bg-[#D4AF37] text-black text-xs font-bold flex items-center justify-center flex-none">3</span>
                 <div className="flex-1">
                   <div className="text-white font-medium">Tap "Add"</div>
-                  <div className="text-[11px] text-white/50">XAU AI Sniper Command Center will appear on your home screen and open full-screen like a real app</div>
+                  <div className="text-[11px] text-white/50">XauCloud Command Center will appear on your home screen and open full-screen like a real app</div>
                 </div>
               </li>
             </ol>

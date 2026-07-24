@@ -17,7 +17,7 @@ function AuthShell({ title, subtitle, children }) {
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link to="/command" className="flex items-center gap-2" data-testid="auth-logo-link">
             <RadioTower className="w-6 h-6 text-[#D4AF37]" />
-            <span className="font-bold tracking-tight text-lg">XAU AI Sniper Command Center</span>
+            <span className="font-bold tracking-tight text-lg">XauCloud Command Center</span>
           </Link>
         </div>
       </nav>
@@ -100,7 +100,7 @@ export function CloudLogin() {
   };
 
   return (
-    <AuthShell title="Welcome back" subtitle="Log in to your XAU AI Sniper Command Center">
+    <AuthShell title="Welcome back" subtitle="Log in to your XauCloud Command Center">
       <form onSubmit={submit} className="space-y-4" data-testid="login-form">
         <div>
           <label htmlFor="cloud-login-email" className="block text-xs font-mono tracking-widest text-white/50 mb-1.5">EMAIL</label>

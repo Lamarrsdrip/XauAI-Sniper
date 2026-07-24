@@ -35,7 +35,7 @@ export default function HeroSection({ performance }) {
         </h1>
 
         <p className="mx-auto mt-6 max-w-2xl text-[15px] leading-7 text-white/50">
-          XAU AI Sniper is an advanced AI trading bot built exclusively for Gold (XAUUSD).<br className="hidden sm:block" />
+          XauCloud is an advanced AI trading bot built exclusively for Gold (XAUUSD).<br className="hidden sm:block" />
           It analyzes market structure, trend strength, volatility, and momentum —<br className="hidden sm:block" />
           then executes only rule-qualified candidates through explicit risk, structure, margin, spread, and broker checks. Trading losses remain possible.
         </p>

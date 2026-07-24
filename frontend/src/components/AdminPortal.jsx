@@ -122,7 +122,7 @@ export default function AdminPortal({ api }) {
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-300">
               <span className="font-mono text-[10px] font-black text-black">XA</span>
             </div>
-            <span className="text-[14px] font-semibold">XauAI Sniper</span>
+            <span className="text-[14px] font-semibold">XauCloud</span>
             <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · PUBLISHED RELEASE</span>
           </div>
           <div className="flex items-center gap-4">

@@ -33,7 +33,7 @@ export default function CloudLanding() {
           <Link to="/" className="flex min-w-0 items-center gap-2.5" data-testid="cloud-logo-link">
             <XauAiLogo size={32} className="flex-none" />
             <span className="min-w-0">
-              <span className="block truncate text-[15px] font-semibold">XAU AI Sniper Command Center</span>
+              <span className="block truncate text-[15px] font-semibold">XauCloud Command Center</span>
               <span className="block truncate font-mono text-[9px] uppercase tracking-[0.22em] text-white/35">Published release · M10 production</span>
             </span>
           </Link>
@@ -55,7 +55,7 @@ export default function CloudLanding() {
               Monitor and control your gold bot from anywhere.
             </h1>
             <p className="mt-5 max-w-xl text-[15px] leading-7 text-white/55" data-testid="hero-subtitle">
-              Buy the licensed XAU AI Sniper EA, run it on your own MT5 or VPS, then use the Command Center for live heartbeat, AI Director decisions, ML state, trade activity, and PIN-protected remote commands.
+              Buy the licensed XauCloud EA, run it on your own MT5 or VPS, then use the Command Center for live heartbeat, AI Director decisions, ML state, trade activity, and PIN-protected remote commands.
             </p>
             <div className="mt-7 flex flex-col gap-3 sm:flex-row">
               <Link to="/command/signup"

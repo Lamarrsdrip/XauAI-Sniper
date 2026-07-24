@@ -606,7 +606,7 @@ async def _send_email(to_email: str, subject: str, html: str) -> bool:
 
 async def send_pin_email(to_email: str, buyer_name: str, pin: str):
     html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-<h2 style="color:#B8860B;">XauAI Sniper EA - License PIN</h2>
+<h2 style="color:#B8860B;">XauCloud EA - License PIN</h2>
 <p>Hello {buyer_name or 'Trader'},</p>
 <p>Thank you for your purchase! Here is your unique license PIN:</p>
 <div style="background:#f5f5f5;border:2px solid #B8860B;padding:20px;text-align:center;margin:20px 0;">
@@ -616,7 +616,7 @@ async def send_pin_email(to_email: str, buyer_name: str, pin: str):
 <ol><li>Download the EA from our website</li><li>Install on MetaTrader 5 (follow our Setup Guide)</li><li>Enter this PIN in the EA settings</li><li>Enable Auto Trading and start!</li></ol>
 <p style="color:#888;font-size:12px;">Keep this PIN private. Each PIN works on one MT5 account.</p>
 </div>"""
-    return await _send_email(to_email, "Your XauAI Sniper EA License PIN", html)
+    return await _send_email(to_email, "Your XauCloud EA License PIN", html)
 
 # -------------------------------------------------------------------
 # PUBLIC ROUTES
@@ -624,7 +624,7 @@ async def send_pin_email(to_email: str, buyer_name: str, pin: str):
 
 @api_router.get("/")
 async def root():
-    return {"message": "XauAI Sniper EA API v2.0"}
+    return {"message": "XauCloud EA API v2.0"}
 
 @api_router.get("/health")
 async def health():
@@ -774,7 +774,7 @@ async def admin_mfa_setup(admin: dict = Depends(get_current_admin)):
     secret = _generate_totp_secret()
     await db.users.update_one({"email": admin["email"]},
                                {"$set": {"mfa_pending_secret_enc": _cloud_encrypt(secret)}})
-    issuer = "XauAISniperAdmin"
+    issuer = "XauCloudAdmin"
     label = admin.get("email", "admin")
     otpauth_uri = f"otpauth://totp/{issuer}:{label}?secret={secret}&issuer={issuer}&algorithm=SHA1&digits=6&period=30"
     return {"secret": secret, "otpauth_uri": otpauth_uri}
@@ -1196,10 +1196,10 @@ async def admin_download_ea_master():
     )
 
 # -------- XauIndex (separate product, separate download) --------
-# A DIFFERENT product from XauAI Sniper (gold-only, maintained separately).
+# A DIFFERENT product from XauCloud (gold-only, maintained separately).
 # XauIndex has Gold+Index market detection built in and is versioned
 # independently (1.0.0+) so the two are never confused with one another.
-# Mirrors the XauAI Sniper download endpoints exactly, pointed at its own
+# Mirrors the XauCloud download endpoints exactly, pointed at its own
 # ea_code_xauindex/ directory instead.
 # v6.25.3 owner directive 2026-07-17 (Phase 3 P0) -- XauIndex had the exact
 # same public MQ5 source exposure as the main EA. It has no compiled EX5
@@ -1391,12 +1391,12 @@ async def get_installation_guide():
 @api_router.get("/docs/how-it-works")
 async def get_how_it_works():
     version = (_current_ea_release() or {}).get("version", "current release")
-    return {"sections":[{"title":f"How XauAI Sniper {version} Works","subtitle":"Completed M10 evidence with a single authoritative decision mode","steps":[{"id":1,"title":"M10 Evidence","description":"The EA records one immutable snapshot for each completed M10 candle.","detail":"The forming candle is never used as evidence."},{"id":2,"title":"Decision Mode","description":"M10 legacy is the only decision mode in this release. An M30 three-snapshot consensus path exists in source for possible future use but is not selectable or executable in the current build.","detail":"The journal and Command Center confirm M10 legacy is the active mode."},{"id":3,"title":"One Entry Timer","description":"A qualifying BUY or SELL immediately starts one 120–180 second timer.","detail":"There is no second retracement, candle, slot, or AI wait."},{"id":4,"title":"Execute or Cancel","description":"At final revalidation the EA executes if valid and below 0.30R movement, otherwise it cancels.","detail":"A cancelled candidate cannot be carried or resurrected."},{"id":5,"title":"Risk and Broker Truth","description":"A core order requires structural SL, one 1.20 widening, configured 10% risk sizing, margin, direction exclusivity, and broker confirmation.","detail":"Ambiguous sends are reconciled and never immediately resent."},{"id":6,"title":"Tick-Based Management","description":"Once open, positions and exits continue to be managed on ticks.","detail":"Entry cadence does not slow exit management."}]}],"faq":[{"q":"Is M30 mode available?","a":"No. This release runs M10 legacy decision mode only; M30 is not a selectable option in the current build. Always confirm the active Decision Mode shown in the MT5 journal and Command Center."},{"q":"Do I need to keep MT5 running?","a":"Yes. A properly monitored VPS can provide continuous terminal operation."},{"q":"Does the EA guarantee profit?","a":"No. Trading can lose money; demo and broker-specific verification are required."},{"q":"Which broker?","a":"Use an MT5 broker whose XAUUSD symbol, stops, volume steps, margin, spread, and execution behavior you have verified."},{"q":"What if connectivity fails?","a":"Broker-held SL/TP remain important, but cloud features and EA-side management may be unavailable until connectivity returns."}]}
+    return {"sections":[{"title":f"How XauCloud {version} Works","subtitle":"Completed M10 evidence with a single authoritative decision mode","steps":[{"id":1,"title":"M10 Evidence","description":"The EA records one immutable snapshot for each completed M10 candle.","detail":"The forming candle is never used as evidence."},{"id":2,"title":"Decision Mode","description":"M10 legacy is the only decision mode in this release. An M30 three-snapshot consensus path exists in source for possible future use but is not selectable or executable in the current build.","detail":"The journal and Command Center confirm M10 legacy is the active mode."},{"id":3,"title":"One Entry Timer","description":"A qualifying BUY or SELL immediately starts one 120–180 second timer.","detail":"There is no second retracement, candle, slot, or AI wait."},{"id":4,"title":"Execute or Cancel","description":"At final revalidation the EA executes if valid and below 0.30R movement, otherwise it cancels.","detail":"A cancelled candidate cannot be carried or resurrected."},{"id":5,"title":"Risk and Broker Truth","description":"A core order requires structural SL, one 1.20 widening, configured 10% risk sizing, margin, direction exclusivity, and broker confirmation.","detail":"Ambiguous sends are reconciled and never immediately resent."},{"id":6,"title":"Tick-Based Management","description":"Once open, positions and exits continue to be managed on ticks.","detail":"Entry cadence does not slow exit management."}]}],"faq":[{"q":"Is M30 mode available?","a":"No. This release runs M10 legacy decision mode only; M30 is not a selectable option in the current build. Always confirm the active Decision Mode shown in the MT5 journal and Command Center."},{"q":"Do I need to keep MT5 running?","a":"Yes. A properly monitored VPS can provide continuous terminal operation."},{"q":"Does the EA guarantee profit?","a":"No. Trading can lose money; demo and broker-specific verification are required."},{"q":"Which broker?","a":"Use an MT5 broker whose XAUUSD symbol, stops, volume steps, margin, spread, and execution behavior you have verified."},{"q":"What if connectivity fails?","a":"Broker-held SL/TP remain important, but cloud features and EA-side management may be unavailable until connectivity returns."}]}
 
 @api_router.get("/docs/setup-guide")
 async def get_setup_guide():
     version = (_current_ea_release() or {}).get("version", "current release")
-    return {"title":f"XauAI Sniper {version} Setup Guide","intro":"Install only the verified compiled EX5 and confirm the running inputs before enabling trading.","steps":[{"step":1,"title":"Prepare MT5 Demo","instructions":["Install your broker's MT5 terminal","Sign in to a demo account","Confirm the broker's exact XAUUSD symbol and trading specification"],"tip":"Do not begin with a real-money account."},{"step":2,"title":"Download Verified EX5","instructions":["Sign in to Command Center","Link the active license",f"Download {version} compiled EX5","Compare the displayed checksum with the release manifest"],"tip":"Customers do not need MQ5 source or MetaEditor compilation."},{"step":3,"title":"Install the EA","instructions":["MT5: File > Open Data Folder","Open MQL5 > Experts","Copy the verified EX5","Refresh Expert Advisors in Navigator"],"tip":"Keep older builds clearly separated."},{"step":4,"title":"Open Gold Chart","instructions":["Open your broker's XAUUSD chart","Set the chart to M10","Confirm live prices and normal broker spread"],"tip":"M10 is the primary evidence timeframe."},{"step":5,"title":"Attach and Review Inputs","instructions":["Drag XAUUSD_AI_Sniper_EA onto the chart","Enter the license PIN","Confirm Decision Mode shows M10 legacy","Confirm risk, magic number, server URL, and structural SL settings"],"tip":"This release runs M10 legacy decision mode only; there is no M30 mode to select."},{"step":6,"title":"Verify Journal","instructions":["Confirm the exact EA version and build hash","Confirm the active Decision Mode","Confirm license and indicator readiness","Confirm there is no older EA attached to another XAUUSD chart"],"tip":"The file name alone does not prove the running version."},{"step":7,"title":"Enable on Demo","instructions":["Enable Allow Algo Trading","Turn the MT5 Algo Trading button on","Watch heartbeat and Command Center status","Verify broker send/modify/close behavior on demo"],"tip":"Move to live only after owner approval and broker-specific evidence."}],"important_notes":["No profit is guaranteed.","The configured 10% risk is high and can produce large losses.","Keep MT5 and connectivity monitored.","Never share your PIN.","Mac and VPS must use the same approved artifact and intentional Decision Mode."]}
+    return {"title":f"XauCloud {version} Setup Guide","intro":"Install only the verified compiled EX5 and confirm the running inputs before enabling trading.","steps":[{"step":1,"title":"Prepare MT5 Demo","instructions":["Install your broker's MT5 terminal","Sign in to a demo account","Confirm the broker's exact XAUUSD symbol and trading specification"],"tip":"Do not begin with a real-money account."},{"step":2,"title":"Download Verified EX5","instructions":["Sign in to Command Center","Link the active license",f"Download {version} compiled EX5","Compare the displayed checksum with the release manifest"],"tip":"Customers do not need MQ5 source or MetaEditor compilation."},{"step":3,"title":"Install the EA","instructions":["MT5: File > Open Data Folder","Open MQL5 > Experts","Copy the verified EX5","Refresh Expert Advisors in Navigator"],"tip":"Keep older builds clearly separated."},{"step":4,"title":"Open Gold Chart","instructions":["Open your broker's XAUUSD chart","Set the chart to M10","Confirm live prices and normal broker spread"],"tip":"M10 is the primary evidence timeframe."},{"step":5,"title":"Attach and Review Inputs","instructions":["Drag XAUUSD_AI_Sniper_EA onto the chart","Enter the license PIN","Confirm Decision Mode shows M10 legacy","Confirm risk, magic number, server URL, and structural SL settings"],"tip":"This release runs M10 legacy decision mode only; there is no M30 mode to select."},{"step":6,"title":"Verify Journal","instructions":["Confirm the exact EA version and build hash","Confirm the active Decision Mode","Confirm license and indicator readiness","Confirm there is no older EA attached to another XAUUSD chart"],"tip":"The file name alone does not prove the running version."},{"step":7,"title":"Enable on Demo","instructions":["Enable Allow Algo Trading","Turn the MT5 Algo Trading button on","Watch heartbeat and Command Center status","Verify broker send/modify/close behavior on demo"],"tip":"Move to live only after owner approval and broker-specific evidence."}],"important_notes":["No profit is guaranteed.","The configured 10% risk is high and can produce large losses.","Keep MT5 and connectivity monitored.","Never share your PIN.","Mac and VPS must use the same approved artifact and intentional Decision Mode."]}
 
 @api_router.get("/docs/video-guide")
 async def get_video_guide():
@@ -3246,7 +3246,7 @@ async def ai_memory_report(request: Request, pin: str = "", account: str = "", l
             ])
             buckets.setdefault(key, []).append(row)
         lines = [
-            "# XAU AI Sniper Conscious Memory Report",
+            "# XauCloud Conscious Memory Report",
             "",
             f"Generated: {datetime.now(timezone.utc).isoformat()}",
             f"Records: {len(rows)}",
@@ -4237,7 +4237,7 @@ async def request_ea_download_token(user: dict = Depends(get_cloud_user)):
 async def _verify_command_license(user: dict, key: str) -> dict:
     raw = _normalize_license_key(key)
     if not raw.startswith("ASE-") or len(raw) < 10:
-        raise HTTPException(status_code=400, detail="Enter your XAU AI Sniper license key, for example ASE-D4Q9-SUFW.")
+        raise HTTPException(status_code=400, detail="Enter your XauCloud license key, for example ASE-D4Q9-SUFW.")
     lic = await db.pin_licenses.find_one({"pin": raw, "is_active": True}, {"_id": 0})
     if not lic:
         raise HTTPException(status_code=403, detail="License key not found or inactive.")
@@ -4462,12 +4462,12 @@ async def cloud_forgot_password(req: CloudForgotPasswordReq, request: Request):
         token = _password_reset_token(user["id"], jti)
         reset_url = f"{PUBLIC_SITE_URL}/command/reset-password?token={token}"
         html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-<h2 style="color:#B8860B;">Reset your XauAI Sniper Command Center password</h2>
+<h2 style="color:#B8860B;">Reset your XauCloud Command Center password</h2>
 <p>Click the link below to set a new password. This link expires in 30 minutes and can only be used once.</p>
 <p><a href="{reset_url}" style="display:inline-block;background:#B8860B;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;">Reset password</a></p>
 <p style="color:#888;font-size:12px;">If you didn't request this, you can safely ignore this email -- your password will not be changed.</p>
 </div>"""
-        await _send_email(email, "Reset your XauAI Sniper password", html)
+        await _send_email(email, "Reset your XauCloud password", html)
     return {"ok": True, "message": "If an account exists for that email, a reset link has been sent."}
 
 @api_router.post("/cloud/auth/reset-password")
