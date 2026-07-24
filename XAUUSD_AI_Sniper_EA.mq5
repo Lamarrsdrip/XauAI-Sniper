@@ -9820,6 +9820,8 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       (StringFind(logTag, "OWNER_INITIAL_1R_HARD_STOP") == 0) ||
       (StringFind(logTag, "OWNER_PYRAMID_1R_HARD_STOP") == 0) ||
       (StringFind(logTag, "GENERAL_10M_EXTENSION_RESTORE_ORIGINAL_SL") == 0) ||
+      (StringFind(logTag, "GENERAL_10M_EXTENSION_FLOOR_PROTECT") == 0) ||
+      (StringFind(logTag, "GENERAL_10M_EXTENSION_RATCHET") == 0) ||
       (StringFind(logTag, "BASKET_050R_RESTORE_ORIGINAL_SL") == 0) ||
       (StringFind(logTag, "OWNER_R_EXIT_FLOOR") == 0) ||
       (StringFind(logTag, "PRIMARY_EXIT_FLOOR") == 0);
@@ -26303,7 +26305,7 @@ bool SafePositionClosePartial(ulong ticket, double lots, string ctx = "")
 #define R_CLOSE_REQUESTED     2
 #define R_CLOSE_PENDING_RETRY 3
 #define R_CLOSE_CONFIRMED     4
-#define R_EXIT_STATE_SCHEMA_VERSION 6
+#define R_EXIT_STATE_SCHEMA_VERSION 7
 // v6.25.0 owner directive 2026-07-17 -- orphan-cleanup debounce thresholds.
 // Both must be satisfied before a "not found this tick" observation is
 // trusted as a genuine close -- see XAU_RExit_ReconcileOrphans().
@@ -26371,6 +26373,14 @@ struct XAU_RExitState
    double   extensionDeadlineR;
    double   extensionDeadlineProfitUSD;
    datetime extensionLastSuppressionLog;
+
+   // v6.25.26 owner rule -- EXTENSION-SPECIFIC 70%-OF-PEAK PROTECTION.
+   // Scoped strictly to the active 600s extension window (see
+   // XAU_General10MArmExtensionFloor / XAU_General10MUpdateExtensionRatchet);
+   // never read or written by any pre-extension GENERAL exit code.
+   double   extensionHighestPeakR;      // highest R reached DURING this extension only (not the trade's overall peakR)
+   bool     extensionRatchetActivated;  // true once extensionHighestPeakR first reached +0.70R
+   double   extensionProtectedFloorR;   // current protected floor, in R -- monotonic, never decreases
 
    // v6.25.0 owner directive 2026-07-17 -- URGENT LIVE EXIT FORENSIC fix.
    // Debounce state for XAU_RExit_ReconcileOrphans(): a live position must
@@ -26873,6 +26883,210 @@ bool XAU_General10MRestoreOriginalProtection(int idx, ulong ticket, string &fail
    return true;
 }
 
+// v6.25.26 OWNER EXIT RULE -- EXTENSION-SPECIFIC 70%-OF-PEAK PROTECTION,
+// PHASE 1: extension-start minimum floor. Scoped strictly to the moment the
+// existing 600-second GENERAL extension arms; this function is never called
+// from anywhere else and never runs before the extension exists. It does
+// not replace XAU_General10MRestoreOriginalProtection (still present,
+// unused by this call site, kept as historical evidence per the existing
+// codebase convention) -- it supersedes which function TryArm calls at the
+// exact same single call site.
+//
+// Rule: extensionProtectedFloorR = max(existingProtectedFloorR, 0.15).
+// existingProtectedFloorR is derived from whatever SL is already on the
+// broker at this instant (could be the frozen original structural stop --
+// a negative R -- or, in principle, an already-stronger floor); the max()
+// guarantees this step can only improve protection, never weaken it.
+bool XAU_General10MArmExtensionFloor(int idx, ulong ticket, string &failureReason)
+{
+   failureReason = "";
+   if(idx < 0 || idx >= ArraySize(g_rExit)) { failureReason="INVALID_R_EXIT_INDEX"; return false; }
+   if(g_rExit[idx].ownerExitProfile != (int)OWNER_EXIT_GENERAL) { failureReason="NOT_GENERAL_PROFILE"; return false; }
+   if(!PositionSelectByTicket(ticket)) { failureReason="POSITION_NOT_LIVE"; return false; }
+
+   bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   double entryPrice = g_rExit[idx].originalEntryPrice;
+   double currentSL = PositionGetDouble(POSITION_SL);
+   double currentTP = PositionGetDouble(POSITION_TP);
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double currentPrice = isBuy ? bid : ask;
+
+   // Internal R distance -- the SAME independent reference used everywhere
+   // else in this file for R-based exit management (frozen at CORE entry),
+   // never the fixed InpStopLossGoldMove broker-SL distance.
+   int slot = XAU_CampaignSlot(isBuy ? 1 : -1);
+   double internalRDistance = g_campaign[slot].ownerEffectiveHardStopDistance;
+   if(!(g_campaign[slot].active && internalRDistance > 0.0))
+   {
+      internalRDistance = isBuy ? (entryPrice - g_rExit[idx].originalStopLoss)
+                                 : (g_rExit[idx].originalStopLoss - entryPrice);
+      if(internalRDistance <= 0.0) { failureReason="INVALID_INTERNAL_R_DISTANCE"; return false; }
+   }
+
+   double existingProtectedFloorR = internalRDistance > 0.0 && currentSL > 0.0
+      ? (isBuy ? (currentSL - entryPrice) : (entryPrice - currentSL)) / internalRDistance
+      : -1.0; // no valid existing SL to compare against -- treat as worse than any positive floor
+   double minimumExtensionFloorR = 0.15;
+   double extensionProtectedFloorR = MathMax(existingProtectedFloorR, minimumExtensionFloorR);
+   double calculatedSL = isBuy ? (entryPrice + internalRDistance * extensionProtectedFloorR)
+                                : (entryPrice - internalRDistance * extensionProtectedFloorR);
+   calculatedSL = NormalizeDouble(calculatedSL, digits);
+
+   PrintFormat("EXTENSION_STARTED | position=%I64u | entryPrice=%.5f | internalRDistance=%.5f | existingProtectedFloorR=%.3f | minimumExtensionFloorR=%.2f | activeExtensionFloorR=%.3f | deadline=%s | ratchetActivated=false | calculatedSL=%.5f | previousSL=%.5f",
+               g_rExit[idx].positionId, entryPrice, internalRDistance, existingProtectedFloorR,
+               minimumExtensionFloorR, extensionProtectedFloorR,
+               TimeToString(g_rExit[idx].extensionDeadline, TIME_DATE|TIME_SECONDS), calculatedSL, currentSL);
+
+   bool validSide = isBuy ? (calculatedSL < bid) : (calculatedSL > ask);
+   if(!validSide)
+   {
+      failureReason = "PRICE_ALREADY_BEYOND_CALCULATED_LEVEL";
+      return false;
+   }
+
+   bool alreadyAtTarget = MathAbs(currentSL - calculatedSL) <= MathMax(point*2.0, 0.00001) && currentTP <= 0.00001;
+   if(!alreadyAtTarget)
+   {
+      bool accepted = SafeModifySL(ticket, calculatedSL, 0.0, isBuy, currentPrice,
+                                    "GENERAL_10M_EXTENSION_FLOOR_PROTECT");
+      if(!accepted)
+      {
+         failureReason = StringFormat("BROKER_MODIFY_REJECTED ret=%u err=%d", trade.ResultRetcode(), GetLastError());
+         return false;
+      }
+      if(!PositionSelectByTicket(ticket)) { failureReason="POSITION_VANISHED_AFTER_MODIFY"; return false; }
+   }
+   double actualSL = PositionGetDouble(POSITION_SL);
+   double actualTP = PositionGetDouble(POSITION_TP);
+   bool confirmed = MathAbs(actualSL - calculatedSL) <= MathMax(point*2.0, 0.00001) && actualTP <= 0.00001;
+   if(!confirmed)
+   {
+      failureReason = StringFormat("BROKER_REREAD_NOT_CONFIRMED actualSL=%.5f actualTP=%.5f", actualSL, actualTP);
+      return false;
+   }
+
+   double protectedR = internalRDistance > 0.0
+      ? (isBuy ? (actualSL - entryPrice) : (entryPrice - actualSL)) / internalRDistance
+      : 0.0;
+   g_rExit[idx].guaranteedFloorDesiredSL = actualSL;
+   g_rExit[idx].lastProtectedSL = actualSL;
+   g_rExit[idx].extensionProtectedFloorR = protectedR;
+   g_rExit[idx].extensionHighestPeakR = MathMax(protectedR, g_rExit[idx].extensionTriggerR);
+   g_rExit[idx].extensionRatchetActivated = false;
+   PrintFormat("EXTENSION_PROTECTION_CONFIRMED | position=%I64u | actualBrokerSL=%.5f | protectedR=%.3f | timerActive=true",
+               g_rExit[idx].positionId, actualSL, protectedR);
+   return true;
+}
+
+// v6.25.26 OWNER EXIT RULE -- EXTENSION-SPECIFIC 70%-OF-PEAK PROTECTION,
+// PHASE 2: the peak-tracking ratchet. Called every tick while the extension
+// is active (from the Priority-1.5 extension-hold branch in the main R-exit
+// loop) AND once immediately after arming (covers the edge case where the
+// trigger R itself is already >= 0.70). Pure: reads g_rExit[idx].currentR,
+// which the caller has already refreshed this tick; never recomputes
+// profit/R itself, so it cannot drift from the one canonical R calculation.
+//
+// Activation: only at extensionHighestPeakR >= 0.70 (not at entry, not at
+// extension start, not at 0.15/0.40/0.50R). Once activated, the floor is
+// max(previous floor, highestPeakR * 0.70) -- monotonic by construction
+// since both operands of the max() can only ever increase or stay level.
+void XAU_General10MUpdateExtensionRatchet(int idx, ulong ticket)
+{
+   if(idx < 0 || idx >= ArraySize(g_rExit)) return;
+   if(g_rExit[idx].ownerExitProfile != (int)OWNER_EXIT_GENERAL) return;
+   if(!XAU_General10MExtensionActive(idx)) return;
+
+   double currentR = g_rExit[idx].currentR;
+   double previousPeakR = g_rExit[idx].extensionHighestPeakR;
+   if(currentR > g_rExit[idx].extensionHighestPeakR)
+      g_rExit[idx].extensionHighestPeakR = currentR;
+
+   const double RATCHET_ACTIVATION_R = 0.70;
+   const double RATCHET_RETENTION_PCT = 0.70;
+
+   if(!g_rExit[idx].extensionRatchetActivated && g_rExit[idx].extensionHighestPeakR >= RATCHET_ACTIVATION_R)
+   {
+      g_rExit[idx].extensionRatchetActivated = true;
+      double activationFloorR = g_rExit[idx].extensionHighestPeakR * RATCHET_RETENTION_PCT;
+      PrintFormat("EXTENSION_70PCT_RATCHET_ACTIVATED | position=%I64u | highestExtensionPeakR=%.3f | activationThresholdR=%.2f | calculatedFloorR=%.3f",
+                  g_rExit[idx].positionId, g_rExit[idx].extensionHighestPeakR, RATCHET_ACTIVATION_R, activationFloorR);
+   }
+
+   if(!g_rExit[idx].extensionRatchetActivated) return;
+
+   double ratchetFloorR = g_rExit[idx].extensionHighestPeakR * RATCHET_RETENTION_PCT;
+   double newFloorR = MathMax(g_rExit[idx].extensionProtectedFloorR, ratchetFloorR);
+   if(newFloorR <= g_rExit[idx].extensionProtectedFloorR + 0.0001) return; // no genuine improvement -- do not touch the broker
+
+   if(!PositionSelectByTicket(ticket)) return; // position gone -- OnTradeTransaction reconciliation owns this, not this function
+   bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   double entryPrice = g_rExit[idx].originalEntryPrice;
+   double currentSL = PositionGetDouble(POSITION_SL);
+   double currentTP = PositionGetDouble(POSITION_TP);
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double currentPrice = isBuy ? bid : ask;
+
+   int slot = XAU_CampaignSlot(isBuy ? 1 : -1);
+   double internalRDistance = g_campaign[slot].ownerEffectiveHardStopDistance;
+   if(!(g_campaign[slot].active && internalRDistance > 0.0))
+      internalRDistance = isBuy ? (entryPrice - g_rExit[idx].originalStopLoss)
+                                 : (g_rExit[idx].originalStopLoss - entryPrice);
+   if(internalRDistance <= 0.0) return;
+
+   double requestedSL = isBuy ? (entryPrice + internalRDistance * newFloorR)
+                               : (entryPrice - internalRDistance * newFloorR);
+   requestedSL = NormalizeDouble(requestedSL, digits);
+
+   // For BUY the protected SL may only move upward; for SELL only downward.
+   // newFloorR > previous floor already guarantees this algebraically, but
+   // re-derive it as an explicit geometric assertion rather than trust the
+   // R-space comparison alone.
+   bool directionOk = isBuy ? (currentSL <= 0.0 || requestedSL > currentSL)
+                             : (currentSL <= 0.0 || requestedSL < currentSL);
+   if(!directionOk) return;
+
+   bool validSide = isBuy ? (requestedSL < bid) : (requestedSL > ask);
+   if(!validSide)
+   {
+      PrintFormat("EXTENSION_PEAK_RATCHET_REJECTED | position=%I64u | reason=PRICE_ALREADY_BEYOND_CALCULATED_LEVEL | requestedSL=%.5f | bid=%.5f | ask=%.5f",
+                  g_rExit[idx].positionId, requestedSL, bid, ask);
+      return; // fail closed -- do not report the higher floor as protected until broker confirmation exists
+   }
+
+   double previousFloorR = g_rExit[idx].extensionProtectedFloorR;
+   bool accepted = SafeModifySL(ticket, requestedSL, 0.0, isBuy, currentPrice, "GENERAL_10M_EXTENSION_RATCHET");
+   if(!accepted)
+   {
+      PrintFormat("EXTENSION_PEAK_RATCHET_REJECTED | position=%I64u | reason=BROKER_MODIFY_REJECTED ret=%u err=%d | requestedSL=%.5f",
+                  g_rExit[idx].positionId, trade.ResultRetcode(), GetLastError(), requestedSL);
+      return;
+   }
+   if(!PositionSelectByTicket(ticket)) return;
+   double confirmedSL = PositionGetDouble(POSITION_SL);
+   double confirmedTP = PositionGetDouble(POSITION_TP);
+   bool confirmed = MathAbs(confirmedSL - requestedSL) <= MathMax(point*2.0, 0.00001) && confirmedTP <= 0.00001;
+   if(!confirmed)
+   {
+      PrintFormat("EXTENSION_PEAK_RATCHET_REJECTED | position=%I64u | reason=BROKER_REREAD_NOT_CONFIRMED actualSL=%.5f | requestedSL=%.5f",
+                  g_rExit[idx].positionId, confirmedSL, requestedSL);
+      return; // do not update floor state -- broker did not confirm the improvement
+   }
+
+   g_rExit[idx].extensionProtectedFloorR = newFloorR;
+   g_rExit[idx].lastProtectedSL = confirmedSL;
+   g_rExit[idx].guaranteedFloorDesiredSL = confirmedSL;
+   g_rExitStateDirty = true;
+   PrintFormat("EXTENSION_PEAK_RATCHET_UPDATED | position=%I64u | previousPeakR=%.3f | newPeakR=%.3f | previousFloorR=%.3f | newFloorR=%.3f | requestedSL=%.5f | confirmedSL=%.5f",
+               g_rExit[idx].positionId, previousPeakR, g_rExit[idx].extensionHighestPeakR,
+               previousFloorR, newFloorR, requestedSL, confirmedSL);
+}
+
 bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
 {
    if(idx < 0 || idx >= ArraySize(g_rExit)) return false;
@@ -26903,9 +27117,9 @@ bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
    g_rExitStateDirty = true;
 
    string restoreFailure = "";
-   if(!XAU_General10MRestoreOriginalProtection(idx, ticket, restoreFailure))
+   if(!XAU_General10MArmExtensionFloor(idx, ticket, restoreFailure))
    {
-      PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=SL_RESTORE | reason=%s | action=EXECUTE_ORIGINAL_APPROVED_CLOSE",
+      PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=SL_015R_FLOOR_PROTECT | reason=%s | action=EXECUTE_ORIGINAL_APPROVED_CLOSE",
                   g_rExit[idx].positionId, restoreFailure);
       g_rExit[idx].extensionStartTime = 0;
       g_rExit[idx].extensionDeadline = 0;
@@ -26913,6 +27127,9 @@ bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
       g_rExit[idx].extensionTriggerPrice = 0.0;
       g_rExit[idx].extensionTriggerProfitUSD = 0.0;
       g_rExit[idx].extensionTriggerAuthority = "";
+      g_rExit[idx].extensionHighestPeakR = 0.0;
+      g_rExit[idx].extensionRatchetActivated = false;
+      g_rExit[idx].extensionProtectedFloorR = 0.0;
       g_rExitStateDirty = true;
       XAU_RExit_SaveState(true);
       return false;
@@ -26930,24 +27147,31 @@ bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
    g_rExit[idx].extensionLastSuppressionLog = 0;
 
    // The active extension deliberately suspends the old profitable floor.
-   // The broker now carries only the frozen original structural SL; the loop
-   // short-circuits before any new floor can arm or ratchet.
+   // v6.25.26: unlike the pre-extension floor, the broker now carries the
+   // owner's extension-start +0.15R-or-better protection -- already set,
+   // confirmed, and recorded into guaranteedFloorDesiredSL/lastProtectedSL/
+   // extensionProtectedFloorR by XAU_General10MArmExtensionFloor() above.
+   // Do NOT overwrite those with the raw original structural SL here; that
+   // would silently discard the floor this rule just placed on the broker.
    g_rExit[idx].profitGuaranteeArmed = false;
    g_rExit[idx].guaranteedFloorR = 0.0;
-   g_rExit[idx].guaranteedFloorDesiredSL = g_rExit[idx].originalStopLoss;
    g_rExit[idx].guaranteedFloorGeometryBlocked = false;
-   g_rExit[idx].lastProtectedSL = g_rExit[idx].originalStopLoss;
    g_rExit[idx].closeState = R_CLOSE_NONE;
    g_rExit[idx].pendingCloseReason = "";
    g_rExit[idx].closeAttemptCount = 0;
    g_rExitStateDirty = true;
    XAU_RExit_SaveState(true);
 
-   PrintFormat("GENERAL_10M_EXTENSION_ARMED | position_id=%I64u | start_time=%s | deadline=%s | trigger_r=%.3f | original_structural_sl=%.5f",
+   PrintFormat("GENERAL_10M_EXTENSION_ARMED | position_id=%I64u | start_time=%s | deadline=%s | trigger_r=%.3f | original_structural_sl=%.5f | extension_protected_floor_r=%.3f",
                g_rExit[idx].positionId,
                TimeToString(g_rExit[idx].extensionStartTime, TIME_DATE|TIME_SECONDS),
                TimeToString(g_rExit[idx].extensionDeadline, TIME_DATE|TIME_SECONDS),
-               g_rExit[idx].extensionTriggerR, g_rExit[idx].originalStopLoss);
+               g_rExit[idx].extensionTriggerR, g_rExit[idx].originalStopLoss, g_rExit[idx].extensionProtectedFloorR);
+
+   // Covers the edge case where the trigger R that qualified this extension
+   // is already >= 0.70 -- the ratchet must not wait for the next tick to
+   // notice a peak that was already reached at the instant of arming.
+   XAU_General10MUpdateExtensionRatchet(idx, ticket);
    return true;
 }
 
@@ -27306,7 +27530,10 @@ void XAU_RExit_SaveState(bool force = false)
                  (long)g_rExit[i].extensionDeadlineRequestTime,
                  DoubleToString(g_rExit[i].extensionDeadlineR, 6),
                  DoubleToString(g_rExit[i].extensionDeadlineProfitUSD, 2),
-                 (long)g_rExit[i].extensionLastSuppressionLog);
+                 (long)g_rExit[i].extensionLastSuppressionLog,
+                 DoubleToString(g_rExit[i].extensionHighestPeakR, 6),
+                 g_rExit[i].extensionRatchetActivated ? 1 : 0,
+                 DoubleToString(g_rExit[i].extensionProtectedFloorR, 6));
    }
    FileClose(h);
    if(!FileMove(tmpPath, FILE_COMMON, path, FILE_COMMON | FILE_REWRITE))
@@ -27355,7 +27582,7 @@ void XAU_RExit_LoadPersistedState()
    while(!FileIsEnding(h))
    {
       int schema     = (int)FileReadNumber(h);
-      if(schema != 2 && schema != 3 && schema != 4 && schema != 5 && schema != R_EXIT_STATE_SCHEMA_VERSION)
+      if(schema != 2 && schema != 3 && schema != 4 && schema != 5 && schema != 6 && schema != R_EXIT_STATE_SCHEMA_VERSION)
       {
          // v6.21.2: a foreign/older schema row has a different field layout --
          // do not keep reading fields from it as if they lined up. Skip the
@@ -27417,6 +27644,9 @@ void XAU_RExit_LoadPersistedState()
       double extensionDeadlineR = schema >= 6 ? FileReadNumber(h) : 0.0;
       double extensionDeadlineProfitUSD = schema >= 6 ? FileReadNumber(h) : 0.0;
       datetime extensionLastSuppressionLog = schema >= 6 ? (datetime)FileReadNumber(h) : 0;
+      double extensionHighestPeakR = schema >= 7 ? FileReadNumber(h) : 0.0;
+      bool extensionRatchetActivated = schema >= 7 ? FileReadNumber(h) != 0 : false;
+      double extensionProtectedFloorR = schema >= 7 ? FileReadNumber(h) : 0.0;
       int legacyOwnerExitProfile = ownerExitProfile;
       if(schema <= 4)
       {
@@ -27509,6 +27739,9 @@ void XAU_RExit_LoadPersistedState()
       g_rExit[idx].extensionDeadlineR = extensionDeadlineR;
       g_rExit[idx].extensionDeadlineProfitUSD = extensionDeadlineProfitUSD;
       g_rExit[idx].extensionLastSuppressionLog = extensionLastSuppressionLog;
+      g_rExit[idx].extensionHighestPeakR = extensionHighestPeakR;
+      g_rExit[idx].extensionRatchetActivated = extensionRatchetActivated;
+      g_rExit[idx].extensionProtectedFloorR = extensionProtectedFloorR;
       int restoredCampaignSlot = XAU_CampaignSlot(direction);
       if(g_campaign[restoredCampaignSlot].active)
          g_campaign[restoredCampaignSlot].ownerExitProfile = ownerExitProfile;
@@ -27518,10 +27751,11 @@ void XAU_RExit_LoadPersistedState()
                   StringLen(pendingReason) > 0 ? pendingReason : "NONE",
                   guaranteeArmed ? "true" : "false", guaranteedFloorR);
       if(extensionArmed && extensionFullyConfirmed && !extensionCompleted)
-         PrintFormat("GENERAL_10M_EXTENSION_RESTORED | position_id=%I64u | start_time=%s | deadline=%s | overdue=%s",
+         PrintFormat("GENERAL_10M_EXTENSION_RESTORED | position_id=%I64u | start_time=%s | deadline=%s | overdue=%s | extensionHighestPeakR=%.3f | extensionRatchetActivated=%s | extensionProtectedFloorR=%.3f",
                      positionId, TimeToString(extensionStartTime, TIME_DATE|TIME_SECONDS),
                      TimeToString(extensionDeadline, TIME_DATE|TIME_SECONDS),
-                     TimeCurrent() >= extensionDeadline ? "true" : "false");
+                     TimeCurrent() >= extensionDeadline ? "true" : "false",
+                     extensionHighestPeakR, extensionRatchetActivated ? "true" : "false", extensionProtectedFloorR);
       if(closeState == R_CLOSE_REQUESTED || closeState == R_CLOSE_PENDING_RETRY)
          PrintFormat("R_EXIT_PENDING_CLOSE_RESTORED positionId=%I64u ticket=%I64u reason=%s", positionId, liveTicket, pendingReason);
    }
@@ -28410,9 +28644,22 @@ void XAU_RExitCoreLoop()
       {
          datetime extensionNow = TimeCurrent();
          if(extensionNow >= g_rExit[idx].extensionDeadline)
+         {
+            PrintFormat("EXTENSION_DEADLINE_EXIT | position=%I64u | highestExtensionPeakR=%.3f | protectedFloorR=%.3f | currentR=%.3f | secondsElapsed=%d | timerExpired=true",
+                        g_rExit[idx].positionId, g_rExit[idx].extensionHighestPeakR, g_rExit[idx].extensionProtectedFloorR,
+                        currentR, (int)(extensionNow - g_rExit[idx].extensionStartTime));
             XAU_RExit_RequestClose(idx, ticket, "OWNER_R_EXIT_GENERAL_10M_DEADLINE");
+         }
          else
+         {
+            // v6.25.26: the extension-specific 70%-of-peak ratchet runs every
+            // tick the extension is active and before the deadline -- this is
+            // the ONLY place it is called from the main loop (plus once at
+            // arm time, for the trigger-R->=0.70 edge case). It never runs
+            // for a position outside an active extension.
+            XAU_General10MUpdateExtensionRatchet(idx, ticket);
             XAU_General10MLogSuppressed(idx, "ACTIVE_EXTENSION_HOLD");
+         }
          continue;
       }
 
@@ -31303,9 +31550,20 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
             double extensionCloseR = g_rExit[rIdx].cumulativeOriginalRiskUSD > 0.0
                                      ? extensionCloseProfit / g_rExit[rIdx].cumulativeOriginalRiskUSD : 0.0;
             if(dReason == DEAL_REASON_SL)
+            {
                PrintFormat("GENERAL_10M_EXTENSION_ORIGINAL_SL_HIT | position_id=%I64u | deadline=%s | close_time=%s | realized_r=%.3f",
                            posId, TimeToString(g_rExit[rIdx].extensionDeadline, TIME_DATE|TIME_SECONDS),
                            TimeToString(extensionCloseTime, TIME_DATE|TIME_SECONDS), extensionCloseR);
+               // v6.25.26: the broker-side SL fill IS the protected-floor exit
+               // this owner rule expects when price reverses to the ratcheted
+               // (or minimum +0.15R) level before the 600s deadline -- no
+               // separate EA-side close action is needed or taken here, only
+               // the required telemetry record of what protection was in
+               // effect when it happened.
+               PrintFormat("EXTENSION_PROTECTED_EXIT | position=%I64u | highestExtensionPeakR=%.3f | protectedFloorR=%.3f | secondsElapsed=%d | timerExpired=false",
+                           posId, g_rExit[rIdx].extensionHighestPeakR, g_rExit[rIdx].extensionProtectedFloorR,
+                           (int)(extensionCloseTime - g_rExit[rIdx].extensionStartTime));
+            }
             else if(extensionCloseTime < g_rExit[rIdx].extensionDeadline &&
                     dReason != DEAL_REASON_CLIENT && dReason != DEAL_REASON_MOBILE && dReason != DEAL_REASON_WEB)
                PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=UNINTENDED_EARLY_CLOSE | reason=%s | close_time=%s | deadline=%s | realized_r=%.3f",
