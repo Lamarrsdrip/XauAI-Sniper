@@ -55,3 +55,27 @@ nothing overwritten, nothing attached, nothing restarted, AutoTrading untouched)
 - This does not change the Phase 9 release-gate verdict (still RELEASE HOLD) —
   file staging isn't runtime verification. Confirming what's actually attached
   and running on both terminals (§3 of `05_live_step_packages.md`) remains open.
+
+## Update: VPS runtime confirmed healthy (post-deployment check)
+
+Read `MQL5\Logs\20260724.log` (the actual Experts-tab log — distinct from the
+terminal-level `Logs\` journal checked earlier) directly via SSH. Findings:
+
+- License validated for real: `BOT-MONITOR heartbeat OK account=436698921
+  pin=ASE-OV8Z-AJ2J ... 'auth':'license_pin','bound':true` — backend-confirmed,
+  not just a local PIN-format check.
+- M10 decision authority confirmed intact despite the chart being attached on
+  M5: log is full of `M10_SIGNAL_ANALYSIS`, `M10_EVIDENCE_STORED`,
+  `M10_FRESHNESS` lines, exactly matching the source-level guarantee from
+  `02_ea_root_audit.md` (no `Period()` usage anywhere in the EA — decisions
+  never depend on the attached chart's timeframe).
+- No errors; correctly returning `NO_TRADE` when setup evidence doesn't clear
+  threshold (`buyCaseScore=48.4` vs `threshold=55.0`) — truthful non-trading,
+  not a fault.
+- Server is `Exness-MT5Trial9` — suggests a broker trial/demo account rather
+  than confirmed funded real money, though this isn't independently verified
+  beyond the server name.
+
+This resolves the runtime-verification gap for the VPS. Mac verification
+remains partial (attached, AutoTrading confirmed off, but the Mac's own
+MQL5\Logs Experts-tab output was not separately checked this session).
