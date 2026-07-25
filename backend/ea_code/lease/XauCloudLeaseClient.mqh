@@ -475,15 +475,33 @@ string XAU_LeaseMutexName(const string &licenseId, const string &accountLogin, c
 
 // Compare-and-set: succeeds only if the named global variable does not
 // exist or is older than staleSeconds (a crashed/hung prior attempt).
+// Mirrors XAU_TryClaimEntryLock()'s proven compare-and-swap exactly
+// (mq5:4056-4073 -- see the v6.20.3 adversarial-review comment there
+// explaining why a plain check-then-set is a real TOCTOU race between
+// two chart instances): GlobalVariableSetOnCondition only succeeds if
+// the variable's value is STILL exactly oldVal at the instant of the
+// write, so a racing second acquire attempt correctly fails closed
+// instead of silently overwriting the first holder's claim.
 bool XAU_LeaseMutexTryAcquire(const string &name, int staleSeconds = 60)
 {
-   if(GlobalVariableCheck(name))
-   {
-      datetime setAt = (datetime)GlobalVariableGet(name);
-      if(TimeCurrent() - setAt < staleSeconds)
-         return false; // held by a still-fresh attempt
-   }
-   return GlobalVariableSet(name, (double)TimeCurrent()) != 0;
+   // GlobalVariableSetOnCondition() does NOT create a variable that does
+   // not exist yet in this MQL5 build (verified empirically: it fails
+   // with GetLastError()==4501/"global variable not found" even when
+   // comparing against check_value=0.0 -- not the commonly-assumed
+   // auto-create-on-zero behavior). For the true first-ever claim of this
+   // exact key there is by definition no prior claimant to race against,
+   // so a plain GlobalVariableSet() is the correct primitive there. Once
+   // the variable exists, every subsequent claim goes through the real
+   // compare-and-swap below, identical to XAU_TryClaimEntryLock()'s
+   // proven pattern (mq5:4056-4073).
+   if(!GlobalVariableCheck(name))
+      return GlobalVariableSet(name, (double)TimeCurrent()) != 0;
+
+   double oldVal = GlobalVariableGet(name);
+   double elapsed = (oldVal > 0.0) ? (double)(TimeCurrent() - (datetime)oldVal) : 1.0e9;
+   if(elapsed < staleSeconds)
+      return false; // held by a still-fresh attempt
+   return GlobalVariableSetOnCondition(name, (double)TimeCurrent(), oldVal);
 }
 
 void XAU_LeaseMutexRelease(const string &name)
@@ -554,12 +572,30 @@ bool XAU_LeaseOfflineLedgerTryRecordNew(const string &executionKey)
 //| pipe-delimited path above once persisted, not from this JSON       |
 //| directly).                                                         |
 //+------------------------------------------------------------------+
+// Advances past any run of plain ASCII spaces starting at `pos`. Python's
+// json.dumps() (the real backend's serializer) uses the default
+// separators (", ", ": ") -- i.e. a space after every colon and every
+// comma -- so a JSON extractor that assumes compact/no-space JSON
+// silently fails to find anything at all. This was a real bug caught by
+// running the full parse pipeline in Strategy Tester: every field
+// defaulted to empty/zero because the naive needle-with-no-space never
+// matched.
+int XAU_JsonSkipWhitespace(const string &json, int pos)
+{
+   int len = StringLen(json);
+   while(pos < len && StringGetCharacter(json, pos) == ' ')
+      pos++;
+   return pos;
+}
+
 string XAU_JsonExtractString(const string &json, const string &key)
 {
-   string needle = "\"" + key + "\":\"";
+   string needle = "\"" + key + "\":";
    int pos = StringFind(json, needle);
    if(pos < 0) return "";
-   int start = pos + StringLen(needle);
+   int start = XAU_JsonSkipWhitespace(json, pos + StringLen(needle));
+   if(start >= StringLen(json) || StringGetCharacter(json, start) != '"') return "";
+   start++; // skip the opening quote
    int end = StringFind(json, "\"", start);
    if(end < 0) return "";
    return StringSubstr(json, start, end - start);
@@ -570,7 +606,7 @@ long XAU_JsonExtractInt(const string &json, const string &key)
    string needle = "\"" + key + "\":";
    int pos = StringFind(json, needle);
    if(pos < 0) return 0;
-   int start = pos + StringLen(needle);
+   int start = XAU_JsonSkipWhitespace(json, pos + StringLen(needle));
    int end = start;
    int len = StringLen(json);
    while(end < len)
@@ -584,8 +620,11 @@ long XAU_JsonExtractInt(const string &json, const string &key)
 
 bool XAU_JsonExtractBool(const string &json, const string &key)
 {
-   string needle = "\"" + key + "\":true";
-   return StringFind(json, needle) >= 0;
+   string needle = "\"" + key + "\":";
+   int pos = StringFind(json, needle);
+   if(pos < 0) return false;
+   int start = XAU_JsonSkipWhitespace(json, pos + StringLen(needle));
+   return StringSubstr(json, start, 4) == "true";
 }
 
 void XAU_LeaseParseResponseIntoState(const string &json, XauLeaseState &st)
@@ -623,26 +662,42 @@ void XAU_LeaseParseResponseIntoState(const string &json, XauLeaseState &st)
    st.loaded = true;
 }
 
+// Normalizes a JSON array's elements into a plain comma-joined string with
+// NO surrounding whitespace and no quotes -- e.g. "[1, -1]" and "[1,-1]"
+// both become "1,-1", matching exactly what Python's canonical_payload()
+// produces (",".join(str(v) for v in value), no spaces). This was a real
+// bug caught by running the full parse-then-verify pipeline in Strategy
+// Tester: Python's json.dumps() inserts ", " between array elements by
+// default, which silently broke signature verification for every lease
+// until this was fixed to split/trim/rejoin instead of taking the raw
+// bracket interior verbatim.
 string XAU_LeaseExtractArrayAsCsv(const string &json, const string &key, bool isStringArray = false)
 {
-   string needle = "\"" + key + "\":[";
+   string needle = "\"" + key + "\":";
    int pos = StringFind(json, needle);
    if(pos < 0) return "";
-   int start = pos + StringLen(needle);
+   int bracketPos = XAU_JsonSkipWhitespace(json, pos + StringLen(needle));
+   if(bracketPos >= StringLen(json) || StringGetCharacter(json, bracketPos) != '[') return "";
+   int start = bracketPos + 1;
    int end = StringFind(json, "]", start);
    if(end < 0) return "";
    string inner = StringSubstr(json, start, end - start);
-   if(isStringArray)
+
+   string tokens[];
+   int n = StringSplit(inner, ',', tokens);
+   string result = "";
+   for(int i = 0; i < n; i++)
    {
-      string cleaned = "";
-      for(int i = 0; i < StringLen(inner); i++)
-      {
-         ushort c = StringGetCharacter(inner, i);
-         if(c != '"') cleaned += CharToString((uchar)c);
-      }
-      return cleaned;
+      string t = tokens[i];
+      StringTrimLeft(t);
+      StringTrimRight(t);
+      // strip surrounding quotes if this is a string-array element
+      if(StringLen(t) >= 2 && StringGetCharacter(t, 0) == '"' && StringGetCharacter(t, StringLen(t) - 1) == '"')
+         t = StringSubstr(t, 1, StringLen(t) - 2);
+      if(i > 0) result += ",";
+      result += t;
    }
-   return inner; // numeric array: MQL5's raw "1,-1" is already the CSV form we want
+   return result;
 }
 
 //+------------------------------------------------------------------+
