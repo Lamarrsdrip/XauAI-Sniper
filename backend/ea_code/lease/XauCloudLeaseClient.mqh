@@ -453,7 +453,13 @@ ENUM_XAU_LEASE_VALIDITY XAU_LeaseCheckValidity(const XauLeaseState &st, int dire
 
    if(brokerNow < (datetime)st.notBeforeUnix) return XAU_LEASE_INVALID_NOT_YET_VALID;
    if(brokerNow >= (datetime)st.expiresAtUnix) return XAU_LEASE_INVALID_EXPIRED;
-   if(st.remainingOfflineNewCampaigns <= 0) return XAU_LEASE_INVALID_NO_ALLOWANCE_REMAINING;
+   // remainingOfflineNewCampaigns is a SIGNED field -- it is the original
+   // grant and must never be mutated locally (doing so would invalidate
+   // the signature on next reload). Consumption is tracked separately in
+   // the local-only (unsigned) consumedThisLease counter; the effective
+   // remaining allowance is always the signed grant minus local
+   // consumption, never the signed field mutated in place.
+   if(st.remainingOfflineNewCampaigns - st.consumedThisLease <= 0) return XAU_LEASE_INVALID_NO_ALLOWANCE_REMAINING;
 
    return XAU_LEASE_VALID;
 }
@@ -531,26 +537,34 @@ string XAU_LeaseOfflineLedgerPath() { return "XauCloudLease\\offline_sent_ledger
 // caller is allowed to continue -- restart-proof because it's a file,
 // checked BEFORE the broker send is attempted, same discipline as the
 // existing local GV mutex but surviving process restart.
-bool XAU_LeaseOfflineLedgerTryRecordNew(const string &executionKey)
+// Read-only peek -- true if this execution key has already been recorded
+// (i.e. it must never be sent). Used at AUTHORIZATION time (before the
+// broker send) to refuse re-attempting an already-consumed candidate,
+// without yet writing anything -- the actual record is only written by
+// XAU_LeaseOfflineLedgerTryRecordNew() once the real broker outcome is
+// known (confirmed or ambiguous), never merely because a candidate was
+// evaluated or authorized (owner requirement, Phase 5/Phase 12 step 30).
+bool XAU_LeaseOfflineLedgerContains(const string &executionKey)
 {
    string path = XAU_LeaseOfflineLedgerPath();
-   if(FileIsExist(path, 0))
+   if(!FileIsExist(path, 0)) return false;
+   int h = FileOpen(path, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return false;
+   bool found = false;
+   while(!FileIsEnding(h))
    {
-      int h = FileOpen(path, FILE_READ | FILE_TXT | FILE_ANSI);
-      if(h != INVALID_HANDLE)
-      {
-         while(!FileIsEnding(h))
-         {
-            string existing = FileReadString(h);
-            if(existing == executionKey)
-            {
-               FileClose(h);
-               return false; // already recorded -- never send twice for this key
-            }
-         }
-         FileClose(h);
-      }
+      string existing = FileReadString(h);
+      if(existing == executionKey) { found = true; break; }
    }
+   FileClose(h);
+   return found;
+}
+
+bool XAU_LeaseOfflineLedgerTryRecordNew(const string &executionKey)
+{
+   if(XAU_LeaseOfflineLedgerContains(executionKey))
+      return false; // already recorded -- never send twice for this key
+   string path = XAU_LeaseOfflineLedgerPath();
    int ha = FileOpen(path, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(ha == INVALID_HANDLE) return false;
    FileSeek(ha, 0, SEEK_END);
@@ -558,6 +572,46 @@ bool XAU_LeaseOfflineLedgerTryRecordNew(const string &executionKey)
    FileFlush(ha);
    FileClose(ha);
    return true;
+}
+
+// Called ONLY after a broker send whose retcode was accepted (confirmed
+// OR ambiguous-may-have-executed) -- never on evaluation alone, never on
+// an explicit rejection. Increments the LOCAL (unsigned) consumption
+// counter and re-persists the lease state file (the signed fields are
+// untouched, so the signature remains valid on next reload -- see the
+// comment on XAU_LeaseCheckValidity's allowance check).
+bool XAU_LeaseConsumeOfflineAllowance(XauLeaseState &st, const string &executionKey)
+{
+   if(!XAU_LeaseOfflineLedgerTryRecordNew(executionKey))
+      return false; // already consumed for this exact candidate -- do not double-count
+   st.consumedThisLease = st.consumedThisLease + 1;
+   st.lastConsumedExecutionKey = executionKey;
+   return XAU_LeasePersist(st);
+}
+
+//+------------------------------------------------------------------+
+//| Durable reconciliation queue (Phase 15) -- every offline-authorized|
+//| send (confirmed or ambiguous) is appended here with everything the |
+//| backend's /cloud/lease/reconcile endpoint needs. Never deleted by  |
+//| this module on a failed upload attempt -- only the reconciliation  |
+//| upload code (wired at reconnection) removes an entry, and only     |
+//| after the backend acknowledges it.                                 |
+//+------------------------------------------------------------------+
+string XAU_LeaseReconcileQueuePath() { return "XauCloudLease\\reconcile_queue.dat"; }
+
+void XAU_LeaseQueueReconciliationEvent(const string &executionKey, const string &leaseId, long leaseSequence,
+                                       int direction, const string &entryFamily, string brokerTicket,
+                                       string result, datetime executedAt)
+{
+   string line = StringFormat("%s|%s|%I64d|%d|%s|%s|%s|%I64d",
+                               executionKey, leaseId, leaseSequence, direction, entryFamily,
+                               brokerTicket, result, (long)executedAt);
+   int h = FileOpen(XAU_LeaseReconcileQueuePath(), FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return;
+   FileSeek(h, 0, SEEK_END);
+   FileWriteString(h, line + "\n");
+   FileFlush(h);
+   FileClose(h);
 }
 
 //+------------------------------------------------------------------+
@@ -764,4 +818,59 @@ void XAU_LeaseSurrenderOnline(const string &cloudUrl, int timeoutMs, const strin
    WebRequest("POST", cloudUrl + "/api/cloud/lease/surrender", hdr, timeoutMs, pd, res, rh);
    // Best-effort, same discipline as the existing XAU_ReleaseDirectionReservation()
    // (mq5:5425-5447) -- no retry; the lease's own expiry is the backstop.
+}
+
+//+------------------------------------------------------------------+
+//| Single top-level entry point the main EA calls at the final       |
+//| order-send choke point (Phase 12). Bundles: load persisted lease   |
+//| from disk, verify its signature, check clock-integrity/scope/      |
+//| allowance validity, peek (not consume) the offline dedup ledger,   |
+//| and acquire the local same-terminal mutex -- all in one call so    |
+//| the EA integration itself stays a small, easy-to-review diff.      |
+//|                                                                    |
+//| On success (returns true): the caller now holds the local mutex   |
+//| and MUST release it (XAU_LeaseMutexRelease with the returned       |
+//| mutexNameOut) after the broker result is known, and must call      |
+//| XAU_LeaseConsumeOfflineAllowance() -- only if the broker retcode   |
+//| was accepted (confirmed or ambiguous) -- never on outright         |
+//| rejection or merely for having attempted the send.                 |
+//+------------------------------------------------------------------+
+bool XAU_LeaseTryAuthorizeOffline(int direction, const string &entryFamily, const string &candidateExecutionKey,
+                                   const string &accountLogin, const string &accountServer, const string &symbol,
+                                   XauLeaseState &outState, string &offlineExecutionKeyOut, string &mutexNameOut,
+                                   string &blockReasonOut)
+{
+   blockReasonOut = "";
+   if(!XAU_LeaseLoadFromDisk(outState))
+   {
+      blockReasonOut = "OFFLINE_LEASE_NOT_LOADED";
+      return false;
+   }
+   string installationId = XAU_LeaseGetOrCreateInstallationId();
+   string terminalId = XAU_LeaseGetOrCreateTerminalId();
+   ENUM_XAU_LEASE_VALIDITY validity = XAU_LeaseCheckValidity(outState, direction, entryFamily,
+                                                              accountLogin, accountServer, symbol,
+                                                              installationId, terminalId);
+   if(validity != XAU_LEASE_VALID)
+   {
+      blockReasonOut = "OFFLINE_LEASE_" + XAU_LeaseValidityName(validity);
+      return false;
+   }
+
+   mutexNameOut = XAU_LeaseMutexName(outState.licenseId, accountLogin, accountServer, symbol, direction);
+   if(!XAU_LeaseMutexTryAcquire(mutexNameOut))
+   {
+      blockReasonOut = "OFFLINE_LEASE_LOCAL_MUTEX_HELD";
+      return false;
+   }
+
+   offlineExecutionKeyOut = XAU_LeaseOfflineExecutionKey(candidateExecutionKey, outState.leaseId, outState.leaseSequence);
+   if(XAU_LeaseOfflineLedgerContains(offlineExecutionKeyOut))
+   {
+      blockReasonOut = "OFFLINE_LEASE_EXECUTION_KEY_ALREADY_CONSUMED";
+      XAU_LeaseMutexRelease(mutexNameOut);
+      return false;
+   }
+
+   return true;
 }
