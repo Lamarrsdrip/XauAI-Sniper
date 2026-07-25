@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
 
 MIGRATION_DIR = Path(__file__).resolve().parent
 BACKUP_DIR = MIGRATION_DIR / "backups"
@@ -51,6 +52,8 @@ BACKFILL_VALUE = "PAYSTACK"
 
 class _JSONEncoder(json.JSONEncoder):
     def default(self, o):
+        if isinstance(o, ObjectId):
+            return str(o)
         if isinstance(o, datetime):
             return o.isoformat()
         return super().default(o)
