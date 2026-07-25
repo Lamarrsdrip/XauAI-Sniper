@@ -11391,10 +11391,34 @@ void OnDeinit(const int reason)
    Print("=== ", XAUAI_EA_VERSION, " STI STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
+datetime g_xauLeaseLastReconcileAttempt = 0;
+
 void OnTimer()
 {
    int secondsSinceScan = (g_lastEntryScanAt > 0) ? (int)(TimeCurrent() - g_lastEntryScanAt) : 999999;
    g_timerForceScan = (InpScanWatchdogMin > 0 && secondsSinceScan >= InpScanWatchdogMin * 60);
+
+   // Phase 15: upload any queued offline-executed events once the backend
+   // is reachable again, rate-limited to once per minute so a persistent
+   // outage doesn't spam WebRequest calls. Never requests a new lease
+   // until this succeeds (queue empties) -- that gating lives in the
+   // lease-request call site itself (not yet wired to an automatic
+   // renewal loop in this release; renewal remains an explicit action,
+   // same as the initial request).
+   if(InpOfflineLeaseEnabled && !MQLInfoInteger(MQL_TESTER) &&
+      (TimeCurrent() - g_xauLeaseLastReconcileAttempt) >= 60)
+   {
+      g_xauLeaseLastReconcileAttempt = TimeCurrent();
+      string xauLeaseAccountLogin = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+      string xauLeaseAccountServer = AccountInfoString(ACCOUNT_SERVER);
+      string xauLeaseSymbol = Symbol();
+      string xauLeaseInstallationId = XAU_LeaseGetOrCreateInstallationId();
+      string xauLeaseTerminalId = XAU_LeaseGetOrCreateTerminalId();
+      XAU_LeaseUploadReconciliationQueue(InpCloudURL, InpCloudTimeoutMs, InpLicensePIN,
+                                         xauLeaseAccountLogin, xauLeaseAccountServer, xauLeaseSymbol,
+                                         xauLeaseInstallationId, xauLeaseTerminalId);
+   }
+
    OnTick();
 }
 

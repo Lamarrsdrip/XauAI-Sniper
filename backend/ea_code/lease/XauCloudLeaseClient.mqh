@@ -874,3 +874,70 @@ bool XAU_LeaseTryAuthorizeOffline(int direction, const string &entryFamily, cons
 
    return true;
 }
+
+//+------------------------------------------------------------------+
+//| Reconnection/reconciliation upload (Phase 15). Called periodically |
+//| (gated by InpOfflineLeaseEnabled, rate-limited) once the backend is |
+//| reachable again. Uploads every queued offline event idempotently -- |
+//| the backend's /cloud/lease/reconcile endpoint keys each event by    |
+//| its execution_key and safely no-ops a duplicate upload. Queue       |
+//| entries are only ever removed after a real HTTP 200 response;       |
+//| a failed upload attempt leaves the file untouched so nothing is     |
+//| ever lost to one bad network call.                                  |
+//+------------------------------------------------------------------+
+bool XAU_LeaseUploadReconciliationQueue(const string &cloudUrl, int timeoutMs, const string &pin,
+                                        const string &account, const string &brokerServer, const string &symbol,
+                                        const string &installationId, const string &terminalInstanceId)
+{
+   string path = XAU_LeaseReconcileQueuePath();
+   if(!FileIsExist(path, 0)) return true; // nothing queued -- trivially successful
+
+   int h = FileOpen(path, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return false;
+   string lines[];
+   int n = 0;
+   while(!FileIsEnding(h))
+   {
+      string line = FileReadString(h);
+      if(StringLen(line) == 0) continue;
+      ArrayResize(lines, n + 1);
+      lines[n] = line;
+      n++;
+   }
+   FileClose(h);
+   if(n == 0) return true;
+
+   string eventsJson = "[";
+   for(int i = 0; i < n; i++)
+   {
+      string parts[];
+      int partCount = StringSplit(lines[i], '|', parts);
+      if(partCount != 8) continue; // malformed line -- skip rather than crash, left in queue for a human to inspect
+      if(i > 0) eventsJson += ",";
+      eventsJson += StringFormat(
+         "{\"execution_key\":\"%s\",\"lease_id\":\"%s\",\"lease_sequence\":%s,\"direction\":%s,\"entry_family\":\"%s\",\"broker_ticket\":%s,\"result\":\"%s\",\"executed_at\":\"%s\"}",
+         parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7]);
+   }
+   eventsJson += "]";
+
+   string body = StringFormat(
+      "{\"pin\":\"%s\",\"account\":\"%s\",\"broker_server\":\"%s\",\"symbol\":\"%s\",\"installation_id\":\"%s\",\"terminal_instance_id\":\"%s\",\"events\":%s}",
+      pin, account, brokerServer, symbol, installationId, terminalInstanceId, eventsJson);
+   uchar pd[]; StringToCharArray(body, pd, 0, StringLen(body), CP_UTF8);
+   int rawLen = ArraySize(pd);
+   if(rawLen > 0 && pd[rawLen - 1] == 0) ArrayResize(pd, rawLen - 1);
+   string hdr = "Content-Type: application/json\r\n";
+   uchar res[]; string rh;
+   ResetLastError();
+   int code = WebRequest("POST", cloudUrl + "/api/cloud/lease/reconcile", hdr, timeoutMs, pd, res, rh);
+   if(code != 200)
+   {
+      PrintFormat("XAUCLOUD_LEASE_RECONCILE_UPLOAD_FAILED httpCode=%d err=%d queuedEvents=%d -- left in queue, will retry", code, GetLastError(), n);
+      return false;
+   }
+
+   // Backend acknowledged (idempotently) -- safe to clear the queue now.
+   FileDelete(path);
+   PrintFormat("XAUCLOUD_LEASE_RECONCILE_UPLOAD_SUCCEEDED queuedEvents=%d", n);
+   return true;
+}
