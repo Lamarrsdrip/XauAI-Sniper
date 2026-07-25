@@ -514,6 +514,29 @@ class AdminAccountUpdate(BaseModel):
     new_password: Optional[str] = None
     current_password: str
 
+class NombaConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    enabled: Optional[bool] = None
+    environment: Optional[str] = None  # "sandbox" | "production"
+    sandbox_client_id: Optional[str] = None
+    sandbox_client_secret: Optional[str] = None
+    sandbox_account_id: Optional[str] = None
+    sandbox_webhook_signature_key: Optional[str] = None
+    production_client_id: Optional[str] = None
+    production_client_secret: Optional[str] = None
+    production_account_id: Optional[str] = None
+    production_webhook_signature_key: Optional[str] = None
+    allowed_payment_methods: Optional[List[str]] = None
+    currency: Optional[str] = None
+    payment_description: Optional[str] = None
+    # Required only when this request changes anything under "production"
+    # (any production_* field, or environment -> "production") -- the
+    # owner's spec calls for "fresh administrator authentication ... before
+    # replacing production credentials", mirroring the existing
+    # AdminAccountUpdate.current_password pattern used for email/password
+    # changes (see update_admin_account() below).
+    current_password: Optional[str] = None
+
 # -------------------------------------------------------------------
 # GOLD PRICE
 # -------------------------------------------------------------------
@@ -578,6 +601,82 @@ async def get_settings():
         await db.admin_settings.insert_one(s)
         s.pop('_id', None)
     return s
+
+# -------------------------------------------------------------------
+# NOMBA PAYMENT CONFIG -- separate collection from admin_settings
+# (which stores Paystack/SMTP/OneSignal as plaintext) because Nomba
+# credentials are encrypted at rest via payment_crypto.py, per the
+# owner's explicit spec for this migration. See
+# audits/nomba_migration/03_implementation_notes.md for the full
+# rationale.
+# -------------------------------------------------------------------
+_NOMBA_CONFIG_DEFAULT_METHODS = ["card", "transfer", "ussd", "qr"]
+
+def _empty_nomba_env_block() -> dict:
+    return {
+        "client_id_enc": None, "client_secret_enc": None,
+        "account_id_enc": None, "webhook_signature_key_enc": None,
+        "last_validated_at": None, "last_validation_ok": None,
+        "last_validation_error": None,
+    }
+
+async def get_nomba_config() -> dict:
+    cfg = await db.payment_nomba_config.find_one({"key": "main"}, {"_id": 0})
+    if not cfg:
+        cfg = {
+            "key": "main", "enabled": False, "environment": "sandbox",
+            "sandbox": _empty_nomba_env_block(), "production": _empty_nomba_env_block(),
+            "allowed_payment_methods": _NOMBA_CONFIG_DEFAULT_METHODS,
+            "currency": "NGN", "payment_description": "XauCloud EA Lifetime License",
+        }
+        await db.payment_nomba_config.insert_one(cfg)
+        cfg.pop('_id', None)
+    return cfg
+
+def _decrypt_nomba_env_block(env_block: dict, environment: str):
+    """Returns a nomba_service.NombaCredentials or None if any required
+    field is missing/unconfigured for this environment."""
+    import payment_crypto as _pc
+    import nomba_service as _nomba
+    try:
+        client_id = _pc.decrypt_secret(env_block.get("client_id_enc"))
+        client_secret = _pc.decrypt_secret(env_block.get("client_secret_enc"))
+        account_id = _pc.decrypt_secret(env_block.get("account_id_enc"))
+        webhook_key = _pc.decrypt_secret(env_block.get("webhook_signature_key_enc"))
+    except Exception as exc:
+        logger.error(f"NOMBA_CONFIG_DECRYPT_FAILED env={environment}: {exc}")
+        return None
+    if not (client_id and client_secret and account_id):
+        return None
+    return _nomba.NombaCredentials(
+        client_id=client_id, client_secret=client_secret, account_id=account_id,
+        webhook_signature_key=webhook_key, environment=environment,
+    )
+
+async def get_active_nomba_credentials():
+    """Returns (config_dict, NombaCredentials) for the currently active
+    environment, or (config_dict, None) if Nomba is disabled or the
+    active environment isn't fully configured yet. Never raises -- every
+    caller (checkout init, webhook) must treat 'not configured' as a
+    normal, handled state (503 to the customer), not a crash."""
+    cfg = await get_nomba_config()
+    if not cfg.get("enabled"):
+        return cfg, None
+    environment = cfg.get("environment", "sandbox")
+    env_block = cfg.get(environment) or _empty_nomba_env_block()
+    creds = _decrypt_nomba_env_block(env_block, environment)
+    return cfg, creds
+
+async def _log_nomba_config_audit(admin_email: str, changed_fields: list, environment: str, test_passed: Optional[bool]):
+    await db.payment_config_audit_log.insert_one({
+        "id": str(uuid.uuid4()),
+        "provider": "NOMBA",
+        "admin_email": admin_email,
+        "changed_fields": changed_fields,  # field NAMES only, never values
+        "environment": environment,
+        "test_connection_passed": test_passed,
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
 
 async def _send_email(to_email: str, subject: str, html: str) -> bool:
     """v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- shared SMTP sender,
@@ -846,33 +945,54 @@ async def get_pin_price():
     s = await get_settings()
     kobo = s.get("pin_price_kobo", 30000000)
     naira = kobo / 100
-    return {"price_kobo": kobo, "price_naira": naira, "currency": "NGN", "payment_method": "paystack", "formatted": f"\u20a6{naira:,.0f}"}
+    nomba_cfg, nomba_creds = await get_active_nomba_credentials()
+    return {
+        "price_kobo": kobo, "price_naira": naira, "currency": "NGN",
+        "payment_method": "nomba" if nomba_creds else "unavailable",
+        "formatted": f"\u20a6{naira:,.0f}",
+    }
 
 @api_router.post("/purchase/initialize")
 async def initialize_purchase(req: PurchaseInitRequest, request: Request):
+    # v-nomba-migration owner directive -- Paystack is no longer the
+    # active payment provider for new purchases (historical Paystack
+    # transactions/licenses are untouched -- see
+    # audits/nomba_migration/01_paystack_audit.md). This endpoint now
+    # creates a Nomba checkout order exclusively; if Nomba isn't enabled
+    # and fully configured, it fails closed with 503 rather than ever
+    # falling back to Paystack for a new sale.
     _rate_limit(f"purchase_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
-    s = await get_settings()
-    pk = s.get("paystack_secret_key", "")
-    if not pk: raise HTTPException(status_code=503, detail="Payment system not configured yet.")
-    kobo = s.get("pin_price_kobo", 30000000)
+    nomba_cfg, creds = await get_active_nomba_credentials()
+    if not creds:
+        raise HTTPException(status_code=503, detail="Payment system not configured yet.")
+    kobo = (await get_settings()).get("pin_price_kobo", 30000000)
+    naira = kobo / 100
     ref = f"ASE-{uuid.uuid4().hex[:12].upper()}"
-    # v6.25.3 owner directive 2026-07-17 (Phase 2) -- callback_url is built
-    # ONLY from the operator-controlled PUBLIC_SITE_URL, never from
-    # req.origin_url. The old code trusted client-supplied origin_url
-    # directly, so any caller of this endpoint could redirect the post-
-    # payment browser flow to an arbitrary attacker-controlled domain.
+    # Same discipline as the pre-existing Paystack code this replaces:
+    # callback_url is built ONLY from the operator-controlled
+    # PUBLIC_SITE_URL, never from req.origin_url -- a client-supplied
+    # origin_url would let any caller redirect the post-payment browser
+    # flow to an arbitrary attacker-controlled domain.
     callback_url = f"{PUBLIC_SITE_URL}/purchase/success?reference={ref}"
     tx = {"id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN",
+          "provider": "NOMBA", "nomba_order_reference": ref, "nomba_transaction_id": None,
           "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
           "payment_status": "PENDING", "pin_generated": None,
           "created_at": datetime.now(timezone.utc).isoformat(), "state_transitions": {}}
     await db.payment_transactions.insert_one(tx)
-    async with httpx.AsyncClient(timeout=15.0) as http:
-        resp = await http.post(f"{PAYSTACK_BASE_URL}/transaction/initialize", headers={"Authorization": f"Bearer {pk}", "Content-Type": "application/json"}, json={"email": req.buyer_email, "amount": kobo, "reference": ref, "callback_url": callback_url, "metadata": {"buyer_name": req.buyer_name}, "currency": "NGN"})
-    if resp.status_code != 200: raise HTTPException(status_code=502, detail="Payment init failed")
-    data = resp.json()
-    if not data.get("status"): raise HTTPException(status_code=502, detail=data.get("message", "Failed"))
-    return {"authorization_url": data["data"]["authorization_url"], "reference": ref}
+
+    import nomba_service as _nomba
+    try:
+        result = await _nomba.create_checkout_order(
+            creds, order_reference=ref, amount=naira, currency=nomba_cfg.get("currency", "NGN"),
+            callback_url=callback_url, customer_email=req.buyer_email,
+            allowed_payment_methods=nomba_cfg.get("allowed_payment_methods") or None,
+            idempotency_key=ref,
+        )
+    except _nomba.NombaError as exc:
+        logger.error(f"NOMBA_INITIALIZE_FAILED ref={ref}: {exc}")
+        raise HTTPException(status_code=502, detail="Payment init failed") from exc
+    return {"authorization_url": result["checkout_link"], "reference": result["order_reference"]}
 
 
 def _verify_paystack_signature(raw_body: bytes, signature: str, secret: str) -> bool:
@@ -1000,12 +1120,102 @@ async def _fulfill_payment(reference: str, source: str) -> dict:
     return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
 
 
+async def _fulfill_nomba_payment(reference: str, source: str) -> dict:
+    """Nomba's equivalent of _fulfill_payment() above -- deliberately
+    mirrors its exact state-machine/idempotency structure (same
+    _transition_payment_state helper, same PENDING->VERIFYING->PAID->
+    FULFILLING->FULFILLED flow, same unique-index-on-payment_ref
+    defense-in-depth) rather than inventing a parallel pattern. Only the
+    "how do we ask the provider whether this really succeeded" step
+    differs: nomba_service.verify_transaction() instead of a direct
+    Paystack HTTP call. Never trusts a webhook body's claims alone, even
+    after signature verification -- always re-verifies directly with
+    Nomba first."""
+    tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+    if not tx:
+        logger.warning(f"NOMBA_FULFILL_UNKNOWN_REFERENCE ref={reference} source={source}")
+        return {"status": "not_found"}
+    if tx.get("pin_generated") and tx.get("payment_status") == "FULFILLED":
+        return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+
+    won_verifying = await _transition_payment_state(reference, ["PENDING"], "VERIFYING")
+    if not won_verifying:
+        tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        if tx and tx.get("pin_generated"):
+            return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+        return {"status": "pending"}
+
+    _cfg, creds = await get_active_nomba_credentials()
+    if not creds:
+        logger.error(f"NOMBA_FULFILL_NOT_CONFIGURED ref={reference}")
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    import nomba_service as _nomba
+    try:
+        result = await _nomba.verify_transaction(creds, order_reference=reference)
+    except _nomba.NombaError as exc:
+        logger.error(f"NOMBA_VERIFY_CALL_FAILED ref={reference}: {exc}")
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    if result.status == "NOT_FOUND":
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+    if result.status != "SUCCESS":
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    # Cross-check the REAL paid amount/currency against what WE expect --
+    # same discipline as PAYSTACK_AMOUNT_MISMATCH above. tx.amount_kobo is
+    # kobo; Nomba's verified amount is in naira (major units).
+    expected_naira = tx.get("amount_kobo", 0) / 100
+    expected_currency = tx.get("currency", "NGN")
+    if result.amount is None or result.amount < expected_naira - 0.01 or (result.currency and result.currency != expected_currency):
+        logger.error(
+            f"NOMBA_AMOUNT_MISMATCH ref={reference} expected={expected_naira}{expected_currency} "
+            f"paid={result.amount}{result.currency}"
+        )
+        await _transition_payment_state(reference, ["VERIFYING"], "REJECTED_AMOUNT_MISMATCH")
+        return {"status": "failed", "reason": "amount_mismatch"}
+
+    await _transition_payment_state(reference, ["VERIFYING"], "PAID")
+    won_fulfilling = await _transition_payment_state(reference, ["PAID"], "FULFILLING")
+    if not won_fulfilling:
+        tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        if tx and tx.get("pin_generated"):
+            return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+        return {"status": "pending"}
+
+    pin = generate_unique_pin()
+    while await db.pin_licenses.find_one({"pin": pin}):
+        pin = generate_unique_pin()
+    doc = PinLicense(pin=pin, buyer_name=tx.get("buyer_name", ""), buyer_email=tx.get("buyer_email", ""),
+                      notes=f"{source} - {reference}", payment_ref=reference).model_dump()
+    doc["provider"] = "NOMBA"
+    try:
+        await db.pin_licenses.insert_one(doc)
+    except DuplicateKeyError:
+        existing = await db.pin_licenses.find_one({"payment_ref": reference})
+        pin = existing["pin"] if existing else pin
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {"$set": {"pin_generated": pin, "payment_status": "FULFILLED", "nomba_transaction_id": result.nomba_transaction_id}},
+    )
+    await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    logger.info(f"NOMBA_FULFILLED ref={reference} source={source}")
+    return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
+
+
 @api_router.get("/purchase/verify/{reference}")
 async def verify_purchase(reference: str, request: Request):
     # Generous window -- the frontend legitimately polls this every few
     # seconds while a real customer waits for their payment to confirm.
     _rate_limit(f"purchase_verify_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
-    result = await _fulfill_payment(reference, source="poll")
+    tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0, "provider": 1})
+    provider = (tx or {}).get("provider", "PAYSTACK")  # pre-migration rows have no provider field -> PAYSTACK
+    fulfill_fn = _fulfill_nomba_payment if provider == "NOMBA" else _fulfill_payment
+    result = await fulfill_fn(reference, source="poll")
     if result["status"] == "success":
         return {"status": "success", "payment_status": "success", "pin": result["pin"], "buyer_name": result.get("buyer_name", "")}
     if result["status"] == "not_found":
@@ -1043,6 +1253,100 @@ async def paystack_webhook(request: Request):
     if not ref:
         raise HTTPException(status_code=400, detail="Missing reference")
     await _fulfill_payment(ref, source="webhook")
+    return {"status": "ok"}
+
+
+@api_router.post("/webhook/nomba")
+async def nomba_webhook(request: Request):
+    """Mirrors paystack_webhook()'s exact safety discipline: (1) verify
+    the signature BEFORE trusting anything in the body, reject with 401
+    otherwise; (2) never trust the webhook body's own claims about
+    success -- _fulfill_nomba_payment() always re-verifies the real
+    transaction status/amount/currency directly against Nomba's own API.
+    A valid signature only proves the request came from Nomba; it does
+    not, by itself, prove the payment is real, current, or unprocessed.
+
+    Always returns a 2XX once the payload is structurally valid and
+    routed to fulfilment, even for events we don't act on (payout_*) or
+    already-fulfilled duplicates -- Nomba retries on any non-2XX with
+    exponential backoff (up to 5 times over ~53 minutes, per
+    audits/nomba_migration/02_nomba_api_reference.md), and retrying an
+    already-handled event serves no purpose."""
+    raw_body = await request.body()
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    signature = headers.get("nomba-signature", "")
+    timestamp = headers.get("nomba-timestamp", "")
+
+    try:
+        body = _json.loads(raw_body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    event_type = body.get("event_type", "")
+    order_ref = None
+    import nomba_service as _nomba
+    try:
+        order_ref = _nomba.extract_order_reference(body)
+    except Exception:
+        pass
+
+    # Determine which environment's webhook signature key to check
+    # against by looking up the pending transaction's own environment --
+    # but the transaction lookup itself must never happen before a valid
+    # signature, so first try BOTH configured environments' keys (a
+    # merchant only ever has webhooks pointed at one active environment
+    # at a time in practice, but checking both is cheap and avoids a
+    # chicken-and-egg problem between "which env is this for" and "is
+    # the signature even valid").
+    cfg = await get_nomba_config()
+    sig_fields = _nomba.extract_webhook_signature_fields(body)
+    valid = False
+    for env_name in ("sandbox", "production"):
+        env_block = cfg.get(env_name) or {}
+        creds = _decrypt_nomba_env_block(env_block, env_name)
+        if not creds or not creds.webhook_signature_key:
+            continue
+        if _nomba.verify_webhook_signature(
+            signature_header=signature, timestamp_header=timestamp,
+            webhook_signature_key=creds.webhook_signature_key, **sig_fields,
+        ):
+            valid = True
+            break
+
+    if not valid:
+        client_host = request.client.host if request.client else "unknown"
+        logger.warning(f"NOMBA_WEBHOOK_SIGNATURE_INVALID ip={client_host} event={event_type} ref={order_ref}")
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    if event_type not in ("payment_success", "payment_failed", "payment_reversal"):
+        # payout_success/payout_failed/payout_refund describe money
+        # leaving Nomba's account -- not relevant to this inbound-only
+        # checkout integration. Acknowledge with 2XX so Nomba doesn't
+        # retry an event we deliberately never act on.
+        return {"status": "ignored"}
+    if not order_ref:
+        raise HTTPException(status_code=400, detail="Missing order reference")
+
+    if event_type == "payment_success":
+        await _fulfill_nomba_payment(order_ref, source="webhook")
+    elif event_type == "payment_failed":
+        await _transition_payment_state(order_ref, ["PENDING", "VERIFYING"], "FAILED")
+        logger.info(f"NOMBA_PAYMENT_FAILED_WEBHOOK ref={order_ref}")
+    elif event_type == "payment_reversal":
+        # A reversal must never remain displayed as a successful settled
+        # payment -- flip status to REVERSED regardless of current state
+        # (a reversal can arrive after FULFILLED) and flag for admin
+        # review. Does not touch the already-issued PIN/license record --
+        # per the owner's spec, no automatic destruction of customer data;
+        # manual review decides next steps.
+        await db.payment_transactions.update_one(
+            {"reference": order_ref},
+            {"$set": {"payment_status": "REVERSED", "state_transitions.REVERSED": datetime.now(timezone.utc).isoformat()}},
+        )
+        await db.pin_licenses.update_many(
+            {"payment_ref": order_ref}, {"$set": {"review_required": True, "review_reason": "PAYMENT_REVERSED"}},
+        )
+        logger.warning(f"NOMBA_PAYMENT_REVERSAL ref={order_ref} -- license flagged review_required")
     return {"status": "ok"}
 
 # --- Public Docs ---
@@ -1541,6 +1845,162 @@ async def update_admin_settings(req: AdminSettingsUpdate, admin: dict = Depends(
     if updates:
         await db.admin_settings.update_one({"key": "main"}, {"$set": updates}, upsert=True)
     return {"updated": True}
+
+
+# -------------------------------------------------------------------
+# NOMBA PAYMENT CONFIG (Admin Dashboard -> Settings -> Payments -> Nomba)
+# -------------------------------------------------------------------
+
+def _nomba_env_view(env_block: dict) -> dict:
+    import payment_crypto as _pc
+    def preview(key):
+        enc = env_block.get(key)
+        if not enc:
+            return {"configured": False, "preview": ""}
+        try:
+            plain = _pc.decrypt_secret(enc)
+        except Exception:
+            return {"configured": True, "preview": "‹decrypt error›"}
+        return {"configured": bool(plain), "preview": _pc.mask_preview(plain)}
+    return {
+        "client_id": preview("client_id_enc"),
+        "client_secret": preview("client_secret_enc"),
+        "account_id": preview("account_id_enc"),
+        "webhook_signature_key": preview("webhook_signature_key_enc"),
+        "last_validated_at": env_block.get("last_validated_at"),
+        "last_validation_ok": env_block.get("last_validation_ok"),
+        "last_validation_error": env_block.get("last_validation_error"),
+    }
+
+
+@api_router.get("/admin/settings/nomba")
+async def get_nomba_settings(admin: dict = Depends(get_current_admin)):
+    import payment_crypto as _pc
+    cfg = await get_nomba_config()
+    return {
+        "enabled": cfg.get("enabled", False),
+        "environment": cfg.get("environment", "sandbox"),
+        "sandbox": _nomba_env_view(cfg.get("sandbox") or {}),
+        "production": _nomba_env_view(cfg.get("production") or {}),
+        "allowed_payment_methods": cfg.get("allowed_payment_methods", _NOMBA_CONFIG_DEFAULT_METHODS),
+        "currency": cfg.get("currency", "NGN"),
+        "payment_description": cfg.get("payment_description", ""),
+        "callback_url": f"{PUBLIC_SITE_URL}/purchase/success",
+        "webhook_url": f"{PUBLIC_SITE_URL}/api/webhook/nomba",
+        "encryption_configured": _pc.is_configured(),
+    }
+
+
+@api_router.put("/admin/settings/nomba")
+async def update_nomba_settings(req: NombaConfigUpdate, admin: dict = Depends(get_current_admin)):
+    import payment_crypto as _pc
+    if not _pc.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="PAYMENT_CONFIG_ENCRYPTION_KEY is not set on the server -- Nomba credentials cannot be "
+                   "saved until it is. See audits/nomba_migration/ for setup instructions.",
+        )
+
+    cfg = await get_nomba_config()
+    changed_fields: List[str] = []
+    updates: Dict[str, Any] = {}
+
+    production_touched = any([
+        req.production_client_id is not None, req.production_client_secret is not None,
+        req.production_account_id is not None, req.production_webhook_signature_key is not None,
+        (req.environment == "production" and cfg.get("environment") != "production"),
+    ])
+    if production_touched:
+        # Fresh-auth requirement for production credential changes, same
+        # pattern as update_admin_account()'s current_password check.
+        if not req.current_password:
+            raise HTTPException(status_code=401, detail="Current admin password required to change production settings.")
+        full = await db.users.find_one({"email": admin["email"]})
+        if not full or not verify_password(req.current_password, full.get("password_hash", "")):
+            raise HTTPException(status_code=401, detail="Incorrect password.")
+
+    if req.enabled is not None:
+        updates["enabled"] = req.enabled
+        changed_fields.append("enabled")
+    if req.environment is not None:
+        if req.environment not in ("sandbox", "production"):
+            raise HTTPException(status_code=400, detail="environment must be 'sandbox' or 'production'")
+        updates["environment"] = req.environment
+        changed_fields.append("environment")
+    if req.allowed_payment_methods is not None:
+        updates["allowed_payment_methods"] = req.allowed_payment_methods
+        changed_fields.append("allowed_payment_methods")
+    if req.currency is not None:
+        updates["currency"] = req.currency
+        changed_fields.append("currency")
+    if req.payment_description is not None:
+        updates["payment_description"] = req.payment_description
+        changed_fields.append("payment_description")
+
+    def _apply_env_field(env_name: str, field_attr: str, sub_key: str, label: str):
+        val = getattr(req, field_attr)
+        if val is not None:
+            updates[f"{env_name}.{sub_key}"] = _pc.encrypt_secret(val)
+            changed_fields.append(f"{env_name}.{label}")
+
+    _apply_env_field("sandbox", "sandbox_client_id", "client_id_enc", "client_id")
+    _apply_env_field("sandbox", "sandbox_client_secret", "client_secret_enc", "client_secret")
+    _apply_env_field("sandbox", "sandbox_account_id", "account_id_enc", "account_id")
+    _apply_env_field("sandbox", "sandbox_webhook_signature_key", "webhook_signature_key_enc", "webhook_signature_key")
+    _apply_env_field("production", "production_client_id", "client_id_enc", "client_id")
+    _apply_env_field("production", "production_client_secret", "client_secret_enc", "client_secret")
+    _apply_env_field("production", "production_account_id", "account_id_enc", "account_id")
+    _apply_env_field("production", "production_webhook_signature_key", "webhook_signature_key_enc", "webhook_signature_key")
+
+    if updates:
+        await db.payment_nomba_config.update_one({"key": "main"}, {"$set": updates}, upsert=True)
+        await _log_nomba_config_audit(admin["email"], changed_fields, req.environment or cfg.get("environment", "sandbox"), test_passed=None)
+    return {"updated": True, "changed_fields": changed_fields}
+
+
+@api_router.post("/admin/settings/nomba/test-connection")
+async def test_nomba_connection(admin: dict = Depends(get_current_admin)):
+    """Validates the ACTIVE environment's credentials by attempting real
+    OAuth token issuance only -- never a checkout order, never a charge.
+    Records the result (pass/fail + redacted error) on the env block so
+    the admin UI can show 'last successful validation time' without a
+    second round-trip."""
+    cfg = await get_nomba_config()
+    environment = cfg.get("environment", "sandbox")
+    env_block = cfg.get(environment) or {}
+    creds = _decrypt_nomba_env_block(env_block, environment)
+    if not creds:
+        raise HTTPException(status_code=400, detail=f"{environment} credentials are not fully configured (client ID, client secret, and account ID are all required).")
+
+    import nomba_service as _nomba
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        await _nomba.get_access_token(creds, force_refresh=True)
+        ok, error_msg = True, None
+    except _nomba.NombaError as exc:
+        ok, error_msg = False, str(exc)
+
+    await db.payment_nomba_config.update_one(
+        {"key": "main"},
+        {"$set": {
+            f"{environment}.last_validated_at": now_iso,
+            f"{environment}.last_validation_ok": ok,
+            f"{environment}.last_validation_error": error_msg,
+        }},
+    )
+    await _log_nomba_config_audit(admin["email"], ["test_connection"], environment, test_passed=ok)
+    if not ok:
+        return {"success": False, "environment": environment, "message": f"Connection failed: {error_msg}"}
+    return {"success": True, "environment": environment, "message": "Successfully authenticated with Nomba.", "validated_at": now_iso}
+
+
+@api_router.get("/admin/settings/nomba/audit-log")
+async def get_nomba_audit_log(admin: dict = Depends(get_current_admin), limit: int = 50):
+    entries = await db.payment_config_audit_log.find(
+        {"provider": "NOMBA"}, {"_id": 0}
+    ).sort("at", -1).to_list(length=min(limit, 200))
+    return {"entries": entries}
+
 
 # v6.6.0 — global Gold/Index Mode platform switches (architecture phase).
 # These gate what the WEBSITE/DASHBOARD advertises and allows users to select
