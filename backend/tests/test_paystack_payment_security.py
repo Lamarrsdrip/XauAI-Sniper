@@ -281,32 +281,19 @@ def test_webhook_and_poll_race_creates_exactly_one_pin():
     _run(go())
 
 
-def test_client_supplied_malicious_callback_origin_ignored():
-    async def go():
-        await _clear()
-        await _set_secret()
-        req = srv.PurchaseInitRequest(
-            buyer_name="Test", buyer_email="buyer@example.com",
-            origin_url="https://evil-phishing-site.example")
-        fake_init_resp = MagicMock()
-        fake_init_resp.status_code = 200
-        fake_init_resp.json = MagicMock(return_value={
-            "status": True, "data": {"authorization_url": "https://paystack.com/pay/xyz"}})
-        captured = {}
-
-        async def _capture_post(url, headers=None, json=None):
-            captured["json"] = json
-            return fake_init_resp
-
-        with patch("httpx.AsyncClient") as MockClient:
-            instance = MockClient.return_value.__aenter__.return_value
-            instance.post = _capture_post
-            await srv.initialize_purchase(req, _FakeRequest(b"", ip="9.9.9.9"))
-        callback_url = captured["json"]["callback_url"]
-        assert "evil-phishing-site.example" not in callback_url
-        assert callback_url.startswith(srv.PUBLIC_SITE_URL)
-        await _clear()
-    _run(go())
+# test_client_supplied_malicious_callback_origin_ignored() used to live
+# here, asserting that POST /purchase/initialize never used a client-
+# supplied origin_url to build the Paystack callback_url. As of the
+# Nomba payment migration, /purchase/initialize creates a Nomba order
+# exclusively (see server.py's initialize_purchase() and
+# audits/nomba_migration/01_paystack_audit.md) -- Paystack is no longer
+# reachable through that endpoint at all, so a test that mocks a
+# Paystack /transaction/initialize response and expects
+# initialize_purchase() to call it no longer exercises anything real.
+# The identical security property (callback_url built only from
+# PUBLIC_SITE_URL, never req.origin_url) is now covered against the
+# live code path in
+# backend/tests/test_nomba_payment_security.py::test_initialize_purchase_ignores_client_supplied_origin_for_callback.
 
 
 def test_failed_payment_never_creates_pin():
