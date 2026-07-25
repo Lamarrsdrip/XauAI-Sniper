@@ -224,6 +224,40 @@ def compute_period_stats(
     return stats
 
 
+def build_recent_trades(
+    trades: list,
+    be_tolerance_usd: float = DEFAULT_BREAK_EVEN_TOLERANCE_USD,
+    limit: int = 20,
+) -> list:
+    """Most-recent-first compact trade list for display -- same
+    classification (net result vs. break-even tolerance) as every other
+    number on the page, never a second, different calculation. `trades`
+    should already be eligibility-filtered/deduplicated by the caller,
+    same as compute_period_stats()."""
+    from datetime import datetime, timezone
+
+    ordered = sorted(trades, key=lambda t: t.get("opened_at") or 0, reverse=True)
+    out = []
+    for t in ordered[:limit]:
+        outcome = classify_trade(t, be_tolerance_usd)
+        net = round(net_result(t), 2)
+        opened_at = t.get("opened_at")
+        try:
+            date_str = datetime.fromtimestamp(float(opened_at), timezone.utc).strftime("%Y-%m-%d")
+        except Exception:
+            date_str = None
+        out.append({
+            "date": date_str,
+            "direction": str(t.get("direction") or "").upper(),
+            "price": t.get("price"),
+            "net_result": net,
+            "outcome": outcome,
+            "exit_reason": t.get("exit_reason") or "",
+            "ticket": t.get("ticket"),
+        })
+    return out
+
+
 def period_stats_to_dict(stats: PeriodStats) -> dict:
     """Serializes PeriodStats into the exact response shape the frontend
     consumes -- profit_factor is represented as a (value, state) pair so

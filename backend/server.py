@@ -20,6 +20,7 @@ try:
     from emergentintegrations.llm.chat import LlmChat, UserMessage
 except ImportError:
     from llm_adapter import LlmChat, UserMessage
+import performance_engine
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -1296,156 +1297,252 @@ async def download_xauindex_package_retired():
     """Retired 2026-07-17 -- see download_ea_retired() above."""
     raise HTTPException(status_code=410, detail="This endpoint is retired. XauIndex download is not yet available.")
 
-@api_router.get("/performance/summary")
-async def get_performance_summary():
-    # v6.25.3 owner directive 2026-07-17 (Phase 7 truthfulness cleanup) --
-    # this endpoint used to also return an "ai_features" block
-    # (market_classification_accuracy, learning_rate_current, etc.) that was
-    # either a hardcoded 0 or a trivial reshuffle of wins/losses/total
-    # already reported elsewhere in this same response, mislabeled as
-    # measured AI performance. Nothing in this codebase actually measures
-    # those things. It had no frontend consumer (grepped before removal) --
-    # removed rather than leaving fabricated numbers reachable.
-    try:
-        trades = await db.trade_journal.find({}, {"_id": 0}).sort("created_ts", 1).to_list(length=5000)
-    except Exception as e:
-        logger.error(f"Performance summary error: {e}")
-        trades = []
+########################################
+# PERFORMANCE PERIODS (forward-record reset system)
+########################################
+# See audits/performance_reset/01_current_system_audit.md for the full
+# audit this replaces, and audits/performance_reset/02_implementation_notes.md
+# for the design decisions summarized here.
+#
+# Every displayed statistic comes from exactly one authoritative source:
+# performance_engine.compute_period_stats() over a query-scoped,
+# eligibility-filtered, deduplicated trade_journal dataset for a single
+# performance_periods document. No number is ever hand-typed, cached
+# indefinitely, or mixed across two different queries.
 
-    closed = [t for t in trades if str(t.get("result", "")).upper() in {"WIN", "LOSS", "BE"}]
-    total = len(closed)
-    wins = sum(1 for t in closed if str(t.get("result", "")).upper() == "WIN")
-    losses = sum(1 for t in closed if str(t.get("result", "")).upper() == "LOSS")
-    profits = [float(t.get("profit") or 0) for t in closed]
-    gross_profit = sum(p for p in profits if p > 0)
-    gross_loss = abs(sum(p for p in profits if p < 0))
-    net_profit = sum(profits)
-    winning_profits = [p for p in profits if p > 0]
-    losing_profits = [p for p in profits if p < 0]
-    avg_win = sum(winning_profits) / len(winning_profits) if winning_profits else 0
-    avg_loss = sum(losing_profits) / len(losing_profits) if losing_profits else 0
-    largest_win = max(winning_profits) if winning_profits else 0
-    largest_loss = min(losing_profits) if losing_profits else 0
+class StartPerformancePeriodRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    reason: str
+    account_logins: Optional[List[str]] = None   # None = all accounts (see audit doc open item)
+    ea_versions: Optional[List[str]] = None       # None = all versions
+    symbol: str = "XAUUSD"
+    break_even_tolerance_usd: float = performance_engine.DEFAULT_BREAK_EVEN_TOLERANCE_USD
+    minimum_sample: int = performance_engine.DEFAULT_MINIMUM_SAMPLE
+    current_password: str  # fresh-auth requirement, same pattern as update_admin_account()
+    confirm: bool = False
 
-    summary = {
+
+async def get_active_performance_period() -> Optional[dict]:
+    return await db.performance_periods.find_one({"status": "ACTIVE"}, {"_id": 0})
+
+
+def _period_query(period: dict) -> dict:
+    query: Dict[str, Any] = {
+        "has_rich_ledger_data": True,
+        "opened_at": {"$gte": period["epoch_started_at_unix"]},
+    }
+    if period.get("epoch_ended_at_unix"):
+        query["opened_at"]["$lt"] = period["epoch_ended_at_unix"]
+    scope = period.get("scope") or {}
+    if scope.get("account_logins"):
+        query["account_login"] = {"$in": scope["account_logins"]}
+    if scope.get("ea_versions"):
+        query["ea_version"] = {"$in": scope["ea_versions"]}
+    if scope.get("symbol"):
+        query["symbol"] = scope["symbol"]
+    return query
+
+
+async def _fetch_period_trades(period: dict) -> list:
+    query = _period_query(period)
+    raw = await db.trade_journal.find(query, {"_id": 0}).sort("opened_at", 1).to_list(length=20000)
+    eligible = [t for t in raw if performance_engine.is_eligible_trade(t)]
+    return performance_engine.dedupe_by_ticket(eligible)
+
+
+async def _period_summary_dict(period: dict) -> dict:
+    trades = await _fetch_period_trades(period)
+    scope = period.get("scope") or {}
+    stats = performance_engine.compute_period_stats(
+        trades,
+        be_tolerance_usd=scope.get("break_even_tolerance_usd", performance_engine.DEFAULT_BREAK_EVEN_TOLERANCE_USD),
+        minimum_sample=scope.get("minimum_sample", performance_engine.DEFAULT_MINIMUM_SAMPLE),
+    )
+    d = performance_engine.period_stats_to_dict(stats)
+    d.update({
         "source": "live_journal",
         "verification": "first_party_ea_journal",
         "independently_verified": False,
-        "sufficient_data": total >= 20,
-        "minimum_sample": 20,
-        "total_trades": total,
-        "win_rate": round(wins / total * 100, 1) if total else 0,
-        "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else (round(gross_profit, 2) if gross_profit > 0 else 0),
-        "net_profit": round(net_profit, 2),
-        "gross_profit": round(gross_profit, 2),
-        "gross_loss": round(gross_loss, 2),
-        "avg_win": round(avg_win, 2),
-        "avg_loss": round(avg_loss, 2),
-        "largest_win": round(largest_win, 2),
-        "largest_loss": round(largest_loss, 2),
-        "loss_to_avg_win": round(abs(avg_loss) / avg_win, 2) if avg_win > 0 and avg_loss < 0 else 0,
-        "max_drawdown": 0,
-        "avg_rr_ratio": 0,
-        "weekly_return_avg": 0,
-        "sharpe_ratio": 0,
-        "best_week": 0,
-        "worst_week": 0,
-        "avg_trade_duration": "n/a",
-        "longest_winning_streak": 0,
-        "longest_losing_streak": 0,
-        "monthly_returns": [],
-        "strategy_breakdown": [],
-        "weekly_data": [],
-        "equity_curve": [],
-        "first_trade_at": None,
-        "last_trade_at": None,
+        "drawdown_label": "Max Balance Drawdown",
+        "period_id": period["id"],
+        "period_name": period["name"],
+        "period_status": period["status"],
+        "epoch_started_at": period["epoch_started_at"],
+        "epoch_ended_at": period.get("epoch_ended_at"),
         "ea_version": (_current_ea_release() or {}).get("version", ""),
-    }
-    if not total:
-        return summary
+        "recalculated_at": datetime.now(timezone.utc).isoformat(),
+        "recent_trades": performance_engine.build_recent_trades(
+            trades,
+            be_tolerance_usd=scope.get("break_even_tolerance_usd", performance_engine.DEFAULT_BREAK_EVEN_TOLERANCE_USD),
+            limit=20,
+        ),
+    })
+    return d
 
-    running_equity = 0.0
-    peak_equity = 0.0
-    max_dd = 0.0
-    week_stats = {}
-    month_stats = {}
-    setup_stats = {}
-    current_win_streak = current_loss_streak = 0
-    trade_dts = []
 
-    for idx, trade in enumerate(closed, start=1):
-        profit = float(trade.get("profit") or 0)
-        running_equity += profit
-        peak_equity = max(peak_equity, running_equity)
-        max_dd = max(max_dd, peak_equity - running_equity)
-        balance = float(trade.get("balance") or 0)
-        summary["equity_curve"].append({"day": idx, "equity": round(balance if balance > 0 else running_equity, 2)})
+@api_router.get("/performance/summary")
+async def get_performance_summary():
+    # v6.25.3 owner directive 2026-07-17 (Phase 7 truthfulness cleanup) --
+    # this endpoint used to also return an "ai_features" block that was
+    # either a hardcoded 0 or a trivial reshuffle of numbers reported
+    # elsewhere, mislabeled as measured AI performance. Removed rather
+    # than left reachable.
+    #
+    # v-performance-reset owner directive -- this endpoint used to
+    # aggregate every trade ever logged, all-time, no scope. It now
+    # reports ONLY the active forward performance period -- see
+    # audits/performance_reset/ for the full history.
+    try:
+        period = await get_active_performance_period()
+    except Exception as e:
+        logger.error(f"Performance summary error (period lookup): {e}")
+        return {"status": "unavailable"}
+    if not period:
+        # No forward period has ever been activated -- fail into an
+        # honest "unavailable" state rather than silently falling back
+        # to the old all-time aggregate.
+        return {"status": "unavailable"}
+    try:
+        d = await _period_summary_dict(period)
+    except Exception as e:
+        logger.error(f"Performance summary error (calculation): {e}")
+        return {"status": "unavailable"}
+    d["status"] = "active" if d["sufficient_data"] else "collecting"
+    return d
 
-        raw_dt = trade.get("created_at")
+
+@api_router.get("/performance/full")
+async def get_performance_full(period_id: Optional[str] = None):
+    """Detailed performance page -- defaults to the active period; pass
+    period_id to view any specific (including archived) period's full
+    detail through the same one endpoint the historical page also uses."""
+    if period_id:
+        period = await db.performance_periods.find_one({"id": period_id}, {"_id": 0})
+    else:
+        period = await get_active_performance_period()
+    if not period:
+        return {"status": "unavailable"}
+    d = await _period_summary_dict(period)
+    d["status"] = "active" if d["sufficient_data"] else "collecting"
+    return d
+
+
+@api_router.get("/performance/historical")
+async def get_performance_historical():
+    """Every ARCHIVED period, oldest first, each with its own
+    independently-computed summary -- the read-only archive. Never
+    mixes trades across periods; each period's stats come from that
+    period's own scoped query only."""
+    periods = await db.performance_periods.find({"status": "ARCHIVED"}, {"_id": 0}).sort("epoch_started_at", 1).to_list(length=200)
+    results = []
+    for period in periods:
         try:
-            dt = datetime.fromisoformat(str(raw_dt).replace("Z", "+00:00")) if raw_dt else datetime.fromtimestamp(float(trade.get("created_ts") or 0), timezone.utc)
+            d = await _period_summary_dict(period)
+        except Exception as e:
+            logger.error(f"Historical performance error for period {period.get('id')}: {e}")
+            continue
+        results.append(d)
+    return {"periods": results}
+
+
+@api_router.get("/admin/performance/periods")
+async def admin_list_performance_periods(admin: dict = Depends(get_current_admin)):
+    periods = await db.performance_periods.find({}, {"_id": 0}).sort("epoch_started_at", -1).to_list(length=200)
+    enriched = []
+    for period in periods:
+        try:
+            trades = await _fetch_period_trades(period)
+            qualifying = len(trades)
         except Exception:
-            dt = datetime.now(timezone.utc)
-        trade_dts.append(dt)
-        week_key = f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
-        month_key = dt.strftime("%b %Y")
+            qualifying = None
+        enriched.append({**period, "qualifying_trade_count": qualifying})
+    return {"periods": enriched}
 
-        if week_key not in week_stats:
-            week_stats[week_key] = {"profit": 0.0, "trades": 0, "peak": 0.0, "equity": 0.0, "drawdown": 0.0}
-        week_stats[week_key]["profit"] += profit
-        week_stats[week_key]["trades"] += 1
-        week_stats[week_key]["equity"] += profit
-        week_stats[week_key]["peak"] = max(week_stats[week_key]["peak"], week_stats[week_key]["equity"])
-        week_stats[week_key]["drawdown"] = max(week_stats[week_key]["drawdown"], week_stats[week_key]["peak"] - week_stats[week_key]["equity"])
 
-        if month_key not in month_stats:
-            month_stats[month_key] = {"profit": 0.0, "trades": 0}
-        month_stats[month_key]["profit"] += profit
-        month_stats[month_key]["trades"] += 1
+@api_router.post("/admin/performance/periods/start")
+async def admin_start_performance_period(req: StartPerformancePeriodRequest, admin: dict = Depends(get_current_admin)):
+    # Fresh-auth requirement -- same pattern as update_admin_account() and
+    # the Nomba production-credential gate: a destructive/high-stakes
+    # admin action requires re-entering the current password, not just an
+    # already-valid session cookie.
+    full = await db.users.find_one({"email": admin["email"]})
+    if not full or not verify_password(req.current_password, full.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    if not req.confirm:
+        raise HTTPException(status_code=400, detail="Set confirm=true to acknowledge that the previous period will be archived, not deleted.")
+    if not req.name.strip() or not req.reason.strip():
+        raise HTTPException(status_code=400, detail="A period name and reason are both required.")
 
-        setup = str(trade.get("setup") or trade.get("signature") or "Unknown").split("|")[0] or "Unknown"
-        if setup not in setup_stats:
-            setup_stats[setup] = {"trades": 0, "wins": 0, "profit": 0.0}
-        setup_stats[setup]["trades"] += 1
-        setup_stats[setup]["profit"] += profit
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    now_unix = now.timestamp()
 
-        result = str(trade.get("result", "")).upper()
-        if result == "WIN":
-            setup_stats[setup]["wins"] += 1
-            current_win_streak += 1
-            current_loss_streak = 0
-        elif result == "LOSS":
-            current_loss_streak += 1
-            current_win_streak = 0
-        summary["longest_winning_streak"] = max(summary["longest_winning_streak"], current_win_streak)
-        summary["longest_losing_streak"] = max(summary["longest_losing_streak"], current_loss_streak)
+    current_active = await get_active_performance_period()
 
-    summary["max_drawdown"] = round(max_dd, 2)
-    if trade_dts:
-        summary["first_trade_at"] = min(trade_dts).isoformat()
-        summary["last_trade_at"] = max(trade_dts).isoformat()
-    weekly_profits = [v["profit"] for v in week_stats.values()]
-    summary["best_week"] = round(max(weekly_profits), 2) if weekly_profits else 0
-    summary["worst_week"] = round(min(weekly_profits), 2) if weekly_profits else 0
-    summary["weekly_return_avg"] = round(sum(weekly_profits) / len(weekly_profits), 2) if weekly_profits else 0
-    summary["weekly_data"] = [
-        {"week": k, "return": round(v["profit"], 2), "drawdown": round(v["drawdown"], 2), "trades": v["trades"]}
-        for k, v in sorted(week_stats.items())[-12:]
-    ]
-    summary["monthly_returns"] = [
-        {"month": k, "return": round(v["profit"], 2), "trades": v["trades"]}
-        for k, v in month_stats.items()
-    ][-12:]
-    summary["strategy_breakdown"] = [
-        {
-            "strategy": k[:24],
-            "trades": v["trades"],
-            "win_rate": round(v["wins"] / v["trades"] * 100, 1) if v["trades"] else 0,
-            "profit_share": round(v["profit"], 2),
-        }
-        for k, v in sorted(setup_stats.items(), key=lambda item: item[1]["profit"], reverse=True)[:3]
-    ]
-    return summary
+    # First-ever activation: also archive an implicit "Historical EA
+    # Journal" period covering everything before any period system
+    # existed, so the pre-reset 1,217-trade dataset gets its own labeled,
+    # queryable, permanently-preserved period rather than being an
+    # orphaned, un-scoped blob. Its own start is the earliest eligible
+    # trade's opened_at (or, if there is none, the same moment the first
+    # real period starts, making it an honest empty bucket rather than a
+    # fabricated date range).
+    if current_active is None:
+        existing_periods_count = await db.performance_periods.count_documents({})
+        if existing_periods_count == 0:
+            earliest = await db.trade_journal.find(
+                {"has_rich_ledger_data": True, "ticket": {"$gt": 0}, "opened_at": {"$gt": 0}},
+                {"_id": 0, "opened_at": 1},
+            ).sort("opened_at", 1).limit(1).to_list(length=1)
+            legacy_start_unix = earliest[0]["opened_at"] if earliest else now_unix
+            legacy_period = {
+                "id": str(uuid.uuid4()),
+                "name": "Historical EA Journal",
+                "status": "ARCHIVED",
+                "epoch_started_at": datetime.fromtimestamp(legacy_start_unix, timezone.utc).isoformat(),
+                "epoch_started_at_unix": legacy_start_unix,
+                "epoch_ended_at": now_iso,
+                "epoch_ended_at_unix": now_unix,
+                "scope": {"account_logins": None, "ea_versions": None, "symbol": None,
+                          "break_even_tolerance_usd": performance_engine.DEFAULT_BREAK_EVEN_TOLERANCE_USD,
+                          "minimum_sample": performance_engine.DEFAULT_MINIMUM_SAMPLE},
+                "created_by_admin_email": admin["email"],
+                "reason": "Automatically created to preserve all pre-reset trade history as its own labeled, permanent, read-only period.",
+                "created_at": now_iso,
+            }
+            await db.performance_periods.insert_one(legacy_period)
+    elif current_active:
+        # Archive the currently active period -- never deleted, never
+        # rewritten, just closed off at exactly this moment.
+        await db.performance_periods.update_one(
+            {"id": current_active["id"]},
+            {"$set": {"status": "ARCHIVED", "epoch_ended_at": now_iso, "epoch_ended_at_unix": now_unix}},
+        )
+
+    new_period = {
+        "id": str(uuid.uuid4()),
+        "name": req.name.strip(),
+        "status": "ACTIVE",
+        "epoch_started_at": now_iso,
+        "epoch_started_at_unix": now_unix,
+        "epoch_ended_at": None,
+        "epoch_ended_at_unix": None,
+        "scope": {
+            "account_logins": req.account_logins,
+            "ea_versions": req.ea_versions,
+            "symbol": req.symbol,
+            "break_even_tolerance_usd": req.break_even_tolerance_usd,
+            "minimum_sample": req.minimum_sample,
+        },
+        "created_by_admin_email": admin["email"],
+        "reason": req.reason.strip(),
+        "created_at": now_iso,
+    }
+    await db.performance_periods.insert_one(new_period)
+    logger.info(f"PERFORMANCE_PERIOD_STARTED id={new_period['id']} name={new_period['name']} by={admin['email']} epoch={now_iso}")
+    new_period.pop("_id", None)
+    return {"started": True, "period": new_period}
 
 @api_router.get("/architecture")
 async def get_architecture():
