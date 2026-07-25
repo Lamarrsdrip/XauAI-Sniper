@@ -21,6 +21,8 @@ import { CloudSignup, CloudLogin } from "@/components/cloud/CloudAuth";
 import CloudDashboard from "@/components/cloud/CloudDashboard";
 import AIMarketOutlookPage from "@/pages/AIMarketOutlookPage";
 import LabsPage from "@/pages/LabsPage";
+import PerformancePage from "@/pages/PerformancePage";
+import PerformanceHistoryPage from "@/pages/PerformanceHistoryPage";
 import { API } from "@/lib/api";
 
 function MainDashboard() {
@@ -94,6 +96,8 @@ function App() {
         <Route path="/command/dashboard" element={<CloudDashboard />} />
         <Route path="/ai-market-outlook" element={<AIMarketOutlookPage />} />
         <Route path="/labs" element={<LabsPage />} />
+        <Route path="/performance" element={<PerformancePage />} />
+        <Route path="/performance/history" element={<PerformanceHistoryPage />} />
         <Route path="/cloud" element={<Navigate to="/command" replace />} />
         <Route path="/cloud/signup" element={<Navigate to="/command/signup" replace />} />
         <Route path="/cloud/login" element={<Navigate to="/command/login" replace />} />

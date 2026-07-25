@@ -107,6 +107,7 @@ export default function AdminPortal({ api }) {
     { id: "pins",          label: "Licenses",      icon: Key            },
     { id: "command",       label: "Bot Ops",       icon: Pulse          },
     { id: "notifications", label: "Notifications", icon: Bell           },
+    { id: "performance",   label: "Performance",   icon: TrendUp        },
     { id: "settings",      label: "Settings",      icon: GearSix        },
     { id: "configurator",  label: "EA Config",     icon: ChartBar       },
     { id: "transactions",  label: "Payments",      icon: CurrencyNgn    },
@@ -160,6 +161,7 @@ export default function AdminPortal({ api }) {
         {tab === "pins"          && <PinsTab          api={api} />}
         {tab === "command"       && <CommandOpsTab    api={api} />}
         {tab === "notifications" && <NotificationsTab api={api} />}
+        {tab === "performance"   && <PerformanceTab   api={api} />}
         {tab === "settings"      && <SettingsTab      api={api} />}
         {tab === "configurator"  && <ConfigTab        api={api} />}
         {tab === "transactions"  && <TransactionsTab  api={api} />}
@@ -383,6 +385,204 @@ function NotificationsTab({ api }) {
           </div>
         </div>
       </CardSection>
+    </div>
+  );
+}
+
+// ─── Performance / Reporting Periods ────────────────────────────────────────
+function fmtNum(v, digits = 1) {
+  return v == null || Number.isNaN(v) ? "--" : Number(v).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+function fmtDate(iso) {
+  if (!iso) return "--";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "--" : d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function StartPeriodDialog({ api, h, onDone, onCancel }) {
+  const [name, setName] = useState("");
+  const [reason, setReason] = useState("");
+  const [accountLogins, setAccountLogins] = useState("");
+  const [eaVersions, setEaVersions] = useState("");
+  const [password, setPassword] = useState("");
+  const [step, setStep] = useState("form"); // form | confirm
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      await ax.post(`${api}/admin/performance/periods/start`, {
+        name,
+        reason,
+        account_logins: accountLogins.split(",").map(s => s.trim()).filter(Boolean) || undefined,
+        ea_versions: eaVersions.split(",").map(s => s.trim()).filter(Boolean) || undefined,
+        current_password: password,
+        confirm: true,
+      }, h);
+      onDone();
+    } catch (e) {
+      setError(e?.response?.data?.detail || "Failed to start new period — check your password and try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4" data-testid="start-period-dialog">
+      <div className={`${CARD} w-full max-w-lg`}>
+        <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-white/[0.06]">
+          <h4 className="text-[11px] font-bold uppercase tracking-[0.15em] text-white/45">Start new forward period</h4>
+        </div>
+        <div className="p-5 space-y-4">
+          {step === "form" && (
+            <>
+              <p className="text-[12px] leading-5 text-white/45">
+                This archives the current active period (nothing is deleted) and starts a brand-new, honest forward
+                record from this exact moment. Only trades opened after this timestamp will count toward the new period's
+                win rate, profit factor, and drawdown.
+              </p>
+              <Field label="Period name">
+                <Input data-testid="start-period-name" value={name} onChange={e => setName(e.target.value)} placeholder="XauCloud Forward Record — July 2026" />
+              </Field>
+              <Field label="Reason">
+                <Input data-testid="start-period-reason" value={reason} onChange={e => setReason(e.target.value)} placeholder="Why start a new period now" />
+              </Field>
+              <Field label="Account logins (optional, comma-separated)">
+                <Input data-testid="start-period-accounts" value={accountLogins} onChange={e => setAccountLogins(e.target.value)} placeholder="Leave blank to include all" />
+              </Field>
+              <Field label="EA versions (optional, comma-separated)">
+                <Input data-testid="start-period-versions" value={eaVersions} onChange={e => setEaVersions(e.target.value)} placeholder="Leave blank to include all" />
+              </Field>
+              <div className="flex justify-end gap-2 pt-2">
+                <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+                <Btn variant="primary" disabled={!name || !reason} onClick={() => setStep("confirm")}>Continue</Btn>
+              </div>
+            </>
+          )}
+          {step === "confirm" && (
+            <>
+              <div className="rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-4 text-[12px] leading-5 text-amber-100">
+                You're about to archive the current period and start <span className="font-bold">"{name}"</span> effective
+                immediately. The homepage will show <span className="font-bold">0 closed trades</span> until real trades
+                close after this moment. This action is logged with your admin account and cannot be undone.
+              </div>
+              <Field label="Confirm your password">
+                <Input data-testid="start-period-password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Current admin password" />
+              </Field>
+              {error && <p className="text-[12px] text-red-400">{error}</p>}
+              <div className="flex justify-end gap-2 pt-2">
+                <Btn variant="ghost" onClick={() => setStep("form")} disabled={saving}>Back</Btn>
+                <Btn variant="danger" disabled={!password || saving} onClick={submit}>{saving ? "Starting…" : "Start new period"}</Btn>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PerformanceTab({ api }) {
+  const h = useMemo(() => auth(), []);
+  const [periods, setPeriods] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await ax.get(`${api}/admin/performance/periods`, h);
+      setPeriods(r.data.periods || []);
+    } catch {
+      setPeriods(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, h]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const active = periods?.find(p => p.status === "ACTIVE");
+  const archived = periods?.filter(p => p.status !== "ACTIVE") || [];
+
+  return (
+    <div className="max-w-3xl space-y-5" data-testid="admin-performance-tab">
+      <CardSection
+        title="Active reporting period"
+        action={<Btn variant="primary" onClick={() => setDialogOpen(true)} data-testid="start-new-period-btn"><ArrowClockwise size={13} /> Start New Forward Period</Btn>}
+      >
+        {loading && <p className="text-[12px] text-white/40">Loading…</p>}
+        {!loading && !periods && <p className="text-[12px] text-white/40">Could not load reporting periods.</p>}
+        {!loading && periods && !active && <p className="text-[12px] text-white/40">No active period yet. Start one to begin honest forward tracking.</p>}
+        {active && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[14px] font-bold">{active.period_name}</span>
+              <Badge tone="green">ACTIVE</Badge>
+            </div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div>
+                <div className={LABEL}>Started</div>
+                <div className="mt-1 text-[13px] font-mono">{fmtDate(active.epoch_started_at)}</div>
+              </div>
+              <div>
+                <div className={LABEL}>Closed trades</div>
+                <div className="mt-1 text-[13px] font-mono">{active.total_trades ?? "--"}</div>
+              </div>
+              <div>
+                <div className={LABEL}>Status</div>
+                <div className="mt-1 text-[13px] font-mono">{active.sufficient_data ? "Reporting live" : `Collecting (${active.minimum_sample || 20} needed)`}</div>
+              </div>
+              <div>
+                <div className={LABEL}>Account scope</div>
+                <div className="mt-1 text-[13px] font-mono">{active.account_logins?.length ? active.account_logins.join(", ") : "All accounts"}</div>
+              </div>
+              <div>
+                <div className={LABEL}>EA version scope</div>
+                <div className="mt-1 text-[13px] font-mono">{active.ea_versions?.length ? active.ea_versions.join(", ") : "All versions"}</div>
+              </div>
+              <div>
+                <div className={LABEL}>Started by</div>
+                <div className="mt-1 text-[13px] font-mono">{active.started_by_admin || "--"}</div>
+              </div>
+            </div>
+            {active.reason && (
+              <div>
+                <div className={LABEL}>Reason</div>
+                <p className="mt-1 text-[12px] text-white/50">{active.reason}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </CardSection>
+
+      <CardSection title={`Archived periods (${archived.length})`}>
+        {archived.length === 0 && <p className="text-[12px] text-white/40">Nothing archived yet.</p>}
+        <div className="space-y-3">
+          {archived.map(p => (
+            <div key={p.period_id} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4" data-testid="archived-period-row">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[13px] font-semibold">{p.period_name}</span>
+                <Badge tone="neutral">ARCHIVED</Badge>
+              </div>
+              <div className="mt-1 font-mono text-[11px] text-white/35">
+                {fmtDate(p.epoch_started_at)} – {fmtDate(p.epoch_ended_at)} · {p.total_trades ?? 0} trades · Win rate {p.win_rate != null ? `${fmtNum(p.win_rate)}%` : "--"}
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardSection>
+
+      {dialogOpen && (
+        <StartPeriodDialog
+          api={api}
+          h={h}
+          onCancel={() => setDialogOpen(false)}
+          onDone={() => { setDialogOpen(false); load(); }}
+        />
+      )}
     </div>
   );
 }
