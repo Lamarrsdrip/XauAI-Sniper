@@ -5811,10 +5811,10 @@ async def _issue_lease(lic: dict, req_account: str, req_broker_server: str, req_
         "normalized_symbol": symbol_norm,
         "allowed_directions": allowed_directions,
         "allowed_entry_families": allowed_entry_families,
-        "issued_at": now_iso,
-        "not_before": now_iso,
-        "expires_at": expires_at.isoformat(),
-        "renewal_after": renewal_after.isoformat(),
+        "issued_at_unix": int(now.timestamp()),
+        "not_before_unix": int(now.timestamp()),
+        "expires_at_unix": int(expires_at.timestamp()),
+        "renewal_after_unix": int(renewal_after.timestamp()),
         "maximum_offline_new_campaigns": cfg["max_offline_campaigns"],
         "remaining_offline_new_campaigns": cfg["max_offline_campaigns"],
         "lease_sequence": next_sequence,
@@ -5860,6 +5860,12 @@ async def _issue_lease(lic: dict, req_account: str, req_broker_server: str, req_
     lease_doc["detached_signature"] = signature_hex
     lease_doc["_history_id"] = str(uuid.uuid4())
     lease_doc["recorded_at"] = now_iso
+    # Display-only ISO strings for the admin UI -- NOT part of the signed
+    # canonical payload (that uses the *_unix integer fields above, which
+    # MQL5 can parse unambiguously). Never used by the EA's own logic.
+    lease_doc["issued_at_iso"] = now_iso
+    lease_doc["expires_at_iso"] = expires_at.isoformat()
+    lease_doc["renewal_after_iso"] = renewal_after.isoformat()
     await db.lease_documents.insert_one(dict(lease_doc))
     lease_doc.pop("_id", None)
     logger.info(f"LEASE_ISSUED key={key} lease_id={lease_id} sequence={next_sequence} terminal={terminal_instance_id} renewal={is_renewal}")

@@ -34,11 +34,19 @@ RSA_PUBLIC_EXPONENT = 65537
 # Fixed field order -- MUST exactly match XAU_LeaseVerifySignature's caller
 # construction in the EA. MQL5 has no canonical-JSON serializer, so a fixed
 # field list (not dict/alphabetical order) is the canonicalization rule.
+#
+# Timestamps are plain Unix integer seconds, NOT ISO8601 strings. MQL5 has
+# no safe ISO8601 parser, and Python's datetime.isoformat() emits a
+# variable-length microseconds component -- both are unnecessary parsing
+# risk for a security-critical field the EA's clock-integrity logic
+# depends on. An integer is unambiguous and trivial to parse on both
+# sides, and is still fully covered by the signature like every other
+# field here.
 _CANONICAL_FIELD_ORDER = [
     "schema_version", "lease_id", "key_id", "tenant_id", "license_id",
     "account_login", "account_server", "installation_id", "terminal_instance_id",
     "normalized_symbol", "allowed_directions", "allowed_entry_families",
-    "issued_at", "not_before", "expires_at", "renewal_after",
+    "issued_at_unix", "not_before_unix", "expires_at_unix", "renewal_after_unix",
     "maximum_offline_new_campaigns", "remaining_offline_new_campaigns",
     "lease_sequence", "revocation_epoch", "nonce",
 ]
