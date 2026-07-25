@@ -21,6 +21,7 @@ try:
 except ImportError:
     from llm_adapter import LlmChat, UserMessage
 import performance_engine
+import lease_service
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -5669,6 +5670,283 @@ async def cloud_reservation_release(req: DirectionReservationReleaseReq, request
                             key, req.reservation_id, lic.get("id", ""), foreign.get("licenseId", ""))
     logger.info("[reservation-release] key=%s reservationId=%s licenseId=%s released=%s", key, req.reservation_id, lic.get("id", ""), released)
     return {"released": released}
+
+########################################
+# BOUNDED OFFLINE TRADING LEASE
+########################################
+# See audits/offline_lease/ for the full design. This does not replace
+# the reservation system above -- it is a fallback used by the EA only
+# when a genuine temporary connectivity failure prevents reaching
+# /cloud/reservation/claim at all (never on an explicit deny/auth/
+# validation failure). The backend remains the sole authoritative
+# cross-device duplicate-prevention system whenever it is reachable.
+
+class LeaseRequestReq(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    pin: str = ""
+    license_key: Optional[str] = ""
+    account: str = ""
+    broker_server: str = ""
+    symbol: str = ""
+    installation_id: str = ""
+    terminal_instance_id: str = ""
+    allowed_directions: List[int] = [1, -1]
+    allowed_entry_families: List[str] = ["CORE"]
+
+class LeaseSurrenderReq(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    pin: str = ""
+    license_key: Optional[str] = ""
+    account: str = ""
+    broker_server: str = ""
+    symbol: str = ""
+    installation_id: str = ""
+    terminal_instance_id: str = ""
+    lease_id: str = ""
+
+class LeaseReconcileEvent(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    execution_key: str
+    lease_id: str
+    lease_sequence: int
+    candidate_evidence_id: str = ""
+    opportunity_id: str = ""
+    direction: int
+    entry_family: str = "CORE"
+    broker_order_id: str = ""
+    broker_deal_id: str = ""
+    broker_position_id: str = ""
+    broker_ticket: int = 0
+    result: str = "CONFIRMED"  # CONFIRMED | AMBIGUOUS | REJECTED
+    executed_at: str = ""
+
+class LeaseReconcileReq(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    pin: str = ""
+    license_key: Optional[str] = ""
+    account: str = ""
+    broker_server: str = ""
+    symbol: str = ""
+    installation_id: str = ""
+    terminal_instance_id: str = ""
+    events: List[LeaseReconcileEvent] = []
+
+
+def _lease_authority_key(license_id: str, account: str, broker_server: str, symbol: str) -> str:
+    return f"{license_id}:{(broker_server or '').strip()}:{(account or '').strip()}:{(symbol or '').strip().upper()}"
+
+
+def get_lease_config() -> dict:
+    return {
+        "validity_seconds": int(os.environ.get("XAUCLOUD_LEASE_VALIDITY_SECONDS", "900")),
+        "renewal_seconds_before_expiry": int(os.environ.get("XAUCLOUD_LEASE_RENEWAL_SECONDS", "300")),
+        "max_offline_campaigns": int(os.environ.get("XAUCLOUD_LEASE_MAX_OFFLINE_CAMPAIGNS", "1")),
+    }
+
+
+async def _issue_lease(lic: dict, req_account: str, req_broker_server: str, req_symbol: str,
+                        installation_id: str, terminal_instance_id: str,
+                        allowed_directions: List[int], allowed_entry_families: List[str],
+                        is_renewal: bool) -> dict:
+    """Shared atomic issue/renew logic for /lease/request and /lease/renew.
+    Enforces: only one non-expired, non-surrendered primary terminal per
+    (license, account, server, symbol) at a time. A different terminal
+    cannot receive a new lease for the same key until the current one has
+    expired or been explicitly surrendered -- enforced by the MongoDB
+    filter itself (the compare-and-swap), never only checked in Python
+    after a plain read."""
+    if not installation_id or not terminal_instance_id:
+        raise HTTPException(status_code=400, detail="installation_id and terminal_instance_id are required")
+    symbol_norm = (req_symbol or "").strip().upper()
+    if symbol_norm not in {s.upper() for s in _RESERVATION_VALID_SYMBOLS}:
+        raise HTTPException(status_code=400, detail={"ok": False, "reason": "INVALID_SYMBOL", "symbol": req_symbol})
+
+    cfg = get_lease_config()
+    key = _lease_authority_key(lic.get("id", ""), req_account, req_broker_server, symbol_norm)
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    existing = await db.lease_terminal_authority.find_one({"_id": key})
+    if existing:
+        holder_terminal = existing.get("holder_terminal_id", "")
+        holder_expired = existing.get("lease_expires_at", "") <= now_iso
+        surrendered = existing.get("surrendered", False)
+        if holder_terminal != terminal_instance_id and not holder_expired and not surrendered:
+            raise HTTPException(status_code=403, detail={
+                "ok": False,
+                "reason": "PRIMARY_TERMINAL_ALREADY_ASSIGNED",
+                "message": "Another terminal already holds an active offline lease for this account/symbol.",
+                "holder_terminal_id": holder_terminal,
+                "lease_expires_at": existing.get("lease_expires_at"),
+            })
+        if is_renewal and holder_terminal != terminal_instance_id:
+            raise HTTPException(status_code=403, detail={
+                "ok": False,
+                "reason": "NOT_CURRENT_HOLDER",
+                "message": "Only the current primary terminal may renew this lease.",
+            })
+
+    try:
+        signing_key = lease_service.load_signing_key()
+    except lease_service.LeaseCryptoNotConfigured as e:
+        logger.error(f"[lease] signing key not configured: {e}")
+        raise HTTPException(status_code=503, detail="Lease signing is not configured on this server.")
+
+    next_sequence = int((existing or {}).get("lease_sequence", 0)) + 1
+    revocation_epoch = int((existing or {}).get("revocation_epoch", 1))
+    lease_id = str(uuid.uuid4())
+    expires_at = now + timedelta(seconds=cfg["validity_seconds"])
+    renewal_after = expires_at - timedelta(seconds=cfg["renewal_seconds_before_expiry"])
+
+    lease_fields = {
+        "schema_version": lease_service.LEASE_SCHEMA_VERSION,
+        "lease_id": lease_id,
+        "key_id": signing_key.key_id,
+        "tenant_id": lic.get("id", ""),
+        "license_id": lic.get("id", ""),
+        "account_login": req_account,
+        "account_server": req_broker_server,
+        "installation_id": installation_id,
+        "terminal_instance_id": terminal_instance_id,
+        "normalized_symbol": symbol_norm,
+        "allowed_directions": allowed_directions,
+        "allowed_entry_families": allowed_entry_families,
+        "issued_at": now_iso,
+        "not_before": now_iso,
+        "expires_at": expires_at.isoformat(),
+        "renewal_after": renewal_after.isoformat(),
+        "maximum_offline_new_campaigns": cfg["max_offline_campaigns"],
+        "remaining_offline_new_campaigns": cfg["max_offline_campaigns"],
+        "lease_sequence": next_sequence,
+        "revocation_epoch": revocation_epoch,
+        "nonce": lease_service.new_nonce(),
+    }
+    signature_hex = lease_service.sign_lease(signing_key, lease_fields)
+
+    # Atomic compare-and-swap: the filter re-requires the same holder
+    # condition checked above, at write time, so two concurrent requests
+    # from two different terminals can never both win this update.
+    filter_query = {
+        "_id": key,
+        "$or": [
+            {"holder_terminal_id": {"$exists": False}},
+            {"holder_terminal_id": terminal_instance_id},
+            {"lease_expires_at": {"$lte": now_iso}},
+            {"surrendered": True},
+        ],
+    }
+    update_result = await db.lease_terminal_authority.find_one_and_update(
+        filter_query,
+        {"$set": {
+            "holder_terminal_id": terminal_instance_id,
+            "holder_installation_id": installation_id,
+            "lease_sequence": next_sequence,
+            "revocation_epoch": revocation_epoch,
+            "current_lease_id": lease_id,
+            "lease_expires_at": expires_at.isoformat(),
+            "surrendered": False,
+            "updated_at": now_iso,
+        }},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    if update_result is None or update_result.get("current_lease_id") != lease_id:
+        # Lost a genuine race against another concurrent request -- fail
+        # closed rather than hand out a lease that isn't actually authoritative.
+        raise HTTPException(status_code=409, detail={"ok": False, "reason": "CONCURRENT_LEASE_ASSIGNMENT", "message": "Lease assignment raced with another request; retry."})
+
+    lease_doc = dict(lease_fields)
+    lease_doc["signature_algorithm"] = lease_service.LEASE_ALGORITHM_ID
+    lease_doc["detached_signature"] = signature_hex
+    lease_doc["_history_id"] = str(uuid.uuid4())
+    lease_doc["recorded_at"] = now_iso
+    await db.lease_documents.insert_one(dict(lease_doc))
+    lease_doc.pop("_id", None)
+    logger.info(f"LEASE_ISSUED key={key} lease_id={lease_id} sequence={next_sequence} terminal={terminal_instance_id} renewal={is_renewal}")
+    return lease_doc
+
+
+@api_router.post("/cloud/lease/request")
+async def cloud_lease_request(req: LeaseRequestReq, request: Request):
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    lease_doc = await _issue_lease(lic, req.account, req.broker_server, req.symbol,
+                                    req.installation_id, req.terminal_instance_id,
+                                    req.allowed_directions, req.allowed_entry_families, is_renewal=False)
+    return {"issued": True, "lease": lease_doc}
+
+
+@api_router.post("/cloud/lease/renew")
+async def cloud_lease_renew(req: LeaseRequestReq, request: Request):
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    lease_doc = await _issue_lease(lic, req.account, req.broker_server, req.symbol,
+                                    req.installation_id, req.terminal_instance_id,
+                                    req.allowed_directions, req.allowed_entry_families, is_renewal=True)
+    return {"issued": True, "lease": lease_doc}
+
+
+@api_router.post("/cloud/lease/surrender")
+async def cloud_lease_surrender(req: LeaseSurrenderReq, request: Request):
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    key = _lease_authority_key(lic.get("id", ""), req.account, req.broker_server, req.symbol)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    result = await db.lease_terminal_authority.update_one(
+        {"_id": key, "holder_terminal_id": req.terminal_instance_id, "current_lease_id": req.lease_id},
+        {"$set": {"surrendered": True, "updated_at": now_iso}},
+    )
+    surrendered = result.modified_count > 0
+    logger.info(f"LEASE_SURRENDER key={key} lease_id={req.lease_id} terminal={req.terminal_instance_id} surrendered={surrendered}")
+    return {"surrendered": surrendered}
+
+
+@api_router.get("/cloud/lease/status")
+async def cloud_lease_status(pin: str = "", account: str = "", broker_server: str = "", symbol: str = "", request: Request = None):
+    lic = await _resolve_monitor_license(pin, account, request)
+    key = _lease_authority_key(lic.get("id", ""), account, broker_server, symbol)
+    authority = await db.lease_terminal_authority.find_one({"_id": key}, {"_id": 0})
+    if not authority:
+        return {"has_authority_record": False}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return {
+        "has_authority_record": True,
+        "holder_terminal_id": authority.get("holder_terminal_id"),
+        "lease_sequence": authority.get("lease_sequence"),
+        "lease_expires_at": authority.get("lease_expires_at"),
+        "is_expired": authority.get("lease_expires_at", "") <= now_iso,
+        "surrendered": authority.get("surrendered", False),
+        "revocation_epoch": authority.get("revocation_epoch"),
+    }
+
+
+@api_router.post("/cloud/lease/reconcile")
+async def cloud_lease_reconcile(req: LeaseReconcileReq, request: Request):
+    """Idempotent -- each event's execution_key is unique-indexed in
+    lease_offline_events; reconciling the same event twice (retry, two
+    terminals, replayed upload) is a no-op on the second+ attempt, never a
+    second position/duplicate record. Never creates a trade -- this only
+    records that an offline execution already happened (or may have
+    happened) so the backend's own view of history is complete; the real
+    trade record comes from the EA's normal /journal/log path."""
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    results = []
+    for ev in req.events:
+        doc = ev.model_dump()
+        doc["_id"] = ev.execution_key
+        doc["license_id"] = lic.get("id", "")
+        doc["account"] = req.account
+        doc["broker_server"] = req.broker_server
+        doc["symbol"] = req.symbol
+        doc["installation_id"] = req.installation_id
+        doc["terminal_instance_id"] = req.terminal_instance_id
+        doc["reconciled_at"] = now_iso
+        try:
+            await db.lease_offline_events.insert_one(doc)
+            results.append({"execution_key": ev.execution_key, "status": "reconciled"})
+            logger.info(f"LEASE_RECONCILE_NEW execution_key={ev.execution_key} lease_id={ev.lease_id} result={ev.result}")
+        except DuplicateKeyError:
+            results.append({"execution_key": ev.execution_key, "status": "already_reconciled"})
+    return {"reconciled": True, "events": results}
+
 
 @api_router.post("/cloud/monitor/thesis-status")
 async def cloud_monitor_thesis_status(req: TradeThesisStatusReq, request: Request):
