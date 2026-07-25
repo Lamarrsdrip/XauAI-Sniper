@@ -7,7 +7,6 @@ describe("forensic operating-company browser contracts", () => {
   test("browser sessions use HttpOnly cookies, not script-readable JWT storage", () => {
     const files = [
       "components/AdminPortal.jsx",
-      "components/DownloadSection.jsx",
       "components/cloud/CloudAuth.jsx",
       "components/cloud/CloudDashboard.jsx",
       "components/cloud/AIThoughtFeed.jsx",
@@ -25,9 +24,8 @@ describe("forensic operating-company browser contracts", () => {
     const performance = read("components/PerformanceSection.jsx");
     expect(hero).not.toContain('value: "5%"');
     expect(hero).not.toContain('value: "90 / 100"');
-    expect(hero).toContain("first-party EA journal data, not independently verified");
     expect(performance).toContain("sufficient_data");
-    expect(performance).toContain("not independently verified");
+    expect(performance).toContain("First-party trading records, not independently verified");
   });
 
   test("public ticker renders only a provider-marked available quote", () => {
@@ -59,14 +57,14 @@ describe("forensic operating-company browser contracts", () => {
 
   test("broker and funded-account copy makes no unverified universal promise", () => {
     const copy = [
-      read("components/BrokerSection.jsx"),
-      read("components/HowItWorksSection.jsx"),
+      read("components/ReassuranceSection.jsx"),
+      read("components/FaqSection.jsx"),
     ].join("\n");
     expect(copy).not.toMatch(/75% deposit bonus/i);
     expect(copy).not.toMatch(/official partner/i);
     expect(copy).not.toMatch(/works on any MT5 broker/i);
     expect(copy).toMatch(/affiliate link/i);
-    expect(copy).toMatch(/Compatibility is broker-specific/i);
+    expect(copy).toMatch(/compatibility is broker-specific/i);
   });
 
   test("optional push failure cannot prevent the base service worker", () => {

@@ -4,7 +4,21 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#07090d" />
-        <meta name="description" content="XauCloud Command Center - monitor and control your licensed MT5 gold trading bot from your phone." />
+        <meta name="description" content="XauCloud is an automated Gold (XAUUSD) trading Expert Advisor for MetaTrader 5. It analyzes the market, qualifies setups, sizes risk, and manages every trade automatically." />
+        <link rel="canonical" href="https://xauaisniper.com/" />
+
+        <!-- Open Graph / social preview -->
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="XauCloud" />
+        <meta property="og:title" content="XauCloud — Automated Gold Trading for MetaTrader 5" />
+        <meta property="og:description" content="A Gold-only MT5 Expert Advisor that analyzes XAUUSD, qualifies setups, sizes risk from your account, and manages every trade automatically. No martingale, no grid." />
+        <meta property="og:url" content="https://xauaisniper.com/" />
+        <meta property="og:image" content="https://xauaisniper.com/xauai-logo.png" />
+        <meta name="twitter:card" content="summary" />
+        <meta name="twitter:title" content="XauCloud — Automated Gold Trading for MetaTrader 5" />
+        <meta name="twitter:description" content="A Gold-only MT5 Expert Advisor that analyzes XAUUSD, qualifies setups, sizes risk from your account, and manages every trade automatically." />
+        <meta name="twitter:image" content="https://xauaisniper.com/xauai-logo.png" />
+
         <!-- PWA manifest -->
         <link rel="manifest" href="/manifest.json" />
         <!-- iOS PWA support (Safari requires these instead of manifest) -->
@@ -33,7 +47,31 @@
         work correctly both with client-side routing and a non-root public URL.
         Learn how to configure a non-root public URL by running `npm run build`.
         -->
-        <title>XauCloud</title>
+        <title>XauCloud — Automated Gold Trading EA for MetaTrader 5</title>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "SoftwareApplication",
+          "name": "XauCloud",
+          "applicationCategory": "FinanceApplication",
+          "operatingSystem": "MetaTrader 5",
+          "description": "Automated Gold (XAUUSD) trading Expert Advisor for MetaTrader 5. Analyzes market conditions, qualifies setups, sizes risk, and manages trades automatically.",
+          "offers": { "@type": "Offer", "priceCurrency": "NGN", "price": "300000" }
+        }
+        </script>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "FAQPage",
+          "mainEntity": [
+            { "@type": "Question", "name": "What is XauCloud?", "acceptedAnswer": { "@type": "Answer", "text": "An automated Expert Advisor for MetaTrader 5 that trades Gold (XAUUSD). It analyzes the market, qualifies setups, and manages approved trades on your behalf." } },
+            { "@type": "Question", "name": "Which platform and symbol does it use?", "acceptedAnswer": { "@type": "Answer", "text": "MetaTrader 5, Gold (XAUUSD) only." } },
+            { "@type": "Question", "name": "Does it use martingale or grid?", "acceptedAnswer": { "@type": "Answer", "text": "No. Position sizing comes from your account risk settings and a defined stop loss." } },
+            { "@type": "Question", "name": "Do I need a VPS?", "acceptedAnswer": { "@type": "Answer", "text": "Recommended but not required to get started. Free remote VPS activation is included after purchase." } },
+            { "@type": "Question", "name": "Are profits guaranteed?", "acceptedAnswer": { "@type": "Answer", "text": "No. No trading system can guarantee profit. Start on demo and risk only what you can afford to lose." } }
+          ]
+        }
+        </script>
         <script>window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);</script>
         <script src="https://assets.emergent.sh/scripts/emergent-main.js"></script>
         <!-- v6.25.3 owner directive 2026-07-17 -- OneSignal Web Push SDK.

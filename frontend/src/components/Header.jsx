@@ -3,10 +3,10 @@ import { TrendUp, TrendDown, Crosshair, List, X } from "@phosphor-icons/react";
 import XauAiLogo from "./cloud/XauAiLogo";
 
 const NAV = [
-  { id: "overview",    label: "Home"        },
-  { id: "performance", label: "Performance" },
-  { id: "purchase",    label: "Pricing"     },
-  { id: "faq",         label: "FAQ"         },
+  { id: "how-it-works", label: "How It Works" },
+  { id: "performance",  label: "Performance"   },
+  { id: "features",     label: "Features"      },
+  { id: "purchase",     label: "Pricing"       },
 ];
 
 export default function Header({ activeSection, onNavigate, goldPrice }) {

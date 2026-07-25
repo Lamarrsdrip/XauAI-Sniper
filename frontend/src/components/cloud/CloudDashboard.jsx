@@ -731,7 +731,7 @@ export default function CloudDashboard() {
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
       {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} />}
       {active==="control"      && <ControlPage commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
-      {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} />}
+      {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} status={status} />}
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
       <CommandModal command={modalCommand} onCancel={()=>setModalCommand(null)} onSubmit={queueCommand} busy={commandBusy} message={commandMsg} licenseKey={licenseInfo.activation_key} />
     </AppShell>
@@ -1661,7 +1661,61 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
 }
 
 // ─── License ──────────────────────────────────────────────────────────────────
-function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, commandMsg, heartbeat, me }) {
+// Licensed EA download -- relocated here from the public marketing homepage
+// (2026-07-25 homepage redesign) so the only functional download flow lives
+// where a signed-in, licensed customer actually looks for it, instead of on
+// the anonymous public page where it always 401'd for a first-time visitor
+// anyway. Same backend contract as before: POST /download/request-token
+// (cookie-authenticated) -> short-lived signed URL -> GET /download/ea-release.
+function EaDownloadCard({ hasLicense }) {
+  const [info, setInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    commandAxios.get("/download/info").then(r => setInfo(r.data)).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const requestDownload = async () => {
+    setDownloading(true); setError("");
+    try {
+      const { data } = await commandAxios.post("/download/request-token");
+      window.location.href = `${API}${data.download_url}`;
+    } catch (e) {
+      setError(e.response?.status === 403
+        ? "No active license linked to your account yet. Link your license above first."
+        : (e.response?.data?.detail || "Could not start download. Please try again."));
+    }
+    setDownloading(false);
+  };
+
+  const available = info?.available !== false;
+  const version = info?.version || "Published release";
+
+  return (
+    <Card title="Download EA">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-mono text-[13px] font-bold text-white/85">{loading ? "Loading release info…" : `${version}${info?.edition ? ` · ${info.edition}` : ""}`}</div>
+          <p className="mt-1 text-[12px] leading-5 text-white/45">Signed, license-gated compiled .ex5. Operator cloud tokens and fanout settings are stripped before download.</p>
+        </div>
+        {!loading && (
+          <span className={`flex-none rounded-full px-2.5 py-1 font-mono text-[10px] font-black uppercase tracking-widest ${info?.stable ? "bg-emerald-300 text-[#06110c]" : "bg-amber-300/80 text-[#1a1400]"}`}>
+            {info?.stable ? "Stable" : "Release candidate"}
+          </span>
+        )}
+      </div>
+      {error && <div className="mt-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-[12px] text-rose-300">{error}</div>}
+      <button onClick={requestDownload} disabled={downloading || loading || !available || !hasLicense}
+        className="mt-4 w-full rounded-xl bg-amber-300 px-5 py-3 text-[13px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-40">
+        {downloading ? "Preparing download…" : !hasLicense ? "Link a license to download" : available ? `Download ${version} .EX5` : "No release available"}
+      </button>
+    </Card>
+  );
+}
+
+function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, commandMsg, heartbeat, me, status }) {
   const info = license?.license;
   return (
     <div className="space-y-4">
@@ -1702,6 +1756,8 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
         <Metric label="VPS binding"    value={info?.vps_binding||"Not bound"} detail="Optional" icon={Wifi} tone="blue" />
         <Metric label="XauCloud version" value={status?.release?.public_display_name||"Waiting"} detail={`Heartbeat ${relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}`} icon={Bot} tone={heartbeat.ea_version?"green":"neutral"} />
       </div>
+
+      <EaDownloadCard hasLicense={Boolean(info?.activation_key)} />
     </div>
   );
 }

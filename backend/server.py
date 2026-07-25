@@ -1180,6 +1180,7 @@ async def download_info():
         "checksum_sha256_12": release["ex5_sha256"][:12],
         "checksum_sha256": release["ex5_sha256"],
         "release_notes": release.get("release_notes", ""),
+        "build_timestamp": release.get("build_timestamp"),
         "stable": bool(release.get("stable_status", False)),
         "requires_login": True,
         "download_url": "/command",  # customer flow now goes through Command Center, not a direct link
@@ -1356,6 +1357,9 @@ async def get_performance_summary():
         "strategy_breakdown": [],
         "weekly_data": [],
         "equity_curve": [],
+        "first_trade_at": None,
+        "last_trade_at": None,
+        "ea_version": (_current_ea_release() or {}).get("version", ""),
     }
     if not total:
         return summary
@@ -1367,6 +1371,7 @@ async def get_performance_summary():
     month_stats = {}
     setup_stats = {}
     current_win_streak = current_loss_streak = 0
+    trade_dts = []
 
     for idx, trade in enumerate(closed, start=1):
         profit = float(trade.get("profit") or 0)
@@ -1381,6 +1386,7 @@ async def get_performance_summary():
             dt = datetime.fromisoformat(str(raw_dt).replace("Z", "+00:00")) if raw_dt else datetime.fromtimestamp(float(trade.get("created_ts") or 0), timezone.utc)
         except Exception:
             dt = datetime.now(timezone.utc)
+        trade_dts.append(dt)
         week_key = f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
         month_key = dt.strftime("%b %Y")
 
@@ -1415,6 +1421,9 @@ async def get_performance_summary():
         summary["longest_losing_streak"] = max(summary["longest_losing_streak"], current_loss_streak)
 
     summary["max_drawdown"] = round(max_dd, 2)
+    if trade_dts:
+        summary["first_trade_at"] = min(trade_dts).isoformat()
+        summary["last_trade_at"] = max(trade_dts).isoformat()
     weekly_profits = [v["profit"] for v in week_stats.values()]
     summary["best_week"] = round(max(weekly_profits), 2) if weekly_profits else 0
     summary["worst_week"] = round(min(weekly_profits), 2) if weekly_profits else 0
