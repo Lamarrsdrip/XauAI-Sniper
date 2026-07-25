@@ -279,7 +279,7 @@ function DashboardTab({ api }) {
             {[
               ["Licenses", "Create, revoke, activate, and copy ASE license keys."],
               ["Bot Ops",  "Watch live heartbeat, command queue, and EA activity."],
-              ["Payments", "Review Paystack transactions and generated license keys."],
+              ["Payments", "Review Nomba (and historical Paystack) transactions and generated license keys."],
               ["Settings", "Set license price, payment keys, and email delivery."],
             ].map(([title, body]) => (
               <div key={title} className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
@@ -498,6 +498,230 @@ function PinsTab({ api }) {
   );
 }
 
+// ─── Nomba payment settings ───────────────────────────────────────────────────
+function NombaCredentialFields({ env, values, onChange, existing }) {
+  const set = (field) => (e) => onChange(env, field, e.target.value);
+  const ex = existing || {};
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <Field label="Client ID">
+        <Input value={values.client_id} onChange={set("client_id")} className="font-mono"
+          placeholder={ex.client_id?.configured ? `Configured (${ex.client_id.preview})` : "Enter Client ID"} />
+      </Field>
+      <Field label="Client Secret">
+        <Input type="password" value={values.client_secret} onChange={set("client_secret")} className="font-mono"
+          placeholder={ex.client_secret?.configured ? "Configured — enter new to change" : "Enter Client Secret"} />
+      </Field>
+      <Field label="Account ID">
+        <Input value={values.account_id} onChange={set("account_id")} className="font-mono"
+          placeholder={ex.account_id?.configured ? `Configured (${ex.account_id.preview})` : "Enter Account ID"} />
+      </Field>
+      <Field label="Webhook Signature Key">
+        <Input type="password" value={values.webhook_signature_key} onChange={set("webhook_signature_key")} className="font-mono"
+          placeholder={ex.webhook_signature_key?.configured ? "Configured — enter new to change" : "Enter Webhook Signature Key"} />
+      </Field>
+    </div>
+  );
+}
+
+const NOMBA_EMPTY_ENV_FORM = { client_id: "", client_secret: "", account_id: "", webhook_signature_key: "" };
+const NOMBA_PAYMENT_METHODS = ["card", "transfer", "ussd", "qr"];
+
+function NombaSettingsSection({ api }) {
+  const [cfg, setCfg] = useState(null);
+  const [enabled, setEnabled] = useState(false);
+  const [environment, setEnvironment] = useState("sandbox");
+  const [sandboxForm, setSandboxForm] = useState(NOMBA_EMPTY_ENV_FORM);
+  const [productionForm, setProductionForm] = useState(NOMBA_EMPTY_ENV_FORM);
+  const [methods, setMethods] = useState(NOMBA_PAYMENT_METHODS);
+  const [currency, setCurrency] = useState("NGN");
+  const [description, setDescription] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [error, setError] = useState("");
+
+  const load = useCallback(() => {
+    ax.get(`${api}/admin/settings/nomba`).then(r => {
+      setCfg(r.data);
+      setEnabled(r.data.enabled);
+      setEnvironment(r.data.environment);
+      setMethods(r.data.allowed_payment_methods || NOMBA_PAYMENT_METHODS);
+      setCurrency(r.data.currency || "NGN");
+      setDescription(r.data.payment_description || "");
+    }).catch(() => {});
+  }, [api]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const productionTouched = productionForm.client_id || productionForm.client_secret ||
+    productionForm.account_id || productionForm.webhook_signature_key ||
+    (environment === "production" && cfg?.environment !== "production");
+
+  const setEnvField = (env, field, value) => {
+    (env === "sandbox" ? setSandboxForm : setProductionForm)(prev => ({ ...prev, [field]: value }));
+  };
+
+  const save = async () => {
+    setError(""); setSaving(true); setSaved(false);
+    const payload = { enabled, environment, allowed_payment_methods: methods, currency, payment_description: description };
+    if (sandboxForm.client_id) payload.sandbox_client_id = sandboxForm.client_id;
+    if (sandboxForm.client_secret) payload.sandbox_client_secret = sandboxForm.client_secret;
+    if (sandboxForm.account_id) payload.sandbox_account_id = sandboxForm.account_id;
+    if (sandboxForm.webhook_signature_key) payload.sandbox_webhook_signature_key = sandboxForm.webhook_signature_key;
+    if (productionForm.client_id) payload.production_client_id = productionForm.client_id;
+    if (productionForm.client_secret) payload.production_client_secret = productionForm.client_secret;
+    if (productionForm.account_id) payload.production_account_id = productionForm.account_id;
+    if (productionForm.webhook_signature_key) payload.production_webhook_signature_key = productionForm.webhook_signature_key;
+    if (productionTouched) {
+      if (!currentPassword) { setError("Enter your current admin password to change production settings."); setSaving(false); return; }
+      payload.current_password = currentPassword;
+    }
+    try {
+      await ax.put(`${api}/admin/settings/nomba`, payload);
+      setSaved(true); setTimeout(() => setSaved(false), 3000);
+      setSandboxForm(NOMBA_EMPTY_ENV_FORM); setProductionForm(NOMBA_EMPTY_ENV_FORM); setCurrentPassword("");
+      load();
+    } catch (e) {
+      setError(e.response?.data?.detail || "Failed to save Nomba settings.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const testConnection = async () => {
+    setTesting(true); setTestResult(null);
+    try {
+      const r = await ax.post(`${api}/admin/settings/nomba/test-connection`);
+      setTestResult(r.data);
+    } catch (e) {
+      setTestResult({ success: false, message: e.response?.data?.detail || "Test connection failed." });
+    } finally {
+      setTesting(false);
+      load();
+    }
+  };
+
+  const toggleMethod = (m) => {
+    setMethods(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+  };
+
+  if (!cfg) return null;
+  const activeEnvView = environment === "sandbox" ? cfg.sandbox : cfg.production;
+
+  return (
+    <CardSection
+      title="Nomba payment configuration"
+      action={
+        <label className="flex items-center gap-2 text-[11px] text-white/50 cursor-pointer">
+          <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} className="accent-amber-300" />
+          Enable Nomba Payments
+        </label>
+      }
+    >
+      {!cfg.encryption_configured && (
+        <div className="mb-4 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-[12px] text-red-300">
+          PAYMENT_CONFIG_ENCRYPTION_KEY is not set on the server. Nomba credentials cannot be saved until this
+          environment variable is configured — see audits/nomba_migration/ for setup instructions.
+        </div>
+      )}
+
+      <div className="space-y-5">
+        <Field label="Environment">
+          <div className="flex gap-2">
+            {["sandbox", "production"].map(env => (
+              <button key={env} onClick={() => setEnvironment(env)}
+                className={`flex-1 rounded-xl border px-4 py-2.5 text-[12px] font-bold uppercase tracking-wide transition ${
+                  environment === env ? "border-amber-300/50 bg-amber-300/10 text-amber-200" : "border-white/[0.08] bg-white/[0.03] text-white/50 hover:text-white/80"
+                }`}>
+                {env}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[11px] text-white/35">
+            Status: {activeEnvView?.last_validation_ok === true && <Badge tone="green">Last test passed</Badge>}
+            {activeEnvView?.last_validation_ok === false && <Badge tone="red">Last test failed</Badge>}
+            {activeEnvView?.last_validation_ok == null && <Badge tone="neutral">Not tested yet</Badge>}
+            {activeEnvView?.last_validated_at && <span className="ml-2 text-white/30">({new Date(activeEnvView.last_validated_at).toLocaleString()})</span>}
+          </p>
+        </Field>
+
+        <div className="rounded-xl border border-white/[0.06] p-4">
+          <div className="mb-3 text-[11px] font-bold uppercase tracking-wide text-white/40">Sandbox credentials</div>
+          <NombaCredentialFields env="sandbox" values={sandboxForm} onChange={setEnvField} existing={cfg.sandbox} />
+        </div>
+
+        <div className="rounded-xl border border-amber-300/15 bg-amber-300/[0.02] p-4">
+          <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-amber-200/70">Production credentials</div>
+          <p className="mb-3 text-[11px] text-white/35">Changing any production field requires your current admin password below.</p>
+          <NombaCredentialFields env="production" values={productionForm} onChange={setEnvField} existing={cfg.production} />
+        </div>
+
+        {productionTouched && (
+          <Field label="Current admin password (required to change production settings)">
+            <Input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} placeholder="••••••••" />
+          </Field>
+        )}
+
+        <Field label="Allowed payment methods">
+          <div className="flex flex-wrap gap-2">
+            {NOMBA_PAYMENT_METHODS.map(m => (
+              <button key={m} onClick={() => toggleMethod(m)}
+                className={`rounded-full border px-3.5 py-1.5 text-[11px] font-bold uppercase transition ${
+                  methods.includes(m) ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-white/[0.08] bg-white/[0.03] text-white/40"
+                }`}>
+                {m}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Currency">
+            <Input value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} className="font-mono" />
+          </Field>
+          <Field label="Payment description">
+            <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="XauCloud EA Lifetime License" />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Callback URL (read-only, copy into your Nomba dashboard)">
+            <div className="flex gap-2">
+              <Input value={cfg.callback_url} readOnly className="font-mono text-white/50" />
+              <Btn variant="ghost" onClick={() => navigator.clipboard.writeText(cfg.callback_url)}><Copy size={14} /></Btn>
+            </div>
+          </Field>
+          <Field label="Webhook URL (read-only, copy into your Nomba dashboard)">
+            <div className="flex gap-2">
+              <Input value={cfg.webhook_url} readOnly className="font-mono text-white/50" />
+              <Btn variant="ghost" onClick={() => navigator.clipboard.writeText(cfg.webhook_url)}><Copy size={14} /></Btn>
+            </div>
+          </Field>
+        </div>
+
+        {error && <div className="text-[12px] text-rose-400 font-mono">{error}</div>}
+        {testResult && (
+          <div className={`rounded-xl border px-4 py-3 text-[12px] ${testResult.success ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-red-400/20 bg-red-500/10 text-red-300"}`}>
+            {testResult.message}
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 pt-2 border-t border-white/[0.06]">
+          <Btn onClick={save} disabled={saving}>
+            <FloppyDisk size={15} /> {saving ? "Saving…" : saved ? "Saved ✓" : "Save Configuration"}
+          </Btn>
+          <Btn variant="ghost" onClick={testConnection} disabled={testing}>
+            <Lightning size={15} /> {testing ? "Testing…" : "Test Connection"}
+          </Btn>
+        </div>
+      </div>
+    </CardSection>
+  );
+}
+
 // ─── Settings ─────────────────────────────────────────────────────────────────
 function SettingsTab({ api }) {
   const [settings, setSettings] = useState(null);
@@ -562,7 +786,27 @@ function SettingsTab({ api }) {
 
   return (
     <div className="max-w-2xl space-y-5" data-testid="admin-settings-tab">
-      <CardSection title="Paystack configuration">
+      <CardSection title="Pricing">
+        <div className="space-y-4">
+          <Field label="PIN price (Naira)">
+            <div className="flex items-center gap-2">
+              <span className="text-white/50">₦</span>
+              <Input data-testid="settings-price" type="number" value={priceNaira} onChange={e => setPriceNaira(parseInt(e.target.value) || 0)} className="font-mono" />
+            </div>
+            <p className="mt-1 text-[11px] text-white/35">Current: ₦{priceNaira?.toLocaleString()} — used by both the Nomba checkout below and any still-resolving Paystack transaction.</p>
+          </Field>
+        </div>
+      </CardSection>
+
+      <NombaSettingsSection api={api} />
+
+      <CardSection title="Paystack (legacy — historical transactions only)">
+        <p className="text-[12px] text-white/40 mb-4 leading-5">
+          Paystack is no longer used for new purchases — every new checkout goes through Nomba above.
+          This key is kept only so any Paystack transaction still resolving (webhook/verify race) and
+          historical records remain lookupable. Existing customers, licenses, and purchase history are
+          untouched.
+        </p>
         <div className="space-y-4">
           <Field label="Paystack secret key">
             <Input data-testid="settings-paystack-key" type="password" value={pk} onChange={e => setPk(e.target.value)}
@@ -571,13 +815,6 @@ function SettingsTab({ api }) {
               Status: <span className={settings?.paystack_configured ? "text-emerald-400" : "text-red-400"}>{settings?.paystack_configured ? "Configured" : "Not set"}</span>
               {settings?.paystack_key_preview && settings.paystack_configured && <span className="ml-1 font-mono">({settings.paystack_key_preview})</span>}
             </p>
-          </Field>
-          <Field label="PIN price (Naira)">
-            <div className="flex items-center gap-2">
-              <span className="text-white/50">₦</span>
-              <Input data-testid="settings-price" type="number" value={priceNaira} onChange={e => setPriceNaira(parseInt(e.target.value) || 0)} className="font-mono" />
-            </div>
-            <p className="mt-1 text-[11px] text-white/35">Current: ₦{priceNaira?.toLocaleString()}</p>
           </Field>
         </div>
       </CardSection>

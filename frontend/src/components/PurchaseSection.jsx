@@ -21,7 +21,11 @@ export default function PurchaseSection({ api }) {
       .catch(() => {});
   }, [api]);
 
+  const paymentUnavailable = priceData?.payment_method === "unavailable";
+
   const handlePurchase = async () => {
+    if (loading) return; // belt-and-braces against double-submit beyond the disabled button alone
+    if (paymentUnavailable) { setError("Payments are temporarily unavailable. Please try again shortly."); return; }
     if (!buyerName.trim() || !buyerEmail.trim()) { setError("Please enter your name and email."); return; }
     if (!buyerEmail.includes("@")) { setError("Please enter a valid email address."); return; }
     setError(""); setLoading(true);
@@ -94,16 +98,16 @@ export default function PurchaseSection({ api }) {
               <button
                 data-testid="purchase-btn"
                 onClick={handlePurchase}
-                disabled={loading}
+                disabled={loading || paymentUnavailable}
                 className="mt-1 w-full inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-4 text-[14px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-50">
                 <ShoppingCart size={17} weight="bold" />
-                {loading ? "Redirecting…" : `Pay ${displayPrice} Now`}
+                {loading ? "Redirecting…" : paymentUnavailable ? "Payments Unavailable" : `Pay ${displayPrice} Now`}
               </button>
             </div>
 
             <div className="mt-5 flex items-center justify-center gap-5 border-t border-white/[0.06] pt-5">
               <div className="flex items-center gap-1.5 text-white/25 text-[11px]">
-                <ShieldCheck size={13} /> Paystack secured
+                <ShieldCheck size={13} /> Secured by Nomba
               </div>
               <div className="flex items-center gap-1.5 text-white/25 text-[11px]">
                 <Lightning size={13} /> Instant delivery

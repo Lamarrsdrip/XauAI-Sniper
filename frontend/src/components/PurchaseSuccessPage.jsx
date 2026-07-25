@@ -7,7 +7,13 @@ import { API } from "@/lib/api";
 export default function PurchaseSuccessPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const reference = searchParams.get("reference") || searchParams.get("trxref");
+  // "reference"/"trxref" were Paystack's callback params; Nomba appends
+  // "orderReference" to the callbackUrl instead (see
+  // audits/nomba_migration/02_nomba_api_reference.md) -- our own internal
+  // reference string is identical either way (we generate it and pass it
+  // to the provider as orderReference/reference respectively), so reading
+  // whichever of the three is present resolves the same transaction.
+  const reference = searchParams.get("reference") || searchParams.get("trxref") || searchParams.get("orderReference");
 
   const [status, setStatus] = useState("checking");
   const [pin, setPin] = useState(null);
@@ -51,7 +57,7 @@ export default function PurchaseSuccessPage() {
               <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
             </div>
             <h2 className="font-heading text-xl font-bold mb-2">Confirming Payment...</h2>
-            <p className="text-sm text-muted-foreground">Verifying your Paystack payment. This may take a moment.</p>
+            <p className="text-sm text-muted-foreground">Verifying your payment. This may take a moment.</p>
             <div className="mt-4 h-1 bg-muted overflow-hidden"><div className="h-full bg-primary gold-shimmer w-full" /></div>
           </div>
         )}
