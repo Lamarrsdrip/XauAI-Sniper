@@ -29,9 +29,14 @@
 //| transition window; see audits/offline_lease/03_lease_architecture |
 //| .md "Key management" section.                                    |
 //+------------------------------------------------------------------+
+// Production key provisioned 2026-07-25 (RSA-2048, e=65537). The
+// matching private key lives ONLY in the backend's
+// XAUCLOUD_LEASE_SIGNING_PRIVATE_KEY environment variable -- it is never
+// committed anywhere, including here. This modulus is public by design
+// (it can only ever be used to VERIFY a signature, never create one).
 #define XAU_LEASE_TRUSTED_KEY_COUNT 1
-string XAU_LeaseTrustedKeyIds[XAU_LEASE_TRUSTED_KEY_COUNT]   = {"PLACEHOLDER-KEY-ID"};
-string XAU_LeaseTrustedModulus[XAU_LEASE_TRUSTED_KEY_COUNT]  = {"PLACEHOLDER-SET-BY-OWNER-AT-KEY-PROVISIONING-TIME"};
+string XAU_LeaseTrustedKeyIds[XAU_LEASE_TRUSTED_KEY_COUNT]   = {"xaucloud-lease-2026-07-cfae21"};
+string XAU_LeaseTrustedModulus[XAU_LEASE_TRUSTED_KEY_COUNT]  = {"ae13558d0dd6671b788b46dd78d1387d99dc862b676bd1bf83f4d604920a3529b7e7476d442f08ccd05f32165a730b2c53ba1f62c1fcf3dd1a8cc7f5472c9b452a3324098dadea28341bf4ed048aaf5e345406c34f1eca4a6369feb5c20576c772934b61541e617763a2ec20ff0d19f5e2d9e37d2c502a19a405e91362e14b708428aae27c5f377f6fe14250b0da1ef90c3ef293c9ec12df7c852de4b5635708bfe75e2e79422828e58d9542f771800307fb02896f52c61531ecfc7da35ab75077a31527295324e086482f568eb9b2cec439aae469e1a0cea5704d19fbc78060329e28f7b05c1754b2dda9e2d5dda0d521718b2f738c5fd3ed9dee926609009f"};
 
 bool XAU_LeaseLookupTrustedModulus(const string &keyId, string &modulusOut)
 {
