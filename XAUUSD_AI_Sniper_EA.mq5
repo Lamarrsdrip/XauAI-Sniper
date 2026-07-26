@@ -2061,6 +2061,13 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 #include <Trade\PositionInfo.mqh>
 #include <Trade\AccountInfo.mqh>
 
+// XauCloud bounded offline trading lease (owner directive 2026-07-25 --
+// remove the reservation backend as an immediate single point of failure
+// for new CORE entries). Isolated module; see audits/offline_lease/ for
+// the full design. Release packaging must copy the sibling `lease/`
+// folder alongside this source file (same relative layout as this repo).
+#include "lease/XauCloudLeaseClient.mqh"
+
 //+------------------------------------------------------------------+
 //| INPUTS                                                           |
 //+------------------------------------------------------------------+
@@ -2718,6 +2725,9 @@ input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms
 input int    InpCloudOfflineFailThreshold = 3; // v6.13.0: consecutive cloud-call failures before logging CLOUD_OFFLINE_LOCAL_MODE
 input bool   InpBotMonitorEnable  = true;    // Command Center heartbeat/activity/command acknowledgements
 input int    InpBotMonitorHeartbeatSec = 20; // Send remote heartbeat every 10-30 seconds recommended
+
+input group "=== XAUCLOUD BOUNDED OFFLINE TRADING LEASE (owner directive 2026-07-25) ==="
+input bool   InpOfflineLeaseEnabled = false; // DEFAULT OFF. When true, a genuinely TEMPORARY backend connectivity failure (never an explicit deny/auth/validation failure) on a real, automated CORE candidate may be authorized instead by a valid signed offline lease this terminal is holding. Does not change risk, lot size, stop loss, entry conditions, or timing in any way -- only whether execution authority can survive a temporary outage. See audits/offline_lease/ for the full design and required controlled-outage test before enabling on a live account.
 
 input group "=== TUNABLE THRESHOLDS (walk-forward optimize these) ==="
 input double InpGradeAPlus     = 5.5;      // Combined score for A+ (default 5.5)
@@ -5354,10 +5364,12 @@ double XAU_CampaignAggregateProfitUSD(int direction)
 // claim, the order does not send -- this is a deliberate, owner-requested
 // safety property (see item 4 of the full-repair spec), not an accident.
 bool XAU_ClaimDirectionReservation(int direction, string requestingFamily, string executionKey,
-                                   string &reservationIdOut, string &failReason)
+                                   string &reservationIdOut, string &failReason,
+                                   ENUM_XAU_LEASE_FAILURE_CLASS &failureClassOut)
 {
    reservationIdOut = "";
    failReason = "";
+   failureClassOut = XAU_LFC_UNKNOWN_UNSAFE_FAILURE;
    // v6.25.5 backtest-audit finding 2026-07-17 -- a real 30-day Strategy
    // Tester run (100% real-tick data, MetaQuotes-Demo) produced ZERO trades
    // despite ~9,000 candidates reaching FinalEntryArbiter/timing/freshness/
@@ -5378,6 +5390,7 @@ bool XAU_ClaimDirectionReservation(int direction, string requestingFamily, strin
    {
       reservationIdOut = StringFormat("TESTER_LOCAL_%s_%d_%I64d", direction == 1 ? "BUY" : "SELL",
                                        (int)TimeCurrent(), GetMicrosecondCount());
+      failureClassOut = XAU_LFC_ONLINE_ALLOWED;
       PrintFormat("DIRECTION_RESERVATION_CLAIMED_TESTER_BYPASS direction=%s family=%s reservationId=%s reason=strategy_tester_is_always_a_single_isolated_instance",
                   direction == 1 ? "BUY" : "SELL", requestingFamily, reservationIdOut);
       return true;
@@ -5393,14 +5406,21 @@ bool XAU_ClaimDirectionReservation(int direction, string requestingFamily, strin
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
    ResetLastError();
    int code = WebRequest("POST", InpCloudURL + "/api/cloud/reservation/claim", hdr, InpCloudTimeoutMs, pd, res, rh);
+   string response = (code != -1) ? CharArrayToString(res) : "";
+   bool claimed = (StringFind(response, "\"claimed\":true") >= 0);
+   // Strict classification (see audits/offline_lease/03_lease_architecture.md
+   // Phase 6) -- replaces the old single RESERVATION_BACKEND_UNREACHABLE
+   // bucket that conflated a genuine timeout with an explicit backend
+   // deny/auth/validation failure. Only the two TEMPORARY classes may
+   // ever be consulted against the cached offline lease by the caller;
+   // every other value blocks the trade exactly as it always has.
+   failureClassOut = XAU_ClassifyReservationFailure(code, response, claimed);
    if(code != 200)
    {
-      failReason = StringFormat("RESERVATION_BACKEND_UNREACHABLE httpCode=%d err=%d", code, GetLastError());
+      failReason = StringFormat("RESERVATION_BACKEND_UNREACHABLE httpCode=%d err=%d class=%s", code, GetLastError(), XAU_LeaseFailureClassName(failureClassOut));
       PrintFormat("DIRECTION_RESERVATION_CLAIM_FAILED direction=%s family=%s reason=%s", direction==1?"BUY":"SELL", requestingFamily, failReason);
       return false;
    }
-   string response = CharArrayToString(res);
-   bool claimed = (StringFind(response, "\"claimed\":true") >= 0);
    if(!claimed)
    {
       failReason = "ACTIVE_EXECUTION_RESERVED_BY_ANOTHER_TERMINAL_OR_FAMILY";
@@ -5502,17 +5522,41 @@ bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, strin
    return XAU_CanOpenDirection(requestedDirection, requestingFamily, blockReason, unusedReservationId, fallbackKey);
 }
 
+// Side channel for the offline-lease outcome of the most recent
+// XAU_CanOpenDirection() call -- read by the CORE call site immediately
+// after the call (single-threaded, no race) to know whether the local
+// mutex must be released and the offline allowance consumed once the
+// real broker result is known. Never touched by the PYRAMID/
+// COUNTER_EXCURSION call sites (they never pass allowOfflineFallback=true).
+bool   g_xauLeaseLastAuthWasOffline = false;
+string g_xauLeaseLastOfflineExecutionKey = "";
+string g_xauLeaseLastOfflineMutexName = "";
+
 // Required flow (owner item 4): 1) check live positions 2) check pending
 // orders 3) check existing reservation (implicit in step 4's atomic claim)
 // 4) atomically claim requested direction 5) recheck live/pending exposure
 // (catches a race that landed a real position between the initial scan and
 // the claim) 6-9) caller sends the order, records the broker result, and
 // releases/lets-expire the reservation -- see the 3 call sites.
+//
+// allowOfflineFallback (owner directive 2026-07-25, default false so
+// PYRAMID/COUNTER_EXCURSION are completely unaffected): when true AND
+// InpOfflineLeaseEnabled AND the reservation claim fails with a
+// classification that genuinely means "the backend did not answer"
+// (never an explicit deny/auth/validation failure), consult a valid
+// signed offline lease this terminal is holding instead of blocking
+// outright. See audits/offline_lease/ for the full design. This never
+// weakens the existing online path in any way -- it only adds a new
+// fallback that only ever engages after the online path has already
+// failed for a qualifying reason.
 bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, string &blockReason,
-                          string &reservationIdOut, string executionKey)
+                          string &reservationIdOut, string executionKey, bool allowOfflineFallback = false)
 {
    blockReason = "";
    reservationIdOut = "";
+   g_xauLeaseLastAuthWasOffline = false;
+   g_xauLeaseLastOfflineExecutionKey = "";
+   g_xauLeaseLastOfflineMutexName = "";
    if(requestedDirection != 1 && requestedDirection != -1)
    {
       blockReason = "INVALID_DIRECTION";
@@ -5523,11 +5567,38 @@ bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, strin
       return false;
 
    string reservationFailReason = "";
+   ENUM_XAU_LEASE_FAILURE_CLASS failureClass = XAU_LFC_UNKNOWN_UNSAFE_FAILURE;
    if(!XAU_ClaimDirectionReservation(requestedDirection, requestingFamily, executionKey,
-                                     reservationIdOut, reservationFailReason))
+                                     reservationIdOut, reservationFailReason, failureClass))
    {
-      blockReason = StringFormat("CROSS_INSTANCE_RESERVATION_DENIED reason=%s", reservationFailReason);
-      return false;
+      if(allowOfflineFallback && InpOfflineLeaseEnabled && XAU_LeaseFailureAllowsOfflineFallback(failureClass))
+      {
+         XauLeaseState leaseState;
+         string offlineExecKey = "", offlineMutexName = "", offlineBlockReason = "";
+         if(XAU_LeaseTryAuthorizeOffline(requestedDirection, requestingFamily, executionKey,
+                                         IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)),
+                                         AccountInfoString(ACCOUNT_SERVER), Symbol(),
+                                         leaseState, offlineExecKey, offlineMutexName, offlineBlockReason))
+         {
+            reservationIdOut = "OFFLINE_LEASE:" + leaseState.leaseId;
+            g_xauLeaseLastAuthWasOffline = true;
+            g_xauLeaseLastOfflineExecutionKey = offlineExecKey;
+            g_xauLeaseLastOfflineMutexName = offlineMutexName;
+            PrintFormat("XAUCLOUD_OFFLINE_LEASE_AUTHORIZED direction=%s family=%s leaseId=%s sequence=%I64d remainingBeforeThisSend=%d",
+                        requestedDirection==1?"BUY":"SELL", requestingFamily, leaseState.leaseId, leaseState.leaseSequence,
+                        (int)(leaseState.remainingOfflineNewCampaigns - leaseState.consumedThisLease));
+         }
+         else
+         {
+            blockReason = StringFormat("CROSS_INSTANCE_RESERVATION_DENIED reason=%s offlineLeaseReason=%s", reservationFailReason, offlineBlockReason);
+            return false;
+         }
+      }
+      else
+      {
+         blockReason = StringFormat("CROSS_INSTANCE_RESERVATION_DENIED reason=%s", reservationFailReason);
+         return false;
+      }
    }
 
    // Recheck live/pending exposure -- a real position or pending order
@@ -5538,7 +5609,15 @@ bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, strin
    // scan and the reservation claim above.
    if(!XAU_CanOpenDirectionLocalScanOnly(requestedDirection, requestingFamily, blockReason))
    {
-      XAU_ReleaseDirectionReservation(reservationIdOut);
+      if(g_xauLeaseLastAuthWasOffline)
+      {
+         XAU_LeaseMutexRelease(g_xauLeaseLastOfflineMutexName);
+         g_xauLeaseLastAuthWasOffline = false;
+      }
+      else
+      {
+         XAU_ReleaseDirectionReservation(reservationIdOut);
+      }
       reservationIdOut = "";
       return false;
    }
@@ -11312,10 +11391,34 @@ void OnDeinit(const int reason)
    Print("=== ", XAUAI_EA_VERSION, " STI STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
+datetime g_xauLeaseLastReconcileAttempt = 0;
+
 void OnTimer()
 {
    int secondsSinceScan = (g_lastEntryScanAt > 0) ? (int)(TimeCurrent() - g_lastEntryScanAt) : 999999;
    g_timerForceScan = (InpScanWatchdogMin > 0 && secondsSinceScan >= InpScanWatchdogMin * 60);
+
+   // Phase 15: upload any queued offline-executed events once the backend
+   // is reachable again, rate-limited to once per minute so a persistent
+   // outage doesn't spam WebRequest calls. Never requests a new lease
+   // until this succeeds (queue empties) -- that gating lives in the
+   // lease-request call site itself (not yet wired to an automatic
+   // renewal loop in this release; renewal remains an explicit action,
+   // same as the initial request).
+   if(InpOfflineLeaseEnabled && !MQLInfoInteger(MQL_TESTER) &&
+      (TimeCurrent() - g_xauLeaseLastReconcileAttempt) >= 60)
+   {
+      g_xauLeaseLastReconcileAttempt = TimeCurrent();
+      string xauLeaseAccountLogin = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+      string xauLeaseAccountServer = AccountInfoString(ACCOUNT_SERVER);
+      string xauLeaseSymbol = Symbol();
+      string xauLeaseInstallationId = XAU_LeaseGetOrCreateInstallationId();
+      string xauLeaseTerminalId = XAU_LeaseGetOrCreateTerminalId();
+      XAU_LeaseUploadReconciliationQueue(InpCloudURL, InpCloudTimeoutMs, InpLicensePIN,
+                                         xauLeaseAccountLogin, xauLeaseAccountServer, xauLeaseSymbol,
+                                         xauLeaseInstallationId, xauLeaseTerminalId);
+   }
+
    OnTick();
 }
 
@@ -21722,6 +21825,18 @@ void PrintBacktestAuditReport()
 // caller, manual override included.
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
 {
+   // Owner directive 2026-07-25 (Phase 14, conservative initial scope):
+   // the offline lease may only ever authorize a genuine, fully-automated
+   // CORE candidate -- never RE_ENTRY (identified by its
+   // "RE_ENTRY_FRESH_SETUP:" reason prefix, since it calls this same
+   // OpenTrade() function rather than having its own execution path --
+   // see audits/offline_lease/02_reservation_flow_audit.md §3) and never
+   // a manual/force override (isManualOverride=true). This flag is passed
+   // straight through to XAU_CanOpenDirection()'s allowOfflineFallback
+   // parameter below and touches nothing else about how this function
+   // decides direction, size, SL, or timing.
+   bool xauLeaseIsGenuineCoreEntry = (!isManualOverride) && (StringFind(reason, "RE_ENTRY_FRESH_SETUP:") != 0);
+
    // The analysis/timer/final-arbiter pipeline has already approved `signal`
    // before OpenTrade is called. This is the one final execution mapping:
    // fresh BRKT_UP/BRKT_DN candidates invert only in Scenario C; all other
@@ -22968,7 +23083,8 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       string sendGuardReason = "";
       string coreExecutionKey = XAU_CoreExecutionKey(signal);
       if(!XAU_CanOpenDirection(signal, isManualOverride ? "MANUAL_FORCE" : "NORMAL_CORE",
-                               sendGuardReason, directionReservationId, coreExecutionKey))
+                               sendGuardReason, directionReservationId, coreExecutionKey,
+                               xauLeaseIsGenuineCoreEntry))
       {
          PrintFormat("DIRECTION_EXCLUSIVITY_FINAL_SEND_BLOCK signal=%s reason=%s", signal == 1 ? "BUY" : "SELL", sendGuardReason);
          return false;
@@ -23046,6 +23162,46 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                   requestOk?"true":"false", brokerRetcode,
                   XAU_BrokerOpenRetcodeAccepted(brokerRetcode)?"true":"false",
                   openedPosId, liveConfirmed?"true":"false");
+   }
+
+   // Owner directive 2026-07-25, Phase 12 step 30: the offline lease
+   // allowance is consumed (and the offline event durably queued for
+   // backend reconciliation) ONLY when the broker retcode was accepted --
+   // confirmed (ok) OR ambiguous-may-have-executed (accepted but
+   // liveConfirmed/ownerSLConfirmed still false) -- and NEVER merely
+   // because this candidate was evaluated or authorized, and NEVER on a
+   // definitive broker rejection. The local mutex is released in every
+   // case so a later genuine retry is never blocked by this attempt.
+   if(g_xauLeaseLastAuthWasOffline)
+   {
+      if(XAU_BrokerOpenRetcodeAccepted(brokerRetcode))
+      {
+         XauLeaseState currentLease;
+         if(XAU_LeaseLoadFromDisk(currentLease))
+         {
+            if(XAU_LeaseConsumeOfflineAllowance(currentLease, g_xauLeaseLastOfflineExecutionKey))
+            {
+               string xauLeaseFamilyForReconcile = isManualOverride ? "MANUAL_FORCE" : "NORMAL_CORE";
+               string xauLeaseResultForReconcile = liveConfirmed ? "CONFIRMED" : "AMBIGUOUS";
+               XAU_LeaseQueueReconciliationEvent(g_xauLeaseLastOfflineExecutionKey, currentLease.leaseId,
+                                                  currentLease.leaseSequence, signal,
+                                                  xauLeaseFamilyForReconcile,
+                                                  IntegerToString((long)openedDealTicket),
+                                                  xauLeaseResultForReconcile, TimeCurrent());
+               PrintFormat("XAUCLOUD_OFFLINE_LEASE_CONSUMED leaseId=%s sequence=%I64d remainingAfter=%d result=%s",
+                           currentLease.leaseId, currentLease.leaseSequence,
+                           (int)(currentLease.remainingOfflineNewCampaigns - currentLease.consumedThisLease),
+                           liveConfirmed ? "CONFIRMED" : "AMBIGUOUS");
+            }
+         }
+      }
+      else
+      {
+         PrintFormat("XAUCLOUD_OFFLINE_LEASE_NOT_CONSUMED_DEFINITIVE_REJECTION executionKey=%s retcode=%u",
+                     g_xauLeaseLastOfflineExecutionKey, brokerRetcode);
+      }
+      XAU_LeaseMutexRelease(g_xauLeaseLastOfflineMutexName);
+      g_xauLeaseLastAuthWasOffline = false;
    }
 
    if(ok)
