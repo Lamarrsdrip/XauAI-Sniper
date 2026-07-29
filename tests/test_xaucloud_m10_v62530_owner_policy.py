@@ -70,8 +70,8 @@ def test_owner_required_allow_block_matrix():
 
 def test_production_identity_and_source_mirror():
     text = source()
-    assert '#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.30"' in text
-    assert '#define XAUAI_EA_VERSION_NUM "6.25.30"' in text
+    assert '#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.31"' in text
+    assert '#define XAUAI_EA_VERSION_NUM "6.25.31"' in text
     assert "ASIA_A_PLUS_ONLY_NO_A_PLUS_RESET_PENDING" not in text
     assert EA.read_bytes() == BACKEND_EA.read_bytes()
 
@@ -183,7 +183,8 @@ def test_unrelated_production_controls_and_offline_lease_are_preserved():
     text = source()
     assert "input double InpStopLossGoldMove = 10.0;" in text
     assert "g_rExit[idx].extensionDeadline = triggerTime + 600;" in text
-    assert '#include "lease/XauCloudLeaseClient.mqh"' in text
+    assert '#include "lease/XauCloudLeaseClient.mqh"' not in text
+    assert 'blockReasonOut="OFFLINE_LEASE_NOT_INCLUDED";' in text
     assert "input bool   InpOfflineLeaseEnabled = false;" in text
     assert "XAU_LeaseTryAuthorizeOffline(" in text
     assert "InpExtensionFloor015REnabled" in text

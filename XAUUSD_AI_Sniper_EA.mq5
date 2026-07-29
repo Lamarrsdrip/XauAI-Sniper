@@ -1,6 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
-//|                                     XauAI Sniper — M10 Gold Edition|
+//|                                     XauCloud — M10 Gold Edition   |
+//|   v6.25.31 - Hybrid M5 evidence / M10 execution production       |
+//|   Two immutable closed-M5 observations may mature one candidate   |
+//|   only at the authoritative M10 boundary. R2 additionally resolves|
+//|   a narrow M10 transition close-call when both M5 bars strongly   |
+//|   agree. All shared gates and permanent owner blocks still apply. |
+//|   Single-file build: command center remains online-authoritative; |
+//|   no external lease include or offline-lease execution path.      |
 //|   v6.25.24 - 30-day replay consolidated root repair              |
 //|   Replay-proven fixes: 4807 requires persistence before targeted  |
 //|   rebuild (no per-bar handle churn); explicit WAIT thesis actions |
@@ -1946,8 +1953,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.256"
-#property description "Official XauCloud-m10 v6.25.30 production build: Asia permits A+ only; A+ reset-pending and the approved Grade-B harmful categories are permanently blocked."
+#property version   "6.258"
+#property description "XauCloud-m10 production: two closed-M5 evidence scans feed one authoritative M10-boundary candidate through all shared gates."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -2031,9 +2038,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.30"
-#define XAUAI_EA_VERSION_NUM "6.25.30"
-#define XAUAI_BUILD_HASH "xaucloud-m10-v62530-approved-main-20260729"
+#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.31"
+#define XAUAI_EA_VERSION_NUM "6.25.31"
+#define XAUAI_BUILD_HASH "xaucloud-m10-v62531-hybrid-m5-evidence-m10-execution-r2-20260729"
 #define XAU_PYRAMID_BASKET_HARD_CLOSE_R 0.50
 #define XAU_COUNTER_EXCURSION_BUILD false
 #define XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE true
@@ -2061,12 +2068,107 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 #include <Trade\PositionInfo.mqh>
 #include <Trade\AccountInfo.mqh>
 
-// XauCloud bounded offline trading lease (owner directive 2026-07-25 --
-// remove the reservation backend as an immediate single point of failure
-// for new CORE entries). Isolated module; see audits/offline_lease/ for
-// the full design. Release packaging must copy the sibling `lease/`
-// folder alongside this source file (same relative layout as this repo).
-#include "lease/XauCloudLeaseClient.mqh"
+// Owner-approved single-file production build: no optional offline-lease
+// module and no sibling include directory. Online command-center reservation
+// remains authoritative; a backend outage fails closed. Compatibility stubs
+// keep older .set files loadable without a separate lease dependency.
+enum ENUM_XAU_LEASE_FAILURE_CLASS
+{
+   XAU_LFC_ONLINE_ALLOWED,
+   XAU_LFC_ONLINE_DENIED,
+   XAU_LFC_AUTHENTICATION_FAILURE,
+   XAU_LFC_AUTHORIZATION_FAILURE,
+   XAU_LFC_VALIDATION_FAILURE,
+   XAU_LFC_DUPLICATE_OR_CONFLICT,
+   XAU_LFC_SERVER_TEMPORARY_FAILURE,
+   XAU_LFC_TEMPORARY_CONNECTIVITY_FAILURE,
+   XAU_LFC_UNKNOWN_UNSAFE_FAILURE
+};
+
+struct XauLeaseState
+{
+   bool   loaded;
+   string leaseId;
+   long   leaseSequence;
+   int    remainingOfflineNewCampaigns;
+   int    consumedThisLease;
+};
+
+string XAU_LeaseFailureClassName(ENUM_XAU_LEASE_FAILURE_CLASS value)
+{
+   switch(value)
+   {
+      case XAU_LFC_ONLINE_ALLOWED:                 return "ONLINE_ALLOWED";
+      case XAU_LFC_ONLINE_DENIED:                  return "ONLINE_DENIED";
+      case XAU_LFC_AUTHENTICATION_FAILURE:         return "AUTHENTICATION_FAILURE";
+      case XAU_LFC_AUTHORIZATION_FAILURE:          return "AUTHORIZATION_FAILURE";
+      case XAU_LFC_VALIDATION_FAILURE:             return "VALIDATION_FAILURE";
+      case XAU_LFC_DUPLICATE_OR_CONFLICT:          return "DUPLICATE_OR_CONFLICT";
+      case XAU_LFC_SERVER_TEMPORARY_FAILURE:       return "SERVER_TEMPORARY_FAILURE";
+      case XAU_LFC_TEMPORARY_CONNECTIVITY_FAILURE: return "TEMPORARY_CONNECTIVITY_FAILURE";
+      default:                                     return "UNKNOWN_UNSAFE_FAILURE";
+   }
+}
+
+ENUM_XAU_LEASE_FAILURE_CLASS XAU_ClassifyReservationFailure(
+   int httpCode,
+   const string &responseBody,
+   bool claimedTrue)
+{
+   if(httpCode==-1) return XAU_LFC_TEMPORARY_CONNECTIVITY_FAILURE;
+   if(httpCode==200) return claimedTrue ? XAU_LFC_ONLINE_ALLOWED : XAU_LFC_ONLINE_DENIED;
+   if(httpCode==400) return XAU_LFC_VALIDATION_FAILURE;
+   if(httpCode==401) return XAU_LFC_AUTHENTICATION_FAILURE;
+   if(httpCode==403) return XAU_LFC_AUTHORIZATION_FAILURE;
+   if(httpCode==409) return XAU_LFC_DUPLICATE_OR_CONFLICT;
+   if(httpCode==500 || httpCode==502 || httpCode==503 || httpCode==504)
+      return XAU_LFC_SERVER_TEMPORARY_FAILURE;
+   return XAU_LFC_UNKNOWN_UNSAFE_FAILURE;
+}
+
+bool XAU_LeaseFailureAllowsOfflineFallback(ENUM_XAU_LEASE_FAILURE_CLASS value)
+{
+   return false;
+}
+
+string XAU_LeaseGetOrCreateInstallationId() { return ""; }
+string XAU_LeaseGetOrCreateTerminalId() { return ""; }
+bool XAU_LeaseLoadFromDisk(XauLeaseState &state) { return false; }
+bool XAU_LeaseConsumeOfflineAllowance(XauLeaseState &state,const string &executionKey) { return false; }
+void XAU_LeaseMutexRelease(const string &mutexName) {}
+void XAU_LeaseQueueReconciliationEvent(
+   const string &executionKey,
+   const string &leaseId,
+   long leaseSequence,
+   int direction,
+   const string &entryFamily,
+   string brokerTicket,
+   string result,
+   datetime executedAt) {}
+bool XAU_LeaseUploadReconciliationQueue(
+   const string &cloudUrl,
+   int timeoutMs,
+   const string &pin,
+   const string &account,
+   const string &brokerServer,
+   const string &symbol,
+   const string &installationId,
+   const string &terminalInstanceId) { return false; }
+bool XAU_LeaseTryAuthorizeOffline(
+   int direction,
+   const string &entryFamily,
+   const string &candidateExecutionKey,
+   const string &accountLogin,
+   const string &accountServer,
+   const string &symbol,
+   XauLeaseState &outState,
+   string &offlineExecutionKeyOut,
+   string &mutexNameOut,
+   string &blockReasonOut)
+{
+   blockReasonOut="OFFLINE_LEASE_NOT_INCLUDED";
+   return false;
+}
 
 //+------------------------------------------------------------------+
 //| INPUTS                                                           |
@@ -2727,7 +2829,7 @@ input bool   InpBotMonitorEnable  = true;    // Command Center heartbeat/activit
 input int    InpBotMonitorHeartbeatSec = 20; // Send remote heartbeat every 10-30 seconds recommended
 
 input group "=== XAUCLOUD BOUNDED OFFLINE TRADING LEASE (owner directive 2026-07-25) ==="
-input bool   InpOfflineLeaseEnabled = false; // DEFAULT OFF. When true, a genuinely TEMPORARY backend connectivity failure (never an explicit deny/auth/validation failure) on a real, automated CORE candidate may be authorized instead by a valid signed offline lease this terminal is holding. Does not change risk, lot size, stop loss, entry conditions, or timing in any way -- only whether execution authority can survive a temporary outage. See audits/offline_lease/ for the full design and required controlled-outage test before enabling on a live account.
+input bool   InpOfflineLeaseEnabled = false; // Legacy compatibility input only. The single-file v6.25.31 production build has no offline-lease path and always fails closed if online command-center reservation is unavailable.
 
 input group "=== TUNABLE THRESHOLDS (walk-forward optimize these) ==="
 input double InpGradeAPlus     = 5.5;      // Combined score for A+ (default 5.5)
@@ -3473,6 +3575,10 @@ int    hEMAFast=INVALID_HANDLE, hEMASlow=INVALID_HANDLE, hRSI=INVALID_HANDLE, hA
 int    hBBUpper=INVALID_HANDLE, hBBLower=INVALID_HANDLE, hBBMid=INVALID_HANDLE;
 int    hEMAFast_H1=INVALID_HANDLE, hEMASlow_H1=INVALID_HANDLE, hRSI_M15=INVALID_HANDLE, hStoch=INVALID_HANDLE;
 int    hEMAFast_H4=INVALID_HANDLE, hEMASlow_H4=INVALID_HANDLE;   // v4.8.0 — H4 HTF context
+// Research-only observation handles. They read closed M5 evidence and never
+// replace the production M10 indicator handles or feed an order directly.
+int    hHybridEMAFastM5=INVALID_HANDLE, hHybridEMASlowM5=INVALID_HANDLE;
+int    hHybridRSIM5=INVALID_HANDLE, hHybridATRM5=INVALID_HANDLE;
 double bufEMAFast[], bufEMASlow[], bufRSI[], bufATR[];
 double bufBBUpper[], bufBBLower[], bufBBMid[];
 double bufEMAFast_H1[], bufEMASlow_H1[], bufRSI_M15[];
@@ -10864,6 +10970,7 @@ bool XAU_RunOwnerRExitSelfTests()
 
 bool XAU_RunNoBreakoutAndSnapshotSelfTests();
 bool XAU_RunPermanentM10CategoryPolicySelfTests();
+bool XAU_RunHybridM5StateSelfTests();
 
 int OnInit()
 {
@@ -10877,6 +10984,8 @@ int OnInit()
    if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunNoBreakoutAndSnapshotSelfTests())
       return INIT_FAILED;
    if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunPermanentM10CategoryPolicySelfTests())
+      return INIT_FAILED;
+   if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunHybridM5StateSelfTests())
       return INIT_FAILED;
 
    // v6.21.2 Part 3 — CONFIG-AGREEMENT ASSERTION: InpNormalRiskPct (the sole normal-
@@ -10994,6 +11103,10 @@ int OnInit()
    hEMASlow_H4 = iMA(Symbol(), InpContextTF, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
    hRSI_M15  = iRSI(Symbol(), PERIOD_M15, InpRSIPeriod, PRICE_CLOSE);
    hStoch    = iStochastic(Symbol(), XAU_PRIMARY_DECISION_TF, 14, 3, 3, MODE_SMA, STO_LOWHIGH);
+   hHybridEMAFastM5 = iMA(Symbol(), PERIOD_M5, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
+   hHybridEMASlowM5 = iMA(Symbol(), PERIOD_M5, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
+   hHybridRSIM5     = iRSI(Symbol(), PERIOD_M5, InpRSIPeriod, PRICE_CLOSE);
+   hHybridATRM5     = iATR(Symbol(), PERIOD_M5, InpATRPeriod);
 
    // v6.25.24: only handles actually consumed by the immutable M10 snapshot
    // are mandatory. H1 is soft context. The legacy-named H4/context handles
@@ -11009,6 +11122,10 @@ int OnInit()
       Print("INDICATOR_H1_SOFT_CONTEXT_UNAVAILABLE_AT_INIT: M10 engine remains active with neutral H1 context");
    if(hEMAFast_H4==INVALID_HANDLE || hEMASlow_H4==INVALID_HANDLE)
       Print("INDICATOR_CONTEXT_DUPLICATE_SOFT_UNAVAILABLE_AT_INIT: canonical M10 EMA snapshot remains authoritative");
+   if(hHybridEMAFastM5==INVALID_HANDLE || hHybridEMASlowM5==INVALID_HANDLE ||
+      hHybridRSIM5==INVALID_HANDLE || hHybridATRM5==INVALID_HANDLE)
+      Print("HYBRID_M5_OBSERVATION_HANDLES_UNAVAILABLE | action=NORMAL_M10_FALLBACK | production M10 scanner remains active");
+   Print("HYBRID_M5_EVIDENCE_POLICY | scan1=FIRST_CLOSED_M5_IMMUTABLE_NO_EXECUTION | scan2=SECOND_CLOSED_M5_AT_M10_BOUNDARY | candidatePath=SHARED_PRODUCTION_GATES | fixedEntryTimer=UNCHANGED | riskExitsBlocks=UNCHANGED");
 
    ArraySetAsSeries(bufEMAFast, true); ArraySetAsSeries(bufEMASlow, true);
    ArraySetAsSeries(bufRSI, true);     ArraySetAsSeries(bufATR, true);
@@ -11398,11 +11515,19 @@ void OnDeinit(const int reason)
                g_permM10APlusResetPendingBlocked,g_permM10GradeBReversalBlocked,
                g_permM10AsiaGradeBBlocked,g_permM10ResetPendingGradeBBlocked,
                g_permM10FinalAssertionFailures);
+   PrintFormat("HYBRID_M5_FUNNEL_SUMMARY | scan1=%d | scan2=%d | candidatesCreated=%d | discoveryRejected=%d | scan1MissedFallback=%d | permanentBlocks=%d | executed=%d",
+               g_hybridM5Scan1Count,g_hybridM5Scan2Count,g_hybridM5CandidateCount,
+               g_hybridM5RejectedCount,g_hybridM5FallbackCount,
+               g_hybridM5PermanentBlockCount,g_hybridM5ExecutedCount);
    IndicatorRelease(hEMAFast); IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI); IndicatorRelease(hATR); IndicatorRelease(hBBUpper);
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
+   if(hHybridEMAFastM5!=INVALID_HANDLE) IndicatorRelease(hHybridEMAFastM5);
+   if(hHybridEMASlowM5!=INVALID_HANDLE) IndicatorRelease(hHybridEMASlowM5);
+   if(hHybridRSIM5!=INVALID_HANDLE) IndicatorRelease(hHybridRSIM5);
+   if(hHybridATRM5!=INVALID_HANDLE) IndicatorRelease(hHybridATRM5);
    SavePatterns();
    // v6.3.8 Upgrade 6 / v6.3.9: final gate analytics report on shutdown
    PrintGateReport();
@@ -14548,6 +14673,534 @@ XAU_M10EvidenceSnapshot g_m10Snapshot;
 XAU_M10SignalDecision   g_m10Decision;
 long     g_m10EvidenceSeq = 0;
 datetime g_m10LastEvidenceBar = 0;
+
+// ===========================================================================
+// RESEARCH: TWO CLOSED-M5 EVIDENCE SCANS, ONE M10 EXECUTION DECISION
+// ===========================================================================
+// Scan 1 is observation only. Scan 2 is captured only when the matching M10
+// bar has closed and the normal M10 evidence snapshot is ready. A hybrid idea
+// is injected into the existing candidate lane only when both immutable M5
+// observations and the current canonical M10 decision support it. It has no
+// order-send function and cannot change grade, risk, SL, timing or exits.
+enum ENUM_XAU_HYBRID_M5_RELATION
+{
+   HYBRID_M5_REL_NONE=0,
+   HYBRID_M5_REL_PERSISTENT_DIRECTION=1,
+   HYBRID_M5_REL_DEVELOPING_SIGNAL=2,
+   HYBRID_M5_REL_FALSE_IMPULSE=3,
+   HYBRID_M5_REL_LOCATION_IMPROVEMENT=4,
+   HYBRID_M5_REL_TRANSITION_MATURATION=5,
+   HYBRID_M5_REL_DIRECTIONS_CONFLICT=6,
+   HYBRID_M5_REL_DATA_INVALID=7
+};
+
+string XAU_HybridM5RelationName(ENUM_XAU_HYBRID_M5_RELATION value)
+{
+   switch(value)
+   {
+      case HYBRID_M5_REL_PERSISTENT_DIRECTION:  return "PERSISTENT_DIRECTION";
+      case HYBRID_M5_REL_DEVELOPING_SIGNAL:     return "DEVELOPING_SIGNAL";
+      case HYBRID_M5_REL_FALSE_IMPULSE:         return "FALSE_IMPULSE_REJECTION";
+      case HYBRID_M5_REL_LOCATION_IMPROVEMENT:  return "LOCATION_IMPROVEMENT";
+      case HYBRID_M5_REL_TRANSITION_MATURATION: return "TRANSITION_MATURATION";
+      case HYBRID_M5_REL_DIRECTIONS_CONFLICT:   return "DIRECTIONS_CONFLICT";
+      case HYBRID_M5_REL_DATA_INVALID:          return "DATA_INVALID";
+      default:                                  return "NONE";
+   }
+}
+
+struct XAU_HybridM5Snapshot
+{
+   bool     valid;
+   datetime cycleStart;
+   datetime barTime;
+   datetime capturedAt;
+   double   buyScore;
+   double   sellScore;
+   int      preferredDirection;
+   double   confidence;
+   double   emaFast;
+   double   emaSlow;
+   double   rsi;
+   double   atr;
+   double   momentumATR;
+   double   buyRoomR;
+   double   sellRoomR;
+   string   regime;
+   string   transitionState;
+   string   momentumState;
+   string   structureState;
+   string   locationState;
+   string   setupPossibilities;
+   string   session;
+   string   reason;
+};
+
+struct XAU_HybridM5CycleState
+{
+   datetime cycleStart;
+   XAU_HybridM5Snapshot scan1;
+   XAU_HybridM5Snapshot scan2;
+   ENUM_XAU_HYBRID_M5_RELATION relation;
+   int      finalDirection;
+   double   finalConfidence;
+   double   finalSetupScore;
+   string   finalSetupName;
+   string   exactReason;
+   bool     finalCandidateCreated;
+   bool     consumed;
+   bool     fallbackUsed;
+};
+
+XAU_HybridM5CycleState g_hybridM5Cycle;
+datetime g_hybridM5LastPhaseOneBar=0;
+int g_hybridM5Scan1Count=0;
+int g_hybridM5Scan2Count=0;
+int g_hybridM5CandidateCount=0;
+int g_hybridM5RejectedCount=0;
+int g_hybridM5FallbackCount=0;
+int g_hybridM5ExecutedCount=0;
+int g_hybridM5PermanentBlockCount=0;
+
+datetime XAU_HybridM5CycleStart(datetime m5BarTime)
+{
+   if(m5BarTime<=0) return 0;
+   return (datetime)(((long)m5BarTime/XAU_PRIMARY_DECISION_TF_SECONDS)*XAU_PRIMARY_DECISION_TF_SECONDS);
+}
+
+bool XAU_HybridM5ReadBuffer(int handle,int shift,double &value)
+{
+   value=0.0;
+   if(handle==INVALID_HANDLE || shift<1) return false;
+   double one[];
+   ArrayResize(one,1);
+   ResetLastError();
+   if(CopyBuffer(handle,0,shift,1,one)!=1) return false;
+   value=one[0];
+   return MathIsValidNumber(value);
+}
+
+double XAU_HybridM5Clamp(double value,double lo,double hi)
+{
+   return MathMax(lo,MathMin(hi,value));
+}
+
+XAU_HybridM5Snapshot XAU_HybridM5Capture(datetime barTime,datetime cycleStart)
+{
+   XAU_HybridM5Snapshot s;
+   ZeroMemory(s);
+   s.cycleStart=cycleStart;
+   s.barTime=barTime;
+   s.capturedAt=TimeCurrent();
+
+   int shift=iBarShift(Symbol(),PERIOD_M5,barTime,true);
+   if(shift<1 || iTime(Symbol(),PERIOD_M5,shift)!=barTime)
+   {
+      s.reason="closed M5 bar identity unavailable";
+      return s;
+   }
+
+   double fastNow=0.0,fastPrev=0.0,slowNow=0.0,rsiNow=0.0,atrNow=0.0;
+   bool buffersOk=
+      XAU_HybridM5ReadBuffer(hHybridEMAFastM5,shift,fastNow) &&
+      XAU_HybridM5ReadBuffer(hHybridEMAFastM5,shift+1,fastPrev) &&
+      XAU_HybridM5ReadBuffer(hHybridEMASlowM5,shift,slowNow) &&
+      XAU_HybridM5ReadBuffer(hHybridRSIM5,shift,rsiNow) &&
+      XAU_HybridM5ReadBuffer(hHybridATRM5,shift,atrNow);
+   double open1=iOpen(Symbol(),PERIOD_M5,shift);
+   double high1=iHigh(Symbol(),PERIOD_M5,shift);
+   double low1=iLow(Symbol(),PERIOD_M5,shift);
+   double close1=iClose(Symbol(),PERIOD_M5,shift);
+   double close4=iClose(Symbol(),PERIOD_M5,shift+3);
+   if(!buffersOk || atrNow<=0.0 || open1<=0.0 || high1<=0.0 ||
+      low1<=0.0 || close1<=0.0 || close4<=0.0)
+   {
+      s.reason=StringFormat("closed M5 data incomplete shift=%d buffersOk=%s atr=%.5f",
+                            shift,buffersOk?"true":"false",atrNow);
+      return s;
+   }
+
+   double prior3High=-DBL_MAX,prior3Low=DBL_MAX;
+   double prior12High=-DBL_MAX,prior12Low=DBL_MAX;
+   for(int i=shift+1;i<=shift+12;i++)
+   {
+      double h=iHigh(Symbol(),PERIOD_M5,i);
+      double l=iLow(Symbol(),PERIOD_M5,i);
+      if(h>prior12High) prior12High=h;
+      if(l>0.0 && l<prior12Low) prior12Low=l;
+      if(i<=shift+3)
+      {
+         if(h>prior3High) prior3High=h;
+         if(l>0.0 && l<prior3Low) prior3Low=l;
+      }
+   }
+   if(prior3High<=-DBL_MAX || prior3Low>=DBL_MAX ||
+      prior12High<=-DBL_MAX || prior12Low>=DBL_MAX)
+   {
+      s.reason="closed M5 structure history incomplete";
+      return s;
+   }
+
+   double emaSpreadATR=(fastNow-slowNow)/atrNow;
+   double emaSlopeATR=(fastNow-fastPrev)/atrNow;
+   double momentumATR=(close1-close4)/atrNow;
+   double bodyATR=(close1-open1)/atrNow;
+   double directionalEvidence=
+      XAU_HybridM5Clamp(emaSpreadATR*18.0,-18.0,18.0)+
+      XAU_HybridM5Clamp(emaSlopeATR*22.0,-8.0,8.0)+
+      XAU_HybridM5Clamp((rsiNow-50.0)*0.65,-13.0,13.0)+
+      XAU_HybridM5Clamp(momentumATR*9.0,-12.0,12.0)+
+      XAU_HybridM5Clamp(bodyATR*8.0,-7.0,7.0);
+
+   bool bullishBreak=(close1>prior3High);
+   bool bearishBreak=(close1<prior3Low);
+   if(bullishBreak) directionalEvidence+=8.0;
+   if(bearishBreak) directionalEvidence-=8.0;
+
+   double projectedHigh=prior12High+(prior12High-prior12Low)*0.50;
+   double projectedLow =prior12Low -(prior12High-prior12Low)*0.50;
+   double buyRoom=XAU_HybridM5Clamp((projectedHigh-close1)/atrNow,0.0,5.0);
+   double sellRoom=XAU_HybridM5Clamp((close1-projectedLow)/atrNow,0.0,5.0);
+   directionalEvidence+=XAU_HybridM5Clamp((buyRoom-sellRoom)*1.5,-4.0,4.0);
+
+   s.buyScore=XAU_HybridM5Clamp(50.0+directionalEvidence,0.0,100.0);
+   s.sellScore=XAU_HybridM5Clamp(50.0-directionalEvidence,0.0,100.0);
+   double scoreGap=MathAbs(s.buyScore-s.sellScore);
+   s.preferredDirection=(scoreGap>=10.0)?(s.buyScore>s.sellScore?1:-1):0;
+   s.confidence=MathMax(s.buyScore,s.sellScore);
+   s.emaFast=fastNow;
+   s.emaSlow=slowNow;
+   s.rsi=rsiNow;
+   s.atr=atrNow;
+   s.momentumATR=momentumATR;
+   s.buyRoomR=buyRoom;
+   s.sellRoomR=sellRoom;
+   s.regime=RegimeName();
+   s.transitionState=EnumToString(g_transitionDecision.lifecycle);
+   s.momentumState=momentumATR>=0.35?"BULLISH_CONTINUATION":
+                   (momentumATR<=-0.35?"BEARISH_CONTINUATION":"MIXED");
+   s.structureState=bullishBreak?"BULLISH_BREAK":
+                    (bearishBreak?"BEARISH_BREAK":
+                     (fastNow>slowNow?"BULLISH_HELD":
+                      (fastNow<slowNow?"BEARISH_HELD":"MIXED")));
+   double distanceFromFastATR=MathAbs(close1-fastNow)/atrNow;
+   s.locationState=distanceFromFastATR<=0.55?"GOOD":
+                   (distanceFromFastATR<=0.90?"ACCEPTABLE":
+                    (distanceFromFastATR<=1.35?"LATE":"EXTREME"));
+   s.setupPossibilities=(bullishBreak||bearishBreak)?"M5_STRUCTURE_BREAK":
+                        (MathAbs(momentumATR)>=0.35?"M5_MOMENTUM_CONTINUATION":
+                         (distanceFromFastATR<=0.55?"M5_CONTROLLED_RESET":"M5_EVIDENCE_DEVELOPING"));
+   s.session=SessionTag();
+   s.reason=StringFormat("emaSpreadATR=%.2f emaSlopeATR=%.2f rsi=%.1f momentumATR=%.2f bodyATR=%.2f",
+                         emaSpreadATR,emaSlopeATR,rsiNow,momentumATR,bodyATR);
+   s.valid=true;
+   return s;
+}
+
+bool XAU_HybridM5Classify(const XAU_HybridM5Snapshot &scan1,
+                          const XAU_HybridM5Snapshot &scan2,
+                          ENUM_XAU_HYBRID_M5_RELATION &relation,
+                          int &direction,double &confidence,string &reason)
+{
+   relation=HYBRID_M5_REL_NONE;
+   direction=0;
+   confidence=0.0;
+   reason="";
+   if(!scan1.valid || !scan2.valid || scan1.cycleStart!=scan2.cycleStart ||
+      scan2.barTime-scan1.barTime!=300)
+   {
+      relation=HYBRID_M5_REL_DATA_INVALID;
+      reason="scan pair invalid, stale or non-sequential";
+      return false;
+   }
+
+   int dir1=scan1.preferredDirection;
+   int dir2=scan2.preferredDirection;
+   double gap2=MathAbs(scan2.buyScore-scan2.sellScore);
+   bool scan2Qualifies=(dir2!=0 && scan2.confidence>=56.0 && gap2>=12.0 &&
+                        scan2.locationState!="EXTREME");
+   bool scan1Committed=(dir1!=0 && scan1.confidence>=56.0);
+
+   if(scan1Committed && scan2Qualifies && dir1!=dir2)
+   {
+      relation=HYBRID_M5_REL_DIRECTIONS_CONFLICT;
+      reason=StringFormat("confirmed scan directions conflict scan1=%s %.1f scan2=%s %.1f",
+                          dir1==1?"BUY":"SELL",scan1.confidence,
+                          dir2==1?"BUY":"SELL",scan2.confidence);
+      return false;
+   }
+
+   if(scan1Committed && dir2==dir1 && scan1.locationState!="GOOD" &&
+      scan2.locationState=="GOOD" && scan2.confidence>=55.0)
+   {
+      relation=HYBRID_M5_REL_LOCATION_IMPROVEMENT;
+      direction=dir2;
+      confidence=scan2.confidence;
+      reason=StringFormat("same direction held while location improved %s -> %s",
+                          scan1.locationState,scan2.locationState);
+      return true;
+   }
+
+   if(dir1!=0 && dir2==dir1 && scan2Qualifies &&
+      scan2.confidence>=scan1.confidence-8.0)
+   {
+      relation=HYBRID_M5_REL_PERSISTENT_DIRECTION;
+      direction=dir2;
+      confidence=scan2.confidence;
+      reason=StringFormat("direction persisted, score delta=%.1f, structure=%s",
+                          scan2.confidence-scan1.confidence,scan2.structureState);
+      return true;
+   }
+
+   if(!scan1Committed && scan2Qualifies)
+   {
+      bool strongOpposite=(dir1!=0 && dir1!=dir2 && scan1.confidence>=60.0);
+      if(!strongOpposite)
+      {
+         relation=HYBRID_M5_REL_DEVELOPING_SIGNAL;
+         direction=dir2;
+         confidence=scan2.confidence;
+         reason=StringFormat("scan1 early/neutral %.1f, scan2 confirmed %s %.1f",
+                             scan1.confidence,dir2==1?"BUY":"SELL",scan2.confidence);
+         return true;
+      }
+   }
+
+   if(dir1!=0 && (dir2==0 || dir2!=dir1) && scan2.confidence<scan1.confidence-8.0)
+   {
+      relation=HYBRID_M5_REL_FALSE_IMPULSE;
+      reason=StringFormat("scan1 %s impulse collapsed by %.1f points at scan2",
+                          dir1==1?"BUY":"SELL",scan1.confidence-scan2.confidence);
+      return false;
+   }
+
+   reason=StringFormat("no qualified two-scan relationship scan1=%s %.1f scan2=%s %.1f",
+                       dir1==1?"BUY":(dir1==-1?"SELL":"NONE"),scan1.confidence,
+                       dir2==1?"BUY":(dir2==-1?"SELL":"NONE"),scan2.confidence);
+   return false;
+}
+
+void XAU_HybridM5ResetForCycle(datetime cycleStart)
+{
+   ZeroMemory(g_hybridM5Cycle);
+   g_hybridM5Cycle.cycleStart=cycleStart;
+}
+
+void XAU_HybridM5ObservePhaseOne()
+{
+   datetime closedM5=iTime(Symbol(),PERIOD_M5,1);
+   if(closedM5<=0 || closedM5==g_hybridM5LastPhaseOneBar) return;
+   datetime cycleStart=XAU_HybridM5CycleStart(closedM5);
+   if(closedM5!=cycleStart) return; // the :05 bar belongs to Phase 2
+
+   g_hybridM5LastPhaseOneBar=closedM5;
+   XAU_HybridM5ResetForCycle(cycleStart);
+   g_hybridM5Cycle.scan1=XAU_HybridM5Capture(closedM5,cycleStart);
+   g_hybridM5Scan1Count++;
+   PrintFormat("HYBRID_M5_SCAN_1 | cycleId=%I64d | m10CycleStart=%s | m5Bar=%s | buyScore=%.1f | sellScore=%.1f | preferred=%s | regime=%s | transition=%s | structure=%s | momentum=%s | location=%s | setupCandidates=%s | confidence=%.1f | rewardRoomBuyR=%.2f | rewardRoomSellR=%.2f | valid=%s | reason=%s | orderAuthority=false",
+               (long)cycleStart,TimeToString(cycleStart,TIME_DATE|TIME_MINUTES),
+               TimeToString(closedM5,TIME_DATE|TIME_MINUTES),
+               g_hybridM5Cycle.scan1.buyScore,g_hybridM5Cycle.scan1.sellScore,
+               g_hybridM5Cycle.scan1.preferredDirection==1?"BUY":
+                  (g_hybridM5Cycle.scan1.preferredDirection==-1?"SELL":"NONE"),
+               g_hybridM5Cycle.scan1.regime,g_hybridM5Cycle.scan1.transitionState,
+               g_hybridM5Cycle.scan1.structureState,g_hybridM5Cycle.scan1.momentumState,
+               g_hybridM5Cycle.scan1.locationState,g_hybridM5Cycle.scan1.setupPossibilities,
+               g_hybridM5Cycle.scan1.confidence,g_hybridM5Cycle.scan1.buyRoomR,
+               g_hybridM5Cycle.scan1.sellRoomR,g_hybridM5Cycle.scan1.valid?"true":"false",
+               g_hybridM5Cycle.scan1.reason);
+}
+
+void XAU_HybridM5FinalizeAtM10Boundary(datetime closedM10Bar)
+{
+   if(closedM10Bar<=0) return;
+   if(g_hybridM5Cycle.consumed && g_hybridM5Cycle.cycleStart==closedM10Bar) return;
+
+   datetime closedM5=iTime(Symbol(),PERIOD_M5,1);
+   datetime cycleStart=XAU_HybridM5CycleStart(closedM5);
+   bool secondBarMatches=(closedM5==closedM10Bar+300 && cycleStart==closedM10Bar);
+   bool firstScanMatches=(g_hybridM5Cycle.cycleStart==closedM10Bar &&
+                          g_hybridM5Cycle.scan1.valid &&
+                          g_hybridM5Cycle.scan1.barTime==closedM10Bar);
+   if(!secondBarMatches || !firstScanMatches)
+   {
+      if(g_hybridM5Cycle.cycleStart!=closedM10Bar)
+         XAU_HybridM5ResetForCycle(closedM10Bar);
+      g_hybridM5Cycle.fallbackUsed=true;
+      g_hybridM5Cycle.consumed=true;
+      g_hybridM5FallbackCount++;
+      PrintFormat("HYBRID_SCAN_1_MISSED_FALLBACK | cycleId=%I64d | closedM10=%s | latestClosedM5=%s | secondBarMatches=%s | firstScanMatches=%s | action=NORMAL_M10_DECISION",
+                  (long)closedM10Bar,TimeToString(closedM10Bar,TIME_DATE|TIME_MINUTES),
+                  TimeToString(closedM5,TIME_DATE|TIME_MINUTES),
+                  secondBarMatches?"true":"false",firstScanMatches?"true":"false");
+      return;
+   }
+
+   g_hybridM5Cycle.scan2=XAU_HybridM5Capture(closedM5,closedM10Bar);
+   g_hybridM5Scan2Count++;
+   ENUM_XAU_HYBRID_M5_RELATION relationship=HYBRID_M5_REL_NONE;
+   int proposedDirection=0;
+   double proposedConfidence=0.0;
+   string compareReason="";
+   bool comparisonValid=XAU_HybridM5Classify(g_hybridM5Cycle.scan1,g_hybridM5Cycle.scan2,
+                                              relationship,proposedDirection,
+                                              proposedConfidence,compareReason);
+
+   PrintFormat("HYBRID_M5_SCAN_2_M10_DECISION | cycleId=%I64d | m5Bar=%s | buyScore=%.1f | sellScore=%.1f | preferred=%s | regime=%s | transition=%s | structure=%s | momentum=%s | location=%s | setupCandidates=%s | confidence=%.1f | rewardRoomBuyR=%.2f | rewardRoomSellR=%.2f | valid=%s | canonicalM10Decision=%s | canonicalM10Preferred=%s",
+               (long)closedM10Bar,TimeToString(closedM5,TIME_DATE|TIME_MINUTES),
+               g_hybridM5Cycle.scan2.buyScore,g_hybridM5Cycle.scan2.sellScore,
+               g_hybridM5Cycle.scan2.preferredDirection==1?"BUY":
+                  (g_hybridM5Cycle.scan2.preferredDirection==-1?"SELL":"NONE"),
+               g_hybridM5Cycle.scan2.regime,g_hybridM5Cycle.scan2.transitionState,
+               g_hybridM5Cycle.scan2.structureState,g_hybridM5Cycle.scan2.momentumState,
+               g_hybridM5Cycle.scan2.locationState,g_hybridM5Cycle.scan2.setupPossibilities,
+               g_hybridM5Cycle.scan2.confidence,g_hybridM5Cycle.scan2.buyRoomR,
+               g_hybridM5Cycle.scan2.sellRoomR,g_hybridM5Cycle.scan2.valid?"true":"false",
+               XAU_M10DecisionName(g_m10Decision.decisionType),
+               g_m10Decision.preferredDirection==1?"BUY":
+                  (g_m10Decision.preferredDirection==-1?"SELL":"NONE"));
+
+   double buyDelta=g_hybridM5Cycle.scan2.buyScore-g_hybridM5Cycle.scan1.buyScore;
+   double sellDelta=g_hybridM5Cycle.scan2.sellScore-g_hybridM5Cycle.scan1.sellScore;
+   double selectedRoom1=proposedDirection==1?g_hybridM5Cycle.scan1.buyRoomR:g_hybridM5Cycle.scan1.sellRoomR;
+   double selectedRoom2=proposedDirection==1?g_hybridM5Cycle.scan2.buyRoomR:g_hybridM5Cycle.scan2.sellRoomR;
+   PrintFormat("HYBRID_EVIDENCE_COMPARE | cycleId=%I64d | scan1Preferred=%s | scan2Preferred=%s | buyDelta=%.1f | sellDelta=%.1f | momentumDeltaATR=%.2f | location=%s->%s | rewardRoomDeltaR=%.2f | relation=%s | proposedDirection=%s | comparisonValid=%s | reason=%s",
+               (long)closedM10Bar,
+               g_hybridM5Cycle.scan1.preferredDirection==1?"BUY":
+                  (g_hybridM5Cycle.scan1.preferredDirection==-1?"SELL":"NONE"),
+               g_hybridM5Cycle.scan2.preferredDirection==1?"BUY":
+                  (g_hybridM5Cycle.scan2.preferredDirection==-1?"SELL":"NONE"),
+               buyDelta,sellDelta,
+               g_hybridM5Cycle.scan2.momentumATR-g_hybridM5Cycle.scan1.momentumATR,
+               g_hybridM5Cycle.scan1.locationState,g_hybridM5Cycle.scan2.locationState,
+               selectedRoom2-selectedRoom1,XAU_HybridM5RelationName(relationship),
+               proposedDirection==1?"BUY":(proposedDirection==-1?"SELL":"NONE"),
+               comparisonValid?"true":"false",compareReason);
+
+   bool m10ExplicitSame=
+      proposedDirection!=0 && g_m10Decision.preferredDirection==proposedDirection &&
+      (g_m10Decision.decisionType==M10_DECISION_BUY_CANDIDATE ||
+       g_m10Decision.decisionType==M10_DECISION_SELL_CANDIDATE ||
+       g_m10Decision.decisionType==M10_DECISION_WAIT_FOR_BUY_RETRACE ||
+       g_m10Decision.decisionType==M10_DECISION_WAIT_FOR_SELL_RETRACE);
+   bool transitionMatured=
+      proposedDirection!=0 && g_m10Decision.preferredDirection==proposedDirection &&
+      g_m10Decision.decisionType==M10_DECISION_TRANSITION_WATCH &&
+      g_m10Decision.confidence>=55.0;
+   // A canonical M10 close-call sets preferredDirection=0 when its two case
+   // scores are less than 10 points apart. Two sequential closed-M5 scans can
+   // legitimately resolve that narrower timing ambiguity, but only when the
+   // chosen M10 side itself still scores >=50, the M5 pair is strong, and the
+   // second location is not late/extreme. This is the intended two-scan
+   // advantage: persistence resolves a close call without weakening any gate.
+   double proposedM10SideScore=proposedDirection==1
+                               ? g_m10Decision.buyCaseScore
+                               : g_m10Decision.sellCaseScore;
+   bool closeCallTransitionMatured=
+      proposedDirection!=0 &&
+      g_m10Decision.decisionType==M10_DECISION_TRANSITION_WATCH &&
+      g_m10Decision.preferredDirection==0 &&
+      MathAbs(g_m10Decision.buyCaseScore-g_m10Decision.sellCaseScore)<10.0 &&
+      proposedM10SideScore>=50.0 &&
+      proposedConfidence>=62.0 &&
+      (g_hybridM5Cycle.scan2.locationState=="GOOD" ||
+       g_hybridM5Cycle.scan2.locationState=="ACCEPTABLE");
+   bool continuationMatured=
+      proposedDirection!=0 && g_m10Decision.preferredDirection==proposedDirection &&
+      g_m10Decision.decisionType==M10_DECISION_TREND_CONTINUATION_NO_ENTRY_YET &&
+      g_m10Decision.confidence>=50.0;
+
+   g_hybridM5Cycle.relation=relationship;
+   g_hybridM5Cycle.finalDirection=0;
+   g_hybridM5Cycle.finalConfidence=0.0;
+   g_hybridM5Cycle.finalSetupScore=0.0;
+   g_hybridM5Cycle.finalSetupName="";
+   g_hybridM5Cycle.finalCandidateCreated=false;
+   g_hybridM5Cycle.exactReason=compareReason;
+   g_hybridM5Cycle.consumed=true;
+
+   if(comparisonValid && (m10ExplicitSame || transitionMatured ||
+                          closeCallTransitionMatured || continuationMatured))
+   {
+      if(transitionMatured || closeCallTransitionMatured)
+      {
+         relationship=HYBRID_M5_REL_TRANSITION_MATURATION;
+         g_hybridM5Cycle.relation=relationship;
+      }
+      g_hybridM5Cycle.finalDirection=proposedDirection;
+      g_hybridM5Cycle.finalConfidence=MathMax(55.0,
+         (proposedConfidence+MathMax(50.0,g_m10Decision.confidence))*0.5);
+      g_hybridM5Cycle.finalSetupScore=XAU_CanonicalM10SetupScore(g_hybridM5Cycle.finalConfidence);
+      g_hybridM5Cycle.finalSetupName="HYBRID_M5_"+XAU_HybridM5RelationName(relationship);
+      g_hybridM5Cycle.finalCandidateCreated=true;
+      g_hybridM5Cycle.exactReason=StringFormat("%s; canonicalM10=%s %.1f proposedM10SideScore=%.1f closeCallResolved=%s",
+                                               compareReason,
+                                               XAU_M10DecisionName(g_m10Decision.decisionType),
+                                               g_m10Decision.confidence,
+                                               proposedM10SideScore,
+                                               closeCallTransitionMatured?"true":"false");
+      g_hybridM5CandidateCount++;
+      PrintFormat("HYBRID_CANDIDATE_CREATED | cycleId=%I64d | direction=%s | setup=%s | confidence=%.1f | setupScore=%.2f | grade=PENDING_SHARED_GRADING | session=%s | regime=%s | location=%s | gateResult=PENDING_SHARED_GATES | permanentBlockResult=PENDING_FINAL_RECHECK | reason=%s",
+                  (long)closedM10Bar,proposedDirection==1?"BUY":"SELL",
+                  g_hybridM5Cycle.finalSetupName,g_hybridM5Cycle.finalConfidence,
+                  g_hybridM5Cycle.finalSetupScore,SessionTag(),RegimeName(),
+                  g_hybridM5Cycle.scan2.locationState,g_hybridM5Cycle.exactReason);
+   }
+   else
+   {
+      g_hybridM5RejectedCount++;
+      string supportWhy=comparisonValid
+         ? StringFormat("canonical M10 did not support proposed direction (decision=%s preferred=%s confidence=%.1f)",
+                        XAU_M10DecisionName(g_m10Decision.decisionType),
+                        g_m10Decision.preferredDirection==1?"BUY":
+                           (g_m10Decision.preferredDirection==-1?"SELL":"NONE"),
+                        g_m10Decision.confidence)
+         : compareReason;
+      g_hybridM5Cycle.exactReason=supportWhy;
+      PrintFormat("HYBRID_CANDIDATE_REJECTED | cycleId=%I64d | relation=%s | proposedDirection=%s | grade=NONE | session=%s | regime=%s | location=%s | gateResult=DISCOVERY_REJECTED | permanentBlockResult=NOT_REACHED | executionResult=NO_ORDER | reason=%s",
+                  (long)closedM10Bar,XAU_HybridM5RelationName(relationship),
+                  proposedDirection==1?"BUY":(proposedDirection==-1?"SELL":"NONE"),
+                  SessionTag(),RegimeName(),g_hybridM5Cycle.scan2.locationState,supportWhy);
+      PrintFormat("HYBRID_NO_VALID_CANDIDATE | cycleId=%I64d | exactReason=%s | action=WAIT_NEXT_M10_CYCLE",
+                  (long)closedM10Bar,supportWhy);
+   }
+}
+
+bool XAU_RunHybridM5StateSelfTests()
+{
+   XAU_HybridM5Snapshot a,b;
+   ZeroMemory(a); ZeroMemory(b);
+   a.valid=true; b.valid=true;
+   a.cycleStart=600; b.cycleStart=600;
+   a.barTime=600; b.barTime=900;
+   a.preferredDirection=1; b.preferredDirection=1;
+   a.buyScore=58.0; a.sellScore=42.0; a.confidence=58.0;
+   b.buyScore=64.0; b.sellScore=36.0; b.confidence=64.0;
+   a.locationState="ACCEPTABLE"; b.locationState="ACCEPTABLE";
+   ENUM_XAU_HYBRID_M5_RELATION rel;
+   int dir=0;
+   double conf=0.0;
+   string why="";
+   bool persistent=XAU_HybridM5Classify(a,b,rel,dir,conf,why) &&
+                   rel==HYBRID_M5_REL_PERSISTENT_DIRECTION && dir==1;
+
+   b.preferredDirection=-1; b.buyScore=35.0; b.sellScore=65.0; b.confidence=65.0;
+   bool conflict=!XAU_HybridM5Classify(a,b,rel,dir,conf,why) &&
+                 rel==HYBRID_M5_REL_DIRECTIONS_CONFLICT;
+
+   a.preferredDirection=0; a.buyScore=52.0; a.sellScore=48.0; a.confidence=52.0;
+   b.preferredDirection=-1; b.buyScore=36.0; b.sellScore=64.0; b.confidence=64.0;
+   bool developing=XAU_HybridM5Classify(a,b,rel,dir,conf,why) &&
+                   rel==HYBRID_M5_REL_DEVELOPING_SIGNAL && dir==-1;
+
+   a.valid=false;
+   bool invalid=!XAU_HybridM5Classify(a,b,rel,dir,conf,why) &&
+                rel==HYBRID_M5_REL_DATA_INVALID;
+   int passed=(persistent?1:0)+(conflict?1:0)+(developing?1:0)+(invalid?1:0);
+   PrintFormat("HYBRID_M5_STATE_SELF_TEST | passed=%d | failed=%d | scan1CanExecute=false | oneDecisionPerM10=true | stalePairRejected=true",
+               passed,4-passed);
+   return passed==4;
+}
 
 // ===========================================================================
 // v6.25.5 owner directive 2026-07-17 (URGENT ARCHITECTURE CHANGE) -- M30
@@ -19322,6 +19975,10 @@ void OnTick()
    // this function is never affected by it.
    XAU_PostTradeCooldownTick();
    XAU_ReadinessStuckWatchdog();
+   // Phase A is deliberately above entry-only gates: it is immutable market
+   // observation, never execution authority. This prevents an operational
+   // block from silently erasing the first half of the next M10 comparison.
+   XAU_HybridM5ObservePhaseOne();
 
    // v4.9.6 — DIAGNOSTIC HEARTBEAT (prints every 60s telling user WHY bot is idle)
    if(TimeCurrent() - g_lastHeartbeat >= 60)
@@ -20231,6 +20888,7 @@ void OnTick()
          Print("M10_SNAPSHOT_FAILED_FINAL | ",g_lastSkipReason," | finalAction=NO_TRADE");
          return;
       }
+      XAU_HybridM5FinalizeAtM10Boundary(closedPrimaryBar);
       XAU_RecordM10EvidenceIfNew();
    }
    else
@@ -20508,6 +21166,23 @@ void OnTick()
       }
    }
 
+   // Additive research path: a two-scan idea may originate only after the
+   // existing proposal has produced no endorsed direction. It still falls
+   // through the same scoring, owner policy, timing, freshness, news, final
+   // arbiter, risk and OpenTrade path. No separate order-send lane exists.
+   if(!resumeFrozenPrimaryCandidate && signal==0 &&
+      g_hybridM5Cycle.finalCandidateCreated &&
+      g_hybridM5Cycle.cycleStart==closedPrimaryBar &&
+      g_hybridM5Cycle.finalDirection!=0)
+   {
+      signal=g_hybridM5Cycle.finalDirection;
+      setupName=g_hybridM5Cycle.finalSetupName;
+      setupScore=g_hybridM5Cycle.finalSetupScore;
+      PrintFormat("HYBRID_CANDIDATE_TO_SHARED_GATES | cycleId=%I64d | direction=%s | setup=%s | setupScore=%.2f | canonicalM10=%s | reason=%s",
+                  (long)closedPrimaryBar,signal==1?"BUY":"SELL",setupName,setupScore,
+                  XAU_M10DecisionName(g_m10Decision.decisionType),g_hybridM5Cycle.exactReason);
+   }
+
    // v6.25.2 owner directive 2026-07-17 -- M10 ORIGINATION FALLBACK.
    // The endorsement gate above only lets M10 VETO a ScoreSetups/reversal-path
    // proposal; it never ran at all when ScoreSetups proposed nothing
@@ -20701,6 +21376,18 @@ void OnTick()
               : combinedScore >= InpGradeA    ? "A"
               : combinedScore >= dynGradeB    ? "B"
               : "SKIP";
+   }
+
+   if(!resumeFrozenPrimaryCandidate && StringFind(setupName,"HYBRID_M5_")==0)
+   {
+      if(grade=="SKIP")
+         PrintFormat("HYBRID_CANDIDATE_REJECTED | cycleId=%I64d | direction=%s | setup=%s | grade=%s | session=%s | regime=%s | location=%s | gateResult=SHARED_GRADING_REJECTED | permanentBlockResult=NOT_REACHED | executionResult=NO_ORDER | combinedScore=%.2f | reason=below existing production grade threshold",
+                     (long)closedPrimaryBar,signal==1?"BUY":"SELL",setupName,grade,
+                     SessionTag(),RegimeName(),g_hybridM5Cycle.scan2.locationState,combinedScore);
+      else
+         PrintFormat("HYBRID_CANDIDATE_GRADED | cycleId=%I64d | direction=%s | setup=%s | grade=%s | session=%s | regime=%s | location=%s | combinedScore=%.2f | gateResult=CONTINUE_SHARED_GATES | permanentBlockResult=PENDING_FINAL_RECHECK",
+                     (long)closedPrimaryBar,signal==1?"BUY":"SELL",setupName,grade,
+                     SessionTag(),RegimeName(),g_hybridM5Cycle.scan2.locationState,combinedScore);
    }
 
    // v6.25.21: only a genuine new closed-bar decision publishes/captures a
@@ -38796,6 +39483,20 @@ void XAU_RecordExactPrimaryOutcome(int signal,string setupName,string reason,boo
 
    PrintFormat("EXACT_CANDIDATE_FINAL_OUTCOME | candidateId=%s | result=%s | executed=%s | finalized=%d",
                candidateId,reason,executed?"true":"false",g_exactOutcomeFinalized);
+   if(StringFind(setupName,"HYBRID_M5_")==0)
+   {
+      string hybridEvent=executed?"HYBRID_CANDIDATE_EXECUTED":"HYBRID_CANDIDATE_REJECTED";
+      if(executed) g_hybridM5ExecutedCount++;
+      if(StringFind(upper,"PERM_BLOCK_")>=0)
+      {
+         g_hybridM5PermanentBlockCount++;
+         PrintFormat("HYBRID_PERMANENT_BLOCK | candidateId=%s | direction=%s | setup=%s | reason=%s | finalAuthoritativeRecheck=true | executionResult=NO_ORDER",
+                     candidateId,signal==1?"BUY":"SELL",setupName,reason);
+      }
+      PrintFormat("%s | candidateId=%s | direction=%s | setup=%s | result=%s | executed=%s | sharedProductionPath=true",
+                  hybridEvent,candidateId,signal==1?"BUY":"SELL",setupName,reason,
+                  executed?"true":"false");
+   }
 }
 
 bool XAU_TimingAuthorityAllows(int signal, string setupName, double atr, string &why)
