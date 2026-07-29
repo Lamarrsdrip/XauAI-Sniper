@@ -1427,7 +1427,15 @@ PRODUCTION_TIMEFRAME = "M10"  # the only authoritative production decision mode;
 
 
 def _normalize_release_version(v: str) -> str:
-    return str(v or "").strip().lstrip("vV")
+    raw = str(v or "").strip()
+    # Live XauCloud builds report a product-qualified identity such as
+    # "XauCloud-m10_v6.25.31", while manifest keys remain the stable public
+    # form "v6.25.31". Normalize both to the same numeric token so the
+    # Command Center recognizes the attached official build.
+    marker = raw.lower().rfind("_v")
+    if marker >= 0:
+        raw = raw[marker + 2:]
+    return raw.lstrip("vV")
 
 
 def _known_release_versions() -> set:
@@ -5263,6 +5271,10 @@ class BotHeartbeatReq(BaseModel):
     broker_server: Optional[str] = ""
     symbol: Optional[str] = ""
     timeframe: Optional[str] = ""
+    decision_timeframe: Optional[str] = ""
+    evidence_timeframe: Optional[str] = ""
+    hybrid_mode: Optional[bool] = False
+    hybrid_scan_phase: Optional[str] = ""
     market_mode: Optional[str] = "GOLD_MODE"  # v6.6.0: GOLD_MODE or INDEX_MODE, as resolved by the EA's XAU_DetectMarketMode()
     index_profile: Optional[str] = ""          # v6.6.0: diagnostic only until a real index strategy ships
     spread: Optional[float] = 0.0

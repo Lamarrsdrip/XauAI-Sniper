@@ -112,3 +112,22 @@ def test_existing_timing_risk_and_exit_controls_are_unchanged():
     assert "InpM5EntryDelayMinSeconds      = 120;" in text
     assert "InpM5EntryDelayMaxSeconds      = 180;" in text
     assert "XAU_EffectiveEntryDelaySeconds()" in text
+
+
+def test_command_center_reports_both_hybrid_timeframes():
+    text = source()
+    server = (ROOT / "backend" / "server.py").read_text(
+        encoding="utf-8", errors="ignore"
+    )
+    dashboard = (
+        ROOT / "frontend" / "src" / "components" / "cloud" / "CloudDashboard.jsx"
+    ).read_text(encoding="utf-8", errors="ignore")
+    assert '\\"timeframe\\":\\"M10\\"' in text
+    assert '\\"decision_timeframe\\":\\"M10\\"' in text
+    assert '\\"evidence_timeframe\\":\\"M5\\"' in text
+    assert '\\"hybrid_mode\\":true' in text
+    assert "BotMonitorJsonSafe(XAUAI_EA_VERSION, 64)" in text
+    assert "decision_timeframe: Optional[str]" in server
+    assert "evidence_timeframe: Optional[str]" in server
+    assert 'marker = raw.lower().rfind("_v")' in server
+    assert "M5 evidence →" in dashboard

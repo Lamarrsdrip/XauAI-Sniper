@@ -1755,6 +1755,10 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
         <Metric label="MT5 binding"    value={info?.account_binding||heartbeat.account_number||"Not bound"} detail={heartbeat.broker_server||"Waiting for EA"} icon={TerminalSquare} tone={heartbeat.account_number?"green":"amber"} />
         <Metric label="VPS binding"    value={info?.vps_binding||"Not bound"} detail="Optional" icon={Wifi} tone="blue" />
         <Metric label="XauCloud version" value={status?.release?.public_display_name||"Waiting"} detail={`Heartbeat ${relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}`} icon={Bot} tone={heartbeat.ea_version?"green":"neutral"} />
+        <Metric label="Signal pipeline"
+          value={heartbeat.hybrid_mode ? `${heartbeat.evidence_timeframe||"M5"} evidence → ${heartbeat.decision_timeframe||heartbeat.timeframe||"M10"} execution` : (heartbeat.timeframe||"Waiting")}
+          detail={heartbeat.hybrid_mode ? "Two closed M5 observations; one authoritative M10 decision" : "Reported by the connected EA"}
+          icon={Activity} tone={heartbeat.hybrid_mode?"green":"neutral"} />
       </div>
 
       <EaDownloadCard hasLicense={Boolean(info?.activation_key)} />
@@ -1825,6 +1829,9 @@ function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
               ["EA build (internal)", heartbeat.ea_version||"—"],
               ["Build recognized",    String(status?.release?.reported_build_recognized ?? "—")],
               ["Reported timeframe",  status?.production_status?.reported_timeframe||"—"],
+              ["Evidence timeframe",  heartbeat.evidence_timeframe||"—"],
+              ["Decision timeframe",  heartbeat.decision_timeframe||heartbeat.timeframe||"—"],
+              ["Hybrid pipeline",     heartbeat.hybrid_mode ? (heartbeat.hybrid_scan_phase||"M5 evidence → M10 execution") : "false"],
               ["Timeframe mismatch",  String(status?.production_status?.timeframe_mismatch ?? "—")],
               ["Account",          heartbeat.account_number||"—"],
               ["License status",   licenseInfo?.status||"—"],

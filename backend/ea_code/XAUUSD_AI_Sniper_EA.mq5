@@ -43233,7 +43233,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       BotMonitorBool(g_postClose[0].valid && g_postClose[0].wasProfitable && g_postClose[0].direction == 1),
       BotMonitorBool(g_postClose[1].valid && g_postClose[1].wasProfitable && g_postClose[1].direction == -1),
       BotMonitorJsonSafe(g_m10Snapshot.freshnessState, 20), g_m10Snapshot.ageSeconds,
-      BotMonitorJsonSafe(XAUAI_BUILD_HASH, 100), BotMonitorJsonSafe(XAUAI_EA_VERSION, 20),
+      BotMonitorJsonSafe(XAUAI_BUILD_HASH, 100), BotMonitorJsonSafe(XAUAI_EA_VERSION, 64),
       AccountInfoInteger(ACCOUNT_LOGIN), Symbol());
 
    string body = StringFormat(
@@ -43350,7 +43350,10 @@ void BotMonitorHeartbeat()
    string body = StringFormat(
       "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"%s\",\"build_hash\":\"%s\","
       "\"input_hash\":\"%s\",\"account_number\":\"%I64d\","
-      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"digits\":%d,\"point\":%.8f,"
+      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M10\","
+      "\"decision_timeframe\":\"M10\",\"evidence_timeframe\":\"M5\","
+      "\"hybrid_mode\":true,\"hybrid_scan_phase\":\"TWO_CLOSED_M5_TO_ONE_M10\","
+      "\"digits\":%d,\"point\":%.8f,"
       "\"magic_number\":%d,\"spread\":%.0f,\"avg_spread\":%.1f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
