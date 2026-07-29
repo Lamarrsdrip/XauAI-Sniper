@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.25.28",
+  "current_version": "v6.25.30",
   "releases": {
     "v6.25.2": {
       "version": "v6.25.2",
@@ -119,6 +119,18 @@
       "ex5_sha256": "68a710374868da4b8b1ff6f41d124bc3ef56b1ff575b3a90d239b7ac107600dc",
       "customer_filename": "XauCloud.ex5",
       "release_notes": "Adds an extension-only exit rule on top of v6.25.25's permanent LOCATION_EXCELLENT/LOCATION_LATE hard block, scoped strictly to the active 600s GENERAL profitable-exit extension: an extension-start +0.15R minimum floor and a 70%-of-peak ratchet (activates once peak reaches +0.70R during the extension), each independently controlled by new inputs InpExtensionFloor015REnabled and InpExtension70PctRatchetEnabled -- BOTH DEFAULT FALSE, so out of the box this release trades identically to v6.25.25 (only the wide original structural SL protects the extension, exactly like pre-v6.25.26 behavior). Real-tick (Model=4, 23,648,730 ticks, 60-day window) evidence across all four toggle combinations: baseline (both off) $12,287.43 net/PF 1.39; ratchet-only $10,429.01/PF 1.36 (identical win count to baseline -- the ratchet never converts a loser to a winner on its own, it only trims already-profitable trades); floor-only $6,918.78/PF 1.26; both $6,970.16/PF 1.26. The floor does essentially all of the protective work (win count 71->79) at a real profit cost on this instrument/window; the ratchet's incremental effect on top of the floor is negligible ($51). Shipped with both off by default so the owner can switch either on live via Inputs without a recompile, informed by this evidence. No other change from v6.25.25: M10 signal generation, fixed Gold SL, internal R, lot sizing, location hard-block, and pre-extension GENERAL exit behavior are all unchanged.",
+      "stable_status": true
+    },
+    "v6.25.30": {
+      "version": "v6.25.30",
+      "edition": "Official XauCloud-m10: Asia A+-only and no A+ reset-pending",
+      "source_commit": "bdcac11b6dae20a522475cc46b71dea178e81fc7",
+      "build_timestamp": "2026-07-29T18:29:00Z",
+      "compiler_result": "0 errors, 0 warnings, 68817 ms elapsed (MetaEditor64.exe, isolated MT5 sandbox)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.30.ex5",
+      "ex5_sha256": "4566ab4cfde1a79fbff84b13ffa24c593b062b9327bb109d74ce5cb8a9010ca3",
+      "customer_filename": "XauCloud-m10.ex5",
+      "release_notes": "Owner-approved permanent production policy: Asia permits Grade A+ only; Asia Grade A and B are blocked across original entries, re-entries, recovery, pyramids and delayed final execution. Grade A+ at RESET_PENDING is blocked in every session. Existing Grade-B reversal/opposite-discovery and Grade-B reset-pending blocks remain permanent. No strategy, risk, lot, SL, 10-minute extension, profit protection, session timing, signal-generation, AI, transition, runner, news or daily-lock behavior was redesigned. The latest main bounded-offline-lease module remains intact and default OFF.",
       "stable_status": true
     }
   }

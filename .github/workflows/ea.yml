@@ -40,7 +40,7 @@ jobs:
       - name: Current production-audit regression suite
         run: |
           python -m pytest \
-            tests/test_xau_v62524_final_production_audit.py \
+            tests/test_xaucloud_m10_v62530_owner_policy.py \
             tests/test_utf16_tester_event_extractor.py \
             -v --tb=short
 
