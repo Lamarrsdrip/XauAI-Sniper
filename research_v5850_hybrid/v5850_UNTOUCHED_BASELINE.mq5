@@ -584,7 +584,7 @@ input double InpHardStopRMulti = 3.5;      // v5.8.15: catastrophic only; struct
 input bool   InpEarlyAdverseCut = false;   // OFF by default — let SL do its job (was killing good trades)
 input int    InpEarlyAdverseMin = 5;       // Minutes window for early cut
 input double InpEarlyAdverseR  = 1.5;      // Only cut if down > 1.5R early (was 0.7 — too tight)
-input bool   InpPeakRetraceExit = true;    // Exit winner if retraces from peak
+input bool   InpPeakRetraceExit = false;   // PORTED (Stage 4): disabled -- XAU_HybridManageProfitFloor now owns peak-giveback exit decisions (same purpose, current-bot's numeric policy); leaving both enabled would be two exit engines contesting the same close
 input double InpPeakRetracePct = 75.0;     // % retrace from peak to close (was 60, give room)
 input double InpPeakMinUSD     = 250.0;    // Peak must exceed this USD to arm retrace exit
 input bool   InpMomentumGuard  = true;     // Don't cut winners if momentum is strong
@@ -1241,6 +1241,78 @@ double XAU_HybridFixedGoldMoveSLPrice(double referencePrice, int direction, int 
    double dist = InpHybridStopLossGoldMove;
    double slPrice = (direction == 1) ? referencePrice - dist : referencePrice + dist;
    return NormalizeDouble(slPrice, digits);
+}
+
+//+------------------------------------------------------------------+
+//| PORTED CURRENT-BOT EXIT MANAGEMENT (Stage 4, 2026-07-31)           |
+//| Ported by INTENT and by the current bot's actual numeric policy,   |
+//| not by literal code -- the current bot's XAU_ProtectPeakProfitFloor|
+//| is entangled with its own momentum/structure-classification engine|
+//| (trendAligned/momentumScore/structureConfirmedBroken), which is a  |
+//| separate system out of this experiment's scope. This reuses        |
+//| v5.8.50's OWN existing peak tracker (UpdatePeakProfit, already     |
+//| called in ManagePositions) rather than adding a second parallel    |
+//| peak-tracking system -- one source of truth for "peak profit".     |
+//|                                                                     |
+//| Ported numeric policy (current bot's real input defaults):         |
+//|   arm  = max(InpProtectedPeakMinUSD=75, balance*InpProtectedPeak-  |
+//|          EquityPct=2.5%), capped by 0.45R (InpProtectedPeakArmR-   |
+//|          Multiple), floored at InpProtectedPeakMinRetainUSD=35     |
+//|   lock = max(peak * InpProtectedPeakLockPct=45%, 35)               |
+//|   hard-close if giveback >= InpProtectedPeakGivebackExitPct=65%    |
+//|          AND the floor is not already secured by SL at/above it    |
+//|                                                                     |
+//| SL-RATCHET ONLY (never loosens) -- so this cannot fight v5.8.50's  |
+//| own hard-loss cutoffs (ExpectancyLossArmor etc.), which only ever  |
+//| act on NEGATIVE profit; this module only ever acts once profit has |
+//| exceeded the arm threshold. Two systems, disjoint by profit sign,  |
+//| not two systems contesting the same decision.                     |
+//+------------------------------------------------------------------+
+input double InpHybridProtectedPeakMinUSD      = 75.0;
+input double InpHybridProtectedPeakEquityPct   = 2.5;
+input double InpHybridProtectedPeakArmRMultiple = 0.45;
+input double InpHybridProtectedPeakLockPct     = 45.0;
+input double InpHybridProtectedPeakMinRetainUSD = 35.0;
+input double InpHybridProtectedPeakGivebackExitPct = 65.0;
+
+void XAU_HybridManageProfitFloor(ulong ticket, bool isBuy, double openPx, double curSL, double curTP,
+                                  double profit, double peak, double rDollars,
+                                  double lotsOpen, double tickValue, double tickSize, int digits)
+{
+   if(rDollars <= 0.0 || lotsOpen <= 0.0 || peak <= 0.0) return;
+
+   double balance = StrategyReferenceBalance();
+   double armAccountScaled = MathMax(InpHybridProtectedPeakMinUSD, balance * InpHybridProtectedPeakEquityPct / 100.0);
+   double armRBased = rDollars * InpHybridProtectedPeakArmRMultiple;
+   double armUSD = MathMin(armAccountScaled, armRBased > 0.0 ? armRBased : armAccountScaled);
+   armUSD = MathMax(armUSD, InpHybridProtectedPeakMinRetainUSD);
+   if(peak < armUSD) return; // not armed yet -- let it run, no tightening
+
+   double floorUSD = MathMax(peak * InpHybridProtectedPeakLockPct / 100.0, InpHybridProtectedPeakMinRetainUSD);
+   double givebackPct = (profit < peak) ? ((peak - profit) / peak) * 100.0 : 0.0;
+
+   double moneyPerPoint = (tickSize > 0.0) ? (lotsOpen * tickValue / tickSize) : 0.0;
+   if(moneyPerPoint > 0.0)
+   {
+      double priceDeltaForFloor = floorUSD / moneyPerPoint;
+      double candidateSL = isBuy ? (openPx + priceDeltaForFloor) : (openPx - priceDeltaForFloor);
+      candidateSL = NormalizeDouble(candidateSL, digits);
+      bool slImproves = isBuy ? (candidateSL > curSL) : (curSL <= 0.0 || candidateSL < curSL);
+      if(slImproves)
+      {
+         if(trade.PositionModify(ticket, candidateSL, curTP))
+            PrintFormat("HYBRID_PROFIT_FLOOR_ARMED #%I64u %s | peak=$%.2f armUSD=$%.2f floorUSD=$%.2f newSL=%s",
+                        ticket, isBuy?"BUY":"SELL", peak, armUSD, floorUSD, DoubleToString(candidateSL, digits));
+      }
+   }
+
+   bool floorSecuredBySL = isBuy ? (curSL >= openPx) : (curSL > 0.0 && curSL <= openPx);
+   if(givebackPct >= InpHybridProtectedPeakGivebackExitPct && !floorSecuredBySL)
+   {
+      PrintFormat("HYBRID_PROFIT_FLOOR_GIVEBACK_CLOSE #%I64u %s | giveback=%.1f%% peak=$%.2f profit=$%.2f",
+                  ticket, isBuy?"BUY":"SELL", givebackPct, peak, profit);
+      trade.PositionClose(ticket);
+   }
 }
 
 datetime   closeTimes[];            // rolling list of close timestamps
@@ -6964,6 +7036,15 @@ void ManagePositions()
       // Track peak (for retrace exit + logging)
       double peak = UpdatePeakProfit(ticket, profit);
       double retracePct = (peak > 0 && profit < peak) ? ((peak - profit) / peak) * 100.0 : 0.0;
+
+      // PORTED CURRENT-BOT EXIT MANAGEMENT (Stage 4) -- SL-ratchet-only profit
+      // floor, disjoint by profit sign from the loss-cutoff logic below, so it
+      // cannot fight it (see XAU_HybridManageProfitFloor's own header comment).
+      // May PositionClose() the ticket on severe unsecured giveback; re-check
+      // PositionSelectByTicket before continuing to touch it further below.
+      XAU_HybridManageProfitFloor(ticket, isBuy, openPx, curSL, curTP, profit, peak,
+                                   rDollars, lotsOpen, tickValue, tickSize, digits);
+      if(!PositionSelectByTicket(ticket)) continue; // closed by the profit floor above
 
       // Dir string for logging
       string dirStr = isBuy ? "BUY" : "SELL";
