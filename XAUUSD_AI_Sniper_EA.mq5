@@ -1946,8 +1946,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.255"
-#property description "XauCloud v6.25.24 M10 FIXED-$10-SL EXPERIMENT (isolated comparison branch, otherwise byte-identical to v6.25.24 production baseline; replay-consolidated 4807 patience, bounded readiness, pyramid integrity and exact outcome telemetry)."
+#property version   "6.256"
+#property description "XauCloud-m10 permanent harmful-category block experiment (Grade-B reversal, Asia Grade-B, and RESET_PENDING Grade-B are unconditional entry vetoes)."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -2031,9 +2031,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "v6.25.24_M10_FIXED10SL_EXPERIMENT"
-#define XAUAI_EA_VERSION_NUM "6.25.24"
-#define XAUAI_BUILD_HASH "v62524-final-production-audit-20260722"
+#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.29_PERM_CATEGORY_BLOCKS"
+#define XAUAI_EA_VERSION_NUM "6.25.29"
+#define XAUAI_BUILD_HASH "xaucloud-m10-permanent-gradeb-category-blocks-20260728"
 #define XAU_PYRAMID_BASKET_HARD_CLOSE_R 0.50
 #define XAU_COUNTER_EXCURSION_BUILD false
 #define XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE true
@@ -7204,6 +7204,16 @@ int g_ownerLocationLateCandidates      = 0;
 int g_ownerLocationLateBlocked         = 0;
 int g_ownerLocationLateExecuted        = 0;
 
+// XauCloud-m10 experimental permanent category policy. These are immutable
+// code-level vetoes, not inputs. The per-reason counters intentionally
+// overlap; g_permM10UniqueBlocked counts each candidate identity once.
+int    g_permM10UniqueBlocked              = 0;
+int    g_permM10GradeBReversalBlocked      = 0;
+int    g_permM10AsiaGradeBBlocked          = 0;
+int    g_permM10ResetPendingGradeBBlocked  = 0;
+int    g_permM10FinalAssertionFailures     = 0;
+string g_permM10BlockedCandidateIds[];
+
 // v6.25.24: exact one-candidate/one-terminal-outcome ledger. The old
 // "Unclassified" value subtracted unrelated phase counters from candidate
 // totals and therefore guessed. These counters are written only when a
@@ -10771,6 +10781,7 @@ bool XAU_RunOwnerRExitSelfTests()
 }
 
 bool XAU_RunNoBreakoutAndSnapshotSelfTests();
+bool XAU_RunPermanentM10CategoryPolicySelfTests();
 
 int OnInit()
 {
@@ -10782,6 +10793,8 @@ int OnInit()
    if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunOwnerRExitSelfTests())
       return INIT_FAILED;
    if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunNoBreakoutAndSnapshotSelfTests())
+      return INIT_FAILED;
+   if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunPermanentM10CategoryPolicySelfTests())
       return INIT_FAILED;
 
    // v6.21.2 Part 3 — CONFIG-AGREEMENT ASSERTION: InpNormalRiskPct (the sole normal-
@@ -10822,6 +10835,7 @@ int OnInit()
                InpNormalRiskPct, InpMaxRiskPctEquity, InpMaxAggregateRiskPct);
    Print("OWNER_ENTRY_TIME_POLICY | blackout=NONE | 06:10-07:30=ELIGIBLE_IF_NORMAL_LOGIC_APPROVES | 14:10-15:30=ELIGIBLE_IF_NORMAL_LOGIC_APPROVES");
    Print("OWNER_NO_BREAKOUT_POLICY | mode=HARD_BLOCK_GLOBAL | finalReason=BREAKOUT_MARKET_NOT_ALLOWED | regimes=BRKT_UP,BRKT_DN | setupSourceCampaignBreakout=BLOCK | AsiaSessionAllowed=true | normalNonBreakoutAsiaAllowed=true | noTimeCooldown=true | closedBarAuthority=M10");
+   Print("PERMANENT_M10_CATEGORY_POLICY | mode=HARD_BLOCK_NON_TOGGLEABLE | rules=GRADE_B_AND_REVERSAL,ASIA_AND_GRADE_B,RESET_PENDING_AND_GRADE_B | AIOverride=false | manualOverride=false | recoveryOverride=false | pyramidOverride=false");
    if(!XAU_ValidateAdaptiveTransitionConfig())
    {
       Print("ADAPTIVE_TRANSITION_CONFIG ERROR: refusing initialization rather than running with contradictory direction/location authority.");
@@ -11297,6 +11311,10 @@ void OnDeinit(const int reason)
    EventKillTimer();
    XAU_RExit_SaveState(true); // Fix 16: force-flush R-exit state on shutdown/reload regardless of dirty flag
    PrintBacktestAuditReport();
+   PrintFormat("PERMANENT_M10_CATEGORY_BLOCK_SUMMARY | uniqueBlocked=%d | gradeBReversal=%d | asiaGradeB=%d | resetPendingGradeB=%d | finalAssertionFailures=%d",
+               g_permM10UniqueBlocked,g_permM10GradeBReversalBlocked,
+               g_permM10AsiaGradeBBlocked,g_permM10ResetPendingGradeBBlocked,
+               g_permM10FinalAssertionFailures);
    IndicatorRelease(hEMAFast); IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI); IndicatorRelease(hATR); IndicatorRelease(hBBUpper);
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
@@ -18482,6 +18500,10 @@ void CheckPyramidOpportunity()
    string ownerPyramidFinalBlock = "";
    if(!XAU_OwnerEntryPermission("FINAL_EXECUTION", "PYRAMID", pyramidGrade, ownerPyramidFinalBlock, dir, "PYRAMID"))
       return;
+   string permanentPyramidAssertion = "";
+   if(!XAU_PermanentM10CategoryFinalAssertion("PYRAMID", pyramidGrade, dir,
+                                               "PYRAMID", permanentPyramidAssertion))
+      return;
 
    string pyramidReservationId = "";
    {
@@ -22890,6 +22912,19 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          XAU_M30FinalizeCandidateWithoutTrade(g_lastSkipReason);
          return false;
       }
+   }
+
+   // Independent immutable-policy assertion after every strategy/AI decision
+   // and before any cross-instance lock, reservation or broker-send side
+   // effect. Manual-force and recovery paths receive no exemption.
+   string permanentCoreAssertion = "";
+   if(!XAU_PermanentM10CategoryFinalAssertion(isManualOverride ? "MANUAL_FORCE" : reason,
+                                               funnelGrade, signal, funnelSetup,
+                                               permanentCoreAssertion))
+   {
+      g_lastSkipReason = permanentCoreAssertion;
+      XAU_M30FinalizeCandidateWithoutTrade(permanentCoreAssertion);
+      return false;
    }
 
    // v6.20.3 (Commit C, adversarial-review fix) — the real, atomic
@@ -37130,6 +37165,12 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    if(!XAU_OwnerEntryPermission("FINAL_EXECUTION", counterOwnerSetup, originalFinalGrade,
                                 ownerCounterFinalBlock, counterDir, counterOwnerSetup))
       return;
+   string permanentCounterAssertion = "";
+   if(!XAU_PermanentM10CategoryFinalAssertion("COUNTER_EXCURSION",
+                                               originalFinalGrade,counterDir,
+                                               counterOwnerSetup,
+                                               permanentCounterAssertion))
+      return;
    string counterReservationId = "";
    {
       string counterGuardReason = "";
@@ -38922,12 +38963,349 @@ bool XAU_RunNoBreakoutAndSnapshotSelfTests()
    return failed==0;
 }
 
+// =====================================================================
+// XauCloud-m10 PERMANENT HARMFUL-CATEGORY POLICY
+// =====================================================================
+// This policy is deliberately expressed as one pure facts function and one
+// shared resolver. It has no runtime input and no positive override path.
+// CORE, RE_ENTRY, PYRAMID, COUNTER_EXCURSION, recovery and manual-force
+// callers all converge through XAU_OwnerEntryPermission; the three broker
+// send sites also call XAU_PermanentM10CategoryFinalAssertion as a separate
+// last pre-order defense.
+struct XAU_PermanentM10PolicyFacts
+{
+   string                          canonicalGrade;
+   string                          liveSession;
+   string                          frozenSession;
+   string                          effectiveSession;
+   ENUM_XAU_LOCATION_QUALITY       liveLocation;
+   ENUM_XAU_LOCATION_QUALITY       frozenLocation;
+   ENUM_XAU_LOCATION_QUALITY       effectiveLocation;
+   ENUM_REGIME                     frozenRegime;
+   ENUM_XAU_TRADE_HORIZON          horizon;
+   ENUM_XAU_MARKET_THESIS_ACTION   thesisAction;
+   bool                            usedFrozenCandidate;
+   string                          candidateId;
+};
+
+bool XAU_IsPermanentM10CategoryBlocked(string grade,
+                                       string session,
+                                       ENUM_XAU_LOCATION_QUALITY location,
+                                       ENUM_XAU_TRADE_HORIZON horizon,
+                                       ENUM_XAU_MARKET_THESIS_ACTION thesisAction,
+                                       string source,
+                                       string candidateSetup,
+                                       string &primaryReason,
+                                       string &allReasons,
+                                       bool &reversalClassified)
+{
+   primaryReason="";
+   allReasons="";
+   reversalClassified=false;
+
+   string canonicalGrade=grade;
+   StringTrimLeft(canonicalGrade);
+   StringTrimRight(canonicalGrade);
+   StringToUpper(canonicalGrade);
+   if(canonicalGrade!="B")
+      return false;
+
+   string canonicalSession=session;
+   string canonicalSource=source;
+   string canonicalSetup=candidateSetup;
+   StringTrimLeft(canonicalSession);
+   StringTrimRight(canonicalSession);
+   StringToUpper(canonicalSession);
+   StringToUpper(canonicalSource);
+   StringToUpper(canonicalSetup);
+
+   reversalClassified =
+      horizon==XAU_HORIZON_REVERSAL ||
+      horizon==XAU_HORIZON_COUNTER_EXCURSION ||
+      thesisAction==OPPOSITE_DISCOVERY ||
+      StringFind(canonicalSource,"REVERSAL")>=0 ||
+      StringFind(canonicalSetup,"REVERSAL")>=0 ||
+      StringFind(canonicalSource,"OPPOSITE_DISCOVERY")>=0 ||
+      StringFind(canonicalSetup,"OPPOSITE_DISCOVERY")>=0 ||
+      StringFind(canonicalSource,"COUNTER_EXCURSION")>=0 ||
+      StringFind(canonicalSetup,"COUNTER_EXCURSION")>=0;
+
+   bool gradeBReversal=reversalClassified;
+   bool asiaGradeB=(canonicalSession=="ASIA");
+   bool resetPendingGradeB=(location==LOCATION_RESET_PENDING);
+
+   if(gradeBReversal)
+   {
+      primaryReason="PERM_BLOCK_GRADE_B_REVERSAL";
+      allReasons=primaryReason;
+   }
+   if(asiaGradeB)
+   {
+      if(StringLen(primaryReason)==0) primaryReason="PERM_BLOCK_ASIA_GRADE_B";
+      if(StringLen(allReasons)>0) allReasons+=";";
+      allReasons+="PERM_BLOCK_ASIA_GRADE_B";
+   }
+   if(resetPendingGradeB)
+   {
+      if(StringLen(primaryReason)==0) primaryReason="PERM_BLOCK_RESET_PENDING_GRADE_B";
+      if(StringLen(allReasons)>0) allReasons+=";";
+      allReasons+="PERM_BLOCK_RESET_PENDING_GRADE_B";
+   }
+   return StringLen(primaryReason)>0;
+}
+
+void XAU_ResolvePermanentM10PolicyFacts(string phase,
+                                        string source,
+                                        string grade,
+                                        int candidateDirection,
+                                        string candidateSetup,
+                                        XAU_PermanentM10PolicyFacts &facts)
+{
+   facts.canonicalGrade=grade;
+   StringTrimLeft(facts.canonicalGrade);
+   StringTrimRight(facts.canonicalGrade);
+   StringToUpper(facts.canonicalGrade);
+   facts.liveSession=SessionTag();
+   facts.frozenSession=facts.liveSession;
+   facts.liveLocation=XAU_OwnerDirectionalLocation(candidateDirection,g_transitionDecision);
+   facts.frozenLocation=facts.liveLocation;
+   facts.frozenRegime=currentRegime;
+   facts.horizon=XAU_HORIZON_SCALP;
+   facts.thesisAction=ALLOW_CORE;
+   facts.usedFrozenCandidate=false;
+
+   bool finalPhase=(StringFind(phase,"FINAL")==0);
+   if(finalPhase && candidateDirection!=0 && StringLen(candidateSetup)>0)
+   {
+      int lane=XAU_AlignedCandidateLane(candidateSetup);
+      if(lane>=0 && lane<3 &&
+         g_alignedCandidates[lane].firstCandidateTime>0 &&
+         g_alignedCandidates[lane].candidateDirection==candidateDirection &&
+         g_alignedCandidates[lane].candidateSetup==candidateSetup)
+      {
+         if(g_alignedCandidates[lane].ownerLocationFrozen)
+         {
+            facts.frozenLocation=(ENUM_XAU_LOCATION_QUALITY)g_alignedCandidates[lane].ownerLocationAtCreation;
+            facts.usedFrozenCandidate=true;
+         }
+         if(g_alignedCandidates[lane].ownerRegimeFrozen)
+            facts.frozenRegime=(ENUM_REGIME)g_alignedCandidates[lane].ownerRegimeAtCreation;
+         if(StringLen(g_alignedCandidates[lane].ownerSessionAtCreation)>0)
+            facts.frozenSession=g_alignedCandidates[lane].ownerSessionAtCreation;
+      }
+   }
+
+   if(g_latestDecisionSnapshot.valid &&
+      g_latestDecisionSnapshot.signalDirection==candidateDirection)
+   {
+      facts.horizon=g_latestDecisionSnapshot.horizon;
+      facts.thesisAction=g_latestDecisionSnapshot.thesis.action;
+   }
+   string sourceUpper=source;
+   string setupUpper=candidateSetup;
+   StringToUpper(sourceUpper);
+   StringToUpper(setupUpper);
+   if(StringFind(sourceUpper,"COUNTER_EXCURSION")>=0 ||
+      StringFind(setupUpper,"COUNTER_EXCURSION")>=0)
+      facts.horizon=XAU_HORIZON_COUNTER_EXCURSION;
+   else if(StringFind(sourceUpper,"REVERSAL")>=0 ||
+           StringFind(setupUpper,"REVERSAL")>=0)
+      facts.horizon=XAU_HORIZON_REVERSAL;
+
+   // A candidate born in Asia remains an Asia candidate across the existing
+   // 120-180 second lifecycle; a candidate reaching final send after the
+   // clock enters Asia is also blocked. Likewise, RESET_PENDING at either
+   // the immutable candidate snapshot or the final live check is a veto.
+   facts.effectiveSession =
+      (facts.liveSession=="ASIA" || facts.frozenSession=="ASIA")
+      ? "ASIA"
+      : (facts.usedFrozenCandidate ? facts.frozenSession : facts.liveSession);
+   facts.effectiveLocation =
+      (facts.liveLocation==LOCATION_RESET_PENDING ||
+       facts.frozenLocation==LOCATION_RESET_PENDING)
+      ? LOCATION_RESET_PENDING
+      : (facts.usedFrozenCandidate ? facts.frozenLocation : facts.liveLocation);
+   facts.candidateId=XAU_NoBreakoutCandidateId(candidateDirection,candidateSetup);
+}
+
+bool XAU_PermanentM10BlockAlreadyRecorded(string candidateId)
+{
+   for(int i=0;i<ArraySize(g_permM10BlockedCandidateIds);i++)
+      if(g_permM10BlockedCandidateIds[i]==candidateId)
+         return true;
+   return false;
+}
+
+void XAU_RecordPermanentM10CategoryBlock(string phase,
+                                         string source,
+                                         int candidateDirection,
+                                         string candidateSetup,
+                                         const XAU_PermanentM10PolicyFacts &facts,
+                                         bool reversalClassified,
+                                         string primaryReason,
+                                         string allReasons)
+{
+   string candidateId=facts.candidateId;
+   if(StringLen(candidateId)==0)
+      candidateId=StringFormat("%s_%s_%I64d",candidateSetup,
+                               candidateDirection==1?"BUY":"SELL",
+                               (long)TimeCurrent());
+   if(XAU_PermanentM10BlockAlreadyRecorded(candidateId))
+      return;
+
+   int n=ArraySize(g_permM10BlockedCandidateIds);
+   ArrayResize(g_permM10BlockedCandidateIds,n+1);
+   g_permM10BlockedCandidateIds[n]=candidateId;
+   g_permM10UniqueBlocked++;
+   if(StringFind(allReasons,"PERM_BLOCK_GRADE_B_REVERSAL")>=0)
+      g_permM10GradeBReversalBlocked++;
+   if(StringFind(allReasons,"PERM_BLOCK_ASIA_GRADE_B")>=0)
+      g_permM10AsiaGradeBBlocked++;
+   if(StringFind(allReasons,"PERM_BLOCK_RESET_PENDING_GRADE_B")>=0)
+      g_permM10ResetPendingGradeBBlocked++;
+
+   PrintFormat("PERMANENT_M10_CATEGORY_BLOCK | timestamp=%s | symbol=%s | candidateId=%s | phase=%s | direction=%s | session=%s | grade=%s | regime=%s | location=%s | reversalClassified=%s | horizon=%s | thesisAction=%s | entryModule=%s | strategy=%s | primaryReason=%s | allReasons=%s | uniqueBlocked=%d | orderSendReached=false",
+               TimeToString(TimeCurrent(),TIME_DATE|TIME_SECONDS),Symbol(),candidateId,phase,
+               candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN",
+               facts.effectiveSession,facts.canonicalGrade,
+               XAU_OwnerRegimeLabel(facts.frozenRegime),
+               XAU_LocationQualityName(facts.effectiveLocation),
+               reversalClassified?"true":"false",
+               XAU_TradeHorizonName(facts.horizon),
+               XAU_MarketThesisActionName(facts.thesisAction),
+               source,candidateSetup,primaryReason,allReasons,g_permM10UniqueBlocked);
+}
+
+bool XAU_EnforcePermanentM10CategoryPolicy(string phase,
+                                           string source,
+                                           string grade,
+                                           int candidateDirection,
+                                           string candidateSetup,
+                                           string &reason)
+{
+   XAU_PermanentM10PolicyFacts facts;
+   XAU_ResolvePermanentM10PolicyFacts(phase,source,grade,candidateDirection,
+                                      candidateSetup,facts);
+   string primaryReason="";
+   string allReasons="";
+   bool reversalClassified=false;
+   if(!XAU_IsPermanentM10CategoryBlocked(facts.canonicalGrade,
+                                         facts.effectiveSession,
+                                         facts.effectiveLocation,
+                                         facts.horizon,
+                                         facts.thesisAction,
+                                         source,candidateSetup,
+                                         primaryReason,allReasons,
+                                         reversalClassified))
+      return true;
+
+   reason=primaryReason;
+   XAU_RecordPermanentM10CategoryBlock(phase,source,candidateDirection,
+                                       candidateSetup,facts,reversalClassified,
+                                       primaryReason,allReasons);
+   return false;
+}
+
+bool XAU_PermanentM10CategoryFinalAssertion(string source,
+                                            string grade,
+                                            int candidateDirection,
+                                            string candidateSetup,
+                                            string &reason)
+{
+   if(XAU_EnforcePermanentM10CategoryPolicy("FINAL_PRE_ORDER_ASSERTION",
+                                             source,grade,candidateDirection,
+                                             candidateSetup,reason))
+      return true;
+   g_permM10FinalAssertionFailures++;
+   PrintFormat("PERMANENT_M10_CATEGORY_ASSERTION_BLOCK | CRITICAL | symbol=%s | direction=%s | source=%s | setup=%s | grade=%s | reason=%s | assertionFailures=%d | orderSendReached=false",
+               Symbol(),candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN",
+               source,candidateSetup,grade,reason,g_permM10FinalAssertionFailures);
+   return false;
+}
+
+bool XAU_RunPermanentM10CategoryPolicySelfTests()
+{
+   bool checks[15];
+   string primary="",all="";
+   bool reversal=false;
+   checks[0]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","RANGE_REVERSAL",
+      primary,all,reversal) && primary=="PERM_BLOCK_GRADE_B_REVERSAL";
+   checks[1]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_REVERSAL,ALLOW_CORE,"PRIMARY","M10_ORIGINATED_CANDIDATE",
+      primary,all,reversal) && primary=="PERM_BLOCK_GRADE_B_REVERSAL";
+   checks[2]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,OPPOSITE_DISCOVERY,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal) && reversal;
+   checks[3]=XAU_IsPermanentM10CategoryBlocked("B","ASIA",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal) && primary=="PERM_BLOCK_ASIA_GRADE_B";
+   checks[4]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_RESET_PENDING,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal) && primary=="PERM_BLOCK_RESET_PENDING_GRADE_B";
+   checks[5]=XAU_IsPermanentM10CategoryBlocked("B","ASIA",LOCATION_RESET_PENDING,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal) &&
+      all=="PERM_BLOCK_ASIA_GRADE_B;PERM_BLOCK_RESET_PENDING_GRADE_B";
+   checks[6]=XAU_IsPermanentM10CategoryBlocked("B","ASIA",LOCATION_RESET_PENDING,
+      XAU_HORIZON_REVERSAL,OPPOSITE_DISCOVERY,"PRIMARY","RANGE_REVERSAL",
+      primary,all,reversal) &&
+      all=="PERM_BLOCK_GRADE_B_REVERSAL;PERM_BLOCK_ASIA_GRADE_B;PERM_BLOCK_RESET_PENDING_GRADE_B";
+   checks[7]=!XAU_IsPermanentM10CategoryBlocked("A","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_REVERSAL,OPPOSITE_DISCOVERY,"PRIMARY","RANGE_REVERSAL",
+      primary,all,reversal);
+   checks[8]=!XAU_IsPermanentM10CategoryBlocked("A+","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_REVERSAL,OPPOSITE_DISCOVERY,"PRIMARY","RANGE_REVERSAL",
+      primary,all,reversal);
+   checks[9]=!XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal);
+   checks[10]=!XAU_IsPermanentM10CategoryBlocked("B","NEW_YORK",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal);
+   checks[11]=!XAU_IsPermanentM10CategoryBlocked("A","ASIA",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal);
+   checks[12]=!XAU_IsPermanentM10CategoryBlocked("A+","ASIA",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal);
+   checks[13]=!XAU_IsPermanentM10CategoryBlocked("A","LONDON",LOCATION_RESET_PENDING,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal);
+   checks[14]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_COUNTER_EXCURSION,ALLOW_CORE,"COUNTER_EXCURSION","TREND_PULLBACK",
+      primary,all,reversal) && reversal;
+
+   int passed=0,failed=0;
+   for(int i=0;i<15;i++)
+   {
+      if(checks[i]) passed++;
+      else
+      {
+         failed++;
+         PrintFormat("PERMANENT_M10_CATEGORY_SELF_TEST_FAIL | case=%d",i+1);
+      }
+   }
+   PrintFormat("PERMANENT_M10_CATEGORY_SELF_TEST | passed=%d | failed=%d | runtimeInputs=NONE | hardVeto=true",
+               passed,failed);
+   return failed==0;
+}
+
 bool XAU_OwnerEntryPermission(string phase, string source, string grade,
                               string &reason, int candidateDirection = 0,
                               string candidateSetup = "", datetime brokerNow = 0)
 {
    reason = "";
    if(brokerNow <= 0) brokerNow = TimeCurrent();
+
+   // First authoritative gateway: permanent category vetoes execute before
+   // every legacy owner/session/location/breakout rule. Candidate acceptance
+   // therefore stops before timer/lot work, and FINAL_EXECUTION re-evaluates
+   // the same immutable facts before any order path can continue.
+   if(!XAU_EnforcePermanentM10CategoryPolicy(phase,source,grade,
+                                              candidateDirection,
+                                              candidateSetup,reason))
+      return false;
 
    string canonicalGrade = grade;
    StringTrimLeft(canonicalGrade);
