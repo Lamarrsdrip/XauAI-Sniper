@@ -2031,9 +2031,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.29_PERM_CATEGORY_BLOCKS"
-#define XAUAI_EA_VERSION_NUM "6.25.29"
-#define XAUAI_BUILD_HASH "xaucloud-m10-permanent-gradeb-category-blocks-20260728"
+#define XAUAI_EA_VERSION "XauCloud-m101_v6.25.33_FLAT_ENTRY_LOCATION_FILTERED"
+#define XAUAI_EA_VERSION_NUM "6.25.33"
+#define XAUAI_BUILD_HASH "xaucloud-m101-flat-entry-location-filtered-20260731"
 #define XAU_PYRAMID_BASKET_HARD_CLOSE_R 0.50
 #define XAU_COUNTER_EXCURSION_BUILD false
 #define XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE true
@@ -15772,6 +15772,37 @@ XAU_M10SignalDecision XAU_EvaluateM10SignalDecision()
       d.confidence=oppositeScore;
       d.decisionType=(oppositeDir==1)?M10_DECISION_BUY_CANDIDATE:M10_DECISION_SELL_CANDIDATE;
       d.exactReason=StringFormat("confirmed opposite case wins (score=%.1f vs dominant=%.1f); Adaptive Transition already marked oppositeEntryAllowed=true",oppositeScore,dominantScore);
+   }
+   else if(oppositeScore > dominantScore && oppositeScore >= 55.0 &&
+           !g_campaign[0].active && !g_campaign[1].active)
+   {
+      // v6.25.32/33 FLAT-ENTRY RESTORE, LOCATION-FILTERED (ported from the
+      // XauCloud-m10_ASIA+ build, 2026-07-31 forensic audit + 30-day A/B
+      // validation). Only fires while flat (nothing open in either
+      // direction -- the reversal-confirmation package below still governs
+      // flipping/adding to an existing position, unchanged). Also excludes
+      // LOCATION_RESET_PENDING: a same-window backtest on the sibling build
+      // proved that bucket alone lost -$5,980.50 net (11W/19L) while every
+      // other location bucket combined was net positive -- RESET_PENDING
+      // means the OLD direction's continuation is currently paused/
+      // uncertain, and entering the opposite direction into that
+      // uncertainty without confirmation is exactly the premature-reversal
+      // risk this gate exists to filter.
+      int oppositeDir=-dominant;
+      d.preferredDirection=oppositeDir;
+      d.confidence=oppositeScore;
+      bool flatLocationPoor = dominantLocationPoor || (loc == LOCATION_RESET_PENDING);
+      if(flatLocationPoor)
+      {
+         d.decisionType=(oppositeDir==1)?M10_DECISION_WAIT_FOR_BUY_RETRACE:M10_DECISION_WAIT_FOR_SELL_RETRACE;
+         d.retracementRequired=true;
+         d.exactReason=StringFormat("flat account, opposite case wins (score=%.1f vs dominant=%.1f) but location=%s -- valid direction, poor/uncertain entry, wait for confirmation",oppositeScore,dominantScore,g_m10Snapshot.locationState);
+      }
+      else
+      {
+         d.decisionType=(oppositeDir==1)?M10_DECISION_BUY_CANDIDATE:M10_DECISION_SELL_CANDIDATE;
+         d.exactReason=StringFormat("flat account, opposite case wins (score=%.1f vs dominant=%.1f), location=%s genuinely favorable -- no existing position to protect, reversal-confirmation package not required",oppositeScore,dominantScore,g_m10Snapshot.locationState);
+      }
    }
    else if(oppositeScore > dominantScore && oppositeScore >= 55.0)
    {
