@@ -2031,9 +2031,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.32_FLAT_ENTRY_RESTORE"
-#define XAUAI_EA_VERSION_NUM "6.25.32"
-#define XAUAI_BUILD_HASH "xaucloud-m10-flat-entry-restore-20260731"
+#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.33_FLAT_ENTRY_LOCATION_FILTERED"
+#define XAUAI_EA_VERSION_NUM "6.25.33"
+#define XAUAI_BUILD_HASH "xaucloud-m10-flat-entry-location-filtered-20260731"
 #define XAU_PYRAMID_BASKET_HARD_CLOSE_R 0.50
 #define XAU_COUNTER_EXCURSION_BUILD false
 #define XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE true
@@ -15805,16 +15805,32 @@ XAU_M10SignalDecision XAU_EvaluateM10SignalDecision()
       int oppositeDir=-dominant;
       d.preferredDirection=oppositeDir;
       d.confidence=oppositeScore;
-      if(dominantLocationPoor)
+      // v6.25.33 REFINEMENT (30-day A/B evidence, 2026-07-31): the first
+      // v6.25.32 cut of this branch treated LOCATION_RESET_PENDING as an
+      // acceptable entry location. A same-window backtest proved that wrong:
+      // 940/1133 flat-branch candidates fired at RESET_PENDING, and the 30
+      // trades traceable to a RESET_PENDING candidate lost -$5,980.50 net
+      // (11W/19L) -- worse than the branch's entire net loss, meaning every
+      // OTHER location bucket combined was net positive (LOCATION_GOOD: 2W/0L,
+      // +$302.40). This is consistent with -- not a new discovery contradicting
+      // -- the existing owner policy that already permanently blocks A+ grade
+      // at RESET_PENDING (114-trade audit finding: "the weak reset-pending
+      // subgroup"). RESET_PENDING means the OLD direction's continuation is
+      // currently paused/uncertain (see XAU_BucketLocation) -- entering the
+      // opposite direction into that uncertainty without the reversal package
+      // is exactly the premature-reversal risk the package exists to filter.
+      // Treated as poor here alongside LATE/EXTREME, not as acceptable.
+      bool flatLocationPoor = dominantLocationPoor || (loc == LOCATION_RESET_PENDING);
+      if(flatLocationPoor)
       {
          d.decisionType=(oppositeDir==1)?M10_DECISION_WAIT_FOR_BUY_RETRACE:M10_DECISION_WAIT_FOR_SELL_RETRACE;
          d.retracementRequired=true;
-         d.exactReason=StringFormat("flat account, opposite case wins (score=%.1f vs dominant=%.1f) but location=%s -- valid direction, poor entry price, wait for retrace",oppositeScore,dominantScore,g_m10Snapshot.locationState);
+         d.exactReason=StringFormat("flat account, opposite case wins (score=%.1f vs dominant=%.1f) but location=%s -- valid direction, poor/uncertain entry, wait for confirmation",oppositeScore,dominantScore,g_m10Snapshot.locationState);
       }
       else
       {
          d.decisionType=(oppositeDir==1)?M10_DECISION_BUY_CANDIDATE:M10_DECISION_SELL_CANDIDATE;
-         d.exactReason=StringFormat("flat account, opposite case wins (score=%.1f vs dominant=%.1f), location=%s acceptable-or-better -- no existing position to protect, reversal-confirmation package not required",oppositeScore,dominantScore,g_m10Snapshot.locationState);
+         d.exactReason=StringFormat("flat account, opposite case wins (score=%.1f vs dominant=%.1f), location=%s genuinely favorable -- no existing position to protect, reversal-confirmation package not required",oppositeScore,dominantScore,g_m10Snapshot.locationState);
       }
    }
    else if(oppositeScore > dominantScore && oppositeScore >= 55.0)
