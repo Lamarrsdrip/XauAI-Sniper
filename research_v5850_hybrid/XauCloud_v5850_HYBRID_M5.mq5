@@ -279,9 +279,9 @@ input int    InpStructureFailFastMinMinutes   = 12;
 input double InpStructureFailFastMaxAdverseATR= 2.4;
 
 input double InpMaxLots        = 50.0;     // Hard max lots; final equity/margin caps still protect risk
-input double InpMaxRiskPctEquity = 3.0;    // v5.8.4: restored original account-based max risk cap
+input double InpMaxRiskPctEquity = 10.0;   // PORTED (Stage 2): matches current bot's InpMaxRiskPctEquity so the hard equity-% backstop doesn't fight InpHybridNormalRiskPct
 input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
-input double InpMaxAggregateRiskPct = 8.0; // v5.8.4: restored original aggregate risk room for demo/cloud testing
+input double InpMaxAggregateRiskPct = 35.0; // PORTED (Stage 2): matches current bot's InpMaxAggregateRiskPct
 input double InpDailyLossLimit = 0.0;      // v5.8.4 demo: disabled
 input int    InpMaxOpenTrades  = 3;        // Max open positions
 input int    InpMaxTradesPerDay= 15;       // v5.8.2 — reduce overtrading after choppy loss windows
@@ -1178,6 +1178,69 @@ void XAU_HybridLogBlock(string phase, int dir, string setupName, string grade, d
                phase, dir==1?"BUY":"SELL", setupName, grade,
                XAU_HybridIsAsiaSession()?"ASIA":"NON_ASIA",
                XAU_HybridLocationName(XAU_HybridBucketLocation(dir, atr)), reason);
+}
+
+//+------------------------------------------------------------------+
+//| PORTED CURRENT-BOT RISK/LOT + INITIAL SL (Stage 2/3, 2026-07-31)   |
+//| Ported by formula, from the current bot's own source              |
+//| (StrategyReferenceBalance/RiskPerLotForDistance/XAU_MoneyPerLot-   |
+//| ForDistance/XAU_FixedGoldMoveSLPrice). InpNormalRiskPct=10.0 in    |
+//| the current bot is a FLAT, UNIFORM, BINARY risk target -- the      |
+//| current bot's own comment states no opinion-based subsystem        |
+//| (grade/AI/losses/drawdown fear/session/news/recovery/personality/  |
+//| memory/committee) may reduce it; InpReducedRiskFloorPct is set     |
+//| equal to InpNormalRiskPct so there is no reduction band at all.    |
+//| v5.8.50's own account-mode/scout/ProfitGuardian/drawdown-recovery/ |
+//| careful-mode/session/pattern-streak/volatility multiplier stack is |
+//| REPLACED by this flat formula per that verified current-bot         |
+//| behavior -- not approximated, not partially kept.                  |
+//+------------------------------------------------------------------+
+input double InpHybridNormalRiskPct   = 10.0;  // ported from current bot InpNormalRiskPct -- flat, uniform, no reducers
+input double InpHybridMaxAggregateRiskPct = 35.0; // ported from current bot InpMaxAggregateRiskPct
+input double InpHybridStopLossGoldMove = 10.0; // ported from current bot InpStopLossGoldMove -- fixed absolute XAUUSD price-move initial SL, decoupled from the structural/ATR distance used for lot sizing
+
+// Ported from current bot's XAU_MoneyPerLotForDistance/RiskPerLotForDistance:
+// broker-accurate $-risk-per-lot for a given SL distance via OrderCalcProfit,
+// falling back to contract size / tick value if the broker call fails.
+double XAU_HybridRiskPerLotForDistance(double dist)
+{
+   if(dist <= 0.0) return 0.0;
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double ref = (bid > 0.0 && ask > 0.0) ? ((bid + ask) * 0.5) : SymbolInfoDouble(Symbol(), SYMBOL_LAST);
+   if(ref <= 0.0) ref = iClose(Symbol(), PERIOD_M5, 1);
+   if(ref <= dist) ref = MathMax(ref, dist * 2.0);
+   if(ref <= 0.0) return 0.0;
+
+   double buyProfit = 0.0, sellProfit = 0.0;
+   double buyLoss = 0.0, sellLoss = 0.0;
+   if(OrderCalcProfit(ORDER_TYPE_BUY, Symbol(), 1.0, ref, ref - dist, buyProfit))
+      buyLoss = MathAbs(buyProfit);
+   if(OrderCalcProfit(ORDER_TYPE_SELL, Symbol(), 1.0, ref, ref + dist, sellProfit))
+      sellLoss = MathAbs(sellProfit);
+   double brokerMoney = MathMax(buyLoss, sellLoss);
+   if(brokerMoney > 0.0) return brokerMoney;
+
+   double contractSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_CONTRACT_SIZE);
+   if(contractSize > 0.0) return dist * contractSize;
+
+   double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue > 0.0 && tickSize > 0.0)
+      return (dist / tickSize) * tickValue;
+   return 0.0;
+}
+
+// Ported from current bot's XAU_FixedGoldMoveSLPrice -- the ACTUAL broker SL
+// price is a fixed absolute Gold price-move, decoupled from the structural/
+// ATR distance (which continues to drive lot sizing only, matching the
+// current bot's own "(A) internal sizing reference, (B) actual broker SL
+// price" decoupling).
+double XAU_HybridFixedGoldMoveSLPrice(double referencePrice, int direction, int digits)
+{
+   double dist = InpHybridStopLossGoldMove;
+   double slPrice = (direction == 1) ? referencePrice - dist : referencePrice + dist;
+   return NormalizeDouble(slPrice, digits);
 }
 
 datetime   closeTimes[];            // rolling list of close timestamps
@@ -5898,8 +5961,13 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    {
       price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
       if(price <= 0) return;
+      // slDist (structural/ATR) is kept EXACTLY as v5.8.50 computed it --
+      // per the ported current-bot SL policy, it continues to drive lot
+      // sizing only (see XAU_HybridRiskPerLotForDistance below). The
+      // ACTUAL broker SL price is now the ported fixed Gold-move policy,
+      // decoupled from this distance -- matching the current bot exactly.
       slDist = MathMax(atr * slM, minDist);
-      sl = NormalizeDouble(price - slDist, digits);
+      sl = XAU_HybridFixedGoldMoveSLPrice(price, 1, digits);
       tp = NormalizeDouble(price + slDist * tpM, digits);
    }
    else
@@ -5907,147 +5975,22 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
       price = SymbolInfoDouble(Symbol(), SYMBOL_BID);
       if(price <= 0) return;
       slDist = MathMax(atr * slM, minDist);
-      sl = NormalizeDouble(price + slDist, digits);
+      sl = XAU_HybridFixedGoldMoveSLPrice(price, -1, digits);
       tp = NormalizeDouble(price - slDist * tpM, digits);
    }
 
-   // Lot sizing with grade multiplier
+   // PORTED CURRENT-BOT RISK/LOT (Stage 2, replaces the entire v5.8.50
+   // multiplier stack below by design -- account-mode base risk, scout risk
+   // cap, Profit Guardian tier scaling, drawdown-recovery cap, careful-mode
+   // weekly-target throttle, Asian session scaling, win/loss-streak pattern
+   // multiplier, and volatility-adaptive multiplier are ALL removed here,
+   // per the current bot's own verified "no opinion-based subsystem may
+   // reduce it" policy for InpNormalRiskPct. Flat 10% of balance, binary --
+   // either the full risk is used or (further below, the existing broker
+   // min-lot/equity-cap logic) the trade is skipped. No approximation.
    double balance = StrategyReferenceBalance();
-   // v4.8.2 — Account Mode preset overrides InpRiskPercent
-   // v5.8.4 — Restore original account-based risk presets for demo/cloud testing.
-   double baseRisk = InpRiskPercent;
-   if(InpAccountMode == ACCT_BALANCED)     baseRisk = 1.2;
-   if(InpAccountMode == ACCT_CONSERVATIVE) baseRisk = 0.6;
-   if(InpAccountMode == ACCT_AGGRESSIVE)   baseRisk = 2.0;
-   double riskPct = baseRisk * sizeMulti;
-   bool entryQualityScout = (sizeMulti <= InpBlockedMemoryScoutLotMulti * 0.75 ||
-                             StringFind(g_pendingBrainEntryAudit, "REPORT-FIT SCOUT") >= 0 ||
-                             StringFind(g_pendingBrainEntryAudit, "BLOCKED-MEMORY SCOUT") >= 0);
-   double riskAfterSignal = riskPct;
+   double riskPct = InpHybridNormalRiskPct;
 
-   double acctSizeMult = AccountSizeRiskMultiplier();
-   if(acctSizeMult != 1.0)
-   {
-      Print("ACCOUNT-SCALE: strategy reference $", DoubleToString(StrategyReferenceBalance(), 2),
-            " risk×", DoubleToString(acctSizeMult, 2),
-            " (large accounts scale stronger; small accounts protected)");
-      riskPct *= acctSizeMult;
-   }
-   if(entryQualityScout && InpEntryQualityScoutRiskCap > 0.0 && riskPct > InpEntryQualityScoutRiskCap)
-   {
-      Print("SCOUT-RISK CAP: memory/scout entry risk ",
-            DoubleToString(riskPct, 2), "% -> ",
-            DoubleToString(InpEntryQualityScoutRiskCap, 2),
-            "% so blocked-memory recovery cannot become a full-size trade.");
-      riskPct = InpEntryQualityScoutRiskCap;
-   }
-   double riskAfterAccount = riskPct;
-
-   // v5.1.0 — PROFIT GUARDIAN: tier-based risk scaling on top of everything else
-   double pgMult = PG_RiskMultiplier();
-   if(pgMult < 1.0)
-   {
-      Print("🛡 PG risk×", DoubleToString(pgMult,2),
-            " (HWM=$", DoubleToString(pg_dayHWM,2), ")");
-      riskPct *= pgMult;
-      if(pgMult <= 0.001) return;   // tier 3: no new lots
-   }
-   if(entryQualityScout && InpEntryQualityScoutRiskCap > 0.0 && riskPct > InpEntryQualityScoutRiskCap)
-   {
-      Print("SCOUT-RISK CAP: post-PG memory/scout risk ",
-            DoubleToString(riskPct, 2), "% -> ",
-            DoubleToString(InpEntryQualityScoutRiskCap, 2), "%");
-      riskPct = InpEntryQualityScoutRiskCap;
-   }
-   double riskAfterPG = riskPct;
-
-   // DRAWDOWN RECOVERY MODE: cap risk at InpDrawdownRisk% until we get a win
-   if(drawdownActive)
-   {
-      double cappedRisk = MathMin(riskPct, InpDrawdownRisk);
-      if(cappedRisk < riskPct)
-      {
-         Print("DRAWDOWN MODE: risk ", DoubleToString(riskPct,2), "% -> capped ", DoubleToString(cappedRisk,2), "%");
-         riskPct = cappedRisk;
-      }
-   }
-
-   // Careful mode near weekly target
-   if(InpCarefulMode && weeklyStartEquity > 0)
-   {
-      double wPct = (accInfo.Equity() - weeklyStartEquity) / weeklyStartEquity * 100;
-      if(wPct > InpWeeklyTarget * 0.75) riskPct *= 0.25;
-      else if(wPct > InpWeeklyTarget * 0.5) riskPct *= 0.5;
-   }
-   double riskAfterCareful = riskPct;
-
-   // Session scaling
-   MqlDateTime dt; TimeCurrent(dt);
-   double sessionMult = 1.0;
-   if(dt.hour >= 0 && dt.hour < 8)
-   {
-      double asianMult = (IsTrendContinuationRegime(signal) && StrategyReferenceBalance() >= 25000.0) ? 0.55 : 0.40;
-      sessionMult = asianMult;
-      riskPct *= asianMult; // Asian session is still quieter, but no longer crushes large clean-trend lots to dust.
-   }
-   double riskAfterSession = riskPct;
-
-   // Auto risk scaling from streaks
-   double patternMult = 1.0;
-   if(patternCount >= 5)
-   {
-      int rW = 0;
-      for(int p = patternCount - 1; p >= MathMax(0, patternCount - 5); p--)
-         if(patterns[p].wasWinner) rW++;
-      if(rW >= 4) { patternMult = 1.3; riskPct *= patternMult; }
-      else if(rW <= 1) { patternMult = 0.5; riskPct *= patternMult; }
-   }
-   double riskAfterPattern = riskPct;
-
-   // VOLATILITY-ADAPTIVE SIZING (reduce in vol spikes, boost in calm)
-   double volMult = GetVolAdaptiveMult();
-   if(volMult != 1.0)
-   {
-      Print("VOL-ADAPT: risk × ", DoubleToString(volMult, 2),
-            " (ATR vs median; ", volMult < 1.0 ? "high vol — shrinking" : "calm — slight boost", ")");
-      riskPct *= volMult;
-   }
-
-   if(g_propFirmMode && g_propFirmRiskPerTradePct > 0.0 &&
-      riskPct > g_propFirmRiskPerTradePct)
-   {
-      Print("PROP-FIRM RISK CAP: calculated entry risk ",
-            DoubleToString(riskPct, 2), "% -> ",
-            DoubleToString(g_propFirmRiskPerTradePct, 2),
-            "%. Signal remains allowed; only position size is reduced.");
-      riskPct = g_propFirmRiskPerTradePct;
-   }
-
-   double equityForSizing = StrategyReferenceBalance();
-   double largeFloor = 0.0;
-   if(g_propFirmMode)
-      Print("PROP-FIRM MODE: large-account risk floor disabled.");
-   else if(InpLargeAccountMinRiskPct > 0 && equityForSizing >= 50000.0 && !drawdownActive && pgMult > 0.40)
-      largeFloor = InpLargeAccountMinRiskPct;
-   else if(InpLargeAccountMinRiskPct > 0 && equityForSizing >= 25000.0 && !drawdownActive && pgMult > 0.40)
-      largeFloor = MathMin(1.25, InpLargeAccountMinRiskPct);
-
-   if(entryQualityScout && largeFloor > 0)
-   {
-      Print("SCOUT-RISK: large-account lot floor bypassed for memory/scout entry. risk=",
-            DoubleToString(riskPct, 2), "% floor=", DoubleToString(largeFloor, 2),
-            "% reason=", reason);
-   }
-   else if(largeFloor > 0 && riskPct < largeFloor)
-   {
-      Print("LOT-FLOOR: large account equity $", DoubleToString(equityForSizing, 2),
-            " raised effective risk ", DoubleToString(riskPct, 2), "% -> ",
-            DoubleToString(largeFloor, 2),
-            "% after small multipliers. Equity cap still limits final lots.");
-      riskPct = largeFloor;
-   }
-
-   double riskAmount = balance * riskPct / 100.0;
    double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
    double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
    double minLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
@@ -6055,14 +5998,16 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
    if(tickValue <= 0 || tickSize <= 0 || slDist <= 0) return;
 
-   double slDollarPerLotRaw = (slDist / tickSize) * tickValue;
+   // Ported current-bot broker-accurate $-risk-per-lot (OrderCalcProfit-based,
+   // replaces v5.8.50's simpler tick-value-only calc).
+   double slDollarPerLotRaw = XAU_HybridRiskPerLotForDistance(slDist);
+   double riskAmount = balance * riskPct / 100.0;
    double rawLots = riskAmount / slDollarPerLotRaw;
    double lots = MathFloor(rawLots / lotStep) * lotStep;
    double brokerLimitedLots = MathMin(maxLot, lots);
    if(brokerLimitedLots < minLot)
    {
       Print("LOT-CALC SKIP: balance=$", DoubleToString(balance,2),
-            " equity=$", DoubleToString(equityForSizing,2),
             " finalRisk=", DoubleToString(riskPct,2), "%",
             " riskUSD=$", DoubleToString(riskAmount,2),
             " slDist=", DoubleToString(slDist,2),
@@ -6163,21 +6108,8 @@ void OpenTrade(int signal, double atr, string reason, double sizeMulti)
    }
    lots = NormalizeDouble(lots, lotDigits);
 
-   Print("LOT-CALC: balance=$", DoubleToString(balance,2),
-         " equity=$", DoubleToString(equityForSizing,2),
-         " modeRisk=", DoubleToString(baseRisk,2), "%",
+   Print("LOT-CALC (PORTED FLAT RISK): balance=$", DoubleToString(balance,2),
          " signalMult=", DoubleToString(sizeMulti,2),
-         " riskSignal=", DoubleToString(riskAfterSignal,2), "%",
-         " acctMult=", DoubleToString(acctSizeMult,2),
-         " riskAcct=", DoubleToString(riskAfterAccount,2), "%",
-         " pgMult=", DoubleToString(pgMult,2),
-         " riskPG=", DoubleToString(riskAfterPG,2), "%",
-         " riskCareful=", DoubleToString(riskAfterCareful,2), "%",
-         " sessionMult=", DoubleToString(sessionMult,2),
-         " riskSession=", DoubleToString(riskAfterSession,2), "%",
-         " patternMult=", DoubleToString(patternMult,2),
-         " riskPattern=", DoubleToString(riskAfterPattern,2), "%",
-         " volMult=", DoubleToString(volMult,2),
          " finalRisk=", DoubleToString(riskPct,2), "%",
          " riskUSD=$", DoubleToString(riskAmount,2),
          " slDist=", DoubleToString(slDist,2),
