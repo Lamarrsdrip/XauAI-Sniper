@@ -2031,9 +2031,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.29_ASIA_A_PLUS_ONLY_NO_A_PLUS_RESET_PENDING"
-#define XAUAI_EA_VERSION_NUM "6.25.29"
-#define XAUAI_BUILD_HASH "xaucloud-m10-permanent-gradeb-category-blocks-20260728"
+#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.32_FLAT_ENTRY_RESTORE"
+#define XAUAI_EA_VERSION_NUM "6.25.32"
+#define XAUAI_BUILD_HASH "xaucloud-m10-flat-entry-restore-20260731"
 #define XAU_PYRAMID_BASKET_HARD_CLOSE_R 0.50
 #define XAU_COUNTER_EXCURSION_BUILD false
 #define XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE true
@@ -15775,6 +15775,47 @@ XAU_M10SignalDecision XAU_EvaluateM10SignalDecision()
       d.confidence=oppositeScore;
       d.decisionType=(oppositeDir==1)?M10_DECISION_BUY_CANDIDATE:M10_DECISION_SELL_CANDIDATE;
       d.exactReason=StringFormat("confirmed opposite case wins (score=%.1f vs dominant=%.1f); Adaptive Transition already marked oppositeEntryAllowed=true",oppositeScore,dominantScore);
+   }
+   else if(oppositeScore > dominantScore && oppositeScore >= 55.0 &&
+           !g_campaign[0].active && !g_campaign[1].active)
+   {
+      // v6.25.32 FLAT-ENTRY RESTORE (owner forensic audit 2026-07-31): the
+      // reversalReady package above (failedExtremes/reclaim/retest/
+      // displacement/persistence) exists to stop an EXISTING open position
+      // from being flipped on weak evidence -- it was never meant to gate a
+      // brand-new entry when the account holds NOTHING in either direction.
+      // Root-cause evidence: 3 live days, 239/318 (75%) of M10 decision
+      // cycles died here as TRANSITION_WATCH even though a fresh score >=55
+      // existed, because this same multi-bar reversal-confirmation gate was
+      // applied identically whether flat or in a position. The documented
+      // May19-Jun17 growth run ($100k->$451,118 net, 74% WR, PF 3.07) predates
+      // this gate entirely (added v6.23.1, 2026-07-14) -- ScoreSetups scored
+      // a fresh direction every bar with only a soft HTF-trend bonus/penalty,
+      // no second independent authority requiring proof of an in-progress
+      // reversal before a flat account could enter. This branch restores
+      // that behavior ONLY while flat (g_campaign[0]/[1].active both false,
+      // i.e. XAU_CampaignSlot(1)/XAU_CampaignSlot(-1) -- nothing open to
+      // protect). The instant a position exists, XAU_CampaignRegisterOpen
+      // sets the relevant slot active and this branch stops matching --
+      // every subsequent opposite-direction decision falls through to the
+      // unchanged td.oppositeEntryAllowed branch above, still requiring the
+      // full reversal package. Threshold (55.0), permanent category blocks,
+      // owner location blocks and every downstream gate are untouched -- this
+      // only lets a candidate the signal engine already scored reach them.
+      int oppositeDir=-dominant;
+      d.preferredDirection=oppositeDir;
+      d.confidence=oppositeScore;
+      if(dominantLocationPoor)
+      {
+         d.decisionType=(oppositeDir==1)?M10_DECISION_WAIT_FOR_BUY_RETRACE:M10_DECISION_WAIT_FOR_SELL_RETRACE;
+         d.retracementRequired=true;
+         d.exactReason=StringFormat("flat account, opposite case wins (score=%.1f vs dominant=%.1f) but location=%s -- valid direction, poor entry price, wait for retrace",oppositeScore,dominantScore,g_m10Snapshot.locationState);
+      }
+      else
+      {
+         d.decisionType=(oppositeDir==1)?M10_DECISION_BUY_CANDIDATE:M10_DECISION_SELL_CANDIDATE;
+         d.exactReason=StringFormat("flat account, opposite case wins (score=%.1f vs dominant=%.1f), location=%s acceptable-or-better -- no existing position to protect, reversal-confirmation package not required",oppositeScore,dominantScore,g_m10Snapshot.locationState);
+      }
    }
    else if(oppositeScore > dominantScore && oppositeScore >= 55.0)
    {
