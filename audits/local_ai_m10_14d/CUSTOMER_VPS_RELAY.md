@@ -64,6 +64,9 @@ that evidence.
 ## Replay status
 
 The full 30-day Model=4 workflow has not yet produced final comparison metrics.
-Its baseline report proved `100% real ticks`, but the orchestrator rejected the
-report because its PowerShell regex was double-escaped. The verifier is fixed;
-no performance claim should be made until the complete AI reports finish.
+Its baseline and both collection reports proved `100% real ticks`, producing
+809 exact M10 snapshots per controlled variant. Two PowerShell 5.1
+compatibility defects in the orchestrator (a double-escaped quality regex and
+an ambiguous `Tee-Object -LiteralPath -Append` parameter set) were repaired.
+Verified collection artifacts are now resumable; no performance claim should
+be made until the complete AI reports finish.

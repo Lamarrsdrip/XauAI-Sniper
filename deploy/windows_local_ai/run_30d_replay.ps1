@@ -39,6 +39,13 @@ function Read-MT5ReportText([string]$Path) {
     return [Text.Encoding]::UTF8.GetString($bytes)
 }
 
+function Get-RealTickQuality([string]$Report) {
+    if (-not (Test-Path -LiteralPath $Report)) { return -1 }
+    $qualityMatch = [regex]::Match((Read-MT5ReportText $Report), "(\d+)% real ticks")
+    if (-not $qualityMatch.Success) { return -1 }
+    return [int]$qualityMatch.Groups[1].Value
+}
+
 function Wait-ForInitialCacheJob {
     $task = Get-ScheduledTask -TaskName "XauCloudLocalAI_Replay14DCache" -ErrorAction SilentlyContinue
     while ($null -ne $task -and $task.State -eq "Running") {
@@ -91,7 +98,7 @@ function Invoke-CacheBuild([string[]]$SnapshotFiles, [string]$Stage) {
     $previousPythonPath = $env:PYTHONPATH
     $env:PYTHONPATH = $ServiceRoot
     try {
-        & $Python @arguments 2>&1 | Tee-Object -LiteralPath $BuildLog -Append
+        & $Python @arguments 2>&1 | Tee-Object -FilePath $BuildLog -Append
         if ($LASTEXITCODE -ne 0) { throw "Cache builder failed at $Stage with code $LASTEXITCODE" }
     }
     finally {
@@ -114,7 +121,9 @@ try {
     $withOwnerMissing = Join-Path $CommonFiles "${Prefix}_missing_with_owner.tsv"
     $noOwnerMissing = Join-Path $CommonFiles "${Prefix}_missing_no_owner.tsv"
 
-    foreach ($path in @($withOwnerSnapshots, $noOwnerSnapshots, $withOwnerMissing, $noOwnerMissing, $CacheFile, $BuildSummary)) {
+    # Preserve verified collection artifacts across an orchestrator restart.
+    # Cache/missing rows are trajectory-specific and are rebuilt cleanly.
+    foreach ($path in @($withOwnerMissing, $noOwnerMissing, $CacheFile, $BuildSummary)) {
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     }
 
@@ -128,18 +137,33 @@ try {
     }
 
     $baselineReport = Join-Path $ResearchRoot "${Prefix}_BASELINE.htm"
-    $baselineQuality = if (Test-Path -LiteralPath $baselineReport) {
-        [regex]::Match((Read-MT5ReportText $baselineReport), "(\d+)% real ticks")
-    } else { $null }
-    if ($null -ne $baselineQuality -and $baselineQuality.Success -and
-        [int]$baselineQuality.Groups[1].Value -ge 95) {
+    $baselineQuality = Get-RealTickQuality $baselineReport
+    if ($baselineQuality -ge 95) {
         Write-RunLog "TESTER_REUSED job=BASELINE report=$baselineReport reason=VERIFIED_MODEL4_REPORT"
     }
     else {
         Invoke-Tester "BASELINE"
     }
-    Invoke-Tester "COLLECT_WITH_OWNER"
-    Invoke-Tester "COLLECT_NO_OWNER"
+
+    $withOwnerReport = Join-Path $ResearchRoot "${Prefix}_COLLECT_WITH_OWNER.htm"
+    if ((Get-NonEmptyLineCount $withOwnerSnapshots) -gt 0 -and
+        (Get-RealTickQuality $withOwnerReport) -ge 95) {
+        Write-RunLog "TESTER_REUSED job=COLLECT_WITH_OWNER report=$withOwnerReport snapshots=$(Get-NonEmptyLineCount $withOwnerSnapshots) reason=VERIFIED_MODEL4_REPORT_AND_SNAPSHOTS"
+    }
+    else {
+        if (Test-Path -LiteralPath $withOwnerSnapshots) { Remove-Item -LiteralPath $withOwnerSnapshots -Force }
+        Invoke-Tester "COLLECT_WITH_OWNER"
+    }
+
+    $noOwnerReport = Join-Path $ResearchRoot "${Prefix}_COLLECT_NO_OWNER.htm"
+    if ((Get-NonEmptyLineCount $noOwnerSnapshots) -gt 0 -and
+        (Get-RealTickQuality $noOwnerReport) -ge 95) {
+        Write-RunLog "TESTER_REUSED job=COLLECT_NO_OWNER report=$noOwnerReport snapshots=$(Get-NonEmptyLineCount $noOwnerSnapshots) reason=VERIFIED_MODEL4_REPORT_AND_SNAPSHOTS"
+    }
+    else {
+        if (Test-Path -LiteralPath $noOwnerSnapshots) { Remove-Item -LiteralPath $noOwnerSnapshots -Force }
+        Invoke-Tester "COLLECT_NO_OWNER"
+    }
     Invoke-CacheBuild @($withOwnerSnapshots, $noOwnerSnapshots) "INITIAL_30D"
 
     $resolved = $false

@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EA = (ROOT / "XAUUSD_AI_Sniper_EA.mq5").read_text(encoding="utf-8")
 WITH_OWNER = (ROOT / "research/local_ai_m10/XauCloud_M10_LOCAL_AI_WITH_OWNER_BLOCKERS.mq5").read_text(encoding="utf-8")
 NO_OWNER = (ROOT / "research/local_ai_m10/XauCloud_M10_LOCAL_AI_NO_OWNER_BLOCKERS.mq5").read_text(encoding="utf-8")
+REPLAY_30D = (ROOT / "deploy/windows_local_ai/run_30d_replay.ps1").read_text(encoding="utf-8")
 
 
 def function(text: str, signature: str, next_signature: str) -> str:
@@ -101,3 +102,12 @@ def test_no_owner_variant_changes_only_controlled_owner_blocker_chokes():
         "OrderCalcMargin", "trade.Buy", "trade.Sell", "XAU_FixedGoldMoveSLPrice",
     ):
         assert required in NO_OWNER
+
+
+def test_30day_replay_is_model4_resumable_and_powershell51_compatible():
+    assert 'model=4 timeframe=M10 paidCalls=0' in REPLAY_30D
+    assert '"(\\d+)% real ticks"' in REPLAY_30D
+    assert "Tee-Object -FilePath $BuildLog -Append" in REPLAY_30D
+    assert "Tee-Object -LiteralPath" not in REPLAY_30D
+    assert "TESTER_REUSED job=COLLECT_WITH_OWNER" in REPLAY_30D
+    assert "TESTER_REUSED job=COLLECT_NO_OWNER" in REPLAY_30D
