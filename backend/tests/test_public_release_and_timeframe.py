@@ -94,9 +94,10 @@ def test_recognized_build_matching_manifest_is_marked_recognized():
     assert release["reported_build_recognized"] is True
 
 
-def test_product_qualified_xaucloud_build_is_recognized():
-    release = srv.build_public_release_display("XauCloud-m10_v6.25.31")
-    assert srv._normalize_release_version("XauCloud-m10_v6.25.31") == "6.25.31"
+def test_product_qualified_pure_m10_build_is_recognized():
+    identity = "XauCloud-m10_v6.25.30_PURE_M10_CYCLE_AUTHORITY_FIX"
+    release = srv.build_public_release_display(identity)
+    assert srv._normalize_release_version(identity) == "6.25.30"
     assert release["reported_build_recognized"] is True
 
 

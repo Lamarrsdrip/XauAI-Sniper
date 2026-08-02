@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.25.31",
+  "current_version": "v6.25.30",
   "releases": {
     "v6.25.2": {
       "version": "v6.25.2",
@@ -123,26 +123,14 @@
     },
     "v6.25.30": {
       "version": "v6.25.30",
-      "edition": "Official XauCloud-m10: Asia A+-only and no A+ reset-pending",
-      "source_commit": "bdcac11b6dae20a522475cc46b71dea178e81fc7",
-      "build_timestamp": "2026-07-29T18:29:00Z",
-      "compiler_result": "0 errors, 0 warnings, 68817 ms elapsed (MetaEditor64.exe, isolated MT5 sandbox)",
+      "edition": "Official XauCloud-m10: pure M10 cycle-authority repair",
+      "source_commit": "c86594811eee1e947c15b6fc4f52dd66b01fee6f",
+      "build_timestamp": "2026-08-02T16:52:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe, Model 4 real-tick verification); deployed and hash-verified on Mac and VPS",
       "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.30.ex5",
-      "ex5_sha256": "4566ab4cfde1a79fbff84b13ffa24c593b062b9327bb109d74ce5cb8a9010ca3",
+      "ex5_sha256": "1244b533451553d493c0349d7211eee1ae46d71fc64424a2102726f1e5e2281e",
       "customer_filename": "XauCloud-m10.ex5",
-      "release_notes": "Owner-approved permanent production policy: Asia permits Grade A+ only; Asia Grade A and B are blocked across original entries, re-entries, recovery, pyramids and delayed final execution. Grade A+ at RESET_PENDING is blocked in every session. Existing Grade-B reversal/opposite-discovery and Grade-B reset-pending blocks remain permanent. No strategy, risk, lot, SL, 10-minute extension, profit protection, session timing, signal-generation, AI, transition, runner, news or daily-lock behavior was redesigned. The latest main bounded-offline-lease module remains intact and default OFF.",
-      "stable_status": true
-    },
-    "v6.25.31": {
-      "version": "v6.25.31",
-      "edition": "Official XauCloud-m10: Hybrid M5 evidence / authoritative M10 execution R2",
-      "source_commit": "55216a671bda34e54361bce8b2ae4cc0d1c2b712",
-      "build_timestamp": "2026-07-29T22:20:00Z",
-      "compiler_result": "0 errors, 0 warnings, 50081 ms elapsed (MetaEditor64.exe, isolated MT5 sandbox; single-file source with no external lease include)",
-      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.31.ex5",
-      "ex5_sha256": "a0ac0a40e5b4eeba5c95943b4ffae5ea5d289da8434612ae2d0686313592b93b",
-      "customer_filename": "XauCloud-m10.ex5",
-      "release_notes": "Owner-approved R2 production promotion. The first closed M5 bar is observation-only; the second closed M5 bar at the authoritative M10 boundary compares fresh sequential direction, momentum, structure, location and reward-room evidence. A candidate is created only through the existing shared M10 grading, timing, news, owner-policy, risk, SL, exit and broker-send pipeline. R2 additionally resolves a narrow TRANSITION_WATCH close-call only when M10 side scores are less than 10 points apart, the selected M10 side scores at least 50, both M5 observations strongly agree at confidence 62 or higher, and final location is GOOD or ACCEPTABLE. Permanent Asia non-A+, A+ reset-pending, Grade-B reversal and Grade-B reset-pending blocks remain enforced at candidate and final execution. Matched 30-day real-tick comparison: trades 28 to 35 (+25.0%), wins 18 to 24, win rate 64.29% to 68.57%, net profit $450.31 to $2,349.01, PF 1.08 to 1.36, maximum balance drawdown 20.67% to 13.85%, maximum equity drawdown 24.29% to 21.01%. The build is self-contained and keeps online Command Center reservation authoritative; no external lease include or offline-lease execution path is shipped. Heartbeat identifies the authoritative production timeframe as M10 and separately publishes evidence_timeframe=M5, decision_timeframe=M10 and hybrid_mode=true; the Command Center displays M5 evidence to M10 execution and recognizes the product-qualified build identity.",
+      "release_notes": "Pure M10 scanner and execution authority. Each newly closed M10 candle runs one primary decision cycle. A fresh direction-matching setup that reaches TRANSITION_WATCH is preserved as a real classified candidate, while unconfirmed transition protection remains an explicit downstream normal gate before timer and OrderSend. Adds durable completed-cycle restart suppression, reconnect/session-reopen reconciliation, stale candidate/transition/timer clearing, startup health telemetry and exact order-send/retcode telemetry. Permanent Asia non-A+, A+ reset-pending and Grade-B category blocks remain enforced. No M5 evidence scans or hybrid M5-to-M10 state are present. Model 1 is excluded from verification.",
       "stable_status": true
     }
   }
