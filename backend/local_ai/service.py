@@ -157,7 +157,7 @@ class LocalAIEngine:
         self,
         runtime_url: str,
         cache_path: Path,
-        timeout_seconds: float = 20.0,
+        timeout_seconds: float = 40.0,
         confidence_threshold: int = 70,
         max_cpu_percent: float = 70.0,
         min_free_ram_gb: float = 2.0,
@@ -515,7 +515,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--runtime-url", default="http://127.0.0.1:11434")
     parser.add_argument("--cache", type=Path, default=Path("local_ai_cache.sqlite3"))
-    parser.add_argument("--timeout", type=float, default=20.0)
+    parser.add_argument("--timeout", type=float, default=40.0)
     parser.add_argument("--confidence-threshold", type=int, default=70)
     parser.add_argument("--max-cpu-percent", type=float, default=70.0)
     parser.add_argument("--min-free-ram-gb", type=float, default=2.0)

@@ -6,6 +6,8 @@ EA = (ROOT / "XAUUSD_AI_Sniper_EA.mq5").read_text(encoding="utf-8")
 WITH_OWNER = (ROOT / "research/local_ai_m10/XauCloud_M10_LOCAL_AI_WITH_OWNER_BLOCKERS.mq5").read_text(encoding="utf-8")
 NO_OWNER = (ROOT / "research/local_ai_m10/XauCloud_M10_LOCAL_AI_NO_OWNER_BLOCKERS.mq5").read_text(encoding="utf-8")
 REPLAY_30D = (ROOT / "deploy/windows_local_ai/run_30d_replay.ps1").read_text(encoding="utf-8")
+GATEWAY_START = (ROOT / "deploy/windows_local_ai/start_gateway.cmd").read_text(encoding="utf-8")
+WORKER_START = (ROOT / "deploy/windows_local_ai/start_remote_worker.cmd").read_text(encoding="utf-8")
 
 
 def function(text: str, signature: str, next_signature: str) -> str:
@@ -59,6 +61,11 @@ def test_zero_credit_and_confidence_fallback_are_defaults():
     assert "d.confidence>=InpLocalAIConfidenceThreshold" in parser
     assert 'd.status=="LOCAL_AI_FALLBACK"' in parser
     assert 'd.status=="LOCAL_AI_LOW_CONFIDENCE"' in parser
+
+
+def test_vps_timeout_chain_allows_model4_to_finish_before_relay_expires():
+    assert "--timeout 40" in GATEWAY_START
+    assert "--inference-timeout 50" in WORKER_START
 
 
 def test_customer_transport_uses_authenticated_https_relay_without_worker_secret():

@@ -24,7 +24,7 @@ LOG = logging.getLogger("xaucloud.local_ai.remote_worker")
 class RelayClient:
     def __init__(self, public_url: str, gateway_url: str, token: str, worker_id: str,
                  private_key_path: str = "",
-                 request_timeout: float = 10.0, inference_timeout: float = 30.0) -> None:
+                 request_timeout: float = 10.0, inference_timeout: float = 50.0) -> None:
         self.public_url = public_url.rstrip("/")
         self.gateway_url = gateway_url.rstrip("/")
         self.token = token
@@ -154,7 +154,7 @@ def main() -> None:
     parser.add_argument("--token", default=os.environ.get("XAU_LOCAL_AI_WORKER_SECRET", ""))
     parser.add_argument("--private-key", default=r"C:\XauCloudLocalAI\secrets\worker_private_key.pem")
     parser.add_argument("--idle-seconds", type=float, default=1.0)
-    parser.add_argument("--inference-timeout", type=float, default=30.0)
+    parser.add_argument("--inference-timeout", type=float, default=50.0)
     parser.add_argument("--log")
     args = parser.parse_args()
     if args.token and len(args.token) < 32:

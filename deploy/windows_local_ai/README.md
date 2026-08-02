@@ -9,7 +9,7 @@ relay; the VPS worker makes outbound HTTPS requests only.
 - Runtime endpoint: `http://127.0.0.1:11434`.
 - Gateway endpoint: `http://127.0.0.1:8765/api/local-ai/*`.
 - Runtime limits: 2 CPU threads, 2,048-token context, one slot, low process priority.
-- Gateway limits: one non-queued inference, 20-second timeout, 70% CPU ceiling,
+- Gateway limits: one non-queued inference, 40-second timeout, 70% CPU ceiling,
   2 GB minimum free RAM, and deterministic fallback.
 - Local AI confidence below 70 is ignored for trading and the deterministic
   pure-M10 engine decides.
