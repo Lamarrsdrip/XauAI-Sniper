@@ -2717,7 +2717,7 @@ input string InpLocalAIReplayCacheFile = "XauCloud_local_ai_m10_replay_cache.tsv
 input string InpLocalAIReplaySnapshotFile = "XauCloud_local_ai_m10_replay_snapshots.tsv";
 input bool   InpEmergentDifficultFallbackEnabled = false; // OFF by default; reserved for unresolved A/A+ only, never routine scans
 input int    InpEmergentDifficultDailyLimit = 2;           // Hard paid fallback ceiling when explicitly enabled
-input bool   InpResearchOwnerBlockersEnabled = true;      // Research A/B switch; FALSE removes only the enumerated owner-blocker list
+input bool   InpResearchOwnerBlockersEnabled = false;      // Research A/B switch; FALSE removes only the enumerated owner-blocker list
 
 // v6.3.8 UPGRADE 3 — AI SL/TP Advisory System
 // Default: ADVISORY (logs AI suggestion, never applies automatically)
@@ -40033,6 +40033,12 @@ bool XAU_EnforcePermanentM10CategoryPolicy(string phase,
                                            string candidateSetup,
                                            string &reason)
 {
+   if(!InpResearchOwnerBlockersEnabled)
+   {
+      reason="";
+      PrintFormat("RESEARCH_OWNER_BLOCKERS_DISABLED | phase=%s source=%s setup=%s grade=%s | disabledScope=PERMANENT_ENUMERATED_LIST | otherGatesPreserved=true",phase,source,candidateSetup,grade);
+      return true;
+   }
    XAU_PermanentM10PolicyFacts facts;
    XAU_ResolvePermanentM10PolicyFacts(phase,source,grade,candidateDirection,
                                       candidateSetup,facts);
@@ -40246,7 +40252,7 @@ bool XAU_OwnerEntryPermission(string phase, string source, string grade,
       if(ownerLocationIsExcellent) g_ownerLocationExcellentCandidates++;
       if(ownerLocationIsLate)      g_ownerLocationLateCandidates++;
    }
-   if(ownerLocationIsExcellent || ownerLocationIsLate)
+   if(InpResearchOwnerBlockersEnabled && (ownerLocationIsExcellent || ownerLocationIsLate))
    {
       reason = ownerLocationIsExcellent ? "OWNER_LOCATION_EXCELLENT_BLOCK" : "OWNER_LOCATION_LATE_BLOCK";
       if(ownerLocationIsExcellent) { g_gateBlocks_OwnerExcellent++;     g_ownerLocationExcellentBlocked++; }
@@ -40296,6 +40302,7 @@ bool XAU_OwnerEntryPermission(string phase, string source, string grade,
 // and g_ownerLocationLateExecuted must remain 0 for the life of the terminal.
 void XAU_OwnerLocationFinalAssertion(int direction, string source)
 {
+   if(!InpResearchOwnerBlockersEnabled) return;
    ENUM_XAU_LOCATION_QUALITY loc = XAU_OwnerDirectionalLocation(direction, g_transitionDecision);
    if(loc == LOCATION_EXCELLENT)
    {

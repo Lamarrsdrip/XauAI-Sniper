@@ -1,0 +1,286 @@
+{
+  "average_wall_ms": 13081.48,
+  "fallbacks": 8,
+  "json_validity_percent": 100.0,
+  "model": "qwen3-0.6b-q8",
+  "p95_wall_ms": 14178.5,
+  "requests": 10,
+  "results": [
+    {
+      "cache_hit": false,
+      "confidence_threshold": 70,
+      "decision": {
+        "candidate_allowed": true,
+        "candidate_setup": "TREND_PULLBACK",
+        "confidence": 74,
+        "location_quality": "GOOD",
+        "market_state": "BREAKOUT",
+        "momentum_state": "STABLE",
+        "preferred_direction": "BUY",
+        "reason_codes": [
+          "TREND_PULLBACK",
+          "RANGE_REVERSAL",
+          "BREAKOUT",
+          "SQUEEZE_RELEASE",
+          "RSI_EXTREME",
+          "LONDON_FIX_PIN"
+        ],
+        "short_reason": "TREND_PULLBACK",
+        "structure_state": "CONFIRMED"
+      },
+      "fallback": null,
+      "latency_ms": 13766.87,
+      "signature": "6e2d040fa6b44b2da0ff9da113504e6afe14da76601ca340f5977db5e0395a01",
+      "status": "LOCAL_AI_TRUSTED",
+      "wall_ms": 13833.96
+    },
+    {
+      "cache_hit": false,
+      "confidence_threshold": 70,
+      "decision": {
+        "candidate_allowed": true,
+        "candidate_setup": "BREAKOUT",
+        "confidence": 39,
+        "location_quality": "GOOD",
+        "market_state": "BREAKOUT",
+        "momentum_state": "STABLE",
+        "preferred_direction": "SELL",
+        "reason_codes": [
+          "BREAKOUT",
+          "SELL",
+          "M10_ORIGINATED_CANDIDATE"
+        ],
+        "short_reason": "SELL",
+        "structure_state": "CONFIRMED"
+      },
+      "fallback": "DETERMINISTIC",
+      "latency_ms": 11453.09,
+      "signature": "9d84b006492db5f4f4ef65442b9a32b917a1ca0217a9edad0c3c67200d52b941",
+      "status": "LOCAL_AI_LOW_CONFIDENCE",
+      "wall_ms": 11484.04
+    },
+    {
+      "cache_hit": false,
+      "confidence_threshold": 70,
+      "decision": {
+        "candidate_allowed": true,
+        "candidate_setup": "M10_ORIGINATED_CANDIDATE",
+        "confidence": 58,
+        "location_quality": "RESET_PENDING",
+        "market_state": "BREAKOUT",
+        "momentum_state": "STABLE",
+        "preferred_direction": "BUY",
+        "reason_codes": [
+          "TREND_PULLBACK",
+          "RANGE_REVERSAL",
+          "BREAKOUT",
+          "SQUEEZE_RELEASE",
+          "RSI_EXTREME",
+          "LONDON_FIX_PIN"
+        ],
+        "short_reason": "M10_ORIGINATED_CANDIDATE",
+        "structure_state": "DEVELOPING"
+      },
+      "fallback": "DETERMINISTIC",
+      "latency_ms": 15058.87,
+      "signature": "ef2c84e1233ea58310ac2a5ea225e702e883b8d21bc9950ffe910f1f2d750aef",
+      "status": "LOCAL_AI_LOW_CONFIDENCE",
+      "wall_ms": 15096.13
+    },
+    {
+      "cache_hit": false,
+      "confidence_threshold": 70,
+      "decision": {
+        "candidate_allowed": false,
+        "candidate_setup": "NONE",
+        "confidence": 48,
+        "location_quality": "OTHER",
+        "market_state": "BREAKOUT",
+        "momentum_state": "STABLE",
+        "preferred_direction": "NONE",
+        "reason_codes": [
+          "TREND_PULLBACK",
+          "RANGE_REVERSAL",
+          "BREAKOUT",
+          "SQUEEZE_RELEASE",
+          "RSI_EXTREME",
+          "MODEL_CONTRADICTION_FAIL_CLOSED"
+        ],
+        "short_reason": "Contradictory candidate failed closed.",
+        "structure_state": "UNCLEAR"
+      },
+      "fallback": "DETERMINISTIC",
+      "latency_ms": 12793.62,
+      "signature": "8d67cd3270141919dc77168889016537b64d2e400ed868ef9893cb64692eb0d8",
+      "status": "LOCAL_AI_LOW_CONFIDENCE",
+      "wall_ms": 12826.4
+    },
+    {
+      "cache_hit": false,
+      "confidence_threshold": 70,
+      "decision": {
+        "candidate_allowed": true,
+        "candidate_setup": "ADAPTIVE_REVERSAL_RECLAIM",
+        "confidence": 44,
+        "location_quality": "LATE",
+        "market_state": "BREAKOUT",
+        "momentum_state": "STABLE",
+        "preferred_direction": "SELL",
+        "reason_codes": [
+          "TREND_PULLBACK",
+          "RANGE_REVERSAL",
+          "BREAKOUT",
+          "SQUEEZE_RELEASE",
+          "RSI_EXTREME",
+          "LONDON_FIX_PIN"
+        ],
+        "short_reason": "SELL",
+        "structure_state": "DEVELOPING"
+      },
+      "fallback": "DETERMINISTIC",
+      "latency_ms": 14000.73,
+      "signature": "917ad86f519c7f366ca3c5886daab18a8c46503b00e0d15ad162752b0ff0c2f2",
+      "status": "LOCAL_AI_LOW_CONFIDENCE",
+      "wall_ms": 14051.96
+    },
+    {
+      "cache_hit": false,
+      "confidence_threshold": 70,
+      "decision": {
+        "candidate_allowed": true,
+        "candidate_setup": "TREND_PULLBACK",
+        "confidence": 74,
+        "location_quality": "GOOD",
+        "market_state": "BREAKOUT",
+        "momentum_state": "STABLE",
+        "preferred_direction": "BUY",
+        "reason_codes": [
+          "TREND_PULLBACK",
+          "RANGE_REVERSAL",
+          "BREAKOUT",
+          "SQUEEZE_RELEASE",
+          "RSI_EXTREME",
+          "LONDON_FIX_PIN"
+        ],
+        "short_reason": "TREND_PULLBACK",
+        "structure_state": "CONFIRMED"
+      },
+      "fallback": null,
+      "latency_ms": 13256.49,
+      "signature": "07f46a65b62051dae121801380645b6cd7278d3f9da0927837fd7f1c44ad8f7e",
+      "status": "LOCAL_AI_TRUSTED",
+      "wall_ms": 13286.8
+    },
+    {
+      "cache_hit": false,
+      "confidence_threshold": 70,
+      "decision": {
+        "candidate_allowed": true,
+        "candidate_setup": "BREAKOUT",
+        "confidence": 39,
+        "location_quality": "GOOD",
+        "market_state": "BREAKOUT",
+        "momentum_state": "STABLE",
+        "preferred_direction": "SELL",
+        "reason_codes": [
+          "BREAKOUT",
+          "SELL",
+          "NONE"
+        ],
+        "short_reason": "SELL",
+        "structure_state": "CONFIRMED"
+      },
+      "fallback": "DETERMINISTIC",
+      "latency_ms": 11012.2,
+      "signature": "a45ea3d3c38cdf9a5c0b72c65e0c9ce663dc3375448bd872a953b05e1dd0c54f",
+      "status": "LOCAL_AI_LOW_CONFIDENCE",
+      "wall_ms": 11040.53
+    },
+    {
+      "cache_hit": false,
+      "confidence_threshold": 70,
+      "decision": {
+        "candidate_allowed": true,
+        "candidate_setup": "M10_ORIGINATED_CANDIDATE",
+        "confidence": 58,
+        "location_quality": "RESET_PENDING",
+        "market_state": "BREAKOUT",
+        "momentum_state": "STABLE",
+        "preferred_direction": "BUY",
+        "reason_codes": [
+          "TREND_PULLBACK",
+          "RANGE_REVERSAL",
+          "BREAKOUT",
+          "SQUEEZE_RELEASE",
+          "RSI_EXTREME",
+          "LONDON_FIX_PIN"
+        ],
+        "short_reason": "M10_ORIGINATED_CANDIDATE",
+        "structure_state": "DEVELOPING"
+      },
+      "fallback": "DETERMINISTIC",
+      "latency_ms": 14146.96,
+      "signature": "1eecd2c88a04d32be1a6e3aeb3c5a6d475c9f97c28d0b1165a729366cd94526e",
+      "status": "LOCAL_AI_LOW_CONFIDENCE",
+      "wall_ms": 14178.5
+    },
+    {
+      "cache_hit": false,
+      "confidence_threshold": 70,
+      "decision": {
+        "candidate_allowed": false,
+        "candidate_setup": "NONE",
+        "confidence": 48,
+        "location_quality": "OTHER",
+        "market_state": "BREAKOUT",
+        "momentum_state": "STABLE",
+        "preferred_direction": "NONE",
+        "reason_codes": [
+          "TREND_PULLBACK",
+          "RANGE_REVERSAL",
+          "BREAKOUT",
+          "SQUEEZE_RELEASE",
+          "RSI_EXTREME",
+          "MODEL_CONTRADICTION_FAIL_CLOSED"
+        ],
+        "short_reason": "Contradictory candidate failed closed.",
+        "structure_state": "UNCLEAR"
+      },
+      "fallback": "DETERMINISTIC",
+      "latency_ms": 12280.01,
+      "signature": "57ead666fe03e490abdcf07c718e16565b7146e61fc8080537f05070222f0179",
+      "status": "LOCAL_AI_LOW_CONFIDENCE",
+      "wall_ms": 12320.66
+    },
+    {
+      "cache_hit": false,
+      "confidence_threshold": 70,
+      "decision": {
+        "candidate_allowed": true,
+        "candidate_setup": "ADAPTIVE_REVERSAL_RECLAIM",
+        "confidence": 44,
+        "location_quality": "LATE",
+        "market_state": "BREAKOUT",
+        "momentum_state": "STABLE",
+        "preferred_direction": "SELL",
+        "reason_codes": [
+          "TREND_PULLBACK",
+          "RANGE_REVERSAL",
+          "BREAKOUT",
+          "SQUEEZE_RELEASE",
+          "RSI_EXTREME",
+          "LONDON_FIX_PIN"
+        ],
+        "short_reason": "SELL",
+        "structure_state": "DEVELOPING"
+      },
+      "fallback": "DETERMINISTIC",
+      "latency_ms": 12670.27,
+      "signature": "fdbfff3c541d8f54848436bcb7e5fc09de0723093f4fdc38fbb878f5090be7c6",
+      "status": "LOCAL_AI_LOW_CONFIDENCE",
+      "wall_ms": 12695.78
+    }
+  ],
+  "timeouts": 0,
+  "valid_decisions": 10
+}

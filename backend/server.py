@@ -2850,6 +2850,11 @@ async def startup():
     except Exception as e:
         logger.warning(f"[outlook-notifications] could not create idempotency_key index: {e}")
     try:
+        from local_ai.remote_relay import ensure_indexes as _ensure_local_ai_remote_indexes
+        await _ensure_local_ai_remote_indexes(db)
+    except Exception as e:
+        logger.warning(f"[local-ai-remote] could not create queue indexes: {e}")
+    try:
         # Signal Outlook hot paths: tenant history/current lookups, the open
         # lifecycle scan, restart quote replay, and one authoritative outcome
         # row per outlook. These indexes affect monitoring latency only; they
@@ -7132,6 +7137,16 @@ AGENT_TOKEN = os.environ.get("CLOUD_AGENT_TOKEN", "")  # kept for backward compa
 # ===================================================================
 import market_outlook_routes as _mo_routes
 api_router.include_router(_mo_routes.build_router())
+
+# Customer EAs use this authenticated HTTPS relay.  The owner VPS claims
+# jobs outbound-only and keeps llama.cpp plus its gateway on loopback.
+from local_ai import remote_relay as _local_ai_remote
+api_router.include_router(_local_ai_remote.build_router(
+    db=db,
+    resolve_license=_resolve_monitor_license,
+    rate_limit=_rate_limit,
+    client_ip=_client_ip,
+))
 
 app.include_router(api_router)
 
