@@ -2692,7 +2692,7 @@ input group "=== AI DIRECTOR (v6.3.0 — real authority, not just advisory) ==="
 // v6.3.0: The AI Director is the final authority above all strategies.
 // Strategies submit votes/signals. AI Director reviews ALL context and decides:
 // ALLOW | BLOCK | REDUCE_LOT | INCREASE_LOT. Hard safety rules sit above AI.
-input bool   InpUseAI          = true;     // Enable AI Director (Claude + GPT dual vote)
+input bool   InpUseAI          = false;    // Paid legacy AI is OFF by default; local VPS AI is configured separately below
 input bool   InpAIAdvisoryOnly = false;    // v6.3.0: FALSE = AI has real authority. TRUE = log-only (advisory). Default: AUTHORITY MODE.
 input bool   InpAIDirectorAllGrades = true;  // v6.3.0: call AI Director for ALL grades (A,A+,B), not just A+
 input int    InpAIDirectorMinConf = 55;      // v6.3.0: minimum AI confidence % to ALLOW trade. Below = block/reduce.
@@ -2704,6 +2704,20 @@ input int    InpAIMarketStateCacheSec = 300;  // Reuse AI decision while market-
 input bool   InpAIOnlyHighImpact = true;      // Use paid LLM only on meaningful A/A+ or high-score decisions; local rules handle the rest
 input string InpAIMinGradeForLLM = "A";       // Minimum grade for paid LLM when high-impact mode is on
 input double InpAICostPer1KTokensUSD = 0.003; // Rough token-cost estimate for diagnostics only
+
+input group "=== LOCAL VPS AI — PURE M10 RESEARCH (ZERO CREDIT DEFAULT) ==="
+input bool   InpLocalAIEnabled = true;                    // Submit exactly one compact snapshot per eligible closed M10 candle
+input string InpLocalAIURL = "http://127.0.0.1:8765";    // Loopback-only VPS gateway; add this URL to MT5 WebRequest allow-list
+input string InpLocalAIModel = "qwen3-0.6b-q8";          // Hardware-selected local model; part of the persistent decision signature
+input int    InpLocalAIConfidenceThreshold = 70;          // Below this, ignore local AI and let the deterministic M10 engine decide
+input int    InpLocalAISubmitTimeoutMs = 1000;            // Submit/poll only; inference runs asynchronously outside the MT5 tick thread
+input bool   InpLocalAIReplayCacheEnabled = false;         // Tester only: consume exact snapshot/decision pairs from FILE_COMMON; never calls a network
+input bool   InpLocalAIReplayCollectMissing = false;       // Tester pass 1 only: append exact cache misses for offline local inference
+input string InpLocalAIReplayCacheFile = "XauCloud_local_ai_m10_replay_cache.tsv";
+input string InpLocalAIReplaySnapshotFile = "XauCloud_local_ai_m10_replay_snapshots.tsv";
+input bool   InpEmergentDifficultFallbackEnabled = false; // OFF by default; reserved for unresolved A/A+ only, never routine scans
+input int    InpEmergentDifficultDailyLimit = 2;           // Hard paid fallback ceiling when explicitly enabled
+input bool   InpResearchOwnerBlockersEnabled = true;      // Research A/B switch; FALSE removes only the enumerated owner-blocker list
 
 // v6.3.8 UPGRADE 3 — AI SL/TP Advisory System
 // Default: ADVISORY (logs AI suggestion, never applies automatically)
@@ -3123,7 +3137,7 @@ input bool   InpAllowEarlyLossExit            = false; // false=DEFAULT: block E
 input bool   InpAllowGivebackPanicClose       = false; // false=DEFAULT: a giveback%/context breach alone must not fully close a STILL-PROFITABLE position/basket either. Requires a confirmed reversal (or a repeat breach after the first soft-lock/partial). The floor SL already in place keeps protecting either way.
 
 input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
-input bool   InpAIExitOverride   = true;   // v6.3.0: TRUE — AI Director can HOLD, CLOSE, or LOCK positions
+input bool   InpAIExitOverride   = false;  // Paid exit AI is OFF by default in the zero-credit local-AI research build
 input int    InpAIExitMinSec     = 60;     // Min seconds between AI veto calls per position (cost control)
 input double InpAIExitMinProfit  = 30.0;   // Only call AI veto when profit/peak ≥ this $ (skip cheap closes)
 
@@ -14673,6 +14687,36 @@ XAU_M10SignalDecision   g_m10Decision;
 long     g_m10EvidenceSeq = 0;
 datetime g_m10LastEvidenceBar = 0;
 
+struct XAU_LocalAIM10Decision
+{
+   bool valid;
+   bool trusted;
+   bool candidateAllowed;
+   int direction;
+   int confidence;
+   string candidateSetup;
+   string marketState;
+   string structureState;
+   string momentumState;
+   string locationQuality;
+   string status;
+   string signature;
+   string reason;
+};
+XAU_LocalAIM10Decision g_localAIDecision;
+datetime g_localAIClosedBar=0;
+string   g_localAISignature="";
+int      g_localAISubmits=0;
+int      g_localAICacheHits=0;
+int      g_localAIFallbacks=0;
+int      g_localAIParseFailures=0;
+int      g_localAISkips=0;
+int      g_emergentDifficultCallsToday=0;
+bool     g_localAIReplayCacheLoaded=false;
+string   g_localAIReplaySnapshots[];
+string   g_localAIReplayResponses[];
+string   g_localAIReplayCollected[];
+
 // ===========================================================================
 // v6.25.5 owner directive 2026-07-17 (URGENT ARCHITECTURE CHANGE) -- M30
 // THREE-M10-EVIDENCE CONSENSUS ENGINE.
@@ -20751,6 +20795,77 @@ void OnTick()
                   setupScore,g_m10Decision.confidence,(int)g_m10Decision.evidenceId);
    }
 
+   // Zero-credit local AI handoff. A cache miss is submitted asynchronously
+   // and returns immediately, so MT5 never stops tick/position management to
+   // wait for CPU inference. Only a strict cache hit can affect candidate
+   // construction at this point. A fresh result is polled again at the
+   // existing pre-order recheck below. Confidence < threshold, pending,
+   // malformed, unavailable, or resource-guarded results are ignored and the
+   // deterministic pure-M10 path continues unchanged.
+   if(!resumeFrozenPrimaryCandidate)
+   {
+      string provisionalGrade=setupScore>=InpGradeAPlus?"A+":setupScore>=InpGradeA?"A":setupScore>=InpGradeB?"B":"UNCLASSIFIED";
+      XAU_LocalAIM10Decision localNow;
+      string localEligibilityReason="";
+      bool localEligible=XAU_LocalAIEligibleM10(signal,setupName,localEligibilityReason);
+      bool localTrusted=false;
+      if(localEligible)
+         localTrusted=XAU_LocalAISubmitM10(signal,setupName,provisionalGrade,localNow);
+      else
+      {
+         ZeroMemory(localNow);
+         ZeroMemory(g_localAIDecision);
+         g_localAIClosedBar=g_m10Snapshot.closedBarTime;
+         g_localAISignature="";
+         localNow.status="LOCAL_AI_SKIPPED";
+         localNow.reason=localEligibilityReason;
+         g_localAIDecision=localNow;
+         g_localAISkips++;
+         PrintFormat("LOCAL_AI_SKIPPED | closedM10=%s reason=%s deterministicEngineContinues=true",
+                     TimeToString(g_m10Snapshot.closedBarTime,TIME_DATE|TIME_MINUTES),localEligibilityReason);
+      }
+      if(localTrusted)
+      {
+         if(signal!=0 && (!localNow.candidateAllowed || localNow.direction!=signal))
+         {
+            PrintFormat("LOCAL_AI_CANDIDATE_REJECTED | closedM10=%s deterministicDirection=%s aiDirection=%s confidence=%d reason=%s | ownerAndNormalGatesNotBypassed=true",
+                        TimeToString(g_m10Snapshot.closedBarTime,TIME_DATE|TIME_MINUTES),signal==1?"BUY":"SELL",
+                        localNow.direction==1?"BUY":localNow.direction==-1?"SELL":"NONE",
+                        localNow.confidence,localNow.reason);
+            signal=0;
+            setupName="";
+            setupScore=0.0;
+         }
+         else if(signal==0 && localNow.candidateAllowed && localNow.direction!=0 &&
+                 localNow.direction==g_m10Decision.preferredDirection &&
+                 g_m10Decision.confidence>=55.0 && g_m10Snapshot.complete &&
+                 g_m10Snapshot.freshnessState=="FRESH" &&
+                 XAU_LocalAIAllowedSetup(localNow.candidateSetup))
+         {
+            signal=localNow.direction;
+            setupName=localNow.candidateSetup;
+            setupScore=XAU_CanonicalM10SetupScore(g_m10Decision.confidence);
+            PrintFormat("LOCAL_AI_CREATED_EXISTING_SETUP_CANDIDATE | closedM10=%s direction=%s setup=%s confidence=%d deterministicBuy=%.1f deterministicSell=%.1f | sharedOwnerNormalRiskPipeline=true",
+                        TimeToString(g_m10Snapshot.closedBarTime,TIME_DATE|TIME_MINUTES),signal==1?"BUY":"SELL",
+                        setupName,localNow.confidence,g_m10Decision.buyCaseScore,g_m10Decision.sellCaseScore);
+         }
+         else
+         {
+            PrintFormat("LOCAL_AI_APPROVED_CONTEXT_ONLY | direction=%s confidence=%d candidateAlready=%s",
+                        localNow.direction==1?"BUY":localNow.direction==-1?"SELL":"NONE",
+                        localNow.confidence,signal!=0?"true":"false");
+         }
+      }
+      else if(InpEmergentDifficultFallbackEnabled)
+      {
+         // Deliberately no silent paid call here. The optional cloud path is
+         // eligible only after final deterministic grading proves A/A+, and
+         // must be explicitly configured with its own secure credential and
+         // hard budget. Default production operation remains zero-credit.
+         Print("EMERGENT_DIFFICULT_FALLBACK_NOT_TRIGGERED | gradeNotFinal=true paidRoutineScan=false");
+      }
+   }
+
    // v6.24.0: Active Direction is context, not a global veto. Confirmed
    // opposite structure is evaluated by the dedicated structure authority.
    if(signal != 0 && g_activeDirection != DIRECTION_BOTH_ALLOWED)
@@ -21216,6 +21331,38 @@ void OnTick()
    // opposite BOS+HTF, or an extreme location with no realistic remaining
    // reward) -- this is a second confirmation of what already passed, not
    // a new independent veto that could disagree with it.
+   XAU_LocalAIM10Decision localFinal;
+   bool localFinalTrusted=XAU_LocalAIPollM10(localFinal);
+   if(localFinalTrusted)
+   {
+      if(!localFinal.candidateAllowed || localFinal.direction!=signal)
+      {
+         string localBlock=StringFormat("LOCAL_AI_QUALITY_GATE_REJECT:aiDirection=%s confidence=%d reason=%s",
+                                        localFinal.direction==1?"BUY":localFinal.direction==-1?"SELL":"NONE",
+                                        localFinal.confidence,localFinal.reason);
+         PrintFormat("LOCAL_AI_FINAL_GATE | closedM10=%s candidateDirection=%s result=BLOCKED %s | ownerBlocksCannotBeOverridden=true orderSendReached=false",
+                     TimeToString(g_localAIClosedBar,TIME_DATE|TIME_MINUTES),signal==1?"BUY":"SELL",localBlock);
+         XAU_RecordExactPrimaryOutcome(signal,setupName,localBlock,false);
+         g_alignedCandidates[0].firstCandidateTime=0;
+         g_alignedCandidates[0].readinessRecheckAt=0;
+         XAU_M30FinalizeCandidateWithoutTrade("CANCEL_LOCAL_AI_QUALITY_GATE");
+         return;
+      }
+      PrintFormat("LOCAL_AI_FINAL_GATE | closedM10=%s candidateDirection=%s result=APPROVED confidence=%d setup=%s",
+                  TimeToString(g_localAIClosedBar,TIME_DATE|TIME_MINUTES),signal==1?"BUY":"SELL",
+                  localFinal.confidence,localFinal.candidateSetup);
+   }
+   else
+   {
+      PrintFormat("LOCAL_AI_FALLBACK | phase=FINAL_GATE status=%s confidence=%d threshold=%d deterministicEngineContinues=true emergentFallbackEnabled=%s",
+                  localFinal.status,localFinal.confidence,InpLocalAIConfidenceThreshold,
+                  InpEmergentDifficultFallbackEnabled?"true":"false");
+      // The paid fallback is intentionally never triggered from the MT5
+      // event thread. When explicitly enabled it must be implemented by the
+      // same asynchronous gateway and remain A/A+-only with its hard daily
+      // ceiling; until then deterministic fallback is the safe behavior.
+   }
+
    XAU_MarketThesis preOrderThesis = XAU_ComputeMarketThesis(signal, false, false, g_transitionDecision);
    if(preOrderThesis.action == HARD_BLOCK)
    {
@@ -30808,6 +30955,335 @@ int ExtractJsonInt(const string &json, const string key, int fallback)
    return (int)ExtractJsonDouble(json, key, (double)fallback);
 }
 
+bool XAU_LocalAIValueInSet(string value,string csv)
+{
+   return StringFind(","+csv+",",","+value+",")>=0;
+}
+
+bool XAU_LocalAIAllowedSetup(string setup)
+{
+   return XAU_LocalAIValueInSet(setup,
+      "TREND_PULLBACK,RANGE_REVERSAL,BREAKOUT,SQUEEZE_RELEASE,RSI_EXTREME,LONDON_FIX_PIN,MULTI_EXTREME,ASIA_BREAKOUT,HTF_TREND_FOLLOW,ADAPTIVE_REVERSAL_RECLAIM,M10_ORIGINATED_CANDIDATE");
+}
+
+bool XAU_ParseLocalAIDecision(string response,XAU_LocalAIM10Decision &d)
+{
+   ZeroMemory(d);
+   d.status=ExtractJsonString(response,"status");
+   d.signature=ExtractJsonString(response,"signature");
+   if(d.status=="LOCAL_AI_PENDING" || d.status=="LOCAL_AI_NOT_FOUND")
+   {
+      d.reason="ASYNC_RESULT_NOT_READY_DETERMINISTIC_FALLBACK";
+      return true;
+   }
+   if(d.status=="LOCAL_AI_FALLBACK" || d.status=="LOCAL_AI_LOW_CONFIDENCE")
+   {
+      d.confidence=ExtractJsonInt(response,"confidence",0);
+      d.reason=ExtractJsonString(response,"reason");
+      if(StringLen(d.reason)==0) d.reason=d.status;
+      return true;
+   }
+   if(d.status!="LOCAL_AI_TRUSTED") return false;
+
+   string direction=ExtractJsonString(response,"preferred_direction");
+   d.direction=(direction=="BUY")?1:(direction=="SELL"?-1:0);
+   d.candidateAllowed=(StringFind(response,"\"candidate_allowed\":true")>=0);
+   d.candidateSetup=ExtractJsonString(response,"candidate_setup");
+   d.marketState=ExtractJsonString(response,"market_state");
+   d.structureState=ExtractJsonString(response,"structure_state");
+   d.momentumState=ExtractJsonString(response,"momentum_state");
+   d.locationQuality=ExtractJsonString(response,"location_quality");
+   d.confidence=ExtractJsonInt(response,"confidence",-1);
+   d.reason=ExtractJsonString(response,"short_reason");
+
+   bool enumsValid=
+      XAU_LocalAIValueInSet(direction,"BUY,SELL,NONE") &&
+      XAU_LocalAIValueInSet(d.marketState,"TREND,PULLBACK,BREAKOUT,REVERSAL,RANGE,NO_EDGE") &&
+      XAU_LocalAIValueInSet(d.structureState,"CONFIRMED,DEVELOPING,BROKEN,UNCLEAR") &&
+      XAU_LocalAIValueInSet(d.momentumState,"IMPROVING,STABLE,WEAKENING,CONTRADICTORY") &&
+      XAU_LocalAIValueInSet(d.locationQuality,"GOOD,EXCELLENT,LATE,RESET_PENDING,OTHER");
+   bool setupValid=(d.candidateSetup=="NONE" || XAU_LocalAIAllowedSetup(d.candidateSetup));
+   bool relationshipValid=(!d.candidateAllowed || (d.direction!=0 && d.candidateSetup!="NONE"));
+   if(!enumsValid || !setupValid || !relationshipValid || d.confidence<0 || d.confidence>100)
+      return false;
+
+   d.valid=true;
+   d.trusted=(d.confidence>=InpLocalAIConfidenceThreshold);
+   return true;
+}
+
+string XAU_LocalAIRecentM10OHLC()
+{
+   string out="[";
+   for(int shift=5;shift>=1;shift--)
+   {
+      if(shift<5) out+=",";
+      out+=StringFormat("[%.2f,%.2f,%.2f,%.2f]",
+                        iOpen(Symbol(),PERIOD_M10,shift),iHigh(Symbol(),PERIOD_M10,shift),
+                        iLow(Symbol(),PERIOD_M10,shift),iClose(Symbol(),PERIOD_M10,shift));
+   }
+   return out+"]";
+}
+
+string XAU_LocalAISnapshotJson(int signal,string setup,string provisionalGrade)
+{
+   string preferred=g_m10Decision.preferredDirection==1?"BUY":g_m10Decision.preferredDirection==-1?"SELL":"NONE";
+   string safeSetup=StringLen(setup)>0?setup:"NONE";
+   string grade=StringLen(provisionalGrade)>0?provisionalGrade:"UNCLASSIFIED";
+   string emaState=bufEMAFast[1]>bufEMASlow[1]?"FAST_ABOVE_SLOW":bufEMAFast[1]<bufEMASlow[1]?"FAST_BELOW_SLOW":"EMA_FLAT";
+   double momentum=g_m10Snapshot.buyPressure-g_m10Snapshot.sellPressure;
+   double room=(preferred=="BUY")?g_m10Snapshot.buyRoomR:(preferred=="SELL"?g_m10Snapshot.sellRoomR:MathMax(g_m10Snapshot.buyRoomR,g_m10Snapshot.sellRoomR));
+   string breakout=(currentRegime==REGIME_BREAKOUT_UP || currentRegime==REGIME_BREAKOUT_DOWN ||
+                    StringFind(safeSetup,"BREAKOUT")>=0)?"BREAKOUT":"NO_BREAKOUT";
+   string resetState=(StringFind(g_m10Snapshot.locationState,"RESET")>=0)?g_m10Snapshot.locationState:"CLEAR";
+   string htf=StringFormat("M15_RSI=%.1f HTF=%s H1=%s",
+                           ArraySize(bufRSI_M15)>1?bufRSI_M15[1]:50.0,
+                           g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"NEUTRAL",
+                           ArraySize(bufEMAFast_H1)>1 && ArraySize(bufEMASlow_H1)>1?
+                              (bufEMAFast_H1[1]>bufEMASlow_H1[1]?"BUY":bufEMAFast_H1[1]<bufEMASlow_H1[1]?"SELL":"NEUTRAL"):
+                              "UNAVAILABLE");
+   string openState=CountMyPositions()>0?"POSITION_OPEN":"FLAT";
+   return StringFormat(
+      "{\"symbol\":\"%s\",\"closed_m10_timestamp\":%I64d,\"recent_m10_ohlc\":%s,"
+      "\"atr\":%.5f,\"volatility_state\":\"%s\",\"ema_state\":\"%s\",\"rsi\":%.2f,"
+      "\"momentum_score\":%.2f,\"buy_score\":%.2f,\"sell_score\":%.2f,\"preferred_direction\":\"%s\","
+      "\"setup\":\"%s\",\"grade\":\"%s\",\"session\":\"%s\",\"regime\":\"%s\",\"location\":\"%s\","
+      "\"structure_state\":\"%s\",\"breakout_state\":\"%s\",\"pullback_state\":\"%s\",\"reset_state\":\"%s\","
+      "\"reward_room_r\":%.3f,\"higher_timeframe_context\":\"%s\",\"open_position_state\":\"%s\","
+      "\"allowed_candidate_setups\":[\"TREND_PULLBACK\",\"RANGE_REVERSAL\",\"BREAKOUT\",\"SQUEEZE_RELEASE\",\"RSI_EXTREME\",\"LONDON_FIX_PIN\",\"MULTI_EXTREME\",\"ASIA_BREAKOUT\",\"HTF_TREND_FOLLOW\",\"ADAPTIVE_REVERSAL_RECLAIM\",\"M10_ORIGINATED_CANDIDATE\"],"
+      "\"model_name\":\"%s\",\"prompt_schema_version\":\"xaucloud-local-ai-v4\"}",
+      BotMonitorJsonSafe(Symbol(),24),(long)g_m10Snapshot.closedBarTime,XAU_LocalAIRecentM10OHLC(),
+      ArraySize(bufATR)>1?bufATR[1]:0.0,BotMonitorJsonSafe(g_m10Snapshot.volatilityState,40),emaState,
+      ArraySize(bufRSI)>1?bufRSI[1]:50.0,momentum,g_m10Decision.buyCaseScore,g_m10Decision.sellCaseScore,preferred,
+      BotMonitorJsonSafe(safeSetup,80),BotMonitorJsonSafe(grade,24),BotMonitorJsonSafe(SessionTag(),40),
+      BotMonitorJsonSafe(RegimeName(),40),BotMonitorJsonSafe(g_m10Snapshot.locationState,60),
+      BotMonitorJsonSafe(g_m10Snapshot.structureState,60),breakout,BotMonitorJsonSafe(g_m10Snapshot.pullbackState,60),
+      BotMonitorJsonSafe(resetState,60),room,BotMonitorJsonSafe(htf,150),openState,BotMonitorJsonSafe(InpLocalAIModel,80));
+}
+
+bool XAU_LocalAIEligibleM10(int signal,string setup,string &reason)
+{
+   reason="";
+   if(!g_m10Snapshot.complete || g_m10Snapshot.dataState!="COMPLETE" ||
+      g_m10Snapshot.freshnessState!="FRESH")
+   {
+      reason="M10_SNAPSHOT_NOT_COMPLETE_AND_FRESH";
+      return false;
+   }
+   if(g_m10Decision.preferredDirection==0)
+   {
+      reason="NO_MEANINGFUL_M10_DIRECTION";
+      return false;
+   }
+   double leader=MathMax(g_m10Decision.buyCaseScore,g_m10Decision.sellCaseScore);
+   double separation=MathAbs(g_m10Decision.buyCaseScore-g_m10Decision.sellCaseScore);
+   bool existingCandidate=(signal!=0 && StringLen(setup)>0 && setup!="NONE" && XAU_LocalAIAllowedSetup(setup));
+   bool unresolvedHighValue=(signal==0 && leader>=70.0 && separation>=8.0);
+   if(!existingCandidate && !unresolvedHighValue)
+   {
+      reason=StringFormat("LOCAL_FIRST_FILTER:existingCandidate=false leader=%.1f separation=%.1f",leader,separation);
+      return false;
+   }
+   return true;
+}
+
+bool XAU_LocalAIReplayLoadCache()
+{
+   if(g_localAIReplayCacheLoaded) return ArraySize(g_localAIReplaySnapshots)>0;
+   g_localAIReplayCacheLoaded=true;
+   ArrayResize(g_localAIReplaySnapshots,0);
+   ArrayResize(g_localAIReplayResponses,0);
+   if(!FileIsExist(InpLocalAIReplayCacheFile,FILE_COMMON))
+   {
+      PrintFormat("LOCAL_AI_REPLAY_CACHE_NOT_FOUND | file=%s | deterministicFallback=true",InpLocalAIReplayCacheFile);
+      return false;
+   }
+   int h=FileOpen(InpLocalAIReplayCacheFile,FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+   if(h==INVALID_HANDLE)
+   {
+      PrintFormat("LOCAL_AI_REPLAY_CACHE_OPEN_FAILED | file=%s error=%d | deterministicFallback=true",InpLocalAIReplayCacheFile,GetLastError());
+      return false;
+   }
+   while(!FileIsEnding(h))
+   {
+      string line=FileReadString(h);
+      if(StringLen(line)<=0) continue;
+      int tab=StringFind(line,"\t");
+      if(tab<=0 || tab>=StringLen(line)-1) continue;
+      int n=ArraySize(g_localAIReplaySnapshots);
+      ArrayResize(g_localAIReplaySnapshots,n+1);
+      ArrayResize(g_localAIReplayResponses,n+1);
+      g_localAIReplaySnapshots[n]=StringSubstr(line,0,tab);
+      g_localAIReplayResponses[n]=StringSubstr(line,tab+1);
+   }
+   FileClose(h);
+   PrintFormat("LOCAL_AI_REPLAY_CACHE_LOADED | file=%s entries=%d exactSnapshotMatch=true",InpLocalAIReplayCacheFile,ArraySize(g_localAIReplaySnapshots));
+   return ArraySize(g_localAIReplaySnapshots)>0;
+}
+
+bool XAU_LocalAIReplayLookup(const string snapshot,string &response)
+{
+   XAU_LocalAIReplayLoadCache();
+   for(int i=0;i<ArraySize(g_localAIReplaySnapshots);i++)
+   {
+      if(g_localAIReplaySnapshots[i]==snapshot)
+      {
+         response=g_localAIReplayResponses[i];
+         return true;
+      }
+   }
+   response="";
+   return false;
+}
+
+void XAU_LocalAIReplayCollectSnapshot(const string snapshot)
+{
+   if(!InpLocalAIReplayCollectMissing || StringLen(snapshot)<=0) return;
+   for(int i=0;i<ArraySize(g_localAIReplayCollected);i++)
+      if(g_localAIReplayCollected[i]==snapshot) return;
+   int n=ArraySize(g_localAIReplayCollected);
+   ArrayResize(g_localAIReplayCollected,n+1);
+   g_localAIReplayCollected[n]=snapshot;
+
+   int h=FileOpen(InpLocalAIReplaySnapshotFile,FILE_READ|FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
+   if(h==INVALID_HANDLE)
+      h=FileOpen(InpLocalAIReplaySnapshotFile,FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
+   if(h==INVALID_HANDLE)
+   {
+      PrintFormat("LOCAL_AI_REPLAY_SNAPSHOT_WRITE_FAILED | file=%s error=%d",InpLocalAIReplaySnapshotFile,GetLastError());
+      return;
+   }
+   FileSeek(h,0,SEEK_END);
+   FileWriteString(h,snapshot+"\r\n");
+   FileFlush(h);
+   FileClose(h);
+   PrintFormat("LOCAL_AI_REPLAY_SNAPSHOT_COLLECTED | closedM10=%s row=%d file=%s",
+               TimeToString(g_m10Snapshot.closedBarTime,TIME_DATE|TIME_MINUTES),n+1,InpLocalAIReplaySnapshotFile);
+}
+
+bool XAU_LocalAIReplayDecision(const string snapshot,XAU_LocalAIM10Decision &decision)
+{
+   string response="";
+   if(!InpLocalAIReplayCacheEnabled || !XAU_LocalAIReplayLookup(snapshot,response))
+   {
+      XAU_LocalAIReplayCollectSnapshot(snapshot);
+      decision.status="LOCAL_AI_FALLBACK";
+      decision.reason=InpLocalAIReplayCacheEnabled?"REPLAY_CACHE_MISS":"REPLAY_COLLECTION_PASS";
+      g_localAIDecision=decision;
+      g_localAIFallbacks++;
+      return false;
+   }
+   if(!XAU_ParseLocalAIDecision(response,decision))
+   {
+      decision.status="LOCAL_AI_PARSE_FAILED";
+      decision.reason="REPLAY_CACHE_STRICT_RESPONSE_VALIDATION_FAILED";
+      g_localAIDecision=decision;
+      g_localAIParseFailures++;
+      g_localAIFallbacks++;
+      return false;
+   }
+   g_localAIClosedBar=g_m10Snapshot.closedBarTime;
+   g_localAISignature=decision.signature;
+   g_localAIDecision=decision;
+   g_localAICacheHits++;
+   PrintFormat("LOCAL_AI_REPLAY_CACHE_HIT | closedM10=%s signature=%s status=%s confidence=%d threshold=%d trusted=%s",
+               TimeToString(g_localAIClosedBar,TIME_DATE|TIME_MINUTES),decision.signature,decision.status,
+               decision.confidence,InpLocalAIConfidenceThreshold,decision.trusted?"true":"false");
+   return decision.valid && decision.trusted;
+}
+
+bool XAU_LocalAISubmitM10(int signal,string setup,string provisionalGrade,XAU_LocalAIM10Decision &decision)
+{
+   ZeroMemory(decision);
+   ZeroMemory(g_localAIDecision);
+   g_localAIClosedBar=g_m10Snapshot.closedBarTime;
+   g_localAISignature="";
+   if(!InpLocalAIEnabled)
+   {
+      decision.status="LOCAL_AI_DISABLED";
+      decision.reason="InpLocalAIEnabled=false";
+      return false;
+   }
+   string body=XAU_LocalAISnapshotJson(signal,setup,provisionalGrade);
+   if(InpBacktestMode || (bool)MQLInfoInteger(MQL_TESTER))
+   {
+      return XAU_LocalAIReplayDecision(body,decision);
+   }
+   if(StringFind(InpLocalAIURL,"http://127.0.0.1")!=0 && StringFind(InpLocalAIURL,"http://localhost")!=0)
+   {
+      decision.status="LOCAL_AI_FALLBACK";
+      decision.reason="NON_LOOPBACK_LOCAL_AI_URL_REJECTED";
+      g_localAIFallbacks++;
+      return false;
+   }
+
+   char postData[],result[]; string responseHeaders;
+   StringToCharArray(body,postData,0,StringLen(body));
+   ResetLastError();
+   int code=WebRequest("POST",InpLocalAIURL+"/api/local-ai/submit","Content-Type: application/json\r\n",
+                       MathMax(100,InpLocalAISubmitTimeoutMs),postData,result,responseHeaders);
+   string response=CharArrayToString(result);
+   if(code!=200 && code!=202)
+   {
+      decision.status="LOCAL_AI_FALLBACK";
+      decision.reason=StringFormat("LOCAL_AI_SUBMIT_HTTP_%d_MQLERR_%d",code,GetLastError());
+      g_localAIFallbacks++;
+      Print("LOCAL_AI_FALLBACK | ",decision.reason," | deterministicEngineContinues=true");
+      return false;
+   }
+   g_localAISubmits++;
+   if(!XAU_ParseLocalAIDecision(response,decision))
+   {
+      decision.status="LOCAL_AI_PARSE_FAILED";
+      decision.reason="STRICT_RESPONSE_VALIDATION_FAILED";
+      g_localAIParseFailures++;
+      g_localAIFallbacks++;
+      Print("LOCAL_AI_PARSE_FAILED | deterministicEngineContinues=true");
+      return false;
+   }
+   g_localAIClosedBar=g_m10Snapshot.closedBarTime;
+   g_localAISignature=decision.signature;
+   g_localAIDecision=decision;
+   if(StringFind(response,"\"cache_hit\":true")>=0) g_localAICacheHits++;
+   PrintFormat("LOCAL_AI_SUBMIT | closedM10=%s status=%s signature=%s confidence=%d threshold=%d trusted=%s deterministicFallback=%s",
+               TimeToString(g_localAIClosedBar,TIME_DATE|TIME_MINUTES),decision.status,
+               decision.signature,decision.confidence,InpLocalAIConfidenceThreshold,
+               decision.trusted?"true":"false",decision.trusted?"false":"true");
+   return decision.valid && decision.trusted;
+}
+
+bool XAU_LocalAIPollM10(XAU_LocalAIM10Decision &decision)
+{
+   ZeroMemory(decision);
+   if(!InpLocalAIEnabled) return false;
+   if(InpBacktestMode || (bool)MQLInfoInteger(MQL_TESTER))
+   {
+      decision=g_localAIDecision;
+      return decision.valid && decision.trusted;
+   }
+   if(StringLen(g_localAISignature)!=64) return false;
+   char requestData[],result[]; string responseHeaders;
+   ResetLastError();
+   int code=WebRequest("GET",InpLocalAIURL+"/api/local-ai/result?signature="+g_localAISignature,"",
+                       MathMax(100,MathMin(1000,InpLocalAISubmitTimeoutMs)),requestData,result,responseHeaders);
+   string response=CharArrayToString(result);
+   if(code!=200 && code!=202 && code!=404)
+   {
+      g_localAIFallbacks++;
+      return false;
+   }
+   if(!XAU_ParseLocalAIDecision(response,decision))
+   {
+      g_localAIParseFailures++;
+      g_localAIFallbacks++;
+      Print("LOCAL_AI_PARSE_FAILED | phase=FINAL_POLL deterministicEngineContinues=true");
+      return false;
+   }
+   g_localAIDecision=decision;
+   if(StringFind(response,"\"cache_hit\":true")>=0) g_localAICacheHits++;
+   return decision.valid && decision.trusted;
+}
+
 void XAU_AICostResetIfNewDay()
 {
    MqlDateTime dt; TimeCurrent(dt);
@@ -30823,6 +31299,7 @@ void XAU_AICostResetIfNewDay()
    g_aiLastSkipReason = "";
    g_aiLastStateHash = "";
    g_aiLastStateAt = 0;
+   g_emergentDifficultCallsToday = 0;
 }
 
 int XAU_AIGradeRank(string grade)
@@ -31047,7 +31524,7 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
    g_aiLastStatus = "AI Request Pending";
    g_aiLastFailureReason = "";
 
-   if(!InpUseAI)
+   if(!InpUseAI && !InpEmergentDifficultFallbackEnabled)
    {
       XAU_AIRecordLocalDecision("Local Decision (AI Disabled)", "InpUseAI=false");
       return 0;
