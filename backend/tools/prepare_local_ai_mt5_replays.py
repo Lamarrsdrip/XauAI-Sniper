@@ -90,7 +90,7 @@ def main() -> None:
     jobs = {
         "BASELINE": (
             "v62530_production_parity\\XauCloud_v62530_PRODUCTION",
-            {"InpLicensePIN": "ASE-TEST-0001", "InpAuditRunId": f"{args.prefix}_BASELINE"},
+            common_inputs | {"InpAuditRunId": f"{args.prefix}_BASELINE"},
         ),
         "COLLECT_WITH_OWNER": (
             "local_ai_m10\\XauCloud_M10_LOCAL_AI_WITH_OWNER_BLOCKERS",

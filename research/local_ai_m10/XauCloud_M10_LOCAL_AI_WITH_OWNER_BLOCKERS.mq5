@@ -2705,9 +2705,9 @@ input bool   InpAIOnlyHighImpact = true;      // Use paid LLM only on meaningful
 input string InpAIMinGradeForLLM = "A";       // Minimum grade for paid LLM when high-impact mode is on
 input double InpAICostPer1KTokensUSD = 0.003; // Rough token-cost estimate for diagnostics only
 
-input group "=== LOCAL VPS AI — PURE M10 RESEARCH (ZERO CREDIT DEFAULT) ==="
+input group "=== PRIVATE VPS AI — PURE M10 (ZERO CREDIT DEFAULT) ==="
 input bool   InpLocalAIEnabled = true;                    // Submit exactly one compact snapshot per eligible closed M10 candle
-input string InpLocalAIURL = "http://127.0.0.1:8765";    // Loopback-only VPS gateway; add this URL to MT5 WebRequest allow-list
+input string InpLocalAIURL = "https://xauaisniper.com";  // Customer-safe HTTPS relay; add this URL to MT5 WebRequest allow-list
 input string InpLocalAIModel = "qwen3-0.6b-q8";          // Hardware-selected local model; part of the persistent decision signature
 input int    InpLocalAIConfidenceThreshold = 70;          // Below this, ignore local AI and let the deterministic M10 engine decide
 input int    InpLocalAISubmitTimeoutMs = 1000;            // Submit/poll only; inference runs asynchronously outside the MT5 tick thread
@@ -31209,18 +31209,25 @@ bool XAU_LocalAISubmitM10(int signal,string setup,string provisionalGrade,XAU_Lo
    {
       return XAU_LocalAIReplayDecision(body,decision);
    }
-   if(StringFind(InpLocalAIURL,"http://127.0.0.1")!=0 && StringFind(InpLocalAIURL,"http://localhost")!=0)
+   bool loopback=(StringFind(InpLocalAIURL,"http://127.0.0.1")==0 ||
+                  StringFind(InpLocalAIURL,"http://localhost")==0);
+   string requestBody=body;
+   string endpoint=InpLocalAIURL+"/api/local-ai/submit";
+   if(!loopback)
    {
-      decision.status="LOCAL_AI_FALLBACK";
-      decision.reason="NON_LOOPBACK_LOCAL_AI_URL_REJECTED";
-      g_localAIFallbacks++;
-      return false;
+      string terminalId=StringFormat("%I64d-%s-%I64d",AccountInfoInteger(ACCOUNT_LOGIN),
+                                     BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER),60),
+                                     InpMagicNumber);
+      requestBody=StringFormat(
+         "{\"pin\":\"%s\",\"account\":\"%I64d\",\"broker_server\":\"%s\",\"terminal_instance_id\":\"%s\",\"snapshot\":%s}",
+         BotMonitorJsonSafe(InpLicensePIN,32),AccountInfoInteger(ACCOUNT_LOGIN),
+         BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER),90),BotMonitorJsonSafe(terminalId,120),body);
+      endpoint=InpLocalAIURL+"/api/local-ai/remote/submit";
    }
-
    char postData[],result[]; string responseHeaders;
-   StringToCharArray(body,postData,0,StringLen(body));
+   StringToCharArray(requestBody,postData,0,StringLen(requestBody));
    ResetLastError();
-   int code=WebRequest("POST",InpLocalAIURL+"/api/local-ai/submit","Content-Type: application/json\r\n",
+   int code=WebRequest("POST",endpoint,"Content-Type: application/json\r\n",
                        MathMax(100,InpLocalAISubmitTimeoutMs),postData,result,responseHeaders);
    string response=CharArrayToString(result);
    if(code!=200 && code!=202)
@@ -31262,10 +31269,22 @@ bool XAU_LocalAIPollM10(XAU_LocalAIM10Decision &decision)
       return decision.valid && decision.trusted;
    }
    if(StringLen(g_localAISignature)!=64) return false;
+   bool loopback=(StringFind(InpLocalAIURL,"http://127.0.0.1")==0 ||
+                  StringFind(InpLocalAIURL,"http://localhost")==0);
    char requestData[],result[]; string responseHeaders;
    ResetLastError();
-   int code=WebRequest("GET",InpLocalAIURL+"/api/local-ai/result?signature="+g_localAISignature,"",
-                       MathMax(100,MathMin(1000,InpLocalAISubmitTimeoutMs)),requestData,result,responseHeaders);
+   int code=0;
+   if(loopback)
+      code=WebRequest("GET",InpLocalAIURL+"/api/local-ai/result?signature="+g_localAISignature,"",
+                      MathMax(100,MathMin(1000,InpLocalAISubmitTimeoutMs)),requestData,result,responseHeaders);
+   else
+   {
+      string pollBody=StringFormat("{\"pin\":\"%s\",\"account\":\"%I64d\",\"signature\":\"%s\"}",
+                                   BotMonitorJsonSafe(InpLicensePIN,32),AccountInfoInteger(ACCOUNT_LOGIN),g_localAISignature);
+      StringToCharArray(pollBody,requestData,0,StringLen(pollBody));
+      code=WebRequest("POST",InpLocalAIURL+"/api/local-ai/remote/result","Content-Type: application/json\r\n",
+                      MathMax(100,MathMin(1000,InpLocalAISubmitTimeoutMs)),requestData,result,responseHeaders);
+   }
    string response=CharArrayToString(result);
    if(code!=200 && code!=202 && code!=404)
    {

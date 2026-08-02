@@ -21,6 +21,7 @@ def test_local_ai_is_pure_m10_and_submits_asynchronously():
     assert "PERIOD_M10" in ohlc
     assert "M5" not in ohlc + snapshot
     assert '"/api/local-ai/submit"' in submit
+    assert '"/api/local-ai/remote/submit"' in submit
     assert '"/api/local-ai/decision"' not in submit
 
 
@@ -32,7 +33,7 @@ def test_strategy_tester_uses_exact_offline_cache_and_never_webrequest():
     assert "FILE_COMMON" in replay
     assert "XAU_LocalAIReplayCollectSnapshot(snapshot)" in replay
     assert "MQLInfoInteger(MQL_TESTER)" in submit
-    tester_branch = submit[submit.index("MQLInfoInteger(MQL_TESTER)"):submit.index("NON_LOOPBACK_LOCAL_AI_URL_REJECTED")]
+    tester_branch = submit[submit.index("MQLInfoInteger(MQL_TESTER)"):submit.index("bool loopback=")]
     assert "XAU_LocalAIReplayDecision(body,decision)" in tester_branch
     assert "WebRequest" not in tester_branch
     assert "decision=g_localAIDecision" in poll
@@ -57,6 +58,20 @@ def test_zero_credit_and_confidence_fallback_are_defaults():
     assert "d.confidence>=InpLocalAIConfidenceThreshold" in parser
     assert 'd.status=="LOCAL_AI_FALLBACK"' in parser
     assert 'd.status=="LOCAL_AI_LOW_CONFIDENCE"' in parser
+
+
+def test_customer_transport_uses_authenticated_https_relay_without_worker_secret():
+    assert 'InpLocalAIURL = "https://xauaisniper.com"' in EA
+    submit = function(EA, "bool XAU_LocalAISubmitM10(", "bool XAU_LocalAIPollM10(")
+    poll = function(EA, "bool XAU_LocalAIPollM10(", "void XAU_AICostResetIfNewDay(")
+    assert '\\"pin\\"' in submit and "InpLicensePIN" in submit
+    assert '\\"account\\"' in submit and "ACCOUNT_LOGIN" in submit
+    assert '\\"snapshot\\"' in submit
+    assert '"/api/local-ai/remote/submit"' in submit
+    assert '"/api/local-ai/remote/result"' in poll
+    assert "XAU_LOCAL_AI_WORKER_SECRET" not in EA
+    assert "X-Xau-Worker-Token" not in EA
+    assert "M5" not in submit + poll
 
 
 def test_strict_local_result_cannot_bypass_owner_or_normal_pipeline():
