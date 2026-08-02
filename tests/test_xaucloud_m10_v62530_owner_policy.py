@@ -70,8 +70,8 @@ def test_owner_required_allow_block_matrix():
 
 def test_production_identity_and_source_mirror():
     text = source()
-    assert '#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.31"' in text
-    assert '#define XAUAI_EA_VERSION_NUM "6.25.31"' in text
+    assert '#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.30_PURE_M10_CYCLE_AUTHORITY_FIX"' in text
+    assert '#define XAUAI_EA_VERSION_NUM "6.25.30"' in text
     assert "ASIA_A_PLUS_ONLY_NO_A_PLUS_RESET_PENDING" not in text
     assert EA.read_bytes() == BACKEND_EA.read_bytes()
 
@@ -170,22 +170,21 @@ def test_embedded_self_test_covers_all_required_cases_without_duplicate_indices(
     runtime = function_body(
         text, "bool XAU_RunPermanentM10CategoryPolicySelfTests()\n{"
     )
-    assert "bool checks[14];" in runtime
-    for index in range(14):
+    assert "bool checks[16];" in runtime
+    for index in range(16):
         assert runtime.count(f"checks[{index}]=") == 1
-    assert "for(int i=0;i<14;i++)" in runtime
+    assert "for(int i=0;i<16;i++)" in runtime
     init = function_body(text, "int OnInit()")
     assert "XAU_RunPermanentM10CategoryPolicySelfTests()" in init
     assert "return INIT_FAILED;" in init
 
 
-def test_unrelated_production_controls_and_offline_lease_are_preserved():
+def test_unrelated_production_controls_and_license_gate_are_preserved():
     text = source()
     assert "input double InpStopLossGoldMove = 10.0;" in text
     assert "g_rExit[idx].extensionDeadline = triggerTime + 600;" in text
-    assert '#include "lease/XauCloudLeaseClient.mqh"' not in text
-    assert 'blockReasonOut="OFFLINE_LEASE_NOT_INCLUDED";' in text
-    assert "input bool   InpOfflineLeaseEnabled = false;" in text
-    assert "XAU_LeaseTryAuthorizeOffline(" in text
+    assert 'input string InpLicensePIN     = "";' in text
+    assert "licenseValid = ValidatePIN(InpLicensePIN);" in text
+    assert 'if(!licenseValid) { Alert("Invalid PIN: " + InpLicensePIN); return INIT_FAILED; }' in text
     assert "InpExtensionFloor015REnabled" in text
     assert "InpExtension70PctRatchetEnabled" in text

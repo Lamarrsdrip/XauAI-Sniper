@@ -1,13 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
-//|                                     XauCloud — M10 Gold Edition   |
-//|   v6.25.31 - Hybrid M5 evidence / M10 execution production       |
-//|   Two immutable closed-M5 observations may mature one candidate   |
-//|   only at the authoritative M10 boundary. R2 additionally resolves|
-//|   a narrow M10 transition close-call when both M5 bars strongly   |
-//|   agree. All shared gates and permanent owner blocks still apply. |
-//|   Single-file build: command center remains online-authoritative; |
-//|   no external lease include or offline-lease execution path.      |
+//|                                     XauAI Sniper — M10 Gold Edition|
 //|   v6.25.24 - 30-day replay consolidated root repair              |
 //|   Replay-proven fixes: 4807 requires persistence before targeted  |
 //|   rebuild (no per-bar handle churn); explicit WAIT thesis actions |
@@ -1953,8 +1946,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.258"
-#property description "XauCloud-m10 production: two closed-M5 evidence scans feed one authoritative M10-boundary candidate through all shared gates."
+#property version   "6.257"
+#property description "XauCloud-m10 permanent harmful-category blocks: Asia allows only A+, while A+ reset-pending entries are permanently blocked everywhere."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -2038,9 +2031,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.31"
-#define XAUAI_EA_VERSION_NUM "6.25.31"
-#define XAUAI_BUILD_HASH "xaucloud-m10-v62531-hybrid-m5-evidence-m10-execution-r2-20260729"
+#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.30_PURE_M10_CYCLE_AUTHORITY_FIX"
+#define XAUAI_EA_VERSION_NUM "6.25.30"
+#define XAUAI_BUILD_HASH "xaucloud-pure-m10-cycle-authority-restart-ledger-20260802"
 #define XAU_PYRAMID_BASKET_HARD_CLOSE_R 0.50
 #define XAU_COUNTER_EXCURSION_BUILD false
 #define XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE true
@@ -2067,108 +2060,6 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
 #include <Trade\AccountInfo.mqh>
-
-// Owner-approved single-file production build: no optional offline-lease
-// module and no sibling include directory. Online command-center reservation
-// remains authoritative; a backend outage fails closed. Compatibility stubs
-// keep older .set files loadable without a separate lease dependency.
-enum ENUM_XAU_LEASE_FAILURE_CLASS
-{
-   XAU_LFC_ONLINE_ALLOWED,
-   XAU_LFC_ONLINE_DENIED,
-   XAU_LFC_AUTHENTICATION_FAILURE,
-   XAU_LFC_AUTHORIZATION_FAILURE,
-   XAU_LFC_VALIDATION_FAILURE,
-   XAU_LFC_DUPLICATE_OR_CONFLICT,
-   XAU_LFC_SERVER_TEMPORARY_FAILURE,
-   XAU_LFC_TEMPORARY_CONNECTIVITY_FAILURE,
-   XAU_LFC_UNKNOWN_UNSAFE_FAILURE
-};
-
-struct XauLeaseState
-{
-   bool   loaded;
-   string leaseId;
-   long   leaseSequence;
-   int    remainingOfflineNewCampaigns;
-   int    consumedThisLease;
-};
-
-string XAU_LeaseFailureClassName(ENUM_XAU_LEASE_FAILURE_CLASS value)
-{
-   switch(value)
-   {
-      case XAU_LFC_ONLINE_ALLOWED:                 return "ONLINE_ALLOWED";
-      case XAU_LFC_ONLINE_DENIED:                  return "ONLINE_DENIED";
-      case XAU_LFC_AUTHENTICATION_FAILURE:         return "AUTHENTICATION_FAILURE";
-      case XAU_LFC_AUTHORIZATION_FAILURE:          return "AUTHORIZATION_FAILURE";
-      case XAU_LFC_VALIDATION_FAILURE:             return "VALIDATION_FAILURE";
-      case XAU_LFC_DUPLICATE_OR_CONFLICT:          return "DUPLICATE_OR_CONFLICT";
-      case XAU_LFC_SERVER_TEMPORARY_FAILURE:       return "SERVER_TEMPORARY_FAILURE";
-      case XAU_LFC_TEMPORARY_CONNECTIVITY_FAILURE: return "TEMPORARY_CONNECTIVITY_FAILURE";
-      default:                                     return "UNKNOWN_UNSAFE_FAILURE";
-   }
-}
-
-ENUM_XAU_LEASE_FAILURE_CLASS XAU_ClassifyReservationFailure(
-   int httpCode,
-   const string &responseBody,
-   bool claimedTrue)
-{
-   if(httpCode==-1) return XAU_LFC_TEMPORARY_CONNECTIVITY_FAILURE;
-   if(httpCode==200) return claimedTrue ? XAU_LFC_ONLINE_ALLOWED : XAU_LFC_ONLINE_DENIED;
-   if(httpCode==400) return XAU_LFC_VALIDATION_FAILURE;
-   if(httpCode==401) return XAU_LFC_AUTHENTICATION_FAILURE;
-   if(httpCode==403) return XAU_LFC_AUTHORIZATION_FAILURE;
-   if(httpCode==409) return XAU_LFC_DUPLICATE_OR_CONFLICT;
-   if(httpCode==500 || httpCode==502 || httpCode==503 || httpCode==504)
-      return XAU_LFC_SERVER_TEMPORARY_FAILURE;
-   return XAU_LFC_UNKNOWN_UNSAFE_FAILURE;
-}
-
-bool XAU_LeaseFailureAllowsOfflineFallback(ENUM_XAU_LEASE_FAILURE_CLASS value)
-{
-   return false;
-}
-
-string XAU_LeaseGetOrCreateInstallationId() { return ""; }
-string XAU_LeaseGetOrCreateTerminalId() { return ""; }
-bool XAU_LeaseLoadFromDisk(XauLeaseState &state) { return false; }
-bool XAU_LeaseConsumeOfflineAllowance(XauLeaseState &state,const string &executionKey) { return false; }
-void XAU_LeaseMutexRelease(const string &mutexName) {}
-void XAU_LeaseQueueReconciliationEvent(
-   const string &executionKey,
-   const string &leaseId,
-   long leaseSequence,
-   int direction,
-   const string &entryFamily,
-   string brokerTicket,
-   string result,
-   datetime executedAt) {}
-bool XAU_LeaseUploadReconciliationQueue(
-   const string &cloudUrl,
-   int timeoutMs,
-   const string &pin,
-   const string &account,
-   const string &brokerServer,
-   const string &symbol,
-   const string &installationId,
-   const string &terminalInstanceId) { return false; }
-bool XAU_LeaseTryAuthorizeOffline(
-   int direction,
-   const string &entryFamily,
-   const string &candidateExecutionKey,
-   const string &accountLogin,
-   const string &accountServer,
-   const string &symbol,
-   XauLeaseState &outState,
-   string &offlineExecutionKeyOut,
-   string &mutexNameOut,
-   string &blockReasonOut)
-{
-   blockReasonOut="OFFLINE_LEASE_NOT_INCLUDED";
-   return false;
-}
 
 //+------------------------------------------------------------------+
 //| INPUTS                                                           |
@@ -2827,9 +2718,6 @@ input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms
 input int    InpCloudOfflineFailThreshold = 3; // v6.13.0: consecutive cloud-call failures before logging CLOUD_OFFLINE_LOCAL_MODE
 input bool   InpBotMonitorEnable  = true;    // Command Center heartbeat/activity/command acknowledgements
 input int    InpBotMonitorHeartbeatSec = 20; // Send remote heartbeat every 10-30 seconds recommended
-
-input group "=== XAUCLOUD BOUNDED OFFLINE TRADING LEASE (owner directive 2026-07-25) ==="
-input bool   InpOfflineLeaseEnabled = false; // Legacy compatibility input only. The single-file v6.25.31 production build has no offline-lease path and always fails closed if online command-center reservation is unavailable.
 
 input group "=== TUNABLE THRESHOLDS (walk-forward optimize these) ==="
 input double InpGradeAPlus     = 5.5;      // Combined score for A+ (default 5.5)
@@ -3575,10 +3463,6 @@ int    hEMAFast=INVALID_HANDLE, hEMASlow=INVALID_HANDLE, hRSI=INVALID_HANDLE, hA
 int    hBBUpper=INVALID_HANDLE, hBBLower=INVALID_HANDLE, hBBMid=INVALID_HANDLE;
 int    hEMAFast_H1=INVALID_HANDLE, hEMASlow_H1=INVALID_HANDLE, hRSI_M15=INVALID_HANDLE, hStoch=INVALID_HANDLE;
 int    hEMAFast_H4=INVALID_HANDLE, hEMASlow_H4=INVALID_HANDLE;   // v4.8.0 — H4 HTF context
-// Research-only observation handles. They read closed M5 evidence and never
-// replace the production M10 indicator handles or feed an order directly.
-int    hHybridEMAFastM5=INVALID_HANDLE, hHybridEMASlowM5=INVALID_HANDLE;
-int    hHybridRSIM5=INVALID_HANDLE, hHybridATRM5=INVALID_HANDLE;
 double bufEMAFast[], bufEMASlow[], bufRSI[], bufATR[];
 double bufBBUpper[], bufBBLower[], bufBBMid[];
 double bufEMAFast_H1[], bufEMASlow_H1[], bufRSI_M15[];
@@ -5470,12 +5354,10 @@ double XAU_CampaignAggregateProfitUSD(int direction)
 // claim, the order does not send -- this is a deliberate, owner-requested
 // safety property (see item 4 of the full-repair spec), not an accident.
 bool XAU_ClaimDirectionReservation(int direction, string requestingFamily, string executionKey,
-                                   string &reservationIdOut, string &failReason,
-                                   ENUM_XAU_LEASE_FAILURE_CLASS &failureClassOut)
+                                   string &reservationIdOut, string &failReason)
 {
    reservationIdOut = "";
    failReason = "";
-   failureClassOut = XAU_LFC_UNKNOWN_UNSAFE_FAILURE;
    // v6.25.5 backtest-audit finding 2026-07-17 -- a real 30-day Strategy
    // Tester run (100% real-tick data, MetaQuotes-Demo) produced ZERO trades
    // despite ~9,000 candidates reaching FinalEntryArbiter/timing/freshness/
@@ -5496,7 +5378,6 @@ bool XAU_ClaimDirectionReservation(int direction, string requestingFamily, strin
    {
       reservationIdOut = StringFormat("TESTER_LOCAL_%s_%d_%I64d", direction == 1 ? "BUY" : "SELL",
                                        (int)TimeCurrent(), GetMicrosecondCount());
-      failureClassOut = XAU_LFC_ONLINE_ALLOWED;
       PrintFormat("DIRECTION_RESERVATION_CLAIMED_TESTER_BYPASS direction=%s family=%s reservationId=%s reason=strategy_tester_is_always_a_single_isolated_instance",
                   direction == 1 ? "BUY" : "SELL", requestingFamily, reservationIdOut);
       return true;
@@ -5512,21 +5393,14 @@ bool XAU_ClaimDirectionReservation(int direction, string requestingFamily, strin
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
    ResetLastError();
    int code = WebRequest("POST", InpCloudURL + "/api/cloud/reservation/claim", hdr, InpCloudTimeoutMs, pd, res, rh);
-   string response = (code != -1) ? CharArrayToString(res) : "";
-   bool claimed = (StringFind(response, "\"claimed\":true") >= 0);
-   // Strict classification (see audits/offline_lease/03_lease_architecture.md
-   // Phase 6) -- replaces the old single RESERVATION_BACKEND_UNREACHABLE
-   // bucket that conflated a genuine timeout with an explicit backend
-   // deny/auth/validation failure. Only the two TEMPORARY classes may
-   // ever be consulted against the cached offline lease by the caller;
-   // every other value blocks the trade exactly as it always has.
-   failureClassOut = XAU_ClassifyReservationFailure(code, response, claimed);
    if(code != 200)
    {
-      failReason = StringFormat("RESERVATION_BACKEND_UNREACHABLE httpCode=%d err=%d class=%s", code, GetLastError(), XAU_LeaseFailureClassName(failureClassOut));
+      failReason = StringFormat("RESERVATION_BACKEND_UNREACHABLE httpCode=%d err=%d", code, GetLastError());
       PrintFormat("DIRECTION_RESERVATION_CLAIM_FAILED direction=%s family=%s reason=%s", direction==1?"BUY":"SELL", requestingFamily, failReason);
       return false;
    }
+   string response = CharArrayToString(res);
+   bool claimed = (StringFind(response, "\"claimed\":true") >= 0);
    if(!claimed)
    {
       failReason = "ACTIVE_EXECUTION_RESERVED_BY_ANOTHER_TERMINAL_OR_FAMILY";
@@ -5628,41 +5502,17 @@ bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, strin
    return XAU_CanOpenDirection(requestedDirection, requestingFamily, blockReason, unusedReservationId, fallbackKey);
 }
 
-// Side channel for the offline-lease outcome of the most recent
-// XAU_CanOpenDirection() call -- read by the CORE call site immediately
-// after the call (single-threaded, no race) to know whether the local
-// mutex must be released and the offline allowance consumed once the
-// real broker result is known. Never touched by the PYRAMID/
-// COUNTER_EXCURSION call sites (they never pass allowOfflineFallback=true).
-bool   g_xauLeaseLastAuthWasOffline = false;
-string g_xauLeaseLastOfflineExecutionKey = "";
-string g_xauLeaseLastOfflineMutexName = "";
-
 // Required flow (owner item 4): 1) check live positions 2) check pending
 // orders 3) check existing reservation (implicit in step 4's atomic claim)
 // 4) atomically claim requested direction 5) recheck live/pending exposure
 // (catches a race that landed a real position between the initial scan and
 // the claim) 6-9) caller sends the order, records the broker result, and
 // releases/lets-expire the reservation -- see the 3 call sites.
-//
-// allowOfflineFallback (owner directive 2026-07-25, default false so
-// PYRAMID/COUNTER_EXCURSION are completely unaffected): when true AND
-// InpOfflineLeaseEnabled AND the reservation claim fails with a
-// classification that genuinely means "the backend did not answer"
-// (never an explicit deny/auth/validation failure), consult a valid
-// signed offline lease this terminal is holding instead of blocking
-// outright. See audits/offline_lease/ for the full design. This never
-// weakens the existing online path in any way -- it only adds a new
-// fallback that only ever engages after the online path has already
-// failed for a qualifying reason.
 bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, string &blockReason,
-                          string &reservationIdOut, string executionKey, bool allowOfflineFallback = false)
+                          string &reservationIdOut, string executionKey)
 {
    blockReason = "";
    reservationIdOut = "";
-   g_xauLeaseLastAuthWasOffline = false;
-   g_xauLeaseLastOfflineExecutionKey = "";
-   g_xauLeaseLastOfflineMutexName = "";
    if(requestedDirection != 1 && requestedDirection != -1)
    {
       blockReason = "INVALID_DIRECTION";
@@ -5673,38 +5523,11 @@ bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, strin
       return false;
 
    string reservationFailReason = "";
-   ENUM_XAU_LEASE_FAILURE_CLASS failureClass = XAU_LFC_UNKNOWN_UNSAFE_FAILURE;
    if(!XAU_ClaimDirectionReservation(requestedDirection, requestingFamily, executionKey,
-                                     reservationIdOut, reservationFailReason, failureClass))
+                                     reservationIdOut, reservationFailReason))
    {
-      if(allowOfflineFallback && InpOfflineLeaseEnabled && XAU_LeaseFailureAllowsOfflineFallback(failureClass))
-      {
-         XauLeaseState leaseState;
-         string offlineExecKey = "", offlineMutexName = "", offlineBlockReason = "";
-         if(XAU_LeaseTryAuthorizeOffline(requestedDirection, requestingFamily, executionKey,
-                                         IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)),
-                                         AccountInfoString(ACCOUNT_SERVER), Symbol(),
-                                         leaseState, offlineExecKey, offlineMutexName, offlineBlockReason))
-         {
-            reservationIdOut = "OFFLINE_LEASE:" + leaseState.leaseId;
-            g_xauLeaseLastAuthWasOffline = true;
-            g_xauLeaseLastOfflineExecutionKey = offlineExecKey;
-            g_xauLeaseLastOfflineMutexName = offlineMutexName;
-            PrintFormat("XAUCLOUD_OFFLINE_LEASE_AUTHORIZED direction=%s family=%s leaseId=%s sequence=%I64d remainingBeforeThisSend=%d",
-                        requestedDirection==1?"BUY":"SELL", requestingFamily, leaseState.leaseId, leaseState.leaseSequence,
-                        (int)(leaseState.remainingOfflineNewCampaigns - leaseState.consumedThisLease));
-         }
-         else
-         {
-            blockReason = StringFormat("CROSS_INSTANCE_RESERVATION_DENIED reason=%s offlineLeaseReason=%s", reservationFailReason, offlineBlockReason);
-            return false;
-         }
-      }
-      else
-      {
-         blockReason = StringFormat("CROSS_INSTANCE_RESERVATION_DENIED reason=%s", reservationFailReason);
-         return false;
-      }
+      blockReason = StringFormat("CROSS_INSTANCE_RESERVATION_DENIED reason=%s", reservationFailReason);
+      return false;
    }
 
    // Recheck live/pending exposure -- a real position or pending order
@@ -5715,15 +5538,7 @@ bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, strin
    // scan and the reservation claim above.
    if(!XAU_CanOpenDirectionLocalScanOnly(requestedDirection, requestingFamily, blockReason))
    {
-      if(g_xauLeaseLastAuthWasOffline)
-      {
-         XAU_LeaseMutexRelease(g_xauLeaseLastOfflineMutexName);
-         g_xauLeaseLastAuthWasOffline = false;
-      }
-      else
-      {
-         XAU_ReleaseDirectionReservation(reservationIdOut);
-      }
+      XAU_ReleaseDirectionReservation(reservationIdOut);
       reservationIdOut = "";
       return false;
    }
@@ -7389,15 +7204,14 @@ int g_ownerLocationLateCandidates      = 0;
 int g_ownerLocationLateBlocked         = 0;
 int g_ownerLocationLateExecuted        = 0;
 
-// v6.25.30 OWNER-APPROVED PERMANENT CATEGORY POLICY. These are immutable
-// code-level vetoes, not inputs. Per-reason counters intentionally overlap
-// where the policy returns multiple reasons; the unique counter records each
-// candidate identity once.
+// XauCloud-m10 experimental permanent category policy. These are immutable
+// code-level vetoes, not inputs. The per-reason counters intentionally
+// overlap; g_permM10UniqueBlocked counts each candidate identity once.
 int    g_permM10UniqueBlocked              = 0;
 int    g_permM10GradeBReversalBlocked      = 0;
-int    g_permM10AsiaGradeBBlocked          = 0; // retained legacy counter/reason
-int    g_permM10AsiaNonAPlusBlocked        = 0;
-int    g_permM10APlusResetPendingBlocked   = 0;
+int    g_permM10AsiaGradeBBlocked          = 0;
+int    g_permM10AsiaNonAPlusBlocked            = 0;
+int    g_permM10APlusResetPendingBlocked       = 0;
 int    g_permM10ResetPendingGradeBBlocked  = 0;
 int    g_permM10FinalAssertionFailures     = 0;
 string g_permM10BlockedCandidateIds[];
@@ -7743,7 +7557,11 @@ bool       g_remoteStopTrading = false;
 string     g_lastRemoteCommandState = "";
 int        g_ticksSinceEntry = 0;     // How many ticks since last position opened
 datetime   g_lastEntryScanAt = 0;     // v5.8.8: last time indicator buffers loaded and entry scan ran
-datetime   g_lastEntryBarSeen = 0;    // v5.8.8: robust M5 bar marker, not trapped in local static state
+datetime   g_lastEntryBarSeen = 0;    // current open M10 bar whose preceding close was processed
+string     g_lastOpenTradeFailureReason = "";
+uint       g_lastOpenTradeBrokerRetcode = 0;
+bool       g_lastOpenTradeOrderSendReached = false;
+datetime   g_lastRuntimeM10GapLoggedAtClose = 0;
 datetime   g_lastScanSkipLog = 0;     // v5.8.8: throttled reason logs for idle/watchdog decisions
 datetime   g_lastWatchdogLog = 0;     // v6.17.13: separate throttle for the watchdog-forcing print (used to be unthrottled)
 datetime   g_lastForceOpenBar = 0;    // v6.17.15: duplicate same-candle FORCE_OPEN_TRADE protection
@@ -10970,7 +10788,8 @@ bool XAU_RunOwnerRExitSelfTests()
 
 bool XAU_RunNoBreakoutAndSnapshotSelfTests();
 bool XAU_RunPermanentM10CategoryPolicySelfTests();
-bool XAU_RunHybridM5StateSelfTests();
+void XAU_ReconcilePureM10CycleStateOnInit();
+void XAU_LogRuntimePureM10Gap(datetime lastSeenClose,datetime currentClose);
 
 int OnInit()
 {
@@ -10984,8 +10803,6 @@ int OnInit()
    if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunNoBreakoutAndSnapshotSelfTests())
       return INIT_FAILED;
    if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunPermanentM10CategoryPolicySelfTests())
-      return INIT_FAILED;
-   if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunHybridM5StateSelfTests())
       return INIT_FAILED;
 
    // v6.21.2 Part 3 — CONFIG-AGREEMENT ASSERTION: InpNormalRiskPct (the sole normal-
@@ -11026,7 +10843,7 @@ int OnInit()
                InpNormalRiskPct, InpMaxRiskPctEquity, InpMaxAggregateRiskPct);
    Print("OWNER_ENTRY_TIME_POLICY | blackout=NONE | 06:10-07:30=ELIGIBLE_IF_NORMAL_LOGIC_APPROVES | 14:10-15:30=ELIGIBLE_IF_NORMAL_LOGIC_APPROVES");
    Print("OWNER_NO_BREAKOUT_POLICY | mode=HARD_BLOCK_GLOBAL | finalReason=BREAKOUT_MARKET_NOT_ALLOWED | regimes=BRKT_UP,BRKT_DN | setupSourceCampaignBreakout=BLOCK | AsiaSessionAllowed=true | AsiaOnlyAPlusAllowed=true | AsiaAandBBlockedPermanently=true | APlusResetPendingBlockedEverywhere=true | noTimeCooldown=true | closedBarAuthority=M10");
-   Print("PERMANENT_M10_CATEGORY_POLICY | policyId=XAUCLOUD_M10_OWNER_POLICY_V62530 | mode=HARD_BLOCK_NON_TOGGLEABLE | rules=ASIA_NON_A_PLUS,A_PLUS_RESET_PENDING,GRADE_B_AND_REVERSAL,RESET_PENDING_AND_GRADE_B | AIOverride=false | manualOverride=false | recoveryOverride=false | transitionOverride=false | pyramidOverride=false");
+   Print("PERMANENT_M10_CATEGORY_POLICY | mode=HARD_BLOCK_NON_TOGGLEABLE | rules=ASIA_NON_A_PLUS,A_PLUS_RESET_PENDING,GRADE_B_AND_REVERSAL,RESET_PENDING_AND_GRADE_B | AIOverride=false | manualOverride=false | recoveryOverride=false | pyramidOverride=false");
    if(!XAU_ValidateAdaptiveTransitionConfig())
    {
       Print("ADAPTIVE_TRANSITION_CONFIG ERROR: refusing initialization rather than running with contradictory direction/location authority.");
@@ -11103,10 +10920,6 @@ int OnInit()
    hEMASlow_H4 = iMA(Symbol(), InpContextTF, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
    hRSI_M15  = iRSI(Symbol(), PERIOD_M15, InpRSIPeriod, PRICE_CLOSE);
    hStoch    = iStochastic(Symbol(), XAU_PRIMARY_DECISION_TF, 14, 3, 3, MODE_SMA, STO_LOWHIGH);
-   hHybridEMAFastM5 = iMA(Symbol(), PERIOD_M5, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
-   hHybridEMASlowM5 = iMA(Symbol(), PERIOD_M5, InpEMASlow, 0, MODE_EMA, PRICE_CLOSE);
-   hHybridRSIM5     = iRSI(Symbol(), PERIOD_M5, InpRSIPeriod, PRICE_CLOSE);
-   hHybridATRM5     = iATR(Symbol(), PERIOD_M5, InpATRPeriod);
 
    // v6.25.24: only handles actually consumed by the immutable M10 snapshot
    // are mandatory. H1 is soft context. The legacy-named H4/context handles
@@ -11122,10 +10935,6 @@ int OnInit()
       Print("INDICATOR_H1_SOFT_CONTEXT_UNAVAILABLE_AT_INIT: M10 engine remains active with neutral H1 context");
    if(hEMAFast_H4==INVALID_HANDLE || hEMASlow_H4==INVALID_HANDLE)
       Print("INDICATOR_CONTEXT_DUPLICATE_SOFT_UNAVAILABLE_AT_INIT: canonical M10 EMA snapshot remains authoritative");
-   if(hHybridEMAFastM5==INVALID_HANDLE || hHybridEMASlowM5==INVALID_HANDLE ||
-      hHybridRSIM5==INVALID_HANDLE || hHybridATRM5==INVALID_HANDLE)
-      Print("HYBRID_M5_OBSERVATION_HANDLES_UNAVAILABLE | action=NORMAL_M10_FALLBACK | production M10 scanner remains active");
-   Print("HYBRID_M5_EVIDENCE_POLICY | scan1=FIRST_CLOSED_M5_IMMUTABLE_NO_EXECUTION | scan2=SECOND_CLOSED_M5_AT_M10_BOUNDARY | candidatePath=SHARED_PRODUCTION_GATES | fixedEntryTimer=UNCHANGED | riskExitsBlocks=UNCHANGED");
 
    ArraySetAsSeries(bufEMAFast, true); ArraySetAsSeries(bufEMASlow, true);
    ArraySetAsSeries(bufRSI, true);     ArraySetAsSeries(bufATR, true);
@@ -11502,6 +11311,32 @@ int OnInit()
    }
    XAU_RExit_LoadPersistedState();
    XAU_ReconcileRExitOnInit();
+   XAU_ReconcilePureM10CycleStateOnInit();
+
+   datetime startupOpenM10=iTime(Symbol(),XAU_PRIMARY_DECISION_TF,0);
+   datetime startupClosedM10=iTime(Symbol(),XAU_PRIMARY_DECISION_TF,1);
+   datetime startupNextClose=startupOpenM10>0
+      ? startupOpenM10+PeriodSeconds(XAU_PRIMARY_DECISION_TF) : 0;
+   bool startupSeriesSynced=(bool)SeriesInfoInteger(Symbol(),XAU_PRIMARY_DECISION_TF,SERIES_SYNCHRONIZED);
+   bool startupIndicatorsHealthy=
+      hEMAFast!=INVALID_HANDLE && hEMASlow!=INVALID_HANDLE && hRSI!=INVALID_HANDLE &&
+      hATR!=INVALID_HANDLE && hBBUpper!=INVALID_HANDLE && hRSI_M15!=INVALID_HANDLE &&
+      hStoch!=INVALID_HANDLE && BarsCalculated(hEMAFast)>1 && BarsCalculated(hEMASlow)>1 &&
+      BarsCalculated(hRSI)>1 && BarsCalculated(hATR)>1 && BarsCalculated(hBBUpper)>1;
+   PrintFormat("PURE_M10_STARTUP_HEALTH | activeBuild=%s | version=%s | inputHash=%I64u | account=%I64d | server=%s | symbol=%s | magic=%d | chartTF=%s | signalTF=M10 | lastClosedBar=%s | nextExpectedScan=%s | seriesAvailable=%s | seriesSynchronized=%s | scannerHealth=%s | indicatorHealth=%s | licenseStatus=%s | reservationStatus=NOT_CLAIMED | terminalConnected=%s | terminalTradeAllowed=%s | programTradeAllowed=%s | accountTradeAllowed=%s | activeBlocks=ASIA_NON_A_PLUS,A_PLUS_RESET_PENDING,GRADE_B_REVERSAL,RESET_PENDING_GRADE_B,OWNER_BREAKOUT,OWNER_LOCATION_EXCELLENT,OWNER_LOCATION_LATE",
+               XAUAI_BUILD_HASH,XAUAI_EA_VERSION,XAUAI_InputHash(),
+               AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_SERVER),Symbol(),InpMagicNumber,
+               EnumToString((ENUM_TIMEFRAMES)Period()),
+               TimeToString(startupClosedM10,TIME_DATE|TIME_MINUTES),
+               TimeToString(startupNextClose,TIME_DATE|TIME_MINUTES),
+               startupClosedM10>0?"true":"false",startupSeriesSynced?"true":"false",
+               (startupClosedM10>0 && startupSeriesSynced)?"READY":"WAITING_FOR_M10_SERIES",
+               startupIndicatorsHealthy?"HEALTHY":"WARMING_UP",
+               licenseValid?"VALID":"INVALID",
+               TerminalInfoInteger(TERMINAL_CONNECTED)?"true":"false",
+               TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)?"true":"false",
+               MQLInfoInteger(MQL_TRADE_ALLOWED)?"true":"false",
+               AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)?"true":"false");
    return INIT_SUCCEEDED;
 }
 
@@ -11510,24 +11345,16 @@ void OnDeinit(const int reason)
    EventKillTimer();
    XAU_RExit_SaveState(true); // Fix 16: force-flush R-exit state on shutdown/reload regardless of dirty flag
    PrintBacktestAuditReport();
-   PrintFormat("PERMANENT_M10_CATEGORY_BLOCK_SUMMARY | policyId=XAUCLOUD_M10_OWNER_POLICY_V62530 | uniqueBlocked=%d | asiaNonAPlus=%d | aPlusResetPending=%d | gradeBReversal=%d | asiaGradeBLegacy=%d | resetPendingGradeB=%d | finalAssertionBlocks=%d",
+   PrintFormat("PERMANENT_M10_CATEGORY_BLOCK_SUMMARY | uniqueBlocked=%d | asiaNonAPlus=%d | aPlusResetPending=%d | gradeBReversal=%d | asiaGradeBLegacy=%d | resetPendingGradeB=%d | finalAssertionFailures=%d",
                g_permM10UniqueBlocked,g_permM10AsiaNonAPlusBlocked,
                g_permM10APlusResetPendingBlocked,g_permM10GradeBReversalBlocked,
                g_permM10AsiaGradeBBlocked,g_permM10ResetPendingGradeBBlocked,
                g_permM10FinalAssertionFailures);
-   PrintFormat("HYBRID_M5_FUNNEL_SUMMARY | scan1=%d | scan2=%d | candidatesCreated=%d | discoveryRejected=%d | scan1MissedFallback=%d | permanentBlocks=%d | executed=%d",
-               g_hybridM5Scan1Count,g_hybridM5Scan2Count,g_hybridM5CandidateCount,
-               g_hybridM5RejectedCount,g_hybridM5FallbackCount,
-               g_hybridM5PermanentBlockCount,g_hybridM5ExecutedCount);
    IndicatorRelease(hEMAFast); IndicatorRelease(hEMASlow);
    IndicatorRelease(hRSI); IndicatorRelease(hATR); IndicatorRelease(hBBUpper);
    IndicatorRelease(hEMAFast_H1); IndicatorRelease(hEMASlow_H1); IndicatorRelease(hRSI_M15);
    IndicatorRelease(hEMAFast_H4); IndicatorRelease(hEMASlow_H4);
    IndicatorRelease(hStoch);
-   if(hHybridEMAFastM5!=INVALID_HANDLE) IndicatorRelease(hHybridEMAFastM5);
-   if(hHybridEMASlowM5!=INVALID_HANDLE) IndicatorRelease(hHybridEMASlowM5);
-   if(hHybridRSIM5!=INVALID_HANDLE) IndicatorRelease(hHybridRSIM5);
-   if(hHybridATRM5!=INVALID_HANDLE) IndicatorRelease(hHybridATRM5);
    SavePatterns();
    // v6.3.8 Upgrade 6 / v6.3.9: final gate analytics report on shutdown
    PrintGateReport();
@@ -11538,34 +11365,10 @@ void OnDeinit(const int reason)
    Print("=== ", XAUAI_EA_VERSION, " STI STOPPED | Trades:", totalTrades, " W:", wins, " L:", losses, " ===");
 }
 
-datetime g_xauLeaseLastReconcileAttempt = 0;
-
 void OnTimer()
 {
    int secondsSinceScan = (g_lastEntryScanAt > 0) ? (int)(TimeCurrent() - g_lastEntryScanAt) : 999999;
    g_timerForceScan = (InpScanWatchdogMin > 0 && secondsSinceScan >= InpScanWatchdogMin * 60);
-
-   // Phase 15: upload any queued offline-executed events once the backend
-   // is reachable again, rate-limited to once per minute so a persistent
-   // outage doesn't spam WebRequest calls. Never requests a new lease
-   // until this succeeds (queue empties) -- that gating lives in the
-   // lease-request call site itself (not yet wired to an automatic
-   // renewal loop in this release; renewal remains an explicit action,
-   // same as the initial request).
-   if(InpOfflineLeaseEnabled && !MQLInfoInteger(MQL_TESTER) &&
-      (TimeCurrent() - g_xauLeaseLastReconcileAttempt) >= 60)
-   {
-      g_xauLeaseLastReconcileAttempt = TimeCurrent();
-      string xauLeaseAccountLogin = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
-      string xauLeaseAccountServer = AccountInfoString(ACCOUNT_SERVER);
-      string xauLeaseSymbol = Symbol();
-      string xauLeaseInstallationId = XAU_LeaseGetOrCreateInstallationId();
-      string xauLeaseTerminalId = XAU_LeaseGetOrCreateTerminalId();
-      XAU_LeaseUploadReconciliationQueue(InpCloudURL, InpCloudTimeoutMs, InpLicensePIN,
-                                         xauLeaseAccountLogin, xauLeaseAccountServer, xauLeaseSymbol,
-                                         xauLeaseInstallationId, xauLeaseTerminalId);
-   }
-
    OnTick();
 }
 
@@ -11744,6 +11547,201 @@ void XAU_LogLogicalScanCompleted(datetime closedBar,string outcome)
    XAU_LogScanState(outcome);
 }
 
+string XAU_PureM10CycleGVPrefix()
+{
+   return "XAUAI_PURE_M10_CYCLE_"+XAU_ProductionStateScope()+"_";
+}
+
+void XAU_PersistCompletedM10Cycle(datetime closedBar,
+                                  ENUM_XAU_M10_TERMINAL_DECISION_STATE state)
+{
+   if(closedBar<=0 || (bool)MQLInfoInteger(MQL_TESTER)) return;
+   string p=XAU_PureM10CycleGVPrefix();
+   GlobalVariableSet(p+"lastClosedBar",(double)closedBar);
+   GlobalVariableSet(p+"terminalState",(double)state);
+   GlobalVariablesFlush();
+}
+
+// Restart/reconnect contract for the pure M10 scanner. A bar is persisted
+// only after it has a terminal decision. The same completed close is then
+// suppressed after an EA/terminal restart, while an interrupted close is
+// retried. Broker bars which became historical while the terminal was
+// offline are explicitly ledgered; they are never traded retroactively.
+void XAU_ReconcilePureM10CycleStateOnInit()
+{
+   if((bool)MQLInfoInteger(MQL_TESTER)) return;
+   datetime currentOpen=iTime(Symbol(),XAU_PRIMARY_DECISION_TF,0);
+   datetime latestClosed=iTime(Symbol(),XAU_PRIMARY_DECISION_TF,1);
+   string p=XAU_PureM10CycleGVPrefix();
+   datetime persisted=GlobalVariableCheck(p+"lastClosedBar")
+      ? (datetime)GlobalVariableGet(p+"lastClosedBar") : 0;
+   int persistedState=GlobalVariableCheck(p+"terminalState")
+      ? (int)GlobalVariableGet(p+"terminalState") : (int)M10_TERMINAL_NONE;
+
+   if(currentOpen<=0 || latestClosed<=0)
+   {
+      Print("PURE_M10_RESTART_RECONCILIATION | state=WAITING_FOR_SYNCHRONIZED_M10_SERIES | duplicateSuppressed=false | staleStateCleared=true");
+      return;
+   }
+
+   if(persisted==latestClosed)
+   {
+      g_lastEntryBarSeen=currentOpen;
+      g_lastEntryScanAt=TimeCurrent();
+      g_m10TerminalDecisionBar=latestClosed;
+      g_m10TerminalDecisionState=(ENUM_XAU_M10_TERMINAL_DECISION_STATE)persistedState;
+      g_m10TerminalDecisionReason="RESTART_COMPLETED_BAR_SUPPRESSED";
+      PrintFormat("PURE_M10_RESTART_RECONCILIATION | state=COMPLETED_BAR_RESTORED | closedM10Bar=%s | terminalState=%d | duplicateSuppressed=true | staleCandidateCleared=%s | staleTransitionOrTimerResumed=false",
+                  TimeToString(latestClosed,TIME_DATE|TIME_MINUTES),persistedState,
+                  persistedState==(int)M10_TERMINAL_READY_CANDIDATE?"true":"false");
+      Print("STALE_STATE_CLEARED | scope=PURE_M10_PRIMARY | candidate=true | timer=true | reason=restart_does_not_resurrect_unconfirmed_candidate");
+      return;
+   }
+
+   if(persisted>0 && persisted<latestClosed)
+   {
+      MqlDateTime persistedParts,latestParts;
+      TimeToStruct(persisted,persistedParts);
+      TimeToStruct(latestClosed,latestParts);
+      if(persistedParts.year!=latestParts.year ||
+         persistedParts.day_of_year!=latestParts.day_of_year)
+      {
+         PrintFormat("PURE_M10_RESTART_RECONCILIATION | state=SESSION_BOUNDARY_GAP_NOT_ENUMERATED | lastCompleted=%s | latestClosed=%s | perBarGapEnumeration=UNSAFE_ACROSS_SESSION_BOUNDARY | latestBarWillRun=true | duplicateSuppressed=false | staleCandidateCleared=true | retroactiveOrderSend=false | silentSkip=false",
+                     TimeToString(persisted,TIME_DATE|TIME_MINUTES),
+                     TimeToString(latestClosed,TIME_DATE|TIME_MINUTES));
+         Print("STALE_STATE_CLEARED | scope=PURE_M10_PRIMARY | candidate=true | timer=true | reason=RESTART_ACROSS_SESSION_BOUNDARY");
+         return;
+      }
+      datetime availableBars[];
+      int copied=CopyTime(Symbol(),XAU_PRIMARY_DECISION_TF,
+                          persisted+PeriodSeconds(XAU_PRIMARY_DECISION_TF),
+                          latestClosed,availableBars);
+      int missed=0;
+      for(int i=0;i<copied;i++)
+      {
+         datetime barOpen=availableBars[i];
+         if(barOpen<=persisted || barOpen>=latestClosed) continue;
+         missed++;
+         PrintFormat("M10_CYCLE_GAP | closedM10Bar=%s | scanRan=false | exactReason=TERMINAL_OFFLINE_OR_SERIES_NOT_ADVANCING | retroactiveOrderSend=false",
+                     TimeToString(barOpen+PeriodSeconds(XAU_PRIMARY_DECISION_TF),TIME_DATE|TIME_MINUTES));
+      }
+      PrintFormat("PURE_M10_RESTART_RECONCILIATION | state=GAP_DETECTED | lastCompleted=%s | latestClosed=%s | missedBrokerBars=%d | latestBarWillRun=true | duplicateSuppressed=false | staleCandidateCleared=true",
+                  TimeToString(persisted,TIME_DATE|TIME_MINUTES),
+                  TimeToString(latestClosed,TIME_DATE|TIME_MINUTES),missed);
+      Print("STALE_STATE_CLEARED | scope=PURE_M10_PRIMARY | candidate=true | timer=true | reason=offline_gap_latest_closed_bar_requires_fresh_cycle");
+      return;
+   }
+
+   if(persisted>latestClosed)
+   {
+      GlobalVariableDel(p+"lastClosedBar");
+      GlobalVariableDel(p+"terminalState");
+      PrintFormat("PURE_M10_RESTART_RECONCILIATION | state=INVALID_FUTURE_LEDGER_CLEARED | persisted=%s | latestClosed=%s | latestBarWillRun=true | staleStateCleared=true",
+                  TimeToString(persisted,TIME_DATE|TIME_MINUTES),
+                  TimeToString(latestClosed,TIME_DATE|TIME_MINUTES));
+      return;
+   }
+
+   PrintFormat("PURE_M10_RESTART_RECONCILIATION | state=FIRST_RUN | latestClosed=%s | latestBarWillRun=true | duplicateSuppressed=false | staleStateCleared=true",
+               TimeToString(latestClosed,TIME_DATE|TIME_MINUTES));
+}
+
+void XAU_LogRuntimePureM10Gap(datetime lastSeenOpen,datetime currentOpen)
+{
+   int secondsPerBar=PeriodSeconds(XAU_PRIMARY_DECISION_TF);
+   if(lastSeenOpen<=0 || currentOpen<=lastSeenOpen+secondsPerBar) return;
+   if(g_lastRuntimeM10GapLoggedAtClose==currentOpen) return;
+   g_lastRuntimeM10GapLoggedAtClose=currentOpen;
+
+   MqlDateTime lastParts,currentParts;
+   TimeToStruct(lastSeenOpen,lastParts);
+   TimeToStruct(currentOpen,currentParts);
+   bool crossSessionDate=(lastParts.year!=currentParts.year ||
+                          lastParts.day_of_year!=currentParts.day_of_year);
+   if(crossSessionDate)
+   {
+      bool weekendLength=(currentOpen-lastSeenOpen>24*60*60);
+      g_alignedCandidates[0].firstCandidateTime=0;
+      g_alignedCandidates[0].readinessRecheckAt=0;
+      g_pendingTimingProof.active=false;
+      Print("STALE_STATE_CLEARED | scope=PURE_M10_PRIMARY | candidate=true | timer=true | reason=SESSION_REOPEN_NO_CANDIDATE_RESURRECTION");
+      if(weekendLength)
+      {
+         g_transitionCandidateState=-1;
+         g_transitionCandidateBars=0;
+         g_transitionPersistentExhaustion=0.0;
+         g_transitionPersistentDirection=0;
+         g_counterTransitionEvidence=0.0;
+         g_counterTransitionEvidenceAt=0;
+         g_transitionLastComputedBar=0;
+         ZeroMemory(g_reversalOpportunity);
+         Print("STALE_STATE_CLEARED | scope=PURE_M10_TRANSITION | candidate=true | transition=true | timer=true | reason=WEEKEND_REOPEN | weekendReopenSafe=true");
+      }
+      PrintFormat("PURE_M10_SESSION_REOPEN | lastProcessedBoundary=%s | currentBoundary=%s | weekendLength=%s | perBarGapEnumeration=UNSAFE_ACROSS_SESSION_BOUNDARY | latestCloseWillRun=true | retroactiveOrderSend=false | silentSkip=false",
+                  TimeToString(lastSeenOpen,TIME_DATE|TIME_MINUTES),
+                  TimeToString(currentOpen,TIME_DATE|TIME_MINUTES),
+                  weekendLength?"true":"false");
+      return;
+   }
+
+   // A wall-clock jump is not itself evidence of skipped market candles:
+   // XAUUSD has daily and weekend closures. Enumerate only PERIOD_M10 bars
+   // which actually exist with real tick volume in the synchronized broker
+   // series between the last processed current-bar open and the new current-
+   // bar open. MT5 can retain Friday/session-close placeholders in the bar
+   // index (sometimes even with synthetic tick_volume); cross-session jumps
+   // were handled above rather than guessed from incompatible history/session
+   // alignments. Inside one broker date, require the boundary to fall inside
+   // SymbolInfoSessionTrade as well. Each remaining bar-open timestamp is
+   // also the close timestamp of the decision cycle which should have run.
+   MqlRates brokerBars[];
+   int copied=CopyRates(Symbol(),XAU_PRIMARY_DECISION_TF,
+                        lastSeenOpen+secondsPerBar,
+                        currentOpen-secondsPerBar,brokerBars);
+   if(copied<=0) return;
+   int missed=0;
+   for(int i=0;i<copied;i++)
+   {
+      if(brokerBars[i].tick_volume<=0) continue;
+      datetime closeTime=brokerBars[i].time;
+      if(closeTime<=lastSeenOpen || closeTime>=currentOpen) continue;
+      MqlDateTime boundaryParts;
+      TimeToStruct(closeTime,boundaryParts);
+      int boundarySecond=boundaryParts.hour*3600+boundaryParts.min*60+boundaryParts.sec;
+      bool insideBrokerSession=false;
+      for(uint sessionIndex=0;sessionIndex<10;sessionIndex++)
+      {
+         datetime sessionFrom=0,sessionTo=0;
+         if(!SymbolInfoSessionTrade(Symbol(),
+              (ENUM_DAY_OF_WEEK)boundaryParts.day_of_week,sessionIndex,
+              sessionFrom,sessionTo)) break;
+         MqlDateTime fromParts,toParts;
+         TimeToStruct(sessionFrom,fromParts);
+         TimeToStruct(sessionTo,toParts);
+         int fromSecond=fromParts.hour*3600+fromParts.min*60+fromParts.sec;
+         int toSecond=toParts.hour*3600+toParts.min*60+toParts.sec;
+         if(fromSecond==toSecond ||
+            (fromSecond<toSecond && boundarySecond>=fromSecond && boundarySecond<toSecond) ||
+            (fromSecond>toSecond && (boundarySecond>=fromSecond || boundarySecond<toSecond)))
+         {
+            insideBrokerSession=true;
+            break;
+         }
+      }
+      if(!insideBrokerSession) continue;
+      missed++;
+      PrintFormat("M10_CYCLE_GAP | closedM10Bar=%s | scanRan=false | exactReason=RUNTIME_RECONNECT_OR_SERIES_JUMP | tickVolume=%I64u | realVolume=%I64u | spread=%d | o=%.2f | h=%.2f | l=%.2f | c=%.2f | retroactiveOrderSend=false",
+                  TimeToString(closeTime,TIME_DATE|TIME_MINUTES),
+                  brokerBars[i].tick_volume,brokerBars[i].real_volume,
+                  brokerBars[i].spread,brokerBars[i].open,brokerBars[i].high,
+                  brokerBars[i].low,brokerBars[i].close);
+   }
+   if(missed>0)
+      PrintFormat("PURE_M10_RUNTIME_GAP_SUMMARY | lastProcessedBoundary=%s | currentBoundary=%s | missedBrokerM10Closes=%d | currentCloseWillRun=true | silentSkip=false",
+                  TimeToString(lastSeenOpen,TIME_DATE|TIME_MINUTES),
+                  TimeToString(currentOpen,TIME_DATE|TIME_MINUTES),missed);
+}
+
 void XAU_MarkM10TerminalDecision(datetime closedBar,
                                  ENUM_XAU_M10_TERMINAL_DECISION_STATE state,
                                  string reason)
@@ -11752,6 +11750,7 @@ void XAU_MarkM10TerminalDecision(datetime closedBar,
    g_m10TerminalDecisionBar=closedBar;
    g_m10TerminalDecisionState=state;
    g_m10TerminalDecisionReason=reason;
+   XAU_PersistCompletedM10Cycle(closedBar,state);
 }
 
 bool XAU_M10BarHasTerminalDecision(datetime closedBar)
@@ -14675,534 +14674,6 @@ long     g_m10EvidenceSeq = 0;
 datetime g_m10LastEvidenceBar = 0;
 
 // ===========================================================================
-// RESEARCH: TWO CLOSED-M5 EVIDENCE SCANS, ONE M10 EXECUTION DECISION
-// ===========================================================================
-// Scan 1 is observation only. Scan 2 is captured only when the matching M10
-// bar has closed and the normal M10 evidence snapshot is ready. A hybrid idea
-// is injected into the existing candidate lane only when both immutable M5
-// observations and the current canonical M10 decision support it. It has no
-// order-send function and cannot change grade, risk, SL, timing or exits.
-enum ENUM_XAU_HYBRID_M5_RELATION
-{
-   HYBRID_M5_REL_NONE=0,
-   HYBRID_M5_REL_PERSISTENT_DIRECTION=1,
-   HYBRID_M5_REL_DEVELOPING_SIGNAL=2,
-   HYBRID_M5_REL_FALSE_IMPULSE=3,
-   HYBRID_M5_REL_LOCATION_IMPROVEMENT=4,
-   HYBRID_M5_REL_TRANSITION_MATURATION=5,
-   HYBRID_M5_REL_DIRECTIONS_CONFLICT=6,
-   HYBRID_M5_REL_DATA_INVALID=7
-};
-
-string XAU_HybridM5RelationName(ENUM_XAU_HYBRID_M5_RELATION value)
-{
-   switch(value)
-   {
-      case HYBRID_M5_REL_PERSISTENT_DIRECTION:  return "PERSISTENT_DIRECTION";
-      case HYBRID_M5_REL_DEVELOPING_SIGNAL:     return "DEVELOPING_SIGNAL";
-      case HYBRID_M5_REL_FALSE_IMPULSE:         return "FALSE_IMPULSE_REJECTION";
-      case HYBRID_M5_REL_LOCATION_IMPROVEMENT:  return "LOCATION_IMPROVEMENT";
-      case HYBRID_M5_REL_TRANSITION_MATURATION: return "TRANSITION_MATURATION";
-      case HYBRID_M5_REL_DIRECTIONS_CONFLICT:   return "DIRECTIONS_CONFLICT";
-      case HYBRID_M5_REL_DATA_INVALID:          return "DATA_INVALID";
-      default:                                  return "NONE";
-   }
-}
-
-struct XAU_HybridM5Snapshot
-{
-   bool     valid;
-   datetime cycleStart;
-   datetime barTime;
-   datetime capturedAt;
-   double   buyScore;
-   double   sellScore;
-   int      preferredDirection;
-   double   confidence;
-   double   emaFast;
-   double   emaSlow;
-   double   rsi;
-   double   atr;
-   double   momentumATR;
-   double   buyRoomR;
-   double   sellRoomR;
-   string   regime;
-   string   transitionState;
-   string   momentumState;
-   string   structureState;
-   string   locationState;
-   string   setupPossibilities;
-   string   session;
-   string   reason;
-};
-
-struct XAU_HybridM5CycleState
-{
-   datetime cycleStart;
-   XAU_HybridM5Snapshot scan1;
-   XAU_HybridM5Snapshot scan2;
-   ENUM_XAU_HYBRID_M5_RELATION relation;
-   int      finalDirection;
-   double   finalConfidence;
-   double   finalSetupScore;
-   string   finalSetupName;
-   string   exactReason;
-   bool     finalCandidateCreated;
-   bool     consumed;
-   bool     fallbackUsed;
-};
-
-XAU_HybridM5CycleState g_hybridM5Cycle;
-datetime g_hybridM5LastPhaseOneBar=0;
-int g_hybridM5Scan1Count=0;
-int g_hybridM5Scan2Count=0;
-int g_hybridM5CandidateCount=0;
-int g_hybridM5RejectedCount=0;
-int g_hybridM5FallbackCount=0;
-int g_hybridM5ExecutedCount=0;
-int g_hybridM5PermanentBlockCount=0;
-
-datetime XAU_HybridM5CycleStart(datetime m5BarTime)
-{
-   if(m5BarTime<=0) return 0;
-   return (datetime)(((long)m5BarTime/XAU_PRIMARY_DECISION_TF_SECONDS)*XAU_PRIMARY_DECISION_TF_SECONDS);
-}
-
-bool XAU_HybridM5ReadBuffer(int handle,int shift,double &value)
-{
-   value=0.0;
-   if(handle==INVALID_HANDLE || shift<1) return false;
-   double one[];
-   ArrayResize(one,1);
-   ResetLastError();
-   if(CopyBuffer(handle,0,shift,1,one)!=1) return false;
-   value=one[0];
-   return MathIsValidNumber(value);
-}
-
-double XAU_HybridM5Clamp(double value,double lo,double hi)
-{
-   return MathMax(lo,MathMin(hi,value));
-}
-
-XAU_HybridM5Snapshot XAU_HybridM5Capture(datetime barTime,datetime cycleStart)
-{
-   XAU_HybridM5Snapshot s;
-   ZeroMemory(s);
-   s.cycleStart=cycleStart;
-   s.barTime=barTime;
-   s.capturedAt=TimeCurrent();
-
-   int shift=iBarShift(Symbol(),PERIOD_M5,barTime,true);
-   if(shift<1 || iTime(Symbol(),PERIOD_M5,shift)!=barTime)
-   {
-      s.reason="closed M5 bar identity unavailable";
-      return s;
-   }
-
-   double fastNow=0.0,fastPrev=0.0,slowNow=0.0,rsiNow=0.0,atrNow=0.0;
-   bool buffersOk=
-      XAU_HybridM5ReadBuffer(hHybridEMAFastM5,shift,fastNow) &&
-      XAU_HybridM5ReadBuffer(hHybridEMAFastM5,shift+1,fastPrev) &&
-      XAU_HybridM5ReadBuffer(hHybridEMASlowM5,shift,slowNow) &&
-      XAU_HybridM5ReadBuffer(hHybridRSIM5,shift,rsiNow) &&
-      XAU_HybridM5ReadBuffer(hHybridATRM5,shift,atrNow);
-   double open1=iOpen(Symbol(),PERIOD_M5,shift);
-   double high1=iHigh(Symbol(),PERIOD_M5,shift);
-   double low1=iLow(Symbol(),PERIOD_M5,shift);
-   double close1=iClose(Symbol(),PERIOD_M5,shift);
-   double close4=iClose(Symbol(),PERIOD_M5,shift+3);
-   if(!buffersOk || atrNow<=0.0 || open1<=0.0 || high1<=0.0 ||
-      low1<=0.0 || close1<=0.0 || close4<=0.0)
-   {
-      s.reason=StringFormat("closed M5 data incomplete shift=%d buffersOk=%s atr=%.5f",
-                            shift,buffersOk?"true":"false",atrNow);
-      return s;
-   }
-
-   double prior3High=-DBL_MAX,prior3Low=DBL_MAX;
-   double prior12High=-DBL_MAX,prior12Low=DBL_MAX;
-   for(int i=shift+1;i<=shift+12;i++)
-   {
-      double h=iHigh(Symbol(),PERIOD_M5,i);
-      double l=iLow(Symbol(),PERIOD_M5,i);
-      if(h>prior12High) prior12High=h;
-      if(l>0.0 && l<prior12Low) prior12Low=l;
-      if(i<=shift+3)
-      {
-         if(h>prior3High) prior3High=h;
-         if(l>0.0 && l<prior3Low) prior3Low=l;
-      }
-   }
-   if(prior3High<=-DBL_MAX || prior3Low>=DBL_MAX ||
-      prior12High<=-DBL_MAX || prior12Low>=DBL_MAX)
-   {
-      s.reason="closed M5 structure history incomplete";
-      return s;
-   }
-
-   double emaSpreadATR=(fastNow-slowNow)/atrNow;
-   double emaSlopeATR=(fastNow-fastPrev)/atrNow;
-   double momentumATR=(close1-close4)/atrNow;
-   double bodyATR=(close1-open1)/atrNow;
-   double directionalEvidence=
-      XAU_HybridM5Clamp(emaSpreadATR*18.0,-18.0,18.0)+
-      XAU_HybridM5Clamp(emaSlopeATR*22.0,-8.0,8.0)+
-      XAU_HybridM5Clamp((rsiNow-50.0)*0.65,-13.0,13.0)+
-      XAU_HybridM5Clamp(momentumATR*9.0,-12.0,12.0)+
-      XAU_HybridM5Clamp(bodyATR*8.0,-7.0,7.0);
-
-   bool bullishBreak=(close1>prior3High);
-   bool bearishBreak=(close1<prior3Low);
-   if(bullishBreak) directionalEvidence+=8.0;
-   if(bearishBreak) directionalEvidence-=8.0;
-
-   double projectedHigh=prior12High+(prior12High-prior12Low)*0.50;
-   double projectedLow =prior12Low -(prior12High-prior12Low)*0.50;
-   double buyRoom=XAU_HybridM5Clamp((projectedHigh-close1)/atrNow,0.0,5.0);
-   double sellRoom=XAU_HybridM5Clamp((close1-projectedLow)/atrNow,0.0,5.0);
-   directionalEvidence+=XAU_HybridM5Clamp((buyRoom-sellRoom)*1.5,-4.0,4.0);
-
-   s.buyScore=XAU_HybridM5Clamp(50.0+directionalEvidence,0.0,100.0);
-   s.sellScore=XAU_HybridM5Clamp(50.0-directionalEvidence,0.0,100.0);
-   double scoreGap=MathAbs(s.buyScore-s.sellScore);
-   s.preferredDirection=(scoreGap>=10.0)?(s.buyScore>s.sellScore?1:-1):0;
-   s.confidence=MathMax(s.buyScore,s.sellScore);
-   s.emaFast=fastNow;
-   s.emaSlow=slowNow;
-   s.rsi=rsiNow;
-   s.atr=atrNow;
-   s.momentumATR=momentumATR;
-   s.buyRoomR=buyRoom;
-   s.sellRoomR=sellRoom;
-   s.regime=RegimeName();
-   s.transitionState=EnumToString(g_transitionDecision.lifecycle);
-   s.momentumState=momentumATR>=0.35?"BULLISH_CONTINUATION":
-                   (momentumATR<=-0.35?"BEARISH_CONTINUATION":"MIXED");
-   s.structureState=bullishBreak?"BULLISH_BREAK":
-                    (bearishBreak?"BEARISH_BREAK":
-                     (fastNow>slowNow?"BULLISH_HELD":
-                      (fastNow<slowNow?"BEARISH_HELD":"MIXED")));
-   double distanceFromFastATR=MathAbs(close1-fastNow)/atrNow;
-   s.locationState=distanceFromFastATR<=0.55?"GOOD":
-                   (distanceFromFastATR<=0.90?"ACCEPTABLE":
-                    (distanceFromFastATR<=1.35?"LATE":"EXTREME"));
-   s.setupPossibilities=(bullishBreak||bearishBreak)?"M5_STRUCTURE_BREAK":
-                        (MathAbs(momentumATR)>=0.35?"M5_MOMENTUM_CONTINUATION":
-                         (distanceFromFastATR<=0.55?"M5_CONTROLLED_RESET":"M5_EVIDENCE_DEVELOPING"));
-   s.session=SessionTag();
-   s.reason=StringFormat("emaSpreadATR=%.2f emaSlopeATR=%.2f rsi=%.1f momentumATR=%.2f bodyATR=%.2f",
-                         emaSpreadATR,emaSlopeATR,rsiNow,momentumATR,bodyATR);
-   s.valid=true;
-   return s;
-}
-
-bool XAU_HybridM5Classify(const XAU_HybridM5Snapshot &scan1,
-                          const XAU_HybridM5Snapshot &scan2,
-                          ENUM_XAU_HYBRID_M5_RELATION &relation,
-                          int &direction,double &confidence,string &reason)
-{
-   relation=HYBRID_M5_REL_NONE;
-   direction=0;
-   confidence=0.0;
-   reason="";
-   if(!scan1.valid || !scan2.valid || scan1.cycleStart!=scan2.cycleStart ||
-      scan2.barTime-scan1.barTime!=300)
-   {
-      relation=HYBRID_M5_REL_DATA_INVALID;
-      reason="scan pair invalid, stale or non-sequential";
-      return false;
-   }
-
-   int dir1=scan1.preferredDirection;
-   int dir2=scan2.preferredDirection;
-   double gap2=MathAbs(scan2.buyScore-scan2.sellScore);
-   bool scan2Qualifies=(dir2!=0 && scan2.confidence>=56.0 && gap2>=12.0 &&
-                        scan2.locationState!="EXTREME");
-   bool scan1Committed=(dir1!=0 && scan1.confidence>=56.0);
-
-   if(scan1Committed && scan2Qualifies && dir1!=dir2)
-   {
-      relation=HYBRID_M5_REL_DIRECTIONS_CONFLICT;
-      reason=StringFormat("confirmed scan directions conflict scan1=%s %.1f scan2=%s %.1f",
-                          dir1==1?"BUY":"SELL",scan1.confidence,
-                          dir2==1?"BUY":"SELL",scan2.confidence);
-      return false;
-   }
-
-   if(scan1Committed && dir2==dir1 && scan1.locationState!="GOOD" &&
-      scan2.locationState=="GOOD" && scan2.confidence>=55.0)
-   {
-      relation=HYBRID_M5_REL_LOCATION_IMPROVEMENT;
-      direction=dir2;
-      confidence=scan2.confidence;
-      reason=StringFormat("same direction held while location improved %s -> %s",
-                          scan1.locationState,scan2.locationState);
-      return true;
-   }
-
-   if(dir1!=0 && dir2==dir1 && scan2Qualifies &&
-      scan2.confidence>=scan1.confidence-8.0)
-   {
-      relation=HYBRID_M5_REL_PERSISTENT_DIRECTION;
-      direction=dir2;
-      confidence=scan2.confidence;
-      reason=StringFormat("direction persisted, score delta=%.1f, structure=%s",
-                          scan2.confidence-scan1.confidence,scan2.structureState);
-      return true;
-   }
-
-   if(!scan1Committed && scan2Qualifies)
-   {
-      bool strongOpposite=(dir1!=0 && dir1!=dir2 && scan1.confidence>=60.0);
-      if(!strongOpposite)
-      {
-         relation=HYBRID_M5_REL_DEVELOPING_SIGNAL;
-         direction=dir2;
-         confidence=scan2.confidence;
-         reason=StringFormat("scan1 early/neutral %.1f, scan2 confirmed %s %.1f",
-                             scan1.confidence,dir2==1?"BUY":"SELL",scan2.confidence);
-         return true;
-      }
-   }
-
-   if(dir1!=0 && (dir2==0 || dir2!=dir1) && scan2.confidence<scan1.confidence-8.0)
-   {
-      relation=HYBRID_M5_REL_FALSE_IMPULSE;
-      reason=StringFormat("scan1 %s impulse collapsed by %.1f points at scan2",
-                          dir1==1?"BUY":"SELL",scan1.confidence-scan2.confidence);
-      return false;
-   }
-
-   reason=StringFormat("no qualified two-scan relationship scan1=%s %.1f scan2=%s %.1f",
-                       dir1==1?"BUY":(dir1==-1?"SELL":"NONE"),scan1.confidence,
-                       dir2==1?"BUY":(dir2==-1?"SELL":"NONE"),scan2.confidence);
-   return false;
-}
-
-void XAU_HybridM5ResetForCycle(datetime cycleStart)
-{
-   ZeroMemory(g_hybridM5Cycle);
-   g_hybridM5Cycle.cycleStart=cycleStart;
-}
-
-void XAU_HybridM5ObservePhaseOne()
-{
-   datetime closedM5=iTime(Symbol(),PERIOD_M5,1);
-   if(closedM5<=0 || closedM5==g_hybridM5LastPhaseOneBar) return;
-   datetime cycleStart=XAU_HybridM5CycleStart(closedM5);
-   if(closedM5!=cycleStart) return; // the :05 bar belongs to Phase 2
-
-   g_hybridM5LastPhaseOneBar=closedM5;
-   XAU_HybridM5ResetForCycle(cycleStart);
-   g_hybridM5Cycle.scan1=XAU_HybridM5Capture(closedM5,cycleStart);
-   g_hybridM5Scan1Count++;
-   PrintFormat("HYBRID_M5_SCAN_1 | cycleId=%I64d | m10CycleStart=%s | m5Bar=%s | buyScore=%.1f | sellScore=%.1f | preferred=%s | regime=%s | transition=%s | structure=%s | momentum=%s | location=%s | setupCandidates=%s | confidence=%.1f | rewardRoomBuyR=%.2f | rewardRoomSellR=%.2f | valid=%s | reason=%s | orderAuthority=false",
-               (long)cycleStart,TimeToString(cycleStart,TIME_DATE|TIME_MINUTES),
-               TimeToString(closedM5,TIME_DATE|TIME_MINUTES),
-               g_hybridM5Cycle.scan1.buyScore,g_hybridM5Cycle.scan1.sellScore,
-               g_hybridM5Cycle.scan1.preferredDirection==1?"BUY":
-                  (g_hybridM5Cycle.scan1.preferredDirection==-1?"SELL":"NONE"),
-               g_hybridM5Cycle.scan1.regime,g_hybridM5Cycle.scan1.transitionState,
-               g_hybridM5Cycle.scan1.structureState,g_hybridM5Cycle.scan1.momentumState,
-               g_hybridM5Cycle.scan1.locationState,g_hybridM5Cycle.scan1.setupPossibilities,
-               g_hybridM5Cycle.scan1.confidence,g_hybridM5Cycle.scan1.buyRoomR,
-               g_hybridM5Cycle.scan1.sellRoomR,g_hybridM5Cycle.scan1.valid?"true":"false",
-               g_hybridM5Cycle.scan1.reason);
-}
-
-void XAU_HybridM5FinalizeAtM10Boundary(datetime closedM10Bar)
-{
-   if(closedM10Bar<=0) return;
-   if(g_hybridM5Cycle.consumed && g_hybridM5Cycle.cycleStart==closedM10Bar) return;
-
-   datetime closedM5=iTime(Symbol(),PERIOD_M5,1);
-   datetime cycleStart=XAU_HybridM5CycleStart(closedM5);
-   bool secondBarMatches=(closedM5==closedM10Bar+300 && cycleStart==closedM10Bar);
-   bool firstScanMatches=(g_hybridM5Cycle.cycleStart==closedM10Bar &&
-                          g_hybridM5Cycle.scan1.valid &&
-                          g_hybridM5Cycle.scan1.barTime==closedM10Bar);
-   if(!secondBarMatches || !firstScanMatches)
-   {
-      if(g_hybridM5Cycle.cycleStart!=closedM10Bar)
-         XAU_HybridM5ResetForCycle(closedM10Bar);
-      g_hybridM5Cycle.fallbackUsed=true;
-      g_hybridM5Cycle.consumed=true;
-      g_hybridM5FallbackCount++;
-      PrintFormat("HYBRID_SCAN_1_MISSED_FALLBACK | cycleId=%I64d | closedM10=%s | latestClosedM5=%s | secondBarMatches=%s | firstScanMatches=%s | action=NORMAL_M10_DECISION",
-                  (long)closedM10Bar,TimeToString(closedM10Bar,TIME_DATE|TIME_MINUTES),
-                  TimeToString(closedM5,TIME_DATE|TIME_MINUTES),
-                  secondBarMatches?"true":"false",firstScanMatches?"true":"false");
-      return;
-   }
-
-   g_hybridM5Cycle.scan2=XAU_HybridM5Capture(closedM5,closedM10Bar);
-   g_hybridM5Scan2Count++;
-   ENUM_XAU_HYBRID_M5_RELATION relationship=HYBRID_M5_REL_NONE;
-   int proposedDirection=0;
-   double proposedConfidence=0.0;
-   string compareReason="";
-   bool comparisonValid=XAU_HybridM5Classify(g_hybridM5Cycle.scan1,g_hybridM5Cycle.scan2,
-                                              relationship,proposedDirection,
-                                              proposedConfidence,compareReason);
-
-   PrintFormat("HYBRID_M5_SCAN_2_M10_DECISION | cycleId=%I64d | m5Bar=%s | buyScore=%.1f | sellScore=%.1f | preferred=%s | regime=%s | transition=%s | structure=%s | momentum=%s | location=%s | setupCandidates=%s | confidence=%.1f | rewardRoomBuyR=%.2f | rewardRoomSellR=%.2f | valid=%s | canonicalM10Decision=%s | canonicalM10Preferred=%s",
-               (long)closedM10Bar,TimeToString(closedM5,TIME_DATE|TIME_MINUTES),
-               g_hybridM5Cycle.scan2.buyScore,g_hybridM5Cycle.scan2.sellScore,
-               g_hybridM5Cycle.scan2.preferredDirection==1?"BUY":
-                  (g_hybridM5Cycle.scan2.preferredDirection==-1?"SELL":"NONE"),
-               g_hybridM5Cycle.scan2.regime,g_hybridM5Cycle.scan2.transitionState,
-               g_hybridM5Cycle.scan2.structureState,g_hybridM5Cycle.scan2.momentumState,
-               g_hybridM5Cycle.scan2.locationState,g_hybridM5Cycle.scan2.setupPossibilities,
-               g_hybridM5Cycle.scan2.confidence,g_hybridM5Cycle.scan2.buyRoomR,
-               g_hybridM5Cycle.scan2.sellRoomR,g_hybridM5Cycle.scan2.valid?"true":"false",
-               XAU_M10DecisionName(g_m10Decision.decisionType),
-               g_m10Decision.preferredDirection==1?"BUY":
-                  (g_m10Decision.preferredDirection==-1?"SELL":"NONE"));
-
-   double buyDelta=g_hybridM5Cycle.scan2.buyScore-g_hybridM5Cycle.scan1.buyScore;
-   double sellDelta=g_hybridM5Cycle.scan2.sellScore-g_hybridM5Cycle.scan1.sellScore;
-   double selectedRoom1=proposedDirection==1?g_hybridM5Cycle.scan1.buyRoomR:g_hybridM5Cycle.scan1.sellRoomR;
-   double selectedRoom2=proposedDirection==1?g_hybridM5Cycle.scan2.buyRoomR:g_hybridM5Cycle.scan2.sellRoomR;
-   PrintFormat("HYBRID_EVIDENCE_COMPARE | cycleId=%I64d | scan1Preferred=%s | scan2Preferred=%s | buyDelta=%.1f | sellDelta=%.1f | momentumDeltaATR=%.2f | location=%s->%s | rewardRoomDeltaR=%.2f | relation=%s | proposedDirection=%s | comparisonValid=%s | reason=%s",
-               (long)closedM10Bar,
-               g_hybridM5Cycle.scan1.preferredDirection==1?"BUY":
-                  (g_hybridM5Cycle.scan1.preferredDirection==-1?"SELL":"NONE"),
-               g_hybridM5Cycle.scan2.preferredDirection==1?"BUY":
-                  (g_hybridM5Cycle.scan2.preferredDirection==-1?"SELL":"NONE"),
-               buyDelta,sellDelta,
-               g_hybridM5Cycle.scan2.momentumATR-g_hybridM5Cycle.scan1.momentumATR,
-               g_hybridM5Cycle.scan1.locationState,g_hybridM5Cycle.scan2.locationState,
-               selectedRoom2-selectedRoom1,XAU_HybridM5RelationName(relationship),
-               proposedDirection==1?"BUY":(proposedDirection==-1?"SELL":"NONE"),
-               comparisonValid?"true":"false",compareReason);
-
-   bool m10ExplicitSame=
-      proposedDirection!=0 && g_m10Decision.preferredDirection==proposedDirection &&
-      (g_m10Decision.decisionType==M10_DECISION_BUY_CANDIDATE ||
-       g_m10Decision.decisionType==M10_DECISION_SELL_CANDIDATE ||
-       g_m10Decision.decisionType==M10_DECISION_WAIT_FOR_BUY_RETRACE ||
-       g_m10Decision.decisionType==M10_DECISION_WAIT_FOR_SELL_RETRACE);
-   bool transitionMatured=
-      proposedDirection!=0 && g_m10Decision.preferredDirection==proposedDirection &&
-      g_m10Decision.decisionType==M10_DECISION_TRANSITION_WATCH &&
-      g_m10Decision.confidence>=55.0;
-   // A canonical M10 close-call sets preferredDirection=0 when its two case
-   // scores are less than 10 points apart. Two sequential closed-M5 scans can
-   // legitimately resolve that narrower timing ambiguity, but only when the
-   // chosen M10 side itself still scores >=50, the M5 pair is strong, and the
-   // second location is not late/extreme. This is the intended two-scan
-   // advantage: persistence resolves a close call without weakening any gate.
-   double proposedM10SideScore=proposedDirection==1
-                               ? g_m10Decision.buyCaseScore
-                               : g_m10Decision.sellCaseScore;
-   bool closeCallTransitionMatured=
-      proposedDirection!=0 &&
-      g_m10Decision.decisionType==M10_DECISION_TRANSITION_WATCH &&
-      g_m10Decision.preferredDirection==0 &&
-      MathAbs(g_m10Decision.buyCaseScore-g_m10Decision.sellCaseScore)<10.0 &&
-      proposedM10SideScore>=50.0 &&
-      proposedConfidence>=62.0 &&
-      (g_hybridM5Cycle.scan2.locationState=="GOOD" ||
-       g_hybridM5Cycle.scan2.locationState=="ACCEPTABLE");
-   bool continuationMatured=
-      proposedDirection!=0 && g_m10Decision.preferredDirection==proposedDirection &&
-      g_m10Decision.decisionType==M10_DECISION_TREND_CONTINUATION_NO_ENTRY_YET &&
-      g_m10Decision.confidence>=50.0;
-
-   g_hybridM5Cycle.relation=relationship;
-   g_hybridM5Cycle.finalDirection=0;
-   g_hybridM5Cycle.finalConfidence=0.0;
-   g_hybridM5Cycle.finalSetupScore=0.0;
-   g_hybridM5Cycle.finalSetupName="";
-   g_hybridM5Cycle.finalCandidateCreated=false;
-   g_hybridM5Cycle.exactReason=compareReason;
-   g_hybridM5Cycle.consumed=true;
-
-   if(comparisonValid && (m10ExplicitSame || transitionMatured ||
-                          closeCallTransitionMatured || continuationMatured))
-   {
-      if(transitionMatured || closeCallTransitionMatured)
-      {
-         relationship=HYBRID_M5_REL_TRANSITION_MATURATION;
-         g_hybridM5Cycle.relation=relationship;
-      }
-      g_hybridM5Cycle.finalDirection=proposedDirection;
-      g_hybridM5Cycle.finalConfidence=MathMax(55.0,
-         (proposedConfidence+MathMax(50.0,g_m10Decision.confidence))*0.5);
-      g_hybridM5Cycle.finalSetupScore=XAU_CanonicalM10SetupScore(g_hybridM5Cycle.finalConfidence);
-      g_hybridM5Cycle.finalSetupName="HYBRID_M5_"+XAU_HybridM5RelationName(relationship);
-      g_hybridM5Cycle.finalCandidateCreated=true;
-      g_hybridM5Cycle.exactReason=StringFormat("%s; canonicalM10=%s %.1f proposedM10SideScore=%.1f closeCallResolved=%s",
-                                               compareReason,
-                                               XAU_M10DecisionName(g_m10Decision.decisionType),
-                                               g_m10Decision.confidence,
-                                               proposedM10SideScore,
-                                               closeCallTransitionMatured?"true":"false");
-      g_hybridM5CandidateCount++;
-      PrintFormat("HYBRID_CANDIDATE_CREATED | cycleId=%I64d | direction=%s | setup=%s | confidence=%.1f | setupScore=%.2f | grade=PENDING_SHARED_GRADING | session=%s | regime=%s | location=%s | gateResult=PENDING_SHARED_GATES | permanentBlockResult=PENDING_FINAL_RECHECK | reason=%s",
-                  (long)closedM10Bar,proposedDirection==1?"BUY":"SELL",
-                  g_hybridM5Cycle.finalSetupName,g_hybridM5Cycle.finalConfidence,
-                  g_hybridM5Cycle.finalSetupScore,SessionTag(),RegimeName(),
-                  g_hybridM5Cycle.scan2.locationState,g_hybridM5Cycle.exactReason);
-   }
-   else
-   {
-      g_hybridM5RejectedCount++;
-      string supportWhy=comparisonValid
-         ? StringFormat("canonical M10 did not support proposed direction (decision=%s preferred=%s confidence=%.1f)",
-                        XAU_M10DecisionName(g_m10Decision.decisionType),
-                        g_m10Decision.preferredDirection==1?"BUY":
-                           (g_m10Decision.preferredDirection==-1?"SELL":"NONE"),
-                        g_m10Decision.confidence)
-         : compareReason;
-      g_hybridM5Cycle.exactReason=supportWhy;
-      PrintFormat("HYBRID_CANDIDATE_REJECTED | cycleId=%I64d | relation=%s | proposedDirection=%s | grade=NONE | session=%s | regime=%s | location=%s | gateResult=DISCOVERY_REJECTED | permanentBlockResult=NOT_REACHED | executionResult=NO_ORDER | reason=%s",
-                  (long)closedM10Bar,XAU_HybridM5RelationName(relationship),
-                  proposedDirection==1?"BUY":(proposedDirection==-1?"SELL":"NONE"),
-                  SessionTag(),RegimeName(),g_hybridM5Cycle.scan2.locationState,supportWhy);
-      PrintFormat("HYBRID_NO_VALID_CANDIDATE | cycleId=%I64d | exactReason=%s | action=WAIT_NEXT_M10_CYCLE",
-                  (long)closedM10Bar,supportWhy);
-   }
-}
-
-bool XAU_RunHybridM5StateSelfTests()
-{
-   XAU_HybridM5Snapshot a,b;
-   ZeroMemory(a); ZeroMemory(b);
-   a.valid=true; b.valid=true;
-   a.cycleStart=600; b.cycleStart=600;
-   a.barTime=600; b.barTime=900;
-   a.preferredDirection=1; b.preferredDirection=1;
-   a.buyScore=58.0; a.sellScore=42.0; a.confidence=58.0;
-   b.buyScore=64.0; b.sellScore=36.0; b.confidence=64.0;
-   a.locationState="ACCEPTABLE"; b.locationState="ACCEPTABLE";
-   ENUM_XAU_HYBRID_M5_RELATION rel;
-   int dir=0;
-   double conf=0.0;
-   string why="";
-   bool persistent=XAU_HybridM5Classify(a,b,rel,dir,conf,why) &&
-                   rel==HYBRID_M5_REL_PERSISTENT_DIRECTION && dir==1;
-
-   b.preferredDirection=-1; b.buyScore=35.0; b.sellScore=65.0; b.confidence=65.0;
-   bool conflict=!XAU_HybridM5Classify(a,b,rel,dir,conf,why) &&
-                 rel==HYBRID_M5_REL_DIRECTIONS_CONFLICT;
-
-   a.preferredDirection=0; a.buyScore=52.0; a.sellScore=48.0; a.confidence=52.0;
-   b.preferredDirection=-1; b.buyScore=36.0; b.sellScore=64.0; b.confidence=64.0;
-   bool developing=XAU_HybridM5Classify(a,b,rel,dir,conf,why) &&
-                   rel==HYBRID_M5_REL_DEVELOPING_SIGNAL && dir==-1;
-
-   a.valid=false;
-   bool invalid=!XAU_HybridM5Classify(a,b,rel,dir,conf,why) &&
-                rel==HYBRID_M5_REL_DATA_INVALID;
-   int passed=(persistent?1:0)+(conflict?1:0)+(developing?1:0)+(invalid?1:0);
-   PrintFormat("HYBRID_M5_STATE_SELF_TEST | passed=%d | failed=%d | scan1CanExecute=false | oneDecisionPerM10=true | stalePairRejected=true",
-               passed,4-passed);
-   return passed==4;
-}
-
-// ===========================================================================
 // v6.25.5 owner directive 2026-07-17 (URGENT ARCHITECTURE CHANGE) -- M30
 // THREE-M10-EVIDENCE CONSENSUS ENGINE.
 //
@@ -17062,6 +16533,22 @@ void XAU_ATLoadPersistentState()
 {
    if(g_counterTransitionEvidenceLoaded) return;
    g_counterTransitionEvidenceLoaded = true;
+   if((bool)MQLInfoInteger(MQL_TESTER))
+   {
+      // Each tester run is an independent replay. Terminal Global Variables
+      // outlive a run and can otherwise inject future July transition state
+      // into a June holdout launched afterwards in the same portable terminal.
+      g_transitionCandidateState=-1;
+      g_transitionCandidateBars=0;
+      g_transitionPersistentExhaustion=0.0;
+      g_transitionPersistentDirection=0;
+      g_counterTransitionEvidence=0.0;
+      g_counterTransitionEvidenceAt=0;
+      g_transitionLastComputedBar=0;
+      ZeroMemory(g_reversalOpportunity);
+      Print("TESTER_TRANSITION_STATE_ISOLATED | persistentTerminalStateLoaded=false");
+      return;
+   }
    string p = XAU_ATGVPrefix();
    if(GlobalVariableCheck(p + "counter"))
       g_counterTransitionEvidence = GlobalVariableGet(p + "counter");
@@ -17109,10 +16596,39 @@ void XAU_ATLoadPersistentState()
       g_reversalOpportunity.generation = (int)GlobalVariableGet(p + "revGeneration");
    if(GlobalVariableCheck(p + "revState"))
       g_reversalOpportunity.state = (ENUM_XAU_REVERSAL_OPPORTUNITY_STATE)(int)GlobalVariableGet(p + "revState");
+
+   datetime persistedStateAt=GlobalVariableCheck(p+"stateAt")
+      ? (datetime)GlobalVariableGet(p+"stateAt") : 0;
+   datetime fallbackStateAt=MathMax(g_counterTransitionEvidenceAt,
+                              MathMax(g_reversalOpportunity.lastEvidenceAt,
+                                      g_reversalOpportunity.createdAt));
+   datetime stateAt=persistedStateAt>0?persistedStateAt:fallbackStateAt;
+   int staleLimitSec=InpTransitionOpportunityMaxBars*PeriodSeconds(XAU_PRIMARY_DECISION_TF);
+   bool hasPersistedTransition=
+      g_transitionCandidateState>=0 || g_transitionPersistentDirection!=0 ||
+      g_transitionPersistentExhaustion>0.0 || g_reversalOpportunity.active ||
+      MathAbs(g_counterTransitionEvidence)>0.0;
+   if(hasPersistedTransition &&
+      (stateAt<=0 || TimeCurrent()-stateAt>staleLimitSec))
+   {
+      int staleAge=stateAt>0?(int)(TimeCurrent()-stateAt):-1;
+      g_transitionCandidateState=-1;
+      g_transitionCandidateBars=0;
+      g_transitionPersistentExhaustion=0.0;
+      g_transitionPersistentDirection=0;
+      g_counterTransitionEvidence=0.0;
+      g_counterTransitionEvidenceAt=0;
+      g_transitionLastComputedBar=0;
+      ZeroMemory(g_reversalOpportunity);
+      PrintFormat("STALE_STATE_CLEARED | scope=PURE_M10_TRANSITION | candidate=true | transition=true | timer=true | persistedAgeSec=%d | staleLimitSec=%d | weekendReopenSafe=true",
+                  staleAge,staleLimitSec);
+      XAU_ATSavePersistentState();
+   }
 }
 
 void XAU_ATSavePersistentState()
 {
+   if((bool)MQLInfoInteger(MQL_TESTER)) return;
    string p = XAU_ATGVPrefix();
    GlobalVariableSet(p + "counter", g_counterTransitionEvidence);
    GlobalVariableSet(p + "counterAt", (double)g_counterTransitionEvidenceAt);
@@ -17137,6 +16653,8 @@ void XAU_ATSavePersistentState()
    GlobalVariableSet(p + "revContradict", (double)g_reversalOpportunity.contradictionBars);
    GlobalVariableSet(p + "revGeneration", (double)g_reversalOpportunity.generation);
    GlobalVariableSet(p + "revState", (double)g_reversalOpportunity.state);
+   GlobalVariableSet(p + "stateAt", (double)TimeCurrent());
+   GlobalVariablesFlush();
 }
 
 string XAU_ATReversalOpportunityId()
@@ -19975,10 +19493,6 @@ void OnTick()
    // this function is never affected by it.
    XAU_PostTradeCooldownTick();
    XAU_ReadinessStuckWatchdog();
-   // Phase A is deliberately above entry-only gates: it is immutable market
-   // observation, never execution authority. This prevents an operational
-   // block from silently erasing the first half of the next M10 comparison.
-   XAU_HybridM5ObservePhaseOne();
 
    // v4.9.6 — DIAGNOSTIC HEARTBEAT (prints every 60s telling user WHY bot is idle)
    if(TimeCurrent() - g_lastHeartbeat >= 60)
@@ -20691,6 +20205,7 @@ void OnTick()
    if(barCopied > 0) curBar = barOpens[0];
    if(curBar <= 0)  curBar = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 0);
 
+   XAU_LogRuntimePureM10Gap(g_lastEntryBarSeen,curBar);
    bool newPrimaryBar = (curBar > 0 && curBar != g_lastEntryBarSeen);
    datetime closedPrimaryBar=iTime(Symbol(),XAU_PRIMARY_DECISION_TF,1);
    double primaryDelayRequired = g_alignedCandidates[0].requiredDelaySeconds > 0.0
@@ -20888,7 +20403,6 @@ void OnTick()
          Print("M10_SNAPSHOT_FAILED_FINAL | ",g_lastSkipReason," | finalAction=NO_TRADE");
          return;
       }
-      XAU_HybridM5FinalizeAtM10Boundary(closedPrimaryBar);
       XAU_RecordM10EvidenceIfNew();
    }
    else
@@ -21127,21 +20641,27 @@ void OnTick()
    // independently uses the existing M10 endorsement/origination logic below.
    // There is no selectable or executable M30 consensus branch in this build.
    // v6.25.1 owner directive 2026-07-17 -- M10 IS THE CANONICAL CANDIDATE
-   // AUTHORITY. Whatever direction ScoreSetups (or the ADAPTIVE_REVERSAL_
-   // RECLAIM shared path immediately above) proposed, it may only become a
-   // live candidate if the M10 Intelligent Signal Engine's own independent
-   // buy/sell case evidence currently endorses that EXACT direction --
+   // AUTHORITY. ScoreSetups selects the setup/direction from this one closed
+   // M10 scan. The independent M10 case analysis must agree with that exact
+   // direction. TRANSITION_WATCH is context, not a second candidate-creation
+   // authority: when it has a meaningful >=55 preferred direction matching
+   // the existing setup engine, the setup remains a real candidate and then
+   // passes every normal classification, owner block and execution gate.
    // BUY_CANDIDATE/SELL_CANDIDATE (a genuine new candidate), or
    // WAIT_FOR_BUY_RETRACE/WAIT_FOR_SELL_RETRACE (same preferred direction,
    // just a poor entry price right now -- the candidate is preserved, not
    // deleted; the existing freshness/entry-timer machinery downstream is
    // what actually waits for a better price, not this gate). Every other
-   // M10 decision (TRANSITION_WATCH/RANGE_NO_TRADE/NO_VALID_SIGNAL/
-   // DATA_UNAVAILABLE/TREND_CONTINUATION_NO_ENTRY_YET, or a mismatched
-   // preferredDirection) rejects the candidate outright here. ScoreSetups
-   // is setup EVIDENCE now (pattern/EMA/RSI/structure quality feeding
-   // setupScore/setupName), not an independent competing direction
-   // authority -- this is the one place that enforces that.
+   // A conflicted TRANSITION_WATCH (preferredDirection=NONE), a mismatched
+   // direction, RANGE_NO_TRADE, NO_VALID_SIGNAL, DATA_UNAVAILABLE, or
+   // TREND_CONTINUATION_NO_ENTRY_YET still rejects the setup fail-closed.
+   bool directionAlignedTransitionContext=
+      !resumeFrozenPrimaryCandidate && signal!=0 &&
+      g_m10Decision.decisionType==M10_DECISION_TRANSITION_WATCH &&
+      g_m10Decision.preferredDirection==signal &&
+      g_m10Decision.confidence>=55.0 &&
+      g_m10Snapshot.complete &&
+      g_m10Snapshot.freshnessState=="FRESH";
    if(!resumeFrozenPrimaryCandidate && signal != 0)
    {
       bool m10Endorses =
@@ -21149,7 +20669,8 @@ void OnTick()
          (g_m10Decision.decisionType == M10_DECISION_BUY_CANDIDATE ||
           g_m10Decision.decisionType == M10_DECISION_SELL_CANDIDATE ||
           g_m10Decision.decisionType == M10_DECISION_WAIT_FOR_BUY_RETRACE ||
-          g_m10Decision.decisionType == M10_DECISION_WAIT_FOR_SELL_RETRACE);
+          g_m10Decision.decisionType == M10_DECISION_WAIT_FOR_SELL_RETRACE ||
+          directionAlignedTransitionContext);
       if(!m10Endorses)
       {
          PrintFormat("M10_CANDIDATE_REJECTED | proposedDirection=%s proposedSetup=%s m10Decision=%s m10PreferredDirection=%s m10Reason=%s -- ScoreSetups/reversal-path direction not endorsed by the canonical M10 authority",
@@ -21161,26 +20682,10 @@ void OnTick()
       }
       else
       {
-         PrintFormat("M10_CANDIDATE_ENDORSED | direction=%s setup=%s m10Decision=%s m10Confidence=%.1f evidenceId=%d",
-                     signal==1?"BUY":"SELL", setupName, XAU_M10DecisionName(g_m10Decision.decisionType), g_m10Decision.confidence, (int)g_m10Decision.evidenceId);
+         PrintFormat("M10_CANDIDATE_ENDORSED | direction=%s setup=%s m10Decision=%s m10Confidence=%.1f evidenceId=%d authority=%s",
+                     signal==1?"BUY":"SELL", setupName, XAU_M10DecisionName(g_m10Decision.decisionType), g_m10Decision.confidence, (int)g_m10Decision.evidenceId,
+                     directionAlignedTransitionContext?"EXISTING_SETUP_ENGINE_WITH_TRANSITION_CONTEXT":"CANONICAL_M10_CASE");
       }
-   }
-
-   // Additive research path: a two-scan idea may originate only after the
-   // existing proposal has produced no endorsed direction. It still falls
-   // through the same scoring, owner policy, timing, freshness, news, final
-   // arbiter, risk and OpenTrade path. No separate order-send lane exists.
-   if(!resumeFrozenPrimaryCandidate && signal==0 &&
-      g_hybridM5Cycle.finalCandidateCreated &&
-      g_hybridM5Cycle.cycleStart==closedPrimaryBar &&
-      g_hybridM5Cycle.finalDirection!=0)
-   {
-      signal=g_hybridM5Cycle.finalDirection;
-      setupName=g_hybridM5Cycle.finalSetupName;
-      setupScore=g_hybridM5Cycle.finalSetupScore;
-      PrintFormat("HYBRID_CANDIDATE_TO_SHARED_GATES | cycleId=%I64d | direction=%s | setup=%s | setupScore=%.2f | canonicalM10=%s | reason=%s",
-                  (long)closedPrimaryBar,signal==1?"BUY":"SELL",setupName,setupScore,
-                  XAU_M10DecisionName(g_m10Decision.decisionType),g_hybridM5Cycle.exactReason);
    }
 
    // v6.25.2 owner directive 2026-07-17 -- M10 ORIGINATION FALLBACK.
@@ -21378,18 +20883,6 @@ void OnTick()
               : "SKIP";
    }
 
-   if(!resumeFrozenPrimaryCandidate && StringFind(setupName,"HYBRID_M5_")==0)
-   {
-      if(grade=="SKIP")
-         PrintFormat("HYBRID_CANDIDATE_REJECTED | cycleId=%I64d | direction=%s | setup=%s | grade=%s | session=%s | regime=%s | location=%s | gateResult=SHARED_GRADING_REJECTED | permanentBlockResult=NOT_REACHED | executionResult=NO_ORDER | combinedScore=%.2f | reason=below existing production grade threshold",
-                     (long)closedPrimaryBar,signal==1?"BUY":"SELL",setupName,grade,
-                     SessionTag(),RegimeName(),g_hybridM5Cycle.scan2.locationState,combinedScore);
-      else
-         PrintFormat("HYBRID_CANDIDATE_GRADED | cycleId=%I64d | direction=%s | setup=%s | grade=%s | session=%s | regime=%s | location=%s | combinedScore=%.2f | gateResult=CONTINUE_SHARED_GATES | permanentBlockResult=PENDING_FINAL_RECHECK",
-                     (long)closedPrimaryBar,signal==1?"BUY":"SELL",setupName,grade,
-                     SessionTag(),RegimeName(),g_hybridM5Cycle.scan2.locationState,combinedScore);
-   }
-
    // v6.25.21: only a genuine new closed-bar decision publishes/captures a
    // decision snapshot. The matured-delay revalidation path reuses that
    // immutable snapshot and emits no second PRIMARY_DECISION event.
@@ -21432,6 +20925,32 @@ void OnTick()
          UpdateDashboard(0, combinedScore, grade);
          return;
       }
+   }
+
+   // TRANSITION_WATCH is no longer allowed to erase an existing M10 setup
+   // before setup/grade/session/regime/location classification. It is still
+   // a normal execution gate: until the separate closed-bar transition
+   // package confirms entry, the fully classified candidate terminates here
+   // with an exact downstream result and never reaches timer or OrderSend.
+   // This preserves the previously approved transition protection without
+   // making it a competing candidate-creation authority.
+   if(!resumeFrozenPrimaryCandidate && directionAlignedTransitionContext &&
+      signal!=0 && grade!="SKIP")
+   {
+      string transitionGateReason=StringFormat(
+         "NORMAL_GATE_TRANSITION_CONFIRMATION_PENDING:preferred=%s confidence=%.1f decision=TRANSITION_WATCH",
+         signal==1?"BUY":"SELL",g_m10Decision.confidence);
+      PrintFormat("M10_TRANSITION_NORMAL_GATE | candidateCreated=true | direction=%s | setup=%s | grade=%s | session=%s | regime=%s | location=%s | result=BLOCKED | reason=%s | timerStarted=false | orderSendReached=false",
+                  signal==1?"BUY":"SELL",setupName,grade,SessionTag(),RegimeName(),
+                  XAU_LocationQualityName(XAU_OwnerDirectionalLocation(signal,g_transitionDecision)),
+                  transitionGateReason);
+      XAU_RecordExactPrimaryOutcome(signal,setupName,transitionGateReason,false);
+      g_alignedCandidates[0].firstCandidateTime=0;
+      g_alignedCandidates[0].readinessRecheckAt=0;
+      XAU_M30FinalizeCandidateWithoutTrade(transitionGateReason);
+      g_lastSkipReason=transitionGateReason;
+      UpdateDashboard(0,combinedScore,grade);
+      return;
    }
 
    // v6.17.14 FLEET-CONSISTENCY: DecisionFingerprint -- one line per completed
@@ -21709,15 +21228,24 @@ void OnTick()
    }
 
    bool tradeOpened = OpenTrade(signal, bufATR[1], setupName + " [" + grade + "]", finalSzMult);
+   string exactExecutionResult=tradeOpened
+      ? "EXECUTED_BROKER_CONFIRMED"
+      : (StringLen(g_lastOpenTradeFailureReason)>0
+         ? "CANCEL_"+g_lastOpenTradeFailureReason
+         : "CANCEL_EXECUTION_NOT_CONFIRMED");
+   PrintFormat("PRIMARY_ORDER_SEND_RESULT | direction=%s | setup=%s | orderSendReached=%s | result=%s | brokerRetcode=%u",
+               signal==1?"BUY":"SELL",setupName,
+               g_lastOpenTradeOrderSendReached?"true":"false",
+               exactExecutionResult,g_lastOpenTradeBrokerRetcode);
    XAU_RecordExactPrimaryOutcome(signal,setupName,
-                                 tradeOpened?"EXECUTED_BROKER_CONFIRMED":"CANCEL_EXECUTION_NOT_CONFIRMED",
+                                 exactExecutionResult,
                                  tradeOpened);
    // One terminal attempt per immutable candidate. Success or failure ends
    // this timing lifecycle; no readiness recheck can resurrect it.
    g_alignedCandidates[0].firstCandidateTime = 0;
    g_alignedCandidates[0].readinessRecheckAt = 0;
    if(!tradeOpened)
-      XAU_M30FinalizeCandidateWithoutTrade("CANCEL_EXECUTION_NOT_CONFIRMED");
+      XAU_M30FinalizeCandidateWithoutTrade(exactExecutionResult);
    if(!tradeOpened) g_pendingSmartCautionMemory.valid=false;
    // v6.20.1: unconditionally invalidate the entry-timing mailbox right after
    // this specific OpenTrade attempt, success or fail -- it must never leak
@@ -22538,18 +22066,9 @@ void PrintBacktestAuditReport()
 // caller, manual override included.
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
 {
-   // Owner directive 2026-07-25 (Phase 14, conservative initial scope):
-   // the offline lease may only ever authorize a genuine, fully-automated
-   // CORE candidate -- never RE_ENTRY (identified by its
-   // "RE_ENTRY_FRESH_SETUP:" reason prefix, since it calls this same
-   // OpenTrade() function rather than having its own execution path --
-   // see audits/offline_lease/02_reservation_flow_audit.md §3) and never
-   // a manual/force override (isManualOverride=true). This flag is passed
-   // straight through to XAU_CanOpenDirection()'s allowOfflineFallback
-   // parameter below and touches nothing else about how this function
-   // decides direction, size, SL, or timing.
-   bool xauLeaseIsGenuineCoreEntry = (!isManualOverride) && (StringFind(reason, "RE_ENTRY_FRESH_SETUP:") != 0);
-
+   g_lastOpenTradeFailureReason="PRE_BROKER_EXECUTION_GATE_REJECTED_SEE_EXACT_GATE_LOG";
+   g_lastOpenTradeBrokerRetcode=0;
+   g_lastOpenTradeOrderSendReached=false;
    // The analysis/timer/final-arbiter pipeline has already approved `signal`
    // before OpenTrade is called. This is the one final execution mapping:
    // fresh BRKT_UP/BRKT_DN candidates invert only in Scenario C; all other
@@ -22930,6 +22449,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
             : "NO_VALID_CLOSED_M10_SWING_INVALIDATION";
          PrintFormat("STRUCTURAL_SL_BLOCK | signal=%s reason=%s rawLevel=%.2f buffer=%.2f atrFloorDist=%.2f",
                      signal==1?"BUY":"SELL", structuralBlock, slRawLevel, slBuffer, slDist);
+         g_lastOpenTradeFailureReason="STRUCTURAL_SL_BLOCK:"+structuralBlock;
          BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "StructuralSL",
                                    signal, funnelSetup, funnelGrade, funnelScore,
                                    true, false, "BLOCKED", structuralBlock,
@@ -23722,7 +23242,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
 
    // Independent immutable-policy assertion after every strategy/AI decision
    // and before any cross-instance lock, reservation or broker-send side
-   // effect. Manual-force, re-entry and recovery paths receive no exemption.
+   // effect. Manual-force and recovery paths receive no exemption.
    string permanentCoreAssertion = "";
    if(!XAU_PermanentM10CategoryFinalAssertion(isManualOverride ? "MANUAL_FORCE" : reason,
                                                funnelGrade, signal, funnelSetup,
@@ -23809,8 +23329,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       string sendGuardReason = "";
       string coreExecutionKey = XAU_CoreExecutionKey(signal);
       if(!XAU_CanOpenDirection(signal, isManualOverride ? "MANUAL_FORCE" : "NORMAL_CORE",
-                               sendGuardReason, directionReservationId, coreExecutionKey,
-                               xauLeaseIsGenuineCoreEntry))
+                               sendGuardReason, directionReservationId, coreExecutionKey))
       {
          PrintFormat("DIRECTION_EXCLUSIVITY_FINAL_SEND_BLOCK signal=%s reason=%s", signal == 1 ? "BUY" : "SELL", sendGuardReason);
          return false;
@@ -23823,11 +23342,13 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    string ownerDirectionComment=StringFormat("XAU-SNIPER|ORIG=%s|EXEC=%s|REG=%s|INV=%s|%s",
       ownerOriginalSignalDirection==1?"BUY":"SELL",signal==1?"BUY":"SELL",
       XAU_OwnerRegimeLabel(frozenEntryRegime),breakoutInversionApplied?"Y":"N",reason);
+   g_lastOpenTradeOrderSendReached=true;
    if(signal == 1) requestOk = trade.Buy(lots, Symbol(), 0, sl, 0.0, ownerDirectionComment);
    else requestOk = trade.Sell(lots, Symbol(), 0, sl, 0.0, ownerDirectionComment);
    if(requestOk) XAU_OwnerLocationFinalAssertion(signal, isManualOverride ? "MANUAL_FORCE" : reason);
 
    uint brokerRetcode = trade.ResultRetcode();
+   g_lastOpenTradeBrokerRetcode=brokerRetcode;
    ulong openedDealTicket = trade.ResultDeal();
    ulong openedPosId = 0;
    ulong confirmedTicket = 0; string confirmedSymbol = ""; long confirmedMagic = 0; int confirmedDirection = 0;
@@ -23870,6 +23391,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
    }
    bool ok = XAU_BrokerOpenRetcodeAccepted(brokerRetcode) && liveConfirmed && ownerSLConfirmed;
+   if(!ok)
+      g_lastOpenTradeFailureReason=StringFormat("BROKER_OPEN_NOT_CONFIRMED:retcode=%u:requestOk=%s:liveConfirmed=%s:ownerSLConfirmed=%s",
+                                                brokerRetcode,requestOk?"true":"false",
+                                                liveConfirmed?"true":"false",ownerSLConfirmed?"true":"false");
+   else
+      g_lastOpenTradeFailureReason="";
 
    // v6.25.1 -- record broker result against the direction reservation: on
    // failure release it immediately (the direction is free again for the
@@ -23888,46 +23415,6 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                   requestOk?"true":"false", brokerRetcode,
                   XAU_BrokerOpenRetcodeAccepted(brokerRetcode)?"true":"false",
                   openedPosId, liveConfirmed?"true":"false");
-   }
-
-   // Owner directive 2026-07-25, Phase 12 step 30: the offline lease
-   // allowance is consumed (and the offline event durably queued for
-   // backend reconciliation) ONLY when the broker retcode was accepted --
-   // confirmed (ok) OR ambiguous-may-have-executed (accepted but
-   // liveConfirmed/ownerSLConfirmed still false) -- and NEVER merely
-   // because this candidate was evaluated or authorized, and NEVER on a
-   // definitive broker rejection. The local mutex is released in every
-   // case so a later genuine retry is never blocked by this attempt.
-   if(g_xauLeaseLastAuthWasOffline)
-   {
-      if(XAU_BrokerOpenRetcodeAccepted(brokerRetcode))
-      {
-         XauLeaseState currentLease;
-         if(XAU_LeaseLoadFromDisk(currentLease))
-         {
-            if(XAU_LeaseConsumeOfflineAllowance(currentLease, g_xauLeaseLastOfflineExecutionKey))
-            {
-               string xauLeaseFamilyForReconcile = isManualOverride ? "MANUAL_FORCE" : "NORMAL_CORE";
-               string xauLeaseResultForReconcile = liveConfirmed ? "CONFIRMED" : "AMBIGUOUS";
-               XAU_LeaseQueueReconciliationEvent(g_xauLeaseLastOfflineExecutionKey, currentLease.leaseId,
-                                                  currentLease.leaseSequence, signal,
-                                                  xauLeaseFamilyForReconcile,
-                                                  IntegerToString((long)openedDealTicket),
-                                                  xauLeaseResultForReconcile, TimeCurrent());
-               PrintFormat("XAUCLOUD_OFFLINE_LEASE_CONSUMED leaseId=%s sequence=%I64d remainingAfter=%d result=%s",
-                           currentLease.leaseId, currentLease.leaseSequence,
-                           (int)(currentLease.remainingOfflineNewCampaigns - currentLease.consumedThisLease),
-                           liveConfirmed ? "CONFIRMED" : "AMBIGUOUS");
-            }
-         }
-      }
-      else
-      {
-         PrintFormat("XAUCLOUD_OFFLINE_LEASE_NOT_CONSUMED_DEFINITIVE_REJECTION executionKey=%s retcode=%u",
-                     g_xauLeaseLastOfflineExecutionKey, brokerRetcode);
-      }
-      XAU_LeaseMutexRelease(g_xauLeaseLastOfflineMutexName);
-      g_xauLeaseLastAuthWasOffline = false;
    }
 
    if(ok)
@@ -39483,20 +38970,6 @@ void XAU_RecordExactPrimaryOutcome(int signal,string setupName,string reason,boo
 
    PrintFormat("EXACT_CANDIDATE_FINAL_OUTCOME | candidateId=%s | result=%s | executed=%s | finalized=%d",
                candidateId,reason,executed?"true":"false",g_exactOutcomeFinalized);
-   if(StringFind(setupName,"HYBRID_M5_")==0)
-   {
-      string hybridEvent=executed?"HYBRID_CANDIDATE_EXECUTED":"HYBRID_CANDIDATE_REJECTED";
-      if(executed) g_hybridM5ExecutedCount++;
-      if(StringFind(upper,"PERM_BLOCK_")>=0)
-      {
-         g_hybridM5PermanentBlockCount++;
-         PrintFormat("HYBRID_PERMANENT_BLOCK | candidateId=%s | direction=%s | setup=%s | reason=%s | finalAuthoritativeRecheck=true | executionResult=NO_ORDER",
-                     candidateId,signal==1?"BUY":"SELL",setupName,reason);
-      }
-      PrintFormat("%s | candidateId=%s | direction=%s | setup=%s | result=%s | executed=%s | sharedProductionPath=true",
-                  hybridEvent,candidateId,signal==1?"BUY":"SELL",setupName,reason,
-                  executed?"true":"false");
-   }
 }
 
 bool XAU_TimingAuthorityAllows(int signal, string setupName, double atr, string &why)
@@ -39825,11 +39298,10 @@ bool XAU_RunNoBreakoutAndSnapshotSelfTests()
 }
 
 // =====================================================================
-// XauCloud-m10 v6.25.30 PERMANENT OWNER CATEGORY POLICY
+// XauCloud-m10 PERMANENT HARMFUL-CATEGORY POLICY
 // =====================================================================
-// This is the exact owner-approved v6.25.29 policy promoted to production.
-// It is deliberately expressed as one pure facts function and one shared
-// resolver. It has no runtime input and no positive override path.
+// This policy is deliberately expressed as one pure facts function and one
+// shared resolver. It has no runtime input and no positive override path.
 // CORE, RE_ENTRY, PYRAMID, COUNTER_EXCURSION, recovery and manual-force
 // callers all converge through XAU_OwnerEntryPermission; the three broker
 // send sites also call XAU_PermanentM10CategoryFinalAssertion as a separate
@@ -39890,8 +39362,9 @@ bool XAU_IsPermanentM10CategoryBlocked(string grade,
       return true;
    }
 
-   // A+ at RESET_PENDING is permanently blocked in every session, including
-   // Asia. This is a code-level owner policy with no input or AI override.
+   // Permanent owner policy from the 114-trade audit:
+   // A+ at RESET_PENDING was the weak reset-pending subgroup. Block it
+   // everywhere, including Asia. This is code-level and has no input toggle.
    if(canonicalGrade=="A+" && location==LOCATION_RESET_PENDING)
    {
       primaryReason="PERM_BLOCK_A_PLUS_RESET_PENDING";
@@ -40045,7 +39518,7 @@ void XAU_RecordPermanentM10CategoryBlock(string phase,
    if(StringFind(allReasons,"PERM_BLOCK_RESET_PENDING_GRADE_B")>=0)
       g_permM10ResetPendingGradeBBlocked++;
 
-   PrintFormat("PERMANENT_M10_CATEGORY_BLOCK | policyId=XAUCLOUD_M10_OWNER_POLICY_V62530 | timestamp=%s | symbol=%s | candidateId=%s | phase=%s | direction=%s | session=%s | grade=%s | regime=%s | location=%s | reversalClassified=%s | horizon=%s | thesisAction=%s | entryModule=%s | strategy=%s | primaryReason=%s | allReasons=%s | uniqueBlocked=%d | orderSendReached=false",
+   PrintFormat("PERMANENT_M10_CATEGORY_BLOCK | timestamp=%s | symbol=%s | candidateId=%s | phase=%s | direction=%s | session=%s | grade=%s | regime=%s | location=%s | reversalClassified=%s | horizon=%s | thesisAction=%s | entryModule=%s | strategy=%s | primaryReason=%s | allReasons=%s | uniqueBlocked=%d | orderSendReached=false",
                TimeToString(TimeCurrent(),TIME_DATE|TIME_SECONDS),Symbol(),candidateId,phase,
                candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN",
                facts.effectiveSession,facts.canonicalGrade,
@@ -40098,7 +39571,7 @@ bool XAU_PermanentM10CategoryFinalAssertion(string source,
                                              candidateSetup,reason))
       return true;
    g_permM10FinalAssertionFailures++;
-   PrintFormat("PERMANENT_M10_CATEGORY_ASSERTION_BLOCK | CRITICAL | policyId=XAUCLOUD_M10_OWNER_POLICY_V62530 | symbol=%s | direction=%s | source=%s | setup=%s | grade=%s | reason=%s | assertionBlocks=%d | orderSendReached=false",
+   PrintFormat("PERMANENT_M10_CATEGORY_ASSERTION_BLOCK | CRITICAL | symbol=%s | direction=%s | source=%s | setup=%s | grade=%s | reason=%s | assertionFailures=%d | orderSendReached=false",
                Symbol(),candidateDirection==1?"BUY":candidateDirection==-1?"SELL":"UNKNOWN",
                source,candidateSetup,grade,reason,g_permM10FinalAssertionFailures);
    return false;
@@ -40106,58 +39579,62 @@ bool XAU_PermanentM10CategoryFinalAssertion(string source,
 
 bool XAU_RunPermanentM10CategoryPolicySelfTests()
 {
-   bool checks[14];
+   bool checks[16];
    string primary="",all="";
    bool reversal=false;
-
-   // Required owner allow/block matrix.
-   checks[0]=XAU_IsPermanentM10CategoryBlocked("A","ASIA",LOCATION_GOOD,
-      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
-      primary,all,reversal) && primary=="PERM_BLOCK_ASIA_NON_A_PLUS";
-   checks[1]=XAU_IsPermanentM10CategoryBlocked("B","ASIA",LOCATION_GOOD,
-      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
-      primary,all,reversal) && primary=="PERM_BLOCK_ASIA_NON_A_PLUS";
-   checks[2]=!XAU_IsPermanentM10CategoryBlocked("A+","ASIA",LOCATION_GOOD,
-      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
-      primary,all,reversal);
-   checks[3]=XAU_IsPermanentM10CategoryBlocked("A+","ASIA",LOCATION_RESET_PENDING,
-      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
-      primary,all,reversal) && primary=="PERM_BLOCK_A_PLUS_RESET_PENDING";
-   checks[4]=XAU_IsPermanentM10CategoryBlocked("A+","LONDON",LOCATION_RESET_PENDING,
-      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
-      primary,all,reversal) && primary=="PERM_BLOCK_A_PLUS_RESET_PENDING";
-   checks[5]=XAU_IsPermanentM10CategoryBlocked("A+","NEW_YORK",LOCATION_RESET_PENDING,
-      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
-      primary,all,reversal) && primary=="PERM_BLOCK_A_PLUS_RESET_PENDING";
-   checks[6]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
+   checks[0]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","RANGE_REVERSAL",
+      primary,all,reversal) && primary=="PERM_BLOCK_GRADE_B_REVERSAL";
+   checks[1]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
       XAU_HORIZON_REVERSAL,ALLOW_CORE,"PRIMARY","M10_ORIGINATED_CANDIDATE",
       primary,all,reversal) && primary=="PERM_BLOCK_GRADE_B_REVERSAL";
-   checks[7]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_RESET_PENDING,
+   checks[2]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,OPPOSITE_DISCOVERY,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal) && reversal;
+   checks[3]=XAU_IsPermanentM10CategoryBlocked("B","ASIA",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal) && primary=="PERM_BLOCK_ASIA_NON_A_PLUS";
+   checks[4]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_RESET_PENDING,
       XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
       primary,all,reversal) && primary=="PERM_BLOCK_RESET_PENDING_GRADE_B";
-   checks[8]=!XAU_IsPermanentM10CategoryBlocked("A","LONDON",LOCATION_GOOD,
+   checks[5]=XAU_IsPermanentM10CategoryBlocked("B","ASIA",LOCATION_RESET_PENDING,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal) &&
+      all=="PERM_BLOCK_ASIA_NON_A_PLUS";
+   checks[6]=XAU_IsPermanentM10CategoryBlocked("B","ASIA",LOCATION_RESET_PENDING,
+      XAU_HORIZON_REVERSAL,OPPOSITE_DISCOVERY,"PRIMARY","RANGE_REVERSAL",
+      primary,all,reversal) &&
+      all=="PERM_BLOCK_ASIA_NON_A_PLUS";
+   checks[7]=!XAU_IsPermanentM10CategoryBlocked("A","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_REVERSAL,OPPOSITE_DISCOVERY,"PRIMARY","RANGE_REVERSAL",
+      primary,all,reversal);
+   checks[8]=!XAU_IsPermanentM10CategoryBlocked("A+","LONDON",LOCATION_GOOD,
+      XAU_HORIZON_REVERSAL,OPPOSITE_DISCOVERY,"PRIMARY","RANGE_REVERSAL",
+      primary,all,reversal);
+   checks[9]=!XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
       XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
       primary,all,reversal);
-   checks[9]=!XAU_IsPermanentM10CategoryBlocked("A+","LONDON",LOCATION_GOOD,
+   checks[10]=!XAU_IsPermanentM10CategoryBlocked("B","NEW_YORK",LOCATION_GOOD,
       XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
       primary,all,reversal);
-
-   // Additional session coverage and preserved Grade-B classification.
-   checks[10]=XAU_IsPermanentM10CategoryBlocked("A+","FIX",LOCATION_RESET_PENDING,
+   checks[11]=XAU_IsPermanentM10CategoryBlocked("A","ASIA",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal) && primary=="PERM_BLOCK_ASIA_NON_A_PLUS";
+   checks[12]=!XAU_IsPermanentM10CategoryBlocked("A+","ASIA",LOCATION_GOOD,
+      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
+      primary,all,reversal);
+   checks[13]=XAU_IsPermanentM10CategoryBlocked("A+","LONDON",LOCATION_RESET_PENDING,
       XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
       primary,all,reversal) && primary=="PERM_BLOCK_A_PLUS_RESET_PENDING";
-   checks[11]=XAU_IsPermanentM10CategoryBlocked("A+","LATE",LOCATION_RESET_PENDING,
+   checks[14]=!XAU_IsPermanentM10CategoryBlocked("A","LONDON",LOCATION_RESET_PENDING,
       XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
-      primary,all,reversal) && primary=="PERM_BLOCK_A_PLUS_RESET_PENDING";
-   checks[12]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
+      primary,all,reversal);
+   checks[15]=XAU_IsPermanentM10CategoryBlocked("B","LONDON",LOCATION_GOOD,
       XAU_HORIZON_COUNTER_EXCURSION,ALLOW_CORE,"COUNTER_EXCURSION","TREND_PULLBACK",
-      primary,all,reversal) && primary=="PERM_BLOCK_GRADE_B_REVERSAL" && reversal;
-   checks[13]=!XAU_IsPermanentM10CategoryBlocked("B","NEW_YORK",LOCATION_GOOD,
-      XAU_HORIZON_INTRADAY_TREND,ALLOW_CORE,"PRIMARY","TREND_PULLBACK",
-      primary,all,reversal);
+      primary,all,reversal) && reversal;
 
    int passed=0,failed=0;
-   for(int i=0;i<14;i++)
+   for(int i=0;i<16;i++)
    {
       if(checks[i]) passed++;
       else
@@ -40166,7 +39643,7 @@ bool XAU_RunPermanentM10CategoryPolicySelfTests()
          PrintFormat("PERMANENT_M10_CATEGORY_SELF_TEST_FAIL | case=%d",i+1);
       }
    }
-   PrintFormat("PERMANENT_M10_CATEGORY_SELF_TEST | policyId=XAUCLOUD_M10_OWNER_POLICY_V62530 | passed=%d | failed=%d | runtimeInputs=NONE | hardVeto=true",
+   PrintFormat("PERMANENT_M10_CATEGORY_SELF_TEST | passed=%d | failed=%d | runtimeInputs=NONE | hardVeto=true",
                passed,failed);
    return failed==0;
 }
@@ -43233,7 +42710,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       BotMonitorBool(g_postClose[0].valid && g_postClose[0].wasProfitable && g_postClose[0].direction == 1),
       BotMonitorBool(g_postClose[1].valid && g_postClose[1].wasProfitable && g_postClose[1].direction == -1),
       BotMonitorJsonSafe(g_m10Snapshot.freshnessState, 20), g_m10Snapshot.ageSeconds,
-      BotMonitorJsonSafe(XAUAI_BUILD_HASH, 100), BotMonitorJsonSafe(XAUAI_EA_VERSION, 64),
+      BotMonitorJsonSafe(XAUAI_BUILD_HASH, 100), BotMonitorJsonSafe(XAUAI_EA_VERSION, 20),
       AccountInfoInteger(ACCOUNT_LOGIN), Symbol());
 
    string body = StringFormat(
@@ -43350,10 +42827,7 @@ void BotMonitorHeartbeat()
    string body = StringFormat(
       "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"%s\",\"build_hash\":\"%s\","
       "\"input_hash\":\"%s\",\"account_number\":\"%I64d\","
-      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M10\","
-      "\"decision_timeframe\":\"M10\",\"evidence_timeframe\":\"M5\","
-      "\"hybrid_mode\":true,\"hybrid_scan_phase\":\"TWO_CLOSED_M5_TO_ONE_M10\","
-      "\"digits\":%d,\"point\":%.8f,"
+      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"digits\":%d,\"point\":%.8f,"
       "\"magic_number\":%d,\"spread\":%.0f,\"avg_spread\":%.1f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
