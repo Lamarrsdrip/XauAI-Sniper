@@ -1406,11 +1406,26 @@ def _load_ea_release_manifest() -> dict:
 
 
 def _current_ea_release() -> Optional[dict]:
+    """The one function every version-facing surface (download, Command
+    Center display, fulfillment email) must call -- never read
+    manifest['current_version'] directly. Fails closed: a release is only
+    ever treated as current if it's both pointed to by current_version AND
+    explicitly marked stable_status=true. This matters because
+    current_version and the releases dict are edited independently (e.g. by
+    the CI auto-promotion workflow); a release that fails validation there
+    must never become servable just because current_version still points at
+    it from a prior, now-stale state."""
     manifest = _load_ea_release_manifest()
     current = manifest.get("current_version")
     if not current:
         return None
-    return manifest.get("releases", {}).get(current)
+    release = manifest.get("releases", {}).get(current)
+    if not release:
+        return None
+    if not release.get("stable_status"):
+        logger.error(f"EA_RELEASE_CURRENT_VERSION_NOT_STABLE version={current} -- refusing to serve/display it")
+        return None
+    return release
 
 
 # ---------------------------------------------------------------------------
@@ -1525,16 +1540,47 @@ async def download_ea_release(token: str):
     lic = await db.pin_licenses.find_one({"id": license_id, "is_active": True}, {"_id": 0})
     if not lic:
         raise HTTPException(status_code=403, detail="License is no longer active.")
-    release = _load_ea_release_manifest().get("releases", {}).get(payload.get("version", ""))
-    if not release:
+    version = payload.get("version", "")
+    release = _load_ea_release_manifest().get("releases", {}).get(version)
+    # Re-check stable_status here, not just at token-mint time: a release
+    # can be disabled by an admin (e.g. a critical bug found) within the
+    # token's short lifetime, and an already-minted token must not still be
+    # able to pull down a build that's since been pulled from circulation.
+    if not release or not release.get("stable_status"):
+        await db.ea_download_log.insert_one({
+            "id": str(uuid.uuid4()), "user_id": payload.get("user_id", ""), "license_id": license_id,
+            "version": version, "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "result": "REJECTED_RELEASE_NOT_AVAILABLE",
+        })
         raise HTTPException(status_code=404, detail="Release no longer available.")
-    p = EA_RELEASES_DIR / payload["version"] / release["ex5_filename"]
+    p = EA_RELEASES_DIR / version / release["ex5_filename"]
     if not p.exists():
-        logger.error(f"EA_RELEASE_ARTIFACT_MISSING version={payload.get('version')} path={p}")
+        logger.error(f"EA_RELEASE_ARTIFACT_MISSING version={version} path={p}")
+        await db.ea_download_log.insert_one({
+            "id": str(uuid.uuid4()), "user_id": payload.get("user_id", ""), "license_id": license_id,
+            "version": version, "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "result": "REJECTED_ARTIFACT_MISSING",
+        })
         raise HTTPException(status_code=404, detail="Release artifact missing.")
+    # Runtime integrity check -- the CI workflow verifies the EX5 hash
+    # against the manifest at push time, but a customer download must never
+    # rely solely on a check that ran once at commit time; recompute the
+    # hash of the exact bytes about to be served and refuse to serve on any
+    # mismatch (corrupted artifact, tampered file, stale manifest entry).
+    actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+    expected_hash = release.get("ex5_sha256", "")
+    if actual_hash != expected_hash:
+        logger.error(f"EA_RELEASE_HASH_MISMATCH version={version} expected={expected_hash} actual={actual_hash}")
+        await db.ea_download_log.insert_one({
+            "id": str(uuid.uuid4()), "user_id": payload.get("user_id", ""), "license_id": license_id,
+            "version": version, "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "result": "REJECTED_HASH_MISMATCH",
+        })
+        raise HTTPException(status_code=503, detail="Release integrity check failed. The admin has been alerted.")
     await db.ea_download_log.insert_one({
         "id": str(uuid.uuid4()), "user_id": payload.get("user_id", ""), "license_id": license_id,
-        "version": payload.get("version", ""), "downloaded_at": datetime.now(timezone.utc).isoformat(),
+        "version": version, "downloaded_at": datetime.now(timezone.utc).isoformat(),
+        "result": "SUCCESS",
     })
     return FileResponse(path=str(p), filename=release["customer_filename"], media_type="application/octet-stream")
 
