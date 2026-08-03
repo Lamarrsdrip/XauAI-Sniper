@@ -7,6 +7,8 @@ on:
       - "**.mq5"
       - "**.mqh"
       - "tests/test_xau_*.py"
+      - "backend/ea_releases/**"
+      - "scripts/auto_promote_release.py"
       - ".github/workflows/ea.yml"
   pull_request:
     branches: [main, "release/**"]
@@ -14,6 +16,8 @@ on:
       - "**.mq5"
       - "**.mqh"
       - "tests/test_xau_*.py"
+      - "backend/ea_releases/**"
+      - "scripts/auto_promote_release.py"
       - ".github/workflows/ea.yml"
 
 jobs:
@@ -63,6 +67,50 @@ jobs:
           print("EX5 artifact checksum matches manifest -- OK")
           PY
 
+  auto-promote-release:
+    # Only ever runs on a real push to main (never a PR -- promotion must
+    # never happen against unmerged/unreviewed code), and only after
+    # static-checks has confirmed the currently-pinned release is itself
+    # consistent, so a pre-existing problem with the OLD current_version
+    # never blocks promoting a genuinely newer, valid one.
+    #
+    # This is the durable half of release promotion (see
+    # backend/server.py's admin /admin/releases/promote endpoint for the
+    # immediate-but-not-durable admin-panel half): current_version is
+    # updated as part of a real commit on main, so it survives every future
+    # redeploy, unlike a live edit to the running container's filesystem.
+    needs: static-checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Decide and apply promotion
+        id: promote
+        run: python3 scripts/auto_promote_release.py
+
+      - name: Commit and push promoted manifest
+        if: steps.promote.outputs.promoted == 'true'
+        run: |
+          git config user.name "xaucloud-release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git add backend/ea_releases/manifest.json
+          # [skip ci] prevents this bot commit from re-triggering this same
+          # workflow -- it only touches manifest.json, which this workflow's
+          # own path filters would otherwise pick back up, and the
+          # promotion decision is already final once applied.
+          git commit -m "chore(release): auto-promote to ${{ steps.promote.outputs.version }} [skip ci]"
+          git push
+
 # ---------------------------------------------------------------------
 # NOT COVERED BY THIS WORKFLOW (disclosed honestly rather than faked):
 #
@@ -83,4 +131,10 @@ jobs:
 #   v6.25.24 workflow runs the current production-audit invariants instead;
 #   the historical suite remains available as evidence but is not a valid
 #   current-release gate until it is explicitly retired or version-scoped.
+# - Redeployment. auto-promote-release updates manifest.json's
+#   current_version on main (durable, survives a redeploy) but this
+#   workflow has no credentials for and does not trigger the Emergent
+#   platform's actual redeploy -- the running backend keeps serving
+#   whatever it was already serving until the next redeploy happens
+#   through that platform's own normal process.
 # ---------------------------------------------------------------------
