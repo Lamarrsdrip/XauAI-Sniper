@@ -706,19 +706,44 @@ async def _send_email(to_email: str, subject: str, html: str) -> bool:
         logger.error(f"Email send failed: {e}")
         return False
 
+TELEGRAM_SUPPORT_URL = "https://t.me/emrizeth"
+
 async def send_pin_email(to_email: str, buyer_name: str, pin: str):
+    """Fulfillment email -- resolves the current approved release from the
+    one authoritative manifest (_current_ea_release()) at SEND time, never a
+    hardcoded version. The download button deep-links to the Command Center
+    rather than embedding a direct file URL: the actual signed download
+    token (GET /download/request-token -> /download/ea-release) is only
+    ever minted for whatever release is current at the moment the customer
+    is authenticated and clicks it, so an old purchase email always resolves
+    to the newest approved build, never the version that existed when the
+    email was first sent."""
+    release = _current_ea_release()
+    version_line = f"Current version: <strong>{release['version']}</strong>" if release else "Current version: check Command Center"
+    changelog = (release or {}).get("release_notes", "")
+    changelog_html = f'<p style="margin-top:12px;color:#555;font-size:13px;line-height:1.5;">{changelog}</p>' if changelog else ""
+    command_center_url = f"{PUBLIC_SITE_URL}/command"
     html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-<h2 style="color:#B8860B;">XauCloud EA - License PIN</h2>
+<h2 style="color:#B8860B;">XauCloud - Payment Confirmed</h2>
 <p>Hello {buyer_name or 'Trader'},</p>
 <p>Thank you for your purchase! Here is your unique license PIN:</p>
 <div style="background:#f5f5f5;border:2px solid #B8860B;padding:20px;text-align:center;margin:20px 0;">
 <span style="font-family:monospace;font-size:28px;font-weight:bold;letter-spacing:3px;">{pin}</span>
 </div>
-<p><strong>How to use:</strong></p>
-<ol><li>Download the EA from our website</li><li>Install on MetaTrader 5 (follow our Setup Guide)</li><li>Enter this PIN in the EA settings</li><li>Enable Auto Trading and start!</li></ol>
-<p style="color:#888;font-size:12px;">Keep this PIN private. Each PIN works on one MT5 account.</p>
+<p style="font-size:13px;color:#333;">{version_line}</p>
+{changelog_html}
+<div style="text-align:center;margin:24px 0;">
+<a href="{command_center_url}" style="display:inline-block;background:#B8860B;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;font-size:14px;margin:6px;">Download Latest XauCloud</a>
+<a href="{command_center_url}" style="display:inline-block;background:#222;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;font-size:14px;margin:6px;">Open Command Center</a>
+</div>
+<p><strong>Quick start:</strong></p>
+<ol><li>Sign in to Command Center and link this PIN</li><li>Download the compiled EX5 from your Command Center dashboard</li><li>Install on MetaTrader 5 (see the full install guide in Command Center)</li><li>Enter this PIN in the EA settings and enable Algo Trading</li></ol>
+<div style="text-align:center;margin:20px 0;">
+<a href="{TELEGRAM_SUPPORT_URL}" style="display:inline-block;background:#229ED9;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:bold;font-size:13px;">Message XauCloud Support on Telegram</a>
+</div>
+<p style="color:#888;font-size:12px;">Keep this PIN private. Each PIN works on one MT5 account. Trading involves risk; past results do not guarantee future performance.</p>
 </div>"""
-    return await _send_email(to_email, "Your XauCloud EA License PIN", html)
+    return await _send_email(to_email, "Your XauCloud License PIN", html)
 
 # -------------------------------------------------------------------
 # PUBLIC ROUTES
