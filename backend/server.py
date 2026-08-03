@@ -825,6 +825,41 @@ async def notify_admin_bank_transfer_submitted(tx: dict):
 </div>"""
     return await _notify_admin(f"Bank transfer submitted — {tx.get('reference')}", html)
 
+async def _record_fulfillment_email_result(reference: str, buyer_name: str, buyer_email: str, pin: str, email_sent: bool):
+    """The order is already marked FULFILLED and the license already
+    exists by the time this runs -- a failed send must never be silently
+    lost (the spec's "do not lose the paid order... alert the admin"
+    requirement). No background retry queue exists in this deployment, so
+    this flags the order for admin visibility/manual resend rather than
+    auto-retrying blind."""
+    if email_sent:
+        return
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {"$set": {"fulfillment_email_failed": True, "fulfillment_email_failed_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    logger.error(f"FULFILLMENT_EMAIL_FAILED ref={reference} buyer={buyer_email} -- order is FULFILLED but the customer may not have received their PIN")
+    admin_url = f"{PUBLIC_SITE_URL}/admin"
+    html = f"""<div style="font-family:Arial,sans-serif;">
+<h3>Fulfillment email failed to send</h3>
+<p>Reference: {reference}<br>Buyer: {buyer_name} &lt;{buyer_email}&gt;<br>PIN: {pin}</p>
+<p>The order is fulfilled and the license exists, but the customer may not have received it. Please resend manually or check SMTP configuration.</p>
+<p><a href="{admin_url}">Review in Admin Dashboard</a></p>
+</div>"""
+    await _notify_admin(f"Fulfillment email FAILED — {reference}", html)
+
+@api_router.post("/admin/orders/{reference}/resend-fulfillment-email", dependencies=[Depends(get_current_admin)])
+async def admin_resend_fulfillment_email(reference: str):
+    tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not tx.get("pin_generated"):
+        raise HTTPException(status_code=409, detail="This order has no license to resend yet.")
+    sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), tx["pin_generated"])
+    if sent:
+        await db.payment_transactions.update_one({"reference": reference}, {"$unset": {"fulfillment_email_failed": ""}})
+    return {"sent": sent}
+
 # -------------------------------------------------------------------
 # PUBLIC ROUTES
 # -------------------------------------------------------------------
@@ -1331,7 +1366,8 @@ async def _fulfill_payment(reference: str, source: str) -> dict:
         pin = existing["pin"] if existing else pin
     await db.payment_transactions.update_one(
         {"reference": reference}, {"$set": {"pin_generated": pin, "payment_status": "FULFILLED"}})
-    await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    email_sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    await _record_fulfillment_email_result(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), pin, email_sent)
     await notify_admin_new_order("card payment confirmed", reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), f"₦{tx.get('amount_kobo', 0) / 100:,.0f}")
     logger.info(f"PAYSTACK_FULFILLED ref={reference} source={source}")
     return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
@@ -1419,7 +1455,8 @@ async def _fulfill_nomba_payment(reference: str, source: str) -> dict:
         {"reference": reference},
         {"$set": {"pin_generated": pin, "payment_status": "FULFILLED", "nomba_transaction_id": result.nomba_transaction_id}},
     )
-    await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    email_sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    await _record_fulfillment_email_result(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), pin, email_sent)
     await notify_admin_new_order("card payment confirmed", reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), f"₦{tx.get('amount_kobo', 0) / 100:,.0f}")
     logger.info(f"NOMBA_FULFILLED ref={reference} source={source}")
     return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
@@ -2829,7 +2866,8 @@ async def admin_approve_bank_transfer(reference: str, admin: dict = Depends(get_
         {"$set": {"pin_generated": pin, "payment_status": "FULFILLED",
                    "approved_by": admin["email"], "approved_at": datetime.now(timezone.utc).isoformat()}},
     )
-    await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    email_sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    await _record_fulfillment_email_result(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), pin, email_sent)
     logger.info(f"BANK_TRANSFER_APPROVED ref={reference} admin={admin['email']}")
     return {"status": "approved", "pin": pin}
 
