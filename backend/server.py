@@ -1474,6 +1474,7 @@ async def _bank_transfer_effective_status(tx: dict) -> str:
 
 @api_router.get("/purchase/bank-transfer/eligibility")
 async def bank_transfer_eligibility(request: Request):
+    _rate_limit(f"bank_transfer_eligibility_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
     country = _detect_country_code(request)
     settings = await _get_bank_transfer_settings()
     eligible = country == "NG" and settings.get("enabled", False) and _bank_transfer_is_configured(settings)
@@ -1566,7 +1567,11 @@ async def bank_transfer_upload_proof(reference: str, req: BankTransferProofReque
     return {"status": "ok"}
 
 @api_router.get("/purchase/bank-transfer/{reference}/status")
-async def bank_transfer_status(reference: str):
+async def bank_transfer_status(reference: str, request: Request):
+    # Same generous per-IP window as /purchase/verify/{reference} -- the
+    # frontend legitimately polls this every few seconds while a customer
+    # waits for admin approval.
+    _rate_limit(f"bank_transfer_status_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
     tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
     if not tx:
         raise HTTPException(status_code=404, detail="Not found")
