@@ -63,6 +63,17 @@ def test_zero_credit_and_confidence_fallback_are_defaults():
     assert 'd.status=="LOCAL_AI_LOW_CONFIDENCE"' in parser
 
 
+def test_submit_timeout_has_same_hard_ceiling_as_poll_timeout():
+    submit = function(EA, "bool XAU_LocalAISubmitM10(", "bool XAU_LocalAIPollM10(")
+    poll = function(EA, "bool XAU_LocalAIPollM10(", "void XAU_AICostResetIfNewDay(")
+    assert "MathMax(100,MathMin(1000,InpLocalAISubmitTimeoutMs))" in submit
+    assert "MathMax(100,InpLocalAISubmitTimeoutMs),postData" not in submit
+    assert poll.count("MathMax(100,MathMin(1000,InpLocalAISubmitTimeoutMs))") == 2
+    for variant in (WITH_OWNER, NO_OWNER):
+        variant_submit = function(variant, "bool XAU_LocalAISubmitM10(", "bool XAU_LocalAIPollM10(")
+        assert "MathMax(100,MathMin(1000,InpLocalAISubmitTimeoutMs))" in variant_submit
+
+
 def test_vps_timeout_chain_allows_model4_to_finish_before_relay_expires():
     assert "--timeout 40" in GATEWAY_START
     assert "--inference-timeout 50" in WORKER_START

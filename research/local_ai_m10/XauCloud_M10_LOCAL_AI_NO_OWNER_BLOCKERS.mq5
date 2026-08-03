@@ -31228,7 +31228,7 @@ bool XAU_LocalAISubmitM10(int signal,string setup,string provisionalGrade,XAU_Lo
    StringToCharArray(requestBody,postData,0,StringLen(requestBody));
    ResetLastError();
    int code=WebRequest("POST",endpoint,"Content-Type: application/json\r\n",
-                       MathMax(100,InpLocalAISubmitTimeoutMs),postData,result,responseHeaders);
+                       MathMax(100,MathMin(1000,InpLocalAISubmitTimeoutMs)),postData,result,responseHeaders);
    string response=CharArrayToString(result);
    if(code!=200 && code!=202)
    {

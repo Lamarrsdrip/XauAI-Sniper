@@ -98,11 +98,16 @@ def test_can_open_direction_allows_same_direction_and_no_exposure():
 
 def test_five_arg_overload_claims_reservation_and_rechecks_after_claim():
     ea = read(EA)
-    fn = find_function(ea, "bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, string &blockReason,\n                          string &reservationIdOut, string executionKey)")
+    # v6.25.30-restore (owner directive 2026-08-03): restored the bounded
+    # offline trading lease, which adds a 6th, defaulted-false
+    # allowOfflineFallback parameter. Callers that never passed it
+    # (PYRAMID/COUNTER_EXCURSION) are byte-unchanged; only the signature
+    # string this test searches for grew a trailing default arg.
+    fn = find_function(ea, "bool XAU_CanOpenDirection(int requestedDirection, string requestingFamily, string &blockReason,\n                          string &reservationIdOut, string executionKey, bool allowOfflineFallback = false)")
     assert "XAU_CanOpenDirectionLocalScanOnly(requestedDirection, requestingFamily, blockReason)" in fn
     assert fn.count("XAU_CanOpenDirectionLocalScanOnly(") == 2, "must scan before AND after the atomic claim (owner item 4)"
     assert "XAU_ClaimDirectionReservation(requestedDirection, requestingFamily, executionKey," in fn
-    assert "reservationIdOut, reservationFailReason)" in fn
+    assert "reservationIdOut, reservationFailReason, failureClass)" in fn
     assert "XAU_ReleaseDirectionReservation(reservationIdOut)" in fn, "must release the reservation if the post-claim recheck fails"
 
 
