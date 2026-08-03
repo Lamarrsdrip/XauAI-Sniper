@@ -121,9 +121,11 @@ try {
     $withOwnerMissing = Join-Path $CommonFiles "${Prefix}_missing_with_owner.tsv"
     $noOwnerMissing = Join-Path $CommonFiles "${Prefix}_missing_no_owner.tsv"
 
-    # Preserve verified collection artifacts across an orchestrator restart.
-    # Cache/missing rows are trajectory-specific and are rebuilt cleanly.
-    foreach ($path in @($withOwnerMissing, $noOwnerMissing, $CacheFile, $BuildSummary)) {
+    # Preserve verified collection and exact snapshot/decision pairs across an
+    # orchestrator restart. Missing rows are trajectory-specific and are
+    # rebuilt before each AI pass; the cache builder validates and resumes the
+    # existing TSV without repeating completed local Model 4 inference.
+    foreach ($path in @($withOwnerMissing, $noOwnerMissing)) {
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     }
 
@@ -131,7 +133,10 @@ try {
     # Extra rows are harmless because the EA and builder require full raw-JSON
     # equality; this avoids repeating local inference when the 30-day trajectory
     # reaches an identical market and position state.
-    if (Test-Path -LiteralPath $SeedCacheFile) {
+    if (Test-Path -LiteralPath $CacheFile) {
+        Write-RunLog "CACHE_RESUMED file=$CacheFile rows=$(Get-NonEmptyLineCount $CacheFile)"
+    }
+    elseif (Test-Path -LiteralPath $SeedCacheFile) {
         Copy-Item -LiteralPath $SeedCacheFile -Destination $CacheFile -Force
         Write-RunLog "CACHE_SEEDED source=$SeedCacheFile rows=$(Get-NonEmptyLineCount $CacheFile)"
     }
@@ -168,11 +173,24 @@ try {
 
     $resolved = $false
     for ($iteration = 1; $iteration -le 8; $iteration++) {
-        foreach ($path in @($withOwnerMissing, $noOwnerMissing)) {
-            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+        $aiWithOwnerReport = Join-Path $ResearchRoot "${Prefix}_AI_WITH_OWNER.htm"
+        $aiNoOwnerReport = Join-Path $ResearchRoot "${Prefix}_AI_NO_OWNER.htm"
+        $cacheWriteUtc = (Get-Item -LiteralPath $CacheFile).LastWriteTimeUtc
+        $withOwnerCurrent = ((Get-RealTickQuality $aiWithOwnerReport) -ge 95 -and
+            (Get-Item -LiteralPath $aiWithOwnerReport).LastWriteTimeUtc -ge $cacheWriteUtc)
+        $noOwnerCurrent = ((Get-RealTickQuality $aiNoOwnerReport) -ge 95 -and
+            (Get-Item -LiteralPath $aiNoOwnerReport).LastWriteTimeUtc -ge $cacheWriteUtc)
+        if ($withOwnerCurrent -and $noOwnerCurrent) {
+            Write-RunLog "TESTER_REUSED job=AI_WITH_OWNER report=$aiWithOwnerReport reason=VERIFIED_MODEL4_REPORT_CURRENT_CACHE"
+            Write-RunLog "TESTER_REUSED job=AI_NO_OWNER report=$aiNoOwnerReport reason=VERIFIED_MODEL4_REPORT_CURRENT_CACHE"
         }
-        Invoke-Tester "AI_WITH_OWNER"
-        Invoke-Tester "AI_NO_OWNER"
+        else {
+            foreach ($path in @($withOwnerMissing, $noOwnerMissing)) {
+                if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+            }
+            Invoke-Tester "AI_WITH_OWNER"
+            Invoke-Tester "AI_NO_OWNER"
+        }
         $withMisses = Get-NonEmptyLineCount $withOwnerMissing
         $noMisses = Get-NonEmptyLineCount $noOwnerMissing
         Write-RunLog "AI_CACHE_MISSES iteration=$iteration withOwner=$withMisses noOwner=$noMisses"
