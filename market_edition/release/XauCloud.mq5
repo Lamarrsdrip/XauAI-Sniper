@@ -9911,27 +9911,36 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       }
    }
 
-   // Market Edition compliance fix (Phase 22, second pass): MetaQuotes'
+   // Market Edition compliance fix (Phase 22, third pass): MetaQuotes'
    // automated validation counts each rejected broker request itself, not
    // just log lines -- reclassifying the log line (first pass) didn't
-   // change the actual number of PositionModify() calls sent. When the
-   // exact same (ticket, target SL) was just rejected with retcode 10016
-   // (INVALID_STOPS -- "order or position being close to market"), skip
-   // resubmitting it until either the target changes (price moved enough
-   // for a caller to compute a new level) or the cooldown elapses -- don't
-   // keep hammering a request that cannot succeed until price itself moves.
-   // No effect on which SL value is computed or when a *different* target
-   // is attempted; only suppresses re-sending an identical just-rejected one.
-   // Both static variables are declared once, in this outer scope, so the
-   // check below and the write further down (after a real rejection) refer
-   // to the same persistent storage.
-   static ulong    g_lastInvalidStopsTicket = 0;
-   static double   g_lastInvalidStopsSL     = 0.0;
-   static datetime g_lastInvalidStopsAt     = 0;
+   // change the actual number of PositionModify() calls sent, and gating
+   // the resubmit-cooldown on retcode==10016 only (second pass) missed the
+   // dominant real-world rejection code entirely: the historical Feb-2024
+   // XAUUSD test window that MetaQuotes replays rejects most of these
+   // modifies with retcode 10029 (TRADE_RETCODE_FROZEN -- "order or
+   // position frozen because price is within the freeze level"), which
+   // reads as "order or position being close to market" in the terminal's
+   // trade journal and is textually easy to mistake for 10016's "Invalid
+   // stops", but is a distinct code the old `ret == 10016` gate never
+   // caught. The actual requirement is retcode-agnostic: never resend an
+   // identical (ticket, target SL) request that was just rejected, for
+   // *any* rejection reason, until either the target changes (price moved
+   // enough for a caller to compute a new level) or the cooldown elapses --
+   // a request that failed for reason X will fail again immediately for
+   // the same reason X if nothing about it changed. No effect on which SL
+   // value is computed or when a *different* target is attempted; only
+   // suppresses re-sending an identical just-rejected one. Both static
+   // variables are declared once, in this outer scope, so the check below
+   // and the write further down (after a real rejection) refer to the
+   // same persistent storage.
+   static ulong    g_lastRejectedModifyTicket = 0;
+   static double   g_lastRejectedModifySL     = 0.0;
+   static datetime g_lastRejectedModifyAt     = 0;
    {
       double slTol = MathMax(point * 2, 0.00001);
-      if(g_lastInvalidStopsTicket == ticket && MathAbs(g_lastInvalidStopsSL - newSL) < slTol &&
-         TimeCurrent() - g_lastInvalidStopsAt < 5)
+      if(g_lastRejectedModifyTicket == ticket && MathAbs(g_lastRejectedModifySL - newSL) < slTol &&
+         TimeCurrent() - g_lastRejectedModifyAt < 5)
       {
          return false;
       }
@@ -9956,30 +9965,19 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
          ret = trade.ResultRetcode();
          err = GetLastError();
       }
-      // Record a genuine invalid-stops rejection so the next identical
+      // Record this rejection (whatever the retcode) so the next identical
       // request within the cooldown window (above) is skipped entirely
-      // rather than resent to the broker.
-      if(ret == 10016)
-      {
-         g_lastInvalidStopsTicket = ticket;
-         g_lastInvalidStopsSL     = newSL;
-         g_lastInvalidStopsAt     = TimeCurrent();
-      }
+      // rather than resent to the broker. Unconditional on purpose -- see
+      // the Phase 22 third-pass note above.
+      g_lastRejectedModifyTicket = ticket;
+      g_lastRejectedModifySL     = newSL;
+      g_lastRejectedModifyAt     = TimeCurrent();
       // v4.6.5 - Downgrade common non-fatal retcodes to throttled INFO (1/min).
-      //   10025 NO_CHANGES, 10004 REQUOTE, 10021 OFF_QUOTES, 4756 invalid stops
-      //   are transient/benign - the next tick will retry. Don't spam the log.
-      // Market Edition compliance fix (Phase 22): 10016 (INVALID_STOPS, "order
-      // or position being close to market") was already treated as retry-worthy
-      // by this same function's own retry block a few lines above (the
-      // `err==4756 || ret==10016` branch just before this), but was missing
-      // from this benign set -- so once that one retry also failed, every
-      // following tick printed an unthrottled SL-MOD FAIL line instead of the
-      // rate-limited SL-MOD INFO line used for the other transient retcodes.
-      // MetaQuotes' automated Market validation flagged the resulting log
-      // spam on a real historical test window. This only changes which log
-      // line/throttle a known-transient retcode uses -- the SL value computed
-      // and the modify attempt itself are byte-for-byte unchanged.
-      bool benign = (ret == 10025 || ret == 10004 || ret == 10021 || ret == 10016 || err == 4756 || err == 10025);
+      //   10025 NO_CHANGES, 10004 REQUOTE, 10021 OFF_QUOTES, 10016 INVALID_STOPS,
+      //   10029 FROZEN, 4756 context busy are transient/benign - the cooldown
+      //   above already prevents the request itself from repeating, so the log
+      //   line only needs the same throttle. Don't spam the log.
+      bool benign = (ret == 10025 || ret == 10004 || ret == 10021 || ret == 10016 || ret == 10029 || err == 4756 || err == 10025);
       if(benign)
       {
          static datetime lastBenignWarn = 0;
