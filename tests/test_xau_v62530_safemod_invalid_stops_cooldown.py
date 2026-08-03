@@ -16,12 +16,18 @@ def test_root_backend_and_with_owner_copies_stay_synced():
     assert EA == WITH_OWNER
 
 
-def test_invalid_stops_added_to_benign_throttled_set():
+def test_frozen_retcode_added_to_benign_throttled_set():
+    # Third pass: the dominant real-world rejection in the historical
+    # Feb-2024 XAUUSD replay MetaQuotes runs was retcode 10029 (FROZEN,
+    # "order or position frozen because price is within the freeze
+    # level"), not 10016 (INVALID_STOPS) as the second pass assumed --
+    # the two read very similarly in the trade journal ("close to
+    # market" vs "Invalid stops") but are distinct codes.
     fn = function(EA, "bool SafeModifySL(", "double StrategyReferenceBalance()")
-    assert "bool benign = (ret == 10025 || ret == 10004 || ret == 10021 || ret == 10016 || err == 4756 || err == 10025);" in fn
+    assert "bool benign = (ret == 10025 || ret == 10004 || ret == 10021 || ret == 10016 || ret == 10029 || err == 4756 || err == 10025);" in fn
 
 
-def test_invalid_stops_cooldown_check_and_write_share_the_same_statics():
+def test_cooldown_check_and_write_share_the_same_statics():
     fn = function(EA, "bool SafeModifySL(", "double StrategyReferenceBalance()")
     # Regression guard for a real scoping bug caught before this shipped: an
     # earlier draft declared the check-side and write-side statics in two
@@ -32,32 +38,44 @@ def test_invalid_stops_cooldown_check_and_write_share_the_same_statics():
     # rather than two independent same-named-but-different variables.
     import re
     for var, decl_type in (
-        ("g_lastInvalidStopsTicket", "ulong"),
-        ("g_lastInvalidStopsSL", "double"),
-        ("g_lastInvalidStopsAt", "datetime"),
+        ("g_lastRejectedModifyTicket", "ulong"),
+        ("g_lastRejectedModifySL", "double"),
+        ("g_lastRejectedModifyAt", "datetime"),
     ):
         decls = re.findall(rf"static {decl_type}\s+{var}\b", fn)
         assert len(decls) == 1, f"{var} must be declared exactly once, found {len(decls)}"
         assignments = re.findall(rf"{var}\s*=", fn)
         assert len(assignments) >= 2, f"{var} must be both declared/checked and later reassigned at the write site"
+    # The old, narrower (retcode==10016-only) names must be fully gone --
+    # not just superseded -- so nothing still reads/writes an orphaned copy.
+    assert "g_lastInvalidStopsTicket" not in fn
+    assert "g_lastInvalidStopsSL" not in fn
+    assert "g_lastInvalidStopsAt" not in fn
 
 
 def test_cooldown_skips_before_the_real_modify_and_is_checked_against_the_same_ticket_and_sl():
     fn = function(EA, "bool SafeModifySL(", "double StrategyReferenceBalance()")
-    cooldown_idx = fn.index("g_lastInvalidStopsTicket == ticket")
+    cooldown_idx = fn.index("g_lastRejectedModifyTicket == ticket")
     modify_idx = fn.index("if(!trade.PositionModify(ticket, newSL, tp))")
     assert cooldown_idx < modify_idx, "the cooldown skip must be checked before attempting the real broker request"
     window = fn[cooldown_idx:modify_idx]
-    assert "MathAbs(g_lastInvalidStopsSL - newSL) < slTol" in window
-    assert "TimeCurrent() - g_lastInvalidStopsAt < 5" in window
+    assert "MathAbs(g_lastRejectedModifySL - newSL) < slTol" in window
+    assert "TimeCurrent() - g_lastRejectedModifyAt < 5" in window
     assert "return false;" in window
 
 
-def test_rejection_is_only_recorded_for_genuine_invalid_stops_retcode():
+def test_rejection_is_recorded_unconditionally_for_any_retcode():
+    # Third pass: recording the cooldown must NOT be gated on a specific
+    # retcode (that was the second pass's bug -- it only caught 10016 and
+    # missed 10029, which is what MetaQuotes' validator actually hit).
+    # The write must sit directly after computing ret/err (post-retry),
+    # with no `if(ret == ...)` gate in between.
     fn = function(EA, "bool SafeModifySL(", "double StrategyReferenceBalance()")
-    write_idx = fn.index("g_lastInvalidStopsTicket = ticket;")
-    preceding = fn[max(0, write_idx - 200):write_idx]
-    assert "if(ret == 10016)" in preceding
+    write_idx = fn.index("g_lastRejectedModifyTicket = ticket;")
+    retry_block_end = fn.index("err = GetLastError();\n      }") + len("err = GetLastError();\n      }")
+    between = fn[retry_block_end:write_idx]
+    assert "if(ret ==" not in between, f"cooldown write must be unconditional, found a retcode gate: {between!r}"
+    assert "if(err ==" not in between, f"cooldown write must be unconditional, found an errcode gate: {between!r}"
 
 
 def test_other_transient_retcode_handling_untouched():

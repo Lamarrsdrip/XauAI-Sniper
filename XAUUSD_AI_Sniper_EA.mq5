@@ -10041,30 +10041,35 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       }
    }
 
-   // Owner directive 2026-08-03: a real historical scenario (position stuck
-   // with a target SL rejected as "too close to market", retcode 10016)
-   // showed this function resubmitting the identical already-rejected
-   // PositionModify() request on every subsequent tick within the existing
-   // 3-per-second throttle, indefinitely, until price moved. That's a real
-   // defect independent of any Market-listing concern: repeatedly hammering
-   // the broker with a request already known to fail wastes the same
-   // execution-thread budget the throttle above exists to protect, and on
-   // a live ECN/raw-spread broker risks request-rate flags. When the exact
-   // same (ticket, target SL) was just rejected with retcode 10016, skip
-   // resubmitting it for a short cooldown -- until either the target
-   // changes (a caller computes a new level as price moves) or the
-   // cooldown elapses. Does not change which SL value is computed, when a
+   // Owner directive 2026-08-03 (revised same day, third pass): a real
+   // historical scenario showed this function resubmitting an identical
+   // already-rejected PositionModify() request on every subsequent tick
+   // within the existing 3-per-second throttle, indefinitely, until price
+   // moved. The first pass here only caught retcode 10016 (INVALID_STOPS);
+   // a follow-up Market-edition validation run against the same class of
+   // scenario showed the dominant rejection code was actually 10029
+   // (TRADE_RETCODE_FROZEN — "order or position frozen because price is
+   // within the freeze level"), which reads as "order or position being
+   // close to market" in the trade journal and is easy to mistake for
+   // 10016's "Invalid stops" by text alone, but is a distinct code the
+   // `ret == 10016` gate never caught. The actual requirement is
+   // retcode-agnostic: never resend an identical (ticket, target SL)
+   // request that was just rejected, for *any* rejection reason, until
+   // either the target changes (a caller computes a new level as price
+   // moves) or the cooldown elapses — a request that failed for reason X
+   // will fail again immediately for the same reason X if nothing about it
+   // changed. Does not change which SL value is computed, when a
    // *different* target is attempted, or any other decision in this
-   // function -- only suppresses re-sending an identical just-rejected
+   // function — only suppresses re-sending an identical just-rejected
    // request. Both statics are declared once here so the check and the
    // write further below share the same persistent storage.
-   static ulong    g_lastInvalidStopsTicket = 0;
-   static double   g_lastInvalidStopsSL     = 0.0;
-   static datetime g_lastInvalidStopsAt     = 0;
+   static ulong    g_lastRejectedModifyTicket = 0;
+   static double   g_lastRejectedModifySL     = 0.0;
+   static datetime g_lastRejectedModifyAt     = 0;
    {
       double slTol = MathMax(point * 2, 0.00001);
-      if(g_lastInvalidStopsTicket == ticket && MathAbs(g_lastInvalidStopsSL - newSL) < slTol &&
-         TimeCurrent() - g_lastInvalidStopsAt < 5)
+      if(g_lastRejectedModifyTicket == ticket && MathAbs(g_lastRejectedModifySL - newSL) < slTol &&
+         TimeCurrent() - g_lastRejectedModifyAt < 5)
       {
          return false;
       }
@@ -10089,19 +10094,19 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
          ret = trade.ResultRetcode();
          err = GetLastError();
       }
-      // Record a genuine invalid-stops rejection so the next identical
+      // Record this rejection (whatever the retcode) so the next identical
       // request within the cooldown window (above) is skipped entirely
-      // rather than resent to the broker.
-      if(ret == 10016)
-      {
-         g_lastInvalidStopsTicket = ticket;
-         g_lastInvalidStopsSL     = newSL;
-         g_lastInvalidStopsAt     = TimeCurrent();
-      }
+      // rather than resent to the broker. Unconditional on purpose — see
+      // the third-pass note above.
+      g_lastRejectedModifyTicket = ticket;
+      g_lastRejectedModifySL     = newSL;
+      g_lastRejectedModifyAt     = TimeCurrent();
       // v4.6.5 — Downgrade common non-fatal retcodes to throttled INFO (1/min).
-      //   10025 NO_CHANGES, 10004 REQUOTE, 10021 OFF_QUOTES, 4756 invalid stops
-      //   are transient/benign — the next tick will retry. Don't spam the log.
-      bool benign = (ret == 10025 || ret == 10004 || ret == 10021 || ret == 10016 || err == 4756 || err == 10025);
+      //   10025 NO_CHANGES, 10004 REQUOTE, 10021 OFF_QUOTES, 10016 INVALID_STOPS,
+      //   10029 FROZEN, 4756 context busy are transient/benign — the cooldown
+      //   above already prevents the request itself from repeating, so the log
+      //   line only needs the same throttle. Don't spam the log.
+      bool benign = (ret == 10025 || ret == 10004 || ret == 10021 || ret == 10016 || ret == 10029 || err == 4756 || err == 10025);
       if(benign)
       {
          static datetime lastBenignWarn = 0;
