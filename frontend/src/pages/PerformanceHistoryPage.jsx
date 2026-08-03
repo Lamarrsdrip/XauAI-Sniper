@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, Archive } from "@phosphor-icons/react";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import Seo from "@/components/Seo";
 import { API } from "@/lib/api";
 
 const fmt = (v, digits = 2) => (v == null || Number.isNaN(v) ? "--" : Number(v).toLocaleString(undefined, { maximumFractionDigits: digits }));
@@ -71,6 +72,11 @@ export default function PerformanceHistoryPage() {
 
   return (
     <div className="min-h-screen bg-[#060609] text-white">
+      <Seo
+        title="XauCloud Performance Archive — Historical Gold Trading Results"
+        description="Every prior XauCloud reporting period, preserved exactly as recorded — read-only, never deleted, never rewritten."
+        path="/performance/history"
+      />
       <Header activeSection="" onNavigate={() => {}} goldPrice={null} />
       <div className="mx-auto max-w-4xl px-4 py-14 md:px-8 md:py-20">
         <Link to="/" className="inline-flex items-center gap-2 text-[13px] text-white/45 hover:text-white transition">

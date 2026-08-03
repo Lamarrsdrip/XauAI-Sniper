@@ -9,6 +9,7 @@ import {
 import { API } from "@/lib/api";
 import { ensureOneSignalDeviceRegistered } from "@/lib/onesignal";
 import M10VsOutlookCard from "@/components/cloud/M10VsOutlookCard";
+import Seo from "@/components/Seo";
 
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
 
@@ -753,6 +754,11 @@ export default function AIMarketOutlookPage() {
 
   return (
     <div className="min-h-screen bg-[#07090d] text-white">
+      <Seo
+        title="AI Gold Market Outlook — XauCloud M10 Execution Truth"
+        description="M10 execution truth with hourly advisory context for XAUUSD Gold trading, from the XauCloud AI Director."
+        path="/ai-market-outlook"
+      />
       <div className="mx-auto max-w-6xl px-4 pb-16 pt-[max(1.5rem,env(safe-area-inset-top))] sm:px-6">
         <div className="mb-6 flex items-center gap-3">
           <button onClick={() => navigate(-1)} className="rounded-full border border-white/10 p-2 hover:border-white/25">
